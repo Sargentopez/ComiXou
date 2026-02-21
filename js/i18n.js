@@ -4,13 +4,13 @@
 
 const TRANSLATIONS = {
   es: {
-    tagline:       "Crea y comparte tus cómics",
+    tagline:       "Tu plataforma de cómics",
     register:      "Regístrate",
     login:         "Inicia sesión",
     myComics:      "Mis Cómics",
     logout:        "Cerrar sesión",
-    heroTitle:     "ComicShow",
-    heroSubtitle:  "Crea y comparte tus cómics",
+    heroTitle:     "ComiXow",
+    heroSubtitle:  "Tu plataforma de cómics",
     createComic:   "🎨 Crea tu cómic",
     allComics:     "Todos los cómics",
     filterAll:     "Todos",
@@ -78,13 +78,13 @@ const TRANSLATIONS = {
     saveOk:        "Guardado",
   },
   en: {
-    tagline:       "Create and share your comics",
+    tagline:       "Your comics platform",
     register:      "Sign Up",
     login:         "Sign In",
     myComics:      "My Comics",
     logout:        "Sign Out",
-    heroTitle:     "ComicShow",
-    heroSubtitle:  "Create and share your comics",
+    heroTitle:     "ComiXow",
+    heroSubtitle:  "Your comics platform",
     createComic:   "🎨 Create your comic",
     allComics:     "All Comics",
     filterAll:     "All",

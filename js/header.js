@@ -13,9 +13,9 @@
     <div class="home-header-inner">
       <div class="home-logo-area">
         <a href="${root}index.html" class="logo-link">
-          <span class="logo-main">Comic<span class="logo-accent">Show</span></span>
+          <span class="logo-main">Comi<span class="logo-accent">Xow</span></span>
         </a>
-        <span class="home-tagline">Crea y comparte tus cómics</span>
+        <span class="home-tagline">Tu plataforma de cómics</span>
       </div>
       <div class="home-user-area">
         ${user ? `

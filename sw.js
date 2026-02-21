@@ -1,5 +1,5 @@
-/* ComicShow Service Worker */
-const CACHE = 'comicshow-v1';
+/* ComiXow Service Worker */
+const CACHE = 'comixow-v1';
 const ASSETS = [
   './',
   './index.html',

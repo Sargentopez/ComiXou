@@ -1,9 +1,9 @@
 {
-  "name": "ComicShow",
-  "short_name": "ComicShow",
+  "name": "ComiXow",
+  "short_name": "ComiXow",
   "description": "Crea y lee cómics en tu móvil",
-  "start_url": "/ComiXou/index.html",
-  "scope": "/ComiXou/",
+  "start_url": "/ComiXow/index.html",
+  "scope": "/ComiXow/",
   "display": "fullscreen",
   "orientation": "any",
   "background_color": "#FFE135",
