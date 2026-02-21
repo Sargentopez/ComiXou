@@ -65,15 +65,14 @@
 }
 
 /* ── CONTENIDO SCROLLABLE ── */
-/* Empuja el contenido para que no quede bajo las barras fijas */
+/* Empuja el contenido para que no quede bajo las dos barras fijas */
 .home-list {
-  margin-top: var(--bars-h);
+  padding-top: var(--bars-h);  /* barra1 + barra2 */
   max-width: var(--max-w);
   margin-left: auto;
   margin-right: auto;
   width: 100%;
-  /* Permite scroll independiente */
-  min-height: calc(100vh - var(--bars-h));
+  min-height: 100vh;
 }
 
 /* ── FILA DE CÓMIC ── */

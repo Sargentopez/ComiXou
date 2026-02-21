@@ -6,6 +6,7 @@
 .auth-page  { background: var(--gray-100); }
 
 .auth-main {
+  /* body.auth-page ya tiene padding-top: var(--header-h) */
   min-height: calc(100vh - var(--header-h));
   display: flex; align-items: flex-start;
   justify-content: center; padding: 32px 16px;
