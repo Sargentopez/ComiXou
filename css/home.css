@@ -1,41 +1,80 @@
 /* ============================================================
-   home.css — Solo estilos específicos de la página de inicio
-   Los estilos de cabecera están en main.css
+   home.css — Página de inicio
    ============================================================ */
 
-/* ── FILTROS ── */
-.home-filters {
+/* ── VARIABLES DE ALTURA DE BARRAS ── */
+:root {
+  --header-h:  52px;   /* barra 1: logo/usuario */
+  --pagenav-h: 44px;   /* barra 2: menú de página */
+  --bars-h: calc(var(--header-h) + var(--pagenav-h));
+}
+
+/* ── BARRA 1: cabecera global (posicionada en main.css) ── */
+/* ya es sticky — aquí solo ajustamos altura */
+.home-header { height: var(--header-h); min-height: var(--header-h); }
+
+/* ── BARRA 2: menú de página ── */
+.page-nav {
+  position: fixed;
+  top: var(--header-h);
+  left: 0; right: 0;
+  z-index: 900;
+  height: var(--pagenav-h);
   display: flex;
   align-items: center;
-  border-bottom: 1.5px solid var(--gray-300);
   background: var(--white);
+  border-bottom: 1.5px solid var(--gray-300);
   padding: 0 14px;
 }
-.home-filter {
+.page-nav-sep {
+  width: 1px; height: 18px;
+  background: var(--gray-300); flex-shrink: 0;
+}
+.page-nav-item { flex: 1; display: flex; justify-content: center; }
+.page-nav-btn {
   flex: 1;
   background: none; border: none;
-  padding: 11px 4px;
+  padding: 0 4px; height: var(--pagenav-h);
   font-family: var(--font-body);
   font-weight: 700; font-size: 0.88rem;
   color: var(--gray-500);
   cursor: pointer; text-align: center;
   position: relative; transition: color .15s;
+  white-space: nowrap;
 }
-.home-filter:hover  { color: var(--ink); }
-.home-filter.active { color: var(--ink); }
-.home-filter.active::after {
+.page-nav-btn:hover  { color: var(--ink); }
+.page-nav-btn.active { color: var(--ink); }
+.page-nav-btn.active::after {
   content: '';
   position: absolute;
-  bottom: -1.5px; left: 10%; right: 10%;
+  bottom: 0; left: 10%; right: 10%;
   height: 2.5px; background: var(--black); border-radius: 2px;
 }
-.home-filter-sep {
-  width: 1px; height: 18px;
-  background: var(--gray-300); flex-shrink: 0;
+.page-nav-btn-create { color: var(--blue); }
+.page-nav-btn-create:hover { color: var(--ink); }
+
+/* Dropdown del menú de página */
+.page-nav-dropdown {
+  top: var(--pagenav-h) !important;
+  left: 0 !important;
+  min-width: 180px;
+}
+.coming-soon {
+  font-size: 0.7rem; color: var(--gray-300);
+  font-weight: 400; margin-left: 6px;
 }
 
-/* ── LISTA ── */
-.home-list { max-width: var(--max-w); margin: 0 auto; width: 100%; }
+/* ── CONTENIDO SCROLLABLE ── */
+/* Empuja el contenido para que no quede bajo las barras fijas */
+.home-list {
+  margin-top: var(--bars-h);
+  max-width: var(--max-w);
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  /* Permite scroll independiente */
+  min-height: calc(100vh - var(--bars-h));
+}
 
 /* ── FILA DE CÓMIC ── */
 .comic-row {
@@ -44,7 +83,6 @@
   border-bottom: 1px solid var(--gray-100);
   background: var(--white);
 }
-
 .comic-row-thumb {
   width: 72px; height: 72px; min-width: 72px;
   flex-shrink: 0; background: var(--gray-100);
@@ -56,7 +94,6 @@
   width: 72px; height: 72px; min-width: 72px; max-width: 72px;
   object-fit: cover; display: block;
 }
-
 .comic-row-info {
   flex: 1; min-width: 0;
   display: flex; flex-direction: column; gap: 3px; padding-top: 1px;
@@ -66,13 +103,9 @@
   line-height: 1.2; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
-.comic-row-author {
-  font-size: 0.78rem; color: var(--gray-500); font-weight: 600;
-}
+.comic-row-author { font-size: 0.78rem; color: var(--gray-500); font-weight: 600; }
 .comic-row-author a { color: var(--blue); font-weight: 700; }
-
 .comic-row-actions { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; }
-
 .comic-row-btn {
   background: none; border: none; padding: 0;
   font-family: var(--font-body); font-weight: 700;
@@ -94,8 +127,8 @@
 .home-empty.hidden { display: none !important; }
 
 @media(min-width: 600px) {
-  .home-filters { padding: 0 24px; }
-  .comic-row    { padding: 14px 24px; gap: 16px; }
+  .page-nav { padding: 0 24px; }
+  .comic-row { padding: 14px 24px; gap: 16px; }
   .comic-row-thumb     { width: 88px; height: 88px; min-width: 88px; }
   .comic-row-thumb img { width: 88px; height: 88px; min-width: 88px; max-width: 88px; }
   .comic-row-title { font-size: 1rem; }

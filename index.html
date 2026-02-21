@@ -13,17 +13,33 @@
 </head>
 <body>
 
+<!-- Barra 1: cabecera — inyectada por header.js -->
 
-<!-- ══ FILTROS ══ -->
-<nav class="home-filters">
-  <button class="home-filter active" data-filter="all">Publicaciones</button>
-  <span class="home-filter-sep"></span>
-  <button class="home-filter" data-filter="recent">Últimos</button>
-  <span class="home-filter-sep"></span>
-  <button class="home-filter" data-filter="create" id="createBtn">Crear</button>
+<!-- Barra 2: menú de página (fija, bajo la cabecera) -->
+<nav class="page-nav" id="pageNav">
+
+  <!-- Filtros (desplegable vacío de momento) -->
+  <div class="dropdown page-nav-item">
+    <button class="page-nav-btn" id="filtrosBtn">Filtros ▾</button>
+    <div class="dropdown-menu page-nav-dropdown" id="filtrosMenu">
+      <span class="dropdown-item disabled-item">Por autor <span class="coming-soon">próximamente</span></span>
+      <span class="dropdown-item disabled-item">Por género <span class="coming-soon">próximamente</span></span>
+    </div>
+  </div>
+
+  <span class="page-nav-sep"></span>
+
+  <!-- Novedades -->
+  <button class="page-nav-btn" id="novedadesBtn">Novedades</button>
+
+  <span class="page-nav-sep"></span>
+
+  <!-- Crear -->
+  <button class="page-nav-btn page-nav-btn-create" id="createBtn">Crear</button>
+
 </nav>
 
-<!-- ══ LISTA ══ -->
+<!-- Contenido scrollable -->
 <main class="home-list" id="comicsGrid">
   <div class="home-empty hidden" id="emptyState">
     <span>📚</span>

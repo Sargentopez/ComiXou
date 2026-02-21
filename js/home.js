@@ -1,28 +1,45 @@
 /* ============================================================
    home.js — Lógica de la página de inicio
-   Depende de: auth.js, storage.js, header.js
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
   renderComics('all');
-  setupFilters();
+  setupPageNav();
+});
 
-  document.getElementById('createBtn').addEventListener('click', () => {
+function setupPageNav() {
+  // ── Filtros (desplegable) ──
+  const filtrosBtn  = document.getElementById('filtrosBtn');
+  const filtrosMenu = document.getElementById('filtrosMenu');
+  filtrosBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = filtrosMenu.classList.contains('open');
+    document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+    if (!isOpen) filtrosMenu.classList.add('open');
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.dropdown')) {
+      document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+    }
+  });
+
+  // ── Novedades ──
+  document.getElementById('novedadesBtn')?.addEventListener('click', () => {
+    setActive('novedadesBtn');
+    renderComics('recent');
+  });
+
+  // ── Crear ──
+  document.getElementById('createBtn')?.addEventListener('click', () => {
     window.location.href = Auth.isLogged()
       ? 'pages/editor.html'
       : 'pages/login.html?redirect=editor';
   });
-});
+}
 
-function setupFilters() {
-  document.querySelectorAll('.home-filter[data-filter]').forEach(btn => {
-    if (btn.id === 'createBtn') return;
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.home-filter').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      renderComics(btn.dataset.filter);
-    });
-  });
+function setActive(btnId) {
+  document.querySelectorAll('.page-nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(btnId)?.classList.add('active');
 }
 
 function renderComics(filter = 'all') {
@@ -32,9 +49,7 @@ function renderComics(filter = 'all') {
 
   let comics = ComicStore.getPublished();
   if (filter === 'recent') {
-    comics = [...comics]
-      .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
-      .slice(0, 20);
+    comics = [...comics].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   }
 
   if (comics.length === 0) {
@@ -55,19 +70,16 @@ function buildRow(comic, currentUser) {
   const row = document.createElement('div');
   row.className = 'comic-row';
 
-  // Miniatura
   const thumb = document.createElement('div');
   thumb.className = 'comic-row-thumb';
   if (thumbSrc) {
     const img = document.createElement('img');
-    img.src = thumbSrc;
-    img.alt = comic.title || '';
+    img.src = thumbSrc; img.alt = comic.title || '';
     thumb.appendChild(img);
   } else {
     thumb.textContent = '🖼️';
   }
 
-  // Info
   const info   = document.createElement('div');
   info.className = 'comic-row-info';
 
@@ -106,7 +118,7 @@ function buildRow(comic, currentUser) {
       if (confirm('¿Retirar este cómic del índice?\n\nPodrás seguir editándolo desde "Crear" → "Mis cómics".')) {
         comic.published = false;
         ComicStore.save(comic);
-        renderComics(document.querySelector('.home-filter.active')?.dataset.filter || 'all');
+        renderComics();
         showToast('Cómic retirado del índice');
       }
     });
@@ -118,7 +130,7 @@ function buildRow(comic, currentUser) {
     delBtn.addEventListener('click', () => {
       if (confirm('Si eliminas este proyecto, ya no podrás acceder a él.\n\nSi solo quieres que no esté publicado pero quieres seguir editándolo, elige "Dejar de publicar".')) {
         ComicStore.remove(comic.id);
-        renderComics(document.querySelector('.home-filter.active')?.dataset.filter || 'all');
+        renderComics();
         showToast('Cómic eliminado');
       }
     });
