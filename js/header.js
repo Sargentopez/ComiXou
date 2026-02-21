@@ -13,7 +13,7 @@
     <div class="home-header-inner">
       <div class="home-logo-area">
         <a href="${root}index.html" class="logo-link">
-          <span class="logo-main">Comi<span class="logo-accent">Xow</span></span>
+          <span class="logo-main"><span class="logo-big">C</span>omi<span class="logo-accent"><span class="logo-big">X</span>ow</span></span>
         </a>
         <span class="home-tagline">Tu plataforma de cómics</span>
       </div>
