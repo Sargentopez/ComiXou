@@ -1,0 +1,43 @@
+/* ============================================================
+   auth.css — Login y Registro
+   Los estilos de cabecera están en main.css
+   ============================================================ */
+
+.auth-page  { background: var(--gray-100); }
+
+.auth-main {
+  min-height: calc(100vh - var(--header-h));
+  display: flex; align-items: flex-start;
+  justify-content: center; padding: 32px 16px;
+}
+
+.auth-card {
+  background: var(--white);
+  border-top: 3px solid var(--black);
+  width: 100%; max-width: 400px; overflow: hidden;
+}
+.auth-card-header {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--gray-100);
+}
+.auth-title {
+  font-family: var(--font-body);
+  font-size: 1.3rem; font-weight: 900; color: var(--ink);
+}
+.auth-form { padding: 20px 24px; }
+.btn-full  { width: 100%; justify-content: center; margin-top: 8px; }
+.auth-switch {
+  text-align: center; padding: 14px 24px;
+  border-top: 1px solid var(--gray-100);
+  font-size: 0.85rem; color: var(--gray-500);
+}
+.auth-switch a { color: var(--blue); font-weight: 700; margin-left: 4px; }
+.forgot-row    { text-align: right; margin-top: -8px; }
+.forgot-link   { font-size: 0.8rem; color: var(--blue); font-weight: 600; }
+.pass-wrap     { position: relative; }
+.pass-wrap .form-input { padding-right: 44px; }
+.pass-toggle {
+  position: absolute; right: 10px; top: 50%;
+  transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; font-size: 1rem;
+}

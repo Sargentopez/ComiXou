@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>ComicShow</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/home.css">
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Nunito:wght@400;600;700;900&display=swap" rel="stylesheet">
+</head>
+<body>
+
+
+<!-- ══ FILTROS ══ -->
+<nav class="home-filters">
+  <button class="home-filter active" data-filter="all">Publicaciones</button>
+  <span class="home-filter-sep"></span>
+  <button class="home-filter" data-filter="recent">Últimos</button>
+  <span class="home-filter-sep"></span>
+  <button class="home-filter" data-filter="create" id="createBtn">Crear</button>
+</nav>
+
+<!-- ══ LISTA ══ -->
+<main class="home-list" id="comicsGrid">
+  <div class="home-empty hidden" id="emptyState">
+    <span>📚</span>
+    <p>Aún no hay cómics publicados.</p>
+    <p>¡Sé el primero en crear uno!</p>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="js/i18n.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/header.js"></script>
+<script src="js/home.js"></script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Editor – ComicShow</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="stylesheet" href="../css/editor.css">
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Nunito:wght@400;600;700;900&display=swap" rel="stylesheet">
+</head>
+<body class="editor-page">
+
+
+<!-- PANTALLA 1: Lista de proyectos -->
+<main id="screenProjects" class="projects-screen">
+  <div class="projects-header">
+    <h2 class="projects-title">Mis cómics</h2>
+    <button class="btn btn-primary" id="newProjectBtn">✨ Nuevo proyecto</button>
+  </div>
+  <div class="projects-grid" id="projectsGrid"></div>
+</main>
+
+<!-- PANTALLA 2: Editor de viñeta -->
+<main id="screenEditor" class="editor-canvas-area" style="display:none">
+  <div class="canvas-placeholder" id="canvasPlaceholder">
+    <span>🖼</span>
+    <p>Abre <strong>Viñetas ▾</strong> y sube tu primera imagen</p>
+  </div>
+  <div class="panel-viewer hidden" id="panelViewer">
+    <div class="panel-stage" id="panelStage">
+      <img id="panelImage" src="" alt="">
+      <div class="text-layer" id="textLayer"></div>
+    </div>
+    <div class="panel-num-bar" id="panelNumBar">Viñeta 1</div>
+  </div>
+</main>
+
+<!-- Modal: Nuevo proyecto -->
+<div class="modal-overlay" id="projectModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">Nuevo proyecto</span>
+      <button class="modal-close" id="projectModalClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Título del cómic</label>
+        <input type="text" id="comicTitleInput" class="form-input" maxlength="80" placeholder="Escribe el título...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Descripción (opcional)</label>
+        <textarea id="comicDescInput" class="form-input" rows="2" maxlength="200" placeholder="Breve descripción..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="projectModalSave">Crear proyecto</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Cola del bocadillo -->
+<div class="modal-overlay" id="tailModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">Cola del bocadillo</span>
+      <button class="modal-close" id="tailModalClose">✕</button>
+    </div>
+    <div class="modal-body tail-selector">
+      <p style="margin-bottom:12px;font-size:.9rem;color:var(--gray-700)">¿Desde qué lado sale la cola?</p>
+      <div class="tail-options">
+        <button class="tail-opt" data-tail="top">↑ Arriba</button>
+        <button class="tail-opt" data-tail="right">→ Derecha</button>
+        <button class="tail-opt" data-tail="bottom">↓ Abajo</button>
+        <button class="tail-opt" data-tail="left">← Izquierda</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept="image/*,.gif" style="display:none" multiple>
+<div class="toast" id="toast"></div>
+<script src="../js/i18n.js"></script>
+<script src="../js/auth.js"></script>
+<script src="../js/storage.js"></script>
+<script src="../js/header.js"></script>
+<script src="../js/editor.js"></script>
+</body>
+</html>
