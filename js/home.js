@@ -2,7 +2,7 @@
    home.js — Lógica de la página de inicio
    ============================================================ */
 
-let activeGenre = null; // null = todos
+let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | null
 
 document.addEventListener('DOMContentLoaded', () => {
   renderComics();
@@ -11,8 +11,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── MENÚ DE PÁGINA ──
 function setupPageNav() {
-
-  // Filtros: poblar con géneros disponibles
   buildFiltrosMenu();
 
   const filtrosBtn  = document.getElementById('filtrosBtn');
@@ -29,9 +27,9 @@ function setupPageNav() {
     }
   });
 
-  // Novedades: scroll al top, quitar filtro de género
+  // Novedades: quita filtros, scroll al top
   document.getElementById('novedadesBtn')?.addEventListener('click', () => {
-    activeGenre = null;
+    activeFilter = { type: null, value: null };
     setActiveBtn('novedadesBtn');
     updateFiltrosLabel();
     renderComics();
@@ -50,62 +48,86 @@ function buildFiltrosMenu() {
   const menu = document.getElementById('filtrosMenu');
   if (!menu) return;
 
-  // Géneros que realmente tienen cómics publicados
   const published = ComicStore.getPublished();
-  const usedIds   = [...new Set(published.map(c => c.genre).filter(Boolean))];
+
+  // Géneros usados
+  const usedGenres  = [...new Set(published.map(c => c.genre).filter(Boolean))];
+  // Autores usados
+  const usedAuthors = [...new Set(published.map(c => c.username).filter(Boolean))].sort();
 
   menu.innerHTML = '';
 
-  // Opción "Todos"
-  const allItem = document.createElement('a');
-  allItem.className = 'dropdown-item' + (activeGenre === null ? ' active' : '');
-  allItem.href = '#';
-  allItem.textContent = 'Todos';
-  allItem.addEventListener('click', (e) => {
-    e.preventDefault();
-    activeGenre = null;
-    updateFiltrosLabel();
-    setActiveBtn(null);
-    renderComics();
-    document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
-  });
-  menu.appendChild(allItem);
+  // ── SECCIÓN GÉNERO ──
+  const genreHeader = document.createElement('span');
+  genreHeader.className = 'dropdown-section-label';
+  genreHeader.textContent = 'Por género';
+  menu.appendChild(genreHeader);
 
-  if (usedIds.length === 0) {
+  if (usedGenres.length === 0) {
     const empty = document.createElement('span');
     empty.className = 'dropdown-item disabled-item';
     empty.textContent = 'Sin géneros disponibles';
     menu.appendChild(empty);
-    return;
+  } else {
+    usedGenres.forEach(id => {
+      menu.appendChild(buildFilterItem(genreLabel(id), () => {
+        activeFilter = { type: 'genre', value: id };
+        updateFiltrosLabel();
+        setActiveBtn('filtrosBtn');
+        renderComics();
+        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+      }, activeFilter.type === 'genre' && activeFilter.value === id));
+    });
   }
 
+  // ── SEPARADOR ──
   const divider = document.createElement('div');
   divider.className = 'dropdown-divider';
   menu.appendChild(divider);
 
-  // Un item por género usado
-  usedIds.forEach(id => {
-    const label = genreLabel(id);
-    const item  = document.createElement('a');
-    item.className = 'dropdown-item' + (activeGenre === id ? ' active' : '');
-    item.href = '#';
-    item.textContent = label;
-    item.addEventListener('click', (e) => {
-      e.preventDefault();
-      activeGenre = id;
-      updateFiltrosLabel();
-      setActiveBtn('filtrosBtn');
-      renderComics();
-      document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+  // ── SECCIÓN AUTOR ──
+  const authorHeader = document.createElement('span');
+  authorHeader.className = 'dropdown-section-label';
+  authorHeader.textContent = 'Por autor';
+  menu.appendChild(authorHeader);
+
+  if (usedAuthors.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'dropdown-item disabled-item';
+    empty.textContent = 'Sin autores disponibles';
+    menu.appendChild(empty);
+  } else {
+    usedAuthors.forEach(username => {
+      menu.appendChild(buildFilterItem(username, () => {
+        activeFilter = { type: 'author', value: username };
+        updateFiltrosLabel();
+        setActiveBtn('filtrosBtn');
+        renderComics();
+        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+      }, activeFilter.type === 'author' && activeFilter.value === username));
     });
-    menu.appendChild(item);
-  });
+  }
+}
+
+function buildFilterItem(label, onClick, isActive) {
+  const item = document.createElement('a');
+  item.className = 'dropdown-item' + (isActive ? ' active' : '');
+  item.href = '#';
+  item.textContent = label;
+  item.addEventListener('click', (e) => { e.preventDefault(); onClick(); });
+  return item;
 }
 
 function updateFiltrosLabel() {
   const btn = document.getElementById('filtrosBtn');
   if (!btn) return;
-  btn.textContent = activeGenre ? `${genreLabel(activeGenre)} ▾` : 'Filtros ▾';
+  if (!activeFilter.type) {
+    btn.textContent = 'Filtros ▾';
+  } else if (activeFilter.type === 'genre') {
+    btn.textContent = `${genreLabel(activeFilter.value)} ▾`;
+  } else {
+    btn.textContent = `${activeFilter.value} ▾`;
+  }
 }
 
 function setActiveBtn(id) {
@@ -122,8 +144,10 @@ function renderComics() {
   let comics = [...ComicStore.getPublished()]
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
-  if (activeGenre) {
-    comics = comics.filter(c => c.genre === activeGenre);
+  if (activeFilter.type === 'genre') {
+    comics = comics.filter(c => c.genre === activeFilter.value);
+  } else if (activeFilter.type === 'author') {
+    comics = comics.filter(c => c.username === activeFilter.value);
   }
 
   if (comics.length === 0) {
@@ -163,7 +187,8 @@ function buildRow(comic, currentUser) {
 
   const meta = document.createElement('div');
   meta.className = 'comic-row-author';
-  const genreBadge = comic.genre ? ` · <span class="genre-badge">${escHtml(genreLabel(comic.genre))}</span>` : '';
+  const genreBadge = comic.genre
+    ? ` · <span class="genre-badge">${escHtml(genreLabel(comic.genre))}</span>` : '';
   if (comic.contactUrl) {
     meta.innerHTML = `${escHtml(comic.username || '')}${genreBadge} · <a href="${escHtml(comic.contactUrl)}" target="_blank">Contacto</a>`;
   } else {
