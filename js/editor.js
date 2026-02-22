@@ -155,6 +155,16 @@ function setupGlobalListeners() {
   document.getElementById('newProjectBtn').addEventListener('click', () => {
     document.getElementById('comicTitleInput').value = '';
     document.getElementById('comicDescInput').value  = '';
+    document.getElementById('comicGenreNew').value   = '';
+    // Poblar select de géneros
+    const sel = document.getElementById('comicGenreSelect');
+    sel.innerHTML = '<option value="">— Elige un género —</option>';
+    GENRES.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g.id; opt.textContent = g.label;
+      sel.appendChild(opt);
+    });
+    sel.value = '';
     document.getElementById('projectModal').classList.add('open');
   });
 
@@ -169,6 +179,10 @@ function setupGlobalListeners() {
     const comic = ComicStore.createNew(user.id, user.username);
     comic.title = title;
     comic.desc  = document.getElementById('comicDescInput').value.trim();
+    // Género: nuevo texto tiene prioridad sobre el select
+    const genreNew = document.getElementById('comicGenreNew').value.trim();
+    const genreSel = document.getElementById('comicGenreSelect').value;
+    comic.genre = genreNew || genreSel || '';
     ComicStore.save(comic);
     document.getElementById('projectModal').classList.remove('open');
     openComic(ComicStore.getById(comic.id));

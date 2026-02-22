@@ -2,13 +2,19 @@
    home.js — Lógica de la página de inicio
    ============================================================ */
 
+let activeGenre = null; // null = todos
+
 document.addEventListener('DOMContentLoaded', () => {
-  renderComics('all');
+  renderComics();
   setupPageNav();
 });
 
+// ── MENÚ DE PÁGINA ──
 function setupPageNav() {
-  // ── Filtros (desplegable) ──
+
+  // Filtros: poblar con géneros disponibles
+  buildFiltrosMenu();
+
   const filtrosBtn  = document.getElementById('filtrosBtn');
   const filtrosMenu = document.getElementById('filtrosMenu');
   filtrosBtn?.addEventListener('click', (e) => {
@@ -23,13 +29,16 @@ function setupPageNav() {
     }
   });
 
-  // ── Novedades ──
+  // Novedades: scroll al top, quitar filtro de género
   document.getElementById('novedadesBtn')?.addEventListener('click', () => {
-    setActive('novedadesBtn');
-    renderComics('recent');
+    activeGenre = null;
+    setActiveBtn('novedadesBtn');
+    updateFiltrosLabel();
+    renderComics();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
-  // ── Crear ──
+  // Crear
   document.getElementById('createBtn')?.addEventListener('click', () => {
     window.location.href = Auth.isLogged()
       ? 'pages/editor.html'
@@ -37,23 +46,84 @@ function setupPageNav() {
   });
 }
 
-function setActive(btnId) {
-  document.querySelectorAll('.page-nav-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById(btnId)?.classList.add('active');
+function buildFiltrosMenu() {
+  const menu = document.getElementById('filtrosMenu');
+  if (!menu) return;
+
+  // Géneros que realmente tienen cómics publicados
+  const published = ComicStore.getPublished();
+  const usedIds   = [...new Set(published.map(c => c.genre).filter(Boolean))];
+
+  menu.innerHTML = '';
+
+  // Opción "Todos"
+  const allItem = document.createElement('a');
+  allItem.className = 'dropdown-item' + (activeGenre === null ? ' active' : '');
+  allItem.href = '#';
+  allItem.textContent = 'Todos';
+  allItem.addEventListener('click', (e) => {
+    e.preventDefault();
+    activeGenre = null;
+    updateFiltrosLabel();
+    setActiveBtn(null);
+    renderComics();
+    document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+  });
+  menu.appendChild(allItem);
+
+  if (usedIds.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'dropdown-item disabled-item';
+    empty.textContent = 'Sin géneros disponibles';
+    menu.appendChild(empty);
+    return;
+  }
+
+  const divider = document.createElement('div');
+  divider.className = 'dropdown-divider';
+  menu.appendChild(divider);
+
+  // Un item por género usado
+  usedIds.forEach(id => {
+    const label = genreLabel(id);
+    const item  = document.createElement('a');
+    item.className = 'dropdown-item' + (activeGenre === id ? ' active' : '');
+    item.href = '#';
+    item.textContent = label;
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      activeGenre = id;
+      updateFiltrosLabel();
+      setActiveBtn('filtrosBtn');
+      renderComics();
+      document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+    });
+    menu.appendChild(item);
+  });
 }
 
-function renderComics(filter = 'all') {
+function updateFiltrosLabel() {
+  const btn = document.getElementById('filtrosBtn');
+  if (!btn) return;
+  btn.textContent = activeGenre ? `${genreLabel(activeGenre)} ▾` : 'Filtros ▾';
+}
+
+function setActiveBtn(id) {
+  document.querySelectorAll('.page-nav-btn').forEach(b => b.classList.remove('active'));
+  if (id) document.getElementById(id)?.classList.add('active');
+}
+
+// ── RENDER ──
+function renderComics() {
   const grid  = document.getElementById('comicsGrid');
   const empty = document.getElementById('emptyState');
   grid.querySelectorAll('.comic-row').forEach(el => el.remove());
 
-  // Siempre ordenar de más reciente a más antiguo
   let comics = [...ComicStore.getPublished()]
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
-  // Novedades: scroll al top además del orden (ya es el mismo)
-  if (filter === 'recent') {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (activeGenre) {
+    comics = comics.filter(c => c.genre === activeGenre);
   }
 
   if (comics.length === 0) {
@@ -66,37 +136,38 @@ function renderComics(filter = 'all') {
   comics.forEach(comic => grid.appendChild(buildRow(comic, currentUser)));
 }
 
+// ── FILA ──
 function buildRow(comic, currentUser) {
-  const isOwner    = currentUser && (currentUser.id === comic.userId || currentUser.role === 'admin');
-  const firstPanel = comic.panels?.[0];
-  const thumbSrc   = firstPanel?.dataUrl || null;
+  const isOwner = currentUser && (currentUser.id === comic.userId || currentUser.role === 'admin');
+  const thumb   = comic.panels?.[0]?.dataUrl || null;
 
   const row = document.createElement('div');
   row.className = 'comic-row';
 
-  const thumb = document.createElement('div');
-  thumb.className = 'comic-row-thumb';
-  if (thumbSrc) {
+  const thumbEl = document.createElement('div');
+  thumbEl.className = 'comic-row-thumb';
+  if (thumb) {
     const img = document.createElement('img');
-    img.src = thumbSrc; img.alt = comic.title || '';
-    thumb.appendChild(img);
+    img.src = thumb; img.alt = comic.title || '';
+    thumbEl.appendChild(img);
   } else {
-    thumb.textContent = '🖼️';
+    thumbEl.textContent = '🖼️';
   }
 
-  const info   = document.createElement('div');
+  const info = document.createElement('div');
   info.className = 'comic-row-info';
 
-  const title  = document.createElement('div');
+  const title = document.createElement('div');
   title.className = 'comic-row-title';
   title.textContent = comic.title || 'Sin título';
 
-  const author = document.createElement('div');
-  author.className = 'comic-row-author';
+  const meta = document.createElement('div');
+  meta.className = 'comic-row-author';
+  const genreBadge = comic.genre ? ` · <span class="genre-badge">${escHtml(genreLabel(comic.genre))}</span>` : '';
   if (comic.contactUrl) {
-    author.innerHTML = `${escHtml(comic.username || '')} · <a href="${escHtml(comic.contactUrl)}" target="_blank">Contacto</a>`;
+    meta.innerHTML = `${escHtml(comic.username || '')}${genreBadge} · <a href="${escHtml(comic.contactUrl)}" target="_blank">Contacto</a>`;
   } else {
-    author.textContent = comic.username || '';
+    meta.innerHTML = escHtml(comic.username || '') + genreBadge;
   }
 
   const actions = document.createElement('div');
@@ -122,6 +193,7 @@ function buildRow(comic, currentUser) {
       if (confirm('¿Retirar este cómic del índice?\n\nPodrás seguir editándolo desde "Crear" → "Mis cómics".')) {
         comic.published = false;
         ComicStore.save(comic);
+        buildFiltrosMenu();
         renderComics();
         showToast('Cómic retirado del índice');
       }
@@ -134,6 +206,7 @@ function buildRow(comic, currentUser) {
     delBtn.addEventListener('click', () => {
       if (confirm('Si eliminas este proyecto, ya no podrás acceder a él.\n\nSi solo quieres que no esté publicado pero quieres seguir editándolo, elige "Dejar de publicar".')) {
         ComicStore.remove(comic.id);
+        buildFiltrosMenu();
         renderComics();
         showToast('Cómic eliminado');
       }
@@ -142,9 +215,9 @@ function buildRow(comic, currentUser) {
   }
 
   info.appendChild(title);
-  info.appendChild(author);
+  info.appendChild(meta);
   info.appendChild(actions);
-  row.appendChild(thumb);
+  row.appendChild(thumbEl);
   row.appendChild(info);
   return row;
 }

@@ -113,12 +113,12 @@
   // Limpiar cómics de seed anteriores
   const cleaned = comics.filter(c => !c._seed);
 
-  const genres = ['Aventura','Drama','Comedia','Sci-Fi','Terror','Romance','Acción','Fantasía','Thriller','Histórico'];
+  const seedGenres = ['comic', 'fotografia', 'underground'];
 
   for (let i = 1; i <= 20; i++) {
-    const autorNum = Math.ceil(i / 2); // autores 1-10, dos cómics cada uno
+    const autorNum = Math.ceil(i / 2);
     const userId   = autorNum <= 5 ? 'u_autor1' : 'u_admin';
-    const username = autorNum <= 5 ? 'AutorDePrueba' : 'admin';
+    const genre    = seedGenres[(i - 1) % 3]; // reparte: comic, fotografia, underground, comic...
     const thumbUrl = makeThumb(i);
 
     const panels = [1, 2, 3].map((p, idx) => ({
@@ -133,12 +133,12 @@
       userId,
       username:  `Autor ${autorNum}`,
       title:     `Título ${i}`,
-      desc:      `Descripción del cómic número ${i}. Género: ${genres[i % genres.length]}.`,
-      genre:     genres[i % genres.length],
+      desc:      `Descripción del cómic número ${i}.`,
+      genre,
       panels,
       published:  true,
-      approved:   true,   // campo para moderación futura
-      _seed:      true,   // marca para poder limpiarlos
+      approved:   true,
+      _seed:      true,
       createdAt:  new Date(Date.now() - (20 - i) * 86400000).toISOString(),
       updatedAt:  new Date(Date.now() - (20 - i) * 3600000).toISOString()
     });
