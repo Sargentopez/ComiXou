@@ -18,13 +18,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const comic = ComicStore.getById(comicId);
   if (!comic || !comic.panels || comic.panels.length === 0) {
-    showToast('Cómic no encontrado');
+    showToast(I18n.t('workNotFound'));
     setTimeout(() => window.location.href = '../index.html', 1500);
     return;
   }
 
   ReaderState.comic = comic;
-  document.getElementById('readerComicTitle').textContent = comic.title || 'Cómic';
+  document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
 
   buildPanelElements();
   goToPanel(0);
@@ -284,6 +284,3 @@ function showSwipeHint() {
   setTimeout(() => { hint.style.display = 'none'; }, 3200);
 }
 
-function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
