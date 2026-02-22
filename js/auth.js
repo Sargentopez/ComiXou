@@ -35,7 +35,7 @@ const Auth = (() => {
     const key   = email.toLowerCase().trim();
     const user  = users[key];
     if (!user || user.passHash !== simpleHash(password)) return { ok: false, err: 'errUserNotFound' };
-    const session = { id: user.id, username: user.username, email: user.email };
+    const session = { id: user.id, username: user.username, email: user.email, role: user.role || 'user' };
     localStorage.setItem(KEY_SESSION, JSON.stringify(session));
     return { ok: true, user: session };
   }
@@ -53,6 +53,7 @@ const Auth = (() => {
 
   function currentUser() { return getSession(); }
   function isLogged()    { return !!getSession(); }
+  function isAdmin()     { const u = getSession(); return u && u.role === 'admin'; }
 
   function getRootPath() {
     return window.location.pathname.includes('/pages/') ? '../' : '';
@@ -61,7 +62,7 @@ const Auth = (() => {
   // updateNavUI: solo por compatibilidad con páginas que aún la llamen
   function updateNavUI() { /* gestionado por header.js */ }
 
-  return { register, login, logout, deleteAccount, currentUser, isLogged, updateNavUI, getRootPath };
+  return { register, login, logout, deleteAccount, currentUser, isLogged, isAdmin, updateNavUI, getRootPath };
 })();
 
 // ── Toast global ──

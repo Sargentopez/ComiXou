@@ -20,9 +20,10 @@
       <div class="home-user-area">
         ${user ? `
           <div class="dropdown">
-            <button class="home-user-link" id="avatarBtn">${user.username} ▾</button>
+            <button class="home-user-link" id="avatarBtn">${user.role === 'admin' ? '⚙️ ' : ''}${user.username} ▾</button>
             <div class="dropdown-menu" id="avatarMenu">
               <a href="${root}pages/editor.html" class="dropdown-item">Mis cómics</a>
+              ${user.role === 'admin' ? `<a href="${root}pages/admin.html" class="dropdown-item admin-item">⚙️ Panel admin</a>` : ''}
               <div class="dropdown-divider"></div>
               <a href="#" class="dropdown-item" id="logoutBtn">Cerrar sesión</a>
             </div>

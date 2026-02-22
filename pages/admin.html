@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Admin – ComiXow</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="stylesheet" href="../css/admin.css">
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Nunito:wght@400;600;700;900&display=swap" rel="stylesheet">
+</head>
+<body class="admin-page">
+
+<main class="admin-main">
+  <div class="admin-tabs">
+    <button class="admin-tab active" data-tab="pending">Pendientes de aprobación</button>
+    <button class="admin-tab" data-tab="published">Publicados</button>
+    <button class="admin-tab" data-tab="users">Usuarios</button>
+  </div>
+
+  <div class="admin-panel" id="tabPending"></div>
+  <div class="admin-panel hidden" id="tabPublished"></div>
+  <div class="admin-panel hidden" id="tabUsers"></div>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="../js/i18n.js"></script>
+<script src="../js/auth.js"></script>
+<script src="../js/storage.js"></script>
+<script src="../js/header.js"></script>
+<script src="../js/admin.js"></script>
+</body>
+</html>
