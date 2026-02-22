@@ -15,15 +15,25 @@ function setupPageNav() {
 
   const filtrosBtn  = document.getElementById('filtrosBtn');
   const filtrosMenu = document.getElementById('filtrosMenu');
+
   filtrosBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
     const isOpen = filtrosMenu.classList.contains('open');
     document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
     if (!isOpen) filtrosMenu.classList.add('open');
   });
+
+  // PC: cerrar y resetear al salir con el ratón
+  filtrosMenu?.addEventListener('mouseleave', () => {
+    filtrosMenu.classList.remove('open');
+    showFiltrosLevel1();
+  });
+
+  // Móvil + PC: cerrar al tocar/clicar fuera
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.dropdown')) {
       document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+      showFiltrosLevel1(); // resetear nivel
     }
   });
 
@@ -44,69 +54,62 @@ function setupPageNav() {
   });
 }
 
+// ── MENÚ DE FILTROS: dos niveles ──
+// Nivel 1: Género | Autor
+// Nivel 2: listado del tipo seleccionado
+
 function buildFiltrosMenu() {
+  showFiltrosLevel1();
+}
+
+function showFiltrosLevel1() {
   const menu = document.getElementById('filtrosMenu');
   if (!menu) return;
+  menu.innerHTML = '';
+
+  menu.appendChild(buildFilterItem('Género ›', () => showFiltrosLevel2('genre'), false));
+  menu.appendChild(buildFilterItem('Autor ›',  () => showFiltrosLevel2('author'), false));
+}
+
+function showFiltrosLevel2(type) {
+  const menu = document.getElementById('filtrosMenu');
+  if (!menu) return;
+  menu.innerHTML = '';
 
   const published = ComicStore.getPublished();
 
-  // Géneros usados
-  const usedGenres  = [...new Set(published.map(c => c.genre).filter(Boolean))];
-  // Autores usados
-  const usedAuthors = [...new Set(published.map(c => c.username).filter(Boolean))].sort();
 
-  menu.innerHTML = '';
 
-  // ── SECCIÓN GÉNERO ──
-  const genreHeader = document.createElement('span');
-  genreHeader.className = 'dropdown-section-label';
-  genreHeader.textContent = 'Por género';
-  menu.appendChild(genreHeader);
-
-  if (usedGenres.length === 0) {
-    const empty = document.createElement('span');
-    empty.className = 'dropdown-item disabled-item';
-    empty.textContent = 'Sin géneros disponibles';
-    menu.appendChild(empty);
+  if (type === 'genre') {
+    const items = [...new Set(published.map(c => c.genre).filter(Boolean))];
+    if (items.length === 0) {
+      menu.appendChild(emptyItem('Sin géneros disponibles'));
+    } else {
+      items.forEach(id => {
+        const isActive = activeFilter.type === 'genre' && activeFilter.value === id;
+        menu.appendChild(buildFilterItem(genreLabel(id), () => applyFilter('genre', id), isActive));
+      });
+    }
   } else {
-    usedGenres.forEach(id => {
-      menu.appendChild(buildFilterItem(genreLabel(id), () => {
-        activeFilter = { type: 'genre', value: id };
-        updateFiltrosLabel();
-        setActiveBtn('filtrosBtn');
-        renderComics();
-        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
-      }, activeFilter.type === 'genre' && activeFilter.value === id));
-    });
+    const items = [...new Set(published.map(c => c.username).filter(Boolean))].sort();
+    if (items.length === 0) {
+      menu.appendChild(emptyItem('Sin autores disponibles'));
+    } else {
+      items.forEach(username => {
+        const isActive = activeFilter.type === 'author' && activeFilter.value === username;
+        menu.appendChild(buildFilterItem(username, () => applyFilter('author', username), isActive));
+      });
+    }
   }
+}
 
-  // ── SEPARADOR ──
-  const divider = document.createElement('div');
-  divider.className = 'dropdown-divider';
-  menu.appendChild(divider);
+function applyFilter(type, value) {
+  activeFilter = { type, value };
+  updateFiltrosLabel();
+  setActiveBtn('filtrosBtn');
+  renderComics();
+  document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
 
-  // ── SECCIÓN AUTOR ──
-  const authorHeader = document.createElement('span');
-  authorHeader.className = 'dropdown-section-label';
-  authorHeader.textContent = 'Por autor';
-  menu.appendChild(authorHeader);
-
-  if (usedAuthors.length === 0) {
-    const empty = document.createElement('span');
-    empty.className = 'dropdown-item disabled-item';
-    empty.textContent = 'Sin autores disponibles';
-    menu.appendChild(empty);
-  } else {
-    usedAuthors.forEach(username => {
-      menu.appendChild(buildFilterItem(username, () => {
-        activeFilter = { type: 'author', value: username };
-        updateFiltrosLabel();
-        setActiveBtn('filtrosBtn');
-        renderComics();
-        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
-      }, activeFilter.type === 'author' && activeFilter.value === username));
-    });
-  }
 }
 
 function buildFilterItem(label, onClick, isActive) {
@@ -116,6 +119,13 @@ function buildFilterItem(label, onClick, isActive) {
   item.textContent = label;
   item.addEventListener('click', (e) => { e.preventDefault(); onClick(); });
   return item;
+}
+
+function emptyItem(text) {
+  const s = document.createElement('span');
+  s.className = 'dropdown-item disabled-item';
+  s.textContent = text;
+  return s;
 }
 
 function updateFiltrosLabel() {
