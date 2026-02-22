@@ -117,7 +117,7 @@ function buildFilterItem(label, onClick, isActive) {
   item.className = 'dropdown-item' + (isActive ? ' active' : '');
   item.href = '#';
   item.textContent = label;
-  item.addEventListener('click', (e) => { e.preventDefault(); onClick(); });
+  item.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onClick(); });
   return item;
 }
 
