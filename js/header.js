@@ -15,14 +15,14 @@
         <a href="${root}index.html" class="logo-link">
           <span class="logo-main"><span class="logo-big">C</span>omi<span class="logo-accent"><span class="logo-big">X</span>ow</span></span>
         </a>
-        <span class="home-tagline">Tu plataforma de cómics</span>
+        <span class="home-tagline">${T('tagline')}</span>
       </div>
       <div class="home-user-area">
         ${user ? `
           <div class="dropdown">
             <button class="home-user-link" id="avatarBtn">${user.role === 'admin' ? '⚙️ ' : ''}${user.username} ▾</button>
             <div class="dropdown-menu" id="avatarMenu">
-              <a href="${root}pages/editor.html" class="dropdown-item">Mis cómics</a>
+              <a href="${root}pages/editor.html" class="dropdown-item">${T('myComics')}</a>
               ${user.role === 'admin' ? `<a href="${root}pages/admin.html" class="dropdown-item admin-item">⚙️ Panel admin</a>` : ''}
               <div class="dropdown-divider"></div>
               <a href="#" class="dropdown-item" id="logoutBtn">Cerrar sesión</a>

@@ -7,10 +7,10 @@
 const TRANSLATIONS = {
   es: {
     // Cabecera
-    tagline:          "Tu plataforma de cómics",
+    tagline:          "La creatividad es la inteligencia divirtiéndose",
     register:         "Regístrate",
     login:            "Entrar",
-    myComics:         "Mis cómics",
+    myComics:         "Mis creaciones",
     logout:           "Cerrar sesión",
     adminPanel:       "⚙️ Panel admin",
     deleteAccount:    "Eliminar mi cuenta",
@@ -24,7 +24,7 @@ const TRANSLATIONS = {
     byAuthor:         "Autor ›",
     noGenres:         "Sin géneros disponibles",
     noAuthors:        "Sin autores disponibles",
-    noComics:         "Aún no hay cómics publicados.",
+    noComics:         "Aún no hay obras publicadas.",
     beFirst:          "¡Sé el primero en crear uno!",
     read:             "Leer",
     edit:             "Editar",
@@ -32,11 +32,11 @@ const TRANSLATIONS = {
     delete:           "Eliminar",
 
     // Confirmaciones
-    confirmUnpublish: "¿Retirar este cómic del índice?\n\nPodrás seguir editándolo desde \"Crear\" → \"Mis cómics\".",
+    confirmUnpublish: "¿Retirar esta obra del índice?\n\nPodrás seguir editándola desde \"Crear\" → \"Mis creaciones\".",
     confirmDelete:    "Si eliminas este proyecto, ya no podrás acceder a él.\n\nSi solo quieres que no esté publicado pero quieres seguir editándolo, elige \"Dejar de publicar\".",
     confirmDeleteAccount: "Si eliminas tu cuenta se borrarán todos tus datos y cómics.\n\nEsta acción no se puede deshacer.",
-    unpublishOk:      "Cómic retirado del índice",
-    deleteOk:         "Cómic eliminado",
+    unpublishOk:      "Obra retirada del índice",
+    deleteOk:         "Obra eliminada",
 
     // Auth
     pageLogin:        "Iniciar sesión",
@@ -62,7 +62,7 @@ const TRANSLATIONS = {
 
     // Editor
     newProject:       "Nuevo proyecto",
-    comicTitle:       "Título del cómic",
+    comicTitle:       "Título",
     comicDesc:        "Descripción (opcional)",
     comicGenre:       "Género",
     genrePlaceholder: "Escribe uno nuevo...",
@@ -71,7 +71,7 @@ const TRANSLATIONS = {
     createProject:    "Crear proyecto",
     saveBtn:          "Guardar",
     publishBtn:       "📖 Publicar",
-    publishOk:        "¡Cómic publicado!",
+    publishOk:        "¡Obra publicada!",
     saveOk:           "Guardado",
     addDialog:        "💬 Bocadillo",
     addHeader:        "📋 Cabecera",
@@ -94,15 +94,15 @@ const TRANSLATIONS = {
     approve:          "✓ Aprobar",
     unpublishAdmin:   "Retirar",
     deleteAdmin:      "Eliminar",
-    noPending:        "No hay cómics pendientes de aprobación.",
-    noPublished:      "No hay cómics publicados.",
+    noPending:        "No hay obras pendientes de aprobación.",
+    noPublished:      "No hay obras publicadas.",
     noUsers:          "No hay usuarios registrados.",
   },
   en: {
-    tagline:          "Your comics platform",
+    tagline:          "Creativity is intelligence having fun",
     register:         "Sign Up",
     login:            "Sign In",
-    myComics:         "My Comics",
+    myComics:         "My Works",
     logout:           "Sign Out",
     adminPanel:       "⚙️ Admin panel",
     deleteAccount:    "Delete my account",
@@ -115,7 +115,7 @@ const TRANSLATIONS = {
     byAuthor:         "Author ›",
     noGenres:         "No genres available",
     noAuthors:        "No authors available",
-    noComics:         "No comics published yet.",
+    noComics:         "No works published yet.",
     beFirst:          "Be the first to create one!",
     read:             "Read",
     edit:             "Edit",
@@ -125,8 +125,8 @@ const TRANSLATIONS = {
     confirmUnpublish: "Remove this comic from the index?\n\nYou can keep editing it from \"Create\" → \"My comics\".",
     confirmDelete:    "If you delete this project you won\'t be able to access it anymore.\n\nIf you just want it unlisted but still editable, choose \"Unpublish\".",
     confirmDeleteAccount: "Deleting your account will remove all your data and comics.\n\nThis action cannot be undone.",
-    unpublishOk:      "Comic removed from index",
-    deleteOk:         "Comic deleted",
+    unpublishOk:      "Work removed from index",
+    deleteOk:         "Work deleted",
 
     pageLogin:        "Sign In",
     pageRegister:     "Create Account",
@@ -150,7 +150,7 @@ const TRANSLATIONS = {
     logoutOk:         "Signed out",
 
     newProject:       "New project",
-    comicTitle:       "Comic title",
+    comicTitle:       "Title",
     comicDesc:        "Description (optional)",
     comicGenre:       "Genre",
     genrePlaceholder: "Type a new one...",
@@ -159,7 +159,7 @@ const TRANSLATIONS = {
     createProject:    "Create project",
     saveBtn:          "Save",
     publishBtn:       "📖 Publish",
-    publishOk:        "Comic published!",
+    publishOk:        "Work published!",
     saveOk:           "Saved",
     addDialog:        "💬 Speech bubble",
     addHeader:        "📋 Header",
@@ -180,8 +180,8 @@ const TRANSLATIONS = {
     approve:          "✓ Approve",
     unpublishAdmin:   "Unpublish",
     deleteAdmin:      "Delete",
-    noPending:        "No comics pending approval.",
-    noPublished:      "No published comics.",
+    noPending:        "No works pending approval.",
+    noPublished:      "No published works.",
     noUsers:          "No registered users.",
   }
 };

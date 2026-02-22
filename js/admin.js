@@ -38,7 +38,7 @@ function renderTab(tab) {
 function renderPending(panel) {
   const comics = ComicStore.getAll().filter(c => !c.published && !c.approved && c.pendingReview);
   if (comics.length === 0) {
-    panel.innerHTML = '<p class="admin-empty">No hay cómics pendientes de aprobación.</p>';
+    panel.innerHTML = `<p class="admin-empty">${I18n.t('noPending')}</p>`;
     return;
   }
   comics.forEach(comic => panel.appendChild(buildAdminRow(comic, 'pending')));
@@ -48,7 +48,7 @@ function renderPending(panel) {
 function renderPublished(panel) {
   const comics = ComicStore.getPublished();
   if (comics.length === 0) {
-    panel.innerHTML = '<p class="admin-empty">No hay cómics publicados.</p>';
+    panel.innerHTML = `<p class="admin-empty">${I18n.t('noPublished')}</p>`;
     return;
   }
   comics.forEach(comic => panel.appendChild(buildAdminRow(comic, 'published')));

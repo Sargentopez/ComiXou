@@ -14,8 +14,8 @@
 <!-- PANTALLA 1: Lista de proyectos -->
 <main id="screenProjects" class="projects-screen">
   <div class="projects-header">
-    <h2 class="projects-title">Mis cómics</h2>
-    <button class="btn btn-primary" id="newProjectBtn">✨ Nuevo proyecto</button>
+    <h2 class="projects-title" data-i18n="myComics">Mis creaciones</h2>
+    <button class="btn btn-primary" id="newProjectBtn" data-i18n="newProject">✨ Nuevo proyecto</button>
   </div>
   <div class="projects-grid" id="projectsGrid"></div>
 </main>
@@ -39,12 +39,12 @@
 <div class="modal-overlay" id="projectModal">
   <div class="modal-box">
     <div class="modal-header">
-      <span class="modal-title">Nuevo proyecto</span>
+      <span class="modal-title" data-i18n="newProject">Nuevo proyecto</span>
       <button class="modal-close" id="projectModalClose">✕</button>
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label class="form-label">Título del cómic</label>
+        <label class="form-label" data-i18n="comicTitle">Título</label>
         <input type="text" id="comicTitleInput" class="form-input" maxlength="80" placeholder="Escribe el título...">
       </div>
       <div class="form-group">
