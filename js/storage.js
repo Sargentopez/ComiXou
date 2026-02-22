@@ -1,5 +1,5 @@
 /* ============================================================
-   storage.js — Persistencia de obras en localStorage
+   storage.js — Persistencia de cómics en localStorage
    ============================================================ */
 
 const ComicStore = (() => {
@@ -48,6 +48,12 @@ const ComicStore = (() => {
     };
   }
 
+  // Publicar/despublicar
+  function publish(id, bool=true) {
+    const c = getById(id);
+    if (c) { c.published = bool; save(c); }
+  }
+
   // Cómics del usuario
   function getByUser(userId) {
     return getAll().filter(c => c.userId === userId);
@@ -58,5 +64,5 @@ const ComicStore = (() => {
     return getAll().filter(c => c.published);
   }
 
-  return { getAll, getById, save, remove, createNew, getByUser, getPublished };
+  return { getAll, getById, save, remove, createNew, publish, getByUser, getPublished };
 })();

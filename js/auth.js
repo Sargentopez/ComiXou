@@ -1,7 +1,6 @@
 /* ============================================================
    auth.js — Autenticación (localStorage)
    La cabecera y sus dropdowns los gestiona header.js
-   showToast y escHtml están en utils.js
    ============================================================ */
 
 const Auth = (() => {
@@ -25,7 +24,7 @@ const Auth = (() => {
     users[key] = {
       id: 'u_' + Date.now(), username: username.trim(),
       email: key, passHash: simpleHash(password),
-      role: 'user', createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString()
     };
     saveUsers(users);
     return { ok: true };
@@ -54,7 +53,23 @@ const Auth = (() => {
 
   function currentUser() { return getSession(); }
   function isLogged()    { return !!getSession(); }
-  function isAdmin()     { const u = getSession(); return !!(u && u.role === 'admin'); }
+  function isAdmin()     { const u = getSession(); return u && u.role === 'admin'; }
 
-  return { register, login, logout, deleteAccount, currentUser, isLogged, isAdmin };
+  function getRootPath() {
+    return window.location.pathname.includes('/pages/') ? '../' : '';
+  }
+
+  // updateNavUI: solo por compatibilidad con páginas que aún la llamen
+  function updateNavUI() { /* gestionado por header.js */ }
+
+  return { register, login, logout, deleteAccount, currentUser, isLogged, isAdmin, updateNavUI, getRootPath };
 })();
+
+// ── Toast global ──
+function showToast(msg, duration = 2500) {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), duration);
+}

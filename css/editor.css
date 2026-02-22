@@ -85,7 +85,7 @@
 .editor-btn { padding: 8px 14px; font-size: 0.9rem; }
 
 /* ── PANTALLA PROYECTOS ── */
-.projects-screen { max-width: 900px; margin: 0 auto; padding: 30px 16px; }
+.projects-screen { padding-top: 0; /* padding-top ya aplicado en body.editor-page */ max-width: 900px; margin: 0 auto; padding: 30px 16px; }
 .projects-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 24px; padding-bottom: 12px;
@@ -364,4 +364,14 @@
   .editor-menu-btn { padding: 8px 10px; font-size: 0.85rem; }
   .editor-btn      { padding: 7px 10px; font-size: 0.82rem; }
   .projects-grid   { grid-template-columns: 1fr 1fr; gap: 12px; }
+}
+
+/* ── CAMPO GÉNERO EN MODAL ── */
+.genre-field {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.genre-field .form-input { flex: 1; min-width: 100px; }
+.genre-or {
+  font-size: 0.8rem; color: var(--gray-400);
+  font-weight: 700; flex-shrink: 0;
 }

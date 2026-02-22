@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── MENÚ DE PÁGINA ──
 function setupPageNav() {
-  showFiltrosLevel1();
+  buildFiltrosMenu();
 
   const filtrosBtn  = document.getElementById('filtrosBtn');
   const filtrosMenu = document.getElementById('filtrosMenu');
@@ -57,6 +57,10 @@ function setupPageNav() {
 // ── MENÚ DE FILTROS: dos niveles ──
 // Nivel 1: Género | Autor
 // Nivel 2: listado del tipo seleccionado
+
+function buildFiltrosMenu() {
+  showFiltrosLevel1();
+}
 
 function showFiltrosLevel1() {
   const menu = document.getElementById('filtrosMenu');
@@ -189,7 +193,7 @@ function buildRow(comic, currentUser) {
 
   const title = document.createElement('div');
   title.className = 'comic-row-title';
-  title.textContent = comic.title || I18n.t('noWork');
+  title.textContent = comic.title || 'Sin título';
 
   const meta = document.createElement('div');
   meta.className = 'comic-row-author';
@@ -253,3 +257,8 @@ function buildRow(comic, currentUser) {
   return row;
 }
 
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}

@@ -132,3 +132,24 @@
   .comic-row-thumb img { width: 88px; height: 88px; min-width: 88px; max-width: 88px; }
   .comic-row-title { font-size: 1rem; }
 }
+
+/* ── BADGE DE GÉNERO ── */
+.genre-badge {
+  display: inline-block;
+  font-size: 0.7rem; font-weight: 700;
+  color: var(--gray-700);
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: 3px;
+  padding: 1px 5px;
+  vertical-align: middle;
+}
+
+/* ── ITEM ACTIVO EN FILTROS ── */
+.dropdown-item.active {
+  color: var(--ink);
+  font-weight: 900;
+}
+.dropdown-item.active::before {
+  content: '✓ ';
+}
