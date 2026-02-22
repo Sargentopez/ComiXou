@@ -47,9 +47,13 @@ function renderComics(filter = 'all') {
   const empty = document.getElementById('emptyState');
   grid.querySelectorAll('.comic-row').forEach(el => el.remove());
 
-  let comics = ComicStore.getPublished();
+  // Siempre ordenar de más reciente a más antiguo
+  let comics = [...ComicStore.getPublished()]
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+  // Novedades: scroll al top además del orden (ya es el mismo)
   if (filter === 'recent') {
-    comics = [...comics].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   if (comics.length === 0) {
@@ -63,7 +67,7 @@ function renderComics(filter = 'all') {
 }
 
 function buildRow(comic, currentUser) {
-  const isOwner    = currentUser && currentUser.id === comic.userId;
+  const isOwner    = currentUser && (currentUser.id === comic.userId || currentUser.role === 'admin');
   const firstPanel = comic.panels?.[0];
   const thumbSrc   = firstPanel?.dataUrl || null;
 
