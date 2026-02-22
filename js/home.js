@@ -67,8 +67,8 @@ function showFiltrosLevel1() {
   if (!menu) return;
   menu.innerHTML = '';
 
-  menu.appendChild(buildFilterItem('Género ›', () => showFiltrosLevel2('genre'), false));
-  menu.appendChild(buildFilterItem('Autor ›',  () => showFiltrosLevel2('author'), false));
+  menu.appendChild(buildFilterItem(I18n.t('byGenre'), () => showFiltrosLevel2('genre'), false));
+  menu.appendChild(buildFilterItem(I18n.t('byAuthor'),  () => showFiltrosLevel2('author'), false));
 }
 
 function showFiltrosLevel2(type) {
@@ -81,9 +81,9 @@ function showFiltrosLevel2(type) {
 
 
   if (type === 'genre') {
-    const items = [...new Set(published.map(c => c.genre).filter(Boolean))];
+    const items = [...new Set(published.map(c => c.genre).filter(Boolean))].sort((a,b) => genreLabel(a).localeCompare(genreLabel(b), 'es'));
     if (items.length === 0) {
-      menu.appendChild(emptyItem('Sin géneros disponibles'));
+      menu.appendChild(emptyItem(I18n.t('noGenres')));
     } else {
       items.forEach(id => {
         const isActive = activeFilter.type === 'genre' && activeFilter.value === id;
@@ -91,9 +91,9 @@ function showFiltrosLevel2(type) {
       });
     }
   } else {
-    const items = [...new Set(published.map(c => c.username).filter(Boolean))].sort();
+    const items = [...new Set(published.map(c => c.username).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
     if (items.length === 0) {
-      menu.appendChild(emptyItem('Sin autores disponibles'));
+      menu.appendChild(emptyItem(I18n.t('noAuthors')));
     } else {
       items.forEach(username => {
         const isActive = activeFilter.type === 'author' && activeFilter.value === username;
@@ -132,7 +132,7 @@ function updateFiltrosLabel() {
   const btn = document.getElementById('filtrosBtn');
   if (!btn) return;
   if (!activeFilter.type) {
-    btn.textContent = 'Filtros ▾';
+    btn.textContent = I18n.t('filterBtn');
   } else if (activeFilter.type === 'genre') {
     btn.textContent = `${genreLabel(activeFilter.value)} ▾`;
   } else {
@@ -211,39 +211,39 @@ function buildRow(comic, currentUser) {
   const readBtn = document.createElement('a');
   readBtn.className = 'comic-row-btn';
   readBtn.href = `pages/reader.html?id=${comic.id}`;
-  readBtn.textContent = 'Leer';
+  readBtn.textContent = I18n.t('read');
   actions.appendChild(readBtn);
 
   if (isOwner) {
     const editBtn = document.createElement('a');
     editBtn.className = 'comic-row-btn edit';
     editBtn.href = `pages/editor.html?id=${comic.id}`;
-    editBtn.textContent = 'Editar';
+    editBtn.textContent = I18n.t('edit');
     actions.appendChild(editBtn);
 
     const unpubBtn = document.createElement('button');
     unpubBtn.className = 'comic-row-btn unpub';
-    unpubBtn.textContent = 'Dejar de publicar';
+    unpubBtn.textContent = I18n.t('unpublish');
     unpubBtn.addEventListener('click', () => {
-      if (confirm('¿Retirar este cómic del índice?\n\nPodrás seguir editándolo desde "Crear" → "Mis cómics".')) {
+      if (confirm(I18n.t('confirmUnpublish'))) {
         comic.published = false;
         ComicStore.save(comic);
         buildFiltrosMenu();
         renderComics();
-        showToast('Cómic retirado del índice');
+        showToast(I18n.t('unpublishOk'));
       }
     });
     actions.appendChild(unpubBtn);
 
     const delBtn = document.createElement('button');
     delBtn.className = 'comic-row-btn del';
-    delBtn.textContent = 'Eliminar';
+    delBtn.textContent = I18n.t('delete');
     delBtn.addEventListener('click', () => {
-      if (confirm('Si eliminas este proyecto, ya no podrás acceder a él.\n\nSi solo quieres que no esté publicado pero quieres seguir editándolo, elige "Dejar de publicar".')) {
+      if (confirm(I18n.t('confirmDelete'))) {
         ComicStore.remove(comic.id);
         buildFiltrosMenu();
         renderComics();
-        showToast('Cómic eliminado');
+        showToast(I18n.t('deleteOk'));
       }
     });
     actions.appendChild(delBtn);
