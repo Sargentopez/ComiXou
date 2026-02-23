@@ -40,13 +40,13 @@
 
   var html = '<header class="site-header home-header" id="siteHeader">'
     + '<div class="home-header-inner">'
-      + '<div class="home-logo-area">'
-        + '<a href="' + root + 'index.html" class="logo-link">'
-          + '<span class="logo-main"><span class="logo-big">C</span>omi<span class="logo-accent"><span class="logo-big">X</span>ow</span></span>'
-        + '</a>'
-        + '<span class="home-tagline">' + T('tagline') + '</span>'
-      + '</div>'
-      + '<div class="home-user-area">'
+      + '<div class="home-header-row1">'
+        + '<div class="home-logo-area">'
+          + '<a href="' + root + 'index.html" class="logo-link">'
+            + '<span class="logo-main"><span class="logo-big">C</span>omi<span class="logo-accent"><span class="logo-big">X</span>ow</span></span>'
+          + '</a>'
+        + '</div>'
+        + '<div class="home-user-area">'
         + userBlock
         + '<div class="dropdown">'
           + '<button class="home-dots-btn" id="dotsBtn">⋮</button>'
@@ -58,8 +58,10 @@
             + '<span class="dropdown-item disabled-item">✉️ Contacto</span>'
             + '<span class="dropdown-item disabled-item">☕ Invítame a un café</span>'
           + '</div>'
+          + '</div>'
         + '</div>'
-      + '</div>'
+      + '</div>'  
+      + '<div class="home-tagline">' + T('tagline') + '</div>'
     + '</div>'
   + '</header>';
 
