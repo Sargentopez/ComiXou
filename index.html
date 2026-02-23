@@ -14,50 +14,44 @@
 </head>
 <body>
 
-<!-- Barra 1: cabecera — inyectada por header.js -->
+  <!-- Cabecera fija: inyectada por header.js, persiste entre vistas -->
+  <!-- Vistas SPA: se renderizan aquí -->
+  <div id="appView"></div>
+  <div class="toast" id="toast"></div>
 
-<!-- Barra 2: menú de página (fija, bajo la cabecera) -->
-<nav class="page-nav" id="pageNav">
+  <!-- Core -->
+  <script src="js/utils.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/genres.js"></script>
+  <script src="js/seed.js"></script>
 
-  <!-- Filtros -->
-  <div class="dropdown page-nav-item">
-    <button class="page-nav-btn" id="filtrosBtn" data-i18n="filterBtn">Filtros ▾</button>
-    <div class="dropdown-menu page-nav-dropdown" id="filtrosMenu">
-      <!-- poblado dinámicamente por home.js -->
-    </div>
-  </div>
+  <!-- Router SPA -->
+  <script src="js/router.js"></script>
 
-  <span class="page-nav-sep"></span>
+  <!-- Lógica de cada vista -->
+  <script src="js/home.js"></script>
+  <script src="js/auth-pages.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/reader.js"></script>
+  <script src="js/admin.js"></script>
 
-  <!-- Novedades -->
-  <button class="page-nav-btn" id="novedadesBtn" data-i18n="novedades">Novedades</button>
+  <!-- Registro de vistas -->
+  <script src="js/views.js"></script>
 
-  <span class="page-nav-sep"></span>
+  <!-- Header persistente -->
+  <script src="js/header.js"></script>
 
-  <!-- Crear -->
-  <button class="page-nav-btn page-nav-btn-create" id="createBtn" data-i18n="create">Crear</button>
+  <!-- PWA -->
+  <script src="js/pwa.js"></script>
 
-</nav>
+  <!-- Arrancar -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      Router.start();
+    });
+  </script>
 
-<!-- Contenido scrollable -->
-<main class="home-list" id="comicsGrid">
-  <div class="home-empty hidden" id="emptyState">
-    <span>📚</span>
-    <p data-i18n="noComics">Aún no hay cómics publicados.</p>
-    <p data-i18n="beFirst">¡Sé el primero en crear uno!</p>
-  </div>
-</main>
-
-<div class="toast" id="toast"></div>
-<footer class="app-version">v2.3</footer>
-<script src="js/utils.js"></script>
-<script src="js/i18n.js"></script>
-<script src="js/auth.js"></script>
-<script src="js/storage.js"></script>
-<script src="js/header.js"></script>
-<script src="js/genres.js"></script>
-<script src="js/home.js"></script>
-<script src="js/seed.js"></script>
-<script src="js/pwa.js"></script>
 </body>
 </html>

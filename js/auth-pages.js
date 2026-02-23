@@ -2,7 +2,7 @@
    auth-pages.js — Lógica de formularios login/registro
    ============================================================ */
 
-document.addEventListener('DOMContentLoaded', () => {
+function AuthView_init() {
   // ── Mostrar/ocultar contraseña ──
   const passToggle = document.getElementById('passToggle');
   if (passToggle) {
@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const params = new URLSearchParams(window.location.search);
       const redirect = params.get('redirect');
       setTimeout(() => {
-        window.location.href = redirect === 'editor' ? 'editor.html' : '../index.html';
+        Router.go(redirect === 'editor' ? 'editor' : 'home');
       }, 800);
     });
   }
@@ -91,7 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       showToast(I18n.t('registerOk'));
-      setTimeout(() => { window.location.href = 'login.html'; }, 1200);
+      setTimeout(() => { Router.go('login'); }, 1200);
     });
   }
 });

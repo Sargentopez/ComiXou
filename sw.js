@@ -1,5 +1,5 @@
-/* ComiXow Service Worker */
-const CACHE = 'comixow-v3';
+/* ComiXow Service Worker — SPA */
+const CACHE = 'comixow-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -22,11 +22,8 @@ const ASSETS = [
   './js/reader.js',
   './js/admin.js',
   './js/seed.js',
-  './pages/login.html',
-  './pages/register.html',
-  './pages/editor.html',
-  './pages/reader.html',
-  './pages/admin.html',
+  './js/router.js',
+  './js/views.js',
   './js/pwa.js',
   './icon-192.png',
   './icon-512.png',
@@ -45,6 +42,11 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  // SPA: cualquier navegación devuelve index.html
+  if (e.request.mode === 'navigate') {
+    e.respondWith(caches.match('./index.html'));
+    return;
+  }
   e.respondWith(
     caches.match(e.request).then(r => r || fetch(e.request).catch(() => caches.match('./index.html')))
   );

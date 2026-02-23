@@ -4,11 +4,12 @@
 
 let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | null
 
-document.addEventListener('DOMContentLoaded', () => {
+// ── Punto de entrada SPA ──
+function HomeView_init() {
   adjustBars();
   renderComics();
   setupPageNav();
-});
+}
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera
 function adjustBars() {
@@ -73,9 +74,7 @@ function setupPageNav() {
 
   // Crear
   document.getElementById('createBtn')?.addEventListener('click', () => {
-    window.location.href = Auth.isLogged()
-      ? 'pages/editor.html'
-      : 'pages/login.html?redirect=editor';
+    Router.go(Auth.isLogged() ? 'editor' : 'login');
   });
 }
 
@@ -231,14 +230,14 @@ function buildRow(comic, currentUser) {
 
   const readBtn = document.createElement('a');
   readBtn.className = 'comic-row-btn';
-  readBtn.href = `pages/reader.html?id=${comic.id}`;
+  readBtn.href = '#'; readBtn.onclick = (e) => { e.preventDefault(); Router.go('reader', { id: comic.id }); };
   readBtn.textContent = I18n.t('read');
   actions.appendChild(readBtn);
 
   if (isOwner) {
     const editBtn = document.createElement('a');
     editBtn.className = 'comic-row-btn edit';
-    editBtn.href = `pages/editor.html?id=${comic.id}`;
+    editBtn.href = '#'; editBtn.onclick = (e) => { e.preventDefault(); Router.go('editor', { id: comic.id }); };
     editBtn.textContent = I18n.t('edit');
     actions.appendChild(editBtn);
 

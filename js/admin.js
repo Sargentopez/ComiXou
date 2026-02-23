@@ -2,10 +2,10 @@
    admin.js — Panel de administración
    ============================================================ */
 
-document.addEventListener('DOMContentLoaded', () => {
+function AdminView_init() {
   // Solo admins
   if (!Auth.isAdmin()) {
-    window.location.href = '../index.html';
+    Router.go('home');
     return;
   }
 
@@ -59,7 +59,7 @@ function renderUsers(panel) {
   const users = JSON.parse(localStorage.getItem('cs_users') || '{}');
   const list  = Object.values(users);
   if (list.length === 0) {
-    panel.innerHTML = '<p class="admin-empty">No hay usuarios registrados.</p>';
+    panel.innerHTML = `<p class="admin-empty">${I18n.t('noUsers')}</p>`;
     return;
   }
   list.forEach(user => {
@@ -74,12 +74,12 @@ function renderUsers(panel) {
         ${user.role !== 'admin' ? `<button class="admin-btn admin-btn-warn" data-uid="${user.id}" data-email="${escHtml(user.email)}" id="delUser_${user.id}">Eliminar</button>` : '<span class="admin-badge">Admin</span>'}
       </div>`;
     row.querySelector(`#delUser_${user.id}`)?.addEventListener('click', () => {
-      if (confirm(`¿Eliminar al usuario ${user.username}? Se borrarán también todos sus cómics.`)) {
+      if (confirm(I18n.t('confirmDeleteUser') ? I18n.t('confirmDeleteUser').replace('{name}', user.username) : `¿Eliminar ${user.username}?`)) {
         ComicStore.getByUser(user.id).forEach(c => ComicStore.remove(c.id));
         const users2 = JSON.parse(localStorage.getItem('cs_users') || '{}');
         delete users2[user.email];
         localStorage.setItem('cs_users', JSON.stringify(users2));
-        showToast('Usuario eliminado');
+        showToast(I18n.t('userDeleted'));
         renderTab('users');
       }
     });
@@ -100,7 +100,7 @@ function buildAdminRow(comic, mode) {
     <div class="admin-row-thumb">${thumb}</div>
     <div class="admin-row-info">
       <span class="admin-row-title">${escHtml(comic.title || 'Sin título')}</span>
-      <span class="admin-row-meta">por ${escHtml(comic.username || '')} · ${comic.panels?.length || 0} páginas</span>
+      <span class="admin-row-meta">${I18n.t('by')} ${escHtml(comic.username || '')} · ${comic.panels?.length || 0} ${(comic.panels?.length || 0) !== 1 ? I18n.t('panelsWord') : I18n.t('panelWord')}</span>
       <span class="admin-row-meta">${new Date(comic.createdAt).toLocaleDateString('es')}</span>
     </div>
     <div class="admin-row-actions">
@@ -113,7 +113,7 @@ function buildAdminRow(comic, mode) {
     const c = ComicStore.getById(comic.id);
     c.approved = true; c.published = true; c.pendingReview = false;
     ComicStore.save(c);
-    showToast('Cómic aprobado y publicado');
+    showToast(I18n.t('approveOk'));
     renderTab('pending');
   });
 
@@ -121,14 +121,14 @@ function buildAdminRow(comic, mode) {
     const c = ComicStore.getById(comic.id);
     c.published = false;
     ComicStore.save(c);
-    showToast('Cómic retirado');
+    showToast(I18n.t('retireOk'));
     renderTab('published');
   });
 
   row.querySelector(`#del_${comic.id}`)?.addEventListener('click', () => {
-    if (confirm(`¿Eliminar "${comic.title}"? Esta acción no se puede deshacer.`)) {
+    if (confirm(I18n.t('confirmDelete'))) {
       ComicStore.remove(comic.id);
-      showToast('Cómic eliminado');
+      showToast(I18n.t('workDeleted'));
       renderTab(mode);
     }
   });
@@ -137,8 +137,3 @@ function buildAdminRow(comic, mode) {
 }
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}

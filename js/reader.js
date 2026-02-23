@@ -11,20 +11,19 @@ const ReaderState = {
   animating:       false,
 };
 
-document.addEventListener('DOMContentLoaded', () => {
-  const params  = new URLSearchParams(window.location.search);
-  const comicId = params.get('id');
-  if (!comicId) { window.location.href = '../index.html'; return; }
+function ReaderView_init(params) {
+  const comicId = (params && params.id) ? params.id : new URLSearchParams(window.location.search).get('id');
+  if (!comicId) { Router.go('home'); return; }
 
   const comic = ComicStore.getById(comicId);
   if (!comic || !comic.panels || comic.panels.length === 0) {
-    showToast('Cómic no encontrado');
-    setTimeout(() => window.location.href = '../index.html', 1500);
+    showToast(I18n.t('workNotFound'));
+    setTimeout(() => Router.go('home'), 1500);
     return;
   }
 
   ReaderState.comic = comic;
-  document.getElementById('readerComicTitle').textContent = comic.title || 'Cómic';
+  document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
 
   buildPanelElements();
   goToPanel(0);
@@ -236,7 +235,7 @@ function setupControls() {
   document.addEventListener('keydown', (e) => {
     if (['ArrowRight','Space','Enter'].includes(e.code)) { e.preventDefault(); advance(); }
     if (e.code === 'ArrowLeft') goBack();
-    if (e.code === 'Escape') window.location.href = '../index.html';
+    if (e.code === 'Escape') Router.go('home');
   });
 
   // Swipe (móvil)
@@ -282,8 +281,4 @@ function showSwipeHint() {
   if (!hint) return;
   setTimeout(() => { hint.style.opacity = '0'; }, 2500);
   setTimeout(() => { hint.style.display = 'none'; }, 3200);
-}
-
-function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
