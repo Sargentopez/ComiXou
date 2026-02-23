@@ -4,31 +4,6 @@
    ============================================================ */
 
 (function () {
-  // ── Fullscreen API: eliminar banda negra en Android PWA ──
-  // El manifest pide fullscreen pero Chrome Android a veces deja una banda negra.
-  // Llamar a requestFullscreen() garantiza que el contenido ocupa toda la pantalla.
-  function requestNativeFullscreen() {
-    var el = document.documentElement;
-    var isFullscreenMode = window.matchMedia('(display-mode: fullscreen)').matches;
-    var isStandalone = window.matchMedia('(display-mode: standalone)').matches
-      || window.navigator.standalone;
-
-    if ((isFullscreenMode || isStandalone) && el.requestFullscreen) {
-      el.requestFullscreen({ navigationUI: 'hide' }).catch(function() {
-        // El navegador puede rechazarlo si no hay gesto del usuario — silenciar
-      });
-    }
-  }
-
-  // Intentar al cargar y también al primer toque del usuario
-  document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(requestNativeFullscreen, 300);
-  });
-  document.addEventListener('touchend', function handler() {
-    requestNativeFullscreen();
-    document.removeEventListener('touchend', handler);
-  }, { once: true });
-
   // ── Registrar Service Worker ──
   if ('serviceWorker' in navigator) {
     const swPath = window.location.pathname.includes('/pages/')

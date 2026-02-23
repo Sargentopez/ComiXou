@@ -149,4 +149,26 @@
       }
     });
   }
+  // ── Pantalla completa en PWA ──
+  // Se ejecuta en cada página para mantener el fullscreen al navegar
+  (function goFullscreen() {
+    var el = document.documentElement;
+    if (!el.requestFullscreen) return;
+    var inPWA = window.matchMedia('(display-mode: fullscreen)').matches ||
+                window.matchMedia('(display-mode: standalone)').matches ||
+                window.navigator.standalone;
+    if (!inPWA) return;
+
+    function tryFullscreen() {
+      if (!document.fullscreenElement) {
+        el.requestFullscreen({ navigationUI: 'hide' }).catch(function(){});
+      }
+    }
+    // Intentar al cargar
+    setTimeout(tryFullscreen, 200);
+    // Y al primer toque del usuario (algunos navegadores lo requieren)
+    document.addEventListener('touchend', tryFullscreen, { once: true });
+    document.addEventListener('click',    tryFullscreen, { once: true });
+  })();
+
 })();
