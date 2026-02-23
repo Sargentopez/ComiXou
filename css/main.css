@@ -43,17 +43,13 @@ html {
 }
 body {
   font-family: var(--font-body);
-  background: var(--paper);
+  /* Amarillo en todo el body para que no aparezca negro
+     encima del header en PWA fullscreen de Android */
+  background: #FFE135;
   color: var(--ink);
   min-height: 100%;
   line-height: 1.5;
   overflow-x: hidden;
-}
-/* En PWA instalada el fondo amarillo del <html> cubre la barra de estado.
-   El site-header arranca desde top:0 y su fondo amarillo se funde con html */
-@media all and (display-mode: standalone),
-       all and (display-mode: fullscreen) {
-  body { background: var(--paper); }
 }
 img { max-width: 100%; display: block; }
 a { color: inherit; text-decoration: none; }

@@ -73,6 +73,7 @@
   margin-right: auto;
   width: 100%;
   min-height: 100vh;
+  background: var(--paper);  /* fondo crema, no hereda el amarillo del body */
 }
 
 /* ── FILA DE CÓMIC ── */
