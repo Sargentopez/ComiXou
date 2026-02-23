@@ -66,6 +66,32 @@
   // Inyectar al inicio del body
   document.body.insertAdjacentHTML('afterbegin', html);
 
+  // Forzar safe-area en Android donde env() puede devolver 0
+  (function fixSafeArea() {
+    var hdr = document.getElementById('siteHeader');
+    if (!hdr) return;
+    // Leer el valor CSS calculado
+    var inset = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue('--sat') || '0', 10);
+    // Fallback: en Android standalone la barra de estado suele medir 24-32px
+    var isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone;
+    if (isStandalone && hdr.style.paddingTop === '' || hdr.style.paddingTop === '0px') {
+      // Detectar si env() realmente funciona poniendo un div de prueba
+      var probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;top:env(safe-area-inset-top,0px);height:0;width:0;visibility:hidden';
+      document.body.appendChild(probe);
+      var probeTop = probe.getBoundingClientRect().top;
+      document.body.removeChild(probe);
+      if (probeTop === 0 && isStandalone) {
+        // env() no funciona — aplicar manualmente
+        var ua = navigator.userAgent;
+        var isAndroid = /android/i.test(ua);
+        if (isAndroid) hdr.style.paddingTop = '28px';
+      }
+    }
+  })();
+
   // Ajustar padding-top del body según altura real de la cabecera (páginas sin barra 2)
   if (!document.getElementById('pageNav')) {
     var adjustPadding = function() {

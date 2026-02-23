@@ -24,8 +24,9 @@ function adjustBars() {
     if (list) list.style.paddingTop = (hh + pageNav.offsetHeight + 8) + 'px';
   }
   recalc();
-  // Re-run after fonts/layout settle
-  setTimeout(recalc, 100);
+  // Re-run tras safe-area fix y render de fuentes
+  setTimeout(recalc, 50);
+  setTimeout(recalc, 300);
   window.addEventListener('resize', recalc);
 }
 
