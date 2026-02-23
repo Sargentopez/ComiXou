@@ -38,21 +38,22 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html {
   scroll-behavior: smooth;
-  /* PWA fullscreen Android/iOS: rellena la banda negra de la barra de estado
-     con el color de fondo y empuja el contenido hacia abajo */
-  min-height: calc(100% + env(safe-area-inset-top));
-  padding-top: env(safe-area-inset-top);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
-  background: #FFE135; /* amarillo visible en la zona de safe-area */
+  height: 100%;
+  background: #FFE135;
 }
 body {
   font-family: var(--font-body);
   background: var(--paper);
   color: var(--ink);
-  min-height: 100vh;
+  min-height: 100%;
   line-height: 1.5;
   overflow-x: hidden;
+}
+/* En PWA instalada el fondo amarillo del <html> cubre la barra de estado.
+   El site-header arranca desde top:0 y su fondo amarillo se funde con html */
+@media all and (display-mode: standalone),
+       all and (display-mode: fullscreen) {
+  body { background: var(--paper); }
 }
 img { max-width: 100%; display: block; }
 a { color: inherit; text-decoration: none; }
@@ -339,9 +340,8 @@ a { color: inherit; text-decoration: none; }
   .logo-main { font-size: 1.5rem; }
 }
 
-/* ── PWA safe area ── */
+/* ── PWA safe area: solo bottom (el top lo gestiona el fondo del html) ── */
 @supports(padding: max(0px)){
-  .site-header { padding-top: env(safe-area-inset-top); }
   body { padding-bottom: env(safe-area-inset-bottom); }
 }
 

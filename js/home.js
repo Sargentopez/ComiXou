@@ -18,16 +18,19 @@ function adjustBars() {
   if (!header || !pageNav) return;
 
   function recalc() {
-    // offsetHeight already includes the safe-area-inset-top padding we added via CSS
-    const hh = header.offsetHeight;
+    const hh = header.getBoundingClientRect().height;
     pageNav.style.top = hh + 'px';
-    if (list) list.style.paddingTop = (hh + pageNav.offsetHeight + 8) + 'px';
+    if (list) list.style.paddingTop = (hh + pageNav.getBoundingClientRect().height + 8) + 'px';
   }
+
+  // Varias pasadas: DOM listo, fuentes cargadas, imágenes renderizadas
   recalc();
-  // Re-run tras safe-area fix y render de fuentes
   setTimeout(recalc, 50);
-  setTimeout(recalc, 300);
+  setTimeout(recalc, 200);
+  setTimeout(recalc, 600);
   window.addEventListener('resize', recalc);
+  // Repetir cuando las fuentes web estén listas
+  document.fonts && document.fonts.ready.then(recalc);
 }
 
 // ── MENÚ DE PÁGINA ──

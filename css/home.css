@@ -11,12 +11,12 @@
 
 /* ── BARRA 1: cabecera global (posicionada en main.css) ── */
 /* ya es sticky — aquí solo ajustamos altura */
-.home-header { height: var(--header-h); min-height: var(--header-h); }
+.home-header { height: auto; }  /* altura libre, la mide adjustBars() */
 
 /* ── BARRA 2: menú de página ── */
 .page-nav {
   position: fixed;
-  top: var(--header-h);
+  top: var(--header-h);  /* JS adjustBars() lo sobreescribe con el valor real */
   left: 0; right: 0;
   z-index: 900;
   height: var(--pagenav-h);
