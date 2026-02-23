@@ -153,3 +153,14 @@
 .dropdown-item.active::before {
   content: '✓ ';
 }
+
+/* ── VERSIÓN ── */
+.app-version {
+  text-align: center;
+  padding: 20px 0 32px;
+  font-size: 0.7rem;
+  color: var(--gray-300);
+  font-weight: 600;
+  letter-spacing: .05em;
+  user-select: none;
+}
