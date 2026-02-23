@@ -4,10 +4,11 @@
   "description": "La creatividad es la inteligencia divirtiéndose",
   "start_url": "./index.html",
   "scope": "./",
-  "display": "standalone",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
   "orientation": "any",
   "background_color": "#FFE135",
-  "theme_color": "#1A1A1A",
+  "theme_color": "#FFE135",
   "icons": [
     {
       "src": "icon-192.png",
