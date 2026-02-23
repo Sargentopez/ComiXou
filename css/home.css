@@ -4,7 +4,7 @@
 
 /* ── VARIABLES DE ALTURA DE BARRAS ── */
 :root {
-  --header-h:  52px;   /* barra 1: logo/usuario */
+  --header-h:  68px;   /* barra 1: logo/usuario (auto height, aprox) */
   --pagenav-h: 44px;   /* barra 2: menú de página */
   --bars-h: calc(var(--header-h) + var(--pagenav-h));
 }

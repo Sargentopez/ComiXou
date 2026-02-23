@@ -66,6 +66,17 @@
   // Inyectar al inicio del body
   document.body.insertAdjacentHTML('afterbegin', html);
 
+  // Ajustar padding-top del body según altura real de la cabecera (páginas sin barra 2)
+  if (!document.getElementById('pageNav')) {
+    var adjustPadding = function() {
+      var hdr = document.getElementById('siteHeader');
+      if (hdr) document.body.style.paddingTop = hdr.offsetHeight + 'px';
+    };
+    // Ejecutar tras render
+    requestAnimationFrame(adjustPadding);
+    window.addEventListener('resize', adjustPadding);
+  }
+
   // ── Dropdowns ──
   function bind(btnId, menuId) {
     var btn  = document.getElementById(btnId);

@@ -5,9 +5,26 @@
 let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | null
 
 document.addEventListener('DOMContentLoaded', () => {
+  adjustBars();
   renderComics();
   setupPageNav();
 });
+
+// Ajusta la posición de la barra de página según la altura real de la cabecera
+function adjustBars() {
+  const header  = document.getElementById('siteHeader');
+  const pageNav = document.getElementById('pageNav');
+  const list    = document.getElementById('comicsGrid');
+  if (!header || !pageNav) return;
+
+  function recalc() {
+    const hh = header.offsetHeight;
+    pageNav.style.top = hh + 'px';
+    if (list) list.style.paddingTop = (hh + pageNav.offsetHeight) + 'px';
+  }
+  recalc();
+  window.addEventListener('resize', recalc);
+}
 
 // ── MENÚ DE PÁGINA ──
 function setupPageNav() {
