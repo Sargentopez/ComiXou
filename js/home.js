@@ -18,11 +18,14 @@ function adjustBars() {
   if (!header || !pageNav) return;
 
   function recalc() {
+    // offsetHeight already includes the safe-area-inset-top padding we added via CSS
     const hh = header.offsetHeight;
     pageNav.style.top = hh + 'px';
-    if (list) list.style.paddingTop = (hh + pageNav.offsetHeight) + 'px';
+    if (list) list.style.paddingTop = (hh + pageNav.offsetHeight + 8) + 'px';
   }
   recalc();
+  // Re-run after fonts/layout settle
+  setTimeout(recalc, 100);
   window.addEventListener('resize', recalc);
 }
 

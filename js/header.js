@@ -72,8 +72,10 @@
       var hdr = document.getElementById('siteHeader');
       if (hdr) document.body.style.paddingTop = hdr.offsetHeight + 'px';
     };
-    // Ejecutar tras render
-    requestAnimationFrame(adjustPadding);
+    requestAnimationFrame(function() {
+      adjustPadding();
+      setTimeout(adjustPadding, 100); // segunda pasada tras render completo
+    });
     window.addEventListener('resize', adjustPadding);
   }
 

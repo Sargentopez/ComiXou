@@ -94,6 +94,8 @@ a { color: inherit; text-decoration: none; }
   height: auto;
   min-height: var(--header-h);
   box-shadow: 0 3px 0 var(--black);
+  /* Compensar barra de estado del sistema en app instalada */
+  padding-top: env(safe-area-inset-top);
 }
 .header-inner {
   max-width: var(--max-w);
