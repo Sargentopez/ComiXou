@@ -393,3 +393,57 @@ body.auth-page { padding-top: var(--header-h); }
 
 /* Editor: cabecera fija, el resto lo gestiona editor.css */
 body.editor-page { padding-top: var(--header-h); }
+
+/* ══ BANNER DE INSTALACIÓN PWA ══ */
+.install-banner {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 9999;
+  background: var(--black);
+  color: var(--white);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  box-shadow: 0 -2px 16px rgba(0,0,0,.3);
+  transform: translateY(100%);
+  transition: transform .35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.install-banner.visible { transform: translateY(0); }
+
+.install-banner-icon {
+  font-size: 2rem; flex-shrink: 0;
+}
+.install-banner-text {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.install-banner-text strong {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 900;
+  margin-bottom: 2px;
+  color: var(--yellow);
+}
+.install-banner-actions {
+  display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
+}
+.install-btn {
+  padding: 7px 14px;
+  font-family: var(--font-body); font-weight: 900; font-size: 0.82rem;
+  border: none; border-radius: 4px; cursor: pointer;
+  white-space: nowrap;
+}
+.install-btn-ok {
+  background: var(--yellow); color: var(--black);
+}
+.install-btn-ok:hover { background: #ffd700; }
+.install-btn-dismiss {
+  background: transparent; color: var(--gray-400);
+  font-size: 0.75rem; font-weight: 600; text-align: center;
+}
+.install-btn-dismiss:hover { color: var(--white); }

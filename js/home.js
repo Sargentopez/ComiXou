@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── MENÚ DE PÁGINA ──
 function setupPageNav() {
-  buildFiltrosMenu();
+  showFiltrosLevel1();
 
   const filtrosBtn  = document.getElementById('filtrosBtn');
   const filtrosMenu = document.getElementById('filtrosMenu');
@@ -37,12 +37,13 @@ function setupPageNav() {
     }
   });
 
-  // Novedades: quita filtros, scroll al top
+  // Novedades: quita filtros, recarga datos frescos y scroll al top
   document.getElementById('novedadesBtn')?.addEventListener('click', () => {
     activeFilter = { type: null, value: null };
     setActiveBtn('novedadesBtn');
     updateFiltrosLabel();
-    renderComics();
+    showFiltrosLevel1();   // resetear menú de filtros
+    renderComics();        // releer localStorage con datos actuales
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
@@ -57,10 +58,6 @@ function setupPageNav() {
 // ── MENÚ DE FILTROS: dos niveles ──
 // Nivel 1: Género | Autor
 // Nivel 2: listado del tipo seleccionado
-
-function buildFiltrosMenu() {
-  showFiltrosLevel1();
-}
 
 function showFiltrosLevel1() {
   const menu = document.getElementById('filtrosMenu');
@@ -193,7 +190,7 @@ function buildRow(comic, currentUser) {
 
   const title = document.createElement('div');
   title.className = 'comic-row-title';
-  title.textContent = comic.title || 'Sin título';
+  title.textContent = comic.title || I18n.t('noWork');
 
   const meta = document.createElement('div');
   meta.className = 'comic-row-author';
@@ -257,8 +254,3 @@ function buildRow(comic, currentUser) {
   return row;
 }
 
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}

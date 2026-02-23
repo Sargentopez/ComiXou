@@ -52,6 +52,7 @@
           + '<button class="home-dots-btn" id="dotsBtn">⋮</button>'
           + '<div class="dropdown-menu dropdown-menu-right" id="dotsMenu">'
             + dotsItems
+            + '<a href="#" class="dropdown-item" id="installMenuItem">📲 ' + T('installApp') + '</a>'
             + '<div class="dropdown-divider"></div>'
             + '<span class="dropdown-item disabled-item">ℹ️ Info</span>'
             + '<span class="dropdown-item disabled-item">✉️ Contacto</span>'
@@ -83,6 +84,30 @@
   document.addEventListener('click', function() {
     document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('open'); });
   });
+
+  // ── Instalar app ──
+  var installMenuItem = document.getElementById('installMenuItem');
+  if (installMenuItem) {
+    // Escuchar el prompt guardado por pwa.js
+    installMenuItem.addEventListener('click', function(e) {
+      e.preventDefault();
+      document.querySelectorAll('.dropdown-menu').forEach(function(m) { m.classList.remove('open'); });
+      if (window.__pwaPrompt) {
+        window.__pwaPrompt.prompt();
+        window.__pwaPrompt.userChoice.then(function() { window.__pwaPrompt = null; });
+      } else {
+        // iOS o ya instalada
+        var lang = localStorage.getItem('cs_lang') || (navigator.language||'es').slice(0,2);
+        alert(lang === 'en'
+          ? 'To install: tap Share ↑ then "Add to Home Screen"'
+          : 'Para instalar: pulsa Compartir ↑ y luego "Añadir a inicio"');
+      }
+    });
+    // Ocultar si ya está instalada en modo standalone
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+      installMenuItem.style.display = 'none';
+    }
+  }
 
   // ── Cerrar sesión ──
   var logoutBtn = document.getElementById('logoutBtn');

@@ -1,24 +1,35 @@
 /* ComiXow Service Worker */
-const CACHE = 'comixow-v1';
+const CACHE = 'comixow-v2';
 const ASSETS = [
   './',
   './index.html',
+  './manifest.json',
   './css/main.css',
   './css/home.css',
   './css/auth.css',
   './css/editor.css',
   './css/reader.css',
+  './css/admin.css',
+  './js/utils.js',
   './js/i18n.js',
   './js/auth.js',
   './js/auth-pages.js',
   './js/storage.js',
+  './js/genres.js',
+  './js/header.js',
   './js/home.js',
   './js/editor.js',
   './js/reader.js',
+  './js/admin.js',
+  './js/seed.js',
   './pages/login.html',
   './pages/register.html',
   './pages/editor.html',
   './pages/reader.html',
+  './pages/admin.html',
+  './js/pwa.js',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
 self.addEventListener('install', e => {
