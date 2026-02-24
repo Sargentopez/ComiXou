@@ -1,658 +1,1270 @@
 /* ============================================================
-   editor.js — Editor completo con menús desplegables
+   editor.js — ComiXow Editor v4.0
+   Motor canvas con capas (imagen, texto, bocadillo, dibujo).
+   Se integra en la SPA via EditorView_init().
    ============================================================ */
 
-const EditorState = {
-  comic:          null,
-  activePanelIdx: -1,
-  draggingPanel:  null,
+/* ── CONSTANTES ── */
+const ED = {
+  BASE_W: 600,
+  BASE_H_V: Math.round(600 * 16 / 9),   // vertical  (portrait)
+  BASE_H_H: Math.round(600 * 9 / 16),   // horizontal (landscape)
 };
 
-// ════════════════════════════════════════
-// INIT
-// ════════════════════════════════════════
-function EditorView_init(params) {
-  if (!Auth.isLogged()) {
-    Router.go('login');
-    return;
-  }
-  // ¿Viene con ID de cómic para editar?
-  const params  = new URLSearchParams(window.location.search);
-  const comicId = params.get('id');
-  if (comicId) {
-    const c = ComicStore.getById(comicId);
-    if (c && c.userId === Auth.currentUser().id) {
-      openComic(c);
-    } else {
-      showToast(I18n.t('noPermission'));
-      setTimeout(() => { Router.go('home'); }, 1500);
-      return;
-    }
-  } else {
-    renderProjectsScreen();
-  }
+/* ── ESTADO ── */
+let edState = null;
 
-  setupDropdowns();
-  setupGlobalListeners();
-  I18n.applyAll();
-});
-
-// ════════════════════════════════════════
-// PANTALLA DE PROYECTOS
-// ════════════════════════════════════════
-function renderProjectsScreen() {
-  showScreen('projects');
-  const user = Auth.currentUser();
-  const grid = document.getElementById('projectsGrid');
-  const comics = ComicStore.getByUser(user.id);
-  grid.innerHTML = '';
-
-  if (comics.length === 0) {
-    grid.innerHTML = `<div class="projects-empty"><span>📚</span><p>${I18n.t('newWorkEmpty').replace('\n','<br>')}</p></div>`;
-    return;
-  }
-
-  comics.forEach(comic => {
-    const thumb = comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : null;
-    const panelCount = comic.panels ? comic.panels.length : 0;
-    const card = document.createElement('div');
-    card.className = 'project-card';
-    card.innerHTML = `
-      <div class="project-card-thumb">
-        ${thumb ? `<img src="${thumb}" alt="${escHtml(comic.title)}">` : '📖'}
-      </div>
-      <div class="project-card-body">
-        <div class="project-card-title">${escHtml(comic.title || 'Sin título')}</div>
-        <div class="project-card-meta">${panelCount} ${panelCount !== 1 ? I18n.t('panelsWord') : I18n.t('panelWord')} · ${comic.published ? '✅ ' + I18n.t('published2') : '📝 ' + I18n.t('draft')}</div>
-      </div>
-      <div class="project-card-actions">
-        <button class="btn btn-primary" data-action="edit">✏️ Editar</button>
-        ${comic.published
-          ? `<button class="btn btn-outline" data-action="unpublish" title="Retirar de portada">🔒 Despublicar</button>`
-          : ''}
-        <button class="btn btn-outline" data-action="delete" style="color:var(--red)" title="Eliminar">🗑</button>
-      </div>
-    `;
-    card.querySelector('[data-action="edit"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openComic(comic);
-    });
-    card.querySelector('[data-action="unpublish"]')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      comic.published = false;
-      ComicStore.save(comic);
-      renderProjectsScreen();
-      showToast(I18n.t('workRemovedHome'));
-    });
-    card.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (confirm(I18n.t('confirmDelete'))) {
-        ComicStore.remove(comic.id);
-        renderProjectsScreen();
-        showToast(I18n.t('workDeleted'));
-      }
-    });
-    card.addEventListener('click', () => openComic(comic));
-    grid.appendChild(card);
-  });
+function edReset() {
+  edState = {
+    pages: [],           // [{layers:[], orientation:'v', drawData:null}]
+    current: 0,          // índice de página activa
+    layers: [],          // referencia rápida a pages[current].layers
+    selected: -1,        // índice de capa seleccionada
+    tool: 'select',      // select | draw | eraser
+    drawColor: '#FF3030',
+    drawSize: 6,
+    history: [],
+    maxHistory: 15,
+    project: { title: '', navMode: 'horizontal' },
+    // drag
+    _drag: null,
+    _resize: null,
+    _tailDrag: null,
+    _painting: false,
+    _lastX: 0, _lastY: 0,
+  };
 }
 
-function openComic(comic) {
-  EditorState.comic = comic;
-  showScreen('editor');
-  // Mostrar menús y acciones
-  document.getElementById('editorMenus').style.display = 'flex';
-  document.getElementById('editorActions').style.display = 'flex';
-  // Activar zona de subida
-  setupUploadZone();
-  document.getElementById('orientationSection').style.display = 'block';
-  renderPanelsList();
-  // Si hay viñetas, mostrar la primera
-  if (comic.panels && comic.panels.length > 0) {
-    selectPanel(0);
+/* ── HELPERS ── */
+function edEl(id) { return document.getElementById(id); }
+
+function edToast(msg, ms = 2000) {
+  const t = edEl('edToast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function edSaveHistory() {
+  const page = edState.pages[edState.current];
+  if (!page) return;
+  const snap = JSON.stringify({ layers: page.layers.map(l => l.serialize()), drawData: page.drawData });
+  edState.history.push(snap);
+  if (edState.history.length > edState.maxHistory) edState.history.shift();
+}
+
+/* ── CLASES DE CAPAS ── */
+class BaseLayer {
+  constructor(type, x = 0.5, y = 0.5, w = 0.35, h = 0.2) {
+    this.id = 'l_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    this.type = type;
+    this.x = x; this.y = y;
+    this.w = w; this.h = h;
+    this.rotation = 0;
+  }
+  contains(px, py) {
+    return px >= this.x - this.w/2 && px <= this.x + this.w/2 &&
+           py >= this.y - this.h/2 && py <= this.y + this.h/2;
+  }
+  cornerAt(px, py, thresh = 0.03) {
+    const corners = [
+      { cx: this.x - this.w/2, cy: this.y - this.h/2, c: 'tl' },
+      { cx: this.x + this.w/2, cy: this.y - this.h/2, c: 'tr' },
+      { cx: this.x - this.w/2, cy: this.y + this.h/2, c: 'bl' },
+      { cx: this.x + this.w/2, cy: this.y + this.h/2, c: 'br' },
+    ];
+    return corners.find(c => Math.hypot(px - c.cx, py - c.cy) < thresh) || null;
+  }
+  drawSelection(ctx, cw, ch) {
+    const x = this.x * cw, y = this.y * ch;
+    const w = this.w * cw, h = this.h * ch;
+    ctx.save();
+    ctx.strokeStyle = '#FFE135';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 3]);
+    ctx.strokeRect(x - w/2, y - h/2, w, h);
+    ctx.setLineDash([]);
+    // esquinas
+    ctx.fillStyle = '#FFE135';
+    [[x-w/2,y-h/2],[x+w/2,y-h/2],[x-w/2,y+h/2],[x+w/2,y+h/2]].forEach(([cx,cy]) => {
+      ctx.fillRect(cx - 5, cy - 5, 10, 10);
+    });
+    ctx.restore();
   }
 }
 
-// ════════════════════════════════════════
-// MENÚS DESPLEGABLES
-// ════════════════════════════════════════
-function setupDropdowns() {
-  document.querySelectorAll('.editor-menu-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const menuId = btn.dataset.menu;
-      const panel  = document.getElementById(menuId);
-      const isOpen = panel.classList.contains('open');
-      closeAllDropdowns();
-      if (!isOpen) {
-        panel.classList.add('open');
-        btn.classList.add('open');
-        // Activar capa de texto si es menú textos
-        const textLayer = document.getElementById('textLayer');
-        if (textLayer) textLayer.classList.toggle('editable', menuId === 'menuTextos');
-      }
-    });
-  });
-
-  document.addEventListener('click', closeAllDropdowns);
-  document.querySelectorAll('.editor-dropdown-panel').forEach(p => {
-    p.addEventListener('click', e => e.stopPropagation());
-  });
-}
-
-function closeAllDropdowns() {
-  document.querySelectorAll('.editor-dropdown-panel').forEach(p => p.classList.remove('open'));
-  document.querySelectorAll('.editor-menu-btn').forEach(b => b.classList.remove('open'));
-}
-
-// ════════════════════════════════════════
-// EVENT LISTENERS GLOBALES
-// ════════════════════════════════════════
-function setupGlobalListeners() {
-  // Nuevo proyecto
-  document.getElementById('newProjectBtn').addEventListener('click', () => {
-    document.getElementById('comicTitleInput').value = '';
-    document.getElementById('comicDescInput').value  = '';
-    document.getElementById('comicGenreNew').value   = '';
-    // Poblar select de géneros
-    const sel = document.getElementById('comicGenreSelect');
-    sel.innerHTML = '<option value="">— Elige un género —</option>';
-    GENRES.forEach(g => {
-      const opt = document.createElement('option');
-      opt.value = g.id; opt.textContent = g.label;
-      sel.appendChild(opt);
-    });
-    sel.value = '';
-    document.getElementById('projectModal').classList.add('open');
-  });
-
-  document.getElementById('projectModalClose').addEventListener('click', () => {
-    document.getElementById('projectModal').classList.remove('open');
-  });
-
-  document.getElementById('projectModalSave').addEventListener('click', () => {
-    const title = document.getElementById('comicTitleInput').value.trim();
-    if (!title) { showToast(I18n.t('writeTitle')); return; }
-    const user  = Auth.currentUser();
-    const comic = ComicStore.createNew(user.id, user.username);
-    comic.title = title;
-    comic.desc  = document.getElementById('comicDescInput').value.trim();
-    // Género: nuevo texto tiene prioridad sobre el select
-    const genreNew = document.getElementById('comicGenreNew').value.trim();
-    const genreSel = document.getElementById('comicGenreSelect').value;
-    comic.genre = genreNew || genreSel || '';
-    ComicStore.save(comic);
-    document.getElementById('projectModal').classList.remove('open');
-    openComic(ComicStore.getById(comic.id));
-  });
-
-  // Guardar y publicar
-  document.getElementById('saveBtn').addEventListener('click', saveComic);
-  document.getElementById('publishBtn').addEventListener('click', () => {
-    saveComic();
-    if (EditorState.comic) {
-      EditorState.comic.published = true;
-      ComicStore.save(EditorState.comic);
-      showToast(I18n.t('publishOk'));
-    }
-  });
-
-  // Orientación
-  document.getElementById('panelOrientation').addEventListener('change', (e) => {
-    if (EditorState.activePanelIdx < 0) return;
-    const orient = e.target.value;
-    EditorState.comic.panels[EditorState.activePanelIdx].orientation = orient;
-    // Refrescar clase del canvas
-    const stage = document.getElementById('panelStage');
-    stage.classList.remove('orient-h', 'orient-v');
-    stage.classList.add('orient-' + orient);
-    saveComic();
-  });
-
-  // Botones de texto
-  document.getElementById('addDialogBtn').addEventListener('click', () => { closeAllDropdowns(); addBubble(); });
-  document.getElementById('addHeaderBtn').addEventListener('click', () => { closeAllDropdowns(); addTextBlock('header'); });
-  document.getElementById('addFooterBtn').addEventListener('click', () => { closeAllDropdowns(); addTextBlock('footer'); });
-
-  // Subida de archivo
-  document.getElementById('fileInput').addEventListener('change', handleFileUpload);
-
-  // Modal cola (legacy, por si se usa)
-  document.getElementById('tailModalClose').addEventListener('click', () => {
-    document.getElementById('tailModal').classList.remove('open');
-  });
-}
-
-// ════════════════════════════════════════
-// GUARDAR
-// ════════════════════════════════════════
-function saveComic() {
-  if (!EditorState.comic) return;
-  ComicStore.save(EditorState.comic);
-  showToast(I18n.t('saveOk'));
-}
-
-// ════════════════════════════════════════
-// UPLOAD
-// ════════════════════════════════════════
-function setupUploadZone() {
-  const section = document.getElementById('uploadSection');
-  if (document.getElementById('uploadZone')) return; // ya existe
-  section.innerHTML = '';
-
-  const zone = document.createElement('div');
-  zone.className = 'upload-zone';
-  zone.id = 'uploadZone';
-  zone.innerHTML = `<div style="font-size:1.8rem;margin-bottom:4px">📁</div><strong>Subir viñeta</strong><p style="font-size:.82rem;margin-top:4px;color:var(--gray-500)">JPG, PNG, GIF — click o arrastrar</p>`;
-  zone.addEventListener('click', () => document.getElementById('fileInput').click());
-  zone.addEventListener('dragover', e => { e.preventDefault(); zone.style.borderColor='var(--blue)'; });
-  zone.addEventListener('dragleave', () => zone.style.borderColor='');
-  zone.addEventListener('drop', e => {
-    e.preventDefault(); zone.style.borderColor='';
-    processFiles(Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/')));
-  });
-  section.appendChild(zone);
-}
-
-function handleFileUpload(e) {
-  processFiles(Array.from(e.target.files));
-  e.target.value = '';
-}
-
-function processFiles(files) {
-  if (!EditorState.comic) { showToast(I18n.t('noProjectYet')); return; }
-  files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target.result;
-      // Detectar orientación automáticamente según dimensiones reales de la imagen
+class ImageLayer extends BaseLayer {
+  constructor(img, x = 0.5, y = 0.5, w = 0.6) {
+    const ratio = img.naturalHeight / img.naturalWidth;
+    super('image', x, y, w, w * ratio);
+    this.img = img;
+    this.src = img.src;
+  }
+  draw(ctx, cw, ch) {
+    const x = this.x * cw, y = this.y * ch;
+    const w = this.w * cw, h = this.h * ch;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(this.rotation * Math.PI / 180);
+    ctx.drawImage(this.img, -w/2, -h/2, w, h);
+    ctx.restore();
+  }
+  serialize() {
+    return { type: 'image', x: this.x, y: this.y, w: this.w, h: this.h, rotation: this.rotation, src: this.src };
+  }
+  static deserialize(d) {
+    return new Promise(res => {
       const img = new Image();
       img.onload = () => {
-        const orientation = img.naturalWidth >= img.naturalHeight ? 'h' : 'v';
-        EditorState.comic.panels.push({
-          id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-          dataUrl,
-          orientation,
-          texts: []
-        });
-        renderPanelsList();
-        selectPanel(EditorState.comic.panels.length - 1);
-        saveComic();
+        const l = new ImageLayer(img, d.x, d.y, d.w);
+        l.h = d.h; l.rotation = d.rotation || 0;
+        res(l);
       };
-      img.src = dataUrl;
-    };
-    reader.readAsDataURL(file);
-  });
+      img.src = d.src;
+    });
+  }
 }
 
-// ════════════════════════════════════════
-// LISTA DE VIÑETAS
-// ════════════════════════════════════════
-function renderPanelsList() {
-  const list = document.getElementById('panelsList');
-  list.innerHTML = '';
-  if (!EditorState.comic || EditorState.comic.panels.length === 0) return;
-
-  EditorState.comic.panels.forEach((panel, idx) => {
-    const item = document.createElement('div');
-    item.className = 'panel-thumb-item' + (idx === EditorState.activePanelIdx ? ' active' : '');
-    item.draggable = true;
-    item.innerHTML = `
-      <span class="drag-handle">⠿</span>
-      <img class="panel-thumb-img" src="${panel.dataUrl}" alt="">
-      <div class="panel-thumb-info"><div class="panel-thumb-num">${I18n.t('panelWord')} ${idx+1}</div></div>
-      <div class="panel-thumb-actions">
-        <button data-action="del" style="color:var(--red)" title="Eliminar">🗑</button>
-      </div>
-    `;
-    item.addEventListener('click', (e) => {
-      if (e.target.closest('[data-action="del"]')) { deletePanel(idx); return; }
-      selectPanel(idx);
-      closeAllDropdowns();
-    });
-    item.addEventListener('dragstart', () => { EditorState.draggingPanel = idx; item.classList.add('dragging'); });
-    item.addEventListener('dragend',   () => item.classList.remove('dragging'));
-    item.addEventListener('dragover',  e => { e.preventDefault(); item.classList.add('drag-over'); });
-    item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
-    item.addEventListener('drop', e => {
-      e.preventDefault(); item.classList.remove('drag-over');
-      const from = EditorState.draggingPanel, to = idx;
-      if (from !== null && from !== to) {
-        const [moved] = EditorState.comic.panels.splice(from, 1);
-        EditorState.comic.panels.splice(to, 0, moved);
-        EditorState.activePanelIdx = to;
-        renderPanelsList(); renderPanelViewer(); saveComic();
+class TextLayer extends BaseLayer {
+  constructor(text = 'Texto', x = 0.5, y = 0.3) {
+    super('text', x, y, 0.3, 0.1);
+    this.text = text;
+    this.fontSize = 22;
+    this.fontFamily = 'Bangers';
+    this.color = '#ffffff';
+    this.outlineColor = '#000000';
+    this.outlineWidth = 3;
+    this.align = 'center';
+    this.padding = 10;
+  }
+  _lines() { return this.text.split('\n'); }
+  draw(ctx, cw, ch) {
+    const x = this.x * cw, y = this.y * ch;
+    const w = this.w * cw, h = this.h * ch;
+    const lines = this._lines();
+    const lh = this.fontSize * 1.25;
+    const totalH = lines.length * lh;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(this.rotation * Math.PI / 180);
+    ctx.font = `${this.fontSize}px ${this.fontFamily}`;
+    ctx.textAlign = this.align;
+    ctx.textBaseline = 'middle';
+    lines.forEach((line, i) => {
+      const ly = -totalH/2 + lh/2 + i * lh;
+      if (this.outlineWidth > 0) {
+        ctx.strokeStyle = this.outlineColor;
+        ctx.lineWidth = this.outlineWidth;
+        ctx.lineJoin = 'round';
+        ctx.strokeText(line, 0, ly);
       }
+      ctx.fillStyle = this.color;
+      ctx.fillText(line, 0, ly);
     });
-    list.appendChild(item);
-  });
+    ctx.restore();
+  }
+  autoSize(cw, ch) {
+    const tmpCanvas = document.createElement('canvas');
+    const tmpCtx = tmpCanvas.getContext('2d');
+    tmpCtx.font = `${this.fontSize}px ${this.fontFamily}`;
+    const lines = this._lines();
+    let maxW = 0;
+    lines.forEach(l => { maxW = Math.max(maxW, tmpCtx.measureText(l).width); });
+    const totalH = lines.length * this.fontSize * 1.25;
+    this.w = (maxW + this.padding * 2) / cw;
+    this.h = (totalH + this.padding * 2) / ch;
+  }
+  serialize() {
+    return { type: 'text', x: this.x, y: this.y, w: this.w, h: this.h,
+      rotation: this.rotation, text: this.text, fontSize: this.fontSize,
+      fontFamily: this.fontFamily, color: this.color,
+      outlineColor: this.outlineColor, outlineWidth: this.outlineWidth };
+  }
+  static deserialize(d) {
+    const l = new TextLayer(d.text, d.x, d.y);
+    Object.assign(l, d); return l;
+  }
 }
 
-// ════════════════════════════════════════
-// SELECCIONAR / ELIMINAR VIÑETA
-// ════════════════════════════════════════
-function selectPanel(idx) {
-  EditorState.activePanelIdx = idx;
-  renderPanelsList();
-  renderPanelViewer();
-  updateTextTools();
-  const panel = EditorState.comic.panels[idx];
-  if (panel) document.getElementById('panelOrientation').value = panel.orientation || 'h';
+class BubbleLayer extends BaseLayer {
+  constructor(text = '¡Hola!', x = 0.5, y = 0.3) {
+    super('bubble', x, y, 0.35, 0.18);
+    this.text = text;
+    this.fontSize = 18;
+    this.fontFamily = 'Bangers';
+    this.color = '#000000';
+    this.bgColor = '#ffffff';
+    this.borderColor = '#000000';
+    this.borderWidth = 2.5;
+    this.style = 'conventional'; // conventional|lowvoice|thought|explosion|radio|multiple
+    this.tail = true;
+    this.tailSX = -0.4; this.tailSY = 0.5;   // relativo al centro del bocadillo
+    this.tailEX = -0.5; this.tailEY = 0.75;
+    this.padding = 14;
+  }
+  _lines() { return this.text.split('\n'); }
+  draw(ctx, cw, ch) {
+    const x = this.x * cw, y = this.y * ch;
+    const w = this.w * cw, h = this.h * ch;
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Cuerpo del bocadillo
+    if (this.style === 'explosion') {
+      this._drawExplosion(ctx, w, h);
+    } else if (this.style === 'thought') {
+      this._drawThought(ctx, w, h);
+    } else {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI * 2);
+    }
+
+    if (this.style !== 'thought') {
+      ctx.fillStyle = this.bgColor;
+      ctx.fill();
+      if (this.borderWidth > 0) {
+        ctx.strokeStyle = this.borderColor;
+        ctx.lineWidth = this.borderWidth;
+        if (this.style === 'lowvoice') ctx.setLineDash([5, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // Cola
+    if (this.tail && !['thought','radio'].includes(this.style)) {
+      const count = this.style === 'multiple' ? 3 : 1;
+      for (let i = 0; i < count; i++) {
+        const off = (i - (count-1)/2) * 0.12;
+        const sx = (this.tailSX + off) * w;
+        const sy = this.tailSY * h;
+        const ex = (this.tailEX + off) * w;
+        const ey = this.tailEY * h;
+        this._drawTail(ctx, sx, sy, ex, ey);
+      }
+    }
+    if (this.style === 'radio') {
+      this._drawRadio(ctx, w, h);
+    }
+
+    // Texto
+    const lines = this._lines();
+    const lh = this.fontSize * 1.2;
+    const totalH = lines.length * lh;
+    ctx.font = `${this.fontSize}px ${this.fontFamily}`;
+    ctx.fillStyle = this.color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    lines.forEach((line, i) => {
+      ctx.fillText(line, 0, -totalH/2 + lh/2 + i * lh);
+    });
+
+    ctx.restore();
+  }
+  _drawExplosion(ctx, w, h) {
+    const pts = 14;
+    ctx.beginPath();
+    for (let i = 0; i < pts; i++) {
+      const angle = (i / pts) * Math.PI * 2 - Math.PI / 2;
+      const r = (i % 2 === 0 ? 1 : 0.72) * (w/2);
+      const rh = (i % 2 === 0 ? 1 : 0.72) * (h/2);
+      const px = Math.cos(angle) * r;
+      const py = Math.sin(angle) * rh;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = this.bgColor; ctx.fill();
+    if (this.borderWidth > 0) { ctx.strokeStyle = this.borderColor; ctx.lineWidth = this.borderWidth; ctx.stroke(); }
+  }
+  _drawThought(ctx, w, h) {
+    const circles = [
+      {x:0, y:-h*0.2, r:w*0.32},
+      {x:w*0.22, y:0, r:w*0.30},
+      {x:-w*0.22, y:0, r:w*0.30},
+      {x:0, y:h*0.2, r:w*0.28},
+    ];
+    ctx.fillStyle = this.bgColor;
+    ctx.strokeStyle = this.borderColor;
+    ctx.lineWidth = this.borderWidth;
+    circles.forEach(c => {
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.r, 0, Math.PI*2);
+      ctx.fill(); ctx.stroke();
+    });
+    // Círculo interior blanco para tapar intersecciones
+    ctx.fillStyle = this.bgColor;
+    ctx.beginPath();
+    ctx.arc(0, 0, Math.min(w,h) * 0.28, 0, Math.PI*2);
+    ctx.fill();
+    // Burbujas de cola del pensamiento
+    const tx = this.tailEX * w * 0.5;
+    const ty = this.tailEY * h * 0.8;
+    [0.12, 0.07, 0.04].forEach((r, i) => {
+      const f = 1 - i * 0.3;
+      ctx.beginPath();
+      ctx.arc(tx * f, ty * f, r * w, 0, Math.PI*2);
+      ctx.fillStyle = this.bgColor;
+      ctx.fill();
+      ctx.strokeStyle = this.borderColor;
+      ctx.lineWidth = this.borderWidth;
+      ctx.stroke();
+    });
+  }
+  _drawTail(ctx, sx, sy, ex, ey) {
+    const mx = (sx + ex) / 2;
+    const my = (sy + ey) / 2;
+    ctx.save();
+    ctx.fillStyle = this.bgColor;
+    ctx.strokeStyle = this.borderColor;
+    ctx.lineWidth = this.borderWidth;
+    ctx.beginPath();
+    ctx.moveTo(sx - 6, sy);
+    ctx.lineTo(ex, ey);
+    ctx.lineTo(sx + 6, sy);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+  _drawRadio(ctx, w, h) {
+    ctx.save();
+    ctx.strokeStyle = this.borderColor;
+    ctx.lineWidth = 1;
+    for (let r = 8; r <= 28; r += 7) {
+      ctx.beginPath();
+      ctx.arc(this.tailEX * w, this.tailEY * h, r, 0, Math.PI*2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  getTailPoints(cw, ch) {
+    return [
+      { x: (this.x + this.tailSX * this.w) * cw, y: (this.y + this.tailSY * this.h) * ch, type: 'start' },
+      { x: (this.x + this.tailEX * this.w) * cw, y: (this.y + this.tailEY * this.h) * ch, type: 'end' },
+    ];
+  }
+  serialize() {
+    return { type: 'bubble', x: this.x, y: this.y, w: this.w, h: this.h,
+      text: this.text, fontSize: this.fontSize, fontFamily: this.fontFamily,
+      color: this.color, bgColor: this.bgColor, borderColor: this.borderColor,
+      borderWidth: this.borderWidth, style: this.style,
+      tail: this.tail, tailSX: this.tailSX, tailSY: this.tailSY,
+      tailEX: this.tailEX, tailEY: this.tailEY, rotation: this.rotation };
+  }
+  static deserialize(d) {
+    const l = new BubbleLayer(d.text, d.x, d.y);
+    Object.assign(l, d); return l;
+  }
 }
 
-function deletePanel(idx) {
-  EditorState.comic.panels.splice(idx, 1);
-  EditorState.activePanelIdx = Math.min(EditorState.activePanelIdx, EditorState.comic.panels.length - 1);
-  renderPanelsList(); renderPanelViewer(); saveComic();
+/* ── GESTIÓN DE PÁGINAS ── */
+function edNewPage(orientation = 'v') {
+  const page = { layers: [], orientation, drawData: null };
+  edState.pages.push(page);
+  edGoToPage(edState.pages.length - 1);
 }
 
-// ════════════════════════════════════════
-// VISOR DE VIÑETA
-// ════════════════════════════════════════
-function renderPanelViewer() {
-  const placeholder = document.getElementById('canvasPlaceholder');
-  const viewer      = document.getElementById('panelViewer');
-  const stage       = document.getElementById('panelStage');
-  const idx = EditorState.activePanelIdx;
+function edGoToPage(idx) {
+  edState.current = idx;
+  edState.layers = edState.pages[idx].layers;
+  edState.selected = -1;
+  edResizeCanvas();
+  edRedraw();
+  edRenderStrip();
+  edClosePanel();
+}
 
-  if (!EditorState.comic || idx < 0 || !EditorState.comic.panels[idx]) {
-    placeholder.classList.remove('hidden');
-    viewer.classList.add('hidden');
+function edResizeCanvas() {
+  const page = edState.pages[edState.current];
+  const canvas = edEl('editorCanvas');
+  const wrap = edEl('editorCanvasWrap');
+  if (!canvas || !wrap || !page) return;
+
+  const isV = page.orientation === 'v';
+  const baseW = ED.BASE_W;
+  const baseH = isV ? ED.BASE_H_V : ED.BASE_H_H;
+
+  canvas.width  = baseW;
+  canvas.height = baseH;
+
+  // Escalar visualmente para ajustarse al área disponible
+  const maxW = wrap.clientWidth  - 16;
+  const maxH = wrap.clientHeight - 16;
+  const scale = Math.min(maxW / baseW, maxH / baseH, 1);
+  canvas.style.width  = Math.round(baseW * scale) + 'px';
+  canvas.style.height = Math.round(baseH * scale) + 'px';
+}
+
+/* ── DIBUJADO ── */
+function edRedraw() {
+  const canvas = edEl('editorCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const cw = canvas.width, ch = canvas.height;
+
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, cw, ch);
+
+  const page = edState.pages[edState.current];
+  if (!page) return;
+
+  // Capas
+  edState.layers.forEach(l => l.draw(ctx, cw, ch));
+
+  // Dibujo libre encima
+  if (page.drawData) {
+    const img = new Image();
+    img.onload = () => { ctx.drawImage(img, 0, 0); edDrawSelection(ctx, cw, ch); };
+    img.src = page.drawData;
     return;
   }
-  placeholder.classList.add('hidden');
-  viewer.classList.remove('hidden');
 
-  const panel = EditorState.comic.panels[idx];
-  document.getElementById('panelImage').src = panel.dataUrl;
-  document.getElementById('panelNumBar').textContent = I18n.t('panelOf').replace('{n}', idx+1).replace('{total}', EditorState.comic.panels.length);
-
-  // Canvas con proporción fija según orientación: 20:9 horizontal / 9:20 vertical
-  stage.classList.remove('orient-h', 'orient-v');
-  stage.classList.add('orient-' + (panel.orientation || 'h'));
-
-  renderTextLayer();
+  edDrawSelection(ctx, cw, ch);
 }
 
-// ════════════════════════════════════════
-// CAPA DE TEXTOS
-// ════════════════════════════════════════
-function renderTextLayer() {
-  const idx = EditorState.activePanelIdx;
-  if (idx < 0 || !EditorState.comic) return;
-  const panel = EditorState.comic.panels[idx];
-  const layer = document.getElementById('textLayer');
-  layer.innerHTML = '';
-  (panel.texts || []).forEach(t => {
-    if (t.type === 'dialog') renderBubble(t, layer, panel);
-    else renderTextBlock(t, layer, panel);
-  });
-}
+function edDrawSelection(ctx, cw, ch) {
+  const sel = edState.selected;
+  if (sel < 0 || sel >= edState.layers.length) return;
+  const l = edState.layers[sel];
+  l.drawSelection(ctx, cw, ch);
 
-// ════════════════════════════════════════
-// BOCADILLO
-// ════════════════════════════════════════
-function addBubble() {
-  if (EditorState.activePanelIdx < 0) { showToast(I18n.t('selectPanelFirst')); return; }
-  const panel = EditorState.comic.panels[EditorState.activePanelIdx];
-  if (!panel.texts) panel.texts = [];
-  const textObj = {
-    id: 't_' + Date.now(), type: 'dialog', text: '',
-    tail: 'bottom', x: 30, y: 20,
-    order: panel.texts.filter(t => t.type === 'dialog').length
-  };
-  panel.texts.push(textObj);
-  renderTextLayer();
-  updateDialogOrderList();
-  saveComic();
-  // Activar modo edición en el nuevo bocadillo
-  setTimeout(() => {
-    const wrapper = document.querySelector(`.bubble-wrapper[data-id="${textObj.id}"]`);
-    if (wrapper) enterEditMode(wrapper, textObj, panel);
-  }, 50);
-}
-
-function renderBubble(textObj, layer, panel) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'bubble-wrapper';
-  wrapper.style.left = textObj.x + '%';
-  wrapper.style.top  = textObj.y + '%';
-  wrapper.dataset.id = textObj.id;
-
-  const activePoints = ['top-left','top','top-right','right','bottom-right','bottom','bottom-left','left']
-    .map(pos => `<div class="tail-point${textObj.tail===pos?' active':''}" data-pos="${pos}"></div>`)
-    .join('');
-
-  wrapper.innerHTML = `
-    <div class="bubble-inner">
-      <div class="bubble-text" data-placeholder="Escribe aquí...">${escHtml(textObj.text)}</div>
-      ${buildTailSVGStr(textObj.tail)}
-      <div class="bubble-tail-points">${activePoints}</div>
-    </div>
-    <div class="bubble-controls">
-      <button class="bubble-ctrl-btn save"   data-action="save">💾 Guardar</button>
-      <button class="bubble-ctrl-btn"        data-action="txt">✏️ Txt</button>
-      <button class="bubble-ctrl-btn danger" data-action="del">✕ Eliminar</button>
-    </div>
-  `;
-
-  const textDiv  = wrapper.querySelector('.bubble-text');
-  const inner    = wrapper.querySelector('.bubble-inner');
-  const controls = wrapper.querySelector('.bubble-controls');
-
-  // Guardar
-  wrapper.querySelector('[data-action="save"]').addEventListener('click', e => {
-    e.stopPropagation();
-    textObj.text = textDiv.textContent;
-    textDiv.contentEditable = 'false';
-    wrapper.classList.remove('editing');
-    saveComic();
-    updateDialogOrderList();
-  });
-
-  // Editar texto
-  wrapper.querySelector('[data-action="txt"]').addEventListener('click', e => {
-    e.stopPropagation();
-    textDiv.contentEditable = 'true';
-    textDiv.focus();
-    const r = document.createRange();
-    r.selectNodeContents(textDiv);
-    r.collapse(false);
-    window.getSelection().removeAllRanges();
-    window.getSelection().addRange(r);
-  });
-
-  // Eliminar
-  wrapper.querySelector('[data-action="del"]').addEventListener('click', e => {
-    e.stopPropagation();
-    panel.texts = panel.texts.filter(t => t.id !== textObj.id);
-    renderTextLayer();
-    updateDialogOrderList();
-    saveComic();
-  });
-
-  // Puntos de cola
-  wrapper.querySelectorAll('.tail-point').forEach(pt => {
-    pt.addEventListener('click', e => {
-      e.stopPropagation();
-      const pos = pt.dataset.pos;
-      textObj.tail = pos;
-      // Reemplazar SVG de cola
-      wrapper.querySelector('.bubble-tail')?.remove();
-      inner.insertAdjacentHTML('beforeend', buildTailSVGStr(pos));
-      // Actualizar punto activo
-      wrapper.querySelectorAll('.tail-point').forEach(p => p.classList.toggle('active', p.dataset.pos === pos));
-      // Mover la cola al lado correcto eliminando y volviendo a añadir el SVG
-      const newSvg = inner.querySelector('.bubble-tail');
-      // Asegurarse de que está antes de bubble-tail-points
-      const tailPointsEl = inner.querySelector('.bubble-tail-points');
-      inner.insertBefore(newSvg, tailPointsEl);
-      saveComic();
+  // Puntos de cola para bocadillos
+  if (l.type === 'bubble' && l.tail && !['thought','radio'].includes(l.style)) {
+    const pts = l.getTailPoints(cw, ch);
+    pts.forEach(pt => {
+      ctx.save();
+      ctx.fillStyle = pt.type === 'start' ? '#FFE135' : '#ff3b30';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 7, 0, Math.PI*2);
+      ctx.fill(); ctx.stroke();
+      ctx.restore();
     });
+  }
+}
+
+/* ── STRIP DE MINIATURAS ── */
+function edRenderStrip() {
+  const strip = edEl('editorPageStrip');
+  if (!strip) return;
+  strip.innerHTML = '';
+
+  edState.pages.forEach((page, i) => {
+    const thumb = document.createElement('div');
+    thumb.className = 'ed-page-thumb' + (i === edState.current ? ' active' : '');
+
+    // Canvas miniatura
+    const tc = document.createElement('canvas');
+    tc.width = 42; tc.height = 56;
+    const tctx = tc.getContext('2d');
+    tctx.fillStyle = '#fff';
+    tctx.fillRect(0, 0, 42, 56);
+    page.layers.forEach(l => l.draw(tctx, 42, 56));
+    thumb.appendChild(tc);
+
+    const n = document.createElement('span');
+    n.className = 'thumb-n';
+    if (page.layers.length === 0) n.textContent = i + 1;
+    thumb.appendChild(n);
+
+    thumb.addEventListener('click', () => edGoToPage(i));
+    strip.appendChild(thumb);
   });
 
-  // Click en bocadillo: modo edición
-  inner.addEventListener('click', e => {
-    e.stopPropagation();
-    // Cerrar otros
-    document.querySelectorAll('.bubble-wrapper.editing').forEach(w => {
-      if (w !== wrapper) {
-        const s = w.querySelector('.bubble-text');
-        const t = (panel.texts||[]).find(x => x.id === w.dataset.id);
-        if (t && s) t.text = s.textContent;
-        s && (s.contentEditable = 'false');
-        w.classList.remove('editing');
+  // Botón añadir
+  const add = document.createElement('button');
+  add.className = 'ed-page-add';
+  add.textContent = '+';
+  add.addEventListener('click', () => {
+    const page = edState.pages[edState.current];
+    edNewPage(page ? page.orientation : 'v');
+  });
+  strip.appendChild(add);
+
+  const active = strip.querySelector('.ed-page-thumb.active');
+  if (active) active.scrollIntoView({ behavior: 'smooth', inline: 'nearest' });
+}
+
+/* ── COORDENADAS NORMALIZADAS ── */
+function edCanvasCoords(e) {
+  const canvas = edEl('editorCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  return {
+    x: (src.clientX - rect.left) / rect.width,
+    y: (src.clientY - rect.top) / rect.height,
+  };
+}
+
+/* ── EVENTOS DE CANVAS ── */
+function edOnPointerDown(e) {
+  e.preventDefault();
+  const p = edCanvasCoords(e);
+
+  if (['draw', 'eraser'].includes(edState.tool)) {
+    edStartPaint(e, p); return;
+  }
+
+  // Herramienta select: buscar capa
+  const layers = edState.layers;
+
+  // Comprobar cola de bocadillo seleccionado primero
+  if (edState.selected >= 0) {
+    const sel = layers[edState.selected];
+    if (sel && sel.type === 'bubble' && sel.tail) {
+      const canvas = edEl('editorCanvas');
+      const pts = sel.getTailPoints(canvas.width, canvas.height);
+      for (let pt of pts) {
+        const nx = pt.x / canvas.width;
+        const ny = pt.y / canvas.height;
+        if (Math.hypot(p.x - nx, p.y - ny) < 0.04) {
+          edState._tailDrag = { layer: sel, type: pt.type };
+          return;
+        }
+      }
+    }
+  }
+
+  // Comprobar esquinas de redimensionado
+  if (edState.selected >= 0) {
+    const sel = layers[edState.selected];
+    if (sel) {
+      const corner = sel.cornerAt(p.x, p.y, 0.04);
+      if (corner) {
+        edState._resize = { layer: sel, corner: corner.c, startX: p.x, startY: p.y, origW: sel.w, origH: sel.h, origX: sel.x, origY: sel.y };
+        return;
+      }
+    }
+  }
+
+  // Buscar capa (de arriba hacia abajo)
+  let found = -1;
+  for (let i = layers.length - 1; i >= 0; i--) {
+    if (layers[i].contains(p.x, p.y)) { found = i; break; }
+  }
+
+  if (found >= 0) {
+    edState.selected = found;
+    edState._drag = { layer: layers[found], startX: p.x, startY: p.y, origX: layers[found].x, origY: layers[found].y };
+    edRedraw();
+  } else {
+    edState.selected = -1;
+    edRedraw();
+  }
+}
+
+function edOnPointerMove(e) {
+  e.preventDefault();
+  const p = edCanvasCoords(e);
+
+  if (['draw', 'eraser'].includes(edState.tool) && edState._painting) {
+    edContinuePaint(e, p); return;
+  }
+
+  if (edState._tailDrag) {
+    const td = edState._tailDrag;
+    if (td.type === 'start') {
+      td.layer.tailSX = (p.x - td.layer.x) / td.layer.w;
+      td.layer.tailSY = (p.y - td.layer.y) / td.layer.h;
+    } else {
+      td.layer.tailEX = (p.x - td.layer.x) / td.layer.w;
+      td.layer.tailEY = (p.y - td.layer.y) / td.layer.h;
+    }
+    edRedraw(); return;
+  }
+
+  if (edState._resize) {
+    const r = edState._resize;
+    const dx = p.x - r.startX;
+    const dy = p.y - r.startY;
+    if (r.corner === 'br' || r.corner === 'tr') {
+      r.layer.w = Math.max(0.05, r.origW + dx * 2);
+    } else {
+      r.layer.w = Math.max(0.05, r.origW - dx * 2);
+    }
+    if (r.corner === 'br' || r.corner === 'bl') {
+      r.layer.h = Math.max(0.03, r.origH + dy * 2);
+    } else {
+      r.layer.h = Math.max(0.03, r.origH - dy * 2);
+    }
+    edRedraw(); return;
+  }
+
+  if (edState._drag) {
+    const d = edState._drag;
+    d.layer.x = d.origX + (p.x - d.startX);
+    d.layer.y = d.origY + (p.y - d.startY);
+    edRedraw(); return;
+  }
+}
+
+function edOnPointerUp(e) {
+  if (edState._painting) { edState._painting = false; edSaveDrawing(); }
+  edState._drag = null;
+  edState._resize = null;
+  edState._tailDrag = null;
+}
+
+/* ── DIBUJO LIBRE ── */
+function edStartPaint(e, p) {
+  edState._painting = true;
+  const canvas = edEl('editorCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.beginPath();
+  ctx.arc(p.x * canvas.width, p.y * canvas.height, edState.drawSize / 2, 0, Math.PI*2);
+  if (edState.tool === 'eraser') {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'rgba(0,0,0,1)';
+  } else {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = edState.drawColor;
+  }
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  edState._lastX = p.x; edState._lastY = p.y;
+  edMoveBrushCursor(e);
+}
+
+function edContinuePaint(e, p) {
+  const canvas = edEl('editorCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.beginPath();
+  ctx.moveTo(edState._lastX * canvas.width, edState._lastY * canvas.height);
+  ctx.lineTo(p.x * canvas.width, p.y * canvas.height);
+  ctx.strokeStyle = edState.tool === 'eraser' ? 'rgba(0,0,0,1)' : edState.drawColor;
+  ctx.lineWidth = edState.drawSize;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (edState.tool === 'eraser') ctx.globalCompositeOperation = 'destination-out';
+  else ctx.globalCompositeOperation = 'source-over';
+  ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over';
+  edState._lastX = p.x; edState._lastY = p.y;
+  edMoveBrushCursor(e);
+}
+
+function edSaveDrawing() {
+  const page = edState.pages[edState.current];
+  if (!page) return;
+  page.drawData = edEl('editorCanvas').toDataURL();
+}
+
+function edMoveBrushCursor(e) {
+  const src = e.touches ? e.touches[0] : e;
+  const cursor = edEl('edBrushCursor');
+  if (!cursor) return;
+  const sz = edState.drawSize * 2;
+  cursor.style.left = src.clientX + 'px';
+  cursor.style.top  = src.clientY + 'px';
+  cursor.style.width  = sz + 'px';
+  cursor.style.height = sz + 'px';
+  cursor.style.borderColor = edState.tool === 'eraser' ? 'rgba(255,255,255,.5)' : edState.drawColor;
+}
+
+/* ── AÑADIR CAPAS ── */
+function edAddImage(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      edSaveHistory();
+      edState.layers.push(new ImageLayer(img));
+      edRedraw();
+      edRenderStrip();
+      edToast('Imagen añadida ✓');
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function edAddText(text) {
+  if (!text.trim()) return;
+  edSaveHistory();
+  const l = new TextLayer(text);
+  const canvas = edEl('editorCanvas');
+  l.autoSize(canvas.width, canvas.height);
+  edState.layers.push(l);
+  edState.selected = edState.layers.length - 1;
+  edRedraw();
+  edRenderStrip();
+  edToast('Texto añadido');
+}
+
+function edAddBubble(text, style = 'conventional') {
+  if (!text.trim()) return;
+  edSaveHistory();
+  const l = new BubbleLayer(text);
+  l.style = style;
+  edState.layers.push(l);
+  edState.selected = edState.layers.length - 1;
+  edRedraw();
+  edRenderStrip();
+  edToast('Bocadillo añadido');
+}
+
+function edDeleteSelected() {
+  if (edState.selected < 0) { edToast('Selecciona una capa primero'); return; }
+  edSaveHistory();
+  edState.layers.splice(edState.selected, 1);
+  edState.selected = -1;
+  edRedraw();
+  edRenderStrip();
+  edClosePanel();
+  edToast('Capa eliminada');
+}
+
+/* ── UNDO ── */
+function edUndo() {
+  if (!edState.history.length) { edToast('Nada que deshacer'); return; }
+  const snap = JSON.parse(edState.history.pop());
+  const page = edState.pages[edState.current];
+  // Restaurar drawData
+  page.drawData = snap.drawData;
+  // Restaurar capas — solo texto y bocadillo son sincrónicos
+  const syncLayers = snap.layers.filter(d => d.type !== 'image').map(d => {
+    if (d.type === 'text')   return TextLayer.deserialize(d);
+    if (d.type === 'bubble') return BubbleLayer.deserialize(d);
+  });
+  // Imágenes: async pero raro hacer undo de imagen
+  edState.layers = syncLayers;
+  page.layers = syncLayers;
+  edState.selected = -1;
+  edRedraw();
+  edRenderStrip();
+  edToast('Deshecho ↩');
+}
+
+/* ── PANEL FLOTANTE ── */
+let _panelTool = null;
+
+function edOpenPanel(tool) {
+  _panelTool = tool;
+  const panel = edEl('editorFloatPanel');
+  if (!panel) return;
+  panel.innerHTML = _buildPanel(tool);
+  panel.classList.add('open');
+  _bindPanel(tool);
+}
+
+function edClosePanel() {
+  const panel = edEl('editorFloatPanel');
+  if (panel) panel.classList.remove('open');
+  _panelTool = null;
+}
+
+function edTogglePanel(tool) {
+  if (_panelTool === tool) { edClosePanel(); return; }
+  edOpenPanel(tool);
+}
+
+function _buildPanel(tool) {
+  const DRAW_COLORS = ['#FF3030','#FF9500','#FFE135','#30D158','#0A84FF','#BF5AF2','#ffffff','#111111'];
+
+  if (tool === 'image') {
+    return `<div class="fp-handle"></div>
+    <div class="fp-title">📷 Añadir imagen</div>
+    <div class="fp-section">
+      <div class="fp-btn-row">
+        <button class="fp-btn" id="fpCamera">📷 Cámara</button>
+        <button class="fp-btn" id="fpGallery">🖼 Galería</button>
+        <button class="fp-btn" id="fpGif">GIF</button>
+      </div>
+    </div>`;
+  }
+
+  if (tool === 'text') {
+    return `<div class="fp-handle"></div>
+    <div class="fp-title">T Texto libre</div>
+    <div class="fp-section">
+      <textarea class="fp-textarea" id="fpTextInput" placeholder="Escribe aquí..."></textarea>
+      <div class="fp-label">Color</div>
+      <div class="fp-colors" id="fpTextColors">
+        ${['#ffffff','#FFE135','#FF3030','#30D158','#0A84FF','#111111'].map(c =>
+          `<div class="fp-color-dot${edState.tool==='text'&&c===edState.drawColor?' active':''}"
+            style="background:${c};${c==='#ffffff'?'border:1.5px solid #444':''}"
+            data-color="${c}"></div>`).join('')}
+      </div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-label">Tamaño</div>
+      <div class="fp-btn-row">
+        ${[16,22,30,42].map(s => `<button class="fp-btn${s===22?' active':''}" data-textsize="${s}">${s}px</button>`).join('')}
+      </div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-btn-row">
+        <button class="fp-btn active" id="fpAddText">Añadir texto</button>
+      </div>
+    </div>`;
+  }
+
+  if (tool === 'bubble') {
+    return `<div class="fp-handle"></div>
+    <div class="fp-title">💬 Bocadillo</div>
+    <div class="fp-section">
+      <textarea class="fp-textarea" id="fpBubbleInput" placeholder="Escribe el texto..."></textarea>
+    </div>
+    <div class="fp-section">
+      <div class="fp-label">Estilo</div>
+      <div class="bubble-styles">
+        ${[
+          ['conventional','🗨','Normal'],
+          ['lowvoice','🔇','Susurro'],
+          ['thought','💭','Pensamiento'],
+          ['explosion','💥','Explosión'],
+          ['radio','📻','Radio'],
+          ['multiple','💬','Múltiple'],
+        ].map(([s,ic,label]) =>
+          `<button class="bubble-style-btn${s==='conventional'?' active':''}" data-style="${s}">
+            <span>${ic}</span>${label}
+          </button>`).join('')}
+      </div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-btn-row">
+        <button class="fp-btn active" id="fpAddBubble">Añadir bocadillo</button>
+      </div>
+    </div>`;
+  }
+
+  if (tool === 'draw' || tool === 'eraser') {
+    return `<div class="fp-handle"></div>
+    <div class="fp-title">${tool === 'draw' ? '✏️ Dibujo libre' : '⬜ Borrador'}</div>
+    <div class="fp-section">
+      <div class="fp-label">Color</div>
+      <div class="fp-colors" id="fpDrawColors">
+        ${DRAW_COLORS.map(c =>
+          `<div class="fp-color-dot${c===edState.drawColor?' active':''}"
+            style="background:${c};${c==='#ffffff'?'border:1.5px solid #444':''}"
+            data-color="${c}"></div>`).join('')}
+      </div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-label">Grosor</div>
+      <div class="fp-slider-row">
+        <input type="range" id="fpSizeSlider" min="1" max="48" value="${edState.drawSize}">
+        <span class="fp-slider-val" id="fpSizeVal">${edState.drawSize}px</span>
+      </div>
+    </div>`;
+  }
+
+  if (tool === 'edit') {
+    const sel = edState.selected >= 0 ? edState.layers[edState.selected] : null;
+    if (!sel) return `<div class="fp-handle"></div>
+      <div class="fp-title">Editar capa</div>
+      <div class="fp-section"><p style="color:#636366;font-size:.82rem;text-align:center">
+        Toca una capa en el canvas para seleccionarla</p></div>`;
+
+    let extra = '';
+    if (sel.type === 'text') {
+      extra = `<div class="fp-section">
+        <div class="fp-label">Texto</div>
+        <textarea class="fp-textarea" id="fpEditText">${sel.text}</textarea>
+        <div class="fp-btn-row">
+          <button class="fp-btn active" id="fpApplyText">Aplicar</button>
+        </div>
+      </div>
+      <div class="fp-section">
+        <div class="fp-label">Color</div>
+        <div class="fp-colors" id="fpEditColors">
+          ${['#ffffff','#FFE135','#FF3030','#30D158','#0A84FF','#111111'].map(c =>
+            `<div class="fp-color-dot${c===sel.color?' active':''}" style="background:${c};${c==='#ffffff'?'border:1.5px solid #444':''}" data-editcolor="${c}"></div>`).join('')}
+        </div>
+      </div>`;
+    }
+    if (sel.type === 'bubble') {
+      extra = `<div class="fp-section">
+        <div class="fp-label">Texto</div>
+        <textarea class="fp-textarea" id="fpEditText">${sel.text}</textarea>
+        <div class="fp-btn-row">
+          <button class="fp-btn active" id="fpApplyText">Aplicar</button>
+        </div>
+      </div>
+      <div class="fp-section">
+        <div class="fp-label">Estilo</div>
+        <div class="bubble-styles">
+          ${[['conventional','🗨','Normal'],['lowvoice','🔇','Susurro'],['thought','💭','Pensamiento'],
+             ['explosion','💥','Explosión'],['radio','📻','Radio'],['multiple','💬','Múltiple']]
+            .map(([s,ic,label]) =>
+              `<button class="bubble-style-btn${s===sel.style?' active':''}" data-editstyle="${s}">
+                <span>${ic}</span>${label}
+              </button>`).join('')}
+        </div>
+      </div>`;
+    }
+
+    return `<div class="fp-handle"></div>
+    <div class="fp-title">✏️ Editar — ${sel.type === 'image' ? 'Imagen' : sel.type === 'text' ? 'Texto' : 'Bocadillo'}</div>
+    ${extra}
+    <div class="fp-section">
+      <div class="fp-btn-row">
+        <button class="fp-btn danger" id="fpDeleteLayer">🗑 Eliminar capa</button>
+      </div>
+    </div>`;
+  }
+
+  if (tool === 'pages') {
+    const pages = edState.pages;
+    return `<div class="fp-handle"></div>
+    <div class="fp-title">📄 Páginas (${pages.length})</div>
+    <div class="fp-section">
+      <div class="fp-label">Orientación de esta página</div>
+      <div class="fp-btn-row">
+        <button class="fp-btn${pages[edState.current]?.orientation==='v'?' active':''}" data-orient="v">📱 Vertical</button>
+        <button class="fp-btn${pages[edState.current]?.orientation==='h'?' active':''}" data-orient="h">🖥 Horizontal</button>
+      </div>
+    </div>
+    <div class="fp-section">
+      <div class="fp-btn-row">
+        <button class="fp-btn" id="fpAddPage">➕ Nueva página</button>
+        <button class="fp-btn danger" id="fpDelPage">🗑 Eliminar esta</button>
+      </div>
+    </div>`;
+  }
+
+  return '';
+}
+
+function _bindPanel(tool) {
+  // ── IMAGEN ──
+  if (tool === 'image') {
+    const fpCamera = edEl('fpCamera');
+    const fpGallery = edEl('fpGallery');
+    if (fpCamera)  fpCamera.addEventListener('click',  () => { edEl('edFileCapture').click(); edClosePanel(); });
+    if (fpGallery) fpGallery.addEventListener('click', () => { edEl('edFileGallery').click(); edClosePanel(); });
+    const fpGif = edEl('fpGif');
+    if (fpGif) fpGif.addEventListener('click', () => { edEl('edFileGallery').click(); edClosePanel(); });
+  }
+
+  // ── TEXTO ──
+  if (tool === 'text') {
+    let textColor = '#ffffff', textSize = 22;
+    edEl('editorFloatPanel').querySelectorAll('[data-color]').forEach(dot => {
+      dot.addEventListener('click', () => {
+        edEl('editorFloatPanel').querySelectorAll('[data-color]').forEach(d => d.classList.remove('active'));
+        dot.classList.add('active');
+        textColor = dot.dataset.color;
+      });
+    });
+    edEl('editorFloatPanel').querySelectorAll('[data-textsize]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        edEl('editorFloatPanel').querySelectorAll('[data-textsize]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        textSize = +btn.dataset.textsize;
+      });
+    });
+    const addBtn = edEl('fpAddText');
+    if (addBtn) addBtn.addEventListener('click', () => {
+      const text = edEl('fpTextInput').value.trim();
+      if (!text) { edToast('Escribe algo primero'); return; }
+      const l = new TextLayer(text);
+      l.color = textColor; l.fontSize = textSize;
+      const canvas = edEl('editorCanvas');
+      l.autoSize(canvas.width, canvas.height);
+      edSaveHistory();
+      edState.layers.push(l);
+      edState.selected = edState.layers.length - 1;
+      edRedraw(); edRenderStrip();
+      edClosePanel();
+      edToast('Texto añadido');
+    });
+  }
+
+  // ── BOCADILLO ──
+  if (tool === 'bubble') {
+    let bubbleStyle = 'conventional';
+    edEl('editorFloatPanel').querySelectorAll('[data-style]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        edEl('editorFloatPanel').querySelectorAll('[data-style]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        bubbleStyle = btn.dataset.style;
+      });
+    });
+    const addBtn = edEl('fpAddBubble');
+    if (addBtn) addBtn.addEventListener('click', () => {
+      const text = edEl('fpBubbleInput').value.trim();
+      if (!text) { edToast('Escribe el texto'); return; }
+      edAddBubble(text, bubbleStyle);
+      edClosePanel();
+    });
+  }
+
+  // ── DIBUJO ──
+  if (tool === 'draw' || tool === 'eraser') {
+    edEl('editorFloatPanel').querySelectorAll('[data-color]').forEach(dot => {
+      dot.addEventListener('click', () => {
+        edEl('editorFloatPanel').querySelectorAll('[data-color]').forEach(d => d.classList.remove('active'));
+        dot.classList.add('active');
+        edState.drawColor = dot.dataset.color;
+      });
+    });
+    const slider = edEl('fpSizeSlider');
+    if (slider) slider.addEventListener('input', e => {
+      edState.drawSize = +e.target.value;
+      edEl('fpSizeVal').textContent = e.target.value + 'px';
+    });
+  }
+
+  // ── EDITAR CAPA ──
+  if (tool === 'edit') {
+    const sel = edState.selected >= 0 ? edState.layers[edState.selected] : null;
+    if (!sel) return;
+
+    const applyText = edEl('fpApplyText');
+    if (applyText) applyText.addEventListener('click', () => {
+      const t = edEl('fpEditText').value.trim();
+      if (!t) return;
+      edSaveHistory();
+      sel.text = t;
+      if (sel.type === 'text') { const c = edEl('editorCanvas'); sel.autoSize(c.width, c.height); }
+      edRedraw(); edRenderStrip();
+      edToast('Actualizado');
+    });
+
+    edEl('editorFloatPanel').querySelectorAll('[data-editcolor]').forEach(dot => {
+      dot.addEventListener('click', () => {
+        edEl('editorFloatPanel').querySelectorAll('[data-editcolor]').forEach(d => d.classList.remove('active'));
+        dot.classList.add('active');
+        sel.color = dot.dataset.editcolor;
+        edRedraw();
+      });
+    });
+
+    edEl('editorFloatPanel').querySelectorAll('[data-editstyle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        edEl('editorFloatPanel').querySelectorAll('[data-editstyle]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        sel.style = btn.dataset.editstyle;
+        edSaveHistory(); edRedraw();
+      });
+    });
+
+    const delBtn = edEl('fpDeleteLayer');
+    if (delBtn) delBtn.addEventListener('click', edDeleteSelected);
+  }
+
+  // ── PÁGINAS ──
+  if (tool === 'pages') {
+    edEl('editorFloatPanel').querySelectorAll('[data-orient]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const page = edState.pages[edState.current];
+        page.orientation = btn.dataset.orient;
+        edEl('editorFloatPanel').querySelectorAll('[data-orient]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        edResizeCanvas(); edRedraw();
+      });
+    });
+    const addPage = edEl('fpAddPage');
+    if (addPage) addPage.addEventListener('click', () => {
+      const page = edState.pages[edState.current];
+      edNewPage(page ? page.orientation : 'v');
+      edClosePanel();
+    });
+    const delPage = edEl('fpDelPage');
+    if (delPage) delPage.addEventListener('click', () => {
+      if (edState.pages.length <= 1) { edToast('No puedes eliminar la única página'); return; }
+      edState.pages.splice(edState.current, 1);
+      edGoToPage(Math.min(edState.current, edState.pages.length - 1));
+      edClosePanel();
+    });
+  }
+}
+
+/* ── GUARDAR / PUBLICAR ── */
+function edSaveDraft() {
+  const title = edEl('edTitleInput')?.value.trim() || 'Sin título';
+  edState.project.title = title;
+  const data = {
+    project: edState.project,
+    pages: edState.pages.map(p => ({
+      orientation: p.orientation,
+      drawData: p.drawData,
+      layers: p.layers.map(l => l.serialize()),
+    })),
+    savedAt: new Date().toISOString(),
+  };
+  localStorage.setItem('cx_editor_draft', JSON.stringify(data));
+  edToast('Borrador guardado ✓');
+}
+
+function edPublish() {
+  if (!Auth || !Auth.isLogged()) { edToast('Inicia sesión para publicar'); return; }
+  const title = edEl('edTitleInput')?.value.trim();
+  if (!title) { edToast('Ponle un título a la obra'); return; }
+
+  // Exportar cada página como PNG
+  const canvas = edEl('editorCanvas');
+  const origPage = edState.current;
+  const pngs = [];
+
+  // Función para exportar página por página de forma síncrona
+  function exportPage(i) {
+    if (i >= edState.pages.length) {
+      finishPublish(pngs); return;
+    }
+    edGoToPage(i);
+    requestAnimationFrame(() => {
+      pngs.push(canvas.toDataURL('image/jpeg', 0.85));
+      exportPage(i + 1);
+    });
+  }
+  exportPage(0);
+
+  function finishPublish(pngs) {
+    edGoToPage(origPage);
+    const user = Auth.currentUser();
+    const comic = {
+      id: 'comic_' + Date.now(),
+      userId: user.id,
+      username: user.username,
+      title: edState.project.title,
+      desc: '',
+      genre: '',
+      navMode: edState.project.navMode || 'horizontal',
+      panels: pngs.map((dataUrl, i) => ({
+        id: 'panel_' + i,
+        dataUrl,
+        orientation: edState.pages[i].orientation,
+      })),
+      published: true,
+      approved: false,  // espera moderación
+      createdAt: new Date().toISOString(),
+    };
+    if (typeof ComicStore !== 'undefined') ComicStore.save(comic);
+    edToast('¡Enviada a revisión! ✓', 3000);
+    setTimeout(() => Router.go('home'), 1500);
+  }
+}
+
+/* ── VISOR ── */
+function edOpenViewer() {
+  const viewer = edEl('editorViewer');
+  const vc = edEl('viewerCanvas');
+  if (!viewer || !vc || !edState.pages.length) return;
+  viewer._idx = edState.current;
+  edUpdateViewer();
+  viewer.classList.add('open');
+}
+function edCloseViewer() { edEl('editorViewer')?.classList.remove('open'); }
+function edUpdateViewer() {
+  const viewer = edEl('editorViewer');
+  const vc = edEl('viewerCanvas');
+  if (!viewer || !vc) return;
+  const page = edState.pages[viewer._idx];
+  if (!page) return;
+  const isV = page.orientation === 'v';
+  vc.width  = ED.BASE_W;
+  vc.height = isV ? ED.BASE_H_V : ED.BASE_H_H;
+  const ctx = vc.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, vc.width, vc.height);
+  page.layers.forEach(l => l.draw(ctx, vc.width, vc.height));
+  if (page.drawData) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0); img.src = page.drawData; }
+  edEl('viewerCounter').textContent = `${viewer._idx + 1} / ${edState.pages.length}`;
+}
+
+/* ── SETEAR HERRAMIENTA ── */
+function edSetTool(tool) {
+  edState.tool = tool;
+  document.querySelectorAll('.ed-tool-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`[data-edtool="${tool}"]`);
+  if (btn) btn.classList.add('active');
+
+  const canvas = edEl('editorCanvas');
+  if (canvas) {
+    canvas.className = '';
+    if (tool === 'draw')   { canvas.classList.add('tool-draw'); edEl('edBrushCursor').style.display = 'block'; }
+    else if (tool === 'eraser') { canvas.classList.add('tool-eraser'); edEl('edBrushCursor').style.display = 'block'; }
+    else { edEl('edBrushCursor').style.display = 'none'; }
+  }
+}
+
+/* ── INIT de la vista SPA ── */
+function EditorView_init() {
+  // Si no hay estado o es primera vez, resetear
+  if (!edState) edReset();
+
+  const canvas = edEl('editorCanvas');
+  if (!canvas) return;
+
+  // Restaurar borrador si existe
+  const saved = localStorage.getItem('cx_editor_draft');
+  if (saved && edState.pages.length === 0) {
+    try {
+      const data = JSON.parse(saved);
+      edState.project = data.project || {};
+      const input = edEl('edTitleInput');
+      if (input) input.value = edState.project.title || '';
+      // Reconstruir páginas (solo sync por ahora)
+      data.pages.forEach(pd => {
+        const page = { layers: [], orientation: pd.orientation || 'v', drawData: pd.drawData };
+        pd.layers.forEach(d => {
+          if (d.type === 'text')   page.layers.push(TextLayer.deserialize(d));
+          if (d.type === 'bubble') page.layers.push(BubbleLayer.deserialize(d));
+          // imágenes: async, se omiten en la restauración rápida
+        });
+        edState.pages.push(page);
+      });
+      edState.layers = edState.pages[0]?.layers || [];
+    } catch(e) {}
+  }
+
+  if (!edState.pages.length) edReset(), edNewPage('v');
+  else { edResizeCanvas(); edRedraw(); edRenderStrip(); }
+
+  // Herramienta por defecto
+  edSetTool('select');
+
+  // ── EVENTOS DE CANVAS ──
+  canvas.addEventListener('pointerdown',  edOnPointerDown,  { passive: false });
+  canvas.addEventListener('pointermove',  edOnPointerMove,  { passive: false });
+  canvas.addEventListener('pointerup',    edOnPointerUp);
+  canvas.addEventListener('pointerleave', edOnPointerUp);
+
+  // ── TOOLBAR BOTONES ──
+  document.querySelectorAll('.ed-tool-btn[data-edtool]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.edtool;
+      if (['image','text','bubble','draw','eraser','edit','pages'].includes(t)) {
+        edSetTool(t === 'select' ? 'select' : t);
+        edTogglePanel(t);
+      } else {
+        edSetTool(t);
+        edClosePanel();
       }
     });
-    wrapper.classList.add('editing');
   });
 
-  // Cerrar al hacer clic fuera
-  document.addEventListener('click', () => {
-    if (wrapper.classList.contains('editing')) {
-      textObj.text = textDiv.textContent;
-      textDiv.contentEditable = 'false';
-      wrapper.classList.remove('editing');
-      saveComic();
-    }
+  // ── TOPBAR ──
+  edEl('edUndoBtn')?.addEventListener('click', edUndo);
+  edEl('edSaveBtn')?.addEventListener('click', edSaveDraft);
+  edEl('edPublishBtn')?.addEventListener('click', edPublish);
+  edEl('edViewerBtn')?.addEventListener('click', edOpenViewer);
+
+  // ── FILES ──
+  edEl('edFileCapture')?.addEventListener('change', e => { edAddImage(e.target.files[0]); e.target.value = ''; });
+  edEl('edFileGallery')?.addEventListener('change', e => { edAddImage(e.target.files[0]); e.target.value = ''; });
+
+  // ── VISOR ──
+  edEl('viewerClose')?.addEventListener('click', edCloseViewer);
+  edEl('viewerPrev')?.addEventListener('click', () => {
+    const v = edEl('editorViewer');
+    if (v._idx > 0) { v._idx--; edUpdateViewer(); }
+  });
+  edEl('viewerNext')?.addEventListener('click', () => {
+    const v = edEl('editorViewer');
+    if (v._idx < edState.pages.length - 1) { v._idx++; edUpdateViewer(); }
   });
 
-  makeDraggable(wrapper, textObj);
-  layer.appendChild(wrapper);
-}
+  // ── CERRAR PANEL AL TOCAR CANVAS ──
+  canvas.addEventListener('pointerdown', () => {
+    if (_panelTool && !['draw','eraser'].includes(_panelTool)) edClosePanel();
+  }, { capture: true, passive: true });
 
-// ════════════════════════════════════════
-// ARRASTRAR BOCADILLO
-// ════════════════════════════════════════
-function makeDraggable(wrapper, textObj) {
-  let startX, startY, startLeft, startTop, isDragging = false;
-
-  function onStart(e) {
-    // Solo arrastrar si está en modo edición y no se hace clic en botón/texto editable
-    if (!wrapper.classList.contains('editing')) return;
-    const target = e.target;
-    if (target.tagName === 'BUTTON' || target.classList.contains('bubble-text') ||
-        target.classList.contains('tail-point')) return;
-
-    isDragging = true;
-    e.preventDefault();
-    const stage = document.getElementById('panelStage');
-    const rect  = stage.getBoundingClientRect();
-    startX    = e.touches ? e.touches[0].clientX : e.clientX;
-    startY    = e.touches ? e.touches[0].clientY : e.clientY;
-    startLeft = textObj.x;
-    startTop  = textObj.y;
-    wrapper.style.cursor = 'grabbing';
-
-    function onMove(ev) {
-      if (!isDragging) return;
-      ev.preventDefault();
-      const cx = ev.touches ? ev.touches[0].clientX : ev.clientX;
-      const cy = ev.touches ? ev.touches[0].clientY : ev.clientY;
-      textObj.x = Math.max(0, Math.min(95, startLeft + ((cx-startX)/rect.width)*100));
-      textObj.y = Math.max(0, Math.min(95, startTop  + ((cy-startY)/rect.height)*100));
-      wrapper.style.left = textObj.x + '%';
-      wrapper.style.top  = textObj.y + '%';
-    }
-    function onEnd() {
-      isDragging = false;
-      wrapper.style.cursor = '';
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onEnd);
-      document.removeEventListener('touchmove', onMove);
-      document.removeEventListener('touchend', onEnd);
-      saveComic();
-    }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onEnd);
-    document.addEventListener('touchmove', onMove, { passive: false });
-    document.addEventListener('touchend', onEnd);
-  }
-
-  wrapper.addEventListener('mousedown', onStart);
-  wrapper.addEventListener('touchstart', onStart, { passive: false });
-}
-
-// ════════════════════════════════════════
-// TEXTO CABECERA / PIE
-// ════════════════════════════════════════
-function addTextBlock(type) {
-  if (EditorState.activePanelIdx < 0) { showToast(I18n.t('selectPanelFirst')); return; }
-  const panel = EditorState.comic.panels[EditorState.activePanelIdx];
-  if (!panel.texts) panel.texts = [];
-  if (panel.texts.find(t => t.type === type)) { showToast(I18n.t('blockExists')); return; }
-  panel.texts.push({ id: 't_' + Date.now(), type, text: '' });
-  renderTextLayer();
-  saveComic();
-}
-
-function renderTextBlock(textObj, layer, panel) {
-  const block = document.createElement('div');
-  block.className = 'panel-text-block ' + (textObj.type === 'header' ? 'header-block' : 'footer-block');
-  block.innerHTML = `
-    <button class="block-del" title="Eliminar">✕</button>
-    <span contenteditable="true" data-placeholder="Escribe aquí...">${escHtml(textObj.text)}</span>
-  `;
-  const span = block.querySelector('span');
-  // Placeholder
-  if (!textObj.text) span.textContent = '';
-  span.addEventListener('focus', () => { if (!span.textContent) span.textContent = ''; });
-  span.addEventListener('blur',  () => { textObj.text = span.textContent; saveComic(); });
-  block.querySelector('.block-del').addEventListener('click', () => {
-    panel.texts = panel.texts.filter(t => t.id !== textObj.id);
-    renderTextLayer(); saveComic();
-  });
-  layer.appendChild(block);
-}
-
-// ════════════════════════════════════════
-// HERRAMIENTAS DE TEXTO
-// ════════════════════════════════════════
-function updateTextTools() {
-  const idx   = EditorState.activePanelIdx;
-  const hint  = document.getElementById('textsHint');
-  const tools = document.getElementById('textTools');
-  const has   = EditorState.comic && idx >= 0;
-  if (hint)  hint.style.display  = has ? 'none'  : 'block';
-  if (tools) tools.style.display = has ? 'block' : 'none';
-  if (has) updateDialogOrderList();
-}
-
-function updateDialogOrderList() {
-  const idx    = EditorState.activePanelIdx;
-  const listEl = document.getElementById('dialogOrderList');
-  if (!listEl || !EditorState.comic || idx < 0) return;
-  const dialogs = (EditorState.comic.panels[idx].texts || [])
-    .filter(t => t.type === 'dialog')
-    .sort((a,b) => (a.order||0)-(b.order||0));
-  listEl.innerHTML = '';
-  dialogs.forEach((d, i) => {
-    const item = document.createElement('div');
-    item.className = 'dialog-order-item';
-    item.draggable = true;
-    item.innerHTML = `<div class="order-num">${i+1}</div><div class="order-text">${escHtml(d.text||'(vacío)')}</div>`;
-    let src = null;
-    item.addEventListener('dragstart', () => src = i);
-    item.addEventListener('dragover',  e => e.preventDefault());
-    item.addEventListener('drop', () => {
-      if (src === null || src === i) return;
-      const [m] = dialogs.splice(src, 1);
-      dialogs.splice(i, 0, m);
-      dialogs.forEach((d,j) => d.order = j);
-      updateDialogOrderList(); saveComic();
-    });
-    listEl.appendChild(item);
-  });
-}
-
-// ════════════════════════════════════════
-// CAMBIO DE PANTALLA
-// ════════════════════════════════════════
-function showScreen(name) {
-  document.getElementById('screenProjects').style.display = name === 'projects' ? 'block' : 'none';
-  document.getElementById('screenEditor').style.display   = name === 'editor'   ? 'flex'  : 'none';
-  if (name === 'projects') {
-    document.getElementById('editorMenus').style.display  = 'none';
-    document.getElementById('editorActions').style.display = 'none';
-  }
+  // ── RESIZE ──
+  window.addEventListener('resize', () => { edResizeCanvas(); edRedraw(); });
 }

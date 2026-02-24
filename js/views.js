@@ -32,7 +32,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v3.2</footer>
+    <footer class="app-version">v4.0</footer>
   `,
   init: () => { HomeView_init(); requestAnimationFrame(() => Fullscreen.init()); },
   destroy: () => {}
@@ -136,89 +136,89 @@ Router.register('editor', {
   bodyClass: 'editor-page',
   css: ['css/editor.css'],
   html: () => `
-    <main id="screenProjects" class="projects-screen">
-      <div class="projects-header">
-        <h2 class="projects-title" data-i18n="myComics">Mis creaciones</h2>
-        <button class="btn btn-primary" id="newProjectBtn" data-i18n="newProject">✨ Nuevo proyecto</button>
-      </div>
-      <div class="projects-grid" id="projectsGrid"></div>
-    </main>
+    <div id="editorShell">
 
-    <main id="screenEditor" class="editor-canvas-area" style="display:none">
-      <div class="canvas-placeholder" id="canvasPlaceholder">
-        <span>🖼</span>
-        <p>Abre <strong>Viñetas ▾</strong> y sube tu primera imagen</p>
+      <!-- TOPBAR -->
+      <div id="editorTopbar">
+        <button class="ed-top-btn" id="edUndoBtn" title="Deshacer">↩</button>
+        <input type="text" class="ed-title" id="edTitleInput" placeholder="Sin título...">
+        <button class="ed-top-btn" id="edViewerBtn" title="Vista previa">👁</button>
+        <button class="ed-top-btn" id="edSaveBtn">Borrador</button>
+        <button class="ed-top-btn yellow" id="edPublishBtn">Publicar</button>
       </div>
-      <div class="panel-viewer hidden" id="panelViewer">
-        <div class="panel-stage" id="panelStage">
-          <img id="panelImage" src="" alt="">
-          <div class="text-layer" id="textLayer"></div>
-        </div>
-        <div class="panel-num-bar" id="panelNumBar">Viñeta 1</div>
-      </div>
-    </main>
 
-    <div class="modal-overlay" id="projectModal">
-      <div class="modal-box">
-        <div class="modal-header">
-          <span class="modal-title" data-i18n="newProject">Nuevo proyecto</span>
-          <button class="modal-close" id="projectModalClose">✕</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-group">
-            <label class="form-label" data-i18n="comicTitle">Título</label>
-            <input type="text" id="comicTitleInput" class="form-input" maxlength="80" placeholder="Escribe el título...">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Descripción (opcional)</label>
-            <textarea id="comicDescInput" class="form-input" rows="2" maxlength="200" placeholder="Breve descripción..."></textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Género</label>
-            <div class="genre-field">
-              <select id="comicGenreSelect" class="form-input form-select">
-                <option value="">— Elige un género —</option>
-              </select>
-              <span class="genre-or">o</span>
-              <input type="text" id="comicGenreNew" class="form-input" maxlength="40" placeholder="Escribe uno nuevo...">
-            </div>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-primary" id="projectModalSave">Crear proyecto</button>
-        </div>
+      <!-- STRIP DE PÁGINAS -->
+      <div id="editorPageStrip"></div>
+
+      <!-- CANVAS -->
+      <div id="editorCanvasWrap">
+        <canvas id="editorCanvas"></canvas>
+
+        <!-- Panel flotante sobre el canvas -->
+        <div id="editorFloatPanel"></div>
+
+        <!-- Toast -->
+        <div id="edToast"></div>
+      </div>
+
+      <!-- TOOLBAR -->
+      <div id="editorToolbar">
+        <button class="ed-tool-btn" data-edtool="image">
+          <span class="t-icon">📷</span>
+          <span class="t-label">Foto</span>
+        </button>
+        <div class="ed-tool-sep"></div>
+        <button class="ed-tool-btn" data-edtool="text">
+          <span class="t-icon" style="font-weight:900;font-size:1rem">T</span>
+          <span class="t-label">Texto</span>
+        </button>
+        <button class="ed-tool-btn" data-edtool="bubble">
+          <span class="t-icon">💬</span>
+          <span class="t-label">Bocadillo</span>
+        </button>
+        <div class="ed-tool-sep"></div>
+        <button class="ed-tool-btn" data-edtool="draw">
+          <span class="t-icon">✏️</span>
+          <span class="t-label">Dibujo</span>
+        </button>
+        <button class="ed-tool-btn" data-edtool="eraser">
+          <span class="t-icon">⬜</span>
+          <span class="t-label">Borrar</span>
+        </button>
+        <div class="ed-tool-sep"></div>
+        <button class="ed-tool-btn" data-edtool="edit">
+          <span class="t-icon">↖</span>
+          <span class="t-label">Editar</span>
+        </button>
+        <button class="ed-tool-btn" data-edtool="pages">
+          <span class="t-icon">📄</span>
+          <span class="t-label">Páginas</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Visor -->
+    <div id="editorViewer">
+      <canvas id="viewerCanvas"></canvas>
+      <div class="viewer-controls">
+        <button class="viewer-btn" id="viewerPrev">← Anterior</button>
+        <span id="viewerCounter">1 / 1</span>
+        <button class="viewer-btn" id="viewerNext">Siguiente →</button>
+        <button class="viewer-btn yellow" id="viewerClose">Cerrar ✕</button>
       </div>
     </div>
 
-    <div class="modal-overlay" id="tailModal">
-      <div class="modal-box">
-        <div class="modal-header">
-          <span class="modal-title">Cola del bocadillo</span>
-          <button class="modal-close" id="tailModalClose">✕</button>
-        </div>
-        <div class="modal-body tail-selector">
-          <p style="margin-bottom:12px;font-size:.9rem;color:var(--gray-700)">¿Desde qué lado sale la cola?</p>
-          <div class="tail-options">
-            <button class="tail-opt" data-tail="top">↑ Arriba</button>
-            <button class="tail-opt" data-tail="right">→ Derecha</button>
-            <button class="tail-opt" data-tail="bottom">↓ Abajo</button>
-            <button class="tail-opt" data-tail="left">← Izquierda</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <input type="file" id="fileInput" accept="image/*,.gif" style="display:none" multiple>
+    <!-- Inputs de archivo ocultos -->
+    <input type="file" id="edFileCapture" accept="image/*,.gif" capture="environment" style="display:none">
+    <input type="file" id="edFileGallery" accept="image/*,.gif" style="display:none">
+
+    <!-- Cursor de dibujo -->
+    <div id="edBrushCursor"></div>
   `,
-  init: (params) => EditorView_init(params),
-  destroy: () => {
-    // Limpiar estado del editor al salir
-    if (typeof EditorState !== 'undefined') EditorState.comic = null;
-  }
+  init: () => EditorView_init(),
 });
 
-// ══════════════════════════════════════════════
-// VISTA: READER
-// ══════════════════════════════════════════════
 Router.register('reader', {
   bodyClass: 'reader-page',
   css: ['css/reader.css'],
