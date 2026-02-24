@@ -6,36 +6,12 @@ let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | nu
 
 // ── Punto de entrada SPA ──
 function HomeView_init() {
-  // Pequeño delay para que el DOM de la vista esté pintado
-  requestAnimationFrame(() => {
-    adjustBars();
-    renderComics();
-    setupPageNav();
-  });
+  // El router ya ajusta el spacing — aquí solo inicializamos contenido
+  renderComics();
+  setupPageNav();
 }
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera
-function adjustBars() {
-  function recalc() {
-    const header  = document.getElementById('siteHeader');
-    const pageNav = document.getElementById('pageNav');
-    const list    = document.getElementById('comicsGrid');
-    if (!header || !pageNav || !list) return;
-
-    const hh  = header.getBoundingClientRect().height;
-    const nh  = pageNav.getBoundingClientRect().height;
-    pageNav.style.top     = hh + 'px';
-    list.style.paddingTop = (hh + nh) + 'px';
-  }
-
-  recalc();
-  // Repetir cuando las fuentes web estén pintadas (Bangers puede cambiar la altura)
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => { recalc(); });
-  }
-  setTimeout(recalc, 300);
-  window.addEventListener('resize', recalc);
-}
 
 // ── MENÚ DE PÁGINA ──
 function setupPageNav() {

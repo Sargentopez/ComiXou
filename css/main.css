@@ -43,9 +43,7 @@ html {
 }
 body {
   font-family: var(--font-body);
-  /* Amarillo en todo el body para que no aparezca negro
-     encima del header en PWA fullscreen de Android */
-  background: #FFE135;
+  background: var(--paper);
   color: var(--ink);
   min-height: 100%;
   line-height: 1.5;
@@ -405,10 +403,10 @@ a { color: inherit; text-decoration: none; }
    El editor y el reader tienen su propia lógica.        */
 
 /* Login, registro: solo cabecera fija */
-body.auth-page { padding-top: var(--header-h); }
+body.auth-page { padding-top: 0; }
 
 /* Editor: cabecera fija, el resto lo gestiona editor.css */
-body.editor-page { padding-top: var(--header-h); }
+body.editor-page { padding-top: 0; }
 
 /* ══ BANNER DE INSTALACIÓN PWA ══ */
 .install-banner {
@@ -463,3 +461,35 @@ body.editor-page { padding-top: var(--header-h); }
   font-size: 0.75rem; font-weight: 600; text-align: center;
 }
 .install-btn-dismiss:hover { color: var(--white); }
+
+/* ── BOTÓN PANTALLA COMPLETA (solo PWA) ── */
+.fullscreen-prompt {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: #FFE135;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  font-family: var(--font-body);
+}
+.fullscreen-prompt.visible { display: flex; }
+.fullscreen-prompt .fp-logo {
+  font-size: 3rem; font-family: var(--font-display);
+  font-weight: 900; letter-spacing: -1px;
+}
+.fullscreen-prompt .fp-logo span { color: var(--red); }
+.fullscreen-prompt .fp-btn {
+  background: var(--black); color: var(--yellow);
+  border: none; border-radius: 6px;
+  padding: 14px 32px;
+  font-family: var(--font-body); font-weight: 900; font-size: 1rem;
+  cursor: pointer; letter-spacing: .02em;
+}
+.fullscreen-prompt .fp-skip {
+  font-size: 0.75rem; color: var(--gray-600);
+  background: none; border: none; cursor: pointer;
+  font-family: var(--font-body);
+}
