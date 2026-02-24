@@ -67,7 +67,7 @@
 /* ── CONTENIDO SCROLLABLE ── */
 /* Empuja el contenido para que no quede bajo las dos barras fijas */
 .home-list {
-  padding-top: var(--bars-h);  /* barra1 + barra2 */
+  padding-top: 0;  /* ajustado por adjustBars() en home.js */
   max-width: var(--max-w);
   margin-left: auto;
   margin-right: auto;

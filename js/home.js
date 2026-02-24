@@ -6,9 +6,12 @@ let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | nu
 
 // ── Punto de entrada SPA ──
 function HomeView_init() {
-  adjustBars();
-  renderComics();
-  setupPageNav();
+  // Pequeño delay para que el DOM de la vista esté pintado
+  requestAnimationFrame(() => {
+    adjustBars();
+    renderComics();
+    setupPageNav();
+  });
 }
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera
