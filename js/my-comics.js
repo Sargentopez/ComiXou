@@ -1,3 +1,4 @@
+/* ComiXow v4.2 */
 /* ============================================================
    my-comics.js — Vista "Mis creaciones"
    Listado del autor con opciones Leer / Editar / Publicar.

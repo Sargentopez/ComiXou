@@ -1,3 +1,4 @@
+/* ComiXow v4.2 */
 /* ============================================================
    router.js — SPA Router ComiXow
    ============================================================ */
@@ -65,6 +66,17 @@ const Router = (() => {
       if (!header || !appView) return;
 
       const hh = header.getBoundingClientRect().height;
+
+      // my-comics tiene su propio pageNav con id myComicsNav
+      const myComicsNav = document.getElementById('myComicsNav');
+      if (myComicsNav) {
+        myComicsNav.style.top = hh + 'px';
+        const nh = myComicsNav.getBoundingClientRect().height;
+        const list = document.getElementById('myComicsList');
+        if (list) list.style.paddingTop = (hh + nh) + 'px';
+        appView.style.paddingTop = '0';
+        return;
+      }
 
       if (pageNav) {
         // Home: pageNav debajo del header, appView debajo de ambos
