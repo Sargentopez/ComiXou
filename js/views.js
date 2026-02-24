@@ -32,7 +32,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.2</footer>
+    <footer class="app-version">v4.3</footer>
   `,
   init: () => { HomeView_init(); requestAnimationFrame(() => Fullscreen.init()); },
   destroy: () => {}
@@ -197,71 +197,101 @@ Router.register('editor', {
   html: () => `
     <div id="editorShell">
 
-      <!-- CANVAS (ocupa todo) -->
+      <!-- CANVAS (fondo, ocupa todo) -->
       <div id="editorCanvasWrap">
         <canvas id="editorCanvas"></canvas>
         <div id="edToast"></div>
       </div>
 
-      <!-- STRIP DE PÁGINAS: encima del canvas, arriba -->
-      <div id="editorPageStrip">
-        <!-- poblado por JS: botón volver, separador, miniaturas, botón + -->
+      <!-- ── BARRA SUPERIOR ── -->
+      <div id="edTopbar">
+        <button id="edBackBtn" title="Volver a Mis Creaciones">‹</button>
+        <span id="edProjectTitle">Sin título</span>
+        <button class="ed-top-action" id="edPreviewBtn">👁 Vista previa</button>
+        <button class="ed-top-action" id="edSaveBtn">💾 Guardar</button>
       </div>
 
-      <!-- TOOLBAR FLOTANTE -->
-      <div id="edToolbar">
-        <!-- Pestaña siempre visible -->
-        <div id="edToolbarTab">
-          <div class="tab-label">
-            🛠 HERRAMIENTAS
-            <span class="tab-tool-name" id="edToolName"></span>
+      <!-- ── BARRA DE MENÚ ── -->
+      <div id="edMenuBar">
+
+        <!-- INSERTAR -->
+        <div class="ed-menu-item" style="position:relative">
+          <button class="ed-menu-btn" data-menu="insert">＋ Insertar ▾</button>
+          <div class="ed-dropdown" id="dd-insert">
+            <!-- Imagen -->
+            <div class="ed-dropdown-item has-sub" style="position:relative">
+              <span class="dd-icon">🖼</span> Imagen
+              <div class="ed-subdropdown">
+                <button class="ed-dropdown-item" id="dd-gallery"><span class="dd-icon">🖼</span>Galería</button>
+                <button class="ed-dropdown-item" id="dd-camera"><span class="dd-icon">📷</span>Cámara</button>
+              </div>
+            </div>
+            <!-- Texto -->
+            <div class="ed-dropdown-item has-sub" style="position:relative">
+              <span class="dd-icon">✍️</span> Texto
+              <div class="ed-subdropdown">
+                <button class="ed-dropdown-item" id="dd-textbox"><span class="dd-icon">💬</span>Caja de texto</button>
+                <button class="ed-dropdown-item" id="dd-bubble"><span class="dd-icon">🗯</span>Bocadillo</button>
+              </div>
+            </div>
           </div>
-          <button id="edToolbarMinBtn" title="Minimizar">▼</button>
         </div>
-        <!-- Cuerpo expandible -->
-        <div id="edToolbarBody">
-          <!-- Fila de botones de herramienta -->
-          <div id="edToolNav">
-            <button class="ed-tool-btn active" data-tool="select">
-              <span class="t-icon">↖</span>
-              <span class="t-label">Selec.</span>
-            </button>
-            <div class="ed-tool-sep"></div>
-            <button class="ed-tool-btn" data-tool="image">
-              <span class="t-icon">📷</span>
-              <span class="t-label">Foto</span>
-            </button>
-            <button class="ed-tool-btn" data-tool="text">
-              <span class="t-icon" style="font-weight:900">T</span>
-              <span class="t-label">Texto</span>
-            </button>
-            <button class="ed-tool-btn" data-tool="bubble">
-              <span class="t-icon">💬</span>
-              <span class="t-label">Bocad.</span>
-            </button>
-            <div class="ed-tool-sep"></div>
-            <button class="ed-tool-btn" data-tool="draw">
-              <span class="t-icon">✏️</span>
-              <span class="t-label">Dibujo</span>
-            </button>
-            <button class="ed-tool-btn" data-tool="eraser">
-              <span class="t-icon">⬜</span>
-              <span class="t-label">Borrar</span>
-            </button>
-            <div class="ed-tool-sep"></div>
-            <button class="ed-tool-btn" data-tool="edit">
-              <span class="t-icon">⚙️</span>
-              <span class="t-label">Props</span>
-            </button>
-            <button class="ed-tool-btn" data-tool="view">
-              <span class="t-icon">👁️</span>
-              <span class="t-label">Ver</span>
-            </button>
+
+        <div class="ed-menu-sep"></div>
+
+        <!-- DIBUJAR -->
+        <div class="ed-menu-item" style="position:relative">
+          <button class="ed-menu-btn" data-menu="draw">✏️ Dibujar ▾</button>
+          <div class="ed-dropdown" id="dd-draw">
+            <button class="ed-dropdown-item" id="dd-pen"><span class="dd-icon">✏️</span>Lápiz</button>
+            <button class="ed-dropdown-item" id="dd-eraser"><span class="dd-icon">⬜</span>Borrador</button>
+            <div class="ed-dropdown-sep"></div>
+            <button class="ed-dropdown-item" id="dd-cleardraw"><span class="dd-icon">🗑</span>Borrar dibujos</button>
           </div>
-          <!-- Opciones de la herramienta activa -->
-          <div id="edToolPanel"></div>
         </div>
+
+        <div class="ed-menu-sep"></div>
+
+        <!-- NAVEGAR -->
+        <div class="ed-menu-item" style="position:relative">
+          <button class="ed-menu-btn" data-menu="nav">📄 Navegar ▾</button>
+          <div class="ed-dropdown" id="dd-nav">
+            <div class="ed-dropdown-label">Ir a página</div>
+            <div id="ddNavPages" style="padding:4px 8px 6px;display:flex;flex-wrap:wrap;gap:5px;max-width:220px"></div>
+            <div class="ed-dropdown-sep"></div>
+            <button class="ed-dropdown-item" id="dd-addpage"><span class="dd-icon">➕</span>Nueva página</button>
+            <button class="ed-dropdown-item" id="dd-delpage"><span class="dd-icon">🗑</span>Eliminar esta página</button>
+            <div class="ed-dropdown-sep"></div>
+            <div class="ed-dropdown-label">Orientación</div>
+            <button class="ed-dropdown-item" id="dd-orientv"><span class="dd-icon">📱</span>Vertical</button>
+            <button class="ed-dropdown-item" id="dd-orienth"><span class="dd-icon">🖥</span>Horizontal</button>
+          </div>
+        </div>
+
+        <div class="ed-menu-sep"></div>
+
+        <!-- PROYECTO -->
+        <div class="ed-menu-item" style="position:relative">
+          <button class="ed-menu-btn" data-menu="project">⚙️ Proyecto ▾</button>
+          <div class="ed-dropdown" id="dd-project">
+            <button class="ed-dropdown-item" id="dd-editproject"><span class="dd-icon">✏️</span>Editar datos</button>
+            <button class="ed-dropdown-item" id="dd-viewerjson"><span class="dd-icon">👁</span>Vista previa</button>
+            <div class="ed-dropdown-sep"></div>
+            <button class="ed-dropdown-item" id="dd-savejson"><span class="dd-icon">💾</span>Descargar .json</button>
+            <button class="ed-dropdown-item" id="dd-loadjson"><span class="dd-icon">📂</span>Cargar .json</button>
+          </div>
+        </div>
+
+        <!-- MINIMIZAR (a la derecha) -->
+        <button id="edMinimizeBtn">▲ Minimizar</button>
+
       </div>
+
+      <!-- ── PANEL DE OPCIONES CONTEXTUAL ── -->
+      <div id="edOptionsPanel"></div>
+
+      <!-- ── BOTÓN FLOTANTE (cuando está minimizado) ── -->
+      <div id="edFloatBtn" title="Abrir menú">☰</div>
 
     </div>
 
@@ -273,6 +303,27 @@ Router.register('editor', {
         <span id="viewerCounter">1 / 1</span>
         <button class="viewer-btn" id="viewerNext">▶</button>
         <button class="viewer-btn yellow" id="viewerClose">Cerrar ✕</button>
+      </div>
+    </div>
+
+    <!-- MODAL DATOS DEL PROYECTO -->
+    <div id="edProjectModal">
+      <div class="ed-modal-sheet">
+        <div class="ed-modal-handle"></div>
+        <h3 class="ed-modal-title">Datos del proyecto</h3>
+        <div class="ed-modal-field"><label>Título</label><input type="text" id="edMTitle"></div>
+        <div class="ed-modal-field"><label>Autor</label><input type="text" id="edMAuthor"></div>
+        <div class="ed-modal-field"><label>Género</label><input type="text" id="edMGenre"></div>
+        <div class="ed-modal-field"><label>Modo de lectura</label>
+          <select id="edMNavMode">
+            <option value="fixed">Viñeta fija (botones)</option>
+            <option value="horizontal">Deslizamiento horizontal</option>
+            <option value="vertical">Deslizamiento vertical</option>
+          </select></div>
+        <div class="ed-modal-actions">
+          <button class="ed-modal-btn cancel" id="edMCancel">Cancelar</button>
+          <button class="ed-modal-btn ok" id="edMSave">Guardar ✓</button>
+        </div>
       </div>
     </div>
 
