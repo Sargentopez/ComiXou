@@ -32,9 +32,9 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v3.1</footer>
+    <footer class="app-version">v3.2</footer>
   `,
-  init: () => HomeView_init(),
+  init: () => { HomeView_init(); requestAnimationFrame(() => Fullscreen.init()); },
   destroy: () => {}
 });
 

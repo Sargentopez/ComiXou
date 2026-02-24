@@ -143,49 +143,8 @@ const Header = (() => {
       if (isInstalled) installBtn.style.display = 'none';
     }
 
-    // ── Fullscreen ──
-    _initFullscreen();
   }
 
-  function _initFullscreen() {
-    var inPWA = window.matchMedia('(display-mode: fullscreen)').matches
-      || window.matchMedia('(display-mode: standalone)').matches
-      || window.navigator.standalone;
-    if (!inPWA || !document.documentElement.requestFullscreen) return;
-
-    var GRANT_KEY = 'cx_fs_granted';
-    var SKIP_KEY  = 'cx_fs_skip';
-
-    function enter() {
-      if (document.fullscreenElement) return;
-      document.documentElement.requestFullscreen({ navigationUI: 'hide' })
-        .then(() => localStorage.setItem(GRANT_KEY, '1'))
-        .catch(() => {});
-    }
-
-    // Ya concedido antes → reactivar automáticamente
-    if (localStorage.getItem(GRANT_KEY) && !localStorage.getItem(SKIP_KEY)) {
-      setTimeout(enter, 100);
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') setTimeout(enter, 100);
-      });
-    }
-
-    // Prompt primera vez (solo existe en home)
-    var prompt = document.getElementById('fullscreenPrompt');
-    if (prompt && !localStorage.getItem(SKIP_KEY) && !localStorage.getItem(GRANT_KEY)) {
-      prompt.classList.add('visible');
-      document.getElementById('fullscreenBtn').addEventListener('click', () => {
-        document.documentElement.requestFullscreen({ navigationUI: 'hide' })
-          .then(() => { localStorage.setItem(GRANT_KEY, '1'); prompt.classList.remove('visible'); })
-          .catch(() => prompt.classList.remove('visible'));
-      });
-      document.getElementById('fullscreenSkip').addEventListener('click', () => {
-        localStorage.setItem(SKIP_KEY, '1');
-        prompt.classList.remove('visible');
-      });
-    }
-  }
 
   function init() {
     var existing = document.getElementById('siteHeader');
