@@ -1,40 +1,45 @@
 /* ============================================================
-   auth-pages.js — Lógica de formularios login/registro
+   auth-pages.js — Login y Registro (SPA)
+   AuthView_init() se llama cada vez que el router renderiza
+   la vista login o register — busca elementos frescos del DOM.
    ============================================================ */
 
 function AuthView_init() {
+
   // ── Mostrar/ocultar contraseña ──
   const passToggle = document.getElementById('passToggle');
   if (passToggle) {
     passToggle.addEventListener('click', () => {
-      const inputs = document.querySelectorAll('input[type="password"], input[type="text"].pass-field');
       const passEl = document.getElementById('loginPass') || document.getElementById('regPass');
       if (!passEl) return;
-      const isHidden = passEl.type === 'password';
-      document.querySelectorAll('input[id*="Pass"], input[id*="pass"]').forEach(inp => {
-        inp.type = isHidden ? 'text' : 'password';
-      });
-      passToggle.textContent = isHidden ? '🙈' : '👁';
+      const hide = passEl.type === 'password';
+      document.querySelectorAll('input[id*="Pass"], input[id*="pass"]')
+        .forEach(inp => inp.type = hide ? 'text' : 'password');
+      passToggle.textContent = hide ? '🙈' : '👁';
     });
   }
 
   // ── LOGIN ──
   const loginForm = document.getElementById('loginForm');
   if (loginForm) {
-    loginForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const email = document.getElementById('loginEmail').value;
+    // Usar click en el botón submit en vez de submit del form
+    // (más fiable en SPA con HTML inyectado)
+    const submitBtn = loginForm.querySelector('button[type="submit"]');
+    
+    function doLogin(e) {
+      if (e) e.preventDefault();
+      clearErrors();
+
+      const email = document.getElementById('loginEmail').value.trim();
       const pass  = document.getElementById('loginPass').value;
       let valid = true;
 
-      // Validaciones
-      clearErrors();
-      if (!email.trim()) {
+      if (!email) {
         showError('emailError', I18n.t('errRequired')); valid = false;
       } else if (!isValidEmail(email)) {
         showError('emailError', I18n.t('errEmail')); valid = false;
       }
-      if (!pass.trim()) {
+      if (!pass) {
         showError('passError', I18n.t('errRequired')); valid = false;
       }
       if (!valid) return;
@@ -47,40 +52,37 @@ function AuthView_init() {
 
       showToast(I18n.t('loginOk'));
       setTimeout(() => {
-        Router.go('home');   // renderiza la vista
-        Header.refresh();    // actualiza la cabecera con sesión activa
-      }, 800);
-    });
+        Router.go('home');
+        // Header.refresh tras el render del router
+        requestAnimationFrame(() => Header.refresh());
+      }, 600);
+    }
+
+    loginForm.addEventListener('submit', doLogin);
+    if (submitBtn) submitBtn.addEventListener('click', doLogin);
   }
 
   // ── REGISTRO ──
   const registerForm = document.getElementById('registerForm');
   if (registerForm) {
-    registerForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const username = document.getElementById('regUsername').value;
-      const email    = document.getElementById('regEmail').value;
+    const submitBtn = registerForm.querySelector('button[type="submit"]');
+
+    function doRegister(e) {
+      if (e) e.preventDefault();
+      clearErrors();
+
+      const username = document.getElementById('regUsername').value.trim();
+      const email    = document.getElementById('regEmail').value.trim();
       const pass     = document.getElementById('regPass').value;
       const passConf = document.getElementById('regPassConf').value;
       let valid = true;
 
-      clearErrors();
-      if (!username.trim()) {
-        showError('usernameError', I18n.t('errRequired')); valid = false;
-      }
-      if (!email.trim()) {
-        showError('emailError', I18n.t('errRequired')); valid = false;
-      } else if (!isValidEmail(email)) {
-        showError('emailError', I18n.t('errEmail')); valid = false;
-      }
-      if (!pass.trim()) {
-        showError('passError', I18n.t('errRequired')); valid = false;
-      } else if (pass.length < 6) {
-        showError('passError', I18n.t('errPassLen')); valid = false;
-      }
-      if (pass !== passConf) {
-        showError('passConfError', I18n.t('errPassMatch')); valid = false;
-      }
+      if (!username) { showError('usernameError', I18n.t('errRequired')); valid = false; }
+      if (!email)    { showError('emailError', I18n.t('errRequired')); valid = false; }
+      else if (!isValidEmail(email)) { showError('emailError', I18n.t('errEmail')); valid = false; }
+      if (!pass)     { showError('passError', I18n.t('errRequired')); valid = false; }
+      else if (pass.length < 6) { showError('passError', I18n.t('errPassLen')); valid = false; }
+      if (pass !== passConf) { showError('passConfError', I18n.t('errPassMatch')); valid = false; }
       if (!valid) return;
 
       const result = Auth.register(username, email, pass);
@@ -90,12 +92,15 @@ function AuthView_init() {
       }
 
       showToast(I18n.t('registerOk'));
-      setTimeout(() => { Router.go('login'); }, 1200);
-      // (el header se refresca al hacer login a continuación)
-    });
-  }
-});
+      setTimeout(() => Router.go('login'), 1000);
+    }
 
+    registerForm.addEventListener('submit', doRegister);
+    if (submitBtn) submitBtn.addEventListener('click', doRegister);
+  }
+}
+
+// ── Helpers ──
 function showError(id, msg) {
   const el = document.getElementById(id);
   if (el) { el.textContent = msg; el.classList.add('visible'); }
