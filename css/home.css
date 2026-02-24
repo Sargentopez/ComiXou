@@ -165,3 +165,71 @@
   letter-spacing: .05em;
   user-select: none;
 }
+
+/* ── MODAL MY-COMICS ── */
+.mc-modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 800;
+  display: flex; align-items: flex-end;
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s;
+  backdrop-filter: blur(4px);
+}
+.mc-modal-overlay.open { opacity: 1; pointer-events: all; }
+
+.mc-modal-box {
+  width: 100%;
+  background: var(--white);
+  border-radius: 20px 20px 0 0;
+  border-top: 2.5px solid var(--black);
+  padding: 0 18px 36px;
+  transform: translateY(100%);
+  transition: transform .28s cubic-bezier(.4,0,.2,1);
+  box-shadow: 0 -4px 24px rgba(0,0,0,.12);
+}
+.mc-modal-overlay.open .mc-modal-box { transform: translateY(0); }
+
+.mc-modal-handle {
+  width: 36px; height: 4px;
+  background: var(--gray-300); border-radius: 2px;
+  margin: 12px auto 16px;
+}
+.mc-modal-title {
+  font-family: var(--font-display); font-size: 1.5rem;
+  letter-spacing: 1px; text-align: center;
+  margin-bottom: 18px; color: var(--black);
+}
+
+.mc-field { margin-bottom: 12px; }
+.mc-field label {
+  display: block; font-size: 0.72rem; font-weight: 900;
+  color: var(--gray-500); text-transform: uppercase;
+  letter-spacing: .06em; margin-bottom: 5px;
+}
+.mc-field input,
+.mc-field select {
+  width: 100%;
+  background: var(--gray-100);
+  border: 2px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-family: var(--font-body); font-size: 0.95rem; font-weight: 600;
+  color: var(--black); outline: none;
+  transition: border-color .15s;
+  box-shadow: 2px 2px 0 transparent;
+}
+.mc-field input:focus,
+.mc-field select:focus {
+  border-color: var(--black);
+  box-shadow: 2px 2px 0 var(--black);
+}
+.mc-field select { appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='%23333'><path d='M7 10l5 5 5-5z'/></svg>");
+  background-repeat: no-repeat; background-position: right 12px center;
+  padding-right: 32px;
+}
+
+.mc-modal-actions {
+  display: flex; gap: 10px; margin-top: 18px;
+}

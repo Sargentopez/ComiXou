@@ -132,6 +132,64 @@ Router.register('register', {
 // ══════════════════════════════════════════════
 // VISTA: EDITOR
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// VISTA: MIS CREACIONES (my-comics)
+// ══════════════════════════════════════════════
+
+Router.register('my-comics', {
+  bodyClass: 'home-page',
+  css: ['css/home.css'],
+  html: () => `
+    <!-- Barra de nav igual que home pero con sólo 2 opciones -->
+    <nav class="page-nav" id="myComicsNav">
+      <div class="page-nav-item">
+        <button class="page-nav-btn" id="mcBackBtn">← Expositor</button>
+      </div>
+      <div class="page-nav-sep"></div>
+      <div class="page-nav-item">
+        <button class="page-nav-btn page-nav-btn-create" id="mcNewBtn">✚ Crear nuevo</button>
+      </div>
+    </nav>
+
+    <div class="home-list" id="myComicsList">
+      <div id="mcContent"></div>
+    </div>
+
+    <!-- Modal nuevo proyecto -->
+    <div class="mc-modal-overlay" id="mcNewModal">
+      <div class="mc-modal-box">
+        <div class="mc-modal-handle"></div>
+        <h3 class="mc-modal-title">Nuevo proyecto</h3>
+        <div class="mc-field">
+          <label>Título</label>
+          <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off">
+        </div>
+        <div class="mc-field">
+          <label>Autor</label>
+          <input type="text" id="mcAuthor" placeholder="Tu nombre o seudónimo" autocomplete="off">
+        </div>
+        <div class="mc-field">
+          <label>Género</label>
+          <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off">
+        </div>
+        <div class="mc-field">
+          <label>Modo de lectura</label>
+          <select id="mcNavMode">
+            <option value="fixed">Viñeta fija (botones)</option>
+            <option value="horizontal">Deslizamiento horizontal</option>
+            <option value="vertical">Deslizamiento vertical</option>
+          </select>
+        </div>
+        <div class="mc-modal-actions">
+          <button class="btn" id="mcNewCancel" style="flex:1">Cancelar</button>
+          <button class="btn btn-primary" id="mcNewCreate" style="flex:1">Crear ✓</button>
+        </div>
+      </div>
+    </div>
+  `,
+  init: () => MyComicsView_init(),
+});
+
 Router.register('editor', {
   bodyClass: 'editor-page',
   hideHeader: true,

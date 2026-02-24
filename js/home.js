@@ -53,7 +53,7 @@ function setupPageNav() {
 
   // Crear
   document.getElementById('createBtn')?.addEventListener('click', () => {
-    Router.go(Auth.isLogged() ? 'editor' : 'login');
+    Router.go(Auth.isLogged() ? 'my-comics' : 'login');
   });
 }
 

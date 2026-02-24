@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v7';
+const CACHE = 'comixow-v8';
 const ASSETS = [
   './',
   './index.html',
@@ -24,6 +24,7 @@ const ASSETS = [
   './js/seed.js',
   './js/router.js',
   './js/fullscreen.js',
+  './js/my-comics.js',
   './js/views.js',
   './js/pwa.js',
   './icon-192.png',

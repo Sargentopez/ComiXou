@@ -23,7 +23,7 @@ const Header = (() => {
         + (user.role === 'admin' ? '⚙️ ' : '')
         + escHtml(user.username) + ' ▾</button>'
         + '<div class="dropdown-menu" id="avatarMenu">'
-        + '<a href="#editor" class="dropdown-item" data-route="editor">' + T('myComics') + '</a>'
+        + '<a href="#editor" class="dropdown-item" data-route="my-comics">' + T('myComics') + '</a>'
         + adminLink
         + '<div class="dropdown-divider"></div>'
         + '<a href="#" class="dropdown-item" id="logoutBtn">' + T('logout') + '</a>'
