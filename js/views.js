@@ -141,80 +141,142 @@ Router.register('editor', {
 
       <!-- TOPBAR -->
       <div id="editorTopbar">
-        <button class="ed-top-btn" id="edUndoBtn" title="Deshacer">↩</button>
-        <input type="text" class="ed-title" id="edTitleInput" placeholder="Sin título...">
-        <button class="ed-top-btn" id="edViewerBtn" title="Vista previa">👁</button>
-        <button class="ed-top-btn" id="edSaveBtn">Borrador</button>
-        <button class="ed-top-btn yellow" id="edPublishBtn">Publicar</button>
+        <button class="ed-back-btn" id="edBackBtn" title="Volver">‹</button>
+        <input type="text" id="edTitleInput" placeholder="Sin título...">
+        <button class="ed-top-btn" id="edSaveBtn">💾 Borrador</button>
+        <button class="ed-top-btn yellow" id="edPublishBtn">Publicar ↑</button>
       </div>
 
-      <!-- STRIP DE PÁGINAS -->
+      <!-- STRIP PÁGINAS -->
       <div id="editorPageStrip"></div>
 
       <!-- CANVAS -->
       <div id="editorCanvasWrap">
         <canvas id="editorCanvas"></canvas>
-
-        <!-- Panel flotante sobre el canvas -->
-        <div id="editorFloatPanel"></div>
-
-        <!-- Toast -->
         <div id="edToast"></div>
       </div>
 
-      <!-- TOOLBAR -->
-      <div id="editorToolbar">
-        <button class="ed-tool-btn" data-edtool="image">
-          <span class="t-icon">📷</span>
-          <span class="t-label">Foto</span>
-        </button>
-        <div class="ed-tool-sep"></div>
-        <button class="ed-tool-btn" data-edtool="text">
-          <span class="t-icon" style="font-weight:900;font-size:1rem">T</span>
-          <span class="t-label">Texto</span>
-        </button>
-        <button class="ed-tool-btn" data-edtool="bubble">
-          <span class="t-icon">💬</span>
-          <span class="t-label">Bocadillo</span>
-        </button>
-        <div class="ed-tool-sep"></div>
-        <button class="ed-tool-btn" data-edtool="draw">
-          <span class="t-icon">✏️</span>
-          <span class="t-label">Dibujo</span>
-        </button>
-        <button class="ed-tool-btn" data-edtool="eraser">
-          <span class="t-icon">⬜</span>
-          <span class="t-label">Borrar</span>
-        </button>
-        <div class="ed-tool-sep"></div>
-        <button class="ed-tool-btn" data-edtool="edit">
-          <span class="t-icon">↖</span>
-          <span class="t-label">Editar</span>
-        </button>
-        <button class="ed-tool-btn" data-edtool="pages">
-          <span class="t-icon">📄</span>
-          <span class="t-label">Páginas</span>
-        </button>
+      <!-- NAV INFERIOR -->
+      <div id="editorBottomNav">
+        <div class="ed-nav-item active" id="nav-pages">
+          <span>📄</span>Páginas
+        </div>
+        <div class="ed-nav-item" id="nav-add">
+          <span>➕</span>Añadir
+        </div>
+        <div class="ed-nav-item" id="nav-edit">
+          <span>✏️</span>Editar
+        </div>
+        <div class="ed-nav-item" id="nav-draw">
+          <span>🖊</span>Dibujo
+        </div>
+        <div class="ed-nav-item" id="nav-eraser">
+          <span>⬜</span>Borrar
+        </div>
+        <div class="ed-nav-item" id="nav-view">
+          <span>👁️</span>Ver
+        </div>
+      </div>
+
+      <!-- PANEL: PÁGINAS -->
+      <div class="ed-panel active" id="panel-pages">
+        <div style="width:100%;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <select class="ed-btn small" id="edOrientSelect" style="min-width:140px;">
+            <option value="vertical">📱 Vertical</option>
+            <option value="horizontal">🖥 Horizontal</option>
+          </select>
+          <button class="ed-btn small danger" id="edDeletePageBtn">🗑 Eliminar página</button>
+        </div>
+        <button class="ed-btn" id="edAddPageBtn">➕ Nueva página</button>
+      </div>
+
+      <!-- PANEL: AÑADIR -->
+      <div class="ed-panel" id="panel-add">
+        <button class="ed-btn" id="edAddImgBtn">🖼 Galería</button>
+        <button class="ed-btn" id="edAddCamBtn">📷 Cámara</button>
+        <button class="ed-btn" id="edAddTextBtn">💬 Texto</button>
+        <button class="ed-btn" id="edAddBubbleBtn">🗯 Bocadillo</button>
+        <input type="file" id="edFileGallery" accept="image/*,.gif" style="display:none">
+        <input type="file" id="edFileCapture" accept="image/*" capture="environment" style="display:none">
+      </div>
+
+      <!-- PANEL: EDITAR CAPA -->
+      <div class="ed-panel" id="panel-edit">
+        <div class="ed-selected-info" id="edSelectedInfo">Ningún objeto seleccionado</div>
+        <div id="edPropFields" style="width:100%;display:flex;flex-direction:column;gap:8px;"></div>
+        <button class="ed-btn danger" id="edDeleteSelBtn" style="margin-top:4px;">🗑️ Eliminar selección</button>
+      </div>
+
+      <!-- PANEL: DIBUJO -->
+      <div class="ed-panel" id="panel-draw">
+        <div class="ed-prop-row" style="width:100%">
+          <label>Color</label>
+          <input type="color" id="edDrawColorInput" value="#FF3030">
+        </div>
+        <div class="ed-prop-row" style="width:100%">
+          <label>Grosor</label>
+          <input type="range" id="edDrawSizeInput" min="1" max="48" value="6" style="flex:1;accent-color:#FFE135;">
+          <span id="edDrawSizeVal" style="color:#7aa0cc;font-weight:900;width:36px;text-align:right">6px</span>
+        </div>
+        <p style="color:#4a6080;font-size:.75rem;width:100%;text-align:center;font-weight:700;">Dibuja directamente en el canvas</p>
+      </div>
+
+      <!-- PANEL: BORRADOR -->
+      <div class="ed-panel" id="panel-eraser">
+        <div class="ed-prop-row" style="width:100%">
+          <label>Tamaño</label>
+          <input type="range" id="edEraserSizeInput" min="4" max="80" value="16" style="flex:1;accent-color:#FFE135;">
+          <span id="edEraserSizeVal" style="color:#7aa0cc;font-weight:900;width:36px;text-align:right">16px</span>
+        </div>
+        <p style="color:#4a6080;font-size:.75rem;width:100%;text-align:center;font-weight:700;">Borra sobre el canvas</p>
+      </div>
+
+      <!-- PANEL: VER -->
+      <div class="ed-panel" id="panel-view">
+        <button class="ed-btn" id="edViewerBtn">👁️ Visualizar todo</button>
+        <button class="ed-btn" id="edSaveJsonBtn">💾 Descargar .json</button>
+        <button class="ed-btn" id="edLoadJsonBtn">📂 Cargar .json</button>
+        <button class="ed-btn" id="edNewProjectBtn">🔄 Nuevo proyecto</button>
+        <input type="file" id="edLoadFile" accept=".json" style="display:none">
       </div>
 
     </div>
 
-    <!-- Visor -->
+    <!-- VISOR -->
     <div id="editorViewer">
       <canvas id="viewerCanvas"></canvas>
       <div class="viewer-controls">
-        <button class="viewer-btn" id="viewerPrev">← Anterior</button>
+        <button class="viewer-btn" id="viewerPrev">◀ Anterior</button>
         <span id="viewerCounter">1 / 1</span>
-        <button class="viewer-btn" id="viewerNext">Siguiente →</button>
+        <button class="viewer-btn" id="viewerNext">Siguiente ▶</button>
         <button class="viewer-btn yellow" id="viewerClose">Cerrar ✕</button>
       </div>
     </div>
 
-    <!-- Inputs de archivo ocultos -->
-    <input type="file" id="edFileCapture" accept="image/*,.gif" capture="environment" style="display:none">
-    <input type="file" id="edFileGallery" accept="image/*,.gif" style="display:none">
+    <!-- MODAL NUEVO PROYECTO -->
+    <div class="ed-modal-overlay" id="edNewModal">
+      <div class="ed-modal-box">
+        <h3>Nuevo proyecto</h3>
+        <div class="ed-modal-field">
+          <label>Título</label>
+          <input type="text" id="edNewTitle" placeholder="Mi cómic" value="Mi proyecto">
+        </div>
+        <div class="ed-modal-field">
+          <label>Navegación del lector</label>
+          <select id="edNewNavMode">
+            <option value="horizontal">Deslizar horizontal</option>
+            <option value="vertical">Deslizar vertical</option>
+            <option value="fixed">Botones fijos</option>
+          </select>
+        </div>
+        <div class="ed-modal-actions">
+          <button class="ed-modal-btn cancel" id="edNewCancel">Cancelar</button>
+          <button class="ed-modal-btn ok" id="edNewCreate">Crear</button>
+        </div>
+      </div>
+    </div>
 
-    <!-- Cursor de dibujo -->
+    <!-- CURSOR DIBUJO -->
     <div id="edBrushCursor"></div>
   `,
   init: () => EditorView_init(),
