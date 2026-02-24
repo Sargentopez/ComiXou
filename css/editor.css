@@ -10,6 +10,17 @@ body.editor-page {
   height: 100%;
   display: flex;
   flex-direction: column;
+  padding-top: 0 !important;  /* suprimir el padding del header global */
+}
+
+/* El appView ocupa todo en el editor */
+body.editor-page #appView {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 0 !important;
+  height: 100%;
 }
 
 #editorShell {

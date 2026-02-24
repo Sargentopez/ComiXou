@@ -30,6 +30,10 @@ const Router = (() => {
     container.innerHTML = def.html(params);
     document.body.className = def.bodyClass || '';
 
+    // Ocultar cabecera en vistas que lo pidan (ej: editor)
+    const header = document.getElementById('siteHeader');
+    if (header) header.style.display = def.hideHeader ? 'none' : '';
+
     // Cargar CSS de la vista
     (def.css || []).forEach(href => {
       if (!document.querySelector(`link[href="${href}"]`)) {
@@ -42,8 +46,9 @@ const Router = (() => {
     // i18n
     if (typeof I18n !== 'undefined') I18n.applyAll();
 
-    // Ajustar espaciado bajo el header — siempre, en toda vista
-    _adjustSpacing(name);
+    // Ajustar espaciado bajo el header — solo en vistas que lo muestran
+    if (!def.hideHeader) _adjustSpacing(name);
+    else { const av = document.getElementById('appView'); if (av) av.style.paddingTop = '0'; }
 
     // Inicializar vista
     if (def.init) def.init(params);
