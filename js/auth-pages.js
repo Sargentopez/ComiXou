@@ -46,10 +46,9 @@ function AuthView_init() {
       }
 
       showToast(I18n.t('loginOk'));
-      const params = new URLSearchParams(window.location.search);
-      const redirect = params.get('redirect');
       setTimeout(() => {
-        Router.go(redirect === 'editor' ? 'editor' : 'home');
+        Router.go('home');   // renderiza la vista
+        Header.refresh();    // actualiza la cabecera con sesión activa
       }, 800);
     });
   }
@@ -92,6 +91,7 @@ function AuthView_init() {
 
       showToast(I18n.t('registerOk'));
       setTimeout(() => { Router.go('login'); }, 1200);
+      // (el header se refresca al hacer login a continuación)
     });
   }
 });
