@@ -16,7 +16,7 @@
 /* ── BARRA 2: menú de página ── */
 .page-nav {
   position: fixed;
-  top: var(--header-h);  /* JS adjustBars() lo sobreescribe con el valor real */
+  top: 0;  /* JS adjustBars() lo sobreescribe con el valor real */
   left: 0; right: 0;
   z-index: 900;
   height: var(--pagenav-h);

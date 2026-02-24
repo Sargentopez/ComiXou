@@ -16,25 +16,25 @@ function HomeView_init() {
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera
 function adjustBars() {
-  const header  = document.getElementById('siteHeader');
-  const pageNav = document.getElementById('pageNav');
-  const list    = document.getElementById('comicsGrid');
-  if (!header || !pageNav) return;
-
   function recalc() {
-    const hh = header.getBoundingClientRect().height;
-    pageNav.style.top = hh + 'px';
-    if (list) list.style.paddingTop = (hh + pageNav.getBoundingClientRect().height + 8) + 'px';
+    const header  = document.getElementById('siteHeader');
+    const pageNav = document.getElementById('pageNav');
+    const list    = document.getElementById('comicsGrid');
+    if (!header || !pageNav || !list) return;
+
+    const hh  = header.getBoundingClientRect().height;
+    const nh  = pageNav.getBoundingClientRect().height;
+    pageNav.style.top     = hh + 'px';
+    list.style.paddingTop = (hh + nh) + 'px';
   }
 
-  // Varias pasadas: DOM listo, fuentes cargadas, imágenes renderizadas
   recalc();
-  setTimeout(recalc, 50);
-  setTimeout(recalc, 200);
-  setTimeout(recalc, 600);
+  // Repetir cuando las fuentes web estén pintadas (Bangers puede cambiar la altura)
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => { recalc(); });
+  }
+  setTimeout(recalc, 300);
   window.addEventListener('resize', recalc);
-  // Repetir cuando las fuentes web estén listas
-  document.fonts && document.fonts.ready.then(recalc);
 }
 
 // ── MENÚ DE PÁGINA ──
