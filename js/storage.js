@@ -1,68 +1,70 @@
 /* ============================================================
-   storage.js — Persistencia de cómics en localStorage
+   storage.js  v4.7
+   Persistencia en localStorage + eventos reactivos para
+   que cualquier vista (home, my-comics) se actualice al instante
+   cuando cambian datos (publish, unpublish, delete).
    ============================================================ */
 
 const ComicStore = (() => {
-  const KEY = 'cs_comics';
+  const KEY  = 'cs_comics';
+  const CH   = 'cx_comics_change'; // BroadcastChannel name
 
-  function getAll() {
-    return JSON.parse(localStorage.getItem(KEY) || '[]');
-  }
-  function saveAll(list) {
-    localStorage.setItem(KEY, JSON.stringify(list));
+  /* ── Canal de difusión entre pestañas / vistas ── */
+  let _bc = null;
+  try { _bc = new BroadcastChannel(CH); } catch(e) {}
+
+  /* Emitir cambio — notifica otras pestañas Y la propia (via CustomEvent) */
+  function _emit(type, id) {
+    // Mismo tab
+    window.dispatchEvent(new CustomEvent('cx:store', { detail: { type, id } }));
+    // Otras pestañas
+    try { _bc && _bc.postMessage({ type, id }); } catch(e) {}
   }
 
-  // Obtener cómic por ID
-  function getById(id) {
-    return getAll().find(c => c.id === id) || null;
+  /* Escuchar cambios desde otras pestañas */
+  if (_bc) {
+    _bc.onmessage = (e) => {
+      window.dispatchEvent(new CustomEvent('cx:store', { detail: e.data }));
+    };
   }
 
-  // Guardar o actualizar cómic
+  /* ── CRUD ── */
+  function getAll()       { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
+  function saveAll(list)  { localStorage.setItem(KEY, JSON.stringify(list)); }
+  function getById(id)    { return getAll().find(c => c.id === id) || null; }
+
   function save(comic) {
     const list = getAll();
-    const idx = list.findIndex(c => c.id === comic.id);
+    const idx  = list.findIndex(c => c.id === comic.id);
     if (idx >= 0) {
       list[idx] = { ...list[idx], ...comic, updatedAt: new Date().toISOString() };
     } else {
       list.push({ ...comic, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     }
     saveAll(list);
+    _emit('save', comic.id);
     return comic;
   }
 
-  // Eliminar
   function remove(id) {
     saveAll(getAll().filter(c => c.id !== id));
+    _emit('remove', id);
   }
 
-  // Generar nuevo cómic vacío
   function createNew(userId, username) {
     return {
-      id:       'comic_' + Date.now(),
+      id:        'comic_' + Date.now(),
       userId,
       username,
-      title:    '',
-      desc:     '',
-      panels:   [],   // [{id, dataUrl, orientation:'h'|'v', texts:[]}]
+      title:     '',
+      desc:      '',
+      panels:    [],
       published: false
     };
   }
 
-  // Publicar/despublicar
-  function publish(id, bool=true) {
-    const c = getById(id);
-    if (c) { c.published = bool; save(c); }
-  }
+  function getByUser(userId)  { return getAll().filter(c => c.userId === userId); }
+  function getPublished()     { return getAll().filter(c => c.published); }
 
-  // Cómics del usuario
-  function getByUser(userId) {
-    return getAll().filter(c => c.userId === userId);
-  }
-
-  // Solo publicados
-  function getPublished() {
-    return getAll().filter(c => c.published);
-  }
-
-  return { getAll, getById, save, remove, createNew, publish, getByUser, getPublished };
+  return { getAll, getById, save, remove, createNew, getByUser, getPublished };
 })();

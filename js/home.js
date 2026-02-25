@@ -5,7 +5,21 @@
 let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | null
 
 // ── Punto de entrada SPA ──
+
+/* Refresco reactivo cuando ComicStore emite cx:store */
+function _onStoreChange(e) {
+  // Solo re-renderizar si la vista home está activa
+  if (!document.getElementById('comicsGrid')) return;
+  buildFiltrosMenu();
+  renderComics();
+}
+
 function HomeView_init() {
+  // Reactividad: re-renderizar cuando cambian datos (mismo tab o otra pestaña)
+  window.addEventListener('cx:store', _onStoreChange);
+  // Limpiar listener al destruir la vista (si el router lo soporta)
+  window._homeStoreCleanup = () => window.removeEventListener('cx:store', _onStoreChange);
+
   // El router ya ajusta el spacing — aquí solo inicializamos contenido
   renderComics();
   setupPageNav();
@@ -171,7 +185,7 @@ function renderComics() {
 
 // ── FILA ──
 function buildRow(comic, currentUser) {
-  const isOwner = currentUser && (currentUser.id === comic.userId || currentUser.role === 'admin');
+  const isOwner = typeof Auth !== 'undefined' ? Auth.canManage(comic) : (currentUser && (currentUser.id === comic.userId || currentUser.role === 'admin'));
   const thumb   = comic.panels?.[0]?.dataUrl || null;
 
   const row = document.createElement('div');

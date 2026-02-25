@@ -27,10 +27,10 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.5</footer>
+    <footer class="app-version">v4.7</footer>
   `,
   init: () => { HomeView_init(); },
-  destroy: () => {}
+  destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
 });
 
 // ══════════════════════════════════════════════
@@ -251,7 +251,7 @@ Router.register('editor', {
 
         <!-- NAVEGAR -->
         <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="nav">Navegar ▾</button>
+          <button class="ed-menu-btn" data-menu="nav">Hoja ▾</button>
           <div class="ed-dropdown" id="dd-nav">
             <div class="ed-dropdown-label">Ir a página</div>
             <div id="ddNavPages" style="padding:4px 8px 6px;display:flex;flex-wrap:wrap;gap:5px;max-width:220px"></div>
@@ -292,14 +292,14 @@ Router.register('editor', {
 
     </div>
 
-    <!-- VISOR -->
+    <!-- VISOR: canvas fullscreen + controles flotantes -->
     <div id="editorViewer">
       <canvas id="viewerCanvas"></canvas>
-      <div class="viewer-controls">
+      <div class="viewer-controls" id="viewerControls">
         <button class="viewer-btn" id="viewerPrev">◀</button>
         <span id="viewerCounter">1 / 1</span>
         <button class="viewer-btn" id="viewerNext">▶</button>
-        <button class="viewer-btn yellow" id="viewerClose">Cerrar ✕</button>
+        <button class="viewer-btn close-btn" id="viewerClose">✕</button>
       </div>
     </div>
 

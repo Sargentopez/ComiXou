@@ -54,25 +54,21 @@ const Header = (() => {
       ? '<a href="#" class="dropdown-item danger-item" id="dotsDeleteAccount">' + T('deleteAccount') + '</a>'
       : '<a href="#register" class="dropdown-item" data-route="register">' + T('register') + '</a>';
 
-    /* ── Botones de sistema (fila 2, derecha) ── */
-    /* Solo se muestran en la web (no en la app instalada) */
-    var sysBtns = '';
-    if (!inApp) {
-      /* Botón pantalla completa — siempre visible en browser */
-      var fsSupported = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
-      var fsBtn = fsSupported
-        ? '<button class="hdr-sys-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">⛶</button>'
-        : '';
+    /* ── Botón pantalla completa — se renderiza siempre, se oculta en app por CSS ── */
+    var fsSupported = !!(document.documentElement.requestFullscreen
+                      || document.documentElement.webkitRequestFullscreen);
+    var fsBtnHtml = (fsSupported && !inApp)
+      ? '<button class="hdr-sys-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">⛶</button>'
+      : '';
 
-      /* Botón "Abrir app" — solo si la app ya está instalada */
-      var openAppBtn = _appInstalled()
-        ? '<button class="hdr-sys-btn hdr-open-app-btn" id="hdrOpenAppBtn" title="Abrir app">📱 App</button>'
-        : '';
+    /* Botón "Abrir app" — solo si instalada y en browser */
+    var openAppBtn = (!inApp && _appInstalled())
+      ? '<button class="hdr-sys-btn hdr-open-app-btn" id="hdrOpenAppBtn" title="Abrir app">App</button>'
+      : '';
 
-      if (fsBtn || openAppBtn) {
-        sysBtns = '<div class="hdr-sys-btns">' + openAppBtn + fsBtn + '</div>';
-      }
-    }
+    var sysBtns = (fsBtnHtml || openAppBtn)
+      ? '<div class="hdr-sys-btns">' + openAppBtn + fsBtnHtml + '</div>'
+      : '';
 
     /* Ítem "Instalar app" en el menú ⋮ — oculto si ya es app */
     var installItem = inApp
@@ -88,6 +84,7 @@ const Header = (() => {
             + '</a>'
           + '</div>'
           + '<div class="home-user-area">'
+            + sysBtns
             + userBlock
             + '<div class="dropdown">'
               + '<button class="home-dots-btn" id="dotsBtn">⋮</button>'
@@ -102,10 +99,9 @@ const Header = (() => {
             + '</div>'
           + '</div>'
         + '</div>'
-        /* Fila 2: tagline izq + sys-btns der */
+        /* Fila 2: solo tagline */
         + '<div class="home-header-row2">'
           + '<span class="home-tagline">' + T('tagline') + '</span>'
-          + sysBtns
         + '</div>'
       + '</div>'
     + '</header>';
@@ -214,6 +210,8 @@ const Header = (() => {
     if (existing) existing.remove();
     document.body.insertAdjacentHTML('afterbegin', _html());
     _bind();
+    // Init fullscreen after header is in DOM (button exists now)
+    if (typeof Fullscreen !== 'undefined') Fullscreen.init();
   }
 
   function refresh() {
@@ -221,6 +219,7 @@ const Header = (() => {
     if (existing) existing.remove();
     document.body.insertAdjacentHTML('afterbegin', _html());
     _bind();
+    if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn();
   }
 
   if (document.readyState === 'loading') {

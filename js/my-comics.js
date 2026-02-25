@@ -94,6 +94,10 @@ function _mcRenderList() {
     } else if (action === 'publish') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
+      if (typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
+        alert('No tienes permiso para publicar esta obra.');
+        return;
+      }
       if (!comic.panels || !comic.panels.length) {
         alert('Añade al menos una página antes de publicar.');
         return;
@@ -104,10 +108,19 @@ function _mcRenderList() {
     } else if (action === 'unpublish') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
+      if (typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
+        alert('No tienes permiso para retirar esta obra.');
+        return;
+      }
       ComicStore.save({ ...comic, published: false, approved: false });
       _mcRenderList();
       _mcToast('Retirada del expositor');
     } else if (action === 'delete') {
+      const comic = ComicStore.getById(id);
+      if (comic && typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
+        alert('No tienes permiso para eliminar esta obra.');
+        return;
+      }
       if (!confirm('¿Eliminar esta obra? Esta acción no se puede deshacer.')) return;
       ComicStore.remove(id);
       _mcRenderList();

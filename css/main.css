@@ -481,22 +481,25 @@ body.editor-page { padding-top: 0; }
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  margin-left: auto;
 }
 .hdr-sys-btn {
   background: none;
-  border: 1.5px solid var(--black);
-  border-radius: 5px;
+  border: 1.5px solid rgba(0,0,0,.35);
+  border-radius: 4px;
   color: var(--black);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 700;
   font-family: var(--font-body);
-  padding: 2px 7px;
+  padding: 1px 6px;
   cursor: pointer;
   line-height: 1.6;
-  transition: background .12s;
+  transition: background .12s, opacity .12s;
   white-space: nowrap;
+  opacity: .65;
+  flex-shrink: 0;
 }
+.hdr-sys-btn:hover  { opacity: 1; background: rgba(0,0,0,.06); }
+.hdr-sys-btn:active { background: rgba(0,0,0,.12); }
 .hdr-sys-btn:hover  { background: rgba(0,0,0,.07); }
 .hdr-sys-btn:active { background: rgba(0,0,0,.14); }
 .hdr-sys-btn[aria-pressed="true"] {

@@ -1,5 +1,5 @@
 /* ============================================================
-   editor.js — ComiXow v4.4
+   editor.js — ComiXow v4.6
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -20,6 +20,8 @@ let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20;
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
 let edFloatX = 16, edFloatY = 200; // posición del botón flotante
+// Pinch-to-zoom
+let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 
 const ED_BASE = 360;
 const $ = id => document.getElementById(id);
@@ -235,44 +237,47 @@ function edSetOrientation(o){
   edCanvas.width  =o==='vertical'?ED_BASE:Math.round(ED_BASE*16/9);
   edCanvas.height =o==='vertical'?Math.round(ED_BASE*16/9):ED_BASE;
   if(edViewerCanvas){edViewerCanvas.width=edCanvas.width;edViewerCanvas.height=edCanvas.height;}
-  edFitCanvas();edRedraw();
+  // Doble rAF: esperar dos ciclos de layout para medidas reales del DOM
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ edFitCanvas(); edRedraw(); }));
 }
 
 function edFitCanvas(){
-  const wrap=$('editorCanvasWrap');if(!wrap)return;
+  const wrap=$('editorCanvasWrap');if(!wrap||!edCanvas)return;
   const topbar=$('edTopbar'),menu=$('edMenuBar'),opts=$('edOptionsPanel');
-  // Posicionar menu justo bajo el topbar
-  const topH=topbar&&!edMinimized?topbar.offsetHeight:0;
-  if(menu&&!edMinimized) menu.style.top=(topbar?topbar.offsetHeight:52)+'px';
-  const menuH=(!edMinimized&&menu)?menu.offsetHeight:0;
-  const optsH=(opts&&opts.classList.contains('open'))?opts.offsetHeight:0;
-  if(opts) opts.style.top=((edMinimized?0:topbar?topbar.offsetHeight:52)+menuH)+'px';
-  const totalBarsH=(!edMinimized?(topbar?topbar.offsetHeight:52)+menuH:0)+optsH;
 
-  // Comprobar si orientación coincide → canvas fullscreen
+  // Medir alturas reales de las barras
+  // getBoundingClientRect devuelve 0 si display:none, que es lo que queremos
+  const topH  = (!edMinimized && topbar)  ? topbar.getBoundingClientRect().height  : 0;
+  const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
+  const optsH = (opts && opts.classList.contains('open')) ? opts.getBoundingClientRect().height : 0;
+
+  // Posicionar barras una debajo de la otra
+  if(menu && !edMinimized) menu.style.top = topH + 'px';
+  if(opts) opts.style.top = (topH + menuH) + 'px';
+
+  const totalBarsH = topH + menuH + optsH;
+
+  // ¿Orientación coincide? → canvas fullscreen
   const isPortrait  = window.innerHeight >= window.innerWidth;
   const canvasIsV   = edOrientation === 'vertical';
   const orientMatch = (isPortrait && canvasIsV) || (!isPortrait && !canvasIsV);
 
+  const availW = wrap.clientWidth;
+  const availH = wrap.clientHeight - totalBarsH;
+
+  let scale;
   if(orientMatch){
-    // Fullscreen: canvas ocupa todo el espacio disponible sin márgenes
-    const availW = wrap.clientWidth;
-    const availH = wrap.clientHeight - totalBarsH;
-    // Escalar para rellenar (cover) manteniendo proporción
-    const scaleW = availW / edCanvas.width;
-    const scaleH = availH / edCanvas.height;
-    // Usar el mayor de los dos para rellenar (no dejar barras negras)
-    const scale  = Math.min(scaleW, scaleH); // min para no cortar
-    edCanvas.style.width  = Math.round(edCanvas.width*scale)+'px';
-    edCanvas.style.height = Math.round(edCanvas.height*scale)+'px';
+    // Rellenar todo el espacio disponible (sin dejar márgenes)
+    scale = Math.min(availW / edCanvas.width, availH / edCanvas.height);
   } else {
-    // Normal: cabe entero con margen
-    const maxW=wrap.clientWidth-12, maxH=wrap.clientHeight-totalBarsH-16;
-    const scale=Math.min(maxW/edCanvas.width, maxH/edCanvas.height, 1);
-    edCanvas.style.width  = Math.round(edCanvas.width*scale)+'px';
-    edCanvas.style.height = Math.round(edCanvas.height*scale)+'px';
+    // Cabe entero con pequeño margen
+    scale = Math.min((availW-8) / edCanvas.width, (availH-12) / edCanvas.height, 1);
   }
-  edCanvas.style.marginTop = (totalBarsH + (orientMatch?0:8)) + 'px';
+  scale = Math.max(scale, 0.1); // mínimo sensato
+
+  edCanvas.style.width  = Math.round(edCanvas.width  * scale) + 'px';
+  edCanvas.style.height = Math.round(edCanvas.height * scale) + 'px';
+  edCanvas.style.marginTop = totalBarsH + 'px';
 }
 
 /* ══════════════════════════════════════════
@@ -407,8 +412,59 @@ function edCoords(e){
   return{px,py,nx:px/edCanvas.width,ny:py/edCanvas.height};
 }
 
+
+/* ══════════════════════════════════════════
+   PINCH-TO-ZOOM (2 dedos)
+   ══════════════════════════════════════════ */
+function _pinchDist(t) {
+  const dx = t[0].clientX - t[1].clientX;
+  const dy = t[0].clientY - t[1].clientY;
+  return Math.hypot(dx, dy);
+}
+function _pinchMidCanvas(t) {
+  // Punto medio en coordenadas normalizadas del canvas
+  const rect = edCanvas.getBoundingClientRect();
+  const sx = edCanvas.width / rect.width, sy = edCanvas.height / rect.height;
+  const mx = ((t[0].clientX + t[1].clientX) / 2 - rect.left) * sx;
+  const my = ((t[0].clientY + t[1].clientY) / 2 - rect.top)  * sy;
+  return { nx: mx / edCanvas.width, ny: my / edCanvas.height };
+}
+function edPinchStart(e) {
+  if (e.touches.length !== 2) return false;
+  edPinching  = true;
+  edPinchDist0 = _pinchDist(e.touches);
+  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  edPinchScale0 = la ? { w: la.width, h: la.height, x: la.x, y: la.y }
+                     : null;
+  return true;
+}
+function edPinchMove(e) {
+  if (!edPinching || e.touches.length !== 2) return;
+  const dist = _pinchDist(e.touches);
+  const ratio = dist / Math.max(edPinchDist0, 1);
+  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if (la && edPinchScale0) {
+    // Escalar la capa seleccionada desde su tamaño inicial
+    const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
+    const asp  = edPinchScale0.h / edPinchScale0.w;
+    la.width  = newW;
+    la.height = newW * asp;
+    edRedraw();
+  }
+}
+function edPinchEnd() {
+  edPinching   = false;
+  edPinchDist0 = 0;
+  edPinchScale0 = null;
+}
+
 function edOnStart(e){
   e.preventDefault();
+  // 2 dedos → iniciar pinch-to-zoom
+  if(e.touches && e.touches.length === 2){
+    edPinchStart(e);
+    return;
+  }
   if(edMenuOpen){edCloseMenus();return;}
   if(['draw','eraser'].includes(edActiveTool)){edStartPaint(e);return;}
   const c=edCoords(e);
@@ -442,6 +498,12 @@ function edOnStart(e){
 }
 function edOnMove(e){
   e.preventDefault();
+  // Pinch activo
+  if(e.touches && e.touches.length === 2){
+    edPinchMove(e);
+    return;
+  }
+  if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
   const c=edCoords(e);
   if(edIsTailDragging&&edSelectedIdx>=0){
@@ -463,7 +525,12 @@ function edOnMove(e){
   la.y=Math.min(Math.max(c.ny-edDragOffY,la.height/2),1-la.height/2);
   edRedraw();
 }
-function edOnEnd(){
+function edOnEnd(e){
+  // Si quedan menos de 2 dedos, terminar pinch
+  if(edPinching && (!e || !e.touches || e.touches.length < 2)){
+    edPinchEnd();
+    return;
+  }
   if(edPainting){edPainting=false;edSaveDrawData();}
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
 }
@@ -538,6 +605,11 @@ function edDeactivateDrawTool(){
 /* ══════════════════════════════════════════
    PANEL DE OPCIONES
    ══════════════════════════════════════════ */
+function edCloseOptionsPanel(){
+  const panel=$('edOptionsPanel');
+  if(panel){ panel.classList.remove('open'); panel.innerHTML=''; }
+  requestAnimationFrame(edFitCanvas);
+}
 function edRenderOptionsPanel(mode){
   const panel=$('edOptionsPanel');if(!panel)return;
 
@@ -561,7 +633,7 @@ function edRenderOptionsPanel(mode){
     panel.classList.add('open');
     $('op-dcolor')?.addEventListener('input',e=>edDrawColor=e.target.value);
     $('op-dsize')?.addEventListener('input',e=>{edDrawSize=+e.target.value;const v=$('op-dsizeval');if(v)v.textContent=e.target.value+'px';});
-    $('op-draw-ok')?.addEventListener('click',()=>{ edDeactivateDrawTool(); });
+    $('op-draw-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     requestAnimationFrame(edFitCanvas);return;
   }
 
@@ -575,7 +647,7 @@ function edRenderOptionsPanel(mode){
       </div>`;
     panel.classList.add('open');
     $('op-esize')?.addEventListener('input',e=>{edEraserSize=+e.target.value;const v=$('op-esizeval');if(v)v.textContent=e.target.value+'px';});
-    $('op-eraser-ok')?.addEventListener('click',()=>{ edDeactivateDrawTool(); });
+    $('op-eraser-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     requestAnimationFrame(edFitCanvas);return;
   }
 
@@ -636,8 +708,9 @@ function edRenderOptionsPanel(mode){
         <input type="number" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
       </div>`;
     }
-    html+=`<div class="op-row" style="margin-top:2px">
+    html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between">
       <button class="op-btn danger" id="pp-del">🗑️ Eliminar objeto</button>
+      <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 12px;font-weight:900;font-size:.82rem;cursor:pointer">✓ OK</button>
     </div>`;
 
     panel.innerHTML=html;
@@ -667,6 +740,7 @@ function edRenderOptionsPanel(mode){
       });
     });
     $('pp-del')?.addEventListener('click',edDeleteSelected);
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     requestAnimationFrame(edFitCanvas);return;
   }
 
@@ -813,29 +887,44 @@ function edOpenViewer(){
   $('editorViewer')?.classList.add('open');
   edUpdateViewerSize();
   edUpdateViewer();
+  edInitViewerTap();
 }
 function edUpdateViewerSize(){
   if(!edViewerCanvas) return;
-  const isPortrait  = window.innerHeight >= window.innerWidth;
-  const canvasIsV   = edOrientation === 'vertical';
-  const orientMatch = (isPortrait && canvasIsV) || (!isPortrait && !canvasIsV);
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Dimensiones internas del canvas (resolución de dibujo)
   edViewerCanvas.width  = edCanvas.width;
   edViewerCanvas.height = edCanvas.height;
-  if(orientMatch){
-    // Rellenar pantalla completa
-    const scaleW = window.innerWidth  / edCanvas.width;
-    const scaleH = window.innerHeight / edCanvas.height;
-    const scale  = Math.min(scaleW, scaleH);
-    edViewerCanvas.style.width  = Math.round(edCanvas.width*scale)+'px';
-    edViewerCanvas.style.height = Math.round(edCanvas.height*scale)+'px';
-    edViewerCanvas.style.maxWidth  = '100vw';
-    edViewerCanvas.style.maxHeight = '100vh';
-  } else {
-    edViewerCanvas.style.width  = '';
-    edViewerCanvas.style.height = '';
-    edViewerCanvas.style.maxWidth  = '96vw';
-    edViewerCanvas.style.maxHeight = '78vh';
+  // Escala: llenar el viewport manteniendo proporción (contain, no cover)
+  const scale = Math.min(vw / edCanvas.width, vh / edCanvas.height);
+  const displayW = Math.round(edCanvas.width  * scale);
+  const displayH = Math.round(edCanvas.height * scale);
+  edViewerCanvas.style.width  = displayW + 'px';
+  edViewerCanvas.style.height = displayH + 'px';
+  // Centrar en el viewer
+  edViewerCanvas.style.position = 'absolute';
+  edViewerCanvas.style.left = Math.round((vw - displayW) / 2) + 'px';
+  edViewerCanvas.style.top  = Math.round((vh - displayH) / 2) + 'px';
+}
+
+// Tap en el visor → mostrar/ocultar controles
+let _viewerTapBound = false, _viewerHideTimer;
+function edInitViewerTap(){
+  const ctrls = $('viewerControls');
+  const viewer = $('editorViewer');
+  if(!ctrls || !viewer) return;
+  function showCtrls(){
+    ctrls.classList.remove('hidden');
+    clearTimeout(_viewerHideTimer);
+    _viewerHideTimer = setTimeout(()=>ctrls.classList.add('hidden'), 3500);
   }
+  if(!_viewerTapBound){
+    _viewerTapBound = true;
+    viewer.addEventListener('click', e=>{
+      if(!e.target.closest('.viewer-controls')) showCtrls();
+    });
+  }
+  showCtrls();
 }
 function edCloseViewer(){$('editorViewer')?.classList.remove('open');}
 function edUpdateViewer(){
@@ -975,6 +1064,9 @@ function EditorView_init(){
 
   // ── RESIZE ──
   window.addEventListener('resize',()=>{edFitCanvas();edUpdateCanvasFullscreen();});
+
+  // Doble rAF en init: asegurar que el DOM tiene medidas reales antes del primer fit
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ edFitCanvas(); edRedraw(); }));
 
   // ── DEACTIVATE DRAW WHEN CLICKING OUTSIDE CANVAS ──
   document.addEventListener('pointerdown', e => {

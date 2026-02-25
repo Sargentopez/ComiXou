@@ -30,8 +30,8 @@ body.editor-page #appView {
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 52px;
-  background: var(--white);
-  border-bottom: 2px solid var(--gray-300);
+  background: var(--yellow);
+  border-bottom: 2.5px solid var(--black);
   display: flex;
   align-items: center;
   padding: 0 10px;
@@ -76,7 +76,7 @@ body.editor-page #appView {
   position: absolute;
   left: 0; right: 0;
   top: 52px;   /* JS sobreescribe con edTopbar.offsetHeight */
-  height: 40px;
+  height: auto; min-height: 40px;
   background: var(--white);
   border-bottom: 1.5px solid var(--gray-300);
   display: flex;
@@ -85,6 +85,8 @@ body.editor-page #appView {
   gap: 2px;
   z-index: 40;
   box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
 /* Botones del menú */
@@ -226,17 +228,18 @@ body.editor-page #appView {
   left: 0; right: 0;
   top: 92px; /* JS sobreescribe */
   background: var(--gray-100);
-  border-bottom: 1.5px solid var(--gray-300);
+  border-bottom: 0px solid var(--gray-300); /* sin línea cuando cerrado */
   z-index: 35;
   overflow: hidden;
   max-height: 0;
-  transition: max-height .2s cubic-bezier(.4,0,.2,1), padding .2s;
+  transition: max-height .2s cubic-bezier(.4,0,.2,1), padding .2s, border-bottom-width .2s;
   padding: 0 12px;
 }
 #edOptionsPanel.open {
   max-height: 220px;
   padding: 8px 12px;
   overflow-y: auto;
+  border-bottom-width: 1.5px;
 }
 
 /* Filas de opciones */
@@ -332,20 +335,58 @@ body.editor-page #appView {
    VISOR
    ══════════════════════════════ */
 #editorViewer {
-  position: fixed; inset: 0; background: #000; z-index: 400;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  position: fixed; inset: 0; background: #1a1a1a; z-index: 400;
+  display: flex; align-items: center; justify-content: center;
   opacity: 0; pointer-events: none; transition: opacity .2s;
+  overflow: hidden;
 }
 #editorViewer.open { opacity: 1; pointer-events: all; }
-#viewerCanvas { max-width: 96vw; max-height: 78vh; border-radius: 8px; background: #fff; }
-.viewer-controls { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; justify-content: center; align-items: center; }
-.viewer-btn {
-  background: var(--white); border: 2px solid var(--black); border-radius: 20px;
-  color: var(--black); font-family: var(--font-body); font-size: 0.85rem; font-weight: 700;
-  padding: 8px 16px; cursor: pointer; box-shadow: 2px 2px 0 var(--black);
+
+/* Canvas: JS calcula la escala exacta para llenar el viewport */
+#viewerCanvas {
+  display: block;
+  background: #fff;
+  /* JS sobreescribe width/height/marginTop */
 }
-.viewer-btn.yellow { background: var(--yellow); }
-#viewerCounter { color: #fff; font-size: 0.9rem; font-weight: 900; font-family: var(--font-body); }
+
+/* Controles flotantes: pastilla semitransparente pegada abajo */
+.viewer-controls {
+  position: absolute;
+  bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 100px;
+  padding: 6px 10px;
+  z-index: 410;
+  /* aparecer/desaparecer con tap */
+  transition: opacity .25s;
+}
+.viewer-controls.hidden { opacity: 0; pointer-events: none; }
+
+.viewer-btn {
+  background: rgba(255,255,255,.15);
+  border: 1.5px solid rgba(255,255,255,.4);
+  border-radius: 100px;
+  color: #fff;
+  font-family: var(--font-body); font-size: 0.82rem; font-weight: 700;
+  padding: 6px 14px; cursor: pointer;
+  transition: background .12s;
+  white-space: nowrap;
+}
+.viewer-btn:active { background: rgba(255,255,255,.3); }
+.viewer-btn.close-btn {
+  background: rgba(255,255,255,.22);
+  border-color: rgba(255,255,255,.6);
+  font-size: 0.9rem;
+}
+#viewerCounter {
+  color: rgba(255,255,255,.85);
+  font-size: 0.8rem; font-weight: 700; font-family: var(--font-body);
+  min-width: 40px; text-align: center;
+}
 
 /* ══════════════════════════════
    MODAL PROYECTO

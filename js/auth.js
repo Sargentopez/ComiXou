@@ -1,15 +1,13 @@
 /* ============================================================
-   auth.js — Autenticación (localStorage)
-   La cabecera y sus dropdowns los gestiona header.js
+   auth.js  v4.7 — Autenticación
+   Usuarios fijos (admin + macario) hardcodeados en código:
+   no dependen de ningún dispositivo ni localStorage.
+   Los usuarios registrados se guardan en localStorage como antes.
    ============================================================ */
 
 const Auth = (() => {
   const KEY_USERS   = 'cs_users';
   const KEY_SESSION = 'cs_session';
-
-  function getUsers()   { return JSON.parse(localStorage.getItem(KEY_USERS)   || '{}'); }
-  function saveUsers(u) { localStorage.setItem(KEY_USERS, JSON.stringify(u)); }
-  function getSession() { return JSON.parse(localStorage.getItem(KEY_SESSION) || 'null'); }
 
   function simpleHash(str) {
     let h = 0;
@@ -17,25 +15,70 @@ const Auth = (() => {
     return 'h' + Math.abs(h).toString(36);
   }
 
+  /* ══════════════════════════════════════════
+     USUARIOS FIJOS (hardcoded, funciona en
+     cualquier dispositivo sin registro previo)
+     ══════════════════════════════════════════ */
+  const FIXED_USERS = {
+    'admin@comixow.com': {
+      id:       'u_admin',
+      username: 'Admin',
+      email:    'admin@comixow.com',
+      passHash: simpleHash('123456'),
+      role:     'admin'
+    },
+    'macario@yo.com': {
+      id:       'u_macario',
+      username: 'Macario',
+      email:    'macario@yo.com',
+      passHash: simpleHash('123456'),
+      role:     'author'   // puede publicar/despublicar/eliminar solo lo suyo
+    }
+  };
+
+  /* ── localStorage users (usuarios registrados en el dispositivo) ── */
+  function getStoredUsers() { return JSON.parse(localStorage.getItem(KEY_USERS) || '{}'); }
+  function saveStoredUsers(u) { localStorage.setItem(KEY_USERS, JSON.stringify(u)); }
+  function getSession()    { return JSON.parse(localStorage.getItem(KEY_SESSION) || 'null'); }
+
+  /* Fusionar: fijos tienen prioridad sobre localStorage */
+  function _allUsers() {
+    const stored = getStoredUsers();
+    return { ...stored, ...FIXED_USERS };
+  }
+
+  /* ── Registro (solo para usuarios normales, no fijos) ── */
   function register(username, email, password) {
-    const users = getUsers();
-    const key   = email.toLowerCase().trim();
-    if (users[key]) return { ok: false, err: 'errUserExists' };
-    users[key] = {
-      id: 'u_' + Date.now(), username: username.trim(),
-      email: key, passHash: simpleHash(password),
+    const key = email.toLowerCase().trim();
+    if (FIXED_USERS[key]) return { ok: false, err: 'errUserExists' };
+    const stored = getStoredUsers();
+    if (stored[key]) return { ok: false, err: 'errUserExists' };
+    stored[key] = {
+      id:        'u_' + Date.now(),
+      username:  username.trim(),
+      email:     key,
+      passHash:  simpleHash(password),
+      role:      'user',
       createdAt: new Date().toISOString()
     };
-    saveUsers(users);
+    saveStoredUsers(stored);
     return { ok: true };
   }
 
+  /* ── Login ── */
   function login(email, password) {
-    const users = getUsers();
-    const key   = email.toLowerCase().trim();
-    const user  = users[key];
-    if (!user || user.passHash !== simpleHash(password)) return { ok: false, err: 'errUserNotFound' };
-    const session = { id: user.id, username: user.username, email: user.email, role: user.role || 'user' };
+    const key  = email.toLowerCase().trim();
+    const all  = _allUsers();
+    const user = all[key];
+    if (!user || user.passHash !== simpleHash(password)) {
+      return { ok: false, err: 'errUserNotFound' };
+    }
+    const session = {
+      id:       user.id,
+      username: user.username,
+      email:    user.email,
+      role:     user.role || 'user'
+    };
     localStorage.setItem(KEY_SESSION, JSON.stringify(session));
     return { ok: true, user: session };
   }
@@ -45,31 +88,52 @@ const Auth = (() => {
   function deleteAccount() {
     const user = currentUser();
     if (!user) return;
-    const users = getUsers();
-    Object.keys(users).forEach(k => { if (users[k].id === user.id) delete users[k]; });
-    saveUsers(users);
+    // No se puede eliminar una cuenta fija
+    if (FIXED_USERS[user.email]) { logout(); return; }
+    const stored = getStoredUsers();
+    Object.keys(stored).forEach(k => { if (stored[k].id === user.id) delete stored[k]; });
+    saveStoredUsers(stored);
     logout();
   }
 
   function currentUser() { return getSession(); }
   function isLogged()    { return !!getSession(); }
-  function isAdmin()     { const u = getSession(); return u && u.role === 'admin'; }
+  function isAdmin()     { const u = getSession(); return !!(u && u.role === 'admin'); }
 
-  function getRootPath() {
-    return window.location.pathname.includes('/pages/') ? '../' : '';
+  /* ¿Puede el usuario actuar sobre una obra? (publicar, retirar, eliminar)
+     - admin: sobre cualquier obra
+     - author (Macario): solo sobre sus propias obras
+     - user: solo sobre sus propias obras
+  */
+  function canManage(comic) {
+    const u = currentUser();
+    if (!u) return false;
+    if (u.role === 'admin') return true;
+    return comic.userId === u.id;
   }
 
-  // updateNavUI: solo por compatibilidad con páginas que aún la llamen
-  function updateNavUI() { /* gestionado por header.js */ }
+  /* Asegurar que Macario existe también en localStorage para que
+     sus obras queden asociadas a su ID fijo en todos los dispositivos */
+  function _ensureFixedUsersInStorage() {
+    const stored = getStoredUsers();
+    let changed = false;
+    Object.entries(FIXED_USERS).forEach(([email, user]) => {
+      if (!stored[email]) {
+        stored[email] = { ...user, createdAt: '2024-01-01T00:00:00.000Z' };
+        changed = true;
+      } else {
+        // Asegurar rol correcto aunque haya sido sobreescrito
+        if (stored[email].role !== user.role) {
+          stored[email].role = user.role;
+          changed = true;
+        }
+      }
+    });
+    if (changed) saveStoredUsers(stored);
+  }
 
-  return { register, login, logout, deleteAccount, currentUser, isLogged, isAdmin, updateNavUI, getRootPath };
+  // Ejecutar al cargar
+  _ensureFixedUsersInStorage();
+
+  return { register, login, logout, deleteAccount, currentUser, isLogged, isAdmin, canManage };
 })();
-
-// ── Toast global ──
-function showToast(msg, duration = 2500) {
-  const t = document.getElementById('toast');
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), duration);
-}
