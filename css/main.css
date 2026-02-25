@@ -38,13 +38,15 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html {
   scroll-behavior: smooth;
+  height: 100%;          /* necesario para que editor-page height:100% funcione */
   background: var(--paper);
 }
 body {
   font-family: var(--font-body);
   background: var(--paper);
   color: var(--ink);
-  min-height: 100dvh;
+  height: 100%;          /* propaga la altura al appView del editor */
+  min-height: 100dvh;    /* páginas normales ocupan toda la pantalla */
   line-height: 1.5;
   overflow-x: hidden;
 }
