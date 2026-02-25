@@ -32,7 +32,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.3</footer>
+    <footer class="app-version">v4.4</footer>
   `,
   init: () => { HomeView_init(); requestAnimationFrame(() => Fullscreen.init()); },
   destroy: () => {}
@@ -207,8 +207,8 @@ Router.register('editor', {
       <div id="edTopbar">
         <button id="edBackBtn" title="Volver a Mis Creaciones">‹</button>
         <span id="edProjectTitle">Sin título</span>
-        <button class="ed-top-action" id="edPreviewBtn">👁 Vista previa</button>
-        <button class="ed-top-action" id="edSaveBtn">💾 Guardar</button>
+        <button class="ed-top-action" id="edPreviewBtn">Vista previa</button>
+        <button class="ed-top-action" id="edSaveBtn">Guardar</button>
       </div>
 
       <!-- ── BARRA DE MENÚ ── -->
@@ -216,22 +216,22 @@ Router.register('editor', {
 
         <!-- INSERTAR -->
         <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="insert">＋ Insertar ▾</button>
+          <button class="ed-menu-btn" data-menu="insert">Insertar ▾</button>
           <div class="ed-dropdown" id="dd-insert">
             <!-- Imagen -->
             <div class="ed-dropdown-item has-sub" style="position:relative">
-              <span class="dd-icon">🖼</span> Imagen
+               Imagen
               <div class="ed-subdropdown">
-                <button class="ed-dropdown-item" id="dd-gallery"><span class="dd-icon">🖼</span>Galería</button>
-                <button class="ed-dropdown-item" id="dd-camera"><span class="dd-icon">📷</span>Cámara</button>
+                <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
+                <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
               </div>
             </div>
             <!-- Texto -->
             <div class="ed-dropdown-item has-sub" style="position:relative">
-              <span class="dd-icon">✍️</span> Texto
+               Texto
               <div class="ed-subdropdown">
-                <button class="ed-dropdown-item" id="dd-textbox"><span class="dd-icon">💬</span>Caja de texto</button>
-                <button class="ed-dropdown-item" id="dd-bubble"><span class="dd-icon">🗯</span>Bocadillo</button>
+                <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
+                <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
               </div>
             </div>
           </div>
@@ -241,12 +241,14 @@ Router.register('editor', {
 
         <!-- DIBUJAR -->
         <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="draw">✏️ Dibujar ▾</button>
+          <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
           <div class="ed-dropdown" id="dd-draw">
-            <button class="ed-dropdown-item" id="dd-pen"><span class="dd-icon">✏️</span>Lápiz</button>
-            <button class="ed-dropdown-item" id="dd-eraser"><span class="dd-icon">⬜</span>Borrador</button>
+            <button class="ed-dropdown-item" id="dd-pen">Lápiz</button>
+            <button class="ed-dropdown-item" id="dd-eraser">Borrador</button>
             <div class="ed-dropdown-sep"></div>
-            <button class="ed-dropdown-item" id="dd-cleardraw"><span class="dd-icon">🗑</span>Borrar dibujos</button>
+            <button class="ed-dropdown-item" id="dd-savedraw">Guardar dibujo</button>
+            <div class="ed-dropdown-sep"></div>
+            <button class="ed-dropdown-item" id="dd-cleardraw">Borrar dibujos</button>
           </div>
         </div>
 
@@ -254,17 +256,17 @@ Router.register('editor', {
 
         <!-- NAVEGAR -->
         <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="nav">📄 Navegar ▾</button>
+          <button class="ed-menu-btn" data-menu="nav">Navegar ▾</button>
           <div class="ed-dropdown" id="dd-nav">
             <div class="ed-dropdown-label">Ir a página</div>
             <div id="ddNavPages" style="padding:4px 8px 6px;display:flex;flex-wrap:wrap;gap:5px;max-width:220px"></div>
             <div class="ed-dropdown-sep"></div>
-            <button class="ed-dropdown-item" id="dd-addpage"><span class="dd-icon">➕</span>Nueva página</button>
-            <button class="ed-dropdown-item" id="dd-delpage"><span class="dd-icon">🗑</span>Eliminar esta página</button>
+            <button class="ed-dropdown-item" id="dd-addpage">Nueva página</button>
+            <button class="ed-dropdown-item" id="dd-delpage">Eliminar esta página</button>
             <div class="ed-dropdown-sep"></div>
             <div class="ed-dropdown-label">Orientación</div>
-            <button class="ed-dropdown-item" id="dd-orientv"><span class="dd-icon">📱</span>Vertical</button>
-            <button class="ed-dropdown-item" id="dd-orienth"><span class="dd-icon">🖥</span>Horizontal</button>
+            <button class="ed-dropdown-item" id="dd-orientv">Vertical</button>
+            <button class="ed-dropdown-item" id="dd-orienth">Horizontal</button>
           </div>
         </div>
 
@@ -272,18 +274,18 @@ Router.register('editor', {
 
         <!-- PROYECTO -->
         <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="project">⚙️ Proyecto ▾</button>
+          <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
           <div class="ed-dropdown" id="dd-project">
-            <button class="ed-dropdown-item" id="dd-editproject"><span class="dd-icon">✏️</span>Editar datos</button>
-            <button class="ed-dropdown-item" id="dd-viewerjson"><span class="dd-icon">👁</span>Vista previa</button>
+            <button class="ed-dropdown-item" id="dd-editproject">Editar datos</button>
+            <button class="ed-dropdown-item" id="dd-viewerjson">Vista previa</button>
             <div class="ed-dropdown-sep"></div>
-            <button class="ed-dropdown-item" id="dd-savejson"><span class="dd-icon">💾</span>Descargar .json</button>
-            <button class="ed-dropdown-item" id="dd-loadjson"><span class="dd-icon">📂</span>Cargar .json</button>
+            <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
+            <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
           </div>
         </div>
 
         <!-- MINIMIZAR (a la derecha) -->
-        <button id="edMinimizeBtn">▲ Minimizar</button>
+        <button id="edMinimizeBtn">▼</button>
 
       </div>
 
@@ -291,7 +293,7 @@ Router.register('editor', {
       <div id="edOptionsPanel"></div>
 
       <!-- ── BOTÓN FLOTANTE (cuando está minimizado) ── -->
-      <div id="edFloatBtn" title="Abrir menú">☰</div>
+      <div id="edFloatBtn" title="Menú">☰</div>
 
     </div>
 

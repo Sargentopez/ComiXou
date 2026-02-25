@@ -1,5 +1,5 @@
 /* ============================================================
-   editor.js — ComiXow v4.3
+   editor.js — ComiXow v4.4
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -242,17 +242,37 @@ function edFitCanvas(){
   const wrap=$('editorCanvasWrap');if(!wrap)return;
   const topbar=$('edTopbar'),menu=$('edMenuBar'),opts=$('edOptionsPanel');
   // Posicionar menu justo bajo el topbar
-  const topH=topbar?topbar.offsetHeight:52;
-  if(menu&&!edMinimized) menu.style.top=topH+'px';
+  const topH=topbar&&!edMinimized?topbar.offsetHeight:0;
+  if(menu&&!edMinimized) menu.style.top=(topbar?topbar.offsetHeight:52)+'px';
   const menuH=(!edMinimized&&menu)?menu.offsetHeight:0;
   const optsH=(opts&&opts.classList.contains('open'))?opts.offsetHeight:0;
-  if(opts&&!edMinimized) opts.style.top=(topH+menuH)+'px';
-  const totalBarsH=(!edMinimized?topH+menuH:0)+optsH;
-  const maxW=wrap.clientWidth-12,maxH=wrap.clientHeight-totalBarsH-16;
-  const scale=Math.min(maxW/edCanvas.width,maxH/edCanvas.height,1);
-  edCanvas.style.width=Math.round(edCanvas.width*scale)+'px';
-  edCanvas.style.height=Math.round(edCanvas.height*scale)+'px';
-  edCanvas.style.marginTop=(totalBarsH+8)+'px';
+  if(opts) opts.style.top=((edMinimized?0:topbar?topbar.offsetHeight:52)+menuH)+'px';
+  const totalBarsH=(!edMinimized?(topbar?topbar.offsetHeight:52)+menuH:0)+optsH;
+
+  // Comprobar si orientación coincide → canvas fullscreen
+  const isPortrait  = window.innerHeight >= window.innerWidth;
+  const canvasIsV   = edOrientation === 'vertical';
+  const orientMatch = (isPortrait && canvasIsV) || (!isPortrait && !canvasIsV);
+
+  if(orientMatch){
+    // Fullscreen: canvas ocupa todo el espacio disponible sin márgenes
+    const availW = wrap.clientWidth;
+    const availH = wrap.clientHeight - totalBarsH;
+    // Escalar para rellenar (cover) manteniendo proporción
+    const scaleW = availW / edCanvas.width;
+    const scaleH = availH / edCanvas.height;
+    // Usar el mayor de los dos para rellenar (no dejar barras negras)
+    const scale  = Math.min(scaleW, scaleH); // min para no cortar
+    edCanvas.style.width  = Math.round(edCanvas.width*scale)+'px';
+    edCanvas.style.height = Math.round(edCanvas.height*scale)+'px';
+  } else {
+    // Normal: cabe entero con margen
+    const maxW=wrap.clientWidth-12, maxH=wrap.clientHeight-totalBarsH-16;
+    const scale=Math.min(maxW/edCanvas.width, maxH/edCanvas.height, 1);
+    edCanvas.style.width  = Math.round(edCanvas.width*scale)+'px';
+    edCanvas.style.height = Math.round(edCanvas.height*scale)+'px';
+  }
+  edCanvas.style.marginTop = (totalBarsH + (orientMatch?0:8)) + 'px';
 }
 
 /* ══════════════════════════════════════════
@@ -495,13 +515,24 @@ function edCloseMenus(){
 function edToggleMenu(id){
   if(edMenuOpen===id){edCloseMenus();return;}
   edCloseMenus();
+  // Deactivate draw/eraser when opening any menu
+  if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
   const dd=$('dd-'+id);if(!dd)return;
   dd.classList.add('open');
   const btn=document.querySelector(`[data-menu="${id}"]`);
   if(btn)btn.classList.add('open');
   edMenuOpen=id;
-  // Rellenar páginas en navegación
   if(id==='nav')edUpdateNavPages();
+}
+
+function edDeactivateDrawTool(){
+  edActiveTool='select';
+  edCanvas.className='';
+  const cur=$('edBrushCursor');if(cur)cur.style.display='none';
+  // Close the options panel if it was showing draw options
+  const panel=$('edOptionsPanel');
+  if(panel)panel.classList.remove('open');
+  requestAnimationFrame(edFitCanvas);
 }
 
 /* ══════════════════════════════════════════
@@ -518,29 +549,33 @@ function edRenderOptionsPanel(mode){
 
   if(mode==='draw'){
     panel.innerHTML=`
-      <div class="op-row">
-        <div class="op-label">Color</div>
+      <div class="op-row" style="align-items:center">
+        <span style="font-size:.7rem;font-weight:900;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em">Color</span>
         <input type="color" class="op-color" id="op-dcolor" value="${edDrawColor}">
-        <div class="op-sep"></div>
-        <div class="op-label" style="width:auto">Grosor</div>
-        <input type="range" id="op-dsize" min="1" max="48" value="${edDrawSize}" style="width:100px;accent-color:var(--black)">
-        <span id="op-dsizeval" style="font-size:.75rem;font-weight:900;color:var(--gray-600);min-width:28px">${edDrawSize}px</span>
+        <span class="op-sep"></span>
+        <span style="font-size:.7rem;font-weight:900;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em">Grosor</span>
+        <input type="range" id="op-dsize" min="1" max="48" value="${edDrawSize}" style="width:90px;accent-color:var(--black)">
+        <span id="op-dsizeval" style="font-size:.75rem;font-weight:900;color:var(--gray-600);min-width:26px">${edDrawSize}px</span>
+        <button id="op-draw-ok" style="margin-left:auto;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.8rem;cursor:pointer;flex-shrink:0">✓</button>
       </div>`;
     panel.classList.add('open');
     $('op-dcolor')?.addEventListener('input',e=>edDrawColor=e.target.value);
     $('op-dsize')?.addEventListener('input',e=>{edDrawSize=+e.target.value;const v=$('op-dsizeval');if(v)v.textContent=e.target.value+'px';});
+    $('op-draw-ok')?.addEventListener('click',()=>{ edDeactivateDrawTool(); });
     requestAnimationFrame(edFitCanvas);return;
   }
 
   if(mode==='eraser'){
     panel.innerHTML=`
-      <div class="op-row">
-        <div class="op-label">Tamaño borrador</div>
-        <input type="range" id="op-esize" min="4" max="80" value="${edEraserSize}" style="width:120px;accent-color:var(--black)">
-        <span id="op-esizeval" style="font-size:.75rem;font-weight:900;color:var(--gray-600);min-width:28px">${edEraserSize}px</span>
+      <div class="op-row" style="align-items:center">
+        <span style="font-size:.7rem;font-weight:900;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em">Tamaño</span>
+        <input type="range" id="op-esize" min="4" max="80" value="${edEraserSize}" style="width:110px;accent-color:var(--black)">
+        <span id="op-esizeval" style="font-size:.75rem;font-weight:900;color:var(--gray-600);min-width:26px">${edEraserSize}px</span>
+        <button id="op-eraser-ok" style="margin-left:auto;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.8rem;cursor:pointer;flex-shrink:0">✓</button>
       </div>`;
     panel.classList.add('open');
     $('op-esize')?.addEventListener('input',e=>{edEraserSize=+e.target.value;const v=$('op-esizeval');if(v)v.textContent=e.target.value+'px';});
+    $('op-eraser-ok')?.addEventListener('click',()=>{ edDeactivateDrawTool(); });
     requestAnimationFrame(edFitCanvas);return;
   }
 
@@ -771,9 +806,36 @@ function edLoadProject(id){
    VISOR
    ══════════════════════════════════════════ */
 let edViewerIdx=0;
+function edUpdateCanvasFullscreen(){ edFitCanvas(); }
+
 function edOpenViewer(){
-  edViewerIdx=edCurrentPage;edUpdateViewer();
+  edViewerIdx=edCurrentPage;
   $('editorViewer')?.classList.add('open');
+  edUpdateViewerSize();
+  edUpdateViewer();
+}
+function edUpdateViewerSize(){
+  if(!edViewerCanvas) return;
+  const isPortrait  = window.innerHeight >= window.innerWidth;
+  const canvasIsV   = edOrientation === 'vertical';
+  const orientMatch = (isPortrait && canvasIsV) || (!isPortrait && !canvasIsV);
+  edViewerCanvas.width  = edCanvas.width;
+  edViewerCanvas.height = edCanvas.height;
+  if(orientMatch){
+    // Rellenar pantalla completa
+    const scaleW = window.innerWidth  / edCanvas.width;
+    const scaleH = window.innerHeight / edCanvas.height;
+    const scale  = Math.min(scaleW, scaleH);
+    edViewerCanvas.style.width  = Math.round(edCanvas.width*scale)+'px';
+    edViewerCanvas.style.height = Math.round(edCanvas.height*scale)+'px';
+    edViewerCanvas.style.maxWidth  = '100vw';
+    edViewerCanvas.style.maxHeight = '100vh';
+  } else {
+    edViewerCanvas.style.width  = '';
+    edViewerCanvas.style.height = '';
+    edViewerCanvas.style.maxWidth  = '96vw';
+    edViewerCanvas.style.maxHeight = '78vh';
+  }
 }
 function edCloseViewer(){$('editorViewer')?.classList.remove('open');}
 function edUpdateViewer(){
@@ -877,6 +939,12 @@ function EditorView_init(){
     if($('edBrushCursor'))$('edBrushCursor').style.display='block';
     edRenderOptionsPanel('eraser');edCloseMenus();
   });
+  $('dd-savedraw')?.addEventListener('click',()=>{
+    edDeactivateDrawTool();
+    edSaveDrawData();
+    edToast('Dibujo guardado ✓');
+    edCloseMenus();
+  });
   $('dd-cleardraw')?.addEventListener('click',()=>{edClearDraw();edCloseMenus();});
 
   // ── NAVEGAR ──
@@ -906,7 +974,26 @@ function EditorView_init(){
   $('edMSave')?.addEventListener('click',edSaveProjectModal);
 
   // ── RESIZE ──
-  window.addEventListener('resize',edFitCanvas);
+  window.addEventListener('resize',()=>{edFitCanvas();edUpdateCanvasFullscreen();});
+
+  // ── DEACTIVATE DRAW WHEN CLICKING OUTSIDE CANVAS ──
+  document.addEventListener('pointerdown', e => {
+    if(['draw','eraser'].includes(edActiveTool)){
+      if(!e.target.closest('#editorCanvas') && !e.target.closest('#edOptionsPanel')){
+        edDeactivateDrawTool();
+      }
+    }
+    // Close menus when clicking outside menubar
+    if(!e.target.closest('#edMenuBar') && !e.target.closest('.ed-dropdown')){
+      edCloseMenus();
+    }
+  });
+
+  // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
+  edUpdateCanvasFullscreen();
+  window.addEventListener('orientationchange', ()=>{
+    setTimeout(()=>{edFitCanvas();edUpdateCanvasFullscreen();}, 200);
+  });
 }
 
 /* ── DESCARGAR / CARGAR JSON ── */

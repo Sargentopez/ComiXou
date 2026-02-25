@@ -4,7 +4,7 @@
    ============================================================ */
 
 body.editor-page {
-  background: var(--gray-200);
+  background: var(--paper);
   overflow: hidden;
   height: 100%;
   padding-top: 0 !important;
@@ -30,8 +30,8 @@ body.editor-page #appView {
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 52px;
-  background: var(--yellow);
-  border-bottom: 2.5px solid var(--black);
+  background: var(--white);
+  border-bottom: 2px solid var(--gray-300);
   display: flex;
   align-items: center;
   padding: 0 10px;
@@ -48,6 +48,7 @@ body.editor-page #appView {
   flex-shrink: 0; line-height: 1;
   transition: background .15s;
 }
+#edBackBtn:active { background: var(--gray-100); }
 #edBackBtn:active { background: rgba(0,0,0,.1); }
 
 #edProjectTitle {
@@ -60,7 +61,7 @@ body.editor-page #appView {
 }
 
 .ed-top-action {
-  background: var(--black); color: var(--yellow);
+  background: var(--black); color: var(--white);
   border: none; border-radius: var(--radius-sm);
   font-family: var(--font-body); font-size: 0.78rem; font-weight: 900;
   padding: 6px 12px; cursor: pointer; flex-shrink: 0;
@@ -202,7 +203,7 @@ body.editor-page #appView {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--gray-200);
+  background: var(--paper);
 }
 
 #editorCanvas {

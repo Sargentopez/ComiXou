@@ -39,7 +39,7 @@
 html {
   scroll-behavior: smooth;
   height: 100%;
-  background: #FFE135;
+  background: var(--paper);
 }
 body {
   font-family: var(--font-body);
