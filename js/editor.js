@@ -22,6 +22,7 @@ let edMinimized = false;
 let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
+let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 
 const ED_BASE = 360;
 const $ = id => document.getElementById(id);
@@ -301,11 +302,87 @@ function edRedraw(){
       edCtx.drawImage(img,0,0);
       edLayers.filter(l=>l.type!=='image').forEach(l=>l.draw(edCtx,edCanvas));
       edDrawSel();
+      edUpdateFloatingIcons();
     };
     img.src=page.drawData;return;
   }
   edLayers.filter(l=>l.type!=='image').forEach(l=>l.draw(edCtx,edCanvas));
   edDrawSel();
+}
+
+
+/* ══════════════════════════════════════════
+   ICONOS FLOTANTES SOBRE OBJETO SELECCIONADO
+   ══════════════════════════════════════════ */
+function edUpdateFloatingIcons(){
+  const wrap = $('editorCanvasWrap');
+  if(!wrap) return;
+  // Eliminar iconos anteriores
+  wrap.querySelectorAll('.ed-float-icon').forEach(el=>el.remove());
+  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return;
+
+  const la  = edLayers[edSelectedIdx];
+  const rect = edCanvas.getBoundingClientRect();
+  const wrapRect = wrap.getBoundingClientRect();
+
+  // Escala canvas → CSS pixels
+  const scaleX = rect.width  / edCanvas.width;
+  const scaleY = rect.height / edCanvas.height;
+
+  // Centro del objeto en CSS pixels relativo al wrap
+  const cx = (la.x * edCanvas.width)  * scaleX + (rect.left - wrapRect.left);
+  const cy = (la.y * edCanvas.height) * scaleY + (rect.top  - wrapRect.top);
+  const hw = (la.width  * edCanvas.width)  * scaleX / 2;
+  const hh = (la.height * edCanvas.height) * scaleY / 2;
+
+  const GAP = 10; // px entre borde objeto e icono
+  const R   = 18; // radio del icono
+
+  // Icono ARRIBA: abrir opciones (⚙)
+  const btnTop = document.createElement('button');
+  btnTop.className = 'ed-float-icon ed-float-icon-top';
+  btnTop.title = 'Opciones';
+  btnTop.innerHTML = '⚙';
+  btnTop.style.left = (cx - R) + 'px';
+  btnTop.style.top  = (cy - hh - GAP - R*2) + 'px';
+  btnTop.addEventListener('pointerdown', e => { e.stopPropagation(); });
+  btnTop.addEventListener('click', e => {
+    e.stopPropagation();
+    edPanelUserClosed = false;
+    edRenderOptionsPanel('props');
+  });
+  wrap.appendChild(btnTop);
+
+  // Icono ABAJO: mover/tamaño (⤢)
+  const btnBot = document.createElement('button');
+  btnBot.className = 'ed-float-icon ed-float-icon-bot';
+  btnBot.title = 'Mover / Cambiar tamaño';
+  btnBot.innerHTML = '⤢';
+  btnBot.style.left = (cx - R) + 'px';
+  btnBot.style.top  = (cy + hh + GAP) + 'px';
+  // En touch: iniciar drag/pinch desde este icono
+  // En PC: cursor resize
+  btnBot.addEventListener('pointerdown', e => {
+    e.stopPropagation();
+    e.preventDefault();
+    if(edIsTouchDevice()){
+      // Activar drag desde el icono
+      const cCoords = edCoords(e);
+      edIsDragging = true;
+      edDragOffX = cCoords.nx - la.x;
+      edDragOffY = cCoords.ny - la.y;
+    } else {
+      // PC: iniciar resize proporcional desde esquina
+      edIsResizing = true;
+      edResizeCorner = 'br';
+      edInitialSize = {width:la.width, height:la.height, x:la.x, y:la.y};
+    }
+  });
+  wrap.appendChild(btnBot);
+}
+
+function edRemoveFloatingIcons(){
+  $('editorCanvasWrap')?.querySelectorAll('.ed-float-icon').forEach(el=>el.remove());
 }
 
 function edIsTouchDevice(){
@@ -496,10 +573,18 @@ function edOnStart(e){
   let found=-1;
   for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
   if(found>=0){
+    const prevIdx = edSelectedIdx;
     edSelectedIdx=found;edDragOffX=c.nx-edLayers[found].x;edDragOffY=c.ny-edLayers[found].y;
-    edIsDragging=true;edRenderOptionsPanel('props');
+    edIsDragging=true;
+    // Si seleccionamos un objeto diferente, resetear el flag de cierre
+    if(prevIdx !== found) edPanelUserClosed = false;
+    // Solo abrir panel si usuario no lo ha cerrado explícitamente
+    if(!edPanelUserClosed) edRenderOptionsPanel('props');
+    else edRenderOptionsPanel(); // cerrar si había otro abierto
   }else{
-    edSelectedIdx=-1;edRenderOptionsPanel();
+    edSelectedIdx=-1;
+    edPanelUserClosed = false;  // deselección → resetear flag
+    edRenderOptionsPanel();
   }
   edRedraw();
 }
@@ -615,6 +700,7 @@ function edDeactivateDrawTool(){
 function edCloseOptionsPanel(){
   const panel=$('edOptionsPanel');
   if(panel){ panel.classList.remove('open'); panel.innerHTML=''; }
+  edPanelUserClosed = true;   // usuario cerró → no reabrir al seleccionar
   requestAnimationFrame(edFitCanvas);
 }
 function edRenderOptionsPanel(mode){
@@ -909,6 +995,10 @@ function edOpenViewer(){
   edUpdateViewerSize();
   edUpdateViewer();
   edInitViewerTap();
+  // Teclado PC
+  if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
+  _viewerKeyHandler = _edViewerKey;
+  document.addEventListener('keydown', _viewerKeyHandler);
 }
 function edUpdateViewerSize(){
   if(!edViewerCanvas) return;
@@ -926,6 +1016,23 @@ function edUpdateViewerSize(){
   edViewerCanvas.style.position = 'absolute';
   edViewerCanvas.style.left = Math.round((vw - displayW) / 2) + 'px';
   edViewerCanvas.style.top  = Math.round((vh - displayH) / 2) + 'px';
+}
+
+// Teclado en visor (PC)
+let _viewerKeyHandler = null;
+function _edViewerKey(e){
+  const v = $('editorViewer');
+  if(!v || !v.classList.contains('open')) return;
+  if(e.key === 'ArrowRight' || e.key === 'ArrowDown'){
+    e.preventDefault();
+    if(edViewerIdx < edPages.length-1){ edViewerIdx++; edUpdateViewer(); }
+  } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
+    e.preventDefault();
+    if(edViewerIdx > 0){ edViewerIdx--; edUpdateViewer(); }
+  } else if(e.key === 'Escape'){
+    e.preventDefault();
+    edCloseViewer();
+  }
 }
 
 // Tap en el visor → mostrar/ocultar controles
@@ -947,7 +1054,13 @@ function edInitViewerTap(){
   }
   showCtrls();
 }
-function edCloseViewer(){$('editorViewer')?.classList.remove('open');}
+function edCloseViewer(){
+  $('editorViewer')?.classList.remove('open');
+  if(_viewerKeyHandler){
+    document.removeEventListener('keydown', _viewerKeyHandler);
+    _viewerKeyHandler = null;
+  }
+}
 function edUpdateViewer(){
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
   edViewerCtx.fillStyle='#fff';edViewerCtx.fillRect(0,0,edViewerCanvas.width,edViewerCanvas.height);

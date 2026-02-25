@@ -432,3 +432,33 @@ body.editor-page #appView {
   border-radius: 50%; border: 1.5px solid rgba(0,0,0,.35);
   transform: translate(-50%,-50%); display: none;
 }
+
+/* ══════════════════════════════════════════
+   ICONOS FLOTANTES SOBRE OBJETO SELECCIONADO
+   ══════════════════════════════════════════ */
+.ed-float-icon {
+  position: absolute;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--black);
+  background: var(--white);
+  color: var(--black);
+  font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 var(--black);
+  z-index: 60;
+  transition: background .12s, transform .1s;
+  touch-action: none;
+  user-select: none;
+  padding: 0;
+  line-height: 1;
+}
+.ed-float-icon:hover  { background: var(--yellow); transform: scale(1.12); }
+.ed-float-icon:active { background: var(--yellow); transform: scale(0.96); }
+.ed-float-icon-top { /* ⚙ opciones */ }
+.ed-float-icon-bot {
+  /* ⤢ mover/tamaño */
+  font-size: 18px;
+  cursor: move;
+}
