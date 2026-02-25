@@ -38,14 +38,17 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html {
   scroll-behavior: smooth;
-  height: 100%;
-  background: var(--paper);
+  /* viewport-fit=cover + padding-top empuja contenido bajo la status bar.
+     Background yellow = la franja de la status bar toma el color de la cabecera.
+     Solo se ve en la zona safe-area-inset-top (normalmente 24-48px arriba). */
+  background: var(--yellow);
+  padding-top: env(safe-area-inset-top, 0px);
 }
 body {
   font-family: var(--font-body);
-  background: var(--paper);
+  background: var(--paper);  /* body cubre TODO el resto - el yellow no asoma */
   color: var(--ink);
-  min-height: 100%;
+  min-height: 100dvh;        /* ocupa toda la pantalla visible */
   line-height: 1.5;
   overflow-x: hidden;
 }
@@ -339,7 +342,7 @@ a { color: inherit; text-decoration: none; }
   .logo-main { font-size: 1.5rem; }
 }
 
-/* ── PWA safe area: solo bottom (el top lo gestiona el fondo del html) ── */
+/* ── PWA safe area ── */
 @supports(padding: max(0px)){
   body { padding-bottom: env(safe-area-inset-bottom); }
 }

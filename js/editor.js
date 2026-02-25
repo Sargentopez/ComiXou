@@ -91,7 +91,9 @@ class TextLayer extends BaseLayer {
     }
     ctx.save();ctx.translate(px,py);ctx.rotate(this.rotation*Math.PI/180);
     ctx.font=`${this.fontSize}px ${this.fontFamily}`;
-    ctx.fillStyle=this.color;ctx.textAlign='center';ctx.textBaseline='middle';
+    const isPlaceholder = this.text==='Escribe aquí';
+    ctx.fillStyle=isPlaceholder?'#aaaaaa':this.color;
+    ctx.textAlign='center';ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
     lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
     ctx.restore();
@@ -222,7 +224,9 @@ class BubbleLayer extends BaseLayer {
     }
 
     ctx.font=`${this.fontSize}px ${this.fontFamily}`;
-    ctx.fillStyle=this.color;ctx.textAlign='center';ctx.textBaseline='middle';
+    const isPlaceholder = this.text==='Escribe aquí';
+    ctx.fillStyle=isPlaceholder?'#999999':this.color;
+    ctx.textAlign='center';ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
     lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
     ctx.restore();
@@ -304,6 +308,9 @@ function edRedraw(){
   edDrawSel();
 }
 
+function edIsTouchDevice(){
+  return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+}
 function edDrawSel(){
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
@@ -312,7 +319,7 @@ function edDrawSel(){
   edCtx.save();
   edCtx.strokeStyle='#ff6600';edCtx.lineWidth=2;edCtx.setLineDash([5,3]);
   edCtx.strokeRect(x-w/2,y-h/2,w,h);edCtx.setLineDash([]);
-  if(la.type==='image'){
+  if(la.type==='image' && !edIsTouchDevice()){
     edCtx.fillStyle='#ff4444';
     la.getControlPoints().forEach(p=>{
       const px=p.x*cw,py=p.y*ch;
@@ -475,8 +482,8 @@ function edOnStart(e){
       if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.04){edIsTailDragging=true;edTailPointType=p.type;return;}
     }
   }
-  // Resize imagen
-  if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='image'){
+  // Resize imagen por puntos: solo en PC (táctil usa pinch)
+  if(!edIsTouchDevice() && edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='image'){
     const la=edLayers[edSelectedIdx];
     for(const p of la.getControlPoints()){
       if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.04){
@@ -725,7 +732,16 @@ function edRenderOptionsPanel(mode){
       inp.addEventListener('input',e=>{
         if(edSelectedIdx<0)return;
         const la=edLayers[edSelectedIdx],id=e.target.id;
-        if(id==='pp-text'){la.text=e.target.value;la.resizeToFitText(edCanvas);}
+        if(id==='pp-text'){
+          // Borrar placeholder al empezar a escribir
+          if(la.text==='Escribe aquí' && e.target.value.length > 'Escribe aquí'.length){
+            la.text = e.target.value.replace('Escribe aquí','');
+            e.target.value = la.text;
+          } else {
+            la.text=e.target.value;
+          }
+          la.resizeToFitText(edCanvas);
+        }
         else if(id==='pp-font'){la.fontFamily=e.target.value;la.resizeToFitText(edCanvas);}
         else if(id==='pp-fs'){la.fontSize=parseInt(e.target.value)||12;la.resizeToFitText(edCanvas);}
         else if(id==='pp-color')  la.color=e.target.value;
@@ -741,6 +757,11 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del')?.addEventListener('click',edDeleteSelected);
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
+    // Si el texto es placeholder, seleccionar todo para sobreescribir directamente
+    const ppText = $('pp-text');
+    if(ppText && (edLayers[edSelectedIdx]?.text === 'Escribe aquí')){
+      requestAnimationFrame(()=>{ ppText.select(); });
+    }
     requestAnimationFrame(edFitCanvas);return;
   }
 
