@@ -7,49 +7,12 @@
 
 (function seedData() {
 
-  // ── USUARIO ADMIN ──
-  const KEY_USERS = 'cs_users';
-  const users = JSON.parse(localStorage.getItem(KEY_USERS) || '{}');
-  const adminEmail = 'admin@comixow.com';
-
-  function simpleHash(str) {
-    let h = 0;
-    for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
-    return 'h' + Math.abs(h).toString(36);
-  }
-
-  if (!users[adminEmail]) {
-    users[adminEmail] = {
-      id:        'u_admin',
-      username:  'admin',
-      email:     adminEmail,
-      passHash:  simpleHash('123456'),
-      role:      'admin',
-      createdAt: new Date().toISOString()
-    };
-    localStorage.setItem(KEY_USERS, JSON.stringify(users));
-    console.log('✅ Admin creado: admin@comixow.com / 123456');
-  } else {
-    // Asegurar que tiene role admin aunque ya existiera
-    users[adminEmail].role = 'admin';
-    localStorage.setItem(KEY_USERS, JSON.stringify(users));
-    console.log('ℹ️ Admin ya existía — rol admin confirmado');
-  }
-
-  // ── USUARIO AUTOR DE PRUEBA ──
-  const autorEmail = 'autor@comixow.com';
-  if (!users[autorEmail]) {
-    users[autorEmail] = {
-      id:        'u_autor1',
-      username:  'AutorDePrueba',
-      email:     autorEmail,
-      passHash:  simpleHash('123456'),
-      role:      'user',
-      createdAt: new Date().toISOString()
-    };
-    localStorage.setItem(KEY_USERS, JSON.stringify(users));
-    console.log('✅ Autor de prueba creado: autor@comixow.com / 123456');
-  }
+  // ── USUARIOS FIJOS ──
+  // Admin y Macario son hardcoded en auth.js — no necesitan localStorage.
+  // Solo aseguramos que seed de cómics usa los IDs correctos.
+  console.log('ℹ️  Usuarios fijos gestionados por auth.js:');
+  console.log('   admin@comixow.com / 123456  (rol: admin)');
+  console.log('   macario@yo.com   / 123456  (rol: author)');
 
   // ── PORTADA DEFAULT (canvas gris con número) ──
   function makeThumb(n) {
