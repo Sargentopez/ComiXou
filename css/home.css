@@ -169,37 +169,45 @@
 /* ── MODAL MY-COMICS ── */
 .mc-modal-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,.45);
-  z-index: 800;
+  background: rgba(0,0,0,.55);
+  z-index: 2000;               /* por encima de cabecera (1000) y todo lo demás */
   display: flex;
-  align-items: flex-start;     /* ARRIBA */
+  align-items: center;         /* centrado vertical como auth */
   justify-content: center;
-  padding-top: env(safe-area-inset-top, 0px);
+  padding: env(safe-area-inset-top, 0px) 16px 16px;
   opacity: 0; pointer-events: none;
   transition: opacity .22s;
-  backdrop-filter: blur(4px);
-  overflow-y: auto;            /* scroll si el teclado sube el viewport */
+  backdrop-filter: blur(5px);
+  overflow-y: auto;
 }
 .mc-modal-overlay.open { opacity: 1; pointer-events: all; }
 
 .mc-modal-box {
   width: 100%; max-width: 480px;
   background: var(--white);
-  border-radius: 0 0 20px 20px;
-  border-bottom: 2.5px solid var(--black);
+  border-radius: 16px;          /* esquinas redondeadas en todos los lados */
+  border: 2.5px solid var(--black);
   padding: 0 18px 28px;
-  transform: translateY(-100%);
-  transition: transform .26s cubic-bezier(.4,0,.2,1);
-  box-shadow: 0 4px 24px rgba(0,0,0,.12);
+  transform: translateY(-20px);
+  transition: transform .26s cubic-bezier(.4,0,.2,1), opacity .22s;
+  box-shadow: 4px 4px 0 var(--black);
+  opacity: 0;
 }
-.mc-modal-overlay.open .mc-modal-box { transform: translateY(0); }
+.mc-modal-overlay.open .mc-modal-box {
+  transform: translateY(0);
+  opacity: 1;
+}
 
-/* handle arriba ya no tiene sentido — ocultamos */
 .mc-modal-handle { display: none; }
 .mc-modal-title {
   font-family: var(--font-display); font-size: 1.5rem;
   letter-spacing: 1px; text-align: center;
-  margin-bottom: 18px; color: var(--black);
+  margin: 0 -18px 20px;          /* extiende al borde de la caja */
+  padding: 16px 18px;
+  background: var(--yellow);
+  border-bottom: 2px solid var(--black);
+  border-radius: 13px 13px 0 0;  /* esquinas superiores redondeadas */
+  color: var(--black);
 }
 
 .mc-field { margin-bottom: 12px; }
