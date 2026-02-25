@@ -4,7 +4,51 @@
    Listado del autor con opciones Leer / Editar / Publicar.
    ============================================================ */
 
+function _mcInjectModal() {
+  // Inyectar el modal directamente en body (fuera de appView)
+  // para que position:fixed funcione sin restricciones
+  if (document.getElementById('mcNewModal')) return; // ya existe
+  const modal = document.createElement('div');
+  modal.className = 'mc-modal-overlay';
+  modal.id = 'mcNewModal';
+  modal.innerHTML = `
+    <div class="mc-modal-box">
+      <h3 class="mc-modal-title">Nuevo proyecto</h3>
+      <div class="mc-field">
+        <label>Título</label>
+        <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off" inputmode="text" enterkeyhint="next">
+      </div>
+      <div class="mc-field">
+        <label>Autor</label>
+        <input type="text" id="mcAuthor" placeholder="Tu nombre o seudónimo" autocomplete="off" inputmode="text" enterkeyhint="next">
+      </div>
+      <div class="mc-field">
+        <label>Género</label>
+        <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="done">
+      </div>
+      <div class="mc-field">
+        <label>Modo de lectura</label>
+        <select id="mcNavMode">
+          <option value="fixed">Viñeta fija (botones)</option>
+          <option value="horizontal">Deslizamiento horizontal</option>
+          <option value="vertical">Deslizamiento vertical</option>
+        </select>
+      </div>
+      <div class="mc-modal-actions">
+        <button class="btn" id="mcNewCancel" style="flex:1">Cancelar</button>
+        <button class="btn btn-primary" id="mcNewCreate" style="flex:1">Crear ✓</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function _mcRemoveModal() {
+  const m = document.getElementById('mcNewModal');
+  if (m) m.remove();
+}
+
 function MyComicsView_init() {
+  _mcInjectModal();
   _mcRenderList();
   _mcBindNav();
 }
@@ -211,3 +255,5 @@ function _mcToast(msg) {
     t.style.opacity = '0'; t.style.transform = 'translateX(-50%) translateY(8px)';
   }, 2200);
 }
+
+function MyComicsView_destroy() { _mcRemoveModal(); }

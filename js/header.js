@@ -57,7 +57,7 @@ const Header = (() => {
     /* ── Botón pantalla completa — se renderiza siempre, se oculta en app por CSS ── */
     var fsSupported = !!(document.documentElement.requestFullscreen
                       || document.documentElement.webkitRequestFullscreen);
-    var fsBtnHtml = (fsSupported && !inApp)
+    var fsBtnHtml = fsSupported
       ? '<button class="hdr-sys-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">⛶</button>'
       : '';
 

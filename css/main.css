@@ -38,17 +38,13 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html {
   scroll-behavior: smooth;
-  /* viewport-fit=cover + padding-top empuja contenido bajo la status bar.
-     Background yellow = la franja de la status bar toma el color de la cabecera.
-     Solo se ve en la zona safe-area-inset-top (normalmente 24-48px arriba). */
-  background: var(--yellow);
-  padding-top: env(safe-area-inset-top, 0px);
+  background: var(--paper);
 }
 body {
   font-family: var(--font-body);
-  background: var(--paper);  /* body cubre TODO el resto - el yellow no asoma */
+  background: var(--paper);
   color: var(--ink);
-  min-height: 100dvh;        /* ocupa toda la pantalla visible */
+  min-height: 100dvh;
   line-height: 1.5;
   overflow-x: hidden;
 }

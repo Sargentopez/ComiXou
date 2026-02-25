@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.8b</footer>
+    <footer class="app-version">v4.9</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -150,39 +150,9 @@ Router.register('my-comics', {
       <div id="mcContent"></div>
     </div>
 
-    <!-- Modal nuevo proyecto -->
-    <div class="mc-modal-overlay" id="mcNewModal">
-      <div class="mc-modal-box">
-        <div class="mc-modal-handle"></div>
-        <h3 class="mc-modal-title">Nuevo proyecto</h3>
-        <div class="mc-field">
-          <label>Título</label>
-          <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off" inputmode="text" enterkeyhint="next">
-        </div>
-        <div class="mc-field">
-          <label>Autor</label>
-          <input type="text" id="mcAuthor" placeholder="Tu nombre o seudónimo" autocomplete="off" inputmode="text" enterkeyhint="next">
-        </div>
-        <div class="mc-field">
-          <label>Género</label>
-          <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="done">
-        </div>
-        <div class="mc-field">
-          <label>Modo de lectura</label>
-          <select id="mcNavMode">
-            <option value="fixed">Viñeta fija (botones)</option>
-            <option value="horizontal">Deslizamiento horizontal</option>
-            <option value="vertical">Deslizamiento vertical</option>
-          </select>
-        </div>
-        <div class="mc-modal-actions">
-          <button class="btn" id="mcNewCancel" style="flex:1">Cancelar</button>
-          <button class="btn btn-primary" id="mcNewCreate" style="flex:1">Crear ✓</button>
-        </div>
-      </div>
-    </div>
   `,
   init: () => MyComicsView_init(),
+  destroy: () => { if(typeof MyComicsView_destroy==='function') MyComicsView_destroy(); }
 });
 
 Router.register('editor', {
