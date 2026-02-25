@@ -1,6 +1,8 @@
 /* ============================================================
-   fullscreen.js  v4.6
-   Sin navigationUI para evitar franja negra en Android.
+   fullscreen.js — Gestión robusta de pantalla completa  v4.5
+   REVERTIDO a v4.5: navigationUI:'hide' funciona correctamente.
+   El cambio a "sin navigationUI" introducido en v4.6 no resolvía
+   ningún problema real y fue revertido.
    ============================================================ */
 
 const Fullscreen = (() => {
@@ -14,55 +16,52 @@ const Fullscreen = (() => {
   }
 
   function supported() {
-    return !!(document.documentElement.requestFullscreen
-           || document.documentElement.webkitRequestFullscreen);
-  }
-
-  function isActive() {
-    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+    return !!(
+      document.documentElement.requestFullscreen ||
+      document.documentElement.webkitRequestFullscreen
+    );
   }
 
   function enter() {
-    if (!supported() || isActive()) return Promise.resolve();
+    if (!supported()) return Promise.resolve();
+    if (document.fullscreenElement || document.webkitFullscreenElement) return Promise.resolve();
     const el  = document.documentElement;
     const req = el.requestFullscreen || el.webkitRequestFullscreen;
-    // Sin opciones: el SO gestiona su propia barra de sistema de forma nativa.
-    // Pasar { navigationUI:'hide' } provoca franja negra en Android Chrome.
-    return req.call(el)
-      .then(() => localStorage.setItem(GRANT_KEY, '1'))
+    return req.call(el, { navigationUI: 'hide' })
+      .then(() => { localStorage.setItem(GRANT_KEY, '1'); })
       .catch(() => {});
   }
 
   function exit() {
-    if (!isActive()) return;
-    (document.exitFullscreen || document.webkitExitFullscreen
-     || function(){}).call(document);
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
   }
 
   let _watching = false;
   function _watchVisibility() {
     if (_watching) return;
     _watching = true;
-    const reenter = () => { if (!isActive()) enter(); };
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') reenter();
+      if (document.visibilityState === 'visible') enter();
     });
-    window.addEventListener('focus',    reenter);
-    window.addEventListener('pageshow', reenter);
+    window.addEventListener('focus',    () => enter());
+    window.addEventListener('pageshow', () => enter());
+    document.addEventListener('click', function _once() {
+      enter();
+      document.removeEventListener('click', _once);
+    }, { once: true });
   }
 
   function _updateBtn() {
     const btn = document.getElementById('hdrFsBtn');
     if (!btn) return;
-    const active = isActive();
-    btn.title       = active ? 'Salir pantalla completa' : 'Pantalla completa';
-    btn.textContent = '⛶';
+    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    btn.title = active ? 'Salir de pantalla completa' : 'Pantalla completa';
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   }
 
-  // Llamado al pulsar ⛶ en el header
   function request() {
-    if (isActive()) {
+    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (active) {
       exit();
     } else {
       enter().then(() => { _watchVisibility(); _updateBtn(); });
@@ -78,5 +77,5 @@ const Fullscreen = (() => {
     }
   }
 
-  return { init, enter, exit, request, inPWA, supported, isActive, _updateBtn };
+  return { init, enter, exit, request, inPWA, supported, _updateBtn };
 })();

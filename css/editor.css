@@ -36,7 +36,7 @@ body.editor-page #appView {
   align-items: center;
   padding: 0 10px;
   gap: 8px;
-  z-index: 40;
+  z-index: 310;          /* por encima del menubar */
   flex-shrink: 0;
 }
 
@@ -83,10 +83,10 @@ body.editor-page #appView {
   align-items: center;
   padding: 0 4px;
   gap: 2px;
-  z-index: 40;
+  z-index: 300;          /* alto para estar por encima de todo */
   box-shadow: 0 1px 4px rgba(0,0,0,.06);
   flex-wrap: nowrap;
-  overflow: hidden;
+  overflow: visible;     /* CRÍTICO: permite que los dropdowns salgan */
 }
 
 /* Botones del menú */
@@ -131,8 +131,8 @@ body.editor-page #appView {
   background: var(--white);
   border: 2px solid var(--black);
   border-radius: var(--radius);
-  box-shadow: var(--box-shadow-lg, 4px 4px 0 var(--black));
-  z-index: 200;
+  box-shadow: 4px 4px 0 var(--black);
+  z-index: 9000;         /* por encima de TODO: topbar, canvas, options */
   display: none;
   padding: 6px 0;
 }
@@ -169,7 +169,7 @@ body.editor-page #appView {
   border: 2px solid var(--black);
   border-radius: var(--radius);
   box-shadow: var(--box-shadow-lg, 4px 4px 0 var(--black));
-  z-index: 201;
+  z-index: 9001;
   display: none;
   padding: 6px 0;
 }
@@ -229,7 +229,7 @@ body.editor-page #appView {
   top: 92px; /* JS sobreescribe */
   background: var(--gray-100);
   border-bottom: 0px solid var(--gray-300); /* sin línea cuando cerrado */
-  z-index: 35;
+  z-index: 200;
   overflow: hidden;
   max-height: 0;
   transition: max-height .2s cubic-bezier(.4,0,.2,1), padding .2s, border-bottom-width .2s;

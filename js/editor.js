@@ -1002,9 +1002,6 @@ function EditorView_init(){
   document.querySelectorAll('[data-menu]').forEach(btn=>{
     btn.addEventListener('click',e=>{e.stopPropagation();edToggleMenu(btn.dataset.menu);});
   });
-  // Impedir que los clicks en ítems del dropdown suban al document listener
-  // (el listener de document usa capture:true, así que stopPropagation no basta;
-  //  en su lugar dejamos que el listener de captura compruebe closest correctamente)
 
   // ── INSERTAR ──
   $('dd-gallery')?.addEventListener('click',()=>{$('edFileGallery').click();edCloseMenus();});
@@ -1067,22 +1064,19 @@ function EditorView_init(){
   // Doble rAF en init: asegurar que el DOM tiene medidas reales antes del primer fit
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ edFitCanvas(); edRedraw(); }));
 
-  // ── GESTIÓN UNIFICADA DE CLICKS FUERA ──
-  // Usamos 'pointerdown' solo para dibujo; los menús se cierran con 'mousedown'
-  // para que sea DESPUÉS de que el click en el ítem ya haya disparado su handler.
+  // ── DEACTIVATE DRAW WHEN CLICKING OUTSIDE CANVAS ──
   document.addEventListener('pointerdown', e => {
-    // Desactivar herramienta de dibujo al pulsar fuera del canvas
     if(['draw','eraser'].includes(edActiveTool)){
       if(!e.target.closest('#editorCanvas') && !e.target.closest('#edOptionsPanel')){
         edDeactivateDrawTool();
       }
     }
+    // Close menus when clicking outside menubar
+    if(!e.target.closest('#edMenuBar') && !e.target.closest('.ed-dropdown')){
+      edCloseMenus();
+    }
   });
-  // Cerrar menús al clicar fuera — usar 'click' para que los ítems ya hayan actuado
-  document.addEventListener('click', e => {
-    const inMenu = e.target.closest('#edMenuBar') || e.target.closest('.ed-dropdown') || e.target.closest('.ed-subdropdown');
-    if (!inMenu) edCloseMenus();
-  }, true);  // captura = true → se ejecuta en fase de captura, antes de stopPropagation
+
 
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
   edUpdateCanvasFullscreen();
