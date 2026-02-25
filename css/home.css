@@ -169,32 +169,33 @@
 /* ── MODAL MY-COMICS ── */
 .mc-modal-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,.5);
+  background: rgba(0,0,0,.45);
   z-index: 800;
-  display: flex; align-items: flex-end;
+  display: flex;
+  align-items: flex-start;     /* ARRIBA */
+  justify-content: center;
+  padding-top: env(safe-area-inset-top, 0px);
   opacity: 0; pointer-events: none;
-  transition: opacity .2s;
+  transition: opacity .22s;
   backdrop-filter: blur(4px);
+  overflow-y: auto;            /* scroll si el teclado sube el viewport */
 }
 .mc-modal-overlay.open { opacity: 1; pointer-events: all; }
 
 .mc-modal-box {
-  width: 100%;
+  width: 100%; max-width: 480px;
   background: var(--white);
-  border-radius: 20px 20px 0 0;
-  border-top: 2.5px solid var(--black);
-  padding: 0 18px 36px;
-  transform: translateY(100%);
-  transition: transform .28s cubic-bezier(.4,0,.2,1);
-  box-shadow: 0 -4px 24px rgba(0,0,0,.12);
+  border-radius: 0 0 20px 20px;
+  border-bottom: 2.5px solid var(--black);
+  padding: 0 18px 28px;
+  transform: translateY(-100%);
+  transition: transform .26s cubic-bezier(.4,0,.2,1);
+  box-shadow: 0 4px 24px rgba(0,0,0,.12);
 }
 .mc-modal-overlay.open .mc-modal-box { transform: translateY(0); }
 
-.mc-modal-handle {
-  width: 36px; height: 4px;
-  background: var(--gray-300); border-radius: 2px;
-  margin: 12px auto 16px;
-}
+/* handle arriba ya no tiene sentido — ocultamos */
+.mc-modal-handle { display: none; }
 .mc-modal-title {
   font-family: var(--font-display); font-size: 1.5rem;
   letter-spacing: 1px; text-align: center;

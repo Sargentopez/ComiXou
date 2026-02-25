@@ -1,7 +1,7 @@
 /* ============================================================
-   header.js — Cabecera global SPA
-   Se inyecta una sola vez. Se refresca con Header.refresh()
-   cuando cambia la sesión (login / logout).
+   header.js — Cabecera global SPA  v4.4
+   Fila 1: logo + usuario
+   Fila 2: tagline  +  acciones de sistema (⛶ FS  |  📱 Abrir app)
    ============================================================ */
 
 const Header = (() => {
@@ -10,9 +10,23 @@ const Header = (() => {
     return typeof I18n !== 'undefined' ? I18n.t(key) : key;
   }
 
+  /* ── ¿Estamos dentro de la PWA instalada? ── */
+  function _inApp() {
+    return window.matchMedia('(display-mode: fullscreen)').matches
+      || window.matchMedia('(display-mode: standalone)').matches
+      || !!window.navigator.standalone;
+  }
+
+  /* ── ¿La app está instalada en el dispositivo? ── */
+  function _appInstalled() {
+    return !!localStorage.getItem('cx_app_installed');
+  }
+
   function _html() {
     const user = Auth.currentUser();
+    const inApp = _inApp();
 
+    /* bloque usuario */
     var userBlock;
     if (user) {
       var adminLink = user.role === 'admin'
@@ -40,6 +54,31 @@ const Header = (() => {
       ? '<a href="#" class="dropdown-item danger-item" id="dotsDeleteAccount">' + T('deleteAccount') + '</a>'
       : '<a href="#register" class="dropdown-item" data-route="register">' + T('register') + '</a>';
 
+    /* ── Botones de sistema (fila 2, derecha) ── */
+    /* Solo se muestran en la web (no en la app instalada) */
+    var sysBtns = '';
+    if (!inApp) {
+      /* Botón pantalla completa — siempre visible en browser */
+      var fsSupported = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+      var fsBtn = fsSupported
+        ? '<button class="hdr-sys-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">⛶</button>'
+        : '';
+
+      /* Botón "Abrir app" — solo si la app ya está instalada */
+      var openAppBtn = _appInstalled()
+        ? '<button class="hdr-sys-btn hdr-open-app-btn" id="hdrOpenAppBtn" title="Abrir app">📱 App</button>'
+        : '';
+
+      if (fsBtn || openAppBtn) {
+        sysBtns = '<div class="hdr-sys-btns">' + openAppBtn + fsBtn + '</div>';
+      }
+    }
+
+    /* Ítem "Instalar app" en el menú ⋮ — oculto si ya es app */
+    var installItem = inApp
+      ? ''
+      : '<a href="#" class="dropdown-item" id="installMenuItem">📲 ' + T('installApp') + '</a>';
+
     return '<header class="site-header home-header" id="siteHeader">'
       + '<div class="home-header-inner">'
         + '<div class="home-header-row1">'
@@ -54,7 +93,7 @@ const Header = (() => {
               + '<button class="home-dots-btn" id="dotsBtn">⋮</button>'
               + '<div class="dropdown-menu dropdown-menu-right" id="dotsMenu">'
                 + dotsItems
-                + '<a href="#" class="dropdown-item" id="installMenuItem">📲 ' + T('installApp') + '</a>'
+                + installItem
                 + '<div class="dropdown-divider"></div>'
                 + '<span class="dropdown-item disabled-item">ℹ️ Info</span>'
                 + '<span class="dropdown-item disabled-item">✉️ Contacto</span>'
@@ -63,13 +102,17 @@ const Header = (() => {
             + '</div>'
           + '</div>'
         + '</div>'
-        + '<div class="home-tagline">' + T('tagline') + '</div>'
+        /* Fila 2: tagline izq + sys-btns der */
+        + '<div class="home-header-row2">'
+          + '<span class="home-tagline">' + T('tagline') + '</span>'
+          + sysBtns
+        + '</div>'
       + '</div>'
     + '</header>';
   }
 
   function _bind() {
-    // ── Routing por data-route ──
+    /* ── Routing ── */
     document.getElementById('siteHeader').addEventListener('click', function(e) {
       var el = e.target.closest('[data-route]');
       if (!el) return;
@@ -77,7 +120,7 @@ const Header = (() => {
       Router.go(el.dataset.route);
     });
 
-    // ── Dropdowns ──
+    /* ── Dropdowns ── */
     function bindDropdown(btnId, menuId) {
       var btn  = document.getElementById(btnId);
       var menu = document.getElementById(menuId);
@@ -91,12 +134,11 @@ const Header = (() => {
     }
     bindDropdown('avatarBtn', 'avatarMenu');
     bindDropdown('dotsBtn', 'dotsMenu');
-
     document.addEventListener('click', function() {
       document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
     });
 
-    // ── Logout ──
+    /* ── Logout ── */
     var logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) {
       logoutBtn.addEventListener('click', function(e) {
@@ -107,7 +149,7 @@ const Header = (() => {
       });
     }
 
-    // ── Eliminar cuenta ──
+    /* ── Eliminar cuenta ── */
     var delBtn = document.getElementById('dotsDeleteAccount');
     if (delBtn) {
       delBtn.addEventListener('click', function(e) {
@@ -121,7 +163,7 @@ const Header = (() => {
       });
     }
 
-    // ── Instalar app ──
+    /* ── Instalar app ── */
     var installBtn = document.getElementById('installMenuItem');
     if (installBtn) {
       installBtn.addEventListener('click', function(e) {
@@ -137,14 +179,35 @@ const Header = (() => {
             : 'Pulsa Compartir ↑ y luego "Añadir a inicio"');
         }
       });
-      var isInstalled = window.matchMedia('(display-mode: standalone)').matches
-        || window.matchMedia('(display-mode: fullscreen)').matches
-        || window.navigator.standalone;
-      if (isInstalled) installBtn.style.display = 'none';
     }
 
-  }
+    /* ── Botón pantalla completa ── */
+    var fsBtn = document.getElementById('hdrFsBtn');
+    if (fsBtn) {
+      fsBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          // Salir
+          (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+        } else {
+          if (typeof Fullscreen !== 'undefined') Fullscreen.request();
+        }
+      });
+      // Estado inicial
+      if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn();
+    }
 
+    /* ── Botón "Abrir app" ── */
+    var openAppBtn = document.getElementById('hdrOpenAppBtn');
+    if (openAppBtn) {
+      openAppBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        /* Intentar abrir la PWA instalada via manifest start_url */
+        var startUrl = '/index.html'; // ajustar si el manifest tiene otro
+        window.open(startUrl, '_blank');
+      });
+    }
+  }
 
   function init() {
     var existing = document.getElementById('siteHeader');
@@ -160,7 +223,6 @@ const Header = (() => {
     _bind();
   }
 
-  // Auto-init
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {

@@ -279,13 +279,18 @@ a { color: inherit; text-decoration: none; }
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.6);
+  background: rgba(0,0,0,.55);
   z-index: 5000;
-  align-items: center;
+  align-items: flex-start;   /* top en mobile, no tapa el teclado */
   justify-content: center;
-  padding: 20px;
+  padding: env(safe-area-inset-top, 0px) 16px 16px;
+  overflow-y: auto;
 }
 .modal-overlay.open { display: flex; }
+/* En pantallas grandes volver a centrar */
+@media (min-height: 700px) and (min-width: 600px) {
+  .modal-overlay { align-items: center; padding: 20px; }
+}
 .modal-box {
   background: var(--white);
   border: 3px solid var(--black);
@@ -462,13 +467,56 @@ body.editor-page { padding-top: 0; }
 }
 .install-btn-dismiss:hover { color: var(--white); }
 
+
+/* Fila 2: tagline izq + sys-btns der */
+.home-header-row2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+  min-height: 20px;
+}
+.hdr-sys-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.hdr-sys-btn {
+  background: none;
+  border: 1.5px solid var(--black);
+  border-radius: 5px;
+  color: var(--black);
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-family: var(--font-body);
+  padding: 2px 7px;
+  cursor: pointer;
+  line-height: 1.6;
+  transition: background .12s;
+  white-space: nowrap;
+}
+.hdr-sys-btn:hover  { background: rgba(0,0,0,.07); }
+.hdr-sys-btn:active { background: rgba(0,0,0,.14); }
+.hdr-sys-btn[aria-pressed="true"] {
+  background: var(--black);
+  color: var(--yellow);
+}
+.hdr-open-app-btn {
+  background: var(--black);
+  color: var(--yellow);
+  border-color: var(--black);
+}
+.hdr-open-app-btn:hover { background: var(--gray-700); }
+
 /* ── BOTÓN PANTALLA COMPLETA (solo PWA) ── */
 .fullscreen-prompt {
   display: none;
   position: fixed;
   inset: 0;
   z-index: 9998;
-  background: #FFE135;
+  background: var(--paper);
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -493,3 +541,65 @@ body.editor-page { padding-top: 0; }
   background: none; border: none; cursor: pointer;
   font-family: var(--font-body);
 }
+
+/* ── TOAST "APP INSTALADA" ── */
+.installed-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(16px);
+  background: var(--black);
+  color: var(--white);
+  padding: 12px 22px;
+  border-radius: 10px;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  font-weight: 700;
+  box-shadow: 0 4px 20px rgba(0,0,0,.25);
+  z-index: 10000;
+  opacity: 0;
+  transition: opacity .3s, transform .3s;
+  max-width: calc(100vw - 32px);
+  text-align: center;
+  white-space: normal;
+}
+.installed-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ══════════════════════════════════════════
+   INPUTS: evitar zoom automático en iOS (font-size ≥ 16px)
+   y garantizar tamaño táctil cómodo en Android
+   ══════════════════════════════════════════ */
+.form-input,
+.mc-field input, .mc-field select,
+.ed-modal-field input, .ed-modal-field select,
+.auth-form input, .auth-form select {
+  font-size: 16px !important;  /* ≥16px previene autozoom en iOS Safari */
+  min-height: 44px;            /* mínimo táctil recomendado por Google/Apple */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Teclado virtual: cuando el viewport se encoge por el teclado,
+   los modales ya están en top, pero también aseguramos que los
+   formularios son scrollables */
+.mc-modal-box,
+.ed-modal-sheet,
+.modal-box,
+.auth-card {
+  max-height: 92dvh;   /* dvh = dynamic viewport height, se actualiza con el teclado */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fallback para navegadores sin dvh */
+@supports not (max-height: 1dvh) {
+  .mc-modal-box,
+  .ed-modal-sheet,
+  .modal-box,
+  .auth-card {
+    max-height: 92vh;
+  }
+}
+

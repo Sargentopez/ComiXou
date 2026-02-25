@@ -10,12 +10,7 @@ Router.register('home', {
   bodyClass: 'home-page',
   css: ['css/home.css'],
   html: () => `
-    <div class="fullscreen-prompt" id="fullscreenPrompt">
-      <div class="fp-logo">Comi<span>Xow</span></div>
-      <button class="fp-btn" id="fullscreenBtn">⛶ Pantalla completa</button>
-      <button class="fp-skip" id="fullscreenSkip">Continuar sin pantalla completa</button>
-    </div>
-    <nav class="page-nav" id="pageNav">
+<nav class="page-nav" id="pageNav">
       <div class="dropdown page-nav-item">
         <button class="page-nav-btn" id="filtrosBtn" data-i18n="filterBtn">Filtros ▾</button>
         <div class="dropdown-menu page-nav-dropdown" id="filtrosMenu"></div>
@@ -32,9 +27,9 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.4</footer>
+    <footer class="app-version">v4.5</footer>
   `,
-  init: () => { HomeView_init(); requestAnimationFrame(() => Fullscreen.init()); },
+  init: () => { HomeView_init(); },
   destroy: () => {}
 });
 
@@ -53,13 +48,13 @@ Router.register('login', {
         <form id="loginForm" class="auth-form" novalidate>
           <div class="form-group">
             <label class="form-label" for="loginEmail" data-i18n="email">Email</label>
-            <input type="email" id="loginEmail" class="form-input" autocomplete="email" required>
+            <input type="email" id="loginEmail" class="form-input" autocomplete="email" inputmode="email" enterkeyhint="next" required>
             <span class="form-error" id="emailError"></span>
           </div>
           <div class="form-group">
             <label class="form-label" for="loginPass" data-i18n="password">Contraseña</label>
             <div class="pass-wrap">
-              <input type="password" id="loginPass" class="form-input" autocomplete="current-password" required>
+              <input type="password" id="loginPass" class="form-input" autocomplete="current-password" inputmode="text" enterkeyhint="done" required>
               <button type="button" class="pass-toggle" id="passToggle">👁</button>
             </div>
             <span class="form-error" id="passError"></span>
@@ -95,25 +90,25 @@ Router.register('register', {
         <form id="registerForm" class="auth-form" novalidate>
           <div class="form-group">
             <label class="form-label" for="regUsername" data-i18n="username">Nombre de usuario</label>
-            <input type="text" id="regUsername" class="form-input" autocomplete="username" required>
+            <input type="text" id="regUsername" class="form-input" autocomplete="username" inputmode="text" enterkeyhint="next" required>
             <span class="form-error" id="usernameError"></span>
           </div>
           <div class="form-group">
             <label class="form-label" for="regEmail" data-i18n="email">Email</label>
-            <input type="email" id="regEmail" class="form-input" autocomplete="email" required>
+            <input type="email" id="regEmail" class="form-input" autocomplete="email" inputmode="email" enterkeyhint="next" required>
             <span class="form-error" id="emailError"></span>
           </div>
           <div class="form-group">
             <label class="form-label" for="regPass" data-i18n="password">Contraseña</label>
             <div class="pass-wrap">
-              <input type="password" id="regPass" class="form-input" autocomplete="new-password" required>
+              <input type="password" id="regPass" class="form-input" autocomplete="new-password" inputmode="text" enterkeyhint="next" required>
               <button type="button" class="pass-toggle" id="passToggle">👁</button>
             </div>
             <span class="form-error" id="passError"></span>
           </div>
           <div class="form-group">
             <label class="form-label" for="regPassConf" data-i18n="passwordConf">Confirmar contraseña</label>
-            <input type="password" id="regPassConf" class="form-input" autocomplete="new-password" required>
+            <input type="password" id="regPassConf" class="form-input" autocomplete="new-password" inputmode="text" enterkeyhint="done" required>
             <span class="form-error" id="passConfError"></span>
           </div>
           <button type="submit" class="btn btn-primary btn-full" data-i18n="submitRegister">Crear cuenta</button>
@@ -162,15 +157,15 @@ Router.register('my-comics', {
         <h3 class="mc-modal-title">Nuevo proyecto</h3>
         <div class="mc-field">
           <label>Título</label>
-          <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off">
+          <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off" inputmode="text" enterkeyhint="next">
         </div>
         <div class="mc-field">
           <label>Autor</label>
-          <input type="text" id="mcAuthor" placeholder="Tu nombre o seudónimo" autocomplete="off">
+          <input type="text" id="mcAuthor" placeholder="Tu nombre o seudónimo" autocomplete="off" inputmode="text" enterkeyhint="next">
         </div>
         <div class="mc-field">
           <label>Género</label>
-          <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off">
+          <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="done">
         </div>
         <div class="mc-field">
           <label>Modo de lectura</label>
@@ -313,9 +308,9 @@ Router.register('editor', {
       <div class="ed-modal-sheet">
         <div class="ed-modal-handle"></div>
         <h3 class="ed-modal-title">Datos del proyecto</h3>
-        <div class="ed-modal-field"><label>Título</label><input type="text" id="edMTitle"></div>
-        <div class="ed-modal-field"><label>Autor</label><input type="text" id="edMAuthor"></div>
-        <div class="ed-modal-field"><label>Género</label><input type="text" id="edMGenre"></div>
+        <div class="ed-modal-field"><label>Título</label><input type="text" id="edMTitle" inputmode="text" enterkeyhint="next" autocomplete="off"></div>
+        <div class="ed-modal-field"><label>Autor</label><input type="text" id="edMAuthor" inputmode="text" enterkeyhint="next" autocomplete="off"></div>
+        <div class="ed-modal-field"><label>Género</label><input type="text" id="edMGenre" inputmode="text" enterkeyhint="done" autocomplete="off"></div>
         <div class="ed-modal-field"><label>Modo de lectura</label>
           <select id="edMNavMode">
             <option value="fixed">Viñeta fija (botones)</option>

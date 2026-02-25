@@ -351,21 +351,25 @@ body.editor-page #appView {
    MODAL PROYECTO
    ══════════════════════════════ */
 #edProjectModal {
-  position: fixed; inset: 0; background: rgba(0,0,0,.5);
-  z-index: 500; display: flex; align-items: flex-end;
-  opacity: 0; pointer-events: none; transition: opacity .2s;
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  z-index: 500; display: flex;
+  align-items: flex-start;    /* ARRIBA */
+  justify-content: center;
+  padding-top: env(safe-area-inset-top, 0px);
+  opacity: 0; pointer-events: none; transition: opacity .22s;
   backdrop-filter: blur(4px);
+  overflow-y: auto;
 }
 #edProjectModal.open { opacity: 1; pointer-events: all; }
 .ed-modal-sheet {
-  width: 100%; background: var(--white);
-  border-radius: 20px 20px 0 0; border-top: 2.5px solid var(--black);
-  padding: 0 18px 36px;
-  transform: translateY(100%); transition: transform .28s cubic-bezier(.4,0,.2,1);
-  box-shadow: 0 -4px 24px rgba(0,0,0,.12);
+  width: 100%; max-width: 480px; background: var(--white);
+  border-radius: 0 0 20px 20px; border-bottom: 2.5px solid var(--black);
+  padding: 0 18px 28px;
+  transform: translateY(-100%); transition: transform .26s cubic-bezier(.4,0,.2,1);
+  box-shadow: 0 4px 24px rgba(0,0,0,.12);
 }
 #edProjectModal.open .ed-modal-sheet { transform: translateY(0); }
-.ed-modal-handle { width: 36px; height: 4px; background: var(--gray-300); border-radius: 2px; margin: 12px auto 16px; }
+.ed-modal-handle { display: none; }
 .ed-modal-title { font-family: var(--font-display); font-size: 1.4rem; letter-spacing: 1px; text-align: center; margin-bottom: 16px; }
 .ed-modal-field { margin-bottom: 10px; }
 .ed-modal-field label { display: block; font-size: 0.7rem; font-weight: 900; color: var(--gray-500); text-transform: uppercase; margin-bottom: 4px; }
