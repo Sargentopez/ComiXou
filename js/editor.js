@@ -409,7 +409,6 @@ function edRedraw(){
       edCtx.drawImage(img,0,0);
       edLayers.filter(l=>l.type!=='image').forEach(l=>l.draw(edCtx,edCanvas));
       edDrawSel();
-      edUpdateFloatingIcons();
     };
     img.src=page.drawData;return;
   }
@@ -418,120 +417,95 @@ function edRedraw(){
 }
 
 
-/* ══════════════════════════════════════════
-   ICONOS FLOTANTES SOBRE OBJETO SELECCIONADO
-   ══════════════════════════════════════════ */
-function edUpdateFloatingIcons(){
-  const wrap = $('editorCanvasWrap');
-  if(!wrap) return;
-  wrap.querySelectorAll('.ed-float-icon').forEach(el=>el.remove());
-  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return;
-
-  const la = edLayers[edSelectedIdx];
-
-  // Posición real del canvas y del wrap en viewport
-  const canvasRect = edCanvas.getBoundingClientRect();
-  const wrapRect   = wrap.getBoundingClientRect();
-
-  // Escala: pixels de canvas interno → CSS pixels en pantalla
-  const scaleX = canvasRect.width  / edCanvas.width;
-  const scaleY = canvasRect.height / edCanvas.height;
-
-  // Offset del canvas dentro del wrap (puede ser >0 por el centrado flexbox)
-  const canvasLeft = canvasRect.left - wrapRect.left;
-  const canvasTop  = canvasRect.top  - wrapRect.top;
-
-  // Centro del objeto en px relativos al wrap
-  const cx = canvasLeft + la.x * edCanvas.width  * scaleX;
-  const cy = canvasTop  + la.y * edCanvas.height * scaleY;
-
-  // Mitad del objeto en px de pantalla
-  const hw = la.width  * edCanvas.width  * scaleX / 2;
-  const hh = la.height * edCanvas.height * scaleY / 2;
-
-  const GAP = 8;  // px entre borde del objeto y centro del icono
-  const R   = 18; // radio del icono (width/height = R*2)
-
-  function makeIcon(emoji, title, topPx, extraClass, onDown, onClick){
-    const btn = document.createElement('button');
-    btn.className = 'ed-float-icon ' + extraClass;
-    btn.title = title;
-    btn.innerHTML = emoji;
-    // Centrado horizontalmente sobre el objeto, desplazado vertical
-    btn.style.left = Math.round(cx - R) + 'px';
-    btn.style.top  = Math.round(topPx - R) + 'px';
-    if(onDown)  btn.addEventListener('pointerdown', onDown);
-    if(onClick) btn.addEventListener('click', onClick);
-    wrap.appendChild(btn);
-    return btn;
-  }
-
-  // ── Icono ARRIBA: ⚙ opciones ──
-  makeIcon('⚙', 'Opciones',
-    cy - hh - GAP,
-    'ed-float-icon-top',
-    e => e.stopPropagation(),
-    e => {
-      e.stopPropagation();
-      edPanelUserClosed = false;
-      edRenderOptionsPanel('props');
-    }
-  );
-
-  // ── Icono ABAJO: ⤢ mover/tamaño ──
-  makeIcon('⤢', 'Mover / Cambiar tamaño',
-    cy + hh + GAP,
-    'ed-float-icon-bot',
-    e => {
-      e.stopPropagation();
-      e.preventDefault();
-      if(edIsTouchDevice()){
-        const cCoords = edCoords(e);
-        edIsDragging = true;
-        edDragOffX = cCoords.nx - la.x;
-        edDragOffY = cCoords.ny - la.y;
-      } else {
-        edIsResizing = true;
-        edResizeCorner = 'br';
-        edInitialSize = {width:la.width, height:la.height, x:la.x, y:la.y};
-      }
-    },
-    null
-  );
-}
-
-function edRemoveFloatingIcons(){
-  $('editorCanvasWrap')?.querySelectorAll('.ed-float-icon').forEach(el=>el.remove());
-}
 
 function edIsTouchDevice(){
   return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 }
+/* Radio de los iconos de acción en coordenadas de canvas */
+const ED_ICON_R = 14; /* px en espacio canvas (se escala con el canvas) */
+const ED_ICON_GAP = 18; /* distancia del borde del objeto al centro del icono */
+
+function edDrawSelIcon(cx, cy, emoji){
+  const R = ED_ICON_R;
+  edCtx.save();
+  /* Fondo blanco con borde negro */
+  edCtx.beginPath();
+  edCtx.arc(cx, cy, R, 0, Math.PI*2);
+  edCtx.fillStyle = '#ffffff';
+  edCtx.fill();
+  edCtx.strokeStyle = '#111111';
+  edCtx.lineWidth = 1.5;
+  edCtx.stroke();
+  /* Emoji centrado */
+  edCtx.font = (R * 1.1) + 'px sans-serif';
+  edCtx.textAlign = 'center';
+  edCtx.textBaseline = 'middle';
+  edCtx.fillStyle = '#111111';
+  edCtx.fillText(emoji, cx, cy + 1);
+  edCtx.restore();
+}
+
 function edDrawSel(){
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
   const cw=edCanvas.width,ch=edCanvas.height;
   const x=la.x*cw,y=la.y*ch,w=la.width*cw,h=la.height*ch;
   edCtx.save();
+  /* Marco punteado naranja */
   edCtx.strokeStyle='#ff6600';edCtx.lineWidth=2;edCtx.setLineDash([5,3]);
   edCtx.strokeRect(x-w/2,y-h/2,w,h);edCtx.setLineDash([]);
-  if(la.type==='image' && !edIsTouchDevice()){
-    edCtx.fillStyle='#ff4444';
-    la.getControlPoints().forEach(p=>{
-      const px=p.x*cw,py=p.y*ch;
-      edCtx.beginPath();edCtx.arc(px,py,6,0,Math.PI*2);edCtx.fill();
-      edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
-    });
-  }
+  edCtx.restore();
+
+  /* Puntos de control de cola (bocadillo) */
   if(la.type==='bubble'){
+    edCtx.save();
     edCtx.fillStyle='#ff4444';
     la.getTailControlPoints().forEach(p=>{
       const px=p.x*cw,py=p.y*ch;
       edCtx.beginPath();edCtx.arc(px,py,7,0,Math.PI*2);edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
     });
+    edCtx.restore();
   }
-  edCtx.restore();
+
+  /* Puntos de resize (imagen, solo PC) */
+  if(la.type==='image' && !edIsTouchDevice()){
+    edCtx.save();
+    edCtx.fillStyle='#ff4444';
+    la.getControlPoints().forEach(p=>{
+      const px=p.x*cw,py=p.y*ch;
+      edCtx.beginPath();edCtx.arc(px,py,6,0,Math.PI*2);edCtx.fill();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
+    });
+    edCtx.restore();
+  }
+
+  /* ── Iconos de acción dibujados en canvas ──
+     ⚙ centrado encima del objeto
+     ⤢ centrado debajo del objeto                */
+  const iconY_top = y - h/2 - ED_ICON_GAP;
+  const iconY_bot = y + h/2 + ED_ICON_GAP;
+  edDrawSelIcon(x, iconY_top, '⚙');
+  edDrawSelIcon(x, iconY_bot, '⤢');
+}
+
+/* Detectar si el tap fue sobre uno de los iconos de acción */
+function edHitSelIcon(nx, ny){
+  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return null;
+  const la = edLayers[edSelectedIdx];
+  const cw = edCanvas.width, ch = edCanvas.height;
+  /* Convertir coordenadas normalizadas a canvas px */
+  const px = nx * cw, py = ny * ch;
+  const objX = la.x * cw, objY = la.y * ch;
+  const objH = la.height * ch;
+  const R = ED_ICON_R + 6; /* radio de hit ligeramente mayor para touch */
+
+  const topY = objY - objH/2 - ED_ICON_GAP;
+  const botY = objY + objH/2 + ED_ICON_GAP;
+
+  if(Math.hypot(px - objX, py - topY) <= R) return 'options';
+  if(Math.hypot(px - objX, py - botY) <= R) return 'move';
+  return null;
 }
 
 /* ══════════════════════════════════════════
@@ -671,6 +645,23 @@ function edOnStart(e){
   if(edMenuOpen){edCloseMenus();return;}
   if(['draw','eraser'].includes(edActiveTool)){edStartPaint(e);return;}
   const c=edCoords(e);
+
+  /* ── Comprobar hit en iconos de acción (⚙ opciones / ⤢ mover) ── */
+  const iconHit = edHitSelIcon(c.nx, c.ny);
+  if(iconHit === 'options'){
+    edPanelUserClosed = false;
+    edRenderOptionsPanel('props');
+    return;
+  }
+  if(iconHit === 'move'){
+    if(edSelectedIdx >= 0){
+      const la = edLayers[edSelectedIdx];
+      edIsDragging = true;
+      edDragOffX = c.nx - la.x;
+      edDragOffY = c.ny - la.y;
+    }
+    return;
+  }
   // Cola bocadillo
   if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
     const la=edLayers[edSelectedIdx];
