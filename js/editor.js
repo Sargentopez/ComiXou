@@ -806,12 +806,27 @@ function edCloseMenus(){
 function edToggleMenu(id){
   if(edMenuOpen===id){edCloseMenus();return;}
   edCloseMenus();
-  // Deactivate draw/eraser when opening any menu
   if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
   const dd=$('dd-'+id);if(!dd)return;
-  dd.classList.add('open');
   const btn=document.querySelector(`[data-menu="${id}"]`);
-  if(btn)btn.classList.add('open');
+
+  // Posicionar el dropdown con fixed relativo al botón
+  if(btn){
+    const r = btn.getBoundingClientRect();
+    dd.style.top  = r.bottom + 'px';
+    dd.style.left = r.left   + 'px';
+    // Corrección: si se sale por la derecha, alinear al borde derecho del botón
+    dd.style.removeProperty('right');
+    requestAnimationFrame(() => {
+      const ddR = dd.getBoundingClientRect();
+      if(ddR.right > window.innerWidth - 4){
+        dd.style.left = (r.right - ddR.width) + 'px';
+      }
+    });
+    btn.classList.add('open');
+  }
+
+  dd.classList.add('open');
   edMenuOpen=id;
   if(id==='nav')edUpdateNavPages();
 }

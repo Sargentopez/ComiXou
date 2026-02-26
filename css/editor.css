@@ -150,14 +150,13 @@ body.editor-page #appView {
 
 /* ── DROPDOWNS DEL MENÚ ── */
 .ed-dropdown {
-  position: absolute;
-  top: 100%; left: 0;
+  position: fixed;       /* fixed: escapa del overflow del scroll container */
   min-width: 200px;
   background: var(--white);
   border: 2px solid var(--black);
   border-radius: var(--radius);
   box-shadow: 4px 4px 0 var(--black);
-  z-index: 9000;         /* por encima de TODO: topbar, canvas, options */
+  z-index: 9000;
   display: none;
   padding: 6px 0;
 }
