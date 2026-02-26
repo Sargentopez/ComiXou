@@ -226,7 +226,7 @@ a { color: inherit; text-decoration: none; }
 .toast {
   position: fixed;
   bottom: 24px; left: 50%;
-  transform: translateX(-50%) translateY(80px);
+  transform: translateX(-50%);
   background: var(--black);
   color: var(--yellow);
   padding: 12px 28px;
@@ -235,10 +235,12 @@ a { color: inherit; text-decoration: none; }
   font-size: 0.95rem;
   box-shadow: var(--box-shadow-lg);
   z-index: 9999;
-  transition: transform .3s cubic-bezier(.34,1.56,.64,1);
+  transition: opacity .25s, visibility .25s;
   pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
 }
-.toast.show { transform: translateX(-50%) translateY(0); }
+.toast.show { opacity: 1; visibility: visible; }
 
 /* ── FORMULARIOS ── */
 .form-group { margin-bottom: 18px; }

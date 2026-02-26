@@ -1281,6 +1281,9 @@ function EditorView_init(){
   edHideGearIcon();
   const staleToast = $('edToast');
   if(staleToast){ staleToast.classList.remove('show'); clearTimeout(staleToast._t); }
+  // Ocultar también el toast global (ej: "Bienvenido/a" del login)
+  const globalToast = document.getElementById('toast');
+  if(globalToast){ globalToast.classList.remove('show'); clearTimeout(globalToast._tid); }
   edCanvas=$('editorCanvas');
   // Habilitar botón Capas
   document.querySelector('[data-menu="layers"]')?.removeAttribute('disabled');
@@ -1314,9 +1317,11 @@ function EditorView_init(){
   $('edSaveBtn')?.addEventListener('click',edSaveProject);
   $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
 
-  // ── MENÚ: botones dropdown ──
+  // ── MENÚ: botones dropdown (excluir layers y nav que tienen overlays propios) ──
   document.querySelectorAll('[data-menu]').forEach(btn=>{
-    btn.addEventListener('click',e=>{e.stopPropagation();edToggleMenu(btn.dataset.menu);});
+    const id = btn.dataset.menu;
+    if(id === 'layers' || id === 'nav') return; // tienen su propio handler
+    btn.addEventListener('pointerup',e=>{e.stopPropagation();edToggleMenu(id);});
   });
 
   // ── INSERTAR ──
@@ -1350,13 +1355,14 @@ function EditorView_init(){
 
   // ── NAVEGAR (Hoja → abre overlay) ──
   // El botón Hoja ▾ del menú abre el overlay de hojas
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('[data-menu="nav"]');
-    if (!btn) return;
-    e.stopPropagation();
-    edCloseMenus();
-    edOpenPages();
-  });
+  const _navBtn = document.querySelector('[data-menu="nav"]');
+  if(_navBtn){
+    _navBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      edCloseMenus();
+      edOpenPages();
+    });
+  }
   // Bindings del dropdown pequeño (ya no se usa, pero por si acaso)
   $('dd-addpage')?.addEventListener('click',()=>{edAddPage();edCloseMenus();});
   $('dd-delpage')?.addEventListener('click',()=>{edDeletePage();edCloseMenus();});
@@ -1371,13 +1377,14 @@ function EditorView_init(){
   $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
 
   // ── CAPAS ──
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('[data-menu="layers"]');
-    if (!btn) return;
-    e.stopPropagation();
-    edCloseMenus();
-    edOpenLayers();
-  });
+  const _layersBtn = document.querySelector('[data-menu="layers"]');
+  if(_layersBtn){
+    _layersBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      edCloseMenus();
+      edOpenLayers();
+    });
+  }
 
   // ── MINIMIZAR ──
   $('edUndoBtn')?.addEventListener('click', edUndo);
