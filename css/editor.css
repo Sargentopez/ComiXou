@@ -462,3 +462,21 @@ body.editor-page #appView {
   font-size: 18px;
   cursor: move;
 }
+
+/* ══════════════════════════════════════════
+   BOTONES UNDO / REDO
+   ══════════════════════════════════════════ */
+.ed-undo-redo-btn {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  cursor: pointer;
+  color: var(--gray-600);
+  padding: 0 7px;
+  height: 40px;
+  border-radius: 4px;
+  transition: color .12s, background .12s;
+  flex-shrink: 0;
+}
+.ed-undo-redo-btn:hover:not(:disabled)  { color: var(--black); background: var(--gray-100); }
+.ed-undo-redo-btn:disabled { opacity: .28; cursor: default; }

@@ -23,6 +23,9 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
+// Historial undo/redo (snapshots de edLayers + drawData por página)
+let edHistory = [], edHistoryIdx = -1;
+const ED_MAX_HISTORY = 10;
 
 const ED_BASE = 360;
 const $ = id => document.getElementById(id);
@@ -246,6 +249,77 @@ function edSetOrientation(o){
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ edFitCanvas(); edRedraw(); }));
 }
 
+
+/* ══════════════════════════════════════════
+   HISTORIAL UNDO / REDO
+   ══════════════════════════════════════════ */
+function edPushHistory(){
+  // Snapshot ligero: copia profunda de layers de la página actual + drawData
+  const snapshot = {
+    pageIdx: edCurrentPage,
+    layers: JSON.parse(JSON.stringify(edLayers.map(l => {
+      // Guardar propiedades serializables (no el ImageBitmap/img, sino src)
+      const o = Object.assign({}, l);
+      if(l.img) o._imgSrc = l.img.src || '';
+      delete o.img;
+      return o;
+    }))),
+    drawData: edPages[edCurrentPage]?.drawData || null
+  };
+  // Descartar redo si estamos en medio
+  edHistory = edHistory.slice(0, edHistoryIdx + 1);
+  edHistory.push(snapshot);
+  if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
+  else edHistoryIdx++;
+  edUpdateUndoRedoBtns();
+}
+
+function edUndo(){
+  if(edHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
+  edHistoryIdx--;
+  edApplyHistory(edHistory[edHistoryIdx]);
+}
+
+function edRedo(){
+  if(edHistoryIdx >= edHistory.length - 1){ edToast('Nada que rehacer'); return; }
+  edHistoryIdx++;
+  edApplyHistory(edHistory[edHistoryIdx]);
+}
+
+function edApplyHistory(snapshot){
+  if(!snapshot) return;
+  // Restaurar layers reconstruyendo los objetos correctamente
+  edLayers = snapshot.layers.map(o => {
+    let l;
+    if(o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
+    else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
+    else if(o.type === 'image')  l = new ImageLayer(o.x, o.y);
+    else return o;
+    Object.assign(l, o);
+    // Restaurar imagen
+    if(o.type === 'image' && o._imgSrc){
+      const img = new Image();
+      img.onload = () => { l.img = img; edRedraw(); };
+      img.src = o._imgSrc;
+    }
+    return l;
+  });
+  if(edPages[snapshot.pageIdx]){
+    edPages[snapshot.pageIdx].layers = edLayers;
+    edPages[snapshot.pageIdx].drawData = snapshot.drawData;
+  }
+  edSelectedIdx = -1;
+  edPanelUserClosed = false;
+  edRedraw();
+  edUpdateUndoRedoBtns();
+}
+
+function edUpdateUndoRedoBtns(){
+  const u = $('edUndoBtn'), r = $('edRedoBtn');
+  if(u) u.disabled = edHistoryIdx <= 0;
+  if(r) r.disabled = edHistoryIdx >= edHistory.length - 1;
+}
+
 function edFitCanvas(){
   const wrap=$('editorCanvasWrap');if(!wrap||!edCanvas)return;
   const topbar=$('edTopbar'),menu=$('edMenuBar'),opts=$('edOptionsPanel');
@@ -317,68 +391,79 @@ function edRedraw(){
 function edUpdateFloatingIcons(){
   const wrap = $('editorCanvasWrap');
   if(!wrap) return;
-  // Eliminar iconos anteriores
   wrap.querySelectorAll('.ed-float-icon').forEach(el=>el.remove());
   if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return;
 
-  const la  = edLayers[edSelectedIdx];
-  const rect = edCanvas.getBoundingClientRect();
-  const wrapRect = wrap.getBoundingClientRect();
+  const la = edLayers[edSelectedIdx];
 
-  // Escala canvas → CSS pixels
-  const scaleX = rect.width  / edCanvas.width;
-  const scaleY = rect.height / edCanvas.height;
+  // Escala canvas interno → CSS pixels mostrados
+  // edCanvas.style.width/height son los px reales pintados en pantalla
+  const cssW = parseFloat(edCanvas.style.width)  || edCanvas.offsetWidth;
+  const cssH = parseFloat(edCanvas.style.height) || edCanvas.offsetHeight;
+  const scaleX = cssW / edCanvas.width;
+  const scaleY = cssH / edCanvas.height;
 
-  // Centro del objeto en CSS pixels relativo al wrap
-  const cx = (la.x * edCanvas.width)  * scaleX + (rect.left - wrapRect.left);
-  const cy = (la.y * edCanvas.height) * scaleY + (rect.top  - wrapRect.top);
-  const hw = (la.width  * edCanvas.width)  * scaleX / 2;
-  const hh = (la.height * edCanvas.height) * scaleY / 2;
+  // Posición del canvas dentro del wrap (marginTop lo pone edFitCanvas)
+  const canvasOffsetTop  = parseFloat(edCanvas.style.marginTop)  || 0;
+  const canvasOffsetLeft = parseFloat(edCanvas.style.marginLeft) || 0;
 
-  const GAP = 10; // px entre borde objeto e icono
-  const R   = 18; // radio del icono
+  // Centro del objeto en px relativos al wrap
+  const cx = canvasOffsetLeft + la.x * edCanvas.width  * scaleX;
+  const cy = canvasOffsetTop  + la.y * edCanvas.height * scaleY;
 
-  // Icono ARRIBA: abrir opciones (⚙)
-  const btnTop = document.createElement('button');
-  btnTop.className = 'ed-float-icon ed-float-icon-top';
-  btnTop.title = 'Opciones';
-  btnTop.innerHTML = '⚙';
-  btnTop.style.left = (cx - R) + 'px';
-  btnTop.style.top  = (cy - hh - GAP - R*2) + 'px';
-  btnTop.addEventListener('pointerdown', e => { e.stopPropagation(); });
-  btnTop.addEventListener('click', e => {
-    e.stopPropagation();
-    edPanelUserClosed = false;
-    edRenderOptionsPanel('props');
-  });
-  wrap.appendChild(btnTop);
+  // Mitad del objeto en px de pantalla
+  const hw = la.width  * edCanvas.width  * scaleX / 2;
+  const hh = la.height * edCanvas.height * scaleY / 2;
 
-  // Icono ABAJO: mover/tamaño (⤢)
-  const btnBot = document.createElement('button');
-  btnBot.className = 'ed-float-icon ed-float-icon-bot';
-  btnBot.title = 'Mover / Cambiar tamaño';
-  btnBot.innerHTML = '⤢';
-  btnBot.style.left = (cx - R) + 'px';
-  btnBot.style.top  = (cy + hh + GAP) + 'px';
-  // En touch: iniciar drag/pinch desde este icono
-  // En PC: cursor resize
-  btnBot.addEventListener('pointerdown', e => {
-    e.stopPropagation();
-    e.preventDefault();
-    if(edIsTouchDevice()){
-      // Activar drag desde el icono
-      const cCoords = edCoords(e);
-      edIsDragging = true;
-      edDragOffX = cCoords.nx - la.x;
-      edDragOffY = cCoords.ny - la.y;
-    } else {
-      // PC: iniciar resize proporcional desde esquina
-      edIsResizing = true;
-      edResizeCorner = 'br';
-      edInitialSize = {width:la.width, height:la.height, x:la.x, y:la.y};
+  const GAP = 8;  // px entre borde del objeto y centro del icono
+  const R   = 18; // radio del icono (width/height = R*2)
+
+  function makeIcon(emoji, title, topPx, extraClass, onDown, onClick){
+    const btn = document.createElement('button');
+    btn.className = 'ed-float-icon ' + extraClass;
+    btn.title = title;
+    btn.innerHTML = emoji;
+    // Centrado horizontalmente sobre el objeto, desplazado vertical
+    btn.style.left = Math.round(cx - R) + 'px';
+    btn.style.top  = Math.round(topPx - R) + 'px';
+    if(onDown)  btn.addEventListener('pointerdown', onDown);
+    if(onClick) btn.addEventListener('click', onClick);
+    wrap.appendChild(btn);
+    return btn;
+  }
+
+  // ── Icono ARRIBA: ⚙ opciones ──
+  makeIcon('⚙', 'Opciones',
+    cy - hh - GAP,
+    'ed-float-icon-top',
+    e => e.stopPropagation(),
+    e => {
+      e.stopPropagation();
+      edPanelUserClosed = false;
+      edRenderOptionsPanel('props');
     }
-  });
-  wrap.appendChild(btnBot);
+  );
+
+  // ── Icono ABAJO: ⤢ mover/tamaño ──
+  makeIcon('⤢', 'Mover / Cambiar tamaño',
+    cy + hh + GAP,
+    'ed-float-icon-bot',
+    e => {
+      e.stopPropagation();
+      e.preventDefault();
+      if(edIsTouchDevice()){
+        const cCoords = edCoords(e);
+        edIsDragging = true;
+        edDragOffX = cCoords.nx - la.x;
+        edDragOffY = cCoords.ny - la.y;
+      } else {
+        edIsResizing = true;
+        edResizeCorner = 'br';
+        edInitialSize = {width:la.width, height:la.height, x:la.x, y:la.y};
+      }
+    },
+    null
+  );
 }
 
 function edRemoveFloatingIcons(){
@@ -462,7 +547,7 @@ function edAddImage(file){
       layer.height=Math.min(h,0.85);
       if(layer.height===0.85)layer.width=0.85*(edCanvas.height/edCanvas.width)*(img.naturalWidth/img.naturalHeight);
       edLayers.push(layer);edSelectedIdx=edLayers.length-1;
-      edRedraw();edRenderOptionsPanel('props');edToast('Imagen añadida ✓');
+      edPushHistory();edRedraw();edRenderOptionsPanel('props');edToast('Imagen añadida ✓');
     };
     img.src=ev.target.result;
   };
@@ -471,17 +556,17 @@ function edAddImage(file){
 function edAddText(){
   const l=new TextLayer('Escribe aquí');l.resizeToFitText(edCanvas);
   edLayers.push(l);edSelectedIdx=edLayers.length-1;
-  edRedraw();edRenderOptionsPanel('props');
+  edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edAddBubble(){
   const l=new BubbleLayer('Escribe aquí');l.resizeToFitText(edCanvas);
   edLayers.push(l);edSelectedIdx=edLayers.length-1;
-  edRedraw();edRenderOptionsPanel('props');
+  edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
   edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
-  edRedraw();edRenderOptionsPanel();
+  edPushHistory();edRedraw();edRenderOptionsPanel();
 }
 
 /* ══════════════════════════════════════════
@@ -624,6 +709,7 @@ function edOnEnd(e){
     return;
   }
   if(edPainting){edPainting=false;edSaveDrawData();}
+  if(edIsDragging||edIsResizing||edIsTailDragging) edPushHistory();
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
 }
 
@@ -1180,7 +1266,11 @@ function EditorView_init(){
   $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
 
   // ── MINIMIZAR ──
+  $('edUndoBtn')?.addEventListener('click', edUndo);
+  $('edRedoBtn')?.addEventListener('click', edRedo);
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
+  // Push estado inicial
+  edPushHistory();
   edInitFloatDrag();
 
   // ── VISOR ──

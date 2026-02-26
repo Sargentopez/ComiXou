@@ -514,6 +514,42 @@ body.editor-page { padding-top: 0; }
 }
 .hdr-open-app-btn:hover { background: var(--gray-700); }
 
+/* ── BOTÓN PANTALLA COMPLETA EN ROW2 ── */
+.hdr-fs-row2-btn {
+  background: none;
+  border: 1.5px solid rgba(0,0,0,.30);
+  border-radius: 4px;
+  color: var(--gray-600);
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: var(--font-body);
+  padding: 1px 7px 1px 6px;
+  cursor: pointer;
+  line-height: 1.7;
+  transition: background .12s, opacity .12s, color .12s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.hdr-fs-row2-btn:hover  { background: rgba(0,0,0,.06); color: var(--black); }
+.hdr-fs-row2-btn:active { background: rgba(0,0,0,.12); }
+.hdr-fs-row2-btn[aria-pressed="true"] {
+  background: var(--black); color: var(--yellow); border-color: var(--black);
+}
+/* Texto largo: visible si hay espacio (>320px disponibles aprox) */
+.hdr-fs-label-long  { display: none; }
+.hdr-fs-label-short { display: inline; }
+@media (min-width: 400px) {
+  .hdr-fs-label-long  { display: inline; }
+  .hdr-fs-label-short { display: none; }
+}
+/* Sin texto si la pantalla es muy pequeña */
+@media (max-width: 299px) {
+  .hdr-fs-label-short { display: none; }
+}
+
 /* ── BOTÓN PANTALLA COMPLETA (solo PWA) ── */
 .fullscreen-prompt {
   display: none;

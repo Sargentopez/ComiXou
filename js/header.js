@@ -57,17 +57,21 @@ const Header = (() => {
     /* ── Botón pantalla completa — se renderiza siempre, se oculta en app por CSS ── */
     var fsSupported = !!(document.documentElement.requestFullscreen
                       || document.documentElement.webkitRequestFullscreen);
-    var fsBtnHtml = fsSupported
-      ? '<button class="hdr-sys-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">⛶</button>'
-      : '';
-
     /* Botón "Abrir app" — solo si instalada y en browser */
     var openAppBtn = (!inApp && _appInstalled())
       ? '<button class="hdr-sys-btn hdr-open-app-btn" id="hdrOpenAppBtn" title="Abrir app">App</button>'
       : '';
 
-    var sysBtns = (fsBtnHtml || openAppBtn)
-      ? '<div class="hdr-sys-btns">' + openAppBtn + fsBtnHtml + '</div>'
+    var sysBtns = openAppBtn
+      ? '<div class="hdr-sys-btns">' + openAppBtn + '</div>'
+      : '';
+
+    /* Botón pantalla completa — en row2, ajustado a la derecha, con texto adaptativo */
+    var fsBtnHtml = fsSupported
+      ? '<button class="hdr-fs-row2-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">'
+        + '<span class="hdr-fs-label-long">mejor en pantalla completa</span>'
+        + '<span class="hdr-fs-label-short">pantalla completa</span>'
+        + ' ⛶</button>'
       : '';
 
     /* Ítem "Instalar app" en el menú ⋮ — oculto si ya es app */
