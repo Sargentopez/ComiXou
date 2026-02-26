@@ -798,7 +798,18 @@ function edMoveBrush(e){
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
-  document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+  document.querySelectorAll('.ed-dropdown').forEach(d=>{
+    d.classList.remove('open');
+    // Devolver al padre original si fue movido a body
+    if(d._origParent && d.parentNode === document.body){
+      d._origParent.appendChild(d);
+    }
+    d.style.removeProperty('position');
+    d.style.removeProperty('top');
+    d.style.removeProperty('left');
+    d.style.removeProperty('right');
+    d.style.removeProperty('z-index');
+  });
   document.querySelectorAll('.ed-menu-btn').forEach(b=>b.classList.remove('open'));
   edMenuOpen=null;
 }
@@ -809,26 +820,32 @@ function edToggleMenu(id){
   if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
   const dd=$('dd-'+id);if(!dd)return;
   const btn=document.querySelector(`[data-menu="${id}"]`);
+  if(!btn)return;
 
-  // Posicionar el dropdown con fixed relativo al botón
-  if(btn){
-    const r = btn.getBoundingClientRect();
-    dd.style.top  = r.bottom + 'px';
-    dd.style.left = r.left   + 'px';
-    // Corrección: si se sale por la derecha, alinear al borde derecho del botón
-    dd.style.removeProperty('right');
-    requestAnimationFrame(() => {
-      const ddR = dd.getBoundingClientRect();
-      if(ddR.right > window.innerWidth - 4){
-        dd.style.left = (r.right - ddR.width) + 'px';
-      }
-    });
-    btn.classList.add('open');
-  }
+  // Mover el dropdown a body para escapar de cualquier overflow/stacking context
+  dd._origParent = dd._origParent || dd.parentNode;
+  document.body.appendChild(dd);
+
+  // Posicionar con fixed relativo al botón
+  const r = btn.getBoundingClientRect();
+  dd.style.position = 'fixed';
+  dd.style.top  = r.bottom + 'px';
+  dd.style.left = r.left   + 'px';
+  dd.style.right = 'auto';
+  dd.style.zIndex = '9999';
 
   dd.classList.add('open');
-  edMenuOpen=id;
-  if(id==='nav')edUpdateNavPages();
+  btn.classList.add('open');
+  edMenuOpen = id;
+  if(id === 'nav') edUpdateNavPages();
+
+  // Corrección de desbordamiento lateral (tras render)
+  requestAnimationFrame(() => {
+    const ddR = dd.getBoundingClientRect();
+    if(ddR.right > window.innerWidth - 4){
+      dd.style.left = Math.max(4, r.right - ddR.width) + 'px';
+    }
+  });
 }
 
 function edDeactivateDrawTool(){
@@ -1391,7 +1408,7 @@ function EditorView_init(){
         edDeactivateDrawTool();
       }
     }
-    // Close menus when clicking outside menubar
+    // Cerrar menús al tocar fuera (los dropdowns pueden estar en body)
     if(!e.target.closest('#edMenuBar') && !e.target.closest('.ed-dropdown')){
       edCloseMenus();
     }
