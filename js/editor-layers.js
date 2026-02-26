@@ -46,6 +46,7 @@ function _lyRender() {
   list.innerHTML = '';
 
   const page     = edPages[edCurrentPage];
+  if(!page.textMode) page.textMode = 'immediate'; // fallback para proyectos antiguos
   const isSeq    = page.textMode === 'sequential';
   const imgPairs = edLayers.map((l,i) => ({l,i})).filter(({l}) => l.type==='image');
   const textObjs = edLayers.filter(l => l.type==='text' || l.type==='bubble');
@@ -225,11 +226,7 @@ function _lyBuildImgItem(la, realIdx, selected) {
   name.textContent = 'Imagen ' + (realIdx + 1);
   info.appendChild(name);
 
-  const isTouchDevice = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
-  if (!isTouchDevice) {
-    const opRow = _lyMakeOpRow(la.opacity ?? 1, val => { la.opacity = val; edRedraw(); });
-    info.appendChild(opRow);
-  }
+  // Opacidad ahora en el panel de propiedades de imagen (⚙)
   item.appendChild(info);
 
   /* Eliminar */

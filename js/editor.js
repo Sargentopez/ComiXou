@@ -740,14 +740,16 @@ function edOnMove(e){
     const la=edLayers[edSelectedIdx],asp=edInitialSize.height/edInitialSize.width;
     const dx=c.nx-edInitialSize.x;
     let nw=edResizeCorner==='tl'||edResizeCorner==='bl'?edInitialSize.width-dx:edInitialSize.width+dx;
-    if(nw>0.02){la.width=nw;la.height=nw*asp;}edRedraw();edUpdateGearPos();return;
+    if(nw>0.02){la.width=nw;la.height=nw*asp;}edRedraw();
+    edHideGearIcon(); // ocultar durante resize
+    return;
   }
   if(!edIsDragging||edSelectedIdx<0)return;
   const la=edLayers[edSelectedIdx];
   la.x=Math.min(Math.max(c.nx-edDragOffX,la.width/2),1-la.width/2);
   la.y=Math.min(Math.max(c.ny-edDragOffY,la.height/2),1-la.height/2);
   edRedraw();
-  edUpdateGearPos();
+  edHideGearIcon(); // ocultar durante drag
 }
 function edOnEnd(e){
   // Si quedan menos de 2 dedos, terminar pinch
@@ -756,8 +758,16 @@ function edOnEnd(e){
     return;
   }
   if(edPainting){edPainting=false;edSaveDrawData();}
-  if(edIsDragging||edIsResizing||edIsTailDragging) edPushHistory();
+  const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
+  if(wasDragging) edPushHistory();
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
+  // Mostrar gear icon con delay tras soltar
+  if(wasDragging && edSelectedIdx >= 0){
+    clearTimeout(window._edGearDelay);
+    window._edGearDelay = setTimeout(() => {
+      if(edSelectedIdx >= 0) edShowGearIcon(edSelectedIdx);
+    }, 350);
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -964,10 +974,14 @@ function edRenderOptionsPanel(mode){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
         <input type="number" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
+      </div>
+      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+        <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
       </div>`;
     }
     html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between">
-      <button class="op-btn danger" id="pp-del">🗑️ Eliminar objeto</button>
+      <button class="op-btn danger" id="pp-del"><span style="color:#e63030;font-weight:900">✕</span> Eliminar objeto</button>
       <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 12px;font-weight:900;font-size:.82rem;cursor:pointer">✓ OK</button>
     </div>`;
 
@@ -1008,6 +1022,11 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del')?.addEventListener('click',edDeleteSelected);
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
+    $('pp-opacity')?.addEventListener('input',e=>{
+      la.opacity = e.target.value/100;
+      const v=$('pp-opacity-val'); if(v) v.textContent=e.target.value+'%';
+      edRedraw();
+    });
     // Si el texto es placeholder, seleccionar todo para sobreescribir directamente
     const ppText = $('pp-text');
     if(ppText && (edLayers[edSelectedIdx]?.text === 'Escribe aquí')){
@@ -1109,9 +1128,29 @@ function edRenderPage(page){
   page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(ctx,tmp));
   return tmp.toDataURL('image/jpeg',0.85);
 }
+function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
+  // Redimensiona y comprime una imagen a JPEG para ahorrar espacio en localStorage
+  if(!src || src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña
+  try {
+    const img = new Image();
+    img.src = src;
+    if(!img.complete || img.naturalWidth === 0) return src; // no cargada aún
+    const ratio = Math.min(1, maxPx / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth  * ratio);
+    const h = Math.round(img.naturalHeight * ratio);
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(img, 0, 0, w, h);
+    return cv.toDataURL('image/jpeg', quality);
+  } catch(e) { return src; }
+}
+
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
-  if(l.type==='image')return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:l.src,...op};
+  if(l.type==='image'){
+    const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
+    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
+  }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,...op};
@@ -1125,11 +1164,16 @@ function edDeserLayer(d){
   if(d.type==='bubble'){const l=new BubbleLayer(d.text,d.x,d.y);Object.assign(l,d);
     if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};return l;}
   if(d.type==='image'){
-    const img=new Image();img.src=d.src;
-    const l=new ImageLayer(img,d.x,d.y,d.width);
-    l.height=d.height;l.rotation=d.rotation||0;
-    if(d.opacity!==undefined)l.opacity=d.opacity;
-    img.onload=()=>{edRedraw();};return l;
+    const l=new ImageLayer(null,d.x,d.y,d.width);
+    l.height=d.height; l.rotation=d.rotation||0; l.src=d.src||'';
+    if(d.opacity!==undefined) l.opacity=d.opacity;
+    if(d.src){
+      const img=new Image();
+      img.onload=()=>{ l.img=img; l.src=img.src; edRedraw(); };
+      img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
+      img.src=d.src;
+    }
+    return l;
   }
   return null;
 }
@@ -1160,6 +1204,7 @@ let edViewerIdx=0;
 function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
 function edOpenViewer(){
+  edHideGearIcon();  // ocultar gear al abrir visor
   edViewerIdx=edCurrentPage;
   edViewerTextStep=0;
   $('editorViewer')?.classList.add('open');
@@ -1223,25 +1268,33 @@ function _edViewerKey(e){
 
 // Tap en el visor → mostrar/ocultar controles
 let _viewerTapBound = false, _viewerHideTimer;
-function edInitViewerTap(){
+function edShowViewerCtrls(){
   const ctrls = $('viewerControls');
+  if(!ctrls) return;
+  ctrls.classList.remove('hidden');
+  clearTimeout(_viewerHideTimer);
+  _viewerHideTimer = setTimeout(()=>ctrls.classList.add('hidden'), 3500);
+}
+function edInitViewerTap(){
   const viewer = $('editorViewer');
-  if(!ctrls || !viewer) return;
-  function showCtrls(){
-    ctrls.classList.remove('hidden');
-    clearTimeout(_viewerHideTimer);
-    _viewerHideTimer = setTimeout(()=>ctrls.classList.add('hidden'), 3500);
-  }
+  if(!viewer) return;
+  edShowViewerCtrls();
   if(!_viewerTapBound){
     _viewerTapBound = true;
-    viewer.addEventListener('click', e=>{
-      if(!e.target.closest('.viewer-controls')) showCtrls();
+    viewer.addEventListener('pointerup', e=>{
+      if(!e.target.closest('.viewer-controls')) edShowViewerCtrls();
     });
   }
-  showCtrls();
 }
 function edCloseViewer(){
   $('editorViewer')?.classList.remove('open');
+  // Restaurar gear si hay objeto seleccionado
+  if(edSelectedIdx >= 0){
+    clearTimeout(window._edGearDelay);
+    window._edGearDelay = setTimeout(() => {
+      if(edSelectedIdx >= 0) edShowGearIcon(edSelectedIdx);
+    }, 200);
+  }
   if(_viewerKeyHandler){
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;
@@ -1443,8 +1496,10 @@ function EditorView_init(){
   edInitFloatDrag();
 
   // ── VISOR ──
-  $('viewerClose')?.addEventListener('click',edCloseViewer);
-  $('viewerPrev')?.addEventListener('click',()=>{
+  $('viewerClose')?.addEventListener('pointerup', e=>{ e.stopPropagation(); edCloseViewer(); });
+  $('viewerPrev')?.addEventListener('pointerup', e=>{
+    e.stopPropagation();
+    edShowViewerCtrls();
     const page=edPages[edViewerIdx];
     if(page?.textMode==='sequential' && edViewerTextStep > 0){
       edViewerTextStep--; edUpdateViewer(); return;
@@ -1457,7 +1512,9 @@ function EditorView_init(){
       edUpdateViewer();
     }
   });
-  $('viewerNext')?.addEventListener('click',()=>{
+  $('viewerNext')?.addEventListener('pointerup', e=>{
+    e.stopPropagation();
+    edShowViewerCtrls();
     const page=edPages[edViewerIdx];
     const textLayers=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     if(page?.textMode==='sequential' && edViewerTextStep < textLayers.length){
