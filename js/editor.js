@@ -25,6 +25,7 @@ let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
+let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 
 const ED_BASE = 360;
 const $ = id => document.getElementById(id);
@@ -455,7 +456,7 @@ function edDrawSel(){
    PÁGINAS
    ══════════════════════════════════════════ */
 function edAddPage(){
-  edPages.push({layers:[],drawData:null,textLayerOpacity:1});
+  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
   edLoadPage(edPages.length-1);
   edToast('Página añadida');
 }
@@ -798,7 +799,18 @@ function edMoveBrush(e){
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
-  document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+  document.querySelectorAll('.ed-dropdown').forEach(d=>{
+    d.classList.remove('open');
+    // Devolver al padre original si fue movido a body
+    if(d._origParent && d.parentNode === document.body){
+      d._origParent.appendChild(d);
+    }
+    d.style.removeProperty('position');
+    d.style.removeProperty('top');
+    d.style.removeProperty('left');
+    d.style.removeProperty('right');
+    d.style.removeProperty('z-index');
+  });
   document.querySelectorAll('.ed-menu-btn').forEach(b=>b.classList.remove('open'));
   edMenuOpen=null;
 }
@@ -806,14 +818,35 @@ function edCloseMenus(){
 function edToggleMenu(id){
   if(edMenuOpen===id){edCloseMenus();return;}
   edCloseMenus();
-  // Deactivate draw/eraser when opening any menu
   if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
   const dd=$('dd-'+id);if(!dd)return;
-  dd.classList.add('open');
   const btn=document.querySelector(`[data-menu="${id}"]`);
-  if(btn)btn.classList.add('open');
-  edMenuOpen=id;
-  if(id==='nav')edUpdateNavPages();
+  if(!btn)return;
+
+  // Mover el dropdown a body para escapar de cualquier overflow/stacking context
+  dd._origParent = dd._origParent || dd.parentNode;
+  document.body.appendChild(dd);
+
+  // Posicionar con fixed relativo al botón
+  const r = btn.getBoundingClientRect();
+  dd.style.position = 'fixed';
+  dd.style.top  = r.bottom + 'px';
+  dd.style.left = r.left   + 'px';
+  dd.style.right = 'auto';
+  dd.style.zIndex = '9999';
+
+  dd.classList.add('open');
+  btn.classList.add('open');
+  edMenuOpen = id;
+  if(id === 'nav') edUpdateNavPages();
+
+  // Corrección de desbordamiento lateral (tras render)
+  requestAnimationFrame(() => {
+    const ddR = dd.getBoundingClientRect();
+    if(ddR.right > window.innerWidth - 4){
+      dd.style.left = Math.max(4, r.right - ddR.width) + 'px';
+    }
+  });
 }
 
 function edDeactivateDrawTool(){
@@ -1063,7 +1096,7 @@ function edSaveProject(){
     panels,
     editorData:{
       orientation:edOrientation,
-      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1})),
+      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'immediate'})),
     },
     updatedAt:new Date().toISOString(),
   });
@@ -1111,11 +1144,12 @@ function edLoadProject(id){
       drawData:pd.drawData||null,
       layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
       textLayerOpacity:pd.textLayerOpacity??1,
+      textMode:pd.textMode||'immediate',
     }));
   }else{
-    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1}];
+    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'}];
   }
-  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1});
+  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
   edCurrentPage=0;edLayers=edPages[0].layers;
 }
 
@@ -1127,6 +1161,7 @@ function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
 function edOpenViewer(){
   edViewerIdx=edCurrentPage;
+  edViewerTextStep=0;
   $('editorViewer')?.classList.add('open');
   edUpdateViewerSize();
   edUpdateViewer();
@@ -1161,10 +1196,25 @@ function _edViewerKey(e){
   if(!v || !v.classList.contains('open')) return;
   if(e.key === 'ArrowRight' || e.key === 'ArrowDown'){
     e.preventDefault();
-    if(edViewerIdx < edPages.length-1){ edViewerIdx++; edUpdateViewer(); }
+    const page=edPages[edViewerIdx];
+    const tl=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+      edViewerTextStep++; edUpdateViewer();
+    } else if(edViewerIdx < edPages.length-1){
+      edViewerIdx++; edViewerTextStep=0; edUpdateViewer();
+    }
   } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
     e.preventDefault();
-    if(edViewerIdx > 0){ edViewerIdx--; edUpdateViewer(); }
+    const page=edPages[edViewerIdx];
+    if(page?.textMode==='sequential' && edViewerTextStep > 0){
+      edViewerTextStep--; edUpdateViewer();
+    } else if(edViewerIdx > 0){
+      edViewerIdx--;
+      const pp=edPages[edViewerIdx];
+      const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+      edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+      edUpdateViewer();
+    }
   } else if(e.key === 'Escape'){
     e.preventDefault();
     edCloseViewer();
@@ -1199,11 +1249,42 @@ function edCloseViewer(){
 }
 function edUpdateViewer(){
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
-  edViewerCtx.fillStyle='#fff';edViewerCtx.fillRect(0,0,edViewerCanvas.width,edViewerCanvas.height);
-  page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(edViewerCtx,edViewerCanvas));
-  page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(edViewerCtx,edViewerCanvas));
-  if(page.drawData){const img=new Image();img.onload=()=>edViewerCtx.drawImage(img,0,0);img.src=page.drawData;}
-  const cnt=$('viewerCounter');if(cnt)cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
+  const ctx=edViewerCtx;
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,edViewerCanvas.width,edViewerCanvas.height);
+
+  // Imágenes siempre
+  page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,edViewerCanvas));
+
+  // Dibujo libre
+  if(page.drawData){
+    const img=new Image();
+    img.onload=()=>{
+      ctx.drawImage(img,0,0);
+      _edViewerDrawTexts(page, ctx);
+    };
+    img.src=page.drawData;
+  } else {
+    _edViewerDrawTexts(page, ctx);
+  }
+
+  // Contador
+  const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+  const isSeq = page.textMode === 'sequential';
+  const cnt=$('viewerCounter');
+  if(cnt){
+    if(isSeq && textLayers.length > 0){
+      cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep}/${textLayers.length}`;
+    } else {
+      cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
+    }
+  }
+}
+
+function _edViewerDrawTexts(page, ctx){
+  const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+  const isSeq = page.textMode === 'sequential';
+  const toShow = isSeq ? textLayers.slice(0, edViewerTextStep) : textLayers;
+  toShow.forEach(l=>l.draw(ctx, edViewerCanvas));
 }
 
 /* ══════════════════════════════════════════
@@ -1249,6 +1330,9 @@ function EditorView_init(){
   edHideGearIcon();
   const staleToast = $('edToast');
   if(staleToast){ staleToast.classList.remove('show'); clearTimeout(staleToast._t); }
+  // Ocultar también el toast global (ej: "Bienvenido/a" del login)
+  const globalToast = document.getElementById('toast');
+  if(globalToast){ globalToast.classList.remove('show'); clearTimeout(globalToast._tid); }
   edCanvas=$('editorCanvas');
   // Habilitar botón Capas
   document.querySelector('[data-menu="layers"]')?.removeAttribute('disabled');
@@ -1282,9 +1366,11 @@ function EditorView_init(){
   $('edSaveBtn')?.addEventListener('click',edSaveProject);
   $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
 
-  // ── MENÚ: botones dropdown ──
+  // ── MENÚ: botones dropdown (excluir layers y nav que tienen overlays propios) ──
   document.querySelectorAll('[data-menu]').forEach(btn=>{
-    btn.addEventListener('click',e=>{e.stopPropagation();edToggleMenu(btn.dataset.menu);});
+    const id = btn.dataset.menu;
+    if(id === 'layers' || id === 'nav') return; // tienen su propio handler
+    btn.addEventListener('pointerup',e=>{e.stopPropagation();edToggleMenu(id);});
   });
 
   // ── INSERTAR ──
@@ -1318,13 +1404,14 @@ function EditorView_init(){
 
   // ── NAVEGAR (Hoja → abre overlay) ──
   // El botón Hoja ▾ del menú abre el overlay de hojas
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('[data-menu="nav"]');
-    if (!btn) return;
-    e.stopPropagation();
-    edCloseMenus();
-    edOpenPages();
-  });
+  const _navBtn = document.querySelector('[data-menu="nav"]');
+  if(_navBtn){
+    _navBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      edCloseMenus();
+      edOpenPages();
+    });
+  }
   // Bindings del dropdown pequeño (ya no se usa, pero por si acaso)
   $('dd-addpage')?.addEventListener('click',()=>{edAddPage();edCloseMenus();});
   $('dd-delpage')?.addEventListener('click',()=>{edDeletePage();edCloseMenus();});
@@ -1339,13 +1426,14 @@ function EditorView_init(){
   $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
 
   // ── CAPAS ──
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('[data-menu="layers"]');
-    if (!btn) return;
-    e.stopPropagation();
-    edCloseMenus();
-    edOpenLayers();
-  });
+  const _layersBtn = document.querySelector('[data-menu="layers"]');
+  if(_layersBtn){
+    _layersBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      edCloseMenus();
+      edOpenLayers();
+    });
+  }
 
   // ── MINIMIZAR ──
   $('edUndoBtn')?.addEventListener('click', edUndo);
@@ -1356,8 +1444,29 @@ function EditorView_init(){
 
   // ── VISOR ──
   $('viewerClose')?.addEventListener('click',edCloseViewer);
-  $('viewerPrev')?.addEventListener('click',()=>{if(edViewerIdx>0){edViewerIdx--;edUpdateViewer();}});
-  $('viewerNext')?.addEventListener('click',()=>{if(edViewerIdx<edPages.length-1){edViewerIdx++;edUpdateViewer();}});
+  $('viewerPrev')?.addEventListener('click',()=>{
+    const page=edPages[edViewerIdx];
+    if(page?.textMode==='sequential' && edViewerTextStep > 0){
+      edViewerTextStep--; edUpdateViewer(); return;
+    }
+    if(edViewerIdx>0){
+      edViewerIdx--;
+      const prevPage=edPages[edViewerIdx];
+      const prevTexts=prevPage?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+      edViewerTextStep = prevPage?.textMode==='sequential' ? prevTexts.length : 0;
+      edUpdateViewer();
+    }
+  });
+  $('viewerNext')?.addEventListener('click',()=>{
+    const page=edPages[edViewerIdx];
+    const textLayers=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    if(page?.textMode==='sequential' && edViewerTextStep < textLayers.length){
+      edViewerTextStep++; edUpdateViewer(); return;
+    }
+    if(edViewerIdx<edPages.length-1){
+      edViewerIdx++; edViewerTextStep=0; edUpdateViewer();
+    }
+  });
 
   // ── MODAL PROYECTO ──
   $('edMCancel')?.addEventListener('click',edCloseProjectModal);
@@ -1376,7 +1485,7 @@ function EditorView_init(){
         edDeactivateDrawTool();
       }
     }
-    // Close menus when clicking outside menubar
+    // Cerrar menús al tocar fuera (los dropdowns pueden estar en body)
     if(!e.target.closest('#edMenuBar') && !e.target.closest('.ed-dropdown')){
       edCloseMenus();
     }
@@ -1414,7 +1523,7 @@ function edLoadFromJSON(file){
           drawData:pd.drawData||null,
           layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
         }));
-        if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1});
+        if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
         edCurrentPage=0;edLayers=edPages[0].layers;
         edSetOrientation(edOrientation);
         const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title;

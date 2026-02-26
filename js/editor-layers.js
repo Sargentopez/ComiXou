@@ -1,15 +1,5 @@
 /* ============================================================
-   editor-layers.js — Panel de capas v2 (arquitectura B)
-
-   Estructura visual del panel:
-   ┌─────────────────────────────────┐
-   │  CAPA TEXTOS  [opacidad] [ojo]  │  ← siempre arriba, no se mueve
-   │    · Bocadillo 1                │
-   │    · Texto 2                    │
-   ├─────────────────────────────────┤
-   │  Imagen 1   [op] [⠿] [🗑]      │  ← reordenables entre sí
-   │  Imagen 2   [op] [⠿] [🗑]      │
-   └─────────────────────────────────┘
+   editor-layers.js — Panel de capas v3
    ============================================================ */
 
 let _lyDragIdx  = null;
@@ -30,23 +20,12 @@ function edOpenLayers() {
         <h2 class="ed-fulloverlay-title">Capas</h2>
         <button class="ed-fulloverlay-close" id="edLayersClose">✕</button>
       </div>
-      <p class="ed-fulloverlay-hint">La capa de textos siempre está encima · arrastra las imágenes para reordenar</p>
       <div class="ed-layers-list" id="edLayersList"></div>
-      <div class="ed-fulloverlay-actions">
-        <button class="ed-btn-sec" id="edLayersAddText">+ Texto</button>
-        <button class="ed-btn-sec" id="edLayersAddBubble">+ Bocadillo</button>
-        <button class="ed-btn-sec" id="edLayersAddImg">+ Imagen</button>
-      </div>
     </div>`;
 
   document.body.appendChild(overlay);
   _lyRender();
-
   overlay.querySelector('#edLayersClose').addEventListener('click', edCloseLayers);
-  overlay.querySelector('#edLayersAddText').addEventListener('click', () => { edCloseLayers(); edAddText(); });
-  overlay.querySelector('#edLayersAddBubble').addEventListener('click', () => { edCloseLayers(); edAddBubble(); });
-  overlay.querySelector('#edLayersAddImg').addEventListener('click', () => { edCloseLayers(); document.getElementById('edImgInput')?.click(); });
-
   requestAnimationFrame(() => overlay.classList.add('open'));
 }
 
@@ -65,92 +44,84 @@ function _lyRender() {
   if (!list) return;
   list.innerHTML = '';
 
-  const page      = edPages[edCurrentPage];
-  const imgPairs  = edLayers.map((l,i)=>({l,i})).filter(({l})=>l.type==='image');
-  const textObjs  = edLayers.filter(l=>l.type==='text'||l.type==='bubble');
+  const imgPairs = edLayers.map((l,i) => ({l,i})).filter(({l}) => l.type==='image');
+  const textObjs = edLayers.filter(l => l.type==='text' || l.type==='bubble');
 
-  /* ── SECCIÓN TEXTOS (fija arriba) ── */
-  const textSection = _lyMakeSection(
-    '<span class="ed-ly-icon">✏️</span> <strong>Capa de Textos</strong> <span class="ed-layer-fixed-badge">siempre encima</span>',
-    true
-  );
+  /* ── SECCIÓN TEXTOS ── */
+  const tTitle = document.createElement('div');
+  tTitle.className = 'ed-ly-section-title';
+  tTitle.textContent = 'Textos';
+  list.appendChild(tTitle);
 
-  /* Control de opacidad global del grupo */
-  const tOpRow = _lyMakeOpRow(page.textLayerOpacity ?? 1, val => {
-    page.textLayerOpacity = val;
-    edRedraw();
+  /* Botones modo texto: inmediatos / secuenciales */
+  const page = edPages[edCurrentPage];
+  const textModeRow = document.createElement('div');
+  textModeRow.className = 'ed-ly-textmode-row';
+
+  const btnImm = document.createElement('button');
+  btnImm.className = 'ed-ly-mode-btn' + ((!page.textMode || page.textMode === 'immediate') ? ' active' : '');
+  btnImm.textContent = 'Inmediatos';
+  btnImm.title = 'Todos los textos aparecen a la vez';
+  btnImm.addEventListener('pointerup', () => {
+    page.textMode = 'immediate';
+    btnImm.classList.add('active');
+    btnSeq.classList.remove('active');
+    _lyRender();
   });
-  textSection.querySelector('.ed-layer-section-header').appendChild(tOpRow);
+
+  const btnSeq = document.createElement('button');
+  btnSeq.className = 'ed-ly-mode-btn' + (page.textMode === 'sequential' ? ' active' : '');
+  btnSeq.textContent = 'Secuenciales';
+  btnSeq.title = 'Las flechas del visor revelan los textos uno a uno';
+  btnSeq.addEventListener('pointerup', () => {
+    page.textMode = 'sequential';
+    btnSeq.classList.add('active');
+    btnImm.classList.remove('active');
+    _lyRender();
+  });
+
+  textModeRow.appendChild(btnImm);
+  textModeRow.appendChild(btnSeq);
+  list.appendChild(textModeRow);
 
   if (textObjs.length === 0) {
     const e = document.createElement('p');
     e.className = 'ed-layer-sub-empty';
     e.textContent = 'Sin textos ni bocadillos';
-    textSection.appendChild(e);
+    list.appendChild(e);
   } else {
     textObjs.forEach(la => {
       const realIdx = edLayers.indexOf(la);
-      textSection.appendChild(_lyBuildTextRow(la, realIdx, realIdx === edSelectedIdx));
+      list.appendChild(_lyBuildTextRow(la, realIdx, realIdx === edSelectedIdx));
     });
   }
-  list.appendChild(textSection);
 
   /* ── SEPARADOR ── */
   const sep = document.createElement('div');
   sep.className = 'ed-layer-sep';
   list.appendChild(sep);
 
-  /* ── SECCIÓN IMÁGENES (reordenables) ── */
-  const imgSection = _lyMakeSection(
-    '<span class="ed-ly-icon">🖼️</span> <strong>Imágenes</strong> <span class="ed-layer-hint-small">arrastra para reordenar</span>',
-    false
-  );
+  /* ── SECCIÓN IMÁGENES ── */
+  const iTitle = document.createElement('div');
+  iTitle.className = 'ed-ly-section-title';
+  iTitle.textContent = 'Imágenes';
+  list.appendChild(iTitle);
 
   if (imgPairs.length === 0) {
     const e = document.createElement('p');
     e.className = 'ed-layer-sub-empty';
     e.textContent = 'Sin imágenes';
-    imgSection.appendChild(e);
+    list.appendChild(e);
   } else {
-    /* Invertir: la última en edLayers = encima = primero en la lista */
     [...imgPairs].reverse().forEach(({l, i}) => {
-      imgSection.appendChild(_lyBuildImgItem(l, i, i === edSelectedIdx));
+      list.appendChild(_lyBuildImgItem(l, i, i === edSelectedIdx));
     });
   }
-  list.appendChild(imgSection);
-}
-
-function _lyMakeSection(titleHTML, isText) {
-  const sec = document.createElement('div');
-  sec.className = 'ed-layer-section';
-  const hdr = document.createElement('div');
-  hdr.className = 'ed-layer-section-header' + (isText ? ' ed-layer-text-header' : '');
-  hdr.innerHTML = titleHTML;
-  sec.appendChild(hdr);
-  return sec;
-}
-
-function _lyMakeOpRow(initVal, onChange) {
-  const wrap = document.createElement('label');
-  wrap.className = 'ed-layer-op-row';
-  const slider = document.createElement('input');
-  slider.type = 'range'; slider.min = 0; slider.max = 100;
-  slider.value = Math.round(initVal * 100);
-  slider.className = 'ed-layer-slider';
-  const val = document.createElement('span');
-  val.className = 'ed-layer-op-val';
-  val.textContent = slider.value + '%';
-  slider.addEventListener('input', () => {
-    val.textContent = slider.value + '%';
-    onChange(slider.value / 100);
-  });
-  wrap.appendChild(slider);
-  wrap.appendChild(val);
-  return wrap;
 }
 
 /* ──────────────────────────────────────────
    FILA DE TEXTO/BOCADILLO
+   Con botones de orden: ↑ subir / ↓ bajar dentro del grupo de textos
 ────────────────────────────────────────── */
 function _lyBuildTextRow(la, realIdx, selected) {
   const row = document.createElement('div');
@@ -161,16 +132,51 @@ function _lyBuildTextRow(la, realIdx, selected) {
   thumb.width = 56; thumb.height = 42;
   _lyDrawThumb(thumb, la);
   thumb.title = 'Seleccionar';
-  thumb.addEventListener('click', () => { edSelectedIdx = realIdx; edRedraw(); edCloseLayers(); });
+  thumb.addEventListener('pointerup', () => {
+    edSelectedIdx = realIdx;
+    edRedraw();
+    edCloseLayers();
+  });
 
-  const icon = la.type === 'bubble' ? '💬' : 'T';
   const lbl = document.createElement('span');
   lbl.className = 'ed-layer-name';
-  lbl.textContent = icon + ' ' + (la.text || '').substring(0, 22);
+  const page2 = edPages[edCurrentPage];
+  const textIdxsAll = edLayers.map((l,i)=>({l,i})).filter(({l})=>l.type==='text'||l.type==='bubble');
+  const seqPos = textIdxsAll.findIndex(({i}) => i === realIdx);
+  const seqLabel = page2.textMode === 'sequential' ? ` [${seqPos + 1}]` : '';
+  lbl.textContent = (la.type === 'bubble' ? '💬 ' : 'T ') + (la.text || '').substring(0, 20) + seqLabel;
 
+  /* Botones de orden dentro del grupo texto */
+  const orderWrap = document.createElement('div');
+  orderWrap.className = 'ed-ly-order-btns';
+
+  const upBtn = document.createElement('button');
+  upBtn.className = 'ed-ly-order-btn';
+  upBtn.title = 'Subir';
+  upBtn.textContent = '↑';
+  upBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _lyMoveText(realIdx, -1);
+  });
+
+  const downBtn = document.createElement('button');
+  downBtn.className = 'ed-ly-order-btn';
+  downBtn.title = 'Bajar';
+  downBtn.textContent = '↓';
+  downBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _lyMoveText(realIdx, +1);
+  });
+
+  orderWrap.appendChild(upBtn);
+  orderWrap.appendChild(downBtn);
+
+  /* Eliminar */
   const del = document.createElement('button');
-  del.className = 'ed-layer-del'; del.title = 'Eliminar'; del.innerHTML = '🗑';
-  del.addEventListener('click', e => {
+  del.className = 'ed-layer-del';
+  del.title = 'Eliminar';
+  del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
+  del.addEventListener('pointerup', e => {
     e.stopPropagation();
     edLayers.splice(realIdx, 1);
     if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
@@ -179,8 +185,34 @@ function _lyBuildTextRow(la, realIdx, selected) {
 
   row.appendChild(thumb);
   row.appendChild(lbl);
+  row.appendChild(orderWrap);
   row.appendChild(del);
   return row;
+}
+
+/* Mover un texto/bocadillo dentro del subgrupo de textos en edLayers */
+function _lyMoveText(realIdx, dir) {
+  // Obtener solo los índices de texto en edLayers, en orden
+  const textIdxs = edLayers.map((l,i) => ({l,i}))
+    .filter(({l}) => l.type==='text' || l.type==='bubble')
+    .map(({i}) => i);
+
+  const pos = textIdxs.indexOf(realIdx);
+  const targetPos = pos + dir;
+  if (targetPos < 0 || targetPos >= textIdxs.length) return;
+
+  const targetRealIdx = textIdxs[targetPos];
+
+  // Intercambiar en edLayers
+  const tmp = edLayers[realIdx];
+  edLayers[realIdx] = edLayers[targetRealIdx];
+  edLayers[targetRealIdx] = tmp;
+
+  // Actualizar selección
+  if (edSelectedIdx === realIdx) edSelectedIdx = targetRealIdx;
+  else if (edSelectedIdx === targetRealIdx) edSelectedIdx = realIdx;
+
+  edPushHistory(); edRedraw(); _lyRender();
 }
 
 /* ──────────────────────────────────────────
@@ -201,20 +233,33 @@ function _lyBuildImgItem(la, realIdx, selected) {
   thumb.width = 80; thumb.height = 60;
   _lyDrawThumb(thumb, la);
   thumb.title = 'Seleccionar';
-  thumb.addEventListener('click', () => { edSelectedIdx = realIdx; edRedraw(); edCloseLayers(); });
+  thumb.addEventListener('pointerup', () => {
+    edSelectedIdx = realIdx;
+    edRedraw();
+    edCloseLayers();
+  });
 
   const info = document.createElement('div');
   info.className = 'ed-layer-info';
   const name = document.createElement('span');
   name.className = 'ed-layer-name';
   name.textContent = 'Imagen ' + (realIdx + 1);
-  const opRow = _lyMakeOpRow(la.opacity ?? 1, val => { la.opacity = val; edRedraw(); });
-  info.appendChild(name);
-  info.appendChild(opRow);
+
+  /* Opacidad — solo en no táctil */
+  const isTouchDevice = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+  if (!isTouchDevice) {
+    const opRow = _lyMakeOpRow(la.opacity ?? 1, val => { la.opacity = val; edRedraw(); });
+    info.appendChild(name);
+    info.appendChild(opRow);
+  } else {
+    info.appendChild(name);
+  }
 
   const del = document.createElement('button');
-  del.className = 'ed-layer-del'; del.title = 'Eliminar'; del.innerHTML = '🗑';
-  del.addEventListener('click', e => {
+  del.className = 'ed-layer-del';
+  del.title = 'Eliminar';
+  del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
+  del.addEventListener('pointerup', e => {
     e.stopPropagation();
     edLayers.splice(realIdx, 1);
     if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
@@ -250,6 +295,28 @@ function _lyBuildImgItem(la, realIdx, selected) {
 
   _lyBindTouchDragImg(item, realIdx);
   return item;
+}
+
+/* ──────────────────────────────────────────
+   OPACIDAD (solo desktop)
+────────────────────────────────────────── */
+function _lyMakeOpRow(initVal, onChange) {
+  const wrap = document.createElement('label');
+  wrap.className = 'ed-layer-op-row';
+  const slider = document.createElement('input');
+  slider.type = 'range'; slider.min = 0; slider.max = 100;
+  slider.value = Math.round(initVal * 100);
+  slider.className = 'ed-layer-slider';
+  const val = document.createElement('span');
+  val.className = 'ed-layer-op-val';
+  val.textContent = slider.value + '%';
+  slider.addEventListener('input', () => {
+    val.textContent = slider.value + '%';
+    onChange(slider.value / 100);
+  });
+  wrap.appendChild(slider);
+  wrap.appendChild(val);
+  return wrap;
 }
 
 /* ──────────────────────────────────────────
@@ -291,7 +358,7 @@ function _lyDrawThumb(canvas, la) {
 }
 
 /* ──────────────────────────────────────────
-   TOUCH DRAG MOBILE
+   TOUCH DRAG MOBILE (imágenes)
 ────────────────────────────────────────── */
 function _lyBindTouchDragImg(item, realIdx) {
   let startIdx;

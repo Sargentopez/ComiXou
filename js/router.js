@@ -112,7 +112,11 @@ const Router = (() => {
     const hash = window.location.hash.replace('#', '');
     if (hash) {
       const [name, id] = hash.split('/');
-      if (views[name]) { _render(name, id ? { id } : {}); return; }
+      // Nunca restaurar login/register al arrancar — ir siempre a home
+      const noRestore = ['login', 'register'];
+      if (views[name] && !noRestore.includes(name)) {
+        _render(name, id ? { id } : {}); return;
+      }
     }
     _render('home', {});
   }

@@ -13,6 +13,10 @@ function showToast(msg, duration = 2500) {
   const t = document.getElementById('toast');
   if (!t) return;
   t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), duration);
+  t.classList.remove('show');
+  clearTimeout(t._tid);
+  requestAnimationFrame(() => {
+    t.classList.add('show');
+    t._tid = setTimeout(() => t.classList.remove('show'), duration);
+  });
 }

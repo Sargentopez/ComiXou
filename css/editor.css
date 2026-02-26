@@ -110,7 +110,7 @@ body.editor-page #appView {
   overflow-y: visible;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y;  /* pan-y también para no bloquear taps */
 }
 #edMenuScroll::-webkit-scrollbar { display: none; }
 
@@ -150,14 +150,13 @@ body.editor-page #appView {
 
 /* ── DROPDOWNS DEL MENÚ ── */
 .ed-dropdown {
-  position: absolute;
-  top: 100%; left: 0;
+  position: fixed;       /* JS lo mueve a body y pone top/left al abrir */
   min-width: 200px;
   background: var(--white);
   border: 2px solid var(--black);
   border-radius: var(--radius);
   box-shadow: 4px 4px 0 var(--black);
-  z-index: 9000;         /* por encima de TODO: topbar, canvas, options */
+  z-index: 9000;
   display: none;
   padding: 6px 0;
 }
@@ -603,7 +602,9 @@ body.editor-page #appView {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  scrollbar-width: none;        /* Firefox */
 }
+.ed-layers-list::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
 .ed-layers-empty {
   color: var(--gray-400);
@@ -771,45 +772,22 @@ body.editor-page #appView {
 .ed-page-action-btn:hover { color: var(--black); background: var(--gray-100); }
 .ed-page-del:hover { color: var(--red, #e63030) !important; background: #fff0f0 !important; }
 
-/* ── Arquitectura B: secciones del panel de capas ── */
-.ed-layer-section {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+/* ── Panel de capas v3 ── */
 
-.ed-layer-section-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: var(--gray-100);
-  font-size: 0.82rem;
-  flex-wrap: wrap;
+/* Título de sección: solo texto, sin marco */
+.ed-ly-section-title {
+  font-size: 0.78rem;
+  font-weight: 900;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 8px 4px 4px;
 }
-.ed-layer-text-header {
-  background: #fff8f0;
-  border: 1.5px solid #ffcc99;
-}
-
-.ed-layer-section-title { flex: 1; }
-.ed-layer-fixed-badge {
-  font-size: 0.65rem; font-weight: 700;
-  background: #ff6600; color: #fff;
-  padding: 2px 6px; border-radius: 10px;
-  white-space: nowrap;
-}
-.ed-layer-hint-small {
-  font-size: 0.68rem; color: var(--gray-400);
-  font-weight: 400;
-}
-.ed-ly-icon { font-size: 1rem; }
 
 .ed-layer-sep {
   height: 1.5px;
   background: var(--gray-200);
-  margin: 4px 0;
+  margin: 6px 0;
 }
 
 .ed-layer-sub-empty {
@@ -824,12 +802,12 @@ body.editor-page #appView {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
+  padding: 5px 6px;
   border-radius: 7px;
   border: 1.5px solid transparent;
   transition: border-color .12s, background .12s;
 }
-.ed-layer-text-row:hover   { background: var(--gray-50, #fafafa); }
+.ed-layer-text-row:hover    { background: var(--gray-50, #fafafa); }
 .ed-layer-text-row.selected { border-color: #ff6600; background: #fff8f4; }
 
 .ed-layer-thumb-sm {
@@ -841,3 +819,59 @@ body.editor-page #appView {
   cursor: pointer;
 }
 .ed-layer-thumb-sm:hover { border-color: #ff6600; }
+
+/* Botones de orden ↑↓ */
+.ed-ly-order-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.ed-ly-order-btn {
+  background: var(--gray-100);
+  border: 1.5px solid var(--gray-300);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 900;
+  width: 22px; height: 20px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--gray-600);
+  transition: background .1s, border-color .1s;
+}
+.ed-ly-order-btn:hover { background: var(--yellow); border-color: var(--black); color: var(--black); }
+
+/* Scroll solo en desktop (no táctil) */
+@media (hover: none) {
+  .ed-layer-slider { display: none; }
+  .ed-layer-op-val { display: none; }
+}
+
+/* ── Botones modo texto: inmediatos / secuenciales ── */
+.ed-ly-textmode-row {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.ed-ly-mode-btn {
+  flex: 1;
+  padding: 7px 10px;
+  border: 2px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  background: var(--gray-100);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.ed-ly-mode-btn:hover {
+  border-color: var(--gray-500);
+  color: var(--black);
+}
+.ed-ly-mode-btn.active {
+  border-color: #ff6600;
+  background: #fff4ec;
+  color: #ff6600;
+}
