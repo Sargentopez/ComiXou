@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v4-30';
+const CACHE = 'comixow-v5-1';
 const ASSETS = [
   './',
   './index.html',
@@ -18,6 +18,14 @@ const ASSETS = [
   './js/genres.js',
   './js/header.js',
   './js/home.js',
+  './js/editor-state.js',
+  './js/editor-canvas.js',
+  './js/editor-history.js',
+  './js/editor-input.js',
+  './js/editor-ui.js',
+  './js/editor-storage.js',
+  './js/editor-layers.js',
+  './js/editor-pages.js',
   './js/editor.js',
   './js/reader.js',
   './js/admin.js',
