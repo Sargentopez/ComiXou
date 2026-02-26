@@ -30,7 +30,7 @@ function ReaderView_init(params) {
   setupControls();
   showSwipeHint();
   I18n.applyAll();
-});
+}
 
 // ════════════════════════════════════════
 // CONSTRUIR VIÑETAS

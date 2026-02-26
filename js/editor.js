@@ -253,24 +253,44 @@ function edSetOrientation(o){
 /* ══════════════════════════════════════════
    HISTORIAL UNDO / REDO
    ══════════════════════════════════════════ */
+function _edLayersSnapshot(){
+  // Serializa las layers actuales de forma reproducible
+  return JSON.stringify(edLayers.map(l => {
+    const o = {};
+    // Solo propiedades de datos (no funciones, no ImageBitmap)
+    for(const k of ['type','x','y','width','height','rotation',
+                    'text','fontSize','fontFamily','color','backgroundColor',
+                    'borderColor','borderWidth','padding',
+                    'tail','tailStart','tailEnd','style','multipleCount']){
+      if(l[k] !== undefined) o[k] = l[k];
+    }
+    if(l.img) o._imgSrc = l.img.src || '';
+    return o;
+  }));
+}
+
 function edPushHistory(){
-  // Snapshot ligero: copia profunda de layers de la página actual + drawData
-  const snapshot = {
-    pageIdx: edCurrentPage,
-    layers: JSON.parse(JSON.stringify(edLayers.map(l => {
-      // Guardar propiedades serializables (no el ImageBitmap/img, sino src)
-      const o = Object.assign({}, l);
-      if(l.img) o._imgSrc = l.img.src || '';
-      delete o.img;
-      return o;
-    }))),
-    drawData: edPages[edCurrentPage]?.drawData || null
-  };
-  // Descartar redo si estamos en medio
+  const layersJSON = _edLayersSnapshot();
+  const drawData   = edPages[edCurrentPage]?.drawData || null;
+
+  // No guardar si es idéntico al último estado
+  if(edHistory.length > 0 && edHistoryIdx >= 0){
+    const last = edHistory[edHistoryIdx];
+    if(last.layersJSON === layersJSON && last.drawData === drawData) return;
+  }
+
+  // Descartar estados futuros (redo branch)
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
-  edHistory.push(snapshot);
-  if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
-  else edHistoryIdx++;
+
+  edHistory.push({ pageIdx: edCurrentPage, layersJSON, drawData });
+
+  // Mantener máximo: si se supera, eliminar el más antiguo y ajustar índice
+  if(edHistory.length > ED_MAX_HISTORY){
+    edHistory.shift();
+    // edHistoryIdx ya apunta al último porque acabamos de hacer push
+    // tras el shift el índice correcto es length-1
+  }
+  edHistoryIdx = edHistory.length - 1;
   edUpdateUndoRedoBtns();
 }
 
@@ -288,30 +308,43 @@ function edRedo(){
 
 function edApplyHistory(snapshot){
   if(!snapshot) return;
-  // Restaurar layers reconstruyendo los objetos correctamente
-  edLayers = snapshot.layers.map(o => {
+  const raw = JSON.parse(snapshot.layersJSON);
+
+  // Reconstruir capas y recopilar promesas de carga de imágenes
+  const imgPromises = [];
+  edLayers = raw.map(o => {
     let l;
-    if(o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
+    if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
     else if(o.type === 'image')  l = new ImageLayer(o.x, o.y);
     else return o;
-    Object.assign(l, o);
-    // Restaurar imagen
-    if(o.type === 'image' && o._imgSrc){
-      const img = new Image();
-      img.onload = () => { l.img = img; edRedraw(); };
-      img.src = o._imgSrc;
+    // Restaurar propiedades de datos
+    for(const k of Object.keys(o)){
+      if(k !== '_imgSrc') l[k] = o[k];
+    }
+    // Imagen: cargar antes de redibujar
+    if(o._imgSrc){
+      const p = new Promise(resolve => {
+        const img = new Image();
+        img.onload  = () => { l.img = img; resolve(); };
+        img.onerror = () => resolve(); // no bloquear si falla
+        img.src = o._imgSrc;
+      });
+      imgPromises.push(p);
     }
     return l;
   });
+
   if(edPages[snapshot.pageIdx]){
     edPages[snapshot.pageIdx].layers = edLayers;
     edPages[snapshot.pageIdx].drawData = snapshot.drawData;
   }
   edSelectedIdx = -1;
   edPanelUserClosed = false;
-  edRedraw();
   edUpdateUndoRedoBtns();
+
+  // Esperar todas las imágenes antes de redibujar
+  Promise.all(imgPromises).then(() => edRedraw());
 }
 
 function edUpdateUndoRedoBtns(){
@@ -396,20 +429,21 @@ function edUpdateFloatingIcons(){
 
   const la = edLayers[edSelectedIdx];
 
-  // Escala canvas interno → CSS pixels mostrados
-  // edCanvas.style.width/height son los px reales pintados en pantalla
-  const cssW = parseFloat(edCanvas.style.width)  || edCanvas.offsetWidth;
-  const cssH = parseFloat(edCanvas.style.height) || edCanvas.offsetHeight;
-  const scaleX = cssW / edCanvas.width;
-  const scaleY = cssH / edCanvas.height;
+  // Posición real del canvas y del wrap en viewport
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const wrapRect   = wrap.getBoundingClientRect();
 
-  // Posición del canvas dentro del wrap (marginTop lo pone edFitCanvas)
-  const canvasOffsetTop  = parseFloat(edCanvas.style.marginTop)  || 0;
-  const canvasOffsetLeft = parseFloat(edCanvas.style.marginLeft) || 0;
+  // Escala: pixels de canvas interno → CSS pixels en pantalla
+  const scaleX = canvasRect.width  / edCanvas.width;
+  const scaleY = canvasRect.height / edCanvas.height;
+
+  // Offset del canvas dentro del wrap (puede ser >0 por el centrado flexbox)
+  const canvasLeft = canvasRect.left - wrapRect.left;
+  const canvasTop  = canvasRect.top  - wrapRect.top;
 
   // Centro del objeto en px relativos al wrap
-  const cx = canvasOffsetLeft + la.x * edCanvas.width  * scaleX;
-  const cy = canvasOffsetTop  + la.y * edCanvas.height * scaleY;
+  const cx = canvasLeft + la.x * edCanvas.width  * scaleX;
+  const cy = canvasTop  + la.y * edCanvas.height * scaleY;
 
   // Mitad del objeto en px de pantalla
   const hw = la.width  * edCanvas.width  * scaleX / 2;
@@ -709,7 +743,10 @@ function edOnEnd(e){
     return;
   }
   if(edPainting){edPainting=false;edSaveDrawData();}
-  if(edIsDragging||edIsResizing||edIsTailDragging) edPushHistory();
+  // Solo guardar historial si algo realmente cambió (evita duplicados por tap)
+  if(edIsDragging||edIsResizing||edIsTailDragging){
+    edPushHistory();
+  }
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
 }
 

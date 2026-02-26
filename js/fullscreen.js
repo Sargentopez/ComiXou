@@ -40,15 +40,12 @@ const Fullscreen = (() => {
   function _watchVisibility() {
     if (_watching) return;
     _watching = true;
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') enter();
-    });
-    window.addEventListener('focus',    () => enter());
-    window.addEventListener('pageshow', () => enter());
-    document.addEventListener('click', function _once() {
-      enter();
-      document.removeEventListener('click', _once);
-    }, { once: true });
+    // NOTA: visibilitychange/focus/pageshow NO pueden llamar requestFullscreen
+    // sin gesto de usuario — el navegador los bloquea (Chrome 94+).
+    // Solo actualizamos el estado del botón al volver.
+    document.addEventListener('visibilitychange', _updateBtn);
+    window.addEventListener('focus', _updateBtn);
+    document.addEventListener('fullscreenchange', _updateBtn);
   }
 
   function _updateBtn() {
@@ -71,10 +68,10 @@ const Fullscreen = (() => {
   function init() {
     document.addEventListener('fullscreenchange',       _updateBtn);
     document.addEventListener('webkitfullscreenchange', _updateBtn);
-    if (!inPWA() || !supported()) return;
-    if (localStorage.getItem(GRANT_KEY)) {
-      enter().then(() => { _watchVisibility(); _updateBtn(); });
-    }
+    _watchVisibility();
+    _updateBtn();
+    // No intentamos requestFullscreen automáticamente al init —
+    // el navegador lo bloquea si no hay gesto de usuario reciente.
   }
 
   return { init, enter, exit, request, inPWA, supported, _updateBtn };

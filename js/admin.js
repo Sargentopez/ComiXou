@@ -11,7 +11,7 @@ function AdminView_init() {
 
   renderTab('pending');
   setupTabs();
-});
+}
 
 function setupTabs() {
   document.querySelectorAll('.admin-tab').forEach(tab => {
