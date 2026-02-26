@@ -49,7 +49,7 @@ function buildPanelElements() {
 
     const img = document.createElement('img');
     img.className = 'reader-panel-img';
-    img.src = panel.dataUrl;
+    if(panel.dataUrl) img.src = panel.dataUrl;
     img.draggable = false;
     inner.appendChild(img);
 
