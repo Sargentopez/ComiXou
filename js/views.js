@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.11</footer>
+    <footer class="app-version">v4.11b</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -248,6 +248,11 @@ Router.register('editor', {
             <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
           </div>
         </div>
+
+        <!-- UNDO/REDO — empujados a la derecha con margin-left:auto en el sep -->
+        <div class="ed-menu-sep" style="margin-left:auto"></div>
+        <button class="ed-undo-redo-btn" id="edUndoBtn" title="Deshacer" disabled>↩</button>
+        <button class="ed-undo-redo-btn" id="edRedoBtn" title="Rehacer" disabled>↪</button>
 
         <!-- MINIMIZAR (a la derecha) -->
         <button id="edMinimizeBtn">▼</button>

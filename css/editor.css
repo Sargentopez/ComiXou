@@ -20,7 +20,7 @@ body.editor-page #appView {
 #editorShell {
   position: relative;
   width: 100%; height: 100%;
-  overflow: hidden;
+  overflow: visible;  /* los iconos flotantes pueden salir de los bordes */
 }
 
 /* ══════════════════════════════
@@ -206,6 +206,7 @@ body.editor-page #appView {
   align-items: center;
   justify-content: center;
   background: var(--paper);
+  overflow: visible;   /* permite que los iconos flotantes salgan del área del canvas */
 }
 
 #editorCanvas {
@@ -447,12 +448,13 @@ body.editor-page #appView {
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   box-shadow: 2px 2px 0 var(--black);
-  z-index: 60;
+  z-index: 250;        /* sobre canvas (z:0) pero bajo barras (z:300) */
   transition: background .12s, transform .1s;
   touch-action: none;
   user-select: none;
   padding: 0;
   line-height: 1;
+  pointer-events: all; /* asegurar que recibe eventos aunque el wrap tenga pointer-events:none en algún estado */
 }
 .ed-float-icon:hover  { background: var(--yellow); transform: scale(1.12); }
 .ed-float-icon:active { background: var(--yellow); transform: scale(0.96); }

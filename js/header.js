@@ -103,9 +103,10 @@ const Header = (() => {
             + '</div>'
           + '</div>'
         + '</div>'
-        /* Fila 2: solo tagline */
+        /* Fila 2: tagline izq + botón FS derecha */
         + '<div class="home-header-row2">'
           + '<span class="home-tagline">' + T('tagline') + '</span>'
+          + fsBtnHtml
         + '</div>'
       + '</div>'
     + '</header>';
