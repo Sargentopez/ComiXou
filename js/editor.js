@@ -387,17 +387,32 @@ function edRedraw(){
   edCtx.fillStyle='#ffffff';edCtx.fillRect(0,0,cw,ch);
   const page=edPages[edCurrentPage];if(!page)return;
   // Imágenes primero, luego texto/bocadillos encima
-  edLayers.filter(l=>l.type==='image').forEach(l=>l.draw(edCtx,edCanvas));
+  // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
+  const _imgLayers  = edLayers.filter(l=>l.type==='image');
+  const _textLayers = edLayers.filter(l=>l.type==='text'||l.type==='bubble');
+  // Opacidad global de la capa de textos (máximo de todos sus objetos individuales,
+  // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
+  const _textGroupAlpha = page.textLayerOpacity ?? 1;
+
+  _imgLayers.forEach(l=>{
+    edCtx.globalAlpha = l.opacity ?? 1;
+    l.draw(edCtx,edCanvas);
+    edCtx.globalAlpha = 1;
+  });
   if(page.drawData){
     const img=new Image();
     img.onload=()=>{
       edCtx.drawImage(img,0,0);
-      edLayers.filter(l=>l.type!=='image').forEach(l=>l.draw(edCtx,edCanvas));
+      edCtx.globalAlpha = _textGroupAlpha;
+      _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
+      edCtx.globalAlpha = 1;
       edDrawSel();
     };
     img.src=page.drawData;return;
   }
-  edLayers.filter(l=>l.type!=='image').forEach(l=>l.draw(edCtx,edCanvas));
+  edCtx.globalAlpha = _textGroupAlpha;
+  _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
+  edCtx.globalAlpha = 1;
   edDrawSel();
 }
 
@@ -440,7 +455,7 @@ function edDrawSel(){
    PÁGINAS
    ══════════════════════════════════════════ */
 function edAddPage(){
-  edPages.push({layers:[],drawData:null});
+  edPages.push({layers:[],drawData:null,textLayerOpacity:1});
   edLoadPage(edPages.length-1);
   edToast('Página añadida');
 }
@@ -482,7 +497,15 @@ function edAddImage(file){
       const layer=new ImageLayer(img,0.5,0.5,w);
       layer.height=Math.min(h,0.85);
       if(layer.height===0.85)layer.width=0.85*(edCanvas.height/edCanvas.width)*(img.naturalWidth/img.naturalHeight);
-      edLayers.push(layer);edSelectedIdx=edLayers.length-1;
+      // Insertar imagen antes del primer texto/bocadillo (textos siempre encima)
+      const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
+      if(firstTextIdx >= 0){
+        edLayers.splice(firstTextIdx, 0, layer);
+        edSelectedIdx = firstTextIdx;
+      } else {
+        edLayers.push(layer);
+        edSelectedIdx = edLayers.length - 1;
+      }
       edPushHistory();edRedraw();edRenderOptionsPanel('props');edToast('Imagen añadida ✓');
     };
     img.src=ev.target.result;
@@ -565,87 +588,89 @@ function edPinchEnd() {
 
 
 /* ══════════════════════════════════════════
-   MENÚ CONTEXTUAL (mini, 3 segundos)
+   ICONO ⚙ SOBRE OBJETO SELECCIONADO
+   Permanente mientras el objeto está seleccionado.
+   Centro del círculo = centro de la línea superior del marco.
+   Se mueve con el objeto en tiempo real.
    ══════════════════════════════════════════ */
-let _edCtxTimer = null;
 
-function edShowContextMenu(layerIdx){
-  edHideContextMenu(); // limpiar el anterior si existe
-
-  if(layerIdx < 0 || layerIdx >= edLayers.length) return;
-  const la = edLayers[layerIdx];
-
-  // Calcular posición en pantalla a partir del canvas
+function _edGearPos(la){
+  // Devuelve {left, top} en px fixed para el centro del icono
   const canvasRect = edCanvas.getBoundingClientRect();
   const scaleX = canvasRect.width  / edCanvas.width;
   const scaleY = canvasRect.height / edCanvas.height;
+  // Centro X del objeto, línea superior del marco
+  const cx = canvasRect.left + la.x * edCanvas.width  * scaleX;
+  const ty = canvasRect.top  + (la.y - la.height / 2) * edCanvas.height * scaleY;
+  return { cx, ty };
+}
 
-  // Esquina superior derecha del objeto en viewport
-  const objRight  = canvasRect.left + (la.x + la.width/2)  * edCanvas.width  * scaleX;
-  const objTop    = canvasRect.top  + (la.y - la.height/2) * edCanvas.height * scaleY;
+function edShowGearIcon(layerIdx){
+  edHideGearIcon();
+  if(layerIdx < 0 || layerIdx >= edLayers.length) return;
 
-  const menu = document.createElement('div');
-  menu.id = 'edCtxMenu';
-  menu.innerHTML = '⚙';
-  menu.title = 'Opciones del objeto';
+  const SIZE = 32;
+  const R    = SIZE / 2;
 
-  // Posicionar justo a la derecha-arriba del objeto
-  // Usamos position:fixed para no depender del layout del canvas
-  const SIZE = 36;
-  const GAP  = 6;
-  let left = objRight + GAP;
-  let top  = objTop - GAP;
-
-  // Si se sale por la derecha, ponerlo a la izquierda
-  if(left + SIZE > window.innerWidth - 4) left = objRight - la.width * edCanvas.width * scaleX - SIZE - GAP;
-  // No salir por arriba
-  if(top < 4) top = 4;
-
-  menu.style.cssText = [
+  const btn = document.createElement('button');
+  btn.id = 'edGearIcon';
+  btn.innerHTML = '⚙';
+  btn.title = 'Opciones del objeto';
+  btn.style.cssText = [
     'position:fixed',
     'z-index:500',
-    `left:${Math.round(left)}px`,
-    `top:${Math.round(top)}px`,
     `width:${SIZE}px`,
     `height:${SIZE}px`,
     'border-radius:50%',
     'background:#fff',
-    'border:2px solid #ff6600',
+    'border:2.5px solid #ff6600',
     'box-shadow:0 2px 8px rgba(0,0,0,0.25)',
     'display:flex',
     'align-items:center',
     'justify-content:center',
-    'font-size:17px',
+    'font-size:15px',
     'cursor:pointer',
     'opacity:0',
-    'transition:opacity 0.15s',
+    'transition:opacity 0.12s',
     'pointer-events:all',
     'user-select:none',
     '-webkit-user-select:none',
+    'padding:0',
+    'line-height:1',
   ].join(';');
 
-  menu.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); });
-  menu.addEventListener('click', e => {
+  btn.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); });
+  btn.addEventListener('click', e => {
     e.stopPropagation();
-    edHideContextMenu();
     edPanelUserClosed = false;
     edRenderOptionsPanel('props');
   });
 
-  document.body.appendChild(menu);
-
-  // Fade in
-  requestAnimationFrame(() => { menu.style.opacity = '1'; });
-
-  // Auto-ocultar tras 3 segundos
-  _edCtxTimer = setTimeout(edHideContextMenu, 3000);
+  document.body.appendChild(btn);
+  edUpdateGearPos();                         // posicionar antes del fade-in
+  requestAnimationFrame(() => { btn.style.opacity = '1'; });
 }
 
-function edHideContextMenu(){
-  if(_edCtxTimer){ clearTimeout(_edCtxTimer); _edCtxTimer = null; }
-  const m = document.getElementById('edCtxMenu');
-  if(m) m.remove();
+function edUpdateGearPos(){
+  // Llamado en cada redraw y en cada frame de drag para seguir al objeto
+  const btn = document.getElementById('edGearIcon');
+  if(!btn) return;
+  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length){ edHideGearIcon(); return; }
+  const la = edLayers[edSelectedIdx];
+  const { cx, ty } = _edGearPos(la);
+  const R = 16;
+  btn.style.left = Math.round(cx - R) + 'px';
+  btn.style.top  = Math.round(ty - R) + 'px';
 }
+
+function edHideGearIcon(){
+  const btn = document.getElementById('edGearIcon');
+  if(btn) btn.remove();
+}
+
+// Alias para compatibilidad con llamadas anteriores
+function edHideContextMenu(){ edHideGearIcon(); }
+function edShowContextMenu(idx){ edShowGearIcon(idx); }
 
 function edOnStart(e){
   e.preventDefault();
@@ -714,13 +739,14 @@ function edOnMove(e){
     const la=edLayers[edSelectedIdx],asp=edInitialSize.height/edInitialSize.width;
     const dx=c.nx-edInitialSize.x;
     let nw=edResizeCorner==='tl'||edResizeCorner==='bl'?edInitialSize.width-dx:edInitialSize.width+dx;
-    if(nw>0.02){la.width=nw;la.height=nw*asp;}edRedraw();return;
+    if(nw>0.02){la.width=nw;la.height=nw*asp;}edRedraw();edUpdateGearPos();return;
   }
   if(!edIsDragging||edSelectedIdx<0)return;
   const la=edLayers[edSelectedIdx];
   la.x=Math.min(Math.max(c.nx-edDragOffX,la.width/2),1-la.width/2);
   la.y=Math.min(Math.max(c.ny-edDragOffY,la.height/2),1-la.height/2);
   edRedraw();
+  edUpdateGearPos();
 }
 function edOnEnd(e){
   // Si quedan menos de 2 dedos, terminar pinch
@@ -1037,7 +1063,7 @@ function edSaveProject(){
     panels,
     editorData:{
       orientation:edOrientation,
-      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer)})),
+      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1})),
     },
     updatedAt:new Date().toISOString(),
   });
@@ -1051,14 +1077,15 @@ function edRenderPage(page){
   return tmp.toDataURL('image/jpeg',0.85);
 }
 function edSerLayer(l){
-  if(l.type==='image')return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:l.src};
+  const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
+  if(l.type==='image')return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:l.src,...op};
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
-    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth};
+    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,...op};
   if(l.type==='bubble')return{type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
-    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},multipleCount:l.multipleCount};
+    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},multipleCount:l.multipleCount,...op};
 }
 function edDeserLayer(d){
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
@@ -1066,7 +1093,9 @@ function edDeserLayer(d){
     if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};return l;}
   if(d.type==='image'){
     const img=new Image();img.src=d.src;
-    const l=new ImageLayer(img,d.x,d.y,d.width);l.height=d.height;l.rotation=d.rotation||0;
+    const l=new ImageLayer(img,d.x,d.y,d.width);
+    l.height=d.height;l.rotation=d.rotation||0;
+    if(d.opacity!==undefined)l.opacity=d.opacity;
     img.onload=()=>{edRedraw();};return l;
   }
   return null;
@@ -1081,11 +1110,12 @@ function edLoadProject(id){
     edPages=(comic.editorData.pages||[]).map(pd=>({
       drawData:pd.drawData||null,
       layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
+      textLayerOpacity:pd.textLayerOpacity??1,
     }));
   }else{
-    edOrientation='vertical';edPages=[{layers:[],drawData:null}];
+    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1}];
   }
-  if(!edPages.length)edPages.push({layers:[],drawData:null});
+  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1});
   edCurrentPage=0;edLayers=edPages[0].layers;
 }
 
@@ -1201,15 +1231,29 @@ function edSaveProjectModal(){
    ══════════════════════════════════════════ */
 function edToast(msg,ms=2000){
   const t=$('edToast');if(!t)return;
-  t.textContent=msg;t.classList.add('show');
-  clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),ms);
+  t.classList.remove('show');          // forzar reset antes de reanimar
+  t.textContent=msg;
+  // Pequeño frame para que el remove surta efecto antes del add
+  requestAnimationFrame(()=>{
+    t.classList.add('show');
+    clearTimeout(t._t);
+    t._t=setTimeout(()=>t.classList.remove('show'),ms);
+  });
 }
 
 /* ══════════════════════════════════════════
    INIT
    ══════════════════════════════════════════ */
 function EditorView_init(){
+  // Limpiar estado de sesión anterior
+  edHideGearIcon();
+  const staleToast = $('edToast');
+  if(staleToast){ staleToast.classList.remove('show'); clearTimeout(staleToast._t); }
   edCanvas=$('editorCanvas');
+  // Habilitar botón Capas
+  document.querySelector('[data-menu="layers"]')?.removeAttribute('disabled');
+  document.querySelector('[data-menu="layers"]')?.style.removeProperty('opacity');
+  document.querySelector('[data-menu="layers"]')?.style.removeProperty('cursor');
   edViewerCanvas=$('viewerCanvas');
   if(!edCanvas)return;
   edCtx=edCanvas.getContext('2d');
@@ -1272,7 +1316,16 @@ function EditorView_init(){
   });
   $('dd-cleardraw')?.addEventListener('click',()=>{edClearDraw();edCloseMenus();});
 
-  // ── NAVEGAR ──
+  // ── NAVEGAR (Hoja → abre overlay) ──
+  // El botón Hoja ▾ del menú abre el overlay de hojas
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-menu="nav"]');
+    if (!btn) return;
+    e.stopPropagation();
+    edCloseMenus();
+    edOpenPages();
+  });
+  // Bindings del dropdown pequeño (ya no se usa, pero por si acaso)
   $('dd-addpage')?.addEventListener('click',()=>{edAddPage();edCloseMenus();});
   $('dd-delpage')?.addEventListener('click',()=>{edDeletePage();edCloseMenus();});
   $('dd-orientv')?.addEventListener('click',()=>{edSetOrientation('vertical');edCloseMenus();});
@@ -1284,6 +1337,15 @@ function EditorView_init(){
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
   $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
+
+  // ── CAPAS ──
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-menu="layers"]');
+    if (!btn) return;
+    e.stopPropagation();
+    edCloseMenus();
+    edOpenLayers();
+  });
 
   // ── MINIMIZAR ──
   $('edUndoBtn')?.addEventListener('click', edUndo);
@@ -1352,7 +1414,7 @@ function edLoadFromJSON(file){
           drawData:pd.drawData||null,
           layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
         }));
-        if(!edPages.length)edPages.push({layers:[],drawData:null});
+        if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1});
         edCurrentPage=0;edLayers=edPages[0].layers;
         edSetOrientation(edOrientation);
         const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title;

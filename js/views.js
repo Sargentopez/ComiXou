@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.17</footer>
+    <footer class="app-version">v4.20</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -179,83 +179,95 @@ Router.register('editor', {
       <!-- ── BARRA DE MENÚ ── -->
       <div id="edMenuBar">
 
-        <!-- INSERTAR -->
-        <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="insert">Insertar ▾</button>
-          <div class="ed-dropdown" id="dd-insert">
-            <!-- Imagen -->
-            <div class="ed-dropdown-item has-sub" style="position:relative">
-               Imagen
-              <div class="ed-subdropdown">
-                <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
-                <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
+        <!-- MINIMIZAR — siempre visible al inicio (extremo izquierdo fijo) -->
+        <button id="edMinimizeBtn" class="ed-menu-pin">▼</button>
+        <div class="ed-menu-sep"></div>
+
+        <!-- ZONA DESLIZABLE -->
+        <div id="edMenuScroll">
+
+          <!-- INSERTAR -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="insert">Insertar ▾</button>
+            <div class="ed-dropdown" id="dd-insert">
+              <div class="ed-dropdown-item has-sub" style="position:relative">
+                Imagen
+                <div class="ed-subdropdown">
+                  <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
+                  <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
+                </div>
+              </div>
+              <div class="ed-dropdown-item has-sub" style="position:relative">
+                Texto
+                <div class="ed-subdropdown">
+                  <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
+                  <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
+                </div>
               </div>
             </div>
-            <!-- Texto -->
-            <div class="ed-dropdown-item has-sub" style="position:relative">
-               Texto
-              <div class="ed-subdropdown">
-                <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
-                <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
-              </div>
+          </div>
+
+          <div class="ed-menu-sep"></div>
+
+          <!-- DIBUJAR -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
+            <div class="ed-dropdown" id="dd-draw">
+              <button class="ed-dropdown-item" id="dd-pen">Lápiz</button>
+              <button class="ed-dropdown-item" id="dd-eraser">Borrador</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-savedraw">Guardar dibujo</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-cleardraw">Borrar dibujos</button>
             </div>
           </div>
-        </div>
 
-        <div class="ed-menu-sep"></div>
+          <div class="ed-menu-sep"></div>
 
-        <!-- DIBUJAR -->
-        <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
-          <div class="ed-dropdown" id="dd-draw">
-            <button class="ed-dropdown-item" id="dd-pen">Lápiz</button>
-            <button class="ed-dropdown-item" id="dd-eraser">Borrador</button>
-            <div class="ed-dropdown-sep"></div>
-            <button class="ed-dropdown-item" id="dd-savedraw">Guardar dibujo</button>
-            <div class="ed-dropdown-sep"></div>
-            <button class="ed-dropdown-item" id="dd-cleardraw">Borrar dibujos</button>
+          <!-- DESHACER / REHACER -->
+          <button class="ed-undo-redo-btn" id="edUndoBtn" title="Deshacer" disabled>↩</button>
+          <button class="ed-undo-redo-btn" id="edRedoBtn" title="Rehacer" disabled>↪</button>
+
+          <div class="ed-menu-sep"></div>
+
+          <!-- CAPAS (placeholder — se desarrollará) -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="layers">Capas ▾</button>
           </div>
-        </div>
 
-        <div class="ed-menu-sep"></div>
+          <div class="ed-menu-sep"></div>
 
-        <!-- NAVEGAR -->
-        <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="nav">Hoja ▾</button>
-          <div class="ed-dropdown" id="dd-nav">
-            <div class="ed-dropdown-label">Ir a página</div>
-            <div id="ddNavPages" style="padding:4px 8px 6px;display:flex;flex-wrap:wrap;gap:5px;max-width:220px"></div>
-            <div class="ed-dropdown-sep"></div>
-            <button class="ed-dropdown-item" id="dd-addpage">Nueva página</button>
-            <button class="ed-dropdown-item" id="dd-delpage">Eliminar esta página</button>
-            <div class="ed-dropdown-sep"></div>
-            <div class="ed-dropdown-label">Orientación</div>
-            <button class="ed-dropdown-item" id="dd-orientv">Vertical</button>
-            <button class="ed-dropdown-item" id="dd-orienth">Horizontal</button>
+          <!-- HOJA -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="nav">Hoja ▾</button>
+            <div class="ed-dropdown" id="dd-nav">
+              <div class="ed-dropdown-label">Ir a página</div>
+              <div id="ddNavPages" style="padding:4px 8px 6px;display:flex;flex-wrap:wrap;gap:5px;max-width:220px"></div>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-addpage">Nueva página</button>
+              <button class="ed-dropdown-item" id="dd-delpage">Eliminar esta página</button>
+              <div class="ed-dropdown-sep"></div>
+              <div class="ed-dropdown-label">Orientación</div>
+              <button class="ed-dropdown-item" id="dd-orientv">Vertical</button>
+              <button class="ed-dropdown-item" id="dd-orienth">Horizontal</button>
+            </div>
           </div>
-        </div>
 
-        <div class="ed-menu-sep"></div>
+          <div class="ed-menu-sep"></div>
 
-        <!-- PROYECTO -->
-        <div class="ed-menu-item" style="position:relative">
-          <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
-          <div class="ed-dropdown" id="dd-project">
-            <button class="ed-dropdown-item" id="dd-editproject">Editar datos</button>
-            <button class="ed-dropdown-item" id="dd-viewerjson">Vista previa</button>
-            <div class="ed-dropdown-sep"></div>
-            <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
-            <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
+          <!-- PROYECTO -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
+            <div class="ed-dropdown" id="dd-project">
+              <button class="ed-dropdown-item" id="dd-editproject">Editar datos</button>
+              <button class="ed-dropdown-item" id="dd-viewerjson">Vista previa</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
+              <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
+            </div>
           </div>
-        </div>
 
-        <!-- UNDO/REDO — empujados a la derecha con margin-left:auto en el sep -->
-        <div class="ed-menu-sep" style="margin-left:auto"></div>
-        <button class="ed-undo-redo-btn" id="edUndoBtn" title="Deshacer" disabled>↩</button>
-        <button class="ed-undo-redo-btn" id="edRedoBtn" title="Rehacer" disabled>↪</button>
-
-        <!-- MINIMIZAR (a la derecha) -->
-        <button id="edMinimizeBtn">▼</button>
+        </div><!-- /edMenuScroll -->
 
       </div>
 
