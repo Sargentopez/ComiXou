@@ -23,7 +23,6 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
-// Historial undo/redo (snapshots de edLayers + drawData por página)
 let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
 
@@ -54,11 +53,16 @@ class BaseLayer {
 class ImageLayer extends BaseLayer {
   constructor(imgEl,x=0.5,y=0.5,width=0.4){
     super('image',x,y,width,0.3);
-    this.img=imgEl;this.src=imgEl.src;
-    if(imgEl.naturalWidth&&imgEl.naturalHeight)
-      this.height=width*(imgEl.naturalHeight/imgEl.naturalWidth);
+    if(imgEl){
+      this.img=imgEl; this.src=imgEl.src||'';
+      if(imgEl.naturalWidth&&imgEl.naturalHeight)
+        this.height=width*(imgEl.naturalHeight/imgEl.naturalWidth);
+    } else {
+      this.img=null; this.src='';
+    }
   }
   draw(ctx,can){
+    if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const w=this.width*can.width,h=this.height*can.height;
     const px=this.x*can.width,py=this.y*can.height;
     ctx.save();ctx.translate(px,py);ctx.rotate(this.rotation*Math.PI/180);
@@ -88,16 +92,17 @@ class TextLayer extends BaseLayer {
   draw(ctx,can){
     const w=this.width*can.width,h=this.height*can.height;
     const px=this.x*can.width,py=this.y*can.height;
-    ctx.fillStyle=this.backgroundColor;ctx.fillRect(px-w/2,py-h/2,w,h);
+    ctx.save();
+    ctx.fillStyle=this.backgroundColor; ctx.fillRect(px-w/2,py-h/2,w,h);
     if(this.borderWidth>0){
-      ctx.save();ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
-      ctx.strokeRect(px-w/2,py-h/2,w,h);ctx.restore();
+      ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
+      ctx.strokeRect(px-w/2,py-h/2,w,h);
     }
-    ctx.save();ctx.translate(px,py);ctx.rotate(this.rotation*Math.PI/180);
+    ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
     ctx.font=`${this.fontSize}px ${this.fontFamily}`;
     const isPlaceholder = this.text==='Escribe aquí';
     ctx.fillStyle=isPlaceholder?'#aaaaaa':this.color;
-    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
     lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
     ctx.restore();
@@ -254,17 +259,15 @@ function edSetOrientation(o){
    HISTORIAL UNDO / REDO
    ══════════════════════════════════════════ */
 function _edLayersSnapshot(){
-  // Serializa las layers actuales de forma reproducible
   return JSON.stringify(edLayers.map(l => {
     const o = {};
-    // Solo propiedades de datos (no funciones, no ImageBitmap)
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','color','backgroundColor',
                     'borderColor','borderWidth','padding',
                     'tail','tailStart','tailEnd','style','multipleCount']){
       if(l[k] !== undefined) o[k] = l[k];
     }
-    if(l.img) o._imgSrc = l.img.src || '';
+    if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
     return o;
   }));
 }
@@ -272,24 +275,13 @@ function _edLayersSnapshot(){
 function edPushHistory(){
   const layersJSON = _edLayersSnapshot();
   const drawData   = edPages[edCurrentPage]?.drawData || null;
-
-  // No guardar si es idéntico al último estado
   if(edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
     if(last.layersJSON === layersJSON && last.drawData === drawData) return;
   }
-
-  // Descartar estados futuros (redo branch)
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
-
   edHistory.push({ pageIdx: edCurrentPage, layersJSON, drawData });
-
-  // Mantener máximo: si se supera, eliminar el más antiguo y ajustar índice
-  if(edHistory.length > ED_MAX_HISTORY){
-    edHistory.shift();
-    // edHistoryIdx ya apunta al último porque acabamos de hacer push
-    // tras el shift el índice correcto es length-1
-  }
+  if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
   edHistoryIdx = edHistory.length - 1;
   edUpdateUndoRedoBtns();
 }
@@ -309,32 +301,27 @@ function edRedo(){
 function edApplyHistory(snapshot){
   if(!snapshot) return;
   const raw = JSON.parse(snapshot.layersJSON);
-
-  // Reconstruir capas y recopilar promesas de carga de imágenes
   const imgPromises = [];
   edLayers = raw.map(o => {
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
-    else if(o.type === 'image')  l = new ImageLayer(o.x, o.y);
+    else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
     else return o;
-    // Restaurar propiedades de datos
     for(const k of Object.keys(o)){
       if(k !== '_imgSrc') l[k] = o[k];
     }
-    // Imagen: cargar antes de redibujar
     if(o._imgSrc){
       const p = new Promise(resolve => {
         const img = new Image();
         img.onload  = () => { l.img = img; resolve(); };
-        img.onerror = () => resolve(); // no bloquear si falla
+        img.onerror = () => resolve();
         img.src = o._imgSrc;
       });
       imgPromises.push(p);
     }
     return l;
   });
-
   if(edPages[snapshot.pageIdx]){
     edPages[snapshot.pageIdx].layers = edLayers;
     edPages[snapshot.pageIdx].drawData = snapshot.drawData;
@@ -342,8 +329,6 @@ function edApplyHistory(snapshot){
   edSelectedIdx = -1;
   edPanelUserClosed = false;
   edUpdateUndoRedoBtns();
-
-  // Esperar todas las imágenes antes de redibujar
   Promise.all(imgPromises).then(() => edRedraw());
 }
 
@@ -417,95 +402,38 @@ function edRedraw(){
 }
 
 
+/* ══════════════════════════════════════════
+   ICONOS FLOTANTES SOBRE OBJETO SELECCIONADO
+   ══════════════════════════════════════════ */
 
 function edIsTouchDevice(){
   return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 }
-/* Radio de los iconos de acción en coordenadas de canvas */
-const ED_ICON_R = 14; /* px en espacio canvas (se escala con el canvas) */
-const ED_ICON_GAP = 18; /* distancia del borde del objeto al centro del icono */
-
-function edDrawSelIcon(cx, cy, emoji){
-  const R = ED_ICON_R;
-  edCtx.save();
-  /* Fondo blanco con borde negro */
-  edCtx.beginPath();
-  edCtx.arc(cx, cy, R, 0, Math.PI*2);
-  edCtx.fillStyle = '#ffffff';
-  edCtx.fill();
-  edCtx.strokeStyle = '#111111';
-  edCtx.lineWidth = 1.5;
-  edCtx.stroke();
-  /* Emoji centrado */
-  edCtx.font = (R * 1.1) + 'px sans-serif';
-  edCtx.textAlign = 'center';
-  edCtx.textBaseline = 'middle';
-  edCtx.fillStyle = '#111111';
-  edCtx.fillText(emoji, cx, cy + 1);
-  edCtx.restore();
-}
-
 function edDrawSel(){
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
   const cw=edCanvas.width,ch=edCanvas.height;
   const x=la.x*cw,y=la.y*ch,w=la.width*cw,h=la.height*ch;
   edCtx.save();
-  /* Marco punteado naranja */
   edCtx.strokeStyle='#ff6600';edCtx.lineWidth=2;edCtx.setLineDash([5,3]);
   edCtx.strokeRect(x-w/2,y-h/2,w,h);edCtx.setLineDash([]);
-  edCtx.restore();
-
-  /* Puntos de control de cola (bocadillo) */
-  if(la.type==='bubble'){
-    edCtx.save();
-    edCtx.fillStyle='#ff4444';
-    la.getTailControlPoints().forEach(p=>{
-      const px=p.x*cw,py=p.y*ch;
-      edCtx.beginPath();edCtx.arc(px,py,7,0,Math.PI*2);edCtx.fill();
-      edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
-    });
-    edCtx.restore();
-  }
-
-  /* Puntos de resize (imagen, solo PC) */
   if(la.type==='image' && !edIsTouchDevice()){
-    edCtx.save();
     edCtx.fillStyle='#ff4444';
     la.getControlPoints().forEach(p=>{
       const px=p.x*cw,py=p.y*ch;
       edCtx.beginPath();edCtx.arc(px,py,6,0,Math.PI*2);edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
     });
-    edCtx.restore();
   }
-
-  /* ── Iconos de acción dibujados en canvas ──
-     ⚙ centrado encima del objeto
-     ⤢ centrado debajo del objeto                */
-  const iconY_top = y - h/2 - ED_ICON_GAP;
-  const iconY_bot = y + h/2 + ED_ICON_GAP;
-  edDrawSelIcon(x, iconY_top, '⚙');
-  edDrawSelIcon(x, iconY_bot, '⤢');
-}
-
-/* Detectar si el tap fue sobre uno de los iconos de acción */
-function edHitSelIcon(nx, ny){
-  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return null;
-  const la = edLayers[edSelectedIdx];
-  const cw = edCanvas.width, ch = edCanvas.height;
-  /* Convertir coordenadas normalizadas a canvas px */
-  const px = nx * cw, py = ny * ch;
-  const objX = la.x * cw, objY = la.y * ch;
-  const objH = la.height * ch;
-  const R = ED_ICON_R + 6; /* radio de hit ligeramente mayor para touch */
-
-  const topY = objY - objH/2 - ED_ICON_GAP;
-  const botY = objY + objH/2 + ED_ICON_GAP;
-
-  if(Math.hypot(px - objX, py - topY) <= R) return 'options';
-  if(Math.hypot(px - objX, py - botY) <= R) return 'move';
-  return null;
+  if(la.type==='bubble'){
+    edCtx.fillStyle='#ff4444';
+    la.getTailControlPoints().forEach(p=>{
+      const px=p.x*cw,py=p.y*ch;
+      edCtx.beginPath();edCtx.arc(px,py,7,0,Math.PI*2);edCtx.fill();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
+    });
+  }
+  edCtx.restore();
 }
 
 /* ══════════════════════════════════════════
@@ -645,23 +573,6 @@ function edOnStart(e){
   if(edMenuOpen){edCloseMenus();return;}
   if(['draw','eraser'].includes(edActiveTool)){edStartPaint(e);return;}
   const c=edCoords(e);
-
-  /* ── Comprobar hit en iconos de acción (⚙ opciones / ⤢ mover) ── */
-  const iconHit = edHitSelIcon(c.nx, c.ny);
-  if(iconHit === 'options'){
-    edPanelUserClosed = false;
-    edRenderOptionsPanel('props');
-    return;
-  }
-  if(iconHit === 'move'){
-    if(edSelectedIdx >= 0){
-      const la = edLayers[edSelectedIdx];
-      edIsDragging = true;
-      edDragOffX = c.nx - la.x;
-      edDragOffY = c.ny - la.y;
-    }
-    return;
-  }
   // Cola bocadillo
   if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
     const la=edLayers[edSelectedIdx];
@@ -734,10 +645,7 @@ function edOnEnd(e){
     return;
   }
   if(edPainting){edPainting=false;edSaveDrawData();}
-  // Solo guardar historial si algo realmente cambió (evita duplicados por tap)
-  if(edIsDragging||edIsResizing||edIsTailDragging){
-    edPushHistory();
-  }
+  if(edIsDragging||edIsResizing||edIsTailDragging) edPushHistory();
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
 }
 
@@ -1297,7 +1205,6 @@ function EditorView_init(){
   $('edUndoBtn')?.addEventListener('click', edUndo);
   $('edRedoBtn')?.addEventListener('click', edRedo);
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
-  // Push estado inicial
   edPushHistory();
   edInitFloatDrag();
 
