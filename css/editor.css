@@ -772,9 +772,8 @@ body.editor-page #appView {
 .ed-page-action-btn:hover { color: var(--black); background: var(--gray-100); }
 .ed-page-del:hover { color: var(--red, #e63030) !important; background: #fff0f0 !important; }
 
-/* ── Panel de capas v3 ── */
+/* ── Panel de capas v4 ── */
 
-/* Título de sección: solo texto, sin marco */
 .ed-ly-section-title {
   font-size: 0.78rem;
   font-weight: 900;
@@ -797,6 +796,59 @@ body.editor-page #appView {
   font-style: italic;
 }
 
+/* Fila de botones modo — estilo barra herramientas */
+.ed-ly-mode-row {
+  display: flex;
+  align-items: center;
+  background: var(--white);
+  border: 1.5px solid var(--gray-200);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 4px 0 2px;
+  height: 36px;
+}
+.ed-ly-mode-row .ed-menu-btn {
+  height: 36px;
+  font-size: 0.82rem;
+  flex: 1;
+  justify-content: center;
+  border-radius: 0;
+}
+.ed-ly-mode-row .ed-menu-btn.open {
+  background: var(--yellow);
+  color: var(--black);
+}
+.ed-ly-mode-row .ed-menu-sep {
+  height: 20px;
+  width: 1.5px;
+  background: var(--gray-200);
+  flex-shrink: 0;
+  margin: 0;
+}
+
+/* Hint de arrastre */
+.ed-ly-drag-hint {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--gray-400);
+  padding: 3px 2px 6px;
+  text-align: left;
+  transition: color .2s;
+}
+.ed-ly-drag-hint.active { color: #2563eb; }
+
+/* Badge de secuencia */
+.ed-ly-seq-badge {
+  font-size: 0.7rem;
+  font-weight: 900;
+  color: #fff;
+  background: #2563eb;
+  border-radius: 50%;
+  width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
 /* Fila de texto/bocadillo */
 .ed-layer-text-row {
   display: flex;
@@ -806,9 +858,12 @@ body.editor-page #appView {
   border-radius: 7px;
   border: 1.5px solid transparent;
   transition: border-color .12s, background .12s;
+  user-select: none;
 }
 .ed-layer-text-row:hover    { background: var(--gray-50, #fafafa); }
 .ed-layer-text-row.selected { border-color: #ff6600; background: #fff8f4; }
+.ed-layer-text-row.dragging { opacity: .4; }
+.ed-layer-text-row.drag-over { border-color: #2563eb; background: #eff6ff; }
 
 .ed-layer-thumb-sm {
   width: 56px; height: 42px;
@@ -818,60 +873,40 @@ body.editor-page #appView {
   flex-shrink: 0;
   cursor: pointer;
 }
+.ed-layer-thumb-sm.drag-handle { cursor: grab; }
+.ed-layer-thumb-sm.drag-handle:active { cursor: grabbing; }
 .ed-layer-thumb-sm:hover { border-color: #ff6600; }
 
-/* Botones de orden ↑↓ */
-.ed-ly-order-btns {
+/* Item imagen */
+.ed-layer-item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px;
+  border-radius: 8px;
+  border: 1.5px solid transparent;
+  transition: border-color .12s, background .12s;
+  user-select: none;
+}
+.ed-layer-item:hover    { background: var(--gray-50, #fafafa); }
+.ed-layer-item.selected { border-color: #ff6600; background: #fff8f4; }
+.ed-layer-item.dragging { opacity: .4; }
+.ed-layer-item.drag-over { border-color: #2563eb; background: #eff6ff; }
+
+.ed-layer-thumb {
+  width: 80px; height: 60px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-200);
+  background: #f5f5f5;
   flex-shrink: 0;
 }
-.ed-ly-order-btn {
-  background: var(--gray-100);
-  border: 1.5px solid var(--gray-300);
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 900;
-  width: 22px; height: 20px;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--gray-600);
-  transition: background .1s, border-color .1s;
-}
-.ed-ly-order-btn:hover { background: var(--yellow); border-color: var(--black); color: var(--black); }
+.ed-layer-thumb.drag-handle { cursor: grab; }
+.ed-layer-thumb.drag-handle:active { cursor: grabbing; }
+.ed-layer-thumb:hover { border-color: #ff6600; }
 
-/* Scroll solo en desktop (no táctil) */
+/* Opacidad — ocultar en táctil */
 @media (hover: none) {
   .ed-layer-slider { display: none; }
   .ed-layer-op-val { display: none; }
 }
 
-/* ── Botones modo texto: inmediatos / secuenciales ── */
-.ed-ly-textmode-row {
-  display: flex;
-  gap: 6px;
-  margin: 4px 0 8px;
-}
-.ed-ly-mode-btn {
-  flex: 1;
-  padding: 7px 10px;
-  border: 2px solid var(--gray-300);
-  border-radius: var(--radius-sm);
-  background: var(--gray-100);
-  font-family: var(--font-body);
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--gray-600);
-  cursor: pointer;
-  transition: border-color .12s, background .12s, color .12s;
-}
-.ed-ly-mode-btn:hover {
-  border-color: var(--gray-500);
-  color: var(--black);
-}
-.ed-ly-mode-btn.active {
-  border-color: #ff6600;
-  background: #fff4ec;
-  color: #ff6600;
-}
