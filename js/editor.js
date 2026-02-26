@@ -563,6 +563,90 @@ function edPinchEnd() {
   edPinchScale0 = null;
 }
 
+
+/* ══════════════════════════════════════════
+   MENÚ CONTEXTUAL (mini, 3 segundos)
+   ══════════════════════════════════════════ */
+let _edCtxTimer = null;
+
+function edShowContextMenu(layerIdx){
+  edHideContextMenu(); // limpiar el anterior si existe
+
+  if(layerIdx < 0 || layerIdx >= edLayers.length) return;
+  const la = edLayers[layerIdx];
+
+  // Calcular posición en pantalla a partir del canvas
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const scaleX = canvasRect.width  / edCanvas.width;
+  const scaleY = canvasRect.height / edCanvas.height;
+
+  // Esquina superior derecha del objeto en viewport
+  const objRight  = canvasRect.left + (la.x + la.width/2)  * edCanvas.width  * scaleX;
+  const objTop    = canvasRect.top  + (la.y - la.height/2) * edCanvas.height * scaleY;
+
+  const menu = document.createElement('div');
+  menu.id = 'edCtxMenu';
+  menu.innerHTML = '⚙';
+  menu.title = 'Opciones del objeto';
+
+  // Posicionar justo a la derecha-arriba del objeto
+  // Usamos position:fixed para no depender del layout del canvas
+  const SIZE = 36;
+  const GAP  = 6;
+  let left = objRight + GAP;
+  let top  = objTop - GAP;
+
+  // Si se sale por la derecha, ponerlo a la izquierda
+  if(left + SIZE > window.innerWidth - 4) left = objRight - la.width * edCanvas.width * scaleX - SIZE - GAP;
+  // No salir por arriba
+  if(top < 4) top = 4;
+
+  menu.style.cssText = [
+    'position:fixed',
+    'z-index:500',
+    `left:${Math.round(left)}px`,
+    `top:${Math.round(top)}px`,
+    `width:${SIZE}px`,
+    `height:${SIZE}px`,
+    'border-radius:50%',
+    'background:#fff',
+    'border:2px solid #ff6600',
+    'box-shadow:0 2px 8px rgba(0,0,0,0.25)',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'font-size:17px',
+    'cursor:pointer',
+    'opacity:0',
+    'transition:opacity 0.15s',
+    'pointer-events:all',
+    'user-select:none',
+    '-webkit-user-select:none',
+  ].join(';');
+
+  menu.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); });
+  menu.addEventListener('click', e => {
+    e.stopPropagation();
+    edHideContextMenu();
+    edPanelUserClosed = false;
+    edRenderOptionsPanel('props');
+  });
+
+  document.body.appendChild(menu);
+
+  // Fade in
+  requestAnimationFrame(() => { menu.style.opacity = '1'; });
+
+  // Auto-ocultar tras 3 segundos
+  _edCtxTimer = setTimeout(edHideContextMenu, 3000);
+}
+
+function edHideContextMenu(){
+  if(_edCtxTimer){ clearTimeout(_edCtxTimer); _edCtxTimer = null; }
+  const m = document.getElementById('edCtxMenu');
+  if(m) m.remove();
+}
+
 function edOnStart(e){
   e.preventDefault();
   // 2 dedos → iniciar pinch-to-zoom
@@ -571,6 +655,7 @@ function edOnStart(e){
     return;
   }
   if(edMenuOpen){edCloseMenus();return;}
+  edHideContextMenu();
   if(['draw','eraser'].includes(edActiveTool)){edStartPaint(e);return;}
   const c=edCoords(e);
   // Cola bocadillo
@@ -595,16 +680,15 @@ function edOnStart(e){
   for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
   if(found>=0){
     const prevIdx = edSelectedIdx;
-    edSelectedIdx=found;edDragOffX=c.nx-edLayers[found].x;edDragOffY=c.ny-edLayers[found].y;
-    edIsDragging=true;
-    // Si seleccionamos un objeto diferente, resetear el flag de cierre
-    if(prevIdx !== found) edPanelUserClosed = false;
-    // Solo abrir panel si usuario no lo ha cerrado explícitamente
-    if(!edPanelUserClosed) edRenderOptionsPanel('props');
-    else edRenderOptionsPanel(); // cerrar si había otro abierto
-  }else{
-    edSelectedIdx=-1;
-    edPanelUserClosed = false;  // deselección → resetear flag
+    edSelectedIdx = found;
+    edDragOffX = c.nx - edLayers[found].x;
+    edDragOffY = c.ny - edLayers[found].y;
+    edIsDragging = true;
+    // Mostrar mini menú contextual con ⚙ durante 3 segundos
+    edShowContextMenu(found);
+  } else {
+    edSelectedIdx = -1;
+    edHideContextMenu();
     edRenderOptionsPanel();
   }
   edRedraw();
