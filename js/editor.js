@@ -23,6 +23,7 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
+let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
 let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
@@ -536,8 +537,8 @@ function edCoords(e){
   const rect=edCanvas.getBoundingClientRect();
   const sx=edCanvas.width/rect.width,sy=edCanvas.height/rect.height;
   const src=e.touches?e.touches[0]:e;
-  const px=Math.min(Math.max((src.clientX-rect.left)*sx,0),edCanvas.width);
-  const py=Math.min(Math.max((src.clientY-rect.top)*sy,0),edCanvas.height);
+  const px=(src.clientX-rect.left)*sx;   // sin clamp: permite salir del canvas
+  const py=(src.clientY-rect.top)*sy;
   return{px,py,nx:px/edCanvas.width,ny:py/edCanvas.height};
 }
 
@@ -697,7 +698,12 @@ function edOnStart(e){
     for(const p of la.getControlPoints()){
       if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.04){
         edIsResizing=true;edResizeCorner=p.corner;
-        edInitialSize={width:la.width,height:la.height,x:la.x,y:la.y};return;
+        // Guardamos el centro del objeto y el aspect ratio
+        // La fórmula: nw = distancia(ratón, centro) * 2
+        edInitialSize={width:la.width,height:la.height,
+                       cx:la.x, cy:la.y,   // centro del objeto
+                       asp:la.height/la.width};
+        return;
       }
     }
   }
@@ -705,13 +711,29 @@ function edOnStart(e){
   let found=-1;
   for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
   if(found>=0){
-    const prevIdx = edSelectedIdx;
     edSelectedIdx = found;
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
-    // Mostrar mini menú contextual con ⚙ durante 3 segundos
-    edShowContextMenu(found);
+    edHideGearIcon();
+    // Doble tap en el mismo objeto → abrir propiedades
+    const now = Date.now();
+    if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+      edIsDragging = false;
+      clearTimeout(window._edLongPress);
+      edRenderOptionsPanel('props');
+      _edLastTapTime = 0; _edLastTapIdx = -1;
+    } else {
+      _edLastTapTime = now; _edLastTapIdx = found;
+      // Long-press 600ms sin mover → mostrar gear / abrir propiedades
+      clearTimeout(window._edLongPress);
+      window._edLongPress = setTimeout(() => {
+        if(edSelectedIdx === found && !edIsResizing){
+          edIsDragging = false;
+          edRenderOptionsPanel('props');
+        }
+      }, 600);
+    }
   } else {
     edSelectedIdx = -1;
     edHideContextMenu();
@@ -729,6 +751,7 @@ function edOnMove(e){
   if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
   const c=edCoords(e);
+  clearTimeout(window._edLongPress); // cancelar longpress si el dedo se movió
   if(edIsTailDragging&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     const dx=c.nx-la.x,dy=c.ny-la.y;
@@ -737,17 +760,27 @@ function edOnMove(e){
     edRedraw();return;
   }
   if(edIsResizing&&edSelectedIdx>=0){
-    const la=edLayers[edSelectedIdx],asp=edInitialSize.height/edInitialSize.width;
-    const dx=c.nx-edInitialSize.x;
-    let nw=edResizeCorner==='tl'||edResizeCorner==='bl'?edInitialSize.width-dx:edInitialSize.width+dx;
-    if(nw>0.02){la.width=nw;la.height=nw*asp;}edRedraw();
-    edHideGearIcon(); // ocultar durante resize
+    const la=edLayers[edSelectedIdx];
+    const asp=edInitialSize.asp;
+    // nw = distancia del ratón al centro del objeto * 2
+    // Esquinas izq: el borde izq se mueve → la distancia es cx - mouseX
+    // Esquinas der: el borde der se mueve → la distancia es mouseX - cx
+    let halfW;
+    if(edResizeCorner==='tr'||edResizeCorner==='br'){
+      halfW = c.nx - edInitialSize.cx;           // borde derecho
+    } else {
+      halfW = edInitialSize.cx - c.nx;           // borde izquierdo
+    }
+    const nw = halfW * 2;
+    if(nw > 0.02){ la.width = nw; la.height = nw * asp; }
+    edRedraw();
+    edHideGearIcon();
     return;
   }
   if(!edIsDragging||edSelectedIdx<0)return;
   const la=edLayers[edSelectedIdx];
-  la.x=Math.min(Math.max(c.nx-edDragOffX,la.width/2),1-la.width/2);
-  la.y=Math.min(Math.max(c.ny-edDragOffY,la.height/2),1-la.height/2);
+  la.x = c.nx - edDragOffX;  // sin clamp: las imágenes pueden salir del canvas
+  la.y = c.ny - edDragOffY;
   edRedraw();
   edHideGearIcon(); // ocultar durante drag
 }
@@ -758,16 +791,10 @@ function edOnEnd(e){
     return;
   }
   if(edPainting){edPainting=false;edSaveDrawData();}
+  clearTimeout(window._edLongPress); // cancelar longpress si soltó antes
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   if(wasDragging) edPushHistory();
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
-  // Mostrar gear icon con delay tras soltar
-  if(wasDragging && edSelectedIdx >= 0){
-    clearTimeout(window._edGearDelay);
-    window._edGearDelay = setTimeout(() => {
-      if(edSelectedIdx >= 0) edShowGearIcon(edSelectedIdx);
-    }, 350);
-  }
 }
 
 /* ══════════════════════════════════════════
@@ -1528,6 +1555,17 @@ function EditorView_init(){
   // ── MODAL PROYECTO ──
   $('edMCancel')?.addEventListener('click',edCloseProjectModal);
   $('edMSave')?.addEventListener('click',edSaveProjectModal);
+
+  // ── Ctrl+Z / Ctrl+Y: deshacer/rehacer en PC ──
+  document.addEventListener('keydown', function _edKeyUndo(e){
+    if(!document.getElementById('editorShell')) return;
+    const tag = document.activeElement?.tagName?.toLowerCase();
+    if(tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    const ctrl = e.ctrlKey || e.metaKey;
+    if(!ctrl) return;
+    if(!e.shiftKey && e.key.toLowerCase() === 'z'){ e.preventDefault(); edUndo(); }
+    else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){ e.preventDefault(); edRedo(); }
+  });
 
   // ── RESIZE ──
   window.addEventListener('resize',()=>{edFitCanvas();edUpdateCanvasFullscreen();});
