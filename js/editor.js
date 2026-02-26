@@ -1475,8 +1475,24 @@ function EditorView_init(){
   // ── RESIZE ──
   window.addEventListener('resize',()=>{edFitCanvas();edUpdateCanvasFullscreen();});
 
-  // Doble rAF en init: asegurar que el DOM tiene medidas reales antes del primer fit
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{ edFitCanvas(); edRedraw(); }));
+  // Fit canvas con reintentos hasta que las medidas sean reales
+  // (el CSS se carga dinámicamente y las fuentes tardan en aplicar)
+  function _edInitFit(attemptsLeft) {
+    const topbar = $('edTopbar');
+    const menu   = $('edMenuBar');
+    const topH   = topbar ? topbar.getBoundingClientRect().height : 0;
+    const menuH  = menu   ? menu.getBoundingClientRect().height   : 0;
+    // Si ambas barras tienen altura real, ya está listo
+    if (topH > 10 && menuH > 10) {
+      edFitCanvas(); edRedraw(); return;
+    }
+    if (attemptsLeft <= 0) {
+      edFitCanvas(); edRedraw(); return; // último recurso
+    }
+    requestAnimationFrame(() => _edInitFit(attemptsLeft - 1));
+  }
+  // Primer intento tras doble rAF; si falla reintenta hasta 30 frames (~500ms)
+  requestAnimationFrame(() => requestAnimationFrame(() => _edInitFit(30)));
 
   // ── DEACTIVATE DRAW WHEN CLICKING OUTSIDE CANVAS ──
   document.addEventListener('pointerdown', e => {
@@ -1497,6 +1513,13 @@ function EditorView_init(){
   window.addEventListener('orientationchange', ()=>{
     setTimeout(()=>{edFitCanvas();edUpdateCanvasFullscreen();}, 200);
   });
+
+  // Seguro extra: si después de 600ms el canvas sigue muy pequeño, refitear
+  setTimeout(() => {
+    if (edCanvas && parseInt(edCanvas.style.height || '0') < 50) {
+      edFitCanvas(); edRedraw();
+    }
+  }, 600);
 }
 
 /* ── DESCARGAR / CARGAR JSON ── */
