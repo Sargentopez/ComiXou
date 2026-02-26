@@ -798,18 +798,7 @@ function edMoveBrush(e){
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
-  document.querySelectorAll('.ed-dropdown').forEach(d=>{
-    d.classList.remove('open');
-    // Devolver al padre original si fue movido a body
-    if(d._origParent && d.parentNode === document.body){
-      d._origParent.appendChild(d);
-    }
-    d.style.removeProperty('position');
-    d.style.removeProperty('top');
-    d.style.removeProperty('left');
-    d.style.removeProperty('right');
-    d.style.removeProperty('z-index');
-  });
+  document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
   document.querySelectorAll('.ed-menu-btn').forEach(b=>b.classList.remove('open'));
   edMenuOpen=null;
 }
@@ -817,35 +806,14 @@ function edCloseMenus(){
 function edToggleMenu(id){
   if(edMenuOpen===id){edCloseMenus();return;}
   edCloseMenus();
+  // Deactivate draw/eraser when opening any menu
   if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
   const dd=$('dd-'+id);if(!dd)return;
-  const btn=document.querySelector(`[data-menu="${id}"]`);
-  if(!btn)return;
-
-  // Mover el dropdown a body para escapar de cualquier overflow/stacking context
-  dd._origParent = dd._origParent || dd.parentNode;
-  document.body.appendChild(dd);
-
-  // Posicionar con fixed relativo al botón
-  const r = btn.getBoundingClientRect();
-  dd.style.position = 'fixed';
-  dd.style.top  = r.bottom + 'px';
-  dd.style.left = r.left   + 'px';
-  dd.style.right = 'auto';
-  dd.style.zIndex = '9999';
-
   dd.classList.add('open');
-  btn.classList.add('open');
-  edMenuOpen = id;
-  if(id === 'nav') edUpdateNavPages();
-
-  // Corrección de desbordamiento lateral (tras render)
-  requestAnimationFrame(() => {
-    const ddR = dd.getBoundingClientRect();
-    if(ddR.right > window.innerWidth - 4){
-      dd.style.left = Math.max(4, r.right - ddR.width) + 'px';
-    }
-  });
+  const btn=document.querySelector(`[data-menu="${id}"]`);
+  if(btn)btn.classList.add('open');
+  edMenuOpen=id;
+  if(id==='nav')edUpdateNavPages();
 }
 
 function edDeactivateDrawTool(){
@@ -1281,9 +1249,6 @@ function EditorView_init(){
   edHideGearIcon();
   const staleToast = $('edToast');
   if(staleToast){ staleToast.classList.remove('show'); clearTimeout(staleToast._t); }
-  // Ocultar también el toast global (ej: "Bienvenido/a" del login)
-  const globalToast = document.getElementById('toast');
-  if(globalToast){ globalToast.classList.remove('show'); clearTimeout(globalToast._tid); }
   edCanvas=$('editorCanvas');
   // Habilitar botón Capas
   document.querySelector('[data-menu="layers"]')?.removeAttribute('disabled');
@@ -1317,11 +1282,9 @@ function EditorView_init(){
   $('edSaveBtn')?.addEventListener('click',edSaveProject);
   $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
 
-  // ── MENÚ: botones dropdown (excluir layers y nav que tienen overlays propios) ──
+  // ── MENÚ: botones dropdown ──
   document.querySelectorAll('[data-menu]').forEach(btn=>{
-    const id = btn.dataset.menu;
-    if(id === 'layers' || id === 'nav') return; // tienen su propio handler
-    btn.addEventListener('pointerup',e=>{e.stopPropagation();edToggleMenu(id);});
+    btn.addEventListener('click',e=>{e.stopPropagation();edToggleMenu(btn.dataset.menu);});
   });
 
   // ── INSERTAR ──
@@ -1355,14 +1318,13 @@ function EditorView_init(){
 
   // ── NAVEGAR (Hoja → abre overlay) ──
   // El botón Hoja ▾ del menú abre el overlay de hojas
-  const _navBtn = document.querySelector('[data-menu="nav"]');
-  if(_navBtn){
-    _navBtn.addEventListener('pointerup', e => {
-      e.stopPropagation();
-      edCloseMenus();
-      edOpenPages();
-    });
-  }
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-menu="nav"]');
+    if (!btn) return;
+    e.stopPropagation();
+    edCloseMenus();
+    edOpenPages();
+  });
   // Bindings del dropdown pequeño (ya no se usa, pero por si acaso)
   $('dd-addpage')?.addEventListener('click',()=>{edAddPage();edCloseMenus();});
   $('dd-delpage')?.addEventListener('click',()=>{edDeletePage();edCloseMenus();});
@@ -1377,14 +1339,13 @@ function EditorView_init(){
   $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
 
   // ── CAPAS ──
-  const _layersBtn = document.querySelector('[data-menu="layers"]');
-  if(_layersBtn){
-    _layersBtn.addEventListener('pointerup', e => {
-      e.stopPropagation();
-      edCloseMenus();
-      edOpenLayers();
-    });
-  }
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('[data-menu="layers"]');
+    if (!btn) return;
+    e.stopPropagation();
+    edCloseMenus();
+    edOpenLayers();
+  });
 
   // ── MINIMIZAR ──
   $('edUndoBtn')?.addEventListener('click', edUndo);
@@ -1415,7 +1376,7 @@ function EditorView_init(){
         edDeactivateDrawTool();
       }
     }
-    // Cerrar menús al tocar fuera (los dropdowns pueden estar en body)
+    // Close menus when clicking outside menubar
     if(!e.target.closest('#edMenuBar') && !e.target.closest('.ed-dropdown')){
       edCloseMenus();
     }

@@ -110,7 +110,7 @@ body.editor-page #appView {
   overflow-y: visible;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  touch-action: pan-x pan-y;  /* pan-y también para no bloquear taps */
+  touch-action: pan-x;
 }
 #edMenuScroll::-webkit-scrollbar { display: none; }
 
@@ -150,13 +150,14 @@ body.editor-page #appView {
 
 /* ── DROPDOWNS DEL MENÚ ── */
 .ed-dropdown {
-  position: fixed;       /* JS lo mueve a body y pone top/left al abrir */
+  position: absolute;
+  top: 100%; left: 0;
   min-width: 200px;
   background: var(--white);
   border: 2px solid var(--black);
   border-radius: var(--radius);
   box-shadow: 4px 4px 0 var(--black);
-  z-index: 9000;
+  z-index: 9000;         /* por encima de TODO: topbar, canvas, options */
   display: none;
   padding: 6px 0;
 }
