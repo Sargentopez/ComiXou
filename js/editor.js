@@ -717,15 +717,18 @@ function edOnStart(e){
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
   // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
   const tgt = e.target;
-  const isUI = tgt.closest('#edMenuBar')    ||
-               tgt.closest('#edTopbar')     ||
+  // Ignorar si el click NO está dentro de editorShell (modales, header, etc.)
+  if(!tgt.closest('#editorShell')) return;
+  // Ignorar elementos de UI dentro del editor
+  const isUI = tgt.closest('#edMenuBar')      ||
+               tgt.closest('#edTopbar')       ||
                tgt.closest('#edOptionsPanel') ||
                tgt.closest('.ed-fulloverlay') ||
-               tgt.closest('.ed-dropdown')  ||
-               tgt.closest('#edGearIcon')   ||
-               tgt.closest('#edBrushCursor')||
-               tgt.closest('.ed-float-btn') ||
-               tgt.closest('#editorViewer') ||
+               tgt.closest('.ed-dropdown')    ||
+               tgt.closest('#edGearIcon')     ||
+               tgt.closest('#edBrushCursor')  ||
+               tgt.closest('.ed-float-btn')   ||
+               tgt.closest('#editorViewer')   ||
                tgt.closest('#edProjectModal');
   if(isUI) return;
 
@@ -1474,6 +1477,29 @@ function edOpenProjectModal(){
   $('edProjectModal')?.classList.add('open');
 }
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
+
+/* ── Destruir vista: eliminar todos los listeners de document/window ── */
+function EditorView_destroy(){
+  if(window._edListeners){
+    window._edListeners.forEach(([evt,fn,opts])=>document.removeEventListener(evt,fn,opts));
+    window._edListeners = null;
+  }
+  if(window._edWheelFn){
+    window.removeEventListener('wheel', window._edWheelFn);
+    window._edWheelFn = null;
+  }
+  if(window._edKeyFn){
+    document.removeEventListener('keydown', window._edKeyFn);
+    window._edKeyFn = null;
+  }
+  if(window._edDocDownFn){
+    document.removeEventListener('pointerdown', window._edDocDownFn);
+    window._edDocDownFn = null;
+  }
+  // Limpiar timers
+  clearTimeout(window._edLongPress);
+  edHideGearIcon();
+}
 function edSaveProjectModal(){
   edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
   edProjectMeta.author =$('edMAuthor').value.trim();
@@ -1530,12 +1556,16 @@ function EditorView_init(){
 
   // ── CANVAS ──
   // Todos los eventos en document para capturar objetos fuera del canvas
-  document.addEventListener('pointerdown', edOnStart, {passive:false});
-  document.addEventListener('pointermove', edOnMove,  {passive:false});
-  document.addEventListener('pointerup',   edOnEnd);
-  document.addEventListener('touchstart',  edOnStart, {passive:false});
-  document.addEventListener('touchmove',   edOnMove,  {passive:false});
-  document.addEventListener('touchend',    edOnEnd);
+  // Guardados en window._edListeners para poder eliminarlos en destroy()
+  window._edListeners = [
+    ['pointerdown', edOnStart, {passive:false}],
+    ['pointermove',  edOnMove,  {passive:false}],
+    ['pointerup',    edOnEnd,   {}],
+    ['touchstart',   edOnStart, {passive:false}],
+    ['touchmove',    edOnMove,  {passive:false}],
+    ['touchend',     edOnEnd,   {}],
+  ];
+  window._edListeners.forEach(([evt, fn, opts]) => document.addEventListener(evt, fn, opts));
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
@@ -1601,6 +1631,14 @@ function EditorView_init(){
   $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
+  $('dd-deleteproject')?.addEventListener('click',()=>{
+    edCloseMenus();
+    if(!edProjectId){edToast('Sin proyecto activo');return;}
+    if(!confirm('¿Eliminar esta obra? Esta acción no se puede deshacer.'))return;
+    ComicStore.remove(edProjectId);
+    edToast('Obra eliminada');
+    setTimeout(()=>Router.go('my-comics'),600);
+  });
   $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
 
   // ── CAPAS ──
@@ -1655,22 +1693,22 @@ function EditorView_init(){
   $('edMSave')?.addEventListener('click',edSaveProjectModal);
 
   // ── Ctrl+Wheel: zoom del canvas ──
-  window.addEventListener('wheel', e => {
+  window._edWheelFn = e => {
     if(!document.getElementById('editorShell')) return;
     if(!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     const delta = e.deltaY > 0 ? -0.1 : 0.1;
     edZoom = Math.min(Math.max(edZoom + delta, 0.25), 3.0);
     edFitCanvas();
-  }, {passive: false});
+  };
+  window.addEventListener('wheel', window._edWheelFn, {passive: false});
 
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
-  document.addEventListener('keydown', function _edKeyUndo(e){
+  window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
     const tag = document.activeElement?.tagName?.toLowerCase();
     if(tag === 'input' || tag === 'textarea' || tag === 'select') return;
     const ctrl = e.ctrlKey || e.metaKey;
-    // Delete / Backspace → eliminar objeto seleccionado
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
       if(edSelectedIdx >= 0){ e.preventDefault(); edDeleteSelected(); }
       return;
@@ -1678,7 +1716,8 @@ function EditorView_init(){
     if(!ctrl) return;
     if(!e.shiftKey && e.key.toLowerCase() === 'z'){ e.preventDefault(); edUndo(); }
     else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){ e.preventDefault(); edRedo(); }
-  });
+  };
+  document.addEventListener('keydown', window._edKeyFn);
 
   // ── RESIZE ──
   window.addEventListener('resize',()=>{edFitCanvas();edUpdateCanvasFullscreen();});
@@ -1703,14 +1742,14 @@ function EditorView_init(){
   requestAnimationFrame(() => requestAnimationFrame(() => _edInitFit(30)));
 
   // Cerrar herramienta de dibujo al tocar fuera del canvas
-  // (el cierre de menús lo gestiona edOnStart)
-  document.addEventListener('pointerdown', e => {
+  window._edDocDownFn = e => {
     if(['draw','eraser'].includes(edActiveTool)){
       if(!e.target.closest('#editorCanvas') && !e.target.closest('#edOptionsPanel')){
         edDeactivateDrawTool();
       }
     }
-  });
+  };
+  document.addEventListener('pointerdown', window._edDocDownFn);
 
 
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
