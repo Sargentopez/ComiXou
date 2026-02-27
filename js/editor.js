@@ -526,6 +526,12 @@ function edRedraw(){
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
   edDrawSel();
+  // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
+  edCtx.save();
+  edCtx.strokeStyle = '#1a8cff';
+  edCtx.lineWidth   = 1 / edCamera.z;   // 1px físico independiente del zoom
+  edCtx.strokeRect(edMarginX(), edMarginY(), edPageW(), edPageH());
+  edCtx.restore();
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
   _edScrollbarsDraw();
@@ -949,7 +955,7 @@ function edOnStart(e){
           edIsDragging = false; // soltar el drag para que no arrastre al soltar
           edRenderOptionsPanel('props');
         }
-      }, 2000);
+      }, 1000);
     } else {
       // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
       const now = Date.now();
