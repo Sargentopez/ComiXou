@@ -272,6 +272,7 @@ class BubbleLayer extends BaseLayer {
 function edSetOrientation(o){
   edOrientation=o;
   edZoom = 1.0; // reset zoom al cambiar orientación
+  if(edCanvas) edCanvas._firstFit = true; // centrar al cambiar orientación
   // El canvas de trabajo es siempre fijo (1800×2340)
   // Solo cambia qué zona se considera "lienzo" (centrada dentro)
   edCanvas.width  = ED_CANVAS_W;
@@ -367,55 +368,87 @@ function edUpdateUndoRedoBtns(){
 
 function edFitCanvas(){
   const wrap=$('editorCanvasWrap');if(!wrap||!edCanvas)return;
+  const inner=$('editorCanvasInner');
   const topbar=$('edTopbar'),menu=$('edMenuBar'),opts=$('edOptionsPanel');
 
-  // Medir alturas reales de las barras
-  // getBoundingClientRect devuelve 0 si display:none, que es lo que queremos
+  // Alturas de barras fijas
   const topH  = (!edMinimized && topbar)  ? topbar.getBoundingClientRect().height  : 0;
   const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
   const optsH = (opts && opts.classList.contains('open')) ? opts.getBoundingClientRect().height : 0;
-
-  // Posicionar barras una debajo de la otra
   if(menu && !edMinimized) menu.style.top = topH + 'px';
   if(opts) opts.style.top = (topH + menuH) + 'px';
-
   const totalBarsH = topH + menuH + optsH;
 
-  // ¿Orientación coincide? → canvas fullscreen
-  const isPortrait  = window.innerHeight >= window.innerWidth;
-  const canvasIsV   = edOrientation === 'vertical';
+  // Posicionar el wrap debajo de las barras
+  wrap.style.top = totalBarsH + 'px';
+  wrap.style.height = (window.innerHeight - totalBarsH) + 'px';
+
+  const availW = wrap.clientWidth  || window.innerWidth;
+  const availH = wrap.clientHeight || (window.innerHeight - totalBarsH);
+
+  // Escala base: el LIENZO (ED_PAGE_W × ED_PAGE_H) ocupa el espacio disponible
+  const pw = edPageW(), ph = edPageH();
+  const isPortrait = window.innerHeight >= window.innerWidth;
+  const canvasIsV  = edOrientation === 'vertical';
   const orientMatch = (isPortrait && canvasIsV) || (!isPortrait && !canvasIsV);
-
-  const availW = wrap.clientWidth;
-  const availH = wrap.clientHeight - totalBarsH;
-
-  // Fitear el LIENZO (no el canvas completo) al espacio disponible.
-  // El canvas completo es 5× más ancho y 3× más alto que el lienzo,
-  // así que cuando el lienzo ocupa todo el espacio, el canvas sobresale por los lados.
-  const pw = edPageW(), ph = edPageH();  // dimensiones del lienzo
-  let scale;
+  let baseScale;
   if(orientMatch){
-    scale = Math.min(availW / pw, availH / ph);
+    baseScale = Math.min(availW / pw, availH / ph);
   } else {
-    scale = Math.min((availW-8) / pw, (availH-12) / ph, 1);
+    baseScale = Math.min((availW-8) / pw, (availH-12) / ph, 1);
   }
-  scale = Math.max(scale, 0.05); // mínimo: permite alejarse mucho
-  scale *= edZoom;                // zoom extra del usuario (rueda/pellizco)
+  baseScale = Math.max(baseScale, 0.02);
 
-  // El canvas CSS ocupa el canvas completo a esa escala
+  // ── Zoom referenciado al CENTRO DEL LIENZO ──
+  // Guardamos el scroll normalizado al centro del lienzo antes de cambiar escala,
+  // luego lo restauramos con la nueva escala.
+  const prevScale = edCanvas._lastScale || baseScale;
+
+  const scale = Math.max(baseScale * edZoom, 0.02);
+  edCanvas._lastScale = scale;
+
+  // Canvas CSS size
   const cssW = Math.round(edCanvas.width  * scale);
   const cssH = Math.round(edCanvas.height * scale);
   edCanvas.style.width  = cssW + 'px';
   edCanvas.style.height = cssH + 'px';
+  edCanvas.style.margin = '0';  // sin margin, lo maneja el scroll
 
-  // Centrar el LIENZO (no el canvas) en el área disponible
-  // El canvas se desplaza para que el lienzo quede centrado
+  // Tamaño del lienzo en CSS pixels
   const lienzoCssW = Math.round(pw * scale);
   const lienzoCssH = Math.round(ph * scale);
-  const offsetX = Math.round((availW - lienzoCssW) / 2) - Math.round(edMarginX() * scale);
-  const offsetY = Math.round((availH - lienzoCssH) / 2) - Math.round(edMarginY() * scale);
-  edCanvas.style.marginTop  = (totalBarsH + offsetY) + 'px';
-  edCanvas.style.marginLeft = offsetX + 'px';
+
+  // Padding del inner: centra el canvas cuando es más pequeño que el área visible
+  // Cuando el canvas es más grande, el padding es 0 y aparece el scroll
+  const padX = Math.max(0, Math.round((availW - cssW) / 2));
+  const padY = Math.max(0, Math.round((availH - cssH) / 2));
+  if(inner){
+    inner.style.padding = padY + 'px ' + padX + 'px';
+    // El inner debe ser al menos tan grande como el wrap
+    inner.style.minWidth  = availW + 'px';
+    inner.style.minHeight = availH + 'px';
+  }
+
+  // ── Centrar scroll en el lienzo ──
+  // El centro del lienzo en el canvas interno es (edMarginX + pw/2, edMarginY + ph/2)
+  // En CSS pixels: eje X = padX + (edMarginX + pw/2) * scale
+  //                eje Y = padY + (edMarginY + ph/2) * scale
+  const lienzoCenterX = padX + (edMarginX() + pw/2) * scale;
+  const lienzoCenterY = padY + (edMarginY() + ph/2) * scale;
+  // scrollLeft/scrollTop para que ese punto quede en el centro del viewport
+  const targetScrollX = Math.round(lienzoCenterX - availW/2);
+  const targetScrollY = Math.round(lienzoCenterY - availH/2);
+
+  // Solo ajustamos scroll si el zoom cambió (no en cada resize/repaint)
+  if(Math.abs(prevScale - scale) > 0.001){
+    wrap.scrollLeft = Math.max(0, targetScrollX);
+    wrap.scrollTop  = Math.max(0, targetScrollY);
+  } else if(edCanvas._firstFit){
+    // Primera vez: centrar siempre
+    wrap.scrollLeft = Math.max(0, targetScrollX);
+    wrap.scrollTop  = Math.max(0, targetScrollY);
+    edCanvas._firstFit = false;
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -1340,6 +1373,7 @@ function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
   edCurrentPage=0;edLayers=edPages[0].layers;
+  if(edCanvas) edCanvas._firstFit = true; // centrar al cargar proyecto
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
 }
@@ -1730,9 +1764,21 @@ function EditorView_init(){
     if(!document.getElementById('editorShell')) return;
     if(!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    edZoom = Math.min(Math.max(edZoom + delta, 0.25), 3.0);
+    const wrap = document.getElementById('editorCanvasWrap');
+    if(!wrap || !edCanvas) return;
+    // Posición del cursor relativa al wrap (para centrar el zoom en el cursor)
+    const wRect = wrap.getBoundingClientRect();
+    const cursorXinWrap = e.clientX - wRect.left + wrap.scrollLeft;
+    const cursorYinWrap = e.clientY - wRect.top  + wrap.scrollTop;
+    const prevScale = edCanvas._lastScale || 1;
+    const factor = e.deltaY > 0 ? 0.9 : 1.1;
+    edZoom = Math.min(Math.max(edZoom * factor, 0.1), 5.0);
     edFitCanvas();
+    // Ajustar scroll para que el punto bajo el cursor no se mueva
+    const newScale = edCanvas._lastScale || 1;
+    const ratio = newScale / prevScale;
+    wrap.scrollLeft = Math.round(cursorXinWrap * ratio - (e.clientX - wRect.left));
+    wrap.scrollTop  = Math.round(cursorYinWrap * ratio - (e.clientY - wRect.top));
   };
   window.addEventListener('wheel', window._edWheelFn, {passive: false});
 
@@ -1771,6 +1817,8 @@ function EditorView_init(){
     }
     requestAnimationFrame(() => _edInitFit(attemptsLeft - 1));
   }
+  // Marcar primera vez para centrar el scroll al hacer fit
+  if(edCanvas) edCanvas._firstFit = true;
   // Primer intento tras doble rAF; si falla reintenta hasta 30 frames (~500ms)
   requestAnimationFrame(() => requestAnimationFrame(() => _edInitFit(30)));
 
@@ -1795,23 +1843,39 @@ function EditorView_init(){
   let _shellPinch0 = 0, _shellZoom0 = 1;
   const editorShell = document.getElementById('editorShell');
   if(editorShell){
+    let _shellPinchMidX = 0, _shellPinchMidY = 0;
     editorShell.addEventListener('touchstart', e => {
-      if(e.touches.length === 2 && e.target !== edCanvas){
+      if(e.touches.length === 2){
         _shellPinch0 = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
         _shellZoom0 = edZoom;
+        // Punto medio entre los dos dedos
+        _shellPinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        _shellPinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
       }
     }, {passive:true});
     editorShell.addEventListener('touchmove', e => {
-      if(e.touches.length === 2 && e.target !== edCanvas && _shellPinch0 > 0){
+      if(e.touches.length === 2 && _shellPinch0 > 0){
         const dist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
-        edZoom = Math.min(Math.max(_shellZoom0 * (dist / _shellPinch0), 0.25), 3.0);
+        const wrap = document.getElementById('editorCanvasWrap');
+        const prevScale = edCanvas ? (edCanvas._lastScale || 1) : 1;
+        edZoom = Math.min(Math.max(_shellZoom0 * (dist / _shellPinch0), 0.1), 5.0);
         edFitCanvas();
+        // Centrar zoom en el punto medio de los dedos
+        if(wrap){
+          const wRect = wrap.getBoundingClientRect();
+          const newScale = edCanvas._lastScale || 1;
+          const ratio = newScale / prevScale;
+          const midXinWrap = _shellPinchMidX - wRect.left + wrap.scrollLeft;
+          const midYinWrap = _shellPinchMidY - wRect.top  + wrap.scrollTop;
+          wrap.scrollLeft = Math.round(midXinWrap * ratio - (_shellPinchMidX - wRect.left));
+          wrap.scrollTop  = Math.round(midYinWrap * ratio - (_shellPinchMidY - wRect.top));
+        }
       }
     }, {passive:true});
     editorShell.addEventListener('touchend', ()=>{ _shellPinch0 = 0; }, {passive:true});
