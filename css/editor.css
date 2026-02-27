@@ -20,7 +20,7 @@ body.editor-page #appView {
 #editorShell {
   position: relative;
   width: 100%; height: 100%;
-  overflow: hidden;
+  overflow: visible;  /* objetos pueden salir del canvas (mesa de trabajo) */
 }
 
 /* ══════════════════════════════
@@ -54,17 +54,17 @@ body.editor-page #appView {
 #edProjectTitle {
   flex: 1; min-width: 0;
   font-family: var(--font-display);
-  font-size: 1.15rem; letter-spacing: 1px;
+  font-size: 1rem; letter-spacing: 0.5px;
   color: var(--black);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  text-align: center;
+  text-align: left;
 }
 
 .ed-top-action {
   background: var(--black); color: var(--white);
   border: none; border-radius: var(--radius-sm);
-  font-family: var(--font-body); font-size: 0.78rem; font-weight: 900;
-  padding: 6px 12px; cursor: pointer; flex-shrink: 0;
+  font-family: var(--font-body); font-size: 0.75rem; font-weight: 900;
+  padding: 5px 9px; cursor: pointer; flex-shrink: 0;
   transition: opacity .15s; white-space: nowrap;
 }
 .ed-top-action:active { opacity: .8; }
@@ -73,11 +73,12 @@ body.editor-page #appView {
 .ed-top-pagnav {
   display: flex;
   align-items: center;
-  gap: 2px;
-  background: rgba(0,0,0,.08);
+  gap: 1px;
+  background: rgba(0,0,0,.1);
   border-radius: 6px;
-  padding: 2px 3px;
+  padding: 1px 2px;
   flex-shrink: 0;
+  border: 1.5px solid rgba(0,0,0,.15);
 }
 .ed-top-pagebn {
   background: none; border: none;

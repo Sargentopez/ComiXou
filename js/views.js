@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.33</footer>
+    <footer class="app-version">v4.34</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -177,8 +177,8 @@ Router.register('editor', {
           <span id="edPageNum">1</span>
           <button class="ed-top-pagebn" id="edPageNext" title="Página siguiente">&#9654;</button>
         </div>
-        <button class="ed-top-action" id="edPreviewBtn">Vista previa</button>
-        <button class="ed-top-action" id="edSaveBtn">Guardar</button>
+        <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
+        <button class="ed-top-action" id="edSaveBtn" title="Guardar">💾</button>
       </div>
 
       <!-- ── BARRA DE MENÚ ── -->
@@ -265,7 +265,7 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
             <div class="ed-dropdown" id="dd-project">
               <button class="ed-dropdown-item" id="dd-editproject">Editar datos</button>
-              <button class="ed-dropdown-item" id="dd-viewerjson">Vista previa</button>
+              <button class="ed-dropdown-item" id="dd-viewerjson">Previsualizar</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
               <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
