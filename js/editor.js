@@ -23,7 +23,11 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
-let edZoom = 1.0;               // factor de zoom extra (Ctrl+wheel / pinch fuera de canvas)
+let edZoom = 1.0;               // LEGACY — no usado, ver edCamera
+// ── Cámara del editor (patrón Figma/tldraw) ──
+// x,y = traslación del canvas (donde aparece el origen del workspace en pantalla)
+// z   = escala (1 = lienzo ocupa el viewport)
+const edCamera = { x: 0, y: 0, z: 1 };
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
 let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
@@ -42,9 +46,39 @@ const $ = id => document.getElementById(id);
 // Dimensiones del lienzo según orientación actual
 function edPageW(){ return edOrientation === 'vertical' ? ED_PAGE_W : ED_PAGE_H; }
 function edPageH(){ return edOrientation === 'vertical' ? ED_PAGE_H : ED_PAGE_W; }
-// Offset del lienzo dentro del canvas (centrado)
+// Offset del lienzo dentro del workspace (centrado)
 function edMarginX(){ return (ED_CANVAS_W - edPageW()) / 2; }
 function edMarginY(){ return (ED_CANVAS_H - edPageH()) / 2; }
+
+// ── Conversiones de coordenadas ──
+// Pantalla → workspace interno
+function edScreenToWorld(sx, sy){
+  return { x: (sx - edCamera.x) / edCamera.z,
+           y: (sy - edCamera.y) / edCamera.z };
+}
+// Workspace → pantalla
+function edWorldToScreen(wx, wy){
+  return { x: wx * edCamera.z + edCamera.x,
+           y: wy * edCamera.z + edCamera.y };
+}
+// Zoom hacia un punto de pantalla (sx,sy), con factor multiplicativo
+function edZoomAt(sx, sy, factor){
+  // Límites
+  const newZ = Math.min(Math.max(edCamera.z * factor, 0.05), 8);
+  const fReal = newZ / edCamera.z;
+  edCamera.x = sx - (sx - edCamera.x) * fReal;
+  edCamera.y = sy - (sy - edCamera.y) * fReal;
+  edCamera.z = newZ;
+}
+// ¿Necesita scrollbars? (el lienzo no cabe entero en el viewport)
+function edNeedsScroll(){
+  if(!edCanvas) return { h: false, v: false };
+  const availW = edCanvas.width, availH = edCanvas.height;
+  const pw = edPageW(), ph = edPageH();
+  const lienzoPxW = pw * edCamera.z;
+  const lienzoPxH = ph * edCamera.z;
+  return { h: lienzoPxW > availW + 1, v: lienzoPxH > availH + 1 };
+}
 
 /* ══════════════════════════════════════════
    CLASES (motor referEditor)
@@ -271,15 +305,12 @@ class BubbleLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function edSetOrientation(o){
   edOrientation=o;
-  edZoom = 1.0; // reset zoom al cambiar orientación
-  if(edCanvas) edCanvas._firstFit = true; // centrar al cambiar orientación
-  // El canvas de trabajo es siempre fijo (1800×2340)
-  // Solo cambia qué zona se considera "lienzo" (centrada dentro)
-  edCanvas.width  = ED_CANVAS_W;
-  edCanvas.height = ED_CANVAS_H;
-  // El visor usa solo el lienzo (sin workspace)
+  // El visor usa solo el lienzo
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{ edFitCanvas(); edRedraw(); }));
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    edFitCanvas(true); // true = resetear cámara al lienzo
+    edRedraw();
+  }));
 }
 
 
@@ -366,12 +397,15 @@ function edUpdateUndoRedoBtns(){
   if(r) r.disabled = edHistoryIdx >= edHistory.length - 1;
 }
 
-function edFitCanvas(){
-  const wrap=$('editorCanvasWrap');if(!wrap||!edCanvas)return;
-  const inner=$('editorCanvasInner');
-  const topbar=$('edTopbar'),menu=$('edMenuBar'),opts=$('edOptionsPanel');
+/* ── edFitCanvas ──────────────────────────────────────────────────
+   Ajusta las barras de UI y el tamaño del canvas DOM al viewport.
+   El canvas ocupa SIEMPRE todo el área disponible (sin scroll CSS).
+   La cámara (edCamera) controla qué parte del workspace se ve.
+   ──────────────────────────────────────────────────────────────── */
+function edFitCanvas(resetCamera){
+  if(!edCanvas) return;
+  const topbar=$('edTopbar'), menu=$('edMenuBar'), opts=$('edOptionsPanel');
 
-  // Alturas de barras fijas
   const topH  = (!edMinimized && topbar)  ? topbar.getBoundingClientRect().height  : 0;
   const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
   const optsH = (opts && opts.classList.contains('open')) ? opts.getBoundingClientRect().height : 0;
@@ -379,90 +413,63 @@ function edFitCanvas(){
   if(opts) opts.style.top = (topH + menuH) + 'px';
   const totalBarsH = topH + menuH + optsH;
 
-  // Posicionar el wrap debajo de las barras
-  wrap.style.top = totalBarsH + 'px';
-  wrap.style.height = (window.innerHeight - totalBarsH) + 'px';
+  const availW = window.innerWidth;
+  const availH = window.innerHeight - totalBarsH;
 
-  const availW = wrap.clientWidth  || window.innerWidth;
-  const availH = wrap.clientHeight || (window.innerHeight - totalBarsH);
+  // El canvas DOM ocupa TODO el área disponible (coordenadas de pantalla)
+  edCanvas.width  = Math.round(availW);
+  edCanvas.height = Math.round(availH);
+  edCanvas.style.width  = availW + 'px';
+  edCanvas.style.height = availH + 'px';
+  edCanvas.style.position = 'absolute';
+  edCanvas.style.left = '0';
+  edCanvas.style.top  = totalBarsH + 'px';
+  edCanvas.style.margin = '0';
 
-  // Escala base: el LIENZO (ED_PAGE_W × ED_PAGE_H) ocupa el espacio disponible
+  if(resetCamera){
+    _edCameraReset();
+  }
+  // Actualizar scrollbars visuales
+  _edScrollbarsUpdate();
+}
+
+/* ── Resetea la cámara para que el LIENZO ocupe el viewport centrado ── */
+function _edCameraReset(){
   const pw = edPageW(), ph = edPageH();
-  const isPortrait = window.innerHeight >= window.innerWidth;
-  const canvasIsV  = edOrientation === 'vertical';
-  const orientMatch = (isPortrait && canvasIsV) || (!isPortrait && !canvasIsV);
-  let baseScale;
-  if(orientMatch){
-    baseScale = Math.min(availW / pw, availH / ph);
-  } else {
-    baseScale = Math.min((availW-8) / pw, (availH-12) / ph, 1);
-  }
-  baseScale = Math.max(baseScale, 0.02);
-
-  // ── Zoom referenciado al CENTRO DEL LIENZO ──
-  // Guardamos el scroll normalizado al centro del lienzo antes de cambiar escala,
-  // luego lo restauramos con la nueva escala.
-  const prevScale = edCanvas._lastScale || baseScale;
-
-  const scale = Math.max(baseScale * edZoom, 0.02);
-  edCanvas._lastScale = scale;
-
-  // Canvas CSS size
-  const cssW = Math.round(edCanvas.width  * scale);
-  const cssH = Math.round(edCanvas.height * scale);
-  edCanvas.style.width  = cssW + 'px';
-  edCanvas.style.height = cssH + 'px';
-  edCanvas.style.margin = '0';  // sin margin, lo maneja el scroll
-
-  // Tamaño del lienzo en CSS pixels
-  const lienzoCssW = Math.round(pw * scale);
-  const lienzoCssH = Math.round(ph * scale);
-
-  // Padding del inner: centra el canvas cuando es más pequeño que el área visible
-  // Cuando el canvas es más grande, el padding es 0 y aparece el scroll
-  const padX = Math.max(0, Math.round((availW - cssW) / 2));
-  const padY = Math.max(0, Math.round((availH - cssH) / 2));
-  if(inner){
-    inner.style.padding = padY + 'px ' + padX + 'px';
-    // El inner debe ser al menos tan grande como el wrap
-    inner.style.minWidth  = availW + 'px';
-    inner.style.minHeight = availH + 'px';
-  }
-
-  // ── Centrar scroll en el lienzo ──
-  // El centro del lienzo en el canvas interno es (edMarginX + pw/2, edMarginY + ph/2)
-  // En CSS pixels: eje X = padX + (edMarginX + pw/2) * scale
-  //                eje Y = padY + (edMarginY + ph/2) * scale
-  const lienzoCenterX = padX + (edMarginX() + pw/2) * scale;
-  const lienzoCenterY = padY + (edMarginY() + ph/2) * scale;
-  // scrollLeft/scrollTop para que ese punto quede en el centro del viewport
-  const targetScrollX = Math.round(lienzoCenterX - availW/2);
-  const targetScrollY = Math.round(lienzoCenterY - availH/2);
-
-  // Solo ajustamos scroll si el zoom cambió (no en cada resize/repaint)
-  if(Math.abs(prevScale - scale) > 0.001){
-    wrap.scrollLeft = Math.max(0, targetScrollX);
-    wrap.scrollTop  = Math.max(0, targetScrollY);
-  } else if(edCanvas._firstFit){
-    // Primera vez: centrar siempre
-    wrap.scrollLeft = Math.max(0, targetScrollX);
-    wrap.scrollTop  = Math.max(0, targetScrollY);
-    edCanvas._firstFit = false;
-  }
+  const availW = edCanvas.width, availH = edCanvas.height;
+  const scaleW = availW / pw;
+  const scaleH = availH / ph;
+  const z = Math.min(scaleW, scaleH);
+  // Posición: el centro del lienzo (en workspace) queda en el centro de pantalla
+  // centro_workspace_x = edMarginX + pw/2
+  // pantalla_x = centro_workspace_x * z + camera.x = availW/2
+  // => camera.x = availW/2 - (edMarginX + pw/2) * z
+  edCamera.z = z;
+  edCamera.x = availW/2  - (edMarginX() + pw/2) * z;
+  edCamera.y = availH/2  - (edMarginY() + ph/2) * z;
 }
 
 /* ══════════════════════════════════════════
    REDRAW
    ══════════════════════════════════════════ */
 function edRedraw(){
-  if(!edCtx)return;
-  const cw=edCanvas.width,ch=edCanvas.height;
+  if(!edCtx || !edCanvas)return;
+  const cw=edCanvas.width, ch=edCanvas.height;
+
+  // Reset transform → limpiar todo el viewport
+  edCtx.setTransform(1,0,0,1,0,0);
   edCtx.clearRect(0,0,cw,ch);
-  // Fondo workspace gris (zona fuera de la página)
-  edCtx.fillStyle='#b0b0b0';edCtx.fillRect(0,0,cw,ch);
+  // Fondo workspace (toda la pantalla)
+  edCtx.fillStyle='#b0b0b0';
+  edCtx.fillRect(0,0,cw,ch);
+
+  // Aplicar cámara: escala + traslación
+  edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+
   const page=edPages[edCurrentPage];if(!page)return;
-  // Sombra y lienzo blanco centrado en el canvas de trabajo
-  edCtx.shadowColor='rgba(0,0,0,0.3)';edCtx.shadowBlur=16;
+
+  // Lienzo blanco con sombra (en coordenadas workspace)
+  edCtx.shadowColor='rgba(0,0,0,0.35)';edCtx.shadowBlur=20/edCamera.z;
   edCtx.fillStyle='#ffffff';edCtx.fillRect(edMarginX(),edMarginY(),edPageW(),edPageH());
   edCtx.shadowColor='transparent';edCtx.shadowBlur=0;
   // Imágenes primero, luego texto/bocadillos encima
@@ -493,6 +500,9 @@ function edRedraw(){
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
   edDrawSel();
+  // Restaurar transform para UI sobre el canvas (scrollbars)
+  edCtx.setTransform(1,0,0,1,0,0);
+  _edScrollbarsDraw();
 }
 
 
@@ -620,18 +630,17 @@ function edDeleteSelected(){
    EVENTOS CANVAS
    ══════════════════════════════════════════ */
 function edCoords(e){
-  const rect=edCanvas.getBoundingClientRect();
-  // Escala: canvas interno / canvas CSS
-  const sx=edCanvas.width/rect.width, sy=edCanvas.height/rect.height;
-  const src=e.touches?e.touches[0]:e;
-  // px/py en coordenadas del canvas interno (incluye margen)
-  const px=(src.clientX-rect.left)*sx;
-  const py=(src.clientY-rect.top)*sy;
-  // nx/ny en coordenadas de página (0=borde izq página, 1=borde der página)
-  const pw=edPageW(), ph=edPageH();
-  const nx=(px-edMarginX())/pw;
-  const ny=(py-edMarginY())/ph;
-  return{px,py,nx,ny};
+  const src = e.touches ? e.touches[0] : e;
+  // Coordenadas de pantalla (el canvas cubre todo el viewport)
+  const sx = src.clientX;
+  const sy = src.clientY - parseFloat(edCanvas.style.top || 0);
+  // Convertir pantalla → workspace
+  const w = edScreenToWorld(sx, sy);
+  // Convertir workspace → coordenadas de página (0-1)
+  const pw = edPageW(), ph = edPageH();
+  const nx = (w.x - edMarginX()) / pw;
+  const ny = (w.y - edMarginY()) / ph;
+  return { px: w.x, py: w.y, nx, ny };
 }
 
 
@@ -689,15 +698,14 @@ function edPinchEnd() {
    ══════════════════════════════════════════ */
 
 function _edGearPos(la){
-  // Devuelve {left, top} en px fixed para el centro del icono
-  const canvasRect = edCanvas.getBoundingClientRect();
-  const scaleX = canvasRect.width  / edCanvas.width;
-  const scaleY = canvasRect.height / edCanvas.height;
+  // Workspace coords del centro-superior del objeto
   const pw=edPageW(), ph=edPageH();
-  // Convertir coords de página → coords canvas → coords screen
-  const cx = canvasRect.left + (edMarginX() + la.x * pw) * scaleX;
-  const ty = canvasRect.top  + (edMarginY() + (la.y - la.height/2) * ph) * scaleY;
-  return { cx, ty };
+  const wx = edMarginX() + la.x * pw;
+  const wy = edMarginY() + (la.y - la.height/2) * ph;
+  // Convertir workspace → screen con la cámara
+  const s = edWorldToScreen(wx, wy);
+  const canvasTop = parseFloat(edCanvas.style.top || 0);
+  return { cx: s.x, ty: s.y + canvasTop };
 }
 
 function edShowGearIcon(layerIdx){
@@ -766,6 +774,75 @@ function edHideGearIcon(){
 // Alias para compatibilidad con llamadas anteriores
 function edHideContextMenu(){ edHideGearIcon(); }
 function edShowContextMenu(idx){ edShowGearIcon(idx); }
+
+
+/* ══════════════════════════════════════════
+   SCROLLBARS VIRTUALES
+   Dibujadas sobre el canvas en coordenadas de pantalla.
+   Solo aparecen cuando el lienzo no cabe entero en el viewport.
+   ══════════════════════════════════════════ */
+const _edSB = { needH: false, needV: false };
+
+function _edScrollbarsUpdate(){
+  if(!edCanvas) return;
+  const { h, v } = edNeedsScroll();
+  _edSB.needH = h;
+  _edSB.needV = v;
+}
+
+function _edScrollbarsDraw(){
+  if(!edCtx || !edCanvas) return;
+  const W = edCanvas.width, H = edCanvas.height;
+  const pw = edPageW(), ph = edPageH();
+  const thick = 6, margin = 2, radius = 3;
+
+  // Rango del workspace en pantalla
+  const wsLeft  = edCamera.x;
+  const wsTop   = edCamera.y;
+  const wsRight = wsLeft + ED_CANVAS_W * edCamera.z;
+  const wsBot   = wsTop  + ED_CANVAS_H * edCamera.z;
+
+  // Qué parte del workspace está visible
+  const visLeft = -wsLeft;
+  const visTop  = -wsTop;
+  const visW    = W;
+  const visH    = H;
+  const wsW     = ED_CANVAS_W * edCamera.z;
+  const wsH     = ED_CANVAS_H * edCamera.z;
+
+  edCtx.save();
+  edCtx.globalAlpha = 0.55;
+
+  if(_edSB.needH && wsW > 0){
+    const trackW = W - margin*2 - (thick+margin);
+    const thumbW = Math.max(30, trackW * (visW / wsW));
+    const thumbX = margin + trackW * (Math.max(0, visLeft) / wsW);
+    edCtx.fillStyle = '#555';
+    _edRoundRect(edCtx, Math.min(thumbX, W - thumbW - margin - thick - margin), H - thick - margin, thumbW, thick, radius);
+    edCtx.fill();
+  }
+
+  if(_edSB.needV && wsH > 0){
+    const trackH = H - margin*2 - (thick+margin);
+    const thumbH = Math.max(30, trackH * (visH / wsH));
+    const thumbY = margin + trackH * (Math.max(0, visTop) / wsH);
+    edCtx.fillStyle = '#555';
+    _edRoundRect(edCtx, W - thick - margin, Math.min(thumbY, H - thumbH - margin - thick - margin), thick, thumbH, radius);
+    edCtx.fill();
+  }
+
+  edCtx.restore();
+}
+
+function _edRoundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.arcTo(x+w, y, x+w, y+r, r);
+  ctx.lineTo(x+w, y+h-r); ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+  ctx.lineTo(x+r, y+h); ctx.arcTo(x, y+h, x, y+h-r, r);
+  ctx.lineTo(x, y+r); ctx.arcTo(x, y, x+r, y, r);
+  ctx.closePath();
+}
 
 function edOnStart(e){
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
@@ -1373,7 +1450,8 @@ function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
   edCurrentPage=0;edLayers=edPages[0].layers;
-  if(edCanvas) edCanvas._firstFit = true; // centrar al cargar proyecto
+  // Centrar cámara al cargar proyecto
+  if(edCanvas) { edFitCanvas(true); }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
 }
@@ -1635,8 +1713,20 @@ function EditorView_init(){
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
   $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
   $('edZoomResetBtn')?.addEventListener('click',()=>{
-    edZoom = edZoom < 0.99 ? 1.0 : 0.35; // alterna entre lienzo normal y vista alejada
-    edFitCanvas();
+    const pw=edPageW(), ph=edPageH();
+    const fullZoom = Math.min(edCanvas.width/pw, edCanvas.height/ph);
+    const workZoom = Math.min(edCanvas.width/ED_CANVAS_W, edCanvas.height/ED_CANVAS_H);
+    // Alterna entre "lienzo llena viewport" y "workspace completo visible"
+    const isAtFull = Math.abs(edCamera.z - fullZoom) < 0.01;
+    if(isAtFull){
+      edCamera.z = workZoom;
+      edCamera.x = edCanvas.width/2  - ED_CANVAS_W/2 * workZoom;
+      edCamera.y = edCanvas.height/2 - ED_CANVAS_H/2 * workZoom;
+    } else {
+      _edCameraReset();
+    }
+    edRedraw();
+    _edScrollbarsUpdate();
   });
   $('edSaveBtn')?.addEventListener('click',edSaveProject);
   $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
@@ -1762,23 +1852,21 @@ function EditorView_init(){
   // ── Ctrl+Wheel: zoom del canvas ──
   window._edWheelFn = e => {
     if(!document.getElementById('editorShell')) return;
-    if(!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    const wrap = document.getElementById('editorCanvasWrap');
-    if(!wrap || !edCanvas) return;
-    // Posición del cursor relativa al wrap (para centrar el zoom en el cursor)
-    const wRect = wrap.getBoundingClientRect();
-    const cursorXinWrap = e.clientX - wRect.left + wrap.scrollLeft;
-    const cursorYinWrap = e.clientY - wRect.top  + wrap.scrollTop;
-    const prevScale = edCanvas._lastScale || 1;
-    const factor = e.deltaY > 0 ? 0.9 : 1.1;
-    edZoom = Math.min(Math.max(edZoom * factor, 0.1), 5.0);
-    edFitCanvas();
-    // Ajustar scroll para que el punto bajo el cursor no se mueva
-    const newScale = edCanvas._lastScale || 1;
-    const ratio = newScale / prevScale;
-    wrap.scrollLeft = Math.round(cursorXinWrap * ratio - (e.clientX - wRect.left));
-    wrap.scrollTop  = Math.round(cursorYinWrap * ratio - (e.clientY - wRect.top));
+    if(e.ctrlKey || e.metaKey){
+      // Zoom hacia el cursor
+      const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
+      const sx = e.clientX;
+      const sy = e.clientY - canvasTop;
+      const factor = e.deltaY > 0 ? 1/1.1 : 1.1;
+      edZoomAt(sx, sy, factor);
+    } else {
+      // Pan (sin Ctrl: trackpad two-finger scroll o rueda normal)
+      edCamera.x -= e.deltaX;
+      edCamera.y -= e.deltaY;
+    }
+    edRedraw();
+    _edScrollbarsUpdate();
   };
   window.addEventListener('wheel', window._edWheelFn, {passive: false});
 
@@ -1808,17 +1896,14 @@ function EditorView_init(){
     const menu   = $('edMenuBar');
     const topH   = topbar ? topbar.getBoundingClientRect().height : 0;
     const menuH  = menu   ? menu.getBoundingClientRect().height   : 0;
-    // Si ambas barras tienen altura real, ya está listo
     if (topH > 10 && menuH > 10) {
-      edFitCanvas(); edRedraw(); return;
+      edFitCanvas(true); edRedraw(); return;
     }
     if (attemptsLeft <= 0) {
-      edFitCanvas(); edRedraw(); return; // último recurso
+      edFitCanvas(true); edRedraw(); return;
     }
     requestAnimationFrame(() => _edInitFit(attemptsLeft - 1));
   }
-  // Marcar primera vez para centrar el scroll al hacer fit
-  if(edCanvas) edCanvas._firstFit = true;
   // Primer intento tras doble rAF; si falla reintenta hasta 30 frames (~500ms)
   requestAnimationFrame(() => requestAnimationFrame(() => _edInitFit(30)));
 
@@ -1843,42 +1928,33 @@ function EditorView_init(){
   let _shellPinch0 = 0, _shellZoom0 = 1;
   const editorShell = document.getElementById('editorShell');
   if(editorShell){
-    let _shellPinchMidX = 0, _shellPinchMidY = 0;
+    let _pinchPrev = 0, _pinchMidX = 0, _pinchMidY = 0;
     editorShell.addEventListener('touchstart', e => {
       if(e.touches.length === 2){
-        _shellPinch0 = Math.hypot(
+        _pinchPrev = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
-        _shellZoom0 = edZoom;
-        // Punto medio entre los dos dedos
-        _shellPinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-        _shellPinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
+        _pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        _pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - canvasTop;
       }
     }, {passive:true});
     editorShell.addEventListener('touchmove', e => {
-      if(e.touches.length === 2 && _shellPinch0 > 0){
+      if(e.touches.length === 2 && _pinchPrev > 0){
+        e.preventDefault();
         const dist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
-        const wrap = document.getElementById('editorCanvasWrap');
-        const prevScale = edCanvas ? (edCanvas._lastScale || 1) : 1;
-        edZoom = Math.min(Math.max(_shellZoom0 * (dist / _shellPinch0), 0.1), 5.0);
-        edFitCanvas();
-        // Centrar zoom en el punto medio de los dedos
-        if(wrap){
-          const wRect = wrap.getBoundingClientRect();
-          const newScale = edCanvas._lastScale || 1;
-          const ratio = newScale / prevScale;
-          const midXinWrap = _shellPinchMidX - wRect.left + wrap.scrollLeft;
-          const midYinWrap = _shellPinchMidY - wRect.top  + wrap.scrollTop;
-          wrap.scrollLeft = Math.round(midXinWrap * ratio - (_shellPinchMidX - wRect.left));
-          wrap.scrollTop  = Math.round(midYinWrap * ratio - (_shellPinchMidY - wRect.top));
-        }
+        const factor = dist / _pinchPrev;
+        edZoomAt(_pinchMidX, _pinchMidY, factor);
+        _pinchPrev = dist;
+        edRedraw();
+        _edScrollbarsUpdate();
       }
-    }, {passive:true});
-    editorShell.addEventListener('touchend', ()=>{ _shellPinch0 = 0; }, {passive:true});
+    }, {passive:false});
+    editorShell.addEventListener('touchend', ()=>{ _pinchPrev = 0; }, {passive:true});
   }
 
   // Seguro extra: si después de 600ms el canvas sigue muy pequeño, refitear

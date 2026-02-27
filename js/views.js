@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.38</footer>
+    <footer class="app-version">v4.39</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -164,9 +164,7 @@ Router.register('editor', {
 
       <!-- CANVAS (fondo, ocupa todo) -->
       <div id="editorCanvasWrap">
-        <div id="editorCanvasInner">
-          <canvas id="editorCanvas"></canvas>
-        </div>
+        <canvas id="editorCanvas"></canvas>
         <div id="edToast"></div>
       </div>
 

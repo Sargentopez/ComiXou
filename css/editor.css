@@ -20,7 +20,7 @@ body.editor-page #appView {
 #editorShell {
   position: relative;
   width: 100%; height: 100%;
-  overflow: visible;  /* objetos pueden salir del canvas (mesa de trabajo) */
+  overflow: hidden;
 }
 
 /* ══════════════════════════════
@@ -62,6 +62,16 @@ body.editor-page #appView {
 #edTopbar .ed-top-spacer {
   flex: 1;
 }
+/* Botón icono en topbar (zoom, etc.) */
+.ed-top-icon {
+  background: none; border: none;
+  font-size: 1rem; cursor: pointer;
+  padding: 4px 6px; border-radius: 6px;
+  flex-shrink: 0; line-height: 1;
+  transition: background .12s;
+}
+.ed-top-icon:hover  { background: rgba(0,0,0,.1); }
+.ed-top-icon:active { background: rgba(0,0,0,.2); }
 
 .ed-top-action {
   background: var(--black); color: var(--white);
@@ -262,21 +272,17 @@ body.editor-page #appView {
 #editorCanvasWrap {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--paper);
-  overflow: visible;  /* permite ver objetos fuera del canvas (mesa de trabajo) */
+  overflow: hidden;
+  /* El canvas DOM cubre todo este div, se gestiona via JS */
 }
 
 #editorCanvas {
   display: block;
+  position: absolute;
   touch-action: none;
   user-select: none;
-  border-radius: 4px;
-  box-shadow: 0 2px 20px rgba(0,0,0,.13), 0 0 0 1px rgba(0,0,0,.06);
   cursor: default;
-  background: #fff;
+  /* Sin borde/sombra — el lienzo se dibuja dentro del canvas via JS */
 }
 #editorCanvas.tool-draw   { cursor: crosshair; }
 #editorCanvas.tool-eraser { cursor: cell; }
@@ -407,7 +413,7 @@ body.editor-page #appView {
 #viewerCanvas {
   display: block;
   background: #fff;
-  /* JS sobreescribe width/height/marginTop */
+  /* JS sobreescribe width/height */
 }
 
 /* Controles flotantes: pastilla semitransparente pegada abajo */
