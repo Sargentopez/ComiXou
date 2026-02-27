@@ -813,6 +813,8 @@ body.editor-page #appView {
 }
 .ed-page-action-btn:hover { color: var(--black); background: var(--gray-100); }
 .ed-page-del:hover { color: var(--red, #e63030) !important; background: #fff0f0 !important; }
+.ed-page-rot { color: #666; }
+.ed-page-rot:hover { color: #000; background: var(--gray-100); }
 
 /* ── Panel de capas v4 ── */
 

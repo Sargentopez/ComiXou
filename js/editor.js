@@ -43,9 +43,13 @@ const ED_CANVAS_H = ED_PAGE_H * 3;  // 2340
 
 const $ = id => document.getElementById(id);
 
-// Dimensiones del lienzo según orientación actual
-function edPageW(){ return edOrientation === 'vertical' ? ED_PAGE_W : ED_PAGE_H; }
-function edPageH(){ return edOrientation === 'vertical' ? ED_PAGE_H : ED_PAGE_W; }
+// Dimensiones del lienzo según orientación de la hoja actual (o global si no definida)
+function _edCurrentOrientation(){
+  const po = edPages[edCurrentPage]?.orientation;
+  return po || edOrientation;
+}
+function edPageW(){ return _edCurrentOrientation() === 'vertical' ? ED_PAGE_W : ED_PAGE_H; }
+function edPageH(){ return _edCurrentOrientation() === 'vertical' ? ED_PAGE_H : ED_PAGE_W; }
 // Offset del lienzo dentro del workspace (centrado)
 function edMarginX(){ return (ED_CANVAS_W - edPageW()) / 2; }
 function edMarginY(){ return (ED_CANVAS_H - edPageH()) / 2; }
@@ -566,7 +570,7 @@ function edDrawSel(){
    PÁGINAS
    ══════════════════════════════════════════ */
 function edAddPage(){
-  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
+  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate',orientation:edOrientation});
   edLoadPage(edPages.length-1);
   edToast('Página añadida');
 }
@@ -1388,7 +1392,12 @@ function edSaveProject(){
 }
 function edRenderPage(page){
   // Renderizar solo la zona de la página (sin margen de workspace)
-  // Usamos un canvas proxy con ED_MARGIN=0 para que las capas no añadan offset
+  // Temporalmente usar la orientación de esta hoja específica
+  const _savedOrient = edOrientation;
+  const _savedPage   = edCurrentPage;
+  const _pageIdx     = edPages.indexOf(page);
+  if(_pageIdx >= 0){ edCurrentPage = _pageIdx; }
+  if(page.orientation) edOrientation = page.orientation;
   const pw=edPageW(), ph=edPageH();
   const tmp=document.createElement('canvas');tmp.width=pw;tmp.height=ph;
   // Proxy: simula ser el canvas completo pero con margen 0
@@ -1405,6 +1414,9 @@ function edRenderPage(page){
   // Recortar solo la zona de la página
   const outCtx=tmp.getContext('2d');
   outCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
+  // Restaurar estado
+  edOrientation  = _savedOrient;
+  edCurrentPage  = _savedPage;
   return tmp.toDataURL('image/jpeg',0.85);
 }
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
@@ -1463,6 +1475,8 @@ function edLoadProject(id){
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
+    // Retrocompatibilidad: asignar orientación global a hojas sin orientation propia
+    edPages.forEach(p=>{ if(!p.orientation) p.orientation = edOrientation; });
     edPages=(comic.editorData.pages||[]).map(pd=>({
       drawData:pd.drawData||null,
       layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),

@@ -77,7 +77,8 @@ function _pgBuildCard(page, idx) {
   const thumb = document.createElement('canvas');
   thumb.className = 'ed-page-thumb';
   thumb.width  = 90;
-  thumb.height = edOrientation === 'vertical' ? 127 : 64;
+  const _thumbOrient = page.orientation || edOrientation;
+  thumb.height = _thumbOrient === 'vertical' ? 127 : 64;
   _pgDrawThumb(thumb, page);
 
   // Acciones
@@ -92,6 +93,17 @@ function _pgBuildCard(page, idx) {
   dupBtn.addEventListener('click', e => {
     e.stopPropagation();
     _pgDuplicate(idx);
+  });
+
+  // Rotar orientación
+  const rotBtn = document.createElement('button');
+  rotBtn.className = 'ed-page-action-btn ed-page-rot';
+  const pageOrient = page.orientation || edOrientation;
+  rotBtn.title = 'Cambiar orientación';
+  rotBtn.innerHTML = _pgOrientIcon(pageOrient);
+  rotBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    _pgRotatePage(idx);
   });
 
   // Eliminar
@@ -109,6 +121,7 @@ function _pgBuildCard(page, idx) {
   });
 
   actions.appendChild(dupBtn);
+  actions.appendChild(rotBtn);
   actions.appendChild(delBtn);
 
   card.appendChild(num);
@@ -278,4 +291,80 @@ function _pgBindTouchDrag(card, idx) {
     }
     _pgDragOver = null;
   });
+}
+
+/* ──────────────────────────────────────────
+   ICONO DE ORIENTACIÓN Y ROTACIÓN POR HOJA
+────────────────────────────────────────── */
+
+// Devuelve un SVG inline que muestra la orientación CONTRARIA (destino del botón)
+function _pgOrientIcon(currentOrient) {
+  // Si la hoja es vertical → el botón muestra un rectángulo horizontal (y viceversa)
+  if (currentOrient === 'vertical') {
+    // Mostrar rectángulo apaisado (horizontal)
+    return '<svg width="18" height="14" viewBox="0 0 18 14" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+           '<rect x="1" y="3" width="16" height="8" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>' +
+           '</svg>';
+  } else {
+    // Mostrar rectángulo vertical
+    return '<svg width="12" height="18" viewBox="0 0 12 18" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+           '<rect x="1.5" y="1" width="9" height="16" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/>' +
+           '</svg>';
+  }
+}
+
+// Cambia la orientación de una hoja sin alterar las proporciones de sus imágenes
+function _pgRotatePage(idx) {
+  const page = edPages[idx];
+  if (!page) return;
+
+  const currentOrient = page.orientation || edOrientation;
+  const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
+
+  // Ratio de escala entre el lienzo anterior y el nuevo
+  // Antes: pw × ph (ej. 360×780 vertical)
+  // Después: ph × pw (ej. 780×360 horizontal)
+  // Las coordenadas normalizadas (0-1) de cada capa son relativas al lienzo.
+  // Al cambiar de orientación el lienzo rota, pero los objetos deben
+  // mantener su tamaño físico (en mm/px reales), no su tamaño normalizado.
+  //
+  // Tamaño físico de un objeto: w_px = la.width * pw, h_px = la.height * ph
+  // En el nuevo lienzo (pw',ph') = (ph,pw):
+  //   la.width_new  = w_px / pw' = la.width * pw / ph
+  //   la.height_new = h_px / ph' = la.height * ph / pw
+  // La posición también se reescala igual.
+  const pwOld = currentOrient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const phOld = currentOrient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const pwNew = phOld;  // el nuevo ancho es la altura anterior
+  const phNew = pwOld;  // la nueva altura es el ancho anterior
+
+  const scaleW = pwOld / pwNew;  // = pwOld / phOld
+  const scaleH = phOld / phNew;  // = phOld / pwOld
+
+  page.layers.forEach(la => {
+    if (!la) return;
+    // Reescalar posición y dimensiones para preservar tamaño físico
+    la.x      = la.x      * scaleW;
+    la.y      = la.y      * scaleH;
+    la.width  = la.width  * scaleW;
+    la.height = la.height * scaleH;
+  });
+
+  // El drawData (dibujo libre) se descarta — no tiene forma trivial de rotar
+  // y el texto/imágenes ya se recolocan. Avisar al usuario.
+  const hadDraw = !!page.drawData;
+  page.drawData = null;
+
+  page.orientation = newOrient;
+
+  // Si es la hoja activa, actualizar la cámara y redibujar
+  if (idx === edCurrentPage) {
+    if (typeof edFitCanvas === 'function') edFitCanvas(true);
+    if (typeof edRedraw    === 'function') edRedraw();
+  }
+
+  edPushHistory();
+  if (hadDraw) edToast('Orientación cambiada · el dibujo libre no se puede rotar y fue borrado');
+  else         edToast('Orientación cambiada');
+  _pgRender();
 }
