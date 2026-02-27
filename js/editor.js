@@ -686,15 +686,35 @@ function edHideContextMenu(){ edHideGearIcon(); }
 function edShowContextMenu(idx){ edShowGearIcon(idx); }
 
 function edOnStart(e){
+  // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
+  // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
+  const tgt = e.target;
+  const isUI = tgt.closest('#edMenuBar')    ||
+               tgt.closest('#edTopbar')     ||
+               tgt.closest('#edOptionsPanel') ||
+               tgt.closest('.ed-fulloverlay') ||
+               tgt.closest('.ed-dropdown')  ||
+               tgt.closest('#edGearIcon')   ||
+               tgt.closest('#edBrushCursor')||
+               tgt.closest('.ed-float-btn') ||
+               tgt.closest('#editorViewer') ||
+               tgt.closest('#edProjectModal');
+  if(isUI) return;
+
   e.preventDefault();
   // 2 dedos → iniciar pinch-to-zoom
   if(e.touches && e.touches.length === 2){
     edPinchStart(e);
     return;
   }
-  if(edMenuOpen){edCloseMenus();return;}
+  // Cerrar menús si están abiertos (clic en canvas o zona de trabajo)
+  if(edMenuOpen){ edCloseMenus(); }
   edHideContextMenu();
-  if(['draw','eraser'].includes(edActiveTool)){edStartPaint(e);return;}
+  if(['draw','eraser'].includes(edActiveTool)){
+    // Solo dibujar dentro del canvas
+    if(tgt !== edCanvas) return;
+    edStartPaint(e);return;
+  }
   const c=edCoords(e);
   // Cola bocadillo
   if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
@@ -753,9 +773,9 @@ function edOnStart(e){
   edRedraw();
 }
 function edOnMove(e){
-  // Ignorar si no hay gesto activo y el evento viene de fuera del canvas
+  // Sin gesto activo → ignorar (solo procesar durante drags)
   const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
-  if(!gestureActive && e.target !== edCanvas) return;
+  if(!gestureActive) return;
   e.preventDefault();
   // Pinch activo
   if(e.touches && e.touches.length === 2){
@@ -806,9 +826,9 @@ function edOnMove(e){
   }
 }
 function edOnEnd(e){
-  // Ignorar si no hay gesto activo y el evento viene de fuera del canvas
+  // Sin gesto activo → ignorar
   const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
-  if(!gestureActive2 && e && e.target !== edCanvas) return;
+  if(!gestureActive2) return;
   // Si quedan menos de 2 dedos, terminar pinch
   if(edPinching && (!e || !e.touches || e.touches.length < 2)){
     edPinchEnd();
@@ -1462,12 +1482,11 @@ function EditorView_init(){
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
   // ── CANVAS ──
-  // pointerdown y touchstart en canvas (iniciar gesto)
-  edCanvas.addEventListener('pointerdown', edOnStart, {passive:false});
-  edCanvas.addEventListener('touchstart',  edOnStart, {passive:false});
-  // pointermove/up en DOCUMENT para capturar cuando el ratón/dedo sale del canvas
+  // Todos los eventos en document para capturar objetos fuera del canvas
+  document.addEventListener('pointerdown', edOnStart, {passive:false});
   document.addEventListener('pointermove', edOnMove,  {passive:false});
   document.addEventListener('pointerup',   edOnEnd);
+  document.addEventListener('touchstart',  edOnStart, {passive:false});
   document.addEventListener('touchmove',   edOnMove,  {passive:false});
   document.addEventListener('touchend',    edOnEnd);
 
@@ -1636,16 +1655,13 @@ function EditorView_init(){
   // Primer intento tras doble rAF; si falla reintenta hasta 30 frames (~500ms)
   requestAnimationFrame(() => requestAnimationFrame(() => _edInitFit(30)));
 
-  // ── DEACTIVATE DRAW WHEN CLICKING OUTSIDE CANVAS ──
+  // Cerrar herramienta de dibujo al tocar fuera del canvas
+  // (el cierre de menús lo gestiona edOnStart)
   document.addEventListener('pointerdown', e => {
     if(['draw','eraser'].includes(edActiveTool)){
       if(!e.target.closest('#editorCanvas') && !e.target.closest('#edOptionsPanel')){
         edDeactivateDrawTool();
       }
-    }
-    // Cerrar menús al tocar fuera (los dropdowns pueden estar en body)
-    if(!e.target.closest('#edMenuBar') && !e.target.closest('.ed-dropdown')){
-      edCloseMenus();
     }
   });
 

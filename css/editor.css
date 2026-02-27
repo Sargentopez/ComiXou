@@ -261,7 +261,7 @@ body.editor-page #appView {
   align-items: center;
   justify-content: center;
   background: var(--paper);
-  overflow: hidden;
+  overflow: visible;  /* permite ver objetos fuera del canvas (mesa de trabajo) */
 }
 
 #editorCanvas {
