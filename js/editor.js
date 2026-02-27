@@ -29,6 +29,7 @@ let edZoom = 1.0;               // LEGACY — no usado, ver edCamera
 // z   = escala (1 = lienzo ocupa el viewport)
 const edCamera = { x: 0, y: 0, z: 1 };
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
+let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
@@ -892,6 +893,7 @@ function edOnStart(e){
   if(isUI) return;
 
   e.preventDefault();
+  _edTouchMoved = false; // resetear flag de movimiento
   // 2 dedos → iniciar pinch-to-zoom
   if(e.touches && e.touches.length === 2){
     edPinchStart(e);
@@ -929,6 +931,7 @@ function edOnStart(e){
     }
   }
   // Seleccionar
+  const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   let found=-1;
   for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
   if(found>=0){
@@ -937,23 +940,34 @@ function edOnStart(e){
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
     edHideGearIcon();
-    // Doble tap en el mismo objeto → abrir propiedades
-    const now = Date.now();
-    if(found === _edLastTapIdx && now - _edLastTapTime < 350){
-      edIsDragging = false;
-      clearTimeout(window._edLongPress);
-      edRenderOptionsPanel('props');
-      _edLastTapTime = 0; _edLastTapIdx = -1;
-    } else {
-      _edLastTapTime = now; _edLastTapIdx = found;
-      // Long-press 600ms sin mover → mostrar gear / abrir propiedades
-      clearTimeout(window._edLongPress);
+    clearTimeout(window._edLongPress);
+    if(_isTouch){
+      // TÁCTIL: toque simple = solo seleccionar (sin abrir panel)
+      // Pulsación larga ≥ 2s sin mover → abrir panel de propiedades
       window._edLongPress = setTimeout(() => {
-        if(edSelectedIdx === found && !edIsResizing){
-          edIsDragging = false;
+        if(edSelectedIdx === found && !edIsResizing && !_edTouchMoved){
+          edIsDragging = false; // soltar el drag para que no arrastre al soltar
           edRenderOptionsPanel('props');
         }
-      }, 600);
+      }, 2000);
+    } else {
+      // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
+      const now = Date.now();
+      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+        edIsDragging = false;
+        clearTimeout(window._edLongPress);
+        edRenderOptionsPanel('props');
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+      } else {
+        _edLastTapTime = now; _edLastTapIdx = found;
+        // Long-press 600ms en PC (ratón) → abrir propiedades
+        window._edLongPress = setTimeout(() => {
+          if(edSelectedIdx === found && !edIsResizing){
+            edIsDragging = false;
+            edRenderOptionsPanel('props');
+          }
+        }, 600);
+      }
     }
   } else {
     edSelectedIdx = -1;
@@ -975,6 +989,7 @@ function edOnMove(e){
   if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
   const c=edCoords(e);
+  _edTouchMoved = true;
   clearTimeout(window._edLongPress); // cancelar longpress si el dedo se movió
   if(edIsTailDragging&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
