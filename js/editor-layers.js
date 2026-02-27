@@ -173,6 +173,31 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   lbl.textContent = (la.type === 'bubble' ? '💬 ' : 'T ') + (la.text || '').substring(0, 22);
   row.appendChild(lbl);
 
+  /* Flechas subir/bajar nivel */
+  const textObjs = edLayers.filter(l => l.type==='text' || l.type==='bubble');
+  const viIdx = textObjs.indexOf(la);
+  const upBtn = document.createElement('button');
+  upBtn.className = 'ed-layer-arrow';
+  upBtn.title = 'Subir nivel';
+  upBtn.textContent = '▲';
+  upBtn.disabled = viIdx <= 0;
+  upBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const prevTxt = textObjs[viIdx - 1];
+    const toIdx = edLayers.indexOf(prevTxt);
+    if (toIdx >= 0) _lyReorderTexts(realIdx, toIdx);
+  });
+  const dnBtn = document.createElement('button');
+  dnBtn.className = 'ed-layer-arrow';
+  dnBtn.title = 'Bajar nivel';
+  dnBtn.textContent = '▼';
+  dnBtn.disabled = viIdx >= textObjs.length - 1;
+  dnBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const nextTxt = textObjs[viIdx + 1];
+    const toIdx = edLayers.indexOf(nextTxt);
+    if (toIdx >= 0) _lyReorderTexts(realIdx, toIdx);
+  });
   /* Eliminar */
   const del = document.createElement('button');
   del.className = 'ed-layer-del';
@@ -184,7 +209,13 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
     if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
     edPushHistory(); edRedraw(); _lyRender();
   });
-  row.appendChild(del);
+  // Agrupar controles en un div que nunca se comprime
+  const acts = document.createElement('div');
+  acts.className = 'ed-layer-actions';
+  acts.appendChild(upBtn);
+  acts.appendChild(dnBtn);
+  acts.appendChild(del);
+  row.appendChild(acts);
 
   /* Drag — solo si modo secuencial, desde la miniatura */
   if (draggable) {
@@ -229,6 +260,31 @@ function _lyBuildImgItem(la, realIdx, selected) {
   // Opacidad ahora en el panel de propiedades de imagen (⚙)
   item.appendChild(info);
 
+  /* Flechas subir/bajar nivel */
+  const imgPairsAll = edLayers.map((l,i)=>({l,i})).filter(({l})=>l.type==='image');
+  const imgPosInList = imgPairsAll.findIndex(({i})=>i===realIdx);
+  // La lista se muestra invertida (primero = encima), así ▲ = índice más alto en edLayers
+  const upBtnI = document.createElement('button');
+  upBtnI.className = 'ed-layer-arrow';
+  upBtnI.title = 'Subir nivel';
+  upBtnI.textContent = '▲';
+  upBtnI.disabled = imgPosInList >= imgPairsAll.length - 1; // ya es el último (más arriba visualmente)
+  upBtnI.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    // Subir = mover hacia índice mayor en edLayers (más arriba en la pila)
+    const nextImg = imgPairsAll[imgPosInList + 1];
+    if (nextImg) _lyReorderImages(realIdx, nextImg.i + 1);
+  });
+  const dnBtnI = document.createElement('button');
+  dnBtnI.className = 'ed-layer-arrow';
+  dnBtnI.title = 'Bajar nivel';
+  dnBtnI.textContent = '▼';
+  dnBtnI.disabled = imgPosInList <= 0; // ya es el primero (más abajo visualmente)
+  dnBtnI.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const prevImg = imgPairsAll[imgPosInList - 1];
+    if (prevImg) _lyReorderImages(realIdx, prevImg.i);
+  });
   /* Eliminar */
   const del = document.createElement('button');
   del.className = 'ed-layer-del';
@@ -240,7 +296,12 @@ function _lyBuildImgItem(la, realIdx, selected) {
     if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
     edPushHistory(); edRedraw(); _lyRender();
   });
-  item.appendChild(del);
+  const actsI = document.createElement('div');
+  actsI.className = 'ed-layer-actions';
+  actsI.appendChild(upBtnI);
+  actsI.appendChild(dnBtnI);
+  actsI.appendChild(del);
+  item.appendChild(actsI);
 
   /* Drag desde miniatura */
   _lyBindImgDrag(item, thumb, realIdx);

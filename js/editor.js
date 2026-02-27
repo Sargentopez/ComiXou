@@ -948,14 +948,25 @@ function edOnStart(e){
     edHideGearIcon();
     clearTimeout(window._edLongPress);
     if(_isTouch){
-      // TÁCTIL: toque simple = solo seleccionar (sin abrir panel)
-      // Pulsación larga ≥ 2s sin mover → abrir panel de propiedades
-      window._edLongPress = setTimeout(() => {
-        if(edSelectedIdx === found && !edIsResizing && !_edTouchMoved){
-          edIsDragging = false; // soltar el drag para que no arrastre al soltar
-          edRenderOptionsPanel('props');
-        }
-      }, 1000);
+      // TÁCTIL: toque simple = solo seleccionar
+      // Doble toque rápido (≤350ms) → abrir panel de propiedades
+      const now = Date.now();
+      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+        // Doble toque: abrir panel
+        edIsDragging = false;
+        clearTimeout(window._edLongPress);
+        edRenderOptionsPanel('props');
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+      } else {
+        _edLastTapTime = now; _edLastTapIdx = found;
+        // Pulsación larga ≥ 1s sin mover → abrir panel de propiedades
+        window._edLongPress = setTimeout(() => {
+          if(edSelectedIdx === found && !edIsResizing && !_edTouchMoved){
+            edIsDragging = false;
+            edRenderOptionsPanel('props');
+          }
+        }, 1000);
+      }
     } else {
       // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
       const now = Date.now();
@@ -1789,6 +1800,18 @@ function EditorView_init(){
   });
   $('edSaveBtn')?.addEventListener('click',edSaveProject);
   $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
+  // Botón pantalla completa en topbar
+  $('edFsBtn')?.addEventListener('click', () => {
+    if(typeof Fullscreen !== 'undefined') Fullscreen.request();
+  });
+  const _edFsUpdate = () => {
+    const btn = $('edFsBtn'); if(!btn) return;
+    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    btn.textContent = active ? '⛶✕' : '⛶';
+    btn.title = active ? 'Salir pantalla completa' : 'Pantalla completa';
+  };
+  document.addEventListener('fullscreenchange', _edFsUpdate);
+  document.addEventListener('webkitfullscreenchange', _edFsUpdate);
 
   // ── MENÚ: botones dropdown (excluir layers y nav que tienen overlays propios) ──
   document.querySelectorAll('[data-menu]').forEach(btn=>{
