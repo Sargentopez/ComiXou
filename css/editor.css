@@ -85,19 +85,16 @@ body.editor-page #appView {
 /* Nav de páginas en topbar */
 .ed-top-pagnav {
   display: flex;
-  align-items: center;
-  gap: 1px;
-  background: none;
-  border-radius: 0;
-  padding: 0;
-  flex-shrink: 0;
-  border: none;
+  align-items: flex-end;   /* pegado al fondo del topbar */
   gap: 0;
+  flex-shrink: 0;
+  padding-bottom: 4px;     /* pequeño margen con el borde inferior */
+  align-self: flex-end;
 }
 .ed-top-pagebn {
   background: none; border: none;
-  font-size: 0.6rem; color: var(--black);
-  width: 20px; height: 22px;
+  font-size: 0.9rem; color: var(--black);  /* triángulos más grandes */
+  width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; border-radius: 4px;
   padding: 0; line-height: 1;
@@ -109,10 +106,10 @@ body.editor-page #appView {
 .ed-top-pagebn:disabled { opacity: .28; cursor: default; }
 #edPageNum {
   font-family: var(--font-body);
-  font-size: 0.72rem; font-weight: 900;
+  font-size: 0.9rem; font-weight: 900;   /* número mismo tamaño que triángulos */
   color: var(--black);
-  min-width: 14px; text-align: center;
-  line-height: 1;
+  min-width: 22px; text-align: center;
+  line-height: 28px;   /* altura = triángulos */
 }
 
 /* ══════════════════════════════
@@ -413,6 +410,8 @@ body.editor-page #appView {
 #viewerCanvas {
   display: block;
   background: #fff;
+  border-radius: 28px;   /* imita pantalla móvil */
+  overflow: hidden;
   /* JS sobreescribe width/height */
 }
 
@@ -710,6 +709,8 @@ body.editor-page #appView {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 .ed-layer-op-row {
@@ -733,6 +734,28 @@ body.editor-page #appView {
   text-align: right;
 }
 
+.ed-layer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.ed-layer-arrow {
+  background: none;
+  border: none;
+  font-size: .75rem;
+  line-height: 1;
+  padding: 6px 4px;
+  cursor: pointer;
+  color: #666;
+  flex-shrink: 0;
+  min-width: 24px;
+  text-align: center;
+  border-radius: 0;
+}
+.ed-layer-arrow:hover:not(:disabled) { color: #000; }
+.ed-layer-arrow:disabled { opacity: .2; cursor: default; }
 .ed-layer-del {
   background: none; border: none;
   font-size: 1rem; cursor: pointer;
@@ -910,7 +933,7 @@ body.editor-page #appView {
 .ed-layer-text-row.drag-over { border-color: #2563eb; background: #eff6ff; }
 
 .ed-layer-thumb-sm {
-  width: 56px; height: 42px;
+  width: 44px; height: 33px;
   border-radius: 5px;
   border: 1px solid var(--gray-200);
   background: #f5f5f5;

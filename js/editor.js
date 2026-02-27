@@ -743,72 +743,12 @@ function _edGearPos(la){
   return { cx: s.x, ty: s.y + canvasTop };
 }
 
-function edShowGearIcon(layerIdx){
-  edHideGearIcon();
-  if(layerIdx < 0 || layerIdx >= edLayers.length) return;
-
-  const SIZE = 32;
-  const R    = SIZE / 2;
-
-  const btn = document.createElement('button');
-  btn.id = 'edGearIcon';
-  btn.innerHTML = '⚙';
-  btn.title = 'Opciones del objeto';
-  btn.style.cssText = [
-    'position:fixed',
-    'z-index:500',
-    `width:${SIZE}px`,
-    `height:${SIZE}px`,
-    'border-radius:50%',
-    'background:#fff',
-    'border:2.5px solid #ff6600',
-    'box-shadow:0 2px 8px rgba(0,0,0,0.25)',
-    'display:flex',
-    'align-items:center',
-    'justify-content:center',
-    'font-size:15px',
-    'cursor:pointer',
-    'opacity:0',
-    'transition:opacity 0.12s',
-    'pointer-events:all',
-    'user-select:none',
-    '-webkit-user-select:none',
-    'padding:0',
-    'line-height:1',
-  ].join(';');
-
-  btn.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); });
-  btn.addEventListener('click', e => {
-    e.stopPropagation();
-    edPanelUserClosed = false;
-    edRenderOptionsPanel('props');
-  });
-
-  document.body.appendChild(btn);
-  edUpdateGearPos();                         // posicionar antes del fade-in
-  requestAnimationFrame(() => { btn.style.opacity = '1'; });
-}
-
-function edUpdateGearPos(){
-  // Llamado en cada redraw y en cada frame de drag para seguir al objeto
-  const btn = document.getElementById('edGearIcon');
-  if(!btn) return;
-  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length){ edHideGearIcon(); return; }
-  const la = edLayers[edSelectedIdx];
-  const { cx, ty } = _edGearPos(la);
-  const R = 16;
-  btn.style.left = Math.round(cx - R) + 'px';
-  btn.style.top  = Math.round(ty - R) + 'px';
-}
-
-function edHideGearIcon(){
-  const btn = document.getElementById('edGearIcon');
-  if(btn) btn.remove();
-}
-
-// Alias para compatibilidad con llamadas anteriores
-function edHideContextMenu(){ edHideGearIcon(); }
-function edShowContextMenu(idx){ edShowGearIcon(idx); }
+// Gear icon eliminado — se usa doble toque / long press
+function edShowGearIcon(layerIdx){ /* eliminado */ }
+function edUpdateGearPos(){ /* eliminado */ }
+function edHideGearIcon(){ const b=document.getElementById('edGearIcon');if(b)b.remove(); }
+function edHideContextMenu(){}
+function edShowContextMenu(idx){}
 
 
 /* ══════════════════════════════════════════
@@ -959,11 +899,13 @@ function edOnStart(e){
         _edLastTapTime = 0; _edLastTapIdx = -1;
       } else {
         _edLastTapTime = now; _edLastTapIdx = found;
-        // Pulsación larga ≥ 1s sin mover → abrir panel de propiedades
+        // Pulsación larga ≥ 1s sin mover → marcar flag (se confirma al soltar)
+        window._edLongPressReady = false;
         window._edLongPress = setTimeout(() => {
-          if(edSelectedIdx === found && !edIsResizing && !_edTouchMoved){
-            edIsDragging = false;
-            edRenderOptionsPanel('props');
+          if(edSelectedIdx === found && !_edTouchMoved){
+            window._edLongPressReady = true;
+            // Feedback haptico si disponible
+            if(navigator.vibrate) navigator.vibrate(30);
           }
         }, 1000);
       }
@@ -1057,8 +999,18 @@ function edOnEnd(e){
     return;
   }
   if(edPainting){edPainting=false;edSaveDrawData();}
-  clearTimeout(window._edLongPress); // cancelar longpress si soltó antes
+  clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
+  // Abrir panel si long-press se completó Y no hubo movimiento real
+  if(window._edLongPressReady && !_edTouchMoved && !edIsResizing && !edIsTailDragging){
+    window._edLongPressReady = false;
+    edIsDragging = false;
+    if(wasDragging) edPushHistory();
+    edIsResizing = false; edIsTailDragging = false;
+    edRenderOptionsPanel('props');
+    return;
+  }
+  window._edLongPressReady = false;
   if(wasDragging) edPushHistory();
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
 }
