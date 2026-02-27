@@ -52,12 +52,15 @@ body.editor-page #appView {
 #edBackBtn:active { background: rgba(0,0,0,.1); }
 
 #edProjectTitle {
-  flex: 1; min-width: 0;
+  flex: 0 1 auto; min-width: 0; max-width: 35%;
   font-family: var(--font-display);
   font-size: 1rem; letter-spacing: 0.5px;
   color: var(--black);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  text-align: left;
+}
+/* Espaciador flexible entre pagnav y botones de acción */
+#edTopbar .ed-top-spacer {
+  flex: 1;
 }
 
 .ed-top-action {
@@ -74,11 +77,12 @@ body.editor-page #appView {
   display: flex;
   align-items: center;
   gap: 1px;
-  background: rgba(0,0,0,.1);
-  border-radius: 6px;
-  padding: 1px 2px;
+  background: none;
+  border-radius: 0;
+  padding: 0;
   flex-shrink: 0;
-  border: 1.5px solid rgba(0,0,0,.15);
+  border: none;
+  gap: 0;
 }
 .ed-top-pagebn {
   background: none; border: none;
