@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.39</footer>
+    <footer class="app-version">v4.41</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -178,7 +178,6 @@ Router.register('editor', {
           <button class="ed-top-pagebn" id="edPageNext" title="Página siguiente">&#9654;</button>
         </div>
         <span class="ed-top-spacer"></span>
-        <button class="ed-top-icon" id="edZoomResetBtn" title="Ver lienzo completo">🔍</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
         <button class="ed-top-action" id="edSaveBtn" title="Guardar">💾</button>
       </div>
@@ -234,6 +233,7 @@ Router.register('editor', {
           <!-- DESHACER / REHACER -->
           <button class="ed-undo-redo-btn" id="edUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="edRedoBtn" title="Rehacer" disabled>↪</button>
+          <button class="ed-undo-redo-btn" id="edZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
 
           <div class="ed-menu-sep"></div>
 
@@ -272,7 +272,7 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
               <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
               <div class="ed-dropdown-sep"></div>
-              <button class="ed-dropdown-item" id="dd-deleteproject" style="color:#e63030;font-weight:700">🗑 Eliminar obra</button>
+              <button class="ed-dropdown-item" id="dd-deleteproject" style="color:#e63030;font-weight:700">✕ Eliminar obra</button>
             </div>
           </div>
 

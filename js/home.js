@@ -250,7 +250,9 @@ function buildRow(comic, currentUser) {
 
     const delBtn = document.createElement('button');
     delBtn.className = 'comic-row-btn del';
-    delBtn.textContent = I18n.t('delete');
+    delBtn.style.color = '#e63030';
+    delBtn.style.fontWeight = '900';
+    delBtn.textContent = '✕';
     delBtn.addEventListener('click', () => {
       if (confirm(I18n.t('confirmDelete'))) {
         ComicStore.remove(comic.id);

@@ -107,7 +107,7 @@ function _mcRenderList() {
             ? `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`
             : `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">🔒 Retirar</button>`
           }
-          <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}">🗑</button>
+          <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
       </div>
     </div>`;

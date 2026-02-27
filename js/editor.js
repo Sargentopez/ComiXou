@@ -477,8 +477,33 @@ function edRedraw(){
 
   // Lienzo blanco con sombra (en coordenadas workspace)
   edCtx.shadowColor='rgba(0,0,0,0.35)';edCtx.shadowBlur=20/edCamera.z;
-  edCtx.fillStyle='#ffffff';edCtx.fillRect(edMarginX(),edMarginY(),edPageW(),edPageH());
+  edCtx.fillStyle='#ffffff';
+  // Esquinas redondeadas imitando pantalla de móvil
+  const _lr = Math.max(8, 28/edCamera.z); // radio adaptado al zoom
+  edCtx.beginPath();
+  if(edCtx.roundRect){
+    edCtx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr);
+  } else {
+    // Fallback para navegadores sin roundRect
+    const _x=edMarginX(),_y=edMarginY(),_w=edPageW(),_h=edPageH(),_r=_lr;
+    edCtx.moveTo(_x+_r,_y);edCtx.lineTo(_x+_w-_r,_y);edCtx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
+    edCtx.lineTo(_x+_w,_y+_h-_r);edCtx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
+    edCtx.lineTo(_x+_r,_y+_h);edCtx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
+    edCtx.lineTo(_x,_y+_r);edCtx.arcTo(_x,_y,_x+_r,_y,_r);edCtx.closePath();
+  }
+  edCtx.fill();
   edCtx.shadowColor='transparent';edCtx.shadowBlur=0;
+  // Clip para que el contenido del lienzo respete las esquinas redondeadas
+  edCtx.save();
+  edCtx.beginPath();
+  if(edCtx.roundRect){ edCtx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr); }
+  else { const _x=edMarginX(),_y=edMarginY(),_w=edPageW(),_h=edPageH(),_r=_lr;
+    edCtx.moveTo(_x+_r,_y);edCtx.lineTo(_x+_w-_r,_y);edCtx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
+    edCtx.lineTo(_x+_w,_y+_h-_r);edCtx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
+    edCtx.lineTo(_x+_r,_y+_h);edCtx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
+    edCtx.lineTo(_x,_y+_r);edCtx.arcTo(_x,_y,_x+_r,_y,_r);edCtx.closePath();
+  }
+  edCtx.clip();
   // Imágenes primero, luego texto/bocadillos encima
   // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
   const _imgLayers  = edLayers.filter(l=>l.type==='image');
@@ -506,6 +531,7 @@ function edRedraw(){
   edCtx.globalAlpha = _textGroupAlpha;
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
+  edCtx.restore(); // cierra el clip del border-radius del lienzo
   edDrawSel();
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
@@ -598,10 +624,13 @@ function edAddImage(file){
   reader.onload=ev=>{
     const img=new Image();
     img.onload=()=>{
-      const w=0.7,h=w*(img.naturalHeight/img.naturalWidth)*(edCanvas.width/edCanvas.height);
+      // Calcular altura en coordenadas normalizadas del LIENZO (no del canvas viewport)
+      // width=0.7 = 70% del ancho del lienzo; height se calcula por ratio real de la imagen
+      const pw=edPageW(), ph=edPageH();
+      const w=0.7, h=w*(img.naturalHeight/img.naturalWidth)*(pw/ph);
       const layer=new ImageLayer(img,0.5,0.5,w);
       layer.height=Math.min(h,0.85);
-      if(layer.height===0.85)layer.width=0.85*(edCanvas.height/edCanvas.width)*(img.naturalWidth/img.naturalHeight);
+      if(layer.height===0.85) layer.width=0.85*(ph/pw)*(img.naturalWidth/img.naturalHeight);
       // Insertar imagen antes del primer texto/bocadillo (textos siempre encima)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
       if(firstTextIdx >= 0){

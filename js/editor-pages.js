@@ -98,7 +98,7 @@ function _pgBuildCard(page, idx) {
   const delBtn = document.createElement('button');
   delBtn.className = 'ed-page-action-btn ed-page-del';
   delBtn.title = 'Eliminar hoja';
-  delBtn.innerHTML = '🗑';
+  delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
     if (edPages.length <= 1) { edToast('No puedes eliminar la última hoja'); return; }
