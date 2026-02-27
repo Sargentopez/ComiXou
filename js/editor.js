@@ -471,6 +471,14 @@ function edLoadPage(idx){
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
 }
 function edUpdateNavPages(){
+  // Actualizar número de página en topbar
+  const pnum=$('edPageNum');
+  if(pnum) pnum.textContent = edCurrentPage+1;
+  // Habilitar/deshabilitar flechas en topbar
+  const pprev=$('edPagePrev'), pnext=$('edPageNext');
+  if(pprev) pprev.disabled = edCurrentPage <= 0;
+  if(pnext) pnext.disabled = edCurrentPage >= edPages.length-1;
+
   const wrap=$('ddNavPages');if(!wrap)return;
   wrap.innerHTML='';
   edPages.forEach((p,i)=>{
@@ -762,27 +770,34 @@ function edOnMove(e){
   if(edIsResizing&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     const asp=edInitialSize.asp;
-    // nw = distancia del ratón al centro del objeto * 2
-    // Esquinas izq: el borde izq se mueve → la distancia es cx - mouseX
-    // Esquinas der: el borde der se mueve → la distancia es mouseX - cx
     let halfW;
     if(edResizeCorner==='tr'||edResizeCorner==='br'){
-      halfW = c.nx - edInitialSize.cx;           // borde derecho
+      halfW = c.nx - edInitialSize.cx;
     } else {
-      halfW = edInitialSize.cx - c.nx;           // borde izquierdo
+      halfW = edInitialSize.cx - c.nx;
     }
     const nw = halfW * 2;
     if(nw > 0.02){ la.width = nw; la.height = nw * asp; }
     edRedraw();
     edHideGearIcon();
+    // Cerrar panel de propiedades durante resize
+    const _opPanel=$('edOptionsPanel');
+    if(_opPanel&&_opPanel.classList.contains('open')){
+      _opPanel.classList.remove('open'); _opPanel.innerHTML='';
+    }
     return;
   }
   if(!edIsDragging||edSelectedIdx<0)return;
   const la=edLayers[edSelectedIdx];
-  la.x = c.nx - edDragOffX;  // sin clamp: las imágenes pueden salir del canvas
+  la.x = c.nx - edDragOffX;
   la.y = c.ny - edDragOffY;
   edRedraw();
-  edHideGearIcon(); // ocultar durante drag
+  edHideGearIcon();
+  // Cerrar panel de propiedades durante drag
+  const _opP=$('edOptionsPanel');
+  if(_opP&&_opP.classList.contains('open')){
+    _opP.classList.remove('open'); _opP.innerHTML='';
+  }
 }
 function edOnEnd(e){
   // Si quedan menos de 2 dedos, terminar pinch
@@ -802,6 +817,9 @@ function edOnEnd(e){
    ══════════════════════════════════════════ */
 function edStartPaint(e){
   edPainting=true;
+  // Cerrar panel de propiedades al empezar a dibujar
+  const _pp=$('edOptionsPanel');
+  if(_pp&&_pp.classList.contains('open')){ _pp.classList.remove('open'); _pp.innerHTML=''; }
   const c=edCoords(e),er=edActiveTool==='eraser';
   edCtx.save();
   if(er)edCtx.globalCompositeOperation='destination-out';
@@ -1443,6 +1461,8 @@ function EditorView_init(){
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
+  $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
+  $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
   $('edSaveBtn')?.addEventListener('click',edSaveProject);
   $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
 
@@ -1556,12 +1576,17 @@ function EditorView_init(){
   $('edMCancel')?.addEventListener('click',edCloseProjectModal);
   $('edMSave')?.addEventListener('click',edSaveProjectModal);
 
-  // ── Ctrl+Z / Ctrl+Y: deshacer/rehacer en PC ──
+  // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   document.addEventListener('keydown', function _edKeyUndo(e){
     if(!document.getElementById('editorShell')) return;
     const tag = document.activeElement?.tagName?.toLowerCase();
     if(tag === 'input' || tag === 'textarea' || tag === 'select') return;
     const ctrl = e.ctrlKey || e.metaKey;
+    // Delete / Backspace → eliminar objeto seleccionado
+    if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
+      if(edSelectedIdx >= 0){ e.preventDefault(); edDeleteSelected(); }
+      return;
+    }
     if(!ctrl) return;
     if(!e.shiftKey && e.key.toLowerCase() === 'z'){ e.preventDefault(); edUndo(); }
     else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){ e.preventDefault(); edRedo(); }

@@ -69,6 +69,37 @@ body.editor-page #appView {
 }
 .ed-top-action:active { opacity: .8; }
 
+/* Nav de páginas en topbar */
+.ed-top-pagnav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(0,0,0,.08);
+  border-radius: 6px;
+  padding: 2px 3px;
+  flex-shrink: 0;
+}
+.ed-top-pagebn {
+  background: none; border: none;
+  font-size: 0.6rem; color: var(--black);
+  width: 20px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; border-radius: 4px;
+  padding: 0; line-height: 1;
+  transition: background .12s;
+  flex-shrink: 0;
+}
+.ed-top-pagebn:hover  { background: rgba(0,0,0,.12); }
+.ed-top-pagebn:active { background: rgba(0,0,0,.22); }
+.ed-top-pagebn:disabled { opacity: .28; cursor: default; }
+#edPageNum {
+  font-family: var(--font-body);
+  font-size: 0.72rem; font-weight: 900;
+  color: var(--black);
+  min-width: 14px; text-align: center;
+  line-height: 1;
+}
+
 /* ══════════════════════════════
    BARRA DE MENÚ (= page-nav)
    ══════════════════════════════ */
