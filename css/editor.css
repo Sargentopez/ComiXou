@@ -544,6 +544,7 @@ body.editor-page #appView {
 .ed-fulloverlay.open {
   opacity: 1;
   pointer-events: all;
+  touch-action: pan-y;   /* permitir scroll nativo en el overlay */
 }
 
 .ed-fulloverlay-box {
@@ -644,6 +645,8 @@ body.editor-page #appView {
   flex-direction: column;
   gap: 8px;
   scrollbar-width: none;        /* Firefox */
+  touch-action: pan-y;          /* scroll nativo táctil */
+  overscroll-behavior: contain; /* no propagar al canvas */
 }
 .ed-layers-list::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
@@ -768,6 +771,8 @@ body.editor-page #appView {
 
 /* ── GRID DE HOJAS ── */
 .ed-pages-grid {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
   flex: 1;
   overflow-y: auto;
   padding: 12px;

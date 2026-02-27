@@ -838,7 +838,10 @@ function edOnStart(e){
                tgt.closest('#edProjectModal');
   if(isUI) return;
 
-  e.preventDefault();
+  // No bloquear scroll en overlays (capas, hojas, etc.)
+  if(e.cancelable && !e.target.closest('.ed-fulloverlay')){
+    e.preventDefault();
+  }
   _edTouchMoved = false; // resetear flag de movimiento
   // 2 dedos → iniciar pinch-to-zoom
   if(e.touches && e.touches.length === 2){
@@ -1564,19 +1567,18 @@ function edInitViewerTap(){
   if(!_viewerTapBound){
     _viewerTapBound = true;
     viewer.addEventListener('pointerup', e=>{
-      if(!e.target.closest('.viewer-controls')) edShowViewerCtrls();
+      edShowViewerCtrls(); // siempre mostrar al hacer click/tap en el viewer
+    });
+    // PC: click en cualquier parte del viewer muestra controles
+    viewer.addEventListener('mousemove', () => {
+      edShowViewerCtrls();
     });
   }
 }
 function edCloseViewer(){
   $('editorViewer')?.classList.remove('open');
-  // Restaurar gear si hay objeto seleccionado
-  if(edSelectedIdx >= 0){
-    clearTimeout(window._edGearDelay);
-    window._edGearDelay = setTimeout(() => {
-      if(edSelectedIdx >= 0) edShowGearIcon(edSelectedIdx);
-    }, 200);
-  }
+  clearTimeout(_viewerHideTimer);
+  _viewerTapBound = false; // permitir re-bind en próxima apertura
   if(_viewerKeyHandler){
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;
