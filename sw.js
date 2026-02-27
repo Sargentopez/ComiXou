@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v4-39';
+const CACHE = 'comixow-v4-40';
 const ASSETS = [
   './',
   './index.html',

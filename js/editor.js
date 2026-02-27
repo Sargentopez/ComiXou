@@ -416,11 +416,17 @@ function edFitCanvas(resetCamera){
   const availW = window.innerWidth;
   const availH = window.innerHeight - totalBarsH;
 
-  // El canvas DOM ocupa TODO el área disponible (coordenadas de pantalla)
-  edCanvas.width  = Math.round(availW);
-  edCanvas.height = Math.round(availH);
-  edCanvas.style.width  = availW + 'px';
-  edCanvas.style.height = availH + 'px';
+  const newW = Math.round(availW);
+  const newH = Math.round(availH);
+
+  // Solo redimensionar si cambió el tamaño — asignar canvas.width SIEMPRE
+  // resetea el contexto 2D aunque sea el mismo valor, borrando el contenido
+  if(edCanvas.width !== newW || edCanvas.height !== newH){
+    edCanvas.width  = newW;
+    edCanvas.height = newH;
+  }
+  edCanvas.style.width  = newW + 'px';
+  edCanvas.style.height = newH + 'px';
   edCanvas.style.position = 'absolute';
   edCanvas.style.left = '0';
   edCanvas.style.top  = totalBarsH + 'px';
@@ -429,8 +435,9 @@ function edFitCanvas(resetCamera){
   if(resetCamera){
     _edCameraReset();
   }
-  // Actualizar scrollbars visuales
   _edScrollbarsUpdate();
+  // Siempre redibujar tras ajustar el canvas
+  edRedraw();
 }
 
 /* ── Resetea la cámara para que el LIENZO ocupe el viewport centrado ── */
