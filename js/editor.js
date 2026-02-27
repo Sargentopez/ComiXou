@@ -23,6 +23,7 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
+let edZoom = 1.0;               // factor de zoom extra (Ctrl+wheel / pinch fuera de canvas)
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
 let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
@@ -249,6 +250,7 @@ class BubbleLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function edSetOrientation(o){
   edOrientation=o;
+  edZoom = 1.0; // reset zoom al cambiar orientación
   edCanvas.width  =o==='vertical'?ED_BASE:Math.round(ED_BASE*16/9);
   edCanvas.height =o==='vertical'?Math.round(ED_BASE*16/9):ED_BASE;
   if(edViewerCanvas){edViewerCanvas.width=edCanvas.width;edViewerCanvas.height=edCanvas.height;}
@@ -373,6 +375,7 @@ function edFitCanvas(){
     scale = Math.min((availW-8) / edCanvas.width, (availH-12) / edCanvas.height, 1);
   }
   scale = Math.max(scale, 0.1); // mínimo sensato
+  scale *= edZoom;               // zoom extra del usuario
 
   edCanvas.style.width  = Math.round(edCanvas.width  * scale) + 'px';
   edCanvas.style.height = Math.round(edCanvas.height * scale) + 'px';
@@ -750,6 +753,9 @@ function edOnStart(e){
   edRedraw();
 }
 function edOnMove(e){
+  // Ignorar si no hay gesto activo y el evento viene de fuera del canvas
+  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
+  if(!gestureActive && e.target !== edCanvas) return;
   e.preventDefault();
   // Pinch activo
   if(e.touches && e.touches.length === 2){
@@ -800,6 +806,9 @@ function edOnMove(e){
   }
 }
 function edOnEnd(e){
+  // Ignorar si no hay gesto activo y el evento viene de fuera del canvas
+  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
+  if(!gestureActive2 && e && e.target !== edCanvas) return;
   // Si quedan menos de 2 dedos, terminar pinch
   if(edPinching && (!e || !e.touches || e.touches.length < 2)){
     edPinchEnd();
@@ -1240,6 +1249,8 @@ function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
   edCurrentPage=0;edLayers=edPages[0].layers;
+  // Actualizar nav de páginas en topbar (si ya existe el DOM)
+  requestAnimationFrame(()=>edUpdateNavPages());
 }
 
 /* ══════════════════════════════════════════
@@ -1451,13 +1462,14 @@ function EditorView_init(){
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
   // ── CANVAS ──
-  edCanvas.addEventListener('pointerdown',edOnStart,{passive:false});
-  edCanvas.addEventListener('pointermove',edOnMove, {passive:false});
-  edCanvas.addEventListener('pointerup',  edOnEnd);
-  edCanvas.addEventListener('pointerleave',edOnEnd);
-  edCanvas.addEventListener('touchstart', edOnStart,{passive:false});
-  edCanvas.addEventListener('touchmove',  edOnMove, {passive:false});
-  edCanvas.addEventListener('touchend',   edOnEnd);
+  // pointerdown y touchstart en canvas (iniciar gesto)
+  edCanvas.addEventListener('pointerdown', edOnStart, {passive:false});
+  edCanvas.addEventListener('touchstart',  edOnStart, {passive:false});
+  // pointermove/up en DOCUMENT para capturar cuando el ratón/dedo sale del canvas
+  document.addEventListener('pointermove', edOnMove,  {passive:false});
+  document.addEventListener('pointerup',   edOnEnd);
+  document.addEventListener('touchmove',   edOnMove,  {passive:false});
+  document.addEventListener('touchend',    edOnEnd);
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
@@ -1576,6 +1588,16 @@ function EditorView_init(){
   $('edMCancel')?.addEventListener('click',edCloseProjectModal);
   $('edMSave')?.addEventListener('click',edSaveProjectModal);
 
+  // ── Ctrl+Wheel: zoom del canvas ──
+  window.addEventListener('wheel', e => {
+    if(!document.getElementById('editorShell')) return;
+    if(!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    edZoom = Math.min(Math.max(edZoom + delta, 0.25), 3.0);
+    edFitCanvas();
+  }, {passive: false});
+
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   document.addEventListener('keydown', function _edKeyUndo(e){
     if(!document.getElementById('editorShell')) return;
@@ -1633,6 +1655,32 @@ function EditorView_init(){
   window.addEventListener('orientationchange', ()=>{
     setTimeout(()=>{edFitCanvas();edUpdateCanvasFullscreen();}, 200);
   });
+
+  // ── Pinch en cualquier zona (fuera del canvas) = zoom ──
+  let _shellPinch0 = 0, _shellZoom0 = 1;
+  const editorShell = document.getElementById('editorShell');
+  if(editorShell){
+    editorShell.addEventListener('touchstart', e => {
+      if(e.touches.length === 2 && e.target !== edCanvas){
+        _shellPinch0 = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        _shellZoom0 = edZoom;
+      }
+    }, {passive:true});
+    editorShell.addEventListener('touchmove', e => {
+      if(e.touches.length === 2 && e.target !== edCanvas && _shellPinch0 > 0){
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        edZoom = Math.min(Math.max(_shellZoom0 * (dist / _shellPinch0), 0.25), 3.0);
+        edFitCanvas();
+      }
+    }, {passive:true});
+    editorShell.addEventListener('touchend', ()=>{ _shellPinch0 = 0; }, {passive:true});
+  }
 
   // Seguro extra: si después de 600ms el canvas sigue muy pequeño, refitear
   setTimeout(() => {
