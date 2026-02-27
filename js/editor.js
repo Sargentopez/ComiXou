@@ -475,16 +475,15 @@ function edRedraw(){
 
   const page=edPages[edCurrentPage];if(!page)return;
 
-  // Lienzo blanco con sombra (en coordenadas workspace)
+  // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip)
+  // Radio fijo en coordenadas workspace → proporcional al zoom automáticamente
+  const _lr = 20; // ~20px en workspace = radio de esquina físicamente constante
   edCtx.shadowColor='rgba(0,0,0,0.35)';edCtx.shadowBlur=20/edCamera.z;
   edCtx.fillStyle='#ffffff';
-  // Esquinas redondeadas imitando pantalla de móvil
-  const _lr = Math.max(8, 28/edCamera.z); // radio adaptado al zoom
   edCtx.beginPath();
   if(edCtx.roundRect){
     edCtx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr);
   } else {
-    // Fallback para navegadores sin roundRect
     const _x=edMarginX(),_y=edMarginY(),_w=edPageW(),_h=edPageH(),_r=_lr;
     edCtx.moveTo(_x+_r,_y);edCtx.lineTo(_x+_w-_r,_y);edCtx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
     edCtx.lineTo(_x+_w,_y+_h-_r);edCtx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
@@ -493,17 +492,7 @@ function edRedraw(){
   }
   edCtx.fill();
   edCtx.shadowColor='transparent';edCtx.shadowBlur=0;
-  // Clip para que el contenido del lienzo respete las esquinas redondeadas
-  edCtx.save();
-  edCtx.beginPath();
-  if(edCtx.roundRect){ edCtx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr); }
-  else { const _x=edMarginX(),_y=edMarginY(),_w=edPageW(),_h=edPageH(),_r=_lr;
-    edCtx.moveTo(_x+_r,_y);edCtx.lineTo(_x+_w-_r,_y);edCtx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
-    edCtx.lineTo(_x+_w,_y+_h-_r);edCtx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
-    edCtx.lineTo(_x+_r,_y+_h);edCtx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
-    edCtx.lineTo(_x,_y+_r);edCtx.arcTo(_x,_y,_x+_r,_y,_r);edCtx.closePath();
-  }
-  edCtx.clip();
+  // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
   // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
   const _imgLayers  = edLayers.filter(l=>l.type==='image');
@@ -531,7 +520,6 @@ function edRedraw(){
   edCtx.globalAlpha = _textGroupAlpha;
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
-  edCtx.restore(); // cierra el clip del border-radius del lienzo
   edDrawSel();
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
