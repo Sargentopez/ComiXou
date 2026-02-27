@@ -1,0 +1,87 @@
+/* ============================================================
+   auth.css — Login y Registro  v4.6
+   Overlay modal por encima de todo (z:2000 > header z:1000)
+   ============================================================ */
+
+.auth-page { background: var(--gray-100); }
+
+/* Overlay oscuro cubre todo el viewport */
+.auth-main {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  /* En móvil: desde el top. En PC: un poco de margen visible */
+  padding: 0 16px 32px;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  overflow-y: auto;
+}
+
+/* Tarjeta: en móvil ocupa el ancho completo desde arriba,
+   en PC aparece centrada con margen superior */
+.auth-card {
+  background: var(--white);
+  border: 2.5px solid var(--black);
+  border-top: none;
+  border-radius: 0 0 16px 16px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.25);
+  flex-shrink: 0;
+  /* desliza desde arriba */
+  animation: authSlideDown .22s cubic-bezier(.4,0,.2,1) both;
+}
+
+/* En pantallas altas (PC/tablet) añadir margen superior para
+   que no quede pegada al borde y se vea centrada */
+@media (min-height: 500px) {
+  .auth-main {
+    align-items: center;
+    padding: 16px;
+  }
+  .auth-card {
+    border-top: 2.5px solid var(--black);
+    border-radius: 16px;
+  }
+}
+
+@keyframes authSlideDown {
+  from { transform: translateY(-24px); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+/* Cabecera amarilla estilo site-header */
+.auth-card-header {
+  padding: 14px 24px 12px;
+  background: var(--yellow);
+  border-bottom: 2.5px solid var(--black);
+  border-radius: inherit;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.auth-title {
+  font-family: var(--font-display);
+  font-size: 1.5rem; letter-spacing: 1px; color: var(--black);
+}
+
+.auth-form  { padding: 18px 24px 4px; }
+.btn-full   { width: 100%; justify-content: center; margin-top: 8px; }
+.auth-switch {
+  text-align: center; padding: 12px 24px;
+  border-top: 1px solid var(--gray-100);
+  font-size: 0.85rem; color: var(--gray-500);
+}
+.auth-switch a { color: var(--blue); font-weight: 700; margin-left: 4px; }
+.forgot-row  { text-align: right; margin-top: -8px; margin-bottom: 8px; }
+.forgot-link { font-size: 0.8rem; color: var(--blue); font-weight: 600; }
+.pass-wrap   { position: relative; }
+.pass-wrap .form-input { padding-right: 44px; }
+.pass-toggle {
+  position: absolute; right: 10px; top: 50%;
+  transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; font-size: 1rem;
+}
