@@ -29,12 +29,22 @@ let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 
-const ED_BASE   = 360;   // resolución interna de la página del cómic
-const ED_MARGIN = 120;   // margen de workspace alrededor de la página
+// ── Dimensiones del lienzo (la página reproducible) ──
+// Ratio 6:13 (≈2.167) cabe sin corte en OPPO A38 (720×1612, útil ~720×1588)
+const ED_PAGE_W  = 360;   // ancho del lienzo en orientación vertical
+const ED_PAGE_H  = 780;   // alto  del lienzo en orientación vertical (ratio 6:13)
+// ── Canvas de trabajo: 5× ancho y 3× alto del lienzo vertical ──
+const ED_CANVAS_W = ED_PAGE_W * 5;  // 1800
+const ED_CANVAS_H = ED_PAGE_H * 3;  // 2340
+
 const $ = id => document.getElementById(id);
-// Dimensiones de la página dentro del canvas (excluye margen)
-function edPageW(){ return edCanvas ? edCanvas.width  - ED_MARGIN*2 : ED_BASE; }
-function edPageH(){ return edCanvas ? edCanvas.height - ED_MARGIN*2 : Math.round(ED_BASE*16/9); }
+
+// Dimensiones del lienzo según orientación actual
+function edPageW(){ return edOrientation === 'vertical' ? ED_PAGE_W : ED_PAGE_H; }
+function edPageH(){ return edOrientation === 'vertical' ? ED_PAGE_H : ED_PAGE_W; }
+// Offset del lienzo dentro del canvas (centrado)
+function edMarginX(){ return (ED_CANVAS_W - edPageW()) / 2; }
+function edMarginY(){ return (ED_CANVAS_H - edPageH()) / 2; }
 
 /* ══════════════════════════════════════════
    CLASES (motor referEditor)
@@ -70,9 +80,9 @@ class ImageLayer extends BaseLayer {
   }
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
-    const pw=can.width-ED_MARGIN*2, ph=can.height-ED_MARGIN*2;
+    const pw=edPageW(), ph=edPageH();
     const w=this.width*pw, h=this.height*ph;
-    const px=ED_MARGIN+this.x*pw, py=ED_MARGIN+this.y*ph;
+    const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px,py);ctx.rotate(this.rotation*Math.PI/180);
@@ -95,15 +105,15 @@ class TextLayer extends BaseLayer {
     return{width:mw,height:th};
   }
   resizeToFitText(can){
-    const pw=can.width-ED_MARGIN*2, ph=can.height-ED_MARGIN*2;
+    const pw=edPageW(), ph=edPageH();
     const ctx=can.getContext('2d'),{width,height}=this.measure(ctx);
     this.width=Math.max(0.05,(width+this.padding*2)/pw);
     this.height=Math.max(0.05,(height+this.padding*2)/ph);
   }
   draw(ctx,can){
-    const pw=can.width-ED_MARGIN*2, ph=can.height-ED_MARGIN*2;
+    const pw=edPageW(), ph=edPageH();
     const w=this.width*pw, h=this.height*ph;
-    const px=ED_MARGIN+this.x*pw, py=ED_MARGIN+this.y*ph;
+    const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
     ctx.save();
     ctx.fillStyle=this.backgroundColor; ctx.fillRect(px-w/2,py-h/2,w,h);
     if(this.borderWidth>0){
@@ -138,7 +148,7 @@ class BubbleLayer extends BaseLayer {
     return{width:mw,height:th};
   }
   resizeToFitText(can){
-    const pw=can.width-ED_MARGIN*2, ph=can.height-ED_MARGIN*2;
+    const pw=edPageW(), ph=edPageH();
     const ctx=can.getContext('2d'),{width,height}=this.measure(ctx);
     this.width=Math.max(0.05,(width+this.padding*2)/pw);
     this.height=Math.max(0.05,(height+this.padding*2)/ph);
@@ -166,9 +176,9 @@ class BubbleLayer extends BaseLayer {
     ctx.restore();
   }
   draw(ctx,can){
-    const pw=can.width-ED_MARGIN*2, ph=can.height-ED_MARGIN*2;
+    const pw=edPageW(), ph=edPageH();
     const w=this.width*pw, h=this.height*ph;
-    const pos={x:ED_MARGIN+this.x*pw, y:ED_MARGIN+this.y*ph};
+    const pos={x:edMarginX()+this.x*pw, y:edMarginY()+this.y*ph};
     const isSingle=this.text.trim().length===1&&/[a-zA-Z0-9]/.test(this.text.trim());
     ctx.save();ctx.translate(pos.x,pos.y);
 
@@ -262,14 +272,12 @@ class BubbleLayer extends BaseLayer {
 function edSetOrientation(o){
   edOrientation=o;
   edZoom = 1.0; // reset zoom al cambiar orientación
-  // Página del cómic
-  const pgW = o==='vertical' ? ED_BASE : Math.round(ED_BASE*16/9);
-  const pgH = o==='vertical' ? Math.round(ED_BASE*16/9) : ED_BASE;
-  // Canvas = página + margen workspace a cada lado
-  edCanvas.width  = pgW + ED_MARGIN*2;
-  edCanvas.height = pgH + ED_MARGIN*2;
-  // El visor usa solo la página (sin margen)
-  if(edViewerCanvas){ edViewerCanvas.width=pgW; edViewerCanvas.height=pgH; }
+  // El canvas de trabajo es siempre fijo (1800×2340)
+  // Solo cambia qué zona se considera "lienzo" (centrada dentro)
+  edCanvas.width  = ED_CANVAS_W;
+  edCanvas.height = ED_CANVAS_H;
+  // El visor usa solo el lienzo (sin workspace)
+  if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ edFitCanvas(); edRedraw(); }));
 }
 
@@ -381,20 +389,33 @@ function edFitCanvas(){
   const availW = wrap.clientWidth;
   const availH = wrap.clientHeight - totalBarsH;
 
+  // Fitear el LIENZO (no el canvas completo) al espacio disponible.
+  // El canvas completo es 5× más ancho y 3× más alto que el lienzo,
+  // así que cuando el lienzo ocupa todo el espacio, el canvas sobresale por los lados.
+  const pw = edPageW(), ph = edPageH();  // dimensiones del lienzo
   let scale;
   if(orientMatch){
-    // Rellenar todo el espacio disponible (sin dejar márgenes)
-    scale = Math.min(availW / edCanvas.width, availH / edCanvas.height);
+    scale = Math.min(availW / pw, availH / ph);
   } else {
-    // Cabe entero con pequeño margen
-    scale = Math.min((availW-8) / edCanvas.width, (availH-12) / edCanvas.height, 1);
+    scale = Math.min((availW-8) / pw, (availH-12) / ph, 1);
   }
-  scale = Math.max(scale, 0.1); // mínimo sensato
-  scale *= edZoom;               // zoom extra del usuario
+  scale = Math.max(scale, 0.05); // mínimo: permite alejarse mucho
+  scale *= edZoom;                // zoom extra del usuario (rueda/pellizco)
 
-  edCanvas.style.width  = Math.round(edCanvas.width  * scale) + 'px';
-  edCanvas.style.height = Math.round(edCanvas.height * scale) + 'px';
-  edCanvas.style.marginTop = totalBarsH + 'px';
+  // El canvas CSS ocupa el canvas completo a esa escala
+  const cssW = Math.round(edCanvas.width  * scale);
+  const cssH = Math.round(edCanvas.height * scale);
+  edCanvas.style.width  = cssW + 'px';
+  edCanvas.style.height = cssH + 'px';
+
+  // Centrar el LIENZO (no el canvas) en el área disponible
+  // El canvas se desplaza para que el lienzo quede centrado
+  const lienzoCssW = Math.round(pw * scale);
+  const lienzoCssH = Math.round(ph * scale);
+  const offsetX = Math.round((availW - lienzoCssW) / 2) - Math.round(edMarginX() * scale);
+  const offsetY = Math.round((availH - lienzoCssH) / 2) - Math.round(edMarginY() * scale);
+  edCanvas.style.marginTop  = (totalBarsH + offsetY) + 'px';
+  edCanvas.style.marginLeft = offsetX + 'px';
 }
 
 /* ══════════════════════════════════════════
@@ -405,11 +426,11 @@ function edRedraw(){
   const cw=edCanvas.width,ch=edCanvas.height;
   edCtx.clearRect(0,0,cw,ch);
   // Fondo workspace gris (zona fuera de la página)
-  edCtx.fillStyle='#c8c8c8';edCtx.fillRect(0,0,cw,ch);
+  edCtx.fillStyle='#b0b0b0';edCtx.fillRect(0,0,cw,ch);
   const page=edPages[edCurrentPage];if(!page)return;
-  // Sombra suave de la página
-  edCtx.shadowColor='rgba(0,0,0,0.25)';edCtx.shadowBlur=12;
-  edCtx.fillStyle='#ffffff';edCtx.fillRect(ED_MARGIN,ED_MARGIN,edPageW(),edPageH());
+  // Sombra y lienzo blanco centrado en el canvas de trabajo
+  edCtx.shadowColor='rgba(0,0,0,0.3)';edCtx.shadowBlur=16;
+  edCtx.fillStyle='#ffffff';edCtx.fillRect(edMarginX(),edMarginY(),edPageW(),edPageH());
   edCtx.shadowColor='transparent';edCtx.shadowBlur=0;
   // Imágenes primero, luego texto/bocadillos encima
   // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
@@ -427,7 +448,7 @@ function edRedraw(){
   if(page.drawData){
     const img=new Image();
     img.onload=()=>{
-      edCtx.drawImage(img,ED_MARGIN,ED_MARGIN,edPageW(),edPageH());
+      edCtx.drawImage(img,edMarginX(),edMarginY(),edPageW(),edPageH());
       edCtx.globalAlpha = _textGroupAlpha;
       _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
       edCtx.globalAlpha = 1;
@@ -453,7 +474,7 @@ function edDrawSel(){
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
   const pw=edPageW(), ph=edPageH();
-  const x=ED_MARGIN+la.x*pw, y=ED_MARGIN+la.y*ph;
+  const x=edMarginX()+la.x*pw, y=edMarginY()+la.y*ph;
   const w=la.width*pw, h=la.height*ph;
   edCtx.save();
   edCtx.strokeStyle='#ff6600';edCtx.lineWidth=2;edCtx.setLineDash([5,3]);
@@ -461,7 +482,7 @@ function edDrawSel(){
   if(la.type==='image' && !edIsTouchDevice()){
     edCtx.fillStyle='#ff4444';
     la.getControlPoints().forEach(p=>{
-      const cpx=ED_MARGIN+p.x*pw, cpy=ED_MARGIN+p.y*ph;
+      const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
       edCtx.beginPath();edCtx.arc(cpx,cpy,6,0,Math.PI*2);edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
     });
@@ -469,7 +490,7 @@ function edDrawSel(){
   if(la.type==='bubble'){
     edCtx.fillStyle='#ff4444';
     la.getTailControlPoints().forEach(p=>{
-      const cpx=ED_MARGIN+p.x*pw, cpy=ED_MARGIN+p.y*ph;
+      const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
       edCtx.beginPath();edCtx.arc(cpx,cpy,7,0,Math.PI*2);edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
     });
@@ -575,8 +596,8 @@ function edCoords(e){
   const py=(src.clientY-rect.top)*sy;
   // nx/ny en coordenadas de página (0=borde izq página, 1=borde der página)
   const pw=edPageW(), ph=edPageH();
-  const nx=(px-ED_MARGIN)/pw;
-  const ny=(py-ED_MARGIN)/ph;
+  const nx=(px-edMarginX())/pw;
+  const ny=(py-edMarginY())/ph;
   return{px,py,nx,ny};
 }
 
@@ -641,8 +662,8 @@ function _edGearPos(la){
   const scaleY = canvasRect.height / edCanvas.height;
   const pw=edPageW(), ph=edPageH();
   // Convertir coords de página → coords canvas → coords screen
-  const cx = canvasRect.left + (ED_MARGIN + la.x * pw) * scaleX;
-  const ty = canvasRect.top  + (ED_MARGIN + (la.y - la.height/2) * ph) * scaleY;
+  const cx = canvasRect.left + (edMarginX() + la.x * pw) * scaleX;
+  const ty = canvasRect.top  + (edMarginY() + (la.y - la.height/2) * ph) * scaleY;
   return { cx, ty };
 }
 
@@ -902,7 +923,7 @@ function edSaveDrawData(){
   // Guardar solo la zona de la página (sin margen de workspace)
   const tmp=document.createElement('canvas');
   tmp.width=edPageW();tmp.height=edPageH();
-  tmp.getContext('2d').drawImage(edCanvas,ED_MARGIN,ED_MARGIN,edPageW(),edPageH(),0,0,edPageW(),edPageH());
+  tmp.getContext('2d').drawImage(edCanvas,edMarginX(),edMarginY(),edPageW(),edPageH(),0,0,edPageW(),edPageH());
   page.drawData=tmp.toDataURL();
 }
 function edClearDraw(){
@@ -1240,16 +1261,16 @@ function edRenderPage(page){
   // Las draw() usarán ED_MARGIN (constante global) = 120, que suma fuera de tmp
   // Para evitarlo, usamos un canvas del tamaño del workspace pero solo exportamos la zona central
   const full=document.createElement('canvas');full.width=edCanvas.width;full.height=edCanvas.height;
-  const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(ED_MARGIN,ED_MARGIN,pw,ph);
+  const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
   page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(ctx,full));
   if(page.drawData){
     const di=new Image();di.src=page.drawData;
-    if(di.complete)ctx.drawImage(di,ED_MARGIN,ED_MARGIN,pw,ph);
+    if(di.complete)ctx.drawImage(di,edMarginX(),edMarginY(),pw,ph);
   }
   // Recortar solo la zona de la página
   const outCtx=tmp.getContext('2d');
-  outCtx.drawImage(full,ED_MARGIN,ED_MARGIN,pw,ph,0,0,pw,ph);
+  outCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
   return tmp.toDataURL('image/jpeg',0.85);
 }
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
@@ -1345,13 +1366,14 @@ function edOpenViewer(){
 function edUpdateViewerSize(){
   if(!edViewerCanvas) return;
   const vw = window.innerWidth, vh = window.innerHeight;
-  // Dimensiones internas del canvas (resolución de dibujo)
-  edViewerCanvas.width  = edCanvas.width;
-  edViewerCanvas.height = edCanvas.height;
-  // Escala: llenar el viewport manteniendo proporción (contain, no cover)
-  const scale = Math.min(vw / edCanvas.width, vh / edCanvas.height);
-  const displayW = Math.round(edCanvas.width  * scale);
-  const displayH = Math.round(edCanvas.height * scale);
+  // El visor muestra solo el LIENZO (no el workspace)
+  const pw=edPageW(), ph=edPageH();
+  edViewerCanvas.width  = pw;
+  edViewerCanvas.height = ph;
+  // Escala: llenar el viewport manteniendo proporción (contain)
+  const scale = Math.min(vw / pw, vh / ph);
+  const displayW = Math.round(pw * scale);
+  const displayH = Math.round(ph * scale);
   edViewerCanvas.style.width  = displayW + 'px';
   edViewerCanvas.style.height = displayH + 'px';
   // Centrar en el viewer
@@ -1428,42 +1450,49 @@ function edCloseViewer(){
 }
 function edUpdateViewer(){
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
-  const ctx=edViewerCtx;
-  ctx.fillStyle='#fff';ctx.fillRect(0,0,edViewerCanvas.width,edViewerCanvas.height);
+  // Renderizar usando un canvas temporal del tamaño completo del workspace,
+  // así draw() puede usar edMarginX()/edMarginY() correctamente.
+  // Luego copiamos solo la zona del lienzo al viewerCanvas.
+  const pw=edPageW(), ph=edPageH();
+  const full=document.createElement('canvas');
+  full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
+  const fctx=full.getContext('2d');
+  fctx.fillStyle='#fff';fctx.fillRect(edMarginX(),edMarginY(),pw,ph);
 
-  // Imágenes siempre
-  page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,edViewerCanvas));
+  page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(fctx,full));
 
-  // Dibujo libre
+  const _finishViewer = () => {
+    _edViewerDrawTextsOnCtx(page, fctx, full);
+    // Copiar zona del lienzo al viewerCanvas
+    edViewerCtx.clearRect(0,0,pw,ph);
+    edViewerCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
+    // Contador
+    const textLayers=page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+    const isSeq=page.textMode==='sequential';
+    const cnt=$('viewerCounter');
+    if(cnt){
+      if(isSeq&&textLayers.length>0){
+        cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep}/${textLayers.length}`;
+      } else {
+        cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
+      }
+    }
+  };
+
   if(page.drawData){
     const img=new Image();
-    img.onload=()=>{
-      ctx.drawImage(img,0,0);
-      _edViewerDrawTexts(page, ctx);
-    };
+    img.onload=()=>{fctx.drawImage(img,edMarginX(),edMarginY(),pw,ph);_finishViewer();};
     img.src=page.drawData;
   } else {
-    _edViewerDrawTexts(page, ctx);
-  }
-
-  // Contador
-  const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
-  const isSeq = page.textMode === 'sequential';
-  const cnt=$('viewerCounter');
-  if(cnt){
-    if(isSeq && textLayers.length > 0){
-      cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep}/${textLayers.length}`;
-    } else {
-      cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
-    }
+    _finishViewer();
   }
 }
 
-function _edViewerDrawTexts(page, ctx){
+function _edViewerDrawTextsOnCtx(page, ctx, can){
   const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
   const isSeq = page.textMode === 'sequential';
   const toShow = isSeq ? textLayers.slice(0, edViewerTextStep) : textLayers;
-  toShow.forEach(l=>l.draw(ctx, edViewerCanvas));
+  toShow.forEach(l=>l.draw(ctx, can));
 }
 
 /* ══════════════════════════════════════════
@@ -1571,6 +1600,10 @@ function EditorView_init(){
   $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
   $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
+  $('edZoomResetBtn')?.addEventListener('click',()=>{
+    edZoom = edZoom < 0.99 ? 1.0 : 0.35; // alterna entre lienzo normal y vista alejada
+    edFitCanvas();
+  });
   $('edSaveBtn')?.addEventListener('click',edSaveProject);
   $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
 
