@@ -1646,7 +1646,7 @@ function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
 /* ── Destruir vista: eliminar todos los listeners de document/window ── */
 function EditorView_destroy(){
   if(window._edListeners){
-    window._edListeners.forEach(([evt,fn,opts])=>document.removeEventListener(evt,fn,opts));
+    window._edListeners.forEach(([el,evt,fn,opts])=>el.removeEventListener(evt,fn,opts));
     window._edListeners = null;
   }
   if(window._edWheelFn){
@@ -1722,15 +1722,19 @@ function EditorView_init(){
   // ── CANVAS ──
   // Todos los eventos en document para capturar objetos fuera del canvas
   // Guardados en window._edListeners para poder eliminarlos en destroy()
+  // pointer* en document (captura drags fuera del canvas)
+  // touch* en editorShell (NO en document — así los overlays fuera del shell
+  // no reciben el listener passive:false y pueden hacer scroll nativo)
+  const _shell = document.getElementById('editorShell') || document;
   window._edListeners = [
-    ['pointerdown', edOnStart, {passive:false}],
-    ['pointermove',  edOnMove,  {passive:false}],
-    ['pointerup',    edOnEnd,   {}],
-    ['touchstart',   edOnStart, {passive:false}],
-    ['touchmove',    edOnMove,  {passive:false}],
-    ['touchend',     edOnEnd,   {}],
+    [document, 'pointerdown', edOnStart, {passive:false}],
+    [document, 'pointermove',  edOnMove,  {passive:false}],
+    [document, 'pointerup',    edOnEnd,   {}],
+    [_shell,   'touchstart',   edOnStart, {passive:false}],
+    [_shell,   'touchmove',    edOnMove,  {passive:false}],
+    [_shell,   'touchend',     edOnEnd,   {}],
   ];
-  window._edListeners.forEach(([evt, fn, opts]) => document.addEventListener(evt, fn, opts));
+  window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
@@ -1912,6 +1916,15 @@ function EditorView_init(){
     const tag = document.activeElement?.tagName?.toLowerCase();
     if(tag === 'input' || tag === 'textarea' || tag === 'select') return;
     const ctrl = e.ctrlKey || e.metaKey;
+    // Enter: cerrar panel de opciones abierto (OK)
+    if(e.key === 'Enter' && !ctrl){
+      const panel = $('edOptionsPanel');
+      if(panel && panel.classList.contains('open')){
+        e.preventDefault();
+        edCloseOptionsPanel();
+        return;
+      }
+    }
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
       if(edSelectedIdx >= 0){ e.preventDefault(); edDeleteSelected(); }
       return;
