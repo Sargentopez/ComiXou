@@ -259,6 +259,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
 function _lyBuildImgItem(la, realIdx, selected) {
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
+  item.dataset.lyKey = 'img-' + realIdx;
   item.dataset.realIdx = realIdx;
 
   /* Miniatura — handle de arrastre */

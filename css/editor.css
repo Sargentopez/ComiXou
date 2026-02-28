@@ -664,6 +664,7 @@ body.editor-page #appView {
 }
 
 .ed-layer-item {
+  will-change: transform;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -929,6 +930,7 @@ body.editor-page #appView {
 
 /* Fila de texto/bocadillo */
 .ed-layer-text-row {
+  will-change: transform;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -957,6 +959,7 @@ body.editor-page #appView {
 
 /* Item imagen */
 .ed-layer-item {
+  will-change: transform;
   display: flex;
   align-items: center;
   gap: 10px;
