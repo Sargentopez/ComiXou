@@ -462,31 +462,76 @@ function _lyBindImgDrag(item, handle, realIdx) {
 /* ──────────────────────────────────────────
    REORDENAR
 ────────────────────────────────────────── */
+/* ──────────────────────────────────────────
+   ANIMACIÓN DE REORDENACIÓN
+────────────────────────────────────────── */
+function _lyAnimatedReorder(movedKey, doReorder) {
+  const list = document.getElementById('edLayersList');
+  if (!list) { doReorder(); _lyRender(); return; }
+
+  // Capturar posición del item que se va a mover
+  const movedEl = list.querySelector('[data-ly-key="' + movedKey + '"]');
+  if (!movedEl) { doReorder(); _lyRender(); return; }
+
+  const rectBefore = movedEl.getBoundingClientRect();
+
+  // Ejecutar el reorder + reconstruir lista
+  doReorder();
+  _lyRender();
+
+  // Encontrar el item en su nueva posición
+  const movedAfter = list.querySelector('[data-ly-key="' + movedKey + '"]');
+  if (!movedAfter) return;
+
+  const rectAfter = movedAfter.getBoundingClientRect();
+  const deltaY = rectBefore.top - rectAfter.top;
+  if (Math.abs(deltaY) < 4) return; // no se movió visiblemente
+
+  // Partir de posición anterior con opacidad 50%
+  movedAfter.style.transition = 'none';
+  movedAfter.style.transform  = 'translateY(' + deltaY + 'px)';
+  movedAfter.style.opacity    = '0.5';
+
+  // Doble rAF para forzar que el browser pinte el estado inicial antes de animar
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      movedAfter.style.transition = 'transform 300ms cubic-bezier(.4,0,.2,1), opacity 300ms ease';
+      movedAfter.style.transform  = 'translateY(0)';
+      movedAfter.style.opacity    = '1';
+      movedAfter.addEventListener('transitionend', () => {
+        movedAfter.style.transition = '';
+        movedAfter.style.transform  = '';
+        movedAfter.style.opacity    = '';
+      }, { once: true });
+    });
+  });
+}
+
 function _lyReorderTexts(fromRealIdx, toRealIdx) {
   const textIdxs = edLayers.map((l,i) => ({l,i}))
     .filter(({l}) => l.type==='text' || l.type==='bubble')
     .map(({i}) => i);
-
   const fromPos = textIdxs.indexOf(fromRealIdx);
   const toPos   = textIdxs.indexOf(toRealIdx);
   if (fromPos < 0 || toPos < 0) return;
 
-  // Mover fromRealIdx antes/después de toRealIdx en edLayers
-  const moved = edLayers.splice(fromRealIdx, 1)[0];
-  // Al bajar (from<to): splice ya desplazó índices -1, insertar en toRealIdx sin ajuste
-  // Al subir (from>to): insertar directamente en toRealIdx
-  const adjustedTo = fromRealIdx < toRealIdx ? toRealIdx : toRealIdx;
-  edLayers.splice(adjustedTo, 0, moved);
-  if (edSelectedIdx === fromRealIdx) edSelectedIdx = adjustedTo;
-  edPushHistory(); edRedraw(); _lyRender();
+  _lyAnimatedReorder('txt-' + fromRealIdx, () => {
+    const moved = edLayers.splice(fromRealIdx, 1)[0];
+    const adjustedTo = fromRealIdx < toRealIdx ? toRealIdx : toRealIdx;
+    edLayers.splice(adjustedTo, 0, moved);
+    if (edSelectedIdx === fromRealIdx) edSelectedIdx = adjustedTo;
+    edPushHistory(); edRedraw();
+  });
 }
 
 function _lyReorderImages(fromRealIdx, toRealIdx) {
-  const moved = edLayers.splice(fromRealIdx, 1)[0];
-  const to = fromRealIdx < toRealIdx ? toRealIdx - 1 : toRealIdx;
-  edLayers.splice(to, 0, moved);
-  if (edSelectedIdx === fromRealIdx) edSelectedIdx = to;
-  edPushHistory(); edRedraw(); _lyRender();
+  _lyAnimatedReorder('img-' + fromRealIdx, () => {
+    const moved = edLayers.splice(fromRealIdx, 1)[0];
+    const to = fromRealIdx < toRealIdx ? toRealIdx - 1 : toRealIdx;
+    edLayers.splice(to, 0, moved);
+    if (edSelectedIdx === fromRealIdx) edSelectedIdx = to;
+    edPushHistory(); edRedraw();
+  });
 }
 
 /* ──────────────────────────────────────────
