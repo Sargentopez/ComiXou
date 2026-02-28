@@ -9,7 +9,7 @@ let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
 let edSelectedIdx = -1;
 let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
-let edTailPointType = null, edResizeCorner = null;
+let edTailPointType = null, edResizeCorner = null, edTailVoiceIdx = 0;
 let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
@@ -205,7 +205,7 @@ class BubbleLayer extends BaseLayer {
     this.color='#000000';this.backgroundColor='#ffffff';
     this.borderColor='#000000';this.borderWidth=2;
     this.tail=true;this.tailStart={x:-0.4,y:0.4};this.tailEnd={x:-0.4,y:0.6};
-    this.style='conventional';this.multipleCount=3;this.padding=15;
+    this.style='conventional';this.voiceCount=1;this.padding=15;
   }
   getLines(){return this.text.split('\n');}
   measure(ctx){
@@ -222,24 +222,32 @@ class BubbleLayer extends BaseLayer {
   }
   getTailControlPoints(){
     if(!this.tail)return[];
-    return[
-      {x:this.x+this.tailStart.x*this.width,y:this.y+this.tailStart.y*this.height,type:'start'},
-      {x:this.x+this.tailEnd.x*this.width,  y:this.y+this.tailEnd.y*this.height,  type:'end'},
-    ];
+    const vc=this.voiceCount||1;
+    const pts=[];
+    for(let v=0;v<vc;v++){
+      const off=(vc===1)?0:(v-(vc-1)/2)*0.25;
+      pts.push({x:this.x+(this.tailStart.x+off)*this.width,y:this.y+this.tailStart.y*this.height,type:'start',voice:v});
+      pts.push({x:this.x+(this.tailEnd.x+off)*this.width,  y:this.y+this.tailEnd.y*this.height,  type:'end',  voice:v});
+    }
+    return pts;
   }
-  drawTail(ctx,sx,sy,ex,ey,common=false){
+  drawTail(ctx,sx,sy,ex,ey){
     ctx.save();
     ctx.fillStyle=this.backgroundColor;ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
     const angle=Math.atan2(ey-sy,ex-sx),bw=10;
     const perp={x:-Math.sin(angle),y:Math.cos(angle)};
+    const dir={x:Math.cos(angle),y:Math.sin(angle)};
     const left={x:sx+perp.x*bw/2,y:sy+perp.y*bw/2};
     const right={x:sx-perp.x*bw/2,y:sy-perp.y*bw/2};
     ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(ex,ey);ctx.lineTo(right.x,right.y);
     ctx.closePath();ctx.fill();ctx.stroke();
-    if(common){
-      ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(right.x,right.y);
-      ctx.strokeStyle=this.backgroundColor;ctx.lineWidth=this.borderWidth*2+2;ctx.stroke();
-    }
+    // Línea blanca extendida más allá de los vértices → ángulo abierto limpio
+    const overshoot=bw*0.85;
+    const extL={x:left.x -dir.x*overshoot,y:left.y -dir.y*overshoot};
+    const extR={x:right.x-dir.x*overshoot,y:right.y-dir.y*overshoot};
+    ctx.beginPath();ctx.moveTo(extL.x,extL.y);ctx.lineTo(extR.x,extR.y);
+    ctx.strokeStyle=this.backgroundColor;ctx.lineWidth=this.borderWidth*2+2;
+    ctx.lineCap='round';ctx.stroke();ctx.lineCap='butt';
     ctx.restore();
   }
   draw(ctx,can){
@@ -308,18 +316,17 @@ class BubbleLayer extends BaseLayer {
     }
 
     if(this.tail){
-      if(this.style==='multiple'){
-        for(let i=0;i<this.multipleCount;i++){
-          const off=(i-(this.multipleCount-1)/2)*0.15;
-          this.drawTail(ctx,(this.tailStart.x+off)*w,this.tailStart.y*h,(this.tailEnd.x+off)*w,this.tailEnd.y*h,true);
-        }
-      }else if(this.style==='radio'){
+      if(this.style==='radio'){
         const ex=this.tailEnd.x*w,ey=this.tailEnd.y*h;
         ctx.save();ctx.strokeStyle=this.borderColor;ctx.lineWidth=1;
         for(let r=5;r<25;r+=5){ctx.beginPath();ctx.arc(ex,ey,r,0,Math.PI*2);ctx.stroke();}
         ctx.restore();
       }else{
-        this.drawTail(ctx,this.tailStart.x*w,this.tailStart.y*h,this.tailEnd.x*w,this.tailEnd.y*h,true);
+        const vc=this.voiceCount||1;
+        for(let v=0;v<vc;v++){
+          const off=(vc===1)?0:(v-(vc-1)/2)*0.25*w;
+          this.drawTail(ctx,this.tailStart.x*w+off,this.tailStart.y*h,this.tailEnd.x*w+off,this.tailEnd.y*h);
+        }
       }
     }
 
@@ -356,7 +363,7 @@ function _edLayersSnapshot(){
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','color','backgroundColor',
                     'borderColor','borderWidth','padding',
-                    'tail','tailStart','tailEnd','style','multipleCount']){
+                    'tail','tailStart','tailEnd','style','voiceCount']){
       if(l[k] !== undefined) o[k] = l[k];
     }
     if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
@@ -632,6 +639,11 @@ function edDrawSel(){
     edCtx.save();
     la.getTailControlPoints().forEach(p=>{
       const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
+      // Línea guía tenue al centro
+      edCtx.beginPath();edCtx.moveTo(cx,cy);edCtx.lineTo(cpx,cpy);
+      edCtx.strokeStyle='rgba(26,140,255,0.3)';edCtx.lineWidth=lw;edCtx.setLineDash([4/z,3/z]);edCtx.stroke();
+      edCtx.setLineDash([]);
+      // Handle
       edCtx.beginPath();edCtx.arc(cpx,cpy,7/z,0,Math.PI*2);
       edCtx.fillStyle='#1a8cff';edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
@@ -936,7 +948,7 @@ function edOnStart(e){
   if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
     const la=edLayers[edSelectedIdx];
     for(const p of la.getTailControlPoints()){
-      if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.04){edIsTailDragging=true;edTailPointType=p.type;return;}
+      if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.05){edIsTailDragging=true;edTailPointType=p.type;edTailVoiceIdx=p.voice||0;return;}
     }
   }
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
@@ -1036,8 +1048,10 @@ function edOnMove(e){
   if(edIsTailDragging&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     const dx=c.nx-la.x,dy=c.ny-la.y;
-    if(edTailPointType==='start'){la.tailStart.x=dx/la.width;la.tailStart.y=dy/la.height;}
-    else{la.tailEnd.x=dx/la.width;la.tailEnd.y=dy/la.height;}
+    const vc=la.voiceCount||1;
+    const off=(vc===1)?0:(edTailVoiceIdx-(vc-1)/2)*0.25;
+    if(edTailPointType==='start'){la.tailStart.x=dx/la.width-off;la.tailStart.y=dy/la.height;}
+    else{la.tailEnd.x=dx/la.width-off;la.tailEnd.y=dy/la.height;}
     edRedraw();return;
   }
   if(edIsRotating&&edSelectedIdx>=0){
@@ -1300,17 +1314,16 @@ function edRenderOptionsPanel(mode){
           <select id="pp-style">
             <option value="conventional" ${la.style==='conventional'?'selected':''}>Convencional</option>
             <option value="lowvoice" ${la.style==='lowvoice'?'selected':''}>Voz baja</option>
-            <option value="multiple" ${la.style==='multiple'?'selected':''}>Varias voces</option>
             <option value="thought" ${la.style==='thought'?'selected':''}>Pensamiento</option>
             <option value="radio" ${la.style==='radio'?'selected':''}>Radio/Tele</option>
             <option value="explosion" ${la.style==='explosion'?'selected':''}>Explosión</option>
           </select>
-          <span id="pp-mcwrap" ${la.style!=='multiple'?'style="display:none"':''}>
-            <span class="op-prop-label" style="min-width:auto">Voces</span>
-            <input type="number" id="pp-mc" value="${la.multipleCount||3}" min="1" max="5">
-          </span>
-          <label style="display:flex;align-items:center;gap:4px;font-size:.75rem;font-weight:700">
-            <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}> Cola
+        </div>
+        <div class="op-prop-row">
+          <span class="op-prop-label">Nº voces</span>
+          <input type="number" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:.75rem;font-weight:700;margin-left:12px">
+            <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}>  Cola
           </label>
         </div>`;
       }
@@ -1332,10 +1345,7 @@ function edRenderOptionsPanel(mode){
     panel.innerHTML=html;
     panel.classList.add('open');
 
-    // Estilo → mostrar/ocultar voces
-    $('pp-style')?.addEventListener('change',e=>{
-      const w=$('pp-mcwrap');if(w)w.style.display=e.target.value==='multiple'?'':'none';
-    });
+    // (voiceCount es independiente del estilo)
     // Live update
     panel.querySelectorAll('input,select,textarea').forEach(inp=>{
       inp.addEventListener('input',e=>{
@@ -1358,7 +1368,7 @@ function edRenderOptionsPanel(mode){
         else if(id==='pp-bc')     la.borderColor=e.target.value;
         else if(id==='pp-bw')     la.borderWidth=parseInt(e.target.value);
         else if(id==='pp-style')  {la.style=e.target.value;la.resizeToFitText(edCanvas);}
-        else if(id==='pp-mc')     la.multipleCount=parseInt(e.target.value)||3;
+        else if(id==='pp-vc')     la.voiceCount=Math.max(1,parseInt(e.target.value)||1);
         else if(id==='pp-tail')   la.tail=e.target.checked;
         else if(id==='pp-rot')    la.rotation=parseInt(e.target.value)||0;
         edRedraw();
@@ -1523,12 +1533,14 @@ function edSerLayer(l){
   if(l.type==='bubble')return{type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
-    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},multipleCount:l.multipleCount,...op};
+    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,...op};
 }
 function edDeserLayer(d){
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
   if(d.type==='bubble'){const l=new BubbleLayer(d.text,d.x,d.y);Object.assign(l,d);
-    if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};return l;}
+    if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};
+    if(d.multipleCount&&!d.voiceCount)l.voiceCount=d.multipleCount;
+    return l;}
   if(d.type==='image'){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.height=d.height; l.rotation=d.rotation||0; l.src=d.src||'';
