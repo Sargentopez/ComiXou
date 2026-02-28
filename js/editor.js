@@ -682,35 +682,27 @@ function edCoords(e){
 /* ══════════════════════════════════════════
    PINCH-TO-ZOOM (2 dedos)
    ══════════════════════════════════════════ */
-function _pinchDist(t) {
-  const dx = t[0].clientX - t[1].clientX;
-  const dy = t[0].clientY - t[1].clientY;
+// Distancia entre 2 pointers del mapa _edActivePointers
+function _pinchDist(pMap) {
+  const pts = [...pMap.values()];
+  const dx = pts[0].x - pts[1].x;
+  const dy = pts[0].y - pts[1].y;
   return Math.hypot(dx, dy);
 }
-function _pinchMidCanvas(t) {
-  // Punto medio en coordenadas normalizadas del canvas
-  const rect = edCanvas.getBoundingClientRect();
-  const sx = edCanvas.width / rect.width, sy = edCanvas.height / rect.height;
-  const mx = ((t[0].clientX + t[1].clientX) / 2 - rect.left) * sx;
-  const my = ((t[0].clientY + t[1].clientY) / 2 - rect.top)  * sy;
-  return { nx: mx / edCanvas.width, ny: my / edCanvas.height };
-}
 function edPinchStart(e) {
-  if (e.touches.length !== 2) return false;
-  edPinching  = true;
-  edPinchDist0 = _pinchDist(e.touches);
+  if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
+  edPinching   = true;
+  edPinchDist0 = _pinchDist(window._edActivePointers);
   const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  edPinchScale0 = la ? { w: la.width, h: la.height, x: la.x, y: la.y }
-                     : null;
+  edPinchScale0 = la ? { w: la.width, h: la.height, x: la.x, y: la.y } : null;
   return true;
 }
 function edPinchMove(e) {
-  if (!edPinching || e.touches.length !== 2) return;
-  const dist = _pinchDist(e.touches);
+  if (!edPinching || !window._edActivePointers || window._edActivePointers.size < 2) return;
+  const dist  = _pinchDist(window._edActivePointers);
   const ratio = dist / Math.max(edPinchDist0, 1);
   const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
   if (la && edPinchScale0) {
-    // Escalar la capa seleccionada desde su tamaño inicial
     const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
     const asp  = edPinchScale0.h / edPinchScale0.w;
     la.width  = newW;
@@ -899,22 +891,13 @@ function edOnStart(e){
       // Doble toque rápido (≤350ms) → abrir panel de propiedades
       const now = Date.now();
       if(found === _edLastTapIdx && now - _edLastTapTime < 350){
-        // Doble toque: abrir panel
         edIsDragging = false;
         clearTimeout(window._edLongPress);
         edRenderOptionsPanel('props');
         _edLastTapTime = 0; _edLastTapIdx = -1;
       } else {
         _edLastTapTime = now; _edLastTapIdx = found;
-        // Pulsación larga ≥ 2s sin mover → abrir panel directamente
-        window._edLongPressReady = false;
-        window._edLongPress = setTimeout(() => {
-          if(edSelectedIdx === found && !_edTouchMoved){
-            edIsDragging = false;
-            edRenderOptionsPanel('props');
-            if(navigator.vibrate) navigator.vibrate(30);
-          }
-        }, 2000);
+        // Sin long-press en táctil — solo doble toque abre el panel
       }
     } else {
       // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
