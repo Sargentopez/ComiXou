@@ -37,15 +37,40 @@ function edOpenPages() {
     edClosePages();
     edAddPage();
   });
+  overlay.addEventListener('pointerdown', e => {
+    if (e.target === overlay) edClosePages();
+  });
 
   requestAnimationFrame(() => overlay.classList.add('open'));
+
+  // Desactivar touch del canvas mientras el overlay está abierto
+  _pgSetCanvasTouch(false);
 }
 
 function edClosePages() {
   const ov = document.getElementById('edPagesOverlay');
   if (!ov) return;
   ov.classList.remove('open');
-  setTimeout(() => { if (ov.parentNode) ov.parentNode.removeChild(ov); }, 250);
+  setTimeout(() => { if (ov.parentNode) ov.parentNode.removeChild(ov); _pgSetCanvasTouch(true); }, 250);
+}
+
+function _pgSetCanvasTouch(enabled) {
+  const shell = document.getElementById('editorShell');
+  if (!shell) return;
+  if (enabled) {
+    shell.style.touchAction = '';
+    shell.removeEventListener('touchstart', _pgBlockTouch, {passive:false});
+    shell.removeEventListener('touchmove',  _pgBlockTouch, {passive:false});
+  } else {
+    shell.style.touchAction = 'none';
+    shell.addEventListener('touchstart', _pgBlockTouch, {passive:false});
+    shell.addEventListener('touchmove',  _pgBlockTouch, {passive:false});
+  }
+}
+function _pgBlockTouch(e) {
+  if (!e.target.closest('#edLayersOverlay') && !e.target.closest('#edPagesOverlay')) {
+    e.preventDefault();
+  }
 }
 
 /* ──────────────────────────────────────────

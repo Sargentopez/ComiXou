@@ -27,14 +27,42 @@ function edOpenLayers() {
   document.body.appendChild(overlay);
   _lyRender();
   overlay.querySelector('#edLayersClose').addEventListener('click', edCloseLayers);
+  // Cerrar también al tocar el fondo oscuro (fuera del box)
+  overlay.addEventListener('pointerdown', e => {
+    if (e.target === overlay) edCloseLayers();
+  });
   requestAnimationFrame(() => overlay.classList.add('open'));
+
+  // Desactivar touch del canvas mientras el overlay está abierto
+  _lySetCanvasTouch(false);
 }
 
 function edCloseLayers() {
   const ov = document.getElementById('edLayersOverlay');
   if (!ov) return;
   ov.classList.remove('open');
-  setTimeout(() => ov.remove(), 250);
+  setTimeout(() => { ov.remove(); _lySetCanvasTouch(true); }, 250);
+}
+
+// Activa/desactiva los listeners de touch del canvas
+function _lySetCanvasTouch(enabled) {
+  const shell = document.getElementById('editorShell');
+  if (!shell) return;
+  if (enabled) {
+    shell.style.touchAction = '';          // restaurar
+    shell.removeEventListener('touchstart', _lyBlockTouch, {passive:false});
+    shell.removeEventListener('touchmove',  _lyBlockTouch, {passive:false});
+  } else {
+    shell.style.touchAction = 'none';      // bloquear scroll del compositor
+    shell.addEventListener('touchstart', _lyBlockTouch, {passive:false});
+    shell.addEventListener('touchmove',  _lyBlockTouch, {passive:false});
+  }
+}
+function _lyBlockTouch(e) {
+  // Permitir scroll dentro del overlay; bloquear todo lo demás
+  if (!e.target.closest('#edLayersOverlay') && !e.target.closest('#edPagesOverlay')) {
+    e.preventDefault();
+  }
 }
 
 /* ──────────────────────────────────────────
