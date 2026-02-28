@@ -1654,13 +1654,12 @@ function edInitViewerTap(){
   edShowViewerCtrls();
   if(!_viewerTapBound){
     _viewerTapBound = true;
-    viewer.addEventListener('pointerup', e=>{
-      edShowViewerCtrls(); // siempre mostrar al hacer click/tap en el viewer
-    });
-    // PC: click en cualquier parte del viewer muestra controles
-    viewer.addEventListener('mousemove', () => {
-      edShowViewerCtrls();
-    });
+    // Cualquier interacción muestra los controles
+    // pointerdown cubre Android (no espera a pointerup que puede cancelarse)
+    viewer.addEventListener('pointerdown', () => edShowViewerCtrls());
+    viewer.addEventListener('pointerup',   () => edShowViewerCtrls());
+    // PC: movimiento de ratón
+    viewer.addEventListener('mousemove',   () => edShowViewerCtrls());
   }
 }
 function edCloseViewer(){

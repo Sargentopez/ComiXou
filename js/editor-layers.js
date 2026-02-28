@@ -472,7 +472,9 @@ function _lyReorderTexts(fromRealIdx, toRealIdx) {
 
   // Mover fromRealIdx antes/después de toRealIdx en edLayers
   const moved = edLayers.splice(fromRealIdx, 1)[0];
-  const adjustedTo = fromRealIdx < toRealIdx ? toRealIdx - 1 : toRealIdx;
+  // Al bajar (from<to): splice ya desplazó índices -1, insertar en toRealIdx sin ajuste
+  // Al subir (from>to): insertar directamente en toRealIdx
+  const adjustedTo = fromRealIdx < toRealIdx ? toRealIdx : toRealIdx;
   edLayers.splice(adjustedTo, 0, moved);
   if (edSelectedIdx === fromRealIdx) edSelectedIdx = adjustedTo;
   edPushHistory(); edRedraw(); _lyRender();
