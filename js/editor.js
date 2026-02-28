@@ -361,6 +361,8 @@ class BubbleLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function edSetOrientation(o){
   edOrientation=o;
+  // Persistir en la hoja actual
+  if(edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
   // El visor usa solo el lienzo
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -713,6 +715,16 @@ function edDeletePage(){
 }
 function edLoadPage(idx){
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
+  // Aplicar orientación de esta hoja si difiere de la actual
+  const _po = edPages[idx]?.orientation;
+  if(_po && _po !== edOrientation){
+    edOrientation = _po;
+    // Recalcular dimensiones del canvas sin resetear zoom
+    const pgW=edPageW(), pgH=edPageH();
+    edCanvas.width = ED_CANVAS_W;
+    edCanvas.height= ED_CANVAS_H;
+    if(edViewerCanvas){ edViewerCanvas.width=pgW; edViewerCanvas.height=pgH; }
+  }
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
 }
 function edUpdateNavPages(){
@@ -1627,19 +1639,15 @@ function edLoadProject(id){
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
-    // Restaurar orientation por hoja (retrocompatibilidad: usar global si no hay)
-    edPages.forEach((p,i)=>{
-      const pd=comic.editorData.pages?.[i];
-      p.orientation = pd?.orientation || comic.editorData.orientation || 'vertical';
-    });
     edPages=(comic.editorData.pages||[]).map(pd=>({
       drawData:pd.drawData||null,
       layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
       textLayerOpacity:pd.textLayerOpacity??1,
       textMode:pd.textMode||'immediate',
+      orientation:pd.orientation||comic.editorData.orientation||'vertical',
     }));
   }else{
-    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'}];
+    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate',orientation:'vertical'}];
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
   edCurrentPage=0;edLayers=edPages[0].layers;
