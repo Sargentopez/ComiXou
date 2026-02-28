@@ -1892,6 +1892,10 @@ function EditorView_init(){
   // ── Ctrl+Wheel: zoom del canvas ──
   window._edWheelFn = e => {
     if(!document.getElementById('editorShell')) return;
+    // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas, etc.)
+    // dejarlo hacer scroll nativo — no intervenir
+    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box');
+    if(overScrollable) return;
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
       // Zoom hacia el cursor
