@@ -467,45 +467,46 @@ function _lyBindImgDrag(item, handle, realIdx) {
    REORDENAR
 ────────────────────────────────────────── */
 /* ──────────────────────────────────────────
-   ANIMACIÓN DE REORDENACIÓN
+   ANIMACIÓN DE REORDENACIÓN — FLIP con UID
 ────────────────────────────────────────── */
-function _lyAnimatedReorder(movedKey, doReorder) {
+function _lyAnimatedReorder(layerObj, doReorder) {
   const list = document.getElementById('edLayersList');
   if (!list) { doReorder(); _lyRender(); return; }
 
-  // Capturar posición del item que se va a mover
-  const movedEl = list.querySelector('[data-ly-key="' + movedKey + '"]');
-  if (!movedEl) { doReorder(); _lyRender(); return; }
+  // Asegurar UID en el objeto
+  if (!layerObj._uid) layerObj._uid = ++_lyUidCounter;
+  const uid = layerObj._uid;
 
-  const rectBefore = movedEl.getBoundingClientRect();
+  // 1. Capturar posición ANTES del reorder
+  const elBefore = list.querySelector('[data-uid="' + uid + '"]');
+  if (!elBefore) { doReorder(); _lyRender(); return; }
+  const topBefore = elBefore.getBoundingClientRect().top;
 
-  // Ejecutar el reorder + reconstruir lista
+  // 2. Ejecutar reorder + reconstruir lista
   doReorder();
   _lyRender();
 
-  // Encontrar el item en su nueva posición
-  const movedAfter = list.querySelector('[data-ly-key="' + movedKey + '"]');
-  if (!movedAfter) return;
+  // 3. Encontrar mismo item por UID en nueva posición
+  const elAfter = list.querySelector('[data-uid="' + uid + '"]');
+  if (!elAfter) return;
 
-  const rectAfter = movedAfter.getBoundingClientRect();
-  const deltaY = rectBefore.top - rectAfter.top;
-  if (Math.abs(deltaY) < 4) return; // no se movió visiblemente
+  const deltaY = topBefore - elAfter.getBoundingClientRect().top;
+  if (Math.abs(deltaY) < 4) return;
 
-  // Partir de posición anterior con opacidad 50%
-  movedAfter.style.transition = 'none';
-  movedAfter.style.transform  = 'translateY(' + deltaY + 'px)';
-  movedAfter.style.opacity    = '0.5';
+  // 4. FLIP: partir de posición vieja con opacidad 50%, animar a posición real
+  elAfter.style.transition = 'none';
+  elAfter.style.transform  = 'translateY(' + deltaY + 'px)';
+  elAfter.style.opacity    = '0.5';
 
-  // Doble rAF para forzar que el browser pinte el estado inicial antes de animar
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      movedAfter.style.transition = 'transform 300ms cubic-bezier(.4,0,.2,1), opacity 300ms ease';
-      movedAfter.style.transform  = 'translateY(0)';
-      movedAfter.style.opacity    = '1';
-      movedAfter.addEventListener('transitionend', () => {
-        movedAfter.style.transition = '';
-        movedAfter.style.transform  = '';
-        movedAfter.style.opacity    = '';
+      elAfter.style.transition = 'transform 320ms cubic-bezier(.4,0,.2,1), opacity 320ms ease';
+      elAfter.style.transform  = 'translateY(0)';
+      elAfter.style.opacity    = '1';
+      elAfter.addEventListener('transitionend', () => {
+        elAfter.style.transition = '';
+        elAfter.style.transform  = '';
+        elAfter.style.opacity    = '';
       }, { once: true });
     });
   });
