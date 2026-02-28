@@ -241,10 +241,11 @@ class BubbleLayer extends BaseLayer {
     const right={x:sx-perp.x*bw/2,y:sy-perp.y*bw/2};
     ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(ex,ey);ctx.lineTo(right.x,right.y);
     ctx.closePath();ctx.fill();ctx.stroke();
-    // Línea blanca extendida más allá de los vértices → ángulo abierto limpio
-    const overshoot=bw*0.85;
-    const extL={x:left.x -dir.x*overshoot,y:left.y -dir.y*overshoot};
-    const extR={x:right.x-dir.x*overshoot,y:right.y-dir.y*overshoot};
+    // Línea blanca: misma posición que left→right, extendida a lo largo de perp
+    // para tapar completamente los vértices donde el stroke negro sobresale
+    const extra=this.borderWidth+3;
+    const extL={x:left.x +perp.x*extra, y:left.y +perp.y*extra};
+    const extR={x:right.x-perp.x*extra, y:right.y-perp.y*extra};
     ctx.beginPath();ctx.moveTo(extL.x,extL.y);ctx.lineTo(extR.x,extR.y);
     ctx.strokeStyle=this.backgroundColor;ctx.lineWidth=this.borderWidth*2+2;
     ctx.lineCap='round';ctx.stroke();ctx.lineCap='butt';

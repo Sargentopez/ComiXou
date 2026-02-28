@@ -306,7 +306,7 @@ body.editor-page #appView {
   padding: 0 12px;
 }
 #edOptionsPanel.open {
-  max-height: 220px;
+  max-height: 320px;
   padding: 8px 12px;
   overflow-y: auto;
   border-bottom-width: 1.5px;
