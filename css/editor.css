@@ -36,7 +36,7 @@ body.editor-page #appView {
   align-items: center;
   padding: 0 10px;
   gap: 8px;
-  z-index: 310;          /* por encima del menubar */
+  z-index: 310;
   flex-shrink: 0;
 }
 
@@ -52,7 +52,8 @@ body.editor-page #appView {
 #edBackBtn:active { background: rgba(0,0,0,.1); }
 
 #edProjectTitle {
-  flex: 0 1 auto; min-width: 0; max-width: 35%;
+  flex: 0 1 auto; min-width: 0;
+  /* El título cede espacio hasta cero, truncando con ellipsis */
   font-family: var(--font-display);
   font-size: 1rem; letter-spacing: 0.5px;
   color: var(--black);
@@ -85,11 +86,16 @@ body.editor-page #appView {
 /* Nav de páginas en topbar */
 .ed-top-pagnav {
   display: flex;
-  align-items: flex-end;   /* pegado al fondo del topbar */
+  align-items: flex-end;
   gap: 0;
   flex-shrink: 0;
-  padding-bottom: 4px;     /* pequeño margen con el borde inferior */
+  padding-bottom: 4px;
   align-self: flex-end;
+  /* Centrado absoluto en el topbar */
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
 }
 .ed-top-pagebn {
   background: none; border: none;

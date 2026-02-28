@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.56</footer>
+    <footer class="app-version">v4.57</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -172,12 +172,12 @@ Router.register('editor', {
       <div id="edTopbar">
         <button id="edBackBtn" title="Volver a Mis Creaciones">‹</button>
         <span id="edProjectTitle">Sin título</span>
+        <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav">
           <button class="ed-top-pagebn" id="edPagePrev" title="Página anterior">&#9664;</button>
           <span id="edPageNum">1</span>
           <button class="ed-top-pagebn" id="edPageNext" title="Página siguiente">&#9654;</button>
         </div>
-        <span class="ed-top-spacer"></span>
         <button class="ed-top-action" id="edFsBtn" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
         <button class="ed-top-action" id="edSaveBtn" title="Guardar">💾</button>
