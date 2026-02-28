@@ -204,7 +204,9 @@ class BubbleLayer extends BaseLayer {
     this.text=text;this.fontSize=18;this.fontFamily='Comic Sans MS, cursive';
     this.color='#000000';this.backgroundColor='#ffffff';
     this.borderColor='#000000';this.borderWidth=2;
-    this.tail=true;this.tailStart={x:-0.4,y:0.4};this.tailEnd={x:-0.4,y:0.6};
+    this.tail=true;
+    this.tailStart={x:-0.4,y:0.4};this.tailEnd={x:-0.4,y:0.6}; // voz 0 (legacy)
+    this.tailStarts=[{x:-0.4,y:0.4}];this.tailEnds=[{x:-0.4,y:0.6}]; // arrays por voz
     this.style='conventional';this.voiceCount=1;this.padding=15;
   }
   getLines(){return this.text.split('\n');}
@@ -223,11 +225,19 @@ class BubbleLayer extends BaseLayer {
   getTailControlPoints(){
     if(!this.tail)return[];
     const vc=this.voiceCount||1;
+    // Asegurar que los arrays tienen suficientes entradas
+    if(!this.tailStarts)this.tailStarts=[{...this.tailStart}];
+    if(!this.tailEnds)  this.tailEnds  =[{...this.tailEnd}];
+    while(this.tailStarts.length<vc){
+      const off=(this.tailStarts.length-(vc-1)/2)*0.25;
+      this.tailStarts.push({x:this.tailStart.x+off,y:this.tailStart.y});
+      this.tailEnds.push(  {x:this.tailEnd.x+off,  y:this.tailEnd.y});
+    }
     const pts=[];
     for(let v=0;v<vc;v++){
-      const off=(vc===1)?0:(v-(vc-1)/2)*0.25;
-      pts.push({x:this.x+(this.tailStart.x+off)*this.width,y:this.y+this.tailStart.y*this.height,type:'start',voice:v});
-      pts.push({x:this.x+(this.tailEnd.x+off)*this.width,  y:this.y+this.tailEnd.y*this.height,  type:'end',  voice:v});
+      const s=this.tailStarts[v],e=this.tailEnds[v];
+      pts.push({x:this.x+s.x*this.width,y:this.y+s.y*this.height,type:'start',voice:v});
+      pts.push({x:this.x+e.x*this.width,y:this.y+e.y*this.height,type:'end',  voice:v});
     }
     return pts;
   }
@@ -243,7 +253,7 @@ class BubbleLayer extends BaseLayer {
     ctx.closePath();ctx.fill();ctx.stroke();
     // Línea blanca: misma posición que left→right, extendida a lo largo de perp
     // para tapar completamente los vértices donde el stroke negro sobresale
-    const extra=this.borderWidth+3;
+    const extra=1;
     const extL={x:left.x +perp.x*extra, y:left.y +perp.y*extra};
     const extR={x:right.x-perp.x*extra, y:right.y-perp.y*extra};
     ctx.beginPath();ctx.moveTo(extL.x,extL.y);ctx.lineTo(extR.x,extR.y);
@@ -324,9 +334,12 @@ class BubbleLayer extends BaseLayer {
         ctx.restore();
       }else{
         const vc=this.voiceCount||1;
+        if(!this.tailStarts)this.tailStarts=[{...this.tailStart}];
+        if(!this.tailEnds)  this.tailEnds  =[{...this.tailEnd}];
         for(let v=0;v<vc;v++){
-          const off=(vc===1)?0:(v-(vc-1)/2)*0.25*w;
-          this.drawTail(ctx,this.tailStart.x*w+off,this.tailStart.y*h,this.tailEnd.x*w+off,this.tailEnd.y*h);
+          const s=this.tailStarts[v]||this.tailStarts[0];
+          const e=this.tailEnds[v]  ||this.tailEnds[0];
+          this.drawTail(ctx,s.x*w,s.y*h,e.x*w,e.y*h);
         }
       }
     }
@@ -637,16 +650,28 @@ function edDrawSel(){
   }
   // Handles cola bocadillo (espacio propio, fuera del transform rotado)
   if(la.type==='bubble'){
+    // Dibujar handles FUERA del transform — tamaño fijo independiente del zoom
+    const tcp=la.getTailControlPoints();
+    // Agrupar por voz para dibujar línea entre start y end de cada voz
+    const byVoice={};
+    tcp.forEach(p=>{ if(!byVoice[p.voice])byVoice[p.voice]={}; byVoice[p.voice][p.type]=p; });
     edCtx.save();
-    la.getTailControlPoints().forEach(p=>{
+    // Líneas guía entre los 2 puntos de cada voz
+    Object.values(byVoice).forEach(v=>{
+      if(!v.start||!v.end)return;
+      const sx=edMarginX()+v.start.x*pw, sy=edMarginY()+v.start.y*ph;
+      const ex=edMarginX()+v.end.x*pw,   ey=edMarginY()+v.end.y*ph;
+      edCtx.beginPath();edCtx.moveTo(sx,sy);edCtx.lineTo(ex,ey);
+      edCtx.strokeStyle='rgba(26,140,255,0.5)';edCtx.lineWidth=1.5;
+      edCtx.setLineDash([5,3]);edCtx.stroke();edCtx.setLineDash([]);
+    });
+    // Handles: tamaño fijo 8px en pantalla (multiplicar por z para compensar el scale del canvas)
+    const HR=6/z; // mismo tamaño que handles de selección
+    tcp.forEach(p=>{
       const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
-      // Línea guía tenue al centro
-      edCtx.beginPath();edCtx.moveTo(cx,cy);edCtx.lineTo(cpx,cpy);
-      edCtx.strokeStyle='rgba(26,140,255,0.3)';edCtx.lineWidth=lw;edCtx.setLineDash([4/z,3/z]);edCtx.stroke();
-      edCtx.setLineDash([]);
-      // Handle
-      edCtx.beginPath();edCtx.arc(cpx,cpy,7/z,0,Math.PI*2);
-      edCtx.fillStyle='#1a8cff';edCtx.fill();
+      const isEnd=p.type==='end';
+      edCtx.beginPath();edCtx.arc(cpx,cpy,HR,0,Math.PI*2);
+      edCtx.fillStyle=isEnd?'#ff6600':'#1a8cff';edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
     edCtx.restore();
@@ -1049,10 +1074,16 @@ function edOnMove(e){
   if(edIsTailDragging&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     const dx=c.nx-la.x,dy=c.ny-la.y;
-    const vc=la.voiceCount||1;
-    const off=(vc===1)?0:(edTailVoiceIdx-(vc-1)/2)*0.25;
-    if(edTailPointType==='start'){la.tailStart.x=dx/la.width-off;la.tailStart.y=dy/la.height;}
-    else{la.tailEnd.x=dx/la.width-off;la.tailEnd.y=dy/la.height;}
+    const v=edTailVoiceIdx||0;
+    if(!la.tailStarts)la.tailStarts=[{...la.tailStart}];
+    if(!la.tailEnds)  la.tailEnds  =[{...la.tailEnd}];
+    if(edTailPointType==='start'){
+      if(!la.tailStarts[v])la.tailStarts[v]={...la.tailStarts[0]};
+      la.tailStarts[v]={x:dx/la.width,y:dy/la.height};
+    } else {
+      if(!la.tailEnds[v])la.tailEnds[v]={...la.tailEnds[0]};
+      la.tailEnds[v]={x:dx/la.width,y:dy/la.height};
+    }
     edRedraw();return;
   }
   if(edIsRotating&&edSelectedIdx>=0){
@@ -1534,12 +1565,14 @@ function edSerLayer(l){
   if(l.type==='bubble')return{type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
-    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,...op};
+    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,...op};
 }
 function edDeserLayer(d){
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
   if(d.type==='bubble'){const l=new BubbleLayer(d.text,d.x,d.y);Object.assign(l,d);
     if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};
+    if(d.tailStarts)l.tailStarts=d.tailStarts.map(s=>({...s}));
+    if(d.tailEnds)  l.tailEnds  =d.tailEnds.map(e=>({...e}));
     if(d.multipleCount&&!d.voiceCount)l.voiceCount=d.multipleCount;
     return l;}
   if(d.type==='image'){
