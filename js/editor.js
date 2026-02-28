@@ -139,8 +139,10 @@ class ImageLayer extends BaseLayer {
     super('image',x,y,width,0.3);
     if(imgEl){
       this.img=imgEl; this.src=imgEl.src||'';
-      if(imgEl.naturalWidth&&imgEl.naturalHeight)
-        this.height=width*(imgEl.naturalHeight/imgEl.naturalWidth);
+      if(imgEl.naturalWidth&&imgEl.naturalHeight){
+        const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+        this.height=width*(imgEl.naturalHeight/imgEl.naturalWidth)*(pw/ph);
+      }
     } else {
       this.img=null; this.src='';
     }
@@ -377,7 +379,7 @@ function _edLayersSnapshot(){
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','color','backgroundColor',
                     'borderColor','borderWidth','padding',
-                    'tail','tailStart','tailEnd','style','voiceCount']){
+                    'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount']){
       if(l[k] !== undefined) o[k] = l[k];
     }
     if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
@@ -427,7 +429,16 @@ function edApplyHistory(snapshot){
     if(o._imgSrc){
       const p = new Promise(resolve => {
         const img = new Image();
-        img.onload  = () => { l.img = img; resolve(); };
+        img.onload  = () => {
+          l.img = img;
+          // Migración height si es necesario
+          const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+          const expectedH=l.width*(img.naturalHeight/img.naturalWidth)*(pw/ph);
+          if(Math.abs((l.height/l.width)/(expectedH/l.width)-1)>0.15){
+            l.height=Math.min(expectedH,0.9);
+          }
+          resolve();
+        };
         img.onerror = () => resolve();
         img.src = o._imgSrc;
       });
@@ -475,9 +486,13 @@ function edFitCanvas(resetCamera){
 
   // Solo redimensionar si cambió el tamaño — asignar canvas.width SIEMPRE
   // resetea el contexto 2D aunque sea el mismo valor, borrando el contenido
-  if(edCanvas.width !== newW || edCanvas.height !== newH){
+  const _sizeChanged = edCanvas.width !== newW || edCanvas.height !== newH;
+  if(_sizeChanged){
     edCanvas.width  = newW;
     edCanvas.height = newH;
+    // Si el tamaño cambió notablemente, forzar reset de cámara para evitar deformaciones
+    if(Math.abs(edCanvas.width - newW) > 5 || Math.abs(edCanvas.height - newH) > 5)
+      resetCamera = true;
   }
   edCanvas.style.width  = newW + 'px';
   edCanvas.style.height = newH + 'px';
@@ -561,13 +576,24 @@ function edRedraw(){
     edCtx.globalAlpha = 1;
   });
   if(page.drawData){
+    // Capturar el transform de cámara actual para usarlo en el onload asíncrono
+    const _camZ=edCamera.z, _camX=edCamera.x, _camY=edCamera.y;
     const img=new Image();
     img.onload=()=>{
+      // Restaurar transform de cámara (puede haberse reseteado por otro edRedraw)
+      edCtx.setTransform(_camZ,0,0,_camZ,_camX,_camY);
       edCtx.drawImage(img,edMarginX(),edMarginY(),edPageW(),edPageH());
       edCtx.globalAlpha = _textGroupAlpha;
       _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
       edCtx.globalAlpha = 1;
       edDrawSel();
+      // ── Borde azul del lienzo ──
+      edCtx.save();
+      edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=1/edCamera.z;
+      edCtx.strokeRect(edMarginX(),edMarginY(),edPageW(),edPageH());
+      edCtx.restore();
+      edCtx.setTransform(1,0,0,1,0,0);
+      _edScrollbarsDraw();
     };
     img.src=page.drawData;return;
   }
@@ -726,13 +752,13 @@ function edAddImage(file){
   reader.onload=ev=>{
     const img=new Image();
     img.onload=()=>{
-      // Calcular altura en coordenadas normalizadas del LIENZO (no del canvas viewport)
-      // width=0.7 = 70% del ancho del lienzo; height se calcula por ratio real de la imagen
-      const pw=edPageW(), ph=edPageH();
-      const w=0.7, h=w*(img.naturalHeight/img.naturalWidth)*(pw/ph);
+      const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+      const natW=img.naturalWidth||1, natH=img.naturalHeight||1;
+      const w=0.7;
+      const h=w*(natH/natW)*(pw/ph);
       const layer=new ImageLayer(img,0.5,0.5,w);
       layer.height=Math.min(h,0.85);
-      if(layer.height===0.85) layer.width=0.85*(ph/pw)*(img.naturalWidth/img.naturalHeight);
+      if(layer.height===0.85) layer.width=0.85*(ph/pw)*(natW/natH);
       // Insertar imagen antes del primer texto/bocadillo (textos siempre encima)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
       if(firstTextIdx >= 0){
@@ -1577,7 +1603,20 @@ function edDeserLayer(d){
     if(d.opacity!==undefined) l.opacity=d.opacity;
     if(d.src){
       const img=new Image();
-      img.onload=()=>{ l.img=img; l.src=img.src; edRedraw(); };
+      img.onload=()=>{
+        l.img=img; l.src=img.src;
+        // Migración: recalcular height si el ratio está mal (datos guardados con sistema antiguo)
+        const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+        const expectedH=l.width*(img.naturalHeight/img.naturalWidth)*(pw/ph);
+        const storedRatio=l.height/l.width;
+        const expectedRatio=expectedH/l.width;
+        // Si el ratio almacenado difiere >20% del esperado, es un dato de formato antiguo
+        if(Math.abs(storedRatio/expectedRatio-1)>0.15){
+          l.height=Math.min(expectedH,0.9);
+          if(l.height===0.9)l.width=0.9*(ph/pw)*(img.naturalWidth/img.naturalHeight);
+        }
+        edRedraw();
+      };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
       img.src=d.src;
     }
@@ -1606,7 +1645,14 @@ function edLoadProject(id){
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
   edCurrentPage=0;edLayers=edPages[0].layers;
   // Centrar cámara al cargar proyecto
-  if(edCanvas) { edFitCanvas(true); }
+  // Doble rAF + timeout: esperar que el DOM tenga alturas correctas
+  if(edCanvas){
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      edFitCanvas(true);
+      // Segundo intento por si el layout tardó más (ej: fuentes, imágenes)
+      setTimeout(()=>edFitCanvas(true), 120);
+    }));
+  }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
 }
