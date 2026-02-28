@@ -8,9 +8,10 @@
 let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
 let edSelectedIdx = -1;
-let edIsDragging = false, edIsResizing = false, edIsTailDragging = false;
+let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
 let edTailPointType = null, edResizeCorner = null;
 let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
+let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
 let edProjectId = null;
 let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
@@ -21,7 +22,7 @@ let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
 let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
-let edPinching = false, edPinchDist0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
+let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let edZoom = 1.0;               // LEGACY — no usado, ver edCamera
 // ── Cámara del editor (patrón Figma/tldraw) ──
@@ -94,14 +95,41 @@ class BaseLayer {
     this.type=type;this.x=x;this.y=y;this.width=width;this.height=height;this.rotation=0;
   }
   contains(px,py){
-    return px>=this.x-this.width/2&&px<=this.x+this.width/2&&
-           py>=this.y-this.height/2&&py<=this.y+this.height/2;
+    const rot = (this.rotation||0)*Math.PI/180;
+    if(rot === 0){
+      return px>=this.x-this.width/2&&px<=this.x+this.width/2&&
+             py>=this.y-this.height/2&&py<=this.y+this.height/2;
+    }
+    // Transformar punto al espacio local (sin rotación) del objeto
+    const pw=edPageW(), ph=edPageH();
+    const dx=(px-this.x)*pw, dy=(py-this.y)*ph;
+    const lx=( dx*Math.cos(-rot)-dy*Math.sin(-rot))/pw;
+    const ly=( dx*Math.sin(-rot)+dy*Math.cos(-rot))/ph;
+    return Math.abs(lx)<=this.width/2 && Math.abs(ly)<=this.height/2;
   }
   getControlPoints(){
-    if(this.type!=='image')return[];
-    const hw=this.width/2,hh=this.height/2;
-    return[{x:this.x-hw,y:this.y-hh,corner:'tl'},{x:this.x+hw,y:this.y-hh,corner:'tr'},
-           {x:this.x-hw,y:this.y+hh,corner:'bl'},{x:this.x+hw,y:this.y+hh,corner:'br'}];
+    // Todos los tipos soportan resize y rotate
+    const hw=this.width/2, hh=this.height/2;
+    const rot = (this.rotation||0)*Math.PI/180;
+    const pw=edPageW(), ph=edPageH();
+    // Función para rotar un punto normalizado alrededor del centro
+    const rp = (dx,dy) => {
+      const rx=dx*pw, ry=dy*ph;
+      return { x: this.x+(rx*Math.cos(rot)-ry*Math.sin(rot))/pw,
+               y: this.y+(rx*Math.sin(rot)+ry*Math.cos(rot))/ph };
+    };
+    const tl=rp(-hw,-hh), tr=rp(hw,-hh), bl=rp(-hw,hh), br=rp(hw,hh);
+    const ml=rp(-hw,0),  mr=rp(hw,0),  mt=rp(0,-hh), mb=rp(0,hh);
+    // Handle de rotación: 28px por encima del centro-top (en px físicos → normalizado)
+    const rotOffset = 28/ph;
+    const rotHandle = rp(0,-hh-rotOffset);
+    return[
+      {...tl,corner:'tl'}, {...tr,corner:'tr'},
+      {...bl,corner:'bl'}, {...br,corner:'br'},
+      {...ml,corner:'ml'}, {...mr,corner:'mr'},
+      {...mt,corner:'mt'}, {...mb,corner:'mb'},
+      {...rotHandle,corner:'rotate'},
+    ];
   }
   resizeToFitText(){}
 }
@@ -549,28 +577,69 @@ function edDrawSel(){
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
   const pw=edPageW(), ph=edPageH();
-  const x=edMarginX()+la.x*pw, y=edMarginY()+la.y*ph;
+  const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
   const w=la.width*pw, h=la.height*ph;
+  const rot=(la.rotation||0)*Math.PI/180;
+  const z=edCamera.z;
+  // 1px físico independiente del zoom
+  const lw=1/z;
+  const hr=6/z;   // radio handles escala
+  const hrRot=8/z; // radio handle rotación
   edCtx.save();
-  edCtx.strokeStyle='#ff6600';edCtx.lineWidth=2;edCtx.setLineDash([5,3]);
-  edCtx.strokeRect(x-w/2,y-h/2,w,h);edCtx.setLineDash([]);
-  if(la.type==='image' && !edIsTouchDevice()){
-    edCtx.fillStyle='#ff4444';
-    la.getControlPoints().forEach(p=>{
-      const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
-      edCtx.beginPath();edCtx.arc(cpx,cpy,6,0,Math.PI*2);edCtx.fill();
-      edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
+  // Transformar al espacio del objeto (centro + rotación)
+  edCtx.translate(cx,cy);
+  edCtx.rotate(rot);
+  // Marco de selección — 1px físico
+  edCtx.strokeStyle='#1a8cff';
+  edCtx.lineWidth=lw;
+  edCtx.setLineDash([5/z,3/z]);
+  edCtx.strokeRect(-w/2,-h/2,w,h);
+  edCtx.setLineDash([]);
+  // Handles de escala (8 puntos) — todos los tipos excepto bubble
+  if(la.type!=='bubble'){
+    const corners=[
+      [-w/2,-h/2],[ w/2,-h/2],[-w/2, h/2],[ w/2, h/2],
+      [   0,-h/2],[   0, h/2],[-w/2,   0],[ w/2,   0],
+    ];
+    corners.forEach(([hx,hy])=>{
+      edCtx.beginPath();edCtx.arc(hx,hy,hr,0,Math.PI*2);
+      edCtx.fillStyle='#fff';edCtx.fill();
+      edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
+    // Handle de rotación: círculo con flecha encima del centro-top
+    const rotY=-h/2-28/z;
+    // Línea del handle al borde
+    edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
+    edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw;edCtx.stroke();
+    // Círculo rotación
+    edCtx.beginPath();edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
+    edCtx.fillStyle='#1a8cff';edCtx.fill();
+    edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+    // Icono flecha de rotación dentro del círculo (↻)
+    edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;
+    const ar=hrRot*0.55;
+    edCtx.beginPath();edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5);
+    edCtx.stroke();
+    // Punta de flecha
+    const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
+    edCtx.beginPath();
+    edCtx.moveTo(ax,ay);edCtx.lineTo(ax-3/z,ay-5/z);
+    edCtx.moveTo(ax,ay);edCtx.lineTo(ax+4/z,ay-3/z);
+    edCtx.stroke();
   }
+  // Handles cola bocadillo (espacio propio, fuera del transform rotado)
   if(la.type==='bubble'){
-    edCtx.fillStyle='#ff4444';
+    edCtx.save();
     la.getTailControlPoints().forEach(p=>{
       const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
-      edCtx.beginPath();edCtx.arc(cpx,cpy,7,0,Math.PI*2);edCtx.fill();
-      edCtx.strokeStyle='#fff';edCtx.lineWidth=1.5;edCtx.stroke();
+      edCtx.beginPath();edCtx.arc(cpx,cpy,7/z,0,Math.PI*2);
+      edCtx.fillStyle='#1a8cff';edCtx.fill();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
+    edCtx.restore();
+  } else {
+    edCtx.restore();
   }
-  edCtx.restore();
 }
 
 /* ══════════════════════════════════════════
@@ -689,24 +758,34 @@ function _pinchDist(pMap) {
   const dy = pts[0].y - pts[1].y;
   return Math.hypot(dx, dy);
 }
+function _pinchAngle(pMap){
+  const pts=[...pMap.values()];
+  return Math.atan2(pts[1].y-pts[0].y, pts[1].x-pts[0].x);
+}
 function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
   edPinching   = true;
-  edPinchDist0 = _pinchDist(window._edActivePointers);
+  edPinchDist0  = _pinchDist(window._edActivePointers);
+  edPinchAngle0 = _pinchAngle(window._edActivePointers);
   const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  edPinchScale0 = la ? { w: la.width, h: la.height, x: la.x, y: la.y } : null;
+  edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0 } : null;
   return true;
 }
 function edPinchMove(e) {
   if (!edPinching || !window._edActivePointers || window._edActivePointers.size < 2) return;
-  const dist  = _pinchDist(window._edActivePointers);
-  const ratio = dist / Math.max(edPinchDist0, 1);
+  const dist   = _pinchDist(window._edActivePointers);
+  const angle  = _pinchAngle(window._edActivePointers);
+  const ratio  = dist / Math.max(edPinchDist0, 1);
+  const dAngle = (angle - edPinchAngle0) * 180 / Math.PI;
   const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
   if (la && edPinchScale0) {
+    // Escala proporcional
     const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
     const asp  = edPinchScale0.h / edPinchScale0.w;
     la.width  = newW;
     la.height = newW * asp;
+    // Rotación por giro de dedos
+    la.rotation = edPinchScale0.rot + dAngle;
     edRedraw();
   }
 }
@@ -860,18 +939,26 @@ function edOnStart(e){
       if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.04){edIsTailDragging=true;edTailPointType=p.type;return;}
     }
   }
-  // Resize imagen por puntos: solo en PC (táctil usa pinch)
-  if(!edIsTouchDevice() && edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='image'){
-    const la=edLayers[edSelectedIdx];
+  // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
+  if(edSelectedIdx>=0 && la.type!=='bubble'){
+    const _isT = e.pointerType==='touch';
+    const hitR = 0.04 + (_isT ? 0.02 : 0); // umbral más grande en táctil
     for(const p of la.getControlPoints()){
-      if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.04){
-        edIsResizing=true;edResizeCorner=p.corner;
-        // Guardamos el centro del objeto y el aspect ratio
-        // La fórmula: nw = distancia(ratón, centro) * 2
-        edInitialSize={width:la.width,height:la.height,
-                       cx:la.x, cy:la.y,   // centro del objeto
-                       asp:la.height/la.width};
-        return;
+      if(Math.hypot(c.nx-p.x,c.ny-p.y)<hitR){
+        if(p.corner==='rotate'){
+          // Iniciar rotación
+          edIsRotating = true;
+          edRotateStartAngle = Math.atan2(c.ny-la.y, c.nx-la.x)-(la.rotation||0)*Math.PI/180;
+          return;
+        }
+        if(!_isT){
+          // Resize solo en PC (táctil usa pinch)
+          edIsResizing=true; edResizeCorner=p.corner;
+          edInitialSize={width:la.width,height:la.height,
+                         cx:la.x, cy:la.y, asp:la.height/la.width,
+                         rot:(la.rotation||0)};
+          return;
+        }
       }
     }
   }
@@ -933,7 +1020,7 @@ function edOnMove(e){
     window._edLongPressReady = false;
   }
   // Sin gesto activo → ignorar el resto
-  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
+  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating;
   if(!gestureActive) return;
   e.preventDefault();
   // Pinch activo
@@ -954,20 +1041,40 @@ function edOnMove(e){
     else{la.tailEnd.x=dx/la.width;la.tailEnd.y=dy/la.height;}
     edRedraw();return;
   }
+  if(edIsRotating&&edSelectedIdx>=0){
+    const la=edLayers[edSelectedIdx];
+    const angle = Math.atan2(c.ny-la.y, c.nx-la.x) - edRotateStartAngle;
+    la.rotation = angle*180/Math.PI;
+    edRedraw();
+    return;
+  }
   if(edIsResizing&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
-    const asp=edInitialSize.asp;
-    let halfW;
-    if(edResizeCorner==='tr'||edResizeCorner==='br'){
-      halfW = c.nx - edInitialSize.cx;
+    const pw=edPageW(), ph=edPageH();
+    // Transformar punto al espacio local (sin rotación) del objeto
+    const rot=(edInitialSize.rot||0)*Math.PI/180;
+    const dx=(c.nx-edInitialSize.cx)*pw, dy=(c.ny-edInitialSize.cy||0);
+    // Para resize: distancia desde el centro en el eje correspondiente
+    const corner=edResizeCorner;
+    if(corner==='ml'||corner==='mr'){
+      // Solo ancho, mantener alto
+      const lx=(dx*Math.cos(-rot)-(c.ny-edInitialSize.cy)*ph*Math.sin(-rot))/pw;
+      const nw=Math.abs(lx)*2;
+      if(nw>0.02) la.width=nw;
+    } else if(corner==='mt'||corner==='mb'){
+      // Solo alto, mantener ancho
+      const ly=(dx*Math.sin(-rot)+(c.ny-edInitialSize.cy)*ph*Math.cos(-rot))/ph;
+      const nh=Math.abs(ly)*2;
+      if(nh>0.02) la.height=nh;
     } else {
-      halfW = edInitialSize.cx - c.nx;
+      // Esquinas — escala proporcional desde el centro
+      const asp=edInitialSize.asp;
+      const lx=(dx*Math.cos(-rot)-(c.ny-edInitialSize.cy)*ph*Math.sin(-rot))/pw;
+      const nw=Math.abs(lx)*2;
+      if(nw>0.02){ la.width=nw; la.height=nw*asp; }
     }
-    const nw = halfW * 2;
-    if(nw > 0.02){ la.width = nw; la.height = nw * asp; }
     edRedraw();
     edHideGearIcon();
-    // Cerrar panel de propiedades durante resize
     const _opPanel=$('edOptionsPanel');
     if(_opPanel&&_opPanel.classList.contains('open')){
       _opPanel.classList.remove('open'); _opPanel.innerHTML='';
@@ -992,7 +1099,7 @@ function edOnEnd(e){
     window._edActivePointers.delete(e.pointerId);
   }
   // Sin gesto activo → ignorar el resto
-  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
+  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating;
   if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
   if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
     edPinchEnd();
@@ -1003,7 +1110,7 @@ function edOnEnd(e){
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   window._edLongPressReady = false;
   if(wasDragging) edPushHistory();
-  edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
+  edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
 }
 
 /* ══════════════════════════════════════════
