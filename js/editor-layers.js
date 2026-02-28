@@ -5,6 +5,7 @@
 let _lyDragIdx  = null;
 let _lyDragOver = null;
 let _lyDragType = null; // 'text' | 'image'
+let _lyUidCounter = 0;  // IDs únicos estables para animación FLIP
 
 /* ──────────────────────────────────────────
    ABRIR / CERRAR
