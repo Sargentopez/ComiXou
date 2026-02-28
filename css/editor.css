@@ -664,7 +664,6 @@ body.editor-page #appView {
 }
 
 .ed-layer-item {
-  will-change: transform;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -860,6 +859,11 @@ body.editor-page #appView {
   text-transform: uppercase;
   letter-spacing: .06em;
   padding: 8px 4px 4px;
+  position: sticky;
+  top: 0;
+  background: var(--white);
+  z-index: 9;
+  flex-shrink: 0;
 }
 
 .ed-layer-sep {
@@ -885,6 +889,10 @@ body.editor-page #appView {
   overflow: hidden;
   margin: 4px 0 2px;
   height: 36px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex-shrink: 0;
 }
 .ed-ly-mode-row .ed-menu-btn {
   height: 36px;
@@ -930,7 +938,6 @@ body.editor-page #appView {
 
 /* Fila de texto/bocadillo */
 .ed-layer-text-row {
-  will-change: transform;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -959,7 +966,6 @@ body.editor-page #appView {
 
 /* Item imagen */
 .ed-layer-item {
-  will-change: transform;
   display: flex;
   align-items: center;
   gap: 10px;
