@@ -940,23 +940,22 @@ function edOnStart(e){
     }
   }
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
-  if(edSelectedIdx>=0 && la.type!=='bubble'){
+  const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  if(_la && _la.type!=='bubble'){
     const _isT = e.pointerType==='touch';
-    const hitR = 0.04 + (_isT ? 0.02 : 0); // umbral más grande en táctil
-    for(const p of la.getControlPoints()){
+    const hitR = 0.04 + (_isT ? 0.02 : 0);
+    for(const p of _la.getControlPoints()){
       if(Math.hypot(c.nx-p.x,c.ny-p.y)<hitR){
         if(p.corner==='rotate'){
-          // Iniciar rotación
           edIsRotating = true;
-          edRotateStartAngle = Math.atan2(c.ny-la.y, c.nx-la.x)-(la.rotation||0)*Math.PI/180;
+          edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
           return;
         }
         if(!_isT){
-          // Resize solo en PC (táctil usa pinch)
           edIsResizing=true; edResizeCorner=p.corner;
-          edInitialSize={width:la.width,height:la.height,
-                         cx:la.x, cy:la.y, asp:la.height/la.width,
-                         rot:(la.rotation||0)};
+          edInitialSize={width:_la.width,height:_la.height,
+                         cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
+                         rot:(_la.rotation||0), ox:_la.x, oy:_la.y};
           return;
         }
       }
@@ -1051,26 +1050,20 @@ function edOnMove(e){
   if(edIsResizing&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     const pw=edPageW(), ph=edPageH();
-    // Transformar punto al espacio local (sin rotación) del objeto
     const rot=(edInitialSize.rot||0)*Math.PI/180;
-    const dx=(c.nx-edInitialSize.cx)*pw, dy=(c.ny-edInitialSize.cy||0);
-    // Para resize: distancia desde el centro en el eje correspondiente
+    // Vector ratón→centro en espacio local del objeto
+    const dx=(c.nx-edInitialSize.cx)*pw, dy=(c.ny-edInitialSize.cy)*ph;
+    const lx=( dx*Math.cos(-rot)-dy*Math.sin(-rot))/pw;
+    const ly=( dx*Math.sin(-rot)+dy*Math.cos(-rot))/ph;
     const corner=edResizeCorner;
+    const asp=edInitialSize.asp;
     if(corner==='ml'||corner==='mr'){
-      // Solo ancho, mantener alto
-      const lx=(dx*Math.cos(-rot)-(c.ny-edInitialSize.cy)*ph*Math.sin(-rot))/pw;
-      const nw=Math.abs(lx)*2;
-      if(nw>0.02) la.width=nw;
+      const nw=Math.abs(lx)*2; if(nw>0.02) la.width=nw;
     } else if(corner==='mt'||corner==='mb'){
-      // Solo alto, mantener ancho
-      const ly=(dx*Math.sin(-rot)+(c.ny-edInitialSize.cy)*ph*Math.cos(-rot))/ph;
-      const nh=Math.abs(ly)*2;
-      if(nh>0.02) la.height=nh;
+      const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
     } else {
-      // Esquinas — escala proporcional desde el centro
-      const asp=edInitialSize.asp;
-      const lx=(dx*Math.cos(-rot)-(c.ny-edInitialSize.cy)*ph*Math.sin(-rot))/pw;
-      const nw=Math.abs(lx)*2;
+      // Esquina — proporcional
+      const nw=Math.max(Math.abs(lx),Math.abs(ly)/asp)*2;
       if(nw>0.02){ la.width=nw; la.height=nw*asp; }
     }
     edRedraw();
