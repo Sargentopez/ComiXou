@@ -906,15 +906,15 @@ function edOnStart(e){
         _edLastTapTime = 0; _edLastTapIdx = -1;
       } else {
         _edLastTapTime = now; _edLastTapIdx = found;
-        // Pulsación larga ≥ 1s sin mover → marcar flag (se confirma al soltar)
+        // Pulsación larga ≥ 2s sin mover → abrir panel directamente
         window._edLongPressReady = false;
         window._edLongPress = setTimeout(() => {
           if(edSelectedIdx === found && !_edTouchMoved){
-            window._edLongPressReady = true;
-            // Feedback haptico si disponible
+            edIsDragging = false;
+            edRenderOptionsPanel('props');
             if(navigator.vibrate) navigator.vibrate(30);
           }
-        }, 1000);
+        }, 2000);
       }
     } else {
       // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
@@ -943,7 +943,13 @@ function edOnStart(e){
   edRedraw();
 }
 function edOnMove(e){
-  // Sin gesto activo → ignorar (solo procesar durante drags)
+  // Actualizar _edTouchMoved siempre (para cancelar long-press aunque gestureActive sea false)
+  if(e.pointerType === 'touch' || e.pointerType === 'pen'){
+    _edTouchMoved = true;
+    clearTimeout(window._edLongPress);
+    window._edLongPressReady = false;
+  }
+  // Sin gesto activo → ignorar el resto
   const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
   if(!gestureActive) return;
   e.preventDefault();
@@ -998,13 +1004,13 @@ function edOnMove(e){
   }
 }
 function edOnEnd(e){
-  // Sin gesto activo → ignorar
-  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
-  if(!gestureActive2) return;
-  // Si quedan menos de 2 dedos, terminar pinch
+  // Limpiar pointer del mapa SIEMPRE (antes de la guarda)
   if(e && e.pointerId !== undefined && window._edActivePointers){
     window._edActivePointers.delete(e.pointerId);
   }
+  // Sin gesto activo → ignorar el resto
+  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
+  if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
   if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
     edPinchEnd();
     return;
@@ -1012,15 +1018,6 @@ function edOnEnd(e){
   if(edPainting){edPainting=false;edSaveDrawData();}
   clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
-  // Abrir panel si long-press se completó Y no hubo movimiento real
-  if(window._edLongPressReady && !_edTouchMoved && !edIsResizing && !edIsTailDragging){
-    window._edLongPressReady = false;
-    edIsDragging = false;
-    if(wasDragging) edPushHistory();
-    edIsResizing = false; edIsTailDragging = false;
-    edRenderOptionsPanel('props');
-    return;
-  }
   window._edLongPressReady = false;
   if(wasDragging) edPushHistory();
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;
