@@ -150,7 +150,13 @@ class ImageLayer extends BaseLayer {
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
-    const w=this.width*pw, h=this.height*ph;
+    // Ancho en px según fracción normalizada
+    const w=this.width*pw;
+    // Alto: preservar ratio natural de la imagen, independiente de la orientación
+    // this.height está en coords normalizadas respecto a ph de la orientación en que se creó
+    // Para ser invariante a la orientación, recalculamos desde el ratio natural
+    const natRatio=this.img.naturalWidth/this.img.naturalHeight;
+    const h=w/natRatio;
     const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
@@ -1767,14 +1773,18 @@ function edCloseViewer(){
 }
 function edUpdateViewer(){
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
-  // Aplicar orientación de esta hoja específica
-  if(page.orientation && page.orientation!==edOrientation){
-    edOrientation=page.orientation;
-    edViewerCanvas.width=edPageW();
-    edViewerCanvas.height=edPageH();
+  // Setear orientación de esta hoja temporalmente (restaurar al final)
+  const _savedOrient=edOrientation;
+  const _pageOrient=page.orientation||edOrientation;
+  edOrientation=_pageOrient;
+  const pw=edPageW(), ph=edPageH();
+  // Ajustar tamaño del canvas del visor para esta hoja
+  if(edViewerCanvas.width!==pw||edViewerCanvas.height!==ph){
+    edViewerCanvas.width=pw;
+    edViewerCanvas.height=ph;
     edViewerCtx=edViewerCanvas.getContext('2d');
   }
-  const pw=edPageW(), ph=edPageH();
+  // Canvas de trabajo con margen (igual que el editor)
   const full=document.createElement('canvas');
   full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
   const fctx=full.getContext('2d');
@@ -1798,11 +1808,16 @@ function edUpdateViewer(){
         cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
       }
     }
+    // Restaurar orientación global del editor
+    edOrientation=_savedOrient;
   };
 
   if(page.drawData){
     const img=new Image();
-    img.onload=()=>{fctx.drawImage(img,edMarginX(),edMarginY(),pw,ph);_finishViewer();};
+    img.onload=()=>{
+      fctx.drawImage(img,edMarginX(),edMarginY(),pw,ph);
+      _finishViewer();
+    };
     img.src=page.drawData;
   } else {
     _finishViewer();
