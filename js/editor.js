@@ -642,8 +642,8 @@ function edDrawSel(){
   edCtx.setLineDash([5/z,3/z]);
   edCtx.strokeRect(-w/2,-h/2,w,h);
   edCtx.setLineDash([]);
-  // Handles de escala (8 puntos) — todos los tipos excepto bubble
-  if(la.type!=='bubble'){
+  // Handles de escala y rotación — solo en PC (no táctil)
+  if(la.type!=='bubble' && !edIsTouchDevice()){
     const corners=[
       [-w/2,-h/2],[ w/2,-h/2],[-w/2, h/2],[ w/2, h/2],
       [   0,-h/2],[   0, h/2],[-w/2,   0],[ w/2,   0],
@@ -655,19 +655,15 @@ function edDrawSel(){
     });
     // Handle de rotación: círculo con flecha encima del centro-top
     const rotY=-h/2-28/z;
-    // Línea del handle al borde
     edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
     edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw;edCtx.stroke();
-    // Círculo rotación
     edCtx.beginPath();edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
     edCtx.fillStyle='#1a8cff';edCtx.fill();
     edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
-    // Icono flecha de rotación dentro del círculo (↻)
     edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;
     const ar=hrRot*0.55;
     edCtx.beginPath();edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5);
     edCtx.stroke();
-    // Punta de flecha
     const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
     edCtx.beginPath();
     edCtx.moveTo(ax,ay);edCtx.lineTo(ax-3/z,ay-5/z);
@@ -1514,7 +1510,7 @@ function edSaveProject(){
   const panels=edPages.map((p,i)=>({
     id:'panel_'+i,
     dataUrl:p.drawData||edRenderPage(p),
-    orientation:edOrientation,
+    orientation:p.orientation||edOrientation,
   }));
   ComicStore.save({
     ...existing,
@@ -1523,7 +1519,7 @@ function edSaveProject(){
     panels,
     editorData:{
       orientation:edOrientation,
-      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'immediate'})),
+      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'immediate',orientation:p.orientation||edOrientation})),
     },
     updatedAt:new Date().toISOString(),
   });
@@ -1631,8 +1627,11 @@ function edLoadProject(id){
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
-    // Retrocompatibilidad: asignar orientación global a hojas sin orientation propia
-    edPages.forEach(p=>{ if(!p.orientation) p.orientation = edOrientation; });
+    // Restaurar orientation por hoja (retrocompatibilidad: usar global si no hay)
+    edPages.forEach((p,i)=>{
+      const pd=comic.editorData.pages?.[i];
+      p.orientation = pd?.orientation || comic.editorData.orientation || 'vertical';
+    });
     edPages=(comic.editorData.pages||[]).map(pd=>({
       drawData:pd.drawData||null,
       layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
@@ -1742,12 +1741,11 @@ function edInitViewerTap(){
   edShowViewerCtrls();
   if(!_viewerTapBound){
     _viewerTapBound = true;
-    // Cualquier interacción muestra los controles
-    // pointerdown cubre Android (no espera a pointerup que puede cancelarse)
-    viewer.addEventListener('pointerdown', () => edShowViewerCtrls());
-    viewer.addEventListener('pointerup',   () => edShowViewerCtrls());
-    // PC: movimiento de ratón
-    viewer.addEventListener('mousemove',   () => edShowViewerCtrls());
+    // pointerdown + touchstart cubren PC y Android
+    // Usar capture:true para recibir el evento aunque haya elementos encima
+    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
+    viewer.addEventListener('touchstart',  () => edShowViewerCtrls(), {capture:true, passive:true});
+    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
   }
 }
 function edCloseViewer(){
@@ -1761,9 +1759,13 @@ function edCloseViewer(){
 }
 function edUpdateViewer(){
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
-  // Renderizar usando un canvas temporal del tamaño completo del workspace,
-  // así draw() puede usar edMarginX()/edMarginY() correctamente.
-  // Luego copiamos solo la zona del lienzo al viewerCanvas.
+  // Aplicar orientación de esta hoja específica
+  if(page.orientation && page.orientation!==edOrientation){
+    edOrientation=page.orientation;
+    edViewerCanvas.width=edPageW();
+    edViewerCanvas.height=edPageH();
+    edViewerCtx=edViewerCanvas.getContext('2d');
+  }
   const pw=edPageW(), ph=edPageH();
   const full=document.createElement('canvas');
   full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;

@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v4.75</footer>
+    <footer class="app-version">v4.76</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -322,7 +322,7 @@ Router.register('editor', {
     </div>
 
     <!-- Inputs ocultos -->
-    <input type="file" id="edFileGallery" accept="image/*,.gif" style="display:none">
+    <input type="file" id="edFileGallery" accept="image/*,.gif,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
     <input type="file" id="edFileCapture" accept="image/*" capture="environment" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <div id="edBrushCursor"></div>
