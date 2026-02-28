@@ -1689,13 +1689,18 @@ function edOpenViewer(){
   _viewerKeyHandler = _edViewerKey;
   document.addEventListener('keydown', _viewerKeyHandler);
 }
-function edUpdateViewerSize(){
+function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
   const vw = window.innerWidth, vh = window.innerHeight;
-  // El visor muestra solo el LIENZO (no el workspace)
-  const pw=edPageW(), ph=edPageH();
+  // Si no se pasan dimensiones, calcularlas desde la hoja actual del visor
+  if(!pw||!ph){
+    const _po = edPages[edViewerIdx]?.orientation || edOrientation;
+    pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
+    ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
+  }
   edViewerCanvas.width  = pw;
   edViewerCanvas.height = ph;
+  edViewerCtx = edViewerCanvas.getContext('2d');
   // Escala: llenar el viewport manteniendo proporción (contain)
   const scale = Math.min(vw / pw, vh / ph);
   const displayW = Math.round(pw * scale);
@@ -1778,12 +1783,8 @@ function edUpdateViewer(){
   const _pageOrient=page.orientation||edOrientation;
   edOrientation=_pageOrient;
   const pw=edPageW(), ph=edPageH();
-  // Ajustar tamaño del canvas del visor para esta hoja
-  if(edViewerCanvas.width!==pw||edViewerCanvas.height!==ph){
-    edViewerCanvas.width=pw;
-    edViewerCanvas.height=ph;
-    edViewerCtx=edViewerCanvas.getContext('2d');
-  }
+  // Ajustar tamaño del canvas del visor Y posición/escala CSS para esta hoja
+  edUpdateViewerSize(pw, ph);
   // Canvas de trabajo con margen (igual que el editor)
   const full=document.createElement('canvas');
   full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
