@@ -843,11 +843,15 @@ function edOnStart(e){
     e.preventDefault();
   }
   _edTouchMoved = false; // resetear flag de movimiento
+  // Rastrear pointers activos (para pinch con pointer events)
+  if(!window._edActivePointers) window._edActivePointers = new Map();
+  window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
   // 2 dedos → iniciar pinch-to-zoom
-  if(e.touches && e.touches.length === 2){
+  if(window._edActivePointers.size === 2){
     edPinchStart(e);
     return;
   }
+  if(window._edActivePointers.size > 1) return;
   // Cerrar menús si están abiertos (clic en canvas o zona de trabajo)
   if(edMenuOpen){ edCloseMenus(); }
   edHideContextMenu();
@@ -944,7 +948,8 @@ function edOnMove(e){
   if(!gestureActive) return;
   e.preventDefault();
   // Pinch activo
-  if(e.touches && e.touches.length === 2){
+  if(window._edActivePointers && window._edActivePointers.size >= 2){
+    if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
     edPinchMove(e);
     return;
   }
@@ -997,7 +1002,10 @@ function edOnEnd(e){
   const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching;
   if(!gestureActive2) return;
   // Si quedan menos de 2 dedos, terminar pinch
-  if(edPinching && (!e || !e.touches || e.touches.length < 2)){
+  if(e && e.pointerId !== undefined && window._edActivePointers){
+    window._edActivePointers.delete(e.pointerId);
+  }
+  if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
     edPinchEnd();
     return;
   }
@@ -1720,19 +1728,19 @@ function EditorView_init(){
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
   // ── CANVAS ──
-  // Todos los eventos en document para capturar objetos fuera del canvas
-  // Guardados en window._edListeners para poder eliminarlos en destroy()
-  // pointer* en document (captura drags fuera del canvas)
-  // touch* en editorShell (NO en document — así los overlays fuera del shell
-  // no reciben el listener passive:false y pueden hacer scroll nativo)
-  const _shell = document.getElementById('editorShell') || document;
+  // Usamos SOLO pointer events (unifican mouse + touch sin duplicados).
+  // En Android un toque genera pointerdown+touchstart — usando solo pointer
+  // evitamos que edOnStart se llame dos veces.
+  // touch-action:none en editorShell permite que pointer events funcionen
+  // en táctil sin interferencia del browser, pero sin bloquear overlays
+  // (los overlays están en body, fuera del shell).
+  const _shell = document.getElementById('editorShell');
+  if(_shell) _shell.style.touchAction = 'none';
   window._edListeners = [
-    [document, 'pointerdown', edOnStart, {passive:false}],
+    [document, 'pointerdown',  edOnStart, {passive:false}],
     [document, 'pointermove',  edOnMove,  {passive:false}],
     [document, 'pointerup',    edOnEnd,   {}],
-    [_shell,   'touchstart',   edOnStart, {passive:false}],
-    [_shell,   'touchmove',    edOnMove,  {passive:false}],
-    [_shell,   'touchend',     edOnEnd,   {}],
+    [document, 'pointercancel',edOnEnd,   {}],
   ];
   window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
 
