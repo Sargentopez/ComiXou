@@ -467,47 +467,62 @@ function _lyBindImgDrag(item, handle, realIdx) {
    REORDENAR
 ────────────────────────────────────────── */
 /* ──────────────────────────────────────────
-   ANIMACIÓN DE REORDENACIÓN — FLIP con UID
+   ANIMACIÓN DE REORDENACIÓN — FLIP completo
+   Anima TODOS los items que cambien de posición
 ────────────────────────────────────────── */
 function _lyAnimatedReorder(layerObj, doReorder) {
   const list = document.getElementById('edLayersList');
   if (!list) { doReorder(); _lyRender(); return; }
 
-  // Asegurar UID en el objeto
+  // Asegurar UID en el objeto principal
   if (!layerObj._uid) layerObj._uid = ++_lyUidCounter;
-  const uid = layerObj._uid;
+  const movedUid = layerObj._uid;
 
-  // 1. Capturar posición ANTES del reorder
-  const elBefore = list.querySelector('[data-uid="' + uid + '"]');
-  if (!elBefore) { doReorder(); _lyRender(); return; }
-  const topBefore = elBefore.getBoundingClientRect().top;
+  // ── FIRST: capturar posición de TODOS los items animables ──
+  const snapBefore = new Map();
+  list.querySelectorAll('[data-uid]').forEach(el => {
+    snapBefore.set(el.dataset.uid, el.getBoundingClientRect().top);
+  });
 
-  // 2. Ejecutar reorder + reconstruir lista
+  if (snapBefore.size === 0) { doReorder(); _lyRender(); return; }
+
+  // ── Ejecutar reorder + reconstruir lista ──
   doReorder();
   _lyRender();
 
-  // 3. Encontrar mismo item por UID en nueva posición
-  const elAfter = list.querySelector('[data-uid="' + uid + '"]');
-  if (!elAfter) return;
+  // ── LAST: capturar posiciones nuevas y calcular deltas ──
+  const toAnimate = [];
+  list.querySelectorAll('[data-uid]').forEach(el => {
+    const uid = el.dataset.uid;
+    if (!snapBefore.has(uid)) return;
+    const delta = snapBefore.get(uid) - el.getBoundingClientRect().top;
+    if (Math.abs(delta) < 2) return;
+    toAnimate.push({ el, delta, isMoved: uid === String(movedUid) });
+  });
 
-  const deltaY = topBefore - elAfter.getBoundingClientRect().top;
-  if (Math.abs(deltaY) < 4) return;
+  if (toAnimate.length === 0) return;
 
-  // 4. FLIP: partir de posición vieja con opacidad 50%, animar a posición real
-  elAfter.style.transition = 'none';
-  elAfter.style.transform  = 'translateY(' + deltaY + 'px)';
-  elAfter.style.opacity    = '0.5';
+  // ── INVERT: colocar todos en posición anterior sin transición ──
+  toAnimate.forEach(({ el, delta, isMoved }) => {
+    el.style.transition = 'none';
+    el.style.transform  = 'translateY(' + delta + 'px)';
+    el.style.opacity    = isMoved ? '0.5' : '0.72';
+  });
 
+  // ── PLAY: doble rAF para forzar paint antes de animar ──
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      elAfter.style.transition = 'transform 320ms cubic-bezier(.4,0,.2,1), opacity 320ms ease';
-      elAfter.style.transform  = 'translateY(0)';
-      elAfter.style.opacity    = '1';
-      elAfter.addEventListener('transitionend', () => {
-        elAfter.style.transition = '';
-        elAfter.style.transform  = '';
-        elAfter.style.opacity    = '';
-      }, { once: true });
+      toAnimate.forEach(({ el, isMoved }) => {
+        const dur = isMoved ? 360 : 280;
+        el.style.transition = 'transform ' + dur + 'ms cubic-bezier(.4,0,.2,1), opacity ' + dur + 'ms ease';
+        el.style.transform  = 'translateY(0)';
+        el.style.opacity    = '1';
+        el.addEventListener('transitionend', () => {
+          el.style.transition = '';
+          el.style.transform  = '';
+          el.style.opacity    = '';
+        }, { once: true });
+      });
     });
   });
 }
