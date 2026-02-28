@@ -169,6 +169,8 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   const row = document.createElement('div');
   row.className = 'ed-layer-text-row' + (selected ? ' selected' : '') + (draggable ? ' draggable' : '');
   row.dataset.realIdx = realIdx;
+  if (!la._uid) la._uid = ++_lyUidCounter;
+  row.dataset.uid = la._uid;
 
   /* Número de secuencia (solo en modo secuencial) */
   if (draggable) {
@@ -259,8 +261,9 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
 function _lyBuildImgItem(la, realIdx, selected) {
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
-  item.dataset.lyKey = 'img-' + realIdx;
   item.dataset.realIdx = realIdx;
+  if (!la._uid) la._uid = ++_lyUidCounter;
+  item.dataset.uid = la._uid;
 
   /* Miniatura — handle de arrastre */
   const thumb = document.createElement('canvas');
@@ -515,7 +518,8 @@ function _lyReorderTexts(fromRealIdx, toRealIdx) {
   const toPos   = textIdxs.indexOf(toRealIdx);
   if (fromPos < 0 || toPos < 0) return;
 
-  _lyAnimatedReorder('txt-' + fromRealIdx, () => {
+  const _movedLayerTxt = edLayers[fromRealIdx];
+  _lyAnimatedReorder(_movedLayerTxt, () => {
     const moved = edLayers.splice(fromRealIdx, 1)[0];
     const adjustedTo = fromRealIdx < toRealIdx ? toRealIdx : toRealIdx;
     edLayers.splice(adjustedTo, 0, moved);
@@ -525,7 +529,8 @@ function _lyReorderTexts(fromRealIdx, toRealIdx) {
 }
 
 function _lyReorderImages(fromRealIdx, toRealIdx) {
-  _lyAnimatedReorder('img-' + fromRealIdx, () => {
+  const _movedLayerImg = edLayers[fromRealIdx];
+  _lyAnimatedReorder(_movedLayerImg, () => {
     const moved = edLayers.splice(fromRealIdx, 1)[0];
     const to = fromRealIdx < toRealIdx ? toRealIdx - 1 : toRealIdx;
     edLayers.splice(to, 0, moved);
