@@ -648,25 +648,24 @@ function edDrawSel(){
     edCtx.moveTo(ax,ay);edCtx.lineTo(ax+4/z,ay-3/z);
     edCtx.stroke();
   }
-  // Handles cola bocadillo (espacio propio, fuera del transform rotado)
+  // Cerrar el bloque rotado antes de dibujar los handles de cola
+  edCtx.restore();
+  // Handles cola bocadillo — en coordenadas de workspace absolutas (sin rotación)
   if(la.type==='bubble'){
-    // Dibujar handles FUERA del transform — tamaño fijo independiente del zoom
     const tcp=la.getTailControlPoints();
-    // Agrupar por voz para dibujar línea entre start y end de cada voz
     const byVoice={};
     tcp.forEach(p=>{ if(!byVoice[p.voice])byVoice[p.voice]={}; byVoice[p.voice][p.type]=p; });
-    edCtx.save();
-    // Líneas guía entre los 2 puntos de cada voz
+    // Líneas guía entre start y end de cada voz
     Object.values(byVoice).forEach(v=>{
       if(!v.start||!v.end)return;
       const sx=edMarginX()+v.start.x*pw, sy=edMarginY()+v.start.y*ph;
       const ex=edMarginX()+v.end.x*pw,   ey=edMarginY()+v.end.y*ph;
       edCtx.beginPath();edCtx.moveTo(sx,sy);edCtx.lineTo(ex,ey);
-      edCtx.strokeStyle='rgba(26,140,255,0.5)';edCtx.lineWidth=1.5;
-      edCtx.setLineDash([5,3]);edCtx.stroke();edCtx.setLineDash([]);
+      edCtx.strokeStyle='rgba(26,140,255,0.5)';edCtx.lineWidth=1.5/z;
+      edCtx.setLineDash([5/z,3/z]);edCtx.stroke();edCtx.setLineDash([]);
     });
-    // Handles: tamaño fijo 8px en pantalla (multiplicar por z para compensar el scale del canvas)
-    const HR=6/z; // mismo tamaño que handles de selección
+    // Handles
+    const HR=6/z;
     tcp.forEach(p=>{
       const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
       const isEnd=p.type==='end';
@@ -674,9 +673,6 @@ function edDrawSel(){
       edCtx.fillStyle=isEnd?'#ff6600':'#1a8cff';edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
-    edCtx.restore();
-  } else {
-    edCtx.restore();
   }
 }
 
