@@ -556,6 +556,9 @@ function _edCameraReset(){
    ══════════════════════════════════════════ */
 function edRedraw(){
   if(!edCtx || !edCanvas)return;
+  // BUG-E04: no interrumpir el trazo activo —
+  // durante edPainting el canvas se actualiza directamente por edContinuePaint
+  if(edPainting) return;
   const cw=edCanvas.width, ch=edCanvas.height;
 
   // Reset transform → limpiar todo el viewport
@@ -1079,6 +1082,7 @@ function edOnStart(e){
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
+    window._edMoved = false;  // BUG-E09: reset flag de movimiento real
     edHideGearIcon();
     clearTimeout(window._edLongPress);
     if(_isTouch){
@@ -1198,6 +1202,7 @@ function edOnMove(e){
         la.height = (nw_px * asp)/ph;
       }
     }
+    window._edMoved = true;
     edRedraw();
     edHideGearIcon();
     const _opPanel=$('edOptionsPanel');
@@ -1210,6 +1215,7 @@ function edOnMove(e){
   const la=edLayers[edSelectedIdx];
   la.x = c.nx - edDragOffX;
   la.y = c.ny - edDragOffY;
+  window._edMoved = true;
   edRedraw();
   edHideGearIcon();
   // Cerrar panel de propiedades durante drag
@@ -1234,7 +1240,9 @@ function edOnEnd(e){
   clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   window._edLongPressReady = false;
-  if(wasDragging) edPushHistory();
+  // BUG-E09: solo guardar historial si algo cambió de verdad
+  if(wasDragging && (window._edMoved || edIsTailDragging)) edPushHistory();
+  window._edMoved = false;
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
 }
 
@@ -1592,14 +1600,82 @@ function edInitFloatDrag(){
 /* ══════════════════════════════════════════
    GUARDAR / CARGAR
    ══════════════════════════════════════════ */
+function _edBubbleTailDir(l){
+  // Determinar la dirección de la cola del bocadillo para el reader.
+  // tailEnd es la punta de la cola en coordenadas relativas al centro del bocadillo.
+  // Devuelve: 'bottom', 'bottom-left', 'bottom-right', 'top', 'top-left', 'top-right', 'left', 'right'
+  const e = (l.tailEnds && l.tailEnds[0]) || l.tailEnd || {x:0, y:0.6};
+  const ex = e.x, ey = e.y;  // fracción relativa al bbox del bocadillo
+  // ey > 0.3 → cola hacia abajo; ey < -0.3 → cola hacia arriba
+  // ex > 0.3 → cola hacia derecha; ex < -0.3 → cola hacia izquierda
+  if(Math.abs(ey) >= Math.abs(ex)){
+    if(ey > 0){
+      if(ex < -0.15) return 'bottom-left';
+      if(ex >  0.15) return 'bottom-right';
+      return 'bottom';
+    } else {
+      if(ex < -0.15) return 'top-left';
+      if(ex >  0.15) return 'top-right';
+      return 'top';
+    }
+  } else {
+    return ex > 0 ? 'right' : 'left';
+  }
+}
 function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   const existing=ComicStore.getById(edProjectId)||{};
-  const panels=edPages.map((p,i)=>({
-    id:'panel_'+i,
-    dataUrl:p.drawData||edRenderPage(p),
-    orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
-  }));
+  const panels=edPages.map((p,i)=>{
+    // Exportar capas de texto/bocadillo para el reader
+    const texts = [];
+    let bubbleOrder = 0;
+    p.layers.forEach(l => {
+      if(l.type === 'bubble'){
+        texts.push({
+          type:  'dialog',
+          text:  l.text === 'Escribe aquí' ? '' : l.text,
+          x:     Math.round((l.x - l.width/2)  * 100 * 10) / 10,
+          y:     Math.round((l.y - l.height/2) * 100 * 10) / 10,
+          w:     Math.round(l.width  * 100 * 10) / 10,
+          h:     Math.round(l.height * 100 * 10) / 10,
+          // dirección de la cola: derivada de la posición tailEnd relativa al centro
+          tail:  _edBubbleTailDir(l),
+          style: l.style || 'conventional',
+          order: bubbleOrder++,
+          fontSize: l.fontSize || 18,
+          fontFamily: l.fontFamily || 'Comic Sans MS, cursive',
+          color: l.color || '#000000',
+          bg:    l.backgroundColor || '#ffffff',
+          border: l.borderWidth || 2,
+          borderColor: l.borderColor || '#000000',
+        });
+      } else if(l.type === 'text'){
+        // Las cajas de texto se clasifican por posición vertical:
+        // top 20% → header, bottom 20% → footer, resto → caption
+        const vPos = l.y; // fracción 0-1
+        const ttype = vPos < 0.22 ? 'header' : vPos > 0.78 ? 'footer' : 'caption';
+        texts.push({
+          type:  ttype,
+          text:  l.text === 'Escribe aquí' ? '' : l.text,
+          x:     Math.round((l.x - l.width/2)  * 100 * 10) / 10,
+          y:     Math.round((l.y - l.height/2) * 100 * 10) / 10,
+          w:     Math.round(l.width  * 100 * 10) / 10,
+          fontSize: l.fontSize || 20,
+          fontFamily: l.fontFamily || 'Arial',
+          color: l.color || '#000000',
+          bg:    l.backgroundColor || '#ffffff',
+          border: l.borderWidth || 0,
+        });
+      }
+    });
+    return {
+      id:'panel_'+i,
+      dataUrl:p.drawData||edRenderPage(p),
+      orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
+      textMode: p.textMode || 'immediate',
+      texts,
+    };
+  });
   ComicStore.save({
     ...existing,
     id:edProjectId,
@@ -1630,13 +1706,33 @@ function edRenderPage(page){
   const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
   page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(ctx,full));
-  if(page.drawData){
-    const di=new Image();di.src=page.drawData;
-    if(di.complete)ctx.drawImage(di,edMarginX(),edMarginY(),pw,ph);
-  }
-  // Recortar solo la zona de la página
+  // BUG-E08: si hay drawData (dibujo libre ya guardado), simplemente
+  // usarlo como base y pintar las capas encima — sin depender de di.complete.
+  // El drawData ya fue renderizado correctamente por edSaveDrawData.
   const outCtx=tmp.getContext('2d');
-  outCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
+  if(page.drawData){
+    // Pintar drawData directamente como fondo del thumbnail
+    const di=new Image();
+    // Intentar síncrono primero (muy probable que esté en caché)
+    di.src=page.drawData;
+    if(di.complete && di.naturalWidth > 0){
+      outCtx.drawImage(di,0,0,pw,ph);
+    } else {
+      // Si no está en caché, recortar del full canvas sin drawData
+      outCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
+    }
+  } else {
+    outCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
+  }
+  // Pintar capas texto/bubble encima del drawData en el thumbnail
+  if(page.drawData){
+    const ctx2=tmp.getContext('2d');
+    // Mini canvas workspace para pintar capas en coordenadas correctas
+    const f2=document.createElement('canvas');f2.width=ED_CANVAS_W;f2.height=ED_CANVAS_H;
+    const c2=f2.getContext('2d');
+    page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(c2,f2));
+    ctx2.drawImage(f2,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
+  }
   // Restaurar estado
   edOrientation  = _savedOrient;
   edCurrentPage  = _savedPage;
@@ -1688,6 +1784,9 @@ function edDeserLayer(d, pageOrientation){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
+    // BUG-E07: asignar height guardado ANTES del onload para que el primer
+    // render muestre el tamaño correcto aunque la imagen tarde en cargar
+    if(d.height) l.height = d.height;
     if(d.src){
       const img=new Image();
       img.onload=()=>{

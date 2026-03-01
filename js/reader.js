@@ -64,36 +64,89 @@ function buildPanelElements() {
 }
 
 function buildReaderTexts(panel, layer) {
-  if (!panel.texts) return;
+  if (!panel.texts || panel.texts.length === 0) return;
 
-  // Cabecera y pie: siempre visibles
+  // ── CAJAS DE TEXTO (header / footer / caption) ─────────────────
+  // Siempre visibles, posicionadas exactamente igual que en el editor
   panel.texts.filter(t => t.type !== 'dialog').forEach(t => {
+    if (!t.text) return;
     const block = document.createElement('div');
-    block.className = 'reader-text-block ' + (t.type === 'header' ? 'header' : 'footer');
-    block.textContent = t.text;
+    if (t.type === 'header' || t.type === 'footer') {
+      // Header/footer: banda completa arriba o abajo
+      block.className = 'reader-text-block ' + t.type;
+      block.textContent = t.text;
+    } else {
+      // Caption: posicionado exactamente como en el editor
+      block.className = 'reader-text-caption';
+      block.style.left   = t.x + '%';
+      block.style.top    = t.y + '%';
+      block.style.width  = (t.w || 20) + '%';
+      block.style.fontSize = (t.fontSize || 20) + 'px';
+      block.style.fontFamily = t.fontFamily || 'Arial';
+      block.style.color  = t.color || '#000';
+      block.style.background = t.bg || '#fff';
+      if (t.border) block.style.border = t.border + 'px solid ' + (t.borderColor || '#000');
+      block.textContent = t.text;
+    }
     layer.appendChild(block);
   });
 
-  // Bocadillos ordenados, aparecen secuencialmente
+  // ── BOCADILLOS (dialog) ─────────────────────────────────────────
+  // Aparecen uno a uno al tap/clic, en el orden definido por el editor.
+  // La posición y tamaño coinciden exactamente con lo que se ve en el editor.
   const dialogs = panel.texts
-    .filter(t => t.type === 'dialog')
-    .sort((a,b) => (a.order||0) - (b.order||0));
+    .filter(t => t.type === 'dialog' && t.text)
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
 
   dialogs.forEach((d, i) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'reader-bubble';
-    wrapper.style.left = d.x + '%';
-    wrapper.style.top  = d.y + '%';
+    // Posición: esquina superior-izquierda del bocadillo en % del panel
+    wrapper.style.left   = d.x + '%';
+    wrapper.style.top    = d.y + '%';
+    wrapper.style.width  = (d.w || 30) + '%';
     wrapper.dataset.bubbleIdx = i;
 
-    wrapper.innerHTML = `
-      <div class="reader-bubble-inner">
-        <span>${escHtml(d.text)}</span>
-        <svg class="reader-tail tail-${d.tail||'bottom'}" viewBox="0 0 30 22" xmlns="http://www.w3.org/2000/svg">
-          <path d="M0 0 L15 22 L30 0 Z" fill="white" stroke="black" stroke-width="2.5" stroke-linejoin="round"/>
-        </svg>
-      </div>
-    `;
+    // Estilos del bocadillo copiados del editor
+    const inner = document.createElement('div');
+    inner.className = 'reader-bubble-inner';
+    inner.style.fontFamily  = d.fontFamily || 'Comic Sans MS, cursive';
+    inner.style.fontSize    = Math.round((d.fontSize || 18) * 0.85) + 'px'; // escalar para el reader
+    inner.style.color       = d.color || '#000';
+    inner.style.background  = d.bg || '#fff';
+    inner.style.borderWidth = (d.border || 2) + 'px';
+    inner.style.borderColor = d.borderColor || '#000';
+    inner.style.borderStyle = d.style === 'lowvoice' ? 'dashed' : 'solid';
+    // Forma según estilo
+    if (d.style === 'explosion') {
+      inner.style.borderRadius = '4px';
+      inner.style.transform = 'rotate(-1deg)';
+    } else if (d.style === 'thought') {
+      inner.style.borderRadius = '50%';
+    } else {
+      inner.style.borderRadius = '14px';
+    }
+
+    const span = document.createElement('span');
+    span.textContent = d.text;
+    inner.appendChild(span);
+
+    // Cola del bocadillo (SVG)
+    if (d.style !== 'thought' && d.style !== 'radio') {
+      const tail = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      tail.setAttribute('class', 'reader-tail tail-' + (d.tail || 'bottom'));
+      tail.setAttribute('viewBox', '0 0 30 22');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M0 0 L15 22 L30 0 Z');
+      path.setAttribute('fill', d.bg || 'white');
+      path.setAttribute('stroke', d.borderColor || 'black');
+      path.setAttribute('stroke-width', '2.5');
+      path.setAttribute('stroke-linejoin', 'round');
+      tail.appendChild(path);
+      inner.appendChild(tail);
+    }
+
+    wrapper.appendChild(inner);
     layer.appendChild(wrapper);
   });
 }
@@ -171,7 +224,7 @@ function goToPanel(idx) {
         }, 50);
       }
       ReaderState.animating = false;
-      showNextBubble();
+      _showBubblesForPanel(idx);
       requestOrientationLock(nextOrient);
     }, 950);
 
@@ -182,9 +235,30 @@ function goToPanel(idx) {
 
     setTimeout(() => {
       ReaderState.animating = false;
-      showNextBubble();
+      _showBubblesForPanel(idx);
       requestOrientationLock(nextOrient);
     }, 100);
+  }
+}
+
+function _showBubblesForPanel(idx) {
+  const panel = ReaderState.comic.panels[idx];
+  const mode  = panel?.textMode || 'immediate';
+  const panelEl = document.getElementById('rp_' + idx);
+  if (!panelEl) return;
+  const bubbles = panelEl.querySelectorAll('.reader-bubble');
+  if (bubbles.length === 0) return;
+
+  if (mode === 'sequential') {
+    // Mostrar solo el primero, el resto aparecen con advance()
+    bubbles[0].classList.add('visible');
+    ReaderState.currentBubbleIdx = 0;
+  } else {
+    // Immediate: todos visibles de una vez, escalonados levemente
+    bubbles.forEach((b, i) => {
+      setTimeout(() => b.classList.add('visible'), i * 80);
+    });
+    ReaderState.currentBubbleIdx = bubbles.length - 1;
   }
 }
 
@@ -202,9 +276,14 @@ function showNextBubble() {
 }
 
 function advance() {
-  // Primero mostrar siguiente bocadillo de la viñeta actual
-  if (showNextBubble()) return;
-  // Luego pasar a la siguiente viñeta
+  const panel = ReaderState.comic.panels[ReaderState.currentPanel];
+  const isSequential = (panel?.textMode || 'immediate') === 'sequential';
+
+  if (isSequential) {
+    // Modo secuencial: un bocadillo por tap
+    if (showNextBubble()) return;
+  }
+  // Avanzar a la siguiente viñeta
   const next = ReaderState.currentPanel + 1;
   if (next >= ReaderState.comic.panels.length) {
     document.getElementById('endOverlay').classList.remove('hidden');
