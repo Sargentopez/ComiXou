@@ -1,5 +1,5 @@
 /* ============================================================
-   editor.js — ComiXow v5.0
+   editor.js — ComiXow v5.1
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -1525,7 +1525,7 @@ function edSaveProject(){
   const panels=edPages.map((p,i)=>({
     id:'panel_'+i,
     dataUrl:p.drawData||edRenderPage(p),
-    orientation:p.orientation||edOrientation,
+    orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
   }));
   ComicStore.save({
     ...existing,
@@ -1600,7 +1600,7 @@ function edSerLayer(l){
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
     tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,...op};
 }
-function edDeserLayer(d){
+function edDeserLayer(d, pageOrientation){
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
   if(d.type==='bubble'){const l=new BubbleLayer(d.text,d.x,d.y);Object.assign(l,d);
     if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};
@@ -1616,8 +1616,10 @@ function edDeserLayer(d){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // Migración: height es fracción de ph
-        const _pw=edPageW()||ED_PAGE_W, _ph=edPageH()||ED_PAGE_H;
+        // Recalcular height con las dimensiones reales de la orientacion de ESTA pagina
+        const _isV = (pageOrientation||'vertical') === 'vertical';
+        const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+        const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
         l.height = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
         edRedraw();
       };
@@ -1637,7 +1639,7 @@ function edLoadProject(id){
     edOrientation=comic.editorData.orientation||'vertical';
     edPages=(comic.editorData.pages||[]).map(pd=>({
       drawData:pd.drawData||null,
-      layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
+      layers:(pd.layers||[]).map(d=>edDeserLayer(d, pd.orientation||comic.editorData.orientation||'vertical')).filter(Boolean),
       textLayerOpacity:pd.textLayerOpacity??1,
       textMode:pd.textMode||'immediate',
       orientation:pd.orientation||comic.editorData.orientation||'vertical',
@@ -2240,7 +2242,10 @@ function edLoadFromJSON(file){
         edOrientation=data.editorData.orientation||'vertical';
         edPages=(data.editorData.pages||[]).map(pd=>({
           drawData:pd.drawData||null,
-          layers:(pd.layers||[]).map(edDeserLayer).filter(Boolean),
+          layers:(pd.layers||[]).map(d=>edDeserLayer(d, pd.orientation||data.editorData.orientation||'vertical')).filter(Boolean),
+          textLayerOpacity:pd.textLayerOpacity??1,
+          textMode:pd.textMode||'immediate',
+          orientation:pd.orientation||data.editorData.orientation||'vertical',
         }));
         if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
         edCurrentPage=0;edLayers=edPages[0].layers;
