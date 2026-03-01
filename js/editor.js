@@ -1532,11 +1532,16 @@ function edInitFloatDrag(){
 function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   const existing=ComicStore.getById(edProjectId)||{};
-  const panels=edPages.map((p,i)=>({
-    id:'panel_'+i,
-    dataUrl:p.drawData||edRenderPage(p),
-    orientation:p.orientation||edOrientation,
-  }));
+  const panels=edPages.map((p,i)=>{
+    const rawOrient = p.orientation || edOrientation;
+    // Reader espera 'v'/'h'; el editor usa 'vertical'/'horizontal'
+    const readerOrient = rawOrient === 'vertical' ? 'v' : 'h';
+    return {
+      id:'panel_'+i,
+      dataUrl:p.drawData||edRenderPage(p),
+      orientation: readerOrient,
+    };
+  });
   ComicStore.save({
     ...existing,
     id:edProjectId,

@@ -10,7 +10,7 @@ let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | nu
 function _onStoreChange(e) {
   // Solo re-renderizar si la vista home está activa
   if (!document.getElementById('comicsGrid')) return;
-  buildFiltrosMenu();
+  showFiltrosLevel1();
   renderComics();
 }
 
@@ -241,7 +241,7 @@ function buildRow(comic, currentUser) {
       if (confirm(I18n.t('confirmUnpublish'))) {
         comic.published = false;
         ComicStore.save(comic);
-        buildFiltrosMenu();
+        showFiltrosLevel1();
         renderComics();
         showToast(I18n.t('unpublishOk'));
       }
@@ -256,7 +256,7 @@ function buildRow(comic, currentUser) {
     delBtn.addEventListener('click', () => {
       if (confirm(I18n.t('confirmDelete'))) {
         ComicStore.remove(comic.id);
-        buildFiltrosMenu();
+        showFiltrosLevel1();
         renderComics();
         showToast(I18n.t('deleteOk'));
       }
