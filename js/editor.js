@@ -441,12 +441,109 @@ class DrawLayer extends BaseLayer {
   }
 }
 
+
+class StrokeLayer extends BaseLayer {
+  constructor(srcCanvas, pw, ph){
+    // Calcular bounding box real del contenido no-transparente
+    const bb = StrokeLayer._boundingBox(srcCanvas);
+    if(!bb){
+      // Canvas vacío — crear objeto mínimo centrado
+      super('stroke', 0.5, 0.5, 0.1, 0.1);
+      this._canvas = document.createElement('canvas');
+      this._canvas.width = Math.round(pw * 0.1);
+      this._canvas.height = Math.round(ph * 0.1);
+      return;
+    }
+    // Posición y tamaño en fracción de página
+    const cx = (bb.x + bb.w/2) / pw;
+    const cy = (bb.y + bb.h/2) / ph;
+    const fw = bb.w / pw;
+    const fh = bb.h / ph;
+    super('stroke', cx, cy, fw, fh);
+    // Recortar solo la zona con contenido
+    this._canvas = document.createElement('canvas');
+    this._canvas.width  = Math.max(1, bb.w);
+    this._canvas.height = Math.max(1, bb.h);
+    this._canvas.getContext('2d').drawImage(srcCanvas, bb.x, bb.y, bb.w, bb.h, 0, 0, bb.w, bb.h);
+    this._pw = pw;
+    this._ph = ph;
+  }
+  // Calcular bounding box del contenido no-transparente del canvas
+  static _boundingBox(canvas){
+    const ctx = canvas.getContext('2d');
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let minX=canvas.width, minY=canvas.height, maxX=0, maxY=0, found=false;
+    for(let y=0; y<canvas.height; y++){
+      for(let x=0; x<canvas.width; x++){
+        if(d[(y*canvas.width+x)*4+3] > 10){
+          if(x<minX)minX=x; if(x>maxX)maxX=x;
+          if(y<minY)minY=y; if(y>maxY)maxY=y;
+          found=true;
+        }
+      }
+    }
+    if(!found) return null;
+    // Añadir pequeño margen para no cortar trazos en el borde
+    const pad = 4;
+    return {
+      x: Math.max(0, minX-pad), y: Math.max(0, minY-pad),
+      w: Math.min(canvas.width,  maxX-minX+1+pad*2),
+      h: Math.min(canvas.height, maxY-minY+1+pad*2)
+    };
+  }
+  // Restaurar desde dataUrl (carga de proyecto)
+  static fromDataUrl(dataUrl, x, y, width, height, pw, ph){
+    const sl = new StrokeLayer(document.createElement('canvas'), pw||ED_PAGE_W, ph||ED_PAGE_H);
+    sl.x = x; sl.y = y; sl.width = width; sl.height = height;
+    const bw = Math.max(1, Math.round(width  * (pw||ED_PAGE_W)));
+    const bh = Math.max(1, Math.round(height * (ph||ED_PAGE_H)));
+    sl._canvas = document.createElement('canvas');
+    sl._canvas.width  = bw;
+    sl._canvas.height = bh;
+    const img = new Image();
+    img.onload = () => {
+      sl._canvas.getContext('2d').drawImage(img, 0, 0, bw, bh);
+      if(typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return sl;
+  }
+  // Exportar bitmap recortado
+  toDataUrl(){ return this._canvas.toDataURL(); }
+  // Expandir a DrawLayer para edición — devuelve un DrawLayer con el contenido restaurado
+  toDrawLayer(pw, ph){
+    const dl = new DrawLayer(pw, ph);
+    // Pintar el bitmap del stroke en las coordenadas correctas del DrawLayer
+    const bx = Math.round((this.x - this.width/2)  * pw);
+    const by = Math.round((this.y - this.height/2) * ph);
+    const bw = Math.round(this.width  * pw);
+    const bh = Math.round(this.height * ph);
+    dl._ctx.drawImage(this._canvas, 0, 0, this._canvas.width, this._canvas.height, bx, by, bw, bh);
+    return dl;
+  }
+  draw(ctx){
+    if(!this._canvas || this._canvas.width === 0) return;
+    const pw = edPageW(), ph = edPageH();
+    const w = this.width  * pw;
+    const h = this.height * ph;
+    const px = edMarginX() + this.x * pw;
+    const py = edMarginY() + this.y * ph;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate((this.rotation||0) * Math.PI/180);
+    ctx.drawImage(this._canvas, -w/2, -h/2, w, h);
+    ctx.restore();
+  }
+}
+
 /* ══════════════════════════════════════════
    HISTORIAL UNDO / REDO
    ══════════════════════════════════════════ */
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
-    if(l.type === 'draw') return { type: 'draw', dataUrl: l.toDataUrl() };
+    if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl() };
+    if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(),
+      x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','color','backgroundColor',
@@ -497,6 +594,14 @@ function edApplyHistory(snapshot){
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
                     : new DrawLayer(_isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
+      return l;
+    }
+    else if(o.type === 'stroke') {
+      const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+      const _pw = _isV?ED_PAGE_W:ED_PAGE_H, _ph = _isV?ED_PAGE_H:ED_PAGE_W;
+      l = StrokeLayer.fromDataUrl(o.dataUrl||'', o.x||0.5, o.y||0.5, o.width||0.1, o.height||0.1, _pw, _ph);
+      if(o.rotation) l.rotation=o.rotation;
+      if(o.opacity !== undefined) l.opacity=o.opacity;
       return l;
     }
     else return o;
@@ -659,8 +764,9 @@ function edRedraw(){
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
   // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
-  const _imgLayers  = edLayers.filter(l=>l.type==='image');
-  const _textLayers = edLayers.filter(l=>l.type==='text'||l.type==='bubble');
+  const _imgLayers    = edLayers.filter(l=>l.type==='image');
+  const _strokeLayers = edLayers.filter(l=>l.type==='stroke');
+  const _textLayers   = edLayers.filter(l=>l.type==='text'||l.type==='bubble');
   // Opacidad global de la capa de textos (máximo de todos sus objetos individuales,
   // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
@@ -670,9 +776,15 @@ function edRedraw(){
     l.draw(edCtx,edCanvas);
     edCtx.globalAlpha = 1;
   });
-  // DrawLayer: dibujo libre como capa normal — síncrono, no async
+  // DrawLayer activo (trazo en progreso) — síncrono
   const _drawLayer = page.layers.find(l => l.type === 'draw');
   if(_drawLayer) _drawLayer.draw(edCtx);
+  // StrokeLayers (trazos congelados como objetos)
+  _strokeLayers.forEach(l=>{
+    edCtx.globalAlpha = l.opacity ?? 1;
+    l.draw(edCtx);
+    edCtx.globalAlpha = 1;
+  });
   edCtx.globalAlpha = _textGroupAlpha;
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
@@ -1404,12 +1516,25 @@ function edToggleMenu(id){
 function edDeactivateDrawTool(){
   edActiveTool='select';
   edCanvas.className='';
-  $('editorCanvasWrap')?.classList.remove('mode-draw');
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
-  // Close the options panel if it was showing draw options
   const panel=$('edOptionsPanel');
   if(panel)panel.classList.remove('open');
+  _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
+}
+function _edFreezeDrawLayer(){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dlIdx = page.layers.findIndex(l => l.type === 'draw');
+  if(dlIdx < 0) return;
+  const dl = page.layers[dlIdx];
+  const bb = StrokeLayer._boundingBox(dl._canvas);
+  if(!bb){ page.layers.splice(dlIdx, 1); edLayers=page.layers; return; }
+  const sl = new StrokeLayer(dl._canvas, edPageW(), edPageH());
+  page.layers.splice(dlIdx, 1, sl);
+  edLayers = page.layers;
+  edSelectedIdx = page.layers.indexOf(sl);
+  edPushHistory();
+  edRedraw();
 }
 
 /* ══════════════════════════════════════════
@@ -1512,6 +1637,18 @@ function edRenderOptionsPanel(mode){
           </label>
         </div>`;
       }
+    } else if(la.type==='stroke'){
+      html+=`
+      <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
+        <input type="number" id="pp-rot" value="${la.rotation||0}" min="-180" max="180"> °
+      </div>
+      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+        <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
+      </div>
+      <div class="op-prop-row">
+        <button id="pp-edit-stroke" style="flex:1;background:var(--yellow);color:var(--black);border:none;border-radius:6px;padding:5px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
+      </div>`;
     } else if(la.type==='image'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
@@ -1561,6 +1698,21 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del')?.addEventListener('click',edDeleteSelected);
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
+    $('pp-edit-stroke')?.addEventListener('click',()=>{
+      // Convertir StrokeLayer seleccionado de vuelta a DrawLayer editable
+      const page=edPages[edCurrentPage]; if(!page) return;
+      const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
+      const dl=sl.toDrawLayer(edPageW(), edPageH());
+      page.layers.splice(edSelectedIdx, 1, dl);
+      edLayers=page.layers;
+      edSelectedIdx=-1;
+      // Activar herramienta de dibujo con el DrawLayer restaurado
+      edActiveTool='draw';
+      edCanvas.className='tool-draw';
+      const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+      edRenderOptionsPanel('draw');
+      edRedraw();
+    });
     $('pp-opacity')?.addEventListener('input',e=>{
       la.opacity = e.target.value/100;
       const v=$('pp-opacity-val'); if(v) v.textContent=e.target.value+'%';
@@ -1742,39 +1894,15 @@ function edRenderPage(page){
   const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
   // Imágenes primero, luego DrawLayer, luego texto/bocadillos
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
-  const dl=page.layers.find(l=>l.type==='draw');
-  if(dl) dl.draw(ctx);
-  page.layers.filter(l=>l.type!=='image'&&l.type!=='draw').forEach(l=>l.draw(ctx,full));
-  // BUG-E08: si hay drawData (dibujo libre ya guardado), simplemente
-  // usarlo como base y pintar las capas encima — sin depender de di.complete.
-  // El drawData ya fue renderizado correctamente por edSaveDrawData.
+  const _rdl=page.layers.find(l=>l.type==='draw');
+  if(_rdl) _rdl.draw(ctx);
+  page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(ctx));
+  page.layers.filter(l=>l.type!=='image'&&l.type!=='draw'&&l.type!=='stroke').forEach(l=>l.draw(ctx,full));
+  // Recortar zona de la página del canvas de trabajo
   const outCtx=tmp.getContext('2d');
-  if(page.drawData){
-    // Pintar drawData directamente como fondo del thumbnail
-    const di=new Image();
-    // Intentar síncrono primero (muy probable que esté en caché)
-    di.src=page.drawData;
-    if(di.complete && di.naturalWidth > 0){
-      outCtx.drawImage(di,0,0,pw,ph);
-    } else {
-      // Si no está en caché, recortar del full canvas sin drawData
-      outCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
-    }
-  } else {
-    outCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
-  }
-  // Pintar capas texto/bubble encima del drawData en el thumbnail
-  if(page.drawData){
-    const ctx2=tmp.getContext('2d');
-    // Mini canvas workspace para pintar capas en coordenadas correctas
-    const f2=document.createElement('canvas');f2.width=ED_CANVAS_W;f2.height=ED_CANVAS_H;
-    const c2=f2.getContext('2d');
-    page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(c2,f2));
-    ctx2.drawImage(f2,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
-  }
-  // Restaurar estado
-  edOrientation  = _savedOrient;
-  edCurrentPage  = _savedPage;
+  outCtx.drawImage(full, edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
+  edOrientation = _savedOrient;
+  edCurrentPage = _savedPage;
   return tmp.toDataURL('image/jpeg',0.85);
 }
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
@@ -1810,7 +1938,9 @@ function edSerLayer(l){
     tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
     tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
     padding:l.padding||15,...op};
-  if(l.type==='draw') return{type:'draw', dataUrl: l.toDataUrl()};
+  if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
+  if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
+    x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity};
 }
 function edDeserLayer(d, pageOrientation){
   if(d.type==='draw'){
@@ -1818,6 +1948,15 @@ function edDeserLayer(d, pageOrientation){
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
     return d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer(_pw, _ph);
+  }
+  if(d.type==='stroke'){
+    const _isV = (pageOrientation||'vertical')==='vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', d.x||0.5, d.y||0.5, d.width||0.1, d.height||0.1, _pw, _ph);
+    if(d.rotation) sl.rotation = d.rotation;
+    if(d.opacity !== undefined) sl.opacity = d.opacity;
+    return sl;
   }
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
   if(d.type==='bubble'){const l=new BubbleLayer(d.text,d.x,d.y);Object.assign(l,d);
@@ -2024,6 +2163,9 @@ function edUpdateViewer(){
   const _savedOrient=edOrientation;
   edOrientation=_po;
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(fctx,full));
+  const _viewerDrawLayer = page.layers.find(l=>l.type==='draw');
+  if(_viewerDrawLayer) _viewerDrawLayer.draw(fctx);
+  page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(fctx));
   const _finishViewer = () => {
     _edViewerDrawTextsOnCtx(page, fctx, full);
     // Restaurar antes de manipular el DOM
@@ -2043,16 +2185,7 @@ function edUpdateViewer(){
       }
     }
   };
-  if(page.drawData){
-    const img=new Image();
-    img.onload=()=>{
-      fctx.drawImage(img,mx,my,pw,ph);
-      _finishViewer();
-    };
-    img.src=page.drawData;
-  } else {
-    _finishViewer();
-  }
+  _finishViewer();
 }
 
 function _edViewerDrawTextsOnCtx(page, ctx, can){

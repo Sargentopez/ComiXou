@@ -146,6 +146,62 @@ function _lyRender() {
   sep.className = 'ed-layer-sep';
   list.appendChild(sep);
 
+  /* ══ SECCIÓN DIBUJOS ══ */
+  const dTitle = document.createElement('div');
+  dTitle.className = 'ed-ly-section-title';
+  dTitle.textContent = 'Dibujos';
+  list.appendChild(dTitle);
+
+  const strokePairs = edLayers.map((l,i)=>({l,i})).filter(({l})=>l.type==='stroke'||l.type==='draw');
+  if(strokePairs.length === 0){
+    const e = document.createElement('p');
+    e.className = 'ed-layer-sub-empty';
+    e.textContent = 'Sin dibujos';
+    list.appendChild(e);
+  } else {
+    strokePairs.forEach(({l,i}) => {
+      const row = document.createElement('div');
+      row.className = 'ed-layer-text-row' + (i === edSelectedIdx ? ' selected' : '');
+      // Miniatura del trazo
+      const thumb = document.createElement('canvas');
+      thumb.className = 'ed-layer-thumb-sm';
+      thumb.width = 56; thumb.height = 42;
+      if(l.type === 'stroke' && l._canvas){
+        thumb.getContext('2d').drawImage(l._canvas, 0, 0, l._canvas.width, l._canvas.height, 0, 0, 56, 42);
+      } else {
+        const tc = thumb.getContext('2d');
+        tc.fillStyle = '#e63030'; tc.fillText('✏️', 20, 28);
+      }
+      thumb.addEventListener('pointerup', () => {
+        edSelectedIdx = i; edRedraw(); edCloseLayers();
+      });
+      row.appendChild(thumb);
+      const lbl = document.createElement('span');
+      lbl.className = 'ed-layer-name';
+      lbl.textContent = l.type === 'draw' ? '✏️ Dibujando…' : '✏️ Dibujo';
+      row.appendChild(lbl);
+      // Botón borrar
+      const delBtn = document.createElement('button');
+      delBtn.className = 'ed-ly-act-btn danger';
+      delBtn.textContent = '✕';
+      delBtn.title = 'Eliminar dibujo';
+      delBtn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        edLayers.splice(i, 1);
+        if(edSelectedIdx === i) edSelectedIdx = -1;
+        else if(edSelectedIdx > i) edSelectedIdx--;
+        edPushHistory(); edRedraw(); _lyRender();
+      });
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  }
+
+  /* ══ SEPARADOR 2 ══ */
+  const sep2 = document.createElement('div');
+  sep2.className = 'ed-layer-sep';
+  list.appendChild(sep2);
+
   /* ══ SECCIÓN IMÁGENES ══ */
   const iTitle = document.createElement('div');
   iTitle.className = 'ed-ly-section-title';
