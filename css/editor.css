@@ -290,19 +290,6 @@ body.editor-page #appView {
 #editorCanvas.tool-draw   { cursor: crosshair; }
 #editorCanvas.tool-eraser { cursor: cell; }
 
-/* Canvas de dibujo libre: encima del principal, transparente */
-#edDrawCanvas {
-  display: block;
-  position: absolute;
-  touch-action: none;
-  user-select: none;
-  pointer-events: none;   /* solo recibe eventos cuando tool-draw/eraser está activo */
-  background: transparent;
-  cursor: crosshair;
-}
-/* En modo dibujo/goma: draw canvas captura los eventos, el principal los ignora */
-#editorCanvasWrap.mode-draw #edDrawCanvas  { pointer-events: all; }
-#editorCanvasWrap.mode-draw #editorCanvas  { pointer-events: none; }
 
 /* ══════════════════════════════
    PANEL DE OPCIONES (bajo el menú)

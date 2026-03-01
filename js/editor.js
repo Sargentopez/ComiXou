@@ -16,8 +16,7 @@ let edOrientation = 'vertical';
 let edProjectId = null;
 let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
 let edActiveTool = 'select';  // select | draw | eraser
-let edPainting = false, edLastPX = 0, edLastPY = 0;
-let edDrawCanvas = null, edDrawCtx = null;
+let edPainting = false;
 let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20;
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
@@ -389,11 +388,65 @@ function edSetOrientation(o, persist=true){
 }
 
 
+
+class DrawLayer extends BaseLayer {
+  constructor(pw, ph){
+    super('draw', 0.5, 0.5, 1.0, 1.0);
+    this._pw = pw;
+    this._ph = ph;
+    this._canvas = document.createElement('canvas');
+    this._canvas.width  = pw;
+    this._canvas.height = ph;
+    this._ctx = this._canvas.getContext('2d');
+    this._lastX = 0;
+    this._lastY = 0;
+  }
+  static fromDataUrl(dataUrl, pw, ph){
+    const dl = new DrawLayer(pw, ph);
+    const img = new Image();
+    img.onload = () => {
+      dl._ctx.drawImage(img, 0, 0, pw, ph);
+      if(typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return dl;
+  }
+  toDataUrl(){ return this._canvas.toDataURL(); }
+  clear(){
+    this._ctx.clearRect(0, 0, this._pw, this._ph);
+  }
+  beginStroke(nx, ny, color, size, isEraser){
+    const px = nx * this._pw, py = ny * this._ph;
+    this._ctx.save();
+    if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.fillStyle='rgba(0,0,0,1)'; }
+    else { this._ctx.globalCompositeOperation='source-over'; this._ctx.fillStyle=color; }
+    this._ctx.beginPath(); this._ctx.arc(px,py,size/2,0,Math.PI*2); this._ctx.fill();
+    this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
+    this._lastX=px; this._lastY=py;
+  }
+  continueStroke(nx, ny, color, size, isEraser){
+    const px = nx * this._pw, py = ny * this._ph;
+    this._ctx.save();
+    this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(px,py);
+    if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
+    else { this._ctx.globalCompositeOperation='source-over'; this._ctx.strokeStyle=color; }
+    this._ctx.lineWidth=size; this._ctx.lineCap='round'; this._ctx.lineJoin='round'; this._ctx.stroke();
+    this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
+    this._lastX=px; this._lastY=py;
+  }
+  draw(ctx){
+    ctx.save();
+    ctx.drawImage(this._canvas, edMarginX(), edMarginY(), edPageW(), edPageH());
+    ctx.restore();
+  }
+}
+
 /* ══════════════════════════════════════════
    HISTORIAL UNDO / REDO
    ══════════════════════════════════════════ */
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
+    if(l.type === 'draw') return { type: 'draw', dataUrl: l.toDataUrl() };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','color','backgroundColor',
@@ -408,13 +461,12 @@ function _edLayersSnapshot(){
 
 function edPushHistory(){
   const layersJSON = _edLayersSnapshot();
-  const drawData   = edPages[edCurrentPage]?.drawData || null;
   if(edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
-    if(last.layersJSON === layersJSON && last.drawData === drawData) return;
+    if(last.layersJSON === layersJSON) return;
   }
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
-  edHistory.push({ pageIdx: edCurrentPage, layersJSON, drawData });
+  edHistory.push({ pageIdx: edCurrentPage, layersJSON });
   if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
   edHistoryIdx = edHistory.length - 1;
   edUpdateUndoRedoBtns();
@@ -441,6 +493,12 @@ function edApplyHistory(snapshot){
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
     else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
+    else if(o.type === 'draw') {
+      const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+      l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
+                    : new DrawLayer(_isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
+      return l;
+    }
     else return o;
     for(const k of Object.keys(o)){
       if(k !== '_imgSrc') l[k] = o[k];
@@ -467,7 +525,6 @@ function edApplyHistory(snapshot){
   });
   if(edPages[snapshot.pageIdx]){
     edPages[snapshot.pageIdx].layers = edLayers;
-    edPages[snapshot.pageIdx].drawData = snapshot.drawData;
   }
   edSelectedIdx = -1;
   edPanelUserClosed = false;
@@ -568,9 +625,6 @@ function _edCameraReset(){
    ══════════════════════════════════════════ */
 function edRedraw(){
   if(!edCtx || !edCanvas)return;
-  // BUG-E04: no interrumpir el trazo activo —
-  // durante edPainting el canvas se actualiza directamente por edContinuePaint
-  if(edPainting) return;
   const cw=edCanvas.width, ch=edCanvas.height;
 
   // Reset transform → limpiar todo el viewport
@@ -616,28 +670,9 @@ function edRedraw(){
     l.draw(edCtx,edCanvas);
     edCtx.globalAlpha = 1;
   });
-  if(page.drawData){
-    // Capturar el transform de cámara actual para usarlo en el onload asíncrono
-    const _camZ=edCamera.z, _camX=edCamera.x, _camY=edCamera.y;
-    const img=new Image();
-    img.onload=()=>{
-      // Restaurar transform de cámara (puede haberse reseteado por otro edRedraw)
-      edCtx.setTransform(_camZ,0,0,_camZ,_camX,_camY);
-      edCtx.drawImage(img,edMarginX(),edMarginY(),edPageW(),edPageH());
-      edCtx.globalAlpha = _textGroupAlpha;
-      _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
-      edCtx.globalAlpha = 1;
-      edDrawSel();
-      // ── Borde azul del lienzo ──
-      edCtx.save();
-      edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=1/edCamera.z;
-      edCtx.strokeRect(edMarginX(),edMarginY(),edPageW(),edPageH());
-      edCtx.restore();
-      edCtx.setTransform(1,0,0,1,0,0);
-      _edScrollbarsDraw();
-    };
-    img.src=page.drawData;return;
-  }
+  // DrawLayer: dibujo libre como capa normal — síncrono, no async
+  const _drawLayer = page.layers.find(l => l.type === 'draw');
+  if(_drawLayer) _drawLayer.draw(edCtx);
   edCtx.globalAlpha = _textGroupAlpha;
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
@@ -1047,8 +1082,7 @@ function edOnStart(e){
   if(edMenuOpen){ edCloseMenus(); }
   edHideContextMenu();
   if(['draw','eraser'].includes(edActiveTool)){
-    // Aceptar eventos del canvas principal O del canvas de dibujo superpuesto
-    if(tgt !== edCanvas && tgt !== edDrawCanvas) return;
+    if(tgt !== edCanvas) return;
     edStartPaint(e);return;
   }
   const c=edCoords(e);
@@ -1259,96 +1293,52 @@ function edOnEnd(e){
 }
 
 /* ══════════════════════════════════════════
-   DIBUJO LIBRE
+   DIBUJO LIBRE  (DrawLayer)
    ══════════════════════════════════════════ */
+function _edGetOrCreateDrawLayer(){
+  const page = edPages[edCurrentPage]; if(!page) return null;
+  let dl = page.layers.find(l => l.type === 'draw');
+  if(!dl){
+    dl = new DrawLayer(edPageW(), edPageH());
+    // Insertar DrawLayer al principio del stack (por debajo de imágenes y texto)
+    page.layers.unshift(dl);
+    edLayers = page.layers;
+  }
+  return dl;
+}
 function edStartPaint(e){
-  edPainting=true;
-  // Cerrar panel de propiedades al empezar a dibujar
+  edPainting = true;
   const _pp=$('edOptionsPanel');
   if(_pp&&_pp.classList.contains('open')){ _pp.classList.remove('open'); _pp.innerHTML=''; }
-  if(!edDrawCtx) return;
-  // Capturar el puntero en el canvas de dibujo: garantiza que todos los
-  // pointermove lleguen aunque el cursor/dedo salga del canvas durante el trazo
-  if(e.pointerId !== undefined && e.target && e.target.setPointerCapture){
-    try{ e.target.setPointerCapture(e.pointerId); } catch(_){}
-  }
-  // El canvas de dibujo (#edDrawCanvas) está encima del canvas principal.
-  // Usamos edDrawCtx: el trazo nunca queda tapado por imágenes ni drawData.
-  // El transform de cámara se aplica aquí porque edDrawCanvas comparte el
-  // mismo sistema de coordenadas que edCanvas (mismos px físicos, mismo top).
-  edDrawCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-  const c=edCoords(e),er=edActiveTool==='eraser';
-  edDrawCtx.save();
-  if(er)edDrawCtx.globalCompositeOperation='destination-out';
-  else{edDrawCtx.globalCompositeOperation='source-over';edDrawCtx.fillStyle=edDrawColor;}
-  edDrawCtx.beginPath();edDrawCtx.arc(c.px,c.py,(er?edEraserSize:edDrawSize)/2,0,Math.PI*2);edDrawCtx.fill();
-  edDrawCtx.restore();edDrawCtx.globalCompositeOperation='source-over';
-  edLastPX=c.px;edLastPY=c.py;edMoveBrush(e);
+  const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
+  const c = edCoords(e), er = edActiveTool==='eraser';
+  dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er);
+  edRedraw();
+  edMoveBrush(e);
 }
 function edContinuePaint(e){
-  if(!edDrawCtx) return;
-  const c=edCoords(e),er=edActiveTool==='eraser';
-  edDrawCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-  edDrawCtx.save();edDrawCtx.beginPath();edDrawCtx.moveTo(edLastPX,edLastPY);edDrawCtx.lineTo(c.px,c.py);
-  if(er){edDrawCtx.globalCompositeOperation='destination-out';edDrawCtx.strokeStyle='rgba(0,0,0,1)';}
-  else{edDrawCtx.globalCompositeOperation='source-over';edDrawCtx.strokeStyle=edDrawColor;}
-  edDrawCtx.lineWidth=er?edEraserSize:edDrawSize;edDrawCtx.lineCap='round';edDrawCtx.lineJoin='round';edDrawCtx.stroke();
-  edDrawCtx.restore();edDrawCtx.globalCompositeOperation='source-over';
-  edLastPX=c.px;edLastPY=c.py;edMoveBrush(e);
+  if(!edPainting) return;
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  const c = edCoords(e), er = edActiveTool==='eraser';
+  dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er);
+  edRedraw();
+  edMoveBrush(e);
 }
 function edSaveDrawData(){
-  const page=edPages[edCurrentPage];if(!page)return;
-  if(!edDrawCtx||!edDrawCanvas) return;
+  // Con DrawLayer ya no hay nada que "guardar" por separado —
+  // el DrawLayer persiste en page.layers. Solo marcamos fin del trazo.
   edPainting = false;
-
-  // Fusionar: drawData anterior (trazos previos) + trazo nuevo del edDrawCanvas
-  // Todo se normaliza al tamaño de la página (pw × ph) sin depender del zoom.
-  const pw=edPageW(), ph=edPageH();
-  const tmp=document.createElement('canvas'); tmp.width=pw; tmp.height=ph;
-  const tctx=tmp.getContext('2d');
-
-  // 1. Pintar trazos previos (page.drawData) como fondo
-  if(page.drawData){
-    const prev=new Image(); prev.src=page.drawData;
-    // page.drawData es un dataURL ya generado → siempre está en caché → .complete=true
-    if(prev.complete && prev.naturalWidth>0) tctx.drawImage(prev,0,0,pw,ph);
-  }
-
-  // 2. Pintar el trazo nuevo encima: extraer del edDrawCanvas la zona de la página
-  //    edDrawCanvas usa coordenadas workspace con transform de cámara.
-  //    La zona de la página en workspace = (edMarginX, edMarginY, pw, ph).
-  //    En pantalla (píxeles del canvas DOM) = (mx*z+camX, my*z+camY, pw*z, ph*z).
-  const mx=edMarginX(), my=edMarginY(), z=edCamera.z;
-  const sx=mx*z+edCamera.x, sy=my*z+edCamera.y;
-  const sw=pw*z,            sh=ph*z;
-  // Recortar del draw canvas la zona de la página y escalarla a pw×ph
-  if(sw>0 && sh>0){
-    tctx.save();
-    // El borrador usa destination-out sobre el draw canvas transparente,
-    // que ya tiene el alpha correcto. Aquí simplemente pintamos sobre el resultado fusionado.
-    tctx.drawImage(edDrawCanvas, sx, sy, sw, sh, 0, 0, pw, ph);
-    tctx.restore();
-  }
-
-  page.drawData = tmp.toDataURL();
-
-  // Limpiar el canvas de dibujo: queda transparente para el siguiente trazo
-  edDrawCtx.setTransform(1,0,0,1,0,0);
-  edDrawCtx.clearRect(0,0,edDrawCanvas.width,edDrawCanvas.height);
-
-  // Redibujar el canvas principal para mostrar el nuevo drawData
-  edRedraw();
+  edPushHistory();
 }
 function edClearDraw(){
   const page=edPages[edCurrentPage];if(!page)return;
-  page.drawData=null;
-  // Limpiar también el canvas de dibujo activo (puede haber trazo en progreso)
-  if(edDrawCtx&&edDrawCanvas){
-    edDrawCtx.setTransform(1,0,0,1,0,0);
-    edDrawCtx.clearRect(0,0,edDrawCanvas.width,edDrawCanvas.height);
-  }
-  edPainting=false;
-  edRedraw();edToast('Dibujos borrados');
+  const dl = page.layers.find(l => l.type === 'draw');
+  if(dl) dl.clear();
+  // También eliminar page.drawData legado si existiera
+  page.drawData = null;
+  edPainting = false;
+  edRedraw(); edToast('Dibujos borrados');
 }
 function edMoveBrush(e){
   const src=e.touches?e.touches[0]:e,cur=$('edBrushCursor');if(!cur)return;
@@ -1721,7 +1711,7 @@ function edSaveProject(){
     });
     return {
       id:'panel_'+i,
-      dataUrl:p.drawData||edRenderPage(p),
+      dataUrl:edRenderPage(p),
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
       textMode: p.textMode || 'immediate',
       texts,
@@ -1734,15 +1724,13 @@ function edSaveProject(){
     panels,
     editorData:{
       orientation:edOrientation,
-      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||edOrientation})),
+      pages:edPages.map(p=>({layers:p.layers.map(edSerLayer).filter(Boolean),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||edOrientation})),
     },
     updatedAt:new Date().toISOString(),
   });
   edToast('Guardado ✓');
 }
 function edRenderPage(page){
-  // Renderizar solo la zona de la página (sin margen de workspace)
-  // Temporalmente usar la orientación de esta hoja específica
   const _savedOrient = edOrientation;
   const _savedPage   = edCurrentPage;
   const _pageIdx     = edPages.indexOf(page);
@@ -1750,13 +1738,13 @@ function edRenderPage(page){
   if(page.orientation) edOrientation = page.orientation;
   const pw=edPageW(), ph=edPageH();
   const tmp=document.createElement('canvas');tmp.width=pw;tmp.height=ph;
-  // Proxy: simula ser el canvas completo pero con margen 0
-  // Las draw() usarán ED_MARGIN (constante global) = 120, que suma fuera de tmp
-  // Para evitarlo, usamos un canvas del tamaño del workspace pero solo exportamos la zona central
   const full=document.createElement('canvas');full.width=ED_CANVAS_W;full.height=ED_CANVAS_H;
   const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
+  // Imágenes primero, luego DrawLayer, luego texto/bocadillos
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
-  page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(ctx,full));
+  const dl=page.layers.find(l=>l.type==='draw');
+  if(dl) dl.draw(ctx);
+  page.layers.filter(l=>l.type!=='image'&&l.type!=='draw').forEach(l=>l.draw(ctx,full));
   // BUG-E08: si hay drawData (dibujo libre ya guardado), simplemente
   // usarlo como base y pintar las capas encima — sin depender de di.complete.
   // El drawData ya fue renderizado correctamente por edSaveDrawData.
@@ -1822,8 +1810,15 @@ function edSerLayer(l){
     tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
     tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
     padding:l.padding||15,...op};
+  if(l.type==='draw') return{type:'draw', dataUrl: l.toDataUrl()};
 }
 function edDeserLayer(d, pageOrientation){
+  if(d.type==='draw'){
+    const _isV = (pageOrientation||'vertical')==='vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    return d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer(_pw, _ph);
+  }
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
   if(d.type==='bubble'){const l=new BubbleLayer(d.text,d.x,d.y);Object.assign(l,d);
     if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};
@@ -1868,13 +1863,22 @@ function edLoadProject(id){
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
-    edPages=(comic.editorData.pages||[]).map(pd=>({
-      drawData:pd.drawData||null,
-      layers:(pd.layers||[]).map(d=>edDeserLayer(d, pd.orientation||comic.editorData.orientation||'vertical')).filter(Boolean),
-      textLayerOpacity:pd.textLayerOpacity??1,
-      textMode:pd.textMode||'sequential',
-      orientation:pd.orientation||comic.editorData.orientation||'vertical',
-    }));
+    edPages=(comic.editorData.pages||[]).map(pd=>{
+      const orient = pd.orientation||comic.editorData.orientation||'vertical';
+      const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
+      // Migrar drawData legado (versiones <5.20) a DrawLayer si no hay DrawLayer ya
+      if(pd.drawData && !layers.find(l=>l.type==='draw')){
+        const _isV = orient==='vertical';
+        layers.unshift(DrawLayer.fromDataUrl(pd.drawData, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W));
+      }
+      return {
+        drawData: null,  // ya no se usa, migrado a DrawLayer
+        layers,
+        textLayerOpacity: pd.textLayerOpacity??1,
+        textMode: pd.textMode||'sequential',
+        orientation: orient,
+      };
+    });
   }else{
     edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
   }
