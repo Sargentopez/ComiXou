@@ -42,7 +42,13 @@ function edCloseLayers() {
   const ov = document.getElementById('edLayersOverlay');
   if (!ov) return;
   ov.classList.remove('open');
-  setTimeout(() => { ov.remove(); _lySetCanvasTouch(true); }, 250);
+  setTimeout(() => {
+    ov.remove();
+    _lySetCanvasTouch(true);
+    // Refrescar la hoja vigente al cerrar el panel de capas
+    if (typeof edRedraw === 'function') edRedraw();
+    if (typeof edRenderOptionsPanel === 'function') edRenderOptionsPanel();
+  }, 250);
 }
 
 // Activa/desactiva los listeners de touch del canvas

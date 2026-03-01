@@ -59,7 +59,7 @@ function AuthView_init() {
     }
 
     loginForm.addEventListener('submit', doLogin);
-    if (submitBtn) submitBtn.addEventListener('click', doLogin);
+    // Solo un listener: form submit cubre tanto teclado (Enter) como click en el botón
   }
 
   // ── REGISTRO ──
@@ -96,7 +96,7 @@ function AuthView_init() {
     }
 
     registerForm.addEventListener('submit', doRegister);
-    if (submitBtn) submitBtn.addEventListener('click', doRegister);
+    // Solo un listener: form submit cubre tanto teclado (Enter) como click en el botón
   }
 }
 

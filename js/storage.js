@@ -30,7 +30,19 @@ const ComicStore = (() => {
 
   /* ── CRUD ── */
   function getAll()       { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
-  function saveAll(list)  { localStorage.setItem(KEY, JSON.stringify(list)); }
+  function saveAll(list) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(list));
+    } catch(e) {
+      if (e.name === 'QuotaExceededError' || e.code === 22) {
+        // localStorage lleno — notificar al usuario
+        window.dispatchEvent(new CustomEvent('cx:storage:quota', { detail: { size: JSON.stringify(list).length } }));
+        console.error('[ComicStore] localStorage lleno — guardado fallido:', e);
+      } else {
+        throw e;
+      }
+    }
+  }
   function getById(id)    { return getAll().find(c => c.id === id) || null; }
 
   function save(comic) {

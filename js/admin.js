@@ -101,7 +101,7 @@ function buildAdminRow(comic, mode) {
     <div class="admin-row-info">
       <span class="admin-row-title">${escHtml(comic.title || 'Sin título')}</span>
       <span class="admin-row-meta">${I18n.t('by')} ${escHtml(comic.username || '')} · ${comic.panels?.length || 0} ${(comic.panels?.length || 0) !== 1 ? I18n.t('panelsWord') : I18n.t('panelWord')}</span>
-      <span class="admin-row-meta">${new Date(comic.createdAt).toLocaleDateString('es')}</span>
+      <span class="admin-row-meta">${new Date(comic.createdAt).toLocaleDateString(typeof I18n !== 'undefined' ? I18n.getLang() : 'es')}</span>
     </div>
     <div class="admin-row-actions">
       ${mode === 'pending' ? `<button class="admin-btn admin-btn-ok" id="approve_${comic.id}">✓ Aprobar</button>` : ''}

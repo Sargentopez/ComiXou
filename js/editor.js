@@ -1265,6 +1265,11 @@ function edContinuePaint(e){
 }
 function edSaveDrawData(){
   const page=edPages[edCurrentPage];if(!page)return;
+  // Deseleccionar temporalmente para que los handles azules no aparezcan en el drawData
+  const _prevSelected = edSelectedIdx;
+  edSelectedIdx = -1;
+  // Redibujar sin handles antes de capturar
+  edRedraw();
   // Renderizar el dibujo libre en un canvas del tamaño del workspace,
   // luego recortar solo la zona de la página — igual que edRenderPage.
   // Esto garantiza que el dibujo se guarda correctamente con cualquier zoom.
@@ -1283,6 +1288,8 @@ function edSaveDrawData(){
   const tmp=document.createElement('canvas');tmp.width=pw;tmp.height=ph;
   tmp.getContext('2d').drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
   page.drawData=tmp.toDataURL();
+  // Restaurar selección
+  edSelectedIdx = _prevSelected;
 }
 function edClearDraw(){
   const page=edPages[edCurrentPage];if(!page)return;page.drawData=null;edRedraw();edToast('Dibujos borrados');
@@ -1660,11 +1667,14 @@ function edSerLayer(l){
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
-    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,...op};
+    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
+    padding:l.padding||10,...op};
   if(l.type==='bubble')return{type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
-    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,...op};
+    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
+    tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
+    padding:l.padding||15,...op};
 }
 function edDeserLayer(d, pageOrientation){
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
@@ -1928,6 +1938,18 @@ function EditorView_destroy(){
     document.removeEventListener('pointerdown', window._edDocDownFn);
     window._edDocDownFn = null;
   }
+  if(window._edResizeFn){
+    window.removeEventListener('resize', window._edResizeFn);
+    window._edResizeFn = null;
+  }
+  if(window._edOrientFn){
+    window.removeEventListener('orientationchange', window._edOrientFn);
+    window._edOrientFn = null;
+  }
+  if(window._edQuotaFn){
+    window.removeEventListener('cx:storage:quota', window._edQuotaFn);
+    window._edQuotaFn = null;
+  }
   // Limpiar timers
   clearTimeout(window._edLongPress);
   edHideGearIcon();
@@ -2121,6 +2143,9 @@ function EditorView_init(){
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
   edPushHistory();
   edInitFloatDrag();
+  // Avisar al usuario si localStorage se llena al guardar
+  window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
+  window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
   $('viewerClose')?.addEventListener('pointerup', e=>{ e.stopPropagation(); edCloseViewer(); });
@@ -2207,7 +2232,9 @@ function EditorView_init(){
   document.addEventListener('keydown', window._edKeyFn);
 
   // ── RESIZE ──
-  window.addEventListener('resize',()=>{edFitCanvas();edUpdateCanvasFullscreen();});
+  // Guardar referencia para cleanup en EditorView_destroy
+  window._edResizeFn = () => { edFitCanvas(); edUpdateCanvasFullscreen(); };
+  window.addEventListener('resize', window._edResizeFn);
 
   // Fit canvas con reintentos hasta que las medidas sean reales
   // (el CSS se carga dinámicamente y las fuentes tardan en aplicar)
@@ -2240,9 +2267,9 @@ function EditorView_init(){
 
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
   edUpdateCanvasFullscreen();
-  window.addEventListener('orientationchange', ()=>{
-    setTimeout(()=>{edFitCanvas();edUpdateCanvasFullscreen();}, 200);
-  });
+  // Guardar referencia para cleanup en EditorView_destroy
+  window._edOrientFn = () => { setTimeout(()=>{ edFitCanvas(); edUpdateCanvasFullscreen(); }, 200); };
+  window.addEventListener('orientationchange', window._edOrientFn);
 
   // ── Pinch en cualquier zona (fuera del canvas) = zoom ──
   let _shellPinch0 = 0, _shellZoom0 = 1;

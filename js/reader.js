@@ -231,12 +231,13 @@ function setupControls() {
     goToPanel(0);
   });
 
-  // Teclado (PC)
-  document.addEventListener('keydown', (e) => {
+  // Teclado (PC) — guardar referencia para cleanup en ReaderView_destroy
+  ReaderState._keyHandler = (e) => {
     if (['ArrowRight','Space','Enter'].includes(e.code)) { e.preventDefault(); advance(); }
     if (e.code === 'ArrowLeft') goBack();
     if (e.code === 'Escape') Router.go('home');
-  });
+  };
+  document.addEventListener('keydown', ReaderState._keyHandler);
 
   // Swipe (móvil)
   const stage = document.getElementById('readerStage');
@@ -281,4 +282,18 @@ function showSwipeHint() {
   if (!hint) return;
   setTimeout(() => { hint.style.opacity = '0'; }, 2500);
   setTimeout(() => { hint.style.display = 'none'; }, 3200);
+}
+
+// ════════════════════════════════════════
+// LIMPIEZA DE VISTA (obligatorio para SPA)
+// ════════════════════════════════════════
+function ReaderView_destroy() {
+  // Eliminar el listener de teclado para evitar acumulación
+  // (setupControls lo registra; cada visita al reader añadiría uno más sin esto)
+  if (ReaderState._keyHandler) {
+    document.removeEventListener('keydown', ReaderState._keyHandler);
+    ReaderState._keyHandler = null;
+  }
+  // Liberar referencias al cómic para que el GC pueda limpiar
+  ReaderState.comic = null;
 }
