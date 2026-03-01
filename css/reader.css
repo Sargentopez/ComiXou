@@ -264,3 +264,11 @@
   position: relative;
 }
 
+/* ── TEXTBOX: caja de texto sin sombra de cómic ── */
+.reader-textbox-inner {
+  box-shadow: none;
+}
+.reader-textbox-inner span {
+  white-space: pre-wrap;
+}
+

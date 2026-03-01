@@ -735,7 +735,7 @@ function edDrawSel(){
    PÁGINAS
    ══════════════════════════════════════════ */
 function edAddPage(){
-  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate',orientation:edOrientation});
+  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation});
   edLoadPage(edPages.length-1);
   edToast('Página añadida');
 }
@@ -1236,7 +1236,7 @@ function edOnEnd(e){
     edPinchEnd();
     return;
   }
-  if(edPainting){edPainting=false;edSaveDrawData();}
+  if(edPainting){ edSaveDrawData(); }  // edSaveDrawData ya pone edPainting=false
   clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   window._edLongPressReady = false;
@@ -1254,6 +1254,9 @@ function edStartPaint(e){
   // Cerrar panel de propiedades al empezar a dibujar
   const _pp=$('edOptionsPanel');
   if(_pp&&_pp.classList.contains('open')){ _pp.classList.remove('open'); _pp.innerHTML=''; }
+  // Aplicar transform de cámara: edRedraw() deja el canvas en identidad,
+  // pero edCoords() devuelve coordenadas workspace → necesitamos la cámara activa
+  edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
   const c=edCoords(e),er=edActiveTool==='eraser';
   edCtx.save();
   if(er)edCtx.globalCompositeOperation='destination-out';
@@ -1264,6 +1267,8 @@ function edStartPaint(e){
 }
 function edContinuePaint(e){
   const c=edCoords(e),er=edActiveTool==='eraser';
+  // Garantizar que la cámara sigue activa (puede haberse reseteado entre eventos)
+  edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
   edCtx.save();edCtx.beginPath();edCtx.moveTo(edLastPX,edLastPY);edCtx.lineTo(c.px,c.py);
   if(er){edCtx.globalCompositeOperation='destination-out';edCtx.strokeStyle='rgba(0,0,0,1)';}
   else{edCtx.globalCompositeOperation='source-over';edCtx.strokeStyle=edDrawColor;}
@@ -1276,7 +1281,9 @@ function edSaveDrawData(){
   // Deseleccionar temporalmente para que los handles azules no aparezcan en el drawData
   const _prevSelected = edSelectedIdx;
   edSelectedIdx = -1;
-  // Redibujar sin handles antes de capturar
+  // Forzar edPainting=false ANTES de edRedraw() para que no sea bloqueado por el guard de BUG-E04
+  edPainting = false;
+  // Redibujar completo: fondo + imágenes + drawData anterior + nuevo trazo encima
   edRedraw();
   // Renderizar el dibujo libre en un canvas del tamaño del workspace,
   // luego recortar solo la zona de la página — igual que edRenderPage.
@@ -1626,45 +1633,47 @@ function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   const existing=ComicStore.getById(edProjectId)||{};
   const panels=edPages.map((p,i)=>{
-    // Exportar capas de texto/bocadillo para el reader
+    // Exportar capas de texto/bocadillo para el reader.
+    // El orden del array layers[] es el orden secuencial de aparición.
+    // Tanto BubbleLayer como TextLayer aparecen uno a uno al tocar.
     const texts = [];
-    let bubbleOrder = 0;
+    let seqOrder = 0;
     p.layers.forEach(l => {
+      const rawText = (l.type === 'text' || l.type === 'bubble') ? l.text : null;
+      if(!rawText || rawText === 'Escribe aquí') return;
+
+      const xPct = Math.round((l.x - l.width/2)  * 100 * 10) / 10;
+      const yPct = Math.round((l.y - l.height/2) * 100 * 10) / 10;
+      const wPct = Math.round(l.width  * 100 * 10) / 10;
+      const hPct = Math.round(l.height * 100 * 10) / 10;
+
       if(l.type === 'bubble'){
         texts.push({
-          type:  'dialog',
-          text:  l.text === 'Escribe aquí' ? '' : l.text,
-          x:     Math.round((l.x - l.width/2)  * 100 * 10) / 10,
-          y:     Math.round((l.y - l.height/2) * 100 * 10) / 10,
-          w:     Math.round(l.width  * 100 * 10) / 10,
-          h:     Math.round(l.height * 100 * 10) / 10,
-          // dirección de la cola: derivada de la posición tailEnd relativa al centro
-          tail:  _edBubbleTailDir(l),
-          style: l.style || 'conventional',
-          order: bubbleOrder++,
-          fontSize: l.fontSize || 18,
+          type:       'dialog',
+          text:       rawText,
+          x: xPct, y: yPct, w: wPct, h: hPct,
+          tail:       _edBubbleTailDir(l),
+          style:      l.style || 'conventional',
+          order:      seqOrder++,
+          fontSize:   l.fontSize || 18,
           fontFamily: l.fontFamily || 'Comic Sans MS, cursive',
-          color: l.color || '#000000',
-          bg:    l.backgroundColor || '#ffffff',
-          border: l.borderWidth || 2,
+          color:      l.color || '#000000',
+          bg:         l.backgroundColor || '#ffffff',
+          border:     l.borderWidth || 2,
           borderColor: l.borderColor || '#000000',
         });
       } else if(l.type === 'text'){
-        // Las cajas de texto se clasifican por posición vertical:
-        // top 20% → header, bottom 20% → footer, resto → caption
-        const vPos = l.y; // fracción 0-1
-        const ttype = vPos < 0.22 ? 'header' : vPos > 0.78 ? 'footer' : 'caption';
         texts.push({
-          type:  ttype,
-          text:  l.text === 'Escribe aquí' ? '' : l.text,
-          x:     Math.round((l.x - l.width/2)  * 100 * 10) / 10,
-          y:     Math.round((l.y - l.height/2) * 100 * 10) / 10,
-          w:     Math.round(l.width  * 100 * 10) / 10,
-          fontSize: l.fontSize || 20,
+          type:       'text',    // tipo genérico: aparece secuencialmente
+          text:       rawText,
+          x: xPct, y: yPct, w: wPct, h: hPct,
+          order:      seqOrder++,
+          fontSize:   l.fontSize || 20,
           fontFamily: l.fontFamily || 'Arial',
-          color: l.color || '#000000',
-          bg:    l.backgroundColor || '#ffffff',
-          border: l.borderWidth || 0,
+          color:      l.color || '#000000',
+          bg:         l.backgroundColor || '#ffffff',
+          border:     l.borderWidth || 0,
+          borderColor: l.borderColor || '#000000',
         });
       }
     });
@@ -1683,7 +1692,7 @@ function edSaveProject(){
     panels,
     editorData:{
       orientation:edOrientation,
-      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'immediate',orientation:p.orientation||edOrientation})),
+      pages:edPages.map(p=>({drawData:p.drawData,layers:p.layers.map(edSerLayer),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||edOrientation})),
     },
     updatedAt:new Date().toISOString(),
   });
@@ -1821,13 +1830,13 @@ function edLoadProject(id){
       drawData:pd.drawData||null,
       layers:(pd.layers||[]).map(d=>edDeserLayer(d, pd.orientation||comic.editorData.orientation||'vertical')).filter(Boolean),
       textLayerOpacity:pd.textLayerOpacity??1,
-      textMode:pd.textMode||'immediate',
+      textMode:pd.textMode||'sequential',
       orientation:pd.orientation||comic.editorData.orientation||'vertical',
     }));
   }else{
-    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate',orientation:'vertical'}];
+    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
   }
-  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
+  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
   // Centrar cámara al cargar proyecto
   // Doble rAF + timeout: esperar que el DOM tenga alturas correctas
@@ -2441,10 +2450,10 @@ function edLoadFromJSON(file){
           drawData:pd.drawData||null,
           layers:(pd.layers||[]).map(d=>edDeserLayer(d, pd.orientation||data.editorData.orientation||'vertical')).filter(Boolean),
           textLayerOpacity:pd.textLayerOpacity??1,
-          textMode:pd.textMode||'immediate',
+          textMode:pd.textMode||'sequential',
           orientation:pd.orientation||data.editorData.orientation||'vertical',
         }));
-        if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'immediate'});
+        if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
         edCurrentPage=0;edLayers=edPages[0].layers;
         edSetOrientation(edOrientation);
         const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title;
