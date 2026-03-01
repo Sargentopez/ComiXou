@@ -491,10 +491,14 @@ class StrokeLayer extends BaseLayer {
   static _boundingBox(canvas){
     const ctx = canvas.getContext('2d');
     const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-    let minX=canvas.width, minY=canvas.height, maxX=0, maxY=0, found=false;
-    for(let y=0; y<canvas.height; y++){
-      for(let x=0; x<canvas.width; x++){
-        if(d[(y*canvas.width+x)*4+3] > 10){
+    const W = canvas.width, H = canvas.height;
+    let minX=W, minY=H, maxX=0, maxY=0, found=false;
+    // Iterar buscando solo píxeles CON contenido real (alpha > 10)
+    // No contar píxeles borrados (alpha = 0) aunque estén dentro del bb
+    for(let y=0; y<H; y++){
+      const row = y * W;
+      for(let x=0; x<W; x++){
+        if(d[(row+x)*4+3] > 10){
           if(x<minX)minX=x; if(x>maxX)maxX=x;
           if(y<minY)minY=y; if(y>maxY)maxY=y;
           found=true;
@@ -502,12 +506,12 @@ class StrokeLayer extends BaseLayer {
       }
     }
     if(!found) return null;
-    // Añadir pequeño margen para no cortar trazos en el borde
-    const pad = 4;
+    // Margen mínimo (1px) para no cortar antialiasing en el borde exacto
+    const pad = 1;
     return {
       x: Math.max(0, minX-pad), y: Math.max(0, minY-pad),
-      w: Math.min(canvas.width,  maxX-minX+1+pad*2),
-      h: Math.min(canvas.height, maxY-minY+1+pad*2)
+      w: Math.min(W, maxX-minX+1+pad*2),
+      h: Math.min(H, maxY-minY+1+pad*2)
     };
   }
   // Restaurar desde dataUrl (carga de proyecto)
@@ -1017,6 +1021,42 @@ function edAddBubble(){
   const l=new BubbleLayer('Escribe aquí');l.resizeToFitText(edCanvas);
   edLayers.push(l);edSelectedIdx=edLayers.length-1;
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
+}
+function edDuplicateSelected(){
+  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return;
+  const la = edLayers[edSelectedIdx];
+  let copy;
+  if(la.type === 'stroke'){
+    // Clonar el canvas del stroke
+    const c = document.createElement('canvas');
+    c.width = la._canvas.width; c.height = la._canvas.height;
+    c.getContext('2d').drawImage(la._canvas, 0, 0);
+    copy = new StrokeLayer(document.createElement('canvas'));
+    copy._canvas = c;
+    copy.x = la.x + 0.02; copy.y = la.y + 0.02;
+    copy.width = la.width; copy.height = la.height;
+    copy.rotation = la.rotation || 0;
+    copy.opacity = la.opacity;
+  } else if(la.type === 'image'){
+    copy = new ImageLayer(la.img, la.x + 0.02, la.y + 0.02, la.width);
+    copy.height = la.height; copy.rotation = la.rotation || 0;
+    copy.src = la.src; copy.opacity = la.opacity;
+  } else if(la.type === 'text'){
+    copy = new TextLayer(la.text, la.x + 0.02, la.y + 0.02);
+    Object.assign(copy, la); copy.x = la.x + 0.02; copy.y = la.y + 0.02;
+  } else if(la.type === 'bubble'){
+    copy = new BubbleLayer(la.text, la.x + 0.02, la.y + 0.02);
+    Object.assign(copy, la); copy.x = la.x + 0.02; copy.y = la.y + 0.02;
+    if(la.tailStart) copy.tailStart = {...la.tailStart};
+    if(la.tailEnd)   copy.tailEnd   = {...la.tailEnd};
+    if(la.tailStarts) copy.tailStarts = la.tailStarts.map(s=>({...s}));
+    if(la.tailEnds)   copy.tailEnds   = la.tailEnds.map(e=>({...e}));
+  } else return;
+  // Insertar justo encima del original
+  edLayers.splice(edSelectedIdx + 1, 0, copy);
+  edSelectedIdx = edSelectedIdx + 1;
+  edPushHistory(); edRedraw();
+  edToast('Objeto duplicado');
 }
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
@@ -1614,6 +1654,8 @@ function edRenderOptionsPanel(mode){
         <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}" style="width:80px;accent-color:var(--black)">
         <span id="op-dsizeval" style="font-size:.75rem;font-weight:900;color:var(--gray-600);min-width:26px">${isEr?edEraserSize:edDrawSize}px</span>
         <button id="op-draw-ok" style="margin-left:auto;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.8rem;cursor:pointer;flex-shrink:0">✓</button>
+        <button id="op-draw-dup" style="background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉</button>
+        <button id="op-draw-del" style="background:transparent;border:1px solid #e63030;border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer;color:#e63030">✕</button>
       </div>`;
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
@@ -1633,8 +1675,24 @@ function edRenderOptionsPanel(mode){
     });
     $('op-draw-ok')?.addEventListener('click',()=>{
       edCloseOptionsPanel();
-      // Congelar al cerrar con ✓
       if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
+    });
+    $('op-draw-dup')?.addEventListener('click',()=>{
+      // Congelar primero, luego duplicar el StrokeLayer resultante
+      if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
+      edDuplicateSelected();
+      edCloseOptionsPanel();
+    });
+    $('op-draw-del')?.addEventListener('click',()=>{
+      // Eliminar el DrawLayer activo sin congelar
+      const page=edPages[edCurrentPage];if(!page)return;
+      const dlIdx=page.layers.findIndex(l=>l.type==='draw');
+      if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
+      edActiveTool='select'; edCanvas.className='';
+      const cur=$('edBrushCursor');if(cur)cur.style.display='none';
+      delete panel.dataset.mode;
+      edCloseOptionsPanel(); edPushHistory(); edRedraw();
+      edToast('Dibujo eliminado');
     });
     requestAnimationFrame(edFitCanvas);return;
   }
@@ -1708,9 +1766,10 @@ function edRenderOptionsPanel(mode){
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
       </div>`;
     }
-    html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between">
-      <button class="op-btn danger" id="pp-del"><span style="color:#e63030;font-weight:900">✕</span> Eliminar objeto</button>
-      <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 12px;font-weight:900;font-size:.82rem;cursor:pointer">✓ OK</button>
+    html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
+      <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
+      <button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
+      <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
     </div>`;
 
     panel.innerHTML=html;
@@ -1746,6 +1805,7 @@ function edRenderOptionsPanel(mode){
       });
     });
     $('pp-del')?.addEventListener('click',edDeleteSelected);
+    $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
@@ -2546,6 +2606,11 @@ function EditorView_init(){
         if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
         return;
       }
+    }
+    // Ctrl+D → duplicar objeto seleccionado
+    if(ctrl && e.key.toLowerCase() === 'd'){
+      if(edSelectedIdx >= 0){ e.preventDefault(); edDuplicateSelected(); }
+      return;
     }
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
       if(edSelectedIdx >= 0){ e.preventDefault(); edDeleteSelected(); }
