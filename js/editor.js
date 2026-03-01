@@ -1047,8 +1047,8 @@ function edOnStart(e){
   if(edMenuOpen){ edCloseMenus(); }
   edHideContextMenu();
   if(['draw','eraser'].includes(edActiveTool)){
-    // Solo dibujar dentro del canvas
-    if(tgt !== edCanvas) return;
+    // Aceptar eventos del canvas principal O del canvas de dibujo superpuesto
+    if(tgt !== edCanvas && tgt !== edDrawCanvas) return;
     edStartPaint(e);return;
   }
   const c=edCoords(e);

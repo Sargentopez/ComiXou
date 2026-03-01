@@ -397,10 +397,12 @@ function _pgRotatePage(idx) {
   page.drawData = null;
   page.orientation = newOrient;
 
-  // Si es la hoja activa, actualizar la cámara y redibujar
+  // Si es la hoja activa: edLoadPage sincroniza edOrientation, recalcula
+  // el height de las imágenes para la nueva orientación y redibuja —
+  // todo ocurre inmediatamente al clicar el icono, sin esperar a cerrar el panel.
   if (idx === edCurrentPage) {
-    if (typeof edFitCanvas === 'function') edFitCanvas(true);
-    if (typeof edRedraw    === 'function') edRedraw();
+    if (typeof edLoadPage === 'function') edLoadPage(idx);
+    else if (typeof edFitCanvas === 'function') edFitCanvas(true);
   }
 
   if (hadDraw) edToast('Orientación cambiada · el dibujo libre no se puede rotar y fue borrado');
