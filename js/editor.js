@@ -1267,6 +1267,11 @@ function edStartPaint(e){
   const _pp=$('edOptionsPanel');
   if(_pp&&_pp.classList.contains('open')){ _pp.classList.remove('open'); _pp.innerHTML=''; }
   if(!edDrawCtx) return;
+  // Capturar el puntero en el canvas de dibujo: garantiza que todos los
+  // pointermove lleguen aunque el cursor/dedo salga del canvas durante el trazo
+  if(e.pointerId !== undefined && e.target && e.target.setPointerCapture){
+    try{ e.target.setPointerCapture(e.pointerId); } catch(_){}
+  }
   // El canvas de dibujo (#edDrawCanvas) está encima del canvas principal.
   // Usamos edDrawCtx: el trazo nunca queda tapado por imágenes ni drawData.
   // El transform de cámara se aplica aquí porque edDrawCanvas comparte el
