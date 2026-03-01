@@ -109,21 +109,22 @@ class BaseLayer {
     return Math.abs(lx)<=this.width/2 && Math.abs(ly)<=this.height/2;
   }
   getControlPoints(){
-    // Todos los tipos soportan resize y rotate
-    const hw=this.width/2, hh=this.height/2;
+    const hw = this.width/2;
     const rot = (this.rotation||0)*Math.PI/180;
     const pw=edPageW(), ph=edPageH();
-    // Función para rotar un punto normalizado alrededor del centro
+    // ImageLayer: height es fraccion de pw → convertir a fraccion de ph para rp()
+    const hhPh = (this.type==='image')
+      ? (this.height/2) * (pw/ph)
+      : this.height/2;
     const rp = (dx,dy) => {
       const rx=dx*pw, ry=dy*ph;
       return { x: this.x+(rx*Math.cos(rot)-ry*Math.sin(rot))/pw,
                y: this.y+(rx*Math.sin(rot)+ry*Math.cos(rot))/ph };
     };
-    const tl=rp(-hw,-hh), tr=rp(hw,-hh), bl=rp(-hw,hh), br=rp(hw,hh);
-    const ml=rp(-hw,0),  mr=rp(hw,0),  mt=rp(0,-hh), mb=rp(0,hh);
-    // Handle de rotación: 28px por encima del centro-top (en px físicos → normalizado)
+    const tl=rp(-hw,-hhPh), tr=rp(hw,-hhPh), bl=rp(-hw,hhPh), br=rp(hw,hhPh);
+    const ml=rp(-hw,0),     mr=rp(hw,0),      mt=rp(0,-hhPh), mb=rp(0,hhPh);
     const rotOffset = 28/ph;
-    const rotHandle = rp(0,-hh-rotOffset);
+    const rotHandle = rp(0,-hhPh-rotOffset);
     return[
       {...tl,corner:'tl'}, {...tr,corner:'tr'},
       {...bl,corner:'bl'}, {...br,corner:'br'},
@@ -138,35 +139,30 @@ class BaseLayer {
 class ImageLayer extends BaseLayer {
   constructor(imgEl,x=0.5,y=0.5,width=0.4){
     super('image',x,y,width,0.3);
-    // natRatio = naturalWidth/naturalHeight. height se deriva SIEMPRE en tiempo real.
-    this.natRatio = 1;
     if(imgEl){
       this.img=imgEl; this.src=imgEl.src||'';
       if(imgEl.naturalWidth&&imgEl.naturalHeight){
-        this.natRatio = imgEl.naturalWidth / imgEl.naturalHeight;
+        // height guardado como fraccion de pw (igual que width)
+        // ambas dimensiones en la misma unidad → invariante a orientacion
+        this.height = width * (imgEl.naturalHeight / imgEl.naturalWidth);
       }
     } else {
       this.img=null; this.src='';
     }
-    this._syncHeight();
-  }
-  _syncHeight(){
-    const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-    this.height = (this.width / this.natRatio) * (pw / ph);
   }
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
-    const w=this.width*pw;
-    // Altura siempre desde ratio natural — inmune a cambios de orientacion
-    const h=w/this.natRatio;
-    // Mantener this.height sincronizado para getControlPoints y edDrawSel
-    this.height=h/ph;
-    const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
+    const w = this.width  * pw;  // px
+    const h = this.height * pw;  // px — height fraccion de pw, NO de ph
+    const px = edMarginX() + this.x*pw;
+    const py = edMarginY() + this.y*ph;
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
-    ctx.translate(px,py);ctx.rotate(this.rotation*Math.PI/180);
-    ctx.drawImage(this.img,-w/2,-h/2,w,h);ctx.restore();
+    ctx.translate(px,py);
+    ctx.rotate(this.rotation*Math.PI/180);
+    ctx.drawImage(this.img, -w/2, -h/2, w, h);
+    ctx.restore();
   }
 }
 
@@ -375,7 +371,7 @@ function edSetOrientation(o, persist=true){
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // height de ImageLayer se recalcula automaticamente en draw() via natRatio — no hace falta nada aqui
+  // height de ImageLayer: fraccion de pw — inmune a cambios de orientacion, no hace falta recalcular
   // El visor usa solo el lienzo
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -641,7 +637,8 @@ function edDrawSel(){
   const pw=edPageW(), ph=edPageH();
   const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
   const w=la.width*pw;
-  const h=la.height*ph;
+  // ImageLayer: height fraccion de pw; texto/bubble: fraccion de ph
+  const h=(la.type==='image') ? la.height*pw : la.height*ph;
   const rot=(la.rotation||0)*Math.PI/180;
   const z=edCamera.z;
   // 1px físico independiente del zoom
@@ -773,13 +770,14 @@ function edAddImage(file){
       const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
       const natW=img.naturalWidth||1, natH=img.naturalHeight||1;
       const w=0.7;
-      // layer.height lo calcula el constructor como fracción de ph
+      // height calculado por el constructor como fraccion de pw (h = w*(natH/natW))
       const layer=new ImageLayer(img,0.5,0.5,w);
-      // Limitar: no superar 0.85 de la altura de página (fracción de ph)
-      const maxH = 0.85;
-      if(layer.height > maxH){
-        layer.width  = layer.width  * (maxH/layer.height);
-        layer.height = maxH;
+      // Limitar: no superar 0.85*ph en pixeles → 0.85*(ph/pw) como fraccion de pw
+      const maxH_pw = 0.85*(ph/pw);
+      if(layer.height > maxH_pw){
+        const scale = maxH_pw/layer.height;
+        layer.height = maxH_pw;
+        layer.width  = layer.width * scale;
       }
       // Insertar imagen antes del primer texto/bocadillo (textos siempre encima)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
@@ -864,7 +862,7 @@ function edPinchMove(e) {
     // Escala proporcional
     const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
     la.width  = newW;
-    // Imagen: height se recalcula en draw() via natRatio — no sobreescribir
+    // Imagen: solo modificar width — height mantiene proporcion via asp
     if(la.type !== 'image'){
       const asp = edPinchScale0.h / edPinchScale0.w;
       la.height = newW * asp;
@@ -1156,37 +1154,40 @@ function edOnMove(e){
     const ly_px= dx_px*Math.sin(-rot)+dy_px*Math.cos(-rot);
     const corner=edResizeCorner;
     const isImg = la.type==='image';
-    // asp en pixeles: (height_px / width_px) — para no-imagen
+    // asp: para imagen, ratio height/width (ambos fraccion de pw)
+    //      para texto/bubble: ih_px/iw_px en pixeles fisicos
     const iw_px = edInitialSize.width * pw;
-    const ih_px = edInitialSize.height * ph;
-    const asp_px = iw_px > 0 ? ih_px / iw_px : 1;
+    const ih_px = isImg
+      ? edInitialSize.height * pw   // imagen: height en fraccion de pw
+      : edInitialSize.height * ph;  // texto/bubble: height en fraccion de ph
+    const asp = iw_px > 0 ? ih_px / iw_px : 1;
     if(corner==='ml'||corner==='mr'){
-      // Redimensionar horizontalmente
+      // Resize horizontal
       const nw_px = Math.abs(lx_px)*2;
       if(nw_px > pw*0.02){
         la.width = nw_px/pw;
-        if(!isImg) la.height = (nw_px * asp_px)/ph;
+        if(!isImg) la.height = (nw_px * asp)/ph;
+        else       la.height = (nw_px * asp)/pw;  // mantener proporcion
       }
     } else if(corner==='mt'||corner==='mb'){
-      // Redimensionar verticalmente
+      // Resize vertical
       const nh_px = Math.abs(ly_px)*2;
       if(nh_px > ph*0.02){
         if(isImg){
-          // Para imagen: escalar width segun el nuevo alto deseado y el natRatio
-          la.width = (nh_px * la.natRatio)/pw;
+          la.height = nh_px/pw;  // imagen: height fraccion de pw
+          // ancho se actualiza para mantener la proporcion
+          la.width = la.height / asp;
         } else {
           la.height = nh_px/ph;
         }
       }
     } else {
-      // Esquina — usar el eje dominante para escala proporcional
+      // Esquinas — escala proporcional desde el eje horizontal
       const nw_px = Math.abs(lx_px)*2;
-      const nh_px = Math.abs(ly_px)*2;
-      // Usar el mayor desplazamiento como referencia
-      const ref_px = Math.max(nw_px, nh_px * (iw_px/Math.max(ih_px,1)));
-      if(ref_px > pw*0.02){
-        la.width = ref_px/pw;
-        if(!isImg) la.height = (ref_px * asp_px)/ph;
+      if(nw_px > pw*0.02){
+        la.width = nw_px/pw;
+        if(isImg) la.height = (nw_px * asp)/pw;
+        else      la.height = (nw_px * asp)/ph;
       }
     }
     edRedraw();
@@ -1634,7 +1635,7 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
-    return{type:'image',x:l.x,y:l.y,width:l.width,natRatio:l.natRatio||1,rotation:l.rotation,src:compressedSrc,...op};
+    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
@@ -1654,18 +1655,25 @@ function edDeserLayer(d, pageOrientation){
     return l;}
   if(d.type==='image'){
     const l=new ImageLayer(null,d.x,d.y,d.width);
-    // Restaurar natRatio guardado; si no existe (datos viejos) se recalcula al cargar la img
-    if(d.natRatio) l.natRatio=d.natRatio;
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    l._syncHeight(); // usar natRatio ya restaurado
+    // Restaurar height como fraccion de pw
+    // Si el dato guardado es height (nuevo sistema), usarlo directamente
+    // Si solo hay natRatio (sistema v5.0-v5.3), recalcular: height = width/natRatio
+    // Si ninguno (muy viejos), se recalculara al cargar la imagen
+    if(d.height){
+      l.height = d.height;
+    } else if(d.natRatio){
+      l.height = d.width / d.natRatio;
+    }
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // natRatio definitivo desde la imagen real (cubre migracion de datos viejos)
-        l.natRatio = img.naturalWidth / img.naturalHeight;
-        l._syncHeight();
+        // Si no habia height guardado, calcular desde ratio natural de la imagen
+        if(!d.height && !d.natRatio){
+          l.height = l.width * (img.naturalHeight / img.naturalWidth);
+        }
         edRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
