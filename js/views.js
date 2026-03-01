@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.3</footer>
+    <footer class="app-version">v5.4</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }

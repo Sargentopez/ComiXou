@@ -1,5 +1,5 @@
 /* ============================================================
-   editor.js — ComiXow v5.3
+   editor.js — ComiXow v5.4
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -1028,9 +1028,12 @@ function edOnStart(e){
   const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
   if(_la && _la.type!=='bubble'){
     const _isT = e.pointerType==='touch';
-    const hitR = 0.04 + (_isT ? 0.02 : 0);
+    // Medir distancia en pixeles para hit uniform en ambos ejes
+    const _pw=edPageW(), _ph=edPageH();
+    const hitPx = _isT ? 22 : 14;
     for(const p of _la.getControlPoints()){
-      if(Math.hypot(c.nx-p.x,c.ny-p.y)<hitR){
+      const _dpx=(c.nx-p.x)*_pw, _dpy=(c.ny-p.y)*_ph;
+      if(Math.hypot(_dpx,_dpy)<hitPx){
         if(p.corner==='rotate'){
           edIsRotating = true;
           edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
@@ -1144,36 +1147,46 @@ function edOnMove(e){
     const la=edLayers[edSelectedIdx];
     const pw=edPageW(), ph=edPageH();
     const rot=(edInitialSize.rot||0)*Math.PI/180;
-    // Vector ratón→centro en espacio local del objeto
-    const dx=(c.nx-edInitialSize.cx)*pw, dy=(c.ny-edInitialSize.cy)*ph;
-    const lx=( dx*Math.cos(-rot)-dy*Math.sin(-rot))/pw;
-    const ly=( dx*Math.sin(-rot)+dy*Math.cos(-rot))/ph;
+    // Trabajar SIEMPRE en pixeles para evitar distorsion por pw!=ph
+    // Vector raton->centro en pixeles de pagina
+    const dx_px=(c.nx-edInitialSize.cx)*pw;
+    const dy_px=(c.ny-edInitialSize.cy)*ph;
+    // Rotar al espacio local del objeto (en pixeles)
+    const lx_px= dx_px*Math.cos(-rot)-dy_px*Math.sin(-rot);
+    const ly_px= dx_px*Math.sin(-rot)+dy_px*Math.cos(-rot);
     const corner=edResizeCorner;
-    const asp=edInitialSize.asp;
     const isImg = la.type==='image';
+    // asp en pixeles: (height_px / width_px) — para no-imagen
+    const iw_px = edInitialSize.width * pw;
+    const ih_px = edInitialSize.height * ph;
+    const asp_px = iw_px > 0 ? ih_px / iw_px : 1;
     if(corner==='ml'||corner==='mr'){
-      const nw=Math.abs(lx)*2;
-      if(nw>0.02){
-        la.width=nw;
-        // Para imagen: height se recalcula en draw() via natRatio — no tocar
-        if(!isImg) la.height=nw*asp;
+      // Redimensionar horizontalmente
+      const nw_px = Math.abs(lx_px)*2;
+      if(nw_px > pw*0.02){
+        la.width = nw_px/pw;
+        if(!isImg) la.height = (nw_px * asp_px)/ph;
       }
     } else if(corner==='mt'||corner==='mb'){
-      if(isImg){
-        // Imagen: convertir desplazamiento vertical en nuevo width via natRatio
-        // nh_px = |ly|*2*ph  =>  nw_px = nh_px * natRatio  =>  nw = nw_px/pw
-        const nh_px=Math.abs(ly)*2*ph;
-        const nw=nh_px*la.natRatio/pw;
-        if(nw>0.02) la.width=nw;
-      } else {
-        const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
+      // Redimensionar verticalmente
+      const nh_px = Math.abs(ly_px)*2;
+      if(nh_px > ph*0.02){
+        if(isImg){
+          // Para imagen: escalar width segun el nuevo alto deseado y el natRatio
+          la.width = (nh_px * la.natRatio)/pw;
+        } else {
+          la.height = nh_px/ph;
+        }
       }
     } else {
-      // Esquina — proporcional
-      const nw=Math.abs(lx)*2;
-      if(nw>0.02){
-        la.width=nw;
-        if(!isImg) la.height=nw*asp;
+      // Esquina — usar el eje dominante para escala proporcional
+      const nw_px = Math.abs(lx_px)*2;
+      const nh_px = Math.abs(ly_px)*2;
+      // Usar el mayor desplazamiento como referencia
+      const ref_px = Math.max(nw_px, nh_px * (iw_px/Math.max(ih_px,1)));
+      if(ref_px > pw*0.02){
+        la.width = ref_px/pw;
+        if(!isImg) la.height = (ref_px * asp_px)/ph;
       }
     }
     edRedraw();
