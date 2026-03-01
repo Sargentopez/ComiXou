@@ -369,9 +369,8 @@ function edSetOrientation(o, persist=true){
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // Recalcular height de ImageLayers si la orientacion cambia
-  // (independiente de persist — ocurre tanto al cambiar manualmente como al navegar páginas)
-  if(prevOrientation !== o){
+  // Recalcular height de ImageLayers si la orientacion realmente cambio
+  if(persist && prevOrientation !== o){
     const _isV = o === 'vertical';
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
@@ -736,10 +735,20 @@ function edDeletePage(){
 }
 function edLoadPage(idx){
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
-  // Aplicar orientación de esta hoja — usar edSetOrientation para que recalcule
-  // las imágenes si la orientación cambia (persist=false: no guarda en la página)
   const _po = edPages[idx]?.orientation || 'vertical';
-  edSetOrientation(_po, false);
+  if(_po !== edOrientation){
+    edOrientation = _po;
+    if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
+    // Recalcular height de imagenes para la nueva orientacion
+    const _isV = _po === 'vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    edLayers.forEach(l => {
+      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
+        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
+      }
+    });
+  }
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
 }
 function edUpdateNavPages(){
