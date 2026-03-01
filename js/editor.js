@@ -17,6 +17,7 @@ let edProjectId = null;
 let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
 let edActiveTool = 'select';  // select | draw | eraser
 let edPainting = false, edLastPX = 0, edLastPY = 0;
+let edDrawCanvas = null, edDrawCtx = null;
 let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20;
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
@@ -526,6 +527,17 @@ function edFitCanvas(resetCamera){
   edCanvas.style.left = '0';
   edCanvas.style.top  = totalBarsH + 'px';
   edCanvas.style.margin = '0';
+  // Mantener el canvas de dibujo libre sincronizado en posición y tamaño
+  if(edDrawCanvas){
+    const _sizeChangedDraw = edDrawCanvas.width !== newW || edDrawCanvas.height !== newH;
+    if(_sizeChangedDraw){ edDrawCanvas.width = newW; edDrawCanvas.height = newH; }
+    edDrawCanvas.style.width  = newW + 'px';
+    edDrawCanvas.style.height = newH + 'px';
+    edDrawCanvas.style.position = 'absolute';
+    edDrawCanvas.style.left = '0';
+    edDrawCanvas.style.top  = totalBarsH + 'px';
+    edDrawCanvas.style.margin = '0';
+  }
 
   if(resetCamera){
     _edCameraReset();
@@ -1254,60 +1266,84 @@ function edStartPaint(e){
   // Cerrar panel de propiedades al empezar a dibujar
   const _pp=$('edOptionsPanel');
   if(_pp&&_pp.classList.contains('open')){ _pp.classList.remove('open'); _pp.innerHTML=''; }
-  // Aplicar transform de cámara: edRedraw() deja el canvas en identidad,
-  // pero edCoords() devuelve coordenadas workspace → necesitamos la cámara activa
-  edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+  if(!edDrawCtx) return;
+  // El canvas de dibujo (#edDrawCanvas) está encima del canvas principal.
+  // Usamos edDrawCtx: el trazo nunca queda tapado por imágenes ni drawData.
+  // El transform de cámara se aplica aquí porque edDrawCanvas comparte el
+  // mismo sistema de coordenadas que edCanvas (mismos px físicos, mismo top).
+  edDrawCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
   const c=edCoords(e),er=edActiveTool==='eraser';
-  edCtx.save();
-  if(er)edCtx.globalCompositeOperation='destination-out';
-  else{edCtx.globalCompositeOperation='source-over';edCtx.fillStyle=edDrawColor;}
-  edCtx.beginPath();edCtx.arc(c.px,c.py,(er?edEraserSize:edDrawSize)/2,0,Math.PI*2);edCtx.fill();
-  edCtx.restore();edCtx.globalCompositeOperation='source-over';
+  edDrawCtx.save();
+  if(er)edDrawCtx.globalCompositeOperation='destination-out';
+  else{edDrawCtx.globalCompositeOperation='source-over';edDrawCtx.fillStyle=edDrawColor;}
+  edDrawCtx.beginPath();edDrawCtx.arc(c.px,c.py,(er?edEraserSize:edDrawSize)/2,0,Math.PI*2);edDrawCtx.fill();
+  edDrawCtx.restore();edDrawCtx.globalCompositeOperation='source-over';
   edLastPX=c.px;edLastPY=c.py;edMoveBrush(e);
 }
 function edContinuePaint(e){
+  if(!edDrawCtx) return;
   const c=edCoords(e),er=edActiveTool==='eraser';
-  // Garantizar que la cámara sigue activa (puede haberse reseteado entre eventos)
-  edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-  edCtx.save();edCtx.beginPath();edCtx.moveTo(edLastPX,edLastPY);edCtx.lineTo(c.px,c.py);
-  if(er){edCtx.globalCompositeOperation='destination-out';edCtx.strokeStyle='rgba(0,0,0,1)';}
-  else{edCtx.globalCompositeOperation='source-over';edCtx.strokeStyle=edDrawColor;}
-  edCtx.lineWidth=er?edEraserSize:edDrawSize;edCtx.lineCap='round';edCtx.lineJoin='round';edCtx.stroke();
-  edCtx.restore();edCtx.globalCompositeOperation='source-over';
+  edDrawCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+  edDrawCtx.save();edDrawCtx.beginPath();edDrawCtx.moveTo(edLastPX,edLastPY);edDrawCtx.lineTo(c.px,c.py);
+  if(er){edDrawCtx.globalCompositeOperation='destination-out';edDrawCtx.strokeStyle='rgba(0,0,0,1)';}
+  else{edDrawCtx.globalCompositeOperation='source-over';edDrawCtx.strokeStyle=edDrawColor;}
+  edDrawCtx.lineWidth=er?edEraserSize:edDrawSize;edDrawCtx.lineCap='round';edDrawCtx.lineJoin='round';edDrawCtx.stroke();
+  edDrawCtx.restore();edDrawCtx.globalCompositeOperation='source-over';
   edLastPX=c.px;edLastPY=c.py;edMoveBrush(e);
 }
 function edSaveDrawData(){
   const page=edPages[edCurrentPage];if(!page)return;
-  // Deseleccionar temporalmente para que los handles azules no aparezcan en el drawData
-  const _prevSelected = edSelectedIdx;
-  edSelectedIdx = -1;
-  // Forzar edPainting=false ANTES de edRedraw() para que no sea bloqueado por el guard de BUG-E04
+  if(!edDrawCtx||!edDrawCanvas) return;
   edPainting = false;
-  // Redibujar completo: fondo + imágenes + drawData anterior + nuevo trazo encima
-  edRedraw();
-  // Renderizar el dibujo libre en un canvas del tamaño del workspace,
-  // luego recortar solo la zona de la página — igual que edRenderPage.
-  // Esto garantiza que el dibujo se guarda correctamente con cualquier zoom.
+
+  // Fusionar: drawData anterior (trazos previos) + trazo nuevo del edDrawCanvas
+  // Todo se normaliza al tamaño de la página (pw × ph) sin depender del zoom.
   const pw=edPageW(), ph=edPageH();
-  const full=document.createElement('canvas');full.width=ED_CANVAS_W;full.height=ED_CANVAS_H;
-  const fctx=full.getContext('2d');
-  // Copiar el contenido visible del editor canvas transformando de pantalla → workspace
-  fctx.save();
-  // La transformación inversa de la cámara: pantalla = mundo*z + cam → mundo = (pantalla-cam)/z
-  fctx.setTransform(1/edCamera.z, 0, 0, 1/edCamera.z, -edCamera.x/edCamera.z, -edCamera.y/edCamera.z);
-  // Ajuste de la posición del canvas en pantalla
-  fctx.translate(0, -parseFloat(edCanvas.style.top||0)/edCamera.z);
-  fctx.drawImage(edCanvas, 0, 0);
-  fctx.restore();
-  // Recortar solo la zona de la página
-  const tmp=document.createElement('canvas');tmp.width=pw;tmp.height=ph;
-  tmp.getContext('2d').drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
-  page.drawData=tmp.toDataURL();
-  // Restaurar selección
-  edSelectedIdx = _prevSelected;
+  const tmp=document.createElement('canvas'); tmp.width=pw; tmp.height=ph;
+  const tctx=tmp.getContext('2d');
+
+  // 1. Pintar trazos previos (page.drawData) como fondo
+  if(page.drawData){
+    const prev=new Image(); prev.src=page.drawData;
+    // page.drawData es un dataURL ya generado → siempre está en caché → .complete=true
+    if(prev.complete && prev.naturalWidth>0) tctx.drawImage(prev,0,0,pw,ph);
+  }
+
+  // 2. Pintar el trazo nuevo encima: extraer del edDrawCanvas la zona de la página
+  //    edDrawCanvas usa coordenadas workspace con transform de cámara.
+  //    La zona de la página en workspace = (edMarginX, edMarginY, pw, ph).
+  //    En pantalla (píxeles del canvas DOM) = (mx*z+camX, my*z+camY, pw*z, ph*z).
+  const mx=edMarginX(), my=edMarginY(), z=edCamera.z;
+  const sx=mx*z+edCamera.x, sy=my*z+edCamera.y;
+  const sw=pw*z,            sh=ph*z;
+  // Recortar del draw canvas la zona de la página y escalarla a pw×ph
+  if(sw>0 && sh>0){
+    tctx.save();
+    // El borrador usa destination-out sobre el draw canvas transparente,
+    // que ya tiene el alpha correcto. Aquí simplemente pintamos sobre el resultado fusionado.
+    tctx.drawImage(edDrawCanvas, sx, sy, sw, sh, 0, 0, pw, ph);
+    tctx.restore();
+  }
+
+  page.drawData = tmp.toDataURL();
+
+  // Limpiar el canvas de dibujo: queda transparente para el siguiente trazo
+  edDrawCtx.setTransform(1,0,0,1,0,0);
+  edDrawCtx.clearRect(0,0,edDrawCanvas.width,edDrawCanvas.height);
+
+  // Redibujar el canvas principal para mostrar el nuevo drawData
+  edRedraw();
 }
 function edClearDraw(){
-  const page=edPages[edCurrentPage];if(!page)return;page.drawData=null;edRedraw();edToast('Dibujos borrados');
+  const page=edPages[edCurrentPage];if(!page)return;
+  page.drawData=null;
+  // Limpiar también el canvas de dibujo activo (puede haber trazo en progreso)
+  if(edDrawCtx&&edDrawCanvas){
+    edDrawCtx.setTransform(1,0,0,1,0,0);
+    edDrawCtx.clearRect(0,0,edDrawCanvas.width,edDrawCanvas.height);
+  }
+  edPainting=false;
+  edRedraw();edToast('Dibujos borrados');
 }
 function edMoveBrush(e){
   const src=e.touches?e.touches[0]:e,cur=$('edBrushCursor');if(!cur)return;
@@ -1373,6 +1409,7 @@ function edToggleMenu(id){
 function edDeactivateDrawTool(){
   edActiveTool='select';
   edCanvas.className='';
+  $('editorCanvasWrap')?.classList.remove('mode-draw');
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
   // Close the options panel if it was showing draw options
   const panel=$('edOptionsPanel');
@@ -2098,6 +2135,7 @@ function EditorView_init(){
   const globalToast = document.getElementById('toast');
   if(globalToast){ globalToast.classList.remove('show'); clearTimeout(globalToast._tid); }
   edCanvas=$('editorCanvas');
+  edDrawCanvas=$('edDrawCanvas');
   // Habilitar botón Capas
   document.querySelector('[data-menu="layers"]')?.removeAttribute('disabled');
   document.querySelector('[data-menu="layers"]')?.style.removeProperty('opacity');
@@ -2105,6 +2143,7 @@ function EditorView_init(){
   edViewerCanvas=$('viewerCanvas');
   if(!edCanvas)return;
   edCtx=edCanvas.getContext('2d');
+  if(edDrawCanvas) edDrawCtx=edDrawCanvas.getContext('2d');
   if(edViewerCanvas)edViewerCtx=edViewerCanvas.getContext('2d');
 
   const editId=sessionStorage.getItem('cx_edit_id');
@@ -2187,12 +2226,14 @@ function EditorView_init(){
   $('dd-pen')?.addEventListener('click',()=>{
     edActiveTool='draw';
     edCanvas.className='tool-draw';
+    $('editorCanvasWrap')?.classList.add('mode-draw');
     if($('edBrushCursor'))$('edBrushCursor').style.display='block';
     edRenderOptionsPanel('draw');edCloseMenus();
   });
   $('dd-eraser')?.addEventListener('click',()=>{
     edActiveTool='eraser';
     edCanvas.className='tool-eraser';
+    $('editorCanvasWrap')?.classList.add('mode-draw');
     if($('edBrushCursor'))$('edBrushCursor').style.display='block';
     edRenderOptionsPanel('eraser');edCloseMenus();
   });

@@ -54,31 +54,10 @@ function edClosePages() {
   setTimeout(() => {
     if (ov.parentNode) ov.parentNode.removeChild(ov);
     _pgSetCanvasTouch(true);
-    // Sincronizar orientación de la hoja activa con el estado global del editor.
-    // Cuando el usuario cambia la orientación de una hoja y cierra con X o clic fuera
-    // (en lugar de hacer clic en la miniatura), edOrientation no se actualiza.
-    // Esto causa que las imágenes queden deformadas hasta que el usuario cambia de hoja.
-    const activePage = typeof edPages !== 'undefined' && edPages[edCurrentPage];
-    if (activePage && activePage.orientation) {
-      const needsUpdate = activePage.orientation !== edOrientation;
-      if (needsUpdate) {
-        edOrientation = activePage.orientation;
-        // Recalcular height de imágenes para la nueva orientación
-        const _isV = edOrientation === 'vertical';
-        const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
-        const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-        (activePage.layers || []).forEach(l => {
-          if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
-            l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
-          }
-        });
-        if (typeof edFitCanvas === 'function') edFitCanvas(true);
-      } else if (typeof edRedraw === 'function') {
-        edRedraw();
-      }
-    } else if (typeof edRedraw === 'function') {
-      edRedraw();
-    }
+    // Recargar la hoja activa: sincroniza edOrientation, recalcula imágenes y redibuja.
+    // Necesario cuando el usuario cambia la orientación y cierra con X o clic fuera
+    // en lugar de hacer clic en la miniatura (que ya llamaba edLoadPage).
+    if (typeof edLoadPage === 'function') edLoadPage(edCurrentPage);
   }, 250);
 }
 
