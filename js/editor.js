@@ -377,15 +377,7 @@ function edSetOrientation(o, persist=true){
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // Recalcular height de todas las imagenes de esta hoja para la nueva orientacion
-  // height es fraccion de ph: al cambiar orientacion pw/ph cambian, hay que ajustar
-  // Recalcular height de imagenes para la nueva orientacion usando natRatio
-  const newPw = edPageW(), newPh = edPageH();
-  edLayers.forEach(l => {
-    if(l.type === 'image' && l.natRatio){
-      l.height = l.width * (1/l.natRatio) * (newPw/newPh);
-    }
-  });
+  // height de ImageLayer se recalcula en draw() cada frame via natRatio — no hace falta nada aqui
   if(edViewerCanvas){ edViewerCanvas.width=newPw; edViewerCanvas.height=newPh; }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     edFitCanvas(true);
@@ -1181,11 +1173,12 @@ function edOnMove(e){
       const nh_px = Math.abs(ly_px)*2;
       if(nh_px > ph*0.02) la.height = nh_px/ph;  // fraccion de ph para todos
     } else {
-      // Esquinas — proporcional: usa el eje X como referencia
+      // Esquinas — proporcional
       const nw_px = Math.abs(lx_px)*2;
       if(nw_px > pw*0.02){
         la.width = nw_px/pw;
-        la.height = (nw_px * asp)/ph;  // asp=ih_px/iw_px, resultado fraccion de ph
+        if(isImg) la._syncHeight();
+        else      la.height = (nw_px * asp)/ph;
       }
     }
     edRedraw();
@@ -1633,7 +1626,7 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
-    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,natRatio:l.natRatio||0,rotation:l.rotation,src:compressedSrc,...op};
+    return{type:'image',x:l.x,y:l.y,width:l.width,natRatio:l.natRatio||1,rotation:l.rotation,src:compressedSrc,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
@@ -1655,18 +1648,14 @@ function edDeserLayer(d, pageOrientation){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    // Restaurar natRatio si estaba guardado — permite recalcular orientacion
-    // aunque la imagen aun no haya cargado
     if(d.natRatio) l.natRatio = d.natRatio;
+    l._syncHeight();
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // natRatio definitivo desde la imagen real
         l.natRatio = img.naturalWidth / img.naturalHeight;
-        const _pgPw = (pageOrientation==='vertical') ? ED_PAGE_W : ED_PAGE_H;
-        const _pgPh = (pageOrientation==='vertical') ? ED_PAGE_H : ED_PAGE_W;
-        l.height = l.width * (1/l.natRatio) * (_pgPw/_pgPh);
+        l._syncHeight();
         if(l.height > 0.85){
           const sc = 0.85/l.height;
           l.height = 0.85;
