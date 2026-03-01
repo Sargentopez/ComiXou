@@ -768,10 +768,14 @@ function edAddImage(file){
       const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
       const natW=img.naturalWidth||1, natH=img.naturalHeight||1;
       const w=0.7;
-      const h=w*(natH/natW)*(pw/ph);
+      // layer.height lo calcula el constructor como w*(natH/natW) en fracción de pw
       const layer=new ImageLayer(img,0.5,0.5,w);
-      layer.height=Math.min(h,0.85);
-      if(layer.height===0.85) layer.width=0.85*(ph/pw)*(natW/natH);
+      // Limitar: no superar 0.85*ph en px → 0.85*(ph/pw) en fracción de pw
+      const maxH = 0.85*(ph/pw);
+      if(layer.height > maxH){
+        layer.width  = layer.width  * (maxH/layer.height);
+        layer.height = maxH;
+      }
       // Insertar imagen antes del primer texto/bocadillo (textos siempre encima)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
       if(firstTextIdx >= 0){
@@ -1141,10 +1145,14 @@ function edOnMove(e){
     if(corner==='ml'||corner==='mr'){
       const nw=Math.abs(lx)*2; if(nw>0.02) la.width=nw;
     } else if(corner==='mt'||corner==='mb'){
-      const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
+      if(la.type==='image'){
+        const nh=Math.abs(ly)*2*(ph/pw); if(nh>0.02) la.height=nh;
+      } else {
+        const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
+      }
     } else {
       // Esquina — proporcional
-      const nw=Math.max(Math.abs(lx),Math.abs(ly)/asp)*2;
+      const nw=Math.abs(lx)*2;
       if(nw>0.02){ la.width=nw; la.height=nw*asp; }
     }
     edRedraw();
@@ -1618,15 +1626,8 @@ function edDeserLayer(d){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // Migración: recalcular height en fracción de pw (nuevo sistema)
-        // Si el valor guardado parece ser fracción de ph (proyecto antiguo),
-        // el ratio height/width sería muy diferente de natH/natW
-        const natRatio=img.naturalWidth/img.naturalHeight;
-        const expectedH=l.width/natRatio;  // fracción de pw
-        // Si difiere más del 30%, es un dato viejo en fracción de ph
-        if(Math.abs(l.height/expectedH - 1) > 0.30){
-          l.height=expectedH;
-        }
+        // Migración: height es fracción de pw
+        l.height = l.width * (img.naturalHeight / img.naturalWidth);
         edRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
