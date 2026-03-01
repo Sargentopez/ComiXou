@@ -1409,7 +1409,7 @@ function edOnMove(e){
     edRedraw();
     edHideGearIcon();
     const _opPanel=$('edOptionsPanel');
-    if(_opPanel&&_opPanel.classList.contains('open')){
+    if(_opPanel&&_opPanel.classList.contains('open')&&_opPanel.dataset.mode!=='draw'){
       _opPanel.classList.remove('open'); _opPanel.innerHTML='';
     }
     return;
@@ -1421,9 +1421,8 @@ function edOnMove(e){
   window._edMoved = true;
   edRedraw();
   edHideGearIcon();
-  // Cerrar panel de propiedades durante drag
   const _opP=$('edOptionsPanel');
-  if(_opP&&_opP.classList.contains('open')){
+  if(_opP&&_opP.classList.contains('open')&&_opP.dataset.mode!=='draw'){
     _opP.classList.remove('open'); _opP.innerHTML='';
   }
 }
@@ -1465,7 +1464,9 @@ function _edGetOrCreateDrawLayer(){
 function edStartPaint(e){
   edPainting = true;
   const _pp=$('edOptionsPanel');
-  if(_pp&&_pp.classList.contains('open')){ _pp.classList.remove('open'); _pp.innerHTML=''; }
+  if(_pp&&_pp.classList.contains('open')&&_pp.dataset.mode!=='draw'){
+    _pp.classList.remove('open'); _pp.innerHTML='';
+  }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const c = edCoords(e), er = edActiveTool==='eraser';
   dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er);
@@ -1562,7 +1563,7 @@ function edDeactivateDrawTool(){
   edCanvas.className='';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
   const panel=$('edOptionsPanel');
-  if(panel)panel.classList.remove('open');
+  if(panel){ panel.classList.remove('open'); delete panel.dataset.mode; }
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
 }
@@ -1615,6 +1616,7 @@ function edRenderOptionsPanel(mode){
         <button id="op-draw-ok" style="margin-left:auto;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.8rem;cursor:pointer;flex-shrink:0">✓</button>
       </div>`;
     panel.classList.add('open');
+    panel.dataset.mode = 'draw';
     $('op-tool-pen')?.addEventListener('click',()=>{
       edActiveTool='draw'; edCanvas.className='tool-draw';
       edRenderOptionsPanel('draw');
@@ -1629,7 +1631,11 @@ function edRenderOptionsPanel(mode){
       else edDrawSize=+e.target.value;
       const v=$('op-dsizeval');if(v)v.textContent=e.target.value+'px';
     });
-    $('op-draw-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
+    $('op-draw-ok')?.addEventListener('click',()=>{
+      edCloseOptionsPanel();
+      // Congelar al cerrar con ✓
+      if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
+    });
     requestAnimationFrame(edFitCanvas);return;
   }
 
@@ -2537,6 +2543,7 @@ function EditorView_init(){
       if(panel && panel.classList.contains('open')){
         e.preventDefault();
         edCloseOptionsPanel();
+        if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
         return;
       }
     }
