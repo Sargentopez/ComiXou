@@ -1,5 +1,5 @@
 /* ============================================================
-   editor.js — ComiXow v5.2
+   editor.js — ComiXow v5.3
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -863,9 +863,12 @@ function edPinchMove(e) {
   if (la && edPinchScale0) {
     // Escala proporcional
     const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
-    const asp  = edPinchScale0.h / edPinchScale0.w;
     la.width  = newW;
-    la.height = newW * asp;
+    // Imagen: height se recalcula en draw() via natRatio — no sobreescribir
+    if(la.type !== 'image'){
+      const asp = edPinchScale0.h / edPinchScale0.w;
+      la.height = newW * asp;
+    }
     // Rotación por giro de dedos
     la.rotation = edPinchScale0.rot + dAngle;
     edRedraw();
@@ -1147,14 +1150,31 @@ function edOnMove(e){
     const ly=( dx*Math.sin(-rot)+dy*Math.cos(-rot))/ph;
     const corner=edResizeCorner;
     const asp=edInitialSize.asp;
+    const isImg = la.type==='image';
     if(corner==='ml'||corner==='mr'){
-      const nw=Math.abs(lx)*2; if(nw>0.02) la.width=nw;
+      const nw=Math.abs(lx)*2;
+      if(nw>0.02){
+        la.width=nw;
+        // Para imagen: height se recalcula en draw() via natRatio — no tocar
+        if(!isImg) la.height=nw*asp;
+      }
     } else if(corner==='mt'||corner==='mb'){
-      const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
+      if(isImg){
+        // Imagen: convertir desplazamiento vertical en nuevo width via natRatio
+        // nh_px = |ly|*2*ph  =>  nw_px = nh_px * natRatio  =>  nw = nw_px/pw
+        const nh_px=Math.abs(ly)*2*ph;
+        const nw=nh_px*la.natRatio/pw;
+        if(nw>0.02) la.width=nw;
+      } else {
+        const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
+      }
     } else {
       // Esquina — proporcional
       const nw=Math.abs(lx)*2;
-      if(nw>0.02){ la.width=nw; la.height=nw*asp; }
+      if(nw>0.02){
+        la.width=nw;
+        if(!isImg) la.height=nw*asp;
+      }
     }
     edRedraw();
     edHideGearIcon();
