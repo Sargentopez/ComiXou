@@ -249,6 +249,9 @@ function _pgDuplicate(idx) {
   const newPage = {
     drawData: src.drawData || null,
     layers: newLayers,
+    orientation:       src.orientation       || edOrientation,
+    textLayerOpacity:  src.textLayerOpacity  ?? 1,
+    textMode:          src.textMode          || 'immediate',
   };
 
   // Insertar a continuación
@@ -378,8 +381,13 @@ function _pgRotatePage(idx) {
   // El drawData (dibujo libre) se descarta — no tiene forma trivial de rotar
   // y el texto/imágenes ya se recolocan. Avisar al usuario.
   const hadDraw = !!page.drawData;
-  page.drawData = null;
 
+  // Guardar el historial ANTES de borrar drawData — así el undo puede recuperarlo
+  if (idx === edCurrentPage) {
+    if (typeof edPushHistory === 'function') edPushHistory();
+  }
+
+  page.drawData = null;
   page.orientation = newOrient;
 
   // Si es la hoja activa, actualizar la cámara y redibujar
@@ -388,7 +396,6 @@ function _pgRotatePage(idx) {
     if (typeof edRedraw    === 'function') edRedraw();
   }
 
-  edPushHistory();
   if (hadDraw) edToast('Orientación cambiada · el dibujo libre no se puede rotar y fue borrado');
   else         edToast('Orientación cambiada');
   _pgRender();

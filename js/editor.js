@@ -24,7 +24,7 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
-let edZoom = 1.0;               // LEGACY — no usado, ver edCamera
+// edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
 // x,y = traslación del canvas (donde aparece el origen del workspace en pantalla)
 // z   = escala (1 = lienzo ocupa el viewport)
@@ -188,12 +188,13 @@ class TextLayer extends BaseLayer {
     const w=this.width*pw, h=this.height*ph;
     const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
     ctx.save();
-    ctx.fillStyle=this.backgroundColor; ctx.fillRect(px-w/2,py-h/2,w,h);
+    ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
+    // Fondo y borde se dibujan en espacio local (tras la rotación)
+    ctx.fillStyle=this.backgroundColor; ctx.fillRect(-w/2,-h/2,w,h);
     if(this.borderWidth>0){
       ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
-      ctx.strokeRect(px-w/2,py-h/2,w,h);
+      ctx.strokeRect(-w/2,-h/2,w,h);
     }
-    ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
     ctx.font=`${this.fontSize}px ${this.fontFamily}`;
     const isPlaceholder = this.text==='Escribe aquí';
     ctx.fillStyle=isPlaceholder?'#aaaaaa':this.color;
@@ -365,7 +366,6 @@ class BubbleLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function edSetOrientation(o, persist=true){
   const prevOrientation = edOrientation;
-  const prevPw = edPageW(), prevPh = edPageH();
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
@@ -380,7 +380,7 @@ function edSetOrientation(o, persist=true){
       }
     });
   }
-  if(edViewerCanvas){ edViewerCanvas.width=newPw; edViewerCanvas.height=newPh; }
+  if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     edFitCanvas(true);
     edRedraw();
@@ -471,6 +471,14 @@ function edApplyHistory(snapshot){
   edSelectedIdx = -1;
   edPanelUserClosed = false;
   edUpdateUndoRedoBtns();
+  // Navegar a la página del snapshot si es distinta a la actual
+  if(snapshot.pageIdx !== edCurrentPage && edPages[snapshot.pageIdx]){
+    edCurrentPage = snapshot.pageIdx;
+    edLayers = edPages[edCurrentPage].layers;
+    const _po = edPages[edCurrentPage].orientation || 'vertical';
+    if(_po !== edOrientation) edOrientation = _po;
+    edUpdateNavPages();
+  }
   Promise.all(imgPromises).then(() => edRedraw());
 }
 
@@ -1257,10 +1265,23 @@ function edContinuePaint(e){
 }
 function edSaveDrawData(){
   const page=edPages[edCurrentPage];if(!page)return;
-  // Guardar solo la zona de la página (sin margen de workspace)
-  const tmp=document.createElement('canvas');
-  tmp.width=edPageW();tmp.height=edPageH();
-  tmp.getContext('2d').drawImage(edCanvas,edMarginX(),edMarginY(),edPageW(),edPageH(),0,0,edPageW(),edPageH());
+  // Renderizar el dibujo libre en un canvas del tamaño del workspace,
+  // luego recortar solo la zona de la página — igual que edRenderPage.
+  // Esto garantiza que el dibujo se guarda correctamente con cualquier zoom.
+  const pw=edPageW(), ph=edPageH();
+  const full=document.createElement('canvas');full.width=ED_CANVAS_W;full.height=ED_CANVAS_H;
+  const fctx=full.getContext('2d');
+  // Copiar el contenido visible del editor canvas transformando de pantalla → workspace
+  fctx.save();
+  // La transformación inversa de la cámara: pantalla = mundo*z + cam → mundo = (pantalla-cam)/z
+  fctx.setTransform(1/edCamera.z, 0, 0, 1/edCamera.z, -edCamera.x/edCamera.z, -edCamera.y/edCamera.z);
+  // Ajuste de la posición del canvas en pantalla
+  fctx.translate(0, -parseFloat(edCanvas.style.top||0)/edCamera.z);
+  fctx.drawImage(edCanvas, 0, 0);
+  fctx.restore();
+  // Recortar solo la zona de la página
+  const tmp=document.createElement('canvas');tmp.width=pw;tmp.height=ph;
+  tmp.getContext('2d').drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
   page.drawData=tmp.toDataURL();
 }
 function edClearDraw(){
@@ -1598,7 +1619,7 @@ function edRenderPage(page){
   // Proxy: simula ser el canvas completo pero con margen 0
   // Las draw() usarán ED_MARGIN (constante global) = 120, que suma fuera de tmp
   // Para evitarlo, usamos un canvas del tamaño del workspace pero solo exportamos la zona central
-  const full=document.createElement('canvas');full.width=edCanvas.width;full.height=edCanvas.height;
+  const full=document.createElement('canvas');full.width=ED_CANVAS_W;full.height=ED_CANVAS_H;
   const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
   page.layers.filter(l=>l.type!=='image').forEach(l=>l.draw(ctx,full));
@@ -1664,7 +1685,13 @@ function edDeserLayer(d, pageOrientation){
         const _isV = (pageOrientation||'vertical') === 'vertical';
         const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
         const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-        l.height = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
+        const _natH = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
+        // Respetar height guardado si es razonable (el usuario pudo haberlo ajustado).
+        // Solo recalcular si no hay height guardado o si viene de un formato antiguo
+        // (diferencia >50% respecto al natural → dato corrupto → recalcular).
+        if(!d.height || Math.abs(l.height / _natH - 1) > 0.5){
+          l.height = _natH;
+        }
         edRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
