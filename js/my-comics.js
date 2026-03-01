@@ -146,7 +146,7 @@ function _mcRenderList() {
         alert('Añade al menos una página antes de publicar.');
         return;
       }
-      ComicStore.save({ ...comic, published: true, approved: false, pendingReview: true });
+      ComicStore.save({ ...comic, published: true, approved: false });
       _mcRenderList();
       _mcToast('Enviada a revisión ✓');
     } else if (action === 'unpublish') {
@@ -156,7 +156,7 @@ function _mcRenderList() {
         alert('No tienes permiso para retirar esta obra.');
         return;
       }
-      ComicStore.save({ ...comic, published: false, approved: false, pendingReview: false });
+      ComicStore.save({ ...comic, published: false, approved: false });
       _mcRenderList();
       _mcToast('Retirada del expositor');
     } else if (action === 'delete') {

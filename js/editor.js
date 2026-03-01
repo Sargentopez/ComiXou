@@ -1,5 +1,5 @@
 /* ============================================================
-   editor.js — ComiXow v4.6
+   editor.js — ComiXow v5.0
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -151,13 +151,8 @@ class ImageLayer extends BaseLayer {
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
-    // Ancho en px según fracción normalizada
     const w=this.width*pw;
-    // Alto: preservar ratio natural de la imagen, independiente de la orientación
-    // this.height está en coords normalizadas respecto a ph de la orientación en que se creó
-    // Para ser invariante a la orientación, recalculamos desde el ratio natural
-    const natRatio=this.img.naturalWidth/this.img.naturalHeight;
-    const h=w/natRatio;
+    const h=this.height*ph;
     const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
@@ -635,8 +630,7 @@ function edDrawSel(){
   const pw=edPageW(), ph=edPageH();
   const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
   const w=la.width*pw;
-  // ImageLayer: height en fracción de pw; otros tipos: fracción de ph
-  const h=(la.type==='image') ? la.height*pw : la.height*ph;
+  const h=la.height*ph;
   const rot=(la.rotation||0)*Math.PI/180;
   const z=edCamera.z;
   // 1px físico independiente del zoom
@@ -768,10 +762,10 @@ function edAddImage(file){
       const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
       const natW=img.naturalWidth||1, natH=img.naturalHeight||1;
       const w=0.7;
-      // layer.height lo calcula el constructor como w*(natH/natW) en fracción de pw
+      // layer.height lo calcula el constructor como fracción de ph
       const layer=new ImageLayer(img,0.5,0.5,w);
-      // Limitar: no superar 0.85*ph en px → 0.85*(ph/pw) en fracción de pw
-      const maxH = 0.85*(ph/pw);
+      // Limitar: no superar 0.85 de la altura de página (fracción de ph)
+      const maxH = 0.85;
       if(layer.height > maxH){
         layer.width  = layer.width  * (maxH/layer.height);
         layer.height = maxH;
@@ -1145,11 +1139,7 @@ function edOnMove(e){
     if(corner==='ml'||corner==='mr'){
       const nw=Math.abs(lx)*2; if(nw>0.02) la.width=nw;
     } else if(corner==='mt'||corner==='mb'){
-      if(la.type==='image'){
-        const nh=Math.abs(ly)*2*(ph/pw); if(nh>0.02) la.height=nh;
-      } else {
-        const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
-      }
+      const nh=Math.abs(ly)*2; if(nh>0.02) la.height=nh;
     } else {
       // Esquina — proporcional
       const nw=Math.abs(lx)*2;
@@ -1532,16 +1522,11 @@ function edInitFloatDrag(){
 function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   const existing=ComicStore.getById(edProjectId)||{};
-  const panels=edPages.map((p,i)=>{
-    const rawOrient = p.orientation || edOrientation;
-    // Reader espera 'v'/'h'; el editor usa 'vertical'/'horizontal'
-    const readerOrient = rawOrient === 'vertical' ? 'v' : 'h';
-    return {
-      id:'panel_'+i,
-      dataUrl:p.drawData||edRenderPage(p),
-      orientation: readerOrient,
-    };
-  });
+  const panels=edPages.map((p,i)=>({
+    id:'panel_'+i,
+    dataUrl:p.drawData||edRenderPage(p),
+    orientation:p.orientation||edOrientation,
+  }));
   ComicStore.save({
     ...existing,
     id:edProjectId,
@@ -1631,8 +1616,9 @@ function edDeserLayer(d){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // Migración: height es fracción de pw
-        l.height = l.width * (img.naturalHeight / img.naturalWidth);
+        // Migración: height es fracción de ph
+        const _pw=edPageW()||ED_PAGE_W, _ph=edPageH()||ED_PAGE_H;
+        l.height = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
         edRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };

@@ -64,7 +64,7 @@ const ComicStore = (() => {
   }
 
   function getByUser(userId)  { return getAll().filter(c => c.userId === userId); }
-  function getPublished()     { return getAll().filter(c => c.published && c.approved); }
+  function getPublished()     { return getAll().filter(c => c.published); }
 
   return { getAll, getById, save, remove, createNew, getByUser, getPublished };
 })();
