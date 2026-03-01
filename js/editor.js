@@ -634,7 +634,9 @@ function edDrawSel(){
   const la=edLayers[edSelectedIdx];
   const pw=edPageW(), ph=edPageH();
   const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
-  const w=la.width*pw, h=la.height*ph;
+  const w=la.width*pw;
+  // ImageLayer: height en fracción de pw; otros tipos: fracción de ph
+  const h=(la.type==='image') ? la.height*pw : la.height*ph;
   const rot=(la.rotation||0)*Math.PI/180;
   const z=edCamera.z;
   // 1px físico independiente del zoom
@@ -1616,15 +1618,14 @@ function edDeserLayer(d){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // Migración: recalcular height si el ratio está mal (datos guardados con sistema antiguo)
-        const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-        const expectedH=l.width*(img.naturalHeight/img.naturalWidth)*(pw/ph);
-        const storedRatio=l.height/l.width;
-        const expectedRatio=expectedH/l.width;
-        // Si el ratio almacenado difiere >20% del esperado, es un dato de formato antiguo
-        if(Math.abs(storedRatio/expectedRatio-1)>0.15){
-          l.height=Math.min(expectedH,0.9);
-          if(l.height===0.9)l.width=0.9*(ph/pw)*(img.naturalWidth/img.naturalHeight);
+        // Migración: recalcular height en fracción de pw (nuevo sistema)
+        // Si el valor guardado parece ser fracción de ph (proyecto antiguo),
+        // el ratio height/width sería muy diferente de natH/natW
+        const natRatio=img.naturalWidth/img.naturalHeight;
+        const expectedH=l.width/natRatio;  // fracción de pw
+        // Si difiere más del 30%, es un dato viejo en fracción de ph
+        if(Math.abs(l.height/expectedH - 1) > 0.30){
+          l.height=expectedH;
         }
         edRedraw();
       };
