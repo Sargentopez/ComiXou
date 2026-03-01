@@ -47,8 +47,9 @@ const $ = id => document.getElementById(id);
 
 // Dimensiones del lienzo según orientación de la hoja actual (o global si no definida)
 function _edCurrentOrientation(){
-  const po = edPages[edCurrentPage]?.orientation;
-  return po || edOrientation;
+  // Si estamos renderizando para el visor (edOrientation ya seteado temporalmente),
+  // usar edOrientation directamente — NO leer de la página del editor
+  return edOrientation;
 }
 function edPageW(){ return _edCurrentOrientation() === 'vertical' ? ED_PAGE_W : ED_PAGE_H; }
 function edPageH(){ return _edCurrentOrientation() === 'vertical' ? ED_PAGE_H : ED_PAGE_W; }
@@ -721,15 +722,11 @@ function edDeletePage(){
 }
 function edLoadPage(idx){
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
-  // Aplicar orientación de esta hoja si difiere de la actual
-  const _po = edPages[idx]?.orientation;
-  if(_po && _po !== edOrientation){
+  // Aplicar orientación de esta hoja
+  const _po = edPages[idx]?.orientation || 'vertical';
+  if(_po !== edOrientation){
     edOrientation = _po;
-    // Recalcular dimensiones del canvas sin resetear zoom
-    const pgW=edPageW(), pgH=edPageH();
-    edCanvas.width = ED_CANVAS_W;
-    edCanvas.height= ED_CANVAS_H;
-    if(edViewerCanvas){ edViewerCanvas.width=pgW; edViewerCanvas.height=pgH; }
+    if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   }
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
 }
@@ -1680,8 +1677,9 @@ function edOpenViewer(){
   edHideGearIcon();  // ocultar gear al abrir visor
   edViewerIdx=edCurrentPage;
   edViewerTextStep=0;
+  // Garantizar que TODAS las hojas tienen orientation antes de abrir
+  edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
   $('editorViewer')?.classList.add('open');
-  edUpdateViewerSize();
   edUpdateViewer();
   edInitViewerTap();
   // Teclado PC
@@ -1778,26 +1776,31 @@ function edCloseViewer(){
 }
 function edUpdateViewer(){
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
-  // Setear orientación de esta hoja temporalmente (restaurar al final)
-  const _savedOrient=edOrientation;
-  const _pageOrient=page.orientation||edOrientation;
-  edOrientation=_pageOrient;
-  const pw=edPageW(), ph=edPageH();
-  // Ajustar tamaño del canvas del visor Y posición/escala CSS para esta hoja
+  // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
+  const _po = page.orientation || edOrientation;
+  const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const mx = (ED_CANVAS_W - pw) / 2;  // margen X para esta orientación
+  const my = (ED_CANVAS_H - ph) / 2;  // margen Y para esta orientación
+  // Ajustar canvas del visor para esta hoja
   edUpdateViewerSize(pw, ph);
   // Canvas de trabajo con margen (igual que el editor)
   const full=document.createElement('canvas');
   full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
   const fctx=full.getContext('2d');
-  fctx.fillStyle='#fff';fctx.fillRect(edMarginX(),edMarginY(),pw,ph);
-
+  fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
+  // Renderizar capas: temporalmente setear edOrientation para que draw() funcione
+  // (draw() usa edMarginX/edPageW internamente)
+  const _savedOrient=edOrientation;
+  edOrientation=_po;
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(fctx,full));
-
   const _finishViewer = () => {
     _edViewerDrawTextsOnCtx(page, fctx, full);
+    // Restaurar antes de manipular el DOM
+    edOrientation=_savedOrient;
     // Copiar zona del lienzo al viewerCanvas
     edViewerCtx.clearRect(0,0,pw,ph);
-    edViewerCtx.drawImage(full,edMarginX(),edMarginY(),pw,ph,0,0,pw,ph);
+    edViewerCtx.drawImage(full,mx,my,pw,ph,0,0,pw,ph);
     // Contador
     const textLayers=page.layers.filter(l=>l.type==='text'||l.type==='bubble');
     const isSeq=page.textMode==='sequential';
@@ -1809,14 +1812,11 @@ function edUpdateViewer(){
         cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
       }
     }
-    // Restaurar orientación global del editor
-    edOrientation=_savedOrient;
   };
-
   if(page.drawData){
     const img=new Image();
     img.onload=()=>{
-      fctx.drawImage(img,edMarginX(),edMarginY(),pw,ph);
+      fctx.drawImage(img,mx,my,pw,ph);
       _finishViewer();
     };
     img.src=page.drawData;
