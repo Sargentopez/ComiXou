@@ -137,33 +137,28 @@ class BaseLayer {
 class ImageLayer extends BaseLayer {
   constructor(imgEl,x=0.5,y=0.5,width=0.4){
     super('image',x,y,width,0.3);
-    this.natRatio = 0; // naturalWidth/naturalHeight — 0 = desconocido
+    this.natRatio = 0; // guardado como dato puro, no depende de l.img
     if(imgEl){
       this.img=imgEl; this.src=imgEl.src||'';
       if(imgEl.naturalWidth&&imgEl.naturalHeight){
         this.natRatio = imgEl.naturalWidth / imgEl.naturalHeight;
         const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-        this.height = width * (1/this.natRatio) * (pw/ph);
+        this.height = width * (1/this.natRatio) * (pw / ph);
       }
     } else {
       this.img=null; this.src='';
     }
   }
-  // Recalcular height para la orientacion actual (llamar cuando cambia orientacion)
-  _recalcHeight(){
-    if(!this.natRatio) return;
-    const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-    this.height = this.width * (1/this.natRatio) * (pw/ph);
-  }
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
-    // Actualizar natRatio si aun no lo teniamos (carga asincrona)
+    // Si natRatio no estaba disponible al construir (carga asincrona), calcularlo ahora
     if(!this.natRatio && this.img.naturalWidth){
       this.natRatio = this.img.naturalWidth / this.img.naturalHeight;
+      // Recalcular height para la orientacion actual
       this.height = this.width * (1/this.natRatio) * (pw/ph);
     }
-    const w = this.width * pw;
+    const w = this.width  * pw;
     const h = this.height * ph;
     const px = edMarginX() + this.x*pw;
     const py = edMarginY() + this.y*ph;
@@ -384,9 +379,13 @@ function edSetOrientation(o, persist=true){
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
   // Recalcular height de todas las imagenes de esta hoja para la nueva orientacion
   // height es fraccion de ph: al cambiar orientacion pw/ph cambian, hay que ajustar
-  // Recalcular height de imagenes para la nueva orientacion
-  // _recalcHeight usa natRatio (disponible aunque img no este cargada)
-  edLayers.forEach(l => { if(l.type==='image') l._recalcHeight?.(); });
+  // Recalcular height de imagenes para la nueva orientacion usando natRatio
+  const newPw = edPageW(), newPh = edPageH();
+  edLayers.forEach(l => {
+    if(l.type === 'image' && l.natRatio){
+      l.height = l.width * (1/l.natRatio) * (newPw/newPh);
+    }
+  });
   if(edViewerCanvas){ edViewerCanvas.width=newPw; edViewerCanvas.height=newPh; }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     edFitCanvas(true);
@@ -1656,7 +1655,8 @@ function edDeserLayer(d, pageOrientation){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    // Restaurar natRatio si estaba guardado
+    // Restaurar natRatio si estaba guardado — permite recalcular orientacion
+    // aunque la imagen aun no haya cargado
     if(d.natRatio) l.natRatio = d.natRatio;
     if(d.src){
       const img=new Image();
@@ -1664,11 +1664,9 @@ function edDeserLayer(d, pageOrientation){
         l.img=img; l.src=img.src;
         // natRatio definitivo desde la imagen real
         l.natRatio = img.naturalWidth / img.naturalHeight;
-        // Recalcular height para la orientacion de esta pagina (no la global)
         const _pgPw = (pageOrientation==='vertical') ? ED_PAGE_W : ED_PAGE_H;
         const _pgPh = (pageOrientation==='vertical') ? ED_PAGE_H : ED_PAGE_W;
         l.height = l.width * (1/l.natRatio) * (_pgPw/_pgPh);
-        // Limitar a que quepa en la pagina
         if(l.height > 0.85){
           const sc = 0.85/l.height;
           l.height = 0.85;
