@@ -666,22 +666,24 @@ function edDrawSel(){
       edCtx.fillStyle='#fff';edCtx.fill();
       edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
-    // Handle de rotación: círculo con flecha encima del centro-top
-    const rotY=-h/2-28/z;
-    edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
-    edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw;edCtx.stroke();
-    edCtx.beginPath();edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
-    edCtx.fillStyle='#1a8cff';edCtx.fill();
-    edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
-    edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;
-    const ar=hrRot*0.55;
-    edCtx.beginPath();edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5);
-    edCtx.stroke();
-    const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
-    edCtx.beginPath();
-    edCtx.moveTo(ax,ay);edCtx.lineTo(ax-3/z,ay-5/z);
-    edCtx.moveTo(ax,ay);edCtx.lineTo(ax+4/z,ay-3/z);
-    edCtx.stroke();
+    // Handle de rotación: solo en PC (en táctil se usa gesto pinch)
+    if(!edIsTouch()){
+      const rotY=-h/2-28/z;
+      edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
+      edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw;edCtx.stroke();
+      edCtx.beginPath();edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
+      edCtx.fillStyle='#1a8cff';edCtx.fill();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;
+      const ar=hrRot*0.55;
+      edCtx.beginPath();edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5);
+      edCtx.stroke();
+      const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
+      edCtx.beginPath();
+      edCtx.moveTo(ax,ay);edCtx.lineTo(ax-3/z,ay-5/z);
+      edCtx.moveTo(ax,ay);edCtx.lineTo(ax+4/z,ay-3/z);
+      edCtx.stroke();
+    }
   }
   // Cerrar el bloque rotado antes de dibujar los handles de cola
   edCtx.restore();
@@ -1031,17 +1033,15 @@ function edOnStart(e){
     const hitPx = _isT ? 22 : 14;
     for(const p of _la.getControlPoints()){
       const _dpx=(c.nx-p.x)*_pw, _dpy=(c.ny-p.y)*_ph;
-      const _dist=Math.hypot(_dpx,_dpy);
-      console.log('[DBG] handle',p.corner,'dist_px=',_dist.toFixed(1),'hitPx=',hitPx,'hit=',_dist<hitPx);
-      if(_dist<hitPx){
+      if(Math.hypot(_dpx,_dpy)<hitPx){
         if(p.corner==='rotate'){
+          if(_isT) continue;  // en táctil la rotación es por gesto pinch
           edIsRotating = true;
           edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
           return;
         }
         if(!_isT){
           edIsResizing=true; edResizeCorner=p.corner;
-          console.log('[DBG] RESIZE START corner=',p.corner,'isTouch=',_isT);
           edInitialSize={width:_la.width,height:_la.height,
                          cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
                          rot:(_la.rotation||0), ox:_la.x, oy:_la.y};
@@ -1147,7 +1147,6 @@ function edOnMove(e){
   if(edIsResizing&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     const pw=edPageW(), ph=edPageH();
-    console.log('[DBG] RESIZE MOVE corner=',edResizeCorner,'w=',la.width.toFixed(3),'h=',la.height.toFixed(3));
     const rot=(edInitialSize.rot||0)*Math.PI/180;
     // Trabajar SIEMPRE en pixeles para evitar distorsion por pw!=ph
     // Vector raton->centro en pixeles de pagina
@@ -1166,27 +1165,18 @@ function edOnMove(e){
       : edInitialSize.height * ph;  // texto/bubble: height en fraccion de ph
     const asp = iw_px > 0 ? ih_px / iw_px : 1;
     if(corner==='ml'||corner==='mr'){
-      // Resize horizontal
+      // Solo cambia el ancho — igual para imagen y texto
       const nw_px = Math.abs(lx_px)*2;
-      if(nw_px > pw*0.02){
-        la.width = nw_px/pw;
-        if(!isImg) la.height = (nw_px * asp)/ph;
-        else       la.height = (nw_px * asp)/pw;  // mantener proporcion
-      }
+      if(nw_px > pw*0.02) la.width = nw_px/pw;
     } else if(corner==='mt'||corner==='mb'){
-      // Resize vertical
+      // Solo cambia el alto
       const nh_px = Math.abs(ly_px)*2;
       if(nh_px > ph*0.02){
-        if(isImg){
-          la.height = nh_px/pw;  // imagen: height fraccion de pw
-          // ancho se actualiza para mantener la proporcion
-          la.width = la.height / asp;
-        } else {
-          la.height = nh_px/ph;
-        }
+        if(isImg) la.height = nh_px/pw;  // imagen: height fraccion de pw
+        else      la.height = nh_px/ph;
       }
     } else {
-      // Esquinas — escala proporcional desde el eje horizontal
+      // Esquinas — proporcional: usa el eje X como referencia
       const nw_px = Math.abs(lx_px)*2;
       if(nw_px > pw*0.02){
         la.width = nw_px/pw;
@@ -1677,6 +1667,15 @@ function edDeserLayer(d, pageOrientation){
         // Si no habia height guardado, calcular desde ratio natural de la imagen
         if(!d.height && !d.natRatio){
           l.height = l.width * (img.naturalHeight / img.naturalWidth);
+        }
+        // Siempre asegurar que la imagen cabe en la pagina al cargar
+        // maxH_pw = 0.85*ph expresado como fraccion de pw
+        const _pw2=edPageW()||ED_PAGE_W, _ph2=edPageH()||ED_PAGE_H;
+        const _maxH = 0.85*(_ph2/_pw2);
+        if(l.height > _maxH){
+          const _sc = _maxH/l.height;
+          l.height = _maxH;
+          l.width  = l.width * _sc;
         }
         edRedraw();
       };
