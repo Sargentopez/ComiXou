@@ -1640,20 +1640,35 @@ function edDeserLayer(d, pageOrientation){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    // Restaurar height como fraccion de pw
-    // Si el dato guardado es height (nuevo sistema), usarlo directamente
-    // Si solo hay natRatio (sistema v5.0-v5.3), recalcular: height = width/natRatio
-    // Si ninguno (muy viejos), se recalculara al cargar la imagen
-    // height se recalcula siempre al cargar la imagen real
-    // para garantizar que sea fraccion de ph correcta independiente del sistema con que se guardó
+    // Usar dimensiones de LA PAGINA PROPIA (pageOrientation), no el estado global del editor
+    const _pgPw = (pageOrientation==='vertical') ? ED_PAGE_W : ED_PAGE_H;
+    const _pgPh = (pageOrientation==='vertical') ? ED_PAGE_H : ED_PAGE_W;
+    if(d.height){
+      // height guardado como fraccion de ph de su propia pagina — usar directo
+      l.height = d.height;
+    }
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        const _pw=edPageW()||ED_PAGE_W, _ph=edPageH()||ED_PAGE_H;
         const natR = img.naturalWidth / img.naturalHeight;
-        // Recalcular height como fraccion de ph desde el ancho actual y el ratio natural
-        l.height = (l.width * _pw) / natR / _ph;
+        if(!d.height){
+          // Sin height guardado: calcular desde ratio natural y dimensiones de su pagina
+          l.height = (l.width * _pgPw) / natR / _pgPh;
+        } else {
+          // Con height guardado: verificar que es razonable para esta orientacion.
+          // Si viene de sistema antiguo (fraccion de pw en vez de ph), el ratio
+          // height/width sera ~= natH/natW en vez de natH/natW*(pw/ph).
+          // Detectarlo: si height*ph_px ≈ width*pw_px/natR → es fraccion de ph (correcto)
+          //             si height*pw_px ≈ width*pw_px/natR → era fraccion de pw (migrar)
+          const expected_h_ph = (l.width * _pgPw) / natR / _pgPh;
+          const ratio_diff = Math.abs(l.height / expected_h_ph - 1);
+          // Si difiere mas de 40% del esperado para fraccion-de-ph,
+          // probablemente era fraccion de pw → convertir
+          if(ratio_diff > 0.4){
+            l.height = expected_h_ph;
+          }
+        }
         // Limitar a que quepa en la pagina
         if(l.height > 0.85){
           const sc = 0.85/l.height;
