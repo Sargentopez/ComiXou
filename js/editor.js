@@ -373,10 +373,16 @@ function edSetOrientation(o, persist=true){
   // Recalcular height de todas las imagenes de esta hoja para la nueva orientacion
   // height es fraccion de ph: al cambiar orientacion pw/ph cambian, hay que ajustar
   const newPw = edPageW(), newPh = edPageH();
+  console.log('[ORI] cambio orientacion →', o, 'newPw=',newPw,'newPh=',newPh,'layers=',edLayers.length);
   edLayers.forEach(l => {
-    if(l.type === 'image' && l.img && l.img.naturalWidth){
-      const natR = l.img.naturalWidth / l.img.naturalHeight;
-      l.height = (l.width * newPw) / natR / newPh;
+    if(l.type === 'image'){
+      const hasImg = l.img && l.img.naturalWidth;
+      console.log('[ORI] imagen: hasImg=',hasImg,'w=',l.width,'h_antes=',l.height, l.img?.naturalWidth, l.img?.naturalHeight);
+      if(hasImg){
+        const natR = l.img.naturalWidth / l.img.naturalHeight;
+        l.height = (l.width * newPw) / natR / newPh;
+        console.log('[ORI] → h_despues=',l.height);
+      }
     }
   });
   if(edViewerCanvas){ edViewerCanvas.width=newPw; edViewerCanvas.height=newPh; }
