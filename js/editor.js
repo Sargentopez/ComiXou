@@ -1,5 +1,5 @@
 /* ============================================================
-   editor.js — ComiXow v5.1
+   editor.js — ComiXow v5.2
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -138,21 +138,30 @@ class BaseLayer {
 class ImageLayer extends BaseLayer {
   constructor(imgEl,x=0.5,y=0.5,width=0.4){
     super('image',x,y,width,0.3);
+    // natRatio = naturalWidth/naturalHeight. height se deriva SIEMPRE en tiempo real.
+    this.natRatio = 1;
     if(imgEl){
       this.img=imgEl; this.src=imgEl.src||'';
       if(imgEl.naturalWidth&&imgEl.naturalHeight){
-        const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-        this.height=width*(imgEl.naturalHeight/imgEl.naturalWidth)*(pw/ph);
+        this.natRatio = imgEl.naturalWidth / imgEl.naturalHeight;
       }
     } else {
       this.img=null; this.src='';
     }
+    this._syncHeight();
+  }
+  _syncHeight(){
+    const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+    this.height = (this.width / this.natRatio) * (pw / ph);
   }
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
     const w=this.width*pw;
-    const h=this.height*ph;
+    // Altura siempre desde ratio natural — inmune a cambios de orientacion
+    const h=w/this.natRatio;
+    // Mantener this.height sincronizado para getControlPoints y edDrawSel
+    this.height=h/ph;
     const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
@@ -362,13 +371,15 @@ class BubbleLayer extends BaseLayer {
    CANVAS: TAMAÑO Y FIT
    ══════════════════════════════════════════ */
 function edSetOrientation(o, persist=true){
+  const prevOrientation = edOrientation;
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
+  // height de ImageLayer se recalcula automaticamente en draw() via natRatio — no hace falta nada aqui
   // El visor usa solo el lienzo
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    edFitCanvas(true); // true = resetear cámara al lienzo
+    edFitCanvas(true); // true = resetear camara al lienzo
     edRedraw();
   }));
 }
@@ -1590,7 +1601,7 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
-    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
+    return{type:'image',x:l.x,y:l.y,width:l.width,natRatio:l.natRatio||1,rotation:l.rotation,src:compressedSrc,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
@@ -1610,17 +1621,18 @@ function edDeserLayer(d, pageOrientation){
     return l;}
   if(d.type==='image'){
     const l=new ImageLayer(null,d.x,d.y,d.width);
-    l.height=d.height; l.rotation=d.rotation||0; l.src=d.src||'';
+    // Restaurar natRatio guardado; si no existe (datos viejos) se recalcula al cargar la img
+    if(d.natRatio) l.natRatio=d.natRatio;
+    l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
+    l._syncHeight(); // usar natRatio ya restaurado
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // Recalcular height con las dimensiones reales de la orientacion de ESTA pagina
-        const _isV = (pageOrientation||'vertical') === 'vertical';
-        const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
-        const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-        l.height = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
+        // natRatio definitivo desde la imagen real (cubre migracion de datos viejos)
+        l.natRatio = img.naturalWidth / img.naturalHeight;
+        l._syncHeight();
         edRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
