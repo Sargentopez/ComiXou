@@ -1031,7 +1031,9 @@ function edOnStart(e){
     const hitPx = _isT ? 22 : 14;
     for(const p of _la.getControlPoints()){
       const _dpx=(c.nx-p.x)*_pw, _dpy=(c.ny-p.y)*_ph;
-      if(Math.hypot(_dpx,_dpy)<hitPx){
+      const _dist=Math.hypot(_dpx,_dpy);
+      console.log('[DBG] handle',p.corner,'dist_px=',_dist.toFixed(1),'hitPx=',hitPx,'hit=',_dist<hitPx);
+      if(_dist<hitPx){
         if(p.corner==='rotate'){
           edIsRotating = true;
           edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
@@ -1039,6 +1041,7 @@ function edOnStart(e){
         }
         if(!_isT){
           edIsResizing=true; edResizeCorner=p.corner;
+          console.log('[DBG] RESIZE START corner=',p.corner,'isTouch=',_isT);
           edInitialSize={width:_la.width,height:_la.height,
                          cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
                          rot:(_la.rotation||0), ox:_la.x, oy:_la.y};
@@ -1144,6 +1147,7 @@ function edOnMove(e){
   if(edIsResizing&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     const pw=edPageW(), ph=edPageH();
+    console.log('[DBG] RESIZE MOVE corner=',edResizeCorner,'w=',la.width.toFixed(3),'h=',la.height.toFixed(3));
     const rot=(edInitialSize.rot||0)*Math.PI/180;
     // Trabajar SIEMPRE en pixeles para evitar distorsion por pw!=ph
     // Vector raton->centro en pixeles de pagina
