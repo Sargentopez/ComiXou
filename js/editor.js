@@ -366,10 +366,10 @@ class BubbleLayer extends BaseLayer {
 /* ══════════════════════════════════════════
    CANVAS: TAMAÑO Y FIT
    ══════════════════════════════════════════ */
-function edSetOrientation(o){
+function edSetOrientation(o, persist=true){
   edOrientation=o;
-  // Persistir en la hoja actual
-  if(edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
+  // Persistir en la hoja actual (no al inicializar el editor)
+  if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
   // El visor usa solo el lienzo
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -1915,8 +1915,8 @@ function EditorView_init(){
   if(!editId){Router.go('my-comics');return;}
   edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
-
-  edSetOrientation(edOrientation);
+  // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
+  edSetOrientation(edPages[0]?.orientation || edOrientation, false);
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
