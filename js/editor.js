@@ -137,22 +137,34 @@ class BaseLayer {
 class ImageLayer extends BaseLayer {
   constructor(imgEl,x=0.5,y=0.5,width=0.4){
     super('image',x,y,width,0.3);
+    this.natRatio = 0; // naturalWidth/naturalHeight — 0 = desconocido
     if(imgEl){
       this.img=imgEl; this.src=imgEl.src||'';
       if(imgEl.naturalWidth&&imgEl.naturalHeight){
-        // height como fraccion de ph (igual que texto/bubble) → invariante a orientacion
+        this.natRatio = imgEl.naturalWidth / imgEl.naturalHeight;
         const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-        this.height = width * (imgEl.naturalHeight / imgEl.naturalWidth) * (pw / ph);
+        this.height = width * (1/this.natRatio) * (pw/ph);
       }
     } else {
       this.img=null; this.src='';
     }
   }
+  // Recalcular height para la orientacion actual (llamar cuando cambia orientacion)
+  _recalcHeight(){
+    if(!this.natRatio) return;
+    const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+    this.height = this.width * (1/this.natRatio) * (pw/ph);
+  }
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
-    const w = this.width  * pw;  // px
-    const h = this.height * ph;  // px — height fraccion de ph (igual que texto/bubble)
+    // Actualizar natRatio si aun no lo teniamos (carga asincrona)
+    if(!this.natRatio && this.img.naturalWidth){
+      this.natRatio = this.img.naturalWidth / this.img.naturalHeight;
+      this.height = this.width * (1/this.natRatio) * (pw/ph);
+    }
+    const w = this.width * pw;
+    const h = this.height * ph;
     const px = edMarginX() + this.x*pw;
     const py = edMarginY() + this.y*ph;
     ctx.save();
@@ -372,19 +384,9 @@ function edSetOrientation(o, persist=true){
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
   // Recalcular height de todas las imagenes de esta hoja para la nueva orientacion
   // height es fraccion de ph: al cambiar orientacion pw/ph cambian, hay que ajustar
-  const newPw = edPageW(), newPh = edPageH();
-  console.log('[ORI] cambio orientacion →', o, 'newPw=',newPw,'newPh=',newPh,'layers=',edLayers.length);
-  edLayers.forEach(l => {
-    if(l.type === 'image'){
-      const hasImg = l.img && l.img.naturalWidth;
-      console.log('[ORI] imagen: hasImg=',hasImg,'w=',l.width,'h_antes=',l.height, l.img?.naturalWidth, l.img?.naturalHeight);
-      if(hasImg){
-        const natR = l.img.naturalWidth / l.img.naturalHeight;
-        l.height = (l.width * newPw) / natR / newPh;
-        console.log('[ORI] → h_despues=',l.height);
-      }
-    }
-  });
+  // Recalcular height de imagenes para la nueva orientacion
+  // _recalcHeight usa natRatio (disponible aunque img no este cargada)
+  edLayers.forEach(l => { if(l.type==='image') l._recalcHeight?.(); });
   if(edViewerCanvas){ edViewerCanvas.width=newPw; edViewerCanvas.height=newPh; }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     edFitCanvas(true);
@@ -1632,7 +1634,7 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
-    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
+    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,natRatio:l.natRatio||0,rotation:l.rotation,src:compressedSrc,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
@@ -1654,35 +1656,18 @@ function edDeserLayer(d, pageOrientation){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    // Usar dimensiones de LA PAGINA PROPIA (pageOrientation), no el estado global del editor
-    const _pgPw = (pageOrientation==='vertical') ? ED_PAGE_W : ED_PAGE_H;
-    const _pgPh = (pageOrientation==='vertical') ? ED_PAGE_H : ED_PAGE_W;
-    if(d.height){
-      // height guardado como fraccion de ph de su propia pagina — usar directo
-      l.height = d.height;
-    }
+    // Restaurar natRatio si estaba guardado
+    if(d.natRatio) l.natRatio = d.natRatio;
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        const natR = img.naturalWidth / img.naturalHeight;
-        if(!d.height){
-          // Sin height guardado: calcular desde ratio natural y dimensiones de su pagina
-          l.height = (l.width * _pgPw) / natR / _pgPh;
-        } else {
-          // Con height guardado: verificar que es razonable para esta orientacion.
-          // Si viene de sistema antiguo (fraccion de pw en vez de ph), el ratio
-          // height/width sera ~= natH/natW en vez de natH/natW*(pw/ph).
-          // Detectarlo: si height*ph_px ≈ width*pw_px/natR → es fraccion de ph (correcto)
-          //             si height*pw_px ≈ width*pw_px/natR → era fraccion de pw (migrar)
-          const expected_h_ph = (l.width * _pgPw) / natR / _pgPh;
-          const ratio_diff = Math.abs(l.height / expected_h_ph - 1);
-          // Si difiere mas de 40% del esperado para fraccion-de-ph,
-          // probablemente era fraccion de pw → convertir
-          if(ratio_diff > 0.4){
-            l.height = expected_h_ph;
-          }
-        }
+        // natRatio definitivo desde la imagen real
+        l.natRatio = img.naturalWidth / img.naturalHeight;
+        // Recalcular height para la orientacion de esta pagina (no la global)
+        const _pgPw = (pageOrientation==='vertical') ? ED_PAGE_W : ED_PAGE_H;
+        const _pgPh = (pageOrientation==='vertical') ? ED_PAGE_H : ED_PAGE_W;
+        l.height = l.width * (1/l.natRatio) * (_pgPw/_pgPh);
         // Limitar a que quepa en la pagina
         if(l.height > 0.85){
           const sc = 0.85/l.height;
