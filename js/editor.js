@@ -366,14 +366,22 @@ class BubbleLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function edSetOrientation(o, persist=true){
   const prevOrientation = edOrientation;
+  const prevPw = edPageW(), prevPh = edPageH();
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // height de ImageLayer: fraccion de pw — inmune a cambios de orientacion, no hace falta recalcular
-  // El visor usa solo el lienzo
-  if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
+  // Recalcular height de todas las imagenes de esta hoja para la nueva orientacion
+  // height es fraccion de ph: al cambiar orientacion pw/ph cambian, hay que ajustar
+  const newPw = edPageW(), newPh = edPageH();
+  edLayers.forEach(l => {
+    if(l.type === 'image' && l.img && l.img.naturalWidth){
+      const natR = l.img.naturalWidth / l.img.naturalHeight;
+      l.height = (l.width * newPw) / natR / newPh;
+    }
+  });
+  if(edViewerCanvas){ edViewerCanvas.width=newPw; edViewerCanvas.height=newPh; }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    edFitCanvas(true); // true = resetear camara al lienzo
+    edFitCanvas(true);
     edRedraw();
   }));
 }
