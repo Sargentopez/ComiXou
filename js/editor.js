@@ -1675,7 +1675,7 @@ function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
 function edOpenViewer(){
   edHideGearIcon();  // ocultar gear al abrir visor
-  edViewerIdx=edCurrentPage;
+  edViewerIdx=0;  // siempre empieza por la primera hoja
   edViewerTextStep=0;
   // Garantizar que TODAS las hojas tienen orientation antes de abrir
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
