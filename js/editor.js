@@ -137,13 +137,11 @@ class BaseLayer {
 class ImageLayer extends BaseLayer {
   constructor(imgEl,x=0.5,y=0.5,width=0.4){
     super('image',x,y,width,0.3);
-    this.natRatio = 0; // guardado como dato puro, no depende de l.img
     if(imgEl){
       this.img=imgEl; this.src=imgEl.src||'';
       if(imgEl.naturalWidth&&imgEl.naturalHeight){
-        this.natRatio = imgEl.naturalWidth / imgEl.naturalHeight;
         const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-        this.height = width * (1/this.natRatio) * (pw / ph);
+        this.height = width * (imgEl.naturalHeight / imgEl.naturalWidth) * (pw / ph);
       }
     } else {
       this.img=null; this.src='';
@@ -152,12 +150,6 @@ class ImageLayer extends BaseLayer {
   draw(ctx,can){
     if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
-    // Si natRatio no estaba disponible al construir (carga asincrona), calcularlo ahora
-    if(!this.natRatio && this.img.naturalWidth){
-      this.natRatio = this.img.naturalWidth / this.img.naturalHeight;
-      // Recalcular height para la orientacion actual
-      this.height = this.width * (1/this.natRatio) * (pw/ph);
-    }
     const w = this.width  * pw;
     const h = this.height * ph;
     const px = edMarginX() + this.x*pw;
@@ -377,7 +369,18 @@ function edSetOrientation(o, persist=true){
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // height de ImageLayer se recalcula en draw() cada frame via natRatio — no hace falta nada aqui
+  // Recalcular height de ImageLayers si la orientacion cambia
+  // (independiente de persist — ocurre tanto al cambiar manualmente como al navegar páginas)
+  if(prevOrientation !== o){
+    const _isV = o === 'vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    (edPages[edCurrentPage]?.layers || []).forEach(l => {
+      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
+        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
+      }
+    });
+  }
   if(edViewerCanvas){ edViewerCanvas.width=newPw; edViewerCanvas.height=newPh; }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     edFitCanvas(true);
@@ -733,12 +736,10 @@ function edDeletePage(){
 }
 function edLoadPage(idx){
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
-  // Aplicar orientación de esta hoja
+  // Aplicar orientación de esta hoja — usar edSetOrientation para que recalcule
+  // las imágenes si la orientación cambia (persist=false: no guarda en la página)
   const _po = edPages[idx]?.orientation || 'vertical';
-  if(_po !== edOrientation){
-    edOrientation = _po;
-    if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
-  }
+  edSetOrientation(_po, false);
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
 }
 function edUpdateNavPages(){
@@ -1177,8 +1178,7 @@ function edOnMove(e){
       const nw_px = Math.abs(lx_px)*2;
       if(nw_px > pw*0.02){
         la.width = nw_px/pw;
-        if(isImg) la._syncHeight();
-        else      la.height = (nw_px * asp)/ph;
+        la.height = (nw_px * asp)/ph;
       }
     }
     edRedraw();
@@ -1626,7 +1626,7 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
-    return{type:'image',x:l.x,y:l.y,width:l.width,natRatio:l.natRatio||1,rotation:l.rotation,src:compressedSrc,...op};
+    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
@@ -1648,19 +1648,14 @@ function edDeserLayer(d, pageOrientation){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    if(d.natRatio) l.natRatio = d.natRatio;
-    l._syncHeight();
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        l.natRatio = img.naturalWidth / img.naturalHeight;
-        l._syncHeight();
-        if(l.height > 0.85){
-          const sc = 0.85/l.height;
-          l.height = 0.85;
-          l.width  = l.width * sc;
-        }
+        const _isV = (pageOrientation||'vertical') === 'vertical';
+        const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+        const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+        l.height = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
         edRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
