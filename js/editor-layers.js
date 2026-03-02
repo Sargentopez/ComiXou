@@ -298,6 +298,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
+    if(!confirm('¿Eliminar esta capa?')) return;
     edLayers.splice(realIdx, 1);
     if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
     edPushHistory(); edRedraw(); _lyRender();
@@ -387,6 +388,7 @@ function _lyBuildImgItem(la, realIdx, selected) {
   del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
+    if(!confirm('¿Eliminar esta capa?')) return;
     edLayers.splice(realIdx, 1);
     if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
     edPushHistory(); edRedraw(); _lyRender();

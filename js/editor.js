@@ -946,6 +946,7 @@ function edAddPage(){
 }
 function edDeletePage(){
   if(edPages.length<=1){edToast('Necesitas al menos una página');return;}
+  if(!confirm('¿Eliminar esta hoja?')) return;
   edPages.splice(edCurrentPage,1);
   edLoadPage(Math.min(edCurrentPage,edPages.length-1));
 }
@@ -1297,6 +1298,17 @@ function edOnStart(e){
     if(tgt !== edCanvas) return;
     const c = edCoords(e);
     edFloodFill(c.nx, c.ny);
+    return;
+  }
+  // Color Erase: un toque = borrar zona del color tocado
+  if(window._edColorEraseReady && edActiveTool === 'eraser'){
+    if(tgt !== edCanvas) return;
+    window._edColorEraseReady = false;
+    edCanvas.style.cursor = '';
+    const btn=$('op-color-erase-btn');
+    if(btn) btn.style.background='transparent';
+    const c = edCoords(e);
+    edColorErase(c.nx, c.ny);
     return;
   }
   if(['draw','eraser'].includes(edActiveTool)){
@@ -1693,6 +1705,127 @@ function edFloodFill(nx, ny){
     }
   }
 
+  // Dilatación 1px: expandir el relleno un pixel extra en los 4 direcciones
+  // para cubrir el antialiasing del borde del trazo
+  const dilated = new Uint8Array(fw * fh);
+  for(let y=0; y<fh; y++){
+    for(let x=0; x<fw; x++){
+      const i = y*fw+x;
+      if(!filled[i]) continue;
+      // Marcar vecinos no rellenos para dilatación
+      const neighbors = [[x-1,y],[x+1,y],[x,y-1],[x,y+1]];
+      for(const [nx2,ny2] of neighbors){
+        if(nx2>=0 && nx2<fw && ny2>=0 && ny2<fh){
+          const ni = ny2*fw+nx2;
+          if(!filled[ni] && !dilated[ni]){
+            dilated[ni] = 1;
+          }
+        }
+      }
+    }
+  }
+  // Aplicar dilatación con alta tolerancia (para cubrir antialiasing)
+  for(let i=0; i<fw*fh; i++){
+    if(dilated[i]){
+      const pi = i*4;
+      data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
+    }
+  }
+
+  ctx.putImageData(imageData, x0, y0);
+  _edDrawPushHistory();
+  edRedraw();
+}
+
+/* ══════════════════════════════════════════
+   BORRAR COLOR (Color Erase — como Procreate)
+   ══════════════════════════════════════════ */
+function edColorErase(nx, ny){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  const canvas = dl._canvas, ctx = dl._ctx;
+  const W = canvas.width, H = canvas.height;
+
+  const wx = Math.round(edMarginX() + nx * edPageW());
+  const wy = Math.round(edMarginY() + ny * edPageH());
+  if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
+
+  const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
+  const pw = Math.round(edPageW()),   ph = Math.round(edPageH());
+  const insidePage = wx >= mx && wx < mx+pw && wy >= my && wy < my+ph;
+  const x0 = insidePage ? mx : 0,    y0 = insidePage ? my : 0;
+  const x1 = insidePage ? mx+pw-1 : W-1, y1 = insidePage ? my+ph-1 : H-1;
+  const fw = x1-x0+1, fh = y1-y0+1;
+
+  const imageData = ctx.getImageData(x0, y0, fw, fh);
+  const data = imageData.data;
+
+  const lx = wx-x0, ly = wy-y0;
+  const si0 = (ly*fw+lx)*4;
+  // Color objetivo: el pixel donde se tocó
+  const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
+
+  // Si es transparente, no hay nada que borrar
+  if(tA < 5) return;
+
+  // Tolerancia para la expansión (detiene en colores distintos)
+  const TOL = 40;
+  const strength = edDrawOpacity / 100;  // 0.0–1.0
+
+  function match(i){
+    return Math.abs(data[i  ]-tR) <= TOL &&
+           Math.abs(data[i+1]-tG) <= TOL &&
+           Math.abs(data[i+2]-tB) <= TOL &&
+           Math.abs(data[i+3]-tA) <= TOL;
+  }
+
+  // Span Fill para encontrar zona contigua
+  const inZone = new Uint8Array(fw * fh);
+  const stack2 = [];
+  stack2.push({y:ly, left:lx, right:lx, dy:1});
+  stack2.push({y:ly, left:lx, right:lx, dy:-1});
+  inZone[ly*fw+lx] = 1;
+
+  while(stack2.length){
+    const {y, left, right, dy} = stack2.pop();
+    const ny2 = y + dy;
+    if(ny2 < 0 || ny2 >= fh) continue;
+    let x = left;
+    while(x > 0 && !inZone[ny2*fw+(x-1)] && match((ny2*fw+(x-1))*4)) x--;
+    let rx = right;
+    while(rx < fw-1 && !inZone[ny2*fw+(rx+1)] && match((ny2*fw+(rx+1))*4)) rx++;
+    let segStart = -1;
+    for(let sx=x; sx<=rx; sx++){
+      const idx = ny2*fw+sx;
+      if(!inZone[idx] && match(idx*4)){
+        if(segStart === -1) segStart = sx;
+        inZone[idx] = 1;
+      } else if(segStart !== -1){
+        stack2.push({y:ny2, left:segStart, right:sx-1, dy:dy});
+        stack2.push({y:ny2, left:segStart, right:sx-1, dy:-dy});
+        segStart = -1;
+      }
+    }
+    if(segStart !== -1){
+      stack2.push({y:ny2, left:segStart, right:rx, dy:dy});
+      stack2.push({y:ny2, left:segStart, right:rx, dy:-dy});
+    }
+  }
+
+  // Aplicar Color Erase a la zona contigua
+  // Para cada pixel: cuanto más parecido al color objetivo, más se elimina
+  const maxDist = Math.sqrt(3) * 255;  // distancia euclidiana máxima RGB
+  for(let i=0; i<fw*fh; i++){
+    if(!inZone[i]) continue;
+    const pi = i*4;
+    const r=data[pi], g=data[pi+1], b=data[pi+2], a=data[pi+3];
+    if(a < 1) continue;
+    const dist = Math.sqrt((r-tR)**2 + (g-tG)**2 + (b-tB)**2);
+    const similarity = 1 - dist/maxDist;  // 1=idéntico, 0=muy distinto
+    const reduction = similarity * strength;
+    data[pi+3] = Math.round(a * (1 - reduction));
+  }
+
   ctx.putImageData(imageData, x0, y0);
   _edDrawPushHistory();
   edRedraw();
@@ -1892,6 +2025,10 @@ function edRenderOptionsPanel(mode){
       <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
         style="flex:1;min-width:40px;accent-color:var(--black)">
     </div>
+    ${isEr ? `
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-color-erase-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
   </div>
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -1958,6 +2095,14 @@ function edRenderOptionsPanel(mode){
       else edDrawSize=v;
       const info=$('op-draw-info');
       if(info) info.textContent=v+'px · '+edDrawOpacity+'%';
+    });
+    $('op-color-erase-btn')?.addEventListener('click',()=>{
+      // Activar modo color-erase en el canvas (un click = una operación)
+      edCanvas.style.cursor = 'crosshair';
+      window._edColorEraseReady = true;
+      const btn=$('op-color-erase-btn');
+      if(btn) btn.style.background='var(--gray-200)';
+      edToast('Toca el color a borrar');
     });
     $('op-opacity-btn')?.addEventListener('click',()=>{
       const slO=$('op-opacity-slider'), sl=$('op-size-slider');
