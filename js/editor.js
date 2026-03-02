@@ -1369,11 +1369,17 @@ function edOnStart(e){
       }
     }
   }
-  // Seleccionar: mayor índice = último añadido = más arriba en la pila de capas
-  // Sin prioridades por tipo — cada objeto se selecciona si se toca su área
+  // Seleccionar según orden visual real de renderizado (el más encima primero):
+  // texto/bocadillo → stroke → draw → imagen
+  // Dentro de cada grupo, el último en el array tiene prioridad (más reciente)
   const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   let found=-1;
-  for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
+  const _selOrder = ['text','bubble','stroke','draw','image'];
+  outer: for(const _type of _selOrder){
+    for(let i=edLayers.length-1;i>=0;i--){
+      if(edLayers[i].type===_type && edLayers[i].contains(c.nx,c.ny)){found=i;break outer;}
+    }
+  }
   if(found>=0){
     edSelectedIdx = found;
     edDragOffX = c.nx - edLayers[found].x;
