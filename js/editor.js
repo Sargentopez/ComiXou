@@ -19,7 +19,7 @@ let edActiveTool = 'select';  // select | draw | eraser
 let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
-let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100, edColorEraseOpacity = 100;
+let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
 let edFloatX = 16, edFloatY = 200; // posición del botón flotante
@@ -822,16 +822,15 @@ function edRedraw(){
     l.draw(edCtx,edCanvas);
     edCtx.globalAlpha = 1;
   });
+  // DrawLayer activo (trazo en progreso) — entre imágenes y StrokeLayers
+  const _drawLayer = page.layers.find(l => l.type === 'draw');
+  if(_drawLayer) _drawLayer.draw(edCtx);
   // StrokeLayers (trazos congelados como objetos)
   _strokeLayers.forEach(l=>{
     edCtx.globalAlpha = l.opacity ?? 1;
     l.draw(edCtx);
     edCtx.globalAlpha = 1;
   });
-  // DrawLayer activo — siempre encima de StrokeLayers para que los nuevos
-  // trazos y rellenos sean visibles sobre el dibujo existente
-  const _drawLayer = page.layers.find(l => l.type === 'draw');
-  if(_drawLayer) _drawLayer.draw(edCtx);
   edCtx.globalAlpha = _textGroupAlpha;
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
@@ -1247,8 +1246,7 @@ function _edHandleDoubleTap(idx){
     // Doble tap en dibujo → entrar en modo edición directamente
     const page=edPages[edCurrentPage]; if(!page) return;
     const dl=la.toDrawLayer();
-    page.layers.splice(idx, 1);    // quitar el StrokeLayer
-    page.layers.push(dl);           // añadir DrawLayer al final (encima de todo)
+    page.layers.splice(idx, 1, dl);  // reemplazar StrokeLayer con DrawLayer en su posición
     edLayers=page.layers;
     edSelectedIdx=-1;
     edActiveTool='draw';
@@ -1601,7 +1599,7 @@ function _edGetOrCreateDrawLayer(){
     dl = new DrawLayer();
     // Insertar el DrawLayer ENCIMA de todas las imágenes y StrokeLayers
     // para que los trazos y rellenos nuevos siempre se vean encima
-    page.layers.push(dl);
+    page.layers.unshift(dl);
     edLayers = page.layers;
   }
   return dl;
@@ -1778,7 +1776,7 @@ function edColorErase(nx, ny){
   const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
   if(tA < 5) return;
 
-  const strength = edColorEraseOpacity / 100;
+  const strength = 1.0;  // siempre al 100%
 
   // Tolerancia amplia para capturar píxeles de antialiasing del borde
   // (los píxeles de borde son mezcla del color del trazo + fondo)
@@ -2072,13 +2070,7 @@ function edRenderOptionsPanel(mode){
     ${isEr ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-color-erase-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>
-    <button id="op-ce-opacity-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-500)">${edColorEraseOpacity}%</button>
-    <div id="op-ce-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="range" id="op-dce-opacity" min="1" max="100" value="${edColorEraseOpacity}"
-        style="flex:1;min-width:40px;accent-color:var(--black)">
-    </div>` : ''}
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
   </div>
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -2152,21 +2144,6 @@ function edRenderOptionsPanel(mode){
       const btn=$('op-color-erase-btn');
       if(btn) btn.style.background='var(--gray-200)';
       edToast('Toca el color a borrar');
-    });
-    $('op-ce-opacity-btn')?.addEventListener('click',()=>{
-      const slO=$('op-ce-opacity-slider'), sl=$('op-size-slider'), slA=$('op-opacity-slider');
-      if(!slO) return;
-      const open = slO.style.display === 'none' || slO.style.display === '';
-      slO.style.display = open ? 'flex' : 'none';
-      if(open && sl) sl.style.display='none';
-      if(open && slA) slA.style.display='none';
-      const btn=$('op-ce-opacity-btn');
-      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
-    });
-    $('op-dce-opacity')?.addEventListener('input',e=>{
-      edColorEraseOpacity = +e.target.value;
-      const btn=$('op-ce-opacity-btn');
-      if(btn) btn.textContent = edColorEraseOpacity+'%';
     });
     $('op-opacity-btn')?.addEventListener('click',()=>{
       const slO=$('op-opacity-slider'), sl=$('op-size-slider');
@@ -3143,8 +3120,14 @@ function EditorView_init(){
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
     const tag = document.activeElement?.tagName?.toLowerCase();
-    if(tag === 'input' || tag === 'textarea' || tag === 'select') return;
     const ctrl = e.ctrlKey || e.metaKey;
+    // Bloquear shortcuts si hay un input con foco, EXCEPTO Ctrl+Z/Y
+    // cuando hay herramienta de dibujo activa (los sliders del panel roban el foco)
+    if(tag === 'input' || tag === 'textarea' || tag === 'select'){
+      const isDrawTool = ['draw','eraser','fill'].includes(edActiveTool);
+      const isUndoRedo = ctrl && (e.key.toLowerCase()==='z' || e.key.toLowerCase()==='y');
+      if(!(isDrawTool && isUndoRedo)) return;
+    }
     // Enter: cerrar panel de opciones abierto (OK)
     if(e.key === 'Enter' && !ctrl){
       const panel = $('edOptionsPanel');
