@@ -1254,6 +1254,14 @@ function _edHandleDoubleTap(idx){
     edActiveTool='draw';
     edCanvas.className='tool-draw';
     const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+    // Limpiar historial local y guardar el estado inicial como base:
+    // el usuario puede deshacer hasta aquí pero nunca más allá (no borra el dibujo base)
+    _edDrawClearHistory();
+    // El primer _edDrawPushHistory guardará este estado inicial.
+    // Marcamos que el estado base ya está "guardado" poniendo idx en 0 con el snapshot.
+    edDrawHistory = [dl.toDataUrl()];
+    edDrawHistoryIdx = 0;
+    _edDrawUpdateUndoRedoBtns();
     edRenderOptionsPanel('draw');
     edRedraw();
   } else {
@@ -1557,13 +1565,10 @@ function _edDrawApplyHistory(dataUrl){
 }
 function edDrawUndo(){
   if(edDrawHistoryIdx <= 0){
-    // Si idx=0, deshacer significa limpiar todo (estado vacío)
-    if(edDrawHistoryIdx === 0){
-      edDrawHistoryIdx = -1;
-      const page=edPages[edCurrentPage];
-      const dl=page?.layers.find(l=>l.type==='draw');
-      if(dl) dl.clear();
-      edRedraw(); _edDrawUpdateUndoRedoBtns(); return;
+    if(edDrawHistoryIdx === 0 && edDrawHistory.length > 0){
+      // Estamos en el estado base — restaurar y no ir más atrás
+      _edDrawApplyHistory(edDrawHistory[0]);
+      _edDrawUpdateUndoRedoBtns(); return;
     }
     edToast('Nada que deshacer'); return;
   }
@@ -1709,26 +1714,29 @@ function edFloodFill(nx, ny){
     }
   }
 
-  // Dilatación 1px: expandir el relleno un pixel extra en los 4 direcciones
-  // para cubrir el antialiasing del borde del trazo
+  // Dilatación 1px solo en píxeles TRANSPARENTES o casi transparentes:
+  // Expande el relleno para cubrir el antialiasing del borde del trazo.
+  // NO invade píxeles con color (alpha >= 30) para no corromper bordes adyacentes.
+  // Técnica "expand into transparent" de Krita/Photoshop.
   const dilated = new Uint8Array(fw * fh);
   for(let y=0; y<fh; y++){
     for(let x=0; x<fw; x++){
       const i = y*fw+x;
       if(!filled[i]) continue;
-      // Marcar vecinos no rellenos para dilatación
       const neighbors = [[x-1,y],[x+1,y],[x,y-1],[x,y+1]];
       for(const [nx2,ny2] of neighbors){
         if(nx2>=0 && nx2<fw && ny2>=0 && ny2<fh){
           const ni = ny2*fw+nx2;
           if(!filled[ni] && !dilated[ni]){
-            dilated[ni] = 1;
+            // Solo dilatat en píxeles transparentes o semitransparentes (antialiasing)
+            // NUNCA en píxeles con color sólido (bordes de trazos adyacentes)
+            const alpha = data[ni*4+3];
+            if(alpha < 30) dilated[ni] = 1;
           }
         }
       }
     }
   }
-  // Aplicar dilatación con alta tolerancia (para cubrir antialiasing)
   for(let i=0; i<fw*fh; i++){
     if(dilated[i]){
       const pi = i*4;
@@ -2064,7 +2072,13 @@ function edRenderOptionsPanel(mode){
     ${isEr ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-color-erase-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>
+    <button id="op-ce-opacity-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-500)">${edColorEraseOpacity}%</button>
+    <div id="op-ce-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-dce-opacity" min="1" max="100" value="${edColorEraseOpacity}"
+        style="flex:1;min-width:40px;accent-color:var(--black)">
+    </div>` : ''}
   </div>
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
