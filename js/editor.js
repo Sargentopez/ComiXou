@@ -2986,8 +2986,15 @@ function EditorView_init(){
 
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
-    if(['draw','eraser'].includes(edActiveTool)){
-      if(!e.target.closest('#editorCanvas') && !e.target.closest('#edOptionsPanel')){
+    if(['draw','eraser','fill'].includes(edActiveTool)){
+      // No desactivar si el click es en el canvas, el panel de opciones,
+      // la barra de menú, la barra superior o el botón flotante de minimizar
+      const inCanvas  = e.target.closest('#editorCanvas');
+      const inPanel   = e.target.closest('#edOptionsPanel');
+      const inMenu    = e.target.closest('#edMenuBar');
+      const inTopbar  = e.target.closest('#edTopbar');
+      const inFloat   = e.target.closest('#edFloatBtn');
+      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat){
         edDeactivateDrawTool();
       }
     }
