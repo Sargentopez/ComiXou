@@ -1835,20 +1835,25 @@ function edColorErase(nx, ny){
     if(b > tB && tB < 255) aB = (b - tB) / (255 - tB);
     else if(b < tB && tB > 0)   aB = (tB - b) / tB;
 
-    // El nuevo alpha es la máxima contribución del color objetivo
-    let newAlpha = Math.max(aR, aG, aB);
+    // El nuevo alpha es la máxima contribución del color objetivo (extracción completa)
+    const newAlpha = Math.max(aR, aG, aB);
     if(newAlpha < 0.001){ data[pi+3]=0; continue; }  // prácticamente idéntico → borrar
 
-    // Aplicar strength del usuario (opacidad del slider)
-    newAlpha = Math.min(1, newAlpha * strength);
-
-    // Descomponer el pixel para obtener el color "real" subyacente
-    // pixel = target*(1-newAlpha) + result*newAlpha  →  result = (pixel - target*(1-newAlpha)) / newAlpha
+    // Calcular resultado de Color to Alpha al 100% (extracción completa del color objetivo)
     const inv = 1 - newAlpha;
-    data[pi  ] = Math.max(0, Math.min(255, Math.round((r - tR*inv) / newAlpha)));
-    data[pi+1] = Math.max(0, Math.min(255, Math.round((g - tG*inv) / newAlpha)));
-    data[pi+2] = Math.max(0, Math.min(255, Math.round((b - tB*inv) / newAlpha)));
-    data[pi+3] = Math.round(a * newAlpha);
+    const outR = Math.max(0, Math.min(255, (r - tR*inv) / newAlpha));
+    const outG = Math.max(0, Math.min(255, (g - tG*inv) / newAlpha));
+    const outB = Math.max(0, Math.min(255, (b - tB*inv) / newAlpha));
+    const outA = a * newAlpha;
+
+    // Interpolar entre pixel original y resultado según la opacidad del usuario:
+    // strength=1.0 → resultado completo (borrado total del color)
+    // strength=0.5 → mezcla 50/50 (semi-borrado limpio sin artefactos)
+    // strength=0.0 → sin cambio
+    data[pi  ] = Math.round(r   + (outR - r)   * strength);
+    data[pi+1] = Math.round(g   + (outG - g)   * strength);
+    data[pi+2] = Math.round(b   + (outB - b)   * strength);
+    data[pi+3] = Math.round(a   + (outA - a)   * strength);
   }
 
   ctx.putImageData(imageData, x0, y0);
