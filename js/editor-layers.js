@@ -141,24 +141,14 @@ function _lyRender() {
     });
   }
 
-  /* ══ SEPARADOR ══ */
-  const sep = document.createElement('div');
-  sep.className = 'ed-layer-sep';
-  list.appendChild(sep);
-
-  /* ══ SECCIÓN DIBUJOS ══ */
-  const dTitle = document.createElement('div');
-  dTitle.className = 'ed-ly-section-title';
-  dTitle.textContent = 'Dibujos';
-  list.appendChild(dTitle);
-
+  /* ══ SEPARADOR + DIBUJOS (sin título de sección) ══ */
   const strokePairs = edLayers.map((l,i)=>({l,i})).filter(({l})=>l.type==='stroke'||l.type==='draw');
-  if(strokePairs.length === 0){
-    const e = document.createElement('p');
-    e.className = 'ed-layer-sub-empty';
-    e.textContent = 'Sin dibujos';
-    list.appendChild(e);
-  } else {
+  if(strokePairs.length > 0){
+    const sep = document.createElement('div');
+    sep.className = 'ed-layer-sep';
+    list.appendChild(sep);
+  }
+  if(strokePairs.length > 0){
     strokePairs.forEach(({l,i}) => {
       const row = document.createElement('div');
       row.className = 'ed-layer-text-row' + (i === edSelectedIdx ? ' selected' : '');

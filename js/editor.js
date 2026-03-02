@@ -1293,8 +1293,20 @@ function edOnStart(e){
   // Rastrear pointers activos (para pinch con pointer events)
   if(!window._edActivePointers) window._edActivePointers = new Map();
   window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-  // 2 dedos → iniciar pinch-to-zoom
+  // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
   if(window._edActivePointers.size === 2){
+    // Si estaba pintando, cancelar el trazo sin guardarlo
+    if(edPainting){
+      edPainting = false;
+      // Restaurar el último snapshot del historial local para descartar el trazo parcial
+      const page=edPages[edCurrentPage];
+      const dl=page?.layers.find(l=>l.type==='draw');
+      if(dl && edDrawHistory.length > 0){
+        const img=new Image();
+        img.onload=()=>{ dl.clear(); dl._ctx.drawImage(img,0,0); edRedraw(); };
+        img.src=edDrawHistory[edDrawHistoryIdx] || '';
+      }
+    }
     edPinchStart(e);
     return;
   }
@@ -1357,7 +1369,8 @@ function edOnStart(e){
       }
     }
   }
-  // Seleccionar
+  // Seleccionar: mayor índice = último añadido = más arriba en la pila de capas
+  // Sin prioridades por tipo — cada objeto se selecciona si se toca su área
   const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   let found=-1;
   for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
@@ -2071,6 +2084,7 @@ function edRenderOptionsPanel(mode){
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-color-erase-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
+
   </div>
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -2759,11 +2773,46 @@ function edInitViewerTap(){
   edShowViewerCtrls();
   if(!_viewerTapBound){
     _viewerTapBound = true;
-    // pointerdown + touchstart cubren PC y Android
-    // Usar capture:true para recibir el evento aunque haya elementos encima
     viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
     viewer.addEventListener('touchstart',  () => edShowViewerCtrls(), {capture:true, passive:true});
     viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
+
+    // Swipe horizontal para pasar páginas en táctil
+    let _vSwipeX = null, _vSwipeY = null;
+    viewer.addEventListener('touchstart', e => {
+      if(e.touches.length !== 1) return;
+      _vSwipeX = e.touches[0].clientX;
+      _vSwipeY = e.touches[0].clientY;
+    }, {passive:true});
+    viewer.addEventListener('touchend', e => {
+      if(_vSwipeX === null || e.changedTouches.length !== 1) return;
+      const dx = e.changedTouches[0].clientX - _vSwipeX;
+      const dy = e.changedTouches[0].clientY - _vSwipeY;
+      _vSwipeX = null; _vSwipeY = null;
+      // Solo swipe horizontal claro (más horizontal que vertical, mínimo 40px)
+      if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      const page = edPages[edViewerIdx];
+      const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+      if(dx < 0){
+        // Swipe izquierda → siguiente
+        if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+          edViewerTextStep++; edUpdateViewer();
+        } else if(edViewerIdx < edPages.length-1){
+          edViewerIdx++; edViewerTextStep=0; edUpdateViewer();
+        }
+      } else {
+        // Swipe derecha → anterior
+        if(page?.textMode==='sequential' && edViewerTextStep > 0){
+          edViewerTextStep--; edUpdateViewer();
+        } else if(edViewerIdx > 0){
+          edViewerIdx--;
+          const pp=edPages[edViewerIdx];
+          const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+          edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+          edUpdateViewer();
+        }
+      }
+    }, {passive:true});
   }
 }
 function edCloseViewer(){
