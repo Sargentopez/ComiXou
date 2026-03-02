@@ -19,7 +19,7 @@ let edActiveTool = 'select';  // select | draw | eraser
 let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
-let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
+let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100, edColorEraseOpacity = 100;
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
 let edFloatX = 16, edFloatY = 200; // posición del botón flotante
@@ -822,15 +822,16 @@ function edRedraw(){
     l.draw(edCtx,edCanvas);
     edCtx.globalAlpha = 1;
   });
-  // DrawLayer activo (trazo en progreso) — síncrono
-  const _drawLayer = page.layers.find(l => l.type === 'draw');
-  if(_drawLayer) _drawLayer.draw(edCtx);
   // StrokeLayers (trazos congelados como objetos)
   _strokeLayers.forEach(l=>{
     edCtx.globalAlpha = l.opacity ?? 1;
     l.draw(edCtx);
     edCtx.globalAlpha = 1;
   });
+  // DrawLayer activo — siempre encima de StrokeLayers para que los nuevos
+  // trazos y rellenos sean visibles sobre el dibujo existente
+  const _drawLayer = page.layers.find(l => l.type === 'draw');
+  if(_drawLayer) _drawLayer.draw(edCtx);
   edCtx.globalAlpha = _textGroupAlpha;
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
@@ -1246,7 +1247,8 @@ function _edHandleDoubleTap(idx){
     // Doble tap en dibujo → entrar en modo edición directamente
     const page=edPages[edCurrentPage]; if(!page) return;
     const dl=la.toDrawLayer();
-    page.layers.splice(idx, 1, dl);
+    page.layers.splice(idx, 1);    // quitar el StrokeLayer
+    page.layers.push(dl);           // añadir DrawLayer al final (encima de todo)
     edLayers=page.layers;
     edSelectedIdx=-1;
     edActiveTool='draw';
@@ -1592,7 +1594,9 @@ function _edGetOrCreateDrawLayer(){
   let dl = page.layers.find(l => l.type === 'draw');
   if(!dl){
     dl = new DrawLayer();
-    page.layers.unshift(dl);
+    // Insertar el DrawLayer ENCIMA de todas las imágenes y StrokeLayers
+    // para que los trazos y rellenos nuevos siempre se vean encima
+    page.layers.push(dl);
     edLayers = page.layers;
   }
   return dl;
@@ -1732,8 +1736,9 @@ function edFloodFill(nx, ny){
     }
   }
 
-  ctx.putImageData(imageData, x0, y0);
+  // Guardar snapshot ANTES de aplicar (para que Ctrl+Z restaure el estado previo)
   _edDrawPushHistory();
+  ctx.putImageData(imageData, x0, y0);
   edRedraw();
 }
 
@@ -1765,7 +1770,7 @@ function edColorErase(nx, ny){
   const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
   if(tA < 5) return;
 
-  const strength = edDrawOpacity / 100;
+  const strength = edColorEraseOpacity / 100;
 
   // Tolerancia amplia para capturar píxeles de antialiasing del borde
   // (los píxeles de borde son mezcla del color del trazo + fondo)
@@ -1856,8 +1861,9 @@ function edColorErase(nx, ny){
     data[pi+3] = Math.round(a   + (outA - a)   * strength);
   }
 
-  ctx.putImageData(imageData, x0, y0);
+  // Guardar snapshot ANTES de aplicar
   _edDrawPushHistory();
+  ctx.putImageData(imageData, x0, y0);
   edRedraw();
 }
 function edStartPaint(e){
@@ -2127,12 +2133,26 @@ function edRenderOptionsPanel(mode){
       if(info) info.textContent=v+'px · '+edDrawOpacity+'%';
     });
     $('op-color-erase-btn')?.addEventListener('click',()=>{
-      // Activar modo color-erase en el canvas (un click = una operación)
       edCanvas.style.cursor = 'crosshair';
       window._edColorEraseReady = true;
       const btn=$('op-color-erase-btn');
       if(btn) btn.style.background='var(--gray-200)';
       edToast('Toca el color a borrar');
+    });
+    $('op-ce-opacity-btn')?.addEventListener('click',()=>{
+      const slO=$('op-ce-opacity-slider'), sl=$('op-size-slider'), slA=$('op-opacity-slider');
+      if(!slO) return;
+      const open = slO.style.display === 'none' || slO.style.display === '';
+      slO.style.display = open ? 'flex' : 'none';
+      if(open && sl) sl.style.display='none';
+      if(open && slA) slA.style.display='none';
+      const btn=$('op-ce-opacity-btn');
+      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
+    });
+    $('op-dce-opacity')?.addEventListener('input',e=>{
+      edColorEraseOpacity = +e.target.value;
+      const btn=$('op-ce-opacity-btn');
+      if(btn) btn.textContent = edColorEraseOpacity+'%';
     });
     $('op-opacity-btn')?.addEventListener('click',()=>{
       const slO=$('op-opacity-slider'), sl=$('op-size-slider');
@@ -3131,8 +3151,16 @@ function EditorView_init(){
       return;
     }
     if(!ctrl) return;
-    if(!e.shiftKey && e.key.toLowerCase() === 'z'){ e.preventDefault(); edUndo(); }
-    else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){ e.preventDefault(); edRedo(); }
+    if(!e.shiftKey && e.key.toLowerCase() === 'z'){
+      e.preventDefault();
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
+      else edUndo();
+    }
+    else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){
+      e.preventDefault();
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
+      else edRedo();
+    }
   };
   document.addEventListener('keydown', window._edKeyFn);
 
