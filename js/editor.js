@@ -1839,41 +1839,55 @@ function edRenderOptionsPanel(mode){
       return `${isEr ? edEraserSize : edDrawSize}px`;
     };
     panel.innerHTML=`
-<div class="dp-panel">
+<div style="display:flex;flex-direction:column;width:100%;gap:0">
   <!-- FILA 1: Herramientas -->
-  <div class="dp-row1">
-    <button id="op-tool-pen"  class="dp-tool-btn${isPen?' active':''}">Dibujar</button>
-    <div class="dp-vsep"></div>
-    <button id="op-tool-eraser" class="dp-tool-btn${isEr?' active':''}">Borrar</button>
-    <div class="dp-vsep"></div>
-    <button id="op-tool-fill" class="dp-tool-btn${isFill?' active':''}">Rellenar</button>
+  <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0">
+    <button id="op-tool-pen"
+      style="flex:1;border:none;border-radius:6px;padding:5px 2px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isPen?'rgba(0,0,0,.08)':'transparent'};color:${isPen?'var(--black)':'var(--gray-600)'}">Dibujar</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-tool-eraser"
+      style="flex:1;border:none;border-radius:6px;padding:5px 2px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isEr?'rgba(0,0,0,.08)':'transparent'};color:${isEr?'var(--black)':'var(--gray-600)'}">Borrar</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-tool-fill"
+      style="flex:1;border:none;border-radius:6px;padding:5px 2px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isFill?'rgba(0,0,0,.08)':'transparent'};color:${isFill?'var(--black)':'var(--gray-600)'}">Rellenar</button>
   </div>
-  <div class="dp-hsep"></div>
-  <!-- FILA 2: Controles de color, transparencia, grosor -->
-  <div class="dp-row2">
+  <!-- SEP H -->
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <!-- FILA 2: Controles -->
+  <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
     ${!isEr ? `
-    <!-- Color -->
-    <div style="position:relative;display:flex;align-items:center">
-      <div id="op-color-swatch" style="width:24px;height:24px;border-radius:50%;background:${edDrawColor};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0"></div>
-      <input type="color" id="op-dcolor" value="${edDrawColor}" class="dp-color-hidden">
+    <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
+      <div id="op-color-swatch"
+        style="width:26px;height:26px;border-radius:50%;background:${edDrawColor};border:2px solid var(--gray-300);cursor:pointer"></div>
+      <input type="color" id="op-dcolor" value="${edDrawColor}"
+        style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
     </div>
-    <div class="dp-vsep"></div>` : ''}
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${!isFill ? `
-    <!-- Grosor -->
-    <button id="op-size-btn" class="dp-ctrl-btn">Grosor</button>
-    <div id="op-size-slider" class="dp-inline-slider">
-      <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}">
+    <button id="op-size-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
+    <div id="op-size-slider"
+      style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
+        style="flex:1;min-width:40px;accent-color:var(--black)">
     </div>` : ''}
   </div>
-  <div class="dp-hsep"></div>
-  <!-- FILA 3: Acciones + info + OK -->
-  <div class="dp-row3">
-    <button id="op-draw-del" class="dp-act-btn danger" title="Eliminar dibujo">✕</button>
-    <button id="op-draw-dup" class="dp-act-btn dup"   title="Duplicar">⧉</button>
-    <button id="op-draw-undo" class="dp-act-btn" title="Deshacer trazo" disabled>↩</button>
-    <button id="op-draw-redo" class="dp-act-btn" title="Rehacer trazo" disabled>↪</button>
-    <span class="dp-info" id="op-draw-info">${_infoText()}</span>
-    <button id="op-draw-ok" class="dp-ok-btn">✓</button>
+  <!-- SEP H -->
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <!-- FILA 3: Acciones -->
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
+    <button id="op-draw-del"
+      style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
+    <button id="op-draw-dup"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
+    <button id="op-draw-undo"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
+    <button id="op-draw-redo"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <span id="op-draw-info"
+      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px'}</span>
+    <button id="op-draw-ok"
+      style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
 </div>`;
     panel.classList.add('open');
@@ -1909,8 +1923,10 @@ function edRenderOptionsPanel(mode){
     $('op-size-btn')?.addEventListener('click',()=>{
       const sl=$('op-size-slider');
       if(!sl) return;
-      sl.classList.toggle('visible');
-      $('op-size-btn')?.classList.toggle('open', sl.classList.contains('visible'));
+      const open = sl.style.display === 'none' || sl.style.display === '';
+      sl.style.display = open ? 'flex' : 'none';
+      const btn=$('op-size-btn');
+      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
     });
     $('op-dsize')?.addEventListener('input',e=>{
       const v=+e.target.value;
