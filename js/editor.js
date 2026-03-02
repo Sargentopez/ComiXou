@@ -1420,23 +1420,22 @@ function edOnStart(e){
       }
     }
   }
-  // Seleccionar según orden visual inverso al render:
-  // Render pinta: imagen → draw → stroke → texto (texto siempre encima)
-  // Selección busca primero lo más encima visualmente:
-  // texto/bubble → stroke → draw → imagen
-  // Dentro de cada grupo: mayor índice primero (más recientemente añadido)
+  // Seleccionar: el render sigue el orden del array (mayor índice = encima visualmente).
+  // La selección busca de mayor a menor índice — el primero que contenga el punto tocado.
+  // Textos/bocadillos siempre encima (se buscan primero independientemente del índice).
   const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   let found = -1;
-  const _selGroups = [
-    ['text','bubble'],
-    ['stroke'],
-    ['draw'],
-    ['image'],
-  ];
-  outer_sel: for(const _types of _selGroups){
+  // Primero buscar en textos/bocadillos (siempre encima de todo)
+  for(let i = edLayers.length - 1; i >= 0; i--){
+    if((edLayers[i].type==='text'||edLayers[i].type==='bubble') && edLayers[i].contains(c.nx,c.ny)){
+      found = i; break;
+    }
+  }
+  // Si no hay texto encima, buscar en el resto por orden de array (mayor índice = encima)
+  if(found < 0){
     for(let i = edLayers.length - 1; i >= 0; i--){
-      if(_types.includes(edLayers[i].type) && edLayers[i].contains(c.nx, c.ny)){
-        found = i; break outer_sel;
+      if(edLayers[i].type!=='text' && edLayers[i].type!=='bubble' && edLayers[i].contains(c.nx,c.ny)){
+        found = i; break;
       }
     }
   }
