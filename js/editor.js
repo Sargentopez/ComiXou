@@ -817,18 +817,14 @@ function edRedraw(){
   // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
-  _imgLayers.forEach(l=>{
+  // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
+  // Textos/bocadillos siempre al final (encima de todo).
+  edLayers.forEach(l=>{
+    if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
     edCtx.globalAlpha = l.opacity ?? 1;
-    l.draw(edCtx,edCanvas);
-    edCtx.globalAlpha = 1;
-  });
-  // DrawLayer activo (trazo en progreso) — entre imágenes y StrokeLayers
-  const _drawLayer = page.layers.find(l => l.type === 'draw');
-  if(_drawLayer) _drawLayer.draw(edCtx);
-  // StrokeLayers (trazos congelados como objetos)
-  _strokeLayers.forEach(l=>{
-    edCtx.globalAlpha = l.opacity ?? 1;
-    l.draw(edCtx);
+    if(l.type==='image')      l.draw(edCtx, edCanvas);
+    else if(l.type==='draw')  l.draw(edCtx);
+    else if(l.type==='stroke')l.draw(edCtx);
     edCtx.globalAlpha = 1;
   });
   edCtx.globalAlpha = _textGroupAlpha;
@@ -1017,34 +1013,33 @@ function _edRenderPageThumb(canvas, page, pageIdx){
   const pw=isV?ED_PAGE_W:ED_PAGE_H, ph=isV?ED_PAGE_H:ED_PAGE_W;
   const sx=tw/pw, sy=th/ph;
 
-  // Renderizar capas en orden visual: imágenes → stroke/draw → texto
-  const order=['image','stroke','draw','text','bubble'];
-  order.forEach(type=>{
-    page.layers.filter(l=>l.type===type).forEach(la=>{
-      ctx.save();
-      ctx.globalAlpha=la.opacity??1;
-      const cx=la.x*tw, cy=la.y*th;
-      const lw=la.width*tw, lh=la.height*th;
-      const rot=(la.rotation||0)*Math.PI/180;
-      ctx.translate(cx,cy);
-      if(rot) ctx.rotate(rot);
-      if(type==='image' && la.img && la.img.complete && la.img.naturalWidth>0){
-        ctx.drawImage(la.img,-lw/2,-lh/2,lw,lh);
-      } else if(type==='stroke' && la._canvas){
-        // StrokeLayer: dibujar su canvas en su posición/tamaño
-        ctx.drawImage(la._canvas,-lw/2,-lh/2,lw,lh);
-      } else if(type==='draw' && la._canvas){
-        // DrawLayer: recortar solo la zona de página del workspace
-        ctx.restore();
-        ctx.save();
-        const _mx=(ED_CANVAS_W-pw)/2, _my=(ED_CANVAS_H-ph)/2;
-        ctx.drawImage(la._canvas, _mx, _my, pw, ph, 0, 0, tw, th);
-      } else if(type==='text'||type==='bubble'){
-        ctx.fillStyle=la.backgroundColor||'rgba(255,255,255,0.85)';
-        ctx.fillRect(-lw/2,-lh/2,lw,lh);
-      }
+  // Renderizar capas en orden del array (igual que canvas y visor)
+  // Textos al final
+  const _nonText = page.layers.filter(l=>l.type!=='text'&&l.type!=='bubble');
+  const _textL   = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+  [..._nonText, ..._textL].forEach(la=>{
+    const type = la.type;
+    ctx.save();
+    ctx.globalAlpha=la.opacity??1;
+    const cx=la.x*tw, cy=la.y*th;
+    const lw=la.width*tw, lh=la.height*th;
+    const rot=(la.rotation||0)*Math.PI/180;
+    ctx.translate(cx,cy);
+    if(rot) ctx.rotate(rot);
+    if(type==='image' && la.img && la.img.complete && la.img.naturalWidth>0){
+      ctx.drawImage(la.img,-lw/2,-lh/2,lw,lh);
+    } else if(type==='stroke' && la._canvas){
+      ctx.drawImage(la._canvas,-lw/2,-lh/2,lw,lh);
+    } else if(type==='draw' && la._canvas){
       ctx.restore();
-    });
+      ctx.save();
+      const _mx=(ED_CANVAS_W-pw)/2, _my=(ED_CANVAS_H-ph)/2;
+      ctx.drawImage(la._canvas, _mx, _my, pw, ph, 0, 0, tw, th);
+    } else if(type==='text'||type==='bubble'){
+      ctx.fillStyle=la.backgroundColor||'rgba(255,255,255,0.85)';
+      ctx.fillRect(-lw/2,-lh/2,lw,lh);
+    }
+    ctx.restore();
   });
 }
 
@@ -2949,10 +2944,13 @@ function edUpdateViewer(){
   // (draw() usa edMarginX/edPageW internamente)
   const _savedOrient=edOrientation;
   edOrientation=_po;
-  page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(fctx,full));
-  const _viewerDrawLayer = page.layers.find(l=>l.type==='draw');
-  if(_viewerDrawLayer) _viewerDrawLayer.draw(fctx);
-  page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(fctx));
+  // Mismo orden que el editor: seguir el array, textos al final
+  page.layers.forEach(l=>{
+    if(l.type==='text'||l.type==='bubble') return;
+    if(l.type==='image')       l.draw(fctx, full);
+    else if(l.type==='draw')   l.draw(fctx);
+    else if(l.type==='stroke') l.draw(fctx);
+  });
   const _finishViewer = () => {
     _edViewerDrawTextsOnCtx(page, fctx, full);
     // Restaurar antes de manipular el DOM
