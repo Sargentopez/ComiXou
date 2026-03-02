@@ -699,7 +699,7 @@ function edFitCanvas(resetCamera){
 
   const topH  = (!edMinimized && topbar)  ? topbar.getBoundingClientRect().height  : 0;
   const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
-  const optsH = (opts && opts.classList.contains('open')) ? opts.getBoundingClientRect().height : 0;
+  const optsH = (opts && opts.classList.contains('open') && opts.style.visibility !== 'hidden') ? opts.getBoundingClientRect().height : 0;
   if(menu && !edMinimized) menu.style.top = topH + 'px';
   if(opts) opts.style.top = (topH + menuH) + 'px';
   const totalBarsH = topH + menuH + optsH;
@@ -726,12 +726,8 @@ function edFitCanvas(resetCamera){
   if(_sizeChanged){
     edCanvas.width  = newW;
     edCanvas.height = newH;
-    // Ajustar posición de cámara para compensar el cambio de altura del panel
-    // (sin resetear zoom — solo desplazar para que el lienzo no salte)
-    if(!resetCamera){
-      const dH = newH - _prevH;
-      edCamera.y += dH / 2;  // mantener el lienzo centrado verticalmente
-    }
+    // No mover la cámara al cambiar de tamaño por el panel de opciones.
+    // El canvas crece/encoge hacia abajo; el viewport queda anclado.
   }
   edCanvas.style.width  = newW + 'px';
   edCanvas.style.height = newH + 'px';
@@ -2016,7 +2012,8 @@ function edRenderOptionsPanel(mode){
       edToast('Dibujo eliminado');
     });
 
-    requestAnimationFrame(edFitCanvas);return;
+    // Solo redibujar el canvas para actualizar el cursor; NO redimensionar
+    edRedraw();return;
   }
 
   if(mode==='props'){
@@ -2175,6 +2172,13 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
+  // Si hay herramienta de dibujo activa, preservar modo
+  if(['draw','eraser','fill'].includes(edActiveTool)){
+    window._edMinimizedDrawMode = edActiveTool;
+    // Ocultar visualmente el panel pero mantenerlo en el DOM con dataset.mode
+    const panel=$('edOptionsPanel');
+    if(panel) panel.style.visibility='hidden';
+  }
   edFitCanvas();
 }
 function edMaximize(){
@@ -2183,7 +2187,17 @@ function edMaximize(){
   if(menu)menu.style.display='';
   if(top)top.style.display='';
   $('edFloatBtn')?.classList.remove('visible');
-  edFitCanvas();
+  // Restaurar panel de dibujo si estaba activo al minimizar
+  if(window._edMinimizedDrawMode){
+    const mode = window._edMinimizedDrawMode;
+    window._edMinimizedDrawMode = null;
+    const panel=$('edOptionsPanel');
+    if(panel) panel.style.visibility='';
+    edFitCanvas();
+    edRenderOptionsPanel(mode);
+  } else {
+    edFitCanvas();
+  }
 }
 function edInitFloatDrag(){
   const btn=$('edFloatBtn');if(!btn)return;
