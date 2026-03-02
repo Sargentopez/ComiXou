@@ -1762,30 +1762,27 @@ function edColorErase(nx, ny){
 
   const lx = wx-x0, ly = wy-y0;
   const si0 = (ly*fw+lx)*4;
-  // Color objetivo: el pixel donde se tocó
   const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
-
-  // Si es transparente, no hay nada que borrar
   if(tA < 5) return;
 
-  // Tolerancia para la expansión (detiene en colores distintos)
-  const TOL = 40;
-  const strength = edDrawOpacity / 100;  // 0.0–1.0
+  const strength = edDrawOpacity / 100;
 
+  // Tolerancia amplia para capturar píxeles de antialiasing del borde
+  // (los píxeles de borde son mezcla del color del trazo + fondo)
+  const TOL = 80;
   function match(i){
     return Math.abs(data[i  ]-tR) <= TOL &&
            Math.abs(data[i+1]-tG) <= TOL &&
            Math.abs(data[i+2]-tB) <= TOL &&
-           Math.abs(data[i+3]-tA) <= TOL;
+           data[i+3] > 3;  // solo píxeles con algo de contenido
   }
 
-  // Span Fill para encontrar zona contigua
+  // Span Fill para zona contigua (igual que flood fill)
   const inZone = new Uint8Array(fw * fh);
   const stack2 = [];
   stack2.push({y:ly, left:lx, right:lx, dy:1});
   stack2.push({y:ly, left:lx, right:lx, dy:-1});
   inZone[ly*fw+lx] = 1;
-
   while(stack2.length){
     const {y, left, right, dy} = stack2.pop();
     const ny2 = y + dy;
@@ -1812,18 +1809,46 @@ function edColorErase(nx, ny){
     }
   }
 
-  // Aplicar Color Erase a la zona contigua
-  // Para cada pixel: cuanto más parecido al color objetivo, más se elimina
-  const maxDist = Math.sqrt(3) * 255;  // distancia euclidiana máxima RGB
+  // Algoritmo "Color to Alpha" de Krita/GIMP (Kevin Cozens):
+  // Calcula exactamente cuánto del color objetivo contribuye a cada píxel
+  // y lo elimina sin dejar contorno residual.
+  // 
+  // Para cada canal C: si pix.C > target.C → alphaC = (pix.C - target.C) / (255 - target.C)
+  //                    si pix.C < target.C → alphaC = (target.C - pix.C) / target.C
+  //                    si pix.C = target.C → alphaC = 0
+  // new_alpha = max(alphaR, alphaG, alphaB)  ← contribución total del color objetivo
+  // Luego descomponer: pix = target*(1-new_alpha) + result*new_alpha → despejar result
+  // new_A = original_alpha * new_alpha * strength  (strength = opacidad del usuario)
+
   for(let i=0; i<fw*fh; i++){
     if(!inZone[i]) continue;
     const pi = i*4;
     const r=data[pi], g=data[pi+1], b=data[pi+2], a=data[pi+3];
     if(a < 1) continue;
-    const dist = Math.sqrt((r-tR)**2 + (g-tG)**2 + (b-tB)**2);
-    const similarity = 1 - dist/maxDist;  // 1=idéntico, 0=muy distinto
-    const reduction = similarity * strength;
-    data[pi+3] = Math.round(a * (1 - reduction));
+
+    // Calcular alpha por canal (cuánto del target hay en este pixel)
+    let aR=0, aG=0, aB=0;
+    if(r > tR && tR < 255) aR = (r - tR) / (255 - tR);
+    else if(r < tR && tR > 0)   aR = (tR - r) / tR;
+    if(g > tG && tG < 255) aG = (g - tG) / (255 - tG);
+    else if(g < tG && tG > 0)   aG = (tG - g) / tG;
+    if(b > tB && tB < 255) aB = (b - tB) / (255 - tB);
+    else if(b < tB && tB > 0)   aB = (tB - b) / tB;
+
+    // El nuevo alpha es la máxima contribución del color objetivo
+    let newAlpha = Math.max(aR, aG, aB);
+    if(newAlpha < 0.001){ data[pi+3]=0; continue; }  // prácticamente idéntico → borrar
+
+    // Aplicar strength del usuario (opacidad del slider)
+    newAlpha = Math.min(1, newAlpha * strength);
+
+    // Descomponer el pixel para obtener el color "real" subyacente
+    // pixel = target*(1-newAlpha) + result*newAlpha  →  result = (pixel - target*(1-newAlpha)) / newAlpha
+    const inv = 1 - newAlpha;
+    data[pi  ] = Math.max(0, Math.min(255, Math.round((r - tR*inv) / newAlpha)));
+    data[pi+1] = Math.max(0, Math.min(255, Math.round((g - tG*inv) / newAlpha)));
+    data[pi+2] = Math.max(0, Math.min(255, Math.round((b - tB*inv) / newAlpha)));
+    data[pi+3] = Math.round(a * newAlpha);
   }
 
   ctx.putImageData(imageData, x0, y0);
