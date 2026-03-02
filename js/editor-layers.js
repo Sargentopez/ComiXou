@@ -83,7 +83,7 @@ function _lyRender() {
   const page     = edPages[edCurrentPage];
   if(!page.textMode) page.textMode = 'immediate'; // fallback para proyectos antiguos
   const isSeq    = page.textMode === 'sequential';
-  const imgPairs = edLayers.map((l,i) => ({l,i})).filter(({l}) => l.type==='image');
+  const imgPairs = edLayers.map((l,i) => ({l,i})).filter(({l}) => l.type==='image'); // mantenido por compatibilidad
   const textObjs = edLayers.filter(l => l.type==='text' || l.type==='bubble');
 
   /* ══ SECCIÓN TEXTOS ══ */
@@ -141,61 +141,15 @@ function _lyRender() {
     });
   }
 
-  /* ══ SEPARADOR + DIBUJOS (sin título de sección) ══ */
-  const strokePairs = edLayers.map((l,i)=>({l,i})).filter(({l})=>l.type==='stroke'||l.type==='draw');
-  if(strokePairs.length > 0){
-    const sep = document.createElement('div');
-    sep.className = 'ed-layer-sep';
-    list.appendChild(sep);
-  }
-  if(strokePairs.length > 0){
-    strokePairs.forEach(({l,i}) => {
-      const row = document.createElement('div');
-      row.className = 'ed-layer-text-row' + (i === edSelectedIdx ? ' selected' : '');
-      // Miniatura del trazo
-      const thumb = document.createElement('canvas');
-      thumb.className = 'ed-layer-thumb-sm';
-      thumb.width = 56; thumb.height = 42;
-      if(l.type === 'stroke' && l._canvas){
-        thumb.getContext('2d').drawImage(l._canvas, 0, 0, l._canvas.width, l._canvas.height, 0, 0, 56, 42);
-      } else {
-        const tc = thumb.getContext('2d');
-        tc.fillStyle = '#e63030'; tc.fillText('✏️', 20, 28);
-      }
-      thumb.addEventListener('pointerup', () => {
-        edSelectedIdx = i; edRedraw(); edCloseLayers();
-      });
-      row.appendChild(thumb);
-      const lbl = document.createElement('span');
-      lbl.className = 'ed-layer-name';
-      lbl.textContent = l.type === 'draw' ? '✏️ Dibujando…' : '✏️ Dibujo';
-      row.appendChild(lbl);
-      // Botón borrar
-      const delBtn = document.createElement('button');
-      delBtn.className = 'ed-ly-act-btn danger';
-      delBtn.textContent = '✕';
-      delBtn.title = 'Eliminar dibujo';
-      delBtn.addEventListener('pointerup', e => {
-        e.stopPropagation();
-        edLayers.splice(i, 1);
-        if(edSelectedIdx === i) edSelectedIdx = -1;
-        else if(edSelectedIdx > i) edSelectedIdx--;
-        edPushHistory(); edRedraw(); _lyRender();
-      });
-      row.appendChild(delBtn);
-      list.appendChild(row);
-    });
-  }
-
-  /* ══ SEPARADOR 2 ══ */
+  /* ══ SEPARADOR ══ */
   const sep2 = document.createElement('div');
   sep2.className = 'ed-layer-sep';
   list.appendChild(sep2);
 
-  /* ══ SECCIÓN IMÁGENES ══ */
+  /* ══ SECCIÓN IMÁGENES Y DIBUJOS (combinada) ══ */
   const iTitle = document.createElement('div');
   iTitle.className = 'ed-ly-section-title';
-  iTitle.textContent = 'Imágenes';
+  iTitle.textContent = 'Imágenes y dibujos';
   list.appendChild(iTitle);
 
   const imgHint = document.createElement('div');
@@ -203,14 +157,19 @@ function _lyRender() {
   imgHint.textContent = 'Arrastra para ordenar visualización';
   list.appendChild(imgHint);
 
-  if (imgPairs.length === 0) {
+  // Combinar imágenes y dibujos (stroke/draw) en una sola lista
+  const visualPairs = edLayers
+    .map((l,i)=>({l,i}))
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw');
+
+  if (visualPairs.length === 0) {
     const e = document.createElement('p');
     e.className = 'ed-layer-sub-empty';
-    e.textContent = 'Sin imágenes';
+    e.textContent = 'Sin imágenes ni dibujos';
     list.appendChild(e);
   } else {
-    [...imgPairs].reverse().forEach(({l, i}) => {
-      list.appendChild(_lyBuildImgItem(l, i, i === edSelectedIdx));
+    [...visualPairs].reverse().forEach(({l, i}) => {
+      list.appendChild(_lyBuildVisualItem(l, i, i === edSelectedIdx));
     });
   }
 }
@@ -312,6 +271,135 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
 /* ──────────────────────────────────────────
    ITEM DE IMAGEN — drag desde miniatura
 ────────────────────────────────────────── */
+/* ──────────────────────────────────────────
+   ELEMENTO VISUAL (imagen O dibujo) — sección combinada
+────────────────────────────────────────── */
+function _lyBuildVisualItem(la, realIdx, selected) {
+  const isDrawType = la.type === 'stroke' || la.type === 'draw';
+  const item = document.createElement('div');
+  item.className = 'ed-layer-item' + (selected ? ' selected' : '');
+  item.dataset.realIdx = realIdx;
+  if (!la._uid) la._uid = ++_lyUidCounter;
+  item.dataset.uid = la._uid;
+
+  /* Miniatura */
+  const thumb = document.createElement('canvas');
+  thumb.className = 'ed-layer-thumb drag-handle';
+  thumb.width = 80; thumb.height = 60;
+  if (isDrawType) {
+    _lyDrawStrokeThumb(thumb, la);
+  } else {
+    _lyDrawThumb(thumb, la);
+  }
+  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
+  thumb.addEventListener('pointerup', () => {
+    if (!item.classList.contains('was-dragged')) {
+      edSelectedIdx = realIdx;
+      edRedraw();
+      edCloseLayers();
+    }
+    item.classList.remove('was-dragged');
+  });
+  item.appendChild(thumb);
+
+  /* Info */
+  const info = document.createElement('div');
+  info.className = 'ed-layer-info';
+  const name = document.createElement('span');
+  name.className = 'ed-layer-name';
+  if (isDrawType) {
+    name.textContent = la.type === 'draw' ? '✏️ Dibujando…' : '✏️ Dibujo';
+  } else {
+    name.textContent = 'Imagen ' + (realIdx + 1);
+  }
+  info.appendChild(name);
+  item.appendChild(info);
+
+  /* Flechas subir/bajar — dentro de los elementos visuales */
+  const visualAll = edLayers.map((l,i)=>({l,i}))
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw');
+  const posInList = visualAll.findIndex(({i})=>i===realIdx);
+
+  const upBtn = document.createElement('button');
+  upBtn.className = 'ed-layer-arrow';
+  upBtn.title = 'Subir nivel';
+  upBtn.textContent = '▲';
+  upBtn.disabled = posInList >= visualAll.length - 1;
+  upBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const next = visualAll[posInList + 1];
+    if (next) _lyReorderLayers(realIdx, next.i + 1);
+  });
+
+  const dnBtn = document.createElement('button');
+  dnBtn.className = 'ed-layer-arrow';
+  dnBtn.title = 'Bajar nivel';
+  dnBtn.textContent = '▼';
+  dnBtn.disabled = posInList <= 0;
+  dnBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const prev = visualAll[posInList - 1];
+    if (prev) _lyReorderLayers(realIdx, prev.i);
+  });
+
+  /* Eliminar */
+  const del = document.createElement('button');
+  del.className = 'ed-layer-del';
+  del.title = 'Eliminar';
+  del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
+  del.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    if(!confirm('¿Eliminar esta capa?')) return;
+    edLayers.splice(realIdx, 1);
+    if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
+    edPushHistory(); edRedraw(); _lyRender();
+  });
+
+  const acts = document.createElement('div');
+  acts.className = 'ed-layer-actions';
+  acts.appendChild(upBtn);
+  acts.appendChild(dnBtn);
+  acts.appendChild(del);
+  item.appendChild(acts);
+
+  /* Drag solo para imágenes (stroke/draw se reordenan con flechas) */
+  if (!isDrawType) _lyBindImgDrag(item, thumb, realIdx);
+  return item;
+}
+
+function _lyDrawStrokeThumb(canvas, la) {
+  const ctx = canvas.getContext('2d');
+  const tw = canvas.width, th = canvas.height;
+  ctx.fillStyle = '#f5f5f5';
+  ctx.fillRect(0, 0, tw, th);
+  if (la.type === 'stroke' && la._canvas && la._canvas.width > 0) {
+    // Dibujar el canvas del stroke escalado al thumb, con posición relativa
+    const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
+    const lw = la.width * pw, lh = la.height * ph;
+    const cx = la.x * pw, cy = la.y * ph;
+    // Escalar todo al thumb
+    const sx = tw / pw, sy = th / ph;
+    ctx.save();
+    ctx.drawImage(la._canvas,
+      0, 0, la._canvas.width, la._canvas.height,
+      (cx - lw/2) * sx, (cy - lh/2) * sy,
+      lw * sx, lh * sy);
+    ctx.restore();
+  } else if (la.type === 'draw' && la._canvas) {
+    // DrawLayer ocupa todo el workspace
+    const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
+    ctx.drawImage(la._canvas,
+      edMarginX ? edMarginX() : 0, edMarginY ? edMarginY() : 0,
+      pw, ph,
+      0, 0, tw, th);
+  } else {
+    ctx.fillStyle = '#ddd';
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('✏️', tw/2, th/2);
+  }
+}
+
 function _lyBuildImgItem(la, realIdx, selected) {
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
@@ -595,6 +683,17 @@ function _lyReorderTexts(fromRealIdx, toRealIdx) {
     const adjustedTo = fromRealIdx < toRealIdx ? toRealIdx : toRealIdx;
     edLayers.splice(adjustedTo, 0, moved);
     if (edSelectedIdx === fromRealIdx) edSelectedIdx = adjustedTo;
+    edPushHistory(); edRedraw();
+  });
+}
+
+function _lyReorderLayers(fromRealIdx, toRealIdx) {
+  const _moved = edLayers[fromRealIdx];
+  _lyAnimatedReorder(_moved, () => {
+    const moved = edLayers.splice(fromRealIdx, 1)[0];
+    const to = fromRealIdx < toRealIdx ? toRealIdx - 1 : toRealIdx;
+    edLayers.splice(to, 0, moved);
+    if (edSelectedIdx === fromRealIdx) edSelectedIdx = to;
     edPushHistory(); edRedraw();
   });
 }

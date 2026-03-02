@@ -981,15 +981,71 @@ function edUpdateNavPages(){
   wrap.innerHTML='';
   edPages.forEach((p,i)=>{
     const btn=document.createElement('button');
-    btn.className='op-btn'+(i===edCurrentPage?' active':'');
-    btn.textContent=i+1;
-    btn.style.cssText='padding:5px 10px;min-width:32px;justify-content:center';
+    btn.className='op-btn ed-nav-page-btn'+(i===edCurrentPage?' active':'');
+    btn.title='Hoja '+(i+1);
+    btn.style.cssText='padding:3px;min-width:48px;flex-direction:column;align-items:center;gap:2px;justify-content:center';
+
+    // Canvas miniatura
+    const thumb=document.createElement('canvas');
+    const isV=(p.orientation||edOrientation)==='vertical';
+    thumb.width=44; thumb.height=isV?60:44;
+    thumb.style.cssText='display:block;border:1px solid #ccc;border-radius:3px;background:#fff;max-width:44px';
+    _edRenderPageThumb(thumb, p, i);
+    btn.appendChild(thumb);
+
+    // Número de página
+    const lbl=document.createElement('span');
+    lbl.textContent=i+1;
+    lbl.style.cssText='font-size:10px;font-weight:700;line-height:1';
+    btn.appendChild(lbl);
+
     btn.addEventListener('click',()=>{edLoadPage(i);edCloseMenus();});
     wrap.appendChild(btn);
   });
   // Marcar orientación activa
   $('dd-orientv')?.classList.toggle('active',edOrientation==='vertical');
   $('dd-orienth')?.classList.toggle('active',edOrientation==='horizontal');
+}
+
+function _edRenderPageThumb(canvas, page, pageIdx){
+  const ctx=canvas.getContext('2d');
+  const tw=canvas.width, th=canvas.height;
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(0,0,tw,th);
+  if(!page||!page.layers) return;
+  const isV=(page.orientation||edOrientation)==='vertical';
+  const pw=isV?ED_PAGE_W:ED_PAGE_H, ph=isV?ED_PAGE_H:ED_PAGE_W;
+  const sx=tw/pw, sy=th/ph;
+
+  // Renderizar capas en orden visual: imágenes → stroke/draw → texto
+  const order=['image','stroke','draw','text','bubble'];
+  order.forEach(type=>{
+    page.layers.filter(l=>l.type===type).forEach(la=>{
+      ctx.save();
+      ctx.globalAlpha=la.opacity??1;
+      const cx=la.x*tw, cy=la.y*th;
+      const lw=la.width*tw, lh=la.height*th;
+      const rot=(la.rotation||0)*Math.PI/180;
+      ctx.translate(cx,cy);
+      if(rot) ctx.rotate(rot);
+      if(type==='image' && la.img && la.img.complete && la.img.naturalWidth>0){
+        ctx.drawImage(la.img,-lw/2,-lh/2,lw,lh);
+      } else if(type==='stroke' && la._canvas){
+        // StrokeLayer: dibujar su canvas en su posición/tamaño
+        ctx.drawImage(la._canvas,-lw/2,-lh/2,lw,lh);
+      } else if(type==='draw' && la._canvas){
+        // DrawLayer: ocupa todo el workspace; escalar al thumb
+        ctx.restore();
+        ctx.save();
+        ctx.scale(sx,sy);
+        ctx.drawImage(la._canvas,0,0);
+      } else if(type==='text'||type==='bubble'){
+        ctx.fillStyle=la.backgroundColor||'rgba(255,255,255,0.85)';
+        ctx.fillRect(-lw/2,-lh/2,lw,lh);
+      }
+      ctx.restore();
+    });
+  });
 }
 
 /* ══════════════════════════════════════════
@@ -1369,17 +1425,11 @@ function edOnStart(e){
       }
     }
   }
-  // Seleccionar según orden visual real de renderizado (el más encima primero):
-  // texto/bocadillo → stroke → draw → imagen
-  // Dentro de cada grupo, el último en el array tiene prioridad (más reciente)
+  // Seleccionar: mayor índice = último añadido = más arriba en la pila de capas
+  // Sin prioridades por tipo — cada objeto se selecciona si se toca su área
   const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   let found=-1;
-  const _selOrder = ['text','bubble','stroke','draw','image'];
-  outer: for(const _type of _selOrder){
-    for(let i=edLayers.length-1;i>=0;i--){
-      if(edLayers[i].type===_type && edLayers[i].contains(c.nx,c.ny)){found=i;break outer;}
-    }
-  }
+  for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
   if(found>=0){
     edSelectedIdx = found;
     edDragOffX = c.nx - edLayers[found].x;
@@ -3103,8 +3153,14 @@ function EditorView_init(){
   }
 
   // ── MINIMIZAR ──
-  $('edUndoBtn')?.addEventListener('click', edUndo);
-  $('edRedoBtn')?.addEventListener('click', edRedo);
+  $('edUndoBtn')?.addEventListener('click', () => {
+    if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
+    else edUndo();
+  });
+  $('edRedoBtn')?.addEventListener('click', () => {
+    if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
+    else edRedo();
+  });
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
   edPushHistory();
   edInitFloatDrag();
