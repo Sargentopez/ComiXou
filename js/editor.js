@@ -19,7 +19,7 @@ let edActiveTool = 'select';  // select | draw | eraser
 let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
-let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20;
+let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
 let edFloatX = 16, edFloatY = 200; // posición del botón flotante
@@ -435,18 +435,22 @@ class DrawLayer extends BaseLayer {
       y: edMarginY() + ny * edPageH()
     };
   }
-  beginStroke(nx, ny, color, size, isEraser){
+  beginStroke(nx, ny, color, size, isEraser, opacity){
     const {x,y} = this._wsCoords(nx, ny);
+    const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
+    this._ctx.globalAlpha = alpha;
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.fillStyle='rgba(0,0,0,1)'; }
     else { this._ctx.globalCompositeOperation='source-over'; this._ctx.fillStyle=color; }
     this._ctx.beginPath(); this._ctx.arc(x,y,size/2,0,Math.PI*2); this._ctx.fill();
     this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
     this._lastX=x; this._lastY=y;
   }
-  continueStroke(nx, ny, color, size, isEraser){
+  continueStroke(nx, ny, color, size, isEraser, opacity){
     const {x,y} = this._wsCoords(nx, ny);
+    const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
+    this._ctx.globalAlpha = alpha;
     this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
     else { this._ctx.globalCompositeOperation='source-over'; this._ctx.strokeStyle=color; }
@@ -706,17 +710,28 @@ function edFitCanvas(resetCamera){
   const newW = Math.round(availW);
   const newH = Math.round(availH);
 
-  // Solo redimensionar si cambió el tamaño — asignar canvas.width SIEMPRE
-  // resetea el contexto 2D aunque sea el mismo valor, borrando el contenido
+  // Detectar cambio de VENTANA (no de panel de opciones)
+  // _edWinW/_edWinH solo cambian con resize de ventana real
+  const _winChanged = (window.innerWidth  !== (window._edWinW||0)) ||
+                      (window.innerHeight !== (window._edWinH||0));
+  if(_winChanged){
+    window._edWinW = window.innerWidth;
+    window._edWinH = window.innerHeight;
+    if(!resetCamera) resetCamera = true;  // ventana cambió → centrar lienzo
+  }
+
+  // Redimensionar canvas si es necesario (sin resetear cámara por cambio de panel)
   const _prevW = edCanvas.width, _prevH = edCanvas.height;
   const _sizeChanged = _prevW !== newW || _prevH !== newH;
   if(_sizeChanged){
     edCanvas.width  = newW;
     edCanvas.height = newH;
-    // Solo resetear cámara si el cambio de tamaño es notable (>30px)
-    // Cambios pequeños son por el panel de opciones abriendo/cerrando
-    if(Math.abs(_prevW - newW) > 30 || Math.abs(_prevH - newH) > 30)
-      resetCamera = true;
+    // Ajustar posición de cámara para compensar el cambio de altura del panel
+    // (sin resetear zoom — solo desplazar para que el lienzo no salte)
+    if(!resetCamera){
+      const dH = newH - _prevH;
+      edCamera.y += dH / 2;  // mantener el lienzo centrado verticalmente
+    }
   }
   edCanvas.style.width  = newW + 'px';
   edCanvas.style.height = newH + 'px';
@@ -1579,108 +1594,110 @@ function _edGetOrCreateDrawLayer(){
    FLOOD FILL (Scanline algorithm)
    ══════════════════════════════════════════ */
 function edFloodFill(nx, ny){
-  // nx, ny: coordenadas normalizadas de página (pueden ser <0 o >1 si fuera del lienzo)
   const page = edPages[edCurrentPage]; if(!page) return;
-  const dl = _edGetOrCreateDrawLayer();  // crea DrawLayer si no existe
-
-  const canvas = dl._canvas;
-  const ctx    = dl._ctx;
+  const dl = _edGetOrCreateDrawLayer();
+  const canvas = dl._canvas, ctx = dl._ctx;
   const W = canvas.width, H = canvas.height;
 
-  // Coordenadas absolutas en el workspace (px enteros)
+  // Coordenadas absolutas en workspace
   const wx = Math.round(edMarginX() + nx * edPageW());
   const wy = Math.round(edMarginY() + ny * edPageH());
-
-  // Asegurar que el punto está dentro del workspace
   if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
 
-  // Definir límites del área rellenable
-  // Si el click está dentro de la página → limitamos a la página
-  // Si está fuera → limitamos al workspace completo
+  // Límites: dentro de página → área de página; fuera → workspace
   const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
   const pw = Math.round(edPageW()),   ph = Math.round(edPageH());
-  let fillLeft, fillRight, fillTop, fillBottom;
   const insidePage = wx >= mx && wx < mx+pw && wy >= my && wy < my+ph;
-  if(insidePage){
-    fillLeft = mx; fillRight = mx+pw-1;
-    fillTop  = my; fillBottom= my+ph-1;
-  } else {
-    fillLeft = 0; fillRight = W-1;
-    fillTop  = 0; fillBottom= H-1;
-  }
+  const x0 = insidePage ? mx : 0,      y0 = insidePage ? my : 0;
+  const x1 = insidePage ? mx+pw-1 : W-1, y1 = insidePage ? my+ph-1 : H-1;
 
-  // Leer todos los píxeles del área de trabajo
-  const imageData = ctx.getImageData(fillLeft, fillTop,
-    fillRight-fillLeft+1, fillBottom-fillTop+1);
+  const fw = x1-x0+1, fh = y1-y0+1;
+  const imageData = ctx.getImageData(x0, y0, fw, fh);
   const data = imageData.data;
-  const fw   = fillRight-fillLeft+1;
-  const fh   = fillBottom-fillTop+1;
 
-  // Color objetivo (en coords locales del imageData)
-  const lx = wx - fillLeft, ly = wy - fillTop;
-  const startIdx = (ly * fw + lx) * 4;
-  const tR = data[startIdx], tG = data[startIdx+1],
-        tB = data[startIdx+2], tA = data[startIdx+3];
+  // Coordenadas locales del punto de inicio
+  const lx = wx-x0, ly = wy-y0;
+  const si0 = (ly*fw+lx)*4;
+  const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
 
-  // Color de relleno desde edDrawColor (#rrggbb)
+  // Color de relleno con transparencia
   const fc = edDrawColor;
   const fR = parseInt(fc.slice(1,3),16),
         fG = parseInt(fc.slice(3,5),16),
         fB = parseInt(fc.slice(5,7),16),
-        fA = 255;
+        fA = Math.round((edDrawOpacity/100) * 255);
 
-  // Si el color objetivo es idéntico al de relleno → nada que hacer
+  // No rellenar si el color de inicio ya es idéntico al de relleno
   if(tR===fR && tG===fG && tB===fB && tA===fA) return;
 
-  // Tolerancia para manejar antialiasing en los bordes de los trazos
-  const TOL = 20;
-  function similar(idx){
-    return Math.abs(data[idx]-tR)   <= TOL &&
-           Math.abs(data[idx+1]-tG) <= TOL &&
-           Math.abs(data[idx+2]-tB) <= TOL &&
-           Math.abs(data[idx+3]-tA) <= TOL;
-  }
-  function setPixel(idx){
-    data[idx]=fR; data[idx+1]=fG; data[idx+2]=fB; data[idx+3]=fA;
+  // Tolerancia para antialiasing de bordes (valor bajo = bordes nítidos)
+  const TOL = 15;
+  function match(i){
+    return Math.abs(data[i  ]-tR) <= TOL &&
+           Math.abs(data[i+1]-tG) <= TOL &&
+           Math.abs(data[i+2]-tB) <= TOL &&
+           Math.abs(data[i+3]-tA) <= TOL;
   }
 
-  // Algoritmo Scanline Fill (cola de segmentos horizontales)
-  // Evita stack overflow de la recursión y es más eficiente que BFS píxel a píxel
-  const visited = new Uint8Array(fw * fh);
-  const queue   = [[lx, ly]];
+  // Algoritmo Span Fill correcto (Wikipedia "Flood fill" — span filling variant)
+  // La cola almacena [x, y, dirección] donde dirección es 1=abajo, -1=arriba
+  // Esto garantiza exploración completa sin huecos
+  const filled = new Uint8Array(fw * fh);
 
-  while(queue.length){
-    let [x, y] = queue.pop();
-    if(y < 0 || y >= fh) continue;
-
-    // Buscar límite izquierdo del segmento en esta fila
-    let left = x;
-    while(left > 0 && !visited[y*fw+(left-1)] && similar((y*fw+(left-1))*4)) left--;
-
-    // Buscar límite derecho
-    let right = x;
-    while(right < fw-1 && !visited[y*fw+(right+1)] && similar((y*fw+(right+1))*4)) right++;
-
-    // Rellenar el segmento
-    let scanAbove = false, scanBelow = false;
-    for(let sx=left; sx<=right; sx++){
-      const si = y*fw+sx;
-      if(!visited[si] && similar(si*4)){
-        visited[si] = 1;
-        setPixel(si*4);
-        // Añadir filas adyacentes a la cola si no han sido visitadas
-        if(y > 0    && !visited[(y-1)*fw+sx]) { if(!scanAbove){ queue.push([sx, y-1]); scanAbove=true; } }
-        else scanAbove = false;
-        if(y < fh-1 && !visited[(y+1)*fw+sx]) { if(!scanBelow){ queue.push([sx, y+1]); scanBelow=true; } }
-        else scanBelow = false;
-      } else {
-        scanAbove = false; scanBelow = false;
-      }
+  function fillRow(y, lft, rgt){
+    for(let x=lft; x<=rgt; x++){
+      const i = y*fw+x;
+      filled[i] = 1;
+      const pi = i*4;
+      data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
     }
   }
 
-  // Aplicar resultado
-  ctx.putImageData(imageData, fillLeft, fillTop);
+  // Cola de spans: {y, left, right, dy}
+  // dy = dirección desde la que vino el span (para evitar re-escanear)
+  const stack = [];
+  stack.push({y:ly, left:lx, right:lx, dy:1});
+  stack.push({y:ly, left:lx, right:lx, dy:-1});
+
+  // Marcar píxel inicial
+  filled[ly*fw+lx] = 1;
+
+  while(stack.length){
+    let {y, left, right, dy} = stack.pop();
+    const ny = y + dy;
+    if(ny < 0 || ny >= fh) continue;
+
+    // Expandir horizontalmente en la fila ny buscando píxeles conectados
+    let x = left;
+    // Ir a la izquierda desde left
+    while(x > 0 && !filled[ny*fw+(x-1)] && match((ny*fw+(x-1))*4)) x--;
+    // Ir a la derecha desde right
+    let rx = right;
+    while(rx < fw-1 && !filled[ny*fw+(rx+1)] && match((ny*fw+(rx+1))*4)) rx++;
+
+    // Rellenar el segmento encontrado en ny
+    let segStart = -1;
+    for(let sx=x; sx<=rx; sx++){
+      const idx = ny*fw+sx;
+      if(!filled[idx] && match(idx*4)){
+        if(segStart === -1) segStart = sx;
+        filled[idx] = 1;
+        const pi = idx*4;
+        data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
+      } else if(segStart !== -1){
+        // Propagar en la misma dirección dy y en la opuesta
+        stack.push({y:ny, left:segStart, right:sx-1, dy:dy});
+        stack.push({y:ny, left:segStart, right:sx-1, dy:-dy});
+        segStart = -1;
+      }
+    }
+    if(segStart !== -1){
+      stack.push({y:ny, left:segStart, right:rx, dy:dy});
+      stack.push({y:ny, left:segStart, right:rx, dy:-dy});
+    }
+  }
+
+  ctx.putImageData(imageData, x0, y0);
   _edDrawPushHistory();
   edRedraw();
 }
@@ -1692,7 +1709,7 @@ function edStartPaint(e){
   }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const c = edCoords(e), er = edActiveTool==='eraser';
-  dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er);
+  dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
   edRedraw();
   edMoveBrush(e);
 }
@@ -1701,7 +1718,7 @@ function edContinuePaint(e){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
   const c = edCoords(e), er = edActiveTool==='eraser';
-  dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er);
+  dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
   edRedraw();
   edMoveBrush(e);
 }
@@ -1870,7 +1887,15 @@ function edRenderOptionsPanel(mode){
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
         style="flex:1;min-width:40px;accent-color:var(--black)">
-    </div>` : ''}
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
+    <button id="op-opacity-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Opacidad</button>
+    <div id="op-opacity-slider"
+      style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
+        style="flex:1;min-width:40px;accent-color:var(--black)">
+    </div>
   </div>
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -1885,7 +1910,7 @@ function edRenderOptionsPanel(mode){
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <span id="op-draw-info"
-      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px'}</span>
+      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize+'px':edDrawSize+'px')+' · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
       style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -1921,19 +1946,41 @@ function edRenderOptionsPanel(mode){
 
     // ── Grosor: botón toggle abre/cierra slider ──
     $('op-size-btn')?.addEventListener('click',()=>{
-      const sl=$('op-size-slider');
+      const sl=$('op-size-slider'), slO=$('op-opacity-slider');
       if(!sl) return;
       const open = sl.style.display === 'none' || sl.style.display === '';
       sl.style.display = open ? 'flex' : 'none';
+      if(open && slO) slO.style.display='none';  // cerrar el otro si estaba abierto
       const btn=$('op-size-btn');
       if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
+      const btnO=$('op-opacity-btn');
+      if(btnO) btnO.style.background = 'transparent';
     });
     $('op-dsize')?.addEventListener('input',e=>{
       const v=+e.target.value;
       if(edActiveTool==='eraser') edEraserSize=v;
       else edDrawSize=v;
       const info=$('op-draw-info');
-      if(info) info.textContent=v+'px';
+      if(info) info.textContent=v+'px · '+edDrawOpacity+'%';
+    });
+    $('op-opacity-btn')?.addEventListener('click',()=>{
+      const slO=$('op-opacity-slider'), sl=$('op-size-slider');
+      if(!slO) return;
+      const open = slO.style.display === 'none' || slO.style.display === '';
+      slO.style.display = open ? 'flex' : 'none';
+      if(open && sl) sl.style.display='none';
+      const btn=$('op-opacity-btn');
+      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
+      const btnS=$('op-size-btn');
+      if(btnS) btnS.style.background = 'transparent';
+    });
+    $('op-dopacity')?.addEventListener('input',e=>{
+      edDrawOpacity = +e.target.value;
+      const info=$('op-draw-info');
+      if(info){
+        const sz = edActiveTool==='eraser'?edEraserSize:edDrawSize;
+        info.textContent = isFill ? 'Color '+edDrawColor : sz+'px · '+edDrawOpacity+'%';
+      }
     });
 
     // ── Deshacer / Rehacer ──
