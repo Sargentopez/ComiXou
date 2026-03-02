@@ -1034,11 +1034,11 @@ function _edRenderPageThumb(canvas, page, pageIdx){
         // StrokeLayer: dibujar su canvas en su posición/tamaño
         ctx.drawImage(la._canvas,-lw/2,-lh/2,lw,lh);
       } else if(type==='draw' && la._canvas){
-        // DrawLayer: ocupa todo el workspace; escalar al thumb
+        // DrawLayer: recortar solo la zona de página del workspace
         ctx.restore();
         ctx.save();
-        ctx.scale(sx,sy);
-        ctx.drawImage(la._canvas,0,0);
+        const _mx=(ED_CANVAS_W-pw)/2, _my=(ED_CANVAS_H-ph)/2;
+        ctx.drawImage(la._canvas, _mx, _my, pw, ph, 0, 0, tw, th);
       } else if(type==='text'||type==='bubble'){
         ctx.fillStyle=la.backgroundColor||'rgba(255,255,255,0.85)';
         ctx.fillRect(-lw/2,-lh/2,lw,lh);
@@ -2747,7 +2747,8 @@ function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 function edOpenViewer(){
   edHideGearIcon();  // ocultar gear al abrir visor
   edViewerIdx=0;  // siempre empieza por la primera hoja
-  edViewerTextStep=0;
+  { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
   // Garantizar que TODAS las hojas tienen orientation antes de abrir
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
   $('editorViewer')?.classList.add('open');
@@ -2794,7 +2795,10 @@ function _edViewerKey(e){
     if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
       edViewerTextStep++; edUpdateViewer();
     } else if(edViewerIdx < edPages.length-1){
-      edViewerIdx++; edViewerTextStep=0; edUpdateViewer();
+      edViewerIdx++;
+      { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+        edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+      edUpdateViewer();
     }
   } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
     e.preventDefault();
@@ -2823,6 +2827,22 @@ function edShowViewerCtrls(){
   clearTimeout(_viewerHideTimer);
   _viewerHideTimer = setTimeout(()=>ctrls.classList.add('hidden'), 3500);
 }
+function _vStartBubbleFade(){
+  // Fade-out del bocadillo que acaba de quedar atrás (solo bubble, no text)
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
+  _vPrevBubbleFade = 1.0;
+  const duration = 400;
+  const start = performance.now();
+  function step(now){
+    const t = Math.min(1, (now - start) / duration);
+    _vPrevBubbleFade = 1 - t;
+    edUpdateViewer();
+    if(t < 1) _vFadeRaf = requestAnimationFrame(step);
+    else { _vFadeRaf=null; _vPrevBubbleFade=0; edUpdateViewer(); }
+  }
+  _vFadeRaf = requestAnimationFrame(step);
+}
+
 function edInitViewerTap(){
   const viewer = $('editorViewer');
   if(!viewer) return;
@@ -2852,9 +2872,13 @@ function edInitViewerTap(){
       if(dx < 0){
         // Swipe izquierda → siguiente
         if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+          _vStartBubbleFade();
           edViewerTextStep++; edUpdateViewer();
         } else if(edViewerIdx < edPages.length-1){
-          edViewerIdx++; edViewerTextStep=0; edUpdateViewer();
+          edViewerIdx++;
+          { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+            edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+          edUpdateViewer();
         }
       } else {
         // Swipe derecha → anterior
@@ -2872,6 +2896,8 @@ function edInitViewerTap(){
   }
 }
 function edCloseViewer(){
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
+  _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
   clearTimeout(_viewerHideTimer);
   _viewerTapBound = false; // permitir re-bind en próxima apertura
@@ -2928,8 +2954,30 @@ function edUpdateViewer(){
 function _edViewerDrawTextsOnCtx(page, ctx, can){
   const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
   const isSeq = page.textMode === 'sequential';
-  const toShow = isSeq ? textLayers.slice(0, edViewerTextStep) : textLayers;
-  toShow.forEach(l=>l.draw(ctx, can));
+  if(!isSeq){ textLayers.forEach(l=>l.draw(ctx, can)); return; }
+
+  // Modo secuencial:
+  // - Cajas de texto (type='text'): visibles al 100% cuando reveladas, permanecen
+  // - Bocadillos (type='bubble'): el actual al 100%, el anterior con fade-out 1→0
+  const toShow = textLayers.slice(0, edViewerTextStep);
+  toShow.forEach((l, vi) => {
+    if(l.type === 'text'){
+      l.draw(ctx, can);  // cajas siempre al 100%
+    } else {
+      // Bocadillo: solo el actual y el penúltimo (en fade)
+      const isCurrent  = vi === toShow.length - 1;
+      const isPrevious = vi === toShow.length - 2;
+      if(isCurrent){
+        l.draw(ctx, can);
+      } else if(isPrevious && _vPrevBubbleFade > 0){
+        ctx.save();
+        ctx.globalAlpha = _vPrevBubbleFade;
+        l.draw(ctx, can);
+        ctx.restore();
+      }
+      // Bocadillos más antiguos: ya desaparecieron
+    }
+  });
 }
 
 /* ══════════════════════════════════════════
@@ -3194,7 +3242,10 @@ function EditorView_init(){
       edViewerTextStep++; edUpdateViewer(); return;
     }
     if(edViewerIdx<edPages.length-1){
-      edViewerIdx++; edViewerTextStep=0; edUpdateViewer();
+      edViewerIdx++;
+      { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+        edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+      edUpdateViewer();
     }
   });
 
