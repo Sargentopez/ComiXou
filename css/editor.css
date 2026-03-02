@@ -360,6 +360,167 @@ body.editor-page #appView {
 }
 .op-sep { width: 1px; height: 22px; background: var(--gray-300); margin: 0 2px; }
 
+/* ═══════════════════════════════════════
+   PANEL DE HERRAMIENTAS DE DIBUJO (3 filas)
+   ═══════════════════════════════════════ */
+.dp-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+}
+
+/* Fila 1: herramientas (Dibujar | Borrar | Rellenar) */
+.dp-row1 {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 4px 0 4px 0;
+  min-height: 34px;
+}
+.dp-tool-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 5px 4px;
+  font-family: var(--font-body);
+  font-size: clamp(.7rem, 2.2vw, .82rem);
+  font-weight: 900;
+  color: var(--gray-600);
+  cursor: pointer;
+  text-align: center;
+  white-space: nowrap;
+  transition: color .12s, background .12s;
+}
+.dp-tool-btn.active {
+  color: var(--black);
+  background: rgba(0,0,0,.06);
+  border-radius: 6px;
+}
+.dp-tool-btn:active { opacity: .7; }
+.dp-vsep {
+  width: 1px;
+  height: 20px;
+  background: var(--gray-300);
+  flex-shrink: 0;
+}
+.dp-hsep {
+  height: 1px;
+  background: var(--gray-300);
+  width: 100%;
+  margin: 0;
+}
+
+/* Fila 2: controles (Transparencia | Grosor | Color) */
+.dp-row2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  flex-wrap: nowrap;
+  min-height: 34px;
+}
+.dp-ctrl-btn {
+  background: transparent;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-family: var(--font-body);
+  font-size: clamp(.67rem, 2vw, .78rem);
+  font-weight: 900;
+  color: var(--gray-700);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background .1s;
+}
+.dp-ctrl-btn:active, .dp-ctrl-btn.open { background: var(--gray-200); }
+.dp-slider-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.dp-slider-wrap input[type=range] {
+  flex: 1;
+  min-width: 40px;
+  accent-color: var(--black);
+}
+.dp-color-btn {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--gray-300);
+  padding: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 1px 1px 0 rgba(0,0,0,.07);
+}
+.dp-color-hidden {
+  width: 0; height: 0;
+  opacity: 0; position: absolute; pointer-events: none;
+}
+
+/* Fila 3: acciones (✕ | ↩↪ | info) + ✓ */
+.dp-row3 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 0 2px 0;
+  min-height: 32px;
+}
+.dp-act-btn {
+  background: transparent;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-family: var(--font-body);
+  font-size: clamp(.72rem, 2.2vw, .82rem);
+  font-weight: 900;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .1s;
+}
+.dp-act-btn:active { background: var(--gray-200); }
+.dp-act-btn.danger { color: #c00; border-color: #fcc; }
+.dp-act-btn.dup    { color: var(--gray-700); }
+.dp-info {
+  flex: 1;
+  text-align: right;
+  font-size: clamp(.65rem, 1.8vw, .75rem);
+  font-weight: 700;
+  color: var(--gray-500);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 4px;
+}
+.dp-ok-btn {
+  background: var(--black);
+  color: var(--white);
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-family: var(--font-body);
+  font-size: clamp(.75rem, 2.2vw, .85rem);
+  font-weight: 900;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+/* Slider inline expandible */
+.dp-inline-slider {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  animation: dpSlideIn .15s ease;
+}
+.dp-inline-slider.visible { display: flex; }
+@keyframes dpSlideIn { from { opacity:0; transform: scaleX(.9); } to { opacity:1; transform:scaleX(1); } }
+
+
 /* Props de capa seleccionada */
 .op-prop-row {
   display: flex; align-items: center; gap: 7px;

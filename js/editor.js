@@ -17,6 +17,8 @@ let edProjectId = null;
 let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
 let edActiveTool = 'select';  // select | draw | eraser
 let edPainting = false;
+let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
+const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20;
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
@@ -706,12 +708,14 @@ function edFitCanvas(resetCamera){
 
   // Solo redimensionar si cambió el tamaño — asignar canvas.width SIEMPRE
   // resetea el contexto 2D aunque sea el mismo valor, borrando el contenido
-  const _sizeChanged = edCanvas.width !== newW || edCanvas.height !== newH;
+  const _prevW = edCanvas.width, _prevH = edCanvas.height;
+  const _sizeChanged = _prevW !== newW || _prevH !== newH;
   if(_sizeChanged){
     edCanvas.width  = newW;
     edCanvas.height = newH;
-    // Si el tamaño cambió notablemente, forzar reset de cámara para evitar deformaciones
-    if(Math.abs(edCanvas.width - newW) > 5 || Math.abs(edCanvas.height - newH) > 5)
+    // Solo resetear cámara si el cambio de tamaño es notable (>30px)
+    // Cambios pequeños son por el panel de opciones abriendo/cerrando
+    if(Math.abs(_prevW - newW) > 30 || Math.abs(_prevH - newH) > 30)
       resetCamera = true;
   }
   edCanvas.style.width  = newW + 'px';
@@ -1278,6 +1282,12 @@ function edOnStart(e){
   // Cerrar menús si están abiertos (clic en canvas o zona de trabajo)
   if(edMenuOpen){ edCloseMenus(); }
   edHideContextMenu();
+  if(edActiveTool === 'fill'){
+    if(tgt !== edCanvas) return;
+    const c = edCoords(e);
+    edFloodFill(c.nx, c.ny);
+    return;
+  }
   if(['draw','eraser'].includes(edActiveTool)){
     if(tgt !== edCanvas) return;
     edStartPaint(e);return;
@@ -1386,6 +1396,7 @@ function edOnMove(e){
   }
   if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
+  if(edActiveTool==='fill'){edMoveBrush(e);return;}
   const c=edCoords(e);
   _edTouchMoved = true;
   clearTimeout(window._edLongPress); // cancelar longpress si el dedo se movió
@@ -1478,7 +1489,7 @@ function edOnEnd(e){
     edPinchEnd();
     return;
   }
-  if(edPainting){ edSaveDrawData(); }  // edSaveDrawData ya pone edPainting=false
+  if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); }
   clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   window._edLongPressReady = false;
@@ -1488,6 +1499,68 @@ function edOnEnd(e){
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
 }
 
+
+function _edDrawPushHistory(){
+  // Guardar snapshot del DrawLayer actual
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  // Cortar el futuro si hay
+  edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
+  edDrawHistory.push(dl.toDataUrl());
+  if(edDrawHistory.length > ED_MAX_DRAW_HISTORY) edDrawHistory.shift();
+  edDrawHistoryIdx = edDrawHistory.length - 1;
+  _edDrawUpdateUndoRedoBtns();
+}
+function _edDrawApplyHistory(dataUrl){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  let dl = page.layers.find(l => l.type === 'draw');
+  if(!dl){ dl = new DrawLayer(); page.layers.unshift(dl); edLayers=page.layers; }
+  // Restaurar bitmap del DrawLayer desde dataUrl
+  dl.clear();
+  if(dataUrl){
+    const img = new Image();
+    img.onload = () => {
+      const pw = edPageW(), ph = edPageH();
+      dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
+        edMarginX(), edMarginY(), pw, ph);
+      edRedraw();
+    };
+    img.src = dataUrl;
+  } else {
+    edRedraw();
+  }
+}
+function edDrawUndo(){
+  if(edDrawHistoryIdx <= 0){
+    // Si idx=0, deshacer significa limpiar todo (estado vacío)
+    if(edDrawHistoryIdx === 0){
+      edDrawHistoryIdx = -1;
+      const page=edPages[edCurrentPage];
+      const dl=page?.layers.find(l=>l.type==='draw');
+      if(dl) dl.clear();
+      edRedraw(); _edDrawUpdateUndoRedoBtns(); return;
+    }
+    edToast('Nada que deshacer'); return;
+  }
+  edDrawHistoryIdx--;
+  _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx]);
+  _edDrawUpdateUndoRedoBtns();
+}
+function edDrawRedo(){
+  if(edDrawHistoryIdx >= edDrawHistory.length - 1){ edToast('Nada que rehacer'); return; }
+  edDrawHistoryIdx++;
+  _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx]);
+  _edDrawUpdateUndoRedoBtns();
+}
+function _edDrawUpdateUndoRedoBtns(){
+  const u=$('op-draw-undo'), r=$('op-draw-redo');
+  if(u) u.disabled = edDrawHistoryIdx < 0;
+  if(r) r.disabled = edDrawHistoryIdx >= edDrawHistory.length - 1;
+}
+function _edDrawClearHistory(){
+  edDrawHistory = []; edDrawHistoryIdx = -1;
+  _edDrawUpdateUndoRedoBtns();
+}
 /* ══════════════════════════════════════════
    DIBUJO LIBRE  (DrawLayer)
    ══════════════════════════════════════════ */
@@ -1500,6 +1573,116 @@ function _edGetOrCreateDrawLayer(){
     edLayers = page.layers;
   }
   return dl;
+}
+
+/* ══════════════════════════════════════════
+   FLOOD FILL (Scanline algorithm)
+   ══════════════════════════════════════════ */
+function edFloodFill(nx, ny){
+  // nx, ny: coordenadas normalizadas de página (pueden ser <0 o >1 si fuera del lienzo)
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = _edGetOrCreateDrawLayer();  // crea DrawLayer si no existe
+
+  const canvas = dl._canvas;
+  const ctx    = dl._ctx;
+  const W = canvas.width, H = canvas.height;
+
+  // Coordenadas absolutas en el workspace (px enteros)
+  const wx = Math.round(edMarginX() + nx * edPageW());
+  const wy = Math.round(edMarginY() + ny * edPageH());
+
+  // Asegurar que el punto está dentro del workspace
+  if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
+
+  // Definir límites del área rellenable
+  // Si el click está dentro de la página → limitamos a la página
+  // Si está fuera → limitamos al workspace completo
+  const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
+  const pw = Math.round(edPageW()),   ph = Math.round(edPageH());
+  let fillLeft, fillRight, fillTop, fillBottom;
+  const insidePage = wx >= mx && wx < mx+pw && wy >= my && wy < my+ph;
+  if(insidePage){
+    fillLeft = mx; fillRight = mx+pw-1;
+    fillTop  = my; fillBottom= my+ph-1;
+  } else {
+    fillLeft = 0; fillRight = W-1;
+    fillTop  = 0; fillBottom= H-1;
+  }
+
+  // Leer todos los píxeles del área de trabajo
+  const imageData = ctx.getImageData(fillLeft, fillTop,
+    fillRight-fillLeft+1, fillBottom-fillTop+1);
+  const data = imageData.data;
+  const fw   = fillRight-fillLeft+1;
+  const fh   = fillBottom-fillTop+1;
+
+  // Color objetivo (en coords locales del imageData)
+  const lx = wx - fillLeft, ly = wy - fillTop;
+  const startIdx = (ly * fw + lx) * 4;
+  const tR = data[startIdx], tG = data[startIdx+1],
+        tB = data[startIdx+2], tA = data[startIdx+3];
+
+  // Color de relleno desde edDrawColor (#rrggbb)
+  const fc = edDrawColor;
+  const fR = parseInt(fc.slice(1,3),16),
+        fG = parseInt(fc.slice(3,5),16),
+        fB = parseInt(fc.slice(5,7),16),
+        fA = 255;
+
+  // Si el color objetivo es idéntico al de relleno → nada que hacer
+  if(tR===fR && tG===fG && tB===fB && tA===fA) return;
+
+  // Tolerancia para manejar antialiasing en los bordes de los trazos
+  const TOL = 20;
+  function similar(idx){
+    return Math.abs(data[idx]-tR)   <= TOL &&
+           Math.abs(data[idx+1]-tG) <= TOL &&
+           Math.abs(data[idx+2]-tB) <= TOL &&
+           Math.abs(data[idx+3]-tA) <= TOL;
+  }
+  function setPixel(idx){
+    data[idx]=fR; data[idx+1]=fG; data[idx+2]=fB; data[idx+3]=fA;
+  }
+
+  // Algoritmo Scanline Fill (cola de segmentos horizontales)
+  // Evita stack overflow de la recursión y es más eficiente que BFS píxel a píxel
+  const visited = new Uint8Array(fw * fh);
+  const queue   = [[lx, ly]];
+
+  while(queue.length){
+    let [x, y] = queue.pop();
+    if(y < 0 || y >= fh) continue;
+
+    // Buscar límite izquierdo del segmento en esta fila
+    let left = x;
+    while(left > 0 && !visited[y*fw+(left-1)] && similar((y*fw+(left-1))*4)) left--;
+
+    // Buscar límite derecho
+    let right = x;
+    while(right < fw-1 && !visited[y*fw+(right+1)] && similar((y*fw+(right+1))*4)) right++;
+
+    // Rellenar el segmento
+    let scanAbove = false, scanBelow = false;
+    for(let sx=left; sx<=right; sx++){
+      const si = y*fw+sx;
+      if(!visited[si] && similar(si*4)){
+        visited[si] = 1;
+        setPixel(si*4);
+        // Añadir filas adyacentes a la cola si no han sido visitadas
+        if(y > 0    && !visited[(y-1)*fw+sx]) { if(!scanAbove){ queue.push([sx, y-1]); scanAbove=true; } }
+        else scanAbove = false;
+        if(y < fh-1 && !visited[(y+1)*fw+sx]) { if(!scanBelow){ queue.push([sx, y+1]); scanBelow=true; } }
+        else scanBelow = false;
+      } else {
+        scanAbove = false; scanBelow = false;
+      }
+    }
+  }
+
+  // Aplicar resultado
+  ctx.putImageData(imageData, fillLeft, fillTop);
+  _edDrawPushHistory();
+  edRedraw();
 }
 function edStartPaint(e){
   edPainting = true;
@@ -1523,10 +1706,9 @@ function edContinuePaint(e){
   edMoveBrush(e);
 }
 function edSaveDrawData(){
-  // Con DrawLayer ya no hay nada que "guardar" por separado —
-  // el DrawLayer persiste en page.layers. Solo marcamos fin del trazo.
   edPainting = false;
-  edPushHistory();
+  _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
+  // NO llamar edPushHistory aquí — el historial global se guarda al congelar
 }
 function edClearDraw(){
   const page=edPages[edCurrentPage];if(!page)return;
@@ -1539,7 +1721,11 @@ function edClearDraw(){
 }
 function edMoveBrush(e){
   const src=e.touches?e.touches[0]:e,cur=$('edBrushCursor');if(!cur)return;
+  if(edActiveTool==='fill'){
+    cur.style.display='none'; return;  // fill no muestra cursor circular
+  }
   const sz=(edActiveTool==='eraser'?edEraserSize:edDrawSize)*2;
+  cur.style.display='block';
   cur.style.left=src.clientX+'px';cur.style.top=src.clientY+'px';
   cur.style.width=sz+'px';cur.style.height=sz+'px';
 }
@@ -1567,7 +1753,7 @@ function edCloseMenus(){
 function edToggleMenu(id){
   if(edMenuOpen===id){edCloseMenus();return;}
   edCloseMenus();
-  if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
+  if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
   const dd=$('dd-'+id);if(!dd)return;
   const btn=document.querySelector(`[data-menu="${id}"]`);
   if(!btn)return;
@@ -1613,6 +1799,7 @@ function _edFreezeDrawLayer(){
   if(dlIdx < 0) return;
   const dl = page.layers[dlIdx];
   const bb = StrokeLayer._boundingBox(dl._canvas);
+  _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){ page.layers.splice(dlIdx, 1); edLayers=page.layers; return; }
   const sl = new StrokeLayer(dl._canvas);
   page.layers.splice(dlIdx, 1, sl);
@@ -1640,25 +1827,59 @@ function edRenderOptionsPanel(mode){
     requestAnimationFrame(edFitCanvas);return;
   }
 
-  if(mode==='draw' || mode==='eraser'){
-    const isEr = edActiveTool === 'eraser';
+  if(mode==='draw' || mode==='eraser' || mode==='fill'){
+    const isFill = edActiveTool === 'fill';
+    const isEr   = edActiveTool === 'eraser';
+    const isPen  = !isFill && !isEr;
+    const curSize = isEr ? edEraserSize : edDrawSize;
+    const curOpacity = 100; // future: per-tool opacity
+    // Función helper para generar info de estado
+    const _infoText = () => {
+      if(isFill) return `Color ${edDrawColor}`;
+      return `${isEr ? edEraserSize : edDrawSize}px`;
+    };
     panel.innerHTML=`
-      <div class="op-row" style="align-items:center;gap:6px;flex-wrap:wrap">
-        <button id="op-tool-pen"
-          style="border:2px solid ${!isEr?'var(--black)':'var(--gray-300)'};background:${!isEr?'var(--black)':'transparent'};color:${!isEr?'var(--white)':'var(--gray-600)'};border-radius:6px;padding:3px 10px;font-weight:900;font-size:.8rem;cursor:pointer">✏️ Lápiz</button>
-        <button id="op-tool-eraser"
-          style="border:2px solid ${isEr?'var(--black)':'var(--gray-300)'};background:${isEr?'var(--black)':'transparent'};color:${isEr?'var(--white)':'var(--gray-600)'};border-radius:6px;padding:3px 10px;font-weight:900;font-size:.8rem;cursor:pointer">⬜ Borrador</button>
-        <span class="op-sep" id="op-color-sep" style="${isEr?'display:none':''}"></span>
-        <input type="color" class="op-color" id="op-dcolor" value="${edDrawColor}" style="${isEr?'display:none':''}">
-        <span class="op-sep"></span>
-        <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}" style="width:80px;accent-color:var(--black)">
-        <span id="op-dsizeval" style="font-size:.75rem;font-weight:900;color:var(--gray-600);min-width:26px">${isEr?edEraserSize:edDrawSize}px</span>
-        <button id="op-draw-ok" style="margin-left:auto;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.8rem;cursor:pointer;flex-shrink:0">✓</button>
-        <button id="op-draw-dup" style="background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉</button>
-        <button id="op-draw-del" style="background:transparent;border:1px solid #e63030;border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer;color:#e63030">✕</button>
-      </div>`;
+<div class="dp-panel">
+  <!-- FILA 1: Herramientas -->
+  <div class="dp-row1">
+    <button id="op-tool-pen"  class="dp-tool-btn${isPen?' active':''}">Dibujar</button>
+    <div class="dp-vsep"></div>
+    <button id="op-tool-eraser" class="dp-tool-btn${isEr?' active':''}">Borrar</button>
+    <div class="dp-vsep"></div>
+    <button id="op-tool-fill" class="dp-tool-btn${isFill?' active':''}">Rellenar</button>
+  </div>
+  <div class="dp-hsep"></div>
+  <!-- FILA 2: Controles de color, transparencia, grosor -->
+  <div class="dp-row2">
+    ${!isEr ? `
+    <!-- Color -->
+    <div style="position:relative;display:flex;align-items:center">
+      <div id="op-color-swatch" style="width:24px;height:24px;border-radius:50%;background:${edDrawColor};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0"></div>
+      <input type="color" id="op-dcolor" value="${edDrawColor}" class="dp-color-hidden">
+    </div>
+    <div class="dp-vsep"></div>` : ''}
+    ${!isFill ? `
+    <!-- Grosor -->
+    <button id="op-size-btn" class="dp-ctrl-btn">Grosor</button>
+    <div id="op-size-slider" class="dp-inline-slider">
+      <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}">
+    </div>` : ''}
+  </div>
+  <div class="dp-hsep"></div>
+  <!-- FILA 3: Acciones + info + OK -->
+  <div class="dp-row3">
+    <button id="op-draw-del" class="dp-act-btn danger" title="Eliminar dibujo">✕</button>
+    <button id="op-draw-dup" class="dp-act-btn dup"   title="Duplicar">⧉</button>
+    <button id="op-draw-undo" class="dp-act-btn" title="Deshacer trazo" disabled>↩</button>
+    <button id="op-draw-redo" class="dp-act-btn" title="Rehacer trazo" disabled>↪</button>
+    <span class="dp-info" id="op-draw-info">${_infoText()}</span>
+    <button id="op-draw-ok" class="dp-ok-btn">✓</button>
+  </div>
+</div>`;
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
+
+    // ── Herramientas ──
     $('op-tool-pen')?.addEventListener('click',()=>{
       edActiveTool='draw'; edCanvas.className='tool-draw';
       edRenderOptionsPanel('draw');
@@ -1667,33 +1888,71 @@ function edRenderOptionsPanel(mode){
       edActiveTool='eraser'; edCanvas.className='tool-eraser';
       edRenderOptionsPanel('eraser');
     });
-    $('op-dcolor')?.addEventListener('input',e=>edDrawColor=e.target.value);
-    $('op-dsize')?.addEventListener('input',e=>{
-      if(edActiveTool==='eraser') edEraserSize=+e.target.value;
-      else edDrawSize=+e.target.value;
-      const v=$('op-dsizeval');if(v)v.textContent=e.target.value+'px';
+    $('op-tool-fill')?.addEventListener('click',()=>{
+      edActiveTool='fill'; edCanvas.className='tool-fill';
+      edRenderOptionsPanel('fill');
     });
+
+    // ── Color: swatch abre input[type=color] oculto ──
+    $('op-color-swatch')?.addEventListener('click',()=>{
+      $('op-dcolor')?.click();
+    });
+    $('op-dcolor')?.addEventListener('input',e=>{
+      edDrawColor=e.target.value;
+      const sw=$('op-color-swatch');
+      if(sw) sw.style.background=edDrawColor;
+      const info=$('op-draw-info');
+      if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
+    });
+
+    // ── Grosor: botón toggle abre/cierra slider ──
+    $('op-size-btn')?.addEventListener('click',()=>{
+      const sl=$('op-size-slider');
+      if(!sl) return;
+      sl.classList.toggle('visible');
+      $('op-size-btn')?.classList.toggle('open', sl.classList.contains('visible'));
+    });
+    $('op-dsize')?.addEventListener('input',e=>{
+      const v=+e.target.value;
+      if(edActiveTool==='eraser') edEraserSize=v;
+      else edDrawSize=v;
+      const info=$('op-draw-info');
+      if(info) info.textContent=v+'px';
+    });
+
+    // ── Deshacer / Rehacer ──
+    $('op-draw-undo')?.addEventListener('click', edDrawUndo);
+    $('op-draw-redo')?.addEventListener('click', edDrawRedo);
+    _edDrawUpdateUndoRedoBtns();
+
+    // ── OK: congelar ──
     $('op-draw-ok')?.addEventListener('click',()=>{
       edCloseOptionsPanel();
-      if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
     });
+
+    // ── Duplicar ──
     $('op-draw-dup')?.addEventListener('click',()=>{
-      // Congelar primero, luego duplicar el StrokeLayer resultante
-      if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       edDuplicateSelected();
       edCloseOptionsPanel();
     });
+
+    // ── Eliminar ──
     $('op-draw-del')?.addEventListener('click',()=>{
-      // Eliminar el DrawLayer activo sin congelar
+      const ok = confirm('¿Eliminar el dibujo?');
+      if(!ok) return;
       const page=edPages[edCurrentPage];if(!page)return;
       const dlIdx=page.layers.findIndex(l=>l.type==='draw');
       if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
       edActiveTool='select'; edCanvas.className='';
       const cur=$('edBrushCursor');if(cur)cur.style.display='none';
       delete panel.dataset.mode;
+      _edDrawClearHistory();
       edCloseOptionsPanel(); edPushHistory(); edRedraw();
       edToast('Dibujo eliminado');
     });
+
     requestAnimationFrame(edFitCanvas);return;
   }
 
@@ -1804,7 +2063,10 @@ function edRenderOptionsPanel(mode){
         edRedraw();
       });
     });
-    $('pp-del')?.addEventListener('click',edDeleteSelected);
+    $('pp-del')?.addEventListener('click',()=>{
+      const ok = confirm('¿Eliminar este objeto?');
+      if(ok){ edDeleteSelected(); edCloseOptionsPanel(); }
+    });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
@@ -2603,7 +2865,7 @@ function EditorView_init(){
       if(panel && panel.classList.contains('open')){
         e.preventDefault();
         edCloseOptionsPanel();
-        if(['draw','eraser'].includes(edActiveTool)) edDeactivateDrawTool();
+        if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
         return;
       }
     }
