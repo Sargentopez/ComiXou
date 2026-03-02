@@ -168,15 +168,8 @@ function _lyRender() {
     e.textContent = 'Sin imágenes ni dibujos';
     list.appendChild(e);
   } else {
-    // Ordenar por nivel visual real: stroke/draw encima de imagen.
-    // Dentro del mismo nivel, mayor índice (más reciente) aparece primero.
-    const byVisualLevel = (a, b) => {
-      const rank = t => (t==='stroke'||t==='draw') ? 1 : 0; // stroke/draw encima
-      const rd = rank(b.l.type) - rank(a.l.type);
-      if (rd !== 0) return rd;
-      return b.i - a.i; // mayor índice primero dentro del mismo nivel
-    };
-    [...visualPairs].sort(byVisualLevel).forEach(({l, i}) => {
+    // El primero del array edLayers aparece el último en la lista (más abajo visualmente)
+    [...visualPairs].reverse().forEach(({l, i}) => {
       list.appendChild(_lyBuildVisualItem(l, i, i === edSelectedIdx));
     });
   }

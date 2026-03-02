@@ -1425,11 +1425,26 @@ function edOnStart(e){
       }
     }
   }
-  // Seleccionar: mayor índice = último añadido = más arriba en la pila de capas
-  // Sin prioridades por tipo — cada objeto se selecciona si se toca su área
+  // Seleccionar según orden visual inverso al render:
+  // Render pinta: imagen → draw → stroke → texto (texto siempre encima)
+  // Selección busca primero lo más encima visualmente:
+  // texto/bubble → stroke → draw → imagen
+  // Dentro de cada grupo: mayor índice primero (más recientemente añadido)
   const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
-  let found=-1;
-  for(let i=edLayers.length-1;i>=0;i--){if(edLayers[i].contains(c.nx,c.ny)){found=i;break;}}
+  let found = -1;
+  const _selGroups = [
+    ['text','bubble'],
+    ['stroke'],
+    ['draw'],
+    ['image'],
+  ];
+  outer_sel: for(const _types of _selGroups){
+    for(let i = edLayers.length - 1; i >= 0; i--){
+      if(_types.includes(edLayers[i].type) && edLayers[i].contains(c.nx, c.ny)){
+        found = i; break outer_sel;
+      }
+    }
+  }
   if(found>=0){
     edSelectedIdx = found;
     edDragOffX = c.nx - edLayers[found].x;
@@ -2793,6 +2808,7 @@ function _edViewerKey(e){
     const page=edPages[edViewerIdx];
     const tl=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+      _vStartBubbleFade();
       edViewerTextStep++; edUpdateViewer();
     } else if(edViewerIdx < edPages.length-1){
       edViewerIdx++;
@@ -2828,7 +2844,15 @@ function edShowViewerCtrls(){
   _viewerHideTimer = setTimeout(()=>ctrls.classList.add('hidden'), 3500);
 }
 function _vStartBubbleFade(){
-  // Fade-out del bocadillo que acaba de quedar atrás (solo bubble, no text)
+  // Solo hacer fade si el bocadillo que va a quedar atrás es tipo 'bubble'
+  // (las cajas de texto permanecen visibles, no se desvanecen)
+  const page = edPages[edViewerIdx];
+  const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+  // El bocadillo "anterior" será el que está en textStep (el actual antes del incremento)
+  const curLayer = tl[edViewerTextStep - 1];
+  if(!curLayer || curLayer.type !== 'bubble'){
+    _vPrevBubbleFade = 0; return;  // no es bubble, no fade
+  }
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
   _vPrevBubbleFade = 1.0;
   const duration = 400;
@@ -3239,6 +3263,7 @@ function EditorView_init(){
     const page=edPages[edViewerIdx];
     const textLayers=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     if(page?.textMode==='sequential' && edViewerTextStep < textLayers.length){
+      _vStartBubbleFade();
       edViewerTextStep++; edUpdateViewer(); return;
     }
     if(edViewerIdx<edPages.length-1){
