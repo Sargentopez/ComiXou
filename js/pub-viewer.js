@@ -1,269 +1,195 @@
-/* ============================================================
-   pub-viewer.js — Visor de publicaciones
-   Overlay sobre el index. Mismas mecánicas que el visor del editor:
-   - AbortController para limpieza de listeners
-   - Swipe izquierda/derecha: avanzar bocadillo o página
-   - Botones ◀▶✕ en desktop, solo ✕ en táctil
-   - Modo secuencial: bocadillos revelados uno a uno
-   ============================================================ */
+/* pub-viewer.js  v5.68 */
+
+Router.register('read', {
+  bodyClass: 'pv-page',
+  css: [],
+  hideHeader: true,
+  html: () => `
+    <div id="pubViewer">
+      <div id="pvStage"></div>
+      <div class="pv-controls hidden" id="pvControls">
+        <button class="pv-btn" id="pvPrev">◄</button>
+        <span id="pvCounter">1 / 1</span>
+        <button class="pv-btn" id="pvNext">►</button>
+        <button class="pv-btn" id="pvClose">✕</button>
+      </div>
+      <button class="pv-btn pv-close-touch" id="pvCloseMobile">✕</button>
+    </div>`,
+  init:    (params) => PubViewer._init(params.id),
+  destroy: ()       => PubViewer._destroy(),
+});
 
 const PubViewer = (() => {
+  let _comic=null, _panelIdx=0, _bubbleStep=0, _ac=null, _ro=null, _hideTimer=null;
 
-  // ── Estado ──────────────────────────────────────────────────
-  let _comic    = null;
-  let _panelIdx = 0;
-  let _bubbleStep = 0;   // nº de bocadillos revelados (1 = primero visible)
-  let _ac       = null;
+  function open(comicId) { Router.go("read", { id: comicId }); }
 
-  // ── Abrir ───────────────────────────────────────────────────
-  function open(comicId) {
+  function _init(comicId) {
     const comic = ComicStore.getById(comicId);
-    if (!comic || !comic.panels?.length) {
-      showToast('No se encontró el cómic'); return;
+    if (!comic || !comic.panels || !comic.panels.length) {
+      if (typeof showToast==="function") showToast("No se encontro el comic");
+      Router.go("home"); return;
     }
-    _comic    = comic;
-    _panelIdx = 0;
-    document.getElementById('pubViewer').classList.add('open');
-    _renderPanel(0);
-    _bindListeners();
+    _comic=comic; _panelIdx=0; _bubbleStep=0;
+    _renderPanel(0); _bindListeners();
   }
 
-  // ── Cerrar ──────────────────────────────────────────────────
-  function close() {
-    document.getElementById('pubViewer')?.classList.remove('open');
-    if (_ac) { _ac.abort(); _ac = null; }
-    if (window._pvRO) { window._pvRO.disconnect(); window._pvRO = null; }
-    const stage = document.getElementById('pvStage');
-    if (stage) stage.innerHTML = '';
-    _comic = null;
-    // Volver al index (el visor se abre desde home, al cerrar regresamos ahí)
-    if (typeof Router !== 'undefined') Router.go('home');
+  function _destroy() {
+    if (_ac) { _ac.abort(); _ac=null; }
+    if (_ro) { _ro.disconnect(); _ro=null; }
+    clearTimeout(_hideTimer); _comic=null;
   }
 
-  // ── Renderizar panel ────────────────────────────────────────
+  function close() { Router.go("home"); }
+
   function _renderPanel(idx) {
-    _panelIdx = idx;
-    const panel = _comic.panels[idx];
-    const stage = document.getElementById('pvStage');
-    if (!stage || !panel) return;
-
-    stage.innerHTML = '';
-
-    // Imagen del panel
-    const img = document.createElement('img');
-    img.className = 'pv-panel-img';
-    img.draggable = false;
+    _panelIdx=idx; _bubbleStep=0;
+    const panel=_comic.panels[idx];
+    const stage=document.getElementById('pvStage');
+    if (!stage||!panel) return;
+    stage.innerHTML='';
+    const img=document.createElement('img');
+    img.className='pv-panel-img'; img.draggable=false; img.src=panel.dataUrl||'';
     stage.appendChild(img);
-
-    // Capa de textos: se posiciona encima de la imagen con sus mismas dimensiones
-    const textLayer = document.createElement('div');
-    textLayer.className = 'pv-text-layer';
-    _buildTexts(panel, textLayer);
+    const textLayer=document.createElement('div');
+    textLayer.className='pv-text-layer';
+    _buildTexts(panel,textLayer);
     stage.appendChild(textLayer);
-
-    // textMode: leer de panel.textMode, con 'sequential' como valor por defecto real
-    // (el editor puede guardar 'immediate' como fallback erróneo — tratarlo como sequential)
-    const isSeq = !panel.textMode || panel.textMode === 'sequential' || panel.textMode === 'immediate';
-    const bubbles = textLayer.querySelectorAll('.pv-bubble');
-
-    function _initBubbles() {
-      if (isSeq && bubbles.length > 0) {
-        _bubbleStep = 1;
-        bubbles[0].classList.add('visible');
+    const isSeq=(panel.textMode||'sequential')==='sequential';
+    const bubbles=textLayer.querySelectorAll('.pv-bubble');
+    function fitLayer() {
+      const sw=stage.offsetWidth, sh=stage.offsetHeight;
+      const iw=img.naturalWidth,  ih=img.naturalHeight;
+      if (!iw||!ih||!sw||!sh) return;
+      const scale=Math.min(sw/iw,sh/ih);
+      const rw=iw*scale, rh=ih*scale;
+      const rl=(sw-rw)/2, rt=(sh-rh)/2;
+      textLayer.style.cssText='position:absolute;pointer-events:none;'+
+        'left:'+rl+'px;top:'+rt+'px;width:'+rw+'px;height:'+rh+'px;';
+    }
+    function initBubbles() {
+      if (isSeq && bubbles.length>0) {
+        _bubbleStep=1; bubbles[0].classList.add('visible');
       } else {
-        _bubbleStep = bubbles.length;
-        bubbles.forEach(b => b.classList.add('visible'));
+        _bubbleStep=bubbles.length;
+        bubbles.forEach(b=>b.classList.add('visible'));
       }
-      _updateCounter();
-      _showControls();
+      _updateCounter(); _showControls();
     }
-
-    // Ajustar text-layer al tamaño real de la imagen renderizada
-    // Necesario porque la imagen se escala con object-fit:contain
-    function _fitTextLayer() {
-      const r = img.getBoundingClientRect();
-      textLayer.style.cssText =
-        `position:absolute;pointer-events:none;` +
-        `left:${r.left}px;top:${r.top}px;` +
-        `width:${r.width}px;height:${r.height}px;`;
-    }
-
-    img.onload = () => { _fitTextLayer(); _initBubbles(); };
-    img.onerror = () => { _initBubbles(); };
-    img.src = panel.dataUrl || '';
-
-    // ResizeObserver: reajustar si cambia el tamaño de pantalla (rotación, etc.)
-    if (window._pvRO) { window._pvRO.disconnect(); window._pvRO = null; }
-    window._pvRO = new ResizeObserver(() => { if (img.complete) _fitTextLayer(); });
-    window._pvRO.observe(stage);
+    if (_ro) _ro.disconnect();
+    _ro=new ResizeObserver(()=>{ if (img.naturalWidth) fitLayer(); });
+    _ro.observe(stage);
+    if (img.complete && img.naturalWidth) { fitLayer(); initBubbles(); }
+    else { img.onload=()=>{ fitLayer(); initBubbles(); }; img.onerror=()=>initBubbles(); }
   }
 
-  // ── Construir textos HTML ────────────────────────────────────
-  function _buildTexts(panel, layer) {
-    if (!panel.texts?.length) return;
-    const items = [...panel.texts]
-      .filter(t => t.text)
-      .sort((a, b) => (a.order || 0) - (b.order || 0));
-
-    items.forEach((t, i) => {
-      const wrap = document.createElement('div');
-      wrap.className = 'pv-bubble';
-      wrap.style.cssText = `left:${t.x}%;top:${t.y}%;width:${t.w || 30}%`;
-      wrap.dataset.idx = i;
-
-      const inner = document.createElement('div');
-      inner.className = 'pv-bubble-inner';
-      inner.style.cssText = [
-        `font-family:${t.fontFamily || '"Comic Neue",cursive'}`,
-        `font-size:${Math.round((t.fontSize || 18) * 0.85)}px`,
-        `color:${t.color || '#000'}`,
-        `background:${t.bg || '#fff'}`,
-        `border:${t.border || 2}px solid ${t.borderColor || '#000'}`,
-        t.style === 'thought'    ? 'border-radius:50%'  :
-        t.style === 'explosion'  ? 'border-radius:4px;transform:rotate(-1deg)' :
-                                   'border-radius:14px',
-      ].join(';');
-
-      inner.appendChild(Object.assign(document.createElement('span'), { textContent: t.text }));
-
-      // Cola del bocadillo
-      if (t.type === 'dialog' && t.style !== 'thought' && t.style !== 'radio') {
-        const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-        svg.setAttribute('class', 'pv-tail tail-' + (t.tail || 'bottom'));
-        svg.setAttribute('viewBox','0 0 30 22');
-        const path = document.createElementNS('http://www.w3.org/2000/svg','path');
-        path.setAttribute('d','M0 0 L15 22 L30 0 Z');
-        path.setAttribute('fill', t.bg || '#fff');
-        path.setAttribute('stroke', t.borderColor || '#000');
-        path.setAttribute('stroke-width','2.5');
-        path.setAttribute('stroke-linejoin','round');
-        svg.appendChild(path);
-        inner.appendChild(svg);
+  function _buildTexts(panel,layer){
+    if(!panel.texts||!panel.texts.length)return;
+    const items=[...panel.texts].filter(t=>t.text).sort((a,b)=>(a.order??0)-(b.order??0));
+    items.forEach((t,i)=>{
+      const w=document.createElement('div');
+      w.className='pv-bubble';
+      w.style.cssText='left:'+t.x+'%;top:'+t.y+'%;width:'+(t.w||30)+'%';
+      w.dataset.idx=i;
+      const inn=document.createElement('div');
+      inn.className='pv-bubble-inner';
+      const br=t.style==='thought'?'border-radius:50%':t.style==='explosion'?'border-radius:4px;transform:rotate(-1deg)':'border-radius:14px';
+      const bw=(t.border!=null)?t.border:2;
+      inn.style.cssText=['font-family:'+(t.fontFamily||'"Comic Neue",cursive'),'font-size:'+Math.round((t.fontSize||18)*0.85)+'px','color:'+(t.color||'#000'),'background:'+(t.bg||'#fff'),'border:'+bw+'px solid '+(t.borderColor||'#000'),br].join(';');
+      const sp=document.createElement('span'); sp.textContent=t.text; inn.appendChild(sp);
+      if(t.type==='dialog'&&t.style!=='thought'&&t.style!=='radio'){
+        const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg.setAttribute('class','pv-tail tail-'+(t.tail||'bottom')); svg.setAttribute('viewBox','0 0 30 22');
+        const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+        path.setAttribute('d','M0 0 L15 22 L30 0 Z'); path.setAttribute('fill',t.bg||'#fff');
+        path.setAttribute('stroke',t.borderColor||'#000'); path.setAttribute('stroke-width','2.5'); path.setAttribute('stroke-linejoin','round');
+        svg.appendChild(path); inn.appendChild(svg);
       }
-
-      wrap.appendChild(inner);
-      layer.appendChild(wrap);
+      w.appendChild(inn); layer.appendChild(w);
     });
   }
 
-  // ── Avanzar ─────────────────────────────────────────────────
-  function _advance() {
-    const panel   = _comic.panels[_panelIdx];
-    const isSeq   = (panel.textMode || 'sequential') === 'sequential';
-    const bubbles = document.querySelectorAll('#pvStage .pv-bubble');
-
-    if (isSeq && _bubbleStep < bubbles.length) {
-      bubbles[_bubbleStep].classList.add('visible');
-      _bubbleStep++;
-      _updateCounter();
-    } else if (_panelIdx < _comic.panels.length - 1) {
-      _renderPanel(_panelIdx + 1);
-    }
+  function _advance(){
+    const panel=_comic.panels[_panelIdx];
+    const isSeq=(panel.textMode||'sequential')==='sequential';
+    const bubbles=document.querySelectorAll('#pvStage .pv-bubble');
+    if(isSeq&&_bubbleStep<bubbles.length){
+      bubbles[_bubbleStep].classList.add('visible');_bubbleStep++;_updateCounter();
+    }else if(_panelIdx<_comic.panels.length-1){_renderPanel(_panelIdx+1);}
   }
-
-  // ── Retroceder ──────────────────────────────────────────────
-  function _back() {
-    const panel   = _comic.panels[_panelIdx];
-    const isSeq   = (panel.textMode || 'sequential') === 'sequential';
-    const bubbles = document.querySelectorAll('#pvStage .pv-bubble');
-
-    if (isSeq && _bubbleStep > 1) {
-      _bubbleStep--;
-      bubbles[_bubbleStep].classList.remove('visible');
-      _updateCounter();
-    } else if (_panelIdx > 0) {
-      _renderPanel(_panelIdx - 1);
-      // Al retroceder, mostrar todos los bocadillos del panel anterior
-      requestAnimationFrame(() => {
-        const prevBubbles = document.querySelectorAll('#pvStage .pv-bubble');
-        prevBubbles.forEach(b => b.classList.add('visible'));
-        _bubbleStep = prevBubbles.length;
-        _updateCounter();
+  function _back(){
+    const panel=_comic.panels[_panelIdx];
+    const isSeq=(panel.textMode||'sequential')==='sequential';
+    const bubbles=document.querySelectorAll('#pvStage .pv-bubble');
+    if(isSeq&&_bubbleStep>1){
+      _bubbleStep--;bubbles[_bubbleStep].classList.remove('visible');_updateCounter();
+    }else if(_panelIdx>0){
+      _renderPanel(_panelIdx-1);
+      requestAnimationFrame(()=>{
+        const prev=document.querySelectorAll('#pvStage .pv-bubble');
+        prev.forEach(b=>b.classList.add('visible'));
+        _bubbleStep=prev.length;_updateCounter();
       });
     }
   }
-
-  // ── Contador ─────────────────────────────────────────────────
-  function _updateCounter() {
-    const panel   = _comic.panels[_panelIdx];
-    const isSeq   = (panel.textMode || 'sequential') === 'sequential';
-    const total   = _comic.panels.length;
-    const bubbles = document.querySelectorAll('#pvStage .pv-bubble');
-    const cnt = document.getElementById('pvCounter');
-    if (!cnt) return;
-    cnt.textContent = (isSeq && bubbles.length > 0)
-      ? `${_panelIdx + 1}/${total} · 💬${_bubbleStep}/${bubbles.length}`
-      : `${_panelIdx + 1} / ${total}`;
+  function _updateCounter(){
+    const panel=_comic.panels[_panelIdx];
+    const isSeq=(panel.textMode||'sequential')==='sequential';
+    const bubbles=document.querySelectorAll('#pvStage .pv-bubble');
+    const cnt=document.getElementById('pvCounter');if(!cnt)return;
+    cnt.textContent=(isSeq&&bubbles.length>0)
+      ?(_panelIdx+1)+'/'+_comic.panels.length+' · 💬'+_bubbleStep+'/'+bubbles.length
+      :(_panelIdx+1)+' / '+_comic.panels.length;
   }
-
-  // ── Mostrar controles ────────────────────────────────────────
-  function _showControls() {
-    const ctrl = document.getElementById('pvControls');
-    if (!ctrl) return;
+  function _showControls(){
+    const ctrl=document.getElementById('pvControls');if(!ctrl)return;
     ctrl.classList.remove('hidden');
-    clearTimeout(PubViewer._hideTimer);
-    PubViewer._hideTimer = setTimeout(() => ctrl.classList.add('hidden'), 3000);
+    clearTimeout(_hideTimer);
+    _hideTimer=setTimeout(()=>ctrl.classList.add('hidden'),3000);
   }
 
-  // ── Listeners con AbortController ───────────────────────────
-  function _bindListeners() {
-    if (_ac) _ac.abort();
-    _ac = new AbortController();
-    const sig = { signal: _ac.signal };
-    const viewer = document.getElementById('pubViewer');
-
-    // Botones
-    ['click','pointerup'].forEach(ev => {
-      document.getElementById('pvClose')
-        ?.addEventListener(ev, e => { e.stopPropagation(); close(); }, sig);
-      document.getElementById('pvCloseMobile')
-        ?.addEventListener(ev, e => { e.stopPropagation(); close(); }, sig);
-      document.getElementById('pvNext')
-        ?.addEventListener(ev, e => { e.stopPropagation(); _advance(); }, sig);
-      document.getElementById('pvPrev')
-        ?.addEventListener(ev, e => { e.stopPropagation(); _back(); }, sig);
-    });
-
-    // Teclado
-    document.addEventListener('keydown', e => {
-      if (!document.getElementById('pubViewer')?.classList.contains('open')) return;
-      if (e.key==='ArrowRight'||e.key==='ArrowDown') { e.preventDefault(); _advance(); }
-      if (e.key==='ArrowLeft' ||e.key==='ArrowUp')   { e.preventDefault(); _back(); }
-      if (e.key==='Escape') close();
-    }, sig);
-
-    // Swipe táctil
-    let _sx = null, _sy = null, _sc = false;
-    viewer.addEventListener('touchstart', e => {
-      _sx = null; _sy = null; _sc = false;
-      if (e.touches.length !== 1) return;
-      _sx = e.touches[0].clientX;
-      _sy = e.touches[0].clientY;
-    }, { passive:true, ...sig });
-
-    viewer.addEventListener('touchmove', e => {
-      if (_sx === null) return;
-      const dx = e.touches[0].clientX - _sx;
-      const dy = e.touches[0].clientY - _sy;
-      if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) _sc = true;
-    }, { passive:true, ...sig });
-
-    viewer.addEventListener('touchend', e => {
-      if (_sx === null || _sc) { _sx = null; return; }
-      if (e.changedTouches.length !== 1) { _sx = null; return; }
-      const dx = e.changedTouches[0].clientX - _sx;
-      const dy = e.changedTouches[0].clientY - _sy;
-      _sx = null;
-      if (Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
-      if (dx < 0) _advance(); else _back();
-    }, { passive:true, ...sig });
-
-    // Mouse: mostrar pastilla
-    viewer.addEventListener('mousemove', () => _showControls(), { passive:true, ...sig });
-    viewer.addEventListener('pointerdown', e => {
-      if (e.pointerType === 'mouse') _showControls();
-    }, { capture:true, passive:true, ...sig });
+  function _bindListeners(){
+    if(_ac)_ac.abort();
+    _ac=new AbortController();
+    const sig={signal:_ac.signal};
+    const viewer=document.getElementById("pubViewer");
+    if(!viewer)return;
+    document.getElementById("pvClose")
+      ?.addEventListener("pointerup",e=>{e.stopPropagation();close();},sig);
+    document.getElementById("pvCloseMobile")
+      ?.addEventListener("pointerup",e=>{e.stopPropagation();close();},sig);
+    document.getElementById("pvNext")
+      ?.addEventListener("pointerup",e=>{e.stopPropagation();_advance();},sig);
+    document.getElementById("pvPrev")
+      ?.addEventListener("pointerup",e=>{e.stopPropagation();_back();},sig);
+    document.addEventListener("keydown",e=>{
+      if(e.key==="ArrowRight"||e.key==="ArrowDown"){e.preventDefault();_advance();}
+      if(e.key==="ArrowLeft"||e.key==="ArrowUp"){e.preventDefault();_back();}
+      if(e.key==="Escape")close();
+    },sig);
+    let _sx=null,_sy=null,_scroll=false;
+    viewer.addEventListener("touchstart",e=>{
+      _sx=null;_sy=null;_scroll=false;
+      if(e.touches.length!==1)return;
+      _sx=e.touches[0].clientX;_sy=e.touches[0].clientY;
+    },{passive:true,signal:_ac.signal});
+    viewer.addEventListener("touchmove",e=>{
+      if(_sx===null)return;
+      const dx=e.touches[0].clientX-_sx,dy=e.touches[0].clientY-_sy;
+      if(Math.abs(dy)>Math.abs(dx)&&Math.abs(dy)>10)_scroll=true;
+    },{passive:true,signal:_ac.signal});
+    viewer.addEventListener("touchend",e=>{
+      if(_sx===null||_scroll){_sx=null;return;}
+      if(e.changedTouches.length!==1){_sx=null;return;}
+      const dx=e.changedTouches[0].clientX-_sx,dy=e.changedTouches[0].clientY-_sy;
+      _sx=null;
+      if(Math.abs(dx)<30||Math.abs(dx)<=Math.abs(dy))return;
+      if(dx<0)_advance();else _back();
+    },{passive:true,signal:_ac.signal});
+    viewer.addEventListener("mousemove",()=>_showControls(),{passive:true,signal:_ac.signal});
+    viewer.addEventListener("pointerdown",e=>{
+      if(e.pointerType==="mouse")_showControls();
+    },{capture:true,passive:true,signal:_ac.signal});
   }
-
-  return { open, close };
+  return{open,_init,_destroy};
 })();

@@ -223,7 +223,7 @@ function buildRow(comic, currentUser) {
 
   const readBtn = document.createElement('a');
   readBtn.className = 'comic-row-btn';
-  readBtn.href = '#'; readBtn.onclick = (e) => { e.preventDefault(); PubViewer.open(comic.id); };
+  readBtn.href = '#read/' + comic.id; readBtn.onclick = (e) => { e.preventDefault(); Router.go('read', {id: comic.id}); };
   readBtn.textContent = I18n.t('read');
   actions.appendChild(readBtn);
 
