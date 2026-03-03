@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.52</footer>
+    <footer class="app-version">v5.54</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -290,12 +290,15 @@ Router.register('editor', {
     <!-- VISOR: canvas fullscreen + controles flotantes -->
     <div id="editorViewer">
       <canvas id="viewerCanvas"></canvas>
+      <!-- Táctil: solo botón cerrar, siempre visible -->
+      <button class="viewer-btn close-btn viewer-close-touch" id="viewerClose">✕</button>
+      <!-- Desktop: barra completa con auto-ocultado -->
       <div class="viewer-controls" id="viewerControls">
         <button class="viewer-btn" id="viewerPrev">◀</button>
         <span id="viewerCounter">1 / 1</span>
         <button class="viewer-btn" id="viewerNext">▶</button>
+        <button class="viewer-btn close-btn" id="viewerCloseDesktop">✕</button>
       </div>
-      <button class="viewer-btn close-btn" id="viewerClose">✕</button>
     </div>
 
     <!-- MODAL DATOS DEL PROYECTO -->

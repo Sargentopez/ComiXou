@@ -2813,7 +2813,7 @@ function _edViewerKey(e){
   } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
     e.preventDefault();
     const page=edPages[edViewerIdx];
-    if(page?.textMode==='sequential' && edViewerTextStep > 0){
+    if(page?.textMode==='sequential' && edViewerTextStep > 1){
       edViewerTextStep--; edUpdateViewer();
     } else if(edViewerIdx > 0){
       edViewerIdx--;
@@ -2864,14 +2864,28 @@ function _vStartBubbleFade(){
 function edInitViewerTap(){
   const viewer = $('editorViewer');
   if(!viewer) return;
-  edShowViewerCtrls();
-  if(!_viewerTapBound){
-    _viewerTapBound = true;
-    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
-    viewer.addEventListener('touchstart',  () => edShowViewerCtrls(), {capture:true, passive:true});
-    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
 
-    // Swipe horizontal para pasar páginas en táctil
+  // Detectar si es dispositivo táctil
+  const isTouch = navigator.maxTouchPoints > 0;
+
+  // Mostrar controles correctos
+  const touchClose   = $('viewerClose');
+  const desktopCtrls = $('viewerControls');
+  if(isTouch){
+    if(touchClose)   touchClose.style.display   = '';
+    if(desktopCtrls) desktopCtrls.style.display = 'none';
+  } else {
+    if(touchClose)   touchClose.style.display   = 'none';
+    if(desktopCtrls) desktopCtrls.style.display = '';
+    edShowViewerCtrls();
+  }
+
+  if(_viewerTapBound) return;
+  _viewerTapBound = true;
+
+  // ── MODO TÁCTIL ──
+  if(isTouch){
+    // Swipe horizontal para navegar
     let _vSwipeX = null, _vSwipeY = null;
     viewer.addEventListener('touchstart', e => {
       if(e.touches.length !== 1) return;
@@ -2880,15 +2894,16 @@ function edInitViewerTap(){
     }, {passive:true});
     viewer.addEventListener('touchend', e => {
       if(_vSwipeX === null || e.changedTouches.length !== 1) return;
+      // Si el toque fue sobre el botón cerrar, no procesar swipe
+      if(e.target.closest('#viewerClose')) return;
       const dx = e.changedTouches[0].clientX - _vSwipeX;
       const dy = e.changedTouches[0].clientY - _vSwipeY;
       _vSwipeX = null; _vSwipeY = null;
-      // Solo swipe horizontal claro (más horizontal que vertical, mínimo 40px)
       if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
       const page = edPages[edViewerIdx];
       const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
       if(dx < 0){
-        // Swipe izquierda → siguiente
+        // Swipe izquierda → siguiente bocadillo / página
         if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
           _vStartBubbleFade();
           edViewerTextStep++; edUpdateViewer();
@@ -2899,8 +2914,8 @@ function edInitViewerTap(){
           edUpdateViewer();
         }
       } else {
-        // Swipe derecha → anterior
-        if(page?.textMode==='sequential' && edViewerTextStep > 0){
+        // Swipe derecha → bocadillo anterior / página anterior
+        if(page?.textMode==='sequential' && edViewerTextStep > 1){
           edViewerTextStep--; edUpdateViewer();
         } else if(edViewerIdx > 0){
           edViewerIdx--;
@@ -2911,6 +2926,11 @@ function edInitViewerTap(){
         }
       }
     }, {passive:true});
+
+  // ── MODO DESKTOP ──
+  } else {
+    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
+    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
   }
 }
 function edCloseViewer(){
@@ -3238,14 +3258,25 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  $('viewerClose')?.addEventListener('pointerup', e=>{ e.stopPropagation(); edCloseViewer(); });
-  $('viewerClose')?.addEventListener('touchend',  e=>{ e.stopPropagation(); e.preventDefault(); edCloseViewer(); });
-  $('viewerClose')?.addEventListener('click',     e=>{ e.stopPropagation(); edCloseViewer(); });
+  // Botón cerrar táctil
+  ['pointerup','touchend','click'].forEach(ev=>{
+    $('viewerClose')?.addEventListener(ev, e=>{
+      e.stopPropagation(); e.preventDefault(); edCloseViewer();
+    });
+  });
+  // Botón cerrar desktop
+  ['pointerup','click'].forEach(ev=>{
+    $('viewerCloseDesktop')?.addEventListener(ev, e=>{
+      e.stopPropagation(); edCloseViewer();
+    });
+  });
+  // Botón anterior (desktop)
   $('viewerPrev')?.addEventListener('pointerup', e=>{
     e.stopPropagation();
     edShowViewerCtrls();
     const page=edPages[edViewerIdx];
-    if(page?.textMode==='sequential' && edViewerTextStep > 0){
+    // textStep mínimo es 1 (0/x en contador) — nunca bajar de 1
+    if(page?.textMode==='sequential' && edViewerTextStep > 1){
       edViewerTextStep--; edUpdateViewer(); return;
     }
     if(edViewerIdx>0){
@@ -3256,6 +3287,7 @@ function EditorView_init(){
       edUpdateViewer();
     }
   });
+  // Botón siguiente (desktop)
   $('viewerNext')?.addEventListener('pointerup', e=>{
     e.stopPropagation();
     edShowViewerCtrls();
