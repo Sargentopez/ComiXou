@@ -2889,52 +2889,81 @@ function edInitViewerTap(){
   const viewer = $('editorViewer');
   if(!viewer) return;
 
-  // Mostrar controles al abrir
+  // Mostrar controles desktop al abrir (en táctil el CSS los oculta con display:none)
   edShowViewerCtrls();
 
   if(_viewerTapBound) return;
   _viewerTapBound = true;
 
-  // ── SWIPE TÁCTIL (siempre activo: Android, iOS, y tablets con teclado) ──
-  let _vSwipeX = null, _vSwipeY = null;
+  // ══════════════════════════════════════════════════════════
+  // SWIPE TÁCTIL — patrón estándar de lectores de cómic/webtoon
+  // Referencia: Webtoon, Tapas, Comixology-style swipe navigation
+  // ══════════════════════════════════════════════════════════
+  let _sx = null, _sy = null, _scrollCancelled = false;
+
   viewer.addEventListener('touchstart', e => {
-    if(e.touches.length !== 1) return;
-    _vSwipeX = e.touches[0].clientX;
-    _vSwipeY = e.touches[0].clientY;
+    if(e.touches.length !== 1){ _sx = null; return; }
+    _sx = e.touches[0].clientX;
+    _sy = e.touches[0].clientY;
+    _scrollCancelled = false;
   }, {passive:true});
+
+  viewer.addEventListener('touchmove', e => {
+    // Cancelar swipe si el gesto es primordialmente vertical (scroll)
+    if(_sx === null) return;
+    const dx = e.touches[0].clientX - _sx;
+    const dy = e.touches[0].clientY - _sy;
+    if(Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10){
+      _scrollCancelled = true;
+    }
+  }, {passive:true});
+
   viewer.addEventListener('touchend', e => {
-    if(_vSwipeX === null || e.changedTouches.length !== 1) return;
-    const dx = e.changedTouches[0].clientX - _vSwipeX;
-    const dy = e.changedTouches[0].clientY - _vSwipeY;
-    _vSwipeX = null; _vSwipeY = null;
-    if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if(_sx === null || _scrollCancelled || e.changedTouches.length !== 1){
+      _sx = null; return;
+    }
+    const dx = e.changedTouches[0].clientX - _sx;
+    const dy = e.changedTouches[0].clientY - _sy;
+    _sx = null;
+
+    // Umbral mínimo: 30px horizontal, y la componente horizontal debe dominar
+    if(Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)){ return; }
+
     const page = edPages[edViewerIdx];
-    const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    const tl = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
+    const isSeq = page?.textMode === 'sequential';
+
     if(dx < 0){
-      if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+      // ← Swipe izquierda: avanzar (siguiente texto o siguiente página)
+      if(isSeq && edViewerTextStep < tl.length){
         _vStartBubbleFade();
-        edViewerTextStep++; edUpdateViewer();
-      } else if(edViewerIdx < edPages.length-1){
+        edViewerTextStep++;
+        edUpdateViewer();
+      } else if(edViewerIdx < edPages.length - 1){
         edViewerIdx++;
-        { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-          edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+        const np = edPages[edViewerIdx];
+        const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
+        edViewerTextStep = (np?.textMode==='sequential' && ntl.length > 0) ? 1 : 0;
         edUpdateViewer();
       }
     } else {
-      if(page?.textMode==='sequential' && edViewerTextStep > 1){
-        edViewerTextStep--; edUpdateViewer();
+      // → Swipe derecha: retroceder (texto anterior o página anterior)
+      if(isSeq && edViewerTextStep > 1){
+        edViewerTextStep--;
+        edUpdateViewer();
       } else if(edViewerIdx > 0){
         edViewerIdx--;
-        const pp=edPages[edViewerIdx];
-        const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+        const pp = edPages[edViewerIdx];
+        const ptl = (pp?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
         edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
         edUpdateViewer();
       }
     }
   }, {passive:true});
 
-  // ── CONTROLES DESKTOP (mouse): siempre activos, no dependen de detección táctil ──
-  // pointerdown con capture para que cualquier clic sobre el visor muestre los controles
+  // ══════════════════════════════════════════════════════════
+  // CONTROLES DESKTOP (mouse) — mostrar pastilla al mover el ratón
+  // ══════════════════════════════════════════════════════════
   viewer.addEventListener('pointerdown', e => {
     if(e.pointerType === 'mouse') edShowViewerCtrls();
   }, {capture:true, passive:true});

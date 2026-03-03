@@ -584,9 +584,10 @@ body.editor-page #appView {
 }
 
 /* Controles flotantes: pastilla semitransparente pegada abajo */
+/* Pastilla de controles ◀ contador ▶ — solo en desktop (mouse) */
 .viewer-controls {
   position: absolute;
-  bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  bottom: max(env(safe-area-inset-bottom, 0px), 16px);
   left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 8px;
   background: rgba(0,0,0,.55);
@@ -595,8 +596,11 @@ body.editor-page #appView {
   border-radius: 100px;
   padding: 6px 10px;
   z-index: 410;
-  /* aparecer/desaparecer con tap */
   transition: opacity .25s;
+}
+/* En táctil: pastilla SIEMPRE oculta — la navegación es por swipe */
+@media (pointer: coarse) {
+  .viewer-controls { display: none !important; }
 }
 .viewer-controls.hidden { opacity: 0; pointer-events: none; }
 
@@ -611,31 +615,26 @@ body.editor-page #appView {
   white-space: nowrap;
 }
 .viewer-btn:active { background: rgba(255,255,255,.3); }
-.viewer-btn.close-btn {
-  background: rgba(255,255,255,.22);
-  border-color: rgba(255,255,255,.6);
-  font-size: 0.9rem;
-}
 
-/* ✕ fuera de viewerControls: siempre visible, nunca afectado por .hidden */
+/* Botón ✕ — SIEMPRE visible en ambos modos, esquina superior derecha */
 .viewer-close-btn {
   position: absolute;
-  bottom: max(env(safe-area-inset-bottom, 0px), 12px);
-  right: 16px;          /* esquina derecha en desktop */
+  top: max(env(safe-area-inset-top, 0px), 16px);
+  right: 16px;
   z-index: 420;
   pointer-events: all;
-  background: rgba(255,255,255,.22);
-  border-color: rgba(255,255,255,.6);
-  font-size: 0.9rem;
+  background: rgba(0,0,0,.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1.5px solid rgba(255,255,255,.5);
+  color: #fff;
+  border-radius: 100px;
+  font-size: 1rem;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background .12s;
 }
-/* En táctil: centrado abajo para pulgar */
-@media (pointer: coarse) {
-  .viewer-close-btn {
-    right: auto;
-    left: 50%;
-    transform: translateX(-50%);
-  }
-}
+.viewer-close-btn:active { background: rgba(255,255,255,.25); }
 
 #viewerCounter {
   color: rgba(255,255,255,.85);
