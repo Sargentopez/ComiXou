@@ -2802,6 +2802,7 @@ function _edViewerKey(e){
     const page=edPages[edViewerIdx];
     const tl=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+      _vStartBubbleFade();
       edViewerTextStep++; edUpdateViewer();
     } else if(edViewerIdx < edPages.length-1){
       edViewerIdx++;
@@ -2812,7 +2813,7 @@ function _edViewerKey(e){
   } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
     e.preventDefault();
     const page=edPages[edViewerIdx];
-    if(page?.textMode==='sequential' && edViewerTextStep > 0){
+    if(page?.textMode==='sequential' && edViewerTextStep > 1){
       edViewerTextStep--; edUpdateViewer();
     } else if(edViewerIdx > 0){
       edViewerIdx--;
@@ -2836,18 +2837,55 @@ function edShowViewerCtrls(){
   clearTimeout(_viewerHideTimer);
   _viewerHideTimer = setTimeout(()=>ctrls.classList.add('hidden'), 3500);
 }
+function _vStartBubbleFade(){
+  // Solo hacer fade si el bocadillo que va a quedar atrás es tipo 'bubble'
+  // (las cajas de texto permanecen visibles, no se desvanecen)
+  const page = edPages[edViewerIdx];
+  const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+  // El bocadillo "anterior" será el que está en textStep (el actual antes del incremento)
+  const curLayer = tl[edViewerTextStep - 1];
+  if(!curLayer || curLayer.type !== 'bubble'){
+    _vPrevBubbleFade = 0; return;  // no es bubble, no fade
+  }
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
+  _vPrevBubbleFade = 1.0;
+  const duration = 400;
+  const start = performance.now();
+  function step(now){
+    const t = Math.min(1, (now - start) / duration);
+    _vPrevBubbleFade = 1 - t;
+    edUpdateViewer();
+    if(t < 1) _vFadeRaf = requestAnimationFrame(step);
+    else { _vFadeRaf=null; _vPrevBubbleFade=0; edUpdateViewer(); }
+  }
+  _vFadeRaf = requestAnimationFrame(step);
+}
 
 function edInitViewerTap(){
   const viewer = $('editorViewer');
   if(!viewer) return;
-  edShowViewerCtrls();
-  if(!_viewerTapBound){
-    _viewerTapBound = true;
-    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
-    viewer.addEventListener('touchstart',  () => edShowViewerCtrls(), {capture:true, passive:true});
-    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
 
-    // Swipe horizontal para pasar páginas en táctil
+  // Detectar si es dispositivo táctil
+  const isTouch = navigator.maxTouchPoints > 0;
+
+  // Mostrar controles correctos
+  const touchClose   = $('viewerClose');
+  const desktopCtrls = $('viewerControls');
+  if(isTouch){
+    if(touchClose)   touchClose.style.display   = '';
+    if(desktopCtrls) desktopCtrls.style.display = 'none';
+  } else {
+    if(touchClose)   touchClose.style.display   = 'none';
+    if(desktopCtrls) desktopCtrls.style.display = '';
+    edShowViewerCtrls();
+  }
+
+  if(_viewerTapBound) return;
+  _viewerTapBound = true;
+
+  // ── MODO TÁCTIL ──
+  if(isTouch){
+    // Swipe horizontal para navegar
     let _vSwipeX = null, _vSwipeY = null;
     viewer.addEventListener('touchstart', e => {
       if(e.touches.length !== 1) return;
@@ -2856,17 +2894,19 @@ function edInitViewerTap(){
     }, {passive:true});
     viewer.addEventListener('touchend', e => {
       if(_vSwipeX === null || e.changedTouches.length !== 1) return;
+      // Si el toque fue sobre el botón cerrar, no procesar swipe
+      if(e.target.closest('#viewerClose')) return;
       const dx = e.changedTouches[0].clientX - _vSwipeX;
       const dy = e.changedTouches[0].clientY - _vSwipeY;
       _vSwipeX = null; _vSwipeY = null;
-      // Solo swipe horizontal claro (más horizontal que vertical, mínimo 40px)
       if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
       const page = edPages[edViewerIdx];
       const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
       if(dx < 0){
-        // Swipe izquierda → siguiente
+        // Swipe izquierda → siguiente bocadillo / página
         if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
-            edViewerTextStep++; edUpdateViewer();
+          _vStartBubbleFade();
+          edViewerTextStep++; edUpdateViewer();
         } else if(edViewerIdx < edPages.length-1){
           edViewerIdx++;
           { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -2874,8 +2914,8 @@ function edInitViewerTap(){
           edUpdateViewer();
         }
       } else {
-        // Swipe derecha → anterior
-        if(page?.textMode==='sequential' && edViewerTextStep > 0){
+        // Swipe derecha → bocadillo anterior / página anterior
+        if(page?.textMode==='sequential' && edViewerTextStep > 1){
           edViewerTextStep--; edUpdateViewer();
         } else if(edViewerIdx > 0){
           edViewerIdx--;
@@ -2886,9 +2926,16 @@ function edInitViewerTap(){
         }
       }
     }, {passive:true});
+
+  // ── MODO DESKTOP ──
+  } else {
+    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
+    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
   }
 }
 function edCloseViewer(){
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
+  _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
   clearTimeout(_viewerHideTimer);
   _viewerTapBound = false; // permitir re-bind en próxima apertura
@@ -2936,7 +2983,7 @@ function edUpdateViewer(){
     const cnt=$('viewerCounter');
     if(cnt){
       if(isSeq&&textLayers.length>0){
-        cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep}/${textLayers.length}`;
+        cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep-1}/${textLayers.length}`;
       } else {
         cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
       }
@@ -2948,9 +2995,30 @@ function edUpdateViewer(){
 function _edViewerDrawTextsOnCtx(page, ctx, can){
   const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
   const isSeq = page.textMode === 'sequential';
-  // En secuencial mostrar solo hasta textStep; en inmediato mostrar todos
-  const toShow = isSeq ? textLayers.slice(0, edViewerTextStep) : textLayers;
-  toShow.forEach(l => l.draw(ctx, can));
+  if(!isSeq){ textLayers.forEach(l=>l.draw(ctx, can)); return; }
+
+  // Modo secuencial:
+  // - Cajas de texto (type='text'): visibles al 100% cuando reveladas, permanecen
+  // - Bocadillos (type='bubble'): el actual al 100%, el anterior con fade-out 1→0
+  const toShow = textLayers.slice(0, edViewerTextStep);
+  toShow.forEach((l, vi) => {
+    if(l.type === 'text'){
+      l.draw(ctx, can);  // cajas siempre al 100%
+    } else {
+      // Bocadillo: solo el actual y el penúltimo (en fade)
+      const isCurrent  = vi === toShow.length - 1;
+      const isPrevious = vi === toShow.length - 2;
+      if(isCurrent){
+        l.draw(ctx, can);
+      } else if(isPrevious && _vPrevBubbleFade > 0){
+        ctx.save();
+        ctx.globalAlpha = _vPrevBubbleFade;
+        l.draw(ctx, can);
+        ctx.restore();
+      }
+      // Bocadillos más antiguos: ya desaparecieron
+    }
+  });
 }
 
 /* ══════════════════════════════════════════
@@ -3190,13 +3258,25 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  $('viewerClose')?.addEventListener('click',      e=>{ e.stopPropagation(); edCloseViewer(); });
-  $('viewerClose')?.addEventListener('pointerup',  e=>{ e.stopPropagation(); edCloseViewer(); });
+  // Botón cerrar táctil
+  ['pointerup','touchend','click'].forEach(ev=>{
+    $('viewerClose')?.addEventListener(ev, e=>{
+      e.stopPropagation(); e.preventDefault(); edCloseViewer();
+    });
+  });
+  // Botón cerrar desktop
+  ['pointerup','click'].forEach(ev=>{
+    $('viewerCloseDesktop')?.addEventListener(ev, e=>{
+      e.stopPropagation(); edCloseViewer();
+    });
+  });
+  // Botón anterior (desktop)
   $('viewerPrev')?.addEventListener('pointerup', e=>{
     e.stopPropagation();
     edShowViewerCtrls();
     const page=edPages[edViewerIdx];
-    if(page?.textMode==='sequential' && edViewerTextStep > 0){
+    // textStep mínimo es 1 (0/x en contador) — nunca bajar de 1
+    if(page?.textMode==='sequential' && edViewerTextStep > 1){
       edViewerTextStep--; edUpdateViewer(); return;
     }
     if(edViewerIdx>0){
@@ -3207,12 +3287,14 @@ function EditorView_init(){
       edUpdateViewer();
     }
   });
+  // Botón siguiente (desktop)
   $('viewerNext')?.addEventListener('pointerup', e=>{
     e.stopPropagation();
     edShowViewerCtrls();
     const page=edPages[edViewerIdx];
     const textLayers=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     if(page?.textMode==='sequential' && edViewerTextStep < textLayers.length){
+      _vStartBubbleFade();
       edViewerTextStep++; edUpdateViewer(); return;
     }
     if(edViewerIdx<edPages.length-1){

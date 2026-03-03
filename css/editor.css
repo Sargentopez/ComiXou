@@ -616,6 +616,16 @@ body.editor-page #appView {
   border-color: rgba(255,255,255,.6);
   font-size: 0.9rem;
 }
+/* Botón cerrar táctil: centrado abajo, siempre visible */
+.viewer-close-touch {
+  position: absolute;
+  bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 420;
+  pointer-events: all;
+  display: none; /* JS lo muestra solo en táctil */
+}
 #viewerCounter {
   color: rgba(255,255,255,.85);
   font-size: 0.8rem; font-weight: 700; font-family: var(--font-body);
