@@ -2902,10 +2902,11 @@ function edInitViewerTap(){
   let _sx = null, _sy = null, _scrollCancelled = false;
 
   viewer.addEventListener('touchstart', e => {
-    if(e.touches.length !== 1){ _sx = null; return; }
+    // Reset completo en cada nuevo toque, independientemente del nº de dedos
+    _sx = null; _sy = null; _scrollCancelled = false;
+    if(e.touches.length !== 1) return;
     _sx = e.touches[0].clientX;
     _sy = e.touches[0].clientY;
-    _scrollCancelled = false;
   }, {passive:true});
 
   viewer.addEventListener('touchmove', e => {
@@ -3305,9 +3306,15 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  // Botón cerrar: click + pointerup para máxima compatibilidad
+  // Botón cerrar desktop (dentro de pastilla)
   ['click','pointerup'].forEach(ev=>{
     $('viewerClose')?.addEventListener(ev, e=>{
+      e.stopPropagation(); edCloseViewer();
+    });
+  });
+  // Botón cerrar móvil (táctil, centrado abajo)
+  ['click','pointerup'].forEach(ev=>{
+    $('viewerCloseMobile')?.addEventListener(ev, e=>{
       e.stopPropagation(); edCloseViewer();
     });
   });

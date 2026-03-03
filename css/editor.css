@@ -584,7 +584,7 @@ body.editor-page #appView {
 }
 
 /* Controles flotantes: pastilla semitransparente pegada abajo */
-/* Pastilla de controles ◀ contador ▶ — solo en desktop (mouse) */
+/* Pastilla desktop: ◀ contador ▶ ✕ centrada abajo */
 .viewer-controls {
   position: absolute;
   bottom: max(env(safe-area-inset-bottom, 0px), 16px);
@@ -598,7 +598,7 @@ body.editor-page #appView {
   z-index: 410;
   transition: opacity .25s;
 }
-/* En táctil: pastilla SIEMPRE oculta — la navegación es por swipe */
+/* Táctil: pastilla SIEMPRE oculta — navegación por swipe */
 @media (pointer: coarse) {
   .viewer-controls { display: none !important; }
 }
@@ -616,25 +616,21 @@ body.editor-page #appView {
 }
 .viewer-btn:active { background: rgba(255,255,255,.3); }
 
-/* Botón ✕ — SIEMPRE visible en ambos modos, esquina superior derecha */
-.viewer-close-btn {
+/* ✕ dentro de la pastilla desktop — sin estilo extra, hereda viewer-btn */
+.viewer-close-inline { /* hereda todo de .viewer-btn */ }
+
+/* ✕ táctil: centrado abajo, siempre visible, solo en pointer:coarse */
+.viewer-close-touch {
+  display: none;  /* oculto por defecto (desktop) */
   position: absolute;
-  top: max(env(safe-area-inset-top, 0px), 16px);
-  right: 16px;
+  bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+  left: 50%; transform: translateX(-50%);
   z-index: 420;
   pointer-events: all;
-  background: rgba(0,0,0,.45);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border: 1.5px solid rgba(255,255,255,.5);
-  color: #fff;
-  border-radius: 100px;
-  font-size: 1rem;
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: background .12s;
 }
-.viewer-close-btn:active { background: rgba(255,255,255,.25); }
+@media (pointer: coarse) {
+  .viewer-close-touch { display: block; }
+}
 
 #viewerCounter {
   color: rgba(255,255,255,.85);
