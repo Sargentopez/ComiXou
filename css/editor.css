@@ -615,6 +615,11 @@ body.editor-page #appView {
   background: rgba(255,255,255,.22);
   border-color: rgba(255,255,255,.6);
   font-size: 0.9rem;
+  position: absolute;
+  top: max(env(safe-area-inset-top, 0px), 14px);
+  right: 16px;
+  z-index: 420;
+  pointer-events: all;
 }
 #viewerCounter {
   color: rgba(255,255,255,.85);
