@@ -2767,26 +2767,6 @@ function edOpenViewer(){
   if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
   _viewerKeyHandler = _edViewerKey;
   document.addEventListener('keydown', _viewerKeyHandler);
-  // Resize: recalcular tamaño del visor al girar/redimensionar
-  if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
-  let _viewerResizeTimer;
-  _viewerResizeFn = () => {
-    clearTimeout(_viewerResizeTimer);
-    _viewerResizeTimer = setTimeout(() => { edUpdateViewer(); }, 150);
-  };
-  window.addEventListener('resize', _viewerResizeFn);
-  // Fullscreen: si el navegador sale de fullscreen al girar, volver a entrar
-  if(_viewerFsFn) {
-    document.removeEventListener('fullscreenchange', _viewerFsFn);
-    document.removeEventListener('webkitfullscreenchange', _viewerFsFn);
-  }
-  _viewerFsFn = () => {
-    if(!$('editorViewer')?.classList.contains('open')) return;
-    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    if(!active && typeof Fullscreen !== 'undefined') Fullscreen.enter();
-  };
-  document.addEventListener('fullscreenchange', _viewerFsFn);
-  document.addEventListener('webkitfullscreenchange', _viewerFsFn);
 }
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
@@ -2850,7 +2830,8 @@ function _edViewerKey(e){
 
 // Tap en el visor → mostrar/ocultar controles
 let _viewerTapBound = false, _viewerHideTimer;
-let _viewerResizeFn = null, _viewerFsFn = null;
+let _vPrevBubbleFade = 0;  // opacidad del bocadillo anterior en fade
+let _vFadeRaf = null;       // requestAnimationFrame del fade
 function edShowViewerCtrls(){
   const ctrls = $('viewerControls');
   if(!ctrls) return;
@@ -2886,70 +2867,64 @@ function edInitViewerTap(){
   const viewer = $('editorViewer');
   if(!viewer) return;
 
-  // Mostrar botón táctil por defecto; se oculta si se detecta mouse real
-  const touchClose   = $('viewerClose');
-  const desktopCtrls = $('viewerControls');
-  if(touchClose)   touchClose.style.display   = '';
-  if(desktopCtrls) desktopCtrls.style.display = 'none';
+  // Detectar si es dispositivo táctil
+  const isTouch = navigator.maxTouchPoints > 0;
+
+  // Mostrar controles (siempre visibles, sin distinción táctil/desktop)
+  edShowViewerCtrls();
 
   if(_viewerTapBound) return;
   _viewerTapBound = true;
 
-  // Detección de input real: si llega pointermove con mouse, cambiar a modo desktop
-  // Patrón estándar industria (Modernizr, Material Design)
-  const _onMouseDetected = () => {
-    if(touchClose)   touchClose.style.display   = 'none';
-    if(desktopCtrls) desktopCtrls.style.display = '';
-    edShowViewerCtrls();
-    viewer.removeEventListener('pointermove', _onMouseDetected);
-  };
-  viewer.addEventListener('pointermove', e => {
-    if(e.pointerType === 'mouse') _onMouseDetected();
-  }, {passive:true});
-
-  // Swipe táctil — siempre activo (también en tablets con teclado)
-  let _vSwipeX = null, _vSwipeY = null;
-  viewer.addEventListener('touchstart', e => {
-    if(e.touches.length !== 1) return;
-    _vSwipeX = e.touches[0].clientX;
-    _vSwipeY = e.touches[0].clientY;
-  }, {passive:true});
-  viewer.addEventListener('touchend', e => {
-    if(_vSwipeX === null || e.changedTouches.length !== 1) return;
-    if(e.target.closest('#viewerClose')) return;
-    const dx = e.changedTouches[0].clientX - _vSwipeX;
-    const dy = e.changedTouches[0].clientY - _vSwipeY;
-    _vSwipeX = null; _vSwipeY = null;
-    if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    const page = edPages[edViewerIdx];
-    const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-    if(dx < 0){
-      if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
-        _vStartBubbleFade();
-        edViewerTextStep++; edUpdateViewer();
-      } else if(edViewerIdx < edPages.length-1){
-        edViewerIdx++;
-        { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-          edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
-        edUpdateViewer();
+  // ── MODO TÁCTIL ──
+  if(isTouch){
+    // Swipe horizontal para navegar
+    let _vSwipeX = null, _vSwipeY = null;
+    viewer.addEventListener('touchstart', e => {
+      if(e.touches.length !== 1) return;
+      _vSwipeX = e.touches[0].clientX;
+      _vSwipeY = e.touches[0].clientY;
+    }, {passive:true});
+    viewer.addEventListener('touchend', e => {
+      if(_vSwipeX === null || e.changedTouches.length !== 1) return;
+      // Si el toque fue sobre el botón cerrar, no procesar swipe
+      // Si el desplazamiento es mínimo, no es swipe
+      const dx = e.changedTouches[0].clientX - _vSwipeX;
+      const dy = e.changedTouches[0].clientY - _vSwipeY;
+      _vSwipeX = null; _vSwipeY = null;
+      if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      const page = edPages[edViewerIdx];
+      const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+      if(dx < 0){
+        // Swipe izquierda → siguiente bocadillo / página
+        if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+          _vStartBubbleFade();
+          edViewerTextStep++; edUpdateViewer();
+        } else if(edViewerIdx < edPages.length-1){
+          edViewerIdx++;
+          { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+            edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+          edUpdateViewer();
+        }
+      } else {
+        // Swipe derecha → bocadillo anterior / página anterior
+        if(page?.textMode==='sequential' && edViewerTextStep > 1){
+          edViewerTextStep--; edUpdateViewer();
+        } else if(edViewerIdx > 0){
+          edViewerIdx--;
+          const pp=edPages[edViewerIdx];
+          const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+          edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+          edUpdateViewer();
+        }
       }
-    } else {
-      if(page?.textMode==='sequential' && edViewerTextStep > 1){
-        edViewerTextStep--; edUpdateViewer();
-      } else if(edViewerIdx > 0){
-        edViewerIdx--;
-        const pp=edPages[edViewerIdx];
-        const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-        edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
-        edUpdateViewer();
-      }
-    }
-  }, {passive:true});
+    }, {passive:true});
 
-  // Mostrar controles desktop al interactuar con ratón
-  viewer.addEventListener('pointerdown', e => {
-    if(e.pointerType === 'mouse') edShowViewerCtrls();
-  }, {capture:true, passive:true});
+  // ── MODO DESKTOP ──
+  } else {
+    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
+    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
+  }
 }
 function edCloseViewer(){
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
@@ -2961,17 +2936,9 @@ function edCloseViewer(){
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;
   }
-  if(_viewerResizeFn){
-    window.removeEventListener('resize', _viewerResizeFn);
-    _viewerResizeFn = null;
-  }
-  if(_viewerFsFn){
-    document.removeEventListener('fullscreenchange', _viewerFsFn);
-    document.removeEventListener('webkitfullscreenchange', _viewerFsFn);
-    _viewerFsFn = null;
-  }
 }
 function edUpdateViewer(){
+  if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
   // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
   const _po = page.orientation || edOrientation;
@@ -3285,15 +3252,9 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  // Botón cerrar táctil
-  ['pointerup','touchend','click'].forEach(ev=>{
+  // Botón cerrar: click + pointerup para máxima compatibilidad
+  ['click','pointerup'].forEach(ev=>{
     $('viewerClose')?.addEventListener(ev, e=>{
-      e.stopPropagation(); e.preventDefault(); edCloseViewer();
-    });
-  });
-  // Botón cerrar desktop
-  ['pointerup','click'].forEach(ev=>{
-    $('viewerCloseDesktop')?.addEventListener(ev, e=>{
       e.stopPropagation(); edCloseViewer();
     });
   });
