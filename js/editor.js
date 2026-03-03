@@ -1380,6 +1380,9 @@ function edOnStart(e){
   // Rastrear pointers activos (para pinch con pointer events)
   if(!window._edActivePointers) window._edActivePointers = new Map();
   window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+        if (e.target.setPointerCapture) {
+            try { e.target.setPointerCapture(e.pointerId); } catch {}
+        }
   // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
   if(window._edActivePointers.size === 2){
     // Si estaba pintando, cancelar el trazo parcial sin guardarlo
@@ -1532,6 +1535,9 @@ function edOnMove(e){
   // Pinch activo
   if(window._edActivePointers && window._edActivePointers.size >= 2){
     if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
+        if (e.target.setPointerCapture) {
+            try { e.target.setPointerCapture(e.pointerId); } catch {}
+        }
     edPinchMove(e);
     return;
   }
