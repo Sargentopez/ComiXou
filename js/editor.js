@@ -3239,6 +3239,7 @@ function EditorView_init(){
 
   // ── VISOR ──
   $('viewerClose')?.addEventListener('pointerup', e=>{ e.stopPropagation(); edCloseViewer(); });
+  $('viewerClose')?.addEventListener('touchend',  e=>{ e.stopPropagation(); e.preventDefault(); edCloseViewer(); });
   $('viewerPrev')?.addEventListener('pointerup', e=>{
     e.stopPropagation();
     edShowViewerCtrls();
