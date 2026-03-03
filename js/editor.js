@@ -26,6 +26,7 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
 let edPinchCenter0 = null, edPinchCamera0 = null;
+let _edPinchDrawSnapshot = null;  // snapshot workspace completo antes del pinch
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
@@ -425,6 +426,10 @@ class DrawLayer extends BaseLayer {
     tmp.getContext('2d').drawImage(this._canvas,
       edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
     return tmp.toDataURL();
+  }
+  toDataUrlFull(){
+    // Exportar el workspace completo (incluye dibujo fuera del lienzo)
+    return this._canvas.toDataURL();
   }
   clear(){
     this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
@@ -1381,11 +1386,20 @@ function edOnStart(e){
     // Si estaba pintando, cancelar el trazo sin guardarlo
     if(edPainting){
       edPainting = false;
-      // Restaurar usando _edDrawApplyHistory que coloca el bitmap correctamente
-      // en las coordenadas del workspace (con los márgenes correctos)
-      if(edDrawHistory.length > 0){
+      // Restaurar el workspace completo (incluye dibujo fuera del lienzo)
+      if(_edPinchDrawSnapshot){
+        _edDrawApplyHistoryFull(_edPinchDrawSnapshot);
+        _edPinchDrawSnapshot = null;
+      } else if(edDrawHistory.length > 0){
         _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx] || null);
       }
+    }
+    // Snapshot del workspace completo antes de iniciar pinch
+    // (preserva dibujo fuera del lienzo para restaurar si se cancela)
+    {
+      const _pg = edPages[edCurrentPage];
+      const _dl = _pg?.layers.find(l => l.type === 'draw');
+      _edPinchDrawSnapshot = _dl ? _dl.toDataUrlFull() : null;
     }
     edPinchStart(e);
     return;
@@ -1653,7 +1667,6 @@ function _edDrawApplyHistory(dataUrl){
   const page = edPages[edCurrentPage]; if(!page) return;
   let dl = page.layers.find(l => l.type === 'draw');
   if(!dl){ dl = new DrawLayer(); page.layers.unshift(dl); edLayers=page.layers; }
-  // Restaurar bitmap del DrawLayer desde dataUrl
   dl.clear();
   if(dataUrl){
     const img = new Image();
@@ -1661,6 +1674,23 @@ function _edDrawApplyHistory(dataUrl){
       const pw = edPageW(), ph = edPageH();
       dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
         edMarginX(), edMarginY(), pw, ph);
+      edRedraw();
+    };
+    img.src = dataUrl;
+  } else {
+    edRedraw();
+  }
+}
+function _edDrawApplyHistoryFull(dataUrl){
+  // Restaura desde snapshot del workspace completo (preserva dibujo fuera del lienzo)
+  const page = edPages[edCurrentPage]; if(!page) return;
+  let dl = page.layers.find(l => l.type === 'draw');
+  if(!dl){ dl = new DrawLayer(); page.layers.unshift(dl); edLayers=page.layers; }
+  dl.clear();
+  if(dataUrl){
+    const img = new Image();
+    img.onload = () => {
+      dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
       edRedraw();
     };
     img.src = dataUrl;
