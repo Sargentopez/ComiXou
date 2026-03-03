@@ -2830,6 +2830,8 @@ function _edViewerKey(e){
 
 // Tap en el visor → mostrar/ocultar controles
 let _viewerTapBound = false, _viewerHideTimer;
+let _vPrevBubbleFade = 0;  // opacidad del bocadillo anterior en fade
+let _vFadeRaf = null;       // requestAnimationFrame del fade
 function edShowViewerCtrls(){
   const ctrls = $('viewerControls');
   if(!ctrls) return;
