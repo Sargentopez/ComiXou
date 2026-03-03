@@ -2864,9 +2864,11 @@ function _vStartBubbleFade(){
   _vFadeRaf = requestAnimationFrame(step);
 }
 
+// AbortController del visor: elimina TODOS los listeners de una vez al cerrar
+let _viewerAC = null;
+
 // ── Navegación del visor: funciones únicas usadas por swipe, botones y teclado ──
 function _viewerAdvance(){
-  // Cancela fade en curso para evitar estados mixtos al cambiar contexto
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; _vPrevBubbleFade=0; }
   const page = edPages[edViewerIdx];
   const tl = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
@@ -2908,23 +2910,27 @@ function edInitViewerTap(){
   if(_viewerTapBound) return;
   _viewerTapBound = true;
 
+  // AbortController nuevo en cada apertura: al cerrar, abort() elimina TODOS los listeners
+  // Esto evita la acumulación de handlers en aperturas sucesivas (causa del bug de navegación)
+  _viewerAC = new AbortController();
+  const sig = { signal: _viewerAC.signal };
+
   // ── SWIPE TÁCTIL ──
-  // Cooldown 350ms entre swipes: evita doble disparo en Android y gestos accidentales
-  let _sx = null, _sy = null, _scrollCancelled = false, _lastSwipe = 0;
+  let _sx = null, _sy = null, _scrollCancelled = false;
 
   viewer.addEventListener('touchstart', e => {
     _sx = null; _sy = null; _scrollCancelled = false;
     if(e.touches.length !== 1) return;
     _sx = e.touches[0].clientX;
     _sy = e.touches[0].clientY;
-  }, {passive:true});
+  }, {passive:true, ...sig});
 
   viewer.addEventListener('touchmove', e => {
     if(_sx === null) return;
     const dx = e.touches[0].clientX - _sx;
     const dy = e.touches[0].clientY - _sy;
     if(Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) _scrollCancelled = true;
-  }, {passive:true});
+  }, {passive:true, ...sig});
 
   viewer.addEventListener('touchend', e => {
     if(_sx === null || _scrollCancelled){ _sx = null; return; }
@@ -2933,23 +2939,22 @@ function edInitViewerTap(){
     const dy = e.changedTouches[0].clientY - _sy;
     _sx = null;
     if(Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
-    const now = Date.now();
-    if(now - _lastSwipe < 350) return;  // cooldown anti-doble-disparo
-    _lastSwipe = now;
     if(dx < 0) _viewerAdvance(); else _viewerBack();
-  }, {passive:true});
+  }, {passive:true, ...sig});
 
   // ── CONTROLES DESKTOP (mouse) ──
   viewer.addEventListener('pointerdown', e => {
     if(e.pointerType === 'mouse') edShowViewerCtrls();
-  }, {capture:true, passive:true});
-  viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true});
+  }, {capture:true, passive:true, ...sig});
+  viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
   _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
   clearTimeout(_viewerHideTimer);
+  // Eliminar TODOS los listeners del visor (touch + mouse) de una sola vez
+  if(_viewerAC){ _viewerAC.abort(); _viewerAC=null; }
   _viewerTapBound = false; // permitir re-bind en próxima apertura
   if(_viewerKeyHandler){
     document.removeEventListener('keydown', _viewerKeyHandler);
