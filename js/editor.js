@@ -24,7 +24,8 @@ let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
 let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
-let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
+let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
+let edPinchCenter0 = null, edPinchCamera0 = null;
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
@@ -1163,12 +1164,23 @@ function _pinchAngle(pMap){
   const pts=[...pMap.values()];
   return Math.atan2(pts[1].y-pts[0].y, pts[1].x-pts[0].x);
 }
+function _pinchCenter(pMap){
+  const pts = [...pMap.values()];
+  return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+}
 function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
-  edPinching   = true;
+  edPinching    = true;
   edPinchDist0  = _pinchDist(window._edActivePointers);
   edPinchAngle0 = _pinchAngle(window._edActivePointers);
-  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  // Centro del pinch en coordenadas de pantalla
+  const ctr = _pinchCenter(window._edActivePointers);
+  edPinchCenter0 = { x: ctr.x, y: ctr.y };
+  // Snapshot de cámara para pan/zoom de canvas
+  edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
+  // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
+  const isDrawTool = ['draw','eraser'].includes(edActiveTool);
+  const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0 } : null;
   return true;
 }
@@ -1176,24 +1188,43 @@ function edPinchMove(e) {
   if (!edPinching || !window._edActivePointers || window._edActivePointers.size < 2) return;
   const dist   = _pinchDist(window._edActivePointers);
   const angle  = _pinchAngle(window._edActivePointers);
+  const ctr    = _pinchCenter(window._edActivePointers);
   const ratio  = dist / Math.max(edPinchDist0, 1);
   const dAngle = (angle - edPinchAngle0) * 180 / Math.PI;
-  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  if (la && edPinchScale0) {
-    // Escala proporcional — todos los tipos escalan width y height juntos
-    const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
-    la.width  = newW;
-    const asp = edPinchScale0.h / edPinchScale0.w;
-    la.height = newW * asp;
-    // Rotación por giro de dedos
-    la.rotation = edPinchScale0.rot + dAngle;
+
+  if (edPinchScale0) {
+    // ── Modo objeto: escalar y rotar el layer seleccionado ──
+    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if (la) {
+      const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
+      la.width  = newW;
+      la.height = newW * (edPinchScale0.h / edPinchScale0.w);
+      la.rotation = edPinchScale0.rot + dAngle;
+      edRedraw();
+    }
+  } else {
+    // ── Modo cámara: pan + zoom del canvas (draw/eraser o sin selección) ──
+    // Zoom centrado en el punto medio de los dos dedos
+    const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
+    const zRatio = newZ / edPinchCamera0.z;
+    // Pan: el punto del world bajo el centro del pinch inicial debe seguir bajo el centro actual
+    edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) * zRatio;
+    edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) * zRatio;
+    edCamera.z = newZ;
     edRedraw();
   }
 }
 function edPinchEnd() {
-  edPinching   = false;
-  edPinchDist0 = 0;
+  edPinching    = false;
+  edPinchDist0  = 0;
   edPinchScale0 = null;
+  edPinchCenter0 = null;
+  edPinchCamera0 = null;
+  // Al soltar los dedos en modo draw, reactivar la herramienta de dibujo
+  // sin perder el foco ni resetear el estado
+  if(['draw','eraser'].includes(edActiveTool)){
+    edPainting = false;  // asegurar estado limpio para el siguiente toque
+  }
 }
 
 
