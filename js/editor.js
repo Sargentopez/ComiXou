@@ -2607,7 +2607,7 @@ function edSaveProject(){
       id:'panel_'+i,
       dataUrl:edRenderPage(p),
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
-      textMode: p.textMode || 'immediate',
+      textMode: p.textMode || 'sequential',
       texts,
     };
   });
