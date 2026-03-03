@@ -2868,20 +2868,8 @@ function edInitViewerTap(){
   // Detectar si es dispositivo táctil
   const isTouch = navigator.maxTouchPoints > 0;
 
-  // Mostrar controles correctos
-  const touchClose    = $('viewerClose');
-  const desktopClose  = $('viewerCloseDesktop');
-  const desktopCtrls  = $('viewerControls');
-  if(isTouch){
-    if(touchClose)   touchClose.style.display   = '';
-    if(desktopClose) desktopClose.style.display = 'none';
-    if(desktopCtrls) desktopCtrls.style.display = 'none';
-  } else {
-    if(touchClose)   touchClose.style.display   = 'none';
-    if(desktopClose) desktopClose.style.display = '';
-    if(desktopCtrls) desktopCtrls.style.display = '';
-    edShowViewerCtrls();
-  }
+  // Mostrar controles (siempre visibles, sin distinción táctil/desktop)
+  edShowViewerCtrls();
 
   if(_viewerTapBound) return;
   _viewerTapBound = true;
@@ -2898,7 +2886,7 @@ function edInitViewerTap(){
     viewer.addEventListener('touchend', e => {
       if(_vSwipeX === null || e.changedTouches.length !== 1) return;
       // Si el toque fue sobre el botón cerrar, no procesar swipe
-      if(e.target.closest('#viewerClose')) return;
+      // Si el desplazamiento es mínimo, no es swipe
       const dx = e.changedTouches[0].clientX - _vSwipeX;
       const dy = e.changedTouches[0].clientY - _vSwipeY;
       _vSwipeX = null; _vSwipeY = null;
@@ -3262,15 +3250,9 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  // Botón cerrar táctil
-  ['pointerup','touchend','click'].forEach(ev=>{
+  // Botón cerrar: click + pointerup para máxima compatibilidad
+  ['click','pointerup'].forEach(ev=>{
     $('viewerClose')?.addEventListener(ev, e=>{
-      e.stopPropagation(); e.preventDefault(); edCloseViewer();
-    });
-  });
-  // Botón cerrar desktop
-  ['pointerup','click'].forEach(ev=>{
-    $('viewerCloseDesktop')?.addEventListener(ev, e=>{
       e.stopPropagation(); edCloseViewer();
     });
   });
