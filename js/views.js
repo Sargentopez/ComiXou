@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.54</footer>
+    <footer class="app-version">v5.55</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -297,8 +297,9 @@ Router.register('editor', {
         <button class="viewer-btn" id="viewerPrev">◀</button>
         <span id="viewerCounter">1 / 1</span>
         <button class="viewer-btn" id="viewerNext">▶</button>
-        <button class="viewer-btn close-btn" id="viewerCloseDesktop">✕</button>
       </div>
+      <!-- Desktop: botón cerrar siempre visible (fuera del auto-ocultado) -->
+      <button class="viewer-btn close-btn viewer-close-desktop" id="viewerCloseDesktop">✕</button>
     </div>
 
     <!-- MODAL DATOS DEL PROYECTO -->

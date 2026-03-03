@@ -2869,13 +2869,16 @@ function edInitViewerTap(){
   const isTouch = navigator.maxTouchPoints > 0;
 
   // Mostrar controles correctos
-  const touchClose   = $('viewerClose');
-  const desktopCtrls = $('viewerControls');
+  const touchClose    = $('viewerClose');
+  const desktopClose  = $('viewerCloseDesktop');
+  const desktopCtrls  = $('viewerControls');
   if(isTouch){
     if(touchClose)   touchClose.style.display   = '';
+    if(desktopClose) desktopClose.style.display = 'none';
     if(desktopCtrls) desktopCtrls.style.display = 'none';
   } else {
     if(touchClose)   touchClose.style.display   = 'none';
+    if(desktopClose) desktopClose.style.display = '';
     if(desktopCtrls) desktopCtrls.style.display = '';
     edShowViewerCtrls();
   }
@@ -2945,6 +2948,7 @@ function edCloseViewer(){
   }
 }
 function edUpdateViewer(){
+  if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
   // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
   const _po = page.orientation || edOrientation;
