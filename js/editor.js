@@ -2963,7 +2963,7 @@ function edUpdateViewer(){
     const cnt=$('viewerCounter');
     if(cnt){
       if(isSeq&&textLayers.length>0){
-        cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep}/${textLayers.length}`;
+        cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep-1}/${textLayers.length}`;
       } else {
         cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
       }
