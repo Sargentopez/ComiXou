@@ -2763,11 +2763,7 @@ function edOpenViewer(){
   $('editorViewer')?.classList.add('open');
   edUpdateViewer();
   edInitViewerTap();
-  // Teclado PC
-  if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
-  _viewerKeyHandler = _edViewerKey;
-  document.addEventListener('keydown', _viewerKeyHandler);
-  // Resize: recalcular tamaño del visor al girar/redimensionar
+  // Orientación: resize recalcula canvas al girar dispositivo
   if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
   let _viewerResizeTimer;
   _viewerResizeFn = () => {
@@ -2775,8 +2771,8 @@ function edOpenViewer(){
     _viewerResizeTimer = setTimeout(() => { edUpdateViewer(); }, 150);
   };
   window.addEventListener('resize', _viewerResizeFn);
-  // Fullscreen: si el navegador sale de fullscreen al girar, volver a entrar
-  if(_viewerFsFn) {
+  // Fullscreen: reentrar si el navegador lo cierra al girar
+  if(_viewerFsFn){
     document.removeEventListener('fullscreenchange', _viewerFsFn);
     document.removeEventListener('webkitfullscreenchange', _viewerFsFn);
   }
@@ -2787,6 +2783,10 @@ function edOpenViewer(){
   };
   document.addEventListener('fullscreenchange', _viewerFsFn);
   document.addEventListener('webkitfullscreenchange', _viewerFsFn);
+  // Teclado PC
+  if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
+  _viewerKeyHandler = _edViewerKey;
+  document.addEventListener('keydown', _viewerKeyHandler);
 }
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
@@ -2850,7 +2850,10 @@ function _edViewerKey(e){
 
 // Tap en el visor → mostrar/ocultar controles
 let _viewerTapBound = false, _viewerHideTimer;
-let _viewerResizeFn = null, _viewerFsFn = null;
+let _vPrevBubbleFade = 0;  // opacidad del bocadillo anterior en fade
+let _vFadeRaf = null;       // requestAnimationFrame del fade
+let _viewerResizeFn = null; // listener resize para orientación
+let _viewerFsFn = null;     // listener fullscreenchange para orientación
 function edShowViewerCtrls(){
   const ctrls = $('viewerControls');
   if(!ctrls) return;
@@ -2886,73 +2889,56 @@ function edInitViewerTap(){
   const viewer = $('editorViewer');
   if(!viewer) return;
 
-  // Detectar si es dispositivo táctil
-  const isTouch = navigator.maxTouchPoints > 0;
-
-  // Mostrar controles correctos
-  const touchClose   = $('viewerClose');
-  const desktopCtrls = $('viewerControls');
-  if(isTouch){
-    if(touchClose)   touchClose.style.display   = '';
-    if(desktopCtrls) desktopCtrls.style.display = 'none';
-  } else {
-    if(touchClose)   touchClose.style.display   = 'none';
-    if(desktopCtrls) desktopCtrls.style.display = '';
-    edShowViewerCtrls();
-  }
+  // Mostrar controles al abrir
+  edShowViewerCtrls();
 
   if(_viewerTapBound) return;
   _viewerTapBound = true;
 
-  // ── MODO TÁCTIL ──
-  if(isTouch){
-    // Swipe horizontal para navegar
-    let _vSwipeX = null, _vSwipeY = null;
-    viewer.addEventListener('touchstart', e => {
-      if(e.touches.length !== 1) return;
-      _vSwipeX = e.touches[0].clientX;
-      _vSwipeY = e.touches[0].clientY;
-    }, {passive:true});
-    viewer.addEventListener('touchend', e => {
-      if(_vSwipeX === null || e.changedTouches.length !== 1) return;
-      // Si el toque fue sobre el botón cerrar, no procesar swipe
-      if(e.target.closest('#viewerClose')) return;
-      const dx = e.changedTouches[0].clientX - _vSwipeX;
-      const dy = e.changedTouches[0].clientY - _vSwipeY;
-      _vSwipeX = null; _vSwipeY = null;
-      if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      const page = edPages[edViewerIdx];
-      const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-      if(dx < 0){
-        // Swipe izquierda → siguiente bocadillo / página
-        if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
-          _vStartBubbleFade();
-          edViewerTextStep++; edUpdateViewer();
-        } else if(edViewerIdx < edPages.length-1){
-          edViewerIdx++;
-          { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-            edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
-          edUpdateViewer();
-        }
-      } else {
-        // Swipe derecha → bocadillo anterior / página anterior
-        if(page?.textMode==='sequential' && edViewerTextStep > 1){
-          edViewerTextStep--; edUpdateViewer();
-        } else if(edViewerIdx > 0){
-          edViewerIdx--;
-          const pp=edPages[edViewerIdx];
-          const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-          edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
-          edUpdateViewer();
-        }
+  // ── SWIPE TÁCTIL (siempre activo: Android, iOS, y tablets con teclado) ──
+  let _vSwipeX = null, _vSwipeY = null;
+  viewer.addEventListener('touchstart', e => {
+    if(e.touches.length !== 1) return;
+    _vSwipeX = e.touches[0].clientX;
+    _vSwipeY = e.touches[0].clientY;
+  }, {passive:true});
+  viewer.addEventListener('touchend', e => {
+    if(_vSwipeX === null || e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - _vSwipeX;
+    const dy = e.changedTouches[0].clientY - _vSwipeY;
+    _vSwipeX = null; _vSwipeY = null;
+    if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const page = edPages[edViewerIdx];
+    const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    if(dx < 0){
+      if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+        _vStartBubbleFade();
+        edViewerTextStep++; edUpdateViewer();
+      } else if(edViewerIdx < edPages.length-1){
+        edViewerIdx++;
+        { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+          edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+        edUpdateViewer();
       }
-    }, {passive:true});
+    } else {
+      if(page?.textMode==='sequential' && edViewerTextStep > 1){
+        edViewerTextStep--; edUpdateViewer();
+      } else if(edViewerIdx > 0){
+        edViewerIdx--;
+        const pp=edPages[edViewerIdx];
+        const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+        edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+        edUpdateViewer();
+      }
+    }
+  }, {passive:true});
 
-  // ── MODO DESKTOP ──
-  } else {
-    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
-    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
-  }
+  // ── CONTROLES DESKTOP (mouse): siempre activos, no dependen de detección táctil ──
+  // pointerdown con capture para que cualquier clic sobre el visor muestre los controles
+  viewer.addEventListener('pointerdown', e => {
+    if(e.pointerType === 'mouse') edShowViewerCtrls();
+  }, {capture:true, passive:true});
+  viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true});
 }
 function edCloseViewer(){
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
@@ -2964,6 +2950,7 @@ function edCloseViewer(){
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;
   }
+  // Limpiar listeners de orientación
   if(_viewerResizeFn){
     window.removeEventListener('resize', _viewerResizeFn);
     _viewerResizeFn = null;
@@ -2975,6 +2962,7 @@ function edCloseViewer(){
   }
 }
 function edUpdateViewer(){
+  if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
   // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
   const _po = page.orientation || edOrientation;
@@ -3288,15 +3276,9 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  // Botón cerrar táctil
-  ['pointerup','touchend','click'].forEach(ev=>{
+  // Botón cerrar: click + pointerup para máxima compatibilidad
+  ['click','pointerup'].forEach(ev=>{
     $('viewerClose')?.addEventListener(ev, e=>{
-      e.stopPropagation(); e.preventDefault(); edCloseViewer();
-    });
-  });
-  // Botón cerrar desktop
-  ['pointerup','click'].forEach(ev=>{
-    $('viewerCloseDesktop')?.addEventListener(ev, e=>{
       e.stopPropagation(); edCloseViewer();
     });
   });

@@ -616,16 +616,27 @@ body.editor-page #appView {
   border-color: rgba(255,255,255,.6);
   font-size: 0.9rem;
 }
-/* Botón cerrar táctil: centrado abajo, siempre visible */
-.viewer-close-touch {
+
+/* ✕ fuera de viewerControls: siempre visible, nunca afectado por .hidden */
+.viewer-close-btn {
   position: absolute;
   bottom: max(env(safe-area-inset-bottom, 0px), 12px);
-  left: 50%;
-  transform: translateX(-50%);
+  right: 16px;          /* esquina derecha en desktop */
   z-index: 420;
   pointer-events: all;
-  display: none; /* JS lo muestra solo en táctil */
+  background: rgba(255,255,255,.22);
+  border-color: rgba(255,255,255,.6);
+  font-size: 0.9rem;
 }
+/* En táctil: centrado abajo para pulgar */
+@media (pointer: coarse) {
+  .viewer-close-btn {
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+}
+
 #viewerCounter {
   color: rgba(255,255,255,.85);
   font-size: 0.8rem; font-weight: 700; font-family: var(--font-body);
