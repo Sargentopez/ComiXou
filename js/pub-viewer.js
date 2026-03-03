@@ -78,32 +78,23 @@ const PubViewer = (() => {
       _showControls();
     }
 
-    // Ajustar text-layer al tamaño real de la imagen renderizada.
-    // Usa offsetWidth/offsetHeight del stage (coords relativas al padre),
-    // NO getBoundingClientRect que devuelve coords absolutas de pantalla.
+    // Ajustar text-layer al tamaño real de la imagen renderizada
+    // Necesario porque la imagen se escala con object-fit:contain
     function _fitTextLayer() {
-      const sw = stage.offsetWidth,  sh = stage.offsetHeight;
-      const iw = img.naturalWidth  || sw;
-      const ih = img.naturalHeight || sh;
-      if (!iw || !ih) return;
-      const scale = Math.min(sw / iw, sh / ih);
-      const rw = iw * scale,    rh = ih * scale;
-      const rl = (sw - rw) / 2, rt = (sh - rh) / 2;
+      const r = img.getBoundingClientRect();
       textLayer.style.cssText =
         `position:absolute;pointer-events:none;` +
-        `left:${rl}px;top:${rt}px;width:${rw}px;height:${rh}px;`;
+        `left:${r.left}px;top:${r.top}px;` +
+        `width:${r.width}px;height:${r.height}px;`;
     }
 
-    let _ready = false;
-    function _onReady() { if (_ready) return; _ready = true; _fitTextLayer(); _initBubbles(); }
-    img.onload  = () => _onReady();
-    img.onerror = () => { if (!_ready) { _ready = true; _initBubbles(); } };
+    img.onload = () => { _fitTextLayer(); _initBubbles(); };
+    img.onerror = () => { _initBubbles(); };
     img.src = panel.dataUrl || '';
-    if (img.complete && img.naturalWidth) _onReady();
 
     // ResizeObserver: reajustar si cambia el tamaño de pantalla (rotación, etc.)
     if (window._pvRO) { window._pvRO.disconnect(); window._pvRO = null; }
-    window._pvRO = new ResizeObserver(() => { if (img.naturalWidth) _fitTextLayer(); });
+    window._pvRO = new ResizeObserver(() => { if (img.complete) _fitTextLayer(); });
     window._pvRO.observe(stage);
   }
 

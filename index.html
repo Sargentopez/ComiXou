@@ -14,34 +14,6 @@
 </head>
 <body>
 
-
-  <!-- ═══ VISOR DE PUBLICACIONES ═══ -->
-  <div id="pubViewer">
-    <!-- Stage: imagen del panel + overlay de textos HTML -->
-    <div id="pvStage"></div>
-    <!-- Pastilla desktop: ◀ contador ▶ ✕ — oculta en táctil via CSS -->
-    <div class="pv-controls hidden" id="pvControls">
-      <button class="pv-btn" id="pvPrev">◀</button>
-      <span id="pvCounter">1 / 1</span>
-      <button class="pv-btn" id="pvNext">▶</button>
-      <button class="pv-btn" id="pvClose">✕</button>
-    </div>
-    <!-- ✕ solo táctil: siempre visible en pointer:coarse -->
-    <button class="pv-btn pv-close-touch" id="pvCloseMobile">✕</button>
-  </div>
-
-  <!-- ═══ VISOR DE PUBLICACIONES ═══ -->
-  <div id="pubViewer">
-    <div id="pvStage"></div>
-    <div class="pv-controls hidden" id="pvControls">
-      <button class="pv-btn" id="pvPrev">◀</button>
-      <span id="pvCounter">1 / 1</span>
-      <button class="pv-btn" id="pvNext">▶</button>
-      <button class="pv-btn" id="pvClose">✕</button>
-    </div>
-    <button class="pv-btn pv-close-touch" id="pvCloseMobile">✕</button>
-  </div>
-
   <!-- Cabecera fija: inyectada por header.js, persiste entre vistas -->
   <!-- Vistas SPA: se renderizan aquí -->
   <div id="appView"></div>
@@ -82,7 +54,6 @@
   <!-- PWA -->
   <script src="js/pwa.js"></script>
 
-  <script src="js/pub-viewer.js"></script>
   <!-- Arrancar -->
   <script>
     document.addEventListener('DOMContentLoaded', function() {

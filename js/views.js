@@ -335,6 +335,7 @@ Router.register('editor', {
 Router.register('reader', {
   bodyClass: 'reader-page',
   css: ['css/reader.css'],
+  hideHeader: true,
   html: () => `
     <div class="reader-topbar" id="readerTopbar">
       <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
