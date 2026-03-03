@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.67</footer>
+    <footer class="app-version">v5.66</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -335,7 +335,6 @@ Router.register('editor', {
 Router.register('reader', {
   bodyClass: 'reader-page',
   css: ['css/reader.css'],
-  hideHeader: true,
   html: () => `
     <div class="reader-topbar" id="readerTopbar">
       <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
