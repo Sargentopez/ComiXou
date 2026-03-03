@@ -1204,12 +1204,13 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom del canvas (draw/eraser o sin selección) ──
-    // Zoom centrado en el punto medio de los dos dedos
+    // Fórmula: el punto del mundo bajo el centro inicial del pinch
+    // debe quedar bajo el centro actual del pinch tras aplicar el nuevo zoom.
+    // world = (screen - cam.xy) / cam.z  →  screen = world * cam.z + cam.xy
+    // Igualando worlds: cam1.xy = ctr - (C0 - cam0.xy) / cam0.z * newZ
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
-    const zRatio = newZ / edPinchCamera0.z;
-    // Pan: el punto del world bajo el centro del pinch inicial debe seguir bajo el centro actual
-    edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) * zRatio;
-    edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) * zRatio;
+    edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
+    edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
     edCamera.z = newZ;
     edRedraw();
   }
@@ -1380,13 +1381,10 @@ function edOnStart(e){
     // Si estaba pintando, cancelar el trazo sin guardarlo
     if(edPainting){
       edPainting = false;
-      // Restaurar el último snapshot del historial local para descartar el trazo parcial
-      const page=edPages[edCurrentPage];
-      const dl=page?.layers.find(l=>l.type==='draw');
-      if(dl && edDrawHistory.length > 0){
-        const img=new Image();
-        img.onload=()=>{ dl.clear(); dl._ctx.drawImage(img,0,0); edRedraw(); };
-        img.src=edDrawHistory[edDrawHistoryIdx] || '';
+      // Restaurar usando _edDrawApplyHistory que coloca el bitmap correctamente
+      // en las coordenadas del workspace (con los márgenes correctos)
+      if(edDrawHistory.length > 0){
+        _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx] || null);
       }
     }
     edPinchStart(e);
