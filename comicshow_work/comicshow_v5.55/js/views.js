@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.56</footer>
+    <footer class="app-version">v5.55</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -297,8 +297,6 @@ Router.register('editor', {
         <button class="viewer-btn" id="viewerNext">▶</button>
         <button class="viewer-btn close-btn" id="viewerClose">✕</button>
       </div>
-      <!-- Botón cerrar solo en táctil (pointer:coarse), centrado abajo, siempre visible -->
-      <button class="viewer-btn viewer-close-touch" id="viewerCloseTouchOnly">✕</button>
     </div>
 
     <!-- MODAL DATOS DEL PROYECTO -->

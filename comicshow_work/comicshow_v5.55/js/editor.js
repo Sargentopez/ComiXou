@@ -2767,26 +2767,6 @@ function edOpenViewer(){
   if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
   _viewerKeyHandler = _edViewerKey;
   document.addEventListener('keydown', _viewerKeyHandler);
-  // Resize: recalcular tamaño del visor al girar/redimensionar
-  if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
-  let _viewerResizeTimer;
-  _viewerResizeFn = () => {
-    clearTimeout(_viewerResizeTimer);
-    _viewerResizeTimer = setTimeout(() => { edUpdateViewer(); }, 150);
-  };
-  window.addEventListener('resize', _viewerResizeFn);
-  // Fullscreen: si el navegador sale de fullscreen al girar, volver a entrar
-  if(_viewerFsFn) {
-    document.removeEventListener('fullscreenchange', _viewerFsFn);
-    document.removeEventListener('webkitfullscreenchange', _viewerFsFn);
-  }
-  _viewerFsFn = () => {
-    if(!$('editorViewer')?.classList.contains('open')) return;
-    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    if(!active && typeof Fullscreen !== 'undefined') Fullscreen.enter();
-  };
-  document.addEventListener('fullscreenchange', _viewerFsFn);
-  document.addEventListener('webkitfullscreenchange', _viewerFsFn);
 }
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
@@ -2850,7 +2830,8 @@ function _edViewerKey(e){
 
 // Tap en el visor → mostrar/ocultar controles
 let _viewerTapBound = false, _viewerHideTimer;
-let _viewerResizeFn = null, _viewerFsFn = null;
+let _vPrevBubbleFade = 0;  // opacidad del bocadillo anterior en fade
+let _vFadeRaf = null;       // requestAnimationFrame del fade
 function edShowViewerCtrls(){
   const ctrls = $('viewerControls');
   if(!ctrls) return;
@@ -2889,17 +2870,8 @@ function edInitViewerTap(){
   // Detectar si es dispositivo táctil
   const isTouch = navigator.maxTouchPoints > 0;
 
-  // Mostrar controles correctos
-  const touchClose   = $('viewerClose');
-  const desktopCtrls = $('viewerControls');
-  if(isTouch){
-    if(touchClose)   touchClose.style.display   = '';
-    if(desktopCtrls) desktopCtrls.style.display = 'none';
-  } else {
-    if(touchClose)   touchClose.style.display   = 'none';
-    if(desktopCtrls) desktopCtrls.style.display = '';
-    edShowViewerCtrls();
-  }
+  // Mostrar controles (siempre visibles, sin distinción táctil/desktop)
+  edShowViewerCtrls();
 
   if(_viewerTapBound) return;
   _viewerTapBound = true;
@@ -2916,7 +2888,7 @@ function edInitViewerTap(){
     viewer.addEventListener('touchend', e => {
       if(_vSwipeX === null || e.changedTouches.length !== 1) return;
       // Si el toque fue sobre el botón cerrar, no procesar swipe
-      if(e.target.closest('#viewerClose')) return;
+      // Si el desplazamiento es mínimo, no es swipe
       const dx = e.changedTouches[0].clientX - _vSwipeX;
       const dy = e.changedTouches[0].clientY - _vSwipeY;
       _vSwipeX = null; _vSwipeY = null;
@@ -2964,17 +2936,9 @@ function edCloseViewer(){
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;
   }
-  if(_viewerResizeFn){
-    window.removeEventListener('resize', _viewerResizeFn);
-    _viewerResizeFn = null;
-  }
-  if(_viewerFsFn){
-    document.removeEventListener('fullscreenchange', _viewerFsFn);
-    document.removeEventListener('webkitfullscreenchange', _viewerFsFn);
-    _viewerFsFn = null;
-  }
 }
 function edUpdateViewer(){
+  if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
   // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
   const _po = page.orientation || edOrientation;
@@ -3288,15 +3252,9 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  // Botón cerrar táctil
-  ['pointerup','touchend','click'].forEach(ev=>{
+  // Botón cerrar: click + pointerup para máxima compatibilidad
+  ['click','pointerup'].forEach(ev=>{
     $('viewerClose')?.addEventListener(ev, e=>{
-      e.stopPropagation(); e.preventDefault(); edCloseViewer();
-    });
-  });
-  // Botón cerrar desktop
-  ['pointerup','click'].forEach(ev=>{
-    $('viewerCloseDesktop')?.addEventListener(ev, e=>{
       e.stopPropagation(); edCloseViewer();
     });
   });
