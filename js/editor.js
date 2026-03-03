@@ -26,7 +26,6 @@ let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
 let edPinchCenter0 = null, edPinchCamera0 = null;
-let _edPinchDrawSnapshot = null;  // snapshot workspace completo antes del pinch
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
@@ -1345,7 +1344,7 @@ function _edHandleDoubleTap(idx){
     _edDrawClearHistory();
     // El primer _edDrawPushHistory guardará este estado inicial.
     // Marcamos que el estado base ya está "guardado" poniendo idx en 0 con el snapshot.
-    edDrawHistory = [dl.toDataUrl()];
+    edDrawHistory = [dl.toDataUrlFull()];
     edDrawHistoryIdx = 0;
     _edDrawUpdateUndoRedoBtns();
     edRenderOptionsPanel('draw');
@@ -1383,23 +1382,13 @@ function edOnStart(e){
   window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
   // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
   if(window._edActivePointers.size === 2){
-    // Si estaba pintando, cancelar el trazo sin guardarlo
+    // Si estaba pintando, cancelar el trazo parcial sin guardarlo
     if(edPainting){
       edPainting = false;
-      // Restaurar el workspace completo (incluye dibujo fuera del lienzo)
-      if(_edPinchDrawSnapshot){
-        _edDrawApplyHistoryFull(_edPinchDrawSnapshot);
-        _edPinchDrawSnapshot = null;
-      } else if(edDrawHistory.length > 0){
+      // Restaurar al último estado guardado (antes del trazo actual)
+      if(edDrawHistory.length > 0){
         _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx] || null);
       }
-    }
-    // Snapshot del workspace completo antes de iniciar pinch
-    // (preserva dibujo fuera del lienzo para restaurar si se cancela)
-    {
-      const _pg = edPages[edCurrentPage];
-      const _dl = _pg?.layers.find(l => l.type === 'draw');
-      _edPinchDrawSnapshot = _dl ? _dl.toDataUrlFull() : null;
     }
     edPinchStart(e);
     return;
@@ -1658,31 +1647,14 @@ function _edDrawPushHistory(){
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
   // Cortar el futuro si hay
   edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
-  edDrawHistory.push(dl.toDataUrl());
+  edDrawHistory.push(dl.toDataUrlFull());
   if(edDrawHistory.length > ED_MAX_DRAW_HISTORY) edDrawHistory.shift();
   edDrawHistoryIdx = edDrawHistory.length - 1;
   _edDrawUpdateUndoRedoBtns();
 }
 function _edDrawApplyHistory(dataUrl){
-  const page = edPages[edCurrentPage]; if(!page) return;
-  let dl = page.layers.find(l => l.type === 'draw');
-  if(!dl){ dl = new DrawLayer(); page.layers.unshift(dl); edLayers=page.layers; }
-  dl.clear();
-  if(dataUrl){
-    const img = new Image();
-    img.onload = () => {
-      const pw = edPageW(), ph = edPageH();
-      dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
-        edMarginX(), edMarginY(), pw, ph);
-      edRedraw();
-    };
-    img.src = dataUrl;
-  } else {
-    edRedraw();
-  }
-}
-function _edDrawApplyHistoryFull(dataUrl){
-  // Restaura desde snapshot del workspace completo (preserva dibujo fuera del lienzo)
+  // El historial ahora guarda el workspace completo (toDataUrlFull)
+  // → restaurar 1:1 sin recortar ni reposicionar
   const page = edPages[edCurrentPage]; if(!page) return;
   let dl = page.layers.find(l => l.type === 'draw');
   if(!dl){ dl = new DrawLayer(); page.layers.unshift(dl); edLayers=page.layers; }
