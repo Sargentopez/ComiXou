@@ -645,3 +645,22 @@ body.editor-page { padding-top: 0; }
   }
 }
 
+
+
+/* --- Phase1 UI tweaks --- */
+
+/* bigger red menu minimize icon */
+.menu-toggle, .btn-menu-toggle {
+    color:#ff0000 !important;
+    font-size:1.4em !important;
+}
+
+/* show menus button top-left */
+.show-menus, .btn-show-menus {
+    position:fixed !important;
+    top:8px !important;
+    left:8px !important;
+    right:auto !important;
+    z-index:9999;
+}
+

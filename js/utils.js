@@ -20,3 +20,18 @@ function showToast(msg, duration = 2500) {
     t._tid = setTimeout(() => t.classList.remove('show'), duration);
   });
 }
+
+
+// --- Android color picker defaults ---
+(function(){
+if(/Android/i.test(navigator.userAgent)){
+    window.addEventListener("DOMContentLoaded",()=>{
+        document.querySelectorAll('input[type="range"]').forEach(r=>{
+            if(r.max==100 || r.max==255){
+                r.value=r.max;
+            }
+        });
+    });
+}
+})();
+

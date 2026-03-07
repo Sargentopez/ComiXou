@@ -257,3 +257,17 @@ function _mcToast(msg) {
 }
 
 function MyComicsView_destroy() { _mcRemoveModal(); }
+
+
+// --- Auto refresh list after actions ---
+(function(){
+document.addEventListener("click",function(e){
+    const t=e.target;
+    if(!t) return;
+    const txt=(t.textContent||"").toLowerCase();
+    if(txt.includes("revisión")||txt.includes("publicación")||txt.includes("eliminar")){
+        setTimeout(()=>location.reload(),500);
+    }
+});
+})();
+
