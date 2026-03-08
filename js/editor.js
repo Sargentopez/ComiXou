@@ -12,6 +12,7 @@ let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRo
 let edTailPointType = null, edResizeCorner = null, edTailVoiceIdx = 0;
 let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
+let edLastPointerIsTouch = false; // último pointerType real (mouse=false, touch=true)
 let edOrientation = 'vertical';
 let edProjectId = null;
 let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
@@ -876,8 +877,8 @@ function edDrawSel(){
   edCtx.setLineDash([5/z,3/z]);
   edCtx.strokeRect(-w/2,-h/2,w,h);
   edCtx.setLineDash([]);
-  // Handles de escala y rotación — solo en PC (no táctil)
-  if(la.type!=='bubble' && !edIsTouchDevice()){
+  // Handles de escala y rotación — solo cuando el último puntero fue ratón/lápiz (no dedo)
+  if(la.type!=='bubble' && !edLastPointerIsTouch){
     const corners=[
       [-w/2,-h/2],[ w/2,-h/2],[-w/2, h/2],[ w/2, h/2],
       [   0,-h/2],[   0, h/2],[-w/2,   0],[ w/2,   0],
@@ -887,8 +888,8 @@ function edDrawSel(){
       edCtx.fillStyle='#fff';edCtx.fill();
       edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
-    // Handle de rotación: solo en PC (en táctil se usa gesto pinch)
-    if(!edIsTouchDevice()){
+    // Handle de rotación: solo cuando el puntero es ratón/lápiz (en táctil se usa gesto pinch)
+    if(!edLastPointerIsTouch){
       const rotY=-h/2-28/z;
       edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
       edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw;edCtx.stroke();
@@ -1346,6 +1347,8 @@ function edOnStart(e){
   // Rastrear pointers activos (para pinch con pointer events)
   if(!window._edActivePointers) window._edActivePointers = new Map();
   window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  // Guardar el tipo de puntero real (mouse/pen=false, touch=true) para edDrawSel
+  edLastPointerIsTouch = (e.pointerType === 'touch');
   // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
   if(window._edActivePointers.size === 2){
     // Si estaba pintando, cancelar el trazo sin guardarlo
@@ -2363,7 +2366,9 @@ function edRenderOptionsPanel(mode){
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
       </div>
       <div class="op-prop-row">
-        <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
+        <span class="op-prop-label">Rotación</span>
+        <input type="number" id="pp-rot" value="${Math.round(la.rotation||0)}" min="-180" max="180" style="width:64px">°
+        <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer;margin-left:8px">✏️ Editar dibujo</button>
       </div>`;
     } else if(la.type==='image'){
       html+=`
