@@ -20,9 +20,11 @@ let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
+// Paleta de colores del panel de dibujo (los últimos 2 slots son para personalizados)
+let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
-let edFloatX = 16, edFloatY = 200; // posición del botón flotante
+let edFloatX = 12, edFloatY = 12; // posición del botón flotante
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
@@ -2121,14 +2123,6 @@ function edRenderOptionsPanel(mode){
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: Controles -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
-    ${!isEr ? `
-    <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
-      <div id="op-color-swatch"
-        style="width:26px;height:26px;border-radius:50%;background:${edDrawColor};border:2px solid var(--gray-300);cursor:pointer"></div>
-      <input type="color" id="op-dcolor" value="${edDrawColor}"
-        style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
-    </div>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${!isFill ? `
     <button id="op-size-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
@@ -2151,6 +2145,16 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
 
   </div>
+  ${!isEr ? `
+  <!-- SEP H -->
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <!-- FILA COLOR PALETTE -->
+  <div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">
+    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:2px solid ${c===edDrawColor?'var(--black)':'var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}
+    <button id="op-custom-color-btn" style="width:22px;height:22px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="Color personalizado">
+      <input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
+    </button>
+  </div>` : `<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">`}
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 3: Acciones -->
@@ -2186,16 +2190,37 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('fill');
     });
 
-    // ── Color: swatch abre input[type=color] oculto ──
-    $('op-color-swatch')?.addEventListener('click',()=>{
+    // ── Color: paleta de colores ──
+    $('op-custom-color-btn')?.addEventListener('click',()=>{
       $('op-dcolor')?.click();
     });
     $('op-dcolor')?.addEventListener('input',e=>{
-      edDrawColor=e.target.value;
-      const sw=$('op-color-swatch');
-      if(sw) sw.style.background=edDrawColor;
+      const newColor = e.target.value;
+      edDrawColor = newColor;
+      // Guardar en paleta: reemplazar el último slot
+      edColorPalette[edColorPalette.length-1] = newColor;
+      // Actualizar visual de los dots
+      const dots = document.querySelectorAll('.op-pal-dot');
+      dots.forEach(d => {
+        const idx = parseInt(d.dataset.colidx);
+        d.style.background = edColorPalette[idx];
+        d.style.borderColor = edColorPalette[idx] === edDrawColor ? 'var(--black)' : 'var(--gray-300)';
+      });
       const info=$('op-draw-info');
       if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
+    });
+    // Dots de la paleta
+    document.querySelectorAll('.op-pal-dot').forEach(dot=>{
+      dot.addEventListener('click',()=>{
+        const idx = parseInt(dot.dataset.colidx);
+        edDrawColor = edColorPalette[idx];
+        // Actualizar borde de selección
+        document.querySelectorAll('.op-pal-dot').forEach(d=>{
+          d.style.borderColor = parseInt(d.dataset.colidx)===idx ? 'var(--black)' : 'var(--gray-300)';
+        });
+        const info=$('op-draw-info');
+        if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
+      });
     });
 
     // ── Grosor: botón toggle abre/cierra slider ──

@@ -297,7 +297,7 @@ Router.register('editor', {
         <button class="viewer-btn" id="viewerNext">▶</button>
         <button class="viewer-btn close-btn" id="viewerClose">✕</button>
       </div>
-      <!-- Botón cerrar táctil: solo visible en dispositivos touch (pointer:coarse) -->
+      <!-- Botón cerrar solo en táctil (pointer:coarse), centrado abajo, siempre visible -->
       <button class="viewer-btn viewer-close-touch" id="viewerCloseTouchOnly">✕</button>
     </div>
 

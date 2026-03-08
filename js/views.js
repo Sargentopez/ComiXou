@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.55</footer>
+    <footer class="app-version">v5.56</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -188,7 +188,7 @@ Router.register('editor', {
       <div id="edMenuBar">
 
         <!-- MINIMIZAR — siempre visible al inicio (extremo izquierdo fijo) -->
-        <button id="edMinimizeBtn" class="ed-menu-pin">▼</button>
+        <button id="edMinimizeBtn" class="ed-menu-pin">⊟</button>
         <div class="ed-menu-sep"></div>
 
         <!-- ZONA DESLIZABLE -->
@@ -309,7 +309,7 @@ Router.register('editor', {
         <div class="ed-modal-field"><label>Género</label><input type="text" id="edMGenre" inputmode="text" enterkeyhint="done" autocomplete="off"></div>
         <div class="ed-modal-field"><label>Modo de lectura</label>
           <select id="edMNavMode">
-            <option value="fixed">Viñeta fija (botones)</option>
+            <option value="fixed">Hoja fija (botones)</option>
             <option value="horizontal">Deslizamiento horizontal</option>
             <option value="vertical">Deslizamiento vertical</option>
           </select></div>
@@ -351,7 +351,7 @@ Router.register('reader', {
     <div class="reader-end-overlay hidden" id="endOverlay">
       <div class="end-card">
         <div class="end-icon">🎉</div>
-        <h2>¡Fin del cómic!</h2>
+        <h2>¡Fin de la obra!</h2>
         <div class="end-actions">
           <button class="btn btn-outline" id="restartBtn">↩ Volver al inicio</button>
           <button class="btn btn-primary" onclick="Router.go('home')">🏠 Salir</button>

@@ -4,7 +4,7 @@
    ============================================================ */
 
 :root {
-  /* Paleta cómic */
+  /* Paleta de la app */
   --yellow:   #FFE135;
   --black:    #1A1A1A;
   --white:    #FFFFFF;
@@ -29,7 +29,7 @@
   --radius: 12px;
   --radius-sm: 6px;
 
-  /* Sombras estilo viñeta */
+  /* Sombras decorativas */
   --box-shadow: 3px 3px 0px var(--black);
   --box-shadow-lg: 5px 5px 0px var(--black);
 }

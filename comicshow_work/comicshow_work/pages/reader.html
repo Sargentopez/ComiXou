@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <link rel="manifest" href="../manifest.json">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Leer Cómic – ComiXow</title>
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="stylesheet" href="../css/reader.css">
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Nunito:wght@400;600;700;900&display=swap" rel="stylesheet">
+</head>
+<body class="reader-page">
+
+<!-- Barra superior: solo PC -->
+<div class="reader-topbar" id="readerTopbar">
+  <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
+    <a href="../index.html" class="logo-link">
+      <span class="logo-main" style="font-size:1.4rem">Comi<span class="logo-accent">Xow</span></span>
+    </a>
+  </div>
+  <div class="reader-info">
+    <span class="reader-comic-title" id="readerComicTitle"></span>
+    <span class="reader-panel-num"   id="readerPanelNum">1 / 1</span>
+  </div>
+</div>
+
+<!-- Área de lectura -->
+<div class="reader-stage" id="readerStage"></div>
+
+<!-- Flechas de navegación: solo PC, discretas, sobre el stage -->
+<button class="reader-arrow reader-arrow-left"  id="prevBtn" title="Anterior">‹</button>
+<button class="reader-arrow reader-arrow-right" id="nextBtn" title="Siguiente">›</button>
+
+<!-- Fin del cómic -->
+<div class="reader-end-overlay hidden" id="endOverlay">
+  <div class="end-card">
+    <div class="end-icon">🎉</div>
+    <h2>¡Fin del cómic!</h2>
+    <div class="end-actions">
+      <button class="btn btn-outline" id="restartBtn">↩ Volver al inicio</button>
+      <a href="../index.html" class="btn btn-primary">🏠 Salir</a>
+    </div>
+  </div>
+</div>
+
+<!-- Hint swipe móvil -->
+<div class="swipe-hint" id="swipeHint">👉 Desliza para avanzar</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="../js/utils.js"></script>
+<script src="../js/i18n.js"></script>
+<script src="../js/auth.js"></script>
+<script src="../js/storage.js"></script>
+<script src="../js/reader.js"></script>
+<script src="../js/pwa.js"></script>
+</body>
+</html>

@@ -187,15 +187,14 @@ body.editor-page #appView {
 
 /* Minimizar — a la derecha */
 #edMinimizeBtn {
-  
   background: none; border: none;
-  font-family: var(--font-body); font-size: 0.78rem; font-weight: 900;
-  color: var(--gray-500); padding: 0 10px;
+  font-family: var(--font-body); font-size: 1.15rem; font-weight: 900;
+  color: #e63030; padding: 0 12px;
   height: 40px;
   cursor: pointer; display: flex; align-items: center; gap: 4px;
   transition: color .12s;
 }
-#edMinimizeBtn:hover { color: var(--black); }
+#edMinimizeBtn:hover { color: #b01010; }
 
 /* ── DROPDOWNS DEL MENÚ ── */
 .ed-dropdown {

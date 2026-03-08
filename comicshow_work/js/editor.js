@@ -3257,11 +3257,9 @@ function EditorView_init(){
     $('viewerClose')?.addEventListener(ev, e=>{
       e.stopPropagation(); edCloseViewer();
     });
-    // Botón cerrar táctil (solo visible en pointer:coarse via CSS)
-    $('viewerCloseTouchOnly')?.addEventListener(ev, e=>{
-      e.stopPropagation(); edCloseViewer();
-    });
   });
+  // Botón cerrar táctil (solo visible en pointer:coarse via CSS, siempre disponible)
+  $('viewerCloseTouchOnly')?.addEventListener('click', e=>{ e.stopPropagation(); edCloseViewer(); });
   // Botón anterior (desktop)
   $('viewerPrev')?.addEventListener('pointerup', e=>{
     e.stopPropagation();
