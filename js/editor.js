@@ -2096,6 +2096,82 @@ function edCloseOptionsPanel(){
   edPanelUserClosed = true;   // usuario cerró → no reabrir al seleccionar
   requestAnimationFrame(edFitCanvas);
 }
+/* ══════════════════════════════════════════
+   COLOR PICKER PROPIO (táctil/Android)
+   Muestra overlay HSL con sliders al 100% por defecto
+   ══════════════════════════════════════════ */
+function _hexToHsl(hex){
+  let r=parseInt(hex.slice(1,3),16)/255,g=parseInt(hex.slice(3,5),16)/255,b=parseInt(hex.slice(5,7),16)/255;
+  const max=Math.max(r,g,b),min=Math.min(r,g,b);
+  let h,s,l=(max+min)/2;
+  if(max===min){ h=s=0; }
+  else{
+    const d=max-min; s=l>0.5?d/(2-max-min):d/(max+min);
+    switch(max){ case r:h=((g-b)/d+(g<b?6:0))/6;break; case g:h=((b-r)/d+2)/6;break; default:h=((r-g)/d+4)/6; }
+  }
+  return [Math.round(h*360), Math.round(s*100), Math.round(l*100)];
+}
+function _hslToHex(h,s,l){
+  s/=100; l/=100;
+  const a=s*Math.min(l,1-l);
+  const f=n=>{ const k=(n+h/30)%12; const c=l-a*Math.max(-1,Math.min(k-3,9-k,1)); return Math.round(255*c).toString(16).padStart(2,'0'); };
+  return '#'+f(0)+f(8)+f(4);
+}
+function _edShowColorPicker(onColorChange){
+  // Eliminar picker anterior si existe
+  document.getElementById('ed-hsl-picker')?.remove();
+  // Parsear color actual a HSL — si es muy neutro, iniciar con S=100, L=50
+  let [h,s,l] = _hexToHsl(edDrawColor);
+  if(s < 10) { s=100; l=50; }  // color neutro → arrancar con saturación y brillo al 100%
+
+  const overlay = document.createElement('div');
+  overlay.id = 'ed-hsl-picker';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
+
+  const preview = _hslToHex(h,s,l);
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;padding:20px 18px;width:min(320px,90vw);box-shadow:0 8px 32px rgba(0,0,0,.3)">
+      <div id="ecp-preview" style="width:100%;height:44px;border-radius:8px;margin-bottom:14px;background:${preview};border:1px solid #ddd"></div>
+      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">Tono</label>
+      <input type="range" id="ecp-h" min="0" max="360" value="${h}" style="width:100%;margin-bottom:10px;accent-color:hsl(${h},100%,50%)">
+      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">Saturación <span id="ecp-sv">${s}%</span></label>
+      <input type="range" id="ecp-s" min="0" max="100" value="${s}" style="width:100%;margin-bottom:10px;accent-color:hsl(${h},${s}%,50%)">
+      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">Luminosidad <span id="ecp-lv">${l}%</span></label>
+      <input type="range" id="ecp-l" min="0" max="100" value="${l}" style="width:100%;margin-bottom:16px;accent-color:hsl(${h},100%,${l}%)">
+      <div style="display:flex;gap:10px">
+        <button id="ecp-cancel" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;background:#fff;font-weight:900;font-size:.9rem;cursor:pointer">Cancelar</button>
+        <button id="ecp-ok" style="flex:1;padding:10px;border:none;border-radius:8px;background:#111;color:#fff;font-weight:900;font-size:.9rem;cursor:pointer">OK</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const elH=$('ecp-h'), elS=$('ecp-s'), elL=$('ecp-l'), elPrev=$('ecp-preview');
+  function update(){
+    h=+elH.value; s=+elS.value; l=+elL.value;
+    const hex=_hslToHex(h,s,l);
+    elPrev.style.background=hex;
+    elH.style.accentColor=`hsl(${h},100%,50%)`;
+    elS.style.accentColor=`hsl(${h},${s}%,50%)`;
+    elL.style.accentColor=`hsl(${h},100%,${l}%)`;
+    document.getElementById('ecp-sv').textContent=s+'%';
+    document.getElementById('ecp-lv').textContent=l+'%';
+    onColorChange(hex, false);
+  }
+  elH.addEventListener('input', update);
+  elS.addEventListener('input', update);
+  elL.addEventListener('input', update);
+  document.getElementById('ecp-ok').addEventListener('click',()=>{
+    const hex=_hslToHex(+elH.value,+elS.value,+elL.value);
+    onColorChange(hex, true);
+    overlay.remove();
+  });
+  document.getElementById('ecp-cancel').addEventListener('click',()=>{
+    onColorChange(edDrawColor, true); // restaurar color original
+    overlay.remove();
+  });
+  overlay.addEventListener('click', e=>{ if(e.target===overlay){ onColorChange(edDrawColor,true); overlay.remove(); } });
+}
+
 function edRenderOptionsPanel(mode){
   const panel=$('edOptionsPanel');if(!panel)return;
 
@@ -2202,7 +2278,26 @@ function edRenderOptionsPanel(mode){
 
     // ── Color: paleta de colores ──
     $('op-custom-color-btn')?.addEventListener('click',()=>{
-      $('op-dcolor')?.click();
+      if(edLastPointerIsTouch){
+        // Android/táctil: picker HSL propio con sliders al 100% por defecto
+        const prevColor = edDrawColor;
+        _edShowColorPicker((hex, final)=>{
+          edDrawColor = hex;
+          if(final){
+            edColorPalette[edColorPalette.length-1] = hex;
+          }
+          const dots = document.querySelectorAll('.op-pal-dot');
+          dots.forEach(d => {
+            const idx = parseInt(d.dataset.colidx);
+            d.style.background = edColorPalette[idx];
+            d.style.borderColor = edColorPalette[idx] === edDrawColor ? 'var(--black)' : 'var(--gray-300)';
+          });
+          const info=$('op-draw-info');
+          if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
+        });
+      } else {
+        $('op-dcolor')?.click();
+      }
     });
     $('op-dcolor')?.addEventListener('input',e=>{
       const newColor = e.target.value;
