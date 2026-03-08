@@ -187,14 +187,15 @@ body.editor-page #appView {
 
 /* Minimizar — a la derecha */
 #edMinimizeBtn {
+  
   background: none; border: none;
-  font-family: var(--font-body); font-size: 1.15rem; font-weight: 900;
-  color: #e63030; padding: 0 12px;
+  font-family: var(--font-body); font-size: 0.78rem; font-weight: 900;
+  color: var(--gray-500); padding: 0 10px;
   height: 40px;
   cursor: pointer; display: flex; align-items: center; gap: 4px;
   transition: color .12s;
 }
-#edMinimizeBtn:hover { color: #b01010; }
+#edMinimizeBtn:hover { color: var(--black); }
 
 /* ── DROPDOWNS DEL MENÚ ── */
 .ed-dropdown {
@@ -583,9 +584,10 @@ body.editor-page #appView {
 }
 
 /* Controles flotantes: pastilla semitransparente pegada abajo */
+/* Pastilla desktop: ◀ contador ▶ ✕ centrada abajo */
 .viewer-controls {
   position: absolute;
-  bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  bottom: max(env(safe-area-inset-bottom, 0px), 16px);
   left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 8px;
   background: rgba(0,0,0,.55);
@@ -594,8 +596,11 @@ body.editor-page #appView {
   border-radius: 100px;
   padding: 6px 10px;
   z-index: 410;
-  /* aparecer/desaparecer con tap */
   transition: opacity .25s;
+}
+/* Táctil: pastilla SIEMPRE oculta — navegación por swipe */
+@media (pointer: coarse) {
+  .viewer-controls { display: none !important; }
 }
 .viewer-controls.hidden { opacity: 0; pointer-events: none; }
 
@@ -610,10 +615,21 @@ body.editor-page #appView {
   white-space: nowrap;
 }
 .viewer-btn:active { background: rgba(255,255,255,.3); }
-.viewer-btn.close-btn {
-  background: rgba(255,255,255,.22);
-  border-color: rgba(255,255,255,.6);
-  font-size: 0.9rem;
+
+/* ✕ dentro de la pastilla desktop — sin estilo extra, hereda viewer-btn */
+.viewer-close-inline { /* hereda todo de .viewer-btn */ }
+
+/* ✕ táctil: centrado abajo, siempre visible, solo en pointer:coarse */
+.viewer-close-touch {
+  display: none;  /* oculto por defecto (desktop) */
+  position: absolute;
+  bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+  left: 50%; transform: translateX(-50%);
+  z-index: 420;
+  pointer-events: all;
+}
+@media (pointer: coarse) {
+  .viewer-close-touch { display: block; }
 }
 
 #viewerCounter {

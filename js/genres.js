@@ -4,7 +4,7 @@
    ============================================================ */
 
 const GENRES = [
-  { id: 'comic',       label: 'Ilustración' },
+  { id: 'comic',       label: 'Cómic' },
   { id: 'fotografia',  label: 'Fotografía' },
   { id: 'underground', label: 'Underground' },
   { id: 'aventura',    label: 'Aventura' },

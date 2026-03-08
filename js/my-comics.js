@@ -1,6 +1,6 @@
 /* ComiXow v4.2 */
 /* ============================================================
-   my-comics.js — Vista "Mis obras"
+   my-comics.js — Vista "Mis creaciones"
    Listado del autor con opciones Leer / Editar / Publicar.
    ============================================================ */
 
@@ -29,7 +29,7 @@ function _mcInjectModal() {
       <div class="mc-field">
         <label>Modo de lectura</label>
         <select id="mcNavMode">
-          <option value="fixed">Hoja fija (botones)</option>
+          <option value="fixed">Viñeta fija (botones)</option>
           <option value="horizontal">Deslizamiento horizontal</option>
           <option value="vertical">Deslizamiento vertical</option>
         </select>

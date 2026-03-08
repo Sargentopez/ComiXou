@@ -166,7 +166,7 @@
   user-select: none;
 }
 
-/* ── MODAL MIS OBRAS ── */
+/* ── MODAL MY-COMICS ── */
 .mc-modal-overlay {
   /* Idéntico a .auth-main: fixed overlay z:2000 por encima de todo */
   position: fixed;

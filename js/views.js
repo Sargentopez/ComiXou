@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.59</footer>
+    <footer class="app-version">v5.67</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -188,7 +188,7 @@ Router.register('editor', {
       <div id="edMenuBar">
 
         <!-- MINIMIZAR — siempre visible al inicio (extremo izquierdo fijo) -->
-        <button id="edMinimizeBtn" class="ed-menu-pin">⊟</button>
+        <button id="edMinimizeBtn" class="ed-menu-pin">▼</button>
         <div class="ed-menu-sep"></div>
 
         <!-- ZONA DESLIZABLE -->
@@ -290,13 +290,15 @@ Router.register('editor', {
     <!-- VISOR: canvas fullscreen + controles flotantes -->
     <div id="editorViewer">
       <canvas id="viewerCanvas"></canvas>
-      <!-- Controles del visor: siempre visibles -->
+      <!-- Pastilla desktop: ◀ contador ▶ ✕ — oculta en táctil via CSS -->
       <div class="viewer-controls" id="viewerControls">
         <button class="viewer-btn" id="viewerPrev">◀</button>
         <span id="viewerCounter">1 / 1</span>
         <button class="viewer-btn" id="viewerNext">▶</button>
-        <button class="viewer-btn close-btn" id="viewerClose">✕</button>
+        <button class="viewer-btn viewer-close-inline" id="viewerClose">✕</button>
       </div>
+      <!-- Botón ✕ solo táctil: centrado abajo, siempre visible en Android/iOS -->
+      <button class="viewer-btn viewer-close-touch" id="viewerCloseMobile">✕</button>
     </div>
 
     <!-- MODAL DATOS DEL PROYECTO -->
@@ -309,7 +311,7 @@ Router.register('editor', {
         <div class="ed-modal-field"><label>Género</label><input type="text" id="edMGenre" inputmode="text" enterkeyhint="done" autocomplete="off"></div>
         <div class="ed-modal-field"><label>Modo de lectura</label>
           <select id="edMNavMode">
-            <option value="fixed">Hoja fija (botones)</option>
+            <option value="fixed">Viñeta fija (botones)</option>
             <option value="horizontal">Deslizamiento horizontal</option>
             <option value="vertical">Deslizamiento vertical</option>
           </select></div>
@@ -351,7 +353,7 @@ Router.register('reader', {
     <div class="reader-end-overlay hidden" id="endOverlay">
       <div class="end-card">
         <div class="end-icon">🎉</div>
-        <h2>¡Fin de la obra!</h2>
+        <h2>¡Fin del cómic!</h2>
         <div class="end-actions">
           <button class="btn btn-outline" id="restartBtn">↩ Volver al inicio</button>
           <button class="btn btn-primary" onclick="Router.go('home')">🏠 Salir</button>

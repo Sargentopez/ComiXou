@@ -1,7 +1,7 @@
 /* ============================================================
    storage.js  v4.7
    Persistencia en localStorage + eventos reactivos para
-   que cualquier vista (home, mis-obras) se actualice al instante
+   que cualquier vista (home, my-comics) se actualice al instante
    cuando cambian datos (publish, unpublish, delete).
    ============================================================ */
 

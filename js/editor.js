@@ -12,22 +12,21 @@ let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRo
 let edTailPointType = null, edResizeCorner = null, edTailVoiceIdx = 0;
 let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
-let edLastPointerIsTouch = false; // último pointerType real (mouse=false, touch=true)
 let edOrientation = 'vertical';
 let edProjectId = null;
 let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
 let edActiveTool = 'select';  // select | draw | eraser
+let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
-// Paleta de colores del panel de dibujo (los últimos 2 slots son para personalizados)
-let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
-let edFloatX = 12, edFloatY = 12; // posición del botón flotante
+let edFloatX = 16, edFloatY = 200; // posición del botón flotante
 // Pinch-to-zoom
-let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
+let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
+let edPinchCenter0 = null, edPinchCamera0 = null;
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
@@ -427,6 +426,10 @@ class DrawLayer extends BaseLayer {
     tmp.getContext('2d').drawImage(this._canvas,
       edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
     return tmp.toDataURL();
+  }
+  toDataUrlFull(){
+    // Exportar el workspace completo (incluye dibujo fuera del lienzo)
+    return this._canvas.toDataURL();
   }
   clear(){
     this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
@@ -877,7 +880,7 @@ function edDrawSel(){
   edCtx.setLineDash([5/z,3/z]);
   edCtx.strokeRect(-w/2,-h/2,w,h);
   edCtx.setLineDash([]);
-  // Handles de escala y rotación — solo cuando el último puntero fue ratón/lápiz (no dedo)
+  // Handles de escala y rotación — solo en PC (no táctil)
   if(la.type!=='bubble' && !edLastPointerIsTouch){
     const corners=[
       [-w/2,-h/2],[ w/2,-h/2],[-w/2, h/2],[ w/2, h/2],
@@ -888,7 +891,7 @@ function edDrawSel(){
       edCtx.fillStyle='#fff';edCtx.fill();
       edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
-    // Handle de rotación: solo cuando el puntero es ratón/lápiz (en táctil se usa gesto pinch)
+    // Handle de rotación: solo en PC (en táctil se usa gesto pinch)
     if(!edLastPointerIsTouch){
       const rotY=-h/2-28/z;
       edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
@@ -1166,12 +1169,23 @@ function _pinchAngle(pMap){
   const pts=[...pMap.values()];
   return Math.atan2(pts[1].y-pts[0].y, pts[1].x-pts[0].x);
 }
+function _pinchCenter(pMap){
+  const pts = [...pMap.values()];
+  return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+}
 function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
-  edPinching   = true;
+  edPinching    = true;
   edPinchDist0  = _pinchDist(window._edActivePointers);
   edPinchAngle0 = _pinchAngle(window._edActivePointers);
-  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  // Centro del pinch en coordenadas de pantalla
+  const ctr = _pinchCenter(window._edActivePointers);
+  edPinchCenter0 = { x: ctr.x, y: ctr.y };
+  // Snapshot de cámara para pan/zoom de canvas
+  edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
+  // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
+  const isDrawTool = ['draw','eraser'].includes(edActiveTool);
+  const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0 } : null;
   return true;
 }
@@ -1179,24 +1193,44 @@ function edPinchMove(e) {
   if (!edPinching || !window._edActivePointers || window._edActivePointers.size < 2) return;
   const dist   = _pinchDist(window._edActivePointers);
   const angle  = _pinchAngle(window._edActivePointers);
+  const ctr    = _pinchCenter(window._edActivePointers);
   const ratio  = dist / Math.max(edPinchDist0, 1);
   const dAngle = (angle - edPinchAngle0) * 180 / Math.PI;
-  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  if (la && edPinchScale0) {
-    // Escala proporcional — todos los tipos escalan width y height juntos
-    const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
-    la.width  = newW;
-    const asp = edPinchScale0.h / edPinchScale0.w;
-    la.height = newW * asp;
-    // Rotación por giro de dedos
-    la.rotation = edPinchScale0.rot + dAngle;
+
+  if (edPinchScale0) {
+    // ── Modo objeto: escalar y rotar el layer seleccionado ──
+    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if (la) {
+      const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
+      la.width  = newW;
+      la.height = newW * (edPinchScale0.h / edPinchScale0.w);
+      la.rotation = edPinchScale0.rot + dAngle;
+      edRedraw();
+    }
+  } else {
+    // ── Modo cámara: pan + zoom del canvas (draw/eraser o sin selección) ──
+    // Fórmula: el punto del mundo bajo el centro inicial del pinch
+    // debe quedar bajo el centro actual del pinch tras aplicar el nuevo zoom.
+    // world = (screen - cam.xy) / cam.z  →  screen = world * cam.z + cam.xy
+    // Igualando worlds: cam1.xy = ctr - (C0 - cam0.xy) / cam0.z * newZ
+    const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
+    edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
+    edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
+    edCamera.z = newZ;
     edRedraw();
   }
 }
 function edPinchEnd() {
-  edPinching   = false;
-  edPinchDist0 = 0;
+  edPinching    = false;
+  edPinchDist0  = 0;
   edPinchScale0 = null;
+  edPinchCenter0 = null;
+  edPinchCamera0 = null;
+  // Al soltar los dedos en modo draw, reactivar la herramienta de dibujo
+  // sin perder el foco ni resetear el estado
+  if(['draw','eraser'].includes(edActiveTool)){
+    edPainting = false;  // asegurar estado limpio para el siguiente toque
+  }
 }
 
 
@@ -1311,7 +1345,7 @@ function _edHandleDoubleTap(idx){
     _edDrawClearHistory();
     // El primer _edDrawPushHistory guardará este estado inicial.
     // Marcamos que el estado base ya está "guardado" poniendo idx en 0 con el snapshot.
-    edDrawHistory = [dl.toDataUrl()];
+    edDrawHistory = [dl.toDataUrlFull()];
     edDrawHistoryIdx = 0;
     _edDrawUpdateUndoRedoBtns();
     edRenderOptionsPanel('draw');
@@ -1344,23 +1378,18 @@ function edOnStart(e){
     e.preventDefault();
   }
   _edTouchMoved = false; // resetear flag de movimiento
+  edLastPointerIsTouch = (e.pointerType === 'touch'); // actualizar detección real de táctil
   // Rastrear pointers activos (para pinch con pointer events)
   if(!window._edActivePointers) window._edActivePointers = new Map();
   window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-  // Guardar el tipo de puntero real (mouse/pen=false, touch=true) para edDrawSel
-  edLastPointerIsTouch = (e.pointerType === 'touch');
   // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
   if(window._edActivePointers.size === 2){
-    // Si estaba pintando, cancelar el trazo sin guardarlo
+    // Si estaba pintando, cancelar el trazo parcial sin guardarlo
     if(edPainting){
       edPainting = false;
-      // Restaurar el último snapshot del historial local para descartar el trazo parcial
-      const page=edPages[edCurrentPage];
-      const dl=page?.layers.find(l=>l.type==='draw');
-      if(dl && edDrawHistory.length > 0){
-        const img=new Image();
-        img.onload=()=>{ dl.clear(); dl._ctx.drawImage(img,0,0); edRedraw(); };
-        img.src=edDrawHistory[edDrawHistoryIdx] || '';
+      // Restaurar al último estado guardado (antes del trazo actual)
+      if(edDrawHistory.length > 0){
+        _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx] || null);
       }
     }
     edPinchStart(e);
@@ -1620,12 +1649,14 @@ function _edDrawPushHistory(){
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
   // Cortar el futuro si hay
   edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
-  edDrawHistory.push(dl.toDataUrl());
+  edDrawHistory.push(dl.toDataUrlFull());
   if(edDrawHistory.length > ED_MAX_DRAW_HISTORY) edDrawHistory.shift();
   edDrawHistoryIdx = edDrawHistory.length - 1;
   _edDrawUpdateUndoRedoBtns();
 }
 function _edDrawApplyHistory(dataUrl){
+  // El historial ahora guarda el workspace completo (toDataUrlFull)
+  // → restaurar 1:1 sin recortar ni reposicionar
   const page = edPages[edCurrentPage]; if(!page) return;
   let dl = page.layers.find(l => l.type === 'draw');
   if(!dl){
@@ -1635,14 +1666,11 @@ function _edDrawApplyHistory(dataUrl){
     else page.layers.push(dl);
     edLayers = page.layers;
   }
-  // Restaurar bitmap del DrawLayer desde dataUrl
   dl.clear();
   if(dataUrl){
     const img = new Image();
     img.onload = () => {
-      const pw = edPageW(), ph = edPageH();
-      dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
-        edMarginX(), edMarginY(), pw, ph);
+      dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
       edRedraw();
     };
     img.src = dataUrl;
@@ -2118,16 +2146,12 @@ function _hslToHex(h,s,l){
   return '#'+f(0)+f(8)+f(4);
 }
 function _edShowColorPicker(onColorChange){
-  // Eliminar picker anterior si existe
   document.getElementById('ed-hsl-picker')?.remove();
-  // Parsear color actual a HSL — si es muy neutro, iniciar con S=100, L=50
   let [h,s,l] = _hexToHsl(edDrawColor);
-  if(s < 10) { s=100; l=50; }  // color neutro → arrancar con saturación y brillo al 100%
-
+  if(s < 10){ s=100; l=50; } // color neutro → arrancar con S y L al 100%/50%
   const overlay = document.createElement('div');
   overlay.id = 'ed-hsl-picker';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
-
   const preview = _hslToHex(h,s,l);
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:14px;padding:20px 18px;width:min(320px,90vw);box-shadow:0 8px 32px rgba(0,0,0,.3)">
@@ -2144,8 +2168,7 @@ function _edShowColorPicker(onColorChange){
       </div>
     </div>`;
   document.body.appendChild(overlay);
-
-  const elH=$('ecp-h'), elS=$('ecp-s'), elL=$('ecp-l'), elPrev=$('ecp-preview');
+  const elH=document.getElementById('ecp-h'), elS=document.getElementById('ecp-s'), elL=document.getElementById('ecp-l'), elPrev=document.getElementById('ecp-preview');
   function update(){
     h=+elH.value; s=+elS.value; l=+elL.value;
     const hex=_hslToHex(h,s,l);
@@ -2166,7 +2189,7 @@ function _edShowColorPicker(onColorChange){
     overlay.remove();
   });
   document.getElementById('ecp-cancel').addEventListener('click',()=>{
-    onColorChange(edDrawColor, true); // restaurar color original
+    onColorChange(edDrawColor, true);
     overlay.remove();
   });
   overlay.addEventListener('click', e=>{ if(e.target===overlay){ onColorChange(edDrawColor,true); overlay.remove(); } });
@@ -2209,6 +2232,14 @@ function edRenderOptionsPanel(mode){
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: Controles -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
+    ${!isEr ? `
+    <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
+      <div id="op-color-swatch"
+        style="width:26px;height:26px;border-radius:50%;background:${edDrawColor};border:2px solid var(--gray-300);cursor:pointer"></div>
+      <input type="color" id="op-dcolor" value="${edDrawColor}"
+        style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${!isFill ? `
     <button id="op-size-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
@@ -2231,16 +2262,6 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
 
   </div>
-  ${!isEr ? `
-  <!-- SEP H -->
-  <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <!-- FILA COLOR PALETTE -->
-  <div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">
-    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:2px solid ${c===edDrawColor?'var(--black)':'var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}
-    <button id="op-custom-color-btn" style="width:22px;height:22px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="Color personalizado">
-      <input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
-    </button>
-  </div>` : `<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">`}
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 3: Acciones -->
@@ -2276,22 +2297,13 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('fill');
     });
 
-    // ── Color: paleta de colores ──
-    $('op-custom-color-btn')?.addEventListener('click',()=>{
+    // ── Color: swatch abre picker propio en táctil, nativo en PC ──
+    $('op-color-swatch')?.addEventListener('click',()=>{
       if(edLastPointerIsTouch){
-        // Android/táctil: picker HSL propio con sliders al 100% por defecto
-        const prevColor = edDrawColor;
         _edShowColorPicker((hex, final)=>{
           edDrawColor = hex;
-          if(final){
-            edColorPalette[edColorPalette.length-1] = hex;
-          }
-          const dots = document.querySelectorAll('.op-pal-dot');
-          dots.forEach(d => {
-            const idx = parseInt(d.dataset.colidx);
-            d.style.background = edColorPalette[idx];
-            d.style.borderColor = edColorPalette[idx] === edDrawColor ? 'var(--black)' : 'var(--gray-300)';
-          });
+          const sw=$('op-color-swatch');
+          if(sw) sw.style.background=edDrawColor;
           const info=$('op-draw-info');
           if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
         });
@@ -2300,32 +2312,11 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('op-dcolor')?.addEventListener('input',e=>{
-      const newColor = e.target.value;
-      edDrawColor = newColor;
-      // Guardar en paleta: reemplazar el último slot
-      edColorPalette[edColorPalette.length-1] = newColor;
-      // Actualizar visual de los dots
-      const dots = document.querySelectorAll('.op-pal-dot');
-      dots.forEach(d => {
-        const idx = parseInt(d.dataset.colidx);
-        d.style.background = edColorPalette[idx];
-        d.style.borderColor = edColorPalette[idx] === edDrawColor ? 'var(--black)' : 'var(--gray-300)';
-      });
+      edDrawColor=e.target.value;
+      const sw=$('op-color-swatch');
+      if(sw) sw.style.background=edDrawColor;
       const info=$('op-draw-info');
       if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
-    });
-    // Dots de la paleta
-    document.querySelectorAll('.op-pal-dot').forEach(dot=>{
-      dot.addEventListener('click',()=>{
-        const idx = parseInt(dot.dataset.colidx);
-        edDrawColor = edColorPalette[idx];
-        // Actualizar borde de selección
-        document.querySelectorAll('.op-pal-dot').forEach(d=>{
-          d.style.borderColor = parseInt(d.dataset.colidx)===idx ? 'var(--black)' : 'var(--gray-300)';
-        });
-        const info=$('op-draw-info');
-        if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
-      });
     });
 
     // ── Grosor: botón toggle abre/cierra slider ──
@@ -2468,9 +2459,7 @@ function edRenderOptionsPanel(mode){
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
       </div>
       <div class="op-prop-row">
-        <span class="op-prop-label">Rotación</span>
-        <input type="number" id="pp-rot" value="${Math.round(la.rotation||0)}" min="-180" max="180" style="width:64px">°
-        <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer;margin-left:8px">✏️ Editar dibujo</button>
+        <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
       </div>`;
     } else if(la.type==='image'){
       html+=`
@@ -2895,6 +2884,26 @@ function edOpenViewer(){
   $('editorViewer')?.classList.add('open');
   edUpdateViewer();
   edInitViewerTap();
+  // Orientación: resize recalcula canvas al girar dispositivo
+  if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
+  let _viewerResizeTimer;
+  _viewerResizeFn = () => {
+    clearTimeout(_viewerResizeTimer);
+    _viewerResizeTimer = setTimeout(() => { edUpdateViewer(); }, 150);
+  };
+  window.addEventListener('resize', _viewerResizeFn);
+  // Fullscreen: reentrar si el navegador lo cierra al girar
+  if(_viewerFsFn){
+    document.removeEventListener('fullscreenchange', _viewerFsFn);
+    document.removeEventListener('webkitfullscreenchange', _viewerFsFn);
+  }
+  _viewerFsFn = () => {
+    if(!$('editorViewer')?.classList.contains('open')) return;
+    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if(!active && typeof Fullscreen !== 'undefined') Fullscreen.enter();
+  };
+  document.addEventListener('fullscreenchange', _viewerFsFn);
+  document.addEventListener('webkitfullscreenchange', _viewerFsFn);
   // Teclado PC
   if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
   _viewerKeyHandler = _edViewerKey;
@@ -2930,30 +2939,9 @@ function _edViewerKey(e){
   const v = $('editorViewer');
   if(!v || !v.classList.contains('open')) return;
   if(e.key === 'ArrowRight' || e.key === 'ArrowDown'){
-    e.preventDefault();
-    const page=edPages[edViewerIdx];
-    const tl=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-    if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
-      _vStartBubbleFade();
-      edViewerTextStep++; edUpdateViewer();
-    } else if(edViewerIdx < edPages.length-1){
-      edViewerIdx++;
-      { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-        edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
-      edUpdateViewer();
-    }
+    e.preventDefault(); _viewerAdvance();
   } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
-    e.preventDefault();
-    const page=edPages[edViewerIdx];
-    if(page?.textMode==='sequential' && edViewerTextStep > 1){
-      edViewerTextStep--; edUpdateViewer();
-    } else if(edViewerIdx > 0){
-      edViewerIdx--;
-      const pp=edPages[edViewerIdx];
-      const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-      edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
-      edUpdateViewer();
-    }
+    e.preventDefault(); _viewerBack();
   } else if(e.key === 'Escape'){
     e.preventDefault();
     edCloseViewer();
@@ -2964,6 +2952,8 @@ function _edViewerKey(e){
 let _viewerTapBound = false, _viewerHideTimer;
 let _vPrevBubbleFade = 0;  // opacidad del bocadillo anterior en fade
 let _vFadeRaf = null;       // requestAnimationFrame del fade
+let _viewerResizeFn = null; // listener resize para orientación
+let _viewerFsFn = null;     // listener fullscreenchange para orientación
 function edShowViewerCtrls(){
   const ctrls = $('viewerControls');
   if(!ctrls) return;
@@ -2995,78 +2985,111 @@ function _vStartBubbleFade(){
   _vFadeRaf = requestAnimationFrame(step);
 }
 
+// AbortController del visor: elimina TODOS los listeners de una vez al cerrar
+let _viewerAC = null;
+
+// ── Navegación del visor: funciones únicas usadas por swipe, botones y teclado ──
+function _viewerAdvance(){
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; _vPrevBubbleFade=0; }
+  const page = edPages[edViewerIdx];
+  const tl = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
+  const isSeq = page?.textMode === 'sequential';
+  if(isSeq && edViewerTextStep < tl.length){
+    _vStartBubbleFade();
+    edViewerTextStep++;
+    edUpdateViewer();
+  } else if(edViewerIdx < edPages.length - 1){
+    edViewerIdx++;
+    const np = edPages[edViewerIdx];
+    const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
+    edViewerTextStep = (np?.textMode==='sequential' && ntl.length > 0) ? 1 : 0;
+    edUpdateViewer();
+  }
+}
+function _viewerBack(){
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; _vPrevBubbleFade=0; }
+  const page = edPages[edViewerIdx];
+  const isSeq = page?.textMode === 'sequential';
+  if(isSeq && edViewerTextStep > 1){
+    edViewerTextStep--;
+    edUpdateViewer();
+  } else if(edViewerIdx > 0){
+    edViewerIdx--;
+    const pp = edPages[edViewerIdx];
+    const ptl = (pp?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
+    edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+    edUpdateViewer();
+  }
+}
+
 function edInitViewerTap(){
   const viewer = $('editorViewer');
   if(!viewer) return;
 
-  // Detectar si es dispositivo táctil
-  const isTouch = navigator.maxTouchPoints > 0;
-
-  // Mostrar controles (siempre visibles, sin distinción táctil/desktop)
   edShowViewerCtrls();
 
   if(_viewerTapBound) return;
   _viewerTapBound = true;
 
-  // ── MODO TÁCTIL ──
-  if(isTouch){
-    // Swipe horizontal para navegar
-    let _vSwipeX = null, _vSwipeY = null;
-    viewer.addEventListener('touchstart', e => {
-      if(e.touches.length !== 1) return;
-      _vSwipeX = e.touches[0].clientX;
-      _vSwipeY = e.touches[0].clientY;
-    }, {passive:true});
-    viewer.addEventListener('touchend', e => {
-      if(_vSwipeX === null || e.changedTouches.length !== 1) return;
-      // Si el toque fue sobre el botón cerrar, no procesar swipe
-      // Si el desplazamiento es mínimo, no es swipe
-      const dx = e.changedTouches[0].clientX - _vSwipeX;
-      const dy = e.changedTouches[0].clientY - _vSwipeY;
-      _vSwipeX = null; _vSwipeY = null;
-      if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      const page = edPages[edViewerIdx];
-      const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-      if(dx < 0){
-        // Swipe izquierda → siguiente bocadillo / página
-        if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
-          _vStartBubbleFade();
-          edViewerTextStep++; edUpdateViewer();
-        } else if(edViewerIdx < edPages.length-1){
-          edViewerIdx++;
-          { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-            edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
-          edUpdateViewer();
-        }
-      } else {
-        // Swipe derecha → bocadillo anterior / página anterior
-        if(page?.textMode==='sequential' && edViewerTextStep > 1){
-          edViewerTextStep--; edUpdateViewer();
-        } else if(edViewerIdx > 0){
-          edViewerIdx--;
-          const pp=edPages[edViewerIdx];
-          const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-          edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
-          edUpdateViewer();
-        }
-      }
-    }, {passive:true});
+  // AbortController nuevo en cada apertura: al cerrar, abort() elimina TODOS los listeners
+  // Esto evita la acumulación de handlers en aperturas sucesivas (causa del bug de navegación)
+  _viewerAC = new AbortController();
+  const sig = { signal: _viewerAC.signal };
 
-  // ── MODO DESKTOP ──
-  } else {
-    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
-    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
-  }
+  // ── SWIPE TÁCTIL ──
+  let _sx = null, _sy = null, _scrollCancelled = false;
+
+  viewer.addEventListener('touchstart', e => {
+    _sx = null; _sy = null; _scrollCancelled = false;
+    if(e.touches.length !== 1) return;
+    _sx = e.touches[0].clientX;
+    _sy = e.touches[0].clientY;
+  }, {passive:true, ...sig});
+
+  viewer.addEventListener('touchmove', e => {
+    if(_sx === null) return;
+    const dx = e.touches[0].clientX - _sx;
+    const dy = e.touches[0].clientY - _sy;
+    if(Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) _scrollCancelled = true;
+  }, {passive:true, ...sig});
+
+  viewer.addEventListener('touchend', e => {
+    if(_sx === null || _scrollCancelled){ _sx = null; return; }
+    if(e.changedTouches.length !== 1){ _sx = null; return; }
+    const dx = e.changedTouches[0].clientX - _sx;
+    const dy = e.changedTouches[0].clientY - _sy;
+    _sx = null;
+    if(Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
+    if(dx < 0) _viewerAdvance(); else _viewerBack();
+  }, {passive:true, ...sig});
+
+  // ── CONTROLES DESKTOP (mouse) ──
+  viewer.addEventListener('pointerdown', e => {
+    if(e.pointerType === 'mouse') edShowViewerCtrls();
+  }, {capture:true, passive:true, ...sig});
+  viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
   _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
   clearTimeout(_viewerHideTimer);
+  // Eliminar TODOS los listeners del visor (touch + mouse) de una sola vez
+  if(_viewerAC){ _viewerAC.abort(); _viewerAC=null; }
   _viewerTapBound = false; // permitir re-bind en próxima apertura
   if(_viewerKeyHandler){
     document.removeEventListener('keydown', _viewerKeyHandler);
     _viewerKeyHandler = null;
+  }
+  // Limpiar listeners de orientación
+  if(_viewerResizeFn){
+    window.removeEventListener('resize', _viewerResizeFn);
+    _viewerResizeFn = null;
+  }
+  if(_viewerFsFn){
+    document.removeEventListener('fullscreenchange', _viewerFsFn);
+    document.removeEventListener('webkitfullscreenchange', _viewerFsFn);
+    _viewerFsFn = null;
   }
 }
 function edUpdateViewer(){
@@ -3384,45 +3407,25 @@ function EditorView_init(){
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
-  // Botón cerrar: click + pointerup para máxima compatibilidad
+  // Botón cerrar desktop (dentro de pastilla)
   ['click','pointerup'].forEach(ev=>{
     $('viewerClose')?.addEventListener(ev, e=>{
       e.stopPropagation(); edCloseViewer();
     });
   });
+  // Botón cerrar móvil (táctil, centrado abajo)
+  ['click','pointerup'].forEach(ev=>{
+    $('viewerCloseMobile')?.addEventListener(ev, e=>{
+      e.stopPropagation(); edCloseViewer();
+    });
+  });
   // Botón anterior (desktop)
   $('viewerPrev')?.addEventListener('pointerup', e=>{
-    e.stopPropagation();
-    edShowViewerCtrls();
-    const page=edPages[edViewerIdx];
-    // textStep mínimo es 1 (0/x en contador) — nunca bajar de 1
-    if(page?.textMode==='sequential' && edViewerTextStep > 1){
-      edViewerTextStep--; edUpdateViewer(); return;
-    }
-    if(edViewerIdx>0){
-      edViewerIdx--;
-      const prevPage=edPages[edViewerIdx];
-      const prevTexts=prevPage?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-      edViewerTextStep = prevPage?.textMode==='sequential' ? prevTexts.length : 0;
-      edUpdateViewer();
-    }
+    e.stopPropagation(); edShowViewerCtrls(); _viewerBack();
   });
   // Botón siguiente (desktop)
   $('viewerNext')?.addEventListener('pointerup', e=>{
-    e.stopPropagation();
-    edShowViewerCtrls();
-    const page=edPages[edViewerIdx];
-    const textLayers=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-    if(page?.textMode==='sequential' && edViewerTextStep < textLayers.length){
-      _vStartBubbleFade();
-      edViewerTextStep++; edUpdateViewer(); return;
-    }
-    if(edViewerIdx<edPages.length-1){
-      edViewerIdx++;
-      { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
-        edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
-      edUpdateViewer();
-    }
+    e.stopPropagation(); edShowViewerCtrls(); _viewerAdvance();
   });
 
   // ── MODAL PROYECTO ──

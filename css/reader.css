@@ -1,5 +1,5 @@
 /* ============================================================
-   reader.css — Lector de obras
+   reader.css — Lector de cómics
    ============================================================ */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -264,7 +264,7 @@
   position: relative;
 }
 
-/* ── TEXTBOX: caja de texto sin sombra ── */
+/* ── TEXTBOX: caja de texto sin sombra de cómic ── */
 .reader-textbox-inner {
   box-shadow: none;
 }
