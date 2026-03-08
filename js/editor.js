@@ -1628,7 +1628,13 @@ function _edDrawPushHistory(){
 function _edDrawApplyHistory(dataUrl){
   const page = edPages[edCurrentPage]; if(!page) return;
   let dl = page.layers.find(l => l.type === 'draw');
-  if(!dl){ dl = new DrawLayer(); page.layers.unshift(dl); edLayers=page.layers; }
+  if(!dl){
+    dl = new DrawLayer();
+    const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
+    if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
+    else page.layers.push(dl);
+    edLayers = page.layers;
+  }
   // Restaurar bitmap del DrawLayer desde dataUrl
   dl.clear();
   if(dataUrl){
@@ -1680,9 +1686,10 @@ function _edGetOrCreateDrawLayer(){
   let dl = page.layers.find(l => l.type === 'draw');
   if(!dl){
     dl = new DrawLayer();
-    // Insertar el DrawLayer ENCIMA de todas las imágenes y StrokeLayers
-    // para que los trazos y rellenos nuevos siempre se vean encima
-    page.layers.unshift(dl);
+    // Insertar encima de todo excepto textos/bocadillos (que van siempre al tope)
+    const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
+    if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
+    else page.layers.push(dl);
     edLayers = page.layers;
   }
   return dl;
