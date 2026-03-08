@@ -1,0 +1,3502 @@
+/* ============================================================
+   editor.js — ComiXow v5.4
+   Motor canvas fiel al referEditor.
+   Menú tipo page-nav, botón flotante al minimizar.
+   ============================================================ */
+
+/* ── ESTADO ── */
+let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
+let edPages = [], edCurrentPage = 0, edLayers = [];
+let edSelectedIdx = -1;
+let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
+let edTailPointType = null, edResizeCorner = null, edTailVoiceIdx = 0;
+let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
+let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
+let edOrientation = 'vertical';
+let edProjectId = null;
+let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
+let edActiveTool = 'select';  // select | draw | eraser
+let edPainting = false;
+let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
+const ED_MAX_DRAW_HISTORY = 20;
+let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
+let edMenuOpen = null;     // id del dropdown abierto
+let edMinimized = false;
+let edFloatX = 16, edFloatY = 200; // posición del botón flotante
+// Pinch-to-zoom
+let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = {w:0,h:0,x:0,y:0};
+let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
+// edZoom eliminado — reemplazado por edCamera.z
+// ── Cámara del editor (patrón Figma/tldraw) ──
+// x,y = traslación del canvas (donde aparece el origen del workspace en pantalla)
+// z   = escala (1 = lienzo ocupa el viewport)
+const edCamera = { x: 0, y: 0, z: 1 };
+let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
+let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
+let edHistory = [], edHistoryIdx = -1;
+const ED_MAX_HISTORY = 10;
+let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
+
+// ── Dimensiones del lienzo (la página reproducible) ──
+// Ratio 6:13 (≈2.167) cabe sin corte en OPPO A38 (720×1612, útil ~720×1588)
+const ED_PAGE_W  = 360;   // ancho del lienzo en orientación vertical
+const ED_PAGE_H  = 780;   // alto  del lienzo en orientación vertical (ratio 6:13)
+// ── Canvas de trabajo: 5× ancho y 3× alto del lienzo vertical ──
+const ED_CANVAS_W = ED_PAGE_W * 5;  // 1800
+const ED_CANVAS_H = ED_PAGE_H * 3;  // 2340
+
+const $ = id => document.getElementById(id);
+
+// Dimensiones del lienzo según orientación de la hoja actual (o global si no definida)
+function _edCurrentOrientation(){
+  // Si estamos renderizando para el visor (edOrientation ya seteado temporalmente),
+  // usar edOrientation directamente — NO leer de la página del editor
+  return edOrientation;
+}
+function edPageW(){ return _edCurrentOrientation() === 'vertical' ? ED_PAGE_W : ED_PAGE_H; }
+function edPageH(){ return _edCurrentOrientation() === 'vertical' ? ED_PAGE_H : ED_PAGE_W; }
+// Offset del lienzo dentro del workspace (centrado)
+function edMarginX(){ return (ED_CANVAS_W - edPageW()) / 2; }
+function edMarginY(){ return (ED_CANVAS_H - edPageH()) / 2; }
+
+// ── Conversiones de coordenadas ──
+// Pantalla → workspace interno
+function edScreenToWorld(sx, sy){
+  return { x: (sx - edCamera.x) / edCamera.z,
+           y: (sy - edCamera.y) / edCamera.z };
+}
+// Workspace → pantalla
+function edWorldToScreen(wx, wy){
+  return { x: wx * edCamera.z + edCamera.x,
+           y: wy * edCamera.z + edCamera.y };
+}
+// Zoom hacia un punto de pantalla (sx,sy), con factor multiplicativo
+function edZoomAt(sx, sy, factor){
+  // Límites
+  const newZ = Math.min(Math.max(edCamera.z * factor, 0.05), 8);
+  const fReal = newZ / edCamera.z;
+  edCamera.x = sx - (sx - edCamera.x) * fReal;
+  edCamera.y = sy - (sy - edCamera.y) * fReal;
+  edCamera.z = newZ;
+}
+// ¿Necesita scrollbars? (el lienzo no cabe entero en el viewport)
+function edNeedsScroll(){
+  if(!edCanvas) return { h: false, v: false };
+  const availW = edCanvas.width, availH = edCanvas.height;
+  const pw = edPageW(), ph = edPageH();
+  const lienzoPxW = pw * edCamera.z;
+  const lienzoPxH = ph * edCamera.z;
+  return { h: lienzoPxW > availW + 1, v: lienzoPxH > availH + 1 };
+}
+
+/* ══════════════════════════════════════════
+   CLASES (motor referEditor)
+   ══════════════════════════════════════════ */
+
+class BaseLayer {
+  constructor(type,x=0.5,y=0.5,width=0.3,height=0.2){
+    this.type=type;this.x=x;this.y=y;this.width=width;this.height=height;this.rotation=0;
+  }
+  contains(px,py){
+    const rot = (this.rotation||0)*Math.PI/180;
+    if(rot === 0){
+      return px>=this.x-this.width/2&&px<=this.x+this.width/2&&
+             py>=this.y-this.height/2&&py<=this.y+this.height/2;
+    }
+    // Transformar punto al espacio local (sin rotación) del objeto
+    const pw=edPageW(), ph=edPageH();
+    const dx=(px-this.x)*pw, dy=(py-this.y)*ph;
+    const lx=( dx*Math.cos(-rot)-dy*Math.sin(-rot))/pw;
+    const ly=( dx*Math.sin(-rot)+dy*Math.cos(-rot))/ph;
+    return Math.abs(lx)<=this.width/2 && Math.abs(ly)<=this.height/2;
+  }
+  getControlPoints(){
+    const hw = this.width/2;
+    const rot = (this.rotation||0)*Math.PI/180;
+    const pw=edPageW(), ph=edPageH();
+    // height de todos los tipos es fraccion de ph — uniforme
+    const hhPh = this.height/2;
+    const rp = (dx,dy) => {
+      const rx=dx*pw, ry=dy*ph;
+      return { x: this.x+(rx*Math.cos(rot)-ry*Math.sin(rot))/pw,
+               y: this.y+(rx*Math.sin(rot)+ry*Math.cos(rot))/ph };
+    };
+    const tl=rp(-hw,-hhPh), tr=rp(hw,-hhPh), bl=rp(-hw,hhPh), br=rp(hw,hhPh);
+    const ml=rp(-hw,0),     mr=rp(hw,0),      mt=rp(0,-hhPh), mb=rp(0,hhPh);
+    const rotOffset = 28/ph;
+    const rotHandle = rp(0,-hhPh-rotOffset);
+    return[
+      {...tl,corner:'tl'}, {...tr,corner:'tr'},
+      {...bl,corner:'bl'}, {...br,corner:'br'},
+      {...ml,corner:'ml'}, {...mr,corner:'mr'},
+      {...mt,corner:'mt'}, {...mb,corner:'mb'},
+      {...rotHandle,corner:'rotate'},
+    ];
+  }
+  resizeToFitText(){}
+}
+
+class ImageLayer extends BaseLayer {
+  constructor(imgEl,x=0.5,y=0.5,width=0.4){
+    super('image',x,y,width,0.3);
+    if(imgEl){
+      this.img=imgEl; this.src=imgEl.src||'';
+      if(imgEl.naturalWidth&&imgEl.naturalHeight){
+        const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+        this.height = width * (imgEl.naturalHeight / imgEl.naturalWidth) * (pw / ph);
+      }
+    } else {
+      this.img=null; this.src='';
+    }
+  }
+  draw(ctx,can){
+    if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
+    const pw=edPageW(), ph=edPageH();
+    const w = this.width  * pw;
+    const h = this.height * ph;
+    const px = edMarginX() + this.x*pw;
+    const py = edMarginY() + this.y*ph;
+    ctx.save();
+    ctx.globalAlpha = this.opacity ?? 1;
+    ctx.translate(px,py);
+    ctx.rotate(this.rotation*Math.PI/180);
+    ctx.drawImage(this.img, -w/2, -h/2, w, h);
+    ctx.restore();
+  }
+}
+
+class TextLayer extends BaseLayer {
+  constructor(text='Escribe aquí',x=0.5,y=0.5){
+    super('text',x,y,0.2,0.1);
+    this.text=text;this.fontSize=20;this.fontFamily='Arial';
+    this.color='#000000';this.backgroundColor='#ffffff';
+    this.borderColor='#000000';this.borderWidth=0;this.padding=10;
+  }
+  getLines(){return this.text.split('\n');}
+  measure(ctx){
+    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    let mw=0,th=0;
+    this.getLines().forEach(l=>{mw=Math.max(mw,ctx.measureText(l).width);th+=this.fontSize*1.2;});
+    return{width:mw,height:th};
+  }
+  resizeToFitText(can){
+    const pw=edPageW(), ph=edPageH();
+    const ctx=can.getContext('2d'),{width,height}=this.measure(ctx);
+    this.width=Math.max(0.05,(width+this.padding*2)/pw);
+    this.height=Math.max(0.05,(height+this.padding*2)/ph);
+  }
+  draw(ctx,can){
+    const pw=edPageW(), ph=edPageH();
+    const w=this.width*pw, h=this.height*ph;
+    const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
+    ctx.save();
+    ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
+    // Fondo y borde se dibujan en espacio local (tras la rotación)
+    ctx.fillStyle=this.backgroundColor; ctx.fillRect(-w/2,-h/2,w,h);
+    if(this.borderWidth>0){
+      ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
+      ctx.strokeRect(-w/2,-h/2,w,h);
+    }
+    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    const isPlaceholder = this.text==='Escribe aquí';
+    ctx.fillStyle=isPlaceholder?'#aaaaaa':this.color;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
+    lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+    ctx.restore();
+  }
+}
+
+class BubbleLayer extends BaseLayer {
+  constructor(text='Escribe aquí',x=0.5,y=0.5){
+    super('bubble',x,y,0.3,0.15);
+    this.text=text;this.fontSize=18;this.fontFamily='Comic Sans MS, cursive';
+    this.color='#000000';this.backgroundColor='#ffffff';
+    this.borderColor='#000000';this.borderWidth=2;
+    this.tail=true;
+    this.tailStart={x:-0.4,y:0.4};this.tailEnd={x:-0.4,y:0.6}; // voz 0 (legacy)
+    this.tailStarts=[{x:-0.4,y:0.4}];this.tailEnds=[{x:-0.4,y:0.6}]; // arrays por voz
+    this.style='conventional';this.voiceCount=1;this.padding=15;
+  }
+  getLines(){return this.text.split('\n');}
+  measure(ctx){
+    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    let mw=0,th=0;
+    this.getLines().forEach(l=>{mw=Math.max(mw,ctx.measureText(l).width);th+=this.fontSize*1.2;});
+    return{width:mw,height:th};
+  }
+  resizeToFitText(can){
+    const pw=edPageW(), ph=edPageH();
+    const ctx=can.getContext('2d'),{width,height}=this.measure(ctx);
+    this.width=Math.max(0.05,(width+this.padding*2)/pw);
+    this.height=Math.max(0.05,(height+this.padding*2)/ph);
+  }
+  getTailControlPoints(){
+    if(!this.tail)return[];
+    const vc=this.voiceCount||1;
+    // Asegurar que los arrays tienen suficientes entradas
+    if(!this.tailStarts)this.tailStarts=[{...this.tailStart}];
+    if(!this.tailEnds)  this.tailEnds  =[{...this.tailEnd}];
+    while(this.tailStarts.length<vc){
+      const off=(this.tailStarts.length-(vc-1)/2)*0.25;
+      this.tailStarts.push({x:this.tailStart.x+off,y:this.tailStart.y});
+      this.tailEnds.push(  {x:this.tailEnd.x+off,  y:this.tailEnd.y});
+    }
+    const pts=[];
+    for(let v=0;v<vc;v++){
+      const s=this.tailStarts[v],e=this.tailEnds[v];
+      pts.push({x:this.x+s.x*this.width,y:this.y+s.y*this.height,type:'start',voice:v});
+      pts.push({x:this.x+e.x*this.width,y:this.y+e.y*this.height,type:'end',  voice:v});
+    }
+    return pts;
+  }
+  drawTail(ctx,sx,sy,ex,ey){
+    ctx.save();
+    ctx.fillStyle=this.backgroundColor;ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
+    const angle=Math.atan2(ey-sy,ex-sx),bw=10;
+    const perp={x:-Math.sin(angle),y:Math.cos(angle)};
+    const dir={x:Math.cos(angle),y:Math.sin(angle)};
+    const left={x:sx+perp.x*bw/2,y:sy+perp.y*bw/2};
+    const right={x:sx-perp.x*bw/2,y:sy-perp.y*bw/2};
+    ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(ex,ey);ctx.lineTo(right.x,right.y);
+    ctx.closePath();ctx.fill();ctx.stroke();
+    // Línea blanca: misma posición que left→right, extendida a lo largo de perp
+    // para tapar completamente los vértices donde el stroke negro sobresale
+    const extra=1;
+    const extL={x:left.x +perp.x*extra, y:left.y +perp.y*extra};
+    const extR={x:right.x-perp.x*extra, y:right.y-perp.y*extra};
+    ctx.beginPath();ctx.moveTo(extL.x,extL.y);ctx.lineTo(extR.x,extR.y);
+    ctx.strokeStyle=this.backgroundColor;ctx.lineWidth=this.borderWidth*2+2;
+    ctx.lineCap='round';ctx.stroke();ctx.lineCap='butt';
+    ctx.restore();
+  }
+  draw(ctx,can){
+    const pw=edPageW(), ph=edPageH();
+    const w=this.width*pw, h=this.height*ph;
+    const pos={x:edMarginX()+this.x*pw, y:edMarginY()+this.y*ph};
+    const isSingle=this.text.trim().length===1&&/[a-zA-Z0-9]/.test(this.text.trim());
+    ctx.save();ctx.translate(pos.x,pos.y);
+
+    if(this.style==='thought'){
+      const circles=[{x:0,y:-h/4,r:w/3},{x:w/4,y:0,r:w/3},{x:-w/4,y:0,r:w/3},{x:0,y:h/4,r:w/3}];
+      ctx.fillStyle=this.backgroundColor;ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
+      circles.forEach(c=>{ctx.beginPath();ctx.arc(c.x,c.y,c.r,0,Math.PI*2);ctx.fill();ctx.stroke();});
+      function ci(c1,c2){
+        const dx=c2.x-c1.x,dy=c2.y-c1.y,d=Math.hypot(dx,dy);
+        if(d>c1.r+c2.r||d<Math.abs(c1.r-c2.r)||d===0)return[];
+        const a=(c1.r*c1.r-c2.r*c2.r+d*d)/(2*d),h2=c1.r*c1.r-a*a;
+        if(h2<0)return[];const hh=Math.sqrt(h2),x0=c1.x+a*dx/d,y0=c1.y+a*dy/d;
+        const rx=-dy*(hh/d),ry=dx*(hh/d);
+        return[{x:x0+rx,y:y0+ry},{x:x0-rx,y:y0-ry}];
+      }
+      let maxDist=0;
+      [[0,1],[0,2],[1,3],[2,3],[0,3],[1,2]].forEach(([a,b])=>{
+        ci(circles[a],circles[b]).forEach(p=>{maxDist=Math.max(maxDist,Math.hypot(p.x,p.y));});
+      });
+      if(maxDist===0)maxDist=Math.min(w,h)*0.4;
+      ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(0,0,maxDist,0,Math.PI*2);ctx.fill();
+      // Burbujas cola pensamiento
+      if(this.tail){
+        const tx=this.tailEnd.x*w,ty=this.tailEnd.y*h;
+        [0.09,0.055,0.03].forEach((r,i)=>{
+          const f=1-i*0.3;
+          ctx.beginPath();ctx.arc(tx*f,ty*f,r*Math.min(can.width,can.height),0,Math.PI*2);
+          ctx.fillStyle=this.backgroundColor;ctx.fill();
+          ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;ctx.stroke();
+        });
+      }
+      // Texto centrado
+      ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+      ctx.fillStyle=this.color;ctx.textAlign='center';ctx.textBaseline='middle';
+      const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
+      lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+      ctx.restore();return;
+    }
+
+    if(this.style==='explosion'){
+      const pts=12,step=(2*Math.PI)/pts,radii=[];
+      for(let i=0;i<pts;i++)radii.push(0.8+0.3*Math.sin(i*1.5)+0.2*Math.cos(i*2.3));
+      ctx.beginPath();
+      for(let i=0;i<pts;i++){
+        const angle=i*step,rr=radii[i]*(isSingle?Math.min(w,h)/2:(i%2===0?w/2:h/2));
+        i===0?ctx.moveTo(Math.cos(angle)*rr,Math.sin(angle)*rr):ctx.lineTo(Math.cos(angle)*rr,Math.sin(angle)*rr);
+      }
+      ctx.closePath();
+    }else if(isSingle){
+      ctx.beginPath();ctx.arc(0,0,Math.min(w,h)/2,0,Math.PI*2);
+    }else{
+      ctx.beginPath();ctx.ellipse(0,0,w/2,h/2,0,0,Math.PI*2);
+    }
+
+    ctx.fillStyle=this.backgroundColor;ctx.fill();
+    if(this.borderWidth>0){
+      ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
+      if(this.style==='lowvoice')ctx.setLineDash([5,3]);else ctx.setLineDash([]);
+      ctx.stroke();ctx.setLineDash([]);
+    }
+
+    if(this.tail){
+      if(this.style==='radio'){
+        const ex=this.tailEnd.x*w,ey=this.tailEnd.y*h;
+        ctx.save();ctx.strokeStyle=this.borderColor;ctx.lineWidth=1;
+        for(let r=5;r<25;r+=5){ctx.beginPath();ctx.arc(ex,ey,r,0,Math.PI*2);ctx.stroke();}
+        ctx.restore();
+      }else{
+        const vc=this.voiceCount||1;
+        if(!this.tailStarts)this.tailStarts=[{...this.tailStart}];
+        if(!this.tailEnds)  this.tailEnds  =[{...this.tailEnd}];
+        for(let v=0;v<vc;v++){
+          const s=this.tailStarts[v]||this.tailStarts[0];
+          const e=this.tailEnds[v]  ||this.tailEnds[0];
+          this.drawTail(ctx,s.x*w,s.y*h,e.x*w,e.y*h);
+        }
+      }
+    }
+
+    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    const isPlaceholder = this.text==='Escribe aquí';
+    ctx.fillStyle=isPlaceholder?'#999999':this.color;
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
+    lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+    ctx.restore();
+  }
+}
+
+/* ══════════════════════════════════════════
+   CANVAS: TAMAÑO Y FIT
+   ══════════════════════════════════════════ */
+function edSetOrientation(o, persist=true){
+  const prevOrientation = edOrientation;
+  edOrientation=o;
+  // Persistir en la hoja actual (no al inicializar el editor)
+  if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
+  // Recalcular height de ImageLayers si la orientacion realmente cambio
+  if(persist && prevOrientation !== o){
+    const _isV = o === 'vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    (edPages[edCurrentPage]?.layers || []).forEach(l => {
+      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
+        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
+      }
+    });
+  }
+  if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    edFitCanvas(true);
+    edRedraw();
+  }));
+}
+
+
+
+class DrawLayer extends BaseLayer {
+  constructor(){
+    super('draw', 0.5, 0.5, 1.0, 1.0);
+    // El canvas interno cubre todo el workspace (no solo la página)
+    // para permitir dibujar en la zona de trabajo fuera del lienzo.
+    this._canvas = document.createElement('canvas');
+    this._canvas.width  = ED_CANVAS_W;
+    this._canvas.height = ED_CANVAS_H;
+    this._ctx = this._canvas.getContext('2d');
+    this._lastX = 0;
+    this._lastY = 0;
+  }
+  static fromDataUrl(dataUrl, pw, ph){
+    // Compatibilidad: dataUrl guardado es en coords de página → colocar en posición correcta
+    const dl = new DrawLayer();
+    const img = new Image();
+    img.onload = () => {
+      const mx = (ED_CANVAS_W - pw) / 2;
+      const my = (ED_CANVAS_H - ph) / 2;
+      dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
+      if(typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return dl;
+  }
+  toDataUrl(){
+    // Exportar solo la zona de la página para compatibilidad con guardado
+    const pw = edPageW(), ph = edPageH();
+    const tmp = document.createElement('canvas');
+    tmp.width = pw; tmp.height = ph;
+    tmp.getContext('2d').drawImage(this._canvas,
+      edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
+    return tmp.toDataURL();
+  }
+  clear(){
+    this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+  }
+  // Coordenadas en workspace (px absoluto dentro del canvas de trabajo)
+  _wsCoords(nx, ny){
+    return {
+      x: edMarginX() + nx * edPageW(),
+      y: edMarginY() + ny * edPageH()
+    };
+  }
+  beginStroke(nx, ny, color, size, isEraser, opacity){
+    const {x,y} = this._wsCoords(nx, ny);
+    const alpha = (opacity ?? 100) / 100;
+    this._ctx.save();
+    this._ctx.globalAlpha = alpha;
+    if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.fillStyle='rgba(0,0,0,1)'; }
+    else { this._ctx.globalCompositeOperation='source-over'; this._ctx.fillStyle=color; }
+    this._ctx.beginPath(); this._ctx.arc(x,y,size/2,0,Math.PI*2); this._ctx.fill();
+    this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
+    this._lastX=x; this._lastY=y;
+  }
+  continueStroke(nx, ny, color, size, isEraser, opacity){
+    const {x,y} = this._wsCoords(nx, ny);
+    const alpha = (opacity ?? 100) / 100;
+    this._ctx.save();
+    this._ctx.globalAlpha = alpha;
+    this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
+    if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
+    else { this._ctx.globalCompositeOperation='source-over'; this._ctx.strokeStyle=color; }
+    this._ctx.lineWidth=size; this._ctx.lineCap='round'; this._ctx.lineJoin='round'; this._ctx.stroke();
+    this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
+    this._lastX=x; this._lastY=y;
+  }
+  draw(ctx){
+    // Pintar el workspace entero con el mismo transform de cámara ya activo en ctx
+    ctx.save();
+    ctx.drawImage(this._canvas, 0, 0);
+    ctx.restore();
+  }
+}
+
+
+class StrokeLayer extends BaseLayer {
+  constructor(srcCanvas){
+    // srcCanvas es el workspace completo (ED_CANVAS_W × ED_CANVAS_H)
+    // Calcular bounding box del contenido pintado
+    const bb = StrokeLayer._boundingBox(srcCanvas);
+    const pw = edPageW(), ph = edPageH();
+    if(!bb){
+      super('stroke', 0.5, 0.5, 0.1, 0.1);
+      this._canvas = document.createElement('canvas');
+      this._canvas.width = Math.round(pw * 0.1);
+      this._canvas.height = Math.round(ph * 0.1);
+      return;
+    }
+    // Coordenadas fraccionarias relativas a la PÁGINA
+    // bb está en coordenadas de workspace → convertir
+    const cx = (bb.x + bb.w/2 - edMarginX()) / pw;
+    const cy = (bb.y + bb.h/2 - edMarginY()) / ph;
+    const fw = bb.w / pw;
+    const fh = bb.h / ph;
+    super('stroke', cx, cy, fw, fh);
+    // Recortar bitmap a la zona del bounding box
+    this._canvas = document.createElement('canvas');
+    this._canvas.width  = Math.max(1, bb.w);
+    this._canvas.height = Math.max(1, bb.h);
+    this._canvas.getContext('2d').drawImage(srcCanvas, bb.x, bb.y, bb.w, bb.h, 0, 0, bb.w, bb.h);
+  }
+  // Calcular bounding box del contenido no-transparente del canvas
+  static _boundingBox(canvas){
+    const ctx = canvas.getContext('2d');
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const W = canvas.width, H = canvas.height;
+    let minX=W, minY=H, maxX=0, maxY=0, found=false;
+    // Iterar buscando solo píxeles CON contenido real (alpha > 10)
+    // No contar píxeles borrados (alpha = 0) aunque estén dentro del bb
+    for(let y=0; y<H; y++){
+      const row = y * W;
+      for(let x=0; x<W; x++){
+        if(d[(row+x)*4+3] > 10){
+          if(x<minX)minX=x; if(x>maxX)maxX=x;
+          if(y<minY)minY=y; if(y>maxY)maxY=y;
+          found=true;
+        }
+      }
+    }
+    if(!found) return null;
+    // Margen mínimo (1px) para no cortar antialiasing en el borde exacto
+    const pad = 1;
+    return {
+      x: Math.max(0, minX-pad), y: Math.max(0, minY-pad),
+      w: Math.min(W, maxX-minX+1+pad*2),
+      h: Math.min(H, maxY-minY+1+pad*2)
+    };
+  }
+  // Restaurar desde dataUrl (carga de proyecto)
+  static fromDataUrl(dataUrl, x, y, width, height, pw, ph){
+    const sl = new StrokeLayer(document.createElement('canvas'), pw||ED_PAGE_W, ph||ED_PAGE_H);
+    sl.x = x; sl.y = y; sl.width = width; sl.height = height;
+    const bw = Math.max(1, Math.round(width  * (pw||ED_PAGE_W)));
+    const bh = Math.max(1, Math.round(height * (ph||ED_PAGE_H)));
+    sl._canvas = document.createElement('canvas');
+    sl._canvas.width  = bw;
+    sl._canvas.height = bh;
+    const img = new Image();
+    img.onload = () => {
+      sl._canvas.getContext('2d').drawImage(img, 0, 0, bw, bh);
+      if(typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return sl;
+  }
+  // Exportar bitmap recortado
+  toDataUrl(){ return this._canvas.toDataURL(); }
+  // Expandir a DrawLayer para edición — devuelve un DrawLayer con el contenido restaurado
+  toDrawLayer(){
+    // Hacer bake del StrokeLayer con TODAS sus transformaciones aplicadas
+    // (rotation, resize, opacity) en un DrawLayer del tamaño del workspace.
+    // El resultado visual es idéntico a como se ve en el canvas del editor.
+    const dl = new DrawLayer();
+    const pw = edPageW(), ph = edPageH();
+    const cx = edMarginX() + this.x * pw;
+    const cy = edMarginY() + this.y * ph;
+    const w  = this.width  * pw;
+    const h  = this.height * ph;
+    dl._ctx.save();
+    dl._ctx.globalAlpha = this.opacity ?? 1;
+    dl._ctx.translate(cx, cy);
+    dl._ctx.rotate((this.rotation || 0) * Math.PI / 180);
+    dl._ctx.drawImage(this._canvas, -w/2, -h/2, w, h);
+    dl._ctx.restore();
+    return dl;
+  }
+  draw(ctx){
+    if(!this._canvas || this._canvas.width === 0) return;
+    const pw = edPageW(), ph = edPageH();
+    const w = this.width  * pw;
+    const h = this.height * ph;
+    const px = edMarginX() + this.x * pw;
+    const py = edMarginY() + this.y * ph;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate((this.rotation||0) * Math.PI/180);
+    ctx.drawImage(this._canvas, -w/2, -h/2, w, h);
+    ctx.restore();
+  }
+}
+
+/* ══════════════════════════════════════════
+   HISTORIAL UNDO / REDO
+   ══════════════════════════════════════════ */
+function _edLayersSnapshot(){
+  return JSON.stringify(edLayers.map(l => {
+    if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl() };
+    if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(),
+      x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity };
+    const o = {};
+    for(const k of ['type','x','y','width','height','rotation',
+                    'text','fontSize','fontFamily','color','backgroundColor',
+                    'borderColor','borderWidth','padding',
+                    'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount']){
+      if(l[k] !== undefined) o[k] = l[k];
+    }
+    if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
+    return o;
+  }));
+}
+
+function edPushHistory(){
+  const layersJSON = _edLayersSnapshot();
+  if(edHistory.length > 0 && edHistoryIdx >= 0){
+    const last = edHistory[edHistoryIdx];
+    if(last.layersJSON === layersJSON) return;
+  }
+  edHistory = edHistory.slice(0, edHistoryIdx + 1);
+  edHistory.push({ pageIdx: edCurrentPage, layersJSON });
+  if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
+  edHistoryIdx = edHistory.length - 1;
+  edUpdateUndoRedoBtns();
+}
+
+function edUndo(){
+  if(edHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
+  edHistoryIdx--;
+  edApplyHistory(edHistory[edHistoryIdx]);
+}
+
+function edRedo(){
+  if(edHistoryIdx >= edHistory.length - 1){ edToast('Nada que rehacer'); return; }
+  edHistoryIdx++;
+  edApplyHistory(edHistory[edHistoryIdx]);
+}
+
+function edApplyHistory(snapshot){
+  if(!snapshot) return;
+  const raw = JSON.parse(snapshot.layersJSON);
+  const imgPromises = [];
+  edLayers = raw.map(o => {
+    let l;
+    if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
+    else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
+    else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
+    else if(o.type === 'draw') {
+      const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+      l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
+                    : new DrawLayer();
+      return l;
+    }
+    else if(o.type === 'stroke') {
+      const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+      const _pw = _isV?ED_PAGE_W:ED_PAGE_H, _ph = _isV?ED_PAGE_H:ED_PAGE_W;
+      l = StrokeLayer.fromDataUrl(o.dataUrl||'', o.x||0.5, o.y||0.5, o.width||0.1, o.height||0.1, _pw, _ph);
+      if(o.rotation) l.rotation=o.rotation;
+      if(o.opacity !== undefined) l.opacity=o.opacity;
+      return l;
+    }
+    else return o;
+    for(const k of Object.keys(o)){
+      if(k !== '_imgSrc') l[k] = o[k];
+    }
+    if(o._imgSrc){
+      const p = new Promise(resolve => {
+        const img = new Image();
+        img.onload  = () => {
+          l.img = img;
+          // Migración height si es necesario
+          const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+          const expectedH=l.width*(img.naturalHeight/img.naturalWidth)*(pw/ph);
+          if(Math.abs((l.height/l.width)/(expectedH/l.width)-1)>0.15){
+            l.height=Math.min(expectedH,0.9);
+          }
+          resolve();
+        };
+        img.onerror = () => resolve();
+        img.src = o._imgSrc;
+      });
+      imgPromises.push(p);
+    }
+    return l;
+  });
+  if(edPages[snapshot.pageIdx]){
+    edPages[snapshot.pageIdx].layers = edLayers;
+  }
+  edSelectedIdx = -1;
+  edPanelUserClosed = false;
+  edUpdateUndoRedoBtns();
+  // Navegar a la página del snapshot si es distinta a la actual
+  if(snapshot.pageIdx !== edCurrentPage && edPages[snapshot.pageIdx]){
+    edCurrentPage = snapshot.pageIdx;
+    edLayers = edPages[edCurrentPage].layers;
+    const _po = edPages[edCurrentPage].orientation || 'vertical';
+    if(_po !== edOrientation) edOrientation = _po;
+    edUpdateNavPages();
+  }
+  Promise.all(imgPromises).then(() => edRedraw());
+}
+
+function edUpdateUndoRedoBtns(){
+  const u = $('edUndoBtn'), r = $('edRedoBtn');
+  if(u) u.disabled = edHistoryIdx <= 0;
+  if(r) r.disabled = edHistoryIdx >= edHistory.length - 1;
+}
+
+/* ── edFitCanvas ──────────────────────────────────────────────────
+   Ajusta las barras de UI y el tamaño del canvas DOM al viewport.
+   El canvas ocupa SIEMPRE todo el área disponible (sin scroll CSS).
+   La cámara (edCamera) controla qué parte del workspace se ve.
+   ──────────────────────────────────────────────────────────────── */
+function edFitCanvas(resetCamera){
+  if(!edCanvas) return;
+  const topbar=$('edTopbar'), menu=$('edMenuBar'), opts=$('edOptionsPanel');
+
+  const topH  = (!edMinimized && topbar)  ? topbar.getBoundingClientRect().height  : 0;
+  const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
+  const optsH = (opts && opts.classList.contains('open') && opts.style.visibility !== 'hidden') ? opts.getBoundingClientRect().height : 0;
+  if(menu && !edMinimized) menu.style.top = topH + 'px';
+  if(opts) opts.style.top = (topH + menuH) + 'px';
+  const totalBarsH = topH + menuH + optsH;
+
+  const availW = window.innerWidth;
+  const availH = window.innerHeight - totalBarsH;
+
+  const newW = Math.round(availW);
+  const newH = Math.round(availH);
+
+  // Detectar cambio de VENTANA (no de panel de opciones)
+  // _edWinW/_edWinH solo cambian con resize de ventana real
+  const _winChanged = (window.innerWidth  !== (window._edWinW||0)) ||
+                      (window.innerHeight !== (window._edWinH||0));
+  if(_winChanged){
+    window._edWinW = window.innerWidth;
+    window._edWinH = window.innerHeight;
+    if(!resetCamera) resetCamera = true;  // ventana cambió → centrar lienzo
+  }
+
+  // Redimensionar canvas si es necesario (sin resetear cámara por cambio de panel)
+  const _prevW = edCanvas.width, _prevH = edCanvas.height;
+  const _sizeChanged = _prevW !== newW || _prevH !== newH;
+  if(_sizeChanged){
+    edCanvas.width  = newW;
+    edCanvas.height = newH;
+    // No mover la cámara al cambiar de tamaño por el panel de opciones.
+    // El canvas crece/encoge hacia abajo; el viewport queda anclado.
+  }
+  edCanvas.style.width  = newW + 'px';
+  edCanvas.style.height = newH + 'px';
+  edCanvas.style.position = 'absolute';
+  edCanvas.style.left = '0';
+  edCanvas.style.top  = totalBarsH + 'px';
+  edCanvas.style.margin = '0';
+  // Mantener el canvas de dibujo libre sincronizado en posición y tamaño
+  if(edDrawCanvas){
+    const _sizeChangedDraw = edDrawCanvas.width !== newW || edDrawCanvas.height !== newH;
+    if(_sizeChangedDraw){ edDrawCanvas.width = newW; edDrawCanvas.height = newH; }
+    edDrawCanvas.style.width  = newW + 'px';
+    edDrawCanvas.style.height = newH + 'px';
+    edDrawCanvas.style.position = 'absolute';
+    edDrawCanvas.style.left = '0';
+    edDrawCanvas.style.top  = totalBarsH + 'px';
+    edDrawCanvas.style.margin = '0';
+  }
+
+  if(resetCamera){
+    _edCameraReset();
+  }
+  _edScrollbarsUpdate();
+  // Siempre redibujar tras ajustar el canvas
+  edRedraw();
+}
+
+/* ── Resetea la cámara para que el LIENZO ocupe el viewport centrado ── */
+function _edCameraReset(){
+  const pw = edPageW(), ph = edPageH();
+  const availW = edCanvas.width, availH = edCanvas.height;
+  const scaleW = availW / pw;
+  const scaleH = availH / ph;
+  const z = Math.min(scaleW, scaleH);
+  // Posición: el centro del lienzo (en workspace) queda en el centro de pantalla
+  // centro_workspace_x = edMarginX + pw/2
+  // pantalla_x = centro_workspace_x * z + camera.x = availW/2
+  // => camera.x = availW/2 - (edMarginX + pw/2) * z
+  edCamera.z = z;
+  edCamera.x = availW/2  - (edMarginX() + pw/2) * z;
+  edCamera.y = availH/2  - (edMarginY() + ph/2) * z;
+}
+
+/* ══════════════════════════════════════════
+   REDRAW
+   ══════════════════════════════════════════ */
+function edRedraw(){
+  if(!edCtx || !edCanvas)return;
+  const cw=edCanvas.width, ch=edCanvas.height;
+
+  // Reset transform → limpiar todo el viewport
+  edCtx.setTransform(1,0,0,1,0,0);
+  edCtx.clearRect(0,0,cw,ch);
+  // Fondo workspace (toda la pantalla)
+  edCtx.fillStyle='#b0b0b0';
+  edCtx.fillRect(0,0,cw,ch);
+
+  // Aplicar cámara: escala + traslación
+  edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+
+  const page=edPages[edCurrentPage];if(!page)return;
+
+  // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip)
+  // Radio fijo en coordenadas workspace → proporcional al zoom automáticamente
+  const _lr = 20; // ~20px en workspace = radio de esquina físicamente constante
+  edCtx.shadowColor='rgba(0,0,0,0.35)';edCtx.shadowBlur=20/edCamera.z;
+  edCtx.fillStyle='#ffffff';
+  edCtx.beginPath();
+  if(edCtx.roundRect){
+    edCtx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr);
+  } else {
+    const _x=edMarginX(),_y=edMarginY(),_w=edPageW(),_h=edPageH(),_r=_lr;
+    edCtx.moveTo(_x+_r,_y);edCtx.lineTo(_x+_w-_r,_y);edCtx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
+    edCtx.lineTo(_x+_w,_y+_h-_r);edCtx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
+    edCtx.lineTo(_x+_r,_y+_h);edCtx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
+    edCtx.lineTo(_x,_y+_r);edCtx.arcTo(_x,_y,_x+_r,_y,_r);edCtx.closePath();
+  }
+  edCtx.fill();
+  edCtx.shadowColor='transparent';edCtx.shadowBlur=0;
+  // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
+  // Imágenes primero, luego texto/bocadillos encima
+  // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
+  const _imgLayers    = edLayers.filter(l=>l.type==='image');
+  const _strokeLayers = edLayers.filter(l=>l.type==='stroke');
+  const _textLayers   = edLayers.filter(l=>l.type==='text'||l.type==='bubble');
+  // Opacidad global de la capa de textos (máximo de todos sus objetos individuales,
+  // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
+  const _textGroupAlpha = page.textLayerOpacity ?? 1;
+
+  // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
+  // Textos/bocadillos siempre al final (encima de todo).
+  edLayers.forEach(l=>{
+    if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
+    edCtx.globalAlpha = l.opacity ?? 1;
+    if(l.type==='image')      l.draw(edCtx, edCanvas);
+    else if(l.type==='draw')  l.draw(edCtx);
+    else if(l.type==='stroke')l.draw(edCtx);
+    edCtx.globalAlpha = 1;
+  });
+  edCtx.globalAlpha = _textGroupAlpha;
+  _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
+  edCtx.globalAlpha = 1;
+  edDrawSel();
+  // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
+  edCtx.save();
+  edCtx.strokeStyle = '#1a8cff';
+  edCtx.lineWidth   = 1 / edCamera.z;   // 1px físico independiente del zoom
+  edCtx.strokeRect(edMarginX(), edMarginY(), edPageW(), edPageH());
+  edCtx.restore();
+  // Restaurar transform para UI sobre el canvas (scrollbars)
+  edCtx.setTransform(1,0,0,1,0,0);
+  _edScrollbarsDraw();
+}
+
+
+/* ══════════════════════════════════════════
+   ICONOS FLOTANTES SOBRE OBJETO SELECCIONADO
+   ══════════════════════════════════════════ */
+
+function edIsTouchDevice(){
+  return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+}
+function edDrawSel(){
+  if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
+  const la=edLayers[edSelectedIdx];
+  const pw=edPageW(), ph=edPageH();
+  const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
+  const w=la.width*pw;
+  // height fraccion de ph para todos los tipos
+  const h=la.height*ph;
+  const rot=(la.rotation||0)*Math.PI/180;
+  const z=edCamera.z;
+  // 1px físico independiente del zoom
+  const lw=1/z;
+  const hr=6/z;   // radio handles escala
+  const hrRot=8/z; // radio handle rotación
+  edCtx.save();
+  // Transformar al espacio del objeto (centro + rotación)
+  edCtx.translate(cx,cy);
+  edCtx.rotate(rot);
+  // Marco de selección — 1px físico
+  edCtx.strokeStyle='#1a8cff';
+  edCtx.lineWidth=lw;
+  edCtx.setLineDash([5/z,3/z]);
+  edCtx.strokeRect(-w/2,-h/2,w,h);
+  edCtx.setLineDash([]);
+  // Handles de escala y rotación — solo en PC (no táctil)
+  if(la.type!=='bubble' && !edIsTouchDevice()){
+    const corners=[
+      [-w/2,-h/2],[ w/2,-h/2],[-w/2, h/2],[ w/2, h/2],
+      [   0,-h/2],[   0, h/2],[-w/2,   0],[ w/2,   0],
+    ];
+    corners.forEach(([hx,hy])=>{
+      edCtx.beginPath();edCtx.arc(hx,hy,hr,0,Math.PI*2);
+      edCtx.fillStyle='#fff';edCtx.fill();
+      edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+    });
+    // Handle de rotación: solo en PC (en táctil se usa gesto pinch)
+    if(!edIsTouchDevice()){
+      const rotY=-h/2-28/z;
+      edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
+      edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw;edCtx.stroke();
+      edCtx.beginPath();edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
+      edCtx.fillStyle='#1a8cff';edCtx.fill();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;
+      const ar=hrRot*0.55;
+      edCtx.beginPath();edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5);
+      edCtx.stroke();
+      const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
+      edCtx.beginPath();
+      edCtx.moveTo(ax,ay);edCtx.lineTo(ax-3/z,ay-5/z);
+      edCtx.moveTo(ax,ay);edCtx.lineTo(ax+4/z,ay-3/z);
+      edCtx.stroke();
+    }
+  }
+  // Cerrar el bloque rotado antes de dibujar los handles de cola
+  edCtx.restore();
+  // Handles cola bocadillo — en coordenadas de workspace absolutas (sin rotación)
+  if(la.type==='bubble'){
+    const tcp=la.getTailControlPoints();
+    const byVoice={};
+    tcp.forEach(p=>{ if(!byVoice[p.voice])byVoice[p.voice]={}; byVoice[p.voice][p.type]=p; });
+    // Líneas guía entre start y end de cada voz
+    Object.values(byVoice).forEach(v=>{
+      if(!v.start||!v.end)return;
+      const sx=edMarginX()+v.start.x*pw, sy=edMarginY()+v.start.y*ph;
+      const ex=edMarginX()+v.end.x*pw,   ey=edMarginY()+v.end.y*ph;
+      edCtx.beginPath();edCtx.moveTo(sx,sy);edCtx.lineTo(ex,ey);
+      edCtx.strokeStyle='rgba(26,140,255,0.5)';edCtx.lineWidth=1.5/z;
+      edCtx.setLineDash([5/z,3/z]);edCtx.stroke();edCtx.setLineDash([]);
+    });
+    // Handles
+    const HR=6/z;
+    tcp.forEach(p=>{
+      const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
+      const isEnd=p.type==='end';
+      edCtx.beginPath();edCtx.arc(cpx,cpy,HR,0,Math.PI*2);
+      edCtx.fillStyle=isEnd?'#ff6600':'#1a8cff';edCtx.fill();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+    });
+  }
+}
+
+/* ══════════════════════════════════════════
+   PÁGINAS
+   ══════════════════════════════════════════ */
+function edAddPage(){
+  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation});
+  edLoadPage(edPages.length-1);
+  edToast('Página añadida');
+}
+function edDeletePage(){
+  if(edPages.length<=1){edToast('Necesitas al menos una página');return;}
+  if(!confirm('¿Eliminar esta hoja?')) return;
+  edPages.splice(edCurrentPage,1);
+  edLoadPage(Math.min(edCurrentPage,edPages.length-1));
+}
+function edLoadPage(idx){
+  edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
+  const _po = edPages[idx]?.orientation || 'vertical';
+  if(_po !== edOrientation){
+    edOrientation = _po;
+    if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
+    // Recalcular height de imagenes para la nueva orientacion
+    const _isV = _po === 'vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    edLayers.forEach(l => {
+      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
+        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
+      }
+    });
+  }
+  edRedraw();edUpdateNavPages();edRenderOptionsPanel();
+}
+function edUpdateNavPages(){
+  // Actualizar número de página en topbar
+  const pnum=$('edPageNum');
+  if(pnum) pnum.textContent = edCurrentPage+1;
+  // Habilitar/deshabilitar flechas en topbar
+  const pprev=$('edPagePrev'), pnext=$('edPageNext');
+  if(pprev) pprev.disabled = edCurrentPage <= 0;
+  if(pnext) pnext.disabled = edCurrentPage >= edPages.length-1;
+
+  const wrap=$('ddNavPages');if(!wrap)return;
+  wrap.innerHTML='';
+  edPages.forEach((p,i)=>{
+    const btn=document.createElement('button');
+    btn.className='op-btn ed-nav-page-btn'+(i===edCurrentPage?' active':'');
+    btn.title='Hoja '+(i+1);
+    btn.style.cssText='padding:3px;min-width:48px;flex-direction:column;align-items:center;gap:2px;justify-content:center';
+
+    // Canvas miniatura
+    const thumb=document.createElement('canvas');
+    const isV=(p.orientation||edOrientation)==='vertical';
+    thumb.width=44; thumb.height=isV?60:44;
+    thumb.style.cssText='display:block;border:1px solid #ccc;border-radius:3px;background:#fff;max-width:44px';
+    _edRenderPageThumb(thumb, p, i);
+    btn.appendChild(thumb);
+
+    // Número de página
+    const lbl=document.createElement('span');
+    lbl.textContent=i+1;
+    lbl.style.cssText='font-size:10px;font-weight:700;line-height:1';
+    btn.appendChild(lbl);
+
+    btn.addEventListener('click',()=>{edLoadPage(i);edCloseMenus();});
+    wrap.appendChild(btn);
+  });
+  // Marcar orientación activa
+  $('dd-orientv')?.classList.toggle('active',edOrientation==='vertical');
+  $('dd-orienth')?.classList.toggle('active',edOrientation==='horizontal');
+}
+
+function _edRenderPageThumb(canvas, page, pageIdx){
+  const ctx=canvas.getContext('2d');
+  const tw=canvas.width, th=canvas.height;
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(0,0,tw,th);
+  if(!page||!page.layers) return;
+  const isV=(page.orientation||edOrientation)==='vertical';
+  const pw=isV?ED_PAGE_W:ED_PAGE_H, ph=isV?ED_PAGE_H:ED_PAGE_W;
+  const sx=tw/pw, sy=th/ph;
+
+  // Renderizar capas en orden del array (igual que canvas y visor)
+  // Textos al final
+  const _nonText = page.layers.filter(l=>l.type!=='text'&&l.type!=='bubble');
+  const _textL   = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+  [..._nonText, ..._textL].forEach(la=>{
+    const type = la.type;
+    ctx.save();
+    ctx.globalAlpha=la.opacity??1;
+    const cx=la.x*tw, cy=la.y*th;
+    const lw=la.width*tw, lh=la.height*th;
+    const rot=(la.rotation||0)*Math.PI/180;
+    ctx.translate(cx,cy);
+    if(rot) ctx.rotate(rot);
+    if(type==='image' && la.img && la.img.complete && la.img.naturalWidth>0){
+      ctx.drawImage(la.img,-lw/2,-lh/2,lw,lh);
+    } else if(type==='stroke' && la._canvas){
+      ctx.drawImage(la._canvas,-lw/2,-lh/2,lw,lh);
+    } else if(type==='draw' && la._canvas){
+      ctx.restore();
+      ctx.save();
+      const _mx=(ED_CANVAS_W-pw)/2, _my=(ED_CANVAS_H-ph)/2;
+      ctx.drawImage(la._canvas, _mx, _my, pw, ph, 0, 0, tw, th);
+    } else if(type==='text'||type==='bubble'){
+      ctx.fillStyle=la.backgroundColor||'rgba(255,255,255,0.85)';
+      ctx.fillRect(-lw/2,-lh/2,lw,lh);
+    }
+    ctx.restore();
+  });
+}
+
+/* ══════════════════════════════════════════
+   CAPAS
+   ══════════════════════════════════════════ */
+function edAddImage(file){
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const img=new Image();
+    img.onload=()=>{
+      const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
+      const natW=img.naturalWidth||1, natH=img.naturalHeight||1;
+      const w=0.7;
+      // height calculado por el constructor como fraccion de pw (h = w*(natH/natW))
+      const layer=new ImageLayer(img,0.5,0.5,w);
+      // Limitar: no superar 0.85*ph en pixeles → 0.85*(ph/pw) como fraccion de pw
+      const maxH = 0.85;  // fraccion de ph
+      if(layer.height > maxH){
+        const scale = maxH/layer.height;
+        layer.height = maxH;
+        layer.width  = layer.width * scale;
+      }
+      // Insertar imagen antes del primer texto/bocadillo (textos siempre encima)
+      const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
+      if(firstTextIdx >= 0){
+        edLayers.splice(firstTextIdx, 0, layer);
+        edSelectedIdx = firstTextIdx;
+      } else {
+        edLayers.push(layer);
+        edSelectedIdx = edLayers.length - 1;
+      }
+      edPushHistory();edRedraw();edRenderOptionsPanel('props');edToast('Imagen añadida ✓');
+    };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function edAddText(){
+  const l=new TextLayer('Escribe aquí');l.resizeToFitText(edCanvas);
+  edLayers.push(l);edSelectedIdx=edLayers.length-1;
+  edPushHistory();edRedraw();edRenderOptionsPanel('props');
+}
+function edAddBubble(){
+  const l=new BubbleLayer('Escribe aquí');l.resizeToFitText(edCanvas);
+  edLayers.push(l);edSelectedIdx=edLayers.length-1;
+  edPushHistory();edRedraw();edRenderOptionsPanel('props');
+}
+function edDuplicateSelected(){
+  if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return;
+  const la = edLayers[edSelectedIdx];
+  let copy;
+  if(la.type === 'stroke'){
+    // Clonar el canvas del stroke
+    const c = document.createElement('canvas');
+    c.width = la._canvas.width; c.height = la._canvas.height;
+    c.getContext('2d').drawImage(la._canvas, 0, 0);
+    copy = new StrokeLayer(document.createElement('canvas'));
+    copy._canvas = c;
+    copy.x = la.x + 0.02; copy.y = la.y + 0.02;
+    copy.width = la.width; copy.height = la.height;
+    copy.rotation = la.rotation || 0;
+    copy.opacity = la.opacity;
+  } else if(la.type === 'image'){
+    copy = new ImageLayer(la.img, la.x + 0.02, la.y + 0.02, la.width);
+    copy.height = la.height; copy.rotation = la.rotation || 0;
+    copy.src = la.src; copy.opacity = la.opacity;
+  } else if(la.type === 'text'){
+    copy = new TextLayer(la.text, la.x + 0.02, la.y + 0.02);
+    Object.assign(copy, la); copy.x = la.x + 0.02; copy.y = la.y + 0.02;
+  } else if(la.type === 'bubble'){
+    copy = new BubbleLayer(la.text, la.x + 0.02, la.y + 0.02);
+    Object.assign(copy, la); copy.x = la.x + 0.02; copy.y = la.y + 0.02;
+    if(la.tailStart) copy.tailStart = {...la.tailStart};
+    if(la.tailEnd)   copy.tailEnd   = {...la.tailEnd};
+    if(la.tailStarts) copy.tailStarts = la.tailStarts.map(s=>({...s}));
+    if(la.tailEnds)   copy.tailEnds   = la.tailEnds.map(e=>({...e}));
+  } else return;
+  // Insertar justo encima del original
+  edLayers.splice(edSelectedIdx + 1, 0, copy);
+  edSelectedIdx = edSelectedIdx + 1;
+  edPushHistory(); edRedraw();
+  edToast('Objeto duplicado');
+}
+function edDeleteSelected(){
+  if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
+  edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
+  edPushHistory();edRedraw();edRenderOptionsPanel();
+}
+
+/* ══════════════════════════════════════════
+   EVENTOS CANVAS
+   ══════════════════════════════════════════ */
+function edCoords(e){
+  const src = e.touches ? e.touches[0] : e;
+  // Coordenadas de pantalla (el canvas cubre todo el viewport)
+  const sx = src.clientX;
+  const sy = src.clientY - parseFloat(edCanvas.style.top || 0);
+  // Convertir pantalla → workspace
+  const w = edScreenToWorld(sx, sy);
+  // Convertir workspace → coordenadas de página (0-1)
+  const pw = edPageW(), ph = edPageH();
+  const nx = (w.x - edMarginX()) / pw;
+  const ny = (w.y - edMarginY()) / ph;
+  return { px: w.x, py: w.y, nx, ny };
+}
+
+
+/* ══════════════════════════════════════════
+   PINCH-TO-ZOOM (2 dedos)
+   ══════════════════════════════════════════ */
+// Distancia entre 2 pointers del mapa _edActivePointers
+function _pinchDist(pMap) {
+  const pts = [...pMap.values()];
+  const dx = pts[0].x - pts[1].x;
+  const dy = pts[0].y - pts[1].y;
+  return Math.hypot(dx, dy);
+}
+function _pinchAngle(pMap){
+  const pts=[...pMap.values()];
+  return Math.atan2(pts[1].y-pts[0].y, pts[1].x-pts[0].x);
+}
+function edPinchStart(e) {
+  if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
+  edPinching   = true;
+  edPinchDist0  = _pinchDist(window._edActivePointers);
+  edPinchAngle0 = _pinchAngle(window._edActivePointers);
+  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0 } : null;
+  return true;
+}
+function edPinchMove(e) {
+  if (!edPinching || !window._edActivePointers || window._edActivePointers.size < 2) return;
+  const dist   = _pinchDist(window._edActivePointers);
+  const angle  = _pinchAngle(window._edActivePointers);
+  const ratio  = dist / Math.max(edPinchDist0, 1);
+  const dAngle = (angle - edPinchAngle0) * 180 / Math.PI;
+  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if (la && edPinchScale0) {
+    // Escala proporcional — todos los tipos escalan width y height juntos
+    const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
+    la.width  = newW;
+    const asp = edPinchScale0.h / edPinchScale0.w;
+    la.height = newW * asp;
+    // Rotación por giro de dedos
+    la.rotation = edPinchScale0.rot + dAngle;
+    edRedraw();
+  }
+}
+function edPinchEnd() {
+  edPinching   = false;
+  edPinchDist0 = 0;
+  edPinchScale0 = null;
+}
+
+
+/* ══════════════════════════════════════════
+   ICONO ⚙ SOBRE OBJETO SELECCIONADO
+   Permanente mientras el objeto está seleccionado.
+   Centro del círculo = centro de la línea superior del marco.
+   Se mueve con el objeto en tiempo real.
+   ══════════════════════════════════════════ */
+
+function _edGearPos(la){
+  // Workspace coords del centro-superior del objeto
+  const pw=edPageW(), ph=edPageH();
+  const wx = edMarginX() + la.x * pw;
+  const wy = edMarginY() + (la.y - la.height/2) * ph;
+  // Convertir workspace → screen con la cámara
+  const s = edWorldToScreen(wx, wy);
+  const canvasTop = parseFloat(edCanvas.style.top || 0);
+  return { cx: s.x, ty: s.y + canvasTop };
+}
+
+// Gear icon eliminado — se usa doble toque / long press
+function edShowGearIcon(layerIdx){ /* eliminado */ }
+function edUpdateGearPos(){ /* eliminado */ }
+function edHideGearIcon(){ const b=document.getElementById('edGearIcon');if(b)b.remove(); }
+function edHideContextMenu(){}
+function edShowContextMenu(idx){}
+
+
+/* ══════════════════════════════════════════
+   SCROLLBARS VIRTUALES
+   Dibujadas sobre el canvas en coordenadas de pantalla.
+   Solo aparecen cuando el lienzo no cabe entero en el viewport.
+   ══════════════════════════════════════════ */
+const _edSB = { needH: false, needV: false };
+
+function _edScrollbarsUpdate(){
+  if(!edCanvas) return;
+  const { h, v } = edNeedsScroll();
+  _edSB.needH = h;
+  _edSB.needV = v;
+}
+
+function _edScrollbarsDraw(){
+  if(!edCtx || !edCanvas) return;
+  const W = edCanvas.width, H = edCanvas.height;
+  const pw = edPageW(), ph = edPageH();
+  const thick = 6, margin = 2, radius = 3;
+
+  // Rango del workspace en pantalla
+  const wsLeft  = edCamera.x;
+  const wsTop   = edCamera.y;
+  const wsRight = wsLeft + ED_CANVAS_W * edCamera.z;
+  const wsBot   = wsTop  + ED_CANVAS_H * edCamera.z;
+
+  // Qué parte del workspace está visible
+  const visLeft = -wsLeft;
+  const visTop  = -wsTop;
+  const visW    = W;
+  const visH    = H;
+  const wsW     = ED_CANVAS_W * edCamera.z;
+  const wsH     = ED_CANVAS_H * edCamera.z;
+
+  edCtx.save();
+  edCtx.globalAlpha = 0.55;
+
+  if(_edSB.needH && wsW > 0){
+    const trackW = W - margin*2 - (thick+margin);
+    const thumbW = Math.max(30, trackW * (visW / wsW));
+    const thumbX = margin + trackW * (Math.max(0, visLeft) / wsW);
+    edCtx.fillStyle = '#555';
+    _edRoundRect(edCtx, Math.min(thumbX, W - thumbW - margin - thick - margin), H - thick - margin, thumbW, thick, radius);
+    edCtx.fill();
+  }
+
+  if(_edSB.needV && wsH > 0){
+    const trackH = H - margin*2 - (thick+margin);
+    const thumbH = Math.max(30, trackH * (visH / wsH));
+    const thumbY = margin + trackH * (Math.max(0, visTop) / wsH);
+    edCtx.fillStyle = '#555';
+    _edRoundRect(edCtx, W - thick - margin, Math.min(thumbY, H - thumbH - margin - thick - margin), thick, thumbH, radius);
+    edCtx.fill();
+  }
+
+  edCtx.restore();
+}
+
+function _edRoundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.arcTo(x+w, y, x+w, y+r, r);
+  ctx.lineTo(x+w, y+h-r); ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+  ctx.lineTo(x+r, y+h); ctx.arcTo(x, y+h, x, y+h-r, r);
+  ctx.lineTo(x, y+r); ctx.arcTo(x, y, x+r, y, r);
+  ctx.closePath();
+}
+
+function _edHandleDoubleTap(idx){
+  const la = edLayers[idx];
+  if(la && la.type === 'stroke'){
+    // Doble tap en dibujo → entrar en modo edición directamente
+    const page=edPages[edCurrentPage]; if(!page) return;
+    const dl=la.toDrawLayer();
+    page.layers.splice(idx, 1, dl);  // reemplazar StrokeLayer con DrawLayer en su posición
+    edLayers=page.layers;
+    edSelectedIdx=-1;
+    edActiveTool='draw';
+    edCanvas.className='tool-draw';
+    const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+    // Limpiar historial local y guardar el estado inicial como base:
+    // el usuario puede deshacer hasta aquí pero nunca más allá (no borra el dibujo base)
+    _edDrawClearHistory();
+    // El primer _edDrawPushHistory guardará este estado inicial.
+    // Marcamos que el estado base ya está "guardado" poniendo idx en 0 con el snapshot.
+    edDrawHistory = [dl.toDataUrl()];
+    edDrawHistoryIdx = 0;
+    _edDrawUpdateUndoRedoBtns();
+    edRenderOptionsPanel('draw');
+    edRedraw();
+  } else {
+    edRenderOptionsPanel('props');
+  }
+}
+function edOnStart(e){
+  // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
+  // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
+  const tgt = e.target;
+  // Ignorar si el click NO está dentro de editorShell (modales, header, etc.)
+  if(!tgt.closest('#editorShell')) return;
+  // Ignorar elementos de UI dentro del editor
+  const isUI = tgt.closest('#edMenuBar')      ||
+               tgt.closest('#edTopbar')       ||
+               tgt.closest('#edOptionsPanel') ||
+               tgt.closest('.ed-fulloverlay') ||
+               tgt.closest('.ed-dropdown')    ||
+               tgt.closest('#edGearIcon')     ||
+               tgt.closest('#edBrushCursor')  ||
+               tgt.closest('.ed-float-btn')   ||
+               tgt.closest('#editorViewer')   ||
+               tgt.closest('#edProjectModal');
+  if(isUI) return;
+
+  // No bloquear scroll en overlays (capas, hojas, etc.)
+  if(e.cancelable && !e.target.closest('.ed-fulloverlay')){
+    e.preventDefault();
+  }
+  _edTouchMoved = false; // resetear flag de movimiento
+  // Rastrear pointers activos (para pinch con pointer events)
+  if(!window._edActivePointers) window._edActivePointers = new Map();
+  window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
+  if(window._edActivePointers.size === 2){
+    // Si estaba pintando, cancelar el trazo sin guardarlo
+    if(edPainting){
+      edPainting = false;
+      // Restaurar el último snapshot del historial local para descartar el trazo parcial
+      const page=edPages[edCurrentPage];
+      const dl=page?.layers.find(l=>l.type==='draw');
+      if(dl && edDrawHistory.length > 0){
+        const img=new Image();
+        img.onload=()=>{ dl.clear(); dl._ctx.drawImage(img,0,0); edRedraw(); };
+        img.src=edDrawHistory[edDrawHistoryIdx] || '';
+      }
+    }
+    edPinchStart(e);
+    return;
+  }
+  if(window._edActivePointers.size > 1) return;
+  // Cerrar menús si están abiertos (clic en canvas o zona de trabajo)
+  if(edMenuOpen){ edCloseMenus(); }
+  edHideContextMenu();
+  if(edActiveTool === 'fill'){
+    if(tgt !== edCanvas) return;
+    const c = edCoords(e);
+    edFloodFill(c.nx, c.ny);
+    return;
+  }
+  // Color Erase: un toque = borrar zona del color tocado
+  if(window._edColorEraseReady && edActiveTool === 'eraser'){
+    if(tgt !== edCanvas) return;
+    window._edColorEraseReady = false;
+    edCanvas.style.cursor = '';
+    const btn=$('op-color-erase-btn');
+    if(btn) btn.style.background='transparent';
+    const c = edCoords(e);
+    edColorErase(c.nx, c.ny);
+    return;
+  }
+  if(['draw','eraser'].includes(edActiveTool)){
+    if(tgt !== edCanvas) return;
+    edStartPaint(e);return;
+  }
+  const c=edCoords(e);
+  // Cola bocadillo
+  if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
+    const la=edLayers[edSelectedIdx];
+    for(const p of la.getTailControlPoints()){
+      if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.05){edIsTailDragging=true;edTailPointType=p.type;edTailVoiceIdx=p.voice||0;return;}
+    }
+  }
+  // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
+  const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  if(_la && _la.type!=='bubble'){
+    const _isT = e.pointerType==='touch';
+    // Medir distancia en pixeles para hit uniform en ambos ejes
+    const _pw=edPageW(), _ph=edPageH();
+    const hitPx = _isT ? 22 : 14;
+    for(const p of _la.getControlPoints()){
+      const _dpx=(c.nx-p.x)*_pw, _dpy=(c.ny-p.y)*_ph;
+      if(Math.hypot(_dpx,_dpy)<hitPx){
+        if(p.corner==='rotate'){
+          if(_isT) continue;  // en táctil la rotación es por gesto pinch
+          edIsRotating = true;
+          edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
+          return;
+        }
+        if(!_isT){
+          edIsResizing=true; edResizeCorner=p.corner;
+          edInitialSize={width:_la.width,height:_la.height,
+                         cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
+                         rot:(_la.rotation||0), ox:_la.x, oy:_la.y};
+          return;
+        }
+      }
+    }
+  }
+  // Seleccionar: el render sigue el orden del array (mayor índice = encima visualmente).
+  // La selección busca de mayor a menor índice — el primero que contenga el punto tocado.
+  // Textos/bocadillos siempre encima (se buscan primero independientemente del índice).
+  const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  let found = -1;
+  // Primero buscar en textos/bocadillos (siempre encima de todo)
+  for(let i = edLayers.length - 1; i >= 0; i--){
+    if((edLayers[i].type==='text'||edLayers[i].type==='bubble') && edLayers[i].contains(c.nx,c.ny)){
+      found = i; break;
+    }
+  }
+  // Si no hay texto encima, buscar en el resto por orden de array (mayor índice = encima)
+  if(found < 0){
+    for(let i = edLayers.length - 1; i >= 0; i--){
+      if(edLayers[i].type!=='text' && edLayers[i].type!=='bubble' && edLayers[i].contains(c.nx,c.ny)){
+        found = i; break;
+      }
+    }
+  }
+  if(found>=0){
+    edSelectedIdx = found;
+    edDragOffX = c.nx - edLayers[found].x;
+    edDragOffY = c.ny - edLayers[found].y;
+    edIsDragging = true;
+    window._edMoved = false;  // BUG-E09: reset flag de movimiento real
+    edHideGearIcon();
+    clearTimeout(window._edLongPress);
+    if(_isTouch){
+      // TÁCTIL: toque simple = solo seleccionar
+      // Doble toque rápido (≤350ms) → abrir panel de propiedades
+      const now = Date.now();
+      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+        edIsDragging = false;
+        clearTimeout(window._edLongPress);
+        _edHandleDoubleTap(found);
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+      } else {
+        _edLastTapTime = now; _edLastTapIdx = found;
+        // Sin long-press en táctil — solo doble toque abre el panel
+      }
+    } else {
+      // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
+      const now = Date.now();
+      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+        edIsDragging = false;
+        clearTimeout(window._edLongPress);
+        _edHandleDoubleTap(found);
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+      } else {
+        _edLastTapTime = now; _edLastTapIdx = found;
+        // Long-press 600ms en PC (ratón) → abrir propiedades
+        window._edLongPress = setTimeout(() => {
+          if(edSelectedIdx === found && !edIsResizing){
+            edIsDragging = false;
+            edRenderOptionsPanel('props');
+          }
+        }, 600);
+      }
+    }
+  } else {
+    edSelectedIdx = -1;
+    edHideContextMenu();
+    edRenderOptionsPanel();
+  }
+  edRedraw();
+}
+function edOnMove(e){
+  // Actualizar _edTouchMoved siempre (para cancelar long-press aunque gestureActive sea false)
+  if(e.pointerType === 'touch' || e.pointerType === 'pen'){
+    _edTouchMoved = true;
+    clearTimeout(window._edLongPress);
+    window._edLongPressReady = false;
+  }
+  // Sin gesto activo → ignorar el resto
+  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating;
+  if(!gestureActive) return;
+  e.preventDefault();
+  // Pinch activo
+  if(window._edActivePointers && window._edActivePointers.size >= 2){
+    if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
+    edPinchMove(e);
+    return;
+  }
+  if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
+  if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
+  if(edActiveTool==='fill'){edMoveBrush(e);return;}
+  const c=edCoords(e);
+  _edTouchMoved = true;
+  clearTimeout(window._edLongPress); // cancelar longpress si el dedo se movió
+  if(edIsTailDragging&&edSelectedIdx>=0){
+    const la=edLayers[edSelectedIdx];
+    const dx=c.nx-la.x,dy=c.ny-la.y;
+    const v=edTailVoiceIdx||0;
+    if(!la.tailStarts)la.tailStarts=[{...la.tailStart}];
+    if(!la.tailEnds)  la.tailEnds  =[{...la.tailEnd}];
+    if(edTailPointType==='start'){
+      if(!la.tailStarts[v])la.tailStarts[v]={...la.tailStarts[0]};
+      la.tailStarts[v]={x:dx/la.width,y:dy/la.height};
+    } else {
+      if(!la.tailEnds[v])la.tailEnds[v]={...la.tailEnds[0]};
+      la.tailEnds[v]={x:dx/la.width,y:dy/la.height};
+    }
+    edRedraw();return;
+  }
+  if(edIsRotating&&edSelectedIdx>=0){
+    const la=edLayers[edSelectedIdx];
+    const angle = Math.atan2(c.ny-la.y, c.nx-la.x) - edRotateStartAngle;
+    la.rotation = angle*180/Math.PI;
+    edRedraw();
+    return;
+  }
+  if(edIsResizing&&edSelectedIdx>=0){
+    const la=edLayers[edSelectedIdx];
+    const pw=edPageW(), ph=edPageH();
+    const rot=(edInitialSize.rot||0)*Math.PI/180;
+    // Trabajar SIEMPRE en pixeles para evitar distorsion por pw!=ph
+    // Vector raton->centro en pixeles de pagina
+    const dx_px=(c.nx-edInitialSize.cx)*pw;
+    const dy_px=(c.ny-edInitialSize.cy)*ph;
+    // Rotar al espacio local del objeto (en pixeles)
+    const lx_px= dx_px*Math.cos(-rot)-dy_px*Math.sin(-rot);
+    const ly_px= dx_px*Math.sin(-rot)+dy_px*Math.cos(-rot);
+    const corner=edResizeCorner;
+    const isImg = la.type==='image';
+    // asp: para imagen, ratio height/width (ambos fraccion de pw)
+    //      para texto/bubble: ih_px/iw_px en pixeles fisicos
+    const iw_px = edInitialSize.width * pw;
+    const ih_px = edInitialSize.height * ph;  // height fraccion de ph para todos
+    const asp = iw_px > 0 ? ih_px / iw_px : 1;
+    if(corner==='ml'||corner==='mr'){
+      // Solo cambia el ancho — igual para imagen y texto
+      const nw_px = Math.abs(lx_px)*2;
+      if(nw_px > pw*0.02) la.width = nw_px/pw;
+    } else if(corner==='mt'||corner==='mb'){
+      // Solo cambia el alto
+      const nh_px = Math.abs(ly_px)*2;
+      if(nh_px > ph*0.02) la.height = nh_px/ph;  // fraccion de ph para todos
+    } else {
+      // Esquinas — proporcional
+      const nw_px = Math.abs(lx_px)*2;
+      if(nw_px > pw*0.02){
+        la.width = nw_px/pw;
+        la.height = (nw_px * asp)/ph;
+      }
+    }
+    window._edMoved = true;
+    edRedraw();
+    edHideGearIcon();
+    const _opPanel=$('edOptionsPanel');
+    if(_opPanel&&_opPanel.classList.contains('open')&&_opPanel.dataset.mode!=='draw'){
+      _opPanel.classList.remove('open'); _opPanel.innerHTML='';
+    }
+    return;
+  }
+  if(!edIsDragging||edSelectedIdx<0)return;
+  const la=edLayers[edSelectedIdx];
+  la.x = c.nx - edDragOffX;
+  la.y = c.ny - edDragOffY;
+  window._edMoved = true;
+  edRedraw();
+  edHideGearIcon();
+  const _opP=$('edOptionsPanel');
+  if(_opP&&_opP.classList.contains('open')&&_opP.dataset.mode!=='draw'){
+    _opP.classList.remove('open'); _opP.innerHTML='';
+  }
+}
+function edOnEnd(e){
+  // Limpiar pointer del mapa SIEMPRE (antes de la guarda)
+  if(e && e.pointerId !== undefined && window._edActivePointers){
+    window._edActivePointers.delete(e.pointerId);
+  }
+  // Sin gesto activo → ignorar el resto
+  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating;
+  if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
+  if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
+    edPinchEnd();
+    return;
+  }
+  if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); }
+  clearTimeout(window._edLongPress);
+  const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
+  window._edLongPressReady = false;
+  // BUG-E09: solo guardar historial si algo cambió de verdad
+  if(wasDragging && (window._edMoved || edIsTailDragging)) edPushHistory();
+  window._edMoved = false;
+  edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
+}
+
+
+function _edDrawPushHistory(){
+  // Guardar snapshot del DrawLayer actual
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  // Cortar el futuro si hay
+  edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
+  edDrawHistory.push(dl.toDataUrl());
+  if(edDrawHistory.length > ED_MAX_DRAW_HISTORY) edDrawHistory.shift();
+  edDrawHistoryIdx = edDrawHistory.length - 1;
+  _edDrawUpdateUndoRedoBtns();
+}
+function _edDrawApplyHistory(dataUrl){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  let dl = page.layers.find(l => l.type === 'draw');
+  if(!dl){ dl = new DrawLayer(); page.layers.unshift(dl); edLayers=page.layers; }
+  // Restaurar bitmap del DrawLayer desde dataUrl
+  dl.clear();
+  if(dataUrl){
+    const img = new Image();
+    img.onload = () => {
+      const pw = edPageW(), ph = edPageH();
+      dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
+        edMarginX(), edMarginY(), pw, ph);
+      edRedraw();
+    };
+    img.src = dataUrl;
+  } else {
+    edRedraw();
+  }
+}
+function edDrawUndo(){
+  if(edDrawHistoryIdx <= 0){
+    if(edDrawHistoryIdx === 0 && edDrawHistory.length > 0){
+      // Estamos en el estado base — restaurar y no ir más atrás
+      _edDrawApplyHistory(edDrawHistory[0]);
+      _edDrawUpdateUndoRedoBtns(); return;
+    }
+    edToast('Nada que deshacer'); return;
+  }
+  edDrawHistoryIdx--;
+  _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx]);
+  _edDrawUpdateUndoRedoBtns();
+}
+function edDrawRedo(){
+  if(edDrawHistoryIdx >= edDrawHistory.length - 1){ edToast('Nada que rehacer'); return; }
+  edDrawHistoryIdx++;
+  _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx]);
+  _edDrawUpdateUndoRedoBtns();
+}
+function _edDrawUpdateUndoRedoBtns(){
+  const u=$('op-draw-undo'), r=$('op-draw-redo');
+  if(u) u.disabled = edDrawHistoryIdx < 0;
+  if(r) r.disabled = edDrawHistoryIdx >= edDrawHistory.length - 1;
+}
+function _edDrawClearHistory(){
+  edDrawHistory = []; edDrawHistoryIdx = -1;
+  _edDrawUpdateUndoRedoBtns();
+}
+/* ══════════════════════════════════════════
+   DIBUJO LIBRE  (DrawLayer)
+   ══════════════════════════════════════════ */
+function _edGetOrCreateDrawLayer(){
+  const page = edPages[edCurrentPage]; if(!page) return null;
+  let dl = page.layers.find(l => l.type === 'draw');
+  if(!dl){
+    dl = new DrawLayer();
+    // Insertar el DrawLayer ENCIMA de todas las imágenes y StrokeLayers
+    // para que los trazos y rellenos nuevos siempre se vean encima
+    page.layers.unshift(dl);
+    edLayers = page.layers;
+  }
+  return dl;
+}
+
+/* ══════════════════════════════════════════
+   FLOOD FILL (Scanline algorithm)
+   ══════════════════════════════════════════ */
+function edFloodFill(nx, ny){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = _edGetOrCreateDrawLayer();
+  const canvas = dl._canvas, ctx = dl._ctx;
+  const W = canvas.width, H = canvas.height;
+
+  // Coordenadas absolutas en workspace
+  const wx = Math.round(edMarginX() + nx * edPageW());
+  const wy = Math.round(edMarginY() + ny * edPageH());
+  if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
+
+  // Límites: dentro de página → área de página; fuera → workspace
+  const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
+  const pw = Math.round(edPageW()),   ph = Math.round(edPageH());
+  const insidePage = wx >= mx && wx < mx+pw && wy >= my && wy < my+ph;
+  const x0 = insidePage ? mx : 0,      y0 = insidePage ? my : 0;
+  const x1 = insidePage ? mx+pw-1 : W-1, y1 = insidePage ? my+ph-1 : H-1;
+
+  const fw = x1-x0+1, fh = y1-y0+1;
+  const imageData = ctx.getImageData(x0, y0, fw, fh);
+  const data = imageData.data;
+
+  // Coordenadas locales del punto de inicio
+  const lx = wx-x0, ly = wy-y0;
+  const si0 = (ly*fw+lx)*4;
+  const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
+
+  // Color de relleno con transparencia
+  const fc = edDrawColor;
+  const fR = parseInt(fc.slice(1,3),16),
+        fG = parseInt(fc.slice(3,5),16),
+        fB = parseInt(fc.slice(5,7),16),
+        fA = Math.round((edDrawOpacity/100) * 255);
+
+  // No rellenar si el color de inicio ya es idéntico al de relleno
+  if(tR===fR && tG===fG && tB===fB && tA===fA) return;
+
+  // Tolerancia para antialiasing de bordes (valor bajo = bordes nítidos)
+  const TOL = 15;
+  function match(i){
+    return Math.abs(data[i  ]-tR) <= TOL &&
+           Math.abs(data[i+1]-tG) <= TOL &&
+           Math.abs(data[i+2]-tB) <= TOL &&
+           Math.abs(data[i+3]-tA) <= TOL;
+  }
+
+  // Algoritmo Span Fill correcto (Wikipedia "Flood fill" — span filling variant)
+  // La cola almacena [x, y, dirección] donde dirección es 1=abajo, -1=arriba
+  // Esto garantiza exploración completa sin huecos
+  const filled = new Uint8Array(fw * fh);
+
+  function fillRow(y, lft, rgt){
+    for(let x=lft; x<=rgt; x++){
+      const i = y*fw+x;
+      filled[i] = 1;
+      const pi = i*4;
+      data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
+    }
+  }
+
+  // Cola de spans: {y, left, right, dy}
+  // dy = dirección desde la que vino el span (para evitar re-escanear)
+  const stack = [];
+  stack.push({y:ly, left:lx, right:lx, dy:1});
+  stack.push({y:ly, left:lx, right:lx, dy:-1});
+
+  // Marcar píxel inicial
+  filled[ly*fw+lx] = 1;
+
+  while(stack.length){
+    let {y, left, right, dy} = stack.pop();
+    const ny = y + dy;
+    if(ny < 0 || ny >= fh) continue;
+
+    // Expandir horizontalmente en la fila ny buscando píxeles conectados
+    let x = left;
+    // Ir a la izquierda desde left
+    while(x > 0 && !filled[ny*fw+(x-1)] && match((ny*fw+(x-1))*4)) x--;
+    // Ir a la derecha desde right
+    let rx = right;
+    while(rx < fw-1 && !filled[ny*fw+(rx+1)] && match((ny*fw+(rx+1))*4)) rx++;
+
+    // Rellenar el segmento encontrado en ny
+    let segStart = -1;
+    for(let sx=x; sx<=rx; sx++){
+      const idx = ny*fw+sx;
+      if(!filled[idx] && match(idx*4)){
+        if(segStart === -1) segStart = sx;
+        filled[idx] = 1;
+        const pi = idx*4;
+        data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
+      } else if(segStart !== -1){
+        // Propagar en la misma dirección dy y en la opuesta
+        stack.push({y:ny, left:segStart, right:sx-1, dy:dy});
+        stack.push({y:ny, left:segStart, right:sx-1, dy:-dy});
+        segStart = -1;
+      }
+    }
+    if(segStart !== -1){
+      stack.push({y:ny, left:segStart, right:rx, dy:dy});
+      stack.push({y:ny, left:segStart, right:rx, dy:-dy});
+    }
+  }
+
+  // Dilatación 1px solo en píxeles TRANSPARENTES o casi transparentes:
+  // Expande el relleno para cubrir el antialiasing del borde del trazo.
+  // NO invade píxeles con color (alpha >= 30) para no corromper bordes adyacentes.
+  // Técnica "expand into transparent" de Krita/Photoshop.
+  const dilated = new Uint8Array(fw * fh);
+  for(let y=0; y<fh; y++){
+    for(let x=0; x<fw; x++){
+      const i = y*fw+x;
+      if(!filled[i]) continue;
+      const neighbors = [[x-1,y],[x+1,y],[x,y-1],[x,y+1]];
+      for(const [nx2,ny2] of neighbors){
+        if(nx2>=0 && nx2<fw && ny2>=0 && ny2<fh){
+          const ni = ny2*fw+nx2;
+          if(!filled[ni] && !dilated[ni]){
+            // Solo dilatat en píxeles transparentes o semitransparentes (antialiasing)
+            // NUNCA en píxeles con color sólido (bordes de trazos adyacentes)
+            const alpha = data[ni*4+3];
+            if(alpha < 30) dilated[ni] = 1;
+          }
+        }
+      }
+    }
+  }
+  for(let i=0; i<fw*fh; i++){
+    if(dilated[i]){
+      const pi = i*4;
+      data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
+    }
+  }
+
+  // Guardar snapshot ANTES de aplicar (para que Ctrl+Z restaure el estado previo)
+  _edDrawPushHistory();
+  ctx.putImageData(imageData, x0, y0);
+  edRedraw();
+}
+
+/* ══════════════════════════════════════════
+   BORRAR COLOR (Color Erase — como Procreate)
+   ══════════════════════════════════════════ */
+function edColorErase(nx, ny){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  const canvas = dl._canvas, ctx = dl._ctx;
+  const W = canvas.width, H = canvas.height;
+
+  const wx = Math.round(edMarginX() + nx * edPageW());
+  const wy = Math.round(edMarginY() + ny * edPageH());
+  if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
+
+  const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
+  const pw = Math.round(edPageW()),   ph = Math.round(edPageH());
+  const insidePage = wx >= mx && wx < mx+pw && wy >= my && wy < my+ph;
+  const x0 = insidePage ? mx : 0,    y0 = insidePage ? my : 0;
+  const x1 = insidePage ? mx+pw-1 : W-1, y1 = insidePage ? my+ph-1 : H-1;
+  const fw = x1-x0+1, fh = y1-y0+1;
+
+  const imageData = ctx.getImageData(x0, y0, fw, fh);
+  const data = imageData.data;
+
+  const lx = wx-x0, ly = wy-y0;
+  const si0 = (ly*fw+lx)*4;
+  const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
+  if(tA < 5) return;
+
+  const strength = 1.0;  // siempre al 100%
+
+  // Tolerancia amplia para capturar píxeles de antialiasing del borde
+  // (los píxeles de borde son mezcla del color del trazo + fondo)
+  const TOL = 80;
+  function match(i){
+    return Math.abs(data[i  ]-tR) <= TOL &&
+           Math.abs(data[i+1]-tG) <= TOL &&
+           Math.abs(data[i+2]-tB) <= TOL &&
+           data[i+3] > 3;  // solo píxeles con algo de contenido
+  }
+
+  // Span Fill para zona contigua (igual que flood fill)
+  const inZone = new Uint8Array(fw * fh);
+  const stack2 = [];
+  stack2.push({y:ly, left:lx, right:lx, dy:1});
+  stack2.push({y:ly, left:lx, right:lx, dy:-1});
+  inZone[ly*fw+lx] = 1;
+  while(stack2.length){
+    const {y, left, right, dy} = stack2.pop();
+    const ny2 = y + dy;
+    if(ny2 < 0 || ny2 >= fh) continue;
+    let x = left;
+    while(x > 0 && !inZone[ny2*fw+(x-1)] && match((ny2*fw+(x-1))*4)) x--;
+    let rx = right;
+    while(rx < fw-1 && !inZone[ny2*fw+(rx+1)] && match((ny2*fw+(rx+1))*4)) rx++;
+    let segStart = -1;
+    for(let sx=x; sx<=rx; sx++){
+      const idx = ny2*fw+sx;
+      if(!inZone[idx] && match(idx*4)){
+        if(segStart === -1) segStart = sx;
+        inZone[idx] = 1;
+      } else if(segStart !== -1){
+        stack2.push({y:ny2, left:segStart, right:sx-1, dy:dy});
+        stack2.push({y:ny2, left:segStart, right:sx-1, dy:-dy});
+        segStart = -1;
+      }
+    }
+    if(segStart !== -1){
+      stack2.push({y:ny2, left:segStart, right:rx, dy:dy});
+      stack2.push({y:ny2, left:segStart, right:rx, dy:-dy});
+    }
+  }
+
+  // Algoritmo "Color to Alpha" de Krita/GIMP (Kevin Cozens):
+  // Calcula exactamente cuánto del color objetivo contribuye a cada píxel
+  // y lo elimina sin dejar contorno residual.
+  // 
+  // Para cada canal C: si pix.C > target.C → alphaC = (pix.C - target.C) / (255 - target.C)
+  //                    si pix.C < target.C → alphaC = (target.C - pix.C) / target.C
+  //                    si pix.C = target.C → alphaC = 0
+  // new_alpha = max(alphaR, alphaG, alphaB)  ← contribución total del color objetivo
+  // Luego descomponer: pix = target*(1-new_alpha) + result*new_alpha → despejar result
+  // new_A = original_alpha * new_alpha * strength  (strength = opacidad del usuario)
+
+  for(let i=0; i<fw*fh; i++){
+    if(!inZone[i]) continue;
+    const pi = i*4;
+    const r=data[pi], g=data[pi+1], b=data[pi+2], a=data[pi+3];
+    if(a < 1) continue;
+
+    // Calcular alpha por canal (cuánto del target hay en este pixel)
+    let aR=0, aG=0, aB=0;
+    if(r > tR && tR < 255) aR = (r - tR) / (255 - tR);
+    else if(r < tR && tR > 0)   aR = (tR - r) / tR;
+    if(g > tG && tG < 255) aG = (g - tG) / (255 - tG);
+    else if(g < tG && tG > 0)   aG = (tG - g) / tG;
+    if(b > tB && tB < 255) aB = (b - tB) / (255 - tB);
+    else if(b < tB && tB > 0)   aB = (tB - b) / tB;
+
+    // El nuevo alpha es la máxima contribución del color objetivo (extracción completa)
+    const newAlpha = Math.max(aR, aG, aB);
+    if(newAlpha < 0.001){ data[pi+3]=0; continue; }  // prácticamente idéntico → borrar
+
+    // Calcular resultado de Color to Alpha al 100% (extracción completa del color objetivo)
+    const inv = 1 - newAlpha;
+    const outR = Math.max(0, Math.min(255, (r - tR*inv) / newAlpha));
+    const outG = Math.max(0, Math.min(255, (g - tG*inv) / newAlpha));
+    const outB = Math.max(0, Math.min(255, (b - tB*inv) / newAlpha));
+    const outA = a * newAlpha;
+
+    // Interpolar entre pixel original y resultado según la opacidad del usuario:
+    // strength=1.0 → resultado completo (borrado total del color)
+    // strength=0.5 → mezcla 50/50 (semi-borrado limpio sin artefactos)
+    // strength=0.0 → sin cambio
+    data[pi  ] = Math.round(r   + (outR - r)   * strength);
+    data[pi+1] = Math.round(g   + (outG - g)   * strength);
+    data[pi+2] = Math.round(b   + (outB - b)   * strength);
+    data[pi+3] = Math.round(a   + (outA - a)   * strength);
+  }
+
+  // Guardar snapshot ANTES de aplicar
+  _edDrawPushHistory();
+  ctx.putImageData(imageData, x0, y0);
+  edRedraw();
+}
+function edStartPaint(e){
+  edPainting = true;
+  const _pp=$('edOptionsPanel');
+  if(_pp&&_pp.classList.contains('open')&&_pp.dataset.mode!=='draw'){
+    _pp.classList.remove('open'); _pp.innerHTML='';
+  }
+  const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
+  const c = edCoords(e), er = edActiveTool==='eraser';
+  dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+  edRedraw();
+  edMoveBrush(e);
+}
+function edContinuePaint(e){
+  if(!edPainting) return;
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  const c = edCoords(e), er = edActiveTool==='eraser';
+  dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+  edRedraw();
+  edMoveBrush(e);
+}
+function edSaveDrawData(){
+  edPainting = false;
+  _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
+  // NO llamar edPushHistory aquí — el historial global se guarda al congelar
+}
+function edClearDraw(){
+  const page=edPages[edCurrentPage];if(!page)return;
+  const dl = page.layers.find(l => l.type === 'draw');
+  if(dl) dl.clear();
+  // También eliminar page.drawData legado si existiera
+  page.drawData = null;
+  edPainting = false;
+  edRedraw(); edToast('Dibujos borrados');
+}
+function edMoveBrush(e){
+  const src=e.touches?e.touches[0]:e,cur=$('edBrushCursor');if(!cur)return;
+  if(edActiveTool==='fill'){
+    cur.style.display='none'; return;  // fill no muestra cursor circular
+  }
+  const sz=(edActiveTool==='eraser'?edEraserSize:edDrawSize)*2;
+  cur.style.display='block';
+  cur.style.left=src.clientX+'px';cur.style.top=src.clientY+'px';
+  cur.style.width=sz+'px';cur.style.height=sz+'px';
+}
+
+/* ══════════════════════════════════════════
+   MENÚ
+   ══════════════════════════════════════════ */
+function edCloseMenus(){
+  document.querySelectorAll('.ed-dropdown').forEach(d=>{
+    d.classList.remove('open');
+    // Devolver al padre original si fue movido a body
+    if(d._origParent && d.parentNode === document.body){
+      d._origParent.appendChild(d);
+    }
+    d.style.removeProperty('position');
+    d.style.removeProperty('top');
+    d.style.removeProperty('left');
+    d.style.removeProperty('right');
+    d.style.removeProperty('z-index');
+  });
+  document.querySelectorAll('.ed-menu-btn').forEach(b=>b.classList.remove('open'));
+  edMenuOpen=null;
+}
+
+function edToggleMenu(id){
+  if(edMenuOpen===id){edCloseMenus();return;}
+  edCloseMenus();
+  if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
+  const dd=$('dd-'+id);if(!dd)return;
+  const btn=document.querySelector(`[data-menu="${id}"]`);
+  if(!btn)return;
+
+  // Mover el dropdown a body para escapar de cualquier overflow/stacking context
+  dd._origParent = dd._origParent || dd.parentNode;
+  document.body.appendChild(dd);
+
+  // Posicionar con fixed relativo al botón
+  const r = btn.getBoundingClientRect();
+  dd.style.position = 'fixed';
+  dd.style.top  = r.bottom + 'px';
+  dd.style.left = r.left   + 'px';
+  dd.style.right = 'auto';
+  dd.style.zIndex = '9999';
+
+  dd.classList.add('open');
+  btn.classList.add('open');
+  edMenuOpen = id;
+  if(id === 'nav') edUpdateNavPages();
+
+  // Corrección de desbordamiento lateral (tras render)
+  requestAnimationFrame(() => {
+    const ddR = dd.getBoundingClientRect();
+    if(ddR.right > window.innerWidth - 4){
+      dd.style.left = Math.max(4, r.right - ddR.width) + 'px';
+    }
+  });
+}
+
+function edDeactivateDrawTool(){
+  edActiveTool='select';
+  edCanvas.className='';
+  const cur=$('edBrushCursor');if(cur)cur.style.display='none';
+  const panel=$('edOptionsPanel');
+  if(panel){ panel.classList.remove('open'); delete panel.dataset.mode; }
+  _edFreezeDrawLayer();
+  requestAnimationFrame(edFitCanvas);
+}
+function _edFreezeDrawLayer(){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dlIdx = page.layers.findIndex(l => l.type === 'draw');
+  if(dlIdx < 0) return;
+  const dl = page.layers[dlIdx];
+  const bb = StrokeLayer._boundingBox(dl._canvas);
+  _edDrawClearHistory();  // limpiar historial local al convertir en objeto
+  if(!bb){ page.layers.splice(dlIdx, 1); edLayers=page.layers; return; }
+  const sl = new StrokeLayer(dl._canvas);
+  page.layers.splice(dlIdx, 1, sl);
+  edLayers = page.layers;
+  edSelectedIdx = page.layers.indexOf(sl);
+  edPushHistory();
+  edRedraw();
+}
+
+/* ══════════════════════════════════════════
+   PANEL DE OPCIONES
+   ══════════════════════════════════════════ */
+function edCloseOptionsPanel(){
+  const panel=$('edOptionsPanel');
+  if(panel){ panel.classList.remove('open'); panel.innerHTML=''; }
+  edPanelUserClosed = true;   // usuario cerró → no reabrir al seleccionar
+  requestAnimationFrame(edFitCanvas);
+}
+function edRenderOptionsPanel(mode){
+  const panel=$('edOptionsPanel');if(!panel)return;
+
+  // Sin objeto: cerrar panel
+  if(!mode||(mode==='props'&&edSelectedIdx<0)){
+    panel.classList.remove('open');panel.innerHTML='';
+    requestAnimationFrame(edFitCanvas);return;
+  }
+
+  if(mode==='draw' || mode==='eraser' || mode==='fill'){
+    const isFill = edActiveTool === 'fill';
+    const isEr   = edActiveTool === 'eraser';
+    const isPen  = !isFill && !isEr;
+    const curSize = isEr ? edEraserSize : edDrawSize;
+    const curOpacity = 100; // future: per-tool opacity
+    // Función helper para generar info de estado
+    const _infoText = () => {
+      if(isFill) return `Color ${edDrawColor}`;
+      return `${isEr ? edEraserSize : edDrawSize}px`;
+    };
+    panel.innerHTML=`
+<div style="display:flex;flex-direction:column;width:100%;gap:0">
+  <!-- FILA 1: Herramientas -->
+  <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0">
+    <button id="op-tool-pen"
+      style="flex:1;border:none;border-radius:6px;padding:5px 2px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isPen?'rgba(0,0,0,.08)':'transparent'};color:${isPen?'var(--black)':'var(--gray-600)'}">Dibujar</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-tool-eraser"
+      style="flex:1;border:none;border-radius:6px;padding:5px 2px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isEr?'rgba(0,0,0,.08)':'transparent'};color:${isEr?'var(--black)':'var(--gray-600)'}">Borrar</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-tool-fill"
+      style="flex:1;border:none;border-radius:6px;padding:5px 2px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isFill?'rgba(0,0,0,.08)':'transparent'};color:${isFill?'var(--black)':'var(--gray-600)'}">Rellenar</button>
+  </div>
+  <!-- SEP H -->
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <!-- FILA 2: Controles -->
+  <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
+    ${!isEr ? `
+    <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
+      <div id="op-color-swatch"
+        style="width:26px;height:26px;border-radius:50%;background:${edDrawColor};border:2px solid var(--gray-300);cursor:pointer"></div>
+      <input type="color" id="op-dcolor" value="${edDrawColor}"
+        style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
+    ${!isFill ? `
+    <button id="op-size-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
+    <div id="op-size-slider"
+      style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
+        style="flex:1;min-width:40px;accent-color:var(--black)">
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
+    <button id="op-opacity-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Opacidad</button>
+    <div id="op-opacity-slider"
+      style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
+        style="flex:1;min-width:40px;accent-color:var(--black)">
+    </div>
+    ${isEr ? `
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-color-erase-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
+
+  </div>
+  <!-- SEP H -->
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <!-- FILA 3: Acciones -->
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
+    <button id="op-draw-del"
+      style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
+    <button id="op-draw-dup"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
+    <button id="op-draw-undo"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
+    <button id="op-draw-redo"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <span id="op-draw-info"
+      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize+'px':edDrawSize+'px')+' · '+edDrawOpacity+'%'}</span>
+    <button id="op-draw-ok"
+      style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
+  </div>
+</div>`;
+    panel.classList.add('open');
+    panel.dataset.mode = 'draw';
+
+    // ── Herramientas ──
+    $('op-tool-pen')?.addEventListener('click',()=>{
+      edActiveTool='draw'; edCanvas.className='tool-draw';
+      edRenderOptionsPanel('draw');
+    });
+    $('op-tool-eraser')?.addEventListener('click',()=>{
+      edActiveTool='eraser'; edCanvas.className='tool-eraser';
+      edRenderOptionsPanel('eraser');
+    });
+    $('op-tool-fill')?.addEventListener('click',()=>{
+      edActiveTool='fill'; edCanvas.className='tool-fill';
+      edRenderOptionsPanel('fill');
+    });
+
+    // ── Color: swatch abre input[type=color] oculto ──
+    $('op-color-swatch')?.addEventListener('click',()=>{
+      $('op-dcolor')?.click();
+    });
+    $('op-dcolor')?.addEventListener('input',e=>{
+      edDrawColor=e.target.value;
+      const sw=$('op-color-swatch');
+      if(sw) sw.style.background=edDrawColor;
+      const info=$('op-draw-info');
+      if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
+    });
+
+    // ── Grosor: botón toggle abre/cierra slider ──
+    $('op-size-btn')?.addEventListener('click',()=>{
+      const sl=$('op-size-slider'), slO=$('op-opacity-slider');
+      if(!sl) return;
+      const open = sl.style.display === 'none' || sl.style.display === '';
+      sl.style.display = open ? 'flex' : 'none';
+      if(open && slO) slO.style.display='none';  // cerrar el otro si estaba abierto
+      const btn=$('op-size-btn');
+      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
+      const btnO=$('op-opacity-btn');
+      if(btnO) btnO.style.background = 'transparent';
+    });
+    $('op-dsize')?.addEventListener('input',e=>{
+      const v=+e.target.value;
+      if(edActiveTool==='eraser') edEraserSize=v;
+      else edDrawSize=v;
+      const info=$('op-draw-info');
+      if(info) info.textContent=v+'px · '+edDrawOpacity+'%';
+    });
+    $('op-color-erase-btn')?.addEventListener('click',()=>{
+      edCanvas.style.cursor = 'crosshair';
+      window._edColorEraseReady = true;
+      const btn=$('op-color-erase-btn');
+      if(btn) btn.style.background='var(--gray-200)';
+      edToast('Toca el color a borrar');
+    });
+    $('op-opacity-btn')?.addEventListener('click',()=>{
+      const slO=$('op-opacity-slider'), sl=$('op-size-slider');
+      if(!slO) return;
+      const open = slO.style.display === 'none' || slO.style.display === '';
+      slO.style.display = open ? 'flex' : 'none';
+      if(open && sl) sl.style.display='none';
+      const btn=$('op-opacity-btn');
+      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
+      const btnS=$('op-size-btn');
+      if(btnS) btnS.style.background = 'transparent';
+    });
+    $('op-dopacity')?.addEventListener('input',e=>{
+      edDrawOpacity = +e.target.value;
+      const info=$('op-draw-info');
+      if(info){
+        const sz = edActiveTool==='eraser'?edEraserSize:edDrawSize;
+        info.textContent = isFill ? 'Color '+edDrawColor : sz+'px · '+edDrawOpacity+'%';
+      }
+    });
+
+    // ── Deshacer / Rehacer ──
+    $('op-draw-undo')?.addEventListener('click', edDrawUndo);
+    $('op-draw-redo')?.addEventListener('click', edDrawRedo);
+    _edDrawUpdateUndoRedoBtns();
+
+    // ── OK: congelar ──
+    $('op-draw-ok')?.addEventListener('click',()=>{
+      edCloseOptionsPanel();
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
+    });
+
+    // ── Duplicar ──
+    $('op-draw-dup')?.addEventListener('click',()=>{
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
+      edDuplicateSelected();
+      edCloseOptionsPanel();
+    });
+
+    // ── Eliminar ──
+    $('op-draw-del')?.addEventListener('click',()=>{
+      const ok = confirm('¿Eliminar el dibujo?');
+      if(!ok) return;
+      const page=edPages[edCurrentPage];if(!page)return;
+      const dlIdx=page.layers.findIndex(l=>l.type==='draw');
+      if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
+      edActiveTool='select'; edCanvas.className='';
+      const cur=$('edBrushCursor');if(cur)cur.style.display='none';
+      delete panel.dataset.mode;
+      _edDrawClearHistory();
+      edCloseOptionsPanel(); edPushHistory(); edRedraw();
+      edToast('Dibujo eliminado');
+    });
+
+    // Solo redibujar el canvas para actualizar el cursor; NO redimensionar
+    edRedraw();return;
+  }
+
+  if(mode==='props'){
+    if(edSelectedIdx<0||edSelectedIdx>=edLayers.length){
+      panel.classList.remove('open');panel.innerHTML='';requestAnimationFrame(edFitCanvas);return;
+    }
+    const la=edLayers[edSelectedIdx];
+    let html='';
+
+    if(la.type==='text'||la.type==='bubble'){
+      html+=`
+      <div class="op-prop-row"><span class="op-prop-label">Texto</span>
+        <textarea id="pp-text" style="border-radius:8px;resize:vertical;min-height:40px;flex:1;border:2px solid var(--gray-300);padding:4px 8px;font-family:var(--font-body);font-size:.84rem;">${la.text.replace(/</g,'&lt;')}</textarea></div>
+      <div class="op-prop-row"><span class="op-prop-label">Fuente</span>
+        <select id="pp-font">
+          <option value="Arial" ${la.fontFamily==='Arial'?'selected':''}>Arial</option>
+          <option value="Bangers" ${la.fontFamily==='Bangers'?'selected':''}>Bangers</option>
+          <option value="Comic Sans MS, cursive" ${la.fontFamily==='Comic Sans MS, cursive'?'selected':''}>Comic Sans</option>
+          <option value="Verdana" ${la.fontFamily==='Verdana'?'selected':''}>Verdana</option>
+        </select>
+        <span class="op-prop-label" style="min-width:auto;margin-left:8px">Tamaño</span>
+        <input type="number" id="pp-fs" value="${la.fontSize}" min="8" max="120">
+        <input type="color" id="pp-color" value="${la.color}">
+        <input type="color" id="pp-bg" value="${la.backgroundColor.startsWith('#')?la.backgroundColor:'#ffffff'}">
+      </div>
+      <div class="op-prop-row"><span class="op-prop-label">Marco</span>
+        <select id="pp-bw">
+          ${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${la.borderWidth===n?'selected':''}>${n===0?'Sin borde':n+'px'}</option>`).join('')}
+        </select>
+        <input type="color" id="pp-bc" value="${la.borderColor}">
+        <span class="op-prop-label" style="min-width:auto;margin-left:8px">Rot.</span>
+        <input type="number" id="pp-rot" value="${la.rotation}" min="-180" max="180">°
+      </div>`;
+      if(la.type==='bubble'){
+        html+=`
+        <div class="op-prop-row"><span class="op-prop-label">Estilo</span>
+          <select id="pp-style">
+            <option value="conventional" ${la.style==='conventional'?'selected':''}>Convencional</option>
+            <option value="lowvoice" ${la.style==='lowvoice'?'selected':''}>Voz baja</option>
+            <option value="thought" ${la.style==='thought'?'selected':''}>Pensamiento</option>
+            <option value="radio" ${la.style==='radio'?'selected':''}>Radio/Tele</option>
+            <option value="explosion" ${la.style==='explosion'?'selected':''}>Explosión</option>
+          </select>
+        </div>
+        <div class="op-prop-row">
+          <span class="op-prop-label">Nº voces</span>
+          <input type="number" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:.75rem;font-weight:700;margin-left:12px">
+            <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}>  Cola
+          </label>
+        </div>`;
+      }
+    } else if(la.type==='stroke'){
+      html+=`
+      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+        <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
+      </div>
+      <div class="op-prop-row">
+        <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
+      </div>`;
+    } else if(la.type==='image'){
+      html+=`
+      <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
+        <input type="number" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
+      </div>
+      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+        <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
+      </div>`;
+    }
+    html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
+      <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
+      <button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
+      <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
+    </div>`;
+
+    panel.innerHTML=html;
+    panel.classList.add('open');
+
+    // (voiceCount es independiente del estilo)
+    // Live update
+    panel.querySelectorAll('input,select,textarea').forEach(inp=>{
+      inp.addEventListener('input',e=>{
+        if(edSelectedIdx<0)return;
+        const la=edLayers[edSelectedIdx],id=e.target.id;
+        if(id==='pp-text'){
+          // Borrar placeholder al empezar a escribir
+          if(la.text==='Escribe aquí' && e.target.value.length > 'Escribe aquí'.length){
+            la.text = e.target.value.replace('Escribe aquí','');
+            e.target.value = la.text;
+          } else {
+            la.text=e.target.value;
+          }
+          la.resizeToFitText(edCanvas);
+        }
+        else if(id==='pp-font'){la.fontFamily=e.target.value;la.resizeToFitText(edCanvas);}
+        else if(id==='pp-fs'){la.fontSize=parseInt(e.target.value)||12;la.resizeToFitText(edCanvas);}
+        else if(id==='pp-color')  la.color=e.target.value;
+        else if(id==='pp-bg')     la.backgroundColor=e.target.value;
+        else if(id==='pp-bc')     la.borderColor=e.target.value;
+        else if(id==='pp-bw')     la.borderWidth=parseInt(e.target.value);
+        else if(id==='pp-style')  {la.style=e.target.value;la.resizeToFitText(edCanvas);}
+        else if(id==='pp-vc')     la.voiceCount=Math.max(1,parseInt(e.target.value)||1);
+        else if(id==='pp-tail')   la.tail=e.target.checked;
+        else if(id==='pp-rot')    la.rotation=parseInt(e.target.value)||0;
+        edRedraw();
+      });
+    });
+    $('pp-del')?.addEventListener('click',()=>{
+      const ok = confirm('¿Eliminar este objeto?');
+      if(ok){ edDeleteSelected(); edCloseOptionsPanel(); }
+    });
+    $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
+    $('pp-edit-stroke')?.addEventListener('click',()=>{
+      const page=edPages[edCurrentPage]; if(!page) return;
+      const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
+      const dl=sl.toDrawLayer();
+      page.layers.splice(edSelectedIdx, 1, dl);
+      edLayers=page.layers;
+      edSelectedIdx=-1;
+      edActiveTool='draw';
+      edCanvas.className='tool-draw';
+      const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+      edRenderOptionsPanel('draw');  // panel unificado con lápiz+borrador
+      edRedraw();
+    });
+    $('pp-opacity')?.addEventListener('input',e=>{
+      la.opacity = e.target.value/100;
+      const v=$('pp-opacity-val'); if(v) v.textContent=e.target.value+'%';
+      edRedraw();
+    });
+    // Si el texto es placeholder, seleccionar todo para sobreescribir directamente
+    const ppText = $('pp-text');
+    if(ppText && (edLayers[edSelectedIdx]?.text === 'Escribe aquí')){
+      requestAnimationFrame(()=>{ ppText.select(); });
+    }
+    requestAnimationFrame(edFitCanvas);return;
+  }
+
+  panel.classList.remove('open');panel.innerHTML='';requestAnimationFrame(edFitCanvas);
+}
+
+/* ══════════════════════════════════════════
+   MINIMIZAR / BOTÓN FLOTANTE
+   ══════════════════════════════════════════ */
+function edMinimize(){
+  edMinimized=true;
+  const menu=$('edMenuBar'),top=$('edTopbar');
+  if(menu)menu.style.display='none';
+  if(top)top.style.display='none';
+  const btn=$('edFloatBtn');
+  if(btn){
+    btn.classList.add('visible');
+    btn.style.left=edFloatX+'px';
+    btn.style.top=edFloatY+'px';
+  }
+  // Si hay herramienta de dibujo activa, preservar modo
+  if(['draw','eraser','fill'].includes(edActiveTool)){
+    window._edMinimizedDrawMode = edActiveTool;
+    // Ocultar visualmente el panel pero mantenerlo en el DOM con dataset.mode
+    const panel=$('edOptionsPanel');
+    if(panel) panel.style.visibility='hidden';
+  }
+  edFitCanvas();
+}
+function edMaximize(){
+  edMinimized=false;
+  const menu=$('edMenuBar'),top=$('edTopbar');
+  if(menu)menu.style.display='';
+  if(top)top.style.display='';
+  $('edFloatBtn')?.classList.remove('visible');
+  // Restaurar panel de dibujo si estaba activo al minimizar
+  if(window._edMinimizedDrawMode){
+    const mode = window._edMinimizedDrawMode;
+    window._edMinimizedDrawMode = null;
+    const panel=$('edOptionsPanel');
+    if(panel) panel.style.visibility='';
+    edFitCanvas();
+    edRenderOptionsPanel(mode);
+  } else {
+    edFitCanvas();
+  }
+}
+function edInitFloatDrag(){
+  const btn=$('edFloatBtn');if(!btn)return;
+  let dragging=false,startX=0,startY=0,startLeft=0,startTop=0;
+  function onDown(e){
+    dragging=true;
+    const src=e.touches?e.touches[0]:e;
+    startX=src.clientX;startY=src.clientY;
+    startLeft=parseInt(btn.style.left)||edFloatX;
+    startTop=parseInt(btn.style.top)||edFloatY;
+    e.preventDefault();
+  }
+  function onMove(e){
+    if(!dragging)return;
+    const src=e.touches?e.touches[0]:e;
+    const dx=src.clientX-startX,dy=src.clientY-startY;
+    edFloatX=Math.max(0,Math.min(window.innerWidth-48,startLeft+dx));
+    edFloatY=Math.max(0,Math.min(window.innerHeight-48,startTop+dy));
+    btn.style.left=edFloatX+'px';btn.style.top=edFloatY+'px';
+    e.preventDefault();
+  }
+  function onUp(e){
+    if(!dragging)return;
+    dragging=false;
+    // Si apenas se movió, es un click
+    const src=e.changedTouches?e.changedTouches[0]:e;
+    if(Math.hypot(src.clientX-startX,src.clientY-startY)<8)edMaximize();
+  }
+  btn.addEventListener('pointerdown',onDown,{passive:false});
+  window.addEventListener('pointermove',onMove,{passive:false});
+  window.addEventListener('pointerup',onUp);
+  btn.addEventListener('touchstart',onDown,{passive:false});
+  window.addEventListener('touchmove',onMove,{passive:false});
+  window.addEventListener('touchend',onUp);
+}
+
+/* ══════════════════════════════════════════
+   GUARDAR / CARGAR
+   ══════════════════════════════════════════ */
+function _edBubbleTailDir(l){
+  // Determinar la dirección de la cola del bocadillo para el reader.
+  // tailEnd es la punta de la cola en coordenadas relativas al centro del bocadillo.
+  // Devuelve: 'bottom', 'bottom-left', 'bottom-right', 'top', 'top-left', 'top-right', 'left', 'right'
+  const e = (l.tailEnds && l.tailEnds[0]) || l.tailEnd || {x:0, y:0.6};
+  const ex = e.x, ey = e.y;  // fracción relativa al bbox del bocadillo
+  // ey > 0.3 → cola hacia abajo; ey < -0.3 → cola hacia arriba
+  // ex > 0.3 → cola hacia derecha; ex < -0.3 → cola hacia izquierda
+  if(Math.abs(ey) >= Math.abs(ex)){
+    if(ey > 0){
+      if(ex < -0.15) return 'bottom-left';
+      if(ex >  0.15) return 'bottom-right';
+      return 'bottom';
+    } else {
+      if(ex < -0.15) return 'top-left';
+      if(ex >  0.15) return 'top-right';
+      return 'top';
+    }
+  } else {
+    return ex > 0 ? 'right' : 'left';
+  }
+}
+function edSaveProject(){
+  if(!edProjectId){edToast('Sin proyecto activo');return;}
+  const existing=ComicStore.getById(edProjectId)||{};
+  const panels=edPages.map((p,i)=>{
+    // Exportar capas de texto/bocadillo para el reader.
+    // El orden del array layers[] es el orden secuencial de aparición.
+    // Tanto BubbleLayer como TextLayer aparecen uno a uno al tocar.
+    const texts = [];
+    let seqOrder = 0;
+    p.layers.forEach(l => {
+      const rawText = (l.type === 'text' || l.type === 'bubble') ? l.text : null;
+      if(!rawText || rawText === 'Escribe aquí') return;
+
+      const xPct = Math.round((l.x - l.width/2)  * 100 * 10) / 10;
+      const yPct = Math.round((l.y - l.height/2) * 100 * 10) / 10;
+      const wPct = Math.round(l.width  * 100 * 10) / 10;
+      const hPct = Math.round(l.height * 100 * 10) / 10;
+
+      if(l.type === 'bubble'){
+        texts.push({
+          type:       'dialog',
+          text:       rawText,
+          x: xPct, y: yPct, w: wPct, h: hPct,
+          tail:       _edBubbleTailDir(l),
+          style:      l.style || 'conventional',
+          order:      seqOrder++,
+          fontSize:   l.fontSize || 18,
+          fontFamily: l.fontFamily || 'Comic Sans MS, cursive',
+          color:      l.color || '#000000',
+          bg:         l.backgroundColor || '#ffffff',
+          border:     l.borderWidth || 2,
+          borderColor: l.borderColor || '#000000',
+        });
+      } else if(l.type === 'text'){
+        texts.push({
+          type:       'text',    // tipo genérico: aparece secuencialmente
+          text:       rawText,
+          x: xPct, y: yPct, w: wPct, h: hPct,
+          order:      seqOrder++,
+          fontSize:   l.fontSize || 20,
+          fontFamily: l.fontFamily || 'Arial',
+          color:      l.color || '#000000',
+          bg:         l.backgroundColor || '#ffffff',
+          border:     l.borderWidth || 0,
+          borderColor: l.borderColor || '#000000',
+        });
+      }
+    });
+    return {
+      id:'panel_'+i,
+      dataUrl:edRenderPage(p),
+      orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
+      textMode: p.textMode || 'immediate',
+      texts,
+    };
+  });
+  ComicStore.save({
+    ...existing,
+    id:edProjectId,
+    ...edProjectMeta,
+    panels,
+    editorData:{
+      orientation:edOrientation,
+      pages:edPages.map(p=>({layers:p.layers.map(edSerLayer).filter(Boolean),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||edOrientation})),
+    },
+    updatedAt:new Date().toISOString(),
+  });
+  edToast('Guardado ✓');
+}
+function edRenderPage(page){
+  const _savedOrient = edOrientation;
+  const _savedPage   = edCurrentPage;
+  const _pageIdx     = edPages.indexOf(page);
+  if(_pageIdx >= 0){ edCurrentPage = _pageIdx; }
+  if(page.orientation) edOrientation = page.orientation;
+  const pw=edPageW(), ph=edPageH();
+  const tmp=document.createElement('canvas');tmp.width=pw;tmp.height=ph;
+  const full=document.createElement('canvas');full.width=ED_CANVAS_W;full.height=ED_CANVAS_H;
+  const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
+  // Imágenes primero, luego DrawLayer, luego texto/bocadillos
+  page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
+  const _rdl=page.layers.find(l=>l.type==='draw');
+  if(_rdl) _rdl.draw(ctx);
+  page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(ctx));
+  page.layers.filter(l=>l.type!=='image'&&l.type!=='draw'&&l.type!=='stroke').forEach(l=>l.draw(ctx,full));
+  // Recortar zona de la página del canvas de trabajo
+  const outCtx=tmp.getContext('2d');
+  outCtx.drawImage(full, edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
+  edOrientation = _savedOrient;
+  edCurrentPage = _savedPage;
+  return tmp.toDataURL('image/jpeg',0.85);
+}
+function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
+  // Redimensiona y comprime una imagen a JPEG para ahorrar espacio en localStorage
+  if(!src || src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña
+  try {
+    const img = new Image();
+    img.src = src;
+    if(!img.complete || img.naturalWidth === 0) return src; // no cargada aún
+    const ratio = Math.min(1, maxPx / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth  * ratio);
+    const h = Math.round(img.naturalHeight * ratio);
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(img, 0, 0, w, h);
+    return cv.toDataURL('image/jpeg', quality);
+  } catch(e) { return src; }
+}
+
+function edSerLayer(l){
+  const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
+  if(l.type==='image'){
+    const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
+    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
+  }
+  if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
+    text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
+    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
+    padding:l.padding||10,...op};
+  if(l.type==='bubble')return{type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
+    text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
+    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
+    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
+    tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
+    padding:l.padding||15,...op};
+  if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
+  if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
+    x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity};
+}
+function edDeserLayer(d, pageOrientation){
+  if(d.type==='draw'){
+    const _isV = (pageOrientation||'vertical')==='vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    return d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer();
+  }
+  if(d.type==='stroke'){
+    const _isV = (pageOrientation||'vertical')==='vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', d.x||0.5, d.y||0.5, d.width||0.1, d.height||0.1, _pw, _ph);
+    if(d.rotation) sl.rotation = d.rotation;
+    if(d.opacity !== undefined) sl.opacity = d.opacity;
+    return sl;
+  }
+  if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
+  if(d.type==='bubble'){const l=new BubbleLayer(d.text,d.x,d.y);Object.assign(l,d);
+    if(d.tailStart)l.tailStart={...d.tailStart};if(d.tailEnd)l.tailEnd={...d.tailEnd};
+    if(d.tailStarts)l.tailStarts=d.tailStarts.map(s=>({...s}));
+    if(d.tailEnds)  l.tailEnds  =d.tailEnds.map(e=>({...e}));
+    if(d.multipleCount&&!d.voiceCount)l.voiceCount=d.multipleCount;
+    return l;}
+  if(d.type==='image'){
+    const l=new ImageLayer(null,d.x,d.y,d.width);
+    l.rotation=d.rotation||0; l.src=d.src||'';
+    if(d.opacity!==undefined) l.opacity=d.opacity;
+    // BUG-E07: asignar height guardado ANTES del onload para que el primer
+    // render muestre el tamaño correcto aunque la imagen tarde en cargar
+    if(d.height) l.height = d.height;
+    if(d.src){
+      const img=new Image();
+      img.onload=()=>{
+        l.img=img; l.src=img.src;
+        const _isV = (pageOrientation||'vertical') === 'vertical';
+        const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+        const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+        const _natH = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
+        // Respetar height guardado si es razonable (el usuario pudo haberlo ajustado).
+        // Solo recalcular si no hay height guardado o si viene de un formato antiguo
+        // (diferencia >50% respecto al natural → dato corrupto → recalcular).
+        if(!d.height || Math.abs(l.height / _natH - 1) > 0.5){
+          l.height = _natH;
+        }
+        edRedraw();
+      };
+      img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
+      img.src=d.src;
+    }
+    return l;
+  }
+  return null;
+}
+function edLoadProject(id){
+  const comic=ComicStore.getById(id);if(!comic)return;
+  edProjectId=id;
+  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'horizontal'};
+  const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
+  if(comic.editorData){
+    edOrientation=comic.editorData.orientation||'vertical';
+    edPages=(comic.editorData.pages||[]).map(pd=>{
+      const orient = pd.orientation||comic.editorData.orientation||'vertical';
+      const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
+      // Migrar drawData legado (versiones <5.20) a DrawLayer si no hay DrawLayer ya
+      if(pd.drawData && !layers.find(l=>l.type==='draw')){
+        const _isV = orient==='vertical';
+        layers.unshift(DrawLayer.fromDataUrl(pd.drawData, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)); // legacy
+      }
+      return {
+        drawData: null,  // ya no se usa, migrado a DrawLayer
+        layers,
+        textLayerOpacity: pd.textLayerOpacity??1,
+        textMode: pd.textMode||'sequential',
+        orientation: orient,
+      };
+    });
+  }else{
+    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
+  }
+  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
+  edCurrentPage=0;edLayers=edPages[0].layers;
+  // Centrar cámara al cargar proyecto
+  // Doble rAF + timeout: esperar que el DOM tenga alturas correctas
+  if(edCanvas){
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      edFitCanvas(true);
+      // Segundo intento por si el layout tardó más (ej: fuentes, imágenes)
+      setTimeout(()=>edFitCanvas(true), 120);
+    }));
+  }
+  // Actualizar nav de páginas en topbar (si ya existe el DOM)
+  requestAnimationFrame(()=>edUpdateNavPages());
+}
+
+/* ══════════════════════════════════════════
+   VISOR
+   ══════════════════════════════════════════ */
+let edViewerIdx=0;
+function edUpdateCanvasFullscreen(){ edFitCanvas(); }
+
+function edOpenViewer(){
+  edHideGearIcon();  // ocultar gear al abrir visor
+  edViewerIdx=0;  // siempre empieza por la primera hoja
+  { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
+  // Garantizar que TODAS las hojas tienen orientation antes de abrir
+  edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
+  $('editorViewer')?.classList.add('open');
+  edUpdateViewer();
+  edInitViewerTap();
+  // Teclado PC
+  if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
+  _viewerKeyHandler = _edViewerKey;
+  document.addEventListener('keydown', _viewerKeyHandler);
+}
+function edUpdateViewerSize(pw, ph){
+  if(!edViewerCanvas) return;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Si no se pasan dimensiones, calcularlas desde la hoja actual del visor
+  if(!pw||!ph){
+    const _po = edPages[edViewerIdx]?.orientation || edOrientation;
+    pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
+    ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
+  }
+  edViewerCanvas.width  = pw;
+  edViewerCanvas.height = ph;
+  edViewerCtx = edViewerCanvas.getContext('2d');
+  // Escala: llenar el viewport manteniendo proporción (contain)
+  const scale = Math.min(vw / pw, vh / ph);
+  const displayW = Math.round(pw * scale);
+  const displayH = Math.round(ph * scale);
+  edViewerCanvas.style.width  = displayW + 'px';
+  edViewerCanvas.style.height = displayH + 'px';
+  // Centrar en el viewer
+  edViewerCanvas.style.position = 'absolute';
+  edViewerCanvas.style.left = Math.round((vw - displayW) / 2) + 'px';
+  edViewerCanvas.style.top  = Math.round((vh - displayH) / 2) + 'px';
+}
+
+// Teclado en visor (PC)
+let _viewerKeyHandler = null;
+function _edViewerKey(e){
+  const v = $('editorViewer');
+  if(!v || !v.classList.contains('open')) return;
+  if(e.key === 'ArrowRight' || e.key === 'ArrowDown'){
+    e.preventDefault();
+    const page=edPages[edViewerIdx];
+    const tl=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+      _vStartBubbleFade();
+      edViewerTextStep++; edUpdateViewer();
+    } else if(edViewerIdx < edPages.length-1){
+      edViewerIdx++;
+      { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+        edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+      edUpdateViewer();
+    }
+  } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
+    e.preventDefault();
+    const page=edPages[edViewerIdx];
+    if(page?.textMode==='sequential' && edViewerTextStep > 1){
+      edViewerTextStep--; edUpdateViewer();
+    } else if(edViewerIdx > 0){
+      edViewerIdx--;
+      const pp=edPages[edViewerIdx];
+      const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+      edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+      edUpdateViewer();
+    }
+  } else if(e.key === 'Escape'){
+    e.preventDefault();
+    edCloseViewer();
+  }
+}
+
+// Tap en el visor → mostrar/ocultar controles
+let _viewerTapBound = false, _viewerHideTimer;
+let _vPrevBubbleFade = 0;  // opacidad del bocadillo anterior en fade
+let _vFadeRaf = null;       // requestAnimationFrame del fade
+function edShowViewerCtrls(){
+  const ctrls = $('viewerControls');
+  if(!ctrls) return;
+  ctrls.classList.remove('hidden');
+  clearTimeout(_viewerHideTimer);
+  _viewerHideTimer = setTimeout(()=>ctrls.classList.add('hidden'), 3500);
+}
+function _vStartBubbleFade(){
+  // Solo hacer fade si el bocadillo que va a quedar atrás es tipo 'bubble'
+  // (las cajas de texto permanecen visibles, no se desvanecen)
+  const page = edPages[edViewerIdx];
+  const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+  // El bocadillo "anterior" será el que está en textStep (el actual antes del incremento)
+  const curLayer = tl[edViewerTextStep - 1];
+  if(!curLayer || curLayer.type !== 'bubble'){
+    _vPrevBubbleFade = 0; return;  // no es bubble, no fade
+  }
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
+  _vPrevBubbleFade = 1.0;
+  const duration = 400;
+  const start = performance.now();
+  function step(now){
+    const t = Math.min(1, (now - start) / duration);
+    _vPrevBubbleFade = 1 - t;
+    edUpdateViewer();
+    if(t < 1) _vFadeRaf = requestAnimationFrame(step);
+    else { _vFadeRaf=null; _vPrevBubbleFade=0; edUpdateViewer(); }
+  }
+  _vFadeRaf = requestAnimationFrame(step);
+}
+
+function edInitViewerTap(){
+  const viewer = $('editorViewer');
+  if(!viewer) return;
+
+  // Detectar si es dispositivo táctil
+  const isTouch = navigator.maxTouchPoints > 0;
+
+  // Mostrar controles (siempre visibles, sin distinción táctil/desktop)
+  edShowViewerCtrls();
+
+  if(_viewerTapBound) return;
+  _viewerTapBound = true;
+
+  // ── MODO TÁCTIL ──
+  if(isTouch){
+    // Swipe horizontal para navegar
+    let _vSwipeX = null, _vSwipeY = null;
+    viewer.addEventListener('touchstart', e => {
+      if(e.touches.length !== 1) return;
+      _vSwipeX = e.touches[0].clientX;
+      _vSwipeY = e.touches[0].clientY;
+    }, {passive:true});
+    viewer.addEventListener('touchend', e => {
+      if(_vSwipeX === null || e.changedTouches.length !== 1) return;
+      // Si el toque fue sobre el botón cerrar, no procesar swipe
+      // Si el desplazamiento es mínimo, no es swipe
+      const dx = e.changedTouches[0].clientX - _vSwipeX;
+      const dy = e.changedTouches[0].clientY - _vSwipeY;
+      _vSwipeX = null; _vSwipeY = null;
+      if(Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      const page = edPages[edViewerIdx];
+      const tl = page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+      if(dx < 0){
+        // Swipe izquierda → siguiente bocadillo / página
+        if(page?.textMode==='sequential' && edViewerTextStep < tl.length){
+          _vStartBubbleFade();
+          edViewerTextStep++; edUpdateViewer();
+        } else if(edViewerIdx < edPages.length-1){
+          edViewerIdx++;
+          { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+            edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+          edUpdateViewer();
+        }
+      } else {
+        // Swipe derecha → bocadillo anterior / página anterior
+        if(page?.textMode==='sequential' && edViewerTextStep > 1){
+          edViewerTextStep--; edUpdateViewer();
+        } else if(edViewerIdx > 0){
+          edViewerIdx--;
+          const pp=edPages[edViewerIdx];
+          const ptl=pp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+          edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+          edUpdateViewer();
+        }
+      }
+    }, {passive:true});
+
+  // ── MODO DESKTOP ──
+  } else {
+    viewer.addEventListener('pointerdown', () => edShowViewerCtrls(), {capture:true, passive:true});
+    viewer.addEventListener('mousemove',   () => edShowViewerCtrls(), {passive:true});
+  }
+}
+function edCloseViewer(){
+  if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
+  _vPrevBubbleFade=0;
+  $('editorViewer')?.classList.remove('open');
+  clearTimeout(_viewerHideTimer);
+  _viewerTapBound = false; // permitir re-bind en próxima apertura
+  if(_viewerKeyHandler){
+    document.removeEventListener('keydown', _viewerKeyHandler);
+    _viewerKeyHandler = null;
+  }
+}
+function edUpdateViewer(){
+  if(!$('editorViewer')?.classList.contains('open')) return;
+  const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
+  // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
+  const _po = page.orientation || edOrientation;
+  const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const mx = (ED_CANVAS_W - pw) / 2;  // margen X para esta orientación
+  const my = (ED_CANVAS_H - ph) / 2;  // margen Y para esta orientación
+  // Ajustar canvas del visor para esta hoja
+  edUpdateViewerSize(pw, ph);
+  // Canvas de trabajo con margen (igual que el editor)
+  const full=document.createElement('canvas');
+  full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
+  const fctx=full.getContext('2d');
+  fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
+  // Renderizar capas: temporalmente setear edOrientation para que draw() funcione
+  // (draw() usa edMarginX/edPageW internamente)
+  const _savedOrient=edOrientation;
+  edOrientation=_po;
+  // Mismo orden que el editor: seguir el array, textos al final
+  page.layers.forEach(l=>{
+    if(l.type==='text'||l.type==='bubble') return;
+    if(l.type==='image')       l.draw(fctx, full);
+    else if(l.type==='draw')   l.draw(fctx);
+    else if(l.type==='stroke') l.draw(fctx);
+  });
+  const _finishViewer = () => {
+    _edViewerDrawTextsOnCtx(page, fctx, full);
+    // Restaurar antes de manipular el DOM
+    edOrientation=_savedOrient;
+    // Copiar zona del lienzo al viewerCanvas
+    edViewerCtx.clearRect(0,0,pw,ph);
+    edViewerCtx.drawImage(full,mx,my,pw,ph,0,0,pw,ph);
+    // Contador
+    const textLayers=page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+    const isSeq=page.textMode==='sequential';
+    const cnt=$('viewerCounter');
+    if(cnt){
+      if(isSeq&&textLayers.length>0){
+        cnt.textContent=`${edViewerIdx+1}/${edPages.length} · 💬${edViewerTextStep-1}/${textLayers.length}`;
+      } else {
+        cnt.textContent=`${edViewerIdx+1} / ${edPages.length}`;
+      }
+    }
+  };
+  _finishViewer();
+}
+
+function _edViewerDrawTextsOnCtx(page, ctx, can){
+  const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+  const isSeq = page.textMode === 'sequential';
+  if(!isSeq){ textLayers.forEach(l=>l.draw(ctx, can)); return; }
+
+  // Modo secuencial:
+  // - Cajas de texto (type='text'): visibles al 100% cuando reveladas, permanecen
+  // - Bocadillos (type='bubble'): el actual al 100%, el anterior con fade-out 1→0
+  const toShow = textLayers.slice(0, edViewerTextStep);
+  toShow.forEach((l, vi) => {
+    if(l.type === 'text'){
+      l.draw(ctx, can);  // cajas siempre al 100%
+    } else {
+      // Bocadillo: solo el actual y el penúltimo (en fade)
+      const isCurrent  = vi === toShow.length - 1;
+      const isPrevious = vi === toShow.length - 2;
+      if(isCurrent){
+        l.draw(ctx, can);
+      } else if(isPrevious && _vPrevBubbleFade > 0){
+        ctx.save();
+        ctx.globalAlpha = _vPrevBubbleFade;
+        l.draw(ctx, can);
+        ctx.restore();
+      }
+      // Bocadillos más antiguos: ya desaparecieron
+    }
+  });
+}
+
+/* ══════════════════════════════════════════
+   MODAL DATOS PROYECTO
+   ══════════════════════════════════════════ */
+function edOpenProjectModal(){
+  $('edMTitle').value=edProjectMeta.title;
+  $('edMAuthor').value=edProjectMeta.author;
+  $('edMGenre').value=edProjectMeta.genre;
+  $('edMNavMode').value=edProjectMeta.navMode;
+  $('edProjectModal')?.classList.add('open');
+}
+function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
+
+/* ── Destruir vista: eliminar todos los listeners de document/window ── */
+function EditorView_destroy(){
+  if(window._edListeners){
+    window._edListeners.forEach(([el,evt,fn,opts])=>el.removeEventListener(evt,fn,opts));
+    window._edListeners = null;
+  }
+  if(window._edWheelFn){
+    window.removeEventListener('wheel', window._edWheelFn);
+    window._edWheelFn = null;
+  }
+  if(window._edKeyFn){
+    document.removeEventListener('keydown', window._edKeyFn);
+    window._edKeyFn = null;
+  }
+  if(window._edDocDownFn){
+    document.removeEventListener('pointerdown', window._edDocDownFn);
+    window._edDocDownFn = null;
+  }
+  if(window._edResizeFn){
+    window.removeEventListener('resize', window._edResizeFn);
+    window._edResizeFn = null;
+  }
+  if(window._edOrientFn){
+    window.removeEventListener('orientationchange', window._edOrientFn);
+    window._edOrientFn = null;
+  }
+  if(window._edQuotaFn){
+    window.removeEventListener('cx:storage:quota', window._edQuotaFn);
+    window._edQuotaFn = null;
+  }
+  // Limpiar timers
+  clearTimeout(window._edLongPress);
+  edHideGearIcon();
+}
+function edSaveProjectModal(){
+  edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
+  edProjectMeta.author =$('edMAuthor').value.trim();
+  edProjectMeta.genre  =$('edMGenre').value.trim();
+  edProjectMeta.navMode=$('edMNavMode').value;
+  const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
+  edCloseProjectModal();edSaveProject();
+}
+
+/* ══════════════════════════════════════════
+   TOAST
+   ══════════════════════════════════════════ */
+function edToast(msg,ms=2000){
+  const t=$('edToast');if(!t)return;
+  t.classList.remove('show');          // forzar reset antes de reanimar
+  t.textContent=msg;
+  // Pequeño frame para que el remove surta efecto antes del add
+  requestAnimationFrame(()=>{
+    t.classList.add('show');
+    clearTimeout(t._t);
+    t._t=setTimeout(()=>t.classList.remove('show'),ms);
+  });
+}
+
+/* ══════════════════════════════════════════
+   INIT
+   ══════════════════════════════════════════ */
+function EditorView_init(){
+  // Limpiar estado de sesión anterior
+  edHideGearIcon();
+  const staleToast = $('edToast');
+  if(staleToast){ staleToast.classList.remove('show'); clearTimeout(staleToast._t); }
+  // Ocultar también el toast global (ej: "Bienvenido/a" del login)
+  const globalToast = document.getElementById('toast');
+  if(globalToast){ globalToast.classList.remove('show'); clearTimeout(globalToast._tid); }
+  edCanvas=$('editorCanvas');
+  edDrawCanvas=$('edDrawCanvas');
+  // Habilitar botón Capas
+  document.querySelector('[data-menu="layers"]')?.removeAttribute('disabled');
+  document.querySelector('[data-menu="layers"]')?.style.removeProperty('opacity');
+  document.querySelector('[data-menu="layers"]')?.style.removeProperty('cursor');
+  edViewerCanvas=$('viewerCanvas');
+  if(!edCanvas)return;
+  edCtx=edCanvas.getContext('2d');
+  if(edDrawCanvas) edDrawCtx=edDrawCanvas.getContext('2d');
+  if(edViewerCanvas)edViewerCtx=edViewerCanvas.getContext('2d');
+
+  const editId=sessionStorage.getItem('cx_edit_id');
+  if(!editId){Router.go('my-comics');return;}
+  edLoadProject(editId);
+  sessionStorage.removeItem('cx_edit_id');
+  // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
+  edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  edActiveTool='select';
+  const cur=$('edBrushCursor');if(cur)cur.style.display='none';
+
+  // ── CANVAS ──
+  // Usamos SOLO pointer events (unifican mouse + touch sin duplicados).
+  // En Android un toque genera pointerdown+touchstart — usando solo pointer
+  // evitamos que edOnStart se llame dos veces.
+  // touch-action:none en editorShell permite que pointer events funcionen
+  // en táctil sin interferencia del browser, pero sin bloquear overlays
+  // (los overlays están en body, fuera del shell).
+  const _shell = document.getElementById('editorShell');
+  if(_shell) _shell.style.touchAction = 'none';
+  window._edListeners = [
+    [document, 'pointerdown',  edOnStart, {passive:false}],
+    [document, 'pointermove',  edOnMove,  {passive:false}],
+    [document, 'pointerup',    edOnEnd,   {}],
+    [document, 'pointercancel',edOnEnd,   {}],
+  ];
+  window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
+
+  // ── TOPBAR ──
+  $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
+  $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
+  $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
+  $('edZoomResetBtn')?.addEventListener('click',()=>{
+    const pw=edPageW(), ph=edPageH();
+    const fullZoom = Math.min(edCanvas.width/pw, edCanvas.height/ph);
+    const workZoom = Math.min(edCanvas.width/ED_CANVAS_W, edCanvas.height/ED_CANVAS_H);
+    // Alterna entre "lienzo llena viewport" y "workspace completo visible"
+    const isAtFull = Math.abs(edCamera.z - fullZoom) < 0.01;
+    if(isAtFull){
+      edCamera.z = workZoom;
+      edCamera.x = edCanvas.width/2  - ED_CANVAS_W/2 * workZoom;
+      edCamera.y = edCanvas.height/2 - ED_CANVAS_H/2 * workZoom;
+    } else {
+      _edCameraReset();
+    }
+    edRedraw();
+    _edScrollbarsUpdate();
+  });
+  $('edSaveBtn')?.addEventListener('click',edSaveProject);
+  $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
+  // Botón pantalla completa en topbar
+  $('edFsBtn')?.addEventListener('click', () => {
+    if(typeof Fullscreen !== 'undefined') Fullscreen.request();
+  });
+  const _edFsUpdate = () => {
+    const btn = $('edFsBtn'); if(!btn) return;
+    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    btn.textContent = active ? '⛶✕' : '⛶';
+    btn.title = active ? 'Salir pantalla completa' : 'Pantalla completa';
+  };
+  document.addEventListener('fullscreenchange', _edFsUpdate);
+  document.addEventListener('webkitfullscreenchange', _edFsUpdate);
+
+  // ── MENÚ: botones dropdown (excluir layers y nav que tienen overlays propios) ──
+  document.querySelectorAll('[data-menu]').forEach(btn=>{
+    const id = btn.dataset.menu;
+    if(id === 'layers' || id === 'nav') return; // tienen su propio handler
+    btn.addEventListener('pointerup',e=>{e.stopPropagation();edToggleMenu(id);});
+  });
+
+  // ── INSERTAR ──
+  $('dd-gallery')?.addEventListener('click',()=>{$('edFileGallery').click();edCloseMenus();});
+  $('dd-camera')?.addEventListener('click', ()=>{$('edFileCapture').click();edCloseMenus();});
+  $('dd-textbox')?.addEventListener('click',()=>{edAddText();edCloseMenus();});
+  $('dd-bubble')?.addEventListener('click', ()=>{edAddBubble();edCloseMenus();});
+  $('edFileGallery')?.addEventListener('change',e=>{edAddImage(e.target.files[0]);e.target.value='';});
+  $('edFileCapture')?.addEventListener('change',e=>{edAddImage(e.target.files[0]);e.target.value='';});
+
+  // ── DIBUJAR ──
+  $('dd-pen')?.addEventListener('click',()=>{
+    edActiveTool='draw';
+    edCanvas.className='tool-draw';
+    if($('edBrushCursor'))$('edBrushCursor').style.display='block';
+    edRenderOptionsPanel('draw');edCloseMenus();
+  });
+
+  $('dd-cleardraw')?.addEventListener('click',()=>{edClearDraw();edCloseMenus();});
+
+  // ── NAVEGAR (Hoja → abre overlay) ──
+  // El botón Hoja ▾ del menú abre el overlay de hojas
+  const _navBtn = document.querySelector('[data-menu="nav"]');
+  if(_navBtn){
+    _navBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      edCloseMenus();
+      edOpenPages();
+    });
+  }
+  // Bindings del dropdown pequeño (ya no se usa, pero por si acaso)
+  $('dd-addpage')?.addEventListener('click',()=>{edAddPage();edCloseMenus();});
+  $('dd-delpage')?.addEventListener('click',()=>{edDeletePage();edCloseMenus();});
+  $('dd-orientv')?.addEventListener('click',()=>{edSetOrientation('vertical');edCloseMenus();});
+  $('dd-orienth')?.addEventListener('click',()=>{edSetOrientation('horizontal');edCloseMenus();});
+
+  // ── PROYECTO ──
+  $('dd-editproject')?.addEventListener('click',()=>{edOpenProjectModal();edCloseMenus();});
+  $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
+  $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
+  $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
+  $('dd-deleteproject')?.addEventListener('click',()=>{
+    edCloseMenus();
+    if(!edProjectId){edToast('Sin proyecto activo');return;}
+    if(!confirm('¿Eliminar esta obra? Esta acción no se puede deshacer.'))return;
+    ComicStore.remove(edProjectId);
+    edToast('Obra eliminada');
+    setTimeout(()=>Router.go('my-comics'),600);
+  });
+  $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
+
+  // ── CAPAS ──
+  const _layersBtn = document.querySelector('[data-menu="layers"]');
+  if(_layersBtn){
+    _layersBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      edCloseMenus();
+      edOpenLayers();
+    });
+  }
+
+  // ── MINIMIZAR ──
+  $('edUndoBtn')?.addEventListener('click', () => {
+    if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
+    else edUndo();
+  });
+  $('edRedoBtn')?.addEventListener('click', () => {
+    if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
+    else edRedo();
+  });
+  $('edMinimizeBtn')?.addEventListener('click',edMinimize);
+  edPushHistory();
+  edInitFloatDrag();
+  // Avisar al usuario si localStorage se llena al guardar
+  window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
+  window.addEventListener('cx:storage:quota', window._edQuotaFn);
+
+  // ── VISOR ──
+  // Botón cerrar: click + pointerup para máxima compatibilidad
+  ['click','pointerup'].forEach(ev=>{
+    $('viewerClose')?.addEventListener(ev, e=>{
+      e.stopPropagation(); edCloseViewer();
+    });
+  });
+  // Botón cerrar táctil (solo visible en pointer:coarse via CSS, siempre disponible)
+  $('viewerCloseTouchOnly')?.addEventListener('click', e=>{ e.stopPropagation(); edCloseViewer(); });
+  // Botón anterior (desktop)
+  $('viewerPrev')?.addEventListener('pointerup', e=>{
+    e.stopPropagation();
+    edShowViewerCtrls();
+    const page=edPages[edViewerIdx];
+    // textStep mínimo es 1 (0/x en contador) — nunca bajar de 1
+    if(page?.textMode==='sequential' && edViewerTextStep > 1){
+      edViewerTextStep--; edUpdateViewer(); return;
+    }
+    if(edViewerIdx>0){
+      edViewerIdx--;
+      const prevPage=edPages[edViewerIdx];
+      const prevTexts=prevPage?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+      edViewerTextStep = prevPage?.textMode==='sequential' ? prevTexts.length : 0;
+      edUpdateViewer();
+    }
+  });
+  // Botón siguiente (desktop)
+  $('viewerNext')?.addEventListener('pointerup', e=>{
+    e.stopPropagation();
+    edShowViewerCtrls();
+    const page=edPages[edViewerIdx];
+    const textLayers=page?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+    if(page?.textMode==='sequential' && edViewerTextStep < textLayers.length){
+      _vStartBubbleFade();
+      edViewerTextStep++; edUpdateViewer(); return;
+    }
+    if(edViewerIdx<edPages.length-1){
+      edViewerIdx++;
+      { const _np=edPages[edViewerIdx]; const _ntl=_np?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
+        edViewerTextStep=(_np?.textMode==='sequential'&&_ntl.length>0)?1:0; }
+      edUpdateViewer();
+    }
+  });
+
+  // ── MODAL PROYECTO ──
+  $('edMCancel')?.addEventListener('click',edCloseProjectModal);
+  $('edMSave')?.addEventListener('click',edSaveProjectModal);
+
+  // ── Ctrl+Wheel: zoom del canvas ──
+  window._edWheelFn = e => {
+    if(!document.getElementById('editorShell')) return;
+    // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas, etc.)
+    // dejarlo hacer scroll nativo — no intervenir
+    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box');
+    if(overScrollable) return;
+    e.preventDefault();
+    if(e.ctrlKey || e.metaKey){
+      // Zoom hacia el cursor
+      const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
+      const sx = e.clientX;
+      const sy = e.clientY - canvasTop;
+      const factor = e.deltaY > 0 ? 1/1.1 : 1.1;
+      edZoomAt(sx, sy, factor);
+    } else {
+      // Pan (sin Ctrl: trackpad two-finger scroll o rueda normal)
+      edCamera.x -= e.deltaX;
+      edCamera.y -= e.deltaY;
+    }
+    edRedraw();
+    _edScrollbarsUpdate();
+  };
+  window.addEventListener('wheel', window._edWheelFn, {passive: false});
+
+  // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
+  window._edKeyFn = function(e){
+    if(!document.getElementById('editorShell')) return;
+    const tag = document.activeElement?.tagName?.toLowerCase();
+    const ctrl = e.ctrlKey || e.metaKey;
+    // Bloquear shortcuts si hay un input con foco, EXCEPTO Ctrl+Z/Y
+    // cuando hay herramienta de dibujo activa (los sliders del panel roban el foco)
+    if(tag === 'input' || tag === 'textarea' || tag === 'select'){
+      const isDrawTool = ['draw','eraser','fill'].includes(edActiveTool);
+      const isUndoRedo = ctrl && (e.key.toLowerCase()==='z' || e.key.toLowerCase()==='y');
+      if(!(isDrawTool && isUndoRedo)) return;
+    }
+    // Enter: cerrar panel de opciones abierto (OK)
+    if(e.key === 'Enter' && !ctrl){
+      const panel = $('edOptionsPanel');
+      if(panel && panel.classList.contains('open')){
+        e.preventDefault();
+        edCloseOptionsPanel();
+        if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
+        return;
+      }
+    }
+    // Ctrl+D → duplicar objeto seleccionado
+    if(ctrl && e.key.toLowerCase() === 'd'){
+      if(edSelectedIdx >= 0){ e.preventDefault(); edDuplicateSelected(); }
+      return;
+    }
+    if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
+      if(edSelectedIdx >= 0){ e.preventDefault(); edDeleteSelected(); }
+      return;
+    }
+    if(!ctrl) return;
+    if(!e.shiftKey && e.key.toLowerCase() === 'z'){
+      e.preventDefault();
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
+      else edUndo();
+    }
+    else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){
+      e.preventDefault();
+      if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
+      else edRedo();
+    }
+  };
+  document.addEventListener('keydown', window._edKeyFn);
+
+  // ── RESIZE ──
+  // Guardar referencia para cleanup en EditorView_destroy
+  window._edResizeFn = () => { edFitCanvas(); edUpdateCanvasFullscreen(); };
+  window.addEventListener('resize', window._edResizeFn);
+
+  // Fit canvas con reintentos hasta que las medidas sean reales
+  // (el CSS se carga dinámicamente y las fuentes tardan en aplicar)
+  function _edInitFit(attemptsLeft) {
+    const topbar = $('edTopbar');
+    const menu   = $('edMenuBar');
+    const topH   = topbar ? topbar.getBoundingClientRect().height : 0;
+    const menuH  = menu   ? menu.getBoundingClientRect().height   : 0;
+    if (topH > 10 && menuH > 10) {
+      edFitCanvas(true); edRedraw(); return;
+    }
+    if (attemptsLeft <= 0) {
+      edFitCanvas(true); edRedraw(); return;
+    }
+    requestAnimationFrame(() => _edInitFit(attemptsLeft - 1));
+  }
+  // Primer intento tras doble rAF; si falla reintenta hasta 30 frames (~500ms)
+  requestAnimationFrame(() => requestAnimationFrame(() => _edInitFit(30)));
+
+  // Cerrar herramienta de dibujo al tocar fuera del canvas
+  window._edDocDownFn = e => {
+    if(['draw','eraser','fill'].includes(edActiveTool)){
+      // No desactivar si el click es en el canvas, el panel de opciones,
+      // la barra de menú, la barra superior o el botón flotante de minimizar
+      const inCanvas  = e.target.closest('#editorCanvas');
+      const inPanel   = e.target.closest('#edOptionsPanel');
+      const inMenu    = e.target.closest('#edMenuBar');
+      const inTopbar  = e.target.closest('#edTopbar');
+      const inFloat   = e.target.closest('#edFloatBtn');
+      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat){
+        edDeactivateDrawTool();
+      }
+    }
+  };
+  document.addEventListener('pointerdown', window._edDocDownFn);
+
+
+  // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
+  edUpdateCanvasFullscreen();
+  // Guardar referencia para cleanup en EditorView_destroy
+  window._edOrientFn = () => { setTimeout(()=>{ edFitCanvas(); edUpdateCanvasFullscreen(); }, 200); };
+  window.addEventListener('orientationchange', window._edOrientFn);
+
+  // ── Pinch en cualquier zona (fuera del canvas) = zoom ──
+  let _shellPinch0 = 0, _shellZoom0 = 1;
+  const editorShell = document.getElementById('editorShell');
+  if(editorShell){
+    let _pinchPrev = 0, _pinchMidX = 0, _pinchMidY = 0;
+    editorShell.addEventListener('touchstart', e => {
+      if(e.touches.length === 2){
+        // Si hay objeto seleccionado, el canvas manejará el pinch (resize)
+        // No inicializar zoom de cámara para este gesto
+        if(edSelectedIdx >= 0){ _pinchPrev = 0; return; }
+        _pinchPrev = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
+        _pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        _pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - canvasTop;
+      }
+    }, {passive:true});
+    editorShell.addEventListener('touchmove', e => {
+      if(e.touches.length === 2 && _pinchPrev > 0){
+        e.preventDefault();
+        // Si hay objeto seleccionado, el pinch lo gestiona edPinchMove (resize)
+        // El zoom de cámara solo actúa cuando NO hay objeto seleccionado
+        if(edSelectedIdx >= 0) return;
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        const factor = dist / _pinchPrev;
+        edZoomAt(_pinchMidX, _pinchMidY, factor);
+        _pinchPrev = dist;
+        edRedraw();
+        _edScrollbarsUpdate();
+      }
+    }, {passive:false});
+    editorShell.addEventListener('touchend', ()=>{ _pinchPrev = 0; }, {passive:true});
+  }
+
+  // Seguro extra: si después de 600ms el canvas sigue muy pequeño, refitear
+  setTimeout(() => {
+    if (edCanvas && parseInt(edCanvas.style.height || '0') < 50) {
+      edFitCanvas(); edRedraw();
+    }
+  }, 600);
+}
+
+/* ── DESCARGAR / CARGAR JSON ── */
+function edDownloadJSON(){
+  edSaveProject();
+  const data=localStorage.getItem('cs_comics');
+  const comic=ComicStore.getById(edProjectId);if(!comic)return;
+  const blob=new Blob([JSON.stringify(comic,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=(edProjectMeta.title||'proyecto').replace(/\s+/g,'_')+'.json';
+  a.click();
+}
+function edLoadFromJSON(file){
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const data=JSON.parse(e.target.result);
+      if(data.editorData){
+        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'horizontal'};
+        edOrientation=data.editorData.orientation||'vertical';
+        edPages=(data.editorData.pages||[]).map(pd=>({
+          drawData:pd.drawData||null,
+          layers:(pd.layers||[]).map(d=>edDeserLayer(d, pd.orientation||data.editorData.orientation||'vertical')).filter(Boolean),
+          textLayerOpacity:pd.textLayerOpacity??1,
+          textMode:pd.textMode||'sequential',
+          orientation:pd.orientation||data.editorData.orientation||'vertical',
+        }));
+        if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
+        edCurrentPage=0;edLayers=edPages[0].layers;
+        edSetOrientation(edOrientation);
+        const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title;
+        edToast('Proyecto cargado ✓');
+      }
+    }catch(err){edToast('Error al cargar el archivo');}
+  };
+  reader.readAsText(file);
+}
