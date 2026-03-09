@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v6.05</footer>
+    <footer class="app-version">v6.07</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -219,12 +219,7 @@ Router.register('editor', {
 
           <!-- DIBUJAR -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
-            <div class="ed-dropdown" id="dd-draw">
-              <button class="ed-dropdown-item" id="dd-pen">Lápiz</button>
-              <div class="ed-dropdown-sep"></div>
-              <button class="ed-dropdown-item" id="dd-cleardraw">Borrar dibujos</button>
-            </div>
+            <button class="ed-menu-btn" id="dd-pen">Dibujar</button>
           </div>
 
           <div class="ed-menu-sep"></div>

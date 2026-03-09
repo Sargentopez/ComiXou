@@ -1414,6 +1414,8 @@ function edOnStart(e){
   window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
   // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
   if(window._edActivePointers.size === 2){
+    // Cancelar fill pendiente — era un pinch, no un toque simple
+    if(window._edFillPending) window._edFillPending = null;
     // Si estaba pintando, cancelar el trazo parcial sin guardarlo
     if(edPainting){
       edPainting = false;
@@ -1663,6 +1665,13 @@ function edOnEnd(e){
   if(e && e.pointerId !== undefined && window._edActivePointers){
     window._edActivePointers.delete(e.pointerId);
   }
+  // Fill touch: confirmar siempre que no haya pinch activo — fuera de la guarda gestureActive
+  if(edActiveTool === 'fill' && window._edFillPending){
+    const fp = window._edFillPending; window._edFillPending = null;
+    if(!window._edActivePointers || window._edActivePointers.size === 0){
+      edFloodFill(fp.nx, fp.ny);
+    }
+  }
   // Sin gesto activo → ignorar el resto
   const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating;
   if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
@@ -1671,13 +1680,6 @@ function edOnEnd(e){
     return;
   }
   if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); }
-  // Fill touch: confirmar solo si no hubo pinch (solo 1 puntero activo al soltar)
-  if(edActiveTool === 'fill' && window._edFillPending){
-    const fp = window._edFillPending; window._edFillPending = null;
-    if(fp.pid === e?.pointerId && (!window._edActivePointers || window._edActivePointers.size === 0)){
-      edFloodFill(fp.nx, fp.ny);
-    }
-  }
   clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   window._edLongPressReady = false;
