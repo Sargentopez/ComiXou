@@ -2697,7 +2697,12 @@ function edInitDrawBar() {
   function _edbStartDrag(e) {
     _drag = true;
     _edbDragLocked = true;
-    _sx = e.clientX; _sy = e.clientY;
+    // Coordenadas relativas al shell para que los límites sean correctos
+    // tanto en pantalla completa como en ventana normal del navegador
+    const shell = document.getElementById('editorShell');
+    const shellRect = shell ? shell.getBoundingClientRect() : { left: 0, top: 0 };
+    _sx = e.clientX - shellRect.left;
+    _sy = e.clientY - shellRect.top;
     _sl = parseInt(bar.style.left) || _edbX;
     _st = parseInt(bar.style.top)  || _edbY;
     // Feedback visual: fondo más claro indica modo arrastre
@@ -2719,7 +2724,10 @@ function edInitDrawBar() {
     e.preventDefault();
     if (e.pointerType === 'touch') {
       // Touch: long-press de 300ms activa el drag desde cualquier punto de la barra
-      _sx = e.clientX; _sy = e.clientY;
+      // Guardar posición inicial relativa al shell (igual que _edbStartDrag)
+      const _shell0 = document.getElementById('editorShell');
+      const _rect0  = _shell0 ? _shell0.getBoundingClientRect() : { left: 0, top: 0 };
+      _sx = e.clientX - _rect0.left; _sy = e.clientY - _rect0.top;
       _longTimer = setTimeout(() => {
         _longTimer = null;
         _edbStartDrag(e);
@@ -2731,13 +2739,16 @@ function edInitDrawBar() {
   }, { passive: false });
 
   bar.addEventListener('pointermove', e => {
-    if (_longTimer && (Math.abs(e.clientX - _sx) > 6 || Math.abs(e.clientY - _sy) > 6)) {
+    const shell = document.getElementById('editorShell');
+    const shellRect = shell ? shell.getBoundingClientRect() : { left: 0, top: 0 };
+    const ex = e.clientX - shellRect.left;
+    const ey = e.clientY - shellRect.top;
+    if (_longTimer && (Math.abs(ex - _sx) > 6 || Math.abs(ey - _sy) > 6)) {
       clearTimeout(_longTimer); _longTimer = null;
     }
     if (!_drag) return;
     e.preventDefault();
-    const dx = e.clientX - _sx, dy = e.clientY - _sy;
-    const shell = document.getElementById('editorShell');
+    const dx = ex - _sx, dy = ey - _sy;
     const W = shell ? shell.offsetWidth  : window.innerWidth;
     const H = shell ? shell.offsetHeight : window.innerHeight;
     const bw = bar.offsetWidth, bh = bar.offsetHeight;
@@ -2748,11 +2759,8 @@ function edInitDrawBar() {
     // Snap de orientación: solo cambia al ENTRAR en zona de borde, nunca al salir
     const SNAP = 48;
     const wasHoriz = bar.classList.contains('horiz');
-    const shellRect = shell ? shell.getBoundingClientRect() : { left: 0, top: 0 };
-    const px = e.clientX - shellRect.left;
-    const py = e.clientY - shellRect.top;
-    const distPtrTB = Math.min(py, H - py);
-    const distPtrLR = Math.min(px, W - px);
+    const distPtrTB = Math.min(ey, H - ey);
+    const distPtrLR = Math.min(ex, W - ex);
     // Solo actuar si el puntero está dentro del rango de algún borde
     if (distPtrTB < SNAP || distPtrLR < SNAP) {
       const shouldHoriz = distPtrTB <= distPtrLR;
