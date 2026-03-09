@@ -1396,6 +1396,9 @@ function edOnStart(e){
                tgt.closest('#edGearIcon')     ||
                tgt.closest('#edBrushCursor')  ||
                tgt.closest('.ed-float-btn')   ||
+               tgt.closest('#edDrawBar')      ||
+               tgt.closest('#edb-palette-pop') ||
+               tgt.closest('#ed-hsl-picker')   ||
                tgt.closest('#editorViewer')   ||
                tgt.closest('#edProjectModal');
   if(isUI) return;
@@ -1728,6 +1731,10 @@ function _edDrawUpdateUndoRedoBtns(){
   const u=$('op-draw-undo'), r=$('op-draw-redo');
   if(u) u.disabled = edDrawHistoryIdx < 0;
   if(r) r.disabled = edDrawHistoryIdx >= edDrawHistory.length - 1;
+  // Barra flotante
+  const bu=$('edb-undo'), br=$('edb-redo');
+  if(bu) bu.style.opacity = edDrawHistoryIdx < 0 ? '0.3' : '1';
+  if(br) br.style.opacity = edDrawHistoryIdx >= edDrawHistory.length - 1 ? '0.3' : '1';
 }
 function _edDrawClearHistory(){
   edDrawHistory = []; edDrawHistoryIdx = -1;
@@ -2123,6 +2130,7 @@ function edDeactivateDrawTool(){
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
   const panel=$('edOptionsPanel');
   if(panel){ panel.classList.remove('open'); delete panel.dataset.mode; }
+  edDrawBarHide();
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
 }
@@ -2239,6 +2247,15 @@ function edRenderOptionsPanel(mode){
   }
 
   if(mode==='draw' || mode==='eraser' || mode==='fill'){
+    // Si está minimizado, mostrar barra flotante en vez del panel
+    if(edMinimized){
+      window._edMinimizedDrawMode = mode;
+      const panel=$('edOptionsPanel');
+      if(panel){ panel.style.visibility='hidden'; }
+      edDrawBarShow();
+      return;
+    }
+    edDrawBarHide();
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
@@ -2601,12 +2618,12 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
-  // Si hay herramienta de dibujo activa, preservar modo
+  // Si hay herramienta de dibujo activa, mostrar barra y ocultar panel
   if(['draw','eraser','fill'].includes(edActiveTool)){
     window._edMinimizedDrawMode = edActiveTool;
-    // Ocultar visualmente el panel pero mantenerlo en el DOM con dataset.mode
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='hidden';
+    edDrawBarShow();
   }
   edFitCanvas();
 }
@@ -2616,6 +2633,7 @@ function edMaximize(){
   if(menu)menu.style.display='';
   if(top)top.style.display='';
   $('edFloatBtn')?.classList.remove('visible');
+  edDrawBarHide();
   // Restaurar panel de dibujo si estaba activo al minimizar
   if(window._edMinimizedDrawMode){
     const mode = window._edMinimizedDrawMode;
@@ -2664,8 +2682,242 @@ function edInitFloatDrag(){
 }
 
 /* ══════════════════════════════════════════
-   GUARDAR / CARGAR
+   BARRA HERRAMIENTAS DIBUJO FLOTANTE (T5)
    ══════════════════════════════════════════ */
+let _edbX = 64, _edbY = 12;  // posición persistente de la barra
+
+function edInitDrawBar() {
+  const bar = $('edDrawBar'); if (!bar) return;
+
+  // ── Drag con snap a borde ──
+  let _drag = false, _sx = 0, _sy = 0, _sl = 0, _st = 0;
+  bar.addEventListener('pointerdown', e => {
+    // No iniciar drag si el click fue en un botón
+    if (e.target !== bar && e.target.closest('button')) return;
+    _drag = true;
+    _sx = e.clientX; _sy = e.clientY;
+    _sl = parseInt(bar.style.left) || _edbX;
+    _st = parseInt(bar.style.top)  || _edbY;
+    bar.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, { passive: false });
+
+  bar.addEventListener('pointermove', e => {
+    if (!_drag) return;
+    const dx = e.clientX - _sx, dy = e.clientY - _sy;
+    const W = window.innerWidth, H = window.innerHeight;
+    const bw = bar.offsetWidth || 44, bh = bar.offsetHeight || 200;
+    _edbX = Math.max(0, Math.min(W - bw, _sl + dx));
+    _edbY = Math.max(0, Math.min(H - bh, _st + dy));
+    bar.style.left = _edbX + 'px';
+    bar.style.top  = _edbY + 'px';
+    // Snap visual: horizontal si pegado a borde superior/inferior
+    const nearTop    = _edbY < 60;
+    const nearBottom = _edbY > H - bh - 60;
+    bar.classList.toggle('horiz', nearTop || nearBottom);
+    e.preventDefault();
+  }, { passive: false });
+
+  bar.addEventListener('pointerup', () => { _drag = false; });
+
+  // ── Botones herramienta ──
+  $('edb-pen')?.addEventListener('click', () => {
+    edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
+    _edbSyncTool();
+    // Sincronizar con panel principal si está visible
+    $('op-tool-pen')?.click();
+  });
+  $('edb-eraser')?.addEventListener('click', () => {
+    edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
+    _edbSyncTool();
+    $('op-tool-eraser')?.click();
+  });
+  $('edb-fill')?.addEventListener('click', () => {
+    edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
+    _edbSyncTool();
+    $('op-tool-fill')?.click();
+  });
+
+  // ── Color: abre popover de paleta ──
+  $('edb-color')?.addEventListener('click', e => {
+    e.stopPropagation();
+    _edbTogglePalette();
+  });
+
+  // ── Grosor: toque cicla entre 4 tamaños predefinidos ──
+  const _sizes = [4, 8, 16, 32];
+  $('edb-size')?.addEventListener('click', () => {
+    const isEr = edActiveTool === 'eraser';
+    if (isEr) {
+      const cur = _sizes.findIndex(s => s >= edEraserSize) || 0;
+      edEraserSize = _sizes[(cur + 1) % _sizes.length];
+    } else {
+      const cur = _sizes.findIndex(s => s >= edDrawSize) || 0;
+      edDrawSize = _sizes[(cur + 1) % _sizes.length];
+    }
+    _edbSyncSize();
+    // Sincronizar slider del panel principal si existe
+    const sl = $('op-dsize'); if (sl) { sl.value = isEr ? edEraserSize : edDrawSize; sl.dispatchEvent(new Event('input')); }
+  });
+
+  // ── Deshacer / Rehacer ──
+  $('edb-undo')?.addEventListener('click', () => edDrawUndo());
+  $('edb-redo')?.addEventListener('click', () => edDrawRedo());
+
+  // ── OK: finalizar dibujo ──
+  $('edb-ok')?.addEventListener('click', () => {
+    edDeactivateDrawTool();
+    edDrawBarHide();
+  });
+}
+
+function _edbTogglePalette() {
+  const pop = $('edb-palette-pop');
+  if (!pop) return;
+  if (pop.classList.contains('open')) { _edbClosePalette(); return; }
+  _edbBuildPalette();
+  _edbPositionPalette();
+  pop.classList.add('open');
+  // Cerrar al tocar fuera
+  setTimeout(() => {
+    window._edbPaletteClose = e => {
+      if (!e.target.closest('#edb-palette-pop') && !e.target.closest('#edb-color')) {
+        _edbClosePalette();
+      }
+    };
+    document.addEventListener('pointerdown', window._edbPaletteClose, { once: true });
+  }, 0);
+}
+
+function _edbClosePalette() {
+  $('edb-palette-pop')?.classList.remove('open');
+}
+
+function _edbBuildPalette() {
+  const pop = $('edb-palette-pop'); if (!pop) return;
+  const bar = $('edDrawBar');
+  const isHoriz = bar?.classList.contains('horiz');
+  pop.className = 'edb-palette-pop' + (isHoriz ? ' horiz-pop' : '');
+  pop.id = 'edb-palette-pop';
+  pop.classList.toggle('open', true); // mantener open al reconstruir
+
+  pop.innerHTML = edColorPalette.map((c, i) =>
+    `<button class="edb-pal-dot${c === edDrawColor ? ' current' : ''}"
+      data-colidx="${i}" style="background:${c}" title="${c}"></button>`
+  ).join('') +
+  `<button class="edb-pal-dot edb-pal-custom" data-custom="1" title="Color personalizado">+</button>`;
+
+  pop.querySelectorAll('.edb-pal-dot').forEach(btn => {
+    btn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      if (btn.dataset.custom) {
+        // Abre picker HSL
+        _edbClosePalette();
+        _edShowColorPicker((hex, commit) => {
+          edDrawColor = hex;
+          if (commit) _edUpdatePaletteDots();
+          _edbSyncColor();
+        });
+        return;
+      }
+      const idx = +btn.dataset.colidx;
+      edDrawColor = edColorPalette[idx];
+      _edbSyncColor();
+      // Sincronizar panel principal si está abierto
+      const mainDot = document.querySelector(`.op-pal-dot[data-colidx="${idx}"]`);
+      if (mainDot) mainDot.dispatchEvent(new Event('click'));
+      _edbClosePalette();
+    });
+  });
+}
+
+function _edbPositionPalette() {
+  const pop = $('edb-palette-pop');
+  const bar = $('edDrawBar');
+  const sw  = $('edb-color');
+  if (!pop || !bar || !sw) return;
+
+  const isHoriz = bar.classList.contains('horiz');
+  const br = bar.getBoundingClientRect();
+  const shell = document.getElementById('editorShell');
+  const sr = shell ? shell.getBoundingClientRect() : { left: 0, top: 0 };
+
+  // Mostrar sin visibilidad para medir tamaño
+  pop.style.visibility = 'hidden';
+  pop.style.display = 'flex';
+  const pw = pop.offsetWidth || 44;
+  const ph = pop.offsetHeight || 200;
+  pop.style.display = '';
+  pop.style.visibility = '';
+
+  let left, top;
+  if (isHoriz) {
+    // Barra horizontal → paleta debajo
+    left = br.left - sr.left + (br.width / 2) - pw / 2;
+    top  = br.bottom - sr.top + 6;
+  } else {
+    // Barra vertical → paleta a la derecha
+    left = br.right - sr.left + 6;
+    top  = br.top - sr.top + (br.height / 2) - ph / 2;
+  }
+  // Ajustar para no salir del shell
+  const sw2 = shell ? shell.offsetWidth  : window.innerWidth;
+  const sh2 = shell ? shell.offsetHeight : window.innerHeight;
+  left = Math.max(4, Math.min(sw2 - pw - 4, left));
+  top  = Math.max(4, Math.min(sh2 - ph - 4, top));
+
+  pop.style.left = left + 'px';
+  pop.style.top  = top  + 'px';
+}
+
+
+function _edbSyncTool() {
+  const bar = $('edDrawBar'); if (!bar) return;
+  const t = edActiveTool;
+  $('edb-pen')?.classList.toggle('active', t === 'draw');
+  $('edb-eraser')?.classList.toggle('active', t === 'eraser');
+  $('edb-fill')?.classList.toggle('active', t === 'fill');
+  _edbSyncSize();
+  _edbSyncColor();
+}
+
+function _edbSyncColor() {
+  const sw = $('edb-color'); if (!sw) return;
+  sw.style.background = edDrawColor;
+  sw.style.display = edActiveTool === 'eraser' ? 'none' : '';
+}
+
+function _edbSyncSize() {
+  const dot = $('edb-size-dot'); if (!dot) return;
+  const isEr = edActiveTool === 'eraser';
+  const sz = isEr ? edEraserSize : edDrawSize;
+  // Dot visual entre 6px y 24px según tamaño
+  const d = Math.max(6, Math.min(24, Math.round(sz * 0.6)));
+  dot.style.width  = d + 'px';
+  dot.style.height = d + 'px';
+  const sizebtn = $('edb-size');
+  if (sizebtn) sizebtn.title = (isEr ? edEraserSize : edDrawSize) + 'px';
+}
+
+function edDrawBarShow() {
+  const bar = $('edDrawBar'); if (!bar) return;
+  bar.style.left = _edbX + 'px';
+  bar.style.top  = _edbY + 'px';
+  bar.classList.add('visible');
+  _edbSyncTool();
+}
+
+function edDrawBarHide() {
+  $('edDrawBar')?.classList.remove('visible');
+  _edbClosePalette();
+}
+
+function edDrawBarUpdate() {
+  if (!$('edDrawBar')?.classList.contains('visible')) return;
+  _edbSyncTool();
+}
+
+
 function _edBubbleTailDir(l){
   // Determinar la dirección de la cola del bocadillo para el reader.
   // tailEnd es la punta de la cola en coordenadas relativas al centro del bocadillo.
@@ -3445,6 +3697,7 @@ function EditorView_init(){
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
   edPushHistory();
   edInitFloatDrag();
+  edInitDrawBar();
   // Avisar al usuario si localStorage se llena al guardar
   window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
@@ -3578,7 +3831,10 @@ function EditorView_init(){
       const inMenu    = e.target.closest('#edMenuBar');
       const inTopbar  = e.target.closest('#edTopbar');
       const inFloat   = e.target.closest('#edFloatBtn');
-      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat){
+      const inDrawBar = e.target.closest('#edDrawBar');
+      const inPalPop  = e.target.closest('#edb-palette-pop');
+      const inHSL     = e.target.closest('#ed-hsl-picker');
+      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inPalPop && !inHSL){
         edDeactivateDrawTool();
       }
     }

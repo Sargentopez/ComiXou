@@ -270,6 +270,129 @@ body.editor-page #appView {
 #edFloatBtn:active { cursor: grabbing; }
 
 /* ══════════════════════════════
+   BARRA HERRAMIENTAS DIBUJO (T5)
+   ══════════════════════════════ */
+#edDrawBar {
+  position: absolute;
+  z-index: 51;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 4px;
+  background: rgba(20,20,20,.30);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.25);
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+  left: 64px;
+  top: 12px;
+}
+#edDrawBar.visible { display: flex; }
+#edDrawBar.horiz { flex-direction: row; padding: 4px 6px; }
+#edDrawBar:active { cursor: grabbing; }
+
+.edb-tool {
+  background: none;
+  border: none;
+  font-size: 0.9rem;
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,.75);
+  transition: background .1s, color .1s;
+  padding: 0; line-height: 1;
+}
+.edb-tool.active { background: rgba(255,255,255,.2); color: #fff; }
+.edb-tool:active  { background: rgba(255,255,255,.3); }
+
+.edb-sep {
+  width: 16px; height: 1px;
+  background: rgba(255,255,255,.18);
+  flex-shrink: 0;
+}
+#edDrawBar.horiz .edb-sep { width: 1px; height: 16px; }
+
+/* Swatch de color */
+.edb-swatch {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.45);
+  cursor: pointer;
+  padding: 0; flex-shrink: 0;
+  transition: border-color .1s, transform .12s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.edb-swatch:active { transform: scale(.88); }
+
+/* Dot de grosor */
+.edb-sizebtn {
+  background: none; border: none;
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; border-radius: 6px; padding: 0;
+  transition: background .1s;
+}
+.edb-sizebtn:active { background: rgba(255,255,255,.15); }
+#edb-size-dot {
+  display: block;
+  background: rgba(255,255,255,.85);
+  border-radius: 50%;
+  transition: width .15s, height .15s;
+}
+
+/* OK */
+.edb-ok {
+  background: none; border: none;
+  font-size: 0.85rem; font-weight: 900;
+  color: rgba(120,255,120,.9);
+  width: 26px; height: 26px;
+  border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; transition: background .1s;
+}
+.edb-ok:active { background: rgba(100,255,100,.2); }
+
+/* ── Popover paleta de colores ── */
+#edb-palette-pop {
+  position: absolute;
+  z-index: 52;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 6px;
+  background: rgba(20,20,20,.82);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 10px;
+  box-shadow: 0 3px 12px rgba(0,0,0,.35);
+  /* la posición se calcula por JS */
+}
+#edb-palette-pop.open { display: flex; }
+/* En horiz la paleta se despliega en fila */
+#edb-palette-pop.horiz-pop { flex-direction: row; flex-wrap: wrap; max-width: 180px; }
+
+.edb-pal-dot {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.2);
+  cursor: pointer; padding: 0; flex-shrink: 0;
+  transition: transform .1s, border-color .1s;
+}
+.edb-pal-dot:active  { transform: scale(.85); }
+.edb-pal-dot.current { border-color: #fff; box-shadow: 0 0 0 1px rgba(255,255,255,.6); }
+/* Último dot = abre picker personalizado */
+.edb-pal-custom {
+  background: conic-gradient(red,yellow,lime,cyan,blue,magenta,red) !important;
+  border-color: rgba(255,255,255,.3) !important;
+  font-size: 0.6rem;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 900; text-shadow: 0 0 2px #000;
+}
+
+/* ══════════════════════════════
    CANVAS
    ══════════════════════════════ */
 #editorCanvasWrap {
@@ -985,13 +1108,12 @@ body.editor-page #appView {
   background: var(--white);
   border: 2.5px solid var(--gray-200);
   border-radius: 10px;
-  padding: 8px 8px 6px;
+  padding: 6px 8px 6px;
   cursor: default;
   flex-shrink: 0;
   width: 100px;
   transition: border-color .12s, background .12s, opacity .15s;
   user-select: none;
-  position: relative;
 }
 @media (min-width: 360px) {
   .ed-page-card { width: 108px; }
@@ -1002,23 +1124,31 @@ body.editor-page #appView {
   font-size: 0.7rem;
   font-weight: 900;
   color: var(--gray-500);
-  align-self: flex-start;
+  line-height: 1.6;
 }
 .ed-page-card.current .ed-page-num { color: #ff6600; }
 
-/* Flechas ◀ ▶ en esquina superior derecha, superpuestas */
+/* Cabecera: número + flechas en la misma fila */
+.ed-page-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 2px;
+}
+
+/* Flechas ◀ ▶ en la misma fila que el número */
 .ed-page-arrows {
-  position: absolute;
-  top: 3px;
-  right: 3px;
   display: flex;
   gap: 1px;
+  align-items: center;
 }
 .ed-page-arrows .ed-layer-arrow {
   font-size: 0.6rem;
   padding: 1px 4px;
   min-width: 0;
-  line-height: 1.4;
+  line-height: 1.6;
 }
 
 .ed-page-thumb {

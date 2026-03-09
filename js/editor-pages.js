@@ -181,8 +181,13 @@ function _pgBuildCard(page, idx) {
   actions.appendChild(rotBtn);
   actions.appendChild(delBtn);
 
-  card.appendChild(arrows);
-  card.appendChild(num);
+  // Cabecera: número (izq) + flechas (der) en misma fila
+  const header = document.createElement('div');
+  header.className = 'ed-page-header';
+  header.appendChild(num);
+  header.appendChild(arrows);
+
+  card.appendChild(header);
   card.appendChild(thumb);
   card.appendChild(actions);
 

@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v5.80</footer>
+    <footer class="app-version">v5.88</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -284,6 +284,23 @@ Router.register('editor', {
 
       <!-- ── BOTÓN FLOTANTE (cuando está minimizado) ── -->
       <div id="edFloatBtn" title="Menú">☰</div>
+
+      <!-- ── BARRA HERRAMIENTAS DIBUJO (minimizado + draw activo) ── -->
+      <div id="edDrawBar">
+        <button id="edb-pen"    class="edb-tool" title="Dibujar">✏️</button>
+        <button id="edb-eraser" class="edb-tool" title="Borrar">◻</button>
+        <button id="edb-fill"   class="edb-tool" title="Rellenar">🪣</button>
+        <div class="edb-sep"></div>
+        <button id="edb-color"  class="edb-swatch" title="Color"></button>
+        <button id="edb-size"   class="edb-sizebtn" title="Grosor"><span id="edb-size-dot"></span></button>
+        <div class="edb-sep"></div>
+        <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
+        <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>
+        <div class="edb-sep"></div>
+        <button id="edb-ok"     class="edb-ok" title="Finalizar">✓</button>
+      </div>
+      <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
+      <div id="edb-palette-pop"></div>
 
     </div>
 
