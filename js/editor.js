@@ -824,22 +824,33 @@ function edRedraw(){
   // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
-  // T11: Si hay objeto seleccionado con panel de props abierto, el resto al 50% opacidad
+  // T11: Dimming del resto de capas al editar un objeto o al dibujar
   const _panel = $('edOptionsPanel');
-  const _editingObj = edSelectedIdx >= 0 && _panel?.classList.contains('open') && _panel?.dataset.mode === 'props';
+  const _panelOpen = _panel?.classList.contains('open');
+  // En modo props: dimear todo excepto el objeto seleccionado
+  // En modo draw/eraser/fill: dimear todo excepto el DrawLayer activo
+  const _editingProps = _panelOpen && _panel.dataset.mode === 'props' && edSelectedIdx >= 0;
+  const _editingDraw  = ['draw','eraser','fill'].includes(edActiveTool) && _panelOpen;
+  const _dimming = _editingProps || _editingDraw;
 
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
   // Textos/bocadillos siempre al final (encima de todo).
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
-    const dimmed = _editingObj && i !== edSelectedIdx;
-    edCtx.globalAlpha = (l.opacity ?? 1) * (dimmed ? 0.5 : 1);
+    let dimmed = false;
+    if(_editingProps) dimmed = (i !== edSelectedIdx);
+    else if(_editingDraw) dimmed = (l.type !== 'draw');
+    // Guardar opacity original, aplicar dimming temporalmente, restaurar tras render
+    const _origOpacity = l.opacity;
+    if(dimmed) l.opacity = (l.opacity ?? 1) * 0.5;
     if(l.type==='image')      l.draw(edCtx, edCanvas);
-    else if(l.type==='draw')  l.draw(edCtx);
+    else if(l.type==='draw')  { edCtx.globalAlpha = dimmed ? 0.5 : 1; l.draw(edCtx); edCtx.globalAlpha = 1; }
     else if(l.type==='stroke')l.draw(edCtx);
-    edCtx.globalAlpha = 1;
+    if(dimmed) l.opacity = _origOpacity;
   });
-  edCtx.globalAlpha = _textGroupAlpha * (_editingObj && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble' ? 0.5 : 1);
+  // Textos: dimear si estamos en modo draw, o si hay objeto no-texto seleccionado
+  const _dimTexts = _editingDraw || (_editingProps && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble');
+  edCtx.globalAlpha = _textGroupAlpha * (_dimTexts ? 0.5 : 1);
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
   edDrawSel();
