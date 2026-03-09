@@ -109,6 +109,11 @@ const Router = (() => {
   });
 
   function start() {
+    // Primera visita (localStorage limpio): siempre home, ignorar hash
+    if (!localStorage.getItem('cx_visited')) {
+      localStorage.setItem('cx_visited', '1');
+      _render('home', {}); return;
+    }
     const hash = window.location.hash.replace('#', '');
     if (hash) {
       const [name, id] = hash.split('/');
