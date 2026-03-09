@@ -2689,36 +2689,68 @@ let _edbX = 64, _edbY = 12;  // posición persistente de la barra
 function edInitDrawBar() {
   const bar = $('edDrawBar'); if (!bar) return;
 
-  // ── Drag con snap a borde ──
-  let _drag = false, _sx = 0, _sy = 0, _sl = 0, _st = 0;
-  bar.addEventListener('pointerdown', e => {
-    // No iniciar drag si el click fue en un botón
-    if (e.target !== bar && e.target.closest('button')) return;
+  // ── Drag con long-press (300ms) en touch, inmediato en pointer no-touch ──
+  let _drag = false, _sx = 0, _sy = 0, _sl = 0, _st = 0, _longTimer = null;
+
+  function _edbStartDrag(e) {
     _drag = true;
     _sx = e.clientX; _sy = e.clientY;
     _sl = parseInt(bar.style.left) || _edbX;
     _st = parseInt(bar.style.top)  || _edbY;
+    bar.style.opacity = '1';
     bar.setPointerCapture(e.pointerId);
+  }
+
+  bar.addEventListener('pointerdown', e => {
+    // Ignorar si el click fue directamente en un botón (no en separadores/fondo)
+    if (e.target.closest('button')) return;
     e.preventDefault();
+    if (e.pointerType === 'touch') {
+      // Touch: long-press de 300ms activa el drag
+      _longTimer = setTimeout(() => {
+        _longTimer = null;
+        _edbStartDrag(e);
+        // Feedback háptico si disponible
+        if (navigator.vibrate) navigator.vibrate(30);
+      }, 300);
+    } else {
+      // Mouse/stylus: drag inmediato
+      _edbStartDrag(e);
+    }
   }, { passive: false });
 
   bar.addEventListener('pointermove', e => {
+    // Si el dedo se movió antes del long-press, cancelar timer
+    if (_longTimer && (Math.abs(e.clientX - _sx) > 6 || Math.abs(e.clientY - _sy) > 6)) {
+      clearTimeout(_longTimer); _longTimer = null;
+    }
     if (!_drag) return;
+    e.preventDefault();
     const dx = e.clientX - _sx, dy = e.clientY - _sy;
-    const W = window.innerWidth, H = window.innerHeight;
-    const bw = bar.offsetWidth || 44, bh = bar.offsetHeight || 200;
+    // Límites dentro del editorShell (contenedor real de la barra)
+    const shell = document.getElementById('editorShell');
+    const W = shell ? shell.offsetWidth  : window.innerWidth;
+    const H = shell ? shell.offsetHeight : window.innerHeight;
+    const bw = bar.offsetWidth, bh = bar.offsetHeight;
     _edbX = Math.max(0, Math.min(W - bw, _sl + dx));
     _edbY = Math.max(0, Math.min(H - bh, _st + dy));
     bar.style.left = _edbX + 'px';
     bar.style.top  = _edbY + 'px';
-    // Snap visual: horizontal si pegado a borde superior/inferior
-    const nearTop    = _edbY < 60;
-    const nearBottom = _edbY > H - bh - 60;
-    bar.classList.toggle('horiz', nearTop || nearBottom);
-    e.preventDefault();
+    // Snap visual horizontal si cerca de borde sup/inf
+    bar.classList.toggle('horiz', _edbY < 60 || _edbY > H - bh - 60);
   }, { passive: false });
 
-  bar.addEventListener('pointerup', () => { _drag = false; });
+  bar.addEventListener('pointerup', () => {
+    if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
+    _drag = false;
+    bar.style.opacity = '';
+  });
+
+  bar.addEventListener('pointercancel', () => {
+    if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
+    _drag = false;
+    bar.style.opacity = '';
+  });
 
   // ── Botones herramienta ──
   $('edb-pen')?.addEventListener('click', () => {

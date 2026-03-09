@@ -280,7 +280,7 @@ body.editor-page #appView {
   align-items: center;
   gap: 3px;
   padding: 6px 4px;
-  background: rgba(20,20,20,.30);
+  background: rgba(20,20,20,.40);
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0,0,0,.25);
