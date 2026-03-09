@@ -840,13 +840,23 @@ function edRedraw(){
     let dimmed = false;
     if(_editingProps) dimmed = (i !== edSelectedIdx);
     else if(_editingDraw) dimmed = (l.type !== 'draw');
-    // Guardar opacity original, aplicar dimming temporalmente, restaurar tras render
-    const _origOpacity = l.opacity;
-    if(dimmed) l.opacity = (l.opacity ?? 1) * 0.5;
-    if(l.type==='image')      l.draw(edCtx, edCanvas);
-    else if(l.type==='draw')  { edCtx.globalAlpha = dimmed ? 0.5 : 1; l.draw(edCtx); edCtx.globalAlpha = 1; }
-    else if(l.type==='stroke')l.draw(edCtx);
-    if(dimmed) l.opacity = _origOpacity;
+    const dimFactor = dimmed ? 0.5 : 1;
+    if(l.type==='image'){
+      // ImageLayer.draw() sobreescribe globalAlpha internamente con l.opacity
+      const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
+      l.draw(edCtx, edCanvas);
+      l.opacity = _orig;
+    } else if(l.type==='draw'){
+      // DrawLayer.draw() no usa l.opacity — controlamos globalAlpha directamente
+      edCtx.globalAlpha = dimFactor;
+      l.draw(edCtx);
+      edCtx.globalAlpha = 1;
+    } else if(l.type==='stroke'){
+      // StrokeLayer.draw() tampoco usa l.opacity — controlamos globalAlpha
+      edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
+      l.draw(edCtx);
+      edCtx.globalAlpha = 1;
+    }
   });
   // Textos: dimear si estamos en modo draw, o si hay objeto no-texto seleccionado
   const _dimTexts = _editingDraw || (_editingProps && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble');
