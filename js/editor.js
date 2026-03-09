@@ -2427,6 +2427,7 @@ function edRenderOptionsPanel(mode){
     if(edSelectedIdx<0||edSelectedIdx>=edLayers.length){
       panel.classList.remove('open');panel.innerHTML='';requestAnimationFrame(edFitCanvas);return;
     }
+    panel.dataset.mode = 'props';
     const la=edLayers[edSelectedIdx];
     let html='';
 
