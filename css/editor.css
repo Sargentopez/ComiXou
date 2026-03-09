@@ -413,6 +413,7 @@ body.editor-page #appView {
   touch-action: none;
   user-select: none;
   cursor: default;
+  will-change: transform;  /* capa de compositing — reduce latencia en Android */
   /* Sin borde/sombra — el lienzo se dibuja dentro del canvas via JS */
 }
 #editorCanvas.tool-draw   { cursor: crosshair; }

@@ -1461,7 +1461,7 @@ function edOnStart(e){
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
   const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
   if(_la && _la.type!=='bubble'){
-    const _isT = e.pointerType==='touch';
+    const _isT = e.pointerType==='touch';  // pen actúa como mouse: accede a resize/rotate
     // Medir distancia en pixeles para hit uniform en ambos ejes
     const _pw=edPageW(), _ph=edPageH();
     const hitPx = _isT ? 22 : 14;
@@ -1487,7 +1487,7 @@ function edOnStart(e){
   // Seleccionar: el render sigue el orden del array (mayor índice = encima visualmente).
   // La selección busca de mayor a menor índice — el primero que contenga el punto tocado.
   // Textos/bocadillos siempre encima (se buscan primero independientemente del índice).
-  const _isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  const _isTouch = e.pointerType === 'touch';  // pen (tableta gráfica) se comporta como mouse
   let found = -1;
   // Primero buscar en textos/bocadillos (siempre encima de todo)
   for(let i = edLayers.length - 1; i >= 0; i--){
@@ -1552,7 +1552,7 @@ function edOnStart(e){
 }
 function edOnMove(e){
   // Actualizar _edTouchMoved siempre (para cancelar long-press aunque gestureActive sea false)
-  if(e.pointerType === 'touch' || e.pointerType === 'pen'){
+  if(e.pointerType === 'touch'){
     _edTouchMoved = true;
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
@@ -2029,6 +2029,11 @@ function edStartPaint(e){
   const _pp=$('edOptionsPanel');
   if(_pp&&_pp.classList.contains('open')&&_pp.dataset.mode!=='draw'){
     _pp.classList.remove('open'); _pp.innerHTML='';
+  }
+  // Pointer capture: el canvas recibe todos los eventos del puntero aunque salga de él.
+  // En Android elimina el retraso del sistema antes del primer evento de dibujo.
+  if(e.pointerId !== undefined && edCanvas){
+    try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
   }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const c = edCoords(e), er = edActiveTool==='eraser';
