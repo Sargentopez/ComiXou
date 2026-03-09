@@ -824,17 +824,22 @@ function edRedraw(){
   // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
+  // T11: Si hay objeto seleccionado con panel de props abierto, el resto al 50% opacidad
+  const _panel = $('edOptionsPanel');
+  const _editingObj = edSelectedIdx >= 0 && _panel?.classList.contains('open') && _panel?.dataset.mode === 'props';
+
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
   // Textos/bocadillos siempre al final (encima de todo).
-  edLayers.forEach(l=>{
+  edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
-    edCtx.globalAlpha = l.opacity ?? 1;
+    const dimmed = _editingObj && i !== edSelectedIdx;
+    edCtx.globalAlpha = (l.opacity ?? 1) * (dimmed ? 0.5 : 1);
     if(l.type==='image')      l.draw(edCtx, edCanvas);
     else if(l.type==='draw')  l.draw(edCtx);
     else if(l.type==='stroke')l.draw(edCtx);
     edCtx.globalAlpha = 1;
   });
-  edCtx.globalAlpha = _textGroupAlpha;
+  edCtx.globalAlpha = _textGroupAlpha * (_editingObj && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble' ? 0.5 : 1);
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
   edDrawSel();
