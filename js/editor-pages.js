@@ -1,11 +1,9 @@
 /* ============================================================
    editor-pages.js — Panel de hojas del editor
-   Pantalla completa. Miniaturas de cada hoja, drag reorder,
-   duplicar hoja (se inserta a continuación), eliminar, nueva.
+   Scroll horizontal con flechas ◀ ▶ para reordenar.
    ============================================================ */
 
-let _pgDragIdx  = null;
-let _pgDragOver = null;
+let _pgUidCounter = 0;  // IDs únicos estables para animación FLIP
 
 /* ──────────────────────────────────────────
    ABRIR / CERRAR
@@ -22,7 +20,7 @@ function edOpenPages() {
         <h2 class="ed-fulloverlay-title">Hojas</h2>
         <button class="ed-fulloverlay-close" id="edPagesClose">✕</button>
       </div>
-      <p class="ed-fulloverlay-hint">Arrastra para cambiar el orden de lectura · toca para ir a esa hoja</p>
+      <p class="ed-fulloverlay-hint">Usa ◀ ▶ para cambiar el orden · toca la miniatura para ir a esa hoja</p>
       <div class="ed-pages-grid" id="edPagesGrid"></div>
       <div class="ed-fulloverlay-actions">
         <button class="ed-btn-pri" id="edPagesAdd">+ Nueva hoja</button>
@@ -95,15 +93,45 @@ function _pgRender() {
 }
 
 function _pgBuildCard(page, idx) {
+  // UID estable para animación FLIP
+  if (!page._uid) page._uid = ++_pgUidCounter;
+
   const card = document.createElement('div');
   card.className = 'ed-page-card' + (idx === edCurrentPage ? ' current' : '');
   card.dataset.idx = idx;
-  card.draggable = true;
+  card.dataset.uid = page._uid;
 
-  // Número
+  // Número (esquina superior izquierda)
   const num = document.createElement('div');
   num.className = 'ed-page-num';
   num.textContent = idx + 1;
+
+  // Flechas ◀ ▶ en esquina superior derecha (posición absoluta)
+  const arrows = document.createElement('div');
+  arrows.className = 'ed-page-arrows';
+
+  const leftBtn = document.createElement('button');
+  leftBtn.className = 'ed-layer-arrow';
+  leftBtn.title = 'Mover izquierda';
+  leftBtn.textContent = '◀';
+  leftBtn.disabled = idx === 0;
+  leftBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _pgReorder(idx, idx - 1);
+  });
+
+  const rightBtn = document.createElement('button');
+  rightBtn.className = 'ed-layer-arrow';
+  rightBtn.title = 'Mover derecha';
+  rightBtn.textContent = '▶';
+  rightBtn.disabled = idx === edPages.length - 1;
+  rightBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _pgReorder(idx, idx + 1);
+  });
+
+  arrows.appendChild(leftBtn);
+  arrows.appendChild(rightBtn);
 
   // Miniatura
   const thumb = document.createElement('canvas');
@@ -113,11 +141,10 @@ function _pgBuildCard(page, idx) {
   thumb.height = _thumbOrient === 'vertical' ? 127 : 64;
   _pgDrawThumb(thumb, page);
 
-  // Acciones
+  // Acciones: ⧉ duplicar + rotar + ✕ eliminar
   const actions = document.createElement('div');
   actions.className = 'ed-page-actions';
 
-  // Duplicar
   const dupBtn = document.createElement('button');
   dupBtn.className = 'ed-page-action-btn';
   dupBtn.title = 'Duplicar hoja';
@@ -127,7 +154,6 @@ function _pgBuildCard(page, idx) {
     _pgDuplicate(idx);
   });
 
-  // Rotar orientación
   const rotBtn = document.createElement('button');
   rotBtn.className = 'ed-page-action-btn ed-page-rot';
   const pageOrient = page.orientation || edOrientation;
@@ -138,7 +164,6 @@ function _pgBuildCard(page, idx) {
     _pgRotatePage(idx);
   });
 
-  // Eliminar
   const delBtn = document.createElement('button');
   delBtn.className = 'ed-page-action-btn ed-page-del';
   delBtn.title = 'Eliminar hoja';
@@ -156,40 +181,16 @@ function _pgBuildCard(page, idx) {
   actions.appendChild(rotBtn);
   actions.appendChild(delBtn);
 
+  card.appendChild(arrows);
   card.appendChild(num);
   card.appendChild(thumb);
   card.appendChild(actions);
 
-  // Ir a la hoja al tocar
+  // Ir a la hoja al tocar la miniatura
   thumb.addEventListener('click', () => {
     edLoadPage(idx);
     edClosePages();
   });
-
-  // Drag desktop
-  card.addEventListener('dragstart', e => {
-    _pgDragIdx = idx;
-    card.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-  });
-  card.addEventListener('dragend', () => {
-    card.classList.remove('dragging');
-    document.querySelectorAll('.ed-page-card').forEach(el => el.classList.remove('drag-over'));
-    if (_pgDragIdx !== null && _pgDragOver !== null && _pgDragIdx !== _pgDragOver) {
-      _pgReorder(_pgDragIdx, _pgDragOver);
-    }
-    _pgDragIdx = _pgDragOver = null;
-  });
-  card.addEventListener('dragover', e => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    document.querySelectorAll('.ed-page-card').forEach(el => el.classList.remove('drag-over'));
-    card.classList.add('drag-over');
-    _pgDragOver = idx;
-  });
-
-  // Touch drag mobile
-  _pgBindTouchDrag(card, idx);
 
   return card;
 }
@@ -281,81 +282,85 @@ function _pgDuplicate(idx) {
    REORDENAR
 ────────────────────────────────────────── */
 function _pgReorder(fromIdx, toIdx) {
-  const moved = edPages.splice(fromIdx, 1)[0];
-  edPages.splice(toIdx, 0, moved);
-  // Actualizar página actual
-  if (edCurrentPage === fromIdx) {
-    edCurrentPage = toIdx;
-  } else if (fromIdx < edCurrentPage && edCurrentPage <= toIdx) {
-    edCurrentPage--;
-  } else if (toIdx <= edCurrentPage && edCurrentPage < fromIdx) {
-    edCurrentPage++;
-  }
-  edLayers = edPages[edCurrentPage].layers;
-  edPushHistory();
-  edUpdateNavPages();
-  _pgRender();
+  const pageObj = edPages[fromIdx];
+  _pgAnimatedReorder(pageObj, () => {
+    const moved = edPages.splice(fromIdx, 1)[0];
+    edPages.splice(toIdx, 0, moved);
+    if (edCurrentPage === fromIdx) {
+      edCurrentPage = toIdx;
+    } else if (fromIdx < edCurrentPage && edCurrentPage <= toIdx) {
+      edCurrentPage--;
+    } else if (toIdx <= edCurrentPage && edCurrentPage < fromIdx) {
+      edCurrentPage++;
+    }
+    edLayers = edPages[edCurrentPage].layers;
+    edPushHistory();
+    edUpdateNavPages();
+  });
 }
-
 /* ──────────────────────────────────────────
-   TOUCH DRAG MOBILE
+   ANIMACIÓN FLIP HORIZONTAL — reordenación
 ────────────────────────────────────────── */
-function _pgBindTouchDrag(card, idx) {
-  let startX, startY, active = false;
+function _pgAnimatedReorder(pageObj, doReorder) {
+  const grid = document.getElementById('edPagesGrid');
+  if (!grid) { doReorder(); _pgRender(); return; }
 
-  card.addEventListener('pointerdown', e => {
-    if (e.button !== 0 && e.pointerType === 'mouse') return;
-    startX = e.clientX;
-    startY = e.clientY;
-    active = false;
+  if (!pageObj._uid) pageObj._uid = ++_pgUidCounter;
+  const movedUid = pageObj._uid;
 
-    function onMove(ev) {
-      if (!active) {
-        // Activar drag solo si hay movimiento real (>5px en cualquier dirección)
-        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 5) {
-          active = true;
-          card.classList.add('dragging');
-        }
-        return;
-      }
-      // Detectar tarjeta destino por coordenadas X+Y (cuadrícula)
-      const cards = [...document.querySelectorAll('.ed-page-card')];
-      cards.forEach(el => el.classList.remove('drag-over'));
-      const target = cards.find(el => {
-        if (el === card) return false;
-        const r = el.getBoundingClientRect();
-        return ev.clientX >= r.left && ev.clientX <= r.right &&
-               ev.clientY >= r.top  && ev.clientY <= r.bottom;
+  // FIRST: capturar posición X de todas las cards
+  const snapBefore = new Map();
+  grid.querySelectorAll('[data-uid]').forEach(el => {
+    snapBefore.set(el.dataset.uid, el.getBoundingClientRect().left);
+  });
+
+  if (snapBefore.size === 0) { doReorder(); _pgRender(); return; }
+
+  // Ejecutar reorder + reconstruir
+  doReorder();
+  _pgRender();
+
+  // LAST: calcular deltas X
+  const toAnimate = [];
+  grid.querySelectorAll('[data-uid]').forEach(el => {
+    const uid = el.dataset.uid;
+    if (!snapBefore.has(uid)) return;
+    const delta = snapBefore.get(uid) - el.getBoundingClientRect().left;
+    if (Math.abs(delta) < 2) return;
+    toAnimate.push({ el, delta, isMoved: uid === String(movedUid) });
+  });
+
+  if (toAnimate.length === 0) return;
+
+  // INVERT: colocar en posición anterior sin transición
+  toAnimate.forEach(({ el, delta, isMoved }) => {
+    el.style.transition = 'none';
+    el.style.transform  = 'translateX(' + delta + 'px)';
+    el.style.opacity    = isMoved ? '0.5' : '0.72';
+  });
+
+  // PLAY: doble rAF para forzar paint antes de animar
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      toAnimate.forEach(({ el, isMoved }) => {
+        const dur = isMoved ? 360 : 280;
+        el.style.transition = 'transform ' + dur + 'ms cubic-bezier(.4,0,.2,1), opacity ' + dur + 'ms ease';
+        el.style.transform  = 'translateX(0)';
+        el.style.opacity    = '1';
+        el.addEventListener('transitionend', () => {
+          el.style.transition = '';
+          el.style.transform  = '';
+          el.style.opacity    = '';
+        }, { once: true });
       });
-      if (target) {
-        target.classList.add('drag-over');
-        _pgDragOver = parseInt(target.dataset.idx);
-      } else {
-        _pgDragOver = null;
-      }
-    }
-
-    function onUp() {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup',   onUp);
-      card.classList.remove('dragging');
-      document.querySelectorAll('.ed-page-card').forEach(el => el.classList.remove('drag-over'));
-      if (active && _pgDragOver !== null && _pgDragOver !== idx) {
-        card.classList.add('was-dragged');
-        _pgReorder(idx, _pgDragOver);
-      }
-      _pgDragOver = null;
-      active = false;
-    }
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup',   onUp);
+      // Scroll suave para mantener la hoja movida visible
+      const movedEl = grid.querySelector(`[data-uid="${movedUid}"]`);
+      if (movedEl) movedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    });
   });
 }
 
-/* ──────────────────────────────────────────
-   ICONO DE ORIENTACIÓN Y ROTACIÓN POR HOJA
-────────────────────────────────────────── */
+
 
 // Devuelve un SVG inline que muestra la orientación CONTRARIA (destino del botón)
 function _pgOrientIcon(currentOrient) {
