@@ -2691,35 +2691,42 @@ function edInitDrawBar() {
 
   // ── Drag con long-press (300ms) en touch, inmediato en pointer no-touch ──
   let _drag = false, _sx = 0, _sy = 0, _sl = 0, _st = 0, _longTimer = null;
+  let _edbDragLocked = false;   // true durante drag: bloquea clicks de botones
+  let _edbPid = null;           // pointerId capturado
 
   function _edbStartDrag(e) {
     _drag = true;
+    _edbDragLocked = true;
     _sx = e.clientX; _sy = e.clientY;
     _sl = parseInt(bar.style.left) || _edbX;
     _st = parseInt(bar.style.top)  || _edbY;
-    bar.style.opacity = '0.95';
-    // Ocultar cursor de pincel para que no interfiera con el drag
-    const cur = $('edBrushCursor'); if (cur) cur.style.display = 'none';
-    // Suprimir highlight táctil forzando un reflow mínimo
+    // Feedback visual: fondo más claro indica modo arrastre
+    bar.style.background = 'rgba(80,80,80,0.92)';
     bar.style.willChange = 'transform';
-    bar.setPointerCapture(e.pointerId);
+    const cur = $('edBrushCursor'); if (cur) cur.style.display = 'none';
+    if (_edbPid !== null) { try { bar.setPointerCapture(_edbPid); } catch(_){} }
+    if (navigator.vibrate) navigator.vibrate(30);
   }
 
+  // Bloquear clicks en botones mientras está en modo drag
+  bar.addEventListener('click', e => {
+    if (_edbDragLocked) { e.stopImmediatePropagation(); e.preventDefault(); }
+  }, true);
+
   bar.addEventListener('pointerdown', e => {
-    // Ignorar si el click fue directamente en un botón (no en separadores/fondo)
-    if (e.target.closest('button')) return;
+    _edbPid = e.pointerId;
+    _edbDragLocked = false;
     e.preventDefault();
     if (e.pointerType === 'touch') {
-      // Touch: long-press de 300ms activa el drag
+      // Touch: long-press de 300ms activa el drag desde cualquier punto de la barra
+      _sx = e.clientX; _sy = e.clientY;
       _longTimer = setTimeout(() => {
         _longTimer = null;
         _edbStartDrag(e);
-        // Feedback háptico si disponible
-        if (navigator.vibrate) navigator.vibrate(30);
       }, 300);
     } else {
-      // Mouse/stylus: drag inmediato
-      _edbStartDrag(e);
+      // Mouse/stylus: drag inmediato solo desde fondo (no botones)
+      if (!e.target.closest('button')) _edbStartDrag(e);
     }
   }, { passive: false });
 
@@ -2769,25 +2776,20 @@ function edInitDrawBar() {
     // Esta función se mantiene por si se necesita en el futuro (p.ej. resize de ventana).
   }
 
-  bar.addEventListener('pointerup', () => {
+  function _edbEndDrag() {
     if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
     _drag = false;
-    bar.style.opacity = '';
+    bar.style.background = '';
     bar.style.willChange = '';
+    // Pequeño delay para que el click bloqueado no se propague tras soltar
+    setTimeout(() => { _edbDragLocked = false; }, 50);
     if (['draw','eraser'].includes(edActiveTool)) {
       const cur = $('edBrushCursor'); if (cur) cur.style.display = 'block';
     }
-  });
+  }
 
-  bar.addEventListener('pointercancel', () => {
-    if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
-    _drag = false;
-    bar.style.opacity = '';
-    bar.style.willChange = '';
-    if (['draw','eraser'].includes(edActiveTool)) {
-      const cur = $('edBrushCursor'); if (cur) cur.style.display = 'block';
-    }
-  });
+  bar.addEventListener('pointerup',     _edbEndDrag);
+  bar.addEventListener('pointercancel', _edbEndDrag);
 
   // ── Botones herramienta ──
   $('edb-pen')?.addEventListener('click', () => {
