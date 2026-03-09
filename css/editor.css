@@ -605,16 +605,18 @@ body.editor-page #appView {
 .viewer-controls.hidden { opacity: 0; pointer-events: none; }
 
 .viewer-btn {
-  background: rgba(255,255,255,.15);
-  border: 1.5px solid rgba(255,255,255,.4);
+  background: rgba(0,0,0,.45);
+  border: 1.5px solid rgba(255,255,255,.35);
   border-radius: 100px;
   color: #fff;
   font-family: var(--font-body); font-size: 0.82rem; font-weight: 700;
   padding: 6px 14px; cursor: pointer;
   transition: background .12s;
   white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0,0,0,.8);
+  box-shadow: 0 1px 6px rgba(0,0,0,.4);
 }
-.viewer-btn:active { background: rgba(255,255,255,.3); }
+.viewer-btn:active { background: rgba(0,0,0,.65); }
 
 /* ✕ dentro de la pastilla desktop — sin estilo extra, hereda viewer-btn */
 .viewer-close-inline { /* hereda todo de .viewer-btn */ }
@@ -627,6 +629,10 @@ body.editor-page #appView {
   left: 50%; transform: translateX(-50%);
   z-index: 420;
   pointer-events: all;
+  background: rgba(0,0,0,.6) !important;
+  border: 1.5px solid rgba(255,255,255,.5) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 @media (pointer: coarse) {
   .viewer-close-touch { display: block; }
