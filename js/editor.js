@@ -2843,10 +2843,11 @@ function edInitDrawBar() {
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
-  // ── OK: finalizar dibujo ──
+  // ── OK: finalizar dibujo — cierra tool, limpia estado y vuelve al menú normal ──
   $('edb-ok')?.addEventListener('click', () => {
-    edDeactivateDrawTool();
-    edDrawBarHide();
+    window._edMinimizedDrawMode = null;  // evitar que edMaximize restaure el panel draw
+    edDeactivateDrawTool();              // activa 'select', cierra panel y barra
+    edMaximize();                        // restaura menús completos
   });
 }
 
