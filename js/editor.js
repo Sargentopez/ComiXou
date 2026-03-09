@@ -2697,7 +2697,11 @@ function edInitDrawBar() {
     _sx = e.clientX; _sy = e.clientY;
     _sl = parseInt(bar.style.left) || _edbX;
     _st = parseInt(bar.style.top)  || _edbY;
-    bar.style.opacity = '1';
+    bar.style.opacity = '0.95';
+    // Ocultar cursor de pincel para que no interfiera con el drag
+    const cur = $('edBrushCursor'); if (cur) cur.style.display = 'none';
+    // Suprimir highlight táctil forzando un reflow mínimo
+    bar.style.willChange = 'transform';
     bar.setPointerCapture(e.pointerId);
   }
 
@@ -2720,14 +2724,12 @@ function edInitDrawBar() {
   }, { passive: false });
 
   bar.addEventListener('pointermove', e => {
-    // Si el dedo se movió antes del long-press, cancelar timer
     if (_longTimer && (Math.abs(e.clientX - _sx) > 6 || Math.abs(e.clientY - _sy) > 6)) {
       clearTimeout(_longTimer); _longTimer = null;
     }
     if (!_drag) return;
     e.preventDefault();
     const dx = e.clientX - _sx, dy = e.clientY - _sy;
-    // Límites dentro del editorShell (contenedor real de la barra)
     const shell = document.getElementById('editorShell');
     const W = shell ? shell.offsetWidth  : window.innerWidth;
     const H = shell ? shell.offsetHeight : window.innerHeight;
@@ -2736,20 +2738,55 @@ function edInitDrawBar() {
     _edbY = Math.max(0, Math.min(H - bh, _st + dy));
     bar.style.left = _edbX + 'px';
     bar.style.top  = _edbY + 'px';
-    // Snap visual horizontal si cerca de borde sup/inf
-    bar.classList.toggle('horiz', _edbY < 60 || _edbY > H - bh - 60);
+    // Snap de orientación: solo cambia al ENTRAR en zona de borde, nunca al salir
+    const SNAP = 48;
+    const wasHoriz = bar.classList.contains('horiz');
+    const shellRect = shell ? shell.getBoundingClientRect() : { left: 0, top: 0 };
+    const px = e.clientX - shellRect.left;
+    const py = e.clientY - shellRect.top;
+    const distPtrTB = Math.min(py, H - py);
+    const distPtrLR = Math.min(px, W - px);
+    // Solo actuar si el puntero está dentro del rango de algún borde
+    if (distPtrTB < SNAP || distPtrLR < SNAP) {
+      const shouldHoriz = distPtrTB <= distPtrLR;
+      if (shouldHoriz !== wasHoriz) {
+        bar.classList.toggle('horiz', shouldHoriz);
+        // Reajustar origen del drag para compensar el nuevo tamaño
+        const newBw = bar.offsetWidth, newBh = bar.offsetHeight;
+        const adjX = (bw - newBw) / 2, adjY = (bh - newBh) / 2;
+        _sl += adjX; _st += adjY;
+        _edbX = Math.max(0, Math.min(W - newBw, _edbX + adjX));
+        _edbY = Math.max(0, Math.min(H - newBh, _edbY + adjY));
+        bar.style.left = _edbX + 'px';
+        bar.style.top  = _edbY + 'px';
+      }
+    }
+    // Fuera de rango: mantener orientación sin tocarla
   }, { passive: false });
+
+  function _edbApplySnap() {
+    // La orientación ya se gestiona en tiempo real durante el drag.
+    // Esta función se mantiene por si se necesita en el futuro (p.ej. resize de ventana).
+  }
 
   bar.addEventListener('pointerup', () => {
     if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
     _drag = false;
     bar.style.opacity = '';
+    bar.style.willChange = '';
+    if (['draw','eraser'].includes(edActiveTool)) {
+      const cur = $('edBrushCursor'); if (cur) cur.style.display = 'block';
+    }
   });
 
   bar.addEventListener('pointercancel', () => {
     if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
     _drag = false;
     bar.style.opacity = '';
+    bar.style.willChange = '';
+    if (['draw','eraser'].includes(edActiveTool)) {
+      const cur = $('edBrushCursor'); if (cur) cur.style.display = 'block';
+    }
   });
 
   // ── Botones herramienta ──

@@ -286,9 +286,14 @@ body.editor-page #appView {
   box-shadow: 0 2px 10px rgba(0,0,0,.25);
   touch-action: none;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
   cursor: grab;
   left: 64px;
   top: 12px;
+}
+#edDrawBar * {
+  -webkit-tap-highlight-color: transparent;
 }
 #edDrawBar.visible { display: flex; }
 #edDrawBar.horiz { flex-direction: row; padding: 4px 6px; }
