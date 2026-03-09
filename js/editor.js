@@ -1431,6 +1431,14 @@ function edOnStart(e){
   edHideContextMenu();
   if(edActiveTool === 'fill'){
     if(tgt !== edCanvas) return;
+    // En touch/pen: guardar coordenadas y esperar a pointerup para confirmar
+    // que fue toque simple y no inicio de pinch
+    if(e.pointerType === 'touch'){
+      window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      return;
+    }
+    // Mouse/pen: ejecutar inmediatamente
     const c = edCoords(e);
     edFloodFill(c.nx, c.ny);
     return;
@@ -1663,6 +1671,13 @@ function edOnEnd(e){
     return;
   }
   if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); }
+  // Fill touch: confirmar solo si no hubo pinch (solo 1 puntero activo al soltar)
+  if(edActiveTool === 'fill' && window._edFillPending){
+    const fp = window._edFillPending; window._edFillPending = null;
+    if(fp.pid === e?.pointerId && (!window._edActivePointers || window._edActivePointers.size === 0)){
+      edFloodFill(fp.nx, fp.ny);
+    }
+  }
   clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   window._edLongPressReady = false;
@@ -3661,6 +3676,9 @@ function EditorView_init(){
   // (los overlays están en body, fuera del shell).
   const _shell = document.getElementById('editorShell');
   if(_shell) _shell.style.touchAction = 'none';
+  // Bloquear menú contextual dentro del editor — impide "Guardar imagen como..."
+  // que disparan los botones laterales del lápiz/stylus en PC (estándar en Krita, Figma, etc.)
+  if(_shell) _shell.addEventListener('contextmenu', e => { e.preventDefault(); }, { passive: false });
   window._edListeners = [
     [document, 'pointerdown',  edOnStart, {passive:false}],
     [document, 'pointermove',  edOnMove,  {passive:false}],
