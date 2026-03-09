@@ -227,6 +227,15 @@ function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
       const w = la.width * scaleX, h = la.height * scaleY;
       const px = la.x * scaleX,   py = la.y * scaleY;
       ctx.drawImage(la.img, px - w/2, py - h/2, w, h);
+    } else if (la.type === 'stroke' && la._canvas) {
+      // Dibujos congelados: escalar el canvas del stroke a la miniatura
+      const w = la.width * scaleX, h = la.height * scaleY;
+      const px = la.x * scaleX,   py = la.y * scaleY;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate((la.rotation || 0) * Math.PI / 180);
+      ctx.drawImage(la._canvas, -w/2, -h/2, w, h);
+      ctx.restore();
     } else if (la.type === 'text' || la.type === 'bubble') {
       const w = la.width * scaleX, h = la.height * scaleY;
       const px = la.x * scaleX,   py = la.y * scaleY;

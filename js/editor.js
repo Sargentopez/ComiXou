@@ -21,9 +21,10 @@ let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
+let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
-let edFloatX = 16, edFloatY = 200; // posición del botón flotante
+let edFloatX = 12, edFloatY = 12; // posición del botón flotante (esquina superior izquierda)
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
 let edPinchCenter0 = null, edPinchCamera0 = null;
@@ -2128,6 +2129,13 @@ function edCloseOptionsPanel(){
    COLOR PICKER PROPIO (táctil/Android)
    Muestra overlay HSL con sliders al 100% por defecto
    ══════════════════════════════════════════ */
+function _edUpdatePaletteDots(){
+  document.querySelectorAll('.op-pal-dot').forEach(d=>{
+    const idx=parseInt(d.dataset.colidx);
+    d.style.background=edColorPalette[idx];
+    d.style.borderColor=edColorPalette[idx]===edDrawColor?'var(--black)':'var(--gray-300)';
+  });
+}
 function _hexToHsl(hex){
   let r=parseInt(hex.slice(1,3),16)/255,g=parseInt(hex.slice(3,5),16)/255,b=parseInt(hex.slice(5,7),16)/255;
   const max=Math.max(r,g,b),min=Math.min(r,g,b);
@@ -2234,10 +2242,10 @@ function edRenderOptionsPanel(mode){
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
     ${!isEr ? `
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
-      <div id="op-color-swatch"
-        style="width:26px;height:26px;border-radius:50%;background:${edDrawColor};border:2px solid var(--gray-300);cursor:pointer"></div>
-      <input type="color" id="op-dcolor" value="${edDrawColor}"
-        style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
+      <button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="Color personalizado">🎨
+        <input type="color" id="op-dcolor" value="${edDrawColor}"
+          style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
+      </button>
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${!isFill ? `
@@ -2262,9 +2270,7 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
 
   </div>
-  <!-- SEP H -->
-  <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <!-- FILA 3: Acciones -->
+  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:2px solid ${c===edDrawColor?'var(--black)':'var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
     <button id="op-draw-del"
       style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
@@ -2297,13 +2303,13 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('fill');
     });
 
-    // ── Color: swatch abre picker propio en táctil, nativo en PC ──
-    $('op-color-swatch')?.addEventListener('click',()=>{
+    // ── Color: botón arcoíris abre picker propio en táctil, nativo en PC ──
+    $('op-custom-color-btn')?.addEventListener('click',()=>{
       if(edLastPointerIsTouch){
         _edShowColorPicker((hex, final)=>{
           edDrawColor = hex;
-          const sw=$('op-color-swatch');
-          if(sw) sw.style.background=edDrawColor;
+          if(final){ edColorPalette[edColorPalette.length-1] = hex; }
+          _edUpdatePaletteDots();
           const info=$('op-draw-info');
           if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
         });
@@ -2312,11 +2318,21 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('op-dcolor')?.addEventListener('input',e=>{
-      edDrawColor=e.target.value;
-      const sw=$('op-color-swatch');
-      if(sw) sw.style.background=edDrawColor;
+      edDrawColor = e.target.value;
+      edColorPalette[edColorPalette.length-1] = edDrawColor;
+      _edUpdatePaletteDots();
       const info=$('op-draw-info');
       if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
+    });
+    // Dots de la paleta
+    document.querySelectorAll('.op-pal-dot').forEach(dot=>{
+      dot.addEventListener('click',()=>{
+        const idx = parseInt(dot.dataset.colidx);
+        edDrawColor = edColorPalette[idx];
+        _edUpdatePaletteDots();
+        const info=$('op-draw-info');
+        if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
+      });
     });
 
     // ── Grosor: botón toggle abre/cierra slider ──

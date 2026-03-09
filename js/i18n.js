@@ -35,7 +35,7 @@ const TRANSLATIONS = {
     // Confirmaciones
     confirmUnpublish: "¿Retirar esta obra del índice?\n\nPodrás seguir editándola desde \"Crear\" → \"Mis creaciones\".",
     confirmDelete:    "Si eliminas este proyecto, ya no podrás acceder a él.\n\nSi solo quieres que no esté publicado pero quieres seguir editándolo, elige \"Dejar de publicar\".",
-    confirmDeleteAccount: "Si eliminas tu cuenta se borrarán todos tus datos y cómics.\n\nEsta acción no se puede deshacer.",
+    confirmDeleteAccount: "Si eliminas tu cuenta se borrarán todos tus datos y obras.\n\nEsta acción no se puede deshacer.",
     unpublishOk:      "Obra retirada del índice",
     deleteOk:         "Obra eliminada",
 
@@ -86,7 +86,7 @@ const TRANSLATIONS = {
     tailLeft:         "← Izquierda",
 
     // Reader
-    endOfComic:       "¡Fin del cómic!",
+    endOfComic:       "¡Fin de la obra!",
 
     // Admin
     pendingTab:       "Pendientes de aprobación",
@@ -100,15 +100,15 @@ const TRANSLATIONS = {
     noUsers:          "No hay usuarios registrados.",
     noWork:           "Sin título",
     workNotFound:     "Obra no encontrada",
-    panelOf:          "Viñeta {n} de {total}",
+    panelOf:          "Hoja {n} de {total}",
     draft:            "Borrador",
     published2:       "Publicada",
-    panelWord:        "viñeta",
-    panelsWord:       "viñetas",
+    panelWord:        "hoja",
+    panelsWord:       "hojas",
     noPermission:     "No tienes permiso para editar esta obra",
     writeTitle:       "Escribe un título",
-    selectPanelFirst: "Selecciona una viñeta primero",
-    blockExists:      "Ya existe un bloque de ese tipo en esta viñeta",
+    selectPanelFirst: "Selecciona una hoja primero",
+    blockExists:      "Ya existe un bloque de ese tipo en esta hoja",
     newWorkEmpty:     "Aún no tienes ninguna obra.\n¡Crea la primera!",
     workRemovedHome:  "Obra retirada",
     workDeleted:      "Obra eliminada",
@@ -142,9 +142,9 @@ const TRANSLATIONS = {
     unpublish:        "Unpublish",
     delete:           "Delete",
 
-    confirmUnpublish: "Remove this comic from the index?\n\nYou can keep editing it from \"Create\" → \"My comics\".",
+    confirmUnpublish: "Remove this work from the index?\n\nYou can keep editing it from \"Create\" → \"My works\".",
     confirmDelete:    "If you delete this project you won\'t be able to access it anymore.\n\nIf you just want it unlisted but still editable, choose \"Unpublish\".",
-    confirmDeleteAccount: "Deleting your account will remove all your data and comics.\n\nThis action cannot be undone.",
+    confirmDeleteAccount: "Deleting your account will remove all your data and works.\n\nThis action cannot be undone.",
     unpublishOk:      "Work removed from index",
     deleteOk:         "Work deleted",
 
@@ -192,7 +192,7 @@ const TRANSLATIONS = {
     tailBottom:       "↓ Bottom",
     tailLeft:         "← Left",
 
-    endOfComic:       "End of comic!",
+    endOfComic:       "End of work!",
 
     pendingTab:       "Pending approval",
     publishedTab:     "Published",
