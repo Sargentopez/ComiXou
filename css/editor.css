@@ -984,9 +984,10 @@ body.editor-page #appView {
   cursor: default;
   width: calc(33.33% - 8px);
   min-width: 88px;
-  transition: border-color .12s, opacity .15s;
+  transition: border-color .12s, background .12s, opacity .15s;
   user-select: none;
   position: relative;
+  touch-action: none;
 }
 @media (min-width: 360px) {
   .ed-page-card { width: calc(33.33% - 8px); }

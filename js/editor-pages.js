@@ -301,39 +301,55 @@ function _pgReorder(fromIdx, toIdx) {
    TOUCH DRAG MOBILE
 ────────────────────────────────────────── */
 function _pgBindTouchDrag(card, idx) {
-  let startY, startIdx;
+  let startX, startY, active = false;
 
-  card.addEventListener('touchstart', e => {
-    startY = e.touches[0].clientY;
-    startIdx = idx;
-    // Solo activar drag si toca y mantiene 300ms
-    card._touchTimer = setTimeout(() => {
-      card.classList.add('dragging');
-    }, 300);
-  }, { passive: true });
+  card.addEventListener('pointerdown', e => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    startX = e.clientX;
+    startY = e.clientY;
+    active = false;
 
-  card.addEventListener('touchmove', e => {
-    clearTimeout(card._touchTimer);
-    if (!card.classList.contains('dragging')) return;
-    e.preventDefault();
-    const y = e.touches[0].clientY;
-    const cards = [...document.querySelectorAll('.ed-page-card')];
-    cards.forEach(el => el.classList.remove('drag-over'));
-    const target = cards.find(el => {
-      const r = el.getBoundingClientRect();
-      return y >= r.top && y <= r.bottom;
-    });
-    if (target) { target.classList.add('drag-over'); _pgDragOver = parseInt(target.dataset.idx); }
-  }, { passive: false });
-
-  card.addEventListener('touchend', () => {
-    clearTimeout(card._touchTimer);
-    card.classList.remove('dragging');
-    document.querySelectorAll('.ed-page-card').forEach(el => el.classList.remove('drag-over'));
-    if (_pgDragOver !== null && startIdx !== _pgDragOver) {
-      _pgReorder(startIdx, _pgDragOver);
+    function onMove(ev) {
+      if (!active) {
+        // Activar drag solo si hay movimiento real (>5px en cualquier dirección)
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 5) {
+          active = true;
+          card.classList.add('dragging');
+        }
+        return;
+      }
+      // Detectar tarjeta destino por coordenadas X+Y (cuadrícula)
+      const cards = [...document.querySelectorAll('.ed-page-card')];
+      cards.forEach(el => el.classList.remove('drag-over'));
+      const target = cards.find(el => {
+        if (el === card) return false;
+        const r = el.getBoundingClientRect();
+        return ev.clientX >= r.left && ev.clientX <= r.right &&
+               ev.clientY >= r.top  && ev.clientY <= r.bottom;
+      });
+      if (target) {
+        target.classList.add('drag-over');
+        _pgDragOver = parseInt(target.dataset.idx);
+      } else {
+        _pgDragOver = null;
+      }
     }
-    _pgDragOver = null;
+
+    function onUp() {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup',   onUp);
+      card.classList.remove('dragging');
+      document.querySelectorAll('.ed-page-card').forEach(el => el.classList.remove('drag-over'));
+      if (active && _pgDragOver !== null && _pgDragOver !== idx) {
+        card.classList.add('was-dragged');
+        _pgReorder(idx, _pgDragOver);
+      }
+      _pgDragOver = null;
+      active = false;
+    }
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup',   onUp);
   });
 }
 
