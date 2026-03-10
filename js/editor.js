@@ -1688,6 +1688,8 @@ function edOnStart(e){
   if(window._edActivePointers.size === 2){
     // Cancelar fill pendiente — era un pinch, no un toque simple
     if(window._edFillPending) window._edFillPending = null;
+    // Cancelar primer toque pendiente de multiselect
+    window._edMsTouchStart = null;
     // Si estaba pintando, cancelar el trazo parcial sin guardarlo
     if(edPainting){
       edPainting = false;
@@ -1718,8 +1720,24 @@ function edOnStart(e){
       const bb = edMultiBbox;
       if(bb){
         const grRad = edMultiGroupRot * Math.PI / 180;
-        // ── Hit handle rotación ──
-        // El handle está en espacio local (0, -bh/2 - 28/z) rotado por grRad
+        const _isTouch = e.pointerType === 'touch';
+
+        // ── En táctil: el primer dedo NUNCA decide la operación en pointerdown ──
+        // Puede ser el inicio de un pinch (escala/giro) o un drag de un solo dedo.
+        // Guardamos la posición inicial y esperamos a ver qué ocurre en pointermove.
+        // Si llega un segundo dedo → edPinchStart lo convierte en pinch automáticamente.
+        // Si solo hay un dedo y se mueve → edOnMove lo convierte en drag.
+        // Si es un tap sin movimiento → edOnEnd lo detecta como tap y desactiva.
+        if(_isTouch){
+          // Guardar posición inicial para que edOnMove pueda iniciar drag si solo hay un dedo
+          window._edMsTouchStart = { nx: c.nx, ny: c.ny };
+          // Pre-calcular offsets de drag por si el movimiento lo confirma
+          edMultiDragOffs = edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+          return;
+        }
+
+        // ── PC/ratón: hit-test completo con handles ──
+        // Hit handle rotación
         const _offWs = bb.h*ph/2 + 28/edCamera.z;
         const rotHx = bb.cx + Math.sin(grRad)*_offWs/pw;
         const rotHy = bb.cy - Math.cos(grRad)*_offWs/ph;
@@ -1733,8 +1751,7 @@ function edOnStart(e){
           };
           return;
         }
-        // ── Hit handle escala ──
-        // Desrotar cursor al espacio local del bbox
+        // Hit handle escala
         const cg=Math.cos(-grRad), sg=Math.sin(-grRad);
         const dcxPx=(c.nx-bb.cx)*pw, dcyPx=(c.ny-bb.cy)*ph;
         const lxCur = bb.cx + (dcxPx*cg - dcyPx*sg)/pw;
@@ -1746,14 +1763,14 @@ function edOnStart(e){
               items: edMultiSel.map(i=>({i, x:edLayers[i].x, y:edLayers[i].y, w:edLayers[i].width, h:edLayers[i].height})),
               bb: {cx:bb.cx, cy:bb.cy, w:bb.w, h:bb.h},
               corner: p.c,
-              sx: lxCur, sy: lyCur,   // cursor inicial en espacio local
+              sx: lxCur, sy: lyCur,
               groupRot: edMultiGroupRot,
               _curSx: 1, _curSy: 1,
             };
             return;
           }
         }
-        // ── Hit dentro del bbox → drag ──
+        // Hit dentro del bbox → drag
         const lxD=(dcxPx*cg - dcyPx*sg)/pw;
         const lyD=(dcxPx*sg + dcyPx*cg)/ph;
         if(Math.abs(lxD)<=bb.w/2 && Math.abs(lyD)<=bb.h/2){
@@ -1763,8 +1780,14 @@ function edOnStart(e){
         }
       }
     }
-    // Nada tocado → desactivar si había selección, o iniciar rubber band
+    // Nada tocado → en PC desactivar; en táctil guardar posición (podría ser inicio de pinch)
     if(edMultiSel.length){
+      if(e.pointerType === 'touch'){
+        // Táctil: no desactivar todavía, guardar posición inicial
+        window._edMsTouchStart = { nx: c.nx, ny: c.ny };
+        edMultiDragOffs = edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+        return;
+      }
       _edDeactivateMultiSel();
     } else {
       _msClear();
@@ -1914,6 +1937,15 @@ function edOnMove(e){
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
     const c=edCoords(e);
+    // Táctil: primer dedo moviéndose con un solo puntero → confirmar drag
+    // (si hubiera llegado un segundo dedo, _edActivePointers.size sería 2 y ya habría retornado)
+    if(window._edMsTouchStart && !edMultiDragging && !edPinching &&
+       window._edActivePointers && window._edActivePointers.size === 1){
+      window._edMsTouchStart = null;
+      if(edMultiSel.length && edMultiDragOffs.length){
+        edMultiDragging = true;
+      }
+    }
     if(edRubberBand){
       e.preventDefault();
       edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
@@ -2139,8 +2171,12 @@ function edOnEnd(e){
     }
     if(edMultiDragging||edMultiResizing||edMultiRotating){
       if(edMultiSel.length&&window._edMoved) edPushHistory();
-      // Siempre recalcular al soltar — mantiene bbox ajustado para el siguiente gesto
       if(edMultiSel.length) _msRecalcBbox();
+    }
+    // Táctil: si _edMsTouchStart aún existe → fue un tap sin movimiento → desactivar selección
+    if(window._edMsTouchStart){
+      window._edMsTouchStart = null;
+      if(!_edTouchMoved) _edDeactivateMultiSel();
     }
     edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
     edMultiDragOffs=[]; window._edMoved=false;
@@ -2203,14 +2239,7 @@ function _edDrawApplyHistory(dataUrl){
   }
 }
 function edDrawUndo(){
-  if(edDrawHistoryIdx <= 0){
-    if(edDrawHistoryIdx === 0 && edDrawHistory.length > 0){
-      // Estamos en el estado base — restaurar y no ir más atrás
-      _edDrawApplyHistory(edDrawHistory[0]);
-      _edDrawUpdateUndoRedoBtns(); return;
-    }
-    edToast('Nada que deshacer'); return;
-  }
+  if(edDrawHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
   edDrawHistoryIdx--;
   _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx]);
   _edDrawUpdateUndoRedoBtns();
@@ -2825,6 +2854,8 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <button id="op-draw-minimize"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize+'px':edDrawSize+'px')+' · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
@@ -2930,6 +2961,9 @@ function edRenderOptionsPanel(mode){
     $('op-draw-undo')?.addEventListener('click', edDrawUndo);
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
     _edDrawUpdateUndoRedoBtns();
+
+    // ── Minimizar (desde el panel draw) ──
+    $('op-draw-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
 
     // ── OK: congelar ──
     $('op-draw-ok')?.addEventListener('click',()=>{
