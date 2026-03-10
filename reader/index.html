@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>ComiXow — Lector</title>
+  <meta name="description" content="Reproductor de obras ComiXow">
+  <meta name="theme-color" content="#111111">
+  <link rel="stylesheet" href="reader.css">
+</head>
+<body>
+
+  <!-- ── PANTALLA DE CARGA ── -->
+  <div id="loadingScreen" class="loading-screen">
+    <div class="loading-logo">ComiXow</div>
+    <div class="loading-spinner"></div>
+    <div id="loadingMsg" class="loading-msg">Cargando obra...</div>
+  </div>
+
+  <!-- ── PANTALLA DE ERROR ── -->
+  <div id="errorScreen" class="error-screen hidden">
+    <div class="error-card">
+      <div class="error-icon">📭</div>
+      <h2>Obra no disponible</h2>
+      <p id="errorMsg">Esta obra no existe o no está publicada.</p>
+      <a href="https://comixow.github.io" class="btn-home">Ir a ComiXow</a>
+    </div>
+  </div>
+
+  <!-- ── REPRODUCTOR ── -->
+  <div id="readerApp" class="reader-page hidden">
+
+    <!-- Barra superior (solo PC) -->
+    <div class="reader-topbar">
+      <a href="javascript:history.back()" class="reader-home-btn" title="Volver">🏠</a>
+      <div class="reader-info">
+        <span id="readerTitle" class="reader-comic-title"></span>
+        <span id="readerPanelNum" class="reader-panel-num">1 / 1</span>
+      </div>
+      <span id="readerAuthor" class="reader-author-label"></span>
+    </div>
+
+    <!-- Stage: donde se muestran las páginas -->
+    <div id="readerStage" class="reader-stage"></div>
+
+    <!-- Flechas navegación PC -->
+    <button id="prevBtn" class="reader-arrow reader-arrow-left"  aria-label="Anterior">‹</button>
+    <button id="nextBtn" class="reader-arrow reader-arrow-right" aria-label="Siguiente">›</button>
+
+    <!-- Hint de swipe (móvil) -->
+    <div id="swipeHint" class="swipe-hint">👆 Toca o desliza para avanzar</div>
+
+    <!-- Overlay de fin de obra -->
+    <div id="endOverlay" class="reader-end-overlay hidden">
+      <div class="end-card">
+        <div class="end-icon">🎉</div>
+        <h2>¡FIN!</h2>
+        <div class="end-actions">
+          <button id="restartBtn" class="btn-restart">↺ Volver a empezar</button>
+          <a href="javascript:history.back()" class="btn-home">🏠 Volver</a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="reader.js"></script>
+</body>
+</html>
