@@ -1492,10 +1492,6 @@ function _pinchCenter(pMap){
 }
 function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
-  // DIAGNÓSTICO TEMPORAL
-  const _dbg = `PinchStart: tool=${edActiveTool} multiSel=${edMultiSel.length} bbox=${!!edMultiBbox} pinching=${edPinching}`;
-  edToast(_dbg);
-  console.log(_dbg);
   edPinching    = true;
   edPinchDist0  = _pinchDist(window._edActivePointers);
   edPinchAngle0 = _pinchAngle(window._edActivePointers);
@@ -1523,10 +1519,8 @@ function edPinchStart(e) {
       groupRot: edMultiGroupRot,
       bbox: { ...edMultiBbox },
     };
-    edToast('→ MODO GRUPO'); // DIAGNÓSTICO
   } else {
     window._edPinchMulti = null;
-    edToast(`→ CÁMARA (tool=${edActiveTool} sel=${edMultiSel.length} bbox=${!!edMultiBbox})`); // DIAGNÓSTICO
   }
   return true;
 }
@@ -1988,6 +1982,13 @@ function edOnMove(e){
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
+    // Con 2+ dedos: saltar directamente al pinch de grupo — no procesar drag ni resize
+    if(window._edActivePointers && window._edActivePointers.size >= 2){
+      if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
+      e.preventDefault();
+      if(window._edPinchMulti) edPinchMove(e);
+      return;
+    }
     const c=edCoords(e);
     if(edRubberBand){
       e.preventDefault();
