@@ -2081,13 +2081,11 @@ function edOnMove(e){
   }
   // ─────────────────────────────────────────────────────────
 
-  // Sin gesto activo → ignorar el resto
-  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edMsRubber||!!edMsGesture;
-  if(!gestureActive) return;
-  e.preventDefault();
-  // Pinch activo
+  // Pinch activo — debe comprobarse ANTES del guard gestureActive
+  // (el primer dedo puede no tener gesto activo aún cuando llega el segundo)
   if(window._edActivePointers && window._edActivePointers.size >= 2){
     if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
+    e.preventDefault();
     // Con multiselección activa: pinch afecta SOLO al grupo — nunca a la cámara
     if(edActiveTool==='multiselect' && edMultiSel.length && window._edPinchMulti){
       edPinchMove(e);
@@ -2099,6 +2097,11 @@ function edOnMove(e){
     }
     return;
   }
+
+  // Sin gesto activo → ignorar el resto
+  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edMsRubber||!!edMsGesture;
+  if(!gestureActive) return;
+  e.preventDefault();
   if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
   if(edActiveTool==='fill'){edMoveBrush(e);return;}
