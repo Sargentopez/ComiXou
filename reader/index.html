@@ -4,68 +4,57 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>ComiXow — Lector</title>
-  <meta name="description" content="Reproductor de obras ComiXow">
   <meta name="theme-color" content="#111111">
   <link rel="stylesheet" href="reader.css">
 </head>
 <script>
-  // Desregistrar el Service Worker del SPA para que no intercepte este reproductor
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(regs => {
-      regs.forEach(r => r.unregister());
-    });
-  }
+  if ('serviceWorker' in navigator)
+    navigator.serviceWorker.getRegistrations().then(r => r.forEach(s => s.unregister()));
 </script>
 <body>
 
-  <!-- ── PANTALLA DE CARGA ── -->
+  <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">ComiXow</div>
     <div class="loading-spinner"></div>
     <div id="loadingMsg" class="loading-msg">Cargando obra...</div>
   </div>
 
-  <!-- ── PANTALLA DE ERROR ── -->
+  <!-- ERROR -->
   <div id="errorScreen" class="error-screen hidden">
     <div class="error-card">
       <div class="error-icon">📭</div>
       <h2>Obra no disponible</h2>
       <p id="errorMsg">Esta obra no existe o no está publicada.</p>
-      <a href="https://comixow.github.io" class="btn-home">Ir a ComiXow</a>
+      <a href="javascript:history.back()" class="btn-yellow">Volver</a>
     </div>
   </div>
 
-  <!-- ── REPRODUCTOR ── -->
-  <div id="readerApp" class="reader-page hidden">
+  <!-- REPRODUCTOR -->
+  <div id="readerApp" class="reader-app hidden">
 
-    <!-- Barra superior (solo PC) -->
-    <div class="reader-topbar">
-      <a href="javascript:history.back()" class="reader-home-btn" title="Volver">🏠</a>
-      <div class="reader-info">
-        <span id="readerTitle" class="reader-comic-title"></span>
-        <span id="readerPanelNum" class="reader-panel-num">1 / 1</span>
-      </div>
-      <span id="readerAuthor" class="reader-author-label"></span>
+    <!-- Canvas — toda la obra se renderiza aquí -->
+    <canvas id="readerCanvas"></canvas>
+
+    <!-- Controles flotantes desktop (pastilla inferior) -->
+    <div id="viewerControls" class="viewer-controls">
+      <button id="prevBtn"  class="ctrl-btn" aria-label="Anterior">&#8249;</button>
+      <span   id="readerCounter" class="ctrl-counter">1 / 1</span>
+      <button id="nextBtn"  class="ctrl-btn" aria-label="Siguiente">&#8250;</button>
+      <button id="closeBtn" class="ctrl-btn ctrl-close" aria-label="Cerrar">&#x2715;</button>
     </div>
 
-    <!-- Stage: donde se muestran las páginas -->
-    <div id="readerStage" class="reader-stage"></div>
+    <!-- Botón cerrar móvil (centrado abajo, solo cuando no hay pastilla) -->
+    <button id="closeMobileBtn" class="close-mobile" aria-label="Cerrar">&#x2715;</button>
 
-    <!-- Flechas navegación PC -->
-    <button id="prevBtn" class="reader-arrow reader-arrow-left"  aria-label="Anterior">‹</button>
-    <button id="nextBtn" class="reader-arrow reader-arrow-right" aria-label="Siguiente">›</button>
-
-    <!-- Hint de swipe (móvil) -->
-    <div id="swipeHint" class="swipe-hint">👆 Toca o desliza para avanzar</div>
-
-    <!-- Overlay de fin de obra -->
-    <div id="endOverlay" class="reader-end-overlay hidden">
+    <!-- Fin de obra -->
+    <div id="endOverlay" class="end-overlay hidden">
       <div class="end-card">
-        <div class="end-icon">🎉</div>
+        <div class="end-icon">&#127881;</div>
         <h2>¡FIN!</h2>
         <div class="end-actions">
-          <button id="restartBtn" class="btn-restart">↺ Volver a empezar</button>
-          <a href="javascript:history.back()" class="btn-home">🏠 Volver</a>
+          <button id="restartBtn" class="btn-yellow">&#8635; Volver a empezar</button>
+          <a href="javascript:history.back()" class="btn-outline">&#127968; Volver</a>
         </div>
       </div>
     </div>

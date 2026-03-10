@@ -1,337 +1,386 @@
 /* ============================================================
    ComiXow Reader — Reproductor externo standalone
-   Lee datos de Supabase. No depende del SPA.
+   Canvas idéntico al visor interno del editor.
    ============================================================ */
 
-// ── CONFIGURACIÓN SUPABASE ──────────────────────────────────
 const SUPABASE_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
-// ── ESTADO DEL REPRODUCTOR ──────────────────────────────────
+// Dimensiones canónicas (igual que el editor)
+const ED_PAGE_W = 720;
+const ED_PAGE_H = 1280;
+
+// ── ESTADO ──────────────────────────────────────────────────
 const RS = {
-  work:            null,   // datos de la obra (title, author_name, nav_mode)
-  panels:          [],     // array de paneles con sus textos
-  currentPanel:    0,
-  currentBubbleIdx: -1,
-  animating:       false,
-  _keyHandler:     null,
+  panels:     [],   // [{id, orientation, text_mode, data_url, texts:[]}]
+  images:     [],   // Image objects precargados
+  idx:        0,    // panel actual
+  textStep:   0,    // bocadillo visible (sequential)
+  fadeAlpha:  0,    // alpha bocadillo anterior
+  fadeRaf:    null,
+  canvas:     null,
+  ctx:        null,
+  ctrlTimer:  null,
+  ac:         null,
+  keyHandler: null,
+  resizeFn:   null,
 };
 
-// ── ARRANQUE ────────────────────────────────────────────────
+// ── ARRANQUE ─────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   const id = new URLSearchParams(window.location.search).get('id');
   if (!id) { showError('No se indicó ninguna obra. Comprueba el enlace.'); return; }
   loadWork(id);
 });
 
-// ── CARGA DESDE SUPABASE ────────────────────────────────────
+// ── CARGA DESDE SUPABASE ─────────────────────────────────────
 async function loadWork(workId) {
   setLoadingMsg('Cargando obra...');
   try {
-    // 1. Datos de la obra
-    const work = await sbGet(`works?id=eq.${workId}&published=eq.true`);
-    if (!work || work.length === 0) { showError('Esta obra no existe o no está publicada.'); return; }
-    RS.work = work[0];
+    const work = await sbGet('works?id=eq.' + workId + '&published=eq.true');
+    if (!work || !work.length) { showError('Esta obra no existe o no está publicada.'); return; }
 
-    // 2. Paneles ordenados
     setLoadingMsg('Cargando páginas...');
-    const panels = await sbGet(`panels?work_id=eq.${workId}&order=panel_order.asc`);
-    if (!panels || panels.length === 0) { showError('Esta obra no tiene páginas publicadas.'); return; }
+    const panels = await sbGet('panels?work_id=eq.' + workId + '&order=panel_order.asc');
+    if (!panels || !panels.length) { showError('Esta obra no tiene páginas publicadas.'); return; }
 
-    // 3. Textos de todos los paneles (una sola petición)
     const panelIds = panels.map(p => p.id).join(',');
-    const texts = await sbGet(`panel_texts?panel_id=in.(${panelIds})&order=text_order.asc`);
+    const texts    = await sbGet('panel_texts?panel_id=in.(' + panelIds + ')&order=text_order.asc');
 
-    // 4. Combinar: asignar los textos a cada panel
     RS.panels = panels.map(panel => ({
       ...panel,
-      texts: (texts || []).filter(t => t.panel_id === panel.id),
+      texts: (texts || [])
+        .filter(t => t.panel_id === panel.id)
+        .sort((a,b) => (a.text_order||0) - (b.text_order||0)),
     }));
 
+    document.title = (work[0].title || 'Obra') + ' — ComiXow';
+
+    setLoadingMsg('Preparando imágenes...');
+    await preloadImages();
     startReader();
 
-  } catch (err) {
-    console.error('Error cargando obra:', err);
+  } catch(err) {
+    console.error('Error:', err);
     showError('Error de conexión. Comprueba tu internet e inténtalo de nuevo.');
   }
 }
 
-// Helper: fetch a la API REST de Supabase
+async function preloadImages() {
+  RS.images = await Promise.all(RS.panels.map(p => new Promise(resolve => {
+    if (!p.data_url) { resolve(null); return; }
+    const img = new Image();
+    img.onload  = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = p.data_url;
+  })));
+}
+
 async function sbGet(path) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: {
-      'apikey':        SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-    }
+  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
+    headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
   });
-  if (!res.ok) throw new Error(`Supabase error ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error('Supabase ' + res.status);
   return res.json();
 }
 
-// ── INICIAR REPRODUCTOR ─────────────────────────────────────
+// ── INICIAR ───────────────────────────────────────────────────
 function startReader() {
-  // Ocultar carga, mostrar reproductor
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
 
-  // Título y autor en la barra
-  document.getElementById('readerTitle').textContent  = RS.work.title || 'Sin título';
-  document.getElementById('readerAuthor').textContent = RS.work.author_name ? `por ${RS.work.author_name}` : '';
+  RS.canvas = document.getElementById('readerCanvas');
+  RS.ctx    = RS.canvas.getContext('2d');
+  RS.idx    = 0;
+  RS.textStep = _initTextStep(0);
 
-  // Título de la pestaña del navegador
-  document.title = `${RS.work.title || 'Obra'} — ComiXow`;
+  _resizeCanvas();
+  _render();
+  _showControls();
+  _setupControls();
 
-  buildPanelElements();
-  goToPanel(0);
-  setupControls();
-  showSwipeHint();
+  RS.resizeFn = () => { _resizeCanvas(); _render(); };
+  window.addEventListener('resize', RS.resizeFn);
 }
 
-// ── CONSTRUIR ELEMENTOS HTML DE CADA PANEL ──────────────────
-function buildPanelElements() {
-  const stage = document.getElementById('readerStage');
-  stage.innerHTML = '';
+// ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
+function _panelDims(idx) {
+  const isH = (RS.panels[idx]?.orientation || 'v') === 'h';
+  return { pw: isH ? ED_PAGE_H : ED_PAGE_W, ph: isH ? ED_PAGE_W : ED_PAGE_H };
+}
 
-  RS.panels.forEach((panel, idx) => {
-    const div = document.createElement('div');
-    div.className = 'reader-panel orient-' + (panel.orientation || 'v');
-    div.id = 'rp_' + idx;
+function _resizeCanvas() {
+  const { pw, ph } = _panelDims(RS.idx);
+  RS.canvas.width  = pw;
+  RS.canvas.height = ph;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const scale = Math.min(vw / pw, vh / ph);
+  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+  RS.canvas.style.width  = dw + 'px';
+  RS.canvas.style.height = dh + 'px';
+  RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
+  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
+}
 
-    const inner = document.createElement('div');
-    inner.className = 'reader-panel-inner';
+// ── RENDER PRINCIPAL ──────────────────────────────────────────
+function _render() {
+  const panel = RS.panels[RS.idx];
+  if (!panel || !RS.ctx) return;
+  const { pw, ph } = _panelDims(RS.idx);
+  const ctx = RS.ctx;
 
-    const img = document.createElement('img');
-    img.className = 'reader-panel-img';
-    if (panel.data_url) img.src = panel.data_url;
-    img.draggable = false;
-    inner.appendChild(img);
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
 
-    const textLayer = document.createElement('div');
-    textLayer.className = 'reader-text-layer';
-    buildTexts(panel, textLayer);
-    inner.appendChild(textLayer);
+  const img = RS.images[RS.idx];
+  if (img) ctx.drawImage(img, 0, 0, pw, ph);
 
-    div.appendChild(inner);
-    stage.appendChild(div);
+  _drawTexts(ctx, panel, pw, ph);
+  _updateCounter();
+}
+
+// ── TEXTOS / BOCADILLOS ───────────────────────────────────────
+function _drawTexts(ctx, panel, pw, ph) {
+  const texts = panel.texts || [];
+  if (!texts.length) return;
+
+  const isSeq = (panel.text_mode || 'sequential') === 'sequential';
+  if (!isSeq) {
+    texts.forEach(t => _drawBubble(ctx, t, pw, ph, 1));
+    return;
+  }
+  // Modo sequential: solo hasta textStep, con fade del anterior
+  const toShow = texts.slice(0, RS.textStep);
+  toShow.forEach((t, vi) => {
+    const isCur  = vi === toShow.length - 1;
+    const isPrev = vi === toShow.length - 2;
+    if (isCur)                           _drawBubble(ctx, t, pw, ph, 1);
+    else if (isPrev && RS.fadeAlpha > 0) _drawBubble(ctx, t, pw, ph, RS.fadeAlpha);
   });
 }
 
-function buildTexts(panel, layer) {
-  if (!panel.texts || panel.texts.length === 0) return;
+function _drawBubble(ctx, t, pw, ph, alpha) {
+  const x  = (t.x / 100) * pw;
+  const y  = (t.y / 100) * ph;
+  const w  = ((t.w || 30) / 100) * pw;
+  const fs = Math.max(10, Math.round((t.font_size || 16) * (pw / ED_PAGE_W)));
+  const bg     = t.bg           || '#ffffff';
+  const border = t.border_color || '#000000';
+  const bw     = (t.border !== undefined && t.border !== null) ? t.border : 2;
 
-  const items = panel.texts
-    .filter(t => t.text)
-    .sort((a, b) => (a.text_order || 0) - (b.text_order || 0));
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = fs + 'px ' + (t.font_family || 'Arial, sans-serif');
 
-  items.forEach((t, i) => {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'reader-bubble' + (t.type !== 'dialog' ? ' reader-textbox' : '');
-    wrapper.style.left  = t.x + '%';
-    wrapper.style.top   = t.y + '%';
-    wrapper.style.width = (t.w || 30) + '%';
-    wrapper.dataset.bubbleIdx = i;
+  const lines = _wrapText(ctx, t.text || '', w - 20);
+  const lh    = fs * 1.38;
+  const h     = lines.length * lh + 20;
+  const r     = _bubbleRadius(t);
 
-    const inner = document.createElement('div');
-    inner.className = 'reader-bubble-inner' + (t.type !== 'dialog' ? ' reader-textbox-inner' : '');
-    inner.style.fontFamily   = t.font_family || 'Arial';
-    inner.style.fontSize     = Math.round((t.font_size || 18) * 0.85) + 'px';
-    inner.style.color        = t.color || '#000';
-    inner.style.background   = t.bg || '#fff';
-    inner.style.borderWidth  = (t.border || 2) + 'px';
-    inner.style.borderColor  = t.border_color || '#000';
-    inner.style.borderStyle  = t.style === 'lowvoice' ? 'dashed' : 'solid';
+  // Fondo
+  ctx.beginPath();
+  _rrect(ctx, x, y, w, h, r);
+  ctx.fillStyle = bg;
+  ctx.fill();
 
-    if      (t.style === 'explosion') { inner.style.borderRadius = '4px'; inner.style.transform = 'rotate(-1deg)'; }
-    else if (t.style === 'thought')   { inner.style.borderRadius = '50%'; }
-    else if (t.type !== 'dialog')     { inner.style.borderRadius = '6px'; }
-    else                              { inner.style.borderRadius = '14px'; }
+  // Borde
+  if (bw > 0) {
+    ctx.strokeStyle = border;
+    ctx.lineWidth   = bw;
+    if (t.style === 'lowvoice') ctx.setLineDash([6, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
-    inner.appendChild(Object.assign(document.createElement('span'), { textContent: t.text }));
+  // Cola del bocadillo
+  if (t.type === 'dialog' && t.style !== 'thought' && t.style !== 'radio') {
+    _drawTail(ctx, t, x, y, w, h, bg, border, bw);
+  }
 
-    // Cola del bocadillo (solo para dialog que no sea thought ni radio)
-    if (t.type === 'dialog' && t.style !== 'thought' && t.style !== 'radio') {
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svg.setAttribute('class', 'reader-tail tail-' + (t.tail || 'bottom'));
-      svg.setAttribute('viewBox', '0 0 30 22');
-      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      p.setAttribute('d', 'M0 0 L15 22 L30 0 Z');
-      p.setAttribute('fill', t.bg || 'white');
-      p.setAttribute('stroke', t.border_color || 'black');
-      p.setAttribute('stroke-width', '2.5');
-      p.setAttribute('stroke-linejoin', 'round');
-      svg.appendChild(p);
-      inner.appendChild(svg);
-    }
+  // Texto
+  ctx.fillStyle    = t.color || '#000000';
+  ctx.textBaseline = 'top';
+  lines.forEach((line, i) => ctx.fillText(line, x + 10, y + 10 + i * lh));
 
-    wrapper.appendChild(inner);
-    layer.appendChild(wrapper);
+  ctx.restore();
+}
+
+function _bubbleRadius(t) {
+  if (t.type === 'text')        return 6;
+  if (t.style === 'thought')    return 999;
+  if (t.style === 'explosion')  return 4;
+  return 14;
+}
+
+function _drawTail(ctx, t, x, y, w, h, bg, border, bw) {
+  const tail = t.tail || 'bottom';
+  const cx = x + w / 2;
+  const tw = 18, th = 16;
+  let p1, p2, p3;
+
+  if      (tail === 'bottom') { p1=[cx-tw/2, y+h];      p2=[cx, y+h+th];       p3=[cx+tw/2, y+h];      }
+  else if (tail === 'top')    { p1=[cx-tw/2, y];         p2=[cx, y-th];         p3=[cx+tw/2, y];         }
+  else if (tail === 'left')   { p1=[x, y+h/2-tw/2];     p2=[x-th, y+h/2];     p3=[x, y+h/2+tw/2];     }
+  else                        { p1=[x+w, y+h/2-tw/2];   p2=[x+w+th, y+h/2];   p3=[x+w, y+h/2+tw/2];   }
+
+  ctx.beginPath();
+  ctx.moveTo(...p1); ctx.lineTo(...p2); ctx.lineTo(...p3);
+  ctx.closePath();
+  ctx.fillStyle = bg; ctx.fill();
+  if (bw > 0) { ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke(); }
+}
+
+function _rrect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w/2, h/2);
+  ctx.moveTo(x+rr, y);
+  ctx.lineTo(x+w-rr, y);   ctx.arcTo(x+w, y,   x+w, y+rr,   rr);
+  ctx.lineTo(x+w, y+h-rr); ctx.arcTo(x+w, y+h, x+w-rr, y+h, rr);
+  ctx.lineTo(x+rr, y+h);   ctx.arcTo(x,   y+h, x, y+h-rr,   rr);
+  ctx.lineTo(x, y+rr);     ctx.arcTo(x,   y,   x+rr, y,      rr);
+  ctx.closePath();
+}
+
+function _wrapText(ctx, text, maxW) {
+  const words = String(text).split(' ');
+  const lines = [];
+  let cur = '';
+  words.forEach(w => {
+    const test = cur ? cur + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; }
+    else { cur = test; }
   });
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
 }
 
-// ── NAVEGACIÓN ───────────────────────────────────────────────
-function goToPanel(idx) {
-  if (RS.animating) return;
-  if (idx < 0 || idx >= RS.panels.length) return;
-
-  RS.animating = true;
-
-  const prevIdx    = RS.currentPanel;
-  const prevOrient = RS.panels[prevIdx]?.orientation || 'v';
-  const nextOrient = RS.panels[idx]?.orientation     || 'v';
-  const orientChanges = prevOrient !== nextOrient;
-
-  const prevEl = document.getElementById('rp_' + prevIdx);
-  const nextEl = document.getElementById('rp_' + idx);
-
-  RS.currentPanel      = idx;
-  RS.currentBubbleIdx  = -1;
-  document.getElementById('readerPanelNum').textContent = (idx + 1) + ' / ' + RS.panels.length;
-
-  if (orientChanges) {
-    if (prevEl) { prevEl.style.transition = 'opacity 0.2s ease'; prevEl.style.opacity = '0'; }
-    if (nextEl) {
-      nextEl.classList.remove('active');
-      nextEl.classList.remove('orient-h', 'orient-v');
-      nextEl.classList.add('orient-' + prevOrient);
-      nextEl.style.opacity = '1'; nextEl.style.transform = 'rotate(0deg)';
-      nextEl.style.transition = 'none'; nextEl.style.pointerEvents = 'none';
-    }
-    setTimeout(() => {
-      if (nextEl) {
-        nextEl.classList.add('active');
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          const deg = nextOrient === 'v' ? 90 : -90;
-          nextEl.style.transition = `transform 0.65s cubic-bezier(0.4,0,0.1,1), opacity 0.15s ease`;
-          nextEl.style.transform  = `rotate(${deg}deg)`;
-        }));
-      }
-    }, 200);
-    setTimeout(() => {
-      if (nextEl) {
-        nextEl.style.transition = 'none'; nextEl.style.transform = 'rotate(0deg)';
-        nextEl.classList.remove('orient-' + prevOrient);
-        nextEl.classList.add('orient-' + nextOrient);
-        nextEl.style.pointerEvents = '';
-        setTimeout(() => { nextEl.style.transition = ''; }, 50);
-      }
-      RS.animating = false;
-      _showBubblesForPanel(idx);
-      requestOrientationLock(nextOrient);
-    }, 950);
-
-  } else {
-    if (prevEl) prevEl.classList.remove('active');
-    if (nextEl) nextEl.classList.add('active');
-    setTimeout(() => {
-      RS.animating = false;
-      _showBubblesForPanel(idx);
-      requestOrientationLock(nextOrient);
-    }, 100);
-  }
-}
-
-function _showBubblesForPanel(idx) {
-  const panel  = RS.panels[idx];
-  const mode   = panel?.text_mode || 'sequential';
-  const panelEl = document.getElementById('rp_' + idx);
-  if (!panelEl) return;
-  const bubbles = panelEl.querySelectorAll('.reader-bubble');
-  if (bubbles.length === 0) return;
-
-  if (mode === 'sequential') {
-    bubbles[0].classList.add('visible');
-    RS.currentBubbleIdx = 0;
-  } else {
-    bubbles.forEach((b, i) => setTimeout(() => b.classList.add('visible'), i * 80));
-    RS.currentBubbleIdx = bubbles.length - 1;
-  }
-}
-
-function showNextBubble() {
-  const panelEl = document.getElementById('rp_' + RS.currentPanel);
-  if (!panelEl) return false;
-  const bubbles = panelEl.querySelectorAll('.reader-bubble');
-  const next    = RS.currentBubbleIdx + 1;
-  if (next < bubbles.length) {
-    bubbles[next].classList.add('visible');
-    RS.currentBubbleIdx = next;
-    return true;
-  }
-  return false;
+// ── NAVEGACIÓN ────────────────────────────────────────────────
+function _initTextStep(idx) {
+  const p = RS.panels[idx];
+  return ((p?.text_mode || 'sequential') === 'sequential' && (p?.texts || []).length > 0) ? 1 : 0;
 }
 
 function advance() {
-  const panel = RS.panels[RS.currentPanel];
+  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
+  const panel = RS.panels[RS.idx];
+  const tl    = panel?.texts || [];
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
-  if (isSeq && showNextBubble()) return;
 
-  const next = RS.currentPanel + 1;
-  if (next >= RS.panels.length) {
-    document.getElementById('endOverlay').classList.remove('hidden');
-    return;
+  if (isSeq && RS.textStep < tl.length) {
+    _startFade(); RS.textStep++; _render(); return;
   }
-  goToPanel(next);
+  if (RS.idx < RS.panels.length - 1) {
+    RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
+    _resizeCanvas(); _render();
+  } else {
+    document.getElementById('endOverlay').classList.remove('hidden');
+  }
 }
 
 function goBack() {
-  if (RS.currentPanel > 0) goToPanel(RS.currentPanel - 1);
+  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
+  const panel = RS.panels[RS.idx];
+  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
+
+  if (isSeq && RS.textStep > 1) { RS.textStep--; RS.fadeAlpha = 0; _render(); return; }
+  if (RS.idx > 0) {
+    RS.idx--;
+    const pp = RS.panels[RS.idx];
+    RS.textStep  = (pp?.text_mode || 'sequential') === 'sequential' ? (pp?.texts || []).length : 0;
+    RS.fadeAlpha = 0;
+    _resizeCanvas(); _render();
+  }
 }
 
-// ── CONTROLES ────────────────────────────────────────────────
-function setupControls() {
-  document.getElementById('nextBtn')?.addEventListener('click', advance);
-  document.getElementById('prevBtn')?.addEventListener('click', goBack);
+function _startFade() {
+  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
+  RS.fadeAlpha   = 1;
+  const start    = performance.now();
+  const duration = 400;
+  function step(now) {
+    const t = Math.min(1, (now - start) / duration);
+    RS.fadeAlpha = 1 - t;
+    _render();
+    if (t < 1) RS.fadeRaf = requestAnimationFrame(step);
+    else { RS.fadeRaf = null; RS.fadeAlpha = 0; _render(); }
+  }
+  RS.fadeRaf = requestAnimationFrame(step);
+}
+
+// ── CONTROLES ─────────────────────────────────────────────────
+function _updateCounter() {
+  const el    = document.getElementById('readerCounter');
+  if (!el) return;
+  const panel = RS.panels[RS.idx];
+  const tl    = panel?.texts || [];
+  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
+  el.textContent = (isSeq && tl.length)
+    ? (RS.idx+1) + '/' + RS.panels.length + ' · \uD83D\uDCAC' + RS.textStep + '/' + tl.length
+    : (RS.idx+1) + ' / ' + RS.panels.length;
+}
+
+function _showControls() {
+  const ctrls = document.getElementById('viewerControls');
+  if (!ctrls) return;
+  ctrls.classList.remove('hidden');
+  clearTimeout(RS.ctrlTimer);
+  RS.ctrlTimer = setTimeout(() => ctrls.classList.add('hidden'), 3500);
+}
+
+function _setupControls() {
+  document.getElementById('nextBtn')?.addEventListener('click',  advance);
+  document.getElementById('prevBtn')?.addEventListener('click',  goBack);
+  document.getElementById('closeBtn')?.addEventListener('click', () => history.back());
+  document.getElementById('closeMobileBtn')?.addEventListener('click', () => history.back());
   document.getElementById('restartBtn')?.addEventListener('click', () => {
     document.getElementById('endOverlay').classList.add('hidden');
-    goToPanel(0);
+    RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
+    _resizeCanvas(); _render();
   });
 
-  RS._keyHandler = (e) => {
-    if (['ArrowRight', 'Space', 'Enter'].includes(e.code)) { e.preventDefault(); advance(); }
-    if (e.code === 'ArrowLeft') goBack();
+  // Teclado PC
+  RS.keyHandler = e => {
+    if (['ArrowRight','ArrowDown','Space','Enter'].includes(e.code)) { e.preventDefault(); advance(); }
+    if (['ArrowLeft','ArrowUp'].includes(e.code))                    { e.preventDefault(); goBack(); }
+    if (e.key === 'Escape') history.back();
   };
-  document.addEventListener('keydown', RS._keyHandler);
+  document.addEventListener('keydown', RS.keyHandler);
 
-  // Swipe y tap en móvil
-  const stage = document.getElementById('readerStage');
-  let tx = 0, ty = 0, tt = 0;
-  stage.addEventListener('touchstart', (e) => {
-    tx = e.touches[0].clientX;
-    ty = e.touches[0].clientY;
-    tt = Date.now();
-  }, { passive: true });
-  stage.addEventListener('touchend', (e) => {
-    const dx   = e.changedTouches[0].clientX - tx;
-    const dy   = e.changedTouches[0].clientY - ty;
-    const dt   = Date.now() - tt;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dt < 300 && dist < 15) { advance(); return; }
-    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
-      if (dx < 0) advance(); else goBack();
-    }
-  }, { passive: true });
+  // Mouse — mostrar controles al mover
+  RS.canvas.addEventListener('mousemove',  () => _showControls(), { passive: true });
+  RS.canvas.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse') _showControls(); }, { passive: true });
+
+  // Swipe táctil con AbortController (evita acumulación de listeners)
+  RS.ac = new AbortController();
+  const sig = { signal: RS.ac.signal };
+  let sx = null, sy = null, cancelled = false;
+
+  RS.canvas.addEventListener('touchstart', e => {
+    sx = null; sy = null; cancelled = false;
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    _showControls();
+  }, { passive: true, ...sig });
+
+  RS.canvas.addEventListener('touchmove', e => {
+    if (sx === null) return;
+    const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) cancelled = true;
+  }, { passive: true, ...sig });
+
+  RS.canvas.addEventListener('touchend', e => {
+    if (sx === null || cancelled) { sx = null; return; }
+    const dx = e.changedTouches[0].clientX - sx;
+    const dy = e.changedTouches[0].clientY - sy;
+    sx = null;
+    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) { advance(); return; } // tap
+    if (Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
+    if (dx < 0) advance(); else goBack();
+  }, { passive: true, ...sig });
 }
 
-// ── ORIENTACIÓN ──────────────────────────────────────────────
-function requestOrientationLock(orient) {
-  if (!screen.orientation?.lock) return;
-  screen.orientation.lock(orient === 'v' ? 'portrait' : 'landscape').catch(() => {});
-}
-
-// ── SWIPE HINT ───────────────────────────────────────────────
-function showSwipeHint() {
-  const hint = document.getElementById('swipeHint');
-  if (!hint) return;
-  setTimeout(() => { hint.style.opacity = '0'; }, 2500);
-  setTimeout(() => { hint.style.display = 'none'; }, 3200);
-}
-
-// ── UI HELPERS ───────────────────────────────────────────────
-function setLoadingMsg(msg) {
-  const el = document.getElementById('loadingMsg');
-  if (el) el.textContent = msg;
-}
-
+// ── UI HELPERS ────────────────────────────────────────────────
+function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }
 function showError(msg) {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('errorScreen').classList.remove('hidden');
