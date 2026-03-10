@@ -938,9 +938,9 @@ function edDrawMultiSel(){
   edCtx.strokeRect(-bw/2, -bh/2, bw, bh);
   edCtx.setLineDash([]);
 
-  // En táctil: handles visibles igual que en PC
-  const _drawHandles = true;
-  if(true){
+  // En táctil: handles invisibles — la interacción es solo por gestos (pinch)
+  const _drawHandles = !edLastPointerIsTouch;
+  if(!edLastPointerIsTouch){
     // Handles de escala (en espacio local)
     const corners=[
       [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
@@ -1746,6 +1746,11 @@ function edOnStart(e){
   if(window._edActivePointers.size === 2){
     // Cancelar fill pendiente — era un pinch, no un toque simple
     if(window._edFillPending) window._edFillPending = null;
+    // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
+    if(edActiveTool==='multiselect' && edMultiSel.length){
+      edMultiDragging=false; edMultiDragOffs=[];
+      edMultiResizing=false; edMultiRotating=false;
+    }
     // Si estaba pintando, cancelar el trazo parcial sin guardarlo
     if(edPainting){
       edPainting = false;
@@ -1821,7 +1826,10 @@ function edOnStart(e){
     }
     // Nada tocado → desactivar si había selección, o iniciar rubber band
     if(edMultiSel.length){
-      _edDeactivateMultiSel();
+      // En táctil: NO desactivar al tocar fuera — el usuario puede estar iniciando un pinch
+      // Solo el botón de multiselección puede desactivar la selección en táctil
+      if(!edLastPointerIsTouch) _edDeactivateMultiSel();
+      // En táctil: simplemente ignorar — esperar al posible segundo dedo
     } else {
       _msClear();
       edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
@@ -2080,7 +2088,15 @@ function edOnMove(e){
   // Pinch activo
   if(window._edActivePointers && window._edActivePointers.size >= 2){
     if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
-    edPinchMove(e);
+    // Con multiselección activa: pinch afecta SOLO al grupo — nunca a la cámara
+    if(edActiveTool==='multiselect' && edMultiSel.length && window._edPinchMulti){
+      edPinchMove(e);
+      return;
+    }
+    // Sin multiselección activa: comportamiento normal (cámara u objeto individual)
+    if(edActiveTool!=='multiselect'){
+      edPinchMove(e);
+    }
     return;
   }
   if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
