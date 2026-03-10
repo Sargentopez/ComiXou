@@ -938,9 +938,9 @@ function edDrawMultiSel(){
   edCtx.strokeRect(-bw/2, -bh/2, bw, bh);
   edCtx.setLineDash([]);
 
-  // En táctil: handles invisibles (transparentes) pero el hit-test sigue activo
-  const _drawHandles = !edLastPointerIsTouch;
-  if(!edLastPointerIsTouch){
+  // En táctil: handles visibles igual que en PC
+  const _drawHandles = true;
+  if(true){
     // Handles de escala (en espacio local)
     const corners=[
       [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
@@ -1507,8 +1507,6 @@ function edPinchStart(e) {
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
     edPinchScale0 = null; // no usar modo objeto individual
-    // Cancelar drag de grupo si estaba activo (primer dedo había iniciado drag)
-    edMultiDragging = false; edMultiDragOffs = [];
     window._edPinchMulti = {
       items: edMultiSel.map(i=>({
         i,
@@ -1976,8 +1974,6 @@ function edOnMove(e){
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
-    // Si hay pinch activo (2 dedos), ceder control a edPinchMove — no procesar drag
-    if(edPinching || (window._edActivePointers && window._edActivePointers.size >= 2)) return;
     const c=edCoords(e);
     if(edRubberBand){
       e.preventDefault();
