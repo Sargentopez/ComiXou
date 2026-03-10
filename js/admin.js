@@ -113,6 +113,10 @@ function buildAdminRow(comic, mode) {
     const c = ComicStore.getById(comic.id);
     c.approved = true; c.published = true; c.pendingReview = false;
     ComicStore.save(c);
+    if (typeof SupabaseClient !== 'undefined') {
+      SupabaseClient.approveWork(c)
+        .catch(err => console.warn('Supabase approveWork:', err));
+    }
     showToast(I18n.t('approveOk'));
     renderTab('pending');
   });
@@ -121,6 +125,10 @@ function buildAdminRow(comic, mode) {
     const c = ComicStore.getById(comic.id);
     c.published = false;
     ComicStore.save(c);
+    if (typeof SupabaseClient !== 'undefined') {
+      SupabaseClient.unpublishWork(c.id)
+        .catch(err => console.warn('Supabase unpublishWork:', err));
+    }
     showToast(I18n.t('retireOk'));
     renderTab('published');
   });
