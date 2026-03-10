@@ -126,7 +126,7 @@ function buildAdminRow(comic, mode) {
     c.published = false;
     ComicStore.save(c);
     if (typeof SupabaseClient !== 'undefined') {
-      SupabaseClient.unpublishWork(c.id)
+      SupabaseClient.unpublishWork(c.id, c.supabaseId)
         .catch(err => console.warn('Supabase unpublishWork:', err));
     }
     showToast(I18n.t('retireOk'));

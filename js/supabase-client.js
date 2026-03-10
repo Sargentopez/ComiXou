@@ -44,12 +44,12 @@ const SupabaseClient = (() => {
   }
 
   async function _uploadPanels(comic) {
-    await _delete('panels', `work_id=eq.${comic.id}`);
+    await _delete('panels', `work_id=eq.${comic.supabaseId}`);
     if (!comic.panels || comic.panels.length === 0) return;
     for (let i = 0; i < comic.panels.length; i++) {
       const p = comic.panels[i];
       const ins = await _upsert('panels', {
-        work_id:     comic.id,
+        work_id:     comic.supabaseId,
         panel_order: i,
         orientation: p.orientation || 'v',
         text_mode:   p.textMode    || 'sequential',
@@ -80,7 +80,7 @@ const SupabaseClient = (() => {
 
   async function submitForReview(comic) {
     await _upsert('works', {
-      id:          comic.id,
+      id:          comic.supabaseId,
       title:       comic.title   || '',
       author_name: comic.author  || comic.username || '',
       genre:       comic.genre   || '',
@@ -91,11 +91,13 @@ const SupabaseClient = (() => {
   }
 
   async function approveWork(comic) {
-    await _patch('works', `id=eq.${comic.id}`, { published: true });
+    const sid = comic.supabaseId || comic.id;
+    await _patch('works', `id=eq.${sid}`, { published: true });
   }
 
-  async function unpublishWork(workId) {
-    await _patch('works', `id=eq.${workId}`, { published: false });
+  async function unpublishWork(workId, supabaseId) {
+    const sid = supabaseId || workId;
+    await _patch('works', `id=eq.${sid}`, { published: false });
   }
 
   return { submitForReview, approveWork, unpublishWork };

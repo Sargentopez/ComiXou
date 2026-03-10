@@ -146,10 +146,11 @@ function _mcRenderList() {
         alert('Añade al menos una página antes de publicar.');
         return;
       }
-      ComicStore.save({ ...comic, published: false, approved: false, pendingReview: true });
+      const supabaseId = comic.supabaseId || crypto.randomUUID();
+      ComicStore.save({ ...comic, supabaseId, published: false, approved: false, pendingReview: true });
       _mcRenderList();
       if (typeof SupabaseClient !== 'undefined') {
-        SupabaseClient.submitForReview({ ...comic, published: false, pendingReview: true })
+        SupabaseClient.submitForReview({ ...comic, supabaseId, published: false, pendingReview: true })
           .catch(err => console.warn('Supabase submitForReview:', err));
       }
       _mcToast('Enviada a revisión ✓');
