@@ -876,33 +876,34 @@ function edDrawMultiSel(){
   edCtx.strokeRect(-bw/2, -bh/2, bw, bh);
   edCtx.setLineDash([]);
 
-  // Handles de escala (en espacio local)
-  const corners=[
-    [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
-    [0,-bh/2],[0,bh/2],[-bw/2,0],[bw/2,0],
-  ];
-  for(const [hx,hy] of corners){
-    edCtx.beginPath(); edCtx.arc(hx,hy,hr,0,Math.PI*2);
-    edCtx.fillStyle='#fff'; edCtx.fill();
-    edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+  // En táctil: solo marco, sin handles (gestos nativos de pinch/drag)
+  if(!edLastPointerIsTouch){
+    // Handles de escala (en espacio local)
+    const corners=[
+      [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
+      [0,-bh/2],[0,bh/2],[-bw/2,0],[bw/2,0],
+    ];
+    for(const [hx,hy] of corners){
+      edCtx.beginPath(); edCtx.arc(hx,hy,hr,0,Math.PI*2);
+      edCtx.fillStyle='#fff'; edCtx.fill();
+      edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+    }
+    // Handle de rotación — línea + círculo + flecha
+    const rotY = -bh/2 - 28/z;
+    edCtx.beginPath(); edCtx.moveTo(0,-bh/2); edCtx.lineTo(0,rotY+hrRot);
+    edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw; edCtx.stroke();
+    edCtx.beginPath(); edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
+    edCtx.fillStyle='#1a8cff'; edCtx.fill();
+    edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+    edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5;
+    const ar=hrRot*0.55;
+    edCtx.beginPath(); edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5); edCtx.stroke();
+    const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
+    edCtx.beginPath();
+    edCtx.moveTo(ax,ay); edCtx.lineTo(ax-3/z,ay-5/z);
+    edCtx.moveTo(ax,ay); edCtx.lineTo(ax+4/z,ay-3/z);
+    edCtx.stroke();
   }
-
-  // Handle de rotación — idéntico al individual: línea + círculo + flecha
-  // En espacio local: encima del borde superior, 28/z px más arriba
-  const rotY = -bh/2 - 28/z;
-  edCtx.beginPath(); edCtx.moveTo(0,-bh/2); edCtx.lineTo(0,rotY+hrRot);
-  edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw; edCtx.stroke();
-  edCtx.beginPath(); edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
-  edCtx.fillStyle='#1a8cff'; edCtx.fill();
-  edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
-  edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5;
-  const ar=hrRot*0.55;
-  edCtx.beginPath(); edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5); edCtx.stroke();
-  const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
-  edCtx.beginPath();
-  edCtx.moveTo(ax,ay); edCtx.lineTo(ax-3/z,ay-5/z);
-  edCtx.moveTo(ax,ay); edCtx.lineTo(ax+4/z,ay-3/z);
-  edCtx.stroke();
 
   edCtx.restore();
 
@@ -2539,6 +2540,8 @@ function edCloseMenus(){
     d.style.removeProperty('right');
     d.style.removeProperty('z-index');
   });
+  // Cerrar submenús inline
+  document.querySelectorAll('.ed-submenu').forEach(s=>s.classList.remove('open'));
   document.querySelectorAll('.ed-menu-btn').forEach(b=>b.classList.remove('open'));
   edMenuOpen=null;
 }
@@ -4234,6 +4237,13 @@ function EditorView_init(){
   $('dd-editproject')?.addEventListener('click',()=>{edOpenProjectModal();edCloseMenus();});
   $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
+  // Submenú exportar: toggle inline al clicar
+  $('dd-exportbtn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    $('dd-export-sub')?.classList.toggle('open');
+  });
+  $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
+  $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
   $('dd-deleteproject')?.addEventListener('click',()=>{
     edCloseMenus();
@@ -4476,6 +4486,67 @@ function edDownloadJSON(){
   a.download=(edProjectMeta.title||'proyecto').replace(/\s+/g,'_')+'.json';
   a.click();
 }
+// Exportar la hoja actual como PNG o JPG
+// Renderiza en canvas offscreen con transform z=1, desplazado al origen de la página
+function edExportPagePNG(format){
+  format = format || 'png';
+  edSaveProject();
+  const pw = Math.round(edPageW()), ph = Math.round(edPageH());
+  const mx = edMarginX(), my = edMarginY();
+  const page = edPages[edCurrentPage]; if(!page) return;
+
+  const off    = document.createElement('canvas');
+  off.width    = pw;
+  off.height   = ph;
+  const offCtx = off.getContext('2d');
+
+  // Fondo blanco
+  offCtx.fillStyle = '#ffffff';
+  offCtx.fillRect(0, 0, pw, ph);
+
+  // Transform: z=1, origen en esquina superior izquierda de la página
+  // (equivale a setTransform(1,0,0,1, -mx, -my) en coords workspace)
+  offCtx.setTransform(1, 0, 0, 1, -mx, -my);
+
+  // Renderizar capas en el mismo orden que edRedraw (sin UI, sin handles, sin borde azul)
+  const _textLayers   = edLayers.filter(l => l.type==='text' || l.type==='bubble');
+  const _textGroupAlpha = page.textLayerOpacity ?? 1;
+
+  edLayers.forEach(l => {
+    if(!l) return;
+    if(l.type === 'image'){
+      l.draw(offCtx, off);
+    } else if(l.type === 'draw'){
+      offCtx.globalAlpha = 1;
+      l.draw(offCtx);
+      offCtx.globalAlpha = 1;
+    } else if(l.type === 'stroke'){
+      offCtx.globalAlpha = l.opacity ?? 1;
+      l.draw(offCtx);
+      offCtx.globalAlpha = 1;
+    }
+  });
+  offCtx.globalAlpha = _textGroupAlpha;
+  _textLayers.forEach(l => l.draw(offCtx, off));
+  offCtx.globalAlpha = 1;
+
+  // Descargar
+  const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
+  const quality  = format === 'jpg' ? 0.92 : undefined;
+  off.toBlob(blob => {
+    if(!blob){ edToast('Error al exportar'); return; }
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
+    const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
+    const pg    = edCurrentPage + 1;
+    a.href      = url;
+    a.download  = `${title}_hoja${pg}.${format}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    edToast(`Hoja ${pg} exportada ✓`);
+  }, mimeType, quality);
+}
+
 function edLoadFromJSON(file){
   if(!file)return;
   const reader=new FileReader();

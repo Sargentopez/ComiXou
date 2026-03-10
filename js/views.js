@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v6.27</footer>
+    <footer class="app-version">v6.29</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -271,6 +271,14 @@ Router.register('editor', {
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
               <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
+              <div class="ed-dropdown-sep"></div>
+              <div class="ed-dropdown-submenu" id="dd-export-wrap">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportbtn">⬇ Guardar hoja como… ▸</button>
+                <div class="ed-submenu" id="dd-export-sub">
+                  <button class="ed-dropdown-item" id="dd-exportpng">PNG (transparencias)</button>
+                  <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
+                </div>
+              </div>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-deleteproject" style="color:#e63030;font-weight:700">✕ Eliminar obra</button>
             </div>

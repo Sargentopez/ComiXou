@@ -249,6 +249,21 @@ body.editor-page #appView {
 .ed-dropdown-item:hover > .ed-subdropdown { display: block; }
 .ed-dropdown-item.has-sub::after { content: '›'; margin-left: auto; color: var(--gray-400); }
 
+/* ── Submenú inline para exportar (se despliega hacia abajo dentro del dropdown) ── */
+.ed-dropdown-submenu { position: relative; }
+.ed-submenu {
+  display: none;
+  background: var(--gray-100);
+  border-top: 1px solid var(--gray-200);
+  border-bottom: 1px solid var(--gray-200);
+}
+.ed-submenu.open { display: block; }
+.ed-submenu .ed-dropdown-item {
+  padding-left: 28px;
+  font-weight: 600;
+}
+.ed-has-submenu { justify-content: space-between; }
+
 /* ══════════════════════════════
    BOTÓN FLOTANTE (minimizado)
    ══════════════════════════════ */
