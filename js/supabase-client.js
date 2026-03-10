@@ -81,12 +81,10 @@ const SupabaseClient = (() => {
   async function submitForReview(comic) {
     await _upsert('works', {
       id:          comic.id,
-      title:       comic.title    || '',
-      author_name: comic.author   || comic.username || '',
-      genre:       comic.genre    || '',
-      nav_mode:    comic.navMode  || 'fixed',
-      username:    comic.username || '',
-      user_id:     comic.userId   || '',
+      title:       comic.title   || '',
+      author_name: comic.author  || comic.username || '',
+      genre:       comic.genre   || '',
+      nav_mode:    comic.navMode || 'fixed',
       published:   false,
     });
     await _uploadPanels(comic);
