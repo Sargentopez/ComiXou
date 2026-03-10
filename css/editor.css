@@ -1354,3 +1354,29 @@ body.editor-page #appView {
   .ed-layer-op-val { display: none; }
 }
 
+
+/* ── BLOQUEO DE UI DURANTE MODO DRAW ── */
+/* Cuando draw está activo, todo el topbar y menubar queda inaccesible */
+/* excepto los botones explícitamente permitidos */
+#editorShell.draw-active #edMenuBar {
+  pointer-events: none;
+  opacity: 0.35;
+}
+#editorShell.draw-active #edTopbar .ed-top-action,
+#editorShell.draw-active #edUndoBtn,
+#editorShell.draw-active #edRedoBtn,
+#editorShell.draw-active #edZoomResetBtn,
+#editorShell.draw-active #edMultiSelBtn,
+#editorShell.draw-active #edPagePrev,
+#editorShell.draw-active #edPageNext {
+  pointer-events: none;
+  opacity: 0.35;
+}
+/* Permitidos: botón volver, pantalla completa, minimizar, FloatBtn */
+#editorShell.draw-active #edBackBtn,
+#editorShell.draw-active #edFsBtn,
+#editorShell.draw-active #edMinimizeBtn,
+#editorShell.draw-active #edFloatBtn {
+  pointer-events: auto !important;
+  opacity: 1 !important;
+}

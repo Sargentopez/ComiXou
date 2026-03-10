@@ -1441,6 +1441,24 @@ function edPinchStart(e) {
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
   const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0 } : null;
+  // Snapshot multiselección (tiene prioridad sobre objeto individual)
+  if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
+    edPinchScale0 = null; // no usar modo objeto individual
+    window._edPinchMulti = {
+      items: edMultiSel.map(i=>({
+        i,
+        rot:  edLayers[i].rotation||0,
+        x:    edLayers[i].x,
+        y:    edLayers[i].y,
+        w:    edLayers[i].width,
+        h:    edLayers[i].height,
+      })),
+      groupRot: edMultiGroupRot,
+      bbox: { ...edMultiBbox },
+    };
+  } else {
+    window._edPinchMulti = null;
+  }
   return true;
 }
 function edPinchMove(e) {
@@ -1451,8 +1469,35 @@ function edPinchMove(e) {
   const ratio  = dist / Math.max(edPinchDist0, 1);
   const dAngle = (angle - edPinchAngle0) * 180 / Math.PI;
 
-  if (edPinchScale0) {
-    // ── Modo objeto: escalar y rotar el layer seleccionado ──
+  if (window._edPinchMulti) {
+    // ── Modo multi-selección: escalar y rotar el grupo ──
+    const pm = window._edPinchMulti;
+    const pw = edPageW(), ph = edPageH();
+    // Centro del bbox como pivote (en fracciones de página)
+    const pivX = pm.bbox.cx, pivY = pm.bbox.cy;
+    const dRad = dAngle * Math.PI / 180;
+    for(const snap of pm.items){
+      const la = edLayers[snap.i]; if(!la) continue;
+      // Escalar tamaño
+      la.width  = Math.min(Math.max(snap.w * ratio, 0.04), 2.0);
+      la.height = Math.min(Math.max(snap.h * ratio, 0.04), 2.0);
+      // Rotar posición alrededor del pivote (en px para no distorsionar)
+      const dxPx = (snap.x - pivX) * pw;
+      const dyPx = (snap.y - pivY) * ph;
+      const cos = Math.cos(dRad), sin = Math.sin(dRad);
+      la.x = pivX + (dxPx * cos - dyPx * sin) / pw;
+      la.y = pivY + (dxPx * sin + dyPx * cos) / ph;
+      // Rotar orientación del objeto
+      la.rotation = snap.rot + dAngle;
+    }
+    // Actualizar rotación del grupo y bbox
+    edMultiGroupRot = pm.groupRot + dAngle;
+    // Actualizar edMultiBbox.cx/cy (pivote no se mueve, solo dimensiones escalan)
+    edMultiBbox.w  = pm.bbox.w * ratio;
+    edMultiBbox.h  = pm.bbox.h * ratio;
+    edRedraw();
+  } else if (edPinchScale0) {
+    // ── Modo objeto individual: escalar y rotar el layer seleccionado ──
     const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
     if (la) {
       const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
@@ -1463,10 +1508,6 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom del canvas (draw/eraser o sin selección) ──
-    // Fórmula: el punto del mundo bajo el centro inicial del pinch
-    // debe quedar bajo el centro actual del pinch tras aplicar el nuevo zoom.
-    // world = (screen - cam.xy) / cam.z  →  screen = world * cam.z + cam.xy
-    // Igualando worlds: cam1.xy = ctr - (C0 - cam0.xy) / cam0.z * newZ
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
     edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
@@ -1475,15 +1516,20 @@ function edPinchMove(e) {
   }
 }
 function edPinchEnd() {
+  if(window._edPinchMulti && edMultiSel.length){
+    // Recalcular bbox tras el gesto de grupo
+    _msRecalcBbox();
+    if(window._edMoved) edPushHistory();
+    window._edPinchMulti = null;
+  }
   edPinching    = false;
   edPinchDist0  = 0;
   edPinchScale0 = null;
   edPinchCenter0 = null;
   edPinchCamera0 = null;
   // Al soltar los dedos en modo draw, reactivar la herramienta de dibujo
-  // sin perder el foco ni resetear el estado
   if(['draw','eraser'].includes(edActiveTool)){
-    edPainting = false;  // asegurar estado limpio para el siguiente toque
+    edPainting = false;
   }
 }
 
@@ -1597,11 +1643,10 @@ function _edHandleDoubleTap(idx){
     // Limpiar historial local y guardar el estado inicial como base:
     // el usuario puede deshacer hasta aquí pero nunca más allá (no borra el dibujo base)
     _edDrawClearHistory();
-    // El primer _edDrawPushHistory guardará este estado inicial.
-    // Marcamos que el estado base ya está "guardado" poniendo idx en 0 con el snapshot.
     edDrawHistory = [dl.toDataUrlFull()];
     edDrawHistoryIdx = 0;
     _edDrawUpdateUndoRedoBtns();
+    _edDrawLockUI();
     edRenderOptionsPanel('draw');
     edRedraw();
   } else {
@@ -2178,11 +2223,11 @@ function edDrawRedo(){
 }
 function _edDrawUpdateUndoRedoBtns(){
   const u=$('op-draw-undo'), r=$('op-draw-redo');
-  if(u) u.disabled = edDrawHistoryIdx < 0;
+  if(u) u.disabled = edDrawHistoryIdx <= 0;
   if(r) r.disabled = edDrawHistoryIdx >= edDrawHistory.length - 1;
   // Barra flotante
   const bu=$('edb-undo'), br=$('edb-redo');
-  if(bu) bu.style.opacity = edDrawHistoryIdx < 0 ? '0.3' : '1';
+  if(bu) bu.style.opacity = edDrawHistoryIdx <= 0 ? '0.3' : '1';
   if(br) br.style.opacity = edDrawHistoryIdx >= edDrawHistory.length - 1 ? '0.3' : '1';
 }
 function _edDrawClearHistory(){
@@ -2587,6 +2632,7 @@ function edDeactivateDrawTool(){
   const panel=$('edOptionsPanel');
   if(panel){ panel.classList.remove('open'); delete panel.dataset.mode; }
   edDrawBarHide();
+  _edDrawUnlockUI();
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
 }
@@ -2909,6 +2955,7 @@ function edRenderOptionsPanel(mode){
       const cur=$('edBrushCursor');if(cur)cur.style.display='none';
       delete panel.dataset.mode;
       _edDrawClearHistory();
+      _edDrawUnlockUI();
       edCloseOptionsPanel(); edPushHistory(); edRedraw();
       edToast('Dibujo eliminado');
     });
@@ -3041,6 +3088,7 @@ function edRenderOptionsPanel(mode){
       edActiveTool='draw';
       edCanvas.className='tool-draw';
       const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+      _edDrawLockUI();
       edRenderOptionsPanel('draw');  // panel unificado con lápiz+borrador
       edRedraw();
     });
@@ -3447,6 +3495,10 @@ function edDrawBarHide() {
   $('edDrawBar')?.classList.remove('visible');
   _edbClosePalette();
 }
+
+// Bloquea/desbloquea la UI general durante el modo dibujo
+function _edDrawLockUI()   { $('editorShell')?.classList.add('draw-active'); }
+function _edDrawUnlockUI() { $('editorShell')?.classList.remove('draw-active'); }
 
 function edDrawBarUpdate() {
   if (!$('edDrawBar')?.classList.contains('visible')) return;
@@ -4212,6 +4264,7 @@ function EditorView_init(){
     edActiveTool='draw';
     edCanvas.className='tool-draw';
     if($('edBrushCursor'))$('edBrushCursor').style.display='block';
+    _edDrawLockUI();
     edRenderOptionsPanel('draw');edCloseMenus();
   });
 
