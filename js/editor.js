@@ -1507,6 +1507,8 @@ function edPinchStart(e) {
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
     edPinchScale0 = null; // no usar modo objeto individual
+    // Cancelar drag de grupo si estaba activo (primer dedo había iniciado drag)
+    edMultiDragging = false; edMultiDragOffs = [];
     window._edPinchMulti = {
       items: edMultiSel.map(i=>({
         i,
@@ -1974,6 +1976,8 @@ function edOnMove(e){
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
+    // Si hay pinch activo (2 dedos), ceder control a edPinchMove — no procesar drag
+    if(edPinching || (window._edActivePointers && window._edActivePointers.size >= 2)) return;
     const c=edCoords(e);
     if(edRubberBand){
       e.preventDefault();
