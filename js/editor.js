@@ -39,6 +39,18 @@ let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
+// ── Multi-selección ──
+let edMultiSel = [];        // índices seleccionados
+let edMultiDragging = false;
+let edMultiResizing = false;
+let edMultiRotating = false;
+let edRubberBand = null;    // {x0,y0,x1,y1} norm coords mientras se arrastra
+let edMultiDragOffs = [];   // [{dx,dy}] offset de arrastre por objeto
+let edMultiTransform = null;// snapshot del gesto activo (solo durante el gesto)
+let edMultiGroupRot = 0;    // rotación acumulada del bbox del grupo (grados)
+// bbox persistente del grupo — solo lo actualiza _msRecalcBbox()
+// {w, h, cx, cy, offX, offY}  (offX/Y = offset centro respecto al centroide)
+let edMultiBbox = null;
 
 // ── Dimensiones del lienzo (la página reproducible) ──
 // Ratio 6:13 (≈2.167) cabe sin corte en OPPO A38 (720×1612, útil ~720×1588)
@@ -126,7 +138,7 @@ class BaseLayer {
     };
     const tl=rp(-hw,-hhPh), tr=rp(hw,-hhPh), bl=rp(-hw,hhPh), br=rp(hw,hhPh);
     const ml=rp(-hw,0),     mr=rp(hw,0),      mt=rp(0,-hhPh), mb=rp(0,hhPh);
-    const rotOffset = 28/ph;
+    const rotOffset = 28/(ph * edCamera.z);
     const rotHandle = rp(0,-hhPh-rotOffset);
     return[
       {...tl,corner:'tl'}, {...tr,corner:'tr'},
@@ -781,6 +793,215 @@ function _edCameraReset(){
 /* ══════════════════════════════════════════
    REDRAW
    ══════════════════════════════════════════ */
+/* ══════════════════════════════════════════
+   MULTI-SELECCIÓN — helpers
+   ══════════════════════════════════════════ */
+
+// AABB axis-aligned que engloba todos los objetos de edMultiSel
+function _msBBox(){
+  if(!edMultiSel.length) return null;
+  const pw=edPageW(), ph=edPageH();
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const i of edMultiSel){
+    const la=edLayers[i]; if(!la) continue;
+    const rot=(la.rotation||0)*Math.PI/180;
+    const hw=la.width/2, hh=la.height/2;
+    for(const [cx,cy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
+      const wx=cx*pw, wy=cy*ph;
+      const rx=(wx*Math.cos(rot)-wy*Math.sin(rot))/pw;
+      const ry=(wx*Math.sin(rot)+wy*Math.cos(rot))/ph;
+      x0=Math.min(x0,la.x+rx); y0=Math.min(y0,la.y+ry);
+      x1=Math.max(x1,la.x+rx); y1=Math.max(y1,la.y+ry);
+    }
+  }
+  return {cx:(x0+x1)/2, cy:(y0+y1)/2, w:x1-x0, h:y1-y0, x0,y0,x1,y1};
+}
+
+// 8 handles de escala del bbox colectivo (coords norm)
+function _msHandles(bb){
+  const {cx,cy,w,h}=bb;
+  return[
+    {x:cx-w/2,y:cy-h/2,c:'tl'},{x:cx+w/2,y:cy-h/2,c:'tr'},
+    {x:cx-w/2,y:cy+h/2,c:'bl'},{x:cx+w/2,y:cy+h/2,c:'br'},
+    {x:cx,    y:cy-h/2,c:'mt'},{x:cx,    y:cy+h/2,c:'mb'},
+    {x:cx-w/2,y:cy,    c:'ml'},{x:cx+w/2,y:cy,    c:'mr'},
+  ];
+}
+
+// Dibuja bbox + handles de escala + handle de rotación idéntico al individual
+function edDrawMultiSel(){
+  if(!edMultiSel.length || !edMultiBbox) return;
+  const pw=edPageW(),ph=edPageH(),z=edCamera.z;
+  const lw=1/z, hr=6/z, hrRot=8/z;
+  // Siempre usar edMultiBbox (estado persistente mantenido por _msRecalcBbox).
+  // Durante resize activo: escalar dimensiones por los factores del gesto.
+  const bb = {
+    cx: edMultiBbox.cx,
+    cy: edMultiBbox.cy,
+    w: edMultiResizing && edMultiTransform
+      ? edMultiBbox.w * (edMultiTransform._curSx ?? 1)
+      : edMultiBbox.w,
+    h: edMultiResizing && edMultiTransform
+      ? edMultiBbox.h * (edMultiTransform._curSy ?? 1)
+      : edMultiBbox.h,
+  };
+
+  edCtx.save();
+  // Contornos individuales suaves
+  for(const i of edMultiSel){
+    const la=edLayers[i]; if(!la) continue;
+    const rot=(la.rotation||0)*Math.PI/180;
+    const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
+    const w=la.width*pw, h=la.height*ph;
+    edCtx.save();
+    edCtx.translate(cx,cy); edCtx.rotate(rot);
+    edCtx.strokeStyle='rgba(26,140,255,0.4)';
+    edCtx.lineWidth=lw; edCtx.setLineDash([4/z,3/z]);
+    edCtx.strokeRect(-w/2,-h/2,w,h);
+    edCtx.setLineDash([]);
+    edCtx.restore();
+  }
+  // Bbox colectivo — dibujado en espacio local (translate+rotate) igual que el individual
+  const grRad = edMultiGroupRot * Math.PI / 180;
+  const gcx = edMarginX()+bb.cx*pw, gcy = edMarginY()+bb.cy*ph;
+  const bw=bb.w*pw, bh=bb.h*ph;
+
+  edCtx.save();
+  edCtx.translate(gcx, gcy);
+  edCtx.rotate(grRad);
+
+  // Marco del bbox
+  edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=1.5/z;
+  edCtx.setLineDash([6/z,3/z]);
+  edCtx.strokeRect(-bw/2, -bh/2, bw, bh);
+  edCtx.setLineDash([]);
+
+  // Handles de escala (en espacio local)
+  const corners=[
+    [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
+    [0,-bh/2],[0,bh/2],[-bw/2,0],[bw/2,0],
+  ];
+  for(const [hx,hy] of corners){
+    edCtx.beginPath(); edCtx.arc(hx,hy,hr,0,Math.PI*2);
+    edCtx.fillStyle='#fff'; edCtx.fill();
+    edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+  }
+
+  // Handle de rotación — idéntico al individual: línea + círculo + flecha
+  // En espacio local: encima del borde superior, 28/z px más arriba
+  const rotY = -bh/2 - 28/z;
+  edCtx.beginPath(); edCtx.moveTo(0,-bh/2); edCtx.lineTo(0,rotY+hrRot);
+  edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw; edCtx.stroke();
+  edCtx.beginPath(); edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
+  edCtx.fillStyle='#1a8cff'; edCtx.fill();
+  edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+  edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5;
+  const ar=hrRot*0.55;
+  edCtx.beginPath(); edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5); edCtx.stroke();
+  const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
+  edCtx.beginPath();
+  edCtx.moveTo(ax,ay); edCtx.lineTo(ax-3/z,ay-5/z);
+  edCtx.moveTo(ax,ay); edCtx.lineTo(ax+4/z,ay-3/z);
+  edCtx.stroke();
+
+  edCtx.restore();
+
+  // Marquesina de selección activa
+  if(edRubberBand){
+    const rx=edMarginX()+edRubberBand.x0*pw, ry=edMarginY()+edRubberBand.y0*ph;
+    const rw=(edRubberBand.x1-edRubberBand.x0)*pw, rh=(edRubberBand.y1-edRubberBand.y0)*ph;
+    edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=1.5/z;
+    edCtx.setLineDash([5/z,3/z]);
+    edCtx.fillStyle='rgba(26,140,255,0.06)';
+    edCtx.fillRect(rx,ry,rw,rh); edCtx.strokeRect(rx,ry,rw,rh);
+    edCtx.setLineDash([]);
+  }
+  edCtx.restore();
+}
+
+// Dibuja solo la marquesina (cuando aún no hay selección)
+function edDrawRubberBand(){
+  if(!edRubberBand) return;
+  const pw=edPageW(),ph=edPageH(),z=edCamera.z;
+  const rx=edMarginX()+edRubberBand.x0*pw, ry=edMarginY()+edRubberBand.y0*ph;
+  const rw=(edRubberBand.x1-edRubberBand.x0)*pw, rh=(edRubberBand.y1-edRubberBand.y0)*ph;
+  edCtx.save();
+  edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=1.5/z;
+  edCtx.setLineDash([5/z,3/z]);
+  edCtx.fillStyle='rgba(26,140,255,0.06)';
+  edCtx.fillRect(rx,ry,rw,rh); edCtx.strokeRect(rx,ry,rw,rh);
+  edCtx.setLineDash([]);
+  edCtx.restore();
+}
+
+function _msClear(){
+  edMultiSel=[]; edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
+  edRubberBand=null; edMultiDragOffs=[]; edMultiTransform=null; edMultiGroupRot=0;
+  edMultiBbox=null;
+}
+
+function _edDeactivateMultiSel(){
+  const prev=edMultiSel.length===1?edMultiSel[0]:-1;
+  _msClear();
+  edActiveTool='select';
+  if(edCanvas) edCanvas.className='';
+  const btn = document.getElementById('edMultiSelBtn');
+  if(btn) btn.classList.remove('active');
+  if(prev>=0&&prev<edLayers.length) edSelectedIdx=prev;
+  edRedraw();
+}
+
+// Recalcula edMultiBbox en espacio LOCAL del grupo (desrotado por edMultiGroupRot).
+// Es el ÚNICO sitio que escribe en edMultiBbox.
+// Llamar: al confirmar rubber band, al soltar rotate, al soltar resize, al soltar drag.
+function _msRecalcBbox(){
+  if(!edMultiSel.length){ edMultiBbox=null; return; }
+  const pw=edPageW(), ph=edPageH();
+  const gr = edMultiGroupRot * Math.PI / 180;
+  const cg = Math.cos(-gr), sg = Math.sin(-gr);
+  // Centroide de los centros de los objetos
+  let pivX=0, pivY=0, n=0;
+  for(const i of edMultiSel){
+    const la=edLayers[i]; if(!la) continue;
+    pivX+=la.x; pivY+=la.y; n++;
+  }
+  if(!n){ edMultiBbox=null; return; }
+  pivX/=n; pivY/=n;
+  // AABB de todos los vértices desrotados al espacio local del grupo
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const i of edMultiSel){
+    const la=edLayers[i]; if(!la) continue;
+    const rot=(la.rotation||0)*Math.PI/180;
+    const hw=la.width/2, hh=la.height/2;
+    for(const [lcx,lcy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
+      const wx=lcx*pw, wy=lcy*ph;
+      const vx = la.x + (wx*Math.cos(rot)-wy*Math.sin(rot))/pw;
+      const vy = la.y + (wx*Math.sin(rot)+wy*Math.cos(rot))/ph;
+      const dx=(vx-pivX)*pw, dy=(vy-pivY)*ph;
+      const lx = pivX + (dx*cg - dy*sg)/pw;
+      const ly = pivY + (dx*sg + dy*cg)/ph;
+      x0=Math.min(x0,lx); y0=Math.min(y0,ly);
+      x1=Math.max(x1,lx); y1=Math.max(y1,ly);
+    }
+  }
+  // Centro del bbox local → rotar al espacio global
+  const lcxC=(x0+x1)/2, lcyC=(y0+y1)/2;
+  const dcx=(lcxC-pivX)*pw, dcy=(lcyC-pivY)*ph;
+  const cr=Math.cos(gr), sr=Math.sin(gr);
+  const gcx = pivX + (dcx*cr - dcy*sr)/pw;
+  const gcy = pivY + (dcx*sr + dcy*cr)/ph;
+  edMultiBbox = {
+    w:  x1-x0,
+    h:  y1-y0,
+    cx: gcx,
+    cy: gcy,
+    // offset centro→centroide en espacio LOCAL rotado (fracción de página)
+    // se aplica durante drag para mover el marco sin recalcular todo
+    offX: (lcxC - pivX),
+    offY: (lcyC - pivY),
+  };
+}
+
 function edRedraw(){
   if(!edCtx || !edCanvas)return;
   const cw=edCanvas.width, ch=edCanvas.height;
@@ -864,6 +1085,11 @@ function edRedraw(){
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
   edDrawSel();
+  // Multi-selección: bbox colectivo encima de todo, o marquesina si está arrastrando
+  if(edActiveTool==='multiselect'){
+    if(edMultiSel.length) edDrawMultiSel();
+    else edDrawRubberBand();
+  }
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
   edCtx.save();
   edCtx.strokeStyle = '#1a8cff';
@@ -1431,6 +1657,78 @@ function edOnStart(e){
   // Cerrar menús si están abiertos (clic en canvas o zona de trabajo)
   if(edMenuOpen){ edCloseMenus(); }
   edHideContextMenu();
+
+  // ── MULTI-SELECCIÓN ──────────────────────────────────────
+  if(edActiveTool==='multiselect'){
+    if(tgt!==edCanvas){
+      // Clic fuera del canvas (UI, panel…) → desactivar si había selección
+      if(edMultiSel.length) _edDeactivateMultiSel();
+      return;
+    }
+    const c=edCoords(e);
+    const pw=edPageW(), ph=edPageH();
+
+    if(edMultiSel.length){
+      const bb = edMultiBbox;
+      if(bb){
+        const grRad = edMultiGroupRot * Math.PI / 180;
+        // ── Hit handle rotación ──
+        // El handle está en espacio local (0, -bh/2 - 28/z) rotado por grRad
+        const _offWs = bb.h*ph/2 + 28/edCamera.z;
+        const rotHx = bb.cx + Math.sin(grRad)*_offWs/pw;
+        const rotHy = bb.cy - Math.cos(grRad)*_offWs/ph;
+        if(Math.hypot((c.nx-rotHx)*pw, (c.ny-rotHy)*ph) < 14){
+          edMultiRotating=true;
+          edMultiTransform={
+            items: edMultiSel.map(i=>({i, rot:edLayers[i].rotation||0, x:edLayers[i].x, y:edLayers[i].y})),
+            cx: bb.cx, cy: bb.cy,
+            startAngle: Math.atan2(c.ny-bb.cy, c.nx-bb.cx),
+            startGroupRot: edMultiGroupRot,
+          };
+          return;
+        }
+        // ── Hit handle escala ──
+        // Desrotar cursor al espacio local del bbox
+        const cg=Math.cos(-grRad), sg=Math.sin(-grRad);
+        const dcxPx=(c.nx-bb.cx)*pw, dcyPx=(c.ny-bb.cy)*ph;
+        const lxCur = bb.cx + (dcxPx*cg - dcyPx*sg)/pw;
+        const lyCur = bb.cy + (dcxPx*sg + dcyPx*cg)/ph;
+        for(const p of _msHandles(bb)){
+          if(Math.hypot((lxCur-p.x)*pw, (lyCur-p.y)*ph) < 12){
+            edMultiResizing=true;
+            edMultiTransform={
+              items: edMultiSel.map(i=>({i, x:edLayers[i].x, y:edLayers[i].y, w:edLayers[i].width, h:edLayers[i].height})),
+              bb: {cx:bb.cx, cy:bb.cy, w:bb.w, h:bb.h},
+              corner: p.c,
+              sx: lxCur, sy: lyCur,   // cursor inicial en espacio local
+              groupRot: edMultiGroupRot,
+              _curSx: 1, _curSy: 1,
+            };
+            return;
+          }
+        }
+        // ── Hit dentro del bbox → drag ──
+        const lxD=(dcxPx*cg - dcyPx*sg)/pw;
+        const lyD=(dcxPx*sg + dcyPx*cg)/ph;
+        if(Math.abs(lxD)<=bb.w/2 && Math.abs(lyD)<=bb.h/2){
+          edMultiDragging=true;
+          edMultiDragOffs=edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+          return;
+        }
+      }
+    }
+    // Nada tocado → desactivar si había selección, o iniciar rubber band
+    if(edMultiSel.length){
+      _edDeactivateMultiSel();
+    } else {
+      _msClear();
+      edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+      edRedraw();
+    }
+    return;
+  }
+  // ─────────────────────────────────────────────────────────
+
   if(edActiveTool === 'fill'){
     if(tgt !== edCanvas) return;
     // En touch/pen: guardar coordenadas y esperar a pointerup para confirmar
@@ -1567,8 +1865,109 @@ function edOnMove(e){
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
   }
+  // ── MULTI-SELECCIÓN ────────────────────────────────────────
+  if(edActiveTool==='multiselect'){
+    const c=edCoords(e);
+    if(edRubberBand){
+      e.preventDefault();
+      edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
+      edRedraw(); return;
+    }
+    if(edMultiDragging && edMultiDragOffs.length){
+      e.preventDefault();
+      edMultiSel.forEach((idx,i)=>{
+        const o=edMultiDragOffs[i]; if(!o) return;
+        edLayers[idx].x=c.nx-o.dx; edLayers[idx].y=c.ny-o.dy;
+      });
+      // Actualizar edMultiBbox.cx/cy siguiendo al centroide
+      // Las dimensiones w/h no cambian al trasladar
+      if(edMultiBbox){
+        const _n=edMultiSel.length; let _px=0,_py=0;
+        edMultiSel.forEach(i=>{_px+=edLayers[i].x;_py+=edLayers[i].y;});
+        const pivX=_px/_n, pivY=_py/_n;
+        const gr=edMultiGroupRot*Math.PI/180;
+        const cr=Math.cos(gr), sr=Math.sin(gr);
+        const pw=edPageW(), ph=edPageH();
+        const ox=edMultiBbox.offX*pw, oy=edMultiBbox.offY*ph;
+        edMultiBbox.cx = pivX + (ox*cr - oy*sr)/pw;
+        edMultiBbox.cy = pivY + (ox*sr + oy*cr)/ph;
+      }
+      window._edMoved=true; edRedraw(); return;
+    }
+    if(edMultiResizing && edMultiTransform){
+      e.preventDefault();
+      const {items,bb,corner,sx,sy,groupRot}=edMultiTransform;
+      const pw=edPageW(),ph=edPageH();
+      // Desrotar el cursor actual al espacio local del bbox (igual que en el hit-test)
+      const _gr2 = (groupRot||0) * Math.PI / 180;
+      const _c2 = Math.cos(-_gr2), _s2 = Math.sin(-_gr2);
+      const _dcx2 = (c.nx - bb.cx)*pw, _dcy2 = (c.ny - bb.cy)*ph;
+      const _lx2 = bb.cx + (_dcx2*_c2 - _dcy2*_s2)/pw;
+      const _ly2 = bb.cy + (_dcx2*_s2 + _dcy2*_c2)/ph;
+      const dx=_lx2-sx, dy=_ly2-sy;
+      let sx2=1,sy2=1;
+      if(corner==='tl'){sx2=1-dx/bb.w; sy2=1-dy/bb.h;}
+      else if(corner==='tr'){sx2=1+dx/bb.w; sy2=1-dy/bb.h;}
+      else if(corner==='bl'){sx2=1-dx/bb.w; sy2=1+dy/bb.h;}
+      else if(corner==='br'){sx2=1+dx/bb.w; sy2=1+dy/bb.h;}
+      else if(corner==='ml'){sx2=1-dx/bb.w;}
+      else if(corner==='mr'){sx2=1+dx/bb.w;}
+      else if(corner==='mt'){sy2=1-dy/bb.h;}
+      else if(corner==='mb'){sy2=1+dy/bb.h;}
+      // Esquinas: escala proporcional
+      if(['tl','tr','bl','br'].includes(corner)){
+        const s=(Math.abs(sx2)+Math.abs(sy2))/2;
+        sx2=sy2=s;
+      }
+      sx2=Math.max(sx2,0.05); sy2=Math.max(sy2,0.05);
+      // Guardar factores para que edDrawMultiSel escale el marco visualmente durante el gesto
+      edMultiTransform._curSx = sx2;
+      edMultiTransform._curSy = sy2;
+      // Escalar posiciones relativas al centro del bbox en el espacio ROTADO del grupo
+      const _cr = Math.cos(_gr2), _sr = Math.sin(_gr2);
+      items.forEach(s=>{
+        const la=edLayers[s.i]; if(!la) return;
+        // Vector objeto→centro en px workspace
+        const _ox=(s.x-bb.cx)*pw, _oy=(s.y-bb.cy)*ph;
+        // Desrotar al espacio local del bbox
+        const _lox=( _ox*_c2 - _oy*_s2);
+        const _loy=( _ox*_s2 + _oy*_c2);
+        // Escalar en espacio local
+        const _slx = _lox * sx2;
+        const _sly = _loy * sy2;
+        // Volver a rotar al espacio global
+        la.x = bb.cx + (_slx*_cr - _sly*_sr)/pw;
+        la.y = bb.cy + (_slx*_sr + _sly*_cr)/ph;
+        la.width=Math.max(s.w*Math.abs(sx2),0.02);
+        la.height=Math.max(s.h*Math.abs(sy2),0.02);
+      });
+      window._edMoved=true; edRedraw(); return;
+    }
+    if(edMultiRotating && edMultiTransform){
+      e.preventDefault();
+      const {items,cx,cy,startAngle,startGroupRot}=edMultiTransform;
+      const pw=edPageW(),ph=edPageH();
+      const curAngle=Math.atan2(c.ny-cy, c.nx-cx);
+      const delta=curAngle-startAngle;
+      // Acumular rotación del bbox del grupo desde el inicio del gesto
+      edMultiGroupRot = startGroupRot + delta*180/Math.PI;
+      items.forEach(s=>{
+        const la=edLayers[s.i]; if(!la) return;
+        // Posición rotada alrededor del centro del bbox (en px para evitar distorsión)
+        const dx_px=(s.x-cx)*pw, dy_px=(s.y-cy)*ph;
+        const cos=Math.cos(delta), sin=Math.sin(delta);
+        la.x=cx+(dx_px*cos-dy_px*sin)/pw;
+        la.y=cy+(dx_px*sin+dy_px*cos)/ph;
+        la.rotation=(s.rot+delta*180/Math.PI)%360;
+      });
+      window._edMoved=true; edRedraw(); return;
+    }
+    return;
+  }
+  // ─────────────────────────────────────────────────────────
+
   // Sin gesto activo → ignorar el resto
-  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating;
+  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edMsRubber||!!edMsGesture;
   if(!gestureActive) return;
   e.preventDefault();
   // Pinch activo
@@ -1672,8 +2071,40 @@ function edOnEnd(e){
       edFloodFill(fp.nx, fp.ny);
     }
   }
+  // ── MULTI-SELECCIÓN ────────────────────────────────────────
+  if(edActiveTool==='multiselect'){
+    if(edRubberBand){
+      // Confirmar rubber band → poblar edMultiSel
+      const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
+      const ry0=Math.min(edRubberBand.y0,edRubberBand.y1);
+      const rx1=Math.max(edRubberBand.x0,edRubberBand.x1);
+      const ry1=Math.max(edRubberBand.y0,edRubberBand.y1);
+      edRubberBand=null;
+      if((rx1-rx0)>0.005 || (ry1-ry0)>0.005){
+        edMultiSel=[];
+        edLayers.forEach((la,i)=>{
+          if(la.type==='text'||la.type==='bubble') return;
+          // Seleccionar si el centro del objeto cae dentro del rectángulo
+          if(la.x>=rx0&&la.x<=rx1&&la.y>=ry0&&la.y<=ry1) edMultiSel.push(i);
+        });
+      }
+      if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
+      edRedraw();
+    }
+    if(edMultiDragging||edMultiResizing||edMultiRotating){
+      if(edMultiSel.length&&window._edMoved) edPushHistory();
+      // Siempre recalcular al soltar — mantiene bbox ajustado para el siguiente gesto
+      if(edMultiSel.length) _msRecalcBbox();
+    }
+    edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
+    edMultiDragOffs=[]; window._edMoved=false;
+    clearTimeout(window._edLongPress); window._edLongPressReady=false;
+    return;
+  }
+  // ─────────────────────────────────────────────────────────
+
   // Sin gesto activo → ignorar el resto
-  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating;
+  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edMsRubber||!!edMsGesture;
   if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
   if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
     edPinchEnd();
@@ -3693,6 +4124,40 @@ function EditorView_init(){
   $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
   $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
+  function _edToggleMultiSel(){
+    if(edActiveTool==='multiselect'){
+      _edDeactivateMultiSel();
+    } else {
+      _msClear();
+      edSelectedIdx=-1;
+      edActiveTool='multiselect';
+      edCanvas.className='tool-multiselect';
+      $('edMultiSelBtn')?.classList.add('active');
+      const panel=$('edOptionsPanel');
+      if(panel){panel.classList.remove('open');panel.innerHTML='';}
+      edRedraw();
+    }
+  }
+  // _edDeactivateMultiSel definida en scope global
+
+  // Botón multi-selección
+  $('edMultiSelBtn')?.addEventListener('click', _edToggleMultiSel);
+  // Tecla M para activar/desactivar
+  // (el listener de teclado principal ya existe; lo añadimos aquí una sola vez)
+  if(!window._edMultiSelKeyFn){
+    window._edMultiSelKeyFn = e => {
+      if(e.key==='m'||e.key==='M'){
+        const active=document.activeElement;
+        if(active && (active.tagName==='INPUT'||active.tagName==='TEXTAREA'||active.isContentEditable)) return;
+        _edToggleMultiSel();
+      }
+      if(e.key==='Escape' && edActiveTool==='multiselect'){
+        _edDeactivateMultiSel();
+      }
+    };
+    document.addEventListener('keydown', window._edMultiSelKeyFn);
+  }
+
   $('edZoomResetBtn')?.addEventListener('click',()=>{
     const pw=edPageW(), ph=edPageH();
     const fullZoom = Math.min(edCanvas.width/pw, edCanvas.height/ph);

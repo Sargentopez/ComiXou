@@ -839,6 +839,9 @@ body.editor-page #appView {
 }
 .ed-undo-redo-btn:hover:not(:disabled)  { color: var(--black); background: var(--gray-100); }
 .ed-undo-redo-btn:disabled { opacity: .28; cursor: default; }
+#edMultiSelBtn { display:flex; align-items:center; justify-content:center; }
+#edMultiSelBtn.active { color:var(--black); background:rgba(26,140,255,0.12); }
+.tool-multiselect { cursor: crosshair !important; }
 
 /* ══════════════════════════════════════════════════════
    OVERLAYS DE CAPAS Y HOJAS

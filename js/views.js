@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v6.07</footer>
+    <footer class="app-version">v6.27</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -228,6 +228,12 @@ Router.register('editor', {
           <button class="ed-undo-redo-btn" id="edUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="edRedoBtn" title="Rehacer" disabled>↪</button>
           <button class="ed-undo-redo-btn" id="edZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
+          <button class="ed-undo-redo-btn" id="edMultiSelBtn" title="Selección múltiple (M)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="1" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 1.5"/>
+              <rect x="7" y="7" width="8" height="8" rx="1" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </button>
 
           <div class="ed-menu-sep"></div>
 
