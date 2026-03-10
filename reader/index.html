@@ -8,6 +8,14 @@
   <meta name="theme-color" content="#111111">
   <link rel="stylesheet" href="reader.css">
 </head>
+<script>
+  // Desregistrar el Service Worker del SPA para que no intercepte este reproductor
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      regs.forEach(r => r.unregister());
+    });
+  }
+</script>
 <body>
 
   <!-- ── PANTALLA DE CARGA ── -->

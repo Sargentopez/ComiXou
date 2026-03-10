@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v6-48';
+const CACHE = 'comixow-v6-49';
 const ASSETS = [
   './',
   './index.html',
@@ -46,6 +46,8 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  // El reproductor externo /reader/ es independiente — no interceptar
+  if (e.request.url.includes('/reader/')) return;
   // SPA: cualquier navegación devuelve index.html
   if (e.request.mode === 'navigate') {
     e.respondWith(caches.match('./index.html'));
