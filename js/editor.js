@@ -1544,18 +1544,19 @@ function edPinchMove(e) {
       // Escalar tamaño
       la.width  = Math.min(Math.max(snap.w * ratio, 0.04), 2.0);
       la.height = Math.min(Math.max(snap.h * ratio, 0.04), 2.0);
-      // Rotar posición alrededor del pivote (en px para no distorsionar)
+      // Escalar Y rotar posición alrededor del pivote (en px para no distorsionar)
       const dxPx = (snap.x - pivX) * pw;
       const dyPx = (snap.y - pivY) * ph;
       const cos = Math.cos(dRad), sin = Math.sin(dRad);
-      la.x = pivX + (dxPx * cos - dyPx * sin) / pw;
-      la.y = pivY + (dxPx * sin + dyPx * cos) / ph;
+      // Primero escalar, luego rotar
+      la.x = pivX + (dxPx * ratio * cos - dyPx * ratio * sin) / pw;
+      la.y = pivY + (dxPx * ratio * sin + dyPx * ratio * cos) / ph;
       // Rotar orientación del objeto
       la.rotation = snap.rot + dAngle;
     }
     // Actualizar rotación del grupo y bbox
     edMultiGroupRot = pm.groupRot + dAngle;
-    // Actualizar edMultiBbox.cx/cy (pivote no se mueve, solo dimensiones escalan)
+    // Actualizar edMultiBbox dimensiones escaladas
     edMultiBbox.w  = pm.bbox.w * ratio;
     edMultiBbox.h  = pm.bbox.h * ratio;
     edRedraw();
