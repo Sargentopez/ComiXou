@@ -178,6 +178,34 @@ class ImageLayer extends BaseLayer {
     ctx.drawImage(this.img, -w/2, -h/2, w, h);
     ctx.restore();
   }
+  contains(px, py) {
+    // 1. Comprobar bbox primero (rápido)
+    if (!super.contains(px, py)) return false;
+    // 2. Hit-test por alpha de píxel real — ignora zonas transparentes
+    if (!this.img || !this.img.complete || this.img.naturalWidth === 0) return true;
+    try {
+      const pw = edPageW(), ph = edPageH();
+      // Transformar punto al espacio local de la imagen (con rotación)
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
+      const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+      const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+      const iw = this.width * pw, ih = this.height * ph;
+      // Convertir a coordenadas de píxel en la imagen original
+      const imgX = (lx / iw + 0.5) * this.img.naturalWidth;
+      const imgY = (ly / ih + 0.5) * this.img.naturalHeight;
+      if (imgX < 0 || imgY < 0 || imgX >= this.img.naturalWidth || imgY >= this.img.naturalHeight) return false;
+      // Leer alpha con canvas 1×1
+      const _oc = ImageLayer._alphaCanvas || (ImageLayer._alphaCanvas = document.createElement('canvas'));
+      _oc.width = 1; _oc.height = 1;
+      const _octx = _oc.getContext('2d');
+      _octx.clearRect(0, 0, 1, 1);
+      _octx.drawImage(this.img, -imgX, -imgY);
+      return _octx.getImageData(0, 0, 1, 1).data[3] > 10;
+    } catch(e) {
+      return true; // fallback: si falla (CORS), usar bbox
+    }
+  }
 }
 
 class TextLayer extends BaseLayer {
@@ -483,6 +511,18 @@ class DrawLayer extends BaseLayer {
     ctx.drawImage(this._canvas, 0, 0);
     ctx.restore();
   }
+  contains(px, py){
+    // DrawLayer cubre todo el workspace — necesita pixel-hit directo
+    try {
+      // px,py están en coordenadas normalizadas de página → convertir a workspace px
+      const wx = Math.floor(edMarginX() + px * edPageW());
+      const wy = Math.floor(edMarginY() + py * edPageH());
+      if(wx < 0 || wy < 0 || wx >= this._canvas.width || wy >= this._canvas.height) return false;
+      return this._ctx.getImageData(wx, wy, 1, 1).data[3] > 10;
+    } catch(e) {
+      return true;
+    }
+  }
 }
 
 
@@ -589,6 +629,28 @@ class StrokeLayer extends BaseLayer {
     ctx.rotate((this.rotation||0) * Math.PI/180);
     ctx.drawImage(this._canvas, -w/2, -h/2, w, h);
     ctx.restore();
+  }
+  contains(px, py){
+    // 1. Bbox rápido primero
+    if(!super.contains(px, py)) return false;
+    // 2. Pixel-hit real sobre el bitmap recortado
+    if(!this._canvas || this._canvas.width === 0) return true;
+    try {
+      const pw = edPageW(), ph = edPageH();
+      // Transformar punto al espacio local del stroke (con rotación)
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
+      const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+      const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+      const w = this.width * pw, h = this.height * ph;
+      // Convertir a coordenadas de píxel en el canvas recortado
+      const bx = Math.floor((lx / w + 0.5) * this._canvas.width);
+      const by = Math.floor((ly / h + 0.5) * this._canvas.height);
+      if(bx < 0 || by < 0 || bx >= this._canvas.width || by >= this._canvas.height) return false;
+      return this._canvas.getContext('2d').getImageData(bx, by, 1, 1).data[3] > 10;
+    } catch(e) {
+      return true; // fallback si falla
+    }
   }
 }
 
@@ -876,7 +938,8 @@ function edDrawMultiSel(){
   edCtx.strokeRect(-bw/2, -bh/2, bw, bh);
   edCtx.setLineDash([]);
 
-  // En táctil: solo marco, sin handles (gestos nativos de pinch/drag)
+  // En táctil: handles invisibles (transparentes) pero el hit-test sigue activo
+  const _drawHandles = !edLastPointerIsTouch;
   if(!edLastPointerIsTouch){
     // Handles de escala (en espacio local)
     const corners=[
@@ -1640,12 +1703,7 @@ function _edHandleDoubleTap(idx){
     edActiveTool='draw';
     edCanvas.className='tool-draw';
     const cur=$('edBrushCursor');if(cur)cur.style.display='block';
-    // Limpiar historial local y guardar el estado inicial como base:
-    // el usuario puede deshacer hasta aquí pero nunca más allá (no borra el dibujo base)
-    _edDrawClearHistory();
-    edDrawHistory = [dl.toDataUrlFull()];
-    edDrawHistoryIdx = 0;
-    _edDrawUpdateUndoRedoBtns();
+    _edDrawInitHistory();
     _edDrawLockUI();
     edRenderOptionsPanel('draw');
     edRedraw();
@@ -1688,8 +1746,6 @@ function edOnStart(e){
   if(window._edActivePointers.size === 2){
     // Cancelar fill pendiente — era un pinch, no un toque simple
     if(window._edFillPending) window._edFillPending = null;
-    // Cancelar primer toque pendiente de multiselect
-    window._edMsTouchStart = null;
     // Si estaba pintando, cancelar el trazo parcial sin guardarlo
     if(edPainting){
       edPainting = false;
@@ -1720,24 +1776,7 @@ function edOnStart(e){
       const bb = edMultiBbox;
       if(bb){
         const grRad = edMultiGroupRot * Math.PI / 180;
-        const _isTouch = e.pointerType === 'touch';
-
-        // ── En táctil: el primer dedo NUNCA decide la operación en pointerdown ──
-        // Puede ser el inicio de un pinch (escala/giro) o un drag de un solo dedo.
-        // Guardamos la posición inicial y esperamos a ver qué ocurre en pointermove.
-        // Si llega un segundo dedo → edPinchStart lo convierte en pinch automáticamente.
-        // Si solo hay un dedo y se mueve → edOnMove lo convierte en drag.
-        // Si es un tap sin movimiento → edOnEnd lo detecta como tap y desactiva.
-        if(_isTouch){
-          // Guardar posición inicial para que edOnMove pueda iniciar drag si solo hay un dedo
-          window._edMsTouchStart = { nx: c.nx, ny: c.ny };
-          // Pre-calcular offsets de drag por si el movimiento lo confirma
-          edMultiDragOffs = edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
-          return;
-        }
-
-        // ── PC/ratón: hit-test completo con handles ──
-        // Hit handle rotación
+        // ── Hit handle rotación ──
         const _offWs = bb.h*ph/2 + 28/edCamera.z;
         const rotHx = bb.cx + Math.sin(grRad)*_offWs/pw;
         const rotHy = bb.cy - Math.cos(grRad)*_offWs/ph;
@@ -1751,7 +1790,7 @@ function edOnStart(e){
           };
           return;
         }
-        // Hit handle escala
+        // ── Hit handle escala ──
         const cg=Math.cos(-grRad), sg=Math.sin(-grRad);
         const dcxPx=(c.nx-bb.cx)*pw, dcyPx=(c.ny-bb.cy)*ph;
         const lxCur = bb.cx + (dcxPx*cg - dcyPx*sg)/pw;
@@ -1770,7 +1809,7 @@ function edOnStart(e){
             return;
           }
         }
-        // Hit dentro del bbox → drag
+        // ── Hit dentro del bbox → drag ──
         const lxD=(dcxPx*cg - dcyPx*sg)/pw;
         const lyD=(dcxPx*sg + dcyPx*cg)/ph;
         if(Math.abs(lxD)<=bb.w/2 && Math.abs(lyD)<=bb.h/2){
@@ -1780,14 +1819,8 @@ function edOnStart(e){
         }
       }
     }
-    // Nada tocado → en PC desactivar; en táctil guardar posición (podría ser inicio de pinch)
+    // Nada tocado → desactivar si había selección, o iniciar rubber band
     if(edMultiSel.length){
-      if(e.pointerType === 'touch'){
-        // Táctil: no desactivar todavía, guardar posición inicial
-        window._edMsTouchStart = { nx: c.nx, ny: c.ny };
-        edMultiDragOffs = edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
-        return;
-      }
       _edDeactivateMultiSel();
     } else {
       _msClear();
@@ -1861,23 +1894,28 @@ function edOnStart(e){
       }
     }
   }
-  // Seleccionar: el render sigue el orden del array (mayor índice = encima visualmente).
-  // La selección busca de mayor a menor índice — el primero que contenga el punto tocado.
-  // Textos/bocadillos siempre encima (se buscan primero independientemente del índice).
-  const _isTouch = e.pointerType === 'touch';  // pen (tableta gráfica) se comporta como mouse
+  // Seleccionar: de mayor a menor índice (mayor = encima visualmente).
+  // contains() de cada clase hace el hit-test correcto:
+  //   - ImageLayer: bbox + alpha real del píxel (ignora zonas transparentes)
+  //   - TextLayer/BubbleLayer: bbox rotado
+  //   - StrokeLayer/DrawLayer: bbox rotado
+  // Textos/bocadillos se evalúan primero (siempre encima visualmente).
+  const _isTouch = e.pointerType === 'touch';
+
   let found = -1;
-  // Primero buscar en textos/bocadillos (siempre encima de todo)
+  // Primero textos/bocadillos (siempre encima)
   for(let i = edLayers.length - 1; i >= 0; i--){
-    if((edLayers[i].type==='text'||edLayers[i].type==='bubble') && edLayers[i].contains(c.nx,c.ny)){
+    const l = edLayers[i];
+    if((l.type==='text'||l.type==='bubble') && l.contains(c.nx,c.ny)){
       found = i; break;
     }
   }
-  // Si no hay texto encima, buscar en el resto por orden de array (mayor índice = encima)
+  // Luego el resto, de mayor a menor índice
   if(found < 0){
     for(let i = edLayers.length - 1; i >= 0; i--){
-      if(edLayers[i].type!=='text' && edLayers[i].type!=='bubble' && edLayers[i].contains(c.nx,c.ny)){
-        found = i; break;
-      }
+      const l = edLayers[i];
+      if(l.type==='text'||l.type==='bubble') continue;
+      if(l.contains(c.nx,c.ny)){ found = i; break; }
     }
   }
   if(found>=0){
@@ -1937,15 +1975,6 @@ function edOnMove(e){
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
     const c=edCoords(e);
-    // Táctil: primer dedo moviéndose con un solo puntero → confirmar drag
-    // (si hubiera llegado un segundo dedo, _edActivePointers.size sería 2 y ya habría retornado)
-    if(window._edMsTouchStart && !edMultiDragging && !edPinching &&
-       window._edActivePointers && window._edActivePointers.size === 1){
-      window._edMsTouchStart = null;
-      if(edMultiSel.length && edMultiDragOffs.length){
-        edMultiDragging = true;
-      }
-    }
     if(edRubberBand){
       e.preventDefault();
       edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
@@ -2173,11 +2202,6 @@ function edOnEnd(e){
       if(edMultiSel.length&&window._edMoved) edPushHistory();
       if(edMultiSel.length) _msRecalcBbox();
     }
-    // Táctil: si _edMsTouchStart aún existe → fue un tap sin movimiento → desactivar selección
-    if(window._edMsTouchStart){
-      window._edMsTouchStart = null;
-      if(!_edTouchMoved) _edDeactivateMultiSel();
-    }
     edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
     edMultiDragOffs=[]; window._edMoved=false;
     clearTimeout(window._edLongPress); window._edLongPressReady=false;
@@ -2261,6 +2285,15 @@ function _edDrawUpdateUndoRedoBtns(){
 }
 function _edDrawClearHistory(){
   edDrawHistory = []; edDrawHistoryIdx = -1;
+  _edDrawUpdateUndoRedoBtns();
+}
+function _edDrawInitHistory(){
+  // Captura el estado actual del DrawLayer como punto de partida.
+  // El primer trazo nuevo quedará en idx=1 y podrá deshacerse hasta idx=0.
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw');
+  edDrawHistory = [dl ? dl.toDataUrlFull() : null];
+  edDrawHistoryIdx = 0;
   _edDrawUpdateUndoRedoBtns();
 }
 /* ══════════════════════════════════════════
@@ -3122,6 +3155,7 @@ function edRenderOptionsPanel(mode){
       edActiveTool='draw';
       edCanvas.className='tool-draw';
       const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+      _edDrawInitHistory();
       _edDrawLockUI();
       edRenderOptionsPanel('draw');  // panel unificado con lápiz+borrador
       edRedraw();
@@ -4298,6 +4332,7 @@ function EditorView_init(){
     edActiveTool='draw';
     edCanvas.className='tool-draw';
     if($('edBrushCursor'))$('edBrushCursor').style.display='block';
+    _edDrawInitHistory();
     _edDrawLockUI();
     edRenderOptionsPanel('draw');edCloseMenus();
   });
