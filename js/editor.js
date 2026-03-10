@@ -4585,9 +4585,8 @@ function EditorView_init(){
     let _pinchPrev = 0, _pinchMidX = 0, _pinchMidY = 0;
     editorShell.addEventListener('touchstart', e => {
       if(e.touches.length === 2){
-        // Si hay objeto seleccionado, el canvas manejará el pinch (resize)
-        // No inicializar zoom de cámara para este gesto
-        if(edSelectedIdx >= 0){ _pinchPrev = 0; return; }
+        // No hacer zoom de cámara si hay objeto seleccionado o multiselección activa
+        if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length)){ _pinchPrev = 0; return; }
         _pinchPrev = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
@@ -4600,9 +4599,8 @@ function EditorView_init(){
     editorShell.addEventListener('touchmove', e => {
       if(e.touches.length === 2 && _pinchPrev > 0){
         e.preventDefault();
-        // Si hay objeto seleccionado, el pinch lo gestiona edPinchMove (resize)
-        // El zoom de cámara solo actúa cuando NO hay objeto seleccionado
-        if(edSelectedIdx >= 0) return;
+        // No hacer zoom de cámara si hay objeto seleccionado o multiselección activa
+        if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length)) return;
         const dist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
