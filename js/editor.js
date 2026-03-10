@@ -27,6 +27,7 @@ let edMinimized = false;
 let edFloatX = 12, edFloatY = 12; // posición del botón flotante (esquina superior izquierda)
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
+let _edPinchHappened = false; // true desde que empieza el pinch hasta que se levantan TODOS los dedos
 let edPinchCenter0 = null, edPinchCamera0 = null;
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 // edZoom eliminado — reemplazado por edCamera.z
@@ -1492,7 +1493,8 @@ function _pinchCenter(pMap){
 }
 function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
-  edPinching    = true;
+  edPinching = true;
+  _edPinchHappened = true; // marcar que hubo pinch — cancelar drag al soltar
   edPinchDist0  = _pinchDist(window._edActivePointers);
   edPinchAngle0 = _pinchAngle(window._edActivePointers);
   // Centro del pinch en coordenadas de pantalla
@@ -2227,11 +2229,13 @@ function edOnEnd(e){
       edRedraw();
     }
     if(edMultiDragging||edMultiResizing||edMultiRotating){
-      if(edMultiSel.length&&window._edMoved) edPushHistory();
+      if(!_edPinchHappened && edMultiSel.length && window._edMoved) edPushHistory();
       if(edMultiSel.length) _msRecalcBbox();
     }
     edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
     edMultiDragOffs=[]; window._edMoved=false;
+    // Resetear flag de pinch cuando no quedan dedos
+    if(!window._edActivePointers || window._edActivePointers.size === 0) _edPinchHappened = false;
     clearTimeout(window._edLongPress); window._edLongPressReady=false;
     return;
   }
@@ -2249,6 +2253,13 @@ function edOnEnd(e){
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging;
   window._edLongPressReady = false;
   // BUG-E09: solo guardar historial si algo cambió de verdad
+  // Si hubo pinch, cancelar cualquier drag — el último dedo al levantarse no debe mover nada
+  if(_edPinchHappened){
+    // Resetear flag solo cuando no quedan dedos activos
+    if(!window._edActivePointers || window._edActivePointers.size === 0) _edPinchHappened = false;
+    edIsDragging=false; edIsResizing=false; edIsTailDragging=false; edIsRotating=false;
+    return;
+  }
   if(wasDragging && (window._edMoved || edIsTailDragging)) edPushHistory();
   window._edMoved = false;
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
