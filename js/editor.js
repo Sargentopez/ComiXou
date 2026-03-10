@@ -1571,7 +1571,9 @@ function edPinchMove(e) {
       edRedraw();
     }
   } else {
-    // ── Modo cámara: pan + zoom del canvas (draw/eraser o sin selección) ──
+    // ── Modo cámara: pan + zoom — solo si no hay ninguna selección activa ──
+    const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0;
+    if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
     edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
@@ -1743,7 +1745,7 @@ function edOnStart(e){
   // Rastrear pointers activos (para pinch con pointer events)
   if(!window._edActivePointers) window._edActivePointers = new Map();
   window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-  // 2 dedos → iniciar pinch-to-zoom (aunque se esté pintando)
+  // 2 dedos → iniciar pinch
   if(window._edActivePointers.size === 2){
     // Cancelar fill pendiente — era un pinch, no un toque simple
     if(window._edFillPending) window._edFillPending = null;
@@ -1755,7 +1757,6 @@ function edOnStart(e){
     // Si estaba pintando, cancelar el trazo parcial sin guardarlo
     if(edPainting){
       edPainting = false;
-      // Restaurar al último estado guardado (antes del trazo actual)
       if(edDrawHistory.length > 0){
         _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx] || null);
       }
