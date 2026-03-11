@@ -20,14 +20,14 @@ Router.register('home', {
       <span class="page-nav-sep"></span>
       <button class="page-nav-btn page-nav-btn-create" id="createBtn" data-i18n="create">Crear</button>
     </nav>
-    <main class="home-list" id="comicsGrid">
-      <div class="home-empty hidden" id="emptyState">
+    <div class="home-empty hidden" id="emptyState">
         <span>📚</span>
         <p data-i18n="noComics">Aún no hay obras publicadas.</p>
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
+    <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v6.78</footer>
+    <footer class="app-version">v6.79</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }

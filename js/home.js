@@ -26,29 +26,20 @@ function HomeView_init() {
 
 async function _loadPublishedWorks() {
   const grid = document.getElementById('comicsGrid');
-  if (grid) grid.innerHTML = '<p style="padding:1rem;color:#888">Paso 1: iniciando...</p>';
+  if (grid) grid.innerHTML = '';
 
   if (typeof SupabaseClient === 'undefined' || typeof SupabaseClient.fetchPublishedWorks !== 'function') {
-    if (grid) grid.innerHTML = '<p style="padding:1rem;color:#c00">Error: SupabaseClient no disponible</p>';
     _homeWorks = [];
     renderComics();
     return;
   }
 
-  if (grid) grid.innerHTML = '<p style="padding:1rem;color:#888">Paso 2: llamando a Supabase...</p>';
-
-  let result;
   try {
-    result = await SupabaseClient.fetchPublishedWorks();
+    _homeWorks = await SupabaseClient.fetchPublishedWorks();
   } catch(e) {
-    if (grid) grid.innerHTML = `<p style="padding:1rem;color:#c00">Error fetch: ${e.message}</p>`;
+    console.error('Error cargando obras:', e);
     _homeWorks = [];
-    renderComics();
-    return;
   }
-
-  if (grid) grid.innerHTML = `<p style="padding:1rem;color:#080">Paso 3: recibidas ${result.length} obras</p>`;
-  _homeWorks = result;
   renderComics();
 }
 
@@ -190,12 +181,11 @@ function setActiveBtn(id) {
 function renderComics() {
   const grid  = document.getElementById('comicsGrid');
   const empty = document.getElementById('emptyState');
-  if (!grid) { console.error('renderComics: grid no encontrado'); return; }
-  if (!empty) { console.error('renderComics: empty no encontrado'); return; }
+  if (!grid || !empty) return;
   grid.innerHTML = '';
 
   const source = _homeWorks !== null ? _homeWorks : ComicStore.getPublished();
-  let comics = [...source].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  let comics = [...source].sort((a, b) => new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
 
   if (activeFilter.type === 'genre') {
     comics = comics.filter(c => c.genre === activeFilter.value);
@@ -203,23 +193,16 @@ function renderComics() {
     comics = comics.filter(c => c.username === activeFilter.value);
   }
 
-  // Diagnóstico temporal
-  grid.innerHTML = `<p style="padding:1rem;color:#00c">renderComics: ${comics.length} obras, source=${_homeWorks !== null ? 'supabase' : 'local'}</p>`;
-
   if (comics.length === 0) {
     empty.classList.remove('hidden');
     return;
   }
   empty.classList.add('hidden');
-  grid.innerHTML = '';
 
   const currentUser = Auth.currentUser();
   comics.forEach(comic => {
-    try {
-      grid.appendChild(buildRow(comic, currentUser));
-    } catch(e) {
-      grid.innerHTML += `<p style="color:#c00">Error buildRow: ${e.message}</p>`;
-    }
+    try { grid.appendChild(buildRow(comic, currentUser)); }
+    catch(e) { console.error('buildRow error:', e, comic); }
   });
 }
 
