@@ -211,7 +211,13 @@ function renderComics() {
   empty.classList.add('hidden');
 
   const currentUser = Auth.currentUser();
-  comics.forEach(comic => grid.appendChild(buildRow(comic, currentUser)));
+  comics.forEach(comic => {
+    try {
+      grid.appendChild(buildRow(comic, currentUser));
+    } catch(e) {
+      grid.innerHTML += `<p style="color:#c00">Error buildRow: ${e.message}</p>`;
+    }
+  });
 }
 
 // ── FILA ──
