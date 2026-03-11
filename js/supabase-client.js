@@ -217,31 +217,44 @@ const SupabaseClient = (() => {
 
   // ── ADMIN: LISTAR OBRAS DESDE SUPABASE ──────────────────────
   // Devuelven obras en formato compatible con buildAdminRow del admin.
+  // Fetch genérico de obras con thumbnail del primer panel.
+  // PostgREST soporta relaciones embebidas: panels(panel_order,data_url)
+  // nos da todos los paneles; nos quedamos con el de panel_order=0.
+  async function _fetchWorks(filter) {
+    const works = await _get(
+      `works?${filter}&order=updated_at.desc` +
+      `&select=id,title,author_name,genre,nav_mode,published,updated_at,panels(panel_order,data_url)`
+    );
+    return (works || []).map(w => {
+      const panels = (w.panels || []).sort((a,b) => a.panel_order - b.panel_order);
+      const thumb  = panels[0]?.data_url || '';
+      return _workToComic(w, w.published, thumb);
+    });
+  }
+
   async function fetchPendingWorks() {
-    const works = await _get('works?published=eq.false&order=updated_at.desc&select=id,title,author_name,genre,nav_mode,published,updated_at');
-    return (works || []).map(w => _workToComic(w, false));
+    return _fetchWorks('published=eq.false');
   }
 
   async function fetchPublishedWorks() {
-    const works = await _get('works?published=eq.true&order=updated_at.desc&select=id,title,author_name,genre,nav_mode,published,updated_at');
-    return (works || []).map(w => _workToComic(w, true));
+    return _fetchWorks('published=eq.true');
   }
 
-  // Convierte una fila de Supabase al formato mínimo que necesita buildAdminRow
-  function _workToComic(w, published) {
+  // Convierte una fila de Supabase al formato compatible con home/admin/my-comics
+  function _workToComic(w, published, thumb) {
     return {
-      id:           w.id,          // usamos el supabaseId como id local también
-      supabaseId:   w.id,
-      title:        w.title        || '(sin título)',
-      author:       w.author_name  || '',
-      genre:        w.genre        || '',
-      navMode:      w.nav_mode     || 'fixed',
-      published:    published,
-      approved:     published,
+      id:            w.id,
+      supabaseId:    w.id,
+      title:         w.title        || '(sin título)',
+      author:        w.author_name  || '',
+      username:      w.author_name  || '',   // home.js filtra por username
+      genre:         w.genre        || '',
+      navMode:       w.nav_mode     || 'fixed',
+      published:     published,
+      approved:      published,
       pendingReview: !published,
-      updatedAt:    w.updated_at,
-      // panels vacío — se carga bajo demanda al pulsar Leer
-      panels:       [],
+      updatedAt:     w.updated_at,
+      panels:        thumb ? [{ dataUrl: thumb }] : [],
     };
   }
 

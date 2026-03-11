@@ -2,7 +2,8 @@
    home.js — Lógica de la página de inicio
    ============================================================ */
 
-let activeFilter = { type: null, value: null }; // tipo: 'genre' | 'author' | null
+let activeFilter  = { type: null, value: null }; // tipo: 'genre' | 'author' | null
+let _homeWorks    = null;   // caché de obras publicadas desde Supabase
 
 // ── Punto de entrada SPA ──
 
@@ -15,14 +16,24 @@ function _onStoreChange(e) {
 }
 
 function HomeView_init() {
-  // Reactividad: re-renderizar cuando cambian datos (mismo tab o otra pestaña)
   window.addEventListener('cx:store', _onStoreChange);
-  // Limpiar listener al destruir la vista (si el router lo soporta)
   window._homeStoreCleanup = () => window.removeEventListener('cx:store', _onStoreChange);
 
-  // El router ya ajusta el spacing — aquí solo inicializamos contenido
-  renderComics();
   setupPageNav();
+  _loadPublishedWorks();  // carga desde Supabase y luego renderiza
+}
+
+async function _loadPublishedWorks() {
+  const grid = document.getElementById('comicsGrid');
+  if (grid) grid.innerHTML = '<p style="padding:1rem;color:#888">Cargando...</p>';
+  try {
+    _homeWorks = await SupabaseClient.fetchPublishedWorks();
+  } catch(e) {
+    console.error('Error cargando obras:', e);
+    _homeWorks = [];
+  }
+  buildFiltrosMenu();
+  renderComics();
 }
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera
@@ -60,8 +71,9 @@ function setupPageNav() {
     activeFilter = { type: null, value: null };
     setActiveBtn('novedadesBtn');
     updateFiltrosLabel();
-    showFiltrosLevel1();   // resetear menú de filtros
-    renderComics();        // releer localStorage con datos actuales
+    showFiltrosLevel1();
+    _homeWorks = null;        // forzar recarga fresca desde Supabase
+    _loadPublishedWorks();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
@@ -89,7 +101,7 @@ function showFiltrosLevel2(type) {
   if (!menu) return;
   menu.innerHTML = '';
 
-  const published = ComicStore.getPublished();
+  const published = _homeWorks !== null ? _homeWorks : ComicStore.getPublished();
 
 
 
@@ -163,9 +175,11 @@ function renderComics() {
   const grid  = document.getElementById('comicsGrid');
   const empty = document.getElementById('emptyState');
   grid.querySelectorAll('.comic-row').forEach(el => el.remove());
+  if (!grid || !empty) return;
 
-  let comics = [...ComicStore.getPublished()]
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  // Usar obras de Supabase si están disponibles; fallback a localStorage
+  const source = _homeWorks !== null ? _homeWorks : ComicStore.getPublished();
+  let comics = [...source].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
   if (activeFilter.type === 'genre') {
     comics = comics.filter(c => c.genre === activeFilter.value);
