@@ -118,7 +118,10 @@ function buildAdminRow(comic, mode) {
     const sid = comic.supabaseId;
     // Borradores (no publicados): usar ?draft=. Publicados: usar ?id=
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
-    openReaderModal(`../reader/?${param}&embed=1`);
+    // Construir URL del reader de forma robusta: tomar la raíz del sitio
+    // (todo hasta /pages/ inclusive) y navegar a /reader/ desde la raíz del repo.
+    const base = window.location.href.replace(/\/pages\/.*$/, '');
+    openReaderModal(`${base}/reader/?${param}&embed=1`);
   });
 
   // Aprobar
