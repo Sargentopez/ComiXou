@@ -123,7 +123,7 @@ function _mcRenderList() {
   }
 
   // Eventos de botones
-  wrap.addEventListener('click', e => {
+  wrap.addEventListener('click', async e => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const id = btn.dataset.id;
@@ -142,6 +142,27 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
+      const comicToEdit = ComicStore.getById(id);
+      // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero
+      if (comicToEdit && comicToEdit.cloudOnly && comicToEdit.supabaseId &&
+          (!comicToEdit.editorData || !comicToEdit.editorData.pages || !comicToEdit.editorData.pages.length) &&
+          typeof SupabaseClient !== 'undefined') {
+        _mcToast('\u23f3 Descargando obra de la nube...');
+        try {
+          const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
+          ComicStore.save({
+            ...comicToEdit,
+            cloudOnly: false,
+            editorData,
+            title:   work.title    || comicToEdit.title,
+            genre:   work.genre    || comicToEdit.genre,
+            navMode: work.nav_mode || comicToEdit.navMode,
+          });
+        } catch(err) {
+          _mcToast('\u26a0\ufe0f Error al descargar de la nube: ' + err.message);
+          return;
+        }
+      }
       // Guardar qué proyecto editar y navegar al editor
       sessionStorage.setItem('cx_edit_id', id);
       Router.go('editor');
