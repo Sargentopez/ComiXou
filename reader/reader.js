@@ -165,14 +165,23 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const y  = (t.y / 100) * ph;
   const w  = ((t.w  || 30) / 100) * pw;
   const h  = ((t.h  || 15) / 100) * ph;
-  const fs = Math.max(10, Math.round((t.font_size || 16) * (pw / ED_PAGE_W)));
+  const scale = pw / ED_PAGE_W;
+  const fs = Math.max(10, Math.round((t.font_size || 16) * scale));
   const bg     = t.bg           || '#ffffff';
   const border = t.border_color || '#000000';
-  const bw     = (t.border !== undefined && t.border !== null) ? t.border : 2;
-  const style  = t.style || 'normal';
+  const bw     = ((t.border !== undefined && t.border !== null) ? t.border : 2) * scale;
+  const style  = t.style || 'conventional';
+  const type   = t.type  || 'bubble';
   const cx = x + w / 2;
   const cy = y + h / 2;
   const isSingle = (t.text||'').trim().length===1 && /[a-zA-Z0-9]/.test((t.text||'').trim());
+  // Parsear cola (llega como string JSON desde Supabase)
+  let tailStarts = t.tail_starts;
+  let tailEnds   = t.tail_ends;
+  if (typeof tailStarts === 'string') { try { tailStarts = JSON.parse(tailStarts); } catch(e) { tailStarts = null; } }
+  if (typeof tailEnds   === 'string') { try { tailEnds   = JSON.parse(tailEnds);   } catch(e) { tailEnds   = null; } }
+  const hasTail    = t.has_tail ?? true;
+  const voiceCount = t.voice_count ?? 1;
 
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -201,10 +210,10 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0,0,maxDist,0,Math.PI*2); ctx.fill();
     // Cola de pensamiento: burbujas pequeñas
     const canvasSize = Math.min(pw, ph);
+    const thoughtTailEnd = (tailEnds && tailEnds[0]) || {x:-0.4, y:0.6};
     [0.09,0.055,0.03].forEach((r, i) => {
       const f = 1 - i * 0.3;
-      const te = t.tail_end || {x:0, y:0.5};
-      const tx = te.x * w * f, ty = te.y * h * f;
+      const tx = thoughtTailEnd.x * w * f, ty = thoughtTailEnd.y * h * f;
       ctx.beginPath(); ctx.arc(tx, ty, r * canvasSize, 0, Math.PI*2);
       ctx.fillStyle = bg; ctx.fill();
       ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke();
@@ -229,6 +238,16 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
       i===0 ? ctx.moveTo(Math.cos(angle)*rr, Math.sin(angle)*rr) : ctx.lineTo(Math.cos(angle)*rr, Math.sin(angle)*rr);
     }
     ctx.closePath();
+  } else if (type === 'text') {
+    // Caja de texto: rectángulo con esquinas ligeramente redondeadas
+    const rr = Math.min(6 * scale, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(-w/2+rr, -h/2);
+    ctx.lineTo( w/2-rr, -h/2); ctx.arcTo( w/2,-h/2,  w/2,-h/2+rr, rr);
+    ctx.lineTo( w/2,    h/2-rr); ctx.arcTo( w/2, h/2,  w/2-rr, h/2, rr);
+    ctx.lineTo(-w/2+rr, h/2); ctx.arcTo(-w/2,  h/2, -w/2, h/2-rr, rr);
+    ctx.lineTo(-w/2,   -h/2+rr); ctx.arcTo(-w/2,-h/2, -w/2+rr,-h/2, rr);
+    ctx.closePath();
   } else if (isSingle) {
     ctx.beginPath(); ctx.arc(0, 0, Math.min(w,h)/2, 0, Math.PI*2);
   } else {
@@ -239,22 +258,29 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   ctx.fillStyle = bg; ctx.fill();
   if (bw > 0) {
     ctx.strokeStyle = border; ctx.lineWidth = bw;
-    if (style === 'lowvoice') ctx.setLineDash([5, 3]); else ctx.setLineDash([]);
+    if (style === 'lowvoice') ctx.setLineDash([5*scale, 3*scale]); else ctx.setLineDash([]);
     ctx.stroke(); ctx.setLineDash([]);
   }
 
-  // Cola
-  if (t.type === 'bubble' && style !== 'radio') {
-    _drawTail(ctx, t, w, h, bg, border, bw);
-  } else if (t.type === 'bubble' && style === 'radio') {
-    const te = t.tail_end || {x:0, y:0.5};
+  // Cola (solo bocadillos, no cajas de texto)
+  if (type === 'bubble' && hasTail && style !== 'radio') {
+    const vc = voiceCount;
+    const starts = tailStarts || [{x:-0.4, y:0.4}];
+    const ends   = tailEnds   || [{x:-0.4, y:0.6}];
+    for (let v = 0; v < vc; v++) {
+      const ts = starts[v] || starts[0];
+      const te = ends[v]   || ends[0];
+      _drawTail(ctx, ts, te, w, h, bg, border, bw, scale);
+    }
+  } else if (type === 'bubble' && style === 'radio') {
+    const te = (tailEnds && tailEnds[0]) || {x:0, y:0.5};
     const ex = te.x * w, ey = te.y * h;
-    ctx.save(); ctx.strokeStyle = border; ctx.lineWidth = 1;
-    for (let r = 5; r < 25; r += 5) { ctx.beginPath(); ctx.arc(ex, ey, r, 0, Math.PI*2); ctx.stroke(); }
+    ctx.save(); ctx.strokeStyle = border; ctx.lineWidth = 1 * scale;
+    for (let r = 5*scale; r < 25*scale; r += 5*scale) { ctx.beginPath(); ctx.arc(ex, ey, r, 0, Math.PI*2); ctx.stroke(); }
     ctx.restore();
   }
 
-  // Texto centrado (igual que editor)
+  // Texto centrado
   ctx.font = fs + 'px ' + (t.font_family || 'Arial, sans-serif');
   const isPlaceholder = (t.text||'') === 'Escribe aquí';
   ctx.fillStyle = isPlaceholder ? '#999999' : (t.color || '#000000');
@@ -266,13 +292,12 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   ctx.restore();
 }
 
-// Cola del bocadillo — coordenadas relativas al centro (ctx ya tiene translate)
-function _drawTail(ctx, t, w, h, bg, border, bw) {
-  const ts = t.tail_start || {x:0, y:0.5};
-  const te = t.tail_end   || {x:0, y:0.5};
+// Cola — coordenadas relativas al centro del bocadillo (ctx ya tiene translate)
+function _drawTail(ctx, ts, te, w, h, bg, border, bw, scale) {
   const sx = ts.x * w, sy = ts.y * h;
   const ex = te.x * w, ey = te.y * h;
-  const angle = Math.atan2(ey-sy, ex-sx), tailW = 10;
+  const tailW = 10 * (scale||1);
+  const angle = Math.atan2(ey-sy, ex-sx);
   const perp = {x:-Math.sin(angle), y:Math.cos(angle)};
   const left  = {x: sx+perp.x*tailW/2, y: sy+perp.y*tailW/2};
   const right = {x: sx-perp.x*tailW/2, y: sy-perp.y*tailW/2};
@@ -280,12 +305,12 @@ function _drawTail(ctx, t, w, h, bg, border, bw) {
   ctx.closePath();
   ctx.fillStyle = bg; ctx.fill();
   if (bw > 0) { ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke(); }
-  // Línea blanca para tapar el borde en la base
-  const extra = 1;
+  // Línea de cobertura en la base del triángulo
+  const extra = 1 * (scale||1);
   const extL = {x:left.x +perp.x*extra, y:left.y +perp.y*extra};
   const extR = {x:right.x-perp.x*extra, y:right.y-perp.y*extra};
   ctx.beginPath(); ctx.moveTo(extL.x,extL.y); ctx.lineTo(extR.x,extR.y);
-  ctx.strokeStyle = bg; ctx.lineWidth = bw*2+2; ctx.lineCap='round'; ctx.stroke(); ctx.lineCap='butt';
+  ctx.strokeStyle = bg; ctx.lineWidth = bw*2+2*(scale||1); ctx.lineCap='round'; ctx.stroke(); ctx.lineCap='butt';
 }
 
 function _wrapText(ctx, text, maxW) {
