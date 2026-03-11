@@ -215,5 +215,35 @@ const SupabaseClient = (() => {
     };
   }
 
-  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, downloadDraftAsEditorData };
+  // ── ADMIN: LISTAR OBRAS DESDE SUPABASE ──────────────────────
+  // Devuelven obras en formato compatible con buildAdminRow del admin.
+  async function fetchPendingWorks() {
+    const works = await _get('works?published=eq.false&order=updated_at.desc&select=id,title,author_name,genre,nav_mode,published,updated_at');
+    return (works || []).map(w => _workToComic(w, false));
+  }
+
+  async function fetchPublishedWorks() {
+    const works = await _get('works?published=eq.true&order=updated_at.desc&select=id,title,author_name,genre,nav_mode,published,updated_at');
+    return (works || []).map(w => _workToComic(w, true));
+  }
+
+  // Convierte una fila de Supabase al formato mínimo que necesita buildAdminRow
+  function _workToComic(w, published) {
+    return {
+      id:           w.id,          // usamos el supabaseId como id local también
+      supabaseId:   w.id,
+      title:        w.title        || '(sin título)',
+      author:       w.author_name  || '',
+      genre:        w.genre        || '',
+      navMode:      w.nav_mode     || 'fixed',
+      published:    published,
+      approved:     published,
+      pendingReview: !published,
+      updatedAt:    w.updated_at,
+      // panels vacío — se carga bajo demanda al pulsar Leer
+      panels:       [],
+    };
+  }
+
+  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks };
 })();

@@ -30,17 +30,31 @@ function renderTab(tab) {
 }
 
 // ── PENDIENTES ──
-function renderPending(panel) {
-  const comics = ComicStore.getAll().filter(c => !c.published && !c.approved && c.pendingReview);
-  if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noPending')}</p>`; return; }
-  comics.forEach(c => panel.appendChild(buildAdminRow(c, 'pending')));
+async function renderPending(panel) {
+  panel.innerHTML = `<p class="admin-empty">Cargando...</p>`;
+  try {
+    const comics = await SupabaseClient.fetchPendingWorks();
+    panel.innerHTML = '';
+    if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noPending')}</p>`; return; }
+    comics.forEach(c => panel.appendChild(buildAdminRow(c, 'pending')));
+  } catch(e) {
+    panel.innerHTML = `<p class="admin-empty">Error al cargar obras pendientes.</p>`;
+    console.error(e);
+  }
 }
 
 // ── PUBLICADOS ──
-function renderPublished(panel) {
-  const comics = ComicStore.getPublished();
-  if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noPublished')}</p>`; return; }
-  comics.forEach(c => panel.appendChild(buildAdminRow(c, 'published')));
+async function renderPublished(panel) {
+  panel.innerHTML = `<p class="admin-empty">Cargando...</p>`;
+  try {
+    const comics = await SupabaseClient.fetchPublishedWorks();
+    panel.innerHTML = '';
+    if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noPublished')}</p>`; return; }
+    comics.forEach(c => panel.appendChild(buildAdminRow(c, 'published')));
+  } catch(e) {
+    panel.innerHTML = `<p class="admin-empty">Error al cargar obras publicadas.</p>`;
+    console.error(e);
+  }
 }
 
 // ── TODAS (incluye no publicadas con supabaseId — en BD pero no visibles) ──
@@ -118,25 +132,24 @@ function buildAdminRow(comic, mode) {
     const sid = comic.supabaseId;
     // Borradores (no publicados): usar ?draft=. Publicados: usar ?id=
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
-    // Construir URL del reader de forma robusta: tomar la raíz del sitio
-    // (todo hasta /pages/ inclusive) y navegar a /reader/ desde la raíz del repo.
-    const base = window.location.href.replace(/\/pages\/.*$/, '');
+    // Construir URL del reader de forma robusta usando origin+pathname (sin hash).
+    // pathname en GitHub Pages = /ComiXou/index.html o /ComiXou/
+    const base = (window.location.origin + window.location.pathname)
+      .replace(/\/index\.html$/, '')
+      .replace(/\/$/, '');
     openReaderModal(`${base}/reader/?${param}&embed=1`);
   });
 
   // Aprobar
   row.querySelector(`#approve_${comic.id}`)?.addEventListener('click', async () => {
-    const c = ComicStore.getById(comic.id);
-    if (!c) return;
+    // Intentar obtener de localStorage; si no existe, usar el objeto comic de Supabase
+    const c = ComicStore.getById(comic.id) || comic;
 
-    // Si no tiene supabaseId, no puede aprobarse — el autor debe volver a publicar
     if (!c.supabaseId) {
       showToast('⚠️ Esta obra no tiene ID en la base de datos. Pide al autor que la vuelva a publicar.');
       return;
     }
 
-    c.approved = true; c.published = true; c.pendingReview = false;
-    ComicStore.save(c);
     if (typeof SupabaseClient !== 'undefined') {
       try {
         await SupabaseClient.approveWork(c);
@@ -146,23 +159,27 @@ function buildAdminRow(comic, mode) {
         return;
       }
     }
+    // Actualizar localStorage solo si existe entrada local
+    const local = ComicStore.getById(comic.id);
+    if (local) {
+      local.approved = true; local.published = true; local.pendingReview = false;
+      ComicStore.save(local);
+    }
     showToast(I18n.t('approveOk'));
     renderTab('pending');
   });
 
   // Retirar
   row.querySelector(`#unpub_${comic.id}`)?.addEventListener('click', async () => {
-    const c = ComicStore.getById(comic.id);
-    if (!c) return;
-    c.published = false; c.approved = false;
-    ComicStore.save(c);
-    if (typeof SupabaseClient !== 'undefined' && c.supabaseId) {
+    if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
       try {
-        await SupabaseClient.unpublishWork(c.id, c.supabaseId);
+        await SupabaseClient.unpublishWork(comic.id, comic.supabaseId);
       } catch(err) { console.warn('Supabase unpublishWork:', err); }
     }
+    const local = ComicStore.getById(comic.id);
+    if (local) { local.published = false; local.approved = false; ComicStore.save(local); }
     showToast(I18n.t('retireOk'));
-    renderTab('published'); // refresco inmediato
+    renderTab('published');
   });
 
   // Eliminar (de localStorage Y de Supabase)
