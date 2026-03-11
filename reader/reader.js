@@ -155,13 +155,23 @@ function _drawTexts(ctx, panel, pw, ph) {
     texts.forEach(t => _drawBubble(ctx, t, pw, ph, 1));
     return;
   }
-  // Modo sequential: solo hasta textStep, con fade del anterior
+  // Modo sequential — replica exacta del visor interno del editor (edUpdateViewer):
+  // - type 'text' (cajas): siempre al 100% cuando reveladas, permanecen visibles
+  // - type 'bubble': el actual al 100%, el anterior con fade-out, los más viejos desaparecen
   const toShow = texts.slice(0, RS.textStep);
   toShow.forEach((t, vi) => {
-    const isCur  = vi === toShow.length - 1;
-    const isPrev = vi === toShow.length - 2;
-    if (isCur)                           _drawBubble(ctx, t, pw, ph, 1);
-    else if (isPrev && RS.fadeAlpha > 0) _drawBubble(ctx, t, pw, ph, RS.fadeAlpha);
+    if (t.type === 'text') {
+      _drawBubble(ctx, t, pw, ph, 1);
+    } else {
+      const isCurrent  = vi === toShow.length - 1;
+      const isPrevious = vi === toShow.length - 2;
+      if (isCurrent) {
+        _drawBubble(ctx, t, pw, ph, 1);
+      } else if (isPrevious && RS.fadeAlpha > 0) {
+        _drawBubble(ctx, t, pw, ph, RS.fadeAlpha);
+      }
+      // Bocadillos más antiguos: ya desaparecieron
+    }
   });
 }
 
@@ -399,11 +409,15 @@ function _updateCounter() {
 }
 
 function _showControls() {
+  // En PC (sin táctil): controles siempre visibles, no se ocultan solos
+  // En táctil: se muestran al tocar y se ocultan tras 3.5s
   const ctrls = document.getElementById('viewerControls');
   if (!ctrls) return;
-  ctrls.classList.remove('hidden');
+  ctrls.classList.remove('ctrl-hidden');
   clearTimeout(RS.ctrlTimer);
-  RS.ctrlTimer = setTimeout(() => ctrls.classList.add('hidden'), 3500);
+  if (RS.isTouch) {
+    RS.ctrlTimer = setTimeout(() => ctrls.classList.add('ctrl-hidden'), 3500);
+  }
 }
 
 function _setupControls() {
@@ -425,9 +439,9 @@ function _setupControls() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  // Mouse — mostrar controles al mover
-  RS.canvas.addEventListener('mousemove',  () => _showControls(), { passive: true });
-  RS.canvas.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse') _showControls(); }, { passive: true });
+  // Detectar si es dispositivo táctil para la lógica de auto-ocultar controles
+  RS.isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  _showControls(); // Mostrar al inicio (en PC se quedan fijos, en táctil se ocultan solos)
 
   // Swipe táctil con AbortController (evita acumulación de listeners)
   RS.ac = new AbortController();

@@ -44,38 +44,43 @@ html, body {
 #readerCanvas {
   position: absolute;
   display: block;
-  /* Sin image-rendering: pixelated — deja que el navegador suavice en PC */
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.35);
 }
 
 /* CONTROLES FLOTANTES */
 .viewer-controls {
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 6px;
-  background: rgba(0,0,0,.72); backdrop-filter: blur(8px);
-  border-radius: 999px; padding: 6px 10px;
-  z-index: 100; transition: opacity .3s ease;
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px;
+  background: #222; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 14px; padding: 6px 8px;
+  z-index: 100; transition: opacity .25s ease;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
 }
-.viewer-controls.hidden { opacity: 0; pointer-events: none; }
+.viewer-controls.ctrl-hidden { opacity: 0; pointer-events: none; }
 .ctrl-btn {
-  background: rgba(255,255,255,.12); border: none; border-radius: 50%;
-  width: 38px; height: 38px; color: #fff; font-size: 1.5rem;
+  background: rgba(255,255,255,.08); border: none; border-radius: 8px;
+  width: 36px; height: 36px; color: #fff; font-size: 1.4rem;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   transition: background .15s;
 }
+.ctrl-btn:hover  { background: rgba(255,255,255,.18); }
 .ctrl-btn:active { background: rgba(255,255,255,.28); }
-.ctrl-close { font-size: 1rem; }
+.ctrl-close { font-size: .95rem; }
 .ctrl-counter {
-  font-size: .82rem; color: rgba(255,255,255,.85);
-  white-space: nowrap; padding: 0 6px; min-width: 70px; text-align: center;
+  font-size: .82rem; color: rgba(255,255,255,.9);
+  white-space: nowrap; padding: 0 8px; min-width: 72px; text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 /* CERRAR MÓVIL */
 .close-mobile {
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-  background: rgba(0,0,0,.72); backdrop-filter: blur(8px);
-  border: none; border-radius: 50%; width: 44px; height: 44px;
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: #222; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 50%; width: 44px; height: 44px;
   color: #fff; font-size: 1.1rem; cursor: pointer; z-index: 100;
   display: none; align-items: center; justify-content: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
 }
 
 /* FIN */
