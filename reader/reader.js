@@ -114,12 +114,17 @@ function _resizeCanvas() {
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
   const vw = window.innerWidth, vh = window.innerHeight;
-  const scale = Math.min(vw / pw, vh / ph);
+  // Reservar espacio para controles inferiores (~80px) y margen mínimo (8px)
+  const CTRL_H = 80, MARGIN = 8;
+  const availW = vw  - MARGIN * 2;
+  const availH = vh  - CTRL_H - MARGIN;
+  // Escala uniforme que respeta la proporción original siempre
+  const scale = Math.min(availW / pw, availH / ph);
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
   RS.canvas.style.width  = dw + 'px';
   RS.canvas.style.height = dh + 'px';
   RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
-  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
+  RS.canvas.style.top    = Math.round(MARGIN + (availH - dh) / 2) + 'px';
 }
 
 // ── RENDER PRINCIPAL ──────────────────────────────────────────
@@ -222,7 +227,8 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     ctx.font = fs + 'px ' + (t.font_family || 'Arial, sans-serif');
     ctx.fillStyle = t.color || '#000000';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const linesT = _wrapText(ctx, t.text || '', w * 0.7);
+    const padT = (t.padding || 15) * scale;
+    const linesT = _wrapText(ctx, t.text || '', w * 0.7 - padT * 2);
     const lhT = fs * 1.2, totalHT = linesT.length * lhT;
     linesT.forEach((line, i) => ctx.fillText(line, 0, -totalHT/2 + lhT/2 + i*lhT));
     ctx.restore();
@@ -285,7 +291,8 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const isPlaceholder = (t.text||'') === 'Escribe aquí';
   ctx.fillStyle = isPlaceholder ? '#999999' : (t.color || '#000000');
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const lines = _wrapText(ctx, t.text || '', w * 0.85);
+  const pad = (t.padding || 10) * scale;
+  const lines = _wrapText(ctx, t.text || '', w - pad * 2);
   const lh = fs * 1.2, totalH = lines.length * lh;
   lines.forEach((line, i) => ctx.fillText(line, 0, -totalH/2 + lh/2 + i*lh));
 

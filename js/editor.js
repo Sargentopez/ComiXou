@@ -3656,31 +3656,39 @@ function edSaveProject(){
 
       if(l.type === 'bubble'){
         texts.push({
-          type:       'dialog',
-          text:       rawText,
+          type:        'bubble',
+          text:        rawText,
           x: xPct, y: yPct, w: wPct, h: hPct,
-          tail:       _edBubbleTailDir(l),
-          style:      l.style || 'conventional',
-          order:      seqOrder++,
-          fontSize:   l.fontSize || 18,
-          fontFamily: l.fontFamily || 'Comic Sans MS, cursive',
-          color:      l.color || '#000000',
-          bg:         l.backgroundColor || '#ffffff',
-          border:     l.borderWidth || 2,
+          style:       l.style      || 'conventional',
+          order:       seqOrder++,
+          fontSize:    l.fontSize   || 18,
+          fontFamily:  l.fontFamily || 'Comic Sans MS, cursive',
+          color:       l.color      || '#000000',
+          bg:          l.backgroundColor || '#ffffff',
+          border:      l.borderWidth ?? 2,
           borderColor: l.borderColor || '#000000',
+          rotation:    l.rotation   || 0,
+          padding:     l.padding    || 15,
+          hasTail:     true,
+          voiceCount:  l.voiceCount || 1,
+          tailStarts:  l.tailStarts || [l.tailStart || {x:-0.4, y:0.4}],
+          tailEnds:    l.tailEnds   || [l.tailEnd   || {x:-0.4, y:0.6}],
         });
       } else if(l.type === 'text'){
         texts.push({
-          type:       'text',    // tipo genérico: aparece secuencialmente
-          text:       rawText,
+          type:        'text',
+          text:        rawText,
           x: xPct, y: yPct, w: wPct, h: hPct,
-          order:      seqOrder++,
-          fontSize:   l.fontSize || 20,
-          fontFamily: l.fontFamily || 'Arial',
-          color:      l.color || '#000000',
-          bg:         l.backgroundColor || '#ffffff',
-          border:     l.borderWidth || 0,
+          order:       seqOrder++,
+          fontSize:    l.fontSize   || 20,
+          fontFamily:  l.fontFamily || 'Arial',
+          color:       l.color      || '#000000',
+          bg:          l.backgroundColor || '#ffffff',
+          border:      l.borderWidth ?? 0,
           borderColor: l.borderColor || '#000000',
+          rotation:    l.rotation   || 0,
+          padding:     l.padding    || 10,
+          hasTail:     false,
         });
       }
     });

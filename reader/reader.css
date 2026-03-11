@@ -44,7 +44,7 @@ html, body {
 #readerCanvas {
   position: absolute;
   display: block;
-  image-rendering: pixelated;
+  /* Sin image-rendering: pixelated — deja que el navegador suavice en PC */
 }
 
 /* CONTROLES FLOTANTES */
