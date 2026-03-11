@@ -217,19 +217,25 @@ const SupabaseClient = (() => {
 
   // ── ADMIN: LISTAR OBRAS DESDE SUPABASE ──────────────────────
   // Devuelven obras en formato compatible con buildAdminRow del admin.
-  // Fetch genérico de obras con thumbnail del primer panel.
-  // PostgREST soporta relaciones embebidas: panels(panel_order,data_url)
-  // nos da todos los paneles; nos quedamos con el de panel_order=0.
+  // Fetch genérico de obras + thumbnail del primer panel (dos queries, sin join).
   async function _fetchWorks(filter) {
     const works = await _get(
       `works?${filter}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,published,updated_at,panels(panel_order,data_url)`
+      `&select=id,title,author_name,genre,nav_mode,published,updated_at`
     );
-    return (works || []).map(w => {
-      const panels = (w.panels || []).sort((a,b) => a.panel_order - b.panel_order);
-      const thumb  = panels[0]?.data_url || '';
-      return _workToComic(w, w.published, thumb);
-    });
+    if (!works || !works.length) return [];
+
+    // Pedir solo el panel_order=0 de cada obra para el thumbnail
+    const ids = works.map(w => w.id).join(',');
+    let thumbMap = {};
+    try {
+      const panels = await _get(
+        `panels?work_id=in.(${ids})&panel_order=eq.0&select=work_id,data_url`
+      );
+      (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
+    } catch(e) { /* sin thumbnails */ }
+
+    return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
   }
 
   async function fetchPendingWorks() {
