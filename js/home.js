@@ -31,6 +31,8 @@ async function _loadPublishedWorks() {
   } catch(e) {
     console.error('Error cargando obras:', e);
     _homeWorks = [];
+    if (grid) grid.innerHTML = `<p style="padding:1rem;color:#c00">Error: ${e.message}</p>`;
+    return;
   }
   renderComics();
 }
@@ -173,8 +175,8 @@ function setActiveBtn(id) {
 function renderComics() {
   const grid  = document.getElementById('comicsGrid');
   const empty = document.getElementById('emptyState');
-  grid.querySelectorAll('.comic-row').forEach(el => el.remove());
   if (!grid || !empty) return;
+  grid.innerHTML = ''; // limpiar todo, incluido "Cargando..."
 
   // Usar obras de Supabase si están disponibles; fallback a localStorage
   const source = _homeWorks !== null ? _homeWorks : ComicStore.getPublished();
