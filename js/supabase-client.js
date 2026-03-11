@@ -46,6 +46,11 @@ const SupabaseClient = (() => {
   async function _uploadPanels(comic) {
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
     if (!comic.panels || comic.panels.length === 0) return;
+
+    // editorData.pages[] contiene las capas editables (edSerLayer).
+    // comic.panels[] contiene el render plano + textos para el reader.
+    const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
+
     for (let i = 0; i < comic.panels.length; i++) {
       const p = comic.panels[i];
       const ins = await _upsert('panels', {
@@ -56,7 +61,21 @@ const SupabaseClient = (() => {
         data_url:    p.dataUrl     || null,
       });
       const panelId = ins[0]?.id;
-      if (!panelId || !p.texts || p.texts.length === 0) continue;
+      if (!panelId) continue;
+
+      // Capas del editor: image, draw, stroke, bubble, text — formato edSerLayer
+      const edPage = edPages[i];
+      if (edPage && edPage.layers && edPage.layers.length > 0) {
+        await _upsert('panel_layers', edPage.layers.map((l, j) => ({
+          panel_id:    panelId,
+          layer_order: j,
+          layer_type:  l.type,
+          layer_data:  JSON.stringify(l),
+        })));
+      }
+
+      // Textos para el reader (panel_texts sin cambios)
+      if (!p.texts || p.texts.length === 0) continue;
       await _upsert('panel_texts', p.texts.map((t, j) => ({
         panel_id:     panelId,
         text_order:   t.order              ?? j,
@@ -144,78 +163,44 @@ const SupabaseClient = (() => {
     await _delete('works', `id=eq.${supabaseId}`);
   }
 
-  // ── DESCARGAR BORRADOR PARA EDITAR ──────────────────────────────────────
-  // Descarga el contenido completo de Supabase y lo convierte en editorData
-  // compatible con edLoadProject(). Cada panel se reconstruye como una página
-  // con un ImageLayer (data_url) y los textos como capas serializadas.
+  // ── DESCARGAR BORRADOR PARA EDITAR ──────────────────────────────────────────────────────────────────
+  // Descarga panel_layers (capas del editor, formato edSerLayer) y las devuelve
+  // como editorData listo para edLoadProject(). El editor las pasa por edDeserLayer
+  // sin ninguna conversion — es el mismo formato que guardo edSaveProject.
   async function downloadDraftAsEditorData(supabaseId) {
-    // 1. Metadatos de la obra
     const works = await _get(`works?id=eq.${supabaseId}&limit=1`);
     if (!works || !works.length) throw new Error('Obra no encontrada en la nube');
     const work = works[0];
 
-    // 2. Paneles ordenados
     const panels = await _get(
       `panels?work_id=eq.${supabaseId}&order=panel_order.asc&select=id,panel_order,orientation,text_mode,data_url`
     ) || [];
 
-    // 3. Para cada panel, descargar sus textos
     const pages = [];
     for (const panel of panels) {
-      const texts = await _get(
-        `panel_texts?panel_id=eq.${panel.id}&order=text_order.asc`
+      // Capas del editor guardadas por edSerLayer
+      const layerRows = await _get(
+        `panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`
       ) || [];
 
-      const layers = [];
+      const layers = layerRows.map(row => {
+        try { return JSON.parse(row.layer_data); }
+        catch(e) { return null; }
+      }).filter(Boolean);
 
-      // Capa imagen (el data_url renderizado del panel)
-      if (panel.data_url) {
+      // Si no hay panel_layers (obra subida antes de esta version), usar data_url
+      // como ImageLayer de fallback para que al menos se vea algo
+      if (layers.length === 0 && panel.data_url) {
         layers.push({
-          type:     'image',
-          src:      panel.data_url,
-          x:        0,
-          y:        0,
-          width:    1,
-          height:   1,
-          rotation: 0,
-          opacity:  1,
+          type: 'image', src: panel.data_url,
+          x: 0.5, y: 0.5, width: 1, height: 1, rotation: 0, opacity: 1,
         });
       }
 
-      // Capas de texto/bocadillo
-      for (const t of texts) {
-        let tailStarts, tailEnds;
-        try { tailStarts = JSON.parse(t.tail_starts || 'null'); } catch(e) { tailStarts = null; }
-        try { tailEnds   = JSON.parse(t.tail_ends   || 'null'); } catch(e) { tailEnds   = null; }
-
-        layers.push({
-          type:        t.type        || 'bubble',
-          style:       t.style       || 'conventional',
-          hasTail:     t.has_tail    ?? true,
-          tailStarts:  tailStarts    || [{x:-0.4,y:0.4}],
-          tailEnds:    tailEnds      || [{x:-0.4,y:0.6}],
-          voiceCount:  t.voice_count ?? 1,
-          x:           t.x           ?? 0,
-          y:           t.y           ?? 0,
-          w:           t.w           ?? 0.3,
-          h:           t.h           ?? 0.15,
-          text:        t.text        || '',
-          fontFamily:  t.font_family || 'Comic Sans MS, cursive',
-          fontSize:    t.font_size   ?? 18,
-          color:       t.color       || '#000000',
-          bg:          t.bg          || '#ffffff',
-          border:      t.border      ?? 2,
-          borderColor: t.border_color|| '#000000',
-          rotation:    t.rotation    ?? 0,
-          padding:     t.padding     ?? 15,
-        });
-      }
-
-      // El editor usa 'vertical'/'horizontal'; Supabase almacena 'v'/'h'
       const orient = panel.orientation === 'h' ? 'horizontal' : 'vertical';
       pages.push({
         orientation:      orient,
-        textMode:         panel.text_mode   || 'sequential',
+        textMode:         panel.text_mode || 'sequential',
         textLayerOpacity: 1,
         layers,
       });
