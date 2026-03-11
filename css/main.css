@@ -645,3 +645,34 @@ body.editor-page { padding-top: 0; }
   }
 }
 
+
+/* ── MODAL READER EMBED (compartido: expositor + admin) ── */
+.reader-modal {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,.88);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+}
+.reader-modal.hidden { display: none; }
+.reader-modal-inner {
+  position: relative;
+  width: min(98vw, 560px);
+  height: min(96vh, 900px);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1a1a1a;
+  box-shadow: 0 24px 80px rgba(0,0,0,.7);
+}
+.reader-modal-frame {
+  width: 100%; height: 100%;
+  border: none; display: block;
+}
+.reader-modal-close {
+  position: absolute; top: 10px; right: 10px; z-index: 10;
+  background: rgba(0,0,0,.7); border: 1px solid rgba(255,255,255,.2);
+  color: #fff; border-radius: 50%; width: 34px; height: 34px;
+  font-size: 1rem; cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.reader-modal-close:hover { background: rgba(180,0,0,.8); }

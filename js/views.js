@@ -27,7 +27,7 @@ Router.register('home', {
         <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     </main>
-    <footer class="app-version">v6.59</footer>
+    <footer class="app-version">v6.61</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -142,6 +142,10 @@ Router.register('my-comics', {
       </div>
       <div class="page-nav-sep"></div>
       <div class="page-nav-item">
+        <button class="page-nav-btn" id="mcCloudLoadBtn" title="Cargar borradores guardados en la nube">☁️ Cargar de nube</button>
+      </div>
+      <div class="page-nav-sep"></div>
+      <div class="page-nav-item">
         <button class="page-nav-btn page-nav-btn-create" id="mcNewBtn">✚ Crear nuevo</button>
       </div>
     </nav>
@@ -181,7 +185,8 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
-        <button class="ed-top-action" id="edSaveBtn" title="Guardar">💾</button>
+        <button class="ed-top-action" id="edSaveBtn" title="Guardar local">💾</button>
+        <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
 
       <!-- ── BARRA DE MENÚ ── -->

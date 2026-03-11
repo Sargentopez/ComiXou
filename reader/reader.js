@@ -28,10 +28,33 @@ const RS = {
 
 // ── ARRANQUE ─────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  const id = new URLSearchParams(window.location.search).get('id');
-  if (!id) { showError('No se indicó ninguna obra. Comprueba el enlace.'); return; }
-  loadWork(id);
+  const params = new URLSearchParams(window.location.search);
+  const id     = params.get('id');
+  const draft  = params.get('draft');   // token de borrador (obra no publicada)
+
+  // Modo embed: incrustado en iframe desde admin/expositor
+  RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
+
+  if (RS.isEmbed) {
+    document.body.classList.add('embed-mode');
+    // El botón cerrar manda mensaje al padre en lugar de navegar
+    document.getElementById('closeBtn')?.addEventListener('click', _embedClose);
+    document.getElementById('endBackBtn')?.addEventListener('click', _embedClose);
+  } else {
+    document.getElementById('closeBtn')?.addEventListener('click',   () => history.back());
+    document.getElementById('endBackBtn')?.addEventListener('click', () => history.back());
+  }
+
+  if (draft) { loadDraft(draft); return; }
+  if (id)    { loadWork(id);     return; }
+  showError('No se indicó ninguna obra. Comprueba el enlace.');
 });
+
+function _embedClose() {
+  // Si está en iframe, notifica al padre. Si no, navega atrás.
+  try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(e) {}
+  if (window.self === window.top) history.back();
+}
 
 // ── CARGA DESDE SUPABASE ─────────────────────────────────────
 async function loadWork(workId) {
@@ -63,6 +86,38 @@ async function loadWork(workId) {
   } catch(err) {
     console.error('Error:', err);
     showError('Error de conexión. Comprueba tu internet e inténtalo de nuevo.');
+  }
+}
+
+// ── CARGA BORRADOR (obra no publicada, acceso por token) ─────
+async function loadDraft(token) {
+  setLoadingMsg('Cargando borrador...');
+  try {
+    // El token es el supabaseId de la obra, que solo conoce quien tiene el link
+    const work = await sbGet('works?id=eq.' + token);
+    if (!work || !work.length) { showError('Borrador no encontrado o enlace caducado.'); return; }
+
+    setLoadingMsg('Cargando páginas...');
+    const panels = await sbGet('panels?work_id=eq.' + token + '&order=panel_order.asc');
+    if (!panels || !panels.length) { showError('Esta obra no tiene páginas guardadas.'); return; }
+
+    const panelIds = panels.map(p => p.id).join(',');
+    const texts    = await sbGet('panel_texts?panel_id=in.(' + panelIds + ')&order=text_order.asc');
+
+    RS.panels = panels.map(panel => ({
+      ...panel,
+      texts: (texts || [])
+        .filter(t => t.panel_id === panel.id)
+        .sort((a,b) => (a.text_order||0) - (b.text_order||0)),
+    }));
+
+    document.title = (work[0].title || 'Borrador') + ' — ComiXow';
+    setLoadingMsg('Preparando imágenes...');
+    await preloadImages();
+    startReader();
+  } catch(err) {
+    console.error('Error loadDraft:', err);
+    showError('Error al cargar el borrador. Comprueba tu conexión.');
   }
 }
 
@@ -421,10 +476,9 @@ function _showControls() {
 }
 
 function _setupControls() {
-  document.getElementById('nextBtn')?.addEventListener('click',  advance);
+  document.getElementById('nextBtn')?.addEventListener('click', advance);
   document.getElementById('prevBtn')?.addEventListener('click',  goBack);
-  document.getElementById('closeBtn')?.addEventListener('click', () => history.back());
-  document.getElementById('closeMobileBtn')?.addEventListener('click', () => history.back());
+  // closeBtn y endBackBtn ya se configuran en DOMContentLoaded según modo embed/normal
   document.getElementById('restartBtn')?.addEventListener('click', () => {
     document.getElementById('endOverlay').classList.add('hidden');
     RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;

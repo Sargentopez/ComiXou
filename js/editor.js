@@ -3636,6 +3636,37 @@ function _edBubbleTailDir(l){
     return ex > 0 ? 'right' : 'left';
   }
 }
+async function edCloudSave() {
+  if (!edProjectId) { edToast('Sin proyecto activo'); return; }
+  if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
+  if (!Auth?.currentUser?.()) { edToast('Inicia sesión para guardar en la nube'); return; }
+
+  // Guardar localmente primero
+  edSaveProject();
+
+  const comic = ComicStore.getById(edProjectId);
+  if (!comic) { edToast('Error: obra no encontrada'); return; }
+
+  // Asignar supabaseId si aún no tiene
+  if (!comic.supabaseId) {
+    comic.supabaseId = crypto.randomUUID();
+    ComicStore.save(comic);
+  }
+
+  const btn = $('edCloudSaveBtn');
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+
+  try {
+    const { sizeKB } = await SupabaseClient.saveDraft(comic);
+    edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+  } catch(err) {
+    edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
+    console.error('edCloudSave:', err);
+  } finally {
+    if (btn) { btn.textContent = '☁️'; btn.disabled = false; }
+  }
+}
+
 function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   const existing=ComicStore.getById(edProjectId)||{};
@@ -4345,8 +4376,9 @@ function EditorView_init(){
     edRedraw();
     _edScrollbarsUpdate();
   });
-  $('edSaveBtn')?.addEventListener('click',edSaveProject);
-  $('edPreviewBtn')?.addEventListener('click',edOpenViewer);
+  $('edSaveBtn')?.addEventListener('click', edSaveProject);
+  $('edCloudSaveBtn')?.addEventListener('click', edCloudSave);
+  $('edPreviewBtn')?.addEventListener('click', edOpenViewer);
   // Botón pantalla completa en topbar
   $('edFsBtn')?.addEventListener('click', () => {
     if(typeof Fullscreen !== 'undefined') Fullscreen.request();

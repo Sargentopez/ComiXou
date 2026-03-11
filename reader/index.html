@@ -44,9 +44,6 @@
       <button id="closeBtn" class="ctrl-btn ctrl-close" aria-label="Cerrar">&#x2715;</button>
     </div>
 
-    <!-- Botón cerrar móvil (centrado abajo, solo cuando no hay pastilla) -->
-    <button id="closeMobileBtn" class="close-mobile" aria-label="Cerrar">&#x2715;</button>
-
     <!-- Fin de obra -->
     <div id="endOverlay" class="end-overlay hidden">
       <div class="end-card">
@@ -54,7 +51,7 @@
         <h2>¡FIN!</h2>
         <div class="end-actions">
           <button id="restartBtn" class="btn-yellow">&#8635; Volver a empezar</button>
-          <a href="javascript:history.back()" class="btn-outline">&#127968; Volver</a>
+          <a href="javascript:void(0)" class="btn-outline" id="endBackBtn">&#127968; Volver</a>
         </div>
       </div>
     </div>

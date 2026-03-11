@@ -108,3 +108,8 @@ html, body {
   border: 2px solid rgba(255,255,255,.3); border-radius: 10px;
   padding: 10px 24px; font-size: .95rem; text-decoration: none; text-align: center;
 }
+
+/* MODO EMBED (iframe incrustado en admin/expositor) */
+body.embed-mode { background: transparent; }
+body.embed-mode .reader-app { background: #1a1a1a; }
+body.embed-mode #readerCanvas { border-radius: 4px; }

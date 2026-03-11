@@ -107,10 +107,19 @@ function buildAdminRow(comic, mode) {
       <span class="admin-row-meta">${new Date(comic.createdAt || Date.now()).toLocaleDateString('es')}</span>
     </div>
     <div class="admin-row-actions">
+      ${comic.supabaseId ? `<button class="admin-btn admin-btn-read" id="read_${comic.id}">👁 Leer</button>` : ''}
       ${mode === 'pending'   ? `<button class="admin-btn admin-btn-ok"   id="approve_${comic.id}">✓ Aprobar</button>`  : ''}
       ${mode === 'published' ? `<button class="admin-btn admin-btn-warn" id="unpub_${comic.id}">Retirar</button>`      : ''}
       <button class="admin-btn admin-btn-del" id="del_${comic.id}">Eliminar</button>
     </div>`;
+
+  // Leer (embed reader en modal)
+  row.querySelector(`#read_${comic.id}`)?.addEventListener('click', () => {
+    const sid = comic.supabaseId;
+    // Borradores (no publicados): usar ?draft=. Publicados: usar ?id=
+    const param = comic.published ? `id=${sid}` : `draft=${sid}`;
+    openReaderModal(`../reader/?${param}&embed=1`);
+  });
 
   // Aprobar
   row.querySelector(`#approve_${comic.id}`)?.addEventListener('click', async () => {
@@ -168,6 +177,43 @@ function buildAdminRow(comic, mode) {
   });
 
   return row;
+}
+
+// ── MODAL READER EMBED ─────────────────────────────────────
+function openReaderModal(url) {
+  // Crear overlay si no existe
+  let overlay = document.getElementById('readerModal');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'readerModal';
+    overlay.className = 'reader-modal';
+    overlay.innerHTML = `
+      <div class="reader-modal-inner">
+        <button class="reader-modal-close" id="readerModalClose" aria-label="Cerrar">✕</button>
+        <iframe id="readerModalFrame" class="reader-modal-frame" allowfullscreen></iframe>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#readerModalClose').addEventListener('click', closeReaderModal);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeReaderModal(); });
+
+    // Escuchar mensaje del reader cuando pulsa cerrar dentro del iframe
+    window.addEventListener('message', e => {
+      if (e.data?.type === 'reader:close') closeReaderModal();
+    });
+  }
+
+  overlay.querySelector('#readerModalFrame').src = url;
+  overlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeReaderModal() {
+  const overlay = document.getElementById('readerModal');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  overlay.querySelector('#readerModalFrame').src = '';
+  document.body.style.overflow = '';
 }
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }

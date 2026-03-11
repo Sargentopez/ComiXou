@@ -189,6 +189,7 @@ function _mcRenderList() {
 /* ── NAV Y MODALES ── */
 function _mcBindNav() {
   document.getElementById('mcBackBtn')?.addEventListener('click', () => Router.go('home'));
+  document.getElementById('mcCloudLoadBtn')?.addEventListener('click', _mcCloudLoad);
   document.getElementById('mcNewBtn')?.addEventListener('click', _mcOpenModal);
   document.getElementById('mcNewCancel')?.addEventListener('click', _mcCloseModal);
   document.getElementById('mcNewCreate')?.addEventListener('click', _mcCreateProject);
@@ -270,3 +271,85 @@ function _mcToast(msg) {
 }
 
 function MyComicsView_destroy() { _mcRemoveModal(); }
+
+/* ── CARGAR BORRADORES DESDE NUBE ── */
+async function _mcCloudLoad() {
+  if (typeof SupabaseClient === 'undefined') { _mcToast('Sin conexión al servidor'); return; }
+  const user = Auth.currentUser();
+  if (!user) { _mcToast('Inicia sesión para cargar desde la nube'); return; }
+
+  const btn = document.getElementById('mcCloudLoadBtn');
+  if (btn) { btn.textContent = '⏳ Cargando...'; btn.disabled = true; }
+
+  try {
+    // Buscar en Supabase todas las obras donde author_name coincide con este usuario
+    // Usamos el username como identificador (el campo author_name en works)
+    const BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
+    const KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+    const hdrs = { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY };
+
+    // Buscar por author_name = username del usuario actual
+    const username = encodeURIComponent(user.username || '');
+    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc`, { headers: hdrs })
+      .then(r => r.json());
+
+    if (!works || !works.length) {
+      _mcToast('No hay obras en la nube para este usuario');
+      return;
+    }
+
+    let imported = 0, skipped = 0;
+
+    for (const w of works) {
+      // ¿Ya existe localmente con este supabaseId?
+      const existing = ComicStore.getAll().find(c => c.supabaseId === w.id);
+      if (existing) {
+        // Si la nube es más reciente, preguntar
+        const cloudDate = new Date(w.updated_at || 0);
+        const localDate = new Date(existing.updatedAt || 0);
+        if (cloudDate <= localDate) { skipped++; continue; }
+        // La nube es más nueva — actualizar metadatos (no reemplazar editorData local)
+        // Solo actualizar campos de metadatos, no tocar el contenido del editor local
+        existing.title    = w.title     || existing.title;
+        existing.genre    = w.genre     || existing.genre;
+        existing.navMode  = w.nav_mode  || existing.navMode;
+        ComicStore.save(existing);
+        skipped++;
+        continue;
+      }
+
+      // Obra nueva en nube — crear entrada local mínima
+      // (sin editorData: el autor deberá usar el editor para trabajar localmente)
+      const localComic = {
+        id:           'comic_' + Date.now() + '_' + Math.random().toString(36).slice(2,6),
+        userId:       user.id,
+        username:     user.username,
+        supabaseId:   w.id,
+        title:        w.title      || 'Sin título',
+        author:       w.author_name || user.username,
+        genre:        w.genre      || '',
+        navMode:      w.nav_mode   || 'fixed',
+        panels:       [],   // sin contenido local aún
+        pages:        [],
+        published:    w.published  ?? false,
+        approved:     w.published  ?? false,
+        pendingReview: false,
+        cloudOnly:    true,  // flag: contenido está en nube, no en local
+        createdAt:    w.created_at || new Date().toISOString(),
+        updatedAt:    w.updated_at || new Date().toISOString(),
+      };
+      ComicStore.save(localComic);
+      imported++;
+    }
+
+    _mcRenderList();
+    if (imported > 0)      _mcToast(`☁️ ${imported} obra${imported>1?'s':''} importada${imported>1?'s':''} de la nube`);
+    else if (skipped > 0)  _mcToast('✓ Todo al día — no hay obras nuevas en la nube');
+
+  } catch(err) {
+    console.error('_mcCloudLoad:', err);
+    _mcToast('⚠️ Error al conectar con la nube');
+  } finally {
+    if (btn) { btn.textContent = '☁️ Cargar de nube'; btn.disabled = false; }
+  }
+}

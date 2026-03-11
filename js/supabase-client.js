@@ -83,6 +83,34 @@ const SupabaseClient = (() => {
     }
   }
 
+  // ── BORRADOR EN NUBE ──────────────────────────────────────
+  // Límite razonable: 50MB por obra (data_url de paneles son base64 JPEGs)
+  // El campo published=false impide que aparezca en el reader público
+  async function saveDraft(comic) {
+    const sid = comic.supabaseId;
+    if (!sid) throw new Error('Sin supabaseId para guardar borrador');
+
+    // Calcular tamaño aproximado antes de subir
+    const payload = JSON.stringify(comic);
+    const sizeKB  = Math.round(payload.length * 0.75 / 1024); // base64 → bytes
+    const LIMIT_KB = 50 * 1024; // 50 MB
+    if (sizeKB > LIMIT_KB) {
+      throw new Error(`La obra ocupa ~${Math.round(sizeKB/1024)}MB, supera el límite de 50MB. Reduce el número de páginas o el tamaño de las imágenes.`);
+    }
+
+    await _upsert('works', {
+      id:          sid,
+      title:       comic.title      || '',
+      author_name: comic.author     || comic.username || '',
+      genre:       comic.genre      || '',
+      nav_mode:    comic.navMode    || 'fixed',
+      published:   false,
+      updated_at:  new Date().toISOString(),
+    });
+    await _uploadPanels(comic);
+    return { sizeKB };
+  }
+
   async function submitForReview(comic) {
     await _upsert('works', {
       id:          comic.supabaseId,
@@ -116,5 +144,5 @@ const SupabaseClient = (() => {
     await _delete('works', `id=eq.${supabaseId}`);
   }
 
-  return { submitForReview, approveWork, unpublishWork, deleteWork };
+  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork };
 })();

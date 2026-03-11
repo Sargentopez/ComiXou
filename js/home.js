@@ -223,7 +223,17 @@ function buildRow(comic, currentUser) {
 
   const readBtn = document.createElement('a');
   readBtn.className = 'comic-row-btn';
-  readBtn.href = '#'; readBtn.onclick = (e) => { e.preventDefault(); Router.go('reader', { id: comic.id }); };
+  readBtn.href = '#';
+  readBtn.onclick = (e) => {
+    e.preventDefault();
+    // Obras publicadas: usar el reproductor externo embebido en modal
+    if (comic.supabaseId && comic.published) {
+      _openReaderModal(`reader/?id=${comic.supabaseId}&embed=1`);
+    } else {
+      // Sin supabaseId: visor interno del SPA (obra local)
+      Router.go('reader', { id: comic.id });
+    }
+  };
   readBtn.textContent = I18n.t('read');
   actions.appendChild(readBtn);
 
@@ -272,3 +282,35 @@ function buildRow(comic, currentUser) {
   return row;
 }
 
+// ── MODAL READER EMBED (expositor) ──────────────────────────
+function _openReaderModal(url) {
+  let overlay = document.getElementById('homeReaderModal');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'homeReaderModal';
+    overlay.className = 'reader-modal';
+    overlay.innerHTML = `
+      <div class="reader-modal-inner">
+        <button class="reader-modal-close" aria-label="Cerrar">✕</button>
+        <iframe class="reader-modal-frame" allowfullscreen></iframe>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('.reader-modal-close').addEventListener('click', _closeReaderModal);
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeReaderModal(); });
+    window.addEventListener('message', e => {
+      if (e.data?.type === 'reader:close') _closeReaderModal();
+    });
+  }
+  overlay.querySelector('.reader-modal-frame').src = url;
+  overlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function _closeReaderModal() {
+  const overlay = document.getElementById('homeReaderModal');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  overlay.querySelector('.reader-modal-frame').src = '';
+  document.body.style.overflow = '';
+}
