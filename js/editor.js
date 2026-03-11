@@ -3688,7 +3688,7 @@ function edSaveProject(){
       id:'panel_'+i,
       dataUrl:edRenderPage(p),
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
-      textMode: p.textMode || 'immediate',
+      textMode: p.textMode || 'sequential',
       texts,
     };
   });
@@ -3715,12 +3715,12 @@ function edRenderPage(page){
   const tmp=document.createElement('canvas');tmp.width=pw;tmp.height=ph;
   const full=document.createElement('canvas');full.width=ED_CANVAS_W;full.height=ED_CANVAS_H;
   const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
-  // Imágenes primero, luego DrawLayer, luego texto/bocadillos
+  // Imágenes, DrawLayer y Strokes — SIN textos/bocadillos.
+  // Los textos se superponen en el reader por encima del data_url, igual que el visor del editor.
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
   const _rdl=page.layers.find(l=>l.type==='draw');
   if(_rdl) _rdl.draw(ctx);
   page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(ctx));
-  page.layers.filter(l=>l.type!=='image'&&l.type!=='draw'&&l.type!=='stroke').forEach(l=>l.draw(ctx,full));
   // Recortar zona de la página del canvas de trabajo
   const outCtx=tmp.getContext('2d');
   outCtx.drawImage(full, edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
