@@ -49,8 +49,7 @@ async function _loadPublishedWorks() {
 
   if (grid) grid.innerHTML = `<p style="padding:1rem;color:#080">Paso 3: recibidas ${result.length} obras</p>`;
   _homeWorks = result;
-
-  setTimeout(() => renderComics(), 800); // pequeña pausa para ver el mensaje
+  renderComics();
 }
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera
@@ -191,10 +190,10 @@ function setActiveBtn(id) {
 function renderComics() {
   const grid  = document.getElementById('comicsGrid');
   const empty = document.getElementById('emptyState');
-  if (!grid || !empty) return;
-  grid.innerHTML = ''; // limpiar todo, incluido "Cargando..."
+  if (!grid) { console.error('renderComics: grid no encontrado'); return; }
+  if (!empty) { console.error('renderComics: empty no encontrado'); return; }
+  grid.innerHTML = '';
 
-  // Usar obras de Supabase si están disponibles; fallback a localStorage
   const source = _homeWorks !== null ? _homeWorks : ComicStore.getPublished();
   let comics = [...source].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
@@ -204,11 +203,15 @@ function renderComics() {
     comics = comics.filter(c => c.username === activeFilter.value);
   }
 
+  // Diagnóstico temporal
+  grid.innerHTML = `<p style="padding:1rem;color:#00c">renderComics: ${comics.length} obras, source=${_homeWorks !== null ? 'supabase' : 'local'}</p>`;
+
   if (comics.length === 0) {
     empty.classList.remove('hidden');
     return;
   }
   empty.classList.add('hidden');
+  grid.innerHTML = '';
 
   const currentUser = Auth.currentUser();
   comics.forEach(comic => {
