@@ -130,7 +130,17 @@ function _mcRenderList() {
     const action = btn.dataset.action;
 
     if (action === 'read') {
-      Router.go('reader', { id });
+      const comic = ComicStore.getById(id);
+      if (!comic) return;
+      if (comic.supabaseId) {
+        // Tiene ID en nube: usar el reader externo embebido en modal
+        // obras publicadas → ?id=, borradores/cloudOnly → ?draft=
+        const param = comic.published ? `id=${comic.supabaseId}` : `draft=${comic.supabaseId}`;
+        _mcOpenReaderModal(`reader/?${param}&embed=1`);
+      } else {
+        // Solo local: visor interno del SPA
+        Router.go('reader', { id });
+      }
     } else if (action === 'edit') {
       // Guardar qué proyecto editar y navegar al editor
       sessionStorage.setItem('cx_edit_id', id);
@@ -318,25 +328,34 @@ async function _mcCloudLoad() {
         continue;
       }
 
-      // Obra nueva en nube — crear entrada local mínima
-      // (sin editorData: el autor deberá usar el editor para trabajar localmente)
+      // Obra nueva en nube — crear entrada local con thumbnail del primer panel
+      // El contenido completo se carga desde Supabase al leer (?draft=supabaseId)
+      let thumbDataUrl = '';
+      try {
+        const firstPanels = await fetch(
+          `${BASE}/panels?work_id=eq.${w.id}&order=panel_order.asc&limit=1&select=data_url`,
+          { headers: hdrs }
+        ).then(r => r.json());
+        thumbDataUrl = firstPanels?.[0]?.data_url || '';
+      } catch(e) { /* sin thumbnail */ }
+
       const localComic = {
         id:           'comic_' + Date.now() + '_' + Math.random().toString(36).slice(2,6),
         userId:       user.id,
         username:     user.username,
         supabaseId:   w.id,
-        title:        w.title      || 'Sin título',
+        title:        w.title       || 'Sin título',
         author:       w.author_name || user.username,
-        genre:        w.genre      || '',
-        navMode:      w.nav_mode   || 'fixed',
-        panels:       [],   // sin contenido local aún
+        genre:        w.genre       || '',
+        navMode:      w.nav_mode    || 'fixed',
+        panels:       thumbDataUrl ? [{ dataUrl: thumbDataUrl }] : [],
         pages:        [],
-        published:    w.published  ?? false,
-        approved:     w.published  ?? false,
+        published:    w.published   ?? false,
+        approved:     w.published   ?? false,
         pendingReview: false,
-        cloudOnly:    true,  // flag: contenido está en nube, no en local
-        createdAt:    w.created_at || new Date().toISOString(),
-        updatedAt:    w.updated_at || new Date().toISOString(),
+        cloudOnly:    true,
+        createdAt:    w.created_at  || new Date().toISOString(),
+        updatedAt:    w.updated_at  || new Date().toISOString(),
       };
       ComicStore.save(localComic);
       imported++;
@@ -352,4 +371,36 @@ async function _mcCloudLoad() {
   } finally {
     if (btn) { btn.textContent = '☁️ Cargar de nube'; btn.disabled = false; }
   }
+}
+
+/* ── MODAL READER EMBED (my-comics) ── */
+function _mcOpenReaderModal(url) {
+  let overlay = document.getElementById('mcReaderModal');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'mcReaderModal';
+    overlay.className = 'reader-modal';
+    overlay.innerHTML = `
+      <div class="reader-modal-inner">
+        <button class="reader-modal-close" aria-label="Cerrar">✕</button>
+        <iframe class="reader-modal-frame" allowfullscreen></iframe>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.reader-modal-close').addEventListener('click', _mcCloseReaderModal);
+    overlay.addEventListener('click', e => { if (e.target === overlay) _mcCloseReaderModal(); });
+    window.addEventListener('message', e => {
+      if (e.data?.type === 'reader:close') _mcCloseReaderModal();
+    });
+  }
+  overlay.querySelector('.reader-modal-frame').src = url;
+  overlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function _mcCloseReaderModal() {
+  const overlay = document.getElementById('mcReaderModal');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  overlay.querySelector('.reader-modal-frame').src = '';
+  document.body.style.overflow = '';
 }
