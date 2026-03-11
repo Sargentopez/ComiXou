@@ -86,3 +86,13 @@
   border: 1.5px solid var(--gray-300); border-radius: 4px;
 }
 .admin-item { color: #1a7a3a !important; font-weight: 700; }
+
+.admin-badge-sb {
+  font-size: 0.7rem; font-weight: 600;
+  color: #1a7a3a; padding: 2px 6px;
+  border: 1px solid #1a7a3a; border-radius: 4px;
+  vertical-align: middle;
+}
+.admin-badge-nosb {
+  color: #b45309; border-color: #b45309;
+}

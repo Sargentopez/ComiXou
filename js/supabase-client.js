@@ -91,7 +91,8 @@ const SupabaseClient = (() => {
   }
 
   async function approveWork(comic) {
-    const sid = comic.supabaseId || comic.id;
+    const sid = comic.supabaseId;
+    if (!sid) throw new Error('Sin supabaseId');
     await _patch('works', `id=eq.${sid}`, { published: true });
   }
 
@@ -100,5 +101,15 @@ const SupabaseClient = (() => {
     await _patch('works', `id=eq.${sid}`, { published: false });
   }
 
-  return { submitForReview, approveWork, unpublishWork };
+  async function deleteWork(supabaseId) {
+    // Borrar panel_texts → panels → work (en orden por FK)
+    const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
+    for (const p of (panels || [])) {
+      await _delete('panel_texts', `panel_id=eq.${p.id}`);
+    }
+    await _delete('panels', `work_id=eq.${supabaseId}`);
+    await _delete('works', `id=eq.${supabaseId}`);
+  }
+
+  return { submitForReview, approveWork, unpublishWork, deleteWork };
 })();

@@ -162,6 +162,10 @@ function _mcRenderList() {
         return;
       }
       ComicStore.save({ ...comic, published: false, approved: false });
+      if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+        SupabaseClient.unpublishWork(comic.id, comic.supabaseId)
+          .catch(err => console.warn('Supabase unpublishWork:', err));
+      }
       _mcRenderList();
       _mcToast('Retirada del expositor');
     } else if (action === 'delete') {
@@ -171,6 +175,10 @@ function _mcRenderList() {
         return;
       }
       if (!confirm('¿Eliminar esta obra? Esta acción no se puede deshacer.')) return;
+      if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+        SupabaseClient.deleteWork(comic.supabaseId)
+          .catch(err => console.warn('Supabase deleteWork:', err));
+      }
       ComicStore.remove(id);
       _mcRenderList();
       _mcToast('Obra eliminada');
