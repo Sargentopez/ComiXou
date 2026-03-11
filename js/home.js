@@ -9,8 +9,9 @@ let _homeWorks    = null;   // caché de obras publicadas desde Supabase
 
 /* Refresco reactivo cuando ComicStore emite cx:store */
 function _onStoreChange(e) {
-  // Solo re-renderizar si la vista home está activa
   if (!document.getElementById('comicsGrid')) return;
+  // Si ya cargamos desde Supabase, ignorar eventos de localStorage
+  if (_homeWorks !== null) return;
   showFiltrosLevel1();
   renderComics();
 }
