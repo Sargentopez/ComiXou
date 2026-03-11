@@ -14,9 +14,18 @@ const SupabaseClient = (() => {
   };
 
   async function _get(path) {
-    const r = await fetch(`${BASE}/${path}`, { headers: hdrs });
-    if (!r.ok) throw new Error(`GET ${path}: ${r.status}`);
-    return r.json();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000); // 8s timeout
+    try {
+      const r = await fetch(`${BASE}/${path}`, { headers: hdrs, signal: controller.signal });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error(`GET ${path}: ${r.status} ${await r.text()}`);
+      return r.json();
+    } catch(e) {
+      clearTimeout(timer);
+      if (e.name === 'AbortError') throw new Error(`Timeout en GET ${path}`);
+      throw e;
+    }
   }
 
   async function _upsert(table, data) {

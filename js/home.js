@@ -26,9 +26,8 @@ function HomeView_init() {
 
 async function _loadPublishedWorks() {
   const grid = document.getElementById('comicsGrid');
-  if (grid) grid.innerHTML = '<p style="padding:1rem;color:#888">Cargando...</p>';
+  if (grid) grid.innerHTML = '<p style="padding:1rem;color:#888">Paso 1: iniciando...</p>';
 
-  // Diagnóstico: verificar que SupabaseClient existe
   if (typeof SupabaseClient === 'undefined' || typeof SupabaseClient.fetchPublishedWorks !== 'function') {
     if (grid) grid.innerHTML = '<p style="padding:1rem;color:#c00">Error: SupabaseClient no disponible</p>';
     _homeWorks = [];
@@ -36,15 +35,22 @@ async function _loadPublishedWorks() {
     return;
   }
 
+  if (grid) grid.innerHTML = '<p style="padding:1rem;color:#888">Paso 2: llamando a Supabase...</p>';
+
+  let result;
   try {
-    _homeWorks = await SupabaseClient.fetchPublishedWorks();
+    result = await SupabaseClient.fetchPublishedWorks();
   } catch(e) {
-    console.error('Error cargando obras:', e);
+    if (grid) grid.innerHTML = `<p style="padding:1rem;color:#c00">Error fetch: ${e.message}</p>`;
     _homeWorks = [];
-    if (grid) grid.innerHTML = `<p style="padding:1rem;color:#c00">Error: ${e.message}</p>`;
+    renderComics();
     return;
   }
-  renderComics();
+
+  if (grid) grid.innerHTML = `<p style="padding:1rem;color:#080">Paso 3: recibidas ${result.length} obras</p>`;
+  _homeWorks = result;
+
+  setTimeout(() => renderComics(), 800); // pequeña pausa para ver el mensaje
 }
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera
