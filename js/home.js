@@ -26,6 +26,15 @@ function HomeView_init() {
 async function _loadPublishedWorks() {
   const grid = document.getElementById('comicsGrid');
   if (grid) grid.innerHTML = '<p style="padding:1rem;color:#888">Cargando...</p>';
+
+  // Diagnóstico: verificar que SupabaseClient existe
+  if (typeof SupabaseClient === 'undefined' || typeof SupabaseClient.fetchPublishedWorks !== 'function') {
+    if (grid) grid.innerHTML = '<p style="padding:1rem;color:#c00">Error: SupabaseClient no disponible</p>';
+    _homeWorks = [];
+    renderComics();
+    return;
+  }
+
   try {
     _homeWorks = await SupabaseClient.fetchPublishedWorks();
   } catch(e) {
