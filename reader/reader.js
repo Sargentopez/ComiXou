@@ -64,21 +64,8 @@ async function loadWork(workId) {
     if (!work || !work.length) { showError('Esta obra no existe o no está publicada.'); return; }
 
     setLoadingMsg('Cargando páginas...');
-    const panels = await sbGet('panels?work_id=eq.' + workId + '&order=panel_order.asc');
-    if (!panels || !panels.length) { showError('Esta obra no tiene páginas publicadas.'); return; }
-
-    const panelIds = panels.map(p => p.id).join(',');
-    const texts    = await sbGet('panel_texts?panel_id=in.(' + panelIds + ')&order=text_order.asc');
-
-    RS.panels = panels.map(panel => ({
-      ...panel,
-      texts: (texts || [])
-        .filter(t => t.panel_id === panel.id)
-        .sort((a,b) => (a.text_order||0) - (b.text_order||0)),
-    }));
-
+    await _loadPanels(workId);
     document.title = (work[0].title || 'Obra') + ' — ComiXow';
-
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -93,24 +80,11 @@ async function loadWork(workId) {
 async function loadDraft(token) {
   setLoadingMsg('Cargando borrador...');
   try {
-    // El token es el supabaseId de la obra, que solo conoce quien tiene el link
     const work = await sbGet('works?id=eq.' + token);
     if (!work || !work.length) { showError('Borrador no encontrado o enlace caducado.'); return; }
 
     setLoadingMsg('Cargando páginas...');
-    const panels = await sbGet('panels?work_id=eq.' + token + '&order=panel_order.asc');
-    if (!panels || !panels.length) { showError('Esta obra no tiene páginas guardadas.'); return; }
-
-    const panelIds = panels.map(p => p.id).join(',');
-    const texts    = await sbGet('panel_texts?panel_id=in.(' + panelIds + ')&order=text_order.asc');
-
-    RS.panels = panels.map(panel => ({
-      ...panel,
-      texts: (texts || [])
-        .filter(t => t.panel_id === panel.id)
-        .sort((a,b) => (a.text_order||0) - (b.text_order||0)),
-    }));
-
+    await _loadPanels(token);
     document.title = (work[0].title || 'Borrador') + ' — ComiXow';
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
@@ -121,14 +95,76 @@ async function loadDraft(token) {
   }
 }
 
+// ── CARGA PANELES + CAPAS + TEXTOS ────────────────────────────
+// Rellena RS.panels con capas del editor (panel_layers) y textos (panel_texts).
+// panel_layers → render fiel por capas (imagen, draw, stroke, bubble, text)
+// panel_texts  → lógica sequential (text_order, text_mode, contador)
+async function _loadPanels(workId) {
+  const panels = await sbGet('panels?work_id=eq.' + workId + '&order=panel_order.asc');
+  if (!panels || !panels.length) { showError('Esta obra no tiene páginas guardadas.'); return; }
+
+  const panelIds = panels.map(p => p.id).join(',');
+
+  // Descargar capas del editor y textos del reader en paralelo
+  const [layerRows, texts] = await Promise.all([
+    sbGet('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc'),
+    sbGet('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
+  ]);
+
+  RS.panels = panels.map(panel => {
+    // Capas del editor: parsear layer_data JSON
+    const layers = (layerRows || [])
+      .filter(r => r.panel_id === panel.id)
+      .sort((a, b) => a.layer_order - b.layer_order)
+      .map(r => { try { return JSON.parse(r.layer_data); } catch(e) { return null; } })
+      .filter(Boolean);
+
+    // Textos para lógica sequential
+    const panelTexts = (texts || [])
+      .filter(t => t.panel_id === panel.id)
+      .sort((a, b) => (a.text_order||0) - (b.text_order||0));
+
+    return {
+      ...panel,
+      layers,
+      texts: panelTexts,
+    };
+  });
+}
+
 async function preloadImages() {
-  RS.images = await Promise.all(RS.panels.map(p => new Promise(resolve => {
-    if (!p.data_url) { resolve(null); return; }
-    const img = new Image();
-    img.onload  = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = p.data_url;
-  })));
+  // Precargar todos los data base64 de capas image/draw/stroke de todos los paneles.
+  // RS.panels[i].layerImgs[j] = Image | null para cada capa del panel i.
+  RS.images = []; // legacy, ya no se usa para render pero se mantiene para no romper nada
+
+  await Promise.all(RS.panels.map(async (panel, pi) => {
+    panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
+      const src = layer.src || layer.dataUrl;
+      if (!src || (layer.type !== 'image' && layer.type !== 'draw' && layer.type !== 'stroke')) {
+        return Promise.resolve(null);
+      }
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload  = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = src;
+      });
+    }));
+  }));
+
+  // Fallback: si algún panel no tiene capas, precargar data_url como antes
+  RS.panels.forEach((panel, i) => {
+    if (!panel.layers || !panel.layers.length) {
+      if (panel.data_url) {
+        const img = new Image();
+        img.src = panel.data_url;
+        panel.layerImgs = [img];
+        panel.layers    = [{ type: 'image', src: panel.data_url, x:0.5, y:0.5, width:1, height:1 }];
+      } else {
+        panel.layerImgs = [];
+      }
+    }
+  });
 }
 
 async function sbGet(path) {
@@ -193,8 +229,35 @@ function _render() {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
 
-  const img = RS.images[RS.idx];
-  if (img) ctx.drawImage(img, 0, 0, pw, ph);
+  // Dibujar capas en orden: image/draw/stroke primero, bubble/text al final (via _drawTexts)
+  const layers    = panel.layers    || [];
+  const layerImgs = panel.layerImgs || [];
+
+  layers.forEach((layer, j) => {
+    const type = layer.type;
+    if (type === 'image' || type === 'draw' || type === 'stroke') {
+      const img = layerImgs[j];
+      if (!img) return;
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      if (type === 'image' || type === 'stroke') {
+        // Posición y tamaño en 0-1 relativo al panel; centro en (x, y)
+        const x = (layer.x      || 0.5) * pw;
+        const y = (layer.y      || 0.5) * ph;
+        const w = (layer.width  || 1)   * pw;
+        const h = (layer.height || 1)   * ph;
+        const rot = layer.rotation || 0;
+        ctx.translate(x, y);
+        if (rot) ctx.rotate(rot * Math.PI / 180);
+        ctx.drawImage(img, -w / 2, -h / 2, w, h);
+      } else {
+        // draw: capa de dibujo libre — ocupa todo el panel, sin transformación
+        ctx.drawImage(img, 0, 0, pw, ph);
+      }
+      ctx.restore();
+    }
+    // bubble/text: los gestiona _drawTexts con lógica sequential
+  });
 
   _drawTexts(ctx, panel, pw, ph);
   _updateCounter();
@@ -231,27 +294,44 @@ function _drawTexts(ctx, panel, pw, ph) {
 }
 
 function _drawBubble(ctx, t, pw, ph, alpha) {
-  const x  = (t.x / 100) * pw;
-  const y  = (t.y / 100) * ph;
-  const w  = ((t.w  || 30) / 100) * pw;
-  const h  = ((t.h  || 15) / 100) * ph;
+  // Detectar formato de coordenadas:
+  // panel_texts: x,y,w,h en % (0-100) con campos w,h
+  // panel_layers: x,y en 0-1 (centro), width,height en 0-1
+  const _fromLayers = t.width !== undefined || t.height !== undefined;
+  const _rawX = _fromLayers ? (t.x - (t.width  || 0.3) / 2) : (t.x / 100);
+  const _rawY = _fromLayers ? (t.y - (t.height || 0.15)/ 2) : (t.y / 100);
+  const _rawW = _fromLayers ? (t.width  || 0.3)              : ((t.w  || 30) / 100);
+  const _rawH = _fromLayers ? (t.height || 0.15)             : ((t.h  || 15) / 100);
+  const x = _rawX * pw;
+  const y = _rawY * ph;
+  const w = _rawW * pw;
+  const h = _rawH * ph;
   const scale = pw / ED_PAGE_W;
-  const fs = Math.max(10, Math.round((t.font_size || 16) * scale));
-  const bg     = t.bg           || '#ffffff';
-  const border = t.border_color || '#000000';
-  const bw     = ((t.border !== undefined && t.border !== null) ? t.border : 2) * scale;
+  // Normalizar campos: panel_texts usa snake_case; panel_layers usa camelCase del editor
+  const fontSize_  = t.font_size   || t.fontSize   || 16;
+  const fontFamily_= t.font_family || t.fontFamily  || 'Arial, sans-serif';
+  const bgColor_   = t.bg          || t.backgroundColor || '#ffffff';
+  const borderW_   = t.border !== undefined && t.border !== null ? t.border
+                   : t.borderWidth !== undefined ? t.borderWidth : 2;
+  const borderC_   = t.border_color || t.borderColor || '#000000';
+  const textColor_ = t.color || '#000000';
+  const padding_   = t.padding || 10;
+  const fs = Math.max(10, Math.round(fontSize_ * scale));
+  const bg     = bgColor_;
+  const border = borderC_;
+  const bw     = borderW_ * scale;
   const style  = t.style || 'conventional';
   const type   = t.type  || 'bubble';
   const cx = x + w / 2;
   const cy = y + h / 2;
   const isSingle = (t.text||'').trim().length===1 && /[a-zA-Z0-9]/.test((t.text||'').trim());
-  // Parsear cola (llega como string JSON desde Supabase)
-  let tailStarts = t.tail_starts;
-  let tailEnds   = t.tail_ends;
+  // Normalizar cola: panel_texts usa snake_case + JSON string; panel_layers usa camelCase + array
+  let tailStarts = t.tailStarts || t.tail_starts;
+  let tailEnds   = t.tailEnds   || t.tail_ends;
   if (typeof tailStarts === 'string') { try { tailStarts = JSON.parse(tailStarts); } catch(e) { tailStarts = null; } }
   if (typeof tailEnds   === 'string') { try { tailEnds   = JSON.parse(tailEnds);   } catch(e) { tailEnds   = null; } }
-  const hasTail    = t.has_tail ?? true;
-  const voiceCount = t.voice_count ?? 1;
+  const hasTail    = t.hasTail    ?? t.has_tail    ?? true;
+  const voiceCount = t.voiceCount ?? t.voice_count ?? 1;
 
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -289,10 +369,10 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
       ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke();
     });
     // Texto centrado
-    ctx.font = fs + 'px ' + (t.font_family || 'Arial, sans-serif');
-    ctx.fillStyle = t.color || '#000000';
+    ctx.font = fs + 'px ' + fontFamily_;
+    ctx.fillStyle = textColor_;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const padT = (t.padding || 15) * scale;
+    const padT = padding_ * scale;
     const linesT = _wrapText(ctx, t.text || '', w * 0.7 - padT * 2);
     const lhT = fs * 1.2, totalHT = linesT.length * lhT;
     linesT.forEach((line, i) => ctx.fillText(line, 0, -totalHT/2 + lhT/2 + i*lhT));
@@ -352,11 +432,11 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   }
 
   // Texto centrado
-  ctx.font = fs + 'px ' + (t.font_family || 'Arial, sans-serif');
+  ctx.font = fs + 'px ' + fontFamily_;
   const isPlaceholder = (t.text||'') === 'Escribe aquí';
-  ctx.fillStyle = isPlaceholder ? '#999999' : (t.color || '#000000');
+  ctx.fillStyle = isPlaceholder ? '#999999' : textColor_;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const pad = (t.padding || 10) * scale;
+  const pad = padding_ * scale;
   const lines = _wrapText(ctx, t.text || '', w - pad * 2);
   const lh = fs * 1.2, totalH = lines.length * lh;
   lines.forEach((line, i) => ctx.fillText(line, 0, -totalH/2 + lh/2 + i*lh));
