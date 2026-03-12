@@ -34,27 +34,20 @@
   <!-- REPRODUCTOR -->
   <div id="readerApp" class="reader-app hidden">
 
-    <!-- Canvas — toda la obra se renderiza aquí -->
     <canvas id="readerCanvas"></canvas>
 
-    <!-- Botón fullscreen: centrado arriba, mismo estilo que los controles -->
-    <div id="fullscreenBtn" class="viewer-controls viewer-controls-top">
-      <button class="viewer-btn" id="fullscreenToggle" aria-label="Pantalla completa">[ ]</button>
-    </div>
+    <!-- Esquina superior izquierda: fullscreen -->
+    <button id="fullscreenToggle" class="corner-btn corner-tl" aria-label="Pantalla completa">[ ]</button>
 
-    <!-- Controles desktop: pastilla ◀ contador ▶ ✕ (oculta en táctil) -->
-    <div id="viewerControls" class="viewer-controls">
-      <button id="prevBtn"       class="viewer-btn" aria-label="Anterior">&#9664;</button>
-      <span   id="readerCounter" class="viewer-counter">1 / 1</span>
-      <button id="nextBtn"       class="viewer-btn" aria-label="Siguiente">&#9654;</button>
-      <button id="closeBtn"      class="viewer-btn viewer-close-inline" aria-label="Cerrar">&#x2715;</button>
-    </div>
+    <!-- Esquina superior derecha: cerrar -->
+    <button id="closeBtn" class="corner-btn corner-tr" aria-label="Cerrar">&#x2715;</button>
 
-    <!-- Botón cerrar táctil: centrado abajo, solo en pointer:coarse -->
-    <button id="closeBtnTouch" class="viewer-btn viewer-close-touch" aria-label="Cerrar">&#x2715;</button>
+    <!-- Toast de instrucciones de navegación -->
+    <div id="readerToast" class="reader-toast"></div>
 
   </div>
 
+  <script src="../js/fullscreen.js"></script>
   <script src="reader.js"></script>
 </body>
 </html>

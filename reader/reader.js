@@ -42,29 +42,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
   if (RS.isEmbed) document.body.classList.add('embed-mode');
 
-  document.getElementById('closeBtn')?.addEventListener('click',      _closeAction);
-  document.getElementById('closeBtnTouch')?.addEventListener('click', _closeAction);
+  document.getElementById('closeBtn')?.addEventListener('click', _closeAction);
 
   if (draft) { loadDraft(draft); return; }
   if (id)    { loadWork(id);     return; }
   showError('No se indicó ninguna obra. Comprueba el enlace.');
 });
 
-function _requestFullscreen() {
-  // No pedir fullscreen si estamos en iframe (embed)
-  if (RS.isEmbed) return;
-  const el = document.documentElement;
-  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
-  if (req) req.call(el).catch(() => {}); // silenciar error si el usuario lo deniega
-}
-
 function _toggleFullscreen() {
-  const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-  if (isFs) {
-    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
-    if (exit) exit.call(document).catch(() => {});
+  if (RS.isEmbed) return;
+  // Usar el mismo módulo Fullscreen que el editor de ComiXow
+  if (typeof Fullscreen !== 'undefined') {
+    Fullscreen.request();
   } else {
-    _requestFullscreen();
+    // Fallback si el script no cargó
+    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (isFs) {
+      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+    } else {
+      const el = document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) req.call(el, { navigationUI: 'hide' }).catch(() => {});
+    }
   }
 }
 
@@ -208,8 +207,6 @@ function startReader() {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
 
-  _requestFullscreen();
-
   RS.canvas = document.getElementById('readerCanvas');
   RS.ctx    = RS.canvas.getContext('2d');
   RS.idx    = 0;
@@ -222,6 +219,13 @@ function startReader() {
 
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
   window.addEventListener('resize', RS.resizeFn);
+
+  // Toast de instrucciones según dispositivo
+  const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  const msg = isTouch
+    ? 'Desplázate tocando la pantalla  👆'
+    : 'Desplázate con las flechas del teclado  ◀ ▶';
+  _readerToast(msg, 4000);
 }
 
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
@@ -667,32 +671,14 @@ function _renderCredits(pw, ph) {
 
 
 // ── CONTROLES ─────────────────────────────────────────────────
-function _updateCounter() {
-  const el    = document.getElementById('readerCounter');
-  if (!el) return;
-  const panel = RS.panels[RS.idx];
-  const tl    = panel?.texts || [];
-  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
-  el.textContent = (isSeq && tl.length)
-    ? (RS.idx+1) + '/' + RS.panels.length + ' · 💬' + RS.textStep + '/' + tl.length
-    : (RS.idx+1) + ' / ' + RS.panels.length;
-}
+function _updateCounter() { /* sin pastilla — no se muestra */ }
 
-function _showControls() {
-  const ctrls = document.getElementById('viewerControls');
-  if (!ctrls) return;
-  ctrls.classList.remove('ctrl-hidden');
-  clearTimeout(RS.ctrlTimer);
-  // En táctil la pastilla está oculta por CSS (pointer:coarse) — no hay que gestionar timer
-  // En desktop siempre visible (no se oculta)
-}
+function _showControls() { /* botones de esquina siempre visibles */ }
 
 function _setupControls() {
-  document.getElementById('nextBtn')?.addEventListener('click', advance);
-  document.getElementById('prevBtn')?.addEventListener('click',  goBack);
-  // closeBtn ya se configura en DOMContentLoaded según modo embed/normal
+  // closeBtn configurado en DOMContentLoaded
 
-  // Botón fullscreen toggle
+  // Botón fullscreen — usa Fullscreen.request() igual que el editor de ComiXow
   document.getElementById('fullscreenToggle')?.addEventListener('click', _toggleFullscreen);
   document.addEventListener('fullscreenchange',       _onFullscreenChange);
   document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
@@ -705,12 +691,12 @@ function _setupControls() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  // Click de ratón en canvas (PC): en créditos detecta enlace
+  // Click ratón en canvas: en créditos detecta enlace
   RS.canvas.addEventListener('click', e => {
     if (RS.isCredits) { _handleCreditsClick(e.clientX, e.clientY); }
   });
 
-  // Swipe táctil con AbortController (evita acumulación de listeners)
+  // Swipe táctil con AbortController
   RS.ac = new AbortController();
   const sig = { signal: RS.ac.signal };
   let sx = null, sy = null, cancelled = false;
@@ -719,7 +705,6 @@ function _setupControls() {
     sx = null; sy = null; cancelled = false;
     if (e.touches.length !== 1) return;
     sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-    _showControls();
   }, { passive: true, ...sig });
 
   RS.canvas.addEventListener('touchmove', e => {
@@ -734,7 +719,6 @@ function _setupControls() {
     const dy = e.changedTouches[0].clientY - sy;
     sx = null;
     if (Math.abs(dx) < 15 && Math.abs(dy) < 15) {
-      // tap: comprobar si es en el enlace de créditos
       if (RS.isCredits) { _handleCreditsClick(e.changedTouches[0].clientX, e.changedTouches[0].clientY); return; }
       advance(); return;
     }
@@ -745,6 +729,24 @@ function _setupControls() {
 }
 
 // ── UI HELPERS ────────────────────────────────────────────────
+function _readerToast(msg, duration) {
+  let el = document.getElementById('readerToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'readerToast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.remove('rt-hide');
+  el.classList.add('rt-show');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => {
+    el.classList.remove('rt-show');
+    el.classList.add('rt-hide');
+  }, duration || 2500);
+}
+
+
 function _handleCreditsClick(clientX, clientY) {
   // Convertir coordenadas de pantalla a coordenadas del canvas lógico
   const rect   = RS.canvas.getBoundingClientRect();

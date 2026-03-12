@@ -48,76 +48,31 @@ html, body {
   box-shadow: 0 8px 32px rgba(0,0,0,.35);
 }
 
-/* CONTROLES — pastilla desktop: ◀ contador ▶ ✕ */
-.viewer-controls {
+/* ── Botones de esquina: fullscreen (TL) y cerrar (TR) ── */
+.corner-btn {
   position: fixed;
-  bottom: max(env(safe-area-inset-bottom, 0px), 16px);
-  left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 8px;
-  background: rgba(0,0,0,.55);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  top: max(env(safe-area-inset-top, 0px), 8px);
+  background: rgba(0,0,0,.5);
+  border: 1px solid rgba(255,255,255,.3);
   border-radius: 100px;
-  padding: 6px 10px;
+  color: rgba(255,255,255,.8);
+  font-size: 0.6rem; font-weight: 700;
+  padding: 3px 6px;
+  cursor: pointer;
   z-index: 100;
-  transition: opacity .25s;
-}
-/* Táctil: pastilla oculta — navegación por swipe */
-@media (pointer: coarse) {
-  .viewer-controls { display: none !important; }
-}
-.viewer-controls.ctrl-hidden { opacity: 0; pointer-events: none; }
-
-.viewer-btn {
-  background: rgba(0,0,0,.45);
-  border: 1.5px solid rgba(255,255,255,.35);
-  border-radius: 100px;
-  color: #fff;
-  font-size: 0.82rem; font-weight: 700;
-  padding: 6px 14px; cursor: pointer;
-  transition: background .12s;
-  white-space: nowrap;
-  text-shadow: 0 1px 3px rgba(0,0,0,.8);
-  box-shadow: 0 1px 6px rgba(0,0,0,.4);
-}
-.viewer-btn:active { background: rgba(0,0,0,.65); }
-.viewer-close-inline { /* hereda viewer-btn */ }
-
-/* Pastilla top: fullscreen */
-.viewer-controls-top {
-  top: max(env(safe-area-inset-top, 0px), 16px);
-  bottom: auto;
-}
-/* En táctil también se muestra el botón fullscreen (arriba, no interfiere con swipe) */
-@media (pointer: coarse) {
-  .viewer-controls-top { display: flex !important; }
-}
-
-
-.viewer-close-touch {
-  display: none;
-  position: fixed;
-  bottom: max(env(safe-area-inset-bottom, 0px), 20px);
-  left: 50%; transform: translateX(-50%);
-  z-index: 110;
-  background: rgba(0,0,0,.6) !important;
-  border: 1.5px solid rgba(255,255,255,.5) !important;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  text-shadow: 0 1px 2px rgba(0,0,0,.9);
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  transition: background .12s;
+  line-height: 1;
+  letter-spacing: .02em;
 }
-@media (pointer: coarse) {
-  .viewer-close-touch { display: block; }
-}
+.corner-btn:active { background: rgba(0,0,0,.7); }
+.corner-tl { left:  8px; }
+.corner-tr { right: 8px; }
 
-.viewer-counter {
-  color: rgba(255,255,255,.85);
-  font-size: 0.8rem; font-weight: 700;
-  min-width: 40px; text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-/* CERRAR MÓVIL legacy — ya no se usa */
-.close-mobile { display: none; }
+/* ── Pastilla inferior desktop: ya no se usa — eliminada ── */
 
 
 .btn-yellow {
@@ -136,3 +91,24 @@ html, body {
 body.embed-mode { background: transparent; }
 body.embed-mode .reader-app { background: #1a1a1a; }
 body.embed-mode #readerCanvas { border-radius: 4px; }
+
+/* ── Toast de instrucciones ── */
+#readerToast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #fff;
+  font-size: 0.85rem; font-weight: 600;
+  padding: 8px 18px;
+  border-radius: 100px;
+  border: 1px solid rgba(255,255,255,.2);
+  white-space: nowrap;
+  z-index: 200;
+  pointer-events: none;
+  opacity: 0; transition: opacity .3s;
+}
+#readerToast.rt-show { opacity: 1; }
+#readerToast.rt-hide { opacity: 0; }
