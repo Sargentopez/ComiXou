@@ -44,15 +44,16 @@ html, body {
 #readerCanvas {
   position: absolute;
   display: block;
-  border-radius: 8px;
+  clip-path: inset(0 round 10px);
   box-shadow: 0 8px 32px rgba(0,0,0,.35);
 }
 
-/* CONTROLES FLOTANTES */
+/* CONTROLES FLOTANTES — superpuestos sobre el canvas, centrados */
 .viewer-controls {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 4px;
-  background: #222; border: 1px solid rgba(255,255,255,.1);
+  background: rgba(20,20,20,.82); border: 1px solid rgba(255,255,255,.13);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   border-radius: 14px; padding: 6px 8px;
   z-index: 100; transition: opacity .25s ease;
   box-shadow: 0 4px 16px rgba(0,0,0,.4);
@@ -83,19 +84,6 @@ html, body {
   box-shadow: 0 4px 16px rgba(0,0,0,.4);
 }
 
-/* FIN */
-.end-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.85);
-  display: flex; align-items: center; justify-content: center; z-index: 200;
-}
-.end-card {
-  background: #f0f0f0; border-radius: 20px; padding: 48px 36px; text-align: center;
-  display: flex; flex-direction: column; align-items: center; gap: 20px;
-  max-width: 320px; width: 90%; color: #fff;
-}
-.end-icon { font-size: 3.5rem; }
-.end-card h2 { font-size: 2rem; font-weight: 900; }
-.end-actions { display: flex; flex-direction: column; gap: 12px; width: 100%; }
 
 .btn-yellow {
   display: inline-block; background: #f5c400; color: #e8e8e8;

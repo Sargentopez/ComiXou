@@ -46,10 +46,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.add('embed-mode');
     // El botón cerrar manda mensaje al padre en lugar de navegar
     document.getElementById('closeBtn')?.addEventListener('click', _embedClose);
-    document.getElementById('endBackBtn')?.addEventListener('click', _embedClose);
   } else {
     document.getElementById('closeBtn')?.addEventListener('click',   () => history.back());
-    document.getElementById('endBackBtn')?.addEventListener('click', () => history.back());
   }
 
   if (draft) { loadDraft(draft); return; }
@@ -73,6 +71,8 @@ async function loadWork(workId) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(workId);
     document.title = (work[0].title || 'Obra') + ' — ComiXow';
+    RS._workAuthor = work[0].author_name || '';
+    RS._workTitle  = work[0].title       || '';
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -93,6 +93,8 @@ async function loadDraft(token) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(token);
     document.title = (work[0].title || 'Borrador') + ' — ComiXow';
+    RS._workAuthor = work[0].author_name || '';
+    RS._workTitle  = work[0].title       || '';
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -212,17 +214,17 @@ function _resizeCanvas() {
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
   const vw = window.innerWidth, vh = window.innerHeight;
-  // Reservar espacio para controles inferiores (~80px) y margen mínimo (8px)
-  const CTRL_H = 80, MARGIN = 8;
-  const availW = vw  - MARGIN * 2;
-  const availH = vh  - CTRL_H - MARGIN;
+  // Los controles se superponen sobre el canvas — no restan espacio disponible
+  const MARGIN = 8;
+  const availW = vw - MARGIN * 2;
+  const availH = vh - MARGIN * 2;
   // Escala uniforme que respeta la proporción original siempre
   const scale = Math.min(availW / pw, availH / ph);
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
   RS.canvas.style.width  = dw + 'px';
   RS.canvas.style.height = dh + 'px';
   RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
-  RS.canvas.style.top    = Math.round(MARGIN + (availH - dh) / 2) + 'px';
+  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
 }
 
 // ── RENDER PRINCIPAL ──────────────────────────────────────────
@@ -508,7 +510,8 @@ function advance() {
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resizeCanvas(); _render();
   } else {
-    document.getElementById('endOverlay').classList.remove('hidden');
+    // Pantalla final de créditos en canvas
+    _showCredits();
   }
 }
 
@@ -542,6 +545,115 @@ function _startFade() {
   RS.fadeRaf = requestAnimationFrame(step);
 }
 
+// ── PANTALLA FINAL DE CRÉDITOS ────────────────────────────────
+function _showCredits() {
+  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
+  RS.isCredits = true;
+
+  // Mantener las mismas proporciones que la última hoja visitada
+  const { pw, ph } = _panelDims(RS.panels.length - 1);
+  RS.canvas.width  = pw;
+  RS.canvas.height = ph;
+  // Recalcular posición y tamaño (sin cambio de orientación)
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const MARGIN = 8;
+  const scale = Math.min((vw - MARGIN*2) / pw, (vh - MARGIN*2) / ph);
+  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+  RS.canvas.style.width  = dw + 'px';
+  RS.canvas.style.height = dh + 'px';
+  RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
+  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
+
+  // Obtener nombre del autor desde los metadatos cargados
+  RS.creditsAuthor = RS._workTitle || '';
+  RS.creditsAlpha  = 0;
+
+  // Dibujar línea del autor inmediatamente
+  _renderCredits(pw, ph, 0);
+
+  // Tras 1 segundo, iniciar fade-in del resto
+  RS.creditsTimer = setTimeout(() => {
+    const start = performance.now();
+    const dur   = 1200; // ms de fade
+    function fadeStep(now) {
+      RS.creditsAlpha = Math.min(1, (now - start) / dur);
+      _renderCredits(pw, ph, RS.creditsAlpha);
+      if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
+      else RS.fadeRaf = null;
+    }
+    RS.fadeRaf = requestAnimationFrame(fadeStep);
+  }, 1000);
+
+  // El click/tap en créditos lo gestiona el listener permanente del canvas (_setupControls)
+}
+
+function _creditsClick() {
+  if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
+  if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
+  RS.isCredits = false;
+  RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
+  _resizeCanvas(); _render();
+}
+
+function _renderCredits(pw, ph) {
+  const ctx   = RS.ctx;
+  const alpha = RS.creditsAlpha || 0;
+  ctx.clearRect(0, 0, pw, ph);
+
+  // Fondo blanco limpio
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+
+  const cx = pw / 2;
+  const lineH = ph * 0.09; // espaciado entre líneas
+
+  // ── Línea 1: nombre del autor (siempre visible, inmediato) ──
+  const authorY = ph * 0.34;
+  ctx.globalAlpha = 1;
+  ctx.fillStyle   = '#222222';
+  ctx.font        = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
+  ctx.textAlign   = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(RS._workAuthor || '', cx, authorY);
+
+  // ── Resto con fade ──────────────────────────────────────────
+  ctx.globalAlpha = alpha;
+
+  // Línea 2: logotipo ComiXow
+  const logoY = authorY + lineH * 1.3;
+  ctx.font      = `900 ${Math.round(pw * 0.11)}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#f5c400';
+  ctx.fillText('ComiXow', cx, logoY);
+
+  // Línea 3: eslogan
+  const sloganY = logoY + lineH * 1.1;
+  ctx.font      = `400 ${Math.round(pw * 0.042)}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#555555';
+  ctx.fillText('Crea y Comparte', cx, sloganY);
+
+  // Línea 4: enlace (dibujado como texto subrayado)
+  const linkY = sloganY + lineH * 1.0;
+  const linkFS = Math.round(pw * 0.038);
+  ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#1a73e8';
+  const linkText = 'Visita más obras del autor';
+  ctx.fillText(linkText, cx, linkY);
+  // Subrayado manual
+  const lw = ctx.measureText(linkText).width;
+  ctx.beginPath();
+  ctx.strokeStyle = '#1a73e8';
+  ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+  ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
+  ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
+  ctx.stroke();
+
+  ctx.globalAlpha = 1;
+
+  // Guardar zona del enlace para detectar click (en coords de canvas)
+  RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+}
+
+
 // ── CONTROLES ─────────────────────────────────────────────────
 function _updateCounter() {
   const el    = document.getElementById('readerCounter');
@@ -569,12 +681,7 @@ function _showControls() {
 function _setupControls() {
   document.getElementById('nextBtn')?.addEventListener('click', advance);
   document.getElementById('prevBtn')?.addEventListener('click',  goBack);
-  // closeBtn y endBackBtn ya se configuran en DOMContentLoaded según modo embed/normal
-  document.getElementById('restartBtn')?.addEventListener('click', () => {
-    document.getElementById('endOverlay').classList.add('hidden');
-    RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
-    _resizeCanvas(); _render();
-  });
+  // closeBtn ya se configura en DOMContentLoaded según modo embed/normal
 
   // Teclado PC
   RS.keyHandler = e => {
@@ -583,6 +690,11 @@ function _setupControls() {
     if (e.key === 'Escape') history.back();
   };
   document.addEventListener('keydown', RS.keyHandler);
+
+  // Click de ratón en canvas (PC): en créditos detecta enlace
+  RS.canvas.addEventListener('click', e => {
+    if (RS.isCredits) { _handleCreditsClick(e.clientX, e.clientY); }
+  });
 
   // Detectar si es dispositivo táctil para la lógica de auto-ocultar controles
   RS.isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -611,13 +723,35 @@ function _setupControls() {
     const dx = e.changedTouches[0].clientX - sx;
     const dy = e.changedTouches[0].clientY - sy;
     sx = null;
-    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) { advance(); return; } // tap
+    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) {
+      // tap: comprobar si es en el enlace de créditos
+      if (RS.isCredits) { _handleCreditsClick(e.changedTouches[0].clientX, e.changedTouches[0].clientY); return; }
+      advance(); return;
+    }
     if (Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
+    if (RS.isCredits) { _creditsClick(); return; }
     if (dx < 0) advance(); else goBack();
   }, { passive: true, ...sig });
 }
 
 // ── UI HELPERS ────────────────────────────────────────────────
+function _handleCreditsClick(clientX, clientY) {
+  // Convertir coordenadas de pantalla a coordenadas del canvas lógico
+  const rect   = RS.canvas.getBoundingClientRect();
+  const scaleX = RS.canvas.width  / rect.width;
+  const scaleY = RS.canvas.height / rect.height;
+  const cx = (clientX - rect.left) * scaleX;
+  const cy = (clientY - rect.top)  * scaleY;
+
+  const la = RS.creditsLinkArea;
+  if (la && cx >= la.x && cx <= la.x + la.w && cy >= la.y && cy <= la.y + la.h) {
+    window.open('https://sargentopez.github.io/ComiXou/index.html', '_blank');
+  } else {
+    _creditsClick(); // Tap fuera del enlace → reiniciar
+  }
+}
+
+
 function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }
 function showError(msg) {
   document.getElementById('loadingScreen').classList.add('hidden');
