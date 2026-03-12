@@ -3042,6 +3042,7 @@ function edRenderOptionsPanel(mode){
     $('op-draw-ok')?.addEventListener('click',()=>{
       edCloseOptionsPanel();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
+      if(edMinimized){ window._edMinimizedDrawMode = null; edMaximize(); }
     });
 
     // ── Duplicar ──
@@ -3455,11 +3456,12 @@ function edInitDrawBar() {
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
-  // ── OK: finalizar dibujo — cierra tool, limpia estado y vuelve al menú normal ──
+  // ── OK: delega en el botón ✓ del panel de opciones (instancia del mismo botón) ──
   $('edb-ok')?.addEventListener('click', () => {
-    window._edMinimizedDrawMode = null;  // evitar que edMaximize restaure el panel draw
-    edDeactivateDrawTool();              // activa 'select', cierra panel y barra
-    edMaximize();                        // restaura menús completos
+    // El panel puede tener visibility:hidden en modo minimizado — restaurarlo antes
+    const panel = $('edOptionsPanel');
+    if (panel) panel.style.visibility = '';
+    $('op-draw-ok')?.click();
   });
 }
 
