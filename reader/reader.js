@@ -6,16 +6,13 @@
 const SUPABASE_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
-// Dimensiones del canvas del reader (doble que el editor para mejor calidad)
-const ED_PAGE_W = 720;
-const ED_PAGE_H = 1280;
-// Dimensiones canónicas del EDITOR (donde se guardan fontSize, borderWidth, padding)
-// El reader tiene el doble → scale correcto = ED_PAGE_W / ED_EDITOR_PAGE_W = 2
-const ED_EDITOR_PAGE_W = 360;
-const ED_EDITOR_PAGE_H = 780;
+// Dimensiones del canvas — IDÉNTICAS al editor para render 1:1
+// El escalado para ocupar la pantalla lo hace CSS (canvas.style.width/height)
+const ED_PAGE_W = 360;
+const ED_PAGE_H = 780;
 // El workspace del editor es 5×ancho × 3×alto del panel vertical
 // Necesario para reproducir el tamaño de las burbujas de cola "thought"
-const ED_CANVAS_MIN = Math.min(ED_EDITOR_PAGE_W * 5, ED_EDITOR_PAGE_H * 3); // 1800
+const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
 
 // ── ESTADO ──────────────────────────────────────────────────
 const RS = {
@@ -323,8 +320,8 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const y = _rawY * ph;
   const w = _rawW * pw;
   const h = _rawH * ph;
-  // scale convierte valores del canvas del editor (360px base) al canvas del reader (720px base)
-  const scale = pw / ED_EDITOR_PAGE_W;
+  // scale = 1: canvas lógico idéntico al editor, sin conversión
+  const scale = 1;
   // Normalizar campos: panel_texts usa snake_case; panel_layers usa camelCase del editor
   const fontSize_  = t.font_size   || t.fontSize   || 30;
   const fontFamily_= t.font_family || t.fontFamily  || 'Patrick Hand';
@@ -394,7 +391,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     ctx.fillStyle = textColor_;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const padT = padding_ * scale;
-    const linesT = _wrapText(ctx, t.text || '', w * 0.7 - padT * 2);
+    const linesT = _getLines(t.text || '');
     const lhT = fs * 1.2, totalHT = linesT.length * lhT;
     linesT.forEach((line, i) => ctx.fillText(line, 0, -totalHT/2 + lhT/2 + i*lhT));
     ctx.restore();
@@ -457,8 +454,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const isPlaceholder = (t.text||'') === 'Escribe aquí';
   ctx.fillStyle = isPlaceholder ? '#999999' : textColor_;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const pad = padding_ * scale;
-  const lines = _wrapText(ctx, t.text || '', w - pad * 2);
+  const lines = _getLines(t.text || '');
   const lh = fs * 1.2, totalH = lines.length * lh;
   lines.forEach((line, i) => ctx.fillText(line, 0, -totalH/2 + lh/2 + i*lh));
 
@@ -486,17 +482,9 @@ function _drawTail(ctx, ts, te, w, h, bg, border, bw, scale) {
   ctx.strokeStyle = bg; ctx.lineWidth = bw*2+2*(scale||1); ctx.lineCap='round'; ctx.stroke(); ctx.lineCap='butt';
 }
 
-function _wrapText(ctx, text, maxW) {
-  const words = String(text).split(' ');
-  const lines = [];
-  let cur = '';
-  words.forEach(w => {
-    const test = cur ? cur + ' ' + w : w;
-    if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; }
-    else { cur = test; }
-  });
-  if (cur) lines.push(cur);
-  return lines.length ? lines : [''];
+function _getLines(text) {
+  // Idéntico al editor: solo divide por saltos de línea explícitos, sin wrap automático
+  return String(text || '').split('\n');
 }
 
 // ── NAVEGACIÓN ────────────────────────────────────────────────
