@@ -58,6 +58,22 @@ function _requestFullscreen() {
   if (req) req.call(el).catch(() => {}); // silenciar error si el usuario lo deniega
 }
 
+function _toggleFullscreen() {
+  const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (isFs) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+    if (exit) exit.call(document).catch(() => {});
+  } else {
+    _requestFullscreen();
+  }
+}
+
+function _onFullscreenChange() {
+  const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const btn  = document.getElementById('fullscreenToggle');
+  if (btn) btn.textContent = isFs ? '[ ✕ ]' : '[ ]';
+}
+
 function _embedClose() {
   // Si está en iframe, notifica al padre. Si no, navega atrás.
   try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(e) {}
@@ -610,7 +626,7 @@ function _renderCredits(pw, ph) {
   ctx.font        = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(`Autor: "${RS._workAuthor || ''}"`, cx, authorY);
+  ctx.fillText(`Autor: ${RS._workAuthor || ''}`, cx, authorY);
 
   // ── Resto con fade ──────────────────────────────────────────
   ctx.globalAlpha = alpha;
@@ -675,6 +691,11 @@ function _setupControls() {
   document.getElementById('nextBtn')?.addEventListener('click', advance);
   document.getElementById('prevBtn')?.addEventListener('click',  goBack);
   // closeBtn ya se configura en DOMContentLoaded según modo embed/normal
+
+  // Botón fullscreen toggle
+  document.getElementById('fullscreenToggle')?.addEventListener('click', _toggleFullscreen);
+  document.addEventListener('fullscreenchange',       _onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
 
   // Teclado PC
   RS.keyHandler = e => {

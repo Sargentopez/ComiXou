@@ -83,7 +83,17 @@ html, body {
 .viewer-btn:active { background: rgba(0,0,0,.65); }
 .viewer-close-inline { /* hereda viewer-btn */ }
 
-/* Botón ✕ táctil: centrado abajo, solo pointer:coarse */
+/* Pastilla top: fullscreen */
+.viewer-controls-top {
+  top: max(env(safe-area-inset-top, 0px), 16px);
+  bottom: auto;
+}
+/* En táctil también se muestra el botón fullscreen (arriba, no interfiere con swipe) */
+@media (pointer: coarse) {
+  .viewer-controls-top { display: flex !important; }
+}
+
+
 .viewer-close-touch {
   display: none;
   position: fixed;

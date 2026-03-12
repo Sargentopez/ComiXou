@@ -6,6 +6,15 @@
 
 function AuthView_init() {
 
+  // ── Cerrar al clicar fuera de la tarjeta ──
+  const authMain = document.querySelector('.auth-main');
+  if (authMain) {
+    authMain.addEventListener('pointerdown', e => {
+      // Si el click/tap es directamente en el overlay (no en la tarjeta), volver atrás
+      if (e.target === authMain) Router.go('home');
+    });
+  }
+
   // ── Mostrar/ocultar contraseña ──
   const passToggle = document.getElementById('passToggle');
   if (passToggle) {
