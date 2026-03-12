@@ -6,9 +6,16 @@
 const SUPABASE_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
-// Dimensiones canónicas (igual que el editor)
+// Dimensiones del canvas del reader (doble que el editor para mejor calidad)
 const ED_PAGE_W = 720;
 const ED_PAGE_H = 1280;
+// Dimensiones canónicas del EDITOR (donde se guardan fontSize, borderWidth, padding)
+// El reader tiene el doble → scale correcto = ED_PAGE_W / ED_EDITOR_PAGE_W = 2
+const ED_EDITOR_PAGE_W = 360;
+const ED_EDITOR_PAGE_H = 780;
+// El workspace del editor es 5×ancho × 3×alto del panel vertical
+// Necesario para reproducir el tamaño de las burbujas de cola "thought"
+const ED_CANVAS_MIN = Math.min(ED_EDITOR_PAGE_W * 5, ED_EDITOR_PAGE_H * 3); // 1800
 
 // ── ESTADO ──────────────────────────────────────────────────
 const RS = {
@@ -306,7 +313,8 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const y = _rawY * ph;
   const w = _rawW * pw;
   const h = _rawH * ph;
-  const scale = pw / ED_PAGE_W;
+  // scale convierte valores del canvas del editor (360px base) al canvas del reader (720px base)
+  const scale = pw / ED_EDITOR_PAGE_W;
   // Normalizar campos: panel_texts usa snake_case; panel_layers usa camelCase del editor
   const fontSize_  = t.font_size   || t.fontSize   || 16;
   const fontFamily_= t.font_family || t.fontFamily  || 'Arial, sans-serif';
@@ -336,6 +344,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(cx, cy);
+  if (t.rotation) ctx.rotate(t.rotation * Math.PI / 180);
 
   if (style === 'thought') {
     // Nube de pensamiento: 4 círculos solapados
@@ -358,8 +367,8 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     });
     if (maxDist === 0) maxDist = Math.min(w,h)*0.4;
     ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0,0,maxDist,0,Math.PI*2); ctx.fill();
-    // Cola de pensamiento: burbujas pequeñas
-    const canvasSize = Math.min(pw, ph);
+    // Cola de pensamiento: burbujas pequeñas — misma referencia que el editor (workspace completo)
+    const canvasSize = ED_CANVAS_MIN * scale;
     const thoughtTailEnd = (tailEnds && tailEnds[0]) || {x:-0.4, y:0.6};
     [0.09,0.055,0.03].forEach((r, i) => {
       const f = 1 - i * 0.3;
