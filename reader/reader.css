@@ -51,13 +51,13 @@ html, body {
 /* ── Botones de esquina: fullscreen (TL) y cerrar (TR) ── */
 .corner-btn {
   position: fixed;
-  top: max(env(safe-area-inset-top, 0px), 52px);
+  top: max(env(safe-area-inset-top, 0px), 12px);
   background: rgba(0,0,0,.5);
   border: 1px solid rgba(255,255,255,.3);
   border-radius: 100px;
   color: rgba(255,255,255,.8);
   font-size: 0.6rem; font-weight: 700;
-  padding: 3px 6px;
+  padding: 3px 7px;
   cursor: pointer;
   z-index: 100;
   backdrop-filter: blur(6px);
@@ -71,6 +71,8 @@ html, body {
 .corner-btn:active { background: rgba(0,0,0,.7); }
 .corner-tl { left:  8px; }
 .corner-tr { right: 8px; }
+/* Fuera de iframe (URL directa): bajar para evitar barra del navegador */
+body:not(.embed-mode) .corner-btn { top: max(env(safe-area-inset-top, 0px), 52px); }
 
 /* ── Pastilla inferior desktop: ya no se usa — eliminada ── */
 

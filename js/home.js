@@ -316,20 +316,35 @@ function _openReaderModal(url) {
     overlay.className = 'reader-modal';
     overlay.innerHTML = `
       <div class="reader-modal-inner">
-        <button class="reader-modal-close" aria-label="Cerrar">✕</button>
         <iframe class="reader-modal-frame" allowfullscreen></iframe>
       </div>`;
     document.body.appendChild(overlay);
 
-    overlay.querySelector('.reader-modal-close').addEventListener('click', _closeReaderModal);
+    // Cerrar al clicar fuera del iframe
     overlay.addEventListener('click', e => { if (e.target === overlay) _closeReaderModal(); });
+
+    // Escuchar mensajes del iframe
     window.addEventListener('message', e => {
-      if (e.data?.type === 'reader:close') _closeReaderModal();
+      if (e.data?.type === 'reader:close')      _closeReaderModal();
+      if (e.data?.type === 'reader:fullscreen') {
+        const frame = overlay.querySelector('.reader-modal-frame');
+        if (!frame) return;
+        const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        if (isFs) {
+          (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+        } else {
+          const req = frame.requestFullscreen || frame.webkitRequestFullscreen;
+          if (req) req.call(frame, { navigationUI: 'hide' }).catch(() => {});
+        }
+      }
     });
   }
-  overlay.querySelector('.reader-modal-frame').src = url;
+  const frame = overlay.querySelector('.reader-modal-frame');
+  frame.src = url;
   overlay.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  // Dar foco al iframe para que las teclas funcionen sin clic previo
+  frame.addEventListener('load', () => frame.focus(), { once: true });
 }
 
 function _closeReaderModal() {
@@ -339,3 +354,11 @@ function _closeReaderModal() {
   overlay.querySelector('.reader-modal-frame').src = '';
   document.body.style.overflow = '';
 }
+
+// Cerrar modal con Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const overlay = document.getElementById('homeReaderModal');
+    if (overlay && !overlay.classList.contains('hidden')) { e.stopPropagation(); _closeReaderModal(); }
+  }
+});

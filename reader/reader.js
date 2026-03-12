@@ -42,14 +42,26 @@ document.addEventListener('DOMContentLoaded', () => {
   const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
   if (RS.isEmbed) document.body.classList.add('embed-mode');
 
-  document.getElementById('closeBtn')?.addEventListener('click', _closeAction);
+  // En embed: ocultar el closeBtn interno (el padre ya tiene su propio botón de cierre)
+  const closeBtnEl = document.getElementById('closeBtn');
+  if (closeBtnEl) {
+    if (RS.isEmbed) {
+      closeBtnEl.style.display = 'none';
+    } else {
+      closeBtnEl.addEventListener('click', _closeAction);
+    }
+  }
 
   // Botón fullscreen: listener directo en gesto de usuario (igual que header.js)
-  // No esperar a _setupControls para garantizar que el click es un gesto válido
   const fsBtn = document.getElementById('fullscreenToggle');
-  if (fsBtn && !RS.isEmbed) {
+  if (fsBtn) {
     fsBtn.addEventListener('click', function(e) {
       e.stopPropagation();
+      if (RS.isEmbed) {
+        // En iframe: pedir al padre que ponga el iframe en fullscreen
+        try { window.parent.postMessage({ type: 'reader:fullscreen' }, '*'); } catch(_) {}
+        return;
+      }
       if (document.fullscreenElement || document.webkitFullscreenElement) {
         (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
       } else {
@@ -64,8 +76,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('fullscreenchange',       _onFullscreenChange);
     document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
-  } else if (fsBtn && RS.isEmbed) {
-    fsBtn.style.display = 'none';
   }
 
   if (draft) { loadDraft(draft); return; }
@@ -706,7 +716,10 @@ function _setupControls() {
   RS.keyHandler = e => {
     if (['ArrowRight','ArrowDown','Space','Enter'].includes(e.code)) { e.preventDefault(); advance(); }
     if (['ArrowLeft','ArrowUp'].includes(e.code))                    { e.preventDefault(); goBack(); }
-    if (e.key === 'Escape') history.back();
+    if (e.key === 'Escape') {
+      if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
+      else history.back();
+    }
   };
   document.addEventListener('keydown', RS.keyHandler);
 
