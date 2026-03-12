@@ -42,18 +42,24 @@ document.addEventListener('DOMContentLoaded', () => {
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
-  if (RS.isEmbed) {
-    document.body.classList.add('embed-mode');
-    // El botón cerrar manda mensaje al padre en lugar de navegar
-    document.getElementById('closeBtn')?.addEventListener('click', _embedClose);
-  } else {
-    document.getElementById('closeBtn')?.addEventListener('click',   () => history.back());
-  }
+  const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
+  if (RS.isEmbed) document.body.classList.add('embed-mode');
+
+  document.getElementById('closeBtn')?.addEventListener('click',      _closeAction);
+  document.getElementById('closeBtnTouch')?.addEventListener('click', _closeAction);
 
   if (draft) { loadDraft(draft); return; }
   if (id)    { loadWork(id);     return; }
   showError('No se indicó ninguna obra. Comprueba el enlace.');
 });
+
+function _requestFullscreen() {
+  // No pedir fullscreen si estamos en iframe (embed)
+  if (RS.isEmbed) return;
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+  if (req) req.call(el).catch(() => {}); // silenciar error si el usuario lo deniega
+}
 
 function _embedClose() {
   // Si está en iframe, notifica al padre. Si no, navega atrás.
@@ -188,6 +194,8 @@ async function sbGet(path) {
 function startReader() {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
+
+  _requestFullscreen();
 
   RS.canvas = document.getElementById('readerCanvas');
   RS.ctx    = RS.canvas.getContext('2d');
@@ -614,7 +622,7 @@ function _renderCredits(pw, ph) {
   ctx.font        = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(RS._workAuthor || '', cx, authorY);
+  ctx.fillText(`Autor: "${RS._workAuthor || ''}"`, cx, authorY);
 
   // ── Resto con fade ──────────────────────────────────────────
   ctx.globalAlpha = alpha;
@@ -662,20 +670,17 @@ function _updateCounter() {
   const tl    = panel?.texts || [];
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
   el.textContent = (isSeq && tl.length)
-    ? (RS.idx+1) + '/' + RS.panels.length + ' · \uD83D\uDCAC' + RS.textStep + '/' + tl.length
+    ? (RS.idx+1) + '/' + RS.panels.length + ' · 💬' + RS.textStep + '/' + tl.length
     : (RS.idx+1) + ' / ' + RS.panels.length;
 }
 
 function _showControls() {
-  // En PC (sin táctil): controles siempre visibles, no se ocultan solos
-  // En táctil: se muestran al tocar y se ocultan tras 3.5s
   const ctrls = document.getElementById('viewerControls');
   if (!ctrls) return;
   ctrls.classList.remove('ctrl-hidden');
   clearTimeout(RS.ctrlTimer);
-  if (RS.isTouch) {
-    RS.ctrlTimer = setTimeout(() => ctrls.classList.add('ctrl-hidden'), 3500);
-  }
+  // En táctil la pastilla está oculta por CSS (pointer:coarse) — no hay que gestionar timer
+  // En desktop siempre visible (no se oculta)
 }
 
 function _setupControls() {
@@ -695,10 +700,6 @@ function _setupControls() {
   RS.canvas.addEventListener('click', e => {
     if (RS.isCredits) { _handleCreditsClick(e.clientX, e.clientY); }
   });
-
-  // Detectar si es dispositivo táctil para la lógica de auto-ocultar controles
-  RS.isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
-  _showControls(); // Mostrar al inicio (en PC se quedan fijos, en táctil se ocultan solos)
 
   // Swipe táctil con AbortController (evita acumulación de listeners)
   RS.ac = new AbortController();

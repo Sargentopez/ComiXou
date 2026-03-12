@@ -37,13 +37,16 @@
     <!-- Canvas — toda la obra se renderiza aquí -->
     <canvas id="readerCanvas"></canvas>
 
-    <!-- Controles flotantes desktop (pastilla inferior) -->
+    <!-- Controles desktop: pastilla ◀ contador ▶ ✕ (oculta en táctil) -->
     <div id="viewerControls" class="viewer-controls">
-      <button id="prevBtn"  class="ctrl-btn" aria-label="Anterior">&#8249;</button>
-      <span   id="readerCounter" class="ctrl-counter">1 / 1</span>
-      <button id="nextBtn"  class="ctrl-btn" aria-label="Siguiente">&#8250;</button>
-      <button id="closeBtn" class="ctrl-btn ctrl-close" aria-label="Cerrar">&#x2715;</button>
+      <button id="prevBtn"       class="viewer-btn" aria-label="Anterior">&#9664;</button>
+      <span   id="readerCounter" class="viewer-counter">1 / 1</span>
+      <button id="nextBtn"       class="viewer-btn" aria-label="Siguiente">&#9654;</button>
+      <button id="closeBtn"      class="viewer-btn viewer-close-inline" aria-label="Cerrar">&#x2715;</button>
     </div>
+
+    <!-- Botón cerrar táctil: centrado abajo, solo en pointer:coarse -->
+    <button id="closeBtnTouch" class="viewer-btn viewer-close-touch" aria-label="Cerrar">&#x2715;</button>
 
   </div>
 

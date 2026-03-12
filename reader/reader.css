@@ -48,41 +48,66 @@ html, body {
   box-shadow: 0 8px 32px rgba(0,0,0,.35);
 }
 
-/* CONTROLES FLOTANTES — superpuestos sobre el canvas, centrados */
+/* CONTROLES — pastilla desktop: ◀ contador ▶ ✕ */
 .viewer-controls {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 4px;
-  background: rgba(20,20,20,.82); border: 1px solid rgba(255,255,255,.13);
-  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  border-radius: 14px; padding: 6px 8px;
-  z-index: 100; transition: opacity .25s ease;
-  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  position: fixed;
+  bottom: max(env(safe-area-inset-bottom, 0px), 16px);
+  left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 100px;
+  padding: 6px 10px;
+  z-index: 100;
+  transition: opacity .25s;
+}
+/* Táctil: pastilla oculta — navegación por swipe */
+@media (pointer: coarse) {
+  .viewer-controls { display: none !important; }
 }
 .viewer-controls.ctrl-hidden { opacity: 0; pointer-events: none; }
-.ctrl-btn {
-  background: rgba(255,255,255,.08); border: none; border-radius: 8px;
-  width: 36px; height: 36px; color: #fff; font-size: 1.4rem;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  transition: background .15s;
+
+.viewer-btn {
+  background: rgba(0,0,0,.45);
+  border: 1.5px solid rgba(255,255,255,.35);
+  border-radius: 100px;
+  color: #fff;
+  font-size: 0.82rem; font-weight: 700;
+  padding: 6px 14px; cursor: pointer;
+  transition: background .12s;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0,0,0,.8);
+  box-shadow: 0 1px 6px rgba(0,0,0,.4);
 }
-.ctrl-btn:hover  { background: rgba(255,255,255,.18); }
-.ctrl-btn:active { background: rgba(255,255,255,.28); }
-.ctrl-close { font-size: .95rem; }
-.ctrl-counter {
-  font-size: .82rem; color: rgba(255,255,255,.9);
-  white-space: nowrap; padding: 0 8px; min-width: 72px; text-align: center;
+.viewer-btn:active { background: rgba(0,0,0,.65); }
+.viewer-close-inline { /* hereda viewer-btn */ }
+
+/* Botón ✕ táctil: centrado abajo, solo pointer:coarse */
+.viewer-close-touch {
+  display: none;
+  position: fixed;
+  bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+  left: 50%; transform: translateX(-50%);
+  z-index: 110;
+  background: rgba(0,0,0,.6) !important;
+  border: 1.5px solid rgba(255,255,255,.5) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+@media (pointer: coarse) {
+  .viewer-close-touch { display: block; }
+}
+
+.viewer-counter {
+  color: rgba(255,255,255,.85);
+  font-size: 0.8rem; font-weight: 700;
+  min-width: 40px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
-/* CERRAR MÓVIL */
-.close-mobile {
-  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  background: #222; border: 1px solid rgba(255,255,255,.1);
-  border-radius: 50%; width: 44px; height: 44px;
-  color: #fff; font-size: 1.1rem; cursor: pointer; z-index: 100;
-  display: none; align-items: center; justify-content: center;
-  box-shadow: 0 4px 16px rgba(0,0,0,.4);
-}
+/* CERRAR MÓVIL legacy — ya no se usa */
+.close-mobile { display: none; }
 
 
 .btn-yellow {
