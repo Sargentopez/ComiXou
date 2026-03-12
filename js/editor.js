@@ -212,13 +212,15 @@ class ImageLayer extends BaseLayer {
 class TextLayer extends BaseLayer {
   constructor(text='Escribe aquí',x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
-    this.text=text;this.fontSize=20;this.fontFamily='Arial';
+    this.text=text;this.fontSize=30;this.fontFamily='Patrick Hand';
+    this.fontBold=false;this.fontItalic=false;
     this.color='#000000';this.backgroundColor='#ffffff';
     this.borderColor='#000000';this.borderWidth=0;this.padding=10;
   }
   getLines(){return this.text.split('\n');}
+  _fontStr(){ return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${this.fontFamily}`; }
   measure(ctx){
-    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    ctx.font=this._fontStr();
     let mw=0,th=0;
     this.getLines().forEach(l=>{mw=Math.max(mw,ctx.measureText(l).width);th+=this.fontSize*1.2;});
     return{width:mw,height:th};
@@ -241,7 +243,7 @@ class TextLayer extends BaseLayer {
       ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
       ctx.strokeRect(-w/2,-h/2,w,h);
     }
-    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    ctx.font=this._fontStr();
     const isPlaceholder = this.text==='Escribe aquí';
     ctx.fillStyle=isPlaceholder?'#aaaaaa':this.color;
     ctx.textAlign='center'; ctx.textBaseline='middle';
@@ -254,7 +256,8 @@ class TextLayer extends BaseLayer {
 class BubbleLayer extends BaseLayer {
   constructor(text='Escribe aquí',x=0.5,y=0.5){
     super('bubble',x,y,0.3,0.15);
-    this.text=text;this.fontSize=18;this.fontFamily='Comic Sans MS, cursive';
+    this.text=text;this.fontSize=30;this.fontFamily='Patrick Hand';
+    this.fontBold=false;this.fontItalic=false;
     this.color='#000000';this.backgroundColor='#ffffff';
     this.borderColor='#000000';this.borderWidth=2;
     this.tail=true;
@@ -263,8 +266,9 @@ class BubbleLayer extends BaseLayer {
     this.style='conventional';this.voiceCount=1;this.padding=15;
   }
   getLines(){return this.text.split('\n');}
+  _fontStr(){ return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${this.fontFamily}`; }
   measure(ctx){
-    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    ctx.font=this._fontStr();
     let mw=0,th=0;
     this.getLines().forEach(l=>{mw=Math.max(mw,ctx.measureText(l).width);th+=this.fontSize*1.2;});
     return{width:mw,height:th};
@@ -350,7 +354,7 @@ class BubbleLayer extends BaseLayer {
         });
       }
       // Texto centrado
-      ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+      ctx.font=this._fontStr();
       ctx.fillStyle=this.color;ctx.textAlign='center';ctx.textBaseline='middle';
       const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
       lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
@@ -397,7 +401,7 @@ class BubbleLayer extends BaseLayer {
       }
     }
 
-    ctx.font=`${this.fontSize}px ${this.fontFamily}`;
+    ctx.font=this._fontStr();
     const isPlaceholder = this.text==='Escribe aquí';
     ctx.fillStyle=isPlaceholder?'#999999':this.color;
     ctx.textAlign='center';ctx.textBaseline='middle';
@@ -665,7 +669,7 @@ function _edLayersSnapshot(){
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
-                    'text','fontSize','fontFamily','color','backgroundColor',
+                    'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor',
                     'borderColor','borderWidth','padding',
                     'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount']){
       if(l[k] !== undefined) o[k] = l[k];
@@ -3086,11 +3090,21 @@ function edRenderOptionsPanel(mode){
         <textarea id="pp-text" style="border-radius:8px;resize:vertical;min-height:40px;flex:1;border:2px solid var(--gray-300);padding:4px 8px;font-family:var(--font-body);font-size:.84rem;">${la.text.replace(/</g,'&lt;')}</textarea></div>
       <div class="op-prop-row"><span class="op-prop-label">Fuente</span>
         <select id="pp-font">
-          <option value="Arial" ${la.fontFamily==='Arial'?'selected':''}>Arial</option>
+          <option value="Patrick Hand" ${la.fontFamily==='Patrick Hand'?'selected':''}>Patrick Hand</option>
           <option value="Bangers" ${la.fontFamily==='Bangers'?'selected':''}>Bangers</option>
-          <option value="Comic Sans MS, cursive" ${la.fontFamily==='Comic Sans MS, cursive'?'selected':''}>Comic Sans</option>
+          <option value="Permanent Marker" ${la.fontFamily==='Permanent Marker'?'selected':''}>Permanent Marker</option>
+          <option value="Bebas Neue" ${la.fontFamily==='Bebas Neue'?'selected':''}>Bebas Neue</option>
+          <option value="Oswald" ${la.fontFamily==='Oswald'?'selected':''}>Oswald</option>
+          <option value="Comic Neue" ${la.fontFamily==='Comic Neue'?'selected':''}>Comic Neue</option>
+          <option value="Arial" ${la.fontFamily==='Arial'?'selected':''}>Arial</option>
           <option value="Verdana" ${la.fontFamily==='Verdana'?'selected':''}>Verdana</option>
         </select>
+        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-weight:900;margin-left:6px;cursor:pointer" title="Negrita">
+          <input type="checkbox" id="pp-bold" ${la.fontBold?'checked':''}><b>B</b>
+        </label>
+        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-style:italic;margin-left:4px;cursor:pointer" title="Cursiva">
+          <input type="checkbox" id="pp-italic" ${la.fontItalic?'checked':''}><i>I</i>
+        </label>
         <span class="op-prop-label" style="min-width:auto;margin-left:8px">Tamaño</span>
         <input type="number" id="pp-fs" value="${la.fontSize}" min="8" max="120">
         <input type="color" id="pp-color" value="${la.color}">
@@ -3168,6 +3182,8 @@ function edRenderOptionsPanel(mode){
           la.resizeToFitText(edCanvas);
         }
         else if(id==='pp-font'){la.fontFamily=e.target.value;la.resizeToFitText(edCanvas);}
+        else if(id==='pp-bold')  {la.fontBold=e.target.checked;la.resizeToFitText(edCanvas);}
+        else if(id==='pp-italic'){la.fontItalic=e.target.checked;la.resizeToFitText(edCanvas);}
         else if(id==='pp-fs'){la.fontSize=parseInt(e.target.value)||12;la.resizeToFitText(edCanvas);}
         else if(id==='pp-color')  la.color=e.target.value;
         else if(id==='pp-bg')     la.backgroundColor=e.target.value;
@@ -3694,8 +3710,10 @@ function edSaveProject(){
           x: xPct, y: yPct, w: wPct, h: hPct,
           style:       l.style      || 'conventional',
           order:       seqOrder++,
-          fontSize:    l.fontSize   || 18,
-          fontFamily:  l.fontFamily || 'Comic Sans MS, cursive',
+          fontSize:    l.fontSize   || 30,
+          fontFamily:  l.fontFamily || 'Patrick Hand',
+          fontBold:    l.fontBold   || false,
+          fontItalic:  l.fontItalic || false,
           color:       l.color      || '#000000',
           bg:          l.backgroundColor || '#ffffff',
           border:      l.borderWidth ?? 2,
@@ -3713,8 +3731,10 @@ function edSaveProject(){
           text:        rawText,
           x: xPct, y: yPct, w: wPct, h: hPct,
           order:       seqOrder++,
-          fontSize:    l.fontSize   || 20,
-          fontFamily:  l.fontFamily || 'Arial',
+          fontSize:    l.fontSize   || 30,
+          fontFamily:  l.fontFamily || 'Patrick Hand',
+          fontBold:    l.fontBold   || false,
+          fontItalic:  l.fontItalic || false,
           color:       l.color      || '#000000',
           bg:          l.backgroundColor || '#ffffff',
           border:      l.borderWidth ?? 0,
@@ -3793,11 +3813,11 @@ function edSerLayer(l){
     return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
-    text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
+    text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
   if(l.type==='bubble')return{type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
-    text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,color:l.color,
+    text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
     tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
     tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,

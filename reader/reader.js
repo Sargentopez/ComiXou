@@ -316,8 +316,10 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   // scale convierte valores del canvas del editor (360px base) al canvas del reader (720px base)
   const scale = pw / ED_EDITOR_PAGE_W;
   // Normalizar campos: panel_texts usa snake_case; panel_layers usa camelCase del editor
-  const fontSize_  = t.font_size   || t.fontSize   || 16;
-  const fontFamily_= t.font_family || t.fontFamily  || 'Arial, sans-serif';
+  const fontSize_  = t.font_size   || t.fontSize   || 30;
+  const fontFamily_= t.font_family || t.fontFamily  || 'Patrick Hand';
+  const fontBold_  = t.font_bold   ?? t.fontBold   ?? false;
+  const fontItalic_= t.font_italic ?? t.fontItalic ?? false;
   const bgColor_   = t.bg          || t.backgroundColor || '#ffffff';
   const borderW_   = t.border !== undefined && t.border !== null ? t.border
                    : t.borderWidth !== undefined ? t.borderWidth : 2;
@@ -378,7 +380,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
       ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke();
     });
     // Texto centrado
-    ctx.font = fs + 'px ' + fontFamily_;
+    ctx.font = (fontItalic_ ? 'italic ' : '') + (fontBold_ ? 'bold ' : '') + fs + 'px ' + fontFamily_;
     ctx.fillStyle = textColor_;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const padT = padding_ * scale;
@@ -441,7 +443,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   }
 
   // Texto centrado
-  ctx.font = fs + 'px ' + fontFamily_;
+  ctx.font = (fontItalic_ ? 'italic ' : '') + (fontBold_ ? 'bold ' : '') + fs + 'px ' + fontFamily_;
   const isPlaceholder = (t.text||'') === 'Escribe aquí';
   ctx.fillStyle = isPlaceholder ? '#999999' : textColor_;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
