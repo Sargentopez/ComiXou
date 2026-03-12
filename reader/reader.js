@@ -44,6 +44,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('closeBtn')?.addEventListener('click', _closeAction);
 
+  // Botón fullscreen: listener directo en gesto de usuario (igual que header.js)
+  // No esperar a _setupControls para garantizar que el click es un gesto válido
+  const fsBtn = document.getElementById('fullscreenToggle');
+  if (fsBtn && !RS.isEmbed) {
+    fsBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+      } else {
+        if (typeof Fullscreen !== 'undefined') {
+          Fullscreen.enter().catch(() => {});
+        } else {
+          const el = document.documentElement;
+          const req = el.requestFullscreen || el.webkitRequestFullscreen;
+          if (req) req.call(el, { navigationUI: 'hide' }).catch(() => {});
+        }
+      }
+    });
+    document.addEventListener('fullscreenchange',       _onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
+  } else if (fsBtn && RS.isEmbed) {
+    fsBtn.style.display = 'none';
+  }
+
   if (draft) { loadDraft(draft); return; }
   if (id)    { loadWork(id);     return; }
   showError('No se indicó ninguna obra. Comprueba el enlace.');
@@ -676,12 +700,7 @@ function _updateCounter() { /* sin pastilla — no se muestra */ }
 function _showControls() { /* botones de esquina siempre visibles */ }
 
 function _setupControls() {
-  // closeBtn configurado en DOMContentLoaded
-
-  // Botón fullscreen — usa Fullscreen.request() igual que el editor de ComiXow
-  document.getElementById('fullscreenToggle')?.addEventListener('click', _toggleFullscreen);
-  document.addEventListener('fullscreenchange',       _onFullscreenChange);
-  document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
+  // closeBtn y fullscreenToggle configurados en DOMContentLoaded
 
   // Teclado PC
   RS.keyHandler = e => {

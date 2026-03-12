@@ -96,6 +96,9 @@ const Router = (() => {
     recalc();
     document.fonts && document.fonts.ready.then(recalc);
     setTimeout(recalc, 200);
+    setTimeout(recalc, 600);
+    // Exponer para que home.js pueda forzar recalc tras renderizar fichas
+    window._adjustSpacingNow = recalc;
   }
 
   window.addEventListener('popstate', e => {

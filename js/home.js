@@ -204,6 +204,8 @@ function renderComics() {
     try { grid.appendChild(buildRow(comic, currentUser)); }
     catch(e) { console.error('buildRow error:', e, comic); }
   });
+  // Recalcular padding tras render (especialmente con 1 sola ficha o tras publicar)
+  if (typeof window._adjustSpacingNow === 'function') window._adjustSpacingNow();
 }
 
 // ── FILA ──
