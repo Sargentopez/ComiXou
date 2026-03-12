@@ -250,6 +250,8 @@ function startReader() {
   _render();
   _showControls();
   _setupControls();
+  // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
+  requestAnimationFrame(_positionBtns);
 
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
   window.addEventListener('resize', RS.resizeFn);
@@ -260,6 +262,32 @@ function startReader() {
     ? 'Desplázate tocando la pantalla  👆'
     : 'Desplázate con las flechas del teclado  ◀ ▶';
   _readerToast(msg, 4000);
+}
+
+// ── POSICIÓN DE BOTONES ───────────────────────────────────────
+// Los botones se anclan a los bordes del canvas, no a la ventana.
+// Se llama cada vez que el canvas cambia de tamaño o posición.
+function _positionBtns() {
+  const c = RS.canvas;
+  if (!c) return;
+  const cl  = parseInt(c.style.left)  || 0;
+  const ct  = parseInt(c.style.top)   || 0;
+  const cw  = parseInt(c.style.width) || 0;
+  const PAD = 8;   // distancia al borde del canvas
+  const OFY = 10;  // offset vertical desde el borde superior del canvas
+
+  const fsBtn    = document.getElementById('fullscreenToggle');
+  const closeBtn = document.getElementById('closeBtn');
+
+  if (fsBtn) {
+    fsBtn.style.left = (cl + PAD) + 'px';
+    fsBtn.style.top  = (ct + OFY) + 'px';
+  }
+  if (closeBtn) {
+    const btnW = closeBtn.getBoundingClientRect().width || 32;
+    closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
+    closeBtn.style.top  = (ct + OFY) + 'px';
+  }
 }
 
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
@@ -284,6 +312,7 @@ function _resizeCanvas() {
   RS.canvas.style.height = dh + 'px';
   RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
   RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
+  _positionBtns();
 }
 
 // ── RENDER PRINCIPAL ──────────────────────────────────────────
@@ -613,8 +642,7 @@ function _showCredits() {
   RS.canvas.style.height = dh + 'px';
   RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
   RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
-
-  // Obtener nombre del autor desde los metadatos cargados
+  _positionBtns();
   RS.creditsAuthor = RS._workTitle || '';
   RS.creditsAlpha  = 0;
 
