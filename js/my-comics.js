@@ -23,16 +23,16 @@ function _mcInjectModal() {
         <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="next">
       </div>
       <div class="mc-field">
-        <label>Redes y comentarios <span style="font-weight:400;color:var(--gray-400);font-size:.78rem">(aparecerán en la hoja final, máx. 100 car.)</span></label>
-        <input type="text" id="mcSocial" placeholder="Instagram: @miperfil · Web: misite.com" autocomplete="off" inputmode="text" enterkeyhint="next" maxlength="100">
-      </div>
-      <div class="mc-field">
         <label>Modo de lectura</label>
         <select id="mcNavMode">
           <option value="fixed">Viñeta fija (botones)</option>
           <option value="horizontal">Deslizamiento horizontal</option>
           <option value="vertical">Deslizamiento vertical</option>
         </select>
+      </div>
+      <div class="mc-field">
+        <label>Redes y comentarios <span style="font-weight:400;color:var(--gray-400);font-size:.78rem">(aparecen en la hoja final)</span></label>
+        <textarea id="mcSocial" placeholder="Instagram: @miperfil · Web: misite.com · ¡Gracias por leer!" maxlength="300" rows="3" style="resize:none;overflow-y:auto;font-family:var(--font-body);font-size:.88rem;padding:8px 10px;border:1.5px solid var(--gray-200);border-radius:8px;width:100%;box-sizing:border-box;line-height:1.5"></textarea>
       </div>
       <div class="mc-modal-actions">
         <button class="btn" id="mcNewCancel" style="flex:1">Cancelar</button>
@@ -115,15 +115,6 @@ function _mcRenderList() {
     </div>`;
   }).join('');
 
-  // Ajustar padding top por la barra de nav
-  const list = document.getElementById('myComicsList');
-  const nav  = document.getElementById('myComicsNav');
-  if (list && nav) {
-    requestAnimationFrame(() => {
-      list.style.paddingTop = nav.offsetHeight + 'px';
-    });
-  }
-
   // Eventos de botones
   wrap.addEventListener('click', async e => {
     const btn = e.target.closest('[data-action]');
@@ -182,11 +173,15 @@ function _mcRenderList() {
       const supabaseId = comic.supabaseId || crypto.randomUUID();
       ComicStore.save({ ...comic, supabaseId, published: false, approved: false, pendingReview: true });
       _mcRenderList();
-      // Scroll a la ficha en segundo frame, después de que el padding se haya ajustado
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        const row = document.querySelector(`.comic-row[data-id="${id}"]`);
-        if (row) row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }));
+      // Scroll a la ficha: usar posición real menos el padding del contenedor
+      requestAnimationFrame(() => {
+        const row  = document.querySelector(`.comic-row[data-id="${id}"]`);
+        const list = document.getElementById('myComicsList');
+        if (!row || !list) return;
+        const pt   = parseInt(list.style.paddingTop) || 0;
+        const rowTop = row.getBoundingClientRect().top + window.scrollY - pt;
+        window.scrollTo({ top: rowTop, behavior: 'smooth' });
+      });
       if (typeof SupabaseClient !== 'undefined') {
         SupabaseClient.submitForReview({ ...comic, supabaseId, published: false, pendingReview: true })
           .catch(err => console.warn('Supabase submitForReview:', err));
@@ -245,7 +240,7 @@ function _mcCloseModal() {
 function _mcCreateProject() {
   const title   = document.getElementById('mcTitle')?.value.trim();
   const genre   = document.getElementById('mcGenre')?.value.trim();
-  const social  = document.getElementById('mcSocial')?.value.trim().slice(0, 100);
+  const social  = document.getElementById('mcSocial')?.value.trim().slice(0, 300);
   const navMode = document.getElementById('mcNavMode')?.value || 'horizontal';
 
   if (!title) { document.getElementById('mcTitle')?.focus(); return; }
