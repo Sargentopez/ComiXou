@@ -1383,8 +1383,12 @@ body.editor-page #appView {
   pointer-events: none;
   opacity: 0.35;
 }
+/* draw-active: edMinimizeBtn invisible (lo sustituye op-draw-minimize) */
+#editorShell.draw-active #edMinimizeBtn {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 /* Permitidos en draw-active: botón volver, pantalla completa, FloatBtn */
-/* edMinimizeBtn bloqueado — solo el op-draw-minimize puede ocultar el submenú de dibujo */
 #editorShell.draw-active #edBackBtn,
 #editorShell.draw-active #edFsBtn,
 #editorShell.draw-active #edFloatBtn {
