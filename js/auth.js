@@ -1,13 +1,15 @@
 /* ============================================================
-   auth.js  v4.7 — Autenticación
-   Usuarios fijos (admin + macario) hardcodeados en código:
-   no dependen de ningún dispositivo ni localStorage.
-   Los usuarios registrados se guardan en localStorage como antes.
+   auth.js  v5.0 — Autenticación híbrida
+   - Login/Registro: Supabase Auth (JWT, seguro, multi-dispositivo)
+   - Sesión: cacheada en localStorage para acceso síncrono
+   - Fallback: usuarios fijos admin+macario siguen funcionando
+     aunque Supabase no esté disponible
    ============================================================ */
 
 const Auth = (() => {
-  const KEY_USERS   = 'cs_users';
   const KEY_SESSION = 'cs_session';
+  const SB_URL      = 'https://qqgsbyylaugsagbxsetc.supabase.co';
+  const SB_KEY      = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
   function simpleHash(str) {
     let h = 0;
@@ -15,96 +17,154 @@ const Auth = (() => {
     return 'h' + Math.abs(h).toString(36);
   }
 
-  /* ══════════════════════════════════════════
-     USUARIOS FIJOS (hardcoded, funciona en
-     cualquier dispositivo sin registro previo)
-     ══════════════════════════════════════════ */
   const FIXED_USERS = {
     'admin@comixow.com': {
-      id:       'u_admin',
-      username: 'Admin',
-      email:    'admin@comixow.com',
-      passHash: simpleHash('123456'),
-      role:     'admin'
+      id: 'u_admin', username: 'Admin',
+      email: 'admin@comixow.com', passHash: simpleHash('123456'), role: 'admin'
     },
     'macario@yo.com': {
-      id:       'u_macario',
-      username: 'Macario',
-      email:    'macario@yo.com',
-      passHash: simpleHash('123456'),
-      role:     'author'   // puede publicar/despublicar/eliminar solo lo suyo
+      id: 'u_macario', username: 'Macario',
+      email: 'macario@yo.com', passHash: simpleHash('123456'), role: 'author'
     }
   };
 
-  /* ── localStorage users (usuarios registrados en el dispositivo) ── */
-  function getStoredUsers() { return JSON.parse(localStorage.getItem(KEY_USERS) || '{}'); }
-  function saveStoredUsers(u) { localStorage.setItem(KEY_USERS, JSON.stringify(u)); }
   function getSession()    { return JSON.parse(localStorage.getItem(KEY_SESSION) || 'null'); }
+  function _saveSession(s) { localStorage.setItem(KEY_SESSION, JSON.stringify(s)); }
+  function _clearSession() { localStorage.removeItem(KEY_SESSION); }
 
-  /* Fusionar: fijos tienen prioridad sobre localStorage */
-  function _allUsers() {
-    const stored = getStoredUsers();
-    return { ...stored, ...FIXED_USERS };
+  function _buildSession(id, username, email, role, token) {
+    return { id, username, email, role: role || 'user', token: token || null };
   }
 
-  /* ── Registro (solo para usuarios normales, no fijos) ── */
-  function register(username, email, password) {
+  async function _fetchProfile(userId, token) {
+    try {
+      const res = await fetch(
+        `${SB_URL}/rest/v1/authors?id=eq.${userId}&select=id,username,email,role&limit=1`,
+        { headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${token || SB_KEY}` } }
+      );
+      if (!res.ok) return null;
+      const rows = await res.json();
+      return rows[0] || null;
+    } catch (_) { return null; }
+  }
+
+  async function _upsertProfile(id, username, email, role, token) {
+    try {
+      await fetch(`${SB_URL}/rest/v1/authors`, {
+        method: 'POST',
+        headers: {
+          'apikey': SB_KEY,
+          'Authorization': `Bearer ${token || SB_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify({ id, username, email, role })
+      });
+    } catch (_) {}
+  }
+
+  async function login(email, password) {
+    const key = email.toLowerCase().trim();
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: key, password }),
+      });
+      const data = await res.json();
+      if (res.ok && data.access_token) {
+        const profile  = await _fetchProfile(data.user.id, data.access_token);
+        const role     = profile?.role || data.user.user_metadata?.role || 'user';
+        const username = profile?.username || data.user.user_metadata?.username || key.split('@')[0];
+        const session  = _buildSession(data.user.id, username, key, role, data.access_token);
+        _saveSession(session);
+        if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
+        return { ok: true, user: session };
+      }
+      const errMsg = (data.error_description || data.msg || '').toLowerCase();
+      if (errMsg.includes('invalid') || res.status === 400) {
+        return { ok: false, err: 'errUserNotFound' };
+      }
+    } catch (_) {}
+
+    // Fallback usuarios fijos (sin red o Supabase caído)
+    const fixed = FIXED_USERS[key];
+    if (fixed && fixed.passHash === simpleHash(password)) {
+      const session = _buildSession(fixed.id, fixed.username, key, fixed.role, null);
+      _saveSession(session);
+      return { ok: true, user: session };
+    }
+    return { ok: false, err: 'errUserNotFound' };
+  }
+
+  async function register(username, email, password) {
     const key = email.toLowerCase().trim();
     if (FIXED_USERS[key]) return { ok: false, err: 'errUserExists' };
-    const stored = getStoredUsers();
-    if (stored[key]) return { ok: false, err: 'errUserExists' };
-    stored[key] = {
-      id:        'u_' + Date.now(),
-      username:  username.trim(),
-      email:     key,
-      passHash:  simpleHash(password),
-      role:      'user',
-      createdAt: new Date().toISOString()
-    };
-    saveStoredUsers(stored);
-    return { ok: true };
-  }
-
-  /* ── Login ── */
-  function login(email, password) {
-    const key  = email.toLowerCase().trim();
-    const all  = _allUsers();
-    const user = all[key];
-    if (!user || user.passHash !== simpleHash(password)) {
-      return { ok: false, err: 'errUserNotFound' };
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/signup`, {
+        method: 'POST',
+        headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: key, password, data: { username: username.trim(), role: 'author' } }),
+      });
+      const data = await res.json();
+      if (res.ok && data.id) {
+        await _upsertProfile(data.id, username.trim(), key, 'author', data.access_token);
+        return { ok: true };
+      }
+      const errMsg = (data.error_description || data.msg || '').toLowerCase();
+      if (errMsg.includes('already') || errMsg.includes('exists')) return { ok: false, err: 'errUserExists' };
+      return { ok: false, err: 'errRegisterFail' };
+    } catch (_) {
+      return { ok: false, err: 'errNoNetwork' };
     }
-    const session = {
-      id:       user.id,
-      username: user.username,
-      email:    user.email,
-      role:     user.role || 'user'
-    };
-    localStorage.setItem(KEY_SESSION, JSON.stringify(session));
-    return { ok: true, user: session };
   }
 
-  function logout() { localStorage.removeItem(KEY_SESSION); }
+  async function logout() {
+    const session = getSession();
+    if (session?.token) {
+      fetch(`${SB_URL}/auth/v1/logout`, {
+        method: 'POST',
+        headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${session.token}` }
+      }).catch(() => {});
+    }
+    _clearSession();
+    localStorage.removeItem('cs_refresh');
+  }
 
-  function deleteAccount() {
+  async function deleteAccount() {
     const user = currentUser();
     if (!user) return;
-    // No se puede eliminar una cuenta fija
-    if (FIXED_USERS[user.email]) { logout(); return; }
-    const stored = getStoredUsers();
-    Object.keys(stored).forEach(k => { if (stored[k].id === user.id) delete stored[k]; });
-    saveStoredUsers(stored);
-    logout();
+    _clearSession();
+    localStorage.removeItem('cs_refresh');
   }
+
+  async function _tryRefresh() {
+    const refresh = localStorage.getItem('cs_refresh');
+    if (!refresh) return;
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (!res.ok) { _clearSession(); localStorage.removeItem('cs_refresh'); return; }
+      const data = await res.json();
+      if (data.access_token) {
+        const profile  = await _fetchProfile(data.user.id, data.access_token);
+        const role     = profile?.role || data.user.user_metadata?.role || 'user';
+        const username = profile?.username || data.user.user_metadata?.username || '';
+        _saveSession(_buildSession(data.user.id, username, data.user.email, role, data.access_token));
+        if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
+        if (typeof Header !== 'undefined') Header.refresh();
+      }
+    } catch (_) {}
+  }
+
+  _tryRefresh();
 
   function currentUser() { return getSession(); }
   function isLogged()    { return !!getSession(); }
   function isAdmin()     { const u = getSession(); return !!(u && u.role === 'admin'); }
-
-  /* ¿Puede el usuario actuar sobre una obra? (publicar, retirar, eliminar)
-     - admin: sobre cualquier obra
-     - author (Macario): solo sobre sus propias obras
-     - user: solo sobre sus propias obras
-  */
   function canManage(comic) {
     const u = currentUser();
     if (!u) return false;
@@ -112,28 +172,5 @@ const Auth = (() => {
     return comic.userId === u.id;
   }
 
-  /* Asegurar que Macario existe también en localStorage para que
-     sus obras queden asociadas a su ID fijo en todos los dispositivos */
-  function _ensureFixedUsersInStorage() {
-    const stored = getStoredUsers();
-    let changed = false;
-    Object.entries(FIXED_USERS).forEach(([email, user]) => {
-      if (!stored[email]) {
-        stored[email] = { ...user, createdAt: '2024-01-01T00:00:00.000Z' };
-        changed = true;
-      } else {
-        // Asegurar rol correcto aunque haya sido sobreescrito
-        if (stored[email].role !== user.role) {
-          stored[email].role = user.role;
-          changed = true;
-        }
-      }
-    });
-    if (changed) saveStoredUsers(stored);
-  }
-
-  // Ejecutar al cargar
-  _ensureFixedUsersInStorage();
-
-  return { register, login, logout, deleteAccount, currentUser, isLogged, isAdmin, canManage };
+  return { login, register, logout, deleteAccount, currentUser, isLogged, isAdmin, canManage };
 })();
