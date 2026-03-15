@@ -252,10 +252,16 @@ function startReader() {
   // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);
 
-  // Registrar resize con delay para evitar que el resize inicial (al quitar hidden)
-  // borre el canvas antes de que se haya pintado el primer texto
+  // Registrar resize con delay para evitar que el resize inicial borre el canvas
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
-  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+  setTimeout(() => {
+    window.addEventListener('resize', RS.resizeFn);
+    // visualViewport cambia cuando las barras del navegador se muestran/ocultan en Android
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', RS.resizeFn);
+      window.visualViewport.addEventListener('scroll', RS.resizeFn);
+    }
+  }, 300);
 
   // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -301,13 +307,14 @@ function _resizeCanvas() {
   const { pw, ph } = _panelDims(RS.idx);
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  // Los controles se superponen sobre el canvas — no restan espacio disponible
-  const MARGIN = 8;
-  const availW = vw - MARGIN * 2;
-  const availH = vh - MARGIN * 2;
-  // Escala uniforme que respeta la proporción original siempre
-  const scale = Math.min(availW / pw, availH / ph);
+
+  // Usar visualViewport si está disponible — da el área real visible en Android
+  // excluyendo barras del navegador que se superponen al contenido
+  const vw = window.visualViewport ? window.visualViewport.width  : window.innerWidth;
+  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+
+  // Sin margen — la hoja ocupa todo el viewport visible
+  const scale = Math.min(vw / pw, vh / ph);
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
   RS.canvas.style.width  = dw + 'px';
   RS.canvas.style.height = dh + 'px';
@@ -640,7 +647,8 @@ function _showCredits() {
   }
 
   // Recalcular posición y tamaño
-  const vw = window.innerWidth, vh = window.innerHeight;
+  const vw = window.visualViewport ? window.visualViewport.width  : window.innerWidth;
+  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
   const MARGIN = 8;
   const scale = Math.min((vw - MARGIN*2) / pw, (vh - MARGIN*2) / ph);
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
