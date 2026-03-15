@@ -688,7 +688,10 @@ function _renderCredits(pw, ph) {
   ctx.fillRect(0, 0, pw, ph);
 
   const cx = pw / 2;
-  const lineH = ph * 0.09; // espaciado entre líneas
+  // Orientación horizontal (pw > ph): usar ph como referencia de escala para no amontonar
+  const isHoriz = pw > ph;
+  const ref     = isHoriz ? ph : ph;   // base de escala siempre ph
+  const lineH   = ref * (isHoriz ? 0.07 : 0.09); // más compacto en horizontal
 
   // ── Social + autor ──
   const socialText = RS._workSocial || '';
@@ -696,13 +699,13 @@ function _renderCredits(pw, ph) {
   ctx.globalAlpha  = 1;
   ctx.textBaseline = 'middle';
 
-  let authorY = ph * 0.36;
+  // En horizontal empezar más arriba para que quepa todo
+  let authorY = ph * (isHoriz ? 0.28 : 0.36);
 
   if (socialText) {
-    const socialFS = Math.round(pw * 0.038);
+    const socialFS = Math.round(pw * (isHoriz ? 0.028 : 0.038));
     ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#444444';
-    // Alineado a la izquierda con margen
     ctx.textAlign = 'left';
     const marginX = pw * 0.09;
     const maxW    = pw * 0.82;
@@ -715,15 +718,15 @@ function _renderCredits(pw, ph) {
       else cur = test;
     });
     if (cur) lines.push(cur);
-    const socialLineH  = socialFS * 1.5;
+    const socialLineH  = socialFS * 1.4;
     const totalSocialH = lines.length * socialLineH;
-    const socialStartY = ph * 0.26;
+    const socialStartY = ph * (isHoriz ? 0.18 : 0.26);
     lines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
-    authorY = socialStartY + totalSocialH + socialFS * 1.0;
+    authorY = socialStartY + totalSocialH + socialFS * 0.9;
   }
 
-  // Nombre del autor — centrado, sin "Autor:"
-  ctx.font      = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
+  // Nombre del autor — centrado
+  ctx.font      = `600 ${Math.round(pw * (isHoriz ? 0.04 : 0.055))}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#222222';
   ctx.textAlign = 'center';
   ctx.fillText(authorText, cx, authorY);
@@ -731,26 +734,25 @@ function _renderCredits(pw, ph) {
   // ── Resto con fade ──────────────────────────────────────────
   ctx.globalAlpha = alpha;
 
-  // Línea 2: logotipo ComiXow
+  // Logotipo ComiXow
   const logoY = authorY + lineH * 1.3;
-  ctx.font      = `900 ${Math.round(pw * 0.11)}px Patrick Hand, sans-serif`;
+  ctx.font      = `900 ${Math.round(pw * (isHoriz ? 0.08 : 0.11))}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Línea 3: eslogan
-  const sloganY = logoY + lineH * 1.1;
-  ctx.font      = `400 ${Math.round(pw * 0.042)}px Patrick Hand, sans-serif`;
+  // Eslogan — interlineado reducido a un tercio respecto al anterior
+  const sloganY = logoY + lineH * 0.37;  // era 1.1 → ahora ~1/3
+  ctx.font      = `400 ${Math.round(pw * (isHoriz ? 0.032 : 0.042))}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
-  // Línea 4: enlace (dibujado como texto subrayado)
-  const linkY = sloganY + lineH * 1.0;
-  const linkFS = Math.round(pw * 0.038);
+  // Enlace (texto subrayado)
+  const linkY  = sloganY + lineH * (isHoriz ? 0.9 : 1.0);
+  const linkFS = Math.round(pw * (isHoriz ? 0.028 : 0.038));
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
   ctx.fillText(linkText, cx, linkY);
-  // Subrayado manual
   const lw = ctx.measureText(linkText).width;
   ctx.beginPath();
   ctx.strokeStyle = '#1a73e8';
