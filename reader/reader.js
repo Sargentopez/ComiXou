@@ -741,22 +741,21 @@ function _renderCredits(pw, ph) {
 
   // Logotipo ComiXow
   const logoFS  = Math.round(fRef * (isHoriz ? 0.13 : 0.11));
-  const logoY   = authorY + lineH * (isHoriz ? 1.5 : 1.8);
+  const logoY   = authorY + lineH * 1.3;
   ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Eslogan — D = distancia base logo → base eslogan
+  // Eslogan — a 1/3 de la distancia eslogan→enlace (lineH*1.0) del logo
   const sloganFS = Math.round(fRef * (isHoriz ? 0.055 : 0.042));
-  const D        = logoFS * 0.75 + sloganFS * 0.75 + 2;
-  const sloganY  = logoY + D;
+  const sloganY  = logoY + lineH * (1.0 / 3);
   ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
-  // Enlace — distancia base eslogan → base enlace = 3 × D
+  // Enlace — misma distancia original eslogan→enlace (lineH*1.0)
   const linkFS = Math.round(fRef * (isHoriz ? 0.045 : 0.038));
-  const linkY  = sloganY + 3 * D;
+  const linkY  = sloganY + lineH * 1.0;
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
