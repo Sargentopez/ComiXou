@@ -121,14 +121,9 @@ function _onFullscreenChange() {
 }
 
 function _embedClose() {
-  // Pestaña nueva abierta por window.open: cerrar la pestaña
-  if (window.opener) { window.close(); return; }
-  // Si está en iframe, notifica al padre
-  if (window.self !== window.top) {
-    try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(e) {}
-    return;
-  }
-  // Fallback: volver atrás
+  // Abierto con window.open desde la app — cerrar esta ventana
+  try { window.close(); } catch(e) {}
+  // Fallback por si window.close() no funciona (algunos navegadores lo bloquean)
   history.back();
 }
 

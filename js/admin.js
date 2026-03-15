@@ -164,7 +164,8 @@ function buildAdminRow(comic, mode) {
     const sid = comic.supabaseId;
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
     const fsParam = (document.fullscreenElement || document.webkitFullscreenElement) ? '&fs=1' : '';
-    window.location = 'reader/?' + param + fsParam;
+    const _rUrl = 'reader/?' + param + fsParam;
+    window.open(_rUrl, '_blank', 'toolbar=no,menubar=no,location=no,status=no,scrollbars=no,resizable=yes');
   });
 
   // Aprobar
