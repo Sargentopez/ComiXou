@@ -2934,7 +2934,7 @@ function edRenderOptionsPanel(mode){
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-draw-minimize"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:0 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030;height:40px;min-width:42px;display:flex;align-items:center;justify-content:center;" title="Ocultar menú de dibujo">▼</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize+'px':edDrawSize+'px')+' · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
@@ -3041,8 +3041,15 @@ function edRenderOptionsPanel(mode){
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
     _edDrawUpdateUndoRedoBtns();
 
-    // ── Minimizar (desde el panel draw) ──
-    $('op-draw-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
+    // ── Minimizar (desde el panel draw): oculta el panel y desbloquea el menú ──
+    $('op-draw-minimize')?.addEventListener('click', () => {
+      // Ocultar panel visualmente sin finalizar ni destruir el estado de dibujo
+      const panel = $('edOptionsPanel');
+      if (panel) { panel.classList.remove('open'); panel.style.visibility = ''; }
+      _edDrawUnlockUI();   // quita draw-active → menú principal vuelve a ser accesible
+      edDrawBarHide();
+      requestAnimationFrame(edFitCanvas);
+    });
 
     // ── OK: congelar ──
     $('op-draw-ok')?.addEventListener('click',()=>{
