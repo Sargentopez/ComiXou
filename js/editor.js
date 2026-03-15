@@ -3041,15 +3041,8 @@ function edRenderOptionsPanel(mode){
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
     _edDrawUpdateUndoRedoBtns();
 
-    // ── Minimizar (desde el panel draw): oculta el panel y desbloquea el menú ──
-    $('op-draw-minimize')?.addEventListener('click', () => {
-      // Ocultar panel visualmente sin finalizar ni destruir el estado de dibujo
-      const panel = $('edOptionsPanel');
-      if (panel) { panel.classList.remove('open'); panel.style.visibility = ''; }
-      _edDrawUnlockUI();   // quita draw-active → menú principal vuelve a ser accesible
-      edDrawBarHide();
-      requestAnimationFrame(edFitCanvas);
-    });
+    // ── Minimizar (desde el panel draw) — igual que en v6.95 ──
+    $('op-draw-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
 
     // ── OK: congelar ──
     $('op-draw-ok')?.addEventListener('click',()=>{
