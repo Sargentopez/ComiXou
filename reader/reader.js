@@ -739,6 +739,8 @@ function _renderCredits(pw, ph) {
   // ── Resto con fade ──────────────────────────────────────────
   ctx.globalAlpha = alpha;
 
+  const GAP = 8; // margen fijo entre textos (px en espacio canvas)
+
   // Logotipo ComiXow
   const logoFS  = Math.round(fRef * (isHoriz ? 0.16 : 0.11));
   const logoY   = authorY + lineH * 1.3;
@@ -746,16 +748,16 @@ function _renderCredits(pw, ph) {
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Eslogan — separado del logo por la mitad del logo + margen + mitad del eslogan
+  // Eslogan — borde inferior logo + GAP + borde superior eslogan
   const sloganFS = Math.round(fRef * (isHoriz ? 0.065 : 0.042));
-  const sloganY  = logoY + logoFS * 0.6 + sloganFS * 0.7;
+  const sloganY  = logoY + logoFS / 2 + GAP + sloganFS / 2;
   ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
-  // Enlace (texto subrayado)
+  // Enlace — borde inferior eslogan + GAP + borde superior enlace
   const linkFS = Math.round(fRef * (isHoriz ? 0.055 : 0.038));
-  const linkY  = sloganY + sloganFS * 0.6 + linkFS * 0.9;
+  const linkY  = sloganY + sloganFS / 2 + GAP + linkFS / 2;
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
