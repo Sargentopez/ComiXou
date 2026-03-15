@@ -16,18 +16,19 @@ const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
 
 // ── ESTADO ──────────────────────────────────────────────────
 const RS = {
-  panels:     [],   // [{id, orientation, text_mode, data_url, texts:[]}]
-  images:     [],   // Image objects precargados
-  idx:        0,    // panel actual
-  textStep:   0,    // bocadillo visible (sequential)
-  fadeAlpha:  0,    // alpha bocadillo anterior
-  fadeRaf:    null,
-  canvas:     null,
-  ctx:        null,
-  ctrlTimer:  null,
-  ac:         null,
-  keyHandler: null,
-  resizeFn:   null,
+  panels:       [],   // [{id, orientation, text_mode, data_url, texts:[]}]
+  images:       [],   // Image objects precargados
+  idx:          0,    // panel actual
+  textStep:     0,    // bocadillo visible (sequential)
+  fadeAlpha:    0,    // alpha bocadillo anterior
+  fadeRaf:      null,
+  canvas:       null,
+  ctx:          null,
+  ctrlTimer:    null,
+  ac:           null,
+  keyHandler:   null,
+  resizeFn:     null,
+  creditsShown: false, // true tras mostrarse la primera vez — no vuelve a aparecer
 };
 
 // ── ARRANQUE ─────────────────────────────────────────────────
@@ -631,9 +632,14 @@ function _showCredits() {
 
   // Mantener las mismas proporciones que la última hoja visitada
   const { pw, ph } = _panelDims(RS.panels.length - 1);
-  RS.canvas.width  = pw;
-  RS.canvas.height = ph;
-  // Recalcular posición y tamaño (sin cambio de orientación)
+
+  // Solo cambiar dimensiones si realmente cambian — evita el parpadeo
+  if (RS.canvas.width !== pw || RS.canvas.height !== ph) {
+    RS.canvas.width  = pw;
+    RS.canvas.height = ph;
+  }
+
+  // Recalcular posición y tamaño
   const vw = window.innerWidth, vh = window.innerHeight;
   const MARGIN = 8;
   const scale = Math.min((vw - MARGIN*2) / pw, (vh - MARGIN*2) / ph);
@@ -643,19 +649,18 @@ function _showCredits() {
   RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
   RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
   _positionBtns();
-  RS.creditsAuthor = RS._workTitle || '';
-  RS.creditsAlpha  = 0;
+  RS.creditsAlpha = 0;
 
-  // Dibujar línea del autor inmediatamente
-  _renderCredits(pw, ph, 0);
+  // Dibujar inmediatamente sin parpadeo
+  _renderCredits(pw, ph);
 
   // Tras 1 segundo, iniciar fade-in del resto
   RS.creditsTimer = setTimeout(() => {
     const start = performance.now();
-    const dur   = 1200; // ms de fade
+    const dur   = 1200;
     function fadeStep(now) {
       RS.creditsAlpha = Math.min(1, (now - start) / dur);
-      _renderCredits(pw, ph, RS.creditsAlpha);
+      _renderCredits(pw, ph);
       if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
       else RS.fadeRaf = null;
     }
