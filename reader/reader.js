@@ -251,8 +251,10 @@ function startReader() {
   // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);
 
+  // Registrar resize con delay para evitar que el resize inicial (al quitar hidden)
+  // borre el canvas antes de que se haya pintado el primer texto
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
-  window.addEventListener('resize', RS.resizeFn);
+  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;

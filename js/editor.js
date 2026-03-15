@@ -787,8 +787,6 @@ function edFitCanvas(resetCamera){
   const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
   const optsH = (opts && opts.classList.contains('open') && opts.style.visibility !== 'hidden') ? opts.getBoundingClientRect().height : 0;
   if(menu && !edMinimized) menu.style.top = topH + 'px';
-  const minimizeBtn = $('edMinimizeBtn');
-  if(minimizeBtn && !edMinimized) minimizeBtn.style.top = topH + 'px';
   if(opts) opts.style.top = (topH + menuH) + 'px';
   const totalBarsH = topH + menuH + optsH;
 
@@ -2934,7 +2932,7 @@ function edRenderOptionsPanel(mode){
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-draw-minimize"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:0 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030;height:40px;min-width:42px;display:flex;align-items:center;justify-content:center;" title="Ocultar menú de dibujo">▼</button>
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize+'px':edDrawSize+'px')+' · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
@@ -3041,7 +3039,7 @@ function edRenderOptionsPanel(mode){
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
     _edDrawUpdateUndoRedoBtns();
 
-    // ── Minimizar (desde el panel draw) — igual que en v6.95 ──
+    // ── Minimizar (desde el panel draw) ──
     $('op-draw-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
 
     // ── OK: congelar ──
@@ -3243,7 +3241,6 @@ function edMinimize(){
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='none';
   if(top)top.style.display='none';
-  const minBtn=$('edMinimizeBtn'); if(minBtn) minBtn.style.display='none';
   const btn=$('edFloatBtn');
   if(btn){
     btn.classList.add('visible');
@@ -3264,7 +3261,6 @@ function edMaximize(){
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='';
   if(top)top.style.display='';
-  const minBtn=$('edMinimizeBtn'); if(minBtn) minBtn.style.display='';
   $('edFloatBtn')?.classList.remove('visible');
   edDrawBarHide();
   // Restaurar panel de dibujo si estaba activo al minimizar
