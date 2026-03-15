@@ -705,7 +705,7 @@ function _renderCredits(pw, ph) {
   ctx.globalAlpha  = 1;
   ctx.textBaseline = 'middle';
 
-  let authorY = ph * (isHoriz ? 0.22 : 0.36);
+  let authorY = ph * (isHoriz ? 0.11 : 0.11);
 
   if (socialText) {
     const socialFS = Math.round(fRef * (isHoriz ? 0.05 : 0.038));
@@ -746,16 +746,16 @@ function _renderCredits(pw, ph) {
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Eslogan — base a base desde logo = 2 × sloganFS
+  // Eslogan — 2 × sloganFS desde la base del logo (medido en imagen de referencia)
   const sloganFS = Math.round(fRef * (isHoriz ? 0.055 : 0.042));
   const sloganY  = logoY + sloganFS * 2;
   ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
-  // Enlace — base a base desde eslogan = 6 × sloganFS
+  // Enlace — 3 × sloganFS desde la base del eslogan (medido en imagen de referencia)
   const linkFS = Math.round(fRef * (isHoriz ? 0.045 : 0.038));
-  const linkY  = sloganY + sloganFS * 6;
+  const linkY  = sloganY + sloganFS * 3;
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
