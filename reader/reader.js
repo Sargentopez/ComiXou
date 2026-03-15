@@ -123,6 +123,9 @@ async function loadWork(workId) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    // Añadir hoja de créditos como último panel — se trata como hoja normal
+    const _lastPanel = RS.panels[RS.panels.length - 1];
+    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -146,6 +149,8 @@ async function loadDraft(token) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    const _lastPanel = RS.panels[RS.panels.length - 1];
+    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -328,13 +333,24 @@ function _resizeCanvas() {
 function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
+
+  // Panel de créditos — render especial con fade
+  if (panel.isCredits) {
+    const { pw, ph } = _panelDims(RS.idx);
+    _renderCredits(pw, ph);
+    _showCredits(); // lanza el fade-in si no está en curso
+    return;
+  }
+
+  // Si venimos de los créditos, resetear su estado
+  if (RS.creditsTimer || RS.creditsAlpha > 0) _resetCredits();
+
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
 
   ctx.clearRect(0, 0, pw, ph);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
-
   // Dibujar capas en orden: image/draw/stroke primero, bubble/text al final (via _drawTexts)
   const layers    = panel.layers    || [];
   const layerImgs = panel.layerImgs || [];
@@ -597,9 +613,6 @@ function advance() {
   if (RS.idx < RS.panels.length - 1) {
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resizeCanvas(); _render();
-  } else {
-    // Pantalla final de créditos en canvas
-    _showCredits();
   }
 }
 
@@ -634,34 +647,12 @@ function _startFade() {
 }
 
 // ── PANTALLA FINAL DE CRÉDITOS ────────────────────────────────
+// Se llama desde _render() cuando el panel actual es el de créditos.
+// La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 function _showCredits() {
-  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
-  RS.isCredits = true;
-
-  // Mantener las mismas proporciones que la última hoja visitada
-  const { pw, ph } = _panelDims(RS.panels.length - 1);
-
-  // Solo cambiar dimensiones si realmente cambian — evita el parpadeo
-  if (RS.canvas.width !== pw || RS.canvas.height !== ph) {
-    RS.canvas.width  = pw;
-    RS.canvas.height = ph;
-  }
-
-  // Recalcular posición y tamaño
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const MARGIN = 8;
-  const scale = Math.min((vw - MARGIN*2) / pw, (vh - MARGIN*2) / ph);
-  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
-  RS.canvas.style.width  = dw + 'px';
-  RS.canvas.style.height = dh + 'px';
-  RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
-  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
-  _positionBtns();
+  // Evitar relanzar si ya está en curso
+  if (RS.creditsTimer || RS.creditsAlpha > 0) return;
   RS.creditsAlpha = 0;
-
-  // Dibujar inmediatamente sin parpadeo
-  _renderCredits(pw, ph);
 
   // Tras 1 segundo, iniciar fade-in del resto
   RS.creditsTimer = setTimeout(() => {
@@ -669,14 +660,20 @@ function _showCredits() {
     const dur   = 1200;
     function fadeStep(now) {
       RS.creditsAlpha = Math.min(1, (now - start) / dur);
+      const { pw, ph } = _panelDims(RS.idx);
       _renderCredits(pw, ph);
       if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
-      else RS.fadeRaf = null;
+      else { RS.fadeRaf = null; }
     }
     RS.fadeRaf = requestAnimationFrame(fadeStep);
   }, 1000);
+}
 
-  // El click/tap en créditos lo gestiona el listener permanente del canvas (_setupControls)
+function _resetCredits() {
+  if (RS.creditsTimer) { clearTimeout(RS.creditsTimer); RS.creditsTimer = null; }
+  if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
+  RS.creditsAlpha = 0;
+  RS.isCredits    = false;
 }
 
 function _creditsClick() {
@@ -697,10 +694,10 @@ function _renderCredits(pw, ph) {
   ctx.fillRect(0, 0, pw, ph);
 
   const cx = pw / 2;
-  // Orientación horizontal (pw > ph): usar ph como referencia de escala para no amontonar
   const isHoriz = pw > ph;
-  const ref     = isHoriz ? ph : ph;   // base de escala siempre ph
-  const lineH   = ref * (isHoriz ? 0.07 : 0.09); // más compacto en horizontal
+  // En horizontal ph es la dimensión corta (360) — usarla como base de escala de fuentes
+  const fRef  = isHoriz ? ph : pw;
+  const lineH = ph * (isHoriz ? 0.07 : 0.09);
 
   // ── Social + autor ──
   const socialText = RS._workSocial || '';
@@ -708,11 +705,10 @@ function _renderCredits(pw, ph) {
   ctx.globalAlpha  = 1;
   ctx.textBaseline = 'middle';
 
-  // En horizontal empezar más arriba para que quepa todo
-  let authorY = ph * (isHoriz ? 0.28 : 0.36);
+  let authorY = ph * (isHoriz ? 0.22 : 0.36);
 
   if (socialText) {
-    const socialFS = Math.round(pw * (isHoriz ? 0.028 : 0.038));
+    const socialFS = Math.round(fRef * (isHoriz ? 0.05 : 0.038));
     ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#444444';
     ctx.textAlign = 'left';
@@ -729,13 +725,13 @@ function _renderCredits(pw, ph) {
     if (cur) lines.push(cur);
     const socialLineH  = socialFS * 1.4;
     const totalSocialH = lines.length * socialLineH;
-    const socialStartY = ph * (isHoriz ? 0.18 : 0.26);
+    const socialStartY = ph * (isHoriz ? 0.12 : 0.26);
     lines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
     authorY = socialStartY + totalSocialH + socialFS * 0.9;
   }
 
   // Nombre del autor — centrado
-  ctx.font      = `600 ${Math.round(pw * (isHoriz ? 0.04 : 0.055))}px Patrick Hand, sans-serif`;
+  ctx.font      = `600 ${Math.round(fRef * (isHoriz ? 0.07 : 0.055))}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#222222';
   ctx.textAlign = 'center';
   ctx.fillText(authorText, cx, authorY);
@@ -745,19 +741,19 @@ function _renderCredits(pw, ph) {
 
   // Logotipo ComiXow
   const logoY = authorY + lineH * 1.3;
-  ctx.font      = `900 ${Math.round(pw * (isHoriz ? 0.08 : 0.11))}px Patrick Hand, sans-serif`;
+  ctx.font      = `900 ${Math.round(fRef * (isHoriz ? 0.16 : 0.11))}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Eslogan — interlineado reducido a un tercio respecto al anterior
-  const sloganY = logoY + lineH * 0.37;  // era 1.1 → ahora ~1/3
-  ctx.font      = `400 ${Math.round(pw * (isHoriz ? 0.032 : 0.042))}px Patrick Hand, sans-serif`;
+  // Eslogan — interlineado reducido a un tercio
+  const sloganY = logoY + lineH * 0.37;
+  ctx.font      = `400 ${Math.round(fRef * (isHoriz ? 0.065 : 0.042))}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
   // Enlace (texto subrayado)
   const linkY  = sloganY + lineH * (isHoriz ? 0.9 : 1.0);
-  const linkFS = Math.round(pw * (isHoriz ? 0.028 : 0.038));
+  const linkFS = Math.round(fRef * (isHoriz ? 0.055 : 0.038));
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
