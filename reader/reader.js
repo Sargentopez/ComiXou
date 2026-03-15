@@ -302,22 +302,22 @@ function _panelDims(idx) {
 }
 
 function _resizeCanvas() {
+  const panel = RS.panels[RS.idx];
   const { pw, ph } = _panelDims(RS.idx);
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const isHorizPanel = pw > ph;
+  // Panel de créditos: escalar como vertical normal (contain)
+  // Hojas horizontales reales: llenar toda la altura
+  const isHorizPanel = pw > ph && !panel?.isCredits;
 
   let scale;
   if (isHorizPanel) {
-    // Hoja horizontal: llenar toda la altura disponible
     scale = vh / ph;
-    // Si el ancho resultante supera la ventana, limitar por ancho
     if (pw * scale > vw * 1.5) scale = vw / pw;
   } else {
-    // Hoja vertical: contain normal (llenar lo que más encaje)
     scale = Math.min(vw / pw, vh / ph);
   }
 
