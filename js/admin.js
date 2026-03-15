@@ -4,6 +4,10 @@
 
 function AdminView_init() {
   if (!Auth.isAdmin()) { Router.go('home'); return; }
+  // Ajustar top del sticky tabs con la altura real del header
+  const hdr = document.getElementById('siteHeader');
+  const tabs = document.querySelector('.admin-tabs');
+  if (hdr && tabs) tabs.style.top = hdr.getBoundingClientRect().height + 'px';
   renderTab('pending');
   setupTabs();
 }

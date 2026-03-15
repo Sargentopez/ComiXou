@@ -96,7 +96,7 @@ function _mcRenderList() {
           <span>${comic.author || comic.username || ''}</span>
           ${comic.genre ? `<span style="color:var(--gray-400)">·</span><span style="color:var(--blue);font-size:.75rem;font-weight:700">${comic.genre}</span>` : ''}
           <span style="color:var(--gray-400)">·</span>
-          <span style="font-size:.75rem;font-weight:700">${pages} pág.</span>
+          <span style="font-size:.75rem;font-weight:700">${Math.max(1, pages)} hojas</span>
           <span style="color:var(--gray-400)">·</span>
           <span style="font-size:.75rem;font-weight:700;color:${comic.published ? 'var(--blue)' : 'var(--gray-500)'}">${pubLabel}</span>
         </div>

@@ -42,14 +42,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
   if (RS.isEmbed) document.body.classList.add('embed-mode');
 
-  // En embed: ocultar el closeBtn interno (el padre ya tiene su propio botón de cierre)
+  // Botón cerrar: siempre visible, pegado a la hoja por _positionBtns()
   const closeBtnEl = document.getElementById('closeBtn');
   if (closeBtnEl) {
-    if (RS.isEmbed) {
-      closeBtnEl.style.display = 'none';
-    } else {
-      closeBtnEl.addEventListener('click', _closeAction);
-    }
+    closeBtnEl.addEventListener('click', _closeAction);
   }
 
   // Botón fullscreen: listener directo en gesto de usuario (igual que header.js)

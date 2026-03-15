@@ -5,7 +5,6 @@
 .admin-page  { background: var(--gray-100); }
 
 .admin-main {
-  padding-top: var(--header-h);
   max-width: 800px; margin: 0 auto;
 }
 

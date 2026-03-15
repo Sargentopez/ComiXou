@@ -364,12 +364,12 @@ body.editor-page #appView {
   transition: width .15s, height .15s;
 }
 
-/* OK */
+/* OK / ocultar barra de dibujo — mismo tamaño que edMinimizeBtn */
 .edb-ok {
   background: none; border: none;
-  font-size: 0.85rem; font-weight: 900;
+  font-size: 1.1rem; font-weight: 900;
   color: rgba(120,255,120,.9);
-  width: 26px; height: 26px;
+  width: 36px; height: 36px;
   border-radius: 6px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   padding: 0; transition: background .1s;
