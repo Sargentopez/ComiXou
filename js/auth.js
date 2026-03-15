@@ -79,6 +79,8 @@ const Auth = (() => {
         const session  = _buildSession(data.user.id, username, key, role, data.access_token);
         _saveSession(session);
         if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
+        // Migrar obras locales del ID antiguo al nuevo UUID de Supabase
+        _migrateLocalWorks(key, data.user.id);
         return { ok: true, user: session };
       }
       const errMsg = (data.error_description || data.msg || '').toLowerCase();
@@ -144,6 +146,32 @@ const Auth = (() => {
     if (!user) return;
     _clearSession();
     localStorage.removeItem('cs_refresh');
+  }
+
+  // Migra obras locales del ID antiguo al nuevo UUID de Supabase
+  // Cubre: IDs legacy conocidos (u_admin, u_macario) y IDs generados localmente (u_TIMESTAMP)
+  function _migrateLocalWorks(email, newId) {
+    try {
+      const store = JSON.parse(localStorage.getItem('cs_comics') || '{}');
+      const legacyMap = {
+        'admin@comixow.com': 'u_admin',
+        'macario@yo.com':    'u_macario',
+      };
+      const legacyId = legacyMap[email];
+      // Obtener sesión previa para detectar el ID antiguo de este usuario
+      const prevSession = JSON.parse(localStorage.getItem('cs_session_prev') || 'null');
+      let changed = false;
+      Object.values(store).forEach(comic => {
+        const isLegacy = (legacyId && comic.userId === legacyId) ||
+                         (prevSession && comic.userId === prevSession.id) ||
+                         (comic.userId && comic.userId.startsWith('u_') && comic.userId !== newId);
+        if (isLegacy) {
+          comic.userId = newId;
+          changed = true;
+        }
+      });
+      if (changed) localStorage.setItem('cs_comics', JSON.stringify(store));
+    } catch(_) {}
   }
 
   async function _tryRefresh() {

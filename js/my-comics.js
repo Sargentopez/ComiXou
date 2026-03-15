@@ -61,7 +61,8 @@ function _mcRenderList() {
   const user = Auth.currentUser();
   if (!user) { Router.go('login'); return; }
 
-  const comics = ComicStore.getByUser(user.id)
+  const comics = ComicStore.getAll()
+    .filter(c => c.userId === user.id || c.username === user.username)
     .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
 
   if (!comics.length) {
@@ -336,12 +337,16 @@ async function _mcCloudLoad() {
         // Si la nube es más reciente, preguntar
         const cloudDate = new Date(w.updated_at || 0);
         const localDate = new Date(existing.updatedAt || 0);
-        if (cloudDate <= localDate) { skipped++; continue; }
-        // La nube es más nueva — actualizar metadatos (no reemplazar editorData local)
-        // Solo actualizar campos de metadatos, no tocar el contenido del editor local
+        if (cloudDate <= localDate) {
+          // Aunque no haya cambios, actualizar userId si era el ID antiguo
+          if (existing.userId !== user.id) { existing.userId = user.id; ComicStore.save(existing); }
+          skipped++; continue;
+        }
+        // La nube es más nueva — actualizar metadatos
         existing.title    = w.title     || existing.title;
         existing.genre    = w.genre     || existing.genre;
         existing.navMode  = w.nav_mode  || existing.navMode;
+        existing.userId   = user.id;  // actualizar al UUID nuevo
         ComicStore.save(existing);
         skipped++;
         continue;

@@ -705,7 +705,7 @@ function _renderCredits(pw, ph) {
   ctx.globalAlpha  = 1;
   ctx.textBaseline = 'middle';
 
-  let authorY = ph * (isHoriz ? 0.22 : 0.36);
+  let authorY = ph * (isHoriz ? 0.11 : 0.11);
 
   if (socialText) {
     const socialFS = Math.round(fRef * (isHoriz ? 0.05 : 0.038));
@@ -739,25 +739,23 @@ function _renderCredits(pw, ph) {
   // ── Resto con fade ──────────────────────────────────────────
   ctx.globalAlpha = alpha;
 
-  const GAP = 10;
-
   // Logotipo ComiXow
-  const logoFS  = Math.round(fRef * (isHoriz ? 0.16 : 0.11));
+  const logoFS  = Math.round(fRef * (isHoriz ? 0.13 : 0.11));
   const logoY   = authorY + lineH * 1.3;
   ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Eslogan — debajo del logo con margen claro
-  const sloganFS = Math.round(fRef * (isHoriz ? 0.065 : 0.042));
-  const sloganY  = logoY + logoFS * 0.75 + sloganFS * 0.75 + GAP;
+  // Eslogan — 2 × sloganFS desde la base del logo (medido en imagen de referencia)
+  const sloganFS = Math.round(fRef * (isHoriz ? 0.055 : 0.042));
+  const sloganY  = logoY + sloganFS * 2;
   ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
-  // Enlace debajo del eslogan
-  const linkFS = Math.round(fRef * (isHoriz ? 0.055 : 0.038));
-  const linkY  = sloganY + sloganFS * 0.75 + linkFS * 0.75 + GAP;
+  // Enlace — 3 × sloganFS desde la base del eslogan (medido en imagen de referencia)
+  const linkFS = Math.round(fRef * (isHoriz ? 0.045 : 0.038));
+  const linkY  = sloganY + sloganFS * 3;
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
