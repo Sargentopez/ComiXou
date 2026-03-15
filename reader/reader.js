@@ -254,14 +254,7 @@ function startReader() {
 
   // Registrar resize con delay para evitar que el resize inicial borre el canvas
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
-  setTimeout(() => {
-    window.addEventListener('resize', RS.resizeFn);
-    // visualViewport cambia cuando las barras del navegador se muestran/ocultan en Android
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', RS.resizeFn);
-      window.visualViewport.addEventListener('scroll', RS.resizeFn);
-    }
-  }, 300);
+  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -308,13 +301,21 @@ function _resizeCanvas() {
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
 
-  // Usar visualViewport si está disponible — da el área real visible en Android
-  // excluyendo barras del navegador que se superponen al contenido
-  const vw = window.visualViewport ? window.visualViewport.width  : window.innerWidth;
-  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const isHorizPanel = pw > ph;
 
-  // Sin margen — la hoja ocupa todo el viewport visible
-  const scale = Math.min(vw / pw, vh / ph);
+  let scale;
+  if (isHorizPanel) {
+    // Hoja horizontal: llenar toda la altura disponible
+    scale = vh / ph;
+    // Si el ancho resultante supera la ventana, limitar por ancho
+    if (pw * scale > vw * 1.5) scale = vw / pw;
+  } else {
+    // Hoja vertical: contain normal (llenar lo que más encaje)
+    scale = Math.min(vw / pw, vh / ph);
+  }
+
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
   RS.canvas.style.width  = dw + 'px';
   RS.canvas.style.height = dh + 'px';
@@ -647,8 +648,8 @@ function _showCredits() {
   }
 
   // Recalcular posición y tamaño
-  const vw = window.visualViewport ? window.visualViewport.width  : window.innerWidth;
-  const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
   const MARGIN = 8;
   const scale = Math.min((vw - MARGIN*2) / pw, (vh - MARGIN*2) / ph);
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);

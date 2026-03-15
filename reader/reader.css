@@ -12,10 +12,7 @@ html, body {
 .reader-app {
   position: fixed;
   inset: 0;
-  /* dvh excluye barras del navegador en Android — fallback a 100% */
-  width: 100dvw;
-  height: 100dvh;
-  background: #e8e8e8;
+  background: #000;
 }
 .hidden { display: none !important; }
 
