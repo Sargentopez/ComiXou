@@ -82,6 +82,7 @@
   gap: 12px; padding: 12px 14px;
   border-bottom: 1px solid var(--gray-100);
   background: var(--white);
+  scroll-margin-top: var(--bars-h);
 }
 .comic-row-thumb {
   width: 72px; height: 72px; min-width: 72px;

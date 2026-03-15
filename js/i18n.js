@@ -18,7 +18,7 @@ const TRANSLATIONS = {
     moreOptions:      "Más opciones",
 
     // Index / filtros
-    filterBtn:        "Filtros ▾",
+    filterBtn:        "Buscador ▾",
     novedades:        "Novedades",
     create:           "Crear",
     byGenre:          "Género ›",

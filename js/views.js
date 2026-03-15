@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v6.98</footer>
+    <footer class="app-version">v6.99</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -408,9 +408,11 @@ Router.register('admin', {
   html: () => `
     <main class="admin-main">
       <div class="admin-tabs">
-        <button class="admin-tab active" data-tab="pending" data-i18n="pendingTab">Pendientes de aprobación</button>
-        <button class="admin-tab" data-tab="published" data-i18n="publishedTab">Publicados</button>
-        <button class="admin-tab" data-tab="users" data-i18n="usersTab">Usuarios</button>
+        <button class="admin-tab active" data-tab="pending" data-i18n="pendingTab">Pendientes</button>
+        <div class="admin-tab-sep"></div>
+        <button class="admin-tab" data-tab="published" data-i18n="publishedTab">Publicadas</button>
+        <div class="admin-tab-sep"></div>
+        <button class="admin-tab" data-tab="users" data-i18n="usersTab">Autores</button>
       </div>
       <div class="admin-panel" id="tabPending"></div>
       <div class="admin-panel hidden" id="tabPublished"></div>

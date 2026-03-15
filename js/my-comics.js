@@ -105,7 +105,9 @@ function _mcRenderList() {
           <button class="comic-row-btn edit" data-action="edit" data-id="${comic.id}">✏️ Editar</button>
           ${!comic.published
             ? `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`
-            : `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">🔒 Retirar</button>`
+            : (comic.approved
+                ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">🔒 Retirar</button>`
+                : `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">⏳ En revisión</button>`)
           }
           <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
@@ -180,6 +182,11 @@ function _mcRenderList() {
       const supabaseId = comic.supabaseId || crypto.randomUUID();
       ComicStore.save({ ...comic, supabaseId, published: false, approved: false, pendingReview: true });
       _mcRenderList();
+      // Scroll a la ficha sin que quede tapada por las barras fijas
+      requestAnimationFrame(() => {
+        const row = document.querySelector(`.comic-row[data-id="${id}"]`);
+        if (row) row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
       if (typeof SupabaseClient !== 'undefined') {
         SupabaseClient.submitForReview({ ...comic, supabaseId, published: false, pendingReview: true })
           .catch(err => console.warn('Supabase submitForReview:', err));
