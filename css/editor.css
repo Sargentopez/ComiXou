@@ -378,16 +378,14 @@ body.editor-page #appView {
 /* OK / ocultar barra de dibujo — mismo tamaño que edMinimizeBtn */
 .edb-ok {
   background: none; border: none;
-  border-top: 1px solid rgba(255,255,255,.15);
-  font-size: 1.15rem; font-weight: 900;
-  color: #e63030;
+  font-size: 1.1rem; font-weight: 900;
+  color: rgba(120,255,120,.9);
   width: 36px; height: 36px;
   border-radius: 6px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   padding: 0; transition: background .1s;
-  margin-top: 2px;
 }
-.edb-ok:active { background: rgba(255,0,0,.15); }
+.edb-ok:active { background: rgba(100,255,100,.2); }
 
 /* ── Popover paleta de colores ── */
 #edb-palette-pop {

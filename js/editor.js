@@ -3459,43 +3459,17 @@ function edInitDrawBar() {
   // ── Grosor: toque cicla entre 4 tamaños predefinidos ──
   const _sizes = [4, 8, 16, 32];
   $('edb-size')?.addEventListener('click', () => {
-    const isEr  = edActiveTool === 'eraser';
-    const pop   = $('edb-size-pop');
-    const input = $('edb-size-input');
-    const btn   = $('edb-size');
-    if (!pop || !input || !btn) return;
-    // Posicionar el popover al lado del botón
-    const bar     = $('edDrawBar');
-    const barRect = bar?.getBoundingClientRect() || { right: 80, top: 0 };
-    const shell   = $('editorShell')?.getBoundingClientRect() || { left: 0, top: 0 };
-    pop.style.left    = (barRect.right - shell.left + 6) + 'px';
-    pop.style.top     = (btn.getBoundingClientRect().top - shell.top) + 'px';
-    pop.style.display = 'flex';
-    input.value = isEr ? edEraserSize : edDrawSize;
-    input.focus();
-    input.select();
-    // Aplicar al cambiar valor
-    const apply = () => {
-      const v = Math.max(1, Math.min(120, parseInt(input.value) || 1));
-      if (isEr) { edEraserSize = v; } else { edDrawSize = v; }
-      _edbSyncSize();
-      const sl = $('op-dsize'); if (sl) { sl.value = v; sl.dispatchEvent(new Event('input')); }
-    };
-    input.onchange = apply;
-    input.onkeydown = e => {
-      if (e.key === 'Enter') { apply(); pop.style.display = 'none'; e.preventDefault(); }
-      if (e.key === 'Escape') { pop.style.display = 'none'; e.preventDefault(); }
-    };
-    // Cerrar al clicar fuera
-    setTimeout(() => {
-      window._edbSizeClose = ev => {
-        if (!ev.target.closest('#edb-size-pop') && !ev.target.closest('#edb-size')) {
-          pop.style.display = 'none';
-          window.removeEventListener('pointerdown', window._edbSizeClose);
-        }
-      };
-      window.addEventListener('pointerdown', window._edbSizeClose);
-    }, 50);
+    const isEr = edActiveTool === 'eraser';
+    if (isEr) {
+      const cur = _sizes.findIndex(s => s >= edEraserSize) || 0;
+      edEraserSize = _sizes[(cur + 1) % _sizes.length];
+    } else {
+      const cur = _sizes.findIndex(s => s >= edDrawSize) || 0;
+      edDrawSize = _sizes[(cur + 1) % _sizes.length];
+    }
+    _edbSyncSize();
+    // Sincronizar slider del panel principal si existe
+    const sl = $('op-dsize'); if (sl) { sl.value = isEr ? edEraserSize : edDrawSize; sl.dispatchEvent(new Event('input')); }
   });
 
   // ── Deshacer / Rehacer ──
