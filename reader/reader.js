@@ -740,20 +740,22 @@ function _renderCredits(pw, ph) {
   ctx.globalAlpha = alpha;
 
   // Logotipo ComiXow
-  const logoY = authorY + lineH * 1.3;
-  ctx.font      = `900 ${Math.round(fRef * (isHoriz ? 0.16 : 0.11))}px Patrick Hand, sans-serif`;
+  const logoFS  = Math.round(fRef * (isHoriz ? 0.16 : 0.11));
+  const logoY   = authorY + lineH * 1.3;
+  ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Eslogan — interlineado reducido a un tercio
-  const sloganY = logoY + lineH * 0.37;
-  ctx.font      = `400 ${Math.round(fRef * (isHoriz ? 0.065 : 0.042))}px Patrick Hand, sans-serif`;
+  // Eslogan — separado del logo por la mitad del logo + margen + mitad del eslogan
+  const sloganFS = Math.round(fRef * (isHoriz ? 0.065 : 0.042));
+  const sloganY  = logoY + logoFS * 0.6 + sloganFS * 0.7;
+  ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
   // Enlace (texto subrayado)
-  const linkY  = sloganY + lineH * (isHoriz ? 0.9 : 1.0);
   const linkFS = Math.round(fRef * (isHoriz ? 0.055 : 0.038));
+  const linkY  = sloganY + sloganFS * 0.6 + linkFS * 0.9;
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
