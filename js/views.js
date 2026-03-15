@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v6.105</footer>
+    <footer class="app-version">v6.106</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -310,10 +310,15 @@ Router.register('editor', {
         <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
         <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>
         <div class="edb-sep"></div>
-        <button id="edb-ok"     class="edb-ok" title="Finalizar">✓</button>
+        <button id="edb-ok"     class="edb-ok"  title="Finalizar dibujo">✓</button>
       </div>
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
+      <!-- Input grosor (aparece al pulsar edb-size) -->
+      <div id="edb-size-pop" style="display:none;position:absolute;z-index:60;background:rgba(20,20,20,.9);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:6px 8px;align-items:center;gap:6px;flex-direction:row">
+        <span style="color:rgba(255,255,255,.7);font-size:.75rem">px</span>
+        <input id="edb-size-input" type="number" min="1" max="120" style="width:52px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.3);border-radius:4px;color:#fff;font-size:.85rem;font-weight:700;padding:3px 5px;text-align:center">
+      </div>
 
     </div>
 

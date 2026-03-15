@@ -77,10 +77,9 @@ function _mcRenderList() {
   wrap.innerHTML = comics.map(comic => {
     const thumb = comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '';
     const pages = comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0);
-    const pubLabel = comic.published
-      ? (comic.approved ? '✅ Publicada' : '⏳ En revisión')
-      : '📝 Borrador';
-    const canUnpub = comic.published;
+    const pubLabel = comic.approved
+      ? '✅ Publicada'
+      : (comic.pendingReview ? '⏳ En revisión' : '📝 Borrador');
 
     return `
     <div class="comic-row" data-id="${comic.id}">
@@ -103,11 +102,11 @@ function _mcRenderList() {
         <div class="comic-row-actions">
           ${pages > 0 ? `<button class="comic-row-btn" data-action="read" data-id="${comic.id}">📖 Leer</button>` : ''}
           <button class="comic-row-btn edit" data-action="edit" data-id="${comic.id}">✏️ Editar</button>
-          ${!comic.published
-            ? `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`
-            : (comic.approved
-                ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">🔒 Retirar</button>`
-                : `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">⏳ En revisión</button>`)
+          ${comic.approved
+            ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">📢 Publicada · Retirar</button>`
+            : (comic.pendingReview
+                ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">⏳ En revisión · Retirar</button>`
+                : `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`)
           }
           <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>

@@ -683,26 +683,24 @@ function _renderCredits(pw, ph) {
   const cx = pw / 2;
   const lineH = ph * 0.09; // espaciado entre líneas
 
-  // ── Línea 1: redes/comentarios del autor (si existe) + nombre autor ──
+  // ── Social + autor ──
   const socialText = RS._workSocial || '';
-  const authorText = `Autor: ${RS._workAuthor || ''}`;
-  const fontSize   = Math.round(pw * 0.048);
-  ctx.font        = `400 ${fontSize}px Patrick Hand, sans-serif`;
-  ctx.fillStyle   = '#555555';
-  ctx.globalAlpha = 1;
-  ctx.textAlign   = 'center';
+  const authorText = RS._workAuthor || '';
+  ctx.globalAlpha  = 1;
   ctx.textBaseline = 'middle';
 
   let authorY = ph * 0.36;
+
   if (socialText) {
-    // Social encima, autor debajo
-    const socialFS = Math.round(pw * 0.04);
+    const socialFS = Math.round(pw * 0.038);
     ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#444444';
-    // Wrap manual: máx 30 chars por línea visual
-    const maxW   = pw * 0.82;
-    const words  = socialText.split(' ');
-    const lines  = [];
+    // Alineado a la izquierda con margen
+    ctx.textAlign = 'left';
+    const marginX = pw * 0.09;
+    const maxW    = pw * 0.82;
+    const words   = socialText.split(' ');
+    const lines   = [];
     let cur = '';
     words.forEach(w => {
       const test = cur ? cur + ' ' + w : w;
@@ -710,15 +708,17 @@ function _renderCredits(pw, ph) {
       else cur = test;
     });
     if (cur) lines.push(cur);
-    const socialLineH = socialFS * 1.4;
+    const socialLineH  = socialFS * 1.5;
     const totalSocialH = lines.length * socialLineH;
-    const socialStartY = ph * 0.28;
-    lines.forEach((line, i) => ctx.fillText(line, cx, socialStartY + i * socialLineH));
-    authorY = socialStartY + totalSocialH + socialFS * 0.8;
+    const socialStartY = ph * 0.26;
+    lines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+    authorY = socialStartY + totalSocialH + socialFS * 1.0;
   }
 
+  // Nombre del autor — centrado, sin "Autor:"
   ctx.font      = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#222222';
+  ctx.textAlign = 'center';
   ctx.fillText(authorText, cx, authorY);
 
   // ── Resto con fade ──────────────────────────────────────────
