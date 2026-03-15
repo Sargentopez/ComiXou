@@ -353,6 +353,11 @@ function _closeReaderModal() {
   overlay.classList.add('hidden');
   overlay.querySelector('.reader-modal-frame').src = '';
   document.body.style.overflow = '';
+  // Si el reader dejó la app en fullscreen, salir y resincronizar el botón
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  }
+  if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn();
 }
 
 // Cerrar modal con Escape
