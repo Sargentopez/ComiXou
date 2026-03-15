@@ -129,7 +129,8 @@ function _mcRenderList() {
         // Tiene ID en nube: usar el reader externo embebido en modal
         // obras publicadas → ?id=, borradores/cloudOnly → ?draft=
         const param = comic.published ? `id=${comic.supabaseId}` : `draft=${comic.supabaseId}`;
-        window.location = 'reader/?' + param;
+        const fsParam = (document.fullscreenElement || document.webkitFullscreenElement) ? '&fs=1' : '';
+        window.location = 'reader/?' + param + fsParam;
       } else {
         // Solo local: visor interno del SPA
         Router.go('reader', { id });

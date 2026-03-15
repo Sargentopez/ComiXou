@@ -36,12 +36,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(window.location.search);
   const id     = params.get('id');
   const draft  = params.get('draft');   // token de borrador (obra no publicada)
+  const wantsFs = params.get('fs') === '1'; // heredar fullscreen de la app
 
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
   const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
   if (RS.isEmbed) document.body.classList.add('embed-mode');
+
+  // Si la app estaba en fullscreen, entrar en fullscreen al primer gesto del usuario
+  // (los navegadores exigen que requestFullscreen esté dentro de un evento de usuario)
+  if (wantsFs && !RS.isEmbed) {
+    const _enterFsOnce = () => {
+      const req = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+      if (req) req.call(document.documentElement).catch(() => {});
+      document.removeEventListener('click',     _enterFsOnce);
+      document.removeEventListener('touchstart', _enterFsOnce);
+      document.removeEventListener('keydown',    _enterFsOnce);
+    };
+    document.addEventListener('click',     _enterFsOnce, { once: true });
+    document.addEventListener('touchstart', _enterFsOnce, { once: true });
+    document.addEventListener('keydown',    _enterFsOnce, { once: true });
+  }
 
   // Botón cerrar: siempre visible, pegado a la hoja por _positionBtns()
   const closeBtnEl = document.getElementById('closeBtn');
