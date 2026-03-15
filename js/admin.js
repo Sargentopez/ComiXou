@@ -110,13 +110,22 @@ async function renderUsers(panel) {
       const uid   = this.dataset.uid;
       const uname = user.username;
       if (!confirm(`¿Eliminar usuario ${uname}? Se eliminarán también todas sus obras.`)) return;
-      // Eliminar obras locales
-      ComicStore.getByUser(uid).forEach(c => {
-        if (c.supabaseId && typeof SupabaseClient !== 'undefined')
-          SupabaseClient.deleteWork(c.supabaseId).catch(e => console.warn(e));
-        ComicStore.remove(c.id);
-      });
-      showToast(I18n.t('userDeleted'));
+      const btn = this;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        // Borrar obras y perfil de Supabase
+        if (typeof SupabaseClient !== 'undefined') {
+          await SupabaseClient.deleteAuthorData(uid);
+        }
+        // Borrar obras locales
+        ComicStore.getByUser(uid).forEach(c => ComicStore.remove(c.id));
+        showToast(I18n.t('userDeleted') + ' — Recuerda borrar también el usuario en Supabase Auth');
+      } catch(e) {
+        console.warn('deleteAuthorData error:', e);
+        showToast('Error al eliminar: ' + e.message);
+        btn.disabled = false; btn.textContent = 'Eliminar';
+        return;
+      }
       renderTab('users');
     });
     panel.appendChild(row);

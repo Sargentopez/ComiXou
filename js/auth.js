@@ -107,11 +107,12 @@ const Auth = (() => {
         body: JSON.stringify({ email: key, password, data: { username: username.trim(), role: 'author' } }),
       });
       const data = await res.json();
-      // Supabase puede devolver el usuario en data.user o directamente en data
+      // Supabase signup OK: res.ok y sin campo 'error' en la respuesta
       const userId = data.user?.id || data.id;
       const token  = data.session?.access_token || data.access_token;
-      if (res.ok && userId) {
-        await _upsertProfile(userId, username.trim(), key, 'author', token);
+      if (res.ok && !data.error && !data.error_description) {
+        const uid = userId || 'pending'; // puede no haber id si requiere confirmación
+        if (userId) await _upsertProfile(userId, username.trim(), key, 'author', token);
         return { ok: true };
       }
       const errMsg = (data.error_description || data.msg || data.message || '').toLowerCase();

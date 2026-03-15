@@ -176,6 +176,15 @@ const SupabaseClient = (() => {
     await _delete('works', `id=eq.${supabaseId}`);
   }
 
+  // Borrar todas las obras de un autor y su perfil de authors
+  async function deleteAuthorData(authorId) {
+    const works = await _get(`works?author_id=eq.${authorId}&select=id`).catch(() => []);
+    for (const w of (works || [])) {
+      await deleteWork(w.id).catch(() => {});
+    }
+    await _delete('authors', `id=eq.${authorId}`);
+  }
+
   // ── DESCARGAR BORRADOR PARA EDITAR ──────────────────────────────────────────────────────────────────
   // Descarga panel_layers (capas del editor, formato edSerLayer) y las devuelve
   // como editorData listo para edLoadProject(). El editor las pasa por edDeserLayer
@@ -278,5 +287,5 @@ const SupabaseClient = (() => {
     };
   }
 
-  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks };
+  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks };
 })();
