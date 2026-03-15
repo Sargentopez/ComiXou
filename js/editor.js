@@ -14,7 +14,7 @@ let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
 let edProjectId = null;
-let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal' };
+let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal', social:'' };
 let edActiveTool = 'select';  // select | draw | eraser
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
@@ -3882,7 +3882,7 @@ function edDeserLayer(d, pageOrientation){
 function edLoadProject(id){
   const comic=ComicStore.getById(id);if(!comic)return;
   edProjectId=id;
-  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'horizontal'};
+  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'horizontal',social:comic.social||''};
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
@@ -4230,6 +4230,7 @@ function edOpenProjectModal(){
   $('edMAuthor').value=edProjectMeta.author;
   $('edMGenre').value=edProjectMeta.genre;
   $('edMNavMode').value=edProjectMeta.navMode;
+  const edMSocial=$('edMSocial'); if(edMSocial) edMSocial.value=edProjectMeta.social||'';
   $('edProjectModal')?.classList.add('open');
 }
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
@@ -4273,6 +4274,7 @@ function edSaveProjectModal(){
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
+  edProjectMeta.social =($('edMSocial')?.value||'').trim().slice(0,300);
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   edCloseProjectModal();edSaveProject();
 }
@@ -4776,7 +4778,7 @@ function edLoadFromJSON(file){
     try{
       const data=JSON.parse(e.target.result);
       if(data.editorData){
-        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'horizontal'};
+        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'horizontal',social:data.social||''};
         edOrientation=data.editorData.orientation||'vertical';
         edPages=(data.editorData.pages||[]).map(pd=>({
           drawData:pd.drawData||null,
