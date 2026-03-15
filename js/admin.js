@@ -163,7 +163,7 @@ function buildAdminRow(comic, mode) {
   row.querySelector(`#read_${comic.id}`)?.addEventListener('click', () => {
     const sid = comic.supabaseId;
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
-    openReaderModal(`reader/?${param}&embed=1`);
+    openReaderModalGlobal(`reader/?${param}&embed=1`);
   });
 
   // Aprobar
@@ -238,10 +238,10 @@ function openReaderModal(url) {
       </div>`;
     document.body.appendChild(overlay);
 
-    overlay.addEventListener('click', e => { if (e.target === overlay) closeReaderModal(); });
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeReaderModalGlobal(); });
 
     window.addEventListener('message', e => {
-      if (e.data?.type === 'reader:close') closeReaderModal();
+      if (e.data?.type === 'reader:close') closeReaderModalGlobal();
       if (e.data?.type === 'reader:fullscreen') {
         const frame = document.getElementById('readerModalFrame');
         if (!frame) return;
@@ -265,7 +265,7 @@ function openReaderModal(url) {
   frame.addEventListener('load', () => frame.focus(), { once: true });
 }
 
-function closeReaderModal() {
+function closeReaderModalGlobal() {
   const overlay = document.getElementById('readerModal');
   if (!overlay) return;
   overlay.classList.add('hidden');
@@ -288,6 +288,6 @@ function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     const overlay = document.getElementById('readerModal');
-    if (overlay && !overlay.classList.contains('hidden')) { e.stopPropagation(); closeReaderModal(); }
+    if (overlay && !overlay.classList.contains('hidden')) { e.stopPropagation(); closeReaderModalGlobal(); }
   }
 });

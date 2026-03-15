@@ -280,7 +280,7 @@ function buildRow(comic, currentUser) {
     e.preventDefault();
     // Obras publicadas: usar el reproductor externo embebido en modal
     if (comic.supabaseId && comic.published) {
-      _openReaderModal(`reader/?id=${comic.supabaseId}&embed=1`);
+      openReaderModalGlobal(`reader/?id=${comic.supabaseId}&embed=1`);
     } else {
       // Sin supabaseId: visor interno del SPA (obra local)
       Router.go('reader', { id: comic.id });
@@ -348,11 +348,11 @@ function _openReaderModal(url) {
     document.body.appendChild(overlay);
 
     // Cerrar al clicar fuera del iframe
-    overlay.addEventListener('click', e => { if (e.target === overlay) _closeReaderModal(); });
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeReaderModalGlobal(); });
 
     // Escuchar mensajes del iframe
     window.addEventListener('message', e => {
-      if (e.data?.type === 'reader:close')      _closeReaderModal();
+      if (e.data?.type === 'reader:close')      closeReaderModalGlobal();
       if (e.data?.type === 'reader:fullscreen') {
         const frame = overlay.querySelector('.reader-modal-frame');
         if (!frame) return;
@@ -376,7 +376,7 @@ function _openReaderModal(url) {
   frame.addEventListener('load', () => frame.focus(), { once: true });
 }
 
-function _closeReaderModal() {
+function closeReaderModalGlobal() {
   const overlay = document.getElementById('homeReaderModal');
   if (!overlay) return;
   overlay.classList.add('hidden');
@@ -400,6 +400,6 @@ function _closeReaderModal() {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     const overlay = document.getElementById('homeReaderModal');
-    if (overlay && !overlay.classList.contains('hidden')) { e.stopPropagation(); _closeReaderModal(); }
+    if (overlay && !overlay.classList.contains('hidden')) { e.stopPropagation(); closeReaderModalGlobal(); }
   }
 });
