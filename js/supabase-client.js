@@ -134,6 +134,7 @@ const SupabaseClient = (() => {
       author_name: comic.author     || comic.username || '',
       genre:       comic.genre      || '',
       nav_mode:    comic.navMode    || 'fixed',
+      social:      comic.social     || '',
       published:   false,
       updated_at:  new Date().toISOString(),
     });
@@ -148,6 +149,7 @@ const SupabaseClient = (() => {
       author_name: comic.author  || comic.username || '',
       genre:       comic.genre   || '',
       nav_mode:    comic.navMode || 'fixed',
+      social:      comic.social  || '',
       published:   false,
     });
     await _uploadPanels(comic);
@@ -232,7 +234,7 @@ const SupabaseClient = (() => {
   async function _fetchWorks(filter) {
     const works = await _get(
       `works?${filter}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,published,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,social,published,updated_at`
     );
     if (!works || !works.length) return [];
 
@@ -267,6 +269,7 @@ const SupabaseClient = (() => {
       username:      w.author_name  || '',   // home.js filtra por username
       genre:         w.genre        || '',
       navMode:       w.nav_mode     || 'fixed',
+      social:        w.social       || '',
       published:     published,
       approved:      published,
       pendingReview: !published,

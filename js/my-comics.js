@@ -19,12 +19,12 @@ function _mcInjectModal() {
         <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off" inputmode="text" enterkeyhint="next">
       </div>
       <div class="mc-field">
-        <label>Autor</label>
-        <input type="text" id="mcAuthor" placeholder="Tu nombre o seudónimo" autocomplete="off" inputmode="text" enterkeyhint="next">
+        <label>Género</label>
+        <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="next">
       </div>
       <div class="mc-field">
-        <label>Género</label>
-        <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="done">
+        <label>Redes y comentarios <span style="font-weight:400;color:var(--gray-400);font-size:.78rem">(aparecerán en la hoja final, máx. 100 car.)</span></label>
+        <input type="text" id="mcSocial" placeholder="Instagram: @miperfil · Web: misite.com" autocomplete="off" inputmode="text" enterkeyhint="next" maxlength="100">
       </div>
       <div class="mc-field">
         <label>Modo de lectura</label>
@@ -182,11 +182,11 @@ function _mcRenderList() {
       const supabaseId = comic.supabaseId || crypto.randomUUID();
       ComicStore.save({ ...comic, supabaseId, published: false, approved: false, pendingReview: true });
       _mcRenderList();
-      // Scroll a la ficha sin que quede tapada por las barras fijas
-      requestAnimationFrame(() => {
+      // Scroll a la ficha en segundo frame, después de que el padding se haya ajustado
+      requestAnimationFrame(() => requestAnimationFrame(() => {
         const row = document.querySelector(`.comic-row[data-id="${id}"]`);
         if (row) row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      });
+      }));
       if (typeof SupabaseClient !== 'undefined') {
         SupabaseClient.submitForReview({ ...comic, supabaseId, published: false, pendingReview: true })
           .catch(err => console.warn('Supabase submitForReview:', err));
@@ -236,10 +236,6 @@ function _mcBindNav() {
 function _mcOpenModal() {
   const m = document.getElementById('mcNewModal');
   if (m) m.classList.add('open');
-  // Pre-rellenar autor con el usuario actual
-  const user = Auth.currentUser();
-  const authorInput = document.getElementById('mcAuthor');
-  if (authorInput && user) authorInput.value = user.username || '';
 }
 
 function _mcCloseModal() {
@@ -248,8 +244,8 @@ function _mcCloseModal() {
 
 function _mcCreateProject() {
   const title   = document.getElementById('mcTitle')?.value.trim();
-  const author  = document.getElementById('mcAuthor')?.value.trim();
   const genre   = document.getElementById('mcGenre')?.value.trim();
+  const social  = document.getElementById('mcSocial')?.value.trim().slice(0, 100);
   const navMode = document.getElementById('mcNavMode')?.value || 'horizontal';
 
   if (!title) { document.getElementById('mcTitle')?.focus(); return; }
@@ -260,8 +256,9 @@ function _mcCreateProject() {
     userId:   user.id,
     username: user.username,
     title,
-    author:   author || user.username,
+    author:   user.username,
     genre,
+    social:   social || '',
     navMode,
     pages:    [],
     panels:   [],
@@ -275,7 +272,7 @@ function _mcCreateProject() {
   _mcCloseModal();
 
   // Limpiar campos
-  ['mcTitle','mcAuthor','mcGenre'].forEach(id => {
+  ['mcTitle','mcGenre','mcSocial'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });

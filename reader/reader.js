@@ -119,7 +119,8 @@ async function loadWork(workId) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(workId);
     document.title = (work[0].title || 'Obra') + ' — ComiXow';
-    RS._workAuthor = work[0].author_name || '';
+    RS._workAuthor = work[0].author_name || "";
+    RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
@@ -141,7 +142,8 @@ async function loadDraft(token) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(token);
     document.title = (work[0].title || 'Borrador') + ' — ComiXow';
-    RS._workAuthor = work[0].author_name || '';
+    RS._workAuthor = work[0].author_name || "";
+    RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
@@ -681,14 +683,43 @@ function _renderCredits(pw, ph) {
   const cx = pw / 2;
   const lineH = ph * 0.09; // espaciado entre líneas
 
-  // ── Línea 1: nombre del autor (siempre visible, inmediato) ──
-  const authorY = ph * 0.34;
+  // ── Línea 1: redes/comentarios del autor (si existe) + nombre autor ──
+  const socialText = RS._workSocial || '';
+  const authorText = `Autor: ${RS._workAuthor || ''}`;
+  const fontSize   = Math.round(pw * 0.048);
+  ctx.font        = `400 ${fontSize}px Patrick Hand, sans-serif`;
+  ctx.fillStyle   = '#555555';
   ctx.globalAlpha = 1;
-  ctx.fillStyle   = '#222222';
-  ctx.font        = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(`Autor: ${RS._workAuthor || ''}`, cx, authorY);
+
+  let authorY = ph * 0.36;
+  if (socialText) {
+    // Social encima, autor debajo
+    const socialFS = Math.round(pw * 0.04);
+    ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#444444';
+    // Wrap manual: máx 30 chars por línea visual
+    const maxW   = pw * 0.82;
+    const words  = socialText.split(' ');
+    const lines  = [];
+    let cur = '';
+    words.forEach(w => {
+      const test = cur ? cur + ' ' + w : w;
+      if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; }
+      else cur = test;
+    });
+    if (cur) lines.push(cur);
+    const socialLineH = socialFS * 1.4;
+    const totalSocialH = lines.length * socialLineH;
+    const socialStartY = ph * 0.28;
+    lines.forEach((line, i) => ctx.fillText(line, cx, socialStartY + i * socialLineH));
+    authorY = socialStartY + totalSocialH + socialFS * 0.8;
+  }
+
+  ctx.font      = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#222222';
+  ctx.fillText(authorText, cx, authorY);
 
   // ── Resto con fade ──────────────────────────────────────────
   ctx.globalAlpha = alpha;
