@@ -131,13 +131,36 @@ body.editor-page #appView {
   display: flex;
   align-items: stretch;
   padding: 0;
+  padding-left: 42px;   /* hueco para el edMinimizeBtn que está fuera */
   gap: 0;
   z-index: 300;
   box-shadow: 0 1px 4px rgba(0,0,0,.06);
   overflow: visible;
 }
 
-/* Botón minimizar: fijo a la izquierda, no se desplaza con el scroll */
+/* Botón minimizar: posicionado FUERA de edMenuBar para no quedar cortado por overflow:hidden */
+#edMinimizeBtn {
+  position: absolute;
+  left: 0;
+  top: 52px;   /* JS lo ajusta igual que edMenuBar */
+  z-index: 310;
+  background: var(--white);
+  border: none;
+  border-right: 1.5px solid var(--gray-300);
+  border-bottom: 1.5px solid var(--gray-300);
+  font-family: var(--font-body);
+  color: #e63030;
+  padding: 0 10px;
+  height: 40px;
+  width: 42px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: color .12s;
+  flex-shrink: 0;
+}
+#edMinimizeBtn:hover { color: var(--black); }
+
+/* (legacy — ya no necesario, el botón está fuera del flex) */
 #edMinimizeBtn.ed-menu-pin {
   flex-shrink: 0;
 }
@@ -184,18 +207,6 @@ body.editor-page #appView {
   width: 1px; height: 20px;
   background: var(--gray-300); flex-shrink: 0; margin: 0 2px;
 }
-
-/* Minimizar — a la derecha */
-#edMinimizeBtn {
-  
-  background: none; border: none;
-  font-family: var(--font-body); font-size: 0.78rem; font-weight: 900;
-  color: var(--gray-500); padding: 0 10px;
-  height: 40px;
-  cursor: pointer; display: flex; align-items: center; gap: 4px;
-  transition: color .12s;
-}
-#edMinimizeBtn:hover { color: var(--black); }
 
 /* ── DROPDOWNS DEL MENÚ ── */
 .ed-dropdown {

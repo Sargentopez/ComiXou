@@ -107,14 +107,21 @@ const Auth = (() => {
         body: JSON.stringify({ email: key, password, data: { username: username.trim(), role: 'author' } }),
       });
       const data = await res.json();
-      if (res.ok && data.id) {
-        await _upsertProfile(data.id, username.trim(), key, 'author', data.access_token);
+      // Supabase puede devolver el usuario en data.user o directamente en data
+      const userId = data.user?.id || data.id;
+      const token  = data.session?.access_token || data.access_token;
+      if (res.ok && userId) {
+        await _upsertProfile(userId, username.trim(), key, 'author', token);
         return { ok: true };
       }
-      const errMsg = (data.error_description || data.msg || '').toLowerCase();
+      const errMsg = (data.error_description || data.msg || data.message || '').toLowerCase();
+      console.warn('Supabase signup error:', data);
       if (errMsg.includes('already') || errMsg.includes('exists')) return { ok: false, err: 'errUserExists' };
-      return { ok: false, err: 'errRegisterFail' };
-    } catch (_) {
+      if (errMsg.includes('password') || errMsg.includes('weak')) return { ok: false, err: 'errPassLen' };
+      // Devolver mensaje real para diagnóstico
+      return { ok: false, err: 'errRegisterFail', detail: data.error_description || data.msg || data.message || JSON.stringify(data) };
+    } catch (e) {
+      console.warn('register fetch error:', e);
       return { ok: false, err: 'errNoNetwork' };
     }
   }

@@ -107,7 +107,8 @@ function AuthView_init() {
       if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = I18n.t('registerBtn') || 'Crear cuenta'; }
 
       if (!result.ok) {
-        showError('emailError', I18n.t(result.err));
+        const msg = result.detail ? `${I18n.t(result.err)} (${result.detail})` : I18n.t(result.err);
+        showError('emailError', msg);
         return;
       }
 

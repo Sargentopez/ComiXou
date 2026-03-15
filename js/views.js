@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v6.102</footer>
+    <footer class="app-version">v6.103</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -189,14 +189,13 @@ Router.register('editor', {
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
 
+      <!-- ── BOTÓN MINIMIZAR — fuera del marco edMenuBar ── -->
+      <button id="edMinimizeBtn" class="ed-menu-pin" style="font-size:1.15rem;color:#e63030;font-weight:900">▼</button>
+
       <!-- ── BARRA DE MENÚ ── -->
       <div id="edMenuBar">
 
-        <!-- MINIMIZAR — siempre visible al inicio (extremo izquierdo fijo) -->
-        <button id="edMinimizeBtn" class="ed-menu-pin" style="font-size:1.15rem;color:#e63030;font-weight:900">▼</button>
-        <div class="ed-menu-sep"></div>
-
-        <!-- ZONA DESLIZABLE -->
+        <!-- ZONA DESLIZABLE (el minimizar ya no está aquí) -->
         <div id="edMenuScroll">
 
           <!-- INSERTAR -->

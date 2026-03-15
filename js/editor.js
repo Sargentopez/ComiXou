@@ -787,6 +787,8 @@ function edFitCanvas(resetCamera){
   const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
   const optsH = (opts && opts.classList.contains('open') && opts.style.visibility !== 'hidden') ? opts.getBoundingClientRect().height : 0;
   if(menu && !edMinimized) menu.style.top = topH + 'px';
+  const minimizeBtn = $('edMinimizeBtn');
+  if(minimizeBtn && !edMinimized) minimizeBtn.style.top = topH + 'px';
   if(opts) opts.style.top = (topH + menuH) + 'px';
   const totalBarsH = topH + menuH + optsH;
 
@@ -3241,6 +3243,7 @@ function edMinimize(){
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='none';
   if(top)top.style.display='none';
+  const minBtn=$('edMinimizeBtn'); if(minBtn) minBtn.style.display='none';
   const btn=$('edFloatBtn');
   if(btn){
     btn.classList.add('visible');
@@ -3261,6 +3264,7 @@ function edMaximize(){
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='';
   if(top)top.style.display='';
+  const minBtn=$('edMinimizeBtn'); if(minBtn) minBtn.style.display='';
   $('edFloatBtn')?.classList.remove('visible');
   edDrawBarHide();
   // Restaurar panel de dibujo si estaba activo al minimizar
