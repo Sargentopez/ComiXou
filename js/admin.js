@@ -233,7 +233,6 @@ function buildAdminRow(comic, mode) {
 
 // ── MODAL READER EMBED ─────────────────────────────────────
 function openReaderModal(url) {
-  // Crear overlay si no existe
   let overlay = document.getElementById('readerModal');
   if (!overlay) {
     overlay = document.createElement('div');
@@ -241,31 +240,60 @@ function openReaderModal(url) {
     overlay.className = 'reader-modal';
     overlay.innerHTML = `
       <div class="reader-modal-inner">
-        <button class="reader-modal-close" id="readerModalClose" aria-label="Cerrar">✕</button>
         <iframe id="readerModalFrame" class="reader-modal-frame" allowfullscreen></iframe>
       </div>`;
     document.body.appendChild(overlay);
 
-    overlay.querySelector('#readerModalClose').addEventListener('click', closeReaderModal);
     overlay.addEventListener('click', e => { if (e.target === overlay) closeReaderModal(); });
 
-    // Escuchar mensaje del reader cuando pulsa cerrar dentro del iframe
     window.addEventListener('message', e => {
       if (e.data?.type === 'reader:close') closeReaderModal();
+      if (e.data?.type === 'reader:fullscreen') {
+        const frame = document.getElementById('readerModalFrame');
+        if (!frame) return;
+        const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        if (isFs) {
+          (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+        } else {
+          const req = frame.requestFullscreen || frame.webkitRequestFullscreen;
+          if (req) req.call(frame, { navigationUI: 'hide' }).catch(() => {});
+        }
+      }
     });
   }
+  // Recordar estado de fullscreen previo
+  overlay._wasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
 
-  overlay.querySelector('#readerModalFrame').src = url;
+  const frame = document.getElementById('readerModalFrame');
+  frame.src = url;
   overlay.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  frame.addEventListener('load', () => frame.focus(), { once: true });
 }
 
 function closeReaderModal() {
   const overlay = document.getElementById('readerModal');
   if (!overlay) return;
   overlay.classList.add('hidden');
-  overlay.querySelector('#readerModalFrame').src = '';
+  document.getElementById('readerModalFrame').src = '';
   document.body.style.overflow = '';
+  const wasFs = overlay._wasFullscreen;
+  overlay._wasFullscreen = false;
+  const nowFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (nowFs && !wasFs) {
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  } else if (!nowFs && wasFs) {
+    if (typeof Fullscreen !== 'undefined') Fullscreen.enter();
+  }
+  setTimeout(() => { if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn(); }, 200);
 }
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// Cerrar modal reader con Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const overlay = document.getElementById('readerModal');
+    if (overlay && !overlay.classList.contains('hidden')) { e.stopPropagation(); closeReaderModal(); }
+  }
+});
