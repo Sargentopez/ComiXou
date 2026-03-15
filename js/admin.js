@@ -162,14 +162,8 @@ function buildAdminRow(comic, mode) {
   // Leer (embed reader en modal)
   row.querySelector(`#read_${comic.id}`)?.addEventListener('click', () => {
     const sid = comic.supabaseId;
-    // Borradores (no publicados): usar ?draft=. Publicados: usar ?id=
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
-    // Construir URL del reader de forma robusta usando origin+pathname (sin hash).
-    // pathname en GitHub Pages = /ComiXou/index.html o /ComiXou/
-    const base = (window.location.origin + window.location.pathname)
-      .replace(/\/index\.html$/, '')
-      .replace(/\/$/, '');
-    openReaderModal(`${base}/reader/?${param}&embed=1`);
+    openReaderModal(`reader/?${param}&embed=1`);
   });
 
   // Aprobar
