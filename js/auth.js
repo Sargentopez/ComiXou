@@ -205,7 +205,8 @@ const Auth = (() => {
     const u = currentUser();
     if (!u) return false;
     if (u.role === 'admin') return true;
-    return comic.userId === u.id;
+    // Compatibilidad: obras antiguas tienen userId='u_macario', nuevas tienen UUID
+    return comic.userId === u.id || comic.username === u.username;
   }
 
   return { login, register, logout, deleteAccount, currentUser, isLogged, isAdmin, canManage };
