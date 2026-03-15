@@ -343,6 +343,8 @@ function _openReaderModal(url) {
   frame.src = url;
   overlay.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  // Recordar si la app estaba en fullscreen antes de abrir el reader
+  overlay._wasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
   // Dar foco al iframe para que las teclas funcionen sin clic previo
   frame.addEventListener('load', () => frame.focus(), { once: true });
 }
@@ -353,11 +355,18 @@ function _closeReaderModal() {
   overlay.classList.add('hidden');
   overlay.querySelector('.reader-modal-frame').src = '';
   document.body.style.overflow = '';
-  // Si el reader dejó la app en fullscreen, salir y resincronizar el botón
-  if (document.fullscreenElement || document.webkitFullscreenElement) {
+  const wasFs = overlay._wasFullscreen;
+  overlay._wasFullscreen = false;
+  const nowFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (nowFs && !wasFs) {
+    // El reader activó fullscreen — salir
     (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  } else if (!nowFs && wasFs) {
+    // La app estaba en fullscreen antes — restaurar
+    if (typeof Fullscreen !== 'undefined') Fullscreen.enter();
   }
-  if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn();
+  // Resincronizar botón (con pequeño delay para que el estado FS se actualice)
+  setTimeout(() => { if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn(); }, 200);
 }
 
 // Cerrar modal con Escape
