@@ -195,6 +195,19 @@ function buildReaderTexts(panel, layer) {
 // ════════════════════════════════════════
 // NAVEGACIÓN
 // ════════════════════════════════════════
+// Detecta lado "retroceder" según orientación física (screen.orientation.angle, estándar W3C)
+function _isBackSide(endX, endY) {
+  const angle = screen.orientation?.angle ?? 0;
+  const W = window.innerWidth, H = window.innerHeight;
+  switch (angle) {
+    case 0:   return endX < W / 2;
+    case 90:  return endY > H / 2;
+    case 180: return endX > W / 2;
+    case 270: return endY < H / 2;
+    default:  return endX < W / 2;
+  }
+}
+
 function goToPanel(idx) {
   if (ReaderState.animating) return;
   const panels = ReaderState.comic.panels;
@@ -629,37 +642,25 @@ function setupControls() {
     const endY = e.changedTouches[0].clientY;
     const dy   = Math.abs(endY - touchStartY);
     if (dy > 40) return;
-    // En créditos: izquierda retrocede, derecha detecta botón "Volver a leer"
+
+    // En créditos: lado retroceder → goBack, lado avanzar → detectar botón "Volver a leer"
     if (ReaderState.currentPanel === ReaderState.comic.panels.length) {
-      const devicePortrait = screen.orientation?.type
-        ? screen.orientation.type.startsWith('portrait')
-        : screen.height > screen.width;
-      const isLeft = devicePortrait ? endX < window.innerWidth / 2 : endY > window.innerHeight / 2;
-      if (isLeft) { goBack(); return; }
-      // Derecha: comprobar si toca el botón "Volver a leer"
+      if (_isBackSide(endX, endY)) { goBack(); return; }
       const canvas = ReaderState.creditsCanvas;
       const ra = ReaderState.creditsRestartArea;
       if (canvas && ra) {
-        const rect   = canvas.getBoundingClientRect();
-        const scaleX = canvas.width  / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const cx = (endX - rect.left) * scaleX;
-        const cy = (endY - rect.top)  * scaleY;
+        const rect = canvas.getBoundingClientRect();
+        const cx = (endX - rect.left) * (canvas.width  / rect.width);
+        const cy = (endY - rect.top)  * (canvas.height / rect.height);
         if (cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
           goToPanel(0);
         }
       }
       return;
     }
-    // Orientación física del dispositivo (ignora orientación de la hoja)
-    const devicePortrait = screen.orientation?.type
-      ? screen.orientation.type.startsWith('portrait')
-      : screen.height > screen.width;
-    if (devicePortrait) {
-      if (endX < window.innerWidth / 2) goBack(); else advance();
-    } else {
-      if (endY < window.innerHeight / 2) goBack(); else advance();
-    }
+
+    // Navegación normal: mitad física retrocede, otra mitad avanza
+    if (_isBackSide(endX, endY)) goBack(); else advance();
   }, sig);
 }
 

@@ -943,6 +943,19 @@ function _updateCounter() { /* sin pastilla — no se muestra */ }
 
 function _showControls() { /* botones de esquina siempre visibles */ }
 
+// Detecta lado "retroceder" según orientación física (screen.orientation.angle, W3C)
+function _isBackSide(endX, endY) {
+  const angle = screen.orientation?.angle ?? 0;
+  const W = window.innerWidth, H = window.innerHeight;
+  switch (angle) {
+    case 0:   return endX < W / 2;
+    case 90:  return endY > H / 2;
+    case 180: return endX > W / 2;
+    case 270: return endY < H / 2;
+    default:  return endX < W / 2;
+  }
+}
+
 function _setupControls() {
   // closeBtn y fullscreenToggle configurados en DOMContentLoaded
 
@@ -985,27 +998,15 @@ function _setupControls() {
     const endY = e.changedTouches[0].clientY;
     const dy   = Math.abs(endY - sy);
     sx = null;
-    // Ignorar si hay mucho movimiento vertical
     if (dy > 40) return;
-    // En créditos: izquierda retrocede, derecha solo gestiona el enlace
+    // En créditos: lado retroceder → goBack, lado avanzar → detecta enlace/botón
     if (RS.isCredits) {
-      const devicePortrait = screen.orientation?.type
-        ? screen.orientation.type.startsWith('portrait')
-        : screen.height > screen.width;
-      const isLeft = devicePortrait ? endX < window.innerWidth / 2 : endY > window.innerHeight / 2;
-      if (isLeft) goBack();
-      else _handleCreditsClick(endX, endY); // detecta si toca el enlace
+      if (_isBackSide(endX, endY)) goBack();
+      else _handleCreditsClick(endX, endY);
       return;
     }
-    // Orientación física del dispositivo (ignora orientación de la hoja)
-    const devicePortrait = screen.orientation?.type
-      ? screen.orientation.type.startsWith('portrait')
-      : screen.height > screen.width;
-    if (devicePortrait) {
-      if (endX < window.innerWidth / 2) goBack(); else advance();
-    } else {
-      if (endY < window.innerHeight / 2) goBack(); else advance();
-    }
+    // Navegación normal
+    if (_isBackSide(endX, endY)) goBack(); else advance();
   }, { passive: true, ...sig });
 }
 

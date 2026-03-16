@@ -4119,15 +4119,8 @@ function edInitViewerTap(){
     _sx = null;
     // Ignorar si hay mucho movimiento vertical
     if(Math.abs(dy) > 40) return;
-    // Orientación física del dispositivo (ignora orientación de la hoja)
-    const devicePortrait = screen.orientation?.type
-      ? screen.orientation.type.startsWith('portrait')
-      : screen.height > screen.width;
-    if (devicePortrait) {
-      if(endX < window.innerWidth / 2) _viewerBack(); else _viewerAdvance();
-    } else {
-      if(endY < window.innerHeight / 2) _viewerBack(); else _viewerAdvance();
-    }
+    // División según orientación física del dispositivo (4 posiciones)
+    if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
   }, {passive:true, ...sig});
 
   // ── CONTROLES DESKTOP (mouse) ──
@@ -4251,7 +4244,22 @@ function edOpenProjectModal(){
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
 
 /* ── Destruir vista: eliminar todos los listeners de document/window ── */
-/* ── CUENTAGOTAS ── */
+// Detecta si el toque está en el lado "retroceder" según orientación física del dispositivo.
+// Usa screen.orientation.angle (estándar W3C Screen Orientation API):
+// 0°=portrait normal, 90°=landscape izq, 180°=portrait al revés, 270°=landscape der
+function _isBackSide(endX, endY) {
+  const angle = screen.orientation?.angle ?? 0;
+  const W = window.innerWidth, H = window.innerHeight;
+  switch (angle) {
+    case 0:   return endX < W / 2;  // portrait normal:    izquierda física = X < mitad
+    case 90:  return endY > H / 2;  // landscape izq:      izquierda física = abajo pantalla
+    case 180: return endX > W / 2;  // portrait al revés:  izquierda física = derecha pantalla
+    case 270: return endY < H / 2;  // landscape der:      izquierda física = arriba pantalla
+    default:  return endX < W / 2;
+  }
+}
+
+
 function _edStartEyedrop() {
   const canvas = edCanvas;
   if (!canvas) return;
