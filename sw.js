@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v7-44';
+const CACHE = 'comixow-v7-45';
 const ASSETS = [
   './',
   './index.html',
@@ -29,6 +29,11 @@ const ASSETS = [
   './js/my-comics.js',
   './js/views.js',
   './js/pwa.js',
+  './js/supabase-client.js',
+  './reader/index.html',
+  './reader/reader.css',
+  './reader/reader.js',
+  './pages/reader.html',
   './icon-192.png',
   './icon-512.png',
 ];
@@ -39,20 +44,40 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys =>
-    Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-  ));
-  self.clients.claim();
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener('fetch', e => {
-  // El reproductor externo /reader/ es independiente — no interceptar
-  if (e.request.url.includes('/reader/')) return;
-  // SPA: cualquier navegación devuelve index.html
+  const url = e.request.url;
+
+  // SPA: navegaciones devuelven index.html
   if (e.request.mode === 'navigate') {
-    e.respondWith(caches.match('./index.html'));
+    e.respondWith(
+      fetch(e.request)
+        .then(r => { caches.open(CACHE).then(c => c.put(e.request, r.clone())); return r; })
+        .catch(() => caches.match('./index.html'))
+    );
     return;
   }
+
+  // JS y CSS: network-first — siempre intenta red, actualiza caché, fallback a caché
+  if (url.match(/\.(js|css)(\?|$)/)) {
+    e.respondWith(
+      fetch(e.request)
+        .then(r => {
+          if (r.ok) caches.open(CACHE).then(c => c.put(e.request, r.clone()));
+          return r;
+        })
+        .catch(() => caches.match(e.request))
+    );
+    return;
+  }
+
+  // Resto (imágenes, fuentes, etc.): cache-first
   e.respondWith(
     caches.match(e.request).then(r => r || fetch(e.request).catch(() => caches.match('./index.html')))
   );
