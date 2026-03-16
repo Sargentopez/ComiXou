@@ -121,10 +121,7 @@ function _onFullscreenChange() {
 }
 
 function _embedClose() {
-  // En iframe: notificar al padre para que cierre el modal
-  try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(e) {}
-  // Fallback si no está en iframe
-  if (window.self === window.top) history.back();
+  history.back();
 }
 
 // ── CARGA DESDE SUPABASE ─────────────────────────────────────

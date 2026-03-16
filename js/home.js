@@ -278,9 +278,9 @@ function buildRow(comic, currentUser) {
   readBtn.href = '#';
   readBtn.onclick = (e) => {
     e.preventDefault();
-    // Obras publicadas: usar el reproductor externo embebido en modal
+    // Obras publicadas: usar el reproductor externo
     if (comic.supabaseId && comic.published) {
-      _openReaderModal(`reader/?id=${comic.supabaseId}&embed=1`);
+      window.location = 'reader/?id=' + comic.supabaseId;
     } else {
       // Sin supabaseId: visor interno del SPA (obra local)
       Router.go('reader', { id: comic.id });
