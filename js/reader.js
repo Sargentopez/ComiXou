@@ -30,18 +30,8 @@ function ReaderView_init(params) {
   }
 
   ReaderState.comic = comic;
-  ReaderState.totalPanels = comic.panels.length + 1; // +1 para créditos
+  ReaderState.totalPanels = comic.panels.length + 1;
   ReaderState.creditsShown = false;
-
-  // Garantizar que todos los paneles tienen texts generados desde editorData.
-  // El visor del editor usa page.layers directamente; el reproductor usa panel.texts.
-  // Si la obra es antigua o texts está vacío, lo regeneramos aquí.
-  _ensurePanelTexts(comic);
-
-  // DIAGNÓSTICO TEMPORAL
-  const _p0 = comic.panels[0];
-  alert('Panel 0: ' + (_p0.texts?.length||0) + ' texts\n' +
-    (_p0.texts||[]).map((t,i)=>i+': type='+t.type+' "'+String(t.text).slice(0,20)+'"').join('\n'));
 
   document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
 
@@ -50,68 +40,6 @@ function ReaderView_init(params) {
   setupControls();
   showSwipeHint();
   I18n.applyAll();
-}
-
-// Regenera panel.texts desde editorData.pages[i].layers si está vacío o ausente.
-// Replica exactamente la lógica de edSaveProject en editor.js.
-function _ensurePanelTexts(comic) {
-  const edPages = comic.editorData?.pages;
-  if (!edPages) return; // sin editorData no podemos hacer nada
-
-  comic.panels.forEach((panel, i) => {
-    // Si ya tiene texts con contenido, no tocar
-    if (panel.texts && panel.texts.length > 0) return;
-
-    const page = edPages[i];
-    if (!page?.layers) return;
-
-    const texts = [];
-    let seqOrder = 0;
-    page.layers.forEach(l => {
-      const rawText = (l.type === 'text' || l.type === 'bubble') ? l.text : null;
-      if (!rawText || rawText === 'Escribe aquí') return;
-
-      const xPct = Math.round((l.x - (l.width||0)/2)  * 100 * 10) / 10;
-      const yPct = Math.round((l.y - (l.height||0)/2) * 100 * 10) / 10;
-      const wPct = Math.round((l.width||0.3)  * 100 * 10) / 10;
-      const hPct = Math.round((l.height||0.15) * 100 * 10) / 10;
-
-      if (l.type === 'bubble') {
-        texts.push({
-          type:        'bubble',
-          text:        rawText,
-          x: xPct, y: yPct, w: wPct, h: hPct,
-          style:       l.style       || 'conventional',
-          order:       seqOrder++,
-          fontSize:    l.fontSize    || 30,
-          fontFamily:  l.fontFamily  || 'Patrick Hand',
-          fontBold:    l.fontBold    || false,
-          fontItalic:  l.fontItalic  || false,
-          color:       l.color       || '#000000',
-          bg:          l.backgroundColor || '#ffffff',
-          border:      l.borderWidth ?? 2,
-          borderColor: l.borderColor || '#000000',
-        });
-      } else if (l.type === 'text') {
-        texts.push({
-          type:        'text',
-          text:        rawText,
-          x: xPct, y: yPct, w: wPct, h: hPct,
-          order:       seqOrder++,
-          fontSize:    l.fontSize    || 30,
-          fontFamily:  l.fontFamily  || 'Patrick Hand',
-          fontBold:    l.fontBold    || false,
-          fontItalic:  l.fontItalic  || false,
-          color:       l.color       || '#000000',
-          bg:          l.backgroundColor || '#ffffff',
-          border:      l.borderWidth ?? 0,
-          borderColor: l.borderColor || '#000000',
-        });
-      }
-    });
-    panel.texts    = texts;
-    panel.textMode = page.textMode || 'sequential';
-  });
 }
 
 // ════════════════════════════════════════
@@ -352,8 +280,7 @@ function _showBubblesForPanel(idx) {
   if (!panelEl) return;
   const bubbles = Array.from(panelEl.querySelectorAll('.reader-bubble'));
 
-  // DIAGNÓSTICO
-  alert('Panel ' + idx + ': ' + bubbles.length + ' .reader-bubble encontrados\ntextMode=' + mode);
+  // Resetear todos
 
   // Resetear todos
   bubbles.forEach(b => b.classList.remove('visible'));
