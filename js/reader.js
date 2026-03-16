@@ -439,14 +439,15 @@ function _renderCreditsCanvas() {
     }
     ctx.font      = `600 ${authorFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#222222';
-    ctx.textAlign = 'left';
-    ctx.fillText(authorText, leftX, y);
+    ctx.textAlign = 'center';
+    ctx.fillText(authorText, leftX + leftW / 2, y);
 
     ctx.globalAlpha = alpha;
-    const logoFS   = Math.round(fRef * 0.13);
-    const sloganFS = Math.round(fRef * 0.055);
-    const linkFS   = Math.round(fRef * 0.045);
-    const rightBlockH = logoFS * 1.5 + sloganFS * 2.5 + linkFS * 2.5;
+    const logoFS   = Math.round(fRef * 0.11);
+    const sloganFS = Math.round(fRef * 0.042);
+    const linkFS   = Math.round(fRef * 0.038);
+    const lineH    = ph * 0.09;
+    const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
     const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
 
     ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
@@ -454,12 +455,12 @@ function _renderCreditsCanvas() {
     ctx.textAlign = 'center';
     ctx.fillText('ComiXow', rightCX, rightStartY);
 
-    const sloganY = rightStartY + logoFS * 0.7 + sloganFS * 1.2;
+    const sloganY = rightStartY + sloganFS * 2;
     ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#555555';
     ctx.fillText('Crea y Comparte', rightCX, sloganY);
 
-    const linkY    = sloganY + sloganFS * 0.7 + linkFS * 1.4;
+    const linkY    = sloganY + sloganFS * 3;
     const linkText = 'Visita más obras del autor';
     ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#1a73e8';
