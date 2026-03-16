@@ -22,6 +22,7 @@ let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#e63030', edDrawSize = 8, edEraserSize = 20, edDrawOpacity = 100;
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
+let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
 let edFloatX = 12, edFloatY = 12; // posición del botón flotante (esquina superior izquierda)
@@ -2775,7 +2776,9 @@ function _edUpdatePaletteDots(){
   document.querySelectorAll('.op-pal-dot').forEach(d=>{
     const idx=parseInt(d.dataset.colidx);
     d.style.background=edColorPalette[idx];
-    d.style.borderColor=edColorPalette[idx]===edDrawColor?'var(--black)':'var(--gray-300)';
+    // Borde negro grueso = dot seleccionado; borde gris = resto
+    d.style.borderColor = idx === edSelectedPaletteIdx ? 'var(--black)' : 'var(--gray-300)';
+    d.style.borderWidth = idx === edSelectedPaletteIdx ? '3px' : '2px';
   });
 }
 function _hexToHsl(hex){
@@ -2921,7 +2924,7 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
 
   </div>
-  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:2px solid ${c===edDrawColor?'var(--black)':'var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
+  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
     <button id="op-draw-del"
       style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
@@ -2961,7 +2964,7 @@ function edRenderOptionsPanel(mode){
       if(edLastPointerIsTouch){
         _edShowColorPicker((hex, final)=>{
           edDrawColor = hex;
-          if(final){ edColorPalette[edColorPalette.length-1] = hex; }
+          if(final){ edColorPalette[edSelectedPaletteIdx] = hex; }
           _edUpdatePaletteDots();
           const info=$('op-draw-info');
           if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
@@ -2972,7 +2975,7 @@ function edRenderOptionsPanel(mode){
     });
     $('op-dcolor')?.addEventListener('input',e=>{
       edDrawColor = e.target.value;
-      edColorPalette[edColorPalette.length-1] = edDrawColor;
+      edColorPalette[edSelectedPaletteIdx] = edDrawColor;
       _edUpdatePaletteDots();
       const info=$('op-draw-info');
       if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
@@ -2981,6 +2984,7 @@ function edRenderOptionsPanel(mode){
     document.querySelectorAll('.op-pal-dot').forEach(dot=>{
       dot.addEventListener('click',()=>{
         const idx = parseInt(dot.dataset.colidx);
+        edSelectedPaletteIdx = idx;
         edDrawColor = edColorPalette[idx];
         _edUpdatePaletteDots();
         const info=$('op-draw-info');

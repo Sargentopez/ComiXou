@@ -92,6 +92,12 @@ body.editor-page #appView {
   align-self: flex-end;
   padding-bottom: 4px;
 }
+@media (min-width: 768px) {
+  .ed-top-pagnav {
+    align-self: center;
+    padding-bottom: 0;
+  }
+}
 .ed-top-pagebn {
   background: none; border: none;
   font-size: 0.9rem; color: var(--black);
