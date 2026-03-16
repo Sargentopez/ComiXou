@@ -352,8 +352,13 @@ function _render() {
   if (panel.isCredits) {
     RS.isCredits = true;
     const { pw, ph } = _panelDims(RS.idx);
-    _renderCredits(pw, ph);
-    _showCredits(); // lanza el fade-in si no está en curso
+    // Solo llamar _showCredits si no hay fade en marcha ni ya mostrado
+    // para evitar el parpadeo al redibujar con alpha=0
+    if (!RS.creditsTimer && !RS.fadeRaf) {
+      _showCredits();
+    } else {
+      _renderCredits(pw, ph);
+    }
     return;
   }
 
@@ -665,9 +670,21 @@ function _startFade() {
 // Se llama desde _render() cuando el panel actual es el de créditos.
 // La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 function _showCredits() {
+  // Si ya se mostró antes: renderizar directamente con alpha=1, sin fade ni parpadeo
+  if (RS.creditsShown) {
+    RS.creditsAlpha = 1;
+    const { pw, ph } = _panelDims(RS.idx);
+    _renderCredits(pw, ph);
+    return;
+  }
   // Evitar relanzar si ya está en curso
   if (RS.creditsTimer || RS.creditsAlpha > 0) return;
   RS.creditsAlpha = 0;
+
+  // Dibujar inmediatamente solo la parte estática (autor + social) sin parpadeo
+  // El logo/eslogan/enlace aparecerán con fade tras 1 segundo
+  const { pw: pw0, ph: ph0 } = _panelDims(RS.idx);
+  _renderCredits(pw0, ph0);
 
   // Tras 1 segundo, iniciar fade-in del resto
   RS.creditsTimer = setTimeout(() => {
@@ -678,7 +695,7 @@ function _showCredits() {
       const { pw, ph } = _panelDims(RS.idx);
       _renderCredits(pw, ph);
       if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
-      else { RS.fadeRaf = null; }
+      else { RS.fadeRaf = null; RS.creditsShown = true; }
     }
     RS.fadeRaf = requestAnimationFrame(fadeStep);
   }, 1000);
