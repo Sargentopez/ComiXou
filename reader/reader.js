@@ -41,7 +41,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
-  const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
+  const _closeAction = RS.isEmbed
+    ? _embedClose
+    : () => {
+        if (history.length > 1) history.back();
+        else window.location.href = '../index.html';
+      };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
 
   // Si la app estaba en fullscreen, entrar en fullscreen al primer gesto del usuario

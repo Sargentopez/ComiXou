@@ -645,19 +645,21 @@ function setupControls() {
     const dy   = Math.abs(endY - touchStartY);
     if (dy > 40) return;
 
-    // En créditos: lado retroceder → goBack, lado avanzar → detectar botón "Volver a leer"
+    // En créditos: primero detectar botón "Volver a leer" por área exacta,
+    // luego aplicar navegación lateral (izquierda retrocede)
     if (ReaderState.currentPanel === ReaderState.comic.panels.length) {
-      if (_isBackSide(endX, endY)) { goBack(); return; }
       const canvas = ReaderState.creditsCanvas;
-      const ra = ReaderState.creditsRestartArea;
-      if (canvas && ra) {
+      if (canvas) {
         const rect = canvas.getBoundingClientRect();
         const cx = (endX - rect.left) * (canvas.width  / rect.width);
         const cy = (endY - rect.top)  * (canvas.height / rect.height);
-        if (cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
-          goToPanel(0);
+        const ra = ReaderState.creditsRestartArea;
+        if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
+          goToPanel(0); return;
         }
       }
+      // Si no tocó el botón: lado retroceder → goBack, lado avanzar → nada
+      if (_isBackSide(endX, endY)) goBack();
       return;
     }
 
