@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v7.81</footer>
+    <footer class="app-version">v7.82</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -306,6 +306,11 @@ Router.register('editor', {
         <div class="edb-sep"></div>
         <button id="edb-color"  class="edb-swatch" title="Color"></button>
         <button id="edb-size"   class="edb-sizebtn" title="Grosor"><span id="edb-size-dot"></span></button>
+        <input id="edb-size-num" type="number" min="1" max="80" value="8"
+          style="width:32px;text-align:center;font-size:0.75rem;font-weight:700;
+                 border:1px solid rgba(255,255,255,0.3);border-radius:6px;
+                 background:rgba(0,0,0,0.3);color:#fff;padding:2px 2px;
+                 -moz-appearance:textfield;" title="Grosor en px">
         <div class="edb-sep"></div>
         <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
         <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>

@@ -2914,7 +2914,12 @@ function edRenderOptionsPanel(mode){
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     <button id="op-opacity-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Opacidad</button>
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
+    <input id="op-draw-opacity-num" type="number" min="1" max="100" value="${edDrawOpacity}"
+      style="width:38px;text-align:center;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-700);
+             border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;
+             background:transparent;-moz-appearance:textfield;flex-shrink:0"
+      title="Opacidad %">
     <div id="op-opacity-slider"
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
@@ -2938,8 +2943,12 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-draw-minimize"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
-    <span id="op-draw-info"
-      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize+'px':edDrawSize+'px')+' · '+edDrawOpacity+'%'}</span>
+    <input id="op-draw-info"
+      type="number" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
+      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-700);
+             border:1px solid var(--gray-300);border-radius:6px;padding:2px 6px;width:0;min-width:0;
+             background:transparent;-moz-appearance:textfield;"
+      title="Grosor en píxeles">
     <button id="op-draw-ok"
       style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -2969,8 +2978,6 @@ function edRenderOptionsPanel(mode){
           edDrawColor = hex;
           if(final){ edColorPalette[edSelectedPaletteIdx] = hex; }
           _edUpdatePaletteDots();
-          const info=$('op-draw-info');
-          if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
         });
       } else {
         $('op-dcolor')?.click();
@@ -2980,8 +2987,6 @@ function edRenderOptionsPanel(mode){
       edDrawColor = e.target.value;
       edColorPalette[edSelectedPaletteIdx] = edDrawColor;
       _edUpdatePaletteDots();
-      const info=$('op-draw-info');
-      if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
     });
     // Dots de la paleta
     document.querySelectorAll('.op-pal-dot').forEach(dot=>{
@@ -2990,8 +2995,6 @@ function edRenderOptionsPanel(mode){
         edSelectedPaletteIdx = idx;
         edDrawColor = edColorPalette[idx];
         _edUpdatePaletteDots();
-        const info=$('op-draw-info');
-        if(info) info.textContent=edActiveTool==='fill'?`Color ${edDrawColor}`:$('op-dsizeval-hidden')?.textContent||'';
       });
     });
 
@@ -3011,8 +3014,18 @@ function edRenderOptionsPanel(mode){
       const v=+e.target.value;
       if(edActiveTool==='eraser') edEraserSize=v;
       else edDrawSize=v;
-      const info=$('op-draw-info');
-      if(info) info.textContent=v+'px · '+edDrawOpacity+'%';
+      if(info && info.tagName==='INPUT') info.value=v;
+      _edbSyncSize();
+    });
+    // Input numérico editable de grosor
+    $('op-draw-info')?.addEventListener('change',e=>{
+      const max = edActiveTool==='eraser' ? 80 : 48;
+      const v = Math.max(1, Math.min(max, parseInt(e.target.value)||1));
+      e.target.value = v;
+      if(edActiveTool==='eraser') edEraserSize=v;
+      else edDrawSize=v;
+      const sl=$('op-dsize'); if(sl){ sl.value=v; }
+      _edbSyncSize();
     });
     $('op-color-erase-btn')?.addEventListener('click',()=>{
       edCanvas.style.cursor = 'crosshair';
@@ -3034,11 +3047,12 @@ function edRenderOptionsPanel(mode){
     });
     $('op-dopacity')?.addEventListener('input',e=>{
       edDrawOpacity = +e.target.value;
-      const info=$('op-draw-info');
-      if(info){
-        const sz = edActiveTool==='eraser'?edEraserSize:edDrawSize;
-        info.textContent = isFill ? 'Color '+edDrawColor : sz+'px · '+edDrawOpacity+'%';
-      }
+      const num=$('op-draw-opacity-num'); if(num) num.value=edDrawOpacity;
+    });
+    $('op-draw-opacity-num')?.addEventListener('change',e=>{
+      const v=Math.max(1,Math.min(100,parseInt(e.target.value)||1));
+      e.target.value=v; edDrawOpacity=v;
+      const sl=$('op-dopacity'); if(sl) sl.value=v;
     });
 
     // ── Deshacer / Rehacer ──
@@ -3475,6 +3489,20 @@ function edInitDrawBar() {
     const sl = $('op-dsize'); if (sl) { sl.value = isEr ? edEraserSize : edDrawSize; sl.dispatchEvent(new Event('input')); }
   });
 
+  // ── Input numérico de grosor en barra flotante ──
+  $('edb-size-num')?.addEventListener('change', e => {
+    const isEr = edActiveTool === 'eraser';
+    const max = isEr ? 80 : 48;
+    const v = Math.max(1, Math.min(max, parseInt(e.target.value) || 1));
+    e.target.value = v;
+    if (isEr) edEraserSize = v; else edDrawSize = v;
+    _edbSyncSize();
+    const sl = $('op-dsize'); if (sl) { sl.value = v; }
+    const info = $('op-draw-info'); if (info && info.tagName === 'INPUT') info.value = v;
+  });
+  $('edb-size-num')?.addEventListener('pointerdown', e => e.stopPropagation());
+  $('edb-size-num')?.addEventListener('touchstart',  e => e.stopPropagation(), { passive: true });
+
   // ── Deshacer / Rehacer ──
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
@@ -3613,7 +3641,10 @@ function _edbSyncSize() {
   dot.style.width  = d + 'px';
   dot.style.height = d + 'px';
   const sizebtn = $('edb-size');
-  if (sizebtn) sizebtn.title = (isEr ? edEraserSize : edDrawSize) + 'px';
+  if (sizebtn) sizebtn.title = sz + 'px';
+  // Sincronizar input numérico
+  const num = $('edb-size-num');
+  if (num) { num.value = sz; num.max = isEr ? 80 : 48; }
 }
 
 function edDrawBarShow() {
