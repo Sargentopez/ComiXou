@@ -41,11 +41,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
+  const _doClose = () => {
+    if (history.length > 1) history.back();
+    else window.close();
+  };
+
   const _closeAction = RS.isEmbed
     ? _embedClose
     : () => {
-        if (history.length > 1) history.back();
-        else window.location.href = '../index.html';
+        // Salir de fullscreen primero si está activo
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          const exit = document.exitFullscreen || document.webkitExitFullscreen;
+          if (exit) { exit.call(document).then(_doClose).catch(_doClose); return; }
+        }
+        _doClose();
       };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
 
@@ -965,7 +974,8 @@ function _setupControls() {
     if (['ArrowLeft','ArrowUp'].includes(e.code))                    { e.preventDefault(); goBack(); }
     if (e.key === 'Escape') {
       if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
-      else history.back();
+      else if (history.length > 1) history.back();
+      else window.close();
     }
   };
   document.addEventListener('keydown', RS.keyHandler);
