@@ -4,12 +4,35 @@
 
 (function () {
 
-  /* ── Registrar Service Worker ── */
+  /* ── Registrar Service Worker y forzar actualización inmediata ── */
   if ('serviceWorker' in navigator) {
     const swPath = window.location.pathname.includes('/pages/')
       ? '../sw.js' : './sw.js';
     navigator.serviceWorker.register(swPath)
+      .then(reg => {
+        // Si hay un SW esperando (nueva versión descargada), activarlo de inmediato
+        if (reg.waiting) {
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+        // Cuando se instala una nueva versión, forzar activación
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // Nueva versión lista — recargar para usarla
+              newWorker.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
+      })
       .catch(err => console.warn('SW error:', err));
+
+    // Cuando el SW toma el control (tras SKIP_WAITING), recargar la página
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!refreshing) { refreshing = true; window.location.reload(); }
+    });
   }
 
   const DISMISSED_KEY  = 'cx_install_dismissed';
