@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v7.57</footer>
+    <footer class="app-version">v7.59</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -202,13 +202,7 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="insert">Insertar ▾</button>
             <div class="ed-dropdown" id="dd-insert">
-              <div class="ed-dropdown-item has-sub" style="position:relative">
-                Imagen
-                <div class="ed-subdropdown">
-                  <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
-                  <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
-                </div>
-              </div>
+              <button class="ed-dropdown-item" id="dd-gallery">Imagen</button>
               <div class="ed-dropdown-item has-sub" style="position:relative">
                 Texto
                 <div class="ed-subdropdown">
@@ -356,7 +350,6 @@ Router.register('editor', {
 
     <!-- Inputs ocultos -->
     <input type="file" id="edFileGallery" accept="image/*,.gif,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
-    <input type="file" id="edFileCapture" accept="image/*" capture="environment" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <div id="edBrushCursor"></div>
   `,
