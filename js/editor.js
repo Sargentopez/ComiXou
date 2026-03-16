@@ -4425,9 +4425,12 @@ function EditorView_init(){
 
   // ── INSERTAR ──
   $('dd-gallery')?.addEventListener('click',()=>{$('edFileGallery').click();edCloseMenus();});
+  // dd-camera es <label for="edFileCapture"> — activa el input directamente, solo cerrar menú
+  $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); });
   $('dd-textbox')?.addEventListener('click',()=>{edAddText();edCloseMenus();});
   $('dd-bubble')?.addEventListener('click', ()=>{edAddBubble();edCloseMenus();});
   $('edFileGallery')?.addEventListener('change',e=>{edAddImage(e.target.files[0]);e.target.value='';});
+  $('edFileCapture')?.addEventListener('change',e=>{edAddImage(e.target.files[0]);e.target.value='';});
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{
