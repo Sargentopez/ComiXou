@@ -4113,13 +4113,13 @@ function edInitViewerTap(){
   viewer.addEventListener('touchend', e => {
     if(_sx === null || _scrollCancelled){ _sx = null; return; }
     if(e.changedTouches.length !== 1){ _sx = null; return; }
+    // Ignorar si el toque termina sobre un botón de control
+    if(e.target.closest('button, a, input')) { _sx = null; return; }
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     const dx = endX - _sx, dy = endY - _sy;
     _sx = null;
-    // Ignorar si hay mucho movimiento vertical
     if(Math.abs(dy) > 40) return;
-    // División según orientación física del dispositivo (4 posiciones)
     if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
   }, {passive:true, ...sig});
 

@@ -638,6 +638,8 @@ function setupControls() {
   }, sig);
 
   stage.addEventListener('touchend', (e) => {
+    // Ignorar si el toque termina sobre un botón u otro control interactivo
+    if (e.target.closest('button, a, input, label')) return;
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     const dy   = Math.abs(endY - touchStartY);

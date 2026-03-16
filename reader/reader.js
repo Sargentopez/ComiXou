@@ -63,11 +63,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeBtnEl = document.getElementById('closeBtn');
   if (closeBtnEl) {
     closeBtnEl.addEventListener('click', _closeAction);
+    closeBtnEl.addEventListener('touchend', e => { e.stopPropagation(); _closeAction(); }, { passive: false });
   }
 
   // Botón fullscreen: listener directo en gesto de usuario (igual que header.js)
   const fsBtn = document.getElementById('fullscreenToggle');
   if (fsBtn) {
+    fsBtn.addEventListener('touchend', e => { e.stopPropagation(); }, { passive: false });
     fsBtn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (RS.isEmbed) {
