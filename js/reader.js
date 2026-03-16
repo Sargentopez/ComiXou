@@ -593,28 +593,22 @@ function setupControls() {
   const sig = { signal: ReaderState._stageAC.signal, passive: true };
 
   const stage = document.getElementById('readerStage');
-  let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+  let touchStartX = 0, touchStartY = 0;
 
   stage.addEventListener('touchstart', (e) => {
-    touchStartX    = e.touches[0].clientX;
-    touchStartY    = e.touches[0].clientY;
-    touchStartTime = Date.now();
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
   }, sig);
 
   stage.addEventListener('touchend', (e) => {
-    const dx   = e.changedTouches[0].clientX - touchStartX;
-    const dy   = e.changedTouches[0].clientY - touchStartY;
-    const dt   = Date.now() - touchStartTime;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-
-    // Tap rápido (< 300ms, < 15px movimiento) → avanzar
-    if (dt < 300 && dist < 15) { advance(); return; }
-
-    // Swipe horizontal
-    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40) {
-      if (dx < 0) advance();  // swipe izquierda → avanzar
-      else        goBack();   // swipe derecha → retroceder
-    }
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const dy   = Math.abs(endY - touchStartY);
+    // Ignorar si hay mucho movimiento vertical
+    if (dy > 40) return;
+    // Mitad izquierda de pantalla → retroceder, mitad derecha → avanzar
+    if (endX < window.innerWidth / 2) goBack();
+    else advance();
   }, sig);
 }
 

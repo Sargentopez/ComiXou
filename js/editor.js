@@ -4106,19 +4106,22 @@ function edInitViewerTap(){
 
   viewer.addEventListener('touchmove', e => {
     if(_sx === null) return;
-    const dx = e.touches[0].clientX - _sx;
     const dy = e.touches[0].clientY - _sy;
-    if(Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) _scrollCancelled = true;
+    if(Math.abs(dy) > 20) _scrollCancelled = true;
   }, {passive:true, ...sig});
 
   viewer.addEventListener('touchend', e => {
     if(_sx === null || _scrollCancelled){ _sx = null; return; }
     if(e.changedTouches.length !== 1){ _sx = null; return; }
-    const dx = e.changedTouches[0].clientX - _sx;
-    const dy = e.changedTouches[0].clientY - _sy;
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const dx = endX - _sx, dy = endY - _sy;
     _sx = null;
-    if(Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
-    if(dx < 0) _viewerAdvance(); else _viewerBack();
+    // Ignorar si hay mucho movimiento vertical
+    if(Math.abs(dy) > 40) return;
+    // Mitad izquierda de pantalla → retroceder, mitad derecha → avanzar
+    if(endX < window.innerWidth / 2) _viewerBack();
+    else _viewerAdvance();
   }, {passive:true, ...sig});
 
   // ── CONTROLES DESKTOP (mouse) ──

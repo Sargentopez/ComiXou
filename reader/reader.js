@@ -953,22 +953,23 @@ function _setupControls() {
 
   RS.canvas.addEventListener('touchmove', e => {
     if (sx === null) return;
-    const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
-    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) cancelled = true;
+    const dy = e.touches[0].clientY - sy;
+    if (Math.abs(dy) > 20) cancelled = true;
   }, { passive: true, ...sig });
 
   RS.canvas.addEventListener('touchend', e => {
     if (sx === null || cancelled) { sx = null; return; }
-    const dx = e.changedTouches[0].clientX - sx;
-    const dy = e.changedTouches[0].clientY - sy;
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const dy   = Math.abs(endY - sy);
     sx = null;
-    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) {
-      if (RS.isCredits) { _handleCreditsClick(e.changedTouches[0].clientX, e.changedTouches[0].clientY); return; }
-      advance(); return;
-    }
-    if (Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
-    if (RS.isCredits) { _creditsClick(); return; }
-    if (dx < 0) advance(); else goBack();
+    // Ignorar si hay mucho movimiento vertical
+    if (dy > 40) return;
+    // Créditos: tap abre enlace
+    if (RS.isCredits) { _handleCreditsClick(endX, endY); return; }
+    // Mitad izquierda de pantalla → retroceder, mitad derecha → avanzar
+    if (endX < window.innerWidth / 2) goBack();
+    else advance();
   }, { passive: true, ...sig });
 }
 
