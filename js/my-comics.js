@@ -109,6 +109,7 @@ function _mcRenderList() {
                 ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">⏳ En revisión · Retirar</button>`
                 : `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`)
           }
+          ${comic.supabaseId ? `<button class="comic-row-btn" data-action="share" data-id="${comic.id}">📤 Enviar</button>` : ''}
           <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
       </div>
@@ -214,6 +215,9 @@ function _mcRenderList() {
       ComicStore.remove(id);
       _mcRenderList();
       _mcToast('Obra eliminada');
+    } else if (action === 'share') {
+      const comic = ComicStore.getById(id);
+      if (comic && typeof openShareModal !== 'undefined') openShareModal(comic);
     }
   });
 }

@@ -289,6 +289,16 @@ function buildRow(comic, currentUser) {
   readBtn.textContent = I18n.t('read');
   actions.appendChild(readBtn);
 
+  // Botón Enviar — solo para obras publicadas con supabaseId
+  if (comic.supabaseId) {
+    const shareBtn = document.createElement('a');
+    shareBtn.className = 'comic-row-btn';
+    shareBtn.href = '#';
+    shareBtn.textContent = '📤 Enviar';
+    shareBtn.onclick = (e) => { e.preventDefault(); openShareModal(comic); };
+    actions.appendChild(shareBtn);
+  }
+
   if (isOwner) {
     const editBtn = document.createElement('a');
     editBtn.className = 'comic-row-btn edit';
