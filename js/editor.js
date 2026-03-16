@@ -4236,6 +4236,83 @@ function edOpenProjectModal(){
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
 
 /* ── Destruir vista: eliminar todos los listeners de document/window ── */
+/* ── CÁMARA IN-APP (getUserMedia) ── */
+let _edCameraStream = null;
+let _edCameraFacing = 'environment'; // 'environment' = trasera, 'user' = frontal
+
+function edOpenCamera() {
+  const overlay = $('edCameraOverlay');
+  const video   = $('edCameraVideo');
+  if (!overlay || !video) return;
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    edToast('Cámara no disponible en este dispositivo');
+    return;
+  }
+
+  function startStream(facing) {
+    if (_edCameraStream) {
+      _edCameraStream.getTracks().forEach(t => t.stop());
+      _edCameraStream = null;
+    }
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    }).then(stream => {
+      _edCameraStream = stream;
+      video.srcObject = stream;
+      overlay.classList.remove('hidden');
+    }).catch(() => {
+      edToast('No se pudo acceder a la cámara');
+    });
+  }
+
+  startStream(_edCameraFacing);
+
+  // Capturar foto
+  const capBtn = $('edCameraCapture');
+  const closeBtn = $('edCameraClose');
+  const flipBtn = $('edCameraFlip');
+
+  // Usar AbortController para limpiar listeners al cerrar
+  const ac = new AbortController();
+  const sig = { signal: ac.signal };
+
+  function closeCamera() {
+    if (_edCameraStream) {
+      _edCameraStream.getTracks().forEach(t => t.stop());
+      _edCameraStream = null;
+    }
+    video.srcObject = null;
+    overlay.classList.add('hidden');
+    ac.abort();
+  }
+
+  capBtn?.addEventListener('click', () => {
+    if (!_edCameraStream) return;
+    const canvas = document.createElement('canvas');
+    const track  = _edCameraStream.getVideoTracks()[0];
+    const settings = track.getSettings();
+    canvas.width  = settings.width  || video.videoWidth;
+    canvas.height = settings.height || video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      if (blob) {
+        const file = new File([blob], 'photo.jpg', { type: 'image/jpeg' });
+        closeCamera();
+        edAddImage(file);
+      }
+    }, 'image/jpeg', 0.92);
+  }, sig);
+
+  closeBtn?.addEventListener('click', closeCamera, sig);
+
+  flipBtn?.addEventListener('click', () => {
+    _edCameraFacing = _edCameraFacing === 'environment' ? 'user' : 'environment';
+    startStream(_edCameraFacing);
+  }, sig);
+}
+
 function EditorView_destroy(){
   if(window._edListeners){
     window._edListeners.forEach(([el,evt,fn,opts])=>el.removeEventListener(evt,fn,opts));
@@ -4267,6 +4344,11 @@ function EditorView_destroy(){
   }
   // Limpiar timers
   clearTimeout(window._edLongPress);
+  // Parar cámara si estaba abierta
+  if (_edCameraStream) {
+    _edCameraStream.getTracks().forEach(t => t.stop());
+    _edCameraStream = null;
+  }
   edHideGearIcon();
 }
 function edSaveProjectModal(){
@@ -4425,12 +4507,10 @@ function EditorView_init(){
 
   // ── INSERTAR ──
   $('dd-gallery')?.addEventListener('click',()=>{$('edFileGallery').click();edCloseMenus();});
-  // dd-camera es <label for="edFileCapture"> — activa el input directamente, solo cerrar menú
-  $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); });
+  $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
   $('dd-textbox')?.addEventListener('click',()=>{edAddText();edCloseMenus();});
   $('dd-bubble')?.addEventListener('click', ()=>{edAddBubble();edCloseMenus();});
   $('edFileGallery')?.addEventListener('change',e=>{edAddImage(e.target.files[0]);e.target.value='';});
-  $('edFileCapture')?.addEventListener('change',e=>{edAddImage(e.target.files[0]);e.target.value='';});
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{

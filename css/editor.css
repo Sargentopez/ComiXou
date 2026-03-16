@@ -1380,3 +1380,59 @@ body.editor-page #appView {
   pointer-events: auto !important;
   opacity: 1 !important;
 }
+
+/* ── OVERLAY CÁMARA IN-APP ── */
+#edCameraOverlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+#edCameraOverlay.hidden { display: none !important; }
+#edCameraVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+#edCameraControls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 24px 32px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(transparent, rgba(0,0,0,0.55));
+}
+#edCameraCapture {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: #fff;
+  border: 4px solid rgba(255,255,255,0.6);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform .1s;
+}
+#edCameraCapture:active { transform: scale(0.92); }
+#edCameraClose, #edCameraFlip {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.45);
+  border: 1.5px solid rgba(255,255,255,0.4);
+  color: #fff;
+  font-size: 1.3rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}

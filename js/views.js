@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v7.60</footer>
+    <footer class="app-version">v7.61</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -206,7 +206,7 @@ Router.register('editor', {
                 Imagen
                 <div class="ed-subdropdown">
                   <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
-                  <label class="ed-dropdown-item" id="dd-camera" for="edFileCapture" style="cursor:pointer;display:block">Cámara</label>
+                  <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
                 </div>
               </div>
               <div class="ed-dropdown-item has-sub" style="position:relative">
@@ -356,8 +356,16 @@ Router.register('editor', {
 
     <!-- Inputs ocultos -->
     <input type="file" id="edFileGallery" accept="image/*,.gif,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
-    <input type="file" id="edFileCapture" accept="image/*" capture="environment" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
+    <!-- Overlay cámara in-app -->
+    <div id="edCameraOverlay" class="hidden">
+      <video id="edCameraVideo" autoplay playsinline muted></video>
+      <div id="edCameraControls">
+        <button id="edCameraClose" title="Cerrar">✕</button>
+        <button id="edCameraCapture" title="Capturar"></button>
+        <button id="edCameraFlip" title="Cambiar cámara">🔄</button>
+      </div>
+    </div>
     <div id="edBrushCursor"></div>
   `,
   init: () => EditorView_init(),
