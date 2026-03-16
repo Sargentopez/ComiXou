@@ -38,6 +38,11 @@ function ReaderView_init(params) {
   // Si la obra es antigua o texts está vacío, lo regeneramos aquí.
   _ensurePanelTexts(comic);
 
+  // DIAGNÓSTICO TEMPORAL
+  const _p0 = comic.panels[0];
+  alert('Panel 0: ' + (_p0.texts?.length||0) + ' texts\n' +
+    (_p0.texts||[]).map((t,i)=>i+': type='+t.type+' "'+String(t.text).slice(0,20)+'"').join('\n'));
+
   document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
 
   buildPanelElements();
@@ -347,6 +352,9 @@ function _showBubblesForPanel(idx) {
   if (!panelEl) return;
   const bubbles = Array.from(panelEl.querySelectorAll('.reader-bubble'));
 
+  // DIAGNÓSTICO
+  alert('Panel ' + idx + ': ' + bubbles.length + ' .reader-bubble encontrados\ntextMode=' + mode);
+
   // Resetear todos
   bubbles.forEach(b => b.classList.remove('visible'));
 
@@ -628,9 +636,15 @@ function _renderCreditsCanvas() {
 // CONTROLES
 // ════════════════════════════════════════
 function setupControls() {
-  // Botones PC
-  document.getElementById('nextBtn')?.addEventListener('click', advance);
-  document.getElementById('prevBtn')?.addEventListener('click', goBack);
+  // Botones PC — solo responden a click, no a touch (evita doble disparo con el stage)
+  document.getElementById('nextBtn')?.addEventListener('click', (e) => {
+    if (e.pointerType === 'touch') return; // el stage ya lo maneja
+    advance();
+  });
+  document.getElementById('prevBtn')?.addEventListener('click', (e) => {
+    if (e.pointerType === 'touch') return;
+    goBack();
+  });
 
   // Reiniciar
   document.getElementById('restartBtn')?.addEventListener('click', () => {
@@ -646,7 +660,11 @@ function setupControls() {
   };
   document.addEventListener('keydown', ReaderState._keyHandler);
 
-  // Swipe (móvil)
+  // Swipe (móvil) — AbortController para evitar acumulación en cada apertura del reproductor
+  if (ReaderState._stageAC) ReaderState._stageAC.abort();
+  ReaderState._stageAC = new AbortController();
+  const sig = { signal: ReaderState._stageAC.signal, passive: true };
+
   const stage = document.getElementById('readerStage');
   let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
 
@@ -654,7 +672,7 @@ function setupControls() {
     touchStartX    = e.touches[0].clientX;
     touchStartY    = e.touches[0].clientY;
     touchStartTime = Date.now();
-  }, { passive: true });
+  }, sig);
 
   stage.addEventListener('touchend', (e) => {
     const dx   = e.changedTouches[0].clientX - touchStartX;
@@ -670,7 +688,7 @@ function setupControls() {
       if (dx < 0) advance();  // swipe izquierda → avanzar
       else        goBack();   // swipe derecha → retroceder
     }
-  }, { passive: true });
+  }, sig);
 }
 
 // ════════════════════════════════════════
@@ -699,6 +717,7 @@ function ReaderView_destroy() {
     document.removeEventListener('keydown', ReaderState._keyHandler);
     ReaderState._keyHandler = null;
   }
+  if (ReaderState._stageAC) { ReaderState._stageAC.abort(); ReaderState._stageAC = null; }
   if (ReaderState.fadeRaf) { cancelAnimationFrame(ReaderState.fadeRaf); ReaderState.fadeRaf = null; }
   ReaderState.creditsCanvas = null;
   ReaderState.creditsCtx    = null;

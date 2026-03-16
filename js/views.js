@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v7.51</footer>
+    <footer class="app-version">v7.54</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -396,7 +396,7 @@ Router.register('reader', {
   `,
   init: (params) => ReaderView_init(params),
   destroy: () => {
-    if (typeof ReaderState !== 'undefined') ReaderState.comic = null;
+    if (typeof ReaderView_destroy === 'function') ReaderView_destroy();
   }
 });
 
