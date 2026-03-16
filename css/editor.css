@@ -86,21 +86,14 @@ body.editor-page #appView {
 /* Nav de páginas en topbar */
 .ed-top-pagnav {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 0;
   flex-shrink: 0;
-  padding-bottom: 4px;
-  align-self: flex-end;
-  /* Centrado absoluto en el topbar */
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  pointer-events: auto;
 }
 .ed-top-pagebn {
   background: none; border: none;
-  font-size: 0.9rem; color: var(--black);  /* triángulos más grandes */
-  width: 28px; height: 28px;
+  font-size: 0.9rem; color: var(--black);
+  width: 22px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; border-radius: 4px;
   padding: 0; line-height: 1;
