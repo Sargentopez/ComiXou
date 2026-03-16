@@ -118,6 +118,14 @@ function buildReaderTexts(panel, layer) {
     .filter(t => t.text)
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
+  // DIAGNÓSTICO — mostrar tipos reales de los textos del panel
+  const diagMsg = 'texts[' + items.length + ']: ' + items.map(t => t.type || 'UNDEF').join(',');
+  const diagEl = document.createElement('div');
+  diagEl.style.cssText = 'position:fixed;top:40px;left:4px;right:4px;background:rgba(0,0,0,0.85);color:#0f0;font-size:11px;padding:4px 8px;z-index:99999;border-radius:6px;word-break:break-all;pointer-events:none;';
+  diagEl.textContent = diagMsg;
+  document.body.appendChild(diagEl);
+  setTimeout(() => diagEl.remove(), 8000);
+
   items.forEach((t, i) => {
     const wrapper = document.createElement('div');
     wrapper.dataset.textIdx  = i;
