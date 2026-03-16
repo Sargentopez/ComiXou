@@ -39,6 +39,7 @@ const edCamera = { x: 0, y: 0, z: 1 };
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
+let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 // ── Multi-selección ──
@@ -3771,6 +3772,11 @@ function edSaveProject(){
     updatedAt:new Date().toISOString(),
   });
   edToast('Guardado ✓');
+  // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
+  _edSavedHistoryIdx = edHistoryIdx;
+  edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
+  edHistoryIdx = edHistory.length - 1;
+  _edSavedHistoryIdx = edHistoryIdx;
 }
 function edRenderPage(page){
   const _savedOrient = edOrientation;
@@ -3888,6 +3894,8 @@ function edDeserLayer(d, pageOrientation){
 function edLoadProject(id){
   const comic=ComicStore.getById(id);if(!comic)return;
   edProjectId=id;
+  // Resetear marcador de guardado — al cargar, el estado es "guardado"
+  edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'horizontal',social:comic.social||''};
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
@@ -4492,7 +4500,46 @@ function EditorView_init(){
   window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
 
   // ── TOPBAR ──
-  $('edBackBtn')?.addEventListener('click',()=>{edSaveProject();Router.go('my-comics');});
+  $('edBackBtn')?.addEventListener('click', () => {
+    const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
+    if (!hasUnsaved) { Router.go('my-comics'); return; }
+
+    // Hay cambios sin guardar — preguntar
+    const isNew = !ComicStore.getById(edProjectId)?.updatedAt ||
+                  ComicStore.getById(edProjectId)?.updatedAt === ComicStore.getById(edProjectId)?.createdAt;
+
+    const dlg = document.createElement('div');
+    dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
+    dlg.innerHTML = `
+      <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:320px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+        <div style="font-size:1.5rem;margin-bottom:12px">💾</div>
+        <p style="font-weight:700;font-size:1rem;margin-bottom:8px">¿Guardar cambios?</p>
+        <p style="font-size:.88rem;color:#666;margin-bottom:24px">Tienes cambios sin guardar en esta obra.</p>
+        <div style="display:flex;gap:10px;justify-content:center">
+          <button id="_edExitNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">No guardar</button>
+          <button id="_edExitYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">Guardar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(dlg);
+
+    document.getElementById('_edExitYes').onclick = () => {
+      dlg.remove();
+      edSaveProject();
+      Router.go('my-comics');
+    };
+    document.getElementById('_edExitNo').onclick = () => {
+      dlg.remove();
+      // Si era obra nueva sin guardado previo, eliminarla
+      if (isNew && edProjectId) {
+        ComicStore.remove(edProjectId);
+      } else {
+        // Restaurar último estado guardado
+        const saved = ComicStore.getById(edProjectId);
+        if (saved) edLoadProject(edProjectId);
+      }
+      Router.go('my-comics');
+    };
+  });
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
   $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
   function _edToggleMultiSel(){
