@@ -850,6 +850,17 @@ function _renderCredits(pw, ph) {
     ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6);
     ctx.stroke();
 
+    // Botón "Volver a leer"
+    const restartFS   = Math.round(fRef * 0.038);
+    const restartY    = linkY + linkFS * 2.2;
+    const restartText = '↩ Volver a leer';
+    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#888888';
+    ctx.textAlign = 'center';
+    ctx.fillText(restartText, rightCX, restartY);
+    const rw = ctx.measureText(restartText).width;
+    RS.creditsRestartArea = { x: rightCX - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
+
     ctx.globalAlpha = 1;
     RS.creditsLinkArea = { x: rightCX - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
 
@@ -910,6 +921,17 @@ function _renderCredits(pw, ph) {
     ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
     ctx.stroke();
 
+    // Botón "Volver a leer"
+    const restartFS   = Math.round(fRef * 0.038);
+    const restartY    = linkY + linkFS * 2.2;
+    const restartText = '↩ Volver a leer';
+    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#888888';
+    ctx.textAlign = 'center';
+    ctx.fillText(restartText, cx, restartY);
+    const rw = ctx.measureText(restartText).width;
+    RS.creditsRestartArea = { x: cx - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
+
     ctx.globalAlpha = 1;
     RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
   }
@@ -965,10 +987,20 @@ function _setupControls() {
     sx = null;
     // Ignorar si hay mucho movimiento vertical
     if (dy > 40) return;
-    // Créditos: tap abre enlace
-    if (RS.isCredits) { _handleCreditsClick(endX, endY); return; }
-    // División según orientación del dispositivo (recalcula en cada toque)
-    const devicePortrait = window.innerHeight > window.innerWidth;
+    // En créditos: izquierda retrocede, derecha solo gestiona el enlace
+    if (RS.isCredits) {
+      const devicePortrait = screen.orientation?.type
+        ? screen.orientation.type.startsWith('portrait')
+        : screen.height > screen.width;
+      const isLeft = devicePortrait ? endX < window.innerWidth / 2 : endY > window.innerHeight / 2;
+      if (isLeft) goBack();
+      else _handleCreditsClick(endX, endY); // detecta si toca el enlace
+      return;
+    }
+    // Orientación física del dispositivo (ignora orientación de la hoja)
+    const devicePortrait = screen.orientation?.type
+      ? screen.orientation.type.startsWith('portrait')
+      : screen.height > screen.width;
     if (devicePortrait) {
       if (endX < window.innerWidth / 2) goBack(); else advance();
     } else {
@@ -1007,9 +1039,13 @@ function _handleCreditsClick(clientX, clientY) {
   const la = RS.creditsLinkArea;
   if (la && cx >= la.x && cx <= la.x + la.w && cy >= la.y && cy <= la.y + la.h) {
     window.open('https://sargentopez.github.io/ComiXou/index.html', '_blank');
-  } else {
-    _creditsClick(); // Tap fuera del enlace → reiniciar
+    return;
   }
+  const ra = RS.creditsRestartArea;
+  if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
+    _creditsClick(); // Volver a leer → reinicia desde la primera hoja
+  }
+  // Tap fuera de ambas zonas → no hacer nada
 }
 
 

@@ -4119,13 +4119,13 @@ function edInitViewerTap(){
     _sx = null;
     // Ignorar si hay mucho movimiento vertical
     if(Math.abs(dy) > 40) return;
-    // División según orientación del dispositivo (recalcula en cada toque)
-    const devicePortrait = window.innerHeight > window.innerWidth;
+    // Orientación física del dispositivo (ignora orientación de la hoja)
+    const devicePortrait = screen.orientation?.type
+      ? screen.orientation.type.startsWith('portrait')
+      : screen.height > screen.width;
     if (devicePortrait) {
-      // Dispositivo vertical: pantalla dividida verticalmente (izq/der)
       if(endX < window.innerWidth / 2) _viewerBack(); else _viewerAdvance();
     } else {
-      // Dispositivo horizontal: pantalla dividida horizontalmente (arr/abj)
       if(endY < window.innerHeight / 2) _viewerBack(); else _viewerAdvance();
     }
   }, {passive:true, ...sig});

@@ -16,6 +16,7 @@ const ReaderState = {
   fadeRaf:         null,
   creditsCanvas:   null,
   creditsCtx:      null,
+  creditsRestartArea: null,
 };
 
 function ReaderView_init(params) {
@@ -382,7 +383,8 @@ function _showCreditsPanel() {
 function _resetCreditsState() {
   if (ReaderState.fadeRaf) { cancelAnimationFrame(ReaderState.fadeRaf); ReaderState.fadeRaf = null; }
   ReaderState.creditsAlpha = 0;
-  ReaderState.creditsShown = false;
+  // creditsShown NO se resetea — la hoja de créditos es persistente:
+  // una vez mostrada, siempre aparece directamente sin fade
 }
 
 function _renderCreditsCanvas() {
@@ -501,6 +503,17 @@ function _renderCreditsCanvas() {
     ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6);
     ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6);
     ctx.stroke();
+
+    // Botón "Volver a leer"
+    const restartFS = Math.round(fRef * 0.038);
+    const restartY  = linkY + linkFS * 2.2;
+    const restartText = '↩ Volver a leer';
+    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#888888';
+    ctx.textAlign = 'center';
+    ctx.fillText(restartText, rightCX, restartY);
+    ReaderState.creditsRestartArea = { x: rightCX - ctx.measureText(restartText).width/2 - 10, y: restartY - restartFS, w: ctx.measureText(restartText).width + 20, h: restartFS * 2.2 };
+
     ctx.globalAlpha = 1;
 
   } else {
@@ -555,6 +568,17 @@ function _renderCreditsCanvas() {
     ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
     ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
     ctx.stroke();
+
+    // Botón "Volver a leer"
+    const restartFS = Math.round(fRef * 0.038);
+    const restartY  = linkY + linkFS * 2.2;
+    const restartText = '↩ Volver a leer';
+    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#888888';
+    ctx.textAlign = 'center';
+    ctx.fillText(restartText, cx, restartY);
+    ReaderState.creditsRestartArea = { x: cx - ctx.measureText(restartText).width/2 - 10, y: restartY - restartFS, w: ctx.measureText(restartText).width + 20, h: restartFS * 2.2 };
+
     ctx.globalAlpha = 1;
   }
 }
@@ -604,10 +628,33 @@ function setupControls() {
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     const dy   = Math.abs(endY - touchStartY);
-    // Ignorar si hay mucho movimiento vertical
     if (dy > 40) return;
-    // División según orientación del dispositivo (recalcula en cada toque)
-    const devicePortrait = window.innerHeight > window.innerWidth;
+    // En créditos: izquierda retrocede, derecha detecta botón "Volver a leer"
+    if (ReaderState.currentPanel === ReaderState.comic.panels.length) {
+      const devicePortrait = screen.orientation?.type
+        ? screen.orientation.type.startsWith('portrait')
+        : screen.height > screen.width;
+      const isLeft = devicePortrait ? endX < window.innerWidth / 2 : endY > window.innerHeight / 2;
+      if (isLeft) { goBack(); return; }
+      // Derecha: comprobar si toca el botón "Volver a leer"
+      const canvas = ReaderState.creditsCanvas;
+      const ra = ReaderState.creditsRestartArea;
+      if (canvas && ra) {
+        const rect   = canvas.getBoundingClientRect();
+        const scaleX = canvas.width  / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const cx = (endX - rect.left) * scaleX;
+        const cy = (endY - rect.top)  * scaleY;
+        if (cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
+          goToPanel(0);
+        }
+      }
+      return;
+    }
+    // Orientación física del dispositivo (ignora orientación de la hoja)
+    const devicePortrait = screen.orientation?.type
+      ? screen.orientation.type.startsWith('portrait')
+      : screen.height > screen.width;
     if (devicePortrait) {
       if (endX < window.innerWidth / 2) goBack(); else advance();
     } else {
