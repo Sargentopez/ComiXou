@@ -713,7 +713,8 @@ function _renderCredits(pw, ph) {
   const authorText = RS._workAuthor || '';
   ctx.textBaseline = 'middle';
 
-  // Función auxiliar: divide texto en líneas respetando \n explícitos y wrap por maxW
+  // Función auxiliar: divide texto en líneas respetando \n explícitos y wrap por maxW.
+  // Si una palabra sola supera maxW, se corta carácter a carácter.
   function wrapText(text, maxW) {
     const result = [];
     const paragraphs = text.split('\n');
@@ -722,6 +723,22 @@ function _renderCredits(pw, ph) {
       const words = para.split(' ');
       let cur = '';
       words.forEach(w => {
+        // Si la palabra sola es más ancha que maxW, cortarla por caracteres
+        if (ctx.measureText(w).width > maxW) {
+          if (cur) { result.push(cur); cur = ''; }
+          let chunk = '';
+          for (const ch of w) {
+            const test = chunk + ch;
+            if (ctx.measureText(test).width > maxW && chunk) {
+              result.push(chunk); chunk = ch;
+            } else { chunk = test; }
+          }
+          if (chunk) {
+            // intentar unir con lo que siga
+            cur = chunk;
+          }
+          return;
+        }
         const test = cur ? cur + ' ' + w : w;
         if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
         else cur = test;

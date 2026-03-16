@@ -373,7 +373,8 @@ function _renderCreditsCanvas() {
   const authorText = comic.author || comic.username || '';
   ctx.textBaseline = 'middle';
 
-  // Función auxiliar wrap con \n explícitos
+  // Función auxiliar wrap con \n explícitos.
+  // Si una palabra sola supera maxW, se corta carácter a carácter.
   function wrapText(text, maxW) {
     const result = [];
     text.split('\n').forEach(para => {
@@ -381,6 +382,18 @@ function _renderCreditsCanvas() {
       const words = para.split(' ');
       let cur = '';
       words.forEach(w => {
+        if (ctx.measureText(w).width > maxW) {
+          if (cur) { result.push(cur); cur = ''; }
+          let chunk = '';
+          for (const ch of w) {
+            const test = chunk + ch;
+            if (ctx.measureText(test).width > maxW && chunk) {
+              result.push(chunk); chunk = ch;
+            } else { chunk = test; }
+          }
+          if (chunk) { cur = chunk; }
+          return;
+        }
         const test = cur ? cur + ' ' + w : w;
         if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
         else cur = test;
