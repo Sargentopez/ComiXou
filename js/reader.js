@@ -9,6 +9,13 @@ const ReaderState = {
   touchStartX:     0,
   touchStartY:     0,
   animating:       false,
+  totalPanels:     0,   // panels reales + 1 (créditos)
+  creditsShown:    false,
+  creditsAlpha:    0,
+  creditsTimer:    null,
+  fadeRaf:         null,
+  creditsCanvas:   null,
+  creditsCtx:      null,
 };
 
 function ReaderView_init(params) {
@@ -23,6 +30,8 @@ function ReaderView_init(params) {
   }
 
   ReaderState.comic = comic;
+  ReaderState.totalPanels = comic.panels.length + 1; // +1 para créditos
+  ReaderState.creditsShown = false;
   document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
 
   buildPanelElements();
@@ -61,6 +70,35 @@ function buildPanelElements() {
     div.appendChild(inner);
     stage.appendChild(div);
   });
+
+  // Panel de créditos: último panel, hereda orientación del último panel real
+  const lastPanel = ReaderState.comic.panels[ReaderState.comic.panels.length - 1];
+  const creditsOrient = lastPanel?.orientation || 'v';
+  const creditsIdx = ReaderState.comic.panels.length;
+
+  const creditsDiv = document.createElement('div');
+  creditsDiv.className = 'reader-panel orient-' + creditsOrient + ' reader-credits-panel';
+  creditsDiv.id = 'rp_' + creditsIdx;
+
+  const creditsInner = document.createElement('div');
+  creditsInner.className = 'reader-panel-inner';
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'reader-credits-canvas';
+  // Dimensiones canvas = dimensiones del panel según orientación
+  const ED_PAGE_W = 360, ED_PAGE_H = 780;
+  canvas.width  = creditsOrient === 'h' ? ED_PAGE_H : ED_PAGE_W;
+  canvas.height = creditsOrient === 'h' ? ED_PAGE_W : ED_PAGE_H;
+  canvas.style.width  = '100%';
+  canvas.style.height = '100%';
+
+  ReaderState.creditsCanvas = canvas;
+  ReaderState.creditsCtx    = canvas.getContext('2d');
+  ReaderState.creditsAlpha  = 0;
+
+  creditsInner.appendChild(canvas);
+  creditsDiv.appendChild(creditsInner);
+  stage.appendChild(creditsDiv);
 }
 
 function buildReaderTexts(panel, layer) {
@@ -148,13 +186,14 @@ function buildReaderTexts(panel, layer) {
 function goToPanel(idx) {
   if (ReaderState.animating) return;
   const panels = ReaderState.comic.panels;
-  if (idx < 0 || idx >= panels.length) return;
+  const creditsIdx = panels.length; // índice del panel de créditos
+  if (idx < 0 || idx > creditsIdx) return;
 
   ReaderState.animating = true;
 
   const prevIdx    = ReaderState.currentPanel;
-  const prevOrient = panels[prevIdx]?.orientation || 'h';
-  const nextOrient = panels[idx]?.orientation     || 'h';
+  const prevOrient = (idx === creditsIdx ? panels[prevIdx] : panels[prevIdx])?.orientation || 'h';
+  const nextOrient = (idx === creditsIdx ? panels[panels.length-1] : panels[idx])?.orientation || 'h';
   const orientChanges = prevOrient !== nextOrient;
 
   const prevEl = document.getElementById('rp_' + prevIdx);
@@ -162,21 +201,18 @@ function goToPanel(idx) {
 
   ReaderState.currentPanel     = idx;
   ReaderState.currentBubbleIdx = -1;
-  document.getElementById('readerPanelNum').textContent = (idx+1) + ' / ' + panels.length;
+
+  // Contador: créditos no cuenta como hoja numerada
+  const displayNum = Math.min(idx + 1, panels.length);
+  document.getElementById('readerPanelNum').textContent = displayNum + ' / ' + panels.length;
 
   if (orientChanges) {
-    // ── GIRO DE ORIENTACIÓN ──
-    // 1. Fade out de la viñeta anterior
     if (prevEl) {
       prevEl.style.transition = 'opacity 0.2s ease';
       prevEl.style.opacity    = '0';
     }
-
-    // 2. Preparar la nueva viñeta: empieza con la orientación ANTERIOR
-    //    y visible pero rotada 0º (se verá como si tuviese la forma equivocada)
     if (nextEl) {
       nextEl.classList.remove('active');
-      // Forzar orientación previa temporalmente para que el canvas tenga la forma anterior
       nextEl.classList.remove('orient-h', 'orient-v');
       nextEl.classList.add('orient-' + prevOrient);
       nextEl.style.opacity    = '1';
@@ -184,24 +220,18 @@ function goToPanel(idx) {
       nextEl.style.transition = 'none';
       nextEl.style.pointerEvents = 'none';
     }
-
     setTimeout(() => {
-      // 3. Mostrar la nueva viñeta y lanzar el giro
       if (nextEl) {
         nextEl.classList.add('active');
-        // Pequeña pausa para que el browser pinte el estado inicial antes de animar
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const deg = nextOrient === 'v' ? 90 : -90;
-            nextEl.style.transition = `transform 0.65s cubic-bezier(0.4, 0, 0.1, 1),
-                                       opacity   0.15s ease`;
+            nextEl.style.transition = `transform 0.65s cubic-bezier(0.4, 0, 0.1, 1), opacity 0.15s ease`;
             nextEl.style.transform  = `rotate(${deg}deg)`;
           });
         });
       }
     }, 200);
-
-    // 4. Al terminar el giro: quitar rotación, aplicar orientación correcta
     setTimeout(() => {
       if (nextEl) {
         nextEl.style.transition = 'none';
@@ -209,25 +239,20 @@ function goToPanel(idx) {
         nextEl.classList.remove('orient-' + prevOrient);
         nextEl.classList.add('orient-' + nextOrient);
         nextEl.style.pointerEvents = '';
-        // Restaurar transición de opacidad normal para el futuro
-        setTimeout(() => {
-          nextEl.style.transition = '';
-        }, 50);
+        setTimeout(() => { nextEl.style.transition = ''; }, 50);
       }
       ReaderState.animating = false;
-      _showBubblesForPanel(idx);
-      requestOrientationLock(nextOrient);
+      if (idx === creditsIdx) _showCreditsPanel();
+      else { _showBubblesForPanel(idx); requestOrientationLock(nextOrient); }
     }, 950);
 
   } else {
-    // ── TRANSICIÓN NORMAL (sin cambio de orientación): fade ──
     if (prevEl) prevEl.classList.remove('active');
     if (nextEl) nextEl.classList.add('active');
-
     setTimeout(() => {
       ReaderState.animating = false;
-      _showBubblesForPanel(idx);
-      requestOrientationLock(nextOrient);
+      if (idx === creditsIdx) _showCreditsPanel();
+      else { _showBubblesForPanel(idx); requestOrientationLock(nextOrient); }
     }, 100);
   }
 }
@@ -267,24 +292,218 @@ function showNextBubble() {
 }
 
 function advance() {
-  const panel = ReaderState.comic.panels[ReaderState.currentPanel];
+  const panels = ReaderState.comic.panels;
+  const creditsIdx = panels.length;
+  const panel = panels[ReaderState.currentPanel];
   const isSequential = (panel?.textMode || 'sequential') === 'sequential';
 
-  if (isSequential) {
-    // Modo secuencial: un bocadillo por tap
-    if (showNextBubble()) return;
-  }
-  // Avanzar a la siguiente viñeta
-  const next = ReaderState.currentPanel + 1;
-  if (next >= ReaderState.comic.panels.length) {
-    document.getElementById('endOverlay').classList.remove('hidden');
+  // En el panel de créditos: tap reinicia desde el principio
+  if (ReaderState.currentPanel === creditsIdx) {
+    if (!ReaderState.creditsShown) return; // esperando el fade
+    _resetCreditsState();
+    goToPanel(0);
     return;
   }
-  goToPanel(next);
+
+  if (isSequential) {
+    if (showNextBubble()) return;
+  }
+  // Avanzar: si es el último panel real, ir a créditos
+  const next = ReaderState.currentPanel + 1;
+  goToPanel(next); // next === creditsIdx irá a créditos
 }
 
 function goBack() {
   if (ReaderState.currentPanel > 0) goToPanel(ReaderState.currentPanel - 1);
+}
+
+// ════════════════════════════════════════
+// HOJA DE CRÉDITOS
+// ════════════════════════════════════════
+function _showCreditsPanel() {
+  if (ReaderState.creditsShown) {
+    // Ya se mostró antes: renderizar directamente con alpha=1
+    ReaderState.creditsAlpha = 1;
+    _renderCreditsCanvas();
+    return;
+  }
+  // Primera vez: fade-in del bloque logo/eslogan/enlace
+  ReaderState.creditsAlpha = 0;
+  _renderCreditsCanvas(); // dibuja social+autor inmediatamente
+  const dur = 1000, start = performance.now();
+  const fadeStep = (now) => {
+    ReaderState.creditsAlpha = Math.min(1, (now - start) / dur);
+    _renderCreditsCanvas();
+    if (ReaderState.creditsAlpha < 1) ReaderState.fadeRaf = requestAnimationFrame(fadeStep);
+    else { ReaderState.creditsShown = true; ReaderState.fadeRaf = null; }
+  };
+  ReaderState.fadeRaf = requestAnimationFrame(fadeStep);
+}
+
+function _resetCreditsState() {
+  if (ReaderState.fadeRaf) { cancelAnimationFrame(ReaderState.fadeRaf); ReaderState.fadeRaf = null; }
+  ReaderState.creditsAlpha = 0;
+  ReaderState.creditsShown = false;
+}
+
+function _renderCreditsCanvas() {
+  const canvas = ReaderState.creditsCanvas;
+  const ctx    = ReaderState.creditsCtx;
+  if (!canvas || !ctx) return;
+  const pw = canvas.width, ph = canvas.height;
+  const alpha = ReaderState.creditsAlpha || 0;
+  const comic = ReaderState.comic;
+
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+
+  const isHoriz    = pw > ph;
+  const socialText = comic.social || '';
+  const authorText = comic.author || comic.username || '';
+  ctx.textBaseline = 'middle';
+
+  // Función auxiliar wrap con \n explícitos
+  function wrapText(text, maxW) {
+    const result = [];
+    text.split('\n').forEach(para => {
+      if (!para.trim()) { result.push(''); return; }
+      const words = para.split(' ');
+      let cur = '';
+      words.forEach(w => {
+        const test = cur ? cur + ' ' + w : w;
+        if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
+        else cur = test;
+      });
+      if (cur) result.push(cur);
+    });
+    return result;
+  }
+
+  if (isHoriz) {
+    // Layout dos columnas
+    const fRef    = ph;
+    const leftX   = pw * 0.04;
+    const leftW   = pw * 0.52;
+    const colGap  = pw * 0.04;
+    const rightW  = pw * 0.44;
+    const rightCX = leftW + colGap + rightW / 2;
+
+    // Separador
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = '#888888';
+    ctx.fillRect(leftW + colGap * 0.4, ph * 0.1, 1, ph * 0.8);
+    ctx.globalAlpha = 1;
+
+    const socialFS = Math.round(fRef * 0.055);
+    const authorFS = Math.round(fRef * 0.072);
+    let socialLines = [];
+    if (socialText) {
+      ctx.font = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      socialLines = wrapText(socialText, leftW - pw * 0.02);
+    }
+    const socialLineH  = socialFS * 1.5;
+    const totalSocialH = socialLines.length * socialLineH;
+    const blockH = totalSocialH + (socialText ? socialFS * 1.2 : 0) + authorFS * 1.5;
+    let y = (ph - blockH) / 2 + socialLineH * 0.5;
+
+    if (socialText) {
+      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.fillStyle = '#444444';
+      ctx.textAlign = 'left';
+      socialLines.forEach(line => { ctx.fillText(line, leftX, y); y += socialLineH; });
+      y += socialFS * 0.8;
+    }
+    ctx.font      = `600 ${authorFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#222222';
+    ctx.textAlign = 'left';
+    ctx.fillText(authorText, leftX, y);
+
+    ctx.globalAlpha = alpha;
+    const logoFS   = Math.round(fRef * 0.13);
+    const sloganFS = Math.round(fRef * 0.055);
+    const linkFS   = Math.round(fRef * 0.045);
+    const rightBlockH = logoFS * 1.5 + sloganFS * 2.5 + linkFS * 2.5;
+    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
+
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.textAlign = 'center';
+    ctx.fillText('ComiXow', rightCX, rightStartY);
+
+    const sloganY = rightStartY + logoFS * 0.7 + sloganFS * 1.2;
+    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#555555';
+    ctx.fillText('Crea y Comparte', rightCX, sloganY);
+
+    const linkY    = sloganY + sloganFS * 0.7 + linkFS * 1.4;
+    const linkText = 'Visita más obras del autor';
+    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#1a73e8';
+    ctx.fillText(linkText, rightCX, linkY);
+    const lw = ctx.measureText(linkText).width;
+    ctx.beginPath();
+    ctx.strokeStyle = '#1a73e8';
+    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6);
+    ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+  } else {
+    // Layout vertical columna única
+    const fRef    = pw;
+    const cx      = pw / 2;
+    const marginX = pw * 0.09;
+    const maxW    = pw * 0.82;
+
+    let authorY = ph * 0.11;
+    if (socialText) {
+      const socialFS    = Math.round(fRef * 0.038);
+      ctx.font          = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.fillStyle     = '#444444';
+      ctx.textAlign     = 'left';
+      const socialLines = wrapText(socialText, maxW);
+      const socialLineH = socialFS * 1.4;
+      const socialStartY = ph * 0.26;
+      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+      authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
+    }
+
+    ctx.font      = `600 ${Math.round(fRef * 0.055)}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#222222';
+    ctx.textAlign = 'center';
+    ctx.fillText(authorText, cx, authorY);
+
+    ctx.globalAlpha = alpha;
+    const lineH    = ph * 0.09;
+    const logoFS   = Math.round(fRef * 0.11);
+    const logoY    = authorY + lineH * 1.3;
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.fillText('ComiXow', cx, logoY);
+
+    const sloganFS = Math.round(fRef * 0.042);
+    const sloganY  = logoY + sloganFS * 2;
+    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#555555';
+    ctx.fillText('Crea y Comparte', cx, sloganY);
+
+    const linkFS   = Math.round(fRef * 0.038);
+    const linkY    = sloganY + sloganFS * 3;
+    const linkText = 'Visita más obras del autor';
+    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#1a73e8';
+    ctx.fillText(linkText, cx, linkY);
+    const lw = ctx.measureText(linkText).width;
+    ctx.beginPath();
+    ctx.strokeStyle = '#1a73e8';
+    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
+    ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 }
 
 // ════════════════════════════════════════
@@ -358,12 +577,12 @@ function showSwipeHint() {
 // LIMPIEZA DE VISTA (obligatorio para SPA)
 // ════════════════════════════════════════
 function ReaderView_destroy() {
-  // Eliminar el listener de teclado para evitar acumulación
-  // (setupControls lo registra; cada visita al reader añadiría uno más sin esto)
   if (ReaderState._keyHandler) {
     document.removeEventListener('keydown', ReaderState._keyHandler);
     ReaderState._keyHandler = null;
   }
-  // Liberar referencias al cómic para que el GC pueda limpiar
+  if (ReaderState.fadeRaf) { cancelAnimationFrame(ReaderState.fadeRaf); ReaderState.fadeRaf = null; }
+  ReaderState.creditsCanvas = null;
+  ReaderState.creditsCtx    = null;
   ReaderState.comic = null;
 }

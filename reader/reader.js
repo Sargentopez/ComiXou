@@ -707,85 +707,174 @@ function _renderCredits(pw, ph) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
 
-  const cx = pw / 2;
   const isHoriz = pw > ph;
-  // En horizontal ph es la dimensión corta (360) — usarla como base de escala de fuentes
-  const fRef  = isHoriz ? ph : pw;
-  const lineH = ph * (isHoriz ? 0.07 : 0.09);
-
-  // ── Social + autor ──
   const socialText = RS._workSocial || '';
   const authorText = RS._workAuthor || '';
-  ctx.globalAlpha  = 1;
   ctx.textBaseline = 'middle';
 
-  let authorY = ph * (isHoriz ? 0.11 : 0.11);
-
-  if (socialText) {
-    const socialFS = Math.round(fRef * (isHoriz ? 0.05 : 0.038));
-    ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#444444';
-    ctx.textAlign = 'left';
-    const marginX = pw * 0.09;
-    const maxW    = pw * 0.82;
-    const words   = socialText.split(' ');
-    const lines   = [];
-    let cur = '';
-    words.forEach(w => {
-      const test = cur ? cur + ' ' + w : w;
-      if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; }
-      else cur = test;
+  // Función auxiliar: divide texto en líneas respetando \n explícitos y wrap por maxW
+  function wrapText(text, maxW) {
+    const result = [];
+    const paragraphs = text.split('\n');
+    paragraphs.forEach(para => {
+      if (!para.trim()) { result.push(''); return; }
+      const words = para.split(' ');
+      let cur = '';
+      words.forEach(w => {
+        const test = cur ? cur + ' ' + w : w;
+        if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
+        else cur = test;
+      });
+      if (cur) result.push(cur);
     });
-    if (cur) lines.push(cur);
-    const socialLineH  = socialFS * 1.4;
-    const totalSocialH = lines.length * socialLineH;
-    const socialStartY = ph * (isHoriz ? 0.12 : 0.26);
-    lines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
-    authorY = socialStartY + totalSocialH + socialFS * 0.9;
+    return result;
   }
 
-  // Nombre del autor — centrado
-  ctx.font      = `600 ${Math.round(fRef * (isHoriz ? 0.07 : 0.055))}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#222222';
-  ctx.textAlign = 'center';
-  ctx.fillText(authorText, cx, authorY);
+  if (isHoriz) {
+    // ── LAYOUT HORIZONTAL: dos columnas ──────────────────────
+    // Columna izquierda (55%): social + autor
+    // Columna derecha (45%): logo + eslogan + enlace (con fade)
+    const fRef   = ph;  // base de escala = altura (dimensión corta)
+    const colGap = pw * 0.04;
+    const leftW  = pw * 0.52;
+    const rightW = pw * 0.44;
+    const leftX  = pw * 0.04;
+    const rightCX = leftW + colGap + rightW / 2;
+    const padV   = ph * 0.08;
 
-  // ── Resto con fade ──────────────────────────────────────────
-  ctx.globalAlpha = alpha;
+    // Separador vertical central
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = '#888888';
+    ctx.fillRect(leftW + colGap * 0.4, ph * 0.1, 1, ph * 0.8);
+    ctx.globalAlpha = 1;
 
-  // Logotipo ComiXow
-  const logoFS  = Math.round(fRef * (isHoriz ? 0.13 : 0.11));
-  const logoY   = authorY + lineH * 1.3;
-  ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#f5c400';
-  ctx.fillText('ComiXow', cx, logoY);
+    // ── Columna izquierda: social + autor ──
+    const socialFS   = Math.round(fRef * 0.055);
+    const authorFS   = Math.round(fRef * 0.072);
+    const socialMaxW = leftW - pw * 0.02;
 
-  // Eslogan — 2 × sloganFS desde la base del logo (medido en imagen de referencia)
-  const sloganFS = Math.round(fRef * (isHoriz ? 0.055 : 0.042));
-  const sloganY  = logoY + sloganFS * 2;
-  ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#555555';
-  ctx.fillText('Crea y Comparte', cx, sloganY);
+    let socialLines = [];
+    if (socialText) {
+      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      socialLines   = wrapText(socialText, socialMaxW);
+    }
+    const socialLineH  = socialFS * 1.5;
+    const totalSocialH = socialLines.length * socialLineH;
+    const blockH       = totalSocialH + (socialText ? socialFS * 1.2 : 0) + authorFS * 1.5;
+    let y = (ph - blockH) / 2 + socialLineH * 0.5;
 
-  // Enlace — 3 × sloganFS desde la base del eslogan (medido en imagen de referencia)
-  const linkFS = Math.round(fRef * (isHoriz ? 0.045 : 0.038));
-  const linkY  = sloganY + sloganFS * 3;
-  ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#1a73e8';
-  const linkText = 'Visita más obras del autor';
-  ctx.fillText(linkText, cx, linkY);
-  const lw = ctx.measureText(linkText).width;
-  ctx.beginPath();
-  ctx.strokeStyle = '#1a73e8';
-  ctx.lineWidth   = Math.max(1, linkFS * 0.06);
-  ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
-  ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
-  ctx.stroke();
+    if (socialText) {
+      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.fillStyle = '#444444';
+      ctx.textAlign = 'left';
+      socialLines.forEach(line => {
+        ctx.fillText(line, leftX, y);
+        y += socialLineH;
+      });
+      y += socialFS * 0.8;
+    }
 
-  ctx.globalAlpha = 1;
+    // Nombre del autor
+    ctx.font      = `600 ${authorFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#222222';
+    ctx.textAlign = 'left';
+    ctx.fillText(authorText, leftX, y);
 
-  // Guardar zona del enlace para detectar click (en coords de canvas)
-  RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+    // ── Columna derecha: logo + eslogan + enlace (con fade) ──
+    ctx.globalAlpha = alpha;
+
+    const logoFS   = Math.round(fRef * 0.13);
+    const sloganFS = Math.round(fRef * 0.055);
+    const linkFS   = Math.round(fRef * 0.045);
+    const rightBlockH = logoFS * 1.5 + sloganFS * 2.5 + linkFS * 2.5;
+    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
+
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.textAlign = 'center';
+    ctx.fillText('ComiXow', rightCX, rightStartY);
+
+    const sloganY = rightStartY + logoFS * 0.7 + sloganFS * 1.2;
+    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#555555';
+    ctx.fillText('Crea y Comparte', rightCX, sloganY);
+
+    const linkY   = sloganY + sloganFS * 0.7 + linkFS * 1.4;
+    const linkText = 'Visita más obras del autor';
+    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#1a73e8';
+    ctx.fillText(linkText, rightCX, linkY);
+    const lw = ctx.measureText(linkText).width;
+    ctx.beginPath();
+    ctx.strokeStyle = '#1a73e8';
+    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6);
+    ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6);
+    ctx.stroke();
+
+    ctx.globalAlpha = 1;
+    RS.creditsLinkArea = { x: rightCX - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+
+  } else {
+    // ── LAYOUT VERTICAL: columna única ───────────────────────
+    const fRef   = pw;
+    const cx     = pw / 2;
+    const marginX = pw * 0.09;
+    const maxW    = pw * 0.82;
+
+    // Social
+    let authorY = ph * 0.11;
+    if (socialText) {
+      const socialFS    = Math.round(fRef * 0.038);
+      ctx.font          = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.fillStyle     = '#444444';
+      ctx.textAlign     = 'left';
+      const socialLines = wrapText(socialText, maxW);
+      const socialLineH = socialFS * 1.4;
+      const socialStartY = ph * 0.26;
+      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+      authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
+    }
+
+    // Autor
+    ctx.font      = `600 ${Math.round(fRef * 0.055)}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#222222';
+    ctx.textAlign = 'center';
+    ctx.fillText(authorText, cx, authorY);
+
+    // Resto con fade
+    ctx.globalAlpha = alpha;
+
+    const lineH    = ph * 0.09;
+    const logoFS   = Math.round(fRef * 0.11);
+    const logoY    = authorY + lineH * 1.3;
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.fillText('ComiXow', cx, logoY);
+
+    const sloganFS = Math.round(fRef * 0.042);
+    const sloganY  = logoY + sloganFS * 2;
+    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#555555';
+    ctx.fillText('Crea y Comparte', cx, sloganY);
+
+    const linkFS   = Math.round(fRef * 0.038);
+    const linkY    = sloganY + sloganFS * 3;
+    const linkText = 'Visita más obras del autor';
+    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#1a73e8';
+    ctx.fillText(linkText, cx, linkY);
+    const lw = ctx.measureText(linkText).width;
+    ctx.beginPath();
+    ctx.strokeStyle = '#1a73e8';
+    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
+    ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
+    ctx.stroke();
+
+    ctx.globalAlpha = 1;
+    RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+  }
 }
 
 
