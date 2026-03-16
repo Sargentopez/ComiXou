@@ -42,14 +42,19 @@ document.addEventListener('DOMContentLoaded', () => {
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
   const _doClose = () => {
-    if (history.length > 1) history.back();
-    else window.close();
+    if (history.length > 1) { history.back(); return; }
+    // Intentar cerrar la pestaña
+    window.close();
+    // Si seguimos aquí, el navegador bloqueó el cierre — mostrar instrucción
+    setTimeout(() => {
+      _readerToast('Cierra esta pestaña con el botón ✕ del navegador', 4000);
+    }, 300);
   };
 
   const _closeAction = RS.isEmbed
     ? _embedClose
     : () => {
-        // Salir de fullscreen primero si está activo
+        // Salir de fullscreen primero si está activo, luego cerrar
         if (document.fullscreenElement || document.webkitFullscreenElement) {
           const exit = document.exitFullscreen || document.webkitExitFullscreen;
           if (exit) { exit.call(document).then(_doClose).catch(_doClose); return; }
