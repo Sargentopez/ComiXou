@@ -4245,18 +4245,10 @@ function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
 
 /* ── Destruir vista: eliminar todos los listeners de document/window ── */
 // Detecta si el toque está en el lado "retroceder" según orientación física del dispositivo.
-// Usa screen.orientation.angle (estándar W3C Screen Orientation API):
-// 0°=portrait normal, 90°=landscape izq, 180°=portrait al revés, 270°=landscape der
+// El navegador ya transforma las coordenadas táctiles al sistema del usuario.
+// "Izquierda del usuario" es siempre endX < W/2, independientemente del ángulo del dispositivo.
 function _isBackSide(endX, endY) {
-  const angle = screen.orientation?.angle ?? 0;
-  const W = window.innerWidth, H = window.innerHeight;
-  switch (angle) {
-    case 0:   return endX < W / 2;  // portrait normal:    izquierda física = X < mitad
-    case 90:  return endY > H / 2;  // landscape izq:      izquierda física = abajo pantalla
-    case 180: return endX > W / 2;  // portrait al revés:  izquierda física = derecha pantalla
-    case 270: return endY < H / 2;  // landscape der:      izquierda física = arriba pantalla
-    default:  return endX < W / 2;
-  }
+  return endX < window.innerWidth / 2;
 }
 
 

@@ -195,17 +195,10 @@ function buildReaderTexts(panel, layer) {
 // ════════════════════════════════════════
 // NAVEGACIÓN
 // ════════════════════════════════════════
-// Detecta lado "retroceder" según orientación física (screen.orientation.angle, estándar W3C)
+// El navegador transforma las coordenadas táctiles al sistema del usuario.
+// "Izquierda del usuario" es siempre endX < W/2, independientemente del ángulo.
 function _isBackSide(endX, endY) {
-  const angle = screen.orientation?.angle ?? 0;
-  const W = window.innerWidth, H = window.innerHeight;
-  switch (angle) {
-    case 0:   return endX < W / 2;
-    case 90:  return endY > H / 2;
-    case 180: return endX > W / 2;
-    case 270: return endY < H / 2;
-    default:  return endX < W / 2;
-  }
+  return endX < window.innerWidth / 2;
 }
 
 function goToPanel(idx) {
