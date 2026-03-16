@@ -114,29 +114,31 @@ function buildPanelElements() {
 function buildReaderTexts(panel, layer) {
   if (!panel.texts || panel.texts.length === 0) return;
 
-  // Todos los objetos de texto (bocadillos y cajas) ordenados por 'order'.
-  // Aparecen todos ocultos al inicio; _showBubblesForPanel los va revelando.
   const items = panel.texts
     .filter(t => t.text)
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
   items.forEach((t, i) => {
-    if (t.type === 'dialog') {
-      // ── BOCADILLO con cola ────────────────────────────────────
-      const wrapper = document.createElement('div');
+    const wrapper = document.createElement('div');
+    wrapper.dataset.textIdx  = i;
+    wrapper.dataset.textType = t.type; // 'bubble' o 'text'
+
+    if (t.type === 'bubble') {
+      // ── BOCADILLO ────────────────────────────────────────────
       wrapper.className = 'reader-bubble';
       wrapper.style.left  = t.x + '%';
       wrapper.style.top   = t.y + '%';
       wrapper.style.width = (t.w || 30) + '%';
-      wrapper.dataset.bubbleIdx = i;
 
       const inner = document.createElement('div');
       inner.className = 'reader-bubble-inner';
-      inner.style.fontFamily  = t.fontFamily || 'Comic Sans MS, cursive';
-      inner.style.fontSize    = Math.round((t.fontSize || 18) * 0.85) + 'px';
-      inner.style.color       = t.color || '#000';
-      inner.style.background  = t.bg || '#fff';
-      inner.style.borderWidth = (t.border || 2) + 'px';
+      inner.style.fontFamily  = t.fontFamily  || 'Patrick Hand, sans-serif';
+      inner.style.fontSize    = Math.round((t.fontSize || 30) * 0.85) + 'px';
+      inner.style.fontWeight  = t.fontBold   ? '700' : '400';
+      inner.style.fontStyle   = t.fontItalic ? 'italic' : 'normal';
+      inner.style.color       = t.color      || '#000';
+      inner.style.background  = t.bg         || '#fff';
+      inner.style.borderWidth = (t.border    || 2) + 'px';
       inner.style.borderColor = t.borderColor || '#000';
       inner.style.borderStyle = t.style === 'lowvoice' ? 'dashed' : 'solid';
       if      (t.style === 'explosion') { inner.style.borderRadius = '4px'; inner.style.transform = 'rotate(-1deg)'; }
@@ -145,48 +147,46 @@ function buildReaderTexts(panel, layer) {
 
       inner.appendChild(Object.assign(document.createElement('span'), { textContent: t.text }));
 
+      // Cola SVG para estilos que la tienen
       if (t.style !== 'thought' && t.style !== 'radio') {
-        const svg  = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         svg.setAttribute('class', 'reader-tail tail-' + (t.tail || 'bottom'));
         svg.setAttribute('viewBox', '0 0 30 22');
         const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         p.setAttribute('d', 'M0 0 L15 22 L30 0 Z');
-        p.setAttribute('fill', t.bg || 'white');
-        p.setAttribute('stroke', t.borderColor || 'black');
-        p.setAttribute('stroke-width', '2.5');
+        p.setAttribute('fill',          t.bg          || 'white');
+        p.setAttribute('stroke',        t.borderColor || 'black');
+        p.setAttribute('stroke-width',  '2.5');
         p.setAttribute('stroke-linejoin', 'round');
         svg.appendChild(p);
         inner.appendChild(svg);
       }
-
       wrapper.appendChild(inner);
-      layer.appendChild(wrapper);
 
     } else {
-      // ── CAJA DE TEXTO (TextLayer) — misma animación que bocadillos ──
-      const wrapper = document.createElement('div');
-      wrapper.className = 'reader-bubble reader-textbox';  // comparte clase .reader-bubble para animación
+      // ── CAJA DE TEXTO — siempre visible, no secuencial ───────
+      wrapper.className = 'reader-textbox reader-textbox-always';
       wrapper.style.left  = t.x + '%';
       wrapper.style.top   = t.y + '%';
       wrapper.style.width = (t.w || 25) + '%';
-      wrapper.dataset.bubbleIdx = i;
 
       const inner = document.createElement('div');
       inner.className = 'reader-bubble-inner reader-textbox-inner';
-      inner.style.fontFamily  = t.fontFamily || 'Arial';
-      inner.style.fontSize    = Math.round((t.fontSize || 20) * 0.85) + 'px';
-      inner.style.color       = t.color || '#000';
-      inner.style.background  = t.bg || '#fff';
-      inner.style.borderWidth = (t.border || 0) + 'px';
+      inner.style.fontFamily  = t.fontFamily  || 'Patrick Hand, sans-serif';
+      inner.style.fontSize    = Math.round((t.fontSize || 30) * 0.85) + 'px';
+      inner.style.fontWeight  = t.fontBold   ? '700' : '400';
+      inner.style.fontStyle   = t.fontItalic ? 'italic' : 'normal';
+      inner.style.color       = t.color      || '#000';
+      inner.style.background  = t.bg         || 'transparent';
+      inner.style.borderWidth = (t.border    || 0) + 'px';
       inner.style.borderColor = t.borderColor || '#000';
       inner.style.borderStyle = 'solid';
       inner.style.borderRadius = '6px';
-      // Sin cola — es una caja de texto normal
       inner.appendChild(Object.assign(document.createElement('span'), { textContent: t.text }));
-
       wrapper.appendChild(inner);
-      layer.appendChild(wrapper);
     }
+
+    layer.appendChild(wrapper);
   });
 }
 
@@ -267,49 +267,44 @@ function goToPanel(idx) {
   }
 }
 
-// Oculta todos los bocadillos de un panel (para resetear al salir/entrar)
-function _hideBubblesForPanel(idx) {
-  const panelEl = document.getElementById('rp_' + idx);
-  if (!panelEl) return;
-  panelEl.querySelectorAll('.reader-bubble').forEach(b => b.classList.remove('visible'));
-}
-
-// Inicializa los bocadillos al entrar en un panel — igual que el editor:
-// sequential: muestra el primero (textStep=1), currentBubbleIdx=0
+// Inicializa bocadillos al entrar en un panel.
+// Las cajas de texto (.reader-textbox-always) son siempre visibles por CSS — no se tocan.
+// Solo se gestionan los .reader-bubble (bocadillos type='bubble').
+// sequential: muestra el primero, oculta el resto
 // immediate:  muestra todos
 function _showBubblesForPanel(idx) {
-  const panel = ReaderState.comic.panels[idx];
-  const mode  = panel?.textMode || 'sequential';
+  const panel   = ReaderState.comic.panels[idx];
+  const mode    = panel?.textMode || 'sequential';
   const panelEl = document.getElementById('rp_' + idx);
   if (!panelEl) return;
-  const bubbles = panelEl.querySelectorAll('.reader-bubble');
+  const bubbles = Array.from(panelEl.querySelectorAll('.reader-bubble'));
 
-  // Siempre resetear primero (por si se vuelve atrás)
+  // Resetear todos
   bubbles.forEach(b => b.classList.remove('visible'));
 
   if (bubbles.length === 0) { ReaderState.currentBubbleIdx = -1; return; }
 
   if (mode === 'sequential') {
-    // Igual que editor: textStep empieza en 1 → muestra bubbles[0]
     bubbles[0].classList.add('visible');
     ReaderState.currentBubbleIdx = 0;
   } else {
-    // Immediate: todos visibles de una vez, escalonados levemente
     bubbles.forEach((b, i) => setTimeout(() => b.classList.add('visible'), i * 80));
     ReaderState.currentBubbleIdx = bubbles.length - 1;
   }
 }
 
-// Avanza un bocadillo en el panel actual. Devuelve true si había siguiente.
-// Igual que _viewerAdvance del editor: si textStep < total → muestra siguiente
+// Avanza al siguiente bocadillo. Solo muestra el actual, oculta el anterior (igual que editor).
+// Devuelve true si había siguiente bocadillo.
 function _advanceBubble() {
   const panel = ReaderState.comic.panels[ReaderState.currentPanel];
   if ((panel?.textMode || 'sequential') !== 'sequential') return false;
   const panelEl = document.getElementById('rp_' + ReaderState.currentPanel);
   if (!panelEl) return false;
-  const bubbles = panelEl.querySelectorAll('.reader-bubble');
+  const bubbles = Array.from(panelEl.querySelectorAll('.reader-bubble'));
   const next = ReaderState.currentBubbleIdx + 1;
   if (next < bubbles.length) {
+    // Ocultar el anterior, mostrar el siguiente (igual que editor)
+    if (ReaderState.currentBubbleIdx >= 0) bubbles[ReaderState.currentBubbleIdx].classList.remove('visible');
     bubbles[next].classList.add('visible');
     ReaderState.currentBubbleIdx = next;
     return true;
@@ -317,17 +312,17 @@ function _advanceBubble() {
   return false;
 }
 
-// Retrocede un bocadillo. Devuelve true si había anterior.
-// Igual que _viewerBack del editor
+// Retrocede al bocadillo anterior. Devuelve true si había anterior.
 function _backBubble() {
   const panel = ReaderState.comic.panels[ReaderState.currentPanel];
   if ((panel?.textMode || 'sequential') !== 'sequential') return false;
   const panelEl = document.getElementById('rp_' + ReaderState.currentPanel);
   if (!panelEl) return false;
-  const bubbles = panelEl.querySelectorAll('.reader-bubble');
+  const bubbles = Array.from(panelEl.querySelectorAll('.reader-bubble'));
   if (ReaderState.currentBubbleIdx > 0) {
     bubbles[ReaderState.currentBubbleIdx].classList.remove('visible');
     ReaderState.currentBubbleIdx--;
+    bubbles[ReaderState.currentBubbleIdx].classList.add('visible');
     return true;
   }
   return false;
