@@ -158,6 +158,8 @@ async function loadWork(workId) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    // Actualizar meta OG con datos reales de la obra
+    _updateOGMeta(work[0].title, work[0].author_name);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -184,6 +186,7 @@ async function loadDraft(token) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    _updateOGMeta(work[0].title, work[0].author_name);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
@@ -1066,6 +1069,16 @@ function _handleCreditsClick(clientX, clientY) {
 
 
 function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }
+
+function _updateOGMeta(title, author) {
+  const t = (title || 'ComiXow') + ' — ComiXow';
+  const d = author ? `Una obra de ${author} en ComiXow` : 'Abre esta obra en el reproductor de ComiXow';
+  document.title = t;
+  document.querySelector('meta[property="og:title"]')      ?.setAttribute('content', t);
+  document.querySelector('meta[property="og:description"]')?.setAttribute('content', d);
+  document.querySelector('meta[name="twitter:title"]')     ?.setAttribute('content', t);
+  document.querySelector('meta[name="twitter:description"]')?.setAttribute('content', d);
+}
 function showError(msg) {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('errorScreen').classList.remove('hidden');
