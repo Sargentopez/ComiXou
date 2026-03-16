@@ -2941,7 +2941,7 @@ function edRenderOptionsPanel(mode){
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-draw-minimize"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
+      style="flex-shrink:0;border:none;border-radius:6px;padding:3px 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
@@ -4761,6 +4761,7 @@ function EditorView_init(){
     else edRedo();
   });
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
+  $('edMenuMinBtn')?.addEventListener('click',edMinimize);
   edPushHistory();
   edInitFloatDrag();
   edInitDrawBar();

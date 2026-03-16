@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v7.86</footer>
+    <footer class="app-version">v7.88</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -195,8 +195,14 @@ Router.register('editor', {
       <!-- ── BARRA DE MENÚ ── -->
       <div id="edMenuBar">
 
-        <!-- ZONA DESLIZABLE (el minimizar ya no está aquí) -->
+        <!-- ZONA DESLIZABLE -->
         <div id="edMenuScroll">
+
+          <!-- MINIMIZAR — primer elemento, a la izquierda de Insertar -->
+          <button id="edMenuMinBtn" class="ed-menu-btn" title="Ocultar menús"
+            style="color:#e63030;font-weight:900;font-size:1.1rem;padding:0 8px;flex-shrink:0">▼</button>
+
+          <div class="ed-menu-sep"></div>
 
           <!-- INSERTAR -->
           <div class="ed-menu-item" style="position:relative">
