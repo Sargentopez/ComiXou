@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v7.82</footer>
+    <footer class="app-version">v7.83</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -306,11 +306,6 @@ Router.register('editor', {
         <div class="edb-sep"></div>
         <button id="edb-color"  class="edb-swatch" title="Color"></button>
         <button id="edb-size"   class="edb-sizebtn" title="Grosor"><span id="edb-size-dot"></span></button>
-        <input id="edb-size-num" type="number" min="1" max="80" value="8"
-          style="width:32px;text-align:center;font-size:0.75rem;font-weight:700;
-                 border:1px solid rgba(255,255,255,0.3);border-radius:6px;
-                 background:rgba(0,0,0,0.3);color:#fff;padding:2px 2px;
-                 -moz-appearance:textfield;" title="Grosor en px">
         <div class="edb-sep"></div>
         <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
         <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>
@@ -319,6 +314,16 @@ Router.register('editor', {
       </div>
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
+      <!-- Popover grosor barra flotante -->
+      <div id="edb-size-pop" style="display:none;position:absolute;background:rgba(30,30,30,0.95);border-radius:10px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:1200;align-items:center;gap:6px;min-width:160px">
+        <input type="range" id="edb-size-slider" min="1" max="48" value="8"
+          style="flex:1;accent-color:#fff;min-width:80px">
+        <input type="number" id="edb-size-num" min="1" max="80" value="8"
+          style="width:36px;text-align:center;font-size:.8rem;font-weight:700;
+                 border:1px solid rgba(255,255,255,0.4);border-radius:6px;
+                 background:rgba(0,0,0,.4);color:#fff;padding:2px 4px;
+                 -moz-appearance:textfield;">
+      </div>
 
     </div>
 

@@ -2911,19 +2911,18 @@ function edRenderOptionsPanel(mode){
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
         style="flex:1;min-width:40px;accent-color:var(--black)">
+      <input type="number" id="op-dsize-num" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
+        style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     <button id="op-opacity-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
-    <input id="op-draw-opacity-num" type="number" min="1" max="100" value="${edDrawOpacity}"
-      style="width:38px;text-align:center;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-700);
-             border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;
-             background:transparent;-moz-appearance:textfield;flex-shrink:0"
-      title="Opacidad %">
     <div id="op-opacity-slider"
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
         style="flex:1;min-width:40px;accent-color:var(--black)">
+      <input type="number" id="op-draw-opacity-num" min="1" max="100" value="${edDrawOpacity}"
+        style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     ${isEr ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
@@ -2943,12 +2942,6 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-draw-minimize"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
-    <input id="op-draw-info"
-      type="number" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
-      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-700);
-             border:1px solid var(--gray-300);border-radius:6px;padding:2px 6px;width:0;min-width:0;
-             background:transparent;-moz-appearance:textfield;"
-      title="Grosor en píxeles">
     <button id="op-draw-ok"
       style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -2998,33 +2991,27 @@ function edRenderOptionsPanel(mode){
       });
     });
 
-    // ── Grosor: botón toggle abre/cierra slider ──
+    // ── Grosor: botón toggle (mutuamente exclusivo con opacidad) ──
     $('op-size-btn')?.addEventListener('click',()=>{
       const sl=$('op-size-slider'), slO=$('op-opacity-slider');
       if(!sl) return;
-      const open = sl.style.display === 'none' || sl.style.display === '';
+      const open = sl.style.display==='none' || sl.style.display==='';
       sl.style.display = open ? 'flex' : 'none';
-      if(open && slO) slO.style.display='none';  // cerrar el otro si estaba abierto
-      const btn=$('op-size-btn');
-      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
-      const btnO=$('op-opacity-btn');
-      if(btnO) btnO.style.background = 'transparent';
+      if(open && slO){ slO.style.display='none'; $('op-opacity-btn').style.background='transparent'; }
+      $('op-size-btn').style.background = open ? 'var(--gray-200)' : 'transparent';
     });
     $('op-dsize')?.addEventListener('input',e=>{
       const v=+e.target.value;
-      if(edActiveTool==='eraser') edEraserSize=v;
-      else edDrawSize=v;
-      if(info && info.tagName==='INPUT') info.value=v;
+      if(edActiveTool==='eraser') edEraserSize=v; else edDrawSize=v;
+      const num=$('op-dsize-num'); if(num) num.value=v;
       _edbSyncSize();
     });
-    // Input numérico editable de grosor
-    $('op-draw-info')?.addEventListener('change',e=>{
-      const max = edActiveTool==='eraser' ? 80 : 48;
-      const v = Math.max(1, Math.min(max, parseInt(e.target.value)||1));
-      e.target.value = v;
-      if(edActiveTool==='eraser') edEraserSize=v;
-      else edDrawSize=v;
-      const sl=$('op-dsize'); if(sl){ sl.value=v; }
+    $('op-dsize-num')?.addEventListener('change',e=>{
+      const max=edActiveTool==='eraser'?80:48;
+      const v=Math.max(1,Math.min(max,parseInt(e.target.value)||1));
+      e.target.value=v;
+      if(edActiveTool==='eraser') edEraserSize=v; else edDrawSize=v;
+      const sl=$('op-dsize'); if(sl) sl.value=v;
       _edbSyncSize();
     });
     $('op-color-erase-btn')?.addEventListener('click',()=>{
@@ -3034,19 +3021,17 @@ function edRenderOptionsPanel(mode){
       if(btn) btn.style.background='var(--gray-200)';
       edToast('Toca el color a borrar');
     });
+    // ── Opacidad: botón toggle (mutuamente exclusivo con grosor) ──
     $('op-opacity-btn')?.addEventListener('click',()=>{
       const slO=$('op-opacity-slider'), sl=$('op-size-slider');
       if(!slO) return;
-      const open = slO.style.display === 'none' || slO.style.display === '';
+      const open = slO.style.display==='none' || slO.style.display==='';
       slO.style.display = open ? 'flex' : 'none';
-      if(open && sl) sl.style.display='none';
-      const btn=$('op-opacity-btn');
-      if(btn) btn.style.background = open ? 'var(--gray-200)' : 'transparent';
-      const btnS=$('op-size-btn');
-      if(btnS) btnS.style.background = 'transparent';
+      if(open && sl){ sl.style.display='none'; $('op-size-btn').style.background='transparent'; }
+      $('op-opacity-btn').style.background = open ? 'var(--gray-200)' : 'transparent';
     });
     $('op-dopacity')?.addEventListener('input',e=>{
-      edDrawOpacity = +e.target.value;
+      edDrawOpacity=+e.target.value;
       const num=$('op-draw-opacity-num'); if(num) num.value=edDrawOpacity;
     });
     $('op-draw-opacity-num')?.addEventListener('change',e=>{
@@ -3473,35 +3458,54 @@ function edInitDrawBar() {
     _edbTogglePalette();
   });
 
-  // ── Grosor: toque cicla entre 4 tamaños predefinidos ──
-  const _sizes = [4, 8, 16, 32];
-  $('edb-size')?.addEventListener('click', () => {
+  // ── Grosor: abre popover con slider + input numérico ──
+  $('edb-size')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const pop = $('edb-size-pop');
+    if (!pop) return;
+    const isOpen = pop.style.display === 'flex';
+    if (isOpen) { pop.style.display = 'none'; return; }
+    // Posicionar sobre el botón
+    const btn = $('edb-size');
+    const br  = btn.getBoundingClientRect();
+    pop.style.display = 'flex';
+    pop.style.left = Math.max(4, br.left - 10) + 'px';
+    pop.style.top  = (br.top - pop.offsetHeight - 8) + 'px';
+    // Sincronizar valores actuales
     const isEr = edActiveTool === 'eraser';
-    if (isEr) {
-      const cur = _sizes.findIndex(s => s >= edEraserSize) || 0;
-      edEraserSize = _sizes[(cur + 1) % _sizes.length];
-    } else {
-      const cur = _sizes.findIndex(s => s >= edDrawSize) || 0;
-      edDrawSize = _sizes[(cur + 1) % _sizes.length];
-    }
-    _edbSyncSize();
-    // Sincronizar slider del panel principal si existe
-    const sl = $('op-dsize'); if (sl) { sl.value = isEr ? edEraserSize : edDrawSize; sl.dispatchEvent(new Event('input')); }
+    const sz   = isEr ? edEraserSize : edDrawSize;
+    const sl   = $('edb-size-slider');
+    const num  = $('edb-size-num');
+    if (sl)  { sl.max = isEr ? 80 : 48; sl.value = sz; }
+    if (num) { num.max = isEr ? 80 : 48; num.value = sz; }
   });
-
-  // ── Input numérico de grosor en barra flotante ──
+  $('edb-size-slider')?.addEventListener('input', e => {
+    const v = +e.target.value;
+    const isEr = edActiveTool === 'eraser';
+    if (isEr) edEraserSize = v; else edDrawSize = v;
+    const num = $('edb-size-num'); if (num) num.value = v;
+    _edbSyncSize();
+    const sl = $('op-dsize'); if (sl) { sl.value = v; const n=$('op-dsize-num'); if(n) n.value=v; }
+  });
   $('edb-size-num')?.addEventListener('change', e => {
     const isEr = edActiveTool === 'eraser';
     const max = isEr ? 80 : 48;
     const v = Math.max(1, Math.min(max, parseInt(e.target.value) || 1));
     e.target.value = v;
     if (isEr) edEraserSize = v; else edDrawSize = v;
+    const sl2 = $('edb-size-slider'); if (sl2) sl2.value = v;
     _edbSyncSize();
-    const sl = $('op-dsize'); if (sl) { sl.value = v; }
-    const info = $('op-draw-info'); if (info && info.tagName === 'INPUT') info.value = v;
+    const sl = $('op-dsize'); if (sl) { sl.value = v; const n=$('op-dsize-num'); if(n) n.value=v; }
   });
-  $('edb-size-num')?.addEventListener('pointerdown', e => e.stopPropagation());
-  $('edb-size-num')?.addEventListener('touchstart',  e => e.stopPropagation(), { passive: true });
+  ['pointerdown','touchstart'].forEach(ev =>
+    $('edb-size-pop')?.addEventListener(ev, e => e.stopPropagation(), { passive: true })
+  );
+  // Cerrar popover de grosor al tocar fuera
+  document.addEventListener('pointerdown', e => {
+    const pop = $('edb-size-pop');
+    if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-size')
+      pop.style.display = 'none';
+  }, { passive: true });
 
   // ── Deshacer / Rehacer ──
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
