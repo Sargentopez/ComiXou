@@ -83,14 +83,24 @@ function buildPanelElements() {
   const creditsInner = document.createElement('div');
   creditsInner.className = 'reader-panel-inner';
 
+  // Imagen invisible de relleno para que reader-panel-inner tenga las dimensiones correctas
+  // (igual que los paneles normales con su dataUrl)
+  const placeholderImg = document.createElement('img');
+  placeholderImg.className = 'reader-panel-img';
+  placeholderImg.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+  placeholderImg.draggable = false;
+  creditsInner.appendChild(placeholderImg);
+
   const canvas = document.createElement('canvas');
   canvas.className = 'reader-credits-canvas';
-  // Dimensiones canvas = dimensiones del panel según orientación
   const ED_PAGE_W = 360, ED_PAGE_H = 780;
   canvas.width  = creditsOrient === 'h' ? ED_PAGE_H : ED_PAGE_W;
   canvas.height = creditsOrient === 'h' ? ED_PAGE_W : ED_PAGE_H;
-  canvas.style.width  = '100%';
-  canvas.style.height = '100%';
+  // El canvas ocupa todo el inner igual que la imagen de los demás paneles
+  canvas.style.position = 'absolute';
+  canvas.style.inset    = '0';
+  canvas.style.width    = '100%';
+  canvas.style.height   = '100%';
 
   ReaderState.creditsCanvas = canvas;
   ReaderState.creditsCtx    = canvas.getContext('2d');
@@ -400,7 +410,7 @@ function _renderCreditsCanvas() {
     let socialLines = [];
     if (socialText) {
       ctx.font = `400 ${socialFS}px Patrick Hand, sans-serif`;
-      socialLines = wrapText(socialText, leftW - pw * 0.02);
+      socialLines = wrapText(socialText, leftW - leftX - pw * 0.02);
     }
     const socialLineH  = socialFS * 1.5;
     const totalSocialH = socialLines.length * socialLineH;

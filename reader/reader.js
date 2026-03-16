@@ -350,6 +350,7 @@ function _render() {
 
   // Panel de créditos — render especial con fade
   if (panel.isCredits) {
+    RS.isCredits = true;
     const { pw, ph } = _panelDims(RS.idx);
     _renderCredits(pw, ph);
     _showCredits(); // lanza el fade-in si no está en curso
@@ -751,7 +752,7 @@ function _renderCredits(pw, ph) {
     // ── Columna izquierda: social + autor ──
     const socialFS   = Math.round(fRef * 0.055);
     const authorFS   = Math.round(fRef * 0.072);
-    const socialMaxW = leftW - pw * 0.02;
+    const socialMaxW = leftW - leftX - pw * 0.02;  // ancho disponible desde leftX hasta borde columna
 
     let socialLines = [];
     if (socialText) {
