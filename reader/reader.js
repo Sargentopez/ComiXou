@@ -121,10 +121,10 @@ function _onFullscreenChange() {
 }
 
 function _embedClose() {
-  // Abierto con window.open desde la app — cerrar esta ventana
-  try { window.close(); } catch(e) {}
-  // Fallback por si window.close() no funciona (algunos navegadores lo bloquean)
-  history.back();
+  // En iframe: notificar al padre para que cierre el modal
+  try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(e) {}
+  // Fallback si no está en iframe
+  if (window.self === window.top) history.back();
 }
 
 // ── CARGA DESDE SUPABASE ─────────────────────────────────────
