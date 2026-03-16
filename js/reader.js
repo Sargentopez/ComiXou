@@ -606,9 +606,13 @@ function setupControls() {
     const dy   = Math.abs(endY - touchStartY);
     // Ignorar si hay mucho movimiento vertical
     if (dy > 40) return;
-    // Mitad izquierda de pantalla → retroceder, mitad derecha → avanzar
-    if (endX < window.innerWidth / 2) goBack();
-    else advance();
+    // División según orientación del dispositivo (recalcula en cada toque)
+    const devicePortrait = window.innerHeight > window.innerWidth;
+    if (devicePortrait) {
+      if (endX < window.innerWidth / 2) goBack(); else advance();
+    } else {
+      if (endY < window.innerHeight / 2) goBack(); else advance();
+    }
   }, sig);
 }
 

@@ -4119,9 +4119,15 @@ function edInitViewerTap(){
     _sx = null;
     // Ignorar si hay mucho movimiento vertical
     if(Math.abs(dy) > 40) return;
-    // Mitad izquierda de pantalla → retroceder, mitad derecha → avanzar
-    if(endX < window.innerWidth / 2) _viewerBack();
-    else _viewerAdvance();
+    // División según orientación del dispositivo (recalcula en cada toque)
+    const devicePortrait = window.innerHeight > window.innerWidth;
+    if (devicePortrait) {
+      // Dispositivo vertical: pantalla dividida verticalmente (izq/der)
+      if(endX < window.innerWidth / 2) _viewerBack(); else _viewerAdvance();
+    } else {
+      // Dispositivo horizontal: pantalla dividida horizontalmente (arr/abj)
+      if(endY < window.innerHeight / 2) _viewerBack(); else _viewerAdvance();
+    }
   }, {passive:true, ...sig});
 
   // ── CONTROLES DESKTOP (mouse) ──
