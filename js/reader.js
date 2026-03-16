@@ -267,32 +267,48 @@ function goToPanel(idx) {
   }
 }
 
+// Oculta todos los bocadillos de un panel (para resetear al salir/entrar)
+function _hideBubblesForPanel(idx) {
+  const panelEl = document.getElementById('rp_' + idx);
+  if (!panelEl) return;
+  panelEl.querySelectorAll('.reader-bubble').forEach(b => b.classList.remove('visible'));
+}
+
+// Inicializa los bocadillos al entrar en un panel — igual que el editor:
+// sequential: muestra el primero (textStep=1), currentBubbleIdx=0
+// immediate:  muestra todos
 function _showBubblesForPanel(idx) {
   const panel = ReaderState.comic.panels[idx];
   const mode  = panel?.textMode || 'sequential';
   const panelEl = document.getElementById('rp_' + idx);
   if (!panelEl) return;
   const bubbles = panelEl.querySelectorAll('.reader-bubble');
-  if (bubbles.length === 0) return;
+
+  // Siempre resetear primero (por si se vuelve atrás)
+  bubbles.forEach(b => b.classList.remove('visible'));
+
+  if (bubbles.length === 0) { ReaderState.currentBubbleIdx = -1; return; }
 
   if (mode === 'sequential') {
-    // Mostrar solo el primero, el resto aparecen con advance()
+    // Igual que editor: textStep empieza en 1 → muestra bubbles[0]
     bubbles[0].classList.add('visible');
     ReaderState.currentBubbleIdx = 0;
   } else {
     // Immediate: todos visibles de una vez, escalonados levemente
-    bubbles.forEach((b, i) => {
-      setTimeout(() => b.classList.add('visible'), i * 80);
-    });
+    bubbles.forEach((b, i) => setTimeout(() => b.classList.add('visible'), i * 80));
     ReaderState.currentBubbleIdx = bubbles.length - 1;
   }
 }
 
-function showNextBubble() {
+// Avanza un bocadillo en el panel actual. Devuelve true si había siguiente.
+// Igual que _viewerAdvance del editor: si textStep < total → muestra siguiente
+function _advanceBubble() {
+  const panel = ReaderState.comic.panels[ReaderState.currentPanel];
+  if ((panel?.textMode || 'sequential') !== 'sequential') return false;
   const panelEl = document.getElementById('rp_' + ReaderState.currentPanel);
   if (!panelEl) return false;
   const bubbles = panelEl.querySelectorAll('.reader-bubble');
-  const next    = ReaderState.currentBubbleIdx + 1;
+  const next = ReaderState.currentBubbleIdx + 1;
   if (next < bubbles.length) {
     bubbles[next].classList.add('visible');
     ReaderState.currentBubbleIdx = next;
@@ -301,29 +317,44 @@ function showNextBubble() {
   return false;
 }
 
+// Retrocede un bocadillo. Devuelve true si había anterior.
+// Igual que _viewerBack del editor
+function _backBubble() {
+  const panel = ReaderState.comic.panels[ReaderState.currentPanel];
+  if ((panel?.textMode || 'sequential') !== 'sequential') return false;
+  const panelEl = document.getElementById('rp_' + ReaderState.currentPanel);
+  if (!panelEl) return false;
+  const bubbles = panelEl.querySelectorAll('.reader-bubble');
+  if (ReaderState.currentBubbleIdx > 0) {
+    bubbles[ReaderState.currentBubbleIdx].classList.remove('visible');
+    ReaderState.currentBubbleIdx--;
+    return true;
+  }
+  return false;
+}
+
 function advance() {
   const panels = ReaderState.comic.panels;
   const creditsIdx = panels.length;
-  const panel = panels[ReaderState.currentPanel];
-  const isSequential = (panel?.textMode || 'sequential') === 'sequential';
 
   // En el panel de créditos: tap reinicia desde el principio
   if (ReaderState.currentPanel === creditsIdx) {
-    if (!ReaderState.creditsShown) return; // esperando el fade
+    if (!ReaderState.creditsShown) return;
     _resetCreditsState();
     goToPanel(0);
     return;
   }
 
-  if (isSequential) {
-    if (showNextBubble()) return;
-  }
-  // Avanzar: si es el último panel real, ir a créditos
-  const next = ReaderState.currentPanel + 1;
-  goToPanel(next); // next === creditsIdx irá a créditos
+  // Intentar avanzar bocadillo en modo sequential
+  if (_advanceBubble()) return;
+
+  // Sin más bocadillos → avanzar panel
+  goToPanel(ReaderState.currentPanel + 1);
 }
 
 function goBack() {
+  // Igual que _viewerBack del editor: retroceder bocadillo primero, luego panel
+  if (_backBubble()) return;
   if (ReaderState.currentPanel > 0) goToPanel(ReaderState.currentPanel - 1);
 }
 
