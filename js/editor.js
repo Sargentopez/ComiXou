@@ -2942,6 +2942,8 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-draw-minimize"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
+    <span id="op-draw-info"
+      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
       style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -3004,7 +3006,7 @@ function edRenderOptionsPanel(mode){
       const v=+e.target.value;
       if(edActiveTool==='eraser') edEraserSize=v; else edDrawSize=v;
       const num=$('op-dsize-num'); if(num) num.value=v;
-      _edbSyncSize();
+      _edbSyncSize(); _edUpdateDrawInfo();
     });
     $('op-dsize-num')?.addEventListener('change',e=>{
       const max=edActiveTool==='eraser'?80:48;
@@ -3012,7 +3014,7 @@ function edRenderOptionsPanel(mode){
       e.target.value=v;
       if(edActiveTool==='eraser') edEraserSize=v; else edDrawSize=v;
       const sl=$('op-dsize'); if(sl) sl.value=v;
-      _edbSyncSize();
+      _edbSyncSize(); _edUpdateDrawInfo();
     });
     $('op-color-erase-btn')?.addEventListener('click',()=>{
       edCanvas.style.cursor = 'crosshair';
@@ -3033,11 +3035,13 @@ function edRenderOptionsPanel(mode){
     $('op-dopacity')?.addEventListener('input',e=>{
       edDrawOpacity=+e.target.value;
       const num=$('op-draw-opacity-num'); if(num) num.value=edDrawOpacity;
+      _edUpdateDrawInfo();
     });
     $('op-draw-opacity-num')?.addEventListener('change',e=>{
       const v=Math.max(1,Math.min(100,parseInt(e.target.value)||1));
       e.target.value=v; edDrawOpacity=v;
       const sl=$('op-dopacity'); if(sl) sl.value=v;
+      _edUpdateDrawInfo();
     });
 
     // ── Deshacer / Rehacer ──
@@ -3458,6 +3462,12 @@ function edInitDrawBar() {
     _edbTogglePalette();
   });
 
+  // ── Cuentagotas en barra flotante ──
+  $('edb-eyedrop')?.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _edStartEyedrop();
+  });
+
   // ── Grosor: abre popover con slider + input numérico ──
   $('edb-size')?.addEventListener('click', e => {
     e.stopPropagation();
@@ -3465,27 +3475,42 @@ function edInitDrawBar() {
     if (!pop) return;
     const isOpen = pop.style.display === 'flex';
     if (isOpen) { pop.style.display = 'none'; return; }
-    // Posicionar sobre el botón
-    const btn = $('edb-size');
-    const br  = btn.getBoundingClientRect();
-    pop.style.display = 'flex';
-    pop.style.left = Math.max(4, br.left - 10) + 'px';
-    pop.style.top  = (br.top - pop.offsetHeight - 8) + 'px';
-    // Sincronizar valores actuales
+    // Sincronizar valor actual antes de medir
     const isEr = edActiveTool === 'eraser';
     const sz   = isEr ? edEraserSize : edDrawSize;
-    const sl   = $('edb-size-slider');
     const num  = $('edb-size-num');
-    if (sl)  { sl.max = isEr ? 80 : 48; sl.value = sz; }
     if (num) { num.max = isEr ? 80 : 48; num.value = sz; }
-  });
-  $('edb-size-slider')?.addEventListener('input', e => {
-    const v = +e.target.value;
-    const isEr = edActiveTool === 'eraser';
-    if (isEr) edEraserSize = v; else edDrawSize = v;
-    const num = $('edb-size-num'); if (num) num.value = v;
-    _edbSyncSize();
-    const sl = $('op-dsize'); if (sl) { sl.value = v; const n=$('op-dsize-num'); if(n) n.value=v; }
+    // Mostrar para poder medir dimensiones reales
+    pop.style.display = 'flex';
+    pop.style.left = '-9999px'; pop.style.top = '-9999px';
+    const btn = $('edb-size');
+    const br  = btn.getBoundingClientRect();
+    const pw  = pop.offsetWidth  || 90;
+    const ph  = pop.offsetHeight || 44;
+    const W   = window.innerWidth;
+    const H   = window.innerHeight;
+    const GAP = 8;
+    // Decidir posición: preferir arriba, si no cabe abajo, si no lateral
+    let left, top;
+    if (br.top - ph - GAP >= 0) {
+      // Cabe arriba
+      top  = br.top - ph - GAP;
+      left = Math.max(GAP, Math.min(W - pw - GAP, br.left + br.width/2 - pw/2));
+    } else if (br.bottom + ph + GAP <= H) {
+      // Cabe abajo
+      top  = br.bottom + GAP;
+      left = Math.max(GAP, Math.min(W - pw - GAP, br.left + br.width/2 - pw/2));
+    } else if (br.left - pw - GAP >= 0) {
+      // Cabe a la izquierda
+      left = br.left - pw - GAP;
+      top  = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
+    } else {
+      // A la derecha
+      left = br.right + GAP;
+      top  = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
+    }
+    pop.style.left = left + 'px';
+    pop.style.top  = top  + 'px';
   });
   $('edb-size-num')?.addEventListener('change', e => {
     const isEr = edActiveTool === 'eraser';
@@ -3493,7 +3518,6 @@ function edInitDrawBar() {
     const v = Math.max(1, Math.min(max, parseInt(e.target.value) || 1));
     e.target.value = v;
     if (isEr) edEraserSize = v; else edDrawSize = v;
-    const sl2 = $('edb-size-slider'); if (sl2) sl2.value = v;
     _edbSyncSize();
     const sl = $('op-dsize'); if (sl) { sl.value = v; const n=$('op-dsize-num'); if(n) n.value=v; }
   });
@@ -3634,6 +3658,15 @@ function _edbSyncColor() {
   const sw = $('edb-color'); if (!sw) return;
   sw.style.background = edDrawColor;
   sw.style.display = edActiveTool === 'eraser' ? 'none' : '';
+}
+
+function _edUpdateDrawInfo() {
+  const info = $('op-draw-info'); if (!info) return;
+  const isEr = edActiveTool === 'eraser';
+  const isFill = edActiveTool === 'fill';
+  info.textContent = isFill
+    ? 'Color ' + edDrawColor
+    : (isEr ? edEraserSize : edDrawSize) + 'px · ' + edDrawOpacity + '%';
 }
 
 function _edbSyncSize() {
@@ -4328,6 +4361,7 @@ function _edStartEyedrop() {
     edDrawColor = hex;
     edColorPalette[edSelectedPaletteIdx] = hex;
     _edUpdatePaletteDots();
+    _edbSyncColor();
     edToast('Color copiado ✓');
   }
 
