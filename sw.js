@@ -1,39 +1,9 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v7-48';
-const ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  './css/main.css',
-  './css/home.css',
-  './css/auth.css',
-  './css/editor.css',
-  './css/reader.css',
-  './css/admin.css',
-  './js/utils.js',
-  './js/i18n.js',
-  './js/auth.js',
-  './js/auth-pages.js',
-  './js/storage.js',
-  './js/genres.js',
-  './js/header.js',
-  './js/home.js',
-  './js/editor.js',
-  './js/editor-pages.js',
-  './js/editor-layers.js',
-  './js/reader.js',
-  './js/admin.js',
-  './js/seed.js',
-  './js/router.js',
-  './js/fullscreen.js',
-  './js/my-comics.js',
-  './js/views.js',
-  './js/pwa.js',
-  './js/supabase-client.js',
-  './reader/index.html',
-  './reader/reader.css',
-  './reader/reader.js',
-  './pages/reader.html',
+const CACHE = 'comixow-v7-49';
+
+// Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
+// JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
+const STATIC_ASSETS = [
   './icon-192.png',
   './icon-512.png',
 ];
@@ -43,7 +13,7 @@ self.addEventListener('message', e => {
 });
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC_ASSETS)));
   self.skipWaiting();
 });
 
@@ -58,31 +28,27 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // SPA: navegaciones devuelven index.html
-  if (e.request.mode === 'navigate') {
-    e.respondWith(
-      fetch(e.request)
-        .then(r => { caches.open(CACHE).then(c => c.put(e.request, r.clone())); return r; })
-        .catch(() => caches.match('./index.html'))
-    );
-    return;
-  }
+  // No interceptar el reproductor externo — tiene su propia lógica
+  if (url.includes('/reader/')) return;
 
-  // JS y CSS: network-first — siempre intenta red, actualiza caché, fallback a caché
-  if (url.match(/\.(js|css)(\?|$)/)) {
+  // HTML, JS y CSS: network-first siempre — nunca servir versión antigua
+  if (url.match(/\.(html|js|css)(\?|$)/) || e.request.mode === 'navigate') {
     e.respondWith(
       fetch(e.request)
         .then(r => {
-          if (r.ok) caches.open(CACHE).then(c => c.put(e.request, r.clone()));
+          if (r.ok) {
+            const clone = r.clone();
+            caches.open(CACHE).then(c => c.put(e.request, clone));
+          }
           return r;
         })
-        .catch(() => caches.match(e.request))
+        .catch(() => caches.match(e.request).then(r => r || caches.match('./index.html')))
     );
     return;
   }
 
-  // Resto (imágenes, fuentes, etc.): cache-first
+  // Imágenes y otros assets estáticos: cache-first
   e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request).catch(() => caches.match('./index.html')))
+    caches.match(e.request).then(r => r || fetch(e.request))
   );
 });
