@@ -94,6 +94,9 @@ body.editor-page #appView {
 }
 @media (min-width: 768px) {
   .ed-top-pagnav {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
     align-self: center;
     padding-bottom: 0;
   }

@@ -2901,6 +2901,7 @@ function edRenderOptionsPanel(mode){
           style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
       </button>
     </div>
+    <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="Cuentagotas">💧</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${!isFill ? `
     <button id="op-size-btn"
@@ -2959,6 +2960,7 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('fill');
     });
 
+    $('op-eyedrop-btn')?.addEventListener('click', ()=>{ _edStartEyedrop(); });
     // ── Color: botón arcoíris abre picker propio en táctil, nativo en PC ──
     $('op-custom-color-btn')?.addEventListener('click',()=>{
       if(edLastPointerIsTouch){
@@ -4240,6 +4242,54 @@ function edOpenProjectModal(){
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
 
 /* ── Destruir vista: eliminar todos los listeners de document/window ── */
+/* ── CUENTAGOTAS ── */
+function _edStartEyedrop() {
+  const canvas = edCanvas;
+  if (!canvas) return;
+
+  // Indicador visual: cambiar cursor y mostrar toast
+  canvas.style.cursor = 'crosshair';
+  edToast('Toca el color a copiar…');
+
+  // Usar AbortController para limpiar tras el primer sample
+  const ac = new AbortController();
+  const sig = { signal: ac.signal };
+
+  function sampleAt(clientX, clientY) {
+    ac.abort(); // un solo disparo
+    canvas.style.cursor = '';
+
+    // Convertir coordenadas de pantalla a coordenadas del canvas lógico
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = Math.round((clientX - rect.left) * scaleX);
+    const cy = Math.round((clientY - rect.top)  * scaleY);
+
+    // Leer pixel del canvas de trabajo
+    const ctx = canvas.getContext('2d');
+    const px  = ctx.getImageData(cx, cy, 1, 1).data;
+    // Si el pixel es transparente, ignorar
+    if (px[3] < 10) { edToast('Sin color en ese punto'); return; }
+
+    const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2, '0')).join('');
+    edDrawColor = hex;
+    edColorPalette[edSelectedPaletteIdx] = hex;
+    _edUpdatePaletteDots();
+    edToast('Color copiado ✓');
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    sampleAt(e.clientX, e.clientY);
+  }, { ...sig, once: true });
+
+  // Cancelar con Escape o tocando fuera del canvas
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { ac.abort(); canvas.style.cursor = ''; edToast('Cuentagotas cancelado'); }
+  }, { ...sig, once: true });
+}
+
 /* ── CÁMARA IN-APP (getUserMedia) ── */
 let _edCameraStream = null;
 let _edCameraFacing = 'environment'; // 'environment' = trasera, 'user' = frontal
