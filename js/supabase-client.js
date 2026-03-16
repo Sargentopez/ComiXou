@@ -135,6 +135,7 @@ const SupabaseClient = (() => {
       genre:       comic.genre      || '',
       nav_mode:    comic.navMode    || 'fixed',
       social:      comic.social     || '',
+      panel_count: comic.panels?.length || 0,
       published:   false,
       updated_at:  new Date().toISOString(),
     });
@@ -150,6 +151,7 @@ const SupabaseClient = (() => {
       genre:       comic.genre   || '',
       nav_mode:    comic.navMode || 'fixed',
       social:      comic.social  || '',
+      panel_count: comic.panels?.length || 0,
       published:   false,
     });
     await _uploadPanels(comic);

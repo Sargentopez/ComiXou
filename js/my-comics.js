@@ -77,7 +77,7 @@ function _mcRenderList() {
 
   wrap.innerHTML = comics.map(comic => {
     const thumb = comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '';
-    const pages = comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0);
+    const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
     const pubLabel = comic.approved
       ? '✅ Publicada'
       : (comic.pendingReview ? '⏳ En revisión' : '📝 Borrador');
@@ -323,7 +323,7 @@ async function _mcCloudLoad() {
 
     // Buscar por author_name = username del usuario actual
     const username = encodeURIComponent(user.username || '');
-    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc`, { headers: hdrs })
+    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`, { headers: hdrs })
       .then(r => r.json());
 
     if (!works || !works.length) {
@@ -356,7 +356,6 @@ async function _mcCloudLoad() {
       }
 
       // Obra nueva en nube — crear entrada local con thumbnail del primer panel
-      // El contenido completo se carga desde Supabase al leer (?draft=supabaseId)
       let thumbDataUrl = '';
       try {
         const firstPanels = await fetch(
@@ -376,6 +375,7 @@ async function _mcCloudLoad() {
         genre:        w.genre       || '',
         navMode:      w.nav_mode    || 'fixed',
         panels:       thumbDataUrl ? [{ dataUrl: thumbDataUrl }] : [],
+        panelCount:   w.panel_count || 0,
         pages:        [],
         published:    w.published   ?? false,
         approved:     w.published   ?? false,
