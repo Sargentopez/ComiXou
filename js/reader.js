@@ -32,6 +32,12 @@ function ReaderView_init(params) {
   ReaderState.comic = comic;
   ReaderState.totalPanels = comic.panels.length + 1; // +1 para créditos
   ReaderState.creditsShown = false;
+
+  // Garantizar que todos los paneles tienen texts generados desde editorData.
+  // El visor del editor usa page.layers directamente; el reproductor usa panel.texts.
+  // Si la obra es antigua o texts está vacío, lo regeneramos aquí.
+  _ensurePanelTexts(comic);
+
   document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
 
   buildPanelElements();
@@ -39,6 +45,68 @@ function ReaderView_init(params) {
   setupControls();
   showSwipeHint();
   I18n.applyAll();
+}
+
+// Regenera panel.texts desde editorData.pages[i].layers si está vacío o ausente.
+// Replica exactamente la lógica de edSaveProject en editor.js.
+function _ensurePanelTexts(comic) {
+  const edPages = comic.editorData?.pages;
+  if (!edPages) return; // sin editorData no podemos hacer nada
+
+  comic.panels.forEach((panel, i) => {
+    // Si ya tiene texts con contenido, no tocar
+    if (panel.texts && panel.texts.length > 0) return;
+
+    const page = edPages[i];
+    if (!page?.layers) return;
+
+    const texts = [];
+    let seqOrder = 0;
+    page.layers.forEach(l => {
+      const rawText = (l.type === 'text' || l.type === 'bubble') ? l.text : null;
+      if (!rawText || rawText === 'Escribe aquí') return;
+
+      const xPct = Math.round((l.x - (l.width||0)/2)  * 100 * 10) / 10;
+      const yPct = Math.round((l.y - (l.height||0)/2) * 100 * 10) / 10;
+      const wPct = Math.round((l.width||0.3)  * 100 * 10) / 10;
+      const hPct = Math.round((l.height||0.15) * 100 * 10) / 10;
+
+      if (l.type === 'bubble') {
+        texts.push({
+          type:        'bubble',
+          text:        rawText,
+          x: xPct, y: yPct, w: wPct, h: hPct,
+          style:       l.style       || 'conventional',
+          order:       seqOrder++,
+          fontSize:    l.fontSize    || 30,
+          fontFamily:  l.fontFamily  || 'Patrick Hand',
+          fontBold:    l.fontBold    || false,
+          fontItalic:  l.fontItalic  || false,
+          color:       l.color       || '#000000',
+          bg:          l.backgroundColor || '#ffffff',
+          border:      l.borderWidth ?? 2,
+          borderColor: l.borderColor || '#000000',
+        });
+      } else if (l.type === 'text') {
+        texts.push({
+          type:        'text',
+          text:        rawText,
+          x: xPct, y: yPct, w: wPct, h: hPct,
+          order:       seqOrder++,
+          fontSize:    l.fontSize    || 30,
+          fontFamily:  l.fontFamily  || 'Patrick Hand',
+          fontBold:    l.fontBold    || false,
+          fontItalic:  l.fontItalic  || false,
+          color:       l.color       || '#000000',
+          bg:          l.backgroundColor || '#ffffff',
+          border:      l.borderWidth ?? 0,
+          borderColor: l.borderColor || '#000000',
+        });
+      }
+    });
+    panel.texts    = texts;
+    panel.textMode = page.textMode || 'sequential';
+  });
 }
 
 // ════════════════════════════════════════
@@ -117,14 +185,6 @@ function buildReaderTexts(panel, layer) {
   const items = panel.texts
     .filter(t => t.text)
     .sort((a, b) => (a.order || 0) - (b.order || 0));
-
-  // DIAGNÓSTICO — mostrar tipos reales de los textos del panel
-  const diagMsg = 'texts[' + items.length + ']: ' + items.map(t => t.type || 'UNDEF').join(',');
-  const diagEl = document.createElement('div');
-  diagEl.style.cssText = 'position:fixed;top:40px;left:4px;right:4px;background:rgba(0,0,0,0.85);color:#0f0;font-size:11px;padding:4px 8px;z-index:99999;border-radius:6px;word-break:break-all;pointer-events:none;';
-  diagEl.textContent = diagMsg;
-  document.body.appendChild(diagEl);
-  setTimeout(() => diagEl.remove(), 8000);
 
   items.forEach((t, i) => {
     const wrapper = document.createElement('div');
