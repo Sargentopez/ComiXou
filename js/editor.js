@@ -1825,7 +1825,8 @@ function edPinchStart(e) {
   // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
   const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
-  edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0 } : null;
+  edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
+    _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null } : null;
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
     edPinchScale0 = null; // no usar modo objeto individual
@@ -1887,9 +1888,16 @@ function edPinchMove(e) {
     const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
     if (la) {
       const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
+      const newH = newW * (edPinchScale0.h / edPinchScale0.w);
       la.width  = newW;
-      la.height = newW * (edPinchScale0.h / edPinchScale0.w);
+      la.height = newH;
       la.rotation = edPinchScale0.rot + dAngle;
+      // LineLayer: escalar también los puntos internos
+      if (la.type === 'line' && edPinchScale0._linePoints) {
+        const sw = newW / edPinchScale0.w;
+        const sh = newH / edPinchScale0.h;
+        la.points = edPinchScale0._linePoints.map(p => ({x: p.x * sw, y: p.y * sh}));
+      }
       edRedraw();
     }
   } else {

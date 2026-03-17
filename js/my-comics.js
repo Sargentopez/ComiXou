@@ -97,8 +97,7 @@ function _mcRenderList() {
           ${comic.genre ? `<span style="color:var(--gray-400)">·</span><span style="color:var(--blue);font-size:.75rem;font-weight:700">${comic.genre}</span>` : ''}
           <span style="color:var(--gray-400)">·</span>
           <span style="font-size:.75rem;font-weight:700">${Math.max(1, pages)} hojas</span>
-          <span style="color:var(--gray-400)">·</span>
-          <span style="font-size:.75rem;font-weight:700;color:${comic.published ? 'var(--blue)' : 'var(--gray-500)'}">${pubLabel}</span>
+
         </div>
         <div class="comic-row-actions">
           ${pages > 0 ? `<button class="comic-row-btn" data-action="read" data-id="${comic.id}">📖 Leer</button>` : ''}
@@ -109,7 +108,7 @@ function _mcRenderList() {
                 ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">⏳ En revisión · Retirar</button>`
                 : `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`)
           }
-          ${comic.supabaseId ? `<button class="comic-row-btn" data-action="share" data-id="${comic.id}">📤 Enviar</button>` : ''}
+          <button class="comic-row-btn" data-action="share" data-id="${comic.id}">📤 Enviar</button>
           <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
       </div>
@@ -217,7 +216,12 @@ function _mcRenderList() {
       _mcToast('Obra eliminada');
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
-      if (comic && typeof openShareModal !== 'undefined') openShareModal(comic);
+      if (!comic) return;
+      if (!comic.supabaseId) {
+        alert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
+        return;
+      }
+      if (typeof openShareModal !== 'undefined') openShareModal(comic);
     }
   });
 }
