@@ -1385,7 +1385,7 @@ function edRedraw(){
     let dimmed = false;
     if(_editingProps) dimmed = (i !== edSelectedIdx);
     else if(_editingDraw) dimmed = (l.type !== 'draw');
-    else if(_editingShape) dimmed = (l === _edShapePreview || l === _edLineLayer) ? false : true;
+    else if(_editingShape) dimmed = (l === _edShapePreview || l === _edLineLayer || i === edSelectedIdx) ? false : true;
     const dimFactor = dimmed ? 0.5 : 1;
     if(l.type==='image'){
       // ImageLayer.draw() sobreescribe globalAlpha internamente con l.opacity
@@ -1408,8 +1408,10 @@ function edRedraw(){
       edCtx.globalAlpha = 1;
     }
   });
-  // Textos: dimear si estamos en modo draw, o si hay objeto no-texto seleccionado
-  const _dimTexts = _editingDraw || (_editingProps && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble');
+  // Textos: dimear si estamos en modo draw, shape/line, o si hay objeto no-texto seleccionado
+  const _dimTexts = _editingDraw
+    || _editingShape
+    || (_editingProps && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble');
   edCtx.globalAlpha = _textGroupAlpha * (_dimTexts ? 0.5 : 1);
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
@@ -6083,6 +6085,34 @@ function EditorView_init(){
         e.preventDefault();
         edCloseOptionsPanel();
         if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
+        return;
+      }
+    }
+    // ESC: cerrar menús desplegables y panel de opciones sin guardar
+    if(e.key === 'Escape' && !ctrl){
+      // Cerrar menú desplegable si está abierto
+      if(edMenuOpen){ e.preventDefault(); edCloseMenus(); return; }
+      // Cerrar panel de opciones si está abierto (sin guardar)
+      const panel = $('edOptionsPanel');
+      if(panel && panel.classList.contains('open')){
+        e.preventDefault();
+        const mode = panel.dataset.mode;
+        if(mode === 'shape' || mode === 'line'){
+          _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
+          if(_edLineLayer && _edLineLayer.points.length < 2){
+            const idx=edLayers.indexOf(_edLineLayer);
+            if(idx>=0) edLayers.splice(idx,1);
+          }
+          _edLineLayer=null;
+          edActiveTool='select'; edCanvas.className='';
+          _edDrawUnlockUI();
+        } else if(mode === 'draw' || ['draw','eraser','fill'].includes(edActiveTool)){
+          edDeactivateDrawTool();
+        } else {
+          _edDrawUnlockUI();
+        }
+        edCloseOptionsPanel();
+        edSelectedIdx=-1; edRedraw();
         return;
       }
     }
