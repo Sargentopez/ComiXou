@@ -407,7 +407,6 @@ function _render() {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       if (type === 'image' || type === 'stroke') {
-        // Posición y tamaño en 0-1 relativo al panel; centro en (x, y)
         const x = (layer.x      || 0.5) * pw;
         const y = (layer.y      || 0.5) * ph;
         const w = (layer.width  || 1)   * pw;
@@ -417,9 +416,39 @@ function _render() {
         if (rot) ctx.rotate(rot * Math.PI / 180);
         ctx.drawImage(img, -w / 2, -h / 2, w, h);
       } else {
-        // draw: capa de dibujo libre — ocupa todo el panel, sin transformación
         ctx.drawImage(img, 0, 0, pw, ph);
       }
+      ctx.restore();
+    } else if (type === 'shape') {
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const w = (layer.width || 0.3) * pw, h = (layer.height || 0.2) * ph;
+      const rot = (layer.rotation || 0) * Math.PI / 180;
+      ctx.translate(x, y);
+      if (rot) ctx.rotate(rot);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      if (layer.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
+      else ctx.rect(-w/2, -h/2, w, h);
+      if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+      ctx.restore();
+    } else if (type === 'line' && layer.points && layer.points.length >= 2) {
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const rot = (layer.rotation || 0) * Math.PI / 180;
+      ctx.translate(x, y);
+      if (rot) ctx.rotate(rot);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
+      for (let i = 1; i < layer.points.length; i++)
+        ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
+      if (layer.closed) ctx.closePath();
+      if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       ctx.restore();
     }
     // bubble/text: los gestiona _drawTexts con lógica sequential
