@@ -679,7 +679,7 @@ class ShapeLayer extends BaseLayer {
     super('shape', x, y, w, h);
     this.shape     = shape;       // 'rect' | 'ellipse'
     this.color     = '#000000';   // color del borde
-    this.fillColor = '#ffffff'; // relleno blanco por defecto
+    this.fillColor = '#ffffff';    // relleno blanco por defecto
     this.lineWidth = 3;
     this.opacity   = 1;
   }
@@ -713,7 +713,46 @@ class ShapeLayer extends BaseLayer {
     ctx.restore();
   }
   contains(px, py) {
-    return super.contains(px, py);
+    // 1. Bbox rápido primero
+    if (!super.contains(px, py)) return false;
+    // 2. Pixel-hit real — renderizar en offscreen y leer alpha
+    try {
+      const pw = edPageW(), ph = edPageH();
+      const w  = this.width  * pw;
+      const h  = this.height * ph;
+      // Transformar punto al espacio local (con rotación)
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
+      const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+      const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+      // Crear canvas offscreen del tamaño de la shape
+      const cw = Math.max(1, Math.ceil(w)), ch = Math.max(1, Math.ceil(h));
+      const oc = document.createElement('canvas');
+      oc.width = cw; oc.height = ch;
+      const octx = oc.getContext('2d');
+      octx.translate(cw/2, ch/2);
+      octx.beginPath();
+      if (this.shape === 'ellipse') {
+        octx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI * 2);
+      } else {
+        octx.rect(-w/2, -h/2, w, h);
+      }
+      if (this.fillColor && this.fillColor !== 'none') {
+        octx.fillStyle = this.fillColor;
+        octx.fill();
+      }
+      if (this.lineWidth > 0) {
+        octx.strokeStyle = '#000';
+        octx.lineWidth = this.lineWidth;
+        octx.stroke();
+      }
+      const bx = Math.floor(lx + cw/2);
+      const by = Math.floor(ly + ch/2);
+      if (bx < 0 || by < 0 || bx >= cw || by >= ch) return false;
+      return octx.getImageData(bx, by, 1, 1).data[3] > 10;
+    } catch(e) {
+      return true;
+    }
   }
 }
 
@@ -727,7 +766,7 @@ class LineLayer extends BaseLayer {
     this.points    = [];   // coords normalizadas en espacio LOCAL (relativas al centro, sin rotación)
     this.closed    = false;
     this.color     = '#000000';
-    this.fillColor = '#ffffff'; // relleno blanco por defecto
+    this.fillColor = '#ffffff';    // relleno blanco por defecto
     this.lineWidth = 3;
     this.opacity   = 1;
     // rotation heredado de BaseLayer
@@ -801,28 +840,48 @@ class LineLayer extends BaseLayer {
   }
   contains(px, py) {
     if (this.points.length < 2) return false;
-    const pw = edPageW(), ph = edPageH();
-    const threshold = 0.02;
-    // Transformar al espacio local (sin rotación)
-    const rot = -(this.rotation || 0) * Math.PI / 180;
-    const dxPx = (px - this.x) * pw, dyPx = (py - this.y) * ph;
-    const lx = (dxPx * Math.cos(rot) - dyPx * Math.sin(rot)) / pw;
-    const ly = (dxPx * Math.sin(rot) + dyPx * Math.cos(rot)) / ph;
-    const pts = this.closed ? [...this.points, this.points[0]] : this.points;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const ax = pts[i].x, ay = pts[i].y;
-      const bx = pts[i+1].x, by = pts[i+1].y;
-      const abx = bx - ax, aby = by - ay;
-      const apx = lx - ax, apy = ly - ay;
-      const ab2 = abx*abx*(pw*pw) + aby*aby*(ph*ph);
-      if (ab2 === 0) continue;
-      const t = Math.max(0, Math.min(1, (apx*abx*(pw*pw) + apy*aby*(ph*ph)) / ab2));
-      const ddx = (lx - (ax + t*abx)) * pw;
-      const ddy = (ly - (ay + t*aby)) * ph;
-      if (Math.sqrt(ddx*ddx + ddy*ddy) < threshold * Math.min(pw, ph)) return true;
+    // 1. Bbox rápido primero
+    if (!super.contains(px, py)) return false;
+    // 2. Pixel-hit real — renderizar en offscreen y leer alpha
+    try {
+      const pw = edPageW(), ph = edPageH();
+      const w  = this.width  * pw;
+      const h  = this.height * ph;
+      // Transformar punto al espacio local (con rotación)
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
+      const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+      const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+      // Canvas offscreen del tamaño del bbox de la línea
+      const pad = Math.max(this.lineWidth || 3, 8); // margen para el trazo
+      const cw = Math.max(1, Math.ceil(w) + pad*2);
+      const ch = Math.max(1, Math.ceil(h) + pad*2);
+      const oc = document.createElement('canvas');
+      oc.width = cw; oc.height = ch;
+      const octx = oc.getContext('2d');
+      // Origen en centro del bbox + pad
+      octx.translate(cw/2, ch/2);
+      octx.beginPath();
+      const pts = this.points;
+      octx.moveTo(pts[0].x * pw, pts[0].y * ph);
+      for (let i = 1; i < pts.length; i++) {
+        octx.lineTo(pts[i].x * pw, pts[i].y * ph);
+      }
+      if (this.closed) octx.closePath();
+      if (this.closed && this.fillColor && this.fillColor !== 'none') {
+        octx.fillStyle = this.fillColor;
+        octx.fill();
+      }
+      octx.strokeStyle = '#000';
+      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth, 8) : 0, 0);
+      if (this.lineWidth > 0) octx.stroke();
+      const bx = Math.floor(lx + cw/2);
+      const by = Math.floor(ly + ch/2);
+      if (bx < 0 || by < 0 || bx >= cw || by >= ch) return false;
+      return octx.getImageData(bx, by, 1, 1).data[3] > 10;
+    } catch(e) {
+      return true;
     }
-    if (this.closed) return super.contains(px, py);
-    return false;
   }
   nearestVertex(px, py, threshold=0.03) {
     const pw = edPageW(), ph = edPageH();
@@ -1320,7 +1379,9 @@ function edRedraw(){
   // En modo draw/eraser/fill: dimear todo excepto el DrawLayer activo
   const _editingProps = _panelOpen && _panel.dataset.mode === 'props' && edSelectedIdx >= 0;
   const _editingDraw  = ['draw','eraser','fill'].includes(edActiveTool) && _panelOpen;
-  const _editingShape = ['shape','line'].includes(edActiveTool);
+  const _editingShape = (_panelOpen && (_panel.dataset.mode==='shape' || _panel.dataset.mode==='line'))
+    || !!_edShapePreview || !!_edLineLayer
+    || ($('edShapeBar')?.classList.contains('visible') && ['shape','line'].includes(edActiveTool));
   const _dimming = _editingProps || _editingDraw || _editingShape;
 
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
@@ -1977,14 +2038,14 @@ function _edHandleDoubleTap(idx){
     edRenderOptionsPanel('draw');
     edRedraw();
   } else if(la && la.type === 'shape') {
-    // Doble tap en shape → abrir submenú Objeto con valores del objeto
-    edActiveTool='shape'; edCanvas.className='tool-shape';
-    _edShapeType = la.shape || 'rect';
+    edActiveTool='select'; edCanvas.className='';
+    _edShapeType = 'select';
     edDrawColor  = la.color || '#000000';
     edDrawSize   = la.lineWidth || 3;
     _edActivateShapeTool();
   } else if(la && la.type === 'line') {
-    edActiveTool='line'; edCanvas.className='tool-line';
+    edActiveTool='select'; edCanvas.className='';
+    _edLineType = 'select';
     edDrawColor = la.color || '#000000';
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool();
@@ -2008,6 +2069,7 @@ function edOnStart(e){
                tgt.closest('#edBrushCursor')  ||
                tgt.closest('.ed-float-btn')   ||
                tgt.closest('#edDrawBar')      ||
+               tgt.closest('#edShapeBar')     ||
                tgt.closest('#edb-palette-pop') ||
                tgt.closest('#ed-hsl-picker')   ||
                tgt.closest('#editorViewer')   ||
@@ -2121,6 +2183,15 @@ function edOnStart(e){
 
   if(edActiveTool === 'fill'){
     if(tgt !== edCanvas) return;
+    // Si hay una shape o line seleccionada (modo barra flotante), aplicar fillColor directo
+    if($('edDrawBar')?.classList.contains('visible') && edSelectedIdx >= 0){
+      const _la = edLayers[edSelectedIdx];
+      if(_la && (_la.type==='shape' || _la.type==='line')){
+        _la.fillColor = edDrawColor;
+        edPushHistory(); edRedraw();
+        return;
+      }
+    }
     // En touch/pen: guardar coordenadas y esperar a pointerup para confirmar
     // que fue toque simple y no inicio de pinch
     if(e.pointerType === 'touch'){
@@ -2148,55 +2219,6 @@ function edOnStart(e){
     if(tgt !== edCanvas) return;
     edStartPaint(e);return;
   }
-  // ── SHAPE: inicio de drag para crear forma ──
-  if(edActiveTool==='select' || edActiveTool==='shape'){
-    const _p=$('edOptionsPanel');
-    if(_p?.dataset.mode==='shape' && tgt===edCanvas){
-      if(_edShapeType==='select'){
-        // Si hay objeto seleccionado, dejar que el sistema normal de handles/drag actúe
-        // Solo buscar nueva shape si no hay handle ni objeto bajo el toque
-        const c=edCoords(e);
-        if(edSelectedIdx>=0){
-          const _la=edLayers[edSelectedIdx];
-          const _pw=edPageW(),_ph=edPageH();
-          const _z=edCamera.z;
-          const hitScreen = e.pointerType==='touch' ? 28 : 18;
-          // Si el toque está en un handle → dejar pasar al sistema normal
-          let onHandle=false;
-          for(const p of _la.getControlPoints()){
-            const dist=Math.hypot((c.nx-p.x)*_pw,(c.ny-p.y)*_ph)*_z;
-            if(dist<hitScreen){onHandle=true;break;}
-          }
-          if(onHandle){
-            // Caer al código normal de handles más abajo
-          } else if(_la.contains(c.nx,c.ny)){
-            // Dentro del objeto — caer al drag normal
-          } else {
-            // Fuera del objeto y sin handle — buscar otra shape
-            let found=-1;
-            for(let i=edLayers.length-1;i>=0;i--){
-              if(edLayers[i].type==='shape' && edLayers[i].contains(c.nx,c.ny)){found=i;break;}
-            }
-            edSelectedIdx=found;
-            edRedraw();
-            _edActivateShapeTool();
-            return;
-          }
-        } else {
-          let found=-1;
-          for(let i=edLayers.length-1;i>=0;i--){
-            if(edLayers[i].type==='shape' && edLayers[i].contains(c.nx,c.ny)){found=i;break;}
-          }
-          edSelectedIdx=found;
-          edRedraw();
-          _edActivateShapeTool();
-          return;
-        }
-      } else {
-        edActiveTool='shape'; edCanvas.className='tool-shape';
-      }
-    }
-  }
   if(edActiveTool==='shape'){
     if(tgt !== edCanvas) return;
     // Deseleccionar cualquier shape existente antes de crear una nueva
@@ -2205,53 +2227,11 @@ function edOnStart(e){
     _edShapeStart = {x:c.nx, y:c.ny};
     _edShapePreview = new ShapeLayer(_edShapeType, c.nx, c.ny, 0.01, 0.01);
     _edShapePreview.color     = edDrawColor || '#000000';
-    _edShapePreview.fillColor = edDrawFillColor || 'none';
+    _edShapePreview.fillColor = edDrawFillColor || '#ffffff';
     _edShapePreview.lineWidth = edDrawSize || 3;
     edLayers.push(_edShapePreview);
     edRedraw();
     return;
-  }
-  // ── LINE: tap para añadir vértice ──
-  if(edActiveTool==='select' || edActiveTool==='line'){
-    const _p=$('edOptionsPanel');
-    if(_p?.dataset.mode==='line' && tgt===edCanvas){
-      if(_edLineType==='select'){
-        const c=edCoords(e);
-        if(edSelectedIdx>=0){
-          const _la=edLayers[edSelectedIdx];
-          const _pw=edPageW(),_ph=edPageH();
-          const _z=edCamera.z;
-          const hitScreen = e.pointerType==='touch' ? 28 : 18;
-          let onHandle=false;
-          for(const p of _la.getControlPoints()){
-            if(Math.hypot((c.nx-p.x)*_pw,(c.ny-p.y)*_ph)*_z<hitScreen){onHandle=true;break;}
-          }
-          if(!onHandle && !_la.contains(c.nx,c.ny)){
-            // Fuera del objeto y sin handle — buscar otra line
-            let found=-1;
-            for(let i=edLayers.length-1;i>=0;i--){
-              if(edLayers[i].type==='line' && edLayers[i].contains(c.nx,c.ny)){found=i;break;}
-            }
-            edSelectedIdx=found;
-            edRedraw();
-            _edActivateLineTool();
-            return;
-          }
-          // onHandle o dentro del objeto — dejar al sistema normal
-        } else {
-          let found=-1;
-          for(let i=edLayers.length-1;i>=0;i--){
-            if(edLayers[i].type==='line' && edLayers[i].contains(c.nx,c.ny)){found=i;break;}
-          }
-          edSelectedIdx=found;
-          edRedraw();
-          _edActivateLineTool();
-          return;
-        }
-      } else {
-        edActiveTool='line'; edCanvas.className='tool-line';
-      }
-    }
   }
   if(edActiveTool==='line'){
     if(tgt !== edCanvas) return;
@@ -2363,6 +2343,7 @@ function edOnStart(e){
         clearTimeout(window._edLongPress);
         _edHandleDoubleTap(found);
         _edLastTapTime = 0; _edLastTapIdx = -1;
+        return; // no continuar procesando este evento
       } else {
         _edLastTapTime = now; _edLastTapIdx = found;
         // Sin long-press en táctil — solo doble toque abre el panel
@@ -2375,11 +2356,14 @@ function edOnStart(e){
         clearTimeout(window._edLongPress);
         _edHandleDoubleTap(found);
         _edLastTapTime = 0; _edLastTapIdx = -1;
+        return; // no continuar procesando este evento
       } else {
         _edLastTapTime = now; _edLastTapIdx = found;
-        // Long-press 600ms en PC (ratón) → abrir propiedades
+        // Long-press 600ms en PC (ratón) → abrir propiedades (no para shape/line)
         window._edLongPress = setTimeout(() => {
           if(edSelectedIdx === found && !edIsResizing){
+            const _la = edLayers[found];
+            if(_la && (_la.type === 'shape' || _la.type === 'line')) return;
             edIsDragging = false;
             edRenderOptionsPanel('props');
           }
@@ -2393,28 +2377,12 @@ function edOnStart(e){
     const _panelWasProps = _panel?.dataset.mode === 'props';
     edSelectedIdx = -1;
     edHideContextMenu();
-    if (_panelWasProps && _wasType === 'shape') {
-      // Volver al submenú Objeto para poder crear más formas
-      edActiveTool = 'shape';
-      edCanvas.className = 'tool-shape';
-      if (_wasLayer) {
-        _edShapeType  = _wasLayer.shape || 'rect';
-        edDrawColor   = _wasLayer.color || '#000000';
-        edDrawSize    = _wasLayer.lineWidth || 3;
-      }
-      _edActivateShapeTool();
-    } else if (_panelWasProps && _wasType === 'line') {
-      // Volver al submenú Rectas para poder añadir más
-      edActiveTool = 'line';
-      edCanvas.className = 'tool-line';
-      if (_wasLayer) {
-        edDrawColor = _wasLayer.color || '#000000';
-        edDrawSize  = _wasLayer.lineWidth || 3;
-      }
-      _edActivateLineTool();
-    } else {
-      edRenderOptionsPanel();
+    // Con barra flotante activa: solo deseleccionar, sin abrir submenús
+    if($('edDrawBar')?.classList.contains('visible') || $('edShapeBar')?.classList.contains('visible')){
+      edRedraw(); return;
     }
+    // Clic en vacío: cerrar panel si no es draw
+    edRenderOptionsPanel();
   }
   edRedraw();
 }
@@ -2670,7 +2638,14 @@ function edOnEnd(e){
   if(edActiveTool === 'fill' && window._edFillPending){
     const fp = window._edFillPending; window._edFillPending = null;
     if(!window._edActivePointers || window._edActivePointers.size === 0){
-      edFloodFill(fp.nx, fp.ny);
+      // Si hay shape/line seleccionada en modo barra flotante, aplicar fillColor
+      if($('edDrawBar')?.classList.contains('visible') && edSelectedIdx >= 0){
+        const _la = edLayers[edSelectedIdx];
+        if(_la && (_la.type==='shape' || _la.type==='line')){
+          _la.fillColor = edDrawColor;
+          edPushHistory(); edRedraw();
+        } else { edFloodFill(fp.nx, fp.ny); }
+      } else { edFloodFill(fp.nx, fp.ny); }
     }
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
@@ -2733,7 +2708,6 @@ function edOnEnd(e){
     _edShapeType = 'select';
     edPushHistory();
     edRedraw();
-    _edActivateShapeTool(); // refrescar panel mostrando botón seleccionar activo
     return;
   }
   clearTimeout(window._edLongPress);
@@ -3240,44 +3214,56 @@ function edDeactivateDrawTool(){
   const panel=$('edOptionsPanel');
   if(panel){ panel.classList.remove('open'); delete panel.dataset.mode; }
   edDrawBarHide();
+  $('edShapeBar')?.classList.remove('visible');
   _edDrawUnlockUI();
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
 }
 
 /* ── HERRAMIENTA SHAPE (rectángulo / elipse) ── */
+/* ══════════════════════════════════════════
+   HERRAMIENTA SHAPE (rectángulo / elipse)
+   Patrón idéntico a edRenderOptionsPanel('draw')
+   ══════════════════════════════════════════ */
 function _edActivateShapeTool() {
-  edDrawBarHide();
-  const panel = $('edOptionsPanel');
-  if (!panel) return;
-  const _sel = (edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.type === 'shape') ? edLayers[edSelectedIdx] : null;
-  const col     = _sel ? _sel.color      : (edDrawColor  || '#000000');
-  const fillCol = _sel ? (_sel.fillColor||'none') : (edDrawFillColor||'none');
-  const lw      = _sel ? _sel.lineWidth  : (edDrawSize   || 3);
+  // Si minimizado: mostrar edShapeBar en lugar del panel
+  if(edMinimized){
+    window._edMinimizedDrawMode = 'shape';
+    const panel=$('edOptionsPanel');
+    if(panel) panel.style.visibility='hidden';
+    const bar=$('edShapeBar');
+    if(bar){ bar.style.left=_esbBarX+'px'; bar.style.top=_esbBarY+'px'; bar.classList.add('visible'); }
+    if(typeof _esbSyncTool==='function') _esbSyncTool();
+    return;
+  }
+  $('edShapeBar')?.classList.remove('visible');
+  const panel=$('edOptionsPanel');
+  if(!panel) return;
+
+  _edDrawLockUI(); // deshabilitar menús igual que en draw
+
+  const _sel = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape') ? edLayers[edSelectedIdx] : null;
+  const col     = _sel?.color     || edDrawColor  || '#000000';
+  const fillCol = _sel ? (_sel.fillColor||'#ffffff') : (edDrawFillColor||'#ffffff');
+  const lw      = _sel?.lineWidth ?? edDrawSize ?? 3;
   const opacity = _sel ? Math.round((_sel.opacity??1)*100) : 100;
   const hasFill = fillCol !== 'none';
   const fillVal = hasFill ? fillCol : '#ffffff';
+
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <!-- FILA 1: Herramientas -->
+  <!-- FILA 1: Tipo + cambiar a Rectas -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
-    <button id="op-tool-pen" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Dibujar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-eraser" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Borrar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-fill" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Rellenar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-tool-shape" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:rgba(0,0,0,.08);color:var(--black)">Objeto</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-tool-line" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Rectas</button>
   </div>
-  <!-- SEP -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <!-- FILA 2: tipo + colores + grosor + opacidad -->
+  <!-- FILA 2: Tipo de forma + color + grosor + opacidad -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%">
     <button id="op-shape-rect" style="flex-shrink:0;border:2px solid ${_edShapeType==='rect'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='rect'?'rgba(0,0,0,.08)':'transparent'}">▭</button>
     <button id="op-shape-ellipse" style="flex-shrink:0;border:2px solid ${_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
-    <button id="op-shape-select" style="flex-shrink:0;border:2px solid ${_edShapeType==='select'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='select'?'rgba(0,0,0,.08)':'transparent'}">↖</button>
+    <button id="op-shape-select" style="flex-shrink:0;border:2px solid ${_edShapeType==='select'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='select'?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0" title="Color borde">
       <button id="op-shape-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0">
@@ -3297,7 +3283,6 @@ function _edActivateShapeTool() {
       <input type="number" id="op-shape-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
   </div>
-  <!-- SEP -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA RELLENO -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0">
@@ -3309,7 +3294,6 @@ function _edActivateShapeTool() {
       </button>
     </div>
   </div>
-  <!-- SEP -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
@@ -3324,10 +3308,10 @@ function _edActivateShapeTool() {
   panel.classList.add('open');
   panel.dataset.mode = 'shape';
 
-  // Helper live
+  // ── Helpers ──
   const _curShape = () => {
-    const l = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-    return l?.type === 'shape' ? l : null;
+    const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    return l?.type==='shape' ? l : null;
   };
   const _updateInfo = () => {
     const s=_curShape();
@@ -3336,9 +3320,6 @@ function _edActivateShapeTool() {
   };
 
   // ── Herramientas ──
-  $('op-tool-pen')?.addEventListener('click',()=>{ edActiveTool='draw'; edCanvas.className='tool-draw'; edRenderOptionsPanel('draw'); });
-  $('op-tool-eraser')?.addEventListener('click',()=>{ edActiveTool='eraser'; edCanvas.className='tool-eraser'; edRenderOptionsPanel('eraser'); });
-  $('op-tool-fill')?.addEventListener('click',()=>{ edActiveTool='fill'; edCanvas.className='tool-fill'; edRenderOptionsPanel('fill'); });
   $('op-tool-shape')?.addEventListener('click',()=>{ _edActivateShapeTool(); });
   $('op-tool-line')?.addEventListener('click',()=>{ edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
 
@@ -3346,37 +3327,25 @@ function _edActivateShapeTool() {
   $('op-shape-rect')?.addEventListener('click',()=>{ _edShapeType='rect'; const s=_curShape(); if(s){s.shape='rect';edRedraw();} _edActivateShapeTool(); });
   $('op-shape-ellipse')?.addEventListener('click',()=>{ _edShapeType='ellipse'; const s=_curShape(); if(s){s.shape='ellipse';edRedraw();} _edActivateShapeTool(); });
   $('op-shape-select')?.addEventListener('click',()=>{
-    _edShapeType='select';
-    // Cambiar a modo select — solo shapes son seleccionables
-    edActiveTool='select'; edCanvas.className='';
-    edSelectedIdx=-1; edRedraw();
+    _edShapeType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateShapeTool();
   });
 
   // ── Color borde ──
-  $('op-shape-color-btn')?.addEventListener('click',()=>{
-    if(edLastPointerIsTouch){
-      _edShowColorPicker((hex,final)=>{
-        edDrawColor=hex;
-        const s=_curShape(); if(s){s.color=hex;edRedraw();}
-        $('op-shape-color-btn').style.background=hex;
-      });
-    } else { $('op-shape-color')?.click(); }
-  });
+  $('op-shape-color-btn')?.addEventListener('click',()=>{ $('op-shape-color')?.click(); });
   $('op-shape-color')?.addEventListener('input',e=>{
-    edDrawColor=e.target.value;
-    $('op-shape-color-btn').style.background=e.target.value;
-    const s=_curShape(); if(s){s.color=e.target.value;edRedraw();}
-    _updateInfo();
+    const hex=e.target.value; edDrawColor=hex;
+    $('op-shape-color-btn').style.background=hex;
+    const s=_curShape(); if(s){s.color=hex;edRedraw();}
   });
+  $('op-shape-color')?.addEventListener('change',e=>{ edPushHistory(); });
 
-  // ── Grosor (mutuamente exclusivo con opacidad) ──
+  // ── Grosor ──
   $('op-size-btn')?.addEventListener('click',()=>{
-    const sl=$('op-size-slider'), slO=$('op-opacity-slider');
-    if(!sl) return;
+    const sl=$('op-size-slider'),ob=$('op-opacity-slider');
     const open=sl.style.display==='none'||sl.style.display==='';
     sl.style.display=open?'flex':'none';
-    if(open&&slO){slO.style.display='none';$('op-opacity-btn').style.background='transparent';}
+    if(open&&ob){ob.style.display='none';$('op-opacity-btn').style.background='transparent';}
     $('op-size-btn').style.background=open?'var(--gray-200)':'transparent';
   });
   $('op-dsize')?.addEventListener('input',e=>{
@@ -3391,9 +3360,9 @@ function _edActivateShapeTool() {
     const s=_curShape(); if(s){s.lineWidth=v;edRedraw();} _updateInfo();
   });
 
-  // ── Opacidad (mutuamente exclusivo con grosor) ──
+  // ── Opacidad ──
   $('op-opacity-btn')?.addEventListener('click',()=>{
-    const slO=$('op-opacity-slider'), sl=$('op-size-slider');
+    const slO=$('op-opacity-slider'),sl=$('op-size-slider');
     if(!slO) return;
     const open=slO.style.display==='none'||slO.style.display==='';
     slO.style.display=open?'flex':'none';
@@ -3413,96 +3382,115 @@ function _edActivateShapeTool() {
   });
 
   // ── Relleno ──
-  const _fillOn=$('op-shape-fill-on'), _fillBtn=$('op-shape-fill-btn'), _fillCol=$('op-shape-fill-color');
-  const _applyFill=()=>{
-    const on=_fillOn?.checked, c=_fillCol?.value||'#ffffff';
-    const fill=on?c:'none';
-    edDrawFillColor=fill;
-    if(_fillBtn) _fillBtn.style.opacity=on?'1':'0.4';
-    const s=_curShape(); if(s){s.fillColor=fill;edRedraw();}
-  };
-  $('op-shape-fill-on')?.addEventListener('change',_applyFill);
-  $('op-shape-fill-btn')?.addEventListener('click',()=>{
-    if(!_fillOn?.checked) return;
-    if(edLastPointerIsTouch){
-      _edShowColorPicker((hex)=>{ if(_fillCol){_fillCol.value=hex;_fillBtn.style.background=hex;}_applyFill(); });
-    } else { _fillCol?.click(); }
+  $('op-shape-fill-on')?.addEventListener('change',e=>{
+    const on=e.target.checked;
+    const fb=$('op-shape-fill-btn'); if(fb) fb.style.opacity=on?1:0.4;
+    const fc=$('op-shape-fill-color');
+    const hex=fc?fc.value:'#ffffff';
+    const newFill=on?hex:'none';
+    edDrawFillColor=newFill;
+    const s=_curShape(); if(s){s.fillColor=newFill;edRedraw();edPushHistory();}
   });
+  $('op-shape-fill-btn')?.addEventListener('click',()=>{ $('op-shape-fill-color')?.click(); });
   $('op-shape-fill-color')?.addEventListener('input',e=>{
-    if(_fillBtn) _fillBtn.style.background=e.target.value;
-    _applyFill();
+    const hex=e.target.value; edDrawFillColor=hex;
+    $('op-shape-fill-btn').style.background=hex;
+    const s=_curShape(); if(s){s.fillColor=hex;edRedraw();}
+  });
+  $('op-shape-fill-color')?.addEventListener('change',()=>{ edPushHistory(); });
+
+  // ── Minimizar (idéntico a draw) ──
+
+  // ── OK ──
+  $('op-draw-ok')?.addEventListener('click',()=>{
+    edCloseOptionsPanel();
+    edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
+    _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
+    $('edShapeBar')?.classList.remove('visible');
+    _edDrawUnlockUI();
+    if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
+    edRedraw();
   });
 
-  // ── Deshacer / Rehacer ──
-  const _updUR=()=>{
-    const u=$('op-shape-undo'),r=$('op-shape-redo');
-    if(u) u.disabled=edHistoryIdx<=0;
-    if(r) r.disabled=edHistoryIdx>=edHistory.length-1;
-  };
-  _updUR();
-  $('op-shape-undo')?.addEventListener('click',()=>{ edUndo(); _updUR(); });
-  $('op-shape-redo')?.addEventListener('click',()=>{ edRedo(); _updUR(); });
-
-  // ── Minimizar (no presente en submenú shape) ──
-
-  // ── Eliminar / Duplicar ──
+  // ── Eliminar ──
   $('op-shape-del')?.addEventListener('click',()=>{
     const s=_curShape(); if(!s) return;
+    if(!confirm('¿Eliminar objeto?')) return;
     const idx=edLayers.indexOf(s);
-    if(idx>=0){edLayers.splice(idx,1);edSelectedIdx=-1;edPushHistory();edRedraw();}
-    _edActivateShapeTool();
+    if(idx>=0){edLayers.splice(idx,1);}
+    edSelectedIdx=-1; edPushHistory(); edRedraw(); _edActivateShapeTool();
   });
+
+  // ── Duplicar ──
   $('op-shape-dup')?.addEventListener('click',()=>{
     const s=_curShape(); if(!s) return;
-    const copy=new ShapeLayer(s.shape,s.x+0.03,s.y+0.03,s.width,s.height);
-    copy.color=s.color; copy.fillColor=s.fillColor||'none';
-    copy.lineWidth=s.lineWidth; copy.rotation=s.rotation||0; copy.opacity=s.opacity??1;
+    const copy=new ShapeLayer(s.shape, s.x+0.03, s.y+0.03, s.width, s.height);
+    copy.color=s.color; copy.fillColor=s.fillColor; copy.lineWidth=s.lineWidth;
+    copy.opacity=s.opacity??1; copy.rotation=s.rotation||0;
     edLayers.push(copy); edSelectedIdx=edLayers.length-1;
     edPushHistory(); edRedraw(); _edActivateShapeTool();
   });
 
-  // ── OK ──
-  $('op-draw-ok')?.addEventListener('click',()=>{ edDeactivateDrawTool(); });
+  // ── Deshacer / Rehacer ──
+  const _updURShape = ()=>{
+    const u=$('op-shape-undo'),r=$('op-shape-redo');
+    if(u) u.disabled=edHistoryIdx<=0;
+    if(r) r.disabled=edHistoryIdx>=edHistory.length-1;
+  };
+  _updURShape();
+  $('op-shape-undo')?.addEventListener('click',()=>{ edUndo(); _updURShape(); });
+  $('op-shape-redo')?.addEventListener('click',()=>{ edRedo(); _updURShape(); });
+
+  requestAnimationFrame(edFitCanvas);
 }
 
-
-/* ── HERRAMIENTA LINE (rectas y polígonos) ── */
+/* ══════════════════════════════════════════
+   HERRAMIENTA LINE — rectas y polígonos
+   Patrón idéntico a edRenderOptionsPanel('draw')
+   ══════════════════════════════════════════ */
 function _edActivateLineTool() {
-  edDrawBarHide();
-  const panel = $('edOptionsPanel');
-  if (!panel) return;
-  const _sel = (edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.type === 'line') ? edLayers[edSelectedIdx] : null;
-  const _active = _edLineLayer; // línea en construcción
-  const col     = _active ? _active.color     : (_sel ? _sel.color     : (edDrawColor || '#000000'));
-  const lw      = _active ? _active.lineWidth : (_sel ? _sel.lineWidth : (edDrawSize  || 3));
-  const opacity = _sel ? Math.round((_sel.opacity??1)*100) : 100;
-  const isClosed = _active ? _active.closed : (_sel ? _sel.closed : false);
-  const nPoints  = _active ? _active.points.length : (_sel ? _sel.points.length : 0);
-  const isSelectMode = (_edLineType === 'select');
-  const fillCol  = _active ? (_active.fillColor||'none') : (_sel ? (_sel.fillColor||'none') : 'none');
-  const hasFill  = fillCol !== 'none';
-  const fillVal  = hasFill ? fillCol : '#ffffff';
+  // Si minimizado: mostrar edShapeBar en lugar del panel
+  if(edMinimized){
+    window._edMinimizedDrawMode = 'line';
+    const panel=$('edOptionsPanel');
+    if(panel) panel.style.visibility='hidden';
+    const bar=$('edShapeBar');
+    if(bar){ bar.style.left=_esbBarX+'px'; bar.style.top=_esbBarY+'px'; bar.classList.add('visible'); }
+    if(typeof _esbSyncTool==='function') _esbSyncTool();
+    return;
+  }
+  $('edShapeBar')?.classList.remove('visible');
+  const panel=$('edOptionsPanel');
+  if(!panel) return;
+
+  _edDrawLockUI(); // deshabilitar menús igual que en draw
+
+  const _active = _edLineLayer;
+  const _sel    = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line') ? edLayers[edSelectedIdx] : null;
+  const _cur    = _active || _sel;
+  const col     = _cur?.color    || edDrawColor  || '#000000';
+  const lw      = _cur?.lineWidth ?? edDrawSize ?? 3;
+  const opacity = _cur ? Math.round((_cur.opacity??1)*100) : 100;
+  const isSelectMode = _edLineType === 'select';
+  const nPoints = _edLineLayer?.points?.length || 0;
+  const isClosed = _cur?.closed || false;
+  const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
+  const hasFill = fillCol !== 'none' && isClosed;
+  const fillVal = hasFill ? fillCol : '#ffffff';
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <!-- FILA 1: Herramientas -->
+  <!-- FILA 1: Tipo + cambiar a Objeto -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
-    <button id="op-tool-pen" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Dibujar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-eraser" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Borrar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-fill" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Rellenar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-tool-shape" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Objeto</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-tool-line" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:rgba(0,0,0,.08);color:var(--black)">Rectas</button>
   </div>
-  <!-- SEP -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: modo recta/seleccionar + color + grosor + opacidad -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%">
-    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${!isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${!isSelectMode?'rgba(0,0,0,.08)':'transparent'}">✏️</button>
-    <button id="op-line-select-btn" style="flex-shrink:0;border:2px solid ${isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${isSelectMode?'rgba(0,0,0,.08)':'transparent'}">↖</button>
+    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${!isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${!isSelectMode?'rgba(0,0,0,.08)':'transparent'}">╱</button>
+    <button id="op-line-select-btn" style="flex-shrink:0;border:2px solid ${isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${isSelectMode?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0" title="Color línea">
       <button id="op-line-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0">
@@ -3512,8 +3500,8 @@ function _edActivateLineTool() {
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="range" id="op-dsize" min="1" max="20" value="${lw}" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-dsize-num" min="1" max="20" value="${lw}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+      <input type="range" id="op-dsize" min="0" max="20" value="${lw}" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <input type="number" id="op-dsize-num" min="0" max="20" value="${lw}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-opacity-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
@@ -3522,28 +3510,24 @@ function _edActivateLineTool() {
       <input type="number" id="op-line-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
   </div>
-  <!-- SEP -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <!-- FILA específica rectas -->
+  <!-- FILA CERRAR + INFO VÉRTICES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
-    <button id="op-line-close" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-size:.8rem;font-weight:700;cursor:pointer;background:${isClosed?'rgba(0,0,0,.08)':'transparent'}">${isClosed?'Abrir':'Cerrar'}</button>
+    <button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:${isClosed?'var(--gray-200)':'transparent'};cursor:pointer;color:var(--gray-700)">${isClosed?'Abrir':'Cerrar'}</button>
     <button id="op-line-finish" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-size:.8rem;font-weight:700;cursor:pointer;background:transparent">Terminar</button>
     <span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>
   </div>
-  <!-- SEP -->
+  ${isClosed?`
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <!-- FILA RELLENO (solo aplica en polígono cerrado) -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0">
-    <span style="font-size:.72rem;font-weight:700;color:${isClosed?'var(--gray-600)':'var(--gray-400)'}">Relleno</span>
-    <input type="checkbox" id="op-line-fill-on" ${hasFill?'checked':''} ${isClosed?'':'disabled'} style="cursor:pointer;flex-shrink:0;opacity:${isClosed?1:0.4}">
+    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600)">Relleno</span>
+    <input type="checkbox" id="op-line-fill-on" ${hasFill?'checked':''} style="cursor:pointer;flex-shrink:0">
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
-      <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill&&isClosed?1:0.4}">
+      <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}">
         <input type="color" id="op-line-fill-color" value="${fillVal}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none">
       </button>
     </div>
-    ${!isClosed?`<span style="font-size:.68rem;color:var(--gray-400);font-style:italic">Cierra el polígono para rellenar</span>`:''}
-  </div>
-  <!-- SEP -->
+  </div>` : ''}
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
@@ -3558,59 +3542,52 @@ function _edActivateLineTool() {
   panel.classList.add('open');
   panel.dataset.mode = 'line';
 
-  // Helper live — línea activa (en construcción) o seleccionada
+  // ── Helpers ──
   const _curLine = () => {
-    if (_edLineLayer) return _edLineLayer;
-    const l = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-    return l?.type === 'line' ? l : null;
+    if(_edLineLayer) return _edLineLayer;
+    const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    return l?.type==='line' ? l : null;
   };
   const _updateInfo = () => {
+    const info=$('op-line-info');
     const l=_curLine();
-    const info=$('op-line-info'); if(info) info.textContent=l?(l.points.length+' vért.'):'Toca para añadir vértices';
-    const st=$('op-line-status'); if(st) st.textContent=(l?l.lineWidth:edDrawSize)+'px · '+Math.round((l?.opacity??1)*100)+'%';
+    if(info) info.textContent = l ? (l.points.length+' vért.') : 'Toca para añadir vértices';
+    const status=$('op-line-status');
+    if(status){ const ll=_curLine(); if(ll) status.textContent=ll.lineWidth+'px·'+Math.round((ll.opacity??1)*100)+'%'; }
   };
+  const _updUR = () => {
+    const u=$('op-line-undo'),r=$('op-line-redo');
+    if(u) u.disabled=edHistoryIdx<=0;
+    if(r) r.disabled=edHistoryIdx>=edHistory.length-1;
+  };
+  _updUR();
 
   // ── Herramientas ──
-  $('op-tool-pen')?.addEventListener('click',()=>{ _edFinishLine(); edActiveTool='draw'; edCanvas.className='tool-draw'; edRenderOptionsPanel('draw'); });
-  $('op-tool-eraser')?.addEventListener('click',()=>{ _edFinishLine(); edActiveTool='eraser'; edCanvas.className='tool-eraser'; edRenderOptionsPanel('eraser'); });
-  $('op-tool-fill')?.addEventListener('click',()=>{ _edFinishLine(); edActiveTool='fill'; edCanvas.className='tool-fill'; edRenderOptionsPanel('fill'); });
-  $('op-tool-shape')?.addEventListener('click',()=>{ _edFinishLine(); edActiveTool='shape'; _edActivateShapeTool(); });
-  $('op-tool-line')?.addEventListener('click',()=>{ /* ya estamos */ });
+  $('op-tool-shape')?.addEventListener('click',()=>{ _edFinishLine(); edActiveTool='shape'; edCanvas.className='tool-shape'; _edActivateShapeTool(); });
+  $('op-tool-line')?.addEventListener('click',()=>{ edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
 
   // ── Modo dibujar / seleccionar ──
   $('op-line-draw-btn')?.addEventListener('click',()=>{ _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
   $('op-line-select-btn')?.addEventListener('click',()=>{
-    _edLineType='select';
-    _edFinishLine();
-    edActiveTool='select'; edCanvas.className='';
-    edSelectedIdx=-1; edRedraw();
+    _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateLineTool();
   });
 
   // ── Color ──
-  $('op-line-color-btn')?.addEventListener('click',()=>{
-    if(edLastPointerIsTouch){
-      _edShowColorPicker((hex)=>{
-        edDrawColor=hex;
-        const l=_curLine(); if(l){l.color=hex;edRedraw();}
-        $('op-line-color-btn').style.background=hex;
-      });
-    } else { $('op-line-color')?.click(); }
-  });
+  $('op-line-color-btn')?.addEventListener('click',()=>{ $('op-line-color')?.click(); });
   $('op-line-color')?.addEventListener('input',e=>{
-    edDrawColor=e.target.value;
-    $('op-line-color-btn').style.background=e.target.value;
-    const l=_curLine(); if(l){l.color=e.target.value;edRedraw();}
-    _updateInfo();
+    const hex=e.target.value; edDrawColor=hex;
+    $('op-line-color-btn').style.background=hex;
+    const l=_curLine(); if(l){l.color=hex;edRedraw();}
   });
+  $('op-line-color')?.addEventListener('change',()=>{ edPushHistory(); });
 
   // ── Grosor ──
   $('op-size-btn')?.addEventListener('click',()=>{
-    const sl=$('op-size-slider'),slO=$('op-opacity-slider');
-    if(!sl) return;
+    const sl=$('op-size-slider'),ob=$('op-opacity-slider');
     const open=sl.style.display==='none'||sl.style.display==='';
     sl.style.display=open?'flex':'none';
-    if(open&&slO){slO.style.display='none';$('op-opacity-btn').style.background='transparent';}
+    if(open&&ob){ob.style.display='none';$('op-opacity-btn').style.background='transparent';}
     $('op-size-btn').style.background=open?'var(--gray-200)':'transparent';
   });
   $('op-dsize')?.addEventListener('input',e=>{
@@ -3619,7 +3596,7 @@ function _edActivateLineTool() {
     const l=_curLine(); if(l){l.lineWidth=v;edRedraw();} _updateInfo();
   });
   $('op-dsize-num')?.addEventListener('change',e=>{
-    const v=Math.max(1,Math.min(20,parseInt(e.target.value)||1));
+    const v=Math.max(0,Math.min(20,parseInt(e.target.value)||0));
     e.target.value=v; edDrawSize=v;
     const sl=$('op-dsize'); if(sl) sl.value=v;
     const l=_curLine(); if(l){l.lineWidth=v;edRedraw();} _updateInfo();
@@ -3646,64 +3623,75 @@ function _edActivateLineTool() {
     const l=_curLine(); if(l){l.opacity=v/100;edRedraw();} _updateInfo();
   });
 
-  // ── Cerrar / Terminar ──
-  $('op-line-close')?.addEventListener('click',()=>{
-    const l=_curLine();
-    if(l && l.points.length>=3){ l.closed=!l.closed; edRedraw(); _edActivateLineTool(); }
+  // ── Cerrar polígono ──
+  $('op-line-close-btn')?.addEventListener('click',()=>{
+    const l=_curLine(); if(!l||l.points.length<3) return;
+    l.closed=!l.closed; edRedraw(); _edActivateLineTool();
   });
-  // ── Relleno (solo polígono cerrado) ──
-  const _lineFillOn=$('op-line-fill-on'), _lineFillBtn=$('op-line-fill-btn'), _lineFillCol=$('op-line-fill-color');
-  const _applyLineFill=()=>{
-    const on=_lineFillOn?.checked, c=_lineFillCol?.value||'#ffffff';
-    const fill=on?c:'none';
-    if(_lineFillBtn) _lineFillBtn.style.opacity=on?'1':'0.4';
-    const l=_curLine(); if(l){l.fillColor=fill;edRedraw();}
-  };
-  $('op-line-fill-on')?.addEventListener('change',_applyLineFill);
-  $('op-line-fill-btn')?.addEventListener('click',()=>{
-    if(!_lineFillOn?.checked) return;
-    if(edLastPointerIsTouch){
-      _edShowColorPicker((hex)=>{ if(_lineFillCol){_lineFillCol.value=hex;_lineFillBtn.style.background=hex;}_applyLineFill(); });
-    } else { _lineFillCol?.click(); }
+
+  // ── Terminar ──
+  $('op-line-finish')?.addEventListener('click',()=>{ _edFinishLine(); _edActivateLineTool(); });
+
+  // ── Relleno ──
+  $('op-line-fill-on')?.addEventListener('change',e=>{
+    const on=e.target.checked;
+    const fb=$('op-line-fill-btn'); if(fb) fb.style.opacity=on?1:0.4;
+    const fc=$('op-line-fill-color');
+    const hex=fc?fc.value:'#ffffff';
+    const newFill=on?hex:'none';
+    edDrawFillColor=newFill;
+    const l=_curLine(); if(l){l.fillColor=newFill;edRedraw();edPushHistory();}
   });
+  $('op-line-fill-btn')?.addEventListener('click',()=>{ $('op-line-fill-color')?.click(); });
   $('op-line-fill-color')?.addEventListener('input',e=>{
-    if(_lineFillBtn) _lineFillBtn.style.background=e.target.value;
-    _applyLineFill();
+    const hex=e.target.value; edDrawFillColor=hex;
+    $('op-line-fill-btn').style.background=hex;
+    const l=_curLine(); if(l){l.fillColor=hex;edRedraw();}
   });
-  $('op-line-finish')?.addEventListener('click',()=>{ _edFinishLine(); });
+  $('op-line-fill-color')?.addEventListener('change',()=>{ edPushHistory(); });
 
-  // ── Deshacer / Rehacer ──
-  const _updUR=()=>{
-    const u=$('op-line-undo'),r=$('op-line-redo');
-    if(u) u.disabled=edHistoryIdx<=0;
-    if(r) r.disabled=edHistoryIdx>=edHistory.length-1;
-  };
-  _updUR();
-  $('op-line-undo')?.addEventListener('click',()=>{ edUndo(); _updUR(); });
-  $('op-line-redo')?.addEventListener('click',()=>{ edRedo(); _updUR(); });
+  // ── Minimizar (idéntico a draw) ──
 
-  // ── Eliminar / Duplicar ──
+  // ── OK ──
+  $('op-draw-ok')?.addEventListener('click',()=>{
+    _edFinishLine();
+    edCloseOptionsPanel();
+    edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
+    $('edShapeBar')?.classList.remove('visible');
+    _edDrawUnlockUI();
+    if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
+    edRedraw();
+  });
+
+  // ── Eliminar ──
   $('op-line-del')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l) return;
+    if(!confirm('¿Eliminar?')) return;
     _edLineLayer=null;
     const idx=edLayers.indexOf(l);
-    if(idx>=0){edLayers.splice(idx,1);edSelectedIdx=-1;edPushHistory();edRedraw();}
-    _edActivateLineTool();
+    if(idx>=0){edLayers.splice(idx,1);}
+    edSelectedIdx=-1; edPushHistory(); edRedraw(); _edActivateLineTool();
   });
+
+  // ── Duplicar ──
   $('op-line-dup')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l||l.points.length<2) return;
     const copy=new LineLayer();
     copy.points=l.points.map(p=>({x:p.x+0.03,y:p.y+0.03}));
     copy.color=l.color; copy.fillColor=l.fillColor||'none'; copy.lineWidth=l.lineWidth;
-    copy.closed=l.closed; copy.opacity=l.opacity??1;
-    copy._updateBbox();
+    copy.closed=l.closed; copy.opacity=l.opacity??1; copy._updateBbox();
     edLayers.push(copy); edSelectedIdx=edLayers.length-1;
     edPushHistory(); edRedraw(); _edActivateLineTool();
   });
 
-  // ── OK ──
-  $('op-draw-ok')?.addEventListener('click',()=>{ _edFinishLine(); edDeactivateDrawTool(); });
+  // ── Deshacer / Rehacer ──
+  _updUR();
+  $('op-line-undo')?.addEventListener('click',()=>{ edUndo(); _updUR(); });
+  $('op-line-redo')?.addEventListener('click',()=>{ edRedo(); _updUR(); });
+
+  requestAnimationFrame(edFitCanvas);
 }
+
 
 
 function _edFinishLine() {
@@ -3718,7 +3706,8 @@ function _edFinishLine() {
     _edLineType = 'select';
     edPushHistory();
     edRedraw();
-    _edActivateLineTool(); // refrescar panel mostrando botón seleccionar activo
+    const _barWasVisible2 = $('edDrawBar')?.classList.contains('visible');
+    _edActivateLineTool(_barWasVisible2); // refrescar panel mostrando botón seleccionar activo
   } else {
     if (_edLineLayer) {
       const idx = edLayers.indexOf(_edLineLayer);
@@ -3882,12 +3871,7 @@ function edRenderOptionsPanel(mode){
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-tool-fill"
       style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isFill?'rgba(0,0,0,.08)':'transparent'};color:${isFill?'var(--black)':'var(--gray-600)'}">Rellenar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-shape"
-      style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${edActiveTool==='shape'?'rgba(0,0,0,.08)':'transparent'};color:${edActiveTool==='shape'?'var(--black)':'var(--gray-600)'}">Objeto</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-line"
-      style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'};color:${edActiveTool==='line'?'var(--black)':'var(--gray-600)'}">Rectas</button>
+
   </div>
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -4267,7 +4251,7 @@ function edRenderOptionsPanel(mode){
     $('pp-shape-rect')?.addEventListener('click',()=>{ la.shape='rect'; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-shape-ellipse')?.addEventListener('click',()=>{ la.shape='ellipse'; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-shape-color')?.addEventListener('input',e=>{ la.color=e.target.value; edRedraw(); });
-    $('pp-shape-lw')?.addEventListener('change',e=>{ la.lineWidth=Math.max(1,Math.min(20,+e.target.value||3)); edRedraw(); });
+    $('pp-shape-lw')?.addEventListener('change',e=>{ la.lineWidth=Math.max(0,Math.min(20,+e.target.value)); edRedraw(); });
     // Line props — editar recta abre submenú Rectas
     $('pp-edit-line')?.addEventListener('click',()=>{
       edActiveTool='line';
@@ -4308,30 +4292,42 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
-  // Si hay herramienta de dibujo activa, mostrar barra y ocultar panel
+  // Herramientas de dibujo: mostrar barra de dibujo
   if(['draw','eraser','fill'].includes(edActiveTool)){
     window._edMinimizedDrawMode = edActiveTool;
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='hidden';
     edDrawBarShow();
   }
+  // Herramientas de objetos/rectas: mostrar barra de polígonos
+  else if(['shape','line'].includes(edActiveTool)){
+    window._edMinimizedDrawMode = edActiveTool;
+    const panel=$('edOptionsPanel');
+    if(panel) panel.style.visibility='hidden';
+    const bar=$('edShapeBar');
+    if(bar){ bar.style.left=_esbBarX+'px'; bar.style.top=_esbBarY+'px'; bar.classList.add('visible'); }
+    if(typeof _esbSyncTool==='function') _esbSyncTool();
+  }
   edFitCanvas();
 }
-function edMaximize(){
+function edMaximize(keepBar=false){
   edMinimized=false;
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='';
   if(top)top.style.display='';
   $('edFloatBtn')?.classList.remove('visible');
-  edDrawBarHide();
-  // Restaurar panel de dibujo si estaba activo al minimizar
+  if(!keepBar){ edDrawBarHide(); $('edShapeBar')?.classList.remove('visible'); }
+  // Restaurar panel si estaba activo al minimizar
   if(window._edMinimizedDrawMode){
     const mode = window._edMinimizedDrawMode;
     window._edMinimizedDrawMode = null;
+    $('edShapeBar')?.classList.remove('visible');
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
     edFitCanvas();
-    edRenderOptionsPanel(mode);
+    if(mode==='shape') _edActivateShapeTool();
+    else if(mode==='line') _edActivateLineTool();
+    else edRenderOptionsPanel(mode);
   } else {
     edFitCanvas();
   }
@@ -4493,7 +4489,6 @@ function edInitDrawBar() {
   $('edb-pen')?.addEventListener('click', () => {
     edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
     _edbSyncTool();
-    // Sincronizar con panel principal si está visible
     $('op-tool-pen')?.click();
   });
   $('edb-eraser')?.addEventListener('click', () => {
@@ -4568,7 +4563,14 @@ function edInitDrawBar() {
     const max = isEr ? 80 : 48;
     const v = Math.max(1, Math.min(max, parseInt(e.target.value) || 1));
     e.target.value = v;
-    if (isEr) edEraserSize = v; else edDrawSize = v;
+    // Si venimos de edShapeBar, aplicar al objeto seleccionado
+    if($('edb-size-pop')._esbMode){
+      const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+      if(la && (la.type==='shape'||la.type==='line')){ la.lineWidth = v; edPushHistory(); edRedraw(); }
+      edDrawSize = v;
+    } else {
+      if (isEr) edEraserSize = v; else edDrawSize = v;
+    }
     _edbSyncSize();
     const sl = $('op-dsize'); if (sl) { sl.value = v; const n=$('op-dsize-num'); if(n) n.value=v; }
   });
@@ -4578,19 +4580,20 @@ function edInitDrawBar() {
   // Cerrar popover de grosor al tocar fuera
   document.addEventListener('pointerdown', e => {
     const pop = $('edb-size-pop');
-    if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-size')
+    if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-size' && e.target.id !== 'esb-size'){
       pop.style.display = 'none';
+      pop._esbMode = false;
+    }
   }, { passive: true });
 
   // ── Deshacer / Rehacer ──
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
-  // ── OK: delega en el botón ✓ del panel de opciones (instancia del mismo botón) ──
+  // ── OK: finaliza el modo dibujo ──
   $('edb-ok')?.addEventListener('click', () => {
-    // El panel puede tener visibility:hidden en modo minimizado — restaurarlo antes
     const panel = $('edOptionsPanel');
-    if (panel) panel.style.visibility = '';
+    if(panel) panel.style.visibility = '';
     $('op-draw-ok')?.click();
   });
 }
@@ -4710,6 +4713,8 @@ function _edbSyncColor() {
   const sw = $('edb-color'); if (!sw) return;
   sw.style.background = edDrawColor;
   sw.style.display = edActiveTool === 'eraser' ? 'none' : '';
+  // También actualizar el swatch de la barra de polígonos
+  const sw2 = $('esb-color'); if(sw2) sw2.style.background = edDrawColor;
 }
 
 function _edUpdateDrawInfo() {
@@ -4757,6 +4762,7 @@ function edDrawBarUpdate() {
   if (!$('edDrawBar')?.classList.contains('visible')) return;
   _edbSyncTool();
 }
+
 
 
 function _edBubbleTailDir(l){
@@ -5786,6 +5792,145 @@ function EditorView_init(){
     edRenderOptionsPanel('draw');edCloseMenus();
   });
 
+  // ── POLÍGONOS (desde menú Insertar) ──
+  function _esbActivate(shapeType, lineType) {
+    edCloseMenus();
+    edSelectedIdx = -1;
+    edDrawFillColor = '#ffffff';
+    if(shapeType) {
+      _edShapeType = shapeType;
+      edActiveTool = 'shape';
+      edCanvas.className = 'tool-shape';
+      setTimeout(() => _edActivateShapeTool(), 0);
+    } else {
+      _edLineType = lineType || 'draw';
+      edActiveTool = 'line';
+      edCanvas.className = 'tool-line';
+      setTimeout(() => _edActivateLineTool(), 0);
+    }
+  }
+  $('dd-shape-rect')?.addEventListener('click', () => _esbActivate('rect'));
+  $('dd-shape-ellipse')?.addEventListener('click', () => _esbActivate('ellipse'));
+  $('dd-shape-line')?.addEventListener('click', () => _esbActivate(null, 'draw'));
+
+  function _esbSyncTool() {
+    const t = edActiveTool;
+    $('esb-shapes')?.classList.toggle('active', t === 'shape' || t === 'line');
+    $('esb-select')?.classList.toggle('active', t === 'select');
+    $('esb-fill')?.classList.toggle('active', t === 'fill');
+    const dot = $('esb-size-dot');
+    if(dot){ const sz=edDrawSize; const d=Math.max(6,Math.min(24,Math.round(sz*0.6))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
+    const sw = $('esb-color'); if(sw) sw.style.background = edDrawColor;
+  }
+
+  // ── Submenú de tipo de objeto ──
+  const _esbPop = $('esb-shapes-pop');
+  if(_esbPop){
+    _esbPop.innerHTML = `
+      <button class="edb-shape-btn" id="esb-shape-rect"    title="Rectángulo">▭</button>
+      <button class="edb-shape-btn" id="esb-shape-ellipse" title="Elipse">◯</button>
+      <button class="edb-shape-btn" id="esb-shape-line"    title="Rectas">╱</button>`;
+    $('esb-shape-rect')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _esbClosePop();
+      _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
+      edDrawFillColor='none'; _esbSyncTool();
+    });
+    $('esb-shape-ellipse')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _esbClosePop();
+      _edShapeType='ellipse'; edActiveTool='shape'; edCanvas.className='tool-shape';
+      edDrawFillColor='none'; _esbSyncTool();
+    });
+    $('esb-shape-line')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _esbClosePop();
+      _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
+      edDrawFillColor='none'; _esbSyncTool();
+    });
+  }
+  function _esbClosePop(){ $('esb-shapes-pop')?.classList.remove('open'); }
+  function _esbTogglePop(){
+    const pop=$('esb-shapes-pop'); if(!pop) return;
+    if(pop.classList.contains('open')){ _esbClosePop(); return; }
+    // Posicionar el popup
+    const bar=$('edShapeBar'), btn=$('esb-shapes');
+    if(!bar||!btn) return;
+    const isH=bar.classList.contains('horiz');
+    const br=bar.getBoundingClientRect();
+    pop.style.visibility='hidden'; pop.style.display='flex';
+    const pw=pop.offsetWidth||130, ph=pop.offsetHeight||52;
+    pop.style.display=''; pop.style.visibility='';
+    let l,t;
+    if(isH){ l=br.left+(br.width/2)-pw/2; t=br.top-ph-8; if(t<4)t=br.bottom+8; }
+    else { l=br.right+8; t=br.top+(br.height/2)-ph/2; if(l+pw>window.innerWidth-4)l=br.left-pw-8; }
+    pop.style.left=Math.max(4,Math.min(window.innerWidth-pw-4,l))+'px';
+    pop.style.top=Math.max(4,Math.min(window.innerHeight-ph-4,t))+'px';
+    pop.classList.add('open');
+    setTimeout(()=>{
+      window._esbPopClose=e=>{
+        if(!e.target.closest('#esb-shapes-pop')&&!e.target.closest('#esb-shapes')){
+          _esbClosePop(); document.removeEventListener('pointerdown',window._esbPopClose);
+        }
+      };
+      document.addEventListener('pointerdown',window._esbPopClose);
+    },0);
+  }
+  $('esb-shapes')?.addEventListener('pointerup', e => { e.stopPropagation(); _esbTogglePop(); });
+  // ── Seleccionar ──
+  $('esb-select')?.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    edSelectedIdx = -1; edActiveTool = 'select'; edCanvas.className = '';
+    edRedraw(); _esbSyncTool();
+  });
+  // ── Color: reutiliza paleta de dibujo ──
+  $('esb-color')?.addEventListener('click', e => {
+    e.stopPropagation(); _edbTogglePalette();
+  });
+  // ── Cuentagotas ──
+  $('esb-eyedrop')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); _edStartEyedrop();
+  });
+  // ── Grosor: aplica al objeto seleccionado ──
+  $('esb-size')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const pop = $('edb-size-pop'); if(!pop) return;
+    const isOpen = pop.style.display === 'flex';
+    if(isOpen){ pop.style.display = 'none'; return; }
+    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    const curSz = (la?.lineWidth) || edDrawSize;
+    const num = $('edb-size-num'); if(num){ num.max = 20; num.value = curSz; }
+    pop.style.display = 'flex'; pop.style.left = '-9999px'; pop.style.top = '-9999px';
+    const br = $('esb-size').getBoundingClientRect();
+    const pw = pop.offsetWidth||90, ph = pop.offsetHeight||44;
+    const barEl = $('edShapeBar'), isH = barEl?.classList.contains('horiz');
+    let l, t;
+    if(isH){ l=br.left+(br.width-pw)/2; t=br.top-ph-6; if(t<4)t=br.bottom+6; }
+    else { l=br.right+6; t=br.top+(br.height-ph)/2; if(l+pw>window.innerWidth-4)l=br.left-pw-6; }
+    pop.style.left=Math.max(4,l)+'px'; pop.style.top=Math.max(4,t)+'px';
+    // Redirigir cambios al objeto seleccionado
+    pop._esbMode = true;
+  });
+  // ── Relleno: aplica solo a objetos cerrados ──
+  $('esb-fill')?.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if(la && (la.type === 'shape' || (la.type === 'line' && la.closed))){
+      la.fillColor = la.fillColor === 'none' ? edDrawColor : 'none';
+      edPushHistory(); edRedraw(); _esbSyncTool();
+    }
+  });
+  // ── Deshacer / Rehacer ──
+  $('esb-undo')?.addEventListener('click', () => edUndo());
+  $('esb-redo')?.addEventListener('click', () => edRedo());
+  // ── OK: igual que op-draw-ok pero cierra edShapeBar ──
+  $('esb-ok')?.addEventListener('click', () => {
+    if(edActiveTool === 'line' && _edLineLayer) _edFinishLine();
+    $('edShapeBar')?.classList.remove('visible');
+    edCloseOptionsPanel();
+    edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
+    _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
+    if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
+    edRedraw();
+  });
+
   $('dd-cleardraw')?.addEventListener('click',()=>{edClearDraw();edCloseMenus();});
 
   // ── NAVEGAR (Hoja → abre overlay) ──
@@ -5975,19 +6120,36 @@ function EditorView_init(){
 
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
-    if(['draw','eraser','fill'].includes(edActiveTool)){
-      // No desactivar si el click es en el canvas, el panel de opciones,
-      // la barra de menú, la barra superior o el botón flotante de minimizar
-      const inCanvas  = e.target.closest('#editorCanvas');
-      const inPanel   = e.target.closest('#edOptionsPanel');
-      const inMenu    = e.target.closest('#edMenuBar');
-      const inTopbar  = e.target.closest('#edTopbar');
-      const inFloat   = e.target.closest('#edFloatBtn');
-      const inDrawBar = e.target.closest('#edDrawBar');
-      const inPalPop  = e.target.closest('#edb-palette-pop');
-      const inHSL     = e.target.closest('#ed-hsl-picker');
-      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inPalPop && !inHSL){
-        edDeactivateDrawTool();
+    if(['draw','eraser','fill','shape','line'].includes(edActiveTool)){
+      const inCanvas   = e.target.closest('#editorCanvas');
+      const inPanel    = e.target.closest('#edOptionsPanel');
+      const inMenu     = e.target.closest('#edMenuBar');
+      const inTopbar   = e.target.closest('#edTopbar');
+      const inFloat    = e.target.closest('#edFloatBtn');
+      const inDrawBar  = e.target.closest('#edDrawBar');
+      const inShapeBar = e.target.closest('#edShapeBar');
+      const inPalPop   = e.target.closest('#edb-palette-pop');
+      const inShapePop = e.target.closest('#edb-palette-pop');
+      const inHSL      = e.target.closest('#ed-hsl-picker');
+      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL){
+        if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
+      }
+    }
+    // Deseleccionar shape/line al tocar fuera del canvas con barra flotante activa
+    if(($('edDrawBar')?.classList.contains('visible') || $('edShapeBar')?.classList.contains('visible')) && edSelectedIdx >= 0){
+      const _la = edLayers[edSelectedIdx];
+      if(_la && (_la.type==='shape' || _la.type==='line')){
+        const inCanvas   = e.target.closest('#editorCanvas');
+        const inDrawBar  = e.target.closest('#edDrawBar');
+        const inShapeBar = e.target.closest('#edShapeBar');
+        const inShapePop = e.target.closest('#edb-palette-pop');
+        const inPalPop   = e.target.closest('#edb-palette-pop');
+        if(!inCanvas && !inDrawBar && !inShapeBar && !inShapePop && !inPalPop){
+          edSelectedIdx = -1;
+          edActiveTool = 'select';
+          edCanvas.className = '';
+          edRedraw();
+        }
       }
     }
   };

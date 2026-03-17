@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v8.24</footer>
+    <footer class="app-version">v8.57</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -220,6 +220,14 @@ Router.register('editor', {
                 <div class="ed-subdropdown">
                   <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
                   <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
+                </div>
+              </div>
+              <div class="ed-dropdown-item has-sub" style="position:relative">
+                Polígonos
+                <div class="ed-subdropdown">
+                  <button class="ed-dropdown-item" id="dd-shape-rect">▭ Rectángulo</button>
+                  <button class="ed-dropdown-item" id="dd-shape-ellipse">◯ Elipse</button>
+                  <button class="ed-dropdown-item" id="dd-shape-line">╱ Rectas</button>
                 </div>
               </div>
             </div>
