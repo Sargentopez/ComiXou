@@ -994,12 +994,6 @@ function edApplyHistory(snapshot){
         const img = new Image();
         img.onload  = () => {
           l.img = img;
-          // Migración height si es necesario
-          const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-          const expectedH=l.width*(img.naturalHeight/img.naturalWidth)*(pw/ph);
-          if(Math.abs((l.height/l.width)/(expectedH/l.width)-1)>0.15){
-            l.height=Math.min(expectedH,0.9);
-          }
           resolve();
         };
         img.onerror = () => resolve();
@@ -1381,7 +1375,7 @@ function edRedraw(){
   const _editingDraw  = ['draw','eraser','fill'].includes(edActiveTool) && _panelOpen;
   const _editingShape = (_panelOpen && (_panel.dataset.mode==='shape' || _panel.dataset.mode==='line'))
     || !!_edShapePreview || !!_edLineLayer
-    || ($('edShapeBar')?.classList.contains('visible') && ['shape','line'].includes(edActiveTool));
+
   const _dimming = _editingProps || _editingDraw || _editingShape;
 
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
@@ -2069,7 +2063,6 @@ function edOnStart(e){
                tgt.closest('#edBrushCursor')  ||
                tgt.closest('.ed-float-btn')   ||
                tgt.closest('#edDrawBar')      ||
-               tgt.closest('#edShapeBar')     ||
                tgt.closest('#edb-palette-pop') ||
                tgt.closest('#ed-hsl-picker')   ||
                tgt.closest('#editorViewer')   ||
@@ -2381,15 +2374,13 @@ function edOnStart(e){
     if($('edDrawBar')?.classList.contains('visible')){
       edRedraw(); return;
     }
-    // PC/ratón con clic en vacío → iniciar rubber band para multiselección
-    if(e.pointerType !== 'touch' && tgt === edCanvas){
-      _msClear();
-      const c = edCoords(e);
-      edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
-      edRedraw(); return;
-    }
     // Clic en vacío: cerrar panel si no es draw
     edRenderOptionsPanel();
+  }
+  // PC/ratón clic en vacío → marcar para posible rubber band en edOnMove
+  if(e.pointerType !== 'touch' && tgt === edCanvas && edSelectedIdx < 0 && edActiveTool === 'select'){
+    const c = edCoords(e);
+    edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
   }
   edRedraw();
 }
@@ -2672,7 +2663,6 @@ function edOnEnd(e){
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
       edMultiSel=[];
       edLayers.forEach((la,i)=>{
-        if(la.type==='text'||la.type==='bubble') return;
         if(la.x>=rx0&&la.x<=rx1&&la.y>=ry0&&la.y<=ry1) edMultiSel.push(i);
       });
       if(edMultiSel.length>=2){
@@ -2698,7 +2688,6 @@ function edOnEnd(e){
       if((rx1-rx0)>0.005 || (ry1-ry0)>0.005){
         edMultiSel=[];
         edLayers.forEach((la,i)=>{
-          if(la.type==='text'||la.type==='bubble') return;
           // Seleccionar si el centro del objeto cae dentro del rectángulo
           if(la.x>=rx0&&la.x<=rx1&&la.y>=ry0&&la.y<=ry1) edMultiSel.push(i);
         });
@@ -3252,7 +3241,6 @@ function edDeactivateDrawTool(){
   const panel=$('edOptionsPanel');
   if(panel){ panel.classList.remove('open'); delete panel.dataset.mode; }
   edDrawBarHide();
-  $('edShapeBar')?.classList.remove('visible');
   _edDrawUnlockUI();
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
@@ -3264,17 +3252,6 @@ function edDeactivateDrawTool(){
    Patrón idéntico a edRenderOptionsPanel('draw')
    ══════════════════════════════════════════ */
 function _edActivateShapeTool() {
-  // Si minimizado: mostrar edShapeBar en lugar del panel
-  if(edMinimized){
-    window._edMinimizedDrawMode = 'shape';
-    const panel=$('edOptionsPanel');
-    if(panel) panel.style.visibility='hidden';
-    const bar=$('edShapeBar');
-    if(bar){ bar.style.left=_esbBarX+'px'; bar.style.top=_esbBarY+'px'; bar.classList.add('visible'); }
-    if(typeof _esbSyncTool==='function') _esbSyncTool();
-    return;
-  }
-  $('edShapeBar')?.classList.remove('visible');
   const panel=$('edOptionsPanel');
   if(!panel) return;
 
@@ -3344,6 +3321,7 @@ function _edActivateShapeTool() {
   </div>
 </div>`;
   panel.classList.add('open');
+  panel.style.visibility='';
   panel.dataset.mode = 'shape';
 
   // ── Helpers ──
@@ -3487,17 +3465,6 @@ function _edActivateShapeTool() {
    Patrón idéntico a edRenderOptionsPanel('draw')
    ══════════════════════════════════════════ */
 function _edActivateLineTool() {
-  // Si minimizado: mostrar edShapeBar en lugar del panel
-  if(edMinimized){
-    window._edMinimizedDrawMode = 'line';
-    const panel=$('edOptionsPanel');
-    if(panel) panel.style.visibility='hidden';
-    const bar=$('edShapeBar');
-    if(bar){ bar.style.left=_esbBarX+'px'; bar.style.top=_esbBarY+'px'; bar.classList.add('visible'); }
-    if(typeof _esbSyncTool==='function') _esbSyncTool();
-    return;
-  }
-  $('edShapeBar')?.classList.remove('visible');
   const panel=$('edOptionsPanel');
   if(!panel) return;
 
@@ -3578,6 +3545,7 @@ function _edActivateLineTool() {
   </div>
 </div>`;
   panel.classList.add('open');
+  panel.style.visibility='';
   panel.dataset.mode = 'line';
 
   // ── Helpers ──
@@ -3866,6 +3834,8 @@ function _edShowColorPicker(onColorChange){
 
 function edRenderOptionsPanel(mode){
   const panel=$('edOptionsPanel');if(!panel)return;
+  // Siempre restaurar visibility (puede quedar hidden por edMinimize)
+  if(mode) panel.style.visibility='';
 
   // Sin objeto: cerrar panel — pero respetar modos shape/line activos
   if(!mode||(mode==='props'&&edSelectedIdx<0)){
@@ -4216,6 +4186,7 @@ function edRenderOptionsPanel(mode){
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${Math.round((la.opacity??1)*100)}%</span>
       </div>`;
+    }
     html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
       <button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
@@ -4313,7 +4284,6 @@ function edRenderOptionsPanel(mode){
   } // fin if(mode==='props')
 
   panel.classList.remove('open');panel.innerHTML='';requestAnimationFrame(edFitCanvas);
-}
 } // fin edRenderOptionsPanel
 
 /* ══════════════════════════════════════════
@@ -4337,15 +4307,6 @@ function edMinimize(){
     if(panel) panel.style.visibility='hidden';
     edDrawBarShow();
   }
-  // Herramientas de objetos/rectas: mostrar barra de polígonos
-  else if(['shape','line'].includes(edActiveTool)){
-    window._edMinimizedDrawMode = edActiveTool;
-    const panel=$('edOptionsPanel');
-    if(panel) panel.style.visibility='hidden';
-    const bar=$('edShapeBar');
-    if(bar){ bar.style.left=_esbBarX+'px'; bar.style.top=_esbBarY+'px'; bar.classList.add('visible'); }
-    if(typeof _esbSyncTool==='function') _esbSyncTool();
-  }
   edFitCanvas();
 }
 function edMaximize(keepBar=false){
@@ -4354,18 +4315,15 @@ function edMaximize(keepBar=false){
   if(menu)menu.style.display='';
   if(top)top.style.display='';
   $('edFloatBtn')?.classList.remove('visible');
-  if(!keepBar){ edDrawBarHide(); $('edShapeBar')?.classList.remove('visible'); }
+  if(!keepBar){ edDrawBarHide(); }
   // Restaurar panel si estaba activo al minimizar
   if(window._edMinimizedDrawMode){
     const mode = window._edMinimizedDrawMode;
     window._edMinimizedDrawMode = null;
-    $('edShapeBar')?.classList.remove('visible');
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
     edFitCanvas();
-    if(mode==='shape') _edActivateShapeTool();
-    else if(mode==='line') _edActivateLineTool();
-    else edRenderOptionsPanel(mode);
+    edRenderOptionsPanel(mode);
   } else {
     edFitCanvas();
   }
@@ -5809,6 +5767,9 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
+  $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
+  $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
+  $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
   $('edFileGallery')?.addEventListener('change',e=>{
     edAddImage(e.target.files[0]);
     e.target.value='';
@@ -6118,15 +6079,15 @@ function EditorView_init(){
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
       if(edActiveTool==='multiselect' && edMultiSel.length){
         e.preventDefault();
-        // Borrar todos los objetos seleccionados — reversible con deshacer
         const page=edPages[edCurrentPage]; if(!page) return;
-        // Ordenar de mayor a menor índice para que los splice no desplacen los anteriores
+        // Guardar estado actual (con objetos) antes de borrar
+        // Usamos el mismo patrón que edDeleteSelected
         const toDelete=[...edMultiSel].sort((a,b)=>b-a);
         toDelete.forEach(i=>{ page.layers.splice(i,1); });
         edLayers=page.layers;
         _edDeactivateMultiSel();
         edSelectedIdx=-1;
-        edPushHistory();
+        edPushHistory(); // igual que edDeleteSelected: push DESPUÉS del borrado
         edRedraw();
       } else if(edSelectedIdx >= 0){
         e.preventDefault(); edDeleteSelected();
