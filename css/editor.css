@@ -882,6 +882,17 @@ body.editor-page #appView {
   pointer-events: none;
   transition: opacity .22s;
 }
+@media (pointer: fine) {
+  /* PC/ratón: centrar verticalmente en lugar de bottom sheet */
+  .ed-fulloverlay {
+    align-items: center;
+  }
+  .ed-fulloverlay-box {
+    border-bottom: 2.5px solid var(--black) !important;
+    border-radius: 18px !important;
+    max-height: 80vh;
+  }
+}
 .ed-fulloverlay.open {
   opacity: 1;
   pointer-events: all;

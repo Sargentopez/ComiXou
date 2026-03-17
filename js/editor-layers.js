@@ -160,7 +160,7 @@ function _lyRender() {
   // Combinar imágenes y dibujos (stroke/draw) en una sola lista
   const visualPairs = edLayers
     .map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw');
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
 
   if (visualPairs.length === 0) {
     const e = document.createElement('p');
@@ -277,6 +277,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
 ────────────────────────────────────────── */
 function _lyBuildVisualItem(la, realIdx, selected) {
   const isDrawType = la.type === 'stroke' || la.type === 'draw';
+  const isShapeType = la.type === 'shape' || la.type === 'line';
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
   item.dataset.realIdx = realIdx;
@@ -289,10 +290,12 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   thumb.width = 80; thumb.height = 60;
   if (isDrawType) {
     _lyDrawStrokeThumb(thumb, la);
+  } else if (isShapeType) {
+    _lyDrawShapeThumb(thumb, la);
   } else {
     _lyDrawThumb(thumb, la);
   }
-  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
+  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : isShapeType ? 'Objeto · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
   thumb.addEventListener('pointerup', () => {
     if (!item.classList.contains('was-dragged')) {
       edSelectedIdx = realIdx;
@@ -310,6 +313,10 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   name.className = 'ed-layer-name';
   if (isDrawType) {
     name.textContent = la.type === 'draw' ? '✏️ Dibujando…' : '✏️ Dibujo';
+  } else if (la.type === 'shape') {
+    name.textContent = la.shape === 'ellipse' ? '◯ Elipse' : '▭ Rectángulo';
+  } else if (la.type === 'line') {
+    name.textContent = la.closed ? '⬠ Polígono' : '╱ Recta';
   } else {
     name.textContent = 'Imagen ' + (realIdx + 1);
   }
@@ -318,7 +325,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
 
   /* Flechas subir/bajar — dentro de los elementos visuales */
   const visualAll = edLayers.map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw');
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
   const posInList = visualAll.findIndex(({i})=>i===realIdx);
 
   const upBtn = document.createElement('button');
@@ -755,6 +762,48 @@ function _lyDrawThumb(canvas, la) {
     ctx.font = Math.max(7, Math.round(sw*0.13)) + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText((la.text||'').substring(0,14), sw/2, sh/2);
+  }
+  ctx.restore();
+}
+
+/* ──────────────────────────────────────────
+   MINIATURA SHAPE / LINE
+────────────────────────────────────────── */
+function _lyDrawShapeThumb(canvas, la) {
+  const ctx = canvas.getContext('2d');
+  const sw = canvas.width, sh = canvas.height;
+  ctx.fillStyle = '#f5f5f5';
+  ctx.fillRect(0, 0, sw, sh);
+  ctx.save();
+  ctx.globalAlpha = la.opacity ?? 1;
+  const pad = 6; // margen visual
+  if (la.type === 'shape') {
+    const cx = sw/2, cy = sh/2;
+    const hw = sw/2 - pad, hh = sh/2 - pad;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    if (la.shape === 'ellipse') ctx.ellipse(cx, cy, hw, hh, 0, 0, Math.PI*2);
+    else ctx.rect(pad, pad, sw-pad*2, sh-pad*2);
+    if (la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
+    if (la.lineWidth > 0) { ctx.strokeStyle = la.color || '#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * 0.4); ctx.stroke(); }
+  } else if (la.type === 'line' && la.points && la.points.length >= 2) {
+    // Normalizar puntos al espacio del thumb con padding
+    const xs = la.points.map(p=>p.x), ys = la.points.map(p=>p.y);
+    const minX=Math.min(...xs), maxX=Math.max(...xs);
+    const minY=Math.min(...ys), maxY=Math.max(...ys);
+    const rangeX = maxX-minX || 0.01, rangeY = maxY-minY || 0.01;
+    const scaleX = (sw-pad*2)/rangeX, scaleY = (sh-pad*2)/rangeY;
+    const scale = Math.min(scaleX, scaleY);
+    const offX = pad + (sw-pad*2-(rangeX*scale))/2;
+    const offY = pad + (sh-pad*2-(rangeY*scale))/2;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(offX+(la.points[0].x-minX)*scale, offY+(la.points[0].y-minY)*scale);
+    for (let i=1; i<la.points.length; i++)
+      ctx.lineTo(offX+(la.points[i].x-minX)*scale, offY+(la.points[i].y-minY)*scale);
+    if (la.closed) ctx.closePath();
+    if (la.closed && la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
+    if (la.lineWidth > 0) { ctx.strokeStyle = la.color || '#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * 0.4); ctx.stroke(); }
   }
   ctx.restore();
 }

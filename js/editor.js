@@ -1586,8 +1586,7 @@ function _edRenderPageThumb(canvas, page, pageIdx){
   const pw=isV?ED_PAGE_W:ED_PAGE_H, ph=isV?ED_PAGE_H:ED_PAGE_W;
   const sx=tw/pw, sy=th/ph;
 
-  // Renderizar capas en orden del array (igual que canvas y visor)
-  // Textos al final
+  // DEBUG: marcar si hay shapes
   const _nonText = page.layers.filter(l=>l.type!=='text'&&l.type!=='bubble');
   const _textL   = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
   [..._nonText, ..._textL].forEach(la=>{
@@ -1597,18 +1596,35 @@ function _edRenderPageThumb(canvas, page, pageIdx){
     const cx=la.x*tw, cy=la.y*th;
     const lw=la.width*tw, lh=la.height*th;
     const rot=(la.rotation||0)*Math.PI/180;
-    ctx.translate(cx,cy);
-    if(rot) ctx.rotate(rot);
+
     if(type==='image' && la.img && la.img.complete && la.img.naturalWidth>0){
+      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
       ctx.drawImage(la.img,-lw/2,-lh/2,lw,lh);
     } else if(type==='stroke' && la._canvas){
+      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
       ctx.drawImage(la._canvas,-lw/2,-lh/2,lw,lh);
     } else if(type==='draw' && la._canvas){
-      ctx.restore();
-      ctx.save();
       const _mx=(ED_CANVAS_W-pw)/2, _my=(ED_CANVAS_H-ph)/2;
       ctx.drawImage(la._canvas, _mx, _my, pw, ph, 0, 0, tw, th);
+    } else if(type==='shape'){
+      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
+      ctx.lineJoin='round';
+      ctx.beginPath();
+      if(la.shape==='ellipse') ctx.ellipse(0,0,lw/2,lh/2,0,0,Math.PI*2);
+      else ctx.rect(-lw/2,-lh/2,lw,lh);
+      if(la.fillColor&&la.fillColor!=='none'){ctx.fillStyle=la.fillColor;ctx.fill();}
+      if((la.lineWidth||0)>0){ctx.strokeStyle=la.color||'#000000';ctx.lineWidth=Math.max(1.5,la.lineWidth*sx);ctx.stroke();}
+    } else if(type==='line' && la.points&&la.points.length>=2){
+      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
+      ctx.lineJoin='round'; ctx.lineCap='round';
+      ctx.beginPath();
+      ctx.moveTo(la.points[0].x*tw, la.points[0].y*th);
+      for(let i=1;i<la.points.length;i++) ctx.lineTo(la.points[i].x*tw, la.points[i].y*th);
+      if(la.closed) ctx.closePath();
+      if(la.closed&&la.fillColor&&la.fillColor!=='none'){ctx.fillStyle=la.fillColor;ctx.fill();}
+      if((la.lineWidth||0)>0){ctx.strokeStyle=la.color||'#000000';ctx.lineWidth=Math.max(1.5,la.lineWidth*sx);ctx.stroke();}
     } else if(type==='text'||type==='bubble'){
+      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
       ctx.fillStyle=la.backgroundColor||'rgba(255,255,255,0.85)';
       ctx.fillRect(-lw/2,-lh/2,lw,lh);
     }
@@ -3195,11 +3211,15 @@ function edToggleMenu(id){
   edMenuOpen = id;
   if(id === 'nav') edUpdateNavPages();
 
-  // Corrección de desbordamiento lateral (tras render)
+  // Corrección de desbordamiento lateral y vertical (tras render)
   requestAnimationFrame(() => {
     const ddR = dd.getBoundingClientRect();
     if(ddR.right > window.innerWidth - 4){
       dd.style.left = Math.max(4, r.right - ddR.width) + 'px';
+    }
+    // Si el dropdown se sale por abajo, mostrarlo encima del botón
+    if(ddR.bottom > window.innerHeight - 4){
+      dd.style.top = Math.max(4, r.top - ddR.height) + 'px';
     }
   });
 }
@@ -5739,11 +5759,22 @@ function EditorView_init(){
   });
 
   // ── INSERTAR ──
-  $('dd-gallery')?.addEventListener('click',()=>{$('edFileGallery').click();edCloseMenus();});
-  $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
-  $('dd-textbox')?.addEventListener('click',()=>{edAddText();edCloseMenus();});
-  $('dd-bubble')?.addEventListener('click', ()=>{edAddBubble();edCloseMenus();});
-  $('edFileGallery')?.addEventListener('change',e=>{edAddImage(e.target.files[0]);e.target.value='';});
+  $('dd-gallery')?.addEventListener('click',()=>{
+    // Guardar estado fullscreen — el diálogo de archivo lo cancela en algunos navegadores
+    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    $('edFileGallery').click();
+    edCloseMenus();
+  });
+  $('edFileGallery')?.addEventListener('change',e=>{
+    edAddImage(e.target.files[0]);
+    e.target.value='';
+    // Restaurar fullscreen si estaba activo antes de abrir el diálogo
+    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
+      const el = document.documentElement;
+      try{ (el.requestFullscreen||el.webkitRequestFullscreen).call(el); }catch(_){}
+    }
+    window._edWasFullscreen = false;
+  });;
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{
