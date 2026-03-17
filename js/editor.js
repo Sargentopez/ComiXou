@@ -1838,6 +1838,7 @@ function edPinchStart(e) {
         y:    edLayers[i].y,
         w:    edLayers[i].width,
         h:    edLayers[i].height,
+        _linePoints: edLayers[i].type==='line' ? edLayers[i].points.map(p=>({...p})) : null,
       })),
       groupRot: edMultiGroupRot,
       bbox: { ...edMultiBbox },
@@ -1867,6 +1868,12 @@ function edPinchMove(e) {
       // Escalar tamaño
       la.width  = Math.min(Math.max(snap.w * ratio, 0.04), 2.0);
       la.height = Math.min(Math.max(snap.h * ratio, 0.04), 2.0);
+      // LineLayer: escalar también los puntos internos
+      if(la.type === 'line' && snap._linePoints){
+        const sw = la.width  / snap.w;
+        const sh = la.height / snap.h;
+        la.points = snap._linePoints.map(p => ({x: p.x * sw, y: p.y * sh}));
+      }
       // Escalar Y rotar posición alrededor del pivote (en px para no distorsionar)
       const dxPx = (snap.x - pivX) * pw;
       const dyPx = (snap.y - pivY) * ph;
