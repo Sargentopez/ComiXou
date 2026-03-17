@@ -2378,7 +2378,14 @@ function edOnStart(e){
     edSelectedIdx = -1;
     edHideContextMenu();
     // Con barra flotante activa: solo deseleccionar, sin abrir submenús
-    if($('edDrawBar')?.classList.contains('visible') || $('edShapeBar')?.classList.contains('visible')){
+    if($('edDrawBar')?.classList.contains('visible')){
+      edRedraw(); return;
+    }
+    // PC/ratón con clic en vacío → iniciar rubber band para multiselección
+    if(e.pointerType !== 'touch' && tgt === edCanvas){
+      _msClear();
+      const c = edCoords(e);
+      edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
       edRedraw(); return;
     }
     // Clic en vacío: cerrar panel si no es draw
@@ -2392,6 +2399,13 @@ function edOnMove(e){
     _edTouchMoved = true;
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
+  }
+  // ── RUBBER BAND en modo select (PC) ────────────────────────
+  if(edActiveTool==='select' && edRubberBand){
+    e.preventDefault();
+    const c=edCoords(e);
+    edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
+    edRedraw(); return;
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
@@ -2647,6 +2661,30 @@ function edOnEnd(e){
         } else { edFloodFill(fp.nx, fp.ny); }
       } else { edFloodFill(fp.nx, fp.ny); }
     }
+  }
+  // ── RUBBER BAND en modo select (PC) → activar multiselect ──
+  if(edActiveTool==='select' && edRubberBand){
+    const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
+    const ry0=Math.min(edRubberBand.y0,edRubberBand.y1);
+    const rx1=Math.max(edRubberBand.x0,edRubberBand.x1);
+    const ry1=Math.max(edRubberBand.y0,edRubberBand.y1);
+    edRubberBand=null;
+    if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
+      edMultiSel=[];
+      edLayers.forEach((la,i)=>{
+        if(la.type==='text'||la.type==='bubble') return;
+        if(la.x>=rx0&&la.x<=rx1&&la.y>=ry0&&la.y<=ry1) edMultiSel.push(i);
+      });
+      if(edMultiSel.length>=2){
+        edActiveTool='multiselect';
+        _msRecalcBbox();
+        const btn=$('edMultiSelBtn');
+        if(btn) btn.classList.add('active');
+      } else {
+        edMultiSel=[];
+      }
+    }
+    edRedraw(); return;
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
@@ -6078,7 +6116,21 @@ function EditorView_init(){
       return;
     }
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
-      if(edSelectedIdx >= 0){ e.preventDefault(); edDeleteSelected(); }
+      if(edActiveTool==='multiselect' && edMultiSel.length){
+        e.preventDefault();
+        // Borrar todos los objetos seleccionados — reversible con deshacer
+        const page=edPages[edCurrentPage]; if(!page) return;
+        // Ordenar de mayor a menor índice para que los splice no desplacen los anteriores
+        const toDelete=[...edMultiSel].sort((a,b)=>b-a);
+        toDelete.forEach(i=>{ page.layers.splice(i,1); });
+        edLayers=page.layers;
+        _edDeactivateMultiSel();
+        edSelectedIdx=-1;
+        edPushHistory();
+        edRedraw();
+      } else if(edSelectedIdx >= 0){
+        e.preventDefault(); edDeleteSelected();
+      }
       return;
     }
     if(!ctrl) return;
