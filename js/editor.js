@@ -7433,6 +7433,20 @@ function EditorView_init(){
       const _mbr2=_menuBar2.getBoundingClientRect();
       if(e.clientX>=_mbr2.left&&e.clientX<=_mbr2.right&&e.clientY>=_mbr2.top&&e.clientY<=_mbr2.bottom) return;
     }
+    // Cerrar menús y submenús al tocar fuera — solo si NO hay bloqueo activo
+    const _drawActive=$('editorShell')?.classList.contains('draw-active');
+    if(!_drawActive && edMenuOpen){
+      const _inDropdown=e.target.closest('.ed-dropdown')||e.target.closest('.ed-subdropdown')||e.target.closest('[data-menu]');
+      if(!_inDropdown){ edCloseMenus(); }
+    }
+    // Cerrar submenús sueltos (movidos al body) si se toca fuera
+    if(!_drawActive){
+      document.querySelectorAll('.ed-subdropdown').forEach(sub=>{
+        if(sub.style.display==='block' && !sub.contains(e.target) && !sub._origParent?.contains(e.target)){
+          sub.style.display='';
+        }
+      });
+    }
     if(['draw','eraser','fill','shape','line'].includes(edActiveTool)){
       const inCanvas   = e.target.closest('#editorCanvas');
       const inPanel    = e.target.closest('#edOptionsPanel');
