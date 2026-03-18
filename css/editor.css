@@ -297,8 +297,8 @@ body.editor-page #appView {
   display: none;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 6px 4px;
+  gap: 1px;
+  padding: 2px 2px;
   background: rgba(20,20,20,.40);
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 12px;
@@ -318,11 +318,36 @@ body.editor-page #appView {
 #edDrawBar.horiz { flex-direction: row; padding: 4px 6px; }
 #edDrawBar:active { cursor: grabbing; }
 
+#edShapeBar {
+  position: absolute;
+  z-index: 51;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 2px;
+  background: rgba(20,20,20,.40);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.25);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: grab;
+  left: 64px;
+  top: 120px;
+}
+#edShapeBar * { -webkit-tap-highlight-color: transparent; }
+#edShapeBar.visible { display: flex; }
+#edShapeBar.horiz { flex-direction: row; padding: 4px 6px; }
+#edShapeBar:active { cursor: grabbing; }
+
 .edb-tool {
   background: none;
   border: none;
-  font-size: 0.9rem;
-  width: 26px; height: 26px;
+  font-size: 1.25rem;
+  width: 30px; height: 30px;
   border-radius: 6px;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -339,6 +364,7 @@ body.editor-page #appView {
   flex-shrink: 0;
 }
 #edDrawBar.horiz .edb-sep { width: 1px; height: 16px; }
+#edShapeBar.horiz .edb-sep { width: 1px; height: 16px; }
 
 /* Swatch de color */
 .edb-swatch {
@@ -355,7 +381,7 @@ body.editor-page #appView {
 /* Dot de grosor */
 .edb-sizebtn {
   background: none; border: none;
-  width: 26px; height: 26px;
+  width: 30px; height: 30px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; border-radius: 6px; padding: 0;
   transition: background .1s;

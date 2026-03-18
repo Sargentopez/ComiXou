@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v8.88</footer>
+    <footer class="app-version">v8.112</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -342,6 +342,23 @@ Router.register('editor', {
         </div>
         <input type="range" id="edb-size-slider" min="1" max="48" value="8"
           style="width:100%;accent-color:#FFE135;cursor:pointer">
+      </div>
+
+      <!-- Barra flotante Shape/Line -->
+      <div id="edShapeBar">
+        <button id="esb-color"    class="edb-swatch" title="Color borde"></button>
+        <button id="esb-fill-on"  class="edb-tool"   title="Relleno">▣</button>
+        <button id="esb-fill"     class="edb-swatch" title="Color relleno"></button>
+        <div class="edb-sep"></div>
+        <button id="esb-eyedrop"  class="edb-tool"   title="Cuentagotas">💧</button>
+        <div class="edb-sep"></div>
+        <button id="esb-size"     class="edb-sizebtn" title="Grosor"><span id="esb-size-dot"></span></button>
+        <button id="esb-opacity"  class="edb-tool"    title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
+        <div class="edb-sep"></div>
+        <button id="esb-undo"     class="edb-tool" title="Deshacer">↩</button>
+        <button id="esb-redo"     class="edb-tool" title="Rehacer">↪</button>
+        <div class="edb-sep"></div>
+        <button id="esb-ok"       class="edb-ok"   title="Finalizar">✓</button>
       </div>
 
     </div>
