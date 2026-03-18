@@ -2091,6 +2091,21 @@ function _edHandleDoubleTap(idx){
     edRenderOptionsPanel('props');
   }
 }
+
+/* Comprobar que los 4 vértices del objeto están dentro del rectángulo de rubber band */
+function _edAllCornersInside(la, rx0, ry0, rx1, ry1){
+  const hw = la.width/2, hh = la.height/2;
+  const rot = (la.rotation||0)*Math.PI/180;
+  const pw = edPageW(), ph = edPageH();
+  const corners = [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]];
+  return corners.every(([dx,dy])=>{
+    const rx=dx*pw, ry=dy*ph;
+    const wx = la.x + (rx*Math.cos(rot)-ry*Math.sin(rot))/pw;
+    const wy = la.y + (rx*Math.sin(rot)+ry*Math.cos(rot))/ph;
+    return wx>=rx0 && wx<=rx1 && wy>=ry0 && wy<=ry1;
+  });
+}
+
 function edOnStart(e){
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
   // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
@@ -2330,9 +2345,31 @@ function edOnStart(e){
         }
         if(!_isT){
           edIsResizing=true; edResizeCorner=p.corner;
+          // Calcular ancla (punto opuesto en espacio local) para resize profesional
+          const _rot0=(_la.rotation||0)*Math.PI/180;
+          const _hw0=_la.width/2, _hh0=_la.height/2;
+          const _pw0=edPageW(), _ph0=edPageH();
+          // Posición del ancla en fracción de página (opuesto al corner arrastrado)
+          const _anchorLocal = (corner) => {
+            // ancla en espacio local (fracción de tamaño objeto)
+            const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
+                        corner==='tl'||corner==='bl'?_hw0 :
+                        corner==='tr'||corner==='br'?-_hw0 : 0;
+            const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
+                        corner==='tl'||corner==='tr'?_hh0 :
+                        corner==='bl'||corner==='br'?-_hh0 : 0;
+            // Rotar al espacio mundo
+            const rx=ax*_pw0, ry=ay*_ph0;
+            return {
+              x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw0,
+              y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph0
+            };
+          };
+          const _anch = _anchorLocal(p.corner);
           edInitialSize={width:_la.width,height:_la.height,
                          cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
-                         rot:(_la.rotation||0), ox:_la.x, oy:_la.y};
+                         rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
+                         anchorX:_anch.x, anchorY:_anch.y};
           if(_la.type==='line') edInitialSize._linePoints=_la.points.map(p=>({...p}));
           return;
         }
@@ -2630,34 +2667,61 @@ function edOnMove(e){
     const la=edLayers[edSelectedIdx];
     const pw=edPageW(), ph=edPageH();
     const rot=(edInitialSize.rot||0)*Math.PI/180;
-    // Trabajar SIEMPRE en pixeles para evitar distorsion por pw!=ph
-    // Vector raton->centro en pixeles de pagina
-    const dx_px=(c.nx-edInitialSize.cx)*pw;
-    const dy_px=(c.ny-edInitialSize.cy)*ph;
-    // Rotar al espacio local del objeto (en pixeles)
-    const lx_px= dx_px*Math.cos(-rot)-dy_px*Math.sin(-rot);
-    const ly_px= dx_px*Math.sin(-rot)+dy_px*Math.cos(-rot);
     const corner=edResizeCorner;
+    const asp = edInitialSize.width*pw > 0 ? (edInitialSize.height*ph)/(edInitialSize.width*pw) : 1;
     const isImg = la.type==='image';
-    // asp: para imagen, ratio height/width (ambos fraccion de pw)
-    //      para texto/bubble: ih_px/iw_px en pixeles fisicos
-    const iw_px = edInitialSize.width * pw;
-    const ih_px = edInitialSize.height * ph;  // height fraccion de ph para todos
-    const asp = iw_px > 0 ? ih_px / iw_px : 1;
+
+    // ── Resize profesional: el vértice opuesto (ancla) permanece fijo ──
+    // Vector ancla→cursor en píxeles de página
+    const adx_px = (c.nx - edInitialSize.anchorX) * pw;
+    const ady_px = (c.ny - edInitialSize.anchorY) * ph;
+    // Rotar al espacio local del objeto
+    const alx_px =  adx_px*Math.cos(-rot) - ady_px*Math.sin(-rot);
+    const aly_px =  adx_px*Math.sin(-rot) + ady_px*Math.cos(-rot);
+    // Signo según el corner: tl/bl/ml → cursor a la izquierda del ancla (signo negativo en local)
+    // El tamaño es el valor absoluto; el centro es el punto medio entre ancla y cursor
+    const propKey = e.shiftKey; // Shift = proporcional en vértices
+
+    // El nuevo centro = ancla + semitamaño en dirección rotada del objeto
+    // Esto garantiza que el ancla permanece absolutamente fija
+    const _setCenterFromAnchor = (newW, newH, anchorLocalX, anchorLocalY) => {
+      // El centro está desplazado desde el ancla por el semitamaño en espacio local
+      // anchorLocal es el desplazamiento del ancla respecto al centro en espacio local (px)
+      // El nuevo centro en mundo = ancla - anchorLocal_rotado
+      const cx_px = anchorLocalX * Math.cos(rot) - anchorLocalY * Math.sin(rot);
+      const cy_px = anchorLocalX * Math.sin(rot) + anchorLocalY * Math.cos(rot);
+      la.x = edInitialSize.anchorX - cx_px / pw;
+      la.y = edInitialSize.anchorY - cy_px / ph;
+    };
+
     if(corner==='ml'||corner==='mr'){
-      // Solo cambia el ancho — igual para imagen y texto
-      const nw_px = Math.abs(lx_px)*2;
-      if(nw_px > pw*0.02) la.width = nw_px/pw;
-    } else if(corner==='mt'||corner==='mb'){
-      // Solo cambia el alto
-      const nh_px = Math.abs(ly_px)*2;
-      if(nh_px > ph*0.02) la.height = nh_px/ph;  // fraccion de ph para todos
-    } else {
-      // Esquinas — proporcional
-      const nw_px = Math.abs(lx_px)*2;
+      const nw_px = Math.abs(alx_px);
       if(nw_px > pw*0.02){
         la.width = nw_px/pw;
-        la.height = (nw_px * asp)/ph;
+        // Ancla local: para ml ancla es el borde derecho (+hw), para mr es el izquierdo (-hw)
+        const aLocalX = corner==='ml' ?  nw_px/2 : -nw_px/2;
+        _setCenterFromAnchor(la.width, la.height, aLocalX, 0);
+      }
+    } else if(corner==='mt'||corner==='mb'){
+      const nh_px = Math.abs(aly_px);
+      if(nh_px > ph*0.02){
+        la.height = nh_px/ph;
+        // Ancla local: para mt ancla es el borde inferior (+hh), para mb es el superior (-hh)
+        const aLocalY = corner==='mt' ?  nh_px/2 : -nh_px/2;
+        _setCenterFromAnchor(la.width, la.height, 0, aLocalY);
+      }
+    } else {
+      // Esquinas — proporcional
+      const nw_px = Math.abs(alx_px);
+      const nh_px = Math.abs(aly_px);
+      if(nw_px > pw*0.02 && nh_px > ph*0.02){
+        const sc = Math.max(nw_px/(edInitialSize.width*pw), nh_px/(edInitialSize.height*ph));
+        la.width  = edInitialSize.width  * sc;
+        la.height = edInitialSize.height * sc;
+        // Ancla local: semitamaño nuevo en la dirección opuesta al corner arrastrado
+        const aLocalX = (corner==='tl'||corner==='bl') ?  la.width/2*pw : -la.width/2*pw;
+        const aLocalY = (corner==='tl'||corner==='tr') ?  la.height/2*ph : -la.height/2*ph;
+        _setCenterFromAnchor(la.width, la.height, aLocalX, aLocalY);
       }
     }
     window._edMoved = true;
@@ -2723,7 +2787,7 @@ function edOnEnd(e){
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
       edMultiSel=[];
       edLayers.forEach((la,i)=>{
-        if(la.x>=rx0&&la.x<=rx1&&la.y>=ry0&&la.y<=ry1) edMultiSel.push(i);
+        if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
       });
       if(edMultiSel.length>=2){
         edActiveTool='multiselect';
@@ -2748,8 +2812,8 @@ function edOnEnd(e){
       if((rx1-rx0)>0.005 || (ry1-ry0)>0.005){
         edMultiSel=[];
         edLayers.forEach((la,i)=>{
-          // Seleccionar si el centro del objeto cae dentro del rectángulo
-          if(la.x>=rx0&&la.x<=rx1&&la.y>=ry0&&la.y<=ry1) edMultiSel.push(i);
+          // Seleccionar solo si los 4 vértices del objeto están dentro del rectángulo
+          if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
         });
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
