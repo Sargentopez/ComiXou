@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v9.27</footer>
+    <footer class="app-version">v9.40</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -222,14 +222,7 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
                 </div>
               </div>
-              <div class="ed-dropdown-item has-sub" style="position:relative">
-                Polígonos
-                <div class="ed-subdropdown">
-                  <button class="ed-dropdown-item" id="dd-shape-rect">▭ Rectángulo</button>
-                  <button class="ed-dropdown-item" id="dd-shape-ellipse">◯ Elipse</button>
-                  <button class="ed-dropdown-item" id="dd-shape-line">╱ Rectas</button>
-                </div>
-              </div>
+
             </div>
           </div>
 
@@ -237,7 +230,18 @@ Router.register('editor', {
 
           <!-- DIBUJAR -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" id="dd-pen">Dibujar</button>
+            <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
+            <div class="ed-dropdown" id="dd-draw">
+              <button class="ed-dropdown-item" id="dd-pen">✏️ Dibujo a mano</button>
+              <div class="ed-dropdown-item has-sub" style="position:relative">
+                Dibujo vectorial
+                <div class="ed-subdropdown">
+                  <button class="ed-dropdown-item" id="dd-shape-rect">▭ Rectángulo</button>
+                  <button class="ed-dropdown-item" id="dd-shape-ellipse">◯ Elipse</button>
+                  <button class="ed-dropdown-item" id="dd-shape-line">╱ Líneas</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="ed-menu-sep"></div>
@@ -354,6 +358,8 @@ Router.register('editor', {
         <div class="edb-sep"></div>
         <button id="esb-size"     class="edb-sizebtn" title="Grosor"><span id="esb-size-dot"></span></button>
         <button id="esb-opacity"  class="edb-tool"    title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
+        <div class="edb-sep"></div>
+        <button id="esb-curve"    class="edb-tool" title="Convertir vértice a curva" style="font-size:.65rem;font-weight:900"><b>V⟺C</b></button>
         <div class="edb-sep"></div>
         <button id="esb-undo"     class="edb-tool" title="Deshacer">↩</button>
         <button id="esb-redo"     class="edb-tool" title="Rehacer">↪</button>

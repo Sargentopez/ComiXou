@@ -1417,6 +1417,11 @@ body.editor-page #appView {
   pointer-events: none;
   opacity: 0.35;
 }
+/* En modo texto/bocadillo (props-active) la barra de menús permanece accesible */
+#editorShell.props-active #edMenuBar {
+  pointer-events: auto !important;
+  opacity: 1 !important;
+}
 #editorShell.draw-active #edTopbar .ed-top-action,
 #editorShell.draw-active #edUndoBtn,
 #editorShell.draw-active #edRedoBtn,

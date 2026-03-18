@@ -1650,10 +1650,10 @@ function edDrawSel(){
   const h=la.height*ph;
   const rot=(la.rotation||0)*Math.PI/180;
   edCtx.save();
-  // Transformar al espacio del objeto (centro + rotación)
   edCtx.translate(cx,cy);
   edCtx.rotate(rot);
-  // Marco de selección — 1px físico
+  // En modo V⟺C: solo mostrar marco tenue, ocultar handles de resize/rotate
+  const _curveMode=_edCurveModeActive&&_edCurveModeActive();
   edCtx.strokeStyle='#1a8cff';
   edCtx.lineWidth=lw;
   edCtx.setLineDash([5/z,3/z]);
@@ -1661,6 +1661,7 @@ function edDrawSel(){
   edCtx.setLineDash([]);
   // Handles de escala y rotación — solo en PC (no táctil)
   if(la.type!=='bubble' && !edLastPointerIsTouch){
+    if(!_curveMode){
     const corners=[
       [-w/2,-h/2],[ w/2,-h/2],[-w/2, h/2],[ w/2, h/2],
       [   0,-h/2],[   0, h/2],[-w/2,   0],[ w/2,   0],
@@ -1688,7 +1689,8 @@ function edDrawSel(){
       edCtx.moveTo(ax,ay);edCtx.lineTo(ax+4/z,ay-3/z);
       edCtx.stroke();
     }
-  }
+  } // cierra if(!_curveMode)
+  } // cierra if(la.type!=='bubble' && !edLastPointerIsTouch)
   // Cerrar el bloque rotado antes de dibujar los handles de cola
   edCtx.restore();
   // Handles cola bocadillo — en coordenadas de workspace absolutas (sin rotación)
@@ -1733,9 +1735,7 @@ function edDrawSel(){
   }
   // Handles 4 vértices del rect cuando modo curva activo
   if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape'){
-    const curveSliderS=$('op-shape-curve-slider');
-    const curveActiveS=curveSliderS&&curveSliderS.style.display==='flex';
-    if(curveActiveS){
+    if(_edCurveModeActive()){
       const corners=[[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]];
       const rot2=(la.rotation||0)*Math.PI/180;
       const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
@@ -1763,9 +1763,7 @@ function edDrawSel(){
   }
   // Handles 4 vértices del rect en modo curva
   if(la.type==='shape' && la.shape==='rect'){
-    const curveSliderS=$('op-shape-curve-slider');
-    const curveActiveS=curveSliderS&&curveSliderS.style.display==='flex';
-    if(curveActiveS){
+    if(_edCurveModeActive()){
       const rot2=(la.rotation||0)*Math.PI/180;
       const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
       const hw=la.width*pw/2, hh=la.height*ph/2;
@@ -1777,9 +1775,10 @@ function edDrawSel(){
         const ay2=(la.y*ph+lx*sin2+ly*cos2)/ph;
         const cpx2=edMarginX()+ax2*pw, cpy2=edMarginY()+ay2*ph;
         const isAct=window._edCurveVertIdx===ci2;
+        if(isAct) return; // vértice activo: invisible para ver la curvatura
         const hasCrv=(crs2[ci2]||0)>0;
-        const hcol=isAct?'#27ae60':(hasCrv?'#2ecc71':'#e63030');
-        edCtx.beginPath();edCtx.arc(cpx2,cpy2,isAct?hr*1.3:hr,0,Math.PI*2);
+        const hcol=hasCrv?'#2ecc71':'#e63030';
+        edCtx.beginPath();edCtx.arc(cpx2,cpy2,hr,0,Math.PI*2);
         edCtx.fillStyle=hcol;edCtx.fill();
         edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
       });
@@ -1796,10 +1795,10 @@ function edDrawSel(){
       const cpx=cx + lpx*cos - lpy*sin;
       const cpy=cy + lpx*sin + lpy*cos;
       const isActive=window._edCurveVertIdx===i;
+      if(isActive) return; // vértice activo: invisible para ver la curvatura
       const hasCurve=la.cornerRadii&&la.cornerRadii[i]>0;
-      const hColor=isActive?'#27ae60':(hasCurve?'#2ecc71':'#e63030');
-      edCtx.beginPath();edCtx.arc(cpx,cpy,isActive?hr*1.3:hr,0,Math.PI*2);
-      edCtx.fillStyle=hColor;edCtx.fill();
+      edCtx.beginPath();edCtx.arc(cpx,cpy,hr,0,Math.PI*2);
+      edCtx.fillStyle=hasCurve?'#2ecc71':'#e63030';edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
   }
@@ -1990,11 +1989,13 @@ function _edInsertLayerAbove(layer) {
 function edAddText(){
   const l=new TextLayer('Escribe aquí');l.resizeToFitText(edCanvas);
   edLayers.push(l); edSelectedIdx=edLayers.length-1;
+  _edDrawLockUI();
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edAddBubble(){
   const l=new BubbleLayer('Escribe aquí');l.resizeToFitText(edCanvas);
   edLayers.push(l);edSelectedIdx=edLayers.length-1;
+  _edDrawLockUI();
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edDuplicateSelected(){
@@ -2035,7 +2036,15 @@ function edDuplicateSelected(){
 }
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
+  const _delType=edLayers[edSelectedIdx]?.type;
   edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
+  // Si era shape/line con barra flotante activa, limpiar y desbloquear
+  if(_delType==='shape'||_delType==='line'){
+    $('edShapeBar')?.classList.remove('visible');
+    if(typeof _edShapeClearHistory==='function') _edShapeClearHistory();
+    _edDrawUnlockUI();
+    edActiveTool='select'; edCanvas.className='';
+  }
   edPushHistory();edRedraw();edRenderOptionsPanel();
 }
 
@@ -2351,6 +2360,13 @@ function edOnStart(e){
   const tgt = e.target;
   // Ignorar si el click NO está dentro de editorShell (modales, header, etc.)
   if(!tgt.closest('#editorShell')) return;
+  // Si la barra de menús está bloqueada (draw-active), ignorar clicks en su zona
+  // aunque pointer-events:none haga que el target sea el elemento de debajo
+  const _menuBar=$('edMenuBar');
+  if(_menuBar && $('editorShell')?.classList.contains('draw-active')){
+    const _mbr=_menuBar.getBoundingClientRect();
+    if(e.clientX>=_mbr.left&&e.clientX<=_mbr.right&&e.clientY>=_mbr.top&&e.clientY<=_mbr.bottom) return;
+  }
   // Ignorar elementos de UI dentro del editor
   const isUI = tgt.closest('#edMenuBar')      ||
                tgt.closest('#edTopbar')       ||
@@ -2366,6 +2382,63 @@ function edOnStart(e){
                tgt.closest('#editorViewer')   ||
                tgt.closest('#edProjectModal');
   if(isUI) return;
+
+  // ── MODO V⟺C: solo permitir selección de vértices ──
+  if($('esb-curve')?.dataset.curveActive==='1'){
+    const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+    if(la&&(la.type==='line'||la.type==='shape')){
+      const c2=edCoords(e);
+      const pw2=edPageW(),ph2=edPageH();
+      // Intentar seleccionar vértice de línea
+      if(la.type==='line'&&la.points.length>=2){
+        const rot2=(la.rotation||0)*Math.PI/180;
+        const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+        for(let i=0;i<la.points.length;i++){
+          const p=la.points[i];
+          const lpx=p.x*pw2,lpy=p.y*ph2;
+          const ax2=la.x+(lpx*cos2-lpy*sin2)/pw2;
+          const ay2=la.y+(lpx*sin2+lpy*cos2)/ph2;
+          if(Math.hypot(c2.nx-ax2,c2.ny-ay2)<0.05){
+            window._edCurveVertIdx=i;
+            if(!la.cornerRadii)la.cornerRadii={};
+            const existing=la.cornerRadii[i]||0;
+            window._edCurveRadius=existing;
+            const sl=$('op-line-curve-r')||$('esb-curve-sl');
+            const sn=$('op-line-curve-rnum')||$('esb-curve-num');
+            if(sl)sl.value=existing;if(sn)sn.value=existing;
+            // Actualizar popup si está abierto
+            const csl=document.getElementById('esb-curve-sl');
+            const cnum=document.getElementById('esb-curve-num');
+            if(csl)csl.value=existing;if(cnum)cnum.value=existing;
+            edRedraw();return;
+          }
+        }
+      }
+      // Intentar seleccionar vértice de rect
+      if(la.type==='shape'&&la.shape==='rect'){
+        const rot2=(la.rotation||0)*Math.PI/180;
+        const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+        const hw=la.width*pw2/2,hh=la.height*ph2/2;
+        const corners=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
+        for(let ci2=0;ci2<4;ci2++){
+          const[lx,ly]=corners[ci2];
+          const ax2=(la.x*pw2+lx*cos2-ly*sin2)/pw2;
+          const ay2=(la.y*ph2+lx*sin2+ly*cos2)/ph2;
+          if(Math.hypot(c2.nx-ax2,c2.ny-ay2)<0.05){
+            window._edCurveVertIdx=ci2;
+            if(!la.cornerRadii)la.cornerRadii=[0,0,0,0];
+            const existing=la.cornerRadii[ci2]||0;
+            window._edCurveRadius=existing;
+            const csl=document.getElementById('esb-curve-sl');
+            const cnum=document.getElementById('esb-curve-num');
+            if(csl)csl.value=existing;if(cnum)cnum.value=existing;
+            edRedraw();return;
+          }
+        }
+      }
+    }
+    return; // en modo curva, ignorar todo lo demás
+  }
 
   // No bloquear scroll en overlays (capas, hojas, etc.)
   if(e.cancelable && !e.target.closest('.ed-fulloverlay')){
@@ -2544,7 +2617,8 @@ function edOnStart(e){
       if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)<15){
         _edLineLayer.closed=true;
         _edFinishLine();
-        _edActivateLineTool(true); // isNew=true: historial con null como primer estado
+        // Solo abrir panel si los menús están visibles
+        if(!edMinimized) _edActivateLineTool(true);
         return;
       }
       _edLineLayer.addAbsPoint(c.nx, c.ny);
@@ -2578,34 +2652,7 @@ function edOnStart(e){
       }
     }
   }
-  // Vértices del rect en modo curva
-  if(edSelectedIdx>=0){
-    const la2=edLayers[edSelectedIdx];
-    if(la2?.type==='shape' && la2.shape==='rect'){
-      const curveSliderS=$('op-shape-curve-slider');
-      if(curveSliderS&&curveSliderS.style.display==='flex'){
-        const rot2=(la2.rotation||0)*Math.PI/180;
-        const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
-        const hw=la2.width*edPageW()/2, hh=la2.height*edPageH()/2;
-        const corners=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
-        for(let ci2=0;ci2<4;ci2++){
-          const [lx,ly]=corners[ci2];
-          const pw2=edPageW(),ph2=edPageH();
-          const ax2=(la2.x*pw2+lx*cos2-ly*sin2)/pw2;
-          const ay2=(la2.y*ph2+lx*sin2+ly*cos2)/ph2;
-          if(Math.hypot(c.nx-ax2,c.ny-ay2)<0.05){
-            window._edCurveVertIdx=ci2;
-            if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0];
-            const existing=la2.cornerRadii[ci2]||0;
-            window._edCurveRadius=existing;
-            const sl=$('op-shape-curve-r'),sn=$('op-shape-curve-rnum');
-            if(sl)sl.value=existing;if(sn)sn.value=existing;
-            edRedraw();return;
-          }
-        }
-      }
-    }
-  }
+
   // Vértices de línea seleccionada — detección independiente del bubble
   if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line'){
     const la=edLayers[edSelectedIdx];
@@ -2619,48 +2666,12 @@ function edOnStart(e){
         const ax=la.x+(lpx*cos-lpy*sin)/pw;
         const ay=la.y+(lpx*sin+lpy*cos)/ph;
         if(Math.hypot(c.nx-ax,c.ny-ay)<0.05){
-          // Si el modo curva está activo: seleccionar vértice como activo
-          const curveSlider=$('op-line-curve-slider');
-          const curveActive=curveSlider&&curveSlider.style.display==='flex';
-          if(curveActive){
-            const l2=edLayers[edSelectedIdx];
-            if(!l2.cornerRadii) l2.cornerRadii={};
-            // Seleccionar vértice (siempre): sincronizar slider con su radio actual
-            // Radio 0 = esquina recta (el usuario lo controla con el slider)
-            window._edCurveVertIdx=i;
-            const existing=l2.cornerRadii[i]||0;
-            window._edCurveRadius=existing;
-            const sl=$('op-line-curve-r'), sn=$('op-line-curve-rnum');
-            if(sl) sl.value=existing; if(sn) sn.value=existing;
-            edRedraw(); return;
-          }
           edIsTailDragging=true;edTailPointType='linevertex';edTailVoiceIdx=i;return;
         }
       }
     }
   }
-  // Toque en vértice de rect para curva
-  if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape' && edLayers[edSelectedIdx]?.shape==='rect'){
-    const curveSliderS=$('op-shape-curve-slider');
-    if(curveSliderS&&curveSliderS.style.display==='flex'){
-      const la2=edLayers[edSelectedIdx];
-      const pw2=edPageW(),ph2=edPageH();
-      const w2=la2.width*pw2, h2=la2.height*ph2;
-      const rot2=(la2.rotation||0)*Math.PI/180;
-      const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
-      const corners=[[-w2/2,-h2/2],[w2/2,-h2/2],[w2/2,h2/2],[-w2/2,h2/2]];
-      for(const [cx3,cy3] of corners){
-        const rx=cx3*cos2-cy3*sin2, ry=cx3*sin2+cy3*cos2;
-        const ax=la2.x+rx/pw2, ay=la2.y+ry/ph2;
-        if(Math.hypot(c.nx-ax,c.ny-ay)<0.05){
-          // Aplicar radio al rect (global, todos los vértices iguales)
-          const existing=la2.cornerRadius||0;
-          const slR=$('op-shape-curve-r'); if(slR) la2.cornerRadius=+slR.value;
-          _edShapePushHistory(); edRedraw(); return;
-        }
-      }
-    }
-  }
+
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
   const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
   if(_la && _la.type!=='bubble'){
@@ -3827,6 +3838,19 @@ function edCloseMenus(){
 function edToggleMenu(id){
   if(edMenuOpen===id){edCloseMenus();return;}
   edCloseMenus();
+  // Si hay panel de herramienta abierto, cerrarlo antes de abrir el menú
+  const _panel=$('edOptionsPanel');
+  if(_panel&&_panel.classList.contains('open')){
+    const _mode=_panel.dataset.mode;
+    edCloseOptionsPanel();
+    if(_mode==='draw'||_mode==='shape'||_mode==='line'){
+      _edShapeClearHistory&&_edShapeClearHistory();
+      _edShapeStart=null;_edShapePreview=null;_edPendingShape=null;
+      edActiveTool='select';edCanvas.className='';
+      $('edShapeBar')?.classList.remove('visible');
+      _edDrawUnlockUI();
+    }
+  }
   if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
   const dd=$('dd-'+id);if(!dd)return;
   const btn=document.querySelector(`[data-menu="${id}"]`);
@@ -3944,7 +3968,7 @@ function _edActivateShapeTool() {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
-    <button id="op-shape-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">v↔c</button>
+    <button id="op-shape-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
     <div id="op-shape-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-shape-curve-r" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="flex:1;min-width:40px;accent-color:var(--black)">
       <input type="number" id="op-shape-curve-rnum" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
@@ -4251,7 +4275,7 @@ function _edActivateLineTool(isNew) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
-    <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">v↔c</button>
+    <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
       <input type="number" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
@@ -4508,8 +4532,13 @@ function _edFinishLine() {
     _edLineType = 'select';
     _edShapePushHistory();
     edRedraw();
-    const _barWasVisible2 = $('edDrawBar')?.classList.contains('visible');
-    _edActivateLineTool(_barWasVisible2); // refrescar panel mostrando botón seleccionar activo
+    // Si los menús están ocultos (minimizados), no abrir panel — solo mantener barra flotante
+    if(edMinimized){
+      edShapeBarShow();
+    } else {
+      const _barWasVisible2 = $('edShapeBar')?.classList.contains('visible');
+      _edActivateLineTool(_barWasVisible2);
+    }
   } else {
     if (_edLineLayer) {
       const idx = edLayers.indexOf(_edLineLayer);
@@ -4545,8 +4574,12 @@ function _edFreezeDrawLayer(){
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
   const panel=$('edOptionsPanel');
-  if(panel){ panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode; }
-  edPanelUserClosed = true;   // usuario cerró → no reabrir al seleccionar
+  if(panel){
+    const _mode=panel.dataset.mode;
+    panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode;
+    if(_mode==='props') _edDrawUnlockUI();
+  }
+  edPanelUserClosed = true;
   requestAnimationFrame(edFitCanvas);
 }
 /* ══════════════════════════════════════════
@@ -5616,6 +5649,16 @@ function _edbSyncSize() {
 
 /* Calcular posición por defecto de una barra flotante:
    pegada al borde izquierdo del lienzo, centrada verticalmente */
+
+function _edCurveModeActive(){
+  const panelS=$('op-shape-curve-slider');
+  const panelL=$('op-line-curve-slider');
+  const barBtn=$('esb-curve');
+  return (panelS&&panelS.style.display==='flex')||
+         (panelL&&panelL.style.display==='flex')||
+         (barBtn&&barBtn.dataset.curveActive==='1');
+}
+
 function _edBarDefaultPos(barEl) {
   const shell = document.getElementById('editorShell');
   if (!shell) return { x: 8, y: 120 };
@@ -5863,6 +5906,64 @@ function edInitShapeBar() {
     const top2=br.top-ph2-GAP>=0?br.top-ph2-GAP:br.bottom+GAP;
     const left2=Math.max(GAP,Math.min(W-pw2-GAP,br.left+br.width/2-pw2/2));
     pop.style.left=left2+'px'; pop.style.top=top2+'px';
+  });
+
+  // ── V⟺C curva de vértice ──
+  $('esb-curve')?.addEventListener('click', e => {
+    if(_locked) return; e.stopPropagation();
+    const btn=$('esb-curve');
+    const active=btn.dataset.curveActive==='1';
+    btn.dataset.curveActive=active?'0':'1';
+    btn.style.background=active?'':'rgba(0,0,0,.7)';
+    btn.style.color=active?'rgba(255,255,255,1)':'#FFE135';
+    btn.style.outline=active?'':'1px solid rgba(255,255,0,.5)';
+    if(active){
+      window._edCurveVertIdx=-1;
+      document.getElementById('esb-curve-pop')?.remove();
+      edRedraw(); return;
+    }
+    const _savedSelCurve=edSelectedIdx;
+    let pop=document.getElementById('esb-curve-pop');
+    if(pop){ pop.remove(); return; }
+    pop=document.createElement('div');
+    pop.id='esb-curve-pop';
+    pop.style.cssText='position:fixed;background:rgba(30,30,30,.95);border-radius:10px;padding:10px 14px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:1200;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:160px;';
+    const curR=window._edCurveRadius||0;
+    pop.innerHTML=`<div style="display:flex;align-items:center;gap:6px;width:100%">
+      <span style="color:#FFE135;font-size:.75rem;font-weight:700">Radio px</span>
+      <input type="number" id="esb-curve-num" min="0" max="200" value="${curR}"
+        style="width:52px;text-align:center;font-size:1rem;font-weight:700;border:1px solid rgba(255,255,255,.4);border-radius:8px;background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;-moz-appearance:textfield;">
+    </div>
+    <input type="range" id="esb-curve-sl" min="0" max="200" value="${curR}" style="width:100%;accent-color:#FFE135;cursor:pointer">
+    <span style="color:#ccc;font-size:.7rem">Toca un vértice para aplicar</span>`;
+    document.body.appendChild(pop);
+    const br=btn.getBoundingClientRect();
+    const pw2=pop.offsetWidth||160,ph2=pop.offsetHeight||90,GAP=8;
+    const top2=br.top-ph2-GAP>=0?br.top-ph2-GAP:br.bottom+GAP;
+    const left2=Math.max(GAP,Math.min(window.innerWidth-pw2-GAP,br.left+br.width/2-pw2/2));
+    pop.style.left=left2+'px';pop.style.top=top2+'px';
+    const sl2=document.getElementById('esb-curve-sl');
+    const nm2=document.getElementById('esb-curve-num');
+    sl2.addEventListener('input',()=>{ nm2.value=sl2.value; window._edCurveRadius=+sl2.value;
+      // Actualizar en tiempo real el vértice activo
+      const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+      const vi=window._edCurveVertIdx;
+      if(la2&&vi>=0){
+        if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=+sl2.value; }
+        else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=+sl2.value; }
+        edRedraw();
+      }
+    });
+    nm2.addEventListener('change',()=>{ const v=Math.max(0,Math.min(200,+nm2.value)); nm2.value=v; sl2.value=v; window._edCurveRadius=v;
+      const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+      const vi=window._edCurveVertIdx;
+      if(la2&&vi>=0){
+        if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
+        else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=v; }
+        _edShapePushHistory(); edRedraw();
+      }
+    });
+    // El popup permanece abierto hasta que se desactive V⟺C pulsando el botón de nuevo
   });
 
   // Deshacer/Rehacer
@@ -6794,6 +6895,9 @@ function EditorView_init(){
       </div>`;
     document.body.appendChild(dlg);
 
+    // Click fuera del cuadro → cerrar y volver al editor
+    dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
+
     document.getElementById('_edExitYes').onclick = () => {
       dlg.remove();
       edSaveProject();
@@ -7163,6 +7267,11 @@ function EditorView_init(){
     }
     // ESC: cerrar menús desplegables y panel de opciones sin guardar
     if(e.key === 'Escape' && !ctrl){
+      // Cerrar modal de guardado si está abierto
+      const saveModal=document.querySelector('div[style*="z-index:99999"]');
+      if(saveModal){ e.preventDefault(); saveModal.remove(); return; }
+      // Cerrar popup de curva si está abierto
+      document.getElementById('esb-curve-pop')?.remove();
       // Cerrar menú desplegable si está abierto
       if(edMenuOpen){ e.preventDefault(); edCloseMenus(); return; }
       // Cerrar panel de opciones si está abierto (sin guardar)
@@ -7251,6 +7360,12 @@ function EditorView_init(){
 
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
+    // Ignorar clicks en zona de barra bloqueada (pointer-events:none deja pasar coords)
+    const _menuBar2=$('edMenuBar');
+    if(_menuBar2 && $('editorShell')?.classList.contains('draw-active')){
+      const _mbr2=_menuBar2.getBoundingClientRect();
+      if(e.clientX>=_mbr2.left&&e.clientX<=_mbr2.right&&e.clientY>=_mbr2.top&&e.clientY<=_mbr2.bottom) return;
+    }
     if(['draw','eraser','fill','shape','line'].includes(edActiveTool)){
       const inCanvas   = e.target.closest('#editorCanvas');
       const inPanel    = e.target.closest('#edOptionsPanel');
@@ -7273,14 +7388,28 @@ function EditorView_init(){
         const inCanvas   = e.target.closest('#editorCanvas');
         const inDrawBar  = e.target.closest('#edDrawBar');
         const inShapeBar = e.target.closest('#edShapeBar');
-        const inShapePop = e.target.closest('#edb-palette-pop');
-        const inPalPop   = e.target.closest('#edb-palette-pop');
-        if(!inCanvas && !inDrawBar && !inShapeBar && !inShapePop && !inPalPop){
+        const inPanel    = e.target.closest('#edOptionsPanel');
+        const inMenuBar  = e.target.closest('#edMenuBar');
+        const inTopbar   = e.target.closest('#edTopbar');
+        const inCurvePop = e.target.closest('#esb-curve-pop') || e.target.id==='esb-curve';
+        const curveOn=$('esb-curve')?.dataset.curveActive==='1';
+        if(!inCanvas && !inDrawBar && !inShapeBar && !inPanel && !inMenuBar && !inTopbar && !inCurvePop && !curveOn){
           edSelectedIdx = -1;
           edActiveTool = 'select';
           edCanvas.className = '';
           edRedraw();
         }
+      }
+    }
+    // Cerrar panel de texto/bocadillo al tocar fuera (excepto barra de menús bloqueada)
+    const _opP=$('edOptionsPanel');
+    if(_opP&&_opP.classList.contains('open')&&_opP.dataset.mode==='props'){
+      const inPanel   = e.target.closest('#edOptionsPanel');
+      const inMenuBar = e.target.closest('#edMenuBar');
+      const inTopbar  = e.target.closest('#edTopbar');
+      const inCanvas  = e.target.closest('#editorCanvas');
+      if(!inPanel && !inMenuBar && !inTopbar && inCanvas){
+        edCloseOptionsPanel();
       }
     }
   };
