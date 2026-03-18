@@ -7012,8 +7012,22 @@ function EditorView_init(){
     // PC: abrir al hacer hover (ya lo hace CSS) pero también reposicionar
     item.addEventListener('mouseenter',()=>{ sub.style.display='block'; _edPositionSubmenu(sub); });
     item.addEventListener('mouseleave',()=>{ sub.style.display=''; });
-    // PC hover: reposicionar también
-    item.addEventListener('mouseenter',()=>{ requestAnimationFrame(()=>_edPositionSubmenu(sub)); });
+    // PC hover: posicionar al mostrar
+    item.addEventListener('mouseenter',()=>{
+      if(sub.parentElement!==document.body){
+        sub._origParent=sub._origParent||sub.parentElement;
+        document.body.appendChild(sub);
+      }
+      sub.style.display='block';
+      requestAnimationFrame(()=>_edPositionSubmenu(sub));
+    });
+    item.addEventListener('mouseleave',e=>{
+      // Solo ocultar si el ratón no está sobre el submenú
+      if(!sub.contains(e.relatedTarget)){ sub.style.display=''; }
+    });
+    sub.addEventListener('mouseleave',e=>{
+      if(!item.contains(e.relatedTarget)){ sub.style.display=''; }
+    });
     // Táctil: toggle por tap
     item.addEventListener('pointerup',e=>{
       if(e.pointerType!=='touch') return;
