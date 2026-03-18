@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v9.45</footer>
+    <footer class="app-version">v9.56</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -208,16 +208,16 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="insert">Insertar ▾</button>
             <div class="ed-dropdown" id="dd-insert">
-              <div class="ed-dropdown-item has-sub" style="position:relative">
-                Imagen
-                <div class="ed-subdropdown">
+              <div class="ed-dropdown-submenu">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-imagen-btn">Imagen ▸</button>
+                <div class="ed-submenu" id="dd-imagen-sub">
                   <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
                   <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
                 </div>
               </div>
-              <div class="ed-dropdown-item has-sub" style="position:relative">
-                Texto
-                <div class="ed-subdropdown">
+              <div class="ed-dropdown-submenu">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-texto-btn">Texto ▸</button>
+                <div class="ed-submenu" id="dd-texto-sub">
                   <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
                   <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
                 </div>
@@ -233,9 +233,9 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
             <div class="ed-dropdown" id="dd-draw">
               <button class="ed-dropdown-item" id="dd-pen">✏️ Dibujo a mano</button>
-              <div class="ed-dropdown-item has-sub" style="position:relative">
-                Dibujo vectorial
-                <div class="ed-subdropdown">
+              <div class="ed-dropdown-submenu">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-vectorial-btn">Dibujo vectorial ▸</button>
+                <div class="ed-submenu" id="dd-vectorial-sub">
                   <button class="ed-dropdown-item" id="dd-shape-rect">▭ Rectángulo</button>
                   <button class="ed-dropdown-item" id="dd-shape-ellipse">◯ Elipse</button>
                   <button class="ed-dropdown-item" id="dd-shape-line">╱ Líneas</button>

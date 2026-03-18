@@ -239,7 +239,8 @@ body.editor-page #appView {
 
 /* ── Sub-dropdown (segundo nivel) ── */
 .ed-subdropdown {
-  position: fixed;
+  position: absolute;
+  left: 0; top: 100%;
   min-width: 180px;
   background: var(--white);
   border: 2px solid var(--black);
@@ -249,7 +250,10 @@ body.editor-page #appView {
   display: none;
   padding: 6px 0;
 }
-/* PC hover: JS posiciona y muestra */
+/* Submenú dentro del dropdown de Proyecto (derecha): alineado a la derecha */
+#dd-project .ed-subdropdown {
+  left: auto; right: 0;
+}
 .ed-dropdown-item:hover > .ed-subdropdown { display: block; }
 .ed-dropdown-item.has-sub::after { content: '›'; margin-left: auto; color: var(--gray-400); }
 

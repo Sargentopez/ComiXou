@@ -1989,13 +1989,13 @@ function _edInsertLayerAbove(layer) {
 function edAddText(){
   const l=new TextLayer('Escribe aquí');l.resizeToFitText(edCanvas);
   edLayers.push(l); edSelectedIdx=edLayers.length-1;
-  _edDrawLockUI();
+  _edDrawLockUI(); _edPropsOverlayShow();
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edAddBubble(){
   const l=new BubbleLayer('Escribe aquí');l.resizeToFitText(edCanvas);
   edLayers.push(l);edSelectedIdx=edLayers.length-1;
-  _edDrawLockUI();
+  _edDrawLockUI(); _edPropsOverlayShow();
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edDuplicateSelected(){
@@ -2336,6 +2336,7 @@ function _edHandleDoubleTap(idx){
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool();
   } else {
+    _edDrawLockUI(); _edPropsOverlayShow();
     edRenderOptionsPanel('props');
   }
 }
@@ -2818,12 +2819,20 @@ function edOnStart(e){
     const _wasLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
     const _panel = $('edOptionsPanel');
     const _panelWasProps = _panel?.dataset.mode === 'props';
-    edSelectedIdx = -1;
     edHideContextMenu();
     // Con barra flotante activa: solo deseleccionar, sin abrir submenús
     if($('edDrawBar')?.classList.contains('visible')){
-      edRedraw(); return;
+      edSelectedIdx = -1; edRedraw(); return;
     }
+    // Si el panel de texto/bocadillo está abierto: no cerrar al tocar fuera
+    const _panelMode=$('edOptionsPanel')?.dataset.mode;
+    if(_panelMode==='props'){
+      const _la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+      if(_la&&(_la.type==='text'||_la.type==='bubble')){
+        edRedraw(); return; // mantener panel abierto, no deseleccionar
+      }
+    }
+    edSelectedIdx = -1;
     // Clic en vacío: cerrar panel si no es draw
     edRenderOptionsPanel();
   }
@@ -3864,26 +3873,20 @@ function edToggleMenu(id){
   const r = btn.getBoundingClientRect();
   dd.style.position = 'fixed';
   dd.style.top  = r.bottom + 'px';
-  dd.style.left = r.left   + 'px';
-  dd.style.right = 'auto';
   dd.style.zIndex = '9999';
+  // Proyecto: siempre alineado por la derecha con el botón
+  if(id === 'project'){
+    dd.style.left = 'auto';
+    dd.style.right = (window.innerWidth - r.right) + 'px';
+  } else {
+    dd.style.left = r.left + 'px';
+    dd.style.right = 'auto';
+  }
 
   dd.classList.add('open');
   btn.classList.add('open');
   edMenuOpen = id;
   if(id === 'nav') edUpdateNavPages();
-
-  // Corrección de desbordamiento lateral y vertical (tras render)
-  requestAnimationFrame(() => {
-    const ddR = dd.getBoundingClientRect();
-    if(ddR.right > window.innerWidth - 4){
-      dd.style.left = Math.max(4, r.right - ddR.width) + 'px';
-    }
-    // Si el dropdown se sale por abajo, mostrarlo encima del botón
-    if(ddR.bottom > window.innerHeight - 4){
-      dd.style.top = Math.max(4, r.top - ddR.height) + 'px';
-    }
-  });
 }
 
 function edDeactivateDrawTool(){
@@ -4577,7 +4580,7 @@ function edCloseOptionsPanel(){
   if(panel){
     const _mode=panel.dataset.mode;
     panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode;
-    if(_mode==='props') _edDrawUnlockUI();
+    if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
   }
   edPanelUserClosed = true;
   requestAnimationFrame(edFitCanvas);
@@ -5982,6 +5985,24 @@ function edInitShapeBar() {
 function _edDrawLockUI()   { $('editorShell')?.classList.add('draw-active'); }
 function _edDrawUnlockUI() { $('editorShell')?.classList.remove('draw-active'); }
 
+// Overlay transparente sobre el canvas para bloquear clicks cuando panel props abierto
+// No usa pointer-events en la barra — así los clicks en barra no llegan al canvas
+function _edPropsOverlayShow(){
+  let ov=document.getElementById('_edPropsOverlay');
+  if(!ov){
+    ov=document.createElement('div');
+    ov.id='_edPropsOverlay';
+    // Overlay encima de la barra de menús — absorbe clicks sin hacer nada
+    ov.style.cssText='position:absolute;inset:0;z-index:500;background:transparent;cursor:default;';
+    $('edMenuBar')?.appendChild(ov);
+  }
+  ov.style.display='block';
+}
+function _edPropsOverlayHide(){
+  const ov=document.getElementById('_edPropsOverlay');
+  if(ov) ov.style.display='none';
+}
+
 function edDrawBarUpdate() {
   if (!$('edDrawBar')?.classList.contains('visible')) return;
   _edbSyncTool();
@@ -6984,73 +7005,6 @@ function EditorView_init(){
   document.addEventListener('fullscreenchange', _edFsUpdate);
   document.addEventListener('webkitfullscreenchange', _edFsUpdate);
 
-  // ── SUBMENÚS: posicionamiento inteligente (táctil + desbordamiento) ──
-  function _edPositionSubmenu(sub){
-    const parent=sub.parentElement;
-    if(!parent) return;
-    const pr=parent.getBoundingClientRect();
-    const vw=window.innerWidth, vh=window.innerHeight;
-    const GAP=4;
-    sub.style.position='fixed';
-    sub.style.left='-9999px'; sub.style.top='-9999px';
-    sub.style.right='auto';   sub.style.bottom='auto';
-    const sw=sub.offsetWidth||180, sh=sub.offsetHeight||100;
-    // Siempre debajo del ítem padre, desplazado 5px a la derecha
-    let left=pr.left+5;
-    let top=pr.bottom;
-    // Ajustar si se sale por la derecha
-    if(left+sw+GAP>vw){ left=Math.max(GAP, vw-sw-GAP); }
-    // Ajustar si se sale por abajo
-    if(top+sh+GAP>vh){ top=Math.max(GAP, pr.top-sh); }
-    sub.style.left=left+'px';
-    sub.style.top=top+'px';
-  }
-  // Aplicar a todos los has-sub: abrir/cerrar por tap + reposicionar
-  document.querySelectorAll('.ed-dropdown-item.has-sub').forEach(item=>{
-    const sub=item.querySelector('.ed-subdropdown');
-    if(!sub) return;
-    // PC: abrir al hacer hover (ya lo hace CSS) pero también reposicionar
-    item.addEventListener('mouseenter',()=>{ sub.style.display='block'; _edPositionSubmenu(sub); });
-    item.addEventListener('mouseleave',()=>{ sub.style.display=''; });
-    // PC hover: posicionar al mostrar
-    item.addEventListener('mouseenter',()=>{
-      if(sub.parentElement!==document.body){
-        sub._origParent=sub._origParent||sub.parentElement;
-        document.body.appendChild(sub);
-      }
-      sub.style.display='block';
-      requestAnimationFrame(()=>_edPositionSubmenu(sub));
-    });
-    item.addEventListener('mouseleave',e=>{
-      // Solo ocultar si el ratón no está sobre el submenú
-      if(!sub.contains(e.relatedTarget)){ sub.style.display=''; }
-    });
-    sub.addEventListener('mouseleave',e=>{
-      if(!item.contains(e.relatedTarget)){ sub.style.display=''; }
-    });
-    // Táctil: toggle por tap
-    item.addEventListener('pointerup',e=>{
-      if(e.pointerType!=='touch') return;
-      e.stopPropagation();
-      const isOpen=sub.style.display==='block';
-      // Cerrar todos los demás submenús abiertos
-      document.querySelectorAll('.ed-subdropdown').forEach(s=>{ if(s!==sub) s.style.display=''; });
-      if(isOpen){ sub.style.display=''; }
-      else{
-        // Mover al body para que position:fixed funcione sin restricciones
-        if(sub.parentElement!==document.body){
-          sub._origParent=sub._origParent||sub.parentElement;
-          document.body.appendChild(sub);
-        }
-        sub.style.display='block';
-        requestAnimationFrame(()=>_edPositionSubmenu(sub));
-      }
-    });
-  });
-  // Cerrar submenús al cerrar el dropdown padre
-  const _origEdCloseMenus = edCloseMenus;
-  // (edCloseMenus ya cierra los dropdowns, los submenús se ocultan al ocultarse el padre)
-
   // ── MENÚ: botones dropdown (excluir layers y nav que tienen overlays propios) ──
   document.querySelectorAll('[data-menu]').forEach(btn=>{
     const id = btn.dataset.menu;
@@ -7213,6 +7167,19 @@ function EditorView_init(){
   $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
   // Submenú exportar: toggle inline al clicar
+  // Submenús inline — mismo patrón que exportar
+  $('dd-imagen-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    $('dd-imagen-sub')?.classList.toggle('open');
+  });
+  $('dd-texto-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    $('dd-texto-sub')?.classList.toggle('open');
+  });
+  $('dd-vectorial-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    $('dd-vectorial-sub')?.classList.toggle('open');
+  });
   $('dd-exportbtn')?.addEventListener('click', e => {
     e.stopPropagation();
     $('dd-export-sub')?.classList.toggle('open');
@@ -7436,17 +7403,10 @@ function EditorView_init(){
     // Cerrar menús y submenús al tocar fuera — solo si NO hay bloqueo activo
     const _drawActive=$('editorShell')?.classList.contains('draw-active');
     if(!_drawActive && edMenuOpen){
-      const _inDropdown=e.target.closest('.ed-dropdown')||e.target.closest('.ed-subdropdown')||e.target.closest('[data-menu]');
+      const _inDropdown=e.target.closest('.ed-dropdown')||e.target.closest('.ed-subdropdown')||e.target.closest('.ed-submenu')||e.target.closest('[data-menu]');
       if(!_inDropdown){ edCloseMenus(); }
     }
-    // Cerrar submenús sueltos (movidos al body) si se toca fuera
-    if(!_drawActive){
-      document.querySelectorAll('.ed-subdropdown').forEach(sub=>{
-        if(sub.style.display==='block' && !sub.contains(e.target) && !sub._origParent?.contains(e.target)){
-          sub.style.display='';
-        }
-      });
-    }
+
     if(['draw','eraser','fill','shape','line'].includes(edActiveTool)){
       const inCanvas   = e.target.closest('#editorCanvas');
       const inPanel    = e.target.closest('#edOptionsPanel');
@@ -7482,17 +7442,7 @@ function EditorView_init(){
         }
       }
     }
-    // Cerrar panel de texto/bocadillo al tocar fuera (excepto barra de menús bloqueada)
-    const _opP=$('edOptionsPanel');
-    if(_opP&&_opP.classList.contains('open')&&_opP.dataset.mode==='props'){
-      const inPanel   = e.target.closest('#edOptionsPanel');
-      const inMenuBar = e.target.closest('#edMenuBar');
-      const inTopbar  = e.target.closest('#edTopbar');
-      const inCanvas  = e.target.closest('#editorCanvas');
-      if(!inPanel && !inMenuBar && !inTopbar && inCanvas){
-        edCloseOptionsPanel();
-      }
-    }
+
   };
   document.addEventListener('pointerdown', window._edDocDownFn);
 
