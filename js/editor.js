@@ -679,7 +679,7 @@ class ShapeLayer extends BaseLayer {
     super('shape', x, y, w, h);
     this.shape     = shape;       // 'rect' | 'ellipse'
     this.color     = '#000000';   // color del borde
-    this.fillColor = '#ffffff';    // relleno blanco por defecto
+    this.fillColor = 'none';       // sin relleno por defecto
     this.lineWidth = 3;
     this.opacity   = 1;
   }
@@ -691,7 +691,7 @@ class ShapeLayer extends BaseLayer {
     const w  = this.width  * pw;
     const h  = this.height * ph;
     ctx.save();
-    ctx.globalAlpha = this.opacity ?? 1;
+    ctx.globalAlpha = ctx.globalAlpha * (this.opacity ?? 1);
     ctx.translate(cx, cy);
     ctx.rotate((this.rotation || 0) * Math.PI / 180);
     ctx.lineJoin = 'round';
@@ -766,7 +766,7 @@ class LineLayer extends BaseLayer {
     this.points    = [];   // coords normalizadas en espacio LOCAL (relativas al centro, sin rotación)
     this.closed    = false;
     this.color     = '#000000';
-    this.fillColor = '#ffffff';    // relleno blanco por defecto
+    this.fillColor = 'none';       // sin relleno por defecto
     this.lineWidth = 3;
     this.opacity   = 1;
     // rotation heredado de BaseLayer
@@ -816,7 +816,7 @@ class LineLayer extends BaseLayer {
     const cy = edMarginY() + this.y * ph;
     const rot = (this.rotation || 0) * Math.PI / 180;
     ctx.save();
-    ctx.globalAlpha = this.opacity ?? 1;
+    ctx.globalAlpha = ctx.globalAlpha * (this.opacity ?? 1);
     ctx.translate(cx, cy);
     ctx.rotate(rot);
     ctx.lineJoin = 'round';
@@ -1372,7 +1372,8 @@ function edRedraw(){
   // En modo props: dimear todo excepto el objeto seleccionado
   // En modo draw/eraser/fill: dimear todo excepto el DrawLayer activo
   const _editingProps = _panelOpen && _panel.dataset.mode === 'props' && edSelectedIdx >= 0;
-  const _editingDraw  = ['draw','eraser','fill'].includes(edActiveTool) && _panelOpen;
+  const _editingDraw  = ['draw','eraser','fill'].includes(edActiveTool) &&
+    (_panelOpen || $('edDrawBar')?.classList.contains('visible'));
   const _editingShape = (_panelOpen && (_panel.dataset.mode==='shape' || _panel.dataset.mode==='line'))
     || !!_edShapePreview || !!_edLineLayer
 
@@ -1382,39 +1383,42 @@ function edRedraw(){
   // Textos/bocadillos siempre al final (encima de todo).
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
+    if(_editingDraw && l.type==='draw') return;    // en modo draw, el draw va al final
     let dimmed = false;
     if(_editingProps) dimmed = (i !== edSelectedIdx);
-    else if(_editingDraw) dimmed = (l.type !== 'draw');
+    else if(_editingDraw) dimmed = true;           // en modo draw, todo lo demás dimeado
     else if(_editingShape) dimmed = (l === _edShapePreview || l === _edLineLayer || i === edSelectedIdx) ? false : true;
     const dimFactor = dimmed ? 0.5 : 1;
     if(l.type==='image'){
-      // ImageLayer.draw() sobreescribe globalAlpha internamente con l.opacity
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx, edCanvas);
       l.opacity = _orig;
     } else if(l.type==='draw'){
-      // DrawLayer.draw() no usa l.opacity — controlamos globalAlpha directamente
       edCtx.globalAlpha = dimFactor;
       l.draw(edCtx);
       edCtx.globalAlpha = 1;
     } else if(l.type==='stroke'){
-      // StrokeLayer.draw() tampoco usa l.opacity — controlamos globalAlpha
       edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx);
       edCtx.globalAlpha = 1;
     } else if(l.type==='shape' || l.type==='line'){
-      edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
+      edCtx.globalAlpha = dimFactor;
       l.draw(edCtx);
       edCtx.globalAlpha = 1;
     }
   });
-  // Textos: dimear si estamos en modo draw, shape/line, o si hay objeto no-texto seleccionado
+  // Textos: dimear en modo draw, shape/line, o si hay objeto no-texto seleccionado
   const _dimTexts = _editingDraw
     || _editingShape
     || (_editingProps && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble');
   edCtx.globalAlpha = _textGroupAlpha * (_dimTexts ? 0.5 : 1);
   _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
   edCtx.globalAlpha = 1;
+  // En modo draw: DrawLayer al final, encima de shapes/textos dimeados
+  if(_editingDraw){
+    const _dl = edLayers.find(l => l.type==='draw');
+    if(_dl){ _dl.draw(edCtx); }
+  }
   edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
   if(_edLineLayer && _edLineLayer.points.length === 1){
@@ -1725,9 +1729,28 @@ function edAddImage(file){
   };
   reader.readAsDataURL(file);
 }
+/* Insertar capa en la posición más alta, justo debajo de textos/bocadillos */
+function _edInsertLayerAbove(layer) {
+  // Insertar justo antes del DrawLayer activo (si existe) o antes del primer texto
+  // Así el draw siempre queda en la capa más alta entre los no-textos
+  const drawIdx = edLayers.findIndex(l => l.type==='draw');
+  const firstTextIdx = edLayers.findIndex(l => l.type==='text' || l.type==='bubble');
+  let insertAt;
+  if(drawIdx >= 0) insertAt = drawIdx;           // justo debajo del draw
+  else if(firstTextIdx >= 0) insertAt = firstTextIdx; // justo debajo de los textos
+  else insertAt = -1;                             // al final
+  if(insertAt >= 0){
+    edLayers.splice(insertAt, 0, layer);
+    edSelectedIdx = insertAt;
+  } else {
+    edLayers.push(layer);
+    edSelectedIdx = edLayers.length - 1;
+  }
+}
+
 function edAddText(){
   const l=new TextLayer('Escribe aquí');l.resizeToFitText(edCanvas);
-  edLayers.push(l);edSelectedIdx=edLayers.length-1;
+  edLayers.push(l); edSelectedIdx=edLayers.length-1;
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edAddBubble(){
@@ -2038,7 +2061,11 @@ function _edHandleDoubleTap(idx){
   if(la && la.type === 'stroke'){
     const page=edPages[edCurrentPage]; if(!page) return;
     const dl=la.toDrawLayer();
-    page.layers.splice(idx, 1, dl);
+    // Quitar stroke e insertar DrawLayer en posición más alta (bajo textos)
+    page.layers.splice(idx, 1);
+    const firstTextIdx2 = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
+    if(firstTextIdx2 >= 0) page.layers.splice(firstTextIdx2, 0, dl);
+    else page.layers.push(dl);
     edLayers=page.layers;
     edSelectedIdx=-1;
     edActiveTool='draw';
@@ -2237,9 +2264,9 @@ function edOnStart(e){
     _edShapeStart = {x:c.nx, y:c.ny};
     _edShapePreview = new ShapeLayer(_edShapeType, c.nx, c.ny, 0.01, 0.01);
     _edShapePreview.color     = edDrawColor || '#000000';
-    _edShapePreview.fillColor = edDrawFillColor || '#ffffff';
+    _edShapePreview.fillColor = edDrawFillColor || 'none';
     _edShapePreview.lineWidth = edDrawSize || 3;
-    edLayers.push(_edShapePreview);
+    _edInsertLayerAbove(_edShapePreview);
     edRedraw();
     return;
   }
@@ -2254,7 +2281,7 @@ function edOnStart(e){
       _edLineLayer.lineWidth = edDrawSize || 3;
       _edLineLayer.x = c.nx; _edLineLayer.y = c.ny;
       _edLineLayer.points.push({x:0, y:0}); // primer punto en local = (0,0)
-      edLayers.push(_edLineLayer);
+      _edInsertLayerAbove(_edLineLayer);
     } else {
       // Comprobar si toca el primer vértice (cerrar polígono)
       const absFirst = _edLineLayer.absPoints()[0];
@@ -2312,6 +2339,15 @@ function edOnStart(e){
       }
     }
   }
+  // Si el panel de shape/line está abierto, bloquear selección de otros objetos
+  const _activePanel = $('edOptionsPanel');
+  const _activeMode  = _activePanel?.dataset.mode;
+  if((_activeMode === 'shape' || _activeMode === 'line') && edSelectedIdx >= 0){
+    // Solo permitir interacción con el objeto actualmente seleccionado
+    // (handles y drag ya se gestionan arriba) — ignorar el resto del canvas
+    edRedraw(); return;
+  }
+
   // Seleccionar: de mayor a menor índice (mayor = encima visualmente).
   // contains() de cada clase hace el hit-test correcto:
   //   - ImageLayer: bbox + alpha real del píxel (ignora zonas transparentes)
@@ -2853,14 +2889,21 @@ function _edDrawInitHistory(){
 function _edGetOrCreateDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return null;
   let dl = page.layers.find(l => l.type === 'draw');
-  if(!dl){
+  if(dl){
+    // Mover el DrawLayer existente: quitarlo de donde está
+    const dlIdx = page.layers.indexOf(dl);
+    page.layers.splice(dlIdx, 1);
+  } else {
     dl = new DrawLayer();
-    // Insertar encima de todo excepto textos/bocadillos (que van siempre al tope)
-    const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
-    if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
-    else page.layers.push(dl);
-    edLayers = page.layers;
   }
+  // Insertar en la posición más alta posible: justo antes del primer texto,
+  // pero si no hay textos, al final. Los textos siempre van al tope.
+  // Nota: shapes/lines pueden estar después de textos — el draw va al final del todo
+  // excepto textos/bocadillos que siempre deben estar encima
+  const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
+  if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
+  else page.layers.push(dl);
+  edLayers = page.layers;
   return dl;
 }
 
@@ -3460,7 +3503,7 @@ function _edActivateShapeTool() {
     const copy=new ShapeLayer(s.shape, s.x+0.03, s.y+0.03, s.width, s.height);
     copy.color=s.color; copy.fillColor=s.fillColor; copy.lineWidth=s.lineWidth;
     copy.opacity=s.opacity??1; copy.rotation=s.rotation||0;
-    edLayers.push(copy); edSelectedIdx=edLayers.length-1;
+    _edInsertLayerAbove(copy);
     edPushHistory(); edRedraw(); _edActivateShapeTool();
   });
 
@@ -3703,7 +3746,7 @@ function _edActivateLineTool() {
     copy.points=l.points.map(p=>({x:p.x+0.03,y:p.y+0.03}));
     copy.color=l.color; copy.fillColor=l.fillColor||'none'; copy.lineWidth=l.lineWidth;
     copy.closed=l.closed; copy.opacity=l.opacity??1; copy._updateBbox();
-    edLayers.push(copy); edSelectedIdx=edLayers.length-1;
+    _edInsertLayerAbove(copy);
     edPushHistory(); edRedraw(); _edActivateLineTool();
   });
 
@@ -3743,13 +3786,18 @@ function _edFinishLine() {
 function _edFreezeDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dlIdx = page.layers.findIndex(l => l.type === 'draw');
+
   if(dlIdx < 0) return;
   const dl = page.layers[dlIdx];
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){ page.layers.splice(dlIdx, 1); edLayers=page.layers; return; }
   const sl = new StrokeLayer(dl._canvas);
-  page.layers.splice(dlIdx, 1, sl);
+  // Quitar el DrawLayer y reinsertar el StrokeLayer en la posición más alta (bajo textos)
+  page.layers.splice(dlIdx, 1);
+  const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
+  if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, sl);
+  else page.layers.push(sl);
   edLayers = page.layers;
   edSelectedIdx = page.layers.indexOf(sl);
   edPushHistory();
@@ -3761,7 +3809,7 @@ function _edFreezeDrawLayer(){
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
   const panel=$('edOptionsPanel');
-  if(panel){ panel.classList.remove('open'); panel.innerHTML=''; }
+  if(panel){ panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode; }
   edPanelUserClosed = true;   // usuario cerró → no reabrir al seleccionar
   requestAnimationFrame(edFitCanvas);
 }
@@ -4539,6 +4587,10 @@ function edInitDrawBar() {
     const sz   = isEr ? edEraserSize : edDrawSize;
     const num  = $('edb-size-num');
     if (num) { num.max = isEr ? 80 : 48; num.value = sz; }
+    const sl = $('edb-size-slider');
+    if (sl) { sl.max = isEr ? 80 : 48; sl.value = sz; }
+    const prev = $('edb-size-preview');
+    if (prev) { const pd=Math.max(4,Math.min(32,Math.round(sz*0.7))); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
     // Mostrar para poder medir dimensiones reales
     pop.style.display = 'flex';
     pop.style.left = '-9999px'; pop.style.top = '-9999px';
@@ -4587,6 +4639,27 @@ function edInitDrawBar() {
     _edbSyncSize();
     const sl = $('op-dsize'); if (sl) { sl.value = v; const n=$('op-dsize-num'); if(n) n.value=v; }
   });
+  // Slider de grosor en tiempo real
+  $('edb-size-slider')?.addEventListener('input', e => {
+    const isEr = edActiveTool === 'eraser';
+    const v = parseInt(e.target.value) || 1;
+    if($('edb-size-pop')._esbMode){
+      const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+      if(la && (la.type==='shape'||la.type==='line')){ la.lineWidth = v; edRedraw(); }
+      edDrawSize = v;
+    } else {
+      if (isEr) edEraserSize = v; else edDrawSize = v;
+    }
+    // Actualizar número y preview inmediatamente
+    const num = $('edb-size-num'); if(num) num.value = v;
+    const prev = $('edb-size-preview');
+    if(prev){ const pd=Math.max(4,Math.min(32,Math.round(v*0.7))); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
+    const dot = $('edb-size-dot');
+    if(dot){ const d=Math.max(6,Math.min(24,Math.round(v*0.6))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
+    const sl = $('op-dsize'); if(sl){ sl.value=v; const n=$('op-dsize-num'); if(n) n.value=v; }
+  });
+  $('edb-size-slider')?.addEventListener('pointerdown', e => e.stopPropagation());
+  $('edb-size-slider')?.addEventListener('touchstart', e => e.stopPropagation(), {passive:true});
   ['pointerdown','touchstart'].forEach(ev =>
     $('edb-size-pop')?.addEventListener(ev, e => e.stopPropagation(), { passive: true })
   );
@@ -4752,6 +4825,15 @@ function _edbSyncSize() {
   // Sincronizar input numérico
   const num = $('edb-size-num');
   if (num) { num.value = sz; num.max = isEr ? 80 : 48; }
+  // Sincronizar slider y preview del popup
+  const sl = $('edb-size-slider');
+  if (sl) { sl.value = sz; sl.max = isEr ? 80 : 48; }
+  const prev = $('edb-size-preview');
+  if (prev) {
+    const pd = Math.max(4, Math.min(32, Math.round(sz * 0.7)));
+    prev.style.width  = pd + 'px';
+    prev.style.height = pd + 'px';
+  }
 }
 
 function edDrawBarShow() {

@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v8.73</footer>
+    <footer class="app-version">v8.81</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -330,13 +330,18 @@ Router.register('editor', {
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
       <!-- Popover grosor barra flotante -->
-      <div id="edb-size-pop" style="display:none;position:fixed;background:rgba(30,30,30,0.95);border-radius:10px;padding:8px 12px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:1200;align-items:center;gap:6px">
-        <span style="color:#ccc;font-size:.75rem;font-weight:700">px</span>
-        <input type="number" id="edb-size-num" min="1" max="80" value="8"
-          style="width:52px;text-align:center;font-size:1rem;font-weight:700;
-                 border:1px solid rgba(255,255,255,0.4);border-radius:8px;
-                 background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;
-                 -moz-appearance:textfield;">
+      <div id="edb-size-pop" style="display:none;position:fixed;background:rgba(30,30,30,0.95);border-radius:10px;padding:10px 14px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:1200;flex-direction:column;align-items:center;gap:8px;min-width:160px">
+        <div style="display:flex;align-items:center;gap:6px;width:100%">
+          <span style="color:#ccc;font-size:.75rem;font-weight:700">px</span>
+          <input type="number" id="edb-size-num" min="1" max="80" value="8"
+            style="width:52px;text-align:center;font-size:1rem;font-weight:700;
+                   border:1px solid rgba(255,255,255,0.4);border-radius:8px;
+                   background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;
+                   -moz-appearance:textfield;">
+          <span id="edb-size-preview" style="display:inline-block;border-radius:50%;background:#fff;flex-shrink:0;width:12px;height:12px;margin-left:4px"></span>
+        </div>
+        <input type="range" id="edb-size-slider" min="1" max="48" value="8"
+          style="width:100%;accent-color:#FFE135;cursor:pointer">
       </div>
 
     </div>
