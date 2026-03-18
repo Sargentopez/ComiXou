@@ -2340,11 +2340,18 @@ function edOnStart(e){
     }
   }
   // Si el panel de shape/line está abierto, bloquear selección de otros objetos
+  // pero permitir drag del objeto actualmente seleccionado
   const _activePanel = $('edOptionsPanel');
   const _activeMode  = _activePanel?.dataset.mode;
   if((_activeMode === 'shape' || _activeMode === 'line') && edSelectedIdx >= 0){
-    // Solo permitir interacción con el objeto actualmente seleccionado
-    // (handles y drag ya se gestionan arriba) — ignorar el resto del canvas
+    // Comprobar si el click es sobre el objeto seleccionado → permitir drag
+    const _la = edLayers[edSelectedIdx];
+    if(_la && _la.contains(c.nx, c.ny)){
+      edIsDragging=true;
+      edDragOffX=c.nx-_la.x; edDragOffY=c.ny-_la.y;
+      return;
+    }
+    // Click fuera del objeto seleccionado → ignorar
     edRedraw(); return;
   }
 
@@ -3376,6 +3383,7 @@ function _edActivateShapeTool() {
     <button id="op-shape-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <button id="op-shape-minimize" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
     <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':'Sin objeto'}</span>
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -3498,6 +3506,7 @@ function _edActivateShapeTool() {
   });
 
   // ── Duplicar ──
+  $('op-shape-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
   $('op-shape-dup')?.addEventListener('click',()=>{
     const s=_curShape(); if(!s) return;
     const copy=new ShapeLayer(s.shape, s.x+0.03, s.y+0.03, s.width, s.height);
@@ -3600,6 +3609,7 @@ function _edActivateLineTool() {
     <button id="op-line-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <button id="op-line-minimize" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
     <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -3740,6 +3750,7 @@ function _edActivateLineTool() {
   });
 
   // ── Duplicar ──
+  $('op-line-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
   $('op-line-dup')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l||l.points.length<2) return;
     const copy=new LineLayer();
@@ -4372,6 +4383,12 @@ function edMinimize(){
     if(panel) panel.style.visibility='hidden';
     edDrawBarShow();
   }
+  // Herramientas shape/line: ocultar panel y guardar modo para restaurar
+  const _panel=$('edOptionsPanel');
+  if(_panel?.dataset.mode==='shape' || _panel?.dataset.mode==='line'){
+    window._edMinimizedDrawMode = _panel.dataset.mode;
+    _panel.style.visibility='hidden';
+  }
   edFitCanvas();
 }
 function edMaximize(keepBar=false){
@@ -4388,7 +4405,13 @@ function edMaximize(keepBar=false){
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
     edFitCanvas();
-    edRenderOptionsPanel(mode);
+    if(mode === 'shape'){
+      _edActivateShapeTool();
+    } else if(mode === 'line'){
+      _edActivateLineTool();
+    } else {
+      edRenderOptionsPanel(mode);
+    }
   } else {
     edFitCanvas();
   }
