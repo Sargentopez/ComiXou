@@ -1201,19 +1201,10 @@ function edFitCanvas(resetCamera){
 
   // Detectar cambio de VENTANA (no de panel de opciones)
   // _edWinW/_edWinH solo cambian con resize de ventana real
-  const _prevWinW = window._edWinW||0, _prevWinH = window._edWinH||0;
-  const _winChanged = (window.innerWidth  !== _prevWinW) ||
-                      (window.innerHeight !== _prevWinH);
-  if(_winChanged){
-    window._edWinW = window.innerWidth;
-    window._edWinH = window.innerHeight;
-    // Solo resetear cámara si el cambio es significativo (>100px en algún eje)
-    // Cambios pequeños en Android son causados por barra navegación que aparece/desaparece
-    const _dw = Math.abs(window.innerWidth  - _prevWinW);
-    const _dh = Math.abs(window.innerHeight - _prevWinH);
-    const _significant = _prevWinW === 0 || _dw > 100 || _dh > 100;
-    if(!resetCamera && _significant) resetCamera = true;
-  }
+  // Actualizar dimensiones conocidas — sin resetear cámara automáticamente
+  // La cámara solo se resetea cuando se pide explícitamente (primera carga, lupa, orientación)
+  window._edWinW = window.innerWidth;
+  window._edWinH = window.innerHeight;
 
   // Redimensionar canvas si es necesario (sin resetear cámara por cambio de panel)
   const _prevW = edCanvas.width, _prevH = edCanvas.height;
@@ -7377,7 +7368,7 @@ function EditorView_init(){
 
   // ── RESIZE ──
   // Guardar referencia para cleanup en EditorView_destroy
-  window._edResizeFn = () => { edFitCanvas(); edUpdateCanvasFullscreen(); };
+  window._edResizeFn = () => { edFitCanvas(false); }; // solo reajustar tamaño, nunca resetear cámara
   window.addEventListener('resize', window._edResizeFn);
 
   // Fit canvas con reintentos hasta que las medidas sean reales
@@ -7456,7 +7447,7 @@ function EditorView_init(){
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
   edUpdateCanvasFullscreen();
   // Guardar referencia para cleanup en EditorView_destroy
-  window._edOrientFn = () => { setTimeout(()=>{ edFitCanvas(); edUpdateCanvasFullscreen(); }, 200); };
+  window._edOrientFn = () => { setTimeout(()=>{ edFitCanvas(true); }, 200); }; // orientación: sí resetear cámara
   window.addEventListener('orientationchange', window._edOrientFn);
 
   // ── Pinch en cualquier zona (fuera del canvas) = zoom ──
