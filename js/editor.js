@@ -6986,17 +6986,26 @@ function EditorView_init(){
 
   // ── SUBMENÚS: posicionamiento inteligente (táctil + desbordamiento) ──
   function _edPositionSubmenu(sub){
-    // Resetear posición para medir correctamente
-    sub.style.left=''; sub.style.right=''; sub.style.top=''; sub.style.bottom='';
-    sub.style.left='100%'; sub.style.top='0';
-    const r=sub.getBoundingClientRect();
+    const parent=sub.parentElement;
+    if(!parent) return;
+    const pr=parent.getBoundingClientRect();
     const vw=window.innerWidth, vh=window.innerHeight;
-    // Horizontal: si se sale por la derecha, abrir a la izquierda
-    if(r.right>vw-4){ sub.style.left='auto'; sub.style.right='100%'; }
-    else             { sub.style.left='100%'; sub.style.right='auto'; }
-    // Vertical: si se sale por abajo, alinear con el borde inferior de pantalla
-    if(r.bottom>vh-4){ sub.style.top='auto'; sub.style.bottom='0'; }
-    else             { sub.style.top='0'; sub.style.bottom='auto'; }
+    const GAP=4;
+    // Medir el submenú con posición temporal fuera de pantalla
+    sub.style.position='fixed';
+    sub.style.left='-9999px'; sub.style.top='-9999px';
+    sub.style.right='auto';   sub.style.bottom='auto';
+    // Ancho y alto del submenú
+    const sw=sub.offsetWidth||180, sh=sub.offsetHeight||100;
+    // Preferir apertura a la derecha; si no cabe, abrir a la izquierda
+    let left, top;
+    if(pr.right+sw+GAP<=vw){ left=pr.right; }
+    else                    { left=Math.max(GAP, pr.left-sw); }
+    // Preferir alinear con el top del ítem padre; ajustar si se sale por abajo
+    top=pr.top;
+    if(top+sh+GAP>vh){ top=Math.max(GAP, vh-sh-GAP); }
+    sub.style.left=left+'px';
+    sub.style.top=top+'px';
   }
   // Aplicar a todos los has-sub: abrir/cerrar por tap + reposicionar
   document.querySelectorAll('.ed-dropdown-item.has-sub').forEach(item=>{
@@ -7005,6 +7014,8 @@ function EditorView_init(){
     // PC: abrir al hacer hover (ya lo hace CSS) pero también reposicionar
     item.addEventListener('mouseenter',()=>{ sub.style.display='block'; _edPositionSubmenu(sub); });
     item.addEventListener('mouseleave',()=>{ sub.style.display=''; });
+    // PC hover: reposicionar también
+    item.addEventListener('mouseenter',()=>{ requestAnimationFrame(()=>_edPositionSubmenu(sub)); });
     // Táctil: toggle por tap
     item.addEventListener('pointerup',e=>{
       if(e.pointerType!=='touch') return;
@@ -7013,7 +7024,15 @@ function EditorView_init(){
       // Cerrar todos los demás submenús abiertos
       document.querySelectorAll('.ed-subdropdown').forEach(s=>{ if(s!==sub) s.style.display=''; });
       if(isOpen){ sub.style.display=''; }
-      else{ sub.style.display='block'; requestAnimationFrame(()=>_edPositionSubmenu(sub)); }
+      else{
+        // Mover al body para que position:fixed funcione sin restricciones
+        if(sub.parentElement!==document.body){
+          sub._origParent=sub._origParent||sub.parentElement;
+          document.body.appendChild(sub);
+        }
+        sub.style.display='block';
+        requestAnimationFrame(()=>_edPositionSubmenu(sub));
+      }
     });
   });
   // Cerrar submenús al cerrar el dropdown padre
