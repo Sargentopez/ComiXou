@@ -6984,6 +6984,42 @@ function EditorView_init(){
   document.addEventListener('fullscreenchange', _edFsUpdate);
   document.addEventListener('webkitfullscreenchange', _edFsUpdate);
 
+  // ── SUBMENÚS: posicionamiento inteligente (táctil + desbordamiento) ──
+  function _edPositionSubmenu(sub){
+    // Resetear posición para medir correctamente
+    sub.style.left=''; sub.style.right=''; sub.style.top=''; sub.style.bottom='';
+    sub.style.left='100%'; sub.style.top='0';
+    const r=sub.getBoundingClientRect();
+    const vw=window.innerWidth, vh=window.innerHeight;
+    // Horizontal: si se sale por la derecha, abrir a la izquierda
+    if(r.right>vw-4){ sub.style.left='auto'; sub.style.right='100%'; }
+    else             { sub.style.left='100%'; sub.style.right='auto'; }
+    // Vertical: si se sale por abajo, alinear con el borde inferior de pantalla
+    if(r.bottom>vh-4){ sub.style.top='auto'; sub.style.bottom='0'; }
+    else             { sub.style.top='0'; sub.style.bottom='auto'; }
+  }
+  // Aplicar a todos los has-sub: abrir/cerrar por tap + reposicionar
+  document.querySelectorAll('.ed-dropdown-item.has-sub').forEach(item=>{
+    const sub=item.querySelector('.ed-subdropdown');
+    if(!sub) return;
+    // PC: abrir al hacer hover (ya lo hace CSS) pero también reposicionar
+    item.addEventListener('mouseenter',()=>{ sub.style.display='block'; _edPositionSubmenu(sub); });
+    item.addEventListener('mouseleave',()=>{ sub.style.display=''; });
+    // Táctil: toggle por tap
+    item.addEventListener('pointerup',e=>{
+      if(e.pointerType!=='touch') return;
+      e.stopPropagation();
+      const isOpen=sub.style.display==='block';
+      // Cerrar todos los demás submenús abiertos
+      document.querySelectorAll('.ed-subdropdown').forEach(s=>{ if(s!==sub) s.style.display=''; });
+      if(isOpen){ sub.style.display=''; }
+      else{ sub.style.display='block'; requestAnimationFrame(()=>_edPositionSubmenu(sub)); }
+    });
+  });
+  // Cerrar submenús al cerrar el dropdown padre
+  const _origEdCloseMenus = edCloseMenus;
+  // (edCloseMenus ya cierra los dropdowns, los submenús se ocultan al ocultarse el padre)
+
   // ── MENÚ: botones dropdown (excluir layers y nav que tienen overlays propios) ──
   document.querySelectorAll('[data-menu]').forEach(btn=>{
     const id = btn.dataset.menu;
