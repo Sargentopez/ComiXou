@@ -5152,11 +5152,16 @@ function _edBarDefaultPos(barEl) {
   if (!shell) return { x: 8, y: 120 };
   const bw = barEl.offsetWidth  || 36;
   const bh = barEl.offsetHeight || 200;
-  const shellH = shell.offsetHeight || window.innerHeight;
-  // Posición X: justo a la izquierda del margen del lienzo
-  const mx = edMarginX ? edMarginX() * (edCamera?.z||1) : 8;
-  const x = Math.max(4, Math.round(mx - bw - 6));
-  // Posición Y: centrado verticalmente en el shell
+  const shellR = shell.getBoundingClientRect();
+  const canv   = document.getElementById('editorCanvas');
+  const canvR  = canv ? canv.getBoundingClientRect() : shellR;
+  // X: justo a la izquierda del borde del canvas; si no cabe, solapar ligeramente
+  const leftSpace = canvR.left - shellR.left;
+  const x = leftSpace >= bw + 6
+    ? Math.round(leftSpace - bw - 6)   // cabe a la izquierda
+    : Math.max(4, Math.round(leftSpace + 6)); // solapar el borde izquierdo
+  // Y: centrado verticalmente respecto al shell
+  const shellH = shellR.height || shell.offsetHeight || window.innerHeight;
   const y = Math.max(4, Math.round((shellH - bh) / 2));
   return { x, y };
 }
