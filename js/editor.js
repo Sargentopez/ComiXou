@@ -1201,12 +1201,18 @@ function edFitCanvas(resetCamera){
 
   // Detectar cambio de VENTANA (no de panel de opciones)
   // _edWinW/_edWinH solo cambian con resize de ventana real
-  const _winChanged = (window.innerWidth  !== (window._edWinW||0)) ||
-                      (window.innerHeight !== (window._edWinH||0));
+  const _prevWinW = window._edWinW||0, _prevWinH = window._edWinH||0;
+  const _winChanged = (window.innerWidth  !== _prevWinW) ||
+                      (window.innerHeight !== _prevWinH);
   if(_winChanged){
     window._edWinW = window.innerWidth;
     window._edWinH = window.innerHeight;
-    if(!resetCamera) resetCamera = true;  // ventana cambió → centrar lienzo
+    // Solo resetear cámara si el cambio es significativo (>100px en algún eje)
+    // Cambios pequeños en Android son causados por barra navegación que aparece/desaparece
+    const _dw = Math.abs(window.innerWidth  - _prevWinW);
+    const _dh = Math.abs(window.innerHeight - _prevWinH);
+    const _significant = _prevWinW === 0 || _dw > 100 || _dh > 100;
+    if(!resetCamera && _significant) resetCamera = true;
   }
 
   // Redimensionar canvas si es necesario (sin resetear cámara por cambio de panel)
