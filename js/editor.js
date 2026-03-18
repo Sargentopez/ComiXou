@@ -277,6 +277,12 @@ class BubbleLayer extends BaseLayer {
     this.tailStart={x:-0.4,y:0.4};this.tailEnd={x:-0.4,y:0.6}; // voz 0 (legacy)
     this.tailStarts=[{x:-0.4,y:0.4}];this.tailEnds=[{x:-0.4,y:0.6}]; // arrays por voz
     this.style='conventional';this.voiceCount=1;this.padding=15;
+    // Cola pensamiento: posiciones normalizadas de elipse grande y pequeña
+    // tBig = centro elipse grande (más cercana al bocadillo), tSmall = elipse pequeña (más lejana)
+    this.thoughtBig  = {x:0.35, y:0.55};  // relativo al centro, en fracción del tamaño
+    this.thoughtSmall= {x:0.55, y:0.80};
+    // Radios editables para estilo explosión (12 vértices, normalizados 0..1)
+    this.explosionRadii=null; // null = usar valores por defecto
   }
   getLines(){return this.text.split('\n');}
   _fontStr(){ return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${this.fontFamily}`; }
@@ -294,14 +300,72 @@ class BubbleLayer extends BaseLayer {
     const lh=this.fontSize*1.2;
     const maxW=lines.reduce((m,l)=>Math.max(m,ctx.measureText(l).width),0);
     const totalH=lines.length*lh;
-    // Para una elipse, el rectángulo de texto (maxW x totalH) debe caber dentro.
-    // Condición: (maxW/2 / a)² + (totalH/2 / b)² <= 1, con a/b = (maxW+pad*2)/(totalH+pad*2)
-    // Solución simple y segura: usar factor sqrt(2) para la elipse + padding
-    const factor = lines.length === 1 ? 1.15 : 1.05;
-    const w = maxW * factor + this.padding * 2;
-    const h = totalH * factor + this.padding * 2;
-    this.width=Math.max(0.05,w/pw);
-    this.height=Math.max(0.05,h/ph);
+    if(this.style==='thought'){
+      const factor = lines.length === 1 ? 1.15 : 1.05;
+      const w2 = maxW * factor + this.padding * 2;
+      const h2 = totalH * factor + this.padding * 2;
+      this.width=Math.max(0.05,w2/pw);
+      this.height=Math.max(0.05,h2/ph);
+      return;
+    }
+    if(this.style==='explosion'){
+      // Para explosión: el texto debe caber dentro del área interior (delimitada por los valles)
+      // Los valles (índices impares) tienen radio ~0.55-0.65 del borde de la caja
+      // El radio interior mínimo de los valles es ~0.55 en cada eje
+      // Área interior disponible: (w/2)*minValleOx x (h/2)*minValleOy
+      // Necesitamos: caja tal que los valles dejen espacio para maxW x totalH + padding
+      this._initExplosionRadii();
+      // Calcular el radio mínimo de los valles en cada dirección
+      const valleys = this.explosionRadii.filter((_,i)=>i%2!==0);
+      const minValleR = valleys.reduce((m,v)=>Math.min(m,Math.hypot(v.ox,v.oy)),1);
+      // El texto + padding debe caber en el rectángulo inscrito dentro del círculo de radio minValleR
+      // Para un cuadrado inscrito en un círculo de radio r: lado = r * sqrt(2)
+      // Pero usamos el rectángulo real del texto: necesitamos que
+      // sqrt((maxW/2/ax)² + (totalH/2/ay)²) <= minValleR
+      // Simplificación: escalar la caja para que el texto quepa con margen
+      const textDiag = Math.hypot(maxW/2 + this.padding, totalH/2 + this.padding);
+      const scale = 1 / minValleR; // cuánto más grande debe ser la caja respecto al texto
+      const w = (maxW + this.padding*2) * scale * 1.1;
+      const h = (totalH + this.padding*2) * scale * 1.1;
+      this.width=Math.max(0.05,w/pw);
+      this.height=Math.max(0.05,h/ph);
+    } else {
+      const factor = lines.length === 1 ? 1.15 : 1.05;
+      const w = maxW * factor + this.padding * 2;
+      const h = totalH * factor + this.padding * 2;
+      this.width=Math.max(0.05,w/pw);
+      this.height=Math.max(0.05,h/ph);
+    }
+  }
+  _initExplosionRadii(){
+    if(this.explosionRadii&&this.explosionRadii.length===14&&typeof this.explosionRadii[0]==='object') return;
+    // 14 vértices: 7 picos + 7 valles alternos, detectados desde imagen de referencia real
+    // Coordenadas normalizadas: ox=1 = borde derecho de la caja (semieje X)
+    this.explosionRadii=[
+      {ox:+0.9776,oy:+0.3105},
+      {ox:+0.5129,oy:+0.4912},
+      {ox:+0.4159,oy:+0.8929},
+      {ox:+0.0346,oy:+0.5928},
+      {ox:-0.3742,oy:+0.9992},
+      {ox:-0.4809,oy:+0.6768},
+      {ox:-0.9476,oy:+0.6897},
+      {ox:-0.7042,oy:+0.0887},
+      {ox:-0.9825,oy:-0.5075},
+      {ox:-0.3880,oy:-0.6292},
+      {ox:-0.2012,oy:-0.9957},
+      {ox:-0.0315,oy:-0.5401},
+      {ox:+0.3289,oy:-0.8785},
+      {ox:+0.4461,oy:-0.5839}
+    ];
+  }
+  getExplosionControlPoints(){
+    if(this.style!=='explosion')return[];
+    this._initExplosionRadii();
+    const pw=edPageW(),ph=edPageH();
+    const w=this.width*pw, h=this.height*ph;
+    // Todos los vértices son arrastrables (picos en índices pares, valles en impares)
+    return this.explosionRadii
+      .map((v,i)=>({nx:this.x+v.ox*w/2/pw, ny:this.y+v.oy*h/2/ph, idx:i, type:'explosion'}));
   }
   getTailControlPoints(){
     if(!this.tail)return[];
@@ -367,12 +431,22 @@ class BubbleLayer extends BaseLayer {
       });
       if(maxDist===0)maxDist=Math.min(w,h)*0.4;
       ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(0,0,maxDist,0,Math.PI*2);ctx.fill();
-      // Burbujas cola pensamiento
+      // Burbujas cola pensamiento: 3 elipses editables
       if(this.tail){
-        const tx=this.tailEnd.x*w,ty=this.tailEnd.y*h;
-        [0.09,0.055,0.03].forEach((r,i)=>{
-          const f=1-i*0.3;
-          ctx.beginPath();ctx.arc(tx*f,ty*f,r*Math.min(can.width,can.height),0,Math.PI*2);
+        const bx=this.thoughtBig.x*w,   by=this.thoughtBig.y*h;
+        const sx=this.thoughtSmall.x*w, sy=this.thoughtSmall.y*h;
+        const rBig  = 0.04*Math.min(can.width,can.height);
+        const rSmall= 0.0178*Math.min(can.width,can.height);
+        // Elipse mediana: a mitad de distancia entre contorno grande y contorno pequeña
+        // Contorno grande más cercano a pequeña: punto en bx,by en dirección a sx,sy a distancia rBig
+        const dx=sx-bx,dy=sy-by,dist=Math.hypot(dx,dy)||1;
+        const ux=dx/dist,uy=dy/dist;
+        const edgeBig  ={x:bx+ux*rBig,   y:by+uy*rBig};
+        const edgeSmall={x:sx-ux*rSmall,  y:sy-uy*rSmall};
+        const mx=(edgeBig.x+edgeSmall.x)/2, my=(edgeBig.y+edgeSmall.y)/2;
+        const rMid=(rBig+rSmall)/2*0.7;
+        [[bx,by,rBig],[mx,my,rMid],[sx,sy,rSmall]].forEach(([cx2,cy2,r])=>{
+          ctx.beginPath();ctx.ellipse(cx2,cy2,r,r*2/3,0,0,Math.PI*2);
           ctx.fillStyle=this.backgroundColor;ctx.fill();
           ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;ctx.stroke();
         });
@@ -387,13 +461,12 @@ class BubbleLayer extends BaseLayer {
     }
 
     if(this.style==='explosion'){
-      const pts=12,step=(2*Math.PI)/pts,radii=[];
-      for(let i=0;i<pts;i++)radii.push(0.8+0.3*Math.sin(i*1.5)+0.2*Math.cos(i*2.3));
+      this._initExplosionRadii();
       ctx.beginPath();
-      for(let i=0;i<pts;i++){
-        const angle=i*step,rr=radii[i]*(isSingle?Math.min(w,h)/2:(i%2===0?w/2:h/2));
-        i===0?ctx.moveTo(Math.cos(angle)*rr,Math.sin(angle)*rr):ctx.lineTo(Math.cos(angle)*rr,Math.sin(angle)*rr);
-      }
+      this.explosionRadii.forEach((v,i)=>{
+        const vx=v.ox*w/2, vy=v.oy*h/2;
+        i===0?ctx.moveTo(vx,vy):ctx.lineTo(vx,vy);
+      });
       ctx.closePath();
     }else if(isSingle){
       ctx.beginPath();ctx.arc(0,0,Math.min(w,h)/2,0,Math.PI*2);
@@ -409,12 +482,7 @@ class BubbleLayer extends BaseLayer {
     }
 
     if(this.tail){
-      if(this.style==='radio'){
-        const ex=this.tailEnd.x*w,ey=this.tailEnd.y*h;
-        ctx.save();ctx.strokeStyle=this.borderColor;ctx.lineWidth=1;
-        for(let r=5;r<25;r+=5){ctx.beginPath();ctx.arc(ex,ey,r,0,Math.PI*2);ctx.stroke();}
-        ctx.restore();
-      }else{
+      {
         const vc=this.voiceCount||1;
         if(!this.tailStarts)this.tailStarts=[{...this.tailStart}];
         if(!this.tailEnds)  this.tailEnds  =[{...this.tailEnd}];
@@ -431,7 +499,14 @@ class BubbleLayer extends BaseLayer {
     ctx.fillStyle=isPlaceholder?'#999999':this.color;
     ctx.textAlign='center';ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
-    lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+    // Para explosión: centrar el texto en el centroide de los valles (índices impares)
+    let textCx=0, textCy=0;
+    if(this.style==='explosion' && this.explosionRadii && this.explosionRadii.length>1){
+      const valleys=this.explosionRadii.filter((_,i)=>i%2!==0);
+      textCx=valleys.reduce((s,v)=>s+v.ox*w/2,0)/valleys.length;
+      textCy=valleys.reduce((s,v)=>s+v.oy*h/2,0)/valleys.length;
+    }
+    lines.forEach((l,i)=>ctx.fillText(l,textCx,textCy-totalH/2+lh/2+i*lh));
     ctx.restore();
   }
 }
@@ -712,7 +787,16 @@ class ShapeLayer extends BaseLayer {
     if (this.shape === 'ellipse') {
       ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI * 2);
     } else {
-      ctx.rect(-w/2, -h/2, w, h);
+      // Radios por vértice (TL, TR, BR, BL) o radio global
+      const crs=this.cornerRadii;
+      if(crs&&crs.length===4&&crs.some(r=>r>0)){
+        const maxR=Math.min(w,h)/2;
+        ctx.roundRect(-w/2,-h/2,w,h,crs.map(r=>Math.min(r||0,maxR)));
+      } else {
+        const cr=this.cornerRadius||0;
+        if(cr>0){ ctx.roundRect(-w/2,-h/2,w,h,Math.min(cr,Math.min(w,h)/2)); }
+        else { ctx.rect(-w/2,-h/2,w,h); }
+      }
     }
     if (this.fillColor && this.fillColor !== 'none') {
       ctx.fillStyle = this.fillColor;
@@ -788,15 +872,21 @@ class LineLayer extends BaseLayer {
   // Recalcular bbox desde puntos locales; centra los puntos en (0,0)
   _updateBbox() {
     if (!this.points.length) return;
+    const pw = edPageW(), ph = edPageH();
     const xs = this.points.map(p => p.x);
     const ys = this.points.map(p => p.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const newCx = (minX + maxX) / 2;
+    const newCx = (minX + maxX) / 2;  // en unidades normalizadas
     const newCy = (minY + maxY) / 2;
     if (Math.abs(newCx) > 0.0001 || Math.abs(newCy) > 0.0001) {
-      this.x += newCx;
-      this.y += newCy;
+      // El desplazamiento del centro debe aplicarse en espacio rotado con escala pw/ph
+      // igual que hace draw(): translate(cx,cy) + rotate(rot) + point(p.x*pw, p.y*ph)
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const cos = Math.cos(rot), sin = Math.sin(rot);
+      const dxPx = newCx * pw, dyPx = newCy * ph; // en píxeles
+      this.x += (dxPx * cos - dyPx * sin) / pw;
+      this.y += (dxPx * sin + dyPx * cos) / ph;
       this.points = this.points.map(p => ({x: p.x - newCx, y: p.y - newCy}));
     }
     const xs2 = this.points.map(p => p.x);
@@ -835,12 +925,59 @@ class LineLayer extends BaseLayer {
     ctx.rotate(rot);
     ctx.lineJoin = 'round';
     ctx.lineCap  = 'round';
+    // Construir el path con curvas en los vértices marcados (arcTo)
+    const pts = this.points;
+    const cr = this.cornerRadii || {};
+    const n = pts.length;
+    // Función que convierte punto normalizado a px
+    const px2 = p => ({x: p.x*pw, y: p.y*ph});
     ctx.beginPath();
-    ctx.moveTo(this.points[0].x * pw, this.points[0].y * ph);
-    for (let i = 1; i < this.points.length; i++) {
-      ctx.lineTo(this.points[i].x * pw, this.points[i].y * ph);
+    // Encontrar el primer punto de inicio (puede ser curvado)
+    const startIdx = this.closed ? 0 : 0;
+    const totalPts = this.closed ? n : n;
+    // Dibujar: para cada punto intermedio con radio, usar arcTo
+    const drawPts = this.closed ? [...pts, pts[0], pts[1]] : pts;
+    if(!this.closed){
+      const p0=px2(pts[0]);
+      ctx.moveTo(p0.x,p0.y);
+      for(let i=1;i<n;i++){
+        const r=cr[i]||0;
+        if(r>0 && i<n-1){
+          const prev=px2(pts[i-1]), cur=px2(pts[i]), next=px2(pts[i+1]);
+          // Longitud de los segmentos adyacentes
+          const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
+          const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
+          // Limitar radio a la longitud del segmento más corto - 2px
+          const maxR=Math.min(d1,d2)-2;
+          const rr=Math.max(0,Math.min(r,maxR));
+          ctx.arcTo(cur.x,cur.y,next.x,next.y,rr);
+        } else {
+          const p=px2(pts[i]); ctx.lineTo(p.x,p.y);
+        }
+      }
+    } else {
+      // Polígono cerrado: todos los vértices pueden tener radio
+      for(let i=0;i<n;i++){
+        const r=cr[i]||0;
+        const prev=px2(pts[(i-1+n)%n]), cur=px2(pts[i]), next=px2(pts[(i+1)%n]);
+        const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
+        const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
+        const maxR=Math.min(d1,d2)-2;
+        const rr=r>0?Math.max(0,Math.min(r,maxR)):0;
+        if(i===0){
+          if(rr>0){
+            // Empezar en el punto medio del segmento previo→cur
+            const t=rr/d1;
+            ctx.moveTo(cur.x-(cur.x-prev.x)*t, cur.y-(cur.y-prev.y)*t);
+          } else {
+            ctx.moveTo(cur.x,cur.y);
+          }
+        }
+        if(rr>0){ ctx.arcTo(cur.x,cur.y,next.x,next.y,rr); }
+        else     { ctx.lineTo(cur.x,cur.y); }
+      }
+      ctx.closePath();
     }
-    if (this.closed) ctx.closePath();
     if (this.closed && this.fillColor && this.fillColor !== 'none') {
       ctx.fillStyle = this.fillColor;
       ctx.fill();
@@ -928,7 +1065,7 @@ function _edLayersSnapshot(){
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor',
-                    'borderColor','borderWidth','padding',
+                    'borderColor','borderWidth','padding','explosionRadii','thoughtBig','thoughtSmall',
                     'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount']){
       if(l[k] !== undefined) o[k] = l[k];
     }
@@ -1559,22 +1696,110 @@ function edDrawSel(){
     const tcp=la.getTailControlPoints();
     const byVoice={};
     tcp.forEach(p=>{ if(!byVoice[p.voice])byVoice[p.voice]={}; byVoice[p.voice][p.type]=p; });
-    // Líneas guía entre start y end de cada voz
-    Object.values(byVoice).forEach(v=>{
-      if(!v.start||!v.end)return;
-      const sx=edMarginX()+v.start.x*pw, sy=edMarginY()+v.start.y*ph;
-      const ex=edMarginX()+v.end.x*pw,   ey=edMarginY()+v.end.y*ph;
-      edCtx.beginPath();edCtx.moveTo(sx,sy);edCtx.lineTo(ex,ey);
-      edCtx.strokeStyle='rgba(26,140,255,0.5)';edCtx.lineWidth=1.5/z;
-      edCtx.setLineDash([5/z,3/z]);edCtx.stroke();edCtx.setLineDash([]);
-    });
-    // Handles
-    const HR=6/z;
-    tcp.forEach(p=>{
-      const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
-      const isEnd=p.type==='end';
-      edCtx.beginPath();edCtx.arc(cpx,cpy,HR,0,Math.PI*2);
-      edCtx.fillStyle=isEnd?'#ff6600':'#1a8cff';edCtx.fill();
+    // Handles cola (no para thought — usa sus propios handles)
+    if(la.style!=='thought'){
+      Object.values(byVoice).forEach(v=>{
+        if(!v.start||!v.end)return;
+        const sx=edMarginX()+v.start.x*pw, sy=edMarginY()+v.start.y*ph;
+        const ex=edMarginX()+v.end.x*pw,   ey=edMarginY()+v.end.y*ph;
+        edCtx.beginPath();edCtx.moveTo(sx,sy);edCtx.lineTo(ex,ey);
+        edCtx.strokeStyle='rgba(26,140,255,0.5)';edCtx.lineWidth=1.5/z;
+        edCtx.setLineDash([5/z,3/z]);edCtx.stroke();edCtx.setLineDash([]);
+      });
+      const HR=6/z;
+      tcp.forEach(p=>{
+        const cpx=edMarginX()+p.x*pw, cpy=edMarginY()+p.y*ph;
+        const isEnd=p.type==='end';
+        edCtx.beginPath();edCtx.arc(cpx,cpy,HR,0,Math.PI*2);
+        edCtx.fillStyle=isEnd?'#ff6600':'#1a8cff';edCtx.fill();
+        edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+      });
+    }
+    // Handles cola pensamiento (punto rojo=pequeña, azul=grande)
+  if(la.type==='bubble' && la.style==='thought' && la.tail){
+    const HR2=6/z;
+    const bx=edMarginX()+(la.x+la.thoughtBig.x*la.width)*pw;
+    const by=edMarginY()+(la.y+la.thoughtBig.y*la.height)*ph;
+    const sx=edMarginX()+(la.x+la.thoughtSmall.x*la.width)*pw;
+    const sy=edMarginY()+(la.y+la.thoughtSmall.y*la.height)*ph;
+    // Azul = elipse grande
+    edCtx.beginPath();edCtx.arc(bx,by,HR2,0,Math.PI*2);
+    edCtx.fillStyle='#1a8cff';edCtx.fill();
+    edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+    // Rojo = elipse pequeña
+    edCtx.beginPath();edCtx.arc(sx,sy,HR2,0,Math.PI*2);
+    edCtx.fillStyle='#e63030';edCtx.fill();
+    edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+  }
+  // Handles 4 vértices del rect cuando modo curva activo
+  if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape'){
+    const curveSliderS=$('op-shape-curve-slider');
+    const curveActiveS=curveSliderS&&curveSliderS.style.display==='flex';
+    if(curveActiveS){
+      const corners=[[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]];
+      const rot2=(la.rotation||0)*Math.PI/180;
+      const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+      const cxs=edMarginX()+la.x*pw, cys=edMarginY()+la.y*ph;
+      corners.forEach(([cx3,cy3])=>{
+        const rx=cx3*cos2-cy3*sin2, ry=cx3*sin2+cy3*cos2;
+        const cpx=cxs+rx, cpy=cys+ry;
+        const hasCurve=(la.cornerRadius||0)>0;
+        edCtx.beginPath();edCtx.arc(cpx,cpy,hr,0,Math.PI*2);
+        edCtx.fillStyle=hasCurve?'#2ecc71':'#e63030';edCtx.fill();
+        edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+      });
+    }
+  }
+  // Handles vértices explosión
+  if(la.style==='explosion'){
+      const ecp=la.getExplosionControlPoints();
+      ecp.forEach(p=>{
+        const cpx=edMarginX()+p.nx*pw, cpy=edMarginY()+p.ny*ph;
+        edCtx.beginPath();edCtx.arc(cpx,cpy,HR,0,Math.PI*2);
+        edCtx.fillStyle='#e63030';edCtx.fill();
+        edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+      });
+    }
+  }
+  // Handles 4 vértices del rect en modo curva
+  if(la.type==='shape' && la.shape==='rect'){
+    const curveSliderS=$('op-shape-curve-slider');
+    const curveActiveS=curveSliderS&&curveSliderS.style.display==='flex';
+    if(curveActiveS){
+      const rot2=(la.rotation||0)*Math.PI/180;
+      const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+      const hw=la.width*pw/2, hh=la.height*ph/2;
+      // TL=0, TR=1, BR=2, BL=3 en coordenadas locales
+      const corners=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
+      const crs2=la.cornerRadii||[0,0,0,0];
+      corners.forEach(([lx,ly],ci2)=>{
+        const ax2=(la.x*pw+lx*cos2-ly*sin2)/pw;
+        const ay2=(la.y*ph+lx*sin2+ly*cos2)/ph;
+        const cpx2=edMarginX()+ax2*pw, cpy2=edMarginY()+ay2*ph;
+        const isAct=window._edCurveVertIdx===ci2;
+        const hasCrv=(crs2[ci2]||0)>0;
+        const hcol=isAct?'#27ae60':(hasCrv?'#2ecc71':'#e63030');
+        edCtx.beginPath();edCtx.arc(cpx2,cpy2,isAct?hr*1.3:hr,0,Math.PI*2);
+        edCtx.fillStyle=hcol;edCtx.fill();
+        edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+      });
+    }
+  }
+  // Handles vértices de LineLayer seleccionado (panel abierto)
+  if(la.type==='line' && la.points.length>=2 && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+    const rot=(la.rotation||0)*Math.PI/180;
+    const cos=Math.cos(rot),sin=Math.sin(rot);
+    const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
+    la.points.forEach((p,i)=>{
+      // Igual que draw(): translate(cx,cy) + rotate(rot) + point(p.x*pw, p.y*ph)
+      const lpx=p.x*pw, lpy=p.y*ph;
+      const cpx=cx + lpx*cos - lpy*sin;
+      const cpy=cy + lpx*sin + lpy*cos;
+      const isActive=window._edCurveVertIdx===i;
+      const hasCurve=la.cornerRadii&&la.cornerRadii[i]>0;
+      const hColor=isActive?'#27ae60':(hasCurve?'#2ecc71':'#e63030');
+      edCtx.beginPath();edCtx.arc(cpx,cpy,isActive?hr*1.3:hr,0,Math.PI*2);
+      edCtx.fillStyle=hColor;edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
   }
@@ -2334,8 +2559,106 @@ function edOnStart(e){
   // Cola bocadillo
   if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
     const la=edLayers[edSelectedIdx];
+    // Handles cola pensamiento
+    if(la.style==='thought' && la.tail){
+      const bx=la.x+la.thoughtBig.x*la.width,   by=la.y+la.thoughtBig.y*la.height;
+      const sx=la.x+la.thoughtSmall.x*la.width,  sy=la.y+la.thoughtSmall.y*la.height;
+      if(Math.hypot(c.nx-bx,c.ny-by)<0.04){edIsTailDragging=true;edTailPointType='thoughtBig';  return;}
+      if(Math.hypot(c.nx-sx,c.ny-sy)<0.04){edIsTailDragging=true;edTailPointType='thoughtSmall';return;}
+    }
     for(const p of la.getTailControlPoints()){
       if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.05){edIsTailDragging=true;edTailPointType=p.type;edTailVoiceIdx=p.voice||0;return;}
+    }
+    // Vértices de explosión
+    if(la.style==='explosion'){
+      for(const p of la.getExplosionControlPoints()){
+        if(Math.hypot(c.nx-p.nx,c.ny-p.ny)<0.05){
+          edIsTailDragging=true;edTailPointType='explosion';edTailVoiceIdx=p.idx;return;
+        }
+      }
+    }
+  }
+  // Vértices del rect en modo curva
+  if(edSelectedIdx>=0){
+    const la2=edLayers[edSelectedIdx];
+    if(la2?.type==='shape' && la2.shape==='rect'){
+      const curveSliderS=$('op-shape-curve-slider');
+      if(curveSliderS&&curveSliderS.style.display==='flex'){
+        const rot2=(la2.rotation||0)*Math.PI/180;
+        const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+        const hw=la2.width*edPageW()/2, hh=la2.height*edPageH()/2;
+        const corners=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
+        for(let ci2=0;ci2<4;ci2++){
+          const [lx,ly]=corners[ci2];
+          const pw2=edPageW(),ph2=edPageH();
+          const ax2=(la2.x*pw2+lx*cos2-ly*sin2)/pw2;
+          const ay2=(la2.y*ph2+lx*sin2+ly*cos2)/ph2;
+          if(Math.hypot(c.nx-ax2,c.ny-ay2)<0.05){
+            window._edCurveVertIdx=ci2;
+            if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0];
+            const existing=la2.cornerRadii[ci2]||0;
+            window._edCurveRadius=existing;
+            const sl=$('op-shape-curve-r'),sn=$('op-shape-curve-rnum');
+            if(sl)sl.value=existing;if(sn)sn.value=existing;
+            edRedraw();return;
+          }
+        }
+      }
+    }
+  }
+  // Vértices de línea seleccionada — detección independiente del bubble
+  if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line'){
+    const la=edLayers[edSelectedIdx];
+    if(la.points.length>=2 && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+      const rot=(la.rotation||0)*Math.PI/180;
+      const cos=Math.cos(rot),sin=Math.sin(rot);
+      const pw=edPageW(),ph=edPageH();
+      for(let i=0;i<la.points.length;i++){
+        const p=la.points[i];
+        const lpx=p.x*pw, lpy=p.y*ph;
+        const ax=la.x+(lpx*cos-lpy*sin)/pw;
+        const ay=la.y+(lpx*sin+lpy*cos)/ph;
+        if(Math.hypot(c.nx-ax,c.ny-ay)<0.05){
+          // Si el modo curva está activo: seleccionar vértice como activo
+          const curveSlider=$('op-line-curve-slider');
+          const curveActive=curveSlider&&curveSlider.style.display==='flex';
+          if(curveActive){
+            const l2=edLayers[edSelectedIdx];
+            if(!l2.cornerRadii) l2.cornerRadii={};
+            // Seleccionar vértice (siempre): sincronizar slider con su radio actual
+            // Radio 0 = esquina recta (el usuario lo controla con el slider)
+            window._edCurveVertIdx=i;
+            const existing=l2.cornerRadii[i]||0;
+            window._edCurveRadius=existing;
+            const sl=$('op-line-curve-r'), sn=$('op-line-curve-rnum');
+            if(sl) sl.value=existing; if(sn) sn.value=existing;
+            edRedraw(); return;
+          }
+          edIsTailDragging=true;edTailPointType='linevertex';edTailVoiceIdx=i;return;
+        }
+      }
+    }
+  }
+  // Toque en vértice de rect para curva
+  if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape' && edLayers[edSelectedIdx]?.shape==='rect'){
+    const curveSliderS=$('op-shape-curve-slider');
+    if(curveSliderS&&curveSliderS.style.display==='flex'){
+      const la2=edLayers[edSelectedIdx];
+      const pw2=edPageW(),ph2=edPageH();
+      const w2=la2.width*pw2, h2=la2.height*ph2;
+      const rot2=(la2.rotation||0)*Math.PI/180;
+      const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+      const corners=[[-w2/2,-h2/2],[w2/2,-h2/2],[w2/2,h2/2],[-w2/2,h2/2]];
+      for(const [cx3,cy3] of corners){
+        const rx=cx3*cos2-cy3*sin2, ry=cx3*sin2+cy3*cos2;
+        const ax=la2.x+rx/pw2, ay=la2.y+ry/ph2;
+        if(Math.hypot(c.nx-ax,c.ny-ay)<0.05){
+          // Aplicar radio al rect (global, todos los vértices iguales)
+          const existing=la2.cornerRadius||0;
+          const slR=$('op-shape-curve-r'); if(slR) la2.cornerRadius=+slR.value;
+          _edShapePushHistory(); edRedraw(); return;
+        }
+      }
     }
   }
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
@@ -2662,6 +2985,57 @@ function edOnMove(e){
   clearTimeout(window._edLongPress); // cancelar longpress si el dedo se movió
   if(edIsTailDragging&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
+    if(edTailPointType==='thoughtBig'){
+      la.thoughtBig={x:(c.nx-la.x)/la.width, y:(c.ny-la.y)/la.height};
+      edRedraw();return;
+    }
+    if(edTailPointType==='thoughtSmall'){
+      la.thoughtSmall={x:(c.nx-la.x)/la.width, y:(c.ny-la.y)/la.height};
+      edRedraw();return;
+    }
+    if(edTailPointType==='explosion'){
+      const pw=edPageW(),ph=edPageH();
+      const w=la.width*pw, h=la.height*ph;
+      if(w>0&&h>0){
+        la._initExplosionRadii();
+        // Calcular posiciones absolutas de todos los vértices ANTES de cambiar nada
+        const absPts = la.explosionRadii.map(v=>({
+          ax: la.x + v.ox*w/2/pw,
+          ay: la.y + v.oy*h/2/ph
+        }));
+        // Actualizar el vértice arrastrado
+        absPts[edTailVoiceIdx] = {ax: c.nx, ay: c.ny};
+        // Recalcular centro y tamaño del bbox desde las posiciones absolutas
+        const minAx=Math.min(...absPts.map(p=>p.ax)), maxAx=Math.max(...absPts.map(p=>p.ax));
+        const minAy=Math.min(...absPts.map(p=>p.ay)), maxAy=Math.max(...absPts.map(p=>p.ay));
+        const newCx=(minAx+maxAx)/2, newCy=(minAy+maxAy)/2;
+        const newW=Math.max(0.05,(maxAx-minAx)), newH=Math.max(0.05,(maxAy-minAy));
+        // Recalcular ox/oy de todos los vértices con el nuevo centro y tamaño
+        la.x=newCx; la.y=newCy;
+        la.width=newW; la.height=newH;
+        const nw=newW*pw, nh=newH*ph;
+        la.explosionRadii = absPts.map(p=>({
+          ox: (p.ax-newCx)*pw/(nw/2),
+          oy: (p.ay-newCy)*ph/(nh/2)
+        }));
+      }
+      edRedraw();return;
+    }
+    if(edTailPointType==='linevertex'){
+      // Convertir posición absoluta al espacio local de la línea
+      // El draw hace: translate(cx,cy) + rotate(rot) + draw(p.x*pw, p.y*ph)
+      // Inverso: (abs - center) → rotate(-rot) → divide por (pw,ph)
+      const pw2=edPageW(), ph2=edPageH();
+      const rot=-(la.rotation||0)*Math.PI/180;
+      const cos=Math.cos(rot), sin=Math.sin(rot);
+      const dx=(c.nx-la.x)*pw2, dy=(c.ny-la.y)*ph2; // en px
+      la.points[edTailVoiceIdx]={
+        x: (dx*cos - dy*sin) / pw2,
+        y: (dx*sin + dy*cos) / ph2
+      };
+      la._updateBbox();
+      edRedraw();return;
+    }
     const dx=c.nx-la.x,dy=c.ny-la.y;
     const v=edTailVoiceIdx||0;
     if(!la.tailStarts)la.tailStarts=[{...la.tailStart}];
@@ -3570,6 +3944,12 @@ function _edActivateShapeTool() {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
+    <button id="op-shape-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">v↔c</button>
+    <div id="op-shape-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-shape-curve-r" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <input type="number" id="op-shape-curve-rnum" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-shape-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-shape-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
@@ -3718,6 +4098,43 @@ function _edActivateShapeTool() {
 
   // ── Minimizar (idéntico a draw) ──
 
+  // ── Curva de vértice ──
+  $('op-shape-curve-btn')?.addEventListener('click',()=>{
+    const sl=$('op-shape-curve-slider');
+    const open=sl?.style.display==='none'||sl?.style.display==='';
+    if(sl) sl.style.display=open?'flex':'none';
+    const btn=$('op-shape-curve-btn');
+    btn.style.background=open?'var(--black)':'transparent';
+    btn.style.color=open?'var(--white)':'var(--gray-700)';
+    btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
+    if(!open){ window._edCurveVertIdx=-1; edRedraw(); }
+  });
+  $('op-shape-curve-r')?.addEventListener('input',e=>{
+    const v=+e.target.value;
+    const n=$('op-shape-curve-rnum'); if(n) n.value=v;
+    window._edCurveRadius=v;
+    const s=_curShape(); if(!s) return;
+    const vi=window._edCurveVertIdx;
+    if(vi>=0&&vi<4&&s.shape==='rect'){
+      if(!s.cornerRadii)s.cornerRadii=[0,0,0,0];
+      s.cornerRadii[vi]=v;
+    } else { s.cornerRadius=v; }
+    edRedraw();
+  });
+  $('op-shape-curve-r')?.addEventListener('change',()=>{ _edShapePushHistory(); });
+  $('op-shape-curve-rnum')?.addEventListener('change',e=>{
+    const v=Math.max(0,Math.min(80,parseInt(e.target.value)||0));
+    e.target.value=v; const sl=$('op-shape-curve-r'); if(sl) sl.value=v;
+    window._edCurveRadius=v;
+    const s=_curShape(); if(!s) return;
+    const vi=window._edCurveVertIdx;
+    if(vi>=0&&vi<4&&s.shape==='rect'){
+      if(!s.cornerRadii)s.cornerRadii=[0,0,0,0];
+      s.cornerRadii[vi]=v;
+    } else { s.cornerRadius=v; }
+    edRedraw(); _edShapePushHistory();
+  });
+
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
     _edShapeClearHistory();
@@ -3834,6 +4251,12 @@ function _edActivateLineTool(isNew) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
+    <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">v↔c</button>
+    <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <input type="number" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-line-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-line-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
@@ -3993,10 +4416,44 @@ function _edActivateLineTool(isNew) {
     }
   });
 
+  // ── Curva de vértice ──
+  window._edCurveVertIdx=-1; // resetear al abrir el panel
+  $('op-line-curve-btn')?.addEventListener('click',()=>{
+    const sl=$('op-line-curve-slider');
+    const open=sl?.style.display==='none'||sl?.style.display==='';
+    if(sl) sl.style.display=open?'flex':'none';
+    const btn=$('op-line-curve-btn');
+    btn.style.background=open?'var(--black)':'transparent';
+    btn.style.color=open?'var(--white)':'var(--gray-700)';
+    btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
+    if(!open){ window._edCurveVertIdx=-1; edRedraw(); }
+  });
+  $('op-line-curve-r')?.addEventListener('input',e=>{
+    const v=+e.target.value;
+    const n=$('op-line-curve-rnum'); if(n) n.value=v;
+    window._edCurveRadius=v;
+    // Actualizar en tiempo real el vértice activo
+    const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+    const vi=window._edCurveVertIdx;
+    if(la2&&vi>=0){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
+    edRedraw();
+  });
+  $('op-line-curve-r')?.addEventListener('change',()=>{ _edShapePushHistory(); });
+  $('op-line-curve-rnum')?.addEventListener('change',e=>{
+    const v=Math.max(0,Math.min(80,parseInt(e.target.value)||0));
+    e.target.value=v; const sl=$('op-line-curve-r'); if(sl) sl.value=v;
+    window._edCurveRadius=v;
+    const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+    const vi=window._edCurveVertIdx;
+    if(la2&&vi>=0){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
+    edRedraw(); _edShapePushHistory();
+  });
+
   // ── Minimizar (idéntico a draw) ──
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
+    window._edCurveVertIdx=-1;
     _edShapeClearHistory();
     _edFinishLine();
     edCloseOptionsPanel();
@@ -4482,8 +4939,7 @@ function edRenderOptionsPanel(mode){
             <option value="conventional" ${la.style==='conventional'?'selected':''}>Convencional</option>
             <option value="lowvoice" ${la.style==='lowvoice'?'selected':''}>Voz baja</option>
             <option value="thought" ${la.style==='thought'?'selected':''}>Pensamiento</option>
-            <option value="radio" ${la.style==='radio'?'selected':''}>Radio/Tele</option>
-            <option value="explosion" ${la.style==='explosion'?'selected':''}>Explosión</option>
+            <option value="explosion" ${la.style==='explosion'?'selected':''}>Explosión/Grito</option>
           </select>
         </div>
         <div class="op-prop-row">
