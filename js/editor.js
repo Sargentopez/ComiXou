@@ -265,6 +265,7 @@ class TextLayer extends BaseLayer {
   }
 }
 
+
 class BubbleLayer extends BaseLayer {
   constructor(text='Escribe aquí',x=0.5,y=0.5){
     super('bubble',x,y,0.3,0.15);
@@ -287,9 +288,20 @@ class BubbleLayer extends BaseLayer {
   }
   resizeToFitText(can){
     const pw=edPageW(), ph=edPageH();
-    const ctx=can.getContext('2d'),{width,height}=this.measure(ctx);
-    this.width=Math.max(0.05,(width+this.padding*2)/pw);
-    this.height=Math.max(0.05,(height+this.padding*2)/ph);
+    const ctx=can.getContext('2d');
+    ctx.font=this._fontStr();
+    const lines=this.getLines();
+    const lh=this.fontSize*1.2;
+    const maxW=lines.reduce((m,l)=>Math.max(m,ctx.measureText(l).width),0);
+    const totalH=lines.length*lh;
+    // Para una elipse, el rectángulo de texto (maxW x totalH) debe caber dentro.
+    // Condición: (maxW/2 / a)² + (totalH/2 / b)² <= 1, con a/b = (maxW+pad*2)/(totalH+pad*2)
+    // Solución simple y segura: usar factor sqrt(2) para la elipse + padding
+    const factor = lines.length === 1 ? 1.15 : 1.05;
+    const w = maxW * factor + this.padding * 2;
+    const h = totalH * factor + this.padding * 2;
+    this.width=Math.max(0.05,w/pw);
+    this.height=Math.max(0.05,h/ph);
   }
   getTailControlPoints(){
     if(!this.tail)return[];
@@ -367,9 +379,10 @@ class BubbleLayer extends BaseLayer {
       }
       // Texto centrado
       ctx.font=this._fontStr();
-      ctx.fillStyle=this.color;ctx.textAlign='center';ctx.textBaseline='middle';
-      const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
-      lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+      const isPlaceholderT=this.text==='Escribe aquí';
+      ctx.fillStyle=isPlaceholderT?'#999999':this.color;ctx.textAlign='center';ctx.textBaseline='middle';
+      const linesT=this.getLines(),lhT=this.fontSize*1.2,totalHT=linesT.length*lhT;
+      linesT.forEach((l,i)=>ctx.fillText(l,0,-totalHT/2+lhT/2+i*lhT));
       ctx.restore();return;
     }
 
