@@ -6991,19 +6991,17 @@ function EditorView_init(){
     const pr=parent.getBoundingClientRect();
     const vw=window.innerWidth, vh=window.innerHeight;
     const GAP=4;
-    // Medir el submenú con posición temporal fuera de pantalla
     sub.style.position='fixed';
     sub.style.left='-9999px'; sub.style.top='-9999px';
     sub.style.right='auto';   sub.style.bottom='auto';
-    // Ancho y alto del submenú
     const sw=sub.offsetWidth||180, sh=sub.offsetHeight||100;
-    // Preferir apertura a la derecha; si no cabe, abrir a la izquierda
-    let left, top;
-    if(pr.right+sw+GAP<=vw){ left=pr.right; }
-    else                    { left=Math.max(GAP, pr.left-sw); }
-    // Preferir alinear con el top del ítem padre; ajustar si se sale por abajo
-    top=pr.top;
-    if(top+sh+GAP>vh){ top=Math.max(GAP, vh-sh-GAP); }
+    // Siempre debajo del ítem padre, desplazado 5px a la derecha
+    let left=pr.left+5;
+    let top=pr.bottom;
+    // Ajustar si se sale por la derecha
+    if(left+sw+GAP>vw){ left=Math.max(GAP, vw-sw-GAP); }
+    // Ajustar si se sale por abajo
+    if(top+sh+GAP>vh){ top=Math.max(GAP, pr.top-sh); }
     sub.style.left=left+'px';
     sub.style.top=top+'px';
   }
