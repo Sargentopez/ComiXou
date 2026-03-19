@@ -502,7 +502,6 @@ body.editor-page { padding-top: 0; }
   flex-shrink: 0;
 }
 .hdr-sys-btn:hover  { opacity: 1; background: rgba(0,0,0,.06); }
-.hdr-sys-btn:active { background: rgba(0,0,0,.12); }
 .hdr-sys-btn:hover  { background: rgba(0,0,0,.07); }
 .hdr-sys-btn:active { background: rgba(0,0,0,.14); }
 .hdr-sys-btn[aria-pressed="true"] {

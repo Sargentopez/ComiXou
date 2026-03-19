@@ -1070,7 +1070,6 @@ body.editor-page #appView {
   background: #fff8f4;
 }
 .ed-layer-item.dragging  { opacity: .4; }
-.ed-layer-item.drag-over { border-color: var(--black); background: var(--gray-100); }
 
 .ed-layer-handle {
   font-size: 1.1rem;
@@ -1082,16 +1081,7 @@ body.editor-page #appView {
 }
 .ed-layer-handle:active { cursor: grabbing; }
 
-.ed-layer-thumb {
-  width: 80px; height: 60px;
-  border-radius: 6px;
-  border: 1.5px solid var(--gray-200);
-  background: #f5f5f5;
-  flex-shrink: 0;
-  cursor: pointer;
-  object-fit: contain;
-}
-.ed-layer-thumb:hover { border-color: #ff6600; }
+
 
 .ed-layer-info {
   flex: 1;

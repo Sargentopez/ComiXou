@@ -23,8 +23,6 @@ let _edShapePreview = null;   // ShapeLayer temporal en preview
 let _edPendingShape = null;   // ShapeLayer/LineLayer creada pero no confirmada (no seleccionable)
 let edDrawFillColor = '#ffffff'; // relleno blanco por defecto // color de relleno para nuevas shapes
 let _edLineLayer  = null;     // LineLayer en construcción
-let _edLineColor  = '#000000';
-let _edLineWidth  = 3;
 let _edLineType   = 'draw';   // 'draw' | 'select'
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
@@ -106,6 +104,26 @@ function edZoomAt(sx, sy, factor){
   edCamera.x = sx - (sx - edCamera.x) * fReal;
   edCamera.y = sy - (sy - edCamera.y) * fReal;
   edCamera.z = newZ;
+  // Actualizar dots de grosor en barras flotantes para reflejar el nuevo zoom
+  _edSyncSizeDots();
+}
+function _edSyncSizeDots(){
+  const z = edCamera.z;
+  // Dot barra de dibujo libre
+  const dotD = $('edb-size-dot');
+  if(dotD){
+    const sz = edActiveTool==='eraser' ? edEraserSize : edDrawSize;
+    const d = Math.max(3, Math.min(22, Math.round(sz * z)));
+    dotD.style.width=d+'px'; dotD.style.height=d+'px';
+  }
+  // Dot barra flotante de objetos
+  const dotS = $('esb-size-dot');
+  if(dotS){
+    const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    const lw = la ? (la.lineWidth||0) : 0;
+    const d2 = Math.max(3, Math.min(22, Math.round(lw * z)));
+    dotS.style.width=d2+'px'; dotS.style.height=d2+'px';
+  }
 }
 // ¿Necesita scrollbars? (el lienzo no cabe entero en el viewport)
 function edNeedsScroll(){
@@ -538,7 +556,6 @@ function edSetOrientation(o, persist=true){
 }
 
 
-
 class DrawLayer extends BaseLayer {
   constructor(){
     super('draw', 0.5, 0.5, 1.0, 1.0);
@@ -889,26 +906,81 @@ class LineLayer extends BaseLayer {
   _updateBbox() {
     if (!this.points.length) return;
     const pw = edPageW(), ph = edPageH();
-    const xs = this.points.map(p => p.x);
-    const ys = this.points.map(p => p.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const newCx = (minX + maxX) / 2;  // en unidades normalizadas
-    const newCy = (minY + maxY) / 2;
-    if (Math.abs(newCx) > 0.0001 || Math.abs(newCy) > 0.0001) {
-      // El desplazamiento del centro debe aplicarse en espacio rotado con escala pw/ph
-      // igual que hace draw(): translate(cx,cy) + rotate(rot) + point(p.x*pw, p.y*ph)
-      const rot = (this.rotation || 0) * Math.PI / 180;
-      const cos = Math.cos(rot), sin = Math.sin(rot);
-      const dxPx = newCx * pw, dyPx = newCy * ph; // en píxeles
-      this.x += (dxPx * cos - dyPx * sin) / pw;
-      this.y += (dxPx * sin + dyPx * cos) / ph;
-      this.points = this.points.map(p => ({x: p.x - newCx, y: p.y - newCy}));
+    const cr = this.cornerRadii || {};
+    const n = this.points.length;
+    const hasRadii = n>0 && Object.keys(cr).some(k=>(cr[k]||0)>0);
+
+    if(hasRadii){
+      // Con radios: bbox exacto de las curvas cuadráticas Q(p1, ctrl, p2)
+      // El punto más exterior de Q está en t = (p1-ctrl)/(p1-2*ctrl+p2)
+      const norm2=(vx,vy)=>{const l=Math.hypot(vx,vy);return l>0?{x:vx/l,y:vy/l}:{x:0,y:0};};
+      // Añadir el extremo de una curva cuadrática en un eje
+      const addQuadExtreme=(pts,p1c,ctr,p2c,isX,p1other,p2other,ctrOther)=>{
+        const denom=p1c-2*ctr+p2c;
+        if(Math.abs(denom)>1e-10){
+          const t=(p1c-ctr)/denom;
+          if(t>0&&t<1){
+            const v=(1-t)*(1-t)*p1c+2*t*(1-t)*ctr+t*t*p2c;
+            const u=(1-t)*(1-t)*p1other+2*t*(1-t)*ctrOther+t*t*p2other;
+            pts.push(isX?{x:v,y:u}:{x:u,y:v});
+          }
+        }
+      };
+      const effPts=[];
+      for(let i=0;i<n;i++){
+        const r=cr[i]||0;
+        if(r>0){
+          const prev=this.points[(i-1+n)%n],cur=this.points[i],next=this.points[(i+1)%n];
+          const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+          const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+          const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
+          const v1=norm2((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+          const v2=norm2((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+          const p1x=cur.x-v1.x*rr/pw, p1y=cur.y-v1.y*rr/ph;
+          const p2x=cur.x+v2.x*rr/pw, p2y=cur.y+v2.y*rr/ph;
+          // p1 y p2 siempre en el bbox
+          effPts.push({x:p1x,y:p1y});
+          effPts.push({x:p2x,y:p2y});
+          // Extremos de la curva Q(p1, cur, p2) en X e Y
+          addQuadExtreme(effPts,p1x,cur.x,p2x,true, p1y,p2y,cur.y);
+          addQuadExtreme(effPts,p1y,cur.y,p2y,false,p1x,p2x,cur.x);
+        } else {
+          effPts.push(this.points[i]);
+        }
+      }
+      const xs=effPts.map(p=>p.x), ys=effPts.map(p=>p.y);
+      const minX=Math.min(...xs),maxX=Math.max(...xs);
+      const minY=Math.min(...ys),maxY=Math.max(...ys);
+      // Ajustar la.x/y al nuevo centro efectivo y recalcular puntos relativos
+      const newCx=(minX+maxX)/2, newCy=(minY+maxY)/2;
+      if(Math.abs(newCx)>0.0001||Math.abs(newCy)>0.0001){
+        const rot=(this.rotation||0)*Math.PI/180;
+        const cos=Math.cos(rot),sin=Math.sin(rot);
+        const dxPx=newCx*pw, dyPx=newCy*ph;
+        this.x+=(dxPx*cos-dyPx*sin)/pw;
+        this.y+=(dxPx*sin+dyPx*cos)/ph;
+        this.points=this.points.map(p=>({x:p.x-newCx,y:p.y-newCy}));
+        // También desplazar los radios de índice no cambian, los puntos sí
+      }
+      this.width  = Math.max(maxX-minX, 0.01);
+      this.height = Math.max(maxY-minY, 0.01);
+    } else {
+      // Sin radios: comportamiento original
+      const xs=this.points.map(p=>p.x), ys=this.points.map(p=>p.y);
+      const minX=Math.min(...xs),maxX=Math.max(...xs);
+      const minY=Math.min(...ys),maxY=Math.max(...ys);
+      const newCx=(minX+maxX)/2, newCy=(minY+maxY)/2;
+      if(Math.abs(newCx)>0.0001||Math.abs(newCy)>0.0001){
+        const rot=(this.rotation||0)*Math.PI/180;
+        const cos=Math.cos(rot),sin=Math.sin(rot);
+        const dxPx=newCx*pw, dyPx=newCy*ph;
+        this.x+=(dxPx*cos-dyPx*sin)/pw;
+        this.y+=(dxPx*sin+dyPx*cos)/ph;
+        this.points=this.points.map(p=>({x:p.x-newCx,y:p.y-newCy}));
+      }
+      this.width  = Math.max(maxX-minX, 0.01);
+      this.height = Math.max(maxY-minY, 0.01);
     }
-    const xs2 = this.points.map(p => p.x);
-    const ys2 = this.points.map(p => p.y);
-    this.width  = Math.max(Math.max(...xs2) - Math.min(...xs2), 0.01);
-    this.height = Math.max(Math.max(...ys2) - Math.min(...ys2), 0.01);
   }
   // Puntos en coords absolutas (para primera inserción y cerrar polígono)
   absPoints() {
@@ -941,72 +1013,66 @@ class LineLayer extends BaseLayer {
     ctx.rotate(rot);
     ctx.lineJoin = 'round';
     ctx.lineCap  = 'round';
-    // Construir el path con curvas en los vértices marcados (arcTo)
     const pts = this.points;
-    const cr = this.cornerRadii || {};
-    const n = pts.length;
+    const cr  = this.cornerRadii || {};
+    const n   = pts.length;
     const px2 = p => ({x: p.x*pw, y: p.y*ph});
-    // Calcular longitud de cada segmento
-    const segLen = (a,b) => Math.hypot(b.x-a.x, b.y-a.y);
-    // Calcular radios efectivos con prioridad al último vértice editado (_edCurveVertIdx)
-    // Algoritmo: para cada segmento, si la suma de los radios de sus dos extremos
-    // supera la longitud del segmento, reducir el de menor prioridad (no el activo)
-    const activeIdx = window._edCurveVertIdx ?? -1;
-    const _resolveRadii = (rawCR, nPts, closed) => {
-      const rr = [];
-      for(let i=0;i<nPts;i++) rr[i] = rawCR[i]||0;
-      // Para cada segmento i→i+1, resolver conflictos
-      const nSegs = closed ? nPts : nPts-1;
-      for(let s=0;s<nSegs;s++){
-        const a=s, b=(s+1)%nPts;
-        const pa=px2(pts[a]), pb=px2(pts[b]);
-        const len=segLen(pa,pb);
-        if(len<2) continue;
-        const sum=rr[a]+rr[b];
-        if(sum>len-2){
-          // Conflicto: escalar ambos para que quepan, dando prioridad al activo
-          if(activeIdx===a){
-            // a tiene prioridad: clamp a, luego b toma el resto
-            rr[a]=Math.min(rr[a], len-2);
-            rr[b]=Math.max(0, len-2-rr[a]);
-          } else if(activeIdx===b){
-            rr[b]=Math.min(rr[b], len-2);
-            rr[a]=Math.max(0, len-2-rr[b]);
-          } else {
-            // Ninguno es activo: escalar proporcionalmente (CSS border-radius)
-            const scale=(len-2)/sum;
-            rr[a]*=scale; rr[b]*=scale;
-          }
-        }
-      }
-      return rr;
+
+    // Normalize vector to unit length
+    const norm = (vx,vy) => { const l=Math.hypot(vx,vy); return l>0?{x:vx/l,y:vy/l}:{x:0,y:0}; };
+
+    // Effective radius at vertex i: limited to half of shortest adjacent segment
+    const effR = i => {
+      const r=cr[i]||0; if(!r) return 0;
+      const prev=px2(pts[(i-1+n)%n]), cur=px2(pts[i]), next=px2(pts[(i+1)%n]);
+      const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
+      const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
+      return Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
     };
+
+    // For each vertex: compute p1 (entry tangent) and p2 (exit tangent)
+    // using the algorithm from getRoundedPath — quadratic bezier Q curr p2
+    // This is symmetric: works identically for every vertex including the closing segment
+    const tangents = Array.from({length:n}, (_,i) => {
+      const prev=px2(pts[(i-1+n)%n]), cur=px2(pts[i]), next=px2(pts[(i+1)%n]);
+      const v1=norm(cur.x-prev.x, cur.y-prev.y);
+      const v2=norm(next.x-cur.x, next.y-cur.y);
+      const r=effR(i);
+      return {
+        p1: {x:cur.x-v1.x*r, y:cur.y-v1.y*r},  // entry point
+        p2: {x:cur.x+v2.x*r, y:cur.y+v2.y*r},  // exit point
+        cur, r
+      };
+    });
+
     ctx.beginPath();
     if(!this.closed){
-      const rr=_resolveRadii(cr, n, false);
-      const p0=px2(pts[0]);
-      ctx.moveTo(p0.x,p0.y);
+      ctx.moveTo(tangents[0].cur.x, tangents[0].cur.y);
       for(let i=1;i<n;i++){
-        if(rr[i]>0 && i<n-1){
-          const prev=px2(pts[i-1]), cur=px2(pts[i]), next=px2(pts[i+1]);
-          ctx.arcTo(cur.x,cur.y,next.x,next.y,rr[i]);
+        const {p1,p2,cur,r}=tangents[i];
+        if(r>0 && i>0 && i<n-1){
+          ctx.lineTo(p1.x,p1.y);
+          ctx.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y);
         } else {
-          const p=px2(pts[i]); ctx.lineTo(p.x,p.y);
+          ctx.lineTo(cur.x,cur.y);
         }
       }
     } else {
-      const rr=_resolveRadii(cr, n, true);
+      // Closed polygon — symmetric algorithm, no special case for closing segment
+      const t0=tangents[0];
+      ctx.moveTo(t0.p1.x, t0.p1.y);
       for(let i=0;i<n;i++){
-        const prev=px2(pts[(i-1+n)%n]), cur=px2(pts[i]), next=px2(pts[(i+1)%n]);
-        const d1=segLen(prev,cur);
-        if(i===0){
-          if(rr[i]>0){
-            const t=Math.min(rr[i]/d1,0.5);
-            ctx.moveTo(cur.x-(cur.x-prev.x)*t, cur.y-(cur.y-prev.y)*t);
-          } else { ctx.moveTo(cur.x,cur.y); }
+        const {p1,p2,cur,r}=tangents[i];
+        if(r>0){
+          ctx.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y);
         }
-        if(rr[i]>0){ ctx.arcTo(cur.x,cur.y,next.x,next.y,rr[i]); }
-        else        { ctx.lineTo(cur.x,cur.y); }
+        // Line to entry point of next vertex
+        const next=tangents[(i+1)%n];
+        if(next.r>0){
+          ctx.lineTo(next.p1.x,next.p1.y);
+        } else {
+          ctx.lineTo(next.cur.x,next.cur.y);
+        }
       }
       ctx.closePath();
     }
@@ -1021,7 +1087,7 @@ class LineLayer extends BaseLayer {
     }
     ctx.restore();
   }
-  contains(px, py) {
+    contains(px, py) {
     if (this.points.length < 2) return false;
     // 1. Bbox rápido primero
     if (!super.contains(px, py)) return false;
@@ -1667,23 +1733,27 @@ function edDrawSel(){
   const hr=6/z;
   const hrRot=8/z;
 
-  // LineLayer: dibujar también la silueta del polígono rotado
+  // LineLayer: guía de selección discontinua azul (solo si no hay radios aplicados)
   if(la.type==='line'){
-    const mx=edMarginX(), my=edMarginY();
-    const cx=mx+la.x*pw, cy=my+la.y*ph;
-    const rot=(la.rotation||0)*Math.PI/180;
-    if(la.points.length>=2){
-      edCtx.save();
-      edCtx.translate(cx,cy); edCtx.rotate(rot);
-      edCtx.strokeStyle='rgba(26,140,255,0.5)'; edCtx.lineWidth=lw;
-      edCtx.setLineDash([4/z,3/z]);
-      edCtx.beginPath();
-      edCtx.moveTo(la.points[0].x*pw, la.points[0].y*ph);
-      for(let i=1;i<la.points.length;i++) edCtx.lineTo(la.points[i].x*pw, la.points[i].y*ph);
-      if(la.closed) edCtx.closePath();
-      edCtx.stroke();
-      edCtx.setLineDash([]);
-      edCtx.restore();
+    const _cr=la.cornerRadii||{};
+    const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);
+    if(!_hasR){
+      const mx=edMarginX(), my=edMarginY();
+      const cx=mx+la.x*pw, cy=my+la.y*ph;
+      const rot=(la.rotation||0)*Math.PI/180;
+      if(la.points.length>=2){
+        edCtx.save();
+        edCtx.translate(cx,cy); edCtx.rotate(rot);
+        edCtx.strokeStyle='rgba(26,140,255,0.5)'; edCtx.lineWidth=lw;
+        edCtx.setLineDash([4/z,3/z]);
+        edCtx.beginPath();
+        edCtx.moveTo(la.points[0].x*pw, la.points[0].y*ph);
+        for(let i=1;i<la.points.length;i++) edCtx.lineTo(la.points[i].x*pw, la.points[i].y*ph);
+        if(la.closed) edCtx.closePath();
+        edCtx.stroke();
+        edCtx.setLineDash([]);
+        edCtx.restore();
+      }
     }
   }
 
@@ -1785,9 +1855,9 @@ function edDrawSel(){
       corners.forEach(([cx3,cy3])=>{
         const rx=cx3*cos2-cy3*sin2, ry=cx3*sin2+cy3*cos2;
         const cpx=cxs+rx, cpy=cys+ry;
-        const hasCurve=(la.cornerRadius||0)>0;
+        edCtx.globalAlpha=1;
         edCtx.beginPath();edCtx.arc(cpx,cpy,hr,0,Math.PI*2);
-        edCtx.fillStyle=hasCurve?'#2ecc71':'#e63030';edCtx.fill();
+        edCtx.fillStyle='#e63030';edCtx.fill();
         edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
       });
     }
@@ -1817,12 +1887,11 @@ function edDrawSel(){
         const ay2=(la.y*ph+lx*sin2+ly*cos2)/ph;
         const cpx2=edMarginX()+ax2*pw, cpy2=edMarginY()+ay2*ph;
         const isAct=window._edCurveVertIdx===ci2;
-        if(isAct) return; // vértice activo: invisible para ver la curvatura
-        const hasCrv=(crs2[ci2]||0)>0;
-        const hcol=hasCrv?'#2ecc71':'#e63030';
+        edCtx.globalAlpha=isAct?0.5:1;
         edCtx.beginPath();edCtx.arc(cpx2,cpy2,hr,0,Math.PI*2);
-        edCtx.fillStyle=hcol;edCtx.fill();
+        edCtx.fillStyle='#2ecc71';edCtx.fill();
         edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+        edCtx.globalAlpha=1;
       });
     }
   }
@@ -1831,17 +1900,42 @@ function edDrawSel(){
     const rot=(la.rotation||0)*Math.PI/180;
     const cos=Math.cos(rot),sin=Math.sin(rot);
     const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
+    const n2=la.points.length;
+    const cr2=la.cornerRadii||{};
+    const _cvm=_edCurveModeActive();
+    // Helper: radio efectivo en espacio local (px)
+    const _er2 = i => {
+      const r=cr2[i]||0; if(!r) return 0;
+      const prev=la.points[(i-1+n2)%n2], cur=la.points[i], next=la.points[(i+1)%n2];
+      const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+      const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+      return Math.max(0,Math.min(r,Math.min(d1,d2)-2));
+    };
     la.points.forEach((p,i)=>{
-      // Igual que draw(): translate(cx,cy) + rotate(rot) + point(p.x*pw, p.y*ph)
-      const lpx=p.x*pw, lpy=p.y*ph;
+      // Siempre usar radio efectivo para posicionar el handle (no solo en modo V⟺C)
+      const r=_er2(i);
+      let lpx=p.x*pw, lpy=p.y*ph;
+      if(r>0){
+        // Q(t=0.5) = (p1 + 2*cur + p2) / 4
+        const prev=la.points[(i-1+n2)%n2], cur=la.points[i], next=la.points[(i+1)%n2];
+        const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+        const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+        const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
+        const v1x=d1>0?(cur.x-prev.x)*pw/d1:0, v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
+        const v2x=d2>0?(next.x-cur.x)*pw/d2:0, v2y=d2>0?(next.y-cur.y)*ph/d2:0;
+        const p1x=cur.x*pw-v1x*rr, p1y=cur.y*ph-v1y*rr;
+        const p2x=cur.x*pw+v2x*rr, p2y=cur.y*ph+v2y*rr;
+        lpx=(p1x+2*cur.x*pw+p2x)/4;
+        lpy=(p1y+2*cur.y*ph+p2y)/4;
+      }
       const cpx=cx + lpx*cos - lpy*sin;
       const cpy=cy + lpx*sin + lpy*cos;
       const isActive=window._edCurveVertIdx===i;
-      if(isActive) return; // vértice activo: invisible para ver la curvatura
-      const hasCurve=la.cornerRadii&&la.cornerRadii[i]>0;
+      edCtx.globalAlpha=isActive?0.5:1;
       edCtx.beginPath();edCtx.arc(cpx,cpy,hr,0,Math.PI*2);
-      edCtx.fillStyle=hasCurve?'#2ecc71':'#e63030';edCtx.fill();
+      edCtx.fillStyle=_cvm?'#2ecc71':'#e63030';edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+      edCtx.globalAlpha=1;
     });
   }
 }
@@ -2082,7 +2176,7 @@ function edDeleteSelected(){
   edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
   // Si era shape/line con barra flotante activa, limpiar y desbloquear
   if(_delType==='shape'||_delType==='line'){
-    $('edShapeBar')?.classList.remove('visible');
+    edShapeBarHide();
     if(typeof _edShapeClearHistory==='function') _edShapeClearHistory();
     _edDrawUnlockUI();
     edActiveTool='select'; edCanvas.className='';
@@ -2271,11 +2365,9 @@ function _edGearPos(la){
 }
 
 // Gear icon eliminado — se usa doble toque / long press
-function edShowGearIcon(layerIdx){ /* eliminado */ }
-function edUpdateGearPos(){ /* eliminado */ }
+
 function edHideGearIcon(){ const b=document.getElementById('edGearIcon');if(b)b.remove(); }
 function edHideContextMenu(){}
-function edShowContextMenu(idx){}
 
 
 /* ══════════════════════════════════════════
@@ -2446,13 +2538,9 @@ function edOnStart(e){
             if(!la.cornerRadii)la.cornerRadii={};
             const existing=la.cornerRadii[i]||0;
             window._edCurveRadius=existing;
-            const sl=$('op-line-curve-r')||$('esb-curve-sl');
-            const sn=$('op-line-curve-rnum')||$('esb-curve-num');
-            if(sl)sl.value=existing;if(sn)sn.value=existing;
-            // Actualizar popup si está abierto
-            const csl=document.getElementById('esb-curve-sl');
-            const cnum=document.getElementById('esb-curve-num');
-            if(csl)csl.value=existing;if(cnum)cnum.value=existing;
+            // Actualizar slider adjunto (esb-slider-input)
+            const _sl=$('esb-slider-input');
+            if(_sl) _sl.value=existing;
             edRedraw();return;
           }
         }
@@ -2472,15 +2560,16 @@ function edOnStart(e){
             if(!la.cornerRadii)la.cornerRadii=[0,0,0,0];
             const existing=la.cornerRadii[ci2]||0;
             window._edCurveRadius=existing;
-            const csl=document.getElementById('esb-curve-sl');
-            const cnum=document.getElementById('esb-curve-num');
-            if(csl)csl.value=existing;if(cnum)cnum.value=existing;
+            // Actualizar slider adjunto (esb-slider-input)
+            const _sl2=$('esb-slider-input');
+            if(_sl2) _sl2.value=existing;
             edRedraw();return;
           }
         }
       }
     }
-    return; // en modo curva, ignorar todo lo demás
+    // En modo curva: si no se tocó ningún vértice curvable, permitir drag normal
+    // (no bloquear el movimiento del objeto ni sus vértices de arrastre)
   }
 
   // No bloquear scroll en overlays (capas, hojas, etc.)
@@ -2703,9 +2792,29 @@ function edOnStart(e){
       const rot=(la.rotation||0)*Math.PI/180;
       const cos=Math.cos(rot),sin=Math.sin(rot);
       const pw=edPageW(),ph=edPageH();
-      for(let i=0;i<la.points.length;i++){
+      const _n=la.points.length;
+      const _cr=la.cornerRadii||{};
+      // Función que calcula la posición visual del handle (igual que en edDrawSel)
+      const _handlePos=(i)=>{
         const p=la.points[i];
-        const lpx=p.x*pw, lpy=p.y*ph;
+        const r=_cr[i]||0;
+        let lpx=p.x*pw,lpy=p.y*ph;
+        if(r>0){
+          const prev=la.points[(i-1+_n)%_n],cur=la.points[i],next=la.points[(i+1)%_n];
+          const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+          const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+          const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
+          const v1x=d1>0?(cur.x-prev.x)*pw/d1:0,v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
+          const v2x=d2>0?(next.x-cur.x)*pw/d2:0,v2y=d2>0?(next.y-cur.y)*ph/d2:0;
+          const p1x=cur.x*pw-v1x*rr,p1y=cur.y*ph-v1y*rr;
+          const p2x=cur.x*pw+v2x*rr,p2y=cur.y*ph+v2y*rr;
+          lpx=(p1x+2*cur.x*pw+p2x)/4;
+          lpy=(p1y+2*cur.y*ph+p2y)/4;
+        }
+        return {lpx,lpy};
+      };
+      for(let i=0;i<_n;i++){
+        const {lpx,lpy}=_handlePos(i);
         const ax=la.x+(lpx*cos-lpy*sin)/pw;
         const ay=la.y+(lpx*sin+lpy*cos)/ph;
         if(Math.hypot(c.nx-ax,c.ny-ay)<0.05){
@@ -3384,7 +3493,6 @@ function edOnEnd(e){
 }
 
 
-
 /* ══════════════════════════════════════════
    HISTORIAL LOCAL — SHAPE / LINE
    Independiente del historial global. Se inicia al abrir el panel
@@ -3927,7 +4035,7 @@ function edToggleMenu(id){
       _edShapeClearHistory&&_edShapeClearHistory();
       _edShapeStart=null;_edShapePreview=null;_edPendingShape=null;
       edActiveTool='select';edCanvas.className='';
-      $('edShapeBar')?.classList.remove('visible');
+      edShapeBarHide();
       _edDrawUnlockUI();
     }
   }
@@ -4239,7 +4347,7 @@ function _edActivateShapeTool() {
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
-    $('edShapeBar')?.classList.remove('visible');
+    edShapeBarHide();
     _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
     edRedraw();
@@ -4556,7 +4664,7 @@ function _edActivateLineTool(isNew) {
     _edFinishLine();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
-    $('edShapeBar')?.classList.remove('visible');
+    edShapeBarHide();
     _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
     edRedraw();
@@ -4591,7 +4699,6 @@ function _edActivateLineTool(isNew) {
 
   requestAnimationFrame(edFitCanvas);
 }
-
 
 
 function _edFinishLine() {
@@ -5700,8 +5807,9 @@ function _edbSyncSize() {
   const dot = $('edb-size-dot'); if (!dot) return;
   const isEr = edActiveTool === 'eraser';
   const sz = isEr ? edEraserSize : edDrawSize;
-  // Dot visual entre 6px y 24px según tamaño
-  const d = Math.max(6, Math.min(24, Math.round(sz * 0.6)));
+  // Dot visual: refleja el grosor real escalado por el zoom actual
+  const _dz = typeof edCamera !== 'undefined' ? edCamera.z : 1;
+  const d = Math.max(3, Math.min(22, Math.round(sz * _dz)));
   dot.style.width  = d + 'px';
   dot.style.height = d + 'px';
   const sizebtn = $('edb-size');
@@ -5788,7 +5896,9 @@ function edShapeBarShow() {
   _esbSync();
 }
 function edShapeBarHide() {
-  if(typeof _esbHideSlider==='function') _esbHideSlider();
+  // Ocultar slider directamente por DOM (no depender del closure de edInitShapeBar)
+  const _sp=$('esb-slider-panel');
+  if(_sp){ _sp.style.display='none'; _sp._mode=null; }
   $('edShapeBar')?.classList.remove('visible');
 }
 
@@ -5812,7 +5922,8 @@ function _esbSync() {
   // Dot de grosor
   const dot = $('esb-size-dot');
   if(dot){
-    const d = Math.max(3, Math.min(20, Math.round((la.lineWidth||0)*0.8)));
+    const _dz2 = typeof edCamera !== 'undefined' ? edCamera.z : 1;
+    const d = Math.max(3, Math.min(22, Math.round((la.lineWidth||0) * _dz2)));
     dot.style.cssText = `width:${d}px;height:${d}px;border-radius:50%;background:#fff;display:inline-block;`;
   }
 }
@@ -6030,15 +6141,17 @@ function edInitShapeBar() {
       _esbHideSlider();
       edRedraw(); return;
     }
+    edRedraw(); // actualizar vértices a verde inmediatamente al activar V⟺C
     const _savedSelCurve=edSelectedIdx;
     const curR=window._edCurveRadius||0;
     _esbShowSlider('curve', 0, 200, curR,
       v=>{
+        // onInput: previsualizar la curva en tiempo real (solo visual, no hornear)
         window._edCurveRadius=v;
         const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
         const vi=window._edCurveVertIdx;
         if(la2&&vi>=0){
-          if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
+          if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; la2._updateBbox(); }
           else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=v; }
           edRedraw();
         }
@@ -6056,9 +6169,20 @@ function edInitShapeBar() {
   $('esb-ok')?.addEventListener('click', ()=>{
     if(_locked) return;
     _edShapeClearHistory();
+    // Desactivar V⟺C si estaba activo
+    const _curveBtn=$('esb-curve');
+    if(_curveBtn){ _curveBtn.dataset.curveActive='0'; _curveBtn.style.background=''; _curveBtn.style.color=''; _curveBtn.style.outline=''; }
+    window._edCurveVertIdx=-1;
     edShapeBarHide();
     window._edMinimizedDrawMode=null;
+    // Limpiar estado antes de maximizar
+    edSelectedIdx=-1;
+    edActiveTool='select'; edCanvas.className='';
+    const _panel=$('edOptionsPanel');
+    if(_panel){ _panel.style.visibility=''; _panel.classList.remove('open'); _panel.innerHTML=''; delete _panel.dataset.mode; }
+    _edDrawUnlockUI();
     edMaximize();
+    edRedraw();
   });
 }
 function _edDrawLockUI()   { $('editorShell')?.classList.add('draw-active'); }
@@ -6086,7 +6210,6 @@ function edDrawBarUpdate() {
   if (!$('edDrawBar')?.classList.contains('visible')) return;
   _edbSyncTool();
 }
-
 
 
 function _edBubbleTailDir(l){
@@ -6145,6 +6268,8 @@ async function edCloudSave() {
 function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   const existing=ComicStore.getById(edProjectId)||{};
+  // Guardar estado de cámara para restaurarlo al volver a editar
+  const _camState = { x: edCamera.x, y: edCamera.y, z: edCamera.z, page: edCurrentPage };
   const panels=edPages.map((p,i)=>{
     // Exportar capas de texto/bocadillo para el reader.
     // El orden del array layers[] es el orden secuencial de aparición.
@@ -6220,6 +6345,7 @@ function edSaveProject(){
       pages:edPages.map(p=>({layers:p.layers.map(edSerLayer).filter(Boolean),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||edOrientation})),
     },
     updatedAt:new Date().toISOString(),
+    cameraState: _camState,
   });
   edToast('Guardado ✓');
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
@@ -6392,13 +6518,20 @@ function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
-  // Centrar cámara al cargar proyecto
-  // Doble rAF + timeout: esperar que el DOM tenga alturas correctas
+  // Restaurar cámara guardada o centrar si es la primera vez
+  const _cs = comic.cameraState;
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      window._edUserRequestedReset=true; edFitCanvas(true);
-      // Segundo intento por si el layout tardó más (ej: fuentes, imágenes)
-      setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); }, 120);
+      if(_cs && typeof _cs.z === 'number'){
+        // Restaurar cámara de la sesión anterior
+        edCamera.x = _cs.x; edCamera.y = _cs.y; edCamera.z = _cs.z;
+        edFitCanvas(false); // reajustar tamaño del canvas sin mover la cámara
+      } else {
+        // Primera vez: ajuste inicial centrado
+        window._edUserRequestedReset=true; edFitCanvas(true);
+        setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); }, 120);
+      }
+      edRedraw();
     }));
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
@@ -7150,7 +7283,7 @@ function EditorView_init(){
     $('esb-select')?.classList.toggle('active', t === 'select');
     $('esb-fill')?.classList.toggle('active', t === 'fill');
     const dot = $('esb-size-dot');
-    if(dot){ const sz=edDrawSize; const d=Math.max(6,Math.min(24,Math.round(sz*0.6))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
+    if(dot){ const sz=edDrawSize; const _dz3=typeof edCamera!=='undefined'?edCamera.z:1; const d=Math.max(3,Math.min(22,Math.round(sz*_dz3))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
     const sw = $('esb-color'); if(sw) sw.style.background = edDrawColor;
   }
 
@@ -7215,7 +7348,7 @@ function EditorView_init(){
   $('esb-ok')?.addEventListener('click', () => {
     if(edActiveTool === 'line' && _edLineLayer) _edFinishLine();
     _edShapeClearHistory();
-    $('edShapeBar')?.classList.remove('visible');
+    edShapeBarHide();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;

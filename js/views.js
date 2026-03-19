@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v9.65</footer>
+    <footer class="app-version">v9.101</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -349,7 +349,7 @@ Router.register('editor', {
       </div>
 
       <!-- Panel slider adjunto a edShapeBar (grosor, opacidad, curva) -->
-      <div id="esb-slider-panel" style="display:none;position:fixed;z-index:1199;background:rgba(30,30,30,0.95);border-radius:10px;padding:8px;box-shadow:0 4px 16px rgba(0,0,0,.5);align-items:center;justify-content:center;">
+      <div id="esb-slider-panel" style="display:none;position:fixed;z-index:1199;background:rgba(20,20,20,.40);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:8px;box-shadow:0 2px 10px rgba(0,0,0,.25);align-items:center;justify-content:center;">
         <input type="range" id="esb-slider-input" min="0" max="100" value="0"
           style="accent-color:#FFE135;cursor:pointer;touch-action:none;">
       </div>
