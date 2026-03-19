@@ -929,52 +929,68 @@ class LineLayer extends BaseLayer {
     const pts = this.points;
     const cr = this.cornerRadii || {};
     const n = pts.length;
-    // Función que convierte punto normalizado a px
     const px2 = p => ({x: p.x*pw, y: p.y*ph});
+    // Calcular longitud de cada segmento
+    const segLen = (a,b) => Math.hypot(b.x-a.x, b.y-a.y);
+    // Calcular radios efectivos con prioridad al último vértice editado (_edCurveVertIdx)
+    // Algoritmo: para cada segmento, si la suma de los radios de sus dos extremos
+    // supera la longitud del segmento, reducir el de menor prioridad (no el activo)
+    const activeIdx = window._edCurveVertIdx ?? -1;
+    const _resolveRadii = (rawCR, nPts, closed) => {
+      const rr = [];
+      for(let i=0;i<nPts;i++) rr[i] = rawCR[i]||0;
+      // Para cada segmento i→i+1, resolver conflictos
+      const nSegs = closed ? nPts : nPts-1;
+      for(let s=0;s<nSegs;s++){
+        const a=s, b=(s+1)%nPts;
+        const pa=px2(pts[a]), pb=px2(pts[b]);
+        const len=segLen(pa,pb);
+        if(len<2) continue;
+        const sum=rr[a]+rr[b];
+        if(sum>len-2){
+          // Conflicto: escalar ambos para que quepan, dando prioridad al activo
+          if(activeIdx===a){
+            // a tiene prioridad: clamp a, luego b toma el resto
+            rr[a]=Math.min(rr[a], len-2);
+            rr[b]=Math.max(0, len-2-rr[a]);
+          } else if(activeIdx===b){
+            rr[b]=Math.min(rr[b], len-2);
+            rr[a]=Math.max(0, len-2-rr[b]);
+          } else {
+            // Ninguno es activo: escalar proporcionalmente (CSS border-radius)
+            const scale=(len-2)/sum;
+            rr[a]*=scale; rr[b]*=scale;
+          }
+        }
+      }
+      return rr;
+    };
     ctx.beginPath();
-    // Encontrar el primer punto de inicio (puede ser curvado)
-    const startIdx = this.closed ? 0 : 0;
-    const totalPts = this.closed ? n : n;
-    // Dibujar: para cada punto intermedio con radio, usar arcTo
-    const drawPts = this.closed ? [...pts, pts[0], pts[1]] : pts;
     if(!this.closed){
+      const rr=_resolveRadii(cr, n, false);
       const p0=px2(pts[0]);
       ctx.moveTo(p0.x,p0.y);
       for(let i=1;i<n;i++){
-        const r=cr[i]||0;
-        if(r>0 && i<n-1){
+        if(rr[i]>0 && i<n-1){
           const prev=px2(pts[i-1]), cur=px2(pts[i]), next=px2(pts[i+1]);
-          // Longitud de los segmentos adyacentes
-          const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
-          const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
-          // Limitar radio a la longitud del segmento más corto - 2px
-          const maxR=Math.min(d1,d2)-2;
-          const rr=Math.max(0,Math.min(r,maxR));
-          ctx.arcTo(cur.x,cur.y,next.x,next.y,rr);
+          ctx.arcTo(cur.x,cur.y,next.x,next.y,rr[i]);
         } else {
           const p=px2(pts[i]); ctx.lineTo(p.x,p.y);
         }
       }
     } else {
-      // Polígono cerrado: todos los vértices pueden tener radio
+      const rr=_resolveRadii(cr, n, true);
       for(let i=0;i<n;i++){
-        const r=cr[i]||0;
         const prev=px2(pts[(i-1+n)%n]), cur=px2(pts[i]), next=px2(pts[(i+1)%n]);
-        const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
-        const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
-        const maxR=Math.min(d1,d2)-2;
-        const rr=r>0?Math.max(0,Math.min(r,maxR)):0;
+        const d1=segLen(prev,cur);
         if(i===0){
-          if(rr>0){
-            // Empezar en el punto medio del segmento previo→cur
-            const t=rr/d1;
+          if(rr[i]>0){
+            const t=Math.min(rr[i]/d1,0.5);
             ctx.moveTo(cur.x-(cur.x-prev.x)*t, cur.y-(cur.y-prev.y)*t);
-          } else {
-            ctx.moveTo(cur.x,cur.y);
-          }
+          } else { ctx.moveTo(cur.x,cur.y); }
         }
-        if(rr>0){ ctx.arcTo(cur.x,cur.y,next.x,next.y,rr); }
-        else     { ctx.lineTo(cur.x,cur.y); }
+        if(rr[i]>0){ ctx.arcTo(cur.x,cur.y,next.x,next.y,rr[i]); }
+        else        { ctx.lineTo(cur.x,cur.y); }
       }
       ctx.closePath();
     }
@@ -2733,6 +2749,11 @@ function edOnStart(e){
                          rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
                          anchorX:_anch.x, anchorY:_anch.y};
           if(_la.type==='line') edInitialSize._linePoints=_la.points.map(p=>({...p}));
+          // Guardar radios de curva para escalarlos con el resize
+          if(_la.cornerRadii){
+            if(Array.isArray(_la.cornerRadii)) edInitialSize._cornerRadii=[..._la.cornerRadii];
+            else edInitialSize._cornerRadii={..._la.cornerRadii};
+          } else { edInitialSize._cornerRadii=null; }
           return;
         }
       }
@@ -3146,6 +3167,30 @@ function edOnMove(e){
       }
     }
     window._edMoved = true;
+    // Escalar cornerRadii según resize no proporcional (estándar Figma/Illustrator)
+    if(edInitialSize._cornerRadii && la.cornerRadii){
+      const sw = la.width  / (edInitialSize.width  || 0.01);
+      const sh = la.height / (edInitialSize.height || 0.01);
+      const pw2=edPageW(), ph2=edPageH();
+      // Factor de escala para radios: cada radio afecta a ambos ejes por igual
+      // (es un arco circular, no elíptico). El radio máximo posible es
+      // min(w,h)/2 del nuevo tamaño. Escalamos con min(sw,sh) y luego
+      // recortamos al máximo — esto reproduce el comportamiento de Figma/Affinity.
+      const _scR = Math.min(sw, sh);
+      const _maxR = Math.min(la.width*pw2, la.height*ph2) / 2;
+      if(Array.isArray(la.cornerRadii)){
+        la.cornerRadii = edInitialSize._cornerRadii.map(r =>
+          r ? Math.min((r||0)*_scR, _maxR) : 0
+        );
+      } else {
+        const newCR = {};
+        for(const k in edInitialSize._cornerRadii){
+          const r = edInitialSize._cornerRadii[k]||0;
+          newCR[k] = r ? Math.min(r*_scR, _maxR) : 0;
+        }
+        la.cornerRadii = newCR;
+      }
+    }
     // LineLayer: escalar los puntos locales según el nuevo width/height
     if(la.type==='line' && edInitialSize._linePoints){
       const sw = la.width  / (edInitialSize.width  || 0.01);
@@ -5725,6 +5770,7 @@ function edShapeBarShow() {
   _esbSync();
 }
 function edShapeBarHide() {
+  if(typeof _esbHideSlider==='function') _esbHideSlider();
   $('edShapeBar')?.classList.remove('visible');
 }
 
@@ -5784,6 +5830,18 @@ function edInitShapeBar() {
     _esbX=Math.max(0,Math.min(W-bw,_sl+(ex-_sx)));
     _esbY=Math.max(0,Math.min(H-bh,_st+(ey-_sy)));
     bar.style.left=_esbX+'px'; bar.style.top=_esbY+'px';
+    // Reposicionar slider adjunto si está visible
+    const _sp2=$('esb-slider-panel');
+    if(_sp2&&_sp2.style.display!=='none'){
+      const _br2=bar.getBoundingClientRect();
+      const _pr2=_sp2.getBoundingClientRect();
+      const _isH=bar.classList.contains('horiz');
+      const _vw=window.innerWidth,_vh=window.innerHeight,_G=6;
+      let _l,_t;
+      if(_isH){_t=_br2.top-_pr2.height-_G>=0?_br2.top-_pr2.height-_G:_br2.bottom+_G;_l=Math.max(_G,Math.min(_vw-_pr2.width-_G,_br2.left+_br2.width/2-_pr2.width/2));}
+      else{_l=_br2.right+_G+_pr2.width<=_vw?_br2.right+_G:_br2.left-_pr2.width-_G;_t=Math.max(_G,Math.min(_vh-_pr2.height-_G,_br2.top+_br2.height/2-_pr2.height/2));}
+      _sp2.style.left=_l+'px'; _sp2.style.top=_t+'px';
+    }
     // Snap orientación — mismo umbral que edDrawBar
     const SNAP=48;
     const wasHoriz=bar.classList.contains('horiz');
@@ -5875,48 +5933,69 @@ function edInitShapeBar() {
     }
   });
 
-  // Grosor — popup edb-size-pop reutilizado con modo esb
+
+  // ── Helper: posicionar y mostrar slider adjunto a edShapeBar ──
+  function _esbShowSlider(mode, minVal, maxVal, curVal, onInput, onChange){
+    const bar=$('edShapeBar'); const panel=$('esb-slider-panel'); const sl=$('esb-slider-input');
+    if(!bar||!panel||!sl) return;
+    // Si ya está el mismo modo activo, cerrar
+    if(panel.style.display!=='none' && panel._mode===mode){ panel.style.display='none'; panel._mode=null; return; }
+    panel._mode=mode;
+    sl.min=minVal; sl.max=maxVal; sl.value=curVal;
+    const isHoriz=bar.classList.contains('horiz');
+    // Slider con MISMA orientación que la barra
+    // Barra horizontal → slider horizontal pegado arriba o abajo
+    // Barra vertical   → slider vertical pegado a derecha o izquierda
+    sl.style.writingMode=isHoriz?'horizontal-tb':'vertical-lr';
+    sl.style.width=isHoriz?'120px':'20px';
+    sl.style.height=isHoriz?'20px':'120px';
+    panel.style.flexDirection=isHoriz?'column':'row';
+    panel.style.display='flex';
+    panel.style.left='-9999px'; panel.style.top='-9999px';
+    requestAnimationFrame(()=>{
+      const br=bar.getBoundingClientRect();
+      const pr=panel.getBoundingClientRect();
+      const vw=window.innerWidth, vh=window.innerHeight, GAP=6;
+      let left, top;
+      if(isHoriz){
+        // Barra horizontal: slider horizontal arriba o abajo
+        top = br.top-pr.height-GAP>=0 ? br.top-pr.height-GAP : br.bottom+GAP;
+        left = Math.max(GAP, Math.min(vw-pr.width-GAP, br.left+br.width/2-pr.width/2));
+      } else {
+        // Barra vertical: slider vertical a derecha o izquierda
+        left = br.right+GAP+pr.width<=vw ? br.right+GAP : br.left-pr.width-GAP;
+        top  = Math.max(GAP, Math.min(vh-pr.height-GAP, br.top+br.height/2-pr.height/2));
+      }
+      panel.style.left=left+'px'; panel.style.top=top+'px';
+    });
+    sl._onInput=onInput; sl._onChange=onChange;
+  }
+  function _esbHideSlider(){ const p=$('esb-slider-panel'); if(p){p.style.display='none';p._mode=null;} }
+  // Listener único del slider
+  $('esb-slider-input')?.addEventListener('input',e=>{ e.target._onInput&&e.target._onInput(+e.target.value); });
+  $('esb-slider-input')?.addEventListener('change',e=>{ e.target._onChange&&e.target._onChange(+e.target.value); });
+  $('esb-slider-input')?.addEventListener('pointerdown',e=>e.stopPropagation());
+
+  // Grosor — slider adjunto a la barra
   $('esb-size')?.addEventListener('click', e => {
-    e.stopPropagation();
-    const pop=$('edb-size-pop'); if(!pop) return;
-    pop._esbMode=true;
+    if(_locked) return; e.stopPropagation();
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const sz=la?.lineWidth??3;
-    const num=$('edb-size-num'); if(num){ num.min=0; num.max=20; num.value=sz; }
-    const sl=$('edb-size-slider'); if(sl){ sl.min=0; sl.max=20; sl.value=sz; }
-    const prev=$('edb-size-preview');
-    if(prev){ const pd=Math.max(2,Math.min(20,Math.round(sz*0.8))); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
-    pop.style.display='flex'; pop.style.left='-9999px'; pop.style.top='-9999px';
-    const br=$('esb-size').getBoundingClientRect();
-    const pw2=pop.offsetWidth||90, ph2=pop.offsetHeight||44, GAP=8;
-    const W=window.innerWidth, H=window.innerHeight;
-    let left, top;
-    if(br.top-ph2-GAP>=0){ top=br.top-ph2-GAP; left=Math.max(GAP,Math.min(W-pw2-GAP,br.left+br.width/2-pw2/2)); }
-    else{ top=br.bottom+GAP; left=Math.max(GAP,Math.min(W-pw2-GAP,br.left+br.width/2-pw2/2)); }
-    pop.style.left=left+'px'; pop.style.top=top+'px';
+    _esbShowSlider('size', 0, 20, sz,
+      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.lineWidth=v; edRedraw(); _edShapeBarSync&&_edShapeBarSync();} },
+      v=>{ _edShapePushHistory(); }
+    );
   });
 
-  // Opacidad — popup con slider idéntico al de grosor
+  // Opacidad — slider adjunto a la barra
   $('esb-opacity')?.addEventListener('click', e => {
     if(_locked) return; e.stopPropagation();
-    // Reutilizar el popup edb-size-pop en modo opacidad
-    const pop=$('edb-size-pop'); if(!pop) return;
-    if(pop.style.display==='flex' && pop._esbOpMode){ pop.style.display='none'; pop._esbOpMode=false; return; }
-    pop._esbMode=false; pop._esbOpMode=true;
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const op=la?Math.round((la.opacity??1)*100):100;
-    const num=$('edb-size-num'); if(num){ num.min=0; num.max=100; num.value=op; }
-    const sl=$('edb-size-slider'); if(sl){ sl.min=0; sl.max=100; sl.value=op; }
-    // Ocultar el preview dot y cambiar etiqueta a %
-    const prev=$('edb-size-preview'); if(prev) prev.style.display='none';
-    const lbl=pop.querySelector('span[style*="color:#ccc"]'); if(lbl) lbl.textContent='%';
-    pop.style.display='flex'; pop.style.left='-9999px'; pop.style.top='-9999px';
-    const br=$('esb-opacity').getBoundingClientRect();
-    const pw2=pop.offsetWidth||90, ph2=pop.offsetHeight||44, GAP=8;
-    const W=window.innerWidth, H=window.innerHeight;
-    const top2=br.top-ph2-GAP>=0?br.top-ph2-GAP:br.bottom+GAP;
-    const left2=Math.max(GAP,Math.min(W-pw2-GAP,br.left+br.width/2-pw2/2));
-    pop.style.left=left2+'px'; pop.style.top=top2+'px';
+    _esbShowSlider('opacity', 0, 100, op,
+      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.opacity=v/100; edRedraw();} },
+      v=>{ _edShapePushHistory(); }
+    );
   });
 
   // ── V⟺C curva de vértice ──
@@ -5930,51 +6009,25 @@ function edInitShapeBar() {
     btn.style.outline=active?'':'1px solid rgba(255,255,0,.5)';
     if(active){
       window._edCurveVertIdx=-1;
-      document.getElementById('esb-curve-pop')?.remove();
+      _esbHideSlider();
       edRedraw(); return;
     }
     const _savedSelCurve=edSelectedIdx;
-    let pop=document.getElementById('esb-curve-pop');
-    if(pop){ pop.remove(); return; }
-    pop=document.createElement('div');
-    pop.id='esb-curve-pop';
-    pop.style.cssText='position:fixed;background:rgba(30,30,30,.95);border-radius:10px;padding:10px 14px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:1200;display:flex;flex-direction:column;align-items:center;gap:8px;min-width:160px;';
     const curR=window._edCurveRadius||0;
-    pop.innerHTML=`<div style="display:flex;align-items:center;gap:6px;width:100%">
-      <span style="color:#FFE135;font-size:.75rem;font-weight:700">Radio px</span>
-      <input type="number" id="esb-curve-num" min="0" max="200" value="${curR}"
-        style="width:52px;text-align:center;font-size:1rem;font-weight:700;border:1px solid rgba(255,255,255,.4);border-radius:8px;background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;-moz-appearance:textfield;">
-    </div>
-    <input type="range" id="esb-curve-sl" min="0" max="200" value="${curR}" style="width:100%;accent-color:#FFE135;cursor:pointer">
-    <span style="color:#ccc;font-size:.7rem">Toca un vértice para aplicar</span>`;
-    document.body.appendChild(pop);
-    const br=btn.getBoundingClientRect();
-    const pw2=pop.offsetWidth||160,ph2=pop.offsetHeight||90,GAP=8;
-    const top2=br.top-ph2-GAP>=0?br.top-ph2-GAP:br.bottom+GAP;
-    const left2=Math.max(GAP,Math.min(window.innerWidth-pw2-GAP,br.left+br.width/2-pw2/2));
-    pop.style.left=left2+'px';pop.style.top=top2+'px';
-    const sl2=document.getElementById('esb-curve-sl');
-    const nm2=document.getElementById('esb-curve-num');
-    sl2.addEventListener('input',()=>{ nm2.value=sl2.value; window._edCurveRadius=+sl2.value;
-      // Actualizar en tiempo real el vértice activo
-      const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-      const vi=window._edCurveVertIdx;
-      if(la2&&vi>=0){
-        if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=+sl2.value; }
-        else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=+sl2.value; }
-        edRedraw();
-      }
-    });
-    nm2.addEventListener('change',()=>{ const v=Math.max(0,Math.min(200,+nm2.value)); nm2.value=v; sl2.value=v; window._edCurveRadius=v;
-      const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-      const vi=window._edCurveVertIdx;
-      if(la2&&vi>=0){
-        if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
-        else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=v; }
-        _edShapePushHistory(); edRedraw();
-      }
-    });
-    // El popup permanece abierto hasta que se desactive V⟺C pulsando el botón de nuevo
+    _esbShowSlider('curve', 0, 200, curR,
+      v=>{
+        window._edCurveRadius=v;
+        const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+        const vi=window._edCurveVertIdx;
+        if(la2&&vi>=0){
+          if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
+          else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=v; }
+          edRedraw();
+        }
+      },
+      v=>{ _edShapePushHistory(); }
+    );
+    // El slider permanece abierto hasta que se desactive V⟺C pulsando el botón de nuevo
   });
 
   // Deshacer/Rehacer
@@ -7314,7 +7367,7 @@ function EditorView_init(){
       const saveModal=document.querySelector('div[style*="z-index:99999"]');
       if(saveModal){ e.preventDefault(); saveModal.remove(); return; }
       // Cerrar popup de curva si está abierto
-      document.getElementById('esb-curve-pop')?.remove();
+      _esbHideSlider();
       // Cerrar menú desplegable si está abierto
       if(edMenuOpen){ e.preventDefault(); edCloseMenus(); return; }
       // Cerrar panel de opciones si está abierto (sin guardar)
