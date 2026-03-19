@@ -41,26 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
-  const _doClose = () => {
-    if (history.length > 1) { history.back(); return; }
-    // Intentar cerrar la pestaña
-    window.close();
-    // Si seguimos aquí, el navegador bloqueó el cierre — mostrar instrucción
-    setTimeout(() => {
-      _readerToast('Cierra esta pestaña con el botón ✕ del navegador', 4000);
-    }, 300);
-  };
-
-  const _closeAction = RS.isEmbed
-    ? _embedClose
-    : () => {
-        // Salir de fullscreen primero si está activo, luego cerrar
-        if (document.fullscreenElement || document.webkitFullscreenElement) {
-          const exit = document.exitFullscreen || document.webkitExitFullscreen;
-          if (exit) { exit.call(document).then(_doClose).catch(_doClose); return; }
-        }
-        _doClose();
-      };
+  const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
   if (RS.isEmbed) document.body.classList.add('embed-mode');
 
   // Si la app estaba en fullscreen, entrar en fullscreen al primer gesto del usuario
@@ -82,13 +63,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeBtnEl = document.getElementById('closeBtn');
   if (closeBtnEl) {
     closeBtnEl.addEventListener('click', _closeAction);
-    closeBtnEl.addEventListener('touchend', e => { e.stopPropagation(); _closeAction(); }, { passive: false });
   }
 
   // Botón fullscreen: listener directo en gesto de usuario (igual que header.js)
   const fsBtn = document.getElementById('fullscreenToggle');
   if (fsBtn) {
-    fsBtn.addEventListener('touchend', e => { e.stopPropagation(); }, { passive: false });
     fsBtn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (RS.isEmbed) {
@@ -158,8 +137,6 @@ async function loadWork(workId) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
-    // Actualizar meta OG con datos reales de la obra
-    _updateOGMeta(work[0].title, work[0].author_name);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -186,7 +163,6 @@ async function loadDraft(token) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
-    _updateOGMeta(work[0].title, work[0].author_name);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
@@ -374,15 +350,9 @@ function _render() {
 
   // Panel de créditos — render especial con fade
   if (panel.isCredits) {
-    RS.isCredits = true;
     const { pw, ph } = _panelDims(RS.idx);
-    // Solo llamar _showCredits si no hay fade en marcha ni ya mostrado
-    // para evitar el parpadeo al redibujar con alpha=0
-    if (!RS.creditsTimer && !RS.fadeRaf) {
-      _showCredits();
-    } else {
-      _renderCredits(pw, ph);
-    }
+    _renderCredits(pw, ph);
+    _showCredits(); // lanza el fade-in si no está en curso
     return;
   }
 
@@ -407,6 +377,7 @@ function _render() {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       if (type === 'image' || type === 'stroke') {
+        // Posición y tamaño en 0-1 relativo al panel; centro en (x, y)
         const x = (layer.x      || 0.5) * pw;
         const y = (layer.y      || 0.5) * ph;
         const w = (layer.width  || 1)   * pw;
@@ -416,39 +387,9 @@ function _render() {
         if (rot) ctx.rotate(rot * Math.PI / 180);
         ctx.drawImage(img, -w / 2, -h / 2, w, h);
       } else {
+        // draw: capa de dibujo libre — ocupa todo el panel, sin transformación
         ctx.drawImage(img, 0, 0, pw, ph);
       }
-      ctx.restore();
-    } else if (type === 'shape') {
-      ctx.save();
-      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
-      const w = (layer.width || 0.3) * pw, h = (layer.height || 0.2) * ph;
-      const rot = (layer.rotation || 0) * Math.PI / 180;
-      ctx.translate(x, y);
-      if (rot) ctx.rotate(rot);
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      if (layer.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
-      else ctx.rect(-w/2, -h/2, w, h);
-      if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
-      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
-      ctx.restore();
-    } else if (type === 'line' && layer.points && layer.points.length >= 2) {
-      ctx.save();
-      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
-      const rot = (layer.rotation || 0) * Math.PI / 180;
-      ctx.translate(x, y);
-      if (rot) ctx.rotate(rot);
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
-      for (let i = 1; i < layer.points.length; i++)
-        ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
-      if (layer.closed) ctx.closePath();
-      if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
-      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       ctx.restore();
     }
     // bubble/text: los gestiona _drawTexts con lógica sequential
@@ -723,21 +664,9 @@ function _startFade() {
 // Se llama desde _render() cuando el panel actual es el de créditos.
 // La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 function _showCredits() {
-  // Si ya se mostró antes: renderizar directamente con alpha=1, sin fade ni parpadeo
-  if (RS.creditsShown) {
-    RS.creditsAlpha = 1;
-    const { pw, ph } = _panelDims(RS.idx);
-    _renderCredits(pw, ph);
-    return;
-  }
   // Evitar relanzar si ya está en curso
   if (RS.creditsTimer || RS.creditsAlpha > 0) return;
   RS.creditsAlpha = 0;
-
-  // Dibujar inmediatamente solo la parte estática (autor + social) sin parpadeo
-  // El logo/eslogan/enlace aparecerán con fade tras 1 segundo
-  const { pw: pw0, ph: ph0 } = _panelDims(RS.idx);
-  _renderCredits(pw0, ph0);
 
   // Tras 1 segundo, iniciar fade-in del resto
   RS.creditsTimer = setTimeout(() => {
@@ -748,7 +677,7 @@ function _showCredits() {
       const { pw, ph } = _panelDims(RS.idx);
       _renderCredits(pw, ph);
       if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
-      else { RS.fadeRaf = null; RS.creditsShown = true; }
+      else { RS.fadeRaf = null; }
     }
     RS.fadeRaf = requestAnimationFrame(fadeStep);
   }, 1000);
@@ -778,216 +707,85 @@ function _renderCredits(pw, ph) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
 
+  const cx = pw / 2;
   const isHoriz = pw > ph;
+  // En horizontal ph es la dimensión corta (360) — usarla como base de escala de fuentes
+  const fRef  = isHoriz ? ph : pw;
+  const lineH = ph * (isHoriz ? 0.07 : 0.09);
+
+  // ── Social + autor ──
   const socialText = RS._workSocial || '';
   const authorText = RS._workAuthor || '';
+  ctx.globalAlpha  = 1;
   ctx.textBaseline = 'middle';
 
-  // Función auxiliar: divide texto en líneas respetando \n explícitos y wrap por maxW.
-  // Si una palabra sola supera maxW, se corta carácter a carácter.
-  function wrapText(text, maxW) {
-    const result = [];
-    const paragraphs = text.split('\n');
-    paragraphs.forEach(para => {
-      if (!para.trim()) { result.push(''); return; }
-      const words = para.split(' ');
-      let cur = '';
-      words.forEach(w => {
-        // Si la palabra sola es más ancha que maxW, cortarla por caracteres
-        if (ctx.measureText(w).width > maxW) {
-          if (cur) { result.push(cur); cur = ''; }
-          let chunk = '';
-          for (const ch of w) {
-            const test = chunk + ch;
-            if (ctx.measureText(test).width > maxW && chunk) {
-              result.push(chunk); chunk = ch;
-            } else { chunk = test; }
-          }
-          if (chunk) {
-            // intentar unir con lo que siga
-            cur = chunk;
-          }
-          return;
-        }
-        const test = cur ? cur + ' ' + w : w;
-        if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
-        else cur = test;
-      });
-      if (cur) result.push(cur);
-    });
-    return result;
-  }
+  let authorY = ph * (isHoriz ? 0.11 : 0.11);
 
-  if (isHoriz) {
-    // ── LAYOUT HORIZONTAL: dos columnas ──────────────────────
-    // Columna izquierda (55%): social + autor
-    // Columna derecha (45%): logo + eslogan + enlace (con fade)
-    const fRef   = ph;  // base de escala = altura (dimensión corta)
-    const colGap = pw * 0.04;
-    const leftW  = pw * 0.52;
-    const rightW = pw * 0.44;
-    const leftX  = pw * 0.04;
-    const rightCX = leftW + colGap + rightW / 2;
-    const padV   = ph * 0.08;
-
-    // Separador vertical central
-    ctx.globalAlpha = 0.15;
-    ctx.fillStyle = '#888888';
-    ctx.fillRect(leftW + colGap * 0.4, ph * 0.1, 1, ph * 0.8);
-    ctx.globalAlpha = 1;
-
-    // ── Columna izquierda: social + autor ──
-    const socialFS   = Math.round(fRef * 0.055);
-    const authorFS   = Math.round(fRef * 0.072);
-    const socialMaxW = leftW - leftX - pw * 0.02;  // ancho disponible desde leftX hasta borde columna
-
-    let socialLines = [];
-    if (socialText) {
-      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
-      socialLines   = wrapText(socialText, socialMaxW);
-    }
-    const socialLineH  = socialFS * 1.5;
-    const totalSocialH = socialLines.length * socialLineH;
-    const blockH       = totalSocialH + (socialText ? socialFS * 1.2 : 0) + authorFS * 1.5;
-    let y = (ph - blockH) / 2 + socialLineH * 0.5;
-
-    if (socialText) {
-      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
-      ctx.fillStyle = '#444444';
-      ctx.textAlign = 'left';
-      socialLines.forEach(line => {
-        ctx.fillText(line, leftX, y);
-        y += socialLineH;
-      });
-      y += socialFS * 0.8;
-    }
-
-    // Nombre del autor — centrado en columna izquierda
-    ctx.font      = `600 ${authorFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#222222';
-    ctx.textAlign = 'center';
-    ctx.fillText(authorText, leftX + leftW / 2, y);
-
-    // ── Columna derecha: logo + eslogan + enlace (con fade) ──
-    // Mismas proporciones que el layout vertical, ancladas desde el centro vertical
-    ctx.globalAlpha = alpha;
-
-    const logoFS   = Math.round(fRef * 0.11);
-    const sloganFS = Math.round(fRef * 0.042);
-    const linkFS   = Math.round(fRef * 0.038);
-    const lineH    = ph * 0.09;
-    // Bloque centrado verticalmente en la columna derecha
-    const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
-    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
-
-    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#f5c400';
-    ctx.textAlign = 'center';
-    ctx.fillText('ComiXow', rightCX, rightStartY);
-
-    const sloganY = rightStartY + sloganFS * 2;
-    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#555555';
-    ctx.fillText('Crea y Comparte', rightCX, sloganY);
-
-    const linkY   = sloganY + sloganFS * 3;
-    const linkText = 'Visita más obras del autor';
-    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#1a73e8';
-    ctx.fillText(linkText, rightCX, linkY);
-    const lw = ctx.measureText(linkText).width;
-    ctx.beginPath();
-    ctx.strokeStyle = '#1a73e8';
-    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
-    ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6);
-    ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6);
-    ctx.stroke();
-
-    // Botón "Volver a leer"
-    const restartFS   = Math.round(fRef * 0.038);
-    const restartY    = linkY + linkFS * 2.2;
-    const restartText = '↩ Volver a leer';
-    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#888888';
-    ctx.textAlign = 'center';
-    ctx.fillText(restartText, rightCX, restartY);
-    const rw = ctx.measureText(restartText).width;
-    RS.creditsRestartArea = { x: rightCX - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
-
-    ctx.globalAlpha = 1;
-    RS.creditsLinkArea = { x: rightCX - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
-
-  } else {
-    // ── LAYOUT VERTICAL: columna única ───────────────────────
-    const fRef   = pw;
-    const cx     = pw / 2;
+  if (socialText) {
+    const socialFS = Math.round(fRef * (isHoriz ? 0.05 : 0.038));
+    ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#444444';
+    ctx.textAlign = 'left';
     const marginX = pw * 0.09;
     const maxW    = pw * 0.82;
-
-    // Social
-    let authorY = ph * 0.11;
-    if (socialText) {
-      const socialFS    = Math.round(fRef * 0.038);
-      ctx.font          = `400 ${socialFS}px Patrick Hand, sans-serif`;
-      ctx.fillStyle     = '#444444';
-      ctx.textAlign     = 'left';
-      const socialLines = wrapText(socialText, maxW);
-      const socialLineH = socialFS * 1.4;
-      const socialStartY = ph * 0.26;
-      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
-      authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
-    }
-
-    // Autor
-    ctx.font      = `600 ${Math.round(fRef * 0.055)}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#222222';
-    ctx.textAlign = 'center';
-    ctx.fillText(authorText, cx, authorY);
-
-    // Resto con fade
-    ctx.globalAlpha = alpha;
-
-    const lineH    = ph * 0.09;
-    const logoFS   = Math.round(fRef * 0.11);
-    const logoY    = authorY + lineH * 1.3;
-    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#f5c400';
-    ctx.fillText('ComiXow', cx, logoY);
-
-    const sloganFS = Math.round(fRef * 0.042);
-    const sloganY  = logoY + sloganFS * 2;
-    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#555555';
-    ctx.fillText('Crea y Comparte', cx, sloganY);
-
-    const linkFS   = Math.round(fRef * 0.038);
-    const linkY    = sloganY + sloganFS * 3;
-    const linkText = 'Visita más obras del autor';
-    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#1a73e8';
-    ctx.fillText(linkText, cx, linkY);
-    const lw = ctx.measureText(linkText).width;
-    ctx.beginPath();
-    ctx.strokeStyle = '#1a73e8';
-    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
-    ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
-    ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
-    ctx.stroke();
-
-    // Botón "Volver a leer"
-    const restartFS   = Math.round(fRef * 0.038);
-    const restartY    = linkY + linkFS * 2.2;
-    const restartText = '↩ Volver a leer';
-    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#888888';
-    ctx.textAlign = 'center';
-    ctx.fillText(restartText, cx, restartY);
-    const rw = ctx.measureText(restartText).width;
-    RS.creditsRestartArea = { x: cx - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
-
-    ctx.globalAlpha = 1;
-    RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+    const words   = socialText.split(' ');
+    const lines   = [];
+    let cur = '';
+    words.forEach(w => {
+      const test = cur ? cur + ' ' + w : w;
+      if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; }
+      else cur = test;
+    });
+    if (cur) lines.push(cur);
+    const socialLineH  = socialFS * 1.4;
+    const totalSocialH = lines.length * socialLineH;
+    const socialStartY = ph * (isHoriz ? 0.12 : 0.26);
+    lines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+    authorY = socialStartY + totalSocialH + socialFS * 0.9;
   }
+
+  // Nombre del autor — centrado
+  ctx.font      = `600 ${Math.round(fRef * (isHoriz ? 0.07 : 0.055))}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#222222';
+  ctx.textAlign = 'center';
+  ctx.fillText(authorText, cx, authorY);
+
+  // ── Resto con fade ──────────────────────────────────────────
+  ctx.globalAlpha = alpha;
+
+  // Logotipo ComiXow
+  const logoFS  = Math.round(fRef * (isHoriz ? 0.13 : 0.11));
+  const logoY   = authorY + lineH * 1.3;
+  ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#f5c400';
+  ctx.fillText('ComiXow', cx, logoY);
+
+  // Eslogan — 2 × sloganFS desde la base del logo (medido en imagen de referencia)
+  const sloganFS = Math.round(fRef * (isHoriz ? 0.055 : 0.042));
+  const sloganY  = logoY + sloganFS * 2;
+  ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#555555';
+  ctx.fillText('Crea y Comparte', cx, sloganY);
+
+  // Enlace — 3 × sloganFS desde la base del eslogan (medido en imagen de referencia)
+  const linkFS = Math.round(fRef * (isHoriz ? 0.045 : 0.038));
+  const linkY  = sloganY + sloganFS * 3;
+  ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+  ctx.fillStyle = '#1a73e8';
+  const linkText = 'Visita más obras del autor';
+  ctx.fillText(linkText, cx, linkY);
+  const lw = ctx.measureText(linkText).width;
+  ctx.beginPath();
+  ctx.strokeStyle = '#1a73e8';
+  ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+  ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
+  ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
+  ctx.stroke();
+
+  ctx.globalAlpha = 1;
+
+  // Guardar zona del enlace para detectar click (en coords de canvas)
+  RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
 }
 
 
@@ -995,12 +793,6 @@ function _renderCredits(pw, ph) {
 function _updateCounter() { /* sin pastilla — no se muestra */ }
 
 function _showControls() { /* botones de esquina siempre visibles */ }
-
-// El navegador transforma las coordenadas táctiles al sistema del usuario.
-// "Izquierda del usuario" es siempre endX < W/2, independientemente del ángulo.
-function _isBackSide(endX, endY) {
-  return endX < window.innerWidth / 2;
-}
 
 function _setupControls() {
   // closeBtn y fullscreenToggle configurados en DOMContentLoaded
@@ -1011,8 +803,7 @@ function _setupControls() {
     if (['ArrowLeft','ArrowUp'].includes(e.code))                    { e.preventDefault(); goBack(); }
     if (e.key === 'Escape') {
       if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
-      else if (history.length > 1) history.back();
-      else window.close();
+      else history.back();
     }
   };
   document.addEventListener('keydown', RS.keyHandler);
@@ -1035,25 +826,22 @@ function _setupControls() {
 
   RS.canvas.addEventListener('touchmove', e => {
     if (sx === null) return;
-    const dy = e.touches[0].clientY - sy;
-    if (Math.abs(dy) > 20) cancelled = true;
+    const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) cancelled = true;
   }, { passive: true, ...sig });
 
   RS.canvas.addEventListener('touchend', e => {
     if (sx === null || cancelled) { sx = null; return; }
-    const endX = e.changedTouches[0].clientX;
-    const endY = e.changedTouches[0].clientY;
-    const dy   = Math.abs(endY - sy);
+    const dx = e.changedTouches[0].clientX - sx;
+    const dy = e.changedTouches[0].clientY - sy;
     sx = null;
-    if (dy > 40) return;
-    // En créditos: lado retroceder → goBack, lado avanzar → detecta enlace/botón
-    if (RS.isCredits) {
-      if (_isBackSide(endX, endY)) goBack();
-      else _handleCreditsClick(endX, endY);
-      return;
+    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) {
+      if (RS.isCredits) { _handleCreditsClick(e.changedTouches[0].clientX, e.changedTouches[0].clientY); return; }
+      advance(); return;
     }
-    // Navegación normal
-    if (_isBackSide(endX, endY)) goBack(); else advance();
+    if (Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
+    if (RS.isCredits) { _creditsClick(); return; }
+    if (dx < 0) advance(); else goBack();
   }, { passive: true, ...sig });
 }
 
@@ -1087,27 +875,13 @@ function _handleCreditsClick(clientX, clientY) {
   const la = RS.creditsLinkArea;
   if (la && cx >= la.x && cx <= la.x + la.w && cy >= la.y && cy <= la.y + la.h) {
     window.open('https://sargentopez.github.io/ComiXou/index.html', '_blank');
-    return;
+  } else {
+    _creditsClick(); // Tap fuera del enlace → reiniciar
   }
-  const ra = RS.creditsRestartArea;
-  if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
-    _creditsClick(); // Volver a leer → reinicia desde la primera hoja
-  }
-  // Tap fuera de ambas zonas → no hacer nada
 }
 
 
 function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }
-
-function _updateOGMeta(title, author) {
-  const t = (title || 'ComiXow') + ' — ComiXow';
-  const d = author ? `Una obra de ${author} en ComiXow` : 'Abre esta obra en el reproductor de ComiXow';
-  document.title = t;
-  document.querySelector('meta[property="og:title"]')      ?.setAttribute('content', t);
-  document.querySelector('meta[property="og:description"]')?.setAttribute('content', d);
-  document.querySelector('meta[name="twitter:title"]')     ?.setAttribute('content', t);
-  document.querySelector('meta[name="twitter:description"]')?.setAttribute('content', d);
-}
 function showError(msg) {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('errorScreen').classList.remove('hidden');

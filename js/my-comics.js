@@ -77,7 +77,7 @@ function _mcRenderList() {
 
   wrap.innerHTML = comics.map(comic => {
     const thumb = comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '';
-    const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
+    const pages = comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0);
     const pubLabel = comic.approved
       ? '✅ Publicada'
       : (comic.pendingReview ? '⏳ En revisión' : '📝 Borrador');
@@ -97,7 +97,8 @@ function _mcRenderList() {
           ${comic.genre ? `<span style="color:var(--gray-400)">·</span><span style="color:var(--blue);font-size:.75rem;font-weight:700">${comic.genre}</span>` : ''}
           <span style="color:var(--gray-400)">·</span>
           <span style="font-size:.75rem;font-weight:700">${Math.max(1, pages)} hojas</span>
-
+          <span style="color:var(--gray-400)">·</span>
+          <span style="font-size:.75rem;font-weight:700;color:${comic.published ? 'var(--blue)' : 'var(--gray-500)'}">${pubLabel}</span>
         </div>
         <div class="comic-row-actions">
           ${pages > 0 ? `<button class="comic-row-btn" data-action="read" data-id="${comic.id}">📖 Leer</button>` : ''}
@@ -108,7 +109,7 @@ function _mcRenderList() {
                 ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">⏳ En revisión · Retirar</button>`
                 : `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`)
           }
-          <button class="comic-row-btn" data-action="share" data-id="${comic.id}">📤 Enviar</button>
+          ${comic.supabaseId ? `<button class="comic-row-btn" data-action="share" data-id="${comic.id}">📤 Enviar</button>` : ''}
           <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
       </div>
@@ -216,12 +217,7 @@ function _mcRenderList() {
       _mcToast('Obra eliminada');
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
-      if (!comic) return;
-      if (!comic.supabaseId) {
-        alert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
-        return;
-      }
-      if (typeof openShareModal !== 'undefined') openShareModal(comic);
+      if (comic && typeof openShareModal !== 'undefined') openShareModal(comic);
     }
   });
 }
@@ -327,7 +323,7 @@ async function _mcCloudLoad() {
 
     // Buscar por author_name = username del usuario actual
     const username = encodeURIComponent(user.username || '');
-    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`, { headers: hdrs })
+    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc`, { headers: hdrs })
       .then(r => r.json());
 
     if (!works || !works.length) {
@@ -360,6 +356,7 @@ async function _mcCloudLoad() {
       }
 
       // Obra nueva en nube — crear entrada local con thumbnail del primer panel
+      // El contenido completo se carga desde Supabase al leer (?draft=supabaseId)
       let thumbDataUrl = '';
       try {
         const firstPanels = await fetch(
@@ -379,7 +376,6 @@ async function _mcCloudLoad() {
         genre:        w.genre       || '',
         navMode:      w.nav_mode    || 'fixed',
         panels:       thumbDataUrl ? [{ dataUrl: thumbDataUrl }] : [],
-        panelCount:   w.panel_count || 0,
         pages:        [],
         published:    w.published   ?? false,
         approved:     w.published   ?? false,
