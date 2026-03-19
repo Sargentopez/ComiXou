@@ -617,13 +617,18 @@ class DrawLayer extends BaseLayer {
     ctx.restore();
   }
   contains(px, py){
-    // DrawLayer cubre todo el workspace — necesita pixel-hit directo
+    // DrawLayer: pixel-hit con zona expandida para facilitar selección
     try {
-      // px,py están en coordenadas normalizadas de página → convertir a workspace px
-      const wx = Math.floor(edMarginX() + px * edPageW());
-      const wy = Math.floor(edMarginY() + py * edPageH());
-      if(wx < 0 || wy < 0 || wx >= this._canvas.width || wy >= this._canvas.height) return false;
-      return this._ctx.getImageData(wx, wy, 1, 1).data[3] > 10;
+      const wx = Math.round(edMarginX() + px * edPageW());
+      const wy = Math.round(edMarginY() + py * edPageH());
+      const R = 10; // radio de expansión en px del workspace
+      const x0=Math.max(0,wx-R), y0=Math.max(0,wy-R);
+      const x1=Math.min(this._canvas.width-1,wx+R);
+      const y1=Math.min(this._canvas.height-1,wy+R);
+      if(x1<x0||y1<y0) return false;
+      const data=this._ctx.getImageData(x0,y0,x1-x0+1,y1-y0+1).data;
+      for(let i=3;i<data.length;i+=4){ if(data[i]>10) return true; }
+      return false;
     } catch(e) {
       return true;
     }
@@ -749,10 +754,20 @@ class StrokeLayer extends BaseLayer {
       const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
       const w = this.width * pw, h = this.height * ph;
       // Convertir a coordenadas de píxel en el canvas recortado
-      const bx = Math.floor((lx / w + 0.5) * this._canvas.width);
-      const by = Math.floor((ly / h + 0.5) * this._canvas.height);
-      if(bx < 0 || by < 0 || bx >= this._canvas.width || by >= this._canvas.height) return false;
-      return this._canvas.getContext('2d').getImageData(bx, by, 1, 1).data[3] > 10;
+      const bx = Math.round((lx / w + 0.5) * this._canvas.width);
+      const by = Math.round((ly / h + 0.5) * this._canvas.height);
+      // Radio de expansión: 10px en coords de workspace, escalado al canvas recortado
+      const scaleX = this._canvas.width / w;
+      const scaleY = this._canvas.height / h;
+      const Rx = Math.ceil(10 * scaleX), Ry = Math.ceil(10 * scaleY);
+      const x0=Math.max(0,bx-Rx), y0=Math.max(0,by-Ry);
+      const x1=Math.min(this._canvas.width-1,bx+Rx);
+      const y1=Math.min(this._canvas.height-1,by+Ry);
+      if(x1<x0||y1<y0) return false;
+      const _sctx=this._canvas.getContext('2d');
+      const data=_sctx.getImageData(x0,y0,x1-x0+1,y1-y0+1).data;
+      for(let i=3;i<data.length;i+=4){ if(data[i]>10) return true; }
+      return false;
     } catch(e) {
       return true; // fallback si falla
     }
@@ -838,10 +853,11 @@ class ShapeLayer extends BaseLayer {
         octx.fillStyle = this.fillColor;
         octx.fill();
       }
-      // Usar el lineWidth real para el hit-test
+      // Sin relleno: ampliar zona de hit al contorno (mínimo 12px) para facilitar selección
       if (this.lineWidth > 0) {
         octx.strokeStyle = '#000';
-        octx.lineWidth = this.lineWidth;
+        const noFill = !this.fillColor || this.fillColor === 'none';
+        octx.lineWidth = noFill ? Math.max(this.lineWidth, 12) : this.lineWidth;
         octx.stroke();
       }
       const bx = Math.floor(lx + cw/2);
@@ -1040,7 +1056,9 @@ class LineLayer extends BaseLayer {
         octx.fill();
       }
       octx.strokeStyle = '#000';
-      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth, 8) : 0, 0);
+      // Sin relleno: ampliar zona de hit al contorno (mínimo 12px)
+      const _noFillL = !this.fillColor || this.fillColor === 'none';
+      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth, _noFillL ? 12 : 8) : 0, 0);
       if (this.lineWidth > 0) octx.stroke();
       const bx = Math.floor(lx + cw/2);
       const by = Math.floor(ly + ch/2);
