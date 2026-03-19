@@ -1244,7 +1244,13 @@ function edFitCanvas(resetCamera){
 /* ── Resetea la cámara para que el LIENZO ocupe el viewport centrado ── */
 function _edCameraReset(){
   // DIAGNÓSTICO — eliminar tras resolver
-  try{ edToast('CAM RESET: '+new Error().stack.split('\n').slice(1,3).join(' | ')); }catch(_){}
+  try{
+    const st=new Error().stack.split('\n');
+    // Buscar la primera línea que NO sea _edCameraReset ni edFitCanvas
+    const caller=st.slice(1).find(l=>!l.includes('_edCameraReset')&&!l.includes('edFitCanvas'))||st[3]||'?';
+    const short=caller.replace(/.*\//,'').replace(/\?.*/,'');
+    edToast('RESET desde: '+short, 4000);
+  }catch(_){}
   const pw = edPageW(), ph = edPageH();
   const availW = edCanvas.width, availH = edCanvas.height;
   const scaleW = availW / pw;
