@@ -35,7 +35,7 @@ function AuthView_init() {
     // (más fiable en SPA con HTML inyectado)
     const submitBtn = loginForm.querySelector('button[type="submit"]');
     
-    function doLogin(e) {
+    async function doLogin(e) {
       if (e) e.preventDefault();
       clearErrors();
 
@@ -53,7 +53,13 @@ function AuthView_init() {
       }
       if (!valid) return;
 
-      const result = Auth.login(email, pass);
+      const submitBtn = loginForm.querySelector('button[type="submit"]');
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '…'; }
+
+      const result = await Auth.login(email, pass);
+
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = I18n.t('loginBtn') || 'Entrar'; }
+
       if (!result.ok) {
         showError('passError', I18n.t(result.err));
         return;
@@ -62,7 +68,6 @@ function AuthView_init() {
       showToast(I18n.t('loginOk'));
       setTimeout(() => {
         Router.go('home');
-        // Header.refresh tras el render del router
         requestAnimationFrame(() => Header.refresh());
       }, 600);
     }
@@ -76,7 +81,7 @@ function AuthView_init() {
   if (registerForm) {
     const submitBtn = registerForm.querySelector('button[type="submit"]');
 
-    function doRegister(e) {
+    async function doRegister(e) {
       if (e) e.preventDefault();
       clearErrors();
 
@@ -94,9 +99,16 @@ function AuthView_init() {
       if (pass !== passConf) { showError('passConfError', I18n.t('errPassMatch')); valid = false; }
       if (!valid) return;
 
-      const result = Auth.register(username, email, pass);
+      const submitBtn = registerForm.querySelector('button[type="submit"]');
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '…'; }
+
+      const result = await Auth.register(username, email, pass);
+
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = I18n.t('registerBtn') || 'Crear cuenta'; }
+
       if (!result.ok) {
-        showError('emailError', I18n.t(result.err));
+        const msg = result.detail ? `${I18n.t(result.err)} (${result.detail})` : I18n.t(result.err);
+        showError('emailError', msg);
         return;
       }
 

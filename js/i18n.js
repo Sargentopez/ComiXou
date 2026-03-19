@@ -18,7 +18,7 @@ const TRANSLATIONS = {
     moreOptions:      "Más opciones",
 
     // Index / filtros
-    filterBtn:        "Filtros ▾",
+    filterBtn:        "Buscador ▾",
     novedades:        "Novedades",
     create:           "Crear",
     byGenre:          "Género ›",
@@ -57,6 +57,10 @@ const TRANSLATIONS = {
     errPassMatch:     "Las contraseñas no coinciden",
     errUserExists:    "El usuario ya existe",
     errUserNotFound:  "Usuario o contraseña incorrectos",
+    errRegisterFail:  "Error al crear la cuenta. Inténtalo de nuevo.",
+    errNoNetwork:     "Sin conexión. Comprueba tu internet.",
+    loginBtn:         "Entrar",
+    registerBtn:      "Crear cuenta",
     loginOk:          "¡Bienvenido/a de vuelta!",
     registerOk:       "¡Cuenta creada! Ya puedes entrar.",
     logoutOk:         "Sesión cerrada",

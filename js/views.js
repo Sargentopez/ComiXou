@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v6.95</footer>
+    <footer class="app-version">v9.59</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -189,34 +189,40 @@ Router.register('editor', {
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
 
+      <!-- ── BOTÓN MINIMIZAR — fuera del marco edMenuBar ── -->
+      <button id="edMinimizeBtn" class="ed-menu-pin" style="font-size:1.15rem;color:#e63030;font-weight:900">▼</button>
+
       <!-- ── BARRA DE MENÚ ── -->
       <div id="edMenuBar">
 
-        <!-- MINIMIZAR — siempre visible al inicio (extremo izquierdo fijo) -->
-        <button id="edMinimizeBtn" class="ed-menu-pin" style="font-size:1.15rem;color:#e63030;font-weight:900">▼</button>
-        <div class="ed-menu-sep"></div>
-
         <!-- ZONA DESLIZABLE -->
         <div id="edMenuScroll">
+
+          <!-- MINIMIZAR — primer elemento, a la izquierda de Insertar -->
+          <button id="edMenuMinBtn" class="ed-menu-btn" title="Ocultar menús"
+            style="color:#e63030;font-weight:900;font-size:1.1rem;padding:0 8px;flex-shrink:0">▼</button>
+
+          <div class="ed-menu-sep"></div>
 
           <!-- INSERTAR -->
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="insert">Insertar ▾</button>
             <div class="ed-dropdown" id="dd-insert">
-              <div class="ed-dropdown-item has-sub" style="position:relative">
-                Imagen
-                <div class="ed-subdropdown">
+              <div class="ed-dropdown-submenu">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-imagen-btn">Imagen ▸</button>
+                <div class="ed-submenu" id="dd-imagen-sub">
                   <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
                   <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
                 </div>
               </div>
-              <div class="ed-dropdown-item has-sub" style="position:relative">
-                Texto
-                <div class="ed-subdropdown">
+              <div class="ed-dropdown-submenu">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-texto-btn">Texto ▸</button>
+                <div class="ed-submenu" id="dd-texto-sub">
                   <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
                   <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
                 </div>
               </div>
+
             </div>
           </div>
 
@@ -224,7 +230,18 @@ Router.register('editor', {
 
           <!-- DIBUJAR -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" id="dd-pen">Dibujar</button>
+            <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
+            <div class="ed-dropdown" id="dd-draw">
+              <button class="ed-dropdown-item" id="dd-pen">✏️ Dibujo a mano</button>
+              <div class="ed-dropdown-submenu">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-vectorial-btn">Dibujo vectorial ▸</button>
+                <div class="ed-submenu" id="dd-vectorial-sub">
+                  <button class="ed-dropdown-item" id="dd-shape-rect">▭ Rectángulo</button>
+                  <button class="ed-dropdown-item" id="dd-shape-ellipse">◯ Elipse</button>
+                  <button class="ed-dropdown-item" id="dd-shape-line">╱ Líneas</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="ed-menu-sep"></div>
@@ -306,6 +323,7 @@ Router.register('editor', {
         <button id="edb-fill"   class="edb-tool" title="Rellenar">🪣</button>
         <div class="edb-sep"></div>
         <button id="edb-color"  class="edb-swatch" title="Color"></button>
+        <button id="edb-eyedrop" class="edb-tool" title="Cuentagotas">💧</button>
         <button id="edb-size"   class="edb-sizebtn" title="Grosor"><span id="edb-size-dot"></span></button>
         <div class="edb-sep"></div>
         <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
@@ -315,6 +333,39 @@ Router.register('editor', {
       </div>
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
+      <!-- Popover grosor barra flotante -->
+      <div id="edb-size-pop" style="display:none;position:fixed;background:rgba(30,30,30,0.95);border-radius:10px;padding:10px 14px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:1200;flex-direction:column;align-items:center;gap:8px;min-width:160px">
+        <div style="display:flex;align-items:center;gap:6px;width:100%">
+          <span style="color:#ccc;font-size:.75rem;font-weight:700">px</span>
+          <input type="number" id="edb-size-num" min="1" max="80" value="8"
+            style="width:52px;text-align:center;font-size:1rem;font-weight:700;
+                   border:1px solid rgba(255,255,255,0.4);border-radius:8px;
+                   background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;
+                   -moz-appearance:textfield;">
+          <span id="edb-size-preview" style="display:inline-block;border-radius:50%;background:#fff;flex-shrink:0;width:12px;height:12px;margin-left:4px"></span>
+        </div>
+        <input type="range" id="edb-size-slider" min="1" max="48" value="8"
+          style="width:100%;accent-color:#FFE135;cursor:pointer">
+      </div>
+
+      <!-- Barra flotante Shape/Line -->
+      <div id="edShapeBar">
+        <button id="esb-color"    class="edb-swatch" title="Color borde"></button>
+        <button id="esb-fill-on"  class="edb-tool"   title="Relleno">▣</button>
+        <button id="esb-fill"     class="edb-swatch" title="Color relleno"></button>
+        <div class="edb-sep"></div>
+        <button id="esb-eyedrop"  class="edb-tool"   title="Cuentagotas">💧</button>
+        <div class="edb-sep"></div>
+        <button id="esb-size"     class="edb-sizebtn" title="Grosor"><span id="esb-size-dot"></span></button>
+        <button id="esb-opacity"  class="edb-tool"    title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
+        <div class="edb-sep"></div>
+        <button id="esb-curve"    class="edb-tool" title="Convertir vértice a curva" style="font-size:.65rem;font-weight:900"><b>V⟺C</b></button>
+        <div class="edb-sep"></div>
+        <button id="esb-undo"     class="edb-tool" title="Deshacer">↩</button>
+        <button id="esb-redo"     class="edb-tool" title="Rehacer">↪</button>
+        <div class="edb-sep"></div>
+        <button id="esb-ok"       class="edb-ok"   title="Finalizar">✓</button>
+      </div>
 
     </div>
 
@@ -346,6 +397,8 @@ Router.register('editor', {
             <option value="horizontal">Deslizamiento horizontal</option>
             <option value="vertical">Deslizamiento vertical</option>
           </select></div>
+        <div class="ed-modal-field"><label>Redes y comentarios <span style="font-weight:400;font-size:.75rem;opacity:.6">(hoja final)</span></label>
+          <textarea id="edMSocial" maxlength="300" rows="3" style="resize:none;overflow-y:auto;font-family:var(--font-body);font-size:.88rem;padding:8px 10px;border:1.5px solid var(--gray-200);border-radius:8px;width:100%;box-sizing:border-box;line-height:1.5" placeholder="Instagram: @miperfil · Web: misite.com"></textarea></div>
         <div class="ed-modal-actions">
           <button class="ed-modal-btn cancel" id="edMCancel">Cancelar</button>
           <button class="ed-modal-btn ok" id="edMSave">Guardar ✓</button>
@@ -355,8 +408,16 @@ Router.register('editor', {
 
     <!-- Inputs ocultos -->
     <input type="file" id="edFileGallery" accept="image/*,.gif,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
-    <input type="file" id="edFileCapture" accept="image/*" capture="environment" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
+    <!-- Overlay cámara in-app -->
+    <div id="edCameraOverlay" class="hidden">
+      <video id="edCameraVideo" autoplay playsinline muted></video>
+      <div id="edCameraControls">
+        <button id="edCameraClose" title="Cerrar">✕</button>
+        <button id="edCameraCapture" title="Capturar"></button>
+        <button id="edCameraFlip" title="Cambiar cámara">🔄</button>
+      </div>
+    </div>
     <div id="edBrushCursor"></div>
   `,
   init: () => EditorView_init(),
@@ -395,7 +456,7 @@ Router.register('reader', {
   `,
   init: (params) => ReaderView_init(params),
   destroy: () => {
-    if (typeof ReaderState !== 'undefined') ReaderState.comic = null;
+    if (typeof ReaderView_destroy === 'function') ReaderView_destroy();
   }
 });
 
@@ -408,9 +469,11 @@ Router.register('admin', {
   html: () => `
     <main class="admin-main">
       <div class="admin-tabs">
-        <button class="admin-tab active" data-tab="pending" data-i18n="pendingTab">Pendientes de aprobación</button>
-        <button class="admin-tab" data-tab="published" data-i18n="publishedTab">Publicados</button>
-        <button class="admin-tab" data-tab="users" data-i18n="usersTab">Usuarios</button>
+        <button class="admin-tab active" data-tab="pending" data-i18n="pendingTab">Pendientes</button>
+        <div class="admin-tab-sep"></div>
+        <button class="admin-tab" data-tab="published" data-i18n="publishedTab">Publicadas</button>
+        <div class="admin-tab-sep"></div>
+        <button class="admin-tab" data-tab="users" data-i18n="usersTab">Autores</button>
       </div>
       <div class="admin-panel" id="tabPending"></div>
       <div class="admin-panel hidden" id="tabPublished"></div>

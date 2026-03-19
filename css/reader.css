@@ -137,6 +137,13 @@
 }
 .reader-bubble.visible { opacity: 1; transform: scale(1); }
 
+/* Cajas de texto: siempre visibles, sin animación */
+.reader-textbox-always {
+  position: absolute;
+  pointer-events: none;
+  opacity: 1;
+}
+
 .reader-bubble-inner {
   position: relative;
   background: var(--white);

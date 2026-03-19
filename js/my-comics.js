@@ -19,12 +19,8 @@ function _mcInjectModal() {
         <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off" inputmode="text" enterkeyhint="next">
       </div>
       <div class="mc-field">
-        <label>Autor</label>
-        <input type="text" id="mcAuthor" placeholder="Tu nombre o seudónimo" autocomplete="off" inputmode="text" enterkeyhint="next">
-      </div>
-      <div class="mc-field">
         <label>Género</label>
-        <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="done">
+        <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="next">
       </div>
       <div class="mc-field">
         <label>Modo de lectura</label>
@@ -33,6 +29,10 @@ function _mcInjectModal() {
           <option value="horizontal">Deslizamiento horizontal</option>
           <option value="vertical">Deslizamiento vertical</option>
         </select>
+      </div>
+      <div class="mc-field">
+        <label>Redes y comentarios <span style="font-weight:400;color:var(--gray-400);font-size:.78rem">(aparecen en la hoja final)</span></label>
+        <textarea id="mcSocial" placeholder="Instagram: @miperfil · Web: misite.com · ¡Gracias por leer!" maxlength="300" rows="3" style="resize:none;overflow-y:auto;font-family:var(--font-body);font-size:.88rem;padding:8px 10px;border:1.5px solid var(--gray-200);border-radius:8px;width:100%;box-sizing:border-box;line-height:1.5"></textarea>
       </div>
       <div class="mc-modal-actions">
         <button class="btn" id="mcNewCancel" style="flex:1">Cancelar</button>
@@ -61,7 +61,8 @@ function _mcRenderList() {
   const user = Auth.currentUser();
   if (!user) { Router.go('login'); return; }
 
-  const comics = ComicStore.getByUser(user.id)
+  const comics = ComicStore.getAll()
+    .filter(c => c.userId === user.id || c.username === user.username)
     .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
 
   if (!comics.length) {
@@ -76,11 +77,10 @@ function _mcRenderList() {
 
   wrap.innerHTML = comics.map(comic => {
     const thumb = comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '';
-    const pages = comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0);
-    const pubLabel = comic.published
-      ? (comic.approved ? '✅ Publicada' : '⏳ En revisión')
-      : '📝 Borrador';
-    const canUnpub = comic.published;
+    const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
+    const pubLabel = comic.approved
+      ? '✅ Publicada'
+      : (comic.pendingReview ? '⏳ En revisión' : '📝 Borrador');
 
     return `
     <div class="comic-row" data-id="${comic.id}">
@@ -97,30 +97,23 @@ function _mcRenderList() {
           ${comic.genre ? `<span style="color:var(--gray-400)">·</span><span style="color:var(--blue);font-size:.75rem;font-weight:700">${comic.genre}</span>` : ''}
           <span style="color:var(--gray-400)">·</span>
           <span style="font-size:.75rem;font-weight:700">${Math.max(1, pages)} hojas</span>
-          <span style="color:var(--gray-400)">·</span>
-          <span style="font-size:.75rem;font-weight:700;color:${comic.published ? 'var(--blue)' : 'var(--gray-500)'}">${pubLabel}</span>
+
         </div>
         <div class="comic-row-actions">
           ${pages > 0 ? `<button class="comic-row-btn" data-action="read" data-id="${comic.id}">📖 Leer</button>` : ''}
           <button class="comic-row-btn edit" data-action="edit" data-id="${comic.id}">✏️ Editar</button>
-          ${!comic.published
-            ? `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`
-            : `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">🔒 Retirar</button>`
+          ${comic.approved
+            ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">📢 Publicada · Retirar</button>`
+            : (comic.pendingReview
+                ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">⏳ En revisión · Retirar</button>`
+                : `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">🚀 Publicar</button>`)
           }
+          <button class="comic-row-btn" data-action="share" data-id="${comic.id}">📤 Enviar</button>
           <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
       </div>
     </div>`;
   }).join('');
-
-  // Ajustar padding top por la barra de nav
-  const list = document.getElementById('myComicsList');
-  const nav  = document.getElementById('myComicsNav');
-  if (list && nav) {
-    requestAnimationFrame(() => {
-      list.style.paddingTop = nav.offsetHeight + 'px';
-    });
-  }
 
   // Eventos de botones
   wrap.addEventListener('click', async e => {
@@ -133,10 +126,9 @@ function _mcRenderList() {
       const comic = ComicStore.getById(id);
       if (!comic) return;
       if (comic.supabaseId) {
-        // Tiene ID en nube: usar el reader externo embebido en modal
-        // obras publicadas → ?id=, borradores/cloudOnly → ?draft=
+        // Tiene ID en nube: usar el reproductor externo
         const param = comic.published ? `id=${comic.supabaseId}` : `draft=${comic.supabaseId}`;
-        _mcOpenReaderModal(`reader/?${param}&embed=1`);
+        window.location = 'reader/?' + param;
       } else {
         // Solo local: visor interno del SPA
         Router.go('reader', { id });
@@ -180,6 +172,15 @@ function _mcRenderList() {
       const supabaseId = comic.supabaseId || crypto.randomUUID();
       ComicStore.save({ ...comic, supabaseId, published: false, approved: false, pendingReview: true });
       _mcRenderList();
+      // Scroll a la ficha: usar posición real menos el padding del contenedor
+      requestAnimationFrame(() => {
+        const row  = document.querySelector(`.comic-row[data-id="${id}"]`);
+        const list = document.getElementById('myComicsList');
+        if (!row || !list) return;
+        const pt   = parseInt(list.style.paddingTop) || 0;
+        const rowTop = row.getBoundingClientRect().top + window.scrollY - pt;
+        window.scrollTo({ top: rowTop, behavior: 'smooth' });
+      });
       if (typeof SupabaseClient !== 'undefined') {
         SupabaseClient.submitForReview({ ...comic, supabaseId, published: false, pendingReview: true })
           .catch(err => console.warn('Supabase submitForReview:', err));
@@ -213,6 +214,14 @@ function _mcRenderList() {
       ComicStore.remove(id);
       _mcRenderList();
       _mcToast('Obra eliminada');
+    } else if (action === 'share') {
+      const comic = ComicStore.getById(id);
+      if (!comic) return;
+      if (!comic.supabaseId) {
+        alert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
+        return;
+      }
+      if (typeof openShareModal !== 'undefined') openShareModal(comic);
     }
   });
 }
@@ -229,10 +238,6 @@ function _mcBindNav() {
 function _mcOpenModal() {
   const m = document.getElementById('mcNewModal');
   if (m) m.classList.add('open');
-  // Pre-rellenar autor con el usuario actual
-  const user = Auth.currentUser();
-  const authorInput = document.getElementById('mcAuthor');
-  if (authorInput && user) authorInput.value = user.username || '';
 }
 
 function _mcCloseModal() {
@@ -241,8 +246,8 @@ function _mcCloseModal() {
 
 function _mcCreateProject() {
   const title   = document.getElementById('mcTitle')?.value.trim();
-  const author  = document.getElementById('mcAuthor')?.value.trim();
   const genre   = document.getElementById('mcGenre')?.value.trim();
+  const social  = document.getElementById('mcSocial')?.value.trim().slice(0, 300);
   const navMode = document.getElementById('mcNavMode')?.value || 'horizontal';
 
   if (!title) { document.getElementById('mcTitle')?.focus(); return; }
@@ -253,8 +258,9 @@ function _mcCreateProject() {
     userId:   user.id,
     username: user.username,
     title,
-    author:   author || user.username,
+    author:   user.username,
     genre,
+    social:   social || '',
     navMode,
     pages:    [],
     panels:   [],
@@ -268,7 +274,7 @@ function _mcCreateProject() {
   _mcCloseModal();
 
   // Limpiar campos
-  ['mcTitle','mcAuthor','mcGenre'].forEach(id => {
+  ['mcTitle','mcGenre','mcSocial'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -321,7 +327,7 @@ async function _mcCloudLoad() {
 
     // Buscar por author_name = username del usuario actual
     const username = encodeURIComponent(user.username || '');
-    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc`, { headers: hdrs })
+    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`, { headers: hdrs })
       .then(r => r.json());
 
     if (!works || !works.length) {
@@ -338,19 +344,22 @@ async function _mcCloudLoad() {
         // Si la nube es más reciente, preguntar
         const cloudDate = new Date(w.updated_at || 0);
         const localDate = new Date(existing.updatedAt || 0);
-        if (cloudDate <= localDate) { skipped++; continue; }
-        // La nube es más nueva — actualizar metadatos (no reemplazar editorData local)
-        // Solo actualizar campos de metadatos, no tocar el contenido del editor local
+        if (cloudDate <= localDate) {
+          // Aunque no haya cambios, actualizar userId si era el ID antiguo
+          if (existing.userId !== user.id) { existing.userId = user.id; ComicStore.save(existing); }
+          skipped++; continue;
+        }
+        // La nube es más nueva — actualizar metadatos
         existing.title    = w.title     || existing.title;
         existing.genre    = w.genre     || existing.genre;
         existing.navMode  = w.nav_mode  || existing.navMode;
+        existing.userId   = user.id;  // actualizar al UUID nuevo
         ComicStore.save(existing);
         skipped++;
         continue;
       }
 
       // Obra nueva en nube — crear entrada local con thumbnail del primer panel
-      // El contenido completo se carga desde Supabase al leer (?draft=supabaseId)
       let thumbDataUrl = '';
       try {
         const firstPanels = await fetch(
@@ -370,6 +379,7 @@ async function _mcCloudLoad() {
         genre:        w.genre       || '',
         navMode:      w.nav_mode    || 'fixed',
         panels:       thumbDataUrl ? [{ dataUrl: thumbDataUrl }] : [],
+        panelCount:   w.panel_count || 0,
         pages:        [],
         published:    w.published   ?? false,
         approved:     w.published   ?? false,

@@ -16,18 +16,19 @@ const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
 
 // ── ESTADO ──────────────────────────────────────────────────
 const RS = {
-  panels:     [],   // [{id, orientation, text_mode, data_url, texts:[]}]
-  images:     [],   // Image objects precargados
-  idx:        0,    // panel actual
-  textStep:   0,    // bocadillo visible (sequential)
-  fadeAlpha:  0,    // alpha bocadillo anterior
-  fadeRaf:    null,
-  canvas:     null,
-  ctx:        null,
-  ctrlTimer:  null,
-  ac:         null,
-  keyHandler: null,
-  resizeFn:   null,
+  panels:       [],   // [{id, orientation, text_mode, data_url, texts:[]}]
+  images:       [],   // Image objects precargados
+  idx:          0,    // panel actual
+  textStep:     0,    // bocadillo visible (sequential)
+  fadeAlpha:    0,    // alpha bocadillo anterior
+  fadeRaf:      null,
+  canvas:       null,
+  ctx:          null,
+  ctrlTimer:    null,
+  ac:           null,
+  keyHandler:   null,
+  resizeFn:     null,
+  creditsShown: false, // true tras mostrarse la primera vez — no vuelve a aparecer
 };
 
 // ── ARRANQUE ─────────────────────────────────────────────────
@@ -35,22 +36,59 @@ document.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(window.location.search);
   const id     = params.get('id');
   const draft  = params.get('draft');   // token de borrador (obra no publicada)
+  const wantsFs = params.get('fs') === '1'; // heredar fullscreen de la app
 
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
-  const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
+  const _doClose = () => {
+    if (history.length > 1) { history.back(); return; }
+    // Intentar cerrar la pestaña
+    window.close();
+    // Si seguimos aquí, el navegador bloqueó el cierre — mostrar instrucción
+    setTimeout(() => {
+      _readerToast('Cierra esta pestaña con el botón ✕ del navegador', 4000);
+    }, 300);
+  };
+
+  const _closeAction = RS.isEmbed
+    ? _embedClose
+    : () => {
+        // Salir de fullscreen primero si está activo, luego cerrar
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          const exit = document.exitFullscreen || document.webkitExitFullscreen;
+          if (exit) { exit.call(document).then(_doClose).catch(_doClose); return; }
+        }
+        _doClose();
+      };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
+
+  // Si la app estaba en fullscreen, entrar en fullscreen al primer gesto del usuario
+  // (los navegadores exigen que requestFullscreen esté dentro de un evento de usuario)
+  if (wantsFs && !RS.isEmbed) {
+    const _enterFsOnce = () => {
+      const req = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+      if (req) req.call(document.documentElement).catch(() => {});
+      document.removeEventListener('click',     _enterFsOnce);
+      document.removeEventListener('touchstart', _enterFsOnce);
+      document.removeEventListener('keydown',    _enterFsOnce);
+    };
+    document.addEventListener('click',     _enterFsOnce, { once: true });
+    document.addEventListener('touchstart', _enterFsOnce, { once: true });
+    document.addEventListener('keydown',    _enterFsOnce, { once: true });
+  }
 
   // Botón cerrar: siempre visible, pegado a la hoja por _positionBtns()
   const closeBtnEl = document.getElementById('closeBtn');
   if (closeBtnEl) {
     closeBtnEl.addEventListener('click', _closeAction);
+    closeBtnEl.addEventListener('touchend', e => { e.stopPropagation(); _closeAction(); }, { passive: false });
   }
 
   // Botón fullscreen: listener directo en gesto de usuario (igual que header.js)
   const fsBtn = document.getElementById('fullscreenToggle');
   if (fsBtn) {
+    fsBtn.addEventListener('touchend', e => { e.stopPropagation(); }, { passive: false });
     fsBtn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (RS.isEmbed) {
@@ -104,9 +142,7 @@ function _onFullscreenChange() {
 }
 
 function _embedClose() {
-  // Si está en iframe, notifica al padre. Si no, navega atrás.
-  try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(e) {}
-  if (window.self === window.top) history.back();
+  history.back();
 }
 
 // ── CARGA DESDE SUPABASE ─────────────────────────────────────
@@ -119,8 +155,14 @@ async function loadWork(workId) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(workId);
     document.title = (work[0].title || 'Obra') + ' — ComiXow';
-    RS._workAuthor = work[0].author_name || '';
+    RS._workAuthor = work[0].author_name || "";
+    RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    // Actualizar meta OG con datos reales de la obra
+    _updateOGMeta(work[0].title, work[0].author_name);
+    // Añadir hoja de créditos como último panel — se trata como hoja normal
+    const _lastPanel = RS.panels[RS.panels.length - 1];
+    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -141,8 +183,12 @@ async function loadDraft(token) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(token);
     document.title = (work[0].title || 'Borrador') + ' — ComiXow';
-    RS._workAuthor = work[0].author_name || '';
+    RS._workAuthor = work[0].author_name || "";
+    RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    _updateOGMeta(work[0].title, work[0].author_name);
+    const _lastPanel = RS.panels[RS.panels.length - 1];
+    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -249,8 +295,9 @@ function startReader() {
   // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);
 
+  // Registrar resize con delay para evitar que el resize inicial borre el canvas
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
-  window.addEventListener('resize', RS.resizeFn);
+  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -293,16 +340,25 @@ function _panelDims(idx) {
 }
 
 function _resizeCanvas() {
+  const panel = RS.panels[RS.idx];
   const { pw, ph } = _panelDims(RS.idx);
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  // Los controles se superponen sobre el canvas — no restan espacio disponible
-  const MARGIN = 8;
-  const availW = vw - MARGIN * 2;
-  const availH = vh - MARGIN * 2;
-  // Escala uniforme que respeta la proporción original siempre
-  const scale = Math.min(availW / pw, availH / ph);
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // Panel de créditos: escalar como vertical normal (contain)
+  // Hojas horizontales reales: llenar toda la altura
+  const isHorizPanel = pw > ph && !panel?.isCredits;
+
+  let scale;
+  if (isHorizPanel) {
+    scale = vh / ph;
+    if (pw * scale > vw * 1.5) scale = vw / pw;
+  } else {
+    scale = Math.min(vw / pw, vh / ph);
+  }
+
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
   RS.canvas.style.width  = dw + 'px';
   RS.canvas.style.height = dh + 'px';
@@ -315,13 +371,30 @@ function _resizeCanvas() {
 function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
+
+  // Panel de créditos — render especial con fade
+  if (panel.isCredits) {
+    RS.isCredits = true;
+    const { pw, ph } = _panelDims(RS.idx);
+    // Solo llamar _showCredits si no hay fade en marcha ni ya mostrado
+    // para evitar el parpadeo al redibujar con alpha=0
+    if (!RS.creditsTimer && !RS.fadeRaf) {
+      _showCredits();
+    } else {
+      _renderCredits(pw, ph);
+    }
+    return;
+  }
+
+  // Si venimos de los créditos, resetear su estado
+  if (RS.creditsTimer || RS.creditsAlpha > 0) _resetCredits();
+
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
 
   ctx.clearRect(0, 0, pw, ph);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
-
   // Dibujar capas en orden: image/draw/stroke primero, bubble/text al final (via _drawTexts)
   const layers    = panel.layers    || [];
   const layerImgs = panel.layerImgs || [];
@@ -334,7 +407,6 @@ function _render() {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       if (type === 'image' || type === 'stroke') {
-        // Posición y tamaño en 0-1 relativo al panel; centro en (x, y)
         const x = (layer.x      || 0.5) * pw;
         const y = (layer.y      || 0.5) * ph;
         const w = (layer.width  || 1)   * pw;
@@ -344,9 +416,39 @@ function _render() {
         if (rot) ctx.rotate(rot * Math.PI / 180);
         ctx.drawImage(img, -w / 2, -h / 2, w, h);
       } else {
-        // draw: capa de dibujo libre — ocupa todo el panel, sin transformación
         ctx.drawImage(img, 0, 0, pw, ph);
       }
+      ctx.restore();
+    } else if (type === 'shape') {
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const w = (layer.width || 0.3) * pw, h = (layer.height || 0.2) * ph;
+      const rot = (layer.rotation || 0) * Math.PI / 180;
+      ctx.translate(x, y);
+      if (rot) ctx.rotate(rot);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      if (layer.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
+      else ctx.rect(-w/2, -h/2, w, h);
+      if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+      ctx.restore();
+    } else if (type === 'line' && layer.points && layer.points.length >= 2) {
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const rot = (layer.rotation || 0) * Math.PI / 180;
+      ctx.translate(x, y);
+      if (rot) ctx.rotate(rot);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
+      for (let i = 1; i < layer.points.length; i++)
+        ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
+      if (layer.closed) ctx.closePath();
+      if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       ctx.restore();
     }
     // bubble/text: los gestiona _drawTexts con lógica sequential
@@ -584,9 +686,6 @@ function advance() {
   if (RS.idx < RS.panels.length - 1) {
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resizeCanvas(); _render();
-  } else {
-    // Pantalla final de créditos en canvas
-    _showCredits();
   }
 }
 
@@ -621,44 +720,45 @@ function _startFade() {
 }
 
 // ── PANTALLA FINAL DE CRÉDITOS ────────────────────────────────
+// Se llama desde _render() cuando el panel actual es el de créditos.
+// La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 function _showCredits() {
-  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
-  RS.isCredits = true;
+  // Si ya se mostró antes: renderizar directamente con alpha=1, sin fade ni parpadeo
+  if (RS.creditsShown) {
+    RS.creditsAlpha = 1;
+    const { pw, ph } = _panelDims(RS.idx);
+    _renderCredits(pw, ph);
+    return;
+  }
+  // Evitar relanzar si ya está en curso
+  if (RS.creditsTimer || RS.creditsAlpha > 0) return;
+  RS.creditsAlpha = 0;
 
-  // Mantener las mismas proporciones que la última hoja visitada
-  const { pw, ph } = _panelDims(RS.panels.length - 1);
-  RS.canvas.width  = pw;
-  RS.canvas.height = ph;
-  // Recalcular posición y tamaño (sin cambio de orientación)
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const MARGIN = 8;
-  const scale = Math.min((vw - MARGIN*2) / pw, (vh - MARGIN*2) / ph);
-  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
-  RS.canvas.style.width  = dw + 'px';
-  RS.canvas.style.height = dh + 'px';
-  RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
-  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
-  _positionBtns();
-  RS.creditsAuthor = RS._workTitle || '';
-  RS.creditsAlpha  = 0;
-
-  // Dibujar línea del autor inmediatamente
-  _renderCredits(pw, ph, 0);
+  // Dibujar inmediatamente solo la parte estática (autor + social) sin parpadeo
+  // El logo/eslogan/enlace aparecerán con fade tras 1 segundo
+  const { pw: pw0, ph: ph0 } = _panelDims(RS.idx);
+  _renderCredits(pw0, ph0);
 
   // Tras 1 segundo, iniciar fade-in del resto
   RS.creditsTimer = setTimeout(() => {
     const start = performance.now();
-    const dur   = 1200; // ms de fade
+    const dur   = 1200;
     function fadeStep(now) {
       RS.creditsAlpha = Math.min(1, (now - start) / dur);
-      _renderCredits(pw, ph, RS.creditsAlpha);
+      const { pw, ph } = _panelDims(RS.idx);
+      _renderCredits(pw, ph);
       if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
-      else RS.fadeRaf = null;
+      else { RS.fadeRaf = null; RS.creditsShown = true; }
     }
     RS.fadeRaf = requestAnimationFrame(fadeStep);
   }, 1000);
+}
 
-  // El click/tap en créditos lo gestiona el listener permanente del canvas (_setupControls)
+function _resetCredits() {
+  if (RS.creditsTimer) { clearTimeout(RS.creditsTimer); RS.creditsTimer = null; }
+  if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
+  RS.creditsAlpha = 0;
+  RS.isCredits    = false;
 }
 
 function _creditsClick() {
@@ -678,53 +778,216 @@ function _renderCredits(pw, ph) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
 
-  const cx = pw / 2;
-  const lineH = ph * 0.09; // espaciado entre líneas
-
-  // ── Línea 1: nombre del autor (siempre visible, inmediato) ──
-  const authorY = ph * 0.34;
-  ctx.globalAlpha = 1;
-  ctx.fillStyle   = '#222222';
-  ctx.font        = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
-  ctx.textAlign   = 'center';
+  const isHoriz = pw > ph;
+  const socialText = RS._workSocial || '';
+  const authorText = RS._workAuthor || '';
   ctx.textBaseline = 'middle';
-  ctx.fillText(`Autor: ${RS._workAuthor || ''}`, cx, authorY);
 
-  // ── Resto con fade ──────────────────────────────────────────
-  ctx.globalAlpha = alpha;
+  // Función auxiliar: divide texto en líneas respetando \n explícitos y wrap por maxW.
+  // Si una palabra sola supera maxW, se corta carácter a carácter.
+  function wrapText(text, maxW) {
+    const result = [];
+    const paragraphs = text.split('\n');
+    paragraphs.forEach(para => {
+      if (!para.trim()) { result.push(''); return; }
+      const words = para.split(' ');
+      let cur = '';
+      words.forEach(w => {
+        // Si la palabra sola es más ancha que maxW, cortarla por caracteres
+        if (ctx.measureText(w).width > maxW) {
+          if (cur) { result.push(cur); cur = ''; }
+          let chunk = '';
+          for (const ch of w) {
+            const test = chunk + ch;
+            if (ctx.measureText(test).width > maxW && chunk) {
+              result.push(chunk); chunk = ch;
+            } else { chunk = test; }
+          }
+          if (chunk) {
+            // intentar unir con lo que siga
+            cur = chunk;
+          }
+          return;
+        }
+        const test = cur ? cur + ' ' + w : w;
+        if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
+        else cur = test;
+      });
+      if (cur) result.push(cur);
+    });
+    return result;
+  }
 
-  // Línea 2: logotipo ComiXow
-  const logoY = authorY + lineH * 1.3;
-  ctx.font      = `900 ${Math.round(pw * 0.11)}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#f5c400';
-  ctx.fillText('ComiXow', cx, logoY);
+  if (isHoriz) {
+    // ── LAYOUT HORIZONTAL: dos columnas ──────────────────────
+    // Columna izquierda (55%): social + autor
+    // Columna derecha (45%): logo + eslogan + enlace (con fade)
+    const fRef   = ph;  // base de escala = altura (dimensión corta)
+    const colGap = pw * 0.04;
+    const leftW  = pw * 0.52;
+    const rightW = pw * 0.44;
+    const leftX  = pw * 0.04;
+    const rightCX = leftW + colGap + rightW / 2;
+    const padV   = ph * 0.08;
 
-  // Línea 3: eslogan
-  const sloganY = logoY + lineH * 1.1;
-  ctx.font      = `400 ${Math.round(pw * 0.042)}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#555555';
-  ctx.fillText('Crea y Comparte', cx, sloganY);
+    // Separador vertical central
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = '#888888';
+    ctx.fillRect(leftW + colGap * 0.4, ph * 0.1, 1, ph * 0.8);
+    ctx.globalAlpha = 1;
 
-  // Línea 4: enlace (dibujado como texto subrayado)
-  const linkY = sloganY + lineH * 1.0;
-  const linkFS = Math.round(pw * 0.038);
-  ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#1a73e8';
-  const linkText = 'Visita más obras del autor';
-  ctx.fillText(linkText, cx, linkY);
-  // Subrayado manual
-  const lw = ctx.measureText(linkText).width;
-  ctx.beginPath();
-  ctx.strokeStyle = '#1a73e8';
-  ctx.lineWidth   = Math.max(1, linkFS * 0.06);
-  ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
-  ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
-  ctx.stroke();
+    // ── Columna izquierda: social + autor ──
+    const socialFS   = Math.round(fRef * 0.055);
+    const authorFS   = Math.round(fRef * 0.072);
+    const socialMaxW = leftW - leftX - pw * 0.02;  // ancho disponible desde leftX hasta borde columna
 
-  ctx.globalAlpha = 1;
+    let socialLines = [];
+    if (socialText) {
+      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      socialLines   = wrapText(socialText, socialMaxW);
+    }
+    const socialLineH  = socialFS * 1.5;
+    const totalSocialH = socialLines.length * socialLineH;
+    const blockH       = totalSocialH + (socialText ? socialFS * 1.2 : 0) + authorFS * 1.5;
+    let y = (ph - blockH) / 2 + socialLineH * 0.5;
 
-  // Guardar zona del enlace para detectar click (en coords de canvas)
-  RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+    if (socialText) {
+      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.fillStyle = '#444444';
+      ctx.textAlign = 'left';
+      socialLines.forEach(line => {
+        ctx.fillText(line, leftX, y);
+        y += socialLineH;
+      });
+      y += socialFS * 0.8;
+    }
+
+    // Nombre del autor — centrado en columna izquierda
+    ctx.font      = `600 ${authorFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#222222';
+    ctx.textAlign = 'center';
+    ctx.fillText(authorText, leftX + leftW / 2, y);
+
+    // ── Columna derecha: logo + eslogan + enlace (con fade) ──
+    // Mismas proporciones que el layout vertical, ancladas desde el centro vertical
+    ctx.globalAlpha = alpha;
+
+    const logoFS   = Math.round(fRef * 0.11);
+    const sloganFS = Math.round(fRef * 0.042);
+    const linkFS   = Math.round(fRef * 0.038);
+    const lineH    = ph * 0.09;
+    // Bloque centrado verticalmente en la columna derecha
+    const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
+    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
+
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.textAlign = 'center';
+    ctx.fillText('ComiXow', rightCX, rightStartY);
+
+    const sloganY = rightStartY + sloganFS * 2;
+    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#555555';
+    ctx.fillText('Crea y Comparte', rightCX, sloganY);
+
+    const linkY   = sloganY + sloganFS * 3;
+    const linkText = 'Visita más obras del autor';
+    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#1a73e8';
+    ctx.fillText(linkText, rightCX, linkY);
+    const lw = ctx.measureText(linkText).width;
+    ctx.beginPath();
+    ctx.strokeStyle = '#1a73e8';
+    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6);
+    ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6);
+    ctx.stroke();
+
+    // Botón "Volver a leer"
+    const restartFS   = Math.round(fRef * 0.038);
+    const restartY    = linkY + linkFS * 2.2;
+    const restartText = '↩ Volver a leer';
+    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#888888';
+    ctx.textAlign = 'center';
+    ctx.fillText(restartText, rightCX, restartY);
+    const rw = ctx.measureText(restartText).width;
+    RS.creditsRestartArea = { x: rightCX - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
+
+    ctx.globalAlpha = 1;
+    RS.creditsLinkArea = { x: rightCX - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+
+  } else {
+    // ── LAYOUT VERTICAL: columna única ───────────────────────
+    const fRef   = pw;
+    const cx     = pw / 2;
+    const marginX = pw * 0.09;
+    const maxW    = pw * 0.82;
+
+    // Social
+    let authorY = ph * 0.11;
+    if (socialText) {
+      const socialFS    = Math.round(fRef * 0.038);
+      ctx.font          = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.fillStyle     = '#444444';
+      ctx.textAlign     = 'left';
+      const socialLines = wrapText(socialText, maxW);
+      const socialLineH = socialFS * 1.4;
+      const socialStartY = ph * 0.26;
+      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+      authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
+    }
+
+    // Autor
+    ctx.font      = `600 ${Math.round(fRef * 0.055)}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#222222';
+    ctx.textAlign = 'center';
+    ctx.fillText(authorText, cx, authorY);
+
+    // Resto con fade
+    ctx.globalAlpha = alpha;
+
+    const lineH    = ph * 0.09;
+    const logoFS   = Math.round(fRef * 0.11);
+    const logoY    = authorY + lineH * 1.3;
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.fillText('ComiXow', cx, logoY);
+
+    const sloganFS = Math.round(fRef * 0.042);
+    const sloganY  = logoY + sloganFS * 2;
+    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#555555';
+    ctx.fillText('Crea y Comparte', cx, sloganY);
+
+    const linkFS   = Math.round(fRef * 0.038);
+    const linkY    = sloganY + sloganFS * 3;
+    const linkText = 'Visita más obras del autor';
+    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#1a73e8';
+    ctx.fillText(linkText, cx, linkY);
+    const lw = ctx.measureText(linkText).width;
+    ctx.beginPath();
+    ctx.strokeStyle = '#1a73e8';
+    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
+    ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
+    ctx.stroke();
+
+    // Botón "Volver a leer"
+    const restartFS   = Math.round(fRef * 0.038);
+    const restartY    = linkY + linkFS * 2.2;
+    const restartText = '↩ Volver a leer';
+    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#888888';
+    ctx.textAlign = 'center';
+    ctx.fillText(restartText, cx, restartY);
+    const rw = ctx.measureText(restartText).width;
+    RS.creditsRestartArea = { x: cx - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
+
+    ctx.globalAlpha = 1;
+    RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
+  }
 }
 
 
@@ -732,6 +995,12 @@ function _renderCredits(pw, ph) {
 function _updateCounter() { /* sin pastilla — no se muestra */ }
 
 function _showControls() { /* botones de esquina siempre visibles */ }
+
+// El navegador transforma las coordenadas táctiles al sistema del usuario.
+// "Izquierda del usuario" es siempre endX < W/2, independientemente del ángulo.
+function _isBackSide(endX, endY) {
+  return endX < window.innerWidth / 2;
+}
 
 function _setupControls() {
   // closeBtn y fullscreenToggle configurados en DOMContentLoaded
@@ -742,7 +1011,8 @@ function _setupControls() {
     if (['ArrowLeft','ArrowUp'].includes(e.code))                    { e.preventDefault(); goBack(); }
     if (e.key === 'Escape') {
       if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
-      else history.back();
+      else if (history.length > 1) history.back();
+      else window.close();
     }
   };
   document.addEventListener('keydown', RS.keyHandler);
@@ -765,22 +1035,25 @@ function _setupControls() {
 
   RS.canvas.addEventListener('touchmove', e => {
     if (sx === null) return;
-    const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
-    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) cancelled = true;
+    const dy = e.touches[0].clientY - sy;
+    if (Math.abs(dy) > 20) cancelled = true;
   }, { passive: true, ...sig });
 
   RS.canvas.addEventListener('touchend', e => {
     if (sx === null || cancelled) { sx = null; return; }
-    const dx = e.changedTouches[0].clientX - sx;
-    const dy = e.changedTouches[0].clientY - sy;
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const dy   = Math.abs(endY - sy);
     sx = null;
-    if (Math.abs(dx) < 15 && Math.abs(dy) < 15) {
-      if (RS.isCredits) { _handleCreditsClick(e.changedTouches[0].clientX, e.changedTouches[0].clientY); return; }
-      advance(); return;
+    if (dy > 40) return;
+    // En créditos: lado retroceder → goBack, lado avanzar → detecta enlace/botón
+    if (RS.isCredits) {
+      if (_isBackSide(endX, endY)) goBack();
+      else _handleCreditsClick(endX, endY);
+      return;
     }
-    if (Math.abs(dx) < 30 || Math.abs(dx) <= Math.abs(dy)) return;
-    if (RS.isCredits) { _creditsClick(); return; }
-    if (dx < 0) advance(); else goBack();
+    // Navegación normal
+    if (_isBackSide(endX, endY)) goBack(); else advance();
   }, { passive: true, ...sig });
 }
 
@@ -814,13 +1087,27 @@ function _handleCreditsClick(clientX, clientY) {
   const la = RS.creditsLinkArea;
   if (la && cx >= la.x && cx <= la.x + la.w && cy >= la.y && cy <= la.y + la.h) {
     window.open('https://sargentopez.github.io/ComiXou/index.html', '_blank');
-  } else {
-    _creditsClick(); // Tap fuera del enlace → reiniciar
+    return;
   }
+  const ra = RS.creditsRestartArea;
+  if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
+    _creditsClick(); // Volver a leer → reinicia desde la primera hoja
+  }
+  // Tap fuera de ambas zonas → no hacer nada
 }
 
 
 function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }
+
+function _updateOGMeta(title, author) {
+  const t = (title || 'ComiXow') + ' — ComiXow';
+  const d = author ? `Una obra de ${author} en ComiXow` : 'Abre esta obra en el reproductor de ComiXow';
+  document.title = t;
+  document.querySelector('meta[property="og:title"]')      ?.setAttribute('content', t);
+  document.querySelector('meta[property="og:description"]')?.setAttribute('content', d);
+  document.querySelector('meta[name="twitter:title"]')     ?.setAttribute('content', t);
+  document.querySelector('meta[name="twitter:description"]')?.setAttribute('content', d);
+}
 function showError(msg) {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('errorScreen').classList.remove('hidden');

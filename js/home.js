@@ -110,29 +110,56 @@ function showFiltrosLevel2(type) {
 
   const published = _homeWorks !== null ? _homeWorks : ComicStore.getPublished();
 
-
-
-  if (type === 'genre') {
-    const items = [...new Set(published.map(c => c.genre).filter(Boolean))].sort((a,b) => genreLabel(a).localeCompare(genreLabel(b), 'es'));
-    if (items.length === 0) {
-      menu.appendChild(emptyItem(I18n.t('noGenres')));
-    } else {
-      items.forEach(id => {
-        const isActive = activeFilter.type === 'genre' && activeFilter.value === id;
-        menu.appendChild(buildFilterItem(genreLabel(id), () => applyFilter('genre', id), isActive));
-      });
-    }
-  } else {
-    const items = [...new Set(published.map(c => c.username).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
-    if (items.length === 0) {
-      menu.appendChild(emptyItem(I18n.t('noAuthors')));
-    } else {
-      items.forEach(username => {
-        const isActive = activeFilter.type === 'author' && activeFilter.value === username;
-        menu.appendChild(buildFilterItem(username, () => applyFilter('author', username), isActive));
-      });
-    }
+  // Normalizar texto: minúsculas sin acentos para comparación
+  function normalize(s) {
+    return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   }
+
+  const allItems = type === 'genre'
+    ? [...new Set(published.map(c => c.genre).filter(Boolean))].sort((a,b) => genreLabel(a).localeCompare(genreLabel(b), 'es'))
+    : [...new Set(published.map(c => c.username).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
+
+  // Campo de búsqueda con icono lupa
+  const searchWrap = document.createElement('div');
+  searchWrap.style.cssText = 'display:flex;align-items:center;padding:6px 10px;gap:6px;border-bottom:1px solid var(--gray-100)';
+  const lupa = document.createElement('span');
+  lupa.textContent = '🔍';
+  lupa.style.cssText = 'font-size:.85rem;flex-shrink:0';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = type === 'genre' ? 'Género…' : 'Autor…';
+  input.style.cssText = 'border:none;outline:none;font-family:var(--font-body);font-size:.85rem;font-weight:700;width:100%;background:transparent;color:var(--ink)';
+  searchWrap.appendChild(lupa);
+  searchWrap.appendChild(input);
+  menu.appendChild(searchWrap);
+
+  // Contenedor de items filtrados
+  const itemsWrap = document.createElement('div');
+  menu.appendChild(itemsWrap);
+
+  function renderItems(filter) {
+    const norm = normalize(filter);
+    itemsWrap.innerHTML = '';
+    const visible = norm
+      ? allItems.filter(i => normalize(type === 'genre' ? genreLabel(i) : i).startsWith(norm))
+      : allItems;
+    if (!visible.length) {
+      itemsWrap.appendChild(emptyItem(I18n.t(type === 'genre' ? 'noGenres' : 'noAuthors')));
+      return;
+    }
+    visible.forEach(id => {
+      const label    = type === 'genre' ? genreLabel(id) : id;
+      const isActive = activeFilter.type === type && activeFilter.value === id;
+      itemsWrap.appendChild(buildFilterItem(label, () => applyFilter(type, id), isActive));
+    });
+  }
+
+  renderItems('');
+
+  // Filtrar en tiempo real
+  input.addEventListener('input', () => renderItems(input.value));
+  // Foco automático al abrir
+  requestAnimationFrame(() => input.focus());
 }
 
 function applyFilter(type, value) {
@@ -251,9 +278,9 @@ function buildRow(comic, currentUser) {
   readBtn.href = '#';
   readBtn.onclick = (e) => {
     e.preventDefault();
-    // Obras publicadas: usar el reproductor externo embebido en modal
+    // Obras publicadas: usar el reproductor externo
     if (comic.supabaseId && comic.published) {
-      _openReaderModal(`reader/?id=${comic.supabaseId}&embed=1`);
+      window.location = 'reader/?id=' + comic.supabaseId;
     } else {
       // Sin supabaseId: visor interno del SPA (obra local)
       Router.go('reader', { id: comic.id });
@@ -261,6 +288,16 @@ function buildRow(comic, currentUser) {
   };
   readBtn.textContent = I18n.t('read');
   actions.appendChild(readBtn);
+
+  // Botón Enviar — solo para obras publicadas con supabaseId
+  if (comic.supabaseId) {
+    const shareBtn = document.createElement('a');
+    shareBtn.className = 'comic-row-btn';
+    shareBtn.href = '#';
+    shareBtn.textContent = '📤 Enviar';
+    shareBtn.onclick = (e) => { e.preventDefault(); openShareModal(comic); };
+    actions.appendChild(shareBtn);
+  }
 
   if (isOwner) {
     const editBtn = document.createElement('a');
@@ -343,6 +380,8 @@ function _openReaderModal(url) {
   frame.src = url;
   overlay.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
+  // Recordar si la app estaba en fullscreen antes de abrir el reader
+  overlay._wasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
   // Dar foco al iframe para que las teclas funcionen sin clic previo
   frame.addEventListener('load', () => frame.focus(), { once: true });
 }
@@ -353,6 +392,18 @@ function _closeReaderModal() {
   overlay.classList.add('hidden');
   overlay.querySelector('.reader-modal-frame').src = '';
   document.body.style.overflow = '';
+  const wasFs = overlay._wasFullscreen;
+  overlay._wasFullscreen = false;
+  const nowFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  if (nowFs && !wasFs) {
+    // El reader activó fullscreen — salir
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  } else if (!nowFs && wasFs) {
+    // La app estaba en fullscreen antes — restaurar
+    if (typeof Fullscreen !== 'undefined') Fullscreen.enter();
+  }
+  // Resincronizar botón (con pequeño delay para que el estado FS se actualice)
+  setTimeout(() => { if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn(); }, 200);
 }
 
 // Cerrar modal con Escape

@@ -86,21 +86,25 @@ body.editor-page #appView {
 /* Nav de páginas en topbar */
 .ed-top-pagnav {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 0;
   flex-shrink: 0;
-  padding-bottom: 4px;
   align-self: flex-end;
-  /* Centrado absoluto en el topbar */
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  pointer-events: auto;
+  padding-bottom: 4px;
+}
+@media (min-width: 768px) {
+  .ed-top-pagnav {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    align-self: center;
+    padding-bottom: 0;
+  }
 }
 .ed-top-pagebn {
   background: none; border: none;
-  font-size: 0.9rem; color: var(--black);  /* triángulos más grandes */
-  width: 28px; height: 28px;
+  font-size: 0.9rem; color: var(--black);
+  width: 18px; height: 28px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; border-radius: 4px;
   padding: 0; line-height: 1;
@@ -236,7 +240,7 @@ body.editor-page #appView {
 /* ── Sub-dropdown (segundo nivel) ── */
 .ed-subdropdown {
   position: absolute;
-  left: 100%; top: 0;
+  left: 0; top: 100%;
   min-width: 180px;
   background: var(--white);
   border: 2px solid var(--black);
@@ -245,6 +249,10 @@ body.editor-page #appView {
   z-index: 9001;
   display: none;
   padding: 6px 0;
+}
+/* Submenú dentro del dropdown de Proyecto (derecha): alineado a la derecha */
+#dd-project .ed-subdropdown {
+  left: auto; right: 0;
 }
 .ed-dropdown-item:hover > .ed-subdropdown { display: block; }
 .ed-dropdown-item.has-sub::after { content: '›'; margin-left: auto; color: var(--gray-400); }
@@ -293,8 +301,8 @@ body.editor-page #appView {
   display: none;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 6px 4px;
+  gap: 1px;
+  padding: 2px 2px;
   background: rgba(20,20,20,.40);
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 12px;
@@ -314,11 +322,36 @@ body.editor-page #appView {
 #edDrawBar.horiz { flex-direction: row; padding: 4px 6px; }
 #edDrawBar:active { cursor: grabbing; }
 
+#edShapeBar {
+  position: absolute;
+  z-index: 51;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 2px;
+  background: rgba(20,20,20,.40);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.25);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: grab;
+  left: 64px;
+  top: 120px;
+}
+#edShapeBar * { -webkit-tap-highlight-color: transparent; }
+#edShapeBar.visible { display: flex; }
+#edShapeBar.horiz { flex-direction: row; padding: 4px 6px; }
+#edShapeBar:active { cursor: grabbing; }
+
 .edb-tool {
   background: none;
   border: none;
-  font-size: 0.9rem;
-  width: 26px; height: 26px;
+  font-size: 1.25rem;
+  width: 30px; height: 30px;
   border-radius: 6px;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -335,6 +368,7 @@ body.editor-page #appView {
   flex-shrink: 0;
 }
 #edDrawBar.horiz .edb-sep { width: 1px; height: 16px; }
+#edShapeBar.horiz .edb-sep { width: 1px; height: 16px; }
 
 /* Swatch de color */
 .edb-swatch {
@@ -351,7 +385,7 @@ body.editor-page #appView {
 /* Dot de grosor */
 .edb-sizebtn {
   background: none; border: none;
-  width: 26px; height: 26px;
+  width: 30px; height: 30px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; border-radius: 6px; padding: 0;
   transition: background .1s;
@@ -393,6 +427,20 @@ body.editor-page #appView {
 #edb-palette-pop.open { display: flex; }
 /* En horiz la paleta se despliega en fila */
 #edb-palette-pop.horiz-pop { flex-direction: row; flex-wrap: wrap; max-width: 180px; }
+
+#edb-shapes-pop {
+  position: fixed;
+  z-index: 1300;
+  display: none;
+  flex-direction: row;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(20,20,20,.92);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 10px;
+  box-shadow: 0 3px 16px rgba(0,0,0,.45);
+}
+#edb-shapes-pop.open { display: flex; }
 
 .edb-pal-dot {
   width: 22px; height: 22px;
@@ -878,6 +926,17 @@ body.editor-page #appView {
   pointer-events: none;
   transition: opacity .22s;
 }
+@media (pointer: fine) {
+  /* PC/ratón: centrar verticalmente en lugar de bottom sheet */
+  .ed-fulloverlay {
+    align-items: center;
+  }
+  .ed-fulloverlay-box {
+    border-bottom: 2.5px solid var(--black) !important;
+    border-radius: 18px !important;
+    max-height: 80vh;
+  }
+}
 .ed-fulloverlay.open {
   opacity: 1;
   pointer-events: all;
@@ -1362,6 +1421,11 @@ body.editor-page #appView {
   pointer-events: none;
   opacity: 0.35;
 }
+/* En modo texto/bocadillo (props-active) la barra de menús permanece accesible */
+#editorShell.props-active #edMenuBar {
+  pointer-events: auto !important;
+  opacity: 1 !important;
+}
 #editorShell.draw-active #edTopbar .ed-top-action,
 #editorShell.draw-active #edUndoBtn,
 #editorShell.draw-active #edRedoBtn,
@@ -1379,4 +1443,60 @@ body.editor-page #appView {
 #editorShell.draw-active #edFloatBtn {
   pointer-events: auto !important;
   opacity: 1 !important;
+}
+
+/* ── OVERLAY CÁMARA IN-APP ── */
+#edCameraOverlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+#edCameraOverlay.hidden { display: none !important; }
+#edCameraVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+#edCameraControls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 24px 32px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(transparent, rgba(0,0,0,0.55));
+}
+#edCameraCapture {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: #fff;
+  border: 4px solid rgba(255,255,255,0.6);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform .1s;
+}
+#edCameraCapture:active { transform: scale(0.92); }
+#edCameraClose, #edCameraFlip {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.45);
+  border: 1.5px solid rgba(255,255,255,0.4);
+  color: #fff;
+  font-size: 1.3rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
 }

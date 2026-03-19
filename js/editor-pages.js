@@ -229,27 +229,39 @@ function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
     if (!la) return;
     ctx.save();
     ctx.globalAlpha = la.opacity ?? 1;
+    const cx = la.x * scaleX, cy = la.y * scaleY;
+    const w  = la.width  * scaleX, h = la.height * scaleY;
+    const rot = (la.rotation || 0) * Math.PI / 180;
     if (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0) {
-      const w = la.width * scaleX, h = la.height * scaleY;
-      const px = la.x * scaleX,   py = la.y * scaleY;
-      ctx.drawImage(la.img, px - w/2, py - h/2, w, h);
+      ctx.translate(cx, cy); if(rot) ctx.rotate(rot);
+      ctx.drawImage(la.img, -w/2, -h/2, w, h);
     } else if (la.type === 'stroke' && la._canvas) {
-      // Dibujos congelados: escalar el canvas del stroke a la miniatura
-      const w = la.width * scaleX, h = la.height * scaleY;
-      const px = la.x * scaleX,   py = la.y * scaleY;
-      ctx.save();
-      ctx.translate(px, py);
-      ctx.rotate((la.rotation || 0) * Math.PI / 180);
+      ctx.translate(cx, cy); ctx.rotate(rot);
       ctx.drawImage(la._canvas, -w/2, -h/2, w, h);
-      ctx.restore();
+    } else if (la.type === 'shape') {
+      ctx.translate(cx, cy); if(rot) ctx.rotate(rot);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      if (la.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
+      else ctx.rect(-w/2, -h/2, w, h);
+      if (la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
+      if ((la.lineWidth||0) > 0) { ctx.strokeStyle = la.color||'#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * scaleX/360); ctx.stroke(); }
+    } else if (la.type === 'line' && la.points && la.points.length >= 2) {
+      ctx.translate(cx, cy); if(rot) ctx.rotate(rot);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(la.points[0].x * scaleX, la.points[0].y * scaleY);
+      for (let i = 1; i < la.points.length; i++)
+        ctx.lineTo(la.points[i].x * scaleX, la.points[i].y * scaleY);
+      if (la.closed) ctx.closePath();
+      if (la.closed && la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
+      if ((la.lineWidth||0) > 0) { ctx.strokeStyle = la.color||'#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * scaleX/360); ctx.stroke(); }
     } else if (la.type === 'text' || la.type === 'bubble') {
-      const w = la.width * scaleX, h = la.height * scaleY;
-      const px = la.x * scaleX,   py = la.y * scaleY;
       ctx.fillStyle = la.backgroundColor || '#fff';
-      ctx.fillRect(px - w/2, py - h/2, w, h);
+      ctx.fillRect(cx - w/2, cy - h/2, w, h);
       ctx.strokeStyle = la.borderColor || '#ccc';
       ctx.lineWidth = 1;
-      ctx.strokeRect(px - w/2, py - h/2, w, h);
+      ctx.strokeRect(cx - w/2, cy - h/2, w, h);
     }
     ctx.restore();
   });
