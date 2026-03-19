@@ -134,7 +134,6 @@ const SupabaseClient = (() => {
       author_name: comic.author     || comic.username || '',
       genre:       comic.genre      || '',
       nav_mode:    comic.navMode    || 'fixed',
-      social:      comic.social     || '',
       published:   false,
       updated_at:  new Date().toISOString(),
     });
@@ -149,7 +148,6 @@ const SupabaseClient = (() => {
       author_name: comic.author  || comic.username || '',
       genre:       comic.genre   || '',
       nav_mode:    comic.navMode || 'fixed',
-      social:      comic.social  || '',
       published:   false,
     });
     await _uploadPanels(comic);
@@ -174,15 +172,6 @@ const SupabaseClient = (() => {
     }
     await _delete('panels', `work_id=eq.${supabaseId}`);
     await _delete('works', `id=eq.${supabaseId}`);
-  }
-
-  // Borrar todas las obras de un autor y su perfil de authors
-  async function deleteAuthorData(authorId) {
-    const works = await _get(`works?author_id=eq.${authorId}&select=id`).catch(() => []);
-    for (const w of (works || [])) {
-      await deleteWork(w.id).catch(() => {});
-    }
-    await _delete('authors', `id=eq.${authorId}`);
   }
 
   // ── DESCARGAR BORRADOR PARA EDITAR ──────────────────────────────────────────────────────────────────
@@ -243,7 +232,7 @@ const SupabaseClient = (() => {
   async function _fetchWorks(filter) {
     const works = await _get(
       `works?${filter}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,social,published,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,published,updated_at`
     );
     if (!works || !works.length) return [];
 
@@ -278,7 +267,6 @@ const SupabaseClient = (() => {
       username:      w.author_name  || '',   // home.js filtra por username
       genre:         w.genre        || '',
       navMode:       w.nav_mode     || 'fixed',
-      social:        w.social       || '',
       published:     published,
       approved:      published,
       pendingReview: !published,
@@ -287,5 +275,5 @@ const SupabaseClient = (() => {
     };
   }
 
-  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks };
+  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks };
 })();

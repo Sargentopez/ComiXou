@@ -30,7 +30,7 @@ function renderTab(tab) {
   if (tab === 'pending')   renderPending(panel);
   if (tab === 'published') renderPublished(panel);
   if (tab === 'all')       renderAll(panel);
-  if (tab === 'users')     renderUsers(panel);  // async — se muestra "Cargando…" internamente
+  if (tab === 'users')     renderUsers(panel);
 }
 
 // ── PENDIENTES ──
@@ -69,63 +69,35 @@ function renderAll(panel) {
 }
 
 // ── USUARIOS ──
-async function renderUsers(panel) {
-  panel.innerHTML = `<p class="admin-empty">Cargando usuarios…</p>`;
-  let list = [];
-  try {
-    const SB_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
-    const SB_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-    const res = await fetch(
-      `${SB_URL}/rest/v1/authors?select=id,username,email,role&order=role.asc,username.asc`,
-      { headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` } }
-    );
-    if (res.ok) list = await res.json();
-  } catch (_) {}
-
-  // Fallback: usuarios fijos si Supabase no devuelve nada
-  if (!list.length) {
-    list = [
-      { id: 'u_admin',   username: 'Admin',   email: 'admin@comixow.com', role: 'admin'  },
-      { id: 'u_macario', username: 'Macario', email: 'macario@yo.com',    role: 'author' },
-    ];
-  }
-
-  panel.innerHTML = '';
+function renderUsers(panel) {
+  const users = JSON.parse(localStorage.getItem('cs_users') || '{}');
+  const list  = Object.values(users);
   if (!list.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noUsers')}</p>`; return; }
-
   list.forEach(user => {
     const row = document.createElement('div');
     row.className = 'admin-row';
     row.innerHTML = `
       <div class="admin-row-info">
-        <span class="admin-row-title">${escHtml(user.username || '')}</span>
-        <span class="admin-row-meta">${escHtml(user.email || '')} · ${user.role || 'user'}</span>
+        <span class="admin-row-title">${escHtml(user.username)}</span>
+        <span class="admin-row-meta">${escHtml(user.email)} · ${user.role || 'user'}</span>
       </div>
       <div class="admin-row-actions">
         ${user.role !== 'admin'
-          ? `<button class="admin-btn admin-btn-del" data-uid="${user.id}" data-email="${escHtml(user.email)}">Eliminar</button>`
+          ? `<button class="admin-btn admin-btn-del" id="delUser_${user.id}">Eliminar</button>`
           : '<span class="admin-badge">Admin</span>'}
       </div>`;
-    row.querySelector('[data-uid]')?.addEventListener('click', async function() {
-      const uid   = this.dataset.uid;
-      const uname = user.username;
-      if (!confirm(`¿Eliminar usuario ${uname}? Se eliminarán también todas sus obras.`)) return;
-      const btn = this;
-      btn.disabled = true; btn.textContent = '…';
-      try {
-        // Borrar obras y perfil de Supabase
-        if (typeof SupabaseClient !== 'undefined') {
-          await SupabaseClient.deleteAuthorData(uid);
-        }
-        // Borrar obras locales
-        ComicStore.getByUser(uid).forEach(c => ComicStore.remove(c.id));
-        showToast(I18n.t('userDeleted') + ' — Recuerda borrar también el usuario en Supabase Auth');
-      } catch(e) {
-        console.warn('deleteAuthorData error:', e);
-        showToast('Error al eliminar: ' + e.message);
-        btn.disabled = false; btn.textContent = 'Eliminar';
-        return;
-      }
+    row.querySelector(`#delUser_${user.id}`)?.addEventListener('click', () => {
+      const name = user.username;
+      if (!confirm(`¿Eliminar usuario ${name}? Se eliminarán también todas sus obras.`)) return;
+      ComicStore.getByUser(user.id).forEach(c => {
+        if (c.supabaseId && typeof SupabaseClient !== 'undefined')
+          SupabaseClient.deleteWork(c.supabaseId).catch(e => console.warn(e));
+        ComicStore.remove(c.id);
+      });
+      const users2 = JSON.parse(localStorage.getItem('cs_users') || '{}');
+      delete users2[user.email];
+      localStorage.setItem('cs_users', JSON.stringify(users2));
+      showToast(I18n.t('userDeleted'));
       renderTab('users');
     });
     panel.appendChild(row);
@@ -162,8 +134,14 @@ function buildAdminRow(comic, mode) {
   // Leer (embed reader en modal)
   row.querySelector(`#read_${comic.id}`)?.addEventListener('click', () => {
     const sid = comic.supabaseId;
+    // Borradores (no publicados): usar ?draft=. Publicados: usar ?id=
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
-    window.location = 'reader/?' + param;
+    // Construir URL del reader de forma robusta usando origin+pathname (sin hash).
+    // pathname en GitHub Pages = /ComiXou/index.html o /ComiXou/
+    const base = (window.location.origin + window.location.pathname)
+      .replace(/\/index\.html$/, '')
+      .replace(/\/$/, '');
+    openReaderModal(`${base}/reader/?${param}&embed=1`);
   });
 
   // Aprobar
@@ -227,6 +205,7 @@ function buildAdminRow(comic, mode) {
 
 // ── MODAL READER EMBED ─────────────────────────────────────
 function openReaderModal(url) {
+  // Crear overlay si no existe
   let overlay = document.getElementById('readerModal');
   if (!overlay) {
     overlay = document.createElement('div');
@@ -234,60 +213,31 @@ function openReaderModal(url) {
     overlay.className = 'reader-modal';
     overlay.innerHTML = `
       <div class="reader-modal-inner">
+        <button class="reader-modal-close" id="readerModalClose" aria-label="Cerrar">✕</button>
         <iframe id="readerModalFrame" class="reader-modal-frame" allowfullscreen></iframe>
       </div>`;
     document.body.appendChild(overlay);
 
+    overlay.querySelector('#readerModalClose').addEventListener('click', closeReaderModal);
     overlay.addEventListener('click', e => { if (e.target === overlay) closeReaderModal(); });
 
+    // Escuchar mensaje del reader cuando pulsa cerrar dentro del iframe
     window.addEventListener('message', e => {
       if (e.data?.type === 'reader:close') closeReaderModal();
-      if (e.data?.type === 'reader:fullscreen') {
-        const frame = document.getElementById('readerModalFrame');
-        if (!frame) return;
-        const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-        if (isFs) {
-          (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
-        } else {
-          const req = frame.requestFullscreen || frame.webkitRequestFullscreen;
-          if (req) req.call(frame, { navigationUI: 'hide' }).catch(() => {});
-        }
-      }
     });
   }
-  // Recordar estado de fullscreen previo
-  overlay._wasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
 
-  const frame = document.getElementById('readerModalFrame');
-  frame.src = url;
+  overlay.querySelector('#readerModalFrame').src = url;
   overlay.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  frame.addEventListener('load', () => frame.focus(), { once: true });
 }
 
 function closeReaderModal() {
   const overlay = document.getElementById('readerModal');
   if (!overlay) return;
   overlay.classList.add('hidden');
-  document.getElementById('readerModalFrame').src = '';
+  overlay.querySelector('#readerModalFrame').src = '';
   document.body.style.overflow = '';
-  const wasFs = overlay._wasFullscreen;
-  overlay._wasFullscreen = false;
-  const nowFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-  if (nowFs && !wasFs) {
-    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
-  } else if (!nowFs && wasFs) {
-    if (typeof Fullscreen !== 'undefined') Fullscreen.enter();
-  }
-  setTimeout(() => { if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn(); }, 200);
 }
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-
-// Cerrar modal reader con Escape
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') {
-    const overlay = document.getElementById('readerModal');
-    if (overlay && !overlay.classList.contains('hidden')) { e.stopPropagation(); closeReaderModal(); }
-  }
-});

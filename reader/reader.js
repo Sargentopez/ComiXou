@@ -16,19 +16,18 @@ const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
 
 // ── ESTADO ──────────────────────────────────────────────────
 const RS = {
-  panels:       [],   // [{id, orientation, text_mode, data_url, texts:[]}]
-  images:       [],   // Image objects precargados
-  idx:          0,    // panel actual
-  textStep:     0,    // bocadillo visible (sequential)
-  fadeAlpha:    0,    // alpha bocadillo anterior
-  fadeRaf:      null,
-  canvas:       null,
-  ctx:          null,
-  ctrlTimer:    null,
-  ac:           null,
-  keyHandler:   null,
-  resizeFn:     null,
-  creditsShown: false, // true tras mostrarse la primera vez — no vuelve a aparecer
+  panels:     [],   // [{id, orientation, text_mode, data_url, texts:[]}]
+  images:     [],   // Image objects precargados
+  idx:        0,    // panel actual
+  textStep:   0,    // bocadillo visible (sequential)
+  fadeAlpha:  0,    // alpha bocadillo anterior
+  fadeRaf:    null,
+  canvas:     null,
+  ctx:        null,
+  ctrlTimer:  null,
+  ac:         null,
+  keyHandler: null,
+  resizeFn:   null,
 };
 
 // ── ARRANQUE ─────────────────────────────────────────────────
@@ -36,28 +35,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(window.location.search);
   const id     = params.get('id');
   const draft  = params.get('draft');   // token de borrador (obra no publicada)
-  const wantsFs = params.get('fs') === '1'; // heredar fullscreen de la app
 
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
   const _closeAction = RS.isEmbed ? _embedClose : () => history.back();
   if (RS.isEmbed) document.body.classList.add('embed-mode');
-
-  // Si la app estaba en fullscreen, entrar en fullscreen al primer gesto del usuario
-  // (los navegadores exigen que requestFullscreen esté dentro de un evento de usuario)
-  if (wantsFs && !RS.isEmbed) {
-    const _enterFsOnce = () => {
-      const req = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
-      if (req) req.call(document.documentElement).catch(() => {});
-      document.removeEventListener('click',     _enterFsOnce);
-      document.removeEventListener('touchstart', _enterFsOnce);
-      document.removeEventListener('keydown',    _enterFsOnce);
-    };
-    document.addEventListener('click',     _enterFsOnce, { once: true });
-    document.addEventListener('touchstart', _enterFsOnce, { once: true });
-    document.addEventListener('keydown',    _enterFsOnce, { once: true });
-  }
 
   // Botón cerrar: siempre visible, pegado a la hoja por _positionBtns()
   const closeBtnEl = document.getElementById('closeBtn');
@@ -121,7 +104,9 @@ function _onFullscreenChange() {
 }
 
 function _embedClose() {
-  history.back();
+  // Si está en iframe, notifica al padre. Si no, navega atrás.
+  try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(e) {}
+  if (window.self === window.top) history.back();
 }
 
 // ── CARGA DESDE SUPABASE ─────────────────────────────────────
@@ -134,12 +119,8 @@ async function loadWork(workId) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(workId);
     document.title = (work[0].title || 'Obra') + ' — ComiXow';
-    RS._workAuthor = work[0].author_name || "";
-    RS._workSocial = work[0].social      || "";
+    RS._workAuthor = work[0].author_name || '';
     RS._workTitle  = work[0].title       || '';
-    // Añadir hoja de créditos como último panel — se trata como hoja normal
-    const _lastPanel = RS.panels[RS.panels.length - 1];
-    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -160,11 +141,8 @@ async function loadDraft(token) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(token);
     document.title = (work[0].title || 'Borrador') + ' — ComiXow';
-    RS._workAuthor = work[0].author_name || "";
-    RS._workSocial = work[0].social      || "";
+    RS._workAuthor = work[0].author_name || '';
     RS._workTitle  = work[0].title       || '';
-    const _lastPanel = RS.panels[RS.panels.length - 1];
-    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
     await preloadImages();
     startReader();
@@ -271,9 +249,8 @@ function startReader() {
   // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);
 
-  // Registrar resize con delay para evitar que el resize inicial borre el canvas
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
-  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+  window.addEventListener('resize', RS.resizeFn);
 
   // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -316,25 +293,16 @@ function _panelDims(idx) {
 }
 
 function _resizeCanvas() {
-  const panel = RS.panels[RS.idx];
   const { pw, ph } = _panelDims(RS.idx);
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
-
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  // Panel de créditos: escalar como vertical normal (contain)
-  // Hojas horizontales reales: llenar toda la altura
-  const isHorizPanel = pw > ph && !panel?.isCredits;
-
-  let scale;
-  if (isHorizPanel) {
-    scale = vh / ph;
-    if (pw * scale > vw * 1.5) scale = vw / pw;
-  } else {
-    scale = Math.min(vw / pw, vh / ph);
-  }
-
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Los controles se superponen sobre el canvas — no restan espacio disponible
+  const MARGIN = 8;
+  const availW = vw - MARGIN * 2;
+  const availH = vh - MARGIN * 2;
+  // Escala uniforme que respeta la proporción original siempre
+  const scale = Math.min(availW / pw, availH / ph);
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
   RS.canvas.style.width  = dw + 'px';
   RS.canvas.style.height = dh + 'px';
@@ -347,24 +315,13 @@ function _resizeCanvas() {
 function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
-
-  // Panel de créditos — render especial con fade
-  if (panel.isCredits) {
-    const { pw, ph } = _panelDims(RS.idx);
-    _renderCredits(pw, ph);
-    _showCredits(); // lanza el fade-in si no está en curso
-    return;
-  }
-
-  // Si venimos de los créditos, resetear su estado
-  if (RS.creditsTimer || RS.creditsAlpha > 0) _resetCredits();
-
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
 
   ctx.clearRect(0, 0, pw, ph);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
+
   // Dibujar capas en orden: image/draw/stroke primero, bubble/text al final (via _drawTexts)
   const layers    = panel.layers    || [];
   const layerImgs = panel.layerImgs || [];
@@ -627,6 +584,9 @@ function advance() {
   if (RS.idx < RS.panels.length - 1) {
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resizeCanvas(); _render();
+  } else {
+    // Pantalla final de créditos en canvas
+    _showCredits();
   }
 }
 
@@ -661,33 +621,44 @@ function _startFade() {
 }
 
 // ── PANTALLA FINAL DE CRÉDITOS ────────────────────────────────
-// Se llama desde _render() cuando el panel actual es el de créditos.
-// La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 function _showCredits() {
-  // Evitar relanzar si ya está en curso
-  if (RS.creditsTimer || RS.creditsAlpha > 0) return;
-  RS.creditsAlpha = 0;
+  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
+  RS.isCredits = true;
+
+  // Mantener las mismas proporciones que la última hoja visitada
+  const { pw, ph } = _panelDims(RS.panels.length - 1);
+  RS.canvas.width  = pw;
+  RS.canvas.height = ph;
+  // Recalcular posición y tamaño (sin cambio de orientación)
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const MARGIN = 8;
+  const scale = Math.min((vw - MARGIN*2) / pw, (vh - MARGIN*2) / ph);
+  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+  RS.canvas.style.width  = dw + 'px';
+  RS.canvas.style.height = dh + 'px';
+  RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
+  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
+  _positionBtns();
+  RS.creditsAuthor = RS._workTitle || '';
+  RS.creditsAlpha  = 0;
+
+  // Dibujar línea del autor inmediatamente
+  _renderCredits(pw, ph, 0);
 
   // Tras 1 segundo, iniciar fade-in del resto
   RS.creditsTimer = setTimeout(() => {
     const start = performance.now();
-    const dur   = 1200;
+    const dur   = 1200; // ms de fade
     function fadeStep(now) {
       RS.creditsAlpha = Math.min(1, (now - start) / dur);
-      const { pw, ph } = _panelDims(RS.idx);
-      _renderCredits(pw, ph);
+      _renderCredits(pw, ph, RS.creditsAlpha);
       if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
-      else { RS.fadeRaf = null; }
+      else RS.fadeRaf = null;
     }
     RS.fadeRaf = requestAnimationFrame(fadeStep);
   }, 1000);
-}
 
-function _resetCredits() {
-  if (RS.creditsTimer) { clearTimeout(RS.creditsTimer); RS.creditsTimer = null; }
-  if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
-  RS.creditsAlpha = 0;
-  RS.isCredits    = false;
+  // El click/tap en créditos lo gestiona el listener permanente del canvas (_setupControls)
 }
 
 function _creditsClick() {
@@ -708,72 +679,40 @@ function _renderCredits(pw, ph) {
   ctx.fillRect(0, 0, pw, ph);
 
   const cx = pw / 2;
-  const isHoriz = pw > ph;
-  // En horizontal ph es la dimensión corta (360) — usarla como base de escala de fuentes
-  const fRef  = isHoriz ? ph : pw;
-  const lineH = ph * (isHoriz ? 0.07 : 0.09);
+  const lineH = ph * 0.09; // espaciado entre líneas
 
-  // ── Social + autor ──
-  const socialText = RS._workSocial || '';
-  const authorText = RS._workAuthor || '';
-  ctx.globalAlpha  = 1;
+  // ── Línea 1: nombre del autor (siempre visible, inmediato) ──
+  const authorY = ph * 0.34;
+  ctx.globalAlpha = 1;
+  ctx.fillStyle   = '#222222';
+  ctx.font        = `600 ${Math.round(pw * 0.055)}px Patrick Hand, sans-serif`;
+  ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
-
-  let authorY = ph * (isHoriz ? 0.11 : 0.11);
-
-  if (socialText) {
-    const socialFS = Math.round(fRef * (isHoriz ? 0.05 : 0.038));
-    ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#444444';
-    ctx.textAlign = 'left';
-    const marginX = pw * 0.09;
-    const maxW    = pw * 0.82;
-    const words   = socialText.split(' ');
-    const lines   = [];
-    let cur = '';
-    words.forEach(w => {
-      const test = cur ? cur + ' ' + w : w;
-      if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; }
-      else cur = test;
-    });
-    if (cur) lines.push(cur);
-    const socialLineH  = socialFS * 1.4;
-    const totalSocialH = lines.length * socialLineH;
-    const socialStartY = ph * (isHoriz ? 0.12 : 0.26);
-    lines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
-    authorY = socialStartY + totalSocialH + socialFS * 0.9;
-  }
-
-  // Nombre del autor — centrado
-  ctx.font      = `600 ${Math.round(fRef * (isHoriz ? 0.07 : 0.055))}px Patrick Hand, sans-serif`;
-  ctx.fillStyle = '#222222';
-  ctx.textAlign = 'center';
-  ctx.fillText(authorText, cx, authorY);
+  ctx.fillText(`Autor: ${RS._workAuthor || ''}`, cx, authorY);
 
   // ── Resto con fade ──────────────────────────────────────────
   ctx.globalAlpha = alpha;
 
-  // Logotipo ComiXow
-  const logoFS  = Math.round(fRef * (isHoriz ? 0.13 : 0.11));
-  const logoY   = authorY + lineH * 1.3;
-  ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+  // Línea 2: logotipo ComiXow
+  const logoY = authorY + lineH * 1.3;
+  ctx.font      = `900 ${Math.round(pw * 0.11)}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#f5c400';
   ctx.fillText('ComiXow', cx, logoY);
 
-  // Eslogan — 2 × sloganFS desde la base del logo (medido en imagen de referencia)
-  const sloganFS = Math.round(fRef * (isHoriz ? 0.055 : 0.042));
-  const sloganY  = logoY + sloganFS * 2;
-  ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+  // Línea 3: eslogan
+  const sloganY = logoY + lineH * 1.1;
+  ctx.font      = `400 ${Math.round(pw * 0.042)}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#555555';
   ctx.fillText('Crea y Comparte', cx, sloganY);
 
-  // Enlace — 3 × sloganFS desde la base del eslogan (medido en imagen de referencia)
-  const linkFS = Math.round(fRef * (isHoriz ? 0.045 : 0.038));
-  const linkY  = sloganY + sloganFS * 3;
+  // Línea 4: enlace (dibujado como texto subrayado)
+  const linkY = sloganY + lineH * 1.0;
+  const linkFS = Math.round(pw * 0.038);
   ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
   ctx.fillStyle = '#1a73e8';
   const linkText = 'Visita más obras del autor';
   ctx.fillText(linkText, cx, linkY);
+  // Subrayado manual
   const lw = ctx.measureText(linkText).width;
   ctx.beginPath();
   ctx.strokeStyle = '#1a73e8';

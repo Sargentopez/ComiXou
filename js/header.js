@@ -142,9 +142,9 @@ const Header = (() => {
     /* ── Logout ── */
     var logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) {
-      logoutBtn.addEventListener('click', async function(e) {
+      logoutBtn.addEventListener('click', function(e) {
         e.preventDefault();
-        await Auth.logout();
+        Auth.logout();
         Header.refresh();
         Router.go('home');
       });
@@ -153,12 +153,12 @@ const Header = (() => {
     /* ── Eliminar cuenta ── */
     var delBtn = document.getElementById('dotsDeleteAccount');
     if (delBtn) {
-      delBtn.addEventListener('click', async function(e) {
+      delBtn.addEventListener('click', function(e) {
         e.preventDefault();
         if (!confirm(T('confirmDeleteAccount'))) return;
         var u = Auth.currentUser();
         if (u) ComicStore.getByUser(u.id).forEach(c => ComicStore.remove(c.id));
-        await Auth.deleteAccount();
+        Auth.deleteAccount();
         Header.refresh();
         Router.go('home');
       });

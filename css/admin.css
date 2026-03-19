@@ -8,39 +8,25 @@
   max-width: 800px; margin: 0 auto;
 }
 
-/* ── TABS — mismo estilo que .page-nav ── */
+/* ── TABS ── */
 .admin-tabs {
   position: sticky;
-  top: var(--header-h);   /* ajustado por JS en AdminView_init */
+  top: var(--header-h);
   z-index: 800;
   display: flex;
-  align-items: center;
-  height: 44px;
   background: var(--white);
-  border-bottom: 1.5px solid var(--gray-300);
-  padding: 0 14px;
-}
-.admin-tab-sep {
-  width: 1px; height: 18px;
-  background: var(--gray-300); flex-shrink: 0;
+  border-bottom: 2px solid var(--black);
 }
 .admin-tab {
-  flex: 1;
+  flex: 1; padding: 12px 8px;
   background: none; border: none;
-  padding: 0 4px; height: 44px;
-  font-family: var(--font-body); font-weight: 700; font-size: 0.88rem;
-  color: var(--gray-500); cursor: pointer; text-align: center;
-  position: relative; transition: color .15s;
-  white-space: nowrap;
+  font-family: var(--font-body); font-weight: 700; font-size: 0.82rem;
+  color: var(--gray-500); cursor: pointer;
+  border-bottom: 3px solid transparent; margin-bottom: -2px;
+  transition: color .15s;
 }
 .admin-tab:hover  { color: var(--ink); }
-.admin-tab.active { color: var(--ink); }
-.admin-tab.active::after {
-  content: '';
-  position: absolute;
-  bottom: 0; left: 10%; right: 10%;
-  height: 2.5px; background: var(--black); border-radius: 2px;
-}
+.admin-tab.active { color: var(--ink); border-bottom-color: var(--black); }
 
 /* ── PANEL ── */
 .admin-panel { padding: 8px 0; }

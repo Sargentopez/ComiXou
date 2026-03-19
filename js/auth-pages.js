@@ -35,7 +35,7 @@ function AuthView_init() {
     // (más fiable en SPA con HTML inyectado)
     const submitBtn = loginForm.querySelector('button[type="submit"]');
     
-    async function doLogin(e) {
+    function doLogin(e) {
       if (e) e.preventDefault();
       clearErrors();
 
@@ -53,13 +53,7 @@ function AuthView_init() {
       }
       if (!valid) return;
 
-      const submitBtn = loginForm.querySelector('button[type="submit"]');
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '…'; }
-
-      const result = await Auth.login(email, pass);
-
-      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = I18n.t('loginBtn') || 'Entrar'; }
-
+      const result = Auth.login(email, pass);
       if (!result.ok) {
         showError('passError', I18n.t(result.err));
         return;
@@ -68,6 +62,7 @@ function AuthView_init() {
       showToast(I18n.t('loginOk'));
       setTimeout(() => {
         Router.go('home');
+        // Header.refresh tras el render del router
         requestAnimationFrame(() => Header.refresh());
       }, 600);
     }
@@ -81,7 +76,7 @@ function AuthView_init() {
   if (registerForm) {
     const submitBtn = registerForm.querySelector('button[type="submit"]');
 
-    async function doRegister(e) {
+    function doRegister(e) {
       if (e) e.preventDefault();
       clearErrors();
 
@@ -99,16 +94,9 @@ function AuthView_init() {
       if (pass !== passConf) { showError('passConfError', I18n.t('errPassMatch')); valid = false; }
       if (!valid) return;
 
-      const submitBtn = registerForm.querySelector('button[type="submit"]');
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '…'; }
-
-      const result = await Auth.register(username, email, pass);
-
-      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = I18n.t('registerBtn') || 'Crear cuenta'; }
-
+      const result = Auth.register(username, email, pass);
       if (!result.ok) {
-        const msg = result.detail ? `${I18n.t(result.err)} (${result.detail})` : I18n.t(result.err);
-        showError('emailError', msg);
+        showError('emailError', I18n.t(result.err));
         return;
       }
 

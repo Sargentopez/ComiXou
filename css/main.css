@@ -649,16 +649,19 @@ body.editor-page { padding-top: 0; }
 /* ── MODAL READER EMBED (compartido: expositor + admin) ── */
 .reader-modal {
   position: fixed; inset: 0; z-index: 9000;
-  background: #000;
+  background: rgba(0,0,0,.88);
   display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
 }
 .reader-modal.hidden { display: none; }
 .reader-modal-inner {
   position: relative;
-  width: 100%;
-  height: 100%;
+  width: min(98vw, 560px);
+  height: min(96vh, 900px);
+  border-radius: 12px;
   overflow: hidden;
-  background: #000;
+  background: #1a1a1a;
+  box-shadow: 0 24px 80px rgba(0,0,0,.7);
 }
 .reader-modal-frame {
   width: 100%; height: 100%;
