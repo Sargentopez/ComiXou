@@ -459,11 +459,20 @@ class BubbleLayer extends BaseLayer {
         // Contorno grande más cercano a pequeña: punto en bx,by en dirección a sx,sy a distancia rBig
         const dx=sx-bx,dy=sy-by,dist=Math.hypot(dx,dy)||1;
         const ux=dx/dist,uy=dy/dist;
+        // Contornos de grande y pequeña (punto más cercano entre ellas)
         const edgeBig  ={x:bx+ux*rBig,   y:by+uy*rBig};
-        const edgeSmall={x:sx-ux*rSmall,  y:sy-uy*rSmall};
-        const mx=(edgeBig.x+edgeSmall.x)/2, my=(edgeBig.y+edgeSmall.y)/2;
-        const rMid=(rBig+rSmall)/2*0.7;
-        [[bx,by,rBig],[mx,my,rMid],[sx,sy,rSmall]].forEach(([cx2,cy2,r])=>{
+        const edgeSmall={x:sx-ux*rSmall, y:sy-uy*rSmall};
+        const freeD=Math.hypot(edgeSmall.x-edgeBig.x,edgeSmall.y-edgeBig.y);
+        // Radios fijos proporcionales: rM2 más cerca de grande, rM1 más cerca de pequeña
+        // rM2 > rM1 > rSmall, rBig > rM2
+        const rM2=rBig*0.55;   // intermedia más grande (cerca de grande)
+        const rM1=rBig*0.32;   // intermedia más pequeña (cerca de pequeña)
+        // Distribuir posiciones: gap igual entre todos los contornos
+        // gap = (freeD - 2*rM2 - 2*rM1) / 3
+        const gap=Math.max(0,(freeD-2*rM2-2*rM1)/3);
+        const m2x=edgeBig.x+ux*(gap+rM2),      m2y=edgeBig.y+uy*(gap+rM2);
+        const m1x=edgeBig.x+ux*(gap+2*rM2+gap+rM1), m1y=edgeBig.y+uy*(gap+2*rM2+gap+rM1);
+        [[bx,by,rBig],[m2x,m2y,rM2],[m1x,m1y,rM1],[sx,sy,rSmall]].forEach(([cx2,cy2,r])=>{
           ctx.beginPath();ctx.ellipse(cx2,cy2,r,r*2/3,0,0,Math.PI*2);
           ctx.fillStyle=this.backgroundColor;ctx.fill();
           ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;ctx.stroke();
@@ -911,59 +920,23 @@ class LineLayer extends BaseLayer {
     const hasRadii = n>0 && Object.keys(cr).some(k=>(cr[k]||0)>0);
 
     if(hasRadii){
-      // Con radios: bbox exacto de las curvas cuadráticas Q(p1, ctrl, p2)
-      // El punto más exterior de Q está en t = (p1-ctrl)/(p1-2*ctrl+p2)
-      const norm2=(vx,vy)=>{const l=Math.hypot(vx,vy);return l>0?{x:vx/l,y:vy/l}:{x:0,y:0};};
-      // Añadir el extremo de una curva cuadrática en un eje
-      const addQuadExtreme=(pts,p1c,ctr,p2c,isX,p1other,p2other,ctrOther)=>{
-        const denom=p1c-2*ctr+p2c;
-        if(Math.abs(denom)>1e-10){
-          const t=(p1c-ctr)/denom;
-          if(t>0&&t<1){
-            const v=(1-t)*(1-t)*p1c+2*t*(1-t)*ctr+t*t*p2c;
-            const u=(1-t)*(1-t)*p1other+2*t*(1-t)*ctrOther+t*t*p2other;
-            pts.push(isX?{x:v,y:u}:{x:u,y:v});
-          }
-        }
-      };
-      const effPts=[];
-      for(let i=0;i<n;i++){
-        const r=cr[i]||0;
-        if(r>0){
-          const prev=this.points[(i-1+n)%n],cur=this.points[i],next=this.points[(i+1)%n];
-          const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
-          const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
-          const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
-          const v1=norm2((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
-          const v2=norm2((next.x-cur.x)*pw,(next.y-cur.y)*ph);
-          const p1x=cur.x-v1.x*rr/pw, p1y=cur.y-v1.y*rr/ph;
-          const p2x=cur.x+v2.x*rr/pw, p2y=cur.y+v2.y*rr/ph;
-          // p1 y p2 siempre en el bbox
-          effPts.push({x:p1x,y:p1y});
-          effPts.push({x:p2x,y:p2y});
-          // Extremos de la curva Q(p1, cur, p2) en X e Y
-          addQuadExtreme(effPts,p1x,cur.x,p2x,true, p1y,p2y,cur.y);
-          addQuadExtreme(effPts,p1y,cur.y,p2y,false,p1x,p2x,cur.x);
-        } else {
-          effPts.push(this.points[i]);
-        }
-      }
-      const xs=effPts.map(p=>p.x), ys=effPts.map(p=>p.y);
-      const minX=Math.min(...xs),maxX=Math.max(...xs);
-      const minY=Math.min(...ys),maxY=Math.max(...ys);
-      // Ajustar la.x/y al nuevo centro efectivo y recalcular puntos relativos
-      const newCx=(minX+maxX)/2, newCy=(minY+maxY)/2;
-      if(Math.abs(newCx)>0.0001||Math.abs(newCy)>0.0001){
+      // Con radios: el bbox para selección y resize usa los puntos ORIGINALES,
+      // igual que Figma — los radios son metadatos, no modifican la geometría.
+      // _updateBbox solo recentra los puntos si están descentrados.
+      const xs2=this.points.map(p=>p.x), ys2=this.points.map(p=>p.y);
+      const minX2=Math.min(...xs2),maxX2=Math.max(...xs2);
+      const minY2=Math.min(...ys2),maxY2=Math.max(...ys2);
+      const newCx2=(minX2+maxX2)/2, newCy2=(minY2+maxY2)/2;
+      if(Math.abs(newCx2)>0.0001||Math.abs(newCy2)>0.0001){
         const rot=(this.rotation||0)*Math.PI/180;
         const cos=Math.cos(rot),sin=Math.sin(rot);
-        const dxPx=newCx*pw, dyPx=newCy*ph;
+        const dxPx=newCx2*pw, dyPx=newCy2*ph;
         this.x+=(dxPx*cos-dyPx*sin)/pw;
         this.y+=(dxPx*sin+dyPx*cos)/ph;
-        this.points=this.points.map(p=>({x:p.x-newCx,y:p.y-newCy}));
-        // También desplazar los radios de índice no cambian, los puntos sí
+        this.points=this.points.map(p=>({x:p.x-newCx2,y:p.y-newCy2}));
       }
-      this.width  = Math.max(maxX-minX, 0.01);
-      this.height = Math.max(maxY-minY, 0.01);
+      this.width  = Math.max(maxX2-minX2, 0.01);
+      this.height = Math.max(maxY2-minY2, 0.01);
     } else {
       // Sin radios: comportamiento original
       const xs=this.points.map(p=>p.x), ys=this.points.map(p=>p.y);
@@ -1016,6 +989,8 @@ class LineLayer extends BaseLayer {
     const pts = this.points;
     const cr  = this.cornerRadii || {};
     const n   = pts.length;
+    // scaleX/scaleY: factores de escala acumulados por resize no proporcional
+    // Se actualizan en edOnEnd al finalizar un resize
     const px2 = p => ({x: p.x*pw, y: p.y*ph});
 
     // Normalize vector to unit length
@@ -1154,7 +1129,7 @@ class LineLayer extends BaseLayer {
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
     if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl() };
-    if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(),
+    if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -1218,6 +1193,7 @@ function edApplyHistory(snapshot){
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       const _pw = _isV?ED_PAGE_W:ED_PAGE_H, _ph = _isV?ED_PAGE_H:ED_PAGE_W;
       l = StrokeLayer.fromDataUrl(o.dataUrl||'', o.x||0.5, o.y||0.5, o.width||0.1, o.height||0.1, _pw, _ph);
+      if(o.frozenLine) l._frozenLine = o.frozenLine;
       if(o.rotation) l.rotation=o.rotation;
       if(o.opacity !== undefined) l.opacity=o.opacity;
       return l;
@@ -1733,6 +1709,21 @@ function edDrawSel(){
   const hr=6/z;
   const hrRot=8/z;
 
+  // StrokeLayer congelado: mostrar pequeño marcador en esquina superior derecha
+  if(la.type==='stroke' && la._frozenLine){
+    const _scx=edMarginX()+la.x*pw, _scy=edMarginY()+la.y*ph;
+    const _sw=la.width*pw, _sh=la.height*ph;
+    const _srot=(la.rotation||0)*Math.PI/180;
+    edCtx.save();
+    edCtx.translate(_scx,_scy); edCtx.rotate(_srot);
+    // Icono ✦ en esquina superior derecha
+    edCtx.font=`bold ${Math.round(14/z)}px sans-serif`;
+    edCtx.fillStyle='rgba(255,200,0,0.9)';
+    edCtx.textAlign='center'; edCtx.textBaseline='middle';
+    edCtx.fillText('✦', _sw/2-8/z, -_sh/2+8/z);
+    edCtx.restore();
+  }
+
   // LineLayer: guía de selección discontinua azul (solo si no hay radios aplicados)
   if(la.type==='line'){
     const _cr=la.cornerRadii||{};
@@ -1862,16 +1853,22 @@ function edDrawSel(){
       });
     }
   }
-  // Handles vértices explosión
-  if(la.style==='explosion'){
-      const ecp=la.getExplosionControlPoints();
-      ecp.forEach(p=>{
-        const cpx=edMarginX()+p.nx*pw, cpy=edMarginY()+p.ny*ph;
-        edCtx.beginPath();edCtx.arc(cpx,cpy,HR,0,Math.PI*2);
-        edCtx.fillStyle='#e63030';edCtx.fill();
-        edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
-      });
-    }
+  }
+  // Handles vértices explosión: solo visibles editando (panel abierto)
+  if(la.type==='bubble' && la.style==='explosion' &&
+     ($('edOptionsPanel')?.dataset.mode==='bubble' || $('edOptionsPanel')?.dataset.mode==='props')){
+    const _HR=6/z;
+    la._initExplosionRadii();
+    const _pw=edPageW(),_ph=edPageH();
+    const _w=la.width*_pw, _h=la.height*_ph;
+    la.explosionRadii.forEach((v,i)=>{
+      const cpx=edMarginX()+(la.x+v.ox*_w/2/_pw)*_pw;
+      const cpy=edMarginY()+(la.y+v.oy*_h/2/_ph)*_ph;
+      const isPeak = i%2===0;
+      edCtx.beginPath();edCtx.arc(cpx,cpy,_HR,0,Math.PI*2);
+      edCtx.fillStyle=isPeak?'#ff6600':'#1a8cff';edCtx.fill();
+      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
+    });
   }
   // Handles 4 vértices del rect en modo curva
   if(la.type==='shape' && la.shape==='rect'){
@@ -1903,7 +1900,7 @@ function edDrawSel(){
     const n2=la.points.length;
     const cr2=la.cornerRadii||{};
     const _cvm=_edCurveModeActive();
-    // Helper: radio efectivo en espacio local (px)
+    // Helper: radio efectivo en espacio local (px), con escala aplicada
     const _er2 = i => {
       const r=cr2[i]||0; if(!r) return 0;
       const prev=la.points[(i-1+n2)%n2], cur=la.points[i], next=la.points[(i+1)%n2];
@@ -1912,7 +1909,6 @@ function edDrawSel(){
       return Math.max(0,Math.min(r,Math.min(d1,d2)-2));
     };
     la.points.forEach((p,i)=>{
-      // Siempre usar radio efectivo para posicionar el handle (no solo en modo V⟺C)
       const r=_er2(i);
       let lpx=p.x*pw, lpy=p.y*ph;
       if(r>0){
@@ -2875,7 +2871,23 @@ function edOnStart(e){
                          cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
                          rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
                          anchorX:_anch.x, anchorY:_anch.y};
-          if(_la.type==='line') edInitialSize._linePoints=_la.points.map(p=>({...p}));
+          if(_la.type==='line'){
+            edInitialSize._linePoints=_la.points.map(p=>({...p}));
+            // Si tiene radios, sincronizar la.width/height con el bbox de puntos puros
+            // para que el resize y edInitialSize partan de la misma base.
+            const _cr2=_la.cornerRadii||{};
+            if(Object.keys(_cr2).some(k=>(_cr2[k]||0)>0)){
+              const _xs=_la.points.map(p=>p.x), _ys=_la.points.map(p=>p.y);
+              const _ptW=Math.max(Math.max(..._xs)-Math.min(..._xs), 0.01);
+              const _ptH=Math.max(Math.max(..._ys)-Math.min(..._ys), 0.01);
+              // Forzar la.width/height al bbox de puntos para que el resize
+              // calcule sw/sh correctamente desde el primer movimiento
+              _la.width=_ptW; _la.height=_ptH;
+              edInitialSize.width=_ptW; edInitialSize.height=_ptH;
+              // Recalcular ancla con el nuevo tamaño
+              edInitialSize.asp=_ptH/_ptW;
+            }
+          }
           // Guardar radios de curva para escalarlos con el resize
           if(_la.cornerRadii){
             if(Array.isArray(_la.cornerRadii)) edInitialSize._cornerRadii=[..._la.cornerRadii];
@@ -2928,6 +2940,12 @@ function edOnStart(e){
   }
   if(found>=0){
     edSelectedIdx = found;
+    // Si es LineLayer con radios, actualizar bbox antes de interactuar
+    const _fl=edLayers[found];
+    if(_fl&&_fl.type==='line'){
+      const _fcr=_fl.cornerRadii||{};
+      if(Object.keys(_fcr).some(k=>(_fcr[k]||0)>0)) _fl._updateBbox();
+    }
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
@@ -3323,10 +3341,18 @@ function edOnMove(e){
       const sw = la.width  / (edInitialSize.width  || 0.01);
       const sh = la.height / (edInitialSize.height || 0.01);
       la.points = edInitialSize._linePoints.map(p=>({x: p.x*sw, y: p.y*sh}));
-      // Recalcular width/height sin recentrar (los puntos ya están centrados)
+      // Recalcular width/height desde puntos reales (base para el próximo resize)
       const xs=la.points.map(p=>p.x), ys=la.points.map(p=>p.y);
-      la.width  = Math.max(Math.max(...xs)-Math.min(...xs), 0.01);
-      la.height = Math.max(Math.max(...ys)-Math.min(...ys), 0.01);
+      const _ptW=Math.max(Math.max(...xs)-Math.min(...xs), 0.01);
+      const _ptH=Math.max(Math.max(...ys)-Math.min(...ys), 0.01);
+      // Si tiene radios: actualizar bbox curvado; si no, usar bbox de puntos
+      const _cr3=la.cornerRadii||{};
+      if(Object.keys(_cr3).some(k=>(_cr3[k]||0)>0)){
+        la.width=_ptW; la.height=_ptH; // base para próximo edInitialSize
+        la._updateBbox(); // actualiza width/height al bbox curvado para el cuadro visual
+      } else {
+        la.width=_ptW; la.height=_ptH;
+      }
     }
     edRedraw();
     edHideGearIcon();
@@ -4759,6 +4785,7 @@ function edCloseOptionsPanel(){
     const _mode=panel.dataset.mode;
     panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode;
     if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
+
   }
   edPanelUserClosed = true;
   requestAnimationFrame(edFitCanvas);
@@ -5926,6 +5953,97 @@ function _esbSync() {
     const d = Math.max(3, Math.min(22, Math.round((la.lineWidth||0) * _dz2)));
     dot.style.cssText = `width:${d}px;height:${d}px;border-radius:50%;background:#fff;display:inline-block;`;
   }
+}
+
+// Congela un LineLayer con radios en un StrokeLayer, guardando los datos geométricos
+function _edFreezeLineLayer(la, idx) {
+  if(la.type !== 'line') return;
+  const cr = la.cornerRadii || {};
+  const hasR = Object.keys(cr).some(k => (cr[k]||0) > 0);
+  if(!hasR) return; // sin radios, no congelar
+
+  // Renderizar el LineLayer en un canvas del tamaño del workspace
+  const offW = ED_CANVAS_W, offH = ED_CANVAS_H;
+  const off = document.createElement('canvas');
+  off.width = offW; off.height = offH;
+  const octx = off.getContext('2d');
+  // Aplicar transformación idéntica a edRedraw
+  octx.setTransform(1,0,0,1,0,0);
+  la.draw(octx);
+
+  // Crear StrokeLayer con el bitmap
+  const sl = new StrokeLayer(off);
+  // Copiar propiedades comunes
+  sl.opacity = la.opacity ?? 1;
+  sl.rotation = la.rotation || 0;
+  // Guardar datos geométricos originales para descongelar
+  sl._frozenLine = {
+    points: la.points.map(p=>({...p})),
+    cornerRadii: {...cr},
+    color: la.color,
+    fillColor: la.fillColor,
+    lineWidth: la.lineWidth,
+    closed: la.closed,
+    opacity: la.opacity ?? 1,
+    rotation: la.rotation || 0,
+    // Guardar dimensiones originales para calcular transformaciones al descongelar
+    origX: la.x, origY: la.y,
+    origW: la.width, origH: la.height,
+  };
+  // Reemplazar la capa en el array
+  edLayers[idx] = sl;
+  edPages[edCurrentPage].layers[idx] = sl;
+  edSelectedIdx = idx;
+  edPushHistory();
+  edRedraw();
+}
+
+// Descongela un StrokeLayer congelado de vuelta a LineLayer editable
+function _edUnfreezeLineLayer(la, idx) {
+  if(la.type !== 'stroke' || !la._frozenLine) return;
+  const d = la._frozenLine;
+  const pw = edPageW(), ph = edPageH();
+
+  // Factores de transformación: ratio entre dimensiones actuales y originales
+  const origW = d.origW || la.width;
+  const origH = d.origH || la.height;
+  const scaleX = origW > 0.001 ? la.width  / origW : 1;
+  const scaleY = origH > 0.001 ? la.height / origH : 1;
+  // Diferencia de rotación entre el estado actual y el original
+  const rotDelta = ((la.rotation||0) - (d.rotation||0)) * Math.PI / 180;
+  const cosD = Math.cos(rotDelta), sinD = Math.sin(rotDelta);
+
+  const ll = new LineLayer();
+  // Aplicar escala asimétrica a los puntos (en espacio local, en px)
+  ll.points = d.points.map(p => {
+    // Escalar en espacio local
+    const lpx = p.x * pw * scaleX;
+    const lpy = p.y * ph * scaleY;
+    // Rotar por el delta de rotación
+    const rx = (lpx * cosD - lpy * sinD) / pw;
+    const ry = (lpx * sinD + lpy * cosD) / ph;
+    return {x: rx, y: ry};
+  });
+  // Escalar también los radios de curva
+  const cr = d.cornerRadii || {};
+  ll.cornerRadii = {};
+  for(const k in cr){
+    if(cr[k]) ll.cornerRadii[k] = cr[k] * Math.min(scaleX, scaleY);
+  }
+  ll.color = la.color || d.color;       // respetar cambios de color
+  ll.fillColor = la.fillColor || d.fillColor;
+  ll.lineWidth = la.lineWidth || d.lineWidth;
+  ll.closed = d.closed;
+  ll.opacity = la.opacity ?? d.opacity;
+  ll.rotation = la.rotation || 0;       // usar rotación actual
+  // Posición: usar la posición actual del StrokeLayer
+  ll.x = la.x; ll.y = la.y;
+  ll._updateBbox();
+  edLayers[idx] = ll;
+  edPages[edCurrentPage].layers[idx] = ll;
+  edSelectedIdx = idx;
+  edPushHistory();
+  edRedraw();
 }
 
 function edInitShapeBar() {
