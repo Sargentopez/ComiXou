@@ -319,15 +319,16 @@ class BubbleLayer extends BaseLayer {
     const maxW=lines.reduce((m,l)=>Math.max(m,ctx.measureText(l).width),0);
     const totalH=lines.length*lh;
     if(this.style==='thought'){
-      // El texto cabe dentro de la elipse interior (factor 0.58 del bbox)
-      // rx_text = (w/2)*0.58 - padding, ry_text = (h/2)*0.58 - padding
-      // Queremos: maxW <= 2*rx_text = w*0.58 - 2*padding → w = (maxW + 2*padding)/0.58
-      //           totalH <= 2*ry_text = h*0.58 - 2*padding → h = (totalH + 2*padding)/0.58
-      const _f=0.58;
-      const w2=(maxW+this.padding*2)/_f;
-      const h2=(totalH+this.padding*2)/_f;
-      this.width=Math.max(0.05,w2/pw);
-      this.height=Math.max(0.05,h2/ph);
+      // El texto cabe en el círculo interior de radio maxDist-padding
+      // maxDist ≈ 0.45 * w (constante para proporciones razonables, ver análisis geométrico)
+      // → w = (textW/2 + padding) / 0.45 * 1.05 (margen 5%)
+      // → h = (textH/2 + padding) / 0.45 * 1.05
+      // El bbox se adapta al texto en ambos ejes sin espacio desperdiciado
+      const _C=0.45, _mg=1.05;
+      const w2=(maxW/2+this.padding)/_C*_mg;
+      const h2=(totalH/2+this.padding)/_C*_mg;
+      this.width=Math.max(0.10,w2/pw);
+      this.height=Math.max(0.07,h2/ph);
       return;
     }
     if(this.style==='explosion'){
@@ -436,24 +437,30 @@ class BubbleLayer extends BaseLayer {
     ctx.save();ctx.translate(pos.x,pos.y);
 
     if(this.style==='thought'){
-      // Círculos nube: r=w/4 (más compactos que w/3)
-      const _cr=w/4;
-      const circles=[{x:0,y:-h/4,r:_cr},{x:w/4,y:0,r:_cr},{x:-w/4,y:0,r:_cr},{x:0,y:h/4,r:_cr}];
+      const circles=[{x:0,y:-h/4,r:w/3},{x:w/4,y:0,r:w/3},{x:-w/4,y:0,r:w/3},{x:0,y:h/4,r:w/3}];
       ctx.fillStyle=this.backgroundColor;ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
       circles.forEach(c=>{ctx.beginPath();ctx.arc(c.x,c.y,c.r,0,Math.PI*2);ctx.fill();ctx.stroke();});
-      // Interior blanco: elipse proporcional al bocadillo.
-      // Factor 0.58 >= mínimo calculado (0.48) para tapar todos los arcos
-      // de intersección entre círculos sin dejar ninguno expuesto.
-      const _f=0.58;
-      ctx.fillStyle='#ffffff';ctx.beginPath();
-      ctx.ellipse(0,0,w/2*_f,h/2*_f,0,0,Math.PI*2);ctx.fill();
+      function ci(c1,c2){
+        const dx=c2.x-c1.x,dy=c2.y-c1.y,d=Math.hypot(dx,dy);
+        if(d>c1.r+c2.r||d<Math.abs(c1.r-c2.r)||d===0)return[];
+        const a=(c1.r*c1.r-c2.r*c2.r+d*d)/(2*d),h2=c1.r*c1.r-a*a;
+        if(h2<0)return[];const hh=Math.sqrt(h2),x0=c1.x+a*dx/d,y0=c1.y+a*dy/d;
+        const rx=-dy*(hh/d),ry=dx*(hh/d);
+        return[{x:x0+rx,y:y0+ry},{x:x0-rx,y:y0-ry}];
+      }
+      let maxDist=0;
+      [[0,1],[0,2],[1,3],[2,3],[0,3],[1,2]].forEach(([a,b])=>{
+        ci(circles[a],circles[b]).forEach(p=>{maxDist=Math.max(maxDist,Math.hypot(p.x,p.y));});
+      });
+      if(maxDist===0)maxDist=Math.min(w,h)*0.4;
+      ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(0,0,maxDist,0,Math.PI*2);ctx.fill();
       // Burbujas cola pensamiento: 3 elipses editables
       if(this.tail){
         const bx=this.thoughtBig.x*w,   by=this.thoughtBig.y*h;
         const sx=this.thoughtSmall.x*w, sy=this.thoughtSmall.y*h;
-        // Radios proporcionales al bocadillo — reducidos al 60% del original
-        const rBig  = Math.min(w,h)*0.078;
-        const rSmall= Math.min(w,h)*0.035;
+        // Radios proporcionales al bocadillo — tamaño doble manteniendo proporciones relativas
+        const rBig  = Math.min(w,h)*0.156;
+        const rSmall= Math.min(w,h)*0.070;
         // Elipse mediana: a mitad de distancia entre contorno grande y contorno pequeña
         // Contorno grande más cercano a pequeña: punto en bx,by en dirección a sx,sy a distancia rBig
         const dx=sx-bx,dy=sy-by,dist=Math.hypot(dx,dy)||1;
@@ -6745,11 +6752,17 @@ function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
-  // Siempre centrar la cámara al cargar — evita el bug de aparecer pequeño/desplazado
+  // Centrar cámara al cargar — flag dedicado para no interferir con otros resets
+  window._edLoadReset=true;
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
       window._edUserRequestedReset=true; edFitCanvas(true);
-      setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); }, 120);
+      setTimeout(()=>{
+        if(window._edLoadReset){
+          window._edLoadReset=false;
+          window._edUserRequestedReset=true; edFitCanvas(true);
+        }
+      }, 150);
       edRedraw();
     }));
   }
