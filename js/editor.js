@@ -465,14 +465,16 @@ class BubbleLayer extends BaseLayer {
         const freeD=Math.hypot(edgeSmall.x-edgeBig.x,edgeSmall.y-edgeBig.y);
         // Radios fijos proporcionales: rM2 más cerca de grande, rM1 más cerca de pequeña
         // rM2 > rM1 > rSmall, rBig > rM2
-        const rM2=rBig*0.55;   // intermedia más grande (cerca de grande)
-        const rM1=rBig*0.32;   // intermedia más pequeña (cerca de pequeña)
-        // Distribuir posiciones: gap igual entre todos los contornos
-        // gap = (freeD - 2*rM2 - 2*rM1) / 3
-        const gap=Math.max(0,(freeD-2*rM2-2*rM1)/3);
-        const m2x=edgeBig.x+ux*(gap+rM2),      m2y=edgeBig.y+uy*(gap+rM2);
-        const m1x=edgeBig.x+ux*(gap+2*rM2+gap+rM1), m1y=edgeBig.y+uy*(gap+2*rM2+gap+rM1);
-        [[bx,by,rBig],[m2x,m2y,rM2],[m1x,m1y,rM1],[sx,sy,rSmall]].forEach(([cx2,cy2,r])=>{
+        // Elipses 1(rojo/pequeña) < 2 < 3 < 4(azul/grande)
+        // r2: junto a pequeña, r3: junto a grande
+        const r3=rBig*0.55;    // elipse 3 (junto a grande, más pequeña que grande)
+        const r2=rBig*0.32;    // elipse 2 (junto a pequeña, más grande que pequeña)
+        // gap igual entre todos los contornos adyacentes
+        const gap=Math.max(0,(freeD-2*r3-2*r2)/3);
+        // Desde edgeSmall hacia edgeBig (orden 2→3)
+        const e2x=edgeSmall.x-ux*(gap+r2), e2y=edgeSmall.y-uy*(gap+r2);
+        const e3x=edgeSmall.x-ux*(gap+2*r2+gap+r3), e3y=edgeSmall.y-uy*(gap+2*r2+gap+r3);
+        [[sx,sy,rSmall],[e2x,e2y,r2],[e3x,e3y,r3],[bx,by,rBig]].forEach(([cx2,cy2,r])=>{
           ctx.beginPath();ctx.ellipse(cx2,cy2,r,r*2/3,0,0,Math.PI*2);
           ctx.fillStyle=this.backgroundColor;ctx.fill();
           ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;ctx.stroke();
@@ -2013,54 +2015,31 @@ function _edRenderPageThumb(canvas, page, pageIdx){
   ctx.fillStyle='#ffffff';
   ctx.fillRect(0,0,tw,th);
   if(!page||!page.layers) return;
+  // Usar edRenderPage para fidelidad exacta: renderiza igual que el editor
   const isV=(page.orientation||edOrientation)==='vertical';
+  const _savedOrient=edOrientation;
+  edOrientation=page.orientation||edOrientation;
   const pw=isV?ED_PAGE_W:ED_PAGE_H, ph=isV?ED_PAGE_H:ED_PAGE_W;
-  const sx=tw/pw, sy=th/ph;
-
-  // DEBUG: marcar si hay shapes
-  const _nonText = page.layers.filter(l=>l.type!=='text'&&l.type!=='bubble');
-  const _textL   = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
-  [..._nonText, ..._textL].forEach(la=>{
-    const type = la.type;
-    ctx.save();
-    ctx.globalAlpha=la.opacity??1;
-    const cx=la.x*tw, cy=la.y*th;
-    const lw=la.width*tw, lh=la.height*th;
-    const rot=(la.rotation||0)*Math.PI/180;
-
-    if(type==='image' && la.img && la.img.complete && la.img.naturalWidth>0){
-      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
-      ctx.drawImage(la.img,-lw/2,-lh/2,lw,lh);
-    } else if(type==='stroke' && la._canvas){
-      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
-      ctx.drawImage(la._canvas,-lw/2,-lh/2,lw,lh);
-    } else if(type==='draw' && la._canvas){
-      const _mx=(ED_CANVAS_W-pw)/2, _my=(ED_CANVAS_H-ph)/2;
-      ctx.drawImage(la._canvas, _mx, _my, pw, ph, 0, 0, tw, th);
-    } else if(type==='shape'){
-      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
-      ctx.lineJoin='round';
-      ctx.beginPath();
-      if(la.shape==='ellipse') ctx.ellipse(0,0,lw/2,lh/2,0,0,Math.PI*2);
-      else ctx.rect(-lw/2,-lh/2,lw,lh);
-      if(la.fillColor&&la.fillColor!=='none'){ctx.fillStyle=la.fillColor;ctx.fill();}
-      if((la.lineWidth||0)>0){ctx.strokeStyle=la.color||'#000000';ctx.lineWidth=Math.max(1.5,la.lineWidth*sx);ctx.stroke();}
-    } else if(type==='line' && la.points&&la.points.length>=2){
-      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
-      ctx.lineJoin='round'; ctx.lineCap='round';
-      ctx.beginPath();
-      ctx.moveTo(la.points[0].x*tw, la.points[0].y*th);
-      for(let i=1;i<la.points.length;i++) ctx.lineTo(la.points[i].x*tw, la.points[i].y*th);
-      if(la.closed) ctx.closePath();
-      if(la.closed&&la.fillColor&&la.fillColor!=='none'){ctx.fillStyle=la.fillColor;ctx.fill();}
-      if((la.lineWidth||0)>0){ctx.strokeStyle=la.color||'#000000';ctx.lineWidth=Math.max(1.5,la.lineWidth*sx);ctx.stroke();}
-    } else if(type==='text'||type==='bubble'){
-      ctx.translate(cx,cy); if(rot) ctx.rotate(rot);
-      ctx.fillStyle=la.backgroundColor||'rgba(255,255,255,0.85)';
-      ctx.fillRect(-lw/2,-lh/2,lw,lh);
-    }
-    ctx.restore();
+  // Canvas de trabajo tamaño real
+  const full=document.createElement('canvas');
+  full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
+  const fctx=full.getContext('2d');
+  fctx.fillStyle='#fff'; fctx.fillRect(edMarginX(),edMarginY(),pw,ph);
+  // Renderizar todas las capas con draw() para fidelidad
+  const _savedPage=edCurrentPage;
+  const _pi=edPages.indexOf(page);
+  if(_pi>=0) edCurrentPage=_pi;
+  page.layers.forEach(l=>{
+    if(l.type==='text'||l.type==='bubble'){
+      l.draw(fctx,full);
+    } else if(l.type==='image') l.draw(fctx,full);
+    else if(l.type==='draw'||l.type==='stroke') l.draw(fctx);
+    else if(l.type==='shape'||l.type==='line') l.draw(fctx);
   });
+  edOrientation=_savedOrient;
+  edCurrentPage=_savedPage;
+  // Escalar al tamaño de la miniatura
+  ctx.drawImage(full, edMarginX(), edMarginY(), pw, ph, 0, 0, tw, th);
 }
 
 /* ══════════════════════════════════════════
@@ -6523,21 +6502,55 @@ function edSerLayer(l){
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
-  if(l.type==='bubble')return{type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
-    text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
-    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
-    tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
-    tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
-    padding:l.padding||15,...op};
+  if(l.type==='bubble'){
+    const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
+      text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
+      backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
+      tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
+      tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
+      padding:l.padding||15,...op};
+    // Para estilos complejos: guardar bitmap para reproducción fiel
+    if(l.style==='thought'||l.style==='explosion'){
+      try{
+        const _pw=edPageW(),_ph=edPageH();
+        const _off=document.createElement('canvas');
+        _off.width=Math.round(l.width*_pw*2);_off.height=Math.round(l.height*_ph*2);
+        const _octx=_off.getContext('2d');
+        _octx.scale(_off.width/(l.width*_pw),_off.height/(l.height*_ph));
+        // Renderizar centrado: simular translate del draw
+        _octx.translate(l.width*_pw/2,l.height*_ph/2);
+        l.draw(_octx,_off);
+        _bobj.renderDataUrl=_off.toDataURL('image/png');
+      }catch(e){}
+    }
+    return _bobj;
+  }
   if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
   if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity};
   if(l.type==='shape')  return{type:'shape', shape:l.shape, x:l.x, y:l.y,
     width:l.width, height:l.height, rotation:l.rotation||0,
     color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1};
-  if(l.type==='line')   return{type:'line', points:l.points.slice(),
-    x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
-    closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1};
+  if(l.type==='line'){
+    const _cr=l.cornerRadii||{};
+    const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);
+    const _lobj={type:'line', points:l.points.slice(),
+      x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
+      closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      cornerRadii:_hasR?{..._cr}:undefined};
+    if(_hasR){
+      try{
+        const _pw=edPageW(),_ph=edPageH();
+        const _off=document.createElement('canvas');
+        _off.width=Math.round(l.width*_pw*2);_off.height=Math.round(l.height*_ph*2);
+        const _octx=_off.getContext('2d');
+        _octx.scale(2,2);
+        l.draw(_octx);
+        _lobj.renderDataUrl=_off.toDataURL('image/png');
+      }catch(e){}
+    }
+    return _lobj;
+  }
 }
 function edDeserLayer(d, pageOrientation){
   if(d.type==='draw'){
@@ -6565,6 +6578,7 @@ function edDeserLayer(d, pageOrientation){
     l.points=d.points||[]; l.closed=d.closed||false;
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth||3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
+    if(d.cornerRadii) l.cornerRadii={...d.cornerRadii};
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
     else l._updateBbox();
     return l;

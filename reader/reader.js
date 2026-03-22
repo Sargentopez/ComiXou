@@ -227,6 +227,13 @@ async function _loadPanels(workId) {
       .filter(t => t.panel_id === panel.id)
       .sort((a, b) => (a.text_order||0) - (b.text_order||0));
 
+    // Marcar en panel_texts si el correspondiente panel_layer tiene renderDataUrl
+    // para evitar doble render en _drawTexts
+    const bubbleLayers = layers.filter(l => (l.type==='bubble'||l.type==='text') && l.renderDataUrl);
+    panelTexts.forEach((t, i) => {
+      if (bubbleLayers[i]) t._hasRenderLayer = true;
+    });
+
     return {
       ...panel,
       layers,
@@ -242,15 +249,26 @@ async function preloadImages() {
 
   await Promise.all(RS.panels.map(async (panel, pi) => {
     panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
-      const src = layer.src || layer.dataUrl;
-      if (!src || (layer.type !== 'image' && layer.type !== 'draw' && layer.type !== 'stroke')) {
-        return Promise.resolve(null);
-      }
+      // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
+      const src = layer.renderDataUrl || layer.src || layer.dataUrl;
+      if (!src) return Promise.resolve(null);
+      const needsImg = layer.renderDataUrl ||
+        layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' || layer.type === 'line';
+      if (!needsImg) return Promise.resolve(null);
       return new Promise(resolve => {
         const img = new Image();
         img.onload  = () => resolve(img);
         img.onerror = () => resolve(null);
         img.src = src;
+      });
+    }));
+    // Precargar renderDataUrl de bubbles en _renderImg
+    await Promise.all((panel.texts || []).map(t => {
+      if (!t.renderDataUrl) return Promise.resolve();
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = img.onerror = () => { t._renderImg = img; resolve(); };
+        img.src = t.renderDataUrl;
       });
     }));
   }));
@@ -434,21 +452,38 @@ function _render() {
       if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
       if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       ctx.restore();
+    } else if ((type === 'bubble' || type === 'text') && layer.renderDataUrl && layerImgs[j]) {
+      // Bocadillo/texto con bitmap prerenderizado: usarlo directamente
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const w = (layer.width  || 0.3) * pw, h = (layer.height || 0.15) * ph;
+      const rot = layer.rotation || 0;
+      ctx.translate(x, y);
+      if (rot) ctx.rotate(rot * Math.PI / 180);
+      ctx.drawImage(layerImgs[j], -w/2, -h/2, w, h);
+      ctx.restore();
     } else if (type === 'line' && layer.points && layer.points.length >= 2) {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const w = (layer.width  || 0.3) * pw, h = (layer.height || 0.2) * ph;
       const rot = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(x, y);
       if (rot) ctx.rotate(rot);
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
-      for (let i = 1; i < layer.points.length; i++)
-        ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
-      if (layer.closed) ctx.closePath();
-      if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
-      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+      // Si tiene renderDataUrl (línea con curvas), usarlo directamente
+      if (layer.renderDataUrl && layerImgs[j]) {
+        ctx.drawImage(layerImgs[j], -w/2, -h/2, w, h);
+      } else {
+        ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
+        for (let i = 1; i < layer.points.length; i++)
+          ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
+        if (layer.closed) ctx.closePath();
+        if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+        if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+      }
       ctx.restore();
     }
     // bubble/text: los gestiona _drawTexts con lógica sequential
@@ -489,6 +524,51 @@ function _drawTexts(ctx, panel, pw, ph) {
 }
 
 function _drawBubble(ctx, t, pw, ph, alpha) {
+  // Si el bocadillo ya fue renderizado desde panel_layers, solo dibujar el texto
+  if (t._hasRenderLayer) {
+    const _fromLayers = t.width !== undefined;
+    const _rx = _fromLayers ? (t.x - t.width/2) : (t.x/100);
+    const _ry = _fromLayers ? (t.y - t.height/2) : (t.y/100);
+    const _rw = _fromLayers ? t.width : ((t.w||30)/100);
+    const _rh = _fromLayers ? t.height : ((t.h||15)/100);
+    const _cx = (_rx + _rw/2) * pw, _cy = (_ry + _rh/2) * ph;
+    const fs = Math.max(10, t.font_size||t.fontSize||30);
+    ctx.save(); ctx.globalAlpha = alpha;
+    ctx.translate(_cx, _cy);
+    if (t.rotation) ctx.rotate(t.rotation * Math.PI / 180);
+    ctx.font = (t.font_italic||t.fontItalic?'italic ':'')+(t.font_bold||t.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||'Patrick Hand');
+    ctx.fillStyle = t.color || '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const _lines = _getLines(t.text||''); const _lh = fs*1.2; const _th = _lines.length*_lh;
+    _lines.forEach((l,i) => ctx.fillText(l, 0, -_th/2+_lh/2+i*_lh));
+    ctx.restore();
+    return;
+  }
+  // Si tiene bitmap prerenderizado (thought/explosion), usarlo directamente
+  if (t.renderDataUrl && t._renderImg) {
+    const _fromLayers = t.width !== undefined;
+    const _rx = _fromLayers ? (t.x - t.width/2) : (t.x/100);
+    const _ry = _fromLayers ? (t.y - t.height/2) : (t.y/100);
+    const _rw = _fromLayers ? t.width : ((t.w||30)/100);
+    const _rh = _fromLayers ? t.height : ((t.h||15)/100);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (t.rotation) { ctx.translate((_rx+_rw/2)*pw,(_ry+_rh/2)*ph); ctx.rotate(t.rotation*Math.PI/180); ctx.drawImage(t._renderImg,-_rw*pw/2,-_rh*ph/2,_rw*pw,_rh*ph); }
+    else ctx.drawImage(t._renderImg,_rx*pw,_ry*ph,_rw*pw,_rh*ph);
+    ctx.restore();
+    // Aún dibujar el texto encima
+    const _cx = _fromLayers ? t.x*pw : (_rx+_rw/2)*pw;
+    const _cy = _fromLayers ? t.y*ph : (_ry+_rh/2)*ph;
+    const fs = Math.max(10, t.font_size||t.fontSize||30);
+    ctx.save(); ctx.globalAlpha = alpha;
+    ctx.translate(_cx,_cy);
+    if (t.rotation) ctx.rotate(t.rotation*Math.PI/180);
+    ctx.font=(t.font_italic||t.fontItalic?'italic ':'')+(t.font_bold||t.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||'Patrick Hand');
+    ctx.fillStyle=t.color||'#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const _lines=_getLines(t.text||''); const _lh=fs*1.2; const _th=_lines.length*_lh;
+    _lines.forEach((l,i)=>ctx.fillText(l,0,-_th/2+_lh/2+i*_lh));
+    ctx.restore();
+    return;
+  }
   // Detectar formato de coordenadas:
   // panel_texts: x,y,w,h en % (0-100) con campos w,h
   // panel_layers: x,y en 0-1 (centro), width,height en 0-1
