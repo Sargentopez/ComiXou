@@ -463,12 +463,10 @@ class BubbleLayer extends BaseLayer {
         const edgeBig  ={x:bx+ux*rBig,   y:by+uy*rBig};
         const edgeSmall={x:sx-ux*rSmall, y:sy-uy*rSmall};
         const freeD=Math.hypot(edgeSmall.x-edgeBig.x,edgeSmall.y-edgeBig.y);
-        // Radios fijos proporcionales: rM2 más cerca de grande, rM1 más cerca de pequeña
-        // rM2 > rM1 > rSmall, rBig > rM2
+        // Radios interpolados linealmente: rSmall < r2 < r3 < rBig
         // Elipses 1(rojo/pequeña) < 2 < 3 < 4(azul/grande)
-        // r2: junto a pequeña, r3: junto a grande
-        const r3=rBig*0.55;    // elipse 3 (junto a grande, más pequeña que grande)
-        const r2=rBig*0.32;    // elipse 2 (junto a pequeña, más grande que pequeña)
+        const r2=rSmall+(rBig-rSmall)*1/3; // elipse 2: 1/3 del camino entre pequeña y grande
+        const r3=rSmall+(rBig-rSmall)*2/3; // elipse 3: 2/3 del camino entre pequeña y grande
         // gap igual entre todos los contornos adyacentes
         const gap=Math.max(0,(freeD-2*r3-2*r2)/3);
         // Desde edgeSmall hacia edgeBig (orden 2→3)
