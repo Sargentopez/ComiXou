@@ -227,11 +227,14 @@ async function _loadPanels(workId) {
       .filter(t => t.panel_id === panel.id)
       .sort((a, b) => (a.text_order||0) - (b.text_order||0));
 
-    // Marcar en panel_texts si el correspondiente panel_layer tiene renderDataUrl
-    // para evitar doble render en _drawTexts
-    const bubbleLayers = layers.filter(l => (l.type==='bubble'||l.type==='text') && l.renderDataUrl);
+    // Asociar panel_texts con sus panel_layers correspondientes.
+    // panel_layers incluye bubbles sin texto; panel_texts solo incluye los que tienen texto.
+    // Usar _hasText para sincronizar correctamente.
+    const bubbleLayers = layers.filter(l => l.type==='bubble' || l.type==='text');
+    const bubbleLayersWithText = bubbleLayers.filter(l => l._hasText !== false);
     panelTexts.forEach((t, i) => {
-      if (bubbleLayers[i]) t._hasRenderLayer = true;
+      const bl = bubbleLayersWithText[i];
+      if (bl && bl.renderDataUrl) t._hasRenderLayer = true;
     });
 
     return {
@@ -262,15 +265,7 @@ async function preloadImages() {
         img.src = src;
       });
     }));
-    // Precargar renderDataUrl de bubbles en _renderImg
-    await Promise.all((panel.texts || []).map(t => {
-      if (!t.renderDataUrl) return Promise.resolve();
-      return new Promise(resolve => {
-        const img = new Image();
-        img.onload = img.onerror = () => { t._renderImg = img; resolve(); };
-        img.src = t.renderDataUrl;
-      });
-    }));
+    // (renderDataUrl de bubbles se carga via panel.layers en el paso anterior)
   }));
 
   // Fallback: si algún panel no tiene capas, precargar data_url como antes
@@ -452,17 +447,6 @@ function _render() {
       if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
       if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       ctx.restore();
-    } else if ((type === 'bubble' || type === 'text') && layer.renderDataUrl && layerImgs[j]) {
-      // Bocadillo/texto con bitmap prerenderizado: usarlo directamente
-      ctx.save();
-      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
-      const w = (layer.width  || 0.3) * pw, h = (layer.height || 0.15) * ph;
-      const rot = layer.rotation || 0;
-      ctx.translate(x, y);
-      if (rot) ctx.rotate(rot * Math.PI / 180);
-      ctx.drawImage(layerImgs[j], -w/2, -h/2, w, h);
-      ctx.restore();
     } else if (type === 'line' && layer.points && layer.points.length >= 2) {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
@@ -473,7 +457,12 @@ function _render() {
       if (rot) ctx.rotate(rot);
       // Si tiene renderDataUrl (línea con curvas), usarlo directamente
       if (layer.renderDataUrl && layerImgs[j]) {
-        ctx.drawImage(layerImgs[j], -w/2, -h/2, w, h);
+        const _pad = layer._renderPad || 0; // pad en px de página
+        const _pw2 = pw, _ph2 = ph;
+        // El bitmap cubre w+2*pad × h+2*pad centrado en el objeto
+        const _bw = (layer.width || 0.3) * _pw2 + (layer._renderPad||0)*2;
+        const _bh = (layer.height || 0.2) * _ph2 + (layer._renderPad||0)*2;
+        ctx.drawImage(layerImgs[j], -_bw/2, -_bh/2, _bw, _bh);
       } else {
         ctx.lineJoin = 'round'; ctx.lineCap = 'round';
         ctx.beginPath();
@@ -489,14 +478,30 @@ function _render() {
     // bubble/text: los gestiona _drawTexts con lógica sequential
   });
 
-  _drawTexts(ctx, panel, pw, ph);
+  _drawTexts(ctx, panel, pw, ph, panel.layerImgs || []);
   _updateCounter();
 }
 
 // ── TEXTOS / BOCADILLOS ───────────────────────────────────────
-function _drawTexts(ctx, panel, pw, ph) {
+function _drawTexts(ctx, panel, pw, ph, layerImgs) {
   const texts = panel.texts || [];
   if (!texts.length) return;
+  // Asociar cada panel_text con su layerImg (solo layers bubble/text)
+  const layers = panel.layers || [];
+  const allLayerImgs = layerImgs || panel.layerImgs || [];
+  // Solo capas bubble/text que tienen texto (sincronizado con panel_texts que filtra sin texto)
+  const bubbleLayersWithText2 = [];
+  const bubbleLayerGlobalIdx2 = [];
+  layers.forEach((l, gi) => {
+    if ((l.type==='bubble'||l.type==='text') && l._hasText !== false) {
+      bubbleLayersWithText2.push(l);
+      bubbleLayerGlobalIdx2.push(gi);
+    }
+  });
+  texts.forEach((t, i) => {
+    t._bubbleLayerImg = (bubbleLayerGlobalIdx2[i] !== undefined) ? allLayerImgs[bubbleLayerGlobalIdx2[i]] : null;
+    t._bubbleLayer    = bubbleLayersWithText2[i] || null;
+  });
 
   const isSeq = (panel.text_mode || 'sequential') === 'sequential';
   if (!isSeq) {
@@ -524,22 +529,23 @@ function _drawTexts(ctx, panel, pw, ph) {
 }
 
 function _drawBubble(ctx, t, pw, ph, alpha) {
-  // Si el bocadillo ya fue renderizado desde panel_layers, solo dibujar el texto
-  if (t._hasRenderLayer) {
-    const _fromLayers = t.width !== undefined;
-    const _rx = _fromLayers ? (t.x - t.width/2) : (t.x/100);
-    const _ry = _fromLayers ? (t.y - t.height/2) : (t.y/100);
-    const _rw = _fromLayers ? t.width : ((t.w||30)/100);
-    const _rh = _fromLayers ? t.height : ((t.h||15)/100);
-    const _cx = (_rx + _rw/2) * pw, _cy = (_ry + _rh/2) * ph;
-    const fs = Math.max(10, t.font_size||t.fontSize||30);
+  // Si tiene bitmap prerenderizado del panel_layer, dibujarlo y superponer texto
+  if (t._bubbleLayerImg && t._bubbleLayer && t._bubbleLayer.renderDataUrl) {
+    const bl = t._bubbleLayer;
+    const x = (bl.x || 0.5) * pw, y = (bl.y || 0.5) * ph;
+    const w = (bl.width  || 0.3) * pw, h = (bl.height || 0.15) * ph;
+    const _pad = bl._renderPad || 0;
+    const rot = bl.rotation || 0;
     ctx.save(); ctx.globalAlpha = alpha;
-    ctx.translate(_cx, _cy);
-    if (t.rotation) ctx.rotate(t.rotation * Math.PI / 180);
-    ctx.font = (t.font_italic||t.fontItalic?'italic ':'')+(t.font_bold||t.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||'Patrick Hand');
-    ctx.fillStyle = t.color || '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const _lines = _getLines(t.text||''); const _lh = fs*1.2; const _th = _lines.length*_lh;
-    _lines.forEach((l,i) => ctx.fillText(l, 0, -_th/2+_lh/2+i*_lh));
+    ctx.translate(x, y);
+    if (rot) ctx.rotate(rot * Math.PI / 180);
+    ctx.drawImage(t._bubbleLayerImg, -w/2-_pad, -h/2-_pad, w+_pad*2, h+_pad*2);
+    // Texto encima
+    const fs = Math.max(10, t.font_size||t.fontSize||bl.fontSize||30);
+    ctx.font=(t.font_italic||t.fontItalic||bl.fontItalic?'italic ':'')+(t.font_bold||t.fontBold||bl.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||bl.fontFamily||'Patrick Hand');
+    ctx.fillStyle=t.color||bl.color||'#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const _lines=_getLines(t.text||bl.text||''); const _lh=fs*1.2; const _th=_lines.length*_lh;
+    _lines.forEach((l,i)=>ctx.fillText(l,0,-_th/2+_lh/2+i*_lh));
     ctx.restore();
     return;
   }

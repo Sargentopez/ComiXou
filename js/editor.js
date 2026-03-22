@@ -6439,7 +6439,18 @@ function edSaveProject(){
     panels,
     editorData:{
       orientation:edOrientation,
-      pages:edPages.map(p=>({layers:p.layers.map(edSerLayer).filter(Boolean),textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||edOrientation})),
+      pages:(()=>{
+        const _savedOrient=edOrientation, _savedPage=edCurrentPage;
+        const result=edPages.map((p,_pi)=>{
+          // Configurar contexto correcto para que edSerLayer/draw() funcionen
+          edCurrentPage=_pi;
+          edOrientation=p.orientation||_savedOrient;
+          const layers=p.layers.map(edSerLayer).filter(Boolean);
+          return {layers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient};
+        });
+        edOrientation=_savedOrient; edCurrentPage=_savedPage;
+        return result;
+      })(),
     },
     updatedAt:new Date().toISOString(),
     cameraState: _camState,
@@ -6499,28 +6510,44 @@ function edSerLayer(l){
     return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
+    _hasText:!!(l.text&&l.text!=='Escribe aquí'),
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
+      _hasText:!!(l.text&&l.text!=='Escribe aquí'),
       text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
       backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
       tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
       tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
-      padding:l.padding||15,...op};
-    // Para estilos complejos: guardar bitmap para reproducción fiel
+      padding:l.padding||15,
+      explosionRadii:l.explosionRadii?l.explosionRadii.map(v=>({...v})):undefined,
+      thoughtBig:l.thoughtBig?{...l.thoughtBig}:undefined,
+      thoughtSmall:l.thoughtSmall?{...l.thoughtSmall}:undefined,
+      ...op};
+    // Para estilos complejos: guardar bitmap de la FORMA (sin texto) para reproducción fiel
     if(l.style==='thought'||l.style==='explosion'){
       try{
         const _pw=edPageW(),_ph=edPageH();
-        const _off=document.createElement('canvas');
-        _off.width=Math.round(l.width*_pw*2);_off.height=Math.round(l.height*_ph*2);
-        const _octx=_off.getContext('2d');
-        _octx.scale(_off.width/(l.width*_pw),_off.height/(l.height*_ph));
-        // Renderizar centrado: simular translate del draw
-        _octx.translate(l.width*_pw/2,l.height*_ph/2);
-        l.draw(_octx,_off);
-        _bobj.renderDataUrl=_off.toDataURL('image/png');
+        // Renderizar sin texto: guardar y vaciar temporalmente
+        const _savedText=l.text; l.text='';
+        const _full=document.createElement('canvas');
+        _full.width=ED_CANVAS_W; _full.height=ED_CANVAS_H;
+        const _fctx=_full.getContext('2d');
+        l.draw(_fctx,_full);
+        l.text=_savedText;
+        // Recortar zona del bocadillo
+        const _pad=4;
+        const _ox=Math.max(0,Math.round(edMarginX()+(l.x-l.width/2)*_pw-_pad));
+        const _oy=Math.max(0,Math.round(edMarginY()+(l.y-l.height/2)*_ph-_pad));
+        const _ow=Math.min(_full.width-_ox, Math.round(l.width*_pw+_pad*2));
+        const _oh=Math.min(_full.height-_oy, Math.round(l.height*_ph+_pad*2));
+        const _crop=document.createElement('canvas');
+        _crop.width=_ow; _crop.height=_oh;
+        _crop.getContext('2d').drawImage(_full,_ox,_oy,_ow,_oh,0,0,_ow,_oh);
+        _bobj.renderDataUrl=_crop.toDataURL('image/png');
+        _bobj._renderPad=_pad;
       }catch(e){}
     }
     return _bobj;
@@ -6541,12 +6568,26 @@ function edSerLayer(l){
     if(_hasR){
       try{
         const _pw=edPageW(),_ph=edPageH();
-        const _off=document.createElement('canvas');
-        _off.width=Math.round(l.width*_pw*2);_off.height=Math.round(l.height*_ph*2);
-        const _octx=_off.getContext('2d');
-        _octx.scale(2,2);
-        l.draw(_octx);
-        _lobj.renderDataUrl=_off.toDataURL('image/png');
+        // Renderizar SIN rotación para que el reader la aplique una sola vez
+        const _savedRot=l.rotation||0; l.rotation=0;
+        const _full=document.createElement('canvas');
+        _full.width=ED_CANVAS_W; _full.height=ED_CANVAS_H;
+        const _fctx=_full.getContext('2d');
+        l.draw(_fctx);
+        l.rotation=_savedRot;
+        // Recortar zona del objeto con margen para el trazo
+        const _pad=Math.ceil((l.lineWidth||3)/2)+2;
+        const _cx=edMarginX()+l.x*_pw, _cy=edMarginY()+l.y*_ph;
+        const _hw=l.width*_pw/2, _hh=l.height*_ph/2;
+        const _ox=Math.max(0,Math.round(_cx-_hw-_pad));
+        const _oy=Math.max(0,Math.round(_cy-_hh-_pad));
+        const _ow=Math.min(_full.width-_ox, Math.round(_hw*2+_pad*2));
+        const _oh=Math.min(_full.height-_oy, Math.round(_hh*2+_pad*2));
+        const _crop=document.createElement('canvas');
+        _crop.width=_ow; _crop.height=_oh;
+        _crop.getContext('2d').drawImage(_full,_ox,_oy,_ow,_oh,0,0,_ow,_oh);
+        _lobj.renderDataUrl=_crop.toDataURL('image/png');
+        _lobj._renderPad=_pad;
       }catch(e){}
     }
     return _lobj;

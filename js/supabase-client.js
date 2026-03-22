@@ -79,6 +79,7 @@ const SupabaseClient = (() => {
           panel_id:    panelId,
           layer_order: j,
           layer_type:  l.type,
+          // editorData.pages ya contiene el resultado de edSerLayer (con renderDataUrl, cornerRadii, etc.)
           layer_data:  JSON.stringify(l),
         })));
       }
