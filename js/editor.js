@@ -414,8 +414,8 @@ class BubbleLayer extends BaseLayer {
     const right={x:sx-perp.x*bw/2,y:sy-perp.y*bw/2};
     ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(ex,ey);ctx.lineTo(right.x,right.y);
     ctx.closePath();ctx.fill();ctx.stroke();
-    // Línea blanca: misma posición que left→right, extendida a lo largo de perp
-    // para tapar completamente los vértices donde el stroke negro sobresale
+    // Línea blanca: tapa el stroke negro en la base sin cubrir los vértices del triángulo
+    // lineCap='butt' para no crear semicírculos que tapan los ángulos
     const extra=1;
     const extL={x:left.x +perp.x*extra, y:left.y +perp.y*extra};
     const extR={x:right.x-perp.x*extra, y:right.y-perp.y*extra};
@@ -6528,24 +6528,34 @@ function edSerLayer(l){
     if(l.style==='thought'||l.style==='explosion'){
       try{
         const _pw=edPageW(),_ph=edPageH();
-        // Renderizar sin texto: guardar y vaciar temporalmente
         const _savedText=l.text; l.text='';
-        const _full=document.createElement('canvas');
-        _full.width=ED_CANVAS_W; _full.height=ED_CANVAS_H;
-        const _fctx=_full.getContext('2d');
-        l.draw(_fctx,_full);
-        l.text=_savedText;
-        // Recortar zona del bocadillo
-        const _pad=4;
-        const _ox=Math.max(0,Math.round(edMarginX()+(l.x-l.width/2)*_pw-_pad));
-        const _oy=Math.max(0,Math.round(edMarginY()+(l.y-l.height/2)*_ph-_pad));
-        const _ow=Math.min(_full.width-_ox, Math.round(l.width*_pw+_pad*2));
-        const _oh=Math.min(_full.height-_oy, Math.round(l.height*_ph+_pad*2));
+        // Renderizar directamente en canvas del tamaño del bocadillo + pad
+        // SIN pasar por workspace completo: evita el arco blanco desbordante
+        // Calcular bbox que incluye el bocadillo + la cola completa
+        const _bpad=Math.ceil((l.borderWidth||2)/2)+4;
+        // Cola: encontrar el punto más alejado del centro entre tailStarts y tailEnds
+        let _maxOX=l.width/2, _maxOY=l.height/2;
+        const _tails=[...(l.tailStarts||[l.tailStart||{x:-0.4,y:0.4}]),
+                       ...(l.tailEnds  ||[l.tailEnd  ||{x:-0.4,y:0.6}])];
+        _tails.forEach(t=>{
+          _maxOX=Math.max(_maxOX,Math.abs((t.x||0)*l.width));
+          _maxOY=Math.max(_maxOY,Math.abs((t.y||0)*l.height));
+        });
+        const _bw=Math.round((_maxOX*2)*_pw+_bpad*2);
+        const _bh=Math.round((_maxOY*2)*_ph+_bpad*2);
         const _crop=document.createElement('canvas');
-        _crop.width=_ow; _crop.height=_oh;
-        _crop.getContext('2d').drawImage(_full,_ox,_oy,_ow,_oh,0,0,_ow,_oh);
+        _crop.width=_bw; _crop.height=_bh;
+        const _cctx=_crop.getContext('2d');
+        // Traducir para que el centro del bocadillo quede en centro del canvas
+        const _dx=_bw/2-(edMarginX()+l.x*_pw);
+        const _dy=_bh/2-(edMarginY()+l.y*_ph);
+        _cctx.translate(_dx,_dy);
+        l.draw(_cctx,_crop);
+        l.text=_savedText;
         _bobj.renderDataUrl=_crop.toDataURL('image/png');
-        _bobj._renderPad=_pad;
+        _bobj._renderPad=_bpad;
+        // Guardar el tamaño real del bitmap para posicionarlo correctamente en el reader
+        _bobj._renderW=_maxOX*2; _bobj._renderH=_maxOY*2;
       }catch(e){}
     }
     return _bobj;
@@ -6553,9 +6563,36 @@ function edSerLayer(l){
   if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
   if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity};
-  if(l.type==='shape')  return{type:'shape', shape:l.shape, x:l.x, y:l.y,
-    width:l.width, height:l.height, rotation:l.rotation||0,
-    color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1};
+  if(l.type==='shape'){
+    const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
+      width:l.width, height:l.height, rotation:l.rotation||0,
+      color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      cornerRadii:l.cornerRadii?[...l.cornerRadii]:undefined,
+      cornerRadius:l.cornerRadius||0};
+    // Si tiene cornerRadii con valores, generar bitmap fiel
+    const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
+    const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
+    if(_hasCR||_hasCRg){
+      try{
+        const _pw=edPageW(),_ph=edPageH();
+        const _savedRot=l.rotation||0; l.rotation=0;
+        const _pad=Math.ceil((l.lineWidth||3)/2)+2;
+        const _bw=Math.round(l.width*_pw+_pad*2);
+        const _bh=Math.round(l.height*_ph+_pad*2);
+        const _crop=document.createElement('canvas');
+        _crop.width=_bw; _crop.height=_bh;
+        const _cctx=_crop.getContext('2d');
+        const _dx=_bw/2-(edMarginX()+l.x*_pw);
+        const _dy=_bh/2-(edMarginY()+l.y*_ph);
+        _cctx.translate(_dx,_dy);
+        l.draw(_cctx);
+        l.rotation=_savedRot;
+        _sobj.renderDataUrl=_crop.toDataURL('image/png');
+        _sobj._renderPad=_pad;
+      }catch(e){}
+    }
+    return _sobj;
+  }
   if(l.type==='line'){
     const _cr=l.cornerRadii||{};
     const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);

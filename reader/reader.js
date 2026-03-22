@@ -256,7 +256,8 @@ async function preloadImages() {
       const src = layer.renderDataUrl || layer.src || layer.dataUrl;
       if (!src) return Promise.resolve(null);
       const needsImg = layer.renderDataUrl ||
-        layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' || layer.type === 'line';
+        layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
+        layer.type === 'line' || layer.type === 'shape';
       if (!needsImg) return Promise.resolve(null);
       return new Promise(resolve => {
         const img = new Image();
@@ -440,12 +441,18 @@ function _render() {
       const rot = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(x, y);
       if (rot) ctx.rotate(rot);
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      if (layer.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
-      else ctx.rect(-w/2, -h/2, w, h);
-      if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
-      if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+      if (layer.renderDataUrl && layerImgs[j]) {
+        // Shape con cornerRadii: usar bitmap fiel
+        const _pad = layer._renderPad || 0;
+        ctx.drawImage(layerImgs[j], -w/2-_pad, -h/2-_pad, w+_pad*2, h+_pad*2);
+      } else {
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        if (layer.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
+        else ctx.rect(-w/2, -h/2, w, h);
+        if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+        if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+      }
       ctx.restore();
     } else if (type === 'line' && layer.points && layer.points.length >= 2) {
       ctx.save();
@@ -539,15 +546,19 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     ctx.save(); ctx.globalAlpha = alpha;
     ctx.translate(x, y);
     if (rot) ctx.rotate(rot * Math.PI / 180);
-    ctx.drawImage(t._bubbleLayerImg, -w/2-_pad, -h/2-_pad, w+_pad*2, h+_pad*2);
-    // Texto encima
+    // El bitmap ya incluye la forma completa + cola — solo dibujar bitmap y texto
+    // Usar _renderW/_renderH si existen (bitmap incluye cola que puede salir del bbox)
+    const _rw = bl._renderW !== undefined ? bl._renderW * pw : bl.width * pw;
+    const _rh = bl._renderH !== undefined ? bl._renderH * ph : bl.height * ph;
+    ctx.drawImage(t._bubbleLayerImg, -_rw/2-_pad, -_rh/2-_pad, _rw+_pad*2, _rh+_pad*2);
+    // Texto encima (el bitmap se generó con texto vacío)
     const fs = Math.max(10, t.font_size||t.fontSize||bl.fontSize||30);
     ctx.font=(t.font_italic||t.fontItalic||bl.fontItalic?'italic ':'')+(t.font_bold||t.fontBold||bl.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||bl.fontFamily||'Patrick Hand');
     ctx.fillStyle=t.color||bl.color||'#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
     const _lines=_getLines(t.text||bl.text||''); const _lh=fs*1.2; const _th=_lines.length*_lh;
     _lines.forEach((l,i)=>ctx.fillText(l,0,-_th/2+_lh/2+i*_lh));
     ctx.restore();
-    return;
+    return;  // ← early return: no llegar al código de cola/_drawTail
   }
   // Si tiene bitmap prerenderizado (thought/explosion), usarlo directamente
   if (t.renderDataUrl && t._renderImg) {
