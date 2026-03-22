@@ -453,8 +453,9 @@ class BubbleLayer extends BaseLayer {
       if(this.tail){
         const bx=this.thoughtBig.x*w,   by=this.thoughtBig.y*h;
         const sx=this.thoughtSmall.x*w, sy=this.thoughtSmall.y*h;
-        const rBig  = 0.04*Math.min(can.width,can.height);
-        const rSmall= 0.0178*Math.min(can.width,can.height);
+        // Radios proporcionales al bocadillo, no al canvas (para consistencia en bitmaps)
+        const rBig  = Math.min(w,h)*0.13;
+        const rSmall= Math.min(w,h)*0.058;
         // Elipse mediana: a mitad de distancia entre contorno grande y contorno pequeña
         // Contorno grande más cercano a pequeña: punto en bx,by en dirección a sx,sy a distancia rBig
         const dx=sx-bx,dy=sy-by,dist=Math.hypot(dx,dy)||1;
@@ -6524,38 +6525,55 @@ function edSerLayer(l){
       thoughtBig:l.thoughtBig?{...l.thoughtBig}:undefined,
       thoughtSmall:l.thoughtSmall?{...l.thoughtSmall}:undefined,
       ...op};
-    // Para estilos complejos: guardar bitmap de la FORMA (sin texto) para reproducción fiel
+    // Para estilos complejos: guardar bitmap completo (forma+cola+texto) para reproducción fiel
     if(l.style==='thought'||l.style==='explosion'){
       try{
         const _pw=edPageW(),_ph=edPageH();
-        const _savedText=l.text; l.text='';
-        // Renderizar directamente en canvas del tamaño del bocadillo + pad
-        // SIN pasar por workspace completo: evita el arco blanco desbordante
-        // Calcular bbox que incluye el bocadillo + la cola completa
-        const _bpad=Math.ceil((l.borderWidth||2)/2)+4;
-        // Cola: encontrar el punto más alejado del centro entre tailStarts y tailEnds
+        // Para thought: bitmap sin texto (el reader lo superpone centrado)
+        // Para explosion: bitmap CON texto (el centroide de los valles es complejo)
+        const _savedText=l.text;
+        if(l.style==='thought') l.text='';
+
+        // Calcular bbox que incluye bocadillo + cola completa
+        const _bpad=Math.ceil((l.borderWidth||2)/2)+6;
         let _maxOX=l.width/2, _maxOY=l.height/2;
+        // Cola convencional (tailStarts/tailEnds)
         const _tails=[...(l.tailStarts||[l.tailStart||{x:-0.4,y:0.4}]),
                        ...(l.tailEnds  ||[l.tailEnd  ||{x:-0.4,y:0.6}])];
         _tails.forEach(t=>{
           _maxOX=Math.max(_maxOX,Math.abs((t.x||0)*l.width));
           _maxOY=Math.max(_maxOY,Math.abs((t.y||0)*l.height));
         });
-        const _bw=Math.round((_maxOX*2)*_pw+_bpad*2);
-        const _bh=Math.round((_maxOY*2)*_ph+_bpad*2);
-        const _crop=document.createElement('canvas');
-        _crop.width=_bw; _crop.height=_bh;
-        const _cctx=_crop.getContext('2d');
-        // Traducir para que el centro del bocadillo quede en centro del canvas
-        const _dx=_bw/2-(edMarginX()+l.x*_pw);
-        const _dy=_bh/2-(edMarginY()+l.y*_ph);
-        _cctx.translate(_dx,_dy);
-        l.draw(_cctx,_crop);
+        // Cola thought (thoughtBig/thoughtSmall son relativos al tamaño del bocadillo)
+        if(l.style==='thought'&&l.tail){
+          const _tB=l.thoughtBig  ||{x:0.35,y:0.55};
+          const _tS=l.thoughtSmall||{x:0.55,y:0.80};
+          _maxOX=Math.max(_maxOX,Math.abs(_tB.x)*l.width+0.2*l.width);
+          _maxOY=Math.max(_maxOY,Math.abs(_tB.y)*l.height+0.2*l.height);
+          _maxOX=Math.max(_maxOX,Math.abs(_tS.x)*l.width+0.1*l.width);
+          _maxOY=Math.max(_maxOY,Math.abs(_tS.y)*l.height+0.1*l.height);
+        }
+
+        // Renderizar en workspace completo (como LineLayer) — draw() usa coordenadas absolutas
+        const _full=document.createElement('canvas');
+        _full.width=ED_CANVAS_W; _full.height=ED_CANVAS_H;
+        const _fctx=_full.getContext('2d');
+        l.draw(_fctx,_full);
         l.text=_savedText;
+
+        // Recortar zona del bocadillo + cola con bbox calculado
+        const _cx=edMarginX()+l.x*_pw, _cy=edMarginY()+l.y*_ph;
+        const _ox=Math.max(0,Math.round(_cx-_maxOX*_pw-_bpad));
+        const _oy=Math.max(0,Math.round(_cy-_maxOY*_ph-_bpad));
+        const _ow=Math.min(_full.width-_ox, Math.round(_maxOX*2*_pw+_bpad*2));
+        const _oh=Math.min(_full.height-_oy, Math.round(_maxOY*2*_ph+_bpad*2));
+        const _crop=document.createElement('canvas');
+        _crop.width=_ow; _crop.height=_oh;
+        _crop.getContext('2d').drawImage(_full,_ox,_oy,_ow,_oh,0,0,_ow,_oh);
         _bobj.renderDataUrl=_crop.toDataURL('image/png');
         _bobj._renderPad=_bpad;
-        // Guardar el tamaño real del bitmap para posicionarlo correctamente en el reader
-        _bobj._renderW=_maxOX*2; _bobj._renderH=_maxOY*2;
+        _bobj._renderW=_maxOX*2;
+        _bobj._renderH=_maxOY*2;
       }catch(e){}
     }
     return _bobj;

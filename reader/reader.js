@@ -551,12 +551,14 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     const _rw = bl._renderW !== undefined ? bl._renderW * pw : bl.width * pw;
     const _rh = bl._renderH !== undefined ? bl._renderH * ph : bl.height * ph;
     ctx.drawImage(t._bubbleLayerImg, -_rw/2-_pad, -_rh/2-_pad, _rw+_pad*2, _rh+_pad*2);
-    // Texto encima (el bitmap se generó con texto vacío)
-    const fs = Math.max(10, t.font_size||t.fontSize||bl.fontSize||30);
-    ctx.font=(t.font_italic||t.fontItalic||bl.fontItalic?'italic ':'')+(t.font_bold||t.fontBold||bl.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||bl.fontFamily||'Patrick Hand');
-    ctx.fillStyle=t.color||bl.color||'#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    const _lines=_getLines(t.text||bl.text||''); const _lh=fs*1.2; const _th=_lines.length*_lh;
-    _lines.forEach((l,i)=>ctx.fillText(l,0,-_th/2+_lh/2+i*_lh));
+    // Superponer texto solo para thought (explosion incluye el texto en el bitmap)
+    if (bl.style !== 'explosion') {
+      const fs = Math.max(10, t.font_size||t.fontSize||bl.fontSize||30);
+      ctx.font=(t.font_italic||t.fontItalic||bl.fontItalic?'italic ':'')+(t.font_bold||t.fontBold||bl.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||bl.fontFamily||'Patrick Hand');
+      ctx.fillStyle=t.color||bl.color||'#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      const _lines=_getLines(t.text||bl.text||''); const _lh=fs*1.2; const _th=_lines.length*_lh;
+      _lines.forEach((l,i)=>ctx.fillText(l,0,-_th/2+_lh/2+i*_lh));
+    }
     ctx.restore();
     return;  // ← early return: no llegar al código de cola/_drawTail
   }
