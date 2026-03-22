@@ -453,9 +453,9 @@ class BubbleLayer extends BaseLayer {
       if(this.tail){
         const bx=this.thoughtBig.x*w,   by=this.thoughtBig.y*h;
         const sx=this.thoughtSmall.x*w, sy=this.thoughtSmall.y*h;
-        // Radios proporcionales al bocadillo, no al canvas (para consistencia en bitmaps)
-        const rBig  = Math.min(w,h)*0.13;
-        const rSmall= Math.min(w,h)*0.058;
+        // Radios proporcionales al bocadillo — reducidos al 60% del original
+        const rBig  = Math.min(w,h)*0.078;
+        const rSmall= Math.min(w,h)*0.035;
         // Elipse mediana: a mitad de distancia entre contorno grande y contorno pequeña
         // Contorno grande más cercano a pequeña: punto en bx,by en dirección a sx,sy a distancia rBig
         const dx=sx-bx,dy=sy-by,dist=Math.hypot(dx,dy)||1;
@@ -6536,7 +6536,10 @@ function edSerLayer(l){
 
         // Calcular bbox que incluye bocadillo + cola completa
         const _bpad=Math.ceil((l.borderWidth||2)/2)+6;
-        let _maxOX=l.width/2, _maxOY=l.height/2;
+        // Para thought: el bbox real de los círculos es w/4+w/3=7w/12 en X, h/4+h/3=7h/12 en Y
+        const _thoughtOverX = l.style==='thought' ? l.width*7/12  : l.width/2;
+        const _thoughtOverY = l.style==='thought' ? l.height*7/12 : l.height/2;
+        let _maxOX=_thoughtOverX, _maxOY=_thoughtOverY;
         // Cola convencional (tailStarts/tailEnds)
         const _tails=[...(l.tailStarts||[l.tailStart||{x:-0.4,y:0.4}]),
                        ...(l.tailEnds  ||[l.tailEnd  ||{x:-0.4,y:0.6}])];
@@ -6548,10 +6551,10 @@ function edSerLayer(l){
         if(l.style==='thought'&&l.tail){
           const _tB=l.thoughtBig  ||{x:0.35,y:0.55};
           const _tS=l.thoughtSmall||{x:0.55,y:0.80};
-          _maxOX=Math.max(_maxOX,Math.abs(_tB.x)*l.width+0.2*l.width);
-          _maxOY=Math.max(_maxOY,Math.abs(_tB.y)*l.height+0.2*l.height);
-          _maxOX=Math.max(_maxOX,Math.abs(_tS.x)*l.width+0.1*l.width);
-          _maxOY=Math.max(_maxOY,Math.abs(_tS.y)*l.height+0.1*l.height);
+          _maxOX=Math.max(_maxOX,Math.abs(_tB.x)*l.width+0.25*l.width);
+          _maxOY=Math.max(_maxOY,Math.abs(_tB.y)*l.height+0.25*l.height);
+          _maxOX=Math.max(_maxOX,Math.abs(_tS.x)*l.width+0.15*l.width);
+          _maxOY=Math.max(_maxOY,Math.abs(_tS.y)*l.height+0.15*l.height);
         }
 
         // Renderizar en workspace completo (como LineLayer) — draw() usa coordenadas absolutas
@@ -6744,19 +6747,11 @@ function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
-  // Restaurar cámara guardada o centrar si es la primera vez
-  const _cs = comic.cameraState;
+  // Siempre centrar la cámara al cargar — evita el bug de aparecer pequeño/desplazado
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      if(_cs && typeof _cs.z === 'number'){
-        // Restaurar cámara de la sesión anterior
-        edCamera.x = _cs.x; edCamera.y = _cs.y; edCamera.z = _cs.z;
-        edFitCanvas(false); // reajustar tamaño del canvas sin mover la cámara
-      } else {
-        // Primera vez: ajuste inicial centrado
-        window._edUserRequestedReset=true; edFitCanvas(true);
-        setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); }, 120);
-      }
+      window._edUserRequestedReset=true; edFitCanvas(true);
+      setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); }, 120);
       edRedraw();
     }));
   }
