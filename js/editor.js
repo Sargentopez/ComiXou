@@ -3566,15 +3566,19 @@ function _edShapeApplyHistory(snapshot){
   const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null; if(!la) return;
   const d = JSON.parse(snapshot);
   // Restaurar propiedades del layer sin cambiar su posición en el array
-  if(d.color     !== undefined) la.color      = d.color;
-  if(d.fillColor !== undefined) la.fillColor  = d.fillColor;
-  if(d.lineWidth !== undefined) la.lineWidth  = d.lineWidth;
-  if(d.opacity   !== undefined) la.opacity    = d.opacity;
-  if(d.rotation  !== undefined) la.rotation   = d.rotation;
-  if(d.x         !== undefined){ la.x=d.x; la.y=d.y; la.width=d.width; la.height=d.height; }
-  if(d.shape     !== undefined) la.shape      = d.shape;
-  if(d.points    !== undefined) la.points     = d.points.slice();
-  if(d.closed    !== undefined) la.closed     = d.closed;
+  if(d.color        !== undefined) la.color       = d.color;
+  if(d.fillColor    !== undefined) la.fillColor   = d.fillColor;
+  if(d.lineWidth    !== undefined) la.lineWidth   = d.lineWidth;
+  if(d.opacity      !== undefined) la.opacity     = d.opacity;
+  if(d.rotation     !== undefined) la.rotation    = d.rotation;
+  if(d.x            !== undefined){ la.x=d.x; la.y=d.y; la.width=d.width; la.height=d.height; }
+  if(d.shape        !== undefined) la.shape       = d.shape;
+  if(d.points       !== undefined) la.points      = d.points.slice();
+  if(d.closed       !== undefined) la.closed      = d.closed;
+  if(d.cornerRadius !== undefined) la.cornerRadius= d.cornerRadius;
+  la.cornerRadii = d.cornerRadii
+    ? (Array.isArray(d.cornerRadii) ? [...d.cornerRadii] : {...d.cornerRadii})
+    : undefined;
   _esbSync();
   edRedraw();
 }
@@ -6682,6 +6686,8 @@ function edDeserLayer(d, pageOrientation){
   if(d.type==='shape'){
     const l=new ShapeLayer(d.shape||'rect',d.x||0.5,d.y||0.5,d.width||0.3,d.height||0.2);
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'none'; l.lineWidth=d.lineWidth||3; l.rotation=d.rotation||0; l.opacity=d.opacity??1;
+    if(d.cornerRadius) l.cornerRadius=d.cornerRadius;
+    if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     return l;
   }
   if(d.type==='line'){
@@ -6689,7 +6695,7 @@ function edDeserLayer(d, pageOrientation){
     l.points=d.points||[]; l.closed=d.closed||false;
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth||3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
-    if(d.cornerRadii) l.cornerRadii={...d.cornerRadii};
+    if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
     else l._updateBbox();
     return l;
