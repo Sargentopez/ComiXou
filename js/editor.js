@@ -3153,6 +3153,8 @@ function edOnMove(e){
   if(!gestureActive) return;
   e.preventDefault();
   if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
+  // Si estamos pintando activamente, el pinch ya terminó — limpiar flag y continuar trazo
+  if(_edPinchHappened && edPainting) _edPinchHappened = false;
   if(_edPinchHappened) return; // hubo pinch — ignorar movimiento del dedo que queda
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
   if(edActiveTool==='fill'){edMoveBrush(e);return;}
@@ -7488,13 +7490,17 @@ function EditorView_init(){
   $('edFileGallery')?.addEventListener('change',e=>{
     edAddImage(e.target.files[0]);
     e.target.value='';
-    // Restaurar fullscreen si estaba activo antes de abrir el diálogo
+    // Restaurar fullscreen usando Fullscreen.enter() — gestiona todos los casos correctamente
+    // Pequeño delay para que el navegador procese el cierre del selector antes de pedir FS
     if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      const el = document.documentElement;
-      try{ (el.requestFullscreen||el.webkitRequestFullscreen).call(el); }catch(_){}
+      setTimeout(()=>{
+        if(typeof Fullscreen !== 'undefined') Fullscreen.enter();
+        // Forzar actualización visual del botón FS por si el estado quedó desincronizado
+        if(typeof Fullscreen !== 'undefined') Fullscreen._updateBtn();
+      }, 300);
     }
     window._edWasFullscreen = false;
-  });;
+  });
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{
