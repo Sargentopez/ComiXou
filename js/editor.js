@@ -269,7 +269,8 @@ class TextLayer extends BaseLayer {
     ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
     // Fondo y borde se dibujan en espacio local (tras la rotación)
     const _bgo=this.bgOpacity??1;
-    if(_bgo>0){ctx.globalAlpha=_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(-w/2,-h/2,w,h);ctx.globalAlpha=1;}
+    const _ctxAlpha=ctx.globalAlpha;
+    if(_bgo>0){ctx.globalAlpha=_ctxAlpha*_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(-w/2,-h/2,w,h);ctx.globalAlpha=_ctxAlpha;}
     if(this.borderWidth>0){
       ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
       ctx.strokeRect(-w/2,-h/2,w,h);
@@ -1614,29 +1615,41 @@ function edRedraw(){
   // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
-  // T11: Dimming del resto de capas al editar un objeto o al dibujar
+  // ── DIMMING GENERAL ──────────────────────────────────────────────────────────
+  // Regla única: si hay cualquier modo de edición activo, todo se dimea al 50%
+  // excepto el objeto que se está editando activamente.
   const _panel = $('edOptionsPanel');
   const _panelOpen = _panel?.classList.contains('open');
-  // En modo props: dimear todo excepto el objeto seleccionado
-  // En modo draw/eraser/fill: dimear todo excepto el DrawLayer activo
-  const _editingProps = _panelOpen && _panel.dataset.mode === 'props' && edSelectedIdx >= 0;
+  const _panelMode = _panel?.dataset.mode || '';
+
   const _editingDraw  = ['draw','eraser','fill'].includes(edActiveTool) &&
     (_panelOpen || $('edDrawBar')?.classList.contains('visible'));
-  const _editingShape = (_panelOpen && (_panel.dataset.mode==='shape' || _panel.dataset.mode==='line'))
+  const _editingShape = (_panelOpen && (_panelMode==='shape' || _panelMode==='line'))
     || !!_edShapePreview || !!_edLineLayer
+    || $('edShapeBar')?.classList.contains('visible');
+  const _editingProps = _panelOpen && _panelMode === 'props' && edSelectedIdx >= 0;
+  // ¿Hay algún modo de edición activo?
+  const _anyEditing = _editingDraw || _editingShape || _editingProps;
 
-  const _dimming = _editingProps || _editingDraw || _editingShape;
+  // Función que decide si una capa concreta debe dimearse
+  const _isDimmed = (l, i) => {
+    if (!_anyEditing) return false;
+    if (_editingDraw) {
+      // En modo dibujo libre: solo el DrawLayer activo queda al 100%
+      return l.type !== 'draw';
+    }
+    // En cualquier otro modo: dimear todo excepto el objeto seleccionado/en edición
+    if (i === edSelectedIdx) return false;
+    if (l === _edShapePreview || l === _edLineLayer) return false;
+    return true;
+  };
 
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
   // Textos/bocadillos siempre al final (encima de todo).
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
     if(_editingDraw && l.type==='draw') return;    // en modo draw, el draw va al final
-    let dimmed = false;
-    if(_editingProps) dimmed = (i !== edSelectedIdx);
-    else if(_editingDraw) dimmed = true;           // en modo draw, todo lo demás dimeado
-    else if(_editingShape) dimmed = (l === _edShapePreview || l === _edLineLayer || i === edSelectedIdx) ? false : true;
-    const dimFactor = dimmed ? 0.5 : 1;
+    const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='image'){
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx, edCanvas);
@@ -1655,12 +1668,13 @@ function edRedraw(){
       edCtx.globalAlpha = 1;
     }
   });
-  // Textos: dimear en modo draw, shape/line, o si hay objeto no-texto seleccionado
-  const _dimTexts = _editingDraw
-    || _editingShape
-    || (_editingProps && edLayers[edSelectedIdx]?.type !== 'text' && edLayers[edSelectedIdx]?.type !== 'bubble');
-  edCtx.globalAlpha = _textGroupAlpha * (_dimTexts ? 0.5 : 1);
-  _textLayers.forEach(l=>{ l.draw(edCtx,edCanvas); });
+  // Textos/bocadillos: aplicar dimming individual por capa
+  _textLayers.forEach(l=>{
+    const i = edLayers.indexOf(l);
+    const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
+    edCtx.globalAlpha = _textGroupAlpha * dimFactor;
+    l.draw(edCtx, edCanvas);
+  });
   edCtx.globalAlpha = 1;
   // En modo draw: DrawLayer al final, encima de shapes/textos dimeados
   if(_editingDraw){
@@ -2510,6 +2524,8 @@ function edOnStart(e){
     if(la&&(la.type==='line'||la.type==='shape')){
       const c2=edCoords(e);
       const pw2=edPageW(),ph2=edPageH();
+      const _vcTouch = e.pointerType==='touch';
+      const _vcHitR = _vcTouch ? 28 : 18;
       // Intentar seleccionar vértice de línea
       if(la.type==='line'&&la.points.length>=2){
         const rot2=(la.rotation||0)*Math.PI/180;
@@ -2519,7 +2535,7 @@ function edOnStart(e){
           const lpx=p.x*pw2,lpy=p.y*ph2;
           const ax2=la.x+(lpx*cos2-lpy*sin2)/pw2;
           const ay2=la.y+(lpx*sin2+lpy*cos2)/ph2;
-          if(Math.hypot(c2.nx-ax2,c2.ny-ay2)<0.05){
+          if(Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z<_vcHitR){
             window._edCurveVertIdx=i;
             if(!la.cornerRadii)la.cornerRadii={};
             const existing=la.cornerRadii[i]||0;
@@ -2543,7 +2559,7 @@ function edOnStart(e){
           const[lx,ly]=corners[ci2];
           const ax2=(la.x*pw2+lx*cos2-ly*sin2)/pw2;
           const ay2=(la.y*ph2+lx*sin2+ly*cos2)/ph2;
-          if(Math.hypot(c2.nx-ax2,c2.ny-ay2)<0.05){
+          if(Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z<_vcHitR){
             window._edCurveVertIdx=ci2;
             if(!la.cornerRadii)la.cornerRadii=[0,0,0,0];
             const existing=la.cornerRadii[ci2]||0;
@@ -2651,12 +2667,12 @@ function edOnStart(e){
         }
       }
     }
-    // Nada tocado → desactivar si había selección, o iniciar rubber band
+    // Nada tocado fuera del bbox → limpiar selección e iniciar nueva rubber band
+    // La herramienta multiselección permanece activa hasta que el usuario la desactive
     if(edMultiSel.length){
-      // En táctil: NO desactivar al tocar fuera — el usuario puede estar iniciando un pinch
-      // Solo el botón de multiselección puede desactivar la selección en táctil
-      if(!edLastPointerIsTouch) _edDeactivateMultiSel();
-      // En táctil: simplemente ignorar — esperar al posible segundo dedo
+      _msClear();
+      edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+      edRedraw();
     } else {
       _msClear();
       edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
@@ -2754,20 +2770,28 @@ function edOnStart(e){
   // Cola bocadillo
   if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
     const la=edLayers[edSelectedIdx];
+    // Helper: distancia en píxeles de pantalla entre punto normalizado y toque
+    // Usa el mismo sistema que los handles de control (hitScreen táctil=28, PC=18)
+    const _isTouch = e.pointerType === 'touch';
+    const _hitR = _isTouch ? 28 : 18;
+    const _pw0=edPageW(), _ph0=edPageH(), _z0=edCamera.z;
+    const _nodeDist = (nx, ny, px, py) =>
+      Math.hypot((nx-px)*_pw0, (ny-py)*_ph0) * _z0;
+
     // Handles cola pensamiento
     if(la.style==='thought' && la.tail){
       const bx=la.x+la.thoughtBig.x*la.width,   by=la.y+la.thoughtBig.y*la.height;
       const sx=la.x+la.thoughtSmall.x*la.width,  sy=la.y+la.thoughtSmall.y*la.height;
-      if(Math.hypot(c.nx-bx,c.ny-by)<0.04){edIsTailDragging=true;edTailPointType='thoughtBig';  return;}
-      if(Math.hypot(c.nx-sx,c.ny-sy)<0.04){edIsTailDragging=true;edTailPointType='thoughtSmall';return;}
+      if(_nodeDist(c.nx,c.ny,bx,by)<_hitR){edIsTailDragging=true;edTailPointType='thoughtBig';  return;}
+      if(_nodeDist(c.nx,c.ny,sx,sy)<_hitR){edIsTailDragging=true;edTailPointType='thoughtSmall';return;}
     }
     for(const p of la.getTailControlPoints()){
-      if(Math.hypot(c.nx-p.x,c.ny-p.y)<0.05){edIsTailDragging=true;edTailPointType=p.type;edTailVoiceIdx=p.voice||0;return;}
+      if(_nodeDist(c.nx,c.ny,p.x,p.y)<_hitR){edIsTailDragging=true;edTailPointType=p.type;edTailVoiceIdx=p.voice||0;return;}
     }
     // Vértices de explosión
     if(la.style==='explosion'){
       for(const p of la.getExplosionControlPoints()){
-        if(Math.hypot(c.nx-p.nx,c.ny-p.ny)<0.05){
+        if(_nodeDist(c.nx,c.ny,p.nx,p.ny)<_hitR){
           edIsTailDragging=true;edTailPointType='explosion';edTailVoiceIdx=p.idx;return;
         }
       }
@@ -2806,7 +2830,9 @@ function edOnStart(e){
         const {lpx,lpy}=_handlePos(i);
         const ax=la.x+(lpx*cos-lpy*sin)/pw;
         const ay=la.y+(lpx*sin+lpy*cos)/ph;
-        if(Math.hypot(c.nx-ax,c.ny-ay)<0.05){
+        const _isT2 = e.pointerType==='touch';
+        const _hitR2 = _isT2 ? 28 : 18;
+        if(Math.hypot((c.nx-ax)*edPageW(),(c.ny-ay)*edPageH())*edCamera.z<_hitR2){
           edIsTailDragging=true;edTailPointType='linevertex';edTailVoiceIdx=i;return;
         }
       }
