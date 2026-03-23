@@ -481,22 +481,8 @@ function _render() {
         if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       }
       ctx.restore();
-    } else if ((type === 'bubble' || type === 'text') && layer.renderDataUrl && layerImgs[j]) {
-      // Bocadillo con bitmap prerenderizado: dibujar la forma desde layers
-      // El texto se superpone después via _drawTexts
-      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
-      const _rw = layer._renderW !== undefined ? layer._renderW * pw : (layer.width || 0.3) * pw;
-      const _rh = layer._renderH !== undefined ? layer._renderH * ph : (layer.height || 0.15) * ph;
-      const _pad = layer._renderPad || 0;
-      const rot = layer.rotation || 0;
-      ctx.save();
-      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      ctx.translate(x, y);
-      if (rot) ctx.rotate(rot * Math.PI / 180);
-      ctx.drawImage(layerImgs[j], -_rw/2-_pad, -_rh/2-_pad, _rw+_pad*2, _rh+_pad*2);
-      ctx.restore();
     }
-    // bubble/text sin bitmap: los gestiona _drawTexts con lógica sequential
+    // bubble/text: siempre gestionado por _drawTexts (forma + texto juntos, con sequential)
   });
 
   _drawTexts(ctx, panel, pw, ph, panel.layerImgs || []);
@@ -550,22 +536,27 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
 }
 
 function _drawBubble(ctx, t, pw, ph, alpha) {
-  // Si tiene bitmap prerenderizado: la forma ya fue dibujada en _renderPanel
-  // Solo superponer el texto (para thought; explosion ya tiene texto en bitmap)
+  // Si tiene bitmap prerenderizado: dibujar forma + texto juntos (respeta sequential)
   if (t._bubbleLayerImg && t._bubbleLayer && t._bubbleLayer.renderDataUrl) {
     const bl = t._bubbleLayer;
-    if (bl.style === 'explosion') return; // explosion: texto ya en bitmap, nada más que hacer
-    // thought: superponer texto centrado
     const x = (bl.x || 0.5) * pw, y = (bl.y || 0.5) * ph;
+    const _rw = bl._renderW !== undefined ? bl._renderW * pw : (bl.width || 0.3) * pw;
+    const _rh = bl._renderH !== undefined ? bl._renderH * ph : (bl.height || 0.15) * ph;
+    const _pad = bl._renderPad || 0;
     const rot = bl.rotation || 0;
     ctx.save(); ctx.globalAlpha = alpha;
     ctx.translate(x, y);
     if (rot) ctx.rotate(rot * Math.PI / 180);
-    const fs = Math.max(10, t.font_size||t.fontSize||bl.fontSize||30);
-    ctx.font=(t.font_italic||t.fontItalic||bl.fontItalic?'italic ':'')+(t.font_bold||t.fontBold||bl.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||bl.fontFamily||'Patrick Hand');
-    ctx.fillStyle=t.color||bl.color||'#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    const _lines=_getLines(t.text||bl.text||''); const _lh=fs*1.2; const _th=_lines.length*_lh;
-    _lines.forEach((l,i)=>ctx.fillText(l,0,-_th/2+_lh/2+i*_lh));
+    // Dibujar bitmap de la forma
+    ctx.drawImage(t._bubbleLayerImg, -_rw/2-_pad, -_rh/2-_pad, _rw+_pad*2, _rh+_pad*2);
+    // Superponer texto (thought: texto separado; explosion: texto ya en bitmap)
+    if (bl.style !== 'explosion') {
+      const fs = Math.max(10, t.font_size||t.fontSize||bl.fontSize||30);
+      ctx.font=(t.font_italic||t.fontItalic||bl.fontItalic?'italic ':'')+(t.font_bold||t.fontBold||bl.fontBold?'bold ':'')+fs+'px '+(t.font_family||t.fontFamily||bl.fontFamily||'Patrick Hand');
+      ctx.fillStyle=t.color||bl.color||'#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      const _lines=_getLines(t.text||bl.text||''); const _lh=fs*1.2; const _th=_lines.length*_lh;
+      _lines.forEach((l,i)=>ctx.fillText(l,0,-_th/2+_lh/2+i*_lh));
+    }
     ctx.restore();
     return;
   }
