@@ -1655,7 +1655,7 @@ function edRedraw(){
   // Textos/bocadillos siempre al final (encima de todo).
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
-    if(_editingDraw && l.type==='draw') return;    // en modo draw, el draw va al final
+    if((_editingDraw || _edDrawPinch) && l.type==='draw') return; // en modo draw, el draw va al final
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='image'){
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
@@ -1684,7 +1684,7 @@ function edRedraw(){
   });
   edCtx.globalAlpha = 1;
   // En modo draw: DrawLayer al final, encima de shapes/textos dimeados
-  if(_editingDraw){
+  if(_editingDraw || _edDrawPinch){
     const _dl = edLayers.find(l => l.type==='draw');
     if(_dl){
       if(_edDrawPinch){
