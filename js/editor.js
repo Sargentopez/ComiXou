@@ -1628,8 +1628,13 @@ function edRedraw(){
     || !!_edShapePreview || !!_edLineLayer
     || $('edShapeBar')?.classList.contains('visible');
   const _editingProps = _panelOpen && _panelMode === 'props' && edSelectedIdx >= 0;
-  // ¿Hay algún modo de edición activo?
-  const _anyEditing = _editingDraw || _editingShape || _editingProps;
+  // También hay edición activa cuando se está manipulando un objeto (drag/resize/rotate/tail)
+  // aunque el panel no esté abierto — garantiza el dimming durante el desplazamiento
+  const _manipulating = edSelectedIdx >= 0 &&
+    (edIsDragging || edIsResizing || edIsRotating || edIsTailDragging);
+  // Cuentagotas activo: todo al 100% para ver bien los colores
+  const _anyEditing = !window._edEyedropActive &&
+    (_editingDraw || _editingShape || _editingProps || _manipulating);
 
   // Función que decide si una capa concreta debe dimearse
   const _isDimmed = (l, i) => {
@@ -1911,12 +1916,15 @@ function edDrawSel(){
         const ay2=(la.y*ph+lx*sin2+ly*cos2)/ph;
         const cpx2=edMarginX()+ax2*pw, cpy2=edMarginY()+ay2*ph;
         const isAct=window._edCurveVertIdx===ci2;
-        edCtx.globalAlpha=isAct?0.5:1;
+        const _blink2=isAct?(Math.sin(Date.now()/200)*0.25+0.25):1; // parpadeo 0..0.5
+        edCtx.globalAlpha=_blink2;
         edCtx.beginPath();edCtx.arc(cpx2,cpy2,hr,0,Math.PI*2);
-        edCtx.fillStyle='#2ecc71';edCtx.fill();
+        edCtx.fillStyle=isAct?'#e67e22':'#2ecc71';edCtx.fill();
         edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
         edCtx.globalAlpha=1;
       });
+      // Animar parpadeo del nodo activo
+      if(window._edCurveVertIdx >= 0) requestAnimationFrame(()=>{ if(window._edCurveVertIdx>=0) edRedraw(); });
     }
   }
   // Handles vértices de LineLayer seleccionado (panel abierto)
@@ -1954,12 +1962,15 @@ function edDrawSel(){
       const cpx=cx + lpx*cos - lpy*sin;
       const cpy=cy + lpx*sin + lpy*cos;
       const isActive=window._edCurveVertIdx===i;
-      edCtx.globalAlpha=isActive?0.5:1;
+      const _blink3=isActive?(Math.sin(Date.now()/200)*0.25+0.25):1; // parpadeo 0..0.5
+      edCtx.globalAlpha=_blink3;
       edCtx.beginPath();edCtx.arc(cpx,cpy,hr,0,Math.PI*2);
-      edCtx.fillStyle=_cvm?'#2ecc71':'#e63030';edCtx.fill();
+      edCtx.fillStyle=isActive?'#e67e22':(_cvm?'#2ecc71':'#e63030');edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
       edCtx.globalAlpha=1;
     });
+    // Si hay un nodo activo, continuar animando el parpadeo
+    if(window._edCurveVertIdx >= 0) requestAnimationFrame(()=>{ if(window._edCurveVertIdx>=0) edRedraw(); });
   }
 }
 
@@ -3378,12 +3389,7 @@ function edOnMove(e){
     }
     edRedraw();
     edHideGearIcon();
-    const _opPanel=$('edOptionsPanel');
-    const _la2 = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-    const _keepOpen2 = _la2?.type==='shape' || _la2?.type==='line';
-    if(_opPanel&&_opPanel.classList.contains('open')&&_opPanel.dataset.mode!=='draw'&&!_keepOpen2){
-      _opPanel.classList.remove('open'); _opPanel.innerHTML='';
-    }
+    // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
     return;
   }
   if(!edIsDragging||edSelectedIdx<0)return;
@@ -3393,11 +3399,7 @@ function edOnMove(e){
   window._edMoved = true;
   edRedraw();
   edHideGearIcon();
-  const _opP=$('edOptionsPanel');
-  const _keepOpen = la.type==='shape' || la.type==='line';
-  if(_opP&&_opP.classList.contains('open')&&_opP.dataset.mode!=='draw'&&!_keepOpen){
-    _opP.classList.remove('open'); _opP.innerHTML='';
-  }
+  // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
   // Limpiar pointer del mapa SIEMPRE (antes de la guarda)
@@ -5395,19 +5397,20 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
-  // Herramientas de dibujo: mostrar barra de dibujo
-  if(['draw','eraser','fill'].includes(edActiveTool)){
-    window._edMinimizedDrawMode = edActiveTool;
-    const panel=$('edOptionsPanel');
-    if(panel) panel.style.visibility='hidden';
-    edDrawBarShow();
-  }
-  // Herramientas shape/line: ocultar panel, guardar modo y mostrar barra flotante
+  // Ocultar siempre el panel de opciones, sea cual sea su modo
   const _panel=$('edOptionsPanel');
-  if(_panel?.dataset.mode==='shape' || _panel?.dataset.mode==='line'){
-    window._edMinimizedDrawMode = _panel.dataset.mode;
+  if(_panel?.classList.contains('open')){
+    const mode = _panel.dataset.mode || '';
+    // Guardar modo para restaurar al maximizar
+    if(mode) window._edMinimizedDrawMode = mode;
     _panel.style.visibility='hidden';
-    edShapeBarShow();
+    // Mostrar barra flotante si corresponde al modo
+    if(['draw','eraser','fill'].includes(edActiveTool)){
+      edDrawBarShow();
+    } else if(mode==='shape' || mode==='line'){
+      edShapeBarShow();
+    }
+    // Para props (imagen, texto, bocadillo, stroke): panel oculto sin barra flotante
   }
   edFitCanvas();
 }
@@ -7174,6 +7177,10 @@ function _edStartEyedrop() {
   const canvas = edCanvas;
   if (!canvas) return;
 
+  // Opacidad al 100% mientras el cuentagotas está activo
+  window._edEyedropActive = true;
+  edRedraw();
+
   // Indicador visual: cambiar cursor y mostrar toast
   canvas.style.cursor = 'crosshair';
   edToast('Toca el color a copiar…');
@@ -7185,6 +7192,8 @@ function _edStartEyedrop() {
   function sampleAt(clientX, clientY) {
     ac.abort(); // un solo disparo
     canvas.style.cursor = '';
+    window._edEyedropActive = false; // restaurar dimming al 50%
+    edRedraw();
 
     // Convertir coordenadas de pantalla a coordenadas del canvas lógico
     const rect = canvas.getBoundingClientRect();
@@ -7214,7 +7223,11 @@ function _edStartEyedrop() {
 
   // Cancelar con Escape o tocando fuera del canvas
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { ac.abort(); canvas.style.cursor = ''; edToast('Cuentagotas cancelado'); }
+    if (e.key === 'Escape') {
+      ac.abort(); canvas.style.cursor = '';
+      window._edEyedropActive = false; edRedraw();
+      edToast('Cuentagotas cancelado');
+    }
   }, { ...sig, once: true });
 }
 
@@ -7857,6 +7870,40 @@ function EditorView_init(){
     // Ctrl+D → duplicar objeto seleccionado
     if(ctrl && e.key.toLowerCase() === 'd'){
       if(edSelectedIdx >= 0){ e.preventDefault(); edDuplicateSelected(); }
+      return;
+    }
+    // Ctrl+] subir | Ctrl+[ bajar | Ctrl+Alt+] al frente | Ctrl+Alt+[ al fondo
+    // (estándar Figma / Illustrator / Photoshop)
+    if(ctrl && (e.key === ']' || e.key === '[')){
+      if(edSelectedIdx >= 0){
+        e.preventDefault();
+        const page = edPages[edCurrentPage]; if(!page) return;
+        const layers = page.layers;
+        const idx = edSelectedIdx;
+        if(e.altKey){
+          if(e.key === ']' && idx < layers.length - 1){
+            const [moved] = layers.splice(idx, 1);
+            layers.push(moved);
+            edSelectedIdx = layers.length - 1;
+            edPushHistory(); edRedraw(); edToast('Al frente ⬆');
+          } else if(e.key === '[' && idx > 0){
+            const [moved] = layers.splice(idx, 1);
+            layers.unshift(moved);
+            edSelectedIdx = 0;
+            edPushHistory(); edRedraw(); edToast('Al fondo ⬇');
+          }
+        } else {
+          if(e.key === ']' && idx < layers.length - 1){
+            [layers[idx], layers[idx+1]] = [layers[idx+1], layers[idx]];
+            edSelectedIdx = idx + 1;
+            edPushHistory(); edRedraw(); edToast('Capa subida ▲');
+          } else if(e.key === '[' && idx > 0){
+            [layers[idx], layers[idx-1]] = [layers[idx-1], layers[idx]];
+            edSelectedIdx = idx - 1;
+            edPushHistory(); edRedraw(); edToast('Capa bajada ▼');
+          }
+        }
+      }
       return;
     }
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
