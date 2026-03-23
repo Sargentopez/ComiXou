@@ -3627,7 +3627,7 @@ function edOnEnd(e){
    y se destruye al cerrarlo. Los botones undo/redo del panel y de
    la barra flotante usan ESTE historial, no el global.
    ══════════════════════════════════════════ */
-let _edShapeHistory = [], _edShapeHistIdx = -1;
+let _edShapeHistory = [], _edShapeHistIdx = -1, _edShapeHistIdxBase = 0;
 
 function _edShapePushHistory(){
   const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null; if(!la) return;
@@ -3647,6 +3647,7 @@ function _edShapeInitHistory(isNew){
     _edShapeHistory = [la ? JSON.stringify(edSerLayer(la)) : null];
     _edShapeHistIdx = 0;
   }
+  _edShapeHistIdxBase = _edShapeHistIdx;
   _edShapeUpdateUndoRedoBtns();
 }
 
@@ -3694,7 +3695,7 @@ function _edShapeApplyHistory(snapshot){
 }
 
 function edShapeUndo(){
-  if(_edShapeHistIdx <= 0){ edToast('Nada que deshacer'); return; }
+  if(_edShapeHistIdx <= _edShapeHistIdxBase){ edToast('Nada que deshacer'); return; }
   _edShapeHistIdx--;
   _edShapeApplyHistory(_edShapeHistory[_edShapeHistIdx]);
   _edShapeUpdateUndoRedoBtns();
@@ -3710,15 +3711,15 @@ function edShapeRedo(){
 function _edShapeUpdateUndoRedoBtns(){
   // Botones panel shape
   const su=$('op-shape-undo'), sr=$('op-shape-redo');
-  if(su) su.disabled = _edShapeHistIdx <= 0;
+  if(su) su.disabled = _edShapeHistIdx <= _edShapeHistIdxBase;
   if(sr) sr.disabled = _edShapeHistIdx >= _edShapeHistory.length - 1;
   // Botones panel line
   const lu=$('op-line-undo'), lr=$('op-line-redo');
-  if(lu) lu.disabled = _edShapeHistIdx <= 0;
+  if(lu) lu.disabled = _edShapeHistIdx <= _edShapeHistIdxBase;
   if(lr) lr.disabled = _edShapeHistIdx >= _edShapeHistory.length - 1;
   // Barra flotante
   const bu=$('esb-undo'), br=$('esb-redo');
-  if(bu) bu.style.opacity = _edShapeHistIdx <= 0 ? '0.3' : '1';
+  if(bu) bu.style.opacity = _edShapeHistIdx <= _edShapeHistIdxBase ? '0.3' : '1';
   if(br) br.style.opacity = _edShapeHistIdx >= _edShapeHistory.length - 1 ? '0.3' : '1';
 }
 
@@ -4329,6 +4330,8 @@ function _edActivateShapeTool() {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'shape';
+  // Guardar estado previo en historial global (objeto existente)
+  if(_sel) edPushHistory();
   _edShapeInitHistory();
 
   // ── Helpers ──
@@ -4504,7 +4507,7 @@ function _edActivateShapeTool() {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
-    _edShapeClearHistory();
+    edPushHistory(); _edShapeClearHistory();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
@@ -4634,6 +4637,8 @@ function _edActivateLineTool(isNew) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'line';
+  // Guardar estado previo en historial global (objeto existente, no nuevo)
+  if(!isNew) edPushHistory();
   _edShapeInitHistory(isNew);
 
   // ── Helpers ──
@@ -4816,7 +4821,7 @@ function _edActivateLineTool(isNew) {
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
     window._edCurveVertIdx=-1;
-    _edShapeClearHistory();
+    edPushHistory(); _edShapeClearHistory();
     _edFinishLine();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
@@ -6044,8 +6049,8 @@ let _esbX = 12, _esbY = 120;
 
 function edShapeBarShow() {
   const bar = $('edShapeBar'); if(!bar) return;
-  bar.classList.add('visible'); // visible primero para medir offsetHeight
-  // Si sigue en la posición inicial, centrar en el borde izquierdo del lienzo
+  bar.classList.add('visible');
+  if(_edShapeHistory.length === 0) _edShapeInitHistory();
   if (_esbX === 12 && _esbY === 120) {
     const pos = _edBarDefaultPos(bar);
     _esbX = pos.x; _esbY = pos.y;
@@ -7823,10 +7828,12 @@ function EditorView_init(){
   // ── MINIMIZAR ──
   $('edUndoBtn')?.addEventListener('click', () => {
     if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
+    else if(($('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) && _edShapeHistIdx > _edShapeHistIdxBase) edShapeUndo();
     else edUndo();
   });
   $('edRedoBtn')?.addEventListener('click', () => {
     if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
+    else if(($('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) && _edShapeHistIdx < _edShapeHistory.length - 1) edShapeRedo();
     else edRedo();
   });
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
@@ -8003,14 +8010,17 @@ function EditorView_init(){
       return;
     }
     if(!ctrl) return;
+    const _vecActive = $('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible');
     if(!e.shiftKey && e.key.toLowerCase() === 'z'){
       e.preventDefault();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
+      else if(_vecActive && _edShapeHistIdx > _edShapeHistIdxBase) edShapeUndo();
       else edUndo();
     }
     else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){
       e.preventDefault();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
+      else if(_vecActive && _edShapeHistIdx < _edShapeHistory.length - 1) edShapeRedo();
       else edRedo();
     }
   };
