@@ -481,7 +481,6 @@ function _render() {
         if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       }
       ctx.restore();
-    }
     } else if ((type === 'bubble' || type === 'text') && layer.renderDataUrl && layerImgs[j]) {
       // Bocadillo con bitmap prerenderizado: dibujar la forma desde layers
       // El texto se superpone después via _drawTexts
