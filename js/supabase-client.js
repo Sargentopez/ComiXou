@@ -106,6 +106,7 @@ const SupabaseClient = (() => {
         font_italic:  t.fontItalic        ?? false,
         color:        t.color             || '#000000',
         bg:           t.bg || t.backgroundColor || '#ffffff',
+        bg_opacity:   t.bgOpacity         ?? 1,
         border:       t.border            ?? t.borderWidth ?? 2,
         border_color: t.borderColor       || '#000000',
         rotation:     t.rotation          ?? 0,

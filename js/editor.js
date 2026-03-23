@@ -244,7 +244,7 @@ class TextLayer extends BaseLayer {
     super('text',x,y,0.2,0.1);
     this.text=text;this.fontSize=30;this.fontFamily='Patrick Hand';
     this.fontBold=false;this.fontItalic=false;
-    this.color='#000000';this.backgroundColor='#ffffff';
+    this.color='#000000';this.backgroundColor='#ffffff';this.bgOpacity=1;
     this.borderColor='#000000';this.borderWidth=0;this.padding=10;
   }
   getLines(){return this.text.split('\n');}
@@ -268,7 +268,8 @@ class TextLayer extends BaseLayer {
     ctx.save();
     ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
     // Fondo y borde se dibujan en espacio local (tras la rotación)
-    ctx.fillStyle=this.backgroundColor; ctx.fillRect(-w/2,-h/2,w,h);
+    const _bgo=this.bgOpacity??1;
+    if(_bgo>0){ctx.globalAlpha=_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(-w/2,-h/2,w,h);ctx.globalAlpha=1;}
     if(this.borderWidth>0){
       ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
       ctx.strokeRect(-w/2,-h/2,w,h);
@@ -1148,7 +1149,7 @@ function _edLayersSnapshot(){
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
-                    'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor',
+                    'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor','bgOpacity',
                     'borderColor','borderWidth','padding','explosionRadii','thoughtBig','thoughtSmall',
                     'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount']){
       if(l[k] !== undefined) o[k] = l[k];
@@ -2890,11 +2891,13 @@ function edOnStart(e){
       }
     }
   }
-  // Si el panel de shape/line está abierto, bloquear selección de otros objetos
+  // Si se está editando un shape/line (panel O barra flotante), bloquear selección de otros objetos
   // pero permitir drag del objeto actualmente seleccionado
   const _activePanel = $('edOptionsPanel');
   const _activeMode  = _activePanel?.dataset.mode;
-  if((_activeMode === 'shape' || _activeMode === 'line') && edSelectedIdx >= 0){
+  const _shapeBarOpen = $('edShapeBar')?.classList.contains('visible');
+  const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
+  if(_editingVectorial && edSelectedIdx >= 0){
     // Comprobar si el click es sobre el objeto seleccionado → permitir drag
     const _la = edLayers[edSelectedIdx];
     if(_la && _la.contains(c.nx, c.ny)){
@@ -2902,9 +2905,11 @@ function edOnStart(e){
       edDragOffX=c.nx-_la.x; edDragOffY=c.ny-_la.y;
       return;
     }
-    // Click fuera del objeto seleccionado → ignorar
+    // Click fuera del objeto seleccionado → ignorar (igual que imagen/texto/dibujo)
     edRedraw(); return;
   }
+  // Si se está creando una línea nueva (_edLineLayer sin objeto seleccionado aún), bloquear selección
+  if(_edLineLayer){ edRedraw(); return; }
 
   // Seleccionar: de mayor a menor índice (mayor = encima visualmente).
   // contains() de cada clase hace el hit-test correcto:
@@ -5168,8 +5173,9 @@ function edRenderOptionsPanel(mode){
           ${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${la.borderWidth===n?'selected':''}>${n===0?'Sin borde':n+'px'}</option>`).join('')}
         </select>
         <input type="color" id="pp-bc" value="${la.borderColor}">
-        <span class="op-prop-label" style="min-width:auto;margin-left:8px">Rot.</span>
-        <input type="number" id="pp-rot" value="${la.rotation}" min="-180" max="180">°
+        <span class="op-prop-label" style="min-width:auto;margin-left:8px">Fondo</span>
+        <input type="range" id="pp-bgop" min="0" max="100" value="${Math.round((la.bgOpacity??1)*100)}" style="flex:1;min-width:40px;accent-color:var(--black)">
+        <span id="pp-bgop-val" style="font-size:.75rem;font-weight:900;min-width:28px;text-align:right">${Math.round((la.bgOpacity??1)*100)}%</span>
       </div>`;
       if(la.type==='bubble'){
         html+=`
@@ -5260,12 +5266,12 @@ function edRenderOptionsPanel(mode){
         else if(id==='pp-fs'){la.fontSize=parseInt(e.target.value)||12;la.resizeToFitText(edCanvas);}
         else if(id==='pp-color')  la.color=e.target.value;
         else if(id==='pp-bg')     la.backgroundColor=e.target.value;
+        else if(id==='pp-bgop'){const v=parseInt(e.target.value)||0;la.bgOpacity=v/100;const lbl=$('pp-bgop-val');if(lbl)lbl.textContent=v+'%';}
         else if(id==='pp-bc')     la.borderColor=e.target.value;
         else if(id==='pp-bw')     la.borderWidth=parseInt(e.target.value);
         else if(id==='pp-style')  {la.style=e.target.value;la.resizeToFitText(edCanvas);}
         else if(id==='pp-vc')     la.voiceCount=Math.max(1,parseInt(e.target.value)||1);
         else if(id==='pp-tail')   la.tail=e.target.checked;
-        else if(id==='pp-rot')    la.rotation=parseInt(e.target.value)||0;
         edRedraw();
       });
     });
@@ -6531,7 +6537,7 @@ function edSerLayer(l){
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     _hasText:!!(l.text&&l.text!=='Escribe aquí'),
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
-    backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
+    backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,

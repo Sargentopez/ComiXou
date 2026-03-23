@@ -610,6 +610,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const fontBold_  = t.font_bold   ?? t.fontBold   ?? false;
   const fontItalic_= t.font_italic ?? t.fontItalic ?? false;
   const bgColor_   = t.bg          || t.backgroundColor || '#ffffff';
+  const bgOpacity_ = t.bg_opacity  ?? t.bgOpacity ?? 1;
   const borderW_   = t.border !== undefined && t.border !== null ? t.border
                    : t.borderWidth !== undefined ? t.borderWidth : 2;
   const borderC_   = t.border_color || t.borderColor || '#000000';
@@ -636,13 +637,21 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   ctx.globalAlpha = alpha;
   ctx.translate(cx, cy);
   if (t.rotation) ctx.rotate(t.rotation * Math.PI / 180);
+  // Helper: aplica bgOpacity_ solo al fill del fondo
+  const _bgFill = (fn) => {
+    const _prev = ctx.globalAlpha;
+    ctx.globalAlpha = _prev * bgOpacity_;
+    fn();
+    ctx.globalAlpha = _prev;
+  };
 
   if (style === 'thought') {
     // Nube de pensamiento: 4 círculos solapados
     const circles = [{x:0,y:-h/4,r:w/3},{x:w/4,y:0,r:w/3},{x:-w/4,y:0,r:w/3},{x:0,y:h/4,r:w/3}];
     ctx.fillStyle = bg; ctx.strokeStyle = border; ctx.lineWidth = bw;
     circles.forEach(c => {
-      ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI*2);
+      _bgFill(()=>ctx.fill()); ctx.stroke();
     });
     function ci(c1, c2) {
       const dx=c2.x-c1.x, dy=c2.y-c1.y, d=Math.hypot(dx,dy);
@@ -665,7 +674,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
       const f = 1 - i * 0.3;
       const tx = thoughtTailEnd.x * w * f, ty = thoughtTailEnd.y * h * f;
       ctx.beginPath(); ctx.arc(tx, ty, r * canvasSize, 0, Math.PI*2);
-      ctx.fillStyle = bg; ctx.fill();
+      ctx.fillStyle = bg; _bgFill(()=>ctx.fill());
       ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke();
     });
     // Texto centrado
@@ -706,7 +715,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     ctx.beginPath(); ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
   }
 
-  ctx.fillStyle = bg; ctx.fill();
+  ctx.fillStyle = bg; _bgFill(()=>ctx.fill());
   if (bw > 0) {
     ctx.strokeStyle = border; ctx.lineWidth = bw;
     if (style === 'lowvoice') ctx.setLineDash([5*scale, 3*scale]); else ctx.setLineDash([]);
@@ -721,7 +730,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     for (let v = 0; v < vc; v++) {
       const ts = starts[v] || starts[0];
       const te = ends[v]   || ends[0];
-      _drawTail(ctx, ts, te, w, h, bg, border, bw, scale);
+      _drawTail(ctx, ts, te, w, h, bg, border, bw, scale, bgOpacity_);
     }
   } else if (type === 'bubble' && style === 'radio') {
     const te = (tailEnds && tailEnds[0]) || {x:0, y:0.5};
@@ -744,7 +753,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
 }
 
 // Cola — coordenadas relativas al centro del bocadillo (ctx ya tiene translate)
-function _drawTail(ctx, ts, te, w, h, bg, border, bw, scale) {
+function _drawTail(ctx, ts, te, w, h, bg, border, bw, scale, bgOpacity) {
   const sx = ts.x * w, sy = ts.y * h;
   const ex = te.x * w, ey = te.y * h;
   const tailW = 10 * (scale||1);
@@ -754,14 +763,18 @@ function _drawTail(ctx, ts, te, w, h, bg, border, bw, scale) {
   const right = {x: sx-perp.x*tailW/2, y: sy-perp.y*tailW/2};
   ctx.beginPath(); ctx.moveTo(left.x,left.y); ctx.lineTo(ex,ey); ctx.lineTo(right.x,right.y);
   ctx.closePath();
-  ctx.fillStyle = bg; ctx.fill();
+  ctx.fillStyle = bg;
+  const _bgo = bgOpacity ?? 1; const _pga = ctx.globalAlpha;
+  ctx.globalAlpha = _pga * _bgo; ctx.fill(); ctx.globalAlpha = _pga;
   if (bw > 0) { ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke(); }
   // Línea de cobertura en la base del triángulo
   const extra = 1 * (scale||1);
   const extL = {x:left.x +perp.x*extra, y:left.y +perp.y*extra};
   const extR = {x:right.x-perp.x*extra, y:right.y-perp.y*extra};
   ctx.beginPath(); ctx.moveTo(extL.x,extL.y); ctx.lineTo(extR.x,extR.y);
-  ctx.strokeStyle = bg; ctx.lineWidth = bw*2+2*(scale||1); ctx.lineCap='round'; ctx.stroke(); ctx.lineCap='butt';
+  ctx.strokeStyle = bg; ctx.lineWidth = bw*2+2*(scale||1); ctx.lineCap='round';
+  ctx.globalAlpha = _pga * _bgo; ctx.stroke(); ctx.globalAlpha = _pga;
+  ctx.lineCap='butt';
 }
 
 function _getLines(text) {
