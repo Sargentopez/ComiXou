@@ -303,8 +303,12 @@ function startReader() {
   RS.textStep = _initTextStep(0);
 
   _resizeCanvas();
-  _render();
-  _showControls();
+  // Esperar a que las fuentes estén cargadas antes del primer render
+  // Evita que el primer texto aparezca con fuente de fallback
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    _render();
+    _showControls();
+  });
   _setupControls();
   // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);

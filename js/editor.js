@@ -6793,8 +6793,11 @@ function edOpenViewer(){
   // Garantizar que TODAS las hojas tienen orientation antes de abrir
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
   $('editorViewer')?.classList.add('open');
-  edUpdateViewer();
-  edInitViewerTap();
+  // Esperar fuentes antes del primer render para evitar fallback en bocadillos/texto
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    edUpdateViewer();
+    edInitViewerTap();
+  });
   // Orientación: resize recalcula canvas al girar dispositivo
   if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
   let _viewerResizeTimer;
