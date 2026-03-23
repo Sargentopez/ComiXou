@@ -2680,11 +2680,16 @@ function edOnStart(e){
       edMultiResizing=false; edMultiRotating=false;
     }
     // Si estaba pintando, cancelar el trazo parcial sin guardarlo
+    // IMPORTANTE: edPinchStart necesita capturar el estado actual (trazo en curso incluido)
+    // antes de que _edDrawApplyHistory lo revierta. edPinchStart se llama justo después.
     if(edPainting){
       edPainting = false;
-      if(edDrawHistory.length > 0){
-        _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx] || null);
-      }
+      // Resetear _lastX/_lastY del DrawLayer para que el siguiente trazo
+      // arranque limpio (evita el bug del "solo un punto" post-pinch).
+      // No llamar _edDrawApplyHistory — el trazo parcial se preserva en el
+      // snapshot que tomará edPinchStart.
+      const _dlReset = edPages[edCurrentPage]?.layers.find(l => l.type==='draw');
+      if(_dlReset){ _dlReset._lastX = 0; _dlReset._lastY = 0; }
     }
     // Si se estaba añadiendo un punto de línea vectorial (táctil), cancelar el último punto
     // — el segundo dedo es un pinch, no un nodo nuevo (igual que el dibujo a mano)
