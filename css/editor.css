@@ -144,6 +144,11 @@ body.editor-page #appView {
 /* Botón minimizar: fijo a la izquierda, no se desplaza con el scroll */
 #edMinimizeBtn.ed-menu-pin {
   flex-shrink: 0;
+  pointer-events: auto !important;
+  opacity: 1 !important;
+  color: #e63030;
+  display: flex; align-items: center; gap: 3px;
+  font-weight: 900;
 }
 
 /* Separador vertical entre el pin y la zona deslizable */
@@ -1409,6 +1414,8 @@ body.editor-page #appView {
 /* excepto los botones explícitamente permitidos */
 #editorShell.draw-active #edMenuBar {
   pointer-events: none;
+}
+#editorShell.draw-active #edMenuBar #edMenuScroll {
   opacity: 0.35;
 }
 /* En modo texto/bocadillo (props-active) la barra de menús permanece accesible */
@@ -1429,7 +1436,6 @@ body.editor-page #appView {
 /* Permitidos: botón volver, pantalla completa, minimizar, FloatBtn */
 #editorShell.draw-active #edBackBtn,
 #editorShell.draw-active #edFsBtn,
-#editorShell.draw-active #edMinimizeBtn,
 #editorShell.draw-active #edFloatBtn {
   pointer-events: auto !important;
   opacity: 1 !important;

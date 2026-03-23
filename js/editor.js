@@ -2602,6 +2602,13 @@ function edOnStart(e){
         _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx] || null);
       }
     }
+    // Si se estaba añadiendo un punto de línea vectorial (táctil), cancelar el último punto
+    // — el segundo dedo es un pinch, no un nodo nuevo (igual que el dibujo a mano)
+    if(edActiveTool==='line' && _edLineLayer && _edLineLayer.points.length > 1){
+      _edLineLayer.points.pop();
+      _edLineLayer._updateBbox();
+      edRedraw();
+    }
     edPinchStart(e);
     return;
   }
@@ -2737,33 +2744,23 @@ function edOnStart(e){
   if(edActiveTool==='line'){
     if(tgt !== edCanvas) return;
     const c=edCoords(e);
-    if(!_edLineLayer){
-      // Primera vez: crear capa con el primer punto como centro
-      _edLineLayer = new LineLayer();
-      _edLineLayer.color    = edDrawColor || '#000000';
-      _edLineLayer.fillColor = edDrawFillColor || '#ffffff';
-      _edLineLayer.lineWidth = edDrawSize || 3;
-      _edLineLayer.x = c.nx; _edLineLayer.y = c.ny;
-      _edLineLayer.points.push({x:0, y:0}); // primer punto en local = (0,0)
-      _edInsertLayerAbove(_edLineLayer);
-    } else {
-      // Comprobar si toca el primer vértice (cerrar polígono)
-      const absFirst = _edLineLayer.absPoints()[0];
-      const pw=edPageW(), ph=edPageH();
-      const dx=(c.nx-absFirst.x)*pw, dy=(c.ny-absFirst.y)*ph;
-      if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)<15){
-        _edLineLayer.closed=true;
-        _edFinishLine();
-        // Solo abrir panel si los menús están visibles
-        if(!edMinimized) _edActivateLineTool(true);
-        return;
-      }
-      _edLineLayer.addAbsPoint(c.nx, c.ny);
+    // En táctil: retardo breve para detectar si viene un segundo dedo (pinch/zoom)
+    // antes de registrar el toque como nodo nuevo — igual que el dibujo a mano
+    if(e.pointerType === 'touch'){
+      const _pid = e.pointerId;
+      const _cx = c.nx, _cy = c.ny;
+      clearTimeout(window._edLineTouchTimer);
+      window._edLineTouchTimer = setTimeout(()=>{
+        // Si ya hay 2+ dedos activos, era un pinch — no añadir nodo
+        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+        // Si la herramienta ya no está activa (cerrada durante el delay), salir
+        if(edActiveTool !== 'line') return;
+        _edLineAddPoint(_cx, _cy);
+      }, 120);
+      return;
     }
-    edRedraw();
-    // Actualizar info
-    const info=$('op-line-info');
-    if(info) info.textContent=`${_edLineLayer.points.length} vértice(s). Toca el primero para cerrar.`;
+    // PC/ratón: inmediato
+    _edLineAddPoint(c.nx, c.ny);
     return;
   }
   const c=edCoords(e);
@@ -4005,6 +4002,35 @@ function edColorErase(nx, ny){
   ctx.putImageData(imageData, x0, y0);
   edRedraw();
 }
+function _edLineAddPoint(nx, ny){
+  if(!_edLineLayer){
+    // Primera vez: crear capa con el primer punto como centro
+    _edLineLayer = new LineLayer();
+    _edLineLayer.color    = edDrawColor || '#000000';
+    _edLineLayer.fillColor = edDrawFillColor || '#ffffff';
+    _edLineLayer.lineWidth = edDrawSize || 3;
+    _edLineLayer.x = nx; _edLineLayer.y = ny;
+    _edLineLayer.points.push({x:0, y:0}); // primer punto en local = (0,0)
+    _edInsertLayerAbove(_edLineLayer);
+  } else {
+    // Comprobar si toca el primer vértice (cerrar polígono)
+    const absFirst = _edLineLayer.absPoints()[0];
+    const pw=edPageW(), ph=edPageH();
+    const dx=(nx-absFirst.x)*pw, dy=(ny-absFirst.y)*ph;
+    if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)<15){
+      _edLineLayer.closed=true;
+      _edFinishLine();
+      // Solo abrir panel si los menús están visibles
+      if(!edMinimized) _edActivateLineTool(true);
+      return;
+    }
+    _edLineLayer.addAbsPoint(nx, ny);
+  }
+  edRedraw();
+  const info=$('op-line-info');
+  if(info) info.textContent=`${_edLineLayer.points.length} vértice(s). Toca el primero para cerrar.`;
+}
+
 function edStartPaint(e){
   edPainting = true;
   const _pp=$('edOptionsPanel');
@@ -4494,10 +4520,14 @@ function _edActivateLineTool(isNew) {
     </div>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <!-- FILA CERRAR + INFO VÉRTICES -->
+  <!-- FILA CERRAR + V/C + INFO VÉRTICES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
-    <button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:${isClosed?'var(--gray-200)':'transparent'};cursor:pointer;color:var(--gray-700)">${isClosed?'Abrir':'Cerrar'}</button>
-    <button id="op-line-finish" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-size:.8rem;font-weight:700;cursor:pointer;background:transparent">Terminar</button>
+    ${!isClosed?`<button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Cerrar objeto</button><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>`:''}
+    <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
+    <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <input type="number" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+    </div>
     <span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>
   </div>
   ${isClosed?`
@@ -4512,12 +4542,6 @@ function _edActivateLineTool(isNew) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
-    <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
-    <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
-    </div>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-line-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-line-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
@@ -4629,14 +4653,11 @@ function _edActivateLineTool(isNew) {
     _edShapePushHistory();
   });
 
-  // ── Cerrar polígono ──
+  // ── Cerrar objeto ──
   $('op-line-close-btn')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l||l.points.length<3) return;
-    l.closed=!l.closed; _edShapePushHistory(); edRedraw(); _edActivateLineTool();
+    l.closed=true; _edShapePushHistory(); edRedraw(); _edActivateLineTool();
   });
-
-  // ── Terminar ──
-  $('op-line-finish')?.addEventListener('click',()=>{ _edFinishLine(); _edActivateLineTool(true); });
 
   // ── Relleno ──
   $('op-line-fill-on')?.addEventListener('change',e=>{
@@ -7718,7 +7739,7 @@ function EditorView_init(){
     else edRedo();
   });
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
-  $('edMenuMinBtn')?.addEventListener('click',edMinimize);
+  // edMenuMinBtn eliminado — el único botón ocultar es edMinimizeBtn (fuera del scroll)
   _edShapePushHistory();
   edInitFloatDrag();
   edInitDrawBar();

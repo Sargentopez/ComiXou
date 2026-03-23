@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v10.49</footer>
+    <footer class="app-version">v10.53</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -189,20 +189,16 @@ Router.register('editor', {
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
 
-      <!-- ── BOTÓN MINIMIZAR — fuera del marco edMenuBar ── -->
-      <button id="edMinimizeBtn" class="ed-menu-pin" style="font-size:1.15rem;color:#e63030;font-weight:900">▼</button>
-
       <!-- ── BARRA DE MENÚ ── -->
       <div id="edMenuBar">
+
+        <!-- BOTÓN OCULTAR — fijo, no scrollable, siempre al 100% de opacidad -->
+        <button id="edMinimizeBtn" class="ed-menu-pin ed-hide-btn"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem;letter-spacing:.02em">ocultar</b></button>
+        <div class="ed-menu-sep"></div>
 
         <!-- ZONA DESLIZABLE -->
         <div id="edMenuScroll">
 
-          <!-- MINIMIZAR — primer elemento, a la izquierda de Insertar -->
-          <button id="edMenuMinBtn" class="ed-menu-btn" title="Ocultar menús"
-            style="color:#e63030;font-weight:900;font-size:1.1rem;padding:0 8px;flex-shrink:0">▼</button>
-
-          <div class="ed-menu-sep"></div>
 
           <!-- INSERTAR -->
           <div class="ed-menu-item" style="position:relative">

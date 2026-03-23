@@ -7,7 +7,7 @@
 const TRANSLATIONS = {
   es: {
     // Cabecera
-    tagline:          "La creatividad es la inteligencia divirtiéndose",
+    tagline:          "Arte Humano, para Humanos",
     register:         "Regístrate",
     login:            "Entrar",
     myComics:         "Mis creaciones",
