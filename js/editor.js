@@ -38,6 +38,8 @@ let edFloatX = 12, edFloatY = 12; // posición del botón flotante (esquina supe
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
 let _edPinchHappened = false; // true desde que empieza el pinch hasta que se levantan TODOS los dedos
 let edPinchCenter0 = null, edPinchCamera0 = null;
+// Transformación de DrawLayer durante pinch
+let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
@@ -1684,7 +1686,21 @@ function edRedraw(){
   // En modo draw: DrawLayer al final, encima de shapes/textos dimeados
   if(_editingDraw){
     const _dl = edLayers.find(l => l.type==='draw');
-    if(_dl){ _dl.draw(edCtx); }
+    if(_dl){
+      if(_edDrawPinch){
+        // Preview en tiempo real de la transformación de pinch
+        const dp = _edDrawPinch;
+        const px = dp.wsCenterX, py = dp.wsCenterY;
+        edCtx.save();
+        edCtx.translate(px + dp.tx, py + dp.ty);
+        edCtx.scale(dp.scale, dp.scale);
+        edCtx.translate(-px, -py);
+        edCtx.drawImage(dp.snap, 0, 0);
+        edCtx.restore();
+      } else {
+        _dl.draw(edCtx);
+      }
+    }
   }
   edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
@@ -2242,11 +2258,28 @@ function edPinchStart(e) {
   edPinchCenter0 = { x: ctr.x, y: ctr.y };
   // Snapshot de cámara para pan/zoom de canvas
   edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
-  // Snapshot de objeto para resize (solo si hay objeto y NO estamos en modo dibujo libre)
+  // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
   const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
     _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null } : null;
+  // Snapshot DrawLayer para transformación durante pinch en modo draw
+  _edDrawPinch = null;
+  if(isDrawTool){
+    const page = edPages[edCurrentPage];
+    const dl = page ? page.layers.find(l => l.type==='draw') : null;
+    if(dl){
+      // Copiar el canvas del DrawLayer en un canvas temporal (síncrono, sin dataUrl)
+      const snapCanvas = document.createElement('canvas');
+      snapCanvas.width  = ED_CANVAS_W;
+      snapCanvas.height = ED_CANVAS_H;
+      snapCanvas.getContext('2d').drawImage(dl._canvas, 0, 0);
+      // Centro del pinch en coordenadas de workspace
+      const ws = edScreenToWorld(ctr.x, ctr.y);
+      _edDrawPinch = { snap: snapCanvas, tx: 0, ty: 0, scale: 1,
+        wsCenterX: ws.x, wsCenterY: ws.y };
+    }
+  }
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
     edPinchScale0 = null; // no usar modo objeto individual
@@ -2327,10 +2360,19 @@ function edPinchMove(e) {
       }
       edRedraw();
     }
+  } else if (_edDrawPinch) {
+    // ── Modo DrawLayer: mover y escalar el dibujo con pinch ──
+    const dp = _edDrawPinch;
+    const wsNow = edScreenToWorld(ctr.x, ctr.y);
+    dp.tx    = wsNow.x - dp.wsCenterX;
+    dp.ty    = wsNow.y - dp.wsCenterY;
+    dp.scale = ratio;
+    edRedraw();
   } else {
-    // ── Modo cámara: pan + zoom — solo si no hay ninguna selección activa ──
+    // ── Modo cámara: pan + zoom — solo si no hay ninguna selección activa ni draw activo ──
     const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0;
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
+    if(['draw','eraser'].includes(edActiveTool)) return; // en modo dibujo, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
     edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
@@ -2345,6 +2387,14 @@ function edPinchEnd() {
     if(window._edMoved) edPushHistory();
     window._edPinchMulti = null;
   }
+  // Confirmar transformación del DrawLayer si estaba activa
+  if(_edDrawPinch && _edDrawPinch.snap){
+    const dp = _edDrawPinch;
+    const page = edPages[edCurrentPage];
+    const dl = page ? page.layers.find(l => l.type==='draw') : null;
+    if(dl) _edDrawApplyPinchTransform(dl, dp);
+    _edDrawPinch = null;
+  }
   edPinching    = false;
   edPinchDist0  = 0;
   edPinchScale0 = null;
@@ -2354,6 +2404,29 @@ function edPinchEnd() {
   if(['draw','eraser'].includes(edActiveTool)){
     edPainting = false;
   }
+}
+
+function _edDrawApplyPinchTransform(dl, dp){
+  // Aplica la transformación (translate + scale desde el centro del pinch) al _canvas del DrawLayer.
+  // Patrón estándar: copiar snapshot transformado sobre un canvas limpio.
+  const tmp = document.createElement('canvas');
+  tmp.width  = ED_CANVAS_W;
+  tmp.height = ED_CANVAS_H;
+  const ctx = tmp.getContext('2d');
+  // Punto de pivote = centro del pinch en workspace
+  const px = dp.wsCenterX, py = dp.wsCenterY;
+  ctx.save();
+  ctx.translate(px + dp.tx, py + dp.ty);
+  ctx.scale(dp.scale, dp.scale);
+  ctx.translate(-px, -py);
+  ctx.drawImage(dp.snap, 0, 0);
+  ctx.restore();
+  // Reemplazar el contenido del DrawLayer
+  dl.clear();
+  dl._ctx.drawImage(tmp, 0, 0);
+  // Guardar en historial de dibujo
+  edSaveDrawData();
+  edRedraw();
 }
 
 
@@ -8027,14 +8100,10 @@ function EditorView_init(){
   const editorShell = document.getElementById('editorShell');
   if(editorShell){
     let _pinchPrev = 0, _pinchMidX = 0, _pinchMidY = 0;
-    let _drawSnapCanvas = null; // snapshot del DrawLayer para transformación durante pinch
     editorShell.addEventListener('touchstart', e => {
       if(e.touches.length === 2){
-        // Bloquear zoom de cámara si hay objeto seleccionado, multiselección o dibujo activo
-        const isDrawing = ['draw','eraser'].includes(edActiveTool);
-        if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length)){
-          _pinchPrev = 0; return;
-        }
+        // No hacer zoom de cámara si hay objeto seleccionado, multiselección activa o modo dibujo
+        if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length) || ['draw','eraser'].includes(edActiveTool)){ _pinchPrev = 0; return; }
         _pinchPrev = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
@@ -8042,62 +8111,25 @@ function EditorView_init(){
         const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
         _pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         _pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - canvasTop;
-        // Si estamos dibujando: snapshot del DrawLayer para transformarlo
-        _drawSnapCanvas = null;
-        if(isDrawing){
-          const page = edPages[edCurrentPage];
-          const dl = page?.layers.find(l => l.type === 'draw');
-          if(dl && dl._canvas){
-            const snap = document.createElement('canvas');
-            snap.width = dl._canvas.width; snap.height = dl._canvas.height;
-            snap.getContext('2d').drawImage(dl._canvas, 0, 0);
-            _drawSnapCanvas = { dl, snap, dist0: _pinchPrev, midX: _pinchMidX, midY: _pinchMidY };
-          }
-        }
       }
     }, {passive:true});
     editorShell.addEventListener('touchmove', e => {
       if(e.touches.length === 2 && _pinchPrev > 0){
         e.preventDefault();
+        // No hacer zoom de cámara si hay objeto seleccionado, multiselección activa o modo dibujo
+        if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length) || ['draw','eraser'].includes(edActiveTool)) return;
         const dist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
-        if(_drawSnapCanvas){
-          // Transformar DrawLayer: escala + pan respecto al centro del pinch inicial
-          const { dl, snap, dist0, midX, midY } = _drawSnapCanvas;
-          const ratio = dist / dist0;
-          const canvasTop2 = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
-          const curMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-          const curMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - canvasTop2;
-          const panX = (curMidX - midX) / edCamera.z;
-          const panY = (curMidY - midY) / edCamera.z;
-          // Pivote en coordenadas workspace
-          const pivX = (midX - edCamera.x) / edCamera.z;
-          const pivY = (midY - edCamera.y) / edCamera.z;
-          dl._ctx.clearRect(0, 0, dl._canvas.width, dl._canvas.height);
-          dl._ctx.save();
-          dl._ctx.translate(pivX + panX, pivY + panY);
-          dl._ctx.scale(ratio, ratio);
-          dl._ctx.translate(-pivX, -pivY);
-          dl._ctx.drawImage(snap, 0, 0);
-          dl._ctx.restore();
-          edRedraw();
-        } else {
-          // Zoom de cámara normal (sin dibujo activo ni objeto seleccionado)
-          if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length)) return;
-          const factor = dist / _pinchPrev;
-          edZoomAt(_pinchMidX, _pinchMidY, factor);
-          _pinchPrev = dist;
-          edRedraw();
-          _edScrollbarsUpdate();
-        }
+        const factor = dist / _pinchPrev;
+        edZoomAt(_pinchMidX, _pinchMidY, factor);
+        _pinchPrev = dist;
+        edRedraw();
+        _edScrollbarsUpdate();
       }
     }, {passive:false});
-    editorShell.addEventListener('touchend', ()=>{
-      if(_drawSnapCanvas){ _edDrawPushHistory(); _drawSnapCanvas = null; }
-    }, {passive:true});
-    editorShell.addEventListener('touchend', ()=>{ _pinchPrev = 0; if(_drawSnapCanvas){ _edDrawPushHistory(); _drawSnapCanvas = null; } }, {passive:true});
+    editorShell.addEventListener('touchend', ()=>{ _pinchPrev = 0; }, {passive:true});
   }
 
   // Seguro extra: si después de 600ms el canvas sigue muy pequeño, refitear
