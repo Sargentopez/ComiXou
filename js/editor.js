@@ -2242,11 +2242,30 @@ function edPinchStart(e) {
   edPinchCenter0 = { x: ctr.x, y: ctr.y };
   // Snapshot de cámara para pan/zoom de canvas
   edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
-  // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
+  // Snapshot de objeto para resize
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
   const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
     _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null } : null;
+  // DrawLayer: snapshot del canvas de dibujo para transformar durante el pinch
+  window._edPinchDrawLayer = null;
+  if(isDrawTool){
+    const page = edPages[edCurrentPage];
+    const dl = page?.layers.find(l => l.type === 'draw');
+    if(dl && dl._canvas){
+      // Guardar snapshot del canvas completo
+      const snap = document.createElement('canvas');
+      snap.width = dl._canvas.width; snap.height = dl._canvas.height;
+      snap.getContext('2d').drawImage(dl._canvas, 0, 0);
+      // Centro del pinch en coordenadas workspace
+      const rect = edCanvas.getBoundingClientRect();
+      const scaleX = edCanvas.width / rect.width;
+      const scaleY = edCanvas.height / rect.height;
+      const wcx = (ctr.x - rect.left) * scaleX;
+      const wcy = (ctr.y - rect.top)  * scaleY;
+      window._edPinchDrawLayer = { dl, snap, wcx, wcy };
+    }
+  }
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
     edPinchScale0 = null; // no usar modo objeto individual
@@ -2327,6 +2346,27 @@ function edPinchMove(e) {
       }
       edRedraw();
     }
+  } else if(window._edPinchDrawLayer) {
+    // ── Modo dibujo libre: transformar el DrawLayer (escala + pan) ──
+    const { dl, snap, wcx, wcy } = window._edPinchDrawLayer;
+    // Pan: diferencia del centro del pinch en workspace
+    const rect2 = edCanvas.getBoundingClientRect();
+    const scaleX2 = edCanvas.width / rect2.width;
+    const scaleY2 = edCanvas.height / rect2.height;
+    const curWcx = (ctr.x - rect2.left) * scaleX2;
+    const curWcy = (ctr.y - rect2.top)  * scaleY2;
+    const panX = curWcx - wcx;
+    const panY = curWcy - wcy;
+    // Aplicar: limpiar canvas y redibujar snapshot con transform
+    dl._ctx.clearRect(0, 0, dl._canvas.width, dl._canvas.height);
+    dl._ctx.save();
+    // Trasladar al pivote, escalar, volver, aplicar pan
+    dl._ctx.translate(wcx + panX, wcy + panY);
+    dl._ctx.scale(ratio, ratio);
+    dl._ctx.translate(-wcx, -wcy);
+    dl._ctx.drawImage(snap, 0, 0);
+    dl._ctx.restore();
+    edRedraw();
   } else {
     // ── Modo cámara: pan + zoom — solo si no hay ninguna selección activa ──
     const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0;
@@ -2350,6 +2390,11 @@ function edPinchEnd() {
   edPinchScale0 = null;
   edPinchCenter0 = null;
   edPinchCamera0 = null;
+  // Si se transformó el DrawLayer, guardar en historial
+  if(window._edPinchDrawLayer){
+    _edDrawPushHistory();
+    window._edPinchDrawLayer = null;
+  }
   // Al soltar los dedos en modo draw, reactivar la herramienta de dibujo
   if(['draw','eraser'].includes(edActiveTool)){
     edPainting = false;
