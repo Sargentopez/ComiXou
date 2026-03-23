@@ -1139,10 +1139,13 @@ function _edLayersSnapshot(){
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
-      color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1 };
+      color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      cornerRadius: l.cornerRadius||0,
+      cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     if(l.type === 'line')   return { type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
-      closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1 };
+      closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor',
@@ -1207,6 +1210,8 @@ function edApplyHistory(snapshot){
     else if(o.type === 'shape') {
       l = new ShapeLayer(o.shape||'rect', o.x||0.5, o.y||0.5, o.width||0.3, o.height||0.2);
       l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; l.lineWidth=o.lineWidth||3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
+      if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
+      if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       return l;
     }
     else if(o.type === 'line') {
@@ -1214,6 +1219,7 @@ function edApplyHistory(snapshot){
       l.points=o.points||[]; l.closed=o.closed||false;
       l.color=o.color||'#000'; l.fillColor=o.fillColor||'#ffffff'; l.lineWidth=o.lineWidth||3; l.opacity=o.opacity??1;
       l.rotation=o.rotation||0;
+      if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
       else l._updateBbox();
       return l;
@@ -2497,8 +2503,8 @@ function edOnStart(e){
                tgt.closest('#edProjectModal');
   if(isUI) return;
 
-  // ── MODO V⟺C: solo permitir selección de vértices ──
-  if($('esb-curve')?.dataset.curveActive==='1'){
+  // ── MODO V⟺C: selección de vértice individual (barra flotante O submenú) ──
+  if(_edCurveModeActive&&_edCurveModeActive()){
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     if(la&&(la.type==='line'||la.type==='shape')){
       const c2=edCoords(e);
@@ -2517,14 +2523,16 @@ function edOnStart(e){
             if(!la.cornerRadii)la.cornerRadii={};
             const existing=la.cornerRadii[i]||0;
             window._edCurveRadius=existing;
-            // Actualizar slider adjunto (esb-slider-input)
+            // Actualizar sliders (barra flotante Y submenú)
             const _sl=$('esb-slider-input');
             if(_sl) _sl.value=existing;
+            const _slP=$('op-line-curve-r'); if(_slP){_slP.value=existing;}
+            const _slPn=$('op-line-curve-rnum'); if(_slPn){_slPn.value=existing;}
             edRedraw();return;
           }
         }
       }
-      // Intentar seleccionar vértice de rect
+      // Intentar seleccionar vértice de rect (individual, igual que barra flotante)
       if(la.type==='shape'&&la.shape==='rect'){
         const rot2=(la.rotation||0)*Math.PI/180;
         const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
@@ -2539,16 +2547,17 @@ function edOnStart(e){
             if(!la.cornerRadii)la.cornerRadii=[0,0,0,0];
             const existing=la.cornerRadii[ci2]||0;
             window._edCurveRadius=existing;
-            // Actualizar slider adjunto (esb-slider-input)
+            // Actualizar sliders (barra flotante Y submenú)
             const _sl2=$('esb-slider-input');
             if(_sl2) _sl2.value=existing;
+            const _slP2=$('op-shape-curve-r'); if(_slP2){_slP2.value=existing;}
+            const _slP2n=$('op-shape-curve-rnum'); if(_slP2n){_slP2n.value=existing;}
             edRedraw();return;
           }
         }
       }
     }
     // En modo curva: si no se tocó ningún vértice curvable, permitir drag normal
-    // (no bloquear el movimiento del objeto ni sus vértices de arrastre)
   }
 
   // No bloquear scroll en overlays (capas, hojas, etc.)
@@ -4333,8 +4342,8 @@ function _edActivateShapeTool() {
     if(vi>=0&&vi<4&&s.shape==='rect'){
       if(!s.cornerRadii)s.cornerRadii=[0,0,0,0];
       s.cornerRadii[vi]=v;
-    } else { s.cornerRadius=v; }
-    edRedraw();
+      edRedraw();
+    }
   });
   $('op-shape-curve-r')?.addEventListener('change',()=>{ _edShapePushHistory(); });
   $('op-shape-curve-rnum')?.addEventListener('change',e=>{
@@ -4346,8 +4355,8 @@ function _edActivateShapeTool() {
     if(vi>=0&&vi<4&&s.shape==='rect'){
       if(!s.cornerRadii)s.cornerRadii=[0,0,0,0];
       s.cornerRadii[vi]=v;
-    } else { s.cornerRadius=v; }
-    edRedraw(); _edShapePushHistory();
+      edRedraw(); _edShapePushHistory();
+    }
   });
 
   // ── OK ──
