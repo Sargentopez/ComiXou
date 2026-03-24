@@ -3971,143 +3971,117 @@ function edFloodFill(nx, ny){
   const canvas = dl._canvas, ctx = dl._ctx;
   const W = canvas.width, H = canvas.height;
 
-  // Coordenadas absolutas en workspace
   const wx = Math.round(edMarginX() + nx * edPageW());
   const wy = Math.round(edMarginY() + ny * edPageH());
   if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
 
-  // Límites: dentro de página → área de página; fuera → workspace
   const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
   const pw = Math.round(edPageW()),   ph = Math.round(edPageH());
   const insidePage = wx >= mx && wx < mx+pw && wy >= my && wy < my+ph;
   const x0 = insidePage ? mx : 0,      y0 = insidePage ? my : 0;
   const x1 = insidePage ? mx+pw-1 : W-1, y1 = insidePage ? my+ph-1 : H-1;
-
   const fw = x1-x0+1, fh = y1-y0+1;
-  const imageData = ctx.getImageData(x0, y0, fw, fh);
-  const data = imageData.data;
 
-  // Coordenadas locales del punto de inicio
-  const lx = wx-x0, ly = wy-y0;
-  const si0 = (ly*fw+lx)*4;
-  const tR=data[si0], tG=data[si0+1], tB=data[si0+2], tA=data[si0+3];
+  // Leer datos originales del DrawLayer
+  const origImageData = ctx.getImageData(x0, y0, fw, fh);
+  const orig = origImageData.data;
 
-  // Color de relleno con transparencia
+  // Color de relleno
   const fc = edDrawColor;
   const fR = parseInt(fc.slice(1,3),16),
         fG = parseInt(fc.slice(3,5),16),
         fB = parseInt(fc.slice(5,7),16),
         fA = Math.round((edDrawOpacity/100) * 255);
 
-  // No rellenar si el color de inicio ya es idéntico al de relleno
+  // ── TÉCNICA DOS CAPAS (como Krita/Photoshop) ─────────────────────────────
+  // 1. Canvas de RELLENO: binarizar semitransparentes, hacer flood fill.
+  // 2. Canvas de LINE ART: el original sin modificar.
+  // 3. Composicionar: fill debajo, line art original encima (source-over).
+  //    El antialiasing del trazo composiciona sobre el nuevo fill naturalmente.
+
+  // Canvas de relleno con datos binarizados
+  const fillCanvas = document.createElement('canvas');
+  fillCanvas.width = fw; fillCanvas.height = fh;
+  const fillCtx = fillCanvas.getContext('2d');
+  const fillImageData = fillCtx.createImageData(fw, fh);
+  const fd = fillImageData.data;
+
+  for(let i=0; i<fw*fh; i++){
+    const pi=i*4, a=orig[pi+3];
+    if(a===255){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
+    else if(a>=128){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
+    else { fd[pi]=0; fd[pi+1]=0; fd[pi+2]=0; fd[pi+3]=0; }
+  }
+
+  // Semilla desde canvas binarizado
+  const lx = wx-x0, ly = wy-y0;
+  const si0 = (ly*fw+lx)*4;
+  const tR=fd[si0], tG=fd[si0+1], tB=fd[si0+2], tA=fd[si0+3];
   if(tR===fR && tG===fG && tB===fB && tA===fA) return;
 
-  // Tolerancia para antialiasing de bordes (valor bajo = bordes nítidos)
+  // Flood fill sobre canvas binarizado
   const TOL = 15;
   function match(i){
-    return Math.abs(data[i  ]-tR) <= TOL &&
-           Math.abs(data[i+1]-tG) <= TOL &&
-           Math.abs(data[i+2]-tB) <= TOL &&
-           Math.abs(data[i+3]-tA) <= TOL;
+    return Math.abs(fd[i  ]-tR)<=TOL && Math.abs(fd[i+1]-tG)<=TOL &&
+           Math.abs(fd[i+2]-tB)<=TOL && Math.abs(fd[i+3]-tA)<=TOL;
   }
-
-  // Algoritmo Span Fill correcto (Wikipedia "Flood fill" — span filling variant)
-  // La cola almacena [x, y, dirección] donde dirección es 1=abajo, -1=arriba
-  // Esto garantiza exploración completa sin huecos
-  const filled = new Uint8Array(fw * fh);
-
-  function fillRow(y, lft, rgt){
-    for(let x=lft; x<=rgt; x++){
-      const i = y*fw+x;
-      filled[i] = 1;
-      const pi = i*4;
-      data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
-    }
-  }
-
-  // Cola de spans: {y, left, right, dy}
-  // dy = dirección desde la que vino el span (para evitar re-escanear)
+  const filled = new Uint8Array(fw*fh);
   const stack = [];
   stack.push({y:ly, left:lx, right:lx, dy:1});
   stack.push({y:ly, left:lx, right:lx, dy:-1});
-
-  // Marcar píxel inicial
-  filled[ly*fw+lx] = 1;
+  filled[ly*fw+lx]=1;
+  fd[si0]=fR; fd[si0+1]=fG; fd[si0+2]=fB; fd[si0+3]=fA;
 
   while(stack.length){
-    let {y, left, right, dy} = stack.pop();
-    const ny = y + dy;
-    if(ny < 0 || ny >= fh) continue;
-
-    // Expandir horizontalmente en la fila ny buscando píxeles conectados
-    let x = left;
-    // Ir a la izquierda desde left
-    while(x > 0 && !filled[ny*fw+(x-1)] && match((ny*fw+(x-1))*4)) x--;
-    // Ir a la derecha desde right
-    let rx = right;
-    while(rx < fw-1 && !filled[ny*fw+(rx+1)] && match((ny*fw+(rx+1))*4)) rx++;
-
-    // Rellenar el segmento encontrado en ny
-    let segStart = -1;
-    for(let sx=x; sx<=rx; sx++){
-      const idx = ny*fw+sx;
+    const {y, left, right, dy} = stack.pop();
+    const ny2 = y+dy;
+    if(ny2<0||ny2>=fh) continue;
+    let x=left;
+    while(x>0 && !filled[ny2*fw+(x-1)] && match((ny2*fw+(x-1))*4)) x--;
+    let rx=right;
+    while(rx<fw-1 && !filled[ny2*fw+(rx+1)] && match((ny2*fw+(rx+1))*4)) rx++;
+    let segStart=-1;
+    for(let sx=x;sx<=rx;sx++){
+      const idx=ny2*fw+sx;
       if(!filled[idx] && match(idx*4)){
-        if(segStart === -1) segStart = sx;
-        filled[idx] = 1;
-        const pi = idx*4;
-        data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
-      } else if(segStart !== -1){
-        // Propagar en la misma dirección dy y en la opuesta
-        stack.push({y:ny, left:segStart, right:sx-1, dy:dy});
-        stack.push({y:ny, left:segStart, right:sx-1, dy:-dy});
-        segStart = -1;
+        if(segStart===-1) segStart=sx;
+        filled[idx]=1;
+        const pi=idx*4;
+        fd[pi]=fR; fd[pi+1]=fG; fd[pi+2]=fB; fd[pi+3]=fA;
+      } else if(segStart!==-1){
+        stack.push({y:ny2,left:segStart,right:sx-1,dy:dy});
+        stack.push({y:ny2,left:segStart,right:sx-1,dy:-dy});
+        segStart=-1;
       }
     }
-    if(segStart !== -1){
-      stack.push({y:ny, left:segStart, right:rx, dy:dy});
-      stack.push({y:ny, left:segStart, right:rx, dy:-dy});
+    if(segStart!==-1){
+      stack.push({y:ny2,left:segStart,right:rx,dy:dy});
+      stack.push({y:ny2,left:segStart,right:rx,dy:-dy});
     }
   }
 
-  // Dilatación 1px solo en píxeles TRANSPARENTES o casi transparentes:
-  // Expande el relleno para cubrir el antialiasing del borde del trazo.
-  // NO invade píxeles con color (alpha >= 30) para no corromper bordes adyacentes.
-  // Técnica "expand into transparent" de Krita/Photoshop.
-  const dilated = new Uint8Array(fw * fh);
-  for(let y=0; y<fh; y++){
-    for(let x=0; x<fw; x++){
-      const i = y*fw+x;
-      if(!filled[i]) continue;
-      const neighbors = [[x-1,y],[x+1,y],[x,y-1],[x,y+1]];
-      for(const [nx2,ny2] of neighbors){
-        if(nx2>=0 && nx2<fw && ny2>=0 && ny2<fh){
-          const ni = ny2*fw+nx2;
-          if(!filled[ni] && !dilated[ni]){
-            // Solo dilatat en píxeles transparentes o semitransparentes (antialiasing)
-            // NUNCA en píxeles con color sólido (bordes de trazos adyacentes)
-            const alpha = data[ni*4+3];
-            if(alpha < 30) dilated[ni] = 1;
-          }
-        }
-      }
-    }
-  }
+  // Escribir resultado al DrawLayer combinando a nivel de píxel
+  // Para preservar la editabilidad futura, el DrawLayer queda con:
+  //   · Píxeles rellenados (filled=1): color fill opaco
+  //   · Resto: valor EXACTO de origData (semitransparentes del trazo intactos)
+  // NO usar ctx.drawImage() para composicionar — mezcla semitransparentes
+  // con el fill convirtiéndolos en opacos y rompiendo futuros rellenos.
+  const resultImageData = ctx.createImageData(fw, fh);
+  const rd = resultImageData.data;
   for(let i=0; i<fw*fh; i++){
-    if(dilated[i]){
-      const pi = i*4;
-      data[pi]=fR; data[pi+1]=fG; data[pi+2]=fB; data[pi+3]=fA;
+    const pi=i*4;
+    if(filled[i]){
+      rd[pi]=fR; rd[pi+1]=fG; rd[pi+2]=fB; rd[pi+3]=fA;
+    } else {
+      rd[pi]=orig[pi]; rd[pi+1]=orig[pi+1]; rd[pi+2]=orig[pi+2]; rd[pi+3]=orig[pi+3];
     }
   }
 
-  // Guardar snapshot ANTES de aplicar (para que Ctrl+Z restaure el estado previo)
   _edDrawPushHistory();
-  ctx.putImageData(imageData, x0, y0);
+  ctx.putImageData(resultImageData, x0, y0);
   edRedraw();
 }
 
-/* ══════════════════════════════════════════
-   BORRAR COLOR (Color Erase — como Procreate)
-   ══════════════════════════════════════════ */
 function edColorErase(nx, ny){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
