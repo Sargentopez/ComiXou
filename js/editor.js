@@ -2062,37 +2062,50 @@ function edUpdateNavPages(){
   $('dd-orienth')?.classList.toggle('active',edOrientation==='horizontal');
 }
 
+// Regenera solo el thumb de la hoja actual en el nav (sin reconstruir todo el nav)
+function _edRefreshCurrentPageThumb(){
+  const wrap=$('ddNavPages'); if(!wrap) return;
+  const btns=wrap.querySelectorAll('.ed-nav-page-btn');
+  const btn=btns[edCurrentPage]; if(!btn) return;
+  const thumb=btn.querySelector('canvas'); if(!thumb) return;
+  const page=edPages[edCurrentPage]; if(!page) return;
+  _edRenderPageThumb(thumb, page, edCurrentPage);
+}
+
 function _edRenderPageThumb(canvas, page, pageIdx){
   const ctx=canvas.getContext('2d');
   const tw=canvas.width, th=canvas.height;
   ctx.fillStyle='#ffffff';
   ctx.fillRect(0,0,tw,th);
   if(!page||!page.layers) return;
-  // Usar edRenderPage para fidelidad exacta: renderiza igual que el editor
-  const isV=(page.orientation||edOrientation)==='vertical';
-  const _savedOrient=edOrientation;
-  edOrientation=page.orientation||edOrientation;
-  const pw=isV?ED_PAGE_W:ED_PAGE_H, ph=isV?ED_PAGE_H:ED_PAGE_W;
-  // Canvas de trabajo tamaño real
+  // Replicar exactamente lo que hace edUpdateViewer:
+  // calcular pw/ph/mx/my localmente sin tocar edOrientation ni edCurrentPage
+  const _po = page.orientation || edOrientation;
+  const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const mx = (ED_CANVAS_W - pw) / 2;
+  const my = (ED_CANVAS_H - ph) / 2;
+  // Canvas de trabajo tamanyo real
   const full=document.createElement('canvas');
   full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
   const fctx=full.getContext('2d');
-  fctx.fillStyle='#fff'; fctx.fillRect(edMarginX(),edMarginY(),pw,ph);
-  // Renderizar todas las capas con draw() para fidelidad
-  const _savedPage=edCurrentPage;
-  const _pi=edPages.indexOf(page);
-  if(_pi>=0) edCurrentPage=_pi;
+  fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
+  // Setear edOrientation temporalmente igual que edUpdateViewer
+  const _savedOrient=edOrientation;
+  edOrientation=_po;
   page.layers.forEach(l=>{
-    if(l.type==='text'||l.type==='bubble'){
-      l.draw(fctx,full);
-    } else if(l.type==='image') l.draw(fctx,full);
-    else if(l.type==='draw'||l.type==='stroke') l.draw(fctx);
+    if(l.type==='text'||l.type==='bubble') return;
+    if(l.type==='image')        l.draw(fctx,full);
+    else if(l.type==='draw')    l.draw(fctx);
+    else if(l.type==='stroke')  l.draw(fctx);
     else if(l.type==='shape'||l.type==='line') l.draw(fctx);
   });
+  // Textos y bocadillos todos visibles (no secuencial en miniatura)
+  page.layers.filter(l=>l.type==='text'||l.type==='bubble')
+    .forEach(l=>l.draw(fctx,full));
   edOrientation=_savedOrient;
-  edCurrentPage=_savedPage;
-  // Escalar al tamaño de la miniatura
-  ctx.drawImage(full, edMarginX(), edMarginY(), pw, ph, 0, 0, tw, th);
+  // Escalar zona de la pagina al tamano de la miniatura
+  ctx.drawImage(full, mx, my, pw, ph, 0, 0, tw, th);
 }
 
 /* ══════════════════════════════════════════
@@ -2702,7 +2715,11 @@ function edOnStart(e){
             if(_sl) _sl.value=existing;
             const _slP=$('op-line-curve-r'); if(_slP){_slP.value=existing;}
             const _slPn=$('op-line-curve-rnum'); if(_slPn){_slPn.value=existing;}
-            edRedraw();return;
+            edRedraw();
+            // Tap: selecciona vértice. Tap+arrastrar: selecciona y mueve.
+            // El drag se activa inmediatamente — edOnMove lo ejecutará si hay movimiento.
+            edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=i;
+            return;
           }
         }
       }
@@ -3755,6 +3772,16 @@ function _edShapePushHistory(){
   _edShapeHistory.push(JSON.stringify(edSerLayer(la)));
   _edShapeHistIdx = _edShapeHistory.length - 1;
   _edShapeUpdateUndoRedoBtns();
+  // Actualizar miniaturas con debounce (evitar regenerar en cada evento de slider)
+  clearTimeout(window._edThumbRefreshTimer);
+  window._edThumbRefreshTimer = setTimeout(()=>{
+    // Regenerar todos los thumbs del nav (garantiza fidelidad con curvas V/C)
+    edUpdateNavPages();
+    // El overlay de capas se destruye al cerrar — si existe, está abierto
+    if(typeof _lyRender==='function' && document.getElementById('edLayersOverlay')){
+      _lyRender();
+    }
+  }, 300);
 }
 
 function _edShapeInitHistory(isNew){
@@ -5028,10 +5055,12 @@ function _hslToHex(h,s,l){
   const f=n=>{ const k=(n+h/30)%12; const c=l-a*Math.max(-1,Math.min(k-3,9-k,1)); return Math.round(255*c).toString(16).padStart(2,'0'); };
   return '#'+f(0)+f(8)+f(4);
 }
-// Helper unificado para picker de color: touch → HSL propio, PC → nativo
-// Usa edLastPointerIsTouch porque el evento 'click' en Android pierde pointerType
+// Helper unificado para picker de color
+// En táctil (Android) abre el picker HSL propio; en PC abre el selector nativo.
+// Detecta táctil via window._edIsTouch, que se actualiza con cualquier pointerdown real.
 function _edPickColor(e, initialHex, onInput, onCommit){
-  if(e.pointerType === 'touch' || edLastPointerIsTouch){
+  const _isTouch = e.pointerType==='touch' || window._edIsTouch===true;
+  if(_isTouch){
     const _savedSel=edSelectedIdx, _savedCol=edDrawColor;
     edDrawColor = initialHex;
     _edShowColorPicker((hex, commit)=>{
@@ -5238,7 +5267,7 @@ function edRenderOptionsPanel(mode){
     // ── Color: botón arcoíris abre picker propio en táctil, nativo en PC ──
     $('op-custom-color-btn')?.addEventListener('click',()=>{
       if(edSelectedPaletteIdx <= 1){ edToast('Este color no es editable'); return; }
-      if(edLastPointerIsTouch){
+      if(window._edIsTouch){
         _edShowColorPicker((hex, final)=>{
           edDrawColor = hex;
           if(final){ edColorPalette[edSelectedPaletteIdx] = hex; }
@@ -5973,11 +6002,25 @@ function _edbBuildPalette() {
         // Slots 0 y 1 son negro/blanco fijos — no editables
         if(edSelectedPaletteIdx <= 1){ edToast('Este color no es editable'); _edbClosePalette(); return; }
         _edbClosePalette();
-        _edShowColorPicker((hex, commit) => {
-          edDrawColor = hex;
-          if (commit) _edUpdatePaletteDots();
-          _edbSyncColor();
-        });
+        if(window._edIsTouch){
+          // Android: picker HSL propio (sin cuentagotas)
+          _edShowColorPicker((hex, commit) => {
+            edDrawColor = hex;
+            if(commit){ edColorPalette[edSelectedPaletteIdx]=hex; _edUpdatePaletteDots(); }
+            _edbSyncColor();
+          });
+        } else {
+          // PC: selector nativo del navegador (con cuentagotas)
+          const _inp=document.createElement('input'); _inp.type='color'; _inp.value=edDrawColor;
+          _inp.style.cssText='position:fixed;opacity:0;width:0;height:0;';
+          document.body.appendChild(_inp);
+          _inp.addEventListener('input', ev=>{ edDrawColor=ev.target.value; _edbSyncColor(); });
+          _inp.addEventListener('change', ()=>{
+            edColorPalette[edSelectedPaletteIdx]=edDrawColor;
+            _edUpdatePaletteDots(); _edbSyncColor(); _inp.remove();
+          });
+          _inp.click();
+        }
         return;
       }
       const idx = +btn.dataset.colidx;
@@ -7485,6 +7528,10 @@ function EditorView_destroy(){
     window.removeEventListener('cx:storage:quota', window._edQuotaFn);
     window._edQuotaFn = null;
   }
+  if(window._edPointerTypeFn){
+    document.removeEventListener('pointerdown', window._edPointerTypeFn, true);
+    window._edPointerTypeFn = null;
+  }
   // Limpiar timers
   clearTimeout(window._edLongPress);
   // Parar cámara si estaba abierta
@@ -8091,6 +8138,15 @@ function EditorView_init(){
   };
   document.addEventListener('keydown', window._edKeyFn);
 
+  // Detectar si el dispositivo está usando táctil — se actualiza con cualquier pointerdown
+  // Se usa en _edPickColor para elegir el picker correcto (HSL vs nativo)
+  window._edIsTouch = navigator.maxTouchPoints > 0 && !window.matchMedia('(pointer:fine)').matches;
+  window._edPointerTypeFn = ev => {
+    if(ev.pointerType==='touch') window._edIsTouch=true;
+    else if(ev.pointerType==='mouse') window._edIsTouch=false;
+  };
+  document.addEventListener('pointerdown', window._edPointerTypeFn, true);
+
   // ── RESIZE ──
   // Guardar referencia para cleanup en EditorView_destroy
   window._edResizeFn = () => { edFitCanvas(false); }; // solo reajustar tamaño, nunca resetear cámara
@@ -8244,11 +8300,14 @@ function edExportPagePNG(format){
   const off    = document.createElement('canvas');
   off.width    = pw;
   off.height   = ph;
-  const offCtx = off.getContext('2d');
+  const offCtx = off.getContext('2d', { alpha: true });
 
-  // Fondo blanco
-  offCtx.fillStyle = '#ffffff';
-  offCtx.fillRect(0, 0, pw, ph);
+  // Fondo: blanco para JPG (no soporta transparencia), transparente para PNG
+  if(format === 'jpg'){
+    offCtx.fillStyle = '#ffffff';
+    offCtx.fillRect(0, 0, pw, ph);
+  }
+  // PNG: sin fillRect → fondo transparente
 
   // Transform: z=1, origen en esquina superior izquierda de la página
   // (equivale a setTransform(1,0,0,1, -mx, -my) en coords workspace)
@@ -8258,8 +8317,10 @@ function edExportPagePNG(format){
   const _textLayers   = edLayers.filter(l => l.type==='text' || l.type==='bubble');
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
+  // Mismo orden que edRedraw: imagen → stroke → draw → shape/line → textos al final
   edLayers.forEach(l => {
     if(!l) return;
+    if(l.type==='text' || l.type==='bubble') return; // textos al final
     if(l.type === 'image'){
       l.draw(offCtx, off);
     } else if(l.type === 'draw'){
@@ -8267,6 +8328,10 @@ function edExportPagePNG(format){
       l.draw(offCtx);
       offCtx.globalAlpha = 1;
     } else if(l.type === 'stroke'){
+      offCtx.globalAlpha = l.opacity ?? 1;
+      l.draw(offCtx);
+      offCtx.globalAlpha = 1;
+    } else if(l.type === 'shape' || l.type === 'line'){
       offCtx.globalAlpha = l.opacity ?? 1;
       l.draw(offCtx);
       offCtx.globalAlpha = 1;

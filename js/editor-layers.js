@@ -787,23 +787,27 @@ function _lyDrawShapeThumb(canvas, la) {
     if (la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
     if (la.lineWidth > 0) { ctx.strokeStyle = la.color || '#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * 0.4); ctx.stroke(); }
   } else if (la.type === 'line' && la.points && la.points.length >= 2) {
-    // Normalizar puntos al espacio del thumb con padding
-    const xs = la.points.map(p=>p.x), ys = la.points.map(p=>p.y);
-    const minX=Math.min(...xs), maxX=Math.max(...xs);
-    const minY=Math.min(...ys), maxY=Math.max(...ys);
-    const rangeX = maxX-minX || 0.01, rangeY = maxY-minY || 0.01;
-    const scaleX = (sw-pad*2)/rangeX, scaleY = (sh-pad*2)/rangeY;
-    const scale = Math.min(scaleX, scaleY);
-    const offX = pad + (sw-pad*2-(rangeX*scale))/2;
-    const offY = pad + (sh-pad*2-(rangeY*scale))/2;
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(offX+(la.points[0].x-minX)*scale, offY+(la.points[0].y-minY)*scale);
-    for (let i=1; i<la.points.length; i++)
-      ctx.lineTo(offX+(la.points[i].x-minX)*scale, offY+(la.points[i].y-minY)*scale);
-    if (la.closed) ctx.closePath();
-    if (la.closed && la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
-    if (la.lineWidth > 0) { ctx.strokeStyle = la.color || '#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * 0.4); ctx.stroke(); }
+    // Renderizar en canvas workspace completo usando LineLayer.draw() para fidelidad
+    // exacta con las curvas V/C, luego recortar la zona del objeto al thumb
+    const ED_W = typeof ED_CANVAS_W !== 'undefined' ? ED_CANVAS_W : 1800;
+    const ED_H = typeof ED_CANVAS_H !== 'undefined' ? ED_CANVAS_H : 2340;
+    const pw = typeof edPageW === 'function' ? edPageW() : 360;
+    const ph = typeof edPageH === 'function' ? edPageH() : 780;
+    const mx = typeof edMarginX === 'function' ? edMarginX() : (ED_W-pw)/2;
+    const my = typeof edMarginY === 'function' ? edMarginY() : (ED_H-ph)/2;
+    const aux = document.createElement('canvas');
+    aux.width = ED_W; aux.height = ED_H;
+    la.draw(aux.getContext('2d'));
+    // Bbox del objeto en coords workspace
+    const cx = mx + la.x*pw, cy = my + la.y*ph;
+    const hw = la.width*pw/2+4, hh = la.height*ph/2+4;
+    const bx=Math.max(0,cx-hw), by=Math.max(0,cy-hh);
+    const bw=Math.min(ED_W-bx,hw*2), bh=Math.min(ED_H-by,hh*2);
+    if(bw>0 && bh>0){
+      const scale=Math.min((sw-pad*2)/bw,(sh-pad*2)/bh);
+      const dx=pad+(sw-pad*2-bw*scale)/2, dy=pad+(sh-pad*2-bh*scale)/2;
+      ctx.drawImage(aux,bx,by,bw,bh,dx,dy,bw*scale,bh*scale);
+    }
   }
   ctx.restore();
 }
