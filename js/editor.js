@@ -112,13 +112,8 @@ function edZoomAt(sx, sy, factor){
 }
 function _edSyncSizeDots(){
   const z = edCamera.z;
-  // Dot barra de dibujo libre
-  const dotD = $('edb-size-dot');
-  if(dotD){
-    const sz = edActiveTool==='eraser' ? edEraserSize : edDrawSize;
-    const d = Math.max(3, Math.min(22, Math.round(sz * z)));
-    dotD.style.width=d+'px'; dotD.style.height=d+'px';
-  }
+  // Actualizar preview del panel si está abierto
+  _edbSyncSizePreview();
   // Dot barra flotante de objetos
   const dotS = $('esb-size-dot');
   if(dotS){
@@ -2078,34 +2073,37 @@ function _edRenderPageThumb(canvas, page, pageIdx){
   ctx.fillStyle='#ffffff';
   ctx.fillRect(0,0,tw,th);
   if(!page||!page.layers) return;
-  // Replicar exactamente lo que hace edUpdateViewer:
-  // calcular pw/ph/mx/my localmente sin tocar edOrientation ni edCurrentPage
-  const _po = page.orientation || edOrientation;
-  const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
-  const ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
-  const mx = (ED_CANVAS_W - pw) / 2;
-  const my = (ED_CANVAS_H - ph) / 2;
-  // Canvas de trabajo tamanyo real
-  const full=document.createElement('canvas');
-  full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
-  const fctx=full.getContext('2d');
-  fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
-  // Setear edOrientation temporalmente igual que edUpdateViewer
+  // Mismo sistema que edExportPagePNG: canvas del tamano exacto de la pagina
+  // con setTransform para que draw() de cada capa coloque en coords correctas
   const _savedOrient=edOrientation;
+  const _savedPage=edCurrentPage;
+  const _po=page.orientation||edOrientation;
   edOrientation=_po;
+  const _pi=edPages.indexOf(page); if(_pi>=0) edCurrentPage=_pi;
+  const pw=edPageW(), ph=edPageH();
+  const mx=edMarginX(), my=edMarginY();
+  const off=document.createElement('canvas');
+  off.width=pw; off.height=ph;
+  const offCtx=off.getContext('2d');
+  offCtx.fillStyle='#ffffff'; offCtx.fillRect(0,0,pw,ph);
+  // Mismo transform que edExportPagePNG: traslada origen al borde de la pagina
+  offCtx.setTransform(1,0,0,1,-mx,-my);
+  const _textLayers=page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+  const _textAlpha=page.textLayerOpacity??1;
   page.layers.forEach(l=>{
-    if(l.type==='text'||l.type==='bubble') return;
-    if(l.type==='image')        l.draw(fctx,full);
-    else if(l.type==='draw')    l.draw(fctx);
-    else if(l.type==='stroke')  l.draw(fctx);
-    else if(l.type==='shape'||l.type==='line') l.draw(fctx);
+    if(!l||l.type==='text'||l.type==='bubble') return;
+    if(l.type==='image')       l.draw(offCtx,off);
+    else if(l.type==='draw')   l.draw(offCtx);
+    else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
+    else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
   });
-  // Textos y bocadillos todos visibles (no secuencial en miniatura)
-  page.layers.filter(l=>l.type==='text'||l.type==='bubble')
-    .forEach(l=>l.draw(fctx,full));
+  offCtx.globalAlpha=_textAlpha;
+  _textLayers.forEach(l=>l.draw(offCtx,off));
+  offCtx.globalAlpha=1;
   edOrientation=_savedOrient;
-  // Escalar zona de la pagina al tamano de la miniatura
-  ctx.drawImage(full, mx, my, pw, ph, 0, 0, tw, th);
+  edCurrentPage=_savedPage;
+  // Escalar la pagina completa al tamano de la miniatura
+  ctx.drawImage(off,0,0,pw,ph,0,0,tw,th);
 }
 
 /* ══════════════════════════════════════════
@@ -5827,54 +5825,45 @@ function edInitDrawBar() {
     _edStartEyedrop();
   });
 
-  // ── Grosor: abre popover con slider + input numérico ──
-  $('edb-size')?.addEventListener('click', e => {
-    e.stopPropagation();
+  // ── Grosor: abre panel anclado SIEMPRE AL LADO de la barra flotante ──
+  function _edbOpenSizePop(btn) {
     const pop = $('edb-size-pop');
     if (!pop) return;
     const isOpen = pop.style.display === 'flex';
     if (isOpen) { pop.style.display = 'none'; return; }
-    // Sincronizar valor actual antes de medir
-    const isEr = edActiveTool === 'eraser';
-    const sz   = isEr ? edEraserSize : edDrawSize;
-    const num  = $('edb-size-num');
-    if (num) { num.max = isEr ? 80 : 48; num.value = sz; }
-    const sl = $('edb-size-slider');
-    if (sl) { sl.max = isEr ? 80 : 48; sl.value = sz; }
-    const prev = $('edb-size-preview');
-    if (prev) { const pd=Math.max(4,Math.min(32,Math.round(sz*0.7))); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
-    // Mostrar para poder medir dimensiones reales
+    _edbSyncSize();
     pop.style.display = 'flex';
     pop.style.left = '-9999px'; pop.style.top = '-9999px';
-    const btn = $('edb-size');
-    const br  = btn.getBoundingClientRect();
-    const pw  = pop.offsetWidth  || 90;
-    const ph  = pop.offsetHeight || 44;
+    _edbSyncSizePreview();
+    // Posicionar al lado de la barra flotante, adaptando según bordes de pantalla
+    const bar = $('edDrawBar');
+    const br  = bar ? bar.getBoundingClientRect() : btn.getBoundingClientRect();
+    const pw  = pop.offsetWidth  || 170;
+    const ph  = pop.offsetHeight || 120;
     const W   = window.innerWidth;
     const H   = window.innerHeight;
     const GAP = 8;
-    // Decidir posición: preferir arriba, si no cabe abajo, si no lateral
+    // Posicionar siempre AL LADO de la barra (nunca encima/debajo)
+    // Preferir el lado con más espacio: izquierda o derecha
+    const spaceRight = W - br.right - GAP;
+    const spaceLeft  = br.left - GAP;
     let left, top;
-    if (br.top - ph - GAP >= 0) {
-      // Cabe arriba
-      top  = br.top - ph - GAP;
-      left = Math.max(GAP, Math.min(W - pw - GAP, br.left + br.width/2 - pw/2));
-    } else if (br.bottom + ph + GAP <= H) {
-      // Cabe abajo
-      top  = br.bottom + GAP;
-      left = Math.max(GAP, Math.min(W - pw - GAP, br.left + br.width/2 - pw/2));
-    } else if (br.left - pw - GAP >= 0) {
-      // Cabe a la izquierda
-      left = br.left - pw - GAP;
-      top  = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
-    } else {
-      // A la derecha
+    if (spaceRight >= pw || spaceRight >= spaceLeft) {
+      // A la derecha de la barra
       left = br.right + GAP;
-      top  = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
+    } else {
+      // A la izquierda de la barra
+      left = br.left - pw - GAP;
     }
+    // Centrado verticalmente respecto a la barra, ajustado para no salir de pantalla
+    top = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
+    // Asegurar que no sale por la derecha (por si la barra está muy a la derecha)
+    left = Math.max(GAP, Math.min(W - pw - GAP, left));
     pop.style.left = left + 'px';
     pop.style.top  = top  + 'px';
-  });
+  }
+  $('edb-pen-size')?.addEventListener('click', e => { e.stopPropagation(); _edbOpenSizePop($('edb-pen-size')); });
+  $('edb-eraser-size')?.addEventListener('click', e => { e.stopPropagation(); _edbOpenSizePop($('edb-eraser-size')); });
   $('edb-size-num')?.addEventListener('change', e => {
     const pop=$('edb-size-pop');
     if(pop?._esbOpMode){
@@ -5922,8 +5911,8 @@ function edInitDrawBar() {
     const num = $('edb-size-num'); if(num) num.value = v;
     const prev = $('edb-size-preview');
     if(prev){ const pd=Math.max(4,Math.min(32,Math.round(v*0.7))); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
-    const dot = $('edb-size-dot');
-    if(dot){ const d=Math.max(6,Math.min(24,Math.round(v*0.6))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
+    // Actualizar preview en tiempo real
+    _edbSyncSizePreview();
     const sl = $('op-dsize'); if(sl){ sl.value=v; const n=$('op-dsize-num'); if(n) n.value=v; }
   });
   $('edb-size-slider')?.addEventListener('pointerup', e => {
@@ -5938,7 +5927,7 @@ function edInitDrawBar() {
   // Cerrar popover de grosor al tocar fuera
   document.addEventListener('pointerdown', e => {
     const pop = $('edb-size-pop');
-    if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-size' && e.target.id !== 'esb-size' && e.target.id !== 'esb-opacity'){
+    if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-pen-size' && e.target.id !== 'edb-eraser-size' && e.target.id !== 'esb-size' && e.target.id !== 'esb-opacity'){
       pop.style.display = 'none';
       pop._esbMode = false; pop._esbOpMode = false;
       // Restaurar preview dot y etiqueta para el modo grosor
@@ -6090,6 +6079,8 @@ function _edbSyncColor() {
   sw.style.display = edActiveTool === 'eraser' ? 'none' : '';
   // También actualizar el swatch de la barra de polígonos
   const sw2 = $('esb-color'); if(sw2) sw2.style.background = edDrawColor;
+  // Actualizar preview del panel de grosor si está abierto
+  _edbSyncSizePreview();
 }
 
 function _edUpdateDrawInfo() {
@@ -6102,28 +6093,47 @@ function _edUpdateDrawInfo() {
 }
 
 function _edbSyncSize() {
-  const dot = $('edb-size-dot'); if (!dot) return;
   const isEr = edActiveTool === 'eraser';
-  const sz = isEr ? edEraserSize : edDrawSize;
-  // Dot visual: refleja el grosor real escalado por el zoom actual
-  const _dz = typeof edCamera !== 'undefined' ? edCamera.z : 1;
-  const d = Math.max(3, Math.min(22, Math.round(sz * _dz)));
-  dot.style.width  = d + 'px';
-  dot.style.height = d + 'px';
-  const sizebtn = $('edb-size');
-  if (sizebtn) sizebtn.title = sz + 'px';
-  // Sincronizar input numérico
+  const sz   = isEr ? edEraserSize : edDrawSize;
+  // Mostrar/ocultar botones según herramienta activa
+  const btnPen = $('edb-pen-size');
+  const btnEr  = $('edb-eraser-size');
+  if(btnPen) btnPen.style.display = isEr ? 'none' : '';
+  if(btnEr)  btnEr.style.display  = isEr ? '' : 'none';
+  // Sincronizar slider y número
   const num = $('edb-size-num');
-  if (num) { num.value = sz; num.max = isEr ? 80 : 48; }
-  // Sincronizar slider y preview del popup
+  if(num){ num.value=sz; num.max=isEr?80:48; }
   const sl = $('edb-size-slider');
-  if (sl) { sl.value = sz; sl.max = isEr ? 80 : 48; }
+  if(sl){ sl.value=sz; sl.max=isEr?80:48; }
+  _edbSyncSizePreview();
+}
+
+// Actualiza el círculo de preview en el panel de grosor
+function _edbSyncSizePreview() {
+  const pop = $('edb-size-pop');
+  if(!pop || pop.style.display==='none') return;
+  const isEr = edActiveTool === 'eraser';
+  const sz   = isEr ? edEraserSize : edDrawSize;
   const prev = $('edb-size-preview');
-  if (prev) {
-    const pd = Math.max(4, Math.min(32, Math.round(sz * 0.7)));
-    prev.style.width  = pd + 'px';
-    prev.style.height = pd + 'px';
+  if(!prev) return;
+  // Lápiz: círculo del color seleccionado, tamaño escala con zoom
+  // Goma: círculo blanco con borde, tamaño fijo
+  const _dz = typeof edCamera!=='undefined' ? edCamera.z : 1;
+  let d, color, border;
+  // Lápiz y goma: mismo comportamiento — preview = sz * z (tamaño visible en pantalla)
+  d = Math.max(3, Math.min(44, Math.round(sz * _dz)));
+  if(isEr){
+    color = '#ffffff';
+    border = '2px solid rgba(180,180,180,0.6)';
+  } else {
+    color = edDrawColor || '#000000';
+    border = 'none';
   }
+  prev.style.width  = d+'px';
+  prev.style.height = d+'px';
+  prev.style.background = color;
+  prev.style.border = border;
+  prev.style.boxShadow = isEr ? 'none' : '0 0 0 1.5px rgba(255,255,255,0.25)';
 }
 
 

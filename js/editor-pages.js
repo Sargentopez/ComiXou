@@ -202,25 +202,49 @@ function _pgBuildCard(page, idx) {
 
 function _pgDrawThumb(canvas, page) {
   const ctx = canvas.getContext('2d');
+  const tw = canvas.width, th = canvas.height;
   ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, tw, th);
+  if (!page || !page.layers) return;
 
-  // Dibujar capas escaladas
-  const scaleX = canvas.width;
-  const scaleY = canvas.height;
+  // Usar el mismo sistema que edExportPagePNG:
+  // canvas del tamanyo exacto de la pagina + setTransform(-mx,-my)
+  // para que draw() de cada capa funcione en coords workspace correctas
+  const _savedOrient = edOrientation;
+  const _savedPage   = edCurrentPage;
+  const _po = page.orientation || edOrientation;
+  edOrientation = _po;
+  const _pi = edPages.indexOf(page);
+  if (_pi >= 0) edCurrentPage = _pi;
 
-  // Fondo de dibujo libre
-  if (page.drawData) {
-    const img = new Image();
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      // Dibujar capas encima
-      _pgDrawLayers(ctx, page.layers, scaleX, scaleY);
-    };
-    img.src = page.drawData;
-    return;
-  }
-  _pgDrawLayers(ctx, page.layers, scaleX, scaleY);
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+
+  const off = document.createElement('canvas');
+  off.width = pw; off.height = ph;
+  const offCtx = off.getContext('2d');
+  offCtx.fillStyle = '#ffffff';
+  offCtx.fillRect(0, 0, pw, ph);
+  offCtx.setTransform(1, 0, 0, 1, -mx, -my);
+
+  const _textLayers = page.layers.filter(l => l.type === 'text' || l.type === 'bubble');
+  const _textAlpha  = page.textLayerOpacity ?? 1;
+
+  page.layers.forEach(l => {
+    if (!l || l.type === 'text' || l.type === 'bubble') return;
+    if (l.type === 'image')        l.draw(offCtx, off);
+    else if (l.type === 'draw')    l.draw(offCtx);
+    else if (l.type === 'stroke') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+    else if (l.type === 'shape' || l.type === 'line') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+  });
+  offCtx.globalAlpha = _textAlpha;
+  _textLayers.forEach(l => l.draw(offCtx, off));
+  offCtx.globalAlpha = 1;
+
+  edOrientation  = _savedOrient;
+  edCurrentPage  = _savedPage;
+
+  ctx.drawImage(off, 0, 0, pw, ph, 0, 0, tw, th);
 }
 
 function _pgDrawLayers(ctx, layers, scaleX, scaleY) {

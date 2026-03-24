@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v10.95</footer>
+    <footer class="app-version">v11.03</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -320,7 +320,8 @@ Router.register('editor', {
         <div class="edb-sep"></div>
         <button id="edb-color"  class="edb-swatch" title="Color"></button>
         <button id="edb-eyedrop" class="edb-tool" title="Cuentagotas">💧</button>
-        <button id="edb-size"   class="edb-sizebtn" title="Grosor"><span id="edb-size-dot"></span></button>
+        <button id="edb-pen-size"    class="edb-tool edb-sizebtn-fix" title="Grosor lápiz" style="font-size:.7rem;font-weight:900">Ø</button>
+        <button id="edb-eraser-size" class="edb-tool edb-sizebtn-fix" title="Grosor goma"   style="font-size:.7rem;font-weight:900;display:none">Ø</button>
         <div class="edb-sep"></div>
         <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
         <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>
@@ -329,19 +330,24 @@ Router.register('editor', {
       </div>
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
-      <!-- Popover grosor barra flotante -->
-      <div id="edb-size-pop" style="display:none;position:fixed;background:rgba(30,30,30,0.95);border-radius:10px;padding:10px 14px;box-shadow:0 4px 16px rgba(0,0,0,.5);z-index:1200;flex-direction:column;align-items:center;gap:8px;min-width:160px">
-        <div style="display:flex;align-items:center;gap:6px;width:100%">
-          <span style="color:#ccc;font-size:.75rem;font-weight:700">px</span>
+      <!-- Panel grosor anclado a la barra flotante de dibujo -->
+      <div id="edb-size-pop" style="display:none;position:fixed;z-index:1200;background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.6);flex-direction:column;align-items:center;gap:10px;min-width:170px">
+        <!-- Preview grande: círculo del color actual, tamaño proporcional al grosor -->
+        <div style="display:flex;align-items:center;justify-content:center;width:100%;height:48px">
+          <span id="edb-size-preview" style="display:inline-block;border-radius:50%;background:#fff;transition:width .12s,height .12s,background .12s"></span>
+        </div>
+        <!-- Slider -->
+        <input type="range" id="edb-size-slider" min="1" max="48" value="8"
+          style="width:100%;accent-color:#FFE135;cursor:pointer">
+        <!-- Número editable -->
+        <div style="display:flex;align-items:center;gap:6px">
           <input type="number" id="edb-size-num" min="1" max="80" value="8"
             style="width:52px;text-align:center;font-size:1rem;font-weight:700;
                    border:1px solid rgba(255,255,255,0.4);border-radius:8px;
                    background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;
                    -moz-appearance:textfield;">
-          <span id="edb-size-preview" style="display:inline-block;border-radius:50%;background:#fff;flex-shrink:0;width:12px;height:12px;margin-left:4px"></span>
+          <span style="color:#ccc;font-size:.75rem">px</span>
         </div>
-        <input type="range" id="edb-size-slider" min="1" max="48" value="8"
-          style="width:100%;accent-color:#FFE135;cursor:pointer">
       </div>
 
       <!-- Panel slider adjunto a edShapeBar (grosor, opacidad, curva) -->
