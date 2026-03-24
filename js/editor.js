@@ -47,6 +47,7 @@ let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabr
 // z   = escala (1 = lienzo ocupa el viewport)
 const edCamera = { x: 0, y: 0, z: 1 };
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
+let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segmento de línea
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
@@ -2573,6 +2574,78 @@ function _edAllCornersInside(la, rx0, ry0, rx1, ry1){
   });
 }
 
+// ── Hit test para doble tap en líneas vectoriales ──
+// Devuelve {type:'node', idx} si el punto (nx,ny) cae sobre el nodo idx
+// Devuelve {type:'seg',  idx} si cae sobre el segmento idx→idx+1
+// Devuelve null si no hay hit
+// nx, ny: coordenadas normalizadas de página (fracción 0..1)
+function _edLineHitTest(la, nx, ny, isTouch){
+  if(!la || la.type!=='line' || la.points.length < 2) return null;
+  const pw=edPageW(), ph=edPageH(), z=edCamera.z;
+  const rot=(la.rotation||0)*Math.PI/180;
+  const cos=Math.cos(rot), sin=Math.sin(rot);
+  const n=la.points.length;
+  const cr=la.cornerRadii||{};
+  const hitNode = isTouch ? 28 : 18;   // radio hit nodo en píxeles de pantalla
+  const hitSeg  = isTouch ? 18 : 10;   // distancia hit segmento en píxeles de pantalla
+
+  // ── Posición visual de cada nodo (igual que _handlePos en edOnStart) ──
+  const nodePos=(i)=>{
+    const p=la.points[i];
+    const r=cr[i]||0;
+    let lpx=p.x*pw, lpy=p.y*ph;
+    if(r>0){
+      const prev=la.points[(i-1+n)%n], cur=la.points[i], next=la.points[(i+1)%n];
+      const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+      const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+      const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
+      const v1x=d1>0?(cur.x-prev.x)*pw/d1:0, v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
+      const v2x=d2>0?(next.x-cur.x)*pw/d2:0, v2y=d2>0?(next.y-cur.y)*ph/d2:0;
+      const p1x=cur.x*pw-v1x*rr, p1y=cur.y*ph-v1y*rr;
+      const p2x=cur.x*pw+v2x*rr, p2y=cur.y*ph+v2y*rr;
+      lpx=(p1x+2*cur.x*pw+p2x)/4;
+      lpy=(p1y+2*cur.y*ph+p2y)/4;
+    }
+    return {
+      ax: la.x+(lpx*cos-lpy*sin)/pw,
+      ay: la.y+(lpx*sin+lpy*cos)/ph
+    };
+  };
+
+  // 1. Comprobar nodos primero (prioridad sobre segmentos)
+  for(let i=0;i<n;i++){
+    const {ax,ay}=nodePos(i);
+    if(Math.hypot((nx-ax)*pw,(ny-ay)*ph)*z < hitNode){
+      return {type:'node', idx:i};
+    }
+  }
+
+  // 2. Comprobar segmentos: distancia perpendicular punto→segmento
+  const absP=la.absPoints(); // coords absolutas reales de cada punto
+  const segCount = la.closed ? n : n-1;
+  for(let i=0;i<segCount;i++){
+    const j=(i+1)%n;
+    const ax=absP[i].x, ay=absP[i].y;
+    const bx=absP[j].x, by=absP[j].y;
+    // Vectores en píxeles de página (sin cámara, para la distancia)
+    const abxPx=(bx-ax)*pw, abyPx=(by-ay)*ph;
+    const apxPx=(nx-ax)*pw, apyPx=(ny-ay)*ph;
+    const abLen2=abxPx*abxPx+abyPx*abyPx;
+    if(abLen2 < 0.001) continue; // segmento degenerado
+    // Parámetro t de la proyección del punto sobre el segmento [0,1]
+    const t=Math.max(0,Math.min(1,(apxPx*abxPx+apyPx*abyPx)/abLen2));
+    // Punto más cercano del segmento al toque
+    const closestX=apxPx-t*abxPx;
+    const closestY=apyPx-t*abyPx;
+    const dist=Math.hypot(closestX,closestY)*z;
+    if(dist < hitSeg){
+      return {type:'seg', idx:i};
+    }
+  }
+
+  return null;
+}
+
 function edOnStart(e){
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
   // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
@@ -2912,16 +2985,55 @@ function edOnStart(e){
         }
         return {lpx,lpy};
       };
-      for(let i=0;i<_n;i++){
-        const {lpx,lpy}=_handlePos(i);
-        const ax=la.x+(lpx*cos-lpy*sin)/pw;
-        const ay=la.y+(lpx*sin+lpy*cos)/ph;
-        const _isT2 = e.pointerType==='touch';
-        const _hitR2 = _isT2 ? 28 : 18;
-        if(Math.hypot((c.nx-ax)*edPageW(),(c.ny-ay)*edPageH())*edCamera.z<_hitR2){
-          edIsTailDragging=true;edTailPointType='linevertex';edTailVoiceIdx=i;return;
+      // ── Doble tap sobre nodo/segmento ──
+      // Arquitectura: _edLineHitTest detecta qué se tocó.
+      // Primer tap: guardar candidato. Segundo tap (<400ms, mismo hit): ejecutar acción.
+      const _isTouch2 = e.pointerType==='touch' || edLastPointerIsTouch;
+      const _lineHit = _edLineHitTest(la, c.nx, c.ny, _isTouch2);
+      const _now2 = Date.now();
+      if(_lineHit){
+        const _sameHit = _edLastNodeTapIdx !== -1
+          && _edLastNodeTapIdx === (_lineHit.type==='node' ? _lineHit.idx : 1000+_lineHit.idx)
+          && (_now2 - _edLastNodeTapTime) < 400;
+        if(_sameHit){
+          // ── Doble tap confirmado ──
+          _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
+          if(_lineHit.type==='node'){
+            // Eliminar nodo (mínimo 2 puntos)
+            if(_n > 2){
+              la.points.splice(_lineHit.idx,1);
+              if(la.cornerRadii) delete la.cornerRadii[_lineHit.idx];
+              la._updateBbox(); _edShapePushHistory(); edRedraw();
+            }
+            return;
+          } else {
+            // Añadir nodo en el centro del segmento
+            const _absP2=la.absPoints();
+            const _j2=(_lineHit.idx+1)%_n;
+            const _a2=_absP2[_lineHit.idx], _b2=_absP2[_j2];
+            const mx=(_a2.x+_b2.x)/2, my=(_a2.y+_b2.y)/2;
+            // Convertir punto absoluto a local (igual que addAbsPoint pero sin push al final)
+            const rotInv=-(la.rotation||0)*Math.PI/180;
+            const dx=mx-la.x, dy=my-la.y;
+            const lx=dx*Math.cos(rotInv)-dy*Math.sin(rotInv);
+            const ly=dx*Math.sin(rotInv)+dy*Math.cos(rotInv);
+            la.points.splice(_j2,0,{x:lx,y:ly});
+            la._updateBbox(); _edShapePushHistory(); edRedraw();
+            return;
+          }
+        } else {
+          // Primer tap: registrar candidato, continuar con drag normal si es nodo
+          _edLastNodeTapTime=_now2;
+          _edLastNodeTapIdx = _lineHit.type==='node' ? _lineHit.idx : 1000+_lineHit.idx;
+          if(_lineHit.type==='node'){
+            edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
+          }
+          // Para segmento: solo registrar, no iniciar drag
+          return;
         }
       }
+      // Sin hit en nodo ni segmento: limpiar candidato
+      _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
     }
   }
 
@@ -3581,6 +3693,7 @@ function edOnEnd(e){
     // Historial local: estado 0 = null (sin objeto), estado 1 = objeto creado
     _edShapeHistory = [null, JSON.stringify(edSerLayer(createdShape))];
     _edShapeHistIdx = 1;
+    _edShapeHistIdxBase = 1;
     _edShapeUpdateUndoRedoBtns();
     edPushHistory();
     edRedraw();
@@ -3630,7 +3743,14 @@ function edOnEnd(e){
 let _edShapeHistory = [], _edShapeHistIdx = -1, _edShapeHistIdxBase = 0;
 
 function _edShapePushHistory(){
-  const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null; if(!la) return;
+  let la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  if(!la){
+    const _mode = $("edOptionsPanel")?.dataset.mode;
+    if(_mode==="shape"||_mode==="line"||$("edShapeBar")?.classList.contains("visible")){
+      la = edLayers.find(l => l.type==="shape"||l.type==="line")||null;
+    }
+  }
+  if(!la) return;
   _edShapeHistory = _edShapeHistory.slice(0, _edShapeHistIdx + 1);
   _edShapeHistory.push(JSON.stringify(edSerLayer(la)));
   _edShapeHistIdx = _edShapeHistory.length - 1;
@@ -3638,7 +3758,8 @@ function _edShapePushHistory(){
 }
 
 function _edShapeInitHistory(isNew){
-  const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  let la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  if(!la){ la = edLayers.find(l => l.type==="shape"||l.type==="line")||null; }
   if(isNew && la){
     // Nuevo objeto: primer estado = null (sin objeto), segundo = objeto creado
     _edShapeHistory = [null, JSON.stringify(edSerLayer(la))];
@@ -3652,7 +3773,7 @@ function _edShapeInitHistory(isNew){
 }
 
 function _edShapeClearHistory(){
-  _edShapeHistory = []; _edShapeHistIdx = -1;
+  _edShapeHistory = []; _edShapeHistIdx = -1; _edShapeHistIdxBase = 0;
   _edShapeUpdateUndoRedoBtns();
 }
 
@@ -4360,25 +4481,11 @@ function _edActivateShapeTool() {
   // ── Color borde ──
   $('op-shape-color-btn')?.addEventListener('click', e=>{
     const s=_curShape(); if(!s) return;
-    if(e.pointerType==='touch'){
-      // Android: picker HSL propio
-      const _savedSel=edSelectedIdx;
-      const _savedCol=edDrawColor; edDrawColor=s.color||'#000000';
-      _edShowColorPicker((hex, commit)=>{
-        edSelectedIdx=_savedSel; edDrawColor=_savedCol;
-        s.color=hex; $('op-shape-color-btn').style.background=hex;
-        edRedraw(); if(commit) _edShapePushHistory();
-      });
-    } else {
-      // PC: selector nativo (Chrome tiene cuentagotas integrado)
-      const inp=document.createElement('input'); inp.type='color'; inp.value=s.color||'#000000';
-      inp.style.cssText='position:fixed;opacity:0;width:0;height:0;'; document.body.appendChild(inp);
-      inp.addEventListener('input', ev=>{ s.color=ev.target.value; $('op-shape-color-btn').style.background=ev.target.value; edRedraw(); });
-      inp.addEventListener('change', ()=>{ _edShapePushHistory(); inp.remove(); });
-      inp.click();
-    }
+    _edPickColor(e, s.color||'#000000',
+      hex=>{ s.color=hex; $('op-shape-color-btn').style.background=hex; edRedraw(); },
+      ()=>{ _edShapePushHistory(); }
+    );
   });
-
   // ── Grosor ──
   $('op-size-btn')?.addEventListener('click',()=>{
     const sl=$('op-size-slider'),ob=$('op-opacity-slider');
@@ -4443,27 +4550,10 @@ function _edActivateShapeTool() {
   $('op-shape-fill-btn')?.addEventListener('click', e=>{
     const s=_curShape(); if(!s) return;
     const cur=(s.fillColor&&s.fillColor!=='none')?s.fillColor:'#ffffff';
-    if(e.pointerType==='touch'){
-      // Android: picker HSL propio
-      const _savedSel=edSelectedIdx;
-      const _savedCol=edDrawColor; edDrawColor=cur;
-      _edShowColorPicker((hex, commit)=>{
-        edSelectedIdx=_savedSel; edDrawColor=_savedCol;
-        s.fillColor=hex; $('op-shape-fill-btn').style.background=hex;
-        $('op-shape-fill-on').checked=true; edDrawFillColor=hex;
-        edRedraw(); if(commit) _edShapePushHistory();
-      });
-    } else {
-      // PC: selector nativo (Chrome tiene cuentagotas integrado)
-      const inp=document.createElement('input'); inp.type='color'; inp.value=cur;
-      inp.style.cssText='position:fixed;opacity:0;width:0;height:0;'; document.body.appendChild(inp);
-      inp.addEventListener('input', ev=>{
-        s.fillColor=ev.target.value; $('op-shape-fill-btn').style.background=ev.target.value;
-        $('op-shape-fill-on').checked=true; edDrawFillColor=ev.target.value; edRedraw();
-      });
-      inp.addEventListener('change', ()=>{ _edShapePushHistory(); inp.remove(); });
-      inp.click();
-    }
+    _edPickColor(e, cur,
+      hex=>{ s.fillColor=hex; $('op-shape-fill-btn').style.background=hex; $('op-shape-fill-on').checked=true; edDrawFillColor=hex; edRedraw(); },
+      ()=>{ _edShapePushHistory(); }
+    );
   });
 
   // ── Minimizar (idéntico a draw) ──
@@ -4675,21 +4765,10 @@ function _edActivateLineTool(isNew) {
   // ── Color ──
   $('op-line-color-btn')?.addEventListener('click', e=>{
     const l=_curLine(); if(!l) return;
-    if(e.pointerType==='touch'){
-      const _savedSel=edSelectedIdx;
-      const _savedCol=edDrawColor; edDrawColor=l.color||'#000000';
-      _edShowColorPicker((hex, commit)=>{
-        edSelectedIdx=_savedSel; edDrawColor=_savedCol;
-        l.color=hex; $('op-line-color-btn').style.background=hex;
-        edRedraw(); if(commit) _edShapePushHistory();
-      });
-    } else {
-      const inp=document.createElement('input'); inp.type='color'; inp.value=l.color||'#000000';
-      inp.style.cssText='position:fixed;opacity:0;width:0;height:0;'; document.body.appendChild(inp);
-      inp.addEventListener('input', ev=>{ l.color=ev.target.value; $('op-line-color-btn').style.background=ev.target.value; edRedraw(); });
-      inp.addEventListener('change', ()=>{ _edShapePushHistory(); inp.remove(); });
-      inp.click();
-    }
+    _edPickColor(e, l.color||'#000000',
+      hex=>{ l.color=hex; $('op-line-color-btn').style.background=hex; edRedraw(); },
+      ()=>{ _edShapePushHistory(); }
+    );
   });
   $('op-line-eyedrop')?.addEventListener('click', ()=>{ _edStartEyedrop(); });
 
@@ -4762,25 +4841,10 @@ function _edActivateLineTool(isNew) {
   $('op-line-fill-btn')?.addEventListener('click', e=>{
     const l=_curLine(); if(!l) return;
     const cur=(l.fillColor&&l.fillColor!=='none')?l.fillColor:'#ffffff';
-    if(e.pointerType==='touch'){
-      const _savedSel=edSelectedIdx;
-      const _savedCol=edDrawColor; edDrawColor=cur;
-      _edShowColorPicker((hex, commit)=>{
-        edSelectedIdx=_savedSel; edDrawColor=_savedCol;
-        l.fillColor=hex; $('op-line-fill-btn').style.background=hex;
-        $('op-line-fill-on').checked=true; edDrawFillColor=hex;
-        edRedraw(); if(commit) _edShapePushHistory();
-      });
-    } else {
-      const inp=document.createElement('input'); inp.type='color'; inp.value=cur;
-      inp.style.cssText='position:fixed;opacity:0;width:0;height:0;'; document.body.appendChild(inp);
-      inp.addEventListener('input', ev=>{
-        l.fillColor=ev.target.value; $('op-line-fill-btn').style.background=ev.target.value;
-        $('op-line-fill-on').checked=true; edDrawFillColor=ev.target.value; edRedraw();
-      });
-      inp.addEventListener('change', ()=>{ _edShapePushHistory(); inp.remove(); });
-      inp.click();
-    }
+    _edPickColor(e, cur,
+      hex=>{ l.fillColor=hex; $('op-line-fill-btn').style.background=hex; $('op-line-fill-on').checked=true; edDrawFillColor=hex; edRedraw(); },
+      ()=>{ _edShapePushHistory(); }
+    );
   });
 
   // ── Curva de vértice ──
@@ -4876,6 +4940,11 @@ function _edFinishLine() {
     edRedraw();
     // Si los menús están ocultos (minimizados), no abrir panel — solo mantener barra flotante
     if(edMinimized){
+      // Inicializar historial local como objeto nuevo (igual que _edShapeInitHistory(true))
+      _edShapeHistory = [null, JSON.stringify(edSerLayer(finished))];
+      _edShapeHistIdx = 1;
+      _edShapeHistIdxBase = 1;
+      _edShapeUpdateUndoRedoBtns();
       edShapeBarShow();
     } else {
       const _barWasVisible2 = $('edShapeBar')?.classList.contains('visible');
@@ -4959,6 +5028,28 @@ function _hslToHex(h,s,l){
   const f=n=>{ const k=(n+h/30)%12; const c=l-a*Math.max(-1,Math.min(k-3,9-k,1)); return Math.round(255*c).toString(16).padStart(2,'0'); };
   return '#'+f(0)+f(8)+f(4);
 }
+// Helper unificado para picker de color: touch → HSL propio, PC → nativo
+// Usa edLastPointerIsTouch porque el evento 'click' en Android pierde pointerType
+function _edPickColor(e, initialHex, onInput, onCommit){
+  if(e.pointerType === 'touch' || edLastPointerIsTouch){
+    const _savedSel=edSelectedIdx, _savedCol=edDrawColor;
+    edDrawColor = initialHex;
+    _edShowColorPicker((hex, commit)=>{
+      edSelectedIdx=_savedSel; edDrawColor=_savedCol;
+      onInput(hex);
+      if(commit) onCommit(hex);
+    });
+  } else {
+    const inp=document.createElement('input');
+    inp.type='color'; inp.value=initialHex;
+    inp.style.cssText='position:fixed;opacity:0;width:0;height:0;';
+    document.body.appendChild(inp);
+    inp.addEventListener('input', ev=>onInput(ev.target.value));
+    inp.addEventListener('change', ()=>{ onCommit(inp.value); inp.remove(); });
+    inp.click();
+  }
+}
+
 function _edShowColorPicker(onColorChange){
   document.getElementById('ed-hsl-picker')?.remove();
   let [h,s,l] = _hexToHsl(edDrawColor);
@@ -6050,7 +6141,7 @@ let _esbX = 12, _esbY = 120;
 function edShapeBarShow() {
   const bar = $('edShapeBar'); if(!bar) return;
   bar.classList.add('visible');
-  if(_edShapeHistory.length === 0) _edShapeInitHistory();
+  _edShapeInitHistory();
   if (_esbX === 12 && _esbY === 120) {
     const pos = _edBarDefaultPos(bar);
     _esbX = pos.x; _esbY = pos.y;
@@ -6258,21 +6349,10 @@ function edInitShapeBar() {
   $('esb-color')?.addEventListener('click', e => {
     if(_locked) return;
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la) return;
-    if(e.pointerType==='touch'){
-      const _savedSel=edSelectedIdx;
-      const _savedCol=edDrawColor; edDrawColor=la.color||'#000000';
-      _edShowColorPicker((hex, commit)=>{
-        edSelectedIdx=_savedSel; edDrawColor=_savedCol;
-        la.color=hex; _esbSync(); edRedraw();
-        if(commit) _edShapePushHistory();
-      });
-    } else {
-      const inp=document.createElement('input'); inp.type='color'; inp.value=la.color||'#000000';
-      inp.style.cssText='position:fixed;opacity:0;width:0;height:0;'; document.body.appendChild(inp);
-      inp.addEventListener('input', ev=>{ la.color=ev.target.value; _esbSync(); edRedraw(); });
-      inp.addEventListener('change', ()=>{ _edShapePushHistory(); inp.remove(); });
-      inp.click();
-    }
+    _edPickColor(e, la.color||'#000000',
+      hex=>{ la.color=hex; _esbSync(); edRedraw(); },
+      ()=>{ _edShapePushHistory(); }
+    );
   });
 
   // Cuentagotas
@@ -6296,25 +6376,10 @@ function edInitShapeBar() {
     if(_locked) return;
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la) return;
     const cur=(la.fillColor&&la.fillColor!=='none')?la.fillColor:'#ffffff';
-    if(e.pointerType==='touch'){
-      const _savedSel=edSelectedIdx;
-      const _savedCol=edDrawColor; edDrawColor=cur;
-      _edShowColorPicker((hex, commit)=>{
-        edSelectedIdx=_savedSel; edDrawColor=_savedCol;
-        la.fillColor=hex; la._lastFillColor=hex;
-        _esbSync(); edRedraw();
-        if(commit) _edShapePushHistory();
-      });
-    } else {
-      const inp=document.createElement('input'); inp.type='color'; inp.value=cur;
-      inp.style.cssText='position:fixed;opacity:0;width:0;height:0;'; document.body.appendChild(inp);
-      inp.addEventListener('input', ev=>{
-        la.fillColor=ev.target.value; la._lastFillColor=ev.target.value;
-        _esbSync(); edRedraw();
-      });
-      inp.addEventListener('change', ()=>{ _edShapePushHistory(); inp.remove(); });
-      inp.click();
-    }
+    _edPickColor(e, cur,
+      hex=>{ la.fillColor=hex; la._lastFillColor=hex; _esbSync(); edRedraw(); },
+      ()=>{ _edShapePushHistory(); }
+    );
   });
 
 
@@ -6423,7 +6488,7 @@ function edInitShapeBar() {
   // OK
   $('esb-ok')?.addEventListener('click', ()=>{
     if(_locked) return;
-    _edShapeClearHistory();
+    edPushHistory(); _edShapeClearHistory();
     // Desactivar V⟺C si estaba activo
     const _curveBtn=$('esb-curve');
     if(_curveBtn){ _curveBtn.dataset.curveActive='0'; _curveBtn.style.background=''; _curveBtn.style.color=''; _curveBtn.style.outline=''; }
@@ -7752,7 +7817,7 @@ function EditorView_init(){
   // ── OK: igual que op-draw-ok pero cierra edShapeBar ──
   $('esb-ok')?.addEventListener('click', () => {
     if(edActiveTool === 'line' && _edLineLayer) _edFinishLine();
-    _edShapeClearHistory();
+    edPushHistory(); _edShapeClearHistory();
     edShapeBarHide();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
@@ -8090,8 +8155,9 @@ function EditorView_init(){
         const inMenuBar  = e.target.closest('#edMenuBar');
         const inTopbar   = e.target.closest('#edTopbar');
         const inCurvePop = e.target.closest('#esb-curve-pop') || e.target.id==='esb-curve';
+        const inHSLPop   = e.target.closest('#ed-hsl-picker');
         const curveOn=$('esb-curve')?.dataset.curveActive==='1';
-        if(!inCanvas && !inDrawBar && !inShapeBar && !inPanel && !inMenuBar && !inTopbar && !inCurvePop && !curveOn){
+        if(!inCanvas && !inDrawBar && !inShapeBar && !inPanel && !inMenuBar && !inTopbar && !inCurvePop && !inHSLPop && !curveOn){
           edSelectedIdx = -1;
           edActiveTool = 'select';
           edCanvas.className = '';
