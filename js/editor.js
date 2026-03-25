@@ -4301,59 +4301,68 @@ function _edApplyCursorOffset(e){
   };
 }
 function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
+  // Estrategia: un único contenedor posicionado en el punto de toque,
+  // rotado ang grados alrededor de su centro (= centro del cuadrado).
+  // Dentro del contenedor, los elementos se posicionan en coordenadas locales
+  // (eje vertical: hacia arriba = negativo Y).
+  // Así ang=0 es idéntico al caso vertical que ya funcionaba.
+
   const ang = _edCursorOffsetAngle;
   const dotSize = 16;
   const cursorR = cursorSz / 2;
+  const lineLen = Math.max(0, _ED_CURSOR_OFFSET_PX - cursorR - dotSize / 2);
 
-  // La línea es un div vertical que parte del borde inferior del cursor
-  // y apunta hacia abajo. Luego se rota `ang` grados desde su extremo superior.
-  // Esto es exactamente lo mismo que el caso vertical, solo que rotado.
-  // Para ang=0 el comportamiento no cambia en absoluto.
-
-  // Longitud: desde el borde del cursor hasta el borde del cuadrado,
-  // medida a lo largo del eje del bloque (= distancia real entre centros - radios)
-  const totalDist = _ED_CURSOR_OFFSET_PX; // distancia fija cursor↔toque
-  const lineLen = Math.max(0, totalDist - cursorR - dotSize / 2);
-
-  // Origen de la línea: borde inferior del cursor (igual que vertical, siempre)
-  // El rotate se aplica desde transform-origin: top center sobre ese punto
-  const lineStartX = cursorX;
-  const lineStartY = cursorY + cursorR;
-
-  let line = $('edOffsetLine');
-  if(!line){
-    line = document.createElement('div');
-    line.id = 'edOffsetLine';
-    document.getElementById('editorShell')?.appendChild(line);
+  // Eliminar bloques anteriores y usar un único contenedor SVG
+  let wrap = $('edOffsetWrap');
+  if(!wrap){
+    wrap = document.createElement('div');
+    wrap.id = 'edOffsetWrap';
+    wrap.style.cssText = 'position:fixed;pointer-events:none;z-index:998;';
+    document.getElementById('editorShell')?.appendChild(wrap);
   }
-  line.style.cssText = `position:fixed;pointer-events:none;z-index:998;
-    left:${lineStartX}px; top:${lineStartY}px;
-    width:2px; height:${lineLen}px;
-    background:rgba(60,140,255,0.75);
-    transform-origin: top center;
-    transform: translateX(-1px) rotate(${ang}deg);`;
 
-  let dot = $('edTouchDot');
-  if(!dot){
-    dot = document.createElement('div');
-    dot.id = 'edTouchDot';
-    document.getElementById('editorShell')?.appendChild(dot);
-  }
+  // El contenedor se centra en el punto de toque y rota ang grados
+  // transform-origin por defecto es 50% 50% = centro del div
+  // El div tiene tamaño 0×0 — los hijos usan posición absoluta relativa al centro
+  wrap.style.left = touchX + 'px';
+  wrap.style.top  = touchY + 'px';
+  wrap.style.transform = `rotate(${ang}deg)`;
+
   const isEr = edActiveTool === 'eraser';
   const dotColor = isEr ? '#888' : edDrawColor;
-  dot.style.cssText = `position:fixed;pointer-events:none;z-index:998;
-    left:${touchX}px; top:${touchY}px;
-    width:${dotSize}px; height:${dotSize}px;
-    background:${dotColor};
-    transform:translate(-50%,-50%) rotate(${ang}deg);
-    border-radius:2px;
-    box-shadow:0 0 0 1.5px rgba(255,255,255,0.7);`;
+
+  wrap.innerHTML = `
+    <!-- Cuadrado: centrado en el origen (punto de toque) -->
+    <div style="position:absolute;
+      left:${-dotSize/2}px; top:${-dotSize/2}px;
+      width:${dotSize}px; height:${dotSize}px;
+      background:${dotColor};border-radius:2px;
+      box-shadow:0 0 0 1.5px rgba(255,255,255,0.7);"></div>
+    <!-- Línea: arranca del borde superior del cuadrado, sube lineLen px -->
+    <div style="position:absolute;
+      left:-1px; top:${-dotSize/2 - lineLen}px;
+      width:2px; height:${lineLen}px;
+      background:rgba(60,140,255,0.75);"></div>
+    <!-- Cursor (círculo): centrado lineLen+dotSize/2 px arriba del toque -->
+    <div style="position:absolute;
+      left:${-cursorR}px; top:${-dotSize/2 - lineLen - cursorR*2}px;
+      width:${cursorSz}px; height:${cursorSz}px;
+      border-radius:50%;
+      border:1.5px solid ${isEr ? 'rgba(150,150,150,0.6)' : dotColor};
+      background:${isEr ? 'rgba(255,255,255,0.5)' : dotColor + '33'};"></div>`;
+
+  // Ocultar el cursor original y los elementos separados — ya no se usan
+  const cur = $('edBrushCursor'); if(cur) cur.style.display='none';
+  const line = $('edOffsetLine'); if(line) line.style.display='none';
+  const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
 }
 function _edOffsetHide(){
+  const wrap = $('edOffsetWrap'); if(wrap) wrap.style.display='none';
   const line = $('edOffsetLine'); if(line) line.style.display='none';
   const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
 }
 function _edOffsetShowReset(){
+  const wrap = $('edOffsetWrap'); if(wrap) wrap.style.display='';
   const line = $('edOffsetLine'); if(line) line.style.display='';
   const dot  = $('edTouchDot');  if(dot)  dot.style.display='';
 }
@@ -4384,21 +4393,12 @@ function edMoveBrush(e){
   const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(_edCursorOffset && isTouch){
-    // Cursor sube con el ángulo configurado
-    const rad = _edCursorOffsetAngle * Math.PI / 180;
-    const dx  = _ED_CURSOR_OFFSET_PX * Math.sin(rad);
-    const dy  = _ED_CURSOR_OFFSET_PX * Math.cos(rad);
-    const cx = src.clientX - dx;
-    const cy = src.clientY - dy;
-    cur.style.display = 'block';
-    cur.style.left = cx + 'px';
-    cur.style.top  = cy + 'px';
-    cur.style.width = sz + 'px'; cur.style.height = sz + 'px';
-    // Tinte del cursor con el color activo
-    const isEr = edActiveTool === 'eraser';
-    cur.style.background = isEr ? 'rgba(255,255,255,0.5)' : edDrawColor + '33';
-    cur.style.borderColor = isEr ? 'rgba(150,150,150,0.6)' : edDrawColor;
-    _edOffsetShow(cx, cy, src.clientX, src.clientY, sz);
+    // El wrap dibuja cursor+línea+cuadrado como bloque rotado desde el punto de toque
+    // Ocultar el cursor original — el wrap lo reemplaza
+    cur.style.display = 'none';
+    const wrap = $('edOffsetWrap');
+    if(wrap) wrap.style.display = '';
+    _edOffsetShow(0, 0, src.clientX, src.clientY, sz);
   } else {
     cur.style.display = 'block';
     cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
