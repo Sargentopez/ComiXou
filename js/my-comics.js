@@ -51,6 +51,65 @@ function MyComicsView_init() {
   _mcInjectModal();
   _mcRenderList();
   _mcBindNav();
+  // Sincronizar fechas con Supabase en segundo plano
+  _mcSyncCloudDates();
+}
+
+/* ── SINCRONIZAR FECHAS CON SUPABASE ── */
+async function _mcSyncCloudDates() {
+  if (typeof SupabaseClient === 'undefined') return;
+  if (typeof Auth === 'undefined' || !Auth.currentUser?.()) return;
+
+  // Obtener todas las obras locales que tienen supabaseId
+  const locals = ComicStore.getAll().filter(c => c.supabaseId);
+  if (!locals.length) return;
+
+  const BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
+  const KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+  const hdrs = { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY };
+
+  try {
+    const ids = locals.map(c => c.supabaseId).join(',');
+    const works = await fetch(
+      `${BASE}/works?id=in.(${ids})&select=id,updated_at,title,genre,nav_mode,published`,
+      { headers: hdrs }
+    ).then(r => r.ok ? r.json() : []);
+
+    if (!works || !works.length) return;
+
+    let changed = false;
+    for (const w of works) {
+      const local = locals.find(c => c.supabaseId === w.id);
+      if (!local) continue;
+
+      const cloudDate = new Date(w.updated_at || 0);
+      const localDate = new Date(local.updatedAt || 0);
+
+      // Actualizar metadatos siempre (título, género, estado publicación)
+      let dirty = false;
+      if (w.title    && w.title    !== local.title)    { local.title    = w.title;    dirty = true; }
+      if (w.genre    && w.genre    !== local.genre)    { local.genre    = w.genre;    dirty = true; }
+      if (w.nav_mode && w.nav_mode !== local.navMode)  { local.navMode  = w.nav_mode; dirty = true; }
+      if (w.published !== undefined && w.published !== local.published) {
+        local.published = w.published; dirty = true;
+      }
+
+      // Si la nube es más reciente: invalidar editorData local
+      // para que al editar se descargue de Supabase
+      if (cloudDate > localDate) {
+        local.cloudOnly  = true;
+        local.editorData = null;
+        local.updatedAt  = w.updated_at;
+        dirty = true;
+      }
+
+      if (dirty) { ComicStore.save(local); changed = true; }
+    }
+
+    if (changed) _mcRenderList();
+  } catch(e) {
+    // Silencioso — si no hay red, se usa la versión local
+  }
 }
 
 /* ── RENDERIZAR LISTA ── */
@@ -341,7 +400,7 @@ async function _mcCloudLoad() {
       // ¿Ya existe localmente con este supabaseId?
       const existing = ComicStore.getAll().find(c => c.supabaseId === w.id);
       if (existing) {
-        // Si la nube es más reciente, preguntar
+        // Si la nube es más reciente, invalidar editorData local para forzar descarga al editar
         const cloudDate = new Date(w.updated_at || 0);
         const localDate = new Date(existing.updatedAt || 0);
         if (cloudDate <= localDate) {
@@ -349,11 +408,14 @@ async function _mcCloudLoad() {
           if (existing.userId !== user.id) { existing.userId = user.id; ComicStore.save(existing); }
           skipped++; continue;
         }
-        // La nube es más nueva — actualizar metadatos
+        // La nube es más nueva — actualizar metadatos e invalidar editorData
         existing.title    = w.title     || existing.title;
         existing.genre    = w.genre     || existing.genre;
         existing.navMode  = w.nav_mode  || existing.navMode;
-        existing.userId   = user.id;  // actualizar al UUID nuevo
+        existing.userId   = user.id;
+        existing.cloudOnly  = true;
+        existing.editorData = null;
+        existing.updatedAt  = w.updated_at;
         ComicStore.save(existing);
         skipped++;
         continue;

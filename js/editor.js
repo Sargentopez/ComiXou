@@ -6876,10 +6876,25 @@ function edSaveProject(){
       pages:(()=>{
         const _savedOrient=edOrientation, _savedPage=edCurrentPage;
         const result=edPages.map((p,_pi)=>{
-          // Configurar contexto correcto para que edSerLayer/draw() funcionen
           edCurrentPage=_pi;
           edOrientation=p.orientation||_savedOrient;
           const layers=p.layers.map(edSerLayer).filter(Boolean);
+          // DIAGNÓSTICO TEMPORAL: panel persistente con lineWidth de capas vectoriales
+          const _dbgLines = layers
+            .filter(l=>l.type==='shape'||l.type==='line'||l.type==='stroke')
+            .map((l,i)=>`hoja${_pi} [${i}] ${l.type}: color=${l.color||'?'} lw=${l.lineWidth??'?'}`);
+          if(_dbgLines.length){
+            let _dbgPanel = document.getElementById('_edDbgPanel');
+            if(!_dbgPanel){
+              _dbgPanel = document.createElement('div');
+              _dbgPanel.id = '_edDbgPanel';
+              _dbgPanel.style.cssText='position:fixed;top:60px;left:8px;right:8px;z-index:99999;background:rgba(0,0,20,0.93);color:#7effb2;font-family:monospace;font-size:11px;padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow-y:auto;border:1px solid #3f6';
+              _dbgPanel.innerHTML='<b style="color:#fff">DIAGNÓSTICO GUARDADO (toca para cerrar)</b>\n';
+              _dbgPanel.addEventListener('click',()=>_dbgPanel.remove());
+              document.body.appendChild(_dbgPanel);
+            }
+            _dbgPanel.innerHTML += _dbgLines.join('\n') + '\n';
+          }
           return {layers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient};
         });
         edOrientation=_savedOrient; edCurrentPage=_savedPage;
