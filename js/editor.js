@@ -31,7 +31,7 @@ const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
-const _ED_CURSOR_OFFSET_PX = 38;       // 1 cm en px CSS (96/2.54 ≈ 38)
+const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
@@ -5276,6 +5276,10 @@ function edRenderOptionsPanel(mode){
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-color-erase-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
+    ${!isFill ? `
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-offset-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ Cursor</button>` : ''}
 
   </div>
   <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
@@ -5398,6 +5402,18 @@ function edRenderOptionsPanel(mode){
       e.target.value=v; edDrawOpacity=v;
       const sl=$('op-dopacity'); if(sl) sl.value=v;
       _edUpdateDrawInfo();
+    });
+
+    // ── Cursor offset ──
+    $('op-offset-btn')?.addEventListener('click', () => {
+      _edCursorOffset = !_edCursorOffset;
+      const btn = $('op-offset-btn');
+      if(btn){
+        btn.style.background = _edCursorOffset ? 'var(--black)' : 'transparent';
+        btn.style.color = _edCursorOffset ? 'var(--white)' : 'var(--gray-700)';
+      }
+      _edbSyncOffsetBtn(); // sincronizar también el botón de la barra flotante
+      if(!_edCursorOffset) _edOffsetHide();
     });
 
     // ── Deshacer / Rehacer ──
