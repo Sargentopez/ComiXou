@@ -5317,11 +5317,21 @@ function edRenderOptionsPanel(mode){
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-color-erase-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
-    ${!isFill ? `
+    ${!isFill && window._edIsTouch ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-offset-l" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado izquierda">↗Cursor</button>
-    <button id="op-offset-c" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===0?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===0?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — recto">↑Cursor</button>
-    <button id="op-offset-r" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado derecha">↖Cursor</button>` : ''}
+    <button id="op-offset-btn"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ Cursor</button>
+    <div id="op-offset-pop" style="display:none;position:absolute;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);flex-direction:row;align-items:center;gap:6px;">
+      <button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda">
+        <svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <button id="op-offset-pop-c" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Vertical">
+        <svg width="22" height="28" viewBox="0 0 22 28"><line x1="11" y1="4" x2="11" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha">
+        <svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>` : ''}
 
   </div>
   <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
@@ -5446,28 +5456,57 @@ function edRenderOptionsPanel(mode){
       _edUpdateDrawInfo();
     });
 
-    // ── Cursor offset — tres modos de ángulo ──
-    ['l','c','r'].forEach(id => {
-      $('op-offset-'+id)?.addEventListener('click', () => {
-        const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
-        if(_edCursorOffset && _edCursorOffsetAngle === angle){
-          _edCursorOffset = false;
-        } else {
-          _edCursorOffset = true;
-          _edCursorOffsetAngle = angle;
-        }
-        // Actualizar visual de los tres botones del panel
-        ['l','c','r'].forEach(bid => {
-          const a = bid==='l' ? 40 : bid==='r' ? -40 : 0;
-          const b = $('op-offset-'+bid); if(!b) return;
-          const on = _edCursorOffset && _edCursorOffsetAngle === a;
-          b.style.background = on ? 'var(--black)' : 'transparent';
-          b.style.color = on ? 'var(--white)' : 'var(--gray-700)';
-        });
-        _edbSyncOffsetBtn();
-        if(!_edCursorOffset) _edOffsetHide();
-      });
+    // ── Cursor offset — botón único con popover de orientación ──
+    const _opOffsetBtn = $('op-offset-btn');
+    const _opOffsetPop = $('op-offset-pop');
+    // Abrir/cerrar popover al pulsar el botón principal
+    _opOffsetBtn?.addEventListener('click', e => {
+      e.stopPropagation();
+      if(!_opOffsetPop) return;
+      const isOpen = _opOffsetPop.style.display === 'flex';
+      if(isOpen){ _opOffsetPop.style.display = 'none'; return; }
+      // Posicionar el popover encima del botón
+      const br = _opOffsetBtn.getBoundingClientRect();
+      const panel = $('edOptionsPanel');
+      const pr = panel ? panel.getBoundingClientRect() : {left:0,top:0};
+      _opOffsetPop.style.display = 'flex';
+      _opOffsetPop.style.left = (br.left - pr.left) + 'px';
+      _opOffsetPop.style.top  = (br.bottom - pr.top + 4) + 'px';
     });
+    // Botones del popover
+    [{id:'op-offset-pop-l', angle:40}, {id:'op-offset-pop-c', angle:0}, {id:'op-offset-pop-r', angle:-40}]
+      .forEach(({id, angle}) => {
+        $(id)?.addEventListener('click', e => {
+          e.stopPropagation();
+          if(_edCursorOffset && _edCursorOffsetAngle === angle){
+            _edCursorOffset = false;
+          } else {
+            _edCursorOffset = true;
+            _edCursorOffsetAngle = angle;
+          }
+          _opOffsetPop.style.display = 'none';
+          // Actualizar visual del botón principal
+          if(_opOffsetBtn){
+            _opOffsetBtn.style.background = _edCursorOffset ? 'var(--black)' : 'transparent';
+            _opOffsetBtn.style.color = _edCursorOffset ? 'var(--white)' : 'var(--gray-700)';
+          }
+          // Marcar el botón activo dentro del popover
+          ['op-offset-pop-l','op-offset-pop-c','op-offset-pop-r'].forEach(bid => {
+            const b = $(bid); if(!b) return;
+            const a = bid==='op-offset-pop-l' ? 40 : bid==='op-offset-pop-r' ? -40 : 0;
+            const on = _edCursorOffset && _edCursorOffsetAngle === a;
+            b.style.background = on ? 'var(--gray-200)' : 'transparent';
+          });
+          _edbSyncOffsetBtn();
+          if(!_edCursorOffset) _edOffsetHide();
+        });
+      });
+    // Cerrar popover al pulsar fuera
+    document.addEventListener('pointerdown', e => {
+      if(!_opOffsetPop || _opOffsetPop.style.display !== 'flex') return;
+      if(!_opOffsetPop.contains(e.target) && e.target !== _opOffsetBtn)
+        _opOffsetPop.style.display = 'none';
+    }, {capture:true});
 
     // ── Deshacer / Rehacer ──
     $('op-draw-undo')?.addEventListener('click', edDrawUndo);
@@ -6067,21 +6106,38 @@ function edInitDrawBar() {
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
-  // ── Cursor offset (T18) — tres modos de ángulo ──
-  ['l','c','r'].forEach(id => {
-    $('edb-offset-'+id)?.addEventListener('click', () => {
-      const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
-      if(_edCursorOffset && _edCursorOffsetAngle === angle){
-        // Ya activo con este ángulo → desactivar
-        _edCursorOffset = false;
-      } else {
-        _edCursorOffset = true;
-        _edCursorOffsetAngle = angle;
-      }
-      _edbSyncOffsetBtn();
-      if(!_edCursorOffset) _edOffsetHide();
-    });
+  // ── Cursor offset (T18) — botón único con popover reubicable ──
+  $('edb-offset')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const pop = $('edb-offset-pop'); if(!pop) return;
+    const isOpen = pop.style.display === 'flex';
+    if(isOpen){ pop.style.display = 'none'; return; }
+    pop.style.display = 'flex';
+    _edbPositionOffsetPop();
   });
+  // Botones del popover de la barra flotante
+  [{id:'edb-offset-pop-l', angle:40}, {id:'edb-offset-pop-c', angle:0}, {id:'edb-offset-pop-r', angle:-40}]
+    .forEach(({id, angle}) => {
+      $(id)?.addEventListener('click', e => {
+        e.stopPropagation();
+        if(_edCursorOffset && _edCursorOffsetAngle === angle){
+          _edCursorOffset = false;
+        } else {
+          _edCursorOffset = true;
+          _edCursorOffsetAngle = angle;
+        }
+        $('edb-offset-pop').style.display = 'none';
+        _edbSyncOffsetBtn();
+        if(!_edCursorOffset) _edOffsetHide();
+      });
+    });
+  // Cerrar al pulsar fuera
+  document.addEventListener('pointerdown', e => {
+    const pop = $('edb-offset-pop');
+    if(pop && pop.style.display === 'flex' &&
+       !pop.contains(e.target) && e.target.id !== 'edb-offset')
+      pop.style.display = 'none';
+  }, {capture: true});
 
   // ── OK: finaliza el modo dibujo ──
   $('edb-ok')?.addEventListener('click', () => {
@@ -6166,6 +6222,34 @@ function _edbBuildPalette() {
   });
 }
 
+function _edbPositionOffsetPop() {
+  const pop = $('edb-offset-pop'); if(!pop) return;
+  const bar = $('edDrawBar'); if(!bar) return;
+  const shell = document.getElementById('editorShell');
+  const sr = shell ? shell.getBoundingClientRect() : {left:0, top:0, width:window.innerWidth, height:window.innerHeight};
+  const br = bar.getBoundingClientRect();
+  const pw = pop.offsetWidth  || 120;
+  const ph = pop.offsetHeight || 52;
+  const isHoriz = bar.classList.contains('horiz');
+  let left, top;
+  if(isHoriz){
+    // Barra horizontal → popover debajo
+    left = br.left - sr.left + (br.width / 2) - pw / 2;
+    top  = br.bottom - sr.top + 6;
+  } else {
+    // Barra vertical → popover a la derecha
+    left = br.right - sr.left + 6;
+    top  = br.top - sr.top + (br.height / 2) - ph / 2;
+  }
+  // Ajustar para no salir del shell
+  const sw = shell ? shell.offsetWidth  : window.innerWidth;
+  const sh = shell ? shell.offsetHeight : window.innerHeight;
+  left = Math.max(4, Math.min(sw - pw - 4, left));
+  top  = Math.max(4, Math.min(sh - ph - 4, top));
+  pop.style.left = left + 'px';
+  pop.style.top  = top  + 'px';
+}
+
 function _edbPositionPalette() {
   const pop = $('edb-palette-pop');
   const bar = $('edDrawBar');
@@ -6212,32 +6296,34 @@ function _edbSyncTool() {
   $('edb-pen')?.classList.toggle('active', t === 'draw');
   $('edb-eraser')?.classList.toggle('active', t === 'eraser');
   $('edb-fill')?.classList.toggle('active', t === 'fill');
-  // Ocultar botones offset cuando se usa fill (no aplica)
+  // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
-  ['l','c','r'].forEach(id => {
-    const btn = $('edb-offset-'+id);
-    if(btn) btn.style.display = isFill ? 'none' : '';
-  });
+  const offsetBtn = $('edb-offset');
+  if(offsetBtn) offsetBtn.style.display = (isFill || !window._edIsTouch) ? 'none' : '';
+  if(isFill || !window._edIsTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
   _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();
 }
 function _edbSyncOffsetBtn(){
-  ['l','c','r'].forEach(id => {
-    const btn = $('edb-offset-'+id); if(!btn) return;
-    const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
-    const isActive = _edCursorOffset && _edCursorOffsetAngle === angle;
-    btn.classList.toggle('active', isActive);
-    btn.style.opacity = (_edCursorOffset && !isActive) ? '0.35' : (isActive ? '1' : '0.5');
+  // Botón único de la barra flotante
+  const edbBtn = $('edb-offset');
+  if(edbBtn){
+    edbBtn.classList.toggle('active', _edCursorOffset);
+    edbBtn.style.opacity = _edCursorOffset ? '1' : '0.5';
+  }
+  // Marcar el botón activo dentro del popover de la barra
+  [{id:'edb-offset-pop-l', a:40},{id:'edb-offset-pop-c', a:0},{id:'edb-offset-pop-r', a:-40}].forEach(({id,a}) => {
+    const b = $(id); if(!b) return;
+    const on = _edCursorOffset && _edCursorOffsetAngle === a;
+    b.style.background = on ? 'rgba(255,255,255,0.2)' : 'transparent';
   });
-  // Sincronizar también los tres botones del panel si están presentes
-  ['l','c','r'].forEach(id => {
-    const btn = $('op-offset-'+id); if(!btn) return;
-    const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
-    const on = _edCursorOffset && _edCursorOffsetAngle === angle;
-    btn.style.background = on ? 'var(--black)' : 'transparent';
-    btn.style.color = on ? 'var(--white)' : 'var(--gray-700)';
-  });
+  // Botón único del panel
+  const opBtn = $('op-offset-btn');
+  if(opBtn){
+    opBtn.style.background = _edCursorOffset ? 'var(--black)' : 'transparent';
+    opBtn.style.color = _edCursorOffset ? 'var(--white)' : 'var(--gray-700)';
+  }
 }
 
 function _edbSyncColor() {

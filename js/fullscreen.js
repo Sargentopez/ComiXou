@@ -25,6 +25,9 @@ const Fullscreen = (() => {
   function enter() {
     if (!supported()) return Promise.resolve();
     if (document.fullscreenElement || document.webkitFullscreenElement) return Promise.resolve();
+    // En PWA con display:fullscreen el sistema ya oculta la barra de estado.
+    // Llamar requestFullscreen() encima provoca una franja negra en Android.
+    if (inPWA()) return Promise.resolve();
     const el  = document.documentElement;
     const req = el.requestFullscreen || el.webkitRequestFullscreen;
     return req.call(el, { navigationUI: 'hide' })
