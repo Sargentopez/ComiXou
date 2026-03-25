@@ -4301,24 +4301,24 @@ function _edApplyCursorOffset(e){
   };
 }
 function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
-  // El ángulo ya es conocido — es _edCursorOffsetAngle.
-  // No hace falta calcularlo desde atan2.
-  // Guía: del centro del cursor al centro del cuadrado (punto de toque).
-  // Cuadrado rotado _edCursorOffsetAngle grados.
-  const ang = _edCursorOffsetAngle;  // grados, igual que el bloque
+  const ang = _edCursorOffsetAngle;
   const dotSize = 16;
-  const dotHalf = dotSize / 2;
   const cursorR = cursorSz / 2;
-  // Vector unitario del cursor al toque (en dirección del ángulo)
-  const rad = ang * Math.PI / 180;
-  const ux =  Math.sin(rad);   // componente X (positivo = derecha)
-  const uy =  Math.cos(rad);   // componente Y (positivo = abajo)
-  // Longitud de la guía: entre los bordes de cursor y cuadrado
-  const totalDist = Math.hypot(touchX - cursorX, touchY - cursorY);
-  const lineLen = Math.max(0, totalDist - cursorR - dotHalf);
-  // Origen de la guía: borde del cursor en dirección al toque
-  const lineStartX = cursorX + ux * cursorR;
-  const lineStartY = cursorY + uy * cursorR;
+
+  // La línea es un div vertical que parte del borde inferior del cursor
+  // y apunta hacia abajo. Luego se rota `ang` grados desde su extremo superior.
+  // Esto es exactamente lo mismo que el caso vertical, solo que rotado.
+  // Para ang=0 el comportamiento no cambia en absoluto.
+
+  // Longitud: desde el borde del cursor hasta el borde del cuadrado,
+  // medida a lo largo del eje del bloque (= distancia real entre centros - radios)
+  const totalDist = _ED_CURSOR_OFFSET_PX; // distancia fija cursor↔toque
+  const lineLen = Math.max(0, totalDist - cursorR - dotSize / 2);
+
+  // Origen de la línea: borde inferior del cursor (igual que vertical, siempre)
+  // El rotate se aplica desde transform-origin: top center sobre ese punto
+  const lineStartX = cursorX;
+  const lineStartY = cursorY + cursorR;
 
   let line = $('edOffsetLine');
   if(!line){
@@ -4326,7 +4326,6 @@ function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
     line.id = 'edOffsetLine';
     document.getElementById('editorShell')?.appendChild(line);
   }
-  // Div vertical de 2px ancho, rotado ang grados desde su extremo superior
   line.style.cssText = `position:fixed;pointer-events:none;z-index:998;
     left:${lineStartX}px; top:${lineStartY}px;
     width:2px; height:${lineLen}px;
