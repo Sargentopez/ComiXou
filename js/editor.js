@@ -4300,20 +4300,25 @@ function _edApplyCursorOffset(e){
     touches: null
   };
 }
-function _edOffsetShow(touchX, touchY, cursorX, cursorY, cursorSz){
+function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
+  // El ángulo ya es conocido — es _edCursorOffsetAngle.
+  // No hace falta calcularlo desde atan2.
+  // Guía: del centro del cursor al centro del cuadrado (punto de toque).
+  // Cuadrado rotado _edCursorOffsetAngle grados.
+  const ang = _edCursorOffsetAngle;  // grados, igual que el bloque
   const dotSize = 16;
-  // El cuadrado está en el punto de toque (dedo)
-  // El círculo (cursor) está desplazado en (cursorX, cursorY)
-  // La línea va desde el cuadrado (abajo) hasta el borde del círculo (arriba)
-  const dx = cursorX - touchX;
-  const dy = cursorY - touchY;
-  // Ángulo desde el cuadrado hacia el cursor
-  const angleDeg = Math.atan2(dx, dy) * 180 / Math.PI;
-  // Longitud: desde borde del cuadrado hasta borde del círculo
-  const lineLen = Math.max(0, Math.hypot(dx, dy) - cursorSz / 2 - dotSize / 2);
-  // Origen de la línea: borde superior del cuadrado (en dirección al cursor)
-  const lineStartX = touchX;
-  const lineStartY = touchY - dotSize / 2;
+  const dotHalf = dotSize / 2;
+  const cursorR = cursorSz / 2;
+  // Vector unitario del cursor al toque (en dirección del ángulo)
+  const rad = ang * Math.PI / 180;
+  const ux =  Math.sin(rad);   // componente X (positivo = derecha)
+  const uy =  Math.cos(rad);   // componente Y (positivo = abajo)
+  // Longitud de la guía: entre los bordes de cursor y cuadrado
+  const totalDist = Math.hypot(touchX - cursorX, touchY - cursorY);
+  const lineLen = Math.max(0, totalDist - cursorR - dotHalf);
+  // Origen de la guía: borde del cursor en dirección al toque
+  const lineStartX = cursorX + ux * cursorR;
+  const lineStartY = cursorY + uy * cursorR;
 
   let line = $('edOffsetLine');
   if(!line){
@@ -4321,12 +4326,13 @@ function _edOffsetShow(touchX, touchY, cursorX, cursorY, cursorSz){
     line.id = 'edOffsetLine';
     document.getElementById('editorShell')?.appendChild(line);
   }
+  // Div vertical de 2px ancho, rotado ang grados desde su extremo superior
   line.style.cssText = `position:fixed;pointer-events:none;z-index:998;
     left:${lineStartX}px; top:${lineStartY}px;
     width:2px; height:${lineLen}px;
     background:rgba(60,140,255,0.75);
     transform-origin: top center;
-    transform: translateX(-1px) rotate(${angleDeg}deg);`;
+    transform: translateX(-1px) rotate(${ang}deg);`;
 
   let dot = $('edTouchDot');
   if(!dot){
@@ -4340,7 +4346,7 @@ function _edOffsetShow(touchX, touchY, cursorX, cursorY, cursorSz){
     left:${touchX}px; top:${touchY}px;
     width:${dotSize}px; height:${dotSize}px;
     background:${dotColor};
-    transform:translate(-50%,-50%) rotate(${angleDeg}deg);
+    transform:translate(-50%,-50%) rotate(${ang}deg);
     border-radius:2px;
     box-shadow:0 0 0 1.5px rgba(255,255,255,0.7);`;
 }
