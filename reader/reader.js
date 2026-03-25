@@ -41,12 +41,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
+  const fromApp = params.get('from') === 'app';
+
   const _doClose = () => {
     if (history.length > 1) { history.back(); return; }
-    // Sin historial previo: volver al index de ComiXow
-    // Calcular la URL base subiendo un nivel desde reader/
-    const base = window.location.href.replace(/\/reader\/[^/]*$/, '/').replace(/\/reader\/?$/, '/');
-    if (base && base !== window.location.href) { window.location.href = base; return; }
+    // Sin historial previo: volver al index solo si se abrió desde dentro de ComiXow
+    if (fromApp) {
+      const base = window.location.href.replace(/\/reader\/.*$/, '/');
+      if (base) { window.location.href = base; return; }
+    }
+    // Acceso externo: intentar cerrar la pestaña
     window.close();
     setTimeout(() => {
       _readerToast('Cierra esta pestaña con el botón ✕ del navegador', 4000);

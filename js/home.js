@@ -280,7 +280,7 @@ function buildRow(comic, currentUser) {
     e.preventDefault();
     // Obras publicadas: usar el reproductor externo
     if (comic.supabaseId && comic.published) {
-      window.location = 'reader/?id=' + comic.supabaseId;
+      window.location = 'reader/?id=' + comic.supabaseId + '&from=app';
     } else {
       // Sin supabaseId: visor interno del SPA (obra local)
       Router.go('reader', { id: comic.id });
