@@ -2773,6 +2773,8 @@ function edOnStart(e){
   if(window._edActivePointers.size === 2){
     // Cancelar fill pendiente — era un pinch, no un toque simple
     if(window._edFillPending) window._edFillPending = null;
+    // Cancelar timer de draw/eraser pendiente — era un pinch
+    if(window._edDrawTouchTimer){ clearTimeout(window._edDrawTouchTimer); window._edDrawTouchTimer = null; }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
     if(edActiveTool==='multiselect' && edMultiSel.length){
       edMultiDragging=false; edMultiDragOffs=[];
@@ -2911,6 +2913,18 @@ function edOnStart(e){
   }
   if(['draw','eraser'].includes(edActiveTool)){
     if(tgt !== edCanvas) return;
+    // En táctil: retardo para detectar si viene segundo dedo (pinch/zoom)
+    if(e.pointerType === 'touch'){
+      const _eSaved = e;
+      clearTimeout(window._edDrawTouchTimer);
+      window._edDrawTouchTimer = setTimeout(() => {
+        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+        if(!['draw','eraser'].includes(edActiveTool)) return;
+        edStartPaint(_eSaved);
+      }, 120);
+      return;
+    }
+    // PC/ratón: inmediato
     edStartPaint(e);return;
   }
   if(edActiveTool==='shape'){
