@@ -32,6 +32,7 @@ let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
+let _edOffsetFirstMove = false;        // true: el primer move debe incluir el punto inicial
 const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
@@ -632,6 +633,11 @@ class DrawLayer extends BaseLayer {
     else { this._ctx.globalCompositeOperation='source-over'; this._ctx.fillStyle=color; }
     this._ctx.beginPath(); this._ctx.arc(x,y,size/2,0,Math.PI*2); this._ctx.fill();
     this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
+    this._lastX=x; this._lastY=y;
+  }
+  // Como beginStroke pero sin dibujar el punto inicial — para cursor offset
+  beginStrokeNoDot(nx, ny){
+    const {x,y} = this._wsCoords(nx, ny);
     this._lastX=x; this._lastY=y;
   }
   continueStroke(nx, ny, color, size, isEraser, opacity){
@@ -2420,7 +2426,6 @@ function edPinchEnd() {
   // Al soltar los dedos en modo draw, reactivar la herramienta de dibujo
   if(['draw','eraser'].includes(edActiveTool)){
     edPainting = false;
-    _edOffsetHide();
   }
 }
 
@@ -2778,11 +2783,8 @@ function edOnStart(e){
     // antes de que _edDrawApplyHistory lo revierta. edPinchStart se llama justo después.
     if(edPainting){
       edPainting = false;
-      _edOffsetHide();
       // Resetear _lastX/_lastY del DrawLayer para que el siguiente trazo
       // arranque limpio (evita el bug del "solo un punto" post-pinch).
-      // No llamar _edDrawApplyHistory — el trazo parcial se preserva en el
-      // snapshot que tomará edPinchStart.
       const _dlReset = edPages[edCurrentPage]?.layers.find(l => l.type==='draw');
       if(_dlReset){ _dlReset._lastX = 0; _dlReset._lastY = 0; }
     }
@@ -3694,7 +3696,7 @@ function edOnEnd(e){
     edPinchEnd();
     return;
   }
-  if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); _edOffsetHide(); }
+  if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); _edOffsetFirstMove = false; }
   // ── SHAPE: confirmar forma al soltar ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
     const minSize = 0.02;
@@ -4245,17 +4247,24 @@ function edStartPaint(e){
   if(_pp&&_pp.classList.contains('open')&&_pp.dataset.mode!=='draw'){
     _pp.classList.remove('open'); _pp.innerHTML='';
   }
-  // Pointer capture: el canvas recibe todos los eventos del puntero aunque salga de él.
-  // En Android elimina el retraso del sistema antes del primer evento de dibujo.
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
   }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
-  // Si cursor offset activo y es toque táctil, desplazar 1cm arriba
   const _eTmp = _edApplyCursorOffset(e);
-  const c = edCoords(_eTmp), er = edActiveTool==='eraser';
-  dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
-  edRedraw();
+  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  const er = edActiveTool==='eraser';
+  if(_edCursorOffset && isTouch){
+    // Solo fijar posición inicial sin dibujar — el primer move dibujará el punto + el trazo
+    const c = edCoords(_eTmp);
+    dl.beginStrokeNoDot(c.nx, c.ny);
+    _edOffsetFirstMove = true;
+  } else {
+    const c = edCoords(_eTmp);
+    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+    edRedraw();
+    _edOffsetFirstMove = false;
+  }
   edMoveBrush(e);
 }
 function edContinuePaint(e){
@@ -4264,7 +4273,13 @@ function edContinuePaint(e){
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
   const _eTmp = _edApplyCursorOffset(e);
   const c = edCoords(_eTmp), er = edActiveTool==='eraser';
-  dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+  if(_edOffsetFirstMove){
+    // Primer move con offset: dibujar el punto inicial que se omitió en pointerdown
+    _edOffsetFirstMove = false;
+    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+  } else {
+    dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+  }
   edRedraw();
   edMoveBrush(e);
 }
