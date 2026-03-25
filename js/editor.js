@@ -4300,17 +4300,20 @@ function _edApplyCursorOffset(e){
     touches: null
   };
 }
-function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
+function _edOffsetShow(touchX, touchY, cursorX, cursorY, cursorSz){
   const dotSize = 16;
-  // Origen: borde inferior del cursor (centrado en cursorX, cursorY)
-  const lineStartX = cursorX;
-  const lineStartY = cursorY + cursorSz / 2;
-  // Vector hacia el centro del cuadrado de toque
-  const dx = touchX - lineStartX;
-  const dy = touchY - lineStartY;
-  // Longitud: desde borde del cursor hasta borde del cuadrado
-  const lineLen = Math.max(0, Math.hypot(dx, dy) - dotSize / 2);
+  // El cuadrado está en el punto de toque (dedo)
+  // El círculo (cursor) está desplazado en (cursorX, cursorY)
+  // La línea va desde el cuadrado (abajo) hasta el borde del círculo (arriba)
+  const dx = cursorX - touchX;
+  const dy = cursorY - touchY;
+  // Ángulo desde el cuadrado hacia el cursor
   const angleDeg = Math.atan2(dx, dy) * 180 / Math.PI;
+  // Longitud: desde borde del cuadrado hasta borde del círculo
+  const lineLen = Math.max(0, Math.hypot(dx, dy) - cursorSz / 2 - dotSize / 2);
+  // Origen de la línea: borde superior del cuadrado (en dirección al cursor)
+  const lineStartX = touchX;
+  const lineStartY = touchY - dotSize / 2;
 
   let line = $('edOffsetLine');
   if(!line){
@@ -4390,7 +4393,7 @@ function edMoveBrush(e){
     const isEr = edActiveTool === 'eraser';
     cur.style.background = isEr ? 'rgba(255,255,255,0.5)' : edDrawColor + '33';
     cur.style.borderColor = isEr ? 'rgba(150,150,150,0.6)' : edDrawColor;
-    _edOffsetShow(cx, cy, src.clientX, src.clientY, sz);
+    _edOffsetShow(src.clientX, src.clientY, cx, cy, sz);
   } else {
     cur.style.display = 'block';
     cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
