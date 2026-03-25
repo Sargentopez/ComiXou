@@ -4393,7 +4393,7 @@ function edMoveBrush(e){
     const isEr = edActiveTool === 'eraser';
     cur.style.background = isEr ? 'rgba(255,255,255,0.5)' : edDrawColor + '33';
     cur.style.borderColor = isEr ? 'rgba(150,150,150,0.6)' : edDrawColor;
-    _edOffsetShow(src.clientX, src.clientY, cx, cy, sz);
+    _edOffsetShow(cx, cy, src.clientX, src.clientY, sz);
   } else {
     cur.style.display = 'block';
     cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
