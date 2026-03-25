@@ -43,9 +43,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const _doClose = () => {
     if (history.length > 1) { history.back(); return; }
-    // Intentar cerrar la pestaña
+    // Sin historial previo: volver al index de ComiXow
+    // Calcular la URL base subiendo un nivel desde reader/
+    const base = window.location.href.replace(/\/reader\/[^/]*$/, '/').replace(/\/reader\/?$/, '/');
+    if (base && base !== window.location.href) { window.location.href = base; return; }
     window.close();
-    // Si seguimos aquí, el navegador bloqueó el cierre — mostrar instrucción
     setTimeout(() => {
       _readerToast('Cierra esta pestaña con el botón ✕ del navegador', 4000);
     }, 300);
@@ -1125,8 +1127,7 @@ function _setupControls() {
     if (['ArrowLeft','ArrowUp'].includes(e.code))                    { e.preventDefault(); goBack(); }
     if (e.key === 'Escape') {
       if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
-      else if (history.length > 1) history.back();
-      else window.close();
+      else _doClose();
     }
   };
   document.addEventListener('keydown', RS.keyHandler);
