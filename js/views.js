@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v11.17</footer>
+    <footer class="app-version">v11.19</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -322,6 +322,8 @@ Router.register('editor', {
         <button id="edb-eyedrop" class="edb-tool" title="Cuentagotas">💧</button>
         <button id="edb-pen-size"    class="edb-tool edb-sizebtn-fix" title="Grosor lápiz" style="font-size:.7rem;font-weight:900">Ø</button>
         <button id="edb-eraser-size" class="edb-tool edb-sizebtn-fix" title="Grosor goma"   style="font-size:.7rem;font-weight:900;display:none">Ø</button>
+        <div class="edb-sep"></div>
+        <button id="edb-offset" class="edb-tool" title="Desplazar cursor 1cm arriba del toque (táctil)" style="font-size:.62rem;font-weight:900;line-height:1.1;display:flex;flex-direction:column;align-items:center;gap:0;padding:3px 5px">↑<span style="font-size:.55rem">Cursor</span></button>
         <div class="edb-sep"></div>
         <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
         <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>

@@ -886,6 +886,24 @@ body.editor-page #appView {
   transform: translate(-50%,-50%); display: none;
 }
 
+/* Cursor offset (T18) */
+#edb-offset {
+  width: auto !important;
+  height: 30px;
+  padding: 3px 6px !important;
+  font-size: .62rem !important;
+  line-height: 1.1;
+  gap: 0;
+}
+#edb-offset.active {
+  background: rgba(60,140,255,.25) !important;
+  color: #7ec8ff !important;
+  box-shadow: 0 0 0 1.5px rgba(60,140,255,.5);
+}
+#edOffsetLine, #edTouchDot {
+  position: fixed; pointer-events: none; z-index: 998; display: block;
+}
+
 /* ══════════════════════════════════════════
    ICONOS FLOTANTES SOBRE OBJETO SELECCIONADO
    ══════════════════════════════════════════ */

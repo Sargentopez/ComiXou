@@ -29,6 +29,9 @@ let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
+// Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
+let _edCursorOffset = false;           // estado del botón (activo/inactivo)
+const _ED_CURSOR_OFFSET_PX = 38;       // 1 cm en px CSS (96/2.54 ≈ 38)
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
@@ -2415,6 +2418,7 @@ function edPinchEnd() {
   // Al soltar los dedos en modo draw, reactivar la herramienta de dibujo
   if(['draw','eraser'].includes(edActiveTool)){
     edPainting = false;
+    _edOffsetHide();
   }
 }
 
@@ -2772,6 +2776,7 @@ function edOnStart(e){
     // antes de que _edDrawApplyHistory lo revierta. edPinchStart se llama justo después.
     if(edPainting){
       edPainting = false;
+      _edOffsetHide();
       // Resetear _lastX/_lastY del DrawLayer para que el siguiente trazo
       // arranque limpio (evita el bug del "solo un punto" post-pinch).
       // No llamar _edDrawApplyHistory — el trazo parcial se preserva en el
@@ -3687,7 +3692,7 @@ function edOnEnd(e){
     edPinchEnd();
     return;
   }
-  if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); }
+  if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); _edOffsetHide(); }
   // ── SHAPE: confirmar forma al soltar ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
     const minSize = 0.02;
@@ -4244,7 +4249,9 @@ function edStartPaint(e){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
   }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
-  const c = edCoords(e), er = edActiveTool==='eraser';
+  // Si cursor offset activo y es toque táctil, desplazar 1cm arriba
+  const _eTmp = _edApplyCursorOffset(e);
+  const c = edCoords(_eTmp), er = edActiveTool==='eraser';
   dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
   edRedraw();
   edMoveBrush(e);
@@ -4253,11 +4260,68 @@ function edContinuePaint(e){
   if(!edPainting) return;
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
-  const c = edCoords(e), er = edActiveTool==='eraser';
+  const _eTmp = _edApplyCursorOffset(e);
+  const c = edCoords(_eTmp), er = edActiveTool==='eraser';
   dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
   edRedraw();
   edMoveBrush(e);
 }
+/* ── Helpers visuales del cursor offset ── */
+// Devuelve un evento sintético con clientY desplazado si offset activo y táctil
+function _edApplyCursorOffset(e){
+  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  if(!_edCursorOffset || !isTouch) return e;
+  const src = e.touches ? e.touches[0] : e;
+  // Crear objeto ligero que imita el evento con clientY reducido
+  return {
+    clientX: src.clientX,
+    clientY: src.clientY - _ED_CURSOR_OFFSET_PX,
+    pointerType: e.pointerType,
+    pointerId: e.pointerId,
+    touches: null   // forzar rama no-touches en edCoords
+  };
+}
+function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
+  // Línea azul vertical entre cursor y punto de toque
+  let line = $('edOffsetLine');
+  if(!line){
+    line = document.createElement('div');
+    line.id = 'edOffsetLine';
+    document.getElementById('editorShell')?.appendChild(line);
+  }
+  const lineH = touchY - cursorY;  // siempre positivo (touchY > cursorY)
+  line.style.cssText = `position:fixed;pointer-events:none;z-index:998;
+    left:${cursorX}px; top:${cursorY + cursorSz/2}px;
+    width:2px; height:${Math.max(0, lineH - cursorSz/2)}px;
+    background:rgba(60,140,255,0.75);
+    transform:translateX(-1px);`;
+  // Cuadrado del color activo en el punto de toque real
+  let dot = $('edTouchDot');
+  if(!dot){
+    dot = document.createElement('div');
+    dot.id = 'edTouchDot';
+    document.getElementById('editorShell')?.appendChild(dot);
+  }
+  const isEr = edActiveTool === 'eraser';
+  const dotColor = isEr ? '#888' : edDrawColor;
+  const dotSize = 16;
+  dot.style.cssText = `position:fixed;pointer-events:none;z-index:998;
+    left:${touchX}px; top:${touchY}px;
+    width:${dotSize}px; height:${dotSize}px;
+    background:${dotColor};
+    transform:translate(-50%,-50%);
+    border-radius:2px;
+    box-shadow:0 0 0 1.5px rgba(255,255,255,0.7);`;
+}
+function _edOffsetHide(){
+  const line = $('edOffsetLine'); if(line) line.style.display='none';
+  const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
+}
+function _edOffsetShowReset(){
+  const line = $('edOffsetLine'); if(line) line.style.display='';
+  const dot  = $('edTouchDot');  if(dot)  dot.style.display='';
+}
+
 function edSaveDrawData(){
   edPainting = false;
   _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
@@ -4273,14 +4337,36 @@ function edClearDraw(){
   edRedraw(); edToast('Dibujos borrados');
 }
 function edMoveBrush(e){
-  const src=e.touches?e.touches[0]:e,cur=$('edBrushCursor');if(!cur)return;
+  const src = e.touches ? e.touches[0] : e;
+  const cur = $('edBrushCursor');
+  if(!cur) return;
   if(edActiveTool==='fill'){
-    cur.style.display='none'; return;  // fill no muestra cursor circular
+    cur.style.display='none';
+    _edOffsetHide();
+    return;
   }
-  const sz=(edActiveTool==='eraser'?edEraserSize:edDrawSize)*2;
-  cur.style.display='block';
-  cur.style.left=src.clientX+'px';cur.style.top=src.clientY+'px';
-  cur.style.width=sz+'px';cur.style.height=sz+'px';
+  const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
+  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  if(_edCursorOffset && isTouch){
+    // Cursor (círculo) sube 1 cm; cuadrado del dedo en posición real
+    const cx = src.clientX;
+    const cy = src.clientY - _ED_CURSOR_OFFSET_PX;
+    cur.style.display = 'block';
+    cur.style.left = cx + 'px';
+    cur.style.top  = cy + 'px';
+    cur.style.width = sz + 'px'; cur.style.height = sz + 'px';
+    // Tinte del cursor con el color activo
+    const isEr = edActiveTool === 'eraser';
+    cur.style.background = isEr ? 'rgba(255,255,255,0.5)' : edDrawColor + '33';
+    cur.style.borderColor = isEr ? 'rgba(150,150,150,0.6)' : edDrawColor;
+    _edOffsetShow(cx, cy, src.clientX, src.clientY, sz);
+  } else {
+    cur.style.display = 'block';
+    cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
+    cur.style.width = sz + 'px'; cur.style.height = sz + 'px';
+    cur.style.background = ''; cur.style.borderColor = '';
+    _edOffsetHide();
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -4442,7 +4528,7 @@ function _edActivateShapeTool() {
     <button id="op-shape-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
-    <button id="op-shape-minimize" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
+
     <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':'Sin objeto'}</span>
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -4616,7 +4702,7 @@ function _edActivateShapeTool() {
   });
 
   // ── Duplicar ──
-  $('op-shape-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
+
   $('op-shape-dup')?.addEventListener('click',()=>{
     const s=_curShape(); if(!s) return;
     const copy=new ShapeLayer(s.shape, s.x+0.03, s.y+0.03, s.width, s.height);
@@ -4718,7 +4804,7 @@ function _edActivateLineTool(isNew) {
     <button id="op-line-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
-    <button id="op-line-minimize" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
+
     <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
@@ -4905,7 +4991,7 @@ function _edActivateLineTool(isNew) {
   });
 
   // ── Duplicar ──
-  $('op-line-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
+
   $('op-line-dup')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l||l.points.length<2) return;
     const copy=new LineLayer();
@@ -5202,8 +5288,6 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
-    <button id="op-draw-minimize"
-      style="flex-shrink:0;border:none;border-radius:6px;padding:3px 10px;font-family:inherit;font-size:1.15rem;font-weight:900;background:transparent;cursor:pointer;color:#e63030" title="Minimizar">▼</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
@@ -5322,7 +5406,7 @@ function edRenderOptionsPanel(mode){
     _edDrawUpdateUndoRedoBtns();
 
     // ── Minimizar (desde el panel draw) ──
-    $('op-draw-minimize')?.addEventListener('click', ()=>{ $('edMinimizeBtn')?.click(); });
+
 
     // ── OK: congelar ──
     $('op-draw-ok')?.addEventListener('click',()=>{
@@ -5914,6 +5998,13 @@ function edInitDrawBar() {
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
+  // ── Cursor offset (T18) ──
+  $('edb-offset')?.addEventListener('click', () => {
+    _edCursorOffset = !_edCursorOffset;
+    _edbSyncOffsetBtn();
+    if(!_edCursorOffset) _edOffsetHide();
+  });
+
   // ── OK: finaliza el modo dibujo ──
   $('edb-ok')?.addEventListener('click', () => {
     const panel = $('edOptionsPanel');
@@ -6043,8 +6134,17 @@ function _edbSyncTool() {
   $('edb-pen')?.classList.toggle('active', t === 'draw');
   $('edb-eraser')?.classList.toggle('active', t === 'eraser');
   $('edb-fill')?.classList.toggle('active', t === 'fill');
+  // Ocultar botón offset cuando se usa fill (no aplica)
+  const offsetBtn = $('edb-offset');
+  if(offsetBtn) offsetBtn.style.display = (t === 'fill') ? 'none' : '';
+  _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();
+}
+function _edbSyncOffsetBtn(){
+  const btn = $('edb-offset'); if(!btn) return;
+  btn.classList.toggle('active', _edCursorOffset);
+  btn.style.opacity = _edCursorOffset ? '1' : '0.5';
 }
 
 function _edbSyncColor() {
@@ -6152,12 +6252,15 @@ function edDrawBarShow() {
   }
   bar.style.left = _edbX + 'px';
   bar.style.top  = _edbY + 'px';
+  // Default cursor offset: activado en táctil, desactivado en PC
+  _edCursorOffset = !!(window._edIsTouch);
   _edbSyncTool();
 }
 
 function edDrawBarHide() {
   $('edDrawBar')?.classList.remove('visible');
   _edbClosePalette();
+  _edOffsetHide();
 }
 
 /* ══════════════════════════════════════════
