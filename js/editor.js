@@ -4301,24 +4301,30 @@ function _edApplyCursorOffset(e){
   };
 }
 function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
+  const dotSize = 16;
+  // Origen: borde inferior del cursor (centrado en cursorX, cursorY)
+  const lineStartX = cursorX;
+  const lineStartY = cursorY + cursorSz / 2;
+  // Vector hacia el centro del cuadrado de toque
+  const dx = touchX - lineStartX;
+  const dy = touchY - lineStartY;
+  // Longitud: desde borde del cursor hasta borde del cuadrado
+  const lineLen = Math.max(0, Math.hypot(dx, dy) - dotSize / 2);
+  const angleDeg = Math.atan2(dx, dy) * 180 / Math.PI;
+
   let line = $('edOffsetLine');
   if(!line){
     line = document.createElement('div');
     line.id = 'edOffsetLine';
     document.getElementById('editorShell')?.appendChild(line);
   }
-  // Longitud y ángulo de la línea entre cursor y punto de toque
-  const dx = touchX - cursorX;
-  const dy = touchY - cursorY;
-  const lineLen = Math.max(0, Math.hypot(dx, dy) - cursorSz / 2);
-  const angleDeg = Math.atan2(dx, dy) * 180 / Math.PI; // ángulo desde abajo
   line.style.cssText = `position:fixed;pointer-events:none;z-index:998;
-    left:${cursorX}px; top:${cursorY + cursorSz/2}px;
+    left:${lineStartX}px; top:${lineStartY}px;
     width:2px; height:${lineLen}px;
     background:rgba(60,140,255,0.75);
     transform-origin: top center;
     transform: translateX(-1px) rotate(${angleDeg}deg);`;
-  // Cuadrado del color activo en el punto de toque real
+
   let dot = $('edTouchDot');
   if(!dot){
     dot = document.createElement('div');
@@ -4327,12 +4333,11 @@ function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
   }
   const isEr = edActiveTool === 'eraser';
   const dotColor = isEr ? '#888' : edDrawColor;
-  const dotSize = 16;
   dot.style.cssText = `position:fixed;pointer-events:none;z-index:998;
     left:${touchX}px; top:${touchY}px;
     width:${dotSize}px; height:${dotSize}px;
     background:${dotColor};
-    transform:translate(-50%,-50%);
+    transform:translate(-50%,-50%) rotate(${angleDeg}deg);
     border-radius:2px;
     box-shadow:0 0 0 1.5px rgba(255,255,255,0.7);`;
 }
@@ -5304,9 +5309,9 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
     ${!isFill ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-offset-l" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado izquierda">↖Cursor</button>
+    <button id="op-offset-l" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado izquierda">↗Cursor</button>
     <button id="op-offset-c" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===0?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===0?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — recto">↑Cursor</button>
-    <button id="op-offset-r" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado derecha">↗Cursor</button>` : ''}
+    <button id="op-offset-r" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado derecha">↖Cursor</button>` : ''}
 
   </div>
   <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
@@ -6644,8 +6649,6 @@ function edInitShapeBar() {
     _esbShowSlider('size', 0, 20, sz,
       v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.lineWidth=v; edRedraw(); _edShapeBarSync&&_edShapeBarSync();} },
       v=>{
-        const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-        _edDbgLog(`esb-size onChange: idx=${edSelectedIdx} type=${l?.type||'?'} lw=${l?.lineWidth??'?'}`);
         _edShapePushHistory();
       }
     );
@@ -6883,11 +6886,6 @@ function edSaveProject(){
           edCurrentPage=_pi;
           edOrientation=p.orientation||_savedOrient;
           const layers=p.layers.map(edSerLayer).filter(Boolean);
-          // DIAGNÓSTICO TEMPORAL
-          const _dbgLines = layers
-            .filter(l=>l.type==='shape'||l.type==='line'||l.type==='stroke')
-            .map((l,i)=>`hoja${_pi}[${i}] ${l.type}: color=${l.color||'?'} lw=${l.lineWidth??'?'}`);
-          if(_dbgLines.length) _edDbgLog('edSaveProject:\n' + _dbgLines.join('\n'));
           return {layers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient};
         });
         edOrientation=_savedOrient; edCurrentPage=_savedPage;
@@ -7733,36 +7731,6 @@ function edSaveProjectModal(){
 /* ══════════════════════════════════════════
    TOAST
    ══════════════════════════════════════════ */
-function _edDbgLog(text){
-  let panel = document.getElementById('_edDbgPanel');
-  if(!panel){
-    panel = document.createElement('div');
-    panel.id = '_edDbgPanel';
-    panel.style.cssText = 'position:fixed;top:50px;left:6px;right:6px;z-index:99999;' +
-      'background:#0a0a1a;border:2px solid #3f6;border-radius:10px;' +
-      'padding:8px;display:flex;flex-direction:column;gap:6px;max-height:70vh;';
-    panel.innerHTML =
-      '<div style="display:flex;align-items:center;gap:6px">' +
-        '<b style="color:#7effb2;font-family:monospace;font-size:12px;flex:1">🔍 DIAGNÓSTICO</b>' +
-        '<button id="_edDbgCopy" style="background:#1a4;color:#fff;border:none;border-radius:6px;' +
-          'padding:4px 10px;font-size:11px;font-weight:900;cursor:pointer">Copiar</button>' +
-        '<button id="_edDbgClose" style="background:#a22;color:#fff;border:none;border-radius:6px;' +
-          'padding:4px 10px;font-size:11px;font-weight:900;cursor:pointer">✕</button>' +
-      '</div>' +
-      '<textarea id="_edDbgTxt" readonly style="flex:1;min-height:200px;max-height:55vh;' +
-        'background:#000;color:#7effb2;border:1px solid #3f6;border-radius:6px;' +
-        'font-family:monospace;font-size:11px;padding:6px;resize:vertical;' +
-        'white-space:pre;overflow:auto;word-break:break-all"></textarea>';
-    document.body.appendChild(panel);
-    document.getElementById('_edDbgClose')?.addEventListener('click', () => panel.remove());
-    document.getElementById('_edDbgCopy')?.addEventListener('click', () => {
-      const ta = document.getElementById('_edDbgTxt');
-      if(ta){ ta.select(); navigator.clipboard?.writeText(ta.value).catch(()=>{}); }
-    });
-  }
-  const ta = document.getElementById('_edDbgTxt');
-  if(ta) ta.value += (ta.value ? '\n' : '') + text;
-}
 
 function edToast(msg,ms=2000){
   const t=$('edToast');if(!t)return;

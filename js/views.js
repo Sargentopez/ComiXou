@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v11.30</footer>
+    <footer class="app-version">v11.33</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -323,9 +323,9 @@ Router.register('editor', {
         <button id="edb-pen-size"    class="edb-tool edb-sizebtn-fix" title="Grosor lápiz" style="font-size:.7rem;font-weight:900">Ø</button>
         <button id="edb-eraser-size" class="edb-tool edb-sizebtn-fix" title="Grosor goma"   style="font-size:.7rem;font-weight:900;display:none">Ø</button>
         <div class="edb-sep"></div>
-        <button id="edb-offset-l" class="edb-tool" title="Cursor desplazado — inclinado izquierda" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↖<br><span style="font-size:.5rem">Cursor</span></button>
+        <button id="edb-offset-l" class="edb-tool" title="Cursor desplazado — inclinado izquierda" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↗<br><span style="font-size:.5rem">Cursor</span></button>
         <button id="edb-offset-c" class="edb-tool" title="Cursor desplazado — recto" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↑<br><span style="font-size:.5rem">Cursor</span></button>
-        <button id="edb-offset-r" class="edb-tool" title="Cursor desplazado — inclinado derecha" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↗<br><span style="font-size:.5rem">Cursor</span></button>
+        <button id="edb-offset-r" class="edb-tool" title="Cursor desplazado — inclinado derecha" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↖<br><span style="font-size:.5rem">Cursor</span></button>
         <div class="edb-sep"></div>
         <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
         <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>

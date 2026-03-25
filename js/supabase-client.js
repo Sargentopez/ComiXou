@@ -79,12 +79,6 @@ const SupabaseClient = (() => {
       // Capas del editor: image, draw, stroke, bubble, text — formato edSerLayer
       const edPage = edPages[i];
       if (edPage && edPage.layers && edPage.layers.length > 0) {
-        // DIAGNÓSTICO TEMPORAL
-        const _dbgVec = edPage.layers.filter(l=>l.type==='shape'||l.type==='line'||l.type==='stroke');
-        if(_dbgVec.length && typeof _edDbgLog === 'function'){
-          const _lines = _dbgVec.map((l,j)=>`hoja${i}[${j}] ${l.type}: lw=${l.lineWidth??'?'} color=${l.color||'?'}`).join('\n');
-          _edDbgLog('_uploadPanels (Supabase):\n' + _lines);
-        }
         await _upsert('panel_layers', edPage.layers.map((l, j) => ({
           panel_id:    panelId,
           layer_order: j,
