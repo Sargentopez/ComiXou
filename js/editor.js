@@ -1147,7 +1147,7 @@ function _edLayersSnapshot(){
     if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl() };
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-      color:l.color||'#000000', lineWidth:l.lineWidth||3 };
+      color:l.color||'#000000', lineWidth:l.lineWidth??3 };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
@@ -1220,7 +1220,7 @@ function edApplyHistory(snapshot){
     }
     else if(o.type === 'shape') {
       l = new ShapeLayer(o.shape||'rect', o.x||0.5, o.y||0.5, o.width||0.3, o.height||0.2);
-      l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; l.lineWidth=o.lineWidth||3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
+      l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; l.lineWidth=o.lineWidth??3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
       if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       return l;
@@ -1228,7 +1228,7 @@ function edApplyHistory(snapshot){
     else if(o.type === 'line') {
       l = new LineLayer();
       l.points=o.points||[]; l.closed=o.closed||false;
-      l.color=o.color||'#000'; l.fillColor=o.fillColor||'#ffffff'; l.lineWidth=o.lineWidth||3; l.opacity=o.opacity??1;
+      l.color=o.color||'#000'; l.fillColor=o.fillColor||'#ffffff'; l.lineWidth=o.lineWidth??3; l.opacity=o.opacity??1;
       l.rotation=o.rotation||0;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
@@ -6643,7 +6643,11 @@ function edInitShapeBar() {
     const sz=la?.lineWidth??3;
     _esbShowSlider('size', 0, 20, sz,
       v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.lineWidth=v; edRedraw(); _edShapeBarSync&&_edShapeBarSync();} },
-      v=>{ _edShapePushHistory(); }
+      v=>{
+        const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+        _edDbgLog(`esb-size onChange: idx=${edSelectedIdx} type=${l?.type||'?'} lw=${l?.lineWidth??'?'}`);
+        _edShapePushHistory();
+      }
     );
   });
 
@@ -7023,7 +7027,7 @@ function edSerLayer(l){
   if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
   if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth||3};
+    color:l.color||'#000000', lineWidth:l.lineWidth??3};
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -7103,13 +7107,13 @@ function edDeserLayer(d, pageOrientation){
     const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', d.x||0.5, d.y||0.5, d.width||0.1, d.height||0.1, _pw, _ph);
     if(d.rotation) sl.rotation = d.rotation;
     if(d.opacity !== undefined) sl.opacity = d.opacity;
-    if(d.color)     sl.color     = d.color;
-    if(d.lineWidth) sl.lineWidth = d.lineWidth;
+    if(d.color)                  sl.color     = d.color;
+    if(d.lineWidth !== undefined) sl.lineWidth = d.lineWidth;
     return sl;
   }
   if(d.type==='shape'){
     const l=new ShapeLayer(d.shape||'rect',d.x||0.5,d.y||0.5,d.width||0.3,d.height||0.2);
-    l.color=d.color||'#000'; l.fillColor=d.fillColor||'none'; l.lineWidth=d.lineWidth||3; l.rotation=d.rotation||0; l.opacity=d.opacity??1;
+    l.color=d.color||'#000'; l.fillColor=d.fillColor||'none'; l.lineWidth=d.lineWidth??3; l.rotation=d.rotation||0; l.opacity=d.opacity??1;
     if(d.cornerRadius) l.cornerRadius=d.cornerRadius;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     return l;
@@ -7117,7 +7121,7 @@ function edDeserLayer(d, pageOrientation){
   if(d.type==='line'){
     const l=new LineLayer();
     l.points=d.points||[]; l.closed=d.closed||false;
-    l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth||3; l.opacity=d.opacity??1;
+    l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
