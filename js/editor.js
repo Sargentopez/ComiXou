@@ -4290,10 +4290,12 @@ function _edApplyCursorOffset(e){
   if(!_edCursorOffset || !isTouch) return e;
   const src = e.touches ? e.touches[0] : e;
   const rad = _edCursorOffsetAngle * Math.PI / 180;
-  const dx  = _ED_CURSOR_OFFSET_PX * Math.sin(rad);   // desplazamiento horizontal por ángulo
-  const dy  = _ED_CURSOR_OFFSET_PX * Math.cos(rad);   // desplazamiento vertical (siempre arriba)
+  // CSS rotate(ang) sobre punto (0,-offset): X_resultado = +offset*sin(ang), Y_resultado = -offset*cos(ang)
+  // Así que el cursor está en (touchX + offset*sin(ang), touchY - offset*cos(ang))
+  const dx = _ED_CURSOR_OFFSET_PX * Math.sin(rad);
+  const dy = _ED_CURSOR_OFFSET_PX * Math.cos(rad);
   return {
-    clientX: src.clientX - dx,
+    clientX: src.clientX + dx,
     clientY: src.clientY - dy,
     pointerType: e.pointerType,
     pointerId: e.pointerId,
