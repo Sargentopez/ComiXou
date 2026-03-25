@@ -5496,12 +5496,15 @@ function edRenderOptionsPanel(mode){
       _opOffsetPop.style.left = (br.left - pr.left) + 'px';
       _opOffsetPop.style.top  = (br.bottom - pr.top + 4) + 'px';
     });
+    // El popover bloquea pointerdown/touchstart para que no lleguen al cierre exterior
+    ['pointerdown','touchstart'].forEach(ev =>
+      $('op-offset-pop')?.addEventListener(ev, e => e.stopPropagation(), { passive: true })
+    );
     // Botones del popover
     [{id:'op-offset-pop-l', angle:40}, {id:'op-offset-pop-c', angle:0}, {id:'op-offset-pop-r', angle:-40}]
       .forEach(({id, angle}) => {
-        $(id)?.addEventListener('pointerup', e => {
+        $(id)?.addEventListener('click', e => {
           e.stopPropagation();
-          e.preventDefault();
           if(_edCursorOffset && _edCursorOffsetAngle === angle){
             _edCursorOffset = false;
           } else {
@@ -5522,12 +5525,12 @@ function edRenderOptionsPanel(mode){
           if(!_edCursorOffset) _edOffsetHide();
         });
       });
-    // Cerrar popover al pulsar fuera — pointerup para no adelantarse a los botones
-    document.addEventListener('pointerup', e => {
+    // Cerrar al tocar fuera — passive sin capture, igual que edb-size-pop
+    document.addEventListener('pointerdown', e => {
       if(!_opOffsetPop || _opOffsetPop.style.display !== 'flex') return;
       if(!_opOffsetPop.contains(e.target) && e.target !== _opOffsetBtn)
         _opOffsetPop.style.display = 'none';
-    }, {capture:true});
+    }, { passive: true });
 
     // ── Deshacer / Rehacer ──
     $('op-draw-undo')?.addEventListener('click', edDrawUndo);
@@ -6127,33 +6130,51 @@ function edInitDrawBar() {
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
-  // ── Cursor offset (T18) — botón único con popover reubicable ──
-  $('edb-offset')?.addEventListener('click', e => {
-    e.stopPropagation();
-    const pop = $('edb-offset-pop'); if(!pop) return;
+  // ── Cursor offset (T18) — botón único con popover ──
+  function _edbOpenOffsetPop() {
+    const pop = $('edb-offset-pop');
+    if(!pop) return;
     const isOpen = pop.style.display === 'flex';
-    if(isOpen){
-      // Popover abierto → cerrarlo
-      pop.style.display = 'none';
-      return;
-    }
+    if(isOpen){ pop.style.display = 'none'; return; }
+    // Si offset activo → desactivar directamente sin abrir el popover
     if(_edCursorOffset){
-      // Offset activo y popover cerrado → desactivar directamente
       _edCursorOffset = false;
       _edbSyncOffsetBtn();
       _edOffsetHide();
       return;
     }
-    // Offset inactivo → abrir popover para elegir orientación
+    // Posicionar igual que edb-size-pop: al lado de la barra con más espacio
     pop.style.display = 'flex';
-    _edbPositionOffsetPop();
-  });
-  // Botones del popover de la barra flotante
+    pop.style.left = '-9999px'; pop.style.top = '-9999px';
+    const bar = $('edDrawBar');
+    const br  = bar ? bar.getBoundingClientRect() : {left:0, right:0, top:0, bottom:0, width:0, height:0};
+    const pw  = pop.offsetWidth  || 130;
+    const ph  = pop.offsetHeight || 52;
+    const W   = window.innerWidth;
+    const H   = window.innerHeight;
+    const GAP = 8;
+    const spaceRight = W - br.right - GAP;
+    const spaceLeft  = br.left - GAP;
+    let left;
+    if(spaceRight >= pw || spaceRight >= spaceLeft){
+      left = br.right + GAP;
+    } else {
+      left = br.left - pw - GAP;
+    }
+    let top = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
+    left = Math.max(GAP, Math.min(W - pw - GAP, left));
+    pop.style.left = left + 'px';
+    pop.style.top  = top  + 'px';
+  }
+  $('edb-offset')?.addEventListener('click', e => { e.stopPropagation(); _edbOpenOffsetPop(); });
+  // Los botones del popover bloquean pointerdown/touchstart igual que edb-size-pop
+  ['pointerdown','touchstart'].forEach(ev =>
+    $('edb-offset-pop')?.addEventListener(ev, e => e.stopPropagation(), { passive: true })
+  );
   [{id:'edb-offset-pop-l', angle:40}, {id:'edb-offset-pop-c', angle:0}, {id:'edb-offset-pop-r', angle:-40}]
     .forEach(({id, angle}) => {
-      $(id)?.addEventListener('pointerup', e => {
+      $(id)?.addEventListener('click', e => {
         e.stopPropagation();
-        e.preventDefault();
         if(_edCursorOffset && _edCursorOffsetAngle === angle){
           _edCursorOffset = false;
         } else {
@@ -6165,13 +6186,14 @@ function edInitDrawBar() {
         if(!_edCursorOffset) _edOffsetHide();
       });
     });
-  // Cerrar al pulsar fuera — usar pointerup para no adelantarse a los botones del popover
-  document.addEventListener('pointerup', e => {
+  // Cerrar al tocar fuera — passive:true sin capture, igual que edb-size-pop
+  document.addEventListener('pointerdown', e => {
     const pop = $('edb-offset-pop');
-    if(!pop || pop.style.display !== 'flex') return;
-    if(!pop.contains(e.target) && e.target.id !== 'edb-offset')
+    if(pop && pop.style.display === 'flex' &&
+       !pop.contains(e.target) && e.target.id !== 'edb-offset'){
       pop.style.display = 'none';
-  }, {capture: true});
+    }
+  }, { passive: true });
 
   // ── OK: finaliza el modo dibujo ──
   $('edb-ok')?.addEventListener('click', () => {
@@ -6256,33 +6278,6 @@ function _edbBuildPalette() {
   });
 }
 
-function _edbPositionOffsetPop() {
-  const pop = $('edb-offset-pop'); if(!pop) return;
-  const bar = $('edDrawBar'); if(!bar) return;
-  const shell = document.getElementById('editorShell');
-  const sr = shell ? shell.getBoundingClientRect() : {left:0, top:0, width:window.innerWidth, height:window.innerHeight};
-  const br = bar.getBoundingClientRect();
-  const pw = pop.offsetWidth  || 120;
-  const ph = pop.offsetHeight || 52;
-  const isHoriz = bar.classList.contains('horiz');
-  let left, top;
-  if(isHoriz){
-    // Barra horizontal → popover debajo
-    left = br.left - sr.left + (br.width / 2) - pw / 2;
-    top  = br.bottom - sr.top + 6;
-  } else {
-    // Barra vertical → popover a la derecha
-    left = br.right - sr.left + 6;
-    top  = br.top - sr.top + (br.height / 2) - ph / 2;
-  }
-  // Ajustar para no salir del shell
-  const sw = shell ? shell.offsetWidth  : window.innerWidth;
-  const sh = shell ? shell.offsetHeight : window.innerHeight;
-  left = Math.max(4, Math.min(sw - pw - 4, left));
-  top  = Math.max(4, Math.min(sh - ph - 4, top));
-  pop.style.left = left + 'px';
-  pop.style.top  = top  + 'px';
-}
 
 function _edbPositionPalette() {
   const pop = $('edb-palette-pop');

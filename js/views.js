@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v11.45</footer>
+    <footer class="app-version">v11.46</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -330,10 +330,10 @@ Router.register('editor', {
         <div class="edb-sep"></div>
         <button id="edb-ok"     class="edb-ok" title="Finalizar">✓</button>
       </div>
-      <!-- Popover orientación cursor offset (hijo de editorShell para z-index) -->
-      <div id="edb-offset-pop" style="display:none;position:absolute;z-index:1200;
+      <!-- Popover orientación cursor offset (position:fixed igual que edb-size-pop) -->
+      <div id="edb-offset-pop" style="display:none;position:fixed;z-index:1200;
         background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);
-        border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.5);
+        border-radius:12px;padding:8px 10px;box-shadow:0 4px 18px rgba(0,0,0,.6);
         flex-direction:row;align-items:center;gap:6px;">
         <button id="edb-offset-pop-l" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Inclinado izquierda">
           <svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>
