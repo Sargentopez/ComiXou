@@ -5465,7 +5465,16 @@ function edRenderOptionsPanel(mode){
       if(!_opOffsetPop) return;
       const isOpen = _opOffsetPop.style.display === 'flex';
       if(isOpen){ _opOffsetPop.style.display = 'none'; return; }
-      // Posicionar el popover encima del botón
+      if(_edCursorOffset){
+        // Offset activo y popover cerrado → desactivar
+        _edCursorOffset = false;
+        _opOffsetBtn.style.background = 'transparent';
+        _opOffsetBtn.style.color = 'var(--gray-700)';
+        _edbSyncOffsetBtn();
+        _edOffsetHide();
+        return;
+      }
+      // Offset inactivo → abrir popover
       const br = _opOffsetBtn.getBoundingClientRect();
       const panel = $('edOptionsPanel');
       const pr = panel ? panel.getBoundingClientRect() : {left:0,top:0};
@@ -5476,8 +5485,9 @@ function edRenderOptionsPanel(mode){
     // Botones del popover
     [{id:'op-offset-pop-l', angle:40}, {id:'op-offset-pop-c', angle:0}, {id:'op-offset-pop-r', angle:-40}]
       .forEach(({id, angle}) => {
-        $(id)?.addEventListener('click', e => {
+        $(id)?.addEventListener('pointerup', e => {
           e.stopPropagation();
+          e.preventDefault();
           if(_edCursorOffset && _edCursorOffsetAngle === angle){
             _edCursorOffset = false;
           } else {
@@ -5485,24 +5495,21 @@ function edRenderOptionsPanel(mode){
             _edCursorOffsetAngle = angle;
           }
           _opOffsetPop.style.display = 'none';
-          // Actualizar visual del botón principal
           if(_opOffsetBtn){
             _opOffsetBtn.style.background = _edCursorOffset ? 'var(--black)' : 'transparent';
             _opOffsetBtn.style.color = _edCursorOffset ? 'var(--white)' : 'var(--gray-700)';
           }
-          // Marcar el botón activo dentro del popover
           ['op-offset-pop-l','op-offset-pop-c','op-offset-pop-r'].forEach(bid => {
             const b = $(bid); if(!b) return;
             const a = bid==='op-offset-pop-l' ? 40 : bid==='op-offset-pop-r' ? -40 : 0;
-            const on = _edCursorOffset && _edCursorOffsetAngle === a;
-            b.style.background = on ? 'var(--gray-200)' : 'transparent';
+            b.style.background = (_edCursorOffset && _edCursorOffsetAngle === a) ? 'var(--gray-200)' : 'transparent';
           });
           _edbSyncOffsetBtn();
           if(!_edCursorOffset) _edOffsetHide();
         });
       });
-    // Cerrar popover al pulsar fuera
-    document.addEventListener('pointerdown', e => {
+    // Cerrar popover al pulsar fuera — pointerup para no adelantarse a los botones
+    document.addEventListener('pointerup', e => {
       if(!_opOffsetPop || _opOffsetPop.style.display !== 'flex') return;
       if(!_opOffsetPop.contains(e.target) && e.target !== _opOffsetBtn)
         _opOffsetPop.style.display = 'none';
@@ -6111,15 +6118,28 @@ function edInitDrawBar() {
     e.stopPropagation();
     const pop = $('edb-offset-pop'); if(!pop) return;
     const isOpen = pop.style.display === 'flex';
-    if(isOpen){ pop.style.display = 'none'; return; }
+    if(isOpen){
+      // Popover abierto → cerrarlo
+      pop.style.display = 'none';
+      return;
+    }
+    if(_edCursorOffset){
+      // Offset activo y popover cerrado → desactivar directamente
+      _edCursorOffset = false;
+      _edbSyncOffsetBtn();
+      _edOffsetHide();
+      return;
+    }
+    // Offset inactivo → abrir popover para elegir orientación
     pop.style.display = 'flex';
     _edbPositionOffsetPop();
   });
   // Botones del popover de la barra flotante
   [{id:'edb-offset-pop-l', angle:40}, {id:'edb-offset-pop-c', angle:0}, {id:'edb-offset-pop-r', angle:-40}]
     .forEach(({id, angle}) => {
-      $(id)?.addEventListener('click', e => {
+      $(id)?.addEventListener('pointerup', e => {
         e.stopPropagation();
+        e.preventDefault();
         if(_edCursorOffset && _edCursorOffsetAngle === angle){
           _edCursorOffset = false;
         } else {
@@ -6131,11 +6151,11 @@ function edInitDrawBar() {
         if(!_edCursorOffset) _edOffsetHide();
       });
     });
-  // Cerrar al pulsar fuera
-  document.addEventListener('pointerdown', e => {
+  // Cerrar al pulsar fuera — usar pointerup para no adelantarse a los botones del popover
+  document.addEventListener('pointerup', e => {
     const pop = $('edb-offset-pop');
-    if(pop && pop.style.display === 'flex' &&
-       !pop.contains(e.target) && e.target.id !== 'edb-offset')
+    if(!pop || pop.style.display !== 'flex') return;
+    if(!pop.contains(e.target) && e.target.id !== 'edb-offset')
       pop.style.display = 'none';
   }, {capture: true});
 
