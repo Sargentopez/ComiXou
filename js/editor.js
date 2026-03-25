@@ -6879,22 +6879,11 @@ function edSaveProject(){
           edCurrentPage=_pi;
           edOrientation=p.orientation||_savedOrient;
           const layers=p.layers.map(edSerLayer).filter(Boolean);
-          // DIAGNÓSTICO TEMPORAL: panel persistente con lineWidth de capas vectoriales
+          // DIAGNÓSTICO TEMPORAL
           const _dbgLines = layers
             .filter(l=>l.type==='shape'||l.type==='line'||l.type==='stroke')
-            .map((l,i)=>`hoja${_pi} [${i}] ${l.type}: color=${l.color||'?'} lw=${l.lineWidth??'?'}`);
-          if(_dbgLines.length){
-            let _dbgPanel = document.getElementById('_edDbgPanel');
-            if(!_dbgPanel){
-              _dbgPanel = document.createElement('div');
-              _dbgPanel.id = '_edDbgPanel';
-              _dbgPanel.style.cssText='position:fixed;top:60px;left:8px;right:8px;z-index:99999;background:rgba(0,0,20,0.93);color:#7effb2;font-family:monospace;font-size:11px;padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow-y:auto;border:1px solid #3f6';
-              _dbgPanel.innerHTML='<b style="color:#fff">DIAGNÓSTICO GUARDADO (toca para cerrar)</b>\n';
-              _dbgPanel.addEventListener('click',()=>_dbgPanel.remove());
-              document.body.appendChild(_dbgPanel);
-            }
-            _dbgPanel.innerHTML += _dbgLines.join('\n') + '\n';
-          }
+            .map((l,i)=>`hoja${_pi}[${i}] ${l.type}: color=${l.color||'?'} lw=${l.lineWidth??'?'}`);
+          if(_dbgLines.length) _edDbgLog('edSaveProject:\n' + _dbgLines.join('\n'));
           return {layers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient};
         });
         edOrientation=_savedOrient; edCurrentPage=_savedPage;
@@ -7740,6 +7729,37 @@ function edSaveProjectModal(){
 /* ══════════════════════════════════════════
    TOAST
    ══════════════════════════════════════════ */
+function _edDbgLog(text){
+  let panel = document.getElementById('_edDbgPanel');
+  if(!panel){
+    panel = document.createElement('div');
+    panel.id = '_edDbgPanel';
+    panel.style.cssText = 'position:fixed;top:50px;left:6px;right:6px;z-index:99999;' +
+      'background:#0a0a1a;border:2px solid #3f6;border-radius:10px;' +
+      'padding:8px;display:flex;flex-direction:column;gap:6px;max-height:70vh;';
+    panel.innerHTML =
+      '<div style="display:flex;align-items:center;gap:6px">' +
+        '<b style="color:#7effb2;font-family:monospace;font-size:12px;flex:1">🔍 DIAGNÓSTICO</b>' +
+        '<button id="_edDbgCopy" style="background:#1a4;color:#fff;border:none;border-radius:6px;' +
+          'padding:4px 10px;font-size:11px;font-weight:900;cursor:pointer">Copiar</button>' +
+        '<button id="_edDbgClose" style="background:#a22;color:#fff;border:none;border-radius:6px;' +
+          'padding:4px 10px;font-size:11px;font-weight:900;cursor:pointer">✕</button>' +
+      '</div>' +
+      '<textarea id="_edDbgTxt" readonly style="flex:1;min-height:200px;max-height:55vh;' +
+        'background:#000;color:#7effb2;border:1px solid #3f6;border-radius:6px;' +
+        'font-family:monospace;font-size:11px;padding:6px;resize:vertical;' +
+        'white-space:pre;overflow:auto;word-break:break-all"></textarea>';
+    document.body.appendChild(panel);
+    document.getElementById('_edDbgClose')?.addEventListener('click', () => panel.remove());
+    document.getElementById('_edDbgCopy')?.addEventListener('click', () => {
+      const ta = document.getElementById('_edDbgTxt');
+      if(ta){ ta.select(); navigator.clipboard?.writeText(ta.value).catch(()=>{}); }
+    });
+  }
+  const ta = document.getElementById('_edDbgTxt');
+  if(ta) ta.value += (ta.value ? '\n' : '') + text;
+}
+
 function edToast(msg,ms=2000){
   const t=$('edToast');if(!t)return;
   t.classList.remove('show');          // forzar reset antes de reanimar

@@ -79,19 +79,11 @@ const SupabaseClient = (() => {
       // Capas del editor: image, draw, stroke, bubble, text — formato edSerLayer
       const edPage = edPages[i];
       if (edPage && edPage.layers && edPage.layers.length > 0) {
-        // DIAGNÓSTICO TEMPORAL: panel persistente con lo que llega a Supabase
+        // DIAGNÓSTICO TEMPORAL
         const _dbgVec = edPage.layers.filter(l=>l.type==='shape'||l.type==='line'||l.type==='stroke');
-        if(_dbgVec.length){
-          const _lines = _dbgVec.map((l,j)=>`  subiendo hoja${i}[${j}] ${l.type}: lw=${l.lineWidth??'?'} color=${l.color||'?'}`).join('\n');
-          let _p = document.getElementById('_edDbgPanel');
-          if(!_p){
-            _p=document.createElement('div');_p.id='_edDbgPanel';
-            _p.style.cssText='position:fixed;top:60px;left:8px;right:8px;z-index:99999;background:rgba(0,0,20,0.93);color:#7effb2;font-family:monospace;font-size:11px;padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow-y:auto;border:1px solid #3f6';
-            _p.innerHTML='<b style="color:#fff">DIAGNÓSTICO GUARDADO (toca para cerrar)</b>\n';
-            _p.addEventListener('click',()=>_p.remove());
-            document.body.appendChild(_p);
-          }
-          _p.innerHTML += '--- SUPABASE upload ---\n' + _lines + '\n';
+        if(_dbgVec.length && typeof _edDbgLog === 'function'){
+          const _lines = _dbgVec.map((l,j)=>`hoja${i}[${j}] ${l.type}: lw=${l.lineWidth??'?'} color=${l.color||'?'}`).join('\n');
+          _edDbgLog('_uploadPanels (Supabase):\n' + _lines);
         }
         await _upsert('panel_layers', edPage.layers.map((l, j) => ({
           panel_id:    panelId,
