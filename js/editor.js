@@ -31,6 +31,7 @@ const ED_MAX_DRAW_HISTORY = 20;
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
+let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
 const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
@@ -1139,7 +1140,8 @@ function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
     if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl() };
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
-      x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity };
+      x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
+      color:l.color||'#000000', lineWidth:l.lineWidth||3 };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
@@ -4267,34 +4269,40 @@ function edContinuePaint(e){
   edMoveBrush(e);
 }
 /* ── Helpers visuales del cursor offset ── */
-// Devuelve un evento sintético con clientY desplazado si offset activo y táctil
+// Devuelve un evento sintético con clientX/Y desplazados si offset activo y táctil
 function _edApplyCursorOffset(e){
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(!_edCursorOffset || !isTouch) return e;
   const src = e.touches ? e.touches[0] : e;
-  // Crear objeto ligero que imita el evento con clientY reducido
+  const rad = _edCursorOffsetAngle * Math.PI / 180;
+  const dx  = _ED_CURSOR_OFFSET_PX * Math.sin(rad);   // desplazamiento horizontal por ángulo
+  const dy  = _ED_CURSOR_OFFSET_PX * Math.cos(rad);   // desplazamiento vertical (siempre arriba)
   return {
-    clientX: src.clientX,
-    clientY: src.clientY - _ED_CURSOR_OFFSET_PX,
+    clientX: src.clientX - dx,
+    clientY: src.clientY - dy,
     pointerType: e.pointerType,
     pointerId: e.pointerId,
-    touches: null   // forzar rama no-touches en edCoords
+    touches: null
   };
 }
 function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
-  // Línea azul vertical entre cursor y punto de toque
   let line = $('edOffsetLine');
   if(!line){
     line = document.createElement('div');
     line.id = 'edOffsetLine';
     document.getElementById('editorShell')?.appendChild(line);
   }
-  const lineH = touchY - cursorY;  // siempre positivo (touchY > cursorY)
+  // Longitud y ángulo de la línea entre cursor y punto de toque
+  const dx = touchX - cursorX;
+  const dy = touchY - cursorY;
+  const lineLen = Math.max(0, Math.hypot(dx, dy) - cursorSz / 2);
+  const angleDeg = Math.atan2(dx, dy) * 180 / Math.PI; // ángulo desde abajo
   line.style.cssText = `position:fixed;pointer-events:none;z-index:998;
     left:${cursorX}px; top:${cursorY + cursorSz/2}px;
-    width:2px; height:${Math.max(0, lineH - cursorSz/2)}px;
+    width:2px; height:${lineLen}px;
     background:rgba(60,140,255,0.75);
-    transform:translateX(-1px);`;
+    transform-origin: top center;
+    transform: translateX(-1px) rotate(${angleDeg}deg);`;
   // Cuadrado del color activo en el punto de toque real
   let dot = $('edTouchDot');
   if(!dot){
@@ -4348,9 +4356,12 @@ function edMoveBrush(e){
   const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(_edCursorOffset && isTouch){
-    // Cursor (círculo) sube 1 cm; cuadrado del dedo en posición real
-    const cx = src.clientX;
-    const cy = src.clientY - _ED_CURSOR_OFFSET_PX;
+    // Cursor sube con el ángulo configurado
+    const rad = _edCursorOffsetAngle * Math.PI / 180;
+    const dx  = _ED_CURSOR_OFFSET_PX * Math.sin(rad);
+    const dy  = _ED_CURSOR_OFFSET_PX * Math.cos(rad);
+    const cx = src.clientX - dx;
+    const cy = src.clientY - dy;
     cur.style.display = 'block';
     cur.style.left = cx + 'px';
     cur.style.top  = cy + 'px';
@@ -5278,8 +5289,9 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
     ${!isFill ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-offset-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ Cursor</button>` : ''}
+    <button id="op-offset-l" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado izquierda">↖Cursor</button>
+    <button id="op-offset-c" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===0?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===0?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — recto">↑Cursor</button>
+    <button id="op-offset-r" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.7rem,2vw,.82rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--black)':'transparent'};color:${_edCursorOffset&&_edCursorOffsetAngle===-40?'var(--white)':'var(--gray-700)'}" title="Cursor desplazado — inclinado derecha">↗Cursor</button>` : ''}
 
   </div>
   <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
@@ -5404,16 +5416,27 @@ function edRenderOptionsPanel(mode){
       _edUpdateDrawInfo();
     });
 
-    // ── Cursor offset ──
-    $('op-offset-btn')?.addEventListener('click', () => {
-      _edCursorOffset = !_edCursorOffset;
-      const btn = $('op-offset-btn');
-      if(btn){
-        btn.style.background = _edCursorOffset ? 'var(--black)' : 'transparent';
-        btn.style.color = _edCursorOffset ? 'var(--white)' : 'var(--gray-700)';
-      }
-      _edbSyncOffsetBtn(); // sincronizar también el botón de la barra flotante
-      if(!_edCursorOffset) _edOffsetHide();
+    // ── Cursor offset — tres modos de ángulo ──
+    ['l','c','r'].forEach(id => {
+      $('op-offset-'+id)?.addEventListener('click', () => {
+        const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
+        if(_edCursorOffset && _edCursorOffsetAngle === angle){
+          _edCursorOffset = false;
+        } else {
+          _edCursorOffset = true;
+          _edCursorOffsetAngle = angle;
+        }
+        // Actualizar visual de los tres botones del panel
+        ['l','c','r'].forEach(bid => {
+          const a = bid==='l' ? 40 : bid==='r' ? -40 : 0;
+          const b = $('op-offset-'+bid); if(!b) return;
+          const on = _edCursorOffset && _edCursorOffsetAngle === a;
+          b.style.background = on ? 'var(--black)' : 'transparent';
+          b.style.color = on ? 'var(--white)' : 'var(--gray-700)';
+        });
+        _edbSyncOffsetBtn();
+        if(!_edCursorOffset) _edOffsetHide();
+      });
     });
 
     // ── Deshacer / Rehacer ──
@@ -6014,11 +6037,20 @@ function edInitDrawBar() {
   $('edb-undo')?.addEventListener('click', () => edDrawUndo());
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
-  // ── Cursor offset (T18) ──
-  $('edb-offset')?.addEventListener('click', () => {
-    _edCursorOffset = !_edCursorOffset;
-    _edbSyncOffsetBtn();
-    if(!_edCursorOffset) _edOffsetHide();
+  // ── Cursor offset (T18) — tres modos de ángulo ──
+  ['l','c','r'].forEach(id => {
+    $('edb-offset-'+id)?.addEventListener('click', () => {
+      const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
+      if(_edCursorOffset && _edCursorOffsetAngle === angle){
+        // Ya activo con este ángulo → desactivar
+        _edCursorOffset = false;
+      } else {
+        _edCursorOffset = true;
+        _edCursorOffsetAngle = angle;
+      }
+      _edbSyncOffsetBtn();
+      if(!_edCursorOffset) _edOffsetHide();
+    });
   });
 
   // ── OK: finaliza el modo dibujo ──
@@ -6150,17 +6182,32 @@ function _edbSyncTool() {
   $('edb-pen')?.classList.toggle('active', t === 'draw');
   $('edb-eraser')?.classList.toggle('active', t === 'eraser');
   $('edb-fill')?.classList.toggle('active', t === 'fill');
-  // Ocultar botón offset cuando se usa fill (no aplica)
-  const offsetBtn = $('edb-offset');
-  if(offsetBtn) offsetBtn.style.display = (t === 'fill') ? 'none' : '';
+  // Ocultar botones offset cuando se usa fill (no aplica)
+  const isFill = t === 'fill';
+  ['l','c','r'].forEach(id => {
+    const btn = $('edb-offset-'+id);
+    if(btn) btn.style.display = isFill ? 'none' : '';
+  });
   _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();
 }
 function _edbSyncOffsetBtn(){
-  const btn = $('edb-offset'); if(!btn) return;
-  btn.classList.toggle('active', _edCursorOffset);
-  btn.style.opacity = _edCursorOffset ? '1' : '0.5';
+  ['l','c','r'].forEach(id => {
+    const btn = $('edb-offset-'+id); if(!btn) return;
+    const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
+    const isActive = _edCursorOffset && _edCursorOffsetAngle === angle;
+    btn.classList.toggle('active', isActive);
+    btn.style.opacity = (_edCursorOffset && !isActive) ? '0.35' : (isActive ? '1' : '0.5');
+  });
+  // Sincronizar también los tres botones del panel si están presentes
+  ['l','c','r'].forEach(id => {
+    const btn = $('op-offset-'+id); if(!btn) return;
+    const angle = id==='l' ? 40 : id==='r' ? -40 : 0;
+    const on = _edCursorOffset && _edCursorOffsetAngle === angle;
+    btn.style.background = on ? 'var(--black)' : 'transparent';
+    btn.style.color = on ? 'var(--white)' : 'var(--gray-700)';
+  });
 }
 
 function _edbSyncColor() {
@@ -6268,8 +6315,11 @@ function edDrawBarShow() {
   }
   bar.style.left = _edbX + 'px';
   bar.style.top  = _edbY + 'px';
-  // Default cursor offset: activado en táctil, desactivado en PC
-  _edCursorOffset = !!(window._edIsTouch);
+  // Default cursor offset: activado en táctil, desactivado en PC — solo si aún no se ha usado
+  if(typeof _edCursorOffsetInitialized === 'undefined'){
+    window._edCursorOffsetInitialized = true;
+    _edCursorOffset = !!(window._edIsTouch);
+  }
   _edbSyncTool();
 }
 
@@ -6953,7 +7003,8 @@ function edSerLayer(l){
   }
   if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
   if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
-    x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity};
+    x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
+    color:l.color||'#000000', lineWidth:l.lineWidth||3};
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -7033,6 +7084,8 @@ function edDeserLayer(d, pageOrientation){
     const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', d.x||0.5, d.y||0.5, d.width||0.1, d.height||0.1, _pw, _ph);
     if(d.rotation) sl.rotation = d.rotation;
     if(d.opacity !== undefined) sl.opacity = d.opacity;
+    if(d.color)     sl.color     = d.color;
+    if(d.lineWidth) sl.lineWidth = d.lineWidth;
     return sl;
   }
   if(d.type==='shape'){

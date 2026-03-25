@@ -72,10 +72,6 @@ const SupabaseClient = (() => {
       const panelId = ins[0]?.id;
       if (!panelId) continue;
 
-      // Borrar capas y textos anteriores por si el CASCADE no actuó
-      await _delete('panel_layers', `panel_id=eq.${panelId}`);
-      await _delete('panel_texts',  `panel_id=eq.${panelId}`);
-
       // Capas del editor: image, draw, stroke, bubble, text — formato edSerLayer
       const edPage = edPages[i];
       if (edPage && edPage.layers && edPage.layers.length > 0) {
@@ -83,6 +79,7 @@ const SupabaseClient = (() => {
           panel_id:    panelId,
           layer_order: j,
           layer_type:  l.type,
+          // editorData.pages ya contiene el resultado de edSerLayer (con renderDataUrl, cornerRadii, etc.)
           layer_data:  JSON.stringify(l),
         })));
       }
