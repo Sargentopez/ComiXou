@@ -951,7 +951,7 @@ class LineLayer extends BaseLayer {
       const minX2=Math.min(...xs2),maxX2=Math.max(...xs2);
       const minY2=Math.min(...ys2),maxY2=Math.max(...ys2);
       const newCx2=(minX2+maxX2)/2, newCy2=(minY2+maxY2)/2;
-      if(Math.abs(newCx2)>0.0001||Math.abs(newCy2)>0.0001){
+      if(Math.abs(newCx2)>0.001||Math.abs(newCy2)>0.001){
         const rot=(this.rotation||0)*Math.PI/180;
         const cos=Math.cos(rot),sin=Math.sin(rot);
         const dxPx=newCx2*pw, dyPx=newCy2*ph;
@@ -967,7 +967,7 @@ class LineLayer extends BaseLayer {
       const minX=Math.min(...xs),maxX=Math.max(...xs);
       const minY=Math.min(...ys),maxY=Math.max(...ys);
       const newCx=(minX+maxX)/2, newCy=(minY+maxY)/2;
-      if(Math.abs(newCx)>0.0001||Math.abs(newCy)>0.0001){
+      if(Math.abs(newCx)>0.001||Math.abs(newCy)>0.001){
         const rot=(this.rotation||0)*Math.PI/180;
         const cos=Math.cos(rot),sin=Math.sin(rot);
         const dxPx=newCx*pw, dyPx=newCy*ph;
@@ -1703,6 +1703,7 @@ function edRedraw(){
     const _dl = edLayers.find(l => l.type==='draw');
     if(_dl) _dl.draw(edCtx);
   }
+  edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
   if(_edLineLayer && _edLineLayer.points.length === 1){
     const pw=edPageW(), ph=edPageH();
