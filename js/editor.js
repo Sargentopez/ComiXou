@@ -1669,7 +1669,7 @@ function edRedraw(){
   // Textos/bocadillos siempre al final (encima de todo).
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
-    if((_editingDraw || _edDrawPinch) && l.type==='draw') return; // en modo draw, el draw va al final
+    if(_editingDraw && l.type==='draw') return; // en modo draw, el draw va al final
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='image'){
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
@@ -1698,25 +1698,10 @@ function edRedraw(){
   });
   edCtx.globalAlpha = 1;
   // En modo draw: DrawLayer al final, encima de shapes/textos dimeados
-  if(_editingDraw || _edDrawPinch){
+  if(_editingDraw){
     const _dl = edLayers.find(l => l.type==='draw');
-    if(_dl){
-      if(_edDrawPinch){
-        // Preview en tiempo real de la transformación de pinch
-        const dp = _edDrawPinch;
-        const px = dp.wsCenterX, py = dp.wsCenterY;
-        edCtx.save();
-        edCtx.translate(px + dp.tx, py + dp.ty);
-        edCtx.scale(dp.scale, dp.scale);
-        edCtx.translate(-px, -py);
-        edCtx.drawImage(dp.snap, 0, 0);
-        edCtx.restore();
-      } else {
-        _dl.draw(edCtx);
-      }
-    }
+    if(_dl) _dl.draw(edCtx);
   }
-  edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
   if(_edLineLayer && _edLineLayer.points.length === 1){
     const pw=edPageW(), ph=edPageH();
@@ -2427,23 +2412,8 @@ function edPinchStart(e) {
   const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
     _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null } : null;
-  // Snapshot DrawLayer para transformación durante pinch en modo draw
+  // En modo draw, el pinch mueve la cámara (no el dibujo)
   _edDrawPinch = null;
-  if(isDrawTool){
-    const page = edPages[edCurrentPage];
-    const dl = page ? page.layers.find(l => l.type==='draw') : null;
-    if(dl){
-      // Copiar el canvas del DrawLayer en un canvas temporal (síncrono, sin dataUrl)
-      const snapCanvas = document.createElement('canvas');
-      snapCanvas.width  = ED_CANVAS_W;
-      snapCanvas.height = ED_CANVAS_H;
-      snapCanvas.getContext('2d').drawImage(dl._canvas, 0, 0);
-      // Centro del pinch en coordenadas de workspace
-      const ws = edScreenToWorld(ctr.x, ctr.y);
-      _edDrawPinch = { snap: snapCanvas, tx: 0, ty: 0, scale: 1,
-        wsCenterX: ws.x, wsCenterY: ws.y };
-    }
-  }
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
     edPinchScale0 = null; // no usar modo objeto individual
@@ -2524,19 +2494,10 @@ function edPinchMove(e) {
       }
       edRedraw();
     }
-  } else if (_edDrawPinch) {
-    // ── Modo DrawLayer: mover y escalar el dibujo con pinch ──
-    const dp = _edDrawPinch;
-    const wsNow = edScreenToWorld(ctr.x, ctr.y);
-    dp.tx    = wsNow.x - dp.wsCenterX;
-    dp.ty    = wsNow.y - dp.wsCenterY;
-    dp.scale = ratio;
-    edRedraw();
   } else {
-    // ── Modo cámara: pan + zoom — solo si no hay ninguna selección activa ni draw activo ──
+    // ── Modo cámara: pan + zoom ──
     const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0;
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
-    if(['draw','eraser'].includes(edActiveTool)) return; // en modo dibujo, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
     edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
@@ -2551,14 +2512,8 @@ function edPinchEnd() {
     if(window._edMoved) edPushHistory();
     window._edPinchMulti = null;
   }
-  // Confirmar transformación del DrawLayer si estaba activa
-  if(_edDrawPinch && _edDrawPinch.snap){
-    const dp = _edDrawPinch;
-    const page = edPages[edCurrentPage];
-    const dl = page ? page.layers.find(l => l.type==='draw') : null;
-    if(dl) _edDrawApplyPinchTransform(dl, dp);
-    _edDrawPinch = null;
-  }
+  // _edDrawPinch ya no se usa (pinch en modo draw mueve la cámara)
+  _edDrawPinch = null;
   edPinching    = false;
   edPinchDist0  = 0;
   edPinchScale0 = null;
@@ -8223,20 +8178,20 @@ function _edStartEyedrop() {
   function sampleAt(clientX, clientY) {
     ac.abort(); // un solo disparo
     canvas.style.cursor = '';
-    window._edEyedropActive = false; // restaurar dimming al 50%
-    edRedraw();
 
-    // Convertir coordenadas de pantalla a coordenadas del canvas lógico
+    // Leer pixel ANTES de restaurar el dimming — el canvas aún está al 100%
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width  / rect.width;
     const scaleY = canvas.height / rect.height;
     const cx = Math.round((clientX - rect.left) * scaleX);
     const cy = Math.round((clientY - rect.top)  * scaleY);
-
-    // Leer pixel del canvas de trabajo
     const ctx = canvas.getContext('2d');
     const px  = ctx.getImageData(cx, cy, 1, 1).data;
-    // Si el pixel es transparente, ignorar
+
+    // Ahora sí restaurar el dimming
+    window._edEyedropActive = false;
+    edRedraw();
+
     if (px[3] < 10) { edToast('Sin color en ese punto'); return; }
 
     const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2, '0')).join('');
@@ -9095,8 +9050,8 @@ function EditorView_init(){
     editorShell.addEventListener('touchmove', e => {
       if(e.touches.length === 2 && _pinchPrev > 0){
         e.preventDefault();
-        // No hacer zoom de cámara si hay objeto seleccionado, multiselección activa o modo dibujo
-        if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length) || ['draw','eraser'].includes(edActiveTool)) return;
+        // No hacer zoom de cámara si hay objeto seleccionado o multiselección activa
+        if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length)) return;
         const dist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
