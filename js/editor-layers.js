@@ -776,38 +776,28 @@ function _lyDrawShapeThumb(canvas, la) {
   ctx.fillRect(0, 0, sw, sh);
   ctx.save();
   ctx.globalAlpha = la.opacity ?? 1;
-  const pad = 6; // margen visual
-  if (la.type === 'shape') {
-    const cx = sw/2, cy = sh/2;
-    const hw = sw/2 - pad, hh = sh/2 - pad;
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    if (la.shape === 'ellipse') ctx.ellipse(cx, cy, hw, hh, 0, 0, Math.PI*2);
-    else ctx.rect(pad, pad, sw-pad*2, sh-pad*2);
-    if (la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
-    if (la.lineWidth > 0) { ctx.strokeStyle = la.color || '#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * 0.4); ctx.stroke(); }
-  } else if (la.type === 'line' && la.points && la.points.length >= 2) {
-    // Renderizar en canvas workspace completo usando LineLayer.draw() para fidelidad
-    // exacta con las curvas V/C, luego recortar la zona del objeto al thumb
-    const ED_W = typeof ED_CANVAS_W !== 'undefined' ? ED_CANVAS_W : 1800;
-    const ED_H = typeof ED_CANVAS_H !== 'undefined' ? ED_CANVAS_H : 2340;
-    const pw = typeof edPageW === 'function' ? edPageW() : 360;
-    const ph = typeof edPageH === 'function' ? edPageH() : 780;
-    const mx = typeof edMarginX === 'function' ? edMarginX() : (ED_W-pw)/2;
-    const my = typeof edMarginY === 'function' ? edMarginY() : (ED_H-ph)/2;
-    const aux = document.createElement('canvas');
-    aux.width = ED_W; aux.height = ED_H;
-    la.draw(aux.getContext('2d'));
-    // Bbox del objeto en coords workspace
-    const cx = mx + la.x*pw, cy = my + la.y*ph;
-    const hw = la.width*pw/2+4, hh = la.height*ph/2+4;
-    const bx=Math.max(0,cx-hw), by=Math.max(0,cy-hh);
-    const bw=Math.min(ED_W-bx,hw*2), bh=Math.min(ED_H-by,hh*2);
-    if(bw>0 && bh>0){
-      const scale=Math.min((sw-pad*2)/bw,(sh-pad*2)/bh);
-      const dx=pad+(sw-pad*2-bw*scale)/2, dy=pad+(sh-pad*2-bh*scale)/2;
-      ctx.drawImage(aux,bx,by,bw,bh,dx,dy,bw*scale,bh*scale);
-    }
+  const pad = 6;
+
+  // Usar el render real (la.draw) en un canvas workspace auxiliar para ambos tipos,
+  // igual que con LineLayer — garantiza fidelidad exacta con cornerRadii y V/C
+  const ED_W = typeof ED_CANVAS_W !== 'undefined' ? ED_CANVAS_W : 1800;
+  const ED_H = typeof ED_CANVAS_H !== 'undefined' ? ED_CANVAS_H : 2340;
+  const pw = typeof edPageW === 'function' ? edPageW() : 360;
+  const ph = typeof edPageH === 'function' ? edPageH() : 780;
+  const mx = typeof edMarginX === 'function' ? edMarginX() : (ED_W-pw)/2;
+  const my = typeof edMarginY === 'function' ? edMarginY() : (ED_H-ph)/2;
+  const aux = document.createElement('canvas');
+  aux.width = ED_W; aux.height = ED_H;
+  la.draw(aux.getContext('2d'));
+  // Bbox del objeto en coords workspace
+  const ocx = mx + la.x*pw, ocy = my + la.y*ph;
+  const ohw = la.width*pw/2+4, ohh = la.height*ph/2+4;
+  const bx=Math.max(0,ocx-ohw), by=Math.max(0,ocy-ohh);
+  const bw=Math.min(ED_W-bx,ohw*2), bh=Math.min(ED_H-by,ohh*2);
+  if(bw>0 && bh>0){
+    const scale=Math.min((sw-pad*2)/bw,(sh-pad*2)/bh);
+    const dx=pad+(sw-pad*2-bw*scale)/2, dy=pad+(sh-pad*2-bh*scale)/2;
+    ctx.drawImage(aux,bx,by,bw,bh,dx,dy,bw*scale,bh*scale);
   }
   ctx.restore();
 }
