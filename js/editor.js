@@ -40,6 +40,7 @@ let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
 let _edOffsetFirstMove = false;        // true: el primer move debe incluir el punto inicial
+let _edOffsetLastTouch = null;         // última posición táctil conocida {x, y, sz} para refrescar el cursor
 const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
@@ -4609,6 +4610,14 @@ function _edOffsetHide(){
   const line = $('edOffsetLine'); if(line) line.style.display='none';
   const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
 }
+// Refresca el cursor offset en su última posición conocida (cuando cambia grosor o color desde la UI)
+function _edRefreshOffsetCursor(){
+  if(!_edCursorOffset || !_edOffsetLastTouch) return;
+  const wrap = $('edOffsetWrap');
+  if(!wrap || wrap.style.display === 'none') return;
+  const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
+  _edOffsetShow(0, 0, _edOffsetLastTouch.x, _edOffsetLastTouch.y, sz);
+}
 function _edOffsetShowReset(){
   const wrap = $('edOffsetWrap'); if(wrap) wrap.style.display='';
   const line = $('edOffsetLine'); if(line) line.style.display='';
@@ -4641,6 +4650,18 @@ function edMoveBrush(e){
   const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(_edCursorOffset && isTouch){
+    // Si el toque está sobre el panel o la barra flotante, refrescar el cursor en su posición actual
+    const elUnder = document.elementFromPoint(src.clientX, src.clientY);
+    const overUI = !!(elUnder && (elUnder.closest('#edOptionsPanel') || elUnder.closest('#edDrawBar')));
+    if(overUI){
+      // Redibujar con los valores actuales (grosor/color pueden haber cambiado) pero sin mover
+      if(_edOffsetLastTouch){
+        _edOffsetShow(0, 0, _edOffsetLastTouch.x, _edOffsetLastTouch.y, sz);
+      }
+      return;
+    }
+    // Guardar posición para cuando el dedo pase a la UI
+    _edOffsetLastTouch = { x: src.clientX, y: src.clientY };
     // El wrap dibuja cursor+línea+cuadrado como bloque rotado desde el punto de toque
     // Ocultar el cursor original — el wrap lo reemplaza
     cur.style.display = 'none';
@@ -6852,6 +6873,8 @@ function _edbSyncColor() {
   const sw2 = $('esb-color'); if(sw2) sw2.style.background = edDrawColor;
   // Actualizar preview del panel de grosor si está abierto
   _edbSyncSizePreview();
+  // Refrescar cursor offset si está visible y hay posición guardada
+  _edRefreshOffsetCursor();
 }
 
 function _edUpdateDrawInfo() {
@@ -6877,6 +6900,8 @@ function _edbSyncSize() {
   const sl = $('edb-size-slider');
   if(sl){ sl.value=sz; sl.max=isEr?80:48; }
   _edbSyncSizePreview();
+  // Refrescar cursor offset si está visible y hay posición guardada
+  _edRefreshOffsetCursor();
 }
 
 // Actualiza el círculo de preview en el panel de grosor
