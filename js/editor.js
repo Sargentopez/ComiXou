@@ -7,6 +7,11 @@
 /* ── ESTADO ── */
 let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
+// ── Sistema de Reglas (T29) ──
+let edRules = [];          // array de reglas de la hoja actual
+let _edRuleId = 0;         // contador para IDs únicos
+let _edRuleDrag = null;    // { ruleId, part:'a'|'b'|'line', offX, offY } — drag activo
+let _edRulePanelId = null; // id de la regla con panel abierto
 let edSelectedIdx = -1;
 let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
 let edTailPointType = null, edResizeCorner = null, edTailVoiceIdx = 0;
@@ -28,6 +33,8 @@ let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType
 let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
+// Icono simetría (T14): triángulo izq (cateto horiz + cateto vertical derecho) | gap | línea discontinua | gap | triángulo der (espejo)
+const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16" width="20" height="14" style="display:block;pointer-events:none"><polygon points="1,1 9,1 9,15" fill="currentColor"/><line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.5 2"/><polygon points="15,1 23,1 15,15" fill="currentColor"/></svg>`;
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
@@ -1736,6 +1743,8 @@ function edRedraw(){
     if(edMultiSel.length) edDrawMultiSel();
     else edDrawRubberBand();
   }
+  // ── Reglas (T29): solo visibles en el editor, encima de todo ──
+  _edRulesDraw(edCtx);
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
   edCtx.save();
   edCtx.strokeStyle = '#1a8cff';
@@ -2213,6 +2222,21 @@ function edDuplicateSelected(){
     if(la.tailEnd)   copy.tailEnd   = {...la.tailEnd};
     if(la.tailStarts) copy.tailStarts = la.tailStarts.map(s=>({...s}));
     if(la.tailEnds)   copy.tailEnds   = la.tailEnds.map(e=>({...e}));
+  } else if(la.type === 'shape'){
+    copy = new ShapeLayer(la.shape, la.x + 0.02, la.y + 0.02, la.width, la.height);
+    copy.color = la.color; copy.fillColor = la.fillColor;
+    copy.lineWidth = la.lineWidth; copy.opacity = la.opacity ?? 1;
+    copy.rotation = la.rotation || 0;
+    if(la.cornerRadius)  copy.cornerRadius  = la.cornerRadius;
+    if(la.cornerRadii)   copy.cornerRadii   = Array.isArray(la.cornerRadii) ? [...la.cornerRadii] : {...la.cornerRadii};
+  } else if(la.type === 'line'){
+    copy = new LineLayer();
+    copy.points   = la.points.map(p => ({...p, x: p.x + 0.02, y: p.y + 0.02}));
+    copy.color    = la.color; copy.fillColor = la.fillColor || 'none';
+    copy.lineWidth = la.lineWidth; copy.closed = la.closed;
+    copy.opacity  = la.opacity ?? 1; copy.rotation = la.rotation || 0;
+    if(la.cornerRadii) copy.cornerRadii = Array.isArray(la.cornerRadii) ? [...la.cornerRadii] : {...la.cornerRadii};
+    copy._updateBbox();
   } else return;
   // Insertar justo encima del original
   edLayers.splice(edSelectedIdx + 1, 0, copy);
@@ -2220,6 +2244,123 @@ function edDuplicateSelected(){
   edPushHistory(); edRedraw();
   edToast('Objeto duplicado');
 }
+/* ── T14: Simetría horizontal (flip respecto al eje vertical del objeto) ── */
+function edMirrorSelected(){
+  // En modo draw sin selección: reflejar el DrawLayer activo de la hoja
+  if(edSelectedIdx < 0){
+    if(['draw','eraser','fill'].includes(edActiveTool)){
+      const page = edPages[edCurrentPage]; if(!page) return;
+      const la = page.layers.find(l => l.type==='draw'); if(!la) return;
+      edPushHistory();
+      const pageW = edPageW();
+      const mx    = edMarginX();
+      const axisPx = mx + pageW / 2;
+      const tmp = document.createElement('canvas');
+      tmp.width  = ED_CANVAS_W;
+      tmp.height = ED_CANVAS_H;
+      const tctx = tmp.getContext('2d');
+      tctx.translate(axisPx * 2, 0);
+      tctx.scale(-1, 1);
+      tctx.drawImage(la._canvas, 0, 0);
+      la._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+      la._ctx.drawImage(tmp, 0, 0);
+      edRedraw();
+      edToast('Dibujo reflejado');
+    }
+    return;
+  }
+  if(edSelectedIdx >= edLayers.length) return;
+  const la = edLayers[edSelectedIdx];
+  edPushHistory();
+
+  if(la.type === 'image'){
+    // Crear canvas offscreen con el bitmap reflejado
+    const img = la.img;
+    const tmp = document.createElement('canvas');
+    tmp.width  = img.naturalWidth  || img.width;
+    tmp.height = img.naturalHeight || img.height;
+    const tctx = tmp.getContext('2d');
+    tctx.translate(tmp.width, 0);
+    tctx.scale(-1, 1);
+    tctx.drawImage(img, 0, 0);
+    const mirroredImg = new Image();
+    mirroredImg.onload = () => {
+      la.img = mirroredImg;
+      // Invertir rotación respecto a eje vertical: rotation → -rotation
+      la.rotation = -(la.rotation || 0);
+      edRedraw();
+    };
+    mirroredImg.src = tmp.toDataURL();
+    return; // el resto se hace en onload
+  }
+
+  if(la.type === 'stroke'){
+    // El _canvas del stroke cubre solo el bbox del trazo
+    const c = document.createElement('canvas');
+    c.width  = la._canvas.width;
+    c.height = la._canvas.height;
+    const cctx = c.getContext('2d');
+    cctx.translate(c.width, 0);
+    cctx.scale(-1, 1);
+    cctx.drawImage(la._canvas, 0, 0);
+    la._canvas = c;
+    la._ctx    = c.getContext('2d');
+    la.rotation = -(la.rotation || 0);
+  }
+
+  else if(la.type === 'draw'){
+    // DrawLayer cubre el workspace entero; reflejar respecto al eje vertical de la página
+    const pageW = edPageW();
+    const mx    = edMarginX();
+    const axisPx = mx + pageW / 2; // x del eje en coords workspace
+    const tmp = document.createElement('canvas');
+    tmp.width  = ED_CANVAS_W;
+    tmp.height = ED_CANVAS_H;
+    const tctx = tmp.getContext('2d');
+    tctx.translate(axisPx * 2, 0);
+    tctx.scale(-1, 1);
+    tctx.drawImage(la._canvas, 0, 0);
+    la._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    la._ctx.drawImage(tmp, 0, 0);
+  }
+
+  else if(la.type === 'shape'){
+    // Invertir rotación; si tiene cornerRadii por vértice, intercambiar TL↔TR y BL↔BR
+    la.rotation = -(la.rotation || 0);
+    if(la.cornerRadii && la.cornerRadii.length === 4){
+      // [TL, TR, BR, BL] → [TR, TL, BL, BR]
+      const [tl,tr,br,bl] = la.cornerRadii;
+      la.cornerRadii = [tr, tl, bl, br];
+    }
+  }
+
+  else if(la.type === 'line'){
+    // Puntos en espacio local centrado en (0,0) — invertir x
+    la.points = la.points.map(p => ({ ...p, x: -p.x,
+      cx1: p.cx1 !== undefined ? -p.cx1 : undefined,
+      cy1: p.cy1,
+      cx2: p.cx2 !== undefined ? -p.cx2 : undefined,
+      cy2: p.cy2
+    }));
+    la.rotation = -(la.rotation || 0);
+    if(typeof la._updateBbox === 'function') la._updateBbox();
+  }
+
+  else if(la.type === 'text' || la.type === 'bubble'){
+    // Invertir rotación; para bocadillos también espejar la cola
+    la.rotation = -(la.rotation || 0);
+    if(la.type === 'bubble'){
+      if(la.tailStart) la.tailStart = { x: 1 - la.tailStart.x, y: la.tailStart.y };
+      if(la.tailEnd)   la.tailEnd   = { x: 1 - la.tailEnd.x,   y: la.tailEnd.y   };
+      if(la.tailStarts) la.tailStarts = la.tailStarts.map(s=>({ x: 1-s.x, y: s.y }));
+      if(la.tailEnds)   la.tailEnds   = la.tailEnds.map(e=>({ x: 1-e.x, y: e.y }));
+    }
+  }
+
+  edRedraw();
+  edToast('Objeto reflejado');
+}
+
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
   const _delType=edLayers[edSelectedIdx]?.type;
@@ -2697,6 +2838,84 @@ function edOnStart(e){
                tgt.closest('#edProjectModal');
   if(isUI) return;
 
+  // ── REGLAS: si hay modo mover activo desde el panel, absorber el primer toque ──
+  if(_edRuleDrag && _edRuleDrag.part === 'line' && _edRuleDrag.offX === undefined) {
+    // El movimiento real empieza en edOnMove; aquí solo bloqueamos selección de objetos
+    return;
+  }
+
+  // ── REGLAS: hit-test sobre arrastradores y líneas ──
+  if(edRules.length || window._edRuleMoveReady) {
+    const _rc = edCoords(e);
+    // Modo "mover regla" activo tras pulsar "Mover" en el panel
+    if(window._edRuleMoveReady) {
+      const rid = window._edRuleMoveReady;
+      const _rmv = edRules.find(r => r.id === rid);
+      if(_rmv) {
+        window._edRuleMoveReady = null;
+        _edRuleDrag = {
+          ruleId: rid, part: 'line',
+          offX: _rc.px - _rmv.x1, offY: _rc.py - _rmv.y1,
+          dx: _rmv.x2 - _rmv.x1,  dy:  _rmv.y2 - _rmv.y1
+        };
+        edRedraw(); return;
+      }
+      window._edRuleMoveReady = null;
+    }
+    const _rHit = _edRulesHit(_rc.px, _rc.py, e.pointerType === 'touch');
+    if(_rHit) {
+      e.stopPropagation();
+      const _r = edRules.find(r => r.id === _rHit.ruleId);
+      if(!_r) return;
+
+      const _isHandleHit = _rHit.part === 'a' || _rHit.part === 'b';
+
+      if(_isHandleHit) {
+        const _now = Date.now();
+        const _isDouble = (e.detail >= 2) ||
+          (window._edRuleLastTap && (_now - window._edRuleLastTap < 350) &&
+           window._edRuleLastTapId === _rHit.ruleId);
+
+        if(_isDouble) {
+          // Doble tap/clic confirmado → cancelar drag pendiente y abrir popover
+          window._edRuleLastTap = 0;
+          clearTimeout(window._edRuleTapTimer);
+          window._edRuleTapTimer = null;
+          _edRuleDrag = null;
+          const _hitWx = _rHit.part === 'a' ? _r.x1 : _r.x2;
+          const _hitWy = _rHit.part === 'a' ? _r.y1 : _r.y2;
+          _edRulesOpenPanel(_rHit.ruleId, _rHit.part, _hitWx, _hitWy);
+          return;
+        }
+
+        // Primer tap/clic: guardar timestamp y esperar 300ms antes de iniciar drag
+        window._edRuleLastTap = _now;
+        window._edRuleLastTapId = _rHit.ruleId;
+        const _snapId = _rHit.ruleId, _snapPart = _rHit.part;
+        const _snapOffX = _rc.px - _r.x1, _snapOffY = _rc.py - _r.y1;
+        const _snapDx = _r.x2 - _r.x1, _snapDy = _r.y2 - _r.y1;
+        clearTimeout(window._edRuleTapTimer);
+        window._edRuleTapTimer = setTimeout(() => {
+          window._edRuleLastTap = 0;
+          window._edRuleTapTimer = null;
+          _edRuleDrag = { ruleId: _snapId, part: _snapPart,
+            offX: _snapOffX, offY: _snapOffY, dx: _snapDx, dy: _snapDy };
+          edRedraw();
+        }, 300);
+        return;
+      }
+
+      // Línea: iniciar drag inmediatamente (no necesita doble tap)
+      _edRuleDrag = {
+        ruleId: _rHit.ruleId, part: _rHit.part,
+        offX: _rc.px - _r.x1, offY: _rc.py - _r.y1,
+        dx: _r.x2 - _r.x1, dy: _r.y2 - _r.y1
+      };
+      edRedraw();
+      return;
+    }
+  }
+
   // ── MODO V⟺C: selección de vértice individual (barra flotante O submenú) ──
   if(_edCurveModeActive&&_edCurveModeActive()){
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
@@ -2964,8 +3183,10 @@ function edOnStart(e){
     return;
   }
   const c=edCoords(e);
-  // Cola bocadillo
-  if(edSelectedIdx>=0&&edLayers[edSelectedIdx]?.type==='bubble'){
+  // Cola bocadillo — solo cuando el panel de propiedades del bocadillo está abierto
+  const _bubblePanelOpen = $('edOptionsPanel')?.classList.contains('open') &&
+                           $('edOptionsPanel')?.dataset.mode === 'props';
+  if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='bubble' && _bubblePanelOpen){
     const la=edLayers[edSelectedIdx];
     // Helper: distancia en píxeles de pantalla entre punto normalizado y toque
     // Usa el mismo sistema que los handles de control (hitScreen táctil=28, PC=18)
@@ -3282,6 +3503,33 @@ function edOnMove(e){
     _edTouchMoved = true;
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
+  }
+  // ── DRAG DE REGLA ──────────────────────────────────────────
+  if(_edRuleDrag && _edRuleDrag.part !== 'move-pending') {
+    e.preventDefault();
+    const c = edCoords(e);
+    const r = edRules.find(r => r.id === _edRuleDrag.ruleId);
+    if(r) {
+      // Si el offset aún no está inicializado (modo mover activado desde panel), inicializar ahora
+      if(_edRuleDrag.offX === undefined) {
+        _edRuleDrag.offX = c.px - r.x1;
+        _edRuleDrag.offY = c.py - r.y1;
+        _edRuleDrag.dx   = r.x2 - r.x1;
+        _edRuleDrag.dy   = r.y2 - r.y1;
+      }
+      if(_edRuleDrag.part === 'a') {
+        r.x1 = c.px; r.y1 = c.py;
+      } else if(_edRuleDrag.part === 'b') {
+        r.x2 = c.px; r.y2 = c.py;
+      } else { // 'line' — mover todo
+        r.x1 = c.px - _edRuleDrag.offX;
+        r.y1 = c.py - _edRuleDrag.offY;
+        r.x2 = r.x1 + _edRuleDrag.dx;
+        r.y2 = r.y1 + _edRuleDrag.dy;
+      }
+      edRedraw();
+    }
+    return;
   }
   // ── RUBBER BAND en modo select (PC) ────────────────────────
   if(edActiveTool==='select' && edRubberBand){
@@ -3624,12 +3872,21 @@ function edOnMove(e){
   const la=edLayers[edSelectedIdx];
   la.x = c.nx - edDragOffX;
   la.y = c.ny - edDragOffY;
+  // ── Snap a reglas (T29) ──────────────────────────────────────────────────
+  if(edRules.length) _edSnapToRules(la);
   window._edMoved = true;
   edRedraw();
   edHideGearIcon();
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
+  // Limpiar drag de regla si estaba activo
+  if(_edRuleDrag) {
+    _edRuleDrag = null;
+    edRedraw();
+  }
+  // Cancelar timer de doble tap de regla si el dedo se levantó sin segundo tap
+  // (el timer mismo iniciará el drag diferido si procede)
   // Limpiar pointer del mapa SIEMPRE (antes de la guarda)
   if(e && e.pointerId !== undefined && window._edActivePointers){
     window._edActivePointers.delete(e.pointerId);
@@ -4477,7 +4734,7 @@ function edToggleMenu(id){
   dd.style.top  = r.bottom + 'px';
   dd.style.zIndex = '9999';
   // Proyecto: siempre alineado por la derecha con el botón
-  if(id === 'project'){
+  if(id === 'project' || id === 'rules'){
     dd.style.left = 'auto';
     dd.style.right = (window.innerWidth - r.right) + 'px';
   } else {
@@ -4581,6 +4838,7 @@ function _edActivateShapeTool() {
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-shape-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-shape-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
+    <button id="op-shape-mirror" title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
 
@@ -4760,12 +5018,20 @@ function _edActivateShapeTool() {
 
   $('op-shape-dup')?.addEventListener('click',()=>{
     const s=_curShape(); if(!s) return;
+    const origSnapshot = JSON.stringify(edSerLayer(s));
     const copy=new ShapeLayer(s.shape, s.x+0.03, s.y+0.03, s.width, s.height);
     copy.color=s.color; copy.fillColor=s.fillColor; copy.lineWidth=s.lineWidth;
     copy.opacity=s.opacity??1; copy.rotation=s.rotation||0;
+    if(s.cornerRadius) copy.cornerRadius=s.cornerRadius;
+    if(s.cornerRadii)  copy.cornerRadii=Array.isArray(s.cornerRadii)?[...s.cornerRadii]:{...s.cornerRadii};
     _edInsertLayerAbove(copy);
     edPushHistory(); edRedraw(); _edActivateShapeTool();
+    _edShapeHistory = [origSnapshot];
+    _edShapeHistIdx = 0;
+    _edShapeHistIdxBase = 0;
+    _edShapeUpdateUndoRedoBtns();
   });
+  $('op-shape-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
 
   // ── Deshacer / Rehacer ──
   const _updURShape = ()=>{
@@ -4857,6 +5123,7 @@ function _edActivateLineTool(isNew) {
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
     <button id="op-line-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-line-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
+    <button id="op-line-mirror" title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
 
@@ -5049,13 +5316,29 @@ function _edActivateLineTool(isNew) {
 
   $('op-line-dup')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l||l.points.length<2) return;
+    // Capturar snapshot del original ANTES de insertar el duplicado
+    const origSnapshot = JSON.stringify(edSerLayer(l));
     const copy=new LineLayer();
-    copy.points=l.points.map(p=>({x:p.x+0.03,y:p.y+0.03}));
+    copy.points=l.points.map(p=>({...p, x:p.x+0.03, y:p.y+0.03}));
     copy.color=l.color; copy.fillColor=l.fillColor||'none'; copy.lineWidth=l.lineWidth;
-    copy.closed=l.closed; copy.opacity=l.opacity??1; copy._updateBbox();
+    copy.closed=l.closed; copy.opacity=l.opacity??1; copy.rotation=l.rotation||0;
+    if(l.cornerRadii){
+      copy.cornerRadii = Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii};
+    }
+    copy._updateBbox();
     _edInsertLayerAbove(copy);
-    edPushHistory(); edRedraw(); _edActivateLineTool();
+    edPushHistory(); edRedraw();
+    // Abrir panel para el duplicado con historial local ya inicializado con el snapshot correcto
+    // (evita que _edShapeInitHistory re-serialice desde edLayers y pueda perder datos)
+    _edActivateLineTool();
+    // Sobreescribir el historial local con el snapshot del original (que tiene cornerRadii correctos)
+    // El duplicado es idéntico al original salvo la posición — mismo snapshot es válido
+    _edShapeHistory = [origSnapshot];
+    _edShapeHistIdx = 0;
+    _edShapeHistIdxBase = 0;
+    _edShapeUpdateUndoRedoBtns();
   });
+  $('op-line-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
 
   // ── Deshacer / Rehacer ──
   _updUR();
@@ -5351,6 +5634,8 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-draw-dup"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
+    <button id="op-draw-mirror"
+      title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
     <button id="op-draw-undo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-draw-redo"
@@ -5550,6 +5835,7 @@ function edRenderOptionsPanel(mode){
       edDuplicateSelected();
       edCloseOptionsPanel();
     });
+    $('op-draw-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
 
     // ── Eliminar ──
     $('op-draw-del')?.addEventListener('click',()=>{
@@ -5675,6 +5961,7 @@ function edRenderOptionsPanel(mode){
     html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
       <button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
+      ${(la.type!=='text'&&la.type!=='bubble')?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
       <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
     </div>`;
 
@@ -5717,6 +6004,7 @@ function edRenderOptionsPanel(mode){
       if(ok){ edDeleteSelected(); edCloseOptionsPanel(); }
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
+    $('pp-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
@@ -5863,6 +6151,231 @@ function edInitFloatDrag(){
   btn.addEventListener('touchstart',onDown,{passive:false});
   window.addEventListener('touchmove',onMove,{passive:false});
   window.addEventListener('touchend',onUp);
+}
+
+
+/* ══════════════════════════════════════════
+   REGLAS (T29) — guías orientables en el workspace
+   ══════════════════════════════════════════ */
+
+const _ED_RULE_R = 10;        // radio arrastrador en coords workspace
+const _ED_RULE_LINE_HIT = 6;  // tolerancia línea en PC (px workspace)
+const _ED_RULE_LINE_HIT_TOUCH = 22; // tolerancia línea en táctil (px workspace)
+
+function _edRuleAdd() {
+  const mx = edMarginX(), my = edMarginY();
+  const pw = edPageW(),   ph = edPageH();
+  const cy = my + ph / 2;
+  const id = ++_edRuleId;
+  edRules.push({ id, x1: mx - _ED_RULE_R*2, y1: cy, x2: mx + pw + _ED_RULE_R*2, y2: cy });
+  edRedraw();
+}
+
+function _edRuleClear() {
+  if(!edRules.length) return;
+  if(!confirm('¿Borrar todas las reglas de esta hoja?')) return;
+  edRules = [];
+  _edRulesPanelClose();
+  edRedraw();
+}
+
+function _edRuleDelete(id) {
+  edRules = edRules.filter(r => r.id !== id);
+  _edRulesPanelClose();
+  edRedraw();
+}
+
+function _edRuleDuplicate(id) {
+  const r = edRules.find(r => r.id === id); if(!r) return;
+  const newId = ++_edRuleId;
+  edRules.push({ id: newId, x1: r.x1+20, y1: r.y1+20, x2: r.x2+20, y2: r.y2+20 });
+  _edRulesPanelClose();
+  edRedraw();
+}
+
+function _edRulesOpenPanel(id, part, wx, wy) {
+  _edRulesClosePop();
+  const r = edRules.find(r => r.id === id); if(!r) return;
+  const sc = edWorldToScreen(wx, wy);
+  const pop = document.createElement('div');
+  pop.id = 'ed-rule-pop';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
+  const _svgH = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="2" y1="12" x2="22" y2="12" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+  const _svgV = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="12" y1="2" x2="12" y2="22" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+  const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+  pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  document.body.appendChild(pop);
+  const PW = pop.offsetWidth || 150, PH = pop.offsetHeight || 44;
+  let px = sc.x + 22, py = sc.y - PH / 2;
+  if(px + PW > window.innerWidth - 8) px = sc.x - PW - 22;
+  if(py < 8) py = 8;
+  if(py + PH > window.innerHeight - 8) py = window.innerHeight - PH - 8;
+  pop.style.left = px + 'px'; pop.style.top = py + 'px';
+
+  document.getElementById('erp-horiz')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
+    if(part==='a'){ r.x2=r.x1+dist; r.y2=r.y1; } else { r.x1=r.x2-dist; r.y1=r.y2; }
+    _edRulesClosePop(); edRedraw();
+  });
+  document.getElementById('erp-vert')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
+    if(part==='a'){ r.x2=r.x1; r.y2=r.y1+dist; } else { r.x1=r.x2; r.y1=r.y2-dist; }
+    _edRulesClosePop(); edRedraw();
+  });
+  document.getElementById('erp-del')?.addEventListener('click', e => {
+    e.stopPropagation(); _edRuleDelete(id);
+  });
+  ['pointerdown','touchstart'].forEach(ev => pop.addEventListener(ev, e => e.stopPropagation(), {passive:true}));
+  setTimeout(() => { document.addEventListener('pointerdown', _edRulesPopOutside, {passive:true}); }, 50);
+}
+
+function _edRulesPopOutside(e) {
+  // No cerrar si se pulsa dentro del menú o sus dropdowns
+  if(e.target.closest('#edMenuBar') || e.target.closest('.ed-dropdown') ||
+     e.target.closest('.ed-submenu') || e.target.closest('#ed-rule-pop')) return;
+  _edRulesClosePop();
+}
+
+function _edRulesClosePop() {
+  const pop = document.getElementById('ed-rule-pop');
+  if(pop) pop.remove();
+  document.removeEventListener('pointerdown', _edRulesPopOutside, {passive:true});
+}
+
+function _edRulesPanelClose() { _edRulesClosePop(); }
+
+function _edRulesDraw(ctx) {
+  if(!edRules.length) return;
+  const z = edCamera.z;
+  ctx.save();
+  for(const r of edRules) {
+    const isActive = (_edRulePanelId === r.id) || (_edRuleDrag?.ruleId === r.id);
+    ctx.beginPath();
+    ctx.moveTo(r.x1, r.y1);
+    ctx.lineTo(r.x2, r.y2);
+    ctx.strokeStyle = isActive ? '#1a8cff' : 'rgba(30,140,255,0.7)';
+    ctx.lineWidth = 1.5 / z;
+    ctx.setLineDash([8/z, 5/z]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for(const [ex, ey] of [[r.x1,r.y1],[r.x2,r.y2]]) {
+      ctx.beginPath();
+      ctx.arc(ex, ey, _ED_RULE_R / z, 0, Math.PI*2);
+      ctx.fillStyle = isActive ? '#1a8cff' : 'rgba(30,140,255,0.75)';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5 / z;
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function _edRulesHit(wx, wy, isTouch) {
+  const z = edCamera.z;
+  const rPx  = (isTouch ? 22 : _ED_RULE_R) / z;
+  const lPx  = (isTouch ? _ED_RULE_LINE_HIT_TOUCH : _ED_RULE_LINE_HIT) / z;
+  for(let i = edRules.length-1; i >= 0; i--) {
+    const r = edRules[i];
+    if(Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
+    if(Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
+    const dx = r.x2-r.x1, dy = r.y2-r.y1, len2 = dx*dx+dy*dy;
+    if(len2 > 0) {
+      const t  = Math.max(0, Math.min(1, ((wx-r.x1)*dx+(wy-r.y1)*dy)/len2));
+      if(Math.hypot(wx-(r.x1+t*dx), wy-(r.y1+t*dy)) <= lPx) return { ruleId: r.id, part: 'line' };
+    }
+  }
+  return null;
+}
+
+function edInitRules() {
+  $('dd-rule-add')?.addEventListener('click', () => {
+    _edRuleAdd();
+    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+  });
+  $('dd-rule-clear')?.addEventListener('click', () => {
+    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+    _edRuleClear();
+  });
+}
+
+// ── Snap a reglas durante el drag ────────────────────────────────────────────
+// Algoritmo estándar (Figma / Konva / Krita):
+// Para cada punto candidato del objeto (bordes + centro), calcular distancia
+// perpendicular a cada regla. Recoger el mejor snap en componente X y en
+// componente Y por separado para permitir snap simultáneo a dos reglas perpendiculares.
+const _ED_SNAP_THRESHOLD_PX = 8; // px de pantalla — umbral estándar de la industria
+
+function _edSnapToRules(la) {
+  if(!edRules.length) return;
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const z  = edCamera.z;
+  const threshold = _ED_SNAP_THRESHOLD_PX / z; // convertir a coords workspace
+
+  // Puntos candidatos del objeto en coords workspace (bordes y centro del bbox)
+  const objCx = mx + la.x * pw;
+  const objCy = my + la.y * ph;
+  const hw = (la.width  || 0) * pw / 2;
+  const hh = (la.height || 0) * ph / 2;
+
+  const candidates = [
+    { ox: 0,   oy: 0   },  // centro
+    { ox: -hw, oy: 0   },  // borde izquierdo
+    { ox:  hw, oy: 0   },  // borde derecho
+    { ox: 0,   oy: -hh },  // borde superior
+    { ox: 0,   oy:  hh },  // borde inferior
+  ];
+
+  // Recoger mejor snap en componente X e Y por separado
+  // Esto permite snap simultáneo a dos reglas perpendiculares
+  let bestDistX = threshold, bestDistY = threshold;
+  let snapDx = 0, snapDy = 0;
+
+  for(const r of edRules) {
+    const rdx = r.x2 - r.x1, rdy = r.y2 - r.y1;
+    const rlen = Math.hypot(rdx, rdy);
+    if(rlen < 1) continue;
+    // Normal a la línea (perpendicular)
+    const rnx = -rdy / rlen, rny = rdx / rlen;
+
+    for(const cand of candidates) {
+      const px = objCx + cand.ox;
+      const py = objCy + cand.oy;
+      const vx = px - r.x1, vy = py - r.y1;
+      // Distancia perpendicular (con signo)
+      const proj = vx * rnx + vy * rny;
+      const dist = Math.abs(proj);
+
+      if(dist < threshold) {
+        // Desplazamiento para poner el punto sobre la recta
+        const dx = -proj * rnx;
+        const dy = -proj * rny;
+
+        // Separar en componentes X e Y — coger el mejor para cada eje
+        // Una regla predominantemente vertical aporta snap en X
+        // Una regla predominantemente horizontal aporta snap en Y
+        const isMoreVertical = Math.abs(rdy) > Math.abs(rdx);
+        if(isMoreVertical) {
+          // Esta regla da snap horizontal (mueve en X)
+          if(dist < bestDistX) { bestDistX = dist; snapDx = dx; }
+        } else {
+          // Esta regla da snap vertical (mueve en Y)
+          if(dist < bestDistY) { bestDistY = dist; snapDy = dy; }
+        }
+        // Para reglas diagonales (45°), aplicar en ambos ejes si es el mejor
+        if(Math.abs(Math.abs(rdx) - Math.abs(rdy)) < rlen * 0.2) {
+          if(dist < bestDistX) { bestDistX = dist; snapDx = dx; }
+          if(dist < bestDistY) { bestDistY = dist; snapDy = dy; }
+        }
+      }
+    }
+  }
+
+  if(snapDx !== 0) la.x += snapDx / pw;
+  if(snapDy !== 0) la.y += snapDy / ph;
 }
 
 /* ══════════════════════════════════════════
@@ -6927,6 +7440,7 @@ async function edCloudSave() {
 
 function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
+  // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
   const _camState = { x: edCamera.x, y: edCamera.y, z: edCamera.z, page: edCurrentPage };
@@ -7013,6 +7527,7 @@ function edSaveProject(){
         edOrientation=_savedOrient; edCurrentPage=_savedPage;
         return result;
       })(),
+      _rules: edRules,
     },
     updatedAt:new Date().toISOString(),
     cameraState: _camState,
@@ -7294,6 +7809,7 @@ function edLoadProject(id){
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
+    edRules = comic.editorData._rules || [];
     edPages=(comic.editorData.pages||[]).map(pd=>{
       const orient = pd.orientation||comic.editorData.orientation||'vertical';
       const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
@@ -7303,7 +7819,7 @@ function edLoadProject(id){
         layers.unshift(DrawLayer.fromDataUrl(pd.drawData, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)); // legacy
       }
       return {
-        drawData: null,  // ya no se usa, migrado a DrawLayer
+        drawData: null,
         layers,
         textLayerOpacity: pd.textLayerOpacity??1,
         textMode: pd.textMode||'sequential',
@@ -7312,6 +7828,7 @@ function edLoadProject(id){
     });
   }else{
     edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
+    edRules=[];
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
@@ -8254,6 +8771,7 @@ function EditorView_init(){
   edInitFloatDrag();
   edInitDrawBar();
   edInitShapeBar();
+  edInitRules();
   // Avisar al usuario si localStorage se llena al guardar
   window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
   window.addEventListener('cx:storage:quota', window._edQuotaFn);

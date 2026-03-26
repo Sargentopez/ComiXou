@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v11.47</footer>
+    <footer class="app-version">v11.67</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -252,6 +252,17 @@ Router.register('editor', {
               <rect x="7" y="7" width="8" height="8" rx="1" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5"/>
             </svg>
           </button>
+
+          <div class="ed-menu-sep"></div>
+
+          <!-- REGLAS -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="rules">Reglas ▾</button>
+            <div class="ed-dropdown" id="dd-rules">
+              <button class="ed-dropdown-item" id="dd-rule-add">＋ Añadir regla</button>
+              <button class="ed-dropdown-item" id="dd-rule-clear" style="color:#c00">✕ Borrar reglas</button>
+            </div>
+          </div>
 
           <div class="ed-menu-sep"></div>
 

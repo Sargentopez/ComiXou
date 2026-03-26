@@ -141,6 +141,7 @@ const SupabaseClient = (() => {
       nav_mode:    comic.navMode    || 'fixed',
       social:      comic.social     || '',
       panel_count: comic.panels?.length || 0,
+      rules:       JSON.stringify(comic.editorData?._rules || []),
       published:   false,
       updated_at:  new Date().toISOString(),
     });
@@ -197,9 +198,11 @@ const SupabaseClient = (() => {
   // como editorData listo para edLoadProject(). El editor las pasa por edDeserLayer
   // sin ninguna conversion — es el mismo formato que guardo edSaveProject.
   async function downloadDraftAsEditorData(supabaseId) {
-    const works = await _get(`works?id=eq.${supabaseId}&limit=1`);
+    const works = await _get(`works?id=eq.${supabaseId}&limit=1&select=*,rules`);
     if (!works || !works.length) throw new Error('Obra no encontrada en la nube');
     const work = works[0];
+    let _projectRules = [];
+    try { _projectRules = work.rules ? JSON.parse(work.rules) : []; } catch(e) { _projectRules = []; }
 
     const panels = await _get(
       `panels?work_id=eq.${supabaseId}&order=panel_order.asc&select=id,panel_order,orientation,text_mode,data_url`
@@ -207,7 +210,6 @@ const SupabaseClient = (() => {
 
     const pages = [];
     for (const panel of panels) {
-      // Capas del editor guardadas por edSerLayer
       const layerRows = await _get(
         `panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`
       ) || [];
@@ -217,8 +219,6 @@ const SupabaseClient = (() => {
         catch(e) { return null; }
       }).filter(Boolean);
 
-      // Si no hay panel_layers (obra subida antes de esta version), usar data_url
-      // como ImageLayer de fallback para que al menos se vea algo
       if (layers.length === 0 && panel.data_url) {
         layers.push({
           type: 'image', src: panel.data_url,
@@ -239,6 +239,7 @@ const SupabaseClient = (() => {
       work,
       editorData: {
         orientation: pages[0]?.orientation || 'vertical',
+        _rules: _projectRules,
         pages,
       },
     };
