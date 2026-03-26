@@ -2251,10 +2251,11 @@ function edMirrorSelected(){
     if(['draw','eraser','fill'].includes(edActiveTool)){
       const page = edPages[edCurrentPage]; if(!page) return;
       const la = page.layers.find(l => l.type==='draw'); if(!la) return;
-      edPushHistory();
-      const pageW = edPageW();
-      const mx    = edMarginX();
-      const axisPx = mx + pageW / 2;
+      _edDrawPushHistory(); // para que ↩ del panel draw funcione
+      edPushHistory();      // para que ↩ global también funcione
+      // Calcular eje X en el centro del bbox del contenido pintado
+      const bb = StrokeLayer._boundingBox(la._canvas);
+      const axisPx = bb ? (bb.x + bb.w / 2) : (edMarginX() + edPageW() / 2);
       const tmp = document.createElement('canvas');
       tmp.width  = ED_CANVAS_W;
       tmp.height = ED_CANVAS_H;
@@ -2309,10 +2310,9 @@ function edMirrorSelected(){
   }
 
   else if(la.type === 'draw'){
-    // DrawLayer cubre el workspace entero; reflejar respecto al eje vertical de la página
-    const pageW = edPageW();
-    const mx    = edMarginX();
-    const axisPx = mx + pageW / 2; // x del eje en coords workspace
+    // Reflejar respecto al eje vertical del centro del contenido pintado
+    const bb2 = StrokeLayer._boundingBox(la._canvas);
+    const axisPx = bb2 ? (bb2.x + bb2.w / 2) : (edMarginX() + edPageW() / 2);
     const tmp = document.createElement('canvas');
     tmp.width  = ED_CANVAS_W;
     tmp.height = ED_CANVAS_H;
@@ -3261,7 +3261,17 @@ function edOnStart(e){
             // Eliminar nodo (mínimo 2 puntos)
             if(_n > 2){
               la.points.splice(_lineHit.idx,1);
-              if(la.cornerRadii) delete la.cornerRadii[_lineHit.idx];
+              // Reindexar cornerRadii: los índices > eliminado bajan uno
+              if(la.cornerRadii && Object.keys(la.cornerRadii).length){
+                const newCR = {};
+                for(const k in la.cornerRadii){
+                  const ki = parseInt(k);
+                  if(ki < _lineHit.idx) newCR[ki] = la.cornerRadii[k];
+                  else if(ki > _lineHit.idx) newCR[ki-1] = la.cornerRadii[k];
+                  // ki === idx: ese nodo desaparece, no se copia
+                }
+                la.cornerRadii = newCR;
+              }
               la._updateBbox(); _edShapePushHistory(); edRedraw();
             }
             return;
@@ -3277,6 +3287,16 @@ function edOnStart(e){
             const lx=dx*Math.cos(rotInv)-dy*Math.sin(rotInv);
             const ly=dx*Math.sin(rotInv)+dy*Math.cos(rotInv);
             la.points.splice(_j2,0,{x:lx,y:ly});
+            // Reindexar cornerRadii: los índices >= _j2 suben uno
+            if(la.cornerRadii && Object.keys(la.cornerRadii).length){
+              const newCR = {};
+              for(const k in la.cornerRadii){
+                const ki = parseInt(k);
+                if(ki < _j2) newCR[ki] = la.cornerRadii[k];
+                else newCR[ki+1] = la.cornerRadii[k];
+              }
+              la.cornerRadii = newCR;
+            }
             la._updateBbox(); _edShapePushHistory(); edRedraw();
             return;
           }
@@ -4869,8 +4889,8 @@ function _edActivateShapeTool() {
   $('op-tool-line')?.addEventListener('click',()=>{ edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
 
   // ── Tipo ──
-  $('op-shape-rect')?.addEventListener('click',()=>{ _edShapeType='rect'; const s=_curShape(); if(s){s.shape='rect';edRedraw();} _edActivateShapeTool(); });
-  $('op-shape-ellipse')?.addEventListener('click',()=>{ _edShapeType='ellipse'; const s=_curShape(); if(s){s.shape='ellipse';edRedraw();} _edActivateShapeTool(); });
+  $('op-shape-rect')?.addEventListener('click',()=>{ _edShapeType='rect'; const s=_curShape(); if(s){_edShapePushHistory(); s.shape='rect';edRedraw();} _edActivateShapeTool(); });
+  $('op-shape-ellipse')?.addEventListener('click',()=>{ _edShapeType='ellipse'; const s=_curShape(); if(s){_edShapePushHistory(); s.shape='ellipse';edRedraw();} _edActivateShapeTool(); });
   $('op-shape-select')?.addEventListener('click',()=>{
     _edShapeType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateShapeTool();
@@ -5031,7 +5051,7 @@ function _edActivateShapeTool() {
     _edShapeHistIdxBase = 0;
     _edShapeUpdateUndoRedoBtns();
   });
-  $('op-shape-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
+  $('op-shape-mirror')?.addEventListener('click',()=>{ _edShapePushHistory(); edMirrorSelected(); });
 
   // ── Deshacer / Rehacer ──
   const _updURShape = ()=>{
@@ -5338,7 +5358,7 @@ function _edActivateLineTool(isNew) {
     _edShapeHistIdxBase = 0;
     _edShapeUpdateUndoRedoBtns();
   });
-  $('op-line-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
+  $('op-line-mirror')?.addEventListener('click',()=>{ _edShapePushHistory(); edMirrorSelected(); });
 
   // ── Deshacer / Rehacer ──
   _updUR();
@@ -5469,8 +5489,15 @@ function _edPickColor(e, initialHex, onInput, onCommit){
     inp.type='color'; inp.value=initialHex;
     inp.style.cssText='position:fixed;opacity:0;width:0;height:0;';
     document.body.appendChild(inp);
+    // Activar inmediatamente (antes del click) — el focus no siempre se dispara en Chrome
+    window._edEyedropActive = true; edRedraw();
     inp.addEventListener('input', ev=>onInput(ev.target.value));
-    inp.addEventListener('change', ()=>{ onCommit(inp.value); inp.remove(); });
+    inp.addEventListener('change', ()=>{
+      window._edEyedropActive = false; edRedraw();
+      onCommit(inp.value); inp.remove();
+    });
+    // Fallback: si se cierra sin cambiar color (Escape), restaurar tras breve espera
+    inp.addEventListener('blur', ()=>{ setTimeout(()=>{ window._edEyedropActive=false; edRedraw(); }, 200); });
     inp.click();
   }
 }
@@ -5614,21 +5641,9 @@ function edRenderOptionsPanel(mode){
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-color-erase-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
-    ${!isFill && window._edIsTouch ? `
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-offset-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ Cursor</button>
-    <div id="op-offset-pop" style="display:none;position:absolute;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);flex-direction:row;align-items:center;gap:6px;">
-      <button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda">
-        <svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      </button>
-      <button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha">
-        <svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      </button>
-    </div>` : ''}
 
   </div>
-  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
+  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n    ${!isFill && window._edIsTouch ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ Cursor</button><div id="op-offset-pop" style="display:none;position:absolute;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);flex-direction:row;align-items:center;gap:6px;"><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>` : ''}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
     <button id="op-draw-del"
       style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
@@ -5682,6 +5697,7 @@ function edRenderOptionsPanel(mode){
           _edUpdatePaletteDots();
         });
       } else {
+        window._edEyedropActive = true; edRedraw();
         $('op-dcolor')?.click();
       }
     });
@@ -5691,6 +5707,8 @@ function edRenderOptionsPanel(mode){
       edColorPalette[edSelectedPaletteIdx] = edDrawColor;
       _edUpdatePaletteDots();
     });
+    $('op-dcolor')?.addEventListener('change', ()=>{ window._edEyedropActive=false; edRedraw(); });
+    $('op-dcolor')?.addEventListener('blur',   ()=>{ setTimeout(()=>{ window._edEyedropActive=false; edRedraw(); }, 200); });
     // Dots de la paleta
     document.querySelectorAll('.op-pal-dot').forEach(dot=>{
       dot.addEventListener('click',()=>{
@@ -5835,7 +5853,7 @@ function edRenderOptionsPanel(mode){
       edDuplicateSelected();
       edCloseOptionsPanel();
     });
-    $('op-draw-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
+    $('op-draw-mirror')?.addEventListener('click',()=>{ _edDrawPushHistory(); edMirrorSelected(); });
 
     // ── Eliminar ──
     $('op-draw-del')?.addEventListener('click',()=>{
@@ -5971,6 +5989,12 @@ function edRenderOptionsPanel(mode){
     // (voiceCount es independiente del estilo)
     // Live update
     panel.querySelectorAll('input,select,textarea').forEach(inp=>{
+      // input[type=color] en PC: restaurar opacidad del canvas al abrirlo
+      if(inp.type === 'color'){
+        inp.addEventListener('click',  ()=>{ window._edEyedropActive=true;  edRedraw(); });
+        inp.addEventListener('change', ()=>{ window._edEyedropActive=false; edRedraw(); });
+        inp.addEventListener('blur',   ()=>{ setTimeout(()=>{ window._edEyedropActive=false; edRedraw(); }, 200); });
+      }
       inp.addEventListener('input',e=>{
         if(edSelectedIdx<0)return;
         const la=edLayers[edSelectedIdx],id=e.target.id;
