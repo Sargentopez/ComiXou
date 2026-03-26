@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v11.46</footer>
+    <footer class="app-version">v11.47</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -337,9 +337,6 @@ Router.register('editor', {
         flex-direction:row;align-items:center;gap:6px;">
         <button id="edb-offset-pop-l" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Inclinado izquierda">
           <svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
-        <button id="edb-offset-pop-c" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Vertical">
-          <svg width="22" height="28" viewBox="0 0 22 28"><line x1="11" y1="4" x2="11" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
         <button id="edb-offset-pop-r" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Inclinado derecha">
           <svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>

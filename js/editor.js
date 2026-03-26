@@ -5339,9 +5339,6 @@ function edRenderOptionsPanel(mode){
       <button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda">
         <svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
-      <button id="op-offset-pop-c" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Vertical">
-        <svg width="22" height="28" viewBox="0 0 22 28"><line x1="11" y1="4" x2="11" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      </button>
       <button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha">
         <svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
@@ -5501,7 +5498,7 @@ function edRenderOptionsPanel(mode){
       $('op-offset-pop')?.addEventListener(ev, e => e.stopPropagation(), { passive: true })
     );
     // Botones del popover
-    [{id:'op-offset-pop-l', angle:40}, {id:'op-offset-pop-c', angle:0}, {id:'op-offset-pop-r', angle:-40}]
+    [{id:'op-offset-pop-l', angle:40}, {id:'op-offset-pop-r', angle:-40}]
       .forEach(({id, angle}) => {
         $(id)?.addEventListener('click', e => {
           e.stopPropagation();
@@ -5516,9 +5513,9 @@ function edRenderOptionsPanel(mode){
             _opOffsetBtn.style.background = _edCursorOffset ? 'var(--black)' : 'transparent';
             _opOffsetBtn.style.color = _edCursorOffset ? 'var(--white)' : 'var(--gray-700)';
           }
-          ['op-offset-pop-l','op-offset-pop-c','op-offset-pop-r'].forEach(bid => {
+          ['op-offset-pop-l','op-offset-pop-r'].forEach(bid => {
             const b = $(bid); if(!b) return;
-            const a = bid==='op-offset-pop-l' ? 40 : bid==='op-offset-pop-r' ? -40 : 0;
+            const a = bid==='op-offset-pop-l' ? 40 : -40;
             b.style.background = (_edCursorOffset && _edCursorOffsetAngle === a) ? 'var(--gray-200)' : 'transparent';
           });
           _edbSyncOffsetBtn();
@@ -6171,7 +6168,7 @@ function edInitDrawBar() {
   ['pointerdown','touchstart'].forEach(ev =>
     $('edb-offset-pop')?.addEventListener(ev, e => e.stopPropagation(), { passive: true })
   );
-  [{id:'edb-offset-pop-l', angle:40}, {id:'edb-offset-pop-c', angle:0}, {id:'edb-offset-pop-r', angle:-40}]
+  [{id:'edb-offset-pop-l', angle:40}, {id:'edb-offset-pop-r', angle:-40}]
     .forEach(({id, angle}) => {
       $(id)?.addEventListener('click', e => {
         e.stopPropagation();
@@ -6342,7 +6339,7 @@ function _edbSyncOffsetBtn(){
     edbBtn.style.opacity = _edCursorOffset ? '1' : '0.5';
   }
   // Marcar el botón activo dentro del popover de la barra
-  [{id:'edb-offset-pop-l', a:40},{id:'edb-offset-pop-c', a:0},{id:'edb-offset-pop-r', a:-40}].forEach(({id,a}) => {
+  [{id:'edb-offset-pop-l', a:40},{id:'edb-offset-pop-r', a:-40}].forEach(({id,a}) => {
     const b = $(id); if(!b) return;
     const on = _edCursorOffset && _edCursorOffsetAngle === a;
     b.style.background = on ? 'rgba(255,255,255,0.2)' : 'transparent';
