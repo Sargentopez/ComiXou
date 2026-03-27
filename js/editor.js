@@ -1152,10 +1152,10 @@ class LineLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
-    if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl() };
+    if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl(), locked:l.locked||false };
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-      color:l.color||'#000000', lineWidth:l.lineWidth??3 };
+      color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
@@ -1379,9 +1379,53 @@ function _edCameraReset(){
    REDRAW
    ══════════════════════════════════════════ */
 
+/* ── Muestra icono 🔒 centrado en el bbox del objeto durante 2s ── */
+function _edShowLockIcon(la) {
+  if(!la || !edCanvas) return;
+  const pw = edPageW(), ph = edPageH();
+  const wsCx = edMarginX() + la.x * pw;
+  const wsCy = edMarginY() + la.y * ph;
+  const scrCx = wsCx * edCamera.z + edCamera.x;
+  const scrCy = wsCy * edCamera.z + edCamera.y;
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const px = canvasRect.left + scrCx;
+  const py = canvasRect.top  + scrCy;
+
+  let el = $('_edLockIcon');
+  if(!el){
+    el = document.createElement('div');
+    el.id = '_edLockIcon';
+    el.style.cssText = 'position:fixed;pointer-events:none;z-index:9999;font-size:2rem;transform:translate(-50%,-50%);transition:opacity .3s;text-shadow:0 2px 8px rgba(0,0,0,.5)';
+    document.body.appendChild(el);
+  }
+  el.textContent = '🔒';
+  el.style.left = px + 'px';
+  el.style.top  = py + 'px';
+  el.style.opacity = '1';
+  el.style.display = '';
+  clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(()=>{ el.style.opacity='0'; setTimeout(()=>{ el.style.display='none'; }, 300); }, 2000);
+}
+/* ── Versión para DrawLayer: calcula el centro del contenido pintado ── */
+function _edShowLockIconDraw(dl) {
+  if(!dl || !edCanvas) return;
+  const pw = edPageW(), ph = edPageH();
+  // Leer bbox del contenido pintado (muestreo rápido cada 8px)
+  const idata = dl._ctx.getImageData(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+  const d = idata.data;
+  let minX=ED_CANVAS_W, maxX=0, minY=ED_CANVAS_H, maxY=0, found=false;
+  const step=8;
+  for(let y=0;y<ED_CANVAS_H;y+=step) for(let x=0;x<ED_CANVAS_W;x+=step){
+    if(d[(y*ED_CANVAS_W+x)*4+3]>8){ if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; found=true; }
+  }
+  // Si vacío, usar centro de la página
+  const cx = found ? ((minX+maxX)/2 - edMarginX()) / pw : 0.5;
+  const cy = found ? ((minY+maxY)/2 - edMarginY()) / ph : 0.5;
+  _edShowLockIcon({x:cx, y:cy, width:0.1, height:0.1});
+}
+
 /* ── Centra la cámara en el layer dado, ajustando zoom para que quepa
-      en el área visible libre (bajo el panel de opciones y las barras flotantes).
-      Llamar con requestAnimationFrame para que el DOM refleje las alturas reales. ── */
+      en el área visible libre. Llamar con requestAnimationFrame. ── */
 function _edFocusOnLayer(la) {
   if (!la || !edCanvas) return;
   const pw = edPageW(), ph = edPageH();
@@ -2734,6 +2778,8 @@ function _edHandleDoubleTap(idx){
   if(la && la.type === 'stroke'){
     const page=edPages[edCurrentPage]; if(!page) return;
     const dl=la.toDrawLayer();
+    // Transferir locked al DrawLayer para que el panel lo muestre correctamente
+    if(la.locked) dl.locked = true;
     // Quitar stroke e insertar DrawLayer en posición más alta (bajo textos)
     page.layers.splice(idx, 1);
     const firstTextIdx2 = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
@@ -3361,7 +3407,11 @@ function edOnStart(e){
 
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
   const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-  if(_la && _la.type!=='bubble'){
+  const _laInEdit = _la && (()=>{
+    const _p=$('edOptionsPanel'); const _sb=$('edShapeBar'); const _db=$('edDrawBar');
+    return _p?.classList.contains('open') || _sb?.classList.contains('visible') || _db?.classList.contains('visible');
+  })();
+  if(_la && _la.type!=='bubble' && (!_la.locked || _laInEdit)){
     const _isT = e.pointerType==='touch';
     const _pw=edPageW(), _ph=edPageH();
     const _z=edCamera.z;
@@ -3444,9 +3494,14 @@ function edOnStart(e){
   const _shapeBarOpen = $('edShapeBar')?.classList.contains('visible');
   const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
   if(_editingVectorial && edSelectedIdx >= 0){
-    // Comprobar si el click es sobre el objeto seleccionado → permitir drag
+    // Comprobar si el click es sobre el objeto seleccionado → permitir drag (si no está bloqueado o está en edición)
     const _la = edLayers[edSelectedIdx];
     if(_la && _la.contains(c.nx, c.ny)){
+      const _vInEdit = (()=>{
+        const _p=$('edOptionsPanel'); const _sb=$('edShapeBar');
+        return _p?.classList.contains('open') || _sb?.classList.contains('visible');
+      })();
+      if(_la.locked && !_vInEdit){ _edShowLockIcon(_la); edRedraw(); return; }
       edIsDragging=true;
       edDragOffX=c.nx-_la.x; edDragOffY=c.ny-_la.y;
       return;
@@ -3489,47 +3544,57 @@ function edOnStart(e){
       const _fcr=_fl.cornerRadii||{};
       if(Object.keys(_fcr).some(k=>(_fcr[k]||0)>0)) _fl._updateBbox();
     }
+    // ── Objeto bloqueado: aplicar solo si NO está en edición activa ──
+    if(_fl && _fl.locked){
+      // Determinar si este objeto tiene su panel de edición abierto o barra flotante activa
+      const _panel = $('edOptionsPanel');
+      const _panelMode = _panel?.dataset.mode;
+      const _panelOpen = _panel?.classList.contains('open');
+      const _shapeBarOpen = $('edShapeBar')?.classList.contains('visible');
+      const _drawBarOpen  = $('edDrawBar')?.classList.contains('visible');
+      // El objeto está en edición activa si su panel o barra flotante está abierta Y es el seleccionado
+      const _inEdit = (edSelectedIdx === found) && (
+        _panelOpen || _shapeBarOpen || _drawBarOpen
+      );
+      if(!_inEdit){
+        const _nowL = Date.now();
+        if(found === _edLastTapIdx && _nowL - _edLastTapTime < 350){
+          _edLastTapTime = 0; _edLastTapIdx = -1;
+          _edHandleDoubleTap(found);
+        } else {
+          _edLastTapTime = _nowL; _edLastTapIdx = found;
+          _edShowLockIcon(_fl);
+          edRedraw();
+        }
+        return;
+      }
+    }
+    // ── Comprobar doble tap ANTES de activar drag — evita micro-movimiento en Android ──
+    const _nowDbl = Date.now();
+    if(found === _edLastTapIdx && _nowDbl - _edLastTapTime < 350){
+      // Es doble tap: abrir panel sin activar drag en ningún momento
+      _edLastTapTime = 0; _edLastTapIdx = -1;
+      _edHandleDoubleTap(found);
+      return;
+    }
+    _edLastTapTime = _nowDbl; _edLastTapIdx = found;
+
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
     window._edMoved = false;
     edHideGearIcon();
     clearTimeout(window._edLongPress);
-    if(_isTouch){
-      // TÁCTIL: toque simple = solo seleccionar
-      // Doble toque rápido (≤350ms) → abrir panel de propiedades
-      const now = Date.now();
-      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
-        edIsDragging = false;
-        clearTimeout(window._edLongPress);
-        _edHandleDoubleTap(found);
-        _edLastTapTime = 0; _edLastTapIdx = -1;
-        return; // no continuar procesando este evento
-      } else {
-        _edLastTapTime = now; _edLastTapIdx = found;
-        // Sin long-press en táctil — solo doble toque abre el panel
-      }
-    } else {
-      // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
-      const now = Date.now();
-      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
-        edIsDragging = false;
-        clearTimeout(window._edLongPress);
-        _edHandleDoubleTap(found);
-        _edLastTapTime = 0; _edLastTapIdx = -1;
-        return; // no continuar procesando este evento
-      } else {
-        _edLastTapTime = now; _edLastTapIdx = found;
-        // Long-press 600ms en PC (ratón) → abrir propiedades (no para shape/line)
-        window._edLongPress = setTimeout(() => {
-          if(edSelectedIdx === found && !edIsResizing){
-            const _la = edLayers[found];
-            if(_la && (_la.type === 'shape' || _la.type === 'line')) return;
-            edIsDragging = false;
-            edRenderOptionsPanel('props');
-          }
-        }, 600);
-      }
+    if(!_isTouch){
+      // Long-press 600ms en PC (ratón) → abrir propiedades (no para shape/line)
+      window._edLongPress = setTimeout(() => {
+        if(edSelectedIdx === found && !edIsResizing){
+          const _la = edLayers[found];
+          if(_la && (_la.type === 'shape' || _la.type === 'line')) return;
+          edIsDragging = false;
+          edRenderOptionsPanel('props');
+        }
+      }, 600);
     }
   } else {
     const _wasType = edSelectedIdx >= 0 ? edLayers[edSelectedIdx]?.type : null;
@@ -4311,6 +4376,7 @@ function _edGetOrCreateDrawLayer(){
 function edFloodFill(nx, ny){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = _edGetOrCreateDrawLayer();
+  if(dl.locked && !($('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw')){ _edShowLockIconDraw(dl); return; }
   const canvas = dl._canvas, ctx = dl._ctx;
   const W = canvas.width, H = canvas.height;
 
@@ -4576,11 +4642,16 @@ function _edLineAddPoint(nx, ny){
 }
 
 function edStartPaint(e){
-  edPainting = true;
   const _pp=$('edOptionsPanel');
   if(_pp&&_pp.classList.contains('open')&&_pp.dataset.mode!=='draw'){
     _pp.classList.remove('open'); _pp.innerHTML='';
   }
+  // Comprobar lock ANTES de activar edPainting — pero solo si el panel de draw NO está abierto
+  const _dlCheck = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
+  const _drawPanelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
+  if(_dlCheck && _dlCheck.locked && !_drawPanelOpen){ _edShowLockIconDraw(_dlCheck); return; }
+
+  edPainting = true;
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
   }
@@ -4924,6 +4995,7 @@ function _edActivateShapeTool() {
     <button id="op-shape-mirror" title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_sel?.locked?'var(--gray-800)':'transparent'};color:${_sel?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_sel?.locked?'Desbloquear':'Bloquear'}">${_sel?.locked?'🔒':'🔓'}</button>
 
     <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':'Sin objeto'}</span>
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
@@ -5127,6 +5199,20 @@ function _edActivateShapeTool() {
   _updURShape();
   $('op-shape-undo')?.addEventListener('click',()=>{ edShapeUndo(); });
   $('op-shape-redo')?.addEventListener('click',()=>{ edShapeRedo(); });
+  $('op-lock-btn')?.addEventListener('click',()=>{
+    const _ls = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    if(!_ls) return;
+    _ls.locked = !_ls.locked;
+    edPushHistory();
+    // Actualizar botón visualmente sin reconstruir todo el panel
+    const _btn = $('op-lock-btn');
+    if(_btn){
+      _btn.textContent = _ls.locked ? '🔒' : '🔓';
+      _btn.style.background = _ls.locked ? 'var(--gray-800)' : 'transparent';
+      _btn.style.color = _ls.locked ? 'var(--white)' : 'var(--gray-700)';
+      _btn.title = _ls.locked ? 'Desbloquear' : 'Bloquear';
+    }
+  });
 
   requestAnimationFrame(edFitCanvas);
 }
@@ -5211,6 +5297,7 @@ function _edActivateLineTool(isNew) {
     <button id="op-line-mirror" title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_cur?.locked?'var(--gray-800)':'transparent'};color:${_cur?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_cur?.locked?'Desbloquear':'Bloquear'}">${_cur?.locked?'🔒':'🔓'}</button>
 
     <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
@@ -5431,6 +5518,19 @@ function _edActivateLineTool(isNew) {
   _updUR();
   $('op-line-undo')?.addEventListener('click',()=>{ edShapeUndo(); });
   $('op-line-redo')?.addEventListener('click',()=>{ edShapeRedo(); });
+  $('op-lock-btn')?.addEventListener('click',()=>{
+    const _ll = (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null) || _edLineLayer;
+    if(!_ll) return;
+    _ll.locked = !_ll.locked;
+    edPushHistory();
+    const _btn = $('op-lock-btn');
+    if(_btn){
+      _btn.textContent = _ll.locked ? '🔒' : '🔓';
+      _btn.style.background = _ll.locked ? 'var(--gray-800)' : 'transparent';
+      _btn.style.color = _ll.locked ? 'var(--white)' : 'var(--gray-700)';
+      _btn.title = _ll.locked ? 'Desbloquear' : 'Bloquear';
+    }
+  });
 
   requestAnimationFrame(edFitCanvas);
 }
@@ -5475,10 +5575,13 @@ function _edFreezeDrawLayer(){
 
   if(dlIdx < 0) return;
   const dl = page.layers[dlIdx];
+  const _wasLocked = dl.locked || false;
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){ page.layers.splice(dlIdx, 1); edLayers=page.layers; return; }
   const sl = new StrokeLayer(dl._canvas);
+  // Transferir locked del DrawLayer al StrokeLayer resultante
+  if(_wasLocked) sl.locked = true;
   // Quitar el DrawLayer y reinsertar el StrokeLayer en la posición más alta (bajo textos)
   page.layers.splice(dlIdx, 1);
   const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
@@ -5722,6 +5825,7 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
+    <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${(()=>{const _p=edPages[edCurrentPage];const _dl=_p?_p.layers.find(l=>l.type==='draw'):null;return _dl?.locked?'var(--gray-800)':'transparent';})()};color:${(()=>{const _p=edPages[edCurrentPage];const _dl=_p?_p.layers.find(l=>l.type==='draw'):null;return _dl?.locked?'var(--white)':'var(--gray-700)';})()};cursor:pointer">${(()=>{const _p=edPages[edCurrentPage];const _dl=_p?_p.layers.find(l=>l.type==='draw'):null;return _dl?.locked?'🔒':'🔓';})()}</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
     <button id="op-draw-ok"
@@ -5932,6 +6036,19 @@ function edRenderOptionsPanel(mode){
     // ── Deshacer / Rehacer ──
     $('op-draw-undo')?.addEventListener('click', edDrawUndo);
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
+    $('op-lock-btn')?.addEventListener('click',()=>{
+      const _page = edPages[edCurrentPage];
+      const _dl = _page ? _page.layers.find(l=>l.type==='draw') : null;
+      if(!_dl) return;
+      _dl.locked = !_dl.locked;
+      edPushHistory();
+      const _btn = $('op-lock-btn');
+      if(_btn){
+        _btn.textContent = _dl.locked ? '🔒' : '🔓';
+        _btn.style.background = _dl.locked ? 'var(--gray-800)' : 'transparent';
+        _btn.style.color = _dl.locked ? 'var(--white)' : 'var(--gray-700)';
+      }
+    });
     _edDrawUpdateUndoRedoBtns();
 
     // ── Minimizar (desde el panel draw) ──
@@ -6077,6 +6194,7 @@ function edRenderOptionsPanel(mode){
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
       <button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
       ${(la.type!=='text'&&la.type!=='bubble')?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
+      <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:${la.locked?'var(--gray-800)':'var(--gray-100)'};color:${la.locked?'var(--white)':'var(--gray-700)'}" title="${la.locked?'Desbloquear':'Bloquear'}">${la.locked?'🔒':'🔓'}</button>
       <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
     </div>`;
 
@@ -6126,6 +6244,18 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
+    $('pp-lock')?.addEventListener('click',()=>{
+      const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null; if(!_la) return;
+      _la.locked = !_la.locked;
+      edPushHistory();
+      const _btn = $('pp-lock');
+      if(_btn){
+        _btn.textContent = _la.locked ? '🔒' : '🔓';
+        _btn.style.background = _la.locked ? 'var(--gray-800)' : 'var(--gray-100)';
+        _btn.style.color = _la.locked ? 'var(--white)' : 'var(--gray-700)';
+        _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
+      }
+    });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
@@ -7709,18 +7839,19 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
-    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
+    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,locked:l.locked||false,...op};
   }
   if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     _hasText:!!(l.text&&l.text!=='Escribe aquí'),
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
-    padding:l.padding||10,...op};
+    padding:l.padding||10,locked:l.locked||false,...op};
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
       _hasText:!!(l.text&&l.text!=='Escribe aquí'),
       text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
       backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
+      locked:l.locked||false,
       tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
       tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
       padding:l.padding||15,
@@ -7784,16 +7915,16 @@ function edSerLayer(l){
     }
     return _bobj;
   }
-  if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
+  if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl(), locked:l.locked||false};
   if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3};
+    color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false};
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadii:l.cornerRadii?[...l.cornerRadii]:undefined,
-      cornerRadius:l.cornerRadius||0};
+      cornerRadius:l.cornerRadius||0, locked:l.locked||false};
     // Si tiene cornerRadii con valores, generar bitmap fiel
     const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
     const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
@@ -7824,7 +7955,7 @@ function edSerLayer(l){
     const _lobj={type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
-      cornerRadii:_hasR?{..._cr}:undefined};
+      cornerRadii:_hasR?{..._cr}:undefined, locked:l.locked||false};
     if(_hasR){
       try{
         const _pw=edPageW(),_ph=edPageH();
@@ -7858,7 +7989,9 @@ function edDeserLayer(d, pageOrientation){
     const _isV = (pageOrientation||'vertical')==='vertical';
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-    return d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer();
+    const _dl = d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer();
+    if(d.locked) _dl.locked = true;
+    return _dl;
   }
   if(d.type==='stroke'){
     const _isV = (pageOrientation||'vertical')==='vertical';
@@ -7869,6 +8002,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.opacity !== undefined) sl.opacity = d.opacity;
     if(d.color)                  sl.color     = d.color;
     if(d.lineWidth !== undefined) sl.lineWidth = d.lineWidth;
+    if(d.locked) sl.locked = true;
     return sl;
   }
   if(d.type==='shape'){
@@ -7876,6 +8010,7 @@ function edDeserLayer(d, pageOrientation){
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'none'; l.lineWidth=d.lineWidth??3; l.rotation=d.rotation||0; l.opacity=d.opacity??1;
     if(d.cornerRadius) l.cornerRadius=d.cornerRadius;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
+    if(d.locked) l.locked=true;
     return l;
   }
   if(d.type==='line'){
@@ -7886,6 +8021,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
     else l._updateBbox();
+    if(d.locked) l.locked=true;
     return l;
   }
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
@@ -7899,6 +8035,7 @@ function edDeserLayer(d, pageOrientation){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
+    if(d.locked) l.locked=true;
     // BUG-E07: asignar height guardado ANTES del onload para que el primer
     // render muestre el tamaño correcto aunque la imagen tarde en cargar
     if(d.height) l.height = d.height;
