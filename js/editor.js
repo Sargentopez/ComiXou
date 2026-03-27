@@ -1166,6 +1166,7 @@ function _edLayersSnapshot(){
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
+    if(l.type === 'group') return edSerLayer(l);
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor','bgOpacity',
@@ -1243,6 +1244,10 @@ function edApplyHistory(snapshot){
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
       else l._updateBbox();
       return l;
+    }
+    else if(o.type === 'group') {
+      const grp = edDeserLayer(o, edPages[snapshot.pageIdx]?.orientation||edOrientation);
+      return grp;
     }
     else return o;
     for(const k of Object.keys(o)){
