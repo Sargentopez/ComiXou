@@ -160,7 +160,7 @@ function _lyRender() {
   // Combinar imágenes y dibujos (stroke/draw) en una sola lista
   const visualPairs = edLayers
     .map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line'||l.type==='group');
 
   if (visualPairs.length === 0) {
     const e = document.createElement('p');
@@ -278,6 +278,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
 function _lyBuildVisualItem(la, realIdx, selected) {
   const isDrawType = la.type === 'stroke' || la.type === 'draw';
   const isShapeType = la.type === 'shape' || la.type === 'line';
+  const isGroup = la.type === 'group';
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
   item.dataset.realIdx = realIdx;
@@ -292,10 +293,12 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     _lyDrawStrokeThumb(thumb, la);
   } else if (isShapeType) {
     _lyDrawShapeThumb(thumb, la);
+  } else if (isGroup) {
+    _lyDrawGroupThumb(thumb, la);
   } else {
     _lyDrawThumb(thumb, la);
   }
-  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : isShapeType ? 'Objeto · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
+  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : isShapeType ? 'Objeto · toca para seleccionar' : isGroup ? 'Grupo · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
   thumb.addEventListener('pointerup', () => {
     if (!item.classList.contains('was-dragged')) {
       edSelectedIdx = realIdx;
@@ -317,6 +320,8 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     name.textContent = la.shape === 'ellipse' ? '◯ Elipse' : '▭ Rectángulo';
   } else if (la.type === 'line') {
     name.textContent = la.closed ? '⬠ Polígono' : '╱ Recta';
+  } else if (isGroup) {
+    name.textContent = '⊞ Grupo (' + (la._groupChildren?.length||0) + ')';
   } else {
     name.textContent = 'Imagen ' + (realIdx + 1);
   }
@@ -325,7 +330,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
 
   /* Flechas subir/bajar — dentro de los elementos visuales */
   const visualAll = edLayers.map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line'||l.type==='group');
   const posInList = visualAll.findIndex(({i})=>i===realIdx);
 
   const upBtn = document.createElement('button');
@@ -769,6 +774,28 @@ function _lyDrawThumb(canvas, la) {
 /* ──────────────────────────────────────────
    MINIATURA SHAPE / LINE
 ────────────────────────────────────────── */
+function _lyDrawGroupThumb(canvas, la) {
+  const ctx = canvas.getContext('2d');
+  const sw = canvas.width, sh = canvas.height;
+  ctx.fillStyle = '#f5f5f5';
+  ctx.fillRect(0, 0, sw, sh);
+  if (la._cache && la._cache.width > 0) {
+    ctx.save();
+    ctx.globalAlpha = la.opacity ?? 1;
+    const pad = 4;
+    const scale = Math.min((sw-pad*2)/la._cache.width, (sh-pad*2)/la._cache.height);
+    const dx = pad + (sw-pad*2 - la._cache.width*scale)/2;
+    const dy = pad + (sh-pad*2 - la._cache.height*scale)/2;
+    ctx.drawImage(la._cache, dx, dy, la._cache.width*scale, la._cache.height*scale);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#bbb';
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('⊞', sw/2, sh/2);
+  }
+}
+
 function _lyDrawShapeThumb(canvas, la) {
   const ctx = canvas.getContext('2d');
   const sw = canvas.width, sh = canvas.height;
