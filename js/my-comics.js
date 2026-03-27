@@ -64,17 +64,8 @@ async function _mcSyncCloudDates() {
   const locals = ComicStore.getAll().filter(c => c.supabaseId);
   if (!locals.length) return;
 
-  const BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
-  const KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-  const hdrs = { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY };
-
   try {
-    const ids = locals.map(c => c.supabaseId).join(',');
-    const works = await fetch(
-      `${BASE}/works?id=in.(${ids})&select=id,updated_at,title,genre,nav_mode,published`,
-      { headers: hdrs }
-    ).then(r => r.ok ? r.json() : []);
-
+    const works = await SupabaseClient.fetchWorksByIds(locals.map(c => c.supabaseId));
     if (!works || !works.length) return;
 
     let changed = false;

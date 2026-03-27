@@ -298,5 +298,13 @@ const SupabaseClient = (() => {
     };
   }
 
-  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks };
+  // Devuelve metadatos básicos de obras por array de supabaseIds (para sync multi-dispositivo)
+  async function fetchWorksByIds(ids) {
+    if (!ids || !ids.length) return [];
+    const list = ids.join(',');
+    const r = await _get(`works?id=in.(${list})&select=id,updated_at,title,genre,nav_mode,published`);
+    return r || [];
+  }
+
+  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds };
 })();

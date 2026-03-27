@@ -236,6 +236,7 @@ function _pgDrawThumb(canvas, page) {
     else if (l.type === 'draw')    l.draw(offCtx);
     else if (l.type === 'stroke') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
     else if (l.type === 'shape' || l.type === 'line') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+    else if (l.type === 'group') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
   });
   offCtx.globalAlpha = _textAlpha;
   _textLayers.forEach(l => l.draw(offCtx, off));
