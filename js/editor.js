@@ -1378,6 +1378,92 @@ function _edCameraReset(){
 /* ══════════════════════════════════════════
    REDRAW
    ══════════════════════════════════════════ */
+
+/* ── Centra la cámara en el layer dado, ajustando zoom para que quepa
+      en el área visible libre (bajo el panel de opciones y las barras flotantes).
+      Llamar con requestAnimationFrame para que el DOM refleje las alturas reales. ── */
+function _edFocusOnLayer(la) {
+  if (!la || !edCanvas) return;
+  const pw = edPageW(), ph = edPageH();
+
+  // ── 1. Área libre del canvas (rect CSS del canvas en pantalla) ──
+  const canvasRect = edCanvas.getBoundingClientRect();
+
+  // ── 2. Zona bloqueada por el panel de opciones (arriba) ──
+  const panel = $('edOptionsPanel');
+  const panelBottom = (panel && panel.classList.contains('open'))
+    ? panel.getBoundingClientRect().bottom
+    : canvasRect.top;
+
+  // ── 3. Zona bloqueada por las barras flotantes ──
+  // Son móviles — medimos su rect real. Solo consideramos su borde inferior
+  // si solapan la zona central del canvas.
+  let floatBottom = 0;
+  ['edDrawBar','edShapeBar'].forEach(id => {
+    const bar = $(id);
+    if (!bar || bar.style.display === 'none' || !bar.classList.contains('visible')) return;
+    const r = bar.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) floatBottom = Math.max(floatBottom, r.bottom);
+  });
+
+  // Área libre: desde el mayor de panelBottom/floatBottom hasta el borde inferior del canvas
+  const freeTop    = Math.max(panelBottom, floatBottom);
+  const freeBottom = canvasRect.bottom;
+  const freeLeft   = canvasRect.left;
+  const freeRight  = canvasRect.right;
+
+  const freeW = Math.max(freeRight - freeLeft, 80);
+  const freeH = Math.max(freeBottom - freeTop, 80);
+
+  // ── 4. Bbox del objeto en coords de workspace (px absolutas) ──
+  // Centro del objeto en workspace
+  const objCx = edMarginX() + la.x * pw;
+  const objCy = edMarginY() + la.y * ph;
+  // Tamaño del objeto en workspace px
+  const objW  = (la.width  || 0.1) * pw;
+  const objH  = (la.height || 0.1) * ph;
+
+  // ── 5. Zoom: el objeto debe caber en el área libre con margen del 25% ──
+  const MARGIN = 0.75; // 75% del área libre máximo, 25% de margen
+  const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
+  const zForH  = (freeH * MARGIN) / Math.max(objH, 1);
+  const targetZ = Math.min(Math.min(zForW, zForH), 8); // no superar zoom máximo
+  // Solo cambiar zoom si el objeto no cabe bien con el zoom actual
+  const currentlyFitsW = objW * edCamera.z <= freeW * MARGIN;
+  const currentlyFitsH = objH * edCamera.z <= freeH * MARGIN;
+  const newZ = (currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.1);
+
+  // ── 6. Posición de cámara: centrar el objeto en el área libre ──
+  // Centro del área libre en coords de pantalla
+  const freeCx = freeLeft + freeW / 2;
+  const freeCy = freeTop  + freeH / 2;
+
+  // El canvas empieza en canvasRect.left, canvasRect.top (coords pantalla)
+  // camera.x/y son offsets dentro del canvas DOM
+  const camOffX = freeCx - canvasRect.left;
+  const camOffY = freeCy - canvasRect.top;
+
+  // Para que el objeto (objCx, objCy en workspace) quede en (camOffX, camOffY) en pantalla:
+  // camOffX = objCx * newZ + camera.x  →  camera.x = camOffX - objCx * newZ
+  const newCamX = camOffX - objCx * newZ;
+  const newCamY = camOffY - objCy * newZ;
+
+  // Animar suavemente con requestAnimationFrame
+  const startX = edCamera.x, startY = edCamera.y, startZ = edCamera.z;
+  const t0 = performance.now();
+  const DURATION = 220; // ms
+  function _animate(t) {
+    const p = Math.min((t - t0) / DURATION, 1);
+    const ease = p < 0.5 ? 2*p*p : -1+(4-2*p)*p; // easeInOut
+    edCamera.x = startX + (newCamX - startX) * ease;
+    edCamera.y = startY + (newCamY - startY) * ease;
+    edCamera.z = startZ + (newZ    - startZ) * ease;
+    edRedraw();
+    if (p < 1) requestAnimationFrame(_animate);
+  }
+  requestAnimationFrame(_animate);
+}
+
 /* ══════════════════════════════════════════
    MULTI-SELECCIÓN — helpers
    ══════════════════════════════════════════ */
@@ -4849,6 +4935,8 @@ function _edActivateShapeTool() {
   // Guardar estado previo en historial global (objeto existente)
   if(_sel) edPushHistory();
   _edShapeInitHistory();
+  // Centrar cámara en el objeto tras un frame (para que el panel tenga altura real)
+  if(_sel) requestAnimationFrame(()=>_edFocusOnLayer(_sel));
 
   // ── Helpers ──
   const _curShape = () => {
@@ -5134,6 +5222,8 @@ function _edActivateLineTool(isNew) {
   // Guardar estado previo en historial global (objeto existente, no nuevo)
   if(!isNew) edPushHistory();
   _edShapeInitHistory(isNew);
+  // Centrar cámara en el objeto tras un frame (para que el panel tenga altura real)
+  if(_cur) requestAnimationFrame(()=>_edFocusOnLayer(_cur));
 
   // ── Helpers ──
   const _curLine = () => {
@@ -5640,6 +5730,36 @@ function edRenderOptionsPanel(mode){
 </div>`;
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
+    // Centrar cámara en el contenido pintado del DrawLayer tras un frame
+    requestAnimationFrame(()=>{
+      const _page = edPages[edCurrentPage];
+      const _dl = _page ? _page.layers.find(l=>l.type==='draw') : null;
+      if(!_dl) return;
+      // Leer el bbox real del contenido pintado en coords de workspace (px)
+      const idata = _dl._ctx.getImageData(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+      const d = idata.data;
+      let minX=ED_CANVAS_W, maxX=0, minY=ED_CANVAS_H, maxY=0, found=false;
+      // Muestrear cada 4 px para no bloquear el hilo (suficiente precisión)
+      const step = 4;
+      for(let y=0; y<ED_CANVAS_H; y+=step){
+        for(let x=0; x<ED_CANVAS_W; x+=step){
+          if(d[(y*ED_CANVAS_W+x)*4+3] > 8){ // alpha > 8 = pixel visible
+            if(x<minX) minX=x; if(x>maxX) maxX=x;
+            if(y<minY) minY=y; if(y>maxY) maxY=y;
+            found=true;
+          }
+        }
+      }
+      if(!found) return; // canvas vacío — no mover cámara
+      const pw=edPageW(), ph=edPageH();
+      // Convertir bbox de workspace px a coords normalizadas de página
+      const cx = ((minX+maxX)/2 - edMarginX()) / pw;
+      const cy = ((minY+maxY)/2 - edMarginY()) / ph;
+      const bw = (maxX-minX) / pw;
+      const bh = (maxY-minY) / ph;
+      // Crear layer sintético con esas coords para reutilizar _edFocusOnLayer
+      _edFocusOnLayer({x:cx, y:cy, width:Math.max(bw,0.05), height:Math.max(bh,0.05)});
+    });
 
     // ── Herramientas ──
     $('op-tool-pen')?.addEventListener('click',()=>{
