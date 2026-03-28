@@ -7794,8 +7794,17 @@ async function edCloudSave() {
     const user = Auth?.currentUser?.();
     if (user && user.id) {
       try {
-        await SupabaseClient.bibSync(user.id, _bibLoad());
-      } catch(e) { console.warn('bibSync error (no crítico):', e); }
+        const _bib = _bibLoad();
+        const _nitems = (_bib.folders||[]).reduce((s,f)=>s+(f.items||[]).length,0);
+        console.log('[bibSync] iniciando, items:', _nitems, 'userId:', user.id);
+        console.log('[bibSync] data:', JSON.stringify(_bib).slice(0,300));
+        await SupabaseClient.bibSync(user.id, _bib);
+        console.log('[bibSync] completado OK');
+      } catch(e) {
+        console.error('[bibSync] ERROR:', e.message, e);
+      }
+    } else {
+      console.warn('[bibSync] sin usuario activo:', user);
     }
   } catch(err) {
     edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));

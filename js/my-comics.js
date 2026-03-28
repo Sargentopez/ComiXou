@@ -106,7 +106,9 @@ async function _mcSyncCloudDates() {
   try {
     const _user = Auth.currentUser();
     if (_user && _user.id && typeof SupabaseClient.bibDownload === 'function') {
+      console.log('[bibDownload] iniciando para userId:', _user.id);
       const cloudData = await SupabaseClient.bibDownload(_user.id);
+      console.log('[bibDownload] recibido:', JSON.stringify(cloudData).slice(0,300));
       if (cloudData && cloudData.folders && cloudData.folders.length) {
         let localData;
         try { localData = JSON.parse(localStorage.getItem('cs_biblioteca') || 'null'); } catch(e) {}
@@ -120,10 +122,14 @@ async function _mcSyncCloudDates() {
             else { localData.folders.push({ id: cf.id, name: cf.name, items: newItems }); }
           }
         });
-        try { localStorage.setItem('cs_biblioteca', JSON.stringify(localData)); } catch(e) {}
+        try { localStorage.setItem('cs_biblioteca', JSON.stringify(localData)); console.log('[bibDownload] guardado en local OK'); } catch(e) { console.error('[bibDownload] error guardando local:', e); }
+      } else {
+        console.log('[bibDownload] sin datos en nube o carpetas vacías');
       }
+    } else {
+      console.warn('[bibDownload] sin usuario o función no disponible:', _user);
     }
-  } catch(e) { /* silencioso */ }
+  } catch(e) { console.error('[bibDownload] ERROR:', e.message, e); }
 }
 
 /* ── RENDERIZAR LISTA ── */
