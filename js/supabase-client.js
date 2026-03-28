@@ -219,13 +219,6 @@ const SupabaseClient = (() => {
         catch(e) { return null; }
       }).filter(Boolean);
 
-      if (layers.length === 0 && panel.data_url) {
-        layers.push({
-          type: 'image', src: panel.data_url,
-          x: 0.5, y: 0.5, width: 1, height: 1, rotation: 0, opacity: 1,
-        });
-      }
-
       const orient = panel.orientation === 'h' ? 'horizontal' : 'vertical';
       pages.push({
         orientation:      orient,
