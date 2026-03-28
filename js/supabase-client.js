@@ -13,6 +13,17 @@ const SupabaseClient = (() => {
     'Content-Type':  'application/json',
   };
 
+  // Cabeceras con JWT del usuario autenticado (necesario para tablas con RLS estricto)
+  function _hdrsUser() {
+    try {
+      const session = JSON.parse(localStorage.getItem('cs_session') || 'null');
+      if (session && session.token) {
+        return { 'apikey': KEY, 'Authorization': `Bearer ${session.token}`, 'Content-Type': 'application/json' };
+      }
+    } catch(e) {}
+    return hdrs; // fallback a anon key
+  }
+
   async function _get(path) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000); // 8s timeout
@@ -298,18 +309,16 @@ const SupabaseClient = (() => {
 
   // ── BIBLIOTECA ────────────────────────────────────────────────
   async function bibFetch(authorId) {
-    const rows = await _get(`biblioteca?author_id=eq.${authorId}&order=created_at.asc`);
-    return rows || [];
+    const r = await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&order=created_at.asc`, {
+      headers: _hdrsUser(),
+    });
+    if (!r.ok) throw new Error(`bibFetch: ${r.status} ${await r.text()}`);
+    return r.json();
   }
 
   // Sincronización completa: sube todos los items locales a Supabase.
-  // Estrategia upsert por id — añade los nuevos, actualiza los existentes, no borra los que
-  // ya no están (el autor puede haber guardado desde otro dispositivo).
-  // Si el autor elimina un item en local, desaparece en la siguiente sync porque no se upserta.
-  // Sube la biblioteca completa (nueva estructura con carpetas) a Supabase.
-  // Cada item de cada carpeta se sube como fila independiente con campo folder_name.
+  // Estrategia upsert por id — añade los nuevos, actualiza los existentes.
   async function bibSync(authorId, bibData) {
-    // bibData: { folders: [{id, name, items:[...]}] }
     const folders = (bibData && bibData.folders) ? bibData.folders : [];
     const rows = [];
     folders.forEach(folder => {
@@ -326,13 +335,17 @@ const SupabaseClient = (() => {
       });
     });
     if (!rows.length) return;
-    await _upsert('biblioteca', rows);
+    const r = await fetch(`${BASE}/biblioteca`, {
+      method:  'POST',
+      headers: { ..._hdrsUser(), 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      body:    JSON.stringify(rows),
+    });
+    if (!r.ok) throw new Error(`bibSync: ${r.status} ${await r.text()}`);
   }
 
   // Descarga biblioteca desde Supabase y reconstruye la estructura de carpetas.
   async function bibDownload(authorId) {
     const rows = await bibFetch(authorId);
-    // Agrupar por folder_id
     const folderMap = new Map();
     rows.forEach(r => {
       const fid  = r.folder_id   || '__root__';
