@@ -609,6 +609,17 @@ class DrawLayer extends BaseLayer {
     img.src = dataUrl;
     return dl;
   }
+  static fromDataUrlFull(dataUrl){
+    // dataUrl es workspace completo (ED_CANVAS_W × ED_CANVAS_H) — colocar 1:1
+    const dl = new DrawLayer();
+    const img = new Image();
+    img.onload = () => {
+      dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
+      if(typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return dl;
+  }
   toDataUrl(){
     // Exportar solo la zona de la página para compatibilidad con guardado
     const pw = edPageW(), ph = edPageH();
@@ -1172,7 +1183,8 @@ function _edLayersSnapshot(){
                     'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount']){
       if(l[k] !== undefined) o[k] = l[k];
     }
-    if(l.type === 'group') return edSerLayer(l);
+    if(l.type === 'group') return null; // obsoleto — ignorar grupos viejos
+    if(l.groupId) o.groupId = l.groupId;
     if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
     return o;
   }));
@@ -1225,6 +1237,7 @@ function edApplyHistory(snapshot){
       if(o.frozenLine) l._frozenLine = o.frozenLine;
       if(o.rotation) l.rotation=o.rotation;
       if(o.opacity !== undefined) l.opacity=o.opacity;
+      if(o.groupId) l.groupId=o.groupId;
       return l;
     }
     else if(o.type === 'shape') {
@@ -1232,6 +1245,7 @@ function edApplyHistory(snapshot){
       l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; l.lineWidth=o.lineWidth??3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
       if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
+      if(o.groupId) l.groupId=o.groupId;
       return l;
     }
     else if(o.type === 'line') {
@@ -1242,12 +1256,10 @@ function edApplyHistory(snapshot){
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
       else l._updateBbox();
+      if(o.groupId) l.groupId=o.groupId;
       return l;
     }
-    else if(o.type === 'group'){
-      const grp = edDeserLayer(o, edPages[snapshot.pageIdx]?.orientation||edOrientation);
-      return grp;
-    }
+    else if(o.type === 'group') return null; // obsoleto
     else return o;
     for(const k of Object.keys(o)){
       if(k !== '_imgSrc') l[k] = o[k];
@@ -1322,14 +1334,19 @@ function edFitCanvas(resetCamera){
   window._edWinW = window.innerWidth;
   window._edWinH = window.innerHeight;
 
-  // Redimensionar canvas si es necesario (sin resetear cámara por cambio de panel)
+  // Redimensionar canvas si es necesario
   const _prevW = edCanvas.width, _prevH = edCanvas.height;
   const _sizeChanged = _prevW !== newW || _prevH !== newH;
   if(_sizeChanged){
     edCanvas.width  = newW;
     edCanvas.height = newH;
-    // No mover la cámara al cambiar de tamaño por el panel de opciones.
-    // El canvas crece/encoge hacia abajo; el viewport queda anclado.
+    // Cuando el canvas ENCOGE por la apertura de un panel inferior,
+    // compensar camera.y para que el workspace suba con el canvas
+    // y el contenido que estaba visible siga visible.
+    // Cuando crece (panel cerrándose), no compensar — el espacio extra aparece abajo.
+    if(!_doReset && newH < _prevH){
+      _savedCam.y -= (_prevH - newH);
+    }
   }
   edCanvas.style.width  = newW + 'px';
   edCanvas.style.height = newH + 'px';
@@ -1561,15 +1578,14 @@ function _edUpdateMultiSelPanel(){
   if(edActiveTool!=='multiselect' || edMultiSel.length < 2){
     dd.classList.remove('open'); return;
   }
-  const _hasGroup = edMultiSel.some(i => edLayers[i]?.type === 'group');
+  const _hasGroup = edMultiSel.some(i => edLayers[i]?.groupId);
   dd.innerHTML = `
-    <button class="ed-dropdown-item" id="_ms-group">Agrupar</button>
+    <button class="ed-dropdown-item" id="_ms-group">⊞ Agrupar</button>
     ${_hasGroup ? `<button class="ed-dropdown-item" id="_ms-ungroup">⊟ Desagrupar</button>` : ''}`;
   $('_ms-group')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edGroupSelected(); });
   $('_ms-ungroup')?.addEventListener('click', ()=>{
     dd.classList.remove('open');
-    const gIdx = edMultiSel.find(i => edLayers[i]?.type === 'group');
-    if(gIdx !== undefined){ edSelectedIdx=gIdx; _msClear(); edUngroupSelected(); }
+    edUngroupSelected();
   });
   const btn = $('edMultiSelBtn');
   if(btn){
@@ -1728,10 +1744,6 @@ function edRedraw(){
       l.draw(edCtx);
       edCtx.globalAlpha = 1;
     } else if(l.type==='shape' || l.type==='line'){
-      edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
-      l.draw(edCtx);
-      edCtx.globalAlpha = 1;
-    } else if(l.type==='group'){
       edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx);
       edCtx.globalAlpha = 1;
@@ -3031,8 +3043,16 @@ function edOnStart(e){
   // ── MULTI-SELECCIÓN ──────────────────────────────────────
   if(edActiveTool==='multiselect'){
     if(tgt!==edCanvas){
-      // Clic fuera del canvas (UI, panel…) → desactivar si había selección
-      if(edMultiSel.length) _edDeactivateMultiSel();
+      // Clic fuera del canvas (UI, panel…)
+      if(window._edGroupSilentTool !== undefined){
+        // Modo grupo silencioso: restaurar sin tocar botón
+        edActiveTool = window._edGroupSilentTool;
+        delete window._edGroupSilentTool;
+        edMultiSel=[]; edMultiBbox=null; edMultiGroupRot=0;
+        edRedraw();
+      } else if(edMultiSel.length){
+        _edDeactivateMultiSel();
+      }
       return;
     }
     const c=edCoords(e);
@@ -3075,23 +3095,44 @@ function edOnStart(e){
             return;
           }
         }
-        // ── Hit dentro del bbox → drag ──
+        // ── Hit dentro del bbox → drag o doble tap ──
         const lxD=(dcxPx*cg - dcyPx*sg)/pw;
         const lyD=(dcxPx*sg + dcyPx*cg)/ph;
         if(Math.abs(lxD)<=bb.w/2 && Math.abs(lyD)<=bb.h/2){
+          // Doble tap dentro del bbox en modo grupo silencioso → panel del grupo
+          if(window._edGroupSilentTool !== undefined){
+            const _now2 = Date.now();
+            const _isDbl = _now2 - _edLastTapTime < 350;
+            _edLastTapTime = _now2; _edLastTapIdx = -999; // centinela grupo
+            if(_isDbl){
+              // Encontrar el miembro más cercano al toque
+              const _hit = edMultiSel.find(i => edLayers[i]?.contains(c.nx, c.ny)) ?? edMultiSel[0];
+              edSelectedIdx = _hit ?? -1;
+              edMultiSel = []; edMultiBbox = null;
+              edActiveTool = window._edGroupSilentTool;
+              delete window._edGroupSilentTool;
+              _edDrawLockUI(); _edPropsOverlayShow();
+              edRenderOptionsPanel('props');
+              edRedraw();
+              return;
+            }
+          }
           edMultiDragging=true;
           edMultiDragOffs=edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
           return;
         }
       }
     }
-    // Nada tocado fuera del bbox → limpiar selección e iniciar nueva rubber band
-    // La herramienta multiselección permanece activa hasta que el usuario la desactive
-    if(edMultiSel.length){
-      _msClear();
-      edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+    // Nada tocado fuera del bbox
+    if(window._edGroupSilentTool !== undefined){
+      // Modo grupo silencioso: tocar fuera → deseleccionar y restaurar herramienta
+      edActiveTool = window._edGroupSilentTool;
+      delete window._edGroupSilentTool;
+      edMultiSel=[]; edMultiBbox=null; edMultiGroupRot=0;
+      edSelectedIdx = -1;
       edRedraw();
     } else {
+      // Herramienta multiselect normal: limpiar e iniciar nueva rubber band
       _msClear();
       edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
       edRedraw();
@@ -3443,6 +3484,44 @@ function edOnStart(e){
     }
   }
   if(found>=0){
+    const _fla = edLayers[found];
+    // Si el objeto pertenece a un grupo y la herramienta activa NO es multiselect,
+    // activar multiselección completa internamente (con handles de escala/rotación)
+    // pero sin cambiar el botón ni el cursor visible.
+    if(_fla && _fla.groupId && edActiveTool !== 'multiselect'){
+      const _gidxs = _edGroupMemberIdxs(_fla.groupId);
+      if(_gidxs.length > 1){
+        // Detectar doble tap/clic → abrir panel de propiedades del grupo
+        const _now = Date.now();
+        const _isDoubleTap = (found === _edLastTapIdx || _gidxs.includes(_edLastTapIdx)) &&
+                             _now - _edLastTapTime < 350;
+        if(_isDoubleTap){
+          _edLastTapTime = 0; _edLastTapIdx = -1;
+          // Abrir panel con el objeto tocado seleccionado
+          // (el panel mostrará ⊟ Desagrupar porque tiene groupId)
+          edSelectedIdx = found;
+          edMultiSel = []; edMultiBbox = null;
+          if(window._edGroupSilentTool !== undefined) delete window._edGroupSilentTool;
+          edActiveTool = 'select';
+          _edDrawLockUI(); _edPropsOverlayShow();
+          edRenderOptionsPanel('props');
+          edRedraw();
+          return;
+        }
+        _edLastTapTime = _now; _edLastTapIdx = found;
+
+        edMultiSel = _gidxs;
+        edMultiGroupRot = 0;
+        _msRecalcBbox();
+        edSelectedIdx = -1;
+        // Activar multisel internamente sin cambiar herramienta visible
+        const _prevTool = edActiveTool;
+        edActiveTool = 'multiselect';
+        window._edGroupSilentTool = _prevTool; // recordar herramienta previa
+        edRedraw();
+        return;
+      }
+    }
     edSelectedIdx = found;
     // Si es LineLayer con radios, actualizar bbox antes de interactuar
     const _fl=edLayers[found];
@@ -3564,7 +3643,6 @@ function edOnMove(e){
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
-    // Con 2+ dedos: saltar directamente al pinch de grupo — no procesar drag ni resize
     if(window._edActivePointers && window._edActivePointers.size >= 2){
       if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
       e.preventDefault();
@@ -3978,7 +4056,16 @@ function edOnEnd(e){
       if(edMultiSel.length) _msRecalcBbox();
     }
     edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
-    edMultiDragOffs=[]; window._edMoved=false;
+    edMultiDragOffs=[];
+    const _wasMoved = window._edMoved;
+    window._edMoved=false;
+    // Modo grupo silencioso: nunca limpiar aquí — solo se limpia al tocar fuera (edOnStart)
+    if(window._edGroupSilentTool !== undefined){
+      if(_wasMoved) _msRecalcBbox();
+      clearTimeout(window._edLongPress); window._edLongPressReady=false;
+      if(!window._edActivePointers || window._edActivePointers.size === 0) _edPinchHappened = false;
+      return;
+    }
     // Resetear flag de pinch cuando no quedan dedos
     if(!window._edActivePointers || window._edActivePointers.size === 0) _edPinchHappened = false;
     clearTimeout(window._edLongPress); window._edLongPressReady=false;
@@ -4547,6 +4634,10 @@ function edStartPaint(e){
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
   }
+  // Guardar estado global ANTES del primer trazo para que el undo global
+  // pueda retroceder al estado sin dibujo. La deduplicación evita duplicados
+  // si el DrawLayer no ha cambiado desde el último push.
+  edPushHistory();
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
@@ -6004,10 +6095,10 @@ function edRenderOptionsPanel(mode){
     }
     html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
-      ${la.type==='group'
+      ${la.groupId
         ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
         : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`}
-      ${(la.type!=='text'&&la.type!=='bubble'&&la.type!=='group')?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
+      ${(la.type!=='text'&&la.type!=='bubble')?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
       <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
     </div>`;
 
@@ -7640,187 +7731,57 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
 /* ══════════════════════════════════════════
    GROUP LAYER — contenedor de capas agrupadas
    ══════════════════════════════════════════ */
-class GroupLayer extends BaseLayer {
-  constructor(x=0.5, y=0.5, width=0.3, height=0.2){
-    super('group', x, y, width, height);
-    this._groupChildren = [];
-    this._layers = [];
-    this._origWidth  = width;
-    this._origHeight = height;
-    this._cache = null; // bitmap recortado al bbox, listo para draw()
-    this.opacity = 1;
-  }
-  // Construye el cache renderizando los hijos en un workspace temporal completo.
-  // Los draw() de cada hijo usan coords absolutas de workspace — funcionan igual que en edRedraw.
-  buildCache(){
-    const pw=edPageW(), ph=edPageH();
-    const ws = document.createElement('canvas');
-    ws.width  = ED_CANVAS_W;
-    ws.height = ED_CANVAS_H;
-    const wsCtx = ws.getContext('2d');
-    for(const la of this._layers){
-      if(!la) continue;
-      wsCtx.save();
-      wsCtx.globalAlpha = la.opacity ?? 1;
-      if(la.type==='image')                        la.draw(wsCtx, ws);
-      else if(la.type==='draw')                    la.draw(wsCtx);
-      else if(la.type==='stroke')                  la.draw(wsCtx);
-      else if(la.type==='shape'||la.type==='line') la.draw(wsCtx);
-      else if(la.type==='text'||la.type==='bubble') la.draw(wsCtx, ws);
-      wsCtx.restore();
-    }
-    // Calcular bbox geométrico desde los vértices de los hijos
-    // (no desde getImageData — las imágenes pueden no haber cargado aún)
-    let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
-    for(const la of this._layers){
-      if(!la) continue;
-      const hw=la.width/2, hh=la.height/2;
-      const rot=(la.rotation||0)*Math.PI/180;
-      const cos=Math.cos(rot), sin=Math.sin(rot);
-      for(const [lx,ly] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
-        const ax=la.x+(lx*cos-ly*sin), ay=la.y+(lx*sin+ly*cos);
-        if(ax<minX)minX=ax; if(ax>maxX)maxX=ax;
-        if(ay<minY)minY=ay; if(ay>maxY)maxY=ay;
-      }
-    }
-    if(minX===Infinity){ this._cache=document.createElement('canvas'); return; }
-    const gcx=(minX+maxX)/2, gcy=(minY+maxY)/2;
-    const gw=Math.max(maxX-minX,0.01), gh=Math.max(maxY-minY,0.01);
-    // Actualizar x,y,width,height del grupo con el bbox geométrico
-    this.x = gcx;
-    this.y = gcy;
-    this.width  = gw;
-    this.height = gh;
-    this._origWidth  = gw;
-    this._origHeight = gh;
-    // Recortar el workspace al bbox en coords de página
-    const bboxX = Math.round(edMarginX() + (gcx - gw/2) * pw);
-    const bboxY = Math.round(edMarginY() + (gcy - gh/2) * ph);
-    const bboxW = Math.max(Math.round(gw * pw), 1);
-    const bboxH = Math.max(Math.round(gh * ph), 1);
-    const crop = document.createElement('canvas');
-    crop.width  = bboxW;
-    crop.height = bboxH;
-    crop.getContext('2d').drawImage(ws, bboxX, bboxY, bboxW, bboxH, 0, 0, bboxW, bboxH);
-    this._cache = crop;
-    // Guardar posición y tamaño en el momento de creación — referencia para desagrupar
-    this._createdX = this.x;
-    this._createdY = this.y;
-    this._createdW = this.width;
-    this._createdH = this.height;
-  }
-  draw(ctx){
-    if(!this._cache) return;
-    const pw=edPageW(), ph=edPageH();
-    const w  = this.width  * pw;
-    const h  = this.height * ph;
-    const cx = edMarginX() + this.x * pw;
-    const cy = edMarginY() + this.y * ph;
-    ctx.save();
-    ctx.globalAlpha = (ctx.globalAlpha ?? 1) * (this.opacity ?? 1);
-    ctx.translate(cx, cy);
-    ctx.rotate((this.rotation||0) * Math.PI / 180);
-    ctx.drawImage(this._cache, -w/2, -h/2, w, h);
-    ctx.restore();
-  }
-  contains(px, py){ return BaseLayer.prototype.contains.call(this, px, py); }
+/* ══════════════════════════════════════════════════════════════
+   SISTEMA DE GRUPOS — basado en groupId
+   ══════════════════════════════════════════════════════════════
+   Cada objeto agrupado lleva groupId (string único).
+   Al tocar cualquier miembro → autoselección múltiple del grupo.
+   Al desagrupar → se elimina groupId de todos los miembros.
+   Sin GroupLayer. Sin transformaciones. Siempre funciona.
+   ══════════════════════════════════════════════════════════════ */
+
+function _edNewGroupId(){
+  return 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 }
 
-/* ── Agrupar los layers de edMultiSel en un GroupLayer ── */
+/* Índices de todos los miembros del grupo en edLayers */
+function _edGroupMemberIdxs(groupId){
+  const idxs = [];
+  for(let i=0; i<edLayers.length; i++){
+    if(edLayers[i] && edLayers[i].groupId === groupId) idxs.push(i);
+  }
+  return idxs;
+}
+
+/* ── Agrupar los layers de edMultiSel ── */
 function edGroupSelected(){
-  if(!edMultiSel.length || edMultiSel.length < 2){ return; }
-
-  edPushHistory(); // guardar estado previo (para poder deshacer)
-
-  const sortedIdx = [...edMultiSel].sort((a,b)=>a-b);
-  const insertIdx = Math.min(...edMultiSel);
-
-  // Crear GroupLayer — buildCache calculará el bbox real del contenido
-  const grp = new GroupLayer(0.5, 0.5, 0.1, 0.1);
-  grp._layers        = sortedIdx.map(i=>edLayers[i]).filter(Boolean);
-  grp._groupChildren = sortedIdx.map(i=>edSerLayer(edLayers[i])).filter(Boolean);
-  grp.buildCache(); // calcula bbox real y actualiza x,y,width,height,_origWidth,_origHeight
-
-  // Sustituir layers originales por el grupo
-  for(const i of [...sortedIdx].sort((a,b)=>b-a)) edLayers.splice(i,1);
-  edLayers.splice(insertIdx, 0, grp);
-
-  edSelectedIdx = insertIdx;
-  _msClear();
-  $('edMultiSelBtn')?.classList.remove('active');
-  edActiveTool='select'; edCanvas.className='';
-  const _mdd=$('_edMultiSelDd'); if(_mdd) _mdd.classList.remove('open');
+  if(!edMultiSel.length || edMultiSel.length < 2) return;
+  edPushHistory();
+  const gid = _edNewGroupId();
+  edMultiSel.forEach(i => { if(edLayers[i]) edLayers[i].groupId = gid; });
+  // Volver a herramienta select tras agrupar
+  _edDeactivateMultiSel();
   edPushHistory(); edRedraw();
+  edToast('Agrupados ✓');
 }
 
-/* ── Desagrupar el GroupLayer seleccionado ── */
+/* ── Desagrupar: elimina groupId de todos los miembros del grupo activo ── */
 function edUngroupSelected(){
-  if(edSelectedIdx<0) return;
-  const grp=edLayers[edSelectedIdx];
-  if(!grp || grp.type!=='group') return;
-
-  edPushHistory(); // guardar estado previo (para poder deshacer)
-
-  // Marcar imágenes con _keepSize antes de deserializar para que el onload
-  // no sobreescriba sus dimensiones en ningún caso
-  const children = (grp._groupChildren||[]).map(d=>{
-    const dd = (d.type==='image') ? {...d, _keepSize:true} : d;
-    return edDeserLayer(dd);
-  }).filter(Boolean);
-  if(!children.length) return;
-
-  const pw = edPageW(), ph = edPageH();
-
-  // Centro del grupo al crearse
-  const cx0 = grp._createdX ?? grp.x;
-  const cy0 = grp._createdY ?? grp.y;
-  const w0  = grp._createdW ?? grp._origWidth  ?? grp.width;
-  const h0  = grp._createdH ?? grp._origHeight ?? grp.height;
-
-  // Escala acumulada del grupo
-  const grpSx = grp.width  / (w0 || grp.width);
-  const grpSy = grp.height / (h0 || grp.height);
-
-  // Rotación del grupo
-  const grpRad = (grp.rotation||0) * Math.PI / 180;
-  const cos = Math.cos(grpRad), sin = Math.sin(grpRad);
-
-  const insertIdx = edSelectedIdx;
-  edLayers.splice(insertIdx, 1);
-
-  for(let ci=0; ci<children.length; ci++){
-    const child = children[ci];
-    if(!child) continue;
-
-    // 1. Vector del hijo relativo al centro original del grupo
-    const relX = child.x - cx0;
-    const relY = child.y - cy0;
-
-    // 2. Escalar el vector (escala no proporcional del grupo)
-    const scaledX = relX * grpSx;
-    const scaledY = relY * grpSy;
-
-    // 3. Rotar el vector escalado por la rotación del grupo
-    const rotX = scaledX * cos - scaledY * sin;
-    const rotY = scaledX * sin + scaledY * cos;
-
-    // 4. Posición final = centro actual del grupo + vector transformado
-    child.x = grp.x + rotX;
-    child.y = grp.y + rotY;
-
-    // 5. Tamaño: escalar proporcionalmente
-    child.width  *= grpSx;
-    child.height *= grpSy;
-
-    // 6. Rotación: sumar la del grupo
-    child.rotation = ((child.rotation||0) + (grp.rotation||0));
-
-    // 7. Imágenes: _keepSize ya marcado en la deserialización
-    edLayers.splice(insertIdx+ci, 0, child);
+  // Puede llamarse con un objeto seleccionado (edSelectedIdx) o con multiselección
+  let gid = null;
+  if(edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.groupId){
+    gid = edLayers[edSelectedIdx].groupId;
+  } else if(edMultiSel.length){
+    gid = edLayers[edMultiSel[0]]?.groupId;
   }
-
-  edSelectedIdx = -1;
+  if(!gid) return;
+  edPushHistory();
+  edLayers.forEach(l => { if(l && l.groupId === gid) delete l.groupId; });
+  edSelectedIdx = -1; _msClear();
+  // Cerrar panel de opciones si estaba abierto
+  edCloseOptionsPanel();
   edPushHistory(); edRedraw();
+  edToast('Desagrupados ✓');
 }
 
 
@@ -7829,13 +7790,16 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
-    return{type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
+    const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
+    if(l.groupId) _r.groupId=l.groupId;
+    return _r;
   }
-  if(l.type==='text')return{type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
+  if(l.type==='text'){const _o={type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
     _hasText:!!(l.text&&l.text!=='Escribe aquí'),
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
+    if(l.groupId)_o.groupId=l.groupId; return _o;}
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
       _hasText:!!(l.text&&l.text!=='Escribe aquí'),
@@ -7848,6 +7812,7 @@ function edSerLayer(l){
       thoughtBig:l.thoughtBig?{...l.thoughtBig}:undefined,
       thoughtSmall:l.thoughtSmall?{...l.thoughtSmall}:undefined,
       ...op};
+    if(l.groupId)_bobj.groupId=l.groupId;
     // Para estilos complejos: guardar bitmap completo (forma+cola+texto) para reproducción fiel
     if(l.style==='thought'||l.style==='explosion'){
       try{
@@ -7904,28 +7869,18 @@ function edSerLayer(l){
     }
     return _bobj;
   }
-  if(l.type==='group'){
-    const _gobj={type:'group', x:l.x, y:l.y, width:l.width, height:l.height,
-      rotation:l.rotation||0, opacity:l.opacity??1, locked:l.locked||false,
-      _origWidth:l._origWidth||l.width, _origHeight:l._origHeight||l.height,
-      _createdX:l._createdX??l.x, _createdY:l._createdY??l.y,
-      _createdW:l._createdW??l.width, _createdH:l._createdH??l.height,
-      _groupChildren:l._groupChildren||[]};
-    if(l._cache && l._cache.width > 0){
-      try{ _gobj.renderDataUrl = l._cache.toDataURL('image/png'); }catch(e){}
-    }
-    return _gobj;
-  }
-  if(l.type==='draw')   return{type:'draw',   dataUrl: l.toDataUrl()};
-  if(l.type==='stroke') return{type:'stroke', dataUrl: l.toDataUrl(),
+  if(l.type==='group') return null; // obsoleto
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; return _o;}
+  if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3};
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadii:l.cornerRadii?[...l.cornerRadii]:undefined,
       cornerRadius:l.cornerRadius||0};
+    if(l.groupId)_sobj.groupId=l.groupId;
     // Si tiene cornerRadii con valores, generar bitmap fiel
     const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
     const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
@@ -7957,6 +7912,7 @@ function edSerLayer(l){
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadii:_hasR?{..._cr}:undefined};
+    if(l.groupId)_lobj.groupId=l.groupId;
     if(_hasR){
       try{
         const _pw=edPageW(),_ph=edPageH();
@@ -7986,28 +7942,15 @@ function edSerLayer(l){
   }
 }
 function edDeserLayer(d, pageOrientation){
-  if(d.type==='group'){
-    const grp = new GroupLayer(d.x||0.5, d.y||0.5, d.width||0.3, d.height||0.2);
-    grp.rotation = d.rotation||0;
-    grp.opacity  = d.opacity??1;
-    grp.locked   = d.locked||false;
-    grp._origWidth  = d._origWidth  || d.width||0.3;
-    grp._origHeight = d._origHeight || d.height||0.2;
-    grp._groupChildren = d._groupChildren||[];
-    grp._createdX = d._createdX ?? d.x ?? grp.x;
-    grp._createdY = d._createdY ?? d.y ?? grp.y;
-    grp._createdW = d._createdW ?? d._origWidth ?? grp.width;
-    grp._createdH = d._createdH ?? d._origHeight ?? grp.height;
-    grp._layers = grp._groupChildren.map(cd=>edDeserLayer(cd, pageOrientation)).filter(Boolean);
-    grp.type = 'group';
-    requestAnimationFrame(()=>{ grp.buildCache(); if(typeof edRedraw==='function') edRedraw(); });
-    return grp;
-  }
+  if(!d) return null;
+  if(d.type==='group') return null; // obsoleto
   if(d.type==='draw'){
     const _isV = (pageOrientation||'vertical')==='vertical';
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-    return d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer();
+    const dl = d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer();
+    if(d.groupId) dl.groupId=d.groupId;
+    return dl;
   }
   if(d.type==='stroke'){
     const _isV = (pageOrientation||'vertical')==='vertical';
@@ -8016,8 +7959,9 @@ function edDeserLayer(d, pageOrientation){
     const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', d.x||0.5, d.y||0.5, d.width||0.1, d.height||0.1, _pw, _ph);
     if(d.rotation) sl.rotation = d.rotation;
     if(d.opacity !== undefined) sl.opacity = d.opacity;
-    if(d.color)                  sl.color     = d.color;
+    if(d.color) sl.color = d.color;
     if(d.lineWidth !== undefined) sl.lineWidth = d.lineWidth;
+    if(d.groupId) sl.groupId = d.groupId;
     return sl;
   }
   if(d.type==='shape'){
@@ -8025,6 +7969,7 @@ function edDeserLayer(d, pageOrientation){
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'none'; l.lineWidth=d.lineWidth??3; l.rotation=d.rotation||0; l.opacity=d.opacity??1;
     if(d.cornerRadius) l.cornerRadius=d.cornerRadius;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
+    if(d.groupId) l.groupId=d.groupId;
     return l;
   }
   if(d.type==='line'){
@@ -8035,6 +7980,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
     else l._updateBbox();
+    if(d.groupId) l.groupId=d.groupId;
     return l;
   }
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
@@ -8051,6 +7997,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.locked) l.locked=true;
     if(d._keepSize) l._keepSize=true;
     if(d.height) l.height = d.height;
+    if(d.groupId) l.groupId=d.groupId;
     if(d.src){
       const img=new Image();
       img.onload=()=>{
@@ -8104,6 +8051,12 @@ function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
+  // Reconstruir _cache de grupos en todas las páginas (buildCache usa edOrientation/edCurrentPage)
+  edPages.forEach((pg, _pgi) => {
+    const _savedP=edCurrentPage, _savedO=edOrientation;
+    edCurrentPage=_pgi; edOrientation=pg.orientation||edOrientation;
+    edCurrentPage=_savedP; edOrientation=_savedO;
+  });
   // Centrar cámara al cargar — flag dedicado para no interferir con otros resets
   window._edLoadReset=true;
   if(edCanvas){
@@ -8381,8 +8334,6 @@ function edUpdateViewer(){
     } else if(l.type==='stroke'){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
     } else if(l.type==='shape' || l.type==='line'){
-      fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
-    } else if(l.type==='group'){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
     }
   });
@@ -9429,10 +9380,6 @@ function edExportPagePNG(format){
       l.draw(offCtx);
       offCtx.globalAlpha = 1;
     } else if(l.type === 'shape' || l.type === 'line'){
-      offCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(offCtx);
-      offCtx.globalAlpha = 1;
-    } else if(l.type === 'group'){
       offCtx.globalAlpha = l.opacity ?? 1;
       l.draw(offCtx);
       offCtx.globalAlpha = 1;

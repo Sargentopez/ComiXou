@@ -160,7 +160,7 @@ function _lyRender() {
   // Combinar imágenes y dibujos (stroke/draw) en una sola lista
   const visualPairs = edLayers
     .map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line'||l.type==='group');
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
 
   if (visualPairs.length === 0) {
     const e = document.createElement('p');
@@ -278,7 +278,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
 function _lyBuildVisualItem(la, realIdx, selected) {
   const isDrawType = la.type === 'stroke' || la.type === 'draw';
   const isShapeType = la.type === 'shape' || la.type === 'line';
-  const isGroup = la.type === 'group';
+  const isGroup = false; // obsoleto
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
   item.dataset.realIdx = realIdx;
@@ -298,7 +298,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   } else {
     _lyDrawThumb(thumb, la);
   }
-  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : isShapeType ? 'Objeto · toca para seleccionar' : isGroup ? 'Grupo · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
+  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : isShapeType ? 'Objeto · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
   thumb.addEventListener('pointerup', () => {
     if (!item.classList.contains('was-dragged')) {
       edSelectedIdx = realIdx;
@@ -314,23 +314,22 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   info.className = 'ed-layer-info';
   const name = document.createElement('span');
   name.className = 'ed-layer-name';
+  const _grpTag = la.groupId ? ' 🔗' : '';
   if (isDrawType) {
-    name.textContent = la.type === 'draw' ? '✏️ Dibujando…' : '✏️ Dibujo';
+    name.textContent = (la.type === 'draw' ? '✏️ Dibujando…' : '✏️ Dibujo') + _grpTag;
   } else if (la.type === 'shape') {
-    name.textContent = la.shape === 'ellipse' ? '◯ Elipse' : '▭ Rectángulo';
+    name.textContent = (la.shape === 'ellipse' ? '◯ Elipse' : '▭ Rectángulo') + _grpTag;
   } else if (la.type === 'line') {
-    name.textContent = la.closed ? '⬠ Polígono' : '╱ Recta';
-  } else if (isGroup) {
-    name.textContent = '⊞ Grupo (' + (la._groupChildren?.length||0) + ')';
+    name.textContent = (la.closed ? '⬠ Polígono' : '╱ Recta') + _grpTag;
   } else {
-    name.textContent = 'Imagen ' + (realIdx + 1);
+    name.textContent = 'Imagen ' + (realIdx + 1) + _grpTag;
   }
   info.appendChild(name);
   item.appendChild(info);
 
   /* Flechas subir/bajar — dentro de los elementos visuales */
   const visualAll = edLayers.map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line'||l.type==='group');
+    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
   const posInList = visualAll.findIndex(({i})=>i===realIdx);
 
   const upBtn = document.createElement('button');

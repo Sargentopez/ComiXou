@@ -263,7 +263,7 @@ async function preloadImages() {
       if (!src) return Promise.resolve(null);
       const needsImg = layer.renderDataUrl ||
         layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
-        layer.type === 'line' || layer.type === 'shape' || layer.type === 'group';
+        layer.type === 'line' || layer.type === 'shape';
       if (!needsImg) return Promise.resolve(null);
       return new Promise(resolve => {
         const img = new Image();
@@ -490,17 +490,6 @@ function _render() {
         if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
         if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       }
-      ctx.restore();
-    } else if (type === 'group' && layerImgs[j]) {
-      // Grupo: bitmap prerenderizado centrado en x,y con rotación propia
-      ctx.save();
-      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
-      const w = (layer.width  || 0.3) * pw, h = (layer.height || 0.2) * ph;
-      const rot = (layer.rotation || 0) * Math.PI / 180;
-      ctx.translate(x, y);
-      if (rot) ctx.rotate(rot);
-      ctx.drawImage(layerImgs[j], -w / 2, -h / 2, w, h);
       ctx.restore();
     }
     // bubble/text: siempre gestionado por _drawTexts (forma + texto juntos, con sequential)
