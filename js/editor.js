@@ -2850,6 +2850,9 @@ function edOnStart(e){
                tgt.closest('#edBrushCursor')  ||
                tgt.closest('.ed-float-btn')   ||
                tgt.closest('#edDrawBar')      ||
+               tgt.closest('#edShapeBar')     ||
+               tgt.closest('#edb-size-pop')   ||
+               tgt.closest('#esb-slider-panel') ||
                tgt.closest('#edb-palette-pop') ||
                tgt.closest('#ed-hsl-picker')   ||
                tgt.closest('#editorViewer')   ||
@@ -3004,8 +3007,14 @@ function edOnStart(e){
   _edTouchMoved = false; // resetear flag de movimiento
   edLastPointerIsTouch = (e.pointerType === 'touch'); // actualizar detección real de táctil
   // Rastrear pointers activos (para pinch con pointer events)
+  // No registrar punteros que vienen de la UI de barras flotantes — evita falsos pinch
   if(!window._edActivePointers) window._edActivePointers = new Map();
-  window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  const _tgt = e.target;
+  if(!_tgt.closest('#edDrawBar') && !_tgt.closest('#edShapeBar') &&
+     !_tgt.closest('#edb-size-pop') && !_tgt.closest('#esb-slider-panel') &&
+     !_tgt.closest('#edb-palette-pop') && !_tgt.closest('#ed-hsl-picker')){
+    window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  }
   // 2 dedos → iniciar pinch
   if(window._edActivePointers.size === 2){
     // Cancelar fill pendiente — era un pinch, no un toque simple
@@ -6735,7 +6744,20 @@ function edInitDrawBar() {
     if (_edbDragLocked) { e.stopImmediatePropagation(); e.preventDefault(); }
   }, true);
 
+  // ── Pestaña de arrastre: drag inmediato desde el handle ──
+  const handle = bar.querySelector('.edb-handle');
+  if (handle) {
+    handle.addEventListener('pointerdown', e => {
+      _edbPid = e.pointerId;
+      _edbDragLocked = false;
+      e.preventDefault();
+      e.stopPropagation();
+      _edbStartDrag(e);
+    }, { passive: false });
+  }
+
   bar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.edb-handle')) return; // ya gestionado por el handle
     _edbPid = e.pointerId;
     _edbDragLocked = false;
     e.preventDefault();
@@ -7456,9 +7478,23 @@ function edInitShapeBar() {
   let _drag=false, _sx=0, _sy=0, _sl=0, _st=0, _longTimer=null;
   let _locked=false, _pid=null;
 
+  // ── Drag: inmediato desde handle, long-press desde fondo/sep ──
+  const _handle = bar.querySelector('.edb-handle');
+  if (_handle) {
+    _handle.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      _pid = e.pointerId; bar.setPointerCapture(_pid);
+      const shell = document.getElementById('editorShell');
+      const sr = shell ? shell.getBoundingClientRect() : { left:0, top:0 };
+      _sx = e.clientX - sr.left; _sy = e.clientY - sr.top;
+      _sl = parseInt(bar.style.left) || _esbX; _st = parseInt(bar.style.top) || _esbY;
+      _drag = true; _locked = true; bar.style.cursor = 'grabbing';
+    }, { passive: false });
+  }
+
   bar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.edb-handle')) return; // ya gestionado
     if(e.target !== bar && !e.target.classList.contains('edb-sep')) return;
-    _pid=e.pointerId; bar.setPointerCapture(_pid);
     const shell=document.getElementById('editorShell');
     const sr=shell?shell.getBoundingClientRect():{left:0,top:0};
     _sx=e.clientX-sr.left; _sy=e.clientY-sr.top;
@@ -9983,14 +10019,35 @@ function _bibRenderPanel(panel) {
     el.addEventListener('pointerup', e => {
       if (el._wasDrag) { el._wasDrag = false; return; }
       e.stopPropagation();
+      if (el._editing) return; // ya está en modo edición
+      el._editing = true;
       const fi = parseInt(el.dataset.fi);
       const d = _bibLoad();
-      const nombre = prompt('Nombre de la carpeta:', d.folders[fi].name);
-      if (nombre !== null && nombre.trim()) {
-        d.folders[fi].name = nombre.trim();
-        _bibSave(d);
+      const oldName = d.folders[fi]?.name || '';
+      // Convertir span en input inline
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.value = oldName;
+      inp.inputMode = 'text';
+      inp.enterKeyHint = 'done';
+      inp.style.cssText = 'flex:1;font-size:.78rem;font-weight:700;color:var(--gray-700);border:none;border-bottom:1.5px solid var(--black);background:transparent;outline:none;padding:1px 2px;min-width:0;width:100%';
+      el.replaceWith(inp);
+      inp.focus();
+      inp.select();
+      const confirm = () => {
+        const nombre = inp.value.trim();
+        if (nombre) {
+          const d2 = _bibLoad();
+          if (d2.folders[fi]) d2.folders[fi].name = nombre;
+          _bibSave(d2);
+        }
         _bibRenderPanel(panel);
-      }
+      };
+      inp.addEventListener('blur', confirm);
+      inp.addEventListener('keydown', e2 => {
+        if (e2.key === 'Enter') { e2.preventDefault(); inp.blur(); }
+        if (e2.key === 'Escape') { inp.removeEventListener('blur', confirm); _bibRenderPanel(panel); }
+      });
     });
   });
 

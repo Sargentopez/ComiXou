@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v12.59</footer>
+    <footer class="app-version">v12.62</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -347,6 +347,7 @@ Router.register('editor', {
 
       <!-- ── BARRA HERRAMIENTAS DIBUJO (minimizado + draw activo) ── -->
       <div id="edDrawBar">
+        <div class="edb-handle" title="Mover barra">⠿</div>
         <button id="edb-pen"    class="edb-tool" title="Dibujar">✏️</button>
         <button id="edb-eraser" class="edb-tool" title="Borrar">◻</button>
         <button id="edb-fill"   class="edb-tool" title="Rellenar">🪣</button>
@@ -405,6 +406,7 @@ Router.register('editor', {
 
       <!-- Barra flotante Shape/Line -->
       <div id="edShapeBar">
+        <div class="edb-handle" title="Mover barra">⠿</div>
         <button id="esb-color"    class="edb-swatch" title="Color borde"></button>
         <button id="esb-fill-on"  class="edb-tool"   title="Relleno">▣</button>
         <button id="esb-fill"     class="edb-swatch" title="Color relleno"></button>

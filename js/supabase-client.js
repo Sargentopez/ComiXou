@@ -79,15 +79,12 @@ const SupabaseClient = (() => {
       // Capas del editor: image, draw, stroke, bubble, text — formato edSerLayer
       const edPage = edPages[i];
       if (edPage && edPage.layers && edPage.layers.length > 0) {
-        await _upsert('panel_layers', edPage.layers.map((l, j) => {
-          const serialized = (typeof edSerLayer === 'function') ? edSerLayer(l) : l;
-          return {
-            panel_id:    panelId,
-            layer_order: j,
-            layer_type:  l.type,
-            layer_data:  JSON.stringify(serialized),
-          };
-        }));
+        await _upsert('panel_layers', edPage.layers.map((l, j) => ({
+          panel_id:    panelId,
+          layer_order: j,
+          layer_type:  l.type,
+          layer_data:  JSON.stringify(l),
+        })));
       }
 
       // Textos para el reader (panel_texts sin cambios)
