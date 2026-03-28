@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v12.58</footer>
+    <footer class="app-version">v12.59</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -171,6 +171,17 @@ Router.register('editor', {
         <canvas id="editorCanvas"></canvas>
 
         <div id="edToast"></div>
+
+      <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
+      <div id="edConfirmModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box">
+          <p id="edConfirmMsg" class="ed-confirm-msg"></p>
+          <div class="ed-modal-actions">
+            <button id="edConfirmCancel" class="ed-modal-btn cancel">Cancelar</button>
+            <button id="edConfirmOk" class="ed-modal-btn ok">Eliminar</button>
+          </div>
+        </div>
+      </div>
       </div>
 
       <!-- ── BARRA SUPERIOR ── -->

@@ -310,13 +310,13 @@ function buildRow(comic, currentUser) {
     unpubBtn.className = 'comic-row-btn unpub';
     unpubBtn.textContent = I18n.t('unpublish');
     unpubBtn.addEventListener('click', () => {
-      if (confirm(I18n.t('confirmUnpublish'))) {
+      appConfirm(I18n.t('confirmUnpublish'), ()=>{
         comic.published = false;
         ComicStore.save(comic);
         showFiltrosLevel1();
         renderComics();
         showToast(I18n.t('unpublishOk'));
-      }
+      }, I18n.t('unpublish') || 'Retirar');
     });
     actions.appendChild(unpubBtn);
 
@@ -326,12 +326,12 @@ function buildRow(comic, currentUser) {
     delBtn.style.fontWeight = '900';
     delBtn.textContent = '✕';
     delBtn.addEventListener('click', () => {
-      if (confirm(I18n.t('confirmDelete'))) {
+      appConfirm(I18n.t('confirmDelete'), ()=>{
         ComicStore.remove(comic.id);
         showFiltrosLevel1();
         renderComics();
         showToast(I18n.t('deleteOk'));
-      }
+      });
     });
     actions.appendChild(delBtn);
   }

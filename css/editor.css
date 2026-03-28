@@ -885,6 +885,26 @@ body.editor-page #appView {
 .ed-modal-btn.cancel { background: var(--white); }
 .ed-modal-btn.ok { background: var(--yellow); }
 
+/* Modal de confirmación (reemplaza confirm() nativo que rompe fullscreen) */
+.ed-confirm-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity .18s;
+}
+.ed-confirm-overlay.open { opacity: 1; pointer-events: all; }
+.ed-confirm-box {
+  background: var(--white); border: 2.5px solid var(--black);
+  border-radius: 16px; padding: 24px 20px 16px;
+  width: calc(100% - 48px); max-width: 340px;
+  box-shadow: 4px 4px 0 var(--black);
+}
+.ed-confirm-msg {
+  font-family: var(--font-body); font-size: 1rem; font-weight: 700;
+  text-align: center; margin: 0 0 20px; line-height: 1.4;
+  color: var(--black);
+}
+
 /* Cursor dibujo */
 #edBrushCursor {
   position: fixed; pointer-events: none; z-index: 999;

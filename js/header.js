@@ -175,9 +175,10 @@ const Header = (() => {
           window.__pwaPrompt.userChoice.then(() => { window.__pwaPrompt = null; });
         } else {
           var lang = localStorage.getItem('cs_lang') || (navigator.language || 'es').slice(0, 2);
-          alert(lang === 'en'
+          var msg = lang === 'en'
             ? 'Tap Share ↑ then "Add to Home Screen"'
-            : 'Pulsa Compartir ↑ y luego "Añadir a inicio"');
+            : 'Pulsa Compartir ↑ y luego "Añadir a inicio"';
+          if (typeof appAlert === 'function') appAlert(msg); else alert(msg);
         }
       });
     }

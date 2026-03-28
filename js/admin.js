@@ -106,27 +106,28 @@ async function renderUsers(panel) {
           ? `<button class="admin-btn admin-btn-del" data-uid="${user.id}" data-email="${escHtml(user.email)}">Eliminar</button>`
           : '<span class="admin-badge">Admin</span>'}
       </div>`;
-    row.querySelector('[data-uid]')?.addEventListener('click', async function() {
+    row.querySelector('[data-uid]')?.addEventListener('click', function() {
       const uid   = this.dataset.uid;
       const uname = user.username;
-      if (!confirm(`¿Eliminar usuario ${uname}? Se eliminarán también todas sus obras.`)) return;
       const btn = this;
-      btn.disabled = true; btn.textContent = '…';
-      try {
-        // Borrar obras y perfil de Supabase
-        if (typeof SupabaseClient !== 'undefined') {
-          await SupabaseClient.deleteAuthorData(uid);
+      appConfirm(`¿Eliminar usuario ${uname}? Se eliminarán también todas sus obras.`, async ()=>{
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          // Borrar obras y perfil de Supabase
+          if (typeof SupabaseClient !== 'undefined') {
+            await SupabaseClient.deleteAuthorData(uid);
+          }
+          // Borrar obras locales
+          ComicStore.getByUser(uid).forEach(c => ComicStore.remove(c.id));
+          showToast(I18n.t('userDeleted') + ' — Recuerda borrar también el usuario en Supabase Auth');
+        } catch(e) {
+          console.warn('deleteAuthorData error:', e);
+          showToast('Error al eliminar: ' + e.message);
+          btn.disabled = false; btn.textContent = 'Eliminar';
+          return;
         }
-        // Borrar obras locales
-        ComicStore.getByUser(uid).forEach(c => ComicStore.remove(c.id));
-        showToast(I18n.t('userDeleted') + ' — Recuerda borrar también el usuario en Supabase Auth');
-      } catch(e) {
-        console.warn('deleteAuthorData error:', e);
-        showToast('Error al eliminar: ' + e.message);
-        btn.disabled = false; btn.textContent = 'Eliminar';
-        return;
-      }
-      renderTab('users');
+        renderTab('users');
+      });
     });
     panel.appendChild(row);
   });
@@ -209,17 +210,18 @@ function buildAdminRow(comic, mode) {
   });
 
   // Eliminar (de localStorage Y de Supabase)
-  row.querySelector(`#del_${comic.id}`)?.addEventListener('click', async () => {
+  row.querySelector(`#del_${comic.id}`)?.addEventListener('click', () => {
     const title = comic.title || 'Sin título';
-    if (!confirm(`¿Eliminar "${title}" permanentemente?\nSe eliminará de la base de datos y no podrá recuperarse.`)) return;
-    if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
-      try {
-        await SupabaseClient.deleteWork(comic.supabaseId);
-      } catch(err) { console.warn('Supabase deleteWork:', err); }
-    }
-    ComicStore.remove(comic.id);
-    showToast(I18n.t('workDeleted') || 'Obra eliminada');
-    renderTab(mode); // refresco inmediato
+    appConfirm(`¿Eliminar "${title}" permanentemente?\nSe eliminará de la base de datos y no podrá recuperarse.`, async ()=>{
+      if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+        try {
+          await SupabaseClient.deleteWork(comic.supabaseId);
+        } catch(err) { console.warn('Supabase deleteWork:', err); }
+      }
+      ComicStore.remove(comic.id);
+      showToast(I18n.t('workDeleted') || 'Obra eliminada');
+      renderTab(mode); // refresco inmediato
+    });
   });
 
   return row;

@@ -248,10 +248,11 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
-    if(!confirm('¿Eliminar esta capa?')) return;
-    edLayers.splice(realIdx, 1);
-    if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
-    edPushHistory(); edRedraw(); _lyRender();
+    edConfirm('¿Eliminar esta capa?', ()=>{
+      edLayers.splice(realIdx, 1);
+      if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
+      edPushHistory(); edRedraw(); _lyRender();
+    });
   });
   // Agrupar controles en un div que nunca se comprime
   const acts = document.createElement('div');
@@ -361,10 +362,11 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
-    if(!confirm('¿Eliminar esta capa?')) return;
-    edLayers.splice(realIdx, 1);
-    if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
-    edPushHistory(); edRedraw(); _lyRender();
+    edConfirm('¿Eliminar esta capa?', ()=>{
+      edLayers.splice(realIdx, 1);
+      if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
+      edPushHistory(); edRedraw(); _lyRender();
+    });
   });
 
   const acts = document.createElement('div');
@@ -478,10 +480,11 @@ function _lyBuildImgItem(la, realIdx, selected) {
   del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
-    if(!confirm('¿Eliminar esta capa?')) return;
-    edLayers.splice(realIdx, 1);
-    if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
-    edPushHistory(); edRedraw(); _lyRender();
+    edConfirm('¿Eliminar esta capa?', ()=>{
+      edLayers.splice(realIdx, 1);
+      if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
+      edPushHistory(); edRedraw(); _lyRender();
+    });
   });
   const actsI = document.createElement('div');
   actsI.className = 'ed-layer-actions';

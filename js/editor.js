@@ -2063,9 +2063,10 @@ function edAddPage(){
 }
 function edDeletePage(){
   if(edPages.length<=1){edToast('Necesitas al menos una página');return;}
-  if(!confirm('¿Eliminar esta hoja?')) return;
-  edPages.splice(edCurrentPage,1);
-  edLoadPage(Math.min(edCurrentPage,edPages.length-1));
+  edConfirm('¿Eliminar esta hoja?', ()=>{
+    edPages.splice(edCurrentPage,1);
+    edLoadPage(Math.min(edCurrentPage,edPages.length-1));
+  });
 }
 function edLoadPage(idx){
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
@@ -5197,10 +5198,11 @@ function _edActivateShapeTool() {
   // ── Eliminar ──
   $('op-shape-del')?.addEventListener('click',()=>{
     const s=_curShape(); if(!s) return;
-    if(!confirm('¿Eliminar objeto?')) return;
-    const idx=edLayers.indexOf(s);
-    if(idx>=0){edLayers.splice(idx,1);}
-    edSelectedIdx=-1; edPushHistory(); edRedraw(); _edActivateShapeTool();
+    edConfirm('¿Eliminar objeto?', ()=>{
+      const idx=edLayers.indexOf(s);
+      if(idx>=0){edLayers.splice(idx,1);}
+      edSelectedIdx=-1; edPushHistory(); edRedraw(); _edActivateShapeTool();
+    });
   });
 
   // ── Duplicar ──
@@ -5494,11 +5496,12 @@ function _edActivateLineTool(isNew) {
   // ── Eliminar ──
   $('op-line-del')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l) return;
-    if(!confirm('¿Eliminar?')) return;
-    _edLineLayer=null;
-    const idx=edLayers.indexOf(l);
-    if(idx>=0){edLayers.splice(idx,1);}
-    edSelectedIdx=-1; edPushHistory(); edRedraw(); _edActivateLineTool();
+    edConfirm('¿Eliminar?', ()=>{
+      _edLineLayer=null;
+      const idx=edLayers.indexOf(l);
+      if(idx>=0){edLayers.splice(idx,1);}
+      edSelectedIdx=-1; edPushHistory(); edRedraw(); _edActivateLineTool();
+    });
   });
 
   // ── Duplicar ──
@@ -6026,18 +6029,18 @@ function edRenderOptionsPanel(mode){
 
     // ── Eliminar ──
     $('op-draw-del')?.addEventListener('click',()=>{
-      const ok = confirm('¿Eliminar el dibujo?');
-      if(!ok) return;
-      const page=edPages[edCurrentPage];if(!page)return;
-      const dlIdx=page.layers.findIndex(l=>l.type==='draw');
-      if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
-      edActiveTool='select'; edCanvas.className='';
-      const cur=$('edBrushCursor');if(cur)cur.style.display='none';
-      delete panel.dataset.mode;
-      _edDrawClearHistory();
-      _edDrawUnlockUI();
-      edCloseOptionsPanel(); _edShapePushHistory(); edRedraw();
-      edToast('Dibujo eliminado');
+      edConfirm('¿Eliminar el dibujo?', ()=>{
+        const page=edPages[edCurrentPage];if(!page)return;
+        const dlIdx=page.layers.findIndex(l=>l.type==='draw');
+        if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
+        edActiveTool='select'; edCanvas.className='';
+        const cur=$('edBrushCursor');if(cur)cur.style.display='none';
+        delete panel.dataset.mode;
+        _edDrawClearHistory();
+        _edDrawUnlockUI();
+        edCloseOptionsPanel(); _edShapePushHistory(); edRedraw();
+        edToast('Dibujo eliminado');
+      });
     });
 
     // Solo redibujar el canvas para actualizar el cursor; NO redimensionar
@@ -6067,14 +6070,15 @@ function edRenderOptionsPanel(mode){
       panel.classList.add('open');
       // Eliminar todo el grupo
       $('pp-grp-del')?.addEventListener('click',()=>{
-        if(!confirm('¿Eliminar el grupo completo?')) return;
-        const idxs = _edGroupMemberIdxs(gid).sort((a,b)=>b-a);
-        edPushHistory();
-        idxs.forEach(i => edLayers.splice(i,1));
-        edSelectedIdx=-1; edMultiSel=[]; edMultiBbox=null;
-        if(window._edGroupSilentTool!==undefined){ edActiveTool=window._edGroupSilentTool; delete window._edGroupSilentTool; }
-        else if(edActiveTool==='multiselect'){ edActiveTool='select'; edCanvas.className=''; $('edMultiSelBtn')?.classList.remove('active'); }
-        edCloseOptionsPanel(); edPushHistory(); edRedraw();
+        edConfirm('¿Eliminar el grupo completo?', ()=>{
+          const idxs = _edGroupMemberIdxs(gid).sort((a,b)=>b-a);
+          edPushHistory();
+          idxs.forEach(i => edLayers.splice(i,1));
+          edSelectedIdx=-1; edMultiSel=[]; edMultiBbox=null;
+          if(window._edGroupSilentTool!==undefined){ edActiveTool=window._edGroupSilentTool; delete window._edGroupSilentTool; }
+          else if(edActiveTool==='multiselect'){ edActiveTool='select'; edCanvas.className=''; $('edMultiSelBtn')?.classList.remove('active'); }
+          edCloseOptionsPanel(); edPushHistory(); edRedraw();
+        });
       });
       // Duplicar todo el grupo con un nuevo groupId
       $('pp-grp-dup')?.addEventListener('click',()=>{
@@ -6315,8 +6319,7 @@ function edRenderOptionsPanel(mode){
       });
     });
     $('pp-del')?.addEventListener('click',()=>{
-      const ok = confirm('¿Eliminar este objeto?');
-      if(ok){ edDeleteSelected(); edCloseOptionsPanel(); }
+      edConfirm('¿Eliminar este objeto?', ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
@@ -6489,10 +6492,11 @@ function _edRuleAdd() {
 
 function _edRuleClear() {
   if(!edRules.length) return;
-  if(!confirm('¿Borrar todas las reglas de esta hoja?')) return;
-  edRules = [];
-  _edRulesPanelClose();
-  edRedraw();
+  edConfirm('¿Borrar todas las reglas de esta hoja?', ()=>{
+    edRules = [];
+    _edRulesPanelClose();
+    edRedraw();
+  }, 'Borrar');
 }
 
 function _edRuleDelete(id) {
@@ -8802,6 +8806,32 @@ function edToast(msg,ms=2000){
   });
 }
 
+// Modal de confirmación propio — evita confirm() nativo que rompe fullscreen en Android
+let _edConfirmCb = null;
+function edConfirm(msg, onOk, okLabel='Eliminar'){
+  const overlay = $('edConfirmModal');
+  const msgEl   = $('edConfirmMsg');
+  const okBtn   = $('edConfirmOk');
+  const cancelBtn = $('edConfirmCancel');
+  if(!overlay) { if(window.confirm(msg)) onOk(); return; } // fallback por si el DOM no está listo
+  msgEl.textContent = msg;
+  okBtn.textContent = okLabel;
+  _edConfirmCb = onOk;
+  overlay.classList.add('open');
+  // Listeners de un solo uso
+  const close = (exec) => {
+    overlay.classList.remove('open');
+    okBtn.removeEventListener('click', onYes);
+    cancelBtn.removeEventListener('click', onNo);
+    if(exec && _edConfirmCb) _edConfirmCb();
+    _edConfirmCb = null;
+  };
+  const onYes = () => close(true);
+  const onNo  = () => close(false);
+  okBtn.addEventListener('click', onYes);
+  cancelBtn.addEventListener('click', onNo);
+}
+
 /* ══════════════════════════════════════════
    INIT
    ══════════════════════════════════════════ */
@@ -9156,10 +9186,11 @@ function EditorView_init(){
   $('dd-deleteproject')?.addEventListener('click',()=>{
     edCloseMenus();
     if(!edProjectId){edToast('Sin proyecto activo');return;}
-    if(!confirm('¿Eliminar esta obra? Esta acción no se puede deshacer.'))return;
-    ComicStore.remove(edProjectId);
-    edToast('Obra eliminada');
-    setTimeout(()=>Router.go('my-comics'),600);
+    edConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
+      ComicStore.remove(edProjectId);
+      edToast('Obra eliminada');
+      setTimeout(()=>Router.go('my-comics'),600);
+    });
   });
   $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
 
@@ -9970,7 +10001,16 @@ function _bibRenderPanel(panel) {
       const fi = parseInt(btn.dataset.fi);
       const d = _bibLoad();
       const folder = d.folders[fi];
-      if (folder.items.length > 0 && !confirm(`¿Eliminar la carpeta "${folder.name}" y sus ${folder.items.length} objetos?`)) return;
+      if (folder.items.length > 0) {
+        edConfirm(`¿Eliminar la carpeta "${folder.name}" y sus ${folder.items.length} objetos?`, ()=>{
+          const d2 = _bibLoad();
+          d2.folders.splice(fi, 1);
+          _bibSave(d2);
+          edToast('Carpeta eliminada');
+          _bibRenderPanel(panel);
+        });
+        return;
+      }
       d.folders.splice(fi, 1);
       _bibSave(d);
       edToast('Carpeta eliminada');

@@ -235,11 +235,11 @@ function _mcRenderList() {
       const comic = ComicStore.getById(id);
       if (!comic) return;
       if (typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
-        alert('No tienes permiso para publicar esta obra.');
+        appAlert('No tienes permiso para publicar esta obra.');
         return;
       }
       if (!comic.panels || !comic.panels.length) {
-        alert('Añade al menos una página antes de publicar.');
+        appAlert('Añade al menos una página antes de publicar.');
         return;
       }
       const supabaseId = comic.supabaseId || crypto.randomUUID();
@@ -263,7 +263,7 @@ function _mcRenderList() {
       const comic = ComicStore.getById(id);
       if (!comic) return;
       if (typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
-        alert('No tienes permiso para retirar esta obra.');
+        appAlert('No tienes permiso para retirar esta obra.');
         return;
       }
       ComicStore.save({ ...comic, published: false, approved: false });
@@ -276,22 +276,23 @@ function _mcRenderList() {
     } else if (action === 'delete') {
       const comic = ComicStore.getById(id);
       if (comic && typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
-        alert('No tienes permiso para eliminar esta obra.');
+        appAlert('No tienes permiso para eliminar esta obra.');
         return;
       }
-      if (!confirm('¿Eliminar esta obra? Esta acción no se puede deshacer.')) return;
-      if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
-        SupabaseClient.deleteWork(comic.supabaseId)
-          .catch(err => console.warn('Supabase deleteWork:', err));
-      }
-      ComicStore.remove(id);
-      _mcRenderList();
-      _mcToast('Obra eliminada');
+      appConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
+        if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+          SupabaseClient.deleteWork(comic.supabaseId)
+            .catch(err => console.warn('Supabase deleteWork:', err));
+        }
+        ComicStore.remove(id);
+        _mcRenderList();
+        _mcToast('Obra eliminada');
+      });
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
       if (!comic.supabaseId) {
-        alert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
+        appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
         return;
       }
       if (typeof openShareModal !== 'undefined') openShareModal(comic);
