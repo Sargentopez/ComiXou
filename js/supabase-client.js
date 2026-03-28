@@ -306,5 +306,59 @@ const SupabaseClient = (() => {
     return r || [];
   }
 
-  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds };
+  // ── BIBLIOTECA ────────────────────────────────────────────────
+  async function bibFetch(authorId) {
+    const rows = await _get(`biblioteca?author_id=eq.${authorId}&order=created_at.asc`);
+    return rows || [];
+  }
+
+  // Sincronización completa: sube todos los items locales a Supabase.
+  // Estrategia upsert por id — añade los nuevos, actualiza los existentes, no borra los que
+  // ya no están (el autor puede haber guardado desde otro dispositivo).
+  // Si el autor elimina un item en local, desaparece en la siguiente sync porque no se upserta.
+  // Sube la biblioteca completa (nueva estructura con carpetas) a Supabase.
+  // Cada item de cada carpeta se sube como fila independiente con campo folder_name.
+  async function bibSync(authorId, bibData) {
+    // bibData: { folders: [{id, name, items:[...]}] }
+    const folders = (bibData && bibData.folders) ? bibData.folders : [];
+    const rows = [];
+    folders.forEach(folder => {
+      (folder.items || []).forEach(entry => {
+        rows.push({
+          id:          entry.id,
+          author_id:   authorId,
+          layer_type:  (entry.layerData && entry.layerData.type) || 'unknown',
+          layer_data:  JSON.stringify(entry.layerData),
+          thumb:       entry.thumb,
+          folder_id:   folder.id,
+          folder_name: folder.name,
+        });
+      });
+    });
+    if (!rows.length) return;
+    await _upsert('biblioteca', rows);
+  }
+
+  // Descarga biblioteca desde Supabase y reconstruye la estructura de carpetas.
+  async function bibDownload(authorId) {
+    const rows = await bibFetch(authorId);
+    // Agrupar por folder_id
+    const folderMap = new Map();
+    rows.forEach(r => {
+      const fid  = r.folder_id   || '__root__';
+      const fname = r.folder_name || 'General';
+      if (!folderMap.has(fid)) folderMap.set(fid, { id: fid, name: fname, items: [] });
+      let ld = null;
+      try { ld = JSON.parse(r.layer_data); } catch(e) {}
+      if (ld) folderMap.get(fid).items.push({
+        id:        r.id,
+        timestamp: new Date(r.created_at).getTime(),
+        layerData: ld,
+        thumb:     r.thumb,
+      });
+    });
+    return { folders: [...folderMap.values()] };
+  }
+
+  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, bibSync, bibDownload };
 })();

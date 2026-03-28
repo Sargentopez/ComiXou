@@ -510,6 +510,12 @@ body.editor-page #appView {
   border-bottom-width: 1.5px;
 }
 
+/* Modo biblioteca: sin padding (el contenido lo gestiona) y más altura */
+#edOptionsPanel.open[data-mode="biblioteca"] {
+  padding: 0;
+  max-height: 480px;
+}
+
 /* Filas de opciones */
 .op-row {
   display: flex; flex-wrap: wrap;
@@ -1452,10 +1458,11 @@ body.editor-page #appView {
   pointer-events: none;
   opacity: 0.35;
 }
-/* Permitidos: botón volver, pantalla completa, minimizar, FloatBtn */
+/* Permitidos: botón volver, pantalla completa, minimizar, FloatBtn, Biblioteca */
 #editorShell.draw-active #edBackBtn,
 #editorShell.draw-active #edFsBtn,
-#editorShell.draw-active #edFloatBtn {
+#editorShell.draw-active #edFloatBtn,
+#editorShell.draw-active [data-menu="biblioteca"] {
   pointer-events: auto !important;
   opacity: 1 !important;
 }

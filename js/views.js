@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v11.131</footer>
+    <footer class="app-version">v12.58</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -261,6 +261,17 @@ Router.register('editor', {
             <div class="ed-dropdown" id="dd-rules">
               <button class="ed-dropdown-item" id="dd-rule-add">＋ Añadir regla</button>
               <button class="ed-dropdown-item" id="dd-rule-clear" style="color:#c00">✕ Borrar reglas</button>
+            </div>
+          </div>
+
+          <div class="ed-menu-sep"></div>
+
+          <!-- BIBLIOTECA -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="biblioteca">Biblioteca ▾</button>
+            <div class="ed-dropdown" id="dd-biblioteca">
+              <button class="ed-dropdown-item" id="dd-bib-save">📥 Guardar en biblioteca</button>
+              <button class="ed-dropdown-item" id="dd-bib-open">📂 Abrir biblioteca</button>
             </div>
           </div>
 

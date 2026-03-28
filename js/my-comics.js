@@ -200,6 +200,29 @@ function _mcRenderList() {
             genre:   work.genre    || comicToEdit.genre,
             navMode: work.nav_mode || comicToEdit.navMode,
           });
+          // Sincronizar biblioteca desde la nube (merge por id con local)
+          const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
+          if (_user && _user.id && typeof SupabaseClient.bibDownload === 'function') {
+            try {
+              const cloudData = await SupabaseClient.bibDownload(_user.id);
+              if (cloudData && cloudData.folders && cloudData.folders.length) {
+                let localData;
+                try { localData = JSON.parse(localStorage.getItem('cs_biblioteca') || 'null'); } catch(e) {}
+                if (!localData || !localData.folders) localData = { folders: [{ id: '__root__', name: 'General', items: [] }] };
+                // Merge: para cada carpeta de la nube, fusionar sus items no presentes en local
+                const localAllIds = new Set(localData.folders.flatMap(f => f.items.map(i => i.id)));
+                cloudData.folders.forEach(cf => {
+                  const lf = localData.folders.find(f => f.id === cf.id);
+                  const newItems = cf.items.filter(i => !localAllIds.has(i.id));
+                  if (newItems.length) {
+                    if (lf) { lf.items.push(...newItems); }
+                    else { localData.folders.push({ id: cf.id, name: cf.name, items: newItems }); }
+                  }
+                });
+                try { localStorage.setItem('cs_biblioteca', JSON.stringify(localData)); } catch(e) {}
+              }
+            } catch(e) { console.warn('bibDownload error (no crítico):', e); }
+          }
         } catch(err) {
           _mcToast('\u26a0\ufe0f Error al descargar de la nube: ' + err.message);
           return;

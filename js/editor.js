@@ -1605,18 +1605,19 @@ function _msRecalcBbox(){
   const pw=edPageW(), ph=edPageH();
   const gr = edMultiGroupRot * Math.PI / 180;
   const cg = Math.cos(-gr), sg = Math.sin(-gr);
-  // Centroide de los centros de los objetos
+  // Centroide de los centros de los objetos (excluir DrawLayer — siempre x=0.5,y=0.5)
   let pivX=0, pivY=0, n=0;
   for(const i of edMultiSel){
-    const la=edLayers[i]; if(!la) continue;
+    const la=edLayers[i]; if(!la || la.type==='draw') continue;
     pivX+=la.x; pivY+=la.y; n++;
   }
   if(!n){ edMultiBbox=null; return; }
   pivX/=n; pivY/=n;
   // AABB de todos los vértices desrotados al espacio local del grupo
+  // DrawLayer ocupa siempre toda la página (width=1, height=1) — excluirlo del bbox
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   for(const i of edMultiSel){
-    const la=edLayers[i]; if(!la) continue;
+    const la=edLayers[i]; if(!la || la.type==='draw') continue;
     const rot=(la.rotation||0)*Math.PI/180;
     const hw=la.width/2, hh=la.height/2;
     for(const [lcx,lcy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
@@ -3085,7 +3086,15 @@ function edOnStart(e){
           if(Math.hypot((lxCur-p.x)*pw, (lyCur-p.y)*ph) < 12){
             edMultiResizing=true;
             edMultiTransform={
-              items: edMultiSel.map(i=>({i, x:edLayers[i].x, y:edLayers[i].y, w:edLayers[i].width, h:edLayers[i].height})),
+              items: edMultiSel.map(i=>{
+                const _l=edLayers[i];
+                const _cr = _l.cornerRadii
+                  ? (Array.isArray(_l.cornerRadii) ? [..._l.cornerRadii] : {..._l.cornerRadii})
+                  : null;
+                return {i, x:_l.x, y:_l.y, w:_l.width, h:_l.height,
+                  _linePoints: _l.type==='line' ? _l.points.map(p=>({...p})) : null,
+                  _cornerRadii: _cr};
+              }),
               bb: {cx:bb.cx, cy:bb.cy, w:bb.w, h:bb.h},
               corner: p.c,
               sx: lxCur, sy: lyCur,
@@ -3514,10 +3523,13 @@ function edOnStart(e){
         edMultiGroupRot = 0;
         _msRecalcBbox();
         edSelectedIdx = -1;
-        // Activar multisel internamente sin cambiar herramienta visible
         const _prevTool = edActiveTool;
         edActiveTool = 'multiselect';
-        window._edGroupSilentTool = _prevTool; // recordar herramienta previa
+        window._edGroupSilentTool = _prevTool;
+        // Iniciar drag inmediatamente — igual que objetos normales, sin retardo
+        edMultiDragging = true;
+        edMultiDragOffs = _gidxs.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+        window._edMoved = false;
         edRedraw();
         return;
       }
@@ -3720,8 +3732,46 @@ function edOnMove(e){
         // Volver a rotar al espacio global
         la.x = bb.cx + (_slx*_cr - _sly*_sr)/pw;
         la.y = bb.cy + (_slx*_sr + _sly*_cr)/ph;
-        la.width=Math.max(s.w*Math.abs(sx2),0.02);
-        la.height=Math.max(s.h*Math.abs(sy2),0.02);
+        // DrawLayer: transformar el bitmap con la escala, no width/height (siempre 1.0)
+        if(la.type==='draw'){
+          const _nw=Math.round(ED_CANVAS_W*Math.abs(_swL)), _nh=Math.round(ED_CANVAS_H*Math.abs(_shL));
+          if(_nw>0&&_nh>0&&(_nw!==ED_CANVAS_W||_nh!==ED_CANVAS_H)){
+            const tmp=document.createElement('canvas');
+            tmp.width=ED_CANVAS_W; tmp.height=ED_CANVAS_H;
+            const tctx=tmp.getContext('2d');
+            tctx.drawImage(la._canvas, 0,0,ED_CANVAS_W,ED_CANVAS_H, 0,0,_nw,_nh);
+            la._ctx.clearRect(0,0,ED_CANVAS_W,ED_CANVAS_H);
+            la._ctx.drawImage(tmp,0,0);
+          }
+          return; // no tocar width/height
+        }
+        // Proyectar sx2/sy2 (espacio del AABB) al espacio local del objeto.
+        // Un objeto rotado θ relativo al grupo tiene sus ejes locales a θ del AABB.
+        // Fabric.js/Konva usan esta misma proyección para resize no proporcional.
+        const _objRelRad = ((la.rotation||0) - (groupRot||0)) * Math.PI / 180;
+        const _cos2 = Math.cos(_objRelRad)*Math.cos(_objRelRad);
+        const _sin2 = Math.sin(_objRelRad)*Math.sin(_objRelRad);
+        const _swL = Math.abs(_cos2*sx2 + _sin2*sy2);
+        const _shL = Math.abs(_sin2*sx2 + _cos2*sy2);
+        la.width  = Math.max(s.w * _swL, 0.02);
+        la.height = Math.max(s.h * _shL, 0.02);
+        // LineLayer: escalar también los puntos locales para que la forma se estire
+        if(la.type==='line' && s._linePoints){
+          la.points = s._linePoints.map(p=>({...p, x:p.x*_swL, y:p.y*_shL}));
+          if(typeof la._updateBbox==='function') la._updateBbox();
+        }
+        // ShapeLayer/LineLayer: escalar cornerRadii
+        if(s._cornerRadii && la.cornerRadii){
+          const _scR = Math.min(_swL, _shL);
+          const _maxR = Math.min(la.width*pw, la.height*ph) / 2;
+          if(Array.isArray(la.cornerRadii)){
+            la.cornerRadii = s._cornerRadii.map(r => r ? Math.min(r*_scR, _maxR) : 0);
+          } else {
+            const _ncr = {};
+            for(const k in s._cornerRadii){ const r=s._cornerRadii[k]||0; _ncr[k]=r?Math.min(r*_scR,_maxR):0; }
+            la.cornerRadii = _ncr;
+          }
+        }
       });
       window._edMoved=true; edRedraw(); return;
     }
@@ -3735,6 +3785,8 @@ function edOnMove(e){
       edMultiGroupRot = startGroupRot + delta*180/Math.PI;
       items.forEach(s=>{
         const la=edLayers[s.i]; if(!la) return;
+        // DrawLayer: no rotar (su bitmap no se puede rotar en tiempo real)
+        if(la.type==='draw') return;
         // Posición rotada alrededor del centro del bbox (en px para evitar distorsión)
         const dx_px=(s.x-cx)*pw, dy_px=(s.y-cy)*ph;
         const cos=Math.cos(delta), sin=Math.sin(delta);
@@ -4871,7 +4923,7 @@ function edToggleMenu(id){
   dd.style.top  = r.bottom + 'px';
   dd.style.zIndex = '9999';
   // Proyecto: siempre alineado por la derecha con el botón
-  if(id === 'project' || id === 'rules'){
+  if(id === 'project' || id === 'rules' || id === 'biblioteca'){
     dd.style.left = 'auto';
     dd.style.right = (window.innerWidth - r.right) + 'px';
   } else {
@@ -5998,6 +6050,126 @@ function edRenderOptionsPanel(mode){
     }
     panel.dataset.mode = 'props';
     const la=edLayers[edSelectedIdx];
+
+    // ── PANEL DE GRUPO ──────────────────────────────────────────
+    // Objeto agrupado: panel simplificado sin controles de edición individual.
+    // Solo muestra operaciones sobre el grupo completo.
+    if(la.groupId){
+      const gid = la.groupId;
+      panel.innerHTML=`
+        <div class="op-row" style="margin-top:4px;justify-content:space-between;gap:4px">
+          <button class="op-btn danger" id="pp-grp-del" style="flex:1">✕ Eliminar</button>
+          <button class="op-btn" id="pp-grp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
+          <button class="op-btn" id="pp-grp-mirror" title="Simetría" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>
+          <button class="op-btn" id="pp-grp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>
+          <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
+        </div>`;
+      panel.classList.add('open');
+      // Eliminar todo el grupo
+      $('pp-grp-del')?.addEventListener('click',()=>{
+        if(!confirm('¿Eliminar el grupo completo?')) return;
+        const idxs = _edGroupMemberIdxs(gid).sort((a,b)=>b-a);
+        edPushHistory();
+        idxs.forEach(i => edLayers.splice(i,1));
+        edSelectedIdx=-1; edMultiSel=[]; edMultiBbox=null;
+        if(window._edGroupSilentTool!==undefined){ edActiveTool=window._edGroupSilentTool; delete window._edGroupSilentTool; }
+        else if(edActiveTool==='multiselect'){ edActiveTool='select'; edCanvas.className=''; $('edMultiSelBtn')?.classList.remove('active'); }
+        edCloseOptionsPanel(); edPushHistory(); edRedraw();
+      });
+      // Duplicar todo el grupo con un nuevo groupId
+      $('pp-grp-dup')?.addEventListener('click',()=>{
+        const idxs = _edGroupMemberIdxs(gid);
+        const newGid = _edNewGroupId();
+        edPushHistory();
+        const copies = idxs.map(i=>{
+          const copy = edDeserLayer(edSerLayer(edLayers[i]));
+          if(copy){ copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03; }
+          return copy;
+        }).filter(Boolean);
+        copies.forEach(c=>edLayers.push(c));
+        edPushHistory(); edRedraw();
+        edToast('Grupo duplicado ✓');
+      });
+      // Simetría — refleja el grupo entero respecto al eje vertical central
+      $('pp-grp-mirror')?.addEventListener('click',()=>{
+        const idxs = _edGroupMemberIdxs(gid);
+        if(!idxs.length) return;
+        edPushHistory();
+        // Centro horizontal del grupo = promedio de los centros de los miembros
+        const gcx = idxs.reduce((s,i)=>s+(edLayers[i].x||0), 0) / idxs.length;
+        // Aplicar simetría a cada miembro
+        idxs.forEach(i=>{
+          const m = edLayers[i]; if(!m) return;
+          // Reflejar posición respecto al eje central del grupo
+          m.x = 2*gcx - m.x;
+          // Aplicar simetría interna del objeto (misma lógica que edMirrorSelected)
+          if(m.type==='image'){
+            const img=m.img; if(!img) return;
+            const tmp=document.createElement('canvas');
+            tmp.width=img.naturalWidth||img.width; tmp.height=img.naturalHeight||img.height;
+            const tctx=tmp.getContext('2d');
+            tctx.translate(tmp.width,0); tctx.scale(-1,1); tctx.drawImage(img,0,0);
+            const mi=new Image();
+            mi.onload=()=>{ m.img=mi; m.rotation=-(m.rotation||0); edRedraw(); };
+            mi.src=tmp.toDataURL();
+          } else if(m.type==='stroke'){
+            const c=document.createElement('canvas');
+            c.width=m._canvas.width; c.height=m._canvas.height;
+            const cctx=c.getContext('2d');
+            cctx.translate(c.width,0); cctx.scale(-1,1); cctx.drawImage(m._canvas,0,0);
+            m._canvas=c; m._ctx=c.getContext('2d');
+            m.rotation=-(m.rotation||0);
+          } else if(m.type==='draw'){
+            const pw=edPageW(), ph=edPageH();
+            const axisPx=edMarginX()+gcx*pw;
+            const tmp=document.createElement('canvas');
+            tmp.width=ED_CANVAS_W; tmp.height=ED_CANVAS_H;
+            const tctx=tmp.getContext('2d');
+            tctx.translate(axisPx*2,0); tctx.scale(-1,1); tctx.drawImage(m._canvas,0,0);
+            m._ctx.clearRect(0,0,ED_CANVAS_W,ED_CANVAS_H);
+            m._ctx.drawImage(tmp,0,0);
+          } else if(m.type==='shape'){
+            m.rotation=-(m.rotation||0);
+            if(m.cornerRadii&&m.cornerRadii.length===4){
+              const [tl,tr,br,bl]=m.cornerRadii; m.cornerRadii=[tr,tl,bl,br];
+            }
+          } else if(m.type==='line'){
+            m.points=m.points.map(p=>({...p,x:-p.x,
+              cx1:p.cx1!==undefined?-p.cx1:undefined,
+              cx2:p.cx2!==undefined?-p.cx2:undefined}));
+            m.rotation=-(m.rotation||0);
+            if(typeof m._updateBbox==='function') m._updateBbox();
+          } else if(m.type==='text'||m.type==='bubble'){
+            m.rotation=-(m.rotation||0);
+            if(m.type==='bubble'){
+              if(m.tailStart) m.tailStart={x:1-m.tailStart.x,y:m.tailStart.y};
+              if(m.tailEnd)   m.tailEnd  ={x:1-m.tailEnd.x,  y:m.tailEnd.y};
+              if(m.tailStarts) m.tailStarts=m.tailStarts.map(s=>({x:1-s.x,y:s.y}));
+              if(m.tailEnds)   m.tailEnds  =m.tailEnds.map(e=>({x:1-e.x,y:e.y}));
+            }
+          }
+        });
+        edPushHistory(); edRedraw();
+      });
+      // Desagrupar
+      $('pp-grp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
+      // OK — cerrar panel y volver al grupo seleccionado
+      $('pp-grp-ok')?.addEventListener('click',()=>{
+        edCloseOptionsPanel();
+        // Restaurar selección del grupo
+        const idxs = _edGroupMemberIdxs(gid);
+        if(idxs.length>1){
+          edSelectedIdx=-1; edMultiSel=idxs; edMultiGroupRot=0; _msRecalcBbox();
+          const _prev = edActiveTool;
+          edActiveTool='multiselect';
+          window._edGroupSilentTool=_prev;
+          edRedraw();
+        }
+      });
+      requestAnimationFrame(edFitCanvas); return;
+    }
+    // ── FIN PANEL DE GRUPO ──────────────────────────────────────
+
     let html='';
 
     if(la.type==='text'||la.type==='bubble'){
@@ -7578,6 +7750,13 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+    // Sincronizar biblioteca con la nube
+    const user = Auth?.currentUser?.();
+    if (user && user.id) {
+      try {
+        await SupabaseClient.bibSync(user.id, _bibLoad());
+      } catch(e) { console.warn('bibSync error (no crítico):', e); }
+    }
   } catch(err) {
     edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
     console.error('edCloudSave:', err);
@@ -7778,6 +7957,16 @@ function edUngroupSelected(){
   edPushHistory();
   edLayers.forEach(l => { if(l && l.groupId === gid) delete l.groupId; });
   edSelectedIdx = -1; _msClear();
+  // Restaurar herramienta previa si estaba en modo grupo silencioso
+  if(window._edGroupSilentTool !== undefined){
+    edActiveTool = window._edGroupSilentTool;
+    delete window._edGroupSilentTool;
+  } else if(edActiveTool === 'multiselect'){
+    // Por si acaso quedó en multiselect sin flag
+    edActiveTool = 'select';
+    edCanvas.className = '';
+    $('edMultiSelBtn')?.classList.remove('active');
+  }
   // Cerrar panel de opciones si estaba abierto
   edCloseOptionsPanel();
   edPushHistory(); edRedraw();
@@ -9002,6 +9191,7 @@ function EditorView_init(){
   edInitDrawBar();
   edInitShapeBar();
   edInitRules();
+  edInitBiblioteca();
   // Avisar al usuario si localStorage se llena al guardar
   window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
@@ -9037,7 +9227,7 @@ function EditorView_init(){
     if(!document.getElementById('editorShell')) return;
     // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas, etc.)
     // dejarlo hacer scroll nativo — no intervenir
-    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box');
+    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel');
     if(overScrollable) return;
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
@@ -9286,6 +9476,7 @@ function EditorView_init(){
   if(editorShell){
     let _pinchPrev = 0, _pinchMidX = 0, _pinchMidY = 0;
     editorShell.addEventListener('touchstart', e => {
+      if(e.target.closest('#edOptionsPanel')) return; // no interferir con scroll del panel
       if(e.touches.length === 2){
         // No hacer zoom de cámara si hay objeto seleccionado, multiselección activa o modo dibujo
         if(edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length) || ['draw','eraser'].includes(edActiveTool)){ _pinchPrev = 0; return; }
@@ -9299,6 +9490,7 @@ function EditorView_init(){
       }
     }, {passive:true});
     editorShell.addEventListener('touchmove', e => {
+      if(e.target.closest('#edOptionsPanel')) return; // no interferir con scroll del panel
       if(e.touches.length === 2 && _pinchPrev > 0){
         e.preventDefault();
         // No hacer zoom de cámara si hay objeto seleccionado o multiselección activa
@@ -9431,4 +9623,573 @@ function edLoadFromJSON(file){
     }catch(err){edToast('Error al cargar el archivo');}
   };
   reader.readAsText(file);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ── BIBLIOTECA (T8) ─────────────────────────────────────────────
+// Estructura localStorage cs_biblioteca:
+// { folders: [{id, name, items:[{id,timestamp,layerData,thumb}]}] }
+// items sin carpeta → folder id='__root__'
+// Límite global: 30 objetos entre todas las carpetas.
+// ═══════════════════════════════════════════════════════════════
+
+const _BIB_KEY        = 'cs_biblioteca';
+const _BIB_MAX_BYTES  = 3 * 1024 * 1024; // 3 MB — tope de memoria para la biblioteca
+const _BIB_THUMB_SIZE = 80;
+
+// ── Storage ──────────────────────────────────────────────────────
+function _bibLoad() {
+  try {
+    const d = JSON.parse(localStorage.getItem(_BIB_KEY) || 'null');
+    if (d && Array.isArray(d.folders)) return d;
+  } catch(e) {}
+  // Migración: formato antiguo era array plano
+  let oldItems = [];
+  try { oldItems = JSON.parse(localStorage.getItem(_BIB_KEY) || '[]'); if (!Array.isArray(oldItems)) oldItems = []; } catch(e) {}
+  return { folders: [{ id: '__root__', name: 'General', items: oldItems }] };
+}
+function _bibSave(data) {
+  try { localStorage.setItem(_BIB_KEY, JSON.stringify(data)); }
+  catch(e) { edToast('⚠️ Sin espacio en biblioteca'); }
+}
+// Bytes estimados de la biblioteca (suma del JSON de cada item)
+function _bibUsedBytes(data) {
+  return data.folders.reduce((s, f) =>
+    s + f.items.reduce((s2, it) => s2 + (it.thumb ? it.thumb.length : 0)
+      + (it.layerData ? JSON.stringify(it.layerData).length : 0)
+      + (it.layers   ? JSON.stringify(it.layers).length   : 0), 0), 0);
+}
+function _bibTotalItems(data) {
+  return data.folders.reduce((s, f) => s + f.items.length, 0);
+}
+function _bibFormatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/(1024*1024)).toFixed(2) + ' MB';
+}
+function _bibNextFolderName(data) {
+  const nums = data.folders.map(f => { const m = f.name.match(/^Carpeta\s+(\d+)$/i); return m ? parseInt(m[1]) : 0; });
+  return 'Carpeta ' + (Math.max(0, ...nums) + 1);
+}
+
+// ── Miniatura ─────────────────────────────────────────────────────
+function _bibThumb(la) {
+  const S = _BIB_THUMB_SIZE, pad = 6;
+  const thumb = document.createElement('canvas');
+  thumb.width = S; thumb.height = S;
+  const tc = thumb.getContext('2d');
+  tc.fillStyle = '#f5f5f5';
+  tc.fillRect(0, 0, S, S);
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+
+  if (la.type === 'stroke' && la._canvas && la._canvas.width > 0) {
+    const lw = la.width * pw, lh = la.height * ph;
+    const scale = Math.min((S-pad*2)/Math.max(lw,1), (S-pad*2)/Math.max(lh,1));
+    const dw=lw*scale, dh=lh*scale, dx=(S-dw)/2, dy=(S-dh)/2;
+    tc.drawImage(la._canvas, 0, 0, la._canvas.width, la._canvas.height, dx, dy, dw, dh);
+  } else if (la.type === 'draw' && la._canvas) {
+    const scale = Math.min((S-pad*2)/Math.max(pw,1), (S-pad*2)/Math.max(ph,1));
+    const dw=pw*scale, dh=ph*scale, dx=(S-dw)/2, dy=(S-dh)/2;
+    tc.drawImage(la._canvas, mx, my, pw, ph, dx, dy, dw, dh);
+  } else if (la.type === 'shape' || la.type === 'line') {
+    _lyDrawShapeThumb(thumb, la);
+  } else if (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0) {
+    const iw=la.img.naturalWidth, ih=la.img.naturalHeight;
+    const scale=Math.min((S-pad*2)/iw, (S-pad*2)/ih);
+    const dw=iw*scale, dh=ih*scale, dx=(S-dw)/2, dy=(S-dh)/2;
+    tc.save(); tc.globalAlpha=la.opacity??1;
+    tc.drawImage(la.img, dx, dy, dw, dh);
+    tc.restore();
+  } else if (la.type === 'text' || la.type === 'bubble') {
+    // Mismo sistema que el panel de capas: _lyDrawThumb
+    _lyDrawThumb(thumb, la);
+  }
+  return thumb.toDataURL('image/png');
+}
+
+// ── Guardar objeto o grupo ────────────────────────────────────────
+function edBibGuardar() {
+  const data = _bibLoad();
+  if (_bibUsedBytes(data) >= _BIB_MAX_BYTES) {
+    edToast(`Biblioteca llena (${_bibFormatSize(_bibUsedBytes(data))} / ${_bibFormatSize(_BIB_MAX_BYTES)}). Elimina algún objeto para añadir más.`, 3500);
+    return;
+  }
+
+  let entry;
+
+  // ¿Hay grupo activo (multisel silencioso o multisel normal con groupId compartido)?
+  const isGroupActive = window._edGroupSilentTool !== undefined && edMultiSel.length > 1;
+  const isMultiGroup  = edActiveTool === 'multiselect' && edMultiSel.length > 1 &&
+                        edMultiSel.every(i => edLayers[i]?.groupId && edLayers[i].groupId === edLayers[edMultiSel[0]]?.groupId);
+
+  if (isGroupActive || isMultiGroup) {
+    // Guardar grupo completo
+    const idxs = edMultiSel.slice();
+    if (!idxs.length) { edToast('Selecciona un objeto primero'); return; }
+    const layers = idxs.map(i => edSerLayer(edLayers[i])).filter(Boolean);
+    if (!layers.length) { edToast('Error al serializar el grupo'); return; }
+    // Miniatura: renderizar todas las capas del grupo juntas
+    const thumb = _bibThumbGroup(idxs);
+    entry = {
+      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp: Date.now(),
+      isGroup:   true,
+      layers,
+      thumb,
+    };
+  } else {
+    // Objeto individual
+    const la = edLayers[edSelectedIdx];
+    if (!la) { edToast('Selecciona un objeto primero'); return; }
+    entry = {
+      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp: Date.now(),
+      isGroup:   false,
+      layerData: edSerLayer(la),
+      thumb:     _bibThumb(la),
+    };
+  }
+
+  const realFolders = data.folders;
+  if (realFolders.length > 1) {
+    _bibShowFolderPicker(entry, data);
+  } else {
+    realFolders[0].items.push(entry);
+    _bibSave(data);
+    edToast('Guardado en la biblioteca ✓');
+  }
+}
+
+// Miniatura de un grupo: renderiza todas sus capas en un canvas offscreen
+function _bibThumbGroup(idxs) {
+  const S = _BIB_THUMB_SIZE, pad = 6;
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+
+  // Canvas workspace para renderizar todas las capas
+  const off = document.createElement('canvas');
+  off.width = pw; off.height = ph;
+  const ctx = off.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+  ctx.setTransform(1, 0, 0, 1, -mx, -my);
+
+  // Calcular bbox del grupo en coordenadas de página
+  let minX = 1, minY = 1, maxX = 0, maxY = 0;
+  idxs.forEach(i => {
+    const la = edLayers[i];
+    if (!la) return;
+    ctx.globalAlpha = la.opacity ?? 1;
+    la.draw(ctx, off);
+    ctx.globalAlpha = 1;
+    if (la.type !== 'draw') {
+      minX = Math.min(minX, la.x - la.width/2);
+      minY = Math.min(minY, la.y - la.height/2);
+      maxX = Math.max(maxX, la.x + la.width/2);
+      maxY = Math.max(maxY, la.y + la.height/2);
+    }
+  });
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // Si no hay bbox válido (ej. solo DrawLayers), usar página entera
+  if (maxX <= minX || maxY <= minY) { minX=0; minY=0; maxX=1; maxY=1; }
+
+  // Recortar bbox al thumb
+  const bx = minX * pw, by = minY * ph;
+  const bw = (maxX - minX) * pw, bh = (maxY - minY) * ph;
+  const scale = Math.min((S - pad*2) / Math.max(bw, 1), (S - pad*2) / Math.max(bh, 1));
+  const dw = bw * scale, dh = bh * scale;
+  const dx = (S - dw) / 2, dy = (S - dh) / 2;
+
+  const thumb = document.createElement('canvas');
+  thumb.width = S; thumb.height = S;
+  const tc = thumb.getContext('2d');
+  tc.fillStyle = '#f5f5f5';
+  tc.fillRect(0, 0, S, S);
+  tc.drawImage(off, bx, by, bw, bh, dx, dy, dw, dh);
+
+  // Icono de grupo
+  tc.fillStyle = 'rgba(0,0,0,.35)';
+  tc.font = 'bold 11px sans-serif';
+  tc.textAlign = 'right'; tc.textBaseline = 'bottom';
+  tc.fillText('⊞', S - 4, S - 2);
+
+  return thumb.toDataURL('image/png');
+}
+
+// Popup para elegir carpeta al guardar
+function _bibShowFolderPicker(entry, data) {
+  // Cerrar picker anterior si existe
+  document.getElementById('_bib-picker')?.remove();
+
+  const pop = document.createElement('div');
+  pop.id = '_bib-picker';
+  pop.style.cssText = 'position:fixed;z-index:1300;background:var(--surface,#fff);border:1px solid var(--gray-300,#ccc);border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,.18);padding:8px 0;min-width:180px;max-width:260px';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'padding:6px 14px 8px;font-size:.8rem;font-weight:700;color:var(--gray-600,#555);border-bottom:1px solid var(--gray-200,#eee);margin-bottom:4px';
+  title.textContent = '¿En qué carpeta?';
+  pop.appendChild(title);
+
+  data.folders.forEach(folder => {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 14px;border:none;background:transparent;font-size:.85rem;cursor:pointer;color:var(--gray-800,#222)';
+    btn.textContent = '📁 ' + folder.name;
+    btn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      pop.remove();
+      folder.items.push(entry);
+      _bibSave(data);
+      edToast('Guardado en "' + folder.name + '" ✓');
+    });
+    pop.appendChild(btn);
+  });
+
+  // Posicionar centrado en pantalla
+  document.body.appendChild(pop);
+  const pw2 = pop.offsetWidth || 200, ph2 = pop.offsetHeight || 160;
+  pop.style.left = Math.max(8, (window.innerWidth - pw2) / 2) + 'px';
+  pop.style.top  = Math.max(8, (window.innerHeight - ph2) / 2) + 'px';
+
+  // Cerrar al tocar fuera
+  const close = e => { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('pointerdown', close); } };
+  setTimeout(() => document.addEventListener('pointerdown', close), 50);
+}
+
+// ── Panel biblioteca ──────────────────────────────────────────────
+function edBibAbrir() {
+  const panel = $('edOptionsPanel');
+  if (!panel) return;
+  _bibRenderPanel(panel);
+}
+
+function _bibClose(panel) {
+  panel.classList.remove('open');
+  panel.innerHTML = '';
+  delete panel.dataset.mode;
+  requestAnimationFrame(edFitCanvas);
+}
+
+function _bibRenderPanel(panel) {
+  const data = _bibLoad();
+  const total = _bibUsedBytes(data);
+
+  // ── HTML estático ────────────────────────────────────────────
+  let html = `<div style="display:flex;flex-direction:column;width:100%;gap:0;touch-action:pan-y">`;
+
+  html += `
+  <div style="display:flex;flex-direction:row;align-items:center;padding:4px 6px 4px 8px;min-height:30px;gap:4px">
+    <button id="_bib-btn-folder" style="flex-shrink:0;border:none;background:transparent;font-size:.75rem;font-weight:700;cursor:pointer;color:var(--gray-600);padding:3px 6px;border-radius:5px;white-space:nowrap">+ Carpeta</button>
+    <span style="flex:1"></span>
+    <span style="font-size:.72rem;color:var(--gray-500)">${_bibFormatSize(total)} / ${_bibFormatSize(_BIB_MAX_BYTES)}</span>
+    <button id="_bib-close-btn" style="border:none;background:transparent;font-size:1rem;cursor:pointer;color:var(--gray-500);padding:2px 4px;line-height:1">✕</button>
+  </div>
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>`;
+
+  data.folders.forEach((folder, fi) => {
+    const count = folder.items.length;
+    // La cabecera de cada carpeta es zona de drop — data-drop-fi lo marca
+    html += `
+  <div class="_bib-folder" data-fi="${fi}" style="display:flex;flex-direction:column;width:100%">
+    <div class="_bib-drop-zone" data-drop-fi="${fi}"
+         style="display:flex;flex-direction:row;align-items:center;padding:3px 6px 3px 8px;gap:4px;background:var(--gray-50,#fafafa);transition:background .15s">
+      <span style="font-size:.85rem">📁</span>
+      <span class="_bib-fold-name" data-fi="${fi}"
+            style="flex:1;font-size:.78rem;font-weight:700;color:var(--gray-700);cursor:text;padding:1px 2px;border-radius:3px"
+            title="Toca para renombrar">${folder.name}</span>
+      <span style="font-size:.68rem;color:var(--gray-400)">${count}</span>
+      ${fi > 0 ? `<button class="_bib-del-folder" data-fi="${fi}" style="border:none;background:transparent;color:#c00;font-size:.75rem;cursor:pointer;padding:2px 4px;flex-shrink:0" title="Eliminar carpeta">✕</button>` : ''}
+    </div>`;
+
+    if (count === 0) {
+      html += `<div class="_bib-drop-zone _bib-empty-drop" data-drop-fi="${fi}"
+                    style="padding:10px 10px;font-size:.75rem;color:var(--gray-400);font-style:italic;min-height:32px;transition:background .15s">Vacía — arrastra aquí</div>`;
+    } else {
+      html += `<div style="padding:6px 6px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;touch-action:pan-x">
+      <div class="_bib-items-row" style="display:flex;flex-direction:row;gap:7px;flex-wrap:nowrap;min-width:min-content">`;
+      folder.items.forEach((it, ii) => {
+        html += `
+        <div class="_bib-item" data-fi="${fi}" data-ii="${ii}"
+             style="position:relative;flex-shrink:0;cursor:grab;border-radius:7px;overflow:hidden;background:#f0f0f0;width:${_BIB_THUMB_SIZE}px;height:${_BIB_THUMB_SIZE}px;border:2px solid var(--gray-200);touch-action:none;user-select:none">
+          <img src="${it.thumb}" width="${_BIB_THUMB_SIZE}" height="${_BIB_THUMB_SIZE}" style="display:block;pointer-events:none;user-select:none"/>
+          <button class="_bib-del-item" data-fi="${fi}" data-ii="${ii}"
+            style="position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;border:none;font-size:.75rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0"
+            title="Eliminar">✕</button>
+        </div>`;
+      });
+      html += `</div></div>`;
+    }
+    html += `</div>`;
+    if (fi < data.folders.length - 1) html += `<div style="height:1px;background:var(--gray-200);width:100%"></div>`;
+  });
+
+  html += `<div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <div style="padding:4px 8px;font-size:.7rem;color:var(--gray-400)">Toca para insertar · mantén pulsado para mover a otra carpeta</div>
+  </div>`;
+
+  panel.innerHTML = html;
+  panel.dataset.mode = 'biblioteca';
+  panel.classList.add('open');
+  requestAnimationFrame(edFitCanvas);
+
+  // ── Cerrar ───────────────────────────────────────────────────
+  panel.querySelector('#_bib-close-btn')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); _bibClose(panel);
+  });
+
+  // ── Crear carpeta ─────────────────────────────────────────────
+  panel.querySelector('#_bib-btn-folder')?.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const d = _bibLoad();
+    d.folders.push({ id: Date.now() + '_f', name: _bibNextFolderName(d), items: [] });
+    _bibSave(d);
+    _bibRenderPanel(panel);
+  });
+
+  // ── Renombrar carpeta ─────────────────────────────────────────
+  panel.querySelectorAll('._bib-fold-name').forEach(el => {
+    el.addEventListener('pointerup', e => {
+      if (el._wasDrag) { el._wasDrag = false; return; }
+      e.stopPropagation();
+      const fi = parseInt(el.dataset.fi);
+      const d = _bibLoad();
+      const nombre = prompt('Nombre de la carpeta:', d.folders[fi].name);
+      if (nombre !== null && nombre.trim()) {
+        d.folders[fi].name = nombre.trim();
+        _bibSave(d);
+        _bibRenderPanel(panel);
+      }
+    });
+  });
+
+  // ── Eliminar carpeta ──────────────────────────────────────────
+  panel.querySelectorAll('._bib-del-folder').forEach(btn => {
+    btn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      const fi = parseInt(btn.dataset.fi);
+      const d = _bibLoad();
+      const folder = d.folders[fi];
+      if (folder.items.length > 0 && !confirm(`¿Eliminar la carpeta "${folder.name}" y sus ${folder.items.length} objetos?`)) return;
+      d.folders.splice(fi, 1);
+      _bibSave(d);
+      edToast('Carpeta eliminada');
+      _bibRenderPanel(panel);
+    });
+  });
+
+  // ── Eliminar item ─────────────────────────────────────────────
+  panel.querySelectorAll('._bib-del-item').forEach(btn => {
+    btn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      const fi = parseInt(btn.dataset.fi), ii = parseInt(btn.dataset.ii);
+      const d = _bibLoad();
+      d.folders[fi].items.splice(ii, 1);
+      _bibSave(d);
+      edToast('Eliminado de la biblioteca');
+      _bibRenderPanel(panel);
+    });
+  });
+
+  // ── Insertar item (tap rápido sin drag) ───────────────────────
+  panel.querySelectorAll('._bib-item').forEach(el => {
+    el.addEventListener('pointerup', e => {
+      if (e.target.classList.contains('_bib-del-item')) return;
+      if (el._wasDrag) { el._wasDrag = false; return; }
+      e.stopPropagation();
+      const fi = parseInt(el.dataset.fi), ii = parseInt(el.dataset.ii);
+      const d = _bibLoad();
+      const entry = d.folders[fi]?.items[ii];
+      if (!entry) return;
+
+      if (entry.isGroup && Array.isArray(entry.layers)) {
+        // Insertar grupo: deserializar cada capa con nuevo groupId común
+        const newGroupId = _edNewGroupId();
+        let inserted = 0;
+        entry.layers.forEach(ld => {
+          const la = edDeserLayer(ld, edOrientation);
+          if (!la) return;
+          la.groupId = newGroupId;
+          edLayers.push(la);
+          inserted++;
+        });
+        if (!inserted) { edToast('Error al insertar el grupo'); return; }
+      } else {
+        // Objeto individual
+        const newLayer = edDeserLayer(entry.layerData, edOrientation);
+        if (!newLayer) { edToast('Error al insertar el objeto'); return; }
+        edLayers.push(newLayer);
+      }
+
+      edSelectedIdx = -1;
+      edPushHistory(); edRedraw();
+      _bibClose(panel);
+      edToast('Objeto insertado ✓');
+    });
+  });
+
+  // ── Drag entre carpetas (Pointer Events — funciona en táctil y PC) ───────
+  _bibBindDrag(panel);
+}
+
+// Estado de drag
+let _bibDrag = null; // { fi, ii, ghost, lastZone }
+
+function _bibBindDrag(panel) {
+  // Solo arrastrable si hay más de una carpeta
+  const data = _bibLoad();
+  if (data.folders.length < 2) return;
+
+  const DRAG_THRESHOLD = 6; // px de movimiento para confirmar drag (PC y táctil)
+  const LONG_MS = 350;      // ms adicional de long-press solo para táctil
+
+  panel.querySelectorAll('._bib-item').forEach(el => {
+    let _startX = 0, _startY = 0;
+    let _longPressTimer = null;
+    let _dragActive = false;
+    let _downEvent = null;
+
+    el.addEventListener('pointerdown', e => {
+      if (e.target.classList.contains('_bib-del-item')) return;
+      _startX = e.clientX; _startY = e.clientY;
+      _dragActive = false;
+      _downEvent = e;
+
+      if (e.pointerType === 'touch') {
+        // Táctil: activar con long-press
+        _longPressTimer = setTimeout(() => {
+          _dragActive = true;
+          _bibDragStart(_downEvent, el, panel);
+        }, LONG_MS);
+      }
+      // PC: esperar movimiento suficiente (ver pointermove)
+    }, { passive: true });
+
+    el.addEventListener('pointermove', e => {
+      const dist = Math.hypot(e.clientX - _startX, e.clientY - _startY);
+      if (e.pointerType === 'touch') {
+        // En táctil, cancelar long-press si hay movimiento antes de que expire
+        if (dist > DRAG_THRESHOLD && _longPressTimer) {
+          clearTimeout(_longPressTimer); _longPressTimer = null;
+        }
+      } else {
+        // PC: activar drag al superar el umbral de movimiento
+        if (!_dragActive && dist > DRAG_THRESHOLD && _downEvent) {
+          _dragActive = true;
+          _bibDragStart(_downEvent, el, panel);
+        }
+      }
+    }, { passive: true });
+
+    el.addEventListener('pointerup', () => {
+      if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
+      _dragActive = false; _downEvent = null;
+    });
+
+    el.addEventListener('pointercancel', () => {
+      if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
+      _dragActive = false; _downEvent = null;
+      _bibDragCancel();
+    });
+  });
+}
+
+function _bibDragStart(e, el, panel) {
+  const fi = parseInt(el.dataset.fi), ii = parseInt(el.dataset.ii);
+  el.setPointerCapture(e.pointerId);
+  el._wasDrag = true;
+
+  // Ghost visual
+  const ghost = document.createElement('div');
+  ghost.style.cssText = `position:fixed;z-index:2000;pointer-events:none;opacity:.85;border-radius:8px;overflow:hidden;width:${_BIB_THUMB_SIZE}px;height:${_BIB_THUMB_SIZE}px;box-shadow:0 6px 20px rgba(0,0,0,.35);border:2px solid var(--accent,#0077ff)`;
+  const img = el.querySelector('img');
+  if (img) {
+    const gi = document.createElement('img');
+    gi.src = img.src;
+    gi.style.cssText = `width:${_BIB_THUMB_SIZE}px;height:${_BIB_THUMB_SIZE}px;display:block;pointer-events:none`;
+    ghost.appendChild(gi);
+  }
+  document.body.appendChild(ghost);
+
+  _bibDrag = { fi, ii, ghost, panel, lastZone: null };
+  _bibMoveGhost(e.clientX, e.clientY);
+
+  // Listeners globales en el elemento capturado
+  el.addEventListener('pointermove', _bibOnMove);
+  el.addEventListener('pointerup',   _bibOnUp);
+}
+
+function _bibMoveGhost(cx, cy) {
+  if (!_bibDrag) return;
+  const S = _BIB_THUMB_SIZE;
+  _bibDrag.ghost.style.left = (cx - S/2) + 'px';
+  _bibDrag.ghost.style.top  = (cy - S/2) + 'px';
+
+  // Detectar zona de drop bajo el cursor
+  const panel = _bibDrag.panel;
+  const zones = panel.querySelectorAll('._bib-drop-zone');
+  let hit = null;
+  zones.forEach(z => {
+    const r = z.getBoundingClientRect();
+    if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) hit = z;
+  });
+
+  // Resaltar zona destino
+  if (_bibDrag.lastZone && _bibDrag.lastZone !== hit) {
+    _bibDrag.lastZone.style.background = '';
+  }
+  if (hit && hit !== _bibDrag.lastZone) {
+    const destFi = parseInt(hit.dataset.dropFi);
+    if (destFi !== _bibDrag.fi) {
+      hit.style.background = 'rgba(0,119,255,.15)';
+    }
+  }
+  _bibDrag.lastZone = hit;
+}
+
+function _bibOnMove(e) {
+  if (!_bibDrag) return;
+  _bibMoveGhost(e.clientX, e.clientY);
+}
+
+function _bibOnUp(e) {
+  if (!_bibDrag) return;
+  const { fi, ii, ghost, panel, lastZone } = _bibDrag;
+
+  ghost.remove();
+  if (lastZone) lastZone.style.background = '';
+
+  const destFi = lastZone ? parseInt(lastZone.dataset.dropFi) : -1;
+
+  // Limpiar listeners
+  e.target.removeEventListener('pointermove', _bibOnMove);
+  e.target.removeEventListener('pointerup',   _bibOnUp);
+  _bibDrag = null;
+
+  if (destFi < 0 || destFi === fi) return; // sin destino válido o misma carpeta
+
+  // Mover item
+  const d = _bibLoad();
+  if (!d.folders[fi] || !d.folders[destFi]) return;
+  const [entry] = d.folders[fi].items.splice(ii, 1);
+  d.folders[destFi].items.push(entry);
+  _bibSave(d);
+  edToast(`Movido a "${d.folders[destFi].name}" ✓`);
+  _bibRenderPanel(panel);
+}
+
+function _bibDragCancel() {
+  if (!_bibDrag) return;
+  _bibDrag.ghost.remove();
+  if (_bibDrag.lastZone) _bibDrag.lastZone.style.background = '';
+  _bibDrag = null;
+}
+
+function edInitBiblioteca() {
+  $('dd-bib-save')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); edCloseMenus(); edBibGuardar();
+  });
+  $('dd-bib-open')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); edCloseMenus(); edBibAbrir();
+  });
 }
