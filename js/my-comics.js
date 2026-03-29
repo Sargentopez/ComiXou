@@ -102,34 +102,7 @@ async function _mcSyncCloudDates() {
     // Silencioso — si no hay red, se usa la versión local
   }
 
-  // Sincronizar biblioteca desde la nube (merge por id con local)
-  try {
-    const _user = Auth.currentUser();
-    if (_user && _user.id && typeof SupabaseClient.bibDownload === 'function') {
-      console.log('[bibDownload] iniciando para userId:', _user.id);
-      const cloudData = await SupabaseClient.bibDownload(_user.id);
-      console.log('[bibDownload] recibido:', JSON.stringify(cloudData).slice(0,300));
-      if (cloudData && cloudData.folders && cloudData.folders.length) {
-        let localData;
-        try { localData = JSON.parse(localStorage.getItem('cs_biblioteca') || 'null'); } catch(e) {}
-        if (!localData || !localData.folders) localData = { folders: [{ id: '__root__', name: 'General', items: [] }] };
-        const localAllIds = new Set(localData.folders.flatMap(f => f.items.map(i => i.id)));
-        cloudData.folders.forEach(cf => {
-          const lf = localData.folders.find(f => f.id === cf.id);
-          const newItems = cf.items.filter(i => !localAllIds.has(i.id));
-          if (newItems.length) {
-            if (lf) { lf.items.push(...newItems); }
-            else { localData.folders.push({ id: cf.id, name: cf.name, items: newItems }); }
-          }
-        });
-        try { localStorage.setItem('cs_biblioteca', JSON.stringify(localData)); console.log('[bibDownload] guardado en local OK'); } catch(e) { console.error('[bibDownload] error guardando local:', e); }
-      } else {
-        console.log('[bibDownload] sin datos en nube o carpetas vacías');
-      }
-    } else {
-      console.warn('[bibDownload] sin usuario o función no disponible:', _user);
-    }
-  } catch(e) { console.error('[bibDownload] ERROR:', e.message, e); }
+  // La biblioteca es por proyecto — se sincroniza al abrir/guardar cada proyecto en el editor
 }
 
 /* ── RENDERIZAR LISTA ── */
@@ -229,16 +202,16 @@ function _mcRenderList() {
             genre:   work.genre    || comicToEdit.genre,
             navMode: work.nav_mode || comicToEdit.navMode,
           });
-          // Sincronizar biblioteca desde la nube (merge por id con local)
+          // Sincronizar biblioteca del proyecto desde la nube
           const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
-          if (_user && _user.id && typeof SupabaseClient.bibDownload === 'function') {
+          if (_user && _user.id && comicToEdit.supabaseId && typeof SupabaseClient.bibDownload === 'function') {
             try {
-              const cloudData = await SupabaseClient.bibDownload(_user.id);
+              const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
+              const cloudData = await SupabaseClient.bibDownload(_user.id, comicToEdit.supabaseId);
               if (cloudData && cloudData.folders && cloudData.folders.length) {
                 let localData;
-                try { localData = JSON.parse(localStorage.getItem('cs_biblioteca') || 'null'); } catch(e) {}
+                try { localData = JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) {}
                 if (!localData || !localData.folders) localData = { folders: [{ id: '__root__', name: 'General', items: [] }] };
-                // Merge: para cada carpeta de la nube, fusionar sus items no presentes en local
                 const localAllIds = new Set(localData.folders.flatMap(f => f.items.map(i => i.id)));
                 cloudData.folders.forEach(cf => {
                   const lf = localData.folders.find(f => f.id === cf.id);
@@ -248,7 +221,7 @@ function _mcRenderList() {
                     else { localData.folders.push({ id: cf.id, name: cf.name, items: newItems }); }
                   }
                 });
-                try { localStorage.setItem('cs_biblioteca', JSON.stringify(localData)); } catch(e) {}
+                try { localStorage.setItem(_bibKey, JSON.stringify(localData)); } catch(e) {}
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }

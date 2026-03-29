@@ -308,8 +308,11 @@ const SupabaseClient = (() => {
   }
 
   // ── BIBLIOTECA ────────────────────────────────────────────────
-  async function bibFetch(authorId) {
-    const r = await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&order=created_at.asc`, {
+  async function bibFetch(authorId, workId) {
+    const filter = workId
+      ? `author_id=eq.${authorId}&folder_id=like.${encodeURIComponent(workId + '::')}*&order=created_at.asc`
+      : `author_id=eq.${authorId}&order=created_at.asc`;
+    const r = await fetch(`${BASE}/biblioteca?${filter}`, {
       headers: _hdrsUser(),
     });
     if (!r.ok) throw new Error(`bibFetch: ${r.status} ${await r.text()}`);
@@ -317,8 +320,9 @@ const SupabaseClient = (() => {
   }
 
   // Sincronización completa: sube todos los items locales a Supabase.
-  // Estrategia upsert por id — añade los nuevos, actualiza los existentes.
-  async function bibSync(authorId, bibData) {
+  // folder_id se prefixa con workId:: para aislar por proyecto.
+  async function bibSync(authorId, bibData, workId) {
+    const prefix = workId ? workId + '::' : '';
     const folders = (bibData && bibData.folders) ? bibData.folders : [];
     const rows = [];
     folders.forEach(folder => {
@@ -329,7 +333,7 @@ const SupabaseClient = (() => {
           layer_type:  (entry.layerData && entry.layerData.type) || 'unknown',
           layer_data:  JSON.stringify(entry.layerData),
           thumb:       entry.thumb,
-          folder_id:   folder.id,
+          folder_id:   prefix + folder.id,
           folder_name: folder.name,
         });
       });
@@ -344,11 +348,14 @@ const SupabaseClient = (() => {
   }
 
   // Descarga biblioteca desde Supabase y reconstruye la estructura de carpetas.
-  async function bibDownload(authorId) {
-    const rows = await bibFetch(authorId);
+  async function bibDownload(authorId, workId) {
+    const rows = await bibFetch(authorId, workId);
+    const prefix = workId ? workId + '::' : '';
     const folderMap = new Map();
     rows.forEach(r => {
-      const fid  = r.folder_id   || '__root__';
+      // Quitar el prefijo del proyecto del folder_id para obtener el id real
+      const rawFid = r.folder_id || '__root__';
+      const fid  = prefix && rawFid.startsWith(prefix) ? rawFid.slice(prefix.length) : rawFid;
       const fname = r.folder_name || 'General';
       if (!folderMap.has(fid)) folderMap.set(fid, { id: fid, name: fname, items: [] });
       let ld = null;
