@@ -2823,6 +2823,9 @@ function _edHandleDoubleTap(idx){
   }
   if(la && la.type === 'stroke'){
     const page=edPages[edCurrentPage]; if(!page) return;
+    // Guardar estado global con el StrokeLayer antes de convertirlo a DrawLayer.
+    // Así al deshacer desde el historial global se recupera el StrokeLayer.
+    edPushHistory();
     const dl=la.toDrawLayer();
     if(la.locked) dl.locked = true; // propagar bloqueo al convertir
     // Quitar stroke e insertar DrawLayer en posición más alta (bajo textos)
@@ -4852,10 +4855,17 @@ function edStartPaint(e){
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
   }
-  // Guardar estado global ANTES del primer trazo para que el undo global
-  // pueda retroceder al estado sin dibujo. La deduplicación evita duplicados
-  // si el DrawLayer no ha cambiado desde el último push.
-  edPushHistory();
+  // Guardar estado global solo ANTES del primer trazo de la sesión de dibujo.
+  // Si el panel draw está abierto, el historial local (_edDrawHistory) gestiona
+  // los trazos individuales; el historial global solo captura el estado al congelar (OK).
+  // Si el panel está CERRADO (dibujo rápido sin abrir panel), sí guardamos el estado
+  // previo para que el undo global pueda retroceder antes del dibujo.
+  const _drawPanelIsOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
+  if(!_drawPanelIsOpen){
+    // Primer trazo sin panel abierto: guardar estado previo en historial global
+    // La deduplicación de edPushHistory evita duplicados si nada cambió
+    edPushHistory();
+  }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
@@ -5782,9 +5792,16 @@ function _edFreezeDrawLayer(){
   const dl = page.layers[dlIdx];
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
-  if(!bb){ page.layers.splice(dlIdx, 1); edLayers=page.layers; return; }
+  if(!bb){
+    // Dibujo vacío: eliminar el DrawLayer y registrar en historial global
+    page.layers.splice(dlIdx, 1);
+    edLayers = page.layers;
+    edPushHistory();  // registrar eliminación en historial global
+    return;
+  }
   const sl = new StrokeLayer(dl._canvas);
   if(dl.locked) sl.locked = true;
+  if(dl.groupId) sl.groupId = dl.groupId;
   // Quitar el DrawLayer y reinsertar el StrokeLayer en la posición más alta (bajo textos)
   page.layers.splice(dlIdx, 1);
   const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
@@ -5792,6 +5809,10 @@ function _edFreezeDrawLayer(){
   else page.layers.push(sl);
   edLayers = page.layers;
   edSelectedIdx = page.layers.indexOf(sl);
+  // Registrar el resultado final (StrokeLayer) en el historial global.
+  // Este es el único punto donde el dibujo "se confirma" — los trazos
+  // intermedios solo viven en edDrawHistory (historial local del panel).
+  edPushHistory();
   _edShapePushHistory();
   edRedraw();
 }
@@ -6589,6 +6610,8 @@ function edRenderOptionsPanel(mode){
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
+      // Guardar estado global con el StrokeLayer antes de editar
+      edPushHistory();
       const dl=sl.toDrawLayer();
       page.layers.splice(edSelectedIdx, 1, dl);
       edLayers=page.layers;
@@ -9341,6 +9364,8 @@ function EditorView_init(){
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{
+    // Guardar el estado previo (puede ser canvas vacío) antes de entrar al modo dibujo
+    edPushHistory();
     edActiveTool='draw';
     edCanvas.className='tool-draw';
     if($('edBrushCursor'))$('edBrushCursor').style.display='block';
