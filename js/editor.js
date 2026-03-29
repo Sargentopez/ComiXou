@@ -54,6 +54,7 @@ let edPinchCenter0 = null, edPinchCamera0 = null;
 // Transformación de DrawLayer durante pinch
 let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
+let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
 // x,y = traslación del canvas (donde aparece el origen del workspace en pantalla)
@@ -2106,6 +2107,61 @@ function _edShowLockIconDraw(dl) {
   const cx = found ? ((minX+maxX)/2 - edMarginX()) / pw : 0.5;
   const cy = found ? ((minY+maxY)/2 - edMarginY()) / ph : 0.5;
   _edShowLockIcon({x:cx, y:cy, width:0.1, height:0.1});
+}
+
+/* ── Centra la cámara en el objeto al abrir panel, dejándolo en el área libre ── */
+function _edFocusOnLayer(la) {
+  if (!la || !edCanvas) return;
+  if (_edFocusDone) return;
+  _edFocusDone = true;
+  const pw = edPageW(), ph = edPageH();
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const panel = $('edOptionsPanel');
+  const panelBottom = (panel && panel.classList.contains('open'))
+    ? panel.getBoundingClientRect().bottom : canvasRect.top;
+  let floatBottom = 0;
+  ['edDrawBar','edShapeBar'].forEach(id => {
+    const bar = $(id);
+    if (!bar || !bar.classList.contains('visible')) return;
+    const r = bar.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) floatBottom = Math.max(floatBottom, r.bottom);
+  });
+  const freeTop    = Math.max(panelBottom, floatBottom);
+  const freeBottom = canvasRect.bottom;
+  const freeLeft   = canvasRect.left;
+  const freeRight  = canvasRect.right;
+  const freeW = Math.max(freeRight - freeLeft, 80);
+  const freeH = Math.max(freeBottom - freeTop, 80);
+  const objCx = edMarginX() + la.x * pw;
+  const objCy = edMarginY() + la.y * ph;
+  const objW  = (la.width  || 0.1) * pw;
+  const objH  = (la.height || 0.1) * ph;
+  const MARGIN = 0.75;
+  const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
+  const zForH  = (freeH * MARGIN) / Math.max(objH, 1);
+  const targetZ = Math.min(Math.min(zForW, zForH), 8);
+  const currentlyFitsW = objW * edCamera.z <= freeW * MARGIN;
+  const currentlyFitsH = objH * edCamera.z <= freeH * MARGIN;
+  const newZ = (currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.1);
+  const freeCx = freeLeft + freeW / 2;
+  const freeCy = freeTop  + freeH / 2;
+  const camOffX = freeCx - canvasRect.left;
+  const camOffY = freeCy - canvasRect.top;
+  const newCamX = camOffX - objCx * newZ;
+  const newCamY = camOffY - objCy * newZ;
+  const startX = edCamera.x, startY = edCamera.y, startZ = edCamera.z;
+  const t0 = performance.now();
+  const DURATION = 220;
+  function _animate(t) {
+    const p = Math.min((t - t0) / DURATION, 1);
+    const ease = p < 0.5 ? 2*p*p : -1+(4-2*p)*p;
+    edCamera.x = startX + (newCamX - startX) * ease;
+    edCamera.y = startY + (newCamY - startY) * ease;
+    edCamera.z = startZ + (newZ    - startZ) * ease;
+    edRedraw();
+    if (p < 1) requestAnimationFrame(_animate);
+  }
+  requestAnimationFrame(_animate);
 }
 
 function edDeletePage(){
@@ -5048,6 +5104,7 @@ function edToggleMenu(id){
 }
 
 function edDeactivateDrawTool(){
+  _edFocusDone = false;
   // Cancelar herramientas shape/line en curso
   _edShapeStart = null; _edShapePreview = null; _edPendingShape = null;
   if (_edLineLayer) {
@@ -5152,6 +5209,9 @@ function _edActivateShapeTool() {
   // Guardar estado previo en historial global (objeto existente)
   if(_sel) edPushHistory();
   _edShapeInitHistory();
+  // Centrar cámara en el objeto al abrir el panel
+  _edFocusDone = false;
+  if(_sel) requestAnimationFrame(()=>_edFocusOnLayer(_sel));
 
   // ── Helpers ──
   const _curShape = () => {
@@ -5451,6 +5511,10 @@ function _edActivateLineTool(isNew) {
   // Guardar estado previo en historial global (objeto existente, no nuevo)
   if(!isNew) edPushHistory();
   _edShapeInitHistory(isNew);
+  // Centrar cámara en el objeto al abrir el panel
+  _edFocusDone = false;
+  const _focusLayer = _edLineLayer || (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null);
+  if(_focusLayer) requestAnimationFrame(()=>_edFocusOnLayer(_focusLayer));
 
   // ── Helpers ──
   const _curLine = () => {
@@ -5743,6 +5807,7 @@ function edCloseOptionsPanel(){
     if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
 
   }
+  _edFocusDone = false;
   edPanelUserClosed = true;
   requestAnimationFrame(edFitCanvas);
 }
@@ -5974,6 +6039,32 @@ function edRenderOptionsPanel(mode){
 </div>`;
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
+    // Centrar cámara en el contenido del DrawLayer al abrir el panel
+    _edFocusDone = false;
+    requestAnimationFrame(()=>{
+      const _page = edPages[edCurrentPage];
+      const _dl = _page ? _page.layers.find(l=>l.type==='draw') : null;
+      if(!_dl) return;
+      const idata = _dl._ctx.getImageData(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+      const d = idata.data;
+      let minX=ED_CANVAS_W, maxX=0, minY=ED_CANVAS_H, maxY=0, found=false;
+      const step = 4;
+      for(let y=0; y<ED_CANVAS_H; y+=step){
+        for(let x=0; x<ED_CANVAS_W; x+=step){
+          if(d[(y*ED_CANVAS_W+x)*4+3] > 8){
+            if(x<minX)minX=x; if(x>maxX)maxX=x;
+            if(y<minY)minY=y; if(y>maxY)maxY=y;
+            found=true;
+          }
+        }
+      }
+      if(!found) return;
+      const pw=edPageW(), ph=edPageH();
+      const cx=((minX+maxX)/2-edMarginX())/pw;
+      const cy=((minY+maxY)/2-edMarginY())/ph;
+      const bw=(maxX-minX)/pw, bh=(maxY-minY)/ph;
+      _edFocusOnLayer({x:cx, y:cy, width:Math.max(bw,0.05), height:Math.max(bh,0.05)});
+    });
 
     // ── Herramientas ──
     $('op-tool-pen')?.addEventListener('click',()=>{
@@ -6207,6 +6298,9 @@ function edRenderOptionsPanel(mode){
     }
     panel.dataset.mode = 'props';
     const la=edLayers[edSelectedIdx];
+    // Centrar cámara en el objeto al abrir el panel
+    _edFocusDone = false;
+    requestAnimationFrame(()=>_edFocusOnLayer(la));
 
     // ── PANEL DE GRUPO ──────────────────────────────────────────
     // Objeto agrupado: panel simplificado sin controles de edición individual.
