@@ -2391,6 +2391,8 @@ function edDuplicateSelected(){
     if(la.cornerRadii) copy.cornerRadii = Array.isArray(la.cornerRadii) ? [...la.cornerRadii] : {...la.cornerRadii};
     copy._updateBbox();
   } else return;
+  // El duplicado hereda el estado de bloqueo del original
+  if(edLayers[edSelectedIdx]?.locked) copy.locked = true;
   // Insertar justo encima del original
   edLayers.splice(edSelectedIdx + 1, 0, copy);
   edSelectedIdx = edSelectedIdx + 1;
@@ -2516,6 +2518,7 @@ function edMirrorSelected(){
 
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
+  if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
   const _delType=edLayers[edSelectedIdx]?.type;
   edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
   // Si era shape/line con barra flotante activa, limpiar y desbloquear
@@ -2577,7 +2580,8 @@ function edPinchStart(e) {
   edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
   // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
-  const la = (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
+  // LOCK: objeto bloqueado — no capturar snapshot para resize/rotate por pinch
+  const la = (!isDrawTool && edSelectedIdx >= 0 && !edLayers[edSelectedIdx]?.locked) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
     _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null } : null;
   // En modo draw, el pinch mueve la cámara (no el dibujo)
@@ -3209,6 +3213,8 @@ function edOnStart(e){
         const rotHx = bb.cx + Math.sin(grRad)*_offWs/pw;
         const rotHy = bb.cy - Math.cos(grRad)*_offWs/ph;
         if(Math.hypot((c.nx-rotHx)*pw, (c.ny-rotHy)*ph) < 14){
+          // LOCK: solo rotar si hay miembros desbloqueados
+          if(edMultiSel.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
           edMultiRotating=true;
           edMultiTransform={
             items: edMultiSel.map(i=>({i, rot:edLayers[i].rotation||0, x:edLayers[i].x, y:edLayers[i].y})),
@@ -3225,6 +3231,8 @@ function edOnStart(e){
         const lyCur = bb.cy + (dcxPx*sg + dcyPx*cg)/ph;
         for(const p of _msHandles(bb)){
           if(Math.hypot((lxCur-p.x)*pw, (lyCur-p.y)*ph) < 12){
+            // LOCK: solo redimensionar si hay miembros desbloqueados
+            if(edMultiSel.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
             edMultiResizing=true;
             edMultiTransform={
               items: edMultiSel.map(i=>{
@@ -3267,6 +3275,8 @@ function edOnStart(e){
               return;
             }
           }
+          // LOCK: solo iniciar si hay miembros desbloqueados
+          if(edMultiSel.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
           edMultiDragging=true;
           edMultiDragOffs=edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
           return;
@@ -3526,6 +3536,8 @@ function edOnStart(e){
     const _isPotentialDbl = (_la === edLayers[_edLastTapIdx] || edSelectedIdx === _edLastTapIdx)
                             && (_now - _edLastTapTime < 350);
     const hitScreen = _isT ? 28 : 18;
+    // LOCK: si el objeto está bloqueado no activar handles de resize/rotate
+    if(!_la.locked)
     for(const p of _la.getControlPoints()){
       // dist en píxeles de página → multiplicar por z para obtener pantalla
       const _dpx=(c.nx-p.x)*_pw, _dpy=(c.ny-p.y)*_ph;
@@ -3639,7 +3651,7 @@ function edOnStart(e){
   }
   if(found>=0){
     const _fla = edLayers[found];
-    // ── Objeto bloqueado: mostrar candado salvo que ya esté en edición activa ──
+    // ── Objeto bloqueado: mostrar candado o abrir panel ──
     if(_fla && _fla.locked){
       const _panel = $('edOptionsPanel');
       const _inEdit = (edSelectedIdx === found) && (
@@ -3649,6 +3661,29 @@ function edOnStart(e){
       );
       if(!_inEdit){
         const _nowL = Date.now();
+        // ── Grupo bloqueado: tratar como unidad ──
+        if(_fla.groupId){
+          const _gidxsL = _edGroupMemberIdxs(_fla.groupId);
+          const _gcx = _gidxsL.reduce((s,i)=>s+(edLayers[i]?.x||0),0) / _gidxsL.length;
+          const _gcy = _gidxsL.reduce((s,i)=>s+(edLayers[i]?.y||0),0) / _gidxsL.length;
+          if(found === _edLastTapIdx && _nowL - _edLastTapTime < 350){
+            // Doble tap en grupo bloqueado → abrir panel de grupo
+            _edLastTapTime = 0; _edLastTapIdx = -1;
+            edSelectedIdx = found;
+            edMultiSel = []; edMultiBbox = null;
+            if(window._edGroupSilentTool !== undefined) delete window._edGroupSilentTool;
+            edActiveTool = 'select';
+            _edDrawLockUI(); _edPropsOverlayShow();
+            edRenderOptionsPanel('props');
+          } else {
+            // Un tap: mostrar candado en el centro del grupo
+            _edLastTapTime = _nowL; _edLastTapIdx = found;
+            _edShowLockIcon({x:_gcx, y:_gcy, width:0.1, height:0.1});
+            edRedraw();
+          }
+          return;
+        }
+        // ── Objeto individual bloqueado ──
         if(found === _edLastTapIdx && _nowL - _edLastTapTime < 350){
           _edLastTapTime = 0; _edLastTapIdx = -1;
           _edHandleDoubleTap(found);
@@ -3693,6 +3728,8 @@ function edOnStart(e){
         edActiveTool = 'multiselect';
         window._edGroupSilentTool = _prevTool;
         // Iniciar drag inmediatamente — igual que objetos normales, sin retardo
+        // LOCK: solo iniciar si hay miembros desbloqueados
+        if(_gidxs.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
         edMultiDragging = true;
         edMultiDragOffs = _gidxs.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
         window._edMoved = false;
@@ -3706,6 +3743,10 @@ function edOnStart(e){
     if(_fl&&_fl.type==='line'){
       const _fcr=_fl.cornerRadii||{};
       if(Object.keys(_fcr).some(k=>(_fcr[k]||0)>0)) _fl._updateBbox();
+    }
+    // LOCK: objeto bloqueado — seleccionar pero no arrastrar
+    if(_fl && _fl.locked){
+      edRedraw(); return;
     }
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
@@ -3837,6 +3878,7 @@ function edOnMove(e){
       e.preventDefault();
       edMultiSel.forEach((idx,i)=>{
         const o=edMultiDragOffs[i]; if(!o) return;
+        if(edLayers[idx]?.locked) return; // LOCK: no mover objetos bloqueados
         edLayers[idx].x=c.nx-o.dx; edLayers[idx].y=c.ny-o.dy;
       });
       // Actualizar edMultiBbox.cx/cy siguiendo al centroide
@@ -4262,7 +4304,7 @@ function edOnEnd(e){
       if((rx1-rx0)>0.005 || (ry1-ry0)>0.005){
         edMultiSel=[];
         edLayers.forEach((la,i)=>{
-          // Seleccionar solo si los 4 vértices del objeto están dentro del rectángulo
+          // Los objetos bloqueados se incluyen — solo se impide moverlos
           if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
         });
       }
@@ -8550,7 +8592,6 @@ function edDeserLayer(d, pageOrientation){
     if(d._keepSize) l._keepSize=true;
     if(d.height) l.height = d.height;
     if(d.groupId) l.groupId=d.groupId;
-    if(d.locked) l.locked=true;
     if(d.src){
       const img=new Image();
       img.onload=()=>{
@@ -8701,6 +8742,13 @@ let _viewerKeyHandler = null;
 function _edViewerKey(e){
   const v = $('editorViewer');
   if(!v || !v.classList.contains('open')) return;
+  // LOCK: teclas de movimiento respetan objetos bloqueados
+  if((e.key==='ArrowRight'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowUp') && edSelectedIdx>=0 && edLayers[edSelectedIdx]?.locked){
+    _edShowLockIcon(edLayers[edSelectedIdx]); return;
+  }
+  if((e.key==='ArrowRight'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowUp') && edSelectedIdx>=0 && edLayers[edSelectedIdx]?.locked){
+    _edShowLockIcon(edLayers[edSelectedIdx]); return;
+  }
   if(e.key === 'ArrowRight' || e.key === 'ArrowDown'){
     e.preventDefault(); _viewerAdvance();
   } else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
