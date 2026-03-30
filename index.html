@@ -62,6 +62,18 @@
     document.addEventListener('DOMContentLoaded', function() {
       Router.start();
     });
+    // Al volver del reader con history.back(), recuperar fullscreen si la app estaba en él
+    window.addEventListener('pageshow', function(e) {
+      if (sessionStorage.getItem('cx_was_fs') === '1') {
+        sessionStorage.removeItem('cx_was_fs');
+        // Solo pedir fullscreen si no estamos ya en él
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          const el = document.documentElement;
+          const req = el.requestFullscreen || el.webkitRequestFullscreen;
+          if (req) req.call(el).catch(() => {});
+        }
+      }
+    });
   </script>
 
 </body>

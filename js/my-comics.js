@@ -180,7 +180,10 @@ function _mcRenderList() {
       if (comic.supabaseId) {
         // Tiene ID en nube: usar el reproductor externo
         const param = comic.published ? `id=${comic.supabaseId}` : `draft=${comic.supabaseId}`;
-        window.location = 'reader/?' + param + '&from=app';
+        const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        if (_isFs2) sessionStorage.setItem('cx_was_fs', '1');
+        else sessionStorage.removeItem('cx_was_fs');
+        window.location = 'reader/?' + param + '&from=app' + (_isFs2 ? '&fs=1' : '');
       } else {
         // Solo local: visor interno del SPA
         Router.go('reader', { id });

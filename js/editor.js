@@ -4074,6 +4074,7 @@ function edOnMove(e){
     const la=edLayers[edSelectedIdx];
     const angle = Math.atan2(c.ny-la.y, c.nx-la.x) - edRotateStartAngle;
     la.rotation = angle*180/Math.PI;
+    window._edMoved = true;
     edRedraw();
     return;
   }
@@ -6328,11 +6329,13 @@ function edRenderOptionsPanel(mode){
     // Solo muestra operaciones sobre el grupo completo.
     if(la.groupId){
       const gid = la.groupId;
+      const _grpAllLocked = _edGroupMemberIdxs(gid).every(i => edLayers[i]?.locked);
       panel.innerHTML=`
         <div class="op-row" style="margin-top:4px;justify-content:space-between;gap:4px">
           <button class="op-btn danger" id="pp-grp-del" style="flex:1">✕ Eliminar</button>
           <button class="op-btn" id="pp-grp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
           <button class="op-btn" id="pp-grp-mirror" title="Simetría" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>
+          <button class="op-btn" id="pp-grp-lock" title="${_grpAllLocked?'Desbloquear grupo':'Bloquear grupo'}" style="flex-shrink:0;${_grpAllLocked?'background:var(--gray-800);color:var(--white)':'background:var(--gray-100);color:var(--gray-700)'};border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.82rem;cursor:pointer">${_grpAllLocked?'🔒':'🔓'}</button>
           <button class="op-btn" id="pp-grp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>
           <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
         </div>`;
@@ -6427,6 +6430,25 @@ function edRenderOptionsPanel(mode){
       // Desagrupar
       $('pp-grp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
       // OK — cerrar panel y volver al grupo seleccionado
+      // Bloquear/desbloquear todos los miembros del grupo
+      $('pp-grp-lock')?.addEventListener('click',()=>{
+        const idxs = _edGroupMemberIdxs(gid);
+        if(!idxs.length) return;
+        const allLocked = idxs.every(i => edLayers[i]?.locked);
+        const newLocked = !allLocked;
+        edPushHistory();
+        idxs.forEach(i => { if(edLayers[i]) edLayers[i].locked = newLocked; });
+        edPushHistory();
+        // Actualizar visual del botón sin rerenderizar todo el panel
+        const btn = $('pp-grp-lock');
+        if(btn){
+          btn.textContent = newLocked ? '🔒' : '🔓';
+          btn.title = newLocked ? 'Desbloquear grupo' : 'Bloquear grupo';
+          btn.style.background = newLocked ? 'var(--gray-800)' : 'var(--gray-100)';
+          btn.style.color = newLocked ? 'var(--white)' : 'var(--gray-700)';
+        }
+        edToast(newLocked ? 'Grupo bloqueado 🔒' : 'Grupo desbloqueado 🔓');
+      });
       $('pp-grp-ok')?.addEventListener('click',()=>{
         edCloseOptionsPanel();
         // Restaurar selección del grupo

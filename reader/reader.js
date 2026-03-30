@@ -69,19 +69,27 @@ document.addEventListener('DOMContentLoaded', () => {
       };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
 
-  // Si la app estaba en fullscreen, entrar en fullscreen al primer gesto del usuario
-  // (los navegadores exigen que requestFullscreen esté dentro de un evento de usuario)
+  // Si la app estaba en fullscreen, entrar en fullscreen.
+  // Intentamos inmediatamente (el tap en "Leer" puede servir como gesto activador
+  // en navegadores modernos). Si el navegador lo rechaza, esperamos al primer gesto.
   if (wantsFs && !RS.isEmbed) {
     const _enterFsOnce = () => {
       const req = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
       if (req) req.call(document.documentElement).catch(() => {});
-      document.removeEventListener('click',     _enterFsOnce);
+      document.removeEventListener('click',      _enterFsOnce);
       document.removeEventListener('touchstart', _enterFsOnce);
       document.removeEventListener('keydown',    _enterFsOnce);
     };
-    document.addEventListener('click',     _enterFsOnce, { once: true });
-    document.addEventListener('touchstart', _enterFsOnce, { once: true });
-    document.addEventListener('keydown',    _enterFsOnce, { once: true });
+    // Intento inmediato (herencia del gesto de navegación)
+    const _reqFs = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+    if (_reqFs) {
+      _reqFs.call(document.documentElement).catch(() => {
+        // Si falla, esperar al primer gesto explícito
+        document.addEventListener('click',      _enterFsOnce, { once: true });
+        document.addEventListener('touchstart', _enterFsOnce, { once: true });
+        document.addEventListener('keydown',    _enterFsOnce, { once: true });
+      });
+    }
   }
 
   // Botón cerrar: siempre visible, pegado a la hoja por _positionBtns()
