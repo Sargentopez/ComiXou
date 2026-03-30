@@ -29,6 +29,7 @@ let _edPendingShape = null;   // ShapeLayer/LineLayer creada pero no confirmada 
 let edDrawFillColor = '#ffffff'; // relleno blanco por defecto // color de relleno para nuevas shapes
 let _edLineLayer  = null;     // LineLayer en construcción
 let _edLineType   = 'draw';   // 'draw' | 'select'
+let _edLinePrimaryLayer = null; // T1: LineLayer principal del panel (candidata a recibir huecos)
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
@@ -947,6 +948,7 @@ class LineLayer extends BaseLayer {
     this.fillColor = 'none';       // sin relleno por defecto
     this.lineWidth = 3;
     this.opacity   = 1;
+    this.subPaths  = [];   // T1: sub-paths adicionales para huecos con even-odd fill rule
     // rotation heredado de BaseLayer
   }
   // Recalcular bbox desde puntos locales; centra los puntos en (0,0)
@@ -1058,45 +1060,94 @@ class LineLayer extends BaseLayer {
       };
     });
 
-    ctx.beginPath();
-    if(!this.closed){
-      ctx.moveTo(tangents[0].cur.x, tangents[0].cur.y);
-      for(let i=1;i<n;i++){
-        const {p1,p2,cur,r}=tangents[i];
-        if(r>0 && i>0 && i<n-1){
-          ctx.lineTo(p1.x,p1.y);
-          ctx.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y);
-        } else {
-          ctx.lineTo(cur.x,cur.y);
-        }
+    // Helper: añade un path cerrado de puntos locales (en px) a un Path2D o al ctx
+    const _buildClosedPath = (target, localPts, localCr) => {
+      const _n = localPts.length;
+      if(_n < 2) return;
+      const _cr2 = localCr || {};
+      const _px2b = p => ({x: p.x*pw, y: p.y*ph});
+      const _effR2 = i => {
+        const r=_cr2[i]||0; if(!r) return 0;
+        const prev=_px2b(localPts[(i-1+_n)%_n]), cur=_px2b(localPts[i]), next=_px2b(localPts[(i+1)%_n]);
+        const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
+        const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
+        return Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
+      };
+      const _tgs = Array.from({length:_n}, (_,i) => {
+        const prev=_px2b(localPts[(i-1+_n)%_n]), cur=_px2b(localPts[i]), next=_px2b(localPts[(i+1)%_n]);
+        const v1=norm(cur.x-prev.x, cur.y-prev.y);
+        const v2=norm(next.x-cur.x, next.y-cur.y);
+        const r=_effR2(i);
+        return {p1:{x:cur.x-v1.x*r,y:cur.y-v1.y*r}, p2:{x:cur.x+v2.x*r,y:cur.y+v2.y*r}, cur, r};
+      });
+      const t0=_tgs[0];
+      if(target.moveTo) { target.moveTo(t0.p1.x, t0.p1.y); }
+      else              { target.moveTo(t0.p1.x, t0.p1.y); }
+      for(let i=0;i<_n;i++){
+        const {p1,p2,cur,r}=_tgs[i];
+        if(r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
+        const next=_tgs[(i+1)%_n];
+        if(next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
+        else         { target.lineTo(next.cur.x,next.cur.y); }
+      }
+      target.closePath();
+    };
+
+    const hasSubPaths = this.closed && this.subPaths && this.subPaths.length > 0;
+
+    if(hasSubPaths){
+      // T1: múltiples sub-paths → usar Path2D + fillRule evenodd para crear huecos
+      const combined = new Path2D();
+      // Path principal
+      _buildClosedPath(combined, pts, cr);
+      // Sub-paths adicionales
+      for(const sp of this.subPaths){
+        if(sp && sp.length >= 3) _buildClosedPath(combined, sp, {});
+      }
+      if (this.fillColor && this.fillColor !== 'none') {
+        ctx.fillStyle = this.fillColor;
+        ctx.fill(combined, 'evenodd');
+      }
+      if (this.lineWidth > 0) {
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth   = this.lineWidth;
+        ctx.stroke(combined);
       }
     } else {
-      // Closed polygon — symmetric algorithm, no special case for closing segment
-      const t0=tangents[0];
-      ctx.moveTo(t0.p1.x, t0.p1.y);
-      for(let i=0;i<n;i++){
-        const {p1,p2,cur,r}=tangents[i];
-        if(r>0){
-          ctx.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y);
+      // Sin sub-paths: comportamiento original
+      ctx.beginPath();
+      if(!this.closed){
+        ctx.moveTo(tangents[0].cur.x, tangents[0].cur.y);
+        for(let i=1;i<n;i++){
+          const {p1,p2,cur,r}=tangents[i];
+          if(r>0 && i>0 && i<n-1){
+            ctx.lineTo(p1.x,p1.y);
+            ctx.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y);
+          } else {
+            ctx.lineTo(cur.x,cur.y);
+          }
         }
-        // Line to entry point of next vertex
-        const next=tangents[(i+1)%n];
-        if(next.r>0){
-          ctx.lineTo(next.p1.x,next.p1.y);
-        } else {
-          ctx.lineTo(next.cur.x,next.cur.y);
+      } else {
+        const t0=tangents[0];
+        ctx.moveTo(t0.p1.x, t0.p1.y);
+        for(let i=0;i<n;i++){
+          const {p1,p2,cur,r}=tangents[i];
+          if(r>0){ ctx.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
+          const next=tangents[(i+1)%n];
+          if(next.r>0){ ctx.lineTo(next.p1.x,next.p1.y); }
+          else         { ctx.lineTo(next.cur.x,next.cur.y); }
         }
+        ctx.closePath();
       }
-      ctx.closePath();
-    }
-    if (this.closed && this.fillColor && this.fillColor !== 'none') {
-      ctx.fillStyle = this.fillColor;
-      ctx.fill();
-    }
-    if (this.lineWidth > 0) {
-      ctx.strokeStyle = this.color;
-      ctx.lineWidth   = this.lineWidth;
-      ctx.stroke();
+      if (this.closed && this.fillColor && this.fillColor !== 'none') {
+        ctx.fillStyle = this.fillColor;
+        ctx.fill();
+      }
+      if (this.lineWidth > 0) {
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth   = this.lineWidth;
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -1178,6 +1229,7 @@ function _edLayersSnapshot(){
     if(l.type === 'line')   return { type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
+      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>sp.slice()) : undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
@@ -1261,6 +1313,7 @@ function edApplyHistory(snapshot){
       l.color=o.color||'#000'; l.fillColor=o.fillColor||'#ffffff'; l.lineWidth=o.lineWidth??3; l.opacity=o.opacity??1;
       l.rotation=o.rotation||0;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
+      if(o.subPaths&&o.subPaths.length) l.subPaths = o.subPaths.map(sp=>sp.slice());
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
       else l._updateBbox();
       if(o.groupId) l.groupId=o.groupId;
@@ -2058,6 +2111,25 @@ function edDrawSel(){
     });
     // Si hay un nodo activo, continuar animando el parpadeo
     if(window._edCurveVertIdx >= 0) requestAnimationFrame(()=>{ if(window._edCurveVertIdx>=0) edRedraw(); });
+
+    // Handles de subPaths (T1) — color azul para distinguirlos del path principal
+    if(la.subPaths && la.subPaths.length){
+      const rot2=(la.rotation||0)*Math.PI/180;
+      const cos2=Math.cos(rot2), sin2=Math.sin(rot2);
+      la.subPaths.forEach((sp, si)=>{
+        if(!sp||sp.length<2) return;
+        sp.forEach((p, i)=>{
+          const lpx=p.x*pw, lpy=p.y*ph;
+          const cpx=cx + lpx*cos2 - lpy*sin2;
+          const cpy=cy + lpx*sin2 + lpy*cos2;
+          const isActive = (window._edSubPathIdx===si && window._edCurveVertIdx===-(i+1));
+          edCtx.beginPath(); edCtx.arc(cpx, cpy, hr, 0, Math.PI*2);
+          edCtx.fillStyle = isActive ? '#e67e22' : '#2980b9';
+          edCtx.fill();
+          edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+        });
+      });
+    }
   }
 }
 
@@ -2949,6 +3021,42 @@ function _edLineHitTest(la, nx, ny, isTouch){
     }
   }
 
+  // 3. Comprobar subPaths (T1): nodos y segmentos en coordenadas locales del objeto
+  if(la.subPaths && la.subPaths.length){
+    // Helper: pasar punto local (normalizado) a abs
+    const localToAbs = (lx, ly) => {
+      const lpx=lx*pw, lpy=ly*ph;
+      return { x: la.x+(lpx*cos-lpy*sin)/pw, y: la.y+(lpx*sin+lpy*cos)/ph };
+    };
+    for(let si=0; si<la.subPaths.length; si++){
+      const sp=la.subPaths[si];
+      if(!sp||sp.length<2) continue;
+      const ns=sp.length;
+      // Nodos del subPath
+      for(let i=0;i<ns;i++){
+        const {x:ax,y:ay}=localToAbs(sp[i].x, sp[i].y);
+        if(Math.hypot((nx-ax)*pw,(ny-ay)*ph)*z < hitNode){
+          return {type:'node', subPath:si, idx:i};
+        }
+      }
+      // Segmentos del subPath (siempre cerrado)
+      for(let i=0;i<ns;i++){
+        const j=(i+1)%ns;
+        const {x:ax,y:ay}=localToAbs(sp[i].x,sp[i].y);
+        const {x:bx,y:by}=localToAbs(sp[j].x,sp[j].y);
+        const abxPx=(bx-ax)*pw, abyPx=(by-ay)*ph;
+        const apxPx=(nx-ax)*pw, apyPx=(ny-ay)*ph;
+        const abLen2=abxPx*abxPx+abyPx*abyPx;
+        if(abLen2<0.001) continue;
+        const t=Math.max(0,Math.min(1,(apxPx*abxPx+apyPx*abyPx)/abLen2));
+        const dist=Math.hypot(apxPx-t*abxPx, apyPx-t*abyPx)*z;
+        if(dist<hitSeg){
+          return {type:'seg', subPath:si, idx:i};
+        }
+      }
+    }
+  }
+
   return null;
 }
 
@@ -3460,24 +3568,32 @@ function edOnStart(e){
       const _lineHit = _edLineHitTest(la, c.nx, c.ny, _isTouch2);
       const _now2 = Date.now();
       if(_lineHit){
+        // ID único para el hit: negativo para subPaths, positivo para path principal
+        const _hitId = _lineHit.type==='node'
+          ? (_lineHit.subPath!=null ? -((_lineHit.subPath+1)*10000+_lineHit.idx+1) : _lineHit.idx)
+          : 1000+_lineHit.idx;
         const _sameHit = _edLastNodeTapIdx !== -1
-          && _edLastNodeTapIdx === (_lineHit.type==='node' ? _lineHit.idx : 1000+_lineHit.idx)
+          && _edLastNodeTapIdx === _hitId
           && (_now2 - _edLastNodeTapTime) < 400;
         if(_sameHit){
           // ── Doble tap confirmado ──
           _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
           if(_lineHit.type==='node'){
-            // Eliminar nodo (mínimo 2 puntos)
+            if(_lineHit.subPath != null){
+              // Eliminar nodo de subPath (mínimo 3 puntos)
+              const sp=la.subPaths[_lineHit.subPath];
+              if(sp && sp.length > 3){ sp.splice(_lineHit.idx,1); _edShapePushHistory(); edRedraw(); }
+              return;
+            }
+            // Eliminar nodo del path principal (mínimo 2 puntos)
             if(_n > 2){
               la.points.splice(_lineHit.idx,1);
-              // Reindexar cornerRadii: los índices > eliminado bajan uno
               if(la.cornerRadii && Object.keys(la.cornerRadii).length){
                 const newCR = {};
                 for(const k in la.cornerRadii){
                   const ki = parseInt(k);
                   if(ki < _lineHit.idx) newCR[ki] = la.cornerRadii[k];
                   else if(ki > _lineHit.idx) newCR[ki-1] = la.cornerRadii[k];
-                  // ki === idx: ese nodo desaparece, no se copia
                 }
                 la.cornerRadii = newCR;
               }
@@ -3485,18 +3601,24 @@ function edOnStart(e){
             }
             return;
           } else {
-            // Añadir nodo en el centro del segmento
+            if(_lineHit.subPath != null){
+              // Añadir nodo en segmento de subPath
+              const sp=la.subPaths[_lineHit.subPath];
+              if(sp){ const ns=sp.length; const j2=(_lineHit.idx+1)%ns;
+                sp.splice(j2,0,{x:(sp[_lineHit.idx].x+sp[j2].x)/2, y:(sp[_lineHit.idx].y+sp[j2].y)/2});
+                _edShapePushHistory(); edRedraw(); }
+              return;
+            }
+            // Añadir nodo en segmento del path principal
             const _absP2=la.absPoints();
             const _j2=(_lineHit.idx+1)%_n;
             const _a2=_absP2[_lineHit.idx], _b2=_absP2[_j2];
             const mx=(_a2.x+_b2.x)/2, my=(_a2.y+_b2.y)/2;
-            // Convertir punto absoluto a local (igual que addAbsPoint pero sin push al final)
             const rotInv=-(la.rotation||0)*Math.PI/180;
             const dx=mx-la.x, dy=my-la.y;
             const lx=dx*Math.cos(rotInv)-dy*Math.sin(rotInv);
             const ly=dx*Math.sin(rotInv)+dy*Math.cos(rotInv);
             la.points.splice(_j2,0,{x:lx,y:ly});
-            // Reindexar cornerRadii: los índices >= _j2 suben uno
             if(la.cornerRadii && Object.keys(la.cornerRadii).length){
               const newCR = {};
               for(const k in la.cornerRadii){
@@ -3510,13 +3632,19 @@ function edOnStart(e){
             return;
           }
         } else {
-          // Primer tap: registrar candidato, continuar con drag normal si es nodo
+          // Primer tap: registrar candidato, iniciar drag si es nodo
           _edLastNodeTapTime=_now2;
-          _edLastNodeTapIdx = _lineHit.type==='node' ? _lineHit.idx : 1000+_lineHit.idx;
+          _edLastNodeTapIdx = _hitId;
           if(_lineHit.type==='node'){
-            edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
+            if(_lineHit.subPath != null){
+              // Nodo de subPath
+              edIsTailDragging=true; edTailPointType='subpathvertex';
+              edTailVoiceIdx=_lineHit.idx; window._edSubPathIdx=_lineHit.subPath;
+            } else {
+              edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
+            }
           }
-          // Para segmento: solo registrar, no iniciar drag
+          // Para segmento: solo registrar candidato, no iniciar drag
           return;
         }
       }
@@ -4088,8 +4216,6 @@ function edOnMove(e){
     }
     if(edTailPointType==='linevertex'){
       // Convertir posición absoluta al espacio local de la línea
-      // El draw hace: translate(cx,cy) + rotate(rot) + draw(p.x*pw, p.y*ph)
-      // Inverso: (abs - center) → rotate(-rot) → divide por (pw,ph)
       const pw2=edPageW(), ph2=edPageH();
       const rot=-(la.rotation||0)*Math.PI/180;
       const cos=Math.cos(rot), sin=Math.sin(rot);
@@ -4099,6 +4225,21 @@ function edOnMove(e){
         y: (dx*sin + dy*cos) / ph2
       };
       la._updateBbox();
+      edRedraw();return;
+    }
+    if(edTailPointType==='subpathvertex'){
+      // T1: mover vértice de subPath — ya está en coords locales del objeto
+      const pw2=edPageW(), ph2=edPageH();
+      const rot=-(la.rotation||0)*Math.PI/180;
+      const cos=Math.cos(rot), sin=Math.sin(rot);
+      const dx=(c.nx-la.x)*pw2, dy=(c.ny-la.y)*ph2;
+      const sp=la.subPaths?.[window._edSubPathIdx];
+      if(sp && sp[edTailVoiceIdx]){
+        sp[edTailVoiceIdx]={
+          x: (dx*cos - dy*sin) / pw2,
+          y: (dx*sin + dy*cos) / ph2
+        };
+      }
       edRedraw();return;
     }
     const dx=c.nx-la.x,dy=c.ny-la.y;
@@ -4876,8 +5017,18 @@ function _edLineAddPoint(nx, ny){
     if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)<15){
       _edLineLayer.closed=true;
       _edFinishLine();
-      // Solo abrir panel si los menús están visibles
-      if(!edMinimized) _edActivateLineTool(true);
+      // T1: mantener herramienta en modo dibujar para el siguiente polígono.
+      // NO llamar _edActivateLineTool aquí — evita reseteo de cámara (edFitCanvas).
+      // El panel se actualiza solo desde _edFinishLine si hace falta.
+      if(!edMinimized){
+        _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
+        // Actualizar solo el texto de info del panel sin recrearlo
+        const _info=$('op-line-info');
+        if(_info) _info.textContent='Toca para añadir vértices';
+        const _status=$('op-line-status');
+        const _cl=_edLinePrimaryLayer;
+        if(_status&&_cl) _status.textContent=_cl.lineWidth+'px · '+Math.round((_cl.opacity??1)*100)+'%'+(_cl.subPaths?.length?(' · ⊙'+_cl.subPaths.length+' hueco'+(_cl.subPaths.length>1?'s':'')):'');
+      }
       return;
     }
     _edLineLayer.addAbsPoint(nx, ny);
@@ -5165,6 +5316,7 @@ function edDeactivateDrawTool(){
   _edFocusDone = false;
   // Cancelar herramientas shape/line en curso
   _edShapeStart = null; _edShapePreview = null; _edPendingShape = null;
+  _edLinePrimaryLayer = null; // T1: limpiar referencia al objeto primario
   if (_edLineLayer) {
     if (_edLineLayer.points.length < 2) {
       const idx = edLayers.indexOf(_edLineLayer);
@@ -5500,6 +5652,7 @@ function _edActivateLineTool(isNew) {
   const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
   const hasFill = fillCol !== 'none' && isClosed;
   const fillVal = hasFill ? fillCol : '#ffffff';
+  const nSubPaths = (_cur?.subPaths?.length) || 0;
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
@@ -5560,7 +5713,8 @@ function _edActivateLineTool(isNew) {
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_cur?.locked?'var(--gray-800)':'transparent'};color:${_cur?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_cur?.locked?'Desbloquear':'Bloquear'}">${_cur?.locked?'🔒':'🔓'}</button>
 
-    <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
+    <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%${nSubPaths>0?' · ⊙'+nSubPaths+' hueco'+(nSubPaths>1?'s':''):''}</span>
+    ${nSubPaths>0?`<button id="op-line-rmhole" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:900;background:transparent;cursor:pointer;color:#c00" title="Quitar último hueco">⊙✕</button>`:''}
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
 </div>`;
@@ -5731,6 +5885,7 @@ function _edActivateLineTool(isNew) {
     window._edCurveVertIdx=-1;
     edPushHistory(); _edShapeClearHistory();
     _edFinishLine();
+    _edLinePrimaryLayer = null; // T1: limpiar al confirmar
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     edShapeBarHide();
@@ -5796,6 +5951,15 @@ function _edActivateLineTool(isNew) {
     }
   });
 
+  // ── Quitar último hueco (T1) ──
+  $('op-line-rmhole')?.addEventListener('click',()=>{
+    const l=_curLine(); if(!l||!l.subPaths||!l.subPaths.length) return;
+    _edShapePushHistory();
+    l.subPaths.pop();
+    edRedraw();
+    _edActivateLineTool(false);
+  });
+
   requestAnimationFrame(edFitCanvas);
 }
 
@@ -5805,24 +5969,54 @@ function _edFinishLine() {
     _edLineLayer._updateBbox();
     const finished = _edLineLayer;
     _edLineLayer = null;
+
+    // T1: si hay una LineLayer principal previa (cerrada), comprobar solapamiento
+    const _primary = _edLinePrimaryLayer;
+    if(_primary && finished.closed && _primary.closed && _primary !== finished
+       && edLayers.indexOf(_primary) >= 0){
+      // Detección de solapamiento por bounding box (coordenadas normalizadas)
+      const _hw1=_primary.width/2,  _hh1=_primary.height/2;
+      const _hw2=finished.width/2,  _hh2=finished.height/2;
+      const _overlaps = !(
+        _primary.x+_hw1 < finished.x-_hw2 ||
+        finished.x+_hw2 < _primary.x-_hw1 ||
+        _primary.y+_hh1 < finished.y-_hh2 ||
+        finished.y+_hh2 < _primary.y-_hh1
+      );
+      if(_overlaps){
+        // Fusionar: transformar puntos del nuevo al espacio local del primario
+        const _rot = -(_primary.rotation||0)*Math.PI/180;
+        const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
+        const localPts = finished.absPoints().map(p => {
+          const dxN = p.x - _primary.x;
+          const dyN = p.y - _primary.y;
+          return { x: dxN*_cos - dyN*_sin, y: dxN*_sin + dyN*_cos };
+        });
+        if(!_primary.subPaths) _primary.subPaths = [];
+        _primary.subPaths.push(localPts);
+        // Eliminar el objeto nuevo — queda integrado como subPath
+        const _newIdx = edLayers.indexOf(finished);
+        if(_newIdx >= 0) edLayers.splice(_newIdx, 1);
+        edSelectedIdx = edLayers.indexOf(_primary);
+        _edShapePushHistory();
+        edRedraw();
+        return; // _edLinePrimaryLayer sigue siendo _primary para el siguiente polígono
+      }
+      // Sin solapamiento → objeto independiente; pasa a ser el nuevo primario
+    }
+
+    // Nuevo objeto independiente: registrar como primario para posibles fusiones futuras
     _edPendingShape = null;
     edSelectedIdx = edLayers.indexOf(finished);
-    edActiveTool = 'select';
-    edCanvas.className = '';
-    _edLineType = 'select';
+    _edLinePrimaryLayer = finished.closed ? finished : null;
     _edShapePushHistory();
     edRedraw();
-    // Si los menús están ocultos (minimizados), no abrir panel — solo mantener barra flotante
-    if(edMinimized){
-      // Inicializar historial local como objeto nuevo (igual que _edShapeInitHistory(true))
-      _edShapeHistory = [null, JSON.stringify(edSerLayer(finished))];
-      _edShapeHistIdx = 1;
-      _edShapeHistIdxBase = 1;
-      _edShapeUpdateUndoRedoBtns();
-      edShapeBarShow();
-    } else {
-      const _barWasVisible2 = $('edShapeBar')?.classList.contains('visible');
-      _edActivateLineTool(_barWasVisible2);
+
+    // Primera vez (sin panel abierto o minimizado): abrir panel normalmente
+    const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
+    if(!_panelOpen && !edMinimized){
+      _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
+      _edActivateLineTool(true);
     }
   } else {
     if (_edLineLayer) {
@@ -8500,7 +8694,8 @@ function edSerLayer(l){
     const _lobj={type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
-      cornerRadii:_hasR?{..._cr}:undefined};
+      cornerRadii:_hasR?{..._cr}:undefined,
+      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>sp.slice()) : undefined};
     if(l.groupId)_lobj.groupId=l.groupId;
     if(l.locked)_lobj.locked=true;
     if(_hasR){
@@ -8571,6 +8766,7 @@ function edDeserLayer(d, pageOrientation){
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
+    if(d.subPaths&&d.subPaths.length) l.subPaths=d.subPaths.map(sp=>sp.slice());
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
     else l._updateBbox();
     if(d.groupId) l.groupId=d.groupId;

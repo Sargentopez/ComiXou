@@ -490,13 +490,36 @@ function _render() {
         ctx.drawImage(layerImgs[j], -_bw/2, -_bh/2, _bw, _bh);
       } else {
         ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
-        for (let i = 1; i < layer.points.length; i++)
-          ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
-        if (layer.closed) ctx.closePath();
-        if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
-        if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+        const _hasSubPaths = layer.closed && layer.subPaths && layer.subPaths.length > 0;
+        if (_hasSubPaths) {
+          // T1: sub-paths → Path2D + evenodd para huecos
+          const _buildPath = pts => {
+            const p = new Path2D();
+            if (!pts || pts.length < 2) return p;
+            p.moveTo(pts[0].x * pw, pts[0].y * ph);
+            for (let i = 1; i < pts.length; i++) p.lineTo(pts[i].x * pw, pts[i].y * ph);
+            p.closePath();
+            return p;
+          };
+          const combined = new Path2D();
+          // path principal
+          const _main = _buildPath(layer.points);
+          combined.addPath(_main);
+          // sub-paths
+          for (const sp of layer.subPaths) {
+            if (sp && sp.length >= 3) combined.addPath(_buildPath(sp));
+          }
+          if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(combined, 'evenodd'); }
+          if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(combined); }
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
+          for (let i = 1; i < layer.points.length; i++)
+            ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
+          if (layer.closed) ctx.closePath();
+          if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+          if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
+        }
       }
       ctx.restore();
     }
