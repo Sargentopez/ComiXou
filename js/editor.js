@@ -2655,7 +2655,8 @@ function edPinchStart(e) {
   // LOCK: objeto bloqueado — no capturar snapshot para resize/rotate por pinch
   const la = (!isDrawTool && edSelectedIdx >= 0 && !edLayers[edSelectedIdx]?.locked) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
-    _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null } : null;
+    _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null,
+    _subPaths: la.type==='line' && la.subPaths && la.subPaths.length ? la.subPaths.map(sp=>sp.map(p=>({...p}))) : null } : null;
   // En modo draw, el pinch mueve la cámara (no el dibujo)
   _edDrawPinch = null;
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
@@ -2670,6 +2671,7 @@ function edPinchStart(e) {
         w:    edLayers[i].width,
         h:    edLayers[i].height,
         _linePoints: edLayers[i].type==='line' ? edLayers[i].points.map(p=>({...p})) : null,
+        _subPaths: edLayers[i].type==='line' && edLayers[i].subPaths && edLayers[i].subPaths.length ? edLayers[i].subPaths.map(sp=>sp.map(p=>({...p}))) : null,
       })),
       groupRot: edMultiGroupRot,
       bbox: { ...edMultiBbox },
@@ -2735,6 +2737,8 @@ function edPinchMove(e) {
         const sw = newW / edPinchScale0.w;
         const sh = newH / edPinchScale0.h;
         la.points = edPinchScale0._linePoints.map(p => ({x: p.x * sw, y: p.y * sh}));
+        // Escalar subPaths (T1)
+        if(edPinchScale0._subPaths) la.subPaths = edPinchScale0._subPaths.map(sp=>sp.map(p=>({x:p.x*sw, y:p.y*sh})));
       }
       edRedraw();
     }
@@ -3648,8 +3652,16 @@ function edOnStart(e){
           return;
         }
       }
-      // Sin hit en nodo ni segmento: limpiar candidato
+      // Sin hit en nodo ni segmento: comprobar si se toca el interior para drag
       _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
+      // T1: drag del objeto durante edición (táctil y PC) — si toque dentro del bbox
+      if(_edLinePrimaryLayer && _edLinePrimaryLayer.contains && _edLinePrimaryLayer.contains(c.nx, c.ny)){
+        edDragOffX = c.nx - _edLinePrimaryLayer.x;
+        edDragOffY = c.ny - _edLinePrimaryLayer.y;
+        edSelectedIdx = edLayers.indexOf(_edLinePrimaryLayer);
+        edIsDragging = true;
+        edRedraw(); return;
+      }
     }
   }
 
@@ -3708,6 +3720,7 @@ function edOnStart(e){
                          anchorX:_anch.x, anchorY:_anch.y};
           if(_la.type==='line'){
             edInitialSize._linePoints=_la.points.map(p=>({...p}));
+            edInitialSize._subPaths=_la.subPaths&&_la.subPaths.length ? _la.subPaths.map(sp=>sp.map(p=>({...p}))) : null;
             // Si tiene radios, sincronizar la.width/height con el bbox de puntos puros
             // para que el resize y edInitialSize partan de la misma base.
             const _cr2=_la.cornerRadii||{};
@@ -4094,6 +4107,8 @@ function edOnMove(e){
         // LineLayer: escalar también los puntos locales para que la forma se estire
         if(la.type==='line' && s._linePoints){
           la.points = s._linePoints.map(p=>({...p, x:p.x*_swL, y:p.y*_shL}));
+          // Escalar subPaths (T1)
+          if(s._subPaths) la.subPaths = s._subPaths.map(sp=>sp.map(p=>({x:p.x*_swL, y:p.y*_shL})));
           if(typeof la._updateBbox==='function') la._updateBbox();
         }
         // ShapeLayer/LineLayer: escalar cornerRadii
@@ -4354,6 +4369,8 @@ function edOnMove(e){
       const sw = la.width  / (edInitialSize.width  || 0.01);
       const sh = la.height / (edInitialSize.height || 0.01);
       la.points = edInitialSize._linePoints.map(p=>({x: p.x*sw, y: p.y*sh}));
+      // Escalar también subPaths (T1)
+      if(edInitialSize._subPaths) la.subPaths = edInitialSize._subPaths.map(sp=>sp.map(p=>({x:p.x*sw, y:p.y*sh})));
       // Recalcular width/height desde puntos reales (base para el próximo resize)
       const xs=la.points.map(p=>p.x), ys=la.points.map(p=>p.y);
       const _ptW=Math.max(Math.max(...xs)-Math.min(...xs), 0.01);
