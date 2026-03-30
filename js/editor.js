@@ -644,10 +644,11 @@ class DrawLayer extends BaseLayer {
       y: edMarginY() + ny * edPageH()
     };
   }
-  beginStroke(nx, ny, color, size, isEraser, opacity){
+  beginStroke(nx, ny, color, size, isEraser, opacity, clipR){
     const {x,y} = this._wsCoords(nx, ny);
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
+    if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
     this._ctx.globalAlpha = alpha;
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.fillStyle='rgba(0,0,0,1)'; }
     else { this._ctx.globalCompositeOperation='source-over'; this._ctx.fillStyle=color; }
@@ -660,10 +661,11 @@ class DrawLayer extends BaseLayer {
     const {x,y} = this._wsCoords(nx, ny);
     this._lastX=x; this._lastY=y;
   }
-  continueStroke(nx, ny, color, size, isEraser, opacity){
+  continueStroke(nx, ny, color, size, isEraser, opacity, clipR){
     const {x,y} = this._wsCoords(nx, ny);
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
+    if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
     this._ctx.globalAlpha = alpha;
     this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
@@ -4878,7 +4880,8 @@ function edStartPaint(e){
     _edOffsetFirstMove = true;
   } else {
     const c = edCoords(_eTmp);
-    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+    const _cr4 = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
+    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4);
     edRedraw();
     _edOffsetFirstMove = false;
   }
@@ -4893,9 +4896,11 @@ function edContinuePaint(e){
   if(_edOffsetFirstMove){
     // Primer move con offset: dibujar el punto inicial que se omitió en pointerdown
     _edOffsetFirstMove = false;
-    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+    const _cr4f = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
+    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4f);
   } else {
-    dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity);
+    const _cr4c = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
+    dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4c);
   }
   edRedraw();
   edMoveBrush(e);
@@ -5267,6 +5272,7 @@ function _edActivateShapeTool() {
     const v=+e.target.value; edDrawSize=v;
     const n=$('op-dsize-num'); if(n) n.value=v;
     const s=_curShape(); if(s){s.lineWidth=v;edRedraw();} _updateInfo();
+    _edRefreshOffsetCursor(); // T4: actualizar círculo del cursor en tiempo real
   });
   $('op-dsize')?.addEventListener('change',()=>{ _edShapePushHistory(); });
   $('op-dsize-num')?.addEventListener('change',e=>{
@@ -6234,6 +6240,8 @@ function edRenderOptionsPanel(mode){
           } else {
             _edCursorOffset = true;
             _edCursorOffsetAngle = angle;
+            // T2: mostrar instrucciones al activar
+            edToast('Primer tap: coloca cursor\nArrastra para dibujar', 3000);
           }
           _opOffsetPop.style.display = 'none';
           if(_opOffsetBtn){
@@ -7261,6 +7269,7 @@ function edInitDrawBar() {
     // Actualizar preview en tiempo real
     _edbSyncSizePreview();
     const sl = $('op-dsize'); if(sl){ sl.value=v; const n=$('op-dsize-num'); if(n) n.value=v; }
+    _edRefreshOffsetCursor(); // T4: actualizar círculo del cursor en tiempo real
   });
   $('edb-size-slider')?.addEventListener('pointerup', e => {
     const pop=$('edb-size-pop');
