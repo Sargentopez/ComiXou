@@ -29,7 +29,7 @@ let _edPendingShape = null;   // ShapeLayer/LineLayer creada pero no confirmada 
 let edDrawFillColor = '#ffffff'; // relleno blanco por defecto // color de relleno para nuevas shapes
 let _edLineLayer  = null;     // LineLayer en construcción
 let _edLineType   = 'draw';   // 'draw' | 'select'
-let _edLinePrimaryLayer = null; // T1: LineLayer principal del panel (candidata a recibir huecos)
+let _edLineFusionId = null;   // T1: ID de fusión — LineLayer del mismo ID se fusionan al OK
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
@@ -960,10 +960,7 @@ class LineLayer extends BaseLayer {
     const hasRadii = n>0 && Object.keys(cr).some(k=>(cr[k]||0)>0);
 
     if(hasRadii){
-      // Con radios: el bbox para selección y resize usa los puntos ORIGINALES,
-      // igual que Figma — los radios son metadatos, no modifican la geometría.
-      // _updateBbox solo recentra los puntos si están descentrados.
-      const xs2=this.points.map(p=>p.x), ys2=this.points.map(p=>p.y);
+      const xs2=this.points.filter(Boolean).map(p=>p.x), ys2=this.points.filter(Boolean).map(p=>p.y);
       const minX2=Math.min(...xs2),maxX2=Math.max(...xs2);
       const minY2=Math.min(...ys2),maxY2=Math.max(...ys2);
       const newCx2=(minX2+maxX2)/2, newCy2=(minY2+maxY2)/2;
@@ -973,13 +970,13 @@ class LineLayer extends BaseLayer {
         const dxPx=newCx2*pw, dyPx=newCy2*ph;
         this.x+=(dxPx*cos-dyPx*sin)/pw;
         this.y+=(dxPx*sin+dyPx*cos)/ph;
-        this.points=this.points.map(p=>({x:p.x-newCx2,y:p.y-newCy2}));
+        this.points=this.points.map(p=>p?{x:p.x-newCx2,y:p.y-newCy2}:null);
       }
       this.width  = Math.max(maxX2-minX2, 0.01);
       this.height = Math.max(maxY2-minY2, 0.01);
     } else {
       // Sin radios: comportamiento original
-      const xs=this.points.map(p=>p.x), ys=this.points.map(p=>p.y);
+      const xs=this.points.filter(Boolean).map(p=>p.x), ys=this.points.filter(Boolean).map(p=>p.y);
       const minX=Math.min(...xs),maxX=Math.max(...xs);
       const minY=Math.min(...ys),maxY=Math.max(...ys);
       const newCx=(minX+maxX)/2, newCy=(minY+maxY)/2;
@@ -989,7 +986,7 @@ class LineLayer extends BaseLayer {
         const dxPx=newCx*pw, dyPx=newCy*ph;
         this.x+=(dxPx*cos-dyPx*sin)/pw;
         this.y+=(dxPx*sin+dyPx*cos)/ph;
-        this.points=this.points.map(p=>({x:p.x-newCx,y:p.y-newCy}));
+        this.points=this.points.map(p=>p?{x:p.x-newCx,y:p.y-newCy}:null);
       }
       this.width  = Math.max(maxX-minX, 0.01);
       this.height = Math.max(maxY-minY, 0.01);
@@ -999,10 +996,10 @@ class LineLayer extends BaseLayer {
   absPoints() {
     const rot = (this.rotation || 0) * Math.PI / 180;
     const cos = Math.cos(rot), sin = Math.sin(rot);
-    return this.points.map(p => ({
+    return this.points.map(p => p ? ({
       x: this.x + p.x * cos - p.y * sin,
       y: this.y + p.x * sin + p.y * cos
-    }));
+    }) : null);
   }
   // Añadir punto en coords absolutas (convierte a local)
   addAbsPoint(ax, ay) {
@@ -1029,60 +1026,59 @@ class LineLayer extends BaseLayer {
     const pts = this.points;
     const cr  = this.cornerRadii || {};
     const n   = pts.length;
-    // scaleX/scaleY: factores de escala acumulados por resize no proporcional
-    // Se actualizan en edOnEnd al finalizar un resize
-    const px2 = p => ({x: p.x*pw, y: p.y*ph});
+    const px2 = p => p ? ({x: p.x*pw, y: p.y*ph}) : {x:0,y:0};
 
-    // Normalize vector to unit length
     const norm = (vx,vy) => { const l=Math.hypot(vx,vy); return l>0?{x:vx/l,y:vy/l}:{x:0,y:0}; };
 
-    // Effective radius at vertex i: limited to half of shortest adjacent segment
+    // Dividir points en contornos separados por null — antes de construir tangents
+    const _contours = [];
+    let _cur = [];
+    for(const p of pts){ if(p===null){ if(_cur.length>=2) _contours.push(_cur); _cur=[]; } else _cur.push(p); }
+    if(_cur.length>=2) _contours.push(_cur);
+    const _multiContour = _contours.length > 1;
+
+    // tangents solo se necesita para contorno único sin null
     const effR = i => {
       const r=cr[i]||0; if(!r) return 0;
+      if(!pts[(i-1+n)%n]||!pts[i]||!pts[(i+1)%n]) return 0;
       const prev=px2(pts[(i-1+n)%n]), cur=px2(pts[i]), next=px2(pts[(i+1)%n]);
       const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
       const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
       return Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
     };
 
-    // For each vertex: compute p1 (entry tangent) and p2 (exit tangent)
-    // using the algorithm from getRoundedPath — quadratic bezier Q curr p2
-    // This is symmetric: works identically for every vertex including the closing segment
-    const tangents = Array.from({length:n}, (_,i) => {
+    const tangents = _multiContour ? [] : Array.from({length:n}, (_,i) => {
+      if(!pts[i]) return {p1:{x:0,y:0},p2:{x:0,y:0},cur:{x:0,y:0},r:0};
       const prev=px2(pts[(i-1+n)%n]), cur=px2(pts[i]), next=px2(pts[(i+1)%n]);
       const v1=norm(cur.x-prev.x, cur.y-prev.y);
       const v2=norm(next.x-cur.x, next.y-cur.y);
       const r=effR(i);
       return {
-        p1: {x:cur.x-v1.x*r, y:cur.y-v1.y*r},  // entry point
-        p2: {x:cur.x+v2.x*r, y:cur.y+v2.y*r},  // exit point
+        p1: {x:cur.x-v1.x*r, y:cur.y-v1.y*r},
+        p2: {x:cur.x+v2.x*r, y:cur.y+v2.y*r},
         cur, r
       };
     });
 
-    // Helper: añade un path cerrado de puntos locales (en px) a un Path2D o al ctx
-    const _buildClosedPath = (target, localPts, localCr) => {
-      const _n = localPts.length;
-      if(_n < 2) return;
+    // Helper: construye un contorno cerrado con radios opcionales en un Path2D
+    const _buildContour = (target, localPts, localCr) => {
+      const _n = localPts.length; if(_n < 2) return;
       const _cr2 = localCr || {};
       const _px2b = p => ({x: p.x*pw, y: p.y*ph});
       const _effR2 = i => {
         const r=_cr2[i]||0; if(!r) return 0;
         const prev=_px2b(localPts[(i-1+_n)%_n]), cur=_px2b(localPts[i]), next=_px2b(localPts[(i+1)%_n]);
-        const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y);
-        const d2=Math.hypot(next.x-cur.x,next.y-cur.y);
+        const d1=Math.hypot(cur.x-prev.x,cur.y-prev.y), d2=Math.hypot(next.x-cur.x,next.y-cur.y);
         return Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
       };
       const _tgs = Array.from({length:_n}, (_,i) => {
         const prev=_px2b(localPts[(i-1+_n)%_n]), cur=_px2b(localPts[i]), next=_px2b(localPts[(i+1)%_n]);
-        const v1=norm(cur.x-prev.x, cur.y-prev.y);
-        const v2=norm(next.x-cur.x, next.y-cur.y);
+        const v1=norm(cur.x-prev.x, cur.y-prev.y), v2=norm(next.x-cur.x, next.y-cur.y);
         const r=_effR2(i);
         return {p1:{x:cur.x-v1.x*r,y:cur.y-v1.y*r}, p2:{x:cur.x+v2.x*r,y:cur.y+v2.y*r}, cur, r};
       });
       const t0=_tgs[0];
-      if(target.moveTo) { target.moveTo(t0.p1.x, t0.p1.y); }
-      else              { target.moveTo(t0.p1.x, t0.p1.y); }
+      target.moveTo(t0.p1.x, t0.p1.y);
       for(let i=0;i<_n;i++){
         const {p1,p2,cur,r}=_tgs[i];
         if(r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
@@ -1093,17 +1089,24 @@ class LineLayer extends BaseLayer {
       target.closePath();
     };
 
-    const hasSubPaths = this.closed && this.subPaths && this.subPaths.length > 0;
-
-    if(hasSubPaths){
-      // T1: múltiples sub-paths → usar Path2D + fillRule evenodd para crear huecos
+    if(_multiContour){
+      // T1: múltiples contornos → evenodd para huecos en solapamientos
       const combined = new Path2D();
-      // Path principal
-      _buildClosedPath(combined, pts, cr);
-      // Sub-paths adicionales
-      for(const sp of this.subPaths){
-        if(sp && sp.length >= 3) _buildClosedPath(combined, sp, {});
-      }
+      _contours.forEach((c,ci) => {
+        const _crC = {};
+        // Mapear cornerRadii al índice global en points
+        // (los radios se aplican por índice global, los null no cuentan)
+        let _gIdx = 0;
+        for(let _ii=0; _ii<pts.length; _ii++){
+          if(pts[_ii]===null){ continue; }
+          if(_gIdx < c.length && pts[_ii] === c[_gIdx]){
+            const _r = cr[_ii]||0;
+            if(_r) _crC[_gIdx] = _r;
+            _gIdx++;
+          }
+        }
+        _buildContour(combined, c, _crC);
+      });
       if (this.fillColor && this.fillColor !== 'none') {
         ctx.fillStyle = this.fillColor;
         ctx.fill(combined, 'evenodd');
@@ -1114,7 +1117,7 @@ class LineLayer extends BaseLayer {
         ctx.stroke(combined);
       }
     } else {
-      // Sin sub-paths: comportamiento original
+      // Contorno único: comportamiento original
       ctx.beginPath();
       if(!this.closed){
         ctx.moveTo(tangents[0].cur.x, tangents[0].cur.y);
@@ -1174,16 +1177,28 @@ class LineLayer extends BaseLayer {
       const octx = oc.getContext('2d');
       // Origen en centro del bbox + pad
       octx.translate(cw/2, ch/2);
-      octx.beginPath();
-      const pts = this.points;
-      octx.moveTo(pts[0].x * pw, pts[0].y * ph);
-      for (let i = 1; i < pts.length; i++) {
-        octx.lineTo(pts[i].x * pw, pts[i].y * ph);
-      }
-      if (this.closed) octx.closePath();
-      if (this.closed && this.fillColor && this.fillColor !== 'none') {
-        octx.fillStyle = this.fillColor;
-        octx.fill();
+      // Dividir en contornos por null
+      const _cPts = this.points;
+      const _cContours = []; let _cCur = [];
+      for(const p of _cPts){ if(p===null){ if(_cCur.length>=2) _cContours.push(_cCur); _cCur=[]; } else _cCur.push(p); }
+      if(_cCur.length>=2) _cContours.push(_cCur);
+      if(_cContours.length > 1){
+        const _cPath = new Path2D();
+        for(const c of _cContours){
+          _cPath.moveTo(c[0].x*pw, c[0].y*ph);
+          for(let i=1;i<c.length;i++) _cPath.lineTo(c[i].x*pw, c[i].y*ph);
+          _cPath.closePath();
+        }
+        if (this.fillColor && this.fillColor !== 'none') { octx.fillStyle = this.fillColor; octx.fill(_cPath,'evenodd'); }
+        octx.strokeStyle = '#000';
+        octx.lineWidth = Math.max((this.lineWidth||0) > 0 ? Math.max(this.lineWidth,8) : 0, 0);
+        if ((this.lineWidth||0) > 0) octx.stroke(_cPath);
+      } else {
+        octx.beginPath();
+        const _pts0 = _cContours[0]||[];
+        if(_pts0.length) { octx.moveTo(_pts0[0].x*pw, _pts0[0].y*ph); for(let i=1;i<_pts0.length;i++) octx.lineTo(_pts0[i].x*pw, _pts0[i].y*ph); }
+        if (this.closed) octx.closePath();
+        if (this.closed && this.fillColor && this.fillColor !== 'none') { octx.fillStyle = this.fillColor; octx.fill(); }
       }
       octx.strokeStyle = '#000';
       // Sin relleno: ampliar zona de hit al contorno (mínimo 12px)
@@ -1203,6 +1218,7 @@ class LineLayer extends BaseLayer {
     const abs = this.absPoints();
     let best = -1, bestD = Infinity;
     abs.forEach((p, i) => {
+      if(!p) return;
       const dx = (px - p.x) * pw, dy = (py - p.y) * ph;
       const d = Math.sqrt(dx*dx + dy*dy);
       if (d < bestD) { bestD = d; best = i; }
@@ -1229,7 +1245,7 @@ function _edLayersSnapshot(){
     if(l.type === 'line')   return { type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
-      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>sp.slice()) : undefined,
+      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
@@ -1313,7 +1329,7 @@ function edApplyHistory(snapshot){
       l.color=o.color||'#000'; l.fillColor=o.fillColor||'#ffffff'; l.lineWidth=o.lineWidth??3; l.opacity=o.opacity??1;
       l.rotation=o.rotation||0;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
-      if(o.subPaths&&o.subPaths.length) l.subPaths = o.subPaths.map(sp=>sp.slice());
+      if(o.subPaths&&o.subPaths.length) l.subPaths = o.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;});
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
       else l._updateBbox();
       if(o.groupId) l.groupId=o.groupId;
@@ -1775,15 +1791,21 @@ function edRedraw(){
     (_editingDraw || _editingShape || _editingProps || _manipulating);
 
   // Función que decide si una capa concreta debe dimearse
+  // Objeto activo del panel line (puede ser distinto de edSelectedIdx durante construcción)
+  const _activePanelLine = (_editingShape && _panelMode==='line')
+    ? (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : edLayers.find(l=>l.type==='line'&&l._fusionId===_edLineFusionId))
+    : null;
+
   const _isDimmed = (l, i) => {
     if (!_anyEditing) return false;
     if (_editingDraw) {
-      // En modo dibujo libre: solo el DrawLayer activo queda al 100%
       return l.type !== 'draw';
     }
-    // En cualquier otro modo: dimear todo excepto el objeto seleccionado/en edición
     if (i === edSelectedIdx) return false;
     if (l === _edShapePreview || l === _edLineLayer) return false;
+    // T1: no dimear LineLayer que pertenecen a la sesión de edición activa
+    if (l.type === 'line' && _edLineFusionId && l._fusionId === _edLineFusionId) return false;
+    if (l === _activePanelLine) return false;
     return true;
   };
 
@@ -1904,14 +1926,20 @@ function edDrawSel(){
       const mx=edMarginX(), my=edMarginY();
       const cx=mx+la.x*pw, cy=my+la.y*ph;
       const rot=(la.rotation||0)*Math.PI/180;
-      if(la.points.length>=2){
+      const _realPts = la.points.filter(Boolean);
+      if(_realPts.length>=2){
         edCtx.save();
         edCtx.translate(cx,cy); edCtx.rotate(rot);
         edCtx.strokeStyle='rgba(26,140,255,0.5)'; edCtx.lineWidth=lw;
         edCtx.setLineDash([4/z,3/z]);
         edCtx.beginPath();
-        edCtx.moveTo(la.points[0].x*pw, la.points[0].y*ph);
-        for(let i=1;i<la.points.length;i++) edCtx.lineTo(la.points[i].x*pw, la.points[i].y*ph);
+        let _firstInContour = true;
+        for(let i=0;i<la.points.length;i++){
+          const p=la.points[i];
+          if(!p){ _firstInContour=true; continue; }
+          if(_firstInContour){ edCtx.moveTo(p.x*pw, p.y*ph); _firstInContour=false; }
+          else { edCtx.lineTo(p.x*pw, p.y*ph); }
+        }
         if(la.closed) edCtx.closePath();
         edCtx.stroke();
         edCtx.setLineDash([]);
@@ -2079,16 +2107,18 @@ function edDrawSel(){
     const _er2 = i => {
       const r=cr2[i]||0; if(!r) return 0;
       const prev=la.points[(i-1+n2)%n2], cur=la.points[i], next=la.points[(i+1)%n2];
+      if(!prev||!cur||!next) return 0; // no cruzar contornos
       const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
       const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
       return Math.max(0,Math.min(r,Math.min(d1,d2)-2));
     };
     la.points.forEach((p,i)=>{
+      if(!p) return; // separador de contorno
       const r=_er2(i);
       let lpx=p.x*pw, lpy=p.y*ph;
       if(r>0){
-        // Q(t=0.5) = (p1 + 2*cur + p2) / 4
         const prev=la.points[(i-1+n2)%n2], cur=la.points[i], next=la.points[(i+1)%n2];
+        if(!prev||!cur||!next){ /* no cruzar contornos */ } else {
         const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
         const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
         const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
@@ -2098,6 +2128,7 @@ function edDrawSel(){
         const p2x=cur.x*pw+v2x*rr, p2y=cur.y*ph+v2y*rr;
         lpx=(p1x+2*cur.x*pw+p2x)/4;
         lpy=(p1y+2*cur.y*ph+p2y)/4;
+        } // end no-null guard
       }
       const cpx=cx + lpx*cos - lpy*sin;
       const cpy=cy + lpx*sin + lpy*cos;
@@ -2111,25 +2142,6 @@ function edDrawSel(){
     });
     // Si hay un nodo activo, continuar animando el parpadeo
     if(window._edCurveVertIdx >= 0) requestAnimationFrame(()=>{ if(window._edCurveVertIdx>=0) edRedraw(); });
-
-    // Handles de subPaths (T1) — color azul para distinguirlos del path principal
-    if(la.subPaths && la.subPaths.length){
-      const rot2=(la.rotation||0)*Math.PI/180;
-      const cos2=Math.cos(rot2), sin2=Math.sin(rot2);
-      la.subPaths.forEach((sp, si)=>{
-        if(!sp||sp.length<2) return;
-        sp.forEach((p, i)=>{
-          const lpx=p.x*pw, lpy=p.y*ph;
-          const cpx=cx + lpx*cos2 - lpy*sin2;
-          const cpy=cy + lpx*sin2 + lpy*cos2;
-          const isActive = (window._edSubPathIdx===si && window._edCurveVertIdx===-(i+1));
-          edCtx.beginPath(); edCtx.arc(cpx, cpy, hr, 0, Math.PI*2);
-          edCtx.fillStyle = isActive ? '#e67e22' : '#2980b9';
-          edCtx.fill();
-          edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
-        });
-      });
-    }
   }
 }
 
@@ -2563,12 +2575,12 @@ function edMirrorSelected(){
 
   else if(la.type === 'line'){
     // Puntos en espacio local centrado en (0,0) — invertir x
-    la.points = la.points.map(p => ({ ...p, x: -p.x,
+    la.points = la.points.map(p => p ? ({ ...p, x: -p.x,
       cx1: p.cx1 !== undefined ? -p.cx1 : undefined,
       cy1: p.cy1,
       cx2: p.cx2 !== undefined ? -p.cx2 : undefined,
       cy2: p.cy2
-    }));
+    }) : null);
     la.rotation = -(la.rotation || 0);
     if(typeof la._updateBbox === 'function') la._updateBbox();
   }
@@ -2655,8 +2667,8 @@ function edPinchStart(e) {
   // LOCK: objeto bloqueado — no capturar snapshot para resize/rotate por pinch
   const la = (!isDrawTool && edSelectedIdx >= 0 && !edLayers[edSelectedIdx]?.locked) ? edLayers[edSelectedIdx] : null;
   edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
-    _linePoints: la.type==='line' ? la.points.map(p=>({...p})) : null,
-    _subPaths: la.type==='line' && la.subPaths && la.subPaths.length ? la.subPaths.map(sp=>sp.map(p=>({...p}))) : null } : null;
+    _linePoints: la.type==='line' ? la.points.map(p=>p?({...p}):null) : null,
+    _subPaths: la.type==='line' && la.subPaths && la.subPaths.length ? la.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null } : null;
   // En modo draw, el pinch mueve la cámara (no el dibujo)
   _edDrawPinch = null;
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
@@ -2670,8 +2682,8 @@ function edPinchStart(e) {
         y:    edLayers[i].y,
         w:    edLayers[i].width,
         h:    edLayers[i].height,
-        _linePoints: edLayers[i].type==='line' ? edLayers[i].points.map(p=>({...p})) : null,
-        _subPaths: edLayers[i].type==='line' && edLayers[i].subPaths && edLayers[i].subPaths.length ? edLayers[i].subPaths.map(sp=>sp.map(p=>({...p}))) : null,
+        _linePoints: edLayers[i].type==='line' ? edLayers[i].points.map(p=>p?({...p}):null) : null,
+        _subPaths: edLayers[i].type==='line' && edLayers[i].subPaths && edLayers[i].subPaths.length ? edLayers[i].subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null,
       })),
       groupRot: edMultiGroupRot,
       bbox: { ...edMultiBbox },
@@ -2705,7 +2717,7 @@ function edPinchMove(e) {
       if(la.type === 'line' && snap._linePoints){
         const sw = la.width  / snap.w;
         const sh = la.height / snap.h;
-        la.points = snap._linePoints.map(p => ({x: p.x * sw, y: p.y * sh}));
+        la.points = snap._linePoints.map(p => p ? ({x: p.x * sw, y: p.y * sh}) : null);
       }
       // Escalar Y rotar posición alrededor del pivote (en px para no distorsionar)
       const dxPx = (snap.x - pivX) * pw;
@@ -2736,7 +2748,7 @@ function edPinchMove(e) {
       if (la.type === 'line' && edPinchScale0._linePoints) {
         const sw = newW / edPinchScale0.w;
         const sh = newH / edPinchScale0.h;
-        la.points = edPinchScale0._linePoints.map(p => ({x: p.x * sw, y: p.y * sh}));
+        la.points = edPinchScale0._linePoints.map(p => p ? ({x: p.x * sw, y: p.y * sh}) : null);
         // Escalar subPaths (T1)
         if(edPinchScale0._subPaths) la.subPaths = edPinchScale0._subPaths.map(sp=>sp.map(p=>({x:p.x*sw, y:p.y*sh})));
       }
@@ -2973,7 +2985,7 @@ function _edLineHitTest(la, nx, ny, isTouch){
 
   // ── Posición visual de cada nodo (igual que _handlePos en edOnStart) ──
   const nodePos=(i)=>{
-    const p=la.points[i];
+    const p=la.points[i]; if(!p) return {ax:Infinity,ay:Infinity};
     const r=cr[i]||0;
     let lpx=p.x*pw, lpy=p.y*ph;
     if(r>0){
@@ -2994,19 +3006,22 @@ function _edLineHitTest(la, nx, ny, isTouch){
     };
   };
 
-  // 1. Comprobar nodos primero (prioridad sobre segmentos)
+  // 1. Comprobar nodos primero (prioridad sobre segmentos) — saltar null
   for(let i=0;i<n;i++){
+    if(!la.points[i]) continue;
     const {ax,ay}=nodePos(i);
     if(Math.hypot((nx-ax)*pw,(ny-ay)*ph)*z < hitNode){
       return {type:'node', idx:i};
     }
   }
 
-  // 2. Comprobar segmentos: distancia perpendicular punto→segmento
-  const absP=la.absPoints(); // coords absolutas reales de cada punto
+  // 2. Comprobar segmentos — saltar null y no cruzar fronteras de contorno
+  const absP=la.absPoints();
   const segCount = la.closed ? n : n-1;
   for(let i=0;i<segCount;i++){
     const j=(i+1)%n;
+    // No conectar a través de separadores null
+    if(!la.points[i] || !la.points[j]) continue;
     const ax=absP[i].x, ay=absP[i].y;
     const bx=absP[j].x, by=absP[j].y;
     // Vectores en píxeles de página (sin cámara, para la distancia)
@@ -3196,7 +3211,7 @@ function edOnStart(e){
         const rot2=(la.rotation||0)*Math.PI/180;
         const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
         for(let i=0;i<la.points.length;i++){
-          const p=la.points[i];
+          const p=la.points[i]; if(!p) continue;
           const lpx=p.x*pw2,lpy=p.y*ph2;
           const ax2=la.x+(lpx*cos2-lpy*sin2)/pw2;
           const ay2=la.y+(lpx*sin2+lpy*cos2)/ph2;
@@ -3205,14 +3220,11 @@ function edOnStart(e){
             if(!la.cornerRadii)la.cornerRadii={};
             const existing=la.cornerRadii[i]||0;
             window._edCurveRadius=existing;
-            // Actualizar sliders (barra flotante Y submenú)
             const _sl=$('esb-slider-input');
             if(_sl) _sl.value=existing;
             const _slP=$('op-line-curve-r'); if(_slP){_slP.value=existing;}
             const _slPn=$('op-line-curve-rnum'); if(_slPn){_slPn.value=existing;}
             edRedraw();
-            // Tap: selecciona vértice. Tap+arrastrar: selecciona y mueve.
-            // El drag se activa inmediatamente — edOnMove lo ejecutará si hay movimiento.
             edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=i;
             return;
           }
@@ -3353,7 +3365,7 @@ function edOnStart(e){
                   ? (Array.isArray(_l.cornerRadii) ? [..._l.cornerRadii] : {..._l.cornerRadii})
                   : null;
                 return {i, x:_l.x, y:_l.y, w:_l.width, h:_l.height,
-                  _linePoints: _l.type==='line' ? _l.points.map(p=>({...p})) : null,
+                  _linePoints: _l.type==='line' ? _l.points.map(p=>p?({...p}):null) : null,
                   _cornerRadii: _cr};
               }),
               bb: {cx:bb.cx, cy:bb.cy, w:bb.w, h:bb.h},
@@ -3574,8 +3586,7 @@ function edOnStart(e){
       if(_lineHit){
         // ID único para el hit: negativo para subPaths, positivo para path principal
         const _hitId = _lineHit.type==='node'
-          ? (_lineHit.subPath!=null ? -((_lineHit.subPath+1)*10000+_lineHit.idx+1) : _lineHit.idx)
-          : 1000+_lineHit.idx;
+          ? _lineHit.idx : 1000+_lineHit.idx;
         const _sameHit = _edLastNodeTapIdx !== -1
           && _edLastNodeTapIdx === _hitId
           && (_now2 - _edLastNodeTapTime) < 400;
@@ -3583,13 +3594,7 @@ function edOnStart(e){
           // ── Doble tap confirmado ──
           _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
           if(_lineHit.type==='node'){
-            if(_lineHit.subPath != null){
-              // Eliminar nodo de subPath (mínimo 3 puntos)
-              const sp=la.subPaths[_lineHit.subPath];
-              if(sp && sp.length > 3){ sp.splice(_lineHit.idx,1); _edShapePushHistory(); edRedraw(); }
-              return;
-            }
-            // Eliminar nodo del path principal (mínimo 2 puntos)
+            // Eliminar nodo (mínimo 2 puntos)
             if(_n > 2){
               la.points.splice(_lineHit.idx,1);
               if(la.cornerRadii && Object.keys(la.cornerRadii).length){
@@ -3605,15 +3610,7 @@ function edOnStart(e){
             }
             return;
           } else {
-            if(_lineHit.subPath != null){
-              // Añadir nodo en segmento de subPath
-              const sp=la.subPaths[_lineHit.subPath];
-              if(sp){ const ns=sp.length; const j2=(_lineHit.idx+1)%ns;
-                sp.splice(j2,0,{x:(sp[_lineHit.idx].x+sp[j2].x)/2, y:(sp[_lineHit.idx].y+sp[j2].y)/2});
-                _edShapePushHistory(); edRedraw(); }
-              return;
-            }
-            // Añadir nodo en segmento del path principal
+            // Añadir nodo en el centro del segmento
             const _absP2=la.absPoints();
             const _j2=(_lineHit.idx+1)%_n;
             const _a2=_absP2[_lineHit.idx], _b2=_absP2[_j2];
@@ -3640,13 +3637,7 @@ function edOnStart(e){
           _edLastNodeTapTime=_now2;
           _edLastNodeTapIdx = _hitId;
           if(_lineHit.type==='node'){
-            if(_lineHit.subPath != null){
-              // Nodo de subPath
-              edIsTailDragging=true; edTailPointType='subpathvertex';
-              edTailVoiceIdx=_lineHit.idx; window._edSubPathIdx=_lineHit.subPath;
-            } else {
-              edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
-            }
+            edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
           }
           // Para segmento: solo registrar candidato, no iniciar drag
           return;
@@ -3655,13 +3646,7 @@ function edOnStart(e){
       // Sin hit en nodo ni segmento: comprobar si se toca el interior para drag
       _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
       // T1: drag del objeto durante edición (táctil y PC) — si toque dentro del bbox
-      if(_edLinePrimaryLayer && _edLinePrimaryLayer.contains && _edLinePrimaryLayer.contains(c.nx, c.ny)){
-        edDragOffX = c.nx - _edLinePrimaryLayer.x;
-        edDragOffY = c.ny - _edLinePrimaryLayer.y;
-        edSelectedIdx = edLayers.indexOf(_edLinePrimaryLayer);
-        edIsDragging = true;
-        edRedraw(); return;
-      }
+
     }
   }
 
@@ -3719,8 +3704,8 @@ function edOnStart(e){
                          rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
                          anchorX:_anch.x, anchorY:_anch.y};
           if(_la.type==='line'){
-            edInitialSize._linePoints=_la.points.map(p=>({...p}));
-            edInitialSize._subPaths=_la.subPaths&&_la.subPaths.length ? _la.subPaths.map(sp=>sp.map(p=>({...p}))) : null;
+            edInitialSize._linePoints=_la.points.map(p=>p?({...p}):null);
+            edInitialSize._subPaths=_la.subPaths&&_la.subPaths.length ? _la.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null;
             // Si tiene radios, sincronizar la.width/height con el bbox de puntos puros
             // para que el resize y edInitialSize partan de la misma base.
             const _cr2=_la.cornerRadii||{};
@@ -4106,7 +4091,7 @@ function edOnMove(e){
         la.height = Math.max(s.h * _shL, 0.02);
         // LineLayer: escalar también los puntos locales para que la forma se estire
         if(la.type==='line' && s._linePoints){
-          la.points = s._linePoints.map(p=>({...p, x:p.x*_swL, y:p.y*_shL}));
+          la.points = s._linePoints.map(p=>p?({x:p.x*_swL, y:p.y*_shL}):null);
           // Escalar subPaths (T1)
           if(s._subPaths) la.subPaths = s._subPaths.map(sp=>sp.map(p=>({x:p.x*_swL, y:p.y*_shL})));
           if(typeof la._updateBbox==='function') la._updateBbox();
@@ -4239,24 +4224,16 @@ function edOnMove(e){
         x: (dx*cos - dy*sin) / pw2,
         y: (dx*sin + dy*cos) / ph2
       };
-      la._updateBbox();
-      edRedraw();return;
-    }
-    if(edTailPointType==='subpathvertex'){
-      // T1: mover vértice de subPath — ya está en coords locales del objeto
-      const pw2=edPageW(), ph2=edPageH();
-      const rot=-(la.rotation||0)*Math.PI/180;
-      const cos=Math.cos(rot), sin=Math.sin(rot);
-      const dx=(c.nx-la.x)*pw2, dy=(c.ny-la.y)*ph2;
-      const sp=la.subPaths?.[window._edSubPathIdx];
-      if(sp && sp[edTailVoiceIdx]){
-        sp[edTailVoiceIdx]={
-          x: (dx*cos - dy*sin) / pw2,
-          y: (dx*sin + dy*cos) / ph2
-        };
+      // Recalcular width/height sin recentrar (recentrar durante drag causa saltos)
+      const _rxs=la.points.filter(Boolean).map(p=>p.x);
+      const _rys=la.points.filter(Boolean).map(p=>p.y);
+      if(_rxs.length){
+        la.width=Math.max(Math.max(..._rxs)-Math.min(..._rxs),0.01);
+        la.height=Math.max(Math.max(..._rys)-Math.min(..._rys),0.01);
       }
       edRedraw();return;
     }
+
     const dx=c.nx-la.x,dy=c.ny-la.y;
     const v=edTailVoiceIdx||0;
     if(!la.tailStarts)la.tailStarts=[{...la.tailStart}];
@@ -4368,11 +4345,11 @@ function edOnMove(e){
     if(la.type==='line' && edInitialSize._linePoints){
       const sw = la.width  / (edInitialSize.width  || 0.01);
       const sh = la.height / (edInitialSize.height || 0.01);
-      la.points = edInitialSize._linePoints.map(p=>({x: p.x*sw, y: p.y*sh}));
+      la.points = edInitialSize._linePoints.map(p=>p?({x: p.x*sw, y: p.y*sh}):null);
       // Escalar también subPaths (T1)
       if(edInitialSize._subPaths) la.subPaths = edInitialSize._subPaths.map(sp=>sp.map(p=>({x:p.x*sw, y:p.y*sh})));
       // Recalcular width/height desde puntos reales (base para el próximo resize)
-      const xs=la.points.map(p=>p.x), ys=la.points.map(p=>p.y);
+      const xs=la.points.filter(Boolean).map(p=>p.x), ys=la.points.filter(Boolean).map(p=>p.y);
       const _ptW=Math.max(Math.max(...xs)-Math.min(...xs), 0.01);
       const _ptH=Math.max(Math.max(...ys)-Math.min(...ys), 0.01);
       // Si tiene radios: actualizar bbox curvado; si no, usar bbox de puntos
@@ -4554,6 +4531,8 @@ function edOnEnd(e){
   // Limpiar snapshots de LineLayer
   if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line'){
     const _ll=edLayers[edSelectedIdx];
+    // Recentrar bbox al soltar el vértice arrastrado
+    if(_ll.points && _ll.points.length) _ll._updateBbox();
     delete _ll._rotPointsSnap; delete _ll._rotCx; delete _ll._rotCy; delete _ll._rotStartAngle;
     delete _ll._dragPointsSnap; delete _ll._dragStartX; delete _ll._dragStartY;
   }
@@ -5043,8 +5022,8 @@ function _edLineAddPoint(nx, ny){
         const _info=$('op-line-info');
         if(_info) _info.textContent='Toca para añadir vértices';
         const _status=$('op-line-status');
-        const _cl=_edLinePrimaryLayer;
-        if(_status&&_cl) _status.textContent=_cl.lineWidth+'px · '+Math.round((_cl.opacity??1)*100)+'%'+(_cl.subPaths?.length?(' · ⊙'+_cl.subPaths.length+' hueco'+(_cl.subPaths.length>1?'s':'')):'');
+        const _cl=_curLine&&_curLine();
+        if(_status&&_cl) _status.textContent=_cl.lineWidth+'px · '+Math.round((_cl.opacity??1)*100)+'%';
       }
       return;
     }
@@ -5333,7 +5312,7 @@ function edDeactivateDrawTool(){
   _edFocusDone = false;
   // Cancelar herramientas shape/line en curso
   _edShapeStart = null; _edShapePreview = null; _edPendingShape = null;
-  _edLinePrimaryLayer = null; // T1: limpiar referencia al objeto primario
+  _edLineFusionId = null; // T1: limpiar ID de fusión
   if (_edLineLayer) {
     if (_edLineLayer.points.length < 2) {
       const idx = edLayers.indexOf(_edLineLayer);
@@ -5669,7 +5648,7 @@ function _edActivateLineTool(isNew) {
   const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
   const hasFill = fillCol !== 'none' && isClosed;
   const fillVal = hasFill ? fillCol : '#ffffff';
-  const nSubPaths = (_cur?.subPaths?.length) || 0;
+  // nSubPaths eliminado (T1: huecos son objetos independientes hasta OK)
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
@@ -5730,8 +5709,7 @@ function _edActivateLineTool(isNew) {
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_cur?.locked?'var(--gray-800)':'transparent'};color:${_cur?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_cur?.locked?'Desbloquear':'Bloquear'}">${_cur?.locked?'🔒':'🔓'}</button>
 
-    <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%${nSubPaths>0?' · ⊙'+nSubPaths+' hueco'+(nSubPaths>1?'s':''):''}</span>
-    ${nSubPaths>0?`<button id="op-line-rmhole" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:900;background:transparent;cursor:pointer;color:#c00" title="Quitar último hueco">⊙✕</button>`:''}
+    <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
 </div>`;
@@ -5878,7 +5856,6 @@ function _edActivateLineTool(isNew) {
     const v=+e.target.value;
     const n=$('op-line-curve-rnum'); if(n) n.value=v;
     window._edCurveRadius=v;
-    // Actualizar en tiempo real el vértice activo
     const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const vi=window._edCurveVertIdx;
     if(la2&&vi>=0){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
@@ -5900,9 +5877,52 @@ function _edActivateLineTool(isNew) {
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
     window._edCurveVertIdx=-1;
-    edPushHistory(); _edShapeClearHistory();
     _edFinishLine();
-    _edLinePrimaryLayer = null; // T1: limpiar al confirmar
+    // T1: fusionar LineLayer del mismo _fusionId concatenando points con null como separador
+    if(_edLineFusionId){
+      const _fid = _edLineFusionId;
+      _edLineFusionId = null;
+      const _members = edLayers.filter(l => l.type==='line' && l._fusionId===_fid && l.closed);
+      if(_members.length > 1){
+        const pw=edPageW(), ph=edPageH();
+        const _primary = _members[0];
+        // Calcular bbox global con todos los puntos
+        const _allAbs = [];
+        _members.forEach(m => m.absPoints().forEach(p => { if(p) _allAbs.push(p); }));
+        const _axs=_allAbs.map(p=>p.x), _ays=_allAbs.map(p=>p.y);
+        const _gx=(_axs.reduce((a,b)=>a+b,0)/_allAbs.length);
+        const _gy=(_ays.reduce((a,b)=>a+b,0)/_allAbs.length);
+        // Nuevo centro = centroide de todos los puntos
+        const _rot = -(_primary.rotation||0)*Math.PI/180;
+        const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
+        // Convertir todos los puntos al espacio local del primario (centrado en centroide)
+        const _allLocal = [];
+        _members.forEach((m, mi) => {
+          if(mi > 0) _allLocal.push(null); // separador
+          const absP = m.absPoints();
+          absP.forEach(p => {
+            if(!p){ _allLocal.push(null); return; }
+            const dxN=p.x-_primary.x, dyN=p.y-_primary.y;
+            _allLocal.push({x: dxN*_cos - dyN*_sin, y: dxN*_sin + dyN*_cos});
+          });
+        });
+        _primary.points = _allLocal;
+        _primary._updateBbox();
+        // Eliminar los demás miembros
+        for(let mi=1; mi<_members.length; mi++){
+          const _mi2 = edLayers.indexOf(_members[mi]);
+          if(_mi2 >= 0) edLayers.splice(_mi2, 1);
+        }
+        // Relleno: usar el primero que tenga
+        if(!_primary.fillColor || _primary.fillColor==='none'){
+          const _wf = _members.find(m => m.fillColor && m.fillColor!=='none');
+          if(_wf) _primary.fillColor = _wf.fillColor;
+        }
+        delete _primary._fusionId;
+        edSelectedIdx = edLayers.indexOf(_primary);
+      } else if(_members.length===1){ delete _members[0]._fusionId; }
+    }
+    edPushHistory(); _edShapeClearHistory();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     edShapeBarHide();
@@ -5929,7 +5949,7 @@ function _edActivateLineTool(isNew) {
     // Capturar snapshot del original ANTES de insertar el duplicado
     const origSnapshot = JSON.stringify(edSerLayer(l));
     const copy=new LineLayer();
-    copy.points=l.points.map(p=>({...p, x:p.x+0.03, y:p.y+0.03}));
+    copy.points=l.points.map(p=>p?({...p, x:p.x+0.03, y:p.y+0.03}):null);
     copy.color=l.color; copy.fillColor=l.fillColor||'none'; copy.lineWidth=l.lineWidth;
     copy.closed=l.closed; copy.opacity=l.opacity??1; copy.rotation=l.rotation||0;
     if(l.cornerRadii){
@@ -5968,15 +5988,6 @@ function _edActivateLineTool(isNew) {
     }
   });
 
-  // ── Quitar último hueco (T1) ──
-  $('op-line-rmhole')?.addEventListener('click',()=>{
-    const l=_curLine(); if(!l||!l.subPaths||!l.subPaths.length) return;
-    _edShapePushHistory();
-    l.subPaths.pop();
-    edRedraw();
-    _edActivateLineTool(false);
-  });
-
   requestAnimationFrame(edFitCanvas);
 }
 
@@ -5986,50 +5997,15 @@ function _edFinishLine() {
     _edLineLayer._updateBbox();
     const finished = _edLineLayer;
     _edLineLayer = null;
-
-    // T1: si hay una LineLayer principal previa (cerrada), comprobar solapamiento
-    const _primary = _edLinePrimaryLayer;
-    if(_primary && finished.closed && _primary.closed && _primary !== finished
-       && edLayers.indexOf(_primary) >= 0){
-      // Detección de solapamiento por bounding box (coordenadas normalizadas)
-      const _hw1=_primary.width/2,  _hh1=_primary.height/2;
-      const _hw2=finished.width/2,  _hh2=finished.height/2;
-      const _overlaps = !(
-        _primary.x+_hw1 < finished.x-_hw2 ||
-        finished.x+_hw2 < _primary.x-_hw1 ||
-        _primary.y+_hh1 < finished.y-_hh2 ||
-        finished.y+_hh2 < _primary.y-_hh1
-      );
-      if(_overlaps){
-        // Fusionar: transformar puntos del nuevo al espacio local del primario
-        const _rot = -(_primary.rotation||0)*Math.PI/180;
-        const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
-        const localPts = finished.absPoints().map(p => {
-          const dxN = p.x - _primary.x;
-          const dyN = p.y - _primary.y;
-          return { x: dxN*_cos - dyN*_sin, y: dxN*_sin + dyN*_cos };
-        });
-        if(!_primary.subPaths) _primary.subPaths = [];
-        _primary.subPaths.push(localPts);
-        // Eliminar el objeto nuevo — queda integrado como subPath
-        const _newIdx = edLayers.indexOf(finished);
-        if(_newIdx >= 0) edLayers.splice(_newIdx, 1);
-        edSelectedIdx = edLayers.indexOf(_primary);
-        _edShapePushHistory();
-        edRedraw();
-        return; // _edLinePrimaryLayer sigue siendo _primary para el siguiente polígono
-      }
-      // Sin solapamiento → objeto independiente; pasa a ser el nuevo primario
-    }
-
-    // Nuevo objeto independiente: registrar como primario para posibles fusiones futuras
     _edPendingShape = null;
     edSelectedIdx = edLayers.indexOf(finished);
-    _edLinePrimaryLayer = finished.closed ? finished : null;
+    // T1: asignar ID de fusión a polígonos cerrados de esta sesión del panel
+    if(finished.closed){
+      if(!_edLineFusionId) _edLineFusionId = 'fusion_' + Math.random().toString(36).slice(2);
+      finished._fusionId = _edLineFusionId;
+    }
     _edShapePushHistory();
     edRedraw();
-
-    // Primera vez (sin panel abierto o minimizado): abrir panel normalmente
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
     if(!_panelOpen && !edMinimized){
       _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
@@ -6044,6 +6020,7 @@ function _edFinishLine() {
     edRedraw();
   }
 }
+
 function _edFreezeDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dlIdx = page.layers.findIndex(l => l.type === 'draw');
@@ -7970,7 +7947,7 @@ function _edFreezeLineLayer(la, idx) {
   sl.rotation = la.rotation || 0;
   // Guardar datos geométricos originales para descongelar
   sl._frozenLine = {
-    points: la.points.map(p=>({...p})),
+    points: la.points.map(p=>p?({...p}):null),
     cornerRadii: {...cr},
     color: la.color,
     fillColor: la.fillColor,
@@ -8712,7 +8689,7 @@ function edSerLayer(l){
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadii:_hasR?{..._cr}:undefined,
-      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>sp.slice()) : undefined};
+      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined};
     if(l.groupId)_lobj.groupId=l.groupId;
     if(l.locked)_lobj.locked=true;
     if(_hasR){
@@ -8783,7 +8760,7 @@ function edDeserLayer(d, pageOrientation){
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
-    if(d.subPaths&&d.subPaths.length) l.subPaths=d.subPaths.map(sp=>sp.slice());
+    if(d.subPaths&&d.subPaths.length) l.subPaths=d.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;});
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
     else l._updateBbox();
     if(d.groupId) l.groupId=d.groupId;

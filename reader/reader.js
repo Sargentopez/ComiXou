@@ -490,32 +490,24 @@ function _render() {
         ctx.drawImage(layerImgs[j], -_bw/2, -_bh/2, _bw, _bh);
       } else {
         ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-        const _hasSubPaths = layer.closed && layer.subPaths && layer.subPaths.length > 0;
-        if (_hasSubPaths) {
-          // T1: sub-paths → Path2D + evenodd para huecos
-          const _buildPath = pts => {
-            const p = new Path2D();
-            if (!pts || pts.length < 2) return p;
-            p.moveTo(pts[0].x * pw, pts[0].y * ph);
-            for (let i = 1; i < pts.length; i++) p.lineTo(pts[i].x * pw, pts[i].y * ph);
-            p.closePath();
-            return p;
-          };
-          const combined = new Path2D();
-          // path principal
-          const _main = _buildPath(layer.points);
-          combined.addPath(_main);
-          // sub-paths
-          for (const sp of layer.subPaths) {
-            if (sp && sp.length >= 3) combined.addPath(_buildPath(sp));
+        // Dividir points en contornos por null
+        const _rContours = []; let _rCur = [];
+        for(const p of layer.points){ if(p===null){ if(_rCur.length>=2) _rContours.push(_rCur); _rCur=[]; } else _rCur.push(p); }
+        if(_rCur.length>=2) _rContours.push(_rCur);
+        if(_rContours.length > 1){
+          // Múltiples contornos → evenodd
+          const _rPath = new Path2D();
+          for(const c of _rContours){
+            _rPath.moveTo(c[0].x*pw, c[0].y*ph);
+            for(let i=1;i<c.length;i++) _rPath.lineTo(c[i].x*pw, c[i].y*ph);
+            _rPath.closePath();
           }
-          if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(combined, 'evenodd'); }
-          if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(combined); }
+          if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(_rPath, 'evenodd'); }
+          if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(_rPath); }
         } else {
           ctx.beginPath();
-          ctx.moveTo(layer.points[0].x * pw, layer.points[0].y * ph);
-          for (let i = 1; i < layer.points.length; i++)
-            ctx.lineTo(layer.points[i].x * pw, layer.points[i].y * ph);
+          const _pts0 = _rContours[0] || [];
+          if(_pts0.length){ ctx.moveTo(_pts0[0].x*pw, _pts0[0].y*ph); for(let i=1;i<_pts0.length;i++) ctx.lineTo(_pts0[i].x*pw, _pts0[i].y*ph); }
           if (layer.closed) ctx.closePath();
           if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
           if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
