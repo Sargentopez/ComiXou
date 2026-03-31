@@ -67,7 +67,10 @@ function AuthView_init() {
 
       showToast(I18n.t('loginOk'));
       setTimeout(() => {
-        Router.go('home');
+        // T7: ir a ruta pendiente si existe (ej: "Crear" sin sesión)
+        const _pending = sessionStorage.getItem('pendingRoute');
+        sessionStorage.removeItem('pendingRoute');
+        Router.go(_pending || 'home');
         requestAnimationFrame(() => Header.refresh());
       }, 600);
     }

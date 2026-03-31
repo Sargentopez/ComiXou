@@ -363,6 +363,25 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
     edConfirm('¿Eliminar esta capa?', ()=>{
+      // T3: si la capa es draw/stroke/shape/line con panel abierto, limpiar UI primero
+      const _delLa = edLayers[realIdx];
+      const _delType = _delLa ? _delLa.type : '';
+      if (_delType === 'draw' || _delType === 'stroke' || _delType === 'shape' || _delType === 'line') {
+        // Cerrar panel de herramienta y desbloquear UI antes del splice
+        const _panel = document.getElementById('edOptionsPanel');
+        if (_panel) { _panel.classList.remove('open'); delete _panel.dataset.mode; }
+        if (typeof edDrawBarHide === 'function') edDrawBarHide();
+        if (typeof edShapeBarHide === 'function') edShapeBarHide();
+        if (typeof _edDrawUnlockUI === 'function') _edDrawUnlockUI();
+        if (typeof _edShapeClearHistory === 'function') _edShapeClearHistory();
+        if (window._edLineLayer) window._edLineLayer = null;
+        if (window._edLineFusionId) window._edLineFusionId = null;
+        edActiveTool = 'select';
+        if (typeof edCanvas !== 'undefined') edCanvas.className = '';
+        const _cur = document.getElementById('edBrushCursor');
+        if (_cur) _cur.style.display = 'none';
+        if (edSelectedIdx === realIdx) edSelectedIdx = -1;
+      }
       edLayers.splice(realIdx, 1);
       if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
       edPushHistory(); edRedraw(); _lyRender();

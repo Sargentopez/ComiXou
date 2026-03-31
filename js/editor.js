@@ -5140,15 +5140,10 @@ function _edLineAddPoint(nx, ny){
       // Al cerrar un polígono → modo selección para editar vértices
       if(!edMinimized){
         _edLineType='select'; edActiveTool='select'; edCanvas.className='';
-        // Actualizar botones del panel sin recrearlo
-        const _db=$('op-line-draw-btn'), _sb=$('op-line-select-btn');
-        if(_db){ _db.style.border='2px solid var(--gray-300)'; _db.style.background='transparent'; }
-        if(_sb){ _sb.style.border='2px solid var(--black)'; _sb.style.background='rgba(0,0,0,.08)'; }
-        const _info=$('op-line-info');
-        if(_info) _info.textContent='';
-        const _status=$('op-line-status');
-        const _cl=_curLine&&_curLine();
-        if(_status&&_cl) _status.textContent=_cl.lineWidth+'px · '+Math.round((_cl.opacity??1)*100)+'%';
+        // T6: recrear el panel completo para reflejar modo selección correctamente
+        // (incluye botón ╱ listo para crear polígono fusionable)
+        const _panelOpen2 = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
+        if(_panelOpen2) _edActivateLineTool(false);
       }
       return;
     }
@@ -5497,13 +5492,13 @@ function _edActivateShapeTool() {
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dsize" min="0" max="20" value="${lw}" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-dsize-num" min="0" max="20" value="${lw}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-dsize-num" min="0" max="20" value="${lw}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-opacity-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
     <div id="op-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-shape-opacity" min="0" max="100" value="${opacity}" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-shape-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-shape-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -5521,7 +5516,7 @@ function _edActivateShapeTool() {
     <button id="op-shape-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
     <div id="op-shape-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-shape-curve-r" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-shape-curve-rnum" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-shape-curve-rnum" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-shape-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
@@ -5796,13 +5791,13 @@ function _edActivateLineTool(isNew) {
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dsize" min="0" max="20" value="${lw}" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-dsize-num" min="0" max="20" value="${lw}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-dsize-num" min="0" max="20" value="${lw}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-opacity-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
     <div id="op-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-line-opacity" min="0" max="100" value="${opacity}" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-line-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -5812,7 +5807,7 @@ function _edActivateLineTool(isNew) {
     <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     <span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>
   </div>
@@ -6322,6 +6317,23 @@ function _edShowColorPicker(onColorChange){
   overlay.addEventListener('touchstart',  e=>e.stopPropagation(), {passive:true, capture:true});
 }
 
+
+/* T5 — Cerrar teclado virtual Android al pulsar Enter en inputs numéricos */
+function _edBindNumInput(el) {
+  if (!el) return;
+  el.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
+  });
+  el.addEventListener('change', function() {
+    // En Android táctil, blur cierra el teclado virtual
+    if (window._edIsTouch) this.blur();
+  });
+}
+function _edBindAllNumInputs(container) {
+  if (!container) return;
+  container.querySelectorAll('input[type="number"]').forEach(_edBindNumInput);
+}
+
 function edRenderOptionsPanel(mode){
   const panel=$('edOptionsPanel');if(!panel)return;
   // Siempre restaurar visibility (puede quedar hidden por edMinimize)
@@ -6391,7 +6403,7 @@ function edRenderOptionsPanel(mode){
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
         style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-dsize-num" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-dsize-num" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
         style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
@@ -6401,7 +6413,7 @@ function edRenderOptionsPanel(mode){
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
         style="flex:1;min-width:40px;accent-color:var(--black)">
-      <input type="number" id="op-draw-opacity-num" min="1" max="100" value="${edDrawOpacity}"
+      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-draw-opacity-num" min="1" max="100" value="${edDrawOpacity}"
         style="width:38px;text-align:center;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
     </div>
     ${isEr ? `
@@ -6862,7 +6874,7 @@ function edRenderOptionsPanel(mode){
           <input type="checkbox" id="pp-italic" ${la.fontItalic?'checked':''}><i>I</i>
         </label>
         <span class="op-prop-label" style="min-width:auto;margin-left:8px">Tamaño</span>
-        <input type="number" id="pp-fs" value="${la.fontSize}" min="8" max="120">
+        <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-fs" value="${la.fontSize}" min="8" max="120">
         <input type="color" id="pp-color" value="${la.color}">
         <input type="color" id="pp-bg" value="${la.backgroundColor.startsWith('#')?la.backgroundColor:'#ffffff'}">
       </div>
@@ -6887,7 +6899,7 @@ function edRenderOptionsPanel(mode){
         </div>
         <div class="op-prop-row">
           <span class="op-prop-label">Nº voces</span>
-          <input type="number" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
+          <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
           <label style="display:flex;align-items:center;gap:4px;font-size:.75rem;font-weight:700;margin-left:12px">
             <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}>  Cola
           </label>
@@ -6905,7 +6917,7 @@ function edRenderOptionsPanel(mode){
     } else if(la.type==='image'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
-        <input type="number" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
+        <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
       </div>
       <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
@@ -7995,10 +8007,10 @@ function edDrawBarShow() {
   }
   bar.style.left = _edbX + 'px';
   bar.style.top  = _edbY + 'px';
-  // Default cursor offset: activado en táctil, desactivado en PC — solo si aún no se ha usado
+  // T2: cursor offset NUNCA activo por defecto — el usuario lo activa manualmente
   if(typeof _edCursorOffsetInitialized === 'undefined'){
     window._edCursorOffsetInitialized = true;
-    _edCursorOffset = !!(window._edIsTouch);
+    _edCursorOffset = false;
   }
   _edbSyncTool();
 }
@@ -9620,6 +9632,17 @@ function EditorView_init(){
     [document, 'pointercancel',edOnEnd,   {}],
   ];
   window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
+  // T5: Cerrar teclado virtual Android al pulsar Enter en inputs numéricos del panel
+  (function(){
+    const _panel = document.getElementById('edOptionsPanel');
+    if(_panel){
+      _panel.addEventListener('keydown', function(e){
+        if(e.key==='Enter' && e.target.tagName==='INPUT' && e.target.type==='number'){
+          e.preventDefault(); e.target.blur();
+        }
+      }, {passive:false});
+    }
+  })();
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click', () => {

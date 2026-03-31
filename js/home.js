@@ -86,7 +86,13 @@ function setupPageNav() {
 
   // Crear
   document.getElementById('createBtn')?.addEventListener('click', () => {
-    Router.go(Auth.isLogged() ? 'my-comics' : 'login');
+    if (Auth.isLogged()) {
+      Router.go('my-comics');
+    } else {
+      // T7: guardar ruta pendiente para ir directo tras login
+      sessionStorage.setItem('pendingRoute', 'my-comics');
+      Router.go('login');
+    }
   });
 }
 
