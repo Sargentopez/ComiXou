@@ -3533,25 +3533,28 @@ function edOnStart(e){
       const _isT2 = true;
       const _hitNode = _edLineHitTest(_edLineLayer, c.nx, c.ny, _isT2);
       if(_hitNode && _hitNode.type==='node'){
-        // Toque sobre nodo existente — registrar para doble tap (sin timer)
-        const _hitId2 = _hitNode.idx;
-        const _now3 = Date.now();
-        const _sameHit2 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId2
-          && (_now3 - _edLastNodeTapTime) < 400;
-        if(_sameHit2){
-          // Doble tap confirmado → eliminar nodo (mínimo 2 puntos)
-          _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
-          if(_edLineLayer.points.length > 2){
-            _edLineLayer.points.splice(_hitNode.idx, 1);
-            if(_edLineLayer.points.length) _edLineLayer._updateBbox();
-            _edShapePushHistory(); edRedraw();
+        // Si es el primer nodo y hay 3+ puntos → dejar pasar para cerrar el polígono
+        if(_hitNode.idx === 0 && _edLineLayer.points.length >= 3){
+          // No interceptar — _edLineAddPoint lo cerrará
+        } else {
+          // Toque sobre nodo existente (no primero) — registrar para doble tap
+          const _hitId2 = _hitNode.idx;
+          const _now3 = Date.now();
+          const _sameHit2 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId2
+            && (_now3 - _edLastNodeTapTime) < 400;
+          if(_sameHit2){
+            _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
+            if(_edLineLayer.points.length > 2){
+              _edLineLayer.points.splice(_hitNode.idx, 1);
+              if(_edLineLayer.points.length) _edLineLayer._updateBbox();
+              _edShapePushHistory(); edRedraw();
+            }
+            return;
           }
+          _edLastNodeTapTime=_now3; _edLastNodeTapIdx=_hitId2;
+          edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_hitNode.idx;
           return;
         }
-        _edLastNodeTapTime=_now3; _edLastNodeTapIdx=_hitId2;
-        // Primer tap sobre nodo: también iniciar drag
-        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_hitNode.idx;
-        return;
       }
     }
     // En táctil: retardo breve para detectar si viene un segundo dedo (pinch/zoom)
