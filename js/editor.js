@@ -2759,10 +2759,12 @@ function edPinchMove(e) {
       // Pan: mover el objeto con el centro del pinch
       if(edPinchScale0._isLineLayer){
         // Convertir desplazamiento de pantalla a coordenadas normalizadas de página
+        // usando el mismo método que edCoords (resta el top del canvas)
         const pw=edPageW(), ph=edPageH();
         const z=edPinchCamera0.z;
+        const canvasTop = parseFloat(edCanvas?.style.top || 0);
         const dxScreen = ctr.x - edPinchCenter0.x;
-        const dyScreen = ctr.y - edPinchCenter0.y;
+        const dyScreen = (ctr.y - canvasTop) - (edPinchCenter0.y - canvasTop);
         const dxNorm = dxScreen / (pw * z);
         const dyNorm = dyScreen / (ph * z);
         la.x = edPinchScale0.x + dxNorm;
@@ -4580,6 +4582,7 @@ let _edShapeHistory = [], _edShapeHistIdx = -1, _edShapeHistIdxBase = 0;
 
 function _edShapePushHistory(){
   let la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  if(!la && _edLineLayer) la = _edLineLayer; // durante construcción
   if(!la){
     const _mode = $("edOptionsPanel")?.dataset.mode;
     if(_mode==="shape"||_mode==="line"||$("edShapeBar")?.classList.contains("visible")){
@@ -4626,12 +4629,13 @@ function _edShapeClearHistory(){
 function _edShapeApplyHistory(snapshot){
   if(!snapshot){
     // Estado inicial: el objeto no existía → eliminarlo del canvas y cerrar panel
-    const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : (_edLineLayer || null);
     if(la){
       const idx = edLayers.indexOf(la);
       if(idx>=0) edLayers.splice(idx, 1);
       const page=edPages[edCurrentPage]; if(page) page.layers=edLayers;
     }
+    if(la === _edLineLayer) _edLineLayer = null;
     edSelectedIdx=-1;
     edCloseOptionsPanel();
     edShapeBarHide();
@@ -4641,7 +4645,7 @@ function _edShapeApplyHistory(snapshot){
     edRedraw();
     return;
   }
-  const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null; if(!la) return;
+  const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : (_edLineLayer || null); if(!la) return;
   const d = JSON.parse(snapshot);
   // Restaurar propiedades del layer sin cambiar su posición en el array
   if(d.color        !== undefined) la.color       = d.color;
@@ -5060,6 +5064,7 @@ function _edLineAddPoint(nx, ny){
     }
     _edLineLayer.addAbsPoint(nx, ny);
   }
+  _edShapePushHistory(); // guardar estado tras cada nodo para deshacer/rehacer
   edRedraw();
   const info=$('op-line-info');
   if(info) info.textContent=`${_edLineLayer.points.length} vértice(s). Toca el primero para cerrar.`;
