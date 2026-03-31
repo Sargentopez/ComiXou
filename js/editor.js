@@ -3006,14 +3006,15 @@ function _edLineHitTest(la, nx, ny, isTouch){
     };
   };
 
-  // 1. Comprobar nodos primero (prioridad sobre segmentos) — saltar null
+  // 1. Comprobar nodos — devolver el MÁS CERCANO dentro del radio
+  let _bestNodeDist = hitNode, _bestNodeIdx = -1;
   for(let i=0;i<n;i++){
     if(!la.points[i]) continue;
     const {ax,ay}=nodePos(i);
-    if(Math.hypot((nx-ax)*pw,(ny-ay)*ph)*z < hitNode){
-      return {type:'node', idx:i};
-    }
+    const _d=Math.hypot((nx-ax)*pw,(ny-ay)*ph)*z;
+    if(_d < _bestNodeDist){ _bestNodeDist=_d; _bestNodeIdx=i; }
   }
+  if(_bestNodeIdx >= 0) return {type:'node', idx:_bestNodeIdx};
 
   // 2. Comprobar segmentos — saltar null y no cruzar fronteras de contorno
   const absP=la.absPoints();
@@ -3611,25 +3612,24 @@ function edOnStart(e){
             return;
           } else {
             // Añadir nodo en el centro del segmento
-            const _absP2=la.absPoints();
-            const _j2=(_lineHit.idx+1)%_n;
-            const _a2=_absP2[_lineHit.idx], _b2=_absP2[_j2];
-            const mx=(_a2.x+_b2.x)/2, my=(_a2.y+_b2.y)/2;
-            const rotInv=-(la.rotation||0)*Math.PI/180;
-            const dx=mx-la.x, dy=my-la.y;
-            const lx=dx*Math.cos(rotInv)-dy*Math.sin(rotInv);
-            const ly=dx*Math.sin(rotInv)+dy*Math.cos(rotInv);
-            la.points.splice(_j2,0,{x:lx,y:ly});
-            if(la.cornerRadii && Object.keys(la.cornerRadii).length){
-              const newCR = {};
-              for(const k in la.cornerRadii){
-                const ki = parseInt(k);
-                if(ki < _j2) newCR[ki] = la.cornerRadii[k];
-                else newCR[ki+1] = la.cornerRadii[k];
+            // Calcular punto medio directamente desde los puntos locales (ignora nulls)
+            const _segI = _lineHit.idx;
+            const _segJ = (_segI+1)%_n;
+            const _pA = la.points[_segI], _pB = la.points[_segJ];
+            if(_pA && _pB){
+              const newLocal = {x:(_pA.x+_pB.x)/2, y:(_pA.y+_pB.y)/2};
+              la.points.splice(_segJ,0,newLocal);
+              if(la.cornerRadii && Object.keys(la.cornerRadii).length){
+                const newCR = {};
+                for(const k in la.cornerRadii){
+                  const ki = parseInt(k);
+                  if(ki < _segJ) newCR[ki] = la.cornerRadii[k];
+                  else newCR[ki+1] = la.cornerRadii[k];
+                }
+                la.cornerRadii = newCR;
               }
-              la.cornerRadii = newCR;
+              la._updateBbox(); _edShapePushHistory(); edRedraw();
             }
-            la._updateBbox(); _edShapePushHistory(); edRedraw();
             return;
           }
         } else {
@@ -3737,7 +3737,9 @@ function edOnStart(e){
   const _activeMode  = _activePanel?.dataset.mode;
   const _shapeBarOpen = $('edShapeBar')?.classList.contains('visible');
   const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
-  if(_editingVectorial && edSelectedIdx >= 0){
+  // En modo selección del panel line, permitir handles normales de resize/rotate
+  const _lineSelectMode = _activeMode === 'line' && _edLineType === 'select' && !_edLineLayer;
+  if(_editingVectorial && !_lineSelectMode && edSelectedIdx >= 0){
     // Comprobar si el click es sobre el objeto seleccionado → permitir drag
     const _la = edLayers[edSelectedIdx];
     if(_la && _la.contains(c.nx, c.ny)){
@@ -4995,6 +4997,7 @@ function edColorErase(nx, ny){
   ctx.putImageData(imageData, x0, y0);
   edRedraw();
 }
+let _edLineAddTimer = null; // retardo táctil para detectar segundo dedo
 function _edLineAddPoint(nx, ny){
   if(!_edLineLayer){
     // Primera vez: crear capa con el primer punto como centro
@@ -5719,10 +5722,10 @@ function _edActivateLineTool(isNew) {
   // Guardar estado previo en historial global (objeto existente, no nuevo)
   if(!isNew) edPushHistory();
   _edShapeInitHistory(isNew);
-  // Centrar cámara en el objeto al abrir el panel
-  _edFocusDone = false;
+  // Centrar cámara solo si es la primera apertura (isNew) o si aún no se ha centrado
+  if(isNew) _edFocusDone = false;
   const _focusLayer = _edLineLayer || (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null);
-  if(_focusLayer) requestAnimationFrame(()=>_edFocusOnLayer(_focusLayer));
+  if(_focusLayer && !_edFocusDone) requestAnimationFrame(()=>_edFocusOnLayer(_focusLayer));
 
   // ── Helpers ──
   const _curLine = () => {
@@ -5988,7 +5991,7 @@ function _edActivateLineTool(isNew) {
     }
   });
 
-  requestAnimationFrame(edFitCanvas);
+  if(isNew) requestAnimationFrame(edFitCanvas);
 }
 
 
