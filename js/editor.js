@@ -3333,6 +3333,23 @@ function edOnStart(e){
     }
     // Cancelar el timer de añadir nodo si el segundo dedo llega antes de que expire
     clearTimeout(window._edLineTouchTimer);
+    // Sistema de pan independiente para _edLineLayer en construcción
+    if(edActiveTool==='line' && _edLineLayer){
+      const _pts2 = [...window._edActivePointers.values()];
+      window._edLinePan = {
+        cx0: (_pts2[0].x+_pts2[1].x)/2,
+        cy0: (_pts2[0].y+_pts2[1].y)/2,
+        lx0: _edLineLayer.x,
+        ly0: _edLineLayer.y,
+        // Snapshot de posiciones de todos los objetos de la sesión de fusión
+        fsnaps: (() => {
+          const m = new Map();
+          if(_edLineFusionId) edLayers.forEach(l=>{ if(l.type==='line'&&l._fusionId===_edLineFusionId) m.set(l,{x:l.x,y:l.y}); });
+          return m;
+        })()
+      };
+      return; // no activar pinch del sistema general
+    }
     edPinchStart(e);
     return;
   }
@@ -4200,6 +4217,23 @@ function edOnMove(e){
   if(window._edActivePointers && window._edActivePointers.size >= 2){
     if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
     e.preventDefault();
+    // Pan independiente para _edLineLayer en construcción
+    if(window._edLinePan && edActiveTool==='line' && _edLineLayer){
+      const _pts = [...window._edActivePointers.values()];
+      const cx = (_pts[0].x+_pts[1].x)/2;
+      const cy = (_pts[0].y+_pts[1].y)/2;
+      const pw=edPageW(), ph=edPageH(), z=edCamera.z;
+      const dxNorm = (cx - window._edLinePan.cx0) / (pw * z);
+      const dyNorm = (cy - window._edLinePan.cy0) / (ph * z);
+      _edLineLayer.x = window._edLinePan.lx0 + dxNorm;
+      _edLineLayer.y = window._edLinePan.ly0 + dyNorm;
+      // Mover también los objetos ya cerrados de la sesión de fusión
+      window._edLinePan.fsnaps.forEach((snap, l) => {
+        l.x = snap.x + dxNorm;
+        l.y = snap.y + dyNorm;
+      });
+      edRedraw(); return;
+    }
     // Con multiselección activa: pinch afecta SOLO al grupo — nunca a la cámara
     if(edActiveTool==='multiselect' && edMultiSel.length && window._edPinchMulti){
       edPinchMove(e);
@@ -4437,7 +4471,10 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
-  // Limpiar drag de regla si estaba activo
+  // Limpiar pan de _edLineLayer si se sueltan dedos
+  if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
+    window._edLinePan = null;
+  }
   if(_edRuleDrag) {
     _edRuleDrag = null;
     edRedraw();
