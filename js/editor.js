@@ -5448,6 +5448,9 @@ function edDeactivateDrawTool(){
   if(panel){ panel.classList.remove('open'); delete panel.dataset.mode; }
   edDrawBarHide();
   _edDrawUnlockUI();
+  // Apagar cursor offset al salir del panel de dibujo
+  _edCursorOffset = false;
+  _edOffsetHide();
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
 }

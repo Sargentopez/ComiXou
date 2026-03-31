@@ -66,8 +66,10 @@ function _lySetCanvasTouch(enabled) {
   }
 }
 function _lyBlockTouch(e) {
-  // Permitir scroll dentro del overlay; bloquear todo lo demás
-  if (!e.target.closest('#edLayersOverlay') && !e.target.closest('#edPagesOverlay')) {
+  // Permitir scroll dentro del overlay y toques en el modal de confirmación
+  if (!e.target.closest('#edLayersOverlay') &&
+      !e.target.closest('#edPagesOverlay') &&
+      !e.target.closest('#edConfirmModal')) {
     e.preventDefault();
   }
 }
