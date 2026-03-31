@@ -2672,7 +2672,14 @@ function edPinchStart(e) {
     x: _laForPinch.x, y: _laForPinch.y,
     _isLineLayer: _laForPinch === _edLineLayer && !la, // es la LineLayer en construcción
     _linePoints: _laForPinch.type==='line' ? _laForPinch.points.map(p=>p?({...p}):null) : null,
-    _subPaths: _laForPinch.type==='line' && _laForPinch.subPaths && _laForPinch.subPaths.length ? _laForPinch.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null } : null;
+    _subPaths: _laForPinch.type==='line' && _laForPinch.subPaths && _laForPinch.subPaths.length ? _laForPinch.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null,
+    // Snapshot de posiciones de todos los objetos de la sesión de fusión
+    _fusionSnaps: (_laForPinch === _edLineLayer && !la && _edLineFusionId) ? (() => {
+      const m = new Map();
+      edLayers.forEach(l=>{ if(l.type==='line'&&l._fusionId===_edLineFusionId) m.set(l,{x:l.x,y:l.y}); });
+      return m;
+    })() : null
+  } : null;
   // En modo draw, el pinch mueve la cámara (no el dibujo)
   _edDrawPinch = null;
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
@@ -2751,12 +2758,24 @@ function edPinchMove(e) {
       la.rotation = edPinchScale0.rot + dAngle;
       // Pan: mover el objeto con el centro del pinch
       if(edPinchScale0._isLineLayer){
-        // Para LineLayer en construcción: trasladar con el desplazamiento del pinch
+        // Convertir desplazamiento de pantalla a coordenadas normalizadas de página
         const pw=edPageW(), ph=edPageH();
+        const z=edPinchCamera0.z;
         const dxScreen = ctr.x - edPinchCenter0.x;
         const dyScreen = ctr.y - edPinchCenter0.y;
-        la.x = edPinchScale0.x + dxScreen / (ph * edPinchCamera0.z);
-        la.y = edPinchScale0.y + dyScreen / (ph * edPinchCamera0.z);
+        const dxNorm = dxScreen / (pw * z);
+        const dyNorm = dyScreen / (ph * z);
+        la.x = edPinchScale0.x + dxNorm;
+        la.y = edPinchScale0.y + dyNorm;
+        // Mover también todos los objetos de la misma sesión de fusión
+        if(_edLineFusionId){
+          edLayers.forEach(l=>{
+            if(l!==la && l.type==='line' && l._fusionId===_edLineFusionId){
+              const snap=edPinchScale0._fusionSnaps&&edPinchScale0._fusionSnaps.get(l);
+              if(snap){ l.x=snap.x+dxNorm; l.y=snap.y+dyNorm; }
+            }
+          });
+        }
       }
       // LineLayer: escalar también los puntos internos
       if (la.type === 'line' && edPinchScale0._linePoints) {
@@ -3310,13 +3329,8 @@ function edOnStart(e){
       const _dlReset = edPages[edCurrentPage]?.layers.find(l => l.type==='draw');
       if(_dlReset){ _dlReset._lastX = 0; _dlReset._lastY = 0; }
     }
-    // Si se estaba añadiendo un punto de línea vectorial (táctil), cancelar el último punto
-    // — el segundo dedo es un pinch, no un nodo nuevo (igual que el dibujo a mano)
-    if(edActiveTool==='line' && _edLineLayer && _edLineLayer.points.length > 1){
-      _edLineLayer.points.pop();
-      _edLineLayer._updateBbox();
-      edRedraw();
-    }
+    // Cancelar el timer de añadir nodo si el segundo dedo llega antes de que expire
+    clearTimeout(window._edLineTouchTimer);
     edPinchStart(e);
     return;
   }
