@@ -3333,18 +3333,21 @@ function edOnStart(e){
     }
     // Cancelar el timer de añadir nodo si el segundo dedo llega antes de que expire
     clearTimeout(window._edLineTouchTimer);
-    // Sistema de pan independiente para _edLineLayer en construcción
-    if(edActiveTool==='line' && _edLineLayer){
+    // Sistema de pan para LineLayer (en construcción o seleccionado)
+    const _panTarget = _edLineLayer ||
+      (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line' ? edLayers[edSelectedIdx] : null);
+    if(_panTarget){
       const _pts2 = [...window._edActivePointers.values()];
+      const _fusId = _panTarget._fusionId || _edLineFusionId;
       window._edLinePan = {
         cx0: (_pts2[0].x+_pts2[1].x)/2,
         cy0: (_pts2[0].y+_pts2[1].y)/2,
-        lx0: _edLineLayer.x,
-        ly0: _edLineLayer.y,
-        // Snapshot de posiciones de todos los objetos de la sesión de fusión
+        lx0: _panTarget.x,
+        ly0: _panTarget.y,
+        target: _panTarget,
         fsnaps: (() => {
           const m = new Map();
-          if(_edLineFusionId) edLayers.forEach(l=>{ if(l.type==='line'&&l._fusionId===_edLineFusionId) m.set(l,{x:l.x,y:l.y}); });
+          if(_fusId) edLayers.forEach(l=>{ if(l!==_panTarget && l.type==='line'&&l._fusionId===_fusId) m.set(l,{x:l.x,y:l.y}); });
           return m;
         })()
       };
@@ -4220,21 +4223,41 @@ function edOnMove(e){
     if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
     e.preventDefault();
     // Pan independiente para _edLineLayer en construcción
-    if(window._edLinePan && edActiveTool==='line' && _edLineLayer){
-      const _pts = [...window._edActivePointers.values()];
-      const cx = (_pts[0].x+_pts[1].x)/2;
-      const cy = (_pts[0].y+_pts[1].y)/2;
-      const pw=edPageW(), ph=edPageH(), z=edCamera.z;
-      const dxNorm = (cx - window._edLinePan.cx0) / (pw * z);
-      const dyNorm = (cy - window._edLinePan.cy0) / (ph * z);
-      _edLineLayer.x = window._edLinePan.lx0 + dxNorm;
-      _edLineLayer.y = window._edLinePan.ly0 + dyNorm;
-      // Mover también los objetos ya cerrados de la sesión de fusión
-      window._edLinePan.fsnaps.forEach((snap, l) => {
-        l.x = snap.x + dxNorm;
-        l.y = snap.y + dyNorm;
-      });
-      edRedraw(); return;
+    if(window._edLinePan){
+      const _panTgt = window._edLinePan.target;
+      if(_panTgt){
+        const _pts = [...window._edActivePointers.values()];
+        const cx = (_pts[0].x+_pts[1].x)/2;
+        const cy = (_pts[0].y+_pts[1].y)/2;
+        const pw=edPageW(), ph=edPageH(), z=edCamera.z;
+        const dxNorm = (cx - window._edLinePan.cx0) / (pw * z);
+        const dyNorm = (cy - window._edLinePan.cy0) / (ph * z);
+        _panTgt.x = window._edLinePan.lx0 + dxNorm;
+        _panTgt.y = window._edLinePan.ly0 + dyNorm;
+        // Mover también los objetos de la sesión de fusión
+        window._edLinePan.fsnaps.forEach((snap, l) => {
+          l.x = snap.x + dxNorm;
+          l.y = snap.y + dyNorm;
+        });
+        // Aplicar resize si hay snapshot de pinch
+        if(edPinchScale0 && edPinchDist0 > 0){
+          const _dist = _pinchDist(window._edActivePointers);
+          const _ratio = _dist / edPinchDist0;
+          const _ang = _pinchAngle(window._edActivePointers);
+          const _dAng = (_ang - edPinchAngle0) * 180 / Math.PI;
+          const newW = Math.min(Math.max(edPinchScale0.w * _ratio, 0.04), 2.0);
+          const newH = newW * (edPinchScale0.h / Math.max(edPinchScale0.w, 0.01));
+          _panTgt.width = newW;
+          _panTgt.height = newH;
+          _panTgt.rotation = edPinchScale0.rot + _dAng;
+          if(_panTgt.type==='line' && edPinchScale0._linePoints){
+            const sw = newW / edPinchScale0.w;
+            const sh = newH / edPinchScale0.h;
+            _panTgt.points = edPinchScale0._linePoints.map(p => p ? ({x:p.x*sw, y:p.y*sh}) : null);
+          }
+        }
+        edRedraw(); return;
+      }
     }
     // Con multiselección activa: pinch afecta SOLO al grupo — nunca a la cámara
     if(edActiveTool==='multiselect' && edMultiSel.length && window._edPinchMulti){
