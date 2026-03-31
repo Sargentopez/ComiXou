@@ -2666,9 +2666,13 @@ function edPinchStart(e) {
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
   // LOCK: objeto bloqueado — no capturar snapshot para resize/rotate por pinch
   const la = (!isDrawTool && edSelectedIdx >= 0 && !edLayers[edSelectedIdx]?.locked) ? edLayers[edSelectedIdx] : null;
-  edPinchScale0 = la ? { w: la.width, h: la.height, rot: la.rotation||0,
-    _linePoints: la.type==='line' ? la.points.map(p=>p?({...p}):null) : null,
-    _subPaths: la.type==='line' && la.subPaths && la.subPaths.length ? la.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null } : null;
+  // T1: si hay LineLayer en construcción, usarla como objeto pincheable
+  const _laForPinch = la || (_edLineLayer && edActiveTool==='line' ? _edLineLayer : null);
+  edPinchScale0 = _laForPinch ? { w: _laForPinch.width, h: _laForPinch.height, rot: _laForPinch.rotation||0,
+    x: _laForPinch.x, y: _laForPinch.y,
+    _isLineLayer: _laForPinch === _edLineLayer && !la, // es la LineLayer en construcción
+    _linePoints: _laForPinch.type==='line' ? _laForPinch.points.map(p=>p?({...p}):null) : null,
+    _subPaths: _laForPinch.type==='line' && _laForPinch.subPaths && _laForPinch.subPaths.length ? _laForPinch.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null } : null;
   // En modo draw, el pinch mueve la cámara (no el dibujo)
   _edDrawPinch = null;
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
@@ -2737,13 +2741,23 @@ function edPinchMove(e) {
     edRedraw();
   } else if (edPinchScale0) {
     // ── Modo objeto individual: escalar y rotar el layer seleccionado ──
-    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    // T1: puede ser _edLineLayer (en construcción) o un objeto seleccionado
+    const la = edPinchScale0._isLineLayer ? _edLineLayer : (edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null);
     if (la) {
       const newW = Math.min(Math.max(edPinchScale0.w * ratio, 0.04), 2.0);
-      const newH = newW * (edPinchScale0.h / edPinchScale0.w);
+      const newH = newW * (edPinchScale0.h / Math.max(edPinchScale0.w, 0.01));
       la.width  = newW;
       la.height = newH;
       la.rotation = edPinchScale0.rot + dAngle;
+      // Pan: mover el objeto con el centro del pinch
+      if(edPinchScale0._isLineLayer){
+        // Para LineLayer en construcción: trasladar con el desplazamiento del pinch
+        const pw=edPageW(), ph=edPageH();
+        const dxScreen = ctr.x - edPinchCenter0.x;
+        const dyScreen = ctr.y - edPinchCenter0.y;
+        la.x = edPinchScale0.x + dxScreen / (ph * edPinchCamera0.z);
+        la.y = edPinchScale0.y + dyScreen / (ph * edPinchCamera0.z);
+      }
       // LineLayer: escalar también los puntos internos
       if (la.type === 'line' && edPinchScale0._linePoints) {
         const sw = newW / edPinchScale0.w;
@@ -2756,7 +2770,7 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom ──
-    const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0;
+    const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer;
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
