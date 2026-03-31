@@ -3527,16 +3527,40 @@ function edOnStart(e){
   if(edActiveTool==='line'){
     if(tgt !== edCanvas) return;
     const c=edCoords(e);
+    // En táctil: comprobar primero si hay un nodo existente para doble-tap
+    // Si el toque cae sobre un nodo, no usar timer — procesar inmediatamente
+    if(e.pointerType === 'touch' && _edLineLayer && edSelectedIdx>=0 && edLayers[edSelectedIdx]===_edLineLayer){
+      const _isT2 = true;
+      const _hitNode = _edLineHitTest(_edLineLayer, c.nx, c.ny, _isT2);
+      if(_hitNode && _hitNode.type==='node'){
+        // Toque sobre nodo existente — registrar para doble tap (sin timer)
+        const _hitId2 = _hitNode.idx;
+        const _now3 = Date.now();
+        const _sameHit2 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId2
+          && (_now3 - _edLastNodeTapTime) < 400;
+        if(_sameHit2){
+          // Doble tap confirmado → eliminar nodo (mínimo 2 puntos)
+          _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
+          if(_edLineLayer.points.length > 2){
+            _edLineLayer.points.splice(_hitNode.idx, 1);
+            if(_edLineLayer.points.length) _edLineLayer._updateBbox();
+            _edShapePushHistory(); edRedraw();
+          }
+          return;
+        }
+        _edLastNodeTapTime=_now3; _edLastNodeTapIdx=_hitId2;
+        // Primer tap sobre nodo: también iniciar drag
+        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_hitNode.idx;
+        return;
+      }
+    }
     // En táctil: retardo breve para detectar si viene un segundo dedo (pinch/zoom)
-    // antes de registrar el toque como nodo nuevo — igual que el dibujo a mano
     if(e.pointerType === 'touch'){
       const _pid = e.pointerId;
       const _cx = c.nx, _cy = c.ny;
       clearTimeout(window._edLineTouchTimer);
       window._edLineTouchTimer = setTimeout(()=>{
-        // Si ya hay 2+ dedos activos, era un pinch — no añadir nodo
         if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-        // Si la herramienta ya no está activa (cerrada durante el delay), salir
         if(edActiveTool !== 'line') return;
         _edLineAddPoint(_cx, _cy);
       }, 120);
@@ -5048,14 +5072,15 @@ function _edLineAddPoint(nx, ny){
     if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)<15){
       _edLineLayer.closed=true;
       _edFinishLine();
-      // T1: mantener herramienta en modo dibujar para el siguiente polígono.
-      // NO llamar _edActivateLineTool aquí — evita reseteo de cámara (edFitCanvas).
-      // El panel se actualiza solo desde _edFinishLine si hace falta.
+      // Al cerrar un polígono → modo selección para editar vértices
       if(!edMinimized){
-        _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
-        // Actualizar solo el texto de info del panel sin recrearlo
+        _edLineType='select'; edActiveTool='select'; edCanvas.className='';
+        // Actualizar botones del panel sin recrearlo
+        const _db=$('op-line-draw-btn'), _sb=$('op-line-select-btn');
+        if(_db){ _db.style.border='2px solid var(--gray-300)'; _db.style.background='transparent'; }
+        if(_sb){ _sb.style.border='2px solid var(--black)'; _sb.style.background='rgba(0,0,0,.08)'; }
         const _info=$('op-line-info');
-        if(_info) _info.textContent='Toca para añadir vértices';
+        if(_info) _info.textContent='';
         const _status=$('op-line-status');
         const _cl=_curLine&&_curLine();
         if(_status&&_cl) _status.textContent=_cl.lineWidth+'px · '+Math.round((_cl.opacity??1)*100)+'%';
@@ -6044,7 +6069,7 @@ function _edFinishLine() {
     edRedraw();
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
     if(!_panelOpen && !edMinimized){
-      _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
+      _edLineType='select'; edActiveTool='select'; edCanvas.className='';
       _edActivateLineTool(true);
     }
   } else {
