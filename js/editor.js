@@ -3348,7 +3348,9 @@ function edOnStart(e){
           return m;
         })()
       };
-      return; // no activar pinch del sistema general
+      // También iniciar pinch para que el resize funcione
+      edPinchStart(e);
+      return;
     }
     edPinchStart(e);
     return;
@@ -5850,7 +5852,16 @@ function _edActivateLineTool(isNew) {
   $('op-tool-line')?.addEventListener('click',()=>{ edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
 
   // ── Modo dibujar / seleccionar ──
-  $('op-line-draw-btn')?.addEventListener('click',()=>{ _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
+  $('op-line-draw-btn')?.addEventListener('click',()=>{
+    _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
+    // Reactivar ID de fusión para que el nuevo polígono pueda fusionarse con el actual
+    const _curL = _curLine&&_curLine();
+    if(_curL){
+      if(!_curL._fusionId) _curL._fusionId = 'fusion_' + Math.random().toString(36).slice(2);
+      _edLineFusionId = _curL._fusionId;
+    }
+    _edActivateLineTool();
+  });
   $('op-line-select-btn')?.addEventListener('click',()=>{
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateLineTool();
