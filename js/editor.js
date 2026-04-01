@@ -1918,8 +1918,8 @@ function edDrawSel(){
     edCtx.restore();
   }
 
-  // LineLayer: guía de selección discontinua azul (solo si no hay radios aplicados)
-  if(la.type==='line'){
+  // LineLayer: guía de selección discontinua azul (solo si no hay radios y no es ellipse)
+  if(la.type==='line' && !la._fromEllipse){
     const _cr=la.cornerRadii||{};
     const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);
     if(!_hasR){
@@ -2095,8 +2095,22 @@ function edDrawSel(){
       if(window._edCurveVertIdx >= 0) requestAnimationFrame(()=>{ if(window._edCurveVertIdx>=0) edRedraw(); });
     }
   }
-  // Handles vértices de LineLayer seleccionado (panel abierto)
-  if(la.type==='line' && la.points.length>=2 && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+  // Handles vértices de ShapeLayer rect en sesión de fusión (panel line abierto)
+  if(la.type==='shape' && la.shape==='rect' && la._fusionId && $('edOptionsPanel')?.dataset.mode==='line'){
+    const rot2=(la.rotation||0)*Math.PI/180;
+    const cos2=Math.cos(rot2), sin2=Math.sin(rot2);
+    const hw=la.width*pw/2, hh=la.height*ph/2;
+    const cxR=edMarginX()+la.x*pw, cyR=edMarginY()+la.y*ph;
+    [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].forEach(([lx,ly])=>{
+      const cpx=cxR+lx*cos2-ly*sin2, cpy=cyR+lx*sin2+ly*cos2;
+      edCtx.globalAlpha=1;
+      edCtx.beginPath(); edCtx.arc(cpx,cpy,hr,0,Math.PI*2);
+      edCtx.fillStyle='#e63030'; edCtx.fill();
+      edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+    });
+  }
+  // Handles vértices de LineLayer seleccionado (panel abierto, solo si no es ellipse)
+  if(la.type==='line' && la.points.length>=2 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
     const rot=(la.rotation||0)*Math.PI/180;
     const cos=Math.cos(rot),sin=Math.sin(rot);
     const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
@@ -2971,18 +2985,28 @@ function _edHandleDoubleTap(idx){
     _edDrawLockUI();
     edRenderOptionsPanel('draw');
     edRedraw();
-  } else if(la && la.type === 'shape') {
-    edActiveTool='select'; edCanvas.className='';
-    _edShapeType = 'select';
-    edDrawColor  = la.color || '#000000';
-    edDrawSize   = la.lineWidth || 3;
-    _edActivateShapeTool();
-  } else if(la && la.type === 'line') {
+  } else if(la && la.type === 'shape' && la._fusionId) {
+    // Shape con _fusionId (rect en sesión de fusión) → panel line
+    edSelectedIdx = idx;
     edActiveTool='select'; edCanvas.className='';
     _edLineType = 'select';
     edDrawColor = la.color || '#000000';
     edDrawSize  = la.lineWidth || 3;
-    _edActivateLineTool();
+    _edActivateLineTool(true);
+  } else if(la && la.type === 'shape') {
+    edSelectedIdx = idx;
+    edActiveTool='select'; edCanvas.className='';
+    _edShapeType = 'select';
+    edDrawColor  = la.color || '#000000';
+    edDrawSize   = la.lineWidth || 3;
+    _edActivateShapeTool(true);
+  } else if(la && la.type === 'line') {
+    edSelectedIdx = idx;
+    edActiveTool='select'; edCanvas.className='';
+    _edLineType = 'select';
+    edDrawColor = la.color || '#000000';
+    edDrawSize  = la.lineWidth || 3;
+    _edActivateLineTool(true);
   } else {
     _edDrawLockUI(); _edPropsOverlayShow();
     edRenderOptionsPanel('props');
@@ -3816,18 +3840,26 @@ function edOnStart(e){
   const _activeMode  = _activePanel?.dataset.mode;
   const _shapeBarOpen = $('edShapeBar')?.classList.contains('visible');
   const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
-  // En modo selección del panel line, permitir handles normales de resize/rotate
-  const _lineSelectMode = _activeMode === 'line' && _edLineType === 'select' && !_edLineLayer;
-  if(_editingVectorial && !_lineSelectMode && edSelectedIdx >= 0){
-    // Comprobar si el click es sobre el objeto seleccionado → permitir drag
-    const _la = edLayers[edSelectedIdx];
-    if(_la && _la.contains(c.nx, c.ny)){
-      edIsDragging=true;
-      edDragOffX=c.nx-_la.x; edDragOffY=c.ny-_la.y;
-      return;
+  // En modo selección del panel line/shape: permitir seleccionar objetos de la fusión y drag
+  const _lineSelectMode = (_activeMode === 'line' || _activeMode === 'shape') && _edLineType === 'select' && !_edLineLayer;
+  if(_editingVectorial && !_lineSelectMode && edActiveTool !== 'shape' && edActiveTool !== 'line'){
+    // En modo dibujo activo: bloquear solo si hay objeto seleccionado y el toque no es en el canvas
+    if(edSelectedIdx >= 0){
+      const _la = edLayers[edSelectedIdx];
+      if(_la && _la.contains(c.nx, c.ny)){
+        edIsDragging=true;
+        edDragOffX=c.nx-_la.x; edDragOffY=c.ny-_la.y;
+        return;
+      }
+      edRedraw(); return;
     }
-    // Click fuera del objeto seleccionado → ignorar (igual que imagen/texto/dibujo)
-    edRedraw(); return;
+  }
+  // En modo selección vectorial: permitir seleccionar objetos de la fusión
+  // pero bloquear selección de objetos externos (sin _fusionId de la sesión)
+  if(_lineSelectMode && _edLineFusionId){
+    // Permitir todo — la selección de objetos se gestiona abajo normalmente
+  } else if(_lineSelectMode && !_edLineFusionId){
+    // Sin sesión activa (re-edición de objeto ya fusionado): permitir selección libre
   }
   // Si se está creando una línea nueva (_edLineLayer sin objeto seleccionado aún), bloquear selección
   if(_edLineLayer){ edRedraw(); return; }
@@ -4598,30 +4630,35 @@ function edOnEnd(e){
     return;
   }
   if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); _edOffsetFirstMove = false; }
-  // ── SHAPE: confirmar forma al soltar ──
+  // ── SHAPE: al soltar, convertir preview a LineLayer (igual que rectas) ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
-    const minSize = 0.02;
-    if(_edShapePreview.width < minSize || _edShapePreview.height < minSize){
-      _edShapePreview.width  = Math.max(_edShapePreview.width,  minSize);
-      _edShapePreview.height = Math.max(_edShapePreview.height, minSize);
-    }
+    _edShapePreview.width  = Math.max(_edShapePreview.width,  0.02);
+    _edShapePreview.height = Math.max(_edShapePreview.height, 0.02);
     _edShapePreview.color     = edDrawColor || '#000000';
+    _edShapePreview.fillColor = edDrawFillColor || 'none';
     _edShapePreview.lineWidth = edDrawSize  || 3;
-    const createdShape = _edShapePreview;
-    _edPendingShape = null;
-    _edShapeStart   = null;
-    _edShapePreview = null;
-    edSelectedIdx = edLayers.indexOf(createdShape);
-    edActiveTool = 'select';
-    edCanvas.className = '';
-    _edShapeType = 'select';
-    // Historial local: estado 0 = null (sin objeto), estado 1 = objeto creado
-    _edShapeHistory = [null, JSON.stringify(edSerLayer(createdShape))];
-    _edShapeHistIdx = 1;
-    _edShapeHistIdxBase = 1;
-    _edShapeUpdateUndoRedoBtns();
-    edPushHistory();
-    edRedraw();
+    // Rectángulos: guardar como ShapeLayer con _fusionId (4 nodos editables)
+    // Elipses: convertir a LineLayer inmediatamente (sin nodos visibles)
+    if(!_edLineFusionId) _edLineFusionId = 'fusion_' + Math.random().toString(36).slice(2);
+    let _finalObj;
+    if(_edShapePreview.shape === 'ellipse'){
+      // Convertir a LineLayer — la elipse no tiene nodos útiles
+      const _ll = _edShapeToLineLayer(_edShapePreview);
+      _ll._fusionId = _edLineFusionId;
+      const _pi = edLayers.indexOf(_edShapePreview);
+      if(_pi >= 0) edLayers[_pi] = _ll;
+      _finalObj = _ll;
+    } else {
+      // Rectángulo: queda como ShapeLayer con _fusionId
+      _edShapePreview._fusionId = _edLineFusionId;
+      _finalObj = _edShapePreview;
+    }
+    _edPendingShape = null; _edShapeStart = null; _edShapePreview = null;
+    edSelectedIdx = edLayers.indexOf(_finalObj);
+    _edLineType = 'select'; edActiveTool = 'select'; edCanvas.className = '';
+    edPushHistory(); edRedraw();
+    // Abrir panel line en modo selección — igual que al cerrar un polígono
+    _edActivateLineTool(false);
     return;
   }
   clearTimeout(window._edLongPress);
@@ -5460,7 +5497,51 @@ function edDeactivateDrawTool(){
    HERRAMIENTA SHAPE (rectángulo / elipse)
    Patrón idéntico a edRenderOptionsPanel('draw')
    ══════════════════════════════════════════ */
-function _edActivateShapeTool() {
+
+/* ══════════════════════════════════════════
+   T1-shapes: Convertir ShapeLayer a LineLayer con puntos
+   rect  → 4 puntos (TL, TR, BR, BL) en coords locales normalizadas
+   ellipse → 32 puntos aproximados en coords locales normalizadas
+   ══════════════════════════════════════════ */
+function _edShapeToLineLayer(s) {
+  const l = new LineLayer();
+  // Heredar propiedades visuales
+  l.color     = s.color     || '#000000';
+  l.fillColor = s.fillColor || 'none';
+  l.lineWidth = s.lineWidth ?? 3;
+  l.opacity   = s.opacity   ?? 1;
+  l.rotation  = s.rotation  || 0;
+  l.x = s.x; l.y = s.y;
+  l.width  = s.width;
+  l.height = s.height;
+  if (s.groupId) l.groupId = s.groupId;
+  if (s.locked)  l.locked  = true;
+  if (s._fusionId) l._fusionId = s._fusionId;
+  // Generar puntos en coords locales (relativas al centro, normalizadas a página)
+  const hw = s.width  / 2;  // half-width  en coords normalizadas
+  const hh = s.height / 2;  // half-height en coords normalizadas
+  if (s.shape === 'ellipse') {
+    const N = 32;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      l.points.push({ x: Math.cos(a) * hw, y: Math.sin(a) * hh });
+    }
+  } else {
+    // rect: TL → TR → BR → BL
+    l.points.push({ x: -hw, y: -hh });
+    l.points.push({ x:  hw, y: -hh });
+    l.points.push({ x:  hw, y:  hh });
+    l.points.push({ x: -hw, y:  hh });
+    // Aplicar cornerRadii si existen
+    if (s.cornerRadii && s.cornerRadii.some(r => r > 0)) l.cornerRadii = [...s.cornerRadii];
+    else if (s.cornerRadius && s.cornerRadius > 0) l.cornerRadius = s.cornerRadius;
+  }
+  l.closed = true;
+  if (s.shape === 'ellipse') l._fromEllipse = true;
+  return l;
+}
+
+function _edActivateShapeTool(isNew) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
 
@@ -5540,8 +5621,10 @@ function _edActivateShapeTool() {
   if(_sel) edPushHistory();
   _edShapeInitHistory();
   // Centrar cámara en el objeto al abrir el panel
-  _edFocusDone = false;
-  if(_sel) requestAnimationFrame(()=>_edFocusOnLayer(_sel));
+  // No centrar si ya hay objetos en sesión de fusión
+  const _hasFusionObjs5 = _edLineFusionId && edLayers.some(l => l._fusionId===_edLineFusionId);
+  if(!_hasFusionObjs5) _edFocusDone = false;
+  if(_sel && !_edFocusDone) requestAnimationFrame(()=>_edFocusOnLayer(_sel));
 
   // ── Helpers ──
   const _curShape = () => {
@@ -5556,11 +5639,34 @@ function _edActivateShapeTool() {
 
   // ── Herramientas ──
   $('op-tool-shape')?.addEventListener('click',()=>{ _edActivateShapeTool(); });
-  $('op-tool-line')?.addEventListener('click',()=>{ edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
+  $('op-tool-line')?.addEventListener('click',()=>{
+    // T1-shapes: convertir shape actual a LineLayer y asignar fusionId
+    const _curS = _curShape();
+    if(_curS){
+      const _ll = _edShapeToLineLayer(_curS);
+      if(!_edLineFusionId) _edLineFusionId = 'fusion_' + Math.random().toString(36).slice(2);
+      _ll._fusionId = _edLineFusionId;
+      const _si = edLayers.indexOf(_curS);
+      if(_si >= 0){ edLayers[_si] = _ll; edSelectedIdx = _si; }
+    }
+    edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool();
+  });
 
   // ── Tipo ──
-  $('op-shape-rect')?.addEventListener('click',()=>{ _edShapeType='rect'; const s=_curShape(); if(s){_edShapePushHistory(); s.shape='rect';edRedraw();} _edActivateShapeTool(); });
-  $('op-shape-ellipse')?.addEventListener('click',()=>{ _edShapeType='ellipse'; const s=_curShape(); if(s){_edShapePushHistory(); s.shape='ellipse';edRedraw();} _edActivateShapeTool(); });
+  $('op-shape-rect')?.addEventListener('click',()=>{
+    _edShapeType='rect';
+    const s=_curShape();
+    // Si hay sesión de fusión activa, NO cambiar el shape existente — preparar el siguiente
+    if(s && !_edLineFusionId){ _edShapePushHistory(); s.shape='rect'; edRedraw(); }
+    _edActivateShapeTool();
+  });
+  $('op-shape-ellipse')?.addEventListener('click',()=>{
+    _edShapeType='ellipse';
+    const s=_curShape();
+    // Si hay sesión de fusión activa, NO cambiar el shape existente — preparar el siguiente
+    if(s && !_edLineFusionId){ _edShapePushHistory(); s.shape='ellipse'; edRedraw(); }
+    _edActivateShapeTool();
+  });
   $('op-shape-select')?.addEventListener('click',()=>{
     _edShapeType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateShapeTool();
@@ -5686,6 +5792,60 @@ function _edActivateShapeTool() {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
+    // T1-shapes: convertir shapes con _fusionId a LineLayer y fusionar (solo si hay ≥2 objetos)
+    if(_edLineFusionId){
+      const _fid = _edLineFusionId;
+      // Contar todos los miembros de la fusión (shapes + lines cerrados)
+      const _allMembers = edLayers.filter(l => l._fusionId === _fid && (l.type==='line'?l.closed:true));
+      if(_allMembers.length >= 2){
+        // Convertir todos los ShapeLayer con este _fusionId a LineLayer
+        edLayers.forEach((la, idx) => {
+          if(la.type === 'shape' && la._fusionId === _fid){
+            const _ll = _edShapeToLineLayer(la);
+            edLayers[idx] = _ll;
+            if(edSelectedIdx === idx) edSelectedIdx = idx;
+          }
+        });
+      } else {
+        // Solo 1 objeto: limpiar fusionId sin convertir
+        _allMembers.forEach(m => delete m._fusionId);
+        _edLineFusionId = null;
+      }
+      // Ahora ejecutar la fusión igual que el panel line
+      _edLineFusionId = null;
+      const _members = edLayers.filter(l => l.type==='line' && l._fusionId===_fid && l.closed);
+      if(_members.length > 1){
+        const pw=edPageW(), ph=edPageH();
+        const _primary = _members[0];
+        const _allAbs = [];
+        _members.forEach(m => m.absPoints().forEach(p => { if(p) _allAbs.push(p); }));
+        const _axs=_allAbs.map(p=>p.x), _ays=_allAbs.map(p=>p.y);
+        const _rot = -(_primary.rotation||0)*Math.PI/180;
+        const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
+        const _allLocal = [];
+        _members.forEach((m, mi) => {
+          if(mi > 0) _allLocal.push(null);
+          const absP = m.absPoints();
+          absP.forEach(p => {
+            if(!p){ _allLocal.push(null); return; }
+            const dxN=p.x-_primary.x, dyN=p.y-_primary.y;
+            _allLocal.push({x: dxN*_cos - dyN*_sin, y: dxN*_sin + dyN*_cos});
+          });
+        });
+        _primary.points = _allLocal;
+        _primary._updateBbox();
+        for(let mi=1; mi<_members.length; mi++){
+          const _mi2 = edLayers.indexOf(_members[mi]);
+          if(_mi2 >= 0) edLayers.splice(_mi2, 1);
+        }
+        if(!_primary.fillColor || _primary.fillColor==='none'){
+          const _wf = _members.find(m => m.fillColor && m.fillColor!=='none');
+          if(_wf) _primary.fillColor = _wf.fillColor;
+        }
+        delete _primary._fusionId;
+        edSelectedIdx = edLayers.indexOf(_primary);
+      } else if(_members.length===1){ delete _members[0]._fusionId; }
+    }
     edPushHistory(); _edShapeClearHistory();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
@@ -5747,7 +5907,7 @@ function _edActivateShapeTool() {
     }
   });
 
-  requestAnimationFrame(edFitCanvas);
+  if(isNew) requestAnimationFrame(edFitCanvas);
 }
 
 /* ══════════════════════════════════════════
@@ -5785,7 +5945,9 @@ function _edActivateLineTool(isNew) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: modo recta/seleccionar + color + grosor + opacidad -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%">
-    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${!isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${!isSelectMode?'rgba(0,0,0,.08)':'transparent'}">╱</button>
+    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${!isSelectMode&&edActiveTool!=='shape'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${!isSelectMode&&edActiveTool!=='shape'?'rgba(0,0,0,.08)':'transparent'}">╱</button>
+    <button id="op-line-rect-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='rect'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='rect'?'rgba(0,0,0,.08)':'transparent'}">▭</button>
+    <button id="op-line-ellipse-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
     <button id="op-line-select-btn" style="flex-shrink:0;border:2px solid ${isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${isSelectMode?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-line-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="Color línea"></button>
@@ -5845,6 +6007,9 @@ function _edActivateLineTool(isNew) {
   _edShapeInitHistory(isNew);
   // Centrar cámara solo si es la primera apertura (isNew) o si aún no se ha centrado
   if(isNew) _edFocusDone = false;
+  // No centrar si ya hay objetos en sesión de fusión (usuario añadiendo más objetos)
+  const _hasFusionObjs = _edLineFusionId && edLayers.some(l => l._fusionId===_edLineFusionId);
+  if(_hasFusionObjs) _edFocusDone = true;
   const _focusLayer = _edLineLayer || (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null);
   if(_focusLayer && !_edFocusDone) requestAnimationFrame(()=>_edFocusOnLayer(_focusLayer));
 
@@ -5852,7 +6017,8 @@ function _edActivateLineTool(isNew) {
   const _curLine = () => {
     if(_edLineLayer) return _edLineLayer;
     const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-    return l?.type==='line' ? l : null;
+    // Incluir ShapeLayer con _fusionId (rectángulos en sesión de fusión)
+    return (l?.type==='line' || (l?.type==='shape' && l?._fusionId)) ? l : null;
   };
   const _updateInfo = () => {
     const info=$('op-line-info');
@@ -5869,18 +6035,34 @@ function _edActivateLineTool(isNew) {
   _updUR();
 
   // ── Herramientas ──
-  $('op-tool-shape')?.addEventListener('click',()=>{ _edFinishLine(); edActiveTool='shape'; edCanvas.className='tool-shape'; _edActivateShapeTool(); });
+  $('op-tool-shape')?.addEventListener('click',()=>{
+    _edFinishLine();
+    // T1-shapes: mantener _fusionId activo para que el nuevo shape entre en la fusión
+    // _edLineFusionId ya está activo si había polígonos; si no, se iniciará al OK
+    edActiveTool='shape'; edCanvas.className='tool-shape'; _edActivateShapeTool(true);
+  });
   $('op-tool-line')?.addEventListener('click',()=>{ edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(); });
 
   // ── Modo dibujar / seleccionar ──
   $('op-line-draw-btn')?.addEventListener('click',()=>{
     _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
-    // Reactivar ID de fusión para que el nuevo polígono pueda fusionarse con el actual
     const _curL = _curLine&&_curLine();
     if(_curL){
       if(!_curL._fusionId) _curL._fusionId = 'fusion_' + Math.random().toString(36).slice(2);
       _edLineFusionId = _curL._fusionId;
     }
+    _edActivateLineTool();
+  });
+  $('op-line-rect-btn')?.addEventListener('click',()=>{
+    _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
+    const _cL=_curLine&&_curLine();
+    if(_cL){ if(!_edLineFusionId){ if(!_cL._fusionId) _cL._fusionId='fusion_'+Math.random().toString(36).slice(2); _edLineFusionId=_cL._fusionId; } }
+    _edActivateLineTool();
+  });
+  $('op-line-ellipse-btn')?.addEventListener('click',()=>{
+    _edShapeType='ellipse'; edActiveTool='shape'; edCanvas.className='tool-shape';
+    const _cL=_curLine&&_curLine();
+    if(_cL){ if(!_edLineFusionId){ if(!_cL._fusionId) _cL._fusionId='fusion_'+Math.random().toString(36).slice(2); _edLineFusionId=_cL._fusionId; } }
     _edActivateLineTool();
   });
   $('op-line-select-btn')?.addEventListener('click',()=>{
@@ -6015,7 +6197,15 @@ function _edActivateLineTool(isNew) {
     if(_edLineFusionId){
       const _fid = _edLineFusionId;
       _edLineFusionId = null;
-      const _members = edLayers.filter(l => l.type==='line' && l._fusionId===_fid && l.closed);
+      // T1-shapes: convertir ShapeLayer con este _fusionId a LineLayer antes de fusionar
+      edLayers.forEach((la, idx) => {
+        if(la.type === 'shape' && la._fusionId === _fid){
+          const _ll = _edShapeToLineLayer(la);
+          edLayers[idx] = _ll;
+          if(edSelectedIdx === idx) edSelectedIdx = idx;
+        }
+      });
+      const _members = edLayers.filter(l => (l.type==='line'||l.type==='shape') && l._fusionId===_fid && l.closed);
       if(_members.length > 1){
         const pw=edPageW(), ph=edPageH();
         const _primary = _members[0];
@@ -6121,7 +6311,7 @@ function _edActivateLineTool(isNew) {
     }
   });
 
-  if(isNew) requestAnimationFrame(edFitCanvas);
+  // No mover cámara al abrir panel line
 }
 
 
@@ -6200,7 +6390,7 @@ function edCloseOptionsPanel(){
   }
   _edFocusDone = false;
   edPanelUserClosed = true;
-  requestAnimationFrame(edFitCanvas);
+  // No mover cámara al cerrar panel — el usuario decide el zoom
 }
 /* ══════════════════════════════════════════
    COLOR PICKER PROPIO (táctil/Android)
@@ -6489,7 +6679,7 @@ function edRenderOptionsPanel(mode){
     });
     $('op-tool-shape')?.addEventListener('click',()=>{
       edActiveTool='shape'; edCanvas.className='tool-shape';
-      _edActivateShapeTool();
+      _edActivateShapeTool(true);
     });
     $('op-tool-line')?.addEventListener('click',()=>{
       edActiveTool='line'; edCanvas.className='tool-line';
@@ -7041,7 +7231,7 @@ function edRenderOptionsPanel(mode){
       _edShapeType = la.shape || 'rect';
       edDrawColor  = la.color || '#000000';
       edDrawSize   = la.lineWidth || 3;
-      _edActivateShapeTool();
+      _edActivateShapeTool(true);
     });
     $('pp-shape-rect')?.addEventListener('click',()=>{ la.shape='rect'; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-shape-ellipse')?.addEventListener('click',()=>{ la.shape='ellipse'; edRedraw(); edRenderOptionsPanel('props'); });
@@ -7120,7 +7310,7 @@ function edMaximize(keepBar=false){
     edFitCanvas();
     if(mode === 'shape'){
       edShapeBarHide();
-      _edActivateShapeTool();
+      _edActivateShapeTool(true);
     } else if(mode === 'line'){
       edShapeBarHide();
       _edActivateLineTool();
@@ -8838,6 +9028,7 @@ function edSerLayer(l){
     const _lobj={type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      _fromEllipse:l._fromEllipse||false,
       cornerRadii:_hasR?{..._cr}:undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined};
     if(l.groupId)_lobj.groupId=l.groupId;
@@ -8909,6 +9100,7 @@ function edDeserLayer(d, pageOrientation){
     l.points=d.points||[]; l.closed=d.closed||false;
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
+    if(d._fromEllipse) l._fromEllipse=true;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     if(d.subPaths&&d.subPaths.length) l.subPaths=d.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;});
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
@@ -9813,7 +10005,7 @@ function EditorView_init(){
       _edShapeType = shapeType;
       edActiveTool = 'shape';
       edCanvas.className = 'tool-shape';
-      setTimeout(() => _edActivateShapeTool(), 0);
+      setTimeout(() => _edActivateShapeTool(true), 0);
     } else {
       _edLineType = lineType || 'draw';
       edActiveTool = 'line';
