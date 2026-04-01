@@ -21,6 +21,7 @@ body.editor-page #appView {
   position: relative;
   width: 100%; height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;  /* evita propagación de gestos de borde */
 }
 
 /* ══════════════════════════════
