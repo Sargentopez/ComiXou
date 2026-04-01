@@ -3755,7 +3755,10 @@ function edOnStart(e){
 
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
   const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-  if(_la && _la.type!=='bubble'){
+  // En panel line con LineLayer seleccionado: los nodos tienen prioridad sobre los handles de bbox
+  const _panelLineOpen = $('edOptionsPanel')?.dataset.mode === 'line';
+  const _skipHandles = _panelLineOpen && _la?.type === 'line' && !_la?._fromEllipse;
+  if(_la && _la.type!=='bubble' && !_skipHandles){
     const _isT = e.pointerType==='touch';
     const _pw=edPageW(), _ph=edPageH();
     const _z=edCamera.z;
