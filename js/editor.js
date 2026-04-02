@@ -43,6 +43,13 @@ let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +
 let _edOffsetFirstMove = false;        // true: el primer move debe incluir el punto inicial
 let _edOffsetLastTouch = null;         // última posición táctil conocida {x, y, sz} para refrescar el cursor
 const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
+// Cursor offset — modo "posición guardada":
+// Al arrastrar solo se posiciona el cursor (no dibuja). Al levantar el dedo se guarda la posición.
+// Si el siguiente tap llega en < 500ms, el trazo empieza desde la posición guardada.
+let _edCursorSavedPos = null;          // {nx, ny, clientX, clientY} posición guardada del cursor
+let _edCursorSavedTime = 0;            // timestamp del último levantamiento de dedo con cursor activo
+let _edCursorPositioning = false;      // true: arrastre actual es solo posicionamiento (no dibuja)
+const _ED_CURSOR_TAP_MS = 500;         // ventana de tiempo para "tap rápido" que inicia dibujo
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
@@ -3679,37 +3686,37 @@ function edOnStart(e){
     // En táctil: retardo para detectar si viene segundo dedo (pinch/zoom)
     if(e.pointerType === 'touch'){
       const _eSaved = e;
-      // Cursor offset: tap = posicionar cursor; arrastre rápido tras lift = dibujar
+      clearTimeout(window._edDrawTouchTimer);
+      // ── Cursor offset: lógica de posición guardada ──
       if(_edCursorOffset){
-        clearTimeout(window._edDrawTouchTimer);
-        window._edDrawTouchTimer = null;
-        const _timeSinceLift = Date.now() - (window._edOffsetLiftTime || 0);
-        if(_timeSinceLift < 400 && _edOffsetLastTouch){
-          // Regresa rápido tras levantar → iniciar dibujo desde cursor anclado
-          window._edOffsetDrawing = true;
-          window._edOffsetLiftTime = 0;
-          const _rad = _edCursorOffsetAngle * Math.PI / 180;
-          const _aEvt = {
-            clientX: _edOffsetLastTouch.x + _ED_CURSOR_OFFSET_PX * Math.sin(_rad),
-            clientY: _edOffsetLastTouch.y - _ED_CURSOR_OFFSET_PX * Math.cos(_rad),
-            pointerType: 'touch', pointerId: e.pointerId, touches: null
-          };
-          edStartPaint(_aEvt);
+        const _nowC = Date.now();
+        const _c = edCoords(e);
+        // ¿Hay una posición guardada y el tap llega en tiempo rápido?
+        if(_edCursorSavedPos && (_nowC - _edCursorSavedTime) < _ED_CURSOR_TAP_MS){
+          // Tap rápido: empezar a dibujar DESDE la posición guardada, no desde el dedo
+          _edCursorPositioning = false;
+          window._edDrawTouchTimer = setTimeout(() => {
+            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!['draw','eraser'].includes(edActiveTool)) return;
+            edStartPaintFromSaved(_eSaved);
+          }, 120);
         } else {
-          // Toque frío → solo posicionar cursor, no dibujar
-          window._edOffsetDrawing = false;
-          window._edOffsetLiftTime = 0;
-          const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
-          _edOffsetLastTouch = { x: e.clientX, y: e.clientY };
-          _edOffsetShow(0, 0, e.clientX, e.clientY, sz);
-          // Capturar puntero para recibir pointermove aunque el dedo salga del canvas
-          if(e.pointerId !== undefined && edCanvas){
-            try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
-          }
+          // Tap lento (o primer tap): modo posicionamiento — el arrastre solo mueve el cursor
+          _edCursorPositioning = true;
+          _edCursorSavedPos = null; // limpiar posición anterior
+          // Mostrar el cursor visual en la posición del dedo pero NO iniciar trazo
+          window._edDrawTouchTimer = setTimeout(() => {
+            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!['draw','eraser'].includes(edActiveTool)) return;
+            if(_edCursorPositioning){
+              // Iniciar el seguimiento visual del cursor (sin dibujar)
+              _edCursorStartPositioning(_eSaved);
+            }
+          }, 120);
         }
         return;
       }
-      clearTimeout(window._edDrawTouchTimer);
+      // ── Modo dibujo normal (sin cursor offset) ──
       window._edDrawTouchTimer = setTimeout(() => {
         if(!window._edActivePointers || window._edActivePointers.size > 1) return;
         if(!['draw','eraser'].includes(edActiveTool)) return;
@@ -4107,11 +4114,31 @@ function edOnStart(e){
       // Redirigir al sistema de dibujo táctil (igual que si hubiera caído en zona vacía)
       clearTimeout(window._edDrawTouchTimer);
       const _eSaved2 = e;
-      window._edDrawTouchTimer = setTimeout(() => {
-        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-        if(!['draw','eraser'].includes(edActiveTool)) return;
-        edStartPaint(_eSaved2);
-      }, 120);
+      if(e.pointerType === 'touch' && _edCursorOffset){
+        const _nowC2 = Date.now();
+        if(_edCursorSavedPos && (_nowC2 - _edCursorSavedTime) < _ED_CURSOR_TAP_MS){
+          _edCursorPositioning = false;
+          window._edDrawTouchTimer = setTimeout(() => {
+            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!['draw','eraser'].includes(edActiveTool)) return;
+            edStartPaintFromSaved(_eSaved2);
+          }, 120);
+        } else {
+          _edCursorPositioning = true;
+          _edCursorSavedPos = null;
+          window._edDrawTouchTimer = setTimeout(() => {
+            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!['draw','eraser'].includes(edActiveTool)) return;
+            if(_edCursorPositioning) _edCursorStartPositioning(_eSaved2);
+          }, 120);
+        }
+      } else {
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!['draw','eraser'].includes(edActiveTool)) return;
+          edStartPaint(_eSaved2);
+        }, 120);
+      }
       return;
     }
     // ── Objeto bloqueado: mostrar candado o abrir panel ──
@@ -4534,6 +4561,13 @@ function edOnMove(e){
     return;
   }
 
+  // Cursor offset en modo posicionamiento: solo actualizar visual, no dibujar
+  // DEBE ir antes del guard gestureActive porque edPainting=false en este modo
+  if(_edCursorPositioning && _edCursorOffset && ['draw','eraser'].includes(edActiveTool)){
+    e.preventDefault();
+    edMoveBrush(e);
+    return;
+  }
   // Sin gesto activo → ignorar el resto
   const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart;
   if(!gestureActive) return;
@@ -4543,16 +4577,6 @@ function edOnMove(e){
   if(_edPinchHappened && edPainting) _edPinchHappened = false;
   if(_edPinchHappened) return; // hubo pinch — ignorar movimiento del dedo que queda
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
-  // Cursor offset: arrastre sin dibujar → mover cursor en tiempo real
-  if(_edCursorOffset && ['draw','eraser'].includes(edActiveTool) &&
-     !edPainting && e.pointerType === 'touch' &&
-     window._edOffsetDrawing === false &&
-     _edActivePointers && _edActivePointers.size === 1){
-    const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
-    _edOffsetLastTouch = { x: e.clientX, y: e.clientY };
-    _edOffsetShow(0, 0, e.clientX, e.clientY, sz);
-    return;
-  }
   if(edActiveTool==='fill'){edMoveBrush(e);return;}
   // ── SHAPE: preview en tiempo real durante el drag ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
@@ -4885,18 +4909,49 @@ function edOnEnd(e){
   }
   // ─────────────────────────────────────────────────────────
 
+  // ── Cursor offset posicionamiento: al levantar el dedo guardar posición ──
+  if(_edCursorPositioning && _edCursorOffset){
+    _edCursorPositioning = false;
+    // Usar la posición del evento actual (más fiable que _edOffsetLastTouch si no hubo movimiento)
+    const _touchSrc = (e && e.touches) ? e.touches[0] : e;
+    const _touchX = (_touchSrc && _touchSrc.clientX) ? _touchSrc.clientX
+                  : (_edOffsetLastTouch ? _edOffsetLastTouch.x : null);
+    const _touchY = (_touchSrc && _touchSrc.clientY) ? _touchSrc.clientY
+                  : (_edOffsetLastTouch ? _edOffsetLastTouch.y : null);
+    if(_touchX !== null && _touchY !== null){
+      const _rad = _edCursorOffsetAngle * Math.PI / 180;
+      const _cx = _touchX + _ED_CURSOR_OFFSET_PX * Math.sin(_rad);
+      const _cy = _touchY - _ED_CURSOR_OFFSET_PX * Math.cos(_rad);
+      _edCursorSavedPos = { clientX: _cx, clientY: _cy };
+      _edCursorSavedTime = Date.now();
+      // Mantener el cursor visible en la posición guardada
+      const _sz = edDrawSize * 2;
+      _edOffsetShow(0, 0, _touchX, _touchY, _sz);
+      // Actualizar _edOffsetLastTouch para que _edRefreshOffsetCursor funcione
+      _edOffsetLastTouch = { x: _touchX, y: _touchY };
+    }
+    clearTimeout(window._edLongPress); window._edLongPressReady=false;
+    return;
+  }
+
   // Sin gesto activo → ignorar el resto
-  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart;
+  const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart||_edCursorPositioning;
   if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
   if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
     edPinchEnd();
     return;
   }
-  if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); _edOffsetFirstMove = false; }
-  // Cursor offset: guardar momento del lift
-  if(_edCursorOffset && ['draw','eraser'].includes(edActiveTool) && e.pointerType === 'touch'){
-    window._edOffsetLiftTime = Date.now();
-    window._edOffsetDrawing = false;
+  if(edPainting && edActiveTool !== 'fill'){
+    edSaveDrawData(); _edOffsetFirstMove = false;
+    // Cursor offset: al terminar un trazo, guardar la posición actual del cursor
+    // para que el siguiente tap rápido pueda continuar desde ahí
+    if(_edCursorOffset && _edOffsetLastTouch){
+      const _rad2 = _edCursorOffsetAngle * Math.PI / 180;
+      const _cx2 = _edOffsetLastTouch.x + _ED_CURSOR_OFFSET_PX * Math.sin(_rad2);
+      const _cy2 = _edOffsetLastTouch.y - _ED_CURSOR_OFFSET_PX * Math.cos(_rad2);
+      _edCursorSavedPos = { clientX: _cx2, clientY: _cy2 };
+      _edCursorSavedTime = Date.now();
+    }
   }
   // ── SHAPE: al soltar, convertir a LineLayer y fusionar inmediatamente ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
@@ -5481,6 +5536,29 @@ function _edLineAddPoint(nx, ny){
   if(info) info.textContent=`${_edLineLayer.points.length} vértice(s). Toca el primero para cerrar.`;
 }
 
+// ── Cursor offset: inicia el seguimiento visual sin dibujar ──
+function _edCursorStartPositioning(e){
+  _edCursorPositioning = true;
+  edMoveBrush(e);
+}
+
+// ── Cursor offset: inicia el trazo DESDE la posición guardada ──
+function edStartPaintFromSaved(e){
+  const _saved = _edCursorSavedPos;
+  if(!_saved){ edStartPaint(e); return; }
+  const _synthetic = {
+    clientX: _saved.clientX,
+    clientY: _saved.clientY,
+    pointerType: e.pointerType,
+    pointerId: e.pointerId,
+    touches: null
+  };
+  _edCursorSavedPos = null;
+  _edCursorSavedTime = 0;
+  _edCursorPositioning = false;
+  edStartPaint(_synthetic);
+}
+
 function edStartPaint(e){
   edPainting = true;
   const _pp=$('edOptionsPanel');
@@ -5776,7 +5854,7 @@ function edDeactivateDrawTool(){
   edDrawBarHide();
   _edDrawUnlockUI();
   // Apagar cursor offset al salir del panel de dibujo
-  _edCursorOffset = false;
+  _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
   _edOffsetHide();
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
@@ -6965,7 +7043,7 @@ function edRenderOptionsPanel(mode){
       if(isOpen){ _opOffsetPop.style.display = 'none'; return; }
       if(_edCursorOffset){
         // Offset activo y popover cerrado → desactivar
-        _edCursorOffset = false;
+        _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
         _opOffsetBtn.style.background = 'transparent';
         _opOffsetBtn.style.color = 'var(--gray-700)';
         _edbSyncOffsetBtn();
@@ -6990,7 +7068,7 @@ function edRenderOptionsPanel(mode){
         $(id)?.addEventListener('click', e => {
           e.stopPropagation();
           if(_edCursorOffset && _edCursorOffsetAngle === angle){
-            _edCursorOffset = false;
+            _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
           } else {
             _edCursorOffset = true;
             _edCursorOffsetAngle = angle;
@@ -8058,7 +8136,7 @@ function edInitDrawBar() {
     if(isOpen){ pop.style.display = 'none'; return; }
     // Si offset activo → desactivar directamente sin abrir el popover
     if(_edCursorOffset){
-      _edCursorOffset = false;
+      _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
       _edbSyncOffsetBtn();
       _edOffsetHide();
       return;
@@ -8096,7 +8174,7 @@ function edInitDrawBar() {
       $(id)?.addEventListener('click', e => {
         e.stopPropagation();
         if(_edCursorOffset && _edCursorOffsetAngle === angle){
-          _edCursorOffset = false;
+          _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
         } else {
           _edCursorOffset = true;
           _edCursorOffsetAngle = angle;
@@ -8247,10 +8325,9 @@ function _edbSyncTool() {
   $('edb-fill')?.classList.toggle('active', t === 'fill');
   // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
-  const _hasTouch = window._edIsTouch || navigator.maxTouchPoints > 0;
   const offsetBtn = $('edb-offset');
-  if(offsetBtn) offsetBtn.style.display = (isFill || !_hasTouch) ? 'none' : '';
-  if(isFill || !_hasTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
+  if(offsetBtn) offsetBtn.style.display = (isFill || !window._edIsTouch) ? 'none' : '';
+  if(isFill || !window._edIsTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
   _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();
@@ -8388,7 +8465,7 @@ function edDrawBarShow() {
   // T2: cursor offset NUNCA activo por defecto — el usuario lo activa manualmente
   if(typeof _edCursorOffsetInitialized === 'undefined'){
     window._edCursorOffsetInitialized = true;
-    _edCursorOffset = false;
+    _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
   }
   _edbSyncTool();
 }
