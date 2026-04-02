@@ -5625,11 +5625,12 @@ function edContinuePaint(e){
   const _eTmp = _edApplyCursorOffset(e);
   const c = edCoords(_eTmp), er = edActiveTool==='eraser';
   if(_edOffsetFirstMove){
-    // Primer move con offset: dibujar el punto inicial que se omitió en pointerdown
+    // Primer move: trazar desde la posición guardada (_lastX/_lastY) hasta aquí
+    // continueStroke parte de _lastX/_lastY sin resetearlos → no hay salto
     _edOffsetFirstMove = false;
     const _cr4f = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
     const _sizeFM = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
-    dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
+    dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
   } else {
     const _cr4c = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
     const _sizeCS = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
