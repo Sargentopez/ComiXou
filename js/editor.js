@@ -675,7 +675,37 @@ class DrawLayer extends BaseLayer {
     const {x,y} = this._wsCoords(nx, ny);
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
-    if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
+    if(clipR > 0){
+      // Clip cubre todo el segmento: trayectoria engrosada por clipR
+      // (equivale al área barrida por un círculo de radio clipR a lo largo del segmento)
+      this._ctx.beginPath();
+      this._ctx.moveTo(this._lastX, this._lastY);
+      this._ctx.lineTo(x, y);
+      this._ctx.lineWidth = clipR * 2;
+      this._ctx.lineCap = 'round';
+      this._ctx.stroke(); // solo para definir la ruta, restore() la descarta
+      // Recrear el path para clip (stroke no se puede clipear directamente)
+      this._ctx.beginPath();
+      this._ctx.moveTo(this._lastX, this._lastY);
+      this._ctx.lineTo(x, y);
+      // Usar el truco de isPointInStroke no disponible como clip;
+      // usar en cambio dos arcos + rect girado para aproximar la cápsula
+      const dx = x - this._lastX, dy = y - this._lastY;
+      const len = Math.sqrt(dx*dx+dy*dy);
+      if(len > 0){
+        const nx2 = -dy/len*clipR, ny2 = dx/len*clipR;
+        this._ctx.beginPath();
+        this._ctx.moveTo(this._lastX+nx2, this._lastY+ny2);
+        this._ctx.lineTo(x+nx2, y+ny2);
+        this._ctx.arc(x, y, clipR, Math.atan2(dy,dx)-Math.PI/2, Math.atan2(dy,dx)+Math.PI/2);
+        this._ctx.lineTo(this._lastX-nx2, this._lastY-ny2);
+        this._ctx.arc(this._lastX, this._lastY, clipR, Math.atan2(dy,dx)+Math.PI/2, Math.atan2(dy,dx)+3*Math.PI/2);
+        this._ctx.closePath();
+      } else {
+        this._ctx.arc(x, y, clipR, 0, Math.PI*2);
+      }
+      this._ctx.clip();
+    }
     this._ctx.globalAlpha = alpha;
     this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
@@ -4960,7 +4990,6 @@ function edOnEnd(e){
       _edCursorSavedTime = Date.now();
       _edCursorSetLineColor('rgba(220,50,50,0.85)');  // rojo = listo para siguiente trazo
       _edCursorStartExpireTimer();
-      _edCursorStartExpireTimer();
     }
   }
   // ── SHAPE: al soltar, convertir a LineLayer y fusionar inmediatamente ──
@@ -5601,6 +5630,8 @@ function edStartPaint(e){
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   const er = edActiveTool==='eraser';
   const _cr4base = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
+  // Poner línea del cursor en rojo al iniciar cualquier trazo con cursor offset
+  if(_edCursorOffset && isTouch) _edCursorSetLineColor('rgba(220,50,50,0.85)');
   if(_edCursorOffset && isTouch && !e._skipMoveBrush){
     // Cursor offset normal: fijar posición sin dibujar punto — el primer move lo hará
     const c = edCoords(_eTmp);
@@ -5709,14 +5740,6 @@ function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
   const cur = $('edBrushCursor'); if(cur) cur.style.display='none';
   const line = $('edOffsetLine'); if(line) line.style.display='none';
   const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
-}
-function _edCursorStartExpireTimer(){
-  clearTimeout(_edCursorExpireTimer);
-  _edCursorExpireTimer = setTimeout(() => {
-    _edCursorSavedPos = null;
-    _edCursorSavedTime = 0;
-    _edCursorSetLineColor('rgba(60,140,255,0.75)');
-  }, _ED_CURSOR_TAP_MS);
 }
 function _edCursorSetLineColor(color){
   _edCursorLineColor = color;
