@@ -854,7 +854,7 @@ body.editor-page #appView {
   bottom: max(env(safe-area-inset-bottom, 0px), 20px);
   left: 50%; transform: translateX(-50%);
   z-index: 420;
-  pointer-events: all;
+  pointer-events: none;  /* bloqueado mientras el visor esté cerrado */
   background: rgba(0,0,0,.6) !important;
   border: 1.5px solid rgba(255,255,255,.5) !important;
   backdrop-filter: blur(6px);
@@ -862,6 +862,9 @@ body.editor-page #appView {
 }
 @media (pointer: coarse) {
   .viewer-close-touch { display: block; }
+}
+#editorViewer.open .viewer-close-touch {
+  pointer-events: all;  /* solo activo cuando el visor está abierto */
 }
 
 #viewerCounter {
