@@ -3679,6 +3679,20 @@ function edOnStart(e){
     // En táctil: retardo para detectar si viene segundo dedo (pinch/zoom)
     if(e.pointerType === 'touch'){
       const _eSaved = e;
+      // Cursor offset activo: el tap solo posiciona el cursor, NO inicia trazo.
+      // El trazo comienza cuando el dedo se arrastra (en edOnMove).
+      if(_edCursorOffset){
+        clearTimeout(window._edDrawTouchTimer);
+        window._edDrawTouchTimer = null;
+        // Actualizar posición del cursor en pantalla
+        const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
+        _edOffsetLastTouch = { x: e.clientX, y: e.clientY };
+        _edOffsetShow(0, 0, e.clientX, e.clientY, sz);
+        // Guardar punto de inicio del arrastre para detectar zona muerta
+        window._edOffsetDragStart = { x: e.clientX, y: e.clientY };
+        window._edOffsetPaintStarted = false;
+        return;
+      }
       clearTimeout(window._edDrawTouchTimer);
       window._edDrawTouchTimer = setTimeout(() => {
         if(!window._edActivePointers || window._edActivePointers.size > 1) return;
@@ -4513,6 +4527,31 @@ function edOnMove(e){
   if(_edPinchHappened && edPainting) _edPinchHappened = false;
   if(_edPinchHappened) return; // hubo pinch — ignorar movimiento del dedo que queda
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
+  // Cursor offset: iniciar trazo cuando el dedo se arrastra más del umbral
+  if(_edCursorOffset && ['draw','eraser'].includes(edActiveTool) &&
+     !edPainting && window._edOffsetDragStart &&
+     e.pointerType === 'touch' &&
+     (_edActivePointers && _edActivePointers.size === 1)){
+    const _dx = e.clientX - window._edOffsetDragStart.x;
+    const _dy = e.clientY - window._edOffsetDragStart.y;
+    if(Math.sqrt(_dx*_dx + _dy*_dy) >= 8){
+      window._edOffsetDragStart = null;
+      // Crear evento sintético desde la posición del cursor anclado
+      const _anchor = _edOffsetLastTouch;
+      if(_anchor){
+        const _rad = _edCursorOffsetAngle * Math.PI / 180;
+        const _anchorEvt = {
+          clientX: _anchor.x + _ED_CURSOR_OFFSET_PX * Math.sin(_rad),
+          clientY: _anchor.y - _ED_CURSOR_OFFSET_PX * Math.cos(_rad),
+          pointerType: 'touch', pointerId: e.pointerId, touches: null
+        };
+        edStartPaint(_anchorEvt);
+      } else {
+        edStartPaint(e);
+      }
+    }
+    return;
+  }
   if(edActiveTool==='fill'){edMoveBrush(e);return;}
   // ── SHAPE: preview en tiempo real durante el drag ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
@@ -4853,6 +4892,11 @@ function edOnEnd(e){
     return;
   }
   if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); _edOffsetFirstMove = false; }
+  // Limpiar estado de arrastre del cursor offset
+  if(_edCursorOffset && window._edOffsetDragStart !== undefined){
+    window._edOffsetDragStart = null;
+    window._edOffsetPaintStarted = false;
+  }
   // ── SHAPE: al soltar, convertir a LineLayer y fusionar inmediatamente ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
     _edShapePreview.width  = Math.max(_edShapePreview.width,  0.02);
@@ -10930,37 +10974,38 @@ function _bibThumbGroup(idxs) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
 
-  // Canvas workspace para renderizar todas las capas
+  // Canvas workspace COMPLETO — captura objetos fuera del lienzo
   const off = document.createElement('canvas');
-  off.width = pw; off.height = ph;
+  off.width = ED_CANVAS_W; off.height = ED_CANVAS_H;
   const ctx = off.getContext('2d');
   ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, pw, ph);
-  ctx.setTransform(1, 0, 0, 1, -mx, -my);
+  ctx.fillRect(mx, my, pw, ph);
 
-  // Calcular bbox del grupo en coordenadas de página
-  let minX = 1, minY = 1, maxX = 0, maxY = 0;
+  // Calcular bbox en coordenadas absolutas de workspace
+  let minWX = Infinity, minWY = Infinity, maxWX = -Infinity, maxWY = -Infinity;
   idxs.forEach(i => {
     const la = edLayers[i];
     if (!la) return;
     ctx.globalAlpha = la.opacity ?? 1;
     la.draw(ctx, off);
     ctx.globalAlpha = 1;
-    if (la.type !== 'draw') {
-      minX = Math.min(minX, la.x - la.width/2);
-      minY = Math.min(minY, la.y - la.height/2);
-      maxX = Math.max(maxX, la.x + la.width/2);
-      maxY = Math.max(maxY, la.y + la.height/2);
+    if (la.type === 'draw') {
+      minWX = Math.min(minWX, mx); minWY = Math.min(minWY, my);
+      maxWX = Math.max(maxWX, mx + pw); maxWY = Math.max(maxWY, my + ph);
+    } else {
+      const cx = mx + la.x * pw, cy = my + la.y * ph;
+      const hw = la.width * pw / 2, hh = la.height * ph / 2;
+      minWX = Math.min(minWX, cx - hw); minWY = Math.min(minWY, cy - hh);
+      maxWX = Math.max(maxWX, cx + hw); maxWY = Math.max(maxWY, cy + hh);
     }
   });
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-  // Si no hay bbox válido (ej. solo DrawLayers), usar página entera
-  if (maxX <= minX || maxY <= minY) { minX=0; minY=0; maxX=1; maxY=1; }
+  if (!isFinite(minWX) || maxWX <= minWX || maxWY <= minWY) {
+    minWX = mx; minWY = my; maxWX = mx + pw; maxWY = my + ph;
+  }
+  minWX -= 4; minWY -= 4; maxWX += 4; maxWY += 4;
 
-  // Recortar bbox al thumb
-  const bx = minX * pw, by = minY * ph;
-  const bw = (maxX - minX) * pw, bh = (maxY - minY) * ph;
+  const bw = maxWX - minWX, bh = maxWY - minWY;
   const scale = Math.min((S - pad*2) / Math.max(bw, 1), (S - pad*2) / Math.max(bh, 1));
   const dw = bw * scale, dh = bh * scale;
   const dx = (S - dw) / 2, dy = (S - dh) / 2;
@@ -10970,7 +11015,7 @@ function _bibThumbGroup(idxs) {
   const tc = thumb.getContext('2d');
   tc.fillStyle = '#f5f5f5';
   tc.fillRect(0, 0, S, S);
-  tc.drawImage(off, bx, by, bw, bh, dx, dy, dw, dh);
+  tc.drawImage(off, minWX, minWY, bw, bh, dx, dy, dw, dh);
 
   // Icono de grupo
   tc.fillStyle = 'rgba(0,0,0,.35)';
