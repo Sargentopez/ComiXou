@@ -49,7 +49,8 @@ const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 let _edCursorSavedPos = null;          // {nx, ny, clientX, clientY} posición guardada del cursor
 let _edCursorSavedTime = 0;            // timestamp del último levantamiento de dedo con cursor activo
 let _edCursorPositioning = false;      // true: arrastre actual es solo posicionamiento (no dibuja)
-const _ED_CURSOR_TAP_MS = 1000;         // ventana de tiempo para "tap rápido" que inicia dibujo
+const _ED_CURSOR_TAP_MS = 1000;         // ventana activa tras ubicar cursor (ms antes de volver a azul)
+const _ED_CURSOR_STROKE_MS = 500;       // ventana activa tras terminar trazo (ms antes de volver a azul)
 let _edCursorExpireTimer = null;       // timer que vuelve a azul al expirar el estado rojo
 let _edCursorLineColor = 'rgba(60,140,255,0.75)';
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
@@ -4940,7 +4941,7 @@ function edOnEnd(e){
       const _sz = Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
       _edOffsetShow(0, 0, _touchX, _touchY, _sz);
       _edCursorSetLineColor('rgba(220,50,50,0.85)');  // rojo = listo para dibujar
-      _edCursorStartExpireTimer();
+      _edCursorStartExpireTimer(_ED_CURSOR_TAP_MS);  // 1000ms tras ubicar cursor
       // Actualizar _edOffsetLastTouch para que _edRefreshOffsetCursor funcione
       _edOffsetLastTouch = { x: _touchX, y: _touchY };
     }
@@ -4966,7 +4967,7 @@ function edOnEnd(e){
       _edCursorSavedPos = { clientX: _cx2, clientY: _cy2 };
       _edCursorSavedTime = Date.now();
       _edCursorSetLineColor('rgba(220,50,50,0.85)');  // rojo = listo para siguiente trazo
-      _edCursorStartExpireTimer();
+      _edCursorStartExpireTimer(_ED_CURSOR_STROKE_MS);  // 500ms tras terminar trazo
     }
   }
   // ── SHAPE: al soltar, convertir a LineLayer y fusionar inmediatamente ──
@@ -5730,15 +5731,15 @@ function _edCursorSetLineColor(color){
   const line = wrap.querySelector('div:nth-child(2)');
   if(line) line.style.background = color;
 }
-// Arranca el timer de expiración: tras _ED_CURSOR_TAP_MS sin dibujar, vuelve a azul
-function _edCursorStartExpireTimer(){
+// Arranca el timer de expiración: tras ms sin dibujar, vuelve a azul
+function _edCursorStartExpireTimer(ms){
   clearTimeout(_edCursorExpireTimer);
   _edCursorExpireTimer = setTimeout(() => {
     // El tiempo expiró sin que el usuario dibujara → volver a modo reposicionamiento
     _edCursorSavedPos = null;
     _edCursorSavedTime = 0;
     _edCursorSetLineColor('rgba(60,140,255,0.75)');  // azul = reposicionando
-  }, _ED_CURSOR_TAP_MS);
+  }, ms ?? _ED_CURSOR_TAP_MS);
 }
 
 function _edOffsetHide(){
