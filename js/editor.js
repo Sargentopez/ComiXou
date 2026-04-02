@@ -675,37 +675,7 @@ class DrawLayer extends BaseLayer {
     const {x,y} = this._wsCoords(nx, ny);
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
-    if(clipR > 0){
-      // Clip cubre todo el segmento: trayectoria engrosada por clipR
-      // (equivale al área barrida por un círculo de radio clipR a lo largo del segmento)
-      this._ctx.beginPath();
-      this._ctx.moveTo(this._lastX, this._lastY);
-      this._ctx.lineTo(x, y);
-      this._ctx.lineWidth = clipR * 2;
-      this._ctx.lineCap = 'round';
-      this._ctx.stroke(); // solo para definir la ruta, restore() la descarta
-      // Recrear el path para clip (stroke no se puede clipear directamente)
-      this._ctx.beginPath();
-      this._ctx.moveTo(this._lastX, this._lastY);
-      this._ctx.lineTo(x, y);
-      // Usar el truco de isPointInStroke no disponible como clip;
-      // usar en cambio dos arcos + rect girado para aproximar la cápsula
-      const dx = x - this._lastX, dy = y - this._lastY;
-      const len = Math.sqrt(dx*dx+dy*dy);
-      if(len > 0){
-        const nx2 = -dy/len*clipR, ny2 = dx/len*clipR;
-        this._ctx.beginPath();
-        this._ctx.moveTo(this._lastX+nx2, this._lastY+ny2);
-        this._ctx.lineTo(x+nx2, y+ny2);
-        this._ctx.arc(x, y, clipR, Math.atan2(dy,dx)-Math.PI/2, Math.atan2(dy,dx)+Math.PI/2);
-        this._ctx.lineTo(this._lastX-nx2, this._lastY-ny2);
-        this._ctx.arc(this._lastX, this._lastY, clipR, Math.atan2(dy,dx)+Math.PI/2, Math.atan2(dy,dx)+3*Math.PI/2);
-        this._ctx.closePath();
-      } else {
-        this._ctx.arc(x, y, clipR, 0, Math.PI*2);
-      }
-      this._ctx.clip();
-    }
+    if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
     this._ctx.globalAlpha = alpha;
     this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
@@ -5640,7 +5610,9 @@ function edStartPaint(e){
   } else {
     // Posición guardada (edStartPaintFromSaved) o PC: dibujar punto inicial directamente
     const c = edCoords(_eTmp);
-    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4base);
+    // Con cursor offset: size = diámetro del clip para que nada sobresalga
+    const _sizeBS = (_cr4base > 0) ? _cr4base * 2 : (er?edEraserSize:edDrawSize);
+    dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
     edRedraw();
     _edOffsetFirstMove = false;
   }
@@ -5656,10 +5628,12 @@ function edContinuePaint(e){
     // Primer move con offset: dibujar el punto inicial que se omitió en pointerdown
     _edOffsetFirstMove = false;
     const _cr4f = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
-    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4f);
+    const _sizeFM = (_cr4f > 0) ? _cr4f * 2 : (er?edEraserSize:edDrawSize);
+    dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
   } else {
     const _cr4c = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
-    dl.continueStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4c);
+    const _sizeCS = (_cr4c > 0) ? _cr4c * 2 : (er?edEraserSize:edDrawSize);
+    dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
   edRedraw();
   edMoveBrush(e);
@@ -8164,7 +8138,7 @@ function edInitDrawBar() {
     // Actualizar número y preview inmediatamente
     const num = $('edb-size-num'); if(num) num.value = v;
     const prev = $('edb-size-preview');
-    if(prev){ const pd=Math.max(4,Math.min(32,Math.round(v*0.7))); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
+    if(prev){ const pd=Math.max(4,Math.min(80,v*2)); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
     // Actualizar preview en tiempo real
     _edbSyncSizePreview();
     const sl = $('op-dsize'); if(sl){ sl.value=v; const n=$('op-dsize-num'); if(n) n.value=v; }
@@ -8471,8 +8445,8 @@ function _edbSyncSizePreview() {
   // Goma: círculo blanco con borde, tamaño fijo
   const _dz = typeof edCamera!=='undefined' ? edCamera.z : 1;
   let d, color, border;
-  // Lápiz y goma: mismo comportamiento — preview = sz * z (tamaño visible en pantalla)
-  d = Math.max(3, Math.min(44, Math.round(sz * _dz)));
+  // Preview escala con zoom de cámara, límite 80px
+  d = Math.max(4, Math.min(80, Math.round(sz * _dz)));
   if(isEr){
     color = '#ffffff';
     border = '2px solid rgba(180,180,180,0.6)';
