@@ -41,6 +41,7 @@ let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
 let _edOffsetFirstMove = false;        // true: el primer move debe incluir el punto inicial
+let _edFromSaved = false;              // true: venimos de edStartPaintFromSaved — ignorar posición del primer move
 let _edOffsetLastTouch = null;         // última posición táctil conocida {x, y, sz} para refrescar el cursor
 const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 // Cursor offset — modo "posición guardada":
@@ -4957,7 +4958,7 @@ function edOnEnd(e){
     return;
   }
   if(edPainting && edActiveTool !== 'fill'){
-    edSaveDrawData(); _edOffsetFirstMove = false;
+    edSaveDrawData(); _edOffsetFirstMove = false; _edFromSaved = false;
     // Cursor offset: al terminar un trazo, guardar la posición actual del cursor
     // para que el siguiente tap rápido pueda continuar desde ahí
     if(_edCursorOffset && _edOffsetLastTouch){
@@ -5575,6 +5576,7 @@ function edStartPaintFromSaved(e){
   _edCursorSavedTime = 0;
   _edCursorPositioning = false;
   clearTimeout(_edCursorExpireTimer);
+  _edFromSaved = true;  // primer continueStroke ignorará la nueva posición del toque
   // La línea se mantiene roja mientras se dibuja
   edStartPaint(_synthetic);
 }
@@ -5630,6 +5632,9 @@ function edContinuePaint(e){
   if(!edPainting) return;
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  // Si venimos de edStartPaintFromSaved: el primer move ignora el toque nuevo.
+  // El trazo arranca exactamente donde terminó el anterior, sin salto.
+  if(_edFromSaved){ _edFromSaved = false; edMoveBrush(e); return; }
   const _eTmp = _edApplyCursorOffset(e);
   const c = edCoords(_eTmp), er = edActiveTool==='eraser';
   if(_edOffsetFirstMove){
