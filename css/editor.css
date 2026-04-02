@@ -8,6 +8,10 @@ body.editor-page {
   overflow: hidden;
   height: 100%;
   padding-top: 0 !important;
+  -webkit-tap-highlight-color: transparent;
+}
+body.editor-page * {
+  -webkit-tap-highlight-color: transparent;
 }
 body.editor-page #appView {
   height: 100%;
