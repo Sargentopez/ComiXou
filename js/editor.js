@@ -10559,7 +10559,14 @@ function EditorView_init(){
       const inPalPop   = e.target.closest('#edb-palette-pop');
       const inShapePop = e.target.closest('#edb-palette-pop');
       const inHSL      = e.target.closest('#ed-hsl-picker');
-      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL){
+      // Guards adicionales para evitar cancelación accidental en Android:
+      // 1. Estamos pintando activamente → nunca cancelar
+      // 2. Timer táctil pendiente (120ms) → acabamos de tocar el canvas → no cancelar
+      // 3. Target dentro del editorShell → el canvas cubre toda la pantalla, si el evento
+      //    llegó al doc sin pasar por #editorCanvas es un evento de borde/sistema Android
+      const _inShell = e.target.closest('#editorShell');
+      const _drawSafe = edPainting || !!window._edDrawTouchTimer || !!window._edLineTouchTimer || _inShell;
+      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL && !_drawSafe){
         if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       }
     }
