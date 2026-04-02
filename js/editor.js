@@ -3679,38 +3679,33 @@ function edOnStart(e){
     // En táctil: retardo para detectar si viene segundo dedo (pinch/zoom)
     if(e.pointerType === 'touch'){
       const _eSaved = e;
-      // Cursor offset activo:
-      //   - Si el dedo vuelve antes de 400ms → dibujar desde cursor anclado
-      //   - Si vuelve después de 400ms → solo reposicionar cursor, no dibujar
+      // Cursor offset: tap = posicionar cursor; arrastre rápido tras lift = dibujar
       if(_edCursorOffset){
         clearTimeout(window._edDrawTouchTimer);
         window._edDrawTouchTimer = null;
-        const _now = Date.now();
-        const _timeSinceLift = _now - (window._edOffsetLiftTime || 0);
+        const _timeSinceLift = Date.now() - (window._edOffsetLiftTime || 0);
         if(_timeSinceLift < 400 && _edOffsetLastTouch){
-          // Vuelve rápido — iniciar dibujo desde el cursor anclado
+          // Regresa rápido tras levantar → iniciar dibujo desde cursor anclado
           window._edOffsetDrawing = true;
           window._edOffsetLiftTime = 0;
-          // edStartPaint con evento anclado al cursor
           const _rad = _edCursorOffsetAngle * Math.PI / 180;
           const _aEvt = {
             clientX: _edOffsetLastTouch.x + _ED_CURSOR_OFFSET_PX * Math.sin(_rad),
             clientY: _edOffsetLastTouch.y - _ED_CURSOR_OFFSET_PX * Math.cos(_rad),
             pointerType: 'touch', pointerId: e.pointerId, touches: null
           };
-          // Pequeño delay para asegurar que edStartPaint tiene el dl listo
-          setTimeout(() => {
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-            if(!['draw','eraser'].includes(edActiveTool)) return;
-            edStartPaint(_aEvt);
-          }, 0);
+          edStartPaint(_aEvt);
         } else {
-          // Toque frío — solo posicionar cursor, no dibujar
+          // Toque frío → solo posicionar cursor, no dibujar
           window._edOffsetDrawing = false;
           window._edOffsetLiftTime = 0;
           const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
           _edOffsetLastTouch = { x: e.clientX, y: e.clientY };
           _edOffsetShow(0, 0, e.clientX, e.clientY, sz);
+          // Capturar puntero para recibir pointermove aunque el dedo salga del canvas
+          if(e.pointerId !== undefined && edCanvas){
+            try { edCanvas.setPointerCapture(e.pointerId); } catch(_){}
+          }
         }
         return;
       }
@@ -4548,11 +4543,11 @@ function edOnMove(e){
   if(_edPinchHappened && edPainting) _edPinchHappened = false;
   if(_edPinchHappened) return; // hubo pinch — ignorar movimiento del dedo que queda
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
-  // Cursor offset en modo arrastre sin dibujar: solo mover el cursor
+  // Cursor offset: arrastre sin dibujar → mover cursor en tiempo real
   if(_edCursorOffset && ['draw','eraser'].includes(edActiveTool) &&
      !edPainting && e.pointerType === 'touch' &&
      window._edOffsetDrawing === false &&
-     (_edActivePointers && _edActivePointers.size === 1)){
+     _edActivePointers && _edActivePointers.size === 1){
     const sz = (edActiveTool==='eraser' ? edEraserSize : edDrawSize) * 2;
     _edOffsetLastTouch = { x: e.clientX, y: e.clientY };
     _edOffsetShow(0, 0, e.clientX, e.clientY, sz);
@@ -4898,7 +4893,7 @@ function edOnEnd(e){
     return;
   }
   if(edPainting && edActiveTool !== 'fill'){ edSaveDrawData(); _edOffsetFirstMove = false; }
-  // Cursor offset: guardar momento del lift para saber si el siguiente tap es rápido
+  // Cursor offset: guardar momento del lift
   if(_edCursorOffset && ['draw','eraser'].includes(edActiveTool) && e.pointerType === 'touch'){
     window._edOffsetLiftTime = Date.now();
     window._edOffsetDrawing = false;
@@ -8252,9 +8247,10 @@ function _edbSyncTool() {
   $('edb-fill')?.classList.toggle('active', t === 'fill');
   // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
+  const _hasTouch = window._edIsTouch || navigator.maxTouchPoints > 0;
   const offsetBtn = $('edb-offset');
-  if(offsetBtn) offsetBtn.style.display = (isFill || !window._edIsTouch) ? 'none' : '';
-  if(isFill || !window._edIsTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
+  if(offsetBtn) offsetBtn.style.display = (isFill || !_hasTouch) ? 'none' : '';
+  if(isFill || !_hasTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
   _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();
