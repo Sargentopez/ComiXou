@@ -39,6 +39,7 @@ const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
+let _edLastBrushE = null;              // último evento de puntero para actualizar cursor al hacer zoom
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
 let _edOffsetFirstMove = false;        // true: el primer move debe incluir el punto inicial
 let _edOffsetLastTouch = null;         // última posición táctil conocida {x, y, sz} para refrescar el cursor
@@ -138,6 +139,8 @@ function _edSyncSizeDots(){
   const z = edCamera.z;
   // Actualizar preview del panel si está abierto
   _edbSyncSizePreview();
+  // Actualizar cursor del pincel si hay posición guardada
+  if(_edLastBrushE) edMoveBrush(_edLastBrushE);
   // Dot barra flotante de objetos
   const dotS = $('esb-size-dot');
   if(dotS){
@@ -675,7 +678,8 @@ class DrawLayer extends BaseLayer {
     const {x,y} = this._wsCoords(nx, ny);
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
-    if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
+    // No clip en continueStroke: clipR circular en el punto destino cortaría el trazo entrante.
+    // lineCap='round' garantiza que el extremo no exceda size/2 del centro.
     this._ctx.globalAlpha = alpha;
     this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
@@ -5770,6 +5774,7 @@ function edClearDraw(){
   edRedraw(); edToast('Dibujos borrados');
 }
 function edMoveBrush(e){
+  if(e && e.clientX !== undefined) _edLastBrushE = e; // guardar para refresh al zoom
   const src = e.touches ? e.touches[0] : e;
   const cur = $('edBrushCursor');
   if(!cur) return;
