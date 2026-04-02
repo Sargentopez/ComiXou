@@ -3272,6 +3272,33 @@ function _edLineHitTest(la, nx, ny, isTouch){
 }
 
 function edOnStart(e){
+  // ── DIAGNÓSTICO TEMPORAL (borrar tras identificar el bug) ──
+  if(e.pointerType === 'touch'){
+    const _diagEl = document.elementFromPoint(e.clientX, e.clientY);
+    const _diagInfo = _diagEl
+      ? (_diagEl.id || _diagEl.className || _diagEl.tagName)
+      : 'null';
+    // Mostrar panel diagnóstico si el elemento no es el canvas
+    if(_diagEl && _diagEl !== edCanvas){
+      let _dp = document.getElementById('_edDiagPanel');
+      if(!_dp){
+        _dp = document.createElement('div');
+        _dp.id = '_edDiagPanel';
+        _dp.style.cssText = 'position:fixed;top:50px;left:10px;right:10px;z-index:99999;background:#fff;border:2px solid red;padding:8px;font-size:11px;font-family:monospace;word-break:break-all;max-height:200px;overflow-y:auto;';
+        document.body.appendChild(_dp);
+      }
+      const _rect = _diagEl.getBoundingClientRect();
+      _dp.innerHTML = `<b>Elemento en (${Math.round(e.clientX)},${Math.round(e.clientY)}):</b><br>
+tag: ${_diagEl.tagName}<br>
+id: ${_diagEl.id || '(sin id)'}<br>
+class: ${_diagEl.className || '(sin class)'}<br>
+rect: ${Math.round(_rect.left)},${Math.round(_rect.top)} ${Math.round(_rect.width)}x${Math.round(_rect.height)}<br>
+pointer-events: ${getComputedStyle(_diagEl).pointerEvents}<br>
+display: ${getComputedStyle(_diagEl).display}<br>
+<button onclick="this.parentNode.remove()" style="margin-top:4px;padding:2px 8px">✕ Cerrar</button>`;
+    }
+  }
+  // ── FIN DIAGNÓSTICO ──
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
   if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
