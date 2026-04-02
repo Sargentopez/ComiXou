@@ -4926,7 +4926,7 @@ function edOnEnd(e){
       _edCursorSavedPos = { clientX: _cx, clientY: _cy };
       _edCursorSavedTime = Date.now();
       // Mantener el cursor visible en la posición guardada y pintar línea en rojo
-      const _sz = edDrawSize * 2;
+      const _sz = (edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * 2;
       _edOffsetShow(0, 0, _touchX, _touchY, _sz);
       _edCursorSetLineColor('rgba(220,50,50,0.85)');  // rojo = listo para dibujar
       _edCursorStartExpireTimer();
