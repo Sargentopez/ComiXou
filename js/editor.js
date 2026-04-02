@@ -4067,6 +4067,18 @@ function edOnStart(e){
   }
   if(found>=0){
     const _fla = edLayers[found];
+    // Con barra flotante de dibujo activa: ignorar selección — el toque debe ir al dibujo
+    if($('edDrawBar')?.classList.contains('visible') && ['draw','eraser','fill'].includes(edActiveTool)){
+      // Redirigir al sistema de dibujo táctil (igual que si hubiera caído en zona vacía)
+      clearTimeout(window._edDrawTouchTimer);
+      const _eSaved2 = e;
+      window._edDrawTouchTimer = setTimeout(() => {
+        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+        if(!['draw','eraser'].includes(edActiveTool)) return;
+        edStartPaint(_eSaved2);
+      }, 120);
+      return;
+    }
     // ── Objeto bloqueado: mostrar candado o abrir panel ──
     if(_fla && _fla.locked){
       const _panel = $('edOptionsPanel');
@@ -6650,8 +6662,8 @@ function _edBindAllNumInputs(container) {
 
 function edRenderOptionsPanel(mode){
   const panel=$('edOptionsPanel');if(!panel)return;
-  // Siempre restaurar visibility (puede quedar hidden por edMinimize)
-  if(mode) panel.style.visibility='';
+  // Restaurar visibility solo si NO estamos minimizados (si estamos minimizados, el panel debe quedar hidden)
+  if(mode && !edMinimized) panel.style.visibility='';
 
   // Sin objeto: cerrar panel — pero respetar modos shape/line activos
   if(!mode||(mode==='props'&&edSelectedIdx<0)){
@@ -10559,13 +10571,8 @@ function EditorView_init(){
       const inPalPop   = e.target.closest('#edb-palette-pop');
       const inShapePop = e.target.closest('#edb-palette-pop');
       const inHSL      = e.target.closest('#ed-hsl-picker');
-      // Guards adicionales para evitar cancelación accidental en Android:
-      // 1. Estamos pintando activamente → nunca cancelar
-      // 2. Timer táctil pendiente (120ms) → acabamos de tocar el canvas → no cancelar
-      // 3. Target dentro del editorShell → el canvas cubre toda la pantalla, si el evento
-      //    llegó al doc sin pasar por #editorCanvas es un evento de borde/sistema Android
-      const _inShell = e.target.closest('#editorShell');
-      const _drawSafe = edPainting || !!window._edDrawTouchTimer || !!window._edLineTouchTimer || _inShell;
+      // Guards: no cancelar si estamos pintando activamente o timer táctil pendiente
+      const _drawSafe = edPainting || !!window._edDrawTouchTimer || !!window._edLineTouchTimer;
       if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL && !_drawSafe){
         if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       }
