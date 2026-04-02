@@ -51,6 +51,7 @@ let _edCursorSavedTime = 0;            // timestamp del último levantamiento de
 let _edCursorPositioning = false;      // true: arrastre actual es solo posicionamiento (no dibuja)
 const _ED_CURSOR_TAP_MS = 500;         // ventana de tiempo para "tap rápido" que inicia dibujo
 let _edCursorExpireTimer = null;       // timer que vuelve a azul al expirar el estado rojo
+let _edCursorLineColor = 'rgba(60,140,255,0.75)';
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
@@ -5695,7 +5696,7 @@ function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
     <div style="position:absolute;
       left:-1px; top:${-dotSize/2 - lineLen}px;
       width:2px; height:${lineLen}px;
-      background:rgba(60,140,255,0.75);"></div>
+      background:${_edCursorLineColor};"></div>
     <!-- Cursor (círculo): centrado lineLen+dotSize/2 px arriba del toque -->
     <div style="position:absolute;
       left:${-cursorR}px; top:${-dotSize/2 - lineLen - cursorR*2}px;
@@ -5718,6 +5719,7 @@ function _edCursorStartExpireTimer(){
   }, _ED_CURSOR_TAP_MS);
 }
 function _edCursorSetLineColor(color){
+  _edCursorLineColor = color;
   const wrap = $('edOffsetWrap');
   if(!wrap || wrap.style.display === 'none') return;
   const line = wrap.querySelector('div:nth-child(2)');
