@@ -39,7 +39,6 @@ const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
-let _edLastBrushE = null;              // último evento de puntero para actualizar cursor al hacer zoom
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
 let _edOffsetFirstMove = false;        // true: el primer move debe incluir el punto inicial
 let _edOffsetLastTouch = null;         // última posición táctil conocida {x, y, sz} para refrescar el cursor
@@ -139,8 +138,13 @@ function _edSyncSizeDots(){
   const z = edCamera.z;
   // Actualizar preview del panel si está abierto
   _edbSyncSizePreview();
-  // Actualizar cursor del pincel si hay posición guardada
-  if(_edLastBrushE) edMoveBrush(_edLastBrushE);
+  // Actualizar cursor del pincel (escala con zoom)
+  _edRefreshOffsetCursor();
+  const _bCur = $('edBrushCursor');
+  if(_bCur && _bCur.style.display !== 'none'){
+    const _szB = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * z);
+    _bCur.style.width = _szB + 'px'; _bCur.style.height = _szB + 'px';
+  }
   // Dot barra flotante de objetos
   const dotS = $('esb-size-dot');
   if(dotS){
@@ -678,8 +682,7 @@ class DrawLayer extends BaseLayer {
     const {x,y} = this._wsCoords(nx, ny);
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
-    // No clip en continueStroke: clipR circular en el punto destino cortaría el trazo entrante.
-    // lineCap='round' garantiza que el extremo no exceda size/2 del centro.
+    if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
     this._ctx.globalAlpha = alpha;
     this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
     if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
@@ -5603,7 +5606,7 @@ function edStartPaint(e){
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   const er = edActiveTool==='eraser';
-  const _cr4base = (er?edEraserSize:edDrawSize)/2; // clipR siempre activo
+  const _cr4base = (er?edEraserSize:edDrawSize)/2; // clip siempre activo en el punto inicial
   // Poner línea del cursor en rojo al iniciar cualquier trazo con cursor offset
   if(_edCursorOffset && isTouch) _edCursorSetLineColor('rgba(220,50,50,0.85)');
   if(_edCursorOffset && isTouch && !e._skipMoveBrush){
@@ -5615,7 +5618,7 @@ function edStartPaint(e){
     // Posición guardada (edStartPaintFromSaved) o PC: dibujar punto inicial directamente
     const c = edCoords(_eTmp);
     // size = diámetro - 1px para que el antialiasing quede dentro del clip
-    const _sizeBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2) : (er?edEraserSize:edDrawSize);
+    const _sizeBS = er?edEraserSize:edDrawSize; // tamaño exacto; clipR=size/2 contiene el antialiasing
     dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
     edRedraw();
     _edOffsetFirstMove = false;
@@ -5632,12 +5635,12 @@ function edContinuePaint(e){
     // Primer move: trazar desde la posición guardada (_lastX/_lastY) hasta aquí
     // continueStroke parte de _lastX/_lastY sin resetearlos → no hay salto
     _edOffsetFirstMove = false;
-    const _cr4f = (er?edEraserSize:edDrawSize)/2; // clipR siempre activo
-    const _sizeFM = (_cr4f > 0) ? Math.max(1, _cr4f * 2) : (er?edEraserSize:edDrawSize);
+    const _cr4f = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
+    const _sizeFM = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
   } else {
-    const _cr4c = (er?edEraserSize:edDrawSize)/2; // clipR siempre activo
-    const _sizeCS = (_cr4c > 0) ? Math.max(1, _cr4c * 2) : (er?edEraserSize:edDrawSize);
+    const _cr4c = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
+    const _sizeCS = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
   edRedraw();
@@ -5749,8 +5752,7 @@ function _edRefreshOffsetCursor(){
   if(!_edCursorOffset || !_edOffsetLastTouch) return;
   const wrap = $('edOffsetWrap');
   if(!wrap || wrap.style.display === 'none') return;
-  const _sz0 = edActiveTool==='eraser' ? edEraserSize : edDrawSize;
-  const sz = Math.round(_sz0 * (edCamera ? edCamera.z : 1));
+  const sz = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
   _edOffsetShow(0, 0, _edOffsetLastTouch.x, _edOffsetLastTouch.y, sz);
 }
 function _edOffsetShowReset(){
@@ -5774,7 +5776,6 @@ function edClearDraw(){
   edRedraw(); edToast('Dibujos borrados');
 }
 function edMoveBrush(e){
-  if(e && e.clientX !== undefined) _edLastBrushE = e; // guardar para refresh al zoom
   const src = e.touches ? e.touches[0] : e;
   const cur = $('edBrushCursor');
   if(!cur) return;
@@ -5783,8 +5784,7 @@ function edMoveBrush(e){
     _edOffsetHide();
     return;
   }
-  const _szRaw = edActiveTool==='eraser' ? edEraserSize : edDrawSize;
-  const sz = Math.round(_szRaw * (edCamera ? edCamera.z : 1));
+  const sz = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(_edCursorOffset && isTouch){
     // Si el toque está sobre el panel o la barra flotante, refrescar el cursor en su posición actual
