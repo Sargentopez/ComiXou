@@ -50,6 +50,7 @@ let _edCursorSavedPos = null;          // {nx, ny, clientX, clientY} posición g
 let _edCursorSavedTime = 0;            // timestamp del último levantamiento de dedo con cursor activo
 let _edCursorPositioning = false;      // true: arrastre actual es solo posicionamiento (no dibuja)
 const _ED_CURSOR_TAP_MS = 500;         // ventana de tiempo para "tap rápido" que inicia dibujo
+let _edCursorExpireTimer = null;       // timer que vuelve a azul al expirar el estado rojo
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
@@ -4924,9 +4925,11 @@ function edOnEnd(e){
       const _cy = _touchY - _ED_CURSOR_OFFSET_PX * Math.cos(_rad);
       _edCursorSavedPos = { clientX: _cx, clientY: _cy };
       _edCursorSavedTime = Date.now();
-      // Mantener el cursor visible en la posición guardada
+      // Mantener el cursor visible en la posición guardada y pintar línea en rojo
       const _sz = edDrawSize * 2;
       _edOffsetShow(0, 0, _touchX, _touchY, _sz);
+      _edCursorSetLineColor('rgba(220,50,50,0.85)');  // rojo = listo para dibujar
+      _edCursorStartExpireTimer();
       // Actualizar _edOffsetLastTouch para que _edRefreshOffsetCursor funcione
       _edOffsetLastTouch = { x: _touchX, y: _touchY };
     }
@@ -4951,6 +4954,9 @@ function edOnEnd(e){
       const _cy2 = _edOffsetLastTouch.y - _ED_CURSOR_OFFSET_PX * Math.cos(_rad2);
       _edCursorSavedPos = { clientX: _cx2, clientY: _cy2 };
       _edCursorSavedTime = Date.now();
+      _edCursorSetLineColor('rgba(220,50,50,0.85)');  // rojo = listo para siguiente trazo
+      _edCursorStartExpireTimer();
+      _edCursorStartExpireTimer();
     }
   }
   // ── SHAPE: al soltar, convertir a LineLayer y fusionar inmediatamente ──
@@ -5551,11 +5557,15 @@ function edStartPaintFromSaved(e){
     clientY: _saved.clientY,
     pointerType: e.pointerType,
     pointerId: e.pointerId,
-    touches: null
+    touches: null,
+    _skipMoveBrush: true  // no reubicar el visual — ya está en la posición correcta
   };
   _edCursorSavedPos = null;
   _edCursorSavedTime = 0;
   _edCursorPositioning = false;
+  clearTimeout(_edCursorExpireTimer);
+  // La línea vuelve a azul al arrancar el trazo
+  _edCursorSetLineColor('rgba(60,140,255,0.75)');
   edStartPaint(_synthetic);
 }
 
@@ -5599,7 +5609,7 @@ function edStartPaint(e){
     edRedraw();
     _edOffsetFirstMove = false;
   }
-  edMoveBrush(e);
+  if(!e._skipMoveBrush) edMoveBrush(e);
 }
 function edContinuePaint(e){
   if(!edPainting) return;
@@ -5694,6 +5704,31 @@ function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
   const line = $('edOffsetLine'); if(line) line.style.display='none';
   const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
 }
+function _edCursorStartExpireTimer(){
+  clearTimeout(_edCursorExpireTimer);
+  _edCursorExpireTimer = setTimeout(() => {
+    _edCursorSavedPos = null;
+    _edCursorSavedTime = 0;
+    _edCursorSetLineColor('rgba(60,140,255,0.75)');
+  }, _ED_CURSOR_TAP_MS);
+}
+function _edCursorSetLineColor(color){
+  const wrap = $('edOffsetWrap');
+  if(!wrap || wrap.style.display === 'none') return;
+  const line = wrap.querySelector('div:nth-child(2)');
+  if(line) line.style.background = color;
+}
+// Arranca el timer de expiración: tras _ED_CURSOR_TAP_MS sin dibujar, vuelve a azul
+function _edCursorStartExpireTimer(){
+  clearTimeout(_edCursorExpireTimer);
+  _edCursorExpireTimer = setTimeout(() => {
+    // El tiempo expiró sin que el usuario dibujara → volver a modo reposicionamiento
+    _edCursorSavedPos = null;
+    _edCursorSavedTime = 0;
+    _edCursorSetLineColor('rgba(60,140,255,0.75)');  // azul = reposicionando
+  }, _ED_CURSOR_TAP_MS);
+}
+
 function _edOffsetHide(){
   const wrap = $('edOffsetWrap');
   if(wrap){ wrap.style.display='none'; wrap.innerHTML=''; }
@@ -5854,7 +5889,7 @@ function edDeactivateDrawTool(){
   edDrawBarHide();
   _edDrawUnlockUI();
   // Apagar cursor offset al salir del panel de dibujo
-  _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
+  _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false; clearTimeout(_edCursorExpireTimer); clearTimeout(_edCursorExpireTimer);
   _edOffsetHide();
   _edFreezeDrawLayer();
   requestAnimationFrame(edFitCanvas);
@@ -7043,7 +7078,7 @@ function edRenderOptionsPanel(mode){
       if(isOpen){ _opOffsetPop.style.display = 'none'; return; }
       if(_edCursorOffset){
         // Offset activo y popover cerrado → desactivar
-        _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
+        _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false; clearTimeout(_edCursorExpireTimer); clearTimeout(_edCursorExpireTimer);
         _opOffsetBtn.style.background = 'transparent';
         _opOffsetBtn.style.color = 'var(--gray-700)';
         _edbSyncOffsetBtn();
@@ -7068,7 +7103,7 @@ function edRenderOptionsPanel(mode){
         $(id)?.addEventListener('click', e => {
           e.stopPropagation();
           if(_edCursorOffset && _edCursorOffsetAngle === angle){
-            _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
+            _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false; clearTimeout(_edCursorExpireTimer); clearTimeout(_edCursorExpireTimer);
           } else {
             _edCursorOffset = true;
             _edCursorOffsetAngle = angle;
@@ -8136,7 +8171,7 @@ function edInitDrawBar() {
     if(isOpen){ pop.style.display = 'none'; return; }
     // Si offset activo → desactivar directamente sin abrir el popover
     if(_edCursorOffset){
-      _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
+      _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false; clearTimeout(_edCursorExpireTimer); clearTimeout(_edCursorExpireTimer);
       _edbSyncOffsetBtn();
       _edOffsetHide();
       return;
@@ -8174,7 +8209,7 @@ function edInitDrawBar() {
       $(id)?.addEventListener('click', e => {
         e.stopPropagation();
         if(_edCursorOffset && _edCursorOffsetAngle === angle){
-          _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
+          _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false; clearTimeout(_edCursorExpireTimer); clearTimeout(_edCursorExpireTimer);
         } else {
           _edCursorOffset = true;
           _edCursorOffsetAngle = angle;
@@ -8465,7 +8500,7 @@ function edDrawBarShow() {
   // T2: cursor offset NUNCA activo por defecto — el usuario lo activa manualmente
   if(typeof _edCursorOffsetInitialized === 'undefined'){
     window._edCursorOffsetInitialized = true;
-    _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false;
+    _edCursorOffset = false; _edCursorSavedPos = null; _edCursorSavedTime = 0; _edCursorPositioning = false; clearTimeout(_edCursorExpireTimer); clearTimeout(_edCursorExpireTimer);
   }
   _edbSyncTool();
 }
