@@ -138,8 +138,8 @@ function _edSyncSizeDots(){
   const z = edCamera.z;
   // Actualizar preview del panel si está abierto
   _edbSyncSizePreview();
-  // Actualizar cursor del pincel (escala con zoom)
-  _edRefreshOffsetCursor();
+  // Actualizar cursor del pincel al cambiar zoom
+  if(typeof _edRefreshOffsetCursor === 'function') _edRefreshOffsetCursor();
   const _bCur = $('edBrushCursor');
   if(_bCur && _bCur.style.display !== 'none'){
     const _szB = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * z);
@@ -4937,7 +4937,7 @@ function edOnEnd(e){
       _edCursorSavedPos = { clientX: _cx, clientY: _cy };
       _edCursorSavedTime = Date.now();
       // Mantener el cursor visible en la posición guardada y pintar línea en rojo
-      const _sz = (edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * 2;
+      const _sz = Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
       _edOffsetShow(0, 0, _touchX, _touchY, _sz);
       _edCursorSetLineColor('rgba(220,50,50,0.85)');  // rojo = listo para dibujar
       _edCursorStartExpireTimer();
@@ -5606,7 +5606,7 @@ function edStartPaint(e){
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   const er = edActiveTool==='eraser';
-  const _cr4base = (er?edEraserSize:edDrawSize)/2; // clip siempre activo en el punto inicial
+  const _cr4base = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
   // Poner línea del cursor en rojo al iniciar cualquier trazo con cursor offset
   if(_edCursorOffset && isTouch) _edCursorSetLineColor('rgba(220,50,50,0.85)');
   if(_edCursorOffset && isTouch && !e._skipMoveBrush){
@@ -5618,7 +5618,7 @@ function edStartPaint(e){
     // Posición guardada (edStartPaintFromSaved) o PC: dibujar punto inicial directamente
     const c = edCoords(_eTmp);
     // size = diámetro - 1px para que el antialiasing quede dentro del clip
-    const _sizeBS = er?edEraserSize:edDrawSize; // tamaño exacto; clipR=size/2 contiene el antialiasing
+    const _sizeBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
     edRedraw();
     _edOffsetFirstMove = false;
