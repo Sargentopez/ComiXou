@@ -3131,7 +3131,7 @@ function _edHandleDoubleTap(idx){
     _edLineType = 'select';
     edDrawColor = la.color || '#000000';
     edDrawSize  = la.lineWidth || 3;
-    _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
+    _edActivateLineTool(true);
   } else {
     // image, text, bubble y cualquier otro tipo
     edSelectedIdx = idx;
@@ -3267,8 +3267,6 @@ function _edLineHitTest(la, nx, ny, isTouch){
 }
 
 function edOnStart(e){
-  // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
-  if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
   // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
   const tgt = e.target;
@@ -3869,7 +3867,6 @@ function edOnStart(e){
           _edLastNodeTapTime=_now2;
           _edLastNodeTapIdx = _hitId;
           if(_lineHit.type==='node'){
-            _edShapePushHistory(); // pre-snapshot antes del drag
             edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
           }
           // Para segmento: solo registrar candidato, no iniciar drag
@@ -3888,10 +3885,10 @@ function edOnStart(e){
   // En panel line con LineLayer seleccionado: los nodos tienen prioridad sobre los handles de bbox
   const _panelLineOpen = $('edOptionsPanel')?.dataset.mode === 'line';
   const _panelShapeOpen = $('edOptionsPanel')?.dataset.mode === 'shape';
-  // Solo saltar handles en modo V⟺C (nodos tienen prioridad sobre handles)
-  // Giro y resize siempre disponibles con el panel line abierto
+  // Saltar handles de bbox cuando el modo V⟺C está activo (los nodos tienen prioridad)
   const _inCurveMode = _edCurveModeActive && _edCurveModeActive();
-  const _skipHandles = _inCurveMode && (_la?.type === 'line' || _la?.type === 'shape');
+  const _skipHandles = (_panelLineOpen && _la?.type === 'line' && !_la?._fromEllipse) ||
+                       (_inCurveMode && (_la?.type === 'line' || _la?.type === 'shape'));
   if(_la && _la.type!=='bubble' && !_skipHandles){
     const _isT = e.pointerType==='touch';
     const _pw=edPageW(), _ph=edPageH();
@@ -3912,23 +3909,11 @@ function edOnStart(e){
         if(_isPotentialDbl) break;
         if(p.corner==='rotate'){
           if(_isT) continue;  // en táctil la rotación es por gesto pinch
-          // Pre-snapshot para objetos vectoriales con panel abierto
-          if(_la.type==='line'||_la.type==='shape'){
-            const _pm=$('edOptionsPanel')?.dataset.mode;
-            if(_pm==='line'||_pm==='shape'||$('edShapeBar')?.classList.contains('visible'))
-              _edShapePushHistory();
-          }
           edIsRotating = true;
           edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
           return;
         }
         if(!_isT){
-          // Pre-snapshot para objetos vectoriales con panel abierto
-          if(_la.type==='line'||_la.type==='shape'){
-            const _pm=$('edOptionsPanel')?.dataset.mode;
-            if(_pm==='line'||_pm==='shape'||$('edShapeBar')?.classList.contains('visible'))
-              _edShapePushHistory();
-          }
           edIsResizing=true; edResizeCorner=p.corner;
           // Calcular ancla (punto opuesto en espacio local) para resize profesional
           const _rot0=(_la.rotation||0)*Math.PI/180;
@@ -3991,52 +3976,24 @@ function edOnStart(e){
   const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
   // En modo selección del panel line/shape: permitir seleccionar objetos de la fusión y drag
   const _lineSelectMode = (_activeMode === 'line' || _activeMode === 'shape') && _edLineType === 'select' && !_edLineLayer;
-  // Bug2-fix: en táctil con panel line abierto y edActiveTool='select', permitir drag de nodos
-  if(_lineSelectMode && e.pointerType === 'touch' && edSelectedIdx >= 0){
-    const _lsLa = edLayers[edSelectedIdx];
-    if(_lsLa && _lsLa.type === 'line'){
-      const _lsHit = _edLineHitTest(_lsLa, c.nx, c.ny, true);
-      if(_lsHit && _lsHit.type === 'node'){
-        const _hitId3 = _lsHit.idx;
-        const _now4 = Date.now();
-        const _sameHit3 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId3
-          && (_now4 - _edLastNodeTapTime) < 400;
-        if(_sameHit3){
-          // Doble tap confirmado sobre nodo → eliminar
-          _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
-          const _nPts = _lsLa.points.filter(Boolean).length;
-          if(_nPts > 2){
-            _lsLa.points.splice(_lsHit.idx, 1);
-            _lsLa._updateBbox(); _edShapePushHistory(); edRedraw();
-          }
-          return;
-        }
-        // Primer tap sobre nodo → iniciar drag
-        _edLastNodeTapTime=_now4; _edLastNodeTapIdx=_hitId3;
-        _edShapePushHistory();
-        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
+  if(_editingVectorial && !_lineSelectMode && edActiveTool !== 'shape' && edActiveTool !== 'line'){
+    // En modo dibujo activo: bloquear solo si hay objeto seleccionado y el toque no es en el canvas
+    if(edSelectedIdx >= 0){
+      const _la = edLayers[edSelectedIdx];
+      if(_la && _la.contains(c.nx, c.ny)){
+        edIsDragging=true;
+        edDragOffX=c.nx-_la.x; edDragOffY=c.ny-_la.y;
         return;
       }
+      edRedraw(); return;
     }
   }
-  // Con panel vectorial abierto o barra flotante: bloquear selección de objetos externos
-  // Solo se puede interactuar con el objeto que se está editando
-  if(_editingVectorial && edActiveTool !== 'shape' && edActiveTool !== 'line'){
-    // Determinar el objeto "activo" de la sesión
-    const _activeObj = edSelectedIdx >= 0 ? edLayers[edSelectedIdx]
-      : (_edLineFusionId ? edLayers.find(l => l._fusionId === _edLineFusionId) : null);
-    if(_activeObj && _activeObj.contains(c.nx, c.ny)){
-      // Toque sobre el objeto activo → drag
-      edSelectedIdx = edLayers.indexOf(_activeObj);
-      edDragOffX = c.nx - _activeObj.x;
-      edDragOffY = c.ny - _activeObj.y;
-      edIsDragging = true;
-      window._edMoved = false;
-      edRedraw();
-      return;
-    }
-    // Toque fuera del objeto activo → ignorar siempre
-    edRedraw(); return;
+  // En modo selección vectorial: permitir seleccionar objetos de la fusión
+  // pero bloquear selección de objetos externos (sin _fusionId de la sesión)
+  if(_lineSelectMode && _edLineFusionId){
+    // Permitir todo — la selección de objetos se gestiona abajo normalmente
+  } else if(_lineSelectMode && !_edLineFusionId){
+    // Sin sesión activa (re-edición de objeto ya fusionado): permitir selección libre
   }
   // Si se está creando una línea nueva (_edLineLayer sin objeto seleccionado aún), bloquear selección
   if(_edLineLayer){ edRedraw(); return; }
@@ -4168,13 +4125,6 @@ function edOnStart(e){
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
     window._edMoved = false;
-    // Pre-snapshot para objetos vectoriales (permite deshacer el desplazamiento)
-    if(edLayers[found]?.type==='line'||edLayers[found]?.type==='shape'){
-      const _pm=$('edOptionsPanel')?.dataset.mode;
-      if(_pm==='line'||_pm==='shape'||$('edShapeBar')?.classList.contains('visible')){
-        _edShapePushHistory();
-      }
-    }
     edHideGearIcon();
     clearTimeout(window._edLongPress);
     if(_isTouch){
@@ -4855,7 +4805,7 @@ function edOnEnd(e){
     edSelectedIdx = edLayers.indexOf(_finalObj);
     _edLineType = 'select'; edActiveTool = 'select'; edCanvas.className = '';
     edPushHistory(); edRedraw();
-    _edActivateLineTool(false, true); // true = objeto recién creado
+    _edActivateLineTool(false);
     return;
   }
   clearTimeout(window._edLongPress);
@@ -4931,26 +4881,16 @@ function _edShapePushHistory(){
 
 function _edShapeInitHistory(isNew){
   let la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-  if(!la){ la = edLayers.find(l => l.type==="line"||l.type==="shape")||null; }
+  if(!la){ la = edLayers.find(l => l.type==="shape"||l.type==="line")||null; }
   if(isNew && la){
-    if(_edShapeHistory.length > 0 && _edLineFusionId){
-      // Sesión de fusión en curso: añadir nuevo estado al historial existente
-      // (el objeto ya fusionó un contorno nuevo — guardarlo como paso adicional)
-      _edShapeHistory = _edShapeHistory.slice(0, _edShapeHistIdx + 1);
-      _edShapeHistory.push(JSON.stringify(edSerLayer(la)));
-      _edShapeHistIdx = _edShapeHistory.length - 1;
-    } else {
-      // Primera apertura: historial nuevo con null como estado 0
-      _edShapeHistory = [null, JSON.stringify(edSerLayer(la))];
-      _edShapeHistIdx = 1;
-      _edShapeHistIdxBase = 0;
-    }
+    // Nuevo objeto: primer estado = null (sin objeto), segundo = objeto creado
+    _edShapeHistory = [null, JSON.stringify(edSerLayer(la))];
+    _edShapeHistIdx = 1;
   } else {
-    // Apertura de objeto existente (doble tap): estado base = objeto actual
     _edShapeHistory = [la ? JSON.stringify(edSerLayer(la)) : null];
     _edShapeHistIdx = 0;
-    _edShapeHistIdxBase = 0;
   }
+  _edShapeHistIdxBase = _edShapeHistIdx;
   _edShapeUpdateUndoRedoBtns();
 }
 
@@ -4961,37 +4901,20 @@ function _edShapeClearHistory(){
 
 function _edShapeApplyHistory(snapshot){
   if(!snapshot){
-    // Estado inicial: el objeto no existía → eliminar
+    // Estado inicial: el objeto no existía → eliminarlo del canvas y cerrar panel
     const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : (_edLineLayer || null);
     if(la){
-      // Si tiene múltiples contornos (fusión), quitar solo el último contorno
-      if(la.type==='line' && la.points){
-        const _lastNull = la.points.lastIndexOf(null);
-        if(_lastNull > 0){
-          la.points = la.points.slice(0, _lastNull);
-          la._updateBbox();
-          // Si queda solo 1 contorno, ya no hay fusión activa
-          if(!la.points.includes(null)) _edLineFusionId = null;
-          edRedraw();
-          return;
-        }
-      }
-      // Solo 1 contorno o no es line → eliminar el objeto
       const idx = edLayers.indexOf(la);
       if(idx>=0) edLayers.splice(idx, 1);
       const page=edPages[edCurrentPage]; if(page) page.layers=edLayers;
     }
     if(la === _edLineLayer) _edLineLayer = null;
-    // Limpiar sesión de fusión
-    _edLineFusionId = null;
     edSelectedIdx=-1;
     edCloseOptionsPanel();
     edShapeBarHide();
     _edDrawUnlockUI();
     edActiveTool='select'; edCanvas.className='';
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
-    // Bloquear el siguiente toque para evitar selección accidental
-    window._edIgnoreNextTap = true;
     edRedraw();
     return;
   }
@@ -5006,9 +4929,6 @@ function _edShapeApplyHistory(snapshot){
   if(d.x            !== undefined){ la.x=d.x; la.y=d.y; la.width=d.width; la.height=d.height; }
   if(d.shape        !== undefined) la.shape       = d.shape;
   if(d.points       !== undefined) la.points      = d.points.slice();
-  // T1: restaurar _fusionId para que el historial vectorial sea coherente
-  if(d._fusionId !== undefined){ la._fusionId = d._fusionId; }
-  else { delete la._fusionId; } // snapshot sin _fusionId → objeto ya no es miembro de fusión
   if(d.closed       !== undefined) la.closed      = d.closed;
   if(d.cornerRadius !== undefined) la.cornerRadius= d.cornerRadius;
   la.cornerRadii = d.cornerRadii
@@ -6019,12 +5939,10 @@ function _edActivateShapeTool(isNew) {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
-    // T1: limpiar _fusionId de todos los objetos (con ID actual o del objeto seleccionado)
-    const _shapeFusId = _edLineFusionId || (edSelectedIdx>=0 ? edLayers[edSelectedIdx]?._fusionId : null);
-    if(_shapeFusId){
-      edLayers.forEach(l => { if(l._fusionId === _shapeFusId) delete l._fusionId; });
+    if(_edLineFusionId){
+      edLayers.forEach(l => { if(l._fusionId === _edLineFusionId) delete l._fusionId; });
+      _edLineFusionId = null;
     }
-    _edLineFusionId = null;
     edPushHistory(); _edShapeClearHistory();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
@@ -6063,8 +5981,12 @@ function _edActivateShapeTool(isNew) {
   });
   $('op-shape-mirror')?.addEventListener('click',()=>{ _edShapePushHistory(); edMirrorSelected(); });
 
-  // ── Deshacer / Rehacer — usa historial LOCAL, no el global ──
-  const _updURShape = ()=>{ _edShapeUpdateUndoRedoBtns(); };
+  // ── Deshacer / Rehacer ──
+  const _updURShape = ()=>{
+    const u=$('op-shape-undo'),r=$('op-shape-redo');
+    if(u) u.disabled=edHistoryIdx<=0;
+    if(r) r.disabled=edHistoryIdx>=edHistory.length-1;
+  };
   _updURShape();
   $('op-shape-undo')?.addEventListener('click',()=>{ edShapeUndo(); });
   $('op-shape-redo')?.addEventListener('click',()=>{ edShapeRedo(); });
@@ -6088,7 +6010,7 @@ function _edActivateShapeTool(isNew) {
    HERRAMIENTA LINE — rectas y polígonos
    Patrón idéntico a edRenderOptionsPanel('draw')
    ══════════════════════════════════════════ */
-function _edActivateLineTool(isNew, isCreating) {
+function _edActivateLineTool(isNew) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
 
@@ -6174,10 +6096,8 @@ function _edActivateLineTool(isNew, isCreating) {
   panel.style.visibility='';
   panel.dataset.mode = 'line';
   // Guardar estado previo en historial global (objeto existente, no nuevo)
-  if(!isNew && !isCreating) edPushHistory();
-  // isCreating: objeto recién creado → historial empieza con null (permite deshacer a "sin objeto")
-  // isNew: primera apertura del panel → igual que isCreating
-  _edShapeInitHistory(isNew || isCreating);
+  if(!isNew) edPushHistory();
+  _edShapeInitHistory(isNew);
   // Centrar cámara solo si es la primera apertura (isNew) o si aún no se ha centrado
   if(isNew) _edFocusDone = false;
   // No centrar si ya hay objetos en sesión de fusión (usuario añadiendo más objetos)
@@ -6200,7 +6120,11 @@ function _edActivateLineTool(isNew, isCreating) {
     const status=$('op-line-status');
     if(status){ const ll=_curLine(); if(ll) status.textContent=ll.lineWidth+'px·'+Math.round((ll.opacity??1)*100)+'%'; }
   };
-  const _updUR = () => { _edShapeUpdateUndoRedoBtns(); };
+  const _updUR = () => {
+    const u=$('op-line-undo'),r=$('op-line-redo');
+    if(u) u.disabled=edHistoryIdx<=0;
+    if(r) r.disabled=edHistoryIdx>=edHistory.length-1;
+  };
   _updUR();
 
   // ── Herramientas ──
@@ -6213,8 +6137,6 @@ function _edActivateLineTool(isNew, isCreating) {
     if(_curL){
       if(!_curL._fusionId) _curL._fusionId = 'fusion_' + Math.random().toString(36).slice(2);
       _edLineFusionId = _curL._fusionId;
-    } else {
-      _edLineFusionId = null; // T1-fix: sin objeto activo, no reutilizar ID de sesión anterior
     }
     _edActivateLineTool();
   });
@@ -6222,7 +6144,6 @@ function _edActivateLineTool(isNew, isCreating) {
     _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
     const _cL=_curLine&&_curLine();
     if(_cL){ if(!_edLineFusionId){ if(!_cL._fusionId) _cL._fusionId='fusion_'+Math.random().toString(36).slice(2); _edLineFusionId=_cL._fusionId; } }
-    else if(!_edLineFusionId){ /* ok, se asignará al crear */ }
     _edActivateLineTool();
   });
   $('op-line-ellipse-btn')?.addEventListener('click',()=>{
@@ -6359,12 +6280,11 @@ function _edActivateLineTool(isNew, isCreating) {
   $('op-draw-ok')?.addEventListener('click',()=>{
     window._edCurveVertIdx=-1;
     _edFinishLine();
-    // T1: fusión ya hecha en tiempo real — limpiar _fusionId de TODOS los objetos
-    const _okFusId = _edLineFusionId || (edSelectedIdx>=0 ? edLayers[edSelectedIdx]?._fusionId : null);
-    if(_okFusId){
-      edLayers.forEach(l => { if(l._fusionId === _okFusId) delete l._fusionId; });
+    // T1: fusión ya hecha en tiempo real — solo limpiar _fusionId
+    if(_edLineFusionId){
+      edLayers.forEach(l => { if(l._fusionId === _edLineFusionId) delete l._fusionId; });
+      _edLineFusionId = null;
     }
-    _edLineFusionId = null;
     edPushHistory(); _edShapeClearHistory();
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
@@ -6452,8 +6372,7 @@ function _edFinishLine() {
     edRedraw();
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
-    // isCreating=true para iniciar historial con null como estado 0
-    if(_panelOpen) _edActivateLineTool(false, true); else if(!edMinimized) _edActivateLineTool(true);
+    if(_panelOpen) _edActivateLineTool(false); else if(!edMinimized) _edActivateLineTool(true);
   } else {
     if (_edLineLayer) {
       const idx = edLayers.indexOf(_edLineLayer);
@@ -6506,8 +6425,7 @@ function edCloseOptionsPanel(){
     const _mode=panel.dataset.mode;
     panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode;
     if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
-    // Limpiar sesión de fusión vectorial al cerrar el panel
-    if(_mode==='line' || _mode==='shape') _edLineFusionId = null;
+
   }
   _edFocusDone = false;
   edPanelUserClosed = true;
@@ -9154,7 +9072,6 @@ function edSerLayer(l){
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined};
     if(l.groupId)_lobj.groupId=l.groupId;
     if(l.locked)_lobj.locked=true;
-    if(l._fusionId)_lobj._fusionId=l._fusionId; // T1: preservar en historial vectorial
     if(_hasR){
       try{
         const _pw=edPageW(),_ph=edPageH();
