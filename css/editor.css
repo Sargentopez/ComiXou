@@ -491,7 +491,8 @@ body.editor-page #appView {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  /* El canvas DOM cubre todo este div, se gestiona via JS */
+  pointer-events: none; /* el canvas gestiona todos los eventos — evita tap-highlight en Android */
+  -webkit-tap-highlight-color: transparent;
 }
 
 #editorCanvas {
