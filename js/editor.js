@@ -1398,11 +1398,8 @@ function edFitCanvas(resetCamera){
   if(opts) opts.style.top = (topH + menuH) + 'px';
   const totalBarsH = topH + menuH + optsH;
 
-  // Usar visualViewport.height si disponible — más preciso en Android con viewport-fit=cover
-  // ya que window.innerHeight puede no incluir la zona de la barra de navegación del sistema
-  const _vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
   const availW = window.innerWidth;
-  const availH = _vh - totalBarsH;
+  const availH = window.innerHeight - totalBarsH;
 
   const newW = Math.round(availW);
   const newH = Math.round(availH);
@@ -5591,8 +5588,6 @@ function _edOffsetShowReset(){
 function edSaveDrawData(){
   edPainting = false;
   _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
-  // Ocultar el cursor offset al soltar — reaparecerá en el siguiente pointermove
-  _edOffsetHide();
   // NO llamar edPushHistory aquí — el historial global se guarda al congelar
 }
 function edClearDraw(){
