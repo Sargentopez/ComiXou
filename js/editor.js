@@ -3131,7 +3131,7 @@ function _edHandleDoubleTap(idx){
     _edLineType = 'select';
     edDrawColor = la.color || '#000000';
     edDrawSize  = la.lineWidth || 3;
-    _edActivateLineTool(true);
+    _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
   } else {
     // image, text, bubble y cualquier otro tipo
     edSelectedIdx = idx;
@@ -3991,6 +3991,34 @@ function edOnStart(e){
   const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
   // En modo selección del panel line/shape: permitir seleccionar objetos de la fusión y drag
   const _lineSelectMode = (_activeMode === 'line' || _activeMode === 'shape') && _edLineType === 'select' && !_edLineLayer;
+  // Bug2-fix: en táctil con panel line abierto y edActiveTool='select', permitir drag de nodos
+  if(_lineSelectMode && e.pointerType === 'touch' && edSelectedIdx >= 0){
+    const _lsLa = edLayers[edSelectedIdx];
+    if(_lsLa && _lsLa.type === 'line'){
+      const _lsHit = _edLineHitTest(_lsLa, c.nx, c.ny, true);
+      if(_lsHit && _lsHit.type === 'node'){
+        const _hitId3 = _lsHit.idx;
+        const _now4 = Date.now();
+        const _sameHit3 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId3
+          && (_now4 - _edLastNodeTapTime) < 400;
+        if(_sameHit3){
+          // Doble tap confirmado sobre nodo → eliminar
+          _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
+          const _nPts = _lsLa.points.filter(Boolean).length;
+          if(_nPts > 2){
+            _lsLa.points.splice(_lsHit.idx, 1);
+            _lsLa._updateBbox(); _edShapePushHistory(); edRedraw();
+          }
+          return;
+        }
+        // Primer tap sobre nodo → iniciar drag
+        _edLastNodeTapTime=_now4; _edLastNodeTapIdx=_hitId3;
+        _edShapePushHistory();
+        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
+        return;
+      }
+    }
+  }
   // Con panel vectorial abierto o barra flotante: bloquear selección de objetos externos
   // Solo se puede interactuar con el objeto que se está editando
   if(_editingVectorial && edActiveTool !== 'shape' && edActiveTool !== 'line'){
