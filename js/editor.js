@@ -5572,7 +5572,8 @@ function _edOffsetShow(cursorX, cursorY, touchX, touchY, cursorSz){
   const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
 }
 function _edOffsetHide(){
-  const wrap = $('edOffsetWrap'); if(wrap) wrap.style.display='none';
+  const wrap = $('edOffsetWrap');
+  if(wrap){ wrap.style.display='none'; wrap.innerHTML=''; }
   const line = $('edOffsetLine'); if(line) line.style.display='none';
   const dot  = $('edTouchDot');  if(dot)  dot.style.display='none';
 }
