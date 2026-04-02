@@ -5597,15 +5597,16 @@ function edStartPaint(e){
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   const er = edActiveTool==='eraser';
-  if(_edCursorOffset && isTouch){
-    // Solo fijar posición inicial sin dibujar — el primer move dibujará el punto + el trazo
+  const _cr4base = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
+  if(_edCursorOffset && isTouch && !e._skipMoveBrush){
+    // Cursor offset normal: fijar posición sin dibujar punto — el primer move lo hará
     const c = edCoords(_eTmp);
     dl.beginStrokeNoDot(c.nx, c.ny);
     _edOffsetFirstMove = true;
   } else {
+    // Posición guardada (edStartPaintFromSaved) o PC: dibujar punto inicial directamente
     const c = edCoords(_eTmp);
-    const _cr4 = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
-    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4);
+    dl.beginStroke(c.nx, c.ny, edDrawColor, er?edEraserSize:edDrawSize, er, edDrawOpacity, _cr4base);
     edRedraw();
     _edOffsetFirstMove = false;
   }
