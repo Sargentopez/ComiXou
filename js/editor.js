@@ -5740,9 +5740,19 @@ function _edCursorSetLineColor(color){
 function _edCursorStartExpireTimer(ms){
   clearTimeout(_edCursorExpireTimer);
   _edCursorExpireTimer = setTimeout(() => {
-    // El tiempo expiró sin que el usuario dibujara → volver a modo reposicionamiento
-    _edCursorSavedPos = null;
-    _edCursorSavedTime = 0;
+    // El tiempo expiró → volver a azul, pero conservar la posición del cursor
+    // para que el siguiente tap arranque desde ahí sin salto
+    if(_edOffsetLastTouch){
+      const _rad3 = _edCursorOffsetAngle * Math.PI / 180;
+      _edCursorSavedPos = {
+        clientX: _edOffsetLastTouch.x + _ED_CURSOR_OFFSET_PX * Math.sin(_rad3),
+        clientY: _edOffsetLastTouch.y - _ED_CURSOR_OFFSET_PX * Math.cos(_rad3)
+      };
+      _edCursorSavedTime = Date.now();  // renovar timestamp — el tap tiene _ED_CURSOR_TAP_MS para llegar
+    } else {
+      _edCursorSavedPos = null;
+      _edCursorSavedTime = 0;
+    }
     _edCursorSetLineColor('rgba(60,140,255,0.75)');  // azul = reposicionando
   }, ms ?? _ED_CURSOR_TAP_MS);
 }
