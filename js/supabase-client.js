@@ -230,6 +230,11 @@ const SupabaseClient = (() => {
         catch(e) { return null; }
       }).filter(Boolean);
 
+      // Fallback: si no hay panel_layers (obra antigua), usar data_url como ImageLayer
+      if (layers.length === 0 && panel.data_url) {
+        layers.push({ type: 'image', src: panel.data_url, x: 0.5, y: 0.5, width: 1.0, height: 1.0, _keepSize: true });
+      }
+
       const orient = panel.orientation === 'h' ? 'horizontal' : 'vertical';
       pages.push({
         orientation:      orient,

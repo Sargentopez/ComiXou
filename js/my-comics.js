@@ -190,10 +190,18 @@ function _mcRenderList() {
       }
     } else if (action === 'edit') {
       const comicToEdit = ComicStore.getById(id);
-      // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero
-      if (comicToEdit && comicToEdit.cloudOnly && comicToEdit.supabaseId &&
-          (!comicToEdit.editorData || !comicToEdit.editorData.pages || !comicToEdit.editorData.pages.length) &&
-          typeof SupabaseClient !== 'undefined') {
+      // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero.
+      // También re-descargar si hay strokes en formato antiguo (sin x/y/width/height) —
+      // esos strokes se renderizan incorrectamente con las versiones nuevas del editor.
+      const _hasLegacyStrokes = (comicToEdit.editorData?.pages||[]).some(pg =>
+        (pg.layers||[]).some(l => l.type === 'stroke' && l.x == null)
+      );
+      const _needsDownload = comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && (
+        comicToEdit.cloudOnly ||
+        !comicToEdit.editorData?.pages?.length ||
+        _hasLegacyStrokes
+      );
+      if (comicToEdit && _needsDownload) {
         _mcToast('\u23f3 Descargando obra de la nube...');
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);

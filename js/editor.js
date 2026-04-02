@@ -1306,7 +1306,12 @@ function edApplyHistory(snapshot){
     else if(o.type === 'stroke') {
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       const _pw = _isV?ED_PAGE_W:ED_PAGE_H, _ph = _isV?ED_PAGE_H:ED_PAGE_W;
-      l = StrokeLayer.fromDataUrl(o.dataUrl||'', o.x||0.5, o.y||0.5, o.width||0.1, o.height||0.1, _pw, _ph);
+      // Strokes antiguos (sin x/y/width/height) usan bbox completo de página
+      const _lsx = o.x != null ? o.x : 0.5;
+      const _lsy = o.y != null ? o.y : 0.5;
+      const _lsw = o.width  != null ? o.width  : 1.0;
+      const _lsh = o.height != null ? o.height : 1.0;
+      l = StrokeLayer.fromDataUrl(o.dataUrl||'', _lsx, _lsy, _lsw, _lsh, _pw, _ph);
       if(o.frozenLine) l._frozenLine = o.frozenLine;
       if(o.rotation) l.rotation=o.rotation;
       if(o.opacity !== undefined) l.opacity=o.opacity;
@@ -9211,7 +9216,12 @@ function edDeserLayer(d, pageOrientation){
     const _isV = (pageOrientation||'vertical')==='vertical';
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-    const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', d.x||0.5, d.y||0.5, d.width||0.1, d.height||0.1, _pw, _ph);
+    // Strokes antiguos (sin x/y/width/height) usan bbox completo de página — compatibilidad hacia atrás
+    const _sx = d.x != null ? d.x : 0.5;
+    const _sy = d.y != null ? d.y : 0.5;
+    const _sw = d.width  != null ? d.width  : 1.0;
+    const _sh = d.height != null ? d.height : 1.0;
+    const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', _sx, _sy, _sw, _sh, _pw, _ph);
     if(d.rotation) sl.rotation = d.rotation;
     if(d.opacity !== undefined) sl.opacity = d.opacity;
     if(d.color) sl.color = d.color;
