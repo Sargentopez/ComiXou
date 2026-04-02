@@ -5632,6 +5632,8 @@ function edContinuePaint(e){
 /* ── Helpers visuales del cursor offset ── */
 // Devuelve un evento sintético con clientX/Y desplazados si offset activo y táctil
 function _edApplyCursorOffset(e){
+  // Evento sintético de edStartPaintFromSaved: coordenadas ya en espacio del cursor, no aplicar offset
+  if(e._skipMoveBrush) return e;
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(!_edCursorOffset || !isTouch) return e;
   const src = e.touches ? e.touches[0] : e;
@@ -6932,10 +6934,12 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
 </div>`;
+    const _drawPanelAlreadyOpen = panel.classList.contains('open') && panel.dataset.mode === 'draw';
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
-    // Centrar cámara en el contenido del DrawLayer al abrir el panel
-    _edFocusDone = false;
+    // Centrar cámara en el contenido del DrawLayer al abrir el panel,
+    // pero NO si ya estaba abierto en modo draw (cambio lápiz↔goma no mueve la cámara)
+    _edFocusDone = _drawPanelAlreadyOpen;
     requestAnimationFrame(()=>{
       const _page = edPages[edCurrentPage];
       const _dl = _page ? _page.layers.find(l=>l.type==='draw') : null;
