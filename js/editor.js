@@ -5610,8 +5610,8 @@ function edStartPaint(e){
   } else {
     // Posición guardada (edStartPaintFromSaved) o PC: dibujar punto inicial directamente
     const c = edCoords(_eTmp);
-    // Con cursor offset: size = diámetro del clip para que nada sobresalga
-    const _sizeBS = (_cr4base > 0) ? _cr4base * 2 : (er?edEraserSize:edDrawSize);
+    // size = diámetro - 1px para que el antialiasing quede dentro del clip
+    const _sizeBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
     edRedraw();
     _edOffsetFirstMove = false;
@@ -5628,11 +5628,11 @@ function edContinuePaint(e){
     // Primer move con offset: dibujar el punto inicial que se omitió en pointerdown
     _edOffsetFirstMove = false;
     const _cr4f = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
-    const _sizeFM = (_cr4f > 0) ? _cr4f * 2 : (er?edEraserSize:edDrawSize);
+    const _sizeFM = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
   } else {
     const _cr4c = _edCursorOffset && (e.pointerType==='touch'||(e.touches&&e.touches.length>0)) ? (er?edEraserSize:edDrawSize)/2 : 0;
-    const _sizeCS = (_cr4c > 0) ? _cr4c * 2 : (er?edEraserSize:edDrawSize);
+    const _sizeCS = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
   edRedraw();
