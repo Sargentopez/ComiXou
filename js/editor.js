@@ -4913,12 +4913,15 @@ function edOnEnd(e){
   // ── Cursor offset posicionamiento: al levantar el dedo guardar posición ──
   if(_edCursorPositioning && _edCursorOffset){
     _edCursorPositioning = false;
-    // Usar la posición del evento actual (más fiable que _edOffsetLastTouch si no hubo movimiento)
+    // Usar _edOffsetLastTouch como fuente de verdad: es la posición del último pointermove,
+    // que es exactamente lo que el usuario ve como posición del cursor.
+    // El evento pointerup puede tener coords distintas (momento exacto de levantar el dedo).
+    // Fallback a e.clientX/Y solo si no hubo ningún movimiento previo.
     const _touchSrc = (e && e.touches) ? e.touches[0] : e;
-    const _touchX = (_touchSrc && _touchSrc.clientX) ? _touchSrc.clientX
-                  : (_edOffsetLastTouch ? _edOffsetLastTouch.x : null);
-    const _touchY = (_touchSrc && _touchSrc.clientY) ? _touchSrc.clientY
-                  : (_edOffsetLastTouch ? _edOffsetLastTouch.y : null);
+    const _touchX = _edOffsetLastTouch ? _edOffsetLastTouch.x
+                  : ((_touchSrc && _touchSrc.clientX) ? _touchSrc.clientX : null);
+    const _touchY = _edOffsetLastTouch ? _edOffsetLastTouch.y
+                  : ((_touchSrc && _touchSrc.clientY) ? _touchSrc.clientY : null);
     if(_touchX !== null && _touchY !== null){
       const _rad = _edCursorOffsetAngle * Math.PI / 180;
       const _cx = _touchX + _ED_CURSOR_OFFSET_PX * Math.sin(_rad);
