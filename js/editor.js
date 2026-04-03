@@ -3924,6 +3924,8 @@ function edOnStart(e){
           if(_lineHit.type==='node'){
             _edShapePushHistory(); // pre-snapshot antes del drag
             edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
+            // Capturar pointer para recibir pointermove aunque el dedo salga del canvas
+            if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
           }
           // Para segmento: solo registrar candidato, no iniciar drag
           return;
@@ -4049,27 +4051,40 @@ function edOnStart(e){
     const _lsLa = edLayers[edSelectedIdx];
     if(_lsLa && _lsLa.type === 'line'){
       const _lsHit = _edLineHitTest(_lsLa, c.nx, c.ny, true);
-      if(_lsHit && _lsHit.type === 'node'){
-        const _hitId3 = _lsHit.idx;
-        const _now4 = Date.now();
-        const _sameHit3 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId3
-          && (_now4 - _edLastNodeTapTime) < 400;
-        if(_sameHit3){
-          // Doble tap confirmado sobre nodo → eliminar
-          _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
+      const _hitId3 = _lsHit.type==='node' ? _lsHit.idx : 1000+_lsHit.idx;
+      const _now4 = Date.now();
+      const _sameHit3 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId3
+        && (_now4 - _edLastNodeTapTime) < 400;
+      if(_sameHit3){
+        _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
+        if(_lsHit.type==='node'){
+          // Doble tap sobre nodo → eliminar
           const _nPts = _lsLa.points.filter(Boolean).length;
           if(_nPts > 2){
             _lsLa.points.splice(_lsHit.idx, 1);
             _lsLa._updateBbox(); _edShapePushHistory(); edRedraw();
           }
-          return;
+        } else {
+          // Doble tap sobre segmento → añadir nodo
+          const _sI = _lsHit.idx, _sJ = (_sI+1) % _lsLa.points.length;
+          const _pA = _lsLa.points[_sI], _pB = _lsLa.points[_sJ];
+          if(_pA && _pB){
+            _lsLa.points.splice(_sJ, 0, {x:(_pA.x+_pB.x)/2, y:(_pA.y+_pB.y)/2});
+            _lsLa._updateBbox(); _edShapePushHistory(); edRedraw();
+          }
         }
-        // Primer tap sobre nodo → iniciar drag
-        _edLastNodeTapTime=_now4; _edLastNodeTapIdx=_hitId3;
-        _edShapePushHistory();
-        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
         return;
       }
+      // Primer tap: registrar candidato
+      _edLastNodeTapTime=_now4; _edLastNodeTapIdx=_hitId3;
+      if(_lsHit.type==='node'){
+        // Iniciar drag de nodo
+        _edShapePushHistory();
+        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
+        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      }
+      // Segmento: solo registrar candidato (esperar 2º tap para añadir nodo)
+      return;
     }
   }
   // Con panel vectorial abierto o barra flotante: bloquear selección de objetos externos
