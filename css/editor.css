@@ -334,20 +334,22 @@ body.editor-page #appView {
 
 /* Pestaña de arrastre de barras flotantes */
 .edb-handle {
-  width: 28px; height: 16px;
+  /* Vertical (default): handle en la parte superior, ancho completo de la barra (lado largo) */
+  width: auto; height: 14px; align-self: stretch;
   display: flex; align-items: center; justify-content: center;
-  font-size: 1rem; line-height: 1; color: rgba(255,255,255,.55);
+  font-size: .7rem; line-height: 1; color: rgba(255,255,255,.55);
   cursor: grab; touch-action: none; user-select: none;
   -webkit-user-select: none; flex-shrink: 0;
-  border-radius: 5px;
+  border-radius: 5px 5px 0 0;
   transition: color .15s, background .15s;
 }
 .edb-handle:hover  { color: rgba(255,255,255,.85); background: rgba(255,255,255,.1); }
 .edb-handle:active { cursor: grabbing; color: #fff; }
-/* En modo horizontal la pestaña queda a la izquierda del todo */
+/* En modo horizontal: handle a la izquierda, alto completo de la barra (lado largo) */
 #edDrawBar.horiz  .edb-handle,
 #edShapeBar.horiz .edb-handle {
-  width: 16px; height: 28px;
+  width: 14px; height: auto; align-self: stretch;
+  border-radius: 5px 0 0 5px;
 }
 
 #edShapeBar {
@@ -1567,4 +1569,39 @@ body.editor-page #appView {
   align-items: center;
   justify-content: center;
   backdrop-filter: blur(4px);
+}
+
+/* ── Casilla flotante sobre thumb del slider (en todos los paneles) ── */
+.ed-slider-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+.ed-slider-wrap input[type="range"] {
+  flex: 1;
+  min-width: 40px;
+}
+.ed-slider-bubble {
+  position: absolute;
+  bottom: calc(100% + 14px); /* bien separado del dedo: 14px encima del thumb */
+  transform: translateX(-50%);
+  background: var(--black);
+  color: var(--white);
+  font-size: .72rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .1s;
+  z-index: 10;
+  min-width: 28px;
+  text-align: center;
+}
+.ed-slider-wrap:focus-within .ed-slider-bubble,
+.ed-slider-wrap.dragging .ed-slider-bubble {
+  opacity: 1;
 }

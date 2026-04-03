@@ -4331,6 +4331,11 @@ function edOnStart(e){
         edRedraw(); return; // mantener panel abierto, no deseleccionar
       }
     }
+    // Si el panel vectorial (line/shape) está abierto: mantener selección del objeto
+    // Un toque en zona vacía NO debe perder edSelectedIdx — los nodos dejarían de ser accesibles
+    if(_panelMode==='line' || _panelMode==='shape'){
+      edRedraw(); return;
+    }
     edSelectedIdx = -1;
     // Clic en vacío: cerrar panel si no es draw
     edRenderOptionsPanel();
@@ -6063,6 +6068,7 @@ function _edActivateShapeTool(isNew) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'shape';
+  _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global (objeto existente)
   if(_sel) edPushHistory();
   _edShapeInitHistory();
@@ -6392,6 +6398,7 @@ function _edActivateLineTool(isNew, isCreating) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'line';
+  _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global (objeto existente, no nuevo)
   if(!isNew && !isCreating) edPushHistory();
   // isCreating: objeto recién creado → historial empieza con null (permite deshacer a "sin objeto")
@@ -6852,6 +6859,51 @@ function _edShowColorPicker(onColorChange){
 
 
 /* T5 — Cerrar teclado virtual Android al pulsar Enter en inputs numéricos */
+// ── Burbuja flotante sobre thumb del slider ──
+function _edUpdateBubble(slider, suffix) {
+  const wrap = slider.closest('.ed-slider-wrap'); if (!wrap) return;
+  const bubble = wrap.querySelector('.ed-slider-bubble'); if (!bubble) return;
+  const val = slider.value + (suffix || '');
+  bubble.textContent = val;
+  // Posicionar la burbuja centrada sobre el thumb
+  const min = parseFloat(slider.min) || 0;
+  const max = parseFloat(slider.max) || 100;
+  const pct = (parseFloat(slider.value) - min) / (max - min);
+  // El thumb ocupa ~10px en ambos extremos (corrección de recorrido real)
+  const thumbW = 10;
+  const trackW = slider.offsetWidth - thumbW * 2;
+  const leftPx = thumbW + pct * trackW;
+  bubble.style.left = leftPx + 'px';
+}
+function _edInitSliderBubbles(container) {
+  if (!container) return;
+  container.querySelectorAll('.ed-slider-wrap input[type="range"]').forEach(sl => {
+    // Detectar sufijo según ID
+    const suffix = (sl.id.includes('opacity') || sl.id.includes('dopacity')) ? '%' : 'px';
+    // Mostrar burbuja al arrastrar
+    sl.addEventListener('input', () => {
+      const wrap = sl.closest('.ed-slider-wrap');
+      if (wrap) wrap.classList.add('dragging');
+      _edUpdateBubble(sl, suffix);
+    });
+    sl.addEventListener('pointerdown', () => {
+      const wrap = sl.closest('.ed-slider-wrap');
+      if (wrap) wrap.classList.add('dragging');
+      _edUpdateBubble(sl, suffix);
+    });
+    sl.addEventListener('pointerup', () => {
+      const wrap = sl.closest('.ed-slider-wrap');
+      if (wrap) wrap.classList.remove('dragging');
+    });
+    sl.addEventListener('pointercancel', () => {
+      const wrap = sl.closest('.ed-slider-wrap');
+      if (wrap) wrap.classList.remove('dragging');
+    });
+    // Inicializar posición
+    _edUpdateBubble(sl, suffix);
+  });
+}
+
 function _edBindNumInput(el) {
   if (!el) return;
   el.addEventListener('keydown', function(e) {
@@ -6865,6 +6917,7 @@ function _edBindNumInput(el) {
 function _edBindAllNumInputs(container) {
   if (!container) return;
   container.querySelectorAll('input[type="number"]').forEach(_edBindNumInput);
+  _edInitSliderBubbles(container);
 }
 
 function edRenderOptionsPanel(mode){
@@ -6934,20 +6987,22 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider"
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-dsize-num" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
-        style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
-      <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
-        style="flex:1;min-width:40px;accent-color:var(--black)">
+      <div class="ed-slider-wrap">
+        <input type="range" id="op-dsize" min="1" max="${isEr?80:48}" value="${isEr?edEraserSize:edDrawSize}"
+          style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     <button id="op-opacity-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
     <div id="op-opacity-slider"
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-draw-opacity-num" min="1" max="100" value="${edDrawOpacity}"
-        style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
-      <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
-        style="flex:1;min-width:40px;accent-color:var(--black)">
+      <div class="ed-slider-wrap">
+        <input type="range" id="op-dopacity" min="1" max="100" value="${edDrawOpacity}"
+          style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
     </div>
     ${isEr ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
@@ -6978,6 +7033,7 @@ function edRenderOptionsPanel(mode){
     const _drawPanelAlreadyOpen = panel.classList.contains('open') && panel.dataset.mode === 'draw';
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
+    _edInitSliderBubbles(panel);
     // Centrar cámara en el contenido del DrawLayer al abrir el panel,
     // pero NO si ya estaba abierto en modo draw (cambio lápiz↔goma no mueve la cámara)
     _edFocusDone = _drawPanelAlreadyOpen;
@@ -7081,7 +7137,7 @@ function edRenderOptionsPanel(mode){
       const v=Math.max(1,Math.min(max,parseInt(e.target.value)||1));
       e.target.value=v;
       if(edActiveTool==='eraser') edEraserSize=v; else edDrawSize=v;
-      const sl=$('op-dsize'); if(sl) sl.value=v;
+      const sl=$('op-dsize'); if(sl){ sl.value=v; _edUpdateBubble(sl,'px'); }
       _edbSyncSize(); _edUpdateDrawInfo();
     });
     $('op-color-erase-btn')?.addEventListener('click',()=>{
@@ -7102,7 +7158,7 @@ function edRenderOptionsPanel(mode){
     });
     $('op-dopacity')?.addEventListener('input',e=>{
       edDrawOpacity=+e.target.value;
-      const num=$('op-draw-opacity-num'); if(num) num.value=edDrawOpacity;
+
       _edUpdateDrawInfo();
     });
     $('op-draw-opacity-num')?.addEventListener('change',e=>{
@@ -7652,10 +7708,10 @@ function edMaximize(keepBar=false){
     edFitCanvas();
     if(mode === 'shape'){
       edShapeBarHide();
-      _edActivateShapeTool(true);
+      _edActivateShapeTool(false); // false = no resetear cámara al restaurar desde barra
     } else if(mode === 'line'){
       edShapeBarHide();
-      _edActivateLineTool();
+      _edActivateLineTool(false); // false = no resetear cámara al restaurar desde barra
     } else {
       edRenderOptionsPanel(mode);
     }
@@ -8153,7 +8209,7 @@ function edInitDrawBar() {
       if (isEr) edEraserSize = v; else edDrawSize = v;
     }
     _edbSyncSize();
-    const sl = $('op-dsize'); if (sl) { sl.value = v; const n=$('op-dsize-num'); if(n) n.value=v; }
+    const sl = $('op-dsize'); if (sl) { sl.value = v; _edUpdateBubble(sl,'px'); }
   });
   // Slider de grosor en tiempo real
   $('edb-size-slider')?.addEventListener('input', e => {
@@ -8180,7 +8236,7 @@ function edInitDrawBar() {
     if(prev){ const pd=Math.max(4,Math.min(80,v*2)); prev.style.width=pd+'px'; prev.style.height=pd+'px'; }
     // Actualizar preview en tiempo real
     _edbSyncSizePreview();
-    const sl = $('op-dsize'); if(sl){ sl.value=v; const n=$('op-dsize-num'); if(n) n.value=v; }
+    const sl = $('op-dsize'); if(sl){ sl.value=v; _edUpdateBubble(sl,'px'); }
     _edRefreshOffsetCursor(); // T4: actualizar círculo del cursor en tiempo real
   });
   $('edb-size-slider')?.addEventListener('pointerup', e => {
@@ -8346,6 +8402,7 @@ function _edbBuildPalette() {
         return;
       }
       const idx = +btn.dataset.colidx;
+      edSelectedPaletteIdx = idx; // sincronizar índice para que el botón arcoíris sepa qué slot editar
       edDrawColor = edColorPalette[idx];
       _edbSyncColor();
       // Sincronizar panel principal si está abierto
@@ -8787,7 +8844,11 @@ function edInitShapeBar() {
     if(_locked) return;
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la) return;
     _edPickColor(e, la.color||'#000000',
-      hex=>{ la.color=hex; _esbSync(); edRedraw(); },
+      hex=>{ la.color=hex; _esbSync(); edRedraw();
+        // Sincronizar botón color del panel si está abierto
+        const _pcb=$('op-line-color-btn'); if(_pcb) _pcb.style.background=hex;
+        const _pcb2=$('op-shape-color-btn'); if(_pcb2) _pcb2.style.background=hex;
+      },
       ()=>{ _edShapePushHistory(); }
     );
   });
@@ -8868,7 +8929,13 @@ function edInitShapeBar() {
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const sz=la?.lineWidth??3;
     _esbShowSlider('size', 0, 20, sz,
-      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.lineWidth=v; edRedraw(); _edShapeBarSync&&_edShapeBarSync();} },
+      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.lineWidth=v; edRedraw();
+        // Sincronizar sliders del panel si está abierto
+        const _sl=$('op-dsize'); if(_sl){ _sl.value=v; _edUpdateBubble(_sl, 'px'); }
+        const _ss=$('op-size-btn'); if(_ss) _ss.style.background='var(--gray-200)';
+        const _sls=$('op-size-slider'); if(_sls) _sls.style.display='flex';
+        const _st=$('op-line-status'); if(_st){ const ll=l; _st.textContent=ll.lineWidth+'px·'+Math.round((ll.opacity??1)*100)+'%'; }
+      } },
       v=>{
         _edShapePushHistory();
       }
@@ -8881,7 +8948,11 @@ function edInitShapeBar() {
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const op=la?Math.round((la.opacity??1)*100):100;
     _esbShowSlider('opacity', 0, 100, op,
-      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.opacity=v/100; edRedraw();} },
+      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.opacity=v/100; edRedraw();
+        // Sincronizar slider de opacidad del panel si está abierto
+        const _osl=$('op-line-opacity'); if(_osl){ _osl.value=v; _edUpdateBubble(_osl,'%'); }
+        const _st=$('op-line-status'); if(_st){ _st.textContent=(l.lineWidth||3)+'px·'+v+'%'; }
+      } },
       v=>{ _edShapePushHistory(); }
     );
   });
