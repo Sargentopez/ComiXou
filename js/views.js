@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v13.88</footer>
+    <footer class="app-version">v13.89</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -348,21 +348,23 @@ Router.register('editor', {
       <!-- ── BARRA HERRAMIENTAS DIBUJO (minimizado + draw activo) ── -->
       <div id="edDrawBar">
         <div class="edb-handle" title="Mover barra">⠿</div>
-        <button id="edb-pen"    class="edb-tool" title="Dibujar">✏️</button>
-        <button id="edb-eraser" class="edb-tool" title="Borrar">◻</button>
-        <button id="edb-fill"   class="edb-tool" title="Rellenar">🪣</button>
-        <div class="edb-sep"></div>
-        <button id="edb-color"  class="edb-swatch" title="Color"></button>
-        <button id="edb-eyedrop" class="edb-tool" title="Cuentagotas">💧</button>
-        <button id="edb-pen-size"    class="edb-tool edb-sizebtn-fix" title="Grosor lápiz" style="font-size:.7rem;font-weight:900">Ø</button>
-        <button id="edb-eraser-size" class="edb-tool edb-sizebtn-fix" title="Grosor goma"   style="font-size:.7rem;font-weight:900;display:none">Ø</button>
-        <div class="edb-sep"></div>
-        <button id="edb-offset" class="edb-tool" title="Cursor desplazado" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↑<br><span style="font-size:.5rem">Cursor</span></button>
-        <div class="edb-sep"></div>
-        <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
-        <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>
-        <div class="edb-sep"></div>
-        <button id="edb-ok"     class="edb-ok" title="Finalizar">✓</button>
+        <div class="edb-content">
+          <button id="edb-pen"    class="edb-tool" title="Dibujar">✏️</button>
+          <button id="edb-eraser" class="edb-tool" title="Borrar">◻</button>
+          <button id="edb-fill"   class="edb-tool" title="Rellenar">🪣</button>
+          <div class="edb-sep"></div>
+          <button id="edb-color"  class="edb-swatch" title="Color"></button>
+          <button id="edb-eyedrop" class="edb-tool" title="Cuentagotas">💧</button>
+          <button id="edb-pen-size"    class="edb-tool edb-sizebtn-fix" title="Grosor lápiz" style="font-size:.7rem;font-weight:900">Ø</button>
+          <button id="edb-eraser-size" class="edb-tool edb-sizebtn-fix" title="Grosor goma"   style="font-size:.7rem;font-weight:900;display:none">Ø</button>
+          <div class="edb-sep"></div>
+          <button id="edb-offset" class="edb-tool" title="Cursor desplazado" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↑<br><span style="font-size:.5rem">Cursor</span></button>
+          <div class="edb-sep"></div>
+          <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
+          <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>
+          <div class="edb-sep"></div>
+          <button id="edb-ok"     class="edb-ok" title="Finalizar">✓</button>
+        </div>
       </div>
       <!-- Popover orientación cursor offset (position:fixed igual que edb-size-pop) -->
       <div id="edb-offset-pop" style="display:none;position:fixed;z-index:1200;
@@ -380,22 +382,19 @@ Router.register('editor', {
       <div id="edb-palette-pop"></div>
       <!-- Panel grosor anclado a la barra flotante de dibujo -->
       <div id="edb-size-pop" style="display:none;position:fixed;z-index:1200;background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.6);flex-direction:column;align-items:center;gap:10px;min-width:170px">
-        <!-- Preview grande: círculo del color actual, tamaño proporcional al grosor -->
-        <div style="display:flex;align-items:center;justify-content:center;width:100%;height:48px">
+        <!-- Preview: número a la izquierda + círculo a la derecha -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:48px">
+          <input type="number" id="edb-size-num" min="1" max="80" value="8"
+            style="width:46px;text-align:center;font-size:1rem;font-weight:700;
+                   border:1px solid rgba(255,255,255,0.4);border-radius:8px;
+                   background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;
+                   -moz-appearance:textfield;">
+          <span style="color:#ccc;font-size:.75rem">px</span>
           <span id="edb-size-preview" style="display:inline-block;border-radius:50%;background:#fff;transition:width .12s,height .12s,background .12s"></span>
         </div>
         <!-- Slider -->
         <input type="range" id="edb-size-slider" min="1" max="48" value="8"
           style="width:100%;accent-color:#FFE135;cursor:pointer">
-        <!-- Número editable -->
-        <div style="display:flex;align-items:center;gap:6px">
-          <input type="number" id="edb-size-num" min="1" max="80" value="8"
-            style="width:52px;text-align:center;font-size:1rem;font-weight:700;
-                   border:1px solid rgba(255,255,255,0.4);border-radius:8px;
-                   background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;
-                   -moz-appearance:textfield;">
-          <span style="color:#ccc;font-size:.75rem">px</span>
-        </div>
       </div>
 
       <!-- Panel slider adjunto a edShapeBar (grosor, opacidad, curva) -->
@@ -407,21 +406,23 @@ Router.register('editor', {
       <!-- Barra flotante Shape/Line -->
       <div id="edShapeBar">
         <div class="edb-handle" title="Mover barra">⠿</div>
-        <button id="esb-color"    class="edb-swatch" title="Color borde"></button>
-        <button id="esb-fill-on"  class="edb-tool"   title="Relleno">▣</button>
-        <button id="esb-fill"     class="edb-swatch" title="Color relleno"></button>
-        <div class="edb-sep"></div>
-        <button id="esb-eyedrop"  class="edb-tool"   title="Cuentagotas">💧</button>
-        <div class="edb-sep"></div>
-        <button id="esb-size"     class="edb-sizebtn" title="Grosor"><span id="esb-size-dot"></span></button>
-        <button id="esb-opacity"  class="edb-tool"    title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
-        <div class="edb-sep"></div>
-        <button id="esb-curve"    class="edb-tool" title="Convertir vértice a curva" style="font-size:.65rem;font-weight:900"><b>V⟺C</b></button>
-        <div class="edb-sep"></div>
-        <button id="esb-undo"     class="edb-tool" title="Deshacer">↩</button>
-        <button id="esb-redo"     class="edb-tool" title="Rehacer">↪</button>
-        <div class="edb-sep"></div>
-        <button id="esb-ok"       class="edb-ok"   title="Finalizar">✓</button>
+        <div class="edb-content">
+          <button id="esb-color"    class="edb-swatch" title="Color borde"></button>
+          <button id="esb-fill-on"  class="edb-tool"   title="Relleno">▣</button>
+          <button id="esb-fill"     class="edb-swatch" title="Color relleno"></button>
+          <div class="edb-sep"></div>
+          <button id="esb-eyedrop"  class="edb-tool"   title="Cuentagotas">💧</button>
+          <div class="edb-sep"></div>
+          <button id="esb-size"     class="edb-sizebtn" title="Grosor"><span id="esb-size-dot"></span></button>
+          <button id="esb-opacity"  class="edb-tool"    title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
+          <div class="edb-sep"></div>
+          <button id="esb-curve"    class="edb-tool" title="Convertir vértice a curva" style="font-size:.65rem;font-weight:900"><b>V⟺C</b></button>
+          <div class="edb-sep"></div>
+          <button id="esb-undo"     class="edb-tool" title="Deshacer">↩</button>
+          <button id="esb-redo"     class="edb-tool" title="Rehacer">↪</button>
+          <div class="edb-sep"></div>
+          <button id="esb-ok"       class="edb-ok"   title="Finalizar">✓</button>
+        </div>
       </div>
 
     </div>
