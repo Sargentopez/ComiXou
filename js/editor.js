@@ -5549,17 +5549,23 @@ function _cofSetOn(on) {
   _cof.on = on;
   _edCursorOffset = on;
   if (!on) { _cofReset(); _cofHide(); return; }
-  const cw = (edCanvas ? edCanvas.width : window.innerWidth) / 2;
-  const ch = (edCanvas ? edCanvas.height : window.innerHeight) / 2;
+  // Usar el centro del viewport visible (coordenadas CSS de pantalla)
+  // El punto de arrastre aparece en el centro, el cursor 76px arriba
+  const shell = document.getElementById('editorShell');
+  const r = shell ? shell.getBoundingClientRect()
+                  : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  const cw = r.left + r.width  / 2;
+  const ch = r.top  + r.height / 2;
   _cof.cursorX = cw;
-  _cof.cursorY = ch;
-  _cof.touchX = cw;
-  _cof.touchY = ch + _cof.distDefault;
+  _cof.cursorY = ch - _cof.distDefault / 2;
+  _cof.touchX  = cw;
+  _cof.touchY  = ch + _cof.distDefault / 2;
   _cof.dist = _cof.distDefault;
-  _cof.savedClientX = cw;
-  _cof.savedClientY = ch;
+  _cof.savedClientX = _cof.cursorX;
+  _cof.savedClientY = _cof.cursorY;
   _cof.state = 'idle_blue';
-  _cofDraw();
+  // Dibujar en el siguiente frame para garantizar que el DOM esté listo
+  requestAnimationFrame(_cofDraw);
 }
 function _cofReset() {
   clearTimeout(_cof._timer);
@@ -5753,6 +5759,87 @@ function edStartPaintFromSaved(e) {
   else { edStartPaint(e); }
 }
 
+function _edApplyCursorOffset(e){
+  // Eventos sintéticos del nuevo cursor: coordenadas ya correctas
+  if(e._skipMoveBrush || e._cofStroke) return e;
+  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  // Con nuevo sistema activo: no aplicar offset (el cursor ya está calculado)
+  if(_cof.on || !_edCursorOffset || !isTouch) return e;
+  const src2 = e.touches ? e.touches[0] : e;
+  const rad = _edCursorOffsetAngle * Math.PI / 180;
+  const dx = _ED_CURSOR_OFFSET_PX * Math.sin(rad);
+  const dy = _ED_CURSOR_OFFSET_PX * Math.cos(rad);
+  return { clientX: src2.clientX + dx, clientY: src2.clientY - dy,
+           pointerType: e.pointerType, pointerId: e.pointerId, touches: null };
+}
+function edStartPaint(e){
+  edPainting = true;
+  const _pp=$('edOptionsPanel');
+  if(_pp&&_pp.classList.contains('open')&&_pp.dataset.mode!=='draw'){
+    _pp.classList.remove('open'); _pp.innerHTML='';
+  }
+  const _dlCheck = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
+  const _drawPanelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
+  if(_dlCheck && _dlCheck.locked && !_drawPanelOpen){ edPainting = false; _edShowLockIconDraw(_dlCheck); return; }
+  if(e.pointerId !== undefined && edCanvas){
+    try { edCanvas.setPointerCapture(e.pointerId); } catch(_){} }
+  const _drawPanelIsOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
+  if(!_drawPanelIsOpen){ edPushHistory(); }
+  const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
+  const _eTmp = _edApplyCursorOffset(e);
+  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  const er = edActiveTool==='eraser';
+  // Nuevo sistema cursor: iniciar trazo directo sin offset
+  if(_cof.on && isTouch){
+    const c = edCoords(_eTmp);
+    const _sz = er ? edEraserSize : edDrawSize;
+    dl.beginStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
+    edRedraw();
+    return;
+  }
+  const _cr4base = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
+  if(_edCursorOffset && isTouch) _edCursorSetLineColor('rgba(220,50,50,0.85)');
+  if(_edCursorOffset && isTouch && !e._skipMoveBrush){
+    const c = edCoords(_eTmp);
+    dl.beginStrokeNoDot(c.nx, c.ny);
+    _edOffsetFirstMove = true;
+  } else {
+    const c = edCoords(_eTmp);
+    const _sizeBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
+    dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
+    edRedraw();
+    _edOffsetFirstMove = false;
+  }
+  if(!e._skipMoveBrush) edMoveBrush(e);
+}
+function edContinuePaint(e){
+  if(!edPainting) return;
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
+  if(_edFromSaved){ _edFromSaved = false; edMoveBrush(e); return; }
+  const _eTmp = _edApplyCursorOffset(e);
+  const c = edCoords(_eTmp), er = edActiveTool==='eraser';
+  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  // Nuevo sistema cursor: continuar trazo sin offset ni _edOffsetFirstMove
+  if(_cof.on && isTouch){
+    const _sz = er ? edEraserSize : edDrawSize;
+    dl.continueStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
+    edRedraw();
+    return;
+  }
+  if(_edOffsetFirstMove){
+    _edOffsetFirstMove = false;
+    const _cr4f = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
+    const _sizeFM = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
+    dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
+  } else {
+    const _cr4c = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
+    const _sizeCS = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
+    dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
+  }
+  edRedraw();
+  edMoveBrush(e);
+}
 function edSaveDrawData(){
   edPainting = false;
   _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
@@ -5778,25 +5865,9 @@ function edMoveBrush(e){
   }
   const sz = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
-  if(_edCursorOffset && isTouch){
-    // Si el toque está sobre el panel o la barra flotante, refrescar el cursor en su posición actual
-    const elUnder = document.elementFromPoint(src.clientX, src.clientY);
-    const overUI = !!(elUnder && (elUnder.closest('#edOptionsPanel') || elUnder.closest('#edDrawBar')));
-    if(overUI){
-      // Redibujar con los valores actuales (grosor/color pueden haber cambiado) pero sin mover
-      if(_edOffsetLastTouch){
-        _edOffsetShow(0, 0, _edOffsetLastTouch.x, _edOffsetLastTouch.y, sz);
-      }
-      return;
-    }
-    // Guardar posición para cuando el dedo pase a la UI
-    _edOffsetLastTouch = { x: src.clientX, y: src.clientY };
-    // El wrap dibuja cursor+línea+cuadrado como bloque rotado desde el punto de toque
-    // Ocultar el cursor original — el wrap lo reemplaza
+  if(_cof.on){
+    // Nuevo sistema: el visual lo gestiona _cofDraw, solo ocultar cursor normal
     cur.style.display = 'none';
-    const wrap = $('edOffsetWrap');
-    if(wrap) wrap.style.display = '';
-    _edOffsetShow(0, 0, src.clientX, src.clientY, sz);
   } else {
     cur.style.display = 'block';
     cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
@@ -8419,8 +8490,8 @@ function _edbSyncTool() {
   // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
   const offsetBtn = $('edb-offset');
-  if(offsetBtn) offsetBtn.style.display = (isFill || !window._edIsTouch) ? 'none' : '';
-  if(isFill || !window._edIsTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
+  if(offsetBtn) offsetBtn.style.display = isFill ? 'none' : '';
+  if(isFill) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
   _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();

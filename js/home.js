@@ -86,13 +86,8 @@ function setupPageNav() {
 
   // Crear
   document.getElementById('createBtn')?.addEventListener('click', () => {
-    if (Auth.isLogged()) {
-      Router.go('my-comics');
-    } else {
-      // T7: guardar ruta pendiente para ir directo tras login
-      sessionStorage.setItem('pendingRoute', 'my-comics');
-      Router.go('login');
-    }
+    // Sin login: ir a my-comics de todas formas (modo anónimo)
+    Router.go('my-comics');
   });
 }
 
