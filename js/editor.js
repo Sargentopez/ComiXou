@@ -5696,8 +5696,8 @@ function _cofDraw() {
   const isRed = (_cof.state === 'red_ready' || _cof.state === 'red_cool');
   const lineColor = isRed ? 'rgba(220,50,50,0.85)' : 'rgba(60,140,255,0.75)';
   const ang = _edCursorOffsetAngle; // -40, 0, +40 según botón elegido
-  const sz = Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
-  const cursorR = Math.max(4, sz / 2);
+  const sz = Math.max(2, Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1)));
+  const cursorR = sz / 2; // radio real sin forzar mínimo — el centrado usa transform
   const isEr = edActiveTool === 'eraser';
   const dotColor = isEr ? '#888' : edDrawColor;
   const dotSize = 18;
@@ -5729,10 +5729,11 @@ function _cofDraw() {
     'left:-1px;top:' + (-dotSize/2 - lineLen) + 'px;' +
     'width:2px;height:' + lineLen + 'px;' +
     'background:' + lineColor + ';"></div>' +
-    // Cursor circular en el extremo superior de la línea
+    // Cursor circular: centrado horizontalmente con transform para evitar sub-pixel
     '<div style="position:absolute;' +
-    'left:' + (-cursorR) + 'px;top:' + (-dotSize/2 - lineLen - cursorR*2) + 'px;' +
+    'left:0px;top:' + (-dotSize/2 - lineLen - sz) + 'px;' +
     'width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;' +
+    'transform:translateX(-50%);' +
     'border:1.5px solid ' + (isEr ? 'rgba(150,150,150,0.6)' : lineColor) + ';' +
     'background:' + (isEr ? 'rgba(255,255,255,0.5)' : dotColor + '33') + ';"></div>';
 
