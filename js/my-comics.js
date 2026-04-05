@@ -110,12 +110,22 @@ function _mcRenderList() {
   const wrap = document.getElementById('mcContent');
   if (!wrap) return;
 
-  const user = Auth.currentUser();
-  if (!user) { Router.go('login'); return; }
+  const user = Auth.currentUser?.() || null;
 
+  // Sin login: mostrar proyectos anónimos locales + banner de login
+  const _anonId = '_anon_';
   const comics = ComicStore.getAll()
-    .filter(c => c.userId === user.id || c.username === user.username)
+    .filter(c => user
+      ? (c.userId === user.id || c.username === user.username)
+      : (c.userId === _anonId || c.anonymous === true))
     .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+
+  // Banner de login para usuarios no autenticados
+  const _loginBanner = user ? '' : `
+    <div id="mcAnonBanner" style="background:var(--blue);color:#fff;padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:.85rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="flex:1">Modo invitado — las obras se guardan solo en este dispositivo.</span>
+      <button onclick="Router.go('login')" style="background:#fff;color:var(--blue);border:none;border-radius:8px;padding:5px 12px;font-weight:700;cursor:pointer;font-size:.82rem">Iniciar sesión</button>
+    </div>`;
 
   if (!comics.length) {
     wrap.innerHTML = `
@@ -127,7 +137,16 @@ function _mcRenderList() {
     return;
   }
 
-  wrap.innerHTML = comics.map(comic => {
+  if (!comics.length && !user) {
+    wrap.innerHTML = _loginBanner + `
+      <div style="text-align:center;padding:40px 20px;color:var(--gray-500)">
+        <span style="font-size:3rem;display:block;margin-bottom:12px">📝</span>
+        <p style="font-weight:700;font-size:1rem">Aún no has creado ninguna obra.</p>
+        <p style="font-size:.88rem;margin-top:6px">Pulsa <strong>Crear nuevo</strong> para empezar.</p>
+      </div>`;
+    return;
+  }
+  wrap.innerHTML = _loginBanner + comics.map(comic => {
     const thumb = comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '';
     const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
     const pubLabel = comic.approved
@@ -339,13 +358,14 @@ function _mcCreateProject() {
 
   if (!title) { document.getElementById('mcTitle')?.focus(); return; }
 
-  const user = Auth.currentUser();
+  const user = Auth.currentUser?.() || null;
   const comic = {
     id:       'comic_' + Date.now(),
-    userId:   user.id,
-    username: user.username,
+    userId:   user ? user.id : '_anon_',
+    username: user ? user.username : 'Anónimo',
+    anonymous: !user,
     title,
-    author:   user.username,
+    author:   user ? user.username : 'Anónimo',
     genre,
     social:   social || '',
     navMode,
