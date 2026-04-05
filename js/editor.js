@@ -5554,7 +5554,8 @@ function _cofSetOn(on) {
   _cof.savedClientX = _cof.cursorX;
   _cof.savedClientY = _cof.cursorY;
   _cof.state = 'idle_blue';
-  requestAnimationFrame(_cofDraw);
+  // Sincronizar todos los controles visuales del cursor
+  requestAnimationFrame(() => { _cofDraw(); _edbSyncOffsetBtn(); });
 }
 function _cofReset() {
   clearTimeout(_cof._timer);
@@ -8503,31 +8504,36 @@ function _edbSyncTool() {
   // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
   const offsetBtn = $('edb-offset');
-  if(offsetBtn) offsetBtn.style.display = isFill ? 'none' : '';
-  if(isFill) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
+  if(offsetBtn) offsetBtn.style.display = (isFill || !window._edIsTouch) ? 'none' : '';
+  if(isFill || !window._edIsTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
   _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();
 }
 function _edbSyncOffsetBtn(){
-  // Botón único de la barra flotante
+  // Botón de la barra flotante (edb-offset)
   const edbBtn = $('edb-offset');
   if(edbBtn){
     edbBtn.classList.toggle('active', _edCursorOffset);
     edbBtn.style.opacity = _edCursorOffset ? '1' : '0.5';
   }
-  // Marcar el botón activo dentro del popover de la barra
+  // Botones izq/der en el popover de la BARRA FLOTANTE
   [{id:'edb-offset-pop-l', a:40},{id:'edb-offset-pop-r', a:-40}].forEach(({id,a}) => {
     const b = $(id); if(!b) return;
     const on = _edCursorOffset && _edCursorOffsetAngle === a;
     b.style.background = on ? 'rgba(255,255,255,0.2)' : 'transparent';
   });
-  // Botón único del panel
+  // Botón del PANEL (op-offset-btn)
   const opBtn = $('op-offset-btn');
   if(opBtn){
     opBtn.style.background = _edCursorOffset ? 'var(--black)' : 'transparent';
     opBtn.style.color = _edCursorOffset ? 'var(--white)' : 'var(--gray-700)';
   }
+  // Botones izq/der en el popover del PANEL (op-offset-pop-l/r)
+  [{id:'op-offset-pop-l', a:40},{id:'op-offset-pop-r', a:-40}].forEach(({id,a}) => {
+    const b = $(id); if(!b) return;
+    b.style.background = (_edCursorOffset && _edCursorOffsetAngle === a) ? 'var(--gray-200)' : 'transparent';
+  });
 }
 
 function _edbSyncColor() {
