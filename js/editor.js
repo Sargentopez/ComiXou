@@ -5538,15 +5538,17 @@ function _cofSetOn(on) {
                   : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
   const cw = r.left + r.width  / 2;
   const ch = r.top  + r.height / 2;
-  _cof.cursorX = cw;
-  _cof.cursorY = ch - _cof.distDefault / 2;
-  _cof.touchX  = cw;
-  _cof.touchY  = ch + _cof.distDefault / 2;
+  // Posición del punto de arrastre: centro de la pantalla
+  _cof.touchX = cw;
+  _cof.touchY = ch;
+  // Cursor desplazado según el ángulo elegido (izq/vertical/dcha)
+  const _rad0 = _edCursorOffsetAngle * Math.PI / 180;
+  _cof.cursorX = cw + _cof.distDefault * Math.sin(_rad0);
+  _cof.cursorY = ch - _cof.distDefault * Math.cos(_rad0);
   _cof.dist = _cof.distDefault;
   _cof.savedClientX = _cof.cursorX;
   _cof.savedClientY = _cof.cursorY;
   _cof.state = 'idle_blue';
-  // Dibujar en el siguiente frame para garantizar que el DOM esté listo
   requestAnimationFrame(_cofDraw);
 }
 function _cofReset() {
@@ -5567,9 +5569,11 @@ function _cofHandleTouch(e) {
     if (dToArrastre <= _cof.MARGIN) {
       _cof._dragging = true;
     } else {
-      // Saltar: cursor mantiene distancia default encima del nuevo punto
+      // Saltar: mover el conjunto al nuevo punto, cursor en dirección del ángulo
+      const _radJ = _edCursorOffsetAngle * Math.PI / 180;
       _cof.touchX = tx; _cof.touchY = ty;
-      _cof.cursorX = tx; _cof.cursorY = ty - _cof.distDefault;
+      _cof.cursorX = tx + _cof.distDefault * Math.sin(_radJ);
+      _cof.cursorY = ty - _cof.distDefault * Math.cos(_radJ);
       _cof.dist = _cof.distDefault;
       _cof.savedClientX = _cof.cursorX; _cof.savedClientY = _cof.cursorY;
       _cofDraw();
@@ -5592,8 +5596,10 @@ function _cofHandleMove(e) {
   const tx = e.clientX, ty = e.clientY;
 
   if (_cof._dragging && _cof.state === 'idle_blue') {
+    const _radD = _edCursorOffsetAngle * Math.PI / 180;
     _cof.touchX = tx; _cof.touchY = ty;
-    _cof.cursorX = tx; _cof.cursorY = ty - _cof.dist;
+    _cof.cursorX = tx + _cof.dist * Math.sin(_radD);
+    _cof.cursorY = ty - _cof.dist * Math.cos(_radD);
     _cofDraw();
     return;
   }
@@ -5664,8 +5670,10 @@ function _cofExpire() {
   if (!_cof.on) return;
   _cof.state = 'idle_blue';
   _cof.dist = _cof.distDefault;
-  _cof.touchX = _cof.cursorX;
-  _cof.touchY = _cof.cursorY + _cof.dist;
+  // Reposicionar punto de arrastre según el ángulo (inverso del offset)
+  const _radE = _edCursorOffsetAngle * Math.PI / 180;
+  _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radE);
+  _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radE);
   _cofDraw();
 }
 
@@ -5683,42 +5691,59 @@ function _cofStartStroke(e) {
 }
 
 function _cofDraw() {
+  // Visual idéntico al sistema original: contenedor centrado en el punto de arrastre,
+  // rotado ang grados. Los hijos están en coordenadas locales verticales.
   const isRed = (_cof.state === 'red_ready' || _cof.state === 'red_cool');
   const lineColor = isRed ? 'rgba(220,50,50,0.85)' : 'rgba(60,140,255,0.75)';
-  const dotColor  = isRed ? 'rgba(220,50,50,0.9)'  : 'rgba(60,140,255,0.9)';
+  const ang = _edCursorOffsetAngle; // -40, 0, +40 según botón elegido
   const sz = Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
-  const cursorR = sz / 2;
+  const cursorR = Math.max(4, sz / 2);
   const isEr = edActiveTool === 'eraser';
-  const brushColor = isEr ? 'rgba(255,255,255,0.5)' : edDrawColor;
+  const dotColor = isEr ? '#888' : edDrawColor;
+  const dotSize = 18;
+  const dist = Math.max(10, _cof.dist);
+  const lineLen = Math.max(0, dist - cursorR - dotSize / 2);
+
   let wrap = document.getElementById('edOffsetWrap');
   if (!wrap) {
     wrap = document.createElement('div');
     wrap.id = 'edOffsetWrap';
-    wrap.style.cssText = 'position:fixed;pointer-events:none;z-index:998;top:0;left:0;width:0;height:0;overflow:visible;';
+    wrap.style.cssText = 'position:fixed;pointer-events:none;z-index:998;';
     (document.getElementById('editorShell') || document.body).appendChild(wrap);
   }
   wrap.style.display = '';
-  const tx = _cof.touchX, ty = _cof.touchY;
-  const cx = _cof.cursorX, cy = _cof.cursorY;
-  const dx = cx - tx, dy = cy - ty;
-  const len = Math.hypot(dx, dy);
-  const ang = Math.atan2(dy, dx) * 180 / Math.PI;
-  const dotSize = 18;
+  // El contenedor se centra en el punto de arrastre y rota ang grados
+  wrap.style.left = _cof.touchX + 'px';
+  wrap.style.top  = _cof.touchY + 'px';
+  wrap.style.transform = 'rotate(' + ang + 'deg)';
+
   wrap.innerHTML =
-    '<div style="position:absolute;left:' + (tx-dotSize/2) + 'px;top:' + (ty-dotSize/2) + 'px;' +
+    // Cuadrado de arrastre: centrado en el origen
+    '<div style="position:absolute;' +
+    'left:' + (-dotSize/2) + 'px;top:' + (-dotSize/2) + 'px;' +
     'width:' + dotSize + 'px;height:' + dotSize + 'px;' +
-    'background:' + dotColor + ';border-radius:3px;box-shadow:0 0 0 2px rgba(255,255,255,0.7);"></div>' +
-    '<div style="position:absolute;left:' + tx + 'px;top:' + ty + 'px;' +
-    'width:' + len + 'px;height:2px;background:' + lineColor + ';' +
-    'transform-origin:0 50%;transform:rotate(' + ang + 'deg);opacity:0.8;"></div>' +
-    '<div style="position:absolute;left:' + (cx-cursorR) + 'px;top:' + (cy-cursorR) + 'px;' +
+    'background:' + dotColor + ';border-radius:2px;' +
+    'box-shadow:0 0 0 1.5px rgba(255,255,255,0.7);"></div>' +
+    // Línea vertical desde el borde superior del cuadrado hacia arriba
+    '<div style="position:absolute;' +
+    'left:-1px;top:' + (-dotSize/2 - lineLen) + 'px;' +
+    'width:2px;height:' + lineLen + 'px;' +
+    'background:' + lineColor + ';"></div>' +
+    // Cursor circular en el extremo superior de la línea
+    '<div style="position:absolute;' +
+    'left:' + (-cursorR) + 'px;top:' + (-dotSize/2 - lineLen - cursorR*2) + 'px;' +
     'width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;' +
-    'border:2px solid ' + lineColor + ';background:' + brushColor + '33;"></div>';
+    'border:1.5px solid ' + (isEr ? 'rgba(150,150,150,0.6)' : lineColor) + ';' +
+    'background:' + (isEr ? 'rgba(255,255,255,0.5)' : dotColor + '33') + ';"></div>';
+
   const cur = document.getElementById('edBrushCursor');
   if (cur) cur.style.display = 'none';
   _edCursorLineColor = lineColor;
-  _edOffsetLastTouch = { x: tx, y: ty };
-  if (isRed) { _edCursorSavedPos = { clientX: cx, clientY: cy }; _edCursorSavedTime = Date.now(); }
+  _edOffsetLastTouch = { x: _cof.touchX, y: _cof.touchY };
+  if (isRed) {
+    _edCursorSavedPos = { clientX: _cof.cursorX, clientY: _cof.cursorY };
+    _edCursorSavedTime = Date.now();
+  }
 }
 
 function _cofHide() {
@@ -7215,8 +7240,8 @@ function edRenderOptionsPanel(mode){
           if(_edCursorOffset && _edCursorOffsetAngle === angle){
             _cofSetOn(false);
           } else {
-            _cofSetOn(true);
             _edCursorOffsetAngle = angle;
+            _cofSetOn(true);
             // T2: mostrar instrucciones al activar
             edToast('Primer tap: coloca cursor\nArrastra para dibujar', 3000);
           }
@@ -8321,8 +8346,8 @@ function edInitDrawBar() {
         if(_edCursorOffset && _edCursorOffsetAngle === angle){
           _cofSetOn(false);
         } else {
-          _cofSetOn(true);
           _edCursorOffsetAngle = angle;
+          _cofSetOn(true);
         }
         $('edb-offset-pop').style.display = 'none';
         _edbSyncOffsetBtn();
