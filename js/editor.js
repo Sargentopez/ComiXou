@@ -3717,11 +3717,13 @@ function edOnStart(e){
     if(e.pointerType === 'touch'){
       const _eSaved = e;
       clearTimeout(window._edDrawTouchTimer);
-      // ── Nuevo sistema cursor: delegar a _cof ──
+      // ── Nuevo sistema cursor: timer 120ms para detectar segundo dedo (pinch) ──
       if(_cof.on){
-        // Sin timer — el cursor maneja su propio estado
-        if(window._edActivePointers && window._edActivePointers.size > 1) return;
-        _cofHandleTouch(_eSaved);
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!['draw','eraser'].includes(edActiveTool)) return;
+          _cofHandleTouch(_eSaved);
+        }, 120);
         return;
       }
       // ── Modo dibujo normal (sin cursor offset) ──
@@ -4138,8 +4140,11 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       const _eSaved2 = e;
       if(e.pointerType === 'touch' && _cof.on){
-        if(window._edActivePointers && window._edActivePointers.size > 1) return;
-        _cofHandleTouch(_eSaved2);
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!['draw','eraser'].includes(edActiveTool)) return;
+          _cofHandleTouch(_eSaved2);
+        }, 120);
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
           if(!window._edActivePointers || window._edActivePointers.size > 1) return;
