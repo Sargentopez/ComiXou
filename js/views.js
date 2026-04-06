@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v13.98</footer>
+    <footer class="app-version">v13.99</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -169,8 +169,16 @@ Router.register('editor', {
       <!-- CANVAS (fondo, ocupa todo) -->
       <div id="editorCanvasWrap">
         <canvas id="editorCanvas"></canvas>
+        <!-- Barras de navegación PC (solo visibles en no-touch cuando el lienzo no cabe) -->
+        <div id="ed-hscroll" style="display:none;position:absolute;bottom:0;left:0;right:12px;height:12px;background:rgba(0,0,0,0.08);cursor:pointer">
+          <div id="ed-hscroll-thumb" style="position:absolute;top:2px;height:8px;background:rgba(0,0,0,0.35);border-radius:4px;cursor:grab"></div>
+        </div>
+        <div id="ed-vscroll" style="display:none;position:absolute;top:0;right:0;bottom:12px;width:12px;background:rgba(0,0,0,0.08);cursor:pointer">
+          <div id="ed-vscroll-thumb" style="position:absolute;left:2px;width:8px;background:rgba(0,0,0,0.35);border-radius:4px;cursor:grab"></div>
+        </div>
 
         <div id="edToast"></div>
+        <div id="edCofHint" style="display:none;position:absolute;bottom:56px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.78);color:#fff;padding:8px 18px;border-radius:14px;font-size:0.78rem;font-weight:700;line-height:1.6;text-align:center;pointer-events:none;z-index:61;white-space:nowrap;box-shadow:0 2px 12px rgba(0,0,0,.4)"></div>
 
       <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
       <div id="edConfirmModal" class="ed-confirm-overlay">
@@ -204,7 +212,7 @@ Router.register('editor', {
       <div id="edMenuBar">
 
         <!-- BOTÓN OCULTAR — fijo, no scrollable, siempre al 100% de opacidad -->
-        <button id="edMinimizeBtn" class="ed-menu-pin ed-hide-btn"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem;letter-spacing:.02em">ocultar</b></button>
+        <button id="edMinimizeBtn" class="ed-menu-pin ed-hide-btn"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem;letter-spacing:.02em">OCULTAR</b></button>
         <div class="ed-menu-sep"></div>
 
         <!-- ZONA DESLIZABLE -->
@@ -268,10 +276,10 @@ Router.register('editor', {
 
           <!-- REGLAS -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-menu="rules">Reglas ▾</button>
+            <button class="ed-menu-btn" data-menu="rules">Guías ▾</button>
             <div class="ed-dropdown" id="dd-rules">
-              <button class="ed-dropdown-item" id="dd-rule-add">＋ Añadir regla</button>
-              <button class="ed-dropdown-item" id="dd-rule-clear" style="color:#c00">✕ Borrar reglas</button>
+              <button class="ed-dropdown-item" id="dd-rule-add">＋ Añadir guía</button>
+              <button class="ed-dropdown-item" id="dd-rule-clear" style="color:#c00">✕ Borrar guías</button>
             </div>
           </div>
 
@@ -358,7 +366,7 @@ Router.register('editor', {
           <button id="edb-pen-size"    class="edb-tool edb-sizebtn-fix" title="Grosor lápiz" style="font-size:.7rem;font-weight:900">Ø</button>
           <button id="edb-eraser-size" class="edb-tool edb-sizebtn-fix" title="Grosor goma"   style="font-size:.7rem;font-weight:900;display:none">Ø</button>
           <div class="edb-sep"></div>
-          <button id="edb-offset" class="edb-tool" title="Cursor desplazado" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↑<br><span style="font-size:.5rem">Cursor</span></button>
+          <button id="edb-offset" class="edb-tool" title="Cursor desplazado" style="font-size:.6rem;font-weight:900;line-height:1;padding:2px 4px">↑<br><span style="font-size:.5rem">CURSOR</span></button>
           <div class="edb-sep"></div>
           <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
           <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>

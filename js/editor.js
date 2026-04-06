@@ -3061,50 +3061,127 @@ function _edScrollbarsUpdate(){
   const { h, v } = edNeedsScroll();
   _edSB.needH = h;
   _edSB.needV = v;
+  _edScrollbarsDraw();
 }
 
 function _edScrollbarsDraw(){
-  if(!edCtx || !edCanvas) return;
+  // Barras de navegación HTML — solo PC (no táctil)
+  if(window._edIsTouch){ _edHideHTMLScrollbars(); return; }
+  if(!edCanvas) return;
   const W = edCanvas.width, H = edCanvas.height;
-  const pw = edPageW(), ph = edPageH();
-  const thick = 6, margin = 2, radius = 3;
+  const wsW = ED_CANVAS_W * edCamera.z;
+  const wsH = ED_CANVAS_H * edCamera.z;
+  const visLeft = -edCamera.x;
+  const visTop  = -edCamera.y;
 
-  // Rango del workspace en pantalla
-  const wsLeft  = edCamera.x;
-  const wsTop   = edCamera.y;
-  const wsRight = wsLeft + ED_CANVAS_W * edCamera.z;
-  const wsBot   = wsTop  + ED_CANVAS_H * edCamera.z;
+  const hBar   = document.getElementById('ed-hscroll');
+  const hThumb = document.getElementById('ed-hscroll-thumb');
+  const vBar   = document.getElementById('ed-vscroll');
+  const vThumb = document.getElementById('ed-vscroll-thumb');
+  if(!hBar || !vBar) return;
 
-  // Qué parte del workspace está visible
-  const visLeft = -wsLeft;
-  const visTop  = -wsTop;
-  const visW    = W;
-  const visH    = H;
-  const wsW     = ED_CANVAS_W * edCamera.z;
-  const wsH     = ED_CANVAS_H * edCamera.z;
+  const needH = wsW > W + 1;
+  const needV = wsH > H + 1;
+  hBar.style.display = needH ? 'block' : 'none';
+  vBar.style.display = needV ? 'block' : 'none';
 
-  edCtx.save();
-  edCtx.globalAlpha = 0.55;
-
-  if(_edSB.needH && wsW > 0){
-    const trackW = W - margin*2 - (thick+margin);
-    const thumbW = Math.max(30, trackW * (visW / wsW));
-    const thumbX = margin + trackW * (Math.max(0, visLeft) / wsW);
-    edCtx.fillStyle = '#555';
-    _edRoundRect(edCtx, Math.min(thumbX, W - thumbW - margin - thick - margin), H - thick - margin, thumbW, thick, radius);
-    edCtx.fill();
+  if(needH && hThumb && wsW > 0){
+    const trackW = W - (needV ? 12 : 0);
+    const ratio  = Math.min(1, W / wsW);
+    const thumbW = Math.max(30, trackW * ratio);
+    const maxScroll = wsW - W;
+    const frac = maxScroll > 0 ? Math.max(0, Math.min(1, visLeft / maxScroll)) : 0;
+    hThumb.style.left  = (frac * (trackW - thumbW)) + 'px';
+    hThumb.style.width = thumbW + 'px';
   }
 
-  if(_edSB.needV && wsH > 0){
-    const trackH = H - margin*2 - (thick+margin);
-    const thumbH = Math.max(30, trackH * (visH / wsH));
-    const thumbY = margin + trackH * (Math.max(0, visTop) / wsH);
-    edCtx.fillStyle = '#555';
-    _edRoundRect(edCtx, W - thick - margin, Math.min(thumbY, H - thumbH - margin - thick - margin), thick, thumbH, radius);
-    edCtx.fill();
+  if(needV && vThumb && wsH > 0){
+    const trackH = H - (needH ? 12 : 0);
+    const ratio  = Math.min(1, H / wsH);
+    const thumbH = Math.max(30, trackH * ratio);
+    const maxScroll = wsH - H;
+    const frac = maxScroll > 0 ? Math.max(0, Math.min(1, visTop / maxScroll)) : 0;
+    vThumb.style.top    = (frac * (trackH - thumbH)) + 'px';
+    vThumb.style.height = thumbH + 'px';
+  }
+}
+
+function _edHideHTMLScrollbars(){
+  const h = document.getElementById('ed-hscroll');
+  const v = document.getElementById('ed-vscroll');
+  if(h) h.style.display = 'none';
+  if(v) v.style.display = 'none';
+}
+
+function _edInitHTMLScrollbars(){
+  if(window._edIsTouch) return;
+  let _sbAxis = null, _sbDragStart = 0, _sbCamStart = 0;
+
+  function getMetrics(axis){
+    if(!edCanvas) return null;
+    const W = edCanvas.width, H = edCanvas.height;
+    const wsW = ED_CANVAS_W * edCamera.z;
+    const wsH = ED_CANVAS_H * edCamera.z;
+    if(axis === 'h'){
+      const needV = wsH > H + 1;
+      const trackW = W - (needV ? 12 : 0);
+      const thumbW = Math.max(30, trackW * Math.min(1, W / wsW));
+      return { trackLen: trackW, thumbLen: thumbW, maxScroll: Math.max(0, wsW - W), camVal: -edCamera.x };
+    } else {
+      const needH = wsW > W + 1;
+      const trackH = H - (needH ? 12 : 0);
+      const thumbH = Math.max(30, trackH * Math.min(1, H / wsH));
+      return { trackLen: trackH, thumbLen: thumbH, maxScroll: Math.max(0, wsH - H), camVal: -edCamera.y };
+    }
   }
 
-  edCtx.restore();
+  function applyScroll(axis, val){
+    const m = getMetrics(axis);
+    if(!m) return;
+    const clamped = Math.max(0, Math.min(m.maxScroll, val));
+    if(axis === 'h') edCamera.x = -clamped;
+    else             edCamera.y = -clamped;
+    edRedraw();
+  }
+
+  ['h','v'].forEach(axis => {
+    const bar   = document.getElementById('ed-' + axis + 'scroll');
+    const thumb = document.getElementById('ed-' + axis + 'scroll-thumb');
+    if(!bar || !thumb) return;
+
+    // Drag del thumb
+    thumb.addEventListener('pointerdown', e => {
+      e.stopPropagation();
+      _sbAxis = axis;
+      _sbDragStart = axis === 'h' ? e.clientX : e.clientY;
+      const m = getMetrics(axis);
+      _sbCamStart = m ? m.camVal : 0;
+      thumb.setPointerCapture(e.pointerId);
+      thumb.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+    thumb.addEventListener('pointermove', e => {
+      if(_sbAxis !== axis) return;
+      const delta = (axis === 'h' ? e.clientX : e.clientY) - _sbDragStart;
+      const m = getMetrics(axis);
+      if(!m || m.trackLen <= m.thumbLen) return;
+      applyScroll(axis, _sbCamStart + delta * (m.maxScroll / (m.trackLen - m.thumbLen)));
+    });
+    thumb.addEventListener('pointerup', () => { _sbAxis = null; thumb.style.cursor = 'grab'; });
+    thumb.addEventListener('pointercancel', () => { _sbAxis = null; thumb.style.cursor = 'grab'; });
+
+    // Clic en la pista → saltar a esa posición
+    bar.addEventListener('pointerdown', e => {
+      if(e.target === thumb) return;
+      e.stopPropagation();
+      const rect = bar.getBoundingClientRect();
+      const clickPos = axis === 'h' ? e.clientX - rect.left : e.clientY - rect.top;
+      const m = getMetrics(axis);
+      if(!m) return;
+      const frac = Math.max(0, Math.min(1, (clickPos - m.thumbLen / 2) / (m.trackLen - m.thumbLen)));
+      applyScroll(axis, frac * m.maxScroll);
+    });
+  });
 }
 
 function _edRoundRect(ctx, x, y, w, h, r){
@@ -5532,10 +5609,20 @@ function _edLineAddPoint(nx, ny){
 // ════════════════════════════════════════════════
 //  NUEVO SISTEMA DE CURSOR DESPLAZADO (_cof)
 // ════════════════════════════════════════════════
+function _cofShowHint(show) {
+  const h = document.getElementById('edCofHint');
+  if (!h) return;
+  if (show) {
+    h.innerHTML = 'Línea azul: Posiciona el cursor<br>Línea roja: Arrastra para dibujar';
+    h.style.display = 'block';
+  } else {
+    h.style.display = 'none';
+  }
+}
 function _cofSetOn(on) {
   _cof.on = on;
   _edCursorOffset = on;
-  if (!on) { _cofReset(); _cofHide(); return; }
+  if (!on) { _cofReset(); _cofHide(); _cofShowHint(false); return; }
   // Usar el centro del viewport visible (coordenadas CSS de pantalla)
   // El punto de arrastre aparece en el centro, el cursor 76px arriba
   const shell = document.getElementById('editorShell');
@@ -5556,6 +5643,7 @@ function _cofSetOn(on) {
   _cof.state = 'idle_blue';
   // Sincronizar todos los controles visuales del cursor
   requestAnimationFrame(() => { _cofDraw(); _edbSyncOffsetBtn(); });
+  if (on) _cofShowHint(true);
 }
 function _cofReset() {
   clearTimeout(_cof._timer);
@@ -5568,6 +5656,7 @@ function _cofDist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 
 function _cofHandleTouch(e) {
   if (!_cof.on) return;
+  _cofShowHint(false);
   const tx = e.clientX, ty = e.clientY;
   const dToArrastre = _cofDist(tx, ty, _cof.touchX, _cof.touchY);
 
@@ -6067,14 +6156,18 @@ function _edActivateShapeTool(isNew) {
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-dsize-num" min="0" max="20" value="${lw}" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
-      <input type="range" id="op-dsize" min="0" max="20" value="${lw}" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <div class="ed-slider-wrap" style="flex:1;min-width:40px">
+        <input type="range" id="op-dsize" min="0" max="20" data-suffix="px" value="${lw}" style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-opacity-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
     <div id="op-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-shape-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
-      <input type="range" id="op-shape-opacity" min="0" max="100" value="${opacity}" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <div class="ed-slider-wrap" style="flex:1;min-width:40px">
+        <input type="range" id="op-shape-opacity" min="0" max="100" data-suffix="%" value="${opacity}" style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
     </div>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -6183,7 +6276,6 @@ function _edActivateShapeTool(isNew) {
   });
   $('op-dsize')?.addEventListener('input',e=>{
     const v=+e.target.value; edDrawSize=v;
-    const n=$('op-dsize-num'); if(n) n.value=v;
     const s=_curShape(); if(s){s.lineWidth=v;edRedraw();} _updateInfo();
     _edRefreshOffsetCursor(); // T4: actualizar círculo del cursor en tiempo real
   });
@@ -6207,7 +6299,6 @@ function _edActivateShapeTool(isNew) {
   });
   $('op-shape-opacity')?.addEventListener('input',e=>{
     const v=+e.target.value;
-    const n=$('op-shape-opacity-num'); if(n) n.value=v;
     const s=_curShape(); if(s){s.opacity=v/100;edRedraw();} _updateInfo();
   });
   $('op-shape-opacity')?.addEventListener('change',()=>{ _edShapePushHistory(); });
@@ -6392,14 +6483,18 @@ function _edActivateLineTool(isNew, isCreating) {
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-dsize-num" min="0" max="20" value="${lw}" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
-      <input type="range" id="op-dsize" min="0" max="20" value="${lw}" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <div class="ed-slider-wrap" style="flex:1;min-width:40px">
+        <input type="range" id="op-dsize" min="0" max="20" data-suffix="px" value="${lw}" style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-opacity-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Op%</button>
     <div id="op-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
-      <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-opacity-num" min="0" max="100" value="${opacity}" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
-      <input type="range" id="op-line-opacity" min="0" max="100" value="${opacity}" style="flex:1;min-width:40px;accent-color:var(--black)">
+      <div class="ed-slider-wrap" style="flex:1;min-width:40px">
+        <input type="range" id="op-line-opacity" min="0" max="100" data-suffix="%" value="${opacity}" style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
     </div>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -6523,7 +6618,6 @@ function _edActivateLineTool(isNew, isCreating) {
   });
   $('op-dsize')?.addEventListener('input',e=>{
     const v=+e.target.value; edDrawSize=v;
-    const n=$('op-dsize-num'); if(n) n.value=v;
     const l=_curLine(); if(l){l.lineWidth=v;edRedraw();} _updateInfo();
   });
   $('op-dsize')?.addEventListener('change',()=>{ _edShapePushHistory(); });
@@ -6546,7 +6640,6 @@ function _edActivateLineTool(isNew, isCreating) {
   });
   $('op-line-opacity')?.addEventListener('input',e=>{
     const v=+e.target.value;
-    const n=$('op-line-opacity-num'); if(n) n.value=v;
     const l=_curLine(); if(l){l.opacity=v/100;edRedraw();} _updateInfo();
   });
   $('op-line-opacity')?.addEventListener('change',()=>{ _edShapePushHistory(); });
@@ -7048,10 +7141,10 @@ function edRenderOptionsPanel(mode){
     ${isEr ? `
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-color-erase-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>${window._edIsTouch ? '<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id=\"op-offset-btn\" style=\"flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:'+(_edCursorOffset?'var(--black)':'transparent')+';color:'+(_edCursorOffset?'var(--white)':'var(--gray-700)')+'\">↑ CURSOR</button>' : ''}` : ''}
 
   </div>
-  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n    ${!isFill && window._edIsTouch ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ Cursor</button><div id="op-offset-pop" style="display:none;position:absolute;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);flex-direction:row;align-items:center;gap:6px;"><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>` : ''}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
+  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n    ${!isFill && window._edIsTouch ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ CURSOR</button><div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:center;gap:6px;"><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>` : ''}\n  </div>` : ''}\n  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA 3: Acciones -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
     <button id="op-draw-del"
       style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
@@ -7232,8 +7325,12 @@ function edRenderOptionsPanel(mode){
       const panel = $('edOptionsPanel');
       const pr = panel ? panel.getBoundingClientRect() : {left:0,top:0};
       _opOffsetPop.style.display = 'flex';
-      _opOffsetPop.style.left = (br.left - pr.left) + 'px';
-      _opOffsetPop.style.top  = (br.bottom - pr.top + 4) + 'px';
+      _opOffsetPop.style.left = br.left + 'px';
+      _opOffsetPop.style.top = '0px';
+      requestAnimationFrame(() => {
+        const ph = _opOffsetPop.getBoundingClientRect().height;
+        _opOffsetPop.style.top = (br.top - ph - 6) + 'px';
+      });
     });
     // El popover bloquea pointerdown/touchstart para que no lleguen al cierre exterior
     ['pointerdown','touchstart'].forEach(ev =>
@@ -7250,7 +7347,7 @@ function edRenderOptionsPanel(mode){
             _edCursorOffsetAngle = angle;
             _cofSetOn(true);
             // T2: mostrar instrucciones al activar
-            edToast('Primer tap: coloca cursor\nArrastra para dibujar', 3000);
+            // hint mostrado via _cofShowHint en _cofSetOn
           }
           _opOffsetPop.style.display = 'none';
           if(_opOffsetBtn){
@@ -7815,7 +7912,7 @@ function _edRuleAdd() {
 
 function _edRuleClear() {
   if(!edRules.length) return;
-  edConfirm('¿Borrar todas las reglas de esta hoja?', ()=>{
+  edConfirm('¿Borrar todas las guías de esta hoja?', ()=>{
     edRules = [];
     _edRulesPanelClose();
     edRedraw();
@@ -10863,6 +10960,8 @@ function EditorView_init(){
     else if(ev.pointerType==='mouse') window._edIsTouch=false;
   };
   document.addEventListener('pointerdown', window._edPointerTypeFn, true);
+  // Inicializar barras de navegación HTML (solo PC)
+  setTimeout(_edInitHTMLScrollbars, 400);
 
   // ── RESIZE ──
   // Guardar referencia para cleanup en EditorView_destroy

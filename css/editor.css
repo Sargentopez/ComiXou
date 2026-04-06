@@ -1619,3 +1619,28 @@ body.editor-page #appView {
 .ed-slider-wrap.dragging .ed-slider-bubble {
   opacity: 1;
 }
+
+/* ══════════════════════════════
+   BARRAS DE NAVEGACIÓN PC (T11)
+   ══════════════════════════════ */
+#ed-hscroll,
+#ed-vscroll {
+  z-index: 50;
+  border-radius: 0;
+  transition: opacity .2s;
+  opacity: 0.6;
+}
+#ed-hscroll:hover,
+#ed-vscroll:hover {
+  opacity: 1;
+}
+#ed-hscroll-thumb,
+#ed-vscroll-thumb {
+  transition: background .15s;
+  min-width: 30px;
+  min-height: 30px;
+}
+#ed-hscroll-thumb:hover,
+#ed-vscroll-thumb:hover {
+  background: rgba(0,0,0,0.55) !important;
+}
