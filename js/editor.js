@@ -5999,10 +5999,14 @@ function _cofHandleMove(e) {
     return;
   }
   if (_cof._pendingStart) {
-    // Calcular dist entre dedo y cursor guardado
+    // La distancia se mide entre el dedo y el cursor guardado (punto real del trazo).
+    // La herramienta se posiciona desde cursorX/Y usando esa distancia y el ángulo,
+    // no en la posición cruda del dedo — así no hay error desde el primer momento.
     const d = _cofDist(tx, ty, _cof.cursorX, _cof.cursorY);
     _cof.dist = Math.max(10, d);
-    _cof.touchX = tx; _cof.touchY = ty;
+    const _radP = _edCursorOffsetAngle * Math.PI / 180;
+    _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radP);
+    _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radP);
     _cof._pendingStart = false;
     _cof.state = 'red_ready';
     _cofDraw();
@@ -6010,9 +6014,14 @@ function _cofHandleMove(e) {
     return;
   }
   if (_cof._strokeStarted && edPainting) {
+    // El punto real del trazo (cursorX/Y) se mueve con el delta del dedo.
+    // La herramienta (touchX/Y) se recalcula desde cursorX/Y para estar
+    // siempre geométricamente alineada — sin acumulación de error.
     const dxN = tx - _cof.touchX, dyN = ty - _cof.touchY;
-    _cof.touchX = tx; _cof.touchY = ty;
     _cof.cursorX += dxN; _cof.cursorY += dyN;
+    const _radM = _edCursorOffsetAngle * Math.PI / 180;
+    _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radM);
+    _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radM);
     _cofDraw();
     const synth = { clientX: _cof.cursorX, clientY: _cof.cursorY,
                     pointerType: 'touch', pointerId: e.pointerId, touches: null };
@@ -6025,12 +6034,6 @@ function _cofHandleUp(e) {
   if (_cof._dragging && _cof.state === 'idle_blue') {
     _cof._dragging = false;
     _cof.savedClientX = _cof.cursorX; _cof.savedClientY = _cof.cursorY;
-    // Reubicar la herramienta para que quede geométricamente alineada con el punto
-    // de trazo (cursorX/Y) usando el ángulo y la distancia actuales.
-    // Esto corrige cualquier acumulación de error durante el arrastre azul.
-    const _radU = _edCursorOffsetAngle * Math.PI / 180;
-    _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radU);
-    _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radU);
     _cof.state = 'red_ready';
     _cofDraw();
     clearTimeout(_cof._timer);
@@ -6062,11 +6065,6 @@ function _cofAfterStroke() {
   if (!_cof.on) return;
   _cof.state = 'red_cool';
   _cof._strokeStarted = false;
-  // Reubicar la herramienta al terminar el stroke para que el siguiente toque
-  // encuentre la herramienta en la posición correcta respecto al punto de trazo.
-  const _radA = _edCursorOffsetAngle * Math.PI / 180;
-  _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radA);
-  _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radA);
   _cofDraw();
   clearTimeout(_cof._timer);
   _cof._timer = setTimeout(_cofExpire, _cof.MS_COOL);
