@@ -6769,7 +6769,7 @@ function _edActivateLineTool(isNew, isCreating) {
   const col     = _cur?.color    || edDrawColor  || '#000000';
   const lw      = _cur?.lineWidth ?? edDrawSize ?? 3;
   const opacity = _cur ? Math.round((_cur.opacity??1)*100) : 100;
-  const isSelectMode = _edLineType === 'select';
+  const isSelectMode = _edLineType === 'select' && edActiveTool !== 'shape';
   const nPoints = _edLineLayer?.points?.length || 0;
   const isClosed = _cur?.closed || false;
   const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
