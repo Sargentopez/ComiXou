@@ -2135,9 +2135,13 @@ function edDrawSel(){
   const _curveMode=_edCurveModeActive&&_edCurveModeActive();
   edCtx.strokeStyle='#1a8cff';
   edCtx.lineWidth=lw;
-  edCtx.setLineDash([5/z,3/z]);
-  edCtx.strokeRect(-w/2,-h/2,w,h);
-  edCtx.setLineDash([]);
+  // En táctil, ocultar el rectángulo guía del bbox para objetos vectoriales (solo ruido visual)
+  const _isVectorial = la.type==='line' || la.type==='shape';
+  if(!edLastPointerIsTouch || !_isVectorial){
+    edCtx.setLineDash([5/z,3/z]);
+    edCtx.strokeRect(-w/2,-h/2,w,h);
+    edCtx.setLineDash([]);
+  }
   // Handles de escala y rotación — solo en PC (no táctil)
   if(la.type!=='bubble' && !edLastPointerIsTouch){
     if(!_curveMode){
@@ -3980,7 +3984,7 @@ function edOnStart(e){
         }
       }
     }
-    if(la.points.length>=2 && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+    if(la.points.length>=2 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
       const rot=(la.rotation||0)*Math.PI/180;
       const cos=Math.cos(rot),sin=Math.sin(rot);
       const pw=edPageW(),ph=edPageH();
@@ -5886,8 +5890,10 @@ function _edLineAddPoint(nx, ny){
         _edLineType='select'; edActiveTool='select'; edCanvas.className='';
         // T6: recrear el panel completo para reflejar modo selección correctamente
         // (incluye botón ╱ listo para crear polígono fusionable)
+        // Solo si el panel ya estaba abierto en modo line; NO abrir si veníamos de la barra flotante
         const _panelOpen2 = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
-        if(_panelOpen2) _edActivateLineTool(false);
+        const _shapeBarWasOpen = $('edShapeBar')?.classList.contains('visible');
+        if(_panelOpen2 && !_shapeBarWasOpen) _edActivateLineTool(false);
       }
       return;
     }
