@@ -6025,6 +6025,12 @@ function _cofHandleUp(e) {
   if (_cof._dragging && _cof.state === 'idle_blue') {
     _cof._dragging = false;
     _cof.savedClientX = _cof.cursorX; _cof.savedClientY = _cof.cursorY;
+    // Reubicar la herramienta para que quede geométricamente alineada con el punto
+    // de trazo (cursorX/Y) usando el ángulo y la distancia actuales.
+    // Esto corrige cualquier acumulación de error durante el arrastre azul.
+    const _radU = _edCursorOffsetAngle * Math.PI / 180;
+    _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radU);
+    _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radU);
     _cof.state = 'red_ready';
     _cofDraw();
     clearTimeout(_cof._timer);
@@ -6056,6 +6062,11 @@ function _cofAfterStroke() {
   if (!_cof.on) return;
   _cof.state = 'red_cool';
   _cof._strokeStarted = false;
+  // Reubicar la herramienta al terminar el stroke para que el siguiente toque
+  // encuentre la herramienta en la posición correcta respecto al punto de trazo.
+  const _radA = _edCursorOffsetAngle * Math.PI / 180;
+  _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radA);
+  _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radA);
   _cofDraw();
   clearTimeout(_cof._timer);
   _cof._timer = setTimeout(_cofExpire, _cof.MS_COOL);
@@ -6513,7 +6524,7 @@ function _edActivateShapeTool(isNew) {
   // No centrar si ya hay objetos en sesión de fusión
   const _hasFusionObjs5 = _edLineFusionId && edLayers.some(l => l._fusionId===_edLineFusionId);
   if(!_hasFusionObjs5) _edFocusDone = false;
-  if(_sel && !_edFocusDone) requestAnimationFrame(()=>_edFocusOnLayer(_sel));
+  if(_sel && !_edFocusDone) setTimeout(()=>_edFocusOnLayer(_sel), 220);
 
   // ── Helpers ──
   const _curShape = () => {
@@ -6835,6 +6846,8 @@ function _edActivateLineTool(isNew, isCreating) {
     <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
   </div>
 </div>`;
+  // Capturar ANTES de abrir el panel si ya estaba abierto en modo 'line'
+  const _panelWasOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'line';
@@ -6847,13 +6860,12 @@ function _edActivateLineTool(isNew, isCreating) {
   _edShapeInitHistory(isNew || isCreating);
   // Sistema _vs*: inicializar solo si no hay sesión activa
   if(!isCreating && _vsHistory.length === 0) _vsInit(!!isNew);
-  // Centrar cámara solo en la primera apertura real (isNew desde fuera del panel)
-  // Si el panel ya estaba abierto en modo 'line', no mover la cámara
-  const _panelWasOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
-  if(isNew && !_panelWasOpen) _edFocusDone = false;
-  else if(!isNew) _edFocusDone = true; // re-render interno: no mover
+  // Centrar cámara: solo si el panel no estaba ya abierto (apertura real, no re-render interno)
+  if(!_panelWasOpen) _edFocusDone = false;
+  else _edFocusDone = true;
   const _focusLayer = _edLineLayer || (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null);
-  if(_focusLayer && !_edFocusDone) requestAnimationFrame(()=>_edFocusOnLayer(_focusLayer));
+  // Esperar a que termine la transición CSS del panel (max-height 0.2s) antes de medir su tamaño real
+  if(_focusLayer && !_edFocusDone) setTimeout(()=>_edFocusOnLayer(_focusLayer), 220);
 
   // ── Helpers ──
   const _curLine = () => {
@@ -7171,7 +7183,10 @@ function _edFinishLine() {
     edRedraw();
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
-    if(_panelOpen) _edActivateLineTool(false, true); else if(!edMinimized) _edActivateLineTool(true);
+    const _shapeBarActive = $('edShapeBar')?.classList.contains('visible');
+    // En modo barra flotante (menús ocultos): NUNCA abrir el panel al finalizar línea
+    if(_panelOpen && !_shapeBarActive) _edActivateLineTool(false, true);
+    else if(!edMinimized && !_shapeBarActive) _edActivateLineTool(true);
   } else {
     if (_edLineLayer) {
       const idx = edLayers.indexOf(_edLineLayer);
@@ -7540,7 +7555,7 @@ function edRenderOptionsPanel(mode){
     // Centrar cámara en el contenido del DrawLayer al abrir el panel,
     // pero NO si ya estaba abierto en modo draw (cambio lápiz↔goma no mueve la cámara)
     _edFocusDone = _drawPanelAlreadyOpen;
-    requestAnimationFrame(()=>{
+    setTimeout(()=>{
       const _page = edPages[edCurrentPage];
       const _dl = _page ? _page.layers.find(l=>l.type==='draw') : null;
       if(!_dl) return;
@@ -7563,7 +7578,7 @@ function edRenderOptionsPanel(mode){
       const cy=((minY+maxY)/2-edMarginY())/ph;
       const bw=(maxX-minX)/pw, bh=(maxY-minY)/ph;
       _edFocusOnLayer({x:cx, y:cy, width:Math.max(bw,0.05), height:Math.max(bh,0.05)});
-    });
+    }, 220);
 
     // ── Herramientas ──
     $('op-tool-pen')?.addEventListener('click',()=>{
@@ -7805,7 +7820,7 @@ function edRenderOptionsPanel(mode){
     const la=edLayers[edSelectedIdx];
     // Centrar cámara en el objeto al abrir el panel
     _edFocusDone = false;
-    requestAnimationFrame(()=>_edFocusOnLayer(la));
+    setTimeout(()=>_edFocusOnLayer(la), 220);
 
     // ── PANEL DE GRUPO ──────────────────────────────────────────
     // Objeto agrupado: panel simplificado sin controles de edición individual.
