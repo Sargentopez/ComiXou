@@ -86,6 +86,15 @@ let edPinchCenter0 = null, edPinchCamera0 = null;
 let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
+let _edCropMode     = false;    // true cuando el modo recorte está activo
+let _edCropLayer    = null;     // referencia al layer que se está recortando
+let _edCropPts      = [];       // vértices del polígono de recorte en coords fraccionarias de página
+let _edCropDragIdx  = -1;       // índice del nodo que se está arrastrando (-1 = ninguno)
+let _edCropDragging = false;    // true durante un drag de nodo
+let _edCropLastTapSeg = -1;     // índice de segmento del último tap (doble tap)
+let _edCropLastTapTime = 0;     // timestamp del último tap sobre segmento
+let _edCropHistory = [];        // historial de snapshots del polígono (para ↩)
+let _edCropHistIdx = -1;        // índice actual en el historial
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
 // x,y = traslación del canvas (donde aparece el origen del workspace en pantalla)
@@ -100,6 +109,7 @@ const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 // ── Multi-selección ──
 let edMultiSel = [];        // índices seleccionados
+let edMultiSelAnchor = -1;  // índice del objeto ancla para Shift+flechas (último seleccionado individualmente)
 let edMultiDragging = false;
 let edMultiResizing = false;
 let edMultiRotating = false;
@@ -1649,8 +1659,10 @@ function edDrawMultiSel(){
 
   // Marquesina de selección activa
   if(edRubberBand){
-    const rx=edMarginX()+edRubberBand.x0*pw, ry=edMarginY()+edRubberBand.y0*ph;
-    const rw=(edRubberBand.x1-edRubberBand.x0)*pw, rh=(edRubberBand.y1-edRubberBand.y0)*ph;
+    const rx=edMarginX()+Math.min(edRubberBand.x0,edRubberBand.x1)*pw;
+    const ry=edMarginY()+Math.min(edRubberBand.y0,edRubberBand.y1)*ph;
+    const rw=Math.abs(edRubberBand.x1-edRubberBand.x0)*pw;
+    const rh=Math.abs(edRubberBand.y1-edRubberBand.y0)*ph;
     edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=1.5/z;
     edCtx.setLineDash([5/z,3/z]);
     edCtx.fillStyle='rgba(26,140,255,0.06)';
@@ -1664,8 +1676,10 @@ function edDrawMultiSel(){
 function edDrawRubberBand(){
   if(!edRubberBand) return;
   const pw=edPageW(),ph=edPageH(),z=edCamera.z;
-  const rx=edMarginX()+edRubberBand.x0*pw, ry=edMarginY()+edRubberBand.y0*ph;
-  const rw=(edRubberBand.x1-edRubberBand.x0)*pw, rh=(edRubberBand.y1-edRubberBand.y0)*ph;
+  const rx=edMarginX()+Math.min(edRubberBand.x0,edRubberBand.x1)*pw;
+  const ry=edMarginY()+Math.min(edRubberBand.y0,edRubberBand.y1)*ph;
+  const rw=Math.abs(edRubberBand.x1-edRubberBand.x0)*pw;
+  const rh=Math.abs(edRubberBand.y1-edRubberBand.y0)*ph;
   edCtx.save();
   edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=1.5/z;
   edCtx.setLineDash([5/z,3/z]);
@@ -1678,7 +1692,10 @@ function edDrawRubberBand(){
 function _msClear(){
   edMultiSel=[]; edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
   edRubberBand=null; edMultiDragOffs=[]; edMultiTransform=null; edMultiGroupRot=0;
-  edMultiBbox=null;
+  edMultiBbox=null; edMultiSelAnchor=-1;
+  // Limpiar siempre el botón y el dropdown para que no queden activos en PC
+  $('edMultiSelBtn')?.classList.remove('active');
+  $('_edMultiSelDd')?.classList.remove('open');
 }
 
 function _edDeactivateMultiSel(){
@@ -1693,7 +1710,6 @@ function _edDeactivateMultiSel(){
   edRedraw();
 }
 
-// Muestra/actualiza el dropdown de multiselección (Agrupar/Desagrupar)
 function _edUpdateMultiSelPanel(){
   const panel=$('edOptionsPanel');
   if(panel && panel.dataset.mode==='multiselect'){ panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode; }
@@ -1711,14 +1727,17 @@ function _edUpdateMultiSelPanel(){
     dd.classList.remove('open'); return;
   }
   const _hasGroup = edMultiSel.some(i => edLayers[i]?.groupId);
+  const _mergeTypes = _edMergeableTypes();
   dd.innerHTML = `
     <button class="ed-dropdown-item" id="_ms-group">⊞ Agrupar</button>
-    ${_hasGroup ? `<button class="ed-dropdown-item" id="_ms-ungroup">⊟ Desagrupar</button>` : ''}`;
+    ${_hasGroup ? `<button class="ed-dropdown-item" id="_ms-ungroup">⊟ Desagrupar</button>` : ''}
+    ${_mergeTypes ? `<button class="ed-dropdown-item" id="_ms-merge">⊕ Unir</button>` : ''}`;
   $('_ms-group')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edGroupSelected(); });
   $('_ms-ungroup')?.addEventListener('click', ()=>{
     dd.classList.remove('open');
     edUngroupSelected();
   });
+  $('_ms-merge')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edMergeSelected(); });
   const btn = $('edMultiSelBtn');
   if(btn){
     const r = btn.getBoundingClientRect();
@@ -2049,6 +2068,8 @@ function edRedraw(){
     if(edMultiSel.length) edDrawMultiSel();
     else edDrawRubberBand();
   }
+  // Rubber band en modo select (PC, sin pulsar botón multiselect)
+  if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
   // ── Reglas (T29): solo visibles en el editor, encima de todo ──
   _edRulesDraw(edCtx);
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
@@ -2057,6 +2078,8 @@ function edRedraw(){
   edCtx.lineWidth   = 1 / edCamera.z;   // 1px físico independiente del zoom
   edCtx.strokeRect(edMarginX(), edMarginY(), edPageW(), edPageH());
   edCtx.restore();
+  // Overlay de recorte: contorno del polígono + zona exterior oscurecida
+  if (_edCropMode && _edCropLayer) _edCropDrawOverlay();
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
   _edScrollbarsDraw();
@@ -2451,6 +2474,563 @@ function _edFocusOnLayer(la) {
   requestAnimationFrame(_animate);
 }
 
+
+/* ══════════════════════════════════════════
+   SISTEMA DE RECORTE POLIGONAL (_edCrop*)
+   ══════════════════════════════════════════ */
+
+function _edStartCrop(la) {
+  if (!la || !['image','stroke','draw'].includes(la.type)) return;
+  edPushHistory();
+  _edCropMode        = true;
+  _edCropLayer       = la;
+  _edCropPts         = [];
+  _edCropDragIdx     = -1;
+  _edCropDragging    = false;
+  _edCropLastTapSeg  = -1;
+  _edCropLastTapTime = 0;
+  _edCropHistory     = [];
+  _edCropHistIdx     = -1;
+  // draw ya tiene su propia UI bloqueada; para imagen/stroke hay que bloquearlo
+  if (la.type !== 'draw') _edDrawLockUI();
+  _edCropPushHistory(); // estado inicial vacío para poder deshacer hasta el principio
+  _edCropRenderPanel();
+  edRedraw();
+}
+
+// Guarda snapshot del estado actual del polígono en el historial interno del recorte.
+// Se llama después de cada acción: añadir vértice, drag, inserción en segmento.
+function _edCropPushHistory() {
+  _edCropHistory = _edCropHistory.slice(0, _edCropHistIdx + 1);
+  _edCropHistory.push(_edCropPts.map(p => ({x: p.x, y: p.y})));
+  if (_edCropHistory.length > 30) _edCropHistory.shift();
+  _edCropHistIdx = _edCropHistory.length - 1;
+}
+
+function _edCropUndoHistory() {
+  if (_edCropHistIdx <= 0) return; // en el estado inicial (vacío) — no deshacer más
+  _edCropHistIdx--;
+  _edCropPts = _edCropHistory[_edCropHistIdx].map(p => ({x: p.x, y: p.y}));
+  _edCropRenderPanel();
+  edRedraw();
+}
+
+function _edCropRedoHistory() {
+  if (_edCropHistIdx >= _edCropHistory.length - 1) return;
+  _edCropHistIdx++;
+  _edCropPts = _edCropHistory[_edCropHistIdx].map(p => ({x: p.x, y: p.y}));
+  _edCropRenderPanel();
+  edRedraw();
+}
+
+function _edCropRenderPanel() {
+  const panel = $('edOptionsPanel');
+  if (!panel) return;
+  const n = _edCropPts.length;
+  const canUndo = _edCropHistIdx > 0;
+  const canRedo = _edCropHistIdx < _edCropHistory.length - 1;
+  panel.innerHTML = `
+<div style="display:flex;flex-direction:column;width:100%;gap:0">
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:6px 0;min-height:32px">
+    <span style="font-size:.8rem;font-weight:700;color:var(--gray-600);flex:1">
+      ✂ ${n < 3 ? 'Toca para añadir vértices (mín. 3)' : n + ' vértices · arrastra · doble tap en segmento añade nodo'}
+    </span>
+  </div>
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
+    <button id="crop-undo" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer" ${!canUndo?'disabled':''}>↩</button>
+    <button id="crop-redo" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer" ${!canRedo?'disabled':''}>↪</button>
+    <button id="crop-cancel" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer;color:#c00">✕</button>
+    <button id="crop-apply" style="flex:2;background:${n>=3?'var(--black)':'var(--gray-400)'};color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer" ${n<3?'disabled':''}>✓ Aplicar</button>
+  </div>
+</div>`;
+  panel.classList.add('open');
+  panel.dataset.mode = 'crop';
+  $('crop-undo')?.addEventListener('click', _edCropUndoHistory);
+  $('crop-redo')?.addEventListener('click', _edCropRedoHistory);
+  $('crop-cancel')?.addEventListener('click', _edCancelCrop);
+  $('crop-apply')?.addEventListener('click', () => {
+    if (_edCropPts.length >= 3) _edApplyCrop();
+  });
+}
+
+function _edCancelCrop() {
+  const _wasDrawLayer = _edCropLayer && _edCropLayer.type === 'draw';
+  _edCropMode         = false;
+  _edCropLayer        = null;
+  _edCropPts          = [];
+  _edCropDragIdx      = -1;
+  _edCropDragging     = false;
+  _edCropLastTapSeg   = -1;
+  _edCropLastTapTime  = 0;
+  _edCropHistory      = [];
+  _edCropHistIdx      = -1;
+  if (!_wasDrawLayer) _edDrawUnlockUI();
+  _edPropsOverlayHide();
+  if (_wasDrawLayer) {
+    edRenderOptionsPanel('draw');
+  } else {
+    edRenderOptionsPanel('props');
+  }
+  edRedraw();
+}
+
+function _edCropDrawOverlay() {
+  // Overlay de recorte: la imagen es completamente visible.
+  // Solo se dibuja el polígono con relleno semitransparente azul (preview del área a conservar)
+  // y el contorno amarillo con nodos.
+  const pw = edPageW(), ph = edPageH();
+  const z  = edCamera.z;
+  const ctx = edCtx;
+
+  if (_edCropPts.length === 0) return;
+
+  // Convertir puntos a coordenadas workspace (cámara ya aplicada)
+  const toWS = p => ({
+    x: edMarginX() + p.x * pw,
+    y: edMarginY() + p.y * ph
+  });
+  const wsPts = _edCropPts.map(toWS);
+
+  ctx.save();
+
+  if (wsPts.length >= 3) {
+    // Relleno semitransparente azul sobre el área de recorte
+    ctx.beginPath();
+    ctx.moveTo(wsPts[0].x, wsPts[0].y);
+    for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(59,130,246,0.25)';
+    ctx.fill();
+  }
+
+  // Contorno del polígono
+  ctx.beginPath();
+  ctx.moveTo(wsPts[0].x, wsPts[0].y);
+  for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
+  if (_edCropPts.length >= 3) ctx.closePath();
+  ctx.strokeStyle = '#f97316';
+  ctx.lineWidth = 2.5 / z;
+  ctx.stroke();
+  // Borde interior blanco
+  ctx.beginPath();
+  ctx.moveTo(wsPts[0].x, wsPts[0].y);
+  for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
+  if (_edCropPts.length >= 3) ctx.closePath();
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 1.2 / z;
+  ctx.stroke();
+
+  // Nodos
+  const hr = 7 / z;
+  wsPts.forEach((p, i) => {
+    const isActive = i === _edCropDragIdx;
+    const r = isActive ? hr * 1.5 : hr;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = isActive ? '#f97316' : '#3b82f6';
+    ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = (isActive ? 2.5 : 1.5) / z; ctx.stroke();
+  });
+
+  ctx.restore();
+}
+
+// Hit-test unificado para el polígono de recorte.
+// Mismo patrón que _edLineHitTest: nodos primero, segmentos después.
+// Devuelve {type:'node', idx} | {type:'seg', segIdx, ix, iy} | null
+function _edCropHitTest(nx, ny) {
+  const pw = edPageW(), ph = edPageH();
+  const z  = edCamera.z;
+  const n  = _edCropPts.length;
+  if (n === 0) return null;
+  const HIT_NODE = 22; // px de pantalla
+  const HIT_SEG  = 18;
+
+  // 1. Nodos — el más cercano dentro del radio
+  let bestDist = HIT_NODE, bestIdx = -1;
+  for (let i = 0; i < n; i++) {
+    const p = _edCropPts[i];
+    const d = Math.hypot((nx - p.x) * pw, (ny - p.y) * ph) * z;
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  if (bestIdx >= 0) return { type: 'node', idx: bestIdx };
+
+  // 2. Segmentos — proyección perpendicular (igual que _edLineHitTest)
+  if (n < 2) return null;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    if (j === 0 && n < 3) continue; // no cerrar si < 3 puntos
+    const ax = _edCropPts[i].x, ay = _edCropPts[i].y;
+    const bx = _edCropPts[j].x, by = _edCropPts[j].y;
+    const abxPx = (bx - ax) * pw, abyPx = (by - ay) * ph;
+    const apxPx = (nx - ax) * pw, apyPx = (ny - ay) * ph;
+    const abLen2 = abxPx * abxPx + abyPx * abyPx;
+    if (abLen2 < 0.0001) continue;
+    const t = Math.max(0, Math.min(1, (apxPx * abxPx + apyPx * abyPx) / abLen2));
+    const dist = Math.hypot(apxPx - t * abxPx, apyPx - t * abyPx) * z;
+    if (dist < HIT_SEG) {
+      return { type: 'seg', segIdx: i, ix: ax + t * (bx - ax), iy: ay + t * (by - ay) };
+    }
+  }
+  return null;
+}
+
+function _edCropHandleCanvasTap(nx, ny) {
+  if (!_edCropMode) return false;
+  // Si estábamos arrastrando, absorber el tap-end sin añadir vértice
+  if (_edCropDragging) { _edCropLastTapSeg = -1; _edCropLastTapTime = 0; return true; }
+  const hit = _edCropHitTest(nx, ny);
+  if (hit && hit.type === 'node') {
+    // Tap sobre nodo → el drag lo gestiona Start; aquí solo absorber
+    _edCropLastTapSeg = -1; _edCropLastTapTime = 0;
+    return true;
+  }
+  if (hit && hit.type === 'seg') {
+    // Doble tap sobre segmento → insertar nodo en posición exacta del toque
+    const _now = Date.now();
+    const _same = _edCropLastTapSeg === hit.segIdx && (_now - _edCropLastTapTime) < 400;
+    if (_same) {
+      _edCropLastTapSeg = -1; _edCropLastTapTime = 0;
+      _edCropPts.splice(hit.segIdx + 1, 0, { x: hit.ix, y: hit.iy });
+      _edCropPushHistory();
+      _edCropRenderPanel();
+      edRedraw();
+    } else {
+      _edCropLastTapSeg = hit.segIdx;
+      _edCropLastTapTime = _now;
+    }
+    return true;
+  }
+  // Tap en vacío → añadir nuevo vértice al final
+  _edCropLastTapSeg = -1; _edCropLastTapTime = 0;
+  _edCropPts.push({ x: nx, y: ny });
+  _edCropPushHistory();
+  _edCropRenderPanel();
+  edRedraw();
+  return true;
+}
+
+// Llamado desde edOnStart cuando _edCropMode está activo
+function _edCropHandleCanvasStart(nx, ny) {
+  if (!_edCropMode) return false;
+  const hit = _edCropHitTest(nx, ny);
+  if (hit && hit.type === 'node') {
+    // Nodo → iniciar drag
+    _edCropDragIdx = hit.idx;
+    _edCropDragging = false;
+    return true;
+  }
+  return false; // segmento o vacío → Tap lo gestiona
+}
+
+// Llamado desde edOnMove cuando _edCropMode está activo
+function _edCropHandleCanvasMove(nx, ny) {
+  if (!_edCropMode || _edCropDragIdx < 0) return false;
+  _edCropDragging = true;
+  _edCropPts[_edCropDragIdx] = { x: nx, y: ny };
+  edRedraw();
+  return true;
+}
+
+// Llamado desde edOnEnd cuando _edCropMode está activo
+function _edCropHandleCanvasEnd() {
+  if (!_edCropMode) return false;
+  if (_edCropDragIdx >= 0) {
+    const _wasDragging = _edCropDragging;
+    _edCropDragIdx  = -1;
+    _edCropDragging = false;
+    if (_wasDragging) _edCropPushHistory(); // solo si hubo movimiento real
+    edRedraw();
+    return true;
+  }
+  return false;
+}
+
+function _edApplyCrop() {
+  const la  = _edCropLayer;
+  const pw  = edPageW(), ph = edPageH();
+  const pts = _edCropPts;
+  if (!la || pts.length < 3) return;
+
+  // Función de finalización — se llama cuando todas las imágenes han cargado
+  const _wasDrawLayer = la && la.type === 'draw';
+  const _finish = (newLayer) => {
+    if (newLayer) {
+      // Para DrawLayer: _edApplyCropDraw ya sustituyó el original por dlOutside,
+      // insertamos dlInside (newLayer) justo después del dlOutside (que está en origIdx)
+      const origIdx = edLayers.indexOf(_edCropLayer !== null ? _edCropLayer : la);
+      const insertAt = origIdx >= 0 ? origIdx + 1 : edLayers.length;
+      edLayers.splice(insertAt, 0, newLayer);
+      edPages[edCurrentPage].layers = edLayers;
+      edSelectedIdx = insertAt;
+    }
+    _edCropMode         = false;
+    _edCropLayer        = null;
+    _edCropPts          = [];
+    _edCropDragIdx      = -1;
+    _edCropDragging     = false;
+    _edCropLastTapSeg   = -1;
+    _edCropLastTapTime  = 0;
+    _edCropHistory      = [];
+    _edCropHistIdx      = -1;
+    if (_wasDrawLayer) {
+      // Congelar TODOS los DrawLayers resultantes del recorte → StrokeLayers.
+      // Así no quedan DrawLayers huérfanos ni bloqueos de UI.
+      _edFreezeAllDrawLayers();
+      edActiveTool = 'select';
+      edCanvas.className = '';
+      const _bc = $('edBrushCursor'); if(_bc) _bc.style.display = 'none';
+      edDrawBarHide();
+      _cofSetOn(false); _edOffsetHide();
+      _edDrawUnlockUI();
+      _edPropsOverlayHide();
+      edRenderOptionsPanel('props');
+    } else {
+      _edDrawUnlockUI();
+      _edPropsOverlayHide();
+      edPushHistory(); // snapshot DESPUÉS
+      edRenderOptionsPanel('props');
+    }
+    edRedraw();
+    edToast('Recorte creado ✓');
+  };
+
+  if (la.type === 'image') {
+    _edApplyCropImage(la, pts, pw, ph, _finish);
+  } else if (la.type === 'stroke') {
+    const newLayer = _edApplyCropStroke(la, pts, pw, ph);
+    _finish(newLayer); // stroke es síncrono, llamar directamente
+  } else if (la.type === 'draw') {
+    _edApplyCropDraw(la, pts, pw, ph, _finish);
+  } else {
+    _finish(null);
+  }
+}
+
+function _edApplyCropImage(la, pts, pw, ph, _onDone) {
+  const img = la.img;
+  if (!img || !img.naturalWidth) return null;
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const rot = (la.rotation || 0) * Math.PI / 180;
+  const lw = la.width * pw, lh = la.height * ph;
+  const cos = Math.cos(-rot), sin = Math.sin(-rot);
+
+  // Puntos de recorte → píxeles de la imagen original
+  const localPts = pts.map(p => {
+    const dx = (p.x - la.x) * pw, dy = (p.y - la.y) * ph;
+    const lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
+    return { x: ((lx / lw) + 0.5) * iw, y: ((ly / lh) + 0.5) * ih };
+  });
+
+  const _drawPoly = (ctx) => {
+    ctx.beginPath();
+    ctx.moveTo(localPts[0].x, localPts[0].y);
+    for (let i = 1; i < localPts.length; i++) ctx.lineTo(localPts[i].x, localPts[i].y);
+    ctx.closePath();
+  };
+
+  // ── 1. Nuevo layer: solo el área del polígono ──
+  const offNew = document.createElement('canvas');
+  offNew.width = iw; offNew.height = ih;
+  const ctxNew = offNew.getContext('2d');
+  ctxNew.save(); _drawPoly(ctxNew); ctxNew.clip();
+  ctxNew.drawImage(img, 0, 0, iw, ih);
+  ctxNew.restore();
+
+  const idNew = ctxNew.getImageData(0, 0, iw, ih).data;
+  let minX=iw, minY=ih, maxX=0, maxY=0, found=false;
+  for (let y=0; y<ih; y++) for (let x=0; x<iw; x++) {
+    if (idNew[(y*iw+x)*4+3] > 4) {
+      if(x<minX)minX=x; if(x>maxX)maxX=x;
+      if(y<minY)minY=y; if(y>maxY)maxY=y; found=true;
+    }
+  }
+  if (!found) return null;
+
+  const cw = maxX-minX+1, ch = maxY-minY+1;
+  const croppedNew = document.createElement('canvas');
+  croppedNew.width = cw; croppedNew.height = ch;
+  croppedNew.getContext('2d').drawImage(offNew, minX, minY, cw, ch, 0, 0, cw, ch);
+
+  const newLayer = new ImageLayer(null, la.x, la.y, la.width);
+  newLayer.rotation = la.rotation || 0;
+  newLayer.opacity  = la.opacity  ?? 1;
+  const bcx = (minX + cw/2) / iw, bcy = (minY + ch/2) / ih;
+  const dxL = (bcx - 0.5) * lw, dyL = (bcy - 0.5) * lh;
+  newLayer.x = la.x + (dxL * Math.cos(rot) - dyL * Math.sin(rot)) / pw;
+  newLayer.y = la.y + (dxL * Math.sin(rot) + dyL * Math.cos(rot)) / ph;
+  newLayer.width  = (cw / iw) * la.width;
+  newLayer.height = (ch / ih) * la.height;
+  // ── 2. Original: restar el polígono (destination-out) ──
+  const offOrig = document.createElement('canvas');
+  offOrig.width = iw; offOrig.height = ih;
+  const ctxOrig = offOrig.getContext('2d');
+  ctxOrig.drawImage(img, 0, 0, iw, ih);
+  ctxOrig.globalCompositeOperation = 'destination-out';
+  _drawPoly(ctxOrig);
+  ctxOrig.fill();
+  ctxOrig.globalCompositeOperation = 'source-over';
+
+  // Esperar a que ambas imágenes carguen antes de llamar _onDone
+  // (el snapshot del historial debe capturar el estado FINAL, no el intermedio)
+  let _pending = 2;
+  const _checkDone = () => { if (--_pending === 0) { edRedraw(); if (_onDone) _onDone(newLayer); } };
+
+  const newImg = new Image();
+  newImg.onload = () => { newLayer.img = newImg; newLayer.src = newImg.src; _checkDone(); };
+  newImg.src = croppedNew.toDataURL('image/png');
+
+  const newOrigImg = new Image();
+  newOrigImg.onload = () => { la.img = newOrigImg; la.src = newOrigImg.src; _checkDone(); };
+  newOrigImg.src = offOrig.toDataURL('image/png');
+
+  // Devolver newLayer ahora (sin imagen aún) — se completará en el callback
+  return newLayer;
+}
+
+function _edApplyCropStroke(la, pts, pw, ph) {
+  const sc = la._canvas;
+  if (!sc) return null;
+  const sw = sc.width, sh = sc.height;
+  const rot = (la.rotation || 0) * Math.PI / 180;
+  const lw = la.width * pw, lh = la.height * ph;
+  const cos = Math.cos(-rot), sin = Math.sin(-rot);
+
+  const localPts = pts.map(p => {
+    const dx = (p.x - la.x) * pw, dy = (p.y - la.y) * ph;
+    const lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
+    return { x: ((lx / lw) + 0.5) * sw, y: ((ly / lh) + 0.5) * sh };
+  });
+
+  const _drawPoly = (ctx) => {
+    ctx.beginPath();
+    ctx.moveTo(localPts[0].x, localPts[0].y);
+    for (let i = 1; i < localPts.length; i++) ctx.lineTo(localPts[i].x, localPts[i].y);
+    ctx.closePath();
+  };
+
+  // ── 1. Nuevo layer: solo el área del polígono ──
+  const offNew = document.createElement('canvas');
+  offNew.width = sw; offNew.height = sh;
+  const ctxNew = offNew.getContext('2d');
+  ctxNew.save(); _drawPoly(ctxNew); ctxNew.clip();
+  ctxNew.drawImage(sc, 0, 0);
+  ctxNew.restore();
+
+  const idNew = ctxNew.getImageData(0, 0, sw, sh).data;
+  let minX=sw, minY=sh, maxX=0, maxY=0, found=false;
+  for (let y=0; y<sh; y++) for (let x=0; x<sw; x++) {
+    if (idNew[(y*sw+x)*4+3] > 4) {
+      if(x<minX)minX=x; if(x>maxX)maxX=x;
+      if(y<minY)minY=y; if(y>maxY)maxY=y; found=true;
+    }
+  }
+  if (!found) return null;
+
+  const cw2 = maxX-minX+1, ch2 = maxY-minY+1;
+  const cropped2 = document.createElement('canvas');
+  cropped2.width = cw2; cropped2.height = ch2;
+  cropped2.getContext('2d').drawImage(offNew, minX, minY, cw2, ch2, 0, 0, cw2, ch2);
+
+  const newLayer = new StrokeLayer(document.createElement('canvas'));
+  newLayer.rotation = la.rotation || 0;
+  newLayer.opacity  = la.opacity  ?? 1;
+  const bcx2 = (minX + cw2/2) / sw, bcy2 = (minY + ch2/2) / sh;
+  const dxL2 = (bcx2 - 0.5) * lw, dyL2 = (bcy2 - 0.5) * lh;
+  newLayer.x = la.x + (dxL2 * Math.cos(rot) - dyL2 * Math.sin(rot)) / pw;
+  newLayer.y = la.y + (dxL2 * Math.sin(rot) + dyL2 * Math.cos(rot)) / ph;
+  newLayer.width  = (cw2 / sw) * la.width;
+  newLayer.height = (ch2 / sh) * la.height;
+  newLayer._canvas = cropped2;
+  newLayer._ctx    = cropped2.getContext('2d');
+
+  // ── 2. Original: restar el polígono (destination-out) ──
+  const ctxOrig = la._canvas.getContext('2d');
+  ctxOrig.globalCompositeOperation = 'destination-out';
+  _drawPoly(ctxOrig);
+  ctxOrig.fill();
+  ctxOrig.globalCompositeOperation = 'source-over';
+
+  return newLayer;
+}
+
+function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
+  // El DrawLayer trabaja en coordenadas ABSOLUTAS del workspace (ED_CANVAS_W × ED_CANVAS_H).
+  // Convertimos los puntos fraccionarios de página a coordenadas de workspace.
+  const mxWS = edMarginX(), myWS = edMarginY();
+
+  const wsPts = pts.map(p => ({
+    x: mxWS + p.x * pw,
+    y: myWS + p.y * ph
+  }));
+
+  const W = ED_CANVAS_W, H = ED_CANVAS_H;
+  const srcCanvas = dl._canvas;
+
+  const _drawPoly = (ctx) => {
+    ctx.beginPath();
+    ctx.moveTo(wsPts[0].x, wsPts[0].y);
+    for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
+    ctx.closePath();
+  };
+
+  // ── 1. DrawLayer "dentro": área interior del polígono ──
+  const offInside = document.createElement('canvas');
+  offInside.width = W; offInside.height = H;
+  const ctxInside = offInside.getContext('2d');
+  ctxInside.save();
+  _drawPoly(ctxInside);
+  ctxInside.clip();
+  ctxInside.drawImage(srcCanvas, 0, 0);
+  ctxInside.restore();
+
+  // ── 2. DrawLayer "fuera": área exterior del polígono ──
+  const offOutside = document.createElement('canvas');
+  offOutside.width = W; offOutside.height = H;
+  const ctxOutside = offOutside.getContext('2d');
+  ctxOutside.drawImage(srcCanvas, 0, 0);
+  ctxOutside.globalCompositeOperation = 'destination-out';
+  _drawPoly(ctxOutside);
+  ctxOutside.fill();
+  ctxOutside.globalCompositeOperation = 'source-over';
+
+  // ── 3. Verificar que haya contenido en la zona interior ──
+  const idCheck = ctxInside.getImageData(0, 0, W, H).data;
+  let hasContent = false;
+  for (let i = 3; i < idCheck.length; i += 4) { if (idCheck[i] > 4) { hasContent = true; break; } }
+  if (!hasContent) {
+    // Nada dentro del polígono — cancelar silenciosamente
+    if (_onDone) _onDone(null);
+    return;
+  }
+
+  // ── 4. Crear nuevo DrawLayer con el contenido DENTRO del polígono ──
+  const dlInside = new DrawLayer();
+  dlInside._ctx.drawImage(offInside, 0, 0);
+  dlInside.opacity = dl.opacity ?? 1;
+  dlInside.locked  = false;
+
+  // ── 5. Reemplazar el canvas del DrawLayer original con el contenido FUERA ──
+  // (crear nuevo DrawLayer para "fuera" y sustituir el original en edLayers)
+  const dlOutside = new DrawLayer();
+  dlOutside._ctx.drawImage(offOutside, 0, 0);
+  dlOutside.opacity = dl.opacity ?? 1;
+  dlOutside.locked  = dl.locked || false;
+
+  // Sustituir el original (dl) por dlOutside en el array de layers
+  const page = edPages[edCurrentPage];
+  const origIdx = page ? page.layers.indexOf(dl) : -1;
+  if (origIdx >= 0) {
+    page.layers.splice(origIdx, 1, dlOutside);
+    edLayers = page.layers;
+    // Asegurarse de que la referencia en _edCropLayer apunta al nuevo
+    _edCropLayer = dlOutside;
+  }
+
+  // El _finish de _edApplyCrop insertará dlInside justo después de dlOutside
+  if (_onDone) _onDone(dlInside);
+}
+
 function edDeletePage(){
   if(edPages.length<=1){edToast('Necesitas al menos una página');return;}
   edConfirm('¿Eliminar esta hoja?', ()=>{
@@ -2806,6 +3386,8 @@ function edMirrorSelected(){
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
   if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
+  // Si el modo recorte está activo, cancelarlo antes de eliminar
+  if(_edCropMode){ _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edDrawUnlockUI(); _edPropsOverlayHide(); }
   const _delType=edLayers[edSelectedIdx]?.type;
   edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
   // Si era shape/line con barra flotante activa, limpiar y desbloquear
@@ -3444,6 +4026,15 @@ function edOnStart(e){
                tgt.closest('#edConfirmModal');
   if(isUI) return;
 
+  // ── MODO RECORTE: interceptar todos los toques en el canvas ──
+  if (_edCropMode) {
+    const _cc = edCoords(e);
+    const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
+    if (_nodeHit) return; // arrastrando nodo — edOnMove/End lo gestionan
+    // Sin nodo bajo el toque: gestionar como tap (añadir vértice o cerrar)
+    if (_edCropHandleCanvasTap(_cc.nx, _cc.ny)) return;
+  }
+
   // ── REGLAS: si hay modo mover activo desde el panel, absorber el primer toque ──
   if(_edRuleDrag && _edRuleDrag.part === 'line' && _edRuleDrag.offX === undefined) {
     // El movimiento real empieza en edOnMove; aquí solo bloqueamos selección de objetos
@@ -3764,10 +4355,47 @@ function edOnStart(e){
       edMultiSel=[]; edMultiBbox=null; edMultiGroupRot=0;
       edSelectedIdx = -1;
       edRedraw();
+    } else if(e.shiftKey && e.pointerType !== 'touch'){
+      // Shift+clic fuera del bbox en multiselect: buscar objeto y hacer toggle
+      const _sfound = edLayers.map((_,i)=>i).reverse().find(i=>{
+        const _la=edLayers[i]; return _la && !_la.type?.startsWith('_') && _la.contains && _la.contains(c.nx,c.ny);
+      });
+      if(_sfound !== undefined){
+        const _si = edMultiSel.indexOf(_sfound);
+        if(_si >= 0) edMultiSel.splice(_si, 1);
+        else         edMultiSel.push(_sfound);
+        if(edMultiSel.length >= 2){
+          _msRecalcBbox();
+          _edUpdateMultiSelPanel();
+        } else if(edMultiSel.length === 1){
+          edSelectedIdx = edMultiSel[0];
+          edMultiSel = []; edMultiBbox = null;
+          edActiveTool = 'select'; edCanvas.className = '';
+          $('edMultiSelBtn')?.classList.remove('active');
+          _edDrawLockUI(); _edPropsOverlayShow();
+          edRenderOptionsPanel('props');
+        } else {
+          _msClear(); edActiveTool='select'; edCanvas.className='';
+          $('edMultiSelBtn')?.classList.remove('active');
+        }
+      }
+      edRedraw();
     } else {
-      // Herramienta multiselect normal: limpiar e iniciar nueva rubber band
+      // Tocar en vacío fuera del bbox → deseleccionar y volver a modo select
       _msClear();
-      edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+      edActiveTool = 'select'; edCanvas.className = '';
+      // Si hay un objeto bajo el clic, seleccionarlo inmediatamente (PC)
+      if(e.pointerType !== 'touch'){
+        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && edLayers[i].contains(c.nx,c.ny));
+        if(_hit !== undefined){
+          edSelectedIdx = _hit;
+          _edDrawLockUI(); _edPropsOverlayShow();
+          edRenderOptionsPanel('props');
+        } else {
+          // Vacío real → iniciar rubber band
+          edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+        }
+      }
       edRedraw();
     }
     return;
@@ -4423,7 +5051,42 @@ function edOnStart(e){
         return;
       }
     }
+    // ── Shift+clic (solo PC): añadir/quitar de la multiselección ──
+    if(e.shiftKey && e.pointerType !== 'touch'){
+      const _inSel = edMultiSel.indexOf(found);
+      if(edActiveTool === 'multiselect' && edMultiSel.length){
+        // Toggle del objeto en la selección existente
+        if(_inSel >= 0) edMultiSel.splice(_inSel, 1);
+        else            edMultiSel.push(found);
+      } else {
+        // Primera vez con Shift: combinar objeto previo + nuevo
+        const _prev = edSelectedIdx >= 0 ? [edSelectedIdx] : [];
+        edMultiSel = [...new Set([..._prev, found])];
+      }
+      edSelectedIdx = -1;
+      if(edMultiSel.length >= 2){
+        edActiveTool = 'multiselect';
+        edCanvas.className = 'tool-multiselect';
+        $('edMultiSelBtn')?.classList.add('active');
+        _msRecalcBbox();
+        _edUpdateMultiSelPanel();
+      } else if(edMultiSel.length === 1){
+        // Quedó uno solo → volver a selección normal
+        edSelectedIdx = edMultiSel[0];
+        edMultiSel = []; edMultiBbox = null;
+        edActiveTool = 'select'; edCanvas.className = '';
+        $('edMultiSelBtn')?.classList.remove('active');
+        _edDrawLockUI(); _edPropsOverlayShow();
+        edRenderOptionsPanel('props');
+      } else {
+        _msClear();
+        edActiveTool = 'select'; edCanvas.className = '';
+        $('edMultiSelBtn')?.classList.remove('active');
+      }
+      edRedraw(); return;
+    }
     edSelectedIdx = found;
+    edMultiSelAnchor = found; // ancla para Shift+flechas
     // Si es LineLayer con radios, actualizar bbox antes de interactuar
     const _fl=edLayers[found];
     if(_fl&&_fl.type==='line'){
@@ -4511,9 +5174,12 @@ function edOnStart(e){
     edRenderOptionsPanel();
   }
   // PC/ratón clic en vacío → marcar para posible rubber band en edOnMove
-  if(e.pointerType !== 'touch' && tgt === edCanvas && edSelectedIdx < 0 && edActiveTool === 'select'){
+  // Condición: no táctil, dentro del editor, sin objeto seleccionado, herramienta select
+  // tgt puede ser el canvas O la zona gris del workspace (editorCanvasWrap)
+  if(e.pointerType !== 'touch' && tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
     const c = edCoords(e);
     edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
+    window._edRubberBandEndPos = null;
   }
   edRedraw();
 }
@@ -4523,6 +5189,13 @@ function edOnMove(e){
     _edTouchMoved = true;
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
+  }
+  // ── DRAG DE NODO DE RECORTE ────────────────────────────────
+  if (_edCropMode && _edCropDragIdx >= 0) {
+    e.preventDefault();
+    const _cmc = edCoords(e);
+    _edCropHandleCanvasMove(_cmc.nx, _cmc.ny);
+    return;
   }
   // ── DRAG DE REGLA ──────────────────────────────────────────
   if(_edRuleDrag && _edRuleDrag.part !== 'move-pending') {
@@ -4556,6 +5229,7 @@ function edOnMove(e){
     e.preventDefault();
     const c=edCoords(e);
     edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
+    window._edRubberBandEndPos = {clientX: e.clientX, clientY: e.clientY};
     edRedraw(); return;
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
@@ -4570,6 +5244,7 @@ function edOnMove(e){
     if(edRubberBand){
       e.preventDefault();
       edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
+      window._edRubberBandEndPos = {clientX: e.clientX, clientY: e.clientY};
       edRedraw(); return;
     }
     if(edMultiDragging && edMultiDragOffs.length){
@@ -5027,6 +5702,11 @@ function edOnEnd(e){
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
   }
+  // ── FIN DE DRAG DE NODO DE RECORTE ────────────────────────
+  if (_edCropMode && _edCropDragIdx >= 0) {
+    _edCropHandleCanvasEnd();
+    return;
+  }
   if(_edRuleDrag) {
     _edRuleDrag = null;
     edRedraw();
@@ -5053,24 +5733,29 @@ function edOnEnd(e){
   }
   // ── RUBBER BAND en modo select (PC) → activar multiselect ──
   if(edActiveTool==='select' && edRubberBand){
+    const _rbPos = window._edRubberBandEndPos || {clientX: window.innerWidth/2, clientY: window.innerHeight/2};
+    window._edRubberBandEndPos = null;
     const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
     const ry0=Math.min(edRubberBand.y0,edRubberBand.y1);
     const rx1=Math.max(edRubberBand.x0,edRubberBand.x1);
     const ry1=Math.max(edRubberBand.y0,edRubberBand.y1);
     edRubberBand=null;
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
-      edMultiSel=[];
-      edLayers.forEach((la,i)=>{
-        if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
-      });
-      if(edMultiSel.length>=2){
+      const _found=[];
+      edLayers.forEach((la,i)=>{ if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
+      if(_found.length===1){
+        // Un solo objeto → selección normal
+        edSelectedIdx=_found[0];
+        _edDrawLockUI(); _edPropsOverlayShow();
+        edRenderOptionsPanel('props');
+      } else if(_found.length>=2){
+        edMultiSel=_found;
+        edSelectedIdx=-1;
         edActiveTool='multiselect';
+        edCanvas.className='tool-multiselect';
         _msRecalcBbox();
-        const btn=$('edMultiSelBtn');
-        if(btn) btn.classList.add('active');
+        $('edMultiSelBtn')?.classList.add('active');
         _edUpdateMultiSelPanel();
-      } else {
-        edMultiSel=[];
       }
     }
     edRedraw(); return;
@@ -5092,7 +5777,10 @@ function edOnEnd(e){
         });
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
-      if(edMultiSel.length >= 2) _edUpdateMultiSelPanel();
+      if(edMultiSel.length >= 2){
+        window._edRubberBandEndPos = null;
+        _edUpdateMultiSelPanel();
+      }
       edRedraw();
     }
     if(edMultiDragging||edMultiResizing||edMultiRotating){
@@ -6196,7 +6884,14 @@ function edStartPaint(e){
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){} }
   const _drawPanelIsOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
-  if(!_drawPanelIsOpen){ edPushHistory(); }
+  // Solo guardar historial global si el panel estaba cerrado Y no hay ya un DrawLayer activo.
+  // Si ya hay DrawLayer (de un trazo anterior en la misma sesión abierta), el snapshot
+  // "antes de dibujar" ya existe — no crear un snapshot con DrawLayer vacío que
+  // corrompe el historial al deshacer.
+  if(!_drawPanelIsOpen){
+    const _existingDL = edPages[edCurrentPage]?.layers.find(l => l.type === 'draw');
+    if(!_existingDL) edPushHistory();
+  }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
@@ -6819,7 +7514,7 @@ function _edActivateLineTool(isNew, isCreating) {
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
       <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
     </div>
-    <span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>
+    ${!edLastPointerIsTouch ? `<span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>` : ''}
   </div>
   ${isClosed?`
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -7195,6 +7890,36 @@ function _edFinishLine() {
   }
 }
 
+// Congela TODOS los DrawLayers de la página actual, de abajo a arriba.
+// Usado tras un recorte de DrawLayer, que deja temporalmente 2 DrawLayers.
+function _edFreezeAllDrawLayers(){
+  const page = edPages[edCurrentPage]; if(!page) return;
+  // Iterar hasta que no quede ningún DrawLayer en la página
+  let safety = 20; // máximo 20 iteraciones para evitar bucle infinito
+  while(safety-- > 0){
+    const dlIdx = page.layers.findIndex(l => l.type === 'draw');
+    if(dlIdx < 0) break;
+    const dl = page.layers[dlIdx];
+    const bb = StrokeLayer._boundingBox(dl._canvas);
+    if(!bb){
+      // DrawLayer vacío: eliminar sin congelar
+      page.layers.splice(dlIdx, 1);
+      edLayers = page.layers;
+      continue;
+    }
+    const sl = new StrokeLayer(dl._canvas);
+    if(dl.locked) sl.locked = true;
+    if(dl.groupId) sl.groupId = dl.groupId;
+    // Sustituir DrawLayer por StrokeLayer en la misma posición
+    page.layers.splice(dlIdx, 1, sl);
+    edLayers = page.layers;
+  }
+  _edDrawClearHistory();
+  edSelectedIdx = -1;
+  edPushHistory();
+  _edShapePushHistory();
+}
+
 function _edFreezeDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dlIdx = page.layers.findIndex(l => l.type === 'draw');
@@ -7237,6 +7962,12 @@ function edCloseOptionsPanel(){
     const _mode=panel.dataset.mode;
     panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode;
     if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
+    if(_mode==='crop'){
+      const _wdl = _edCropLayer && _edCropLayer.type === 'draw';
+      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
+      if(!_wdl) _edDrawUnlockUI();
+      _edPropsOverlayHide();
+    }
     // Limpiar sesión de fusión vectorial al cerrar el panel
     if(_mode==='line' || _mode==='shape') _edLineFusionId = null;
   }
@@ -7436,6 +8167,13 @@ function edRenderOptionsPanel(mode){
     if(panel.dataset.mode==='shape' || panel.dataset.mode==='line'){
       return;
     }
+    // Si el panel estaba en modo recorte, limpiar estado
+    if(panel.dataset.mode==='crop'){
+      const _wdl2 = _edCropLayer && _edCropLayer.type === 'draw';
+      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
+      if(!_wdl2) _edDrawUnlockUI();
+      _edPropsOverlayHide();
+    }
     panel.classList.remove('open');panel.innerHTML='';
     requestAnimationFrame(edFitCanvas);return;
   }
@@ -7534,6 +8272,8 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-draw-mirror"
       title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
+    <button id="op-draw-crop"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Recortar">✂</button>
     <button id="op-draw-undo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-draw-redo"
@@ -7754,6 +8494,11 @@ function edRenderOptionsPanel(mode){
 
     // ── Deshacer / Rehacer ──
     $('op-draw-undo')?.addEventListener('click', edDrawUndo);
+    $('op-draw-crop')?.addEventListener('click',()=>{
+      const _page = edPages[edCurrentPage]; if(!_page) return;
+      const _dl = _page.layers.find(l=>l.type==='draw'); if(!_dl) return;
+      _edStartCrop(_dl);
+    });
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
     _edDrawUpdateUndoRedoBtns();
 
@@ -8024,6 +8769,7 @@ function edRenderOptionsPanel(mode){
       </div>
       <div class="op-prop-row">
         <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
+        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
     } else if(la.type==='image'){
       html+=`
@@ -8033,6 +8779,9 @@ function edRenderOptionsPanel(mode){
       <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+      </div>
+      <div class="op-prop-row">
+        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
     } else if(la.type==='shape'){
       html+=`
@@ -8125,6 +8874,7 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
+    $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
@@ -9768,7 +10518,10 @@ function edRenderPage(page){
 }
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
   // Redimensiona y comprime una imagen a JPEG para ahorrar espacio en localStorage
-  if(!src || src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña
+  // Las imágenes PNG con transparencia (recortes) deben conservarse como PNG
+  if(!src) return src;
+  const isPng = src.startsWith('data:image/png');
+  if(!isPng && src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña JPEG
   try {
     const img = new Image();
     img.src = src;
@@ -9778,7 +10531,15 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
     const h = Math.round(img.naturalHeight * ratio);
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
-    cv.getContext('2d').drawImage(img, 0, 0, w, h);
+    const cctx = cv.getContext('2d');
+    cctx.drawImage(img, 0, 0, w, h);
+    // Si es PNG, verificar si tiene píxeles transparentes — si los tiene, conservar PNG
+    if(isPng){
+      const d = cctx.getImageData(0, 0, w, h).data;
+      let hasAlpha = false;
+      for(let i=3; i<d.length; i+=4){ if(d[i]<255){ hasAlpha=true; break; } }
+      if(hasAlpha) return cv.toDataURL('image/png'); // preservar transparencia
+    }
     return cv.toDataURL('image/jpeg', quality);
   } catch(e) { return src; }
 }
@@ -9850,6 +10611,218 @@ function edUngroupSelected(){
 }
 
 
+
+/* ── Comprueba si la selección actual es unible, devuelve el tipo o null ── */
+function _edMergeableTypes(){
+  if(!edMultiSel || edMultiSel.length < 2) return null;
+  const layers = edMultiSel.map(i => edLayers[i]).filter(Boolean);
+  if(layers.length < 2) return null;
+  const t0 = layers[0].type;
+  // Vectoriales: line y shape se pueden unir entre sí
+  const isVec = t => t === 'line' || t === 'shape';
+  if(isVec(t0)){
+    if(layers.every(l => isVec(l.type))) return 'vector';
+    return null;
+  }
+  // Stroke, draw e image solo se pueden unir con su mismo tipo
+  if(t0 === 'stroke' || t0 === 'draw' || t0 === 'image'){
+    if(layers.every(l => l.type === t0)) return t0;
+    return null;
+  }
+  return null;
+}
+
+/* ── Convierte un ShapeLayer a array de puntos absolutos (normalizados 0-1) ── */
+function _edShapeToAbsPoints(sl, nEllipse){
+  const n = nEllipse || 48;
+  const pts = [];
+  if(sl.shape === 'ellipse'){
+    for(let i = 0; i < n; i++){
+      const ang = (i / n) * Math.PI * 2;
+      pts.push({
+        x: sl.x + Math.cos(ang) * sl.width  / 2,
+        y: sl.y + Math.sin(ang) * sl.height / 2
+      });
+    }
+  } else {
+    // rect (con rotación si la tiene)
+    const hw = sl.width / 2, hh = sl.height / 2;
+    const rot = (sl.rotation || 0) * Math.PI / 180;
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]){
+      pts.push({
+        x: sl.x + lx * cos - ly * sin,
+        y: sl.y + lx * sin + ly * cos
+      });
+    }
+  }
+  return pts;
+}
+
+/* ── Renderiza un layer en el canvas workspace completo (para merge de stroke/draw) ── */
+function _edRenderLayerToWorkspace(la){
+  const pw = edPageW(), ph = edPageH();
+  const wc = document.createElement('canvas');
+  wc.width  = ED_CANVAS_W;
+  wc.height = ED_CANVAS_H;
+  const ctx = wc.getContext('2d');
+  la.draw(ctx);
+  return wc;
+}
+
+/* ── Une los objetos seleccionados en uno solo ── */
+function edMergeSelected(){
+  const mtype = _edMergeableTypes();
+  if(!mtype) return;
+  edPushHistory();
+  // Ordenar índices ascendente: índice menor = capa inferior (se dibuja primero)
+  const idxs  = [...edMultiSel].sort((a,b) => a - b);
+  const layers = idxs.map(i => edLayers[i]);
+
+  /* ── helper: finalizar inserción ── */
+  function _finishMerge(newLayer){
+    const insertAt = idxs[0];
+    // Eliminar originales de mayor a menor para no desplazar índices
+    for(let i = idxs.length - 1; i >= 0; i--) edLayers.splice(idxs[i], 1);
+    edLayers.splice(Math.min(insertAt, edLayers.length), 0, newLayer);
+    edPages[edCurrentPage].layers = edLayers;
+    edSelectedIdx = Math.min(insertAt, edLayers.length - 1);
+    _msClear();
+    edActiveTool = 'select';
+    if(edCanvas) edCanvas.className = '';
+    $('edMultiSelBtn')?.classList.remove('active');
+    edPushHistory(); edRedraw();
+    edToast('Objetos unidos ✓');
+  }
+
+  if(mtype === 'vector'){
+    const newLL = new LineLayer();
+    const first = layers[0];
+    newLL.color     = first.color     || '#000000';
+    newLL.lineWidth = first.lineWidth || 3;
+    newLL.opacity   = first.opacity   ?? 1;
+    newLL.fillColor = first.fillColor || 'none';
+
+    const allContours = [];
+    for(const la of layers){
+      if(la.type === 'line'){
+        const raw = la.absPoints();
+        let cur = [];
+        for(const p of raw){
+          if(p === null){ if(cur.length){ allContours.push(cur); cur=[]; } }
+          else cur.push(p);
+        }
+        if(cur.length) allContours.push(cur);
+      } else {
+        allContours.push(_edShapeToAbsPoints(la));
+      }
+    }
+
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const c of allContours) for(const p of c){
+      if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
+      if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
+    }
+    newLL.x = (minX + maxX) / 2;
+    newLL.y = (minY + maxY) / 2;
+    for(let ci = 0; ci < allContours.length; ci++){
+      if(ci > 0) newLL.points.push(null);
+      for(const p of allContours[ci]) newLL.points.push({ x: p.x - newLL.x, y: p.y - newLL.y });
+    }
+    newLL.closed = true;
+    newLL._updateBbox();
+    _finishMerge(newLL);
+    return;
+  }
+
+  if(mtype === 'stroke' || mtype === 'draw'){
+    // Composición de píxeles en orden de capa (ascendente = inferior primero)
+    const wc = document.createElement('canvas');
+    wc.width  = ED_CANVAS_W;
+    wc.height = ED_CANVAS_H;
+    const ctx = wc.getContext('2d');
+    for(const la of layers){ la.draw(ctx); }
+    const newSL = new StrokeLayer(wc);
+    _finishMerge(newSL);
+    return;
+  }
+
+  if(mtype === 'image'){
+    // Unión de alta calidad: componer en un canvas a resolución nativa
+    const pw = edPageW(), ph = edPageH();
+    // 1. Calcular el bbox normalizado (0-1) que engloba todas las imágenes
+    let bx0=Infinity, by0=Infinity, bx1=-Infinity, by1=-Infinity;
+    for(const la of layers){
+      const rot = (la.rotation||0) * Math.PI/180;
+      const hw = la.width/2, hh = la.height/2;
+      const cos = Math.cos(rot), sin = Math.sin(rot);
+      for(const [lx,ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]){
+        const ax = la.x + lx*cos - ly*sin;
+        const ay = la.y + lx*sin + ly*cos;
+        if(ax < bx0) bx0=ax; if(ax > bx1) bx1=ax;
+        if(ay < by0) by0=ay; if(ay > by1) by1=ay;
+      }
+    }
+    const bboxW = bx1 - bx0;  // en coordenadas normalizadas
+    const bboxH = by1 - by0;
+
+    // 2. Resolución del canvas de composición: usar la imagen con mayor densidad de píxeles
+    //    (naturalWidth / ancho normalizado * ancho página) → px/unidad-norm
+    let maxPPU = 0;
+    for(const la of layers){
+      if(la.img && la.img.naturalWidth > 0){
+        const ppu = la.img.naturalWidth / (la.width * pw);
+        if(ppu > maxPPU) maxPPU = ppu;
+      }
+    }
+    // Si no hay imágenes cargadas, fallback al workspace
+    if(maxPPU <= 0) maxPPU = 1;
+
+    // Tamaño del canvas de composición en píxeles
+    const canW = Math.round(bboxW * pw * maxPPU);
+    const canH = Math.round(bboxH * ph * maxPPU);
+    const MAX_DIM = 8192;
+    const scale = Math.min(1, MAX_DIM / Math.max(canW, canH));
+    const outW = Math.max(1, Math.round(canW * scale));
+    const outH = Math.max(1, Math.round(canH * scale));
+    const ppu  = maxPPU * scale;  // píxeles por unidad normalizada en el canvas de salida
+
+    const wc = document.createElement('canvas');
+    wc.width  = outW;
+    wc.height = outH;
+    const ctx = wc.getContext('2d');
+
+    // 3. Componer cada imagen en el canvas de salida (de abajo arriba)
+    for(const la of layers){
+      if(!la.img || !la.img.complete || la.img.naturalWidth === 0) continue;
+      const rot  = (la.rotation||0) * Math.PI/180;
+      // Centro de esta imagen en coords del canvas de salida
+      const cx = (la.x - bx0) * pw * ppu;
+      const cy = (la.y - by0) * ph * ppu;
+      const iw = la.width  * pw * ppu;
+      const ih = la.height * ph * ppu;
+      ctx.save();
+      ctx.globalAlpha = la.opacity ?? 1;
+      ctx.translate(cx, cy);
+      ctx.rotate(rot);
+      ctx.drawImage(la.img, -iw/2, -ih/2, iw, ih);
+      ctx.restore();
+    }
+
+    // 4. Crear StrokeLayer a partir del canvas de alta resolución
+    //    Necesitamos ubicarlo en coords normalizadas del workspace
+    const cx_norm = (bx0 + bx1) / 2;
+    const cy_norm = (by0 + by1) / 2;
+    const newSL = new StrokeLayer(document.createElement('canvas'));
+    newSL.x      = cx_norm;
+    newSL.y      = cy_norm;
+    newSL.width  = bboxW;
+    newSL.height = bboxH;
+    newSL._canvas = wc;
+    _finishMerge(newSL);
+    return;
+  }
+}
 
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
@@ -11317,6 +12290,53 @@ function EditorView_init(){
         edRedraw();
       } else if(edSelectedIdx >= 0){
         e.preventDefault(); edDeleteSelected();
+      }
+      return;
+    }
+    // Shift+flechas (PC): añadir a la multiselección el objeto más cercano en esa dirección
+    // Busca siempre desde el objeto ANCLA (el primero seleccionado), no desde el centroide.
+    // Así se puede saltar objetos intermedios y seleccionar cualquier objeto no contiguo.
+    if(e.shiftKey && !ctrl && (e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight')){
+      if(!window._edIsTouch && edLayers.length > 0){
+        e.preventDefault();
+        const pw = edPageW(), ph = edPageH();
+        const curSel = edActiveTool==='multiselect' ? [...edMultiSel]
+                     : edSelectedIdx >= 0 ? [edSelectedIdx] : [];
+        if(curSel.length === 0) return;
+        // Punto de referencia: ancla fija (primer objeto de la selección original)
+        // NO el centroide — así cada flecha busca desde el mismo punto de partida
+        // y se pueden saltar objetos intermedios sin problema.
+        const anchorIdx = (edMultiSelAnchor >= 0 && curSel.includes(edMultiSelAnchor))
+          ? edMultiSelAnchor : curSel[0];
+        const anchor = edLayers[anchorIdx];
+        if(!anchor) return;
+        const ax = anchor.x, ay = anchor.y;
+        let bestIdx = -1, bestScore = Infinity;
+        edLayers.forEach((la, i) => {
+          if(curSel.includes(i)) return;
+          const dx = (la.x - ax) * pw;
+          const dy = (la.y - ay) * ph;
+          let inDir = false;
+          if(e.key==='ArrowRight' && dx >  Math.abs(dy)*0.3) inDir=true;
+          if(e.key==='ArrowLeft'  && dx < -Math.abs(dy)*0.3) inDir=true;
+          if(e.key==='ArrowDown'  && dy >  Math.abs(dx)*0.3) inDir=true;
+          if(e.key==='ArrowUp'    && dy < -Math.abs(dx)*0.3) inDir=true;
+          if(!inDir) return;
+          const dist = Math.hypot(dx, dy);
+          if(dist < bestScore){ bestScore=dist; bestIdx=i; }
+        });
+        if(bestIdx < 0) return;
+        const combined = [...new Set([...curSel, bestIdx])];
+        if(combined.length >= 2){
+          edMultiSel = combined;
+          edSelectedIdx = -1;
+          edActiveTool = 'multiselect';
+          edCanvas.className = 'tool-multiselect';
+          $('edMultiSelBtn')?.classList.add('active');
+          _msRecalcBbox();
+          _edUpdateMultiSelPanel();
+        }
+        edRedraw();
       }
       return;
     }
