@@ -1348,10 +1348,6 @@ function edPushHistory(force){
     if(last.layersJSON === layersJSON){ edUpdateUndoRedoBtns(); return; }
   }
 
-  if(edHistoryIdx < edHistory.length - 1){
-    // TRAZA: alguien está truncando el redo — capturar quién
-    console.trace('[edPushHistory] TRUNCANDO REDO idx='+edHistoryIdx+' len='+edHistory.length+' force='+force);
-  }
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
   edHistory.push({ pageIdx: edCurrentPage, layersJSON });
   if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
@@ -4406,11 +4402,16 @@ function edOnStart(e){
       }
       edRedraw();
     } else {
-      // Tocar en vacío fuera del bbox → deseleccionar y volver a modo select
-      _msClear();
-      edActiveTool = 'select'; edCanvas.className = '';
-      // Si hay un objeto bajo el clic, seleccionarlo inmediatamente (PC)
-      if(e.pointerType !== 'touch'){
+      // Tocar en vacío fuera del bbox
+      if(e.pointerType === 'touch'){
+        // Táctil: mantener herramienta multiselect y comenzar nueva rubber band
+        _msClear();
+        edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+      } else {
+        // PC: deseleccionar y volver a modo select
+        _msClear();
+        edActiveTool = 'select'; edCanvas.className = '';
+        // Si hay un objeto bajo el clic, seleccionarlo inmediatamente
         const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && edLayers[i].contains(c.nx,c.ny));
         if(_hit !== undefined){
           edSelectedIdx = _hit;
