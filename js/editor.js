@@ -1543,6 +1543,12 @@ function edFitCanvas(resetCamera){
   edRedraw();
 }
 
+/* ── Recentra el canvas como la lupa: ajusta cámara al lienzo y redibuja ── */
+function _edResetCameraToFit(){
+  window._edUserRequestedReset = true;
+  edFitCanvas(true);
+}
+
 /* ── Resetea la cámara para que el LIENZO ocupe el viewport centrado ── */
 function _edCameraReset(){
 
@@ -2812,6 +2818,7 @@ function _edApplyCrop() {
       edPushHistory(); // snapshot DESPUÉS
       edRenderOptionsPanel('props');
     }
+    _edResetCameraToFit();
     edRedraw();
     edToast('Recorte creado ✓');
   };
@@ -4049,6 +4056,22 @@ function edOnStart(e){
 
   // ── MODO RECORTE: interceptar todos los toques en el canvas ──
   if (_edCropMode) {
+    if (e.pointerType === 'touch') {
+      // Táctil: esperar 120ms para detectar segundo dedo (pinch/zoom de cámara)
+      const _eSavedCrop = e;
+      clearTimeout(window._edCropTouchTimer);
+      window._edCropTouchTimer = setTimeout(() => {
+        window._edCropTouchTimer = null;
+        if (!_edCropMode) return;
+        if (window._edActivePointers && window._edActivePointers.size > 1) return;
+        const _cc = edCoords(_eSavedCrop);
+        const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
+        if (_nodeHit) return;
+        _edCropHandleCanvasTap(_cc.nx, _cc.ny);
+      }, 120);
+      return;
+    }
+    // PC/ratón: inmediato
     const _cc = edCoords(e);
     const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
     if (_nodeHit) return; // arrastrando nodo — edOnMove/End lo gestionan
@@ -4241,6 +4264,10 @@ function edOnStart(e){
     }
     // Cancelar el timer de añadir nodo si el segundo dedo llega antes de que expire
     clearTimeout(window._edLineTouchTimer);
+    // Cancelar timer de recorte si había uno pendiente
+    if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
+    // Cancelar drag de nodo de recorte si estaba activo
+    if(_edCropMode && _edCropDragIdx >= 0){ _edCropDragIdx = -1; _edCropDragging = false; }
     // Sistema de pan para LineLayer (en construcción o seleccionado)
     const _panTarget = _edLineLayer ||
       (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line' ? edLayers[edSelectedIdx] : null);
@@ -4513,6 +4540,22 @@ function edOnStart(e){
     // Si el toque cae sobre un nodo, no usar timer — procesar inmediatamente
     if(e.pointerType === 'touch' && _edLineLayer && edSelectedIdx>=0 && edLayers[edSelectedIdx]===_edLineLayer){
       const _isT2 = true;
+      // Comprobación anticipada del primer nodo con radio ampliado (táctil, polígono abierto)
+      if(!_edLineLayer.closed && _edLineLayer.points.length >= 3){
+        const _absF = _edLineLayer.absPoints()[0];
+        const _pw0=edPageW(), _ph0=edPageH(), _z0=edCamera.z;
+        const _df=Math.hypot((c.nx-_absF.x)*_pw0,(c.ny-_absF.y)*_ph0)*_z0;
+        if(_df < 44){
+          // Toque cerca del primer nodo → pasar a _edLineAddPoint con isTouch=true
+          clearTimeout(window._edLineTouchTimer);
+          window._edLineTouchTimer = setTimeout(()=>{
+            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(edActiveTool !== 'line') return;
+            _edLineAddPoint(c.nx, c.ny, true);
+          }, 120);
+          return;
+        }
+      }
       const _hitNode = _edLineHitTest(_edLineLayer, c.nx, c.ny, _isT2);
       if(_hitNode && _hitNode.type==='node'){
         // Si es el primer nodo y hay 3+ puntos → dejar pasar para cerrar el polígono
@@ -4547,12 +4590,12 @@ function edOnStart(e){
       window._edLineTouchTimer = setTimeout(()=>{
         if(!window._edActivePointers || window._edActivePointers.size > 1) return;
         if(edActiveTool !== 'line') return;
-        _edLineAddPoint(_cx, _cy);
+        _edLineAddPoint(_cx, _cy, true);
       }, 120);
       return;
     }
     // PC/ratón: inmediato
-    _edLineAddPoint(c.nx, c.ny);
+    _edLineAddPoint(c.nx, c.ny, false);
     return;
   }
   const c=edCoords(e);
@@ -4991,6 +5034,13 @@ function edOnStart(e){
       }
       return;
     }
+    // Panel de propiedades abierto en táctil: bloquear toda selección/interacción del canvas
+    if(e.pointerType === 'touch'){
+      const _ppMode = $('edOptionsPanel')?.dataset.mode;
+      if(_ppMode === 'props'){
+        edRedraw(); return; // absorber — solo OK cierra el panel
+      }
+    }
     // ── Objeto bloqueado: mostrar candado o abrir panel ──
     if(_fla && _fla.locked){
       const _panel = $('edOptionsPanel');
@@ -5182,13 +5232,10 @@ function edOnStart(e){
     if($('edDrawBar')?.classList.contains('visible')){
       edSelectedIdx = -1; edRedraw(); return;
     }
-    // Si el panel de texto/bocadillo está abierto: no cerrar al tocar fuera
+    // Si el panel de propiedades está abierto: no cerrar al tocar fuera (ningún tipo)
     const _panelMode=$('edOptionsPanel')?.dataset.mode;
     if(_panelMode==='props'){
-      const _la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-      if(_la&&(_la.type==='text'||_la.type==='bubble')){
-        edRedraw(); return; // mantener panel abierto, no deseleccionar
-      }
+      edRedraw(); return; // mantener panel abierto — OK es la única salida
     }
     // Si el panel vectorial (line/shape) está abierto: mantener selección del objeto
     // Un toque en zona vacía NO debe perder edSelectedIdx — los nodos dejarían de ser accesibles
@@ -6581,7 +6628,7 @@ function edColorErase(nx, ny){
   edRedraw();
 }
 let _edLineAddTimer = null; // retardo táctil para detectar segundo dedo
-function _edLineAddPoint(nx, ny){
+function _edLineAddPoint(nx, ny, isTouch=false){
   if(!_edLineLayer){
     // Crear capa con el primer punto como centro
     _edLineLayer = new LineLayer();
@@ -6596,7 +6643,8 @@ function _edLineAddPoint(nx, ny){
     const absFirst = _edLineLayer.absPoints()[0];
     const pw=edPageW(), ph=edPageH();
     const dx=(nx-absFirst.x)*pw, dy=(ny-absFirst.y)*ph;
-    if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)<15){
+    const _closeR = isTouch ? 44 : 15; // radio de cierre ampliado en táctil
+    if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)*edCamera.z<_closeR){
       _edLineLayer.closed=true;
       _edFinishLine();
       // Al cerrar un polígono → modo selección para editar vértices
@@ -6607,7 +6655,7 @@ function _edLineAddPoint(nx, ny){
         // Solo si el panel ya estaba abierto en modo line; NO abrir si veníamos de la barra flotante
         const _panelOpen2 = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
         const _shapeBarWasOpen = $('edShapeBar')?.classList.contains('visible');
-        if(_panelOpen2 && !_shapeBarWasOpen) _edActivateLineTool(false);
+        if(_panelOpen2 && !_shapeBarWasOpen) _edActivateLineTool(false, true); // true=isCreating: no reiniciar _vsPreSessionLayers
       }
       return;
     }
@@ -7153,6 +7201,8 @@ function _edShapeToLineLayer(s) {
 function _edActivateShapeTool(isNew) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
+  // Táctil: si los menús están ocultos, la barra flotante ya está visible — no abrir panel
+  if(edMinimized){ edShapeBarShow(); edRedraw(); return; }
 
   _edDrawLockUI(); // deshabilitar menús igual que en draw
 
@@ -7418,6 +7468,7 @@ function _edActivateShapeTool(isNew) {
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
     edShapeBarHide(); _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
+    else { _edResetCameraToFit(); }
     edRedraw();
   });
 
@@ -7478,6 +7529,8 @@ function _edActivateShapeTool(isNew) {
 function _edActivateLineTool(isNew, isCreating) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
+  // Táctil: si los menús están ocultos, la barra flotante ya está visible — no abrir panel
+  if(edMinimized){ edShapeBarShow(); edRedraw(); return; }
 
   _edDrawLockUI(); // deshabilitar menús igual que en draw
 
@@ -7809,6 +7862,7 @@ function _edActivateLineTool(isNew, isCreating) {
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     edShapeBarHide(); _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
+    else { _edResetCameraToFit(); }
     edRedraw();
   });
 
@@ -8531,6 +8585,7 @@ function edRenderOptionsPanel(mode){
       edCloseOptionsPanel();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       if(edMinimized){ window._edMinimizedDrawMode = null; edMaximize(); }
+      else { _edResetCameraToFit(); }
     });
 
     // ── Duplicar ──
@@ -8897,7 +8952,7 @@ function edRenderOptionsPanel(mode){
         _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
       }
     });
-    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
@@ -8957,6 +9012,29 @@ function edRenderOptionsPanel(mode){
 /* ══════════════════════════════════════════
    MINIMIZAR / BOTÓN FLOTANTE
    ══════════════════════════════════════════ */
+/* Reposiciona las barras flotantes visibles para que queden
+   completamente dentro de la pantalla (se llama tras cambios de layout). */
+function _edBarClampToScreen(){
+  const W = window.innerWidth, H = window.innerHeight;
+  const drawBar = $('edDrawBar');
+  if(drawBar && drawBar.classList.contains('visible')){
+    const bw = drawBar.offsetWidth  || 36;
+    const bh = drawBar.offsetHeight || 200;
+    _edbX = Math.max(0, Math.min(W - bw, _edbX));
+    _edbY = Math.max(0, Math.min(H - bh, _edbY));
+    drawBar.style.left = _edbX + 'px';
+    drawBar.style.top  = _edbY + 'px';
+  }
+  const shapeBar = $('edShapeBar');
+  if(shapeBar && shapeBar.classList.contains('visible')){
+    const bw = shapeBar.offsetWidth  || 36;
+    const bh = shapeBar.offsetHeight || 200;
+    _esbX = Math.max(0, Math.min(W - bw, _esbX));
+    _esbY = Math.max(0, Math.min(H - bh, _esbY));
+    shapeBar.style.left = _esbX + 'px';
+    shapeBar.style.top  = _esbY + 'px';
+  }
+}
 function edMinimize(){
   edMinimized=true;
   const menu=$('edMenuBar'),top=$('edTopbar');
@@ -8983,7 +9061,8 @@ function edMinimize(){
     }
     // Para props (imagen, texto, bocadillo, stroke): panel oculto sin barra flotante
   }
-  edFitCanvas();
+  _edResetCameraToFit();
+  requestAnimationFrame(_edBarClampToScreen);
 }
 function edMaximize(keepBar=false){
   edMinimized=false;
@@ -8999,7 +9078,8 @@ function edMaximize(keepBar=false){
     window._edMinimizedDrawMode = null;
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
-    edFitCanvas();
+    _edResetCameraToFit();
+    requestAnimationFrame(_edBarClampToScreen);
     if(mode === 'shape'){
       edShapeBarHide();
       _edActivateShapeTool(false); // false = no resetear cámara al restaurar desde barra
@@ -9010,7 +9090,8 @@ function edMaximize(keepBar=false){
       edRenderOptionsPanel(mode);
     }
   } else {
-    edFitCanvas();
+    _edResetCameraToFit();
+    requestAnimationFrame(_edBarClampToScreen);
   }
 }
 function edInitFloatDrag(){
@@ -12065,6 +12146,7 @@ function EditorView_init(){
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
     _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
+    else { _edResetCameraToFit(); }
     edRedraw();
   });
 
