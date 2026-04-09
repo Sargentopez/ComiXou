@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v14.93</footer>
+    <footer class="app-version">v15.04</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -415,6 +415,8 @@ Router.register('editor', {
       <div id="edShapeBar">
         <div class="edb-handle" title="Mover barra">⠿</div>
         <div class="edb-content">
+          <button id="esb-shapes"   class="edb-tool" title="Tipo de objeto" style="min-width:28px;font-size:1rem;font-weight:900">▭</button>
+          <div class="edb-sep"></div>
           <button id="esb-color"    class="edb-swatch" title="Color borde"></button>
           <button id="esb-fill-on"  class="edb-tool"   title="Relleno">▣</button>
           <button id="esb-fill"     class="edb-swatch" title="Color relleno"></button>

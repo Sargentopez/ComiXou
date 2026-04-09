@@ -2028,6 +2028,9 @@ function edRedraw(){
     // T1: no dimear LineLayer que pertenecen a la sesión de edición activa
     if (_edLineFusionId && l._fusionId === _edLineFusionId) return false; // miembro de fusión activa
     if (l === _activePanelLine) return false;
+    // No dimear objetos vectoriales de la sesión actual (fusionables entre sí)
+    if (_editingShape && (l.type === 'line' || l.type === 'shape') &&
+        _vsHistory.length > 0 && !_vsPreSessionLayers.has(l)) return false;
     return true;
   };
 
@@ -3848,11 +3851,8 @@ function _edHandleDoubleTap(idx){
     edPushHistory();
     const dl=la.toDrawLayer();
     if(la.locked) dl.locked = true; // propagar bloqueo al convertir
-    // Quitar stroke e insertar DrawLayer en posición más alta (bajo textos)
-    page.layers.splice(idx, 1);
-    const firstTextIdx2 = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
-    if(firstTextIdx2 >= 0) page.layers.splice(firstTextIdx2, 0, dl);
-    else page.layers.push(dl);
+    // T9: Quitar stroke e insertar DrawLayer en la MISMA posición (preservar orden de capas)
+    page.layers.splice(idx, 1, dl);  // reemplaza en sitio
     edLayers=page.layers;
     edSelectedIdx=-1;
     edActiveTool='draw';
@@ -4059,12 +4059,22 @@ function edOnStart(e){
     if (e.pointerType === 'touch') {
       // Táctil: esperar 120ms para detectar segundo dedo (pinch/zoom de cámara)
       const _eSavedCrop = e;
+      // Guardar posición inicial para calcular distancia real (no depender de _edTouchMoved
+      // que se activa con cualquier movimiento mínimo involuntario del dedo)
+      const _cropTouchX0 = e.clientX, _cropTouchY0 = e.clientY;
       clearTimeout(window._edCropTouchTimer);
       window._edCropTouchTimer = setTimeout(() => {
         window._edCropTouchTimer = null;
         if (!_edCropMode) return;
         if (window._edActivePointers && window._edActivePointers.size > 1) return;
-        if (_edTouchMoved) return; // dedo en movimiento = gesto, no tap
+        // Usar umbral de 10px de distancia en lugar de _edTouchMoved
+        // para tolerar el temblor natural del dedo al tocar
+        const _cropActiveP = window._edActivePointers && window._edActivePointers.size > 0
+          ? [...window._edActivePointers.values()][0] : null;
+        const _cx = _cropActiveP ? _cropActiveP.clientX : _cropTouchX0;
+        const _cy = _cropActiveP ? _cropActiveP.clientY : _cropTouchY0;
+        const _cropDist = Math.hypot(_cx - _cropTouchX0, _cy - _cropTouchY0);
+        if (_cropDist > 10) return; // movimiento real = gesto, no tap
         const _cc = edCoords(_eSavedCrop);
         const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
         if (_nodeHit) return;
@@ -6014,15 +6024,11 @@ function _vsSnapshot() {
   const page = edPages[edCurrentPage];
   if (!page) return null;
   // Excluir _edLineLayer de vecLayers — se guarda por separado
-  // T9: guardar índice original de cada layer vectorial para preservar orden de capas
   const vecLayers = page.layers
-    .map((l, idx) => (l.type === 'line' || l.type === 'shape') && l !== _edLineLayer
-      ? { data: _vsSerLayer(l), origIdx: idx }
-      : null)
-    .filter(Boolean);
-  const lineLayerIdx = _edLineLayer ? page.layers.indexOf(_edLineLayer) : -1;
+    .filter(l => (l.type === 'line' || l.type === 'shape') && l !== _edLineLayer)
+    .map(l => _vsSerLayer(l));
   const lineLayer = _edLineLayer ? _vsSerLayer(_edLineLayer) : null;
-  return { vecLayers, lineLayer, lineLayerIdx };
+  return { vecLayers, lineLayer };
 }
 
 function _vsPush() {
@@ -6052,40 +6058,16 @@ function _vsApply(snap) {
     _edLineLayer = null;
   }
 
-  // T9: Reconstruir page.layers respetando el orden original de cada capa vectorial.
-  // Si el snapshot tiene índices originales (formato nuevo), usarlos para reinsertar
-  // cada layer vectorial en su posición original. Si no (compatibilidad), fallback al método anterior.
+  // Reconstruir page.layers: mantener no-vectoriales en su posición,
+  // insertar vectoriales donde estaban (antes del draw layer, después de stroke)
   const nonVec = page.layers.filter(l => l.type !== 'line' && l.type !== 'shape');
-  const hasOrigIdx = snap.vecLayers.length > 0 && snap.vecLayers[0] && 'origIdx' in snap.vecLayers[0];
-  if (hasOrigIdx) {
-    // Nuevo formato: reinsertar cada layer vectorial en su posición original
-    // Construir lista: empezamos con nonVec, luego insertamos vectoriales en los huecos correctos
-    // Calculamos los índices ajustados: por cada vectorial, su origIdx incluía los otros vectoriales,
-    // así que usamos un método de inserción secuencial ordenado por origIdx
-    const toInsert = vecRestored.map((l, i) => ({ layer: l, origIdx: snap.vecLayers[i].origIdx }));
-    if (_edLineLayer) {
-      const lineOrigIdx = snap.lineLayerIdx >= 0 ? snap.lineLayerIdx : (toInsert.length ? toInsert[toInsert.length-1].origIdx + 1 : nonVec.length);
-      toInsert.push({ layer: _edLineLayer, origIdx: lineOrigIdx });
-    }
-    toInsert.sort((a, b) => a.origIdx - b.origIdx);
-    // Reconstruir page.layers insertando vectoriales en sus posiciones originales
-    let result = [...nonVec];
-    let offset = 0;
-    for (const { layer, origIdx } of toInsert) {
-      const insertPos = Math.min(origIdx, result.length);
-      result.splice(insertPos, 0, layer);
-    }
-    page.layers = result;
-  } else {
-    // Fallback (compatibilidad con snapshots sin origIdx)
-    const drawIdx = nonVec.findIndex(l => l.type === 'draw');
-    const textIdx = nonVec.findIndex(l => l.type === 'text' || l.type === 'bubble');
-    let insertAt = drawIdx >= 0 ? drawIdx : (textIdx >= 0 ? textIdx : nonVec.length);
-    const before = nonVec.slice(0, insertAt);
-    const after  = nonVec.slice(insertAt);
-    const allVec = _edLineLayer ? [...vecRestored, _edLineLayer] : vecRestored;
-    page.layers = [...before, ...allVec, ...after];
-  }
+  const drawIdx = nonVec.findIndex(l => l.type === 'draw');
+  const textIdx = nonVec.findIndex(l => l.type === 'text' || l.type === 'bubble');
+  let insertAt = drawIdx >= 0 ? drawIdx : (textIdx >= 0 ? textIdx : nonVec.length);
+  const before = nonVec.slice(0, insertAt);
+  const after  = nonVec.slice(insertAt);
+  const allVec = _edLineLayer ? [...vecRestored, _edLineLayer] : vecRestored;
+  page.layers = [...before, ...allVec, ...after];
   edLayers = page.layers;
 
   // Seleccionar el último layer vectorial restaurado (el más relevante)
@@ -6135,16 +6117,14 @@ let _vsPreSessionLayers = new Set(); // referencias a layers vectoriales previos
 function _vsInit(isNew) {
   const page = edPages[edCurrentPage];
   if (!page) return;
+
   if (isNew) {
-    // Sesión nueva: todos los layers vectoriales previos quedan protegidos
     _vsPreSessionLayers = new Set(
       page.layers.filter(l => l.type === 'line' || l.type === 'shape')
     );
     _vsHistory = [_vsSnapshot()];
     _vsHistIdx = 0;
   } else {
-    // Reedición: proteger todos los layers previos EXCEPTO el que se edita
-    // El objeto reeditado puede fusionarse con los nuevos; los demás NO
     const _currentLayer = edSelectedIdx >= 0 ? page.layers[edSelectedIdx] : null;
     _vsPreSessionLayers = new Set(
       page.layers.filter(l =>
@@ -6402,16 +6382,12 @@ function _edGetOrCreateDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return null;
   let dl = page.layers.find(l => l.type === 'draw');
   if(dl){
-    // Mover el DrawLayer existente: quitarlo de donde está
-    const dlIdx = page.layers.indexOf(dl);
-    page.layers.splice(dlIdx, 1);
-  } else {
-    dl = new DrawLayer();
+    // T9: DrawLayer ya existe — usarlo en su posición actual sin moverlo
+    edLayers = page.layers;
+    return dl;
   }
-  // Insertar en la posición más alta posible: justo antes del primer texto,
-  // pero si no hay textos, al final. Los textos siempre van al tope.
-  // Nota: shapes/lines pueden estar después de textos — el draw va al final del todo
-  // excepto textos/bocadillos que siempre deben estar encima
+  // No existe: crear nuevo e insertar antes del primer texto (o al final)
+  dl = new DrawLayer();
   const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
   if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
   else page.layers.push(dl);
@@ -6980,6 +6956,23 @@ function _edApplyCursorOffset(e){
   return { clientX: src2.clientX + dx, clientY: src2.clientY - dy,
            pointerType: e.pointerType, pointerId: e.pointerId, touches: null };
 }
+// T14: helper — devuelve factor de presión del lápiz (0.05–1.0).
+// Activo para pointerType==='pen' Y también para 'mouse' cuando pressure varía (Wacom en Windows
+// reporta el lápiz como mouse). Táctil siempre devuelve 1 (sin modulación).
+// Wacom con Windows Ink activado → pointerType='pen', pressure 0..1 ✓
+// Wacom con Windows Ink desactivado → pointerType='mouse', pressure 0..1 ✓  
+// Ratón real → pointerType='mouse', pressure siempre 0 o 0.5 (detectamos y devolvemos 1)
+function _edPenPressure(e) {
+  if (e.pointerType === 'touch') return 1; // táctil: sin modulación
+  const p = e.pressure ?? 0;
+  // Ratón real: pressure es siempre exactamente 0 (sin pulsar) o 0.5 (pulsado, valor fijo del estándar)
+  // Lápiz real: pressure varía continuamente entre 0 y 1
+  // Si pressure es exactamente 0.5 (valor constante de ratón) o 0, devolver 1 (sin modulación)
+  if (p === 0 || p === 0.5) return 1;
+  // Lápiz con presión real: escalar (mínimo 0.05 para que no desaparezca)
+  return Math.max(0.05, Math.min(1, p));
+}
+
 function edStartPaint(e){
   edPainting = true;
   const _pp=$('edOptionsPanel');
@@ -7001,6 +6994,8 @@ function edStartPaint(e){
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   const er = edActiveTool==='eraser';
+  // T14: factor de presión del lápiz (solo pen; eraser no se modula por presión)
+  const _pres = er ? 1 : _edPenPressure(e);
   // Nuevo sistema cursor: iniciar trazo directo sin offset
   if(_cof.on && isTouch){
     const c = edCoords(_eTmp);
@@ -7017,7 +7012,8 @@ function edStartPaint(e){
     _edOffsetFirstMove = true;
   } else {
     const c = edCoords(_eTmp);
-    const _sizeBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
+    const _baseBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
+    const _sizeBS = Math.max(1, Math.round(_baseBS * _pres));
     dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
     edRedraw();
     _edOffsetFirstMove = false;
@@ -7032,6 +7028,8 @@ function edContinuePaint(e){
   const _eTmp = _edApplyCursorOffset(e);
   const c = edCoords(_eTmp), er = edActiveTool==='eraser';
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  // T14: factor de presión del lápiz (solo pen; eraser no se modula)
+  const _pres = er ? 1 : _edPenPressure(e);
   // Nuevo sistema cursor: continuar trazo sin offset ni _edOffsetFirstMove
   if(_cof.on && isTouch){
     const _sz = er ? edEraserSize : edDrawSize;
@@ -7042,11 +7040,13 @@ function edContinuePaint(e){
   if(_edOffsetFirstMove){
     _edOffsetFirstMove = false;
     const _cr4f = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
-    const _sizeFM = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
+    const _baseF = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
+    const _sizeFM = Math.max(1, Math.round(_baseF * _pres));
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
   } else {
     const _cr4c = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
-    const _sizeCS = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
+    const _baseC = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
+    const _sizeCS = Math.max(1, Math.round(_baseC * _pres));
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
   edRedraw();
@@ -7120,8 +7120,10 @@ function edToggleMenu(id){
     const _mode=_panel.dataset.mode;
     edCloseOptionsPanel();
     if(_mode==='draw'||_mode==='shape'||_mode==='line'){
-      _edShapeClearHistory&&_edShapeClearHistory();
-      if(typeof _vsClear==='function') _vsClear();
+      // NO llamar _vsClear() ni _edShapeClearHistory() aquí:
+      // la sesión vectorial debe preservarse para que al cerrar el menú
+      // el usuario pueda seguir trabajando con los mismos objetos y fusionarlos.
+      // Solo limpiar la construcción activa (shape/line en curso) sin terminar la sesión.
       _edShapeStart=null;_edShapePreview=null;_edPendingShape=null;
       edActiveTool='select';edCanvas.className='';
       edShapeBarHide();
@@ -7580,6 +7582,10 @@ function _edActivateLineTool(isNew, isCreating) {
   const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
   const hasFill = fillCol !== 'none' && isClosed;
   const fillVal = hasFill ? fillCol : '#ffffff';
+  // canFuse: mostrar botón Fusionar si hay ≥2 objetos line cerrados en la página.
+  // Se muestra independientemente de selección y de _vsPreSessionLayers.
+  // El handler de fusión ya filtra qué objetos fusionar (solo los de sesión actual).
+  const canFuse = edLayers.filter(l => l.type==='line' && l.closed).length >= 2;
   // nSubPaths eliminado (T1: huecos son objetos independientes hasta OK)
 
   panel.innerHTML = `
@@ -7619,7 +7625,7 @@ function _edActivateLineTool(isNew, isCreating) {
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
     ${!isClosed?`<button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Cerrar objeto</button><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>`:''}
     <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
-    ${isClosed ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Fusionar objetos cerrados en uno solo con huecos">⊕ Fusionar</button>` : ''}
+    ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Fusionar objetos cerrados en uno solo con huecos">⊕ Fusionar</button>` : ''}
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
       <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
@@ -7798,9 +7804,6 @@ function _edActivateLineTool(isNew, isCreating) {
   window._edCurveVertIdx=-1; // resetear al abrir el panel
   // ── Fusionar — combina todos los objetos cerrados en uno con huecos ──
   $('op-line-fuse-btn')?.addEventListener('click', () => {
-    // Solo fusionar objetos de la sesión actual (no los que ya existían antes)
-    // Los objetos previos están serializados en _vsHistory[0].vecLayers
-    // Solo fusionar objetos creados en la sesión actual (no los previos)
     const _closedLayers = edLayers.filter(l =>
       l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l)
     );
@@ -8048,11 +8051,8 @@ function _edFreezeDrawLayer(){
   const sl = new StrokeLayer(dl._canvas);
   if(dl.locked) sl.locked = true;
   if(dl.groupId) sl.groupId = dl.groupId;
-  // Quitar el DrawLayer y reinsertar el StrokeLayer en la posición más alta (bajo textos)
-  page.layers.splice(dlIdx, 1);
-  const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
-  if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, sl);
-  else page.layers.push(sl);
+  // T9: Quitar el DrawLayer y reinsertar el StrokeLayer en la MISMA posición (preservar orden de capas)
+  page.layers.splice(dlIdx, 1, sl);  // reemplaza en sitio
   edLayers = page.layers;
   edSelectedIdx = page.layers.indexOf(sl);
   // Registrar el resultado final (StrokeLayer) en el historial global.
@@ -9122,6 +9122,15 @@ function edMaximize(keepBar=false){
       _edActivateLineTool(false); // false = no resetear cámara al restaurar desde barra
     } else {
       edRenderOptionsPanel(mode);
+    }
+  } else if(_vsHistory.length > 0) {
+    edShapeBarHide();
+    _edResetCameraToFit();
+    requestAnimationFrame(_edBarClampToScreen);
+    if(edActiveTool === 'shape') {
+      _edActivateShapeTool(false);
+    } else {
+      _edActivateLineTool(false);
     }
   } else {
     _edResetCameraToFit();
@@ -11253,19 +11262,22 @@ function edLoadProject(id){
     edCurrentPage=_pgi; edOrientation=pg.orientation||edOrientation;
     edCurrentPage=_savedP; edOrientation=_savedO;
   });
-  // Centrar cámara al cargar — flag dedicado para no interferir con otros resets
+  // Centrar cámara al cargar — igual que la lupa: reset completo garantizado
+  // Forzar reset inmediato de cámara sin esperar al frame (evita que quede cámara de obra anterior)
+  edCamera.x = 0; edCamera.y = 0; edCamera.z = 1;
   window._edLoadReset=true;
   if(edCanvas){
+    // Primer intento: tras 2 frames (DOM listo)
     requestAnimationFrame(()=>requestAnimationFrame(()=>{
       window._edUserRequestedReset=true; edFitCanvas(true);
-      setTimeout(()=>{
-        if(window._edLoadReset){
-          window._edLoadReset=false;
-          window._edUserRequestedReset=true; edFitCanvas(true);
-        }
-      }, 150);
       edRedraw();
     }));
+    // Segundo intento: 200ms (imágenes cargadas)
+    setTimeout(()=>{
+      window._edUserRequestedReset=true; edFitCanvas(true);
+      window._edLoadReset=false;
+      edRedraw();
+    }, 200);
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
@@ -12102,62 +12114,95 @@ function EditorView_init(){
   $('dd-shape-ellipse')?.addEventListener('click', () => _esbActivate('ellipse'));
   $('dd-shape-line')?.addEventListener('click', () => _esbActivate(null, 'draw'));
 
+  // T20: botón tipo-objeto con icono dinámico y popup selector
+  function _esbGetActiveIcon() {
+    if(edActiveTool === 'select') return '↖';
+    if(edActiveTool === 'shape') return _edShapeType === 'ellipse' ? '◯' : '▭';
+    if(edActiveTool === 'line')  return '╱';
+    return '▭';
+  }
   function _esbSyncTool() {
     const t = edActiveTool;
-    $('esb-shapes')?.classList.toggle('active', t === 'shape' || t === 'line');
-    $('esb-select')?.classList.toggle('active', t === 'select');
+    const shapesBtn = $('esb-shapes');
+    if(shapesBtn) shapesBtn.textContent = _esbGetActiveIcon();
     $('esb-fill')?.classList.toggle('active', t === 'fill');
     const dot = $('esb-size-dot');
     if(dot){ const sz=edDrawSize; const _dz3=typeof edCamera!=='undefined'?edCamera.z:1; const d=Math.max(3,Math.min(22,Math.round(sz*_dz3))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
     const sw = $('esb-color'); if(sw) sw.style.background = edDrawColor;
   }
 
-  // ── Submenú de tipo de objeto ──
-  const _esbPop = $('esb-shapes-pop');
-  if(_esbPop){
-    _esbPop.innerHTML = `
-      <button class="edb-shape-btn" id="esb-shape-rect"    title="Rectángulo">▭</button>
-      <button class="edb-shape-btn" id="esb-shape-ellipse" title="Elipse">◯</button>
-      <button class="edb-shape-btn" id="esb-shape-line"    title="Rectas">╱</button>`;
-    $('esb-shape-rect')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _esbClosePop();
-      _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
-      edDrawFillColor='none'; _esbSyncTool();
-    });
-    $('esb-shape-ellipse')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _esbClosePop();
-      _edShapeType='ellipse'; edActiveTool='shape'; edCanvas.className='tool-shape';
-      edDrawFillColor='none'; _esbSyncTool();
-    });
-    $('esb-shape-line')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _esbClosePop();
-      _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
-      edDrawFillColor='none'; _esbSyncTool();
-    });
+  // ── T20: Popup selector de tipo de objeto ──
+  let _esbPopEl = document.getElementById('esb-shapes-pop');
+  if(!_esbPopEl){
+    _esbPopEl = document.createElement('div');
+    _esbPopEl.id = 'esb-shapes-pop';
+    _esbPopEl.style.cssText = 'position:fixed;z-index:1300;display:none;flex-direction:row;gap:6px;padding:8px 10px;background:rgba(24,24,28,.96);border:1px solid rgba(255,255,255,.13);border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.45);align-items:center;';
+    document.body.appendChild(_esbPopEl);
   }
-  function _esbClosePop(){ $('esb-shapes-pop')?.classList.remove('open'); }
+  _esbPopEl.innerHTML = `
+    <button class="edb-shape-btn" id="esb-shape-rect"    title="Rectángulo" style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">▭</button>
+    <button class="edb-shape-btn" id="esb-shape-ellipse" title="Elipse"      style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">◯</button>
+    <button class="edb-shape-btn" id="esb-shape-line"    title="Rectas"      style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">╱</button>
+    <button class="edb-shape-btn" id="esb-shape-select"  title="Selección"   style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">↖</button>`;
+
+  function _esbMarkActivePop(){
+    _esbPopEl.querySelectorAll('.edb-shape-btn').forEach(b => b.style.background='transparent');
+    let activeId;
+    if(edActiveTool==='shape') activeId = _edShapeType==='ellipse' ? 'esb-shape-ellipse' : 'esb-shape-rect';
+    else if(edActiveTool==='line') activeId = 'esb-shape-line';
+    else if(edActiveTool==='select') activeId = 'esb-shape-select';
+    if(activeId){ const b=$(activeId); if(b) b.style.background='rgba(255,255,255,.15)'; }
+  }
+
+  // Handlers: usan _esbActivate exactamente igual que los botones del menú Insertar original
+  $('esb-shape-rect')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); _esbClosePop();
+    _esbActivate('rect');
+    _esbSyncTool();
+  });
+  $('esb-shape-ellipse')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); _esbClosePop();
+    _esbActivate('ellipse');
+    _esbSyncTool();
+  });
+  $('esb-shape-line')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); _esbClosePop();
+    // T19: confirmar línea en construcción antes de cambiar tipo
+    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
+    _esbActivate(null, 'draw');
+    _esbSyncTool();
+  });
+  $('esb-shape-select')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); _esbClosePop();
+    // T19: confirmar línea en construcción
+    if(_edLineLayer && _edLineLayer.points.length >= 2) { _edFinishLine(); _esbSyncTool(); return; }
+    if(_edLineLayer){ const _ix=edLayers.indexOf(_edLineLayer); if(_ix>=0) edLayers.splice(_ix,1); _edLineLayer=null; }
+    edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
+    edRedraw(); _esbSyncTool();
+  });
+
+  function _esbClosePop(){
+    _esbPopEl.style.display='none';
+    document.removeEventListener('pointerdown', window._esbPopClose);
+  }
   function _esbTogglePop(){
-    const pop=$('esb-shapes-pop'); if(!pop) return;
-    if(pop.classList.contains('open')){ _esbClosePop(); return; }
-    // Posicionar el popup
+    if(_esbPopEl.style.display!=='none'){ _esbClosePop(); return; }
+    _esbMarkActivePop();
     const bar=$('edShapeBar'), btn=$('esb-shapes');
     if(!bar||!btn) return;
     const isH=bar.classList.contains('horiz');
     const br=bar.getBoundingClientRect();
-    pop.style.visibility='hidden'; pop.style.display='flex';
-    const pw=pop.offsetWidth||130, ph=pop.offsetHeight||52;
-    pop.style.display=''; pop.style.visibility='';
+    _esbPopEl.style.display='flex';
+    const pw=_esbPopEl.offsetWidth||160, ph=_esbPopEl.offsetHeight||52;
     let l,t;
     if(isH){ l=br.left+(br.width/2)-pw/2; t=br.top-ph-8; if(t<4)t=br.bottom+8; }
     else { l=br.right+8; t=br.top+(br.height/2)-ph/2; if(l+pw>window.innerWidth-4)l=br.left-pw-8; }
-    pop.style.left=Math.max(4,Math.min(window.innerWidth-pw-4,l))+'px';
-    pop.style.top=Math.max(4,Math.min(window.innerHeight-ph-4,t))+'px';
-    pop.classList.add('open');
+    _esbPopEl.style.left=Math.max(4,Math.min(window.innerWidth-pw-4,l))+'px';
+    _esbPopEl.style.top=Math.max(4,Math.min(window.innerHeight-ph-4,t))+'px';
     setTimeout(()=>{
-      window._esbPopClose=e=>{
-        if(!e.target.closest('#esb-shapes-pop')&&!e.target.closest('#esb-shapes')){
-          _esbClosePop(); document.removeEventListener('pointerdown',window._esbPopClose);
-        }
+      window._esbPopClose=ev=>{
+        if(!ev.target.closest('#esb-shapes-pop')&&!ev.target.closest('#esb-shapes'))
+          _esbClosePop();
       };
       document.addEventListener('pointerdown',window._esbPopClose);
     },0);
