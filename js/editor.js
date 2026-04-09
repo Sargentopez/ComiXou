@@ -4064,6 +4064,7 @@ function edOnStart(e){
         window._edCropTouchTimer = null;
         if (!_edCropMode) return;
         if (window._edActivePointers && window._edActivePointers.size > 1) return;
+        if (_edTouchMoved) return; // dedo en movimiento = gesto, no tap
         const _cc = edCoords(_eSavedCrop);
         const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
         if (_nodeHit) return;
@@ -5265,10 +5266,15 @@ function edOnMove(e){
   }
   // ── DRAG DE NODO DE RECORTE ────────────────────────────────
   if (_edCropMode && _edCropDragIdx >= 0) {
-    e.preventDefault();
-    const _cmc = edCoords(e);
-    _edCropHandleCanvasMove(_cmc.nx, _cmc.ny);
-    return;
+    // Si hay 2+ dedos (pinch), cancelar el drag de nodo y ceder al pinch de cámara
+    if (e.pointerType === 'touch' && window._edActivePointers && window._edActivePointers.size >= 2) {
+      _edCropDragIdx = -1; _edCropDragging = false;
+    } else {
+      e.preventDefault();
+      const _cmc = edCoords(e);
+      _edCropHandleCanvasMove(_cmc.nx, _cmc.ny);
+      return;
+    }
   }
   // ── DRAG DE REGLA ──────────────────────────────────────────
   if(_edRuleDrag && _edRuleDrag.part !== 'move-pending') {
@@ -6008,11 +6014,15 @@ function _vsSnapshot() {
   const page = edPages[edCurrentPage];
   if (!page) return null;
   // Excluir _edLineLayer de vecLayers — se guarda por separado
+  // T9: guardar índice original de cada layer vectorial para preservar orden de capas
   const vecLayers = page.layers
-    .filter(l => (l.type === 'line' || l.type === 'shape') && l !== _edLineLayer)
-    .map(l => _vsSerLayer(l));
+    .map((l, idx) => (l.type === 'line' || l.type === 'shape') && l !== _edLineLayer
+      ? { data: _vsSerLayer(l), origIdx: idx }
+      : null)
+    .filter(Boolean);
+  const lineLayerIdx = _edLineLayer ? page.layers.indexOf(_edLineLayer) : -1;
   const lineLayer = _edLineLayer ? _vsSerLayer(_edLineLayer) : null;
-  return { vecLayers, lineLayer };
+  return { vecLayers, lineLayer, lineLayerIdx };
 }
 
 function _vsPush() {
@@ -6042,16 +6052,40 @@ function _vsApply(snap) {
     _edLineLayer = null;
   }
 
-  // Reconstruir page.layers: mantener no-vectoriales en su posición,
-  // insertar vectoriales donde estaban (antes del draw layer, después de stroke)
+  // T9: Reconstruir page.layers respetando el orden original de cada capa vectorial.
+  // Si el snapshot tiene índices originales (formato nuevo), usarlos para reinsertar
+  // cada layer vectorial en su posición original. Si no (compatibilidad), fallback al método anterior.
   const nonVec = page.layers.filter(l => l.type !== 'line' && l.type !== 'shape');
-  const drawIdx = nonVec.findIndex(l => l.type === 'draw');
-  const textIdx = nonVec.findIndex(l => l.type === 'text' || l.type === 'bubble');
-  let insertAt = drawIdx >= 0 ? drawIdx : (textIdx >= 0 ? textIdx : nonVec.length);
-  const before = nonVec.slice(0, insertAt);
-  const after  = nonVec.slice(insertAt);
-  const allVec = _edLineLayer ? [...vecRestored, _edLineLayer] : vecRestored;
-  page.layers = [...before, ...allVec, ...after];
+  const hasOrigIdx = snap.vecLayers.length > 0 && snap.vecLayers[0] && 'origIdx' in snap.vecLayers[0];
+  if (hasOrigIdx) {
+    // Nuevo formato: reinsertar cada layer vectorial en su posición original
+    // Construir lista: empezamos con nonVec, luego insertamos vectoriales en los huecos correctos
+    // Calculamos los índices ajustados: por cada vectorial, su origIdx incluía los otros vectoriales,
+    // así que usamos un método de inserción secuencial ordenado por origIdx
+    const toInsert = vecRestored.map((l, i) => ({ layer: l, origIdx: snap.vecLayers[i].origIdx }));
+    if (_edLineLayer) {
+      const lineOrigIdx = snap.lineLayerIdx >= 0 ? snap.lineLayerIdx : (toInsert.length ? toInsert[toInsert.length-1].origIdx + 1 : nonVec.length);
+      toInsert.push({ layer: _edLineLayer, origIdx: lineOrigIdx });
+    }
+    toInsert.sort((a, b) => a.origIdx - b.origIdx);
+    // Reconstruir page.layers insertando vectoriales en sus posiciones originales
+    let result = [...nonVec];
+    let offset = 0;
+    for (const { layer, origIdx } of toInsert) {
+      const insertPos = Math.min(origIdx, result.length);
+      result.splice(insertPos, 0, layer);
+    }
+    page.layers = result;
+  } else {
+    // Fallback (compatibilidad con snapshots sin origIdx)
+    const drawIdx = nonVec.findIndex(l => l.type === 'draw');
+    const textIdx = nonVec.findIndex(l => l.type === 'text' || l.type === 'bubble');
+    let insertAt = drawIdx >= 0 ? drawIdx : (textIdx >= 0 ? textIdx : nonVec.length);
+    const before = nonVec.slice(0, insertAt);
+    const after  = nonVec.slice(insertAt);
+    const allVec = _edLineLayer ? [...vecRestored, _edLineLayer] : vecRestored;
+    page.layers = [...before, ...allVec, ...after];
+  }
   edLayers = page.layers;
 
   // Seleccionar el último layer vectorial restaurado (el más relevante)
