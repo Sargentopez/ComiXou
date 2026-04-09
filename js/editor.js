@@ -1289,7 +1289,26 @@ class LineLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
-    if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl(), locked:l.locked||false };
+    if(l.type === 'draw'){
+      // Serializar DrawLayer como StrokeLayer en el historial global.
+      // Esto garantiza que restaurar un snapshot siempre produce un StrokeLayer
+      // estático correcto, sin el problema del DrawLayer vacío al restaurar.
+      const _bb = StrokeLayer._boundingBox(l._canvas);
+      const _pw = edPageW(), _ph = edPageH();
+      if(!_bb) return null; // DrawLayer vacío: no incluir en snapshot
+      const _cx = (_bb.x + _bb.w/2 - edMarginX()) / _pw;
+      const _cy = (_bb.y + _bb.h/2 - edMarginY()) / _ph;
+      const _fw = _bb.w / _pw;
+      const _fh = _bb.h / _ph;
+      // Crear canvas recortado para el dataUrl
+      const _tmp = document.createElement('canvas');
+      _tmp.width = _bb.w; _tmp.height = _bb.h;
+      _tmp.getContext('2d').drawImage(l._canvas, _bb.x, _bb.y, _bb.w, _bb.h, 0, 0, _bb.w, _bb.h);
+      return { type: 'stroke', dataUrl: _tmp.toDataURL(),
+        x: _cx, y: _cy, width: _fw, height: _fh,
+        rotation: 0, opacity: l.opacity ?? 1,
+        locked: l.locked || false };
+    }
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
       color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false };
@@ -1318,15 +1337,20 @@ function _edLayersSnapshot(){
   }));
 }
 
-function edPushHistory(){
+function edPushHistory(force){
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
-  if(_vsHistory.length > 0) return;
+  if(_vsHistory.length > 0){ edUpdateUndoRedoBtns(); return; }
   const layersJSON = _edLayersSnapshot();
-  if(edHistory.length > 0 && edHistoryIdx >= 0){
+  if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
-    if(last.layersJSON === layersJSON) return;
+    if(last.layersJSON === layersJSON){ edUpdateUndoRedoBtns(); return; }
+  }
+
+  if(edHistoryIdx < edHistory.length - 1){
+    // TRAZA: alguien está truncando el redo — capturar quién
+    console.trace('[edPushHistory] TRUNCANDO REDO idx='+edHistoryIdx+' len='+edHistory.length+' force='+force);
   }
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
   edHistory.push({ pageIdx: edCurrentPage, layersJSON });
@@ -1441,6 +1465,7 @@ function edUpdateUndoRedoBtns(){
   const u = $('edUndoBtn'), r = $('edRedoBtn');
   if(u) u.disabled = edHistoryIdx <= 0;
   if(r) r.disabled = edHistoryIdx >= edHistory.length - 1;
+
 }
 
 /* ── edFitCanvas ──────────────────────────────────────────────────
@@ -2481,7 +2506,7 @@ function _edFocusOnLayer(la) {
 
 function _edStartCrop(la) {
   if (!la || !['image','stroke','draw'].includes(la.type)) return;
-  edPushHistory();
+  edPushHistory(true); // force: el punto "antes de recortar" siempre se guarda
   _edCropMode        = true;
   _edCropLayer       = la;
   _edCropPts         = [];
@@ -6884,14 +6909,11 @@ function edStartPaint(e){
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){} }
   const _drawPanelIsOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
-  // Solo guardar historial global si el panel estaba cerrado Y no hay ya un DrawLayer activo.
-  // Si ya hay DrawLayer (de un trazo anterior en la misma sesión abierta), el snapshot
-  // "antes de dibujar" ya existe — no crear un snapshot con DrawLayer vacío que
-  // corrompe el historial al deshacer.
-  if(!_drawPanelIsOpen){
-    const _existingDL = edPages[edCurrentPage]?.layers.find(l => l.type === 'draw');
-    if(!_existingDL) edPushHistory();
-  }
+  // Deseleccionar cualquier objeto previo al iniciar un nuevo trazo
+  if(edSelectedIdx >= 0){ edSelectedIdx = -1; }
+  if(edMultiSel.length){ _msClear(); edActiveTool='draw'; edCanvas.className='tool-draw'; }
+  // Limpiar sesión vectorial si quedó activa (evita que BLOCKED_VS bloquee edPushHistory)
+  if(_vsHistory.length > 0){ _edShapeClearHistory(); _vsClear(); }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
@@ -7916,8 +7938,7 @@ function _edFreezeAllDrawLayers(){
   }
   _edDrawClearHistory();
   edSelectedIdx = -1;
-  edPushHistory();
-  _edShapePushHistory();
+  edPushHistory(true); // force: resultado del recorte siempre se guarda
 }
 
 function _edFreezeDrawLayer(){
@@ -7948,8 +7969,7 @@ function _edFreezeDrawLayer(){
   // Registrar el resultado final (StrokeLayer) en el historial global.
   // Este es el único punto donde el dibujo "se confirma" — los trazos
   // intermedios solo viven en edDrawHistory (historial local del panel).
-  edPushHistory();
-  _edShapePushHistory();
+  edPushHistory(true); // force: el resultado del dibujo siempre se guarda
   edRedraw();
 }
 
@@ -8546,7 +8566,10 @@ function edRenderOptionsPanel(mode){
         delete panel.dataset.mode;
         _edDrawClearHistory();
         _edDrawUnlockUI();
-        edCloseOptionsPanel(); _edShapePushHistory(); edRedraw();
+        _edPropsOverlayHide();
+        edCloseOptionsPanel();
+        edPushHistory(); // guardar eliminación en historial global
+        edRedraw();
         edToast('Dibujo eliminado');
       });
     });
@@ -9391,6 +9414,7 @@ function edInitDrawBar() {
 
   // ── Botones herramienta ──
   $('edb-pen')?.addEventListener('click', () => {
+    edPushHistory(); // guardar estado previo antes de entrar a dibujo
     edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
     _edbSyncTool();
     $('op-tool-pen')?.click();
@@ -11931,7 +11955,7 @@ function EditorView_init(){
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{
-    // Guardar el estado previo (puede ser canvas vacío) antes de entrar al modo dibujo
+    // Guardar el estado previo antes de entrar al modo dibujo
     edPushHistory();
     edActiveTool='draw';
     edCanvas.className='tool-draw';
