@@ -12234,9 +12234,16 @@ function edOpenCamera() {
       _edCameraStream.getTracks().forEach(t => t.stop());
       _edCameraStream = null;
     }
+    // Cierre completo del elemento video para liberar el contexto de cámara en el navegador
+    video.pause();
     video.srcObject = null;
-    video.style.transform = '';
+    video.load(); // fuerza reset del elemento — libera el contexto de media en Chrome/Android
+    // Revertir todos los estilos aplicados durante la sesión de cámara
+    video.style.transform   = '';
+    video.style.touchAction = '';
     _camZoom = 1; _camPinchDist0 = null; _camPointers.clear();
+    // Liberar capturas de puntero pendientes
+    for(const [pid] of _camPointers) { try{ overlay.releasePointerCapture(pid); }catch(_){} }
     overlay.classList.add('hidden');
     ac.abort();
     // Restaurar fullscreen si estaba activo antes de abrir la cámara.
@@ -12572,8 +12579,17 @@ function EditorView_init(){
   $('edCloudSaveBtn')?.addEventListener('click', edCloudSave);
   $('edPreviewBtn')?.addEventListener('click', edOpenViewer);
   // Botón pantalla completa en topbar
+  // Llama requestFullscreen directamente (sin la guarda inPWA de Fullscreen.enter)
+  // para que funcione siempre que el usuario lo pida explícitamente
   $('edFsBtn')?.addEventListener('click', () => {
-    if(typeof Fullscreen !== 'undefined') Fullscreen.request();
+    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if(isFs) {
+      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+    } else {
+      const el  = document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if(req) req.call(el, { navigationUI: 'hide' }).catch(()=>{});
+    }
   });
   const _edFsUpdate = () => {
     const btn = $('edFsBtn'); if(!btn) return;
