@@ -12113,6 +12113,8 @@ function edOpenCamera() {
   // Guardar estado fullscreen — getUserMedia puede cancelarlo en Android
   const _camWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
 
+  let _camClosed = false; // flag: si closeCamera fue llamado, parar cualquier stream que llegue
+
   function startStream(facing) {
     if (_edCameraStream) {
       _edCameraStream.getTracks().forEach(t => t.stop());
@@ -12123,12 +12125,15 @@ function edOpenCamera() {
       video: { facingMode: facing, width: { ideal: ED_CANVAS_W * 2 }, height: { ideal: ED_CANVAS_H * 2 } },
       audio: false
     }).then(stream => {
+      // Si closeCamera ya fue llamado mientras esperábamos la Promise, parar inmediatamente
+      if (_camClosed) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
       _edCameraStream = stream;
       video.srcObject = stream;
       overlay.classList.remove('hidden');
-    }).catch(() => {
-      edToast('No se pudo acceder a la cámara');
-    });
+    }).catch(() => {});
   }
 
   startStream(_edCameraFacing);
@@ -12230,6 +12235,7 @@ function edOpenCamera() {
   overlay.addEventListener('pointercancel', _camEndPtr, { signal: ac.signal, capture: true });
 
   function closeCamera(restoreFs = false) {
+    _camClosed = true; // cualquier stream pendiente de getUserMedia se parará al llegar
     if (_edCameraStream) {
       _edCameraStream.getTracks().forEach(t => t.stop());
       _edCameraStream = null;
