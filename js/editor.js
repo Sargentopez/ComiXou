@@ -11727,6 +11727,9 @@ function edOpenViewer(){
   }
   _viewerFsFn = () => {
     if(!$('editorViewer')?.classList.contains('open')) return;
+    // No intentar re-entrar FS si la cámara está abierta: getUserMedia causa
+    // salida de FS en Android y requestFullscreen sin gesto corrompe los permisos
+    if(!$('edCameraOverlay')?.classList.contains('hidden')) return;
     const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
     if(!active && typeof Fullscreen !== 'undefined') Fullscreen.enter();
   };
@@ -12195,30 +12198,36 @@ function edOpenCamera() {
     return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
+  // touch-action:none en el video para que el navegador no consuma el gesto de pinch
+  video.style.touchAction = 'none';
+
   overlay.addEventListener('pointerdown', e => {
+    // Capturar el puntero en el overlay para recibir move/up aunque salga del elemento
+    try { overlay.setPointerCapture(e.pointerId); } catch(_){}
     _camPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if(_camPointers.size === 2) {
       _camInitZoom();
       _camPinchDist0 = _camPinchDist(_camPointers);
       _camZoom0 = _camZoom;
     }
-  }, { signal: ac.signal });
+  }, { signal: ac.signal, capture: true });
 
   overlay.addEventListener('pointermove', e => {
     if(!_camPointers.has(e.pointerId)) return;
     _camPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if(_camPointers.size === 2 && _camPinchDist0) {
+      e.preventDefault();
       const dist = _camPinchDist(_camPointers);
       _camApplyZoom(_camZoom0 * (dist / _camPinchDist0));
     }
-  }, { signal: ac.signal });
+  }, { signal: ac.signal, capture: true, passive: false });
 
   const _camEndPtr = e => {
     _camPointers.delete(e.pointerId);
     if(_camPointers.size < 2) _camPinchDist0 = null;
   };
-  overlay.addEventListener('pointerup',     _camEndPtr, { signal: ac.signal });
-  overlay.addEventListener('pointercancel', _camEndPtr, { signal: ac.signal });
+  overlay.addEventListener('pointerup',     _camEndPtr, { signal: ac.signal, capture: true });
+  overlay.addEventListener('pointercancel', _camEndPtr, { signal: ac.signal, capture: true });
 
   function closeCamera(restoreFs = false) {
     if (_edCameraStream) {
@@ -12235,7 +12244,11 @@ function edOpenCamera() {
     // por lo que lo hacemos aquí (dentro del handler del botón cerrar/capturar).
     if(restoreFs && _camWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
       if(typeof Fullscreen !== 'undefined'){
-        Fullscreen.enter().then(() => Fullscreen._updateBtn()).catch(()=>{});
+        // Delay mínimo: esperar a que el overlay quede hidden antes de pedir FS,
+        // de lo contrario Android puede rechazar la llamada por contexto de cámara
+        setTimeout(() => {
+          Fullscreen.enter().then(() => Fullscreen._updateBtn()).catch(()=>{});
+        }, 120);
       }
     }
   }

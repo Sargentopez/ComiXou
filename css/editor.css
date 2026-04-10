@@ -1547,6 +1547,7 @@ body.editor-page #appView {
   height: 100%;
   object-fit: cover;
   display: block;
+  touch-action: none;
 }
 #edCameraControls {
   position: absolute;
