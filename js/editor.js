@@ -4057,24 +4057,20 @@ function edOnStart(e){
   // ── MODO RECORTE: interceptar todos los toques en el canvas ──
   if (_edCropMode) {
     if (e.pointerType === 'touch') {
-      // Táctil: esperar 120ms para detectar segundo dedo (pinch/zoom de cámara)
+      // Si ya hay un dedo activo (segundo dedo = pinch), cancelar timer y no procesar
+      if (window._edActivePointers && window._edActivePointers.size >= 1) {
+        clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
+        return;
+      }
+      // Primer dedo: guardar evento y esperar 120ms para detectar si llega segundo dedo
       const _eSavedCrop = e;
-      // Guardar posición inicial para calcular distancia real (no depender de _edTouchMoved
-      // que se activa con cualquier movimiento mínimo involuntario del dedo)
-      const _cropTouchX0 = e.clientX, _cropTouchY0 = e.clientY;
+      window._edCropTouchMoved = false; // flag local del recorte, independiente del global
       clearTimeout(window._edCropTouchTimer);
       window._edCropTouchTimer = setTimeout(() => {
         window._edCropTouchTimer = null;
         if (!_edCropMode) return;
         if (window._edActivePointers && window._edActivePointers.size > 1) return;
-        // Usar umbral de 10px de distancia en lugar de _edTouchMoved
-        // para tolerar el temblor natural del dedo al tocar
-        const _cropActiveP = window._edActivePointers && window._edActivePointers.size > 0
-          ? [...window._edActivePointers.values()][0] : null;
-        const _cx = _cropActiveP ? _cropActiveP.clientX : _cropTouchX0;
-        const _cy = _cropActiveP ? _cropActiveP.clientY : _cropTouchY0;
-        const _cropDist = Math.hypot(_cx - _cropTouchX0, _cy - _cropTouchY0);
-        if (_cropDist > 10) return; // movimiento real = gesto, no tap
+        if (window._edCropTouchMoved) return; // movimiento significativo = gesto
         const _cc = edCoords(_eSavedCrop);
         const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
         if (_nodeHit) return;
@@ -4258,6 +4254,8 @@ function edOnStart(e){
     if(window._edFillPending) window._edFillPending = null;
     // Cancelar timer de draw/eraser pendiente — era un pinch
     if(window._edDrawTouchTimer){ clearTimeout(window._edDrawTouchTimer); window._edDrawTouchTimer = null; }
+    // Cancelar timer de recorte pendiente — era un pinch, no un tap
+    if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
     if(edActiveTool==='multiselect' && edMultiSel.length){
       edMultiDragging=false; edMultiDragOffs=[];
@@ -5273,6 +5271,10 @@ function edOnMove(e){
     _edTouchMoved = true;
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
+    // Flag local del recorte: solo marcar si no hay drag de nodo activo
+    if(_edCropMode && window._edCropTouchTimer && _edCropDragIdx < 0){
+      window._edCropTouchMoved = true;
+    }
   }
   // ── DRAG DE NODO DE RECORTE ────────────────────────────────
   if (_edCropMode && _edCropDragIdx >= 0) {
@@ -7713,6 +7715,19 @@ function _edActivateLineTool(isNew, isCreating) {
     _edActivateLineTool();
   });
   $('op-line-select-btn')?.addEventListener('click',()=>{
+    // T19: si hay una recta en construcción, confirmarla como objeto abierto independiente
+    if(_edLineLayer) {
+      if(_edLineLayer.points.length >= 2) {
+        _edFinishLine(); // confirma sin cerrar; _edFinishLine ya pone modo selección
+        return;
+      } else {
+        // Menos de 2 puntos: descartar
+        const _ix = edLayers.indexOf(_edLineLayer);
+        if(_ix >= 0) edLayers.splice(_ix, 1);
+        _edLineLayer = null;
+        edRedraw();
+      }
+    }
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateLineTool();
   });
