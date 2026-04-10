@@ -2832,6 +2832,12 @@ function _edApplyCrop() {
     _edCropLastTapTime  = 0;
     _edCropHistory      = [];
     _edCropHistIdx      = -1;
+    // Limpiar mapa de punteros: el toque en el botón "Aplicar" (fuera del canvas)
+    // no genera pointerup en el canvas, dejando punteros fantasma que rompen los gestos
+    if(window._edActivePointers) window._edActivePointers.clear();
+    edPinching    = false;
+    edPinchScale0 = null;
+    clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
     if (_wasDrawLayer) {
       // Congelar TODOS los DrawLayers resultantes del recorte → StrokeLayers.
       // Así no quedan DrawLayers huérfanos ni bloqueos de UI.
