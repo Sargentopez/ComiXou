@@ -12241,13 +12241,15 @@ function edOpenCamera() {
     // Revertir todos los estilos aplicados durante la sesión de cámara
     video.style.transform   = '';
     video.style.touchAction = '';
-    _camZoom = 1; _camPinchDist0 = null; _camPointers.clear();
-    // Liberar capturas de puntero pendientes
-    for(const [pid] of _camPointers) { try{ overlay.releasePointerCapture(pid); }catch(_){} }
+    // Liberar TODOS los pointer captures antes de cualquier otra cosa —
+    // Chrome rechaza requestFullscreen si hay un pointer capture activo
+    const _pids = [..._camPointers.keys()];
+    _camPointers.clear();
+    _camZoom = 1; _camPinchDist0 = null;
+    for(const pid of _pids) { try{ overlay.releasePointerCapture(pid); }catch(_){} }
     overlay.classList.add('hidden');
     ac.abort();
-    // Restaurar fullscreen: llamar requestFullscreen SINCRONAMENTE dentro del handler
-    // del botón (gesto de usuario válido). Sin setTimeout — el token expira en ~1 frame.
+    // requestFullscreen síncrono dentro del handler de gesto de usuario
     if(restoreFs && _camWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
       const _el = document.documentElement;
       const _req = _el.requestFullscreen || _el.webkitRequestFullscreen;
@@ -12259,35 +12261,31 @@ function edOpenCamera() {
 
   capBtn?.addEventListener('click', () => {
     if (!_edCameraStream) return;
+    // 1. Capturar frame del video en canvas (síncrono, mientras stream está vivo)
     const canvas = document.createElement('canvas');
     const track  = _edCameraStream.getVideoTracks()[0];
     const settings = track.getSettings();
     canvas.width  = settings.width  || video.videoWidth;
     canvas.height = settings.height || video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    // Si se usó zoom CSS, recortar el canvas al área visible
-    if(!_camHwZoom && _camZoom > 1) {
+    // Si se usó zoom CSS, usar las dimensiones recortadas directamente
+    const _useZoom = !_camHwZoom && _camZoom > 1;
+    if(_useZoom) {
       const z = _camZoom;
-      const sw = canvas.width / z, sh = canvas.height / z;
-      const sx = (canvas.width - sw) / 2, sy = (canvas.height - sh) / 2;
-      const cropC = document.createElement('canvas');
-      cropC.width = Math.round(sw); cropC.height = Math.round(sh);
-      cropC.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, cropC.width, cropC.height);
-      cropC.toBlob(blob2 => {
-        if(blob2) {
-          const file2 = new File([blob2], 'photo.jpg', { type: 'image/jpeg' });
-          closeCamera(true);
-          edAddImage(file2);
-        }
-      }, 'image/jpeg', 0.92);
-      return;
+      const sw = Math.round((settings.width  || video.videoWidth)  / z);
+      const sh = Math.round((settings.height || video.videoHeight) / z);
+      const sx = Math.round(((settings.width  || video.videoWidth)  - sw) / 2);
+      const sy = Math.round(((settings.height || video.videoHeight) - sh) / 2);
+      canvas.width = sw; canvas.height = sh;
+      canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    } else {
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     }
+    // 2. Cerrar cámara y restaurar FS SÍNCRONAMENTE dentro del gesto de usuario
+    //    (antes de toBlob que es asíncrono y expira el token de gesto)
+    closeCamera(true);
+    // 3. Convertir canvas a blob y añadir imagen (asíncrono, FS ya solicitado)
     canvas.toBlob(blob => {
-      if (blob) {
-        const file = new File([blob], 'photo.jpg', { type: 'image/jpeg' });
-        closeCamera(true); // restaurar FS — estamos dentro de un gesto de usuario
-        edAddImage(file);
-      }
+      if(blob) edAddImage(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
     }, 'image/jpeg', 0.92);
   }, sig);
 
@@ -12587,7 +12585,7 @@ function EditorView_init(){
       const req = el.requestFullscreen || el.webkitRequestFullscreen;
       if(req) req.call(el, { navigationUI: 'hide' })
         .then(() => { if(typeof Fullscreen!=='undefined') Fullscreen._updateBtn(); })
-        .catch(err => edToast('FS error: ' + (err?.message || err)));
+        .catch(() => {});
     }
   });
   const _edFsUpdate = () => {
