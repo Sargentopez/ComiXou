@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v15.38</footer>
+    <footer class="app-version">v15.39</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -477,11 +477,10 @@ Router.register('editor', {
 
     <!-- Inputs ocultos -->
     <input type="file" id="edFileGallery" accept="image/*,.gif,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
-    <input type="file" id="edFileCamera" accept="image/*" capture="environment" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">
-      <video id="edCameraVideo" autoplay playsinline muted></video>
+      <iframe id="edCameraFrame" src="" allow="camera" style="width:100%;height:100%;border:none;display:block;"></iframe>
       <div id="edCameraControls">
         <button id="edCameraClose" title="Cerrar">✕</button>
         <button id="edCameraCapture" title="Capturar"></button>

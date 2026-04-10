@@ -12096,211 +12096,52 @@ function _edStartEyedrop() {
   }, { ...sig, once: true });
 }
 
-/* ── CÁMARA IN-APP (getUserMedia) ── */
-let _edCameraStream = null;
-let _edCameraFacing = 'environment'; // 'environment' = trasera, 'user' = frontal
+/* ── CÁMARA: iframe independiente para no contaminar fullscreenEnabled ── */
+// getUserMedia en el documento principal invalida document.fullscreenEnabled en Chrome.
+// Solución: la cámara vive en pages/camera.html (iframe separado).
+// La foto llega via postMessage como Blob transferible.
 
 function edOpenCamera() {
   const overlay = $('edCameraOverlay');
-  const video   = $('edCameraVideo');
-  if (!overlay || !video) return;
+  const frame   = $('edCameraFrame');
+  if(!overlay || !frame) return;
 
-  if (!navigator.mediaDevices?.getUserMedia) {
-    edToast('Cámara no disponible en este dispositivo');
-    return;
-  }
+  // Guardar estado fullscreen
+  const _camWasFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
 
-  // Guardar estado fullscreen — getUserMedia puede cancelarlo en Android
-  const _camWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  // Cargar la página de cámara en el iframe
+  frame.src = 'pages/camera.html';
+  overlay.classList.remove('hidden');
 
-  let _camClosed = false; // flag: si closeCamera fue llamado, parar cualquier stream que llegue
-
-  function startStream(facing) {
-    if (_edCameraStream) {
-      _edCameraStream.getTracks().forEach(t => t.stop());
-      _edCameraStream = null;
-    }
-    // Resolución ideal = doble del lienzo (1800×2340 → ×2 = 3600×4680)
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: facing, width: { ideal: ED_CANVAS_W * 2 }, height: { ideal: ED_CANVAS_H * 2 } },
-      audio: false
-    }).then(stream => {
-      // Si closeCamera ya fue llamado mientras esperábamos la Promise, parar inmediatamente
-      if (_camClosed) {
-        stream.getTracks().forEach(t => t.stop());
-        return;
-      }
-      _edCameraStream = stream;
-      video.srcObject = stream;
-      overlay.classList.remove('hidden');
-    }).catch(() => {});
-  }
-
-  startStream(_edCameraFacing);
-
-  // Capturar foto
-  const capBtn = $('edCameraCapture');
-  const closeBtn = $('edCameraClose');
-  const flipBtn = $('edCameraFlip');
-
-  // Usar AbortController para limpiar listeners al cerrar
-  const ac = new AbortController();
-  const sig = { signal: ac.signal };
-
-  // ── Pinch-to-zoom en el visor de cámara ──
-  // Estrategia dual: zoom de hardware vía applyConstraints (si el track lo soporta),
-  // con fallback a zoom CSS transform sobre el <video>.
-  let _camZoom = 1, _camZoomMin = 1, _camZoomMax = 1, _camHwZoom = false;
-  let _camPinchDist0 = null, _camZoom0 = 1;
-  const _camPointers = new Map();
-
-  function _camApplyZoom(z) {
-    _camZoom = Math.max(_camZoomMin, Math.min(_camZoomMax, z));
-    if(_camHwZoom && _edCameraStream) {
-      const track = _edCameraStream.getVideoTracks()[0];
-      if(track) track.applyConstraints({ advanced: [{ zoom: _camZoom }] }).catch(()=>{});
-    } else {
-      // Fallback: zoom CSS (crop visual del stream)
-      video.style.transform = _camZoom > 1 ? `scale(${_camZoom})` : '';
-    }
-    // Mostrar indicador de zoom
-    _camShowZoomBadge(_camZoom);
-  }
-
-  function _camShowZoomBadge(z) {
-    let badge = document.getElementById('_camZoomBadge');
-    if(!badge) {
-      badge = document.createElement('div');
-      badge.id = '_camZoomBadge';
-      badge.style.cssText = 'position:absolute;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.55);color:#fff;font-size:1rem;font-weight:700;padding:4px 14px;border-radius:20px;pointer-events:none;transition:opacity .4s;z-index:10001;';
-      overlay.appendChild(badge);
-    }
-    badge.textContent = z.toFixed(1) + '×';
-    badge.style.opacity = '1';
-    clearTimeout(badge._hide);
-    badge._hide = setTimeout(() => { badge.style.opacity = '0'; }, 1500);
-  }
-
-  function _camInitZoom() {
-    if(!_edCameraStream) return;
-    const track = _edCameraStream.getVideoTracks()[0];
-    if(!track) return;
-    if(track.getCapabilities) {
-      const caps = track.getCapabilities();
-      if(caps.zoom) {
-        _camZoomMin = caps.zoom.min || 1;
-        _camZoomMax = Math.min(caps.zoom.max || 1, 10);
-        _camHwZoom  = true;
-        return;
-      }
-    }
-    // Sin zoom de hardware: zoom CSS, rango visual razonable
-    _camZoomMin = 1; _camZoomMax = 5; _camHwZoom = false;
-  }
-
-  function _camPinchDist(ptrs) {
-    const [a, b] = [...ptrs.values()];
-    return Math.hypot(a.x - b.x, a.y - b.y);
-  }
-
-  // touch-action:none en el video para que el navegador no consuma el gesto de pinch
-  video.style.touchAction = 'none';
-
-  overlay.addEventListener('pointerdown', e => {
-    // Capturar el puntero en el overlay para recibir move/up aunque salga del elemento
-    try { overlay.setPointerCapture(e.pointerId); } catch(_){}
-    _camPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if(_camPointers.size === 2) {
-      _camInitZoom();
-      _camPinchDist0 = _camPinchDist(_camPointers);
-      _camZoom0 = _camZoom;
-    }
-  }, { signal: ac.signal, capture: true });
-
-  overlay.addEventListener('pointermove', e => {
-    if(!_camPointers.has(e.pointerId)) return;
-    _camPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if(_camPointers.size === 2 && _camPinchDist0) {
-      e.preventDefault();
-      const dist = _camPinchDist(_camPointers);
-      _camApplyZoom(_camZoom0 * (dist / _camPinchDist0));
-    }
-  }, { signal: ac.signal, capture: true, passive: false });
-
-  const _camEndPtr = e => {
-    _camPointers.delete(e.pointerId);
-    if(_camPointers.size < 2) _camPinchDist0 = null;
-  };
-  overlay.addEventListener('pointerup',     _camEndPtr, { signal: ac.signal, capture: true });
-  overlay.addEventListener('pointercancel', _camEndPtr, { signal: ac.signal, capture: true });
-
-  function closeCamera(restoreFs = false) {
-    _camClosed = true; // cualquier stream pendiente de getUserMedia se parará al llegar
-    if (_edCameraStream) {
-      _edCameraStream.getTracks().forEach(t => t.stop());
-      _edCameraStream = null;
-    }
-    // Detener y liberar el elemento video
-    video.pause();
-    video.srcObject = null;
-    // NO llamar video.load() — puede disparar eventos internos que invalidan el user gesture token
-    // Revertir todos los estilos aplicados durante la sesión de cámara
-    video.style.transform   = '';
-    video.style.touchAction = '';
-    // Liberar TODOS los pointer captures antes de cualquier otra cosa —
-    // Chrome rechaza requestFullscreen si hay un pointer capture activo
-    const _pids = [..._camPointers.keys()];
-    _camPointers.clear();
-    _camZoom = 1; _camPinchDist0 = null;
-    for(const pid of _pids) { try{ overlay.releasePointerCapture(pid); }catch(_){} }
+  function _close(restoreFs) {
     overlay.classList.add('hidden');
-    ac.abort();
-    // requestFullscreen síncrono dentro del handler de gesto de usuario
-    if(restoreFs && _camWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      const _el = document.documentElement;
-      const _req = _el.requestFullscreen || _el.webkitRequestFullscreen;
-      if(_req) _req.call(_el, { navigationUI: 'hide' })
-        .then(() => { if(typeof Fullscreen !== 'undefined') Fullscreen._updateBtn(); })
-        .catch(() => {});
+    frame.src = ''; // descargar el iframe — libera todos los recursos de cámara
+    window.removeEventListener('message', _onMsg);
+    if(restoreFs && _camWasFs && !(document.fullscreenElement || document.webkitFullscreenElement)){
+      const el = document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if(req) req.call(el, {navigationUI:'hide'})
+        .then(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen._updateBtn(); })
+        .catch(()=>{});
     }
   }
 
-  capBtn?.addEventListener('click', () => {
-    if (!_edCameraStream) return;
-    // 1. Capturar frame del video en canvas (síncrono, mientras stream está vivo)
-    const canvas = document.createElement('canvas');
-    const track  = _edCameraStream.getVideoTracks()[0];
-    const settings = track.getSettings();
-    canvas.width  = settings.width  || video.videoWidth;
-    canvas.height = settings.height || video.videoHeight;
-    // Si se usó zoom CSS, usar las dimensiones recortadas directamente
-    const _useZoom = !_camHwZoom && _camZoom > 1;
-    if(_useZoom) {
-      const z = _camZoom;
-      const sw = Math.round((settings.width  || video.videoWidth)  / z);
-      const sh = Math.round((settings.height || video.videoHeight) / z);
-      const sx = Math.round(((settings.width  || video.videoWidth)  - sw) / 2);
-      const sy = Math.round(((settings.height || video.videoHeight) - sh) / 2);
-      canvas.width = sw; canvas.height = sh;
-      canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-    } else {
-      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  function _onMsg(e) {
+    if(!e.data || typeof e.data.type !== 'string') return;
+    if(e.data.type === 'camera:cancel'){
+      _close(false);
+    } else if(e.data.type === 'camera:photo'){
+      const blob = e.data.blob;
+      if(blob){
+        _close(true); // restaurar FS síncronamente — seguimos en el handler de postMessage
+        edAddImage(new File([blob], 'photo.jpg', {type:'image/jpeg'}));
+      }
+    } else if(e.data.type === 'camera:error'){
+      _close(false);
     }
-    // 2. Cerrar cámara y restaurar FS SÍNCRONAMENTE dentro del gesto de usuario
-    //    (antes de toBlob que es asíncrono y expira el token de gesto)
-    closeCamera(true);
-    // 3. Convertir canvas a blob y añadir imagen (asíncrono, FS ya solicitado)
-    canvas.toBlob(blob => {
-      if(blob) edAddImage(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
-    }, 'image/jpeg', 0.92);
-  }, sig);
+  }
 
-  closeBtn?.addEventListener('click', () => closeCamera(true), sig);
-
-  flipBtn?.addEventListener('click', () => {
-    _edCameraFacing = _edCameraFacing === 'environment' ? 'user' : 'environment';
-    startStream(_edCameraFacing);
-  }, sig);
+  window.addEventListener('message', _onMsg);
 }
 
 function EditorView_destroy(){
@@ -12617,25 +12458,7 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
-  $('dd-camera')?.addEventListener('click', ()=>{
-    // Usar input nativo con capture="environment" — no contamina el contexto de fullscreen
-    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    edCloseMenus();
-    $('edFileCamera').click();
-  });
-  $('edFileCamera')?.addEventListener('change', e => {
-    const file = e.target.files[0];
-    e.target.value = '';
-    if(!file) return;
-    edAddImage(file);
-    // Restaurar fullscreen igual que la galería
-    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      setTimeout(()=>{
-        if(typeof Fullscreen !== 'undefined'){ Fullscreen.enter(); Fullscreen._updateBtn(); }
-      }, 300);
-    }
-    window._edWasFullscreen = false;
-  });
+  $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
   $('edFileGallery')?.addEventListener('change',e=>{
