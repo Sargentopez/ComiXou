@@ -1150,26 +1150,34 @@ class LineLayer extends BaseLayer {
     if(_multiContour){
       if(this.grouped){
         // Agrupado (⊕ Unir): cada contorno se pinta independientemente, sin fusión booleana
-        let _ptOffset = 0;
-        _contours.forEach((c) => {
+        const _gStyles = this.groupedStyles || [];
+        // Acumular offset en pts para mapear cornerRadii correctamente por contorno
+        let _ptBase = 0; // índice de inicio en pts del contorno actual (incluye nulls previos)
+        _contours.forEach((c, _ci) => {
+          const _st = _gStyles[_ci] || {};
+          const _fc = _st.fillColor !== undefined ? _st.fillColor : this.fillColor;
+          const _sc = _st.color     !== undefined ? _st.color     : this.color;
+          const _lw = _st.lineWidth !== undefined ? _st.lineWidth : this.lineWidth;
+          const _cl = _st.closed    !== undefined ? _st.closed    : this.closed;
           const _crC = {};
-          // Mapear cornerRadii: índice en pts (con nulls) → índice local en contorno
-          let _lIdx = 0;
-          for(let _ii = 0; _ii < pts.length; _ii++){
-            if(pts[_ii] === null){ _lIdx = 0; continue; }
-            const _r = cr[_ii]||0;
-            if(_r && _lIdx < c.length) _crC[_lIdx] = _r;
+          // Mapear cornerRadii: avanzar en pts desde _ptBase, solo para este contorno
+          let _lIdx = 0, _scan = _ptBase;
+          for(; _scan < pts.length; _scan++){
+            if(pts[_scan] === null){ if(_lIdx > 0) break; continue; } // null = fin del contorno
+            const _r = cr[_scan]||0;
+            if(_r) _crC[_lIdx] = _r;
             _lIdx++;
           }
+          _ptBase = _scan + 1; // saltar el null separador
           const _path = new Path2D();
           _buildContour(_path, c, _crC);
-          if(this.closed && this.fillColor && this.fillColor !== 'none'){
-            ctx.fillStyle = this.fillColor;
+          if(_cl && _fc && _fc !== 'none'){
+            ctx.fillStyle = _fc;
             ctx.fill(_path);
           }
-          if(this.lineWidth > 0){
-            ctx.strokeStyle = this.color;
-            ctx.lineWidth   = this.lineWidth;
+          if(_lw > 0){
+            ctx.strokeStyle = _sc;
+            ctx.lineWidth   = _lw;
             ctx.stroke(_path);
           }
         });
@@ -1348,6 +1356,7 @@ function _edLayersSnapshot(){
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
       grouped: l.grouped||false,
+      groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     const o = {};
@@ -1433,6 +1442,7 @@ function edApplyHistory(snapshot){
       if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.grouped) l.grouped = true;
+      if(o.groupedStyles) l.groupedStyles = o.groupedStyles.map(s=>({...s}));
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       return l;
@@ -11234,10 +11244,21 @@ function edMergeSelected(){
       return contours;
     }
 
-    // Recoger todos los contornos en px
+    // Recoger todos los contornos en px, con sus estilos individuales
     const allContoursPx = [];
+    const allContourStyles = []; // estilo por contorno
     for(const la of layers) {
-      for(const c of _layerToPixelContours(la)) allContoursPx.push(c);
+      const _cs = _layerToPixelContours(la);
+      const _style = {
+        fillColor: la.fillColor || 'none',
+        color:     la.color     || '#000000',
+        lineWidth: la.lineWidth ?? 3,
+        closed:    la.type === 'shape' || (la.type === 'line' && !!la.closed)
+      };
+      for(const c of _cs) {
+        allContoursPx.push(c);
+        allContourStyles.push(_style);
+      }
     }
 
     // Centro del bbox en px
@@ -11267,6 +11288,7 @@ function edMergeSelected(){
     }
     newLL.closed = _allClosed;
     newLL.grouped = true; // agrupado sin fusión booleana
+    newLL.groupedStyles = allContourStyles; // estilos individuales por contorno
     newLL._updateBbox();
     _finishMerge(newLL);
     return;
