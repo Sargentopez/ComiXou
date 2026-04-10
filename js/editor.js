@@ -12617,7 +12617,25 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
-  $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
+  $('dd-camera')?.addEventListener('click', ()=>{
+    // Usar input nativo con capture="environment" — no contamina el contexto de fullscreen
+    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    edCloseMenus();
+    $('edFileCamera').click();
+  });
+  $('edFileCamera')?.addEventListener('change', e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if(!file) return;
+    edAddImage(file);
+    // Restaurar fullscreen igual que la galería
+    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
+      setTimeout(()=>{
+        if(typeof Fullscreen !== 'undefined'){ Fullscreen.enter(); Fullscreen._updateBtn(); }
+      }, 300);
+    }
+    window._edWasFullscreen = false;
+  });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
   $('edFileGallery')?.addEventListener('change',e=>{
