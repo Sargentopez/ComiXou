@@ -12234,10 +12234,10 @@ function edOpenCamera() {
       _edCameraStream.getTracks().forEach(t => t.stop());
       _edCameraStream = null;
     }
-    // Cierre completo del elemento video para liberar el contexto de cámara en el navegador
+    // Detener y liberar el elemento video
     video.pause();
     video.srcObject = null;
-    video.load(); // fuerza reset del elemento — libera el contexto de media en Chrome/Android
+    // NO llamar video.load() — puede disparar eventos internos que invalidan el user gesture token
     // Revertir todos los estilos aplicados durante la sesión de cámara
     video.style.transform   = '';
     video.style.touchAction = '';
@@ -12246,17 +12246,14 @@ function edOpenCamera() {
     for(const [pid] of _camPointers) { try{ overlay.releasePointerCapture(pid); }catch(_){} }
     overlay.classList.add('hidden');
     ac.abort();
-    // Restaurar fullscreen si estaba activo antes de abrir la cámara.
-    // Solo se puede llamar requestFullscreen desde un gesto de usuario,
-    // por lo que lo hacemos aquí (dentro del handler del botón cerrar/capturar).
+    // Restaurar fullscreen: llamar requestFullscreen SINCRONAMENTE dentro del handler
+    // del botón (gesto de usuario válido). Sin setTimeout — el token expira en ~1 frame.
     if(restoreFs && _camWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      if(typeof Fullscreen !== 'undefined'){
-        // Delay mínimo: esperar a que el overlay quede hidden antes de pedir FS,
-        // de lo contrario Android puede rechazar la llamada por contexto de cámara
-        setTimeout(() => {
-          Fullscreen.enter().then(() => Fullscreen._updateBtn()).catch(()=>{});
-        }, 120);
-      }
+      const _el = document.documentElement;
+      const _req = _el.requestFullscreen || _el.webkitRequestFullscreen;
+      if(_req) _req.call(_el, { navigationUI: 'hide' })
+        .then(() => { if(typeof Fullscreen !== 'undefined') Fullscreen._updateBtn(); })
+        .catch(() => {});
     }
   }
 
@@ -12588,7 +12585,9 @@ function EditorView_init(){
     } else {
       const el  = document.documentElement;
       const req = el.requestFullscreen || el.webkitRequestFullscreen;
-      if(req) req.call(el, { navigationUI: 'hide' }).catch(()=>{});
+      if(req) req.call(el, { navigationUI: 'hide' })
+        .then(() => { if(typeof Fullscreen!=='undefined') Fullscreen._updateBtn(); })
+        .catch(err => edToast('FS error: ' + (err?.message || err)));
     }
   });
   const _edFsUpdate = () => {
