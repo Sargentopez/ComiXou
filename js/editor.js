@@ -12300,6 +12300,186 @@ function edOpenCamera() {
   }, sig);
 }
 
+/* ── T15: Importar archivo con capas (PSD / XCF / TIFF) ──
+   Cada capa visible se convierte en un ImageLayer independiente en el editor.
+   Las librerías se cargan dinámicamente desde CDN solo cuando se necesitan. */
+
+async function _edLoadScript(url) {
+  return new Promise((resolve, reject) => {
+    if(document.querySelector(`script[src="${url}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = url; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function edImportLayers(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  const buf = await file.arrayBuffer();
+
+  // Cada capa se representa como {name, canvas, opacity, visible}
+  let rawLayers = [];
+
+  try {
+    if(ext === 'psd') {
+      // Cargar bundle UMD de ag-psd (expone window.agPsd)
+      await _edLoadScript('https://unpkg.com/ag-psd@20.0.0/dist/bundle.js');
+      // Inicializar el canvas factory para browser (obligatorio antes de readPsd)
+      if(!window._agPsdInit) {
+        window.agPsd.initializeCanvas(
+          (w, h) => { const c=document.createElement('canvas'); c.width=w; c.height=h; return c; },
+          (data) => {
+            const img = new Image();
+            img.src = 'data:image/jpeg;base64,' + window.agPsd.byteArrayToBase64(data);
+            const c = document.createElement('canvas');
+            c.width = img.width||1; c.height = img.height||1;
+            c.getContext('2d').drawImage(img,0,0);
+            return c;
+          },
+          (w, h) => new ImageData(w, h)
+        );
+        window._agPsdInit = true;
+      }
+      const psd = window.agPsd.readPsd(buf);
+
+      // Helper: forzar alpha=255 en un canvas que no tiene canal alpha (capa Background)
+      function _forceOpaque(canvas) {
+        const ctx2 = canvas.getContext('2d');
+        const id = ctx2.getImageData(0, 0, canvas.width, canvas.height);
+        const d = id.data;
+        let allTransparent = true;
+        for(let i = 3; i < d.length; i += 4) { if(d[i] > 0) { allTransparent = false; break; } }
+        if(allTransparent) {
+          for(let i = 3; i < d.length; i += 4) d[i] = 255;
+          ctx2.putImageData(id, 0, 0);
+        }
+        return canvas;
+      }
+
+      const _collectLayers = (children) => {
+        const result = [];
+        for(const layer of (children || [])) {
+          if(layer.children && layer.children.length) {
+            result.push(..._collectLayers(layer.children));
+          } else if(layer.canvas) {
+            result.push(layer);
+          }
+        }
+        return result;
+      };
+      const flatLayers = _collectLayers(psd.children || []);
+      for(const layer of flatLayers) {
+        const lc = layer.transparencyProtected ? _forceOpaque(layer.canvas) : layer.canvas;
+        rawLayers.push({
+          name: layer.name || 'Capa',
+          canvas: lc,
+          opacity: (layer.opacity !== undefined ? layer.opacity : 1),
+          visible: layer.hidden !== true
+        });
+      }
+      // PSD children: orden de arriba a abajo → invertir para que [0] sea la inferior
+      rawLayers.reverse();
+
+    } else if(ext === 'xcf') {
+      await _edLoadScript('https://cdn.jsdelivr.net/npm/xcfreader@0.0.6/dist/xcfreader.min.js');
+      const xcf = new XCFReader(buf);
+      const xcfLayers = xcf.layers || [];
+      for(const layer of xcfLayers) {
+        const lc = await layer.toCanvas();
+        rawLayers.push({ name: layer.name || 'Capa', canvas: lc,
+          opacity: layer.opacity !== undefined ? layer.opacity / 255 : 1,
+          visible: layer.visible !== false });
+      }
+      // xcfreader devuelve capas de arriba a abajo → invertir para orden inferior→superior
+      rawLayers.reverse();
+
+    } else if(ext === 'tif' || ext === 'tiff') {
+      await _edLoadScript('https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js');
+      const ifds = UTIF.decode(buf);
+      for(let i = 0; i < ifds.length; i++) {
+        UTIF.decodeImage(buf, ifds[i]);
+        const rgba = UTIF.toRGBA8(ifds[i]);
+        const lc = document.createElement('canvas');
+        lc.width = ifds[i].width; lc.height = ifds[i].height;
+        lc.getContext('2d').putImageData(
+          new ImageData(new Uint8ClampedArray(rgba), ifds[i].width, ifds[i].height), 0, 0);
+        rawLayers.push({ name: `Página ${i+1}`, canvas: lc, opacity: 1, visible: true });
+      }
+    }
+  } catch(err) {
+    edToast('Error al importar: ' + (err.message || err));
+    return;
+  }
+
+  if(!rawLayers.length) { edToast('No se encontraron capas'); return; }
+
+  // Filtrar invisibles
+  const visible = rawLayers.filter(l => l.visible);
+  if(!visible.length) { edToast('Todas las capas están ocultas'); return; }
+
+  // ── Indicador de progreso ──
+  let _progEl = document.getElementById('_edImportProgress');
+  if(!_progEl) {
+    _progEl = document.createElement('div');
+    _progEl.id = '_edImportProgress';
+    _progEl.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
+      'background:rgba(20,20,20,0.92);color:#fff;font-family:inherit;font-size:.95rem;font-weight:600;' +
+      'padding:16px 28px;border-radius:12px;z-index:99999;pointer-events:none;text-align:center;' +
+      'box-shadow:0 4px 20px rgba(0,0,0,.5);';
+    document.body.appendChild(_progEl);
+  }
+  const _setProgress = (i, total) => {
+    _progEl.textContent = `Importando capa ${i} de ${total}…`;
+    _progEl.style.display = 'block';
+  };
+  const _hideProgress = () => { _progEl.style.display = 'none'; };
+
+  edPushHistory();
+
+  // Convertir todos los rawLayers a ImageLayer en orden (inferior → superior)
+  // rawLayers ya está ordenado de inferior a superior tras el .reverse()
+  const newLayers = [];
+  for(let i = 0; i < visible.length; i++) {
+    const rl = visible[i];
+    _setProgress(i + 1, visible.length);
+    // Ceder el hilo para que el DOM actualice el indicador
+    await new Promise(r => setTimeout(r, 0));
+    const dataUrl = rl.canvas.toDataURL('image/png');
+    await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const layer = new ImageLayer(img, 0.5, 0.5, 0.7);
+        const maxH = 0.85;
+        if(layer.height > maxH){
+          const scale = maxH / layer.height;
+          layer.height = maxH; layer.width = layer.width * scale;
+        }
+        layer.opacity = Math.max(0, Math.min(1, rl.opacity));
+        newLayers.push(layer);
+        resolve();
+      };
+      img.src = dataUrl;
+    });
+  }
+
+  _hideProgress();
+
+  // Insertar todas las capas de golpe en el orden correcto (inferior primero),
+  // justo antes del primer texto/bocadillo si lo hay
+  const firstTextIdx = edLayers.findIndex(l => l.type==='text' || l.type==='bubble');
+  if(firstTextIdx >= 0) {
+    edLayers.splice(firstTextIdx, 0, ...newLayers);
+    edSelectedIdx = firstTextIdx + newLayers.length - 1;
+  } else {
+    edLayers.push(...newLayers);
+    edSelectedIdx = edLayers.length - 1;
+  }
+
+  edPages[edCurrentPage].layers = edLayers;
+  edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
+  edToast(`${visible.length} capa${visible.length>1?'s':''} importada${visible.length>1?'s':''} ✓`);
+}
+
 function EditorView_destroy(){
   if(window._edListeners){
     window._edListeners.forEach(([el,evt,fn,opts])=>el.removeEventListener(evt,fn,opts));
@@ -12613,6 +12793,23 @@ function EditorView_init(){
     window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
     $('edFileGallery').click();
     edCloseMenus();
+  });
+  $('dd-layers')?.addEventListener('click',()=>{
+    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    edCloseMenus();
+    $('edFileLayers').click();
+  });
+  $('edFileLayers')?.addEventListener('change', async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if(!file) return;
+    await edImportLayers(file);
+    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
+      setTimeout(()=>{
+        if(typeof Fullscreen !== 'undefined'){ Fullscreen.enter(); Fullscreen._updateBtn(); }
+      }, 300);
+    }
+    window._edWasFullscreen = false;
   });
   $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
