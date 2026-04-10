@@ -4057,33 +4057,35 @@ function edOnStart(e){
   // ── MODO RECORTE: interceptar todos los toques en el canvas ──
   if (_edCropMode) {
     if (e.pointerType === 'touch') {
-      // Si ya hay un dedo activo (segundo dedo = pinch), cancelar timer y no procesar
+      // Si ya hay un dedo activo (segundo dedo = pinch):
+      // cancelar timer de recorte y dejar pasar al flujo normal de pinch/cámara
       if (window._edActivePointers && window._edActivePointers.size >= 1) {
         clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
-        return;
+        // NO hacer return: dejar que el código de pinch más abajo lo gestione
+      } else {
+        // Primer dedo: guardar evento y esperar 120ms para detectar si llega segundo dedo
+        const _eSavedCrop = e;
+        window._edCropTouchMoved = false;
+        clearTimeout(window._edCropTouchTimer);
+        window._edCropTouchTimer = setTimeout(() => {
+          window._edCropTouchTimer = null;
+          if (!_edCropMode) return;
+          if (window._edActivePointers && window._edActivePointers.size > 1) return;
+          if (window._edCropTouchMoved) return;
+          const _cc = edCoords(_eSavedCrop);
+          const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
+          if (_nodeHit) return;
+          _edCropHandleCanvasTap(_cc.nx, _cc.ny);
+        }, 120);
+        return; // solo el primer dedo hace return aquí
       }
-      // Primer dedo: guardar evento y esperar 120ms para detectar si llega segundo dedo
-      const _eSavedCrop = e;
-      window._edCropTouchMoved = false; // flag local del recorte, independiente del global
-      clearTimeout(window._edCropTouchTimer);
-      window._edCropTouchTimer = setTimeout(() => {
-        window._edCropTouchTimer = null;
-        if (!_edCropMode) return;
-        if (window._edActivePointers && window._edActivePointers.size > 1) return;
-        if (window._edCropTouchMoved) return; // movimiento significativo = gesto
-        const _cc = edCoords(_eSavedCrop);
-        const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-        if (_nodeHit) return;
-        _edCropHandleCanvasTap(_cc.nx, _cc.ny);
-      }, 120);
-      return;
+    } else {
+      // PC/ratón: inmediato
+      const _cc = edCoords(e);
+      const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
+      if (_nodeHit) return;
+      if (_edCropHandleCanvasTap(_cc.nx, _cc.ny)) return;
     }
-    // PC/ratón: inmediato
-    const _cc = edCoords(e);
-    const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-    if (_nodeHit) return; // arrastrando nodo — edOnMove/End lo gestionan
-    // Sin nodo bajo el toque: gestionar como tap (añadir vértice o cerrar)
-    if (_edCropHandleCanvasTap(_cc.nx, _cc.ny)) return;
   }
 
   // ── REGLAS: si hay modo mover activo desde el panel, absorber el primer toque ──
@@ -11279,20 +11281,17 @@ function edLoadProject(id){
   });
   // Centrar cámara al cargar — igual que la lupa: reset completo garantizado
   // Forzar reset inmediato de cámara sin esperar al frame (evita que quede cámara de obra anterior)
-  edCamera.x = 0; edCamera.y = 0; edCamera.z = 1;
+  edCamera.x = 0; edCamera.y = 0; edCamera.z = 0; // z=0 fuerza recalculo en _edCameraReset
   window._edLoadReset=true;
+  const _doLoadReset = () => {
+    window._edUserRequestedReset=true;
+    edFitCanvas(true);
+    edRedraw();
+  };
   if(edCanvas){
-    // Primer intento: tras 2 frames (DOM listo)
-    requestAnimationFrame(()=>requestAnimationFrame(()=>{
-      window._edUserRequestedReset=true; edFitCanvas(true);
-      edRedraw();
-    }));
-    // Segundo intento: 200ms (imágenes cargadas)
-    setTimeout(()=>{
-      window._edUserRequestedReset=true; edFitCanvas(true);
-      window._edLoadReset=false;
-      edRedraw();
-    }, 200);
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
+    setTimeout(()=>{ _doLoadReset(); }, 150);
+    setTimeout(()=>{ _doLoadReset(); window._edLoadReset=false; }, 400);
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
