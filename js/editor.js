@@ -4061,13 +4061,16 @@ function edOnStart(e){
   // ── MODO RECORTE: interceptar todos los toques en el canvas ──
   if (_edCropMode) {
     if (e.pointerType === 'touch') {
-      // Si ya hay un dedo activo (segundo dedo = pinch):
-      // cancelar timer de recorte y dejar pasar al flujo normal de pinch/cámara
-      if (window._edActivePointers && window._edActivePointers.size >= 1) {
+      // Registrar el puntero ANTES de cualquier return para que el pinch funcione
+      if(!window._edActivePointers) window._edActivePointers = new Map();
+      window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+
+      if (window._edActivePointers.size >= 2) {
+        // Segundo dedo: cancelar timer de recorte y dejar pasar al pinch
         clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
-        // NO hacer return: dejar que el código de pinch más abajo lo gestione
+        // Caer al bloque de pinch más abajo — NO hacer return
       } else {
-        // Primer dedo: guardar evento y esperar 120ms para detectar si llega segundo dedo
+        // Primer dedo: esperar 120ms para detectar si llega segundo dedo
         const _eSavedCrop = e;
         window._edCropTouchMoved = false;
         clearTimeout(window._edCropTouchTimer);
@@ -4081,7 +4084,7 @@ function edOnStart(e){
           if (_nodeHit) return;
           _edCropHandleCanvasTap(_cc.nx, _cc.ny);
         }, 120);
-        return; // solo el primer dedo hace return aquí
+        return; // primer dedo espera — ya está registrado en _edActivePointers
       }
     } else {
       // PC/ratón: inmediato
