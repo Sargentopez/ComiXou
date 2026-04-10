@@ -3483,8 +3483,9 @@ function edPinchStart(e) {
   edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
   // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
-  // LOCK: objeto bloqueado — no capturar snapshot para resize/rotate por pinch
-  const la = (!isDrawTool && edSelectedIdx >= 0 && !edLayers[edSelectedIdx]?.locked) ? edLayers[edSelectedIdx] : null;
+  // Durante recorte: forzar modo cámara (no escalar el objeto que se recorta)
+  const la = (_edCropMode || !isDrawTool && edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.locked) ? null
+    : (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   // T1: si hay LineLayer en construcción, usarla como objeto pincheable
   const _laForPinch = la || (_edLineLayer && edActiveTool==='line' ? _edLineLayer : null);
   edPinchScale0 = _laForPinch ? { w: _laForPinch.width, h: _laForPinch.height, rot: _laForPinch.rotation||0,
