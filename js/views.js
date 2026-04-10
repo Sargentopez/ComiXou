@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v15.09</footer>
+    <footer class="app-version">v15.27</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -178,7 +178,7 @@ Router.register('editor', {
         </div>
 
         <div id="edToast"></div>
-        <div id="edCofHint" style="display:none;position:absolute;bottom:56px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.78);color:#fff;padding:8px 18px;border-radius:14px;font-size:0.78rem;font-weight:700;line-height:1.6;text-align:center;pointer-events:none;z-index:61;white-space:nowrap;box-shadow:0 2px 12px rgba(0,0,0,.4)"></div>
+        <div id="edCofHint" style="display:none;position:fixed;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.78);color:#fff;padding:8px 18px;border-radius:14px;font-size:0.78rem;font-weight:700;line-height:1.6;text-align:center;pointer-events:none;z-index:61;white-space:nowrap;box-shadow:0 2px 12px rgba(0,0,0,.4)"></div>
 
       <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
       <div id="edConfirmModal" class="ed-confirm-overlay">
@@ -254,6 +254,7 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-shape-rect">▭ Rectángulo</button>
                   <button class="ed-dropdown-item" id="dd-shape-ellipse">◯ Elipse</button>
                   <button class="ed-dropdown-item" id="dd-shape-line">╱ Líneas</button>
+                  <button class="ed-dropdown-item" id="dd-shape-segment"><svg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'><line x1='13' y1='3' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='10' y1='3' x2='13' y2='3' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='3' y1='10' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/></svg> Segmentos</button>
                 </div>
               </div>
             </div>

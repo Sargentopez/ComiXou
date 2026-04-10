@@ -11,6 +11,8 @@ let edPages = [], edCurrentPage = 0, edLayers = [];
 let edRules = [];          // array de reglas de la hoja actual
 let _edRuleId = 0;         // contador para IDs únicos
 let _edRuleDrag = null;    // { ruleId, part:'a'|'b'|'line', offX, offY } — drag activo
+let edRuleNodes = [];      // nodos compartidos entre reglas: {id, x, y, ruleIds, locked}
+let _edRuleNodeId = 0;     // contador IDs de nodos
 let _edRulePanelId = null; // id de la regla con panel abierto
 let edSelectedIdx = -1;
 let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
@@ -1146,31 +1148,56 @@ class LineLayer extends BaseLayer {
     };
 
     if(_multiContour){
-      // T1: múltiples contornos → evenodd para huecos en solapamientos
-      const combined = new Path2D();
-      _contours.forEach((c,ci) => {
-        const _crC = {};
-        // Mapear cornerRadii al índice global en points
-        // (los radios se aplican por índice global, los null no cuentan)
-        let _gIdx = 0;
-        for(let _ii=0; _ii<pts.length; _ii++){
-          if(pts[_ii]===null){ continue; }
-          if(_gIdx < c.length && pts[_ii] === c[_gIdx]){
+      if(this.grouped){
+        // Agrupado (⊕ Unir): cada contorno se pinta independientemente, sin fusión booleana
+        let _ptOffset = 0;
+        _contours.forEach((c) => {
+          const _crC = {};
+          // Mapear cornerRadii: índice en pts (con nulls) → índice local en contorno
+          let _lIdx = 0;
+          for(let _ii = 0; _ii < pts.length; _ii++){
+            if(pts[_ii] === null){ _lIdx = 0; continue; }
             const _r = cr[_ii]||0;
-            if(_r) _crC[_gIdx] = _r;
-            _gIdx++;
+            if(_r && _lIdx < c.length) _crC[_lIdx] = _r;
+            _lIdx++;
           }
+          const _path = new Path2D();
+          _buildContour(_path, c, _crC);
+          if(this.closed && this.fillColor && this.fillColor !== 'none'){
+            ctx.fillStyle = this.fillColor;
+            ctx.fill(_path);
+          }
+          if(this.lineWidth > 0){
+            ctx.strokeStyle = this.color;
+            ctx.lineWidth   = this.lineWidth;
+            ctx.stroke(_path);
+          }
+        });
+      } else {
+        // Fusionado (⊕ Fusionar): evenodd para huecos booleanos
+        const combined = new Path2D();
+        _contours.forEach((c,ci) => {
+          const _crC = {};
+          let _gIdx = 0;
+          for(let _ii=0; _ii<pts.length; _ii++){
+            if(pts[_ii]===null){ continue; }
+            if(_gIdx < c.length && pts[_ii] === c[_gIdx]){
+              const _r = cr[_ii]||0;
+              if(_r) _crC[_gIdx] = _r;
+              _gIdx++;
+            }
+          }
+          _buildContour(combined, c, _crC);
+        });
+        if (this.fillColor && this.fillColor !== 'none') {
+          ctx.fillStyle = this.fillColor;
+          ctx.fill(combined, 'evenodd');
         }
-        _buildContour(combined, c, _crC);
-      });
-      if (this.fillColor && this.fillColor !== 'none') {
-        ctx.fillStyle = this.fillColor;
-        ctx.fill(combined, 'evenodd');
-      }
-      if (this.lineWidth > 0) {
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth   = this.lineWidth;
-        ctx.stroke(combined);
+        if (this.lineWidth > 0) {
+          ctx.strokeStyle = this.color;
+          ctx.lineWidth   = this.lineWidth;
+          ctx.stroke(combined);
+        }
       }
     } else {
       // Contorno único: comportamiento original
@@ -1320,6 +1347,7 @@ function _edLayersSnapshot(){
     if(l.type === 'line')   return { type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
+      grouped: l.grouped||false,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     const o = {};
@@ -1404,6 +1432,7 @@ function edApplyHistory(snapshot){
       l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; l.lineWidth=o.lineWidth??3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
       if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
+      if(o.grouped) l.grouped = true;
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       return l;
@@ -4122,6 +4151,27 @@ function edOnStart(e){
     const _rHit = _edRulesHit(_rc.px, _rc.py, e.pointerType === 'touch');
     if(_rHit) {
       e.stopPropagation();
+      // ── Hit sobre nodo compartido ──
+      if(_rHit.nodeId !== undefined) {
+        const _n = edRuleNodes.find(n => n.id === _rHit.nodeId); if(!_n) return;
+        const _now2 = Date.now();
+        const _isDouble2 = (e.detail >= 2) ||
+          (window._edNodeLastTap && (_now2 - window._edNodeLastTap < 350) &&
+           window._edNodeLastTapId === _rHit.nodeId);
+        if(_isDouble2) {
+          window._edNodeLastTap = 0; clearTimeout(window._edNodeTapTimer);
+          _edRulesNodePanel(_n); return;
+        }
+        window._edNodeLastTap = _now2; window._edNodeLastTapId = _rHit.nodeId;
+        clearTimeout(window._edNodeTapTimer);
+        window._edNodeTapTimer = setTimeout(() => {
+          window._edNodeLastTap = 0; window._edNodeTapTimer = null;
+          if(_n.locked) return; // nodo bloqueado: no iniciar drag
+          _edRuleDrag = { nodeId: _n.id, offX: _rc.px - _n.x, offY: _rc.py - _n.y };
+          edRedraw();
+        }, 300);
+        return;
+      }
       const _r = edRules.find(r => r.id === _rHit.ruleId);
       if(!_r) return;
 
@@ -5297,6 +5347,24 @@ function edOnMove(e){
       return;
     }
   }
+  // ── DRAG DE NODO COMPARTIDO ────────────────────────────────
+  if(_edRuleDrag && _edRuleDrag.nodeId !== undefined) {
+    e.preventDefault();
+    const c = edCoords(e);
+    const _n = edRuleNodes.find(n => n.id === _edRuleDrag.nodeId);
+    if(_n) {
+      _n.x = c.px - _edRuleDrag.offX;
+      _n.y = c.py - _edRuleDrag.offY;
+      for(const rid of _n.ruleIds) {
+        const _rr = edRules.find(r => r.id === rid);
+        if(!_rr) continue;
+        if(_rr.nodeA === _n.id) { _rr.x1 = _n.x; _rr.y1 = _n.y; }
+        if(_rr.nodeB === _n.id) { _rr.x2 = _n.x; _rr.y2 = _n.y; }
+      }
+      edRedraw();
+    }
+    return;
+  }
   // ── DRAG DE REGLA ──────────────────────────────────────────
   if(_edRuleDrag && _edRuleDrag.part !== 'move-pending') {
     e.preventDefault();
@@ -5315,10 +5383,45 @@ function edOnMove(e){
       } else if(_edRuleDrag.part === 'b') {
         r.x2 = c.px; r.y2 = c.py;
       } else { // 'line' — mover todo
-        r.x1 = c.px - _edRuleDrag.offX;
-        r.y1 = c.py - _edRuleDrag.offY;
-        r.x2 = r.x1 + _edRuleDrag.dx;
-        r.y2 = r.y1 + _edRuleDrag.dy;
+        const _newX1 = c.px - _edRuleDrag.offX;
+        const _newY1 = c.py - _edRuleDrag.offY;
+        // Si la regla pertenece a un grupo, mover todo el grupo en bloque
+        const _nodeIds = [];
+        if(r.nodeA) _nodeIds.push(r.nodeA);
+        if(r.nodeB) _nodeIds.push(r.nodeB);
+        if(_nodeIds.length) {
+          const _dx = _newX1 - r.x1, _dy = _newY1 - r.y1;
+          // Recoger todas las reglas del grupo
+          const _groupRuleIds = new Set([r.id]);
+          for(const nid of _nodeIds) {
+            const _n = edRuleNodes.find(n => n.id === nid);
+            if(_n) _n.ruleIds.forEach(rid => _groupRuleIds.add(rid));
+          }
+          // Mover todas las reglas del grupo
+          for(const rid of _groupRuleIds) {
+            const _rr = edRules.find(rr => rr.id === rid);
+            if(!_rr) continue;
+            _rr.x1 += _dx; _rr.y1 += _dy;
+            _rr.x2 += _dx; _rr.y2 += _dy;
+          }
+          // Mover todos los nodos del grupo
+          const _allNodeIds = new Set(_nodeIds);
+          for(const rid of _groupRuleIds) {
+            const _rr = edRules.find(rr => rr.id === rid);
+            if(!_rr) continue;
+            if(_rr.nodeA) _allNodeIds.add(_rr.nodeA);
+            if(_rr.nodeB) _allNodeIds.add(_rr.nodeB);
+          }
+          for(const nid of _allNodeIds) {
+            const _n = edRuleNodes.find(n => n.id === nid);
+            if(_n) { _n.x += _dx; _n.y += _dy; }
+          }
+        } else {
+          r.x1 = _newX1;
+          r.y1 = _newY1;
+          r.x2 = r.x1 + _edRuleDrag.dx;
+          r.y2 = r.y1 + _edRuleDrag.dy;
+        }
       }
       edRedraw();
     }
@@ -5808,7 +5911,57 @@ function edOnEnd(e){
     return;
   }
   if(_edRuleDrag) {
+    const _finDrag = _edRuleDrag;
     _edRuleDrag = null;
+    // ── Fusión de círculos (T21 parte 2) ──
+    if(_finDrag.part === 'a' || _finDrag.part === 'b') {
+      const _rDragged = edRules.find(r => r.id === _finDrag.ruleId);
+      if(_rDragged) {
+        const _ex = _finDrag.part === 'a' ? _rDragged.x1 : _rDragged.x2;
+        const _ey = _finDrag.part === 'a' ? _rDragged.y1 : _rDragged.y2;
+        // Umbral: 80% de solapamiento = distancia entre centros < 20% del diámetro
+        const _rPx = (_ED_RULE_R * 2) / Math.max(0.1, edCamera.z);
+        const _fusionThresh = _rPx * 0.2;
+        // Radio del nodo compartido para hit de incorporación
+        const _nPx = (_ED_RULE_R * 1.5) / Math.max(0.1, edCamera.z);
+        let _fused = false;
+
+        // CASO A: arrastrar sobre un nodo compartido existente → incorporar al grupo
+        for(const _node of edRuleNodes) {
+          if(_fused) break;
+          // La guía arrastrada no debe estar ya en ese nodo
+          if(_node.ruleIds.includes(_rDragged.id)) continue;
+          if(Math.hypot(_ex - _node.x, _ey - _node.y) <= _nPx) {
+            // Anclar el extremo arrastrado al centro del nodo
+            if(_finDrag.part === 'a') { _rDragged.x1 = _node.x; _rDragged.y1 = _node.y; _rDragged.nodeA = _node.id; }
+            else                      { _rDragged.x2 = _node.x; _rDragged.y2 = _node.y; _rDragged.nodeB = _node.id; }
+            _node.ruleIds.push(_rDragged.id);
+            _fused = true;
+          }
+        }
+
+        // CASO B: arrastrar sobre el círculo libre de otra guía → crear nodo nuevo
+        if(!_fused) {
+          for(const _rOther of edRules) {
+            if(_rOther.id === _rDragged.id || _fused) continue;
+            for(const [_ox, _oy, _oPart] of [[_rOther.x1, _rOther.y1, 'a'], [_rOther.x2, _rOther.y2, 'b']]) {
+              if(_oPart === 'a' && _rOther.nodeA) continue;
+              if(_oPart === 'b' && _rOther.nodeB) continue;
+              if(Math.hypot(_ex - _ox, _ey - _oy) <= _fusionThresh) {
+                const _nx = (_ex + _ox) / 2, _ny = (_ey + _oy) / 2;
+                const _nid = ++_edRuleNodeId;
+                edRuleNodes.push({ id: _nid, x: _nx, y: _ny, ruleIds: [_rDragged.id, _rOther.id], locked: false });
+                if(_finDrag.part === 'a') { _rDragged.x1 = _nx; _rDragged.y1 = _ny; _rDragged.nodeA = _nid; }
+                else                      { _rDragged.x2 = _nx; _rDragged.y2 = _ny; _rDragged.nodeB = _nid; }
+                if(_oPart === 'a') { _rOther.x1 = _nx; _rOther.y1 = _ny; _rOther.nodeA = _nid; }
+                else               { _rOther.x2 = _nx; _rOther.y2 = _ny; _rOther.nodeB = _nid; }
+                _fused = true; break;
+              }
+            }
+          }
+        }
+      }
+    }
     edRedraw();
   }
   // Cancelar timer de doble tap de regla si el dedo se levantó sin segundo tap
@@ -6681,6 +6834,11 @@ function _edLineAddPoint(nx, ny, isTouch=false){
       return;
     }
     _edLineLayer.addAbsPoint(nx, ny);
+    // Modo segmento: confirmar automáticamente al llegar a 2 puntos
+    if(_edLineType === 'segment' && _edLineLayer.points.length >= 2){
+      _edFinishLine();
+      return;
+    }
   }
   _edShapePushHistory(); // guardar estado tras cada nodo para deshacer/rehacer
   edRedraw();
@@ -6697,6 +6855,14 @@ function _cofShowHint(show) {
   if (!h) return;
   if (show) {
     h.innerHTML = '<b style="color:#1a8cff">Guía azul:</b> Posiciona el cursor<br><b style="color:#e02020">Guía roja:</b> Arrastra para dibujar';
+    // Posicionar debajo del topbar + panel de opciones (si está abierto)
+    const topbar = document.getElementById('edTopbar');
+    const menu   = document.getElementById('edMenuBar');
+    const panel  = document.getElementById('edOptionsPanel');
+    const topH   = topbar ? topbar.getBoundingClientRect().bottom : 0;
+    const menuH  = (menu && menu.style.display !== 'none') ? menu.getBoundingClientRect().height : 0;
+    const panelH = (panel && panel.classList.contains('open')) ? panel.getBoundingClientRect().height : 0;
+    h.style.top = (topH + menuH + panelH + 8) + 'px';
     h.style.display = 'block';
   } else {
     h.style.display = 'none';
@@ -7603,7 +7769,8 @@ function _edActivateLineTool(isNew, isCreating) {
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
   <!-- FILA 1: Tipo de objeto + selección -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
-    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${!isSelectMode&&edActiveTool!=='shape'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${!isSelectMode&&edActiveTool!=='shape'?'rgba(0,0,0,.08)':'transparent'}">╱</button>
+    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='draw'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edLineType==='draw'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="Pol\u00edgono">╱</button>
+    <button id="op-line-segment-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='segment'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 5px;cursor:pointer;background:${_edLineType==='segment'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="Segmento"><svg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'><line x1='13' y1='3' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='10' y1='3' x2='13' y2='3' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='3' y1='10' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/></svg></button>
     <button id="op-line-rect-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='rect'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='rect'?'rgba(0,0,0,.08)':'transparent'}">▭</button>
     <button id="op-line-ellipse-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
     <button id="op-line-select-btn" style="flex-shrink:0;border:2px solid ${isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${isSelectMode?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
@@ -7709,7 +7876,14 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── Modo dibujar / seleccionar ──
   $('op-line-draw-btn')?.addEventListener('click',()=>{
+    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
     _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
+    _edLineFusionId = null;
+    _edActivateLineTool();
+  });
+  $('op-line-segment-btn')?.addEventListener('click',()=>{
+    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
+    _edLineType='segment'; edActiveTool='line'; edCanvas.className='tool-line';
     _edLineFusionId = null;
     _edActivateLineTool();
   });
@@ -8677,6 +8851,8 @@ function edRenderOptionsPanel(mode){
         if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
         edActiveTool='select'; edCanvas.className='';
         const cur=$('edBrushCursor');if(cur)cur.style.display='none';
+        // Desactivar cursor offset si estaba activo (evita que el cursor quede visible)
+        if(_cof.on) _cofSetOn(false);
         delete panel.dataset.mode;
         _edDrawClearHistory();
         _edDrawUnlockUI();
@@ -9218,13 +9394,34 @@ function _edRuleClear() {
   if(!edRules.length) return;
   edConfirm('¿Borrar todas las guías de esta hoja?', ()=>{
     edRules = [];
+    edRuleNodes = [];
     _edRulesPanelClose();
     edRedraw();
   }, 'Borrar');
 }
 
 function _edRuleDelete(id) {
-  edRules = edRules.filter(r => r.id !== id);
+  const _rDel = edRules.find(r => r.id === id);
+  if(_rDel) {
+    // Si la regla pertenece a algún nodo compartido, eliminar el grupo completo
+    const _nodeIds = [];
+    if(_rDel.nodeA) _nodeIds.push(_rDel.nodeA);
+    if(_rDel.nodeB) _nodeIds.push(_rDel.nodeB);
+    if(_nodeIds.length) {
+      // Recoger todas las reglas del grupo
+      const _groupRuleIds = new Set([id]);
+      for(const nid of _nodeIds) {
+        const _n = edRuleNodes.find(n => n.id === nid);
+        if(_n) _n.ruleIds.forEach(rid => _groupRuleIds.add(rid));
+      }
+      edRules = edRules.filter(r => !_groupRuleIds.has(r.id));
+      edRuleNodes = edRuleNodes.filter(n => !_nodeIds.includes(n.id));
+    } else {
+      edRules = edRules.filter(r => r.id !== id);
+    }
+  } else {
+    edRules = edRules.filter(r => r.id !== id);
+  }
   _edRulesPanelClose();
   edRedraw();
 }
@@ -9237,6 +9434,41 @@ function _edRuleDuplicate(id) {
   edRedraw();
 }
 
+function _edRulesNodePanel(n) {
+  _edRulesClosePop();
+  const sc = edWorldToScreen(n.x, n.y);
+  const pop = document.createElement('div');
+  pop.id = 'ed-rule-pop';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
+  const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+  const _bsLock = `background:${n.locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
+  pop.innerHTML = `<button id="enp-lock" title="${n.locked ? 'Desbloquear punto' : 'Bloquear punto'}" style="${_bsLock}">${n.locked ? '🔒' : '🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="enp-del" title="Borrar punto de fuga" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  document.body.appendChild(pop);
+  const PW = pop.offsetWidth || 100, PH = pop.offsetHeight || 44;
+  let px = sc.x + 22, py = sc.y - PH / 2;
+  if(px + PW > window.innerWidth - 8) px = sc.x - PW - 22;
+  if(py < 8) py = 8;
+  if(py + PH > window.innerHeight - 8) py = window.innerHeight - PH - 8;
+  pop.style.left = px + 'px'; pop.style.top = py + 'px';
+  document.getElementById('enp-lock')?.addEventListener('click', ev => {
+    ev.stopPropagation();
+    n.locked = !n.locked;
+    for(const rid of n.ruleIds) { const _rr=edRules.find(r=>r.id===rid); if(_rr) _rr.locked=n.locked; }
+    _edRulesClosePop(); edRedraw();
+  });
+  document.getElementById('enp-del')?.addEventListener('click', ev => {
+    ev.stopPropagation();
+    for(const rid of n.ruleIds) {
+      const _rr = edRules.find(r=>r.id===rid);
+      if(_rr) { if(_rr.nodeA===n.id) _rr.nodeA=null; if(_rr.nodeB===n.id) _rr.nodeB=null; }
+    }
+    edRuleNodes = edRuleNodes.filter(nn=>nn.id!==n.id);
+    _edRulesClosePop(); edRedraw();
+  });
+  ['pointerdown','touchstart'].forEach(ev2 => pop.addEventListener(ev2, e => e.stopPropagation(), {passive:true}));
+  setTimeout(() => { document.addEventListener('pointerdown', _edRulesPopOutside, {passive:true}); }, 50);
+}
+
 function _edRulesOpenPanel(id, part, wx, wy) {
   _edRulesClosePop();
   const r = edRules.find(r => r.id === id); if(!r) return;
@@ -9246,9 +9478,17 @@ function _edRulesOpenPanel(id, part, wx, wy) {
   pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
   const _svgH = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="2" y1="12" x2="22" y2="12" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
   const _svgV = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="12" y1="2" x2="12" y2="22" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+  const _svgDup = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><rect x="9" y="9" width="11" height="11" rx="1.5" stroke="white" stroke-width="2" fill="none"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" stroke="white" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`;
   const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
   const _bsLock = `background:${r.locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
-  pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  const _sep = '<div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div>';
+  // Si la regla pertenece a un grupo (algún extremo vinculado a nodo), mostrar solo dup + lock + delete
+  const _inGroup = !!(r.nodeA || r.nodeB);
+  if(_inGroup) {
+    pop.innerHTML = `<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  } else {
+    pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  }
   document.body.appendChild(pop);
   const PW = pop.offsetWidth || 150, PH = pop.offsetHeight || 44;
   let px = sc.x + 22, py = sc.y - PH / 2;
@@ -9257,6 +9497,9 @@ function _edRulesOpenPanel(id, part, wx, wy) {
   if(py + PH > window.innerHeight - 8) py = window.innerHeight - PH - 8;
   pop.style.left = px + 'px'; pop.style.top = py + 'px';
 
+  document.getElementById('erp-dup')?.addEventListener('click', e => {
+    e.stopPropagation(); _edRuleDuplicate(id); 
+  });
   document.getElementById('erp-horiz')?.addEventListener('click', e => {
     e.stopPropagation();
     const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
@@ -9297,9 +9540,19 @@ function _edRulesClosePop() {
 function _edRulesPanelClose() { _edRulesClosePop(); }
 
 function _edRulesDraw(ctx) {
-  if(!edRules.length) return;
+  if(!edRules.length && !edRuleNodes.length) return;
   const z = edCamera.z;
   ctx.save();
+  // Extremos ya cubiertos por un nodo compartido
+  const _sharedEnds = new Set();
+  for(const n of edRuleNodes) {
+    for(const rid of n.ruleIds) {
+      const _rr = edRules.find(r=>r.id===rid);
+      if(!_rr) continue;
+      if(_rr.nodeA===n.id) _sharedEnds.add(rid+'_a');
+      if(_rr.nodeB===n.id) _sharedEnds.add(rid+'_b');
+    }
+  }
   for(const r of edRules) {
     const isActive = (_edRulePanelId === r.id) || (_edRuleDrag?.ruleId === r.id);
     const lineColor = r.locked ? 'rgba(255,160,30,0.8)' : (isActive ? '#1a8cff' : 'rgba(30,140,255,0.7)');
@@ -9312,7 +9565,8 @@ function _edRulesDraw(ctx) {
     ctx.setLineDash([8/z, 5/z]);
     ctx.stroke();
     ctx.setLineDash([]);
-    for(const [ex, ey] of [[r.x1,r.y1],[r.x2,r.y2]]) {
+    for(const [ex, ey, key] of [[r.x1,r.y1,r.id+'_a'],[r.x2,r.y2,r.id+'_b']]) {
+      if(_sharedEnds.has(key)) continue; // dibujado por el nodo compartido
       ctx.beginPath();
       ctx.arc(ex, ey, _ED_RULE_R / z, 0, Math.PI*2);
       ctx.fillStyle = dotColor;
@@ -9322,6 +9576,26 @@ function _edRulesDraw(ctx) {
       ctx.stroke();
     }
   }
+  // Nodos compartidos: círculo naranja más grande
+  for(const n of edRuleNodes) {
+    const isActiveN = (_edRuleDrag?.nodeId === n.id);
+    const nodeColor = n.locked ? 'rgba(255,160,30,0.95)' : (isActiveN ? '#ff9900' : 'rgba(255,140,0,0.9)');
+    const nr = (_ED_RULE_R * 1.5) / z;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, nr, 0, Math.PI*2);
+    ctx.fillStyle = nodeColor;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2 / z;
+    ctx.stroke();
+    // Cruz interior (punto de fuga)
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1.2 / z;
+    ctx.beginPath();
+    ctx.moveTo(n.x - nr*0.5, n.y); ctx.lineTo(n.x + nr*0.5, n.y);
+    ctx.moveTo(n.x, n.y - nr*0.5); ctx.lineTo(n.x, n.y + nr*0.5);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -9329,14 +9603,26 @@ function _edRulesHit(wx, wy, isTouch) {
   const z = edCamera.z;
   const rPx  = (isTouch ? 22 : _ED_RULE_R) / z;
   const lPx  = (isTouch ? _ED_RULE_LINE_HIT_TOUCH : _ED_RULE_LINE_HIT) / z;
+  const nPx  = (_ED_RULE_R * 1.5) / z;
+  // Primero: nodos compartidos (prioridad máxima)
+  for(let i = edRuleNodes.length-1; i >= 0; i--) {
+    const n = edRuleNodes[i];
+    if(Math.hypot(wx-n.x, wy-n.y) <= nPx) return { nodeId: n.id };
+  }
+  // Luego: reglas individuales
   for(let i = edRules.length-1; i >= 0; i--) {
     const r = edRules[i];
-    if(Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
-    if(Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
-    const dx = r.x2-r.x1, dy = r.y2-r.y1, len2 = dx*dx+dy*dy;
-    if(len2 > 0) {
-      const t  = Math.max(0, Math.min(1, ((wx-r.x1)*dx+(wy-r.y1)*dy)/len2));
-      if(Math.hypot(wx-(r.x1+t*dx), wy-(r.y1+t*dy)) <= lPx) return { ruleId: r.id, part: 'line' };
+    // Extremo A — solo si no pertenece a un nodo compartido
+    if(!r.nodeA && Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
+    // Extremo B
+    if(!r.nodeB && Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
+    // Línea — solo si la regla NO está bloqueada (T21 parte 1)
+    if(!r.locked) {
+      const dx = r.x2-r.x1, dy = r.y2-r.y1, len2 = dx*dx+dy*dy;
+      if(len2 > 0) {
+        const t  = Math.max(0, Math.min(1, ((wx-r.x1)*dx+(wy-r.y1)*dy)/len2));
+        if(Math.hypot(wx-(r.x1+t*dx), wy-(r.y1+t*dy)) <= lPx) return { ruleId: r.id, part: 'line' };
+      }
     }
   }
   return null;
@@ -10654,6 +10940,7 @@ function edSaveProject(){
         return result;
       })(),
       _rules: edRules,
+      _ruleNodes: edRuleNodes,
     },
     updatedAt:new Date().toISOString(),
     cameraState: _camState,
@@ -10874,35 +11161,106 @@ function edMergeSelected(){
     newLL.color     = first.color     || '#000000';
     newLL.lineWidth = first.lineWidth || 3;
     newLL.opacity   = first.opacity   ?? 1;
-    newLL.fillColor = first.fillColor || 'none';
+    const _fillLayer = layers.find(l => l.fillColor && l.fillColor !== 'none');
+    newLL.fillColor = _fillLayer ? _fillLayer.fillColor : (first.fillColor || 'none');
+    const _allClosed = layers.every(l => l.type === 'shape' || (l.type === 'line' && l.closed));
 
-    const allContours = [];
-    for(const la of layers){
-      if(la.type === 'line'){
-        const raw = la.absPoints();
+    // Trabajar en píxeles workspace para respetar rotación y escala X/Y distintas.
+    // Los puntos locales están en normalizado (aprox 0-1) con pw/ph distintos.
+    const pw = edPageW(), ph = edPageH();
+    const mx = edMarginX(), my = edMarginY();
+
+    // Transforma un vector local (dx,dy) en normalizado al espacio px rotado del layer
+    function _rotPx(dx, dy, cos, sin) {
+      const lpx = dx * pw, lpy = dy * ph;
+      return { x: lpx * cos - lpy * sin, y: lpx * sin + lpy * cos };
+    }
+
+    // Devuelve array de contornos en px absolutos.
+    // Cada punto preserva: x, y (px), cp1, cp2 (px, opcionales), curve, cornerRadius (de cornerRadii)
+    function _layerToPixelContours(la) {
+      const contours = [];
+      if(la.type === 'line') {
+        const cx = mx + la.x * pw;
+        const cy = my + la.y * ph;
+        const rot = (la.rotation || 0) * Math.PI / 180;
+        const cos = Math.cos(rot), sin = Math.sin(rot);
+        const cr = la.cornerRadii || {};
         let cur = [];
-        for(const p of raw){
-          if(p === null){ if(cur.length){ allContours.push(cur); cur=[]; } }
-          else cur.push(p);
+        for(let _pi = 0; _pi < la.points.length; _pi++) {
+          const p = la.points[_pi];
+          if(p === null) {
+            if(cur.length) { contours.push(cur); cur = []; }
+          } else {
+            const rp = _rotPx(p.x, p.y, cos, sin);
+            const np = { x: cx + rp.x, y: cy + rp.y };
+            if(p.curve !== undefined) np.curve = p.curve;
+            if(p.cp1) { const c1 = _rotPx(p.cp1.x, p.cp1.y, cos, sin); np.cp1 = { x: cx + c1.x, y: cy + c1.y }; }
+            if(p.cp2) { const c2 = _rotPx(p.cp2.x, p.cp2.y, cos, sin); np.cp2 = { x: cx + c2.x, y: cy + c2.y }; }
+            // cornerRadii indexado por posición en la.points (incluyendo nulls)
+            if(cr[_pi]) np._cr = cr[_pi];
+            cur.push(np);
+          }
         }
-        if(cur.length) allContours.push(cur);
+        if(cur.length) contours.push(cur);
       } else {
-        allContours.push(_edShapeToAbsPoints(la));
+        // ShapeLayer → polígono en px (sin datos de curva)
+        const cx = mx + la.x * pw;
+        const cy = my + la.y * ph;
+        const rot = (la.rotation || 0) * Math.PI / 180;
+        const cos = Math.cos(rot), sin = Math.sin(rot);
+        const pts = [];
+        if(la.shape === 'ellipse') {
+          const n = 48, rw = la.width * pw / 2, rh = la.height * ph / 2;
+          for(let i = 0; i < n; i++) {
+            const ang = (i / n) * Math.PI * 2;
+            const lpx = Math.cos(ang) * rw, lpy = Math.sin(ang) * rh;
+            pts.push({ x: cx + lpx*cos - lpy*sin, y: cy + lpx*sin + lpy*cos });
+          }
+        } else {
+          const hw = la.width * pw / 2, hh = la.height * ph / 2;
+          for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]) {
+            pts.push({ x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos });
+          }
+        }
+        contours.push(pts);
+      }
+      return contours;
+    }
+
+    // Recoger todos los contornos en px
+    const allContoursPx = [];
+    for(const la of layers) {
+      for(const c of _layerToPixelContours(la)) allContoursPx.push(c);
+    }
+
+    // Centro del bbox en px
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const c of allContoursPx) for(const p of c) {
+      if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
+      if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+    }
+    const cxPx = (minX + maxX) / 2;
+    const cyPx = (minY + maxY) / 2;
+    newLL.x = (cxPx - mx) / pw;
+    newLL.y = (cyPx - my) / ph;
+    newLL.rotation = 0; // absorbida en los puntos
+    newLL.cornerRadii = {};
+
+    for(let ci = 0; ci < allContoursPx.length; ci++) {
+      if(ci > 0) { newLL.points.push(null); } // el null ocupa índice en points
+      for(const p of allContoursPx[ci]) {
+        const np = { x: (p.x - cxPx) / pw, y: (p.y - cyPx) / ph };
+        if(p.curve !== undefined) np.curve = p.curve;
+        if(p.cp1) np.cp1 = { x: (p.cp1.x - cxPx) / pw, y: (p.cp1.y - cyPx) / ph };
+        if(p.cp2) np.cp2 = { x: (p.cp2.x - cxPx) / pw, y: (p.cp2.y - cyPx) / ph };
+        // cornerRadii se indexa por posición en points INCLUYENDO nulls
+        if(p._cr) newLL.cornerRadii[newLL.points.length] = p._cr;
+        newLL.points.push(np);
       }
     }
-
-    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    for(const c of allContours) for(const p of c){
-      if(p.x < minX) minX = p.x; if(p.x > maxX) maxX = p.x;
-      if(p.y < minY) minY = p.y; if(p.y > maxY) maxY = p.y;
-    }
-    newLL.x = (minX + maxX) / 2;
-    newLL.y = (minY + maxY) / 2;
-    for(let ci = 0; ci < allContours.length; ci++){
-      if(ci > 0) newLL.points.push(null);
-      for(const p of allContours[ci]) newLL.points.push({ x: p.x - newLL.x, y: p.y - newLL.y });
-    }
-    newLL.closed = true;
+    newLL.closed = _allClosed;
+    newLL.grouped = true; // agrupado sin fusión booleana
     newLL._updateBbox();
     _finishMerge(newLL);
     return;
@@ -11258,6 +11616,8 @@ function edLoadProject(id){
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
     edRules = comic.editorData._rules || [];
+    edRuleNodes = comic.editorData._ruleNodes || [];
+    _edRuleNodeId = edRuleNodes.reduce((m,n)=>Math.max(m,n.id),0);
     edPages=(comic.editorData.pages||[]).map(pd=>{
       const orient = pd.orientation||comic.editorData.orientation||'vertical';
       const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
@@ -11277,6 +11637,7 @@ function edLoadProject(id){
   }else{
     edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
     edRules=[];
+    edRuleNodes=[];
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
@@ -12134,18 +12495,19 @@ function EditorView_init(){
   $('dd-shape-rect')?.addEventListener('click', () => _esbActivate('rect'));
   $('dd-shape-ellipse')?.addEventListener('click', () => _esbActivate('ellipse'));
   $('dd-shape-line')?.addEventListener('click', () => _esbActivate(null, 'draw'));
+  $('dd-shape-segment')?.addEventListener('click', () => _esbActivate(null, 'segment'));
 
   // T20: botón tipo-objeto con icono dinámico y popup selector
   function _esbGetActiveIcon() {
     if(edActiveTool === 'select') return '↖';
     if(edActiveTool === 'shape') return _edShapeType === 'ellipse' ? '◯' : '▭';
-    if(edActiveTool === 'line')  return '╱';
+    if(edActiveTool === 'line')  return _edLineType === 'segment' ? '├─┤' : '╱';
     return '▭';
   }
   function _esbSyncTool() {
     const t = edActiveTool;
     const shapesBtn = $('esb-shapes');
-    if(shapesBtn) shapesBtn.textContent = _esbGetActiveIcon();
+    if(shapesBtn) shapesBtn.innerHTML = _esbGetActiveIcon();
     $('esb-fill')?.classList.toggle('active', t === 'fill');
     const dot = $('esb-size-dot');
     if(dot){ const sz=edDrawSize; const _dz3=typeof edCamera!=='undefined'?edCamera.z:1; const d=Math.max(3,Math.min(22,Math.round(sz*_dz3))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
@@ -12163,14 +12525,15 @@ function EditorView_init(){
   _esbPopEl.innerHTML = `
     <button class="edb-shape-btn" id="esb-shape-rect"    title="Rectángulo" style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">▭</button>
     <button class="edb-shape-btn" id="esb-shape-ellipse" title="Elipse"      style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">◯</button>
-    <button class="edb-shape-btn" id="esb-shape-line"    title="Rectas"      style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">╱</button>
+    <button class="edb-shape-btn" id="esb-shape-line"    title="Pol&#237;gono"    style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">╱</button>
+    <button class="edb-shape-btn" id="esb-shape-segment" title="Segmento"    style="min-width:32px;padding:4px 6px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;"><svg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'><line x1='13' y1='3' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='10' y1='3' x2='13' y2='3' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='3' y1='10' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/></svg></button>
     <button class="edb-shape-btn" id="esb-shape-select"  title="Selección"   style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">↖</button>`;
 
   function _esbMarkActivePop(){
     _esbPopEl.querySelectorAll('.edb-shape-btn').forEach(b => b.style.background='transparent');
     let activeId;
     if(edActiveTool==='shape') activeId = _edShapeType==='ellipse' ? 'esb-shape-ellipse' : 'esb-shape-rect';
-    else if(edActiveTool==='line') activeId = 'esb-shape-line';
+    else if(edActiveTool==='line') activeId = _edLineType==='segment' ? 'esb-shape-segment' : 'esb-shape-line';
     else if(edActiveTool==='select') activeId = 'esb-shape-select';
     if(activeId){ const b=$(activeId); if(b) b.style.background='rgba(255,255,255,.15)'; }
   }
@@ -12188,9 +12551,14 @@ function EditorView_init(){
   });
   $('esb-shape-line')?.addEventListener('pointerup', e => {
     e.stopPropagation(); _esbClosePop();
-    // T19: confirmar línea en construcción antes de cambiar tipo
     if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
     _esbActivate(null, 'draw');
+    _esbSyncTool();
+  });
+  $('esb-shape-segment')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); _esbClosePop();
+    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
+    _esbActivate(null, 'segment');
     _esbSyncTool();
   });
   $('esb-shape-select')?.addEventListener('pointerup', e => {
