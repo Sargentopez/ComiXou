@@ -3472,6 +3472,8 @@ function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
   edPinching = true;
   _edPinchHappened = true; // marcar que hubo pinch — cancelar drag al soltar
+  // Cancelar timer de recorte pendiente — es un pinch, no un tap
+  if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
   edPinchDist0  = _pinchDist(window._edActivePointers);
   edPinchAngle0 = _pinchAngle(window._edActivePointers);
   // Centro del pinch en coordenadas de pantalla
@@ -3608,7 +3610,8 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom ──
-    const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer;
+    // En modo recorte el pinch siempre mueve la cámara (el layer está seleccionado pero no debe escalar)
+    const _haySeleccion = !_edCropMode && ((edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer);
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
