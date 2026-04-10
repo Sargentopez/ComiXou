@@ -166,8 +166,14 @@ document.getElementById('btnCapture').addEventListener('click', ()=>{
     canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
   }
   closeCamera();
+  // Enviar como dataURL — más compatible que Blob transferible entre frames
   canvas.toBlob(blob=>{
-    if(blob) parent.postMessage({type:'camera:photo', blob},'*',[blob]);
+    if(!blob) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      parent.postMessage({type:'camera:photo', dataUrl: reader.result}, '*');
+    };
+    reader.readAsDataURL(blob);
   },'image/jpeg',0.92);
 });
 
