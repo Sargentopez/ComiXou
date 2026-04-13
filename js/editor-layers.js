@@ -7,9 +7,57 @@ let _lyDragOver = null;
 let _lyDragType = null; // 'text' | 'image'
 let _lyUidCounter = 0;  // IDs únicos estables para animación FLIP
 
+/* ── Doble tap en miniatura ──
+   lastTapTime/lastTapEl se comparten por closure en cada listener.
+   Se detecta como dos pointerup sobre el mismo elemento en < 350 ms. */
+function _lyBindThumbDoubleTap(thumb, realIdxGetter) {
+  let _lastTime = 0;
+  thumb.addEventListener('pointerup', e => {
+    const now = Date.now();
+    const isDbl = now - _lastTime < 350;
+    _lastTime = now;
+    if (!isDbl) return;
+    // Evitar que el simple-tap handler cierre el overlay también
+    e.stopImmediatePropagation();
+    const idx = typeof realIdxGetter === 'function' ? realIdxGetter() : realIdxGetter;
+    edSelectedIdx = idx;
+    edRedraw();
+    // Cerrar panel de capas (con animación) y, al terminar, abrir panel del objeto
+    const ov = document.getElementById('edLayersOverlay');
+    if (ov) {
+      ov.classList.remove('open');
+      setTimeout(() => {
+        ov.remove();
+        _lySetCanvasTouch(true);
+        if (typeof edRedraw === 'function') edRedraw();
+        if (typeof _edHandleDoubleTap === 'function') _edHandleDoubleTap(idx);
+      }, 250);
+    } else {
+      if (typeof _edHandleDoubleTap === 'function') _edHandleDoubleTap(idx);
+    }
+  });
+}
+
 /* ──────────────────────────────────────────
    ABRIR / CERRAR
 ────────────────────────────────────────── */
+/* Abre el panel de propiedades del objeto idx tras cerrar el overlay de capas */
+function _lyOpenLayerPanel(idx) {
+  const la = typeof edLayers !== 'undefined' ? edLayers[idx] : null;
+  if (!la) return;
+  edSelectedIdx = idx;
+  edRedraw();
+  if (la.type === 'draw' || la.type === 'stroke' || la.type === 'shape' || la.type === 'line') {
+    // Para tipos editables: usar _edHandleDoubleTap para abrir el panel correcto
+    if (typeof _edHandleDoubleTap === 'function') _edHandleDoubleTap(idx);
+  } else {
+    // image, text, bubble → panel de propiedades estándar
+    if (typeof _edDrawLockUI === 'function') _edDrawLockUI();
+    if (typeof _edPropsOverlayShow === 'function') _edPropsOverlayShow();
+    if (typeof edRenderOptionsPanel === 'function') edRenderOptionsPanel('props');
+  }
+}
+
 function edOpenLayers() {
   if (document.getElementById('edLayersOverlay')) return;
 
@@ -204,12 +252,18 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   thumb.addEventListener('pointerup', e => {
     // Solo seleccionar si no hubo drag
     if (!row.classList.contains('was-dragged')) {
-      edSelectedIdx = realIdx;
-      edRedraw();
-      edCloseLayers();
+      const _idx = realIdx;
+      const ov = document.getElementById('edLayersOverlay');
+      if (ov) {
+        ov.classList.remove('open');
+        setTimeout(() => { ov.remove(); _lySetCanvasTouch(true); _lyOpenLayerPanel(_idx); }, 250);
+      } else {
+        _lyOpenLayerPanel(_idx);
+      }
     }
     row.classList.remove('was-dragged');
   });
+  _lyBindThumbDoubleTap(thumb, () => realIdx);
   row.appendChild(thumb);
 
   /* Nombre */
@@ -304,12 +358,18 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : isShapeType ? 'Objeto · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
   thumb.addEventListener('pointerup', () => {
     if (!item.classList.contains('was-dragged')) {
-      edSelectedIdx = realIdx;
-      edRedraw();
-      edCloseLayers();
+      const _idx = realIdx;
+      const ov = document.getElementById('edLayersOverlay');
+      if (ov) {
+        ov.classList.remove('open');
+        setTimeout(() => { ov.remove(); _lySetCanvasTouch(true); _lyOpenLayerPanel(_idx); }, 250);
+      } else {
+        _lyOpenLayerPanel(_idx);
+      }
     }
     item.classList.remove('was-dragged');
   });
+  _lyBindThumbDoubleTap(thumb, () => realIdx);
   item.appendChild(thumb);
 
   /* Info */

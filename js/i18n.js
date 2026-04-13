@@ -20,7 +20,7 @@ const TRANSLATIONS = {
     // Index / filtros
     filterBtn:        "Buscador ▾",
     novedades:        "Novedades",
-    create:           "Crear",
+    create:           "Mis Creaciones",
     byGenre:          "Género ›",
     byAuthor:         "Autor ›",
     noGenres:         "Sin géneros disponibles",

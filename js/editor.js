@@ -36,6 +36,10 @@ let _edLineType   = 'draw';   // 'draw' | 'select'
 let _edLineFusionId = null;   // T1: ID de fusión — LineLayer del mismo ID se fusionan al OK
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
+let _edPenPendingStroke = null; // punto inicial diferido para lápiz
+const _ED_PEN_MIN_PRESSURE = 0.05; // tldraw/perfect-freehand: presión mínima para considerar contacto real
+let _edPenLowPressureTimer = null; // timer de 250ms para presión baja — si expira, termina el trazo
+let _edPenCanDraw = false;         // true cuando se ha confirmado presión suficiente al menos una vez
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 // Icono simetría (T14): triángulo izq (cateto horiz + cateto vertical derecho) | gap | línea discontinua | gap | triángulo der (espejo)
@@ -109,6 +113,7 @@ let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segm
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
+let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 // ── Multi-selección ──
@@ -4653,7 +4658,9 @@ function edOnStart(e){
       }, 120);
       return;
     }
-    // PC/ratón: inmediato
+    // PC/ratón: inmediato — verificar buttons===1 (perfect-freehand pattern)
+    // Con tabletas Wacom, algunos eventos pointerdown llegan con buttons=0 (hover spurio)
+    if(e.buttons === 0 && e.pointerType === 'pen') return; // ignorar hover sin contacto
     edStartPaint(e);return;
   }
   if(edActiveTool==='shape'){
@@ -6002,11 +6009,12 @@ function edOnEnd(e){
       if(_rDragged && !_rDragged.nodeA && !_rDragged.nodeB) {
         const _ex = _finDrag.part === 'a' ? _rDragged.x1 : _rDragged.x2;
         const _ey = _finDrag.part === 'a' ? _rDragged.y1 : _rDragged.y2;
-        // Umbral: 80% de solapamiento = distancia entre centros < 20% del diámetro
+        // Umbral de fusión: ampliado en táctil (dedo) para facilitar agrupamiento
+        const _isFinDragTouch = edLastPointerIsTouch;
         const _rPx = (_ED_RULE_R * 2) / Math.max(0.1, edCamera.z);
-        const _fusionThresh = _rPx * 0.2;
-        // Radio del nodo compartido para hit de incorporación
-        const _nPx = (_ED_RULE_R * 1.5) / Math.max(0.1, edCamera.z);
+        const _fusionThresh = _isFinDragTouch ? (28 / Math.max(0.1, edCamera.z)) : _rPx * 0.2;
+        // Radio del nodo compartido para hit de incorporación (también ampliado en táctil)
+        const _nPx = _isFinDragTouch ? (32 / Math.max(0.1, edCamera.z)) : (_ED_RULE_R * 1.5) / Math.max(0.1, edCamera.z);
         let _fused = false;
 
         // CASO A: arrastrar sobre un nodo compartido existente → incorporar al grupo
@@ -7274,14 +7282,46 @@ function edStartPaint(e){
     const c = edCoords(_eTmp);
     const _baseBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
     const _sizeBS = Math.max(1, Math.round(_baseBS * _pres));
-    dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
-    edRedraw();
+    _edPenPendingStroke = null;
+    if(e.pointerType === 'pen' && _cr4base === 0){
+      // Lápiz gráfico: NUNCA dibujar punto en pointerdown.
+      // Además: si pressure < umbral mínimo, ignorar el evento completamente.
+      // Patrón documentado de tldraw (PR #5693): pressure < 0.05 = hover espurio.
+      // Inicio siempre con NoDot — el dibujo real empieza en el primer pointermove
+      // con presión suficiente (lógica en edContinuePaint)
+      dl.beginStrokeNoDot(c.nx, c.ny);
+    } else {
+      dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
+      edRedraw();
+    }
     _edOffsetFirstMove = false;
   }
   if(!e._skipMoveBrush) edMoveBrush(e);
 }
 function edContinuePaint(e){
   if(!edPainting) return;
+  // Máquina de estados de presión para lápiz gráfico
+  if(e.pointerType === 'pen'){
+    if(e.buttons === 0){ edSaveDrawData(); return; } // hover sin contacto
+    const _penP2 = e.pressure ?? 0;
+    if(_penP2 >= _ED_PEN_MIN_PRESSURE){
+      // Presión suficiente: cancelar timer de baja presión y permitir dibujo
+      if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
+      _edPenCanDraw = true;
+    } else {
+      // Presión baja: si ya estábamos dibujando, iniciar timer de 250ms
+      if(_edPenCanDraw && !_edPenLowPressureTimer){
+        _edPenLowPressureTimer = setTimeout(() => {
+          _edPenLowPressureTimer = null;
+          _edPenCanDraw = false;
+          edSaveDrawData();
+        }, 250);
+      }
+      // No dibujar en este evento — esperar a que suba la presión o expire el timer
+      edMoveBrush(e);
+      return;
+    }
+  }
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
   if(_edFromSaved){ _edFromSaved = false; edMoveBrush(e); return; }
@@ -7297,6 +7337,7 @@ function edContinuePaint(e){
     edRedraw();
     return;
   }
+
   if(_edOffsetFirstMove){
     _edOffsetFirstMove = false;
     const _cr4f = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
@@ -7313,6 +7354,9 @@ function edContinuePaint(e){
   edMoveBrush(e);
 }
 function edSaveDrawData(){
+  _edPenPendingStroke = null;
+  if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
+  _edPenCanDraw = false;
   edPainting = false;
   _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
   // NO llamar edPushHistory aquí — el historial global se guarda al congelar
@@ -9386,6 +9430,11 @@ function edRenderOptionsPanel(mode){
       _edActivateLineTool();
     });
     $('pp-line-toggle-close')?.addEventListener('click',()=>{ la.closed=!la.closed; edRedraw(); edRenderOptionsPanel('props'); });
+    $('pp-rot')?.addEventListener('input',e=>{
+      const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la2)return;
+      la2.rotation=parseFloat(e.target.value)||0;
+      edRedraw();
+    });
     $('pp-opacity')?.addEventListener('input',e=>{
       la.opacity = e.target.value/100;
       const v=$('pp-opacity-val'); if(v) v.textContent=e.target.value+'%';
@@ -11011,6 +11060,20 @@ function _edBubbleTailDir(l){
     return ex > 0 ? 'right' : 'left';
   }
 }
+let _edCloudSavingStart = 0;
+let _edCloudSavingTimer = null;
+function _edCloudSavingUpdateBadge() {
+  if (!_edCloudSaving) return;
+  const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
+  const badge = document.getElementById('_edCloudSavingBadge');
+  if (badge) badge.textContent = `☁️ Guardando en nube... ${elapsed}s`;
+  _edCloudSavingTimer = setTimeout(_edCloudSavingUpdateBadge, 1000);
+}
+function _edCloudSavingStop() {
+  if (_edCloudSavingTimer) { clearTimeout(_edCloudSavingTimer); _edCloudSavingTimer = null; }
+  const badge = document.getElementById('_edCloudSavingBadge');
+  if (badge) badge.remove();
+}
 async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
@@ -11038,6 +11101,9 @@ async function edCloudSave() {
 
   const btn = $('edCloudSaveBtn');
   if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+  _edCloudSaving = true;
+  _edCloudSavingStart = Date.now();
+  _edCloudSavingUpdateBadge();
 
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
@@ -11054,6 +11120,8 @@ async function edCloudSave() {
     edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
     console.error('edCloudSave:', err);
   } finally {
+    _edCloudSaving = false;
+    _edCloudSavingStop();
     if (btn) { btn.textContent = '☁️'; btn.disabled = false; }
   }
 }
@@ -11595,7 +11663,7 @@ function edSerLayer(l){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
       _hasText:!!(l.text&&l.text!=='Escribe aquí'),
       text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
-      backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
+      backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
       tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
       tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
       padding:l.padding||15,
@@ -12219,6 +12287,8 @@ function edOpenProjectModal(){
   $('edMGenre').value=edProjectMeta.genre;
   $('edMNavMode').value=edProjectMeta.navMode;
   const edMSocial=$('edMSocial'); if(edMSocial) edMSocial.value=edProjectMeta.social||'';
+  const _titleEl = document.querySelector('#edProjectModal .ed-modal-title');
+  if(_titleEl) _titleEl.textContent = 'Editar datos de la obra';
   $('edProjectModal')?.classList.add('open');
 }
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
@@ -12852,6 +12922,47 @@ function EditorView_init(){
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click', () => {
+    // Si hay guardado en la nube en curso, avisar con diálogo bloqueante
+    if (_edCloudSaving) {
+      const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
+      const dlgCloud = document.createElement('div');
+      dlgCloud.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
+      dlgCloud.innerHTML = `
+        <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+          <div style="font-size:1.8rem;margin-bottom:12px">⚠️</div>
+          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">Guardado en nube en curso</p>
+          <p id="_edCloudSavingBadge" style="font-size:.88rem;color:#e67e22;font-weight:700;margin-bottom:8px">☁️ Guardando en nube... ${elapsed}s</p>
+          <p style="font-size:.85rem;color:#666;margin-bottom:24px">Salir del editor antes de que termine de guardarse en la nube guardará una copia defectuosa.</p>
+          <div style="display:flex;gap:10px;justify-content:center">
+            <button id="_edCloudExitAnyway" style="flex:1;padding:10px;border:1.5px solid #e74c3c;border-radius:10px;background:#fff;color:#e74c3c;font-weight:700;cursor:pointer;font-size:.85rem">Salir igualmente</button>
+            <button id="_edCloudWait" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">Esperar</button>
+          </div>
+        </div>`;
+      document.body.appendChild(dlgCloud);
+      // Actualizar contador en el diálogo mientras está abierto
+      const _dlgTimer = setInterval(() => {
+        const b = document.getElementById('_edCloudSavingBadge');
+        if (b && _edCloudSaving) {
+          const s = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
+          b.textContent = `☁️ Guardando en nube... ${s}s`;
+        } else if (!_edCloudSaving) {
+          clearInterval(_dlgTimer);
+          dlgCloud.remove();
+          Router.go('my-comics');
+        }
+      }, 500);
+      document.getElementById('_edCloudWait').onclick = () => {
+        clearInterval(_dlgTimer);
+        dlgCloud.remove();
+      };
+      document.getElementById('_edCloudExitAnyway').onclick = () => {
+        clearInterval(_dlgTimer);
+        dlgCloud.remove();
+        Router.go('my-comics');
+      };
+      return;
+    }
+
     const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
     if (!hasUnsaved) { Router.go('my-comics'); return; }
 
