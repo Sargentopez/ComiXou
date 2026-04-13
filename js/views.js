@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v15.66</footer>
+    <footer class="app-version">v15.85</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -228,7 +228,6 @@ Router.register('editor', {
                 <div class="ed-submenu" id="dd-imagen-sub">
                   <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
                   <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
-                  <button class="ed-dropdown-item" id="dd-layers">Capas (PSD/XCF/TIFF)</button>
                 </div>
               </div>
               <div class="ed-dropdown-submenu">
@@ -281,6 +280,8 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="rules">Guías ▾</button>
             <div class="ed-dropdown" id="dd-rules">
               <button class="ed-dropdown-item" id="dd-rule-add">＋ Añadir guía</button>
+              <button class="ed-dropdown-item" id="dd-rule-toggle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" style="vertical-align:middle;margin-right:5px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg><span id="dd-rule-toggle-txt">Ocultar guías</span></button>
+              <button class="ed-dropdown-item" id="dd-rule-lock-all">🔒 Bloquear guías</button>
               <button class="ed-dropdown-item" id="dd-rule-clear" style="color:#c00">✕ Borrar guías</button>
             </div>
           </div>
@@ -488,8 +489,7 @@ Router.register('editor', {
     </div>
 
     <!-- Inputs ocultos -->
-    <input type="file" id="edFileGallery" accept="image/*,.gif,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
-    <input type="file" id="edFileLayers" accept=".psd,.xcf,.tif,.tiff" style="display:none">
+    <input type="file" id="edFileGallery" accept="image/*,.psd,.xcf,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">

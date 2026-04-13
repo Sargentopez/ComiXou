@@ -366,6 +366,9 @@ a { color: inherit; text-decoration: none; }
 .home-logo-area {
   display: flex; align-items: center;
   flex-shrink: 0;
+  position: relative;
+  top: 8px;
+  align-self: flex-start;
 }
 .home-logo-area .logo-main { font-size: 1.8rem; line-height: 1; }
 .logo-img-link { display: flex; align-items: center; }

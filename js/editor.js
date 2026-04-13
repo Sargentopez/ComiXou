@@ -9,6 +9,8 @@ let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
 // ── Sistema de Reglas (T29) ──
 let edRules = [];          // array de reglas de la hoja actual
+let _edCanvasTop = 0;      // top del canvas en viewport — cacheado en edFitCanvas
+let edRulesHidden = false; // true = guías ocultas (invisibles, no seleccionables, sin snap)
 let _edRuleId = 0;         // contador para IDs únicos
 let _edRuleDrag = null;    // { ruleId, part:'a'|'b'|'line', offX, offY } — drag activo
 let edRuleNodes = [];      // nodos compartidos entre reglas: {id, x, y, ruleIds, locked}
@@ -189,12 +191,10 @@ function _edSyncSizeDots(){
 }
 // ¿Necesita scrollbars? (el lienzo no cabe entero en el viewport)
 function edNeedsScroll(){
+  // En PC: siempre mostrar barras para permitir navegación a cualquier zoom
   if(!edCanvas) return { h: false, v: false };
-  const availW = edCanvas.width, availH = edCanvas.height;
-  const pw = edPageW(), ph = edPageH();
-  const lienzoPxW = pw * edCamera.z;
-  const lienzoPxH = ph * edCamera.z;
-  return { h: lienzoPxW > availW + 1, v: lienzoPxH > availH + 1 };
+  if(window._edIsTouch) return { h: false, v: false };
+  return { h: true, v: true };
 }
 
 /* ══════════════════════════════════════════
@@ -739,12 +739,16 @@ class DrawLayer extends BaseLayer {
     ctx.drawImage(this._canvas, 0, 0);
     ctx.restore();
   }
-  contains(px, py){
-    // DrawLayer: pixel-hit con zona expandida para facilitar selección
+  contains(px, py, exactMode){
+    // DrawLayer: pixel-hit sobre el canvas del workspace completo.
+    // exactMode=true → solo píxel exacto (R=1 para antialiasing); usado en la primera
+    //   pasada de selección para no "ganar" sobre capas inferiores en huecos.
+    // exactMode=false/undefined → radio R=10 para facilitar selección cuando no hay
+    //   ningún objeto exacto bajo el toque.
     try {
       const wx = Math.round(edMarginX() + px * edPageW());
       const wy = Math.round(edMarginY() + py * edPageH());
-      const R = 10; // radio de expansión en px del workspace
+      const R = exactMode ? 1 : 10;
       const x0=Math.max(0,wx-R), y0=Math.max(0,wy-R);
       const x1=Math.min(this._canvas.width-1,wx+R);
       const y1=Math.min(this._canvas.height-1,wy+R);
@@ -1555,6 +1559,7 @@ function edFitCanvas(resetCamera){
   edCanvas.style.position = 'absolute';
   edCanvas.style.left = '0';
   edCanvas.style.top  = totalBarsH + 'px';
+  _edCanvasTop = totalBarsH; // cachear para edCoords
   edCanvas.style.margin = '0';
   // Mantener el canvas de dibujo libre sincronizado en posición y tamaño
   if(edDrawCanvas){
@@ -2580,6 +2585,11 @@ function _edCropUndoHistory() {
   if (_edCropHistIdx <= 0) return; // en el estado inicial (vacío) — no deshacer más
   _edCropHistIdx--;
   _edCropPts = _edCropHistory[_edCropHistIdx].map(p => ({x: p.x, y: p.y}));
+  // Resetear estado de drag para que el usuario pueda volver a interactuar
+  _edCropDragIdx = -1;
+  _edCropDragging = false;
+  _edCropLastTapSeg = -1;
+  _edCropLastTapTime = 0;
   _edCropRenderPanel();
   edRedraw();
 }
@@ -2615,6 +2625,7 @@ function _edCropRenderPanel() {
 </div>`;
   panel.classList.add('open');
   panel.dataset.mode = 'crop';
+  edFitCanvas(); // actualizar _edCanvasTop
   $('crop-undo')?.addEventListener('click', _edCropUndoHistory);
   $('crop-redo')?.addEventListener('click', _edCropRedoHistory);
   $('crop-cancel')?.addEventListener('click', _edCancelCrop);
@@ -2625,6 +2636,7 @@ function _edCropRenderPanel() {
 
 function _edCancelCrop() {
   const _wasDrawLayer = _edCropLayer && _edCropLayer.type === 'draw';
+  const _cancelSelIdx = edSelectedIdx; // conservar índice seleccionado
   _edCropMode         = false;
   _edCropLayer        = null;
   _edCropPts          = [];
@@ -2634,12 +2646,23 @@ function _edCancelCrop() {
   _edCropLastTapTime  = 0;
   _edCropHistory      = [];
   _edCropHistIdx      = -1;
-  if (!_wasDrawLayer) _edDrawUnlockUI();
-  _edPropsOverlayHide();
+  // Limpiar punteros fantasma
+  if (window._edActivePointers) window._edActivePointers.clear();
+  edPinching = false; edPinchScale0 = null;
+  clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
   if (_wasDrawLayer) {
+    // Draw: ya tenía UI bloqueada por el dibujo — restaurar panel draw
     edRenderOptionsPanel('draw');
   } else {
-    edRenderOptionsPanel('props');
+    // Imagen/Stroke: restaurar selección y panel props con overlay
+    _edDrawUnlockUI();
+    _edPropsOverlayHide();
+    edSelectedIdx = _cancelSelIdx; // asegurar que sigue seleccionado
+    if (edSelectedIdx >= 0 && edSelectedIdx < edLayers.length) {
+      _edDrawLockUI();
+      _edPropsOverlayShow();
+      edRenderOptionsPanel('props');
+    }
   }
   edRedraw();
 }
@@ -3482,9 +3505,13 @@ function edDeleteSelected(){
    ══════════════════════════════════════════ */
 function edCoords(e){
   const src = e.touches ? e.touches[0] : e;
-  // Coordenadas de pantalla (el canvas cubre todo el viewport)
+  // sx: canvas siempre tiene left=0 en el shell, clientX no necesita ajuste.
+  // sy: usar _edCanvasTop cacheado síncronamente en edFitCanvas.
+  //     Más fiable que style.top (puede quedar desactualizado entre layout
+  //     y el siguiente evento) y que getBoundingClientRect (puede incluir
+  //     scroll del contenedor en algunos navegadores Android).
   const sx = src.clientX;
-  const sy = src.clientY - parseFloat(edCanvas.style.top || 0);
+  const sy = src.clientY - _edCanvasTop;
   // Convertir pantalla → workspace
   const w = edScreenToWorld(sx, sy);
   // Convertir workspace → coordenadas de página (0-1)
@@ -3627,7 +3654,7 @@ function edPinchMove(e) {
         // usando el mismo método que edCoords (resta el top del canvas)
         const pw=edPageW(), ph=edPageH();
         const z=edPinchCamera0.z;
-        const canvasTop = parseFloat(edCanvas?.style.top || 0);
+        const canvasTop = _edCanvasTop;
         const dxScreen = ctr.x - edPinchCenter0.x;
         const dyScreen = (ctr.y - canvasTop) - (edPinchCenter0.y - canvasTop);
         const dxNorm = dxScreen / (pw * z);
@@ -3724,8 +3751,7 @@ function _edGearPos(la){
   const wy = edMarginY() + (la.y - la.height/2) * ph;
   // Convertir workspace → screen con la cámara
   const s = edWorldToScreen(wx, wy);
-  const canvasTop = parseFloat(edCanvas.style.top || 0);
-  return { cx: s.x, ty: s.y + canvasTop };
+  return { cx: s.x, ty: s.y + _edCanvasTop };
 }
 
 // Gear icon eliminado — se usa doble toque / long press
@@ -3754,10 +3780,6 @@ function _edScrollbarsDraw(){
   if(window._edIsTouch){ _edHideHTMLScrollbars(); return; }
   if(!edCanvas) return;
   const W = edCanvas.width, H = edCanvas.height;
-  const wsW = ED_CANVAS_W * edCamera.z;
-  const wsH = ED_CANVAS_H * edCamera.z;
-  const visLeft = -edCamera.x;
-  const visTop  = -edCamera.y;
 
   const hBar   = document.getElementById('ed-hscroll');
   const hThumb = document.getElementById('ed-hscroll-thumb');
@@ -3765,27 +3787,44 @@ function _edScrollbarsDraw(){
   const vThumb = document.getElementById('ed-vscroll-thumb');
   if(!hBar || !vBar) return;
 
-  const needH = wsW > W + 1;
-  const needV = wsH > H + 1;
-  hBar.style.display = needH ? 'block' : 'none';
-  vBar.style.display = needV ? 'block' : 'none';
+  // Siempre visibles en PC
+  hBar.style.display = 'block';
+  vBar.style.display = 'block';
 
-  if(needH && hThumb && wsW > 0){
-    const trackW = W - (needV ? 12 : 0);
-    const ratio  = Math.min(1, W / wsW);
-    const thumbW = Math.max(30, trackW * ratio);
-    const maxScroll = wsW - W;
-    const frac = maxScroll > 0 ? Math.max(0, Math.min(1, visLeft / maxScroll)) : 0;
+  // Espacio navegable: workspace escalado + margen = 40% del canvas en cada lado
+  // Esto permite hacer pan más allá de los bordes del workspace a cualquier zoom.
+  const MARGIN_RATIO = 0.4;
+  const wsW = ED_CANVAS_W * edCamera.z;
+  const wsH = ED_CANVAS_H * edCamera.z;
+  const marginX = W * MARGIN_RATIO;
+  const marginY = H * MARGIN_RATIO;
+  // Espacio total navegable en px de pantalla
+  const totalNavW = wsW + marginX * 2;
+  const totalNavH = wsH + marginY * 2;
+  // Posición actual del borde izquierdo/superior del canvas en el espacio navegable
+  // camera.x = desplazamiento del workspace respecto al canvas → workspace empieza en camera.x
+  // En el espacio navegable, el origen del workspace está en marginX
+  // posNav = marginX - camera.x  (cuánto del espacio navegable está a la izquierda del viewport)
+  const posNavX = marginX - edCamera.x;
+  const posNavY = marginY - edCamera.y;
+
+  const trackW = W - 12; // 12px para la barra vertical
+  const trackH = H - 12; // 12px para la barra horizontal
+
+  if(hThumb && totalNavW > 0){
+    const ratio  = Math.min(1, W / totalNavW);
+    const thumbW = Math.max(20, trackW * ratio);
+    const maxPos = Math.max(0, totalNavW - W);
+    const frac   = maxPos > 0 ? Math.max(0, Math.min(1, posNavX / maxPos)) : 0;
     hThumb.style.left  = (frac * (trackW - thumbW)) + 'px';
     hThumb.style.width = thumbW + 'px';
   }
 
-  if(needV && vThumb && wsH > 0){
-    const trackH = H - (needH ? 12 : 0);
-    const ratio  = Math.min(1, H / wsH);
-    const thumbH = Math.max(30, trackH * ratio);
-    const maxScroll = wsH - H;
-    const frac = maxScroll > 0 ? Math.max(0, Math.min(1, visTop / maxScroll)) : 0;
+  if(vThumb && totalNavH > 0){
+    const ratio  = Math.min(1, H / totalNavH);
+    const thumbH = Math.max(20, trackH * ratio);
+    const maxPos = Math.max(0, totalNavH - H);
+    const frac   = maxPos > 0 ? Math.max(0, Math.min(1, posNavY / maxPos)) : 0;
     vThumb.style.top    = (frac * (trackH - thumbH)) + 'px';
     vThumb.style.height = thumbH + 'px';
   }
@@ -3802,21 +3841,29 @@ function _edInitHTMLScrollbars(){
   if(window._edIsTouch) return;
   let _sbAxis = null, _sbDragStart = 0, _sbCamStart = 0;
 
+  const MARGIN_RATIO_SB = 0.4;
   function getMetrics(axis){
     if(!edCanvas) return null;
     const W = edCanvas.width, H = edCanvas.height;
     const wsW = ED_CANVAS_W * edCamera.z;
     const wsH = ED_CANVAS_H * edCamera.z;
     if(axis === 'h'){
-      const needV = wsH > H + 1;
-      const trackW = W - (needV ? 12 : 0);
-      const thumbW = Math.max(30, trackW * Math.min(1, W / wsW));
-      return { trackLen: trackW, thumbLen: thumbW, maxScroll: Math.max(0, wsW - W), camVal: -edCamera.x };
+      const marginX   = W * MARGIN_RATIO_SB;
+      const totalNavW = wsW + marginX * 2;
+      const trackW    = W - 12;
+      const thumbW    = Math.max(20, trackW * Math.min(1, W / totalNavW));
+      const maxPos    = Math.max(0, totalNavW - W);
+      // camVal: posición actual en el espacio navegable (cuánto scroll hay aplicado)
+      const camVal    = marginX - edCamera.x;
+      return { trackLen: trackW, thumbLen: thumbW, maxScroll: maxPos, camVal, marginX };
     } else {
-      const needH = wsW > W + 1;
-      const trackH = H - (needH ? 12 : 0);
-      const thumbH = Math.max(30, trackH * Math.min(1, H / wsH));
-      return { trackLen: trackH, thumbLen: thumbH, maxScroll: Math.max(0, wsH - H), camVal: -edCamera.y };
+      const marginY   = H * MARGIN_RATIO_SB;
+      const totalNavH = wsH + marginY * 2;
+      const trackH    = H - 12;
+      const thumbH    = Math.max(20, trackH * Math.min(1, H / totalNavH));
+      const maxPos    = Math.max(0, totalNavH - H);
+      const camVal    = marginY - edCamera.y;
+      return { trackLen: trackH, thumbLen: thumbH, maxScroll: maxPos, camVal, marginY };
     }
   }
 
@@ -3824,8 +3871,9 @@ function _edInitHTMLScrollbars(){
     const m = getMetrics(axis);
     if(!m) return;
     const clamped = Math.max(0, Math.min(m.maxScroll, val));
-    if(axis === 'h') edCamera.x = -clamped;
-    else             edCamera.y = -clamped;
+    // Convertir posición navegable → camera
+    if(axis === 'h') edCamera.x = (m.marginX !== undefined ? m.marginX : 0) - clamped;
+    else             edCamera.y = (m.marginY !== undefined ? m.marginY : 0) - clamped;
     edRedraw();
   }
 
@@ -4071,75 +4119,9 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
 function edOnStart(e){
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
   if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
-  // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
-  // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
-  const tgt = e.target;
-  // Ignorar si el click NO está dentro de editorShell (modales, header, etc.)
-  if(!tgt.closest('#editorShell')) return;
-  // Si la barra de menús está bloqueada (draw-active), ignorar clicks en su zona
-  // aunque pointer-events:none haga que el target sea el elemento de debajo
-  const _menuBar=$('edMenuBar');
-  if(_menuBar && $('editorShell')?.classList.contains('draw-active')){
-    const _mbr=_menuBar.getBoundingClientRect();
-    if(e.clientX>=_mbr.left&&e.clientX<=_mbr.right&&e.clientY>=_mbr.top&&e.clientY<=_mbr.bottom) return;
-  }
-  // Ignorar elementos de UI dentro del editor
-  const isUI = tgt.closest('#edMenuBar')      ||
-               tgt.closest('#edTopbar')       ||
-               tgt.closest('#edOptionsPanel') ||
-               tgt.closest('.ed-fulloverlay') ||
-               tgt.closest('.ed-dropdown')    ||
-               tgt.closest('#edGearIcon')     ||
-               tgt.closest('#edBrushCursor')  ||
-               tgt.closest('.ed-float-btn')   ||
-               tgt.closest('#edDrawBar')      ||
-               tgt.closest('#edShapeBar')     ||
-               tgt.closest('#edb-size-pop')   ||
-               tgt.closest('#esb-slider-panel') ||
-               tgt.closest('#edb-palette-pop') ||
-               tgt.closest('#ed-hsl-picker')   ||
-               tgt.closest('#editorViewer')   ||
-               tgt.closest('#edProjectModal') ||
-               tgt.closest('#edConfirmModal');
-  if(isUI) return;
-
-  // ── MODO RECORTE: interceptar todos los toques en el canvas ──
-  if (_edCropMode) {
-    if (e.pointerType === 'touch') {
-      // Registrar el puntero ANTES de cualquier return para que el pinch funcione
-      if(!window._edActivePointers) window._edActivePointers = new Map();
-      window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-
-      if (window._edActivePointers.size >= 2) {
-        // Segundo dedo: cancelar timer de recorte y dejar pasar al pinch
-        clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
-        // Caer al bloque de pinch más abajo — NO hacer return
-      } else {
-        // Primer dedo: esperar 120ms para detectar si llega segundo dedo
-        const _eSavedCrop = e;
-        window._edCropTouchMoved = false;
-        clearTimeout(window._edCropTouchTimer);
-        window._edCropTouchTimer = setTimeout(() => {
-          window._edCropTouchTimer = null;
-          if (!_edCropMode) return;
-          if (window._edActivePointers && window._edActivePointers.size > 1) return;
-          if (window._edCropTouchMoved) return;
-          const _cc = edCoords(_eSavedCrop);
-          const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-          if (_nodeHit) return;
-          _edCropHandleCanvasTap(_cc.nx, _cc.ny);
-        }, 120);
-        return; // primer dedo espera — ya está registrado en _edActivePointers
-      }
-    } else {
-      // PC/ratón: inmediato
-      const _cc = edCoords(e);
-      const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-      if (_nodeHit) return;
-      if (_edCropHandleCanvasTap(_cc.nx, _cc.ny)) return;
-    }
-  }
-
+  // ── REGLAS: prioridad máxima — siempre antes de cualquier bloqueo de UI ──
+  // (Las guías deben funcionar aunque draw-active esté activo o el panel props
+  //  esté abierto. Igual que el borde del lienzo: siempre por encima de todo.)
   // ── REGLAS: si hay modo mover activo desde el panel, absorber el primer toque ──
   if(_edRuleDrag && _edRuleDrag.part === 'line' && _edRuleDrag.offX === undefined) {
     // El movimiento real empieza en edOnMove; aquí solo bloqueamos selección de objetos
@@ -4244,6 +4226,77 @@ function edOnStart(e){
       };
       edRedraw();
       return;
+    }
+  }
+
+  
+
+  // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
+  // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
+  const tgt = e.target;
+  // Ignorar si el click NO está dentro de editorShell (modales, header, etc.)
+  if(!tgt.closest('#editorShell')) return;
+  // Si la barra de menús está bloqueada (draw-active), ignorar clicks en su zona
+  // aunque pointer-events:none haga que el target sea el elemento de debajo
+  const _menuBar=$('edMenuBar');
+  if(_menuBar && $('editorShell')?.classList.contains('draw-active')){
+    const _mbr=_menuBar.getBoundingClientRect();
+    if(e.clientX>=_mbr.left&&e.clientX<=_mbr.right&&e.clientY>=_mbr.top&&e.clientY<=_mbr.bottom) return;
+  }
+  // Ignorar elementos de UI dentro del editor
+  const isUI = tgt.closest('#edMenuBar')      ||
+               tgt.closest('#edTopbar')       ||
+               tgt.closest('#edOptionsPanel') ||
+               tgt.closest('.ed-fulloverlay') ||
+               tgt.closest('.ed-dropdown')    ||
+               tgt.closest('#edGearIcon')     ||
+               tgt.closest('#edBrushCursor')  ||
+               tgt.closest('.ed-float-btn')   ||
+               tgt.closest('#edDrawBar')      ||
+               tgt.closest('#edShapeBar')     ||
+               tgt.closest('#edb-size-pop')   ||
+               tgt.closest('#esb-slider-panel') ||
+               tgt.closest('#edb-palette-pop') ||
+               tgt.closest('#ed-hsl-picker')   ||
+               tgt.closest('#editorViewer')   ||
+               tgt.closest('#edProjectModal') ||
+               tgt.closest('#edConfirmModal');
+  if(isUI) return;
+
+  // ── MODO RECORTE: interceptar todos los toques en el canvas ──
+  if (_edCropMode) {
+    if (e.pointerType === 'touch') {
+      // Registrar el puntero ANTES de cualquier return para que el pinch funcione
+      if(!window._edActivePointers) window._edActivePointers = new Map();
+      window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+
+      if (window._edActivePointers.size >= 2) {
+        // Segundo dedo: cancelar timer de recorte y dejar pasar al pinch
+        clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
+        // Caer al bloque de pinch más abajo — NO hacer return
+      } else {
+        // Primer dedo: esperar 120ms para detectar si llega segundo dedo
+        const _eSavedCrop = e;
+        window._edCropTouchMoved = false;
+        clearTimeout(window._edCropTouchTimer);
+        window._edCropTouchTimer = setTimeout(() => {
+          window._edCropTouchTimer = null;
+          if (!_edCropMode) return;
+          if (window._edActivePointers && window._edActivePointers.size > 1) return;
+          if (window._edCropTouchMoved) return;
+          const _cc = edCoords(_eSavedCrop);
+          const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
+          if (_nodeHit) return;
+          _edCropHandleCanvasTap(_cc.nx, _cc.ny);
+        }, 120);
+        return; // primer dedo espera — ya está registrado en _edActivePointers
+      }
+    } else {
+      // PC/ratón: inmediato
+      const _cc = edCoords(e);
+      const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
+      if (_nodeHit) return;
+      if (_edCropHandleCanvasTap(_cc.nx, _cc.ny)) return;
     }
   }
 
@@ -5088,12 +5141,25 @@ function edOnStart(e){
       found = i; break;
     }
   }
-  // Luego el resto, de mayor a menor índice
+  // Pasada 1 (exacta): resto de layers de mayor a menor índice.
+  // DrawLayer usa exactMode=true → radio=1px, no da positivo en huecos.
+  // Esto permite que capas inferiores sean seleccionables a través de huecos de DrawLayer.
   if(found < 0){
     for(let i = edLayers.length - 1; i >= 0; i--){
       const l = edLayers[i];
       if(l.type==='text'||l.type==='bubble') continue;
-      if(l.contains(c.nx,c.ny)){ found = i; break; }
+      const _hit = l.type==='draw' ? l.contains(c.nx,c.ny,true) : l.contains(c.nx,c.ny);
+      if(_hit){ found = i; break; }
+    }
+  }
+  // Pasada 2 (expandida): solo si pasada 1 no encontró nada.
+  // DrawLayer usa radio=10px para facilitar selección de trazos finos.
+  if(found < 0){
+    for(let i = edLayers.length - 1; i >= 0; i--){
+      const l = edLayers[i];
+      if(l.type==='text'||l.type==='bubble') continue;
+      if(l.type!=='draw') continue; // solo DrawLayer tiene radio expandido; el resto ya se probó
+      if(l.contains(c.nx,c.ny,false)){ found = i; break; }
     }
   }
   if(found>=0){
@@ -7351,6 +7417,7 @@ function edToggleMenu(id){
   btn.classList.add('open');
   edMenuOpen = id;
   if(id === 'nav') edUpdateNavPages();
+  if(id === 'rules') _edRuleToggleSync();
 }
 
 function edDeactivateDrawTool(){
@@ -7510,6 +7577,7 @@ function _edActivateShapeTool(isNew) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'shape';
+  edFitCanvas(); // actualizar _edCanvasTop
   _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global (objeto existente)
   if(_sel) edPushHistory(); else if(isNew) edPushHistory(); // estado previo a objeto nuevo
@@ -7564,6 +7632,14 @@ function _edActivateShapeTool(isNew) {
     _edActivateShapeTool();
   });
   $('op-shape-select')?.addEventListener('click',()=>{
+    // Cerrar modo V⟺C si estaba abierto
+    const _slVCS=$('op-shape-curve-slider');
+    if(_slVCS && _slVCS.style.display==='flex'){
+      _slVCS.style.display='none';
+      const _vcBtnS=$('op-shape-curve-btn');
+      if(_vcBtnS){ _vcBtnS.style.background='transparent'; _vcBtnS.style.color='var(--gray-700)'; _vcBtnS.style.borderColor='var(--gray-300)'; }
+      window._edCurveVertIdx=-1;
+    }
     _edShapeType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateShapeTool();
   });
@@ -7686,6 +7762,14 @@ function _edActivateShapeTool(isNew) {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
+    // Cerrar modo V⟺C si estaba abierto
+    const _slVCShape=$('op-shape-curve-slider');
+    if(_slVCShape && _slVCShape.style.display==='flex'){
+      _slVCShape.style.display='none';
+      const _vcBtnShape=$('op-shape-curve-btn');
+      if(_vcBtnShape){ _vcBtnShape.style.background='transparent'; _vcBtnShape.style.color='var(--gray-700)'; _vcBtnShape.style.borderColor='var(--gray-300)'; }
+      window._edCurveVertIdx=-1;
+    }
     // T1: limpiar _fusionId de todos los objetos (con ID actual o del objeto seleccionado)
     const _shapeFusId = _edLineFusionId || (edSelectedIdx>=0 ? edLayers[edSelectedIdx]?._fusionId : null);
     if(_shapeFusId){
@@ -7855,6 +7939,7 @@ function _edActivateLineTool(isNew, isCreating) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'line';
+  edFitCanvas(); // actualizar _edCanvasTop
   _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global
   // - isNew: primera apertura (panel cerrado) → guardar estado antes de crear objeto
@@ -7915,6 +8000,14 @@ function _edActivateLineTool(isNew, isCreating) {
     _edActivateLineTool();
   });
   $('op-line-select-btn')?.addEventListener('click',()=>{
+    // Cerrar modo V⟺C si estaba abierto
+    const _slVC=$('op-line-curve-slider');
+    if(_slVC && _slVC.style.display==='flex'){
+      _slVC.style.display='none';
+      const _vcBtn=$('op-line-curve-btn');
+      if(_vcBtn){ _vcBtn.style.background='transparent'; _vcBtn.style.color='var(--gray-700)'; _vcBtn.style.borderColor='var(--gray-300)'; }
+      window._edCurveVertIdx=-1;
+    }
     // T19: si hay una recta en construcción, confirmarla como objeto abierto independiente
     if(_edLineLayer) {
       if(_edLineLayer.points.length >= 2) {
@@ -8099,6 +8192,13 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
+    // Cerrar modo V⟺C si estaba abierto
+    const _slVCL=$('op-line-curve-slider');
+    if(_slVCL && _slVCL.style.display==='flex'){
+      _slVCL.style.display='none';
+      const _vcBtnL=$('op-line-curve-btn');
+      if(_vcBtnL){ _vcBtnL.style.background='transparent'; _vcBtnL.style.color='var(--gray-700)'; _vcBtnL.style.borderColor='var(--gray-300)'; }
+    }
     window._edCurveVertIdx=-1;
     _edFinishLine();
     // Aplicar relleno a todos los objetos cerrados de la sesión al confirmar
@@ -8288,12 +8388,32 @@ function edCloseOptionsPanel(){
     if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
     if(_mode==='crop'){
       const _wdl = _edCropLayer && _edCropLayer.type === 'draw';
+      const _cropSelIdx = edSelectedIdx;
       _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
-      if(!_wdl) _edDrawUnlockUI();
-      _edPropsOverlayHide();
+      if(window._edActivePointers) window._edActivePointers.clear();
+      edPinching=false; edPinchScale0=null;
+      clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer=null;
+      if(!_wdl){
+        _edDrawUnlockUI(); _edPropsOverlayHide();
+        // Restaurar overlay y panel si hay objeto seleccionado
+        if(_cropSelIdx>=0 && _cropSelIdx<edLayers.length){
+          edSelectedIdx=_cropSelIdx;
+          _edDrawLockUI(); _edPropsOverlayShow();
+          edRenderOptionsPanel('props');
+        }
+      } else {
+        _edPropsOverlayHide();
+        edRenderOptionsPanel('draw');
+      }
     }
-    // Limpiar sesión de fusión vectorial al cerrar el panel
-    if(_mode==='line' || _mode==='shape') _edLineFusionId = null;
+    // Limpiar sesión de fusión vectorial y sesión _vs* al cerrar el panel
+    // sin OK (toque fuera, swipe). El OK ya llama _vsClear() explícitamente.
+    // Sin esto, _vsHistory queda sucio y edPushHistory queda bloqueado
+    // impidiendo guardar movimientos/resize/rotate de cualquier objeto posterior.
+    if(_mode==='line' || _mode==='shape'){
+      _edLineFusionId = null;
+      if(typeof _vsClear === 'function') _vsClear();
+    }
   }
   _edFocusDone = false;
   edPanelUserClosed = true;
@@ -8494,9 +8614,26 @@ function edRenderOptionsPanel(mode){
     // Si el panel estaba en modo recorte, limpiar estado
     if(panel.dataset.mode==='crop'){
       const _wdl2 = _edCropLayer && _edCropLayer.type === 'draw';
+      const _cropSelIdx2 = edSelectedIdx;
       _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
-      if(!_wdl2) _edDrawUnlockUI();
-      _edPropsOverlayHide();
+      if(window._edActivePointers) window._edActivePointers.clear();
+      edPinching=false; edPinchScale0=null;
+      clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer=null;
+      if(!_wdl2){
+        _edDrawUnlockUI(); _edPropsOverlayHide();
+        panel.classList.remove('open');panel.innerHTML='';
+        if(_cropSelIdx2>=0 && _cropSelIdx2<edLayers.length){
+          edSelectedIdx=_cropSelIdx2;
+          _edDrawLockUI(); _edPropsOverlayShow();
+          edRenderOptionsPanel('props');
+        } else { requestAnimationFrame(edFitCanvas); }
+        return;
+      } else {
+        _edPropsOverlayHide();
+        panel.classList.remove('open');panel.innerHTML='';
+        edRenderOptionsPanel('draw');
+        return;
+      }
     }
     panel.classList.remove('open');panel.innerHTML='';
     requestAnimationFrame(edFitCanvas);return;
@@ -8613,6 +8750,7 @@ function edRenderOptionsPanel(mode){
     const _drawPanelAlreadyOpen = panel.classList.contains('open') && panel.dataset.mode === 'draw';
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
+    edFitCanvas(); // actualizar _edCanvasTop
     _edInitSliderBubbles(panel);
     // Centrar cámara en el contenido del DrawLayer al abrir el panel,
     // pero NO si ya estaba abierto en modo draw (cambio lápiz↔goma no mueve la cámara)
@@ -8911,6 +9049,7 @@ function edRenderOptionsPanel(mode){
           <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
         </div>`;
       panel.classList.add('open');
+      edFitCanvas(); // actualizar _edCanvasTop
       // Eliminar todo el grupo
       $('pp-grp-del')?.addEventListener('click',()=>{
         edConfirm('¿Eliminar el grupo completo?', ()=>{
@@ -9147,6 +9286,9 @@ function edRenderOptionsPanel(mode){
 
     panel.innerHTML=html;
     panel.classList.add('open');
+    // Actualizar _edCanvasTop síncronamente: el panel ya está open, el layout
+    // ha cambiado, edFitCanvas recalcula totalBarsH y actualiza _edCanvasTop.
+    edFitCanvas();
 
     // (voiceCount es independiente del estilo)
     // Live update
@@ -9498,13 +9640,15 @@ function _edRulesOpenPanel(id, part, wx, wy) {
   const _svgDup = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><rect x="9" y="9" width="11" height="11" rx="1.5" stroke="white" stroke-width="2" fill="none"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" stroke="white" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`;
   const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
   const _bsLock = `background:${r.locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
+  const _svgEye = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="white" stroke-width="2" fill="none"/></svg>`;
+  const _bsHide = `background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;`;
   const _sep = '<div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div>';
-  // Si la regla pertenece a un grupo (algún extremo vinculado a nodo), mostrar solo dup + lock + delete
+  // Si la regla pertenece a un grupo (algún extremo vinculado a nodo), mostrar solo dup + lock + hide + delete
   const _inGroup = !!(r.nodeA || r.nodeB);
   if(_inGroup) {
-    pop.innerHTML = `<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+    pop.innerHTML = `<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="Ocultar esta guía" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   } else {
-    pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+    pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="Ocultar esta guía" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   }
   document.body.appendChild(pop);
   const PW = pop.offsetWidth || 150, PH = pop.offsetHeight || 44;
@@ -9534,6 +9678,11 @@ function _edRulesOpenPanel(id, part, wx, wy) {
     r.locked = !r.locked;
     _edRulesClosePop(); edRedraw();
   });
+  document.getElementById('erp-hide')?.addEventListener('click', e => {
+    e.stopPropagation();
+    r.hidden = true; // ocultar solo esta guía
+    _edRulesClosePop(); edRedraw();
+  });
   document.getElementById('erp-del')?.addEventListener('click', e => {
     e.stopPropagation(); _edRuleDelete(id);
   });
@@ -9558,6 +9707,7 @@ function _edRulesPanelClose() { _edRulesClosePop(); }
 
 function _edRulesDraw(ctx) {
   if(!edRules.length && !edRuleNodes.length) return;
+  if(edRulesHidden) return; // guías ocultas: no dibujar
   const z = edCamera.z;
   ctx.save();
   // Extremos ya cubiertos por un nodo compartido
@@ -9571,6 +9721,7 @@ function _edRulesDraw(ctx) {
     }
   }
   for(const r of edRules) {
+    if(r.hidden) continue; // guía individualmente oculta
     const isActive = (_edRulePanelId === r.id) || (_edRuleDrag?.ruleId === r.id);
     const lineColor = r.locked ? 'rgba(255,160,30,0.8)' : (isActive ? '#1a8cff' : 'rgba(30,140,255,0.7)');
     const dotColor  = r.locked ? 'rgba(255,160,30,0.9)' : (isActive ? '#1a8cff' : 'rgba(30,140,255,0.75)');
@@ -9617,6 +9768,7 @@ function _edRulesDraw(ctx) {
 }
 
 function _edRulesHit(wx, wy, isTouch) {
+  if(edRulesHidden) return null; // guías ocultas: no seleccionables
   const z = edCamera.z;
   const rPx  = (isTouch ? 22 : _ED_RULE_R) / z;
   const lPx  = (isTouch ? _ED_RULE_LINE_HIT_TOUCH : _ED_RULE_LINE_HIT) / z;
@@ -9629,6 +9781,7 @@ function _edRulesHit(wx, wy, isTouch) {
   // Luego: reglas individuales
   for(let i = edRules.length-1; i >= 0; i--) {
     const r = edRules[i];
+    if(r.hidden) continue; // guía individualmente oculta: no seleccionable
     // Extremo A — solo si no pertenece a un nodo compartido
     if(!r.nodeA && Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
     // Extremo B
@@ -9645,6 +9798,14 @@ function _edRulesHit(wx, wy, isTouch) {
   return null;
 }
 
+// Actualiza el texto del botón toggle según el estado actual de visibilidad de guías.
+// Global para que pueda llamarse desde edToggleMenu al abrir el menú.
+function _edRuleToggleSync() {
+  const _txt = $('dd-rule-toggle-txt'); if(!_txt) return;
+  const _anyHidden = edRulesHidden || edRules.some(r => r.hidden);
+  _txt.textContent = _anyHidden ? 'Mostrar guías' : 'Ocultar guías';
+}
+
 function edInitRules() {
   $('dd-rule-add')?.addEventListener('click', () => {
     _edRuleAdd();
@@ -9653,6 +9814,29 @@ function edInitRules() {
   $('dd-rule-clear')?.addEventListener('click', () => {
     document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
     _edRuleClear();
+  });
+  $('dd-rule-toggle')?.addEventListener('click', () => {
+    const _anyHidden = edRulesHidden || edRules.some(r => r.hidden);
+    if(_anyHidden){
+      // Hay algo oculto → mostrar todo
+      edRulesHidden = false;
+      edRules.forEach(r => { r.hidden = false; });
+    } else {
+      // Todo visible → ocultar todo
+      edRulesHidden = true;
+    }
+    _edRuleToggleSync();
+    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+    edRedraw();
+  });
+  $('dd-rule-lock-all')?.addEventListener('click', () => {
+    // Bloquear todas las guías que no estén ya bloqueadas
+    let _count = 0;
+    edRules.forEach(r => { if(!r.locked){ r.locked = true; _count++; } });
+    // Bloquear también los nodos compartidos
+    edRuleNodes.forEach(n => { if(!n.locked){ n.locked = true; } });
+    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+    edRedraw();
   });
 }
 
@@ -9664,7 +9848,8 @@ function edInitRules() {
 const _ED_SNAP_THRESHOLD_PX = 8; // px de pantalla — umbral estándar de la industria
 
 function _edSnapToRules(la) {
-  if(!edRules.length) return;
+  if(!edRules.length || edRulesHidden) return; // sin snap si no hay guías o están ocultas
+  // (las guías individuales ocultas se saltan en el bucle interno)
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const z  = edCamera.z;
@@ -9690,6 +9875,7 @@ function _edSnapToRules(la) {
   let snapDx = 0, snapDy = 0;
 
   for(const r of edRules) {
+    if(r.hidden) continue; // guía individualmente oculta: sin snap
     const rdx = r.x2 - r.x1, rdy = r.y2 - r.y1;
     const rlen = Math.hypot(rdx, rdy);
     if(rlen < 1) continue;
@@ -10386,6 +10572,13 @@ function edShapeBarHide() {
   // Ocultar slider directamente por DOM (no depender del closure de edInitShapeBar)
   const _sp=$('esb-slider-panel');
   if(_sp){ _sp.style.display='none'; _sp._mode=null; }
+  // Cerrar modo V⟺C de la barra flotante
+  const _curveBtn=$('esb-curve');
+  if(_curveBtn && _curveBtn.dataset.curveActive==='1'){
+    _curveBtn.dataset.curveActive='0';
+    _curveBtn.style.background=''; _curveBtn.style.color=''; _curveBtn.style.outline='';
+  }
+  window._edCurveVertIdx=-1;
   $('edShapeBar')?.classList.remove('visible');
 }
 
@@ -10752,10 +10945,11 @@ function edInitShapeBar() {
     if(_locked) return;
     _edApplyFillToClosedLayers(); // relleno al confirmar
     _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
-    // Desactivar V⟺C si estaba activo
+    // Desactivar V⟺C si estaba activo, y cerrar su slider
     const _curveBtn=$('esb-curve');
     if(_curveBtn){ _curveBtn.dataset.curveActive='0'; _curveBtn.style.background=''; _curveBtn.style.color=''; _curveBtn.style.outline=''; }
     window._edCurveVertIdx=-1;
+    _esbHideSlider(); // cerrar slider V/C (y cualquier otro slider activo)
     edShapeBarHide();
     window._edMinimizedDrawMode=null;
     // Limpiar estado antes de maximizar
@@ -11645,6 +11839,7 @@ function edLoadProject(id){
     edRules = comic.editorData._rules || [];
     edRuleNodes = comic.editorData._ruleNodes || [];
     _edRuleNodeId = edRuleNodes.reduce((m,n)=>Math.max(m,n.id),0);
+    _edRuleId     = edRules.reduce((m,r)=>Math.max(m,r.id||0),0); // evitar colisión de IDs
     edPages=(comic.editorData.pages||[]).map(pd=>{
       const orient = pd.orientation||comic.editorData.orientation||'vertical';
       const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
@@ -12793,29 +12988,20 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
-  $('dd-layers')?.addEventListener('click',()=>{
-    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    edCloseMenus();
-    $('edFileLayers').click();
-  });
-  $('edFileLayers')?.addEventListener('change', async e => {
-    const file = e.target.files[0];
-    e.target.value = '';
-    if(!file) return;
-    await edImportLayers(file);
-    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      setTimeout(()=>{
-        if(typeof Fullscreen !== 'undefined'){ Fullscreen.enter(); Fullscreen._updateBtn(); }
-      }, 300);
-    }
-    window._edWasFullscreen = false;
-  });
+
   $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
-  $('edFileGallery')?.addEventListener('change',e=>{
-    edAddImage(e.target.files[0]);
-    e.target.value='';
+  $('edFileGallery')?.addEventListener('change', async e=>{
+    const _f = e.target.files[0];
+    e.target.value = '';
+    if(!_f) return;
+    const _ext = _f.name.split('.').pop().toLowerCase();
+    if(_ext === 'psd' || _ext === 'xcf' || _ext === 'tif' || _ext === 'tiff'){
+      await edImportLayers(_f);
+    } else {
+      edAddImage(_f);
+    }
     // Restaurar fullscreen usando Fullscreen.enter() — gestiona todos los casos correctamente
     // Pequeño delay para que el navegador procese el cierre del selector antes de pedir FS
     if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
@@ -13150,9 +13336,8 @@ function EditorView_init(){
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
       // Zoom hacia el cursor
-      const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
       const sx = e.clientX;
-      const sy = e.clientY - canvasTop;
+      const sy = e.clientY - _edCanvasTop;
       const factor = e.deltaY > 0 ? 1/1.1 : 1.1;
       edZoomAt(sx, sy, factor);
     } else {
@@ -13453,9 +13638,8 @@ function EditorView_init(){
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
-        const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
         _pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-        _pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - canvasTop;
+        _pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - _edCanvasTop;
       }
     }, {passive:true});
     editorShell.addEventListener('touchmove', e => {
