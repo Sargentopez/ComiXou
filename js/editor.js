@@ -12137,32 +12137,40 @@ function edInitViewerTap(){
   const sig = { signal: _viewerAC.signal };
 
   // ── SWIPE TÁCTIL ──
-  let _sx = null, _sy = null, _scrollCancelled = false;
+  // PC: siempre modo fijo. Táctil: según navMode de la obra.
+  const _vNavMode = edProjectMeta.navMode || 'fixed';
+  let _sx = null, _sy = null;
 
   viewer.addEventListener('touchstart', e => {
-    _sx = null; _sy = null; _scrollCancelled = false;
+    _sx = null; _sy = null;
     if(e.touches.length !== 1) return;
     _sx = e.touches[0].clientX;
     _sy = e.touches[0].clientY;
   }, {passive:true, ...sig});
 
-  viewer.addEventListener('touchmove', e => {
-    if(_sx === null) return;
-    const dy = e.touches[0].clientY - _sy;
-    if(Math.abs(dy) > 20) _scrollCancelled = true;
-  }, {passive:true, ...sig});
-
   viewer.addEventListener('touchend', e => {
-    if(_sx === null || _scrollCancelled){ _sx = null; return; }
+    if(_sx === null) return;
     if(e.changedTouches.length !== 1){ _sx = null; return; }
-    // Ignorar si el toque termina sobre un botón de control
     if(e.target.closest('button, a, input')) { _sx = null; return; }
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     const dx = endX - _sx, dy = endY - _sy;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
     _sx = null;
-    if(Math.abs(dy) > 40) return;
-    if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
+
+    if (_vNavMode === 'horizontal') {
+      if (adx < 30) return;
+      if (adx < ady) return; // gesto más vertical, ignorar
+      if (dx > 0) _viewerBack(); else _viewerAdvance();
+    } else if (_vNavMode === 'vertical') {
+      if (ady < 30) return;
+      if (ady < adx) return; // gesto más horizontal, ignorar
+      if (dy > 0) _viewerBack(); else _viewerAdvance();
+    } else {
+      // Modo fixed: tap en mitad izquierda/derecha
+      if (ady > 40) return;
+      if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
+    }
   }, {passive:true, ...sig});
 
   // ── CONTROLES DESKTOP (mouse) ──
