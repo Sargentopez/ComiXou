@@ -119,3 +119,56 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
 }
 #readerToast.rt-show { opacity: 1; }
 #readerToast.rt-hide { opacity: 0; }
+
+/* ── MODOS SCROLL (horizontal / vertical) ── */
+#scrollReader {
+  display: none; /* oculto por defecto — solo visible en navMode scroll */
+}
+
+.scroll-reader {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  background: #111;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scroll-reader::-webkit-scrollbar { display: none; }
+
+/* Modo horizontal */
+.scroll-h {
+  flex-direction: row;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  /* scroll-snap para que scrollTo() anime al punto exacto */
+  scroll-snap-type: x mandatory;
+  /* touch-action: none bloquea el scroll nativo táctil;
+     el gesto lo gestionamos con touchstart/touchend */
+  touch-action: none;
+}
+
+/* Modo vertical */
+.scroll-v {
+  flex-direction: column;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scroll-snap-type: y mandatory;
+  touch-action: none;
+}
+
+/* Cada slide ocupa exactamente la pantalla */
+.rs-slide {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111;
+  scroll-snap-align: start;
+  position: relative;
+}
+
+.rs-slide canvas {
+  display: block;
+  clip-path: inset(0 round 10px);
+  box-shadow: 0 8px 32px rgba(0,0,0,.45);
+}

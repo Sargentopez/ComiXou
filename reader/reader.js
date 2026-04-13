@@ -29,6 +29,7 @@ const RS = {
   keyHandler:   null,
   resizeFn:     null,
   creditsShown: false, // true tras mostrarse la primera vez — no vuelve a aparecer
+  navMode:      'fixed', // 'fixed' | 'horizontal' | 'vertical'
 };
 
 // ── ARRANQUE ─────────────────────────────────────────────────
@@ -172,6 +173,7 @@ async function loadWork(workId) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    RS.navMode     = work[0].navMode     || 'fixed';
     // Actualizar meta OG con datos reales de la obra
     _updateOGMeta(work[0].title, work[0].author_name);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
@@ -200,6 +202,7 @@ async function loadDraft(token) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    RS.navMode     = work[0].navMode     || 'fixed';
     _updateOGMeta(work[0].title, work[0].author_name);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -311,32 +314,314 @@ function startReader() {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
 
+  if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
+    _startScrollReader();
+    return;
+  }
+
+  // ── Modo fixed (original) ──
   RS.canvas = document.getElementById('readerCanvas');
   RS.ctx    = RS.canvas.getContext('2d');
   RS.idx    = 0;
   RS.textStep = _initTextStep(0);
 
   _resizeCanvas();
-  // Esperar a que las fuentes estén cargadas antes del primer render
-  // Evita que el primer texto aparezca con fuente de fallback
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _render();
     _showControls();
   });
   _setupControls();
-  // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);
 
-  // Registrar resize con delay para evitar que el resize inicial borre el canvas
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
-  // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isTouch
-    ? 'Desplázate tocando la pantalla  👆'
+    ? 'Toca izquierda/derecha para pasar página  👆'
     : 'Desplázate con las flechas del teclado  ◀ ▶';
   _readerToast(msg, 4000);
+}
+
+// ── MODO SCROLL (horizontal / vertical) ──────────────────────
+function _startScrollReader() {
+  const isH = RS.navMode === 'horizontal';
+
+  // Ocultar canvas del modo fixed
+  const fixedCanvas = document.getElementById('readerCanvas');
+  if (fixedCanvas) fixedCanvas.style.display = 'none';
+
+  // Mostrar / configurar el contenedor de scroll
+  // overflow: hidden — el scroll lo controlamos nosotros, no el navegador
+  const container = document.getElementById('scrollReader');
+  container.className = isH ? 'scroll-reader scroll-h' : 'scroll-reader scroll-v';
+
+  // Construir un slide por panel
+  RS.scrollSlides = [];
+  RS.panels.forEach((panel, idx) => {
+    const slide = document.createElement('div');
+    slide.className = 'rs-slide';
+    const canvas = document.createElement('canvas');
+    slide.appendChild(canvas);
+    container.appendChild(slide);
+    RS.scrollSlides.push({ slide, canvas, idx });
+  });
+
+  // Estado inicial
+  RS.idx      = 0;
+  RS.textStep = _initTextStep(0);
+
+  // Renderizar todos los paneles tras cargar fuentes
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    _renderAllScrollSlides();
+    // Redibujar slide 0 con textStep correcto
+    _renderScrollSlide(0);
+  });
+
+  // ── Teclado ──
+  RS.keyHandler = e => {
+    const fwd = ['ArrowRight','ArrowDown','Space','Enter'].includes(e.code);
+    const bwd = ['ArrowLeft','ArrowUp'].includes(e.code);
+    if (fwd) { e.preventDefault(); _scrollAdvance(); }
+    if (bwd) { e.preventDefault(); _scrollGoBack(); }
+    if (e.key === 'Escape') {
+      if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
+    }
+  };
+  document.addEventListener('keydown', RS.keyHandler);
+
+  // ── Swipe táctil — interceptado antes del scroll nativo ──
+  let _sx = null, _sy = null, _cancelled = false;
+  container.addEventListener('touchstart', e => {
+    _sx = null; _sy = null; _cancelled = false;
+    if (e.touches.length !== 1) return;
+    _sx = e.touches[0].clientX;
+    _sy = e.touches[0].clientY;
+  }, { passive: true });
+
+  container.addEventListener('touchmove', e => {
+    // Bloquear scroll nativo — el movimiento lo gestionamos en touchend
+    e.preventDefault();
+  }, { passive: false });
+
+  container.addEventListener('touchend', e => {
+    if (_sx === null) return;
+    const ex = e.changedTouches[0].clientX;
+    const ey = e.changedTouches[0].clientY;
+    const dx = ex - _sx, dy = ey - _sy;
+    _sx = null;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (adx < 25 && ady < 25) return; // tap, no swipe
+    // Dirección dominante del gesto
+    const goFwd = isH ? dx < -30 : dy < -30;
+    const goBwd = isH ? dx >  30 : dy >  30;
+    if (goFwd) _scrollAdvance();
+    else if (goBwd) _scrollGoBack();
+  }, { passive: true });
+
+  // ── Resize: re-renderizar todo ──
+  RS.resizeFn = () => { _renderAllScrollSlides(); _renderScrollSlide(RS.idx); };
+  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+
+  const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  const msg = isH
+    ? (isTouch ? 'Desliza ◀ ▶ para pasar página' : 'Usa las flechas ◀ ▶ del teclado')
+    : (isTouch ? 'Desliza ▲ ▼ para pasar página' : 'Usa las flechas ▲ ▼ del teclado');
+  _readerToast(msg, 4000);
+}
+
+// ── Avanzar en modo scroll: bocadillo → bocadillo → slide siguiente ──
+function _scrollAdvance() {
+  const panel = RS.panels[RS.idx];
+  const tl    = panel?.texts || [];
+  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
+
+  if (isSeq && RS.textStep < tl.length) {
+    RS.textStep++;
+    _renderScrollSlide(RS.idx);
+    return;
+  }
+  // Último bocadillo (o sin bocadillos) → ir al slide siguiente
+  if (RS.idx < RS.panels.length - 1) {
+    RS.idx++;
+    RS.textStep = _initTextStep(RS.idx);
+    _scrollToSlide(RS.idx);
+    _renderScrollSlide(RS.idx);
+  }
+}
+
+// ── Retroceder en modo scroll ──
+function _scrollGoBack() {
+  const panel = RS.panels[RS.idx];
+  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
+
+  if (isSeq && RS.textStep > 1) {
+    RS.textStep--;
+    _renderScrollSlide(RS.idx);
+    return;
+  }
+  if (RS.idx > 0) {
+    RS.idx--;
+    const pp = RS.panels[RS.idx];
+    RS.textStep = (pp?.text_mode || 'sequential') === 'sequential'
+      ? (pp?.texts || []).length
+      : 0;
+    _scrollToSlide(RS.idx);
+    _renderScrollSlide(RS.idx);
+  }
+}
+
+// ── Redibujar un slide concreto con el textStep actual ──
+function _renderScrollSlide(idx) {
+  if (!RS.scrollSlides) return;
+  const entry = RS.scrollSlides[idx];
+  if (!entry) return;
+  const { canvas } = entry;
+  const panel = RS.panels[idx];
+  const { pw, ph } = _panelDims(idx);
+  const ctx = canvas.getContext('2d');
+
+  if (panel.isCredits) {
+    _renderCreditsOnCtx(ctx, pw, ph, panel);
+    return;
+  }
+
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+
+  const layers    = panel.layers    || [];
+  const layerImgs = panel.layerImgs || [];
+
+  layers.forEach((layer, j) => {
+    const type = layer.type;
+    if (type === 'image' || type === 'draw' || type === 'stroke') {
+      const img = layerImgs[j];
+      if (!img) return;
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      if (type === 'image' || type === 'stroke') {
+        const x = (layer.x      || 0.5) * pw;
+        const y = (layer.y      || 0.5) * ph;
+        const w = (layer.width  || 1)   * pw;
+        const h = (layer.height || 1)   * ph;
+        const rot = layer.rotation || 0;
+        ctx.translate(x, y);
+        if (rot) ctx.rotate(rot * Math.PI / 180);
+        ctx.drawImage(img, -w / 2, -h / 2, w, h);
+      } else {
+        ctx.drawImage(img, 0, 0, pw, ph);
+      }
+      ctx.restore();
+    } else if (type === 'shape' || type === 'line') {
+      _renderVectorLayer(ctx, layer, pw, ph, layerImgs[j]);
+    }
+  });
+
+  // Textos con textStep actual (solo el slide activo lo usa con su paso real;
+  // los demás slides se renderizan con todos visibles en _renderAllScrollSlides)
+  _drawTexts(ctx, panel, pw, ph);
+}
+
+// Renderizar todos los slides del modo scroll
+function _renderAllScrollSlides() {
+  if (!RS.scrollSlides) return;
+  const isH = RS.navMode === 'horizontal';
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // 1. Ajustar dimensiones de todos los slides
+  RS.scrollSlides.forEach(({ slide, canvas, idx }) => {
+    const { pw, ph } = _panelDims(idx);
+    const scale = Math.min(vw / pw, vh / ph);
+    const dw = Math.round(pw * scale);
+    const dh = Math.round(ph * scale);
+
+    slide.style.width     = vw + 'px';
+    slide.style.height    = vh + 'px';
+    if (isH) slide.style.minWidth  = vw + 'px';
+    else      slide.style.minHeight = vh + 'px';
+
+    canvas.width  = pw;
+    canvas.height = ph;
+    canvas.style.width  = dw + 'px';
+    canvas.style.height = dh + 'px';
+  });
+
+  // 2. Renderizar cada slide:
+  //    - Slide activo: con RS.textStep actual (gestión secuencial real)
+  //    - Slides no activos: con todos los bocadillos visibles
+  const savedStep = RS.textStep;
+  RS.scrollSlides.forEach(({ idx }) => {
+    if (idx !== RS.idx) {
+      RS.textStep = (RS.panels[idx]?.texts || []).length;
+    } else {
+      RS.textStep = savedStep;
+    }
+    _renderScrollSlide(idx);
+  });
+  RS.textStep = savedStep;
+}
+
+// Obtener el índice de slide visible actualmente en el scroll
+function _scrollCurrentIdx() {
+  const container = document.getElementById('scrollReader');
+  if (!container || !RS.scrollSlides || !RS.scrollSlides.length) return 0;
+  const isH = RS.navMode === 'horizontal';
+  const scrollPos = isH ? container.scrollLeft : container.scrollTop;
+  const size = isH ? container.clientWidth : container.clientHeight;
+  return Math.min(RS.panels.length - 1, Math.round(scrollPos / size));
+}
+
+function _scrollToSlide(idx) {
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+  RS.idx = idx;
+  const isH = RS.navMode === 'horizontal';
+  const size = isH ? container.clientWidth : container.clientHeight;
+  if (isH) {
+    container.scrollTo({ left: idx * size, behavior: 'smooth' });
+  } else {
+    container.scrollTo({ top: idx * size, behavior: 'smooth' });
+  }
+}
+
+// Render de créditos sobre un ctx externo (sin fade, estático)
+function _renderCreditsOnCtx(ctx, pw, ph, panel) {
+  // Fondo negro
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, pw, ph);
+  // Texto de créditos centrado — reutilizar la función de créditos con alpha=1
+  // Guardar estado global y sustituir temporalmente
+  const saved = { canvas: RS.canvas, ctx: RS.ctx, idx: RS.idx };
+  // No podemos reutilizar _renderCredits directamente (usa RS.canvas dimensiones)
+  // Implementación mínima de créditos en scroll
+  const cx = pw / 2, cy = ph / 2;
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // Título
+  ctx.font = `bold ${Math.round(pw * 0.08)}px 'Bebas Neue', Oswald, sans-serif`;
+  ctx.fillText(RS._workTitle || '', cx, cy - pw * 0.12);
+  // Autor
+  ctx.font = `${Math.round(pw * 0.045)}px system-ui, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText(RS._workAuthor ? 'por ' + RS._workAuthor : '', cx, cy - pw * 0.04);
+  // Hecho con ComiXow
+  ctx.font = `${Math.round(pw * 0.035)}px system-ui, sans-serif`;
+  ctx.fillStyle = 'rgba(255,215,0,0.85)';
+  ctx.fillText('Hecho con ComiXow', cx, cy + pw * 0.1);
+  ctx.textAlign = 'left';
+}
+
+// Render de capa vectorial (shape/line) sobre ctx externo
+function _renderVectorLayer(ctx, layer, pw, ph, img) {
+  if (img) {
+    ctx.save();
+    ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+    ctx.drawImage(img, 0, 0, pw, ph);
+    ctx.restore();
+  }
 }
 
 // ── POSICIÓN DE BOTONES ───────────────────────────────────────
