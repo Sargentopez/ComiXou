@@ -58,11 +58,33 @@ function MyComicsView_init() {
 /* ── SINCRONIZAR FECHAS CON SUPABASE ── */
 async function _mcSyncCloudDates() {
   if (typeof SupabaseClient === 'undefined') return;
-  if (typeof Auth === 'undefined' || !Auth.currentUser?.()) return;
+  const _mcUser = Auth.currentUser?.();
+  if (typeof Auth === 'undefined' || !_mcUser) return;
 
-  // Obtener todas las obras locales que tienen supabaseId
-  const locals = ComicStore.getAll().filter(c => c.supabaseId);
-  if (!locals.length) return;
+  // Si no hay obras locales del usuario, intentar traer las de la nube
+  const locals = ComicStore.getAll().filter(c => c.supabaseId &&
+    (c.userId === _mcUser.id || c.username === _mcUser.username));
+  if (!locals.length) {
+    try {
+      const cloudWorks = await SupabaseClient.fetchWorksByAuthor(_mcUser.id);
+      if(cloudWorks && cloudWorks.length) {
+        for(const w of cloudWorks) {
+          // Guardar como obra cloudOnly (sin editorData local)
+          const existing = ComicStore.getAll().find(c => c.supabaseId === w.id);
+          if(!existing) {
+            ComicStore.save({
+              ...w,
+              userId:    _mcUser.id,
+              cloudOnly: true,
+              editorData: null,
+            });
+          }
+        }
+        _mcRenderList();
+      }
+    } catch(_) {}
+    return;
+  }
 
   try {
     const works = await SupabaseClient.fetchWorksByIds(locals.map(c => c.supabaseId));
@@ -85,11 +107,15 @@ async function _mcSyncCloudDates() {
         local.published = w.published; dirty = true;
       }
 
-      // Si la nube es más reciente: invalidar editorData local
-      // para que al editar se descargue de Supabase
+      // Si la nube es más reciente: marcar cloudNewer pero preservar editorData local
+      // El usuario puede recuperar la versión local desde Proyecto → Recuperar versión del dispositivo
       if (cloudDate > localDate) {
-        local.cloudOnly  = true;
-        local.editorData = null;
+        local.cloudNewer = true;
+        // Preservar editorData local bajo localEditorData (no sobreescribir nunca)
+        if(local.editorData && !local.localEditorData) {
+          local.localEditorData = local.editorData;
+        }
+        local.editorData = null; // forzar descarga de la versión de nube al editar
         local.updatedAt  = w.updated_at;
         dirty = true;
       }
@@ -202,7 +228,7 @@ function _mcRenderList() {
         const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
         if (_isFs2) sessionStorage.setItem('cx_was_fs', '1');
         else sessionStorage.removeItem('cx_was_fs');
-        window.location = 'reader/?' + param + '&from=app' + (_isFs2 ? '&fs=1' : '');
+        window.location = 'reader/index.html?' + param + '&from=app' + (_isFs2 ? '&fs=1' : '');
       } else {
         // Solo local: visor interno del SPA
         Router.go('reader', { id });

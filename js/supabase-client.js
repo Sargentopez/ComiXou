@@ -375,5 +375,22 @@ const SupabaseClient = (() => {
     return { folders: [...folderMap.values()] };
   }
 
-  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, bibSync, bibDownload };
+  // Lista todas las obras de un autor en Supabase (para sync multi-dispositivo)
+  async function fetchWorksByAuthor(authorId) {
+    if(!authorId) return [];
+    const works = await _get(
+      `works?author_id=eq.${authorId}&order=updated_at.desc` +
+      `&select=id,title,author_name,genre,nav_mode,social,published,updated_at`
+    ).catch(() => []);
+    if(!works || !works.length) return [];
+    const ids = works.map(w => w.id).join(',');
+    let thumbMap = {};
+    try {
+      const panels = await _get(`panels?work_id=in.(${ids})&panel_order=eq.0&select=work_id,data_url`);
+      (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
+    } catch(_) {}
+    return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
+  }
+
+  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
 })();

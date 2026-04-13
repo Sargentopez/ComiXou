@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v15.48</footer>
+    <footer class="app-version">v15.66</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -327,21 +327,32 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
             <div class="ed-dropdown" id="dd-project">
-              <button class="ed-dropdown-item" id="dd-editproject">Editar datos</button>
+              <button class="ed-dropdown-item" id="dd-editproject">Editar datos de la obra</button>
               <button class="ed-dropdown-item" id="dd-viewerjson">Previsualizar</button>
               <div class="ed-dropdown-sep"></div>
-              <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
-              <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
-              <div class="ed-dropdown-sep"></div>
               <div class="ed-dropdown-submenu" id="dd-export-wrap">
-                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportbtn">⬇ Guardar hoja como… ▸</button>
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportbtn">⬇ Descargar… ▸</button>
                 <div class="ed-submenu" id="dd-export-sub">
-                  <button class="ed-dropdown-item" id="dd-exportpng">PNG (transparencias)</button>
-                  <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
+                  <div class="ed-dropdown-submenu" id="dd-export-page-wrap">
+                    <button class="ed-dropdown-item ed-has-submenu" id="dd-exportpagebtn">Hoja actual ▸</button>
+                    <div class="ed-submenu" id="dd-export-page-sub">
+                      <button class="ed-dropdown-item" id="dd-exportpng">PNG (transparencias)</button>
+                      <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
+                    </div>
+                  </div>
+                  <button class="ed-dropdown-item" id="dd-savejson">Obra (.json)</button>
+                  <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
+                    <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn">Selección ▸</button>
+                    <div class="ed-submenu" id="dd-export-sel-sub">
+                      <button class="ed-dropdown-item" id="dd-exportselpng">PNG (transparencias)</button>
+                      <button class="ed-dropdown-item" id="dd-exportseljpg">JPG (fondo blanco)</button>
+                    </div>
+                  </div>
                 </div>
               </div>
+              <button class="ed-dropdown-item" id="dd-loadjson">Cargar obra (.json)</button>
               <div class="ed-dropdown-sep"></div>
-              <button class="ed-dropdown-item" id="dd-deleteproject" style="color:#e63030;font-weight:700">✕ Eliminar obra</button>
+              <button class="ed-dropdown-item" id="dd-recoverlocal" style="display:none">↩ Recuperar versión del dispositivo</button>
             </div>
           </div>
 
@@ -501,8 +512,8 @@ Router.register('reader', {
   html: () => `
     <div class="reader-topbar" id="readerTopbar">
       <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
-        <a href="#home" onclick="Router.go('home');return false;" class="logo-link">
-          <span class="logo-main" style="font-size:1.4rem">Comi<span class="logo-accent">Xow</span></span>
+        <a href="#home" onclick="Router.go('home');return false;" class="logo-link logo-img-link">
+          <img src="logo_long.png" alt="ComiXow" class="logo-img" style="height:22px;width:auto;">
         </a>
       </div>
       <div class="reader-info">

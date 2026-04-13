@@ -5932,7 +5932,8 @@ function edOnEnd(e){
     // ── Fusión de círculos (T21 parte 2) ──
     if(_finDrag.part === 'a' || _finDrag.part === 'b') {
       const _rDragged = edRules.find(r => r.id === _finDrag.ruleId);
-      if(_rDragged) {
+      // Una guía que ya pertenece a un grupo no puede fusionarse por su otro extremo
+      if(_rDragged && !_rDragged.nodeA && !_rDragged.nodeB) {
         const _ex = _finDrag.part === 'a' ? _rDragged.x1 : _rDragged.x2;
         const _ey = _finDrag.part === 'a' ? _rDragged.y1 : _rDragged.y2;
         // Umbral: 80% de solapamiento = distancia entre centros < 20% del diámetro
@@ -10832,9 +10833,6 @@ async function edCloudSave() {
     return;
   }
 
-  // Guardar localmente primero
-  edSaveProject();
-
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
@@ -10959,6 +10957,7 @@ function edSaveProject(){
       _ruleNodes: edRuleNodes,
     },
     updatedAt:new Date().toISOString(),
+    localSavedAt:new Date().toISOString(),
     cameraState: _camState,
   });
   edToast('Guardado ✓');
@@ -13006,6 +13005,20 @@ function EditorView_init(){
   $('dd-editproject')?.addEventListener('click',()=>{edOpenProjectModal();edCloseMenus();});
   $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
+  // Submenú Hoja actual (inline, igual que los demás submenús)
+  $('dd-exportpagebtn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    $('dd-export-page-sub')?.classList.toggle('open');
+    $('dd-export-sel-sub')?.classList.remove('open');
+  });
+  // Submenú Selección (inline)
+  $('dd-exportselbtn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    $('dd-export-sel-sub')?.classList.toggle('open');
+    $('dd-export-page-sub')?.classList.remove('open');
+  });
+  $('dd-exportselpng')?.addEventListener('click',()=>{ edExportSelectionPNG('png'); edCloseMenus(); });
+  $('dd-exportseljpg')?.addEventListener('click',()=>{ edExportSelectionPNG('jpg'); edCloseMenus(); });
   // Submenú exportar: toggle inline al clicar
   // Submenús inline — mismo patrón que exportar
   $('dd-imagen-btn')?.addEventListener('click', e => {
@@ -13027,6 +13040,36 @@ function EditorView_init(){
   $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
   $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
+  // Mostrar "Recuperar versión del dispositivo" solo si hay versión local guardada
+  function _edUpdateRecoverBtn() {
+    const btn = $('dd-recoverlocal');
+    if(!btn || !edProjectId) return;
+    const comic = ComicStore.getById(edProjectId);
+    // Mostrar si: tiene localEditorData guardado Y la nube es más reciente
+    const hasLocal = !!(comic?.localEditorData);
+    btn.style.display = hasLocal ? '' : 'none';
+  }
+
+  // Actualizar al abrir el menú proyecto
+  document.querySelector('[data-menu="project"]')?.addEventListener('pointerup', () => {
+    setTimeout(_edUpdateRecoverBtn, 50);
+  });
+
+  $('dd-recoverlocal')?.addEventListener('click', () => {
+    edCloseMenus();
+    if(!edProjectId) return;
+    const comic = ComicStore.getById(edProjectId);
+    if(!comic?.localEditorData) { edToast('No hay versión local guardada'); return; }
+    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios actuales no guardados localmente.')) return;
+    // Restaurar localEditorData como editorData activo
+    comic.editorData = comic.localEditorData;
+    comic.cloudNewer = false;
+    ComicStore.save(comic);
+    // Recargar la obra
+    edLoadProject(edProjectId);
+    edToast('Versión del dispositivo restaurada ✓');
+  });
+
   $('dd-deleteproject')?.addEventListener('click',()=>{
     edCloseMenus();
     if(!edProjectId){edToast('Sin proyecto activo');return;}
@@ -13521,6 +13564,80 @@ function edExportPagePNG(format){
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     edToast(`Hoja ${pg} exportada ✓`);
+  }, mimeType, quality);
+}
+
+function edExportSelectionPNG(format) {
+  format = format || 'png';
+  // Calcular bbox de la selección (single o multi)
+  let bb = null;
+  if(edMultiSel.length >= 2) {
+    bb = _msBBox();
+  } else if(edSelectedIdx >= 0) {
+    const la = edLayers[edSelectedIdx];
+    if(la) {
+      const pw2 = edPageW(), ph2 = edPageH();
+      const rot = (la.rotation||0)*Math.PI/180;
+      const hw = la.width/2, hh = la.height/2;
+      let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+      for(const [cx,cy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
+        const wx=cx*pw2, wy=cy*ph2;
+        const rx=(wx*Math.cos(rot)-wy*Math.sin(rot))/pw2;
+        const ry=(wx*Math.sin(rot)+wy*Math.cos(rot))/ph2;
+        x0=Math.min(x0,la.x+rx); y0=Math.min(y0,la.y+ry);
+        x1=Math.max(x1,la.x+rx); y1=Math.max(y1,la.y+ry);
+      }
+      bb = {x0,y0,x1,y1,w:x1-x0,h:y1-y0,cx:(x0+x1)/2,cy:(y0+y1)/2};
+    }
+  }
+  if(!bb || bb.w < 0.001 || bb.h < 0.001) { edToast('Selecciona objetos primero'); return; }
+
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const page = edPages[edCurrentPage]; if(!page) return;
+
+  // Canvas del tamaño exacto del bbox de selección en px
+  const bxPx = Math.ceil(bb.w * pw);
+  const byPx = Math.ceil(bb.h * ph);
+  const off = document.createElement('canvas');
+  off.width  = bxPx;
+  off.height = byPx;
+  const offCtx = off.getContext('2d', { alpha: true });
+
+  if(format === 'jpg'){ offCtx.fillStyle='#ffffff'; offCtx.fillRect(0,0,bxPx,byPx); }
+
+  // Transform: mapear coords workspace al canvas de exportación
+  // El origen del canvas exportado corresponde a (mx + bb.x0*pw, my + bb.y0*ph) en workspace
+  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
+
+  // Renderizar solo las capas seleccionadas
+  const selSet = edMultiSel.length >= 2
+    ? new Set(edMultiSel.map(i => edLayers[i]).filter(Boolean))
+    : new Set([edLayers[edSelectedIdx]].filter(Boolean));
+
+  const _textLayers = [...selSet].filter(l => l.type==='text'||l.type==='bubble');
+  const _textAlpha  = page.textLayerOpacity ?? 1;
+
+  [...selSet].forEach(l => {
+    if(!l || l.type==='text'||l.type==='bubble') return;
+    if(l.type==='image'){ l.draw(offCtx, off); }
+    else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+  });
+  offCtx.globalAlpha = _textAlpha;
+  _textLayers.forEach(l => l.draw(offCtx, off));
+  offCtx.globalAlpha = 1;
+
+  const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
+  const quality  = format==='jpg' ? 0.92 : undefined;
+  off.toBlob(blob => {
+    if(!blob){ edToast('Error al exportar'); return; }
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href    = url;
+    a.download = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    edToast('Selección exportada ✓');
   }, mimeType, quality);
 }
 

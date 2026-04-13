@@ -364,10 +364,16 @@ a { color: inherit; text-decoration: none; }
   gap: 8px;
 }
 .home-logo-area {
-  display: flex; align-items: baseline;
+  display: flex; align-items: center;
   flex-shrink: 0;
 }
 .home-logo-area .logo-main { font-size: 1.8rem; line-height: 1; }
+.logo-img-link { display: flex; align-items: center; }
+.logo-img {
+  height: 26px;
+  width: auto;
+  display: block;
+}
 .home-tagline {
   font-size: 0.72rem; font-weight: 700;
   color: var(--gray-600);

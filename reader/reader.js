@@ -1023,10 +1023,14 @@ function _renderCredits(pw, ph) {
     const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
     const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
 
-    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#f5c400';
-    ctx.textAlign = 'center';
-    ctx.fillText('ComiXow', rightCX, rightStartY);
+    // Logo imagen (síncrono via data URL precargada)
+    if(typeof _LOGO_DATA_URL !== 'undefined') {
+      const _limg = new Image();
+      _limg.src = _LOGO_DATA_URL;
+      const _lh = logoFS * 1.1;
+      const _lw = _limg.naturalWidth > 0 ? _limg.naturalWidth * (_lh / _limg.naturalHeight) : _lh * (191/42);
+      ctx.drawImage(_limg, rightCX - _lw/2, rightStartY - _lh * 0.8, _lw, _lh);
+    }
 
     const sloganY = rightStartY + sloganFS * 2;
     ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
@@ -1093,9 +1097,14 @@ function _renderCredits(pw, ph) {
     const lineH    = ph * 0.09;
     const logoFS   = Math.round(fRef * 0.11);
     const logoY    = authorY + lineH * 1.3;
-    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#f5c400';
-    ctx.fillText('ComiXow', cx, logoY);
+    // Logo imagen (síncrono via data URL precargada)
+    if(typeof _LOGO_DATA_URL !== 'undefined') {
+      const _limg2 = new Image();
+      _limg2.src = _LOGO_DATA_URL;
+      const _lh2 = logoFS * 1.1;
+      const _lw2 = _limg2.naturalWidth > 0 ? _limg2.naturalWidth * (_lh2 / _limg2.naturalHeight) : _lh2 * (191/42);
+      ctx.drawImage(_limg2, cx - _lw2/2, logoY - _lh2 * 0.8, _lw2, _lh2);
+    }
 
     const sloganFS = Math.round(fRef * 0.042);
     const sloganY  = logoY + sloganFS * 2;
