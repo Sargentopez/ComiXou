@@ -23,7 +23,7 @@ let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
 let edProjectId = null;
-let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal', social:'' };
+let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'' };
 let edActiveTool = 'select';  // select | draw | eraser | fill | shape | line
 // Estado herramienta shape
 let _edShapeType  = 'rect';   // 'rect' | 'ellipse'
@@ -11900,7 +11900,7 @@ function edLoadProject(id){
   edProjectId=id;
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
-  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'horizontal',social:comic.social||''};
+  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
@@ -13951,7 +13951,7 @@ function edLoadFromJSON(file){
     try{
       const data=JSON.parse(e.target.result);
       if(data.editorData){
-        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'horizontal',social:data.social||''};
+        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'fixed',social:data.social||''};
         edOrientation=data.editorData.orientation||'vertical';
         edPages=(data.editorData.pages||[]).map(pd=>({
           drawData:pd.drawData||null,

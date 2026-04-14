@@ -173,7 +173,7 @@ async function loadWork(workId) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
-    RS.navMode     = work[0].navMode     || 'fixed';
+    RS.navMode     = work[0].nav_mode    || 'fixed';
     // Actualizar meta OG con datos reales de la obra
     _updateOGMeta(work[0].title, work[0].author_name);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
@@ -202,7 +202,7 @@ async function loadDraft(token) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
-    RS.navMode     = work[0].navMode     || 'fixed';
+    RS.navMode     = work[0].nav_mode    || 'fixed';
     _updateOGMeta(work[0].title, work[0].author_name);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -344,41 +344,97 @@ function startReader() {
 }
 
 // ── MODO SCROLL (horizontal / vertical) ──────────────────────
+//
+// Arquitectura: el contenedor tiene (totalEstados) slides.
+// Cada panel ocupa (1 + nBocadillos_secuenciales) slides.
+// El slide 0 de cada panel = imagen + 0 bocadillos visibles.
+// El slide k de cada panel = imagen + k bocadillos visibles.
+// El gesto de arrastre lleva siempre al siguiente estado via scroll-snap nativo.
+// Al llegar a un estado nuevo, se redibuja el canvas del panel con el textStep correcto.
+//
+// RS.scrollMap[slideGlobal] = { panelIdx, textStep }
+// RS.scrollCanvases[panelIdx] = <canvas> — uno por panel, reutilizado
+// ─────────────────────────────────────────────────────────────
+
 function _startScrollReader() {
   const isH = RS.navMode === 'horizontal';
 
-  // Ocultar canvas del modo fixed
   const fixedCanvas = document.getElementById('readerCanvas');
   if (fixedCanvas) fixedCanvas.style.display = 'none';
 
-  // Mostrar / configurar el contenedor de scroll
-  // overflow: hidden — el scroll lo controlamos nosotros, no el navegador
   const container = document.getElementById('scrollReader');
   container.className = isH ? 'scroll-reader scroll-h' : 'scroll-reader scroll-v';
+  container.innerHTML = '';
 
-  // Construir un slide por panel
-  RS.scrollSlides = [];
-  RS.panels.forEach((panel, idx) => {
-    const slide = document.createElement('div');
-    slide.className = 'rs-slide';
+  // Construir el mapa de estados y los slides
+  RS.scrollMap     = [];   // [{panelIdx, textStep}]
+  RS.scrollCanvases = [];  // canvas por panel (índice = panelIdx)
+
+  RS.panels.forEach((panel, pi) => {
+    const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
+    const nTexts = isSeq ? (panel?.texts || []).length : 0;
+    const nStates = nTexts + 1;
+
+    // Canvas único por panel — position:fixed, gestionado por clase rs-active
     const canvas = document.createElement('canvas');
-    slide.appendChild(canvas);
-    container.appendChild(slide);
-    RS.scrollSlides.push({ slide, canvas, idx });
+    if (pi === 0) canvas.classList.add('rs-active'); // panel 0 visible al inicio
+    RS.scrollCanvases[pi] = canvas;
+    // El canvas se añade al body (no al slide) para que position:fixed funcione
+    document.getElementById('readerApp').appendChild(canvas);
+
+    for (let ts = 0; ts < nStates; ts++) {
+      const slide = document.createElement('div');
+      slide.className = 'rs-slide';
+      container.appendChild(slide);
+      RS.scrollMap.push({ panelIdx: pi, textStep: ts });
+    }
   });
 
   // Estado inicial
-  RS.idx      = 0;
-  RS.textStep = _initTextStep(0);
+  RS.idx      = 0;   // índice de panel
+  RS.textStep = 0;   // textStep actual
 
-  // Renderizar todos los paneles tras cargar fuentes
+  // Renderizar todos los paneles (todos los bocadillos visibles) para los canvases
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _renderAllScrollSlides();
-    // Redibujar slide 0 con textStep correcto
+    // Redibujar panel 0 con textStep=0 (bocadillos iniciales)
+    const p0 = RS.panels[0];
+    RS.textStep = _initTextStep(0);
     _renderScrollSlide(0);
   });
 
-  // ── Teclado ──
+  // ── Sincronización por scroll: detectar el estado actual y redibujar ──
+  let _prevScrollState = 0;
+  let _scrollRaf = null;
+
+  function _onScroll() {
+    if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
+    _scrollRaf = requestAnimationFrame(() => {
+      const stateIdx = _scrollCurrentStateIdx();
+      if (stateIdx === _prevScrollState) return;
+      const prev = RS.scrollMap[_prevScrollState] || {};
+      const curr = RS.scrollMap[stateIdx]         || {};
+      _prevScrollState = stateIdx;
+
+      const pi = curr.panelIdx;
+      const ts = curr.textStep;
+
+      // Cambiar canvas visible
+      if (pi !== prev.panelIdx) {
+        if (prev.panelIdx !== undefined) {
+          RS.scrollCanvases[prev.panelIdx]?.classList.remove('rs-active');
+        }
+        RS.scrollCanvases[pi]?.classList.add('rs-active');
+      }
+
+      RS.idx      = pi;
+      RS.textStep = ts;
+      _renderScrollSlide(pi);
+    });
+  }
+  container.addEventListener('scroll', _onScroll, { passive: true });
+
+  // ── Teclado PC: bocadillo → bocadillo → slide (misma lógica que modo fixed) ──
   RS.keyHandler = e => {
     const fwd = ['ArrowRight','ArrowDown','Space','Enter'].includes(e.code);
     const bwd = ['ArrowLeft','ArrowUp'].includes(e.code);
@@ -390,95 +446,79 @@ function _startScrollReader() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  // ── Swipe táctil — interceptado antes del scroll nativo ──
-  let _sx = null, _sy = null, _cancelled = false;
-  container.addEventListener('touchstart', e => {
-    _sx = null; _sy = null; _cancelled = false;
-    if (e.touches.length !== 1) return;
-    _sx = e.touches[0].clientX;
-    _sy = e.touches[0].clientY;
-  }, { passive: true });
-
-  container.addEventListener('touchmove', e => {
-    // Bloquear scroll nativo — el movimiento lo gestionamos en touchend
-    e.preventDefault();
-  }, { passive: false });
-
-  container.addEventListener('touchend', e => {
-    if (_sx === null) return;
-    const ex = e.changedTouches[0].clientX;
-    const ey = e.changedTouches[0].clientY;
-    const dx = ex - _sx, dy = ey - _sy;
-    _sx = null;
-    const adx = Math.abs(dx), ady = Math.abs(dy);
-    if (adx < 25 && ady < 25) return; // tap, no swipe
-    // Dirección dominante del gesto
-    const goFwd = isH ? dx < -30 : dy < -30;
-    const goBwd = isH ? dx >  30 : dy >  30;
-    if (goFwd) _scrollAdvance();
-    else if (goBwd) _scrollGoBack();
-  }, { passive: true });
-
-  // ── Resize: re-renderizar todo ──
   RS.resizeFn = () => { _renderAllScrollSlides(); _renderScrollSlide(RS.idx); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isH
-    ? (isTouch ? 'Desliza ◀ ▶ para pasar página' : 'Usa las flechas ◀ ▶ del teclado')
-    : (isTouch ? 'Desliza ▲ ▼ para pasar página' : 'Usa las flechas ▲ ▼ del teclado');
+    ? (isTouch ? 'Desliza ◀ ▶ para pasar de hoja' : 'Flechas ◀ ▶ para navegar')
+    : (isTouch ? 'Desliza ▲ ▼ para pasar de hoja' : 'Flechas ▲ ▼ para navegar');
   _readerToast(msg, 4000);
 }
 
-// ── Avanzar en modo scroll: bocadillo → bocadillo → slide siguiente ──
+// Índice global de estado (en RS.scrollMap) según posición de scroll
+function _scrollCurrentStateIdx() {
+  const container = document.getElementById('scrollReader');
+  if (!container || !RS.scrollMap || !RS.scrollMap.length) return 0;
+  const isH = RS.navMode === 'horizontal';
+  const scrollPos = isH ? container.scrollLeft : container.scrollTop;
+  const size      = isH ? container.clientWidth : container.clientHeight;
+  if (!size) return 0;
+  return Math.min(RS.scrollMap.length - 1, Math.max(0, Math.round(scrollPos / size)));
+}
+
+// Primer slide DOM que corresponde a (panelIdx, ts=targetTs)
+function _slideForState(panelIdx, targetTs) {
+  const container = document.getElementById('scrollReader');
+  if (!container || !RS.scrollMap) return null;
+  for (let i = 0; i < RS.scrollMap.length; i++) {
+    const m = RS.scrollMap[i];
+    if (m.panelIdx === panelIdx && m.textStep === targetTs) {
+      return container.children[i] || null;
+    }
+  }
+  return null;
+}
+
+// Navegar programáticamente a un estado global (para teclado PC)
+function _scrollToStateIdx(stateIdx) {
+  const container = document.getElementById('scrollReader');
+  if (!container || !RS.scrollMap) return;
+  stateIdx = Math.max(0, Math.min(RS.scrollMap.length - 1, stateIdx));
+  const slide = container.children[stateIdx];
+  if (!slide) return;
+  const isH = RS.navMode === 'horizontal';
+  slide.scrollIntoView({ behavior: 'smooth', block: isH ? 'nearest' : 'start', inline: isH ? 'start' : 'nearest' });
+}
+
+// Obtener índice global de estado actual (para teclado)
+function _currentStateIdx() {
+  if (!RS.scrollMap) return 0;
+  for (let i = 0; i < RS.scrollMap.length; i++) {
+    const m = RS.scrollMap[i];
+    if (m.panelIdx === RS.idx && m.textStep === RS.textStep) return i;
+  }
+  return 0;
+}
+
+// Avanzar (teclado PC)
 function _scrollAdvance() {
-  const panel = RS.panels[RS.idx];
-  const tl    = panel?.texts || [];
-  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
-
-  if (isSeq && RS.textStep < tl.length) {
-    RS.textStep++;
-    _renderScrollSlide(RS.idx);
-    return;
-  }
-  // Último bocadillo (o sin bocadillos) → ir al slide siguiente
-  if (RS.idx < RS.panels.length - 1) {
-    RS.idx++;
-    RS.textStep = _initTextStep(RS.idx);
-    _scrollToSlide(RS.idx);
-    _renderScrollSlide(RS.idx);
-  }
+  const si = _currentStateIdx();
+  _scrollToStateIdx(si + 1);
 }
 
-// ── Retroceder en modo scroll ──
+// Retroceder (teclado PC)
 function _scrollGoBack() {
-  const panel = RS.panels[RS.idx];
-  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
-
-  if (isSeq && RS.textStep > 1) {
-    RS.textStep--;
-    _renderScrollSlide(RS.idx);
-    return;
-  }
-  if (RS.idx > 0) {
-    RS.idx--;
-    const pp = RS.panels[RS.idx];
-    RS.textStep = (pp?.text_mode || 'sequential') === 'sequential'
-      ? (pp?.texts || []).length
-      : 0;
-    _scrollToSlide(RS.idx);
-    _renderScrollSlide(RS.idx);
-  }
+  const si = _currentStateIdx();
+  _scrollToStateIdx(si - 1);
 }
 
-// ── Redibujar un slide concreto con el textStep actual ──
-function _renderScrollSlide(idx) {
-  if (!RS.scrollSlides) return;
-  const entry = RS.scrollSlides[idx];
-  if (!entry) return;
-  const { canvas } = entry;
-  const panel = RS.panels[idx];
-  const { pw, ph } = _panelDims(idx);
+// Redibujar un panel con el RS.textStep actual
+function _renderScrollSlide(panelIdx) {
+  const canvas = RS.scrollCanvases?.[panelIdx];
+  if (!canvas) return;
+  const panel = RS.panels[panelIdx];
+  const { pw, ph } = _panelDims(panelIdx);
   const ctx = canvas.getContext('2d');
 
   if (panel.isCredits) {
@@ -518,103 +558,50 @@ function _renderScrollSlide(idx) {
     }
   });
 
-  // Textos con textStep actual (solo el slide activo lo usa con su paso real;
-  // los demás slides se renderizan con todos visibles en _renderAllScrollSlides)
   _drawTexts(ctx, panel, pw, ph);
 }
 
-// Renderizar todos los slides del modo scroll
+// Renderizar todos los canvases (dimensiones + todos bocadillos visibles para los no activos)
 function _renderAllScrollSlides() {
-  if (!RS.scrollSlides) return;
+  if (!RS.scrollCanvases || !RS.scrollMap) return;
   const isH = RS.navMode === 'horizontal';
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
-  // 1. Ajustar dimensiones de todos los slides
-  RS.scrollSlides.forEach(({ slide, canvas, idx }) => {
-    const { pw, ph } = _panelDims(idx);
+  // Ajustar dimensiones de todos los slides del contenedor
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+  Array.from(container.children).forEach(slide => {
+    slide.style.width    = vw + 'px';
+    slide.style.height   = vh + 'px';
+    slide.style.minWidth  = isH ? vw + 'px' : '';
+    slide.style.minHeight = isH ? '' : vh + 'px';
+  });
+
+  // Ajustar cada canvas al tamaño de pantalla y renderizar
+  const savedStep = RS.textStep;
+  RS.panels.forEach((panel, pi) => {
+    const canvas = RS.scrollCanvases[pi];
+    if (!canvas) return;
+    const { pw, ph } = _panelDims(pi);
     const scale = Math.min(vw / pw, vh / ph);
     const dw = Math.round(pw * scale);
     const dh = Math.round(ph * scale);
-
-    slide.style.width     = vw + 'px';
-    slide.style.height    = vh + 'px';
-    if (isH) slide.style.minWidth  = vw + 'px';
-    else      slide.style.minHeight = vh + 'px';
-
     canvas.width  = pw;
     canvas.height = ph;
     canvas.style.width  = dw + 'px';
     canvas.style.height = dh + 'px';
-  });
 
-  // 2. Renderizar cada slide:
-  //    - Slide activo: con RS.textStep actual (gestión secuencial real)
-  //    - Slides no activos: con todos los bocadillos visibles
-  const savedStep = RS.textStep;
-  RS.scrollSlides.forEach(({ idx }) => {
-    if (idx !== RS.idx) {
-      RS.textStep = (RS.panels[idx]?.texts || []).length;
+    if (pi !== RS.idx) {
+      RS.textStep = (panel?.texts || []).length;
     } else {
       RS.textStep = savedStep;
     }
-    _renderScrollSlide(idx);
+    _renderScrollSlide(pi);
   });
   RS.textStep = savedStep;
 }
 
-// Obtener el índice de slide visible actualmente en el scroll
-function _scrollCurrentIdx() {
-  const container = document.getElementById('scrollReader');
-  if (!container || !RS.scrollSlides || !RS.scrollSlides.length) return 0;
-  const isH = RS.navMode === 'horizontal';
-  const scrollPos = isH ? container.scrollLeft : container.scrollTop;
-  const size = isH ? container.clientWidth : container.clientHeight;
-  return Math.min(RS.panels.length - 1, Math.round(scrollPos / size));
-}
-
-function _scrollToSlide(idx) {
-  const container = document.getElementById('scrollReader');
-  if (!container) return;
-  RS.idx = idx;
-  const isH = RS.navMode === 'horizontal';
-  const size = isH ? container.clientWidth : container.clientHeight;
-  if (isH) {
-    container.scrollTo({ left: idx * size, behavior: 'smooth' });
-  } else {
-    container.scrollTo({ top: idx * size, behavior: 'smooth' });
-  }
-}
-
-// Render de créditos sobre un ctx externo (sin fade, estático)
-function _renderCreditsOnCtx(ctx, pw, ph, panel) {
-  // Fondo negro
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, pw, ph);
-  // Texto de créditos centrado — reutilizar la función de créditos con alpha=1
-  // Guardar estado global y sustituir temporalmente
-  const saved = { canvas: RS.canvas, ctx: RS.ctx, idx: RS.idx };
-  // No podemos reutilizar _renderCredits directamente (usa RS.canvas dimensiones)
-  // Implementación mínima de créditos en scroll
-  const cx = pw / 2, cy = ph / 2;
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  // Título
-  ctx.font = `bold ${Math.round(pw * 0.08)}px 'Bebas Neue', Oswald, sans-serif`;
-  ctx.fillText(RS._workTitle || '', cx, cy - pw * 0.12);
-  // Autor
-  ctx.font = `${Math.round(pw * 0.045)}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.fillText(RS._workAuthor ? 'por ' + RS._workAuthor : '', cx, cy - pw * 0.04);
-  // Hecho con ComiXow
-  ctx.font = `${Math.round(pw * 0.035)}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(255,215,0,0.85)';
-  ctx.fillText('Hecho con ComiXow', cx, cy + pw * 0.1);
-  ctx.textAlign = 'left';
-}
-
-// Render de capa vectorial (shape/line) sobre ctx externo
 function _renderVectorLayer(ctx, layer, pw, ph, img) {
   if (img) {
     ctx.save();
