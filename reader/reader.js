@@ -345,13 +345,12 @@ function startReader() {
 
 // ── MODO SCROLL (horizontal / vertical) ──────────────────────
 //
-// Igual que el HTML de referencia:
-//   - Un canvas por ESTADO (panel×textStep) dentro de su slide
-//   - flex: 0 0 100% + scroll-snap → el navegador anima el deslizamiento
-//   - Al llegar a un estado nuevo se detecta por evento scroll
-//   - Teclado PC: scrollIntoView al estado siguiente/anterior
-//
-// RS.scrollMap[i] = { panelIdx, textStep }
+// Mismo patrón que el visor del editor:
+//   - Scroll nativo SIEMPRE activo (overflow nunca cambia → sin saltos)
+//   - Un slide por panel en el contenedor scroll-snap
+//   - Overlay encima: pointer-events:all cuando hay textos pendientes
+//     (intercepta el swipe → avanza bocadillo), none cuando no los hay
+//     (el swipe llega al scroll nativo → desliza la hoja suavemente)
 // ─────────────────────────────────────────────────────────────
 
 function _startScrollReader() {
@@ -365,65 +364,119 @@ function _startScrollReader() {
   container.className = isH ? 'scroll-reader scroll-h' : 'scroll-reader scroll-v';
   container.innerHTML = '';
 
-  RS.scrollMap = [];   // [{panelIdx, textStep, canvas}]
-
-  // Construir un slide+canvas por estado
+  // Construir un slide+canvas por panel
+  RS.scrollCanvases = [];
   RS.panels.forEach((panel, pi) => {
-    const isSeq  = (panel?.text_mode || 'sequential') === 'sequential';
-    const nTexts = isSeq ? (panel?.texts || []).length : 0;
-    const nStates = nTexts + 1;
+    const { pw, ph } = _panelDims(pi);
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const scale = Math.min(vw / pw, vh / ph);
 
-    for (let ts = 0; ts < nStates; ts++) {
-      const slide  = document.createElement('div');
-      slide.className = 'rs-slide';
+    const slide  = document.createElement('div');
+    slide.className = 'rs-slide';
+    slide.style.width  = vw + 'px';
+    slide.style.height = vh + 'px';
 
-      const canvas = document.createElement('canvas');
-      slide.appendChild(canvas);
-      container.appendChild(slide);
+    const canvas = document.createElement('canvas');
+    canvas.width  = pw;
+    canvas.height = ph;
+    canvas.style.width  = Math.round(pw * scale) + 'px';
+    canvas.style.height = Math.round(ph * scale) + 'px';
+    canvas.style.pointerEvents = 'none';
 
-      RS.scrollMap.push({ panelIdx: pi, textStep: ts, canvas });
-    }
+    slide.appendChild(canvas);
+    container.appendChild(slide);
+    RS.scrollCanvases.push(canvas);
   });
 
+  // Estado inicial
   RS.idx      = 0;
   RS.textStep = _initTextStep(0);
 
-  // Renderizar todos los estados al inicio
+  // Overlay — intercepta swipes cuando hay textos pendientes
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:10;touch-action:none;pointer-events:none;';
+  document.getElementById('readerApp').appendChild(overlay);
+  RS.scrollOverlay = overlay;
+
+  function _hasPendingTexts() {
+    const panel = RS.panels[RS.idx];
+    const tl    = panel?.texts || [];
+    return (panel?.text_mode || 'sequential') === 'sequential' && RS.textStep < tl.length;
+  }
+
+  function _updateOverlay() {
+    overlay.style.pointerEvents = _hasPendingTexts() ? 'all' : 'none';
+  }
+
+  // Render inicial de todos los slides
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _renderAllScrollSlides();
+    // Redibujar slide 0 con textStep inicial
+    RS.textStep = _initTextStep(0);
+    _renderScrollSlide(0);
+    _updateOverlay();
   });
 
-  // Detectar cambio de estado por scroll → actualizar RS.idx/textStep
-  let _prevStateIdx = 0;
-  let _scrollRaf = null;
+  // Swipe en overlay (bocadillos pendientes)
+  let _osx = null, _osy = null;
+  overlay.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { _osx = null; return; }
+    _osx = e.touches[0].clientX;
+    _osy = e.touches[0].clientY;
+  }, { passive: true });
+
+  overlay.addEventListener('touchend', e => {
+    if (_osx === null) return;
+    const ex = e.changedTouches[0].clientX, ey = e.changedTouches[0].clientY;
+    const dx = ex - _osx, dy = ey - _osy;
+    _osx = null;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (isH && adx < 20) return;
+    if (!isH && ady < 20) return;
+    if (isH && ady > adx * 1.5) return;
+    if (!isH && adx > ady * 1.5) return;
+    const goFwd = isH ? dx < 0 : dy < 0;
+    const goBwd = isH ? dx > 0 : dy > 0;
+    if (goFwd && _hasPendingTexts()) {
+      _startFade();
+      RS.textStep++;
+      _renderScrollSlide(RS.idx);
+      _updateOverlay();
+    } else if (goBwd) {
+      _scrollGoBack();
+      _updateOverlay();
+    }
+  }, { passive: true });
+
+  // Scroll nativo: detectar llegada a nuevo slide
+  let _prevSI = 0, _sraf = null;
   container.addEventListener('scroll', () => {
-    if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
-    _scrollRaf = requestAnimationFrame(() => {
-      const si = _scrollCurrentStateIdx();
-      if (si === _prevStateIdx) return;
-      _prevStateIdx = si;
-      const m = RS.scrollMap[si];
-      if (!m) return;
-      RS.idx      = m.panelIdx;
-      RS.textStep = m.textStep;
+    if (_sraf) cancelAnimationFrame(_sraf);
+    _sraf = requestAnimationFrame(() => {
+      const pos  = isH ? container.scrollLeft : container.scrollTop;
+      const size = isH ? container.clientWidth : container.clientHeight;
+      if (!size) return;
+      const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
+      if (si === _prevSI) return;
+      _prevSI = si;
+      RS.idx  = si;
+      RS.textStep = _initTextStep(si);
+      _renderScrollSlide(si);
+      _updateOverlay();
+      // Bloquear orientación del dispositivo según la hoja actual
+      const _pOrient = RS.panels[si]?.orientation || 'v';
+      if (screen.orientation?.lock) {
+        screen.orientation.lock(_pOrient === 'h' ? 'landscape' : 'portrait').catch(() => {});
+      }
     });
   }, { passive: true });
 
-  // Teclado PC
+  // Teclado PC — avanza bocadillo o slide
   RS.keyHandler = e => {
     const fwd = ['ArrowRight','ArrowDown','Space','Enter'].includes(e.code);
     const bwd = ['ArrowLeft','ArrowUp'].includes(e.code);
-    if (fwd || bwd) {
-      e.preventDefault();
-      const si  = _scrollCurrentStateIdx();
-      const nsi = Math.max(0, Math.min(RS.scrollMap.length - 1, si + (fwd ? 1 : -1)));
-      const slide = container.children[nsi];
-      if (slide) slide.scrollIntoView({
-        behavior: 'smooth',
-        block:  isH ? 'nearest' : 'start',
-        inline: isH ? 'start'   : 'nearest',
-      });
-    }
+    if (fwd) { e.preventDefault(); _scrollAdvance(); }
+    if (bwd) { e.preventDefault(); _scrollGoBack(); }
     if (e.key === 'Escape') {
       if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
     }
@@ -433,7 +486,7 @@ function _startScrollReader() {
   RS.resizeFn = () => _renderAllScrollSlides();
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
-  const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  const isTouch = window.matchMedia('(hover:none) and (pointer:coarse)').matches;
   _readerToast(
     isH ? (isTouch ? 'Desliza ◀ ▶ para cambiar de hoja' : 'Flechas ◀ ▶ para navegar')
         : (isTouch ? 'Desliza ▲ ▼ para cambiar de hoja' : 'Flechas ▲ ▼ para navegar'),
@@ -441,39 +494,60 @@ function _startScrollReader() {
   );
 }
 
-// Índice de estado visible según posición de scroll
-function _scrollCurrentStateIdx() {
-  const container = document.getElementById('scrollReader');
-  if (!container || !RS.scrollMap?.length) return 0;
-  const isH = RS.navMode === 'horizontal';
-  const pos  = isH ? container.scrollLeft : container.scrollTop;
-  const size = isH ? container.clientWidth : container.clientHeight;
-  if (!size) return 0;
-  return Math.max(0, Math.min(RS.scrollMap.length - 1, Math.round(pos / size)));
+// Avanzar (teclado): bocadillo → slide siguiente
+function _scrollAdvance() {
+  if (_hasPendingFn()) {
+    _startFade(); RS.textStep++; _renderScrollSlide(RS.idx);
+  } else if (RS.idx < RS.panels.length - 1) {
+    _snapScrollTo(RS.idx + 1);
+  }
+  function _hasPendingFn() {
+    const panel = RS.panels[RS.idx];
+    return (panel?.text_mode || 'sequential') === 'sequential' && RS.textStep < (panel?.texts || []).length;
+  }
 }
 
-// Renderizar un estado: canvas del slide en scrollMap[stateIdx]
-function _renderScrollSlide(stateIdx) {
-  const entry = RS.scrollMap?.[stateIdx];
-  if (!entry) return;
-  const { panelIdx, textStep, canvas } = entry;
-  const panel = RS.panels[panelIdx];
-  const { pw, ph } = _panelDims(panelIdx);
+// Retroceder
+function _scrollGoBack() {
+  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
+  const panel = RS.panels[RS.idx];
+  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
+  if (isSeq && RS.textStep > 1) {
+    RS.textStep--;
+    _renderScrollSlide(RS.idx);
+    if (RS.scrollOverlay) RS.scrollOverlay.style.pointerEvents = 'all';
+  } else if (RS.idx > 0) {
+    _snapScrollTo(RS.idx - 1);
+  }
+}
 
-  // Dimensionar canvas
+// Navegar programáticamente al slide idx
+function _snapScrollTo(idx) {
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+  const isH  = RS.navMode === 'horizontal';
+  const size  = isH ? container.clientWidth : container.clientHeight;
+  container.scrollTo({
+    left: isH ? idx * size : 0,
+    top:  isH ? 0 : idx * size,
+    behavior: 'smooth',
+  });
+}
+
+// Redibujar el canvas del slide idx con RS.textStep actual
+function _renderScrollSlide(idx) {
+  const canvas = RS.scrollCanvases?.[idx];
+  if (!canvas) return;
+  const panel = RS.panels[idx];
+  const { pw, ph } = _panelDims(idx);
+  const ctx = canvas.getContext('2d');
   const vw = window.innerWidth, vh = window.innerHeight;
   const scale = Math.min(vw / pw, vh / ph);
-  canvas.width  = pw;
-  canvas.height = ph;
+  canvas.width  = pw; canvas.height = ph;
   canvas.style.width  = Math.round(pw * scale) + 'px';
   canvas.style.height = Math.round(ph * scale) + 'px';
 
-  const ctx = canvas.getContext('2d');
-
-  if (panel.isCredits) {
-    _renderCreditsOnCtx(ctx, pw, ph, panel);
-    return;
-  }
+  if (panel.isCredits) { _renderCreditsOnCtx(ctx, pw, ph, panel); return; }
 
   ctx.clearRect(0, 0, pw, ph);
   ctx.fillStyle = '#ffffff';
@@ -481,53 +555,47 @@ function _renderScrollSlide(stateIdx) {
 
   const layers    = panel.layers    || [];
   const layerImgs = panel.layerImgs || [];
-
   layers.forEach((layer, j) => {
     const type = layer.type;
     if (type === 'image' || type === 'draw' || type === 'stroke') {
-      const img = layerImgs[j];
-      if (!img) return;
+      const img = layerImgs[j]; if (!img) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       if (type === 'image' || type === 'stroke') {
-        const x = (layer.x     || 0.5) * pw;
-        const y = (layer.y     || 0.5) * ph;
-        const w = (layer.width || 1)   * pw;
-        const h = (layer.height|| 1)   * ph;
-        const rot = layer.rotation || 0;
-        ctx.translate(x, y);
-        if (rot) ctx.rotate(rot * Math.PI / 180);
-        ctx.drawImage(img, -w/2, -h/2, w, h);
-      } else {
-        ctx.drawImage(img, 0, 0, pw, ph);
-      }
+        const x = (layer.x||0.5)*pw, y = (layer.y||0.5)*ph;
+        const w = (layer.width||1)*pw, h = (layer.height||1)*ph;
+        ctx.translate(x,y); if (layer.rotation) ctx.rotate(layer.rotation*Math.PI/180);
+        ctx.drawImage(img,-w/2,-h/2,w,h);
+      } else { ctx.drawImage(img,0,0,pw,ph); }
       ctx.restore();
     } else if (type === 'shape' || type === 'line') {
       _renderVectorLayer(ctx, layer, pw, ph, layerImgs[j]);
     }
   });
-
-  // Textos hasta textStep
-  const savedStep = RS.textStep;
-  RS.textStep = textStep;
   _drawTexts(ctx, panel, pw, ph);
-  RS.textStep = savedStep;
 }
 
-// Renderizar todos los estados (llamado al inicio y en resize)
+// Renderizar todos los slides (init + resize) con todos los textos visibles para no-activos
 function _renderAllScrollSlides() {
-  if (!RS.scrollMap) return;
+  if (!RS.scrollCanvases) return;
   const vw = window.innerWidth, vh = window.innerHeight;
   const container = document.getElementById('scrollReader');
-  if (!container) return;
-
-  // Ajustar tamaño de cada slide al viewport
-  Array.from(container.children).forEach(slide => {
-    slide.style.width  = vw + 'px';
-    slide.style.height = vh + 'px';
+  if (container) {
+    Array.from(container.children).forEach(slide => {
+      slide.style.width  = vw + 'px';
+      slide.style.height = vh + 'px';
+    });
+  }
+  const savedStep = RS.textStep;
+  RS.panels.forEach((panel, pi) => {
+    if (pi !== RS.idx) {
+      RS.textStep = (panel?.texts || []).length;
+    } else {
+      RS.textStep = savedStep;
+    }
+    _renderScrollSlide(pi);
   });
-
-  RS.scrollMap.forEach((_, i) => _renderScrollSlide(i));
+  RS.textStep = savedStep;
 }
 
 function _renderVectorLayer(ctx, layer, pw, ph, img) {

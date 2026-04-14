@@ -12189,6 +12189,11 @@ function _edOpenViewerScroll(navMode) {
       edViewerTextStep = (np?.textMode === 'sequential' && ntl.length > 0) ? 1 : 0;
       edUpdateViewer();
       _updateOverlay();
+      // Bloquear orientación del dispositivo según la hoja actual
+      const _npOrient = np?.orientation || edOrientation;
+      if (screen.orientation?.lock) {
+        screen.orientation.lock(_npOrient === 'vertical' ? 'portrait' : 'landscape').catch(() => {});
+      }
     });
   }, { passive: true });
 
@@ -12204,6 +12209,32 @@ function _edOpenViewerScroll(navMode) {
 
   // Guardar referencia al overlay para limpieza en edCloseViewer
   sc._vsOverlay = overlay;
+
+  // Resize: reajustar todos los slides y redibujar el activo
+  if (_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
+  let _vsResizeTimer;
+  _viewerResizeFn = () => {
+    clearTimeout(_vsResizeTimer);
+    _vsResizeTimer = setTimeout(() => {
+      const nvw = window.innerWidth, nvh = window.innerHeight;
+      edPages.forEach((page, pi) => {
+        const orient = page.orientation || edOrientation;
+        const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+        const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+        const scale = Math.min(nvw / pw, nvh / ph);
+        const cv = _canvases[pi];
+        if (!cv) return;
+        cv.style.width  = Math.round(pw * scale) + 'px';
+        cv.style.height = Math.round(ph * scale) + 'px';
+        const slide = sc.children[pi];
+        if (slide) { slide.style.width = nvw + 'px'; slide.style.height = nvh + 'px'; }
+      });
+      // Redibujar solo el slide activo
+      _activateCanvas(edViewerIdx);
+      edUpdateViewer();
+    }, 150);
+  };
+  window.addEventListener('resize', _viewerResizeFn);
 }
 
 // Función de render de un estado concreto sobre un canvas destino (usada en resize)

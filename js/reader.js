@@ -602,7 +602,10 @@ function _renderCreditsCanvas() {
 // CONTROLES
 // ════════════════════════════════════════
 function setupControls() {
-  // Botones PC — solo responden a click, no a touch (evita doble disparo con el stage)
+  const navMode = ReaderState.comic?.navMode || 'fixed';
+  const isTouch = window.matchMedia('(hover:none) and (pointer:coarse)').matches;
+
+  // Botones PC
   document.getElementById('nextBtn')?.addEventListener('click', (e) => {
     if (e.pointerType === 'touch') return;
     advance();
@@ -611,14 +614,12 @@ function setupControls() {
     if (e.pointerType === 'touch') return;
     goBack();
   });
-
-  // Reiniciar
   document.getElementById('restartBtn')?.addEventListener('click', () => {
     document.getElementById('endOverlay').classList.add('hidden');
     goToPanel(0);
   });
 
-  // Teclado (PC) — siempre fijo independientemente del navMode
+  // Teclado PC — siempre fijo
   ReaderState._keyHandler = (e) => {
     if (['ArrowRight','Space','Enter'].includes(e.code)) { e.preventDefault(); advance(); }
     if (e.code === 'ArrowLeft') goBack();
@@ -626,60 +627,167 @@ function setupControls() {
   };
   document.addEventListener('keydown', ReaderState._keyHandler);
 
-  // Swipe táctil — AbortController para evitar acumulación en cada apertura
+  if ((navMode === 'horizontal' || navMode === 'vertical') && isTouch) {
+    _setupScrollMode(navMode);
+  } else {
+    _setupFixedSwipe();
+  }
+}
+
+// ── Modo fijo: swipe detecta mitad izquierda/derecha ──
+function _setupFixedSwipe() {
   if (ReaderState._stageAC) ReaderState._stageAC.abort();
   ReaderState._stageAC = new AbortController();
   const sig = { signal: ReaderState._stageAC.signal, passive: true };
-
   const stage = document.getElementById('readerStage');
-  const navMode = ReaderState.comic?.navMode || 'fixed';
-  let touchStartX = 0, touchStartY = 0;
-
-  stage.addEventListener('touchstart', (e) => {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
-  }, sig);
-
-  stage.addEventListener('touchend', (e) => {
+  let sx = 0, sy = 0;
+  stage.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, sig);
+  stage.addEventListener('touchend', e => {
     if (e.target.closest('button, a, input, label')) return;
-    const endX = e.changedTouches[0].clientX;
-    const endY = e.changedTouches[0].clientY;
-    const dx   = endX - touchStartX;
-    const dy   = endY - touchStartY;
-    const adx  = Math.abs(dx), ady = Math.abs(dy);
-
-    // En créditos: detectar botón "Volver a leer"
+    const ex = e.changedTouches[0].clientX, ey = e.changedTouches[0].clientY;
+    if (Math.abs(ey - sy) > 40) return;
     if (ReaderState.currentPanel === ReaderState.comic.panels.length) {
       const canvas = ReaderState.creditsCanvas;
       if (canvas) {
         const rect = canvas.getBoundingClientRect();
-        const cx = (endX - rect.left) * (canvas.width  / rect.width);
-        const cy = (endY - rect.top)  * (canvas.height / rect.height);
+        const cx = (ex - rect.left) * (canvas.width / rect.width);
+        const cy = (ey - rect.top)  * (canvas.height / rect.height);
         const ra = ReaderState.creditsRestartArea;
-        if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
-          goToPanel(0); return;
-        }
+        if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) { goToPanel(0); return; }
       }
-      if (_isBackSide(endX, endY)) goBack();
+      if (_isBackSide(ex, ey)) goBack();
       return;
     }
-
-    if (navMode === 'horizontal') {
-      // Swipe horizontal: derecha→atrás, izquierda→adelante
-      if (adx < 30) return; // sin movimiento suficiente
-      if (adx < ady) return; // gesto más vertical que horizontal, ignorar
-      if (dx > 0) goBack(); else advance();
-    } else if (navMode === 'vertical') {
-      // Swipe vertical: abajo→atrás, arriba→adelante
-      if (ady < 30) return;
-      if (ady < adx) return; // gesto más horizontal que vertical, ignorar
-      if (dy > 0) goBack(); else advance();
-    } else {
-      // Modo fixed (o PC): tap en mitad izquierda/derecha
-      if (ady > 40) return;
-      if (_isBackSide(endX, endY)) goBack(); else advance();
-    }
+    if (_isBackSide(ex, ey)) goBack(); else advance();
   }, sig);
+}
+
+// ── Modo scroll: stage se convierte en carrusel + overlay para bocadillos ──
+function _setupScrollMode(navMode) {
+  const isH   = navMode === 'horizontal';
+  const stage = document.getElementById('readerStage');
+  const panels = ReaderState.comic.panels;
+
+  // Convertir stage a contenedor flex con scroll-snap
+  stage.style.cssText = `
+    display: flex;
+    flex-direction: ${isH ? 'row' : 'column'};
+    overflow-${isH ? 'x' : 'y'}: scroll;
+    overflow-${isH ? 'y' : 'x'}: hidden;
+    scroll-snap-type: ${isH ? 'x' : 'y'} mandatory;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-${isH ? 'x' : 'y'}: none;
+    align-items: stretch;
+    justify-content: flex-start;
+    position: relative;
+  `;
+
+  // Convertir cada panel a slide flex
+  Array.from(stage.children).forEach(panel => {
+    panel.style.cssText = `
+      flex: 0 0 100%;
+      width: 100%;
+      height: 100%;
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      opacity: 1;
+    `;
+    panel.classList.remove('active');
+  });
+
+  // Ir al panel 0 sin animación
+  ReaderState.currentPanel = 0;
+  _showBubblesForPanel(0);
+
+  // Overlay para interceptar swipes cuando hay bocadillos pendientes
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;touch-action:none;pointer-events:none;';
+  document.body.appendChild(overlay);
+  ReaderState._scrollOverlay = overlay;
+
+  function _hasPendingBubbles() {
+    const panelEl = document.getElementById('rp_' + ReaderState.currentPanel);
+    if (!panelEl) return false;
+    const bubbles = Array.from(panelEl.querySelectorAll('.reader-bubble'));
+    const visible = bubbles.filter(b => b.classList.contains('visible')).length;
+    return visible < bubbles.length;
+  }
+
+  function _updateOverlay() {
+    overlay.style.pointerEvents = _hasPendingBubbles() ? 'all' : 'none';
+  }
+  _updateOverlay();
+
+  // Swipe en overlay (bocadillos pendientes)
+  let _osx = null, _osy = null;
+  overlay.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { _osx = null; return; }
+    _osx = e.touches[0].clientX;
+    _osy = e.touches[0].clientY;
+  }, { passive: true });
+
+  overlay.addEventListener('touchend', e => {
+    if (_osx === null) return;
+    const ex = e.changedTouches[0].clientX, ey = e.changedTouches[0].clientY;
+    const dx = ex - _osx, dy = ey - _osy;
+    _osx = null;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (isH && adx < 20) return;
+    if (!isH && ady < 20) return;
+    if (isH && ady > adx * 1.5) return;
+    if (!isH && adx > ady * 1.5) return;
+    const goFwd = isH ? dx < 0 : dy < 0;
+    const goBwd = isH ? dx > 0 : dy > 0;
+    if (goFwd) {
+      if (_advanceBubble()) { _updateOverlay(); }
+    } else if (goBwd) {
+      _goBackBubble(); _updateOverlay();
+    }
+  }, { passive: true });
+
+  // Scroll nativo: detectar llegada a nuevo panel
+  let _prevPanel = 0, _sraf = null;
+  stage.addEventListener('scroll', () => {
+    if (_sraf) cancelAnimationFrame(_sraf);
+    _sraf = requestAnimationFrame(() => {
+      const pos  = isH ? stage.scrollLeft : stage.scrollTop;
+      const size = isH ? stage.clientWidth : stage.clientHeight;
+      if (!size) return;
+      const si = Math.max(0, Math.min(panels.length, Math.round(pos / size)));
+      if (si === _prevPanel) return;
+      _prevPanel = si;
+      ReaderState.currentPanel = si;
+      ReaderState.currentBubbleIdx = -1;
+      document.getElementById('readerPanelNum').textContent =
+        Math.min(si + 1, panels.length) + ' / ' + panels.length;
+      if (si === panels.length) {
+        _showCreditsPanel();
+      } else {
+        _showBubblesForPanel(si);
+        // Bloquear orientación del dispositivo según la hoja actual
+        const orient = panels[si]?.orientation || 'v';
+        requestOrientationLock(orient);
+      }
+      _updateOverlay();
+    });
+  }, { passive: true });
+}
+
+// Retroceder bocadillo (en modo scroll)
+function _goBackBubble() {
+  const panelEl = document.getElementById('rp_' + ReaderState.currentPanel);
+  if (!panelEl) return;
+  const bubbles = Array.from(panelEl.querySelectorAll('.reader-bubble'));
+  const lastVisible = bubbles.filter(b => b.classList.contains('visible')).length;
+  if (lastVisible > 1) {
+    bubbles[lastVisible - 1].classList.remove('visible');
+    ReaderState.currentBubbleIdx = lastVisible - 2;
+  }
 }
 
 // ════════════════════════════════════════
@@ -709,6 +817,7 @@ function ReaderView_destroy() {
     ReaderState._keyHandler = null;
   }
   if (ReaderState._stageAC) { ReaderState._stageAC.abort(); ReaderState._stageAC = null; }
+  if (ReaderState._scrollOverlay) { ReaderState._scrollOverlay.remove(); ReaderState._scrollOverlay = null; }
   if (ReaderState.fadeRaf) { cancelAnimationFrame(ReaderState.fadeRaf); ReaderState.fadeRaf = null; }
   ReaderState.creditsCanvas = null;
   ReaderState.creditsCtx    = null;
