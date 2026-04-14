@@ -418,6 +418,7 @@ function _startScrollReader() {
     RS.textStep = _initTextStep(0);
     _renderScrollSlide(0);
     _updateOverlay();
+    requestAnimationFrame(_positionBtns);
   });
 
   // Swipe en overlay (bocadillos pendientes)
@@ -467,11 +468,21 @@ function _startScrollReader() {
       _prevSI = si;
       RS.idx  = si;
       RS.textStep = _initTextStep(si);
-      // Apuntar RS.canvas/ctx al canvas del nuevo slide
+      // Apuntar RS.canvas/ctx al canvas del nuevo slide y asegurar dimensiones
       RS.canvas = RS.scrollCanvases[si];
-      RS.ctx    = RS.canvas?.getContext('2d');
-      _render();   // usa RS.canvas/ctx correctos
+      if (RS.canvas) {
+        const { pw, ph } = _panelDims(si);
+        const vw = window.innerWidth, vh = window.innerHeight;
+        RS.canvas.width  = pw;
+        RS.canvas.height = ph;
+        const scale = Math.min(vw / pw, vh / ph);
+        RS.canvas.style.width  = Math.round(pw * scale) + 'px';
+        RS.canvas.style.height = Math.round(ph * scale) + 'px';
+        RS.ctx = RS.canvas.getContext('2d');
+      }
+      _render();
       _updateOverlay();
+      requestAnimationFrame(_positionBtns);
       // Bloquear orientación del dispositivo según la hoja actual
       const _pOrient = RS.panels[si]?.orientation || 'v';
       if (screen.orientation?.lock) {
@@ -632,33 +643,14 @@ function _positionBtns() {
   const fsBtn    = document.getElementById('fullscreenToggle');
   const closeBtn = document.getElementById('closeBtn');
 
-  // En modo scroll el canvas fixed está oculto — usar el slide activo del
-  // contenedor scroll como referencia, o directamente el viewport
-  const scrollContainer = document.getElementById('scrollReader');
-  const isScrollMode = scrollContainer && scrollContainer.style.display !== 'none'
-                       && scrollContainer.className.includes('scroll-');
-
-  if (isScrollMode) {
-    // Botones fijos en las esquinas del viewport (igual que en modo fijo visualmente)
-    const vw = window.innerWidth;
-    if (fsBtn) {
-      fsBtn.style.left = PAD + 'px';
-      fsBtn.style.top  = OFY + 'px';
-    }
-    if (closeBtn) {
-      const btnW = closeBtn.getBoundingClientRect().width || 32;
-      closeBtn.style.left = (vw - PAD - btnW) + 'px';
-      closeBtn.style.top  = OFY + 'px';
-    }
-    return;
-  }
-
-  // Modo fixed: posicionar relativo al canvas
+  // Usar getBoundingClientRect() del canvas activo — funciona tanto en modo
+  // fixed (canvas con position:absolute) como en modo scroll (canvas en slide flex)
   const c = RS.canvas;
   if (!c) return;
-  const cl  = parseInt(c.style.left)  || 0;
-  const ct  = parseInt(c.style.top)   || 0;
-  const cw  = parseInt(c.style.width) || 0;
+  const rect = c.getBoundingClientRect();
+  const cl = rect.left;
+  const ct = rect.top;
+  const cw = rect.width;
 
   if (fsBtn) {
     fsBtn.style.left = (cl + PAD) + 'px';
