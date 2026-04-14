@@ -69,6 +69,8 @@ document.addEventListener('DOMContentLoaded', () => {
         _doClose();
       };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
+  // Guardar _closeAction en RS para que _startScrollReader pueda usarla
+  RS._closeAction = _closeAction;
 
   // Si la app estaba en fullscreen, entrar en fullscreen.
   // Intentamos inmediatamente (el tap en "Leer" puede servir como gesto activador
@@ -385,8 +387,17 @@ function _startScrollReader() {
     canvas.style.pointerEvents = 'none';
 
     slide.appendChild(canvas);
+    // Insertar instancias de botones para este slide (necesitamos _closeAction capturado)
+    // _closeAction se define fuera de _startScrollReader, se pasa al llamar esta función
+    slide._panelIdx = pi;
     container.appendChild(slide);
     RS.scrollCanvases.push(canvas);
+  });
+
+  // Insertar botones en cada slide ahora que _closeAction está disponible
+  RS.panels.forEach((panel, pi) => {
+    const slide = container.children[pi];
+    if (slide) _insertSlideButtons(slide, pi, RS._closeAction || (() => {}));
   });
 
   // Estado inicial
@@ -418,7 +429,7 @@ function _startScrollReader() {
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _renderAllScrollSlides();
     RS.textStep = _initTextStep(0);
-    _resizeScrollCanvas();   // activa canvas 0, escribe left/top/width, llama _positionBtns
+    _resizeScrollCanvas();
     _renderScrollSlide(0);
     _updateOverlay();
   });
@@ -493,13 +504,14 @@ function _startScrollReader() {
 
   RS.resizeFn = () => {
     _renderAllScrollSlides();
+    _updateScrollButtons();
     // Reposicionar el scroll al slide activo (el giro puede haberlo desplazado)
     const _rc = document.getElementById('scrollReader');
     if (_rc) {
       const _sz = isH ? _rc.clientWidth : _rc.clientHeight;
       if (_sz) _rc.scrollTo({ left: isH ? RS.idx*_sz : 0, top: isH ? 0 : RS.idx*_sz, behavior:'instant' });
     }
-    _resizeScrollCanvas();   // actualiza canvas activo y botones
+    _resizeScrollCanvas();
   };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
@@ -633,82 +645,98 @@ function _renderVectorLayer(ctx, layer, pw, ph, img) {
 // Los botones se anclan a los bordes del canvas, no a la ventana.
 // Se llama cada vez que el canvas cambia de tamaño o posición.
 function _positionBtns() {
+  // Modo fixed: posicionar los botones originales según el canvas actual
   const PAD = 8;
   const OFY = 10;
-  const fsBtn    = document.getElementById('fullscreenToggle');
-  const closeBtn = document.getElementById('closeBtn');
   const c = RS.canvas;
   if (!c) return;
+  const cl = parseInt(c.style.left)  || 0;
+  const ct = parseInt(c.style.top)   || 0;
+  const cw = parseInt(c.style.width) || 0;
+  const fsBtn    = document.getElementById('fullscreenToggle');
+  const closeBtn = document.getElementById('closeBtn');
+  if (fsBtn)    { fsBtn.style.left    = (cl + PAD) + 'px'; fsBtn.style.top    = (ct + OFY) + 'px'; }
+  if (closeBtn) { closeBtn.style.left = (cl + cw - PAD - (closeBtn.offsetWidth || 32)) + 'px'; closeBtn.style.top = (ct + OFY) + 'px'; }
+}
 
-  const scrollContainer = document.getElementById('scrollReader');
-  const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
-
-  if (isScrollMode) {
-    // En modo scroll: los botones van DENTRO del slide activo, position:absolute
-    // relativo al slide (que es 100vw × 100vh). El canvas está centrado en el slide.
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const dw = parseInt(c.style.width)  || 0;
-    const dh = parseInt(c.style.height) || 0;
-    // Posición del canvas dentro del slide (centrado)
-    const canvasLeft = Math.round((vw - dw) / 2);
-    const canvasTop  = Math.round((vh - dh) / 2);
-
-    // Mover botones al slide activo si no están ya ahí
-    const activeSlide = scrollContainer.children[RS.idx];
-    if (activeSlide) {
-      if (fsBtn    && fsBtn.parentElement    !== activeSlide) activeSlide.appendChild(fsBtn);
-      if (closeBtn && closeBtn.parentElement !== activeSlide) activeSlide.appendChild(closeBtn);
-    }
-    if (fsBtn) {
-      fsBtn.style.position = 'absolute';
-      fsBtn.style.left = (canvasLeft + PAD) + 'px';
-      fsBtn.style.top  = (canvasTop  + OFY) + 'px';
-    }
-    if (closeBtn) {
-      closeBtn.style.position = 'absolute';
-      const btnW = closeBtn.offsetWidth || 32;
-      closeBtn.style.left = (canvasLeft + dw - PAD - btnW) + 'px';
-      closeBtn.style.top  = (canvasTop  + OFY) + 'px';
-    }
+// Calcular posición del canvas para un panel dado — misma lógica que _resizeCanvas
+function _calcPanelLayout(pi) {
+  const panel = RS.panels[pi];
+  const { pw, ph } = _panelDims(pi);
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const isHorizPanel = pw > ph && !panel?.isCredits;
+  let scale;
+  if (isHorizPanel) {
+    scale = vh / ph;
+    if (pw * scale > vw * 1.5) scale = vw / pw;
   } else {
-    // Modo fixed: botones en position:fixed sobre el viewport
-    if (fsBtn    && fsBtn.parentElement    !== document.getElementById('readerApp'))
-      document.getElementById('readerApp').appendChild(fsBtn);
-    if (closeBtn && closeBtn.parentElement !== document.getElementById('readerApp'))
-      document.getElementById('readerApp').appendChild(closeBtn);
-    const cl = parseInt(c.style.left)  || 0;
-    const ct = parseInt(c.style.top)   || 0;
-    const cw = parseInt(c.style.width) || 0;
-    if (fsBtn) {
-      fsBtn.style.position = 'fixed';
-      fsBtn.style.left = (cl + PAD) + 'px';
-      fsBtn.style.top  = (ct + OFY) + 'px';
-    }
-    if (closeBtn) {
-      closeBtn.style.position = 'fixed';
-      const btnW = closeBtn.offsetWidth || 32;
-      closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
-      closeBtn.style.top  = (ct + OFY) + 'px';
-    }
+    scale = Math.min(vw / pw, vh / ph);
   }
+  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+  const left = Math.round((vw - dw) / 2);
+  const top  = Math.round((vh - dh) / 2);
+  return { pw, ph, dw, dh, left, top };
+}
+
+// Insertar instancias de los botones en un slide, posicionadas según la orientación del panel
+function _insertSlideButtons(slide, pi, closeAction) {
+  const PAD = 8, OFY = 10;
+  const { dw, dh, left, top } = _calcPanelLayout(pi);
+
+  // Botón fullscreen
+  const fs = document.createElement('button');
+  fs.className = 'corner-btn';
+  fs.setAttribute('aria-label', 'Pantalla completa');
+  fs.textContent = '[ ]';
+  fs.style.position = 'absolute';
+  fs.style.left = (left + PAD) + 'px';
+  fs.style.top  = (top  + OFY) + 'px';
+  fs.addEventListener('click', _toggleFullscreen);
+  fs.addEventListener('touchend', e => { e.stopPropagation(); _toggleFullscreen(); }, { passive: false });
+
+  // Botón cerrar
+  const cl = document.createElement('button');
+  cl.className = 'corner-btn';
+  cl.setAttribute('aria-label', 'Cerrar');
+  cl.innerHTML = '&#x2715;';
+  cl.style.position = 'absolute';
+  // Ancho aproximado del botón cerrar (32px según CSS)
+  const btnW = 32;
+  cl.style.left = (left + dw - PAD - btnW) + 'px';
+  cl.style.top  = (top  + OFY) + 'px';
+  cl.addEventListener('click', closeAction);
+  cl.addEventListener('touchend', e => { e.stopPropagation(); closeAction(); }, { passive: false });
+
+  slide.appendChild(fs);
+  slide.appendChild(cl);
+}
+
+// Actualizar botones en todos los slides tras resize (recalcular posiciones)
+function _updateScrollButtons() {
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+  RS.panels.forEach((panel, pi) => {
+    const slide = container.children[pi];
+    if (!slide) return;
+    const PAD = 8, OFY = 10;
+    const { dw, dh, left, top } = _calcPanelLayout(pi);
+    const btns = slide.querySelectorAll('.corner-btn');
+    if (btns[0]) { btns[0].style.left = (left + PAD) + 'px'; btns[0].style.top = (top + OFY) + 'px'; }
+    if (btns[1]) { btns[1].style.left = (left + dw - PAD - 32) + 'px'; btns[1].style.top = (top + OFY) + 'px'; }
+  });
 }
 
 // Equivalente a _resizeCanvas para modo scroll.
 function _resizeScrollCanvas() {
   const canvas = RS.scrollCanvases?.[RS.idx];
   if (!canvas) return;
-  const { pw, ph } = _panelDims(RS.idx);
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const scale = Math.min(vw / pw, vh / ph);
-  const dw = Math.round(pw * scale);
-  const dh = Math.round(ph * scale);
+  const { pw, ph, dw, dh } = _calcPanelLayout(RS.idx);
   canvas.width  = pw;
   canvas.height = ph;
   canvas.style.width  = dw + 'px';
   canvas.style.height = dh + 'px';
   RS.canvas = canvas;
   RS.ctx    = canvas.getContext('2d');
-  _positionBtns();
 }
 
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
