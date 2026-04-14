@@ -11962,18 +11962,28 @@ let edViewerIdx=0;
 function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
 function edOpenViewer(){
-  edHideGearIcon();  // ocultar gear al abrir visor
-  edViewerIdx=0;  // siempre empieza por la primera hoja
+  edHideGearIcon();
+  edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
-  // Garantizar que TODAS las hojas tienen orientation antes de abrir
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
   $('editorViewer')?.classList.add('open');
-  // Esperar fuentes antes del primer render para evitar fallback en bocadillos/texto
-  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    edUpdateViewer();
-    edInitViewerTap();
-  });
+
+  const _nm = edProjectMeta.navMode || 'fixed';
+  const _isTouch = window._edIsTouch || window.matchMedia('(hover:none) and (pointer:coarse)').matches;
+
+  if ((_nm === 'horizontal' || _nm === 'vertical') && _isTouch) {
+    // Modo scroll táctil: contenedor con slides
+    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+      _edOpenViewerScroll(_nm);
+    });
+  } else {
+    // Modo fixed (o PC siempre fixed)
+    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+      edUpdateViewer();
+      edInitViewerTap();
+    });
+  }
   // Orientación: resize recalcula canvas al girar dispositivo
   if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
   let _viewerResizeTimer;
@@ -12002,6 +12012,132 @@ function edOpenViewer(){
   _viewerKeyHandler = _edViewerKey;
   document.addEventListener('keydown', _viewerKeyHandler);
 }
+// ── Visor en modo scroll (horizontal / vertical) ──────────────
+// Un canvas por estado (página × textStep) dentro de slides con scroll-snap nativo.
+// El navegador gestiona el deslizamiento — igual que el HTML de referencia.
+function _edOpenViewerScroll(navMode) {
+  const isH = navMode === 'horizontal';
+  const vw = window.innerWidth, vh = window.innerHeight;
+
+  // Ocultar canvas del modo fixed y sus controles
+  const fc = $('viewerCanvas');
+  if (fc) fc.style.display = 'none';
+  $('viewerControls')?.classList.add('hidden');
+
+  // Configurar contenedor
+  const sc = $('viewerScroll');
+  sc.className = isH ? 'vs-h' : 'vs-v';
+  sc.innerHTML = '';
+
+  const _savedOrient  = edOrientation;
+  const _savedPage    = edCurrentPage;
+
+  // Construir slides: 1 canvas por estado (página × textStep)
+  edPages.forEach((page, pi) => {
+    const isSeq  = (page.textMode || 'sequential') === 'sequential';
+    const tl     = page.layers.filter(l => l.type==='text' || l.type==='bubble');
+    const nTexts = isSeq ? tl.length : 0;
+    const nStates = nTexts + 1;
+
+    const orient = page.orientation || _savedOrient;
+    const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+    const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+    const scale = Math.min(vw / pw, vh / ph);
+
+    for (let ts = 0; ts < nStates; ts++) {
+      const slide  = document.createElement('div');
+      slide.className = 'vs-slide';
+      slide.style.width  = vw + 'px';
+      slide.style.height = vh + 'px';
+
+      const canvas = document.createElement('canvas');
+      canvas.width  = pw;
+      canvas.height = ph;
+      canvas.style.width  = Math.round(pw * scale) + 'px';
+      canvas.style.height = Math.round(ph * scale) + 'px';
+
+      slide.appendChild(canvas);
+      sc.appendChild(slide);
+
+      // Renderizar este estado sobre el canvas
+      _edRenderViewerState(canvas, page, pi, ts, pw, ph, orient);
+    }
+  });
+
+  edOrientation  = _savedOrient;
+  edCurrentPage  = _savedPage;
+  edViewerIdx      = 0;
+  edViewerTextStep = 0;
+
+  // Detectar estado actual por scroll → actualizar idx/textStep
+  let _prevSI = 0, _raf = null;
+  const _stateMap = [];
+  edPages.forEach((page, pi) => {
+    const isSeq  = (page.textMode || 'sequential') === 'sequential';
+    const tl     = page.layers.filter(l => l.type==='text' || l.type==='bubble');
+    const nTexts = isSeq ? tl.length : 0;
+    for (let ts = 0; ts < nTexts + 1; ts++) _stateMap.push({ pi, ts });
+  });
+
+  sc.addEventListener('scroll', () => {
+    if (_raf) cancelAnimationFrame(_raf);
+    _raf = requestAnimationFrame(() => {
+      const pos  = isH ? sc.scrollLeft : sc.scrollTop;
+      const size = isH ? sc.clientWidth : sc.clientHeight;
+      if (!size) return;
+      const si = Math.max(0, Math.min(_stateMap.length - 1, Math.round(pos / size)));
+      if (si === _prevSI) return;
+      _prevSI = si;
+      edViewerIdx      = _stateMap[si].pi;
+      edViewerTextStep = _stateMap[si].ts;
+    });
+  }, { passive: true });
+}
+
+// Renderizar una página con un textStep dado sobre un canvas destino
+function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
+  const ctx = canvas.getContext('2d');
+  const _savedOrient  = edOrientation;
+  const _savedPage    = edCurrentPage;
+  const _savedIdx     = edViewerIdx;
+  const _savedStep    = edViewerTextStep;
+
+  edOrientation  = orient;
+  edCurrentPage  = pageIdx;
+  edViewerIdx    = pageIdx;
+  edViewerTextStep = textStep;
+
+  // Canvas de trabajo completo
+  const full = document.createElement('canvas');
+  full.width  = ED_CANVAS_W;
+  full.height = ED_CANVAS_H;
+  const fctx = full.getContext('2d');
+  const mx = (ED_CANVAS_W - pw) / 2;
+  const my = (ED_CANVAS_H - ph) / 2;
+  fctx.fillStyle = '#fff';
+  fctx.fillRect(mx, my, pw, ph);
+
+  // Capas de contenido
+  page.layers.forEach(l => {
+    if (l.type==='text' || l.type==='bubble') return;
+    fctx.globalAlpha = l.opacity ?? 1;
+    if (typeof l.draw === 'function') l.draw(fctx, full);
+    fctx.globalAlpha = 1;
+  });
+
+  // Textos hasta textStep
+  _edViewerDrawTextsOnCtx(page, fctx, full);
+
+  // Copiar zona de la página al canvas destino
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
+
+  edOrientation    = _savedOrient;
+  edCurrentPage    = _savedPage;
+  edViewerIdx      = _savedIdx;
+  edViewerTextStep = _savedStep;
+}
+
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -12180,6 +12316,13 @@ function edInitViewerTap(){
   viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
+  // Limpiar modo scroll si estaba activo
+  const sc = $('viewerScroll');
+  if (sc) { sc.className = ''; sc.innerHTML = ''; }
+  const fc = $('viewerCanvas');
+  if (fc) fc.style.display = '';
+  _viewerTapBound = false;
+
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
   _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
