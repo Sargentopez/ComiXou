@@ -395,6 +395,9 @@ function _startScrollReader() {
 
   // Overlay — intercepta swipes cuando hay textos pendientes
   const overlay = document.createElement('div');
+  // touch-action y pointer-events se sincronizan juntos:
+  // cuando hay textos pendientes: ambos activos (intercepta el swipe)
+  // cuando no hay: ambos inactivos (el gesto llega al scroll nativo sin fricción)
   overlay.style.cssText = 'position:fixed;inset:0;z-index:10;touch-action:none;pointer-events:none;';
   document.getElementById('readerApp').appendChild(overlay);
   RS.scrollOverlay = overlay;
@@ -406,7 +409,9 @@ function _startScrollReader() {
   }
 
   function _updateOverlay() {
-    overlay.style.pointerEvents = _hasPendingTexts() ? 'all' : 'none';
+    const active = _hasPendingTexts();
+    overlay.style.pointerEvents = active ? 'all' : 'none';
+    overlay.style.touchAction   = active ? 'none' : 'auto';
   }
 
   // Render inicial de todos los slides
@@ -418,7 +423,8 @@ function _startScrollReader() {
     RS.textStep = _initTextStep(0);
     _renderScrollSlide(0);
     _updateOverlay();
-    requestAnimationFrame(_positionBtns);
+    // Delay para que el layout esté calculado antes de posicionar los botones
+    setTimeout(_positionBtns, 50);
   });
 
   // Swipe en overlay (bocadillos pendientes)
@@ -482,7 +488,7 @@ function _startScrollReader() {
       }
       _render();
       _updateOverlay();
-      requestAnimationFrame(_positionBtns);
+      setTimeout(_positionBtns, 50);
       // Bloquear orientación del dispositivo según la hoja actual
       const _pOrient = RS.panels[si]?.orientation || 'v';
       if (screen.orientation?.lock) {
@@ -503,7 +509,7 @@ function _startScrollReader() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  RS.resizeFn = () => { _renderAllScrollSlides(); _positionBtns(); };
+  RS.resizeFn = () => { _renderAllScrollSlides(); setTimeout(_positionBtns, 50); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   // Posicionar botones sobre el scroll
@@ -642,22 +648,34 @@ function _positionBtns() {
   const OFY = 10;
   const fsBtn    = document.getElementById('fullscreenToggle');
   const closeBtn = document.getElementById('closeBtn');
-
-  // Usar getBoundingClientRect() del canvas activo — funciona tanto en modo
-  // fixed (canvas con position:absolute) como en modo scroll (canvas en slide flex)
   const c = RS.canvas;
   if (!c) return;
-  const rect = c.getBoundingClientRect();
-  const cl = rect.left;
-  const ct = rect.top;
-  const cw = rect.width;
+
+  let cl, ct, cw;
+  const scrollContainer = document.getElementById('scrollReader');
+  const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
+
+  if (isScrollMode) {
+    // Modo scroll: calcular posición centrada desde dimensiones conocidas del canvas
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const dw = parseInt(c.style.width)  || 0;
+    const dh = parseInt(c.style.height) || 0;
+    cl = Math.round((vw - dw) / 2);
+    ct = Math.round((vh - dh) / 2);
+    cw = dw;
+  } else {
+    // Modo fixed: canvas tiene position:absolute con left/top explícitos
+    cl = parseInt(c.style.left)  || 0;
+    ct = parseInt(c.style.top)   || 0;
+    cw = parseInt(c.style.width) || 0;
+  }
 
   if (fsBtn) {
     fsBtn.style.left = (cl + PAD) + 'px';
     fsBtn.style.top  = (ct + OFY) + 'px';
   }
   if (closeBtn) {
-    const btnW = closeBtn.getBoundingClientRect().width || 32;
+    const btnW = parseInt(closeBtn.style.width) || closeBtn.offsetWidth || 32;
     closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
     closeBtn.style.top  = (ct + OFY) + 'px';
   }
