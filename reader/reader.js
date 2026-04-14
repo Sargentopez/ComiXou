@@ -361,6 +361,7 @@ function _startScrollReader() {
   if (fixedCanvas) fixedCanvas.style.display = 'none';
 
   const container = document.getElementById('scrollReader');
+  container.style.display = ''; // quitar display:none inline antes de activar clases
   container.className = isH ? 'scroll-reader scroll-h' : 'scroll-reader scroll-v';
   container.innerHTML = '';
 
