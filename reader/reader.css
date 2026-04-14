@@ -180,3 +180,9 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   box-shadow: 0 8px 32px rgba(0,0,0,.45);
   pointer-events: none;
 }
+
+/* Botones dentro de slide: position absolute relativo al slide,
+   JS los coloca sobre las esquinas del canvas */
+.rs-slide .corner-btn {
+  position: absolute;
+}
