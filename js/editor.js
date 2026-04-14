@@ -12014,19 +12014,16 @@ function edOpenViewer(){
 }
 // ── Visor en modo scroll (horizontal / vertical) ──────────────
 //
-// Arquitectura: un slide por página, cada slide tiene un canvas.
-// El canvas activo se redibuja igual que en modo fijo (edUpdateViewer),
-// incluyendo fade de bocadillos (_vStartBubbleFade / _vPrevBubbleFade).
-//
-// Gesto de arrastre:
-//   - Si la página actual tiene textos secuenciales pendientes:
-//       → avanzar texto (sin mover el scroll) — mismo comportamiento que modo fijo
-//   - Si no hay textos pendientes:
-//       → el scroll nativo lleva a la siguiente página
-//
-// Para implementarlo: el scroll está BLOQUEADO (overflow:hidden) mientras hay
-// textos pendientes. Al completarse, se desbloquea momentáneamente para que
-// el siguiente swipe mueva el scroll al slide siguiente.
+// Arquitectura (igual que Webtoon / Tapas / Kindle):
+//   - Scroll nativo SIEMPRE activo — overflow NUNCA cambia → sin saltos
+//   - Un slide por página con canvas; scroll-snap + scroll-behavior:smooth
+//     dan la animación natural (ease-out del navegador, acelerada al inicio
+//     y desacelerada al final)
+//   - Un overlay transparente (position:absolute, inset:0) encima del scroll:
+//       · pointer-events:all  → cuando hay textos pendientes: intercepta el
+//         swipe y avanza el bocadillo SIN mover el scroll
+//       · pointer-events:none → cuando la página está completa: los toques
+//         llegan al scroll nativo que mueve la hoja suavemente
 // ─────────────────────────────────────────────────────────────
 
 function _edOpenViewerScroll(navMode) {
@@ -12035,20 +12032,20 @@ function _edOpenViewerScroll(navMode) {
 
   _viewerScrollMode = true;
 
-  // Ocultar canvas del modo fijo y sus controles
+  // Ocultar canvas/controles del modo fijo
   const fc = $('viewerCanvas');
   if (fc) fc.style.display = 'none';
   $('viewerControls')?.classList.add('hidden');
 
+  // Configurar contenedor — overflow NUNCA se toca después de aquí
   const sc = $('viewerScroll');
   sc.className = isH ? 'vs-h' : 'vs-v';
   sc.innerHTML = '';
 
   const _savedOrient = edOrientation;
 
-  // ── Construir un slide+canvas por página ──
-  const _slides   = [];  // elementos DOM slide
-  const _canvases = [];  // canvas por página
+  // ── Construir slides ──
+  const _canvases = [];
 
   edPages.forEach((page, pi) => {
     const orient = page.orientation || _savedOrient;
@@ -12056,7 +12053,7 @@ function _edOpenViewerScroll(navMode) {
     const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
     const scale = Math.min(vw / pw, vh / ph);
 
-    const slide  = document.createElement('div');
+    const slide = document.createElement('div');
     slide.className = 'vs-slide';
     slide.style.width  = vw + 'px';
     slide.style.height = vh + 'px';
@@ -12070,179 +12067,143 @@ function _edOpenViewerScroll(navMode) {
 
     slide.appendChild(canvas);
     sc.appendChild(slide);
-    _slides.push(slide);
     _canvases.push(canvas);
   });
+
+  // ── Overlay: intercepta toques cuando hay textos pendientes ──
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:absolute;inset:0;z-index:10;touch-action:none;';
+  overlay.style.pointerEvents = 'none'; // empieza sin interceptar
+  $('editorViewer').appendChild(overlay);
 
   // ── Estado ──
   edViewerIdx      = 0;
   edViewerTextStep = 0;
-  let _scrollLocked = false;  // true mientras hay textos pendientes en la página actual
 
-  // Apuntar el canvas/ctx global al canvas del slide activo
   function _activateCanvas(pi) {
     edViewerCanvas = _canvases[pi];
-    edViewerCtx    = _canvases[pi].getContext('2d');
+    edViewerCtx    = _canvases[pi]?.getContext('2d');
   }
 
-  function _hasPendingTexts() {
-    const page  = edPages[edViewerIdx];
+  function _hasPendingTexts(pi) {
+    pi = pi ?? edViewerIdx;
+    const page  = edPages[pi];
     const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    const isSeq = page?.textMode === 'sequential';
-    return isSeq && edViewerTextStep < tl.length;
+    return (page?.textMode || 'sequential') === 'sequential' && edViewerTextStep < tl.length;
   }
 
-  function _setScrollLock(locked) {
-    _scrollLocked = locked;
-    // Bloquear/desbloquear scroll nativo cambiando overflow
-    if (isH) {
-      sc.style.overflowX = locked ? 'hidden' : 'scroll';
-    } else {
-      sc.style.overflowY = locked ? 'hidden' : 'scroll';
-    }
+  function _updateOverlay() {
+    // El overlay bloquea toques solo si hay textos pendientes en la página actual
+    overlay.style.pointerEvents = _hasPendingTexts() ? 'all' : 'none';
   }
 
-  // Render inicial del primer slide
-  _activateCanvas(0);
+  // ── Render inicial de todos los slides (sin textos secuenciales aún) ──
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    const _si = edViewerIdx, _ss = edViewerTextStep;
     edPages.forEach((page, pi) => {
       _activateCanvas(pi);
       const orient = page.orientation || _savedOrient;
       const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-      edUpdateViewerSize(pw, orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W);
-      // Renderizar sin textos secuenciales primero
-      const _savedStep = edViewerTextStep;
-      const _savedIdx  = edViewerIdx;
+      const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
       edViewerIdx      = pi;
       edViewerTextStep = 0;
       edUpdateViewer();
-      edViewerIdx      = _savedIdx;
-      edViewerTextStep = _savedStep;
     });
-    // Activar canvas de la página 0 y renderizar con primer texto
+    // Activar página 0 con primer texto
+    edViewerIdx      = _si;
     _activateCanvas(0);
-    edViewerIdx      = 0;
     const p0 = edPages[0];
     const tl0 = (p0?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
     edViewerTextStep = (p0?.textMode === 'sequential' && tl0.length > 0) ? 1 : 0;
     edUpdateViewer();
-    // Bloquear scroll si hay más textos
-    _setScrollLock(_hasPendingTexts());
+    _updateOverlay();
   });
 
-  // ── Swipe: interceptar touchstart/touchend para avanzar textos ──
-  // NO bloqueamos touchmove — el scroll nativo necesita verlo para animar
-  // Usamos la distancia del swipe para decidir: si hay textos pendientes,
-  // cancelamos el efecto con scrollTo() de vuelta al slide actual.
-  let _swipeSx = null, _swipeSy = null, _swipeTime = null;
-
-  sc.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) { _swipeSx = null; return; }
-    _swipeSx   = e.touches[0].clientX;
-    _swipeSy   = e.touches[0].clientY;
-    _swipeTime = Date.now();
+  // ── Swipe en el overlay (cuando hay textos pendientes) ──
+  let _osx = null, _osy = null;
+  overlay.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { _osx = null; return; }
+    _osx = e.touches[0].clientX;
+    _osy = e.touches[0].clientY;
   }, { passive: true });
 
-  sc.addEventListener('touchend', e => {
-    if (_swipeSx === null) return;
-    const ex  = e.changedTouches[0].clientX;
-    const ey  = e.changedTouches[0].clientY;
-    const dx  = ex - _swipeSx;
-    const dy  = ey - _swipeSy;
+  overlay.addEventListener('touchend', e => {
+    if (_osx === null) return;
+    const ex = e.changedTouches[0].clientX;
+    const ey = e.changedTouches[0].clientY;
+    const dx = ex - _osx, dy = ey - _osy;
+    _osx = null;
     const adx = Math.abs(dx), ady = Math.abs(dy);
-    _swipeSx = null;
+    // Ignorar gestos en dirección incorrecta
+    if (isH && adx < 20) return;
+    if (!isH && ady < 20) return;
+    if (isH && ady > adx * 1.5) return;
+    if (!isH && adx > ady * 1.5) return;
 
-    // Detectar dirección dominante del swipe
-    const isFwd = isH ? dx < -25 : dy < -25;
-    const isBwd = isH ? dx >  25 : dy >  25;
-    if (!isFwd && !isBwd) return;
-    // Verificar que el gesto es en la dirección correcta
-    if (isH && ady > adx) return;
-    if (!isH && adx > ady) return;
+    const goFwd = isH ? dx < 0 : dy < 0;
+    const goBwd = isH ? dx > 0 : dy > 0;
 
-    if (isFwd) {
-      if (_hasPendingTexts()) {
-        // Avanzar texto: igual que modo fijo
-        _vStartBubbleFade();
-        edViewerTextStep++;
-        _activateCanvas(edViewerIdx);
-        edUpdateViewer();
-        // Si aún hay textos pendientes, mantener scroll bloqueado en slide actual
-        if (_hasPendingTexts()) {
-          _setScrollLock(true);
-          // Snap de vuelta al slide actual (por si el scroll nativo se movió un poco)
-          _snapToSlide(edViewerIdx);
-        } else {
-          // Último texto mostrado: desbloquear para que el próximo swipe mueva la hoja
-          _setScrollLock(false);
-        }
-      }
-      // Si no hay textos pendientes: el scroll nativo ya mueve la hoja → detectar en evento scroll
-    } else if (isBwd) {
-      _vsScrollBack();
+    if (goFwd && _hasPendingTexts()) {
+      // Avanzar bocadillo con fade (idéntico al modo fijo)
+      _vStartBubbleFade();
+      edViewerTextStep++;
+      _activateCanvas(edViewerIdx);
+      edUpdateViewer();
+      _updateOverlay(); // quitar overlay si ya no hay más
+    } else if (goBwd) {
+      _vsBack();
     }
   }, { passive: true });
 
-  // ── Detectar cambio de slide por scroll nativo ──
-  let _prevSlideIdx = 0, _scrollRaf = null;
+  // ── Retroceder ──
+  function _vsBack() {
+    if (_vFadeRaf) { cancelAnimationFrame(_vFadeRaf); _vFadeRaf = null; _vPrevBubbleFade = 0; }
+    const page  = edPages[edViewerIdx];
+    const isSeq = (page?.textMode || 'sequential') === 'sequential';
+    const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
+    if (isSeq && edViewerTextStep > 1) {
+      edViewerTextStep--;
+      _activateCanvas(edViewerIdx);
+      edUpdateViewer();
+      _updateOverlay();
+    } else if (edViewerIdx > 0) {
+      _snapTo(edViewerIdx - 1);
+    }
+  }
+
+  // ── Scroll nativo: detectar llegada a nuevo slide ──
+  let _prevSI = 0, _scrollRaf = null, _settling = false;
   sc.addEventListener('scroll', () => {
     if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
     _scrollRaf = requestAnimationFrame(() => {
       const pos  = isH ? sc.scrollLeft : sc.scrollTop;
       const size = isH ? sc.clientWidth : sc.clientHeight;
       if (!size) return;
-      const newSI = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
-      if (newSI === _prevSlideIdx) return;
-      _prevSlideIdx = newSI;
-      edViewerIdx = newSI;
-      // Render de la nueva página con primer texto
-      _activateCanvas(newSI);
-      const np  = edPages[newSI];
+      const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
+      if (si === _prevSI) return;
+      _prevSI      = si;
+      edViewerIdx  = si;
+      _activateCanvas(si);
+      const np  = edPages[si];
       const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
       edViewerTextStep = (np?.textMode === 'sequential' && ntl.length > 0) ? 1 : 0;
       edUpdateViewer();
-      // Bloquear si tiene más textos pendientes
-      _setScrollLock(_hasPendingTexts());
+      _updateOverlay();
     });
   }, { passive: true });
 
-  // Volver al slide anterior con swipe back
-  function _vsScrollBack() {
-    if (_vFadeRaf) { cancelAnimationFrame(_vFadeRaf); _vFadeRaf = null; _vPrevBubbleFade = 0; }
-    const page  = edPages[edViewerIdx];
-    const isSeq = page?.textMode === 'sequential';
-    const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    if (isSeq && edViewerTextStep > 1) {
-      edViewerTextStep--;
-      _activateCanvas(edViewerIdx);
-      edUpdateViewer();
-      _setScrollLock(true);
-    } else if (edViewerIdx > 0) {
-      _setScrollLock(false);
-      const prevIdx = edViewerIdx - 1;
-      _snapToSlide(prevIdx);
-      edViewerIdx = prevIdx;
-      const pp  = edPages[prevIdx];
-      const ptl = (pp?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-      edViewerTextStep = pp?.textMode === 'sequential' ? ptl.length : 0;
-      _activateCanvas(prevIdx);
-      edUpdateViewer();
-      _setScrollLock(_hasPendingTexts());
-    }
-  }
-
-  function _snapToSlide(idx) {
+  // ── scrollTo programático para retroceder ──
+  function _snapTo(idx) {
     const size = isH ? sc.clientWidth : sc.clientHeight;
     sc.scrollTo({
-      left: isH ? idx * size : 0,
-      top:  isH ? 0 : idx * size,
+      left:     isH ? idx * size : 0,
+      top:      isH ? 0 : idx * size,
       behavior: 'smooth',
     });
   }
 
-  // Guardar referencia a _snapToSlide para el resize
-  sc._snapToSlide = _snapToSlide;
-  sc._isH = isH;
+  // Guardar referencia al overlay para limpieza en edCloseViewer
+  sc._vsOverlay = overlay;
 }
 
 // Función de render de un estado concreto sobre un canvas destino (usada en resize)
@@ -12478,7 +12439,13 @@ function edCloseViewer(){
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');
-  if (sc) { sc.className = ''; sc.innerHTML = ''; }
+  if (sc) {
+    if (sc._vsOverlay) { sc._vsOverlay.remove(); sc._vsOverlay = null; }
+    sc.className = '';
+    sc.innerHTML = '';
+    sc.style.overflowX = '';
+    sc.style.overflowY = '';
+  }
   const fc = $('viewerCanvas');
   if (fc) fc.style.display = '';
   _viewerTapBound = false;
