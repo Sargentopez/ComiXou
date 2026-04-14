@@ -509,7 +509,7 @@ function _startScrollReader() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  RS.resizeFn = () => { _renderAllScrollSlides(); setTimeout(_positionBtns, 50); };
+  RS.resizeFn = () => { _renderAllScrollSlides(); _positionBtns(); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   // Posicionar botones sobre el scroll
@@ -656,10 +656,14 @@ function _positionBtns() {
   const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
 
   if (isScrollMode) {
-    // Modo scroll: calcular posición centrada desde dimensiones conocidas del canvas
+    // Calcular desde las dimensiones lógicas del canvas y el viewport actual
+    // (no depende de style.left/top ni de getBoundingClientRect que pueden ser 0)
     const vw = window.innerWidth, vh = window.innerHeight;
-    const dw = parseInt(c.style.width)  || 0;
-    const dh = parseInt(c.style.height) || 0;
+    // Dimensiones lógicas del panel activo
+    const { pw, ph } = _panelDims(RS.idx);
+    const scale = Math.min(vw / pw, vh / ph);
+    const dw = Math.round(pw * scale);
+    const dh = Math.round(ph * scale);
     cl = Math.round((vw - dw) / 2);
     ct = Math.round((vh - dh) / 2);
     cw = dw;
@@ -675,7 +679,7 @@ function _positionBtns() {
     fsBtn.style.top  = (ct + OFY) + 'px';
   }
   if (closeBtn) {
-    const btnW = parseInt(closeBtn.style.width) || closeBtn.offsetWidth || 32;
+    const btnW = closeBtn.offsetWidth || 32;
     closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
     closeBtn.style.top  = (ct + OFY) + 'px';
   }
