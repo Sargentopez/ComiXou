@@ -417,14 +417,10 @@ function _startScrollReader() {
   // Render inicial de todos los slides
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _renderAllScrollSlides();
-    // Apuntar RS.canvas/ctx al canvas del slide 0 para que _render() funcione
-    RS.canvas = RS.scrollCanvases[0];
-    RS.ctx    = RS.canvas?.getContext('2d');
     RS.textStep = _initTextStep(0);
+    _resizeScrollCanvas();   // activa canvas 0, escribe left/top/width, llama _positionBtns
     _renderScrollSlide(0);
     _updateOverlay();
-    // Delay para que el layout esté calculado antes de posicionar los botones
-    setTimeout(_positionBtns, 50);
   });
 
   // Swipe en overlay (bocadillos pendientes)
@@ -448,12 +444,10 @@ function _startScrollReader() {
     const goFwd = isH ? dx < 0 : dy < 0;
     const goBwd = isH ? dx > 0 : dy > 0;
     if (goFwd && _hasPendingTexts()) {
-      // Apuntar RS.canvas/ctx al slide activo para que el RAF de fade pinte aquí
-      RS.canvas = RS.scrollCanvases[RS.idx];
-      RS.ctx    = RS.canvas?.getContext('2d');
+      _resizeScrollCanvas();   // asegura RS.canvas/ctx y posición de botones
       _startFade();
       RS.textStep++;
-      _render();   // _render() usa RS.canvas/ctx y RS.fadeAlpha — idéntico al modo fijo
+      _render();
       _updateOverlay();
     } else if (goBwd) {
       _scrollGoBack();
@@ -474,21 +468,9 @@ function _startScrollReader() {
       _prevSI = si;
       RS.idx  = si;
       RS.textStep = _initTextStep(si);
-      // Apuntar RS.canvas/ctx al canvas del nuevo slide y asegurar dimensiones
-      RS.canvas = RS.scrollCanvases[si];
-      if (RS.canvas) {
-        const { pw, ph } = _panelDims(si);
-        const vw = window.innerWidth, vh = window.innerHeight;
-        RS.canvas.width  = pw;
-        RS.canvas.height = ph;
-        const scale = Math.min(vw / pw, vh / ph);
-        RS.canvas.style.width  = Math.round(pw * scale) + 'px';
-        RS.canvas.style.height = Math.round(ph * scale) + 'px';
-        RS.ctx = RS.canvas.getContext('2d');
-      }
+      _resizeScrollCanvas();   // activa canvas si, escribe left/top/width, llama _positionBtns
       _render();
       _updateOverlay();
-      setTimeout(_positionBtns, 50);
       // Bloquear orientación del dispositivo según la hoja actual
       const _pOrient = RS.panels[si]?.orientation || 'v';
       if (screen.orientation?.lock) {
@@ -509,7 +491,16 @@ function _startScrollReader() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  RS.resizeFn = () => { _renderAllScrollSlides(); _positionBtns(); };
+  RS.resizeFn = () => {
+    _renderAllScrollSlides();
+    // Reposicionar el scroll al slide activo (el giro puede haberlo desplazado)
+    const _rc = document.getElementById('scrollReader');
+    if (_rc) {
+      const _sz = isH ? _rc.clientWidth : _rc.clientHeight;
+      if (_sz) _rc.scrollTo({ left: isH ? RS.idx*_sz : 0, top: isH ? 0 : RS.idx*_sz, behavior:'instant' });
+    }
+    _resizeScrollCanvas();   // actualiza canvas activo y botones
+  };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   // Posicionar botones sobre el scroll
@@ -526,8 +517,7 @@ function _startScrollReader() {
 // Avanzar (teclado): bocadillo → slide siguiente
 function _scrollAdvance() {
   if (_hasPendingFn()) {
-    RS.canvas = RS.scrollCanvases[RS.idx];
-    RS.ctx    = RS.canvas?.getContext('2d');
+    _resizeScrollCanvas();
     _startFade(); RS.textStep++; _render();
   } else if (RS.idx < RS.panels.length - 1) {
     _snapScrollTo(RS.idx + 1);
@@ -545,8 +535,7 @@ function _scrollGoBack() {
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
   if (isSeq && RS.textStep > 1) {
     RS.textStep--;
-    RS.canvas = RS.scrollCanvases[RS.idx];
-    RS.ctx    = RS.canvas?.getContext('2d');
+    _resizeScrollCanvas();
     _render();
     if (RS.scrollOverlay) RS.scrollOverlay.style.pointerEvents = 'all';
   } else if (RS.idx > 0) {
@@ -650,30 +639,10 @@ function _positionBtns() {
   const closeBtn = document.getElementById('closeBtn');
   const c = RS.canvas;
   if (!c) return;
-
-  let cl, ct, cw;
-  const scrollContainer = document.getElementById('scrollReader');
-  const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
-
-  if (isScrollMode) {
-    // Calcular desde las dimensiones lógicas del canvas y el viewport actual
-    // (no depende de style.left/top ni de getBoundingClientRect que pueden ser 0)
-    const vw = window.innerWidth, vh = window.innerHeight;
-    // Dimensiones lógicas del panel activo
-    const { pw, ph } = _panelDims(RS.idx);
-    const scale = Math.min(vw / pw, vh / ph);
-    const dw = Math.round(pw * scale);
-    const dh = Math.round(ph * scale);
-    cl = Math.round((vw - dw) / 2);
-    ct = Math.round((vh - dh) / 2);
-    cw = dw;
-  } else {
-    // Modo fixed: canvas tiene position:absolute con left/top explícitos
-    cl = parseInt(c.style.left)  || 0;
-    ct = parseInt(c.style.top)   || 0;
-    cw = parseInt(c.style.width) || 0;
-  }
-
+  // Lee left/top/width escritos sincrónicamente por _resizeCanvas o _resizeScrollCanvas
+  const cl = parseInt(c.style.left)  || 0;
+  const ct = parseInt(c.style.top)   || 0;
+  const cw = parseInt(c.style.width) || 0;
   if (fsBtn) {
     fsBtn.style.left = (cl + PAD) + 'px';
     fsBtn.style.top  = (ct + OFY) + 'px';
@@ -683,6 +652,27 @@ function _positionBtns() {
     closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
     closeBtn.style.top  = (ct + OFY) + 'px';
   }
+}
+
+// Equivalente a _resizeCanvas para modo scroll.
+// Escribe left/top/width/height en el canvas activo y llama _positionBtns — igual que _resizeCanvas.
+function _resizeScrollCanvas() {
+  const canvas = RS.scrollCanvases?.[RS.idx];
+  if (!canvas) return;
+  const { pw, ph } = _panelDims(RS.idx);
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const scale = Math.min(vw / pw, vh / ph);
+  const dw = Math.round(pw * scale);
+  const dh = Math.round(ph * scale);
+  canvas.width  = pw;
+  canvas.height = ph;
+  canvas.style.width  = dw + 'px';
+  canvas.style.height = dh + 'px';
+  canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
+  canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
+  RS.canvas = canvas;
+  RS.ctx    = canvas.getContext('2d');
+  _positionBtns();
 }
 
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
