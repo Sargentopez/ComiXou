@@ -412,7 +412,9 @@ function _startScrollReader() {
   // Render inicial de todos los slides
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _renderAllScrollSlides();
-    // Redibujar slide 0 con textStep inicial
+    // Apuntar RS.canvas/ctx al canvas del slide 0 para que _render() funcione
+    RS.canvas = RS.scrollCanvases[0];
+    RS.ctx    = RS.canvas?.getContext('2d');
     RS.textStep = _initTextStep(0);
     _renderScrollSlide(0);
     _updateOverlay();
@@ -439,9 +441,12 @@ function _startScrollReader() {
     const goFwd = isH ? dx < 0 : dy < 0;
     const goBwd = isH ? dx > 0 : dy > 0;
     if (goFwd && _hasPendingTexts()) {
+      // Apuntar RS.canvas/ctx al slide activo para que el RAF de fade pinte aquí
+      RS.canvas = RS.scrollCanvases[RS.idx];
+      RS.ctx    = RS.canvas?.getContext('2d');
       _startFade();
       RS.textStep++;
-      _renderScrollSlide(RS.idx);
+      _render();   // _render() usa RS.canvas/ctx y RS.fadeAlpha — idéntico al modo fijo
       _updateOverlay();
     } else if (goBwd) {
       _scrollGoBack();
@@ -462,7 +467,10 @@ function _startScrollReader() {
       _prevSI = si;
       RS.idx  = si;
       RS.textStep = _initTextStep(si);
-      _renderScrollSlide(si);
+      // Apuntar RS.canvas/ctx al canvas del nuevo slide
+      RS.canvas = RS.scrollCanvases[si];
+      RS.ctx    = RS.canvas?.getContext('2d');
+      _render();   // usa RS.canvas/ctx correctos
       _updateOverlay();
       // Bloquear orientación del dispositivo según la hoja actual
       const _pOrient = RS.panels[si]?.orientation || 'v';
@@ -484,8 +492,11 @@ function _startScrollReader() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  RS.resizeFn = () => _renderAllScrollSlides();
+  RS.resizeFn = () => { _renderAllScrollSlides(); _positionBtns(); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+
+  // Posicionar botones sobre el scroll
+  requestAnimationFrame(_positionBtns);
 
   const isTouch = window.matchMedia('(hover:none) and (pointer:coarse)').matches;
   _readerToast(
@@ -498,7 +509,9 @@ function _startScrollReader() {
 // Avanzar (teclado): bocadillo → slide siguiente
 function _scrollAdvance() {
   if (_hasPendingFn()) {
-    _startFade(); RS.textStep++; _renderScrollSlide(RS.idx);
+    RS.canvas = RS.scrollCanvases[RS.idx];
+    RS.ctx    = RS.canvas?.getContext('2d');
+    _startFade(); RS.textStep++; _render();
   } else if (RS.idx < RS.panels.length - 1) {
     _snapScrollTo(RS.idx + 1);
   }
@@ -515,7 +528,9 @@ function _scrollGoBack() {
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
   if (isSeq && RS.textStep > 1) {
     RS.textStep--;
-    _renderScrollSlide(RS.idx);
+    RS.canvas = RS.scrollCanvases[RS.idx];
+    RS.ctx    = RS.canvas?.getContext('2d');
+    _render();
     if (RS.scrollOverlay) RS.scrollOverlay.style.pointerEvents = 'all';
   } else if (RS.idx > 0) {
     _snapScrollTo(RS.idx - 1);
@@ -612,16 +627,38 @@ function _renderVectorLayer(ctx, layer, pw, ph, img) {
 // Los botones se anclan a los bordes del canvas, no a la ventana.
 // Se llama cada vez que el canvas cambia de tamaño o posición.
 function _positionBtns() {
+  const PAD = 8;
+  const OFY = 10;
+  const fsBtn    = document.getElementById('fullscreenToggle');
+  const closeBtn = document.getElementById('closeBtn');
+
+  // En modo scroll el canvas fixed está oculto — usar el slide activo del
+  // contenedor scroll como referencia, o directamente el viewport
+  const scrollContainer = document.getElementById('scrollReader');
+  const isScrollMode = scrollContainer && scrollContainer.style.display !== 'none'
+                       && scrollContainer.className.includes('scroll-');
+
+  if (isScrollMode) {
+    // Botones fijos en las esquinas del viewport (igual que en modo fijo visualmente)
+    const vw = window.innerWidth;
+    if (fsBtn) {
+      fsBtn.style.left = PAD + 'px';
+      fsBtn.style.top  = OFY + 'px';
+    }
+    if (closeBtn) {
+      const btnW = closeBtn.getBoundingClientRect().width || 32;
+      closeBtn.style.left = (vw - PAD - btnW) + 'px';
+      closeBtn.style.top  = OFY + 'px';
+    }
+    return;
+  }
+
+  // Modo fixed: posicionar relativo al canvas
   const c = RS.canvas;
   if (!c) return;
   const cl  = parseInt(c.style.left)  || 0;
   const ct  = parseInt(c.style.top)   || 0;
   const cw  = parseInt(c.style.width) || 0;
-  const PAD = 8;   // distancia al borde del canvas
-  const OFY = 10;  // offset vertical desde el borde superior del canvas
-
-  const fsBtn    = document.getElementById('fullscreenToggle');
-  const closeBtn = document.getElementById('closeBtn');
 
   if (fsBtn) {
     fsBtn.style.left = (cl + PAD) + 'px';
