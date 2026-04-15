@@ -11969,11 +11969,19 @@ function edOpenViewer(){
   // Garantizar que TODAS las hojas tienen orientation antes de abrir
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
   $('editorViewer')?.classList.add('open');
-  // Esperar fuentes antes del primer render para evitar fallback en bocadillos/texto
-  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    edUpdateViewer();
-    edInitViewerTap();
-  });
+  // Bifurcar segun navMode: fixed usa canvas unico; scroll usa panel deslizante
+  var _nm = edProjectMeta.navMode || 'fixed';
+  if(_nm === 'horizontal' || _nm === 'vertical'){
+    var _vc = $('viewerCanvas'); if(_vc) _vc.style.display='none';
+    (document.fonts ? document.fonts.ready : Promise.resolve()).then(function(){ _edOpenScrollViewer(_nm); });
+  } else {
+    var _vc2 = $('viewerCanvas'); if(_vc2) _vc2.style.display='';
+    var _vs = $('viewerScroll'); if(_vs){ _vs.style.display='none'; _vs.innerHTML=''; }
+    (document.fonts ? document.fonts.ready : Promise.resolve()).then(function(){
+      edUpdateViewer();
+      edInitViewerTap();
+    });
+  }
   // Orientación: resize recalcula canvas al girar dispositivo
   if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
   let _viewerResizeTimer;
@@ -12176,6 +12184,9 @@ function edCloseViewer(){
   _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
   clearTimeout(_viewerHideTimer);
+  // Limpiar scroll viewer si estaba activo
+  _edCloseScrollViewer();
+  var _vcr = $('viewerCanvas'); if(_vcr) _vcr.style.display='';
   // Eliminar TODOS los listeners del visor (touch + mouse) de una sola vez
   if(_viewerAC){ _viewerAC.abort(); _viewerAC=null; }
   _viewerTapBound = false; // permitir re-bind en próxima apertura
@@ -12194,6 +12205,320 @@ function edCloseViewer(){
     _viewerFsFn = null;
   }
 }
+/* ══════════════════════════════════════════
+   VISOR SCROLL — modos horizontal y vertical
+   Los gestos revelan textos secuenciales uno
+   a uno; al agotar textos pasan a la hoja
+   siguiente con animación de deslizamiento.
+   El sistema fixed NO se toca en absoluto.
+   ══════════════════════════════════════════ */
+
+// Estado del scroll viewer
+let _svMode = null;        // 'horizontal' | 'vertical' | null
+let _svAC   = null;        // AbortController de listeners del scroll viewer
+let _svAnimating = false;  // true durante animación de transición de página
+
+// Renderiza una hoja completa en un canvas recortado al tamaño del lienzo
+function _svRenderPage(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page) return null;
+  const _po = page.orientation || edOrientation;
+  const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const mx = (ED_CANVAS_W - pw) / 2;
+  const my = (ED_CANVAS_H - ph) / 2;
+  const full = document.createElement('canvas');
+  full.width = ED_CANVAS_W; full.height = ED_CANVAS_H;
+  const fctx = full.getContext('2d');
+  fctx.fillStyle = '#fff'; fctx.fillRect(mx, my, pw, ph);
+  const _savedOrient = edOrientation;
+  edOrientation = _po;
+  page.layers.forEach(l => {
+    if(l.type==='text'||l.type==='bubble') return;
+    fctx.globalAlpha = l.opacity ?? 1;
+    if(l.type==='image') l.draw(fctx, full); else l.draw(fctx);
+    fctx.globalAlpha = 1;
+  });
+  edOrientation = _savedOrient;
+  const out = document.createElement('canvas');
+  out.width = pw; out.height = ph;
+  const octx = out.getContext('2d');
+  octx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
+  return { canvas: out, pw, ph };
+}
+
+// Construye el slot visual de una hoja (canvas base + canvas overlay de textos)
+function _svBuildSlot(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page) return null;
+  const rendered = _svRenderPage(pageIdx);
+  if (!rendered) return null;
+  const { canvas: baseCanvas, pw, ph } = rendered;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const scale = Math.min(vw / pw, vh / ph);
+  const dw = Math.round(pw * scale);
+  const dh = Math.round(ph * scale);
+
+  const slot = document.createElement('div');
+  slot.className = 'sv-slot';
+  slot.dataset.idx = pageIdx;
+  slot.style.flexShrink = '0';
+  slot.style.width = '100vw';
+  slot.style.height = '100vh';
+  slot.style.display = 'flex';
+  slot.style.alignItems = 'center';
+  slot.style.justifyContent = 'center';
+  slot.style.position = 'relative';
+  slot.style.overflow = 'hidden';
+
+  baseCanvas.style.width = dw + 'px';
+  baseCanvas.style.height = dh + 'px';
+  baseCanvas.style.borderRadius = '16px';
+  baseCanvas.style.display = 'block';
+  baseCanvas.className = 'sv-base';
+  slot.appendChild(baseCanvas);
+
+  const overlayCanvas = document.createElement('canvas');
+  overlayCanvas.width = pw; overlayCanvas.height = ph;
+  overlayCanvas.style.position = 'absolute';
+  overlayCanvas.style.left = '50%';
+  overlayCanvas.style.top = '50%';
+  overlayCanvas.style.transform = 'translate(-50%,-50%)';
+  overlayCanvas.style.width = dw + 'px';
+  overlayCanvas.style.height = dh + 'px';
+  overlayCanvas.style.borderRadius = '16px';
+  overlayCanvas.style.pointerEvents = 'none';
+  overlayCanvas.className = 'sv-overlay';
+  slot.appendChild(overlayCanvas);
+
+  return slot;
+}
+
+// Redibuja el overlay de textos del slot activo según edViewerTextStep
+function _svRedrawTexts() {
+  const scrollEl = $('viewerScroll');
+  if (!scrollEl) return;
+  const slot = scrollEl.querySelector('.sv-slot[data-idx="' + edViewerIdx + '"]');
+  if (!slot) return;
+  const page = edPages[edViewerIdx];
+  if (!page) return;
+  const overlayCanvas = slot.querySelector('.sv-overlay');
+  if (!overlayCanvas) return;
+  const pw = overlayCanvas.width, ph = overlayCanvas.height;
+  const octx = overlayCanvas.getContext('2d');
+  octx.clearRect(0, 0, pw, ph);
+  const _po = page.orientation || edOrientation;
+  const mx = (ED_CANVAS_W - pw) / 2;
+  const my = (ED_CANVAS_H - ph) / 2;
+  const full = document.createElement('canvas');
+  full.width = ED_CANVAS_W; full.height = ED_CANVAS_H;
+  const fctx = full.getContext('2d');
+  const _savedOrient = edOrientation;
+  edOrientation = _po;
+  _edViewerDrawTextsOnCtx(page, fctx, full);
+  edOrientation = _savedOrient;
+  octx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
+  _svUpdateCounter();
+}
+
+// Actualiza el contador de páginas/textos en los controles del visor
+function _svUpdateCounter() {
+  const page = edPages[edViewerIdx];
+  if (!page) return;
+  const textLayers = page.layers.filter(l => l.type==='text' || l.type==='bubble');
+  const isSeq = page.textMode === 'sequential';
+  const cnt = $('viewerCounter');
+  if (!cnt) return;
+  if (isSeq && textLayers.length > 0) {
+    cnt.textContent = (edViewerIdx+1) + '/' + edPages.length + ' \u00B7 \uD83D\uDCAC' + (edViewerTextStep > 0 ? edViewerTextStep-1 : 0) + '/' + textLayers.length;
+  } else {
+    cnt.textContent = (edViewerIdx+1) + ' / ' + edPages.length;
+  }
+}
+
+// Anima el deslizamiento al cambiar de hoja hacia adelante
+function _svSlideTo(newIdx) {
+  if (_svAnimating) return;
+  _svAnimating = true;
+  const scrollEl = $('viewerScroll');
+  if (!scrollEl) { _svAnimating = false; return; }
+  const oldIdx = edViewerIdx;
+  edViewerIdx = newIdx;
+  const np = edPages[newIdx];
+  const ntl = (np ? np.layers : []).filter(l => l.type==='text' || l.type==='bubble');
+  edViewerTextStep = (np && np.textMode==='sequential' && ntl.length > 0) ? 1 : 0;
+  const isHoriz = _svMode === 'horizontal';
+  const size = isHoriz ? window.innerWidth : window.innerHeight;
+  const prop = isHoriz ? 'translateX' : 'translateY';
+  scrollEl.style.transition = 'none';
+  scrollEl.style.transform = prop + '(-' + (oldIdx * size) + 'px)';
+  scrollEl.getBoundingClientRect();
+  scrollEl.style.transition = 'transform 320ms cubic-bezier(0.25,0.46,0.45,0.94)';
+  scrollEl.style.transform = prop + '(-' + (newIdx * size) + 'px)';
+  scrollEl.addEventListener('transitionend', function handler(){
+    scrollEl.removeEventListener('transitionend', handler);
+    scrollEl.style.transition = 'none';
+    _svAnimating = false;
+    _svRedrawTexts();
+  });
+}
+
+// Anima el deslizamiento al cambiar de hoja hacia atrás, con textStep específico
+function _svSlideBack(newIdx, targetStep) {
+  if (_svAnimating) return;
+  _svAnimating = true;
+  const scrollEl = $('viewerScroll');
+  if (!scrollEl) { _svAnimating = false; return; }
+  const oldIdx = edViewerIdx;
+  edViewerIdx = newIdx;
+  edViewerTextStep = targetStep;
+  const isHoriz = _svMode === 'horizontal';
+  const size = isHoriz ? window.innerWidth : window.innerHeight;
+  const prop = isHoriz ? 'translateX' : 'translateY';
+  scrollEl.style.transition = 'none';
+  scrollEl.style.transform = prop + '(-' + (oldIdx * size) + 'px)';
+  scrollEl.getBoundingClientRect();
+  scrollEl.style.transition = 'transform 320ms cubic-bezier(0.25,0.46,0.45,0.94)';
+  scrollEl.style.transform = prop + '(-' + (newIdx * size) + 'px)';
+  scrollEl.addEventListener('transitionend', function handler(){
+    scrollEl.removeEventListener('transitionend', handler);
+    scrollEl.style.transition = 'none';
+    _svAnimating = false;
+    _svRedrawTexts();
+  });
+}
+
+// Abre el visor en modo scroll (horizontal o vertical)
+function _edOpenScrollViewer(mode) {
+  _svMode = mode;
+  const scrollEl = $('viewerScroll');
+  if (!scrollEl) return;
+  scrollEl.innerHTML = '';
+  const isHoriz = mode === 'horizontal';
+  scrollEl.style.display = 'flex';
+  scrollEl.style.flexDirection = isHoriz ? 'row' : 'column';
+  scrollEl.style.alignItems = 'stretch';
+  scrollEl.style.position = 'absolute';
+  scrollEl.style.inset = '0';
+  scrollEl.style.overflow = 'hidden';
+  scrollEl.style.transform = isHoriz ? 'translateX(0)' : 'translateY(0)';
+  scrollEl.style.willChange = 'transform';
+  scrollEl.style.transition = 'none';
+  edPages.forEach(function(p, i) {
+    const slot = _svBuildSlot(i);
+    if (slot) scrollEl.appendChild(slot);
+  });
+  edViewerIdx = 0;
+  const fp = edPages[0];
+  const ftl = fp ? fp.layers.filter(l => l.type==='text' || l.type==='bubble') : [];
+  edViewerTextStep = (fp && fp.textMode==='sequential' && ftl.length > 0) ? 1 : 0;
+  _svRedrawTexts();
+  _svInitGestures();
+  edShowViewerCtrls();
+}
+
+// Limpia el scroll viewer al cerrar
+function _edCloseScrollViewer() {
+  _svMode = null;
+  _svAnimating = false;
+  if (_svAC) { _svAC.abort(); _svAC = null; }
+  const scrollEl = $('viewerScroll');
+  if (scrollEl) { scrollEl.style.display = 'none'; scrollEl.innerHTML = ''; }
+}
+
+// Inicializa los gestos táctiles/teclado/botones del scroll viewer
+function _svInitGestures() {
+  if (_svAC) _svAC.abort();
+  _svAC = new AbortController();
+  const sig = { signal: _svAC.signal };
+  const viewer = $('editorViewer');
+  if (!viewer) return;
+
+  var _sx = null, _sy = null, _scrollCancelled = false;
+
+  viewer.addEventListener('touchstart', function(e) {
+    _sx = null; _sy = null; _scrollCancelled = false;
+    if (e.touches.length !== 1) return;
+    _sx = e.touches[0].clientX;
+    _sy = e.touches[0].clientY;
+  }, { passive: true, signal: _svAC.signal });
+
+  viewer.addEventListener('touchmove', function(e) {
+    if (_sx === null) return;
+    var isHoriz = _svMode === 'horizontal';
+    var delta = isHoriz ? (e.touches[0].clientY - _sy) : (e.touches[0].clientX - _sx);
+    if (Math.abs(delta) > 20) _scrollCancelled = true;
+  }, { passive: true, signal: _svAC.signal });
+
+  viewer.addEventListener('touchend', function(e) {
+    if (_sx === null || _scrollCancelled) { _sx = null; return; }
+    if (e.changedTouches.length !== 1) { _sx = null; return; }
+    if (e.target.closest('button, a, input')) { _sx = null; return; }
+    var endX = e.changedTouches[0].clientX;
+    var endY = e.changedTouches[0].clientY;
+    var isHoriz = _svMode === 'horizontal';
+    var primary = isHoriz ? (endX - _sx) : (endY - _sy);
+    _sx = null;
+    if (Math.abs(primary) < 30) return;
+    if (primary < 0) _svAdvance(); else _svBack();
+  }, { passive: true, signal: _svAC.signal });
+
+  // Botones desktop ◀ ▶
+  var btnNext = $('viewerNext');
+  var btnPrev = $('viewerPrev');
+  if (btnNext) btnNext.addEventListener('click', _svAdvance, sig);
+  if (btnPrev) btnPrev.addEventListener('click', _svBack, sig);
+
+  // Teclado PC — escuchar en document igual que el visor fixed
+  function _svKeyHandler(e) {
+    if (!$('editorViewer')?.classList.contains('open')) return;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); _svAdvance(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); _svBack(); }
+    else if (e.key === 'Escape') { e.preventDefault(); edCloseViewer(); }
+  }
+  document.addEventListener('keydown', _svKeyHandler, sig);
+
+  // Controles mouse desktop
+  viewer.addEventListener('pointerdown', function(e) {
+    if (e.pointerType === 'mouse') edShowViewerCtrls();
+  }, { capture: true, passive: true, signal: _svAC.signal });
+  viewer.addEventListener('mousemove', function() { edShowViewerCtrls(); }, { passive: true, signal: _svAC.signal });
+}
+
+// Avanza un paso: texto secuencial o siguiente hoja
+function _svAdvance() {
+  if (_svAnimating) return;
+  var page = edPages[edViewerIdx];
+  if (!page) return;
+  var tl = page.layers.filter(l => l.type==='text' || l.type==='bubble');
+  var isSeq = page.textMode === 'sequential';
+  if (isSeq && edViewerTextStep < tl.length) {
+    _vStartBubbleFade();
+    edViewerTextStep++;
+    _svRedrawTexts();
+  } else if (edViewerIdx < edPages.length - 1) {
+    _svSlideTo(edViewerIdx + 1);
+  }
+}
+
+// Retrocede un paso: texto anterior o hoja anterior
+function _svBack() {
+  if (_svAnimating) return;
+  var page = edPages[edViewerIdx];
+  if (!page) return;
+  var isSeq = page.textMode === 'sequential';
+  if (isSeq && edViewerTextStep > 1) {
+    edViewerTextStep--;
+    _svRedrawTexts();
+  } else if (edViewerIdx > 0) {
+    var prevPage = edPages[edViewerIdx - 1];
+    var ptl = prevPage ? prevPage.layers.filter(l => l.type==='text' || l.type==='bubble') : [];
+    var targetStep = (prevPage && prevPage.textMode==='sequential') ? ptl.length : 0;
+    _svSlideBack(edViewerIdx - 1, targetStep);
+  }
+}
+
+
 function edUpdateViewer(){
   if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;

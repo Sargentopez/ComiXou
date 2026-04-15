@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v16.20</footer>
+    <footer class="app-version">v16.21</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -448,7 +448,10 @@ Router.register('editor', {
 
     <!-- VISOR: canvas fullscreen + controles flotantes -->
     <div id="editorViewer">
+      <!-- Modo fixed: un canvas único -->
       <canvas id="viewerCanvas"></canvas>
+      <!-- Modo scroll (horizontal/vertical): hojas en fila/columna con snap -->
+      <div id="viewerScroll"></div>
       <!-- Pastilla desktop: ◀ contador ▶ ✕ — oculta en táctil via CSS -->
       <div class="viewer-controls" id="viewerControls">
         <button class="viewer-btn" id="viewerPrev">◀</button>
