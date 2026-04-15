@@ -11221,6 +11221,24 @@ function edSaveProject(){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
+    // Copia local del editorData — usada por "Recuperar versión del dispositivo"
+    // cuando la nube tiene una versión diferente
+    localEditorData:{
+      orientation:edOrientation,
+      pages:(()=>{
+        const _savedOrient=edOrientation, _savedPage=edCurrentPage;
+        const result=edPages.map((p,_pi)=>{
+          edCurrentPage=_pi;
+          edOrientation=p.orientation||_savedOrient;
+          const layers=p.layers.map(edSerLayer).filter(Boolean);
+          return {layers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient};
+        });
+        edOrientation=_savedOrient; edCurrentPage=_savedPage;
+        return result;
+      })(),
+      _rules: edRules,
+      _ruleNodes: edRuleNodes,
+    },
   });
   edToast('Guardado ✓');
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
