@@ -338,7 +338,13 @@ function startReader() {
   requestAnimationFrame(_positionBtns);
 
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
-  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+  setTimeout(() => {
+    window.addEventListener('resize', RS.resizeFn);
+    // orientationchange: en algunos Android el evento resize no llega o llega tarde
+    window.addEventListener('orientationchange', () => {
+      setTimeout(RS.resizeFn, 200); // esperar a que innerWidth/Height se actualicen
+    });
+  }, 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isTouch
@@ -644,13 +650,15 @@ function _renderVectorLayer(ctx, layer, pw, ph, img) {
 // ── POSICIÓN DE BOTONES ───────────────────────────────────────
 // Los botones se anclan a los bordes del canvas, no a la ventana.
 // Se llama cada vez que el canvas cambia de tamaño o posición.
-// Mostrar los botones originales posicionados sobre el canvas del slide activo
+// Mostrar los botones originales posicionados sobre el canvas del slide activo.
+// Se muestra primero (para que offsetWidth sea calculable) y se posiciona en RAF.
 function _showScrollBtns() {
   const fsBtn    = document.getElementById('fullscreenToggle');
   const closeBtn = document.getElementById('closeBtn');
   if (fsBtn)    fsBtn.style.display    = '';
   if (closeBtn) closeBtn.style.display = '';
-  _positionBtns();
+  // RAF: el navegador calcula offsetWidth antes de llamar _positionBtns
+  requestAnimationFrame(_positionBtns);
 }
 
 // Posicionar botones sobre el canvas (modo fixed y modo scroll)
