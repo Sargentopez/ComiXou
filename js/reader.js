@@ -604,7 +604,7 @@ function _renderCreditsCanvas() {
 function setupControls() {
   // Botones PC — solo responden a click, no a touch (evita doble disparo con el stage)
   document.getElementById('nextBtn')?.addEventListener('click', (e) => {
-    if (e.pointerType === 'touch') return; // el stage ya lo maneja
+    if (e.pointerType === 'touch') return;
     advance();
   });
   document.getElementById('prevBtn')?.addEventListener('click', (e) => {
@@ -618,7 +618,7 @@ function setupControls() {
     goToPanel(0);
   });
 
-  // Teclado (PC) — guardar referencia para cleanup en ReaderView_destroy
+  // Teclado (PC) — siempre fijo independientemente del navMode
   ReaderState._keyHandler = (e) => {
     if (['ArrowRight','Space','Enter'].includes(e.code)) { e.preventDefault(); advance(); }
     if (e.code === 'ArrowLeft') goBack();
@@ -626,12 +626,13 @@ function setupControls() {
   };
   document.addEventListener('keydown', ReaderState._keyHandler);
 
-  // Swipe (móvil) — AbortController para evitar acumulación en cada apertura del reproductor
+  // Swipe táctil — AbortController para evitar acumulación en cada apertura
   if (ReaderState._stageAC) ReaderState._stageAC.abort();
   ReaderState._stageAC = new AbortController();
   const sig = { signal: ReaderState._stageAC.signal, passive: true };
 
   const stage = document.getElementById('readerStage');
+  const navMode = ReaderState.comic?.navMode || 'fixed';
   let touchStartX = 0, touchStartY = 0;
 
   stage.addEventListener('touchstart', (e) => {
@@ -640,15 +641,14 @@ function setupControls() {
   }, sig);
 
   stage.addEventListener('touchend', (e) => {
-    // Ignorar si el toque termina sobre un botón u otro control interactivo
     if (e.target.closest('button, a, input, label')) return;
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
-    const dy   = Math.abs(endY - touchStartY);
-    if (dy > 40) return;
+    const dx   = endX - touchStartX;
+    const dy   = endY - touchStartY;
+    const adx  = Math.abs(dx), ady = Math.abs(dy);
 
-    // En créditos: primero detectar botón "Volver a leer" por área exacta,
-    // luego aplicar navegación lateral (izquierda retrocede)
+    // En créditos: detectar botón "Volver a leer"
     if (ReaderState.currentPanel === ReaderState.comic.panels.length) {
       const canvas = ReaderState.creditsCanvas;
       if (canvas) {
@@ -660,13 +660,25 @@ function setupControls() {
           goToPanel(0); return;
         }
       }
-      // Si no tocó el botón: lado retroceder → goBack, lado avanzar → nada
       if (_isBackSide(endX, endY)) goBack();
       return;
     }
 
-    // Navegación normal: mitad física retrocede, otra mitad avanza
-    if (_isBackSide(endX, endY)) goBack(); else advance();
+    if (navMode === 'horizontal') {
+      // Swipe horizontal: derecha→atrás, izquierda→adelante
+      if (adx < 30) return; // sin movimiento suficiente
+      if (adx < ady) return; // gesto más vertical que horizontal, ignorar
+      if (dx > 0) goBack(); else advance();
+    } else if (navMode === 'vertical') {
+      // Swipe vertical: abajo→atrás, arriba→adelante
+      if (ady < 30) return;
+      if (ady < adx) return; // gesto más horizontal que vertical, ignorar
+      if (dy > 0) goBack(); else advance();
+    } else {
+      // Modo fixed (o PC): tap en mitad izquierda/derecha
+      if (ady > 40) return;
+      if (_isBackSide(endX, endY)) goBack(); else advance();
+    }
   }, sig);
 }
 

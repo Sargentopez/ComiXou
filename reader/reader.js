@@ -29,6 +29,7 @@ const RS = {
   keyHandler:   null,
   resizeFn:     null,
   creditsShown: false, // true tras mostrarse la primera vez — no vuelve a aparecer
+  navMode:      'fixed', // 'fixed' | 'horizontal' | 'vertical'
 };
 
 // ── ARRANQUE ─────────────────────────────────────────────────
@@ -172,6 +173,7 @@ async function loadWork(workId) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    RS.navMode     = work[0].nav_mode    || 'fixed';
     // Actualizar meta OG con datos reales de la obra
     _updateOGMeta(work[0].title, work[0].author_name);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
@@ -200,6 +202,7 @@ async function loadDraft(token) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
+    RS.navMode     = work[0].nav_mode    || 'fixed';
     _updateOGMeta(work[0].title, work[0].author_name);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -311,32 +314,229 @@ function startReader() {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
 
+  if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
+    _startScrollReader();
+    return;
+  }
+
+  // ── Modo fixed (original) ──
   RS.canvas = document.getElementById('readerCanvas');
   RS.ctx    = RS.canvas.getContext('2d');
   RS.idx    = 0;
   RS.textStep = _initTextStep(0);
 
   _resizeCanvas();
-  // Esperar a que las fuentes estén cargadas antes del primer render
-  // Evita que el primer texto aparezca con fuente de fallback
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _render();
     _showControls();
   });
   _setupControls();
-  // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);
 
-  // Registrar resize con delay para evitar que el resize inicial borre el canvas
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
-  // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isTouch
-    ? 'Desplázate tocando la pantalla  👆'
+    ? 'Toca izquierda/derecha para pasar página  👆'
     : 'Desplázate con las flechas del teclado  ◀ ▶';
   _readerToast(msg, 4000);
+}
+
+// ── MODO SCROLL (horizontal / vertical) ──────────────────────
+//
+// Igual que el HTML de referencia:
+//   - Un canvas por ESTADO (panel×textStep) dentro de su slide
+//   - flex: 0 0 100% + scroll-snap → el navegador anima el deslizamiento
+//   - Al llegar a un estado nuevo se detecta por evento scroll
+//   - Teclado PC: scrollIntoView al estado siguiente/anterior
+//
+// RS.scrollMap[i] = { panelIdx, textStep }
+// ─────────────────────────────────────────────────────────────
+
+function _startScrollReader() {
+  const isH = RS.navMode === 'horizontal';
+
+  // Ocultar canvas del modo fixed
+  const fixedCanvas = document.getElementById('readerCanvas');
+  if (fixedCanvas) fixedCanvas.style.display = 'none';
+
+  const container = document.getElementById('scrollReader');
+  container.className = isH ? 'scroll-reader scroll-h' : 'scroll-reader scroll-v';
+  container.innerHTML = '';
+
+  RS.scrollMap = [];   // [{panelIdx, textStep, canvas}]
+
+  // Construir un slide+canvas por estado
+  RS.panels.forEach((panel, pi) => {
+    const isSeq  = (panel?.text_mode || 'sequential') === 'sequential';
+    const nTexts = isSeq ? (panel?.texts || []).length : 0;
+    const nStates = nTexts + 1;
+
+    for (let ts = 0; ts < nStates; ts++) {
+      const slide  = document.createElement('div');
+      slide.className = 'rs-slide';
+
+      const canvas = document.createElement('canvas');
+      slide.appendChild(canvas);
+      container.appendChild(slide);
+
+      RS.scrollMap.push({ panelIdx: pi, textStep: ts, canvas });
+    }
+  });
+
+  RS.idx      = 0;
+  RS.textStep = _initTextStep(0);
+
+  // Renderizar todos los estados al inicio
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    _renderAllScrollSlides();
+  });
+
+  // Detectar cambio de estado por scroll → actualizar RS.idx/textStep
+  let _prevStateIdx = 0;
+  let _scrollRaf = null;
+  container.addEventListener('scroll', () => {
+    if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
+    _scrollRaf = requestAnimationFrame(() => {
+      const si = _scrollCurrentStateIdx();
+      if (si === _prevStateIdx) return;
+      _prevStateIdx = si;
+      const m = RS.scrollMap[si];
+      if (!m) return;
+      RS.idx      = m.panelIdx;
+      RS.textStep = m.textStep;
+    });
+  }, { passive: true });
+
+  // Teclado PC
+  RS.keyHandler = e => {
+    const fwd = ['ArrowRight','ArrowDown','Space','Enter'].includes(e.code);
+    const bwd = ['ArrowLeft','ArrowUp'].includes(e.code);
+    if (fwd || bwd) {
+      e.preventDefault();
+      const si  = _scrollCurrentStateIdx();
+      const nsi = Math.max(0, Math.min(RS.scrollMap.length - 1, si + (fwd ? 1 : -1)));
+      const slide = container.children[nsi];
+      if (slide) slide.scrollIntoView({
+        behavior: 'smooth',
+        block:  isH ? 'nearest' : 'start',
+        inline: isH ? 'start'   : 'nearest',
+      });
+    }
+    if (e.key === 'Escape') {
+      if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
+    }
+  };
+  document.addEventListener('keydown', RS.keyHandler);
+
+  RS.resizeFn = () => _renderAllScrollSlides();
+  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+
+  const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  _readerToast(
+    isH ? (isTouch ? 'Desliza ◀ ▶ para cambiar de hoja' : 'Flechas ◀ ▶ para navegar')
+        : (isTouch ? 'Desliza ▲ ▼ para cambiar de hoja' : 'Flechas ▲ ▼ para navegar'),
+    4000
+  );
+}
+
+// Índice de estado visible según posición de scroll
+function _scrollCurrentStateIdx() {
+  const container = document.getElementById('scrollReader');
+  if (!container || !RS.scrollMap?.length) return 0;
+  const isH = RS.navMode === 'horizontal';
+  const pos  = isH ? container.scrollLeft : container.scrollTop;
+  const size = isH ? container.clientWidth : container.clientHeight;
+  if (!size) return 0;
+  return Math.max(0, Math.min(RS.scrollMap.length - 1, Math.round(pos / size)));
+}
+
+// Renderizar un estado: canvas del slide en scrollMap[stateIdx]
+function _renderScrollSlide(stateIdx) {
+  const entry = RS.scrollMap?.[stateIdx];
+  if (!entry) return;
+  const { panelIdx, textStep, canvas } = entry;
+  const panel = RS.panels[panelIdx];
+  const { pw, ph } = _panelDims(panelIdx);
+
+  // Dimensionar canvas
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const scale = Math.min(vw / pw, vh / ph);
+  canvas.width  = pw;
+  canvas.height = ph;
+  canvas.style.width  = Math.round(pw * scale) + 'px';
+  canvas.style.height = Math.round(ph * scale) + 'px';
+
+  const ctx = canvas.getContext('2d');
+
+  if (panel.isCredits) {
+    _renderCreditsOnCtx(ctx, pw, ph, panel);
+    return;
+  }
+
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+
+  const layers    = panel.layers    || [];
+  const layerImgs = panel.layerImgs || [];
+
+  layers.forEach((layer, j) => {
+    const type = layer.type;
+    if (type === 'image' || type === 'draw' || type === 'stroke') {
+      const img = layerImgs[j];
+      if (!img) return;
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      if (type === 'image' || type === 'stroke') {
+        const x = (layer.x     || 0.5) * pw;
+        const y = (layer.y     || 0.5) * ph;
+        const w = (layer.width || 1)   * pw;
+        const h = (layer.height|| 1)   * ph;
+        const rot = layer.rotation || 0;
+        ctx.translate(x, y);
+        if (rot) ctx.rotate(rot * Math.PI / 180);
+        ctx.drawImage(img, -w/2, -h/2, w, h);
+      } else {
+        ctx.drawImage(img, 0, 0, pw, ph);
+      }
+      ctx.restore();
+    } else if (type === 'shape' || type === 'line') {
+      _renderVectorLayer(ctx, layer, pw, ph, layerImgs[j]);
+    }
+  });
+
+  // Textos hasta textStep
+  const savedStep = RS.textStep;
+  RS.textStep = textStep;
+  _drawTexts(ctx, panel, pw, ph);
+  RS.textStep = savedStep;
+}
+
+// Renderizar todos los estados (llamado al inicio y en resize)
+function _renderAllScrollSlides() {
+  if (!RS.scrollMap) return;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+
+  // Ajustar tamaño de cada slide al viewport
+  Array.from(container.children).forEach(slide => {
+    slide.style.width  = vw + 'px';
+    slide.style.height = vh + 'px';
+  });
+
+  RS.scrollMap.forEach((_, i) => _renderScrollSlide(i));
+}
+
+function _renderVectorLayer(ctx, layer, pw, ph, img) {
+  if (img) {
+    ctx.save();
+    ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+    ctx.drawImage(img, 0, 0, pw, ph);
+    ctx.restore();
+  }
 }
 
 // ── POSICIÓN DE BOTONES ───────────────────────────────────────
