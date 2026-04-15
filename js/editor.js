@@ -11991,8 +11991,30 @@ function edOpenViewer(){
     clearTimeout(_viewerResizeTimer);
     _viewerResizeTimer = setTimeout(() => {
       if (_viewerScrollMode) {
-        // Modo scroll: reajustar todos los slides al nuevo viewport y redibujar
-        _edResizeViewerScroll();
+        // Reajustar slides al nuevo viewport (giro de dispositivo)
+        const _sc = $('viewerScroll');
+        if (!_sc) return;
+        const _isH = _sc.classList.contains('vs-h');
+        const _vw = window.innerWidth, _vh = window.innerHeight;
+        const _so = edOrientation;
+        Array.from(_sc.children).forEach((slide, pi) => {
+          const page = edPages[pi]; if (!page) return;
+          const orient = page.orientation || _so;
+          const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+          const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+          const scale = Math.min(_vw / pw, _vh / ph);
+          slide.style.width  = _vw + 'px';
+          slide.style.height = _vh + 'px';
+          const cv = slide.querySelector('canvas');
+          if (cv) {
+            cv.style.width  = Math.round(pw * scale) + 'px';
+            cv.style.height = Math.round(ph * scale) + 'px';
+          }
+        });
+        // Reposicionar scroll al slide activo
+        const _sz = _isH ? _sc.clientWidth : _sc.clientHeight;
+        if (_sz) _sc.scrollTo({ left: _isH ? edViewerIdx*_sz : 0, top: _isH ? 0 : edViewerIdx*_sz, behavior:'instant' });
+        edUpdateViewer();
       } else {
         edUpdateViewer();
       }
@@ -12124,9 +12146,9 @@ function _edOpenViewerScroll(navMode) {
     edViewerTextStep = (p0?.textMode === 'sequential' && tl0.length > 0) ? 1 : 0;
     edUpdateViewer();
     _updateOverlay();
-    // Forzar scroll a posición 0 — el render de múltiples slides puede desplazarlo
-    const _sc = $('viewerScroll');
-    if (_sc) { _sc.scrollLeft = 0; _sc.scrollTop = 0; }
+    // Forzar posición inicial a hoja 0 (el render de múltiples slides puede desplazarlo)
+    const _sc0 = $('viewerScroll');
+    if (_sc0) { _sc0.scrollLeft = 0; _sc0.scrollTop = 0; }
   });
 
   // ── Swipe en el overlay (cuando hay textos pendientes) ──
@@ -12262,56 +12284,6 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
 
 // Flag: true cuando el visor está en modo scroll (canvas dentro de slide flex)
 let _viewerScrollMode = false;
-
-// Reajustar todos los slides del visor scroll al nuevo viewport (tras giro/resize)
-function _edResizeViewerScroll() {
-  const sc = $('viewerScroll');
-  if (!sc) return;
-  const isH = sc.classList.contains('vs-h');
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const _savedOrient = edOrientation;
-
-  // Reajustar dimensiones de cada slide y su canvas
-  Array.from(sc.children).forEach((slide, pi) => {
-    const page = edPages[pi];
-    if (!page) return;
-    const orient = page.orientation || _savedOrient;
-    const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-    const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-    const scale = Math.min(vw / pw, vh / ph);
-    const dw = Math.round(pw * scale);
-    const dh = Math.round(ph * scale);
-
-    slide.style.width  = vw + 'px';
-    slide.style.height = vh + 'px';
-
-    const canvas = slide.querySelector('canvas');
-    if (canvas) {
-      canvas.width  = pw;
-      canvas.height = ph;
-      canvas.style.width  = dw + 'px';
-      canvas.style.height = dh + 'px';
-    }
-  });
-
-  // Reposicionar scroll al slide activo sin animación
-  const size = isH ? sc.clientWidth : sc.clientHeight;
-  if (size) {
-    sc.scrollTo({
-      left: isH ? edViewerIdx * size : 0,
-      top:  isH ? 0 : edViewerIdx * size,
-      behavior: 'instant',
-    });
-  }
-
-  // Redibujar slide activo
-  const activeCanvas = sc.children[edViewerIdx]?.querySelector('canvas');
-  if (activeCanvas) {
-    edViewerCanvas = activeCanvas;
-    edViewerCtx    = activeCanvas.getContext('2d');
-    edUpdateViewer();
-  }
-}
 
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
