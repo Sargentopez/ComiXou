@@ -12005,10 +12005,14 @@ function edOpenViewer(){
   };
   document.addEventListener('fullscreenchange', _viewerFsFn);
   document.addEventListener('webkitfullscreenchange', _viewerFsFn);
-  // Teclado PC
+  // Teclado PC — solo en modo fixed; scroll tiene su propio handler en _svInitGestures
   if(_viewerKeyHandler) document.removeEventListener('keydown', _viewerKeyHandler);
-  _viewerKeyHandler = _edViewerKey;
-  document.addEventListener('keydown', _viewerKeyHandler);
+  if((edProjectMeta.navMode||'fixed') === 'fixed'){
+    _viewerKeyHandler = _edViewerKey;
+    document.addEventListener('keydown', _viewerKeyHandler);
+  } else {
+    _viewerKeyHandler = null;
+  }
 }
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
@@ -12298,6 +12302,7 @@ function _svMakeCanvas(id) {
   c.style.borderRadius = '16px';
   c.style.display   = 'block';
   c.style.zIndex    = '401';
+  c.style.pointerEvents = 'none'; // el visor captura los eventos, no el canvas
   var viewer = $('editorViewer');
   if (viewer) viewer.appendChild(c);
   return c;
@@ -12339,33 +12344,42 @@ function _svInitGestures() {
   var viewer = $('editorViewer');
   if (!viewer) return;
 
-  var startX = null, startY = null, cancelled = false;
+  var startX = null, startY = null, cancelled = false, activePointerId = null;
 
-  viewer.addEventListener('touchstart', function(e) {
+  // Usar Pointer Events: mas fiables que Touch Events en Android
+  viewer.addEventListener('pointerdown', function(e) {
+    // Solo primer dedo tactil (o mouse)
+    if (activePointerId !== null) { cancelled = true; return; }
+    if (e.pointerType === 'touch' && e.isPrimary === false) { cancelled = true; return; }
+    if (e.target.closest('button, a, input')) return;
     startX = null; startY = null; cancelled = false;
-    if (e.touches.length !== 1) { cancelled = true; return; }
-    startX = e.touches[0].clientX;
-    startY = e.touches[0].clientY;
+    activePointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
   }, { passive: true, signal: _svAC.signal });
 
-  viewer.addEventListener('touchmove', function(e) {
-    if (startX === null || cancelled) return;
+  viewer.addEventListener('pointermove', function(e) {
+    if (e.pointerId !== activePointerId || startX === null || cancelled) return;
+    // Cancelar si movimiento perpendicular supera umbral
     var perp = (_svMode === 'horizontal')
-      ? Math.abs(e.touches[0].clientY - startY)
-      : Math.abs(e.touches[0].clientX - startX);
+      ? Math.abs(e.clientY - startY)
+      : Math.abs(e.clientX - startX);
     if (perp > 20) cancelled = true;
   }, { passive: true, signal: _svAC.signal });
 
-  viewer.addEventListener('touchend', function(e) {
+  viewer.addEventListener('pointerup', function(e) {
+    if (e.pointerId !== activePointerId) return;
+    activePointerId = null;
     if (startX === null || cancelled) { startX = null; return; }
-    if (e.changedTouches.length !== 1) { startX = null; return; }
     if (e.target.closest('button, a, input')) { startX = null; return; }
-    var endX = e.changedTouches[0].clientX;
-    var endY = e.changedTouches[0].clientY;
-    var delta = (_svMode === 'horizontal') ? (endX - startX) : (endY - startY);
+    var delta = (_svMode === 'horizontal') ? (e.clientX - startX) : (e.clientY - startY);
     startX = null;
     if (Math.abs(delta) < 30) return;
     if (delta < 0) _svAdvance(); else _svBack();
+  }, { passive: true, signal: _svAC.signal });
+
+  viewer.addEventListener('pointercancel', function(e) {
+    if (e.pointerId === activePointerId) { activePointerId = null; startX = null; cancelled = false; }
   }, { passive: true, signal: _svAC.signal });
 
   // Botones desktop ◀ ▶
@@ -12382,10 +12396,7 @@ function _svInitGestures() {
     else if (e.key==='Escape') { e.preventDefault(); edCloseViewer(); }
   }, { signal: _svAC.signal });
 
-  // Mouse desktop
-  viewer.addEventListener('pointermove', function(e) {
-    if (e.pointerType === 'mouse') edShowViewerCtrls();
-  }, { passive: true, signal: _svAC.signal });
+  // Mostrar controles en desktop al mover el mouse
   viewer.addEventListener('pointerdown', function(e) {
     if (e.pointerType === 'mouse') edShowViewerCtrls();
   }, { passive: true, signal: _svAC.signal });
