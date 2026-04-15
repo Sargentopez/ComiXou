@@ -491,11 +491,7 @@ function _startScrollReader() {
       _updateOverlay();
       // Mostrar botones originales posicionados sobre el canvas del slide activo
       _showScrollBtns();
-      // Bloquear orientación del dispositivo según la hoja actual
-      const _pOrient = RS.panels[si]?.orientation || 'v';
-      if (screen.orientation?.lock) {
-        screen.orientation.lock(_pOrient === 'h' ? 'landscape' : 'portrait').catch(() => {});
-      }
+
     });
   }, { passive: true });
 

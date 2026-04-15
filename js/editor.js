@@ -12207,11 +12207,7 @@ function _edOpenViewerScroll(navMode) {
       edViewerTextStep = (np?.textMode === 'sequential' && ntl.length > 0) ? 1 : 0;
       edUpdateViewer();
       _updateOverlay();
-      // Bloquear orientación del dispositivo según la hoja actual
-      const _npOrient = np?.orientation || edOrientation;
-      if (screen.orientation?.lock) {
-        screen.orientation.lock(_npOrient === 'vertical' ? 'portrait' : 'landscape').catch(() => {});
-      }
+
     });
   }, { passive: true });
 

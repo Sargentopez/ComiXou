@@ -261,7 +261,7 @@ function goToPanel(idx) {
       }
       ReaderState.animating = false;
       if (idx === creditsIdx) _showCreditsPanel();
-      else { _showBubblesForPanel(idx); requestOrientationLock(nextOrient); }
+      else { _showBubblesForPanel(idx); }
     }, 950);
 
   } else {
@@ -270,7 +270,7 @@ function goToPanel(idx) {
     setTimeout(() => {
       ReaderState.animating = false;
       if (idx === creditsIdx) _showCreditsPanel();
-      else { _showBubblesForPanel(idx); requestOrientationLock(nextOrient); }
+      else { _showBubblesForPanel(idx); }
     }, 100);
   }
 }
@@ -771,7 +771,6 @@ function _setupScrollMode(navMode) {
         _showBubblesForPanel(si);
         // Bloquear orientación del dispositivo según la hoja actual
         const orient = panels[si]?.orientation || 'v';
-        requestOrientationLock(orient);
       }
       _updateOverlay();
     });
@@ -793,10 +792,7 @@ function _goBackBubble() {
 // ════════════════════════════════════════
 // ORIENTACIÓN AUTOMÁTICA
 // ════════════════════════════════════════
-function requestOrientationLock(orient) {
-  if (!screen.orientation?.lock) return;
-  screen.orientation.lock(orient === 'v' ? 'portrait' : 'landscape').catch(() => {});
-}
+
 
 // ════════════════════════════════════════
 // SWIPE HINT
