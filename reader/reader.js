@@ -480,6 +480,7 @@ function _startScrollReader() {
   //   - Al iniciar movimiento → ocultar botones
   //   - Al parar (scrollend o debounce 150ms) → mostrar y posicionar
   let _prevSI = 0, _sraf = null, _scrollStopTimer = null, _lastPos = -1;
+  let _isResizing = false;  // true durante resize/giro para suprimir _hideScrollBtns
 
   function _onScrollStop() {
     if (_isResizing) return; // resize ya gestiona el estado
@@ -532,7 +533,6 @@ function _startScrollReader() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
-  let _isResizing = false;
   RS.resizeFn = () => {
     _isResizing = true;
     _renderAllScrollSlides();
