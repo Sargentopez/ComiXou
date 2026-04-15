@@ -442,11 +442,11 @@ function _startScrollReader() {
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     RS.textStep = _initTextStep(0);
     _renderAllScrollSlides();   // renderiza todos con textStep correcto para el activo
-    // Apuntar RS.canvas/ctx al slide 0 sin borrar el canvas (no llamar _resizeScrollCanvas)
-    RS.canvas = RS.scrollCanvases[0] || null;
+    // Apuntar RS.canvas al slide activo para que _positionBtns tenga getBoundingClientRect
+    RS.canvas = RS.scrollCanvases[RS.idx] || null;
     RS.ctx    = RS.canvas ? RS.canvas.getContext('2d') : null;
     _updateOverlay();
-    // Botones: esperar dos frames para que el layout tenga dimensiones reales
+    // Botones: esperar dos frames para que el layout haya pintado y tenga dimensiones reales
     requestAnimationFrame(() => requestAnimationFrame(() => _showScrollBtns()));
   });
 
@@ -471,10 +471,9 @@ function _startScrollReader() {
     const goFwd = isH ? dx < 0 : dy < 0;
     const goBwd = isH ? dx > 0 : dy > 0;
     if (goFwd && _hasPendingTexts()) {
-      _resizeScrollCanvas();   // asegura RS.canvas/ctx y posición de botones
       _startFade();
       RS.textStep++;
-      _render();
+      _renderScrollSlide(RS.idx, RS.textStep);
       _updateOverlay();
     } else if (goBwd) {
       _scrollGoBack();
@@ -500,8 +499,8 @@ function _startScrollReader() {
       _prevSI = si;
       RS.textStep = _initTextStep(si);
     }
-    _resizeScrollCanvas(); // actualiza RS.canvas/ctx antes de _render
-    _render();
+    _resizeScrollCanvas(); // actualiza RS.canvas/ctx antes de render
+    _renderScrollSlide(RS.idx, RS.textStep);
     _updateOverlay();
     _showScrollBtns();
   }
@@ -584,8 +583,8 @@ function _startScrollReader() {
 // Avanzar (teclado): bocadillo → slide siguiente
 function _scrollAdvance() {
   if (_hasPendingFn()) {
-    _resizeScrollCanvas();
-    _startFade(); RS.textStep++; _render();
+    _startFade(); RS.textStep++;
+    _renderScrollSlide(RS.idx, RS.textStep);
   } else if (RS.idx < RS.panels.length - 1) {
     _snapScrollTo(RS.idx + 1);
   }
@@ -602,8 +601,7 @@ function _scrollGoBack() {
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
   if (isSeq && RS.textStep > 1) {
     RS.textStep--;
-    _resizeScrollCanvas();
-    _render();
+    _renderScrollSlide(RS.idx, RS.textStep);
     if (RS.scrollOverlay) RS.scrollOverlay.style.pointerEvents = 'all';
   } else if (RS.idx > 0) {
     _snapScrollTo(RS.idx - 1);
@@ -623,8 +621,8 @@ function _snapScrollTo(idx) {
   });
 }
 
-// Redibujar el canvas del slide idx con RS.textStep actual
-function _renderScrollSlide(idx) {
+// Redibujar el canvas del slide idx con textStep explícito (no depende de RS.textStep global)
+function _renderScrollSlide(idx, textStep) {
   const canvas = RS.scrollCanvases?.[idx];
   if (!canvas) return;
   const panel = RS.panels[idx];
@@ -661,10 +659,12 @@ function _renderScrollSlide(idx) {
       _renderVectorLayer(ctx, layer, pw, ph, layerImgs[j]);
     }
   });
-  _drawTexts(ctx, panel, pw, ph, layerImgs);
+  // Dibujar textos con el textStep recibido explícitamente
+  _drawTextsWithStep(ctx, panel, pw, ph, layerImgs, textStep);
 }
 
-// Renderizar todos los slides (init + resize) con todos los textos visibles para no-activos
+// Renderizar todos los slides (init + resize).
+// Slides no-activos: todos los textos visibles. Slide activo: RS.textStep actual.
 function _renderAllScrollSlides() {
   if (!RS.scrollCanvases) return;
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -675,16 +675,10 @@ function _renderAllScrollSlides() {
       slide.style.height = vh + 'px';
     });
   }
-  const savedStep = RS.textStep;
   RS.panels.forEach((panel, pi) => {
-    if (pi !== RS.idx) {
-      RS.textStep = (panel?.texts || []).length;
-    } else {
-      RS.textStep = savedStep;
-    }
-    _renderScrollSlide(pi);
+    const step = (pi === RS.idx) ? RS.textStep : (panel?.texts || []).length;
+    _renderScrollSlide(pi, step);
   });
-  RS.textStep = savedStep;
 }
 
 function _renderVectorLayer(ctx, layer, pw, ph, img) {
@@ -717,8 +711,7 @@ function _showScrollBtns() {
 }
 
 // Posicionar botones sobre el canvas.
-// En modo scroll: calcula la posición del canvas activo directamente
-// (misma fórmula que _resizeScrollCanvas) sin depender de style.left.
+// En modo scroll: getBoundingClientRect del canvas activo (está en flex, sin style.left/top).
 // En modo fixed: lee style.left/top/width que escribe _resizeCanvas.
 function _positionBtns() {
   const PAD = 8, OFY = 10;
@@ -730,19 +723,12 @@ function _positionBtns() {
 
   let cl, ct, cw;
   if (isScrollMode) {
-    // Calcular posición del canvas según orientación del panel activo
-    // — misma lógica que _resizeScrollCanvas, independiente del layout DOM
-    const panel = RS.panels[RS.idx];
-    const { pw, ph } = _panelDims(RS.idx);
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const isHorizPanel = pw > ph && !panel?.isCredits;
-    let scale;
-    if (isHorizPanel) { scale = vh / ph; if (pw * scale > vw * 1.5) scale = vw / pw; }
-    else              { scale = Math.min(vw / pw, vh / ph); }
-    const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
-    cl = Math.round((vw - dw) / 2);
-    ct = Math.round((vh - dh) / 2);
-    cw = dw;
+    // En modo scroll el canvas está dentro de un slide flex: getBoundingClientRect es fiable
+    const rect = c.getBoundingClientRect();
+    if (!rect.width) return; // canvas aún no visible — ignorar
+    cl = rect.left;
+    ct = rect.top;
+    cw = rect.width;
   } else {
     cl = parseInt(c.style.left)  || 0;
     ct = parseInt(c.style.top)   || 0;
@@ -934,6 +920,15 @@ function _render() {
 }
 
 // ── TEXTOS / BOCADILLOS ───────────────────────────────────────
+// Versión con textStep explícito — usada por _renderScrollSlide para evitar
+// dependencia del estado global RS.textStep (que puede estar en medio de una actualización)
+function _drawTextsWithStep(ctx, panel, pw, ph, layerImgs, textStep) {
+  const _saved = RS.textStep;
+  RS.textStep = textStep !== undefined ? textStep : _saved;
+  _drawTexts(ctx, panel, pw, ph, layerImgs);
+  RS.textStep = _saved;
+}
+
 function _drawTexts(ctx, panel, pw, ph, layerImgs) {
   const texts = panel.texts || [];
   if (!texts.length) return;
