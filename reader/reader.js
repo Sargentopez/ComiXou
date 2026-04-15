@@ -436,10 +436,11 @@ function _startScrollReader() {
 
   // Render inicial de todos los slides
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    _renderAllScrollSlides();
     RS.textStep = _initTextStep(0);
-    _resizeScrollCanvas();
-    _renderScrollSlide(0);
+    _renderAllScrollSlides();   // renderiza todos con textStep correcto para el activo
+    // Apuntar RS.canvas/ctx al slide 0 sin borrar el canvas (no llamar _resizeScrollCanvas)
+    RS.canvas = RS.scrollCanvases[0] || null;
+    RS.ctx    = RS.canvas ? RS.canvas.getContext('2d') : null;
     _updateOverlay();
     _showScrollBtns();
   });
