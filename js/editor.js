@@ -12214,22 +12214,32 @@ function edCloseViewer(){
    ══════════════════════════════════════════ */
 
 // Estado del scroll viewer
-let _svMode = null;        // 'horizontal' | 'vertical' | null
-let _svAC   = null;        // AbortController de listeners del scroll viewer
-let _svAnimating = false;  // true durante animacion de transicion de pagina
+// ══════════════════════════════════════════
+// VISOR SCROLL — modos horizontal y vertical
+// Usa dos canvas: _svCanvasA (visible) y _svCanvasB (para la transición).
+// Los textos secuenciales se revelan igual que en fixed.
+// El deslizamiento es una animación CSS transform entre los dos canvas.
+// ══════════════════════════════════════════
 
-// Renderiza las capas no-texto de una hoja en un canvas full-workspace y devuelve canvas recortado
-function _svRenderPage(pageIdx) {
+let _svMode = null;       // 'horizontal' | 'vertical' | null
+let _svAC   = null;       // AbortController de listeners
+let _svAnimating = false; // true durante animación de transición de hoja
+let _svCanvasA = null;    // canvas principal (hoja actual)
+let _svCanvasB = null;    // canvas secundario (hoja entrante durante animación)
+
+// Renderiza todas las capas de una hoja (sin textos) en un canvas recortado
+function _svRenderPageToCanvas(pageIdx, destCanvas) {
   const page = edPages[pageIdx];
-  if (!page) return null;
+  if (!page || !destCanvas) return;
   const _po = page.orientation || edOrientation;
   const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
   const ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
   const mx = (ED_CANVAS_W - pw) / 2;
   const my = (ED_CANVAS_H - ph) / 2;
+  // Canvas de trabajo full-workspace
   const full = document.createElement('canvas');
-  full.width = ED_CANVAS_W; full.height = ED_CANVAS_H;
-  const fctx = full.getContext('2d');
+  full.width  = ED_CANVAS_W; full.height = ED_CANVAS_H;
+  const fctx  = full.getContext('2d');
   fctx.fillStyle = '#fff'; fctx.fillRect(mx, my, pw, ph);
   const _savedOrient = edOrientation;
   edOrientation = _po;
@@ -12239,172 +12249,94 @@ function _svRenderPage(pageIdx) {
     if (l.type==='image') l.draw(fctx, full); else l.draw(fctx);
     fctx.globalAlpha = 1;
   });
+  // Textos encima (respetando edViewerTextStep y fade)
+  _edViewerDrawTextsOnCtx(page, fctx, full);
   edOrientation = _savedOrient;
-  const out = document.createElement('canvas');
-  out.width = pw; out.height = ph;
-  out.getContext('2d').drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
-  return { canvas: out, pw: pw, ph: ph };
-}
-
-// Construye el slot (contenedor) de una hoja: canvas base + canvas overlay superpuesto
-function _svBuildSlot(pageIdx) {
-  const rendered = _svRenderPage(pageIdx);
-  if (!rendered) return null;
-  const baseCanvas = rendered.canvas;
-  const pw = rendered.pw;
-  const ph = rendered.ph;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  // Ajustar tamaño del canvas destino y dibujar la zona recortada
+  destCanvas.width  = pw; destCanvas.height = ph;
+  destCanvas.getContext('2d').drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
+  // Posicionar el canvas dentro del viewer (igual que edUpdateViewerSize)
+  const vw = window.innerWidth, vh = window.innerHeight;
   const scale = Math.min(vw / pw, vh / ph);
   const dw = Math.round(pw * scale);
   const dh = Math.round(ph * scale);
-
-  const slot = document.createElement('div');
-  slot.className = 'sv-slot';
-  slot.dataset.idx = String(pageIdx);
-  // Cada slot ocupa EXACTAMENTE el viewport — posicion absoluta para no depender de flex
-  slot.style.position = 'absolute';
-  if (_svMode === 'horizontal') {
-    slot.style.top = '0';
-    slot.style.left = (pageIdx * vw) + 'px';
-    slot.style.width = vw + 'px';
-    slot.style.height = vh + 'px';
-  } else {
-    slot.style.top = (pageIdx * vh) + 'px';
-    slot.style.left = '0';
-    slot.style.width = vw + 'px';
-    slot.style.height = vh + 'px';
-  }
-  slot.style.display = 'flex';
-  slot.style.alignItems = 'center';
-  slot.style.justifyContent = 'center';
-  slot.style.overflow = 'hidden';
-
-  // Canvas base (capas no-texto)
-  baseCanvas.style.width = dw + 'px';
-  baseCanvas.style.height = dh + 'px';
-  baseCanvas.style.borderRadius = '16px';
-  baseCanvas.style.display = 'block';
-  baseCanvas.style.position = 'relative';
-  baseCanvas.className = 'sv-base';
-  slot.appendChild(baseCanvas);
-
-  // Canvas overlay para textos (mismo tamaño visual, superpuesto)
-  const ovl = document.createElement('canvas');
-  ovl.width = pw; ovl.height = ph;
-  ovl.style.position = 'absolute';
-  ovl.style.left = '50%';
-  ovl.style.top = '50%';
-  ovl.style.transform = 'translate(-50%,-50%)';
-  ovl.style.width = dw + 'px';
-  ovl.style.height = dh + 'px';
-  ovl.style.borderRadius = '16px';
-  ovl.style.pointerEvents = 'none';
-  ovl.className = 'sv-overlay';
-  slot.appendChild(ovl);
-
-  return slot;
+  destCanvas.style.width   = dw + 'px';
+  destCanvas.style.height  = dh + 'px';
+  destCanvas.style.left    = Math.round((vw - dw) / 2) + 'px';
+  destCanvas.style.top     = Math.round((vh - dh) / 2) + 'px';
 }
 
-// Redibuja el overlay de textos del slot activo segun edViewerTextStep actual
-// Replica exactamente la logica de edUpdateViewer para los textos
-function _svRedrawTexts() {
-  const scrollEl = $('viewerScroll');
-  if (!scrollEl) return;
-  const slot = scrollEl.querySelector('.sv-slot[data-idx="' + edViewerIdx + '"]');
-  if (!slot) return;
-  const page = edPages[edViewerIdx];
-  if (!page) return;
-  const ovl = slot.querySelector('.sv-overlay');
-  if (!ovl) return;
-  const pw = ovl.width;
-  const ph = ovl.height;
-  const octx = ovl.getContext('2d');
-  octx.clearRect(0, 0, pw, ph);
-  // Canvas full-workspace con fondo blanco en zona del lienzo (igual que edUpdateViewer)
-  const _po = page.orientation || edOrientation;
-  const mx = (ED_CANVAS_W - pw) / 2;
-  const my = (ED_CANVAS_H - ph) / 2;
-  const full = document.createElement('canvas');
-  full.width = ED_CANVAS_W; full.height = ED_CANVAS_H;
-  const fctx = full.getContext('2d');
-  fctx.fillStyle = '#fff'; fctx.fillRect(mx, my, pw, ph);
-  const _savedOrient = edOrientation;
-  edOrientation = _po;
-  _edViewerDrawTextsOnCtx(page, fctx, full);
-  edOrientation = _savedOrient;
-  octx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
-  _svUpdateCounter();
-}
-
-// Actualiza el contador visible en los controles del visor
+// Actualiza el contador de páginas/textos
 function _svUpdateCounter() {
   const page = edPages[edViewerIdx];
   if (!page) return;
-  const textLayers = page.layers.filter(function(l){ return l.type==='text' || l.type==='bubble'; });
+  const tl = page.layers.filter(function(l){ return l.type==='text' || l.type==='bubble'; });
   const isSeq = page.textMode === 'sequential';
   const cnt = $('viewerCounter');
   if (!cnt) return;
-  if (isSeq && textLayers.length > 0) {
-    cnt.textContent = (edViewerIdx+1) + '/' + edPages.length + ' · 💬' + Math.max(0, edViewerTextStep-1) + '/' + textLayers.length;
+  if (isSeq && tl.length > 0) {
+    cnt.textContent = (edViewerIdx+1) + '/' + edPages.length + ' \u00B7 \uD83D\uDCAC' + Math.max(0, edViewerTextStep-1) + '/' + tl.length;
   } else {
     cnt.textContent = (edViewerIdx+1) + ' / ' + edPages.length;
   }
+}
+
+// Redibuja el canvas principal con la hoja actual y sus textos en el paso actual
+function _svRedraw() {
+  if (!_svCanvasA) return;
+  _svRenderPageToCanvas(edViewerIdx, _svCanvasA);
+  _svUpdateCounter();
+}
+
+// Crea y posiciona un canvas de visor scroll dentro de #editorViewer
+function _svMakeCanvas(id) {
+  var existing = document.getElementById(id);
+  if (existing) { existing.remove(); }
+  var c = document.createElement('canvas');
+  c.id = id;
+  c.style.position  = 'absolute';
+  c.style.borderRadius = '16px';
+  c.style.display   = 'block';
+  c.style.zIndex    = '401';
+  var viewer = $('editorViewer');
+  if (viewer) viewer.appendChild(c);
+  return c;
 }
 
 // Abre el visor en modo scroll
 function _edOpenScrollViewer(mode) {
   _svMode = mode;
   _svAnimating = false;
-  _svCurrentPage = 0;
-  const scrollEl = $('viewerScroll');
-  if (!scrollEl) return;
-  scrollEl.innerHTML = '';
-  const isHoriz = mode === 'horizontal';
-  // El contenedor es un area fija que se desplaza con transform
-  scrollEl.style.position = 'absolute';
-  scrollEl.style.top = '0';
-  scrollEl.style.left = '0';
-  scrollEl.style.width = isHoriz ? (edPages.length * window.innerWidth) + 'px' : window.innerWidth + 'px';
-  scrollEl.style.height = isHoriz ? window.innerHeight + 'px' : (edPages.length * window.innerHeight) + 'px';
-  scrollEl.style.display = 'block';
-  scrollEl.style.overflow = 'visible';
-  scrollEl.style.transform = isHoriz ? 'translateX(0)' : 'translateY(0)';
-  scrollEl.style.transition = 'none';
-  scrollEl.style.willChange = 'transform';
-  // Construir slots de todas las hojas
-  edPages.forEach(function(p, i) {
-    const slot = _svBuildSlot(i);
-    if (slot) scrollEl.appendChild(slot);
-  });
-  // Iniciar en hoja 0
+  // Crear canvas A (principal)
+  _svCanvasA = _svMakeCanvas('sv-canvas-a');
+  _svCanvasA.style.transition = 'none';
+  // Ocultar el viewerScroll (no se usa en esta implementación)
+  var scrollEl = $('viewerScroll');
+  if (scrollEl) { scrollEl.style.display = 'none'; scrollEl.innerHTML = ''; }
+  // Renderizar primera hoja
   edViewerIdx = 0;
   const fp = edPages[0];
-  const ftl = fp ? fp.layers.filter(function(l){ return l.type==='text' || l.type==='bubble'; }) : [];
+  const ftl = fp ? fp.layers.filter(function(l){ return l.type==='text'||l.type==='bubble'; }) : [];
   edViewerTextStep = (fp && fp.textMode==='sequential' && ftl.length > 0) ? 1 : 0;
-  _svRedrawTexts();
+  _svRedraw();
   _svInitGestures();
   edShowViewerCtrls();
 }
 
-// Limpia completamente el scroll viewer al cerrar
+// Limpia el scroll viewer al cerrar
 function _edCloseScrollViewer() {
   _svMode = null;
   _svAnimating = false;
-  _svCurrentPage = 0;
   if (_svAC) { _svAC.abort(); _svAC = null; }
-  const scrollEl = $('viewerScroll');
-  if (scrollEl) { scrollEl.style.display = 'none'; scrollEl.innerHTML = ''; }
+  if (_svCanvasA) { _svCanvasA.remove(); _svCanvasA = null; }
+  if (_svCanvasB) { _svCanvasB.remove(); _svCanvasB = null; }
 }
 
-// Variable que rastrea en que hoja esta el contenedor actualmente (para calcular el offset de partida)
-let _svCurrentPage = 0;
-
-// Gestos: swipe tactil + botones desktop + teclado
+// Inicializa gestos táctiles, teclado y botones
 function _svInitGestures() {
   if (_svAC) _svAC.abort();
   _svAC = new AbortController();
-  const viewer = $('editorViewer');
+  var viewer = $('editorViewer');
   if (!viewer) return;
 
   var startX = null, startY = null, cancelled = false;
@@ -12418,11 +12350,10 @@ function _svInitGestures() {
 
   viewer.addEventListener('touchmove', function(e) {
     if (startX === null || cancelled) return;
-    // Cancelar swipe si el dedo se mueve en la direccion perpendicular mas de 20px
-    var perpDelta = (_svMode === 'horizontal')
+    var perp = (_svMode === 'horizontal')
       ? Math.abs(e.touches[0].clientY - startY)
       : Math.abs(e.touches[0].clientX - startX);
-    if (perpDelta > 20) cancelled = true;
+    if (perp > 20) cancelled = true;
   }, { passive: true, signal: _svAC.signal });
 
   viewer.addEventListener('touchend', function(e) {
@@ -12437,7 +12368,7 @@ function _svInitGestures() {
     if (delta < 0) _svAdvance(); else _svBack();
   }, { passive: true, signal: _svAC.signal });
 
-  // Botones desktop
+  // Botones desktop ◀ ▶
   var btnNext = $('viewerNext');
   var btnPrev = $('viewerPrev');
   if (btnNext) btnNext.addEventListener('click', _svAdvance, { signal: _svAC.signal });
@@ -12445,13 +12376,13 @@ function _svInitGestures() {
 
   // Teclado PC
   document.addEventListener('keydown', function(e) {
-    if (!$('editorViewer')?.classList.contains('open')) return;
+    if (!$('editorViewer') || !$('editorViewer').classList.contains('open')) return;
     if (e.key==='ArrowRight'||e.key==='ArrowDown') { e.preventDefault(); _svAdvance(); }
     else if (e.key==='ArrowLeft'||e.key==='ArrowUp') { e.preventDefault(); _svBack(); }
     else if (e.key==='Escape') { e.preventDefault(); edCloseViewer(); }
   }, { signal: _svAC.signal });
 
-  // Mouse desktop: mostrar controles al mover
+  // Mouse desktop
   viewer.addEventListener('pointermove', function(e) {
     if (e.pointerType === 'mouse') edShowViewerCtrls();
   }, { passive: true, signal: _svAC.signal });
@@ -12460,75 +12391,109 @@ function _svInitGestures() {
   }, { passive: true, signal: _svAC.signal });
 }
 
-// Avanza un paso logico: siguiente texto secuencial o siguiente hoja
+// Avanza un paso: texto secuencial o siguiente hoja con animación
 function _svAdvance() {
   if (_svAnimating) return;
   var page = edPages[edViewerIdx];
   if (!page) return;
-  var tl = page.layers.filter(function(l){ return l.type==='text' || l.type==='bubble'; });
-  var isSeq = page.textMode === 'sequential';
-  if (isSeq && edViewerTextStep < tl.length) {
-    // Revelar siguiente texto sin cambiar hoja
+  var tl = page.layers.filter(function(l){ return l.type==='text'||l.type==='bubble'; });
+  if (page.textMode==='sequential' && edViewerTextStep < tl.length) {
+    // Revelar siguiente texto en la misma hoja
     _vStartBubbleFade();
     edViewerTextStep++;
-    _svRedrawTexts();
+    _svRedraw();
   } else if (edViewerIdx < edPages.length - 1) {
-    // Siguiente hoja con animacion
-    var oldPage = _svCurrentPage;
-    _svCurrentPage = edViewerIdx + 1;
-    var np = edPages[_svCurrentPage];
-    var ntl = np ? np.layers.filter(function(l){ return l.type==='text'||l.type==='bubble'; }) : [];
-    var newStep = (np && np.textMode==='sequential' && ntl.length > 0) ? 1 : 0;
-    _svAnimate(_svCurrentPage, oldPage, newStep);
+    // Siguiente hoja con animación de deslizamiento
+    _svSlideToPage(edViewerIdx + 1, 'forward');
   }
 }
 
-// Retrocede un paso logico: texto anterior o hoja anterior
+// Retrocede un paso: texto anterior o hoja anterior con animación
 function _svBack() {
   if (_svAnimating) return;
   var page = edPages[edViewerIdx];
   if (!page) return;
-  var isSeq = page.textMode === 'sequential';
-  if (isSeq && edViewerTextStep > 1) {
+  if (page.textMode==='sequential' && edViewerTextStep > 1) {
     edViewerTextStep--;
-    _svRedrawTexts();
+    _svRedraw();
   } else if (edViewerIdx > 0) {
-    var oldPage = _svCurrentPage;
-    _svCurrentPage = edViewerIdx - 1;
-    var pp = edPages[_svCurrentPage];
-    var ptl = pp ? pp.layers.filter(function(l){ return l.type==='text'||l.type==='bubble'; }) : [];
-    var newStep = (pp && pp.textMode==='sequential') ? ptl.length : 0;
-    _svAnimate(_svCurrentPage, oldPage, newStep);
+    _svSlideToPage(edViewerIdx - 1, 'back');
   }
 }
 
-// Anima el desplazamiento del contenedor de oldPageIdx a newPageIdx y actualiza estado
-function _svAnimate(newPageIdx, oldPageIdx, newTextStep) {
+// Anima la transición entre hojas usando dos canvas
+function _svSlideToPage(newIdx, direction) {
+  if (_svAnimating || !_svCanvasA) return;
   _svAnimating = true;
-  edViewerIdx = newPageIdx;
-  edViewerTextStep = newTextStep != null ? newTextStep : 0;
-  const scrollEl = $('viewerScroll');
-  if (!scrollEl) { _svAnimating = false; return; }
-  const isHoriz = _svMode === 'horizontal';
-  const size = isHoriz ? window.innerWidth : window.innerHeight;
-  const prop = isHoriz ? 'translateX' : 'translateY';
-  // Forzar posicion de partida sin animacion
-  scrollEl.style.transition = 'none';
-  scrollEl.style.transform = prop + '(' + (-(oldPageIdx * size)) + 'px)';
-  // Forzar reflow para que el navegador aplique la posicion antes de animar
-  void scrollEl.offsetWidth;
-  // Animar al destino
-  scrollEl.style.transition = 'transform 320ms cubic-bezier(0.25,0.46,0.45,0.94)';
-  scrollEl.style.transform = prop + '(' + (-(newPageIdx * size)) + 'px)';
+
+  // Preparar textStep para la hoja destino
+  var np = edPages[newIdx];
+  var ntl = np ? np.layers.filter(function(l){ return l.type==='text'||l.type==='bubble'; }) : [];
+  var newStep;
+  if (direction === 'back' && np && np.textMode==='sequential') {
+    newStep = ntl.length; // volver a la última burbuja de la hoja anterior
+  } else {
+    newStep = (np && np.textMode==='sequential' && ntl.length > 0) ? 1 : 0;
+  }
+
+  // Canvas B: renderizar la hoja destino
+  _svCanvasB = _svMakeCanvas('sv-canvas-b');
+  _svCanvasB.style.zIndex = '400'; // detrás de A inicialmente
+  _svCanvasB.style.transition = 'none';
+
+  // Guardar estado actual, cambiar temporalmente para renderizar destino
+  var savedIdx  = edViewerIdx;
+  var savedStep = edViewerTextStep;
+  edViewerIdx = newIdx;
+  edViewerTextStep = newStep;
+  _svRenderPageToCanvas(newIdx, _svCanvasB);
+  // Restaurar para la animación
+  edViewerIdx = savedIdx;
+  edViewerTextStep = savedStep;
+
+  // Determinar ejes de animación
+  var isHoriz = _svMode === 'horizontal';
+  var vw = window.innerWidth, vh = window.innerHeight;
+  // Posición inicial de B: fuera de pantalla en la dirección de entrada
+  var enterFrom = direction === 'forward'
+    ? (isHoriz ? 'translateX(' + vw + 'px)' : 'translateY(' + vh + 'px)')
+    : (isHoriz ? 'translateX(-' + vw + 'px)' : 'translateY(-' + vh + 'px)');
+  // Posición de salida de A
+  var exitTo = direction === 'forward'
+    ? (isHoriz ? 'translateX(-' + vw + 'px)' : 'translateY(-' + vh + 'px)')
+    : (isHoriz ? 'translateX(' + vw + 'px)' : 'translateY(' + vh + 'px)');
+
+  _svCanvasB.style.zIndex = '402'; // encima de A durante animación
+  _svCanvasB.style.transform = enterFrom;
+
+  // Forzar reflow
+  void _svCanvasB.offsetWidth;
+
+  var transition = 'transform 320ms cubic-bezier(0.25,0.46,0.45,0.94)';
+  _svCanvasA.style.transition = transition;
+  _svCanvasB.style.transition = transition;
+  _svCanvasA.style.transform = exitTo;
+  _svCanvasB.style.transform = 'translateX(0) translateY(0)';
+
   var done = false;
   function finish() {
     if (done) return; done = true;
-    scrollEl.style.transition = 'none';
+    // B se convierte en el nuevo A
+    if (_svCanvasA) { _svCanvasA.remove(); _svCanvasA = null; }
+    _svCanvasB.id = 'sv-canvas-a';
+    _svCanvasB.style.transition = 'none';
+    _svCanvasB.style.transform  = 'none';
+    _svCanvasB.style.zIndex     = '401';
+    _svCanvasA = _svCanvasB;
+    _svCanvasB = null;
+    // Actualizar estado real
+    edViewerIdx = newIdx;
+    edViewerTextStep = newStep;
     _svAnimating = false;
-    _svRedrawTexts();
+    _svUpdateCounter();
   }
-  scrollEl.addEventListener('transitionend', finish, { once: true });
-  setTimeout(finish, 400); // fallback por si transitionend no dispara
+  _svCanvasB.addEventListener('transitionend', finish, { once: true });
+  setTimeout(finish, 400);
 }
 
 
