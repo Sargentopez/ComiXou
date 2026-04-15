@@ -158,6 +158,9 @@ function _onFullscreenChange() {
   const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
   const btn  = document.getElementById('fullscreenToggle');
   if (btn) btn.textContent = isFs ? '[ ✕ ]' : '[ ]';
+  // En modo fijo: reposicionar botones (fullscreen cambia el viewport)
+  // El resize lo dispara normalmente, pero algunos dispositivos no lo hacen
+  if (RS.resizeFn) setTimeout(RS.resizeFn, 50);
 }
 
 function _embedClose() {
@@ -473,26 +476,46 @@ function _startScrollReader() {
     }
   }, { passive: true });
 
-  // Scroll nativo: detectar llegada a nuevo slide
-  let _prevSI = 0, _sraf = null;
-  container.addEventListener('scroll', () => {
-    if (_sraf) cancelAnimationFrame(_sraf);
-    _sraf = requestAnimationFrame(() => {
-      const pos  = isH ? container.scrollLeft : container.scrollTop;
-      const size = isH ? container.clientWidth : container.clientHeight;
-      if (!size) return;
-      const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
-      if (si === _prevSI) return;
+  // Scroll nativo:
+  //   - Al iniciar movimiento → ocultar botones
+  //   - Al parar (scrollend o debounce 150ms) → mostrar y posicionar
+  let _prevSI = 0, _sraf = null, _scrollStopTimer = null, _lastPos = -1;
+
+  function _onScrollStop() {
+    const pos  = isH ? container.scrollLeft : container.scrollTop;
+    const size = isH ? container.clientWidth : container.clientHeight;
+    if (!size) return;
+    const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
+    if (si !== _prevSI) {
       _prevSI = si;
       RS.idx  = si;
       RS.textStep = _initTextStep(si);
       _resizeScrollCanvas();
       _render();
       _updateOverlay();
-      // Mostrar botones originales posicionados sobre el canvas del slide activo
-      _showScrollBtns();
+    }
+    _showScrollBtns();
+  }
 
-    });
+  container.addEventListener('scroll', () => {
+    const pos = isH ? container.scrollLeft : container.scrollTop;
+    // Ignorar movimientos minúsculos (< 5px) — pueden ser taps sobre botones
+    if (_lastPos >= 0 && Math.abs(pos - _lastPos) < 5) return;
+    _lastPos = pos;
+    // Ocultar botones mientras se mueve
+    _hideScrollBtns();
+    // Cancelar RAF anterior
+    if (_sraf) cancelAnimationFrame(_sraf);
+    _sraf = null;
+    // Debounce: mostrar al parar
+    clearTimeout(_scrollStopTimer);
+    _scrollStopTimer = setTimeout(_onScrollStop, 150);
+  }, { passive: true });
+
+  // scrollend: nativo en Chrome 114+ / Android WebView moderno
+  container.addEventListener('scrollend', () => {
+    clearTimeout(_scrollStopTimer);
+    _onScrollStop();
   }, { passive: true });
 
   // Teclado PC — avanza bocadillo o slide
@@ -518,7 +541,16 @@ function _startScrollReader() {
     _resizeScrollCanvas();
     _showScrollBtns();
   };
-  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+  setTimeout(() => {
+    window.addEventListener('resize', RS.resizeFn);
+    window.addEventListener('orientationchange', () => {
+      setTimeout(RS.resizeFn, 100);
+      setTimeout(RS.resizeFn, 400);
+    });
+    const _onFsChange = () => setTimeout(RS.resizeFn, 50);
+    document.addEventListener('fullscreenchange',       _onFsChange);
+    document.addEventListener('webkitfullscreenchange', _onFsChange);
+  }, 300);
 
   // Posicionar botones sobre el scroll
 
@@ -650,6 +682,13 @@ function _renderVectorLayer(ctx, layer, pw, ph, img) {
 // Se llama cada vez que el canvas cambia de tamaño o posición.
 // Mostrar los botones originales posicionados sobre el canvas del slide activo.
 // Se muestra primero (para que offsetWidth sea calculable) y se posiciona en RAF.
+function _hideScrollBtns() {
+  const fsBtn    = document.getElementById('fullscreenToggle');
+  const closeBtn = document.getElementById('closeBtn');
+  if (fsBtn)    fsBtn.style.display = 'none';
+  if (closeBtn) closeBtn.style.display = 'none';
+}
+
 function _showScrollBtns() {
   const fsBtn    = document.getElementById('fullscreenToggle');
   const closeBtn = document.getElementById('closeBtn');
