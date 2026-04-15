@@ -23,7 +23,7 @@ let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
 let edProjectId = null;
-let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'' };
+let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal', social:'' };
 let edActiveTool = 'select';  // select | draw | eraser | fill | shape | line
 // Estado herramienta shape
 let _edShapeType  = 'rect';   // 'rect' | 'ellipse'
@@ -11221,24 +11221,6 @@ function edSaveProject(){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
-    // Copia local del editorData — usada por "Recuperar versión del dispositivo"
-    // cuando la nube tiene una versión diferente
-    localEditorData:{
-      orientation:edOrientation,
-      pages:(()=>{
-        const _savedOrient=edOrientation, _savedPage=edCurrentPage;
-        const result=edPages.map((p,_pi)=>{
-          edCurrentPage=_pi;
-          edOrientation=p.orientation||_savedOrient;
-          const layers=p.layers.map(edSerLayer).filter(Boolean);
-          return {layers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient};
-        });
-        edOrientation=_savedOrient; edCurrentPage=_savedPage;
-        return result;
-      })(),
-      _rules: edRules,
-      _ruleNodes: edRuleNodes,
-    },
   });
   edToast('Guardado ✓');
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
@@ -11918,7 +11900,7 @@ function edLoadProject(id){
   edProjectId=id;
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
-  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
+  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'horizontal',social:comic.social||''};
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
@@ -11980,28 +11962,18 @@ let edViewerIdx=0;
 function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
 function edOpenViewer(){
-  edHideGearIcon();
-  edViewerIdx=0;
+  edHideGearIcon();  // ocultar gear al abrir visor
+  edViewerIdx=0;  // siempre empieza por la primera hoja
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
+  // Garantizar que TODAS las hojas tienen orientation antes de abrir
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
   $('editorViewer')?.classList.add('open');
-
-  const _nm = edProjectMeta.navMode || 'fixed';
-  const _isTouch = window._edIsTouch || window.matchMedia('(hover:none) and (pointer:coarse)').matches;
-
-  if ((_nm === 'horizontal' || _nm === 'vertical') && _isTouch) {
-    // Modo scroll táctil: contenedor con slides
-    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-      _edOpenViewerScroll(_nm);
-    });
-  } else {
-    // Modo fixed (o PC siempre fixed)
-    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-      edUpdateViewer();
-      edInitViewerTap();
-    });
-  }
+  // Esperar fuentes antes del primer render para evitar fallback en bocadillos/texto
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    edUpdateViewer();
+    edInitViewerTap();
+  });
   // Orientación: resize recalcula canvas al girar dispositivo
   if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
   let _viewerResizeTimer;
@@ -12030,277 +12002,10 @@ function edOpenViewer(){
   _viewerKeyHandler = _edViewerKey;
   document.addEventListener('keydown', _viewerKeyHandler);
 }
-// ── Visor en modo scroll (horizontal / vertical) ──────────────
-//
-// Arquitectura (igual que Webtoon / Tapas / Kindle):
-//   - Scroll nativo SIEMPRE activo — overflow NUNCA cambia → sin saltos
-//   - Un slide por página con canvas; scroll-snap + scroll-behavior:smooth
-//     dan la animación natural (ease-out del navegador, acelerada al inicio
-//     y desacelerada al final)
-//   - Un overlay transparente (position:absolute, inset:0) encima del scroll:
-//       · pointer-events:all  → cuando hay textos pendientes: intercepta el
-//         swipe y avanza el bocadillo SIN mover el scroll
-//       · pointer-events:none → cuando la página está completa: los toques
-//         llegan al scroll nativo que mueve la hoja suavemente
-// ─────────────────────────────────────────────────────────────
-
-function _edOpenViewerScroll(navMode) {
-  const isH = navMode === 'horizontal';
-  const vw = window.innerWidth, vh = window.innerHeight;
-
-  _viewerScrollMode = true;
-
-  // Ocultar canvas/controles del modo fijo
-  const fc = $('viewerCanvas');
-  if (fc) fc.style.display = 'none';
-  $('viewerControls')?.classList.add('hidden');
-
-  // Configurar contenedor — overflow NUNCA se toca después de aquí
-  const sc = $('viewerScroll');
-  sc.className = isH ? 'vs-h' : 'vs-v';
-  sc.innerHTML = '';
-
-  const _savedOrient = edOrientation;
-
-  // ── Construir slides ──
-  const _canvases = [];
-
-  edPages.forEach((page, pi) => {
-    const orient = page.orientation || _savedOrient;
-    const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-    const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-    const scale = Math.min(vw / pw, vh / ph);
-
-    const slide = document.createElement('div');
-    slide.className = 'vs-slide';
-    slide.style.width  = vw + 'px';
-    slide.style.height = vh + 'px';
-
-    const canvas = document.createElement('canvas');
-    canvas.width  = pw;
-    canvas.height = ph;
-    canvas.style.width  = Math.round(pw * scale) + 'px';
-    canvas.style.height = Math.round(ph * scale) + 'px';
-    canvas.style.pointerEvents = 'none';
-
-    slide.appendChild(canvas);
-    sc.appendChild(slide);
-    _canvases.push(canvas);
-  });
-
-  // ── Overlay: intercepta toques cuando hay textos pendientes ──
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:absolute;inset:0;z-index:10;touch-action:none;';
-  overlay.style.pointerEvents = 'none'; // empieza sin interceptar
-  $('editorViewer').appendChild(overlay);
-
-  // ── Estado ──
-  edViewerIdx      = 0;
-  edViewerTextStep = 0;
-
-  function _activateCanvas(pi) {
-    edViewerCanvas = _canvases[pi];
-    edViewerCtx    = _canvases[pi]?.getContext('2d');
-  }
-
-  function _hasPendingTexts(pi) {
-    pi = pi ?? edViewerIdx;
-    const page  = edPages[pi];
-    const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    return (page?.textMode || 'sequential') === 'sequential' && edViewerTextStep < tl.length;
-  }
-
-  function _updateOverlay() {
-    // El overlay bloquea toques solo si hay textos pendientes en la página actual
-    overlay.style.pointerEvents = _hasPendingTexts() ? 'all' : 'none';
-  }
-
-  // ── Render inicial de todos los slides (sin textos secuenciales aún) ──
-  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    const _si = edViewerIdx, _ss = edViewerTextStep;
-    edPages.forEach((page, pi) => {
-      _activateCanvas(pi);
-      const orient = page.orientation || _savedOrient;
-      const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-      const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-      edViewerIdx      = pi;
-      edViewerTextStep = 0;
-      edUpdateViewer();
-    });
-    // Activar página 0 con primer texto
-    edViewerIdx      = _si;
-    _activateCanvas(0);
-    const p0 = edPages[0];
-    const tl0 = (p0?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    edViewerTextStep = (p0?.textMode === 'sequential' && tl0.length > 0) ? 1 : 0;
-    edUpdateViewer();
-    _updateOverlay();
-  });
-
-  // ── Swipe en el overlay (cuando hay textos pendientes) ──
-  let _osx = null, _osy = null;
-  overlay.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) { _osx = null; return; }
-    _osx = e.touches[0].clientX;
-    _osy = e.touches[0].clientY;
-  }, { passive: true });
-
-  overlay.addEventListener('touchend', e => {
-    if (_osx === null) return;
-    const ex = e.changedTouches[0].clientX;
-    const ey = e.changedTouches[0].clientY;
-    const dx = ex - _osx, dy = ey - _osy;
-    _osx = null;
-    const adx = Math.abs(dx), ady = Math.abs(dy);
-    // Ignorar gestos en dirección incorrecta
-    if (isH && adx < 20) return;
-    if (!isH && ady < 20) return;
-    if (isH && ady > adx * 1.5) return;
-    if (!isH && adx > ady * 1.5) return;
-
-    const goFwd = isH ? dx < 0 : dy < 0;
-    const goBwd = isH ? dx > 0 : dy > 0;
-
-    if (goFwd && _hasPendingTexts()) {
-      // Avanzar bocadillo con fade (idéntico al modo fijo)
-      _vStartBubbleFade();
-      edViewerTextStep++;
-      _activateCanvas(edViewerIdx);
-      edUpdateViewer();
-      _updateOverlay(); // quitar overlay si ya no hay más
-    } else if (goBwd) {
-      _vsBack();
-    }
-  }, { passive: true });
-
-  // ── Retroceder ──
-  function _vsBack() {
-    if (_vFadeRaf) { cancelAnimationFrame(_vFadeRaf); _vFadeRaf = null; _vPrevBubbleFade = 0; }
-    const page  = edPages[edViewerIdx];
-    const isSeq = (page?.textMode || 'sequential') === 'sequential';
-    const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    if (isSeq && edViewerTextStep > 1) {
-      edViewerTextStep--;
-      _activateCanvas(edViewerIdx);
-      edUpdateViewer();
-      _updateOverlay();
-    } else if (edViewerIdx > 0) {
-      _snapTo(edViewerIdx - 1);
-    }
-  }
-
-  // ── Scroll nativo: detectar llegada a nuevo slide ──
-  let _prevSI = 0, _scrollRaf = null, _settling = false;
-  sc.addEventListener('scroll', () => {
-    if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
-    _scrollRaf = requestAnimationFrame(() => {
-      const pos  = isH ? sc.scrollLeft : sc.scrollTop;
-      const size = isH ? sc.clientWidth : sc.clientHeight;
-      if (!size) return;
-      const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
-      if (si === _prevSI) return;
-      _prevSI      = si;
-      edViewerIdx  = si;
-      _activateCanvas(si);
-      const np  = edPages[si];
-      const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-      edViewerTextStep = (np?.textMode === 'sequential' && ntl.length > 0) ? 1 : 0;
-      edUpdateViewer();
-      _updateOverlay();
-
-    });
-  }, { passive: true });
-
-  // ── scrollTo programático para retroceder ──
-  function _snapTo(idx) {
-    const size = isH ? sc.clientWidth : sc.clientHeight;
-    sc.scrollTo({
-      left:     isH ? idx * size : 0,
-      top:      isH ? 0 : idx * size,
-      behavior: 'smooth',
-    });
-  }
-
-  // Guardar referencia al overlay para limpieza en edCloseViewer
-  sc._vsOverlay = overlay;
-
-  // Resize: reajustar todos los slides y redibujar el activo
-  if (_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
-  let _vsResizeTimer;
-  _viewerResizeFn = () => {
-    clearTimeout(_vsResizeTimer);
-    _vsResizeTimer = setTimeout(() => {
-      const nvw = window.innerWidth, nvh = window.innerHeight;
-      edPages.forEach((page, pi) => {
-        const orient = page.orientation || edOrientation;
-        const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-        const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-        const scale = Math.min(nvw / pw, nvh / ph);
-        const cv = _canvases[pi];
-        if (!cv) return;
-        cv.style.width  = Math.round(pw * scale) + 'px';
-        cv.style.height = Math.round(ph * scale) + 'px';
-        const slide = sc.children[pi];
-        if (slide) { slide.style.width = nvw + 'px'; slide.style.height = nvh + 'px'; }
-      });
-      // Redibujar solo el slide activo
-      _activateCanvas(edViewerIdx);
-      edUpdateViewer();
-    }, 150);
-  };
-  window.addEventListener('resize', _viewerResizeFn);
-}
-
-// Función de render de un estado concreto sobre un canvas destino (usada en resize)
-function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
-  const ctx = canvas.getContext('2d');
-  const _savedOrient   = edOrientation;
-  const _savedPage     = edCurrentPage;
-  const _savedIdx      = edViewerIdx;
-  const _savedStep     = edViewerTextStep;
-  const _savedCanvas   = edViewerCanvas;
-  const _savedCtx      = edViewerCtx;
-
-  edOrientation    = orient;
-  edCurrentPage    = pageIdx;
-  edViewerIdx      = pageIdx;
-  edViewerTextStep = textStep;
-  edViewerCanvas   = canvas;
-  edViewerCtx      = ctx;
-
-  const full = document.createElement('canvas');
-  full.width  = ED_CANVAS_W;
-  full.height = ED_CANVAS_H;
-  const fctx  = full.getContext('2d');
-  const mx = (ED_CANVAS_W - pw) / 2;
-  const my = (ED_CANVAS_H - ph) / 2;
-  fctx.fillStyle = '#fff';
-  fctx.fillRect(mx, my, pw, ph);
-
-  page.layers.forEach(l => {
-    if (l.type==='text' || l.type==='bubble') return;
-    fctx.globalAlpha = l.opacity ?? 1;
-    if (typeof l.draw === 'function') l.draw(fctx, full);
-    fctx.globalAlpha = 1;
-  });
-  _edViewerDrawTextsOnCtx(page, fctx, full);
-  ctx.clearRect(0, 0, pw, ph);
-  ctx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
-
-  edOrientation    = _savedOrient;
-  edCurrentPage    = _savedPage;
-  edViewerIdx      = _savedIdx;
-  edViewerTextStep = _savedStep;
-  edViewerCanvas   = _savedCanvas;
-  edViewerCtx      = _savedCtx;
-}
-
-// Flag: true cuando el visor está en modo scroll (canvas dentro de slide flex)
-let _viewerScrollMode = false;
-
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
   const vw = window.innerWidth, vh = window.innerHeight;
+  // Si no se pasan dimensiones, calcularlas desde la hoja actual del visor
   if(!pw||!ph){
     const _po = edPages[edViewerIdx]?.orientation || edOrientation;
     pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
@@ -12309,22 +12014,16 @@ function edUpdateViewerSize(pw, ph){
   edViewerCanvas.width  = pw;
   edViewerCanvas.height = ph;
   edViewerCtx = edViewerCanvas.getContext('2d');
+  // Escala: llenar el viewport manteniendo proporción (contain)
   const scale = Math.min(vw / pw, vh / ph);
   const displayW = Math.round(pw * scale);
   const displayH = Math.round(ph * scale);
   edViewerCanvas.style.width  = displayW + 'px';
   edViewerCanvas.style.height = displayH + 'px';
-  if (!_viewerScrollMode) {
-    // Modo fijo: centrar con position absolute
-    edViewerCanvas.style.position = 'absolute';
-    edViewerCanvas.style.left = Math.round((vw - displayW) / 2) + 'px';
-    edViewerCanvas.style.top  = Math.round((vh - displayH) / 2) + 'px';
-  } else {
-    // Modo scroll: el canvas está dentro de un slide flex, no necesita posicionamiento
-    edViewerCanvas.style.position = '';
-    edViewerCanvas.style.left = '';
-    edViewerCanvas.style.top  = '';
-  }
+  // Centrar en el viewer
+  edViewerCanvas.style.position = 'absolute';
+  edViewerCanvas.style.left = Math.round((vw - displayW) / 2) + 'px';
+  edViewerCanvas.style.top  = Math.round((vh - displayH) / 2) + 'px';
 }
 
 // Teclado en visor (PC)
@@ -12438,40 +12137,32 @@ function edInitViewerTap(){
   const sig = { signal: _viewerAC.signal };
 
   // ── SWIPE TÁCTIL ──
-  // PC: siempre modo fijo. Táctil: según navMode de la obra.
-  const _vNavMode = edProjectMeta.navMode || 'fixed';
-  let _sx = null, _sy = null;
+  let _sx = null, _sy = null, _scrollCancelled = false;
 
   viewer.addEventListener('touchstart', e => {
-    _sx = null; _sy = null;
+    _sx = null; _sy = null; _scrollCancelled = false;
     if(e.touches.length !== 1) return;
     _sx = e.touches[0].clientX;
     _sy = e.touches[0].clientY;
   }, {passive:true, ...sig});
 
-  viewer.addEventListener('touchend', e => {
+  viewer.addEventListener('touchmove', e => {
     if(_sx === null) return;
+    const dy = e.touches[0].clientY - _sy;
+    if(Math.abs(dy) > 20) _scrollCancelled = true;
+  }, {passive:true, ...sig});
+
+  viewer.addEventListener('touchend', e => {
+    if(_sx === null || _scrollCancelled){ _sx = null; return; }
     if(e.changedTouches.length !== 1){ _sx = null; return; }
+    // Ignorar si el toque termina sobre un botón de control
     if(e.target.closest('button, a, input')) { _sx = null; return; }
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     const dx = endX - _sx, dy = endY - _sy;
-    const adx = Math.abs(dx), ady = Math.abs(dy);
     _sx = null;
-
-    if (_vNavMode === 'horizontal') {
-      if (adx < 30) return;
-      if (adx < ady) return; // gesto más vertical, ignorar
-      if (dx > 0) _viewerBack(); else _viewerAdvance();
-    } else if (_vNavMode === 'vertical') {
-      if (ady < 30) return;
-      if (ady < adx) return; // gesto más horizontal, ignorar
-      if (dy > 0) _viewerBack(); else _viewerAdvance();
-    } else {
-      // Modo fixed: tap en mitad izquierda/derecha
-      if (ady > 40) return;
-      if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
-    }
+    if(Math.abs(dy) > 40) return;
+    if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
   }, {passive:true, ...sig});
 
   // ── CONTROLES DESKTOP (mouse) ──
@@ -12481,20 +12172,6 @@ function edInitViewerTap(){
   viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
-  // Limpiar modo scroll si estaba activo
-  _viewerScrollMode = false;
-  const sc = $('viewerScroll');
-  if (sc) {
-    if (sc._vsOverlay) { sc._vsOverlay.remove(); sc._vsOverlay = null; }
-    sc.className = '';
-    sc.innerHTML = '';
-    sc.style.overflowX = '';
-    sc.style.overflowY = '';
-  }
-  const fc = $('viewerCanvas');
-  if (fc) fc.style.display = '';
-  _viewerTapBound = false;
-
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
   _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
@@ -14266,7 +13943,7 @@ function edLoadFromJSON(file){
     try{
       const data=JSON.parse(e.target.result);
       if(data.editorData){
-        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'fixed',social:data.social||''};
+        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'horizontal',social:data.social||''};
         edOrientation=data.editorData.orientation||'vertical';
         edPages=(data.editorData.pages||[]).map(pd=>({
           drawData:pd.drawData||null,

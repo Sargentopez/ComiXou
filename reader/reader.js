@@ -15,9 +15,6 @@ const ED_PAGE_H = 780;
 const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
 
 // ── ESTADO ──────────────────────────────────────────────────
-// Acción de cierre global — asignada en DOMContentLoaded
-let _readerCloseAction = null;
-
 const RS = {
   panels:       [],   // [{id, orientation, text_mode, data_url, texts:[]}]
   images:       [],   // Image objects precargados
@@ -32,7 +29,6 @@ const RS = {
   keyHandler:   null,
   resizeFn:     null,
   creditsShown: false, // true tras mostrarse la primera vez — no vuelve a aparecer
-  navMode:      'fixed', // 'fixed' | 'horizontal' | 'vertical'
 };
 
 // ── ARRANQUE ─────────────────────────────────────────────────
@@ -72,7 +68,6 @@ document.addEventListener('DOMContentLoaded', () => {
         _doClose();
       };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
-  _readerCloseAction = _closeAction;
 
   // Si la app estaba en fullscreen, entrar en fullscreen.
   // Intentamos inmediatamente (el tap en "Leer" puede servir como gesto activador
@@ -158,13 +153,6 @@ function _onFullscreenChange() {
   const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
   const btn  = document.getElementById('fullscreenToggle');
   if (btn) btn.textContent = isFs ? '[ ✕ ]' : '[ ]';
-  // En modo fijo: reposicionar botones (fullscreen cambia el viewport)
-  // El resize lo dispara normalmente, pero algunos dispositivos no lo hacen
-  // En modo scroll el viewport tarda más en actualizarse tras fullscreen
-  if (RS.resizeFn) {
-    setTimeout(RS.resizeFn, 50);
-    setTimeout(RS.resizeFn, 300);
-  }
 }
 
 function _embedClose() {
@@ -184,7 +172,6 @@ async function loadWork(workId) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
-    RS.navMode     = work[0].nav_mode    || 'fixed';
     // Actualizar meta OG con datos reales de la obra
     _updateOGMeta(work[0].title, work[0].author_name);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
@@ -213,7 +200,6 @@ async function loadDraft(token) {
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
-    RS.navMode     = work[0].nav_mode    || 'fixed';
     _updateOGMeta(work[0].title, work[0].author_name);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -325,441 +311,58 @@ function startReader() {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
 
-  if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
-    _startScrollReader();
-    return;
-  }
-
-  // ── Modo fixed (original) ──
   RS.canvas = document.getElementById('readerCanvas');
   RS.ctx    = RS.canvas.getContext('2d');
   RS.idx    = 0;
   RS.textStep = _initTextStep(0);
 
   _resizeCanvas();
+  // Esperar a que las fuentes estén cargadas antes del primer render
+  // Evita que el primer texto aparezca con fuente de fallback
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     _render();
     _showControls();
   });
   _setupControls();
+  // Segunda pasada de posicionamiento: los botones ya son visibles y tienen dimensiones reales
   requestAnimationFrame(_positionBtns);
 
+  // Registrar resize con delay para evitar que el resize inicial borre el canvas
   RS.resizeFn = () => { _resizeCanvas(); _render(); };
-  setTimeout(() => {
-    window.addEventListener('resize', RS.resizeFn);
-    // orientationchange: en algunos Android el evento resize no llega o llega tarde
-    window.addEventListener('orientationchange', () => {
-      // Dos timeouts escalonados: algunos Android actualizan innerWidth tarde
-      setTimeout(RS.resizeFn, 100);
-      setTimeout(RS.resizeFn, 400);
-    });
-  }, 300);
+  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
+  // Toast de instrucciones según dispositivo
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isTouch
-    ? 'Toca izquierda/derecha para pasar página  👆'
+    ? 'Desplázate tocando la pantalla  👆'
     : 'Desplázate con las flechas del teclado  ◀ ▶';
   _readerToast(msg, 4000);
-}
-
-// ── MODO SCROLL (horizontal / vertical) ──────────────────────
-//
-// Mismo patrón que el visor del editor:
-//   - Scroll nativo SIEMPRE activo (overflow nunca cambia → sin saltos)
-//   - Un slide por panel en el contenedor scroll-snap
-//   - Overlay encima: pointer-events:all cuando hay textos pendientes
-//     (intercepta el swipe → avanza bocadillo), none cuando no los hay
-//     (el swipe llega al scroll nativo → desliza la hoja suavemente)
-// ─────────────────────────────────────────────────────────────
-
-function _startScrollReader() {
-  const isH = RS.navMode === 'horizontal';
-
-  // Ocultar canvas del modo fixed
-  const fixedCanvas = document.getElementById('readerCanvas');
-  if (fixedCanvas) fixedCanvas.style.display = 'none';
-
-  const container = document.getElementById('scrollReader');
-  container.style.display = ''; // quitar display:none inline antes de activar clases
-  container.className = isH ? 'scroll-reader scroll-h' : 'scroll-reader scroll-v';
-  container.innerHTML = '';
-  // Ocultar botones originales — en modo scroll cada slide tiene los suyos via CSS
-  const _fsOrig = document.getElementById('fullscreenToggle');
-  const _clOrig = document.getElementById('closeBtn');
-  if (_fsOrig) _fsOrig.style.display = 'none';
-  if (_clOrig) _clOrig.style.display = 'none';
-
-  // Construir un slide+canvas por panel
-  RS.scrollCanvases = [];
-  RS.panels.forEach((panel, pi) => {
-    const { pw, ph } = _panelDims(pi);
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const scale = Math.min(vw / pw, vh / ph);
-
-    const slide  = document.createElement('div');
-    slide.className = 'rs-slide';
-    slide.style.width  = vw + 'px';
-    slide.style.height = vh + 'px';
-
-    const canvas = document.createElement('canvas');
-    canvas.width  = pw;
-    canvas.height = ph;
-    canvas.style.width  = Math.round(pw * scale) + 'px';
-    canvas.style.height = Math.round(ph * scale) + 'px';
-    canvas.style.pointerEvents = 'none';
-
-    slide.appendChild(canvas);
-    container.appendChild(slide);
-    RS.scrollCanvases.push(canvas);
-  });
-
-  // Estado inicial
-  RS.idx      = 0;
-  RS.textStep = _initTextStep(0);
-
-  // Overlay — intercepta swipes cuando hay textos pendientes
-  const overlay = document.createElement('div');
-  // touch-action y pointer-events se sincronizan juntos:
-  // cuando hay textos pendientes: ambos activos (intercepta el swipe)
-  // cuando no hay: ambos inactivos (el gesto llega al scroll nativo sin fricción)
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:10;touch-action:none;pointer-events:none;';
-  document.getElementById('readerApp').appendChild(overlay);
-  RS.scrollOverlay = overlay;
-
-  function _hasPendingTexts() {
-    const panel = RS.panels[RS.idx];
-    const tl    = panel?.texts || [];
-    return (panel?.text_mode || 'sequential') === 'sequential' && RS.textStep < tl.length;
-  }
-
-  function _updateOverlay() {
-    const active = _hasPendingTexts();
-    overlay.style.pointerEvents = active ? 'all' : 'none';
-    overlay.style.touchAction   = active ? 'none' : 'auto';
-  }
-
-  // Render inicial de todos los slides
-  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    RS.textStep = _initTextStep(0);
-    _renderAllScrollSlides();   // renderiza todos con textStep correcto para el activo
-    // Apuntar RS.canvas al slide activo para que _positionBtns tenga getBoundingClientRect
-    RS.canvas = RS.scrollCanvases[RS.idx] || null;
-    RS.ctx    = RS.canvas ? RS.canvas.getContext('2d') : null;
-    _updateOverlay();
-    // Botones: esperar dos frames para que el layout haya pintado y tenga dimensiones reales
-    requestAnimationFrame(() => requestAnimationFrame(() => _showScrollBtns()));
-  });
-
-  // Swipe en overlay (bocadillos pendientes)
-  let _osx = null, _osy = null;
-  overlay.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) { _osx = null; return; }
-    _osx = e.touches[0].clientX;
-    _osy = e.touches[0].clientY;
-  }, { passive: true });
-
-  overlay.addEventListener('touchend', e => {
-    if (_osx === null) return;
-    const ex = e.changedTouches[0].clientX, ey = e.changedTouches[0].clientY;
-    const dx = ex - _osx, dy = ey - _osy;
-    _osx = null;
-    const adx = Math.abs(dx), ady = Math.abs(dy);
-    if (isH && adx < 20) return;
-    if (!isH && ady < 20) return;
-    if (isH && ady > adx * 1.5) return;
-    if (!isH && adx > ady * 1.5) return;
-    const goFwd = isH ? dx < 0 : dy < 0;
-    const goBwd = isH ? dx > 0 : dy > 0;
-    if (goFwd && _hasPendingTexts()) {
-      _startFade();
-      RS.textStep++;
-      _renderScrollSlide(RS.idx, RS.textStep);
-      _updateOverlay();
-    } else if (goBwd) {
-      _scrollGoBack();
-      _updateOverlay();
-    }
-  }, { passive: true });
-
-  // Scroll nativo:
-  //   - Al iniciar movimiento → ocultar botones
-  //   - Al parar (scrollend o debounce 150ms) → mostrar y posicionar
-  let _prevSI = 0, _sraf = null, _scrollStopTimer = null, _lastPos = -1;
-  let _isResizing = false;  // true durante resize/giro para suprimir _hideScrollBtns
-
-  function _onScrollStop() {
-    if (_isResizing) return; // resize ya gestiona el estado
-    const pos  = isH ? container.scrollLeft : container.scrollTop;
-    const size = isH ? container.clientWidth : container.clientHeight;
-    if (!size) return;
-    const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
-    // Siempre actualizar canvas activo para que _render use el ctx correcto
-    RS.idx = si;
-    if (si !== _prevSI) {
-      _prevSI = si;
-      RS.textStep = _initTextStep(si);
-    }
-    _resizeScrollCanvas(); // actualiza RS.canvas/ctx antes de render
-    _renderScrollSlide(RS.idx, RS.textStep);
-    _updateOverlay();
-    _showScrollBtns();
-  }
-
-  container.addEventListener('scroll', () => {
-    const pos = isH ? container.scrollLeft : container.scrollTop;
-    // Ignorar movimientos minúsculos (< 5px) — pueden ser taps sobre botones
-    if (_lastPos >= 0 && Math.abs(pos - _lastPos) < 5) return;
-    _lastPos = pos;
-    // Ocultar botones mientras se mueve (no durante resize programático)
-    if (!_isResizing) _hideScrollBtns();
-    // Cancelar RAF anterior
-    if (_sraf) cancelAnimationFrame(_sraf);
-    _sraf = null;
-    // Debounce: mostrar al parar
-    clearTimeout(_scrollStopTimer);
-    _scrollStopTimer = setTimeout(_onScrollStop, 150);
-  }, { passive: true });
-
-  // scrollend: nativo en Chrome 114+ / Android WebView moderno
-  container.addEventListener('scrollend', () => {
-    clearTimeout(_scrollStopTimer);
-    _onScrollStop();
-  }, { passive: true });
-
-  // Teclado PC — avanza bocadillo o slide
-  RS.keyHandler = e => {
-    const fwd = ['ArrowRight','ArrowDown','Space','Enter'].includes(e.code);
-    const bwd = ['ArrowLeft','ArrowUp'].includes(e.code);
-    if (fwd) { e.preventDefault(); _scrollAdvance(); }
-    if (bwd) { e.preventDefault(); _scrollGoBack(); }
-    if (e.key === 'Escape') {
-      if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
-    }
-  };
-  document.addEventListener('keydown', RS.keyHandler);
-
-  RS.resizeFn = () => {
-    _isResizing = true;
-    _renderAllScrollSlides();
-    // Reposicionar el scroll al slide activo (el giro puede haberlo desplazado)
-    const _rc = document.getElementById('scrollReader');
-    if (_rc) {
-      const _sz = isH ? _rc.clientWidth : _rc.clientHeight;
-      if (_sz) _rc.scrollTo({ left: isH ? RS.idx*_sz : 0, top: isH ? 0 : RS.idx*_sz, behavior:'instant' });
-    }
-    _resizeScrollCanvas();
-    // Mostrar botones tras el scrollTo — esperar más que el debounce (150ms)
-    // para que el scroll event del scrollTo ya haya pasado
-    setTimeout(() => {
-      _isResizing = false;
-      _showScrollBtns();
-    }, 200);
-  };
-  setTimeout(() => {
-    window.addEventListener('resize', RS.resizeFn);
-    window.addEventListener('orientationchange', () => {
-      setTimeout(RS.resizeFn, 100);
-      setTimeout(RS.resizeFn, 400);
-      setTimeout(RS.resizeFn, 700);
-    });
-    const _onFsChange = () => {
-      setTimeout(RS.resizeFn, 50);
-      setTimeout(RS.resizeFn, 300);
-    };
-    document.addEventListener('fullscreenchange',       _onFsChange);
-    document.addEventListener('webkitfullscreenchange', _onFsChange);
-  }, 300);
-
-  // Posicionar botones sobre el scroll
-
-  const isTouch = window.matchMedia('(hover:none) and (pointer:coarse)').matches;
-  _readerToast(
-    isH ? (isTouch ? 'Desliza ◀ ▶ para cambiar de hoja' : 'Flechas ◀ ▶ para navegar')
-        : (isTouch ? 'Desliza ▲ ▼ para cambiar de hoja' : 'Flechas ▲ ▼ para navegar'),
-    4000
-  );
-}
-
-// Avanzar (teclado): bocadillo → slide siguiente
-function _scrollAdvance() {
-  if (_hasPendingFn()) {
-    _startFade(); RS.textStep++;
-    _renderScrollSlide(RS.idx, RS.textStep);
-  } else if (RS.idx < RS.panels.length - 1) {
-    _snapScrollTo(RS.idx + 1);
-  }
-  function _hasPendingFn() {
-    const panel = RS.panels[RS.idx];
-    return (panel?.text_mode || 'sequential') === 'sequential' && RS.textStep < (panel?.texts || []).length;
-  }
-}
-
-// Retroceder
-function _scrollGoBack() {
-  if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
-  const panel = RS.panels[RS.idx];
-  const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
-  if (isSeq && RS.textStep > 1) {
-    RS.textStep--;
-    _renderScrollSlide(RS.idx, RS.textStep);
-    if (RS.scrollOverlay) RS.scrollOverlay.style.pointerEvents = 'all';
-  } else if (RS.idx > 0) {
-    _snapScrollTo(RS.idx - 1);
-  }
-}
-
-// Navegar programáticamente al slide idx
-function _snapScrollTo(idx) {
-  const container = document.getElementById('scrollReader');
-  if (!container) return;
-  const isH  = RS.navMode === 'horizontal';
-  const size  = isH ? container.clientWidth : container.clientHeight;
-  container.scrollTo({
-    left: isH ? idx * size : 0,
-    top:  isH ? 0 : idx * size,
-    behavior: 'smooth',
-  });
-}
-
-// Redibujar el canvas del slide idx con textStep explícito (no depende de RS.textStep global)
-function _renderScrollSlide(idx, textStep) {
-  const canvas = RS.scrollCanvases?.[idx];
-  if (!canvas) return;
-  const panel = RS.panels[idx];
-  const { pw, ph } = _panelDims(idx);
-  const ctx = canvas.getContext('2d');
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const scale = Math.min(vw / pw, vh / ph);
-  canvas.width  = pw; canvas.height = ph;
-  canvas.style.width  = Math.round(pw * scale) + 'px';
-  canvas.style.height = Math.round(ph * scale) + 'px';
-
-  if (panel.isCredits) { _renderCreditsOnCtx(ctx, pw, ph, panel); return; }
-
-  ctx.clearRect(0, 0, pw, ph);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, pw, ph);
-
-  const layers    = panel.layers    || [];
-  const layerImgs = panel.layerImgs || [];
-  layers.forEach((layer, j) => {
-    const type = layer.type;
-    if (type === 'image' || type === 'draw' || type === 'stroke') {
-      const img = layerImgs[j]; if (!img) return;
-      ctx.save();
-      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      if (type === 'image' || type === 'stroke') {
-        const x = (layer.x||0.5)*pw, y = (layer.y||0.5)*ph;
-        const w = (layer.width||1)*pw, h = (layer.height||1)*ph;
-        ctx.translate(x,y); if (layer.rotation) ctx.rotate(layer.rotation*Math.PI/180);
-        ctx.drawImage(img,-w/2,-h/2,w,h);
-      } else { ctx.drawImage(img,0,0,pw,ph); }
-      ctx.restore();
-    } else if (type === 'shape' || type === 'line') {
-      _renderVectorLayer(ctx, layer, pw, ph, layerImgs[j]);
-    }
-  });
-  // Dibujar textos con el textStep recibido explícitamente
-  _drawTextsWithStep(ctx, panel, pw, ph, layerImgs, textStep);
-}
-
-// Renderizar todos los slides (init + resize).
-// Slides no-activos: todos los textos visibles. Slide activo: RS.textStep actual.
-function _renderAllScrollSlides() {
-  if (!RS.scrollCanvases) return;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const container = document.getElementById('scrollReader');
-  if (container) {
-    Array.from(container.children).forEach(slide => {
-      slide.style.width  = vw + 'px';
-      slide.style.height = vh + 'px';
-    });
-  }
-  RS.panels.forEach((panel, pi) => {
-    const step = (pi === RS.idx) ? RS.textStep : (panel?.texts || []).length;
-    _renderScrollSlide(pi, step);
-  });
-}
-
-function _renderVectorLayer(ctx, layer, pw, ph, img) {
-  if (img) {
-    ctx.save();
-    ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-    ctx.drawImage(img, 0, 0, pw, ph);
-    ctx.restore();
-  }
 }
 
 // ── POSICIÓN DE BOTONES ───────────────────────────────────────
 // Los botones se anclan a los bordes del canvas, no a la ventana.
 // Se llama cada vez que el canvas cambia de tamaño o posición.
-// Mostrar los botones originales posicionados sobre el canvas del slide activo.
-// Se muestra primero (para que offsetWidth sea calculable) y se posiciona en RAF.
-function _hideScrollBtns() {
-  const fsBtn    = document.getElementById('fullscreenToggle');
-  const closeBtn = document.getElementById('closeBtn');
-  if (fsBtn)    fsBtn.style.display = 'none';
-  if (closeBtn) closeBtn.style.display = 'none';
-}
-
-function _showScrollBtns() {
-  const fsBtn    = document.getElementById('fullscreenToggle');
-  const closeBtn = document.getElementById('closeBtn');
-  if (fsBtn)    fsBtn.style.display = '';
-  if (closeBtn) closeBtn.style.display = '';
-  _positionBtns();
-}
-
-// Posicionar botones sobre el canvas.
-// En modo scroll: getBoundingClientRect del canvas activo (está en flex, sin style.left/top).
-// En modo fixed: lee style.left/top/width que escribe _resizeCanvas.
 function _positionBtns() {
-  const PAD = 8, OFY = 10;
   const c = RS.canvas;
   if (!c) return;
+  const cl  = parseInt(c.style.left)  || 0;
+  const ct  = parseInt(c.style.top)   || 0;
+  const cw  = parseInt(c.style.width) || 0;
+  const PAD = 8;   // distancia al borde del canvas
+  const OFY = 10;  // offset vertical desde el borde superior del canvas
 
-  const scrollContainer = document.getElementById('scrollReader');
-  const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
-
-  let cl, ct, cw;
-  if (isScrollMode) {
-    // En modo scroll el canvas está dentro de un slide flex: getBoundingClientRect es fiable
-    const rect = c.getBoundingClientRect();
-    if (!rect.width) return; // canvas aún no visible — ignorar
-    cl = rect.left;
-    ct = rect.top;
-    cw = rect.width;
-  } else {
-    cl = parseInt(c.style.left)  || 0;
-    ct = parseInt(c.style.top)   || 0;
-    cw = parseInt(c.style.width) || 0;
-  }
   const fsBtn    = document.getElementById('fullscreenToggle');
   const closeBtn = document.getElementById('closeBtn');
-  if (fsBtn)    { fsBtn.style.left    = (cl + PAD) + 'px'; fsBtn.style.top    = (ct + OFY) + 'px'; }
-  if (closeBtn) { closeBtn.style.left = (cl + cw - PAD - (closeBtn.offsetWidth || 32)) + 'px'; closeBtn.style.top = (ct + OFY) + 'px'; }
-}
 
-// Actualizar canvas activo en modo scroll (sin tocar botones)
-function _resizeScrollCanvas() {
-  const canvas = RS.scrollCanvases?.[RS.idx];
-  if (!canvas) return;
-  const panel = RS.panels[RS.idx];
-  const { pw, ph } = _panelDims(RS.idx);
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const isHorizPanel = pw > ph && !panel?.isCredits;
-  let scale;
-  if (isHorizPanel) { scale = vh / ph; if (pw * scale > vw * 1.5) scale = vw / pw; }
-  else              { scale = Math.min(vw / pw, vh / ph); }
-  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
-  canvas.width  = pw;
-  canvas.height = ph;
-  canvas.style.width  = dw + 'px';
-  canvas.style.height = dh + 'px';
-  canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
-  canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
-  RS.canvas = canvas;
-  RS.ctx    = canvas.getContext('2d');
+  if (fsBtn) {
+    fsBtn.style.left = (cl + PAD) + 'px';
+    fsBtn.style.top  = (ct + OFY) + 'px';
+  }
+  if (closeBtn) {
+    const btnW = closeBtn.getBoundingClientRect().width || 32;
+    closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
+    closeBtn.style.top  = (ct + OFY) + 'px';
+  }
 }
 
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
@@ -920,15 +523,6 @@ function _render() {
 }
 
 // ── TEXTOS / BOCADILLOS ───────────────────────────────────────
-// Versión con textStep explícito — usada por _renderScrollSlide para evitar
-// dependencia del estado global RS.textStep (que puede estar en medio de una actualización)
-function _drawTextsWithStep(ctx, panel, pw, ph, layerImgs, textStep) {
-  const _saved = RS.textStep;
-  RS.textStep = textStep !== undefined ? textStep : _saved;
-  _drawTexts(ctx, panel, pw, ph, layerImgs);
-  RS.textStep = _saved;
-}
-
 function _drawTexts(ctx, panel, pw, ph, layerImgs) {
   const texts = panel.texts || [];
   if (!texts.length) return;
