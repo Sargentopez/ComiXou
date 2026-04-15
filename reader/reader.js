@@ -160,7 +160,11 @@ function _onFullscreenChange() {
   if (btn) btn.textContent = isFs ? '[ ✕ ]' : '[ ]';
   // En modo fijo: reposicionar botones (fullscreen cambia el viewport)
   // El resize lo dispara normalmente, pero algunos dispositivos no lo hacen
-  if (RS.resizeFn) setTimeout(RS.resizeFn, 50);
+  // En modo scroll el viewport tarda más en actualizarse tras fullscreen
+  if (RS.resizeFn) {
+    setTimeout(RS.resizeFn, 50);
+    setTimeout(RS.resizeFn, 300);
+  }
 }
 
 function _embedClose() {
@@ -442,7 +446,8 @@ function _startScrollReader() {
     RS.canvas = RS.scrollCanvases[0] || null;
     RS.ctx    = RS.canvas ? RS.canvas.getContext('2d') : null;
     _updateOverlay();
-    _showScrollBtns();
+    // Botones: esperar dos frames para que el layout tenga dimensiones reales
+    requestAnimationFrame(() => requestAnimationFrame(() => _showScrollBtns()));
   });
 
   // Swipe en overlay (bocadillos pendientes)
@@ -556,8 +561,12 @@ function _startScrollReader() {
     window.addEventListener('orientationchange', () => {
       setTimeout(RS.resizeFn, 100);
       setTimeout(RS.resizeFn, 400);
+      setTimeout(RS.resizeFn, 700);
     });
-    const _onFsChange = () => setTimeout(RS.resizeFn, 50);
+    const _onFsChange = () => {
+      setTimeout(RS.resizeFn, 50);
+      setTimeout(RS.resizeFn, 300);
+    };
     document.addEventListener('fullscreenchange',       _onFsChange);
     document.addEventListener('webkitfullscreenchange', _onFsChange);
   }, 300);
@@ -652,7 +661,7 @@ function _renderScrollSlide(idx) {
       _renderVectorLayer(ctx, layer, pw, ph, layerImgs[j]);
     }
   });
-  _drawTexts(ctx, panel, pw, ph);
+  _drawTexts(ctx, panel, pw, ph, layerImgs);
 }
 
 // Renderizar todos los slides (init + resize) con todos los textos visibles para no-activos
