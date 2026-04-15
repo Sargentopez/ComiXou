@@ -12124,6 +12124,9 @@ function _edOpenViewerScroll(navMode) {
     edViewerTextStep = (p0?.textMode === 'sequential' && tl0.length > 0) ? 1 : 0;
     edUpdateViewer();
     _updateOverlay();
+    // Forzar scroll a posición 0 — el render de múltiples slides puede desplazarlo
+    const _sc = $('viewerScroll');
+    if (_sc) { _sc.scrollLeft = 0; _sc.scrollTop = 0; }
   });
 
   // ── Swipe en el overlay (cuando hay textos pendientes) ──
