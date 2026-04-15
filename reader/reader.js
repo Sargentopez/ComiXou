@@ -342,7 +342,9 @@ function startReader() {
     window.addEventListener('resize', RS.resizeFn);
     // orientationchange: en algunos Android el evento resize no llega o llega tarde
     window.addEventListener('orientationchange', () => {
-      setTimeout(RS.resizeFn, 200); // esperar a que innerWidth/Height se actualicen
+      // Dos timeouts escalonados: algunos Android actualizan innerWidth tarde
+      setTimeout(RS.resizeFn, 100);
+      setTimeout(RS.resizeFn, 400);
     });
   }, 300);
 
@@ -655,20 +657,43 @@ function _renderVectorLayer(ctx, layer, pw, ph, img) {
 function _showScrollBtns() {
   const fsBtn    = document.getElementById('fullscreenToggle');
   const closeBtn = document.getElementById('closeBtn');
-  if (fsBtn)    fsBtn.style.display    = '';
+  if (fsBtn)    fsBtn.style.display = '';
   if (closeBtn) closeBtn.style.display = '';
-  // RAF: el navegador calcula offsetWidth antes de llamar _positionBtns
-  requestAnimationFrame(_positionBtns);
+  _positionBtns();
 }
 
-// Posicionar botones sobre el canvas (modo fixed y modo scroll)
+// Posicionar botones sobre el canvas.
+// En modo scroll: calcula la posición del canvas activo directamente
+// (misma fórmula que _resizeScrollCanvas) sin depender de style.left.
+// En modo fixed: lee style.left/top/width que escribe _resizeCanvas.
 function _positionBtns() {
   const PAD = 8, OFY = 10;
   const c = RS.canvas;
   if (!c) return;
-  const cl = parseInt(c.style.left)  || 0;
-  const ct = parseInt(c.style.top)   || 0;
-  const cw = parseInt(c.style.width) || 0;
+
+  const scrollContainer = document.getElementById('scrollReader');
+  const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
+
+  let cl, ct, cw;
+  if (isScrollMode) {
+    // Calcular posición del canvas según orientación del panel activo
+    // — misma lógica que _resizeScrollCanvas, independiente del layout DOM
+    const panel = RS.panels[RS.idx];
+    const { pw, ph } = _panelDims(RS.idx);
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const isHorizPanel = pw > ph && !panel?.isCredits;
+    let scale;
+    if (isHorizPanel) { scale = vh / ph; if (pw * scale > vw * 1.5) scale = vw / pw; }
+    else              { scale = Math.min(vw / pw, vh / ph); }
+    const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+    cl = Math.round((vw - dw) / 2);
+    ct = Math.round((vh - dh) / 2);
+    cw = dw;
+  } else {
+    cl = parseInt(c.style.left)  || 0;
+    ct = parseInt(c.style.top)   || 0;
+    cw = parseInt(c.style.width) || 0;
+  }
   const fsBtn    = document.getElementById('fullscreenToggle');
   const closeBtn = document.getElementById('closeBtn');
   if (fsBtn)    { fsBtn.style.left    = (cl + PAD) + 'px'; fsBtn.style.top    = (ct + OFY) + 'px'; }
