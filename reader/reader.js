@@ -482,18 +482,20 @@ function _startScrollReader() {
   let _prevSI = 0, _sraf = null, _scrollStopTimer = null, _lastPos = -1;
 
   function _onScrollStop() {
+    if (_isResizing) return; // resize ya gestiona el estado
     const pos  = isH ? container.scrollLeft : container.scrollTop;
     const size = isH ? container.clientWidth : container.clientHeight;
     if (!size) return;
     const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
+    // Siempre actualizar canvas activo para que _render use el ctx correcto
+    RS.idx = si;
     if (si !== _prevSI) {
       _prevSI = si;
-      RS.idx  = si;
       RS.textStep = _initTextStep(si);
-      _resizeScrollCanvas();
-      _render();
-      _updateOverlay();
     }
+    _resizeScrollCanvas(); // actualiza RS.canvas/ctx antes de _render
+    _render();
+    _updateOverlay();
     _showScrollBtns();
   }
 
@@ -502,8 +504,8 @@ function _startScrollReader() {
     // Ignorar movimientos minúsculos (< 5px) — pueden ser taps sobre botones
     if (_lastPos >= 0 && Math.abs(pos - _lastPos) < 5) return;
     _lastPos = pos;
-    // Ocultar botones mientras se mueve
-    _hideScrollBtns();
+    // Ocultar botones mientras se mueve (no durante resize programático)
+    if (!_isResizing) _hideScrollBtns();
     // Cancelar RAF anterior
     if (_sraf) cancelAnimationFrame(_sraf);
     _sraf = null;
@@ -530,7 +532,9 @@ function _startScrollReader() {
   };
   document.addEventListener('keydown', RS.keyHandler);
 
+  let _isResizing = false;
   RS.resizeFn = () => {
+    _isResizing = true;
     _renderAllScrollSlides();
     // Reposicionar el scroll al slide activo (el giro puede haberlo desplazado)
     const _rc = document.getElementById('scrollReader');
@@ -539,7 +543,12 @@ function _startScrollReader() {
       if (_sz) _rc.scrollTo({ left: isH ? RS.idx*_sz : 0, top: isH ? 0 : RS.idx*_sz, behavior:'instant' });
     }
     _resizeScrollCanvas();
-    _showScrollBtns();
+    // Mostrar botones tras el scrollTo — esperar más que el debounce (150ms)
+    // para que el scroll event del scrollTo ya haya pasado
+    setTimeout(() => {
+      _isResizing = false;
+      _showScrollBtns();
+    }, 200);
   };
   setTimeout(() => {
     window.addEventListener('resize', RS.resizeFn);
