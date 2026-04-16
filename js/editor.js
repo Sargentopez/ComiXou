@@ -12223,12 +12223,22 @@ function _edOpenViewerScroll(navMode) {
       if (!size) return;
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
+      const goingBack = si < _prevSI;
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
       const np  = edPages[si];
       const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-      edViewerTextStep = (np?.textMode === 'sequential' && ntl.length > 0) ? 1 : 0;
+      const isSeq = (np?.textMode || 'sequential') === 'sequential';
+      if (!isSeq || ntl.length === 0) {
+        edViewerTextStep = 0;
+      } else if (goingBack) {
+        // Llegamos retrocediendo — mostrar el último texto
+        edViewerTextStep = ntl.length;
+      } else {
+        // Llegamos avanzando — mostrar el primer texto
+        edViewerTextStep = 1;
+      }
       edUpdateViewer();
       _updateOverlay();
     });
