@@ -321,10 +321,10 @@ class ImageLayer extends BaseLayer {
    drawImage() en cada rAF captura el frame actual → animación real.
    ══════════════════════════════════════════ */
 class GifLayer extends BaseLayer {
-  constructor(img, src, x=0.5, y=0.5, width=0.7) {
+  constructor(img, gifKey, x=0.5, y=0.5, width=0.7) {
     super('gif', x, y, width, 0.3);
-    this.img  = img;   // HTMLImageElement animado en DOM
-    this.src  = src;   // dataUrl original del GIF (preservado sin comprimir)
+    this.img    = img;    // HTMLImageElement animado en DOM
+    this.gifKey = gifKey; // clave IDB (string corto) — el dataUrl vive en IndexedDB
     if (img && img.naturalWidth && img.naturalHeight) {
       const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
       this.height = width * (img.naturalHeight / img.naturalWidth) * (pw / ph);
@@ -362,6 +362,55 @@ function _edGifTick() {
 }
 function _edGifStop() {
   if (_edGifRaf) { cancelAnimationFrame(_edGifRaf); _edGifRaf = null; }
+}
+
+/* ── GIF IndexedDB store ─────────────────────────────────────
+   Los dataUrls de GIF pueden ser varios MB — demasiado para
+   localStorage (límite ~5MB total). Se almacenan en IndexedDB
+   y se referencian desde el JSON del proyecto con una gifKey.
+   ──────────────────────────────────────────────────────────── */
+const _GIF_IDB_NAME = 'cxGifStore';
+const _GIF_IDB_VER  = 1;
+let   _gifIdb       = null;
+
+function _gifIdbOpen() {
+  if (_gifIdb) return Promise.resolve(_gifIdb);
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(_GIF_IDB_NAME, _GIF_IDB_VER);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('gifs');
+    req.onsuccess = e => { _gifIdb = e.target.result; res(_gifIdb); };
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
+function _gifIdbSave(key, dataUrl) {
+  return _gifIdbOpen().then(db => new Promise((res, rej) => {
+    const tx = db.transaction('gifs', 'readwrite');
+    tx.objectStore('gifs').put(dataUrl, key);
+    tx.oncomplete = () => res();
+    tx.onerror    = e => rej(e.target.error);
+  }));
+}
+
+function _gifIdbLoad(key) {
+  return _gifIdbOpen().then(db => new Promise((res, rej) => {
+    const req = db.transaction('gifs').objectStore('gifs').get(key);
+    req.onsuccess = e => res(e.target.result || null);
+    req.onerror   = e => rej(e.target.error);
+  }));
+}
+
+function _gifIdbDelete(key) {
+  return _gifIdbOpen().then(db => new Promise((res) => {
+    const tx = db.transaction('gifs', 'readwrite');
+    tx.objectStore('gifs').delete(key);
+    tx.oncomplete = () => res();
+    tx.onerror    = () => res(); // ignorar errores de borrado
+  }));
+}
+
+function _gifNewKey() {
+  return 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 }
 
 class TextLayer extends BaseLayer {
@@ -3367,7 +3416,8 @@ function edAddGif(file) {
     img.onload = () => {
       const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
       const w = 0.7;
-      const layer = new GifLayer(img, gifSrc, 0.5, 0.5, w);
+      const gifKey = _gifNewKey();
+      const layer = new GifLayer(img, gifKey, 0.5, 0.5, w);
       // Limitar altura máxima al 85% de la página
       if (layer.height > 0.85) {
         const scale = 0.85 / layer.height;
@@ -3382,6 +3432,8 @@ function edAddGif(file) {
         edLayers.push(layer);
         edSelectedIdx = edLayers.length - 1;
       }
+      // Guardar el dataUrl en IndexedDB (no en localStorage)
+      _gifIdbSave(gifKey, gifSrc).catch(e => console.warn('GIF IDB save:', e));
       edPushHistory();
       _edGifStart();
       edRedraw();
@@ -11304,7 +11356,7 @@ function edSaveProject(){
       texts,
     };
   });
-  ComicStore.save({
+  const _saveData = {
     ...existing,
     id:edProjectId,
     ...edProjectMeta,
@@ -11328,9 +11380,14 @@ function edSaveProject(){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
-  });
+  };
+  // Aviso preventivo si la obra es muy grande
+  const _estKB = Math.round(JSON.stringify(_saveData).length / 1024);
+  if (_estKB > 3500) edToast('Obra grande (' + _estKB + 'KB) — se recomienda guardar en la nube', 4000);
+  const _saved = ComicStore.save(_saveData);
+  if (!_saved) { _edShowSaveFailModal(_estKB); return; }
   edToast('Guardado ✓');
-  // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
+  // Marcar punto de guardado y limpiar historial
   _edSavedHistoryIdx = edHistoryIdx;
   edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
   edHistoryIdx = edHistory.length - 1;
@@ -11754,8 +11811,8 @@ function edMergeSelected(){
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='gif'){
-    // GIF: guardar src original sin comprimir (contiene toda la animación)
-    const _r={type:'gif',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,src:l.src,...op};
+    // GIF: guardar solo la gifKey (el dataUrl está en IndexedDB, no en localStorage)
+    const _r={type:'gif',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,gifKey:l.gifKey,...op};
     if(l.groupId) _r.groupId=l.groupId;
     if(l.locked)  _r.locked=true;
     return _r;
@@ -11981,16 +12038,19 @@ function edDeserLayer(d, pageOrientation){
     if(d.multipleCount&&!d.voiceCount)l.voiceCount=d.multipleCount;
     return l;}
   if(d.type==='gif'){
-    const l=new GifLayer(null,d.src||'',d.x,d.y,d.width);
+    const l=new GifLayer(null,d.gifKey||'',d.x,d.y,d.width);
     l.height=d.height||0.3; l.rotation=d.rotation||0;
     if(d.opacity!==undefined) l.opacity=d.opacity;
     if(d.locked)  l.locked=true;
     if(d.groupId) l.groupId=d.groupId;
-    if(d.src){
-      const img=new Image();
-      _edGifImgContainer().appendChild(img);
-      img.onload=()=>{ l.img=img; _edGifStart(); edRedraw(); };
-      img.src=d.src;
+    if(d.gifKey){
+      _gifIdbLoad(d.gifKey).then(dataUrl => {
+        if(!dataUrl) return;
+        const img=new Image();
+        _edGifImgContainer().appendChild(img);
+        img.onload=()=>{ l.img=img; _edGifStart(); edRedraw(); };
+        img.src=dataUrl;
+      }).catch(e => console.warn('GIF IDB load:', e));
     }
     return l;
   }
@@ -12683,6 +12743,8 @@ function edUpdateViewer(){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
     } else if(l.type==='shape' || l.type==='line'){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
+    } else if(l.type==='gif'){
+      fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
     }
   });
   const _finishViewer = () => {
@@ -12705,6 +12767,18 @@ function edUpdateViewer(){
     }
   };
   _finishViewer();
+  // Si la página tiene GIFs, mantener el visor animado
+  const _hasViewerGif = page.layers.some(l => l.type === 'gif');
+  if (_hasViewerGif) {
+    if (!edUpdateViewer._raf) {
+      edUpdateViewer._raf = requestAnimationFrame(() => {
+        edUpdateViewer._raf = null;
+        edUpdateViewer();
+      });
+    }
+  } else {
+    if (edUpdateViewer._raf) { cancelAnimationFrame(edUpdateViewer._raf); edUpdateViewer._raf = null; }
+  }
 }
 
 function _edViewerDrawTextsOnCtx(page, ctx, can){
@@ -13244,6 +13318,72 @@ function EditorView_destroy(){
   }
   edHideGearIcon();
 }
+function _edShowSaveFailModal(sizeKB) {
+  document.getElementById('_edSaveFailModal')&&document.getElementById('_edSaveFailModal').remove();
+  const canCloud = !!(typeof Auth !== 'undefined' && Auth.currentUser && Auth.currentUser() && typeof SupabaseClient !== 'undefined');
+  const overlay = document.createElement('div');
+  overlay.id = '_edSaveFailModal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  const sizeMsg = sizeKB > 0 ? ' (' + sizeKB + 'KB)' : '';
+  let btns = '';
+  if (canCloud) btns += '<button id="_sfm_cloud" style="background:#2563eb;color:#fff;border:none;border-radius:10px;padding:12px;font-size:.9rem;font-weight:700;cursor:pointer;width:100%;margin-bottom:0">Guardar en la nube</button>';
+  btns += '<button id="_sfm_compress" style="background:#16a34a;color:#fff;border:none;border-radius:10px;padding:12px;font-size:.9rem;font-weight:700;cursor:pointer;width:100%">Comprimir imágenes y reintentar</button>';
+  btns += '<button id="_sfm_json" style="background:#7c3aed;color:#fff;border:none;border-radius:10px;padding:12px;font-size:.9rem;font-weight:700;cursor:pointer;width:100%">Descargar copia de seguridad (.json)</button>';
+  btns += '<button id="_sfm_cancel" style="background:transparent;color:#aaa;border:1px solid #444;border-radius:10px;padding:10px;font-size:.85rem;cursor:pointer;width:100%">Cancelar</button>';
+  overlay.innerHTML = '<div style="background:#1a1a2e;border-radius:16px;padding:28px 24px;max-width:400px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.6);color:#eee;font-family:inherit">'
+    + '<div style="font-size:2rem;text-align:center;margin-bottom:8px">&#9888;</div>'
+    + '<h3 style="margin:0 0 10px;font-size:1.05rem;text-align:center">La obra no cabe en el dispositivo</h3>'
+    + '<p style="margin:0 0 18px;font-size:.82rem;color:#aaa;text-align:center;line-height:1.5">El almacenamiento local está lleno' + sizeMsg + '.<br>Las imágenes grandes consumen mucho espacio.</p>'
+    + '<div style="display:flex;flex-direction:column;gap:10px">' + btns + '</div></div>';
+  document.body.appendChild(overlay);
+  var sfmCancel = overlay.querySelector('#_sfm_cancel');
+  if (sfmCancel) sfmCancel.addEventListener('click', function(){ overlay.remove(); });
+  var sfmCloud = overlay.querySelector('#_sfm_cloud');
+  if (sfmCloud) sfmCloud.addEventListener('click', function(){
+    overlay.remove();
+    if (typeof edCloudSave === 'function') edCloudSave();
+    else edToast('Usa el menú Proyecto → Guardar en la nube');
+  });
+  var sfmCompress = overlay.querySelector('#_sfm_compress');
+  if (sfmCompress) sfmCompress.addEventListener('click', function(){
+    overlay.remove();
+    _edCompressAllImages();
+    setTimeout(function(){ edSaveProject(); }, 300);
+  });
+  var sfmJson = overlay.querySelector('#_sfm_json');
+  if (sfmJson) sfmJson.addEventListener('click', function(){
+    overlay.remove();
+    var _comic = ComicStore.getById(edProjectId);
+    if (!_comic) { edToast('No hay proyecto activo'); return; }
+    var _blob = new Blob([JSON.stringify(_comic, null, 2)], { type: 'application/json' });
+    var _a = document.createElement('a');
+    _a.href = URL.createObjectURL(_blob);
+    _a.download = (edProjectMeta.title || 'obra') + '_backup.json';
+    _a.click();
+    setTimeout(function(){ URL.revokeObjectURL(_a.href); }, 5000);
+  });
+}
+
+function _edCompressAllImages() {
+  edPages.forEach(function(page){
+    page.layers.forEach(function(l){
+      if (l.type !== 'image' || !l.img || !l.img.complete || l.img.naturalWidth === 0) return;
+      try {
+        var maxPx = 720;
+        var ratio = Math.min(1, maxPx / Math.max(l.img.naturalWidth, l.img.naturalHeight));
+        var cv = document.createElement('canvas');
+        cv.width  = Math.round(l.img.naturalWidth  * ratio);
+        cv.height = Math.round(l.img.naturalHeight * ratio);
+        cv.getContext('2d').drawImage(l.img, 0, 0, cv.width, cv.height);
+        var newSrc = cv.toDataURL('image/jpeg', 0.65);
+        var newImg = new Image();
+        newImg.src = newSrc; l.img = newImg; l.src = newSrc;
+      } catch(e) {}
+    });
+  });
+  edToast('Imágenes comprimidas — reintentando guardar…');
+}
+
 function edSaveProjectModal(){
   edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
   edProjectMeta.author =$('edMAuthor').value.trim();
@@ -13868,7 +14008,12 @@ function EditorView_init(){
   edInitRules();
   edInitBiblioteca();
   // Avisar al usuario si localStorage se llena al guardar
-  window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
+  window._edQuotaFn = (ev) => {
+    if (ev.detail && ev.detail.trimmed) {
+      edToast('⚠️ Espacio ajustado: se liberó caché de obras ya en la nube', 5000);
+      return;
+    }
+  };
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
 
   // ── VISOR ──
