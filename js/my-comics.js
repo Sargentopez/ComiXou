@@ -104,7 +104,10 @@ async function _mcSyncCloudDates() {
       if (w.genre    && w.genre    !== local.genre)    { local.genre    = w.genre;    dirty = true; }
       if (w.nav_mode && w.nav_mode !== local.navMode)  { local.navMode  = w.nav_mode; dirty = true; }
       if (w.published !== undefined && w.published !== local.published) {
-        local.published = w.published; dirty = true;
+        local.published     = w.published;
+        local.approved      = w.published;
+        local.pendingReview = !w.published;
+        dirty = true;
       }
 
       // Si la nube es más reciente: marcar cloudNewer pero preservar editorData local
@@ -474,22 +477,42 @@ async function _mcCloudLoad() {
       // ¿Ya existe localmente con este supabaseId?
       const existing = ComicStore.getAll().find(c => c.supabaseId === w.id);
       if (existing) {
-        // Si la nube es más reciente, invalidar editorData local para forzar descarga al editar
+        // Siempre actualizar metadatos y thumbnail desde la nube
         const cloudDate = new Date(w.updated_at || 0);
         const localDate = new Date(existing.updatedAt || 0);
-        if (cloudDate <= localDate) {
-          // Aunque no haya cambios, actualizar userId si era el ID antiguo
-          if (existing.userId !== user.id) { existing.userId = user.id; ComicStore.save(existing); }
-          skipped++; continue;
+        const cloudIsNewer = cloudDate > localDate;
+
+        existing.title      = w.title      || existing.title;
+        existing.genre      = w.genre      || existing.genre;
+        existing.navMode    = w.nav_mode   || existing.navMode;
+        existing.userId     = user.id;
+        existing.updatedAt  = w.updated_at || existing.updatedAt;
+        existing.panelCount = w.panel_count || existing.panelCount || 0;
+
+        // Actualizar thumbnail desde el primer panel de la nube
+        try {
+          const firstPanels = await fetch(
+            `${BASE}/panels?work_id=eq.${w.id}&order=panel_order.asc&limit=1&select=data_url`,
+            { headers: hdrs }
+          ).then(r => r.json());
+          const thumb = firstPanels?.[0]?.data_url || '';
+          if (thumb) existing.panels = [{ dataUrl: thumb }];
+        } catch(e) { /* sin thumbnail */ }
+
+        // Sincronizar siempre estado de publicación
+        existing.published     = w.published ?? existing.published;
+        existing.approved      = w.published ?? existing.approved;
+        existing.pendingReview = !(w.published ?? true);
+
+        // Solo invalidar editorData si la nube es más nueva que lo que tenemos
+        if (cloudIsNewer) {
+          // Preservar copia local por si el usuario quiere restaurarla
+          if (existing.editorData) existing.localEditorData = existing.editorData;
+          existing.editorData = null;
+          existing.cloudOnly  = true;
+          existing.cloudNewer = true;
         }
-        // La nube es más nueva — actualizar metadatos e invalidar editorData
-        existing.title    = w.title     || existing.title;
-        existing.genre    = w.genre     || existing.genre;
-        existing.navMode  = w.nav_mode  || existing.navMode;
-        existing.userId   = user.id;
-        existing.cloudOnly  = true;
-        existing.editorData = null;
-        existing.updatedAt  = w.updated_at;
+
         ComicStore.save(existing);
         skipped++;
         continue;
@@ -517,9 +540,9 @@ async function _mcCloudLoad() {
         panels:       thumbDataUrl ? [{ dataUrl: thumbDataUrl }] : [],
         panelCount:   w.panel_count || 0,
         pages:        [],
-        published:    w.published   ?? false,
-        approved:     w.published   ?? false,
-        pendingReview: false,
+        published:     w.published  ?? false,
+        approved:      w.published  ?? false,
+        pendingReview: !(w.published ?? false),
         cloudOnly:    true,
         createdAt:    w.created_at  || new Date().toISOString(),
         updatedAt:    w.updated_at  || new Date().toISOString(),
