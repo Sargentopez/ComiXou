@@ -315,6 +315,55 @@ class ImageLayer extends BaseLayer {
   }
 }
 
+/* ══════════════════════════════════════════
+   GIF LAYER — imagen animada en canvas
+   El navegador avanza los frames del <img> GIF internamente.
+   drawImage() en cada rAF captura el frame actual → animación real.
+   ══════════════════════════════════════════ */
+class GifLayer extends BaseLayer {
+  constructor(img, src, x=0.5, y=0.5, width=0.7) {
+    super('gif', x, y, width, 0.3);
+    this.img  = img;   // HTMLImageElement animado en DOM
+    this.src  = src;   // dataUrl original del GIF (preservado sin comprimir)
+    if (img && img.naturalWidth && img.naturalHeight) {
+      const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
+      this.height = width * (img.naturalHeight / img.naturalWidth) * (pw / ph);
+    }
+  }
+  draw(ctx) {
+    if (!this.img || !this.img.complete || this.img.naturalWidth === 0) return;
+    const pw = edPageW(), ph = edPageH();
+    const w  = this.width  * pw;
+    const h  = this.height * ph;
+    const px = edMarginX() + this.x * pw;
+    const py = edMarginY() + this.y * ph;
+    ctx.save();
+    ctx.globalAlpha = this.opacity ?? 1;
+    ctx.translate(px, py);
+    ctx.rotate((this.rotation || 0) * Math.PI / 180);
+    ctx.drawImage(this.img, -w/2, -h/2, w, h);
+    ctx.restore();
+  }
+  contains(px, py) { return super.contains(px, py); }
+}
+
+// ── Loop de animación continua para GifLayers ──
+// _edGifTick llama edRedraw una vez; al final de edRedraw se reprograma
+// el siguiente tick si aún hay GIFs → sin bucles recursivos ni redraws anidados.
+let _edGifRaf = null;
+function _edGifStart() {
+  if (_edGifRaf) return;
+  _edGifRaf = requestAnimationFrame(_edGifTick);
+}
+function _edGifTick() {
+  _edGifRaf = null;
+  if (!edLayers.some(l => l.type === 'gif')) return;
+  edRedraw();
+}
+function _edGifStop() {
+  if (_edGifRaf) { cancelAnimationFrame(_edGifRaf); _edGifRaf = null; }
+}
+
 class TextLayer extends BaseLayer {
   constructor(text='Escribe aquí',x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
@@ -2105,6 +2154,10 @@ function edRedraw(){
       edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx);
       edCtx.globalAlpha = 1;
+    } else if(l.type==='gif'){
+      const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
+      l.draw(edCtx);
+      l.opacity = _orig;
     }
   });
   // Textos/bocadillos: aplicar dimming individual por capa
@@ -2162,6 +2215,8 @@ function edRedraw(){
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
   _edScrollbarsDraw();
+  // Reprogramar animación GIF si hay capas gif en la página
+  if (edLayers.some(l => l.type === 'gif')) _edGifStart();
 }
 
 
@@ -3146,6 +3201,7 @@ function edLoadPage(idx){
   // Limpiar sesión vectorial al cambiar de página
   if(typeof _vsClear==='function') _vsClear();
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
+  if(edLayers.some(l=>l.type==='gif')) _edGifStart(); else _edGifStop();
   const _po = edPages[idx]?.orientation || 'vertical';
   if(_po !== edOrientation){
     edOrientation = _po;
@@ -3286,6 +3342,57 @@ function edAddImage(file){
   };
   reader.readAsDataURL(file);
 }
+/* ── Insertar GIF animado ── */
+// Contenedor oculto en el DOM para que los navegadores animen los GIFs correctamente.
+// Un <img> fuera del DOM no avanza frames en muchos motores (Chrome Android, WebKit).
+function _edGifImgContainer() {
+  let c = document.getElementById('_edGifImgs');
+  if (!c) {
+    c = document.createElement('div');
+    c.id = '_edGifImgs';
+    c.style.cssText = 'position:fixed;width:1px;height:1px;overflow:hidden;opacity:0.001;pointer-events:none;left:-9999px;top:-9999px;';
+    document.body.appendChild(c);
+  }
+  return c;
+}
+
+function edAddGif(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const gifSrc = ev.target.result; // dataUrl del GIF original — nunca comprimir
+    const img = new Image();
+    // Insertar en DOM oculto ANTES de asignar src para garantizar animación
+    _edGifImgContainer().appendChild(img);
+    img.onload = () => {
+      const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
+      const w = 0.7;
+      const layer = new GifLayer(img, gifSrc, 0.5, 0.5, w);
+      // Limitar altura máxima al 85% de la página
+      if (layer.height > 0.85) {
+        const scale = 0.85 / layer.height;
+        layer.height = 0.85;
+        layer.width  = layer.width * scale;
+      }
+      const firstTextIdx = edLayers.findIndex(l => l.type==='text' || l.type==='bubble');
+      if (firstTextIdx >= 0) {
+        edLayers.splice(firstTextIdx, 0, layer);
+        edSelectedIdx = firstTextIdx;
+      } else {
+        edLayers.push(layer);
+        edSelectedIdx = edLayers.length - 1;
+      }
+      edPushHistory();
+      _edGifStart();
+      edRedraw();
+      edRenderOptionsPanel('props');
+      edToast('GIF animado añadido ✓');
+    };
+    img.src = gifSrc;
+  };
+  reader.readAsDataURL(file);
+}
+
 /* Insertar capa en la posición más alta, justo debajo de textos/bocadillos */
 function _edInsertLayerAbove(layer) {
   // Insertar justo antes del DrawLayer activo (si existe) o antes del primer texto
@@ -11646,6 +11753,13 @@ function edMergeSelected(){
 
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
+  if(l.type==='gif'){
+    // GIF: guardar src original sin comprimir (contiene toda la animación)
+    const _r={type:'gif',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,src:l.src,...op};
+    if(l.groupId) _r.groupId=l.groupId;
+    if(l.locked)  _r.locked=true;
+    return _r;
+  }
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
@@ -11866,6 +11980,20 @@ function edDeserLayer(d, pageOrientation){
     if(d.tailEnds)  l.tailEnds  =d.tailEnds.map(e=>({...e}));
     if(d.multipleCount&&!d.voiceCount)l.voiceCount=d.multipleCount;
     return l;}
+  if(d.type==='gif'){
+    const l=new GifLayer(null,d.src||'',d.x,d.y,d.width);
+    l.height=d.height||0.3; l.rotation=d.rotation||0;
+    if(d.opacity!==undefined) l.opacity=d.opacity;
+    if(d.locked)  l.locked=true;
+    if(d.groupId) l.groupId=d.groupId;
+    if(d.src){
+      const img=new Image();
+      _edGifImgContainer().appendChild(img);
+      img.onload=()=>{ l.img=img; _edGifStart(); edRedraw(); };
+      img.src=d.src;
+    }
+    return l;
+  }
   if(d.type==='image'){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
@@ -13440,6 +13568,8 @@ function EditorView_init(){
     const _ext = _f.name.split('.').pop().toLowerCase();
     if(_ext === 'psd' || _ext === 'xcf' || _ext === 'tif' || _ext === 'tiff'){
       await edImportLayers(_f);
+    } else if(_ext === 'gif') {
+      edAddGif(_f);
     } else {
       edAddImage(_f);
     }
