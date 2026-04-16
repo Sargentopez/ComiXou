@@ -323,15 +323,32 @@ class ImageLayer extends BaseLayer {
 class GifLayer extends BaseLayer {
   constructor(img, gifKey, x=0.5, y=0.5, width=0.7) {
     super('gif', x, y, width, 0.3);
-    this.img    = img;    // HTMLImageElement animado en DOM
-    this.gifKey = gifKey; // clave IDB (string corto) — el dataUrl vive en IndexedDB
+    this.img    = img;
+    this.gifKey = gifKey;
+    this._oc    = null; // canvas offscreen: captura el frame actual en cada tick
     if (img && img.naturalWidth && img.naturalHeight) {
       const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
       this.height = width * (img.naturalHeight / img.naturalWidth) * (pw / ph);
+      this._initOffscreen();
     }
   }
-  draw(ctx) {
+  _initOffscreen() {
+    if (!this.img || !this.img.naturalWidth) return;
+    this._oc = document.createElement('canvas');
+    this._oc.width  = this.img.naturalWidth;
+    this._oc.height = this.img.naturalHeight;
+  }
+  // Llamado en cada tick del rAF: copia el frame actual del <img> al canvas offscreen
+  tick() {
     if (!this.img || !this.img.complete || this.img.naturalWidth === 0) return;
+    if (!this._oc) this._initOffscreen();
+    if (!this._oc) return;
+    this._oc.getContext('2d').drawImage(this.img, 0, 0);
+  }
+  draw(ctx) {
+    const src = this._oc || this.img;
+    if (!src || (src instanceof HTMLImageElement && (!src.complete || src.naturalWidth === 0))) return;
+    if (src instanceof HTMLCanvasElement && src.width === 0) return;
     const pw = edPageW(), ph = edPageH();
     const w  = this.width  * pw;
     const h  = this.height * ph;
@@ -341,7 +358,7 @@ class GifLayer extends BaseLayer {
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px, py);
     ctx.rotate((this.rotation || 0) * Math.PI / 180);
-    ctx.drawImage(this.img, -w/2, -h/2, w, h);
+    ctx.drawImage(src, -w/2, -h/2, w, h);
     ctx.restore();
   }
   contains(px, py) { return super.contains(px, py); }
@@ -357,7 +374,10 @@ function _edGifStart() {
 }
 function _edGifTick() {
   _edGifRaf = null;
-  if (!edLayers.some(l => l.type === 'gif')) return;
+  const gifs = edLayers.filter(l => l.type === 'gif');
+  if (!gifs.length) return;
+  // Capturar frame actual de cada GIF en su canvas offscreen ANTES de redibujar
+  gifs.forEach(l => l.tick());
   edRedraw();
 }
 function _edGifStop() {
@@ -12773,6 +12793,8 @@ function edUpdateViewer(){
     if (!edUpdateViewer._raf) {
       edUpdateViewer._raf = requestAnimationFrame(() => {
         edUpdateViewer._raf = null;
+        // Actualizar frames offscreen antes de redibujar
+        page.layers.filter(l => l.type === 'gif').forEach(l => l.tick());
         edUpdateViewer();
       });
     }
