@@ -364,6 +364,7 @@ function _startScrollReader() {
 
   // Configurar contenedor — overflow NUNCA se toca después de aquí
   const container = document.getElementById('scrollReader');
+  container.style.display = 'flex'; // necesario: #scrollReader{display:none} supera la clase
   container.className = isH ? 'scroll-reader scroll-h' : 'scroll-reader scroll-v';
   container.innerHTML = '';
 
@@ -440,6 +441,8 @@ function _startScrollReader() {
     // Forzar posición inicial al panel 0
     container.scrollLeft = 0;
     container.scrollTop  = 0;
+    // Posicionar botones sobre el canvas del panel activo
+    _positionBtns();
   });
 
   // ── Swipe en el overlay ──
