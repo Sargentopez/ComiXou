@@ -424,24 +424,22 @@ function _startScrollReader() {
 
   // ── Render inicial de todos los slides ──
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    // Paso 1: renderizar todos los panels sin textos secuenciales
     RS.panels.forEach((panel, pi) => {
       _activateCanvas(pi);
       RS.idx      = pi;
       RS.textStep = 0;
       _render();
     });
-    // Activar panel 0 con primer texto
-    RS.idx = 0;
+    // Paso 2: panel 0 con el primer texto visible (igual que el visor del editor)
+    RS.idx      = 0;
+    RS.textStep = _initTextStep(0);
     _activateCanvas(0);
-    const p0    = RS.panels[0];
-    const texts0 = p0?.texts || [];
-    RS.textStep = ((p0?.text_mode || 'sequential') === 'sequential' && texts0.length > 0) ? 1 : 0;
     _render();
     _updateOverlay();
     // Forzar posición inicial al panel 0
     container.scrollLeft = 0;
     container.scrollTop  = 0;
-    // Posicionar botones sobre el canvas del panel activo
     _positionBtns();
   });
 
