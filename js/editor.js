@@ -321,34 +321,51 @@ class ImageLayer extends BaseLayer {
    drawImage() en cada rAF captura el frame actual → animación real.
    ══════════════════════════════════════════ */
 class GifLayer extends BaseLayer {
-  constructor(img, gifKey, x=0.5, y=0.5, width=0.7) {
+  constructor(gifKey, x=0.5, y=0.5, width=0.7) {
     super('gif', x, y, width, 0.3);
-    this.img    = img;
-    this.gifKey = gifKey;
-    this._oc    = null; // canvas offscreen: captura el frame actual en cada tick
-    if (img && img.naturalWidth && img.naturalHeight) {
-      const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-      this.height = width * (img.naturalHeight / img.naturalWidth) * (pw / ph);
-      this._initOffscreen();
-    }
+    this.gifKey  = gifKey;
+    this._frames = [];    // [{imageData, delay}] decodificados por GifDecoder
+    this._fIdx   = 0;     // frame actual
+    this._timer  = null;  // setTimeout del frame actual
+    this._oc     = null;  // canvas offscreen con el frame actual pintado
+    this._ready  = false;
   }
-  _initOffscreen() {
-    if (!this.img || !this.img.naturalWidth) return;
-    this._oc = document.createElement('canvas');
-    this._oc.width  = this.img.naturalWidth;
-    this._oc.height = this.img.naturalHeight;
+
+  // Carga y decodifica el GIF desde IDB. Llama cb() cuando está listo.
+  load(dataUrl, cb) {
+    if (!window.GifDecoder) { if(cb) cb(); return; }
+    GifDecoder.decode(dataUrl).then(({ frames, width, height }) => {
+      this._frames = frames;
+      this._fIdx   = 0;
+      this._oc     = document.createElement('canvas');
+      this._oc.width  = width;
+      this._oc.height = height;
+      this._ready  = true;
+      this._applyFrame(0);
+      if (cb) cb();
+    }).catch(e => { console.warn('GIF decode error:', e); if(cb) cb(); });
   }
-  // Llamado en cada tick del rAF: copia el frame actual del <img> al canvas offscreen
-  tick() {
-    if (!this.img || !this.img.complete || this.img.naturalWidth === 0) return;
-    if (!this._oc) this._initOffscreen();
-    if (!this._oc) return;
-    this._oc.getContext('2d').drawImage(this.img, 0, 0);
+
+  // Pinta el frame i en el canvas offscreen y programa el siguiente
+  _applyFrame(i) {
+    if (!this._ready || !this._frames.length) return;
+    this._fIdx = i % this._frames.length;
+    const frame = this._frames[this._fIdx];
+    this._oc.getContext('2d').putImageData(frame.imageData, 0, 0);
+    if (this._timer) clearTimeout(this._timer);
+    this._timer = setTimeout(() => {
+      this._applyFrame(this._fIdx + 1);
+      // Forzar redibujado del editor si está abierto
+      if (typeof edRedraw === 'function') edRedraw();
+    }, frame.delay);
   }
+
+  stopAnim() {
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+  }
+
   draw(ctx) {
-    const src = this._oc || this.img;
-    if (!src || (src instanceof HTMLImageElement && (!src.complete || src.naturalWidth === 0))) return;
-    if (src instanceof HTMLCanvasElement && src.width === 0) return;
+    if (!this._oc || !this._ready) return;
     const pw = edPageW(), ph = edPageH();
     const w  = this.width  * pw;
     const h  = this.height * ph;
@@ -358,31 +375,18 @@ class GifLayer extends BaseLayer {
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px, py);
     ctx.rotate((this.rotation || 0) * Math.PI / 180);
-    ctx.drawImage(src, -w/2, -h/2, w, h);
+    ctx.drawImage(this._oc, -w/2, -h/2, w, h);
     ctx.restore();
   }
+
   contains(px, py) { return super.contains(px, py); }
 }
 
-// ── Loop de animación continua para GifLayers ──
-// _edGifTick llama edRedraw una vez; al final de edRedraw se reprograma
-// el siguiente tick si aún hay GIFs → sin bucles recursivos ni redraws anidados.
-let _edGifRaf = null;
-function _edGifStart() {
-  if (_edGifRaf) return;
-  _edGifRaf = requestAnimationFrame(_edGifTick);
-}
-function _edGifTick() {
-  _edGifRaf = null;
-  const gifs = edLayers.filter(l => l.type === 'gif');
-  if (!gifs.length) return;
-  // Capturar frame actual de cada GIF en su canvas offscreen ANTES de redibujar
-  gifs.forEach(l => l.tick());
-  edRedraw();
-}
-function _edGifStop() {
-  if (_edGifRaf) { cancelAnimationFrame(_edGifRaf); _edGifRaf = null; }
-}
+
+
+// ── GIF: la animación la maneja GifLayer._applyFrame() con setTimeout propio ──
+function _edGifStart() {} // no-op: mantenido por compatibilidad
+function _edGifStop()  {} // no-op
 
 /* ── GIF IndexedDB store ─────────────────────────────────────
    Los dataUrls de GIF pueden ser varios MB — demasiado para
@@ -2284,8 +2288,6 @@ function edRedraw(){
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
   _edScrollbarsDraw();
-  // Reprogramar animación GIF si hay capas gif en la página
-  if (edLayers.some(l => l.type === 'gif')) _edGifStart();
 }
 
 
@@ -3269,8 +3271,11 @@ function edDeletePage(){
 function edLoadPage(idx){
   // Limpiar sesión vectorial al cambiar de página
   if(typeof _vsClear==='function') _vsClear();
+  // Detener animaciones GIF de la página anterior
+  if(edPages[edCurrentPage]) edPages[edCurrentPage].layers.filter(l=>l.type==='gif').forEach(l=>l.stopAnim&&l.stopAnim());
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
-  if(edLayers.some(l=>l.type==='gif')) _edGifStart(); else _edGifStop();
+  // Arrancar animaciones GIF de la nueva página
+  edLayers.filter(l=>l.type==='gif'&&l._ready).forEach(l=>l._applyFrame&&l._applyFrame(l._fIdx||0));
   const _po = edPages[idx]?.orientation || 'vertical';
   if(_po !== edOrientation){
     edOrientation = _po;
@@ -3414,37 +3419,26 @@ function edAddImage(file){
 /* ── Insertar GIF animado ── */
 // Contenedor oculto en el DOM para que los navegadores animen los GIFs correctamente.
 // Un <img> fuera del DOM no avanza frames en muchos motores (Chrome Android, WebKit).
-function _edGifImgContainer() {
-  let c = document.getElementById('_edGifImgs');
-  if (!c) {
-    c = document.createElement('div');
-    c.id = '_edGifImgs';
-    // Debe estar DENTRO del viewport para que Chrome/Android no pause la animación.
-    // 1x1px en la esquina inferior derecha, invisible pero en viewport.
-    c.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;overflow:hidden;pointer-events:none;z-index:-1;';
-    document.body.appendChild(c);
-  }
-  return c;
-}
-
 function edAddGif(file) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = ev => {
-    const gifSrc = ev.target.result; // dataUrl del GIF original — nunca comprimir
-    const img = new Image();
-    // Insertar en DOM oculto ANTES de asignar src para garantizar animación
-    _edGifImgContainer().appendChild(img);
-    img.onload = () => {
-      const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-      const w = 0.7;
-      const gifKey = _gifNewKey();
-      const layer = new GifLayer(img, gifKey, 0.5, 0.5, w);
-      // Limitar altura máxima al 85% de la página
-      if (layer.height > 0.85) {
-        const scale = 0.85 / layer.height;
-        layer.height = 0.85;
-        layer.width  = layer.width * scale;
+    const gifSrc = ev.target.result;
+    const gifKey = _gifNewKey();
+    const layer  = new GifLayer(gifKey, 0.5, 0.5, 0.7);
+    layer.load(gifSrc, () => {
+      // Calcular dimensiones reales del GIF
+      if (layer._oc) {
+        const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
+        const natW = layer._oc.width, natH = layer._oc.height;
+        const w = 0.7;
+        layer.width  = w;
+        layer.height = w * (natH / natW) * (pw / ph);
+        if (layer.height > 0.85) {
+          const scale = 0.85 / layer.height;
+          layer.height = 0.85;
+          layer.width  = w * scale;
+        }
       }
       const firstTextIdx = edLayers.findIndex(l => l.type==='text' || l.type==='bubble');
       if (firstTextIdx >= 0) {
@@ -3454,15 +3448,12 @@ function edAddGif(file) {
         edLayers.push(layer);
         edSelectedIdx = edLayers.length - 1;
       }
-      // Guardar el dataUrl en IndexedDB (no en localStorage)
       _gifIdbSave(gifKey, gifSrc).catch(e => console.warn('GIF IDB save:', e));
       edPushHistory();
-      _edGifStart();
       edRedraw();
       edRenderOptionsPanel('props');
       edToast('GIF animado añadido ✓');
-    };
-    img.src = gifSrc;
+    });
   };
   reader.readAsDataURL(file);
 }
@@ -12060,7 +12051,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.multipleCount&&!d.voiceCount)l.voiceCount=d.multipleCount;
     return l;}
   if(d.type==='gif'){
-    const l=new GifLayer(null,d.gifKey||'',d.x,d.y,d.width);
+    const l=new GifLayer(d.gifKey||'',d.x,d.y,d.width);
     l.height=d.height||0.3; l.rotation=d.rotation||0;
     if(d.opacity!==undefined) l.opacity=d.opacity;
     if(d.locked)  l.locked=true;
@@ -12068,10 +12059,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.gifKey){
       _gifIdbLoad(d.gifKey).then(dataUrl => {
         if(!dataUrl) return;
-        const img=new Image();
-        _edGifImgContainer().appendChild(img);
-        img.onload=()=>{ l.img=img; _edGifStart(); edRedraw(); };
-        img.src=dataUrl;
+        l.load(dataUrl, () => edRedraw());
       }).catch(e => console.warn('GIF IDB load:', e));
     }
     return l;
@@ -12795,8 +12783,6 @@ function edUpdateViewer(){
     if (!edUpdateViewer._raf) {
       edUpdateViewer._raf = requestAnimationFrame(() => {
         edUpdateViewer._raf = null;
-        // Actualizar frames offscreen antes de redibujar
-        page.layers.filter(l => l.type === 'gif').forEach(l => l.tick());
         edUpdateViewer();
       });
     }
