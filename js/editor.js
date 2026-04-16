@@ -12122,8 +12122,13 @@ function _edOpenViewerScroll(navMode) {
   }
 
   function _updateOverlay() {
-    // El overlay bloquea toques solo si hay textos pendientes en la página actual
-    overlay.style.pointerEvents = _hasPendingTexts() ? 'all' : 'none';
+    // El overlay intercepta gestos si hay textos pendientes hacia adelante
+    // O si hay textos que retroceder (textStep > 1)
+    const page = edPages[edViewerIdx];
+    const tl   = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
+    const isSeq = (page?.textMode || 'sequential') === 'sequential';
+    const active = isSeq && tl.length > 0 && (edViewerTextStep < tl.length || edViewerTextStep > 1);
+    overlay.style.pointerEvents = active ? 'all' : 'none';
   }
 
   // ── Render inicial de todos los slides (sin textos secuenciales aún) ──
