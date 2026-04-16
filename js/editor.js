@@ -12186,7 +12186,10 @@ function _edOpenViewerScroll(navMode) {
       edViewerTextStep++;
       _activateCanvas(edViewerIdx);
       edUpdateViewer();
-      _updateOverlay(); // quitar overlay si ya no hay más
+      _updateOverlay();
+    } else if (goFwd) {
+      // Todos los bocadillos mostrados — deslizar a la siguiente hoja
+      if (edViewerIdx < edPages.length - 1) _snapTo(edViewerIdx + 1);
     } else if (goBwd) {
       _vsBack();
     }
@@ -12199,12 +12202,14 @@ function _edOpenViewerScroll(navMode) {
     const isSeq = (page?.textMode || 'sequential') === 'sequential';
     const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
     if (isSeq && edViewerTextStep > 1) {
+      // Aún hay bocadillos que retroceder en esta hoja
       edViewerTextStep--;
       _activateCanvas(edViewerIdx);
       edUpdateViewer();
       _updateOverlay();
-    } else if (edViewerIdx > 0) {
-      _snapTo(edViewerIdx - 1);
+    } else {
+      // Sin bocadillos que retroceder — deslizar a la hoja anterior
+      if (edViewerIdx > 0) _snapTo(edViewerIdx - 1);
     }
   }
 
