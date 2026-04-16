@@ -3419,7 +3419,9 @@ function _edGifImgContainer() {
   if (!c) {
     c = document.createElement('div');
     c.id = '_edGifImgs';
-    c.style.cssText = 'position:fixed;width:1px;height:1px;overflow:hidden;opacity:0.001;pointer-events:none;left:-9999px;top:-9999px;';
+    // Debe estar DENTRO del viewport para que Chrome/Android no pause la animación.
+    // 1x1px en la esquina inferior derecha, invisible pero en viewport.
+    c.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;overflow:hidden;pointer-events:none;z-index:-1;';
     document.body.appendChild(c);
   }
   return c;
