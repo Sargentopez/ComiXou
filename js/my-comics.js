@@ -250,6 +250,16 @@ function _mcRenderList() {
         _mcToast('\u23f3 Descargando obra de la nube...');
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
+          // DIAGNÓSTICO TEMPORAL — mostrar qué devuelve la descarga
+          {
+            const _diagInfo = (editorData?.pages||[]).map((pg,i) =>
+              `P${i+1}[${pg.orientation}]:${(pg.layers||[]).length}capas`
+            ).join(' | ');
+            const _diagDiv = document.createElement('div');
+            _diagDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#222;color:#0f0;padding:8px;font:12px monospace;';
+            _diagDiv.innerHTML = `Descarga nube: ${(editorData?.pages||[]).length} páginas — ${_diagInfo}<br><button onclick="this.parentElement.remove()" style="margin-top:4px">Cerrar</button>`;
+            document.body.appendChild(_diagDiv);
+          }
           ComicStore.save({
             ...comicToEdit,
             cloudOnly: false,
