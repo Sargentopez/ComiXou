@@ -4149,6 +4149,9 @@ function _gifIdbLoad(key) {
     r.onerror   = e => rej(e.target.error);
   }));
 }
+// Exponer como globals para supabase-client.js
+window._gifIdbSave = _gifIdbSave;
+window._gifIdbLoad = _gifIdbLoad;
 
 /* Insertar capa en la posición más alta, justo debajo de textos/bocadillos */
 function _edInsertLayerAbove(layer) {

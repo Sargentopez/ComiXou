@@ -4,8 +4,9 @@
    ============================================================ */
 
 const SupabaseClient = (() => {
-  const BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
-  const KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+  const BASE    = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
+  const STORAGE = 'https://qqgsbyylaugsagbxsetc.supabase.co/storage/v1';
+  const KEY     = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
   const hdrs = {
     'apikey':        KEY,
@@ -63,6 +64,46 @@ const SupabaseClient = (() => {
     if (!r.ok) throw new Error(`PATCH ${table}: ${r.status}`);
   }
 
+  // ── STORAGE: GIFs en bucket 'gifs' ────────────────────────────────────────
+  // Mini IDB propio para leer GIFs — mismo DB que editor.js (cxGifs)
+  function _sbGifIdbLoad(key) {
+    return new Promise((res, rej) => {
+      const req = indexedDB.open('cxGifs', 1);
+      req.onsuccess = e => {
+        const db = e.target.result;
+        const r  = db.transaction('gifs').objectStore('gifs').get(key);
+        r.onsuccess = e2 => res(e2.target.result || null);
+        r.onerror   = () => res(null);
+      };
+      req.onerror = () => res(null);
+    });
+  }
+
+  // Sube un dataUrl GIF al bucket y devuelve la URL pública
+  async function _gifUpload(gifKey, dataUrl) {
+    // dataUrl → Blob binario
+    const res  = await fetch(dataUrl);
+    const blob = await res.blob();
+    const path = gifKey + '.gif';
+    const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
+      method:  'POST',
+      headers: { 'apikey': KEY, 'Authorization': `Bearer ${KEY}`, 'Content-Type': 'image/gif', 'x-upsert': 'true' },
+      body:    blob,
+    });
+    if (!r.ok) throw new Error(`GIF upload: ${r.status} ${await r.text()}`);
+    return `${STORAGE}/object/public/gifs/${path}`;
+  }
+
+  // Borra un GIF del bucket por su URL pública
+  async function _gifDelete(gifUrl) {
+    if (!gifUrl) return;
+    const path = gifUrl.replace(`${STORAGE}/object/public/gifs/`, '');
+    await fetch(`${STORAGE}/object/gifs/${path}`, {
+      method:  'DELETE',
+      headers: { 'apikey': KEY, 'Authorization': `Bearer ${KEY}` },
+    }).catch(() => {});
+  }
+
   async function _uploadPanels(comic) {
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
     if (!comic.panels || comic.panels.length === 0) return;
@@ -87,15 +128,30 @@ const SupabaseClient = (() => {
       await _delete('panel_layers', `panel_id=eq.${panelId}`);
       await _delete('panel_texts',  `panel_id=eq.${panelId}`);
 
-      // Capas del editor: image, draw, stroke, bubble, text — formato edSerLayer
+      // Capas del editor: image, draw, stroke, bubble, text, gif — formato edSerLayer
       const edPage = edPages[i];
       if (edPage && edPage.layers && edPage.layers.length > 0) {
-        await _upsert('panel_layers', edPage.layers.map((l, j) => ({
-          panel_id:    panelId,
-          layer_order: j,
-          layer_type:  l.type,
-          layer_data:  JSON.stringify(l),
-        })));
+        const layerRows = [];
+        for (let j = 0; j < edPage.layers.length; j++) {
+          const l = edPage.layers[j];
+          let gifUrl = null;
+          // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
+          if (l.type === 'gif' && l.gifKey) {
+            try {
+              // Intentar obtener el dataUrl desde IndexedDB del editor
+              const dataUrl = await _sbGifIdbLoad(l.gifKey);
+                if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
+            } catch(e) { console.warn('GIF cloud upload:', e); }
+          }
+          layerRows.push({
+            panel_id:    panelId,
+            layer_order: j,
+            layer_type:  l.type,
+            layer_data:  JSON.stringify(l), // para gif: solo metadatos (gifKey, pos, tamaño)
+            gif_url:     gifUrl,
+          });
+        }
+        await _upsert('panel_layers', layerRows);
       }
 
       // Textos para el reader (panel_texts sin cambios)
@@ -189,6 +245,11 @@ const SupabaseClient = (() => {
     // Borrar panel_texts → panels → work (en orden por FK)
     const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
     for (const p of (panels || [])) {
+      // Borrar GIFs del bucket antes de borrar las capas
+      try {
+        const gifLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.gif&select=gif_url`);
+        for (const gl of (gifLayers || [])) { await _gifDelete(gl.gif_url); }
+      } catch(e) {}
       await _delete('panel_texts', `panel_id=eq.${p.id}`);
     }
     await _delete('panels', `work_id=eq.${supabaseId}`);
@@ -225,10 +286,30 @@ const SupabaseClient = (() => {
         `panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`
       ) || [];
 
-      const layers = layerRows.map(row => {
-        try { return JSON.parse(row.layer_data); }
-        catch(e) { return null; }
-      }).filter(Boolean);
+      const layers = [];
+      for (const row of layerRows) {
+        let layerObj = null;
+        try { layerObj = JSON.parse(row.layer_data); } catch(e) {}
+        if (!layerObj) continue;
+        // GIF: descargar de Storage y meter en IndexedDB local
+        if (layerObj.type === 'gif' && row.gif_url) {
+          try {
+            const gifResp = await fetch(row.gif_url);
+            if (gifResp.ok) {
+              const blob   = await gifResp.blob();
+              const reader = new FileReader();
+              const dataUrl = await new Promise(res => {
+                reader.onload = e => res(e.target.result);
+                reader.readAsDataURL(blob);
+              });
+              if (window._gifIdbSave && layerObj.gifKey) {
+                await window._gifIdbSave(layerObj.gifKey, dataUrl).catch(() => {});
+              }
+            }
+          } catch(e) { console.warn('GIF cloud download:', e); }
+        }
+        layers.push(layerObj);
+      }
 
       // Fallback: si no hay panel_layers (obra antigua), usar data_url como ImageLayer
       if (layers.length === 0 && panel.data_url) {
