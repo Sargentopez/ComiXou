@@ -31,31 +31,16 @@ const ComicStore = (() => {
   /* ── CRUD ── */
   function getAll()       { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
   function saveAll(list) {
-    const json = JSON.stringify(list);
     try {
-      localStorage.setItem(KEY, json);
-      return true;
+      localStorage.setItem(KEY, JSON.stringify(list));
     } catch(e) {
       if (e.name === 'QuotaExceededError' || e.code === 22) {
-        // Último recurso: liberar editorData de obras ya en la nube
-        try {
-          const trimmed = list.map(c => {
-            if (!c.editorData || !c.supabaseId) return c;
-            if (JSON.stringify(c.editorData).length > 100000)
-              return { ...c, editorData: null, _edDataLost: true };
-            return c;
-          });
-          localStorage.setItem(KEY, JSON.stringify(trimmed));
-          window.dispatchEvent(new CustomEvent('cx:storage:quota',
-            { detail: { size: json.length, trimmed: true } }));
-          return true;
-        } catch(e2) {
-          window.dispatchEvent(new CustomEvent('cx:storage:quota',
-            { detail: { size: json.length, trimmed: false } }));
-          console.error('[ComicStore] localStorage lleno — guardado fallido:', e);
-          return false;
-        }
-      } else { throw e; }
+        // localStorage lleno — notificar al usuario
+        window.dispatchEvent(new CustomEvent('cx:storage:quota', { detail: { size: JSON.stringify(list).length } }));
+        console.error('[ComicStore] localStorage lleno — guardado fallido:', e);
+      } else {
+        throw e;
+      }
     }
   }
   function getById(id)    { return getAll().find(c => c.id === id) || null; }
@@ -68,9 +53,9 @@ const ComicStore = (() => {
     } else {
       list.push({ ...comic, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     }
-    const ok = saveAll(list);
+    saveAll(list);
     _emit('save', comic.id);
-    return ok ? comic : null;
+    return comic;
   }
 
   function remove(id) {

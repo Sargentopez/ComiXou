@@ -1,22 +1,21 @@
 /* gifuct-js standalone para ComiXou
-   Fuente: https://github.com/matt-way/gifuct-js (MIT)
-   Bundle autoejecutable sin dependencias de módulos.
+   Fuente: https://github.com/matt-way/gifuct-js (MIT License, Matt Way)
+   Bundle standalone sin dependencias externas.
 */
 (function(window) {
 'use strict';
 
-// Mini sistema de módulos
-var _mods = {};
-function _def(id, fn) {
+var _m = {}; // caché de módulos
+function _r(id) { return _m[id]; } // require simulado
+
+function _load(id, fn) {
   var exp = {};
-  fn({ exports: exp }, exp, function(id) { return _mods[id]; });
-  _mods[id] = exp;
+  fn(exp, _r);
+  _m[id] = exp;
 }
 
-// === Module 4 ===
-_def(4, function(module, exports, require) {
-
-
+// === module 4 ===
+_load(4, function(exports, _r) {
 "use strict";
 
 
@@ -140,13 +139,10 @@ var readBits = function readBits(schema) {
 };
 
 exports.readBits = readBits;
-
 });
 
-// === Module 3 ===
-_def(3, function(module, exports, require) {
-
-
+// === module 3 ===
+_load(3, function(exports, _r) {
 "use strict";
 
 
@@ -206,56 +202,10 @@ var loop = function loop(schema, continueFunc) {
 };
 
 exports.loop = loop;
-
 });
 
-// === Module 5 ===
-_def(5, function(module, exports, require) {
-
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.deinterlace = void 0;
-
-/**
- * Deinterlace function from https://github.com/shachaf/jsgif
- */
-var deinterlace = function deinterlace(pixels, width) {
-  var newPixels = new Array(pixels.length);
-  var rows = pixels.length / width;
-
-  var cpRow = function cpRow(toRow, fromRow) {
-    var fromPixels = pixels.slice(fromRow * width, (fromRow + 1) * width);
-    newPixels.splice.apply(newPixels, [toRow * width, width].concat(fromPixels));
-  }; // See appendix E.
-
-
-  var offsets = [0, 4, 2, 1];
-  var steps = [8, 8, 4, 2];
-  var fromRow = 0;
-
-  for (var pass = 0; pass < 4; pass++) {
-    for (var toRow = offsets[pass]; toRow < rows; toRow += steps[pass]) {
-      cpRow(toRow, fromRow);
-      fromRow++;
-    }
-  }
-
-  return newPixels;
-};
-
-exports.deinterlace = deinterlace;
-
-});
-
-// === Module 6 ===
-_def(6, function(module, exports, require) {
-
-
+// === module 6 ===
+_load(6, function(exports, _r) {
 "use strict";
 
 
@@ -375,13 +325,50 @@ var lzw = function lzw(minCodeSize, data, pixelCount) {
 };
 
 exports.lzw = lzw;
-
 });
 
-// === Module 2 ===
-_def(2, function(module, exports, require) {
+// === module 5 ===
+_load(5, function(exports, _r) {
+"use strict";
 
 
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.deinterlace = void 0;
+
+/**
+ * Deinterlace function from https://github.com/shachaf/jsgif
+ */
+var deinterlace = function deinterlace(pixels, width) {
+  var newPixels = new Array(pixels.length);
+  var rows = pixels.length / width;
+
+  var cpRow = function cpRow(toRow, fromRow) {
+    var fromPixels = pixels.slice(fromRow * width, (fromRow + 1) * width);
+    newPixels.splice.apply(newPixels, [toRow * width, width].concat(fromPixels));
+  }; // See appendix E.
+
+
+  var offsets = [0, 4, 2, 1];
+  var steps = [8, 8, 4, 2];
+  var fromRow = 0;
+
+  for (var pass = 0; pass < 4; pass++) {
+    for (var toRow = offsets[pass]; toRow < rows; toRow += steps[pass]) {
+      cpRow(toRow, fromRow);
+      fromRow++;
+    }
+  }
+
+  return newPixels;
+};
+
+exports.deinterlace = deinterlace;
+});
+
+// === module 2 ===
+_load(2, function(exports, _r) {
 "use strict";
 
 
@@ -390,9 +377,9 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports["default"] = void 0;
 
-var _ = _mods[3];
+var _ = _r(3);
 
-var _uint = _mods[4];
+var _uint = _r(4);
 
 // a set of 0x00 terminated subblocks
 var subBlocksSchema = {
@@ -599,13 +586,10 @@ var schema = [{
 }];
 var _default = schema;
 exports["default"] = _default;
-
 });
 
-// === Module 1 ===
-_def(1, function(module, exports, require) {
-
-
+// === module 1 ===
+_load(1, function(exports, _r) {
 "use strict";
 
 
@@ -614,15 +598,15 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.decompressFrames = exports.decompressFrame = exports.parseGIF = void 0;
 
-var _gif = _interopRequireDefault(_mods[2]);
+var _gif = _interopRequireDefault(_r(2));
 
-var _jsBinarySchemaParser = _mods[3];
+var _jsBinarySchemaParser = _r(3);
 
-var _uint = _mods[4];
+var _uint = _r(4);
 
-var _deinterlace = _mods[5];
+var _deinterlace = _r(5);
 
-var _lzw = _mods[6];
+var _lzw = _r(6);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }
 
@@ -712,59 +696,52 @@ var decompressFrames = function decompressFrames(parsedGif, buildImagePatches) {
 };
 
 exports.decompressFrames = decompressFrames;
-
 });
 
 
-// Exponer funciones como globals
-var _gifuct = _mods[1];
-window.parseGIF         = _gifuct.parseGIF;
-window.decompressFrames = _gifuct.decompressFrames;
-window.decompressFrame  = _gifuct.decompressFrame;
+// Exponer como globals
+window.parseGIF         = _m[1].parseGIF;
+window.decompressFrames = _m[1].decompressFrames;
+window.decompressFrame  = _m[1].decompressFrame;
 
+// GifDecoder: convierte dataUrl GIF a array de frames {imageData, delay}
 window.GifDecoder = (function() {
   function decode(dataUrl) {
     return new Promise(function(resolve, reject) {
       try {
-        var b64   = dataUrl.split(',')[1];
-        var bin   = atob(b64);
-        var bytes = new Uint8Array(bin.length);
-        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var b64 = dataUrl.split(',')[1];
+        var bin = atob(b64);
+        var u8  = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
 
-        var gif    = window.parseGIF(bytes.buffer);
-        var frames = window.decompressFrames(gif, true);
+        var gif    = window.parseGIF(u8.buffer);
+        var frames = window.decompressFrames(gif, true); // buildPatch=true
 
         if (!frames || !frames.length) { reject(new Error('GIF sin frames')); return; }
 
-        var width  = gif.lsd.width;
-        var height = gif.lsd.height;
+        var w = gif.lsd.width, h = gif.lsd.height;
 
-        var gifCanvas = document.createElement('canvas');
-        gifCanvas.width = width; gifCanvas.height = height;
-        var gifCtx = gifCanvas.getContext('2d');
-
-        var tempCanvas = document.createElement('canvas');
-        var tempCtx    = tempCanvas.getContext('2d');
-        var fid = null;
-        var result = [];
-        var needsDisposal = false;
+        // Canvas acumulado (patrón del demo oficial)
+        var gc = document.createElement('canvas'); gc.width = w; gc.height = h;
+        var gx = gc.getContext('2d');
+        var tc = document.createElement('canvas');
+        var tx = tc.getContext('2d');
+        var fid = null, result = [], needsClear = false;
 
         for (var fi = 0; fi < frames.length; fi++) {
-          var frame = frames[fi];
-          var dims  = frame.dims;
-          if (needsDisposal) { gifCtx.clearRect(0, 0, width, height); needsDisposal = false; }
-          if (!fid || dims.width !== fid.width || dims.height !== fid.height) {
-            tempCanvas.width = dims.width; tempCanvas.height = dims.height;
-            fid = tempCtx.createImageData(dims.width, dims.height);
+          var f = frames[fi], d = f.dims;
+          if (needsClear) { gx.clearRect(0,0,w,h); needsClear = false; }
+          if (!fid || d.width !== fid.width || d.height !== fid.height) {
+            tc.width = d.width; tc.height = d.height;
+            fid = tx.createImageData(d.width, d.height);
           }
-          fid.data.set(frame.patch);
-          tempCtx.putImageData(fid, 0, 0);
-          gifCtx.drawImage(tempCanvas, dims.left, dims.top);
-          var full = gifCtx.getImageData(0, 0, width, height);
-          result.push({ imageData: full, delay: frame.delay || 100 });
-          if (frame.disposalType === 2) needsDisposal = true;
+          fid.data.set(f.patch);
+          tx.putImageData(fid, 0, 0);
+          gx.drawImage(tc, d.left, d.top);
+          result.push({ imageData: gx.getImageData(0,0,w,h), delay: f.delay || 100 });
+          if (f.disposalType === 2) needsClear = true;
         }
-        resolve({ frames: result, width: width, height: height });
+        resolve({ frames: result, width: w, height: h });
       } catch(e) { reject(e); }
     });
   }
