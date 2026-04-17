@@ -4020,7 +4020,7 @@ function _edRenderPageThumb(canvas, page, pageIdx){
   page.layers.forEach(l=>{
     if(!l||l.type==='text'||l.type==='bubble') return;
     if(l.type==='gif')         l.draw(offCtx);
-    if(l.type==='image')       l.draw(offCtx,off);
+    else if(l.type==='image')  l.draw(offCtx,off);
     else if(l.type==='draw')   l.draw(offCtx);
     else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
     else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
@@ -12086,6 +12086,7 @@ function edRenderPage(page){
   // Imágenes, DrawLayer y Strokes — SIN textos/bocadillos.
   // Los textos se superponen en el reader por encima del data_url, igual que el visor del editor.
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
+  page.layers.filter(l=>l.type==='gif').forEach(l=>l.draw(ctx));
   const _rdl=page.layers.find(l=>l.type==='draw');
   if(_rdl) _rdl.draw(ctx);
   page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(ctx));
