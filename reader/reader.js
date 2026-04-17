@@ -992,10 +992,7 @@ async function preloadImages() {
 
   await Promise.all(RS.panels.map(async (panel, pi) => {
     panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
-      // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
-      const src = layer.renderDataUrl || layer.src || layer.dataUrl;
-      if (!src) return Promise.resolve(null);
-      // GIF: descargar de Storage y decodificar frames
+      // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
       if (layer.type === 'gif') {
         if (!layer._gifUrl) return Promise.resolve(null);
         return fetch(layer._gifUrl)
@@ -1021,6 +1018,9 @@ async function preloadImages() {
           })
           .catch(() => null);
       }
+      // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
+      const src = layer.renderDataUrl || layer.src || layer.dataUrl;
+      if (!src) return Promise.resolve(null);
       const needsImg = layer.renderDataUrl ||
         layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
         layer.type === 'line' || layer.type === 'shape';
