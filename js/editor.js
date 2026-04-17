@@ -1059,6 +1059,11 @@ class GifLayer extends BaseLayer {
       this._ready  = true;
       this._applyFrame(0);
       if (cb) cb();
+      // Regenerar miniatura de hojas ahora que _oc tiene el primer frame
+      requestAnimationFrame(() => {
+        if (typeof _edRefreshCurrentPageThumb === 'function') _edRefreshCurrentPageThumb();
+        if (typeof edUpdateNavPages === 'function') edUpdateNavPages();
+      });
     }).catch(e => { console.warn('GIF decode:', e); if (cb) cb(); });
   }
   _applyFrame(i) {
