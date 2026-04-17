@@ -1069,7 +1069,9 @@ class GifLayer extends BaseLayer {
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
-      if (typeof edRedraw === 'function') edRedraw();
+      if (typeof edRedraw === 'function' && typeof edCanvas !== 'undefined' && edCanvas) {
+        requestAnimationFrame(() => edRedraw());
+      }
     }, frame.delay);
   }
   stopAnim() { if (this._timer) { clearTimeout(this._timer); this._timer = null; } }
@@ -4095,6 +4097,7 @@ function edAddGif(file) {
       // Guardar dataUrl en IndexedDB (no en localStorage — puede ser varios MB)
       _gifIdbSave(gifKey, gifSrc).catch(e => console.warn('GIF IDB:', e));
       edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
+      requestAnimationFrame(() => edRedraw()); // asegurar primer frame visible
       edToast('GIF añadido ✓ (' + (layer._frames.length) + ' frames)');
     });
   };
