@@ -749,3 +749,4 @@ window.GifDecoder = (function() {
 })();
 
 console.log('[gifuct] loaded OK, parseGIF:', typeof parseGIF, 'GifDecoder:', typeof GifDecoder);
+alert('[gifuct] window.GifDecoder=' + typeof window.GifDecoder + ' parseGIF=' + typeof window.parseGIF);
