@@ -956,10 +956,7 @@ async function _loadPanels(workId) {
       .map(r => {
         try {
           const l = JSON.parse(r.layer_data);
-          if (l && l.type === 'gif') {
-            console.log('[GIF] capa gif encontrada, gif_url=', r.gif_url, 'gifKey=', l.gifKey);
-            if (r.gif_url) l._gifUrl = r.gif_url;
-          }
+          if (l && l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
           return l;
         } catch(e) { return null; }
       })
@@ -997,8 +994,7 @@ async function preloadImages() {
     panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
       // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
       if (layer.type === 'gif') {
-        console.log('[GIF] preload: _gifUrl=', layer._gifUrl, 'GifDecoder=', typeof window.GifDecoder);
-        if (!layer._gifUrl) { console.log('[GIF] sin _gifUrl, skip'); return Promise.resolve(null); }
+        if (!layer._gifUrl) return Promise.resolve(null);
         return fetch(layer._gifUrl)
           .then(r => r.blob())
           .then(blob => new Promise(res => {
@@ -1008,7 +1004,6 @@ async function preloadImages() {
           }))
           .then(dataUrl => window.GifDecoder ? window.GifDecoder.decode(dataUrl) : null)
           .then(decoded => {
-            console.log('[GIF] decoded=', decoded ? decoded.frames.length + ' frames' : 'null');
             if (!decoded || !decoded.frames.length) return null;
             // Crear canvas offscreen con el primer frame
             const oc = document.createElement('canvas');
@@ -1021,7 +1016,7 @@ async function preloadImages() {
             layer._gifReady  = true;
             return oc; // devolver el canvas como 'img' para layerImgs[j]
           })
-          .catch(e => { console.error('[GIF] preload error:', e); return null; });
+          .catch(() => null);
       }
       // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
       const src = layer.renderDataUrl || layer.src || layer.dataUrl;
@@ -1529,7 +1524,6 @@ function _render() {
   layers.forEach((layer, j) => {
     const type = layer.type;
     if (type === 'gif') {
-      console.log('[GIF] render: ready=', layer._gifReady, 'oc=', !!layer._gifOc);
       if (!layer._gifReady || !layer._gifOc) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;

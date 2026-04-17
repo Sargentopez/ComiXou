@@ -474,24 +474,39 @@ async function _mcCloudLoad() {
       // ¿Ya existe localmente con este supabaseId?
       const existing = ComicStore.getAll().find(c => c.supabaseId === w.id);
       if (existing) {
-        // Si la nube es más reciente, invalidar editorData local para forzar descarga al editar
         const cloudDate = new Date(w.updated_at || 0);
-        const localDate = new Date(existing.updatedAt || 0);
-        if (cloudDate <= localDate) {
-          // Aunque no haya cambios, actualizar userId si era el ID antiguo
-          if (existing.userId !== user.id) { existing.userId = user.id; ComicStore.save(existing); }
-          skipped++; continue;
+        // Comparar contra localSavedAt (cuándo se guardó en este dispositivo)
+        // updatedAt se sobreescribe con la fecha de la nube, así que no sirve para comparar
+        const localSaved = new Date(existing.localSavedAt || existing.updatedAt || 0);
+        const cloudIsNewer = cloudDate > localSaved;
+
+        // Siempre actualizar metadatos básicos
+        let dirty = false;
+        if (existing.userId !== user.id) { existing.userId = user.id; dirty = true; }
+        if (w.title    && w.title    !== existing.title)   { existing.title   = w.title;    dirty = true; }
+        if (w.genre    && w.genre    !== existing.genre)   { existing.genre   = w.genre;    dirty = true; }
+        if (w.nav_mode && w.nav_mode !== existing.navMode) { existing.navMode = w.nav_mode; dirty = true; }
+        existing.published     = w.published ?? existing.published;
+        existing.approved      = w.published ?? existing.approved;
+        existing.pendingReview = !(w.published ?? true);
+
+        if (cloudIsNewer) {
+          // La nube tiene una versión más reciente
+          // Preservar editorData local bajo localEditorData para poder restaurar
+          if (existing.editorData && !existing.localEditorData) {
+            existing.localEditorData = existing.editorData;
+          }
+          existing.editorData = null; // forzar descarga al editar
+          existing.cloudOnly  = true;
+          existing.cloudNewer = true;
+          existing.updatedAt  = w.updated_at;
+          dirty = true;
+          imported++; // contar como actualización
+        } else {
+          skipped++;
         }
-        // La nube es más nueva — actualizar metadatos e invalidar editorData
-        existing.title    = w.title     || existing.title;
-        existing.genre    = w.genre     || existing.genre;
-        existing.navMode  = w.nav_mode  || existing.navMode;
-        existing.userId   = user.id;
-        existing.cloudOnly  = true;
-        existing.editorData = null;
-        existing.updatedAt  = w.updated_at;
-        ComicStore.save(existing);
-        skipped++;
+
+        if (dirty) ComicStore.save(existing);
         continue;
       }
 
@@ -529,8 +544,8 @@ async function _mcCloudLoad() {
     }
 
     _mcRenderList();
-    if (imported > 0)      _mcToast(`☁️ ${imported} obra${imported>1?'s':''} importada${imported>1?'s':''} de la nube`);
-    else if (skipped > 0)  _mcToast('✓ Todo al día — no hay obras nuevas en la nube');
+    if (imported > 0)      _mcToast(`☁️ ${imported} obra${imported>1?'s':''} actualizada${imported>1?'s':''} desde la nube`);
+    else if (skipped > 0)  _mcToast('✓ Todo al día — no hay versiones más recientes en la nube');
 
   } catch(err) {
     console.error('_mcCloudLoad:', err);
