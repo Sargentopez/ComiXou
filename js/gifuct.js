@@ -1,28 +1,22 @@
 /* gifuct-js standalone para ComiXou
    Fuente: https://github.com/matt-way/gifuct-js (MIT License, Matt Way)
-   Bundle standalone sin dependencias externas.
+   Cargado como script plano en scope global.
 */
-(function(window) {
-'use strict';
-
-try {
-
-var _m = {}; // caché de módulos
-function _r(id) { return _m[id]; } // require simulado
-
-function _load(id, fn) {
+var _gifuct_m = {};
+function _gifuct_r(id) { return _gifuct_m[id]; }
+function _gifuct_load(id, fn) {
   try {
     var exp = {};
-    fn(exp, _r);
-    _m[id] = exp;
+    fn(exp, _gifuct_r);
+    _gifuct_m[id] = exp;
   } catch(e) {
-    console.error('gifuct module ' + id + ' failed:', e.message, e.stack);
-    _m[id] = {};
+    console.error('[gifuct] module ' + id + ' error:', e);
+    _gifuct_m[id] = {};
   }
 }
 
-// === module 4 ===
-_load(4, function(exports, _r) {
+// module 4
+_gifuct_load(4, function(exports, _gifuct_r) {
 "use strict";
 
 
@@ -148,8 +142,8 @@ var readBits = function readBits(schema) {
 exports.readBits = readBits;
 });
 
-// === module 3 ===
-_load(3, function(exports, _r) {
+// module 3
+_gifuct_load(3, function(exports, _gifuct_r) {
 "use strict";
 
 
@@ -211,8 +205,8 @@ var loop = function loop(schema, continueFunc) {
 exports.loop = loop;
 });
 
-// === module 6 ===
-_load(6, function(exports, _r) {
+// module 6
+_gifuct_load(6, function(exports, _gifuct_r) {
 "use strict";
 
 
@@ -334,8 +328,8 @@ var lzw = function lzw(minCodeSize, data, pixelCount) {
 exports.lzw = lzw;
 });
 
-// === module 5 ===
-_load(5, function(exports, _r) {
+// module 5
+_gifuct_load(5, function(exports, _gifuct_r) {
 "use strict";
 
 
@@ -374,8 +368,8 @@ var deinterlace = function deinterlace(pixels, width) {
 exports.deinterlace = deinterlace;
 });
 
-// === module 2 ===
-_load(2, function(exports, _r) {
+// module 2
+_gifuct_load(2, function(exports, _gifuct_r) {
 "use strict";
 
 
@@ -384,9 +378,9 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports["default"] = void 0;
 
-var _ = _r(3);
+var _ = _gifuct_r(3);
 
-var _uint = _r(4);
+var _uint = _gifuct_r(4);
 
 // a set of 0x00 terminated subblocks
 var subBlocksSchema = {
@@ -595,8 +589,8 @@ var _default = schema;
 exports["default"] = _default;
 });
 
-// === module 1 ===
-_load(1, function(exports, _r) {
+// module 1
+_gifuct_load(1, function(exports, _gifuct_r) {
 "use strict";
 
 
@@ -605,15 +599,15 @@ Object.defineProperty(exports, "__esModule", {
 });
 exports.decompressFrames = exports.decompressFrame = exports.parseGIF = void 0;
 
-var _gif = _interopRequireDefault(_r(2));
+var _gif = _interopRequireDefault(_gifuct_r(2));
 
-var _jsBinarySchemaParser = _r(3);
+var _jsBinarySchemaParser = _gifuct_r(3);
 
-var _uint = _r(4);
+var _uint = _gifuct_r(4);
 
-var _deinterlace = _r(5);
+var _deinterlace = _gifuct_r(5);
 
-var _lzw = _r(6);
+var _lzw = _gifuct_r(6);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }
 
@@ -707,20 +701,12 @@ exports.decompressFrames = decompressFrames;
 
 
 // Exponer como globals
-window.parseGIF         = _m[1].parseGIF;
-window.decompressFrames = _m[1].decompressFrames;
-window.decompressFrame  = _m[1].decompressFrame;
+window.parseGIF         = _gifuct_m[1].parseGIF;
+window.decompressFrames = _gifuct_m[1].decompressFrames;
+var parseGIF = window.parseGIF;
+var decompressFrames = window.decompressFrames;
 
-// Diagnóstico de carga
-(function() {
-  var ok = typeof (_m[1] && _m[1].parseGIF);
-  console.log('[gifuct] m1.parseGIF:', ok, 'keys:', Object.keys(_m[1]||{}).join(','));
-  console.log('[gifuct] m2 keys:', Object.keys(_m[2]||{}).join(','));
-  console.log('[gifuct] m3 keys:', Object.keys(_m[3]||{}).join(','));
-  console.log('[gifuct] m4 keys:', Object.keys(_m[4]||{}).join(','));
-})();
-
-// GifDecoder: convierte dataUrl GIF a array de frames {imageData, delay}
+// GifDecoder global
 window.GifDecoder = (function() {
   function decode(dataUrl) {
     return new Promise(function(resolve, reject) {
@@ -731,13 +717,11 @@ window.GifDecoder = (function() {
         for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
 
         var gif    = window.parseGIF(u8.buffer);
-        var frames = window.decompressFrames(gif, true); // buildPatch=true
+        var frames = window.decompressFrames(gif, true);
 
         if (!frames || !frames.length) { reject(new Error('GIF sin frames')); return; }
 
         var w = gif.lsd.width, h = gif.lsd.height;
-
-        // Canvas acumulado (patrón del demo oficial)
         var gc = document.createElement('canvas'); gc.width = w; gc.height = h;
         var gx = gc.getContext('2d');
         var tc = document.createElement('canvas');
@@ -764,12 +748,4 @@ window.GifDecoder = (function() {
   return { decode: decode };
 })();
 
-} catch(e) {
-  // Mostrar error visible en móvil sin consola
-  var _d = document.createElement('div');
-  _d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:red;color:white;padding:20px;z-index:99999;font-size:14px;word-break:break-all';
-  _d.textContent = 'gifuct ERROR: ' + e.message + ' | ' + (e.stack||'').slice(0,200);
-  document.body.appendChild(_d);
-  console.error('gifuct.js failed:', e);
-}
-})(window);
+console.log('[gifuct] loaded OK, parseGIF:', typeof parseGIF, 'GifDecoder:', typeof GifDecoder);
