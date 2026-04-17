@@ -4026,21 +4026,19 @@ function _edRenderPageThumb(canvas, page, pageIdx){
     if(!l||l.type==='text'||l.type==='bubble') return;
     if(l.type==='gif'){
       if(l._oc && l._ready && l._oc.width > 0){
-        const _gw = l.width  * pw;
-        const _gh = l.height * ph;
-        // Coords workspace (el transform -mx,-my ya está aplicado)
-        const _gx = mx + l.x * pw - _gw/2;
-        const _gy = my + l.y * ph - _gh/2;
+        // Canvas limpio sin transform para evitar problemas de coordenadas
+        const _gc = document.createElement('canvas');
+        _gc.width = pw; _gc.height = ph;
+        const _gx2 = l.x * pw - (l.width  * pw) / 2;
+        const _gy2 = l.y * ph - (l.height * ph) / 2;
+        _gc.getContext('2d').drawImage(l._oc, _gx2, _gy2, l.width*pw, l.height*ph);
+        // Resetear transform para compositar el canvas limpio sobre off
         offCtx.save();
+        offCtx.setTransform(1,0,0,1,0,0);
         offCtx.globalAlpha = l.opacity ?? 1;
-        if (l.rotation) {
-          offCtx.translate(_gx + _gw/2, _gy + _gh/2);
-          offCtx.rotate(l.rotation * Math.PI / 180);
-          offCtx.drawImage(l._oc, -_gw/2, -_gh/2, _gw, _gh);
-        } else {
-          offCtx.drawImage(l._oc, _gx, _gy, _gw, _gh);
-        }
+        offCtx.drawImage(_gc, 0, 0);
         offCtx.restore();
+        offCtx.setTransform(1,0,0,1,-mx,-my);
       }
     } else if(l.type==='image')  l.draw(offCtx,off);
     else if(l.type==='draw')   l.draw(offCtx);
