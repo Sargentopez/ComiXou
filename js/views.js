@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v16.57</footer>
+    <footer class="app-version">v16.59</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -229,6 +229,7 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
                   <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
                 </div>
+                <button class="ed-dropdown-item" id="dd-animation">Animación (GIF)</button>
               </div>
               <div class="ed-dropdown-submenu">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-texto-btn">Texto ▸</button>
@@ -487,6 +488,7 @@ Router.register('editor', {
 
     <!-- Inputs ocultos -->
     <input type="file" id="edFileGallery" accept="image/*,.psd,.xcf,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
+    <input type="file" id="edFileGif" accept=".gif,image/gif" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">

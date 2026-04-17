@@ -1066,6 +1066,9 @@ class GifLayer extends BaseLayer {
     this._fIdx = i % this._frames.length;
     const frame = this._frames[this._fIdx];
     this._oc.getContext('2d').putImageData(frame.imageData, 0, 0);
+    // En el editor: no animar automáticamente — mostrar frame actual como imagen fija
+    // La animación se activará en los reproductores (Fase 2)
+    if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
@@ -14287,6 +14290,20 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
+  $('dd-animation')?.addEventListener('click',()=>{
+    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    $('edFileGif').click();
+    edCloseMenus();
+  });
+  $('edFileGif')?.addEventListener('change', async e => {
+    const _f = e.target.files[0]; e.target.value = '';
+    if (!_f) return;
+    edAddGif(_f);
+    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
+      setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
+    }
+    window._edWasFullscreen = false;
+  });
 
   $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
@@ -14298,8 +14315,6 @@ function EditorView_init(){
     const _ext = _f.name.split('.').pop().toLowerCase();
     if(_ext === 'psd' || _ext === 'xcf' || _ext === 'tif' || _ext === 'tiff'){
       await edImportLayers(_f);
-    } else if (_ext === 'gif') {
-      edAddGif(_f);
     } else {
       edAddImage(_f);
     }
