@@ -333,8 +333,12 @@ class GifLayer extends BaseLayer {
 
   // Carga y decodifica el GIF desde IDB. Llama cb() cuando está listo.
   load(dataUrl, cb) {
-    if (!window.GifDecoder) { if(cb) cb(); return; }
+    if (!window.GifDecoder) {
+      appAlert('ERROR: GifDecoder no disponible. gifuct.js no se cargó correctamente.');
+      if(cb) cb(); return;
+    }
     GifDecoder.decode(dataUrl).then(({ frames, width, height }) => {
+      appAlert('GIF decodificado OK: ' + frames.length + ' frames, ' + width + 'x' + height + 'px, delay[0]=' + (frames[0]&&frames[0].delay) + 'ms');
       this._frames = frames;
       this._fIdx   = 0;
       this._oc     = document.createElement('canvas');
@@ -343,7 +347,10 @@ class GifLayer extends BaseLayer {
       this._ready  = true;
       this._applyFrame(0);
       if (cb) cb();
-    }).catch(e => { console.warn('GIF decode error:', e); if(cb) cb(); });
+    }).catch(e => {
+      appAlert('GIF decode ERROR: ' + e.message);
+      if(cb) cb();
+    });
   }
 
   // Pinta el frame i en el canvas offscreen y programa el siguiente
