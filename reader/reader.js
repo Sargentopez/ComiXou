@@ -944,7 +944,7 @@ async function _loadPanels(workId) {
 
   // Descargar capas del editor y textos del reader en paralelo
   const [layerRows, texts] = await Promise.all([
-    sbGet('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc&select=*,gif_url'),
+    sbGet('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc&select=*'),
     sbGet('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
   ]);
 

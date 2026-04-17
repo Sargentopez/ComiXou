@@ -81,9 +81,12 @@ const SupabaseClient = (() => {
 
   // Sube un dataUrl GIF al bucket y devuelve la URL pública
   async function _gifUpload(gifKey, dataUrl) {
-    // dataUrl → Blob binario
-    const res  = await fetch(dataUrl);
-    const blob = await res.blob();
+    // dataUrl → Blob binario (sin fetch, compatible con todos los navegadores)
+    const b64  = dataUrl.split(',')[1];
+    const bin  = atob(b64);
+    const u8   = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const blob = new Blob([u8], { type: 'image/gif' });
     const path = gifKey + '.gif';
     const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
       method:  'POST',
