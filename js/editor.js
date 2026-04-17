@@ -2866,10 +2866,7 @@ function edRedraw(){
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
     if(_editingDraw && l.type==='draw') return; // en modo draw, el draw va al final
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
-    if(l.type==='gif'){
-    return {type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...(l.opacity!==undefined?{opacity:l.opacity}:{})};
-  }
-  if(l.type==='image'){
+    if(l.type==='image'){
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx, edCanvas);
       l.opacity = _orig;
@@ -12490,6 +12487,10 @@ function edMergeSelected(){
 
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
+  if(l.type==='gif'){
+    const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
+    if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; return _g;
+  }
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
