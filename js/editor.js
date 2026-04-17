@@ -12816,8 +12816,21 @@ function edLoadProject(id){
 let edViewerIdx=0;
 function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
+
+/* Activar/desactivar animación GIF en todas las páginas */
+function _edGifSetPlaying(playing) {
+  edPages.forEach(page => {
+    page.layers.forEach(l => {
+      if (l.type !== 'gif' || !l._ready) return;
+      l._playing = playing;
+      if (playing) l._applyFrame(l._fIdx || 0);
+      else l.stopAnim();
+    });
+  });
+}
 function edOpenViewer(){
   edHideGearIcon();
+  _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
@@ -13343,6 +13356,7 @@ function edInitViewerTap(){
   viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
+  _edGifSetPlaying(false); // detener animación GIF al salir del visor
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');

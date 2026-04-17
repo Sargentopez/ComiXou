@@ -210,7 +210,7 @@ function _lyRender() {
   // Combinar imágenes y dibujos (stroke/draw) en una sola lista
   const visualPairs = edLayers
     .map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
+    .filter(({l})=>l.type==='image'||l.type==='gif'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
 
   if (visualPairs.length === 0) {
     const e = document.createElement('p');
@@ -384,6 +384,8 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     name.textContent = (la.shape === 'ellipse' ? '◯ Elipse' : '▭ Rectángulo') + _grpTag;
   } else if (la.type === 'line') {
     name.textContent = (la.closed ? '⬠ Polígono' : '╱ Recta') + _grpTag;
+  } else if (la.type === 'gif') {
+    name.textContent = '🎬 GIF ' + (realIdx + 1) + _grpTag;
   } else {
     name.textContent = 'Imagen ' + (realIdx + 1) + _grpTag;
   }
@@ -392,7 +394,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
 
   /* Flechas subir/bajar — dentro de los elementos visuales */
   const visualAll = edLayers.map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
+    .filter(({l})=>l.type==='image'||l.type==='gif'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
   const posInList = visualAll.findIndex(({i})=>i===realIdx);
 
   const upBtn = document.createElement('button');
@@ -837,7 +839,9 @@ function _lyDrawThumb(canvas, la) {
   ctx.fillRect(0, 0, sw, sh);
   ctx.save();
   ctx.globalAlpha = la.opacity ?? 1;
-  if (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0) {
+  if (la.type === 'gif' && la._oc && la._ready) {
+    ctx.drawImage(la._oc, (la.x-la.width/2)*sw, (la.y-la.height/2)*sh, la.width*sw, la.height*sh);
+  } else if (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0) {
     ctx.drawImage(la.img, (la.x-la.width/2)*sw, (la.y-la.height/2)*sh, la.width*sw, la.height*sh);
   } else if (la.type === 'text' || la.type === 'bubble') {
     const x=(la.x-la.width/2)*sw, y=(la.y-la.height/2)*sh, w=la.width*sw, h=la.height*sh;
