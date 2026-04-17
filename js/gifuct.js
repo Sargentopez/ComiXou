@@ -1,190 +1,825 @@
-/* gifuct-js — browser bundle para ComiXou
-   Fuente: https://github.com/matt-way/gifuct-js (MIT License)
-   Adaptado como bundle standalone sin dependencias de módulos.
-*/
-(function(global) {
-'use strict';
+/******/ (function(modules) { // webpackBootstrap
+/******/ 	// The module cache
+/******/ 	var installedModules = {};
+/******/
+/******/ 	// The require function
+/******/ 	function __webpack_require__(moduleId) {
+/******/
+/******/ 		// Check if module is in cache
+/******/ 		if(installedModules[moduleId]) {
+/******/ 			return installedModules[moduleId].exports;
+/******/ 		}
+/******/ 		// Create a new module (and put it into the cache)
+/******/ 		var module = installedModules[moduleId] = {
+/******/ 			i: moduleId,
+/******/ 			l: false,
+/******/ 			exports: {}
+/******/ 		};
+/******/
+/******/ 		// Execute the module function
+/******/ 		modules[moduleId].call(module.exports, module, module.exports, __webpack_require__);
+/******/
+/******/ 		// Flag the module as loaded
+/******/ 		module.l = true;
+/******/
+/******/ 		// Return the exports of the module
+/******/ 		return module.exports;
+/******/ 	}
+/******/
+/******/
+/******/ 	// expose the modules object (__webpack_modules__)
+/******/ 	__webpack_require__.m = modules;
+/******/
+/******/ 	// expose the module cache
+/******/ 	__webpack_require__.c = installedModules;
+/******/
+/******/ 	// define getter function for harmony exports
+/******/ 	__webpack_require__.d = function(exports, name, getter) {
+/******/ 		if(!__webpack_require__.o(exports, name)) {
+/******/ 			Object.defineProperty(exports, name, { enumerable: true, get: getter });
+/******/ 		}
+/******/ 	};
+/******/
+/******/ 	// define __esModule on exports
+/******/ 	__webpack_require__.r = function(exports) {
+/******/ 		if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 			Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
+/******/ 		}
+/******/ 		Object.defineProperty(exports, '__esModule', { value: true });
+/******/ 	};
+/******/
+/******/ 	// create a fake namespace object
+/******/ 	// mode & 1: value is a module id, require it
+/******/ 	// mode & 2: merge all properties of value into the ns
+/******/ 	// mode & 4: return value when already ns object
+/******/ 	// mode & 8|1: behave like require
+/******/ 	__webpack_require__.t = function(value, mode) {
+/******/ 		if(mode & 1) value = __webpack_require__(value);
+/******/ 		if(mode & 8) return value;
+/******/ 		if((mode & 4) && typeof value === 'object' && value && value.__esModule) return value;
+/******/ 		var ns = Object.create(null);
+/******/ 		__webpack_require__.r(ns);
+/******/ 		Object.defineProperty(ns, 'default', { enumerable: true, value: value });
+/******/ 		if(mode & 2 && typeof value != 'string') for(var key in value) __webpack_require__.d(ns, key, function(key) { return value[key]; }.bind(null, key));
+/******/ 		return ns;
+/******/ 	};
+/******/
+/******/ 	// getDefaultExport function for compatibility with non-harmony modules
+/******/ 	__webpack_require__.n = function(module) {
+/******/ 		var getter = module && module.__esModule ?
+/******/ 			function getDefault() { return module['default']; } :
+/******/ 			function getModuleExports() { return module; };
+/******/ 		__webpack_require__.d(getter, 'a', getter);
+/******/ 		return getter;
+/******/ 	};
+/******/
+/******/ 	// Object.prototype.hasOwnProperty.call
+/******/ 	__webpack_require__.o = function(object, property) { return Object.prototype.hasOwnProperty.call(object, property); };
+/******/
+/******/ 	// __webpack_public_path__
+/******/ 	__webpack_require__.p = "";
+/******/
+/******/
+/******/ 	// Load entry module and return exports
+/******/ 	return __webpack_require__(__webpack_require__.s = 0);
+/******/ })
+/************************************************************************/
+/******/ ([
+/* 0 */
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+// shim: exponer gifuct como globals
+var gifuct = __webpack_require__(1);
+window.parseGIF         = gifuct.parseGIF;
+window.decompressFrames = gifuct.decompressFrames;
+window.decompressFrame  = gifuct.decompressFrame;
+window.GifDecoder = { decode: function(dataUrl) {
+  return new Promise(function(resolve, reject) {
+    try {
+      var b64   = dataUrl.split(',')[1];
+      var bin   = atob(b64);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var gif    = window.parseGIF(bytes.buffer);
+      var frames = window.decompressFrames(gif, true);
+      if (!frames || !frames.length) { reject(new Error('GIF sin frames')); return; }
+      var width  = gif.lsd.width;
+      var height = gif.lsd.height;
+      var gifCanvas  = document.createElement('canvas');
+      gifCanvas.width = width; gifCanvas.height = height;
+      var gifCtx = gifCanvas.getContext('2d');
+      var tempCanvas = document.createElement('canvas');
+      var tempCtx    = tempCanvas.getContext('2d');
+      var frameImageData = null;
+      var result = [];
+      var needsDisposal = false;
+      for (var fi = 0; fi < frames.length; fi++) {
+        var frame = frames[fi];
+        var dims  = frame.dims;
+        if (needsDisposal) { gifCtx.clearRect(0, 0, width, height); needsDisposal = false; }
+        if (!frameImageData || dims.width !== frameImageData.width || dims.height !== frameImageData.height) {
+          tempCanvas.width = dims.width; tempCanvas.height = dims.height;
+          frameImageData = tempCtx.createImageData(dims.width, dims.height);
+        }
+        frameImageData.data.set(frame.patch);
+        tempCtx.putImageData(frameImageData, 0, 0);
+        gifCtx.drawImage(tempCanvas, dims.left, dims.top);
+        var full = gifCtx.getImageData(0, 0, width, height);
+        result.push({ imageData: full, delay: frame.delay || 100 });
+        if (frame.disposalType === 2) needsDisposal = true;
+      }
+      resolve({ frames: result, width: width, height: height });
+    } catch(e) { reject(e); }
+  });
+}};
+/***/ }),
+/* 1 */
+/***/ (function(module, exports, __webpack_require__) {
 
-// ── uint8 stream parsers ─────────────────────────────────────────────────────
-var buildStream = function(uint8Data) { return { data: uint8Data, pos: 0 }; };
-var readByte    = function() { return function(s) { return s.data[s.pos++]; }; };
-var peekByte    = function(offset) { offset=offset||0; return function(s) { return s.data[s.pos+offset]; }; };
-var readBytes   = function(n) { return function(s) { return s.data.subarray(s.pos, s.pos+=n); }; };
-var peekBytes   = function(n) { return function(s) { return s.data.subarray(s.pos, s.pos+n); }; };
-var readString  = function(n) { return function(s) { return Array.from(readBytes(n)(s)).map(function(v){return String.fromCharCode(v);}).join(''); }; };
-var readUnsigned= function(le){ return function(s){ var b=readBytes(2)(s); return le?(b[1]<<8)+b[0]:(b[0]<<8)+b[1]; }; };
-var readArray   = function(byteSize, totalOrFunc) {
-  return function(s, result, parent) {
-    var total = typeof totalOrFunc==='function' ? totalOrFunc(s,result,parent) : totalOrFunc;
-    var arr = new Array(total);
-    for(var i=0;i<total;i++) arr[i]=readBytes(byteSize)(s);
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.decompressFrames = exports.decompressFrame = exports.parseGIF = void 0;
+
+var _gif = _interopRequireDefault(__webpack_require__(2));
+
+var _jsBinarySchemaParser = __webpack_require__(3);
+
+var _uint = __webpack_require__(4);
+
+var _deinterlace = __webpack_require__(5);
+
+var _lzw = __webpack_require__(6);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }
+
+var parseGIF = function parseGIF(arrayBuffer) {
+  var byteData = new Uint8Array(arrayBuffer);
+  return (0, _jsBinarySchemaParser.parse)((0, _uint.buildStream)(byteData), _gif["default"]);
+};
+
+exports.parseGIF = parseGIF;
+
+var generatePatch = function generatePatch(image) {
+  var totalPixels = image.pixels.length;
+  var patchData = new Uint8ClampedArray(totalPixels * 4);
+
+  for (var i = 0; i < totalPixels; i++) {
+    var pos = i * 4;
+    var colorIndex = image.pixels[i];
+    var color = image.colorTable[colorIndex] || [0, 0, 0];
+    patchData[pos] = color[0];
+    patchData[pos + 1] = color[1];
+    patchData[pos + 2] = color[2];
+    patchData[pos + 3] = colorIndex !== image.transparentIndex ? 255 : 0;
+  }
+
+  return patchData;
+};
+
+var decompressFrame = function decompressFrame(frame, gct, buildImagePatch) {
+  if (!frame.image) {
+    console.warn('gif frame does not have associated image.');
+    return;
+  }
+
+  var image = frame.image; // get the number of pixels
+
+  var totalPixels = image.descriptor.width * image.descriptor.height; // do lzw decompression
+
+  var pixels = (0, _lzw.lzw)(image.data.minCodeSize, image.data.blocks, totalPixels); // deal with interlacing if necessary
+
+  if (image.descriptor.lct.interlaced) {
+    pixels = (0, _deinterlace.deinterlace)(pixels, image.descriptor.width);
+  }
+
+  var resultImage = {
+    pixels: pixels,
+    dims: {
+      top: frame.image.descriptor.top,
+      left: frame.image.descriptor.left,
+      width: frame.image.descriptor.width,
+      height: frame.image.descriptor.height
+    }
+  }; // color table
+
+  if (image.descriptor.lct && image.descriptor.lct.exists) {
+    resultImage.colorTable = image.lct;
+  } else {
+    resultImage.colorTable = gct;
+  } // add per frame relevant gce information
+
+
+  if (frame.gce) {
+    resultImage.delay = (frame.gce.delay || 10) * 10; // convert to ms
+
+    resultImage.disposalType = frame.gce.extras.disposal; // transparency
+
+    if (frame.gce.extras.transparentColorGiven) {
+      resultImage.transparentIndex = frame.gce.transparentColorIndex;
+    }
+  } // create canvas usable imagedata if desired
+
+
+  if (buildImagePatch) {
+    resultImage.patch = generatePatch(resultImage);
+  }
+
+  return resultImage;
+};
+
+exports.decompressFrame = decompressFrame;
+
+var decompressFrames = function decompressFrames(parsedGif, buildImagePatches) {
+  return parsedGif.frames.filter(function (f) {
+    return f.image;
+  }).map(function (f) {
+    return decompressFrame(f, parsedGif.gct, buildImagePatches);
+  });
+};
+
+exports.decompressFrames = decompressFrames;
+
+/***/ }),
+/* 2 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports["default"] = void 0;
+
+var _ = __webpack_require__(3);
+
+var _uint = __webpack_require__(4);
+
+// a set of 0x00 terminated subblocks
+var subBlocksSchema = {
+  blocks: function blocks(stream) {
+    var terminator = 0x00;
+    var chunks = [];
+    var streamSize = stream.data.length;
+    var total = 0;
+
+    for (var size = (0, _uint.readByte)()(stream); size !== terminator; size = (0, _uint.readByte)()(stream)) {
+      // catch corrupted files with no terminator
+      if (stream.pos + size >= streamSize) {
+        var availableSize = streamSize - stream.pos;
+        chunks.push((0, _uint.readBytes)(availableSize)(stream));
+        total += availableSize;
+        break;
+      }
+
+      chunks.push((0, _uint.readBytes)(size)(stream));
+      total += size;
+    }
+
+    var result = new Uint8Array(total);
+    var offset = 0;
+
+    for (var i = 0; i < chunks.length; i++) {
+      result.set(chunks[i], offset);
+      offset += chunks[i].length;
+    }
+
+    return result;
+  }
+}; // global control extension
+
+var gceSchema = (0, _.conditional)({
+  gce: [{
+    codes: (0, _uint.readBytes)(2)
+  }, {
+    byteSize: (0, _uint.readByte)()
+  }, {
+    extras: (0, _uint.readBits)({
+      future: {
+        index: 0,
+        length: 3
+      },
+      disposal: {
+        index: 3,
+        length: 3
+      },
+      userInput: {
+        index: 6
+      },
+      transparentColorGiven: {
+        index: 7
+      }
+    })
+  }, {
+    delay: (0, _uint.readUnsigned)(true)
+  }, {
+    transparentColorIndex: (0, _uint.readByte)()
+  }, {
+    terminator: (0, _uint.readByte)()
+  }]
+}, function (stream) {
+  var codes = (0, _uint.peekBytes)(2)(stream);
+  return codes[0] === 0x21 && codes[1] === 0xf9;
+}); // image pipeline block
+
+var imageSchema = (0, _.conditional)({
+  image: [{
+    code: (0, _uint.readByte)()
+  }, {
+    descriptor: [{
+      left: (0, _uint.readUnsigned)(true)
+    }, {
+      top: (0, _uint.readUnsigned)(true)
+    }, {
+      width: (0, _uint.readUnsigned)(true)
+    }, {
+      height: (0, _uint.readUnsigned)(true)
+    }, {
+      lct: (0, _uint.readBits)({
+        exists: {
+          index: 0
+        },
+        interlaced: {
+          index: 1
+        },
+        sort: {
+          index: 2
+        },
+        future: {
+          index: 3,
+          length: 2
+        },
+        size: {
+          index: 5,
+          length: 3
+        }
+      })
+    }]
+  }, (0, _.conditional)({
+    lct: (0, _uint.readArray)(3, function (stream, result, parent) {
+      return Math.pow(2, parent.descriptor.lct.size + 1);
+    })
+  }, function (stream, result, parent) {
+    return parent.descriptor.lct.exists;
+  }), {
+    data: [{
+      minCodeSize: (0, _uint.readByte)()
+    }, subBlocksSchema]
+  }]
+}, function (stream) {
+  return (0, _uint.peekByte)()(stream) === 0x2c;
+}); // plain text block
+
+var textSchema = (0, _.conditional)({
+  text: [{
+    codes: (0, _uint.readBytes)(2)
+  }, {
+    blockSize: (0, _uint.readByte)()
+  }, {
+    preData: function preData(stream, result, parent) {
+      return (0, _uint.readBytes)(parent.text.blockSize)(stream);
+    }
+  }, subBlocksSchema]
+}, function (stream) {
+  var codes = (0, _uint.peekBytes)(2)(stream);
+  return codes[0] === 0x21 && codes[1] === 0x01;
+}); // application block
+
+var applicationSchema = (0, _.conditional)({
+  application: [{
+    codes: (0, _uint.readBytes)(2)
+  }, {
+    blockSize: (0, _uint.readByte)()
+  }, {
+    id: function id(stream, result, parent) {
+      return (0, _uint.readString)(parent.blockSize)(stream);
+    }
+  }, subBlocksSchema]
+}, function (stream) {
+  var codes = (0, _uint.peekBytes)(2)(stream);
+  return codes[0] === 0x21 && codes[1] === 0xff;
+}); // comment block
+
+var commentSchema = (0, _.conditional)({
+  comment: [{
+    codes: (0, _uint.readBytes)(2)
+  }, subBlocksSchema]
+}, function (stream) {
+  var codes = (0, _uint.peekBytes)(2)(stream);
+  return codes[0] === 0x21 && codes[1] === 0xfe;
+});
+var schema = [{
+  header: [{
+    signature: (0, _uint.readString)(3)
+  }, {
+    version: (0, _uint.readString)(3)
+  }]
+}, {
+  lsd: [{
+    width: (0, _uint.readUnsigned)(true)
+  }, {
+    height: (0, _uint.readUnsigned)(true)
+  }, {
+    gct: (0, _uint.readBits)({
+      exists: {
+        index: 0
+      },
+      resolution: {
+        index: 1,
+        length: 3
+      },
+      sort: {
+        index: 4
+      },
+      size: {
+        index: 5,
+        length: 3
+      }
+    })
+  }, {
+    backgroundColorIndex: (0, _uint.readByte)()
+  }, {
+    pixelAspectRatio: (0, _uint.readByte)()
+  }]
+}, (0, _.conditional)({
+  gct: (0, _uint.readArray)(3, function (stream, result) {
+    return Math.pow(2, result.lsd.gct.size + 1);
+  })
+}, function (stream, result) {
+  return result.lsd.gct.exists;
+}), // content frames
+{
+  frames: (0, _.loop)([gceSchema, applicationSchema, commentSchema, imageSchema, textSchema], function (stream) {
+    var nextCode = (0, _uint.peekByte)()(stream); // rather than check for a terminator, we should check for the existence
+    // of an ext or image block to avoid infinite loops
+    //var terminator = 0x3B;
+    //return nextCode !== terminator;
+
+    return nextCode === 0x21 || nextCode === 0x2c;
+  })
+}];
+var _default = schema;
+exports["default"] = _default;
+
+/***/ }),
+/* 3 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.loop = exports.conditional = exports.parse = void 0;
+
+var parse = function parse(stream, schema) {
+  var result = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
+  var parent = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : result;
+
+  if (Array.isArray(schema)) {
+    schema.forEach(function (partSchema) {
+      return parse(stream, partSchema, result, parent);
+    });
+  } else if (typeof schema === 'function') {
+    schema(stream, result, parent, parse);
+  } else {
+    var key = Object.keys(schema)[0];
+
+    if (Array.isArray(schema[key])) {
+      parent[key] = {};
+      parse(stream, schema[key], result, parent[key]);
+    } else {
+      parent[key] = schema[key](stream, result, parent, parse);
+    }
+  }
+
+  return result;
+};
+
+exports.parse = parse;
+
+var conditional = function conditional(schema, conditionFunc) {
+  return function (stream, result, parent, parse) {
+    if (conditionFunc(stream, result, parent)) {
+      parse(stream, schema, result, parent);
+    }
+  };
+};
+
+exports.conditional = conditional;
+
+var loop = function loop(schema, continueFunc) {
+  return function (stream, result, parent, parse) {
+    var arr = [];
+
+    while (continueFunc(stream, result, parent)) {
+      var newParent = {};
+      parse(stream, schema, result, newParent);
+      arr.push(newParent);
+    }
+
     return arr;
   };
 };
-var subBitsTotal= function(bits,start,len){ var r=0; for(var i=0;i<len;i++) r+=bits[start+i]&&Math.pow(2,len-i-1); return r; };
-var readBits    = function(schema) {
-  return function(s) {
-    var _byte=readByte()(s), bits=new Array(8);
-    for(var i=0;i<8;i++) bits[7-i]=!!(_byte&(1<<i));
-    return Object.keys(schema).reduce(function(res,key){
-      var def=schema[key];
-      res[key]=def.length ? subBitsTotal(bits,def.index,def.length) : bits[def.index];
-      return res;
-    },{});
+
+exports.loop = loop;
+
+/***/ }),
+/* 4 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.readBits = exports.readArray = exports.readUnsigned = exports.readString = exports.peekBytes = exports.readBytes = exports.peekByte = exports.readByte = exports.buildStream = void 0;
+
+// Default stream and parsers for Uint8TypedArray data type
+var buildStream = function buildStream(uint8Data) {
+  return {
+    data: uint8Data,
+    pos: 0
   };
 };
 
-// ── schema parser ────────────────────────────────────────────────────────────
-var parse = function(stream, schema, result, parent) {
-  result=result||{}; parent=parent||result;
-  if(Array.isArray(schema)){
-    schema.forEach(function(s){ parse(stream,s,result,parent); });
-  } else if(typeof schema==='function'){
-    schema(stream,result,parent,parse);
-  } else {
-    var key=Object.keys(schema)[0];
-    if(Array.isArray(schema[key])){ parent[key]={}; parse(stream,schema[key],result,parent[key]); }
-    else parent[key]=schema[key](stream,result,parent,parse);
-  }
-  return result;
+exports.buildStream = buildStream;
+
+var readByte = function readByte() {
+  return function (stream) {
+    return stream.data[stream.pos++];
+  };
 };
-var conditional = function(schema,condFn){ return function(s,r,p,parse){ if(condFn(s,r,p)) parse(s,schema,r,p); }; };
-var loop        = function(schema,contFn){ return function(s,r,p,parse){ var arr=[]; while(contFn(s,r,p)){ var np={}; parse(s,schema,r,np); arr.push(np); } return arr; }; };
 
-// ── GIF schema ───────────────────────────────────────────────────────────────
-var subBlocksSchema = { blocks: function(stream) {
-  var term=0x00, chunks=[], total=0, size;
-  var streamSize=stream.data.length;
-  while((size=readByte()(stream))!==term){
-    if(stream.pos+size>=streamSize){ var av=streamSize-stream.pos; chunks.push(readBytes(av)(stream)); total+=av; break; }
-    chunks.push(readBytes(size)(stream)); total+=size;
-  }
-  var result=new Uint8Array(total), offset=0;
-  for(var i=0;i<chunks.length;i++){ result.set(chunks[i],offset); offset+=chunks[i].length; }
-  return result;
-}};
+exports.readByte = readByte;
 
-var gceSchema = conditional({gce:[
-  {codes:readBytes(2)},{byteSize:readByte()},
-  {extras:readBits({future:{index:0,length:3},disposal:{index:3,length:3},userInput:{index:6},transparentColorGiven:{index:7}})},
-  {delay:readUnsigned(true)},{transparentColorIndex:readByte()},{terminator:readByte()}
-]}, function(s){ var c=peekBytes(2)(s); return c[0]===0x21&&c[1]===0xf9; });
+var peekByte = function peekByte() {
+  var offset = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 0;
+  return function (stream) {
+    return stream.data[stream.pos + offset];
+  };
+};
 
-var imageSchema = conditional({image:[
-  {code:readByte()},
-  {descriptor:[{left:readUnsigned(true)},{top:readUnsigned(true)},{width:readUnsigned(true)},{height:readUnsigned(true)},
-    {lct:readBits({exists:{index:0},interlaced:{index:1},sort:{index:2},future:{index:3,length:2},size:{index:5,length:3}})}]},
-  conditional({lct:readArray(3,function(s,r,p){return Math.pow(2,p.descriptor.lct.size+1);})},function(s,r,p){return p.descriptor.lct.exists;}),
-  {data:[{minCodeSize:readByte()},subBlocksSchema]}
-]}, function(s){ return peekByte()(s)===0x2c; });
+exports.peekByte = peekByte;
 
-var textSchema = conditional({text:[{codes:readBytes(2)},{blockSize:readByte()},
-  {preData:function(s,r,p){return readBytes(p.text.blockSize)(s);}}, subBlocksSchema
-]}, function(s){ var c=peekBytes(2)(s); return c[0]===0x21&&c[1]===0x01; });
+var readBytes = function readBytes(length) {
+  return function (stream) {
+    return stream.data.subarray(stream.pos, stream.pos += length);
+  };
+};
 
-var applicationSchema = conditional({application:[{codes:readBytes(2)},{blockSize:readByte()},
-  {id:function(s,r,p){return readString(p.blockSize)(s);}}, subBlocksSchema
-]}, function(s){ var c=peekBytes(2)(s); return c[0]===0x21&&c[1]===0xff; });
+exports.readBytes = readBytes;
 
-var commentSchema = conditional({comment:[{codes:readBytes(2)},subBlocksSchema]},
-  function(s){ var c=peekBytes(2)(s); return c[0]===0x21&&c[1]===0xfe; });
+var peekBytes = function peekBytes(length) {
+  return function (stream) {
+    return stream.data.subarray(stream.pos, stream.pos + length);
+  };
+};
 
-var gifSchema = [
-  {header:[{signature:readString(3)},{version:readString(3)}]},
-  {lsd:[{width:readUnsigned(true)},{height:readUnsigned(true)},
-    {gct:readBits({exists:{index:0},resolution:{index:1,length:3},sort:{index:4},size:{index:5,length:3}})},
-    {backgroundColorIndex:readByte()},{pixelAspectRatio:readByte()}]},
-  conditional({gct:readArray(3,function(s,r){return Math.pow(2,r.lsd.gct.size+1);})},function(s,r){return r.lsd.gct.exists;}),
-  {frames:loop([gceSchema,applicationSchema,commentSchema,imageSchema,textSchema],
-    function(s){ var n=peekByte()(s); return n===0x21||n===0x2c; })}
-];
+exports.peekBytes = peekBytes;
 
-// ── LZW ─────────────────────────────────────────────────────────────────────
-var lzw = function(minCodeSize, data, pixelCount) {
-  var MAX=4096, nullCode=-1, npix=pixelCount;
-  var available,clear,code_mask,code_size,end_of_information,in_code,old_code,bits,code,i,datum,data_size,first,top,bi,pi;
-  var dstPixels=new Array(pixelCount), prefix=new Array(MAX), suffix=new Array(MAX), pixelStack=new Array(MAX+1);
-  data_size=minCodeSize; clear=1<<data_size; end_of_information=clear+1; available=clear+2;
-  old_code=nullCode; code_size=data_size+1; code_mask=(1<<code_size)-1;
-  for(code=0;code<clear;code++){prefix[code]=0;suffix[code]=code;}
-  var datum2,bits2,count,first2,top2,pi2,bi2;
-  datum2=bits2=count=first2=top2=pi2=bi2=0;
-  for(i=0;i<npix;){
-    if(top2===0){
-      if(bits2<code_size){datum2+=data[bi2]<<bits2;bits2+=8;bi2++;continue;}
-      code=datum2&code_mask; datum2>>=code_size; bits2-=code_size;
-      if(code>available||code==end_of_information) break;
-      if(code==clear){code_size=data_size+1;code_mask=(1<<code_size)-1;available=clear+2;old_code=nullCode;continue;}
-      if(old_code==nullCode){pixelStack[top2++]=suffix[code];old_code=code;first2=code;continue;}
-      in_code=code;
-      if(code==available){pixelStack[top2++]=first2;code=old_code;}
-      while(code>clear){pixelStack[top2++]=suffix[code];code=prefix[code];}
-      first2=suffix[code]&0xff; pixelStack[top2++]=first2;
-      if(available<MAX){prefix[available]=old_code;suffix[available]=first2;available++;
-        if((available&code_mask)===0&&available<MAX){code_size++;code_mask+=available;}}
-      old_code=in_code;
+var readString = function readString(length) {
+  return function (stream) {
+    return Array.from(readBytes(length)(stream)).map(function (value) {
+      return String.fromCharCode(value);
+    }).join('');
+  };
+};
+
+exports.readString = readString;
+
+var readUnsigned = function readUnsigned(littleEndian) {
+  return function (stream) {
+    var bytes = readBytes(2)(stream);
+    return littleEndian ? (bytes[1] << 8) + bytes[0] : (bytes[0] << 8) + bytes[1];
+  };
+};
+
+exports.readUnsigned = readUnsigned;
+
+var readArray = function readArray(byteSize, totalOrFunc) {
+  return function (stream, result, parent) {
+    var total = typeof totalOrFunc === 'function' ? totalOrFunc(stream, result, parent) : totalOrFunc;
+    var parser = readBytes(byteSize);
+    var arr = new Array(total);
+
+    for (var i = 0; i < total; i++) {
+      arr[i] = parser(stream);
     }
-    top2--; dstPixels[pi2++]=pixelStack[top2]; i++;
-  }
-  for(i=pi2;i<npix;i++) dstPixels[i]=0;
-  return dstPixels;
+
+    return arr;
+  };
 };
 
-// ── deinterlace ──────────────────────────────────────────────────────────────
-var deinterlace = function(pixels, width) {
-  var newPixels=new Array(pixels.length), rows=pixels.length/width;
-  var cpRow=function(to,from){
-    var fp=pixels.slice(from*width,(from+1)*width);
-    newPixels.splice.apply(newPixels,[to*width,width].concat(fp));
+exports.readArray = readArray;
+
+var subBitsTotal = function subBitsTotal(bits, startIndex, length) {
+  var result = 0;
+
+  for (var i = 0; i < length; i++) {
+    result += bits[startIndex + i] && Math.pow(2, length - i - 1);
+  }
+
+  return result;
+};
+
+var readBits = function readBits(schema) {
+  return function (stream) {
+    var _byte = readByte()(stream); // convert the byte to bit array
+
+
+    var bits = new Array(8);
+
+    for (var i = 0; i < 8; i++) {
+      bits[7 - i] = !!(_byte & 1 << i);
+    } // convert the bit array to values based on the schema
+
+
+    return Object.keys(schema).reduce(function (res, key) {
+      var def = schema[key];
+
+      if (def.length) {
+        res[key] = subBitsTotal(bits, def.index, def.length);
+      } else {
+        res[key] = bits[def.index];
+      }
+
+      return res;
+    }, {});
   };
-  var offsets=[0,4,2,1], steps=[8,8,4,2], fromRow=0;
-  for(var pass=0;pass<4;pass++) for(var toRow=offsets[pass];toRow<rows;toRow+=steps[pass]){cpRow(toRow,fromRow);fromRow++;}
+};
+
+exports.readBits = readBits;
+
+/***/ }),
+/* 5 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.deinterlace = void 0;
+
+/**
+ * Deinterlace function from https://github.com/shachaf/jsgif
+ */
+var deinterlace = function deinterlace(pixels, width) {
+  var newPixels = new Array(pixels.length);
+  var rows = pixels.length / width;
+
+  var cpRow = function cpRow(toRow, fromRow) {
+    var fromPixels = pixels.slice(fromRow * width, (fromRow + 1) * width);
+    newPixels.splice.apply(newPixels, [toRow * width, width].concat(fromPixels));
+  }; // See appendix E.
+
+
+  var offsets = [0, 4, 2, 1];
+  var steps = [8, 8, 4, 2];
+  var fromRow = 0;
+
+  for (var pass = 0; pass < 4; pass++) {
+    for (var toRow = offsets[pass]; toRow < rows; toRow += steps[pass]) {
+      cpRow(toRow, fromRow);
+      fromRow++;
+    }
+  }
+
   return newPixels;
 };
 
-// ── public API ───────────────────────────────────────────────────────────────
-var parseGIF = function(arrayBuffer) {
-  return parse(buildStream(new Uint8Array(arrayBuffer)), gifSchema);
-};
+exports.deinterlace = deinterlace;
 
-var generatePatch = function(image) {
-  var total=image.pixels.length, patch=new Uint8ClampedArray(total*4);
-  for(var i=0;i<total;i++){
-    var pos=i*4, ci=image.pixels[i], color=image.colorTable[ci]||[0,0,0];
-    patch[pos]=color[0]; patch[pos+1]=color[1]; patch[pos+2]=color[2];
-    patch[pos+3]=ci!==image.transparentIndex?255:0;
+/***/ }),
+/* 6 */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.lzw = void 0;
+
+/**
+ * javascript port of java LZW decompression
+ * Original java author url: https://gist.github.com/devunwired/4479231
+ */
+var lzw = function lzw(minCodeSize, data, pixelCount) {
+  var MAX_STACK_SIZE = 4096;
+  var nullCode = -1;
+  var npix = pixelCount;
+  var available, clear, code_mask, code_size, end_of_information, in_code, old_code, bits, code, i, datum, data_size, first, top, bi, pi;
+  var dstPixels = new Array(pixelCount);
+  var prefix = new Array(MAX_STACK_SIZE);
+  var suffix = new Array(MAX_STACK_SIZE);
+  var pixelStack = new Array(MAX_STACK_SIZE + 1); // Initialize GIF data stream decoder.
+
+  data_size = minCodeSize;
+  clear = 1 << data_size;
+  end_of_information = clear + 1;
+  available = clear + 2;
+  old_code = nullCode;
+  code_size = data_size + 1;
+  code_mask = (1 << code_size) - 1;
+
+  for (code = 0; code < clear; code++) {
+    prefix[code] = 0;
+    suffix[code] = code;
+  } // Decode GIF pixel stream.
+
+
+  var datum, bits, count, first, top, pi, bi;
+  datum = bits = count = first = top = pi = bi = 0;
+
+  for (i = 0; i < npix;) {
+    if (top === 0) {
+      if (bits < code_size) {
+        // get the next byte
+        datum += data[bi] << bits;
+        bits += 8;
+        bi++;
+        continue;
+      } // Get the next code.
+
+
+      code = datum & code_mask;
+      datum >>= code_size;
+      bits -= code_size; // Interpret the code
+
+      if (code > available || code == end_of_information) {
+        break;
+      }
+
+      if (code == clear) {
+        // Reset decoder.
+        code_size = data_size + 1;
+        code_mask = (1 << code_size) - 1;
+        available = clear + 2;
+        old_code = nullCode;
+        continue;
+      }
+
+      if (old_code == nullCode) {
+        pixelStack[top++] = suffix[code];
+        old_code = code;
+        first = code;
+        continue;
+      }
+
+      in_code = code;
+
+      if (code == available) {
+        pixelStack[top++] = first;
+        code = old_code;
+      }
+
+      while (code > clear) {
+        pixelStack[top++] = suffix[code];
+        code = prefix[code];
+      }
+
+      first = suffix[code] & 0xff;
+      pixelStack[top++] = first; // add a new string to the table, but only if space is available
+      // if not, just continue with current table until a clear code is found
+      // (deferred clear code implementation as per GIF spec)
+
+      if (available < MAX_STACK_SIZE) {
+        prefix[available] = old_code;
+        suffix[available] = first;
+        available++;
+
+        if ((available & code_mask) === 0 && available < MAX_STACK_SIZE) {
+          code_size++;
+          code_mask += available;
+        }
+      }
+
+      old_code = in_code;
+    } // Pop a pixel off the pixel stack.
+
+
+    top--;
+    dstPixels[pi++] = pixelStack[top];
+    i++;
   }
-  return patch;
-};
 
-var decompressFrame = function(frame, gct, buildPatch) {
-  if(!frame.image) return;
-  var image=frame.image;
-  var totalPixels=image.descriptor.width*image.descriptor.height;
-  var pixels=lzw(image.data.minCodeSize, image.data.blocks, totalPixels);
-  if(image.descriptor.lct.interlaced) pixels=deinterlace(pixels,image.descriptor.width);
-  var result={
-    pixels:pixels,
-    dims:{top:image.descriptor.top,left:image.descriptor.left,
-          width:image.descriptor.width,height:image.descriptor.height}
-  };
-  result.colorTable = (image.descriptor.lct&&image.descriptor.lct.exists) ? image.lct : gct;
-  if(frame.gce){
-    result.delay=(frame.gce.delay||10)*10;
-    result.disposalType=frame.gce.extras.disposal;
-    if(frame.gce.extras.transparentColorGiven) result.transparentIndex=frame.gce.transparentColorIndex;
+  for (i = pi; i < npix; i++) {
+    dstPixels[i] = 0; // clear missing pixels
   }
-  if(buildPatch) result.patch=generatePatch(result);
-  return result;
+
+  return dstPixels;
 };
 
-var decompressFrames = function(parsedGif, buildPatches) {
-  return parsedGif.frames.filter(function(f){return f.image;})
-    .map(function(f){return decompressFrame(f,parsedGif.gct,buildPatches);});
-};
+exports.lzw = lzw;
 
-global.parseGIF         = parseGIF;
-global.decompressFrames = decompressFrames;
-global.decompressFrame  = decompressFrame;
-
-})(window);
+/***/ })
+/******/ ]);
