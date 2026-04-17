@@ -9,9 +9,14 @@ var _m = {}; // caché de módulos
 function _r(id) { return _m[id]; } // require simulado
 
 function _load(id, fn) {
-  var exp = {};
-  fn(exp, _r);
-  _m[id] = exp;
+  try {
+    var exp = {};
+    fn(exp, _r);
+    _m[id] = exp;
+  } catch(e) {
+    console.error('gifuct module ' + id + ' failed:', e.message, e.stack);
+    _m[id] = {};
+  }
 }
 
 // === module 4 ===
@@ -703,6 +708,15 @@ exports.decompressFrames = decompressFrames;
 window.parseGIF         = _m[1].parseGIF;
 window.decompressFrames = _m[1].decompressFrames;
 window.decompressFrame  = _m[1].decompressFrame;
+
+// Diagnóstico de carga
+(function() {
+  var ok = typeof (_m[1] && _m[1].parseGIF);
+  console.log('[gifuct] m1.parseGIF:', ok, 'keys:', Object.keys(_m[1]||{}).join(','));
+  console.log('[gifuct] m2 keys:', Object.keys(_m[2]||{}).join(','));
+  console.log('[gifuct] m3 keys:', Object.keys(_m[3]||{}).join(','));
+  console.log('[gifuct] m4 keys:', Object.keys(_m[4]||{}).join(','));
+})();
 
 // GifDecoder: convierte dataUrl GIF a array de frames {imageData, delay}
 window.GifDecoder = (function() {
