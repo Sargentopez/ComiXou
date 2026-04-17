@@ -5,6 +5,8 @@
 (function(window) {
 'use strict';
 
+try {
+
 var _m = {}; // caché de módulos
 function _r(id) { return _m[id]; } // require simulado
 
@@ -762,4 +764,12 @@ window.GifDecoder = (function() {
   return { decode: decode };
 })();
 
+} catch(e) {
+  // Mostrar error visible en móvil sin consola
+  var _d = document.createElement('div');
+  _d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:red;color:white;padding:20px;z-index:99999;font-size:14px;word-break:break-all';
+  _d.textContent = 'gifuct ERROR: ' + e.message + ' | ' + (e.stack||'').slice(0,200);
+  document.body.appendChild(_d);
+  console.error('gifuct.js failed:', e);
+}
 })(window);
