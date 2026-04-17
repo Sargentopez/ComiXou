@@ -4024,8 +4024,25 @@ function _edRenderPageThumb(canvas, page, pageIdx){
   const _textAlpha=page.textLayerOpacity??1;
   page.layers.forEach(l=>{
     if(!l||l.type==='text'||l.type==='bubble') return;
-    if(l.type==='gif')         l.draw(offCtx);
-    else if(l.type==='image')  l.draw(offCtx,off);
+    if(l.type==='gif'){
+      if(l._oc && l._ready && l._oc.width > 0){
+        const _gw = l.width  * pw;
+        const _gh = l.height * ph;
+        // Coords workspace (el transform -mx,-my ya está aplicado)
+        const _gx = mx + l.x * pw - _gw/2;
+        const _gy = my + l.y * ph - _gh/2;
+        offCtx.save();
+        offCtx.globalAlpha = l.opacity ?? 1;
+        if (l.rotation) {
+          offCtx.translate(_gx + _gw/2, _gy + _gh/2);
+          offCtx.rotate(l.rotation * Math.PI / 180);
+          offCtx.drawImage(l._oc, -_gw/2, -_gh/2, _gw, _gh);
+        } else {
+          offCtx.drawImage(l._oc, _gx, _gy, _gw, _gh);
+        }
+        offCtx.restore();
+      }
+    } else if(l.type==='image')  l.draw(offCtx,off);
     else if(l.type==='draw')   l.draw(offCtx);
     else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
     else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
