@@ -16321,41 +16321,47 @@ function _gcpSaveToLib(onDone) {
     // extraemos la zona de página
     const fullW = gcpCanvas.width, fullH = gcpCanvas.height;
 
-    // ── Paso 2: renderizar cada frame y calcular bounding box global ──────
-    // Usamos un canvas temporal con zoom=1 para renderizar sin distorsión de cámara
+    // ── Paso 2: renderizar cada frame usando la misma técnica que _gcpRedraw ──
+    // Renderizamos en un canvas del mismo tamaño que gcpCanvas aplicando la cámara actual,
+    // luego extraemos la zona de página en coordenadas de pantalla.
+    // Esto garantiza que las capas se dibujan exactamente igual que en pantalla.
     const renderFrame = (fi) => {
       const fc = document.createElement('canvas');
       fc.width = fullW; fc.height = fullH;
       const fctx = fc.getContext('2d', { alpha: true });
-      // Aplicar cámara z=1 con offset de página (sin zoom de usuario)
-      fctx.setTransform(1, 0, 0, 1, 0, 0);
+      // Misma cámara que _gcpRedraw
+      fctx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
       window._gcpLayers.forEach(l => {
         if (!l || typeof l.draw !== 'function') return;
-        // Para layers de tipo stroke/draw/shape: usamos coordenadas de workspace con z=1
-        const savedCtx = gcpCtx;
-        // Dibujar en fctx con transform neutro (z=1)
-        fctx.setTransform(1, 0, 0, 1, 0, 0);
         if (l.type === 'image' || l.type === 'gif') { l.draw(fctx, fc); }
         else if (l.type === 'text' || l.type === 'bubble') { l.draw(fctx, fc); }
         else { fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1; }
       });
+      fctx.setTransform(1, 0, 0, 1, 0, 0);
       return fc;
     };
 
     // Renderizar todos los frames y calcular bbox de píxeles no-transparentes
     const frames = [];
     let minX = pageW, minY = pageH, maxX = 0, maxY = 0;
-    const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
+    // Coordenadas de la zona de página en el canvas con cámara aplicada
+    const mx = Math.round(edMarginX() * edCamera.z + edCamera.x);
+    const my = Math.round(edMarginY() * edCamera.z + edCamera.y);
+    const mw = Math.round(edPageW()  * edCamera.z);
+    const mh = Math.round(edPageH()  * edCamera.z);
 
     for (let fi = 0; fi < totalFrames; fi++) {
       const fc = renderFrame(fi);
       frames.push(fc);
-      // Escanear solo la zona de página (mx,my → mx+pageW, my+pageH)
-      const imgData = fc.getContext('2d').getImageData(mx, my, pageW, pageH);
+      // Escanear solo la zona de página en coordenadas de pantalla
+      const safeX = Math.max(0, mx), safeY = Math.max(0, my);
+      const safeW = Math.min(fullW - safeX, mw), safeH = Math.min(fullH - safeY, mh);
+      if (safeW <= 0 || safeH <= 0) continue;
+      const imgData = fc.getContext('2d').getImageData(safeX, safeY, safeW, safeH);
       const d = imgData.data;
-      for (let y = 0; y < pageH; y++) {
-        for (let x = 0; x < pageW; x++) {
-          if (d[(y * pageW + x) * 4 + 3] > 10) {
+      for (let y = 0; y < safeH; y++) {
+        for (let x = 0; x < safeW; x++) {
+          if (d[(y * safeW + x) * 4 + 3] > 10) {
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
@@ -16366,12 +16372,12 @@ function _gcpSaveToLib(onDone) {
     }
 
     // Si no hay contenido visible, usar la zona de página completa
-    if (maxX <= minX || maxY <= minY) { minX=0; minY=0; maxX=pageW-1; maxY=pageH-1; }
+    if (maxX <= minX || maxY <= minY) { minX=0; minY=0; maxX=mw-1; maxY=mh-1; }
     const pad = 2;
     const cropX = Math.max(0, minX - pad);
     const cropY = Math.max(0, minY - pad);
-    const cropW = Math.min(pageW, maxX + pad + 1) - cropX;
-    const cropH = Math.min(pageH, maxY + pad + 1) - cropY;
+    const cropW = Math.min(mw, maxX + pad + 1) - cropX;
+    const cropH = Math.min(mh, maxY + pad + 1) - cropY;
 
     // ── Paso 3: generar GIF con las dimensiones recortadas ────────────────
     const workerSrc  = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js';
@@ -16391,8 +16397,8 @@ function _gcpSaveToLib(onDone) {
       const cropped = document.createElement('canvas');
       cropped.width = cropW; cropped.height = cropH;
       const cctx = cropped.getContext('2d', { alpha: true });
-      // Copiar desde la zona de página + offset de crop
-      cctx.drawImage(fc, mx + cropX, my + cropY, cropW, cropH, 0, 0, cropW, cropH);
+      // Copiar desde coordenadas de pantalla (safeX+cropX, safeY+cropY)
+      cctx.drawImage(fc, safeX + cropX, safeY + cropY, cropW, cropH, 0, 0, cropW, cropH);
       gif.addFrame(cropped, { delay: 100, copy: true });
     });
 
@@ -16410,7 +16416,7 @@ function _gcpSaveToLib(onDone) {
         const scale2 = Math.min((S-4)/cropW, (S-4)/cropH);
         const dw2 = cropW*scale2, dh2 = cropH*scale2;
         if (frames[0]) tc2.drawImage(frames[0],
-          mx+cropX, my+cropY, cropW, cropH,
+          safeX+cropX, safeY+cropY, cropW, cropH,
           (S-dw2)/2, (S-dh2)/2, dw2, dh2);
         const thumb = thumbC.toDataURL('image/png', 0.7);
         // Guardar en carpeta "Animaciones"
