@@ -1447,7 +1447,6 @@ class DrawLayer extends BaseLayer {
     this._lastY = 0;
   }
   static fromDataUrl(dataUrl, pw, ph){
-    // Compatibilidad: dataUrl guardado es en coords de página → colocar en posición correcta
     const dl = new DrawLayer();
     const img = new Image();
     img.onload = () => {
@@ -1455,17 +1454,18 @@ class DrawLayer extends BaseLayer {
       const my = (ED_CANVAS_H - ph) / 2;
       dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
       if(typeof edRedraw === 'function') edRedraw();
+      if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
     return dl;
   }
   static fromDataUrlFull(dataUrl){
-    // dataUrl es workspace completo (ED_CANVAS_W × ED_CANVAS_H) — colocar 1:1
     const dl = new DrawLayer();
     const img = new Image();
     img.onload = () => {
       dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
       if(typeof edRedraw === 'function') edRedraw();
+      if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
     return dl;
@@ -1619,6 +1619,7 @@ class StrokeLayer extends BaseLayer {
     img.onload = () => {
       sl._canvas.getContext('2d').drawImage(img, 0, 0, bw, bh);
       if(typeof edRedraw === 'function') edRedraw();
+      if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
     return sl;
@@ -12757,7 +12758,7 @@ function edDeserLayer(d, pageOrientation){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        if(l._keepSize){ edRedraw(); return; }
+        if(l._keepSize){ edRedraw(); if(window._gcpActive) _gcpRedraw(); return; }
         const _isV = (pageOrientation||'vertical') === 'vertical';
         const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
         const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
@@ -12766,9 +12767,15 @@ function edDeserLayer(d, pageOrientation){
           l.height = _natH;
         }
         edRedraw();
+        if(window._gcpActive) _gcpRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
       img.src=d.src;
+      // Si ya está en caché (complete antes de onload), disparar manualmente
+      if(img.complete && img.naturalWidth > 0){
+        l.img=img; l.src=img.src;
+        if(window._gcpActive) setTimeout(_gcpRedraw, 0);
+      }
     }
     return l;
   }
@@ -15854,37 +15861,21 @@ function _gcpRedraw() {
   if (!gcpCtx || !gcpCanvas) return;
   const cw = gcpCanvas.width, ch = gcpCanvas.height;
   if (!cw || !ch) return;
-
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
   gcpCtx.clearRect(0, 0, cw, ch);
-
-  // Misma cámara que edRedraw
   gcpCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-
-  // Mismo orden de render que edRedraw
-  window._gcpLayers.forEach((l, i) => {
+  window._gcpLayers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
-    if (l.type === 'image') {
+    if (l.type === 'image' || l.type === 'gif') {
       l.draw(gcpCtx, gcpCanvas);
-    } else if (l.type === 'draw') {
-      gcpCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(gcpCtx);
-      gcpCtx.globalAlpha = 1;
-    } else if (l.type === 'stroke') {
-      gcpCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(gcpCtx);
-      gcpCtx.globalAlpha = 1;
-    } else if (l.type === 'shape' || l.type === 'line') {
-      gcpCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(gcpCtx);
-      gcpCtx.globalAlpha = 1;
-    } else if (l.type === 'gif') {
-      l.draw(gcpCtx);
     } else if (l.type === 'text' || l.type === 'bubble') {
       l.draw(gcpCtx, gcpCanvas);
+    } else {
+      gcpCtx.globalAlpha = l.opacity ?? 1;
+      l.draw(gcpCtx);
+      gcpCtx.globalAlpha = 1;
     }
   });
-
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
@@ -15921,42 +15912,34 @@ function _gcpRenderLayersDropdown(dd) {
 }
 
 // gcpInsertFromBib — copia EXACTA del código de inserción de la biblioteca
-// en el editor general, pero usando _gcpLayers y _gcpRedraw en lugar de
-// edLayers y edRedraw. Para imágenes: parchear onload para llamar _gcpRedraw.
 function gcpInsertFromBib(entry) {
+  const layers = [];
   if (entry.isGroup && Array.isArray(entry.layers)) {
-    // Grupo — igual que el editor general
     const newGroupId = _edNewGroupId();
-    let inserted = 0;
     entry.layers.forEach(ld => {
       const la = edDeserLayer(ld, edOrientation);
       if (!la) return;
       la.groupId = newGroupId;
-      // Parchear onload si es imagen
-      if (la.type === 'image' && la.img) {
-        const prev = la.img.onload;
-        la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
-        if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
-      }
-      window._gcpLayers.push(la);
-      inserted++;
+      layers.push(la);
     });
-    if (!inserted) { edToast('Error al insertar el grupo'); return; }
+    if (!layers.length) { edToast('Error al insertar el grupo'); return; }
   } else {
-    // Objeto individual — igual que el editor general
     const la = edDeserLayer(entry.layerData, edOrientation);
     if (!la) { edToast('Error al insertar el objeto'); return; }
-    // Parchear onload si es imagen
+    layers.push(la);
+  }
+  layers.forEach(la => {
     if (la.type === 'image' && la.img) {
-      const prev = la.img.onload;
-      la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
-      if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
+      const origOnload = la.img.onload;
+      la.img.onload = function() {
+        if (origOnload) origOnload.call(this);
+        _gcpRedraw();
+      };
     }
     window._gcpLayers.push(la);
-  }
-
+  });
   window._gcpSelIdx = window._gcpLayers.length - 1;
-  _gcpRedraw();  // igual que edRedraw() al final en el editor general
+  _gcpRedraw();
   edToast('Objeto insertado en el GIF ✓');
 }
 
@@ -15974,11 +15957,13 @@ function gcpOpen() {
   if (!gcpCanvas) return;
   gcpCtx = gcpCanvas.getContext('2d');
 
-  // Sincronizar dimensiones y posición con editorCanvas
+  // Sincronizar dimensiones con editorCanvas
+  // top siempre 0 — editorCanvasWrap ya está debajo de las barras
+  // editorCanvas tiene top=barHeight dentro del wrap, gcpCanvas no (ocupa todo el wrap)
   gcpCanvas.width  = ec.width;
   gcpCanvas.height = ec.height;
-  gcpCanvas.style.left   = ec.style.left;
-  gcpCanvas.style.top    = ec.style.top;
+  gcpCanvas.style.left   = '0';
+  gcpCanvas.style.top    = ec.style.top;  // mismo top que editorCanvas
   gcpCanvas.style.width  = ec.style.width;
   gcpCanvas.style.height = ec.style.height;
   gcpCanvas.style.display       = 'block';
@@ -15989,7 +15974,7 @@ function gcpOpen() {
   window._gcpLayers = [];
   window._gcpSelIdx = -1;
 
-  // Deseleccionar objetos del editor — igual que al entrar en un modo exclusivo
+  // Deseleccionar objetos del editor
   edSelectedIdx = -1;
   edCloseMenus();
   edRedraw();
@@ -15999,6 +15984,8 @@ function gcpOpen() {
   window._gcpActive = true;
   document.getElementById('editorShell')?.classList.add('gcp-open');
 
+
+
   // Mostrar overlay y bloqueante
   shell.style.display = 'block';
   const blocker = document.getElementById('gcpBlocker');
@@ -16006,7 +15993,11 @@ function gcpOpen() {
     blocker.style.display = 'block';
     if (!blocker._gcpBound) {
       blocker._gcpBound = true;
-      const absorb = e => { e.stopPropagation(); e.preventDefault && e.preventDefault(); };
+      // Solo absorber cuando el bloqueante está visible (display:block)
+      const absorb = e => {
+        if (document.getElementById('gcpBlocker')?.style.display !== 'block') return;
+        e.stopPropagation(); e.preventDefault && e.preventDefault();
+      };
       ['pointerdown','pointermove','pointerup','touchstart','touchmove','touchend','mousedown','click']
         .forEach(ev => blocker.addEventListener(ev, absorb, { passive: false, capture: true }));
     }
@@ -16045,6 +16036,45 @@ function gcpOpen() {
       if (!e.target.closest('[data-gcpmenu]') && !e.target.closest('[id^="gdd-"]'))
         document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
     }, { passive: true });
+
+    // ── Selección, drag, resize en gcpCanvas ──────────────────────────────
+    // Variables de estado propias del GIF (no tocan el estado del editor general)
+    let _gs = null; // { idx, startNx, startNy, startX, startY, startW, startH, startR, mode }
+
+    gcpCanvas.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      const c = edCoords(e);
+      // Buscar capa tocada (de arriba a abajo)
+      let hit = -1;
+      for (let i = window._gcpLayers.length - 1; i >= 0; i--) {
+        const la = window._gcpLayers[i];
+        if (la && la.contains && la.contains(c.nx, c.ny)) { hit = i; break; }
+      }
+      if (hit >= 0) {
+        window._gcpSelIdx = hit;
+        const la = window._gcpLayers[hit];
+        _gs = { idx: hit, startNx: c.nx, startNy: c.ny,
+                startX: la.x, startY: la.y, mode: 'drag' };
+      } else {
+        window._gcpSelIdx = -1;
+        _gs = null;
+      }
+      _gcpRedraw();
+    }, { passive: false });
+
+    gcpCanvas.addEventListener('pointermove', e => {
+      if (!_gs || _gs.mode !== 'drag') return;
+      e.preventDefault();
+      const c = edCoords(e);
+      const la = window._gcpLayers[_gs.idx];
+      if (!la) return;
+      la.x = _gs.startX + (c.nx - _gs.startNx);
+      la.y = _gs.startY + (c.ny - _gs.startNy);
+      _gcpRedraw();
+    }, { passive: false });
+
+    gcpCanvas.addEventListener('pointerup', () => { _gs = null; });
+    gcpCanvas.addEventListener('pointercancel', () => { _gs = null; });
   }
 }
 
