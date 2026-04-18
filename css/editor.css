@@ -1732,3 +1732,101 @@ body.editor-page #appView {
 #ed-vscroll-thumb:hover {
   background: rgba(0,0,0,0.55) !important;
 }
+
+/* ══ EDITOR GIF ══════════════════════════════════════════════════════════════
+   gcpShell flota encima del editor con position:fixed.
+   gcpTopbar y gcpMenuBar copian exactamente los estilos de edTopbar/edMenuBar.
+   gcpCanvas: 100% opacidad (los objetos GIF se ven completos).
+   editorCanvas.gcp-active: 50% opacidad (el editor queda de fondo).
+   ══════════════════════════════════════════════════════════════════════════ */
+#gcpShell {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  pointer-events: none;
+}
+#gcpTopbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 52px;
+  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
+  border-bottom: 2.5px solid var(--black);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 8px;
+  z-index: 510;
+  pointer-events: auto;
+}
+#gcpProjectTitle {
+  font-family: var(--font-display);
+  font-size: 1rem; letter-spacing: 0.5px;
+  color: var(--black);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#gcpTopbar .ed-top-spacer { flex: 1; }
+#gcpCloseBtn {
+  background: none; border: none;
+  font-size: 1.4rem; font-weight: 900;
+  color: var(--black); cursor: pointer;
+  padding: 4px 8px; border-radius: 6px;
+  flex-shrink: 0; line-height: 1;
+  transition: background .15s;
+  margin-left: auto;
+}
+#gcpCloseBtn:active { background: rgba(0,0,0,.1); }
+#gcpMenuBar {
+  position: absolute;
+  top: 52px; left: 0; right: 0;
+  height: 40px;
+  background: var(--white);
+  border-bottom: 1.5px solid var(--gray-300);
+  display: flex;
+  align-items: stretch;
+  z-index: 510;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  overflow: visible;
+  pointer-events: auto;
+}
+#gcpMenuBar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.22), transparent);
+  pointer-events: none;
+  z-index: 509;
+}
+#gcpMenuScroll {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center;
+  overflow-x: auto; overflow-y: visible;
+  scrollbar-width: none;
+  touch-action: pan-x pan-y;
+}
+#gcpMenuScroll::-webkit-scrollbar { display: none; }
+
+/* Canvas GIF: mismo tamaño/posición que editorCanvas, gestionado por JS */
+#gcpCanvas {
+  display: none;
+  position: absolute;
+  touch-action: none;
+  z-index: 10;
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Canvas del editor: al 50% cuando el editor GIF está activo */
+#editorCanvas.gcp-active {
+  opacity: 0.5;
+  pointer-events: none !important;
+  touch-action: none !important;
+}
+
+/* edOptionsPanel por encima del bloqueante cuando GIF activo */
+#editorShell.gcp-open #edOptionsPanel {
+  z-index: 499;
+  position: fixed;
+  top: auto;
+}

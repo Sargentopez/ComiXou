@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v16.73</footer>
+    <footer class="app-version">v16.94</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -169,6 +169,8 @@ Router.register('editor', {
       <!-- CANVAS (fondo, ocupa todo) -->
       <div id="editorCanvasWrap">
         <canvas id="editorCanvas"></canvas>
+        <!-- Canvas GIF: superpuesto, al 100% de opacidad, solo visible en modo animación -->
+        <canvas id="gcpCanvas" style="display:none;position:absolute;touch-action:none;z-index:10;opacity:1;pointer-events:none"></canvas>
         <!-- Barras de navegación PC (solo visibles en no-touch cuando el lienzo no cabe) -->
         <div id="ed-hscroll" style="display:none;position:absolute;bottom:0;left:0;right:12px;height:12px;background:rgba(0,0,0,0.08);cursor:pointer">
           <div id="ed-hscroll-thumb" style="position:absolute;top:2px;height:8px;background:rgba(0,0,0,0.35);border-radius:4px;cursor:grab"></div>
@@ -261,6 +263,8 @@ Router.register('editor', {
             </div>
           </div>
 
+          <div class="ed-menu-sep"></div>
+          <button class="ed-menu-btn" id="edAnimacionesBtn">Animaciones</button>
           <div class="ed-menu-sep"></div>
 
           <!-- DESHACER / REHACER -->
@@ -499,6 +503,46 @@ Router.register('editor', {
         <button id="edCameraFlip" title="Cambiar cámara">🔄</button>
       </div>
     </div>
+    <!-- Bloqueante GIF: cubre toda la pantalla bajo gcpShell para absorber eventos -->
+    <div id="gcpBlocker" style="display:none;position:fixed;inset:0;z-index:498;touch-action:none;-webkit-user-select:none;user-select:none"></div>
+
+    <!-- Editor GIF: mismo diseño que el editor (mismas clases CSS) -->
+    <div id="gcpShell">
+      <div id="gcpTopbar">
+        <span id="gcpProjectTitle">Gif 1</span>
+        <span class="ed-top-spacer"></span>
+        <button class="ed-top-action" id="gcpPreviewBtn" title="Previsualizar">▶</button>
+        <button id="gcpCloseBtn" title="Volver al editor">✕</button>
+      </div>
+      <div id="gcpMenuBar">
+        <button class="ed-menu-pin ed-hide-btn" style="pointer-events:none;opacity:0;flex-shrink:0;visibility:hidden"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem">OCULTAR</b></button>
+        <div class="ed-menu-sep"></div>
+        <div id="gcpMenuScroll">
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" id="gcpBibBtn">Biblioteca ▾</button>
+          </div>
+          <div class="ed-menu-sep"></div>
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-gcpmenu="dibujar">Dibujar ▾</button>
+            <div class="ed-dropdown" id="gdd-dibujar"></div>
+          </div>
+          <div class="ed-menu-sep"></div>
+          <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
+          <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
+          <div class="ed-menu-sep"></div>
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-gcpmenu="capas">Capas ▾</button>
+            <div class="ed-dropdown" id="gdd-capas"></div>
+          </div>
+          <div class="ed-menu-sep"></div>
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-gcpmenu="frames">Frames ▾</button>
+            <div class="ed-dropdown" id="gdd-frames"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="edBrushCursor"></div>
   `,
   init: () => EditorView_init(),

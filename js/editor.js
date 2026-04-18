@@ -14131,6 +14131,7 @@ function EditorView_init(){
   // Solo se previene cuando el usuario está activamente dibujando (edPainting)
   if(edCanvas){
     edCanvas.addEventListener('touchstart', e => {
+      if (window._gcpActive) { e.stopPropagation(); return; }
       // Solo bloquear gesto de borde con 1 dedo — nunca bloquear pinch (2 dedos)
       if(e.touches.length === 1 && ['draw','eraser','fill'].includes(edActiveTool)){
         e.preventDefault();
@@ -14333,6 +14334,7 @@ function EditorView_init(){
     $('edFileGif').click();
     edCloseMenus();
   });
+  $('edAnimacionesBtn')?.addEventListener('click', () => { edCloseMenus(); gcpOpen(); });
   $('edFileGif')?.addEventListener('change', async e => {
     const _f = e.target.files[0]; e.target.value = '';
     if (!_f) return;
@@ -14916,6 +14918,10 @@ function EditorView_init(){
 
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
+    if (window._gcpActive) {
+      const optPanel = document.getElementById('edOptionsPanel');
+      if (!optPanel || !optPanel.contains(e.target)) return;
+    }
     // Ignorar clicks en zona de barra bloqueada (pointer-events:none deja pasar coords)
     const _menuBar2=$('edMenuBar');
     if(_menuBar2 && $('editorShell')?.classList.contains('draw-active')){
@@ -14984,6 +14990,10 @@ function EditorView_init(){
   if(editorShell){
     let _pinchPrev = 0, _pinchMidX = 0, _pinchMidY = 0;
     editorShell.addEventListener('touchstart', e => {
+      if (window._gcpActive) {
+        const optPanel = document.getElementById('edOptionsPanel');
+        if (!optPanel || !optPanel.contains(e.target)) return;
+      }
       if(e.target.closest('#edOptionsPanel')) return; // no interferir con scroll del panel
       if(e.touches.length === 2){
         // No hacer zoom de cámara si hay objeto seleccionado, multiselección activa o modo dibujo
@@ -15627,6 +15637,9 @@ function _bibRenderPanel(panel) {
       const entry = d.folders[fi]?.items[ii];
       if (!entry) return;
 
+      // Si el editor GIF está activo, insertar en el canvas GIF
+      if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
+
       if (entry.isGroup && Array.isArray(entry.layers)) {
         // Insertar grupo: deserializar cada capa con nuevo groupId común
         const newGroupId = _edNewGroupId();
@@ -15817,4 +15830,241 @@ function edInitBiblioteca() {
   $('dd-bib-open')?.addEventListener('pointerup', e => {
     e.stopPropagation(); edCloseMenus(); edBibAbrir();
   });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
+   Copia exacta del patrón del editor general aplicada al canvas GIF.
+   gcpCanvas / gcpCtx = equivalentes de edCanvas / edCtx
+   _gcpLayers = equivalente de edLayers
+   _gcpRedraw = equivalente de edRedraw
+   ═══════════════════════════════════════════════════════════════════════ */
+
+// Variables globales GCP — mismo patrón que: let edCanvas, edCtx;
+let gcpCanvas = null;
+let gcpCtx    = null;
+
+// Lista de capas GIF — equivalente a edLayers
+window._gcpLayers = [];
+window._gcpSelIdx = -1;
+
+// _gcpRedraw — copia de edRedraw usando gcpCanvas/gcpCtx/_gcpLayers
+// Misma cámara, mismo orden de render, mismo patrón exacto
+function _gcpRedraw() {
+  if (!gcpCtx || !gcpCanvas) return;
+  const cw = gcpCanvas.width, ch = gcpCanvas.height;
+  if (!cw || !ch) return;
+
+  gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
+  gcpCtx.clearRect(0, 0, cw, ch);
+
+  // Misma cámara que edRedraw
+  gcpCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+
+  // Mismo orden de render que edRedraw
+  window._gcpLayers.forEach((l, i) => {
+    if (!l || typeof l.draw !== 'function') return;
+    if (l.type === 'image') {
+      l.draw(gcpCtx, gcpCanvas);
+    } else if (l.type === 'draw') {
+      gcpCtx.globalAlpha = l.opacity ?? 1;
+      l.draw(gcpCtx);
+      gcpCtx.globalAlpha = 1;
+    } else if (l.type === 'stroke') {
+      gcpCtx.globalAlpha = l.opacity ?? 1;
+      l.draw(gcpCtx);
+      gcpCtx.globalAlpha = 1;
+    } else if (l.type === 'shape' || l.type === 'line') {
+      gcpCtx.globalAlpha = l.opacity ?? 1;
+      l.draw(gcpCtx);
+      gcpCtx.globalAlpha = 1;
+    } else if (l.type === 'gif') {
+      l.draw(gcpCtx);
+    } else if (l.type === 'text' || l.type === 'bubble') {
+      l.draw(gcpCtx, gcpCanvas);
+    }
+  });
+
+  gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+// Dropdown de capas GIF
+function _gcpRenderLayersDropdown(dd) {
+  dd.innerHTML = '';
+  if (!window._gcpLayers.length) {
+    const d = document.createElement('div');
+    d.className = 'ed-dropdown-item';
+    d.style.color = 'var(--gray-400)'; d.style.fontSize = '0.78rem'; d.style.cursor = 'default';
+    d.textContent = 'Sin capas — inserta desde Biblioteca';
+    dd.appendChild(d); return;
+  }
+  const tipos = { image:'🖼', shape:'⬛', line:'╱', stroke:'✏️', draw:'🖌️', text:'T', bubble:'💬', gif:'🎬' };
+  window._gcpLayers.forEach((la, idx) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;width:100%';
+    const btn = document.createElement('button');
+    btn.className = 'ed-dropdown-item' + (idx === window._gcpSelIdx ? ' active' : '');
+    btn.style.cssText = 'flex:1;text-align:left';
+    btn.textContent = (tipos[la.type] || '•') + ' Capa ' + (idx + 1);
+    btn.addEventListener('click', () => { window._gcpSelIdx = idx; _gcpRenderLayersDropdown(dd); _gcpRedraw(); });
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.style.cssText = 'background:none;border:none;color:#c00;cursor:pointer;padding:0 6px;flex-shrink:0';
+    del.addEventListener('click', e => {
+      e.stopPropagation();
+      window._gcpLayers.splice(idx, 1);
+      window._gcpSelIdx = Math.min(window._gcpSelIdx, window._gcpLayers.length - 1);
+      _gcpRenderLayersDropdown(dd); _gcpRedraw();
+    });
+    row.appendChild(btn); row.appendChild(del); dd.appendChild(row);
+  });
+}
+
+// gcpInsertFromBib — copia EXACTA del código de inserción de la biblioteca
+// en el editor general, pero usando _gcpLayers y _gcpRedraw en lugar de
+// edLayers y edRedraw. Para imágenes: parchear onload para llamar _gcpRedraw.
+function gcpInsertFromBib(entry) {
+  if (entry.isGroup && Array.isArray(entry.layers)) {
+    // Grupo — igual que el editor general
+    const newGroupId = _edNewGroupId();
+    let inserted = 0;
+    entry.layers.forEach(ld => {
+      const la = edDeserLayer(ld, edOrientation);
+      if (!la) return;
+      la.groupId = newGroupId;
+      // Parchear onload si es imagen
+      if (la.type === 'image' && la.img) {
+        const prev = la.img.onload;
+        la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
+        if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
+      }
+      window._gcpLayers.push(la);
+      inserted++;
+    });
+    if (!inserted) { edToast('Error al insertar el grupo'); return; }
+  } else {
+    // Objeto individual — igual que el editor general
+    const la = edDeserLayer(entry.layerData, edOrientation);
+    if (!la) { edToast('Error al insertar el objeto'); return; }
+    // Parchear onload si es imagen
+    if (la.type === 'image' && la.img) {
+      const prev = la.img.onload;
+      la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
+      if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
+    }
+    window._gcpLayers.push(la);
+  }
+
+  window._gcpSelIdx = window._gcpLayers.length - 1;
+  _gcpRedraw();  // igual que edRedraw() al final en el editor general
+  edToast('Objeto insertado en el GIF ✓');
+}
+
+// gcpOpen — inicializa gcpCanvas y gcpCtx igual que el editor inicializa
+// edCanvas y edCtx en EditorView_init
+function gcpOpen() {
+  const shell = document.getElementById('gcpShell');
+  const ec    = document.getElementById('editorCanvas');
+  if (!shell || !ec) return;
+
+  // Inicializar gcpCanvas y gcpCtx — igual que:
+  //   edCanvas = $('editorCanvas');
+  //   edCtx    = edCanvas.getContext('2d');
+  gcpCanvas = document.getElementById('gcpCanvas');
+  if (!gcpCanvas) return;
+  gcpCtx = gcpCanvas.getContext('2d');
+
+  // Sincronizar dimensiones y posición con editorCanvas
+  gcpCanvas.width  = ec.width;
+  gcpCanvas.height = ec.height;
+  gcpCanvas.style.left   = ec.style.left;
+  gcpCanvas.style.top    = ec.style.top;
+  gcpCanvas.style.width  = ec.style.width;
+  gcpCanvas.style.height = ec.style.height;
+  gcpCanvas.style.display       = 'block';
+  gcpCanvas.style.pointerEvents = 'auto';
+
+  // Limpiar y resetear capas
+  gcpCtx.clearRect(0, 0, gcpCanvas.width, gcpCanvas.height);
+  window._gcpLayers = [];
+  window._gcpSelIdx = -1;
+
+  // Deseleccionar objetos del editor — igual que al entrar en un modo exclusivo
+  edSelectedIdx = -1;
+  edCloseMenus();
+  edRedraw();
+
+  // Bloquear editor general
+  ec.classList.add('gcp-active');
+  window._gcpActive = true;
+  document.getElementById('editorShell')?.classList.add('gcp-open');
+
+  // Mostrar overlay y bloqueante
+  shell.style.display = 'block';
+  const blocker = document.getElementById('gcpBlocker');
+  if (blocker) {
+    blocker.style.display = 'block';
+    if (!blocker._gcpBound) {
+      blocker._gcpBound = true;
+      const absorb = e => { e.stopPropagation(); e.preventDefault && e.preventDefault(); };
+      ['pointerdown','pointermove','pointerup','touchstart','touchmove','touchend','mousedown','click']
+        .forEach(ev => blocker.addEventListener(ev, absorb, { passive: false, capture: true }));
+    }
+  }
+
+  // Registrar botones (solo primera vez)
+  if (!shell._gcpBound) {
+    shell._gcpBound = true;
+
+    document.getElementById('gcpCloseBtn')?.addEventListener('click', gcpClose);
+    document.getElementById('gcpPreviewBtn')?.addEventListener('click', gcpClose);
+
+    document.getElementById('gcpBibBtn')?.addEventListener('click', () => {
+      const panel = $('edOptionsPanel');
+      if (panel) _bibRenderPanel(panel);
+    });
+
+    // Menús GIF
+    document.querySelectorAll('[data-gcpmenu]').forEach(btn => {
+      btn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        const id = btn.dataset.gcpmenu;
+        const dd = document.getElementById('gdd-' + id);
+        if (!dd) return;
+        const open = dd.classList.contains('open');
+        document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
+        if (!open) {
+          if (id === 'capas') _gcpRenderLayersDropdown(dd);
+          dd.classList.add('open');
+        }
+      });
+    });
+
+    document.addEventListener('pointerdown', e => {
+      if (!window._gcpActive) return;
+      if (!e.target.closest('[data-gcpmenu]') && !e.target.closest('[id^="gdd-"]'))
+        document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
+    }, { passive: true });
+  }
+}
+
+// gcpClose
+function gcpClose() {
+  // Cerrar panel de biblioteca si está abierto
+  const panel = $('edOptionsPanel');
+  if (panel && panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    panel.innerHTML = '';
+    delete panel.dataset.mode;
+    requestAnimationFrame(edFitCanvas);
+  }
+  if (gcpCanvas) { gcpCanvas.style.display = 'none'; gcpCanvas.style.pointerEvents = 'none'; }
+  const shell = document.getElementById('gcpShell');
+  if (shell) shell.style.display = 'none';
+  // Restaurar editor
+  window._gcpActive = false;
+  gcpCanvas = null; gcpCtx = null;
+  document.getElementById('editorShell')?.classList.remove('gcp-open');
+  document.getElementById('editorCanvas')?.classList.remove('gcp-active');
+  document.getElementById('gcpBlocker')?.style && (document.getElementById('gcpBlocker').style.display = 'none');
 }
