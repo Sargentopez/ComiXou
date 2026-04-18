@@ -15866,6 +15866,7 @@ function _gcpRedraw() {
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
   gcpCtx.clearRect(0, 0, cw, ch);
   gcpCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+  // Dibujar capas — mismo orden que edRedraw
   window._gcpLayers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
     if (l.type === 'image' || l.type === 'gif') {
@@ -15878,7 +15879,50 @@ function _gcpRedraw() {
       gcpCtx.globalAlpha = 1;
     }
   });
+  // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
+  _gcpDrawSel();
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+// Copia de edDrawSel adaptada al canvas GIF
+function _gcpDrawSel() {
+  const idx = window._gcpSelIdx;
+  if (idx < 0 || idx >= window._gcpLayers.length) return;
+  const la = window._gcpLayers[idx];
+  if (!la) return;
+  const pw = edPageW(), ph = edPageH();
+  const z = edCamera.z;
+  const lw = 1 / z;
+  const hr = 6 / z;
+  const hrRot = 8 / z;
+  const cx = edMarginX() + la.x * pw;
+  const cy = edMarginY() + la.y * ph;
+  const w = la.width * pw;
+  const h = la.height * ph;
+  const rot = (la.rotation || 0) * Math.PI / 180;
+  gcpCtx.save();
+  gcpCtx.translate(cx, cy);
+  gcpCtx.rotate(rot);
+  gcpCtx.strokeStyle = '#1a8cff';
+  gcpCtx.lineWidth = lw;
+  gcpCtx.setLineDash([5/z, 3/z]);
+  gcpCtx.strokeRect(-w/2, -h/2, w, h);
+  gcpCtx.setLineDash([]);
+  // Handles de escala (esquinas + centros de lados)
+  const corners = [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
+  corners.forEach(([hx, hy]) => {
+    gcpCtx.beginPath(); gcpCtx.arc(hx, hy, hr, 0, Math.PI * 2);
+    gcpCtx.fillStyle = '#fff'; gcpCtx.fill();
+    gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw * 1.5; gcpCtx.stroke();
+  });
+  // Handle de rotación
+  const rotY = -h/2 - 28/z;
+  gcpCtx.beginPath(); gcpCtx.moveTo(0, -h/2); gcpCtx.lineTo(0, rotY + hrRot);
+  gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw; gcpCtx.stroke();
+  gcpCtx.beginPath(); gcpCtx.arc(0, rotY, hrRot, 0, Math.PI * 2);
+  gcpCtx.fillStyle = '#1a8cff'; gcpCtx.fill();
+  gcpCtx.strokeStyle = '#fff'; gcpCtx.lineWidth = lw * 1.5; gcpCtx.stroke();
+  gcpCtx.restore();
 }
 
 // Dropdown de capas GIF
@@ -16039,39 +16083,102 @@ function gcpOpen() {
         document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
     }, { passive: true });
 
-    // ── Selección, drag, resize en gcpCanvas ──────────────────────────────
-    // Variables de estado propias del GIF (no tocan el estado del editor general)
-    let _gs = null; // { idx, startNx, startNy, startX, startY, startW, startH, startR, mode }
+    // ── Selección, drag, resize, rotate en gcpCanvas ────────────────────
+    let _gs = null;
 
     gcpCanvas.addEventListener('pointerdown', e => {
       e.preventDefault();
       const c = edCoords(e);
-      // Buscar capa tocada (de arriba a abajo)
+      const idx = window._gcpSelIdx;
+      // Comprobar handles si hay selección activa
+      if (idx >= 0 && idx < window._gcpLayers.length) {
+        const la = window._gcpLayers[idx];
+        const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+        const cx = edMarginX() + la.x * pw, cy = edMarginY() + la.y * ph;
+        const w = la.width * pw, h = la.height * ph;
+        const rot = (la.rotation || 0) * Math.PI / 180;
+        const cos = Math.cos(rot), sin = Math.sin(rot);
+        // Coordenadas en workspace
+        const wx = c.px, wy = c.py;
+        // Rotar punto al espacio local de la capa
+        const dx = wx - cx, dy = wy - cy;
+        const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
+        const hrPx = 6 / z;
+        // Handle rotación
+        const rotY = -h/2 - 28/z;
+        const rdx = wx - (cx + (-sin) * (h/2 + 28/z)), rdy = wy - (cy + cos * (h/2 + 28/z));
+        // Verificar handle rotación
+        const rotHx = cx - sin * (h/2 + 28/z), rotHy = cy + cos * (h/2 + 28/z);
+        // Calcular handle rotación correctamente
+        const rotHdx = cos * 0 - sin * rotY, rotHdy = sin * 0 + cos * rotY;
+        const rotHwx = cx + rotHdx, rotHwy = cy + rotHdy;
+        if (Math.hypot(wx - rotHwx, wy - rotHwy) < (8/z) * 1.5) {
+          _gs = { mode: 'rotate', idx, cx, cy,
+                  startAngle: Math.atan2(wy - cy, wx - cx),
+                  startRot: la.rotation || 0 };
+          return;
+        }
+        // Handles de escala
+        const hpts = [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
+        for (const [hx, hy] of hpts) {
+          const hwx = cx + hx*cos - hy*sin, hwy = cy + hx*sin + hy*cos;
+          if (Math.hypot(wx - hwx, wy - hwy) < hrPx * 2) {
+            _gs = { mode: 'resize', idx,
+                    startNx: c.nx, startNy: c.ny,
+                    startX: la.x, startY: la.y,
+                    startW: la.width, startH: la.height,
+                    hx, hy, cx: la.x, cy: la.y };
+            return;
+          }
+        }
+        // Drag si está dentro del bbox
+        if (Math.abs(lx) <= w/2 + hrPx && Math.abs(ly) <= h/2 + hrPx) {
+          _gs = { mode: 'drag', idx,
+                  startNx: c.nx, startNy: c.ny,
+                  startX: la.x, startY: la.y };
+          return;
+        }
+      }
+      // Buscar capa tocada
       let hit = -1;
       for (let i = window._gcpLayers.length - 1; i >= 0; i--) {
         const la = window._gcpLayers[i];
         if (la && la.contains && la.contains(c.nx, c.ny)) { hit = i; break; }
       }
+      window._gcpSelIdx = hit;
       if (hit >= 0) {
-        window._gcpSelIdx = hit;
         const la = window._gcpLayers[hit];
-        _gs = { idx: hit, startNx: c.nx, startNy: c.ny,
-                startX: la.x, startY: la.y, mode: 'drag' };
+        _gs = { mode: 'drag', idx: hit,
+                startNx: c.nx, startNy: c.ny,
+                startX: la.x, startY: la.y };
       } else {
-        window._gcpSelIdx = -1;
         _gs = null;
       }
       _gcpRedraw();
     }, { passive: false });
 
     gcpCanvas.addEventListener('pointermove', e => {
-      if (!_gs || _gs.mode !== 'drag') return;
+      if (!_gs) return;
       e.preventDefault();
       const c = edCoords(e);
       const la = window._gcpLayers[_gs.idx];
       if (!la) return;
-      la.x = _gs.startX + (c.nx - _gs.startNx);
-      la.y = _gs.startY + (c.ny - _gs.startNy);
+      if (_gs.mode === 'drag') {
+        la.x = _gs.startX + (c.nx - _gs.startNx);
+        la.y = _gs.startY + (c.ny - _gs.startNy);
+      } else if (_gs.mode === 'rotate') {
+        const angle = Math.atan2(c.py - _gs.cy, c.px - _gs.cx);
+        la.rotation = _gs.startRot + (angle - _gs.startAngle) * 180 / Math.PI;
+      } else if (_gs.mode === 'resize') {
+        const dnx = c.nx - _gs.startNx, dny = c.ny - _gs.startNy;
+        const pw = edPageW(), ph = edPageH();
+        // Escalar proporcionalmente desde la esquina opuesta
+        const scaleX = 1 + dnx * pw / (la.width * pw) * Math.sign(_gs.hx || 1);
+        const scaleY = 1 + dny * ph / (la.height * ph) * Math.sign(_gs.hy || 1);
+        const scale = Math.max(0.05, _gs.hx !== 0 ? Math.abs(scaleX) : Math.abs(scaleY));
+        if (_gs.hx !== 0) la.width  = Math.max(0.01, _gs.startW * scale);
+        if (_gs.hy !== 0) la.height = Math.max(0.01, _gs.startH * scale);
+      }
       _gcpRedraw();
     }, { passive: false });
 
