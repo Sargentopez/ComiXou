@@ -12763,7 +12763,9 @@ function edDeserLayer(d, pageOrientation){
         const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
         const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
         const _natH = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
-        if(!d.height || Math.abs(l.height / _natH - 1) > 0.5){
+        // Solo ajustar height si NO se guardó explícitamente (imagen nueva sin height)
+        // Si d.height existe, respetar siempre el valor guardado (puede ser no proporcional)
+        if(!d.height) {
           l.height = _natH;
         }
         edRedraw();
