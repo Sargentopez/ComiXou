@@ -15392,7 +15392,8 @@ function edBibGuardar() {
     };
   }
 
-  const realFolders = data.folders;
+  // Excluir carpeta Animaciones — los objetos normales nunca van ahí
+  const realFolders = data.folders.filter(f => f.name !== 'Animaciones');
   if (realFolders.length > 1) {
     _bibShowFolderPicker(entry, data);
   } else {
@@ -15474,7 +15475,7 @@ function _bibShowFolderPicker(entry, data) {
   title.textContent = '¿En qué carpeta?';
   pop.appendChild(title);
 
-  data.folders.forEach(folder => {
+  data.folders.filter(f => f.name !== 'Animaciones').forEach(folder => {
     const btn = document.createElement('button');
     btn.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 14px;border:none;background:transparent;font-size:.85rem;cursor:pointer;color:var(--gray-800,#222)';
     btn.textContent = '📁 ' + folder.name;
