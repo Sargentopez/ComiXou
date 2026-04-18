@@ -14929,7 +14929,13 @@ function EditorView_init(){
   window._edDocDownFn = e => {
     if (window._gcpActive) {
       const optPanel = document.getElementById('edOptionsPanel');
-      if (!optPanel || !optPanel.contains(e.target)) return;
+      if (optPanel && optPanel.contains(e.target)) {
+        // Dejar pasar — es la biblioteca del GIF
+      } else {
+        // Redirigir al handler del canvas GIF
+        _gcpHandleDown(e);
+        return;
+      }
     }
     // Ignorar clicks en zona de barra bloqueada (pointer-events:none deja pasar coords)
     const _menuBar2=$('edMenuBar');
@@ -14985,6 +14991,14 @@ function EditorView_init(){
 
   };
   document.addEventListener('pointerdown', window._edDocDownFn);
+
+  // Handlers de pointermove/pointerup para el canvas GIF
+  // Registrados en document igual que los del editor general
+  window._gcpMoveFn = e => { if (window._gcpActive) _gcpHandleMove(e); };
+  window._gcpUpFn   = e => { if (window._gcpActive) _gcpHandleUp(e); };
+  document.addEventListener('pointermove', window._gcpMoveFn, { passive: false });
+  document.addEventListener('pointerup',   window._gcpUpFn);
+  document.addEventListener('pointercancel', window._gcpUpFn);
 
 
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
@@ -15259,7 +15273,11 @@ function _bibLoad() {
     oldItems = JSON.parse(localStorage.getItem(_bibKey()) || '[]');
     if (!Array.isArray(oldItems)) oldItems = [];
   } catch(e) {}
-  return { folders: [{ id: '__root__', name: 'General', items: oldItems }] };
+  const defaultData = { folders: [
+    { id: '__root__', name: 'General', items: oldItems },
+    { id: '__anim__', name: 'Animaciones', items: [] }
+  ]};
+  return defaultData;
 }
 function _bibSave(data) {
   try { localStorage.setItem(_bibKey(), JSON.stringify(data)); }
@@ -15319,6 +15337,16 @@ function _bibThumb(la) {
     _lyDrawThumb(thumb, la);
   }
   return thumb.toDataURL('image/png');
+}
+
+// ── Helper: obtener o crear carpeta Animaciones ──────────────────
+function _bibGetAnimFolder(data) {
+  let folder = data.folders.find(f => f.name === 'Animaciones');
+  if (!folder) {
+    folder = { id: '__anim__', name: 'Animaciones', items: [] };
+    data.folders.push(folder);
+  }
+  return folder;
 }
 
 // ── Guardar objeto o grupo ────────────────────────────────────────
@@ -15841,6 +15869,111 @@ function edInitBiblioteca() {
   });
 }
 
+// ── Estado de transformación del canvas GIF ──────────────────────────────
+let _gs = null;
+
+// _gcpHandleDown — equivalente al bloque de selección de _edDocDownFn
+// Registrado en document igual que _edDocDownFn (sin capture)
+function _gcpHandleDown(e) {
+  // Verificar que el tap está dentro del gcpCanvas
+  const gc = document.getElementById('gcpCanvas');
+  if (!gc) return;
+  const rect = gc.getBoundingClientRect();
+  const src2 = e.touches ? e.touches[0] : e;
+  const clientX = src2 ? src2.clientX : e.clientX;
+  const clientY = src2 ? src2.clientY : e.clientY;
+  if (clientX < rect.left || clientX > rect.right ||
+      clientY < rect.top  || clientY > rect.bottom) return;
+
+  const c = edCoords(e);
+  const idx = window._gcpSelIdx;
+
+  // Comprobar handles si hay capa seleccionada
+  if (idx >= 0 && idx < window._gcpLayers.length) {
+    const la = window._gcpLayers[idx];
+    const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+    const cx = edMarginX() + la.x * pw, cy = edMarginY() + la.y * ph;
+    const w = la.width * pw, h = la.height * ph;
+    const rot = (la.rotation || 0) * Math.PI / 180;
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    const wx = c.px, wy = c.py;
+    const hrPx = 10 / z;
+
+    // Handle rotación (círculo azul encima del bbox)
+    const rotLx = 0, rotLy = -(h/2 + 28/z);
+    const rotWx = cx + rotLx * cos - rotLy * sin;
+    const rotWy = cy + rotLx * sin + rotLy * cos;
+    if (Math.hypot(wx - rotWx, wy - rotWy) < hrPx) {
+      _gs = { mode: 'rotate', idx, cx, cy,
+              startAngle: Math.atan2(wy - cy, wx - cx),
+              startRot: la.rotation || 0 };
+      return;
+    }
+
+    // Handles de escala (8 puntos)
+    const hpts = [[-w/2,-h/2,'tl'],[w/2,-h/2,'tr'],[-w/2,h/2,'bl'],[w/2,h/2,'br'],
+                  [0,-h/2,'tc'],[0,h/2,'bc'],[-w/2,0,'ml'],[w/2,0,'mr']];
+    for (const [hx, hy, hname] of hpts) {
+      const hwx = cx + hx*cos - hy*sin, hwy = cy + hx*sin + hy*cos;
+      if (Math.hypot(wx - hwx, wy - hwy) < hrPx) {
+        _gs = { mode: 'resize', idx, hname, hx, hy,
+                startNx: c.nx, startNy: c.ny,
+                startW: la.width, startH: la.height,
+                startX: la.x, startY: la.y };
+        return;
+      }
+    }
+
+    // Dentro del bbox → drag
+    const dx = wx - cx, dy = wy - cy;
+    const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
+    if (Math.abs(lx) <= w/2 + hrPx && Math.abs(ly) <= h/2 + hrPx) {
+      _gs = { mode: 'drag', idx,
+              startNx: c.nx, startNy: c.ny,
+              startX: la.x, startY: la.y };
+      return;
+    }
+  }
+
+  // Buscar capa tocada (de arriba a abajo)
+  let hit = -1;
+  for (let i = window._gcpLayers.length - 1; i >= 0; i--) {
+    const la = window._gcpLayers[i];
+    if (la && la.contains && la.contains(c.nx, c.ny)) { hit = i; break; }
+  }
+  window._gcpSelIdx = hit;
+  if (hit >= 0) {
+    const la = window._gcpLayers[hit];
+    _gs = { mode: 'drag', idx: hit,
+            startNx: c.nx, startNy: c.ny,
+            startX: la.x, startY: la.y };
+  } else {
+    _gs = null;
+  }
+  _gcpRedraw();
+}
+
+function _gcpHandleMove(e) {
+  if (!_gs) return;
+  const c = edCoords(e);
+  const la = window._gcpLayers[_gs.idx];
+  if (!la) return;
+  if (_gs.mode === 'drag') {
+    la.x = _gs.startX + (c.nx - _gs.startNx);
+    la.y = _gs.startY + (c.ny - _gs.startNy);
+  } else if (_gs.mode === 'rotate') {
+    const angle = Math.atan2(c.py - _gs.cy, c.px - _gs.cx);
+    la.rotation = _gs.startRot + (angle - _gs.startAngle) * 180 / Math.PI;
+  } else if (_gs.mode === 'resize') {
+    const dnx = c.nx - _gs.startNx, dny = c.ny - _gs.startNy;
+    if (_gs.hx !== 0) la.width  = Math.max(0.02, _gs.startW + dnx * Math.sign(_gs.hx));
+    if (_gs.hy !== 0) la.height = Math.max(0.02, _gs.startH + dny * Math.sign(_gs.hy));
+  }
+  _gcpRedraw();
+}
+
+function _gcpHandleUp() { _gs = null; }
+
 /* ═══════════════════════════════════════════════════════════════════════
    MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
    Copia exacta del patrón del editor general aplicada al canvas GIF.
@@ -16039,18 +16172,10 @@ function gcpOpen() {
     blocker.style.display = 'block';
     if (!blocker._gcpBound) {
       blocker._gcpBound = true;
-      // Solo absorber cuando el bloqueante está visible Y el evento no va al gcpCanvas
-      const absorb = e => {
-        if (document.getElementById('gcpBlocker')?.style.display !== 'block') return;
-        const gc = document.getElementById('gcpCanvas');
-        if (gc && (e.target === gc || gc.contains(e.target))) return;
-        // También dejar pasar eventos del edOptionsPanel (biblioteca)
-        const op = document.getElementById('edOptionsPanel');
-        if (op && op.contains(e.target)) return;
-        e.stopPropagation(); e.preventDefault && e.preventDefault();
-      };
-      ['pointerdown','pointermove','pointerup','touchstart','touchmove','touchend','mousedown','click']
-        .forEach(ev => blocker.addEventListener(ev, absorb, { passive: false, capture: true }));
+      // El bloqueante es solo visual — los eventos los gestiona _edDocDownFn/_gcpDocDownFn
+      // Solo bloquear touchstart para evitar scroll en Android
+      blocker.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+      blocker.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
     }
   }
 
@@ -16088,113 +16213,13 @@ function gcpOpen() {
         document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
     }, { passive: true });
 
-    // ── Selección, drag, resize, rotate en gcpCanvas ────────────────────
-    let _gs = null;
-
-    gcpCanvas.addEventListener('pointerdown', e => {
-      e.preventDefault();
-      const c = edCoords(e);
-      const idx = window._gcpSelIdx;
-      // Comprobar handles si hay selección activa
-      if (idx >= 0 && idx < window._gcpLayers.length) {
-        const la = window._gcpLayers[idx];
-        const pw = edPageW(), ph = edPageH(), z = edCamera.z;
-        const cx = edMarginX() + la.x * pw, cy = edMarginY() + la.y * ph;
-        const w = la.width * pw, h = la.height * ph;
-        const rot = (la.rotation || 0) * Math.PI / 180;
-        const cos = Math.cos(rot), sin = Math.sin(rot);
-        // Coordenadas en workspace
-        const wx = c.px, wy = c.py;
-        // Rotar punto al espacio local de la capa
-        const dx = wx - cx, dy = wy - cy;
-        const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
-        const hrPx = 6 / z;
-        // Handle rotación
-        const rotY = -h/2 - 28/z;
-        const rdx = wx - (cx + (-sin) * (h/2 + 28/z)), rdy = wy - (cy + cos * (h/2 + 28/z));
-        // Verificar handle rotación
-        const rotHx = cx - sin * (h/2 + 28/z), rotHy = cy + cos * (h/2 + 28/z);
-        // Calcular handle rotación correctamente
-        const rotHdx = cos * 0 - sin * rotY, rotHdy = sin * 0 + cos * rotY;
-        const rotHwx = cx + rotHdx, rotHwy = cy + rotHdy;
-        if (Math.hypot(wx - rotHwx, wy - rotHwy) < (8/z) * 1.5) {
-          _gs = { mode: 'rotate', idx, cx, cy,
-                  startAngle: Math.atan2(wy - cy, wx - cx),
-                  startRot: la.rotation || 0 };
-          return;
-        }
-        // Handles de escala
-        const hpts = [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
-        for (const [hx, hy] of hpts) {
-          const hwx = cx + hx*cos - hy*sin, hwy = cy + hx*sin + hy*cos;
-          if (Math.hypot(wx - hwx, wy - hwy) < hrPx * 2) {
-            _gs = { mode: 'resize', idx,
-                    startNx: c.nx, startNy: c.ny,
-                    startX: la.x, startY: la.y,
-                    startW: la.width, startH: la.height,
-                    hx, hy, cx: la.x, cy: la.y };
-            return;
-          }
-        }
-        // Drag si está dentro del bbox
-        if (Math.abs(lx) <= w/2 + hrPx && Math.abs(ly) <= h/2 + hrPx) {
-          _gs = { mode: 'drag', idx,
-                  startNx: c.nx, startNy: c.ny,
-                  startX: la.x, startY: la.y };
-          return;
-        }
-      }
-      // Buscar capa tocada
-      let hit = -1;
-      for (let i = window._gcpLayers.length - 1; i >= 0; i--) {
-        const la = window._gcpLayers[i];
-        if (la && la.contains && la.contains(c.nx, c.ny)) { hit = i; break; }
-      }
-      window._gcpSelIdx = hit;
-      if (hit >= 0) {
-        const la = window._gcpLayers[hit];
-        _gs = { mode: 'drag', idx: hit,
-                startNx: c.nx, startNy: c.ny,
-                startX: la.x, startY: la.y };
-      } else {
-        _gs = null;
-      }
-      _gcpRedraw();
-    }, { passive: false });
-
-    gcpCanvas.addEventListener('pointermove', e => {
-      if (!_gs) return;
-      e.preventDefault();
-      const c = edCoords(e);
-      const la = window._gcpLayers[_gs.idx];
-      if (!la) return;
-      if (_gs.mode === 'drag') {
-        la.x = _gs.startX + (c.nx - _gs.startNx);
-        la.y = _gs.startY + (c.ny - _gs.startNy);
-      } else if (_gs.mode === 'rotate') {
-        const angle = Math.atan2(c.py - _gs.cy, c.px - _gs.cx);
-        la.rotation = _gs.startRot + (angle - _gs.startAngle) * 180 / Math.PI;
-      } else if (_gs.mode === 'resize') {
-        const dnx = c.nx - _gs.startNx, dny = c.ny - _gs.startNy;
-        const pw = edPageW(), ph = edPageH();
-        // Escalar proporcionalmente desde la esquina opuesta
-        const scaleX = 1 + dnx * pw / (la.width * pw) * Math.sign(_gs.hx || 1);
-        const scaleY = 1 + dny * ph / (la.height * ph) * Math.sign(_gs.hy || 1);
-        const scale = Math.max(0.05, _gs.hx !== 0 ? Math.abs(scaleX) : Math.abs(scaleY));
-        if (_gs.hx !== 0) la.width  = Math.max(0.01, _gs.startW * scale);
-        if (_gs.hy !== 0) la.height = Math.max(0.01, _gs.startH * scale);
-      }
-      _gcpRedraw();
-    }, { passive: false });
-
-    gcpCanvas.addEventListener('pointerup', () => { _gs = null; });
-    gcpCanvas.addEventListener('pointercancel', () => { _gs = null; });
+    // Los handlers de selección/drag/rotate/resize se registran en document
+    // igual que _edDocDownFn — ver _gcpHandleDown/Move/Up más abajo
   }
 }
 
 // gcpClose
-function gcpClose() {
-  // Cerrar panel de biblioteca si está abierto
+function _gcpDoClose() {
   const panel = $('edOptionsPanel');
   if (panel && panel.classList.contains('open')) {
     panel.classList.remove('open');
@@ -16205,10 +16230,99 @@ function gcpClose() {
   if (gcpCanvas) { gcpCanvas.style.display = 'none'; gcpCanvas.style.pointerEvents = 'none'; }
   const shell = document.getElementById('gcpShell');
   if (shell) shell.style.display = 'none';
-  // Restaurar editor
   window._gcpActive = false;
+  _gs = null;
   gcpCanvas = null; gcpCtx = null;
   document.getElementById('editorShell')?.classList.remove('gcp-open');
   document.getElementById('editorCanvas')?.classList.remove('gcp-active');
-  document.getElementById('gcpBlocker')?.style && (document.getElementById('gcpBlocker').style.display = 'none');
+  const blocker = document.getElementById('gcpBlocker');
+  if (blocker) blocker.style.display = 'none';
+}
+
+function gcpClose() {
+  if (!window._gcpLayers || !window._gcpLayers.length) { _gcpDoClose(); return; }
+  // Cambiar botón cancelar antes de abrir el confirm
+  const cancelBtn = $('edConfirmCancel');
+  const origText = cancelBtn ? cancelBtn.textContent : 'Cancelar';
+  if (cancelBtn) cancelBtn.textContent = 'No guardar';
+  edConfirm('¿Guardar la animación en la Biblioteca?', () => {
+    _gcpSaveToLib(() => _gcpDoClose());
+  }, 'Guardar');
+  // Restaurar texto cancelar y cerrar sin guardar al pulsar "No guardar"
+  if (cancelBtn) {
+    const onCancel = () => {
+      cancelBtn.textContent = origText;
+      cancelBtn.removeEventListener('click', onCancel);
+      _gcpDoClose();
+    };
+    cancelBtn.addEventListener('click', onCancel);
+  }
+}
+
+function _gcpSaveToLib(onDone) {
+  if (!window._gcpLayers.length || !gcpCanvas || !gcpCtx) { onDone && onDone(); return; }
+  const loadGifJs = (cb) => {
+    if (window.GIF) { cb(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js';
+    s.onload = cb;
+    s.onerror = () => { edToast('No se pudo cargar gif.js'); onDone && onDone(); };
+    document.head.appendChild(s);
+  };
+  loadGifJs(() => {
+    // Renderizar el frame actual recortado al área de página
+    // Coordenadas del área de página en el canvas (aplicando la cámara)
+    const pageW = Math.round(edPageW()), pageH = Math.round(edPageH());
+    const srcX = Math.round(edMarginX() * edCamera.z + edCamera.x);
+    const srcY = Math.round(edMarginY() * edCamera.z + edCamera.y);
+    const srcW = Math.round(edPageW()  * edCamera.z);
+    const srcH = Math.round(edPageH()  * edCamera.z);
+    const tmp = document.createElement('canvas');
+    tmp.width = pageW; tmp.height = pageH;
+    const tc = tmp.getContext('2d');
+    tc.fillStyle = '#ffffff';
+    tc.fillRect(0, 0, pageW, pageH);
+    if (gcpCanvas && srcW > 0 && srcH > 0)
+      tc.drawImage(gcpCanvas, srcX, srcY, srcW, srcH, 0, 0, pageW, pageH);
+
+    const workerSrc  = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js';
+    const workerCode = 'self.importScripts(' + JSON.stringify(workerSrc) + ')';
+    const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+    const workerURL  = URL.createObjectURL(workerBlob);
+    const gif = new window.GIF({ workers:2, quality:10, width:pageW, height:pageH,
+                                  workerScript:workerURL, repeat:0 });
+    gif.addFrame(tmp, { delay:100, copy:true });
+    gif.on('finished', blob => {
+      URL.revokeObjectURL(workerURL);
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const dataUrl = ev.target.result;
+        // Miniatura
+        const S = 80;
+        const thumbC = document.createElement('canvas');
+        thumbC.width = S; thumbC.height = S;
+        const tc2 = thumbC.getContext('2d');
+        tc2.fillStyle = '#f5f5f5'; tc2.fillRect(0,0,S,S);
+        // Miniatura: usar directamente el canvas recortado ya generado
+        const scale2 = Math.min(S/pageW, S/pageH);
+        const dw2 = pageW*scale2, dh2 = pageH*scale2;
+        tc2.drawImage(tmp, (S-dw2)/2, (S-dh2)/2, dw2, dh2);
+        const thumb = thumbC.toDataURL('image/png', 0.7);
+          // Guardar en carpeta "Animaciones" de la biblioteca
+          const data = _bibLoad();
+          const folder = _bibGetAnimFolder(data);
+          folder.items.push({
+            id: Date.now() + '_gif', timestamp: Date.now(),
+            isGroup: false, isGifAnim: true,
+            gifDataUrl: dataUrl, layerData: null, thumb
+          });
+          _bibSave(data);
+          edToast('Animación guardada en Biblioteca → Animaciones ✓');
+          onDone && onDone();
+      };
+      reader.readAsDataURL(blob);
+    });
+    gif.on('error', () => { edToast('Error al generar el GIF'); onDone && onDone(); });
+    gif.render();
+  });
 }
