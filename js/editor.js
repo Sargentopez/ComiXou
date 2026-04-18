@@ -15335,6 +15335,11 @@ function _bibThumb(la) {
   } else if (la.type === 'text' || la.type === 'bubble') {
     // Mismo sistema que el panel de capas: _lyDrawThumb
     _lyDrawThumb(thumb, la);
+  } else if (la.type === 'gif' && la._oc) {
+    // GIF: usar primer frame del canvas offscreen
+    const scale = Math.min((S-pad*2)/Math.max(la._oc.width,1), (S-pad*2)/Math.max(la._oc.height,1));
+    const dw = la._oc.width*scale, dh = la._oc.height*scale;
+    tc.drawImage(la._oc, (S-dw)/2, (S-dh)/2, dw, dh);
   }
   return thumb.toDataURL('image/png');
 }
@@ -15383,6 +15388,24 @@ function edBibGuardar() {
     // Objeto individual
     const la = edLayers[edSelectedIdx];
     if (!la) { edToast('Selecciona un objeto primero'); return; }
+    // GIF: guardar directamente en carpeta Animaciones con su dataUrl
+    if (la.type === 'gif') {
+      const gifThumb = _bibThumb(la);
+      // Necesitamos el dataUrl del gif — está en IndexedDB
+      _gifIdbLoad(la.gifKey).then(gifDataUrl => {
+        if (!gifDataUrl) { edToast('No se pudo cargar el GIF'); return; }
+        const gifEntry = {
+          id: Date.now() + '_gif', timestamp: Date.now(),
+          isGroup: false, isGifAnim: true,
+          gifDataUrl, layerData: null, thumb: gifThumb
+        };
+        const d2 = _bibLoad();
+        _bibGetAnimFolder(d2).items.push(gifEntry);
+        _bibSave(d2);
+        edToast('GIF guardado en Biblioteca → Animaciones ✓');
+      }).catch(() => edToast('Error al leer el GIF'));
+      return;
+    }
     entry = {
       id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
       timestamp: Date.now(),
@@ -15512,6 +15535,16 @@ function _bibClose(panel) {
   panel.innerHTML = '';
   delete panel.dataset.mode;
   requestAnimationFrame(edFitCanvas);
+}
+
+// Convertir dataUrl a Blob (sin fetch — funciona en Android)
+function _dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',');
+  const mime  = parts[0].match(/:(.*?);/)[1];
+  const bin   = atob(parts[1]);
+  const arr   = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
 }
 
 function _bibRenderPanel(panel) {
@@ -15677,6 +15710,15 @@ function _bibRenderPanel(panel) {
 
       // Si el editor GIF está activo, insertar en el canvas GIF
       if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
+
+      // GIF animado guardado desde el editor GIF
+      if (entry.isGifAnim && entry.gifDataUrl) {
+        const f = new File([_dataUrlToBlob(entry.gifDataUrl)], 'animacion.gif', { type: 'image/gif' });
+        edAddGif(f);
+        _bibClose(panel);
+        edToast('GIF insertado ✓');
+        return;
+      }
 
       if (entry.isGroup && Array.isArray(entry.layers)) {
         // Insertar grupo: deserializar cada capa con nuevo groupId común
