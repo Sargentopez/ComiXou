@@ -16039,9 +16039,14 @@ function gcpOpen() {
     blocker.style.display = 'block';
     if (!blocker._gcpBound) {
       blocker._gcpBound = true;
-      // Solo absorber cuando el bloqueante está visible (display:block)
+      // Solo absorber cuando el bloqueante está visible Y el evento no va al gcpCanvas
       const absorb = e => {
         if (document.getElementById('gcpBlocker')?.style.display !== 'block') return;
+        const gc = document.getElementById('gcpCanvas');
+        if (gc && (e.target === gc || gc.contains(e.target))) return;
+        // También dejar pasar eventos del edOptionsPanel (biblioteca)
+        const op = document.getElementById('edOptionsPanel');
+        if (op && op.contains(e.target)) return;
         e.stopPropagation(); e.preventDefault && e.preventDefault();
       };
       ['pointerdown','pointermove','pointerup','touchstart','touchmove','touchend','mousedown','click']
