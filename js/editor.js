@@ -16285,13 +16285,27 @@ function _gcpDoClose() {
 
 function gcpClose() {
   if (!window._gcpLayers || !window._gcpLayers.length) { _gcpDoClose(); return; }
-  edConfirm(
-    '¿Guardar la animación en la Biblioteca?',
-    () => { _gcpSaveToLib(() => _gcpDoClose()); }, // Guardar → guardar y cerrar
-    'Guardar',
-    () => { _gcpDoClose(); },                       // No guardar → cerrar sin guardar
-    'No guardar'
-  );
+  // Modal propio — no reutiliza edConfirm para evitar conflictos con sus callbacks
+  let pop = document.getElementById('_gcpSavePop');
+  if (pop) pop.remove();
+  pop = document.createElement('div');
+  pop.id = '_gcpSavePop';
+  pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;touch-action:none';
+  pop.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,0.3)">
+      <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">¿Guardar la animación en la Biblioteca?</p>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button id="_gcpPopNo" style="flex:1;padding:10px;border:1.5px solid #ccc;border-radius:8px;background:#f5f5f5;font-size:.9rem;cursor:pointer">No guardar</button>
+        <button id="_gcpPopSi" style="flex:1;padding:10px;border:none;border-radius:8px;background:var(--yellow,#ffe066);font-size:.9rem;font-weight:700;cursor:pointer">Guardar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(pop);
+  pop.querySelector('#_gcpPopNo').addEventListener('click', () => { pop.remove(); _gcpDoClose(); });
+  pop.querySelector('#_gcpPopSi').addEventListener('click', () => {
+    pop.remove();
+    edToast('Guardando animación...');
+    _gcpSaveToLib(() => _gcpDoClose());
+  });
 }
 
 function _gcpSaveToLib(onDone) {
