@@ -1812,7 +1812,7 @@ body.editor-page #appView {
   display: none;
   position: absolute;
   touch-action: none;
-  z-index: 10;
+  z-index: 499;  /* encima del gcpBlocker (498) para recibir eventos */
   opacity: 1;
   pointer-events: none;
 }
