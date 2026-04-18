@@ -14052,26 +14052,27 @@ function edToast(msg,ms=2000){
 
 // Modal de confirmación propio — evita confirm() nativo que rompe fullscreen en Android
 let _edConfirmCb = null;
-function edConfirm(msg, onOk, okLabel='Eliminar'){
+function edConfirm(msg, onOk, okLabel='Eliminar', onCancel=null, cancelLabel=null){
   const overlay = $('edConfirmModal');
   const msgEl   = $('edConfirmMsg');
   const okBtn   = $('edConfirmOk');
   const cancelBtn = $('edConfirmCancel');
-  if(!overlay) { if(window.confirm(msg)) onOk(); return; } // fallback por si el DOM no está listo
+  if(!overlay) { if(window.confirm(msg)) onOk(); else if(onCancel) onCancel(); return; }
   msgEl.textContent = msg;
   okBtn.textContent = okLabel;
+  if(cancelLabel) cancelBtn.textContent = cancelLabel;
   _edConfirmCb = onOk;
   overlay.classList.add('open');
-  // Absorber todos los eventos de puntero para que no lleguen al canvas/edOnStart
   const _stopAll = e => e.stopPropagation();
   overlay.addEventListener('pointerdown', _stopAll, { capture: true });
-  // Listeners de un solo uso
   const close = (exec) => {
     overlay.classList.remove('open');
+    cancelBtn.textContent = 'Cancelar'; // restaurar siempre
     overlay.removeEventListener('pointerdown', _stopAll, { capture: true });
     okBtn.removeEventListener('click', onYes);
     cancelBtn.removeEventListener('click', onNo);
     if(exec && _edConfirmCb) _edConfirmCb();
+    else if(!exec && onCancel) onCancel();
     _edConfirmCb = null;
   };
   const onYes = () => close(true);
@@ -16284,22 +16285,13 @@ function _gcpDoClose() {
 
 function gcpClose() {
   if (!window._gcpLayers || !window._gcpLayers.length) { _gcpDoClose(); return; }
-  // Cambiar botón cancelar antes de abrir el confirm
-  const cancelBtn = $('edConfirmCancel');
-  const origText = cancelBtn ? cancelBtn.textContent : 'Cancelar';
-  if (cancelBtn) cancelBtn.textContent = 'No guardar';
-  edConfirm('¿Guardar la animación en la Biblioteca?', () => {
-    _gcpSaveToLib(() => _gcpDoClose());
-  }, 'Guardar');
-  // Restaurar texto cancelar y cerrar sin guardar al pulsar "No guardar"
-  if (cancelBtn) {
-    const onCancel = () => {
-      cancelBtn.textContent = origText;
-      cancelBtn.removeEventListener('click', onCancel);
-      _gcpDoClose();
-    };
-    cancelBtn.addEventListener('click', onCancel);
-  }
+  edConfirm(
+    '¿Guardar la animación en la Biblioteca?',
+    () => { _gcpSaveToLib(() => _gcpDoClose()); }, // Guardar → guardar y cerrar
+    'Guardar',
+    () => { _gcpDoClose(); },                       // No guardar → cerrar sin guardar
+    'No guardar'
+  );
 }
 
 function _gcpSaveToLib(onDone) {
