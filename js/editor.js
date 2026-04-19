@@ -2784,6 +2784,8 @@ function _edFuseIntoMain(newLL) {
 }
 
 function edRedraw(){
+  // Si hay un contexto GIF activo en curso, redirigir a _gcpRedraw
+  if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
   if(!edCtx || !edCanvas)return;
   const cw=edCanvas.width, ch=edCanvas.height;
 
@@ -15946,151 +15948,56 @@ function edInitBiblioteca() {
 // ── Estado de transformación del canvas GIF ──────────────────────────────
 let _gs = null;
 
-// _gcpHandleDown — copia exacta del sistema de handles del editor general
-// Usa getControlPoints() y ancla fija igual que edIsResizing
+// Ejecutar fn() con edLayers/_Selected/edCanvas/edCtx apuntando al GIF,
+// luego restaurar. Permite reutilizar TODO el código del editor general.
+// _gcpWithEditorContext: ejecuta fn() con edLayers/edSelectedIdx/edCanvas/edCtx
+// apuntando al GIF. Desactiva _gcpActive para evitar loop en _edDocDownFn.
+function _gcpWithEditorContext(fn) {
+  const savedLayers = edLayers,  savedSel    = edSelectedIdx;
+  const savedCanvas = edCanvas,  savedCtx    = edCtx;
+  const savedActive = window._gcpActive;
+  const savedOvrd   = window._edRedrawOverride;
+  try {
+    edLayers      = window._gcpLayers;
+    edSelectedIdx = window._gcpSelIdx;
+    edCanvas      = gcpCanvas;
+    edCtx         = gcpCtx;
+    window._gcpActive        = false; // evitar loop en _edDocDownFn
+    window._edRedrawOverride = true;  // edRedraw → _gcpRedraw
+    fn();
+  } finally {
+    edLayers      = savedLayers;  edSelectedIdx = savedSel;
+    edCanvas      = savedCanvas;  edCtx         = savedCtx;
+    window._gcpActive        = savedActive;
+    window._edRedrawOverride = savedOvrd;
+    window._gcpSelIdx = edSelectedIdx; // sincronizar selección
+  }
+}
+
 function _gcpHandleDown(e) {
   const gc = document.getElementById('gcpCanvas');
   if (!gc) return;
   const rect = gc.getBoundingClientRect();
   const src2 = e.touches ? e.touches[0] : e;
-  const clientX = src2 ? src2.clientX : e.clientX;
-  const clientY = src2 ? src2.clientY : e.clientY;
-  if (clientX < rect.left || clientX > rect.right ||
-      clientY < rect.top  || clientY > rect.bottom) return;
-
-  const c = edCoords(e);
-  const idx = window._gcpSelIdx;
-
-  if (idx >= 0 && idx < window._gcpLayers.length) {
-    const la = window._gcpLayers[idx];
-    const pw = edPageW(), ph = edPageH(), z = edCamera.z;
-    const hitScreen = 28; // generoso en táctil
-
-    // Usar getControlPoints() igual que el editor general
-    for (const p of la.getControlPoints()) {
-      const dpx = (c.nx - p.x) * pw, dpy = (c.ny - p.y) * ph;
-      const distScreen = Math.hypot(dpx, dpy) * z;
-      if (distScreen < hitScreen) {
-        if (p.corner === 'rotate') {
-          _gs = { mode: 'rotate', idx,
-                  startAngle: Math.atan2(c.ny - la.y, c.nx - la.x) - (la.rotation||0) * Math.PI/180,
-                  startRot: la.rotation || 0 };
-          return;
-        }
-        // Resize con ancla fija — copia de edInitialSize del editor general
-        const rot0 = (la.rotation||0) * Math.PI/180;
-        const hw0 = la.width/2, hh0 = la.height/2;
-        const _anchorLocal = (corner) => {
-          const ax = corner==='ml'?hw0 : corner==='mr'?-hw0 :
-                     (corner==='tl'||corner==='bl')?hw0 :
-                     (corner==='tr'||corner==='br')?-hw0 : 0;
-          const ay = corner==='mt'?hh0 : corner==='mb'?-hh0 :
-                     (corner==='tl'||corner==='tr')?hh0 :
-                     (corner==='bl'||corner==='br')?-hh0 : 0;
-          const rx = ax*pw, ry = ay*ph;
-          return {
-            x: la.x + (rx*Math.cos(rot0) - ry*Math.sin(rot0))/pw,
-            y: la.y + (rx*Math.sin(rot0) + ry*Math.cos(rot0))/ph
-          };
-        };
-        const anch = _anchorLocal(p.corner);
-        _gs = { mode: 'resize', idx, corner: p.corner,
-                startW: la.width, startH: la.height,
-                startX: la.x, startY: la.y,
-                rot: la.rotation||0, asp: la.height/la.width,
-                anchorX: anch.x, anchorY: anch.y };
-        return;
-      }
-    }
-
-    // Dentro del bbox → drag
-    const rot = (la.rotation||0) * Math.PI/180;
-    const cx = la.x, cy = la.y;
-    const dx = c.nx - cx, dy = c.ny - cy;
-    const lx = dx*Math.cos(-rot)*pw - dy*Math.sin(-rot)*ph;
-    const ly = dx*Math.sin(-rot)*pw + dy*Math.cos(-rot)*ph;
-    if (Math.abs(lx) <= la.width/2*pw + 10/z && Math.abs(ly) <= la.height/2*ph + 10/z) {
-      _gs = { mode: 'drag', idx, startNx: c.nx, startNy: c.ny, startX: la.x, startY: la.y };
-      return;
-    }
-  }
-
-  // Buscar capa tocada
-  let hit = -1;
-  for (let i = window._gcpLayers.length - 1; i >= 0; i--) {
-    const la = window._gcpLayers[i];
-    if (la && la.contains && la.contains(c.nx, c.ny)) { hit = i; break; }
-  }
-  window._gcpSelIdx = hit;
-  if (hit >= 0) {
-    const la = window._gcpLayers[hit];
-    _gs = { mode: 'drag', idx: hit, startNx: c.nx, startNy: c.ny, startX: la.x, startY: la.y };
-  } else {
-    _gs = null;
-  }
+  const cx = src2 ? src2.clientX : e.clientX;
+  const cy2 = src2 ? src2.clientY : e.clientY;
+  if (cx < rect.left || cx > rect.right || cy2 < rect.top || cy2 > rect.bottom) return;
+  _gcpWithEditorContext(() => {
+    edSelectedIdx = window._gcpSelIdx;
+    window._edDocDownFn && window._edDocDownFn(e);
+  });
   _gcpRedraw();
 }
 
-// _gcpHandleMove — copia exacta del resize profesional del editor general
 function _gcpHandleMove(e) {
-  if (!_gs) return;
-  const c = edCoords(e);
-  const la = window._gcpLayers[_gs.idx];
-  if (!la) return;
-
-  if (_gs.mode === 'drag') {
-    la.x = _gs.startX + (c.nx - _gs.startNx);
-    la.y = _gs.startY + (c.ny - _gs.startNy);
-
-  } else if (_gs.mode === 'rotate') {
-    la.rotation = _gs.startRot + (Math.atan2(c.ny - la.y, c.nx - la.x) - _gs.startAngle) * 180/Math.PI;
-
-  } else if (_gs.mode === 'resize') {
-    // Resize profesional con ancla fija — copia de edIsResizing en el editor general
-    const pw = edPageW(), ph = edPageH();
-    const rot = _gs.rot * Math.PI/180;
-    const corner = _gs.corner;
-    const adx_px = (c.nx - _gs.anchorX) * pw;
-    const ady_px = (c.ny - _gs.anchorY) * ph;
-    const alx_px =  adx_px*Math.cos(-rot) - ady_px*Math.sin(-rot);
-    const aly_px =  adx_px*Math.sin(-rot) + ady_px*Math.cos(-rot);
-
-    const _setCenterFromAnchor = (newW, newH, aLocalX, aLocalY) => {
-      const cx_px = aLocalX*Math.cos(rot) - aLocalY*Math.sin(rot);
-      const cy_px = aLocalX*Math.sin(rot) + aLocalY*Math.cos(rot);
-      la.x = _gs.anchorX - cx_px/pw;
-      la.y = _gs.anchorY - cy_px/ph;
-    };
-
-    if (corner==='ml'||corner==='mr') {
-      const nw_px = Math.abs(alx_px);
-      if (nw_px > pw*0.02) {
-        la.width = nw_px/pw;
-        const aLocalX = corner==='ml' ? nw_px/2 : -nw_px/2;
-        _setCenterFromAnchor(la.width, la.height, aLocalX, 0);
-      }
-    } else if (corner==='mt'||corner==='mb') {
-      const nh_px = Math.abs(aly_px);
-      if (nh_px > ph*0.02) {
-        la.height = nh_px/ph;
-        const aLocalY = corner==='mt' ? nh_px/2 : -nh_px/2;
-        _setCenterFromAnchor(la.width, la.height, 0, aLocalY);
-      }
-    } else {
-      const nw_px = Math.abs(alx_px), nh_px = Math.abs(aly_px);
-      if (Math.max(nw_px, nh_px) > pw*0.02) {
-        la.width  = Math.max(nw_px, pw*0.01) / pw;
-        la.height = Math.max(nh_px, ph*0.01) / ph;
-        const aLocalX = (corner==='tl'||corner==='bl') ?  la.width/2*pw : -la.width/2*pw;
-        const aLocalY = (corner==='tl'||corner==='tr') ?  la.height/2*ph : -la.height/2*ph;
-        _setCenterFromAnchor(la.width, la.height, aLocalX, aLocalY);
-      }
-    }
-  }
+  _gcpWithEditorContext(() => { edOnMove(e); });
   _gcpRedraw();
 }
 
-function _gcpHandleUp() { _gs = null; }
+function _gcpHandleUp(e) {
+  _gcpWithEditorContext(() => { edOnEnd(e); });
+  _gcpRedraw();
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
