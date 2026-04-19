@@ -16391,21 +16391,11 @@ function _gcpSaveToLib(onDone) {
   // El blanco puro (255,255,255) puede ser contenido real del dibujo.
   // La segunda pasada reemplazará solo este color exacto por blanco puro,
   // que gif.js tratará como transparente.
+  // Fondo #FEFEFE — gif.js lo tratará como transparente (ver transparent abajo)
+  // El blanco puro #FFFFFF del dibujo se conserva intacto
   gctx.fillStyle = '#fefefe';
   gctx.fillRect(0, 0, cropW, cropH);
   gctx.drawImage(frameC, marginX+cropX, marginY+cropY, cropW, cropH, 0, 0, cropW, cropH);
-  // Segunda pasada: detectar los píxeles que siguen siendo exactamente #FEFEFE
-  // (fondo que pusimos, no sobreescrito por contenido) → reemplazarlos por #FFFFFF puro
-  // para que gif.js los trate como transparentes.
-  // Píxeles con cualquier otro color (incluido blanco puro del dibujo) se dejan intactos.
-  const gifPx = gctx.getImageData(0, 0, cropW, cropH);
-  const gd = gifPx.data;
-  for (let i = 0; i < gd.length; i += 4) {
-    if (gd[i]===254 && gd[i+1]===254 && gd[i+2]===254) {
-      gd[i]=255; gd[i+1]=255; gd[i+2]=255; gd[i+3]=255;
-    }
-  }
-  gctx.putImageData(gifPx, 0, 0);
 
   // Miniatura
   const S = 80;
@@ -16434,7 +16424,7 @@ function _gcpSaveToLib(onDone) {
     const gif = new window.GIF({
       workers:2, quality:10, width:cropW, height:cropH,
       workerScript:workerURL, repeat:0,
-      transparent: 0xFFFFFF  // blanco puro → transparente (segunda pasada lo garantiza)
+      transparent: 0xFEFEFE  // #FEFEFE → transparente; blanco puro del dibujo se conserva
     });
     gif.addFrame(gifC, {delay:100, copy:true});
     gif.on('finished', blob => {
