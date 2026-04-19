@@ -15731,14 +15731,23 @@ function _bibRenderPanel(panel) {
         const img = new Image();
         img.onload = () => {
           const pw = edPageW(), ph = edPageH();
-          const natW = img.naturalWidth || 1, natH = img.naturalHeight || 1;
-          const baseW = 0.7;
-          const baseH = baseW * (natH / natW) * (pw / ph);
-          // Ajustar si alto > 85%
-          const scale = baseH > 0.85 ? 0.85 / baseH : 1;
-          const la = new ImageLayer(img, 0.5, 0.5, baseW * scale);
-          la.height  = baseH * scale;
-          la.src     = entry.gifDataUrl;
+          let finalW, finalH;
+          if (entry.normW && entry.normH) {
+            // Usar proporciones guardadas — reflejan el tamaño real en el canvas GIF
+            finalW = entry.normW;
+            finalH = entry.normH;
+          } else {
+            // Fallback: calcular desde dimensiones naturales del PNG
+            const natW = img.naturalWidth || 1, natH = img.naturalHeight || 1;
+            finalW = 0.7;
+            finalH = finalW * (natH / natW) * (pw / ph);
+          }
+          // Ajustar si alguna dimensión supera 0.9
+          const scale = Math.max(finalW / 0.9, finalH / 0.9, 1);
+          finalW /= scale; finalH /= scale;
+          const la = new ImageLayer(img, 0.5, 0.5, finalW);
+          la.height = finalH;
+          la.src = entry.gifDataUrl;
           la._keepSize = true;
           if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
           la._isGcpImage = true;
@@ -16475,10 +16484,15 @@ function _gcpSaveToLib(onDone) {
           .map(l => { try { return edSerLayer(l); } catch(e) { return null; } })
           .filter(Boolean);
         const data = _bibLoad();
+        // Guardar proporciones reales del contenido (fracción de página)
+        // para insertar con el tamaño correcto en el editor general
+        const _gcpNormW = cropW / pageW;
+        const _gcpNormH = cropH / pageH;
         _bibGetAnimFolder(data).items.push({
           id: Date.now()+'_gif', timestamp:Date.now(),
           isGroup:false, isGifAnim:true,
           gifDataUrl:dataUrl, gcpLayersData,
+          normW: _gcpNormW, normH: _gcpNormH,
           layerData:null, thumb
         });
         _bibSave(data);
@@ -16504,9 +16518,11 @@ function _gcpSaveToLib(onDone) {
             img.onload = () => {
               existingLayer.img = img; existingLayer.src = dataUrl;
               existingLayer.x = savedX; existingLayer.y = savedY; existingLayer.rotation = savedR;
-              // Recalcular altura proporcional al nuevo tamaño
-              const pw = edPageW(), ph = edPageH();
-              existingLayer.height = existingLayer.width * (img.naturalHeight/img.naturalWidth) * (pw/ph);
+              // Usar proporciones reales del nuevo PNG (cropW/cropH ya calculados arriba)
+              let newW = _gcpNormW, newH = _gcpNormH;
+              const scale2 = Math.max(newW/0.9, newH/0.9, 1);
+              existingLayer.width  = newW / scale2;
+              existingLayer.height = newH / scale2;
               edPushHistory(); requestAnimationFrame(() => edRedraw());
             };
             img.src = dataUrl;
