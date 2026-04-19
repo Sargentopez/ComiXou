@@ -16350,13 +16350,26 @@ function _gcpSaveToLib(onDone) {
   const cropW = Math.min(iw, maxX+pad+1) - cropX;
   const cropH = Math.min(ih, maxY+pad+1) - cropY;
 
-  // Canvas recortado — fondo blanco (gif.js no soporta transparencia real con gifuct-js)
+  // Canvas recortado — fondo blanco, luego segunda pasada para poner alpha=0
+  // en los píxeles que eran transparentes en el original (los que siguen siendo
+  // blanco puro tras componer), para que gifuct-js los trate como transparentes.
   const gifC = document.createElement('canvas');
   gifC.width = cropW; gifC.height = cropH;
   const gctx = gifC.getContext('2d');
   gctx.fillStyle = '#ffffff';
   gctx.fillRect(0, 0, cropW, cropH);
   gctx.drawImage(frameC, pxX+cropX, pxY+cropY, cropW, cropH, 0, 0, cropW, cropH);
+  // Segunda pasada: usar el alpha original para marcar transparentes como blanco puro
+  // gif.js con transparent:0xFFFFFF tratará ese color como transparente
+  const origData = frameC.getContext('2d').getImageData(pxX+cropX, pxY+cropY, cropW, cropH);
+  const gifPx   = gctx.getImageData(0, 0, cropW, cropH);
+  const od = origData.data, gd = gifPx.data;
+  for (let i = 0; i < od.length; i += 4) {
+    if (od[i+3] < 16) { // píxel era transparente → forzar blanco puro en el GIF
+      gd[i]=255; gd[i+1]=255; gd[i+2]=255; gd[i+3]=255;
+    }
+  }
+  gctx.putImageData(gifPx, 0, 0);
 
   // Miniatura
   const S = 80;
@@ -16384,7 +16397,8 @@ function _gcpSaveToLib(onDone) {
     const workerURL  = URL.createObjectURL(workerBlob);
     const gif = new window.GIF({
       workers:2, quality:10, width:cropW, height:cropH,
-      workerScript:workerURL, repeat:0
+      workerScript:workerURL, repeat:0,
+      transparent: 0xFFFFFF  // blanco puro → transparente (segunda pasada lo garantiza)
     });
     gif.addFrame(gifC, {delay:100, copy:true});
     gif.on('finished', blob => {
