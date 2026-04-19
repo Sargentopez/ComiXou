@@ -16106,131 +16106,116 @@ window._gcpFrameIdx = 0;    // frame activo
 // Captura el estado actual de todas las capas como un nuevo frame
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Snapshot de cada capa: posición, tamaño, rotación, opacidad
   const snapshot = window._gcpLayers.map(la => ({
     x: la.x, y: la.y, width: la.width, height: la.height,
     rotation: la.rotation || 0, opacity: la.opacity ?? 1
   }));
-  // Añadir frame al array
   window._gcpFrames.push(snapshot);
   window._gcpFrameIdx = window._gcpFrames.length - 1;
-  // Actualizar UI del dropdown de frames
   _gcpUpdateFramesBar();
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
-// Ir a un frame: restaurar estado de las capas
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
-  const snap = window._gcpFrames[fi];
   window._gcpFrameIdx = fi;
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i];
-    if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
+  window._gcpFrames[fi].forEach((s, i) => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+    la.rotation=s.rotation; la.opacity=s.opacity;
   });
   _gcpRedraw();
   _gcpUpdateFramesBar();
 }
 
-// Genera miniatura 60×60 del frame fi
+// Genera miniatura 44×44 del frame fi.
+// Copia exacta del patrón de _edRenderPageThumb:
+// canvas pw×ph con setTransform(1,0,0,1,-mx,-my) para que draw() funcione igual
+// que en el canvas principal, luego se escala a 44×44.
 function _gcpFrameThumb(fi) {
   const snap = window._gcpFrames[fi];
-  if (!snap) return null;
-  // Guardar estado actual
-  const savedState = window._gcpLayers.map(la => ({
-    x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1
-  }));
-  // Aplicar el snapshot
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i];
-    if (!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height; la.rotation=s.rotation; la.opacity=s.opacity;
+  if (!snap) { const c=document.createElement('canvas');c.width=44;c.height=44;return c; }
+
+  // Guardar estado y aplicar snapshot
+  const saved = window._gcpLayers.map(la=>({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1}));
+  snap.forEach((s,i)=>{ const la=window._gcpLayers[i];if(!la)return; la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity; });
+
+  // Canvas de página (sin cámara, zoom=1) — igual que _edRenderPageThumb
+  const pw=edPageW(), ph=edPageH(), mx=edMarginX(), my=edMarginY();
+  const off=document.createElement('canvas');
+  off.width=pw; off.height=ph;
+  const octx=off.getContext('2d');
+  octx.fillStyle='#ffffff'; octx.fillRect(0,0,pw,ph);
+  // El mismo transform que usa _edRenderPageThumb y edExportPagePNG:
+  // traslada el origen al borde de la página para que la.x*pw + mx - mx = la.x*pw
+  octx.setTransform(1,0,0,1,-mx,-my);
+  window._gcpLayers.forEach(la=>{
+    if(!la||typeof la.draw!=='function') return;
+    if(la.type==='image'||la.type==='gif') la.draw(octx, off);
+    else if(la.type==='text'||la.type==='bubble') la.draw(octx, off);
+    else { octx.globalAlpha=la.opacity??1; la.draw(octx); octx.globalAlpha=1; }
   });
-  // Renderizar en canvas pequeño
-  const S = 60;
-  const tc = document.createElement('canvas');
-  tc.width = S; tc.height = S;
-  const tctx = tc.getContext('2d');
-  tctx.fillStyle = '#f5f5f5';
-  tctx.fillRect(0, 0, S, S);
-  // Escalar: página completa → 60px
-  const pw = edPageW(), ph = edPageH();
-  const scx = S / pw, scy = S / ph;
-  tctx.setTransform(scx, 0, 0, scy, 0, 0);
-  window._gcpLayers.forEach(la => {
-    if (!la || typeof la.draw !== 'function') return;
-    if (la.type === 'image' || la.type === 'gif') la.draw(tctx, tc);
-    else if (la.type === 'text' || la.type === 'bubble') la.draw(tctx, tc);
-    else { tctx.globalAlpha = la.opacity ?? 1; la.draw(tctx); tctx.globalAlpha = 1; }
-  });
-  tctx.setTransform(1,0,0,1,0,0);
+  octx.setTransform(1,0,0,1,0,0);
+
+  // Escalar a 44×44
+  const S=44;
+  const tc=document.createElement('canvas'); tc.width=S; tc.height=S;
+  const tctx=tc.getContext('2d');
+  tctx.fillStyle='#ffffff'; tctx.fillRect(0,0,S,S);
+  tctx.drawImage(off,0,0,pw,ph,0,0,S,S);
+
   // Restaurar estado
-  savedState.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height; la.rotation=s.rotation; la.opacity=s.opacity;
-  });
+  saved.forEach((s,i)=>{ const la=window._gcpLayers[i];if(!la)return; la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity; });
   return tc;
 }
 
 // Renderizar el dropdown de frames con miniaturas
-function _gcpRenderFramesDropdown(dd) {
-  if (!dd) return;
-  dd.innerHTML = '';
-  // Botón crear frame
-  const addBtn = document.createElement('button');
-  addBtn.className = 'ed-dropdown-item';
-  addBtn.style.cssText = 'font-weight:700;color:var(--black);justify-content:center;gap:6px';
-  addBtn.innerHTML = '➕ Guardar frame actual';
-  addBtn.addEventListener('click', e => { e.stopPropagation(); _gcpCaptureFrame(); });
-  dd.appendChild(addBtn);
-
+// Actualiza la barra de frames — miniaturas estilo hojas del editor general.
+// Copia el patrón exacto de edUpdateNavPages.
+function _gcpUpdateFramesBar() {
+  const bar = document.getElementById('gcpFramesBar');
+  if (!bar) return;
+  bar.innerHTML = '';
   if (!window._gcpFrames.length) {
-    const empty = document.createElement('div');
-    empty.className = 'ed-dropdown-item';
-    empty.style.cssText = 'color:var(--gray-400);font-size:0.78rem;cursor:default;font-style:italic';
-    empty.textContent = 'Sin frames — mueve los objetos y guarda frames';
-    dd.appendChild(empty);
+    bar.style.display = 'none';
     return;
   }
+  bar.style.display = 'flex';
 
-  // Separador
-  const sep = document.createElement('div');
-  sep.style.cssText = 'height:1px;background:var(--gray-200);margin:2px 0';
-  dd.appendChild(sep);
-
-  // Lista de frames con miniatura
   window._gcpFrames.forEach((snap, fi) => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;border-radius:6px;' +
-      (fi === window._gcpFrameIdx ? 'background:var(--yellow)' : '');
-    row.addEventListener('click', e => { e.stopPropagation(); _gcpGoToFrame(fi); });
+    const btn = document.createElement('button');
+    btn.className = 'gcp-frame-btn' + (fi === window._gcpFrameIdx ? ' active' : '');
+    btn.title = 'Frame ' + (fi+1);
 
+    // Canvas miniatura 44×44 — igual que hojas del editor general
     const thumb = _gcpFrameThumb(fi);
-    if (thumb) {
-      thumb.style.cssText = 'width:40px;height:40px;border-radius:6px;flex-shrink:0;border:1.5px solid var(--gray-300)';
-      row.appendChild(thumb);
-    }
-    const info = document.createElement('span');
-    info.style.cssText = 'flex:1;font-size:0.82rem;font-weight:' + (fi === window._gcpFrameIdx ? '700' : '400');
-    info.textContent = 'Frame ' + (fi+1);
-    row.appendChild(info);
+    btn.appendChild(thumb);
 
-    // Botón eliminar frame
-    const del = document.createElement('button');
-    del.textContent = '✕';
-    del.style.cssText = 'background:none;border:none;color:#c00;cursor:pointer;padding:0 4px;font-size:0.82rem;flex-shrink:0';
-    del.addEventListener('click', ev => {
-      ev.stopPropagation();
-      window._gcpFrames.splice(fi, 1);
-      if (window._gcpFrameIdx >= window._gcpFrames.length) window._gcpFrameIdx = Math.max(0, window._gcpFrames.length-1);
-      if (window._gcpFrames.length) _gcpGoToFrame(window._gcpFrameIdx);
-      else _gcpRenderFramesDropdown(dd);
+    // Número
+    const lbl = document.createElement('span');
+    lbl.textContent = fi + 1;
+    btn.appendChild(lbl);
+
+    // Tap → ir al frame
+    btn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      _gcpGoToFrame(fi);
     });
-    row.appendChild(del);
-    dd.appendChild(row);
+
+    // Doble tap → eliminar frame
+    let _lastTap = 0;
+    btn.addEventListener('pointerup', () => {
+      const now = Date.now();
+      if (now - _lastTap < 350 && window._gcpFrames.length > 1) {
+        window._gcpFrames.splice(fi, 1);
+        if (window._gcpFrameIdx >= window._gcpFrames.length)
+          window._gcpFrameIdx = window._gcpFrames.length - 1;
+        _gcpGoToFrame(window._gcpFrameIdx);
+      }
+      _lastTap = now;
+    });
+
+    bar.appendChild(btn);
   });
 }
 

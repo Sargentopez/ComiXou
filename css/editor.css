@@ -1834,6 +1834,7 @@ body.editor-page #appView {
 /* ── Barra de frames del editor GIF ─────────────────────────────────── */
 #gcpFramesBar {
   position: absolute;
+  top: 92px;   /* gcpMenuBar top(52) + height(40) */
   left: 0; right: 0;
   overflow-x: auto; overflow-y: hidden;
   background: var(--white);
