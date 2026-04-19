@@ -15951,7 +15951,7 @@ function _gcpHandleDown(e) {
     const rot = (la.rotation || 0) * Math.PI / 180;
     const cos = Math.cos(rot), sin = Math.sin(rot);
     const wx = c.px, wy = c.py;
-    const hrPx = 10 / z;
+    const hrPx = 20 / z;  // más generoso en táctil
 
     // Handle rotación (círculo azul encima del bbox)
     const rotLx = 0, rotLy = -(h/2 + 28/z);
@@ -16394,24 +16394,22 @@ function _gcpSaveToLib(onDone) {
   const cropW = Math.min(wsW, maxX+pad+1) - cropX;
   const cropH = Math.min(wsH, maxY+pad+1) - cropY;
 
-  // Canvas recortado con fondo #FEFEFE
-  // gif.js usará transparent:0xFEFEFE para eliminar ese fondo
-  // El blanco puro #FFFFFF del contenido se conserva intacto
+  // Fondo magenta puro #FF00FF — color imposible en dibujos normales.
+  // gif.js lo mapea exacto en la paleta como transparente.
+  // gifuct-js lo decodifica con alpha=0.
   const gifC = document.createElement('canvas');
   gifC.width = cropW; gifC.height = cropH;
   const gctx = gifC.getContext('2d');
-  gctx.fillStyle = '#fefefe';
+  gctx.fillStyle = '#ff00ff';
   gctx.fillRect(0, 0, cropW, cropH);
   gctx.drawImage(frameC, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-  // Segunda pasada: eliminar antialiasing del borde (#FEFEFE mezclado con contenido)
-  // Cualquier píxel cuyo R,G,B sean todos >= 250 y no sean blanco puro (255,255,255)
-  // se considera residuo del fondo → reemplazar por #FEFEFE para que gif.js lo elimine
+  // Segunda pasada: antialiasing borde (mezcla magenta+contenido) → forzar a magenta puro
+  // Criterio: G bajo (<30), R y B altos (>200) = residuo de magenta
   const gifPx = gctx.getImageData(0, 0, cropW, cropH);
   const gd = gifPx.data;
   for (let i = 0; i < gd.length; i += 4) {
-    if (gd[i] >= 250 && gd[i+1] >= 250 && gd[i+2] >= 250 &&
-        !(gd[i]===255 && gd[i+1]===255 && gd[i+2]===255)) {
-      gd[i]=254; gd[i+1]=254; gd[i+2]=254; gd[i+3]=255;
+    if (gd[i] > 200 && gd[i+1] < 30 && gd[i+2] > 200) {
+      gd[i]=255; gd[i+1]=0; gd[i+2]=255; gd[i+3]=255;
     }
   }
   gctx.putImageData(gifPx, 0, 0);
@@ -16443,7 +16441,7 @@ function _gcpSaveToLib(onDone) {
     const gif = new window.GIF({
       workers:2, quality:10, width:cropW, height:cropH,
       workerScript:workerURL, repeat:0,
-      transparent: 0xFEFEFE  // #FEFEFE → transparente; blanco puro del dibujo se conserva
+      transparent: 0xFF00FF  // magenta → transparente; conserva todos los colores reales
     });
     gif.addFrame(gifC, {delay:100, copy:true});
     gif.on('finished', blob => {
@@ -16473,10 +16471,20 @@ function _gcpSaveToLib(onDone) {
           const savedR = existingLayer.rotation;
           // Recargar el GIF decodificado en la capa existente
           existingLayer.load(dataUrl, () => {
-            // Restaurar posición/tamaño — load() no los toca pero por seguridad
+            // Preservar posición y rotación — recalcular width/height según nuevo tamaño
             existingLayer.x = savedX; existingLayer.y = savedY;
-            existingLayer.width = savedW; existingLayer.height = savedH;
             existingLayer.rotation = savedR;
+            // Recalcular proporción igual que edAddGif
+            if (existingLayer._oc) {
+              const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
+              const natW = existingLayer._oc.width || 1, natH = existingLayer._oc.height || 1;
+              existingLayer.width  = savedW;
+              existingLayer.height = savedW * (natH / natW) * (pw / ph);
+              if (existingLayer.height > 0.85) {
+                const s = 0.85 / existingLayer.height;
+                existingLayer.height = 0.85; existingLayer.width = savedW * s;
+              }
+            }
             existingLayer._gcpLayersData = gcpLayersData;
             // Actualizar IndexedDB con el nuevo dataUrl
             _gifIdbSave(existingLayer.gifKey, dataUrl).catch(e => console.warn('GIF IDB update:', e));
