@@ -4092,7 +4092,7 @@ function edAddImage(file){
   reader.readAsDataURL(file);
 }
 /* ── Insertar GIF animado ── */
-function edAddGif(file) {
+function edAddGif(file, onLayerReady) {
   if (!file) return;
   if (!window.GifDecoder) { edToast('GIF no soportado en este navegador'); return; }
   const gifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
@@ -4117,6 +4117,7 @@ function edAddGif(file) {
       else { edLayers.push(layer); edSelectedIdx = edLayers.length - 1; }
       // Guardar dataUrl en IndexedDB (no en localStorage — puede ser varios MB)
       _gifIdbSave(gifKey, gifSrc).catch(e => console.warn('GIF IDB:', e));
+      if (typeof onLayerReady === 'function') onLayerReady(layer);
       edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
       requestAnimationFrame(() => edRedraw()); // asegurar primer frame visible
       edToast('GIF añadido ✓ (' + (layer._frames.length) + ' frames)');
@@ -4854,6 +4855,11 @@ function _edHandleDoubleTap(idx){
     edDrawColor = la.color || '#000000';
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
+  } else if (la && la.type === 'gif') {
+    // GIF: abrir editor GIF para re-editar
+    edSelectedIdx = idx;
+    edRedraw();
+    gcpOpen(idx);
   } else {
     // image, text, bubble y cualquier otro tipo
     edSelectedIdx = idx;
@@ -15714,7 +15720,12 @@ function _bibRenderPanel(panel) {
       // GIF animado guardado desde el editor GIF
       if (entry.isGifAnim && entry.gifDataUrl) {
         const f = new File([_dataUrlToBlob(entry.gifDataUrl)], 'animacion.gif', { type: 'image/gif' });
-        edAddGif(f);
+        // edAddGif añade la capa — guardar gcpLayersData en ella cuando esté lista
+        const insertIdx = edLayers.length; // índice aproximado donde se insertará
+        edAddGif(f, (layer) => {
+          // callback tras carga — guardar capas serializadas para re-edición
+          if (entry.gcpLayersData) layer._gcpLayersData = entry.gcpLayersData;
+        });
         _bibClose(panel);
         edToast('GIF insertado ✓');
         return;
@@ -16167,34 +16178,56 @@ function gcpInsertFromBib(entry) {
 
 // gcpOpen — inicializa gcpCanvas y gcpCtx igual que el editor inicializa
 // edCanvas y edCtx en EditorView_init
-function gcpOpen() {
+// edLayerIdx: índice en edLayers del GifLayer que se va a re-editar (-1 = nuevo)
+function gcpOpen(edLayerIdx) {
   const shell = document.getElementById('gcpShell');
   const ec    = document.getElementById('editorCanvas');
   if (!shell || !ec) return;
 
-  // Inicializar gcpCanvas y gcpCtx — igual que:
-  //   edCanvas = $('editorCanvas');
-  //   edCtx    = edCanvas.getContext('2d');
   gcpCanvas = document.getElementById('gcpCanvas');
   if (!gcpCanvas) return;
   gcpCtx = gcpCanvas.getContext('2d');
 
-  // Sincronizar dimensiones con editorCanvas
-  // top siempre 0 — editorCanvasWrap ya está debajo de las barras
-  // editorCanvas tiene top=barHeight dentro del wrap, gcpCanvas no (ocupa todo el wrap)
   gcpCanvas.width  = ec.width;
   gcpCanvas.height = ec.height;
   gcpCanvas.style.left   = '0';
-  gcpCanvas.style.top    = ec.style.top;  // mismo top que editorCanvas
+  gcpCanvas.style.top    = ec.style.top;
   gcpCanvas.style.width  = ec.style.width;
   gcpCanvas.style.height = ec.style.height;
   gcpCanvas.style.display       = 'block';
   gcpCanvas.style.pointerEvents = 'auto';
 
+  // Guardar qué capa del editor se está editando (para actualizarla al cerrar)
+  window._gcpEdLayerIdx = (typeof edLayerIdx === 'number' && edLayerIdx >= 0) ? edLayerIdx : -1;
+
   // Limpiar y resetear capas
   gcpCtx.clearRect(0, 0, gcpCanvas.width, gcpCanvas.height);
   window._gcpLayers = [];
   window._gcpSelIdx = -1;
+
+  // Si re-editamos un GIF existente, restaurar sus capas serializadas
+  if (window._gcpEdLayerIdx >= 0) {
+    const gifLayer = edLayers[window._gcpEdLayerIdx];
+    if (gifLayer && gifLayer.type === 'gif' && gifLayer._gcpLayersData) {
+      const restoredLayers = gifLayer._gcpLayersData
+        .map(ld => edDeserLayer(ld, edOrientation))
+        .filter(Boolean);
+      restoredLayers.forEach(la => {
+        // Redirigir onload de imágenes a _gcpRedraw
+        if (la.type === 'image' && la.img) {
+          const prev = la.img.onload;
+          la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
+          if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
+        }
+        // Redirigir fromDataUrl de stroke/draw a _gcpRedraw (ya parcheado en las clases)
+        window._gcpLayers.push(la);
+      });
+      window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
+      // Actualizar título con el nombre de la capa
+      const titleEl = document.getElementById('gcpProjectTitle');
+      if (titleEl) titleEl.textContent = 'Editar GIF';
+    }
+  }
 
   // Deseleccionar objetos del editor
   edSelectedIdx = -1;
@@ -16274,12 +16307,17 @@ function _gcpDoClose() {
   const shell = document.getElementById('gcpShell');
   if (shell) shell.style.display = 'none';
   window._gcpActive = false;
+  window._gcpEdLayerIdx = -1;
   _gs = null;
   gcpCanvas = null; gcpCtx = null;
   document.getElementById('editorShell')?.classList.remove('gcp-open');
   document.getElementById('editorCanvas')?.classList.remove('gcp-active');
   const blocker = document.getElementById('gcpBlocker');
   if (blocker) blocker.style.display = 'none';
+  // Restaurar título del gcpShell para próxima apertura
+  const titleEl = document.getElementById('gcpProjectTitle');
+  if (titleEl) titleEl.textContent = 'Gif 1';
+  edRedraw();
 }
 
 function gcpClose() {
@@ -16406,13 +16444,22 @@ function _gcpSaveToLib(onDone) {
       const reader = new FileReader();
       reader.onload = ev => {
         const dataUrl = ev.target.result;
+        // Serializar las capas del editor GIF para poder re-editarlas
+        const gcpLayersData = window._gcpLayers
+          .map(l => { try { return edSerLayer(l); } catch(e) { return null; } })
+          .filter(Boolean);
         const data = _bibLoad();
         _bibGetAnimFolder(data).items.push({
           id: Date.now()+'_gif', timestamp:Date.now(),
           isGroup:false, isGifAnim:true,
-          gifDataUrl:dataUrl, layerData:null, thumb
+          gifDataUrl:dataUrl, gcpLayersData,
+          layerData:null, thumb
         });
         _bibSave(data);
+        // Si estamos re-editando un GifLayer existente, actualizar sus datos
+        if (window._gcpEdLayerIdx >= 0 && edLayers[window._gcpEdLayerIdx]?.type === 'gif') {
+          edLayers[window._gcpEdLayerIdx]._gcpLayersData = gcpLayersData;
+        }
         edToast('Animación guardada en Biblioteca → Animaciones ✓');
         onDone && onDone();
       };
