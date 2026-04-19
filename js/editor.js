@@ -15988,48 +15988,61 @@ function _gcpHandleDown(e) {
 
   // Handles: usar getControlPoints() igual que el editor, pero siempre permitir
   // resize/rotate aunque sea táctil (el editor los desactiva en móvil, nosotros no)
-  if (idx >= 0 && idx < window._gcpLayers.length) {
-    const la = window._gcpLayers[idx];
-    const pw = edPageW(), ph = edPageH(), z = edCamera.z;
-    const hitScreen = 28;
-
-    for (const p of la.getControlPoints()) {
-      const dpx = (c.nx - p.x) * pw, dpy = (c.ny - p.y) * ph;
-      if (Math.hypot(dpx, dpy) * z < hitScreen) {
-        if (p.corner === 'rotate') {
-          _gs = { mode:'rotate', idx,
-                  startAngle: Math.atan2(c.ny - la.y, c.nx - la.x) - (la.rotation||0)*Math.PI/180,
-                  startRot: la.rotation||0 };
+  // Handles y selección — copia exacta de _edDocDownFn usando _gcpLayers
+  const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
+  if (_la && _la.type !== 'bubble') {
+    const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
+    const hitScreen = 18; // PC
+    if (!_la.locked) {
+      for (const p of _la.getControlPoints()) {
+        const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
+        if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
+          if (p.corner === 'rotate') {
+            edIsRotating = true;
+            edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
+            return;
+          }
+          // Resize — mismo código exacto que _edDocDownFn
+          edIsResizing = true; edResizeCorner = p.corner;
+          const _rot0 = (_la.rotation||0)*Math.PI/180;
+          const _hw0 = _la.width/2, _hh0 = _la.height/2;
+          const _pw0 = edPageW(), _ph0 = edPageH();
+          const _anchorLocal = (corner) => {
+            const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
+                       corner==='tl'||corner==='bl'?_hw0 :
+                       corner==='tr'||corner==='br'?-_hw0 : 0;
+            const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
+                       corner==='tl'||corner==='tr'?_hh0 :
+                       corner==='bl'||corner==='br'?-_hh0 : 0;
+            const rx=ax*_pw0, ry=ay*_ph0;
+            return { x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw0,
+                     y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph0 };
+          };
+          const _anch = _anchorLocal(p.corner);
+          edInitialSize = { width:_la.width, height:_la.height,
+            cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
+            rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
+            anchorX:_anch.x, anchorY:_anch.y };
+          if (_la.type==='line') {
+            edInitialSize._linePoints = _la.points.map(p=>p?({...p}):null);
+            edInitialSize._subPaths = _la.subPaths?.length ? _la.subPaths.map(sp=>{const s=sp.map(p=>({...p}));if(sp.cornerRadii)s.cornerRadii={...sp.cornerRadii};return s;}) : null;
+          }
+          if (_la.cornerRadii) {
+            edInitialSize._cornerRadii = Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii};
+          } else { edInitialSize._cornerRadii = null; }
           return;
         }
-        // Resize con ancla fija — copia exacta de edIsResizing
-        const rot0 = (la.rotation||0)*Math.PI/180;
-        const hw0 = la.width/2, hh0 = la.height/2;
-        const _anch = (() => {
-          const ax = p.corner==='ml'?hw0 : p.corner==='mr'?-hw0 :
-                     (p.corner==='tl'||p.corner==='bl')?hw0 :
-                     (p.corner==='tr'||p.corner==='br')?-hw0 : 0;
-          const ay = p.corner==='mt'?hh0 : p.corner==='mb'?-hh0 :
-                     (p.corner==='tl'||p.corner==='tr')?hh0 :
-                     (p.corner==='bl'||p.corner==='br')?-hh0 : 0;
-          const rx=ax*pw, ry=ay*ph;
-          return { x: la.x+(rx*Math.cos(rot0)-ry*Math.sin(rot0))/pw,
-                   y: la.y+(rx*Math.sin(rot0)+ry*Math.cos(rot0))/ph };
-        })();
-        _gs = { mode:'resize', idx, corner:p.corner,
-                startW:la.width, startH:la.height, startX:la.x, startY:la.y,
-                rot:la.rotation||0, anchorX:_anch.x, anchorY:_anch.y };
-        return;
       }
     }
-
     // Drag dentro del bbox
-    const rot = (la.rotation||0)*Math.PI/180;
-    const dx = c.nx-la.x, dy = c.ny-la.y;
-    const lx = dx*Math.cos(-rot)*pw - dy*Math.sin(-rot)*ph;
-    const ly = dx*Math.sin(-rot)*pw + dy*Math.cos(-rot)*ph;
-    if (Math.abs(lx) <= la.width/2*pw+10/z && Math.abs(ly) <= la.height/2*ph+10/z) {
-      _gs = { mode:'drag', idx, startNx:c.nx, startNy:c.ny, startX:la.x, startY:la.y };
+    const _rot = (_la.rotation||0)*Math.PI/180;
+    const _dx = c.nx-_la.x, _dy = c.ny-_la.y;
+    const _lx = _dx*Math.cos(-_rot)*_pw - _dy*Math.sin(-_rot)*_ph;
+    const _ly = _dx*Math.sin(-_rot)*_pw + _dy*Math.cos(-_rot)*_ph;
+    if (Math.abs(_lx) <= _la.width/2*_pw + 10/_z && Math.abs(_ly) <= _la.height/2*_ph + 10/_z) {
+      edIsDragging = true;
+      edDragOffX = c.nx - _la.x;
+      edDragOffY = c.ny - _la.y;
       return;
     }
   }
@@ -16041,69 +16054,24 @@ function _gcpHandleDown(e) {
   }
   window._gcpSelIdx = hit;
   if (hit >= 0) {
-    const la = window._gcpLayers[hit];
-    _gs = { mode:'drag', idx:hit, startNx:c.nx, startNy:c.ny, startX:la.x, startY:la.y };
-  } else { _gs = null; }
-  _gcpRedraw();
-}
-
-function _gcpHandleMove(e) {
-  if (!_gs) return;
-  const c = edCoords(e);
-  const la = window._gcpLayers[_gs.idx];
-  if (!la) return;
-
-  if (_gs.mode === 'drag') {
-    la.x = _gs.startX + (c.nx - _gs.startNx);
-    la.y = _gs.startY + (c.ny - _gs.startNy);
-
-  } else if (_gs.mode === 'rotate') {
-    la.rotation = _gs.startRot +
-      (Math.atan2(c.ny - la.y, c.nx - la.x) - _gs.startAngle) * 180/Math.PI;
-
-  } else if (_gs.mode === 'resize') {
-    // Resize profesional con ancla fija — copia exacta de edIsResizing
-    const pw = edPageW(), ph = edPageH();
-    const rot = _gs.rot * Math.PI/180;
-    const corner = _gs.corner;
-    const adx = (c.nx - _gs.anchorX)*pw, ady = (c.ny - _gs.anchorY)*ph;
-    const alx =  adx*Math.cos(-rot) - ady*Math.sin(-rot);
-    const aly =  adx*Math.sin(-rot) + ady*Math.cos(-rot);
-
-    const _setCenter = (aLocalX, aLocalY) => {
-      const cpx = aLocalX*Math.cos(rot) - aLocalY*Math.sin(rot);
-      const cpy = aLocalX*Math.sin(rot) + aLocalY*Math.cos(rot);
-      la.x = _gs.anchorX - cpx/pw;
-      la.y = _gs.anchorY - cpy/ph;
-    };
-
-    if (corner==='ml'||corner==='mr') {
-      const nw = Math.abs(alx);
-      if (nw > pw*0.02) {
-        la.width = nw/pw;
-        _setCenter(corner==='ml'?nw/2:-nw/2, 0);
-      }
-    } else if (corner==='mt'||corner==='mb') {
-      const nh = Math.abs(aly);
-      if (nh > ph*0.02) {
-        la.height = nh/ph;
-        _setCenter(0, corner==='mt'?nh/2:-nh/2);
-      }
-    } else {
-      const nw = Math.abs(alx), nh = Math.abs(aly);
-      if (Math.max(nw,nh) > pw*0.02) {
-        la.width  = Math.max(nw, pw*0.01)/pw;
-        la.height = Math.max(nh, ph*0.01)/ph;
-        const ax = (corner==='tl'||corner==='bl') ?  la.width/2*pw : -la.width/2*pw;
-        const ay = (corner==='tl'||corner==='tr') ?  la.height/2*ph : -la.height/2*ph;
-        _setCenter(ax, ay);
-      }
-    }
+    edIsDragging = true;
+    edDragOffX = c.nx - window._gcpLayers[hit].x;
+    edDragOffY = c.ny - window._gcpLayers[hit].y;
   }
   _gcpRedraw();
 }
 
-function _gcpHandleUp() { _gs = null; }
+// _gcpHandleMove/Up usan _gcpWithEditorContext para que edOnMove/edOnEnd
+// operen sobre _gcpLayers[_gcpSelIdx] igual que en el editor general
+function _gcpHandleMove(e) {
+  _gcpWithEditorContext(() => { edOnMove(e); });
+  _gcpRedraw();
+}
+
+function _gcpHandleUp(e) {
+  _gcpWithEditorContext(() => { edOnEnd(e); });
+  _gcpRedraw();
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
