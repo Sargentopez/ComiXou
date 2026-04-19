@@ -16456,11 +16456,30 @@ function _gcpSaveToLib(onDone) {
           layerData:null, thumb
         });
         _bibSave(data);
-        // Si estamos re-editando un GifLayer existente, actualizar sus datos
-        if (window._gcpEdLayerIdx >= 0 && edLayers[window._gcpEdLayerIdx]?.type === 'gif') {
-          edLayers[window._gcpEdLayerIdx]._gcpLayersData = gcpLayersData;
+
+        // Si estamos re-editando un GifLayer existente, actualizarlo in-place
+        const existingLayer = (window._gcpEdLayerIdx >= 0) ? edLayers[window._gcpEdLayerIdx] : null;
+        if (existingLayer && existingLayer.type === 'gif') {
+          // Guardar posición/tamaño/rotación actuales para preservarlos
+          const savedX = existingLayer.x, savedY = existingLayer.y;
+          const savedW = existingLayer.width, savedH = existingLayer.height;
+          const savedR = existingLayer.rotation;
+          // Recargar el GIF decodificado en la capa existente
+          existingLayer.load(dataUrl, () => {
+            // Restaurar posición/tamaño — load() no los toca pero por seguridad
+            existingLayer.x = savedX; existingLayer.y = savedY;
+            existingLayer.width = savedW; existingLayer.height = savedH;
+            existingLayer.rotation = savedR;
+            existingLayer._gcpLayersData = gcpLayersData;
+            // Actualizar IndexedDB con el nuevo dataUrl
+            _gifIdbSave(existingLayer.gifKey, dataUrl).catch(e => console.warn('GIF IDB update:', e));
+            edPushHistory();
+            requestAnimationFrame(() => edRedraw());
+          });
+          edToast('GIF actualizado ✓');
+        } else {
+          edToast('Animación guardada en Biblioteca → Animaciones ✓');
         }
-        edToast('Animación guardada en Biblioteca → Animaciones ✓');
         onDone && onDone();
       };
       reader.readAsDataURL(blob);
