@@ -16061,15 +16061,19 @@ function _gcpHandleDown(e) {
   _gcpRedraw();
 }
 
-// _gcpHandleMove/Up usan _gcpWithEditorContext para que edOnMove/edOnEnd
-// operen sobre _gcpLayers[_gcpSelIdx] igual que en el editor general
 function _gcpHandleMove(e) {
   _gcpWithEditorContext(() => { edOnMove(e); });
   _gcpRedraw();
 }
 
 function _gcpHandleUp(e) {
-  _gcpWithEditorContext(() => { edOnEnd(e); });
+  // Solo limpiar estado — no llamar edOnEnd que tiene efectos secundarios
+  // (rubber band, multiselect, historial, etc.) no aplicables al canvas GIF
+  if (window._edMoved && (edIsDragging || edIsResizing || edIsRotating)) {
+    _gcpWithEditorContext(() => { edPushHistory(); });
+  }
+  window._edMoved = false;
+  edIsDragging = false; edIsResizing = false; edIsRotating = false;
   _gcpRedraw();
 }
 
