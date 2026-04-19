@@ -16115,7 +16115,7 @@ function _gcpCaptureFrame() {
   window._gcpFrames.push(snapshot);
   window._gcpFrameIdx = window._gcpFrames.length - 1;
   // Actualizar UI del dropdown de frames
-  _gcpRenderFramesDropdown(document.getElementById('gdd-frames'));
+  _gcpUpdateFramesBar();
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
@@ -16132,7 +16132,7 @@ function _gcpGoToFrame(fi) {
     la.rotation = s.rotation; la.opacity = s.opacity;
   });
   _gcpRedraw();
-  _gcpRenderFramesDropdown(document.getElementById('gdd-frames'));
+  _gcpUpdateFramesBar();
 }
 
 // Genera miniatura 60×60 del frame fi
@@ -16460,6 +16460,11 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpBibBtn')?.addEventListener('click', () => {
       const panel = $('edOptionsPanel');
       if (panel) _bibRenderPanel(panel);
+    });
+
+    // Botón Añadir Frame
+    document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _gcpCaptureFrame();
     });
 
     // Menús GIF

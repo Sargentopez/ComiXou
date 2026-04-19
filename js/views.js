@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v17.38</footer>
+    <footer class="app-version">v17.39</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -535,11 +535,11 @@ Router.register('editor', {
             <div class="ed-dropdown" id="gdd-capas"></div>
           </div>
           <div class="ed-menu-sep"></div>
-          <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-gcpmenu="frames">Frames ▾</button>
-            <div class="ed-dropdown" id="gdd-frames"></div>
-          </div>
+          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900">＋ Frame</button>
         </div>
+      </div>
+      <!-- Barra de frames: miniaturas como las hojas del editor general -->
+      <div id="gcpFramesBar" style="display:none;position:absolute;left:0;right:0;overflow-x:auto;overflow-y:hidden;background:var(--white);border-bottom:1.5px solid var(--gray-300);padding:4px 8px;display:flex;align-items:center;gap:6px;scrollbar-width:none;touch-action:pan-x;z-index:510;">
       </div>
     </div>
 
