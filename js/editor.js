@@ -15726,37 +15726,29 @@ function _bibRenderPanel(panel) {
 
       // GIF animado guardado desde el editor GIF
       if (entry.isGifAnim && entry.gifDataUrl) {
-        // PNG con transparencia real — insertar como ImageLayer
-        // Calcular proporción correcta desde las dimensiones reales del PNG
+        const frames = entry.pngFrames && entry.pngFrames.length > 1 ? entry.pngFrames : [entry.gifDataUrl];
         const img = new Image();
         img.onload = () => {
           const pw = edPageW(), ph = edPageH();
-          let finalW, finalH;
-          if (entry.normW && entry.normH) {
-            // Usar proporciones guardadas — reflejan el tamaño real en el canvas GIF
-            finalW = entry.normW;
-            finalH = entry.normH;
-          } else {
-            // Fallback: calcular desde dimensiones naturales del PNG
-            const natW = img.naturalWidth || 1, natH = img.naturalHeight || 1;
-            finalW = 0.7;
-            finalH = finalW * (natH / natW) * (pw / ph);
-          }
-          // Ajustar si alguna dimensión supera 0.9
-          const scale = Math.max(finalW / 0.9, finalH / 0.9, 1);
-          finalW /= scale; finalH /= scale;
+          let finalW = entry.normW || 0.7;
+          let finalH = entry.normH || finalW*(img.naturalHeight/Math.max(img.naturalWidth,1))*(pw/ph);
+          const sc = Math.max(finalW/0.9, finalH/0.9, 1);
+          finalW /= sc; finalH /= sc;
           const la = new ImageLayer(img, 0.5, 0.5, finalW);
           la.height = finalH;
-          la.src = entry.gifDataUrl;
+          la.src = frames[0];
           la._keepSize = true;
-          if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
           la._isGcpImage = true;
+          la._pngFrames = frames;       // todos los frames
+          la._pngFrameIdx = 0;
+          if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
+          if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
           edPushHistory(); edRedraw();
         };
-        img.src = entry.gifDataUrl;
+        img.src = frames[0];
         _bibClose(panel);
         edToast('Animación insertada ✓');
         return;
@@ -16104,6 +16096,144 @@ let gcpCtx    = null;
 window._gcpLayers = [];
 window._gcpSelIdx = -1;
 
+// Sistema de frames: cada frame guarda el estado de TODAS las capas
+// frame = [{x, y, width, height, rotation, opacity}, ...]  (una entrada por capa)
+window._gcpFrames   = [];   // array de frames
+window._gcpFrameIdx = 0;    // frame activo
+
+// ── Sistema de frames ────────────────────────────────────────────────────
+
+// Captura el estado actual de todas las capas como un nuevo frame
+function _gcpCaptureFrame() {
+  if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
+  // Snapshot de cada capa: posición, tamaño, rotación, opacidad
+  const snapshot = window._gcpLayers.map(la => ({
+    x: la.x, y: la.y, width: la.width, height: la.height,
+    rotation: la.rotation || 0, opacity: la.opacity ?? 1
+  }));
+  // Añadir frame al array
+  window._gcpFrames.push(snapshot);
+  window._gcpFrameIdx = window._gcpFrames.length - 1;
+  // Actualizar UI del dropdown de frames
+  _gcpRenderFramesDropdown(document.getElementById('gdd-frames'));
+  edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
+}
+
+// Ir a un frame: restaurar estado de las capas
+function _gcpGoToFrame(fi) {
+  if (fi < 0 || fi >= window._gcpFrames.length) return;
+  const snap = window._gcpFrames[fi];
+  window._gcpFrameIdx = fi;
+  snap.forEach((s, i) => {
+    const la = window._gcpLayers[i];
+    if (!la) return;
+    la.x = s.x; la.y = s.y;
+    la.width = s.width; la.height = s.height;
+    la.rotation = s.rotation; la.opacity = s.opacity;
+  });
+  _gcpRedraw();
+  _gcpRenderFramesDropdown(document.getElementById('gdd-frames'));
+}
+
+// Genera miniatura 60×60 del frame fi
+function _gcpFrameThumb(fi) {
+  const snap = window._gcpFrames[fi];
+  if (!snap) return null;
+  // Guardar estado actual
+  const savedState = window._gcpLayers.map(la => ({
+    x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1
+  }));
+  // Aplicar el snapshot
+  snap.forEach((s, i) => {
+    const la = window._gcpLayers[i];
+    if (!la) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height; la.rotation=s.rotation; la.opacity=s.opacity;
+  });
+  // Renderizar en canvas pequeño
+  const S = 60;
+  const tc = document.createElement('canvas');
+  tc.width = S; tc.height = S;
+  const tctx = tc.getContext('2d');
+  tctx.fillStyle = '#f5f5f5';
+  tctx.fillRect(0, 0, S, S);
+  // Escalar: página completa → 60px
+  const pw = edPageW(), ph = edPageH();
+  const scx = S / pw, scy = S / ph;
+  tctx.setTransform(scx, 0, 0, scy, 0, 0);
+  window._gcpLayers.forEach(la => {
+    if (!la || typeof la.draw !== 'function') return;
+    if (la.type === 'image' || la.type === 'gif') la.draw(tctx, tc);
+    else if (la.type === 'text' || la.type === 'bubble') la.draw(tctx, tc);
+    else { tctx.globalAlpha = la.opacity ?? 1; la.draw(tctx); tctx.globalAlpha = 1; }
+  });
+  tctx.setTransform(1,0,0,1,0,0);
+  // Restaurar estado
+  savedState.forEach((s, i) => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height; la.rotation=s.rotation; la.opacity=s.opacity;
+  });
+  return tc;
+}
+
+// Renderizar el dropdown de frames con miniaturas
+function _gcpRenderFramesDropdown(dd) {
+  if (!dd) return;
+  dd.innerHTML = '';
+  // Botón crear frame
+  const addBtn = document.createElement('button');
+  addBtn.className = 'ed-dropdown-item';
+  addBtn.style.cssText = 'font-weight:700;color:var(--black);justify-content:center;gap:6px';
+  addBtn.innerHTML = '➕ Guardar frame actual';
+  addBtn.addEventListener('click', e => { e.stopPropagation(); _gcpCaptureFrame(); });
+  dd.appendChild(addBtn);
+
+  if (!window._gcpFrames.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ed-dropdown-item';
+    empty.style.cssText = 'color:var(--gray-400);font-size:0.78rem;cursor:default;font-style:italic';
+    empty.textContent = 'Sin frames — mueve los objetos y guarda frames';
+    dd.appendChild(empty);
+    return;
+  }
+
+  // Separador
+  const sep = document.createElement('div');
+  sep.style.cssText = 'height:1px;background:var(--gray-200);margin:2px 0';
+  dd.appendChild(sep);
+
+  // Lista de frames con miniatura
+  window._gcpFrames.forEach((snap, fi) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;border-radius:6px;' +
+      (fi === window._gcpFrameIdx ? 'background:var(--yellow)' : '');
+    row.addEventListener('click', e => { e.stopPropagation(); _gcpGoToFrame(fi); });
+
+    const thumb = _gcpFrameThumb(fi);
+    if (thumb) {
+      thumb.style.cssText = 'width:40px;height:40px;border-radius:6px;flex-shrink:0;border:1.5px solid var(--gray-300)';
+      row.appendChild(thumb);
+    }
+    const info = document.createElement('span');
+    info.style.cssText = 'flex:1;font-size:0.82rem;font-weight:' + (fi === window._gcpFrameIdx ? '700' : '400');
+    info.textContent = 'Frame ' + (fi+1);
+    row.appendChild(info);
+
+    // Botón eliminar frame
+    const del = document.createElement('button');
+    del.textContent = '✕';
+    del.style.cssText = 'background:none;border:none;color:#c00;cursor:pointer;padding:0 4px;font-size:0.82rem;flex-shrink:0';
+    del.addEventListener('click', ev => {
+      ev.stopPropagation();
+      window._gcpFrames.splice(fi, 1);
+      if (window._gcpFrameIdx >= window._gcpFrames.length) window._gcpFrameIdx = Math.max(0, window._gcpFrames.length-1);
+      if (window._gcpFrames.length) _gcpGoToFrame(window._gcpFrameIdx);
+      else _gcpRenderFramesDropdown(dd);
+    });
+    row.appendChild(del);
+    dd.appendChild(row);
+  });
+}
+
 // _gcpRedraw — copia de edRedraw usando gcpCanvas/gcpCtx/_gcpLayers
 // Misma cámara, mismo orden de render, mismo patrón exacto
 function _gcpRedraw() {
@@ -16262,14 +16392,18 @@ function gcpOpen(edLayerIdx) {
 
   // Limpiar y resetear capas
   gcpCtx.clearRect(0, 0, gcpCanvas.width, gcpCanvas.height);
-  window._gcpLayers = [];
-  window._gcpSelIdx = -1;
+  window._gcpLayers   = [];
+  window._gcpSelIdx   = -1;
+  window._gcpFrames   = [];
+  window._gcpFrameIdx = 0;
 
   // Si re-editamos una animación existente, restaurar sus capas serializadas
   if (window._gcpEdLayerIdx >= 0) {
     const gifLayer = edLayers[window._gcpEdLayerIdx];
     const hasData = gifLayer && gifLayer._gcpLayersData;
     if (hasData) {
+      // Restaurar también los frames si existen
+      if (gifLayer._gcpFramesData) window._gcpFrames = gifLayer._gcpFramesData.slice();
       const restoredLayers = gifLayer._gcpLayersData
         .map(ld => edDeserLayer(ld, edOrientation))
         .filter(Boolean);
@@ -16410,128 +16544,126 @@ function _gcpSaveToLib(onDone) {
   const layers  = window._gcpLayers.slice();
   const pageW   = Math.round(edPageW()),  pageH  = Math.round(edPageH());
   const marginX = Math.round(edMarginX()), marginY = Math.round(edMarginY());
+  // Frames: si hay frames definidos usarlos, si no: frame único con estado actual
+  const frameSnaps = window._gcpFrames.length
+    ? window._gcpFrames.slice()
+    : [layers.map(la => ({ x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1 }))];
 
-  // Canvas amplio con margen extra para que los objetos rotados no se corten.
-  // Los objetos girados tienen esquinas que sobresalen del área de página —
-  // necesitamos espacio para capturarlos todos antes de calcular el bbox.
-  const extra = Math.round(Math.max(pageW, pageH) * 0.5); // 50% extra por lado
-  const wsW = pageW + marginX * 2 + extra * 2;
-  const wsH = pageH + marginY * 2 + extra * 2;
-  // Offset de las capas: las capas usan edMarginX/Y como origen,
-  // nosotros desplazamos el contexto para centrarlas en el canvas ampliado
+  const extra = Math.round(Math.max(pageW, pageH) * 0.5);
+  const wsW = pageW + marginX*2 + extra*2;
+  const wsH = pageH + marginY*2 + extra*2;
   const offX = extra, offY = extra;
 
-  const frameC = document.createElement('canvas');
-  frameC.width  = wsW; frameC.height = wsH;
-  const fctx = frameC.getContext('2d');
-  // Aplicar offset extra + zoom=1 para que las capas queden centradas
-  fctx.setTransform(1, 0, 0, 1, offX, offY);
-  layers.forEach(l => {
-    if (!l || typeof l.draw !== 'function') return;
-    if (l.type === 'image' || l.type === 'gif') { l.draw(fctx, frameC); }
-    else if (l.type === 'text' || l.type === 'bubble') { l.draw(fctx, frameC); }
-    else { fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1; }
-  });
-  fctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Renderizar un snapshot de capas en un canvas de workspace a zoom=1
+  const renderSnap = (snap) => {
+    snap.forEach((s, i) => {
+      const la = layers[i]; if (!la) return;
+      la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+      la.rotation=s.rotation; la.opacity=s.opacity;
+    });
+    const fc = document.createElement('canvas');
+    fc.width = wsW; fc.height = wsH;
+    const fctx = fc.getContext('2d');
+    fctx.setTransform(1, 0, 0, 1, offX, offY);
+    layers.forEach(l => {
+      if (!l || typeof l.draw !== 'function') return;
+      if (l.type==='image'||l.type==='gif') l.draw(fctx, fc);
+      else if (l.type==='text'||l.type==='bubble') l.draw(fctx, fc);
+      else { fctx.globalAlpha = l.opacity??1; l.draw(fctx); fctx.globalAlpha=1; }
+    });
+    fctx.setTransform(1,0,0,1,0,0);
+    return fc;
+  };
 
-  // Bounding box escaneando el canvas COMPLETO (no solo la zona de página)
-  // para capturar esquinas rotadas que sobresalen del área de página
-  const imgData = fctx.getImageData(0, 0, wsW, wsH);
-  const d = imgData.data;
-  let minX = wsW, minY = wsH, maxX = 0, maxY = 0;
-  for (let y = 0; y < wsH; y++) for (let x = 0; x < wsW; x++) {
-    if (d[(y*wsW+x)*4+3] > 10) {
-      if (x < minX) minX=x; if (x > maxX) maxX=x;
-      if (y < minY) minY=y; if (y > maxY) maxY=y;
+  // Renderizar todos los frames y calcular bbox global sobre todos
+  const renderedFrames = frameSnaps.map(renderSnap);
+  let minX=wsW, minY=wsH, maxX=0, maxY=0;
+  renderedFrames.forEach(fc => {
+    const d = fc.getContext('2d').getImageData(0,0,wsW,wsH).data;
+    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
+      if (d[(y*wsW+x)*4+3] > 10) {
+        if (x<minX) minX=x; if (x>maxX) maxX=x;
+        if (y<minY) minY=y; if (y>maxY) maxY=y;
+      }
     }
+  });
+  if (maxX<minX || maxY<minY) {
+    minX=marginX+offX; minY=marginY+offY;
+    maxX=minX+pageW-1; maxY=minY+pageH-1;
   }
-  if (maxX < minX || maxY < minY) {
-    // Sin contenido: usar zona de página
-    minX = marginX+offX; minY = marginY+offY;
-    maxX = minX+pageW-1; maxY = minY+pageH-1;
+  const pad=4;
+  const cropX=Math.max(0,minX-pad), cropY=Math.max(0,minY-pad);
+  const cropW=Math.min(wsW,maxX+pad+1)-cropX;
+  const cropH=Math.min(wsH,maxY+pad+1)-cropY;
+
+  // Convertir cada frame renderizado a PNG dataUrl recortado y transparente
+  const pngFrames = renderedFrames.map(fc => {
+    const c = document.createElement('canvas');
+    c.width=cropW; c.height=cropH;
+    c.getContext('2d').drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+    return c.toDataURL('image/png');
+  });
+
+  // Miniatura desde el primer frame
+  const S=80;
+  const thumbC=document.createElement('canvas'); thumbC.width=S; thumbC.height=S;
+  const tc2=thumbC.getContext('2d');
+  tc2.fillStyle='#f0f0f0'; tc2.fillRect(0,0,S,S);
+  const sc=Math.min((S-4)/Math.max(cropW,1),(S-4)/Math.max(cropH,1));
+  tc2.drawImage(renderedFrames[0], cropX,cropY,cropW,cropH, (S-cropW*sc)/2,(S-cropH*sc)/2,cropW*sc,cropH*sc);
+  const thumb=thumbC.toDataURL('image/png',0.7);
+
+  // Proporciones normalizadas (fracción de página)
+  const _gcpNormW = cropW/pageW;
+  const _gcpNormH = cropH/pageH;
+
+  // Serializar capas para re-edición
+  const gcpLayersData = window._gcpLayers
+    .map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean);
+  // Serializar frames
+  const gcpFramesData = window._gcpFrames.slice();
+
+  // Restaurar estado actual de las capas (el último frame aplicado)
+  const lastSnap = frameSnaps[frameSnaps.length-1];
+  lastSnap.forEach((s,i) => {
+    const la=layers[i]; if(!la) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height; la.rotation=s.rotation; la.opacity=s.opacity;
+  });
+
+  // Guardar en biblioteca
+  const data = _bibLoad();
+  _bibGetAnimFolder(data).items.push({
+    id: Date.now()+'_gif', timestamp:Date.now(),
+    isGroup:false, isGifAnim:true,
+    gifDataUrl: pngFrames[0],  // primer frame como preview
+    pngFrames,                  // todos los frames
+    gcpLayersData, gcpFramesData,
+    normW:_gcpNormW, normH:_gcpNormH,
+    layerData:null, thumb
+  });
+  _bibSave(data);
+
+  // Si re-editamos capa existente, actualizarla in-place
+  const existingLayer = (window._gcpEdLayerIdx>=0) ? edLayers[window._gcpEdLayerIdx] : null;
+  if (existingLayer && (existingLayer.type==='gif' || existingLayer._isGcpImage)) {
+    const savedX=existingLayer.x, savedY=existingLayer.y, savedR=existingLayer.rotation;
+    existingLayer._gcpLayersData=gcpLayersData;
+    existingLayer._gcpFramesData=gcpFramesData;
+    existingLayer._isGcpImage=true;
+    existingLayer._pngFrames=pngFrames;
+    // Cargar primer frame como imagen visible
+    const img=new Image();
+    img.onload=()=>{
+      existingLayer.img=img; existingLayer.src=pngFrames[0];
+      existingLayer.x=savedX; existingLayer.y=savedY; existingLayer.rotation=savedR;
+      const sc2=Math.max(_gcpNormW/0.9,_gcpNormH/0.9,1);
+      existingLayer.width=_gcpNormW/sc2; existingLayer.height=_gcpNormH/sc2;
+      edPushHistory(); requestAnimationFrame(()=>edRedraw());
+    };
+    img.src=pngFrames[0];
+    edToast('Animación actualizada ✓');
+  } else {
+    edToast('Animación guardada en Biblioteca → Animaciones ✓');
   }
-  const pad = 4;
-  const cropX = Math.max(0, minX-pad), cropY = Math.max(0, minY-pad);
-  const cropW = Math.min(wsW, maxX+pad+1) - cropX;
-  const cropH = Math.min(wsH, maxY+pad+1) - cropY;
-
-  // Canvas recortado con transparencia real — guardado como PNG (no GIF)
-  // PNG soporta alpha nativo, sin problemas de paleta ni contornos
-  const gifC = document.createElement('canvas');
-  gifC.width = cropW; gifC.height = cropH;
-  const gctx = gifC.getContext('2d', { alpha: true });
-  // SIN fondo — transparente
-  gctx.drawImage(frameC, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-  // Miniatura
-  const S = 80;
-  const thumbC = document.createElement('canvas');
-  thumbC.width = S; thumbC.height = S;
-  const tc2 = thumbC.getContext('2d');
-  tc2.fillStyle = '#f0f0f0'; tc2.fillRect(0,0,S,S);
-  const sc = Math.min((S-4)/Math.max(cropW,1), (S-4)/Math.max(cropH,1));
-  tc2.drawImage(gifC, (S-cropW*sc)/2, (S-cropH*sc)/2, cropW*sc, cropH*sc);
-  const thumb = thumbC.toDataURL('image/png', 0.7);
-
-  // Guardar como PNG con transparencia real
-  const dataUrl = gifC.toDataURL('image/png');
-  {
-    const ev = { target: { result: dataUrl } };
-    (ev => {
-      const dataUrl = ev.target.result;
-        // Serializar las capas del editor GIF para poder re-editarlas
-        const gcpLayersData = window._gcpLayers
-          .map(l => { try { return edSerLayer(l); } catch(e) { return null; } })
-          .filter(Boolean);
-        const data = _bibLoad();
-        // Guardar proporciones reales del contenido (fracción de página)
-        // para insertar con el tamaño correcto en el editor general
-        const _gcpNormW = cropW / pageW;
-        const _gcpNormH = cropH / pageH;
-        _bibGetAnimFolder(data).items.push({
-          id: Date.now()+'_gif', timestamp:Date.now(),
-          isGroup:false, isGifAnim:true,
-          gifDataUrl:dataUrl, gcpLayersData,
-          normW: _gcpNormW, normH: _gcpNormH,
-          layerData:null, thumb
-        });
-        _bibSave(data);
-
-        // Si estamos re-editando una animación existente, actualizarla in-place
-        const existingLayer = (window._gcpEdLayerIdx >= 0) ? edLayers[window._gcpEdLayerIdx] : null;
-        if (existingLayer && (existingLayer.type === 'gif' || existingLayer._isGcpImage)) {
-          const savedX = existingLayer.x, savedY = existingLayer.y, savedR = existingLayer.rotation;
-          if (existingLayer.type === 'gif') {
-            // GifLayer importado: recargar con load()
-            existingLayer.load(dataUrl, () => {
-              existingLayer.x = savedX; existingLayer.y = savedY; existingLayer.rotation = savedR;
-              existingLayer._gcpLayersData = gcpLayersData;
-              _gifIdbSave(existingLayer.gifKey, dataUrl).catch(()=>{});
-              edPushHistory(); requestAnimationFrame(() => edRedraw());
-            });
-          } else {
-            // ImageLayer del editor GIF: actualizar src con nuevo PNG
-            existingLayer._gcpLayersData = gcpLayersData;
-            existingLayer._isGcpImage = true;
-            existingLayer.src = dataUrl;
-            const img = new Image();
-            img.onload = () => {
-              existingLayer.img = img; existingLayer.src = dataUrl;
-              existingLayer.x = savedX; existingLayer.y = savedY; existingLayer.rotation = savedR;
-              // Usar proporciones reales del nuevo PNG (cropW/cropH ya calculados arriba)
-              let newW = _gcpNormW, newH = _gcpNormH;
-              const scale2 = Math.max(newW/0.9, newH/0.9, 1);
-              existingLayer.width  = newW / scale2;
-              existingLayer.height = newH / scale2;
-              edPushHistory(); requestAnimationFrame(() => edRedraw());
-            };
-            img.src = dataUrl;
-          }
-          edToast('Animación actualizada ✓');
-        } else {
-          edToast('Animación guardada en Biblioteca → Animaciones ✓');
-        }
-        onDone && onDone();
-    })(ev);
-  }
+  onDone && onDone();
 }
