@@ -16350,10 +16350,12 @@ function _gcpSaveToLib(onDone) {
   const cropW = Math.min(iw, maxX+pad+1) - cropX;
   const cropH = Math.min(ih, maxY+pad+1) - cropY;
 
-  // Canvas recortado con fondo transparente
+  // Canvas recortado — fondo blanco (gif.js no soporta transparencia real con gifuct-js)
   const gifC = document.createElement('canvas');
   gifC.width = cropW; gifC.height = cropH;
   const gctx = gifC.getContext('2d');
+  gctx.fillStyle = '#ffffff';
+  gctx.fillRect(0, 0, cropW, cropH);
   gctx.drawImage(frameC, pxX+cropX, pxY+cropY, cropW, cropH, 0, 0, cropW, cropH);
 
   // Miniatura
@@ -16382,7 +16384,7 @@ function _gcpSaveToLib(onDone) {
     const workerURL  = URL.createObjectURL(workerBlob);
     const gif = new window.GIF({
       workers:2, quality:10, width:cropW, height:cropH,
-      workerScript:workerURL, repeat:0, transparent:0x00000000
+      workerScript:workerURL, repeat:0
     });
     gif.addFrame(gifC, {delay:100, copy:true});
     gif.on('finished', blob => {
