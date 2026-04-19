@@ -16346,34 +16346,29 @@ function gcpClose() {
 
 function _gcpSaveToLib(onDone) {
   if (!window._gcpLayers.length || !gcpCanvas || !gcpCtx) { onDone && onDone(); return; }
-  // Capturar todo lo necesario ANTES de cualquier operación asíncrona
-  const cam    = { z: edCamera.z, x: edCamera.x, y: edCamera.y };
-  const layers = window._gcpLayers.slice();
-  const wsW    = gcpCanvas.width, wsH = gcpCanvas.height;
-  const pageW  = Math.round(edPageW()), pageH = Math.round(edPageH());
+  const layers  = window._gcpLayers.slice();
+  const pageW   = Math.round(edPageW()),  pageH  = Math.round(edPageH());
   const marginX = Math.round(edMarginX()), marginY = Math.round(edMarginY());
 
-  // Renderizar frame con la misma cámara que _gcpRedraw
+  // Renderizar a zoom=1 en un canvas del tamaño del workspace completo.
+  // Así las capas quedan en sus coordenadas naturales de página y el bounding
+  // box es correcto aunque haya rotaciones o el usuario tenga zoom distinto de 1.
+  const wsW = Math.round(edMarginX()*2 + edPageW());
+  const wsH = Math.round(edMarginY()*2 + edPageH());
   const frameC = document.createElement('canvas');
-  frameC.width = wsW; frameC.height = wsH;
+  frameC.width  = wsW; frameC.height = wsH;
   const fctx = frameC.getContext('2d');
-  fctx.setTransform(cam.z, 0, 0, cam.z, cam.x, cam.y);
+  // Zoom=1, sin offset de cámara — las capas usan edMarginX/Y directamente
+  fctx.setTransform(1, 0, 0, 1, 0, 0);
   layers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
     if (l.type === 'image' || l.type === 'gif') { l.draw(fctx, frameC); }
     else if (l.type === 'text' || l.type === 'bubble') { l.draw(fctx, frameC); }
     else { fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1; }
   });
-  fctx.setTransform(1, 0, 0, 1, 0, 0);
 
-  // Zona de página en coordenadas del canvas renderizado
-  const pxX = Math.max(0, Math.round(marginX * cam.z + cam.x));
-  const pxY = Math.max(0, Math.round(marginY * cam.z + cam.y));
-  const pxW = Math.min(wsW - pxX, Math.round(pageW * cam.z));
-  const pxH = Math.min(wsH - pxY, Math.round(pageH * cam.z));
-
-  // Bounding box de contenido no-transparente
-  const imgData = fctx.getImageData(pxX, pxY, pxW, pxH);
+  // Bounding box de contenido no-transparente dentro de la zona de página
+  const imgData = fctx.getImageData(marginX, marginY, pageW, pageH);
   const d = imgData.data, iw = imgData.width, ih = imgData.height;
   let minX = iw, minY = ih, maxX = 0, maxY = 0;
   for (let y = 0; y < ih; y++) for (let x = 0; x < iw; x++) {
@@ -16388,22 +16383,25 @@ function _gcpSaveToLib(onDone) {
   const cropW = Math.min(iw, maxX+pad+1) - cropX;
   const cropH = Math.min(ih, maxY+pad+1) - cropY;
 
-  // Canvas recortado — fondo blanco, luego segunda pasada para poner alpha=0
-  // en los píxeles que eran transparentes en el original (los que siguen siendo
-  // blanco puro tras componer), para que gifuct-js los trate como transparentes.
+  // Canvas recortado a coordenadas de página (zoom=1, sin cámara de usuario)
   const gifC = document.createElement('canvas');
   gifC.width = cropW; gifC.height = cropH;
   const gctx = gifC.getContext('2d');
-  gctx.fillStyle = '#ffffff';
+  // Fondo #FEFEFE (254,254,254) — casi blanco pero NO blanco puro.
+  // El blanco puro (255,255,255) puede ser contenido real del dibujo.
+  // La segunda pasada reemplazará solo este color exacto por blanco puro,
+  // que gif.js tratará como transparente.
+  gctx.fillStyle = '#fefefe';
   gctx.fillRect(0, 0, cropW, cropH);
-  gctx.drawImage(frameC, pxX+cropX, pxY+cropY, cropW, cropH, 0, 0, cropW, cropH);
-  // Segunda pasada: usar el alpha original para marcar transparentes como blanco puro
-  // gif.js con transparent:0xFFFFFF tratará ese color como transparente
-  const origData = frameC.getContext('2d').getImageData(pxX+cropX, pxY+cropY, cropW, cropH);
-  const gifPx   = gctx.getImageData(0, 0, cropW, cropH);
-  const od = origData.data, gd = gifPx.data;
+  gctx.drawImage(frameC, marginX+cropX, marginY+cropY, cropW, cropH, 0, 0, cropW, cropH);
+  // Segunda pasada: donde el original era transparente (alpha<16), el fondo #FEFEFE
+  // sigue intacto → reemplazarlo por blanco puro #FFFFFF que gif.js marca transparente.
+  // Donde el original tenía contenido, el color ya no es #FEFEFE → no tocarlo.
+  const origPx = frameC.getContext('2d').getImageData(marginX+cropX, marginY+cropY, cropW, cropH);
+  const gifPx  = gctx.getImageData(0, 0, cropW, cropH);
+  const od = origPx.data, gd = gifPx.data;
   for (let i = 0; i < od.length; i += 4) {
-    if (od[i+3] < 16) { // píxel era transparente → forzar blanco puro en el GIF
+    if (od[i+3] < 16) { // píxel original transparente → forzar blanco puro
       gd[i]=255; gd[i+1]=255; gd[i+2]=255; gd[i+3]=255;
     }
   }
