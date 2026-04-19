@@ -15979,25 +15979,131 @@ function _gcpHandleDown(e) {
   if (!gc) return;
   const rect = gc.getBoundingClientRect();
   const src2 = e.touches ? e.touches[0] : e;
-  const cx = src2 ? src2.clientX : e.clientX;
-  const cy2 = src2 ? src2.clientY : e.clientY;
-  if (cx < rect.left || cx > rect.right || cy2 < rect.top || cy2 > rect.bottom) return;
-  _gcpWithEditorContext(() => {
-    edSelectedIdx = window._gcpSelIdx;
-    window._edDocDownFn && window._edDocDownFn(e);
-  });
+  const clientX = src2 ? src2.clientX : e.clientX;
+  const clientY2 = src2 ? src2.clientY : e.clientY;
+  if (clientX < rect.left || clientX > rect.right || clientY2 < rect.top || clientY2 > rect.bottom) return;
+
+  const c = edCoords(e);
+  const idx = window._gcpSelIdx;
+
+  // Handles: usar getControlPoints() igual que el editor, pero siempre permitir
+  // resize/rotate aunque sea táctil (el editor los desactiva en móvil, nosotros no)
+  if (idx >= 0 && idx < window._gcpLayers.length) {
+    const la = window._gcpLayers[idx];
+    const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+    const hitScreen = 28;
+
+    for (const p of la.getControlPoints()) {
+      const dpx = (c.nx - p.x) * pw, dpy = (c.ny - p.y) * ph;
+      if (Math.hypot(dpx, dpy) * z < hitScreen) {
+        if (p.corner === 'rotate') {
+          _gs = { mode:'rotate', idx,
+                  startAngle: Math.atan2(c.ny - la.y, c.nx - la.x) - (la.rotation||0)*Math.PI/180,
+                  startRot: la.rotation||0 };
+          return;
+        }
+        // Resize con ancla fija — copia exacta de edIsResizing
+        const rot0 = (la.rotation||0)*Math.PI/180;
+        const hw0 = la.width/2, hh0 = la.height/2;
+        const _anch = (() => {
+          const ax = p.corner==='ml'?hw0 : p.corner==='mr'?-hw0 :
+                     (p.corner==='tl'||p.corner==='bl')?hw0 :
+                     (p.corner==='tr'||p.corner==='br')?-hw0 : 0;
+          const ay = p.corner==='mt'?hh0 : p.corner==='mb'?-hh0 :
+                     (p.corner==='tl'||p.corner==='tr')?hh0 :
+                     (p.corner==='bl'||p.corner==='br')?-hh0 : 0;
+          const rx=ax*pw, ry=ay*ph;
+          return { x: la.x+(rx*Math.cos(rot0)-ry*Math.sin(rot0))/pw,
+                   y: la.y+(rx*Math.sin(rot0)+ry*Math.cos(rot0))/ph };
+        })();
+        _gs = { mode:'resize', idx, corner:p.corner,
+                startW:la.width, startH:la.height, startX:la.x, startY:la.y,
+                rot:la.rotation||0, anchorX:_anch.x, anchorY:_anch.y };
+        return;
+      }
+    }
+
+    // Drag dentro del bbox
+    const rot = (la.rotation||0)*Math.PI/180;
+    const dx = c.nx-la.x, dy = c.ny-la.y;
+    const lx = dx*Math.cos(-rot)*pw - dy*Math.sin(-rot)*ph;
+    const ly = dx*Math.sin(-rot)*pw + dy*Math.cos(-rot)*ph;
+    if (Math.abs(lx) <= la.width/2*pw+10/z && Math.abs(ly) <= la.height/2*ph+10/z) {
+      _gs = { mode:'drag', idx, startNx:c.nx, startNy:c.ny, startX:la.x, startY:la.y };
+      return;
+    }
+  }
+
+  // Buscar capa tocada
+  let hit = -1;
+  for (let i = window._gcpLayers.length-1; i >= 0; i--) {
+    if (window._gcpLayers[i]?.contains?.(c.nx, c.ny)) { hit = i; break; }
+  }
+  window._gcpSelIdx = hit;
+  if (hit >= 0) {
+    const la = window._gcpLayers[hit];
+    _gs = { mode:'drag', idx:hit, startNx:c.nx, startNy:c.ny, startX:la.x, startY:la.y };
+  } else { _gs = null; }
   _gcpRedraw();
 }
 
 function _gcpHandleMove(e) {
-  _gcpWithEditorContext(() => { edOnMove(e); });
+  if (!_gs) return;
+  const c = edCoords(e);
+  const la = window._gcpLayers[_gs.idx];
+  if (!la) return;
+
+  if (_gs.mode === 'drag') {
+    la.x = _gs.startX + (c.nx - _gs.startNx);
+    la.y = _gs.startY + (c.ny - _gs.startNy);
+
+  } else if (_gs.mode === 'rotate') {
+    la.rotation = _gs.startRot +
+      (Math.atan2(c.ny - la.y, c.nx - la.x) - _gs.startAngle) * 180/Math.PI;
+
+  } else if (_gs.mode === 'resize') {
+    // Resize profesional con ancla fija — copia exacta de edIsResizing
+    const pw = edPageW(), ph = edPageH();
+    const rot = _gs.rot * Math.PI/180;
+    const corner = _gs.corner;
+    const adx = (c.nx - _gs.anchorX)*pw, ady = (c.ny - _gs.anchorY)*ph;
+    const alx =  adx*Math.cos(-rot) - ady*Math.sin(-rot);
+    const aly =  adx*Math.sin(-rot) + ady*Math.cos(-rot);
+
+    const _setCenter = (aLocalX, aLocalY) => {
+      const cpx = aLocalX*Math.cos(rot) - aLocalY*Math.sin(rot);
+      const cpy = aLocalX*Math.sin(rot) + aLocalY*Math.cos(rot);
+      la.x = _gs.anchorX - cpx/pw;
+      la.y = _gs.anchorY - cpy/ph;
+    };
+
+    if (corner==='ml'||corner==='mr') {
+      const nw = Math.abs(alx);
+      if (nw > pw*0.02) {
+        la.width = nw/pw;
+        _setCenter(corner==='ml'?nw/2:-nw/2, 0);
+      }
+    } else if (corner==='mt'||corner==='mb') {
+      const nh = Math.abs(aly);
+      if (nh > ph*0.02) {
+        la.height = nh/ph;
+        _setCenter(0, corner==='mt'?nh/2:-nh/2);
+      }
+    } else {
+      const nw = Math.abs(alx), nh = Math.abs(aly);
+      if (Math.max(nw,nh) > pw*0.02) {
+        la.width  = Math.max(nw, pw*0.01)/pw;
+        la.height = Math.max(nh, ph*0.01)/ph;
+        const ax = (corner==='tl'||corner==='bl') ?  la.width/2*pw : -la.width/2*pw;
+        const ay = (corner==='tl'||corner==='tr') ?  la.height/2*ph : -la.height/2*ph;
+        _setCenter(ax, ay);
+      }
+    }
+  }
   _gcpRedraw();
 }
 
-function _gcpHandleUp(e) {
-  _gcpWithEditorContext(() => { edOnEnd(e); });
-  _gcpRedraw();
-}
+function _gcpHandleUp() { _gs = null; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
