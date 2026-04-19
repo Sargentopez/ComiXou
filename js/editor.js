@@ -4856,7 +4856,12 @@ function _edHandleDoubleTap(idx){
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
   } else if (la && la.type === 'gif') {
-    // GIF: abrir editor GIF para re-editar
+    // GifLayer importado: abrir editor GIF
+    edSelectedIdx = idx;
+    edRedraw();
+    gcpOpen(idx);
+  } else if (la && la.type === 'image' && la._isGcpImage) {
+    // ImageLayer generado por el editor GIF: abrir editor GIF para re-editar
     edSelectedIdx = idx;
     edRedraw();
     gcpOpen(idx);
@@ -15719,15 +15724,23 @@ function _bibRenderPanel(panel) {
 
       // GIF animado guardado desde el editor GIF
       if (entry.isGifAnim && entry.gifDataUrl) {
-        const f = new File([_dataUrlToBlob(entry.gifDataUrl)], 'animacion.gif', { type: 'image/gif' });
-        // edAddGif añade la capa — guardar gcpLayersData en ella cuando esté lista
-        const insertIdx = edLayers.length; // índice aproximado donde se insertará
-        edAddGif(f, (layer) => {
-          // callback tras carga — guardar capas serializadas para re-edición
-          if (entry.gcpLayersData) layer._gcpLayersData = entry.gcpLayersData;
-        });
+        // Los GIFs del editor GIF se guardan como PNG con transparencia real.
+        // Insertar como ImageLayer — soporta alpha nativo sin contornos.
+        const la = edDeserLayer({
+          type: 'image', src: entry.gifDataUrl,
+          x: 0.5, y: 0.5, width: 0.7, height: 0.7,
+          rotation: 0, opacity: 1, _keepSize: true
+        }, edOrientation);
+        if (!la) { edToast('Error al insertar la animación'); return; }
+        // Guardar gcpLayersData para re-edición
+        if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
+        la._isGcpImage = true; // marca para doble tap → abrir editor GIF
+        const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
+        if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
+        else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
+        edPushHistory(); edRedraw();
         _bibClose(panel);
-        edToast('GIF insertado ✓');
+        edToast('Animación insertada ✓');
         return;
       }
 
@@ -16205,10 +16218,11 @@ function gcpOpen(edLayerIdx) {
   window._gcpLayers = [];
   window._gcpSelIdx = -1;
 
-  // Si re-editamos un GIF existente, restaurar sus capas serializadas
+  // Si re-editamos una animación existente, restaurar sus capas serializadas
   if (window._gcpEdLayerIdx >= 0) {
     const gifLayer = edLayers[window._gcpEdLayerIdx];
-    if (gifLayer && gifLayer.type === 'gif' && gifLayer._gcpLayersData) {
+    const hasData = gifLayer && gifLayer._gcpLayersData;
+    if (hasData) {
       const restoredLayers = gifLayer._gcpLayersData
         .map(ld => edDeserLayer(ld, edOrientation))
         .filter(Boolean);
@@ -16394,25 +16408,13 @@ function _gcpSaveToLib(onDone) {
   const cropW = Math.min(wsW, maxX+pad+1) - cropX;
   const cropH = Math.min(wsH, maxY+pad+1) - cropY;
 
-  // Fondo magenta puro #FF00FF — color imposible en dibujos normales.
-  // gif.js lo mapea exacto en la paleta como transparente.
-  // gifuct-js lo decodifica con alpha=0.
+  // Canvas recortado con transparencia real — guardado como PNG (no GIF)
+  // PNG soporta alpha nativo, sin problemas de paleta ni contornos
   const gifC = document.createElement('canvas');
   gifC.width = cropW; gifC.height = cropH;
-  const gctx = gifC.getContext('2d');
-  gctx.fillStyle = '#ff00ff';
-  gctx.fillRect(0, 0, cropW, cropH);
+  const gctx = gifC.getContext('2d', { alpha: true });
+  // SIN fondo — transparente
   gctx.drawImage(frameC, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-  // Segunda pasada: antialiasing borde (mezcla magenta+contenido) → forzar a magenta puro
-  // Criterio: G bajo (<30), R y B altos (>200) = residuo de magenta
-  const gifPx = gctx.getImageData(0, 0, cropW, cropH);
-  const gd = gifPx.data;
-  for (let i = 0; i < gd.length; i += 4) {
-    if (gd[i] > 200 && gd[i+1] < 30 && gd[i+2] > 200) {
-      gd[i]=255; gd[i+1]=0; gd[i+2]=255; gd[i+3]=255;
-    }
-  }
-  gctx.putImageData(gifPx, 0, 0);
 
   // Miniatura
   const S = 80;
@@ -16424,31 +16426,12 @@ function _gcpSaveToLib(onDone) {
   tc2.drawImage(gifC, (S-cropW*sc)/2, (S-cropH*sc)/2, cropW*sc, cropH*sc);
   const thumb = thumbC.toDataURL('image/png', 0.7);
 
-  // Generar GIF
-  const loadGifJs = (cb) => {
-    if (window.GIF) { cb(); return; }
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js';
-    s.onload = cb;
-    s.onerror = () => { edToast('No se pudo cargar gif.js'); onDone && onDone(); };
-    document.head.appendChild(s);
-  };
-  loadGifJs(() => {
-    const workerSrc  = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js';
-    const workerCode = 'self.importScripts(' + JSON.stringify(workerSrc) + ')';
-    const workerBlob = new Blob([workerCode], {type:'application/javascript'});
-    const workerURL  = URL.createObjectURL(workerBlob);
-    const gif = new window.GIF({
-      workers:2, quality:10, width:cropW, height:cropH,
-      workerScript:workerURL, repeat:0,
-      transparent: 0xFF00FF  // magenta → transparente; conserva todos los colores reales
-    });
-    gif.addFrame(gifC, {delay:100, copy:true});
-    gif.on('finished', blob => {
-      URL.revokeObjectURL(workerURL);
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const dataUrl = ev.target.result;
+  // Guardar como PNG con transparencia real
+  const dataUrl = gifC.toDataURL('image/png');
+  {
+    const ev = { target: { result: dataUrl } };
+    (ev => {
+      const dataUrl = ev.target.result;
         // Serializar las capas del editor GIF para poder re-editarlas
         const gcpLayersData = window._gcpLayers
           .map(l => { try { return edSerLayer(l); } catch(e) { return null; } })
@@ -16462,44 +16445,39 @@ function _gcpSaveToLib(onDone) {
         });
         _bibSave(data);
 
-        // Si estamos re-editando un GifLayer existente, actualizarlo in-place
+        // Si estamos re-editando una animación existente, actualizarla in-place
         const existingLayer = (window._gcpEdLayerIdx >= 0) ? edLayers[window._gcpEdLayerIdx] : null;
-        if (existingLayer && existingLayer.type === 'gif') {
-          // Guardar posición/tamaño/rotación actuales para preservarlos
-          const savedX = existingLayer.x, savedY = existingLayer.y;
-          const savedW = existingLayer.width, savedH = existingLayer.height;
-          const savedR = existingLayer.rotation;
-          // Recargar el GIF decodificado en la capa existente
-          existingLayer.load(dataUrl, () => {
-            // Preservar posición y rotación — recalcular width/height según nuevo tamaño
-            existingLayer.x = savedX; existingLayer.y = savedY;
-            existingLayer.rotation = savedR;
-            // Recalcular proporción igual que edAddGif
-            if (existingLayer._oc) {
-              const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-              const natW = existingLayer._oc.width || 1, natH = existingLayer._oc.height || 1;
-              existingLayer.width  = savedW;
-              existingLayer.height = savedW * (natH / natW) * (pw / ph);
-              if (existingLayer.height > 0.85) {
-                const s = 0.85 / existingLayer.height;
-                existingLayer.height = 0.85; existingLayer.width = savedW * s;
-              }
-            }
+        if (existingLayer && (existingLayer.type === 'gif' || existingLayer._isGcpImage)) {
+          const savedX = existingLayer.x, savedY = existingLayer.y, savedR = existingLayer.rotation;
+          if (existingLayer.type === 'gif') {
+            // GifLayer importado: recargar con load()
+            existingLayer.load(dataUrl, () => {
+              existingLayer.x = savedX; existingLayer.y = savedY; existingLayer.rotation = savedR;
+              existingLayer._gcpLayersData = gcpLayersData;
+              _gifIdbSave(existingLayer.gifKey, dataUrl).catch(()=>{});
+              edPushHistory(); requestAnimationFrame(() => edRedraw());
+            });
+          } else {
+            // ImageLayer del editor GIF: actualizar src con nuevo PNG
             existingLayer._gcpLayersData = gcpLayersData;
-            // Actualizar IndexedDB con el nuevo dataUrl
-            _gifIdbSave(existingLayer.gifKey, dataUrl).catch(e => console.warn('GIF IDB update:', e));
-            edPushHistory();
-            requestAnimationFrame(() => edRedraw());
-          });
-          edToast('GIF actualizado ✓');
+            existingLayer._isGcpImage = true;
+            existingLayer.src = dataUrl;
+            const img = new Image();
+            img.onload = () => {
+              existingLayer.img = img; existingLayer.src = dataUrl;
+              existingLayer.x = savedX; existingLayer.y = savedY; existingLayer.rotation = savedR;
+              // Recalcular altura proporcional al nuevo tamaño
+              const pw = edPageW(), ph = edPageH();
+              existingLayer.height = existingLayer.width * (img.naturalHeight/img.naturalWidth) * (pw/ph);
+              edPushHistory(); requestAnimationFrame(() => edRedraw());
+            };
+            img.src = dataUrl;
+          }
+          edToast('Animación actualizada ✓');
         } else {
           edToast('Animación guardada en Biblioteca → Animaciones ✓');
         }
         onDone && onDone();
-      };
-      reader.readAsDataURL(blob);
-    });
-    gif.on('error', () => { edToast('Error al generar el GIF'); onDone && onDone(); });
-    gif.render();
-  });
+    })(ev);
+  }
 }
