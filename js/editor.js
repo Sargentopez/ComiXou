@@ -16394,14 +16394,14 @@ function _gcpSaveToLib(onDone) {
   gctx.fillStyle = '#fefefe';
   gctx.fillRect(0, 0, cropW, cropH);
   gctx.drawImage(frameC, marginX+cropX, marginY+cropY, cropW, cropH, 0, 0, cropW, cropH);
-  // Segunda pasada: donde el original era transparente (alpha<16), el fondo #FEFEFE
-  // sigue intacto → reemplazarlo por blanco puro #FFFFFF que gif.js marca transparente.
-  // Donde el original tenía contenido, el color ya no es #FEFEFE → no tocarlo.
-  const origPx = frameC.getContext('2d').getImageData(marginX+cropX, marginY+cropY, cropW, cropH);
-  const gifPx  = gctx.getImageData(0, 0, cropW, cropH);
-  const od = origPx.data, gd = gifPx.data;
-  for (let i = 0; i < od.length; i += 4) {
-    if (od[i+3] < 16) { // píxel original transparente → forzar blanco puro
+  // Segunda pasada: detectar los píxeles que siguen siendo exactamente #FEFEFE
+  // (fondo que pusimos, no sobreescrito por contenido) → reemplazarlos por #FFFFFF puro
+  // para que gif.js los trate como transparentes.
+  // Píxeles con cualquier otro color (incluido blanco puro del dibujo) se dejan intactos.
+  const gifPx = gctx.getImageData(0, 0, cropW, cropH);
+  const gd = gifPx.data;
+  for (let i = 0; i < gd.length; i += 4) {
+    if (gd[i]===254 && gd[i+1]===254 && gd[i+2]===254) {
       gd[i]=255; gd[i+1]=255; gd[i+2]=255; gd[i+3]=255;
     }
   }
