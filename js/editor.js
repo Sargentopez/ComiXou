@@ -14052,27 +14052,26 @@ function edToast(msg,ms=2000){
 
 // Modal de confirmación propio — evita confirm() nativo que rompe fullscreen en Android
 let _edConfirmCb = null;
-function edConfirm(msg, onOk, okLabel='Eliminar', onCancel=null, cancelLabel=null){
+function edConfirm(msg, onOk, okLabel='Eliminar'){
   const overlay = $('edConfirmModal');
   const msgEl   = $('edConfirmMsg');
   const okBtn   = $('edConfirmOk');
   const cancelBtn = $('edConfirmCancel');
-  if(!overlay) { if(window.confirm(msg)) onOk(); else if(onCancel) onCancel(); return; }
+  if(!overlay) { if(window.confirm(msg)) onOk(); return; } // fallback por si el DOM no está listo
   msgEl.textContent = msg;
   okBtn.textContent = okLabel;
-  if(cancelLabel) cancelBtn.textContent = cancelLabel;
   _edConfirmCb = onOk;
   overlay.classList.add('open');
+  // Absorber todos los eventos de puntero para que no lleguen al canvas/edOnStart
   const _stopAll = e => e.stopPropagation();
   overlay.addEventListener('pointerdown', _stopAll, { capture: true });
+  // Listeners de un solo uso
   const close = (exec) => {
     overlay.classList.remove('open');
-    cancelBtn.textContent = 'Cancelar'; // restaurar siempre
     overlay.removeEventListener('pointerdown', _stopAll, { capture: true });
     okBtn.removeEventListener('click', onYes);
     cancelBtn.removeEventListener('click', onNo);
     if(exec && _edConfirmCb) _edConfirmCb();
-    else if(!exec && onCancel) onCancel();
     _edConfirmCb = null;
   };
   const onYes = () => close(true);
@@ -16285,31 +16284,89 @@ function _gcpDoClose() {
 
 function gcpClose() {
   if (!window._gcpLayers || !window._gcpLayers.length) { _gcpDoClose(); return; }
-  // Modal propio — no reutiliza edConfirm para evitar conflictos con sus callbacks
-  let pop = document.getElementById('_gcpSavePop');
-  if (pop) pop.remove();
-  pop = document.createElement('div');
+  document.getElementById('_gcpSavePop')?.remove();
+  const pop = document.createElement('div');
   pop.id = '_gcpSavePop';
-  pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;touch-action:none';
-  pop.innerHTML = `
-    <div style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,0.3)">
-      <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">¿Guardar la animación en la Biblioteca?</p>
-      <div style="display:flex;gap:10px;justify-content:center">
-        <button id="_gcpPopNo" style="flex:1;padding:10px;border:1.5px solid #ccc;border-radius:8px;background:#f5f5f5;font-size:.9rem;cursor:pointer">No guardar</button>
-        <button id="_gcpPopSi" style="flex:1;padding:10px;border:none;border-radius:8px;background:var(--yellow,#ffe066);font-size:.9rem;font-weight:700;cursor:pointer">Guardar</button>
-      </div>
-    </div>`;
+  pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;touch-action:none';
+  pop.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
+    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">¿Guardar la animación en la Biblioteca?</p>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button id="_gcpPopNo" style="flex:1;padding:10px;border:1.5px solid #ccc;border-radius:8px;background:#f5f5f5;font-size:.9rem;cursor:pointer">No guardar</button>
+      <button id="_gcpPopSi" style="flex:1;padding:10px;border:none;border-radius:8px;background:#ffe066;font-size:.9rem;font-weight:700;cursor:pointer">Guardar</button>
+    </div>
+  </div>`;
   document.body.appendChild(pop);
-  pop.querySelector('#_gcpPopNo').addEventListener('click', () => { pop.remove(); _gcpDoClose(); });
-  pop.querySelector('#_gcpPopSi').addEventListener('click', () => {
+  pop.querySelector('#_gcpPopNo').addEventListener('pointerup', () => {
+    pop.remove(); _gcpDoClose();
+  });
+  pop.querySelector('#_gcpPopSi').addEventListener('pointerup', () => {
     pop.remove();
-    edToast('Guardando animación...');
+    edToast('Guardando...');
     _gcpSaveToLib(() => _gcpDoClose());
   });
 }
 
 function _gcpSaveToLib(onDone) {
   if (!window._gcpLayers.length || !gcpCanvas || !gcpCtx) { onDone && onDone(); return; }
+  // Capturar todo lo necesario ANTES de cualquier operación asíncrona
+  const cam    = { z: edCamera.z, x: edCamera.x, y: edCamera.y };
+  const layers = window._gcpLayers.slice();
+  const wsW    = gcpCanvas.width, wsH = gcpCanvas.height;
+  const pageW  = Math.round(edPageW()), pageH = Math.round(edPageH());
+  const marginX = Math.round(edMarginX()), marginY = Math.round(edMarginY());
+
+  // Renderizar frame con la misma cámara que _gcpRedraw
+  const frameC = document.createElement('canvas');
+  frameC.width = wsW; frameC.height = wsH;
+  const fctx = frameC.getContext('2d');
+  fctx.setTransform(cam.z, 0, 0, cam.z, cam.x, cam.y);
+  layers.forEach(l => {
+    if (!l || typeof l.draw !== 'function') return;
+    if (l.type === 'image' || l.type === 'gif') { l.draw(fctx, frameC); }
+    else if (l.type === 'text' || l.type === 'bubble') { l.draw(fctx, frameC); }
+    else { fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1; }
+  });
+  fctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // Zona de página en coordenadas del canvas renderizado
+  const pxX = Math.max(0, Math.round(marginX * cam.z + cam.x));
+  const pxY = Math.max(0, Math.round(marginY * cam.z + cam.y));
+  const pxW = Math.min(wsW - pxX, Math.round(pageW * cam.z));
+  const pxH = Math.min(wsH - pxY, Math.round(pageH * cam.z));
+
+  // Bounding box de contenido no-transparente
+  const imgData = fctx.getImageData(pxX, pxY, pxW, pxH);
+  const d = imgData.data, iw = imgData.width, ih = imgData.height;
+  let minX = iw, minY = ih, maxX = 0, maxY = 0;
+  for (let y = 0; y < ih; y++) for (let x = 0; x < iw; x++) {
+    if (d[(y*iw+x)*4+3] > 10) {
+      if (x < minX) minX=x; if (x > maxX) maxX=x;
+      if (y < minY) minY=y; if (y > maxY) maxY=y;
+    }
+  }
+  if (maxX < minX || maxY < minY) { minX=0; minY=0; maxX=iw-1; maxY=ih-1; }
+  const pad = 2;
+  const cropX = Math.max(0, minX-pad), cropY = Math.max(0, minY-pad);
+  const cropW = Math.min(iw, maxX+pad+1) - cropX;
+  const cropH = Math.min(ih, maxY+pad+1) - cropY;
+
+  // Canvas recortado con fondo transparente
+  const gifC = document.createElement('canvas');
+  gifC.width = cropW; gifC.height = cropH;
+  const gctx = gifC.getContext('2d');
+  gctx.drawImage(frameC, pxX+cropX, pxY+cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  // Miniatura
+  const S = 80;
+  const thumbC = document.createElement('canvas');
+  thumbC.width = S; thumbC.height = S;
+  const tc2 = thumbC.getContext('2d');
+  tc2.fillStyle = '#f0f0f0'; tc2.fillRect(0,0,S,S);
+  const sc = Math.min((S-4)/Math.max(cropW,1), (S-4)/Math.max(cropH,1));
+  tc2.drawImage(gifC, (S-cropW*sc)/2, (S-cropH*sc)/2, cropW*sc, cropH*sc);
+  const thumb = thumbC.toDataURL('image/png', 0.7);
+
+  // Generar GIF
   const loadGifJs = (cb) => {
     if (window.GIF) { cb(); return; }
     const s = document.createElement('script');
@@ -16319,119 +16376,25 @@ function _gcpSaveToLib(onDone) {
     document.head.appendChild(s);
   };
   loadGifJs(() => {
-    // ── Paso 1: calcular total de frames ──────────────────────────────────
-    const totalFrames = Math.max(...window._gcpLayers.map(l => l.frames ? l.frames.length : 1), 1);
-    const pageW = Math.round(edPageW()), pageH = Math.round(edPageH());
-    // Canvas de trabajo en coordenadas de página (sin cámara — zoom=1, sin offset)
-    // Renderizamos las capas directamente en coordenadas de workspace y luego
-    // extraemos la zona de página
-    const fullW = gcpCanvas.width, fullH = gcpCanvas.height;
-
-    // ── Paso 2: renderizar cada frame usando la misma técnica que _gcpRedraw ──
-    // Renderizamos en un canvas del mismo tamaño que gcpCanvas aplicando la cámara actual,
-    // luego extraemos la zona de página en coordenadas de pantalla.
-    // Esto garantiza que las capas se dibujan exactamente igual que en pantalla.
-    const renderFrame = (fi) => {
-      const fc = document.createElement('canvas');
-      fc.width = fullW; fc.height = fullH;
-      const fctx = fc.getContext('2d', { alpha: true });
-      // Misma cámara que _gcpRedraw
-      fctx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-      window._gcpLayers.forEach(l => {
-        if (!l || typeof l.draw !== 'function') return;
-        if (l.type === 'image' || l.type === 'gif') { l.draw(fctx, fc); }
-        else if (l.type === 'text' || l.type === 'bubble') { l.draw(fctx, fc); }
-        else { fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1; }
-      });
-      fctx.setTransform(1, 0, 0, 1, 0, 0);
-      return fc;
-    };
-
-    // Renderizar todos los frames y calcular bbox de píxeles no-transparentes
-    const frames = [];
-    let minX = pageW, minY = pageH, maxX = 0, maxY = 0;
-    // Coordenadas de la zona de página en el canvas con cámara aplicada
-    const mx = Math.round(edMarginX() * edCamera.z + edCamera.x);
-    const my = Math.round(edMarginY() * edCamera.z + edCamera.y);
-    const mw = Math.round(edPageW()  * edCamera.z);
-    const mh = Math.round(edPageH()  * edCamera.z);
-
-    for (let fi = 0; fi < totalFrames; fi++) {
-      const fc = renderFrame(fi);
-      frames.push(fc);
-      // Escanear solo la zona de página en coordenadas de pantalla
-      const safeX = Math.max(0, mx), safeY = Math.max(0, my);
-      const safeW = Math.min(fullW - safeX, mw), safeH = Math.min(fullH - safeY, mh);
-      if (safeW <= 0 || safeH <= 0) continue;
-      const imgData = fc.getContext('2d').getImageData(safeX, safeY, safeW, safeH);
-      const d = imgData.data;
-      for (let y = 0; y < safeH; y++) {
-        for (let x = 0; x < safeW; x++) {
-          if (d[(y * safeW + x) * 4 + 3] > 10) {
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-    }
-
-    // Si no hay contenido visible, usar la zona de página completa
-    if (maxX <= minX || maxY <= minY) { minX=0; minY=0; maxX=mw-1; maxY=mh-1; }
-    const pad = 2;
-    const cropX = Math.max(0, minX - pad);
-    const cropY = Math.max(0, minY - pad);
-    const cropW = Math.min(mw, maxX + pad + 1) - cropX;
-    const cropH = Math.min(mh, maxY + pad + 1) - cropY;
-
-    // ── Paso 3: generar GIF con las dimensiones recortadas ────────────────
     const workerSrc  = 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js';
     const workerCode = 'self.importScripts(' + JSON.stringify(workerSrc) + ')';
-    const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+    const workerBlob = new Blob([workerCode], {type:'application/javascript'});
     const workerURL  = URL.createObjectURL(workerBlob);
     const gif = new window.GIF({
-      workers: 2, quality: 10,
-      width: cropW, height: cropH,
-      workerScript: workerURL,
-      repeat: 0,
-      transparent: 0x00000000  // fondo transparente
+      workers:2, quality:10, width:cropW, height:cropH,
+      workerScript:workerURL, repeat:0, transparent:0x00000000
     });
-
-    frames.forEach(fc => {
-      // Canvas recortado: transparente, sin fondo blanco
-      const cropped = document.createElement('canvas');
-      cropped.width = cropW; cropped.height = cropH;
-      const cctx = cropped.getContext('2d', { alpha: true });
-      // Copiar desde coordenadas de pantalla (safeX+cropX, safeY+cropY)
-      cctx.drawImage(fc, safeX + cropX, safeY + cropY, cropW, cropH, 0, 0, cropW, cropH);
-      gif.addFrame(cropped, { delay: 100, copy: true });
-    });
-
+    gif.addFrame(gifC, {delay:100, copy:true});
     gif.on('finished', blob => {
       URL.revokeObjectURL(workerURL);
       const reader = new FileReader();
       reader.onload = ev => {
         const dataUrl = ev.target.result;
-        // Miniatura: primer frame recortado sobre fondo gris claro
-        const S = 80;
-        const thumbC = document.createElement('canvas');
-        thumbC.width = S; thumbC.height = S;
-        const tc2 = thumbC.getContext('2d');
-        tc2.fillStyle = '#f0f0f0'; tc2.fillRect(0, 0, S, S);
-        const scale2 = Math.min((S-4)/cropW, (S-4)/cropH);
-        const dw2 = cropW*scale2, dh2 = cropH*scale2;
-        if (frames[0]) tc2.drawImage(frames[0],
-          safeX+cropX, safeY+cropY, cropW, cropH,
-          (S-dw2)/2, (S-dh2)/2, dw2, dh2);
-        const thumb = thumbC.toDataURL('image/png', 0.7);
-        // Guardar en carpeta "Animaciones"
         const data = _bibLoad();
-        const folder = _bibGetAnimFolder(data);
-        folder.items.push({
-          id: Date.now() + '_gif', timestamp: Date.now(),
-          isGroup: false, isGifAnim: true,
-          gifDataUrl: dataUrl, layerData: null, thumb
+        _bibGetAnimFolder(data).items.push({
+          id: Date.now()+'_gif', timestamp:Date.now(),
+          isGroup:false, isGifAnim:true,
+          gifDataUrl:dataUrl, layerData:null, thumb
         });
         _bibSave(data);
         edToast('Animación guardada en Biblioteca → Animaciones ✓');
