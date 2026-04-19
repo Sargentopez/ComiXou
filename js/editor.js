@@ -16350,52 +16350,71 @@ function _gcpSaveToLib(onDone) {
   const pageW   = Math.round(edPageW()),  pageH  = Math.round(edPageH());
   const marginX = Math.round(edMarginX()), marginY = Math.round(edMarginY());
 
-  // Renderizar a zoom=1 en un canvas del tamaño del workspace completo.
-  // Así las capas quedan en sus coordenadas naturales de página y el bounding
-  // box es correcto aunque haya rotaciones o el usuario tenga zoom distinto de 1.
-  const wsW = Math.round(edMarginX()*2 + edPageW());
-  const wsH = Math.round(edMarginY()*2 + edPageH());
+  // Canvas amplio con margen extra para que los objetos rotados no se corten.
+  // Los objetos girados tienen esquinas que sobresalen del área de página —
+  // necesitamos espacio para capturarlos todos antes de calcular el bbox.
+  const extra = Math.round(Math.max(pageW, pageH) * 0.5); // 50% extra por lado
+  const wsW = pageW + marginX * 2 + extra * 2;
+  const wsH = pageH + marginY * 2 + extra * 2;
+  // Offset de las capas: las capas usan edMarginX/Y como origen,
+  // nosotros desplazamos el contexto para centrarlas en el canvas ampliado
+  const offX = extra, offY = extra;
+
   const frameC = document.createElement('canvas');
   frameC.width  = wsW; frameC.height = wsH;
   const fctx = frameC.getContext('2d');
-  // Zoom=1, sin offset de cámara — las capas usan edMarginX/Y directamente
-  fctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Aplicar offset extra + zoom=1 para que las capas queden centradas
+  fctx.setTransform(1, 0, 0, 1, offX, offY);
   layers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
     if (l.type === 'image' || l.type === 'gif') { l.draw(fctx, frameC); }
     else if (l.type === 'text' || l.type === 'bubble') { l.draw(fctx, frameC); }
     else { fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1; }
   });
+  fctx.setTransform(1, 0, 0, 1, 0, 0);
 
-  // Bounding box de contenido no-transparente dentro de la zona de página
-  const imgData = fctx.getImageData(marginX, marginY, pageW, pageH);
-  const d = imgData.data, iw = imgData.width, ih = imgData.height;
-  let minX = iw, minY = ih, maxX = 0, maxY = 0;
-  for (let y = 0; y < ih; y++) for (let x = 0; x < iw; x++) {
-    if (d[(y*iw+x)*4+3] > 10) {
+  // Bounding box escaneando el canvas COMPLETO (no solo la zona de página)
+  // para capturar esquinas rotadas que sobresalen del área de página
+  const imgData = fctx.getImageData(0, 0, wsW, wsH);
+  const d = imgData.data;
+  let minX = wsW, minY = wsH, maxX = 0, maxY = 0;
+  for (let y = 0; y < wsH; y++) for (let x = 0; x < wsW; x++) {
+    if (d[(y*wsW+x)*4+3] > 10) {
       if (x < minX) minX=x; if (x > maxX) maxX=x;
       if (y < minY) minY=y; if (y > maxY) maxY=y;
     }
   }
-  if (maxX < minX || maxY < minY) { minX=0; minY=0; maxX=iw-1; maxY=ih-1; }
-  const pad = 2;
+  if (maxX < minX || maxY < minY) {
+    // Sin contenido: usar zona de página
+    minX = marginX+offX; minY = marginY+offY;
+    maxX = minX+pageW-1; maxY = minY+pageH-1;
+  }
+  const pad = 4;
   const cropX = Math.max(0, minX-pad), cropY = Math.max(0, minY-pad);
-  const cropW = Math.min(iw, maxX+pad+1) - cropX;
-  const cropH = Math.min(ih, maxY+pad+1) - cropY;
+  const cropW = Math.min(wsW, maxX+pad+1) - cropX;
+  const cropH = Math.min(wsH, maxY+pad+1) - cropY;
 
-  // Canvas recortado a coordenadas de página (zoom=1, sin cámara de usuario)
+  // Canvas recortado con fondo #FEFEFE
+  // gif.js usará transparent:0xFEFEFE para eliminar ese fondo
+  // El blanco puro #FFFFFF del contenido se conserva intacto
   const gifC = document.createElement('canvas');
   gifC.width = cropW; gifC.height = cropH;
   const gctx = gifC.getContext('2d');
-  // Fondo #FEFEFE (254,254,254) — casi blanco pero NO blanco puro.
-  // El blanco puro (255,255,255) puede ser contenido real del dibujo.
-  // La segunda pasada reemplazará solo este color exacto por blanco puro,
-  // que gif.js tratará como transparente.
-  // Fondo #FEFEFE — gif.js lo tratará como transparente (ver transparent abajo)
-  // El blanco puro #FFFFFF del dibujo se conserva intacto
   gctx.fillStyle = '#fefefe';
   gctx.fillRect(0, 0, cropW, cropH);
-  gctx.drawImage(frameC, marginX+cropX, marginY+cropY, cropW, cropH, 0, 0, cropW, cropH);
+  gctx.drawImage(frameC, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+  // Segunda pasada: eliminar antialiasing del borde (#FEFEFE mezclado con contenido)
+  // Cualquier píxel cuyo R,G,B sean todos >= 250 y no sean blanco puro (255,255,255)
+  // se considera residuo del fondo → reemplazar por #FEFEFE para que gif.js lo elimine
+  const gifPx = gctx.getImageData(0, 0, cropW, cropH);
+  const gd = gifPx.data;
+  for (let i = 0; i < gd.length; i += 4) {
+    if (gd[i] >= 250 && gd[i+1] >= 250 && gd[i+2] >= 250 &&
+        !(gd[i]===255 && gd[i+1]===255 && gd[i+2]===255)) {
+      gd[i]=254; gd[i+1]=254; gd[i+2]=254; gd[i+3]=255;
+    }
+  }
+  gctx.putImageData(gifPx, 0, 0);
 
   // Miniatura
   const S = 80;
