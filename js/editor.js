@@ -15957,20 +15957,22 @@ function _gcpWithEditorContext(fn) {
   const savedCanvas = edCanvas,  savedCtx    = edCtx;
   const savedActive = window._gcpActive;
   const savedOvrd   = window._edRedrawOverride;
+  let selAfter = window._gcpSelIdx;
   try {
     edLayers      = window._gcpLayers;
     edSelectedIdx = window._gcpSelIdx;
     edCanvas      = gcpCanvas;
     edCtx         = gcpCtx;
-    window._gcpActive        = false; // evitar loop en _edDocDownFn
-    window._edRedrawOverride = true;  // edRedraw → _gcpRedraw
+    window._gcpActive        = false;
+    window._edRedrawOverride = true;
     fn();
+    selAfter = edSelectedIdx; // capturar selección modificada dentro del contexto
   } finally {
     edLayers      = savedLayers;  edSelectedIdx = savedSel;
     edCanvas      = savedCanvas;  edCtx         = savedCtx;
     window._gcpActive        = savedActive;
     window._edRedrawOverride = savedOvrd;
-    window._gcpSelIdx = edSelectedIdx; // sincronizar selección
+    window._gcpSelIdx = selAfter; // usar el valor de dentro del contexto
   }
 }
 
