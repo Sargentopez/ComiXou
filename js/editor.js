@@ -16066,39 +16066,62 @@ function _gcpHandleDown(e) {
 
 function _gcpHandleMove(e) {
   _gcpWithEditorContext(() => { edOnMove(e); });
+  // Sincronizar la posición modificada por edOnMove al frame activo
+  _gcpSyncLayersToFrame();
   _gcpRedraw();
 }
 
 function _gcpHandleUp(e) {
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  // Guardar el estado actual de las capas en el frame activo.
-  // edOnMove ya modificó la.x/la.y/etc. — los leemos aquí como snapshot definitivo.
-  // Cada frame es un array de primitivos completamente independiente.
-  if (window._gcpFrames.length > 0) {
-    window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
-      x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1
-    }));
-  }
+  // Guardar estado final de las capas en el frame activo
+  _gcpSyncLayersToFrame();
   _gcpRedraw();
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
-   Sistema de frames basado EXACTAMENTE en Crear_y_visualizar_Gifs.html:
-   - _gcpTempTransform = estado EN VIVO (dx,dy,angle,scaleX,scaleY)
-   - _gcpFrames[fi]    = snapshots INMUTABLES de {x,y,width,height,rotation,opacity}
-   - edOnMove modifica la.x/y directamente (handlers originales restaurados)
-   - _gcpHandleUp guarda el frame activo al terminar cada transformación
-   - _gcpGoToFrame guarda el frame actual y restaura el destino
-   ═══════════════════════════════════════════════════════════════════════ */
+// ═══════════════════════════════════════════════════════════════════════
+// MÓDULO GCP — Sistema de frames
+//
+// ARQUITECTURA:
+//   _gcpFrames[fi] = [{x,y,width,height,rotation,opacity}, ...] — uno por capa
+//   Cada frame es un array de objetos primitivos INDEPENDIENTES.
+//   Los handlers modifican la.x/la.y (vía edOnMove), luego
+//   _gcpSyncLayersToFrame() copia esos valores al frame activo.
+//   _gcpApplyFrame(fi) restaura las capas desde el snapshot del frame fi.
+//   Navegar = _gcpApplyFrame(destino) + redibujar. Nunca sobreescribe otros frames.
+// ═══════════════════════════════════════════════════════════════════════
 
-// Crear frame: snapshot del estado actual de las capas como nuevo array independiente.
-// _gcpHandleUp ya guardó el frame activo al soltar — este snapshot es coherente.
+// Copia el estado actual de las capas al frame activo.
+// Llamado por _gcpHandleMove y _gcpHandleUp tras cada transformación.
+function _gcpSyncLayersToFrame() {
+  if (!window._gcpFrames.length) return;
+  window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
+    x: la.x, y: la.y, width: la.width, height: la.height,
+    rotation: la.rotation || 0, opacity: la.opacity ?? 1
+  }));
+}
+
+// Aplica el snapshot de un frame a las capas (restaura la.x/y/etc.).
+// Usado por _gcpGoToFrame, _gcpPreview y _gcpFrameThumb.
+function _gcpApplyFrame(fi) {
+  const snap = window._gcpFrames[fi];
+  if (!snap) return;
+  snap.forEach((s, i) => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    la.x = s.x; la.y = s.y;
+    la.width = s.width; la.height = s.height;
+    la.rotation = s.rotation; la.opacity = s.opacity;
+  });
+}
+
+// Pulsar +: guarda el estado actual y crea un nuevo frame independiente.
+// El frame anterior queda intacto. El nuevo frame empieza con los mismos
+// valores que el anterior (deep-copy) — el usuario lo modifica desde ahí.
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Snapshot del estado ACTUAL de las capas — objeto completamente nuevo e independiente
+  // Asegurar que el frame actual está guardado
+  _gcpSyncLayersToFrame();
+  // Nuevo frame = deep-copy del estado actual — array de primitivos nuevo e independiente
   const snap = window._gcpLayers.map(la => ({
     x: la.x, y: la.y, width: la.width, height: la.height,
     rotation: la.rotation || 0, opacity: la.opacity ?? 1
@@ -16111,49 +16134,17 @@ function _gcpCaptureFrame() {
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
-// Aplica un frame a las capas (solo para thumbs y exportación — NO para navegación)
-function _gcpApplyFrame(fi) {
-  const snap = window._gcpFrames[fi];
-  if (!snap) return;
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
-  });
-}
-
-// Ir a un frame: restaura las capas al snapshot del frame destino.
-// _gcpHandleUp ya guarda al soltar. Solo guardamos aquí si hay gesto activo
-// (pointerup perdido — raro pero posible en táctil).
+// Navegar a un frame: aplica su snapshot a las capas y redibuja.
+// NUNCA modifica otros frames — solo restaura el destino.
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
-  // Guardar solo si hay transformación en curso (gesto sin soltar)
-  if ((edIsDragging || edIsResizing || edIsRotating) && window._gcpFrames.length > window._gcpFrameIdx) {
-    window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
-      x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1
-    }));
-    edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  }
+  edIsDragging = false; edIsResizing = false; edIsRotating = false;
   window._gcpFrameIdx = fi;
-  // Restaurar capas al estado del frame destino — deep copy de primitivos
-  const snap = window._gcpFrames[fi];
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
-  });
+  _gcpApplyFrame(fi);
   _gcpRedraw();
   const bar = document.getElementById('gcpFramesBar');
   if (bar) bar.querySelectorAll('.gcp-frame-btn').forEach((b, i) => b.classList.toggle('active', i === fi));
 }
-
-// Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
-// Genera miniatura 88×88 del frame fi.
-// Renderiza el frame completo, calcula el bbox del contenido visible
-// y recorta solo esa zona — independientemente de dónde esté en el canvas.
 function _gcpFrameThumb(fi) {
   const S = 88;
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
