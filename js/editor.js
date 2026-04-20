@@ -16197,50 +16197,57 @@ function _gcpFrameThumb(fi) {
     const pw = edPageW(), ph = edPageH();
     const mx = edMarginX(), my = edMarginY();
 
-    // Canvas pw×ph con fondo BLANCO puro — mismo que _edRenderPageThumb
+    // Canvas ampliado con margen extra igual que _gcpSaveToLib:
+    // captura objetos rotados que sobresalen del borde de página
+    const extra = Math.round(Math.max(pw, ph) * 0.5);
+    const wsW = pw + mx*2 + extra*2;
+    const wsH = ph + my*2 + extra*2;
+    const offX = extra, offY = extra;
+
     const off = document.createElement('canvas');
-    off.width = pw; off.height = ph;
+    off.width = wsW; off.height = wsH;
     const octx = off.getContext('2d');
-    octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, pw, ph);
-    octx.setTransform(1, 0, 0, 1, -mx, -my);
-    const textLayers = edLayers.filter(l => l.type==='text'||l.type==='bubble');
+    // Sin relleno — transparente para detectar contenido real
+    octx.setTransform(1, 0, 0, 1, offX, offY);
     edLayers.forEach(l => {
-      if (!l || l.type==='text' || l.type==='bubble') return;
+      if (!l || typeof l.draw !== 'function') return;
       if (l.type==='gif') {
         if (l._oc && l._ready && l._oc.width > 0) {
-          const gc = document.createElement('canvas'); gc.width=pw; gc.height=ph;
-          gc.getContext('2d').drawImage(l._oc, l.x*pw-(l.width*pw)/2, l.y*ph-(l.height*ph)/2, l.width*pw, l.height*ph);
-          octx.save(); octx.setTransform(1,0,0,1,0,0); octx.globalAlpha=l.opacity??1;
-          octx.drawImage(gc,0,0); octx.restore(); octx.setTransform(1,0,0,1,-mx,-my);
+          const gc = document.createElement('canvas'); gc.width=wsW; gc.height=wsH;
+          const gcx = gc.getContext('2d');
+          gcx.setTransform(1,0,0,1,offX,offY);
+          const gx = edMarginX() + l.x*pw - (l.width*pw)/2;
+          const gy = edMarginY() + l.y*ph - (l.height*ph)/2;
+          gcx.drawImage(l._oc, gx, gy, l.width*pw, l.height*ph);
+          octx.save(); octx.setTransform(1,0,0,1,0,0);
+          octx.globalAlpha=l.opacity??1; octx.drawImage(gc,0,0);
+          octx.restore(); octx.setTransform(1,0,0,1,offX,offY);
         }
       } else if (l.type==='image') { l.draw(octx, off); }
       else if (l.type==='draw')    { l.draw(octx); }
       else { octx.globalAlpha=l.opacity??1; l.draw(octx); octx.globalAlpha=1; }
     });
-    textLayers.forEach(l => l.draw(octx, off));
     octx.setTransform(1,0,0,1,0,0);
 
-    // Calcular bbox del contenido (píxeles no blancos)
-    const idata = octx.getImageData(0, 0, pw, ph).data;
-    let x0=pw, y0=ph, x1=0, y1=0;
-    for (let y=0; y<ph; y++) for (let x=0; x<pw; x++) {
-      const i=(y*pw+x)*4;
-      // Píxel no blanco: no todos los canales son 255, o alpha < 255
-      if (idata[i]<250 || idata[i+1]<250 || idata[i+2]<250) {
+    // Bbox de píxeles con alpha > 10 (contenido real, transparente o coloreado)
+    const idata = octx.getImageData(0, 0, wsW, wsH).data;
+    let x0=wsW, y0=wsH, x1=0, y1=0;
+    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
+      if (idata[(y*wsW+x)*4+3] > 10) {
         if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
       }
     }
-    // Sin contenido: mostrar página completa
-    if (x1<=x0 || y1<=y0) { x0=0; y0=0; x1=pw-1; y1=ph-1; }
-    const pad = 4;
+    if (x1<=x0 || y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
+    const pad=6;
     x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
-    x1=Math.min(pw-1,x1+pad); y1=Math.min(ph-1,y1+pad);
+    x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
     const cw=x1-x0+1, ch=y1-y0+1;
 
-    // Escalar bbox al thumb preservando proporciones
+    // Fondo blanco + escalar bbox preservando proporciones
     const scale = Math.min(S/cw, S/ch);
     const dw=cw*scale, dh=ch*scale;
-    tctx.fillStyle='#ffffff'; tctx.fillRect(0,0,S,S);
+    tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
+    tctx.fillStyle='#ffffff'; tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
     tctx.drawImage(off, x0, y0, cw, ch, (S-dw)/2, (S-dh)/2, dw, dh);
   });
 
