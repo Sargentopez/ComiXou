@@ -15951,241 +15951,256 @@ let _gs = null;
 
 // Ejecutar fn() con edLayers/_Selected/edCanvas/edCtx apuntando al GIF,
 // luego restaurar. Permite reutilizar TODO el código del editor general.
-// _gcpWithEditorContext: ejecuta fn() con edLayers/edSelectedIdx/edCanvas/edCtx
-// apuntando al GIF. Desactiva _gcpActive para evitar loop en _edDocDownFn.
-function _gcpWithEditorContext(fn) {
-  const savedLayers = edLayers,  savedSel    = edSelectedIdx;
-  const savedCanvas = edCanvas,  savedCtx    = edCtx;
-  const savedActive = window._gcpActive;
-  const savedOvrd   = window._edRedrawOverride;
-  let selAfter = window._gcpSelIdx;
-  try {
-    edLayers      = window._gcpLayers;
-    edSelectedIdx = window._gcpSelIdx;
-    edCanvas      = gcpCanvas;
-    edCtx         = gcpCtx;
-    window._gcpActive        = false;
-    window._edRedrawOverride = true;
-    fn();
-    selAfter = edSelectedIdx; // capturar selección modificada dentro del contexto
-  } finally {
-    edLayers      = savedLayers;  edSelectedIdx = savedSel;
-    edCanvas      = savedCanvas;  edCtx         = savedCtx;
-    window._gcpActive        = savedActive;
-    window._edRedrawOverride = savedOvrd;
-    window._gcpSelIdx = selAfter; // usar el valor de dentro del contexto
+// ── GCP Handlers ─────────────────────────────────────────────────────────
+// Sistema de transformación basado EXACTAMENTE en el HTML de referencia
+// (Crear_y_visualizar_Gifs.html). NO usa edOnMove ni ninguna variable del
+// editor general. Estado en vivo: window._gcpTempTransform por capa seleccionada.
+// Solo _gcpEndTransform() escribe en layer.frames[].
+
+// Coordenadas canvas del gcpCanvas (equivalente a getCanvasCoords del HTML ref.)
+function _gcpGetCoords(e) {
+  const gc = document.getElementById('gcpCanvas');
+  if (!gc) return { x: 0, y: 0 };
+  const rect = gc.getBoundingClientRect();
+  const scaleX = gc.width / rect.width;
+  const scaleY = gc.height / rect.height;
+  const src = e.touches ? e.touches[0] : e;
+  const clientX = src ? src.clientX : e.clientX;
+  const clientY = src ? src.clientY : e.clientY;
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top)  * scaleY
+  };
+}
+
+// _gcpTempTransform: {dx, dy, angle, scaleX, scaleY} — estado EN VIVO.
+// Equivalente exacto a tempTransform del HTML de referencia.
+// Solo se escribe en layer.frames[] cuando termina la transformación.
+window._gcpTempTransform = { dx: 0, dy: 0, angle: 0, scaleX: 1, scaleY: 1 };
+window._gcpActiveHandle  = null;  // handle activo durante el gesto
+window._gcpDragStart     = { x: 0, y: 0, transformStart: null }; // igual que dragStart del HTML
+
+// Calcula la posición canvas (px workspace) del centro del objeto seleccionado
+// con la transformación en vivo aplicada.
+function _gcpGetLayerCanvasCenter(la, t) {
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const z  = edCamera.z;
+  // Centro en coordenadas normalizadas → canvas con cámara
+  const cx = (mx + la.x * pw) * z + edCamera.x;
+  const cy = (my + la.y * ph) * z + edCamera.y;
+  return { cx, cy };
+}
+
+// Detecta qué handle está bajo las coordenadas canvas (x,y) — igual que getHandleAt del HTML
+function _gcpGetHandleAt(x, y) {
+  const idx = window._gcpSelIdx;
+  if (idx < 0 || idx >= window._gcpLayers.length) return null;
+  const la = window._gcpLayers[idx];
+  if (!la) return null;
+  const t  = window._gcpTempTransform;
+  const pw = edPageW(), ph = edPageH();
+  const z  = edCamera.z;
+  const mx = edMarginX(), my = edMarginY();
+  // Centro en canvas con transformación de traslación
+  const cx = (mx + (la.x + t.dx) * pw) * z + edCamera.x;
+  const cy = (my + (la.y + t.dy) * ph) * z + edCamera.y;
+  const hw = la.width  * pw * t.scaleX * z / 2;
+  const hh = la.height * ph * t.scaleY * z / 2;
+  const rad = t.angle * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  // Esquinas en canvas
+  const corners = [
+    { lx: -hw, ly: -hh, type: 'tl' }, { lx: hw, ly: -hh, type: 'tr' },
+    { lx:  hw, ly:  hh, type: 'br' }, { lx: -hw, ly:  hh, type: 'bl' }
+  ].map(c => ({
+    x: cx + c.lx * cos - c.ly * sin,
+    y: cy + c.lx * sin + c.ly * cos,
+    type: c.type
+  }));
+  const HIT = 18;
+  for (const c of corners) if (Math.hypot(x - c.x, y - c.y) < HIT) return c.type;
+  // Handle de rotación (arriba del centro)
+  const rotX = cx + (0) * cos - (-hh - 28) * sin;
+  const rotY = cy + (0) * sin + (-hh - 28) * cos;
+  if (Math.hypot(x - rotX, y - rotY) < HIT) return 'rotate';
+  // Mover: dentro del bbox
+  if (Math.hypot(x - cx, y - cy) < Math.max(hw, hh) + 10) return 'move';
+  return null;
+}
+
+// Inicia transformación — equivalente exacto a startTransform del HTML
+function _gcpStartTransform(e, handle) {
+  window._gcpActiveHandle = handle;
+  const coords = _gcpGetCoords(e);
+  window._gcpDragStart = {
+    x: coords.x,
+    y: coords.y,
+    transformStart: { ...window._gcpTempTransform }
+  };
+  e.preventDefault();
+}
+
+// Actualiza transformación en vivo — equivalente exacto a updateTransform del HTML
+function _gcpUpdateTransform(dx, dy) {
+  if (!window._gcpActiveHandle) return;
+  const idx = window._gcpSelIdx;
+  if (idx < 0 || idx >= window._gcpLayers.length) return;
+  const la    = window._gcpLayers[idx];
+  const start = window._gcpDragStart.transformStart;
+  const t     = window._gcpTempTransform;
+  const pw = edPageW(), ph = edPageH();
+  const z  = edCamera.z;
+
+  if (window._gcpActiveHandle === 'move') {
+    // dx/dy están en canvas px → convertir a coordenadas normalizadas
+    t.dx = start.dx + dx / (pw * z);
+    t.dy = start.dy + dy / (ph * z);
+  } else if (window._gcpActiveHandle === 'rotate') {
+    const mx = edMarginX(), my = edMarginY();
+    const cx = (mx + (la.x + start.dx) * pw) * z + edCamera.x;
+    const cy = (my + (la.y + start.dy) * ph) * z + edCamera.y;
+    const startAng = Math.atan2(window._gcpDragStart.y - cy, window._gcpDragStart.x - cx);
+    const newAng   = Math.atan2((window._gcpDragStart.y + dy) - cy, (window._gcpDragStart.x + dx) - cx);
+    t.angle = (start.angle + (newAng - startAng) * 180 / Math.PI) % 360;
+  } else if (['tl', 'tr', 'br', 'bl'].includes(window._gcpActiveHandle)) {
+    const mx = edMarginX(), my = edMarginY();
+    const cx = (mx + (la.x + start.dx) * pw) * z + edCamera.x;
+    const cy = (my + (la.y + start.dy) * ph) * z + edCamera.y;
+    const startDist = Math.hypot(window._gcpDragStart.x - cx, window._gcpDragStart.y - cy);
+    const newDist   = Math.hypot((window._gcpDragStart.x + dx) - cx, (window._gcpDragStart.y + dy) - cy);
+    let factor = startDist > 0 ? newDist / startDist : 1;
+    factor = Math.max(0.05, Math.min(10, factor));
+    t.scaleX = start.scaleX * factor;
+    t.scaleY = start.scaleY * factor;
   }
+  _gcpRedraw();
+}
+
+// Aplica _gcpTempTransform a la capa seleccionada y guarda en frame activo.
+// Equivalente exacto a endTransform → saveCurrentTransformToFrame del HTML.
+function _gcpEndTransform() {
+  if (!window._gcpActiveHandle) return;
+  const idx = window._gcpSelIdx;
+  if (idx >= 0 && idx < window._gcpLayers.length) {
+    const la = window._gcpLayers[idx];
+    const t  = window._gcpTempTransform;
+    const pw = edPageW(), ph = edPageH();
+    // Aplicar transformación acumulada a la capa
+    la.x        += t.dx;
+    la.y        += t.dy;
+    la.width    *= t.scaleX;
+    la.height   *= t.scaleY;
+    la.rotation  = (la.rotation || 0) + t.angle;
+    // Guardar el estado definitivo en el frame activo
+    if (window._gcpFrames.length > window._gcpFrameIdx) {
+      const snap = window._gcpLayers.map(l => ({
+        x: l.x, y: l.y, width: l.width, height: l.height,
+        rotation: l.rotation || 0, opacity: l.opacity ?? 1
+      }));
+      window._gcpFrames[window._gcpFrameIdx] = snap;
+    }
+  }
+  // Resetear tempTransform a neutro — igual que el HTML pone activeHandle=null
+  window._gcpTempTransform = { dx: 0, dy: 0, angle: 0, scaleX: 1, scaleY: 1 };
+  window._gcpActiveHandle  = null;
+  _gcpRedraw();
 }
 
 function _gcpHandleDown(e) {
   const gc = document.getElementById('gcpCanvas');
   if (!gc) return;
   const rect = gc.getBoundingClientRect();
-  const src2 = e.touches ? e.touches[0] : e;
-  const clientX = src2 ? src2.clientX : e.clientX;
-  const clientY2 = src2 ? src2.clientY : e.clientY;
-  if (clientX < rect.left || clientX > rect.right || clientY2 < rect.top || clientY2 > rect.bottom) return;
+  const src = e.touches ? e.touches[0] : e;
+  const clientX = src ? src.clientX : e.clientX;
+  const clientY = src ? src.clientY : e.clientY;
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return;
 
-  const c = edCoords(e);
+  const coords = _gcpGetCoords(e);
   const idx = window._gcpSelIdx;
 
-  // Handles: usar getControlPoints() igual que el editor, pero siempre permitir
-  // resize/rotate aunque sea táctil (el editor los desactiva en móvil, nosotros no)
-  // Handles y selección — copia exacta de _edDocDownFn usando _gcpLayers
-  const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
-  if (_la && _la.type !== 'bubble') {
-    const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
-    const hitScreen = 18; // PC
-    if (!_la.locked) {
-      for (const p of _la.getControlPoints()) {
-        const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
-        if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
-          if (p.corner === 'rotate') {
-            edIsRotating = true;
-            edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
-            return;
-          }
-          // Resize — mismo código exacto que _edDocDownFn
-          edIsResizing = true; edResizeCorner = p.corner;
-          const _rot0 = (_la.rotation||0)*Math.PI/180;
-          const _hw0 = _la.width/2, _hh0 = _la.height/2;
-          const _pw0 = edPageW(), _ph0 = edPageH();
-          const _anchorLocal = (corner) => {
-            const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
-                       corner==='tl'||corner==='bl'?_hw0 :
-                       corner==='tr'||corner==='br'?-_hw0 : 0;
-            const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
-                       corner==='tl'||corner==='tr'?_hh0 :
-                       corner==='bl'||corner==='br'?-_hh0 : 0;
-            const rx=ax*_pw0, ry=ay*_ph0;
-            return { x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw0,
-                     y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph0 };
-          };
-          const _anch = _anchorLocal(p.corner);
-          edInitialSize = { width:_la.width, height:_la.height,
-            cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
-            rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
-            anchorX:_anch.x, anchorY:_anch.y };
-          if (_la.type==='line') {
-            edInitialSize._linePoints = _la.points.map(p=>p?({...p}):null);
-            edInitialSize._subPaths = _la.subPaths?.length ? _la.subPaths.map(sp=>{const s=sp.map(p=>({...p}));if(sp.cornerRadii)s.cornerRadii={...sp.cornerRadii};return s;}) : null;
-          }
-          if (_la.cornerRadii) {
-            edInitialSize._cornerRadii = Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii};
-          } else { edInitialSize._cornerRadii = null; }
-          return;
-        }
-      }
-    }
-    // Drag dentro del bbox
-    const _rot = (_la.rotation||0)*Math.PI/180;
-    const _dx = c.nx-_la.x, _dy = c.ny-_la.y;
-    const _lx = _dx*Math.cos(-_rot)*_pw - _dy*Math.sin(-_rot)*_ph;
-    const _ly = _dx*Math.sin(-_rot)*_pw + _dy*Math.cos(-_rot)*_ph;
-    if (Math.abs(_lx) <= _la.width/2*_pw + 10/_z && Math.abs(_ly) <= _la.height/2*_ph + 10/_z) {
-      edIsDragging = true;
-      edDragOffX = c.nx - _la.x;
-      edDragOffY = c.ny - _la.y;
+  // ── Si hay capa seleccionada, intentar handle de transformación ──
+  if (idx >= 0 && idx < window._gcpLayers.length) {
+    const handle = _gcpGetHandleAt(coords.x, coords.y);
+    if (handle) {
+      _gcpStartTransform(e, handle);
       return;
     }
   }
 
-  // Buscar capa tocada
+  // ── Buscar capa tocada (hit test simple por distancia al centro) ──
   let hit = -1;
-  for (let i = window._gcpLayers.length-1; i >= 0; i--) {
-    if (window._gcpLayers[i]?.contains?.(c.nx, c.ny)) { hit = i; break; }
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const mx = edMarginX(), my = edMarginY();
+  for (let i = window._gcpLayers.length - 1; i >= 0; i--) {
+    const la = window._gcpLayers[i];
+    if (!la) continue;
+    const cx = (mx + la.x * pw) * z + edCamera.x;
+    const cy = (my + la.y * ph) * z + edCamera.y;
+    const hw = la.width  * pw * z / 2 + 10;
+    const hh = la.height * ph * z / 2 + 10;
+    if (Math.abs(coords.x - cx) < hw && Math.abs(coords.y - cy) < hh) {
+      hit = i; break;
+    }
   }
-  window._gcpSelIdx = hit;
   if (hit >= 0) {
-    edIsDragging = true;
-    edDragOffX = c.nx - window._gcpLayers[hit].x;
-    edDragOffY = c.ny - window._gcpLayers[hit].y;
+    window._gcpSelIdx = hit;
+    // Cargar tempTransform con los valores base (sin delta) al seleccionar
+    window._gcpTempTransform = { dx: 0, dy: 0, angle: 0, scaleX: 1, scaleY: 1 };
+    _gcpStartTransform(e, 'move');
+  } else {
+    window._gcpSelIdx = -1;
+    _gcpRedraw();
   }
-  _gcpRedraw();
 }
 
 function _gcpHandleMove(e) {
-  _gcpWithEditorContext(() => { edOnMove(e); });
-  _gcpRedraw();
+  if (!window._gcpActiveHandle) return;
+  e.preventDefault();
+  const coords = _gcpGetCoords(e);
+  _gcpUpdateTransform(
+    coords.x - window._gcpDragStart.x,
+    coords.y - window._gcpDragStart.y
+  );
 }
 
 function _gcpHandleUp(e) {
-  window._edMoved = false;
-  edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  // Sincronizar _gcpTempState desde las capas (edOnMove las modifica directamente)
-  // y guardar en el frame activo — así cada frame es un objeto independiente.
-  if (window._gcpFrames.length > 0) {
-    window._gcpTempState = window._gcpLayers.map(la => ({
-      x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1
-    }));
-    window._gcpFrames[window._gcpFrameIdx] = window._gcpTempState.map(s => ({...s}));
-  }
-  _gcpRedraw();
+  _gcpEndTransform();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
    MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
-   Copia exacta del patrón del editor general aplicada al canvas GIF.
-   gcpCanvas / gcpCtx = equivalentes de edCanvas / edCtx
-   _gcpLayers = equivalente de edLayers
-   _gcpRedraw = equivalente de edRedraw
+   Sistema de frames basado EXACTAMENTE en Crear_y_visualizar_Gifs.html:
+   - _gcpTempTransform = estado EN VIVO (dx,dy,angle,scaleX,scaleY)
+   - _gcpFrames[fi]    = snapshots INMUTABLES de {x,y,width,height,rotation,opacity}
+   - Solo _gcpEndTransform() escribe en _gcpFrames[]
+   - Navegar entre frames NUNCA guarda — solo restaura
    ═══════════════════════════════════════════════════════════════════════ */
 
-// Variables globales GCP — mismo patrón que: let edCanvas, edCtx;
-let gcpCanvas = null;
-let gcpCtx    = null;
-
-// Lista de capas GIF — equivalente a edLayers
-window._gcpLayers = [];
-window._gcpSelIdx = -1;
-
-// Sistema de frames: cada frame guarda el estado de TODAS las capas
-// frame = [{x, y, width, height, rotation, opacity}, ...]  (una entrada por capa)
-window._gcpFrames   = [];   // array de frames
-window._gcpFrameIdx = 0;    // frame activo
-
-// ── Sistema de frames ────────────────────────────────────────────────────
-
-// Captura el estado actual de todas las capas como un nuevo frame
-// ── Sistema de frames con transformaciones relativas al frame 1 ──────────
-// Igual que el HTML de referencia: frame 1 = base, frames siguientes = deltas.
-// Cada entrada del frame guarda para cada capa:
-//   { dx, dy, drot, scaleW, scaleH, opacity }
-// donde dx/dy = desplazamiento desde base, drot = rotación adicional,
-// scaleW/scaleH = factor de escala de width/height respecto al frame 1.
-
-// ── Sistema de frames — equivalente exacto al HTML de referencia ─────────
-//
-// _gcpTempState: array de {x,y,width,height,rotation,opacity} por capa.
-//   Equivale a tempTransform. Es el estado EN VIVO que el usuario modifica.
-//   Las capas siempre se renderizan con _gcpTempState.
-//
-// _gcpFrames[fi]: array de snapshots guardados. Inmutables hasta que el
-//   usuario crea un nuevo frame — entonces el frame ACTUAL se sobreescribe
-//   con _gcpTempState (saveCurrentTransformToFrame), igual que en el HTML.
-//
-// Flujo (idéntico al HTML de referencia):
-//   Crear frame → saveCurrentTransformToFrame() + push({..._gcpTempState})
-//   Ir a frame  → _gcpTempState = deep copy de frames[fi] + redraw
-//   Transformar → modifica _gcpTempState + redraw (NO toca frames[])
-
-window._gcpTempState = []; // estado en vivo (equivalente a tempTransform)
-
-// Guarda _gcpTempState en el frame activo — equivalente a saveCurrentTransformToFrame
-function _gcpSaveCurrentToFrame() {
-  if (!window._gcpFrames.length) return;
-  window._gcpFrames[window._gcpFrameIdx] = window._gcpTempState.map(s => ({...s}));
-}
-
-// Snapshot de _gcpTempState — equivalente a {...tempTransform}
-function _gcpSnapTemp() {
-  return window._gcpTempState.map(s => ({...s}));
-}
-
-// Inicializar _gcpTempState desde las capas actuales
-function _gcpInitTempState() {
-  window._gcpTempState = window._gcpLayers.map(la => ({
-    x: la.x, y: la.y,
-    width: la.width, height: la.height,
-    rotation: la.rotation || 0,
-    opacity: la.opacity ?? 1
-  }));
-}
-
-// Aplicar _gcpTempState a las capas (para render y transformaciones)
-function _gcpApplyTempToLayers() {
-  window._gcpTempState.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
-  });
-}
-
-// Crear frame — equivalente a addFrameToActiveLayer del HTML de referencia:
-//   1. Actualizar el frame actual con el estado en vivo
-//   2. Crear nuevo frame con el estado en vivo
-//   3. Avanzar al nuevo frame
+// Crear frame — equivalente exacto a addFrameToActiveLayer del HTML de referencia:
+//   1. El frame actual YA está guardado (lo guardó _gcpEndTransform al soltar)
+//   2. Crear nuevo frame con el estado actual de las capas
+//   3. Avanzar al nuevo frame y resetear tempTransform
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Snapshot del estado actual como nuevo frame — objeto independiente.
-  // NO sobreescribir el frame actual: su estado ya fue guardado por _gcpHandleUp.
+  // Snapshot del estado ACTUAL de las capas — objeto completamente nuevo e independiente
+  // (igual que: const newFrame = { ...tempTransform }; layer.frames.push(newFrame))
   const snap = window._gcpLayers.map(la => ({
     x: la.x, y: la.y, width: la.width, height: la.height,
     rotation: la.rotation || 0, opacity: la.opacity ?? 1
   }));
   window._gcpFrames.push(snap);
   window._gcpFrameIdx = window._gcpFrames.length - 1;
-  window._gcpTempState = snap.map(s => ({...s}));
-  // Abrir panel si no está visible
+  // Resetear tempTransform a neutro — el nuevo frame empieza sin deltas
+  window._gcpTempTransform = { dx: 0, dy: 0, angle: 0, scaleX: 1, scaleY: 1 };
+  window._gcpActiveHandle  = null;
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display !== 'flex') _gcpToggleFramesBar();
   else _gcpUpdateFramesBar();
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
-// Aplica un frame a las capas (usado para thumbs y exportación)
+// Aplica un frame a las capas (solo para thumbs y exportación — NO para navegación)
 function _gcpApplyFrame(fi) {
   const snap = window._gcpFrames[fi];
   if (!snap) return;
@@ -16197,27 +16212,25 @@ function _gcpApplyFrame(fi) {
   });
 }
 
-// Ir a un frame — equivalente a: globalFrameIndex=f; tempTransform={...frames[f]}
-// NO toca _gcpFrames — solo actualiza _gcpTempState y redibuja
+// Ir a un frame — equivalente exacto al click en frame del HTML de referencia:
+//   globalFrameIndex = f;
+//   tempTransform = { ...layer.frames[f] };   ← copia profunda, NUNCA referencia
+//   renderCompositeFrame();
+// NUNCA guarda el frame actual antes de navegar — _gcpEndTransform ya lo hizo.
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
-  // Guardar el estado en vivo en el frame actual ANTES de cambiar
-  // (igual que saveCurrentTransformToFrame() en el HTML de referencia)
-  if (window._gcpFrames.length > window._gcpFrameIdx) {
-    const curState = window._gcpLayers.map(la => ({
-      x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1
-    }));
-    window._gcpFrames[window._gcpFrameIdx] = curState;
-  }
   window._gcpFrameIdx = fi;
+  // Restaurar capas al estado del frame destino (copia profunda de primitivos)
   const snap = window._gcpFrames[fi];
   snap.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y; la.width = s.width; la.height = s.height;
+    la.x = s.x; la.y = s.y;
+    la.width = s.width; la.height = s.height;
     la.rotation = s.rotation; la.opacity = s.opacity;
   });
-  window._gcpTempState = snap.map(s => ({...s}));
+  // Resetear tempTransform — el frame destino empieza sin deltas en vivo
+  window._gcpTempTransform = { dx: 0, dy: 0, angle: 0, scaleX: 1, scaleY: 1 };
+  window._gcpActiveHandle  = null;
   _gcpRedraw();
   const bar = document.getElementById('gcpFramesBar');
   if (bar) bar.querySelectorAll('.gcp-frame-btn').forEach((b, i) => b.classList.toggle('active', i === fi));
@@ -16243,12 +16256,10 @@ function _gcpFrameThumb(fi) {
   const _savedSelIdx = window._gcpSelIdx;
   _gcpApplyFrame(fi);
 
-  _gcpWithEditorContext(() => {
+  {
     const pw = edPageW(), ph = edPageH();
     const mx = edMarginX(), my = edMarginY();
 
-    // Canvas ampliado con margen extra igual que _gcpSaveToLib:
-    // captura objetos rotados que sobresalen del borde de página
     const extra = Math.round(Math.max(pw, ph) * 0.5);
     const wsW = pw + mx*2 + extra*2;
     const wsH = ph + my*2 + extra*2;
@@ -16257,9 +16268,9 @@ function _gcpFrameThumb(fi) {
     const off = document.createElement('canvas');
     off.width = wsW; off.height = wsH;
     const octx = off.getContext('2d');
-    // Sin relleno — transparente para detectar contenido real
     octx.setTransform(1, 0, 0, 1, offX, offY);
-    edLayers.forEach(l => {
+    // Usar _gcpLayers directamente — no necesitamos _gcpWithEditorContext
+    window._gcpLayers.forEach(l => {
       if (!l || typeof l.draw !== 'function') return;
       if (l.type==='gif') {
         if (l._oc && l._ready && l._oc.width > 0) {
@@ -16279,7 +16290,6 @@ function _gcpFrameThumb(fi) {
     });
     octx.setTransform(1,0,0,1,0,0);
 
-    // Bbox de píxeles con alpha > 10 (contenido real, transparente o coloreado)
     const idata = octx.getImageData(0, 0, wsW, wsH).data;
     let x0=wsW, y0=wsH, x1=0, y1=0;
     for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
@@ -16293,13 +16303,12 @@ function _gcpFrameThumb(fi) {
     x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
     const cw=x1-x0+1, ch=y1-y0+1;
 
-    // Fondo blanco + escalar bbox preservando proporciones
     const scale = Math.min(S/cw, S/ch);
     const dw=cw*scale, dh=ch*scale;
     tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
     tctx.fillStyle='#ffffff'; tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
     tctx.drawImage(off, x0, y0, cw, ch, (S-dw)/2, (S-dh)/2, dw, dh);
-  });
+  }
 
   window._gcpSelIdx = _savedSelIdx;
   saved.forEach((s,i)=>{ const la=window._gcpLayers[i]; if(!la) return;
@@ -16421,9 +16430,26 @@ function _gcpRedraw() {
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
   gcpCtx.clearRect(0, 0, cw, ch);
   gcpCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-  // Dibujar capas — mismo orden que edRedraw
-  window._gcpLayers.forEach(l => {
+
+  const selIdx = window._gcpSelIdx;
+  const t = window._gcpTempTransform;
+  const isTransforming = !!window._gcpActiveHandle;
+  const pw = edPageW(), ph = edPageH();
+
+  window._gcpLayers.forEach((l, li) => {
     if (!l || typeof l.draw !== 'function') return;
+    // Durante transformación en vivo: desplazar temporalmente la capa seleccionada
+    // igual que renderCompositeFrame del HTML de referencia usa customTransform
+    const isActive = isTransforming && li === selIdx;
+    let savedX, savedY, savedW, savedH, savedRot;
+    if (isActive) {
+      savedX = l.x; savedY = l.y; savedW = l.width; savedH = l.height; savedRot = l.rotation || 0;
+      l.x       = savedX + t.dx;
+      l.y       = savedY + t.dy;
+      l.width   = savedW * t.scaleX;
+      l.height  = savedH * t.scaleY;
+      l.rotation = savedRot + t.angle;
+    }
     if (l.type === 'image' || l.type === 'gif') {
       l.draw(gcpCtx, gcpCanvas);
     } else if (l.type === 'text' || l.type === 'bubble') {
@@ -16433,28 +16459,33 @@ function _gcpRedraw() {
       l.draw(gcpCtx);
       gcpCtx.globalAlpha = 1;
     }
+    if (isActive) {
+      l.x = savedX; l.y = savedY; l.width = savedW; l.height = savedH; l.rotation = savedRot;
+    }
   });
-  // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
+  // Dibujar handles de selección
   _gcpDrawSel();
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-// Copia de edDrawSel adaptada al canvas GIF
+// Copia de edDrawSel adaptada al canvas GIF — usa _gcpTempTransform durante el drag
 function _gcpDrawSel() {
   const idx = window._gcpSelIdx;
   if (idx < 0 || idx >= window._gcpLayers.length) return;
   const la = window._gcpLayers[idx];
   if (!la) return;
+  const t  = window._gcpTempTransform;
   const pw = edPageW(), ph = edPageH();
   const z = edCamera.z;
   const lw = 1 / z;
   const hr = 6 / z;
   const hrRot = 8 / z;
-  const cx = edMarginX() + la.x * pw;
-  const cy = edMarginY() + la.y * ph;
-  const w = la.width * pw;
-  const h = la.height * ph;
-  const rot = (la.rotation || 0) * Math.PI / 180;
+  // Aplicar delta de tempTransform para la posición visual del handle
+  const cx = edMarginX() + (la.x + t.dx) * pw;
+  const cy = edMarginY() + (la.y + t.dy) * ph;
+  const w = la.width  * pw * t.scaleX;
+  const h = la.height * ph * t.scaleY;
+  const rot = ((la.rotation || 0) + t.angle) * Math.PI / 180;
   gcpCtx.save();
   gcpCtx.translate(cx, cy);
   gcpCtx.rotate(rot);
@@ -16570,11 +16601,12 @@ function gcpOpen(edLayerIdx) {
 
   // Limpiar y resetear capas
   gcpCtx.clearRect(0, 0, gcpCanvas.width, gcpCanvas.height);
-  window._gcpLayers   = [];
-  window._gcpSelIdx   = -1;
-  window._gcpFrames   = [];
-  window._gcpFrameIdx = 0;
-  window._gcpTempState = [];
+  window._gcpLayers        = [];
+  window._gcpSelIdx        = -1;
+  window._gcpFrames        = [];
+  window._gcpFrameIdx      = 0;
+  window._gcpTempTransform = { dx: 0, dy: 0, angle: 0, scaleX: 1, scaleY: 1 };
+  window._gcpActiveHandle  = null;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -16586,8 +16618,7 @@ function gcpOpen(edLayerIdx) {
     const gifLayer = edLayers[window._gcpEdLayerIdx];
     const hasData = gifLayer && gifLayer._gcpLayersData;
     if (hasData) {
-      // Restaurar también los frames si existen
-      if (gifLayer._gcpFramesData) window._gcpFrames = gifLayer._gcpFramesData.slice();
+      // Restaurar frames si existen (deep copy de primitivos)
       if (gifLayer._gcpFramesData && gifLayer._gcpFramesData.length) {
         window._gcpFrames = gifLayer._gcpFramesData.map(snap => snap.map(s => ({...s})));
       }
@@ -16595,27 +16626,21 @@ function gcpOpen(edLayerIdx) {
         .map(ld => edDeserLayer(ld, edOrientation))
         .filter(Boolean);
       restoredLayers.forEach(la => {
-        // Redirigir onload de imágenes a _gcpRedraw
         if (la.type === 'image' && la.img) {
           const prev = la.img.onload;
           la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
           if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
         }
-        // Redirigir fromDataUrl de stroke/draw a _gcpRedraw (ya parcheado en las clases)
         window._gcpLayers.push(la);
       });
       window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
-      // Actualizar título con el nombre de la capa
       const titleEl = document.getElementById('gcpProjectTitle');
       if (titleEl) titleEl.textContent = 'Editar GIF';
     }
   }
-  // Inicializar _gcpTempState con el estado actual de las capas
-  _gcpInitTempState();
   // Si hay frames guardados, restaurar el último frame activo
   if (window._gcpFrames.length > 0) {
-    window._gcpTempState = window._gcpFrames[window._gcpFrameIdx].map(s => ({...s}));
-    _gcpApplyTempToLayers();
+    _gcpGoToFrame(window._gcpFrameIdx);
     requestAnimationFrame(() => _gcpUpdateFramesBar());
   }
 
