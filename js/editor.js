@@ -16070,13 +16070,18 @@ function _gcpHandleMove(e) {
 }
 
 function _gcpHandleUp(e) {
-  // Solo limpiar estado — no llamar edOnEnd que tiene efectos secundarios
-  // (rubber band, multiselect, historial, etc.) no aplicables al canvas GIF
-  if (window._edMoved && (edIsDragging || edIsResizing || edIsRotating)) {
-    _gcpWithEditorContext(() => { edPushHistory(); });
-  }
+  const wasMoved = window._edMoved;
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
+  if (wasMoved) {
+    // Sincronizar _gcpTempState con el estado actual de las capas
+    // (equivalente a endTransform → saveCurrentTransformToFrame en el HTML de referencia)
+    _gcpInitTempState();
+    // Sobreescribir el frame activo con el nuevo estado
+    if (window._gcpFrames.length > 0) _gcpSaveCurrentToFrame();
+    // Actualizar miniaturas del frame activo en la barra
+    _gcpRefreshActiveThumb();
+  }
   _gcpRedraw();
 }
 
@@ -16111,23 +16116,66 @@ window._gcpFrameIdx = 0;    // frame activo
 // donde dx/dy = desplazamiento desde base, drot = rotación adicional,
 // scaleW/scaleH = factor de escala de width/height respecto al frame 1.
 
-// Sistema de frames — copia exacta del HTML de referencia:
-// cada frame guarda el estado absoluto de cada capa en ese instante.
-// Al crear frame: snapshot del estado actual.
-// Al ir a frame: restaurar ese snapshot y redibujar.
-// _gcpUpdateFramesBar solo se llama al crear/borrar frames,
-// NO al navegar entre frames (evita corrupción de estado).
+// ── Sistema de frames — equivalente exacto al HTML de referencia ─────────
+//
+// _gcpTempState: array de {x,y,width,height,rotation,opacity} por capa.
+//   Equivale a tempTransform. Es el estado EN VIVO que el usuario modifica.
+//   Las capas siempre se renderizan con _gcpTempState.
+//
+// _gcpFrames[fi]: array de snapshots guardados. Inmutables hasta que el
+//   usuario crea un nuevo frame — entonces el frame ACTUAL se sobreescribe
+//   con _gcpTempState (saveCurrentTransformToFrame), igual que en el HTML.
+//
+// Flujo (idéntico al HTML de referencia):
+//   Crear frame → saveCurrentTransformToFrame() + push({..._gcpTempState})
+//   Ir a frame  → _gcpTempState = deep copy de frames[fi] + redraw
+//   Transformar → modifica _gcpTempState + redraw (NO toca frames[])
 
-function _gcpCaptureFrame() {
-  if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Snapshot exacto del estado actual — igual que {...tempTransform} en el HTML de referencia
-  const snap = window._gcpLayers.map(la => ({
+window._gcpTempState = []; // estado en vivo (equivalente a tempTransform)
+
+// Guarda _gcpTempState en el frame activo — equivalente a saveCurrentTransformToFrame
+function _gcpSaveCurrentToFrame() {
+  if (!window._gcpFrames.length) return;
+  window._gcpFrames[window._gcpFrameIdx] = window._gcpTempState.map(s => ({...s}));
+}
+
+// Snapshot de _gcpTempState — equivalente a {...tempTransform}
+function _gcpSnapTemp() {
+  return window._gcpTempState.map(s => ({...s}));
+}
+
+// Inicializar _gcpTempState desde las capas actuales
+function _gcpInitTempState() {
+  window._gcpTempState = window._gcpLayers.map(la => ({
     x: la.x, y: la.y,
     width: la.width, height: la.height,
     rotation: la.rotation || 0,
     opacity: la.opacity ?? 1
   }));
-  window._gcpFrames.push(snap);
+}
+
+// Aplicar _gcpTempState a las capas (para render y transformaciones)
+function _gcpApplyTempToLayers() {
+  window._gcpTempState.forEach((s, i) => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    la.x = s.x; la.y = s.y;
+    la.width = s.width; la.height = s.height;
+    la.rotation = s.rotation; la.opacity = s.opacity;
+  });
+}
+
+// Crear frame — equivalente a addFrameToActiveLayer del HTML de referencia:
+//   1. Actualizar el frame actual con el estado en vivo
+//   2. Crear nuevo frame con el estado en vivo
+//   3. Avanzar al nuevo frame
+function _gcpCaptureFrame() {
+  if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
+  // Asegurar que _gcpTempState está sincronizado con las capas
+  _gcpInitTempState();
+  // Actualizar frame actual si ya existe (equivalente a saveCurrentTransformToFrame)
+  if (window._gcpFrames.length > 0) _gcpSaveCurrentToFrame();
+  // Nuevo frame = copia del estado actual
+  window._gcpFrames.push(_gcpSnapTemp());
   window._gcpFrameIdx = window._gcpFrames.length - 1;
   // Abrir panel si no está visible
   const _fb = document.getElementById('gcpFramesBar');
@@ -16136,7 +16184,7 @@ function _gcpCaptureFrame() {
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
-// Aplica un frame a las capas (usado solo para thumbs y exportación)
+// Aplica un frame a las capas (usado para thumbs y exportación)
 function _gcpApplyFrame(fi) {
   const snap = window._gcpFrames[fi];
   if (!snap) return;
@@ -16148,26 +16196,19 @@ function _gcpApplyFrame(fi) {
   });
 }
 
-// Ir a un frame: igual que globalFrameIndex = f en el HTML de referencia.
-// Actualiza _gcpFrameIdx y aplica el snapshot a las capas para que el
-// usuario pueda seguir transformando desde ese estado.
+// Ir a un frame — equivalente a: globalFrameIndex=f; tempTransform={...frames[f]}
+// NO toca _gcpFrames — solo actualiza _gcpTempState y redibuja
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
+  // Guardar estado actual en el frame activo antes de salir
+  _gcpSaveCurrentToFrame();
   window._gcpFrameIdx = fi;
-  // Copiar valores del snapshot a las capas — igual que tempTransform = {...frames[f]}
-  const snap = window._gcpFrames[fi];
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    // Copia explícita de cada valor primitivo — no referencias
-    la.x        = +s.x;
-    la.y        = +s.y;
-    la.width    = +s.width;
-    la.height   = +s.height;
-    la.rotation = +s.rotation;
-    la.opacity  = +s.opacity;
-  });
+  // Restaurar estado del frame destino a _gcpTempState (copia profunda)
+  window._gcpTempState = window._gcpFrames[fi].map(s => ({...s}));
+  // Aplicar a las capas para que draw() use las coordenadas correctas
+  _gcpApplyTempToLayers();
   _gcpRedraw();
-  // Actualizar resaltado del botón activo sin regenerar thumbs
+  // Actualizar resaltado sin regenerar thumbs
   const bar = document.getElementById('gcpFramesBar');
   if (bar) bar.querySelectorAll('.gcp-frame-btn').forEach((b, i) => b.classList.toggle('active', i === fi));
 }
@@ -16259,6 +16300,19 @@ function _gcpFrameThumb(fi) {
 }
 
 // Renderizar el dropdown de frames con miniaturas
+// Refrescar solo la miniatura del frame activo en la barra
+function _gcpRefreshActiveThumb() {
+  const bar = document.getElementById('gcpFramesBar');
+  if (!bar || bar.style.display !== 'flex') return;
+  const fi = window._gcpFrameIdx;
+  const btns = bar.querySelectorAll('.gcp-frame-btn');
+  const btn = btns[fi];
+  if (!btn) return;
+  const oldThumb = btn.querySelector('canvas');
+  const newThumb = _gcpFrameThumb(fi);
+  if (oldThumb) btn.replaceChild(newThumb, oldThumb);
+}
+
 // Toggle visibilidad del panel de frames
 function _gcpToggleFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
@@ -16510,6 +16564,7 @@ function gcpOpen(edLayerIdx) {
   window._gcpSelIdx   = -1;
   window._gcpFrames   = [];
   window._gcpFrameIdx = 0;
+  window._gcpTempState = [];
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -16523,6 +16578,9 @@ function gcpOpen(edLayerIdx) {
     if (hasData) {
       // Restaurar también los frames si existen
       if (gifLayer._gcpFramesData) window._gcpFrames = gifLayer._gcpFramesData.slice();
+      if (gifLayer._gcpFramesData && gifLayer._gcpFramesData.length) {
+        window._gcpFrames = gifLayer._gcpFramesData.map(snap => snap.map(s => ({...s})));
+      }
       const restoredLayers = gifLayer._gcpLayersData
         .map(ld => edDeserLayer(ld, edOrientation))
         .filter(Boolean);
@@ -16541,6 +16599,14 @@ function gcpOpen(edLayerIdx) {
       const titleEl = document.getElementById('gcpProjectTitle');
       if (titleEl) titleEl.textContent = 'Editar GIF';
     }
+  }
+  // Inicializar _gcpTempState con el estado actual de las capas
+  _gcpInitTempState();
+  // Si hay frames guardados, restaurar el último frame activo
+  if (window._gcpFrames.length > 0) {
+    window._gcpTempState = window._gcpFrames[window._gcpFrameIdx].map(s => ({...s}));
+    _gcpApplyTempToLayers();
+    requestAnimationFrame(() => _gcpUpdateFramesBar());
   }
 
   // Deseleccionar objetos del editor
