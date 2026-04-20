@@ -16143,7 +16143,10 @@ function _gcpCaptureFrame() {
     window._gcpFrames.push(snap);
     window._gcpFrameIdx = window._gcpFrames.length - 1;
   }
-  _gcpUpdateFramesBar();
+  // Abrir panel si no está visible
+  const _fb = document.getElementById('gcpFramesBar');
+  if (_fb && _fb.style.display !== 'flex') _gcpToggleFramesBar();
+  else _gcpUpdateFramesBar();
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
@@ -16172,8 +16175,8 @@ function _gcpGoToFrame(fi) {
 
 // Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
 // Genera miniatura 88×88 del frame fi.
-// Copia EXACTA de _edRenderPageThumb: usa _gcpWithEditorContext para que
-// edPageW/edMarginX/draw() operen sobre gcpCanvas igual que en el editor principal.
+// Renderiza el frame completo, calcula el bbox del contenido visible
+// y recorta solo esa zona — independientemente de dónde esté en el canvas.
 function _gcpFrameThumb(fi) {
   const S = 88;
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
@@ -16182,62 +16185,65 @@ function _gcpFrameThumb(fi) {
   const snap = window._gcpFrames[fi];
   if (!snap || !window._gcpLayers.length) return tc;
 
-  // Guardar estado actual
+  // Guardar estado
   const saved = window._gcpLayers.map(la=>({
     x:la.x, y:la.y, width:la.width, height:la.height,
     rotation:la.rotation||0, opacity:la.opacity??1
   }));
-  // Aplicar el frame al que queremos hacer miniatura
+  const _savedSelIdx = window._gcpSelIdx;
   _gcpApplyFrame(fi);
 
-  // Renderizar usando _gcpWithEditorContext para que edPageW/edMarginX
-  // devuelvan las dimensiones correctas del gcpCanvas.
-  // Guardar _gcpSelIdx porque _gcpWithEditorContext lo puede modificar.
-  const _savedSelIdx = window._gcpSelIdx;
   _gcpWithEditorContext(() => {
     const pw = edPageW(), ph = edPageH();
     const mx = edMarginX(), my = edMarginY();
 
-    // Canvas pw×ph — mismo approach que _edRenderPageThumb
+    // Canvas pw×ph con fondo BLANCO puro — mismo que _edRenderPageThumb
     const off = document.createElement('canvas');
     off.width = pw; off.height = ph;
     const octx = off.getContext('2d');
     octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, pw, ph);
-    // Mismo transform: traslada origen al borde de la página
     octx.setTransform(1, 0, 0, 1, -mx, -my);
-
-    // Dibujar cada capa igual que _edRenderPageThumb
     const textLayers = edLayers.filter(l => l.type==='text'||l.type==='bubble');
     edLayers.forEach(l => {
       if (!l || l.type==='text' || l.type==='bubble') return;
       if (l.type==='gif') {
         if (l._oc && l._ready && l._oc.width > 0) {
-          const gc = document.createElement('canvas');
-          gc.width=pw; gc.height=ph;
-          const gx = l.x*pw - (l.width*pw)/2;
-          const gy = l.y*ph - (l.height*ph)/2;
-          gc.getContext('2d').drawImage(l._oc, gx, gy, l.width*pw, l.height*ph);
-          octx.save(); octx.setTransform(1,0,0,1,0,0);
-          octx.globalAlpha = l.opacity??1;
-          octx.drawImage(gc, 0, 0);
-          octx.restore(); octx.setTransform(1,0,0,1,-mx,-my);
+          const gc = document.createElement('canvas'); gc.width=pw; gc.height=ph;
+          gc.getContext('2d').drawImage(l._oc, l.x*pw-(l.width*pw)/2, l.y*ph-(l.height*ph)/2, l.width*pw, l.height*ph);
+          octx.save(); octx.setTransform(1,0,0,1,0,0); octx.globalAlpha=l.opacity??1;
+          octx.drawImage(gc,0,0); octx.restore(); octx.setTransform(1,0,0,1,-mx,-my);
         }
       } else if (l.type==='image') { l.draw(octx, off); }
-      else if (l.type==='draw')   { l.draw(octx); }
+      else if (l.type==='draw')    { l.draw(octx); }
       else { octx.globalAlpha=l.opacity??1; l.draw(octx); octx.globalAlpha=1; }
     });
     textLayers.forEach(l => l.draw(octx, off));
     octx.setTransform(1,0,0,1,0,0);
 
-    // Escalar preservando proporciones (letterbox)
-    const scale = Math.min(S/pw, S/ph);
-    const dw = pw*scale, dh = ph*scale;
-    const ox = (S-dw)/2, oy = (S-dh)/2;
-    tctx.fillStyle='#ffffff'; tctx.fillRect(ox, oy, dw, dh);
-    tctx.drawImage(off, 0, 0, pw, ph, ox, oy, dw, dh);
+    // Calcular bbox del contenido (píxeles no blancos)
+    const idata = octx.getImageData(0, 0, pw, ph).data;
+    let x0=pw, y0=ph, x1=0, y1=0;
+    for (let y=0; y<ph; y++) for (let x=0; x<pw; x++) {
+      const i=(y*pw+x)*4;
+      // Píxel no blanco: no todos los canales son 255, o alpha < 255
+      if (idata[i]<250 || idata[i+1]<250 || idata[i+2]<250) {
+        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+      }
+    }
+    // Sin contenido: mostrar página completa
+    if (x1<=x0 || y1<=y0) { x0=0; y0=0; x1=pw-1; y1=ph-1; }
+    const pad = 4;
+    x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
+    x1=Math.min(pw-1,x1+pad); y1=Math.min(ph-1,y1+pad);
+    const cw=x1-x0+1, ch=y1-y0+1;
+
+    // Escalar bbox al thumb preservando proporciones
+    const scale = Math.min(S/cw, S/ch);
+    const dw=cw*scale, dh=ch*scale;
+    tctx.fillStyle='#ffffff'; tctx.fillRect(0,0,S,S);
+    tctx.drawImage(off, x0, y0, cw, ch, (S-dw)/2, (S-dh)/2, dw, dh);
   });
 
-  // Restaurar estado y selección
   window._gcpSelIdx = _savedSelIdx;
   saved.forEach((s,i)=>{ const la=window._gcpLayers[i]; if(!la) return;
     la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
@@ -16298,11 +16304,6 @@ function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   if (!bar) return;
   bar.innerHTML = '';
-  if (!window._gcpFrames.length) {
-    bar.style.display = 'none';
-    return;
-  }
-  bar.style.display = 'flex';
 
   window._gcpFrames.forEach((snap, fi) => {
     const btn = document.createElement('button');
@@ -16505,7 +16506,7 @@ function gcpOpen(edLayerIdx) {
   window._gcpFrameIdx = 0;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
-  if (_frBar) { _frBar.classList.remove('open'); _frBar.innerHTML=''; }
+  if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
   const _ftBtn = document.getElementById('gcpFramesToggleBtn');
   if (_ftBtn) { _ftBtn.textContent='Frames ▾'; _ftBtn.classList.remove('active'); }
 
