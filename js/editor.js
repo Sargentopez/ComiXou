@@ -15991,17 +15991,64 @@ function _gcpHandleDown(e) {
     return la ? { x: la.x, y: la.y, width: la.width, height: la.height, rotation: la.rotation || 0, opacity: la.opacity ?? 1 } : null;
   };
 
-  // Buscar capa tocada
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const hitScreen = 18;
+
+  // PRIMERO: comprobar handles de la capa seleccionada (igual que el editor real)
+  // Los handles están dentro del bbox — si buscamos bbox primero nunca llegamos a los handles
+  const selIdx = window._gcpSelIdx;
+  if (selIdx >= 0) {
+    const la = window._gcpLayers[selIdx];
+    const fo = getPosObj(selIdx);
+    if (la && fo) {
+      // Aplicar fo temporalmente para que getControlPoints() use la posicion del frame
+      const savedX=la.x, savedY=la.y, savedW=la.width, savedH=la.height, savedR=la.rotation;
+      la.x=fo.x; la.y=fo.y; la.width=fo.width; la.height=fo.height; la.rotation=fo.rotation||0;
+      for (const p of la.getControlPoints()) {
+        const dpx = (c.nx - p.x) * pw, dpy = (c.ny - p.y) * ph;
+        if (Math.hypot(dpx, dpy) * z < hitScreen) {
+          if (p.corner === 'rotate') {
+            edIsRotating = true;
+            edRotateStartAngle = Math.atan2(c.ny - fo.y, c.nx - fo.x) - (fo.rotation||0)*Math.PI/180;
+            edInitialSize = { rot: fo.rotation||0, cx: fo.x, cy: fo.y, width: fo.width, height: fo.height, asp: fo.height/fo.width, ox: fo.x, oy: fo.y, anchorX: fo.x, anchorY: fo.y };
+            la.x=savedX; la.y=savedY; la.width=savedW; la.height=savedH; la.rotation=savedR;
+            return;
+          }
+          // Resize
+          edIsResizing = true; edResizeCorner = p.corner;
+          const rot0 = (fo.rotation||0) * Math.PI / 180;
+          const hw = fo.width/2, hh = fo.height/2;
+          const ax = p.corner==='ml'?hw : p.corner==='mr'?-hw :
+                     (p.corner==='tl'||p.corner==='bl')?hw :
+                     (p.corner==='tr'||p.corner==='br')?-hw : 0;
+          const ay = p.corner==='mt'?hh : p.corner==='mb'?-hh :
+                     (p.corner==='tl'||p.corner==='tr')?hh :
+                     (p.corner==='bl'||p.corner==='br')?-hh : 0;
+          const rx = ax*pw, ry = ay*ph;
+          edInitialSize = {
+            width: fo.width, height: fo.height,
+            cx: fo.x, cy: fo.y, asp: fo.height/fo.width,
+            rot: fo.rotation||0, ox: fo.x, oy: fo.y,
+            anchorX: fo.x + (rx*Math.cos(rot0) - ry*Math.sin(rot0)) / pw,
+            anchorY: fo.y + (rx*Math.sin(rot0) + ry*Math.cos(rot0)) / ph
+          };
+          la.x=savedX; la.y=savedY; la.width=savedW; la.height=savedH; la.rotation=savedR;
+          return;
+        }
+      }
+      la.x=savedX; la.y=savedY; la.width=savedW; la.height=savedH; la.rotation=savedR;
+    }
+  }
+
+  // SEGUNDO: buscar capa tocada por bbox (drag)
   let hit = -1;
   for (let i = window._gcpLayers.length - 1; i >= 0; i--) {
     const fo = getPosObj(i);
     if (!fo) continue;
-    const pw = edPageW(), ph = edPageH();
     const rot = (fo.rotation || 0) * Math.PI / 180;
     const dx = c.nx - fo.x, dy = c.ny - fo.y;
     const lx = dx * Math.cos(-rot) * pw - dy * Math.sin(-rot) * ph;
     const ly = dx * Math.sin(-rot) * pw + dy * Math.cos(-rot) * ph;
-    const z = edCamera.z;
     if (Math.abs(lx) <= fo.width / 2 * pw + 10 / z && Math.abs(ly) <= fo.height / 2 * ph + 10 / z) {
       hit = i; break;
     }
@@ -16022,54 +16069,6 @@ function _gcpHandleDown(e) {
       };
     }
   } else {
-    // Comprobar handles de resize/rotate de la capa seleccionada.
-    // Usamos getControlPoints() igual que el editor real — calcula posiciones rotadas correctamente.
-    const selIdx = window._gcpSelIdx;
-    if (selIdx >= 0) {
-      const la = window._gcpLayers[selIdx];
-      const fo = getPosObj(selIdx);
-      if (la && fo) {
-        // Aplicar temporalmente fo a la capa para que getControlPoints() use la posicion del frame
-        const savedX=la.x, savedY=la.y, savedW=la.width, savedH=la.height, savedR=la.rotation;
-        la.x=fo.x; la.y=fo.y; la.width=fo.width; la.height=fo.height; la.rotation=fo.rotation||0;
-
-        const pw = edPageW(), ph = edPageH(), z = edCamera.z;
-        const hitScreen = 18;
-        for (const p of la.getControlPoints()) {
-          const dpx = (c.nx - p.x) * pw, dpy = (c.ny - p.y) * ph;
-          if (Math.hypot(dpx, dpy) * z < hitScreen) {
-            if (p.corner === 'rotate') {
-              edIsRotating = true;
-              edRotateStartAngle = Math.atan2(c.ny - fo.y, c.nx - fo.x) - (fo.rotation||0)*Math.PI/180;
-              edInitialSize = { rot: fo.rotation||0, cx: fo.x, cy: fo.y, width: fo.width, height: fo.height, asp: fo.height/fo.width, ox: fo.x, oy: fo.y, anchorX: fo.x, anchorY: fo.y };
-              la.x=savedX; la.y=savedY; la.width=savedW; la.height=savedH; la.rotation=savedR;
-              return;
-            }
-            // Resize: calcular ancla (punto opuesto) usando la misma lógica del editor real
-            edIsResizing = true; edResizeCorner = p.corner;
-            const rot0 = (fo.rotation||0) * Math.PI / 180;
-            const hw = fo.width/2, hh = fo.height/2;
-            const ax = p.corner==='ml'?hw : p.corner==='mr'?-hw :
-                       (p.corner==='tl'||p.corner==='bl')?hw :
-                       (p.corner==='tr'||p.corner==='br')?-hw : 0;
-            const ay = p.corner==='mt'?hh : p.corner==='mb'?-hh :
-                       (p.corner==='tl'||p.corner==='tr')?hh :
-                       (p.corner==='bl'||p.corner==='br')?-hh : 0;
-            const rx = ax*pw, ry = ay*ph;
-            edInitialSize = {
-              width: fo.width, height: fo.height,
-              cx: fo.x, cy: fo.y, asp: fo.height/fo.width,
-              rot: fo.rotation||0, ox: fo.x, oy: fo.y,
-              anchorX: fo.x + (rx*Math.cos(rot0) - ry*Math.sin(rot0)) / pw,
-              anchorY: fo.y + (rx*Math.sin(rot0) + ry*Math.cos(rot0)) / ph
-            };
-            la.x=savedX; la.y=savedY; la.width=savedW; la.height=savedH; la.rotation=savedR;
-            return;
-          }
-        }
-        la.x=savedX; la.y=savedY; la.width=savedW; la.height=savedH; la.rotation=savedR;
-      }
-    }
     window._gcpSelIdx = -1;
   }
   _gcpRedraw();
@@ -16376,21 +16375,21 @@ function _gcpUpdateFramesBar() {
     lbl.textContent = fi + 1;
     btn.appendChild(lbl);
 
-    // Tap → ir al frame
+    // Tap → ir al frame / Doble tap → eliminar frame
+    let _lastTap = 0;
     btn.addEventListener('pointerup', e => {
       e.stopPropagation();
-      _gcpGoToFrame(fi);
-    });
-
-    // Doble tap → eliminar frame
-    let _lastTap = 0;
-    btn.addEventListener('pointerup', () => {
       const now = Date.now();
       if (now - _lastTap < 350 && window._gcpFrames.length > 1) {
+        // Doble tap: eliminar frame
         window._gcpFrames.splice(fi, 1);
         if (window._gcpFrameIdx >= window._gcpFrames.length)
           window._gcpFrameIdx = window._gcpFrames.length - 1;
         _gcpGoToFrame(window._gcpFrameIdx);
+        _gcpUpdateFramesBar();
+      } else {
+        // Tap simple: ir al frame
+        _gcpGoToFrame(fi);
       }
       _lastTap = now;
     });

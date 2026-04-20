@@ -1863,6 +1863,7 @@ body.editor-page #appView {
   border-radius: 8px;
   cursor: pointer;
   transition: border-color .12s;
+  touch-action: manipulation;
 }
 .gcp-frame-btn.active {
   border-color: var(--black);
