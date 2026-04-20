@@ -16444,6 +16444,11 @@ function gcpOpen(edLayerIdx) {
   window._gcpSelIdx   = -1;
   window._gcpFrames   = [];
   window._gcpFrameIdx = 0;
+  // Cerrar barra de frames al abrir editor
+  const _frBar = document.getElementById('gcpFramesBar');
+  if (_frBar) { _frBar.classList.remove('open'); _frBar.innerHTML=''; }
+  const _ftBtn = document.getElementById('gcpFramesToggleBtn');
+  if (_ftBtn) { _ftBtn.textContent='Frames ▾'; _ftBtn.classList.remove('active'); }
 
   // Si re-editamos una animación existente, restaurar sus capas serializadas
   if (window._gcpEdLayerIdx >= 0) {
