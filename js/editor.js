@@ -16111,38 +16111,24 @@ window._gcpFrameIdx = 0;    // frame activo
 // donde dx/dy = desplazamiento desde base, drot = rotación adicional,
 // scaleW/scaleH = factor de escala de width/height respecto al frame 1.
 
+// Sistema de frames — copia exacta del HTML de referencia:
+// cada frame guarda el estado absoluto de cada capa en ese instante.
+// Al crear frame: snapshot del estado actual.
+// Al ir a frame: restaurar ese snapshot y redibujar.
+// _gcpUpdateFramesBar solo se llama al crear/borrar frames,
+// NO al navegar entre frames (evita corrupción de estado).
+
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-
-  if (!window._gcpFrames.length) {
-    // Frame 1: guardar posición base absoluta de cada capa
-    // Los deltas son cero — es el estado de referencia
-    const base = window._gcpLayers.map(la => ({
-      // Base absoluta (se usa para calcular deltas en frames siguientes)
-      baseX: la.x, baseY: la.y, baseW: la.width, baseH: la.height, baseRot: la.rotation||0,
-      // Deltas respecto a la base (frame 1 = todos cero/uno)
-      dx:0, dy:0, drot:0, scaleW:1, scaleH:1, opacity: la.opacity??1
-    }));
-    window._gcpFrames.push(base);
-    window._gcpFrameIdx = 0;
-  } else {
-    // Frames siguientes: calcular deltas respecto al frame 1
-    const base = window._gcpFrames[0];
-    const snap = window._gcpLayers.map((la, i) => {
-      const b = base[i] || { baseX:la.x, baseY:la.y, baseW:la.width, baseH:la.height, baseRot:la.rotation||0 };
-      return {
-        baseX: b.baseX, baseY: b.baseY, baseW: b.baseW, baseH: b.baseH, baseRot: b.baseRot,
-        dx:    la.x       - b.baseX,
-        dy:    la.y       - b.baseY,
-        drot:  (la.rotation||0) - b.baseRot,
-        scaleW: la.width  / (b.baseW  || 0.001),
-        scaleH: la.height / (b.baseH  || 0.001),
-        opacity: la.opacity ?? 1
-      };
-    });
-    window._gcpFrames.push(snap);
-    window._gcpFrameIdx = window._gcpFrames.length - 1;
-  }
+  // Snapshot exacto del estado actual — igual que {...tempTransform} en el HTML de referencia
+  const snap = window._gcpLayers.map(la => ({
+    x: la.x, y: la.y,
+    width: la.width, height: la.height,
+    rotation: la.rotation || 0,
+    opacity: la.opacity ?? 1
+  }));
+  window._gcpFrames.push(snap);
+  window._gcpFrameIdx = window._gcpFrames.length - 1;
   // Abrir panel si no está visible
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display !== 'flex') _gcpToggleFramesBar();
@@ -16150,27 +16136,33 @@ function _gcpCaptureFrame() {
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
-// Aplica un frame a las capas (restaura posición absoluta desde base + deltas)
+// Aplica un frame: restaura el estado exacto guardado en ese frame
 function _gcpApplyFrame(fi) {
   const snap = window._gcpFrames[fi];
   if (!snap) return;
   snap.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
-    la.x        = s.baseX + s.dx;
-    la.y        = s.baseY + s.dy;
-    la.width    = s.baseW * s.scaleW;
-    la.height   = s.baseH * s.scaleH;
-    la.rotation = s.baseRot + s.drot;
-    la.opacity  = s.opacity;
+    la.x = s.x; la.y = s.y;
+    la.width = s.width; la.height = s.height;
+    la.rotation = s.rotation;
+    la.opacity = s.opacity;
   });
 }
 
+// Ir a un frame: restaurar estado y redibujar.
+// NO llamar _gcpUpdateFramesBar — solo actualizar el botón activo visualmente.
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
   window._gcpFrameIdx = fi;
   _gcpApplyFrame(fi);
   _gcpRedraw();
-  _gcpUpdateFramesBar();
+  // Actualizar solo el resaltado del botón activo en la barra — sin regenerar thumbs
+  const bar = document.getElementById('gcpFramesBar');
+  if (bar) {
+    bar.querySelectorAll('.gcp-frame-btn').forEach((btn, i) => {
+      btn.classList.toggle('active', i === fi);
+    });
+  }
 }
 
 // Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
