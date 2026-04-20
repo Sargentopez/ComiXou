@@ -14941,14 +14941,20 @@ function EditorView_init(){
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
     if (window._gcpActive) {
-      const optPanel = document.getElementById('edOptionsPanel');
-      if (optPanel && optPanel.contains(e.target)) {
-        // Dejar pasar — es la biblioteca del GIF
-      } else {
-        // Redirigir al handler del canvas GIF
+      const optPanel  = document.getElementById('edOptionsPanel');
+      const framesBar = document.getElementById('gcpFramesBar');
+      const gcpTopbar = document.getElementById('gcpTopbar');
+      const gcpMenuBar = document.getElementById('gcpMenuBar');
+      const isUITouch = (optPanel  && optPanel.contains(e.target))
+                     || (framesBar && framesBar.contains(e.target))
+                     || (gcpTopbar && gcpTopbar.contains(e.target))
+                     || (gcpMenuBar && gcpMenuBar.contains(e.target));
+      if (!isUITouch) {
+        // Es el canvas GIF o zona exterior — redirigir al handler del canvas
         _gcpHandleDown(e);
         return;
       }
+      // Es un control UI del editor GIF — dejar pasar al elemento
     }
     // Ignorar clicks en zona de barra bloqueada (pointer-events:none deja pasar coords)
     const _menuBar2=$('edMenuBar');
