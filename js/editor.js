@@ -16204,6 +16204,22 @@ function _gcpFrameThumb(fi) {
 }
 
 // Renderizar el dropdown de frames con miniaturas
+// Toggle visibilidad del panel de frames
+function _gcpToggleFramesBar() {
+  const bar = document.getElementById('gcpFramesBar');
+  const btn = document.getElementById('gcpFramesToggleBtn');
+  if (!bar) return;
+  const isOpen = bar.classList.contains('open');
+  if (isOpen) {
+    bar.classList.remove('open');
+    if (btn) { btn.textContent = 'Frames ▾'; btn.classList.remove('active'); }
+  } else {
+    _gcpUpdateFramesBar();
+    bar.classList.add('open');
+    if (btn) { btn.textContent = 'Frames ▴'; btn.classList.add('active'); }
+  }
+}
+
 // Previsualizar la animación en el canvas GIF (botón ▶)
 // Reproduce todos los frames en bucle sobre el gcpCanvas
 let _gcpPreviewTimer = null;
@@ -16521,6 +16537,10 @@ function gcpOpen(edLayerIdx) {
     // Botón Añadir Frame
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpCaptureFrame();
+    });
+    // Botón toggle Frames
+    document.getElementById('gcpFramesToggleBtn')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _gcpToggleFramesBar();
     });
 
     // Menús GIF

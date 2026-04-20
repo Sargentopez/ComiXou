@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v17.42</footer>
+    <footer class="app-version">v17.43</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -522,11 +522,6 @@ Router.register('editor', {
             <button class="ed-menu-btn" id="gcpBibBtn">Biblioteca ▾</button>
           </div>
           <div class="ed-menu-sep"></div>
-          <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-gcpmenu="dibujar">Dibujar ▾</button>
-            <div class="ed-dropdown" id="gdd-dibujar"></div>
-          </div>
-          <div class="ed-menu-sep"></div>
           <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
           <div class="ed-menu-sep"></div>
@@ -535,9 +530,8 @@ Router.register('editor', {
             <div class="ed-dropdown" id="gdd-capas"></div>
           </div>
           <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900">＋ Frame</button>
-          <div class="ed-menu-sep"></div>
           <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
+          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;padding:0 10px">＋</button>
         </div>
       </div>
       <!-- Panel de frames: toggle, deslizante horizontal, miniaturas 88×88 -->
