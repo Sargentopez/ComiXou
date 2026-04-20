@@ -16136,7 +16136,7 @@ function _gcpCaptureFrame() {
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
-// Aplica un frame: restaura el estado exacto guardado en ese frame
+// Aplica un frame a las capas (usado solo para thumbs y exportación)
 function _gcpApplyFrame(fi) {
   const snap = window._gcpFrames[fi];
   if (!snap) return;
@@ -16144,25 +16144,32 @@ function _gcpApplyFrame(fi) {
     const la = window._gcpLayers[i]; if (!la) return;
     la.x = s.x; la.y = s.y;
     la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation;
-    la.opacity = s.opacity;
+    la.rotation = s.rotation; la.opacity = s.opacity;
   });
 }
 
-// Ir a un frame: restaurar estado y redibujar.
-// NO llamar _gcpUpdateFramesBar — solo actualizar el botón activo visualmente.
+// Ir a un frame: igual que globalFrameIndex = f en el HTML de referencia.
+// Actualiza _gcpFrameIdx y aplica el snapshot a las capas para que el
+// usuario pueda seguir transformando desde ese estado.
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
   window._gcpFrameIdx = fi;
-  _gcpApplyFrame(fi);
+  // Copiar valores del snapshot a las capas — igual que tempTransform = {...frames[f]}
+  const snap = window._gcpFrames[fi];
+  snap.forEach((s, i) => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    // Copia explícita de cada valor primitivo — no referencias
+    la.x        = +s.x;
+    la.y        = +s.y;
+    la.width    = +s.width;
+    la.height   = +s.height;
+    la.rotation = +s.rotation;
+    la.opacity  = +s.opacity;
+  });
   _gcpRedraw();
-  // Actualizar solo el resaltado del botón activo en la barra — sin regenerar thumbs
+  // Actualizar resaltado del botón activo sin regenerar thumbs
   const bar = document.getElementById('gcpFramesBar');
-  if (bar) {
-    bar.querySelectorAll('.gcp-frame-btn').forEach((btn, i) => {
-      btn.classList.toggle('active', i === fi);
-    });
-  }
+  if (bar) bar.querySelectorAll('.gcp-frame-btn').forEach((b, i) => b.classList.toggle('active', i === fi));
 }
 
 // Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
