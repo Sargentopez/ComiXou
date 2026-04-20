@@ -16072,6 +16072,15 @@ function _gcpHandleMove(e) {
 function _gcpHandleUp(e) {
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
+  // Sincronizar _gcpTempState desde las capas (edOnMove las modifica directamente)
+  // y guardar en el frame activo — así cada frame es un objeto independiente.
+  if (window._gcpFrames.length > 0) {
+    window._gcpTempState = window._gcpLayers.map(la => ({
+      x: la.x, y: la.y, width: la.width, height: la.height,
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1
+    }));
+    window._gcpFrames[window._gcpFrameIdx] = window._gcpTempState.map(s => ({...s}));
+  }
   _gcpRedraw();
 }
 
@@ -16160,7 +16169,14 @@ function _gcpApplyTempToLayers() {
 //   3. Avanzar al nuevo frame
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Snapshot del estado actual — cada frame es independiente
+  // Guardar el estado actual en el frame activo (por si hay cambios pendientes de handleUp)
+  if (window._gcpFrames.length > window._gcpFrameIdx) {
+    window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
+      x: la.x, y: la.y, width: la.width, height: la.height,
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1
+    }));
+  }
+  // Snapshot del estado actual como nuevo frame — objeto independiente
   const snap = window._gcpLayers.map(la => ({
     x: la.x, y: la.y, width: la.width, height: la.height,
     rotation: la.rotation || 0, opacity: la.opacity ?? 1
@@ -16191,8 +16207,16 @@ function _gcpApplyFrame(fi) {
 // NO toca _gcpFrames — solo actualiza _gcpTempState y redibuja
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
+  // Guardar el estado en vivo en el frame actual ANTES de cambiar
+  // (igual que saveCurrentTransformToFrame() en el HTML de referencia)
+  if (window._gcpFrames.length > window._gcpFrameIdx) {
+    const curState = window._gcpLayers.map(la => ({
+      x: la.x, y: la.y, width: la.width, height: la.height,
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1
+    }));
+    window._gcpFrames[window._gcpFrameIdx] = curState;
+  }
   window._gcpFrameIdx = fi;
-  // Copiar estado del frame a las capas (copia profunda de valores primitivos)
   const snap = window._gcpFrames[fi];
   snap.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
