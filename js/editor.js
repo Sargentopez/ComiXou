@@ -16171,35 +16171,78 @@ function _gcpGoToFrame(fi) {
 }
 
 // Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
+// Genera miniatura 88×88 del frame fi.
+// Copia EXACTA de _edRenderPageThumb: usa _gcpWithEditorContext para que
+// edPageW/edMarginX/draw() operen sobre gcpCanvas igual que en el editor principal.
 function _gcpFrameThumb(fi) {
-  const snap = window._gcpFrames[fi];
-  const tc = document.createElement('canvas'); tc.width=44; tc.height=44;
+  const S = 88;
+  const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
-  tctx.fillStyle='#ffffff'; tctx.fillRect(0,0,44,44);
-  if (!snap) return tc;
+  tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
+  const snap = window._gcpFrames[fi];
+  if (!snap || !window._gcpLayers.length) return tc;
 
-  // Guardar estado actual de las capas
-  const saved = window._gcpLayers.map(la=>({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1}));
-  // Aplicar el frame
+  // Guardar estado actual
+  const saved = window._gcpLayers.map(la=>({
+    x:la.x, y:la.y, width:la.width, height:la.height,
+    rotation:la.rotation||0, opacity:la.opacity??1
+  }));
+  // Aplicar el frame al que queremos hacer miniatura
   _gcpApplyFrame(fi);
 
-  // Renderizar en canvas pw×ph igual que _edRenderPageThumb
-  const pw=edPageW(), ph=edPageH(), mx=edMarginX(), my=edMarginY();
-  const off=document.createElement('canvas'); off.width=pw; off.height=ph;
-  const octx=off.getContext('2d');
-  octx.fillStyle='#ffffff'; octx.fillRect(0,0,pw,ph);
-  octx.setTransform(1,0,0,1,-mx,-my);
-  window._gcpLayers.forEach(la=>{
-    if(!la||typeof la.draw!=='function') return;
-    if(la.type==='image'||la.type==='gif') la.draw(octx,off);
-    else if(la.type==='text'||la.type==='bubble') la.draw(octx,off);
-    else { octx.globalAlpha=la.opacity??1; la.draw(octx); octx.globalAlpha=1; }
-  });
-  octx.setTransform(1,0,0,1,0,0);
-  tctx.drawImage(off,0,0,pw,ph,0,0,44,44);
+  // Renderizar usando _gcpWithEditorContext para que edPageW/edMarginX
+  // devuelvan las dimensiones correctas del gcpCanvas.
+  // Guardar _gcpSelIdx porque _gcpWithEditorContext lo puede modificar.
+  const _savedSelIdx = window._gcpSelIdx;
+  _gcpWithEditorContext(() => {
+    const pw = edPageW(), ph = edPageH();
+    const mx = edMarginX(), my = edMarginY();
 
-  // Restaurar estado
-  saved.forEach((s,i)=>{ const la=window._gcpLayers[i];if(!la)return; la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity; });
+    // Canvas pw×ph — mismo approach que _edRenderPageThumb
+    const off = document.createElement('canvas');
+    off.width = pw; off.height = ph;
+    const octx = off.getContext('2d');
+    octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, pw, ph);
+    // Mismo transform: traslada origen al borde de la página
+    octx.setTransform(1, 0, 0, 1, -mx, -my);
+
+    // Dibujar cada capa igual que _edRenderPageThumb
+    const textLayers = edLayers.filter(l => l.type==='text'||l.type==='bubble');
+    edLayers.forEach(l => {
+      if (!l || l.type==='text' || l.type==='bubble') return;
+      if (l.type==='gif') {
+        if (l._oc && l._ready && l._oc.width > 0) {
+          const gc = document.createElement('canvas');
+          gc.width=pw; gc.height=ph;
+          const gx = l.x*pw - (l.width*pw)/2;
+          const gy = l.y*ph - (l.height*ph)/2;
+          gc.getContext('2d').drawImage(l._oc, gx, gy, l.width*pw, l.height*ph);
+          octx.save(); octx.setTransform(1,0,0,1,0,0);
+          octx.globalAlpha = l.opacity??1;
+          octx.drawImage(gc, 0, 0);
+          octx.restore(); octx.setTransform(1,0,0,1,-mx,-my);
+        }
+      } else if (l.type==='image') { l.draw(octx, off); }
+      else if (l.type==='draw')   { l.draw(octx); }
+      else { octx.globalAlpha=l.opacity??1; l.draw(octx); octx.globalAlpha=1; }
+    });
+    textLayers.forEach(l => l.draw(octx, off));
+    octx.setTransform(1,0,0,1,0,0);
+
+    // Escalar preservando proporciones (letterbox)
+    const scale = Math.min(S/pw, S/ph);
+    const dw = pw*scale, dh = ph*scale;
+    const ox = (S-dw)/2, oy = (S-dh)/2;
+    tctx.fillStyle='#ffffff'; tctx.fillRect(ox, oy, dw, dh);
+    tctx.drawImage(off, 0, 0, pw, ph, ox, oy, dw, dh);
+  });
+
+  // Restaurar estado y selección
+  window._gcpSelIdx = _savedSelIdx;
+  saved.forEach((s,i)=>{ const la=window._gcpLayers[i]; if(!la) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+    la.rotation=s.rotation; la.opacity=s.opacity;
+  });
   return tc;
 }
 
