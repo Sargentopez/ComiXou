@@ -16123,22 +16123,21 @@ function _gcpApplyFrame(fi) {
   });
 }
 
-// Ir a un frame.
-// Con el sistema de handlers original (edOnMove modifica la.x directamente),
-// _gcpHandleUp ya guarda el frame activo al soltar. _gcpGoToFrame también guarda
-// por si acaso (navegación por código, etc.) — es idempotente.
+// Ir a un frame: restaura las capas al snapshot del frame destino.
+// _gcpHandleUp ya guarda al soltar. Solo guardamos aquí si hay gesto activo
+// (pointerup perdido — raro pero posible en táctil).
 function _gcpGoToFrame(fi) {
   if (fi < 0 || fi >= window._gcpFrames.length) return;
-  // Guardar estado actual antes de cambiar (las capas ya tienen los valores correctos
-  // porque edOnMove los modificó y _gcpHandleUp los guardó — esto es redundante pero seguro)
-  if (window._gcpFrames.length > window._gcpFrameIdx) {
+  // Guardar solo si hay transformación en curso (gesto sin soltar)
+  if ((edIsDragging || edIsResizing || edIsRotating) && window._gcpFrames.length > window._gcpFrameIdx) {
     window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
       x: la.x, y: la.y, width: la.width, height: la.height,
       rotation: la.rotation || 0, opacity: la.opacity ?? 1
     }));
+    edIsDragging = false; edIsResizing = false; edIsRotating = false;
   }
   window._gcpFrameIdx = fi;
-  // Restaurar capas al estado del frame destino (copia profunda de primitivos)
+  // Restaurar capas al estado del frame destino — deep copy de primitivos
   const snap = window._gcpFrames[fi];
   snap.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
