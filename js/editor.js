@@ -16258,13 +16258,13 @@ function _gcpToggleFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   const btn = document.getElementById('gcpFramesToggleBtn');
   if (!bar) return;
-  const isOpen = bar.classList.contains('open');
+  const isOpen = bar.style.display === 'flex';
   if (isOpen) {
-    bar.classList.remove('open');
+    bar.style.display = 'none';
     if (btn) { btn.textContent = 'Frames ▾'; btn.classList.remove('active'); }
   } else {
     _gcpUpdateFramesBar();
-    bar.classList.add('open');
+    bar.style.display = 'flex';
     if (btn) { btn.textContent = 'Frames ▴'; btn.classList.add('active'); }
   }
 }
