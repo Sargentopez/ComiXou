@@ -16169,14 +16169,8 @@ function _gcpApplyTempToLayers() {
 //   3. Avanzar al nuevo frame
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Guardar el estado actual en el frame activo (por si hay cambios pendientes de handleUp)
-  if (window._gcpFrames.length > window._gcpFrameIdx) {
-    window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
-      x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1
-    }));
-  }
-  // Snapshot del estado actual como nuevo frame — objeto independiente
+  // Snapshot del estado actual como nuevo frame — objeto independiente.
+  // NO sobreescribir el frame actual: su estado ya fue guardado por _gcpHandleUp.
   const snap = window._gcpLayers.map(la => ({
     x: la.x, y: la.y, width: la.width, height: la.height,
     rotation: la.rotation || 0, opacity: la.opacity ?? 1
