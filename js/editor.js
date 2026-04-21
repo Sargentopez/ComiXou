@@ -12585,6 +12585,11 @@ function edSerLayer(l){
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
     if(l.groupId) _r.groupId=l.groupId;
     if(l.locked) _r.locked=true;
+    if(l._keepSize) _r._keepSize=true;
+    if(l._isGcpImage) _r._isGcpImage=true;
+    if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
+    if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
+    if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
     return _r;
   }
   if(l.type==='text'){const _o={type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
