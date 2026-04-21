@@ -1002,49 +1002,44 @@ class ImageLayer extends BaseLayer {
     ctx.drawImage(this.img, -w/2, -h/2, w, h);
     ctx.restore();
   }
-  // Animación PNG — equivalente a GifLayer._applyFrame
-  _applyPngFrame(i) {
-    if (!this._pngFrames || !this._pngFrames.length) return;
-    this._pngFrameIdx = i % this._pngFrames.length;
-    const src = this._pngFrames[this._pngFrameIdx];
-    if (this.src === src) {
-      // Frame ya cargado — solo avanzar timer si estamos animando
-      if (this._playing) {
-        if (this._timer) clearTimeout(this._timer);
-        this._timer = setTimeout(() => {
-          this._applyPngFrame(this._pngFrameIdx + 1);
-          if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
-        }, 120); // ~8fps — ajustable
-      }
-      return;
-    }
-    this.src = src;
-    const img = new Image();
-    img.onload = () => {
-      this.img = img;
-      if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
-      if (this._playing) {
-        if (this._timer) clearTimeout(this._timer);
-        this._timer = setTimeout(() => {
-          this._applyPngFrame(this._pngFrameIdx + 1);
-          if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
-        }, 120);
-      }
-    };
-    img.src = src;
+  // Precargar todos los frames PNG como objetos Image — síncrono al animar
+  _preloadPngFrames(cb) {
+    if (!this._pngFrames || !this._pngFrames.length) { cb && cb(); return; }
+    if (this._pngImgs && this._pngImgs.length === this._pngFrames.length) { cb && cb(); return; }
+    this._pngImgs = [];
+    let loaded = 0;
+    this._pngFrames.forEach((src, i) => {
+      const img = new Image();
+      img.onload = () => {
+        this._pngImgs[i] = img;
+        if (++loaded === this._pngFrames.length) cb && cb();
+      };
+      img.onerror = () => { if (++loaded === this._pngFrames.length) cb && cb(); };
+      img.src = src;
+    });
   }
+
+  // Animación PNG — igual que GifLayer._applyFrame pero con imágenes precargadas
+  _applyPngFrame(i) {
+    if (!this._pngImgs || !this._pngImgs.length) return;
+    this._pngFrameIdx = i % this._pngImgs.length;
+    this.img = this._pngImgs[this._pngFrameIdx];
+    if (!this._playing) return;
+    if (this._timer) clearTimeout(this._timer);
+    this._timer = setTimeout(() => {
+      this._applyPngFrame(this._pngFrameIdx + 1);
+      if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
+    }, 150); // ~6fps
+  }
+
   stopAnim() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this._playing = false;
-    // Restaurar primer frame
-    if (this._pngFrames && this._pngFrames.length) {
+    // Volver al primer frame
+    if (this._pngImgs && this._pngImgs[0]) {
       this._pngFrameIdx = 0;
-      if (this.src !== this._pngFrames[0]) {
-        const img = new Image();
-        img.onload = () => { this.img = img; if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw()); };
-        img.src = this._pngFrames[0];
-        this.src = this._pngFrames[0];
-      }
+      this.img = this._pngImgs[0];
+      if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
     }
   }
 
@@ -12926,8 +12921,14 @@ function _edGifSetPlaying(playing) {
       // Animación PNG del editor GIF
       if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 1) {
         l._playing = playing;
-        if (playing) l._applyPngFrame(l._pngFrameIdx || 0);
-        else l.stopAnim();
+        if (playing) {
+          // Precargar frames si no están listos, luego arrancar
+          l._preloadPngFrames(() => {
+            if (l._playing) l._applyPngFrame(l._pngFrameIdx || 0);
+          });
+        } else {
+          l.stopAnim();
+        }
       }
     });
   });
