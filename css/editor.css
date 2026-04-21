@@ -1848,6 +1848,7 @@ body.editor-page #appView {
   scrollbar-color: var(--gray-300) transparent;
   z-index: 510;
   box-shadow: 0 3px 8px rgba(0,0,0,.10);
+  pointer-events: auto;
 }
 #gcpFramesBar::-webkit-scrollbar { height: 4px; }
 #gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }

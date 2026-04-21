@@ -14960,7 +14960,7 @@ function EditorView_init(){
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
       const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, [data-gcpmenu]');
       if (_gcpUiEl) {
-        // Es UI del GIF — no redirigir a _gcpHandleDown
+        return; // Es UI del GIF — dejar que sus propios listeners actúen
       } else {
         _gcpHandleDown(e);
         return;
@@ -16093,19 +16093,22 @@ function _gcpHandleMove(e) {
 }
 
 function _gcpHandleUp(e) {
-  const moved = window._edMoved;
   window._edMoved = false;
-  const wasDragging = edIsDragging || edIsResizing || edIsRotating;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  if ((moved || wasDragging) && window._gcpFrames.length > 0) {
-    // Actualizar el frame activo con la posición actual de las capas
-    window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
+  // Guardar siempre en historial si hay frames — cualquier interacción puede haber
+  // cambiado la posición del objeto (drag, resize, rotate)
+  if (window._gcpFrames.length > 0) {
+    const newSnap = window._gcpLayers.map(la => ({
       x:la.x, y:la.y, width:la.width, height:la.height,
       rotation:la.rotation||0, opacity:la.opacity??1
     }));
-    _gcpPushHistory();
-    // Actualizar miniatura del frame activo
-    _gcpRefreshActiveThumb();
+    const newJSON = JSON.stringify(newSnap);
+    // Solo guardar si el estado cambió respecto al último snapshot del historial
+    if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
+      window._gcpFrames[window._gcpFrameIdx] = newSnap;
+      _gcpPushHistory(newJSON);
+      _gcpRefreshActiveThumb();
+    }
   }
   _gcpRedraw();
 }
@@ -16163,9 +16166,9 @@ window._gcpTempState = []; // estado en vivo (equivalente a tempTransform)
 window._gcpHistory    = [];  // array de snapshots del frame activo
 window._gcpHistoryIdx = -1;  // índice actual
 
-function _gcpPushHistory() {
+function _gcpPushHistory(snapJSON) {
   if (!window._gcpFrames.length) return;
-  const snap = JSON.stringify(window._gcpFrames[window._gcpFrameIdx]);
+  const snap = snapJSON || JSON.stringify(window._gcpFrames[window._gcpFrameIdx]);
   // No duplicar si igual al último
   if (window._gcpHistoryIdx >= 0 && window._gcpHistory[window._gcpHistoryIdx] === snap) return;
   // Truncar futuros
@@ -16300,8 +16303,9 @@ function _gcpGoToFrame(fi) {
   // Empujar estado inicial del frame como primer snapshot del historial
   _gcpPushHistory();
   _gcpRedraw();
+  // Actualizar resaltado de cards — usan .ed-page-card igual que la ventana de hojas
   const bar = document.getElementById('gcpFramesBar');
-  if (bar) bar.querySelectorAll('.gcp-frame-btn').forEach((b, i) => b.classList.toggle('active', i === fi));
+  if (bar) bar.querySelectorAll('.ed-page-card').forEach((c, i) => c.classList.toggle('current', i === fi));
 }
 
 // Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
@@ -16491,7 +16495,7 @@ function _gcpUpdateFramesBar() {
     dupBtn.className = 'ed-page-action-btn';
     dupBtn.title = 'Duplicar frame';
     dupBtn.innerHTML = '⧉';
-    dupBtn.addEventListener('pointerup', e => {
+    dupBtn.addEventListener('click', e => {
       e.stopPropagation();
       const copy = window._gcpFrames[fi].map(s => ({...s}));
       window._gcpFrames.splice(fi + 1, 0, copy);
@@ -16506,7 +16510,7 @@ function _gcpUpdateFramesBar() {
     delBtn.className = 'ed-page-action-btn ed-page-del';
     delBtn.title = 'Eliminar frame';
     delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
-    delBtn.addEventListener('pointerup', e => {
+    delBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (window._gcpFrames.length <= 1) return;
       window._gcpFrames.splice(fi, 1);
@@ -16518,11 +16522,12 @@ function _gcpUpdateFramesBar() {
     actions.appendChild(delBtn);
     card.appendChild(actions);
 
-    // Tap en miniatura o card → ir al frame
+    // Click en miniatura o card → ir al frame (click no se cancela por scroll)
     const goTo = e => { e.stopPropagation(); _gcpGoToFrame(fi); };
-    thumb.addEventListener('pointerup', goTo);
-    card.addEventListener('pointerup', e => {
+    thumb.addEventListener('click', goTo);
+    card.addEventListener('click', e => {
       if (e.target === delBtn || delBtn.contains(e.target)) return;
+      if (e.target === dupBtn || dupBtn.contains(e.target)) return;
       goTo(e);
     });
 
