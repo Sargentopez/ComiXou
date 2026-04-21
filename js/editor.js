@@ -16091,8 +16091,17 @@ function _gcpHandleMove(e) {
 }
 
 function _gcpHandleUp(e) {
+  const moved = window._edMoved;
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
+  if (moved && window._gcpFrames.length > 0) {
+    // Actualizar el frame activo con la posición actual de las capas
+    window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
+      x:la.x, y:la.y, width:la.width, height:la.height,
+      rotation:la.rotation||0, opacity:la.opacity??1
+    }));
+    _gcpPushHistory();
+  }
   _gcpRedraw();
 }
 
@@ -16144,6 +16153,64 @@ window._gcpFrameIdx = 0;    // frame activo
 
 window._gcpTempState = []; // estado en vivo (equivalente a tempTransform)
 
+// ── Historial del editor GIF — por frame, se borra al cambiar de frame ──
+// Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
+window._gcpHistory    = [];  // array de snapshots del frame activo
+window._gcpHistoryIdx = -1;  // índice actual
+
+function _gcpPushHistory() {
+  if (!window._gcpFrames.length) return;
+  const snap = JSON.stringify(window._gcpFrames[window._gcpFrameIdx]);
+  // No duplicar si igual al último
+  if (window._gcpHistoryIdx >= 0 && window._gcpHistory[window._gcpHistoryIdx] === snap) return;
+  // Truncar futuros
+  window._gcpHistory = window._gcpHistory.slice(0, window._gcpHistoryIdx + 1);
+  window._gcpHistory.push(snap);
+  if (window._gcpHistory.length > 30) window._gcpHistory.shift();
+  window._gcpHistoryIdx = window._gcpHistory.length - 1;
+  _gcpUpdateUndoRedoBtns();
+}
+
+function _gcpUndo() {
+  if (window._gcpHistoryIdx <= 0) return;
+  window._gcpHistoryIdx--;
+  _gcpApplyHistorySnap(window._gcpHistory[window._gcpHistoryIdx]);
+}
+
+function _gcpRedo() {
+  if (window._gcpHistoryIdx >= window._gcpHistory.length - 1) return;
+  window._gcpHistoryIdx++;
+  _gcpApplyHistorySnap(window._gcpHistory[window._gcpHistoryIdx]);
+}
+
+function _gcpApplyHistorySnap(snap) {
+  if (!snap) return;
+  const state = JSON.parse(snap);
+  window._gcpFrames[window._gcpFrameIdx] = state;
+  // Aplicar a las capas y redibujar
+  state.forEach((s, i) => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+    la.rotation=s.rotation; la.opacity=s.opacity;
+  });
+  window._gcpTempState = state.map(s => ({...s}));
+  _gcpRedraw();
+  _gcpUpdateUndoRedoBtns();
+}
+
+function _gcpUpdateUndoRedoBtns() {
+  const u = document.getElementById('gcpUndoBtn');
+  const r = document.getElementById('gcpRedoBtn');
+  if (u) u.disabled = window._gcpHistoryIdx <= 0;
+  if (r) r.disabled = window._gcpHistoryIdx >= window._gcpHistory.length - 1;
+}
+
+function _gcpClearHistory() {
+  window._gcpHistory = [];
+  window._gcpHistoryIdx = -1;
+  _gcpUpdateUndoRedoBtns();
+}
+
 // Guarda _gcpTempState en el frame activo — equivalente a saveCurrentTransformToFrame
 function _gcpSaveCurrentToFrame() {
   if (!window._gcpFrames.length) return;
@@ -16189,6 +16256,9 @@ function _gcpCaptureFrame() {
   window._gcpFrames.push(snap);
   window._gcpFrameIdx = window._gcpFrames.length - 1;
   window._gcpTempState = snap.map(s => ({...s}));
+  // Historial nuevo para este frame
+  _gcpClearHistory();
+  _gcpPushHistory();
   // Abrir panel si no está visible
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display !== 'flex') _gcpToggleFramesBar();
@@ -16216,10 +16286,14 @@ function _gcpGoToFrame(fi) {
   const snap = window._gcpFrames[fi];
   snap.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y; la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+    la.rotation=s.rotation; la.opacity=s.opacity;
   });
   window._gcpTempState = snap.map(s => ({...s}));
+  // Borrar historial al cambiar de frame — cada frame tiene su historial propio
+  _gcpClearHistory();
+  // Empujar estado inicial del frame como primer snapshot del historial
+  _gcpPushHistory();
   _gcpRedraw();
   const bar = document.getElementById('gcpFramesBar');
   if (bar) bar.querySelectorAll('.gcp-frame-btn').forEach((b, i) => b.classList.toggle('active', i === fi));
@@ -16680,6 +16754,7 @@ function gcpOpen(edLayerIdx) {
   window._gcpFrames   = [];
   window._gcpFrameIdx = 0;
   window._gcpTempState = [];
+  window._gcpHistory = []; window._gcpHistoryIdx = -1;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -16765,6 +16840,13 @@ function gcpOpen(edLayerIdx) {
       if (panel) _bibRenderPanel(panel);
     });
 
+    // Botones undo/redo
+    document.getElementById('gcpUndoBtn')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _gcpUndo();
+    });
+    document.getElementById('gcpRedoBtn')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _gcpRedo();
+    });
     // Botón Añadir Frame
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpCaptureFrame();
