@@ -12942,21 +12942,6 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
-  // Diagnóstico animación PNG — panel copiable
-  (function(){
-    const anims = [];
-    edPages.forEach((p,pi) => p.layers.forEach((l,li) => {
-      if (l.type==='image' && l._pngFrames) {
-        anims.push('p'+pi+'l'+li+': frames='+l._pngFrames.length+' pngOcs='+(l._pngOcs?l._pngOcs.length:'null')+' playing='+l._playing);
-      }
-    }));
-    if (!anims.length) { anims.push('NO HAY CAPAS CON _pngFrames'); }
-    let panel = document.getElementById('_gcpDbgPanel');
-    if (!panel) { panel=document.createElement('div'); panel.id='_gcpDbgPanel';
-      panel.style.cssText='position:fixed;top:50px;left:10px;z-index:9999;background:#fff;border:2px solid red;padding:8px;font-size:11px;max-width:320px;';
-      document.body.appendChild(panel); }
-    panel.innerHTML='<b>DEBUG ANIM</b><br>'+anims.join('<br>')+'<br><button onclick="this.parentNode.remove()">X</button>';
-  })();
   _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];

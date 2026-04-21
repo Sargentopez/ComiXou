@@ -1018,6 +1018,27 @@ async function preloadImages() {
           })
           .catch(() => null);
       }
+      // Animación PNG del editor GIF: precargar frames como canvas offscreen
+      if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length > 1) {
+        return Promise.all(layer._pngFrames.map(dataUrl => new Promise(res => {
+          const img = new Image();
+          img.onload = () => {
+            const oc = document.createElement('canvas');
+            oc.width = img.naturalWidth; oc.height = img.naturalHeight;
+            oc.getContext('2d').drawImage(img, 0, 0);
+            res(oc);
+          };
+          img.onerror = () => res(null);
+          img.src = dataUrl;
+        }))).then(ocs => {
+          layer._pngOcs = ocs.filter(Boolean);
+          layer._pngIdx = 0;
+          layer._pngOc  = layer._pngOcs[0] || null;
+          layer._pngReady = layer._pngOcs.length > 0;
+          return layer._pngOc;
+        });
+      }
+
       // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
       const src = layer.renderDataUrl || layer.src || layer.dataUrl;
       if (!src) return Promise.resolve(null);
@@ -1065,14 +1086,26 @@ function _readerGifTick() {
   RS.panels.forEach((panel, pi) => {
     let panelChanged = false;
     (panel.layers || []).forEach(layer => {
-      if (!layer._gifReady || !layer._gifFrames || !layer._gifOc) return;
-      if (!layer._gifLastTick) layer._gifLastTick = now;
-      const frame = layer._gifFrames[layer._gifIdx];
-      if (now - layer._gifLastTick >= (frame.delay || 100)) {
-        layer._gifIdx = (layer._gifIdx + 1) % layer._gifFrames.length;
-        layer._gifOc.getContext('2d').putImageData(layer._gifFrames[layer._gifIdx].imageData, 0, 0);
-        layer._gifLastTick = now;
-        panelChanged = true;
+      // GIF importado
+      if (layer._gifReady && layer._gifFrames && layer._gifOc) {
+        if (!layer._gifLastTick) layer._gifLastTick = now;
+        const frame = layer._gifFrames[layer._gifIdx];
+        if (now - layer._gifLastTick >= (frame.delay || 100)) {
+          layer._gifIdx = (layer._gifIdx + 1) % layer._gifFrames.length;
+          layer._gifOc.getContext('2d').putImageData(layer._gifFrames[layer._gifIdx].imageData, 0, 0);
+          layer._gifLastTick = now;
+          panelChanged = true;
+        }
+      }
+      // Animación PNG del editor GIF
+      if (layer._pngReady && layer._pngOcs && layer._pngOcs.length > 1) {
+        if (!layer._pngLastTick) layer._pngLastTick = now;
+        if (now - layer._pngLastTick >= 150) {
+          layer._pngIdx = (layer._pngIdx + 1) % layer._pngOcs.length;
+          layer._pngOc  = layer._pngOcs[layer._pngIdx];
+          layer._pngLastTick = now;
+          panelChanged = true;
+        }
       }
     });
     if (panelChanged) {
@@ -1095,7 +1128,7 @@ function startReader() {
   document.getElementById('readerApp').classList.remove('hidden');
 
   // Arrancar loop de animación GIF si hay alguno en la obra
-  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady));
+  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._pngReady));
   if (_hasGifs) requestAnimationFrame(_readerGifTick);
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
@@ -1524,6 +1557,20 @@ function _render() {
   layers.forEach((layer, j) => {
     const type = layer.type;
     if (type === 'gif') {
+      // Animación PNG del editor GIF
+      if (layer._isGcpImage && layer._pngReady && layer._pngOc) {
+        const _pw2 = RS.pageW, _ph2 = RS.pageH;
+        const _gw2 = layer.width * _pw2, _gh2 = layer.height * _ph2;
+        const _gx2 = RS.marginX + layer.x * _pw2;
+        const _gy2 = RS.marginY + layer.y * _ph2;
+        ctx.save();
+        ctx.globalAlpha = layer.opacity ?? 1;
+        ctx.translate(_gx2, _gy2);
+        ctx.rotate((layer.rotation || 0) * Math.PI / 180);
+        ctx.drawImage(layer._pngOc, -_gw2/2, -_gh2/2, _gw2, _gh2);
+        ctx.restore();
+        return;
+      }
       if (!layer._gifReady || !layer._gifOc) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
