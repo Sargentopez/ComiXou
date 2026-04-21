@@ -15994,18 +15994,20 @@ function _gcpWithEditorContext(fn) {
 }
 
 function _gcpHandleDown(e) {
+  // Solo actuar si el target ES el gcpCanvas — no elementos UI superpuestos
   const gc = document.getElementById('gcpCanvas');
   if (!gc) return;
+  // Si el target no es el canvas ni un elemento sin ID (que sería el canvas mismo),
+  // verificar que no pertenece a ningún elemento de UI del editor GIF
+  if (e.target && e.target !== gc) {
+    // Si el target tiene un ancestro que es UI del GIF → ignorar
+    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, [data-gcpmenu]')) return;
+  }
   const rect = gc.getBoundingClientRect();
   const src2 = e.touches ? e.touches[0] : e;
   const clientX = src2 ? src2.clientX : e.clientX;
   const clientY2 = src2 ? src2.clientY : e.clientY;
   if (clientX < rect.left || clientX > rect.right || clientY2 < rect.top || clientY2 > rect.bottom) return;
-  // Ignorar taps en elementos de UI del editor GIF (barra frames, menú, topbar)
-  const gcpUi = ['gcpFramesBar','gcpMenuBar','gcpTopbar','edOptionsPanel'];
-  if (gcpUi.some(id => { const el=document.getElementById(id); return el && el.contains(e.target); })) return;
-  // Ignorar taps en cualquier botón o elemento interactivo dentro del gcpShell
-  if (e.target && e.target.closest && e.target.closest('#gcpFramesBar, #gcpMenuBar, #gcpTopbar')) return;
 
   const c = edCoords(e);
   const idx = window._gcpSelIdx;

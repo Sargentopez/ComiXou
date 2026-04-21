@@ -1843,11 +1843,13 @@ body.editor-page #appView {
   display: none;
   align-items: flex-start;
   gap: 8px;
-  scrollbar-width: none;
-  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-300) transparent;
   z-index: 510;
   box-shadow: 0 3px 8px rgba(0,0,0,.10);
 }
-#gcpFramesBar::-webkit-scrollbar { display: none; }
+#gcpFramesBar::-webkit-scrollbar { height: 4px; }
+#gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
 /* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }
