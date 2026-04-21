@@ -15997,6 +15997,11 @@ function _gcpHandleDown(e) {
   const clientX = src2 ? src2.clientX : e.clientX;
   const clientY2 = src2 ? src2.clientY : e.clientY;
   if (clientX < rect.left || clientX > rect.right || clientY2 < rect.top || clientY2 > rect.bottom) return;
+  // Ignorar taps en elementos de UI del editor GIF (barra frames, menú, topbar)
+  const gcpUi = ['gcpFramesBar','gcpMenuBar','gcpTopbar','edOptionsPanel'];
+  if (gcpUi.some(id => { const el=document.getElementById(id); return el && el.contains(e.target); })) return;
+  // Ignorar taps en cualquier botón o elemento interactivo dentro del gcpShell
+  if (e.target && e.target.closest && e.target.closest('#gcpFramesBar, #gcpMenuBar, #gcpTopbar')) return;
 
   const c = edCoords(e);
   const idx = window._gcpSelIdx;
@@ -16363,45 +16368,82 @@ function _gcpPreview() {
 
 // Actualiza la barra de frames — miniaturas estilo hojas del editor general.
 // Copia el patrón exacto de edUpdateNavPages.
+// _gcpUpdateFramesBar — copia exacta del estilo de _pgBuildCard (ventana Hojas)
 function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   if (!bar) return;
   bar.innerHTML = '';
 
   window._gcpFrames.forEach((snap, fi) => {
-    const btn = document.createElement('button');
-    btn.className = 'gcp-frame-btn' + (fi === window._gcpFrameIdx ? ' active' : '');
-    btn.title = 'Frame ' + (fi+1);
+    const isCurrent = fi === window._gcpFrameIdx;
 
-    // Canvas miniatura 44×44 — igual que hojas del editor general
+    // Card — igual que .ed-page-card
+    const card = document.createElement('div');
+    card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
+    card.style.cursor = 'pointer';
+
+    // Cabecera: número
+    const header = document.createElement('div');
+    header.className = 'ed-page-header';
+    const num = document.createElement('div');
+    num.className = 'ed-page-num';
+    num.textContent = fi + 1;
+    header.appendChild(num);
+    card.appendChild(header);
+
+    // Miniatura — igual que .ed-page-thumb
     const thumb = _gcpFrameThumb(fi);
-    btn.appendChild(thumb);
+    thumb.className = 'ed-page-thumb';
+    thumb.style.width = '100%';
+    thumb.style.height = 'auto';
+    thumb.style.cursor = 'pointer';
+    card.appendChild(thumb);
 
-    // Número
-    const lbl = document.createElement('span');
-    lbl.textContent = fi + 1;
-    btn.appendChild(lbl);
+    // Acciones — igual que .ed-page-actions
+    const actions = document.createElement('div');
+    actions.className = 'ed-page-actions';
 
-    // Tap → ir al frame
-    btn.addEventListener('pointerup', e => {
+    // Botón ⧉ duplicar
+    const dupBtn = document.createElement('button');
+    dupBtn.className = 'ed-page-action-btn';
+    dupBtn.title = 'Duplicar frame';
+    dupBtn.innerHTML = '⧉';
+    dupBtn.addEventListener('pointerup', e => {
       e.stopPropagation();
-      _gcpGoToFrame(fi);
+      const copy = window._gcpFrames[fi].map(s => ({...s}));
+      window._gcpFrames.splice(fi + 1, 0, copy);
+      window._gcpFrameIdx = fi + 1;
+      _gcpGoToFrame(window._gcpFrameIdx);
+      _gcpUpdateFramesBar();
+    });
+    actions.appendChild(dupBtn);
+
+    // Botón ✕ eliminar
+    const delBtn = document.createElement('button');
+    delBtn.className = 'ed-page-action-btn ed-page-del';
+    delBtn.title = 'Eliminar frame';
+    delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
+    delBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      if (window._gcpFrames.length <= 1) return;
+      window._gcpFrames.splice(fi, 1);
+      if (window._gcpFrameIdx >= window._gcpFrames.length)
+        window._gcpFrameIdx = window._gcpFrames.length - 1;
+      _gcpGoToFrame(window._gcpFrameIdx);
+      _gcpUpdateFramesBar();
+    });
+    actions.appendChild(delBtn);
+    card.appendChild(actions);
+
+    // Tap en miniatura o card → ir al frame
+    const goTo = e => { e.stopPropagation(); _gcpGoToFrame(fi); };
+    thumb.addEventListener('pointerup', goTo);
+    card.addEventListener('pointerup', e => {
+      if (e.target === delBtn || delBtn.contains(e.target)) return;
+      goTo(e);
     });
 
-    // Doble tap → eliminar frame
-    let _lastTap = 0;
-    btn.addEventListener('pointerup', () => {
-      const now = Date.now();
-      if (now - _lastTap < 350 && window._gcpFrames.length > 1) {
-        window._gcpFrames.splice(fi, 1);
-        if (window._gcpFrameIdx >= window._gcpFrames.length)
-          window._gcpFrameIdx = window._gcpFrames.length - 1;
-        _gcpGoToFrame(window._gcpFrameIdx);
-      }
-      _lastTap = now;
-    });
-
-    bar.appendChild(btn);
+    bar.appendChild(card);
   });
 }
 

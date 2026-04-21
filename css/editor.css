@@ -1837,48 +1837,17 @@ body.editor-page #appView {
   top: 92px;   /* gcpMenuBar top(52) + height(40) */
   left: 0; right: 0;
   overflow-x: auto; overflow-y: hidden;
-  background: var(--white);
+  background: var(--gray-100);
   border-bottom: 2px solid var(--gray-300);
-  padding: 6px 10px;
-  display: none;   /* oculto por defecto; toggle con botón Frames */
-  align-items: center;
+  padding: 8px 10px;
+  display: none;
+  align-items: flex-start;
   gap: 8px;
   scrollbar-width: none;
   touch-action: pan-x;
   z-index: 510;
   box-shadow: 0 3px 8px rgba(0,0,0,.10);
-  min-height: 110px;
 }
 #gcpFramesBar::-webkit-scrollbar { display: none; }
-#gcpFramesBar.open { display: flex; }
-.gcp-frame-btn {
-  flex-shrink: 0;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  background: none;
-  border: 2px solid transparent;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color .12s;
-}
-.gcp-frame-btn.active {
-  border-color: var(--black);
-  background: rgba(0,0,0,.06);
-}
-.gcp-frame-btn canvas {
-  display: block;
-  border: 1px solid #ccc;
-  border-radius: 5px;
-  background: #fff;
-  width: 88px;
-  height: 88px;
-}
-.gcp-frame-btn span {
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-}
+/* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }
