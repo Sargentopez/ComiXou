@@ -4862,8 +4862,8 @@ function _edHandleDoubleTap(idx){
     edSelectedIdx = idx;
     edRedraw();
     gcpOpen(idx);
-  } else if (la && la.type === 'image' && la._isGcpImage) {
-    // ImageLayer generado por el editor GIF: abrir editor GIF para re-editar
+  } else if (la && la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames)) {
+    // ImageLayer de animación: abrir editor GIF para re-editar
     edSelectedIdx = idx;
     edRedraw();
     gcpOpen(idx);
@@ -12767,6 +12767,10 @@ function edDeserLayer(d, pageOrientation){
     if(d._keepSize) l._keepSize=true;
     if(d.height) l.height = d.height;
     if(d.groupId) l.groupId=d.groupId;
+    if(d._isGcpImage) l._isGcpImage=true;
+    if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
+    if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
+    if(d._pngFrames) l._pngFrames=d._pngFrames;
     if(d.src){
       const img=new Image();
       img.onload=()=>{
