@@ -989,7 +989,10 @@ class ImageLayer extends BaseLayer {
     }
   }
   draw(ctx,can){
-    if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
+    // Si hay canvas offscreen de animación PNG, usarlo (igual que GifLayer usa _oc)
+    const src = this._oc || this.img;
+    if (!src) return;
+    if (src === this.img && (!this.img.complete || this.img.naturalWidth===0)) return;
     const pw=edPageW(), ph=edPageH();
     const w = this.width  * pw;
     const h = this.height * ph;
@@ -999,48 +1002,52 @@ class ImageLayer extends BaseLayer {
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px,py);
     ctx.rotate(this.rotation*Math.PI/180);
-    ctx.drawImage(this.img, -w/2, -h/2, w, h);
+    ctx.drawImage(src, -w/2, -h/2, w, h);
     ctx.restore();
   }
-  // Precargar todos los frames PNG como objetos Image — síncrono al animar
+  // Precargar frames PNG y pintarlos en canvas offscreen — igual que GifLayer usa _oc
   _preloadPngFrames(cb) {
     if (!this._pngFrames || !this._pngFrames.length) { cb && cb(); return; }
-    if (this._pngImgs && this._pngImgs.length === this._pngFrames.length) { cb && cb(); return; }
-    this._pngImgs = [];
+    if (this._pngOcs && this._pngOcs.length === this._pngFrames.length) { cb && cb(); return; }
+    this._pngOcs = [];
     let loaded = 0;
-    this._pngFrames.forEach((src, i) => {
+    const total = this._pngFrames.length;
+    this._pngFrames.forEach((dataUrl, i) => {
       const img = new Image();
       img.onload = () => {
-        this._pngImgs[i] = img;
-        if (++loaded === this._pngFrames.length) cb && cb();
+        const oc = document.createElement('canvas');
+        oc.width = img.naturalWidth; oc.height = img.naturalHeight;
+        oc.getContext('2d').drawImage(img, 0, 0);
+        this._pngOcs[i] = oc;
+        if (++loaded === total) cb && cb();
       };
-      img.onerror = () => { if (++loaded === this._pngFrames.length) cb && cb(); };
-      img.src = src;
+      img.onerror = () => { if (++loaded === total) cb && cb(); };
+      img.src = dataUrl;
     });
   }
 
-  // Animación PNG — igual que GifLayer._applyFrame pero con imágenes precargadas
+  // Animar PNG — exactamente igual que GifLayer._applyFrame
   _applyPngFrame(i) {
-    if (!this._pngImgs || !this._pngImgs.length) return;
-    this._pngFrameIdx = i % this._pngImgs.length;
-    this.img = this._pngImgs[this._pngFrameIdx];
+    if (!this._pngOcs || !this._pngOcs.length) return;
+    this._pngFrameIdx = i % this._pngOcs.length;
+    this._oc = this._pngOcs[this._pngFrameIdx]; // _oc = lo que draw() usa
     if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => {
       this._applyPngFrame(this._pngFrameIdx + 1);
-      if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
-    }, 150); // ~6fps
+      requestAnimationFrame(() => {
+        if (typeof edRedraw === 'function') edRedraw();
+        // El visor tiene su propio canvas — actualizarlo también
+        if (typeof edUpdateViewer === 'function') edUpdateViewer();
+      });
+    }, 150);
   }
 
   stopAnim() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this._playing = false;
-    // Volver al primer frame
-    if (this._pngImgs && this._pngImgs[0]) {
-      this._pngFrameIdx = 0;
-      this.img = this._pngImgs[0];
-      if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
-    }
+    this._oc = this._pngOcs ? this._pngOcs[0] : null;
+    if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
   }
 
   contains(px, py) {
@@ -12935,6 +12942,21 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
+  // Diagnóstico animación PNG — panel copiable
+  (function(){
+    const anims = [];
+    edPages.forEach((p,pi) => p.layers.forEach((l,li) => {
+      if (l.type==='image' && l._pngFrames) {
+        anims.push('p'+pi+'l'+li+': frames='+l._pngFrames.length+' pngOcs='+(l._pngOcs?l._pngOcs.length:'null')+' playing='+l._playing);
+      }
+    }));
+    if (!anims.length) { anims.push('NO HAY CAPAS CON _pngFrames'); }
+    let panel = document.getElementById('_gcpDbgPanel');
+    if (!panel) { panel=document.createElement('div'); panel.id='_gcpDbgPanel';
+      panel.style.cssText='position:fixed;top:50px;left:10px;z-index:9999;background:#fff;border:2px solid red;padding:8px;font-size:11px;max-width:320px;';
+      document.body.appendChild(panel); }
+    panel.innerHTML='<b>DEBUG ANIM</b><br>'+anims.join('<br>')+'<br><button onclick="this.parentNode.remove()">X</button>';
+  })();
   _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -13553,10 +13575,15 @@ function edUpdateViewer(){
     }
   };
   _finishViewer();
-  // Animar GIFs en el visor interno
-  if (page.layers.some(l=>l.type==='gif')) {
-    if (!edUpdateViewer._raf) edUpdateViewer._raf = requestAnimationFrame(()=>{ edUpdateViewer._raf=null; edUpdateViewer(); });
-  } else { if (edUpdateViewer._raf) { cancelAnimationFrame(edUpdateViewer._raf); edUpdateViewer._raf=null; } }
+  // Animar GIFs y PNGs en el visor interno — el loop lo gestiona _applyFrame/_applyPngFrame
+  const _hasAnim = page.layers.some(l =>
+    (l.type==='gif' && l._playing) ||
+    (l.type==='image' && l._playing && l._pngFrames && l._pngFrames.length > 1)
+  );
+  if (!_hasAnim && edUpdateViewer._raf) {
+    cancelAnimationFrame(edUpdateViewer._raf);
+    edUpdateViewer._raf = null;
+  }
 }
 
 function _edViewerDrawTextsOnCtx(page, ctx, can){
