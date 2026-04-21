@@ -14731,6 +14731,18 @@ function EditorView_init(){
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
+    // Editor GIF activo: flechas navegan entre frames
+    if (window._gcpActive && window._gcpFrames && window._gcpFrames.length > 1) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        _gcpGoToFrame(Math.min(window._gcpFrameIdx + 1, window._gcpFrames.length - 1));
+        return;
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        _gcpGoToFrame(Math.max(window._gcpFrameIdx - 1, 0));
+        return;
+      }
+    }
     const tag = document.activeElement?.tagName?.toLowerCase();
     const ctrl = e.ctrlKey || e.metaKey;
     // Bloquear shortcuts si hay un input con foco, EXCEPTO Ctrl+Z/Y
@@ -16493,36 +16505,102 @@ function _gcpRenderLayersDropdown(dd) {
   });
 }
 
-// gcpInsertFromBib — copia EXACTA del código de inserción de la biblioteca
+// Convierte una capa vectorial (shape/line) a ImageLayer PNG transparente.
+// Usa el mismo sistema de _edRenderPageThumb: canvas pw×ph con
+// setTransform(1,0,0,1,-mx,-my) para que draw() coloque correctamente.
+// Preserva proporciones recortando al bbox del contenido.
+function _gcpVectorToImage(la, cb) {
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  // Extra para capturar rotaciones que sobresalen — igual que _gcpSaveToLib
+  const extra = Math.round(Math.max(pw, ph) * 0.5);
+  const wsW = pw + mx*2 + extra*2;
+  const wsH = ph + my*2 + extra*2;
+  const offX = extra, offY = extra;
+
+  const off = document.createElement('canvas');
+  off.width = wsW; off.height = wsH;
+  const octx = off.getContext('2d');
+  octx.setTransform(1, 0, 0, 1, offX, offY);
+  octx.globalAlpha = la.opacity ?? 1;
+  la.draw(octx);
+  octx.globalAlpha = 1;
+  octx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // Bbox por alpha > 10
+  const d = octx.getImageData(0, 0, wsW, wsH).data;
+  let x0=wsW, y0=wsH, x1=0, y1=0;
+  for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
+    if (d[(y*wsW+x)*4+3] > 10) {
+      if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+    }
+  }
+  if (x1<=x0||y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
+  const pad=4;
+  x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
+  x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
+  const cw=x1-x0+1, ch=y1-y0+1;
+
+  // Canvas recortado — PNG transparente
+  const crop = document.createElement('canvas');
+  crop.width=cw; crop.height=ch;
+  crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
+  const dataUrl = crop.toDataURL('image/png');
+
+  // Proporciones normalizadas (fracción de página)
+  const normW = cw/pw, normH = ch/ph;
+  const scale = Math.max(normW/0.9, normH/0.9, 1);
+  const finalW = normW/scale, finalH = normH/scale;
+
+  // Crear ImageLayer con proporciones correctas
+  const img = new Image();
+  img.onload = () => {
+    const imgLayer = new ImageLayer(img, la.x, la.y, finalW);
+    imgLayer.height = finalH;
+    imgLayer.rotation = la.rotation || 0;
+    imgLayer.opacity = la.opacity ?? 1;
+    imgLayer.src = dataUrl;
+    imgLayer._keepSize = true;
+    cb(imgLayer);
+  };
+  img.src = dataUrl;
+}
+
+// gcpInsertFromBib — inserta desde biblioteca en el canvas GIF.
+// Shapes y lines se convierten a ImageLayer PNG para independencia entre frames.
 function gcpInsertFromBib(entry) {
-  const layers = [];
+  const doInsert = (la) => {
+    if (la.type === 'image' && la.img) {
+      const origOnload = la.img.onload;
+      la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
+    }
+    window._gcpLayers.push(la);
+    window._gcpSelIdx = window._gcpLayers.length - 1;
+    _gcpRedraw();
+  };
+
+  const insertLayer = (la) => {
+    if (la.type === 'shape' || la.type === 'line') {
+      // Convertir vectorial a imagen PNG — así cada frame tiene su propia imagen independiente
+      _gcpVectorToImage(la, imgLayer => doInsert(imgLayer));
+    } else {
+      doInsert(la);
+    }
+  };
+
   if (entry.isGroup && Array.isArray(entry.layers)) {
     const newGroupId = _edNewGroupId();
     entry.layers.forEach(ld => {
       const la = edDeserLayer(ld, edOrientation);
       if (!la) return;
       la.groupId = newGroupId;
-      layers.push(la);
+      insertLayer(la);
     });
-    if (!layers.length) { edToast('Error al insertar el grupo'); return; }
   } else {
     const la = edDeserLayer(entry.layerData, edOrientation);
-    if (!la) { edToast('Error al insertar el objeto'); return; }
-    layers.push(la);
+    if (!la) return;
+    insertLayer(la);
   }
-  layers.forEach(la => {
-    if (la.type === 'image' && la.img) {
-      const origOnload = la.img.onload;
-      la.img.onload = function() {
-        if (origOnload) origOnload.call(this);
-        _gcpRedraw();
-      };
-    }
-    window._gcpLayers.push(la);
-  });
-  window._gcpSelIdx = window._gcpLayers.length - 1;
-  _gcpRedraw();
-  edToast('Objeto insertado en el GIF ✓');
 }
 
 // gcpOpen — inicializa gcpCanvas y gcpCtx igual que el editor inicializa
