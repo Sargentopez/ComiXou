@@ -1020,6 +1020,21 @@ async function preloadImages() {
       }
       // Animación PNG del editor GIF: precargar frames como canvas offscreen
       if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length > 1) {
+        // OK — _pngFrames presentes
+      } else if (layer._isGcpImage) {
+        // Mostrar panel diagnóstico
+        setTimeout(() => {
+          let p = document.getElementById('_rdbg');
+          if (!p) { p=document.createElement('div'); p.id='_rdbg';
+            p.style.cssText='position:fixed;top:10px;left:10px;z-index:9999;background:rgba(0,0,0,.85);color:#fff;padding:8px;font-size:11px;max-width:90vw;border-radius:6px;';
+            document.body.appendChild(p); }
+          p.innerHTML = '_isGcpImage='+layer._isGcpImage
+            +'<br>_pngFrames='+(layer._pngFrames ? layer._pngFrames.length : 'AUSENTE')
+            +'<br>src len='+(layer.src ? layer.src.length : 0)
+            +'<br><button onclick="this.parentNode.remove()" style="margin-top:4px">X</button>';
+        }, 1000);
+      }
+      if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length > 1) {
         return Promise.all(layer._pngFrames.map(dataUrl => new Promise(res => {
           const img = new Image();
           img.onload = () => {
