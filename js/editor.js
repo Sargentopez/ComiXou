@@ -14957,11 +14957,11 @@ function EditorView_init(){
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
     if (window._gcpActive) {
-      const optPanel = document.getElementById('edOptionsPanel');
-      if (optPanel && optPanel.contains(e.target)) {
-        // Dejar pasar — es la biblioteca del GIF
+      // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
+      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, [data-gcpmenu]');
+      if (_gcpUiEl) {
+        // Es UI del GIF — no redirigir a _gcpHandleDown
       } else {
-        // Redirigir al handler del canvas GIF
         _gcpHandleDown(e);
         return;
       }
@@ -16095,14 +16095,17 @@ function _gcpHandleMove(e) {
 function _gcpHandleUp(e) {
   const moved = window._edMoved;
   window._edMoved = false;
+  const wasDragging = edIsDragging || edIsResizing || edIsRotating;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  if (moved && window._gcpFrames.length > 0) {
+  if ((moved || wasDragging) && window._gcpFrames.length > 0) {
     // Actualizar el frame activo con la posición actual de las capas
     window._gcpFrames[window._gcpFrameIdx] = window._gcpLayers.map(la => ({
       x:la.x, y:la.y, width:la.width, height:la.height,
       rotation:la.rotation||0, opacity:la.opacity??1
     }));
     _gcpPushHistory();
+    // Actualizar miniatura del frame activo
+    _gcpRefreshActiveThumb();
   }
   _gcpRedraw();
 }
