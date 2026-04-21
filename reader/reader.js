@@ -1557,20 +1557,6 @@ function _render() {
   layers.forEach((layer, j) => {
     const type = layer.type;
     if (type === 'gif') {
-      // Animación PNG del editor GIF
-      if (layer._isGcpImage && layer._pngReady && layer._pngOc) {
-        const _pw2 = RS.pageW, _ph2 = RS.pageH;
-        const _gw2 = layer.width * _pw2, _gh2 = layer.height * _ph2;
-        const _gx2 = RS.marginX + layer.x * _pw2;
-        const _gy2 = RS.marginY + layer.y * _ph2;
-        ctx.save();
-        ctx.globalAlpha = layer.opacity ?? 1;
-        ctx.translate(_gx2, _gy2);
-        ctx.rotate((layer.rotation || 0) * Math.PI / 180);
-        ctx.drawImage(layer._pngOc, -_gw2/2, -_gh2/2, _gw2, _gh2);
-        ctx.restore();
-        return;
-      }
       if (!layer._gifReady || !layer._gifOc) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
@@ -1586,6 +1572,21 @@ function _render() {
       return;
     }
     if (type === 'image' || type === 'draw' || type === 'stroke') {
+      // Animación PNG del editor GIF — usar _pngOc en lugar de layerImgs[j]
+      if (type === 'image' && layer._pngReady && layer._pngOc) {
+        const x = (layer.x || 0.5) * pw;
+        const y = (layer.y || 0.5) * ph;
+        const w = (layer.width || 1) * pw;
+        const h = (layer.height || 1) * ph;
+        const rot = layer.rotation || 0;
+        ctx.save();
+        ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+        ctx.translate(x, y);
+        if (rot) ctx.rotate(rot * Math.PI / 180);
+        ctx.drawImage(layer._pngOc, -w/2, -h/2, w, h);
+        ctx.restore();
+        return;
+      }
       const img = layerImgs[j];
       if (!img) return;
       ctx.save();
