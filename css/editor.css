@@ -35,7 +35,7 @@ body.editor-page #appView {
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 52px;
-  background: var(--yellow);
+  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
   border-bottom: 2.5px solid var(--black);
   display: flex;
   align-items: center;
@@ -145,6 +145,16 @@ body.editor-page #appView {
   box-shadow: 0 1px 4px rgba(0,0,0,.06);
   overflow: visible;
 }
+#edMenuBar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.22), transparent);
+  pointer-events: none;
+  z-index: 299;
+}
 
 /* Botón minimizar: fijo a la izquierda, no se desplaza con el scroll */
 #edMinimizeBtn.ed-menu-pin {
@@ -218,11 +228,24 @@ body.editor-page #appView {
   background: var(--white);
   border: 2px solid var(--black);
   border-radius: var(--radius);
-  box-shadow: 4px 4px 0 var(--black);
+  box-shadow: none;
   z-index: 9000;
   display: none;
   padding: 6px 0;
+  overflow: visible;
 }
+.ed-dropdown::after {
+  content: '';
+  position: absolute;
+  left: -12px; right: -12px;
+  top: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.22), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 20%, black 80%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, black 20%, black 80%, transparent 100%);
+  pointer-events: none;
+}
+
 .ed-dropdown.open { display: block; }
 
 .ed-dropdown-item {
@@ -255,11 +278,24 @@ body.editor-page #appView {
   background: var(--white);
   border: 2px solid var(--black);
   border-radius: var(--radius);
-  box-shadow: var(--box-shadow-lg, 4px 4px 0 var(--black));
+  box-shadow: none;
   z-index: 9001;
   display: none;
   padding: 6px 0;
+  overflow: visible;
 }
+.ed-subdropdown::after {
+  content: '';
+  position: absolute;
+  left: -12px; right: -12px;
+  top: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.22), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 20%, black 80%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, black 20%, black 80%, transparent 100%);
+  pointer-events: none;
+}
+
 /* Submenú dentro del dropdown de Proyecto (derecha): alineado a la derecha */
 #dd-project .ed-subdropdown {
   left: auto; right: 0;
@@ -815,6 +851,57 @@ body.editor-page #appView {
   opacity: 0; pointer-events: none; transition: opacity .2s;
   overflow: hidden;
 }
+
+/* Contenedor scroll del visor — modos horizontal/vertical */
+#viewerScroll {
+  display: none;
+  position: absolute;
+  inset: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#viewerScroll::-webkit-scrollbar { display: none; }
+#viewerScroll.vs-h {
+  display: flex;
+  flex-direction: row;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: none;
+}
+#viewerScroll.vs-v {
+  display: flex;
+  flex-direction: column;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: none;
+}
+.vs-slide {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a1a1a;
+  min-width: 0;
+  min-height: 0;
+}
+.vs-slide canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  clip-path: inset(0 round 28px);
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  pointer-events: none;
+}
 #editorViewer.open { opacity: 1; pointer-events: all; }
 
 /* Canvas: JS calcula la escala exacta para llenar el viewport */
@@ -1071,7 +1158,7 @@ body.editor-page #appView {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--yellow);
+  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
   border-bottom: 2.5px solid var(--black);
   padding: 12px 16px 10px;
   flex-shrink: 0;
@@ -1547,6 +1634,7 @@ body.editor-page #appView {
   height: 100%;
   object-fit: cover;
   display: block;
+  touch-action: none;
 }
 #edCameraControls {
   position: absolute;
@@ -1644,3 +1732,125 @@ body.editor-page #appView {
 #ed-vscroll-thumb:hover {
   background: rgba(0,0,0,0.55) !important;
 }
+
+/* ══ EDITOR GIF ══════════════════════════════════════════════════════════════
+   gcpShell flota encima del editor con position:fixed.
+   gcpTopbar y gcpMenuBar copian exactamente los estilos de edTopbar/edMenuBar.
+   gcpCanvas: 100% opacidad (los objetos GIF se ven completos).
+   editorCanvas.gcp-active: 50% opacidad (el editor queda de fondo).
+   ══════════════════════════════════════════════════════════════════════════ */
+#gcpShell {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  pointer-events: none;
+}
+#gcpTopbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 52px;
+  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
+  border-bottom: 2.5px solid var(--black);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 8px;
+  z-index: 510;
+  pointer-events: auto;
+}
+#gcpProjectTitle {
+  font-family: var(--font-display);
+  font-size: 1rem; letter-spacing: 0.5px;
+  color: var(--black);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#gcpTopbar .ed-top-spacer { flex: 1; }
+#gcpCloseBtn {
+  background: none; border: none;
+  font-size: 1.4rem; font-weight: 900;
+  color: var(--black); cursor: pointer;
+  padding: 4px 8px; border-radius: 6px;
+  flex-shrink: 0; line-height: 1;
+  transition: background .15s;
+  margin-left: auto;
+}
+#gcpCloseBtn:active { background: rgba(0,0,0,.1); }
+#gcpMenuBar {
+  position: absolute;
+  top: 52px; left: 0; right: 0;
+  height: 40px;
+  background: var(--white);
+  border-bottom: 1.5px solid var(--gray-300);
+  display: flex;
+  align-items: stretch;
+  z-index: 510;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  overflow: visible;
+  pointer-events: auto;
+}
+#gcpMenuBar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.22), transparent);
+  pointer-events: none;
+  z-index: 509;
+}
+#gcpMenuScroll {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center;
+  overflow-x: auto; overflow-y: visible;
+  scrollbar-width: none;
+  touch-action: pan-x pan-y;
+}
+#gcpMenuScroll::-webkit-scrollbar { display: none; }
+
+/* Canvas GIF: mismo tamaño/posición que editorCanvas, gestionado por JS */
+#gcpCanvas {
+  display: none;
+  position: absolute;
+  touch-action: none;
+  z-index: 499;  /* encima del gcpBlocker (498) para recibir eventos */
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Canvas del editor: al 50% cuando el editor GIF está activo */
+#editorCanvas.gcp-active {
+  opacity: 0.5;
+  pointer-events: none !important;
+  touch-action: none !important;
+}
+
+/* edOptionsPanel por encima del bloqueante cuando GIF activo */
+#editorShell.gcp-open #edOptionsPanel {
+  z-index: 499;
+  position: fixed;
+  top: auto;
+}
+
+/* ── Panel de frames del editor GIF ─────────────────────────────────── */
+#gcpFramesBar {
+  position: absolute;
+  top: 92px;   /* gcpMenuBar top(52) + height(40) */
+  left: 0; right: 0;
+  overflow-x: auto; overflow-y: hidden;
+  background: var(--gray-100);
+  border-bottom: 2px solid var(--gray-300);
+  padding: 8px 10px;
+  display: none;
+  align-items: flex-start;
+  gap: 8px;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-300) transparent;
+  z-index: 510;
+  box-shadow: 0 3px 8px rgba(0,0,0,.10);
+  pointer-events: auto;
+}
+#gcpFramesBar::-webkit-scrollbar { height: 4px; }
+#gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
+/* Las cards de frames usan .ed-page-card del editor general */
+#gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }

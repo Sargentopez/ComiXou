@@ -174,16 +174,45 @@ const Auth = (() => {
     } catch(_) {}
   }
 
+  // Decodifica el payload de un JWT y devuelve el campo 'exp' (Unix timestamp)
+  function _jwtExp(token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+      return payload.exp || 0;
+    } catch(_) { return 0; }
+  }
+
+  // Devuelve true si el token JWT ha caducado (o caduca en menos de 60s)
+  function _tokenExpired(token) {
+    if(!token) return true;
+    const exp = _jwtExp(token);
+    return exp > 0 && (exp - 60) < (Date.now() / 1000);
+  }
+
   async function _tryRefresh() {
+    const session = getSession();
     const refresh = localStorage.getItem('cs_refresh');
-    if (!refresh) return;
+
+    // Si no hay sesión, nada que hacer
+    if(!session) return;
+
+    // Si el token no ha caducado, no hace falta refrescar
+    if(session.token && !_tokenExpired(session.token)) return;
+
+    // Token caducado — intentar refresh
+    if(!refresh) {
+      // Sin refresh token y token caducado → sesión inválida, limpiar
+      _clearSession();
+      if(typeof Header !== 'undefined') Header.refresh();
+      return;
+    }
     try {
       const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
         method: 'POST',
         headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refresh }),
       });
-      if (!res.ok) { _clearSession(); localStorage.removeItem('cs_refresh'); return; }
+      if (!res.ok) { _clearSession(); localStorage.removeItem('cs_refresh'); if(typeof Header!=='undefined') Header.refresh(); return; }
       const data = await res.json();
       if (data.access_token) {
         const profile  = await _fetchProfile(data.user.id, data.access_token);
@@ -192,14 +221,27 @@ const Auth = (() => {
         _saveSession(_buildSession(data.user.id, username, data.user.email, role, data.access_token));
         if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
         if (typeof Header !== 'undefined') Header.refresh();
+      } else {
+        // Respuesta sin access_token → refresh inválido
+        _clearSession(); localStorage.removeItem('cs_refresh');
+        if(typeof Header !== 'undefined') Header.refresh();
       }
     } catch (_) {}
   }
 
   _tryRefresh();
 
-  function currentUser() { return getSession(); }
-  function isLogged()    { return !!getSession(); }
+  function currentUser() {
+    const s = getSession();
+    if(!s) return null;
+    // Si el token está caducado y no hay refresh, sesión inválida
+    if(_tokenExpired(s.token) && !localStorage.getItem('cs_refresh')) {
+      _clearSession();
+      return null;
+    }
+    return s;
+  }
+  function isLogged()    { return !!currentUser(); }
   function isAdmin()     { const u = getSession(); return !!(u && u.role === 'admin'); }
   function canManage(comic) {
     const u = currentUser();

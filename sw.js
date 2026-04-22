@@ -1,11 +1,12 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v14-35';
+const CACHE = 'comixow-v17-91';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
 const STATIC_ASSETS = [
   './icon-192.png',
   './icon-512.png',
+  './logo_long.png',
 ];
 
 self.addEventListener('message', e => {
