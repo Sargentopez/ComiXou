@@ -207,12 +207,14 @@ function _pgDrawThumb(canvas, page) {
   ctx.fillRect(0, 0, tw, th);
   if (!page || !page.layers) return;
 
-  const _pi = edPages.indexOf(page);
-
+  // Usar el mismo sistema que edExportPagePNG:
+  // canvas del tamanyo exacto de la pagina + setTransform(-mx,-my)
+  // para que draw() de cada capa funcione en coords workspace correctas
   const _savedOrient = edOrientation;
   const _savedPage   = edCurrentPage;
   const _po = page.orientation || edOrientation;
   edOrientation = _po;
+  const _pi = edPages.indexOf(page);
   if (_pi >= 0) edCurrentPage = _pi;
 
   const pw = edPageW(), ph = edPageH();
@@ -230,8 +232,7 @@ function _pgDrawThumb(canvas, page) {
 
   page.layers.forEach(l => {
     if (!l || l.type === 'text' || l.type === 'bubble') return;
-    if (l.type === 'gif')              l.draw(offCtx);
-    else if (l.type === 'image')        l.draw(offCtx, off);
+    if (l.type === 'image')        l.draw(offCtx, off);
     else if (l.type === 'draw')    l.draw(offCtx);
     else if (l.type === 'stroke') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
     else if (l.type === 'shape' || l.type === 'line') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }

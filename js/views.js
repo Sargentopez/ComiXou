@@ -18,7 +18,7 @@ Router.register('home', {
       <span class="page-nav-sep"></span>
       <button class="page-nav-btn" id="novedadesBtn" data-i18n="novedades">Novedades</button>
       <span class="page-nav-sep"></span>
-      <button class="page-nav-btn page-nav-btn-create" id="createBtn" data-i18n="create">Mis Creaciones</button>
+      <button class="page-nav-btn page-nav-btn-create" id="createBtn" data-i18n="create">Crear</button>
     </nav>
     <div class="home-empty hidden" id="emptyState">
         <span>📚</span>
@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v17.91</footer>
+    <footer class="app-version">v14.35</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -169,8 +169,6 @@ Router.register('editor', {
       <!-- CANVAS (fondo, ocupa todo) -->
       <div id="editorCanvasWrap">
         <canvas id="editorCanvas"></canvas>
-        <!-- Canvas GIF: superpuesto, al 100% de opacidad, solo visible en modo animación -->
-        <canvas id="gcpCanvas" style="display:none;position:absolute;touch-action:none;z-index:10;opacity:1;pointer-events:none"></canvas>
         <!-- Barras de navegación PC (solo visibles en no-touch cuando el lienzo no cabe) -->
         <div id="ed-hscroll" style="display:none;position:absolute;bottom:0;left:0;right:12px;height:12px;background:rgba(0,0,0,0.08);cursor:pointer">
           <div id="ed-hscroll-thumb" style="position:absolute;top:2px;height:8px;background:rgba(0,0,0,0.35);border-radius:4px;cursor:grab"></div>
@@ -180,7 +178,7 @@ Router.register('editor', {
         </div>
 
         <div id="edToast"></div>
-        <div id="edCofHint" style="display:none;position:fixed;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.78);color:#fff;padding:8px 18px;border-radius:14px;font-size:0.78rem;font-weight:700;line-height:1.6;text-align:center;pointer-events:none;z-index:61;white-space:nowrap;box-shadow:0 2px 12px rgba(0,0,0,.4)"></div>
+        <div id="edCofHint" style="display:none;position:absolute;bottom:56px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.78);color:#fff;padding:8px 18px;border-radius:14px;font-size:0.78rem;font-weight:700;line-height:1.6;text-align:center;pointer-events:none;z-index:61;white-space:nowrap;box-shadow:0 2px 12px rgba(0,0,0,.4)"></div>
 
       <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
       <div id="edConfirmModal" class="ed-confirm-overlay">
@@ -231,7 +229,6 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
                   <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
                 </div>
-                <button class="ed-dropdown-item" id="dd-animation">Animación (GIF)</button>
               </div>
               <div class="ed-dropdown-submenu">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-texto-btn">Texto ▸</button>
@@ -257,22 +254,24 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-shape-rect">▭ Rectángulo</button>
                   <button class="ed-dropdown-item" id="dd-shape-ellipse">◯ Elipse</button>
                   <button class="ed-dropdown-item" id="dd-shape-line">╱ Líneas</button>
-                  <button class="ed-dropdown-item" id="dd-shape-segment"><svg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'><line x1='13' y1='3' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='10' y1='3' x2='13' y2='3' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='3' y1='10' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/></svg> Segmentos</button>
                 </div>
               </div>
             </div>
           </div>
 
           <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="edAnimacionesBtn">Animaciones</button>
-          <div class="ed-menu-sep"></div>
 
           <!-- DESHACER / REHACER -->
           <button class="ed-undo-redo-btn" id="edUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="edRedoBtn" title="Rehacer" disabled>↪</button>
           <button class="ed-undo-redo-btn" id="edZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
-          <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="edMultiSelBtn" title="Selección múltiple (M)">Selección</button>
+          <button class="ed-undo-redo-btn" id="edMultiSelBtn" title="Selección múltiple (M)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="1" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 1.5"/>
+              <rect x="7" y="7" width="8" height="8" rx="1" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </button>
+
           <div class="ed-menu-sep"></div>
 
           <!-- REGLAS -->
@@ -280,8 +279,6 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="rules">Guías ▾</button>
             <div class="ed-dropdown" id="dd-rules">
               <button class="ed-dropdown-item" id="dd-rule-add">＋ Añadir guía</button>
-              <button class="ed-dropdown-item" id="dd-rule-toggle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" style="vertical-align:middle;margin-right:5px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg><span id="dd-rule-toggle-txt">Ocultar guías</span></button>
-              <button class="ed-dropdown-item" id="dd-rule-lock-all">🔒 Bloquear guías</button>
               <button class="ed-dropdown-item" id="dd-rule-clear" style="color:#c00">✕ Borrar guías</button>
             </div>
           </div>
@@ -328,32 +325,21 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
             <div class="ed-dropdown" id="dd-project">
-              <button class="ed-dropdown-item" id="dd-editproject">Editar datos de la obra</button>
+              <button class="ed-dropdown-item" id="dd-editproject">Editar datos</button>
               <button class="ed-dropdown-item" id="dd-viewerjson">Previsualizar</button>
               <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-savejson">Descargar .json</button>
+              <button class="ed-dropdown-item" id="dd-loadjson">Cargar .json</button>
+              <div class="ed-dropdown-sep"></div>
               <div class="ed-dropdown-submenu" id="dd-export-wrap">
-                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportbtn">⬇ Descargar… ▸</button>
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportbtn">⬇ Guardar hoja como… ▸</button>
                 <div class="ed-submenu" id="dd-export-sub">
-                  <div class="ed-dropdown-submenu" id="dd-export-page-wrap">
-                    <button class="ed-dropdown-item ed-has-submenu" id="dd-exportpagebtn">Hoja actual ▸</button>
-                    <div class="ed-submenu" id="dd-export-page-sub">
-                      <button class="ed-dropdown-item" id="dd-exportpng">PNG (transparencias)</button>
-                      <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
-                    </div>
-                  </div>
-                  <button class="ed-dropdown-item" id="dd-savejson">Obra (.json)</button>
-                  <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
-                    <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn">Selección ▸</button>
-                    <div class="ed-submenu" id="dd-export-sel-sub">
-                      <button class="ed-dropdown-item" id="dd-exportselpng">PNG (transparencias)</button>
-                      <button class="ed-dropdown-item" id="dd-exportseljpg">JPG (fondo blanco)</button>
-                    </div>
-                  </div>
+                  <button class="ed-dropdown-item" id="dd-exportpng">PNG (transparencias)</button>
+                  <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
                 </div>
               </div>
-              <button class="ed-dropdown-item" id="dd-loadjson">Cargar obra (.json)</button>
               <div class="ed-dropdown-sep"></div>
-              <button class="ed-dropdown-item" id="dd-recoverlocal" style="display:none">↩ Recuperar versión del dispositivo</button>
+              <button class="ed-dropdown-item" id="dd-deleteproject" style="color:#e63030;font-weight:700">✕ Eliminar obra</button>
             </div>
           </div>
 
@@ -429,8 +415,6 @@ Router.register('editor', {
       <div id="edShapeBar">
         <div class="edb-handle" title="Mover barra">⠿</div>
         <div class="edb-content">
-          <button id="esb-shapes"   class="edb-tool" title="Tipo de objeto" style="min-width:28px;font-size:1rem;font-weight:900">▭</button>
-          <div class="edb-sep"></div>
           <button id="esb-color"    class="edb-swatch" title="Color borde"></button>
           <button id="esb-fill-on"  class="edb-tool"   title="Relleno">▣</button>
           <button id="esb-fill"     class="edb-swatch" title="Color relleno"></button>
@@ -454,8 +438,6 @@ Router.register('editor', {
     <!-- VISOR: canvas fullscreen + controles flotantes -->
     <div id="editorViewer">
       <canvas id="viewerCanvas"></canvas>
-      <!-- Contenedor scroll para modos horizontal/vertical -->
-      <div id="viewerScroll"></div>
       <!-- Pastilla desktop: ◀ contador ▶ ✕ — oculta en táctil via CSS -->
       <div class="viewer-controls" id="viewerControls">
         <button class="viewer-btn" id="viewerPrev">◀</button>
@@ -491,8 +473,7 @@ Router.register('editor', {
     </div>
 
     <!-- Inputs ocultos -->
-    <input type="file" id="edFileGallery" accept="image/*,.psd,.xcf,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
-    <input type="file" id="edFileGif" accept=".gif,image/gif" style="display:none">
+    <input type="file" id="edFileGallery" accept="image/*,.gif,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">
@@ -503,42 +484,6 @@ Router.register('editor', {
         <button id="edCameraFlip" title="Cambiar cámara">🔄</button>
       </div>
     </div>
-    <!-- Bloqueante GIF: cubre toda la pantalla bajo gcpShell para absorber eventos -->
-    <div id="gcpBlocker" style="display:none;position:fixed;inset:0;z-index:498;touch-action:none;-webkit-user-select:none;user-select:none"></div>
-
-    <!-- Editor GIF: mismo diseño que el editor (mismas clases CSS) -->
-    <div id="gcpShell">
-      <div id="gcpTopbar">
-        <span id="gcpProjectTitle">Gif 1</span>
-        <span class="ed-top-spacer"></span>
-        <button class="ed-top-action" id="gcpPreviewBtn" title="Previsualizar">▶</button>
-        <button id="gcpCloseBtn" title="Volver al editor">✕</button>
-      </div>
-      <div id="gcpMenuBar">
-        <button class="ed-menu-pin ed-hide-btn" style="pointer-events:none;opacity:0;flex-shrink:0;visibility:hidden"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem">OCULTAR</b></button>
-        <div class="ed-menu-sep"></div>
-        <div id="gcpMenuScroll">
-          <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" id="gcpBibBtn">Biblioteca ▾</button>
-          </div>
-          <div class="ed-menu-sep"></div>
-          <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
-          <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
-          <div class="ed-menu-sep"></div>
-          <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-gcpmenu="capas">Capas ▾</button>
-            <div class="ed-dropdown" id="gdd-capas"></div>
-          </div>
-          <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
-          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;padding:0 10px">＋</button>
-        </div>
-      </div>
-      <!-- Panel de frames: toggle, deslizante horizontal, miniaturas 88×88 -->
-      <div id="gcpFramesBar">
-      </div>
-    </div>
-
     <div id="edBrushCursor"></div>
   `,
   init: () => EditorView_init(),
@@ -551,8 +496,8 @@ Router.register('reader', {
   html: () => `
     <div class="reader-topbar" id="readerTopbar">
       <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
-        <a href="#home" onclick="Router.go('home');return false;" class="logo-link logo-img-link">
-          <img src="logo_long.png" alt="ComiXow" class="logo-img" style="height:22px;width:auto;">
+        <a href="#home" onclick="Router.go('home');return false;" class="logo-link">
+          <span class="logo-main" style="font-size:1.4rem">Comi<span class="logo-accent">Xow</span></span>
         </a>
       </div>
       <div class="reader-info">

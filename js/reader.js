@@ -487,14 +487,10 @@ function _renderCreditsCanvas() {
     const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
     const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
 
-    // Logo imagen (síncrono via data URL precargada)
-    if(typeof _LOGO_DATA_URL !== 'undefined') {
-      const _limg = new Image();
-      _limg.src = _LOGO_DATA_URL;
-      const _lh = logoFS * 1.1;
-      const _lw = _limg.naturalWidth > 0 ? _limg.naturalWidth * (_lh / _limg.naturalHeight) : _lh * (191/42);
-      ctx.drawImage(_limg, rightCX - _lw/2, rightStartY - _lh * 0.8, _lw, _lh);
-    }
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.textAlign = 'center';
+    ctx.fillText('ComiXow', rightCX, rightStartY);
 
     const sloganY = rightStartY + sloganFS * 2;
     ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
@@ -555,14 +551,9 @@ function _renderCreditsCanvas() {
     const lineH    = ph * 0.09;
     const logoFS   = Math.round(fRef * 0.11);
     const logoY    = authorY + lineH * 1.3;
-    // Logo imagen (síncrono via data URL precargada)
-    if(typeof _LOGO_DATA_URL !== 'undefined') {
-      const _limg2 = new Image();
-      _limg2.src = _LOGO_DATA_URL;
-      const _lh2 = logoFS * 1.1;
-      const _lw2 = _limg2.naturalWidth > 0 ? _limg2.naturalWidth * (_lh2 / _limg2.naturalHeight) : _lh2 * (191/42);
-      ctx.drawImage(_limg2, cx - _lw2/2, logoY - _lh2 * 0.8, _lw2, _lh2);
-    }
+    ctx.font      = `900 ${logoFS}px Patrick Hand, sans-serif`;
+    ctx.fillStyle = '#f5c400';
+    ctx.fillText('ComiXow', cx, logoY);
 
     const sloganFS = Math.round(fRef * 0.042);
     const sloganY  = logoY + sloganFS * 2;
@@ -604,7 +595,7 @@ function _renderCreditsCanvas() {
 function setupControls() {
   // Botones PC — solo responden a click, no a touch (evita doble disparo con el stage)
   document.getElementById('nextBtn')?.addEventListener('click', (e) => {
-    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch') return; // el stage ya lo maneja
     advance();
   });
   document.getElementById('prevBtn')?.addEventListener('click', (e) => {
@@ -618,7 +609,7 @@ function setupControls() {
     goToPanel(0);
   });
 
-  // Teclado (PC) — siempre fijo independientemente del navMode
+  // Teclado (PC) — guardar referencia para cleanup en ReaderView_destroy
   ReaderState._keyHandler = (e) => {
     if (['ArrowRight','Space','Enter'].includes(e.code)) { e.preventDefault(); advance(); }
     if (e.code === 'ArrowLeft') goBack();
@@ -626,13 +617,12 @@ function setupControls() {
   };
   document.addEventListener('keydown', ReaderState._keyHandler);
 
-  // Swipe táctil — AbortController para evitar acumulación en cada apertura
+  // Swipe (móvil) — AbortController para evitar acumulación en cada apertura del reproductor
   if (ReaderState._stageAC) ReaderState._stageAC.abort();
   ReaderState._stageAC = new AbortController();
   const sig = { signal: ReaderState._stageAC.signal, passive: true };
 
   const stage = document.getElementById('readerStage');
-  const navMode = ReaderState.comic?.navMode || 'fixed';
   let touchStartX = 0, touchStartY = 0;
 
   stage.addEventListener('touchstart', (e) => {
@@ -641,14 +631,15 @@ function setupControls() {
   }, sig);
 
   stage.addEventListener('touchend', (e) => {
+    // Ignorar si el toque termina sobre un botón u otro control interactivo
     if (e.target.closest('button, a, input, label')) return;
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
-    const dx   = endX - touchStartX;
-    const dy   = endY - touchStartY;
-    const adx  = Math.abs(dx), ady = Math.abs(dy);
+    const dy   = Math.abs(endY - touchStartY);
+    if (dy > 40) return;
 
-    // En créditos: detectar botón "Volver a leer"
+    // En créditos: primero detectar botón "Volver a leer" por área exacta,
+    // luego aplicar navegación lateral (izquierda retrocede)
     if (ReaderState.currentPanel === ReaderState.comic.panels.length) {
       const canvas = ReaderState.creditsCanvas;
       if (canvas) {
@@ -660,25 +651,13 @@ function setupControls() {
           goToPanel(0); return;
         }
       }
+      // Si no tocó el botón: lado retroceder → goBack, lado avanzar → nada
       if (_isBackSide(endX, endY)) goBack();
       return;
     }
 
-    if (navMode === 'horizontal') {
-      // Swipe horizontal: derecha→atrás, izquierda→adelante
-      if (adx < 30) return; // sin movimiento suficiente
-      if (adx < ady) return; // gesto más vertical que horizontal, ignorar
-      if (dx > 0) goBack(); else advance();
-    } else if (navMode === 'vertical') {
-      // Swipe vertical: abajo→atrás, arriba→adelante
-      if (ady < 30) return;
-      if (ady < adx) return; // gesto más horizontal que vertical, ignorar
-      if (dy > 0) goBack(); else advance();
-    } else {
-      // Modo fixed (o PC): tap en mitad izquierda/derecha
-      if (ady > 40) return;
-      if (_isBackSide(endX, endY)) goBack(); else advance();
-    }
+    // Navegación normal: mitad física retrocede, otra mitad avanza
+    if (_isBackSide(endX, endY)) goBack(); else advance();
   }, sig);
 }
 

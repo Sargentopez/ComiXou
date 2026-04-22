@@ -94,7 +94,7 @@ a { color: inherit; text-decoration: none; }
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 1000;
-  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
+  background: var(--yellow);
   border-bottom: 3px solid var(--black);
   height: auto;
   min-height: var(--header-h);
@@ -179,21 +179,10 @@ a { color: inherit; text-decoration: none; }
   background: var(--white);
   border: 2.5px solid var(--black);
   border-radius: var(--radius-sm);
-  box-shadow: none;
+  box-shadow: var(--box-shadow);
   min-width: 160px;
-  z-index: 1000;
-  overflow: visible;
-}
-.dropdown-menu::after {
-  content: '';
-  position: absolute;
-  left: -12px; right: -12px;
-  top: 100%;
-  height: 16px;
-  background: linear-gradient(to bottom, rgba(0,0,0,0.22), transparent);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 20%, black 80%, transparent 100%);
-  mask-image: linear-gradient(to right, transparent 0%, black 20%, black 80%, transparent 100%);
-  pointer-events: none;
+  z-index: 200;
+  overflow: hidden;
 }
 .dropdown-menu.open { display: block; }
 .dropdown-item {
@@ -375,19 +364,10 @@ a { color: inherit; text-decoration: none; }
   gap: 8px;
 }
 .home-logo-area {
-  display: flex; align-items: center;
+  display: flex; align-items: baseline;
   flex-shrink: 0;
-  position: relative;
-  top: 8px;
-  align-self: flex-start;
 }
 .home-logo-area .logo-main { font-size: 1.8rem; line-height: 1; }
-.logo-img-link { display: flex; align-items: center; }
-.logo-img {
-  height: 26px;
-  width: auto;
-  display: block;
-}
 .home-tagline {
   font-size: 0.72rem; font-weight: 700;
   color: var(--gray-600);

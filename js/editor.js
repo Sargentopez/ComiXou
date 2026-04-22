@@ -1,720 +1,3 @@
-/* ── gifuct-js embebido (MIT, Matt Way github.com/matt-way/gifuct-js) ── */
-var _gm = {};
-function _gr(id) { return _gm[id]; }
-function _gl(id, fn) {
-  try { var e={}; fn(e,_gr); _gm[id]=e; }
-  catch(err) { console.error('[gifuct] mod '+id+' err:',err); _gm[id]={}; }
-}
-_gl(4,function(exports,_gr){
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.readBits = exports.readArray = exports.readUnsigned = exports.readString = exports.peekBytes = exports.readBytes = exports.peekByte = exports.readByte = exports.buildStream = void 0;
-
-// Default stream and parsers for Uint8TypedArray data type
-var buildStream = function buildStream(uint8Data) {
-  return {
-    data: uint8Data,
-    pos: 0
-  };
-};
-
-exports.buildStream = buildStream;
-
-var readByte = function readByte() {
-  return function (stream) {
-    return stream.data[stream.pos++];
-  };
-};
-
-exports.readByte = readByte;
-
-var peekByte = function peekByte() {
-  var offset = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 0;
-  return function (stream) {
-    return stream.data[stream.pos + offset];
-  };
-};
-
-exports.peekByte = peekByte;
-
-var readBytes = function readBytes(length) {
-  return function (stream) {
-    return stream.data.subarray(stream.pos, stream.pos += length);
-  };
-};
-
-exports.readBytes = readBytes;
-
-var peekBytes = function peekBytes(length) {
-  return function (stream) {
-    return stream.data.subarray(stream.pos, stream.pos + length);
-  };
-};
-
-exports.peekBytes = peekBytes;
-
-var readString = function readString(length) {
-  return function (stream) {
-    return Array.from(readBytes(length)(stream)).map(function (value) {
-      return String.fromCharCode(value);
-    }).join('');
-  };
-};
-
-exports.readString = readString;
-
-var readUnsigned = function readUnsigned(littleEndian) {
-  return function (stream) {
-    var bytes = readBytes(2)(stream);
-    return littleEndian ? (bytes[1] << 8) + bytes[0] : (bytes[0] << 8) + bytes[1];
-  };
-};
-
-exports.readUnsigned = readUnsigned;
-
-var readArray = function readArray(byteSize, totalOrFunc) {
-  return function (stream, result, parent) {
-    var total = typeof totalOrFunc === 'function' ? totalOrFunc(stream, result, parent) : totalOrFunc;
-    var parser = readBytes(byteSize);
-    var arr = new Array(total);
-
-    for (var i = 0; i < total; i++) {
-      arr[i] = parser(stream);
-    }
-
-    return arr;
-  };
-};
-
-exports.readArray = readArray;
-
-var subBitsTotal = function subBitsTotal(bits, startIndex, length) {
-  var result = 0;
-
-  for (var i = 0; i < length; i++) {
-    result += bits[startIndex + i] && Math.pow(2, length - i - 1);
-  }
-
-  return result;
-};
-
-var readBits = function readBits(schema) {
-  return function (stream) {
-    var _byte = readByte()(stream); // convert the byte to bit array
-
-
-    var bits = new Array(8);
-
-    for (var i = 0; i < 8; i++) {
-      bits[7 - i] = !!(_byte & 1 << i);
-    } // convert the bit array to values based on the schema
-
-
-    return Object.keys(schema).reduce(function (res, key) {
-      var def = schema[key];
-
-      if (def.length) {
-        res[key] = subBitsTotal(bits, def.index, def.length);
-      } else {
-        res[key] = bits[def.index];
-      }
-
-      return res;
-    }, {});
-  };
-};
-
-exports.readBits = readBits;
-});
-_gl(3,function(exports,_gr){
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.loop = exports.conditional = exports.parse = void 0;
-
-var parse = function parse(stream, schema) {
-  var result = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
-  var parent = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : result;
-
-  if (Array.isArray(schema)) {
-    schema.forEach(function (partSchema) {
-      return parse(stream, partSchema, result, parent);
-    });
-  } else if (typeof schema === 'function') {
-    schema(stream, result, parent, parse);
-  } else {
-    var key = Object.keys(schema)[0];
-
-    if (Array.isArray(schema[key])) {
-      parent[key] = {};
-      parse(stream, schema[key], result, parent[key]);
-    } else {
-      parent[key] = schema[key](stream, result, parent, parse);
-    }
-  }
-
-  return result;
-};
-
-exports.parse = parse;
-
-var conditional = function conditional(schema, conditionFunc) {
-  return function (stream, result, parent, parse) {
-    if (conditionFunc(stream, result, parent)) {
-      parse(stream, schema, result, parent);
-    }
-  };
-};
-
-exports.conditional = conditional;
-
-var loop = function loop(schema, continueFunc) {
-  return function (stream, result, parent, parse) {
-    var arr = [];
-
-    while (continueFunc(stream, result, parent)) {
-      var newParent = {};
-      parse(stream, schema, result, newParent);
-      arr.push(newParent);
-    }
-
-    return arr;
-  };
-};
-
-exports.loop = loop;
-});
-_gl(6,function(exports,_gr){
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.lzw = void 0;
-
-/**
- * javascript port of java LZW decompression
- * Original java author url: https://gist.github.com/devunwired/4479231
- */
-var lzw = function lzw(minCodeSize, data, pixelCount) {
-  var MAX_STACK_SIZE = 4096;
-  var nullCode = -1;
-  var npix = pixelCount;
-  var available, clear, code_mask, code_size, end_of_information, in_code, old_code, bits, code, i, datum, data_size, first, top, bi, pi;
-  var dstPixels = new Array(pixelCount);
-  var prefix = new Array(MAX_STACK_SIZE);
-  var suffix = new Array(MAX_STACK_SIZE);
-  var pixelStack = new Array(MAX_STACK_SIZE + 1); // Initialize GIF data stream decoder.
-
-  data_size = minCodeSize;
-  clear = 1 << data_size;
-  end_of_information = clear + 1;
-  available = clear + 2;
-  old_code = nullCode;
-  code_size = data_size + 1;
-  code_mask = (1 << code_size) - 1;
-
-  for (code = 0; code < clear; code++) {
-    prefix[code] = 0;
-    suffix[code] = code;
-  } // Decode GIF pixel stream.
-
-
-  var datum, bits, count, first, top, pi, bi;
-  datum = bits = count = first = top = pi = bi = 0;
-
-  for (i = 0; i < npix;) {
-    if (top === 0) {
-      if (bits < code_size) {
-        // get the next byte
-        datum += data[bi] << bits;
-        bits += 8;
-        bi++;
-        continue;
-      } // Get the next code.
-
-
-      code = datum & code_mask;
-      datum >>= code_size;
-      bits -= code_size; // Interpret the code
-
-      if (code > available || code == end_of_information) {
-        break;
-      }
-
-      if (code == clear) {
-        // Reset decoder.
-        code_size = data_size + 1;
-        code_mask = (1 << code_size) - 1;
-        available = clear + 2;
-        old_code = nullCode;
-        continue;
-      }
-
-      if (old_code == nullCode) {
-        pixelStack[top++] = suffix[code];
-        old_code = code;
-        first = code;
-        continue;
-      }
-
-      in_code = code;
-
-      if (code == available) {
-        pixelStack[top++] = first;
-        code = old_code;
-      }
-
-      while (code > clear) {
-        pixelStack[top++] = suffix[code];
-        code = prefix[code];
-      }
-
-      first = suffix[code] & 0xff;
-      pixelStack[top++] = first; // add a new string to the table, but only if space is available
-      // if not, just continue with current table until a clear code is found
-      // (deferred clear code implementation as per GIF spec)
-
-      if (available < MAX_STACK_SIZE) {
-        prefix[available] = old_code;
-        suffix[available] = first;
-        available++;
-
-        if ((available & code_mask) === 0 && available < MAX_STACK_SIZE) {
-          code_size++;
-          code_mask += available;
-        }
-      }
-
-      old_code = in_code;
-    } // Pop a pixel off the pixel stack.
-
-
-    top--;
-    dstPixels[pi++] = pixelStack[top];
-    i++;
-  }
-
-  for (i = pi; i < npix; i++) {
-    dstPixels[i] = 0; // clear missing pixels
-  }
-
-  return dstPixels;
-};
-
-exports.lzw = lzw;
-});
-_gl(5,function(exports,_gr){
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.deinterlace = void 0;
-
-/**
- * Deinterlace function from https://github.com/shachaf/jsgif
- */
-var deinterlace = function deinterlace(pixels, width) {
-  var newPixels = new Array(pixels.length);
-  var rows = pixels.length / width;
-
-  var cpRow = function cpRow(toRow, fromRow) {
-    var fromPixels = pixels.slice(fromRow * width, (fromRow + 1) * width);
-    newPixels.splice.apply(newPixels, [toRow * width, width].concat(fromPixels));
-  }; // See appendix E.
-
-
-  var offsets = [0, 4, 2, 1];
-  var steps = [8, 8, 4, 2];
-  var fromRow = 0;
-
-  for (var pass = 0; pass < 4; pass++) {
-    for (var toRow = offsets[pass]; toRow < rows; toRow += steps[pass]) {
-      cpRow(toRow, fromRow);
-      fromRow++;
-    }
-  }
-
-  return newPixels;
-};
-
-exports.deinterlace = deinterlace;
-});
-_gl(2,function(exports,_gr){
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports["default"] = void 0;
-
-var _ = _gr(3);
-
-var _uint = _gr(4);
-
-// a set of 0x00 terminated subblocks
-var subBlocksSchema = {
-  blocks: function blocks(stream) {
-    var terminator = 0x00;
-    var chunks = [];
-    var streamSize = stream.data.length;
-    var total = 0;
-
-    for (var size = (0, _uint.readByte)()(stream); size !== terminator; size = (0, _uint.readByte)()(stream)) {
-      // catch corrupted files with no terminator
-      if (stream.pos + size >= streamSize) {
-        var availableSize = streamSize - stream.pos;
-        chunks.push((0, _uint.readBytes)(availableSize)(stream));
-        total += availableSize;
-        break;
-      }
-
-      chunks.push((0, _uint.readBytes)(size)(stream));
-      total += size;
-    }
-
-    var result = new Uint8Array(total);
-    var offset = 0;
-
-    for (var i = 0; i < chunks.length; i++) {
-      result.set(chunks[i], offset);
-      offset += chunks[i].length;
-    }
-
-    return result;
-  }
-}; // global control extension
-
-var gceSchema = (0, _.conditional)({
-  gce: [{
-    codes: (0, _uint.readBytes)(2)
-  }, {
-    byteSize: (0, _uint.readByte)()
-  }, {
-    extras: (0, _uint.readBits)({
-      future: {
-        index: 0,
-        length: 3
-      },
-      disposal: {
-        index: 3,
-        length: 3
-      },
-      userInput: {
-        index: 6
-      },
-      transparentColorGiven: {
-        index: 7
-      }
-    })
-  }, {
-    delay: (0, _uint.readUnsigned)(true)
-  }, {
-    transparentColorIndex: (0, _uint.readByte)()
-  }, {
-    terminator: (0, _uint.readByte)()
-  }]
-}, function (stream) {
-  var codes = (0, _uint.peekBytes)(2)(stream);
-  return codes[0] === 0x21 && codes[1] === 0xf9;
-}); // image pipeline block
-
-var imageSchema = (0, _.conditional)({
-  image: [{
-    code: (0, _uint.readByte)()
-  }, {
-    descriptor: [{
-      left: (0, _uint.readUnsigned)(true)
-    }, {
-      top: (0, _uint.readUnsigned)(true)
-    }, {
-      width: (0, _uint.readUnsigned)(true)
-    }, {
-      height: (0, _uint.readUnsigned)(true)
-    }, {
-      lct: (0, _uint.readBits)({
-        exists: {
-          index: 0
-        },
-        interlaced: {
-          index: 1
-        },
-        sort: {
-          index: 2
-        },
-        future: {
-          index: 3,
-          length: 2
-        },
-        size: {
-          index: 5,
-          length: 3
-        }
-      })
-    }]
-  }, (0, _.conditional)({
-    lct: (0, _uint.readArray)(3, function (stream, result, parent) {
-      return Math.pow(2, parent.descriptor.lct.size + 1);
-    })
-  }, function (stream, result, parent) {
-    return parent.descriptor.lct.exists;
-  }), {
-    data: [{
-      minCodeSize: (0, _uint.readByte)()
-    }, subBlocksSchema]
-  }]
-}, function (stream) {
-  return (0, _uint.peekByte)()(stream) === 0x2c;
-}); // plain text block
-
-var textSchema = (0, _.conditional)({
-  text: [{
-    codes: (0, _uint.readBytes)(2)
-  }, {
-    blockSize: (0, _uint.readByte)()
-  }, {
-    preData: function preData(stream, result, parent) {
-      return (0, _uint.readBytes)(parent.text.blockSize)(stream);
-    }
-  }, subBlocksSchema]
-}, function (stream) {
-  var codes = (0, _uint.peekBytes)(2)(stream);
-  return codes[0] === 0x21 && codes[1] === 0x01;
-}); // application block
-
-var applicationSchema = (0, _.conditional)({
-  application: [{
-    codes: (0, _uint.readBytes)(2)
-  }, {
-    blockSize: (0, _uint.readByte)()
-  }, {
-    id: function id(stream, result, parent) {
-      return (0, _uint.readString)(parent.blockSize)(stream);
-    }
-  }, subBlocksSchema]
-}, function (stream) {
-  var codes = (0, _uint.peekBytes)(2)(stream);
-  return codes[0] === 0x21 && codes[1] === 0xff;
-}); // comment block
-
-var commentSchema = (0, _.conditional)({
-  comment: [{
-    codes: (0, _uint.readBytes)(2)
-  }, subBlocksSchema]
-}, function (stream) {
-  var codes = (0, _uint.peekBytes)(2)(stream);
-  return codes[0] === 0x21 && codes[1] === 0xfe;
-});
-var schema = [{
-  header: [{
-    signature: (0, _uint.readString)(3)
-  }, {
-    version: (0, _uint.readString)(3)
-  }]
-}, {
-  lsd: [{
-    width: (0, _uint.readUnsigned)(true)
-  }, {
-    height: (0, _uint.readUnsigned)(true)
-  }, {
-    gct: (0, _uint.readBits)({
-      exists: {
-        index: 0
-      },
-      resolution: {
-        index: 1,
-        length: 3
-      },
-      sort: {
-        index: 4
-      },
-      size: {
-        index: 5,
-        length: 3
-      }
-    })
-  }, {
-    backgroundColorIndex: (0, _uint.readByte)()
-  }, {
-    pixelAspectRatio: (0, _uint.readByte)()
-  }]
-}, (0, _.conditional)({
-  gct: (0, _uint.readArray)(3, function (stream, result) {
-    return Math.pow(2, result.lsd.gct.size + 1);
-  })
-}, function (stream, result) {
-  return result.lsd.gct.exists;
-}), // content frames
-{
-  frames: (0, _.loop)([gceSchema, applicationSchema, commentSchema, imageSchema, textSchema], function (stream) {
-    var nextCode = (0, _uint.peekByte)()(stream); // rather than check for a terminator, we should check for the existence
-    // of an ext or image block to avoid infinite loops
-    //var terminator = 0x3B;
-    //return nextCode !== terminator;
-
-    return nextCode === 0x21 || nextCode === 0x2c;
-  })
-}];
-var _default = schema;
-exports["default"] = _default;
-});
-_gl(1,function(exports,_gr){
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.decompressFrames = exports.decompressFrame = exports.parseGIF = void 0;
-
-var _gif = _interopRequireDefault(_gr(2));
-
-var _jsBinarySchemaParser = _gr(3);
-
-var _uint = _gr(4);
-
-var _deinterlace = _gr(5);
-
-var _lzw = _gr(6);
-
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }
-
-var parseGIF = function parseGIF(arrayBuffer) {
-  var byteData = new Uint8Array(arrayBuffer);
-  return (0, _jsBinarySchemaParser.parse)((0, _uint.buildStream)(byteData), _gif["default"]);
-};
-
-exports.parseGIF = parseGIF;
-
-var generatePatch = function generatePatch(image) {
-  var totalPixels = image.pixels.length;
-  var patchData = new Uint8ClampedArray(totalPixels * 4);
-
-  for (var i = 0; i < totalPixels; i++) {
-    var pos = i * 4;
-    var colorIndex = image.pixels[i];
-    var color = image.colorTable[colorIndex] || [0, 0, 0];
-    patchData[pos] = color[0];
-    patchData[pos + 1] = color[1];
-    patchData[pos + 2] = color[2];
-    patchData[pos + 3] = colorIndex !== image.transparentIndex ? 255 : 0;
-  }
-
-  return patchData;
-};
-
-var decompressFrame = function decompressFrame(frame, gct, buildImagePatch) {
-  if (!frame.image) {
-    console.warn('gif frame does not have associated image.');
-    return;
-  }
-
-  var image = frame.image; // get the number of pixels
-
-  var totalPixels = image.descriptor.width * image.descriptor.height; // do lzw decompression
-
-  var pixels = (0, _lzw.lzw)(image.data.minCodeSize, image.data.blocks, totalPixels); // deal with interlacing if necessary
-
-  if (image.descriptor.lct.interlaced) {
-    pixels = (0, _deinterlace.deinterlace)(pixels, image.descriptor.width);
-  }
-
-  var resultImage = {
-    pixels: pixels,
-    dims: {
-      top: frame.image.descriptor.top,
-      left: frame.image.descriptor.left,
-      width: frame.image.descriptor.width,
-      height: frame.image.descriptor.height
-    }
-  }; // color table
-
-  if (image.descriptor.lct && image.descriptor.lct.exists) {
-    resultImage.colorTable = image.lct;
-  } else {
-    resultImage.colorTable = gct;
-  } // add per frame relevant gce information
-
-
-  if (frame.gce) {
-    resultImage.delay = (frame.gce.delay || 10) * 10; // convert to ms
-
-    resultImage.disposalType = frame.gce.extras.disposal; // transparency
-
-    if (frame.gce.extras.transparentColorGiven) {
-      resultImage.transparentIndex = frame.gce.transparentColorIndex;
-    }
-  } // create canvas usable imagedata if desired
-
-
-  if (buildImagePatch) {
-    resultImage.patch = generatePatch(resultImage);
-  }
-
-  return resultImage;
-};
-
-exports.decompressFrame = decompressFrame;
-
-var decompressFrames = function decompressFrames(parsedGif, buildImagePatches) {
-  return parsedGif.frames.filter(function (f) {
-    return f.image;
-  }).map(function (f) {
-    return decompressFrame(f, parsedGif.gct, buildImagePatches);
-  });
-};
-
-exports.decompressFrames = decompressFrames;
-});
-
-window.parseGIF         = _gm[1].parseGIF;
-window.decompressFrames = _gm[1].decompressFrames;
-window.GifDecoder = (function(){
-  function decode(dataUrl){
-    return new Promise(function(res,rej){
-      try{
-        var b64=dataUrl.split(',')[1],bin=atob(b64),u8=new Uint8Array(bin.length);
-        for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
-        var gif=window.parseGIF(u8.buffer);
-        var frames=window.decompressFrames(gif,true);
-        if(!frames||!frames.length){rej(new Error('sin frames'));return;}
-        var w=gif.lsd.width,h=gif.lsd.height;
-        var gc=document.createElement('canvas');gc.width=w;gc.height=h;
-        var gx=gc.getContext('2d');
-        var tc=document.createElement('canvas'),tx=tc.getContext('2d');
-        var fid=null,result=[],clr=false;
-        for(var fi=0;fi<frames.length;fi++){
-          var f=frames[fi],d=f.dims;
-          if(clr){gx.clearRect(0,0,w,h);clr=false;}
-          if(!fid||d.width!==fid.width||d.height!==fid.height){
-            tc.width=d.width;tc.height=d.height;
-            fid=tx.createImageData(d.width,d.height);
-          }
-          fid.data.set(f.patch);
-          tx.putImageData(fid,0,0);
-          gx.drawImage(tc,d.left,d.top);
-          result.push({imageData:gx.getImageData(0,0,w,h),delay:f.delay||100});
-          if(f.disposalType===2) clr=true;
-        }
-        res({frames:result,width:w,height:h});
-      }catch(e){rej(e);}
-    });
-  }
-  return {decode:decode};
-})();
-/* ── fin gifuct-js ── */
-
 /* ============================================================
    editor.js — ComiXow v5.4
    Motor canvas fiel al referEditor.
@@ -726,12 +9,8 @@ let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
 // ── Sistema de Reglas (T29) ──
 let edRules = [];          // array de reglas de la hoja actual
-let _edCanvasTop = 0;      // top del canvas en viewport — cacheado en edFitCanvas
-let edRulesHidden = false; // true = guías ocultas (invisibles, no seleccionables, sin snap)
 let _edRuleId = 0;         // contador para IDs únicos
 let _edRuleDrag = null;    // { ruleId, part:'a'|'b'|'line', offX, offY } — drag activo
-let edRuleNodes = [];      // nodos compartidos entre reglas: {id, x, y, ruleIds, locked}
-let _edRuleNodeId = 0;     // contador IDs de nodos
 let _edRulePanelId = null; // id de la regla con panel abierto
 let edSelectedIdx = -1;
 let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
@@ -740,7 +19,7 @@ let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
 let edProjectId = null;
-let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'' };
+let edProjectMeta = { title:'', author:'', genre:'', navMode:'horizontal', social:'' };
 let edActiveTool = 'select';  // select | draw | eraser | fill | shape | line
 // Estado herramienta shape
 let _edShapeType  = 'rect';   // 'rect' | 'ellipse'
@@ -753,10 +32,6 @@ let _edLineType   = 'draw';   // 'draw' | 'select'
 let _edLineFusionId = null;   // T1: ID de fusión — LineLayer del mismo ID se fusionan al OK
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
-let _edPenPendingStroke = null; // punto inicial diferido para lápiz
-const _ED_PEN_MIN_PRESSURE = 0.05; // tldraw/perfect-freehand: presión mínima para considerar contacto real
-let _edPenLowPressureTimer = null; // timer de 250ms para presión baja — si expira, termina el trazo
-let _edPenCanDraw = false;         // true cuando se ha confirmado presión suficiente al menos una vez
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 // Icono simetría (T14): triángulo izq (cateto horiz + cateto vertical derecho) | gap | línea discontinua | gap | triángulo der (espejo)
@@ -811,15 +86,6 @@ let edPinchCenter0 = null, edPinchCamera0 = null;
 let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
-let _edCropMode     = false;    // true cuando el modo recorte está activo
-let _edCropLayer    = null;     // referencia al layer que se está recortando
-let _edCropPts      = [];       // vértices del polígono de recorte en coords fraccionarias de página
-let _edCropDragIdx  = -1;       // índice del nodo que se está arrastrando (-1 = ninguno)
-let _edCropDragging = false;    // true durante un drag de nodo
-let _edCropLastTapSeg = -1;     // índice de segmento del último tap (doble tap)
-let _edCropLastTapTime = 0;     // timestamp del último tap sobre segmento
-let _edCropHistory = [];        // historial de snapshots del polígono (para ↩)
-let _edCropHistIdx = -1;        // índice actual en el historial
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
 // x,y = traslación del canvas (donde aparece el origen del workspace en pantalla)
@@ -830,12 +96,10 @@ let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segm
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
-let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 // ── Multi-selección ──
 let edMultiSel = [];        // índices seleccionados
-let edMultiSelAnchor = -1;  // índice del objeto ancla para Shift+flechas (último seleccionado individualmente)
 let edMultiDragging = false;
 let edMultiResizing = false;
 let edMultiRotating = false;
@@ -913,10 +177,12 @@ function _edSyncSizeDots(){
 }
 // ¿Necesita scrollbars? (el lienzo no cabe entero en el viewport)
 function edNeedsScroll(){
-  // En PC: siempre mostrar barras para permitir navegación a cualquier zoom
   if(!edCanvas) return { h: false, v: false };
-  if(window._edIsTouch) return { h: false, v: false };
-  return { h: true, v: true };
+  const availW = edCanvas.width, availH = edCanvas.height;
+  const pw = edPageW(), ph = edPageH();
+  const lienzoPxW = pw * edCamera.z;
+  const lienzoPxH = ph * edCamera.z;
+  return { h: lienzoPxW > availW + 1, v: lienzoPxH > availH + 1 };
 }
 
 /* ══════════════════════════════════════════
@@ -989,10 +255,7 @@ class ImageLayer extends BaseLayer {
     }
   }
   draw(ctx,can){
-    // Si hay canvas offscreen de animación PNG, usarlo (igual que GifLayer usa _oc)
-    const src = this._oc || this.img;
-    if (!src) return;
-    if (src === this.img && (!this.img.complete || this.img.naturalWidth===0)) return;
+    if(!this.img || !this.img.complete || this.img.naturalWidth===0) return;
     const pw=edPageW(), ph=edPageH();
     const w = this.width  * pw;
     const h = this.height * ph;
@@ -1002,54 +265,9 @@ class ImageLayer extends BaseLayer {
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px,py);
     ctx.rotate(this.rotation*Math.PI/180);
-    ctx.drawImage(src, -w/2, -h/2, w, h);
+    ctx.drawImage(this.img, -w/2, -h/2, w, h);
     ctx.restore();
   }
-  // Precargar frames PNG y pintarlos en canvas offscreen — igual que GifLayer usa _oc
-  _preloadPngFrames(cb) {
-    if (!this._pngFrames || !this._pngFrames.length) { cb && cb(); return; }
-    if (this._pngOcs && this._pngOcs.length === this._pngFrames.length) { cb && cb(); return; }
-    this._pngOcs = [];
-    let loaded = 0;
-    const total = this._pngFrames.length;
-    this._pngFrames.forEach((dataUrl, i) => {
-      const img = new Image();
-      img.onload = () => {
-        const oc = document.createElement('canvas');
-        oc.width = img.naturalWidth; oc.height = img.naturalHeight;
-        oc.getContext('2d').drawImage(img, 0, 0);
-        this._pngOcs[i] = oc;
-        if (++loaded === total) cb && cb();
-      };
-      img.onerror = () => { if (++loaded === total) cb && cb(); };
-      img.src = dataUrl;
-    });
-  }
-
-  // Animar PNG — exactamente igual que GifLayer._applyFrame
-  _applyPngFrame(i) {
-    if (!this._pngOcs || !this._pngOcs.length) return;
-    this._pngFrameIdx = i % this._pngOcs.length;
-    this._oc = this._pngOcs[this._pngFrameIdx]; // _oc = lo que draw() usa
-    if (!this._playing) return;
-    if (this._timer) clearTimeout(this._timer);
-    this._timer = setTimeout(() => {
-      this._applyPngFrame(this._pngFrameIdx + 1);
-      requestAnimationFrame(() => {
-        if (typeof edRedraw === 'function') edRedraw();
-        // El visor tiene su propio canvas — actualizarlo también
-        if (typeof edUpdateViewer === 'function') edUpdateViewer();
-      });
-    }, 150);
-  }
-
-  stopAnim() {
-    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-    this._playing = false;
-    this._oc = this._pngOcs ? this._pngOcs[0] : null;
-    if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
-  }
-
   contains(px, py) {
     // 1. Comprobar bbox primero (rápido)
     if (!super.contains(px, py)) return false;
@@ -1078,74 +296,6 @@ class ImageLayer extends BaseLayer {
       return true; // fallback: si falla (CORS), usar bbox
     }
   }
-}
-
-/* ══════════════════════════════════════════
-   GIF LAYER — animación GIF en canvas
-   Usa gifuct.js para decodificar frames.
-   Cada frame se pinta en _oc (canvas offscreen).
-   La animación la gestiona _applyFrame() con setTimeout.
-   ══════════════════════════════════════════ */
-class GifLayer extends BaseLayer {
-  constructor(gifKey, x=0.5, y=0.5, width=0.7) {
-    super('gif', x, y, width, 0.3);
-    this.gifKey  = gifKey;
-    this._frames = [];
-    this._fIdx   = 0;
-    this._timer  = null;
-    this._oc     = null;
-    this._ready  = false;
-  }
-  load(dataUrl, cb) {
-    if (!window.GifDecoder) { if (cb) cb(); return; }
-    GifDecoder.decode(dataUrl).then(({ frames, width, height }) => {
-      this._frames = frames;
-      this._fIdx   = 0;
-      this._oc     = document.createElement('canvas');
-      this._oc.width  = width;
-      this._oc.height = height;
-      this._ready  = true;
-      this._applyFrame(0);
-      if (cb) cb();
-      // Regenerar miniatura de hojas ahora que _oc tiene el primer frame
-      requestAnimationFrame(() => {
-        if (typeof _edRefreshCurrentPageThumb === 'function') _edRefreshCurrentPageThumb();
-        if (typeof edUpdateNavPages === 'function') edUpdateNavPages();
-      });
-    }).catch(e => { console.warn('GIF decode:', e); if (cb) cb(); });
-  }
-  _applyFrame(i) {
-    if (!this._ready || !this._frames.length) return;
-    this._fIdx = i % this._frames.length;
-    const frame = this._frames[this._fIdx];
-    this._oc.getContext('2d').putImageData(frame.imageData, 0, 0);
-    // En el editor: no animar automáticamente — mostrar frame actual como imagen fija
-    // La animación se activará en los reproductores (Fase 2)
-    if (!this._playing) return;
-    if (this._timer) clearTimeout(this._timer);
-    this._timer = setTimeout(() => {
-      this._applyFrame(this._fIdx + 1);
-      if (typeof edRedraw === 'function' && typeof edCanvas !== 'undefined' && edCanvas) {
-        requestAnimationFrame(() => edRedraw());
-      }
-    }, frame.delay);
-  }
-  stopAnim() { if (this._timer) { clearTimeout(this._timer); this._timer = null; } }
-  draw(ctx) {
-    if (!this._oc || !this._ready) return;
-    const pw = edPageW(), ph = edPageH();
-    const w  = this.width  * pw;
-    const h  = this.height * ph;
-    const px = edMarginX() + this.x * pw;
-    const py = edMarginY() + this.y * ph;
-    ctx.save();
-    ctx.globalAlpha = this.opacity ?? 1;
-    ctx.translate(px, py);
-    ctx.rotate((this.rotation || 0) * Math.PI / 180);
-    ctx.drawImage(this._oc, -w/2, -h/2, w, h);
-    ctx.restore();
-  }
-  contains(px, py) { return super.contains(px, py); }
 }
 
 class TextLayer extends BaseLayer {
@@ -1495,6 +645,7 @@ class DrawLayer extends BaseLayer {
     this._lastY = 0;
   }
   static fromDataUrl(dataUrl, pw, ph){
+    // Compatibilidad: dataUrl guardado es en coords de página → colocar en posición correcta
     const dl = new DrawLayer();
     const img = new Image();
     img.onload = () => {
@@ -1502,18 +653,17 @@ class DrawLayer extends BaseLayer {
       const my = (ED_CANVAS_H - ph) / 2;
       dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
       if(typeof edRedraw === 'function') edRedraw();
-      if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
     return dl;
   }
   static fromDataUrlFull(dataUrl){
+    // dataUrl es workspace completo (ED_CANVAS_W × ED_CANVAS_H) — colocar 1:1
     const dl = new DrawLayer();
     const img = new Image();
     img.onload = () => {
       dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
       if(typeof edRedraw === 'function') edRedraw();
-      if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
     return dl;
@@ -1577,16 +727,12 @@ class DrawLayer extends BaseLayer {
     ctx.drawImage(this._canvas, 0, 0);
     ctx.restore();
   }
-  contains(px, py, exactMode){
-    // DrawLayer: pixel-hit sobre el canvas del workspace completo.
-    // exactMode=true → solo píxel exacto (R=1 para antialiasing); usado en la primera
-    //   pasada de selección para no "ganar" sobre capas inferiores en huecos.
-    // exactMode=false/undefined → radio R=10 para facilitar selección cuando no hay
-    //   ningún objeto exacto bajo el toque.
+  contains(px, py){
+    // DrawLayer: pixel-hit con zona expandida para facilitar selección
     try {
       const wx = Math.round(edMarginX() + px * edPageW());
       const wy = Math.round(edMarginY() + py * edPageH());
-      const R = exactMode ? 1 : 10;
+      const R = 10; // radio de expansión en px del workspace
       const x0=Math.max(0,wx-R), y0=Math.max(0,wy-R);
       const x1=Math.min(this._canvas.width-1,wx+R);
       const y1=Math.min(this._canvas.height-1,wy+R);
@@ -1667,7 +813,6 @@ class StrokeLayer extends BaseLayer {
     img.onload = () => {
       sl._canvas.getContext('2d').drawImage(img, 0, 0, bw, bh);
       if(typeof edRedraw === 'function') edRedraw();
-      if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
     return sl;
@@ -1991,64 +1136,31 @@ class LineLayer extends BaseLayer {
     };
 
     if(_multiContour){
-      if(this.grouped){
-        // Agrupado (⊕ Unir): cada contorno se pinta independientemente, sin fusión booleana
-        const _gStyles = this.groupedStyles || [];
-        // Acumular offset en pts para mapear cornerRadii correctamente por contorno
-        let _ptBase = 0; // índice de inicio en pts del contorno actual (incluye nulls previos)
-        _contours.forEach((c, _ci) => {
-          const _st = _gStyles[_ci] || {};
-          const _fc = _st.fillColor !== undefined ? _st.fillColor : this.fillColor;
-          const _sc = _st.color     !== undefined ? _st.color     : this.color;
-          const _lw = _st.lineWidth !== undefined ? _st.lineWidth : this.lineWidth;
-          const _cl = _st.closed    !== undefined ? _st.closed    : this.closed;
-          const _crC = {};
-          // Mapear cornerRadii: avanzar en pts desde _ptBase, solo para este contorno
-          let _lIdx = 0, _scan = _ptBase;
-          for(; _scan < pts.length; _scan++){
-            if(pts[_scan] === null){ if(_lIdx > 0) break; continue; } // null = fin del contorno
-            const _r = cr[_scan]||0;
-            if(_r) _crC[_lIdx] = _r;
-            _lIdx++;
+      // T1: múltiples contornos → evenodd para huecos en solapamientos
+      const combined = new Path2D();
+      _contours.forEach((c,ci) => {
+        const _crC = {};
+        // Mapear cornerRadii al índice global en points
+        // (los radios se aplican por índice global, los null no cuentan)
+        let _gIdx = 0;
+        for(let _ii=0; _ii<pts.length; _ii++){
+          if(pts[_ii]===null){ continue; }
+          if(_gIdx < c.length && pts[_ii] === c[_gIdx]){
+            const _r = cr[_ii]||0;
+            if(_r) _crC[_gIdx] = _r;
+            _gIdx++;
           }
-          _ptBase = _scan + 1; // saltar el null separador
-          const _path = new Path2D();
-          _buildContour(_path, c, _crC);
-          if(_cl && _fc && _fc !== 'none'){
-            ctx.fillStyle = _fc;
-            ctx.fill(_path);
-          }
-          if(_lw > 0){
-            ctx.strokeStyle = _sc;
-            ctx.lineWidth   = _lw;
-            ctx.stroke(_path);
-          }
-        });
-      } else {
-        // Fusionado (⊕ Fusionar): evenodd para huecos booleanos
-        const combined = new Path2D();
-        _contours.forEach((c,ci) => {
-          const _crC = {};
-          let _gIdx = 0;
-          for(let _ii=0; _ii<pts.length; _ii++){
-            if(pts[_ii]===null){ continue; }
-            if(_gIdx < c.length && pts[_ii] === c[_gIdx]){
-              const _r = cr[_ii]||0;
-              if(_r) _crC[_gIdx] = _r;
-              _gIdx++;
-            }
-          }
-          _buildContour(combined, c, _crC);
-        });
-        if (this.fillColor && this.fillColor !== 'none') {
-          ctx.fillStyle = this.fillColor;
-          ctx.fill(combined, 'evenodd');
         }
-        if (this.lineWidth > 0) {
-          ctx.strokeStyle = this.color;
-          ctx.lineWidth   = this.lineWidth;
-          ctx.stroke(combined);
-        }
+        _buildContour(combined, c, _crC);
+      });
+      if (this.fillColor && this.fillColor !== 'none') {
+        ctx.fillStyle = this.fillColor;
+        ctx.fill(combined, 'evenodd');
+      }
+      if (this.lineWidth > 0) {
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth   = this.lineWidth;
+        ctx.stroke(combined);
       }
     } else {
       // Contorno único: comportamiento original
@@ -2167,26 +1279,7 @@ class LineLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
-    if(l.type === 'draw'){
-      // Serializar DrawLayer como StrokeLayer en el historial global.
-      // Esto garantiza que restaurar un snapshot siempre produce un StrokeLayer
-      // estático correcto, sin el problema del DrawLayer vacío al restaurar.
-      const _bb = StrokeLayer._boundingBox(l._canvas);
-      const _pw = edPageW(), _ph = edPageH();
-      if(!_bb) return null; // DrawLayer vacío: no incluir en snapshot
-      const _cx = (_bb.x + _bb.w/2 - edMarginX()) / _pw;
-      const _cy = (_bb.y + _bb.h/2 - edMarginY()) / _ph;
-      const _fw = _bb.w / _pw;
-      const _fh = _bb.h / _ph;
-      // Crear canvas recortado para el dataUrl
-      const _tmp = document.createElement('canvas');
-      _tmp.width = _bb.w; _tmp.height = _bb.h;
-      _tmp.getContext('2d').drawImage(l._canvas, _bb.x, _bb.y, _bb.w, _bb.h, 0, 0, _bb.w, _bb.h);
-      return { type: 'stroke', dataUrl: _tmp.toDataURL(),
-        x: _cx, y: _cy, width: _fw, height: _fh,
-        rotation: 0, opacity: l.opacity ?? 1,
-        locked: l.locked || false };
-    }
+    if(l.type === 'draw')   return { type: 'draw',   dataUrl: l.toDataUrl(), locked:l.locked||false };
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
       color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false };
@@ -2198,8 +1291,6 @@ function _edLayersSnapshot(){
     if(l.type === 'line')   return { type:'line', points:l.points.slice(),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
-      grouped: l.grouped||false,
-      groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     const o = {};
@@ -2217,17 +1308,16 @@ function _edLayersSnapshot(){
   }));
 }
 
-function edPushHistory(force){
+function edPushHistory(){
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
-  if(_vsHistory.length > 0){ edUpdateUndoRedoBtns(); return; }
+  if(_vsHistory.length > 0) return;
   const layersJSON = _edLayersSnapshot();
-  if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
+  if(edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
-    if(last.layersJSON === layersJSON){ edUpdateUndoRedoBtns(); return; }
+    if(last.layersJSON === layersJSON) return;
   }
-
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
   edHistory.push({ pageIdx: edCurrentPage, layersJSON });
   if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
@@ -2284,8 +1374,6 @@ function edApplyHistory(snapshot){
       l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; l.lineWidth=o.lineWidth??3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
       if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
-      if(o.grouped) l.grouped = true;
-      if(o.groupedStyles) l.groupedStyles = o.groupedStyles.map(s=>({...s}));
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       return l;
@@ -2343,7 +1431,6 @@ function edUpdateUndoRedoBtns(){
   const u = $('edUndoBtn'), r = $('edRedoBtn');
   if(u) u.disabled = edHistoryIdx <= 0;
   if(r) r.disabled = edHistoryIdx >= edHistory.length - 1;
-
 }
 
 /* ── edFitCanvas ──────────────────────────────────────────────────
@@ -2398,7 +1485,6 @@ function edFitCanvas(resetCamera){
   edCanvas.style.position = 'absolute';
   edCanvas.style.left = '0';
   edCanvas.style.top  = totalBarsH + 'px';
-  _edCanvasTop = totalBarsH; // cachear para edCoords
   edCanvas.style.margin = '0';
   // Mantener el canvas de dibujo libre sincronizado en posición y tamaño
   if(edDrawCanvas){
@@ -2424,12 +1510,6 @@ function edFitCanvas(resetCamera){
   _edScrollbarsUpdate();
   // Siempre redibujar tras ajustar el canvas
   edRedraw();
-}
-
-/* ── Recentra el canvas como la lupa: ajusta cámara al lienzo y redibuja ── */
-function _edResetCameraToFit(){
-  window._edUserRequestedReset = true;
-  edFitCanvas(true);
 }
 
 /* ── Resetea la cámara para que el LIENZO ocupe el viewport centrado ── */
@@ -2569,10 +1649,8 @@ function edDrawMultiSel(){
 
   // Marquesina de selección activa
   if(edRubberBand){
-    const rx=edMarginX()+Math.min(edRubberBand.x0,edRubberBand.x1)*pw;
-    const ry=edMarginY()+Math.min(edRubberBand.y0,edRubberBand.y1)*ph;
-    const rw=Math.abs(edRubberBand.x1-edRubberBand.x0)*pw;
-    const rh=Math.abs(edRubberBand.y1-edRubberBand.y0)*ph;
+    const rx=edMarginX()+edRubberBand.x0*pw, ry=edMarginY()+edRubberBand.y0*ph;
+    const rw=(edRubberBand.x1-edRubberBand.x0)*pw, rh=(edRubberBand.y1-edRubberBand.y0)*ph;
     edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=1.5/z;
     edCtx.setLineDash([5/z,3/z]);
     edCtx.fillStyle='rgba(26,140,255,0.06)';
@@ -2586,10 +1664,8 @@ function edDrawMultiSel(){
 function edDrawRubberBand(){
   if(!edRubberBand) return;
   const pw=edPageW(),ph=edPageH(),z=edCamera.z;
-  const rx=edMarginX()+Math.min(edRubberBand.x0,edRubberBand.x1)*pw;
-  const ry=edMarginY()+Math.min(edRubberBand.y0,edRubberBand.y1)*ph;
-  const rw=Math.abs(edRubberBand.x1-edRubberBand.x0)*pw;
-  const rh=Math.abs(edRubberBand.y1-edRubberBand.y0)*ph;
+  const rx=edMarginX()+edRubberBand.x0*pw, ry=edMarginY()+edRubberBand.y0*ph;
+  const rw=(edRubberBand.x1-edRubberBand.x0)*pw, rh=(edRubberBand.y1-edRubberBand.y0)*ph;
   edCtx.save();
   edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=1.5/z;
   edCtx.setLineDash([5/z,3/z]);
@@ -2602,10 +1678,7 @@ function edDrawRubberBand(){
 function _msClear(){
   edMultiSel=[]; edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
   edRubberBand=null; edMultiDragOffs=[]; edMultiTransform=null; edMultiGroupRot=0;
-  edMultiBbox=null; edMultiSelAnchor=-1;
-  // Limpiar siempre el botón y el dropdown para que no queden activos en PC
-  $('edMultiSelBtn')?.classList.remove('active');
-  $('_edMultiSelDd')?.classList.remove('open');
+  edMultiBbox=null;
 }
 
 function _edDeactivateMultiSel(){
@@ -2620,6 +1693,7 @@ function _edDeactivateMultiSel(){
   edRedraw();
 }
 
+// Muestra/actualiza el dropdown de multiselección (Agrupar/Desagrupar)
 function _edUpdateMultiSelPanel(){
   const panel=$('edOptionsPanel');
   if(panel && panel.dataset.mode==='multiselect'){ panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode; }
@@ -2637,17 +1711,14 @@ function _edUpdateMultiSelPanel(){
     dd.classList.remove('open'); return;
   }
   const _hasGroup = edMultiSel.some(i => edLayers[i]?.groupId);
-  const _mergeTypes = _edMergeableTypes();
   dd.innerHTML = `
     <button class="ed-dropdown-item" id="_ms-group">⊞ Agrupar</button>
-    ${_hasGroup ? `<button class="ed-dropdown-item" id="_ms-ungroup">⊟ Desagrupar</button>` : ''}
-    ${_mergeTypes ? `<button class="ed-dropdown-item" id="_ms-merge">⊕ Unir</button>` : ''}`;
+    ${_hasGroup ? `<button class="ed-dropdown-item" id="_ms-ungroup">⊟ Desagrupar</button>` : ''}`;
   $('_ms-group')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edGroupSelected(); });
   $('_ms-ungroup')?.addEventListener('click', ()=>{
     dd.classList.remove('open');
     edUngroupSelected();
   });
-  $('_ms-merge')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edMergeSelected(); });
   const btn = $('edMultiSelBtn');
   if(btn){
     const r = btn.getBoundingClientRect();
@@ -2832,8 +1903,6 @@ function _edFuseIntoMain(newLL) {
 }
 
 function edRedraw(){
-  // Si hay un contexto GIF activo en curso, redirigir a _gcpRedraw
-  if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
   if(!edCtx || !edCanvas)return;
   const cw=edCanvas.width, ch=edCanvas.height;
 
@@ -2913,9 +1982,6 @@ function edRedraw(){
     // T1: no dimear LineLayer que pertenecen a la sesión de edición activa
     if (_edLineFusionId && l._fusionId === _edLineFusionId) return false; // miembro de fusión activa
     if (l === _activePanelLine) return false;
-    // No dimear objetos vectoriales de la sesión actual (fusionables entre sí)
-    if (_editingShape && (l.type === 'line' || l.type === 'shape') &&
-        _vsHistory.length > 0 && !_vsPreSessionLayers.has(l)) return false;
     return true;
   };
 
@@ -2941,9 +2007,6 @@ function edRedraw(){
       edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx);
       edCtx.globalAlpha = 1;
-    } else if(l.type==='gif'){
-      const _og=l.opacity; l.opacity=(l.opacity??1)*dimFactor;
-      l.draw(edCtx); l.opacity=_og;
     }
   });
   // Textos/bocadillos: aplicar dimming individual por capa
@@ -2986,8 +2049,6 @@ function edRedraw(){
     if(edMultiSel.length) edDrawMultiSel();
     else edDrawRubberBand();
   }
-  // Rubber band en modo select (PC, sin pulsar botón multiselect)
-  if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
   // ── Reglas (T29): solo visibles en el editor, encima de todo ──
   _edRulesDraw(edCtx);
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
@@ -2996,8 +2057,6 @@ function edRedraw(){
   edCtx.lineWidth   = 1 / edCamera.z;   // 1px físico independiente del zoom
   edCtx.strokeRect(edMarginX(), edMarginY(), edPageW(), edPageH());
   edCtx.restore();
-  // Overlay de recorte: contorno del polígono + zona exterior oscurecida
-  if (_edCropMode && _edCropLayer) _edCropDrawOverlay();
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
   _edScrollbarsDraw();
@@ -3392,588 +2451,6 @@ function _edFocusOnLayer(la) {
   requestAnimationFrame(_animate);
 }
 
-
-/* ══════════════════════════════════════════
-   SISTEMA DE RECORTE POLIGONAL (_edCrop*)
-   ══════════════════════════════════════════ */
-
-function _edStartCrop(la) {
-  if (!la || !['image','stroke','draw'].includes(la.type)) return;
-  edPushHistory(true); // force: el punto "antes de recortar" siempre se guarda
-  _edCropMode        = true;
-  _edCropLayer       = la;
-  _edCropPts         = [];
-  _edCropDragIdx     = -1;
-  _edCropDragging    = false;
-  _edCropLastTapSeg  = -1;
-  _edCropLastTapTime = 0;
-  _edCropHistory     = [];
-  _edCropHistIdx     = -1;
-  // draw ya tiene su propia UI bloqueada; para imagen/stroke hay que bloquearlo
-  if (la.type !== 'draw') _edDrawLockUI();
-  _edCropPushHistory(); // estado inicial vacío para poder deshacer hasta el principio
-  _edCropRenderPanel();
-  edRedraw();
-}
-
-// Guarda snapshot del estado actual del polígono en el historial interno del recorte.
-// Se llama después de cada acción: añadir vértice, drag, inserción en segmento.
-function _edCropPushHistory() {
-  _edCropHistory = _edCropHistory.slice(0, _edCropHistIdx + 1);
-  _edCropHistory.push(_edCropPts.map(p => ({x: p.x, y: p.y})));
-  if (_edCropHistory.length > 30) _edCropHistory.shift();
-  _edCropHistIdx = _edCropHistory.length - 1;
-}
-
-function _edCropUndoHistory() {
-  if (_edCropHistIdx <= 0) return; // en el estado inicial (vacío) — no deshacer más
-  _edCropHistIdx--;
-  _edCropPts = _edCropHistory[_edCropHistIdx].map(p => ({x: p.x, y: p.y}));
-  // Resetear estado de drag para que el usuario pueda volver a interactuar
-  _edCropDragIdx = -1;
-  _edCropDragging = false;
-  _edCropLastTapSeg = -1;
-  _edCropLastTapTime = 0;
-  _edCropRenderPanel();
-  edRedraw();
-}
-
-function _edCropRedoHistory() {
-  if (_edCropHistIdx >= _edCropHistory.length - 1) return;
-  _edCropHistIdx++;
-  _edCropPts = _edCropHistory[_edCropHistIdx].map(p => ({x: p.x, y: p.y}));
-  _edCropRenderPanel();
-  edRedraw();
-}
-
-function _edCropRenderPanel() {
-  const panel = $('edOptionsPanel');
-  if (!panel) return;
-  const n = _edCropPts.length;
-  const canUndo = _edCropHistIdx > 0;
-  const canRedo = _edCropHistIdx < _edCropHistory.length - 1;
-  panel.innerHTML = `
-<div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:6px 0;min-height:32px">
-    <span style="font-size:.8rem;font-weight:700;color:var(--gray-600);flex:1">
-      ✂ ${n < 3 ? 'Toca para añadir vértices (mín. 3)' : n + ' vértices · arrastra · doble tap en segmento añade nodo'}
-    </span>
-  </div>
-  <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
-    <button id="crop-undo" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer" ${!canUndo?'disabled':''}>↩</button>
-    <button id="crop-redo" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer" ${!canRedo?'disabled':''}>↪</button>
-    <button id="crop-cancel" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer;color:#c00">✕</button>
-    <button id="crop-apply" style="flex:2;background:${n>=3?'var(--black)':'var(--gray-400)'};color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer" ${n<3?'disabled':''}>✓ Aplicar</button>
-  </div>
-</div>`;
-  panel.classList.add('open');
-  panel.dataset.mode = 'crop';
-  edFitCanvas(); // actualizar _edCanvasTop
-  $('crop-undo')?.addEventListener('click', _edCropUndoHistory);
-  $('crop-redo')?.addEventListener('click', _edCropRedoHistory);
-  $('crop-cancel')?.addEventListener('click', _edCancelCrop);
-  $('crop-apply')?.addEventListener('click', () => {
-    if (_edCropPts.length >= 3) _edApplyCrop();
-  });
-}
-
-function _edCancelCrop() {
-  const _wasDrawLayer = _edCropLayer && _edCropLayer.type === 'draw';
-  const _cancelSelIdx = edSelectedIdx; // conservar índice seleccionado
-  _edCropMode         = false;
-  _edCropLayer        = null;
-  _edCropPts          = [];
-  _edCropDragIdx      = -1;
-  _edCropDragging     = false;
-  _edCropLastTapSeg   = -1;
-  _edCropLastTapTime  = 0;
-  _edCropHistory      = [];
-  _edCropHistIdx      = -1;
-  // Limpiar punteros fantasma
-  if (window._edActivePointers) window._edActivePointers.clear();
-  edPinching = false; edPinchScale0 = null;
-  clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
-  if (_wasDrawLayer) {
-    // Draw: ya tenía UI bloqueada por el dibujo — restaurar panel draw
-    edRenderOptionsPanel('draw');
-  } else {
-    // Imagen/Stroke: restaurar selección y panel props con overlay
-    _edDrawUnlockUI();
-    _edPropsOverlayHide();
-    edSelectedIdx = _cancelSelIdx; // asegurar que sigue seleccionado
-    if (edSelectedIdx >= 0 && edSelectedIdx < edLayers.length) {
-      _edDrawLockUI();
-      _edPropsOverlayShow();
-      edRenderOptionsPanel('props');
-    }
-  }
-  edRedraw();
-}
-
-function _edCropDrawOverlay() {
-  // Overlay de recorte: la imagen es completamente visible.
-  // Solo se dibuja el polígono con relleno semitransparente azul (preview del área a conservar)
-  // y el contorno amarillo con nodos.
-  const pw = edPageW(), ph = edPageH();
-  const z  = edCamera.z;
-  const ctx = edCtx;
-
-  if (_edCropPts.length === 0) return;
-
-  // Convertir puntos a coordenadas workspace (cámara ya aplicada)
-  const toWS = p => ({
-    x: edMarginX() + p.x * pw,
-    y: edMarginY() + p.y * ph
-  });
-  const wsPts = _edCropPts.map(toWS);
-
-  ctx.save();
-
-  if (wsPts.length >= 3) {
-    // Relleno semitransparente azul sobre el área de recorte
-    ctx.beginPath();
-    ctx.moveTo(wsPts[0].x, wsPts[0].y);
-    for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(59,130,246,0.25)';
-    ctx.fill();
-  }
-
-  // Contorno del polígono
-  ctx.beginPath();
-  ctx.moveTo(wsPts[0].x, wsPts[0].y);
-  for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
-  if (_edCropPts.length >= 3) ctx.closePath();
-  ctx.strokeStyle = '#f97316';
-  ctx.lineWidth = 2.5 / z;
-  ctx.stroke();
-  // Borde interior blanco
-  ctx.beginPath();
-  ctx.moveTo(wsPts[0].x, wsPts[0].y);
-  for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
-  if (_edCropPts.length >= 3) ctx.closePath();
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  ctx.lineWidth = 1.2 / z;
-  ctx.stroke();
-
-  // Nodos
-  const hr = 7 / z;
-  wsPts.forEach((p, i) => {
-    const isActive = i === _edCropDragIdx;
-    const r = isActive ? hr * 1.5 : hr;
-    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = isActive ? '#f97316' : '#3b82f6';
-    ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = (isActive ? 2.5 : 1.5) / z; ctx.stroke();
-  });
-
-  ctx.restore();
-}
-
-// Hit-test unificado para el polígono de recorte.
-// Mismo patrón que _edLineHitTest: nodos primero, segmentos después.
-// Devuelve {type:'node', idx} | {type:'seg', segIdx, ix, iy} | null
-function _edCropHitTest(nx, ny) {
-  const pw = edPageW(), ph = edPageH();
-  const z  = edCamera.z;
-  const n  = _edCropPts.length;
-  if (n === 0) return null;
-  const HIT_NODE = 22; // px de pantalla
-  const HIT_SEG  = 18;
-
-  // 1. Nodos — el más cercano dentro del radio
-  let bestDist = HIT_NODE, bestIdx = -1;
-  for (let i = 0; i < n; i++) {
-    const p = _edCropPts[i];
-    const d = Math.hypot((nx - p.x) * pw, (ny - p.y) * ph) * z;
-    if (d < bestDist) { bestDist = d; bestIdx = i; }
-  }
-  if (bestIdx >= 0) return { type: 'node', idx: bestIdx };
-
-  // 2. Segmentos — proyección perpendicular (igual que _edLineHitTest)
-  if (n < 2) return null;
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    if (j === 0 && n < 3) continue; // no cerrar si < 3 puntos
-    const ax = _edCropPts[i].x, ay = _edCropPts[i].y;
-    const bx = _edCropPts[j].x, by = _edCropPts[j].y;
-    const abxPx = (bx - ax) * pw, abyPx = (by - ay) * ph;
-    const apxPx = (nx - ax) * pw, apyPx = (ny - ay) * ph;
-    const abLen2 = abxPx * abxPx + abyPx * abyPx;
-    if (abLen2 < 0.0001) continue;
-    const t = Math.max(0, Math.min(1, (apxPx * abxPx + apyPx * abyPx) / abLen2));
-    const dist = Math.hypot(apxPx - t * abxPx, apyPx - t * abyPx) * z;
-    if (dist < HIT_SEG) {
-      return { type: 'seg', segIdx: i, ix: ax + t * (bx - ax), iy: ay + t * (by - ay) };
-    }
-  }
-  return null;
-}
-
-function _edCropHandleCanvasTap(nx, ny) {
-  if (!_edCropMode) return false;
-  // Si estábamos arrastrando, absorber el tap-end sin añadir vértice
-  if (_edCropDragging) { _edCropLastTapSeg = -1; _edCropLastTapTime = 0; return true; }
-  const hit = _edCropHitTest(nx, ny);
-  if (hit && hit.type === 'node') {
-    // Tap sobre nodo → el drag lo gestiona Start; aquí solo absorber
-    _edCropLastTapSeg = -1; _edCropLastTapTime = 0;
-    return true;
-  }
-  if (hit && hit.type === 'seg') {
-    // Doble tap sobre segmento → insertar nodo en posición exacta del toque
-    const _now = Date.now();
-    const _same = _edCropLastTapSeg === hit.segIdx && (_now - _edCropLastTapTime) < 400;
-    if (_same) {
-      _edCropLastTapSeg = -1; _edCropLastTapTime = 0;
-      _edCropPts.splice(hit.segIdx + 1, 0, { x: hit.ix, y: hit.iy });
-      _edCropPushHistory();
-      _edCropRenderPanel();
-      edRedraw();
-    } else {
-      _edCropLastTapSeg = hit.segIdx;
-      _edCropLastTapTime = _now;
-    }
-    return true;
-  }
-  // Tap en vacío → añadir nuevo vértice al final
-  _edCropLastTapSeg = -1; _edCropLastTapTime = 0;
-  _edCropPts.push({ x: nx, y: ny });
-  _edCropPushHistory();
-  _edCropRenderPanel();
-  edRedraw();
-  return true;
-}
-
-// Llamado desde edOnStart cuando _edCropMode está activo
-function _edCropHandleCanvasStart(nx, ny) {
-  if (!_edCropMode) return false;
-  const hit = _edCropHitTest(nx, ny);
-  if (hit && hit.type === 'node') {
-    // Nodo → iniciar drag
-    _edCropDragIdx = hit.idx;
-    _edCropDragging = false;
-    return true;
-  }
-  return false; // segmento o vacío → Tap lo gestiona
-}
-
-// Llamado desde edOnMove cuando _edCropMode está activo
-function _edCropHandleCanvasMove(nx, ny) {
-  if (!_edCropMode || _edCropDragIdx < 0) return false;
-  _edCropDragging = true;
-  _edCropPts[_edCropDragIdx] = { x: nx, y: ny };
-  edRedraw();
-  return true;
-}
-
-// Llamado desde edOnEnd cuando _edCropMode está activo
-function _edCropHandleCanvasEnd() {
-  if (!_edCropMode) return false;
-  if (_edCropDragIdx >= 0) {
-    const _wasDragging = _edCropDragging;
-    _edCropDragIdx  = -1;
-    _edCropDragging = false;
-    if (_wasDragging) _edCropPushHistory(); // solo si hubo movimiento real
-    edRedraw();
-    return true;
-  }
-  return false;
-}
-
-function _edApplyCrop() {
-  const la  = _edCropLayer;
-  const pw  = edPageW(), ph = edPageH();
-  const pts = _edCropPts;
-  if (!la || pts.length < 3) return;
-
-  // Función de finalización — se llama cuando todas las imágenes han cargado
-  const _wasDrawLayer = la && la.type === 'draw';
-  const _finish = (newLayer) => {
-    if (newLayer) {
-      // Para DrawLayer: _edApplyCropDraw ya sustituyó el original por dlOutside,
-      // insertamos dlInside (newLayer) justo después del dlOutside (que está en origIdx)
-      const origIdx = edLayers.indexOf(_edCropLayer !== null ? _edCropLayer : la);
-      const insertAt = origIdx >= 0 ? origIdx + 1 : edLayers.length;
-      edLayers.splice(insertAt, 0, newLayer);
-      edPages[edCurrentPage].layers = edLayers;
-      edSelectedIdx = insertAt;
-    }
-    _edCropMode         = false;
-    _edCropLayer        = null;
-    _edCropPts          = [];
-    _edCropDragIdx      = -1;
-    _edCropDragging     = false;
-    _edCropLastTapSeg   = -1;
-    _edCropLastTapTime  = 0;
-    _edCropHistory      = [];
-    _edCropHistIdx      = -1;
-    // Limpiar mapa de punteros: el toque en el botón "Aplicar" (fuera del canvas)
-    // no genera pointerup en el canvas, dejando punteros fantasma que rompen los gestos
-    if(window._edActivePointers) window._edActivePointers.clear();
-    edPinching    = false;
-    edPinchScale0 = null;
-    clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
-    if (_wasDrawLayer) {
-      // Congelar TODOS los DrawLayers resultantes del recorte → StrokeLayers.
-      // Así no quedan DrawLayers huérfanos ni bloqueos de UI.
-      _edFreezeAllDrawLayers();
-      edActiveTool = 'select';
-      edCanvas.className = '';
-      const _bc = $('edBrushCursor'); if(_bc) _bc.style.display = 'none';
-      edDrawBarHide();
-      _cofSetOn(false); _edOffsetHide();
-      _edDrawUnlockUI();
-      _edPropsOverlayHide();
-      edRenderOptionsPanel('props');
-    } else {
-      _edDrawUnlockUI();
-      _edPropsOverlayHide();
-      edPushHistory(); // snapshot DESPUÉS
-      edRenderOptionsPanel('props');
-    }
-    _edResetCameraToFit();
-    edRedraw();
-    edToast('Recorte creado ✓');
-  };
-
-  if (la.type === 'image') {
-    _edApplyCropImage(la, pts, pw, ph, _finish);
-  } else if (la.type === 'stroke') {
-    const newLayer = _edApplyCropStroke(la, pts, pw, ph);
-    _finish(newLayer); // stroke es síncrono, llamar directamente
-  } else if (la.type === 'draw') {
-    _edApplyCropDraw(la, pts, pw, ph, _finish);
-  } else {
-    _finish(null);
-  }
-}
-
-function _edApplyCropImage(la, pts, pw, ph, _onDone) {
-  const img = la.img;
-  if (!img || !img.naturalWidth) return null;
-  const iw = img.naturalWidth, ih = img.naturalHeight;
-  const rot = (la.rotation || 0) * Math.PI / 180;
-  const lw = la.width * pw, lh = la.height * ph;
-  const cos = Math.cos(-rot), sin = Math.sin(-rot);
-
-  // Puntos de recorte → píxeles de la imagen original
-  const localPts = pts.map(p => {
-    const dx = (p.x - la.x) * pw, dy = (p.y - la.y) * ph;
-    const lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
-    return { x: ((lx / lw) + 0.5) * iw, y: ((ly / lh) + 0.5) * ih };
-  });
-
-  const _drawPoly = (ctx) => {
-    ctx.beginPath();
-    ctx.moveTo(localPts[0].x, localPts[0].y);
-    for (let i = 1; i < localPts.length; i++) ctx.lineTo(localPts[i].x, localPts[i].y);
-    ctx.closePath();
-  };
-
-  // ── 1. Nuevo layer: solo el área del polígono ──
-  const offNew = document.createElement('canvas');
-  offNew.width = iw; offNew.height = ih;
-  const ctxNew = offNew.getContext('2d');
-  ctxNew.save(); _drawPoly(ctxNew); ctxNew.clip();
-  ctxNew.drawImage(img, 0, 0, iw, ih);
-  ctxNew.restore();
-
-  const idNew = ctxNew.getImageData(0, 0, iw, ih).data;
-  let minX=iw, minY=ih, maxX=0, maxY=0, found=false;
-  for (let y=0; y<ih; y++) for (let x=0; x<iw; x++) {
-    if (idNew[(y*iw+x)*4+3] > 4) {
-      if(x<minX)minX=x; if(x>maxX)maxX=x;
-      if(y<minY)minY=y; if(y>maxY)maxY=y; found=true;
-    }
-  }
-  if (!found) return null;
-
-  const cw = maxX-minX+1, ch = maxY-minY+1;
-  const croppedNew = document.createElement('canvas');
-  croppedNew.width = cw; croppedNew.height = ch;
-  croppedNew.getContext('2d').drawImage(offNew, minX, minY, cw, ch, 0, 0, cw, ch);
-
-  const newLayer = new ImageLayer(null, la.x, la.y, la.width);
-  newLayer.rotation = la.rotation || 0;
-  newLayer.opacity  = la.opacity  ?? 1;
-  const bcx = (minX + cw/2) / iw, bcy = (minY + ch/2) / ih;
-  const dxL = (bcx - 0.5) * lw, dyL = (bcy - 0.5) * lh;
-  newLayer.x = la.x + (dxL * Math.cos(rot) - dyL * Math.sin(rot)) / pw;
-  newLayer.y = la.y + (dxL * Math.sin(rot) + dyL * Math.cos(rot)) / ph;
-  newLayer.width  = (cw / iw) * la.width;
-  newLayer.height = (ch / ih) * la.height;
-  // ── 2. Original: restar el polígono (destination-out) ──
-  const offOrig = document.createElement('canvas');
-  offOrig.width = iw; offOrig.height = ih;
-  const ctxOrig = offOrig.getContext('2d');
-  ctxOrig.drawImage(img, 0, 0, iw, ih);
-  ctxOrig.globalCompositeOperation = 'destination-out';
-  _drawPoly(ctxOrig);
-  ctxOrig.fill();
-  ctxOrig.globalCompositeOperation = 'source-over';
-
-  // Esperar a que ambas imágenes carguen antes de llamar _onDone
-  // (el snapshot del historial debe capturar el estado FINAL, no el intermedio)
-  let _pending = 2;
-  const _checkDone = () => { if (--_pending === 0) { edRedraw(); if (_onDone) _onDone(newLayer); } };
-
-  const newImg = new Image();
-  newImg.onload = () => { newLayer.img = newImg; newLayer.src = newImg.src; _checkDone(); };
-  newImg.src = croppedNew.toDataURL('image/png');
-
-  const newOrigImg = new Image();
-  newOrigImg.onload = () => { la.img = newOrigImg; la.src = newOrigImg.src; _checkDone(); };
-  newOrigImg.src = offOrig.toDataURL('image/png');
-
-  // Devolver newLayer ahora (sin imagen aún) — se completará en el callback
-  return newLayer;
-}
-
-function _edApplyCropStroke(la, pts, pw, ph) {
-  const sc = la._canvas;
-  if (!sc) return null;
-  const sw = sc.width, sh = sc.height;
-  const rot = (la.rotation || 0) * Math.PI / 180;
-  const lw = la.width * pw, lh = la.height * ph;
-  const cos = Math.cos(-rot), sin = Math.sin(-rot);
-
-  const localPts = pts.map(p => {
-    const dx = (p.x - la.x) * pw, dy = (p.y - la.y) * ph;
-    const lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
-    return { x: ((lx / lw) + 0.5) * sw, y: ((ly / lh) + 0.5) * sh };
-  });
-
-  const _drawPoly = (ctx) => {
-    ctx.beginPath();
-    ctx.moveTo(localPts[0].x, localPts[0].y);
-    for (let i = 1; i < localPts.length; i++) ctx.lineTo(localPts[i].x, localPts[i].y);
-    ctx.closePath();
-  };
-
-  // ── 1. Nuevo layer: solo el área del polígono ──
-  const offNew = document.createElement('canvas');
-  offNew.width = sw; offNew.height = sh;
-  const ctxNew = offNew.getContext('2d');
-  ctxNew.save(); _drawPoly(ctxNew); ctxNew.clip();
-  ctxNew.drawImage(sc, 0, 0);
-  ctxNew.restore();
-
-  const idNew = ctxNew.getImageData(0, 0, sw, sh).data;
-  let minX=sw, minY=sh, maxX=0, maxY=0, found=false;
-  for (let y=0; y<sh; y++) for (let x=0; x<sw; x++) {
-    if (idNew[(y*sw+x)*4+3] > 4) {
-      if(x<minX)minX=x; if(x>maxX)maxX=x;
-      if(y<minY)minY=y; if(y>maxY)maxY=y; found=true;
-    }
-  }
-  if (!found) return null;
-
-  const cw2 = maxX-minX+1, ch2 = maxY-minY+1;
-  const cropped2 = document.createElement('canvas');
-  cropped2.width = cw2; cropped2.height = ch2;
-  cropped2.getContext('2d').drawImage(offNew, minX, minY, cw2, ch2, 0, 0, cw2, ch2);
-
-  const newLayer = new StrokeLayer(document.createElement('canvas'));
-  newLayer.rotation = la.rotation || 0;
-  newLayer.opacity  = la.opacity  ?? 1;
-  const bcx2 = (minX + cw2/2) / sw, bcy2 = (minY + ch2/2) / sh;
-  const dxL2 = (bcx2 - 0.5) * lw, dyL2 = (bcy2 - 0.5) * lh;
-  newLayer.x = la.x + (dxL2 * Math.cos(rot) - dyL2 * Math.sin(rot)) / pw;
-  newLayer.y = la.y + (dxL2 * Math.sin(rot) + dyL2 * Math.cos(rot)) / ph;
-  newLayer.width  = (cw2 / sw) * la.width;
-  newLayer.height = (ch2 / sh) * la.height;
-  newLayer._canvas = cropped2;
-  newLayer._ctx    = cropped2.getContext('2d');
-
-  // ── 2. Original: restar el polígono (destination-out) ──
-  const ctxOrig = la._canvas.getContext('2d');
-  ctxOrig.globalCompositeOperation = 'destination-out';
-  _drawPoly(ctxOrig);
-  ctxOrig.fill();
-  ctxOrig.globalCompositeOperation = 'source-over';
-
-  return newLayer;
-}
-
-function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
-  // El DrawLayer trabaja en coordenadas ABSOLUTAS del workspace (ED_CANVAS_W × ED_CANVAS_H).
-  // Convertimos los puntos fraccionarios de página a coordenadas de workspace.
-  const mxWS = edMarginX(), myWS = edMarginY();
-
-  const wsPts = pts.map(p => ({
-    x: mxWS + p.x * pw,
-    y: myWS + p.y * ph
-  }));
-
-  const W = ED_CANVAS_W, H = ED_CANVAS_H;
-  const srcCanvas = dl._canvas;
-
-  const _drawPoly = (ctx) => {
-    ctx.beginPath();
-    ctx.moveTo(wsPts[0].x, wsPts[0].y);
-    for (let i = 1; i < wsPts.length; i++) ctx.lineTo(wsPts[i].x, wsPts[i].y);
-    ctx.closePath();
-  };
-
-  // ── 1. DrawLayer "dentro": área interior del polígono ──
-  const offInside = document.createElement('canvas');
-  offInside.width = W; offInside.height = H;
-  const ctxInside = offInside.getContext('2d');
-  ctxInside.save();
-  _drawPoly(ctxInside);
-  ctxInside.clip();
-  ctxInside.drawImage(srcCanvas, 0, 0);
-  ctxInside.restore();
-
-  // ── 2. DrawLayer "fuera": área exterior del polígono ──
-  const offOutside = document.createElement('canvas');
-  offOutside.width = W; offOutside.height = H;
-  const ctxOutside = offOutside.getContext('2d');
-  ctxOutside.drawImage(srcCanvas, 0, 0);
-  ctxOutside.globalCompositeOperation = 'destination-out';
-  _drawPoly(ctxOutside);
-  ctxOutside.fill();
-  ctxOutside.globalCompositeOperation = 'source-over';
-
-  // ── 3. Verificar que haya contenido en la zona interior ──
-  const idCheck = ctxInside.getImageData(0, 0, W, H).data;
-  let hasContent = false;
-  for (let i = 3; i < idCheck.length; i += 4) { if (idCheck[i] > 4) { hasContent = true; break; } }
-  if (!hasContent) {
-    // Nada dentro del polígono — cancelar silenciosamente
-    if (_onDone) _onDone(null);
-    return;
-  }
-
-  // ── 4. Crear nuevo DrawLayer con el contenido DENTRO del polígono ──
-  const dlInside = new DrawLayer();
-  dlInside._ctx.drawImage(offInside, 0, 0);
-  dlInside.opacity = dl.opacity ?? 1;
-  dlInside.locked  = false;
-
-  // ── 5. Reemplazar el canvas del DrawLayer original con el contenido FUERA ──
-  // (crear nuevo DrawLayer para "fuera" y sustituir el original en edLayers)
-  const dlOutside = new DrawLayer();
-  dlOutside._ctx.drawImage(offOutside, 0, 0);
-  dlOutside.opacity = dl.opacity ?? 1;
-  dlOutside.locked  = dl.locked || false;
-
-  // Sustituir el original (dl) por dlOutside en el array de layers
-  const page = edPages[edCurrentPage];
-  const origIdx = page ? page.layers.indexOf(dl) : -1;
-  if (origIdx >= 0) {
-    page.layers.splice(origIdx, 1, dlOutside);
-    edLayers = page.layers;
-    // Asegurarse de que la referencia en _edCropLayer apunta al nuevo
-    _edCropLayer = dlOutside;
-  }
-
-  // El _finish de _edApplyCrop insertará dlInside justo después de dlOutside
-  if (_onDone) _onDone(dlInside);
-}
-
 function edDeletePage(){
   if(edPages.length<=1){edToast('Necesitas al menos una página');return;}
   edConfirm('¿Eliminar esta hoja?', ()=>{
@@ -4075,23 +2552,7 @@ function _edRenderPageThumb(canvas, page, pageIdx){
   const _textAlpha=page.textLayerOpacity??1;
   page.layers.forEach(l=>{
     if(!l||l.type==='text'||l.type==='bubble') return;
-    if(l.type==='gif'){
-      if(l._oc && l._ready && l._oc.width > 0){
-        // Canvas limpio sin transform para evitar problemas de coordenadas
-        const _gc = document.createElement('canvas');
-        _gc.width = pw; _gc.height = ph;
-        const _gx2 = l.x * pw - (l.width  * pw) / 2;
-        const _gy2 = l.y * ph - (l.height * ph) / 2;
-        _gc.getContext('2d').drawImage(l._oc, _gx2, _gy2, l.width*pw, l.height*ph);
-        // Resetear transform para compositar el canvas limpio sobre off
-        offCtx.save();
-        offCtx.setTransform(1,0,0,1,0,0);
-        offCtx.globalAlpha = l.opacity ?? 1;
-        offCtx.drawImage(_gc, 0, 0);
-        offCtx.restore();
-        offCtx.setTransform(1,0,0,1,-mx,-my);
-      }
-    } else if(l.type==='image')  l.draw(offCtx,off);
+    if(l.type==='image')       l.draw(offCtx,off);
     else if(l.type==='draw')   l.draw(offCtx);
     else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
     else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
@@ -4141,70 +2602,6 @@ function edAddImage(file){
   };
   reader.readAsDataURL(file);
 }
-/* ── Insertar GIF animado ── */
-function edAddGif(file, onLayerReady) {
-  if (!file) return;
-  if (!window.GifDecoder) { edToast('GIF no soportado en este navegador'); return; }
-  const gifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-  const reader = new FileReader();
-  reader.onload = ev => {
-    const gifSrc = ev.target.result;
-    edToast('Procesando GIF…');
-    const layer = new GifLayer(gifKey, 0.5, 0.5, 0.7);
-    layer.load(gifSrc, () => {
-      if (layer._oc) {
-        const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-        const natW = layer._oc.width || 1, natH = layer._oc.height || 1;
-        layer.width  = 0.7;
-        layer.height = 0.7 * (natH / natW) * (pw / ph);
-        if (layer.height > 0.85) {
-          const s = 0.85 / layer.height;
-          layer.height = 0.85; layer.width = 0.7 * s;
-        }
-      }
-      const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
-      if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, layer); edSelectedIdx = firstTextIdx; }
-      else { edLayers.push(layer); edSelectedIdx = edLayers.length - 1; }
-      // Guardar dataUrl en IndexedDB (no en localStorage — puede ser varios MB)
-      _gifIdbSave(gifKey, gifSrc).catch(e => console.warn('GIF IDB:', e));
-      if (typeof onLayerReady === 'function') onLayerReady(layer);
-      edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
-      requestAnimationFrame(() => edRedraw()); // asegurar primer frame visible
-      edToast('GIF añadido ✓ (' + (layer._frames.length) + ' frames)');
-    });
-  };
-  reader.readAsDataURL(file);
-}
-
-/* ── IndexedDB para GIFs (dataUrls grandes, no caben en localStorage) ── */
-const _GIF_DB = 'cxGifs'; let _gifDb = null;
-function _gifIdbOpen() {
-  if (_gifDb) return Promise.resolve(_gifDb);
-  return new Promise((res, rej) => {
-    const r = indexedDB.open(_GIF_DB, 1);
-    r.onupgradeneeded = e => e.target.result.createObjectStore('gifs');
-    r.onsuccess = e => { _gifDb = e.target.result; res(_gifDb); };
-    r.onerror   = e => rej(e.target.error);
-  });
-}
-function _gifIdbSave(key, dataUrl) {
-  return _gifIdbOpen().then(db => new Promise((res, rej) => {
-    const tx = db.transaction('gifs','readwrite');
-    tx.objectStore('gifs').put(dataUrl, key);
-    tx.oncomplete = () => res(); tx.onerror = e => rej(e.target.error);
-  }));
-}
-function _gifIdbLoad(key) {
-  return _gifIdbOpen().then(db => new Promise((res, rej) => {
-    const r = db.transaction('gifs').objectStore('gifs').get(key);
-    r.onsuccess = e => res(e.target.result || null);
-    r.onerror   = e => rej(e.target.error);
-  }));
-}
-// Exponer como globals para supabase-client.js
-window._gifIdbSave = _gifIdbSave;
-window._gifIdbLoad = _gifIdbLoad;
-
 /* Insertar capa en la posición más alta, justo debajo de textos/bocadillos */
 function _edInsertLayerAbove(layer) {
   // Insertar justo antes del DrawLayer activo (si existe) o antes del primer texto
@@ -4409,8 +2806,6 @@ function edMirrorSelected(){
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
   if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
-  // Si el modo recorte está activo, cancelarlo antes de eliminar
-  if(_edCropMode){ _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edDrawUnlockUI(); _edPropsOverlayHide(); }
   const _delType=edLayers[edSelectedIdx]?.type;
   edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
   // Si era shape/line con barra flotante activa, limpiar y desbloquear
@@ -4429,13 +2824,9 @@ function edDeleteSelected(){
    ══════════════════════════════════════════ */
 function edCoords(e){
   const src = e.touches ? e.touches[0] : e;
-  // sx: canvas siempre tiene left=0 en el shell, clientX no necesita ajuste.
-  // sy: usar _edCanvasTop cacheado síncronamente en edFitCanvas.
-  //     Más fiable que style.top (puede quedar desactualizado entre layout
-  //     y el siguiente evento) y que getBoundingClientRect (puede incluir
-  //     scroll del contenedor en algunos navegadores Android).
+  // Coordenadas de pantalla (el canvas cubre todo el viewport)
   const sx = src.clientX;
-  const sy = src.clientY - _edCanvasTop;
+  const sy = src.clientY - parseFloat(edCanvas.style.top || 0);
   // Convertir pantalla → workspace
   const w = edScreenToWorld(sx, sy);
   // Convertir workspace → coordenadas de página (0-1)
@@ -4468,8 +2859,6 @@ function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
   edPinching = true;
   _edPinchHappened = true; // marcar que hubo pinch — cancelar drag al soltar
-  // Cancelar timer de recorte pendiente — es un pinch, no un tap
-  if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
   edPinchDist0  = _pinchDist(window._edActivePointers);
   edPinchAngle0 = _pinchAngle(window._edActivePointers);
   // Centro del pinch en coordenadas de pantalla
@@ -4479,9 +2868,8 @@ function edPinchStart(e) {
   edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
   // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
-  // Durante recorte: forzar modo cámara (no escalar el objeto que se recorta)
-  const la = (_edCropMode || !isDrawTool && edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.locked) ? null
-    : (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
+  // LOCK: objeto bloqueado — no capturar snapshot para resize/rotate por pinch
+  const la = (!isDrawTool && edSelectedIdx >= 0 && !edLayers[edSelectedIdx]?.locked) ? edLayers[edSelectedIdx] : null;
   // T1: si hay LineLayer en construcción, usarla como objeto pincheable
   const _laForPinch = la || (_edLineLayer && edActiveTool==='line' ? _edLineLayer : null);
   edPinchScale0 = _laForPinch ? { w: _laForPinch.width, h: _laForPinch.height, rot: _laForPinch.rotation||0,
@@ -4578,7 +2966,7 @@ function edPinchMove(e) {
         // usando el mismo método que edCoords (resta el top del canvas)
         const pw=edPageW(), ph=edPageH();
         const z=edPinchCamera0.z;
-        const canvasTop = _edCanvasTop;
+        const canvasTop = parseFloat(edCanvas?.style.top || 0);
         const dxScreen = ctr.x - edPinchCenter0.x;
         const dyScreen = (ctr.y - canvasTop) - (edPinchCenter0.y - canvasTop);
         const dxNorm = dxScreen / (pw * z);
@@ -4607,8 +2995,7 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom ──
-    // En modo recorte el pinch siempre mueve la cámara (el layer está seleccionado pero no debe escalar)
-    const _haySeleccion = !_edCropMode && ((edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer);
+    const _haySeleccion = (edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer;
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
@@ -4675,7 +3062,8 @@ function _edGearPos(la){
   const wy = edMarginY() + (la.y - la.height/2) * ph;
   // Convertir workspace → screen con la cámara
   const s = edWorldToScreen(wx, wy);
-  return { cx: s.x, ty: s.y + _edCanvasTop };
+  const canvasTop = parseFloat(edCanvas.style.top || 0);
+  return { cx: s.x, ty: s.y + canvasTop };
 }
 
 // Gear icon eliminado — se usa doble toque / long press
@@ -4704,6 +3092,10 @@ function _edScrollbarsDraw(){
   if(window._edIsTouch){ _edHideHTMLScrollbars(); return; }
   if(!edCanvas) return;
   const W = edCanvas.width, H = edCanvas.height;
+  const wsW = ED_CANVAS_W * edCamera.z;
+  const wsH = ED_CANVAS_H * edCamera.z;
+  const visLeft = -edCamera.x;
+  const visTop  = -edCamera.y;
 
   const hBar   = document.getElementById('ed-hscroll');
   const hThumb = document.getElementById('ed-hscroll-thumb');
@@ -4711,44 +3103,27 @@ function _edScrollbarsDraw(){
   const vThumb = document.getElementById('ed-vscroll-thumb');
   if(!hBar || !vBar) return;
 
-  // Siempre visibles en PC
-  hBar.style.display = 'block';
-  vBar.style.display = 'block';
+  const needH = wsW > W + 1;
+  const needV = wsH > H + 1;
+  hBar.style.display = needH ? 'block' : 'none';
+  vBar.style.display = needV ? 'block' : 'none';
 
-  // Espacio navegable: workspace escalado + margen = 40% del canvas en cada lado
-  // Esto permite hacer pan más allá de los bordes del workspace a cualquier zoom.
-  const MARGIN_RATIO = 0.4;
-  const wsW = ED_CANVAS_W * edCamera.z;
-  const wsH = ED_CANVAS_H * edCamera.z;
-  const marginX = W * MARGIN_RATIO;
-  const marginY = H * MARGIN_RATIO;
-  // Espacio total navegable en px de pantalla
-  const totalNavW = wsW + marginX * 2;
-  const totalNavH = wsH + marginY * 2;
-  // Posición actual del borde izquierdo/superior del canvas en el espacio navegable
-  // camera.x = desplazamiento del workspace respecto al canvas → workspace empieza en camera.x
-  // En el espacio navegable, el origen del workspace está en marginX
-  // posNav = marginX - camera.x  (cuánto del espacio navegable está a la izquierda del viewport)
-  const posNavX = marginX - edCamera.x;
-  const posNavY = marginY - edCamera.y;
-
-  const trackW = W - 12; // 12px para la barra vertical
-  const trackH = H - 12; // 12px para la barra horizontal
-
-  if(hThumb && totalNavW > 0){
-    const ratio  = Math.min(1, W / totalNavW);
-    const thumbW = Math.max(20, trackW * ratio);
-    const maxPos = Math.max(0, totalNavW - W);
-    const frac   = maxPos > 0 ? Math.max(0, Math.min(1, posNavX / maxPos)) : 0;
+  if(needH && hThumb && wsW > 0){
+    const trackW = W - (needV ? 12 : 0);
+    const ratio  = Math.min(1, W / wsW);
+    const thumbW = Math.max(30, trackW * ratio);
+    const maxScroll = wsW - W;
+    const frac = maxScroll > 0 ? Math.max(0, Math.min(1, visLeft / maxScroll)) : 0;
     hThumb.style.left  = (frac * (trackW - thumbW)) + 'px';
     hThumb.style.width = thumbW + 'px';
   }
 
-  if(vThumb && totalNavH > 0){
-    const ratio  = Math.min(1, H / totalNavH);
-    const thumbH = Math.max(20, trackH * ratio);
-    const maxPos = Math.max(0, totalNavH - H);
-    const frac   = maxPos > 0 ? Math.max(0, Math.min(1, posNavY / maxPos)) : 0;
+  if(needV && vThumb && wsH > 0){
+    const trackH = H - (needH ? 12 : 0);
+    const ratio  = Math.min(1, H / wsH);
+    const thumbH = Math.max(30, trackH * ratio);
+    const maxScroll = wsH - H;
+    const frac = maxScroll > 0 ? Math.max(0, Math.min(1, visTop / maxScroll)) : 0;
     vThumb.style.top    = (frac * (trackH - thumbH)) + 'px';
     vThumb.style.height = thumbH + 'px';
   }
@@ -4765,29 +3140,21 @@ function _edInitHTMLScrollbars(){
   if(window._edIsTouch) return;
   let _sbAxis = null, _sbDragStart = 0, _sbCamStart = 0;
 
-  const MARGIN_RATIO_SB = 0.4;
   function getMetrics(axis){
     if(!edCanvas) return null;
     const W = edCanvas.width, H = edCanvas.height;
     const wsW = ED_CANVAS_W * edCamera.z;
     const wsH = ED_CANVAS_H * edCamera.z;
     if(axis === 'h'){
-      const marginX   = W * MARGIN_RATIO_SB;
-      const totalNavW = wsW + marginX * 2;
-      const trackW    = W - 12;
-      const thumbW    = Math.max(20, trackW * Math.min(1, W / totalNavW));
-      const maxPos    = Math.max(0, totalNavW - W);
-      // camVal: posición actual en el espacio navegable (cuánto scroll hay aplicado)
-      const camVal    = marginX - edCamera.x;
-      return { trackLen: trackW, thumbLen: thumbW, maxScroll: maxPos, camVal, marginX };
+      const needV = wsH > H + 1;
+      const trackW = W - (needV ? 12 : 0);
+      const thumbW = Math.max(30, trackW * Math.min(1, W / wsW));
+      return { trackLen: trackW, thumbLen: thumbW, maxScroll: Math.max(0, wsW - W), camVal: -edCamera.x };
     } else {
-      const marginY   = H * MARGIN_RATIO_SB;
-      const totalNavH = wsH + marginY * 2;
-      const trackH    = H - 12;
-      const thumbH    = Math.max(20, trackH * Math.min(1, H / totalNavH));
-      const maxPos    = Math.max(0, totalNavH - H);
-      const camVal    = marginY - edCamera.y;
-      return { trackLen: trackH, thumbLen: thumbH, maxScroll: maxPos, camVal, marginY };
+      const needH = wsW > W + 1;
+      const trackH = H - (needH ? 12 : 0);
+      const thumbH = Math.max(30, trackH * Math.min(1, H / wsH));
+      return { trackLen: trackH, thumbLen: thumbH, maxScroll: Math.max(0, wsH - H), camVal: -edCamera.y };
     }
   }
 
@@ -4795,9 +3162,8 @@ function _edInitHTMLScrollbars(){
     const m = getMetrics(axis);
     if(!m) return;
     const clamped = Math.max(0, Math.min(m.maxScroll, val));
-    // Convertir posición navegable → camera
-    if(axis === 'h') edCamera.x = (m.marginX !== undefined ? m.marginX : 0) - clamped;
-    else             edCamera.y = (m.marginY !== undefined ? m.marginY : 0) - clamped;
+    if(axis === 'h') edCamera.x = -clamped;
+    else             edCamera.y = -clamped;
     edRedraw();
   }
 
@@ -4872,8 +3238,11 @@ function _edHandleDoubleTap(idx){
     edPushHistory();
     const dl=la.toDrawLayer();
     if(la.locked) dl.locked = true; // propagar bloqueo al convertir
-    // T9: Quitar stroke e insertar DrawLayer en la MISMA posición (preservar orden de capas)
-    page.layers.splice(idx, 1, dl);  // reemplaza en sitio
+    // Quitar stroke e insertar DrawLayer en posición más alta (bajo textos)
+    page.layers.splice(idx, 1);
+    const firstTextIdx2 = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
+    if(firstTextIdx2 >= 0) page.layers.splice(firstTextIdx2, 0, dl);
+    else page.layers.push(dl);
     edLayers=page.layers;
     edSelectedIdx=-1;
     edActiveTool='draw';
@@ -4905,16 +3274,6 @@ function _edHandleDoubleTap(idx){
     edDrawColor = la.color || '#000000';
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
-  } else if (la && la.type === 'gif') {
-    // GifLayer importado: abrir editor GIF
-    edSelectedIdx = idx;
-    edRedraw();
-    gcpOpen(idx);
-  } else if (la && la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames)) {
-    // ImageLayer de animación: abrir editor GIF para re-editar
-    edSelectedIdx = idx;
-    edRedraw();
-    gcpOpen(idx);
   } else {
     // image, text, bubble y cualquier otro tipo
     edSelectedIdx = idx;
@@ -5053,9 +3412,38 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
 function edOnStart(e){
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
   if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
-  // ── REGLAS: prioridad máxima — siempre antes de cualquier bloqueo de UI ──
-  // (Las guías deben funcionar aunque draw-active esté activo o el panel props
-  //  esté abierto. Igual que el borde del lienzo: siempre por encima de todo.)
+  // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
+  // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
+  const tgt = e.target;
+  // Ignorar si el click NO está dentro de editorShell (modales, header, etc.)
+  if(!tgt.closest('#editorShell')) return;
+  // Si la barra de menús está bloqueada (draw-active), ignorar clicks en su zona
+  // aunque pointer-events:none haga que el target sea el elemento de debajo
+  const _menuBar=$('edMenuBar');
+  if(_menuBar && $('editorShell')?.classList.contains('draw-active')){
+    const _mbr=_menuBar.getBoundingClientRect();
+    if(e.clientX>=_mbr.left&&e.clientX<=_mbr.right&&e.clientY>=_mbr.top&&e.clientY<=_mbr.bottom) return;
+  }
+  // Ignorar elementos de UI dentro del editor
+  const isUI = tgt.closest('#edMenuBar')      ||
+               tgt.closest('#edTopbar')       ||
+               tgt.closest('#edOptionsPanel') ||
+               tgt.closest('.ed-fulloverlay') ||
+               tgt.closest('.ed-dropdown')    ||
+               tgt.closest('#edGearIcon')     ||
+               tgt.closest('#edBrushCursor')  ||
+               tgt.closest('.ed-float-btn')   ||
+               tgt.closest('#edDrawBar')      ||
+               tgt.closest('#edShapeBar')     ||
+               tgt.closest('#edb-size-pop')   ||
+               tgt.closest('#esb-slider-panel') ||
+               tgt.closest('#edb-palette-pop') ||
+               tgt.closest('#ed-hsl-picker')   ||
+               tgt.closest('#editorViewer')   ||
+               tgt.closest('#edProjectModal') ||
+               tgt.closest('#edConfirmModal');
+  if(isUI) return;
+
   // ── REGLAS: si hay modo mover activo desde el panel, absorber el primer toque ──
   if(_edRuleDrag && _edRuleDrag.part === 'line' && _edRuleDrag.offX === undefined) {
     // El movimiento real empieza en edOnMove; aquí solo bloqueamos selección de objetos
@@ -5083,27 +3471,6 @@ function edOnStart(e){
     const _rHit = _edRulesHit(_rc.px, _rc.py, e.pointerType === 'touch');
     if(_rHit) {
       e.stopPropagation();
-      // ── Hit sobre nodo compartido ──
-      if(_rHit.nodeId !== undefined) {
-        const _n = edRuleNodes.find(n => n.id === _rHit.nodeId); if(!_n) return;
-        const _now2 = Date.now();
-        const _isDouble2 = (e.detail >= 2) ||
-          (window._edNodeLastTap && (_now2 - window._edNodeLastTap < 350) &&
-           window._edNodeLastTapId === _rHit.nodeId);
-        if(_isDouble2) {
-          window._edNodeLastTap = 0; clearTimeout(window._edNodeTapTimer);
-          _edRulesNodePanel(_n); return;
-        }
-        window._edNodeLastTap = _now2; window._edNodeLastTapId = _rHit.nodeId;
-        clearTimeout(window._edNodeTapTimer);
-        window._edNodeTapTimer = setTimeout(() => {
-          window._edNodeLastTap = 0; window._edNodeTapTimer = null;
-          if(_n.locked) return; // nodo bloqueado: no iniciar drag
-          _edRuleDrag = { nodeId: _n.id, offX: _rc.px - _n.x, offY: _rc.py - _n.y };
-          edRedraw();
-        }, 300);
-        return;
-      }
       const _r = edRules.find(r => r.id === _rHit.ruleId);
       if(!_r) return;
 
@@ -5160,77 +3527,6 @@ function edOnStart(e){
       };
       edRedraw();
       return;
-    }
-  }
-
-  
-
-  // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
-  // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
-  const tgt = e.target;
-  // Ignorar si el click NO está dentro de editorShell (modales, header, etc.)
-  if(!tgt.closest('#editorShell')) return;
-  // Si la barra de menús está bloqueada (draw-active), ignorar clicks en su zona
-  // aunque pointer-events:none haga que el target sea el elemento de debajo
-  const _menuBar=$('edMenuBar');
-  if(_menuBar && $('editorShell')?.classList.contains('draw-active')){
-    const _mbr=_menuBar.getBoundingClientRect();
-    if(e.clientX>=_mbr.left&&e.clientX<=_mbr.right&&e.clientY>=_mbr.top&&e.clientY<=_mbr.bottom) return;
-  }
-  // Ignorar elementos de UI dentro del editor
-  const isUI = tgt.closest('#edMenuBar')      ||
-               tgt.closest('#edTopbar')       ||
-               tgt.closest('#edOptionsPanel') ||
-               tgt.closest('.ed-fulloverlay') ||
-               tgt.closest('.ed-dropdown')    ||
-               tgt.closest('#edGearIcon')     ||
-               tgt.closest('#edBrushCursor')  ||
-               tgt.closest('.ed-float-btn')   ||
-               tgt.closest('#edDrawBar')      ||
-               tgt.closest('#edShapeBar')     ||
-               tgt.closest('#edb-size-pop')   ||
-               tgt.closest('#esb-slider-panel') ||
-               tgt.closest('#edb-palette-pop') ||
-               tgt.closest('#ed-hsl-picker')   ||
-               tgt.closest('#editorViewer')   ||
-               tgt.closest('#edProjectModal') ||
-               tgt.closest('#edConfirmModal');
-  if(isUI) return;
-
-  // ── MODO RECORTE: interceptar todos los toques en el canvas ──
-  if (_edCropMode) {
-    if (e.pointerType === 'touch') {
-      // Registrar el puntero ANTES de cualquier return para que el pinch funcione
-      if(!window._edActivePointers) window._edActivePointers = new Map();
-      window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-
-      if (window._edActivePointers.size >= 2) {
-        // Segundo dedo: cancelar timer de recorte y dejar pasar al pinch
-        clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null;
-        // Caer al bloque de pinch más abajo — NO hacer return
-      } else {
-        // Primer dedo: esperar 120ms para detectar si llega segundo dedo
-        const _eSavedCrop = e;
-        window._edCropTouchMoved = false;
-        clearTimeout(window._edCropTouchTimer);
-        window._edCropTouchTimer = setTimeout(() => {
-          window._edCropTouchTimer = null;
-          if (!_edCropMode) return;
-          if (window._edActivePointers && window._edActivePointers.size > 1) return;
-          if (window._edCropTouchMoved) return;
-          const _cc = edCoords(_eSavedCrop);
-          const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-          if (_nodeHit) return;
-          _edCropHandleCanvasTap(_cc.nx, _cc.ny);
-        }, 120);
-        return; // primer dedo espera — ya está registrado en _edActivePointers
-      }
-    } else {
-      // PC/ratón: inmediato
-      const _cc = edCoords(e);
-      const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-      if (_nodeHit) return;
-      if (_edCropHandleCanvasTap(_cc.nx, _cc.ny)) return;
     }
   }
 
@@ -5316,8 +3612,6 @@ function edOnStart(e){
     if(window._edFillPending) window._edFillPending = null;
     // Cancelar timer de draw/eraser pendiente — era un pinch
     if(window._edDrawTouchTimer){ clearTimeout(window._edDrawTouchTimer); window._edDrawTouchTimer = null; }
-    // Cancelar timer de recorte pendiente — era un pinch, no un tap
-    if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
     if(edActiveTool==='multiselect' && edMultiSel.length){
       edMultiDragging=false; edMultiDragOffs=[];
@@ -5335,10 +3629,6 @@ function edOnStart(e){
     }
     // Cancelar el timer de añadir nodo si el segundo dedo llega antes de que expire
     clearTimeout(window._edLineTouchTimer);
-    // Cancelar timer de recorte si había uno pendiente
-    if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
-    // Cancelar drag de nodo de recorte si estaba activo
-    if(_edCropMode && _edCropDragIdx >= 0){ _edCropDragIdx = -1; _edCropDragging = false; }
     // Sistema de pan para LineLayer (en construcción o seleccionado)
     const _panTarget = _edLineLayer ||
       (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line' ? edLayers[edSelectedIdx] : null);
@@ -5474,52 +3764,10 @@ function edOnStart(e){
       edMultiSel=[]; edMultiBbox=null; edMultiGroupRot=0;
       edSelectedIdx = -1;
       edRedraw();
-    } else if(e.shiftKey && e.pointerType !== 'touch'){
-      // Shift+clic fuera del bbox en multiselect: buscar objeto y hacer toggle
-      const _sfound = edLayers.map((_,i)=>i).reverse().find(i=>{
-        const _la=edLayers[i]; return _la && !_la.type?.startsWith('_') && _la.contains && _la.contains(c.nx,c.ny);
-      });
-      if(_sfound !== undefined){
-        const _si = edMultiSel.indexOf(_sfound);
-        if(_si >= 0) edMultiSel.splice(_si, 1);
-        else         edMultiSel.push(_sfound);
-        if(edMultiSel.length >= 2){
-          _msRecalcBbox();
-          _edUpdateMultiSelPanel();
-        } else if(edMultiSel.length === 1){
-          edSelectedIdx = edMultiSel[0];
-          edMultiSel = []; edMultiBbox = null;
-          edActiveTool = 'select'; edCanvas.className = '';
-          $('edMultiSelBtn')?.classList.remove('active');
-          _edDrawLockUI(); _edPropsOverlayShow();
-          edRenderOptionsPanel('props');
-        } else {
-          _msClear(); edActiveTool='select'; edCanvas.className='';
-          $('edMultiSelBtn')?.classList.remove('active');
-        }
-      }
-      edRedraw();
     } else {
-      // Tocar en vacío fuera del bbox
-      if(e.pointerType === 'touch'){
-        // Táctil: mantener herramienta multiselect y comenzar nueva rubber band
-        _msClear();
-        edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
-      } else {
-        // PC: deseleccionar y volver a modo select
-        _msClear();
-        edActiveTool = 'select'; edCanvas.className = '';
-        // Si hay un objeto bajo el clic, seleccionarlo inmediatamente
-        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && edLayers[i].contains(c.nx,c.ny));
-        if(_hit !== undefined){
-          edSelectedIdx = _hit;
-          _edDrawLockUI(); _edPropsOverlayShow();
-          edRenderOptionsPanel('props');
-        } else {
-          // Vacío real → iniciar rubber band
-          edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
-        }
-      }
+      // Herramienta multiselect normal: limpiar e iniciar nueva rubber band
+      _msClear();
+      edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
       edRedraw();
     }
     return;
@@ -5587,9 +3835,7 @@ function edOnStart(e){
       }, 120);
       return;
     }
-    // PC/ratón: inmediato — verificar buttons===1 (perfect-freehand pattern)
-    // Con tabletas Wacom, algunos eventos pointerdown llegan con buttons=0 (hover spurio)
-    if(e.buttons === 0 && e.pointerType === 'pen') return; // ignorar hover sin contacto
+    // PC/ratón: inmediato
     edStartPaint(e);return;
   }
   if(edActiveTool==='shape'){
@@ -5613,22 +3859,6 @@ function edOnStart(e){
     // Si el toque cae sobre un nodo, no usar timer — procesar inmediatamente
     if(e.pointerType === 'touch' && _edLineLayer && edSelectedIdx>=0 && edLayers[edSelectedIdx]===_edLineLayer){
       const _isT2 = true;
-      // Comprobación anticipada del primer nodo con radio ampliado (táctil, polígono abierto)
-      if(!_edLineLayer.closed && _edLineLayer.points.length >= 3){
-        const _absF = _edLineLayer.absPoints()[0];
-        const _pw0=edPageW(), _ph0=edPageH(), _z0=edCamera.z;
-        const _df=Math.hypot((c.nx-_absF.x)*_pw0,(c.ny-_absF.y)*_ph0)*_z0;
-        if(_df < 44){
-          // Toque cerca del primer nodo → pasar a _edLineAddPoint con isTouch=true
-          clearTimeout(window._edLineTouchTimer);
-          window._edLineTouchTimer = setTimeout(()=>{
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-            if(edActiveTool !== 'line') return;
-            _edLineAddPoint(c.nx, c.ny, true);
-          }, 120);
-          return;
-        }
-      }
       const _hitNode = _edLineHitTest(_edLineLayer, c.nx, c.ny, _isT2);
       if(_hitNode && _hitNode.type==='node'){
         // Si es el primer nodo y hay 3+ puntos → dejar pasar para cerrar el polígono
@@ -5663,12 +3893,12 @@ function edOnStart(e){
       window._edLineTouchTimer = setTimeout(()=>{
         if(!window._edActivePointers || window._edActivePointers.size > 1) return;
         if(edActiveTool !== 'line') return;
-        _edLineAddPoint(_cx, _cy, true);
+        _edLineAddPoint(_cx, _cy);
       }, 120);
       return;
     }
     // PC/ratón: inmediato
-    _edLineAddPoint(c.nx, c.ny, false);
+    _edLineAddPoint(c.nx, c.ny);
     return;
   }
   const c=edCoords(e);
@@ -6077,25 +4307,12 @@ function edOnStart(e){
       found = i; break;
     }
   }
-  // Pasada 1 (exacta): resto de layers de mayor a menor índice.
-  // DrawLayer usa exactMode=true → radio=1px, no da positivo en huecos.
-  // Esto permite que capas inferiores sean seleccionables a través de huecos de DrawLayer.
+  // Luego el resto, de mayor a menor índice
   if(found < 0){
     for(let i = edLayers.length - 1; i >= 0; i--){
       const l = edLayers[i];
       if(l.type==='text'||l.type==='bubble') continue;
-      const _hit = l.type==='draw' ? l.contains(c.nx,c.ny,true) : l.contains(c.nx,c.ny);
-      if(_hit){ found = i; break; }
-    }
-  }
-  // Pasada 2 (expandida): solo si pasada 1 no encontró nada.
-  // DrawLayer usa radio=10px para facilitar selección de trazos finos.
-  if(found < 0){
-    for(let i = edLayers.length - 1; i >= 0; i--){
-      const l = edLayers[i];
-      if(l.type==='text'||l.type==='bubble') continue;
-      if(l.type!=='draw') continue; // solo DrawLayer tiene radio expandido; el resto ya se probó
-      if(l.contains(c.nx,c.ny,false)){ found = i; break; }
+      if(l.contains(c.nx,c.ny)){ found = i; break; }
     }
   }
   if(found>=0){
@@ -6119,13 +4336,6 @@ function edOnStart(e){
         }, 120);
       }
       return;
-    }
-    // Panel de propiedades abierto en táctil: bloquear toda selección/interacción del canvas
-    if(e.pointerType === 'touch'){
-      const _ppMode = $('edOptionsPanel')?.dataset.mode;
-      if(_ppMode === 'props'){
-        edRedraw(); return; // absorber — solo OK cierra el panel
-      }
     }
     // ── Objeto bloqueado: mostrar candado o abrir panel ──
     if(_fla && _fla.locked){
@@ -6213,42 +4423,7 @@ function edOnStart(e){
         return;
       }
     }
-    // ── Shift+clic (solo PC): añadir/quitar de la multiselección ──
-    if(e.shiftKey && e.pointerType !== 'touch'){
-      const _inSel = edMultiSel.indexOf(found);
-      if(edActiveTool === 'multiselect' && edMultiSel.length){
-        // Toggle del objeto en la selección existente
-        if(_inSel >= 0) edMultiSel.splice(_inSel, 1);
-        else            edMultiSel.push(found);
-      } else {
-        // Primera vez con Shift: combinar objeto previo + nuevo
-        const _prev = edSelectedIdx >= 0 ? [edSelectedIdx] : [];
-        edMultiSel = [...new Set([..._prev, found])];
-      }
-      edSelectedIdx = -1;
-      if(edMultiSel.length >= 2){
-        edActiveTool = 'multiselect';
-        edCanvas.className = 'tool-multiselect';
-        $('edMultiSelBtn')?.classList.add('active');
-        _msRecalcBbox();
-        _edUpdateMultiSelPanel();
-      } else if(edMultiSel.length === 1){
-        // Quedó uno solo → volver a selección normal
-        edSelectedIdx = edMultiSel[0];
-        edMultiSel = []; edMultiBbox = null;
-        edActiveTool = 'select'; edCanvas.className = '';
-        $('edMultiSelBtn')?.classList.remove('active');
-        _edDrawLockUI(); _edPropsOverlayShow();
-        edRenderOptionsPanel('props');
-      } else {
-        _msClear();
-        edActiveTool = 'select'; edCanvas.className = '';
-        $('edMultiSelBtn')?.classList.remove('active');
-      }
-      edRedraw(); return;
-    }
     edSelectedIdx = found;
-    edMultiSelAnchor = found; // ancla para Shift+flechas
     // Si es LineLayer con radios, actualizar bbox antes de interactuar
     const _fl=edLayers[found];
     if(_fl&&_fl.type==='line'){
@@ -6318,10 +4493,13 @@ function edOnStart(e){
     if($('edDrawBar')?.classList.contains('visible')){
       edSelectedIdx = -1; edRedraw(); return;
     }
-    // Si el panel de propiedades está abierto: no cerrar al tocar fuera (ningún tipo)
+    // Si el panel de texto/bocadillo está abierto: no cerrar al tocar fuera
     const _panelMode=$('edOptionsPanel')?.dataset.mode;
     if(_panelMode==='props'){
-      edRedraw(); return; // mantener panel abierto — OK es la única salida
+      const _la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+      if(_la&&(_la.type==='text'||_la.type==='bubble')){
+        edRedraw(); return; // mantener panel abierto, no deseleccionar
+      }
     }
     // Si el panel vectorial (line/shape) está abierto: mantener selección del objeto
     // Un toque en zona vacía NO debe perder edSelectedIdx — los nodos dejarían de ser accesibles
@@ -6333,12 +4511,9 @@ function edOnStart(e){
     edRenderOptionsPanel();
   }
   // PC/ratón clic en vacío → marcar para posible rubber band en edOnMove
-  // Condición: no táctil, dentro del editor, sin objeto seleccionado, herramienta select
-  // tgt puede ser el canvas O la zona gris del workspace (editorCanvasWrap)
-  if(e.pointerType !== 'touch' && tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
+  if(e.pointerType !== 'touch' && tgt === edCanvas && edSelectedIdx < 0 && edActiveTool === 'select'){
     const c = edCoords(e);
     edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
-    window._edRubberBandEndPos = null;
   }
   edRedraw();
 }
@@ -6348,40 +4523,6 @@ function edOnMove(e){
     _edTouchMoved = true;
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
-    // Flag local del recorte: solo marcar si no hay drag de nodo activo
-    if(_edCropMode && window._edCropTouchTimer && _edCropDragIdx < 0){
-      window._edCropTouchMoved = true;
-    }
-  }
-  // ── DRAG DE NODO DE RECORTE ────────────────────────────────
-  if (_edCropMode && _edCropDragIdx >= 0) {
-    // Si hay 2+ dedos (pinch), cancelar el drag de nodo y ceder al pinch de cámara
-    if (e.pointerType === 'touch' && window._edActivePointers && window._edActivePointers.size >= 2) {
-      _edCropDragIdx = -1; _edCropDragging = false;
-    } else {
-      e.preventDefault();
-      const _cmc = edCoords(e);
-      _edCropHandleCanvasMove(_cmc.nx, _cmc.ny);
-      return;
-    }
-  }
-  // ── DRAG DE NODO COMPARTIDO ────────────────────────────────
-  if(_edRuleDrag && _edRuleDrag.nodeId !== undefined) {
-    e.preventDefault();
-    const c = edCoords(e);
-    const _n = edRuleNodes.find(n => n.id === _edRuleDrag.nodeId);
-    if(_n) {
-      _n.x = c.px - _edRuleDrag.offX;
-      _n.y = c.py - _edRuleDrag.offY;
-      for(const rid of _n.ruleIds) {
-        const _rr = edRules.find(r => r.id === rid);
-        if(!_rr) continue;
-        if(_rr.nodeA === _n.id) { _rr.x1 = _n.x; _rr.y1 = _n.y; }
-        if(_rr.nodeB === _n.id) { _rr.x2 = _n.x; _rr.y2 = _n.y; }
-      }
-      edRedraw();
-    }
-    return;
   }
   // ── DRAG DE REGLA ──────────────────────────────────────────
   if(_edRuleDrag && _edRuleDrag.part !== 'move-pending') {
@@ -6401,45 +4542,10 @@ function edOnMove(e){
       } else if(_edRuleDrag.part === 'b') {
         r.x2 = c.px; r.y2 = c.py;
       } else { // 'line' — mover todo
-        const _newX1 = c.px - _edRuleDrag.offX;
-        const _newY1 = c.py - _edRuleDrag.offY;
-        // Si la regla pertenece a un grupo, mover todo el grupo en bloque
-        const _nodeIds = [];
-        if(r.nodeA) _nodeIds.push(r.nodeA);
-        if(r.nodeB) _nodeIds.push(r.nodeB);
-        if(_nodeIds.length) {
-          const _dx = _newX1 - r.x1, _dy = _newY1 - r.y1;
-          // Recoger todas las reglas del grupo
-          const _groupRuleIds = new Set([r.id]);
-          for(const nid of _nodeIds) {
-            const _n = edRuleNodes.find(n => n.id === nid);
-            if(_n) _n.ruleIds.forEach(rid => _groupRuleIds.add(rid));
-          }
-          // Mover todas las reglas del grupo
-          for(const rid of _groupRuleIds) {
-            const _rr = edRules.find(rr => rr.id === rid);
-            if(!_rr) continue;
-            _rr.x1 += _dx; _rr.y1 += _dy;
-            _rr.x2 += _dx; _rr.y2 += _dy;
-          }
-          // Mover todos los nodos del grupo
-          const _allNodeIds = new Set(_nodeIds);
-          for(const rid of _groupRuleIds) {
-            const _rr = edRules.find(rr => rr.id === rid);
-            if(!_rr) continue;
-            if(_rr.nodeA) _allNodeIds.add(_rr.nodeA);
-            if(_rr.nodeB) _allNodeIds.add(_rr.nodeB);
-          }
-          for(const nid of _allNodeIds) {
-            const _n = edRuleNodes.find(n => n.id === nid);
-            if(_n) { _n.x += _dx; _n.y += _dy; }
-          }
-        } else {
-          r.x1 = _newX1;
-          r.y1 = _newY1;
-          r.x2 = r.x1 + _edRuleDrag.dx;
-          r.y2 = r.y1 + _edRuleDrag.dy;
-        }
+        r.x1 = c.px - _edRuleDrag.offX;
+        r.y1 = c.py - _edRuleDrag.offY;
+        r.x2 = r.x1 + _edRuleDrag.dx;
+        r.y2 = r.y1 + _edRuleDrag.dy;
       }
       edRedraw();
     }
@@ -6450,7 +4556,6 @@ function edOnMove(e){
     e.preventDefault();
     const c=edCoords(e);
     edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
-    window._edRubberBandEndPos = {clientX: e.clientX, clientY: e.clientY};
     edRedraw(); return;
   }
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
@@ -6465,7 +4570,6 @@ function edOnMove(e){
     if(edRubberBand){
       e.preventDefault();
       edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
-      window._edRubberBandEndPos = {clientX: e.clientX, clientY: e.clientY};
       edRedraw(); return;
     }
     if(edMultiDragging && edMultiDragOffs.length){
@@ -6923,65 +5027,8 @@ function edOnEnd(e){
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
   }
-  // ── FIN DE DRAG DE NODO DE RECORTE ────────────────────────
-  if (_edCropMode && _edCropDragIdx >= 0) {
-    _edCropHandleCanvasEnd();
-    return;
-  }
   if(_edRuleDrag) {
-    const _finDrag = _edRuleDrag;
     _edRuleDrag = null;
-    // ── Fusión de círculos (T21 parte 2) ──
-    if(_finDrag.part === 'a' || _finDrag.part === 'b') {
-      const _rDragged = edRules.find(r => r.id === _finDrag.ruleId);
-      // Una guía que ya pertenece a un grupo no puede fusionarse por su otro extremo
-      if(_rDragged && !_rDragged.nodeA && !_rDragged.nodeB) {
-        const _ex = _finDrag.part === 'a' ? _rDragged.x1 : _rDragged.x2;
-        const _ey = _finDrag.part === 'a' ? _rDragged.y1 : _rDragged.y2;
-        // Umbral de fusión: ampliado en táctil (dedo) para facilitar agrupamiento
-        const _isFinDragTouch = edLastPointerIsTouch;
-        const _rPx = (_ED_RULE_R * 2) / Math.max(0.1, edCamera.z);
-        const _fusionThresh = _isFinDragTouch ? (28 / Math.max(0.1, edCamera.z)) : _rPx * 0.2;
-        // Radio del nodo compartido para hit de incorporación (también ampliado en táctil)
-        const _nPx = _isFinDragTouch ? (32 / Math.max(0.1, edCamera.z)) : (_ED_RULE_R * 1.5) / Math.max(0.1, edCamera.z);
-        let _fused = false;
-
-        // CASO A: arrastrar sobre un nodo compartido existente → incorporar al grupo
-        for(const _node of edRuleNodes) {
-          if(_fused) break;
-          // La guía arrastrada no debe estar ya en ese nodo
-          if(_node.ruleIds.includes(_rDragged.id)) continue;
-          if(Math.hypot(_ex - _node.x, _ey - _node.y) <= _nPx) {
-            // Anclar el extremo arrastrado al centro del nodo
-            if(_finDrag.part === 'a') { _rDragged.x1 = _node.x; _rDragged.y1 = _node.y; _rDragged.nodeA = _node.id; }
-            else                      { _rDragged.x2 = _node.x; _rDragged.y2 = _node.y; _rDragged.nodeB = _node.id; }
-            _node.ruleIds.push(_rDragged.id);
-            _fused = true;
-          }
-        }
-
-        // CASO B: arrastrar sobre el círculo libre de otra guía → crear nodo nuevo
-        if(!_fused) {
-          for(const _rOther of edRules) {
-            if(_rOther.id === _rDragged.id || _fused) continue;
-            for(const [_ox, _oy, _oPart] of [[_rOther.x1, _rOther.y1, 'a'], [_rOther.x2, _rOther.y2, 'b']]) {
-              if(_oPart === 'a' && _rOther.nodeA) continue;
-              if(_oPart === 'b' && _rOther.nodeB) continue;
-              if(Math.hypot(_ex - _ox, _ey - _oy) <= _fusionThresh) {
-                const _nx = (_ex + _ox) / 2, _ny = (_ey + _oy) / 2;
-                const _nid = ++_edRuleNodeId;
-                edRuleNodes.push({ id: _nid, x: _nx, y: _ny, ruleIds: [_rDragged.id, _rOther.id], locked: false });
-                if(_finDrag.part === 'a') { _rDragged.x1 = _nx; _rDragged.y1 = _ny; _rDragged.nodeA = _nid; }
-                else                      { _rDragged.x2 = _nx; _rDragged.y2 = _ny; _rDragged.nodeB = _nid; }
-                if(_oPart === 'a') { _rOther.x1 = _nx; _rOther.y1 = _ny; _rOther.nodeA = _nid; }
-                else               { _rOther.x2 = _nx; _rOther.y2 = _ny; _rOther.nodeB = _nid; }
-                _fused = true; break;
-              }
-            }
-          }
-        }
-      }
-    }
     edRedraw();
   }
   // Cancelar timer de doble tap de regla si el dedo se levantó sin segundo tap
@@ -7006,29 +5053,24 @@ function edOnEnd(e){
   }
   // ── RUBBER BAND en modo select (PC) → activar multiselect ──
   if(edActiveTool==='select' && edRubberBand){
-    const _rbPos = window._edRubberBandEndPos || {clientX: window.innerWidth/2, clientY: window.innerHeight/2};
-    window._edRubberBandEndPos = null;
     const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
     const ry0=Math.min(edRubberBand.y0,edRubberBand.y1);
     const rx1=Math.max(edRubberBand.x0,edRubberBand.x1);
     const ry1=Math.max(edRubberBand.y0,edRubberBand.y1);
     edRubberBand=null;
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
-      const _found=[];
-      edLayers.forEach((la,i)=>{ if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
-      if(_found.length===1){
-        // Un solo objeto → selección normal
-        edSelectedIdx=_found[0];
-        _edDrawLockUI(); _edPropsOverlayShow();
-        edRenderOptionsPanel('props');
-      } else if(_found.length>=2){
-        edMultiSel=_found;
-        edSelectedIdx=-1;
+      edMultiSel=[];
+      edLayers.forEach((la,i)=>{
+        if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
+      });
+      if(edMultiSel.length>=2){
         edActiveTool='multiselect';
-        edCanvas.className='tool-multiselect';
         _msRecalcBbox();
-        $('edMultiSelBtn')?.classList.add('active');
+        const btn=$('edMultiSelBtn');
+        if(btn) btn.classList.add('active');
         _edUpdateMultiSelPanel();
+      } else {
+        edMultiSel=[];
       }
     }
     edRedraw(); return;
@@ -7050,10 +5092,7 @@ function edOnEnd(e){
         });
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
-      if(edMultiSel.length >= 2){
-        window._edRubberBandEndPos = null;
-        _edUpdateMultiSelPanel();
-      }
+      if(edMultiSel.length >= 2) _edUpdateMultiSelPanel();
       edRedraw();
     }
     if(edMultiDragging||edMultiResizing||edMultiRotating){
@@ -7301,14 +5340,16 @@ let _vsPreSessionLayers = new Set(); // referencias a layers vectoriales previos
 function _vsInit(isNew) {
   const page = edPages[edCurrentPage];
   if (!page) return;
-
   if (isNew) {
+    // Sesión nueva: todos los layers vectoriales previos quedan protegidos
     _vsPreSessionLayers = new Set(
       page.layers.filter(l => l.type === 'line' || l.type === 'shape')
     );
     _vsHistory = [_vsSnapshot()];
     _vsHistIdx = 0;
   } else {
+    // Reedición: proteger todos los layers previos EXCEPTO el que se edita
+    // El objeto reeditado puede fusionarse con los nuevos; los demás NO
     const _currentLayer = edSelectedIdx >= 0 ? page.layers[edSelectedIdx] : null;
     _vsPreSessionLayers = new Set(
       page.layers.filter(l =>
@@ -7566,12 +5607,16 @@ function _edGetOrCreateDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return null;
   let dl = page.layers.find(l => l.type === 'draw');
   if(dl){
-    // T9: DrawLayer ya existe — usarlo en su posición actual sin moverlo
-    edLayers = page.layers;
-    return dl;
+    // Mover el DrawLayer existente: quitarlo de donde está
+    const dlIdx = page.layers.indexOf(dl);
+    page.layers.splice(dlIdx, 1);
+  } else {
+    dl = new DrawLayer();
   }
-  // No existe: crear nuevo e insertar antes del primer texto (o al final)
-  dl = new DrawLayer();
+  // Insertar en la posición más alta posible: justo antes del primer texto,
+  // pero si no hay textos, al final. Los textos siempre van al tope.
+  // Nota: shapes/lines pueden estar después de textos — el draw va al final del todo
+  // excepto textos/bocadillos que siempre deben estar encima
   const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
   if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
   else page.layers.push(dl);
@@ -7822,7 +5867,7 @@ function edColorErase(nx, ny){
   edRedraw();
 }
 let _edLineAddTimer = null; // retardo táctil para detectar segundo dedo
-function _edLineAddPoint(nx, ny, isTouch=false){
+function _edLineAddPoint(nx, ny){
   if(!_edLineLayer){
     // Crear capa con el primer punto como centro
     _edLineLayer = new LineLayer();
@@ -7837,8 +5882,7 @@ function _edLineAddPoint(nx, ny, isTouch=false){
     const absFirst = _edLineLayer.absPoints()[0];
     const pw=edPageW(), ph=edPageH();
     const dx=(nx-absFirst.x)*pw, dy=(ny-absFirst.y)*ph;
-    const _closeR = isTouch ? 44 : 15; // radio de cierre ampliado en táctil
-    if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)*edCamera.z<_closeR){
+    if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)<15){
       _edLineLayer.closed=true;
       _edFinishLine();
       // Al cerrar un polígono → modo selección para editar vértices
@@ -7849,16 +5893,11 @@ function _edLineAddPoint(nx, ny, isTouch=false){
         // Solo si el panel ya estaba abierto en modo line; NO abrir si veníamos de la barra flotante
         const _panelOpen2 = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
         const _shapeBarWasOpen = $('edShapeBar')?.classList.contains('visible');
-        if(_panelOpen2 && !_shapeBarWasOpen) _edActivateLineTool(false, true); // true=isCreating: no reiniciar _vsPreSessionLayers
+        if(_panelOpen2 && !_shapeBarWasOpen) _edActivateLineTool(false);
       }
       return;
     }
     _edLineLayer.addAbsPoint(nx, ny);
-    // Modo segmento: confirmar automáticamente al llegar a 2 puntos
-    if(_edLineType === 'segment' && _edLineLayer.points.length >= 2){
-      _edFinishLine();
-      return;
-    }
   }
   _edShapePushHistory(); // guardar estado tras cada nodo para deshacer/rehacer
   edRedraw();
@@ -7875,14 +5914,6 @@ function _cofShowHint(show) {
   if (!h) return;
   if (show) {
     h.innerHTML = '<b style="color:#1a8cff">Guía azul:</b> Posiciona el cursor<br><b style="color:#e02020">Guía roja:</b> Arrastra para dibujar';
-    // Posicionar debajo del topbar + panel de opciones (si está abierto)
-    const topbar = document.getElementById('edTopbar');
-    const menu   = document.getElementById('edMenuBar');
-    const panel  = document.getElementById('edOptionsPanel');
-    const topH   = topbar ? topbar.getBoundingClientRect().bottom : 0;
-    const menuH  = (menu && menu.style.display !== 'none') ? menu.getBoundingClientRect().height : 0;
-    const panelH = (panel && panel.classList.contains('open')) ? panel.getBoundingClientRect().height : 0;
-    h.style.top = (topH + menuH + panelH + 8) + 'px';
     h.style.display = 'block';
   } else {
     h.style.display = 'none';
@@ -8153,23 +6184,6 @@ function _edApplyCursorOffset(e){
   return { clientX: src2.clientX + dx, clientY: src2.clientY - dy,
            pointerType: e.pointerType, pointerId: e.pointerId, touches: null };
 }
-// T14: helper — devuelve factor de presión del lápiz (0.05–1.0).
-// Activo para pointerType==='pen' Y también para 'mouse' cuando pressure varía (Wacom en Windows
-// reporta el lápiz como mouse). Táctil siempre devuelve 1 (sin modulación).
-// Wacom con Windows Ink activado → pointerType='pen', pressure 0..1 ✓
-// Wacom con Windows Ink desactivado → pointerType='mouse', pressure 0..1 ✓  
-// Ratón real → pointerType='mouse', pressure siempre 0 o 0.5 (detectamos y devolvemos 1)
-function _edPenPressure(e) {
-  if (e.pointerType === 'touch') return 1; // táctil: sin modulación
-  const p = e.pressure ?? 0;
-  // Ratón real: pressure es siempre exactamente 0 (sin pulsar) o 0.5 (pulsado, valor fijo del estándar)
-  // Lápiz real: pressure varía continuamente entre 0 y 1
-  // Si pressure es exactamente 0.5 (valor constante de ratón) o 0, devolver 1 (sin modulación)
-  if (p === 0 || p === 0.5) return 1;
-  // Lápiz con presión real: escalar (mínimo 0.05 para que no desaparezca)
-  return Math.max(0.05, Math.min(1, p));
-}
-
 function edStartPaint(e){
   edPainting = true;
   const _pp=$('edOptionsPanel');
@@ -8182,17 +6196,11 @@ function edStartPaint(e){
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){} }
   const _drawPanelIsOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
-  // Deseleccionar cualquier objeto previo al iniciar un nuevo trazo
-  if(edSelectedIdx >= 0){ edSelectedIdx = -1; }
-  if(edMultiSel.length){ _msClear(); edActiveTool='draw'; edCanvas.className='tool-draw'; }
-  // Limpiar sesión vectorial si quedó activa (evita que BLOCKED_VS bloquee edPushHistory)
-  if(_vsHistory.length > 0){ _edShapeClearHistory(); _vsClear(); }
+  if(!_drawPanelIsOpen){ edPushHistory(); }
   const dl = _edGetOrCreateDrawLayer(); if(!dl) return;
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   const er = edActiveTool==='eraser';
-  // T14: factor de presión del lápiz (solo pen; eraser no se modula por presión)
-  const _pres = er ? 1 : _edPenPressure(e);
   // Nuevo sistema cursor: iniciar trazo directo sin offset
   if(_cof.on && isTouch){
     const c = edCoords(_eTmp);
@@ -8209,56 +6217,21 @@ function edStartPaint(e){
     _edOffsetFirstMove = true;
   } else {
     const c = edCoords(_eTmp);
-    const _baseBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
-    const _sizeBS = Math.max(1, Math.round(_baseBS * _pres));
-    _edPenPendingStroke = null;
-    if(e.pointerType === 'pen' && _cr4base === 0){
-      // Lápiz gráfico: NUNCA dibujar punto en pointerdown.
-      // Además: si pressure < umbral mínimo, ignorar el evento completamente.
-      // Patrón documentado de tldraw (PR #5693): pressure < 0.05 = hover espurio.
-      // Inicio siempre con NoDot — el dibujo real empieza en el primer pointermove
-      // con presión suficiente (lógica en edContinuePaint)
-      dl.beginStrokeNoDot(c.nx, c.ny);
-    } else {
-      dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
-      edRedraw();
-    }
+    const _sizeBS = (_cr4base > 0) ? Math.max(1, _cr4base * 2 - 1) : (er?edEraserSize:edDrawSize);
+    dl.beginStroke(c.nx, c.ny, edDrawColor, _sizeBS, er, edDrawOpacity, _cr4base);
+    edRedraw();
     _edOffsetFirstMove = false;
   }
   if(!e._skipMoveBrush) edMoveBrush(e);
 }
 function edContinuePaint(e){
   if(!edPainting) return;
-  // Máquina de estados de presión para lápiz gráfico
-  if(e.pointerType === 'pen'){
-    if(e.buttons === 0){ edSaveDrawData(); return; } // hover sin contacto
-    const _penP2 = e.pressure ?? 0;
-    if(_penP2 >= _ED_PEN_MIN_PRESSURE){
-      // Presión suficiente: cancelar timer de baja presión y permitir dibujo
-      if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
-      _edPenCanDraw = true;
-    } else {
-      // Presión baja: si ya estábamos dibujando, iniciar timer de 250ms
-      if(_edPenCanDraw && !_edPenLowPressureTimer){
-        _edPenLowPressureTimer = setTimeout(() => {
-          _edPenLowPressureTimer = null;
-          _edPenCanDraw = false;
-          edSaveDrawData();
-        }, 250);
-      }
-      // No dibujar en este evento — esperar a que suba la presión o expire el timer
-      edMoveBrush(e);
-      return;
-    }
-  }
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
   if(_edFromSaved){ _edFromSaved = false; edMoveBrush(e); return; }
   const _eTmp = _edApplyCursorOffset(e);
   const c = edCoords(_eTmp), er = edActiveTool==='eraser';
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
-  // T14: factor de presión del lápiz (solo pen; eraser no se modula)
-  const _pres = er ? 1 : _edPenPressure(e);
   // Nuevo sistema cursor: continuar trazo sin offset ni _edOffsetFirstMove
   if(_cof.on && isTouch){
     const _sz = er ? edEraserSize : edDrawSize;
@@ -8266,26 +6239,20 @@ function edContinuePaint(e){
     edRedraw();
     return;
   }
-
   if(_edOffsetFirstMove){
     _edOffsetFirstMove = false;
     const _cr4f = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
-    const _baseF = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
-    const _sizeFM = Math.max(1, Math.round(_baseF * _pres));
+    const _sizeFM = (_cr4f > 0) ? Math.max(1, _cr4f * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeFM, er, edDrawOpacity, _cr4f);
   } else {
     const _cr4c = _edCursorOffset && isTouch ? (er?edEraserSize:edDrawSize)/2 : 0;
-    const _baseC = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
-    const _sizeCS = Math.max(1, Math.round(_baseC * _pres));
+    const _sizeCS = (_cr4c > 0) ? Math.max(1, _cr4c * 2 - 1) : (er?edEraserSize:edDrawSize);
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
   edRedraw();
   edMoveBrush(e);
 }
 function edSaveDrawData(){
-  _edPenPendingStroke = null;
-  if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
-  _edPenCanDraw = false;
   edPainting = false;
   _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
   // NO llamar edPushHistory aquí — el historial global se guarda al congelar
@@ -8353,10 +6320,8 @@ function edToggleMenu(id){
     const _mode=_panel.dataset.mode;
     edCloseOptionsPanel();
     if(_mode==='draw'||_mode==='shape'||_mode==='line'){
-      // NO llamar _vsClear() ni _edShapeClearHistory() aquí:
-      // la sesión vectorial debe preservarse para que al cerrar el menú
-      // el usuario pueda seguir trabajando con los mismos objetos y fusionarlos.
-      // Solo limpiar la construcción activa (shape/line en curso) sin terminar la sesión.
+      _edShapeClearHistory&&_edShapeClearHistory();
+      if(typeof _vsClear==='function') _vsClear();
       _edShapeStart=null;_edShapePreview=null;_edPendingShape=null;
       edActiveTool='select';edCanvas.className='';
       edShapeBarHide();
@@ -8390,7 +6355,6 @@ function edToggleMenu(id){
   btn.classList.add('open');
   edMenuOpen = id;
   if(id === 'nav') edUpdateNavPages();
-  if(id === 'rules') _edRuleToggleSync();
 }
 
 function edDeactivateDrawTool(){
@@ -8471,8 +6435,6 @@ function _edShapeToLineLayer(s) {
 function _edActivateShapeTool(isNew) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
-  // Táctil: si los menús están ocultos, la barra flotante ya está visible — no abrir panel
-  if(edMinimized){ edShapeBarShow(); edRedraw(); return; }
 
   _edDrawLockUI(); // deshabilitar menús igual que en draw
 
@@ -8550,7 +6512,6 @@ function _edActivateShapeTool(isNew) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'shape';
-  edFitCanvas(); // actualizar _edCanvasTop
   _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global (objeto existente)
   if(_sel) edPushHistory(); else if(isNew) edPushHistory(); // estado previo a objeto nuevo
@@ -8605,14 +6566,6 @@ function _edActivateShapeTool(isNew) {
     _edActivateShapeTool();
   });
   $('op-shape-select')?.addEventListener('click',()=>{
-    // Cerrar modo V⟺C si estaba abierto
-    const _slVCS=$('op-shape-curve-slider');
-    if(_slVCS && _slVCS.style.display==='flex'){
-      _slVCS.style.display='none';
-      const _vcBtnS=$('op-shape-curve-btn');
-      if(_vcBtnS){ _vcBtnS.style.background='transparent'; _vcBtnS.style.color='var(--gray-700)'; _vcBtnS.style.borderColor='var(--gray-300)'; }
-      window._edCurveVertIdx=-1;
-    }
     _edShapeType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateShapeTool();
   });
@@ -8735,14 +6688,6 @@ function _edActivateShapeTool(isNew) {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
-    // Cerrar modo V⟺C si estaba abierto
-    const _slVCShape=$('op-shape-curve-slider');
-    if(_slVCShape && _slVCShape.style.display==='flex'){
-      _slVCShape.style.display='none';
-      const _vcBtnShape=$('op-shape-curve-btn');
-      if(_vcBtnShape){ _vcBtnShape.style.background='transparent'; _vcBtnShape.style.color='var(--gray-700)'; _vcBtnShape.style.borderColor='var(--gray-300)'; }
-      window._edCurveVertIdx=-1;
-    }
     // T1: limpiar _fusionId de todos los objetos (con ID actual o del objeto seleccionado)
     const _shapeFusId = _edLineFusionId || (edSelectedIdx>=0 ? edLayers[edSelectedIdx]?._fusionId : null);
     if(_shapeFusId){
@@ -8755,7 +6700,6 @@ function _edActivateShapeTool(isNew) {
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
     edShapeBarHide(); _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
-    else { _edResetCameraToFit(); }
     edRedraw();
   });
 
@@ -8816,8 +6760,6 @@ function _edActivateShapeTool(isNew) {
 function _edActivateLineTool(isNew, isCreating) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
-  // Táctil: si los menús están ocultos, la barra flotante ya está visible — no abrir panel
-  if(edMinimized){ edShapeBarShow(); edRedraw(); return; }
 
   _edDrawLockUI(); // deshabilitar menús igual que en draw
 
@@ -8827,24 +6769,19 @@ function _edActivateLineTool(isNew, isCreating) {
   const col     = _cur?.color    || edDrawColor  || '#000000';
   const lw      = _cur?.lineWidth ?? edDrawSize ?? 3;
   const opacity = _cur ? Math.round((_cur.opacity??1)*100) : 100;
-  const isSelectMode = _edLineType === 'select' && edActiveTool !== 'shape';
+  const isSelectMode = _edLineType === 'select';
   const nPoints = _edLineLayer?.points?.length || 0;
   const isClosed = _cur?.closed || false;
   const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
   const hasFill = fillCol !== 'none' && isClosed;
   const fillVal = hasFill ? fillCol : '#ffffff';
-  // canFuse: mostrar botón Fusionar si hay ≥2 objetos line cerrados en la página.
-  // Se muestra independientemente de selección y de _vsPreSessionLayers.
-  // El handler de fusión ya filtra qué objetos fusionar (solo los de sesión actual).
-  const canFuse = edLayers.filter(l => l.type==='line' && l.closed).length >= 2;
   // nSubPaths eliminado (T1: huecos son objetos independientes hasta OK)
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
   <!-- FILA 1: Tipo de objeto + selección -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
-    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='draw'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edLineType==='draw'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="Pol\u00edgono">╱</button>
-    <button id="op-line-segment-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='segment'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 5px;cursor:pointer;background:${_edLineType==='segment'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="Segmento"><svg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'><line x1='13' y1='3' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='10' y1='3' x2='13' y2='3' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='3' y1='10' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/></svg></button>
+    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${!isSelectMode&&edActiveTool!=='shape'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${!isSelectMode&&edActiveTool!=='shape'?'rgba(0,0,0,.08)':'transparent'}">╱</button>
     <button id="op-line-rect-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='rect'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='rect'?'rgba(0,0,0,.08)':'transparent'}">▭</button>
     <button id="op-line-ellipse-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
     <button id="op-line-select-btn" style="flex-shrink:0;border:2px solid ${isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${isSelectMode?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
@@ -8877,12 +6814,12 @@ function _edActivateLineTool(isNew, isCreating) {
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
     ${!isClosed?`<button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Cerrar objeto</button><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>`:''}
     <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
-    ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Fusionar objetos cerrados en uno solo con huecos">⊕ Fusionar</button>` : ''}
+    ${isClosed ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Fusionar objetos cerrados en uno solo con huecos">⊕ Fusionar</button>` : ''}
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
       <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
     </div>
-    ${!edLastPointerIsTouch ? `<span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>` : ''}
+    <span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>
   </div>
   ${isClosed?`
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -8912,7 +6849,6 @@ function _edActivateLineTool(isNew, isCreating) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'line';
-  edFitCanvas(); // actualizar _edCanvasTop
   _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global
   // - isNew: primera apertura (panel cerrado) → guardar estado antes de crear objeto
@@ -8951,14 +6887,7 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── Modo dibujar / seleccionar ──
   $('op-line-draw-btn')?.addEventListener('click',()=>{
-    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
     _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
-    _edLineFusionId = null;
-    _edActivateLineTool();
-  });
-  $('op-line-segment-btn')?.addEventListener('click',()=>{
-    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
-    _edLineType='segment'; edActiveTool='line'; edCanvas.className='tool-line';
     _edLineFusionId = null;
     _edActivateLineTool();
   });
@@ -8973,27 +6902,6 @@ function _edActivateLineTool(isNew, isCreating) {
     _edActivateLineTool();
   });
   $('op-line-select-btn')?.addEventListener('click',()=>{
-    // Cerrar modo V⟺C si estaba abierto
-    const _slVC=$('op-line-curve-slider');
-    if(_slVC && _slVC.style.display==='flex'){
-      _slVC.style.display='none';
-      const _vcBtn=$('op-line-curve-btn');
-      if(_vcBtn){ _vcBtn.style.background='transparent'; _vcBtn.style.color='var(--gray-700)'; _vcBtn.style.borderColor='var(--gray-300)'; }
-      window._edCurveVertIdx=-1;
-    }
-    // T19: si hay una recta en construcción, confirmarla como objeto abierto independiente
-    if(_edLineLayer) {
-      if(_edLineLayer.points.length >= 2) {
-        _edFinishLine(); // confirma sin cerrar; _edFinishLine ya pone modo selección
-        return;
-      } else {
-        // Menos de 2 puntos: descartar
-        const _ix = edLayers.indexOf(_edLineLayer);
-        if(_ix >= 0) edLayers.splice(_ix, 1);
-        _edLineLayer = null;
-        edRedraw();
-      }
-    }
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     _edActivateLineTool();
   });
@@ -9085,6 +6993,9 @@ function _edActivateLineTool(isNew, isCreating) {
   window._edCurveVertIdx=-1; // resetear al abrir el panel
   // ── Fusionar — combina todos los objetos cerrados en uno con huecos ──
   $('op-line-fuse-btn')?.addEventListener('click', () => {
+    // Solo fusionar objetos de la sesión actual (no los que ya existían antes)
+    // Los objetos previos están serializados en _vsHistory[0].vecLayers
+    // Solo fusionar objetos creados en la sesión actual (no los previos)
     const _closedLayers = edLayers.filter(l =>
       l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l)
     );
@@ -9165,13 +7076,6 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
-    // Cerrar modo V⟺C si estaba abierto
-    const _slVCL=$('op-line-curve-slider');
-    if(_slVCL && _slVCL.style.display==='flex'){
-      _slVCL.style.display='none';
-      const _vcBtnL=$('op-line-curve-btn');
-      if(_vcBtnL){ _vcBtnL.style.background='transparent'; _vcBtnL.style.color='var(--gray-700)'; _vcBtnL.style.borderColor='var(--gray-300)'; }
-    }
     window._edCurveVertIdx=-1;
     _edFinishLine();
     // Aplicar relleno a todos los objetos cerrados de la sesión al confirmar
@@ -9187,7 +7091,6 @@ function _edActivateLineTool(isNew, isCreating) {
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     edShapeBarHide(); _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
-    else { _edResetCameraToFit(); }
     edRedraw();
   });
 
@@ -9292,35 +7195,6 @@ function _edFinishLine() {
   }
 }
 
-// Congela TODOS los DrawLayers de la página actual, de abajo a arriba.
-// Usado tras un recorte de DrawLayer, que deja temporalmente 2 DrawLayers.
-function _edFreezeAllDrawLayers(){
-  const page = edPages[edCurrentPage]; if(!page) return;
-  // Iterar hasta que no quede ningún DrawLayer en la página
-  let safety = 20; // máximo 20 iteraciones para evitar bucle infinito
-  while(safety-- > 0){
-    const dlIdx = page.layers.findIndex(l => l.type === 'draw');
-    if(dlIdx < 0) break;
-    const dl = page.layers[dlIdx];
-    const bb = StrokeLayer._boundingBox(dl._canvas);
-    if(!bb){
-      // DrawLayer vacío: eliminar sin congelar
-      page.layers.splice(dlIdx, 1);
-      edLayers = page.layers;
-      continue;
-    }
-    const sl = new StrokeLayer(dl._canvas);
-    if(dl.locked) sl.locked = true;
-    if(dl.groupId) sl.groupId = dl.groupId;
-    // Sustituir DrawLayer por StrokeLayer en la misma posición
-    page.layers.splice(dlIdx, 1, sl);
-    edLayers = page.layers;
-  }
-  _edDrawClearHistory();
-  edSelectedIdx = -1;
-  edPushHistory(true); // force: resultado del recorte siempre se guarda
-}
-
 function _edFreezeDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dlIdx = page.layers.findIndex(l => l.type === 'draw');
@@ -9339,14 +7213,18 @@ function _edFreezeDrawLayer(){
   const sl = new StrokeLayer(dl._canvas);
   if(dl.locked) sl.locked = true;
   if(dl.groupId) sl.groupId = dl.groupId;
-  // T9: Quitar el DrawLayer y reinsertar el StrokeLayer en la MISMA posición (preservar orden de capas)
-  page.layers.splice(dlIdx, 1, sl);  // reemplaza en sitio
+  // Quitar el DrawLayer y reinsertar el StrokeLayer en la posición más alta (bajo textos)
+  page.layers.splice(dlIdx, 1);
+  const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
+  if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, sl);
+  else page.layers.push(sl);
   edLayers = page.layers;
   edSelectedIdx = page.layers.indexOf(sl);
   // Registrar el resultado final (StrokeLayer) en el historial global.
   // Este es el único punto donde el dibujo "se confirma" — los trazos
   // intermedios solo viven en edDrawHistory (historial local del panel).
-  edPushHistory(true); // force: el resultado del dibujo siempre se guarda
+  edPushHistory();
+  _edShapePushHistory();
   edRedraw();
 }
 
@@ -9359,34 +7237,8 @@ function edCloseOptionsPanel(){
     const _mode=panel.dataset.mode;
     panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode;
     if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
-    if(_mode==='crop'){
-      const _wdl = _edCropLayer && _edCropLayer.type === 'draw';
-      const _cropSelIdx = edSelectedIdx;
-      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
-      if(window._edActivePointers) window._edActivePointers.clear();
-      edPinching=false; edPinchScale0=null;
-      clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer=null;
-      if(!_wdl){
-        _edDrawUnlockUI(); _edPropsOverlayHide();
-        // Restaurar overlay y panel si hay objeto seleccionado
-        if(_cropSelIdx>=0 && _cropSelIdx<edLayers.length){
-          edSelectedIdx=_cropSelIdx;
-          _edDrawLockUI(); _edPropsOverlayShow();
-          edRenderOptionsPanel('props');
-        }
-      } else {
-        _edPropsOverlayHide();
-        edRenderOptionsPanel('draw');
-      }
-    }
-    // Limpiar sesión de fusión vectorial y sesión _vs* al cerrar el panel
-    // sin OK (toque fuera, swipe). El OK ya llama _vsClear() explícitamente.
-    // Sin esto, _vsHistory queda sucio y edPushHistory queda bloqueado
-    // impidiendo guardar movimientos/resize/rotate de cualquier objeto posterior.
-    if(_mode==='line' || _mode==='shape'){
-      _edLineFusionId = null;
-      if(typeof _vsClear === 'function') _vsClear();
-    }
+    // Limpiar sesión de fusión vectorial al cerrar el panel
+    if(_mode==='line' || _mode==='shape') _edLineFusionId = null;
   }
   _edFocusDone = false;
   edPanelUserClosed = true;
@@ -9584,30 +7436,6 @@ function edRenderOptionsPanel(mode){
     if(panel.dataset.mode==='shape' || panel.dataset.mode==='line'){
       return;
     }
-    // Si el panel estaba en modo recorte, limpiar estado
-    if(panel.dataset.mode==='crop'){
-      const _wdl2 = _edCropLayer && _edCropLayer.type === 'draw';
-      const _cropSelIdx2 = edSelectedIdx;
-      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
-      if(window._edActivePointers) window._edActivePointers.clear();
-      edPinching=false; edPinchScale0=null;
-      clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer=null;
-      if(!_wdl2){
-        _edDrawUnlockUI(); _edPropsOverlayHide();
-        panel.classList.remove('open');panel.innerHTML='';
-        if(_cropSelIdx2>=0 && _cropSelIdx2<edLayers.length){
-          edSelectedIdx=_cropSelIdx2;
-          _edDrawLockUI(); _edPropsOverlayShow();
-          edRenderOptionsPanel('props');
-        } else { requestAnimationFrame(edFitCanvas); }
-        return;
-      } else {
-        _edPropsOverlayHide();
-        panel.classList.remove('open');panel.innerHTML='';
-        edRenderOptionsPanel('draw');
-        return;
-      }
-    }
     panel.classList.remove('open');panel.innerHTML='';
     requestAnimationFrame(edFitCanvas);return;
   }
@@ -9706,8 +7534,6 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
     <button id="op-draw-mirror"
       title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
-    <button id="op-draw-crop"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Recortar">✂</button>
     <button id="op-draw-undo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-draw-redo"
@@ -9723,7 +7549,6 @@ function edRenderOptionsPanel(mode){
     const _drawPanelAlreadyOpen = panel.classList.contains('open') && panel.dataset.mode === 'draw';
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
-    edFitCanvas(); // actualizar _edCanvasTop
     _edInitSliderBubbles(panel);
     // Centrar cámara en el contenido del DrawLayer al abrir el panel,
     // pero NO si ya estaba abierto en modo draw (cambio lápiz↔goma no mueve la cámara)
@@ -9929,11 +7754,6 @@ function edRenderOptionsPanel(mode){
 
     // ── Deshacer / Rehacer ──
     $('op-draw-undo')?.addEventListener('click', edDrawUndo);
-    $('op-draw-crop')?.addEventListener('click',()=>{
-      const _page = edPages[edCurrentPage]; if(!_page) return;
-      const _dl = _page.layers.find(l=>l.type==='draw'); if(!_dl) return;
-      _edStartCrop(_dl);
-    });
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
     _edDrawUpdateUndoRedoBtns();
 
@@ -9945,7 +7765,6 @@ function edRenderOptionsPanel(mode){
       edCloseOptionsPanel();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       if(edMinimized){ window._edMinimizedDrawMode = null; edMaximize(); }
-      else { _edResetCameraToFit(); }
     });
 
     // ── Duplicar ──
@@ -9979,15 +7798,10 @@ function edRenderOptionsPanel(mode){
         if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
         edActiveTool='select'; edCanvas.className='';
         const cur=$('edBrushCursor');if(cur)cur.style.display='none';
-        // Desactivar cursor offset si estaba activo (evita que el cursor quede visible)
-        if(_cof.on) _cofSetOn(false);
         delete panel.dataset.mode;
         _edDrawClearHistory();
         _edDrawUnlockUI();
-        _edPropsOverlayHide();
-        edCloseOptionsPanel();
-        edPushHistory(); // guardar eliminación en historial global
-        edRedraw();
+        edCloseOptionsPanel(); _edShapePushHistory(); edRedraw();
         edToast('Dibujo eliminado');
       });
     });
@@ -10022,7 +7836,6 @@ function edRenderOptionsPanel(mode){
           <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
         </div>`;
       panel.classList.add('open');
-      edFitCanvas(); // actualizar _edCanvasTop
       // Eliminar todo el grupo
       $('pp-grp-del')?.addEventListener('click',()=>{
         edConfirm('¿Eliminar el grupo completo?', ()=>{
@@ -10211,7 +8024,6 @@ function edRenderOptionsPanel(mode){
       </div>
       <div class="op-prop-row">
         <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
-        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
     } else if(la.type==='image'){
       html+=`
@@ -10221,9 +8033,6 @@ function edRenderOptionsPanel(mode){
       <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
-      </div>
-      <div class="op-prop-row">
-        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
     } else if(la.type==='shape'){
       html+=`
@@ -10259,9 +8068,6 @@ function edRenderOptionsPanel(mode){
 
     panel.innerHTML=html;
     panel.classList.add('open');
-    // Actualizar _edCanvasTop síncronamente: el panel ya está open, el layout
-    // ha cambiado, edFitCanvas recalcula totalBarsH y actualiza _edCanvasTop.
-    edFitCanvas();
 
     // (voiceCount es independiente del estilo)
     // Live update
@@ -10318,8 +8124,7 @@ function edRenderOptionsPanel(mode){
         _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
       }
     });
-    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
-    $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
@@ -10359,11 +8164,6 @@ function edRenderOptionsPanel(mode){
       _edActivateLineTool();
     });
     $('pp-line-toggle-close')?.addEventListener('click',()=>{ la.closed=!la.closed; edRedraw(); edRenderOptionsPanel('props'); });
-    $('pp-rot')?.addEventListener('input',e=>{
-      const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la2)return;
-      la2.rotation=parseFloat(e.target.value)||0;
-      edRedraw();
-    });
     $('pp-opacity')?.addEventListener('input',e=>{
       la.opacity = e.target.value/100;
       const v=$('pp-opacity-val'); if(v) v.textContent=e.target.value+'%';
@@ -10383,29 +8183,6 @@ function edRenderOptionsPanel(mode){
 /* ══════════════════════════════════════════
    MINIMIZAR / BOTÓN FLOTANTE
    ══════════════════════════════════════════ */
-/* Reposiciona las barras flotantes visibles para que queden
-   completamente dentro de la pantalla (se llama tras cambios de layout). */
-function _edBarClampToScreen(){
-  const W = window.innerWidth, H = window.innerHeight;
-  const drawBar = $('edDrawBar');
-  if(drawBar && drawBar.classList.contains('visible')){
-    const bw = drawBar.offsetWidth  || 36;
-    const bh = drawBar.offsetHeight || 200;
-    _edbX = Math.max(0, Math.min(W - bw, _edbX));
-    _edbY = Math.max(0, Math.min(H - bh, _edbY));
-    drawBar.style.left = _edbX + 'px';
-    drawBar.style.top  = _edbY + 'px';
-  }
-  const shapeBar = $('edShapeBar');
-  if(shapeBar && shapeBar.classList.contains('visible')){
-    const bw = shapeBar.offsetWidth  || 36;
-    const bh = shapeBar.offsetHeight || 200;
-    _esbX = Math.max(0, Math.min(W - bw, _esbX));
-    _esbY = Math.max(0, Math.min(H - bh, _esbY));
-    shapeBar.style.left = _esbX + 'px';
-    shapeBar.style.top  = _esbY + 'px';
-  }
-}
 function edMinimize(){
   edMinimized=true;
   const menu=$('edMenuBar'),top=$('edTopbar');
@@ -10432,8 +8209,7 @@ function edMinimize(){
     }
     // Para props (imagen, texto, bocadillo, stroke): panel oculto sin barra flotante
   }
-  _edResetCameraToFit();
-  requestAnimationFrame(_edBarClampToScreen);
+  edFitCanvas();
 }
 function edMaximize(keepBar=false){
   edMinimized=false;
@@ -10449,8 +8225,7 @@ function edMaximize(keepBar=false){
     window._edMinimizedDrawMode = null;
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
-    _edResetCameraToFit();
-    requestAnimationFrame(_edBarClampToScreen);
+    edFitCanvas();
     if(mode === 'shape'){
       edShapeBarHide();
       _edActivateShapeTool(false); // false = no resetear cámara al restaurar desde barra
@@ -10460,18 +8235,8 @@ function edMaximize(keepBar=false){
     } else {
       edRenderOptionsPanel(mode);
     }
-  } else if(_vsHistory.length > 0) {
-    edShapeBarHide();
-    _edResetCameraToFit();
-    requestAnimationFrame(_edBarClampToScreen);
-    if(edActiveTool === 'shape') {
-      _edActivateShapeTool(false);
-    } else {
-      _edActivateLineTool(false);
-    }
   } else {
-    _edResetCameraToFit();
-    requestAnimationFrame(_edBarClampToScreen);
+    edFitCanvas();
   }
 }
 function edInitFloatDrag(){
@@ -10531,34 +8296,13 @@ function _edRuleClear() {
   if(!edRules.length) return;
   edConfirm('¿Borrar todas las guías de esta hoja?', ()=>{
     edRules = [];
-    edRuleNodes = [];
     _edRulesPanelClose();
     edRedraw();
   }, 'Borrar');
 }
 
 function _edRuleDelete(id) {
-  const _rDel = edRules.find(r => r.id === id);
-  if(_rDel) {
-    // Si la regla pertenece a algún nodo compartido, eliminar el grupo completo
-    const _nodeIds = [];
-    if(_rDel.nodeA) _nodeIds.push(_rDel.nodeA);
-    if(_rDel.nodeB) _nodeIds.push(_rDel.nodeB);
-    if(_nodeIds.length) {
-      // Recoger todas las reglas del grupo
-      const _groupRuleIds = new Set([id]);
-      for(const nid of _nodeIds) {
-        const _n = edRuleNodes.find(n => n.id === nid);
-        if(_n) _n.ruleIds.forEach(rid => _groupRuleIds.add(rid));
-      }
-      edRules = edRules.filter(r => !_groupRuleIds.has(r.id));
-      edRuleNodes = edRuleNodes.filter(n => !_nodeIds.includes(n.id));
-    } else {
-      edRules = edRules.filter(r => r.id !== id);
-    }
-  } else {
-    edRules = edRules.filter(r => r.id !== id);
-  }
+  edRules = edRules.filter(r => r.id !== id);
   _edRulesPanelClose();
   edRedraw();
 }
@@ -10571,41 +8315,6 @@ function _edRuleDuplicate(id) {
   edRedraw();
 }
 
-function _edRulesNodePanel(n) {
-  _edRulesClosePop();
-  const sc = edWorldToScreen(n.x, n.y);
-  const pop = document.createElement('div');
-  pop.id = 'ed-rule-pop';
-  pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
-  const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
-  const _bsLock = `background:${n.locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
-  pop.innerHTML = `<button id="enp-lock" title="${n.locked ? 'Desbloquear punto' : 'Bloquear punto'}" style="${_bsLock}">${n.locked ? '🔒' : '🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="enp-del" title="Borrar punto de fuga" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
-  document.body.appendChild(pop);
-  const PW = pop.offsetWidth || 100, PH = pop.offsetHeight || 44;
-  let px = sc.x + 22, py = sc.y - PH / 2;
-  if(px + PW > window.innerWidth - 8) px = sc.x - PW - 22;
-  if(py < 8) py = 8;
-  if(py + PH > window.innerHeight - 8) py = window.innerHeight - PH - 8;
-  pop.style.left = px + 'px'; pop.style.top = py + 'px';
-  document.getElementById('enp-lock')?.addEventListener('click', ev => {
-    ev.stopPropagation();
-    n.locked = !n.locked;
-    for(const rid of n.ruleIds) { const _rr=edRules.find(r=>r.id===rid); if(_rr) _rr.locked=n.locked; }
-    _edRulesClosePop(); edRedraw();
-  });
-  document.getElementById('enp-del')?.addEventListener('click', ev => {
-    ev.stopPropagation();
-    for(const rid of n.ruleIds) {
-      const _rr = edRules.find(r=>r.id===rid);
-      if(_rr) { if(_rr.nodeA===n.id) _rr.nodeA=null; if(_rr.nodeB===n.id) _rr.nodeB=null; }
-    }
-    edRuleNodes = edRuleNodes.filter(nn=>nn.id!==n.id);
-    _edRulesClosePop(); edRedraw();
-  });
-  ['pointerdown','touchstart'].forEach(ev2 => pop.addEventListener(ev2, e => e.stopPropagation(), {passive:true}));
-  setTimeout(() => { document.addEventListener('pointerdown', _edRulesPopOutside, {passive:true}); }, 50);
-}
-
 function _edRulesOpenPanel(id, part, wx, wy) {
   _edRulesClosePop();
   const r = edRules.find(r => r.id === id); if(!r) return;
@@ -10615,19 +8324,9 @@ function _edRulesOpenPanel(id, part, wx, wy) {
   pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
   const _svgH = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="2" y1="12" x2="22" y2="12" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
   const _svgV = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="12" y1="2" x2="12" y2="22" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
-  const _svgDup = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><rect x="9" y="9" width="11" height="11" rx="1.5" stroke="white" stroke-width="2" fill="none"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" stroke="white" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`;
   const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
   const _bsLock = `background:${r.locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
-  const _svgEye = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="white" stroke-width="2" fill="none"/></svg>`;
-  const _bsHide = `background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;`;
-  const _sep = '<div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div>';
-  // Si la regla pertenece a un grupo (algún extremo vinculado a nodo), mostrar solo dup + lock + hide + delete
-  const _inGroup = !!(r.nodeA || r.nodeB);
-  if(_inGroup) {
-    pop.innerHTML = `<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="Ocultar esta guía" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
-  } else {
-    pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="Ocultar esta guía" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
-  }
+  pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   document.body.appendChild(pop);
   const PW = pop.offsetWidth || 150, PH = pop.offsetHeight || 44;
   let px = sc.x + 22, py = sc.y - PH / 2;
@@ -10636,9 +8335,6 @@ function _edRulesOpenPanel(id, part, wx, wy) {
   if(py + PH > window.innerHeight - 8) py = window.innerHeight - PH - 8;
   pop.style.left = px + 'px'; pop.style.top = py + 'px';
 
-  document.getElementById('erp-dup')?.addEventListener('click', e => {
-    e.stopPropagation(); _edRuleDuplicate(id); 
-  });
   document.getElementById('erp-horiz')?.addEventListener('click', e => {
     e.stopPropagation();
     const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
@@ -10654,11 +8350,6 @@ function _edRulesOpenPanel(id, part, wx, wy) {
   document.getElementById('erp-lock')?.addEventListener('click', e => {
     e.stopPropagation();
     r.locked = !r.locked;
-    _edRulesClosePop(); edRedraw();
-  });
-  document.getElementById('erp-hide')?.addEventListener('click', e => {
-    e.stopPropagation();
-    r.hidden = true; // ocultar solo esta guía
     _edRulesClosePop(); edRedraw();
   });
   document.getElementById('erp-del')?.addEventListener('click', e => {
@@ -10684,22 +8375,10 @@ function _edRulesClosePop() {
 function _edRulesPanelClose() { _edRulesClosePop(); }
 
 function _edRulesDraw(ctx) {
-  if(!edRules.length && !edRuleNodes.length) return;
-  if(edRulesHidden) return; // guías ocultas: no dibujar
+  if(!edRules.length) return;
   const z = edCamera.z;
   ctx.save();
-  // Extremos ya cubiertos por un nodo compartido
-  const _sharedEnds = new Set();
-  for(const n of edRuleNodes) {
-    for(const rid of n.ruleIds) {
-      const _rr = edRules.find(r=>r.id===rid);
-      if(!_rr) continue;
-      if(_rr.nodeA===n.id) _sharedEnds.add(rid+'_a');
-      if(_rr.nodeB===n.id) _sharedEnds.add(rid+'_b');
-    }
-  }
   for(const r of edRules) {
-    if(r.hidden) continue; // guía individualmente oculta
     const isActive = (_edRulePanelId === r.id) || (_edRuleDrag?.ruleId === r.id);
     const lineColor = r.locked ? 'rgba(255,160,30,0.8)' : (isActive ? '#1a8cff' : 'rgba(30,140,255,0.7)');
     const dotColor  = r.locked ? 'rgba(255,160,30,0.9)' : (isActive ? '#1a8cff' : 'rgba(30,140,255,0.75)');
@@ -10711,8 +8390,7 @@ function _edRulesDraw(ctx) {
     ctx.setLineDash([8/z, 5/z]);
     ctx.stroke();
     ctx.setLineDash([]);
-    for(const [ex, ey, key] of [[r.x1,r.y1,r.id+'_a'],[r.x2,r.y2,r.id+'_b']]) {
-      if(_sharedEnds.has(key)) continue; // dibujado por el nodo compartido
+    for(const [ex, ey] of [[r.x1,r.y1],[r.x2,r.y2]]) {
       ctx.beginPath();
       ctx.arc(ex, ey, _ED_RULE_R / z, 0, Math.PI*2);
       ctx.fillStyle = dotColor;
@@ -10722,66 +8400,24 @@ function _edRulesDraw(ctx) {
       ctx.stroke();
     }
   }
-  // Nodos compartidos: círculo naranja más grande
-  for(const n of edRuleNodes) {
-    const isActiveN = (_edRuleDrag?.nodeId === n.id);
-    const nodeColor = n.locked ? 'rgba(255,160,30,0.95)' : (isActiveN ? '#ff9900' : 'rgba(255,140,0,0.9)');
-    const nr = (_ED_RULE_R * 1.5) / z;
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, nr, 0, Math.PI*2);
-    ctx.fillStyle = nodeColor;
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2 / z;
-    ctx.stroke();
-    // Cruz interior (punto de fuga)
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-    ctx.lineWidth = 1.2 / z;
-    ctx.beginPath();
-    ctx.moveTo(n.x - nr*0.5, n.y); ctx.lineTo(n.x + nr*0.5, n.y);
-    ctx.moveTo(n.x, n.y - nr*0.5); ctx.lineTo(n.x, n.y + nr*0.5);
-    ctx.stroke();
-  }
   ctx.restore();
 }
 
 function _edRulesHit(wx, wy, isTouch) {
-  if(edRulesHidden) return null; // guías ocultas: no seleccionables
   const z = edCamera.z;
   const rPx  = (isTouch ? 22 : _ED_RULE_R) / z;
   const lPx  = (isTouch ? _ED_RULE_LINE_HIT_TOUCH : _ED_RULE_LINE_HIT) / z;
-  const nPx  = (_ED_RULE_R * 1.5) / z;
-  // Primero: nodos compartidos (prioridad máxima)
-  for(let i = edRuleNodes.length-1; i >= 0; i--) {
-    const n = edRuleNodes[i];
-    if(Math.hypot(wx-n.x, wy-n.y) <= nPx) return { nodeId: n.id };
-  }
-  // Luego: reglas individuales
   for(let i = edRules.length-1; i >= 0; i--) {
     const r = edRules[i];
-    if(r.hidden) continue; // guía individualmente oculta: no seleccionable
-    // Extremo A — solo si no pertenece a un nodo compartido
-    if(!r.nodeA && Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
-    // Extremo B
-    if(!r.nodeB && Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
-    // Línea — solo si la regla NO está bloqueada (T21 parte 1)
-    if(!r.locked) {
-      const dx = r.x2-r.x1, dy = r.y2-r.y1, len2 = dx*dx+dy*dy;
-      if(len2 > 0) {
-        const t  = Math.max(0, Math.min(1, ((wx-r.x1)*dx+(wy-r.y1)*dy)/len2));
-        if(Math.hypot(wx-(r.x1+t*dx), wy-(r.y1+t*dy)) <= lPx) return { ruleId: r.id, part: 'line' };
-      }
+    if(Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
+    if(Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
+    const dx = r.x2-r.x1, dy = r.y2-r.y1, len2 = dx*dx+dy*dy;
+    if(len2 > 0) {
+      const t  = Math.max(0, Math.min(1, ((wx-r.x1)*dx+(wy-r.y1)*dy)/len2));
+      if(Math.hypot(wx-(r.x1+t*dx), wy-(r.y1+t*dy)) <= lPx) return { ruleId: r.id, part: 'line' };
     }
   }
   return null;
-}
-
-// Actualiza el texto del botón toggle según el estado actual de visibilidad de guías.
-// Global para que pueda llamarse desde edToggleMenu al abrir el menú.
-function _edRuleToggleSync() {
-  const _txt = $('dd-rule-toggle-txt'); if(!_txt) return;
-  const _anyHidden = edRulesHidden || edRules.some(r => r.hidden);
-  _txt.textContent = _anyHidden ? 'Mostrar guías' : 'Ocultar guías';
 }
 
 function edInitRules() {
@@ -10793,29 +8429,6 @@ function edInitRules() {
     document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
     _edRuleClear();
   });
-  $('dd-rule-toggle')?.addEventListener('click', () => {
-    const _anyHidden = edRulesHidden || edRules.some(r => r.hidden);
-    if(_anyHidden){
-      // Hay algo oculto → mostrar todo
-      edRulesHidden = false;
-      edRules.forEach(r => { r.hidden = false; });
-    } else {
-      // Todo visible → ocultar todo
-      edRulesHidden = true;
-    }
-    _edRuleToggleSync();
-    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
-    edRedraw();
-  });
-  $('dd-rule-lock-all')?.addEventListener('click', () => {
-    // Bloquear todas las guías que no estén ya bloqueadas
-    let _count = 0;
-    edRules.forEach(r => { if(!r.locked){ r.locked = true; _count++; } });
-    // Bloquear también los nodos compartidos
-    edRuleNodes.forEach(n => { if(!n.locked){ n.locked = true; } });
-    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
-    edRedraw();
-  });
 }
 
 // ── Snap a reglas durante el drag ────────────────────────────────────────────
@@ -10826,8 +8439,7 @@ function edInitRules() {
 const _ED_SNAP_THRESHOLD_PX = 8; // px de pantalla — umbral estándar de la industria
 
 function _edSnapToRules(la) {
-  if(!edRules.length || edRulesHidden) return; // sin snap si no hay guías o están ocultas
-  // (las guías individuales ocultas se saltan en el bucle interno)
+  if(!edRules.length) return;
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const z  = edCamera.z;
@@ -10853,7 +8465,6 @@ function _edSnapToRules(la) {
   let snapDx = 0, snapDy = 0;
 
   for(const r of edRules) {
-    if(r.hidden) continue; // guía individualmente oculta: sin snap
     const rdx = r.x2 - r.x1, rdy = r.y2 - r.y1;
     const rlen = Math.hypot(rdx, rdy);
     if(rlen < 1) continue;
@@ -11030,7 +8641,6 @@ function edInitDrawBar() {
 
   // ── Botones herramienta ──
   $('edb-pen')?.addEventListener('click', () => {
-    edPushHistory(); // guardar estado previo antes de entrar a dibujo
     edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
     _edbSyncTool();
     $('op-tool-pen')?.click();
@@ -11550,13 +9160,6 @@ function edShapeBarHide() {
   // Ocultar slider directamente por DOM (no depender del closure de edInitShapeBar)
   const _sp=$('esb-slider-panel');
   if(_sp){ _sp.style.display='none'; _sp._mode=null; }
-  // Cerrar modo V⟺C de la barra flotante
-  const _curveBtn=$('esb-curve');
-  if(_curveBtn && _curveBtn.dataset.curveActive==='1'){
-    _curveBtn.dataset.curveActive='0';
-    _curveBtn.style.background=''; _curveBtn.style.color=''; _curveBtn.style.outline='';
-  }
-  window._edCurveVertIdx=-1;
   $('edShapeBar')?.classList.remove('visible');
 }
 
@@ -11923,11 +9526,10 @@ function edInitShapeBar() {
     if(_locked) return;
     _edApplyFillToClosedLayers(); // relleno al confirmar
     _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
-    // Desactivar V⟺C si estaba activo, y cerrar su slider
+    // Desactivar V⟺C si estaba activo
     const _curveBtn=$('esb-curve');
     if(_curveBtn){ _curveBtn.dataset.curveActive='0'; _curveBtn.style.background=''; _curveBtn.style.color=''; _curveBtn.style.outline=''; }
     window._edCurveVertIdx=-1;
-    _esbHideSlider(); // cerrar slider V/C (y cualquier otro slider activo)
     edShapeBarHide();
     window._edMinimizedDrawMode=null;
     // Limpiar estado antes de maximizar
@@ -11989,20 +9591,6 @@ function _edBubbleTailDir(l){
     return ex > 0 ? 'right' : 'left';
   }
 }
-let _edCloudSavingStart = 0;
-let _edCloudSavingTimer = null;
-function _edCloudSavingUpdateBadge() {
-  if (!_edCloudSaving) return;
-  const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
-  const badge = document.getElementById('_edCloudSavingBadge');
-  if (badge) badge.textContent = `☁️ Guardando en nube... ${elapsed}s`;
-  _edCloudSavingTimer = setTimeout(_edCloudSavingUpdateBadge, 1000);
-}
-function _edCloudSavingStop() {
-  if (_edCloudSavingTimer) { clearTimeout(_edCloudSavingTimer); _edCloudSavingTimer = null; }
-  const badge = document.getElementById('_edCloudSavingBadge');
-  if (badge) badge.remove();
-}
 async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
@@ -12019,6 +9607,9 @@ async function edCloudSave() {
     return;
   }
 
+  // Guardar localmente primero
+  edSaveProject();
+
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
@@ -12030,9 +9621,6 @@ async function edCloudSave() {
 
   const btn = $('edCloudSaveBtn');
   if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
-  _edCloudSaving = true;
-  _edCloudSavingStart = Date.now();
-  _edCloudSavingUpdateBadge();
 
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
@@ -12049,8 +9637,6 @@ async function edCloudSave() {
     edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
     console.error('edCloudSave:', err);
   } finally {
-    _edCloudSaving = false;
-    _edCloudSavingStop();
     if (btn) { btn.textContent = '☁️'; btn.disabled = false; }
   }
 }
@@ -12145,10 +9731,8 @@ function edSaveProject(){
         return result;
       })(),
       _rules: edRules,
-      _ruleNodes: edRuleNodes,
     },
     updatedAt:new Date().toISOString(),
-    localSavedAt:new Date().toISOString(),
     cameraState: _camState,
   });
   edToast('Guardado ✓');
@@ -12171,7 +9755,6 @@ function edRenderPage(page){
   // Imágenes, DrawLayer y Strokes — SIN textos/bocadillos.
   // Los textos se superponen en el reader por encima del data_url, igual que el visor del editor.
   page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
-  page.layers.filter(l=>l.type==='gif').forEach(l=>l.draw(ctx));
   const _rdl=page.layers.find(l=>l.type==='draw');
   if(_rdl) _rdl.draw(ctx);
   page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(ctx));
@@ -12185,10 +9768,7 @@ function edRenderPage(page){
 }
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
   // Redimensiona y comprime una imagen a JPEG para ahorrar espacio en localStorage
-  // Las imágenes PNG con transparencia (recortes) deben conservarse como PNG
-  if(!src) return src;
-  const isPng = src.startsWith('data:image/png');
-  if(!isPng && src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña JPEG
+  if(!src || src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña
   try {
     const img = new Image();
     img.src = src;
@@ -12198,15 +9778,7 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
     const h = Math.round(img.naturalHeight * ratio);
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
-    const cctx = cv.getContext('2d');
-    cctx.drawImage(img, 0, 0, w, h);
-    // Si es PNG, verificar si tiene píxeles transparentes — si los tiene, conservar PNG
-    if(isPng){
-      const d = cctx.getImageData(0, 0, w, h).data;
-      let hasAlpha = false;
-      for(let i=3; i<d.length; i+=4){ if(d[i]<255){ hasAlpha=true; break; } }
-      if(hasAlpha) return cv.toDataURL('image/png'); // preservar transparencia
-    }
+    cv.getContext('2d').drawImage(img, 0, 0, w, h);
     return cv.toDataURL('image/jpeg', quality);
   } catch(e) { return src; }
 }
@@ -12279,317 +9851,13 @@ function edUngroupSelected(){
 
 
 
-/* ── Comprueba si la selección actual es unible, devuelve el tipo o null ── */
-function _edMergeableTypes(){
-  if(!edMultiSel || edMultiSel.length < 2) return null;
-  const layers = edMultiSel.map(i => edLayers[i]).filter(Boolean);
-  if(layers.length < 2) return null;
-  const t0 = layers[0].type;
-  // Vectoriales: line y shape se pueden unir entre sí
-  const isVec = t => t === 'line' || t === 'shape';
-  if(isVec(t0)){
-    if(layers.every(l => isVec(l.type))) return 'vector';
-    return null;
-  }
-  // Stroke, draw e image solo se pueden unir con su mismo tipo
-  if(t0 === 'stroke' || t0 === 'draw' || t0 === 'image'){
-    if(layers.every(l => l.type === t0)) return t0;
-    return null;
-  }
-  return null;
-}
-
-/* ── Convierte un ShapeLayer a array de puntos absolutos (normalizados 0-1) ── */
-function _edShapeToAbsPoints(sl, nEllipse){
-  const n = nEllipse || 48;
-  const pts = [];
-  if(sl.shape === 'ellipse'){
-    for(let i = 0; i < n; i++){
-      const ang = (i / n) * Math.PI * 2;
-      pts.push({
-        x: sl.x + Math.cos(ang) * sl.width  / 2,
-        y: sl.y + Math.sin(ang) * sl.height / 2
-      });
-    }
-  } else {
-    // rect (con rotación si la tiene)
-    const hw = sl.width / 2, hh = sl.height / 2;
-    const rot = (sl.rotation || 0) * Math.PI / 180;
-    const cos = Math.cos(rot), sin = Math.sin(rot);
-    for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]){
-      pts.push({
-        x: sl.x + lx * cos - ly * sin,
-        y: sl.y + lx * sin + ly * cos
-      });
-    }
-  }
-  return pts;
-}
-
-/* ── Renderiza un layer en el canvas workspace completo (para merge de stroke/draw) ── */
-function _edRenderLayerToWorkspace(la){
-  const pw = edPageW(), ph = edPageH();
-  const wc = document.createElement('canvas');
-  wc.width  = ED_CANVAS_W;
-  wc.height = ED_CANVAS_H;
-  const ctx = wc.getContext('2d');
-  la.draw(ctx);
-  return wc;
-}
-
-/* ── Une los objetos seleccionados en uno solo ── */
-function edMergeSelected(){
-  const mtype = _edMergeableTypes();
-  if(!mtype) return;
-  edPushHistory();
-  // Ordenar índices ascendente: índice menor = capa inferior (se dibuja primero)
-  const idxs  = [...edMultiSel].sort((a,b) => a - b);
-  const layers = idxs.map(i => edLayers[i]);
-
-  /* ── helper: finalizar inserción ── */
-  function _finishMerge(newLayer){
-    const insertAt = idxs[0];
-    // Eliminar originales de mayor a menor para no desplazar índices
-    for(let i = idxs.length - 1; i >= 0; i--) edLayers.splice(idxs[i], 1);
-    edLayers.splice(Math.min(insertAt, edLayers.length), 0, newLayer);
-    edPages[edCurrentPage].layers = edLayers;
-    edSelectedIdx = Math.min(insertAt, edLayers.length - 1);
-    _msClear();
-    edActiveTool = 'select';
-    if(edCanvas) edCanvas.className = '';
-    $('edMultiSelBtn')?.classList.remove('active');
-    edPushHistory(); edRedraw();
-    edToast('Objetos unidos ✓');
-  }
-
-  if(mtype === 'vector'){
-    const newLL = new LineLayer();
-    const first = layers[0];
-    newLL.color     = first.color     || '#000000';
-    newLL.lineWidth = first.lineWidth || 3;
-    newLL.opacity   = first.opacity   ?? 1;
-    const _fillLayer = layers.find(l => l.fillColor && l.fillColor !== 'none');
-    newLL.fillColor = _fillLayer ? _fillLayer.fillColor : (first.fillColor || 'none');
-    const _allClosed = layers.every(l => l.type === 'shape' || (l.type === 'line' && l.closed));
-
-    // Trabajar en píxeles workspace para respetar rotación y escala X/Y distintas.
-    // Los puntos locales están en normalizado (aprox 0-1) con pw/ph distintos.
-    const pw = edPageW(), ph = edPageH();
-    const mx = edMarginX(), my = edMarginY();
-
-    // Transforma un vector local (dx,dy) en normalizado al espacio px rotado del layer
-    function _rotPx(dx, dy, cos, sin) {
-      const lpx = dx * pw, lpy = dy * ph;
-      return { x: lpx * cos - lpy * sin, y: lpx * sin + lpy * cos };
-    }
-
-    // Devuelve array de contornos en px absolutos.
-    // Cada punto preserva: x, y (px), cp1, cp2 (px, opcionales), curve, cornerRadius (de cornerRadii)
-    function _layerToPixelContours(la) {
-      const contours = [];
-      if(la.type === 'line') {
-        const cx = mx + la.x * pw;
-        const cy = my + la.y * ph;
-        const rot = (la.rotation || 0) * Math.PI / 180;
-        const cos = Math.cos(rot), sin = Math.sin(rot);
-        const cr = la.cornerRadii || {};
-        let cur = [];
-        for(let _pi = 0; _pi < la.points.length; _pi++) {
-          const p = la.points[_pi];
-          if(p === null) {
-            if(cur.length) { contours.push(cur); cur = []; }
-          } else {
-            const rp = _rotPx(p.x, p.y, cos, sin);
-            const np = { x: cx + rp.x, y: cy + rp.y };
-            if(p.curve !== undefined) np.curve = p.curve;
-            if(p.cp1) { const c1 = _rotPx(p.cp1.x, p.cp1.y, cos, sin); np.cp1 = { x: cx + c1.x, y: cy + c1.y }; }
-            if(p.cp2) { const c2 = _rotPx(p.cp2.x, p.cp2.y, cos, sin); np.cp2 = { x: cx + c2.x, y: cy + c2.y }; }
-            // cornerRadii indexado por posición en la.points (incluyendo nulls)
-            if(cr[_pi]) np._cr = cr[_pi];
-            cur.push(np);
-          }
-        }
-        if(cur.length) contours.push(cur);
-      } else {
-        // ShapeLayer → polígono en px (sin datos de curva)
-        const cx = mx + la.x * pw;
-        const cy = my + la.y * ph;
-        const rot = (la.rotation || 0) * Math.PI / 180;
-        const cos = Math.cos(rot), sin = Math.sin(rot);
-        const pts = [];
-        if(la.shape === 'ellipse') {
-          const n = 48, rw = la.width * pw / 2, rh = la.height * ph / 2;
-          for(let i = 0; i < n; i++) {
-            const ang = (i / n) * Math.PI * 2;
-            const lpx = Math.cos(ang) * rw, lpy = Math.sin(ang) * rh;
-            pts.push({ x: cx + lpx*cos - lpy*sin, y: cy + lpx*sin + lpy*cos });
-          }
-        } else {
-          const hw = la.width * pw / 2, hh = la.height * ph / 2;
-          for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]) {
-            pts.push({ x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos });
-          }
-        }
-        contours.push(pts);
-      }
-      return contours;
-    }
-
-    // Recoger todos los contornos en px, con sus estilos individuales
-    const allContoursPx = [];
-    const allContourStyles = []; // estilo por contorno
-    for(const la of layers) {
-      const _cs = _layerToPixelContours(la);
-      const _style = {
-        fillColor: la.fillColor || 'none',
-        color:     la.color     || '#000000',
-        lineWidth: la.lineWidth ?? 3,
-        closed:    la.type === 'shape' || (la.type === 'line' && !!la.closed)
-      };
-      for(const c of _cs) {
-        allContoursPx.push(c);
-        allContourStyles.push(_style);
-      }
-    }
-
-    // Centro del bbox en px
-    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    for(const c of allContoursPx) for(const p of c) {
-      if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
-      if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
-    }
-    const cxPx = (minX + maxX) / 2;
-    const cyPx = (minY + maxY) / 2;
-    newLL.x = (cxPx - mx) / pw;
-    newLL.y = (cyPx - my) / ph;
-    newLL.rotation = 0; // absorbida en los puntos
-    newLL.cornerRadii = {};
-
-    for(let ci = 0; ci < allContoursPx.length; ci++) {
-      if(ci > 0) { newLL.points.push(null); } // el null ocupa índice en points
-      for(const p of allContoursPx[ci]) {
-        const np = { x: (p.x - cxPx) / pw, y: (p.y - cyPx) / ph };
-        if(p.curve !== undefined) np.curve = p.curve;
-        if(p.cp1) np.cp1 = { x: (p.cp1.x - cxPx) / pw, y: (p.cp1.y - cyPx) / ph };
-        if(p.cp2) np.cp2 = { x: (p.cp2.x - cxPx) / pw, y: (p.cp2.y - cyPx) / ph };
-        // cornerRadii se indexa por posición en points INCLUYENDO nulls
-        if(p._cr) newLL.cornerRadii[newLL.points.length] = p._cr;
-        newLL.points.push(np);
-      }
-    }
-    newLL.closed = _allClosed;
-    newLL.grouped = true; // agrupado sin fusión booleana
-    newLL.groupedStyles = allContourStyles; // estilos individuales por contorno
-    newLL._updateBbox();
-    _finishMerge(newLL);
-    return;
-  }
-
-  if(mtype === 'stroke' || mtype === 'draw'){
-    // Composición de píxeles en orden de capa (ascendente = inferior primero)
-    const wc = document.createElement('canvas');
-    wc.width  = ED_CANVAS_W;
-    wc.height = ED_CANVAS_H;
-    const ctx = wc.getContext('2d');
-    for(const la of layers){ la.draw(ctx); }
-    const newSL = new StrokeLayer(wc);
-    _finishMerge(newSL);
-    return;
-  }
-
-  if(mtype === 'image'){
-    // Unión de alta calidad: componer en un canvas a resolución nativa
-    const pw = edPageW(), ph = edPageH();
-    // 1. Calcular el bbox normalizado (0-1) que engloba todas las imágenes
-    let bx0=Infinity, by0=Infinity, bx1=-Infinity, by1=-Infinity;
-    for(const la of layers){
-      const rot = (la.rotation||0) * Math.PI/180;
-      const hw = la.width/2, hh = la.height/2;
-      const cos = Math.cos(rot), sin = Math.sin(rot);
-      for(const [lx,ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]){
-        const ax = la.x + lx*cos - ly*sin;
-        const ay = la.y + lx*sin + ly*cos;
-        if(ax < bx0) bx0=ax; if(ax > bx1) bx1=ax;
-        if(ay < by0) by0=ay; if(ay > by1) by1=ay;
-      }
-    }
-    const bboxW = bx1 - bx0;  // en coordenadas normalizadas
-    const bboxH = by1 - by0;
-
-    // 2. Resolución del canvas de composición: usar la imagen con mayor densidad de píxeles
-    //    (naturalWidth / ancho normalizado * ancho página) → px/unidad-norm
-    let maxPPU = 0;
-    for(const la of layers){
-      if(la.img && la.img.naturalWidth > 0){
-        const ppu = la.img.naturalWidth / (la.width * pw);
-        if(ppu > maxPPU) maxPPU = ppu;
-      }
-    }
-    // Si no hay imágenes cargadas, fallback al workspace
-    if(maxPPU <= 0) maxPPU = 1;
-
-    // Tamaño del canvas de composición en píxeles
-    const canW = Math.round(bboxW * pw * maxPPU);
-    const canH = Math.round(bboxH * ph * maxPPU);
-    const MAX_DIM = 8192;
-    const scale = Math.min(1, MAX_DIM / Math.max(canW, canH));
-    const outW = Math.max(1, Math.round(canW * scale));
-    const outH = Math.max(1, Math.round(canH * scale));
-    const ppu  = maxPPU * scale;  // píxeles por unidad normalizada en el canvas de salida
-
-    const wc = document.createElement('canvas');
-    wc.width  = outW;
-    wc.height = outH;
-    const ctx = wc.getContext('2d');
-
-    // 3. Componer cada imagen en el canvas de salida (de abajo arriba)
-    for(const la of layers){
-      if(!la.img || !la.img.complete || la.img.naturalWidth === 0) continue;
-      const rot  = (la.rotation||0) * Math.PI/180;
-      // Centro de esta imagen en coords del canvas de salida
-      const cx = (la.x - bx0) * pw * ppu;
-      const cy = (la.y - by0) * ph * ppu;
-      const iw = la.width  * pw * ppu;
-      const ih = la.height * ph * ppu;
-      ctx.save();
-      ctx.globalAlpha = la.opacity ?? 1;
-      ctx.translate(cx, cy);
-      ctx.rotate(rot);
-      ctx.drawImage(la.img, -iw/2, -ih/2, iw, ih);
-      ctx.restore();
-    }
-
-    // 4. Crear StrokeLayer a partir del canvas de alta resolución
-    //    Necesitamos ubicarlo en coords normalizadas del workspace
-    const cx_norm = (bx0 + bx1) / 2;
-    const cy_norm = (by0 + by1) / 2;
-    const newSL = new StrokeLayer(document.createElement('canvas'));
-    newSL.x      = cx_norm;
-    newSL.y      = cy_norm;
-    newSL.width  = bboxW;
-    newSL.height = bboxH;
-    newSL._canvas = wc;
-    _finishMerge(newSL);
-    return;
-  }
-}
-
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
-  if(l.type==='gif'){
-    const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
-    if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; return _g;
-  }
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
     if(l.groupId) _r.groupId=l.groupId;
     if(l.locked) _r.locked=true;
-    if(l._keepSize) _r._keepSize=true;
-    if(l._isGcpImage) _r._isGcpImage=true;
-    if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
-    if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
-    if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
     return _r;
   }
   if(l.type==='text'){const _o={type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
@@ -12602,7 +9870,7 @@ function edSerLayer(l){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
       _hasText:!!(l.text&&l.text!=='Escribe aquí'),
       text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
-      backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
+      backgroundColor:l.backgroundColor,borderColor:l.borderColor,borderWidth:l.borderWidth,
       tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
       tailStarts:l.tailStarts?l.tailStarts.map(s=>({...s})):undefined,tailEnds:l.tailEnds?l.tailEnds.map(e=>({...e})):undefined,
       padding:l.padding||15,
@@ -12805,13 +10073,6 @@ function edDeserLayer(d, pageOrientation){
     if(d.tailEnds)  l.tailEnds  =d.tailEnds.map(e=>({...e}));
     if(d.multipleCount&&!d.voiceCount)l.voiceCount=d.multipleCount;
     return l;}
-  if(d.type==='gif'){
-    const l=new GifLayer(d.gifKey||'',d.x,d.y,d.width);
-    l.height=d.height||0.3; l.rotation=d.rotation||0;
-    if(d.opacity!==undefined) l.opacity=d.opacity;
-    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{ if(src) l.load(src,()=>edRedraw()); }).catch(()=>{});
-    return l;
-  }
   if(d.type==='image'){
     const l=new ImageLayer(null,d.x,d.y,d.width);
     l.rotation=d.rotation||0; l.src=d.src||'';
@@ -12820,34 +10081,22 @@ function edDeserLayer(d, pageOrientation){
     if(d._keepSize) l._keepSize=true;
     if(d.height) l.height = d.height;
     if(d.groupId) l.groupId=d.groupId;
-    if(d._isGcpImage) l._isGcpImage=true;
-    if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
-    if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
-    if(d._pngFrames) l._pngFrames=d._pngFrames;
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        if(l._keepSize){ edRedraw(); if(window._gcpActive) _gcpRedraw(); return; }
+        if(l._keepSize){ edRedraw(); return; }
         const _isV = (pageOrientation||'vertical') === 'vertical';
         const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
         const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
         const _natH = l.width * (img.naturalHeight / img.naturalWidth) * (_pw / _ph);
-        // Solo ajustar height si NO se guardó explícitamente (imagen nueva sin height)
-        // Si d.height existe, respetar siempre el valor guardado (puede ser no proporcional)
-        if(!d.height) {
+        if(!d.height || Math.abs(l.height / _natH - 1) > 0.5){
           l.height = _natH;
         }
         edRedraw();
-        if(window._gcpActive) _gcpRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
       img.src=d.src;
-      // Si ya está en caché (complete antes de onload), disparar manualmente
-      if(img.complete && img.naturalWidth > 0){
-        l.img=img; l.src=img.src;
-        if(window._gcpActive) setTimeout(_gcpRedraw, 0);
-      }
     }
     return l;
   }
@@ -12858,14 +10107,11 @@ function edLoadProject(id){
   edProjectId=id;
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
-  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
+  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'horizontal',social:comic.social||''};
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
     edRules = comic.editorData._rules || [];
-    edRuleNodes = comic.editorData._ruleNodes || [];
-    _edRuleNodeId = edRuleNodes.reduce((m,n)=>Math.max(m,n.id),0);
-    _edRuleId     = edRules.reduce((m,r)=>Math.max(m,r.id||0),0); // evitar colisión de IDs
     edPages=(comic.editorData.pages||[]).map(pd=>{
       const orient = pd.orientation||comic.editorData.orientation||'vertical';
       const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
@@ -12885,7 +10131,6 @@ function edLoadProject(id){
   }else{
     edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
     edRules=[];
-    edRuleNodes=[];
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
@@ -12895,19 +10140,19 @@ function edLoadProject(id){
     edCurrentPage=_pgi; edOrientation=pg.orientation||edOrientation;
     edCurrentPage=_savedP; edOrientation=_savedO;
   });
-  // Centrar cámara al cargar — igual que la lupa: reset completo garantizado
-  // Forzar reset inmediato de cámara sin esperar al frame (evita que quede cámara de obra anterior)
-  edCamera.x = 0; edCamera.y = 0; edCamera.z = 0; // z=0 fuerza recalculo en _edCameraReset
+  // Centrar cámara al cargar — flag dedicado para no interferir con otros resets
   window._edLoadReset=true;
-  const _doLoadReset = () => {
-    window._edUserRequestedReset=true;
-    edFitCanvas(true);
-    edRedraw();
-  };
   if(edCanvas){
-    requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
-    setTimeout(()=>{ _doLoadReset(); }, 150);
-    setTimeout(()=>{ _doLoadReset(); window._edLoadReset=false; }, 400);
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      window._edUserRequestedReset=true; edFitCanvas(true);
+      setTimeout(()=>{
+        if(window._edLoadReset){
+          window._edLoadReset=false;
+          window._edUserRequestedReset=true; edFitCanvas(true);
+        }
+      }, 150);
+      edRedraw();
+    }));
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
@@ -12919,91 +10164,25 @@ function edLoadProject(id){
 let edViewerIdx=0;
 function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
-
-/* Activar/desactivar animación GIF en todas las páginas */
-function _edGifSetPlaying(playing) {
-  edPages.forEach(page => {
-    page.layers.forEach(l => {
-      // GIF importado
-      if (l.type === 'gif' && l._ready) {
-        l._playing = playing;
-        if (playing) l._applyFrame(l._fIdx || 0);
-        else l.stopAnim();
-      }
-      // Animación PNG del editor GIF
-      if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 1) {
-        l._playing = playing;
-        if (playing) {
-          // Precargar frames si no están listos, luego arrancar
-          l._preloadPngFrames(() => {
-            if (l._playing) l._applyPngFrame(l._pngFrameIdx || 0);
-          });
-        } else {
-          l.stopAnim();
-        }
-      }
-    });
-  });
-}
 function edOpenViewer(){
-  edHideGearIcon();
-  _edGifSetPlaying(true); // activar animación GIF al entrar al visor
-  edViewerIdx=0;
+  edHideGearIcon();  // ocultar gear al abrir visor
+  edViewerIdx=0;  // siempre empieza por la primera hoja
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
+  // Garantizar que TODAS las hojas tienen orientation antes de abrir
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
   $('editorViewer')?.classList.add('open');
-
-  const _nm = edProjectMeta.navMode || 'fixed';
-  const _isTouch = window._edIsTouch || window.matchMedia('(hover:none) and (pointer:coarse)').matches;
-
-  if ((_nm === 'horizontal' || _nm === 'vertical') && _isTouch) {
-    // Modo scroll táctil: contenedor con slides
-    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-      _edOpenViewerScroll(_nm);
-    });
-  } else {
-    // Modo fixed (o PC siempre fixed)
-    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-      edUpdateViewer();
-      edInitViewerTap();
-    });
-  }
+  // Esperar fuentes antes del primer render para evitar fallback en bocadillos/texto
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+    edUpdateViewer();
+    edInitViewerTap();
+  });
   // Orientación: resize recalcula canvas al girar dispositivo
   if(_viewerResizeFn) window.removeEventListener('resize', _viewerResizeFn);
   let _viewerResizeTimer;
   _viewerResizeFn = () => {
     clearTimeout(_viewerResizeTimer);
-    _viewerResizeTimer = setTimeout(() => {
-      if (_viewerScrollMode) {
-        // Reajustar slides al nuevo viewport (giro de dispositivo)
-        const _sc = $('viewerScroll');
-        if (!_sc) return;
-        const _isH = _sc.classList.contains('vs-h');
-        const _vw = window.innerWidth, _vh = window.innerHeight;
-        const _so = edOrientation;
-        Array.from(_sc.children).forEach((slide, pi) => {
-          const page = edPages[pi]; if (!page) return;
-          const orient = page.orientation || _so;
-          const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-          const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-          const scale = Math.min(_vw / pw, _vh / ph);
-          slide.style.width  = _vw + 'px';
-          slide.style.height = _vh + 'px';
-          const cv = slide.querySelector('canvas');
-          if (cv) {
-            cv.style.width  = Math.round(pw * scale) + 'px';
-            cv.style.height = Math.round(ph * scale) + 'px';
-          }
-        });
-        // Reposicionar scroll al slide activo
-        const _sz = _isH ? _sc.clientWidth : _sc.clientHeight;
-        if (_sz) _sc.scrollTo({ left: _isH ? edViewerIdx*_sz : 0, top: _isH ? 0 : edViewerIdx*_sz, behavior:'instant' });
-        edUpdateViewer();
-      } else {
-        edUpdateViewer();
-      }
-    }, 150);
+    _viewerResizeTimer = setTimeout(() => { edUpdateViewer(); }, 150);
   };
   window.addEventListener('resize', _viewerResizeFn);
   // Fullscreen: reentrar si el navegador lo cierra al girar
@@ -13013,9 +10192,6 @@ function edOpenViewer(){
   }
   _viewerFsFn = () => {
     if(!$('editorViewer')?.classList.contains('open')) return;
-    // No intentar re-entrar FS si la cámara está abierta: getUserMedia causa
-    // salida de FS en Android y requestFullscreen sin gesto corrompe los permisos
-    if(!$('edCameraOverlay')?.classList.contains('hidden')) return;
     const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
     if(!active && typeof Fullscreen !== 'undefined') Fullscreen.enter();
   };
@@ -13026,273 +10202,10 @@ function edOpenViewer(){
   _viewerKeyHandler = _edViewerKey;
   document.addEventListener('keydown', _viewerKeyHandler);
 }
-// ── Visor en modo scroll (horizontal / vertical) ──────────────
-//
-// Arquitectura (igual que Webtoon / Tapas / Kindle):
-//   - Scroll nativo SIEMPRE activo — overflow NUNCA cambia → sin saltos
-//   - Un slide por página con canvas; scroll-snap + scroll-behavior:smooth
-//     dan la animación natural (ease-out del navegador, acelerada al inicio
-//     y desacelerada al final)
-//   - Un overlay transparente (position:absolute, inset:0) encima del scroll:
-//       · pointer-events:all  → cuando hay textos pendientes: intercepta el
-//         swipe y avanza el bocadillo SIN mover el scroll
-//       · pointer-events:none → cuando la página está completa: los toques
-//         llegan al scroll nativo que mueve la hoja suavemente
-// ─────────────────────────────────────────────────────────────
-
-function _edOpenViewerScroll(navMode) {
-  const isH = navMode === 'horizontal';
-  const vw = window.innerWidth, vh = window.innerHeight;
-
-  _viewerScrollMode = true;
-
-  // Ocultar canvas/controles del modo fijo
-  const fc = $('viewerCanvas');
-  if (fc) fc.style.display = 'none';
-  $('viewerControls')?.classList.add('hidden');
-
-  // Configurar contenedor — overflow NUNCA se toca después de aquí
-  const sc = $('viewerScroll');
-  sc.className = isH ? 'vs-h' : 'vs-v';
-  sc.innerHTML = '';
-
-  const _savedOrient = edOrientation;
-
-  // ── Construir slides ──
-  const _canvases = [];
-
-  edPages.forEach((page, pi) => {
-    const orient = page.orientation || _savedOrient;
-    const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-    const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-    const scale = Math.min(vw / pw, vh / ph);
-
-    const slide = document.createElement('div');
-    slide.className = 'vs-slide';
-    slide.style.width  = vw + 'px';
-    slide.style.height = vh + 'px';
-
-    const canvas = document.createElement('canvas');
-    canvas.width  = pw;
-    canvas.height = ph;
-    canvas.style.width  = Math.round(pw * scale) + 'px';
-    canvas.style.height = Math.round(ph * scale) + 'px';
-    canvas.style.pointerEvents = 'none';
-
-    slide.appendChild(canvas);
-    sc.appendChild(slide);
-    _canvases.push(canvas);
-  });
-
-  // ── Overlay: intercepta toques cuando hay textos pendientes ──
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:absolute;inset:0;z-index:10;touch-action:none;';
-  overlay.style.pointerEvents = 'none'; // empieza sin interceptar
-  $('editorViewer').appendChild(overlay);
-
-  // ── Estado ──
-  edViewerIdx      = 0;
-  edViewerTextStep = 0;
-
-  function _activateCanvas(pi) {
-    edViewerCanvas = _canvases[pi];
-    edViewerCtx    = _canvases[pi]?.getContext('2d');
-  }
-
-  function _hasPendingTexts(pi) {
-    pi = pi ?? edViewerIdx;
-    const page  = edPages[pi];
-    const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    return (page?.textMode || 'sequential') === 'sequential' && edViewerTextStep < tl.length;
-  }
-
-  function _updateOverlay() {
-    // El overlay intercepta gestos si hay textos pendientes hacia adelante
-    // O si hay textos que retroceder (textStep > 1)
-    const page = edPages[edViewerIdx];
-    const tl   = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    const isSeq = (page?.textMode || 'sequential') === 'sequential';
-    const active = isSeq && tl.length > 0 && (edViewerTextStep < tl.length || edViewerTextStep > 1);
-    overlay.style.pointerEvents = active ? 'all' : 'none';
-  }
-
-  // ── Render inicial de todos los slides (sin textos secuenciales aún) ──
-  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    const _si = edViewerIdx, _ss = edViewerTextStep;
-    edPages.forEach((page, pi) => {
-      _activateCanvas(pi);
-      const orient = page.orientation || _savedOrient;
-      const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-      const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-      edViewerIdx      = pi;
-      edViewerTextStep = 0;
-      edUpdateViewer();
-    });
-    // Activar página 0 con primer texto
-    edViewerIdx      = _si;
-    _activateCanvas(0);
-    const p0 = edPages[0];
-    const tl0 = (p0?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    edViewerTextStep = (p0?.textMode === 'sequential' && tl0.length > 0) ? 1 : 0;
-    edUpdateViewer();
-    _updateOverlay();
-    // Forzar posición inicial a hoja 0 (el render de múltiples slides puede desplazarlo)
-    const _sc0 = $('viewerScroll');
-    if (_sc0) { _sc0.scrollLeft = 0; _sc0.scrollTop = 0; }
-  });
-
-  // ── Swipe en el overlay (cuando hay textos pendientes) ──
-  let _osx = null, _osy = null;
-  overlay.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) { _osx = null; return; }
-    _osx = e.touches[0].clientX;
-    _osy = e.touches[0].clientY;
-  }, { passive: true });
-
-  overlay.addEventListener('touchend', e => {
-    if (_osx === null) return;
-    const ex = e.changedTouches[0].clientX;
-    const ey = e.changedTouches[0].clientY;
-    const dx = ex - _osx, dy = ey - _osy;
-    _osx = null;
-    const adx = Math.abs(dx), ady = Math.abs(dy);
-    // Ignorar gestos en dirección incorrecta
-    if (isH && adx < 20) return;
-    if (!isH && ady < 20) return;
-    if (isH && ady > adx * 1.5) return;
-    if (!isH && adx > ady * 1.5) return;
-
-    const goFwd = isH ? dx < 0 : dy < 0;
-    const goBwd = isH ? dx > 0 : dy > 0;
-
-    if (goFwd && _hasPendingTexts()) {
-      // Avanzar bocadillo con fade (idéntico al modo fijo)
-      _vStartBubbleFade();
-      edViewerTextStep++;
-      _activateCanvas(edViewerIdx);
-      edUpdateViewer();
-      _updateOverlay();
-    } else if (goFwd) {
-      // Todos los bocadillos mostrados — deslizar a la siguiente hoja
-      if (edViewerIdx < edPages.length - 1) _snapTo(edViewerIdx + 1);
-    } else if (goBwd) {
-      _vsBack();
-    }
-  }, { passive: true });
-
-  // ── Retroceder ──
-  function _vsBack() {
-    if (_vFadeRaf) { cancelAnimationFrame(_vFadeRaf); _vFadeRaf = null; _vPrevBubbleFade = 0; }
-    const page  = edPages[edViewerIdx];
-    const isSeq = (page?.textMode || 'sequential') === 'sequential';
-    const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-    if (isSeq && edViewerTextStep > 1) {
-      // Aún hay bocadillos que retroceder en esta hoja
-      edViewerTextStep--;
-      _activateCanvas(edViewerIdx);
-      edUpdateViewer();
-      _updateOverlay();
-    } else {
-      // Sin bocadillos que retroceder — deslizar a la hoja anterior
-      if (edViewerIdx > 0) _snapTo(edViewerIdx - 1);
-    }
-  }
-
-  // ── Scroll nativo: detectar llegada a nuevo slide ──
-  let _prevSI = 0, _scrollRaf = null, _settling = false;
-  sc.addEventListener('scroll', () => {
-    if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
-    _scrollRaf = requestAnimationFrame(() => {
-      const pos  = isH ? sc.scrollLeft : sc.scrollTop;
-      const size = isH ? sc.clientWidth : sc.clientHeight;
-      if (!size) return;
-      const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
-      if (si === _prevSI) return;
-      const goingBack = si < _prevSI;
-      _prevSI      = si;
-      edViewerIdx  = si;
-      _activateCanvas(si);
-      const np  = edPages[si];
-      const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
-      const isSeq = (np?.textMode || 'sequential') === 'sequential';
-      if (!isSeq || ntl.length === 0) {
-        edViewerTextStep = 0;
-      } else if (goingBack) {
-        // Llegamos retrocediendo — mostrar el último texto
-        edViewerTextStep = ntl.length;
-      } else {
-        // Llegamos avanzando — mostrar el primer texto
-        edViewerTextStep = 1;
-      }
-      edUpdateViewer();
-      _updateOverlay();
-    });
-  }, { passive: true });
-
-  // ── scrollTo programático para retroceder ──
-  function _snapTo(idx) {
-    const size = isH ? sc.clientWidth : sc.clientHeight;
-    sc.scrollTo({
-      left:     isH ? idx * size : 0,
-      top:      isH ? 0 : idx * size,
-      behavior: 'smooth',
-    });
-  }
-
-  // Guardar referencia al overlay para limpieza en edCloseViewer
-  sc._vsOverlay = overlay;
-}
-
-// Función de render de un estado concreto sobre un canvas destino (usada en resize)
-function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
-  const ctx = canvas.getContext('2d');
-  const _savedOrient   = edOrientation;
-  const _savedPage     = edCurrentPage;
-  const _savedIdx      = edViewerIdx;
-  const _savedStep     = edViewerTextStep;
-  const _savedCanvas   = edViewerCanvas;
-  const _savedCtx      = edViewerCtx;
-
-  edOrientation    = orient;
-  edCurrentPage    = pageIdx;
-  edViewerIdx      = pageIdx;
-  edViewerTextStep = textStep;
-  edViewerCanvas   = canvas;
-  edViewerCtx      = ctx;
-
-  const full = document.createElement('canvas');
-  full.width  = ED_CANVAS_W;
-  full.height = ED_CANVAS_H;
-  const fctx  = full.getContext('2d');
-  const mx = (ED_CANVAS_W - pw) / 2;
-  const my = (ED_CANVAS_H - ph) / 2;
-  fctx.fillStyle = '#fff';
-  fctx.fillRect(mx, my, pw, ph);
-
-  page.layers.forEach(l => {
-    if (l.type==='text' || l.type==='bubble') return;
-    fctx.globalAlpha = l.opacity ?? 1;
-    if (typeof l.draw === 'function') l.draw(fctx, full);
-    fctx.globalAlpha = 1;
-  });
-  _edViewerDrawTextsOnCtx(page, fctx, full);
-  ctx.clearRect(0, 0, pw, ph);
-  ctx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
-
-  edOrientation    = _savedOrient;
-  edCurrentPage    = _savedPage;
-  edViewerIdx      = _savedIdx;
-  edViewerTextStep = _savedStep;
-  edViewerCanvas   = _savedCanvas;
-  edViewerCtx      = _savedCtx;
-}
-
-// Flag: true cuando el visor está en modo scroll (canvas dentro de slide flex)
-let _viewerScrollMode = false;
-
 function edUpdateViewerSize(pw, ph){
   if(!edViewerCanvas) return;
   const vw = window.innerWidth, vh = window.innerHeight;
+  // Si no se pasan dimensiones, calcularlas desde la hoja actual del visor
   if(!pw||!ph){
     const _po = edPages[edViewerIdx]?.orientation || edOrientation;
     pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
@@ -13301,22 +10214,16 @@ function edUpdateViewerSize(pw, ph){
   edViewerCanvas.width  = pw;
   edViewerCanvas.height = ph;
   edViewerCtx = edViewerCanvas.getContext('2d');
+  // Escala: llenar el viewport manteniendo proporción (contain)
   const scale = Math.min(vw / pw, vh / ph);
   const displayW = Math.round(pw * scale);
   const displayH = Math.round(ph * scale);
   edViewerCanvas.style.width  = displayW + 'px';
   edViewerCanvas.style.height = displayH + 'px';
-  if (!_viewerScrollMode) {
-    // Modo fijo: centrar con position absolute
-    edViewerCanvas.style.position = 'absolute';
-    edViewerCanvas.style.left = Math.round((vw - displayW) / 2) + 'px';
-    edViewerCanvas.style.top  = Math.round((vh - displayH) / 2) + 'px';
-  } else {
-    // Modo scroll: el canvas está dentro de un slide flex, no necesita posicionamiento
-    edViewerCanvas.style.position = '';
-    edViewerCanvas.style.left = '';
-    edViewerCanvas.style.top  = '';
-  }
+  // Centrar en el viewer
+  edViewerCanvas.style.position = 'absolute';
+  edViewerCanvas.style.left = Math.round((vw - displayW) / 2) + 'px';
+  edViewerCanvas.style.top  = Math.round((vh - displayH) / 2) + 'px';
 }
 
 // Teclado en visor (PC)
@@ -13430,40 +10337,32 @@ function edInitViewerTap(){
   const sig = { signal: _viewerAC.signal };
 
   // ── SWIPE TÁCTIL ──
-  // PC: siempre modo fijo. Táctil: según navMode de la obra.
-  const _vNavMode = edProjectMeta.navMode || 'fixed';
-  let _sx = null, _sy = null;
+  let _sx = null, _sy = null, _scrollCancelled = false;
 
   viewer.addEventListener('touchstart', e => {
-    _sx = null; _sy = null;
+    _sx = null; _sy = null; _scrollCancelled = false;
     if(e.touches.length !== 1) return;
     _sx = e.touches[0].clientX;
     _sy = e.touches[0].clientY;
   }, {passive:true, ...sig});
 
-  viewer.addEventListener('touchend', e => {
+  viewer.addEventListener('touchmove', e => {
     if(_sx === null) return;
+    const dy = e.touches[0].clientY - _sy;
+    if(Math.abs(dy) > 20) _scrollCancelled = true;
+  }, {passive:true, ...sig});
+
+  viewer.addEventListener('touchend', e => {
+    if(_sx === null || _scrollCancelled){ _sx = null; return; }
     if(e.changedTouches.length !== 1){ _sx = null; return; }
+    // Ignorar si el toque termina sobre un botón de control
     if(e.target.closest('button, a, input')) { _sx = null; return; }
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     const dx = endX - _sx, dy = endY - _sy;
-    const adx = Math.abs(dx), ady = Math.abs(dy);
     _sx = null;
-
-    if (_vNavMode === 'horizontal') {
-      if (adx < 30) return;
-      if (adx < ady) return; // gesto más vertical, ignorar
-      if (dx > 0) _viewerBack(); else _viewerAdvance();
-    } else if (_vNavMode === 'vertical') {
-      if (ady < 30) return;
-      if (ady < adx) return; // gesto más horizontal, ignorar
-      if (dy > 0) _viewerBack(); else _viewerAdvance();
-    } else {
-      // Modo fixed: tap en mitad izquierda/derecha
-      if (ady > 40) return;
-      if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
-    }
+    if(Math.abs(dy) > 40) return;
+    if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
   }, {passive:true, ...sig});
 
   // ── CONTROLES DESKTOP (mouse) ──
@@ -13473,21 +10372,6 @@ function edInitViewerTap(){
   viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
-  _edGifSetPlaying(false); // detener animación GIF al salir del visor
-  // Limpiar modo scroll si estaba activo
-  _viewerScrollMode = false;
-  const sc = $('viewerScroll');
-  if (sc) {
-    if (sc._vsOverlay) { sc._vsOverlay.remove(); sc._vsOverlay = null; }
-    sc.className = '';
-    sc.innerHTML = '';
-    sc.style.overflowX = '';
-    sc.style.overflowY = '';
-  }
-  const fc = $('viewerCanvas');
-  if (fc) fc.style.display = '';
-  _viewerTapBound = false;
-
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
   _vPrevBubbleFade=0;
   $('editorViewer')?.classList.remove('open');
@@ -13541,8 +10425,6 @@ function edUpdateViewer(){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
     } else if(l.type==='shape' || l.type==='line'){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
-    } else if(l.type==='gif'){
-      fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
     }
   });
   const _finishViewer = () => {
@@ -13565,15 +10447,6 @@ function edUpdateViewer(){
     }
   };
   _finishViewer();
-  // Animar GIFs y PNGs en el visor interno — el loop lo gestiona _applyFrame/_applyPngFrame
-  const _hasAnim = page.layers.some(l =>
-    (l.type==='gif' && l._playing) ||
-    (l.type==='image' && l._playing && l._pngFrames && l._pngFrames.length > 1)
-  );
-  if (!_hasAnim && edUpdateViewer._raf) {
-    cancelAnimationFrame(edUpdateViewer._raf);
-    edUpdateViewer._raf = null;
-  }
 }
 
 function _edViewerDrawTextsOnCtx(page, ctx, can){
@@ -13614,8 +10487,6 @@ function edOpenProjectModal(){
   $('edMGenre').value=edProjectMeta.genre;
   $('edMNavMode').value=edProjectMeta.navMode;
   const edMSocial=$('edMSocial'); if(edMSocial) edMSocial.value=edProjectMeta.social||'';
-  const _titleEl = document.querySelector('#edProjectModal .ed-modal-title');
-  if(_titleEl) _titleEl.textContent = 'Editar datos de la obra';
   $('edProjectModal')?.classList.add('open');
 }
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
@@ -13701,30 +10572,21 @@ function edOpenCamera() {
     return;
   }
 
-  // Guardar estado fullscreen — getUserMedia puede cancelarlo en Android
-  const _camWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-
-  let _camClosed = false; // flag: si closeCamera fue llamado, parar cualquier stream que llegue
-
   function startStream(facing) {
     if (_edCameraStream) {
       _edCameraStream.getTracks().forEach(t => t.stop());
       _edCameraStream = null;
     }
-    // Resolución ideal = doble del lienzo (1800×2340 → ×2 = 3600×4680)
     navigator.mediaDevices.getUserMedia({
-      video: { facingMode: facing, width: { ideal: ED_CANVAS_W * 2 }, height: { ideal: ED_CANVAS_H * 2 } },
+      video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false
     }).then(stream => {
-      // Si closeCamera ya fue llamado mientras esperábamos la Promise, parar inmediatamente
-      if (_camClosed) {
-        stream.getTracks().forEach(t => t.stop());
-        return;
-      }
       _edCameraStream = stream;
       video.srcObject = stream;
       overlay.classList.remove('hidden');
-    }).catch(() => {});
+    }).catch(() => {
+      edToast('No se pudo acceder a la cámara');
+    });
   }
 
   startStream(_edCameraFacing);
@@ -13738,337 +10600,39 @@ function edOpenCamera() {
   const ac = new AbortController();
   const sig = { signal: ac.signal };
 
-  // ── Pinch-to-zoom en el visor de cámara ──
-  // Estrategia dual: zoom de hardware vía applyConstraints (si el track lo soporta),
-  // con fallback a zoom CSS transform sobre el <video>.
-  let _camZoom = 1, _camZoomMin = 1, _camZoomMax = 1, _camHwZoom = false;
-  let _camPinchDist0 = null, _camZoom0 = 1;
-  const _camPointers = new Map();
-
-  function _camApplyZoom(z) {
-    _camZoom = Math.max(_camZoomMin, Math.min(_camZoomMax, z));
-    if(_camHwZoom && _edCameraStream) {
-      const track = _edCameraStream.getVideoTracks()[0];
-      if(track) track.applyConstraints({ advanced: [{ zoom: _camZoom }] }).catch(()=>{});
-    } else {
-      // Fallback: zoom CSS (crop visual del stream)
-      video.style.transform = _camZoom > 1 ? `scale(${_camZoom})` : '';
-    }
-    // Mostrar indicador de zoom
-    _camShowZoomBadge(_camZoom);
-  }
-
-  function _camShowZoomBadge(z) {
-    let badge = document.getElementById('_camZoomBadge');
-    if(!badge) {
-      badge = document.createElement('div');
-      badge.id = '_camZoomBadge';
-      badge.style.cssText = 'position:absolute;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.55);color:#fff;font-size:1rem;font-weight:700;padding:4px 14px;border-radius:20px;pointer-events:none;transition:opacity .4s;z-index:10001;';
-      overlay.appendChild(badge);
-    }
-    badge.textContent = z.toFixed(1) + '×';
-    badge.style.opacity = '1';
-    clearTimeout(badge._hide);
-    badge._hide = setTimeout(() => { badge.style.opacity = '0'; }, 1500);
-  }
-
-  function _camInitZoom() {
-    if(!_edCameraStream) return;
-    const track = _edCameraStream.getVideoTracks()[0];
-    if(!track) return;
-    if(track.getCapabilities) {
-      const caps = track.getCapabilities();
-      if(caps.zoom) {
-        _camZoomMin = caps.zoom.min || 1;
-        _camZoomMax = Math.min(caps.zoom.max || 1, 10);
-        _camHwZoom  = true;
-        return;
-      }
-    }
-    // Sin zoom de hardware: zoom CSS, rango visual razonable
-    _camZoomMin = 1; _camZoomMax = 5; _camHwZoom = false;
-  }
-
-  function _camPinchDist(ptrs) {
-    const [a, b] = [...ptrs.values()];
-    return Math.hypot(a.x - b.x, a.y - b.y);
-  }
-
-  // touch-action:none en el video para que el navegador no consuma el gesto de pinch
-  video.style.touchAction = 'none';
-
-  overlay.addEventListener('pointerdown', e => {
-    // Capturar el puntero en el overlay para recibir move/up aunque salga del elemento
-    try { overlay.setPointerCapture(e.pointerId); } catch(_){}
-    _camPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if(_camPointers.size === 2) {
-      _camInitZoom();
-      _camPinchDist0 = _camPinchDist(_camPointers);
-      _camZoom0 = _camZoom;
-    }
-  }, { signal: ac.signal, capture: true });
-
-  overlay.addEventListener('pointermove', e => {
-    if(!_camPointers.has(e.pointerId)) return;
-    _camPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if(_camPointers.size === 2 && _camPinchDist0) {
-      e.preventDefault();
-      const dist = _camPinchDist(_camPointers);
-      _camApplyZoom(_camZoom0 * (dist / _camPinchDist0));
-    }
-  }, { signal: ac.signal, capture: true, passive: false });
-
-  const _camEndPtr = e => {
-    _camPointers.delete(e.pointerId);
-    if(_camPointers.size < 2) _camPinchDist0 = null;
-  };
-  overlay.addEventListener('pointerup',     _camEndPtr, { signal: ac.signal, capture: true });
-  overlay.addEventListener('pointercancel', _camEndPtr, { signal: ac.signal, capture: true });
-
-  function closeCamera(restoreFs = false) {
-    // Pedir fullscreen PRIMERO — antes de parar stream, ocultar overlay, o cualquier otra acción.
-    // El token de gesto está fresco y ninguna condición puede bloquearlo todavía.
-    if(restoreFs && _camWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      const _el = document.documentElement;
-      const _req = _el.requestFullscreen || _el.webkitRequestFullscreen;
-      if(_req) _req.call(_el, { navigationUI: 'hide' })
-        .then(() => { if(typeof Fullscreen !== 'undefined') Fullscreen._updateBtn(); })
-        .catch(() => {});
-    }
-    // Ahora cerrar todo
-    _camClosed = true;
+  function closeCamera() {
     if (_edCameraStream) {
       _edCameraStream.getTracks().forEach(t => t.stop());
       _edCameraStream = null;
     }
-    video.pause();
     video.srcObject = null;
-    video.style.transform   = '';
-    video.style.touchAction = '';
-    const _pids = [..._camPointers.keys()];
-    _camPointers.clear();
-    _camZoom = 1; _camPinchDist0 = null;
-    for(const pid of _pids) { try{ overlay.releasePointerCapture(pid); }catch(_){} }
     overlay.classList.add('hidden');
     ac.abort();
   }
 
   capBtn?.addEventListener('click', () => {
     if (!_edCameraStream) return;
-    // 1. Capturar frame del video en canvas (síncrono, mientras stream está vivo)
     const canvas = document.createElement('canvas');
     const track  = _edCameraStream.getVideoTracks()[0];
     const settings = track.getSettings();
     canvas.width  = settings.width  || video.videoWidth;
     canvas.height = settings.height || video.videoHeight;
-    // Si se usó zoom CSS, usar las dimensiones recortadas directamente
-    const _useZoom = !_camHwZoom && _camZoom > 1;
-    if(_useZoom) {
-      const z = _camZoom;
-      const sw = Math.round((settings.width  || video.videoWidth)  / z);
-      const sh = Math.round((settings.height || video.videoHeight) / z);
-      const sx = Math.round(((settings.width  || video.videoWidth)  - sw) / 2);
-      const sy = Math.round(((settings.height || video.videoHeight) - sh) / 2);
-      canvas.width = sw; canvas.height = sh;
-      canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-    } else {
-      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    }
-    // 2. Cerrar cámara y restaurar FS SÍNCRONAMENTE dentro del gesto de usuario
-    //    (antes de toBlob que es asíncrono y expira el token de gesto)
-    closeCamera(true);
-    // 3. Convertir canvas a blob y añadir imagen (asíncrono, FS ya solicitado)
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(blob => {
-      if(blob) edAddImage(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
+      if (blob) {
+        const file = new File([blob], 'photo.jpg', { type: 'image/jpeg' });
+        closeCamera();
+        edAddImage(file);
+      }
     }, 'image/jpeg', 0.92);
   }, sig);
 
-  closeBtn?.addEventListener('click', () => closeCamera(true), sig);
+  closeBtn?.addEventListener('click', closeCamera, sig);
 
   flipBtn?.addEventListener('click', () => {
     _edCameraFacing = _edCameraFacing === 'environment' ? 'user' : 'environment';
     startStream(_edCameraFacing);
   }, sig);
-}
-
-/* ── T15: Importar archivo con capas (PSD / XCF / TIFF) ──
-   Cada capa visible se convierte en un ImageLayer independiente en el editor.
-   Las librerías se cargan dinámicamente desde CDN solo cuando se necesitan. */
-
-async function _edLoadScript(url) {
-  return new Promise((resolve, reject) => {
-    if(document.querySelector(`script[src="${url}"]`)) { resolve(); return; }
-    const s = document.createElement('script');
-    s.src = url; s.onload = resolve; s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-
-async function edImportLayers(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  const buf = await file.arrayBuffer();
-
-  // Cada capa se representa como {name, canvas, opacity, visible}
-  let rawLayers = [];
-
-  try {
-    if(ext === 'psd') {
-      // Cargar bundle UMD de ag-psd (expone window.agPsd)
-      await _edLoadScript('https://unpkg.com/ag-psd@20.0.0/dist/bundle.js');
-      // Inicializar el canvas factory para browser (obligatorio antes de readPsd)
-      if(!window._agPsdInit) {
-        window.agPsd.initializeCanvas(
-          (w, h) => { const c=document.createElement('canvas'); c.width=w; c.height=h; return c; },
-          (data) => {
-            const img = new Image();
-            img.src = 'data:image/jpeg;base64,' + window.agPsd.byteArrayToBase64(data);
-            const c = document.createElement('canvas');
-            c.width = img.width||1; c.height = img.height||1;
-            c.getContext('2d').drawImage(img,0,0);
-            return c;
-          },
-          (w, h) => new ImageData(w, h)
-        );
-        window._agPsdInit = true;
-      }
-      const psd = window.agPsd.readPsd(buf);
-
-      // Helper: forzar alpha=255 en un canvas que no tiene canal alpha (capa Background)
-      function _forceOpaque(canvas) {
-        const ctx2 = canvas.getContext('2d');
-        const id = ctx2.getImageData(0, 0, canvas.width, canvas.height);
-        const d = id.data;
-        let allTransparent = true;
-        for(let i = 3; i < d.length; i += 4) { if(d[i] > 0) { allTransparent = false; break; } }
-        if(allTransparent) {
-          for(let i = 3; i < d.length; i += 4) d[i] = 255;
-          ctx2.putImageData(id, 0, 0);
-        }
-        return canvas;
-      }
-
-      const _collectLayers = (children) => {
-        const result = [];
-        for(const layer of (children || [])) {
-          if(layer.children && layer.children.length) {
-            result.push(..._collectLayers(layer.children));
-          } else if(layer.canvas) {
-            result.push(layer);
-          }
-        }
-        return result;
-      };
-      const flatLayers = _collectLayers(psd.children || []);
-      for(const layer of flatLayers) {
-        const lc = layer.transparencyProtected ? _forceOpaque(layer.canvas) : layer.canvas;
-        rawLayers.push({
-          name: layer.name || 'Capa',
-          canvas: lc,
-          opacity: (layer.opacity !== undefined ? layer.opacity : 1),
-          visible: layer.hidden !== true
-        });
-      }
-      // PSD children: orden de arriba a abajo → invertir para que [0] sea la inferior
-      rawLayers.reverse();
-
-    } else if(ext === 'xcf') {
-      await _edLoadScript('https://cdn.jsdelivr.net/npm/xcfreader@0.0.6/dist/xcfreader.min.js');
-      const xcf = new XCFReader(buf);
-      const xcfLayers = xcf.layers || [];
-      for(const layer of xcfLayers) {
-        const lc = await layer.toCanvas();
-        rawLayers.push({ name: layer.name || 'Capa', canvas: lc,
-          opacity: layer.opacity !== undefined ? layer.opacity / 255 : 1,
-          visible: layer.visible !== false });
-      }
-      // xcfreader devuelve capas de arriba a abajo → invertir para orden inferior→superior
-      rawLayers.reverse();
-
-    } else if(ext === 'tif' || ext === 'tiff') {
-      await _edLoadScript('https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js');
-      const ifds = UTIF.decode(buf);
-      for(let i = 0; i < ifds.length; i++) {
-        UTIF.decodeImage(buf, ifds[i]);
-        const rgba = UTIF.toRGBA8(ifds[i]);
-        const lc = document.createElement('canvas');
-        lc.width = ifds[i].width; lc.height = ifds[i].height;
-        lc.getContext('2d').putImageData(
-          new ImageData(new Uint8ClampedArray(rgba), ifds[i].width, ifds[i].height), 0, 0);
-        rawLayers.push({ name: `Página ${i+1}`, canvas: lc, opacity: 1, visible: true });
-      }
-    }
-  } catch(err) {
-    edToast('Error al importar: ' + (err.message || err));
-    return;
-  }
-
-  if(!rawLayers.length) { edToast('No se encontraron capas'); return; }
-
-  // Filtrar invisibles
-  const visible = rawLayers.filter(l => l.visible);
-  if(!visible.length) { edToast('Todas las capas están ocultas'); return; }
-
-  // ── Indicador de progreso ──
-  let _progEl = document.getElementById('_edImportProgress');
-  if(!_progEl) {
-    _progEl = document.createElement('div');
-    _progEl.id = '_edImportProgress';
-    _progEl.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
-      'background:rgba(20,20,20,0.92);color:#fff;font-family:inherit;font-size:.95rem;font-weight:600;' +
-      'padding:16px 28px;border-radius:12px;z-index:99999;pointer-events:none;text-align:center;' +
-      'box-shadow:0 4px 20px rgba(0,0,0,.5);';
-    document.body.appendChild(_progEl);
-  }
-  const _setProgress = (i, total) => {
-    _progEl.textContent = `Importando capa ${i} de ${total}…`;
-    _progEl.style.display = 'block';
-  };
-  const _hideProgress = () => { _progEl.style.display = 'none'; };
-
-  edPushHistory();
-
-  // Convertir todos los rawLayers a ImageLayer en orden (inferior → superior)
-  // rawLayers ya está ordenado de inferior a superior tras el .reverse()
-  const newLayers = [];
-  for(let i = 0; i < visible.length; i++) {
-    const rl = visible[i];
-    _setProgress(i + 1, visible.length);
-    // Ceder el hilo para que el DOM actualice el indicador
-    await new Promise(r => setTimeout(r, 0));
-    const dataUrl = rl.canvas.toDataURL('image/png');
-    await new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => {
-        const layer = new ImageLayer(img, 0.5, 0.5, 0.7);
-        const maxH = 0.85;
-        if(layer.height > maxH){
-          const scale = maxH / layer.height;
-          layer.height = maxH; layer.width = layer.width * scale;
-        }
-        layer.opacity = Math.max(0, Math.min(1, rl.opacity));
-        newLayers.push(layer);
-        resolve();
-      };
-      img.src = dataUrl;
-    });
-  }
-
-  _hideProgress();
-
-  // Insertar todas las capas de golpe en el orden correcto (inferior primero),
-  // justo antes del primer texto/bocadillo si lo hay
-  const firstTextIdx = edLayers.findIndex(l => l.type==='text' || l.type==='bubble');
-  if(firstTextIdx >= 0) {
-    edLayers.splice(firstTextIdx, 0, ...newLayers);
-    edSelectedIdx = firstTextIdx + newLayers.length - 1;
-  } else {
-    edLayers.push(...newLayers);
-    edSelectedIdx = edLayers.length - 1;
-  }
-
-  edPages[edCurrentPage].layers = edLayers;
-  edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
-  edToast(`${visible.length} capa${visible.length>1?'s':''} importada${visible.length>1?'s':''} ✓`);
 }
 
 function EditorView_destroy(){
@@ -14229,7 +10793,6 @@ function EditorView_init(){
   // Solo se previene cuando el usuario está activamente dibujando (edPainting)
   if(edCanvas){
     edCanvas.addEventListener('touchstart', e => {
-      if (window._gcpActive) { e.stopPropagation(); return; }
       // Solo bloquear gesto de borde con 1 dedo — nunca bloquear pinch (2 dedos)
       if(e.touches.length === 1 && ['draw','eraser','fill'].includes(edActiveTool)){
         e.preventDefault();
@@ -14250,47 +10813,6 @@ function EditorView_init(){
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click', () => {
-    // Si hay guardado en la nube en curso, avisar con diálogo bloqueante
-    if (_edCloudSaving) {
-      const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
-      const dlgCloud = document.createElement('div');
-      dlgCloud.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
-      dlgCloud.innerHTML = `
-        <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
-          <div style="font-size:1.8rem;margin-bottom:12px">⚠️</div>
-          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">Guardado en nube en curso</p>
-          <p id="_edCloudSavingBadge" style="font-size:.88rem;color:#e67e22;font-weight:700;margin-bottom:8px">☁️ Guardando en nube... ${elapsed}s</p>
-          <p style="font-size:.85rem;color:#666;margin-bottom:24px">Salir del editor antes de que termine de guardarse en la nube guardará una copia defectuosa.</p>
-          <div style="display:flex;gap:10px;justify-content:center">
-            <button id="_edCloudExitAnyway" style="flex:1;padding:10px;border:1.5px solid #e74c3c;border-radius:10px;background:#fff;color:#e74c3c;font-weight:700;cursor:pointer;font-size:.85rem">Salir igualmente</button>
-            <button id="_edCloudWait" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">Esperar</button>
-          </div>
-        </div>`;
-      document.body.appendChild(dlgCloud);
-      // Actualizar contador en el diálogo mientras está abierto
-      const _dlgTimer = setInterval(() => {
-        const b = document.getElementById('_edCloudSavingBadge');
-        if (b && _edCloudSaving) {
-          const s = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
-          b.textContent = `☁️ Guardando en nube... ${s}s`;
-        } else if (!_edCloudSaving) {
-          clearInterval(_dlgTimer);
-          dlgCloud.remove();
-          Router.go('my-comics');
-        }
-      }, 500);
-      document.getElementById('_edCloudWait').onclick = () => {
-        clearInterval(_dlgTimer);
-        dlgCloud.remove();
-      };
-      document.getElementById('_edCloudExitAnyway').onclick = () => {
-        clearInterval(_dlgTimer);
-        dlgCloud.remove();
-        Router.go('my-comics');
-      };
-      return;
-    }
-
     const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
     if (!hasUnsaved) { Router.go('my-comics'); return; }
 
@@ -14390,19 +10912,8 @@ function EditorView_init(){
   $('edCloudSaveBtn')?.addEventListener('click', edCloudSave);
   $('edPreviewBtn')?.addEventListener('click', edOpenViewer);
   // Botón pantalla completa en topbar
-  // Llama requestFullscreen directamente (sin la guarda inPWA de Fullscreen.enter)
-  // para que funcione siempre que el usuario lo pida explícitamente
   $('edFsBtn')?.addEventListener('click', () => {
-    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    if(isFs) {
-      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
-    } else {
-      const el  = document.documentElement;
-      const req = el.requestFullscreen || el.webkitRequestFullscreen;
-      if(req) req.call(el, { navigationUI: 'hide' })
-        .then(() => { if(typeof Fullscreen!=='undefined') Fullscreen._updateBtn(); })
-        .catch(() => {});
-    }
+    if(typeof Fullscreen !== 'undefined') Fullscreen.request();
   });
   const _edFsUpdate = () => {
     const btn = $('edFsBtn'); if(!btn) return;
@@ -14427,35 +10938,12 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
-  $('dd-animation')?.addEventListener('click',()=>{
-    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    $('edFileGif').click();
-    edCloseMenus();
-  });
-  $('edAnimacionesBtn')?.addEventListener('click', () => { edCloseMenus(); gcpOpen(); });
-  $('edFileGif')?.addEventListener('change', async e => {
-    const _f = e.target.files[0]; e.target.value = '';
-    if (!_f) return;
-    edAddGif(_f);
-    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
-    }
-    window._edWasFullscreen = false;
-  });
-
   $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
-  $('edFileGallery')?.addEventListener('change', async e=>{
-    const _f = e.target.files[0];
-    e.target.value = '';
-    if(!_f) return;
-    const _ext = _f.name.split('.').pop().toLowerCase();
-    if(_ext === 'psd' || _ext === 'xcf' || _ext === 'tif' || _ext === 'tiff'){
-      await edImportLayers(_f);
-    } else {
-      edAddImage(_f);
-    }
+  $('edFileGallery')?.addEventListener('change',e=>{
+    edAddImage(e.target.files[0]);
+    e.target.value='';
     // Restaurar fullscreen usando Fullscreen.enter() — gestiona todos los casos correctamente
     // Pequeño delay para que el navegador procese el cierre del selector antes de pedir FS
     if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
@@ -14470,7 +10958,7 @@ function EditorView_init(){
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{
-    // Guardar el estado previo antes de entrar al modo dibujo
+    // Guardar el estado previo (puede ser canvas vacío) antes de entrar al modo dibujo
     edPushHistory();
     edActiveTool='draw';
     edCanvas.className='tool-draw';
@@ -14500,103 +10988,63 @@ function EditorView_init(){
   $('dd-shape-rect')?.addEventListener('click', () => _esbActivate('rect'));
   $('dd-shape-ellipse')?.addEventListener('click', () => _esbActivate('ellipse'));
   $('dd-shape-line')?.addEventListener('click', () => _esbActivate(null, 'draw'));
-  $('dd-shape-segment')?.addEventListener('click', () => _esbActivate(null, 'segment'));
 
-  // T20: botón tipo-objeto con icono dinámico y popup selector
-  function _esbGetActiveIcon() {
-    if(edActiveTool === 'select') return '↖';
-    if(edActiveTool === 'shape') return _edShapeType === 'ellipse' ? '◯' : '▭';
-    if(edActiveTool === 'line')  return _edLineType === 'segment' ? '├─┤' : '╱';
-    return '▭';
-  }
   function _esbSyncTool() {
     const t = edActiveTool;
-    const shapesBtn = $('esb-shapes');
-    if(shapesBtn) shapesBtn.innerHTML = _esbGetActiveIcon();
+    $('esb-shapes')?.classList.toggle('active', t === 'shape' || t === 'line');
+    $('esb-select')?.classList.toggle('active', t === 'select');
     $('esb-fill')?.classList.toggle('active', t === 'fill');
     const dot = $('esb-size-dot');
     if(dot){ const sz=edDrawSize; const _dz3=typeof edCamera!=='undefined'?edCamera.z:1; const d=Math.max(3,Math.min(22,Math.round(sz*_dz3))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
     const sw = $('esb-color'); if(sw) sw.style.background = edDrawColor;
   }
 
-  // ── T20: Popup selector de tipo de objeto ──
-  let _esbPopEl = document.getElementById('esb-shapes-pop');
-  if(!_esbPopEl){
-    _esbPopEl = document.createElement('div');
-    _esbPopEl.id = 'esb-shapes-pop';
-    _esbPopEl.style.cssText = 'position:fixed;z-index:1300;display:none;flex-direction:row;gap:6px;padding:8px 10px;background:rgba(24,24,28,.96);border:1px solid rgba(255,255,255,.13);border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.45);align-items:center;';
-    document.body.appendChild(_esbPopEl);
+  // ── Submenú de tipo de objeto ──
+  const _esbPop = $('esb-shapes-pop');
+  if(_esbPop){
+    _esbPop.innerHTML = `
+      <button class="edb-shape-btn" id="esb-shape-rect"    title="Rectángulo">▭</button>
+      <button class="edb-shape-btn" id="esb-shape-ellipse" title="Elipse">◯</button>
+      <button class="edb-shape-btn" id="esb-shape-line"    title="Rectas">╱</button>`;
+    $('esb-shape-rect')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _esbClosePop();
+      _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
+      edDrawFillColor='none'; _esbSyncTool();
+    });
+    $('esb-shape-ellipse')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _esbClosePop();
+      _edShapeType='ellipse'; edActiveTool='shape'; edCanvas.className='tool-shape';
+      edDrawFillColor='none'; _esbSyncTool();
+    });
+    $('esb-shape-line')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _esbClosePop();
+      _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
+      edDrawFillColor='none'; _esbSyncTool();
+    });
   }
-  _esbPopEl.innerHTML = `
-    <button class="edb-shape-btn" id="esb-shape-rect"    title="Rectángulo" style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">▭</button>
-    <button class="edb-shape-btn" id="esb-shape-ellipse" title="Elipse"      style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">◯</button>
-    <button class="edb-shape-btn" id="esb-shape-line"    title="Pol&#237;gono"    style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">╱</button>
-    <button class="edb-shape-btn" id="esb-shape-segment" title="Segmento"    style="min-width:32px;padding:4px 6px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;"><svg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'><line x1='13' y1='3' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='10' y1='3' x2='13' y2='3' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/><line x1='3' y1='10' x2='3' y2='13' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/></svg></button>
-    <button class="edb-shape-btn" id="esb-shape-select"  title="Selección"   style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">↖</button>`;
-
-  function _esbMarkActivePop(){
-    _esbPopEl.querySelectorAll('.edb-shape-btn').forEach(b => b.style.background='transparent');
-    let activeId;
-    if(edActiveTool==='shape') activeId = _edShapeType==='ellipse' ? 'esb-shape-ellipse' : 'esb-shape-rect';
-    else if(edActiveTool==='line') activeId = _edLineType==='segment' ? 'esb-shape-segment' : 'esb-shape-line';
-    else if(edActiveTool==='select') activeId = 'esb-shape-select';
-    if(activeId){ const b=$(activeId); if(b) b.style.background='rgba(255,255,255,.15)'; }
-  }
-
-  // Handlers: usan _esbActivate exactamente igual que los botones del menú Insertar original
-  $('esb-shape-rect')?.addEventListener('pointerup', e => {
-    e.stopPropagation(); _esbClosePop();
-    _esbActivate('rect');
-    _esbSyncTool();
-  });
-  $('esb-shape-ellipse')?.addEventListener('pointerup', e => {
-    e.stopPropagation(); _esbClosePop();
-    _esbActivate('ellipse');
-    _esbSyncTool();
-  });
-  $('esb-shape-line')?.addEventListener('pointerup', e => {
-    e.stopPropagation(); _esbClosePop();
-    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
-    _esbActivate(null, 'draw');
-    _esbSyncTool();
-  });
-  $('esb-shape-segment')?.addEventListener('pointerup', e => {
-    e.stopPropagation(); _esbClosePop();
-    if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
-    _esbActivate(null, 'segment');
-    _esbSyncTool();
-  });
-  $('esb-shape-select')?.addEventListener('pointerup', e => {
-    e.stopPropagation(); _esbClosePop();
-    // T19: confirmar línea en construcción
-    if(_edLineLayer && _edLineLayer.points.length >= 2) { _edFinishLine(); _esbSyncTool(); return; }
-    if(_edLineLayer){ const _ix=edLayers.indexOf(_edLineLayer); if(_ix>=0) edLayers.splice(_ix,1); _edLineLayer=null; }
-    edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
-    edRedraw(); _esbSyncTool();
-  });
-
-  function _esbClosePop(){
-    _esbPopEl.style.display='none';
-    document.removeEventListener('pointerdown', window._esbPopClose);
-  }
+  function _esbClosePop(){ $('esb-shapes-pop')?.classList.remove('open'); }
   function _esbTogglePop(){
-    if(_esbPopEl.style.display!=='none'){ _esbClosePop(); return; }
-    _esbMarkActivePop();
+    const pop=$('esb-shapes-pop'); if(!pop) return;
+    if(pop.classList.contains('open')){ _esbClosePop(); return; }
+    // Posicionar el popup
     const bar=$('edShapeBar'), btn=$('esb-shapes');
     if(!bar||!btn) return;
     const isH=bar.classList.contains('horiz');
     const br=bar.getBoundingClientRect();
-    _esbPopEl.style.display='flex';
-    const pw=_esbPopEl.offsetWidth||160, ph=_esbPopEl.offsetHeight||52;
+    pop.style.visibility='hidden'; pop.style.display='flex';
+    const pw=pop.offsetWidth||130, ph=pop.offsetHeight||52;
+    pop.style.display=''; pop.style.visibility='';
     let l,t;
     if(isH){ l=br.left+(br.width/2)-pw/2; t=br.top-ph-8; if(t<4)t=br.bottom+8; }
     else { l=br.right+8; t=br.top+(br.height/2)-ph/2; if(l+pw>window.innerWidth-4)l=br.left-pw-8; }
-    _esbPopEl.style.left=Math.max(4,Math.min(window.innerWidth-pw-4,l))+'px';
-    _esbPopEl.style.top=Math.max(4,Math.min(window.innerHeight-ph-4,t))+'px';
+    pop.style.left=Math.max(4,Math.min(window.innerWidth-pw-4,l))+'px';
+    pop.style.top=Math.max(4,Math.min(window.innerHeight-ph-4,t))+'px';
+    pop.classList.add('open');
     setTimeout(()=>{
-      window._esbPopClose=ev=>{
-        if(!ev.target.closest('#esb-shapes-pop')&&!ev.target.closest('#esb-shapes'))
-          _esbClosePop();
+      window._esbPopClose=e=>{
+        if(!e.target.closest('#esb-shapes-pop')&&!e.target.closest('#esb-shapes')){
+          _esbClosePop(); document.removeEventListener('pointerdown',window._esbPopClose);
+        }
       };
       document.addEventListener('pointerdown',window._esbPopClose);
     },0);
@@ -14619,7 +11067,6 @@ function EditorView_init(){
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
     _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
-    else { _edResetCameraToFit(); }
     edRedraw();
   });
 
@@ -14645,20 +11092,6 @@ function EditorView_init(){
   $('dd-editproject')?.addEventListener('click',()=>{edOpenProjectModal();edCloseMenus();});
   $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
-  // Submenú Hoja actual (inline, igual que los demás submenús)
-  $('dd-exportpagebtn')?.addEventListener('click', e => {
-    e.stopPropagation();
-    $('dd-export-page-sub')?.classList.toggle('open');
-    $('dd-export-sel-sub')?.classList.remove('open');
-  });
-  // Submenú Selección (inline)
-  $('dd-exportselbtn')?.addEventListener('click', e => {
-    e.stopPropagation();
-    $('dd-export-sel-sub')?.classList.toggle('open');
-    $('dd-export-page-sub')?.classList.remove('open');
-  });
-  $('dd-exportselpng')?.addEventListener('click',()=>{ edExportSelectionPNG('png'); edCloseMenus(); });
-  $('dd-exportseljpg')?.addEventListener('click',()=>{ edExportSelectionPNG('jpg'); edCloseMenus(); });
   // Submenú exportar: toggle inline al clicar
   // Submenús inline — mismo patrón que exportar
   $('dd-imagen-btn')?.addEventListener('click', e => {
@@ -14680,36 +11113,6 @@ function EditorView_init(){
   $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
   $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
-  // Mostrar "Recuperar versión del dispositivo" solo si hay versión local guardada
-  function _edUpdateRecoverBtn() {
-    const btn = $('dd-recoverlocal');
-    if(!btn || !edProjectId) return;
-    const comic = ComicStore.getById(edProjectId);
-    // Mostrar si: tiene localEditorData guardado Y la nube es más reciente
-    const hasLocal = !!(comic?.localEditorData);
-    btn.style.display = hasLocal ? '' : 'none';
-  }
-
-  // Actualizar al abrir el menú proyecto
-  document.querySelector('[data-menu="project"]')?.addEventListener('pointerup', () => {
-    setTimeout(_edUpdateRecoverBtn, 50);
-  });
-
-  $('dd-recoverlocal')?.addEventListener('click', () => {
-    edCloseMenus();
-    if(!edProjectId) return;
-    const comic = ComicStore.getById(edProjectId);
-    if(!comic?.localEditorData) { edToast('No hay versión local guardada'); return; }
-    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios actuales no guardados localmente.')) return;
-    // Restaurar localEditorData como editorData activo
-    comic.editorData = comic.localEditorData;
-    comic.cloudNewer = false;
-    ComicStore.save(comic);
-    // Recargar la obra
-    edLoadProject(edProjectId);
-    edToast('Versión del dispositivo restaurada ✓');
-  });
-
   $('dd-deleteproject')?.addEventListener('click',()=>{
     edCloseMenus();
     if(!edProjectId){edToast('Sin proyecto activo');return;}
@@ -14790,8 +11193,9 @@ function EditorView_init(){
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
       // Zoom hacia el cursor
+      const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
       const sx = e.clientX;
-      const sy = e.clientY - _edCanvasTop;
+      const sy = e.clientY - canvasTop;
       const factor = e.deltaY > 0 ? 1/1.1 : 1.1;
       edZoomAt(sx, sy, factor);
     } else {
@@ -14807,18 +11211,6 @@ function EditorView_init(){
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
-    // Editor GIF activo: flechas navegan entre frames
-    if (window._gcpActive && window._gcpFrames && window._gcpFrames.length > 1) {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        _gcpGoToFrame(Math.min(window._gcpFrameIdx + 1, window._gcpFrames.length - 1));
-        return;
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        _gcpGoToFrame(Math.max(window._gcpFrameIdx - 1, 0));
-        return;
-      }
-    }
     const tag = document.activeElement?.tagName?.toLowerCase();
     const ctrl = e.ctrlKey || e.metaKey;
     // Bloquear shortcuts si hay un input con foco, EXCEPTO Ctrl+Z/Y
@@ -14928,53 +11320,6 @@ function EditorView_init(){
       }
       return;
     }
-    // Shift+flechas (PC): añadir a la multiselección el objeto más cercano en esa dirección
-    // Busca siempre desde el objeto ANCLA (el primero seleccionado), no desde el centroide.
-    // Así se puede saltar objetos intermedios y seleccionar cualquier objeto no contiguo.
-    if(e.shiftKey && !ctrl && (e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight')){
-      if(!window._edIsTouch && edLayers.length > 0){
-        e.preventDefault();
-        const pw = edPageW(), ph = edPageH();
-        const curSel = edActiveTool==='multiselect' ? [...edMultiSel]
-                     : edSelectedIdx >= 0 ? [edSelectedIdx] : [];
-        if(curSel.length === 0) return;
-        // Punto de referencia: ancla fija (primer objeto de la selección original)
-        // NO el centroide — así cada flecha busca desde el mismo punto de partida
-        // y se pueden saltar objetos intermedios sin problema.
-        const anchorIdx = (edMultiSelAnchor >= 0 && curSel.includes(edMultiSelAnchor))
-          ? edMultiSelAnchor : curSel[0];
-        const anchor = edLayers[anchorIdx];
-        if(!anchor) return;
-        const ax = anchor.x, ay = anchor.y;
-        let bestIdx = -1, bestScore = Infinity;
-        edLayers.forEach((la, i) => {
-          if(curSel.includes(i)) return;
-          const dx = (la.x - ax) * pw;
-          const dy = (la.y - ay) * ph;
-          let inDir = false;
-          if(e.key==='ArrowRight' && dx >  Math.abs(dy)*0.3) inDir=true;
-          if(e.key==='ArrowLeft'  && dx < -Math.abs(dy)*0.3) inDir=true;
-          if(e.key==='ArrowDown'  && dy >  Math.abs(dx)*0.3) inDir=true;
-          if(e.key==='ArrowUp'    && dy < -Math.abs(dx)*0.3) inDir=true;
-          if(!inDir) return;
-          const dist = Math.hypot(dx, dy);
-          if(dist < bestScore){ bestScore=dist; bestIdx=i; }
-        });
-        if(bestIdx < 0) return;
-        const combined = [...new Set([...curSel, bestIdx])];
-        if(combined.length >= 2){
-          edMultiSel = combined;
-          edSelectedIdx = -1;
-          edActiveTool = 'multiselect';
-          edCanvas.className = 'tool-multiselect';
-          $('edMultiSelBtn')?.classList.add('active');
-          _msRecalcBbox();
-          _edUpdateMultiSelPanel();
-        }
-        edRedraw();
-      }
-      return;
-    }
     if(!ctrl) return;
     const _vecActive = $('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible');
     if(!e.shiftKey && e.key.toLowerCase() === 'z'){
@@ -15028,16 +11373,6 @@ function EditorView_init(){
 
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
-    if (window._gcpActive) {
-      // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
-      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, [data-gcpmenu]');
-      if (_gcpUiEl) {
-        return; // Es UI del GIF — dejar que sus propios listeners actúen
-      } else {
-        _gcpHandleDown(e);
-        return;
-      }
-    }
     // Ignorar clicks en zona de barra bloqueada (pointer-events:none deja pasar coords)
     const _menuBar2=$('edMenuBar');
     if(_menuBar2 && $('editorShell')?.classList.contains('draw-active')){
@@ -15093,14 +11428,6 @@ function EditorView_init(){
   };
   document.addEventListener('pointerdown', window._edDocDownFn);
 
-  // Handlers de pointermove/pointerup para el canvas GIF
-  // Registrados en document igual que los del editor general
-  window._gcpMoveFn = e => { if (window._gcpActive) _gcpHandleMove(e); };
-  window._gcpUpFn   = e => { if (window._gcpActive) _gcpHandleUp(e); };
-  document.addEventListener('pointermove', window._gcpMoveFn, { passive: false });
-  document.addEventListener('pointerup',   window._gcpUpFn);
-  document.addEventListener('pointercancel', window._gcpUpFn);
-
 
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
   edUpdateCanvasFullscreen();
@@ -15114,10 +11441,6 @@ function EditorView_init(){
   if(editorShell){
     let _pinchPrev = 0, _pinchMidX = 0, _pinchMidY = 0;
     editorShell.addEventListener('touchstart', e => {
-      if (window._gcpActive) {
-        const optPanel = document.getElementById('edOptionsPanel');
-        if (!optPanel || !optPanel.contains(e.target)) return;
-      }
       if(e.target.closest('#edOptionsPanel')) return; // no interferir con scroll del panel
       if(e.touches.length === 2){
         // No hacer zoom de cámara si hay objeto seleccionado, multiselección activa o modo dibujo
@@ -15126,8 +11449,9 @@ function EditorView_init(){
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
+        const canvasTop = parseFloat(edCanvas ? edCanvas.style.top : 0) || 0;
         _pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-        _pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - _edCanvasTop;
+        _pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - canvasTop;
       }
     }, {passive:true});
     editorShell.addEventListener('touchmove', e => {
@@ -15239,80 +11563,6 @@ function edExportPagePNG(format){
   }, mimeType, quality);
 }
 
-function edExportSelectionPNG(format) {
-  format = format || 'png';
-  // Calcular bbox de la selección (single o multi)
-  let bb = null;
-  if(edMultiSel.length >= 2) {
-    bb = _msBBox();
-  } else if(edSelectedIdx >= 0) {
-    const la = edLayers[edSelectedIdx];
-    if(la) {
-      const pw2 = edPageW(), ph2 = edPageH();
-      const rot = (la.rotation||0)*Math.PI/180;
-      const hw = la.width/2, hh = la.height/2;
-      let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
-      for(const [cx,cy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
-        const wx=cx*pw2, wy=cy*ph2;
-        const rx=(wx*Math.cos(rot)-wy*Math.sin(rot))/pw2;
-        const ry=(wx*Math.sin(rot)+wy*Math.cos(rot))/ph2;
-        x0=Math.min(x0,la.x+rx); y0=Math.min(y0,la.y+ry);
-        x1=Math.max(x1,la.x+rx); y1=Math.max(y1,la.y+ry);
-      }
-      bb = {x0,y0,x1,y1,w:x1-x0,h:y1-y0,cx:(x0+x1)/2,cy:(y0+y1)/2};
-    }
-  }
-  if(!bb || bb.w < 0.001 || bb.h < 0.001) { edToast('Selecciona objetos primero'); return; }
-
-  const pw = edPageW(), ph = edPageH();
-  const mx = edMarginX(), my = edMarginY();
-  const page = edPages[edCurrentPage]; if(!page) return;
-
-  // Canvas del tamaño exacto del bbox de selección en px
-  const bxPx = Math.ceil(bb.w * pw);
-  const byPx = Math.ceil(bb.h * ph);
-  const off = document.createElement('canvas');
-  off.width  = bxPx;
-  off.height = byPx;
-  const offCtx = off.getContext('2d', { alpha: true });
-
-  if(format === 'jpg'){ offCtx.fillStyle='#ffffff'; offCtx.fillRect(0,0,bxPx,byPx); }
-
-  // Transform: mapear coords workspace al canvas de exportación
-  // El origen del canvas exportado corresponde a (mx + bb.x0*pw, my + bb.y0*ph) en workspace
-  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
-
-  // Renderizar solo las capas seleccionadas
-  const selSet = edMultiSel.length >= 2
-    ? new Set(edMultiSel.map(i => edLayers[i]).filter(Boolean))
-    : new Set([edLayers[edSelectedIdx]].filter(Boolean));
-
-  const _textLayers = [...selSet].filter(l => l.type==='text'||l.type==='bubble');
-  const _textAlpha  = page.textLayerOpacity ?? 1;
-
-  [...selSet].forEach(l => {
-    if(!l || l.type==='text'||l.type==='bubble') return;
-    if(l.type==='image'){ l.draw(offCtx, off); }
-    else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
-  });
-  offCtx.globalAlpha = _textAlpha;
-  _textLayers.forEach(l => l.draw(offCtx, off));
-  offCtx.globalAlpha = 1;
-
-  const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
-  const quality  = format==='jpg' ? 0.92 : undefined;
-  off.toBlob(blob => {
-    if(!blob){ edToast('Error al exportar'); return; }
-    const url = URL.createObjectURL(blob);
-    const a   = document.createElement('a');
-    a.href    = url;
-    a.download = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    edToast('Selección exportada ✓');
-  }, mimeType, quality);
-}
-
 function edLoadFromJSON(file){
   if(!file)return;
   const reader=new FileReader();
@@ -15320,7 +11570,7 @@ function edLoadFromJSON(file){
     try{
       const data=JSON.parse(e.target.result);
       if(data.editorData){
-        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'fixed',social:data.social||''};
+        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'horizontal',social:data.social||''};
         edOrientation=data.editorData.orientation||'vertical';
         edPages=(data.editorData.pages||[]).map(pd=>({
           drawData:pd.drawData||null,
@@ -15374,11 +11624,7 @@ function _bibLoad() {
     oldItems = JSON.parse(localStorage.getItem(_bibKey()) || '[]');
     if (!Array.isArray(oldItems)) oldItems = [];
   } catch(e) {}
-  const defaultData = { folders: [
-    { id: '__root__', name: 'General', items: oldItems },
-    { id: '__anim__', name: 'Animaciones', items: [] }
-  ]};
-  return defaultData;
+  return { folders: [{ id: '__root__', name: 'General', items: oldItems }] };
 }
 function _bibSave(data) {
   try { localStorage.setItem(_bibKey(), JSON.stringify(data)); }
@@ -15436,23 +11682,8 @@ function _bibThumb(la) {
   } else if (la.type === 'text' || la.type === 'bubble') {
     // Mismo sistema que el panel de capas: _lyDrawThumb
     _lyDrawThumb(thumb, la);
-  } else if (la.type === 'gif' && la._oc) {
-    // GIF: usar primer frame del canvas offscreen
-    const scale = Math.min((S-pad*2)/Math.max(la._oc.width,1), (S-pad*2)/Math.max(la._oc.height,1));
-    const dw = la._oc.width*scale, dh = la._oc.height*scale;
-    tc.drawImage(la._oc, (S-dw)/2, (S-dh)/2, dw, dh);
   }
   return thumb.toDataURL('image/png');
-}
-
-// ── Helper: obtener o crear carpeta Animaciones ──────────────────
-function _bibGetAnimFolder(data) {
-  let folder = data.folders.find(f => f.name === 'Animaciones');
-  if (!folder) {
-    folder = { id: '__anim__', name: 'Animaciones', items: [] };
-    data.folders.push(folder);
-  }
-  return folder;
 }
 
 // ── Guardar objeto o grupo ────────────────────────────────────────
@@ -15489,24 +11720,6 @@ function edBibGuardar() {
     // Objeto individual
     const la = edLayers[edSelectedIdx];
     if (!la) { edToast('Selecciona un objeto primero'); return; }
-    // GIF: guardar directamente en carpeta Animaciones con su dataUrl
-    if (la.type === 'gif') {
-      const gifThumb = _bibThumb(la);
-      // Necesitamos el dataUrl del gif — está en IndexedDB
-      _gifIdbLoad(la.gifKey).then(gifDataUrl => {
-        if (!gifDataUrl) { edToast('No se pudo cargar el GIF'); return; }
-        const gifEntry = {
-          id: Date.now() + '_gif', timestamp: Date.now(),
-          isGroup: false, isGifAnim: true,
-          gifDataUrl, layerData: null, thumb: gifThumb
-        };
-        const d2 = _bibLoad();
-        _bibGetAnimFolder(d2).items.push(gifEntry);
-        _bibSave(d2);
-        edToast('GIF guardado en Biblioteca → Animaciones ✓');
-      }).catch(() => edToast('Error al leer el GIF'));
-      return;
-    }
     entry = {
       id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
       timestamp: Date.now(),
@@ -15516,8 +11729,7 @@ function edBibGuardar() {
     };
   }
 
-  // Excluir carpeta Animaciones — los objetos normales nunca van ahí
-  const realFolders = data.folders.filter(f => f.name !== 'Animaciones');
+  const realFolders = data.folders;
   if (realFolders.length > 1) {
     _bibShowFolderPicker(entry, data);
   } else {
@@ -15599,7 +11811,7 @@ function _bibShowFolderPicker(entry, data) {
   title.textContent = '¿En qué carpeta?';
   pop.appendChild(title);
 
-  data.folders.filter(f => f.name !== 'Animaciones').forEach(folder => {
+  data.folders.forEach(folder => {
     const btn = document.createElement('button');
     btn.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 14px;border:none;background:transparent;font-size:.85rem;cursor:pointer;color:var(--gray-800,#222)';
     btn.textContent = '📁 ' + folder.name;
@@ -15636,16 +11848,6 @@ function _bibClose(panel) {
   panel.innerHTML = '';
   delete panel.dataset.mode;
   requestAnimationFrame(edFitCanvas);
-}
-
-// Convertir dataUrl a Blob (sin fetch — funciona en Android)
-function _dataUrlToBlob(dataUrl) {
-  const parts = dataUrl.split(',');
-  const mime  = parts[0].match(/:(.*?);/)[1];
-  const bin   = atob(parts[1]);
-  const arr   = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return new Blob([arr], { type: mime });
 }
 
 function _bibRenderPanel(panel) {
@@ -15808,39 +12010,6 @@ function _bibRenderPanel(panel) {
       const d = _bibLoad();
       const entry = d.folders[fi]?.items[ii];
       if (!entry) return;
-
-      // Si el editor GIF está activo, insertar en el canvas GIF
-      if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
-
-      // GIF animado guardado desde el editor GIF
-      if (entry.isGifAnim && entry.gifDataUrl) {
-        const frames = entry.pngFrames && entry.pngFrames.length > 1 ? entry.pngFrames : [entry.gifDataUrl];
-        const img = new Image();
-        img.onload = () => {
-          const pw = edPageW(), ph = edPageH();
-          let finalW = entry.normW || 0.7;
-          let finalH = entry.normH || finalW*(img.naturalHeight/Math.max(img.naturalWidth,1))*(pw/ph);
-          const sc = Math.max(finalW/0.9, finalH/0.9, 1);
-          finalW /= sc; finalH /= sc;
-          const la = new ImageLayer(img, 0.5, 0.5, finalW);
-          la.height = finalH;
-          la.src = frames[0];
-          la._keepSize = true;
-          la._isGcpImage = true;
-          la._pngFrames = frames;       // todos los frames
-          la._pngFrameIdx = 0;
-          if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
-          if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
-          const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
-          if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
-          else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
-          edPushHistory(); edRedraw();
-        };
-        img.src = frames[0];
-        _bibClose(panel);
-        edToast('Animación insertada ✓');
-        return;
-      }
 
       if (entry.isGroup && Array.isArray(entry.layers)) {
         // Insertar grupo: deserializar cada capa con nuevo groupId común
@@ -16032,1110 +12201,4 @@ function edInitBiblioteca() {
   $('dd-bib-open')?.addEventListener('pointerup', e => {
     e.stopPropagation(); edCloseMenus(); edBibAbrir();
   });
-}
-
-// ── Estado de transformación del canvas GIF ──────────────────────────────
-let _gs = null;
-
-// Ejecutar fn() con edLayers/_Selected/edCanvas/edCtx apuntando al GIF,
-// luego restaurar. Permite reutilizar TODO el código del editor general.
-// _gcpWithEditorContext: ejecuta fn() con edLayers/edSelectedIdx/edCanvas/edCtx
-// apuntando al GIF. Desactiva _gcpActive para evitar loop en _edDocDownFn.
-function _gcpWithEditorContext(fn) {
-  const savedLayers = edLayers,  savedSel    = edSelectedIdx;
-  const savedCanvas = edCanvas,  savedCtx    = edCtx;
-  const savedActive = window._gcpActive;
-  const savedOvrd   = window._edRedrawOverride;
-  let selAfter = window._gcpSelIdx;
-  try {
-    edLayers      = window._gcpLayers;
-    edSelectedIdx = window._gcpSelIdx;
-    edCanvas      = gcpCanvas;
-    edCtx         = gcpCtx;
-    window._gcpActive        = false;
-    window._edRedrawOverride = true;
-    fn();
-    selAfter = edSelectedIdx; // capturar selección modificada dentro del contexto
-  } finally {
-    edLayers      = savedLayers;  edSelectedIdx = savedSel;
-    edCanvas      = savedCanvas;  edCtx         = savedCtx;
-    window._gcpActive        = savedActive;
-    window._edRedrawOverride = savedOvrd;
-    window._gcpSelIdx = selAfter; // usar el valor de dentro del contexto
-  }
-}
-
-function _gcpHandleDown(e) {
-  // Solo actuar si el target ES el gcpCanvas — no elementos UI superpuestos
-  const gc = document.getElementById('gcpCanvas');
-  if (!gc) return;
-  // Si el target no es el canvas ni un elemento sin ID (que sería el canvas mismo),
-  // verificar que no pertenece a ningún elemento de UI del editor GIF
-  if (e.target && e.target !== gc) {
-    // Si el target tiene un ancestro que es UI del GIF → ignorar
-    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, [data-gcpmenu]')) return;
-  }
-  const rect = gc.getBoundingClientRect();
-  const src2 = e.touches ? e.touches[0] : e;
-  const clientX = src2 ? src2.clientX : e.clientX;
-  const clientY2 = src2 ? src2.clientY : e.clientY;
-  if (clientX < rect.left || clientX > rect.right || clientY2 < rect.top || clientY2 > rect.bottom) return;
-
-  const c = edCoords(e);
-  const idx = window._gcpSelIdx;
-
-  // Handles: usar getControlPoints() igual que el editor, pero siempre permitir
-  // resize/rotate aunque sea táctil (el editor los desactiva en móvil, nosotros no)
-  // Handles y selección — copia exacta de _edDocDownFn usando _gcpLayers
-  const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
-  if (_la && _la.type !== 'bubble') {
-    const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
-    const hitScreen = 18; // PC
-    if (!_la.locked) {
-      for (const p of _la.getControlPoints()) {
-        const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
-        if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
-          if (p.corner === 'rotate') {
-            edIsRotating = true;
-            edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
-            return;
-          }
-          // Resize — mismo código exacto que _edDocDownFn
-          edIsResizing = true; edResizeCorner = p.corner;
-          const _rot0 = (_la.rotation||0)*Math.PI/180;
-          const _hw0 = _la.width/2, _hh0 = _la.height/2;
-          const _pw0 = edPageW(), _ph0 = edPageH();
-          const _anchorLocal = (corner) => {
-            const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
-                       corner==='tl'||corner==='bl'?_hw0 :
-                       corner==='tr'||corner==='br'?-_hw0 : 0;
-            const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
-                       corner==='tl'||corner==='tr'?_hh0 :
-                       corner==='bl'||corner==='br'?-_hh0 : 0;
-            const rx=ax*_pw0, ry=ay*_ph0;
-            return { x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw0,
-                     y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph0 };
-          };
-          const _anch = _anchorLocal(p.corner);
-          edInitialSize = { width:_la.width, height:_la.height,
-            cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
-            rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
-            anchorX:_anch.x, anchorY:_anch.y };
-          if (_la.type==='line') {
-            edInitialSize._linePoints = _la.points.map(p=>p?({...p}):null);
-            edInitialSize._subPaths = _la.subPaths?.length ? _la.subPaths.map(sp=>{const s=sp.map(p=>({...p}));if(sp.cornerRadii)s.cornerRadii={...sp.cornerRadii};return s;}) : null;
-          }
-          if (_la.cornerRadii) {
-            edInitialSize._cornerRadii = Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii};
-          } else { edInitialSize._cornerRadii = null; }
-          return;
-        }
-      }
-    }
-    // Drag dentro del bbox
-    const _rot = (_la.rotation||0)*Math.PI/180;
-    const _dx = c.nx-_la.x, _dy = c.ny-_la.y;
-    const _lx = _dx*Math.cos(-_rot)*_pw - _dy*Math.sin(-_rot)*_ph;
-    const _ly = _dx*Math.sin(-_rot)*_pw + _dy*Math.cos(-_rot)*_ph;
-    if (Math.abs(_lx) <= _la.width/2*_pw + 10/_z && Math.abs(_ly) <= _la.height/2*_ph + 10/_z) {
-      edIsDragging = true;
-      edDragOffX = c.nx - _la.x;
-      edDragOffY = c.ny - _la.y;
-      return;
-    }
-  }
-
-  // Buscar capa tocada
-  let hit = -1;
-  for (let i = window._gcpLayers.length-1; i >= 0; i--) {
-    if (window._gcpLayers[i]?.contains?.(c.nx, c.ny)) { hit = i; break; }
-  }
-  window._gcpSelIdx = hit;
-  if (hit >= 0) {
-    edIsDragging = true;
-    edDragOffX = c.nx - window._gcpLayers[hit].x;
-    edDragOffY = c.ny - window._gcpLayers[hit].y;
-  }
-  _gcpRedraw();
-}
-
-function _gcpHandleMove(e) {
-  _gcpWithEditorContext(() => { edOnMove(e); });
-  _gcpRedraw();
-}
-
-function _gcpHandleUp(e) {
-  window._edMoved = false;
-  edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  // Guardar siempre en historial si hay frames — cualquier interacción puede haber
-  // cambiado la posición del objeto (drag, resize, rotate)
-  if (window._gcpFrames.length > 0) {
-    const newSnap = window._gcpLayers.map(la => ({
-      x:la.x, y:la.y, width:la.width, height:la.height,
-      rotation:la.rotation||0, opacity:la.opacity??1
-    }));
-    const newJSON = JSON.stringify(newSnap);
-    // Solo guardar si el estado cambió respecto al último snapshot del historial
-    if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
-      window._gcpFrames[window._gcpFrameIdx] = newSnap;
-      _gcpPushHistory(newJSON);
-      _gcpRefreshActiveThumb();
-    }
-  }
-  _gcpRedraw();
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   MÓDULO GCP — Editor de GIFs  (T16 Fase 2)
-   Copia exacta del patrón del editor general aplicada al canvas GIF.
-   gcpCanvas / gcpCtx = equivalentes de edCanvas / edCtx
-   _gcpLayers = equivalente de edLayers
-   _gcpRedraw = equivalente de edRedraw
-   ═══════════════════════════════════════════════════════════════════════ */
-
-// Variables globales GCP — mismo patrón que: let edCanvas, edCtx;
-let gcpCanvas = null;
-let gcpCtx    = null;
-
-// Lista de capas GIF — equivalente a edLayers
-window._gcpLayers = [];
-window._gcpSelIdx = -1;
-
-// Sistema de frames: cada frame guarda el estado de TODAS las capas
-// frame = [{x, y, width, height, rotation, opacity}, ...]  (una entrada por capa)
-window._gcpFrames   = [];   // array de frames
-window._gcpFrameIdx = 0;    // frame activo
-
-// ── Sistema de frames ────────────────────────────────────────────────────
-
-// Captura el estado actual de todas las capas como un nuevo frame
-// ── Sistema de frames con transformaciones relativas al frame 1 ──────────
-// Igual que el HTML de referencia: frame 1 = base, frames siguientes = deltas.
-// Cada entrada del frame guarda para cada capa:
-//   { dx, dy, drot, scaleW, scaleH, opacity }
-// donde dx/dy = desplazamiento desde base, drot = rotación adicional,
-// scaleW/scaleH = factor de escala de width/height respecto al frame 1.
-
-// ── Sistema de frames — equivalente exacto al HTML de referencia ─────────
-//
-// _gcpTempState: array de {x,y,width,height,rotation,opacity} por capa.
-//   Equivale a tempTransform. Es el estado EN VIVO que el usuario modifica.
-//   Las capas siempre se renderizan con _gcpTempState.
-//
-// _gcpFrames[fi]: array de snapshots guardados. Inmutables hasta que el
-//   usuario crea un nuevo frame — entonces el frame ACTUAL se sobreescribe
-//   con _gcpTempState (saveCurrentTransformToFrame), igual que en el HTML.
-//
-// Flujo (idéntico al HTML de referencia):
-//   Crear frame → saveCurrentTransformToFrame() + push({..._gcpTempState})
-//   Ir a frame  → _gcpTempState = deep copy de frames[fi] + redraw
-//   Transformar → modifica _gcpTempState + redraw (NO toca frames[])
-
-window._gcpTempState = []; // estado en vivo (equivalente a tempTransform)
-
-// ── Historial del editor GIF — por frame, se borra al cambiar de frame ──
-// Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
-window._gcpHistory    = [];  // array de snapshots del frame activo
-window._gcpHistoryIdx = -1;  // índice actual
-
-function _gcpPushHistory(snapJSON) {
-  if (!window._gcpFrames.length) return;
-  const snap = snapJSON || JSON.stringify(window._gcpFrames[window._gcpFrameIdx]);
-  // No duplicar si igual al último
-  if (window._gcpHistoryIdx >= 0 && window._gcpHistory[window._gcpHistoryIdx] === snap) return;
-  // Truncar futuros
-  window._gcpHistory = window._gcpHistory.slice(0, window._gcpHistoryIdx + 1);
-  window._gcpHistory.push(snap);
-  if (window._gcpHistory.length > 30) window._gcpHistory.shift();
-  window._gcpHistoryIdx = window._gcpHistory.length - 1;
-  _gcpUpdateUndoRedoBtns();
-}
-
-function _gcpUndo() {
-  if (window._gcpHistoryIdx <= 0) return;
-  window._gcpHistoryIdx--;
-  _gcpApplyHistorySnap(window._gcpHistory[window._gcpHistoryIdx]);
-}
-
-function _gcpRedo() {
-  if (window._gcpHistoryIdx >= window._gcpHistory.length - 1) return;
-  window._gcpHistoryIdx++;
-  _gcpApplyHistorySnap(window._gcpHistory[window._gcpHistoryIdx]);
-}
-
-function _gcpApplyHistorySnap(snap) {
-  if (!snap) return;
-  const state = JSON.parse(snap);
-  window._gcpFrames[window._gcpFrameIdx] = state;
-  // Aplicar a las capas y redibujar
-  state.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity;
-  });
-  window._gcpTempState = state.map(s => ({...s}));
-  _gcpRedraw();
-  _gcpUpdateUndoRedoBtns();
-}
-
-function _gcpUpdateUndoRedoBtns() {
-  const u = document.getElementById('gcpUndoBtn');
-  const r = document.getElementById('gcpRedoBtn');
-  if (u) u.disabled = window._gcpHistoryIdx <= 0;
-  if (r) r.disabled = window._gcpHistoryIdx >= window._gcpHistory.length - 1;
-}
-
-function _gcpClearHistory() {
-  window._gcpHistory = [];
-  window._gcpHistoryIdx = -1;
-  _gcpUpdateUndoRedoBtns();
-}
-
-// Guarda _gcpTempState en el frame activo — equivalente a saveCurrentTransformToFrame
-function _gcpSaveCurrentToFrame() {
-  if (!window._gcpFrames.length) return;
-  window._gcpFrames[window._gcpFrameIdx] = window._gcpTempState.map(s => ({...s}));
-}
-
-// Snapshot de _gcpTempState — equivalente a {...tempTransform}
-function _gcpSnapTemp() {
-  return window._gcpTempState.map(s => ({...s}));
-}
-
-// Inicializar _gcpTempState desde las capas actuales
-function _gcpInitTempState() {
-  window._gcpTempState = window._gcpLayers.map(la => ({
-    x: la.x, y: la.y,
-    width: la.width, height: la.height,
-    rotation: la.rotation || 0,
-    opacity: la.opacity ?? 1
-  }));
-}
-
-// Aplicar _gcpTempState a las capas (para render y transformaciones)
-function _gcpApplyTempToLayers() {
-  window._gcpTempState.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
-  });
-}
-
-// Crear frame — equivalente a addFrameToActiveLayer del HTML de referencia:
-//   1. Actualizar el frame actual con el estado en vivo
-//   2. Crear nuevo frame con el estado en vivo
-//   3. Avanzar al nuevo frame
-function _gcpCaptureFrame() {
-  if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Snapshot del estado actual — cada frame es independiente
-  const snap = window._gcpLayers.map(la => ({
-    x: la.x, y: la.y, width: la.width, height: la.height,
-    rotation: la.rotation || 0, opacity: la.opacity ?? 1
-  }));
-  window._gcpFrames.push(snap);
-  window._gcpFrameIdx = window._gcpFrames.length - 1;
-  window._gcpTempState = snap.map(s => ({...s}));
-  // Historial nuevo para este frame
-  _gcpClearHistory();
-  _gcpPushHistory();
-  // Abrir panel si no está visible
-  const _fb = document.getElementById('gcpFramesBar');
-  if (_fb && _fb.style.display !== 'flex') _gcpToggleFramesBar();
-  else _gcpUpdateFramesBar();
-  edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
-}
-
-// Aplica un frame a las capas (usado para thumbs y exportación)
-function _gcpApplyFrame(fi) {
-  const snap = window._gcpFrames[fi];
-  if (!snap) return;
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
-  });
-}
-
-// Ir a un frame — equivalente a: globalFrameIndex=f; tempTransform={...frames[f]}
-// NO toca _gcpFrames — solo actualiza _gcpTempState y redibuja
-function _gcpGoToFrame(fi) {
-  if (fi < 0 || fi >= window._gcpFrames.length) return;
-  window._gcpFrameIdx = fi;
-  const snap = window._gcpFrames[fi];
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity;
-  });
-  window._gcpTempState = snap.map(s => ({...s}));
-  // Borrar historial al cambiar de frame — cada frame tiene su historial propio
-  _gcpClearHistory();
-  // Empujar estado inicial del frame como primer snapshot del historial
-  _gcpPushHistory();
-  _gcpRedraw();
-  // Actualizar resaltado de cards — usan .ed-page-card igual que la ventana de hojas
-  const bar = document.getElementById('gcpFramesBar');
-  if (bar) bar.querySelectorAll('.ed-page-card').forEach((c, i) => c.classList.toggle('current', i === fi));
-}
-
-// Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
-// Genera miniatura 88×88 del frame fi.
-// Renderiza el frame completo, calcula el bbox del contenido visible
-// y recorta solo esa zona — independientemente de dónde esté en el canvas.
-function _gcpFrameThumb(fi) {
-  const S = 88;
-  const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
-  const tctx = tc.getContext('2d');
-  tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
-  const snap = window._gcpFrames[fi];
-  if (!snap || !window._gcpLayers.length) return tc;
-
-  // Guardar estado
-  const saved = window._gcpLayers.map(la=>({
-    x:la.x, y:la.y, width:la.width, height:la.height,
-    rotation:la.rotation||0, opacity:la.opacity??1
-  }));
-  const _savedSelIdx = window._gcpSelIdx;
-  _gcpApplyFrame(fi);
-
-  _gcpWithEditorContext(() => {
-    const pw = edPageW(), ph = edPageH();
-    const mx = edMarginX(), my = edMarginY();
-
-    // Canvas ampliado con margen extra igual que _gcpSaveToLib:
-    // captura objetos rotados que sobresalen del borde de página
-    const extra = Math.round(Math.max(pw, ph) * 0.5);
-    const wsW = pw + mx*2 + extra*2;
-    const wsH = ph + my*2 + extra*2;
-    const offX = extra, offY = extra;
-
-    const off = document.createElement('canvas');
-    off.width = wsW; off.height = wsH;
-    const octx = off.getContext('2d');
-    // Sin relleno — transparente para detectar contenido real
-    octx.setTransform(1, 0, 0, 1, offX, offY);
-    edLayers.forEach(l => {
-      if (!l || typeof l.draw !== 'function') return;
-      if (l.type==='gif') {
-        if (l._oc && l._ready && l._oc.width > 0) {
-          const gc = document.createElement('canvas'); gc.width=wsW; gc.height=wsH;
-          const gcx = gc.getContext('2d');
-          gcx.setTransform(1,0,0,1,offX,offY);
-          const gx = edMarginX() + l.x*pw - (l.width*pw)/2;
-          const gy = edMarginY() + l.y*ph - (l.height*ph)/2;
-          gcx.drawImage(l._oc, gx, gy, l.width*pw, l.height*ph);
-          octx.save(); octx.setTransform(1,0,0,1,0,0);
-          octx.globalAlpha=l.opacity??1; octx.drawImage(gc,0,0);
-          octx.restore(); octx.setTransform(1,0,0,1,offX,offY);
-        }
-      } else if (l.type==='image') { l.draw(octx, off); }
-      else if (l.type==='draw')    { l.draw(octx); }
-      else { octx.globalAlpha=l.opacity??1; l.draw(octx); octx.globalAlpha=1; }
-    });
-    octx.setTransform(1,0,0,1,0,0);
-
-    // Bbox de píxeles con alpha > 10 (contenido real, transparente o coloreado)
-    const idata = octx.getImageData(0, 0, wsW, wsH).data;
-    let x0=wsW, y0=wsH, x1=0, y1=0;
-    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
-      if (idata[(y*wsW+x)*4+3] > 10) {
-        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
-      }
-    }
-    if (x1<=x0 || y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
-    const pad=6;
-    x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
-    x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
-    const cw=x1-x0+1, ch=y1-y0+1;
-
-    // Fondo blanco + escalar bbox preservando proporciones
-    const scale = Math.min(S/cw, S/ch);
-    const dw=cw*scale, dh=ch*scale;
-    tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
-    tctx.fillStyle='#ffffff'; tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
-    tctx.drawImage(off, x0, y0, cw, ch, (S-dw)/2, (S-dh)/2, dw, dh);
-  });
-
-  window._gcpSelIdx = _savedSelIdx;
-  saved.forEach((s,i)=>{ const la=window._gcpLayers[i]; if(!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity;
-  });
-  return tc;
-}
-
-// Renderizar el dropdown de frames con miniaturas
-// Refrescar solo la miniatura del frame activo en la barra
-function _gcpRefreshActiveThumb() {
-  const bar = document.getElementById('gcpFramesBar');
-  if (!bar || bar.style.display !== 'flex') return;
-  const fi = window._gcpFrameIdx;
-  const btns = bar.querySelectorAll('.gcp-frame-btn');
-  const btn = btns[fi];
-  if (!btn) return;
-  const oldThumb = btn.querySelector('canvas');
-  const newThumb = _gcpFrameThumb(fi);
-  if (oldThumb) btn.replaceChild(newThumb, oldThumb);
-}
-
-// Toggle visibilidad del panel de frames
-function _gcpToggleFramesBar() {
-  const bar = document.getElementById('gcpFramesBar');
-  const btn = document.getElementById('gcpFramesToggleBtn');
-  if (!bar) return;
-  const isOpen = bar.style.display === 'flex';
-  if (isOpen) {
-    bar.style.display = 'none';
-    if (btn) { btn.textContent = 'Frames ▾'; btn.classList.remove('active'); }
-  } else {
-    _gcpUpdateFramesBar();
-    bar.style.display = 'flex';
-    if (btn) { btn.textContent = 'Frames ▴'; btn.classList.add('active'); }
-  }
-}
-
-// Previsualizar la animación en el canvas GIF (botón ▶)
-// Reproduce todos los frames en bucle sobre el gcpCanvas
-let _gcpPreviewTimer = null;
-function _gcpPreview() {
-  if (!window._gcpFrames.length) { edToast('Sin frames para previsualizar'); return; }
-  // Si ya está reproduciendo, detener
-  if (_gcpPreviewTimer) {
-    clearTimeout(_gcpPreviewTimer);
-    _gcpPreviewTimer = null;
-    // Restaurar frame activo
-    _gcpGoToFrame(window._gcpFrameIdx);
-    const btn = document.getElementById('gcpPreviewBtn');
-    if (btn) btn.textContent = '▶';
-    return;
-  }
-  const btn = document.getElementById('gcpPreviewBtn');
-  if (btn) btn.textContent = '⏹';
-  let fi = 0;
-  const delay = 150; // ms por frame — ajustable
-  const loop = () => {
-    if (!_gcpPreviewTimer) return; // detenido externamente
-    _gcpApplyFrame(fi);
-    _gcpRedraw();
-    fi = (fi + 1) % window._gcpFrames.length;
-    _gcpPreviewTimer = setTimeout(loop, delay);
-  };
-  _gcpPreviewTimer = setTimeout(loop, 0);
-}
-
-// Actualiza la barra de frames — miniaturas estilo hojas del editor general.
-// Copia el patrón exacto de edUpdateNavPages.
-// _gcpUpdateFramesBar — copia exacta del estilo de _pgBuildCard (ventana Hojas)
-function _gcpUpdateFramesBar() {
-  const bar = document.getElementById('gcpFramesBar');
-  if (!bar) return;
-  bar.innerHTML = '';
-
-  window._gcpFrames.forEach((snap, fi) => {
-    const isCurrent = fi === window._gcpFrameIdx;
-
-    // Card — igual que .ed-page-card
-    const card = document.createElement('div');
-    card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
-    card.style.cursor = 'pointer';
-
-    // Cabecera: número
-    const header = document.createElement('div');
-    header.className = 'ed-page-header';
-    const num = document.createElement('div');
-    num.className = 'ed-page-num';
-    num.textContent = fi + 1;
-    header.appendChild(num);
-    card.appendChild(header);
-
-    // Miniatura — igual que .ed-page-thumb
-    const thumb = _gcpFrameThumb(fi);
-    thumb.className = 'ed-page-thumb';
-    thumb.style.width = '100%';
-    thumb.style.height = 'auto';
-    thumb.style.cursor = 'pointer';
-    card.appendChild(thumb);
-
-    // Acciones — igual que .ed-page-actions
-    const actions = document.createElement('div');
-    actions.className = 'ed-page-actions';
-
-    // Botón ⧉ duplicar
-    const dupBtn = document.createElement('button');
-    dupBtn.className = 'ed-page-action-btn';
-    dupBtn.title = 'Duplicar frame';
-    dupBtn.innerHTML = '⧉';
-    dupBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      const copy = window._gcpFrames[fi].map(s => ({...s}));
-      window._gcpFrames.splice(fi + 1, 0, copy);
-      window._gcpFrameIdx = fi + 1;
-      _gcpGoToFrame(window._gcpFrameIdx);
-      _gcpUpdateFramesBar();
-    });
-    actions.appendChild(dupBtn);
-
-    // Botón ✕ eliminar
-    const delBtn = document.createElement('button');
-    delBtn.className = 'ed-page-action-btn ed-page-del';
-    delBtn.title = 'Eliminar frame';
-    delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
-    delBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      if (window._gcpFrames.length <= 1) return;
-      window._gcpFrames.splice(fi, 1);
-      if (window._gcpFrameIdx >= window._gcpFrames.length)
-        window._gcpFrameIdx = window._gcpFrames.length - 1;
-      _gcpGoToFrame(window._gcpFrameIdx);
-      _gcpUpdateFramesBar();
-    });
-    actions.appendChild(delBtn);
-    card.appendChild(actions);
-
-    // Click en miniatura o card → ir al frame (click no se cancela por scroll)
-    const goTo = e => { e.stopPropagation(); _gcpGoToFrame(fi); };
-    thumb.addEventListener('click', goTo);
-    card.addEventListener('click', e => {
-      if (e.target === delBtn || delBtn.contains(e.target)) return;
-      if (e.target === dupBtn || dupBtn.contains(e.target)) return;
-      goTo(e);
-    });
-
-    bar.appendChild(card);
-  });
-}
-
-// _gcpRedraw — copia de edRedraw usando gcpCanvas/gcpCtx/_gcpLayers
-// Misma cámara, mismo orden de render, mismo patrón exacto
-function _gcpRedraw() {
-  if (!gcpCtx || !gcpCanvas) return;
-  const cw = gcpCanvas.width, ch = gcpCanvas.height;
-  if (!cw || !ch) return;
-  gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
-  gcpCtx.clearRect(0, 0, cw, ch);
-  gcpCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-  // Dibujar capas — mismo orden que edRedraw
-  window._gcpLayers.forEach(l => {
-    if (!l || typeof l.draw !== 'function') return;
-    if (l.type === 'image' || l.type === 'gif') {
-      l.draw(gcpCtx, gcpCanvas);
-    } else if (l.type === 'text' || l.type === 'bubble') {
-      l.draw(gcpCtx, gcpCanvas);
-    } else {
-      gcpCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(gcpCtx);
-      gcpCtx.globalAlpha = 1;
-    }
-  });
-  // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
-  _gcpDrawSel();
-  gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
-}
-
-// Copia de edDrawSel adaptada al canvas GIF
-function _gcpDrawSel() {
-  const idx = window._gcpSelIdx;
-  if (idx < 0 || idx >= window._gcpLayers.length) return;
-  const la = window._gcpLayers[idx];
-  if (!la) return;
-  const pw = edPageW(), ph = edPageH();
-  const z = edCamera.z;
-  const lw = 1 / z;
-  const hr = 6 / z;
-  const hrRot = 8 / z;
-  const cx = edMarginX() + la.x * pw;
-  const cy = edMarginY() + la.y * ph;
-  const w = la.width * pw;
-  const h = la.height * ph;
-  const rot = (la.rotation || 0) * Math.PI / 180;
-  gcpCtx.save();
-  gcpCtx.translate(cx, cy);
-  gcpCtx.rotate(rot);
-  gcpCtx.strokeStyle = '#1a8cff';
-  gcpCtx.lineWidth = lw;
-  gcpCtx.setLineDash([5/z, 3/z]);
-  gcpCtx.strokeRect(-w/2, -h/2, w, h);
-  gcpCtx.setLineDash([]);
-  // Handles de escala (esquinas + centros de lados)
-  const corners = [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
-  corners.forEach(([hx, hy]) => {
-    gcpCtx.beginPath(); gcpCtx.arc(hx, hy, hr, 0, Math.PI * 2);
-    gcpCtx.fillStyle = '#fff'; gcpCtx.fill();
-    gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw * 1.5; gcpCtx.stroke();
-  });
-  // Handle de rotación
-  const rotY = -h/2 - 28/z;
-  gcpCtx.beginPath(); gcpCtx.moveTo(0, -h/2); gcpCtx.lineTo(0, rotY + hrRot);
-  gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw; gcpCtx.stroke();
-  gcpCtx.beginPath(); gcpCtx.arc(0, rotY, hrRot, 0, Math.PI * 2);
-  gcpCtx.fillStyle = '#1a8cff'; gcpCtx.fill();
-  gcpCtx.strokeStyle = '#fff'; gcpCtx.lineWidth = lw * 1.5; gcpCtx.stroke();
-  gcpCtx.restore();
-}
-
-// Dropdown de capas GIF
-function _gcpRenderLayersDropdown(dd) {
-  dd.innerHTML = '';
-  if (!window._gcpLayers.length) {
-    const d = document.createElement('div');
-    d.className = 'ed-dropdown-item';
-    d.style.color = 'var(--gray-400)'; d.style.fontSize = '0.78rem'; d.style.cursor = 'default';
-    d.textContent = 'Sin capas — inserta desde Biblioteca';
-    dd.appendChild(d); return;
-  }
-  const tipos = { image:'🖼', shape:'⬛', line:'╱', stroke:'✏️', draw:'🖌️', text:'T', bubble:'💬', gif:'🎬' };
-  window._gcpLayers.forEach((la, idx) => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;width:100%';
-    const btn = document.createElement('button');
-    btn.className = 'ed-dropdown-item' + (idx === window._gcpSelIdx ? ' active' : '');
-    btn.style.cssText = 'flex:1;text-align:left';
-    btn.textContent = (tipos[la.type] || '•') + ' Capa ' + (idx + 1);
-    btn.addEventListener('click', () => { window._gcpSelIdx = idx; _gcpRenderLayersDropdown(dd); _gcpRedraw(); });
-    const del = document.createElement('button');
-    del.textContent = '✕';
-    del.style.cssText = 'background:none;border:none;color:#c00;cursor:pointer;padding:0 6px;flex-shrink:0';
-    del.addEventListener('click', e => {
-      e.stopPropagation();
-      window._gcpLayers.splice(idx, 1);
-      window._gcpSelIdx = Math.min(window._gcpSelIdx, window._gcpLayers.length - 1);
-      _gcpRenderLayersDropdown(dd); _gcpRedraw();
-    });
-    row.appendChild(btn); row.appendChild(del); dd.appendChild(row);
-  });
-}
-
-// Convierte una capa vectorial (shape/line) a ImageLayer PNG transparente.
-// Usa el mismo sistema de _edRenderPageThumb: canvas pw×ph con
-// setTransform(1,0,0,1,-mx,-my) para que draw() coloque correctamente.
-// Preserva proporciones recortando al bbox del contenido.
-function _gcpVectorToImage(la, cb) {
-  const pw = edPageW(), ph = edPageH();
-  const mx = edMarginX(), my = edMarginY();
-  // Extra para capturar rotaciones que sobresalen — igual que _gcpSaveToLib
-  const extra = Math.round(Math.max(pw, ph) * 0.5);
-  const wsW = pw + mx*2 + extra*2;
-  const wsH = ph + my*2 + extra*2;
-  const offX = extra, offY = extra;
-
-  const off = document.createElement('canvas');
-  off.width = wsW; off.height = wsH;
-  const octx = off.getContext('2d');
-  octx.setTransform(1, 0, 0, 1, offX, offY);
-  octx.globalAlpha = la.opacity ?? 1;
-  la.draw(octx);
-  octx.globalAlpha = 1;
-  octx.setTransform(1, 0, 0, 1, 0, 0);
-
-  // Bbox por alpha > 10
-  const d = octx.getImageData(0, 0, wsW, wsH).data;
-  let x0=wsW, y0=wsH, x1=0, y1=0;
-  for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
-    if (d[(y*wsW+x)*4+3] > 10) {
-      if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
-    }
-  }
-  if (x1<=x0||y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
-  const pad=4;
-  x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
-  x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
-  const cw=x1-x0+1, ch=y1-y0+1;
-
-  // Canvas recortado — PNG transparente
-  const crop = document.createElement('canvas');
-  crop.width=cw; crop.height=ch;
-  crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
-  const dataUrl = crop.toDataURL('image/png');
-
-  // Proporciones normalizadas (fracción de página)
-  const normW = cw/pw, normH = ch/ph;
-  const scale = Math.max(normW/0.9, normH/0.9, 1);
-  const finalW = normW/scale, finalH = normH/scale;
-
-  // Crear ImageLayer con proporciones correctas
-  const img = new Image();
-  img.onload = () => {
-    const imgLayer = new ImageLayer(img, la.x, la.y, finalW);
-    imgLayer.height = finalH;
-    imgLayer.rotation = la.rotation || 0;
-    imgLayer.opacity = la.opacity ?? 1;
-    imgLayer.src = dataUrl;
-    imgLayer._keepSize = true;
-    cb(imgLayer);
-  };
-  img.src = dataUrl;
-}
-
-// gcpInsertFromBib — inserta desde biblioteca en el canvas GIF.
-// Shapes y lines se convierten a ImageLayer PNG para independencia entre frames.
-function gcpInsertFromBib(entry) {
-  const doInsert = (la) => {
-    if (la.type === 'image' && la.img) {
-      const origOnload = la.img.onload;
-      la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
-    }
-    window._gcpLayers.push(la);
-    window._gcpSelIdx = window._gcpLayers.length - 1;
-    _gcpRedraw();
-  };
-
-  const insertLayer = (la) => {
-    if (la.type === 'shape' || la.type === 'line') {
-      // Convertir vectorial a imagen PNG — así cada frame tiene su propia imagen independiente
-      _gcpVectorToImage(la, imgLayer => doInsert(imgLayer));
-    } else {
-      doInsert(la);
-    }
-  };
-
-  if (entry.isGroup && Array.isArray(entry.layers)) {
-    const newGroupId = _edNewGroupId();
-    entry.layers.forEach(ld => {
-      const la = edDeserLayer(ld, edOrientation);
-      if (!la) return;
-      la.groupId = newGroupId;
-      insertLayer(la);
-    });
-  } else {
-    const la = edDeserLayer(entry.layerData, edOrientation);
-    if (!la) return;
-    insertLayer(la);
-  }
-}
-
-// gcpOpen — inicializa gcpCanvas y gcpCtx igual que el editor inicializa
-// edCanvas y edCtx en EditorView_init
-// edLayerIdx: índice en edLayers del GifLayer que se va a re-editar (-1 = nuevo)
-function gcpOpen(edLayerIdx) {
-  const shell = document.getElementById('gcpShell');
-  const ec    = document.getElementById('editorCanvas');
-  if (!shell || !ec) return;
-
-  gcpCanvas = document.getElementById('gcpCanvas');
-  if (!gcpCanvas) return;
-  gcpCtx = gcpCanvas.getContext('2d');
-
-  gcpCanvas.width  = ec.width;
-  gcpCanvas.height = ec.height;
-  gcpCanvas.style.left   = '0';
-  gcpCanvas.style.top    = ec.style.top;
-  gcpCanvas.style.width  = ec.style.width;
-  gcpCanvas.style.height = ec.style.height;
-  gcpCanvas.style.display       = 'block';
-  gcpCanvas.style.pointerEvents = 'auto';
-
-  // Guardar qué capa del editor se está editando (para actualizarla al cerrar)
-  window._gcpEdLayerIdx = (typeof edLayerIdx === 'number' && edLayerIdx >= 0) ? edLayerIdx : -1;
-
-  // Limpiar y resetear capas
-  gcpCtx.clearRect(0, 0, gcpCanvas.width, gcpCanvas.height);
-  window._gcpLayers   = [];
-  window._gcpSelIdx   = -1;
-  window._gcpFrames   = [];
-  window._gcpFrameIdx = 0;
-  window._gcpTempState = [];
-  window._gcpHistory = []; window._gcpHistoryIdx = -1;
-  // Cerrar barra de frames al abrir editor
-  const _frBar = document.getElementById('gcpFramesBar');
-  if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
-  const _ftBtn = document.getElementById('gcpFramesToggleBtn');
-  if (_ftBtn) { _ftBtn.textContent='Frames ▾'; _ftBtn.classList.remove('active'); }
-
-  // Si re-editamos una animación existente, restaurar sus capas serializadas
-  if (window._gcpEdLayerIdx >= 0) {
-    const gifLayer = edLayers[window._gcpEdLayerIdx];
-    const hasData = gifLayer && gifLayer._gcpLayersData;
-    if (hasData) {
-      // Restaurar también los frames si existen
-      if (gifLayer._gcpFramesData) window._gcpFrames = gifLayer._gcpFramesData.slice();
-      if (gifLayer._gcpFramesData && gifLayer._gcpFramesData.length) {
-        window._gcpFrames = gifLayer._gcpFramesData.map(snap => snap.map(s => ({...s})));
-      }
-      const restoredLayers = gifLayer._gcpLayersData
-        .map(ld => edDeserLayer(ld, edOrientation))
-        .filter(Boolean);
-      restoredLayers.forEach(la => {
-        // Redirigir onload de imágenes a _gcpRedraw
-        if (la.type === 'image' && la.img) {
-          const prev = la.img.onload;
-          la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
-          if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
-        }
-        // Redirigir fromDataUrl de stroke/draw a _gcpRedraw (ya parcheado en las clases)
-        window._gcpLayers.push(la);
-      });
-      window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
-      // Actualizar título con el nombre de la capa
-      const titleEl = document.getElementById('gcpProjectTitle');
-      if (titleEl) titleEl.textContent = 'Editar GIF';
-    }
-  }
-  // Inicializar _gcpTempState con el estado actual de las capas
-  _gcpInitTempState();
-  // Si hay frames guardados, restaurar el último frame activo
-  if (window._gcpFrames.length > 0) {
-    window._gcpTempState = window._gcpFrames[window._gcpFrameIdx].map(s => ({...s}));
-    _gcpApplyTempToLayers();
-    requestAnimationFrame(() => _gcpUpdateFramesBar());
-  }
-
-  // Deseleccionar objetos del editor
-  edSelectedIdx = -1;
-  edCloseMenus();
-  edRedraw();
-
-  // Bloquear editor general
-  ec.classList.add('gcp-active');
-  window._gcpActive = true;
-  document.getElementById('editorShell')?.classList.add('gcp-open');
-
-
-
-  // Mostrar overlay y bloqueante
-  shell.style.display = 'block';
-  const blocker = document.getElementById('gcpBlocker');
-  if (blocker) {
-    blocker.style.display = 'block';
-    if (!blocker._gcpBound) {
-      blocker._gcpBound = true;
-      // El bloqueante es solo visual — los eventos los gestiona _edDocDownFn/_gcpDocDownFn
-      // Solo bloquear touchstart para evitar scroll en Android
-      blocker.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
-      blocker.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
-    }
-  }
-
-  // Registrar botones (solo primera vez)
-  if (!shell._gcpBound) {
-    shell._gcpBound = true;
-
-    document.getElementById('gcpCloseBtn')?.addEventListener('click', gcpClose);
-    document.getElementById('gcpPreviewBtn')?.addEventListener('pointerup', e => {
-      e.stopPropagation();
-      _gcpPreview();
-    });
-
-    document.getElementById('gcpBibBtn')?.addEventListener('click', () => {
-      const panel = $('edOptionsPanel');
-      if (panel) _bibRenderPanel(panel);
-    });
-
-    // Botones undo/redo
-    document.getElementById('gcpUndoBtn')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _gcpUndo();
-    });
-    document.getElementById('gcpRedoBtn')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _gcpRedo();
-    });
-    // Botón Añadir Frame
-    document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _gcpCaptureFrame();
-    });
-    // Botón toggle Frames
-    document.getElementById('gcpFramesToggleBtn')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _gcpToggleFramesBar();
-    });
-
-    // Menús GIF
-    document.querySelectorAll('[data-gcpmenu]').forEach(btn => {
-      btn.addEventListener('pointerup', e => {
-        e.stopPropagation();
-        const id = btn.dataset.gcpmenu;
-        const dd = document.getElementById('gdd-' + id);
-        if (!dd) return;
-        const open = dd.classList.contains('open');
-        document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
-        if (!open) {
-          if (id === 'capas') _gcpRenderLayersDropdown(dd);
-          dd.classList.add('open');
-        }
-      });
-    });
-
-    document.addEventListener('pointerdown', e => {
-      if (!window._gcpActive) return;
-      if (!e.target.closest('[data-gcpmenu]') && !e.target.closest('[id^="gdd-"]'))
-        document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
-    }, { passive: true });
-
-    // Los handlers de selección/drag/rotate/resize se registran en document
-    // igual que _edDocDownFn — ver _gcpHandleDown/Move/Up más abajo
-  }
-}
-
-// gcpClose
-function _gcpDoClose() {
-  // Detener preview si está activa
-  if (_gcpPreviewTimer) { clearTimeout(_gcpPreviewTimer); _gcpPreviewTimer = null; }
-  const preBtn = document.getElementById('gcpPreviewBtn');
-  if (preBtn) preBtn.textContent = '▶';
-  const panel = $('edOptionsPanel');
-  if (panel && panel.classList.contains('open')) {
-    panel.classList.remove('open');
-    panel.innerHTML = '';
-    delete panel.dataset.mode;
-    requestAnimationFrame(edFitCanvas);
-  }
-  if (gcpCanvas) { gcpCanvas.style.display = 'none'; gcpCanvas.style.pointerEvents = 'none'; }
-  const shell = document.getElementById('gcpShell');
-  if (shell) shell.style.display = 'none';
-  window._gcpActive = false;
-  window._gcpEdLayerIdx = -1;
-  _gs = null;
-  gcpCanvas = null; gcpCtx = null;
-  document.getElementById('editorShell')?.classList.remove('gcp-open');
-  document.getElementById('editorCanvas')?.classList.remove('gcp-active');
-  const blocker = document.getElementById('gcpBlocker');
-  if (blocker) blocker.style.display = 'none';
-  // Restaurar título del gcpShell para próxima apertura
-  const titleEl = document.getElementById('gcpProjectTitle');
-  if (titleEl) titleEl.textContent = 'Gif 1';
-  edRedraw();
-}
-
-function gcpClose() {
-  if (!window._gcpLayers || !window._gcpLayers.length) { _gcpDoClose(); return; }
-  document.getElementById('_gcpSavePop')?.remove();
-  const pop = document.createElement('div');
-  pop.id = '_gcpSavePop';
-  pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;touch-action:none';
-  pop.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
-    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">¿Guardar la animación en la Biblioteca?</p>
-    <div style="display:flex;gap:10px;justify-content:center">
-      <button id="_gcpPopNo" style="flex:1;padding:10px;border:1.5px solid #ccc;border-radius:8px;background:#f5f5f5;font-size:.9rem;cursor:pointer">No guardar</button>
-      <button id="_gcpPopSi" style="flex:1;padding:10px;border:none;border-radius:8px;background:#ffe066;font-size:.9rem;font-weight:700;cursor:pointer">Guardar</button>
-    </div>
-  </div>`;
-  document.body.appendChild(pop);
-  pop.querySelector('#_gcpPopNo').addEventListener('pointerup', () => {
-    pop.remove(); _gcpDoClose();
-  });
-  pop.querySelector('#_gcpPopSi').addEventListener('pointerup', () => {
-    pop.remove();
-    edToast('Guardando...');
-    _gcpSaveToLib(() => _gcpDoClose());
-  });
-}
-
-function _gcpSaveToLib(onDone) {
-  if (!window._gcpLayers.length || !gcpCanvas || !gcpCtx) { onDone && onDone(); return; }
-  const layers  = window._gcpLayers.slice();
-  const pageW   = Math.round(edPageW()),  pageH  = Math.round(edPageH());
-  const marginX = Math.round(edMarginX()), marginY = Math.round(edMarginY());
-  // Frames: si hay frames definidos usarlos, si no: frame único con estado actual
-  const frameSnaps = window._gcpFrames.length
-    ? window._gcpFrames.slice()
-    : [layers.map(la => ({ x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1 }))];
-
-  const extra = Math.round(Math.max(pageW, pageH) * 0.5);
-  const wsW = pageW + marginX*2 + extra*2;
-  const wsH = pageH + marginY*2 + extra*2;
-  const offX = extra, offY = extra;
-
-  // Renderizar un snapshot de capas en un canvas de workspace a zoom=1
-  const renderSnap = (snap, fi) => {
-    _gcpApplyFrame(fi);
-    const fc = document.createElement('canvas');
-    fc.width = wsW; fc.height = wsH;
-    const fctx = fc.getContext('2d');
-    fctx.setTransform(1, 0, 0, 1, offX, offY);
-    layers.forEach(l => {
-      if (!l || typeof l.draw !== 'function') return;
-      if (l.type==='image'||l.type==='gif') l.draw(fctx, fc);
-      else if (l.type==='text'||l.type==='bubble') l.draw(fctx, fc);
-      else { fctx.globalAlpha = l.opacity??1; l.draw(fctx); fctx.globalAlpha=1; }
-    });
-    fctx.setTransform(1,0,0,1,0,0);
-    return fc;
-  };
-
-  // Renderizar todos los frames y calcular bbox global sobre todos
-  const renderedFrames = frameSnaps.map((snap, fi) => renderSnap(snap, fi));
-  let minX=wsW, minY=wsH, maxX=0, maxY=0;
-  renderedFrames.forEach(fc => {
-    const d = fc.getContext('2d').getImageData(0,0,wsW,wsH).data;
-    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
-      if (d[(y*wsW+x)*4+3] > 10) {
-        if (x<minX) minX=x; if (x>maxX) maxX=x;
-        if (y<minY) minY=y; if (y>maxY) maxY=y;
-      }
-    }
-  });
-  if (maxX<minX || maxY<minY) {
-    minX=marginX+offX; minY=marginY+offY;
-    maxX=minX+pageW-1; maxY=minY+pageH-1;
-  }
-  const pad=4;
-  const cropX=Math.max(0,minX-pad), cropY=Math.max(0,minY-pad);
-  const cropW=Math.min(wsW,maxX+pad+1)-cropX;
-  const cropH=Math.min(wsH,maxY+pad+1)-cropY;
-
-  // Convertir cada frame renderizado a PNG dataUrl recortado y transparente
-  const pngFrames = renderedFrames.map(fc => {
-    const c = document.createElement('canvas');
-    c.width=cropW; c.height=cropH;
-    c.getContext('2d').drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-    return c.toDataURL('image/png');
-  });
-
-  // Miniatura desde el primer frame
-  const S=80;
-  const thumbC=document.createElement('canvas'); thumbC.width=S; thumbC.height=S;
-  const tc2=thumbC.getContext('2d');
-  tc2.fillStyle='#f0f0f0'; tc2.fillRect(0,0,S,S);
-  const sc=Math.min((S-4)/Math.max(cropW,1),(S-4)/Math.max(cropH,1));
-  tc2.drawImage(renderedFrames[0], cropX,cropY,cropW,cropH, (S-cropW*sc)/2,(S-cropH*sc)/2,cropW*sc,cropH*sc);
-  const thumb=thumbC.toDataURL('image/png',0.7);
-
-  // Proporciones normalizadas (fracción de página)
-  const _gcpNormW = cropW/pageW;
-  const _gcpNormH = cropH/pageH;
-
-  // Serializar capas para re-edición
-  const gcpLayersData = window._gcpLayers
-    .map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean);
-  // Serializar frames
-  const gcpFramesData = window._gcpFrames.slice();
-
-  // Restaurar estado del frame activo
-  _gcpApplyFrame(window._gcpFrameIdx);
-
-  // Guardar en biblioteca
-  const data = _bibLoad();
-  _bibGetAnimFolder(data).items.push({
-    id: Date.now()+'_gif', timestamp:Date.now(),
-    isGroup:false, isGifAnim:true,
-    gifDataUrl: pngFrames[0],  // primer frame como preview
-    pngFrames,                  // todos los frames
-    gcpLayersData, gcpFramesData,
-    normW:_gcpNormW, normH:_gcpNormH,
-    layerData:null, thumb
-  });
-  _bibSave(data);
-
-  // Si re-editamos capa existente, actualizarla in-place
-  const existingLayer = (window._gcpEdLayerIdx>=0) ? edLayers[window._gcpEdLayerIdx] : null;
-  if (existingLayer && (existingLayer.type==='gif' || existingLayer._isGcpImage)) {
-    const savedX=existingLayer.x, savedY=existingLayer.y, savedR=existingLayer.rotation;
-    existingLayer._gcpLayersData=gcpLayersData;
-    existingLayer._gcpFramesData=gcpFramesData;
-    existingLayer._isGcpImage=true;
-    existingLayer._pngFrames=pngFrames;
-    // Cargar primer frame como imagen visible
-    const img=new Image();
-    img.onload=()=>{
-      existingLayer.img=img; existingLayer.src=pngFrames[0];
-      existingLayer.x=savedX; existingLayer.y=savedY; existingLayer.rotation=savedR;
-      const sc2=Math.max(_gcpNormW/0.9,_gcpNormH/0.9,1);
-      existingLayer.width=_gcpNormW/sc2; existingLayer.height=_gcpNormH/sc2;
-      edPushHistory(); requestAnimationFrame(()=>edRedraw());
-    };
-    img.src=pngFrames[0];
-    edToast('Animación actualizada ✓');
-  } else {
-    edToast('Animación guardada en Biblioteca → Animaciones ✓');
-  }
-  onDone && onDone();
 }

@@ -91,7 +91,7 @@ function openShareModal(comic) {
 
   const base  = window.location.origin + window.location.pathname.replace(/\/index\.html$/, '').replace(/\/$/, '');
   const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
-  const url   = base + '/reader/index.html?' + param;
+  const url   = base + '/reader/?' + param;
   const title = comic.title || 'Una obra en ComiXow';
   const text  = `Mira "${title}" en ComiXow`;
 

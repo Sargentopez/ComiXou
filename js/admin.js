@@ -164,7 +164,7 @@ function buildAdminRow(comic, mode) {
   row.querySelector(`#read_${comic.id}`)?.addEventListener('click', () => {
     const sid = comic.supabaseId;
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
-    window.location = 'reader/index.html?' + param + '&from=app';
+    window.location = 'reader/?' + param + '&from=app';
   });
 
   // Aprobar
