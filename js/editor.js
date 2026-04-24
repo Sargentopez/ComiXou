@@ -16384,9 +16384,33 @@ function _gcpGoToFrame(fi) {
   if (_gfb && _gfb.style.display === 'flex') _gcpUpdateFramesBar();
 }
 
+// ── Cache de miniaturas: evita re-renderizar lo que no cambió ──────────────────
+// Clave: "layerIdx-fi". Se invalida en _gcpInvalidateThumbCache(layerIdx, fi).
+const _gcpThumbCache = new Map();
+function _gcpThumbCacheKey(la, fi) {
+  const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
+  return idx + '-' + fi;
+}
+function _gcpInvalidateThumb(la, fi) {
+  // fi === undefined → invalida todos los frames de ese layer
+  if (fi === undefined) {
+    const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
+    if (idx < 0) return;
+    for (const k of _gcpThumbCache.keys()) {
+      if (k.startsWith(idx + '-')) _gcpThumbCache.delete(k);
+    }
+  } else {
+    _gcpThumbCache.delete(_gcpThumbCacheKey(la, fi));
+  }
+}
+function _gcpInvalidateAllThumbs() { _gcpThumbCache.clear(); }
+
 // Miniatura de UN layer en frame fi (60x60). visible=false → overlay rojo ✖.
 function _gcpLayerFrameThumb(la, fi, S) {
-  S = S || 60;
+  S = S || 88;
+  // Consultar cache antes de renderizar
+  const cacheKey = _gcpThumbCacheKey(la, fi) + '-' + S;
+  if (_gcpThumbCache.has(cacheKey)) return _gcpThumbCache.get(cacheKey);
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
   tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
@@ -16428,6 +16452,7 @@ function _gcpLayerFrameThumb(la, fi, S) {
   });
   la.x=savedPos.x;la.y=savedPos.y;la.width=savedPos.width;la.height=savedPos.height;la.rotation=savedPos.rotation;la.opacity=savedPos.opacity;
   window._gcpSelIdx=_savedSel;
+  _gcpThumbCache.set(cacheKey, tc);
   return tc;
 }
 
@@ -16546,50 +16571,79 @@ function _gcpUpdateFramesBar() {
   if (bar.style.display !== 'flex') return;
   bar.innerHTML = '';
 
-  const total    = _gcpGetTotalFrames();
-  const gfi      = window._gcpGlobalFrameIdx;
-  const hasLayers = window._gcpLayers && window._gcpLayers.length > 0;
-  if (!hasLayers) return;
+  const total     = _gcpGetTotalFrames();
+  const gfi       = window._gcpGlobalFrameIdx;
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
 
-  // ── Una fila por objeto, igual que refreshLayerTimelines() del HTML de referencia ──
   window._gcpLayers.forEach((la, layerIdx) => {
-    const isSelLayer = (layerIdx === window._gcpSelIdx);
-    const layerName  = la._gcpName || ('Obj ' + (layerIdx + 1));
+    const isSelLayer  = (layerIdx === window._gcpSelIdx);
+    const layerName   = la._gcpName || ('Obj ' + (layerIdx + 1));
     const layerFrames = la._frames ? la._frames.length : 0;
 
-    // Fila contenedora
+    // ── Fila ──────────────────────────────────────────────────────────
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:flex-start;gap:6px;margin-bottom:4px;';
+    row.className = 'gcp-layer-row';
 
-    // Etiqueta lateral (estilo .ed-page-num pero vertical)
+    // Columna izquierda: botón eliminar capa + etiqueta
+    const leftCol = document.createElement('div');
+    leftCol.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;' +
+      'width:44px;min-width:44px;border-right:1px solid var(--gray-200);padding:2px 0;gap:2px;';
+
+    // Botón eliminar capa
+    const delLayerBtn = document.createElement('button');
+    delLayerBtn.title = 'Eliminar capa ' + layerName;
+    delLayerBtn.innerHTML = '<span style="color:#e63030;font-size:14px;font-weight:900;line-height:1">✕</span>';
+    delLayerBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:2px 4px;' +
+      'border-radius:4px;transition:background .15s;flex-shrink:0;';
+    delLayerBtn.addEventListener('pointerenter', () => { delLayerBtn.style.background = '#fff0f0'; });
+    delLayerBtn.addEventListener('pointerleave', () => { delLayerBtn.style.background = 'none'; });
+    delLayerBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      window._gcpLayers.splice(layerIdx, 1);
+      _gcpInvalidateAllThumbs();
+      // Ajustar selección
+      if (window._gcpSelIdx >= window._gcpLayers.length)
+        window._gcpSelIdx = window._gcpLayers.length - 1;
+      // Ajustar frame global si el total cambia
+      const newTotal = _gcpGetTotalFrames();
+      if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
+        window._gcpGlobalFrameIdx = newTotal - 1;
+      _gcpApplyFrame(window._gcpGlobalFrameIdx);
+      _gcpPushHistory();
+      _gcpUpdateFrameNav();
+      _gcpRedraw();
+      _gcpUpdateFramesBar();
+    });
+    leftCol.appendChild(delLayerBtn);
+
+    // Etiqueta
     const label = document.createElement('div');
+    label.className = 'gcp-layer-label' + (isSelLayer ? ' sel' : '');
+    label.style.cssText = 'font-size:9px;font-weight:900;text-align:center;' +
+      'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;padding:0 2px;' +
+      'color:' + (isSelLayer ? '#ff6600' : 'var(--gray-500)') + ';';
     label.textContent = layerName;
     label.title = layerName;
-    label.style.cssText = [
-      'flex-shrink:0;width:40px;font-size:9px;font-weight:900;',
-      'color:' + (isSelLayer ? '#ff6600' : 'var(--gray-500)') + ';',
-      'padding-top:28px;text-align:right;overflow:hidden;',
-      'text-overflow:ellipsis;white-space:nowrap;'
-    ].join('');
-    row.appendChild(label);
+    leftCol.appendChild(label);
 
-    // Scroll horizontal de cards para esta fila
+    row.appendChild(leftCol);
+
+    // Scroll horizontal de cards
     const scroll = document.createElement('div');
-    scroll.style.cssText = 'display:flex;gap:6px;overflow-x:auto;flex:1;padding-bottom:4px;overscroll-behavior-x:contain;scrollbar-width:thin;';
+    scroll.className = 'gcp-layer-scroll';
 
-    // ── Cards de frames guardados para este layer ──
+    // ── Cards de frames ───────────────────────────────────────────────
     for (let fi = 0; fi < total; fi++) {
       const hasFrame  = fi < layerFrames;
       const snap      = hasFrame ? la._frames[fi] : null;
       const isVisible = snap && snap.visible !== false;
-      const isCurCol  = (fi === gfi);
-      const isCurrent = isCurCol && isSelLayer;
+      const isCurrent = (fi === gfi) && isSelLayer;
 
       const card = document.createElement('div');
       card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
       card.style.cursor = hasFrame ? 'pointer' : 'default';
 
-      // Cabecera con número
+      // Cabecera con número de columna
       const header = document.createElement('div');
       header.className = 'ed-page-header';
       const num = document.createElement('div');
@@ -16599,29 +16653,31 @@ function _gcpUpdateFramesBar() {
       card.appendChild(header);
 
       if (!hasFrame) {
-        // Celda vacía — este layer aún no tiene frame aquí
+        // Celda vacía — capa sin frame en esta columna
         const empty = document.createElement('div');
         empty.className = 'ed-page-thumb';
         empty.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
-          'justify-content:center;color:var(--gray-300);font-size:22px;background:var(--gray-100);';
+          'justify-content:center;color:var(--gray-300);font-size:28px;background:var(--gray-100);';
         empty.textContent = '·';
         card.appendChild(empty);
+
       } else if (!isVisible) {
-        // Frame existe pero invisible — overlay ✖ rojo
+        // Frame invisible
         const hidden = document.createElement('div');
         hidden.className = 'ed-page-thumb';
         hidden.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
           'justify-content:center;font-size:28px;background:#fff0f0;color:#e63030;';
         hidden.textContent = '✖';
         card.appendChild(hidden);
+
       } else {
-        // Miniatura real del layer en este frame
+        // Miniatura real
         const thumb = _gcpLayerFrameThumb(la, fi, 88);
         thumb.className = 'ed-page-thumb';
         thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;';
         card.appendChild(thumb);
 
-        // Acciones (solo en frames visibles con contenido)
+        // Acciones ⧉ ✕
         const actions = document.createElement('div');
         actions.className = 'ed-page-actions';
 
@@ -16631,8 +16687,6 @@ function _gcpUpdateFramesBar() {
         dupBtn.innerHTML = '⧉';
         dupBtn.addEventListener('click', e => {
           e.stopPropagation();
-          // Duplicar: insertar copia del frame fi justo después, SOLO en esta capa.
-          // Los demás layers son independientes — no se tocan.
           const copy = {...la._frames[fi]};
           la._frames.splice(fi + 1, 0, copy);
           window._gcpGlobalFrameIdx = fi + 1;
@@ -16650,10 +16704,7 @@ function _gcpUpdateFramesBar() {
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
           if (la._frames.length <= 1) return;
-          // Eliminar: splice solo en esta capa. Los frames posteriores se desplazan.
-          // Los demás layers son independientes — no se tocan.
           la._frames.splice(fi, 1);
-          // Ajustar índice global si queda fuera del nuevo total
           const newTotal = _gcpGetTotalFrames();
           if (window._gcpGlobalFrameIdx >= newTotal)
             window._gcpGlobalFrameIdx = Math.max(0, newTotal - 1);
@@ -16666,7 +16717,7 @@ function _gcpUpdateFramesBar() {
         card.appendChild(actions);
       }
 
-      // Click → navegar a frame y seleccionar esta capa
+      // Click → navegar al frame y seleccionar esta capa
       if (hasFrame) {
         card.addEventListener('click', e => {
           if (e.target.closest('.ed-page-action-btn')) return;
@@ -16679,22 +16730,23 @@ function _gcpUpdateFramesBar() {
       scroll.appendChild(card);
     }
 
-    // Card "en edición" al final de cada fila — estado vivo de este layer
+    // Card "en edición" al final de cada fila
     const liveCard = document.createElement('div');
-    liveCard.className = 'ed-page-card' + (isSelLayer && total === layerFrames ? ' current' : '');
-    liveCard.style.cssText = 'cursor:default;opacity:.85;';
+    liveCard.className = 'ed-page-card' + (isSelLayer ? ' current' : '');
+    liveCard.style.cssText = 'cursor:default;opacity:.75;flex-shrink:0;';
     const liveHeader = document.createElement('div');
     liveHeader.className = 'ed-page-header';
     const liveNum = document.createElement('div');
     liveNum.className = 'ed-page-num';
-    liveNum.textContent = (isSelLayer ? '✏️' : '') + (total + 1);
+    liveNum.textContent = total + 1;
     liveHeader.appendChild(liveNum);
     liveCard.appendChild(liveHeader);
     const liveThumb = document.createElement('div');
     liveThumb.className = 'ed-page-thumb';
     liveThumb.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
-      'justify-content:center;color:#aaa;font-size:11px;background:#f8f8f8;border:1px solid #ddd;border-radius:6px;';
-    liveThumb.textContent = isSelLayer ? 'en edición' : '—';
+      'justify-content:center;font-size:10px;color:#aaa;background:#f8f8f8;' +
+      'border:1.5px dashed #ddd;border-radius:6px;text-align:center;line-height:1.3;';
+    liveThumb.innerHTML = isSelLayer ? '✏️<br>editando' : '—';
     liveCard.appendChild(liveThumb);
     scroll.appendChild(liveCard);
 

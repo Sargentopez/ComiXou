@@ -1832,26 +1832,88 @@ body.editor-page #appView {
 }
 
 /* ── Panel de frames del editor GIF ─────────────────────────────────── */
+/* La barra es un contenedor fijo con scroll bidireccional propio.
+   - Eje Y (filas/layers): scroll vertical dentro de la barra
+   - Eje X (frames/columnas): cada fila tiene su propio scroll horizontal
+   La barra ocupa desde top:92px hasta max 55vh para dejar canvas visible */
 #gcpFramesBar {
   position: absolute;
-  top: 92px;   /* gcpMenuBar top(52) + height(40) */
+  top: 92px;   /* gcpTopbar(52) + gcpMenuBar(40) */
   left: 0; right: 0;
-  max-height: 320px;
-  overflow-x: hidden; overflow-y: auto;
+  /* Altura máxima: 55% del viewport — suficiente para 3-4 filas sin tapar el canvas */
+  max-height: 55vh;
+  /* Scroll vertical para ver más filas; cada fila tiene su propio scroll horizontal */
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--gray-100);
   border-bottom: 2px solid var(--gray-300);
-  padding: 8px 10px;
+  padding: 6px 0 6px 0;
   display: none;
   flex-direction: column;
   gap: 0;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: var(--gray-300) transparent;
+  scrollbar-color: var(--gray-400) var(--gray-200);
   z-index: 510;
-  box-shadow: 0 3px 8px rgba(0,0,0,.10);
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
   pointer-events: auto;
+  /* Borde superior sutil para separar del menú */
+  border-top: 1px solid var(--gray-300);
 }
-#gcpFramesBar::-webkit-scrollbar { height: 4px; }
-#gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
+#gcpFramesBar::-webkit-scrollbar { width: 6px; }
+#gcpFramesBar::-webkit-scrollbar-track { background: var(--gray-200); }
+#gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-400); border-radius: 4px; }
+
+/* Cada fila de layer: etiqueta + scroll horizontal de cards */
+.gcp-layer-row {
+  display: flex;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--gray-200);
+  padding: 4px 0;
+  min-height: 0;
+}
+.gcp-layer-row:last-child { border-bottom: none; }
+
+/* Etiqueta del layer: fija a la izquierda mientras se hace scroll horizontal */
+.gcp-layer-label {
+  flex-shrink: 0;
+  width: 44px;
+  min-width: 44px;
+  padding: 6px 4px 0 6px;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.2;
+  color: var(--gray-500);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Borde derecho separador */
+  border-right: 1px solid var(--gray-200);
+  /* Scroll Y propio para alinearse con el thumb aunque la fila sea alta */
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gcp-layer-label.sel { color: #ff6600; }
+
+/* Contenedor de scroll horizontal de las cards de esta fila */
+.gcp-layer-scroll {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  padding: 4px 8px 6px 8px;
+  overscroll-behavior-x: contain;
+  /* Scroll táctil suave */
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-300) transparent;
+}
+.gcp-layer-scroll::-webkit-scrollbar { height: 4px; }
+.gcp-layer-scroll::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
+
 /* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }
