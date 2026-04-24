@@ -16407,7 +16407,7 @@ function _gcpInvalidateAllThumbs() { _gcpThumbCache.clear(); }
 
 // Miniatura de UN layer en frame fi (60x60). visible=false → overlay rojo ✖.
 function _gcpLayerFrameThumb(la, fi, S) {
-  S = S || 88;
+  S = S || 72;
   // Consultar cache antes de renderizar
   const cacheKey = _gcpThumbCacheKey(la, fi) + '-' + S;
   if (_gcpThumbCache.has(cacheKey)) return _gcpThumbCache.get(cacheKey);
@@ -16923,12 +16923,27 @@ function gcpInsertFromBib(entry) {
       const origOnload = la.img.onload;
       la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
     }
-    // Nombre visible en la barra (igual que v17.99: solo push, SIN crear frames)
+    // Nombre visible en la barra
     la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
-    la._frames = [];      // vacío — frames se crean solo al pulsar +
-    la._gcpVisible = true; // visible mientras se edita (sin frame aún)
+    la._gcpVisible = true;
+    const _totalAtInsert = _gcpGetTotalFrames();
+    if (_totalAtInsert > 0) {
+      // Ya hay frames: inicializar este layer con invisible en anteriores,
+      // visible en el frame actual, invisible en los posteriores.
+      const _curFi = window._gcpGlobalFrameIdx;
+      la._frames = [];
+      const _inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
+      for (let _i = 0; _i < _totalAtInsert; _i++) {
+        la._frames.push(_i === _curFi
+          ? {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true}
+          : {..._inv});
+      }
+    } else {
+      la._frames = [];  // sin frames aún — se crean al pulsar +
+    }
     window._gcpLayers.push(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
+    _gcpInvalidateAllThumbs();
     _gcpUpdateFrameNav();
     const _fb = document.getElementById('gcpFramesBar');
     if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();

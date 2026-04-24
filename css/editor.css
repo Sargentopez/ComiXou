@@ -1864,56 +1864,65 @@ body.editor-page #appView {
 #gcpFramesBar::-webkit-scrollbar-track { background: var(--gray-200); }
 #gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-400); border-radius: 4px; }
 
-/* Cada fila de layer: etiqueta + scroll horizontal de cards */
+/* Cada fila de layer — altura fija para que las cards no se solapen.
+   La card mide: header(24) + thumb(72) + actions(26) + padding(8) + gaps = 136px */
 .gcp-layer-row {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;       /* columna izq y scroll se estiran a la misma altura */
   border-bottom: 1px solid var(--gray-200);
-  padding: 4px 0;
-  min-height: 0;
+  flex-shrink: 0;             /* la fila nunca se comprime — el bar hace scroll */
+  height: 148px;              /* altura fija: suficiente para card completa */
 }
 .gcp-layer-row:last-child { border-bottom: none; }
 
-/* Etiqueta del layer: fija a la izquierda mientras se hace scroll horizontal */
+/* Etiqueta/controles del layer: columna fija a la izquierda */
 .gcp-layer-label {
   flex-shrink: 0;
   width: 44px;
   min-width: 44px;
-  padding: 6px 4px 0 6px;
+  border-right: 1px solid var(--gray-200);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 2px 0;
   font-size: 9px;
   font-weight: 900;
-  line-height: 1.2;
   color: var(--gray-500);
   text-align: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  /* Borde derecho separador */
-  border-right: 1px solid var(--gray-200);
-  /* Scroll Y propio para alinearse con el thumb aunque la fila sea alta */
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .gcp-layer-label.sel { color: #ff6600; }
 
-/* Contenedor de scroll horizontal de las cards de esta fila */
+/* Scroll horizontal de cards — ocupa el resto de la fila */
 .gcp-layer-scroll {
   display: flex;
+  align-items: center;
   gap: 6px;
   overflow-x: auto;
   overflow-y: hidden;
   flex: 1;
-  padding: 4px 8px 6px 8px;
+  padding: 4px 8px;
   overscroll-behavior-x: contain;
-  /* Scroll táctil suave */
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: var(--gray-300) transparent;
 }
 .gcp-layer-scroll::-webkit-scrollbar { height: 4px; }
 .gcp-layer-scroll::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
+
+/* Cards de frame dentro del GCP: tamaño reducido para caber en 148px de fila */
+.gcp-layer-scroll .ed-page-card {
+  width: 80px;
+  padding: 3px 4px 3px;
+  gap: 3px;
+}
+.gcp-layer-scroll .ed-page-thumb {
+  width: 72px !important;
+  height: 72px !important;
+  max-height: 72px;
+}
 
 /* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }
