@@ -14808,14 +14808,14 @@ function EditorView_init(){
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
     // Editor GIF activo: flechas navegan entre frames
-    if (window._gcpActive && window._gcpFrames && window._gcpFrames.length > 1) {
+    if (window._gcpActive && _gcpGetTotalFrames() > 1) {
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
-        _gcpGoToFrame(Math.min(window._gcpFrameIdx + 1, window._gcpFrames.length - 1));
+        _gcpGoToFrame(Math.min(window._gcpGlobalFrameIdx + 1, _gcpGetTotalFrames() - 1));
         return;
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        _gcpGoToFrame(Math.max(window._gcpFrameIdx - 1, 0));
+        _gcpGoToFrame(Math.max(window._gcpGlobalFrameIdx - 1, 0));
         return;
       }
     }
@@ -16195,11 +16195,9 @@ let gcpCtx    = null;
 // Lista de capas GIF — equivalente a edLayers
 window._gcpLayers = [];
 window._gcpSelIdx = -1;
-
-// Sistema de frames: cada frame guarda el estado de TODAS las capas
-// frame = [{x, y, width, height, rotation, opacity}, ...]  (una entrada por capa)
-window._gcpFrames   = [];   // array de frames
-window._gcpFrameIdx = 0;    // frame activo
+// Sistema de frames por layer: la._frames[] independiente por capa
+// _gcpGlobalFrameIdx = columna activa
+window._gcpGlobalFrameIdx = 0;
 
 // ── Sistema de frames ────────────────────────────────────────────────────
 
@@ -16211,22 +16209,8 @@ window._gcpFrameIdx = 0;    // frame activo
 // donde dx/dy = desplazamiento desde base, drot = rotación adicional,
 // scaleW/scaleH = factor de escala de width/height respecto al frame 1.
 
-// ── Sistema de frames — equivalente exacto al HTML de referencia ─────────
-//
-// _gcpTempState: array de {x,y,width,height,rotation,opacity} por capa.
-//   Equivale a tempTransform. Es el estado EN VIVO que el usuario modifica.
-//   Las capas siempre se renderizan con _gcpTempState.
-//
-// _gcpFrames[fi]: array de snapshots guardados. Inmutables hasta que el
-//   usuario crea un nuevo frame — entonces el frame ACTUAL se sobreescribe
-//   con _gcpTempState (saveCurrentTransformToFrame), igual que en el HTML.
-//
-// Flujo (idéntico al HTML de referencia):
-//   Crear frame → saveCurrentTransformToFrame() + push({..._gcpTempState})
-//   Ir a frame  → _gcpTempState = deep copy de frames[fi] + redraw
-//   Transformar → modifica _gcpTempState + redraw (NO toca frames[])
-
-window._gcpTempState = []; // estado en vivo (equivalente a tempTransform)
+// ── Sistema de frames por layer — idéntico al HTML de referencia ─────────
+// Cada layer (la) tiene su propio la._frames[fi] = {x,y,width,height,rotation,opacity,visible}
 
 // ── Historial del editor GIF — por frame, se borra al cambiar de frame ──
 // Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
@@ -16234,8 +16218,11 @@ window._gcpHistory    = [];  // array de snapshots del frame activo
 window._gcpHistoryIdx = -1;  // índice actual
 
 function _gcpPushHistory(snapJSON) {
-  if (!window._gcpFrames.length) return;
-  const snap = snapJSON || JSON.stringify(window._gcpFrames[window._gcpFrameIdx]);
+  if (!window._gcpLayers.length) return;
+  const snap = snapJSON || JSON.stringify(window._gcpLayers.map(la => {
+    const fi = Math.min(window._gcpGlobalFrameIdx, (la._frames||[]).length - 1);
+    return fi >= 0 && la._frames && la._frames[fi] ? {...la._frames[fi]} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
+  }));
   // No duplicar si igual al último
   if (window._gcpHistoryIdx >= 0 && window._gcpHistory[window._gcpHistoryIdx] === snap) return;
   // Truncar futuros
@@ -16261,13 +16248,15 @@ function _gcpRedo() {
 function _gcpApplyHistorySnap(snap) {
   if (!snap) return;
   const state = JSON.parse(snap);
-  // Solo restaurar capas — NO tocar _gcpFrames (son inmutables)
   state.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
     la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity;
+    la.rotation=s.rotation; la.opacity=s.opacity??1;
+    if (la._frames) {
+      const fi = Math.min(window._gcpGlobalFrameIdx, la._frames.length - 1);
+      if (fi >= 0) la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation,opacity:la.opacity,visible:s.visible??true};
+    }
   });
-  window._gcpTempState = state.map(s => ({...s}));
   _gcpRedraw();
   _gcpUpdateUndoRedoBtns();
 }
@@ -16285,35 +16274,32 @@ function _gcpClearHistory() {
   _gcpUpdateUndoRedoBtns();
 }
 
-// Guarda _gcpTempState en el frame activo — equivalente a saveCurrentTransformToFrame
+// Guarda el estado en vivo de cada layer en su frame activo
 function _gcpSaveCurrentToFrame() {
-  if (!window._gcpFrames.length) return;
-  window._gcpFrames[window._gcpFrameIdx] = window._gcpTempState.map(s => ({...s}));
-}
-
-// Snapshot de _gcpTempState — equivalente a {...tempTransform}
-function _gcpSnapTemp() {
-  return window._gcpTempState.map(s => ({...s}));
-}
-
-// Inicializar _gcpTempState desde las capas actuales
-function _gcpInitTempState() {
-  window._gcpTempState = window._gcpLayers.map(la => ({
-    x: la.x, y: la.y,
-    width: la.width, height: la.height,
-    rotation: la.rotation || 0,
-    opacity: la.opacity ?? 1
-  }));
-}
-
-// Aplicar _gcpTempState a las capas (para render y transformaciones)
-function _gcpApplyTempToLayers() {
-  window._gcpTempState.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
+  const fi = window._gcpGlobalFrameIdx;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames || fi < 0 || fi >= la._frames.length) return;
+    la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:la._frames[fi]?.visible!==false};
   });
+}
+
+// Helper: total de frames global
+function _gcpGetTotalFrames() {
+  if (!window._gcpLayers.length) return 0;
+  return Math.max(...window._gcpLayers.map(la => (la._frames||[]).length), 0);
+}
+
+// Inicializar _frames de un layer en el frame de inserción
+function _gcpInitLayerFrames(la, startFi) {
+  la._frames = [];
+  const inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
+  for (let i = 0; i < startFi; i++) la._frames.push({...inv});
+  la._frames.push({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true});
+}
+
+// Aplicar frame global fi a todas las capas
+function _gcpApplyTempToLayers() {
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
 }
 
 // Crear frame — equivalente a addFrameToActiveLayer del HTML de referencia:
@@ -16322,177 +16308,165 @@ function _gcpApplyTempToLayers() {
 //   3. Avanzar al nuevo frame
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  // Snapshot del estado actual — cada frame es independiente
-  const snap = window._gcpLayers.map(la => ({
-    x: la.x, y: la.y, width: la.width, height: la.height,
-    rotation: la.rotation || 0, opacity: la.opacity ?? 1
-  }));
-  window._gcpFrames.push(snap);
-  window._gcpFrameIdx = window._gcpFrames.length - 1;
-  window._gcpTempState = snap.map(s => ({...s}));
+  const selLayer = window._gcpLayers[window._gcpSelIdx] ?? null;
+  if (!selLayer) { edToast('Selecciona un objeto primero'); return; }
+  // Guardar estado live en frame activo de todos los layers
+  _gcpSaveCurrentToFrame();
+  // Añadir nuevo frame al layer seleccionado
+  const newSnap = {x:selLayer.x,y:selLayer.y,width:selLayer.width,height:selLayer.height,rotation:selLayer.rotation||0,opacity:selLayer.opacity??1,visible:true};
+  selLayer._frames.push({...newSnap});
+  // Extender otros layers hasta el nuevo total con su último snap (visible:false si aún no activos)
+  const newTotal = _gcpGetTotalFrames();
+  window._gcpLayers.forEach(la => {
+    if (la === selLayer) return;
+    while (la._frames.length < newTotal) {
+      const last = la._frames.length ? {...la._frames[la._frames.length-1], visible:false} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
+      la._frames.push({...last});
+    }
+  });
+  window._gcpGlobalFrameIdx = newTotal - 1;
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
-  // Actualizar barra solo si ya está visible — no abrirla automáticamente
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
-  edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
+  edToast('Frame ' + newTotal + ' creado ✓');
 }
 
-// Aplica un frame a las capas (usado para thumbs y exportación)
+// Aplica un frame global fi: lee la._frames[fi] de cada layer
 function _gcpApplyFrame(fi) {
-  const snap = window._gcpFrames[fi];
-  if (!snap) return;
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x = s.x; la.y = s.y;
-    la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames || fi >= la._frames.length) {
+      // Frame global aún no existe para esta capa → ocultarla
+      la._gcpVisible = false; return;
+    }
+    const s = la._frames[fi]; if (!s) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+    la.rotation=s.rotation; la.opacity=s.opacity??1;
+    la._gcpVisible = (s.visible !== false);
   });
 }
 
-// Ir a un frame — equivalente a: globalFrameIndex=f; tempTransform={...frames[f]}
-// NO toca _gcpFrames — solo actualiza _gcpTempState y redibuja
+// Ir a un frame global
 function _gcpGoToFrame(fi) {
-  if (fi < 0 || fi >= window._gcpFrames.length) return;
-  window._gcpFrameIdx = fi;
-  const snap = window._gcpFrames[fi];
-  snap.forEach((s, i) => {
-    const la = window._gcpLayers[i]; if (!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity;
-  });
-  window._gcpTempState = snap.map(s => ({...s}));
+  const total = _gcpGetTotalFrames();
+  if (fi < 0 || (total > 0 && fi >= total)) return;
+  window._gcpGlobalFrameIdx = fi;
+  _gcpApplyFrame(fi);
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
   _gcpRedraw();
-  const bar = document.getElementById('gcpFramesBar');
-  if (bar) bar.querySelectorAll('.ed-page-card').forEach((c, i) => {
-    c.classList.toggle('current', i === fi);
-    c.style.opacity = '';
-  });
-  // Quitar resaltado de la card live
-  const liveCard = bar ? bar.querySelector('.gcp-live-card') : null;
-  if (liveCard) liveCard.classList.remove('current');
+  const _gfb = document.getElementById('gcpFramesBar');
+  if (_gfb && _gfb.style.display === 'flex') _gcpUpdateFramesBar();
 }
 
-// Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
-// Genera miniatura 88×88 del frame fi.
-// Renderiza el frame completo, calcula el bbox del contenido visible
-// y recorta solo esa zona — independientemente de dónde esté en el canvas.
-function _gcpFrameThumb(fi) {
-  const S = 88;
+// Miniatura de UN layer en frame fi (60x60). visible=false → overlay rojo ✖.
+function _gcpLayerFrameThumb(la, fi, S) {
+  S = S || 60;
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
   tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
-  const snap = window._gcpFrames[fi];
-  if (!snap || !window._gcpLayers.length) return tc;
-
-  // Guardar estado
-  const saved = window._gcpLayers.map(la=>({
-    x:la.x, y:la.y, width:la.width, height:la.height,
-    rotation:la.rotation||0, opacity:la.opacity??1
-  }));
-  const _savedSelIdx = window._gcpSelIdx;
-  _gcpApplyFrame(fi);
-
+  if (!la._frames || fi >= la._frames.length) return tc;
+  const snap = la._frames[fi];
+  if (!snap || snap.visible === false) {
+    tctx.fillStyle='#1e293b'; tctx.fillRect(0,0,S,S);
+    tctx.fillStyle='rgba(239,68,68,0.6)'; tctx.fillRect(0,0,S,S);
+    tctx.fillStyle='#fff'; tctx.font='bold '+(S*0.4)+'px sans-serif';
+    tctx.textAlign='center'; tctx.textBaseline='middle';
+    tctx.fillText('✖', S/2, S/2);
+    return tc;
+  }
+  const savedPos = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
+  const _savedSel = window._gcpSelIdx;
+  window._gcpSelIdx = -1;
+  la.x=snap.x; la.y=snap.y; la.width=snap.width; la.height=snap.height;
+  la.rotation=snap.rotation; la.opacity=snap.opacity??1;
   _gcpWithEditorContext(() => {
-    const pw = edPageW(), ph = edPageH();
-    const mx = edMarginX(), my = edMarginY();
-
-    // Canvas ampliado con margen extra igual que _gcpSaveToLib:
-    // captura objetos rotados que sobresalen del borde de página
-    const extra = Math.round(Math.max(pw, ph) * 0.5);
-    const wsW = pw + mx*2 + extra*2;
-    const wsH = ph + my*2 + extra*2;
-    const offX = extra, offY = extra;
-
-    const off = document.createElement('canvas');
-    off.width = wsW; off.height = wsH;
-    const octx = off.getContext('2d');
-    // Sin relleno — transparente para detectar contenido real
-    octx.setTransform(1, 0, 0, 1, offX, offY);
-    edLayers.forEach(l => {
-      if (!l || typeof l.draw !== 'function') return;
-      if (l.type==='gif') {
-        if (l._oc && l._ready && l._oc.width > 0) {
-          const gc = document.createElement('canvas'); gc.width=wsW; gc.height=wsH;
-          const gcx = gc.getContext('2d');
-          gcx.setTransform(1,0,0,1,offX,offY);
-          const gx = edMarginX() + l.x*pw - (l.width*pw)/2;
-          const gy = edMarginY() + l.y*ph - (l.height*ph)/2;
-          gcx.drawImage(l._oc, gx, gy, l.width*pw, l.height*ph);
-          octx.save(); octx.setTransform(1,0,0,1,0,0);
-          octx.globalAlpha=l.opacity??1; octx.drawImage(gc,0,0);
-          octx.restore(); octx.setTransform(1,0,0,1,offX,offY);
-        }
-      } else if (l.type==='image') { l.draw(octx, off); }
-      else if (l.type==='draw')    { l.draw(octx); }
-      else { octx.globalAlpha=l.opacity??1; l.draw(octx); octx.globalAlpha=1; }
-    });
+    const pw=edPageW(),ph=edPageH(),mx=edMarginX(),my=edMarginY();
+    const extra=Math.round(Math.max(pw,ph)*0.5);
+    const wsW=pw+mx*2+extra*2, wsH=ph+my*2+extra*2, offX=extra, offY=extra;
+    const off=document.createElement('canvas'); off.width=wsW; off.height=wsH;
+    const octx=off.getContext('2d');
+    octx.setTransform(1,0,0,1,offX,offY);
+    if(la.type==='gif'){if(la._oc&&la._ready&&la._oc.width>0){const gx=mx+la.x*pw-(la.width*pw)/2;const gy=my+la.y*ph-(la.height*ph)/2;octx.globalAlpha=la.opacity??1;octx.drawImage(la._oc,gx,gy,la.width*pw,la.height*ph);octx.globalAlpha=1;}}
+    else if(la.type==='image'){la.draw(octx,off);}
+    else if(la.type==='draw'){la.draw(octx);}
+    else{octx.globalAlpha=la.opacity??1;la.draw(octx);octx.globalAlpha=1;}
     octx.setTransform(1,0,0,1,0,0);
-
-    // Bbox de píxeles con alpha > 10 (contenido real, transparente o coloreado)
-    const idata = octx.getImageData(0, 0, wsW, wsH).data;
-    let x0=wsW, y0=wsH, x1=0, y1=0;
-    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
-      if (idata[(y*wsW+x)*4+3] > 10) {
-        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
-      }
-    }
-    if (x1<=x0 || y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
-    const pad=6;
-    x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
-    x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
-    const cw=x1-x0+1, ch=y1-y0+1;
-
-    // Fondo blanco + escalar bbox preservando proporciones
-    const scale = Math.min(S/cw, S/ch);
-    const dw=cw*scale, dh=ch*scale;
-    tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
-    tctx.fillStyle='#ffffff'; tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
-    tctx.drawImage(off, x0, y0, cw, ch, (S-dw)/2, (S-dh)/2, dw, dh);
+    const idata=octx.getImageData(0,0,wsW,wsH).data;
+    let x0=wsW,y0=wsH,x1=0,y1=0;
+    for(let y=0;y<wsH;y++)for(let x=0;x<wsW;x++){if(idata[(y*wsW+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}}
+    if(x1<=x0||y1<=y0){x0=mx+offX;y0=my+offY;x1=x0+pw-1;y1=y0+ph-1;}
+    const pad=6;x0=Math.max(0,x0-pad);y0=Math.max(0,y0-pad);x1=Math.min(wsW-1,x1+pad);y1=Math.min(wsH-1,y1+pad);
+    const cw=x1-x0+1,ch=y1-y0+1;const scale=Math.min(S/cw,S/ch);const dw=cw*scale,dh=ch*scale;
+    tctx.fillStyle='#fff';tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
+    tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
   });
-
-  window._gcpSelIdx = _savedSelIdx;
-  saved.forEach((s,i)=>{ const la=window._gcpLayers[i]; if(!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity;
-  });
+  la.x=savedPos.x;la.y=savedPos.y;la.width=savedPos.width;la.height=savedPos.height;la.rotation=savedPos.rotation;la.opacity=savedPos.opacity;
+  window._gcpSelIdx=_savedSel;
   return tc;
 }
 
-// Renderizar el dropdown de frames con miniaturas
-// Actualizar el contador de frames en gcpTopbar
+// Miniatura compuesta (todos los layers visibles) en frame fi
+function _gcpFrameThumb(fi) {
+  const S=60;
+  const tc=document.createElement('canvas');tc.width=S;tc.height=S;
+  const tctx=tc.getContext('2d');
+  tctx.fillStyle='#f0f0f0';tctx.fillRect(0,0,S,S);
+  if(!window._gcpLayers.length) return tc;
+  const saved=window._gcpLayers.map(la=>({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1}));
+  const _savedSel=window._gcpSelIdx; window._gcpSelIdx=-1;
+  _gcpApplyFrame(fi);
+  _gcpWithEditorContext(()=>{
+    const pw=edPageW(),ph=edPageH(),mx=edMarginX(),my=edMarginY();
+    const extra=Math.round(Math.max(pw,ph)*0.5);
+    const wsW=pw+mx*2+extra*2,wsH=ph+my*2+extra*2,offX=extra,offY=extra;
+    const off=document.createElement('canvas');off.width=wsW;off.height=wsH;
+    const octx=off.getContext('2d');octx.setTransform(1,0,0,1,offX,offY);
+    window._gcpLayers.forEach(l=>{
+      if(!l||!l._frames||fi>=l._frames.length||l._frames[fi]?.visible===false) return;
+      if(l.type==='gif'){if(l._oc&&l._ready&&l._oc.width>0){const gx=mx+l.x*pw-(l.width*pw)/2;const gy=my+l.y*ph-(l.height*ph)/2;octx.globalAlpha=l.opacity??1;octx.drawImage(l._oc,gx,gy,l.width*pw,l.height*ph);octx.globalAlpha=1;}}
+      else if(l.type==='image'){l.draw(octx,off);}
+      else if(l.type==='draw'){l.draw(octx);}
+      else{octx.globalAlpha=l.opacity??1;l.draw(octx);octx.globalAlpha=1;}
+    });
+    octx.setTransform(1,0,0,1,0,0);
+    const idata=octx.getImageData(0,0,wsW,wsH).data;
+    let x0=wsW,y0=wsH,x1=0,y1=0;
+    for(let y=0;y<wsH;y++)for(let x=0;x<wsW;x++){if(idata[(y*wsW+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}}
+    if(x1<=x0||y1<=y0){x0=mx+offX;y0=my+offY;x1=x0+pw-1;y1=y0+ph-1;}
+    const pad=6;x0=Math.max(0,x0-pad);y0=Math.max(0,y0-pad);x1=Math.min(wsW-1,x1+pad);y1=Math.min(wsH-1,y1+pad);
+    const cw=x1-x0+1,ch=y1-y0+1;const scale=Math.min(S/cw,S/ch);const dw=cw*scale,dh=ch*scale;
+    tctx.fillStyle='#fff';tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
+    tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
+  });
+  window._gcpSelIdx=_savedSel;
+  saved.forEach((s,i)=>{const la=window._gcpLayers[i];if(!la)return;la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity;});
+  return tc;
+}
+
+// Actualizar contador de frames en topbar
 function _gcpUpdateFrameNav() {
   const nav = document.getElementById('gcpFrameNav');
   const num = document.getElementById('gcpFrameNum');
   if (!nav || !num) return;
-  const saved = window._gcpFrames ? window._gcpFrames.length : 0;
+  const total = _gcpGetTotalFrames();
   const hasLayers = window._gcpLayers && window._gcpLayers.length > 0;
-  if (saved <= 0 && !hasLayers) { nav.style.display = 'none'; return; }
+  if (total <= 0 && !hasLayers) { nav.style.display = 'none'; return; }
   nav.style.display = '';
-  const total = saved + 1; // frames guardados + frame en edición
-  // Si estamos en un frame guardado, mostrar su posición; si estamos en "en edición", mostrar total
-  num.textContent = saved > 0 ? (window._gcpFrameIdx + 1) + ' / ' + saved : '—';
+  num.textContent = total > 0 ? (window._gcpGlobalFrameIdx + 1) + ' / ' + total : '—';
   const prev = document.getElementById('gcpFramePrev');
   const next = document.getElementById('gcpFrameNext');
-  if (prev) prev.disabled = window._gcpFrameIdx <= 0 || saved === 0;
-  if (next) next.disabled = window._gcpFrameIdx >= saved - 1 || saved === 0;
+  if (prev) prev.disabled = window._gcpGlobalFrameIdx <= 0 || total === 0;
+  if (next) next.disabled = window._gcpGlobalFrameIdx >= total - 1 || total === 0;
 }
 
-// Refrescar solo la miniatura del frame activo en la barra
+// Refrescar miniatura del frame activo (no-op ahora que la barra se reconstruye entera)
 function _gcpRefreshActiveThumb() {
   const bar = document.getElementById('gcpFramesBar');
-  if (!bar || bar.style.display !== 'flex') return;
-  const fi = window._gcpFrameIdx;
-  const btns = bar.querySelectorAll('.gcp-frame-btn');
-  const btn = btns[fi];
-  if (!btn) return;
-  const oldThumb = btn.querySelector('canvas');
-  const newThumb = _gcpFrameThumb(fi);
-  if (oldThumb) btn.replaceChild(newThumb, oldThumb);
+  if (bar && bar.style.display === 'flex') _gcpUpdateFramesBar();
 }
 
 // Toggle visibilidad del panel de frames
@@ -16512,16 +16486,14 @@ function _gcpToggleFramesBar() {
 }
 
 // Previsualizar la animación en el canvas GIF (botón ▶)
-// Reproduce todos los frames en bucle sobre el gcpCanvas
 let _gcpPreviewTimer = null;
 function _gcpPreview() {
-  if (!window._gcpFrames.length) { edToast('Sin frames para previsualizar'); return; }
-  // Si ya está reproduciendo, detener
+  const total = _gcpGetTotalFrames();
+  if (!total) { edToast('Sin frames para previsualizar'); return; }
   if (_gcpPreviewTimer) {
     clearTimeout(_gcpPreviewTimer);
     _gcpPreviewTimer = null;
-    // Restaurar frame activo
-    _gcpGoToFrame(window._gcpFrameIdx);
+    _gcpGoToFrame(window._gcpGlobalFrameIdx);
     const btn = document.getElementById('gcpPreviewBtn');
     if (btn) btn.textContent = '▶';
     return;
@@ -16534,115 +16506,130 @@ function _gcpPreview() {
     if (!_gcpPreviewTimer) return;
     _gcpApplyFrame(fi);
     _gcpRedraw();
-    fi = (fi + 1) % window._gcpFrames.length;
+    fi = (fi + 1) % total;
     _gcpPreviewTimer = setTimeout(loop, delay);
   };
-  // Aplicar frame 0 inmediatamente y arrancar el timer desde frame 1
   _gcpApplyFrame(0);
   _gcpRedraw();
   fi = 1;
   _gcpPreviewTimer = setTimeout(loop, delay);
 }
 
-// Actualiza la barra de frames — miniaturas estilo hojas del editor general.
-// Copia el patrón exacto de edUpdateNavPages.
-// _gcpUpdateFramesBar — copia exacta del estilo de _pgBuildCard (ventana Hojas)
+// _gcpUpdateFramesBar — matriz 2D: una fila por objeto, columnas = frames globales.
+// Patrón idéntico al refreshLayerTimelines() del HTML de referencia.
 function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
-  if (!bar) return;
+  if (!bar || bar.style.display !== 'flex') return;
   bar.innerHTML = '';
+  const total = _gcpGetTotalFrames();
+  const gfi = window._gcpGlobalFrameIdx;
+  if (!window._gcpLayers.length) return;
 
-  window._gcpFrames.forEach((snap, fi) => {
-    // Cards de frames guardados — ninguna marca como current (la live card es la activa)
-    const card = document.createElement('div');
-    card.className = 'ed-page-card';
-    card.style.cursor = 'pointer';
+  // Contenedor vertical (apila filas una sobre otra)
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex;flex-direction:column;gap:6px;width:100%;';
 
-    // Cabecera: número
-    const header = document.createElement('div');
-    header.className = 'ed-page-header';
-    const num = document.createElement('div');
-    num.className = 'ed-page-num';
-    num.textContent = fi + 1;
-    header.appendChild(num);
-    card.appendChild(header);
+  window._gcpLayers.forEach((la, layerIdx) => {
+    const isSelLayer = (layerIdx === window._gcpSelIdx);
 
-    // Miniatura del frame guardado
-    const thumb = _gcpFrameThumb(fi);
-    thumb.className = 'ed-page-thumb';
-    thumb.style.width = '100%';
-    thumb.style.height = 'auto';
-    thumb.style.cursor = 'pointer';
-    card.appendChild(thumb);
+    // Fila: etiqueta + miniaturas horizontales
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:4px;';
 
-    // Acciones — igual que .ed-page-actions
-    const actions = document.createElement('div');
-    actions.className = 'ed-page-actions';
+    // Etiqueta de la capa
+    const label = document.createElement('div');
+    const layerName = la._gcpName || ('Obj ' + (layerIdx + 1));
+    label.textContent = layerName;
+    label.title = layerName;
+    label.style.cssText = [
+      'flex-shrink:0;width:52px;font-size:10px;font-weight:700;',
+      'color:' + (isSelLayer ? '#f59e0b' : '#94a3b8') + ';',
+      'text-align:right;padding-right:6px;overflow:hidden;',
+      'text-overflow:ellipsis;white-space:nowrap;'
+    ].join('');
+    row.appendChild(label);
 
-    // Botón ⧉ duplicar
-    const dupBtn = document.createElement('button');
-    dupBtn.className = 'ed-page-action-btn';
-    dupBtn.title = 'Duplicar frame';
-    dupBtn.innerHTML = '⧉';
-    dupBtn.addEventListener('click', e => {
+    // Scroll horizontal de miniaturas para esta capa
+    const scroll = document.createElement('div');
+    scroll.style.cssText = 'display:flex;gap:4px;overflow-x:auto;flex:1;padding-bottom:2px;';
+
+    // Columnas = total de frames global
+    for (let fi = 0; fi < total; fi++) {
+      const hasFrame = la._frames && fi < la._frames.length;
+      const snap = hasFrame ? la._frames[fi] : null;
+      const isVisible = snap && snap.visible !== false;
+      const isCurrent = fi === gfi;
+      const isLayerCurrent = isCurrent && isSelLayer;
+
+      const cell = document.createElement('div');
+      cell.style.cssText = [
+        'position:relative;flex-shrink:0;cursor:pointer;',
+        'border-radius:6px;overflow:hidden;',
+        'border:2px solid ' + (isLayerCurrent ? '#f59e0b' : isCurrent ? '#3b82f6' : '#334155') + ';',
+        'box-shadow:' + (isLayerCurrent ? '0 0 0 1px #f59e0b' : 'none') + ';'
+      ].join('');
+
+      if (!hasFrame) {
+        // Celda vacía — frame global que esta capa todavía no tiene
+        const empty = document.createElement('div');
+        empty.style.cssText = 'width:60px;height:60px;background:#111827;display:flex;align-items:center;justify-content:center;color:#374151;font-size:18px;';
+        empty.textContent = '·';
+        cell.appendChild(empty);
+      } else {
+        // Miniatura de la capa en este frame
+        const thumb = _gcpLayerFrameThumb(la, fi, 60);
+        thumb.style.cssText = 'display:block;width:60px;height:60px;';
+        cell.appendChild(thumb);
+      }
+
+      // Número de frame encima
+      const numBadge = document.createElement('div');
+      numBadge.textContent = fi + 1;
+      numBadge.style.cssText = [
+        'position:absolute;top:2px;left:3px;',
+        'font-size:9px;font-weight:700;',
+        'color:' + (isCurrent ? '#fff' : '#94a3b8') + ';',
+        'text-shadow:0 1px 3px #000;pointer-events:none;'
+      ].join('');
+      cell.appendChild(numBadge);
+
+      // Click → navegar a ese frame y seleccionar esa capa
+      cell.addEventListener('click', e => {
+        e.stopPropagation();
+        if (hasFrame) {
+          window._gcpSelIdx = layerIdx;
+          _gcpGoToFrame(fi);
+        }
+      });
+
+      scroll.appendChild(cell);
+    }
+
+    // Celda "+" al final de la fila (añadir frame a esta capa)
+    const addCell = document.createElement('div');
+    addCell.title = 'Añadir frame a este objeto';
+    addCell.style.cssText = [
+      'flex-shrink:0;width:60px;height:60px;cursor:pointer;',
+      'border-radius:6px;border:2px dashed #334155;',
+      'display:flex;align-items:center;justify-content:center;',
+      'font-size:22px;color:#4b5563;',
+      'transition:color 0.15s,border-color 0.15s;'
+    ].join('');
+    addCell.textContent = '+';
+    addCell.addEventListener('click', e => {
       e.stopPropagation();
-      const copy = window._gcpFrames[fi].map(s => ({...s}));
-      window._gcpFrames.splice(fi + 1, 0, copy);
-      window._gcpFrameIdx = fi + 1;
-      _gcpGoToFrame(window._gcpFrameIdx);
-      _gcpUpdateFramesBar();
+      window._gcpSelIdx = layerIdx;
+      _gcpCaptureFrame();
     });
-    actions.appendChild(dupBtn);
+    addCell.addEventListener('pointerenter', () => { addCell.style.color='#f59e0b'; addCell.style.borderColor='#f59e0b'; });
+    addCell.addEventListener('pointerleave', () => { addCell.style.color='#4b5563'; addCell.style.borderColor='#334155'; });
+    scroll.appendChild(addCell);
 
-    // Botón ✕ eliminar
-    const delBtn = document.createElement('button');
-    delBtn.className = 'ed-page-action-btn ed-page-del';
-    delBtn.title = 'Eliminar frame';
-    delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
-    delBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      if (window._gcpFrames.length <= 1) return;
-      window._gcpFrames.splice(fi, 1);
-      if (window._gcpFrameIdx >= window._gcpFrames.length)
-        window._gcpFrameIdx = window._gcpFrames.length - 1;
-      _gcpGoToFrame(window._gcpFrameIdx);
-      _gcpUpdateFramesBar();
-    });
-    actions.appendChild(delBtn);
-    card.appendChild(actions);
-
-    // Click en miniatura o card → ir al frame (click no se cancela por scroll)
-    const goTo = e => { e.stopPropagation(); _gcpGoToFrame(fi); };
-    thumb.addEventListener('click', goTo);
-    card.addEventListener('click', e => {
-      if (e.target === delBtn || delBtn.contains(e.target)) return;
-      if (e.target === dupBtn || dupBtn.contains(e.target)) return;
-      goTo(e);
-    });
-
-    bar.appendChild(card);
+    row.appendChild(scroll);
+    wrapper.appendChild(row);
   });
 
-  // Card "en edición" — representa el estado actual (no guardado como frame todavía)
-  // Se muestra siempre al final si hay capas, para indicar el estado en vivo
-  if (window._gcpLayers && window._gcpLayers.length > 0) {
-    const liveCard = document.createElement('div');
-    liveCard.className = 'ed-page-card current';
-    liveCard.style.cssText = 'cursor:default;opacity:.85';
-    const liveHeader = document.createElement('div');
-    liveHeader.className = 'ed-page-header';
-    const liveNum = document.createElement('div');
-    liveNum.className = 'ed-page-num';
-    liveNum.textContent = window._gcpFrames.length + 1;
-    liveHeader.appendChild(liveNum);
-    liveCard.appendChild(liveHeader);
-    const liveThumb = document.createElement('div');
-    liveThumb.className = 'ed-page-thumb';
-    liveThumb.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:11px;background:#f8f8f8;border:1px solid #ddd;border-radius:6px;flex-shrink:0';
-    liveThumb.textContent = 'en edición';
-    liveCard.appendChild(liveThumb);
-    bar.appendChild(liveCard);
-  }
+  bar.appendChild(wrapper);
 }
 
 // _gcpRedraw — copia de edRedraw usando gcpCanvas/gcpCtx/_gcpLayers
@@ -16654,9 +16641,10 @@ function _gcpRedraw() {
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
   gcpCtx.clearRect(0, 0, cw, ch);
   gcpCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-  // Dibujar capas — mismo orden que edRedraw
+  // Dibujar capas — mismo orden que edRedraw, respetando visibilidad por frame
   window._gcpLayers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
+    if (l._gcpVisible === false) return;  // oculto en este frame global
     if (l.type === 'image' || l.type === 'gif') {
       l.draw(gcpCtx, gcpCanvas);
     } else if (l.type === 'text' || l.type === 'bubble') {
@@ -16814,26 +16802,17 @@ function gcpInsertFromBib(entry) {
       const origOnload = la.img.onload;
       la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
     }
+    // Nombre visible en la barra de frames
+    la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
+    // Inicializar _frames por layer: invisible antes del frame actual, visible desde aquí
+    _gcpInitLayerFrames(la, window._gcpGlobalFrameIdx);
+    // El objeto es visible en el frame actual (startFi = _gcpGlobalFrameIdx)
+    la._gcpVisible = true;
     window._gcpLayers.push(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
-    // Si ya hay frames guardados, rellenar cada uno con una entrada para este nuevo objeto.
-    // Frames anteriores al actual → opacity 0 (objeto no visible aún).
-    // Frame actual y posteriores → opacity 1 (objeto visible desde aquí).
-    if (window._gcpFrames && window._gcpFrames.length > 0) {
-      const curFi = window._gcpFrameIdx;
-      window._gcpFrames.forEach((snap, fi) => {
-        const entry = {
-          x: la.x, y: la.y,
-          width: la.width, height: la.height,
-          rotation: la.rotation || 0,
-          opacity: fi >= curFi ? (la.opacity ?? 1) : 0
-        };
-        snap.push(entry);
-      });
-      // Actualizar barra de frames si está visible
-      const _fb = document.getElementById('gcpFramesBar');
-      if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
-    }
+    _gcpUpdateFrameNav();
+    const _fb = document.getElementById('gcpFramesBar');
+    if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
     _gcpRedraw();
   };
 
@@ -16887,53 +16866,51 @@ function gcpOpen(edLayerIdx) {
 
   // Limpiar y resetear capas
   gcpCtx.clearRect(0, 0, gcpCanvas.width, gcpCanvas.height);
-  window._gcpLayers   = [];
-  window._gcpSelIdx   = -1;
-  window._gcpFrames   = [];
-  window._gcpFrameIdx = 0;
-  window._gcpTempState = [];
+  window._gcpLayers         = [];
+  window._gcpSelIdx         = -1;
+  window._gcpGlobalFrameIdx = 0;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
   const _ftBtn = document.getElementById('gcpFramesToggleBtn');
   if (_ftBtn) { _ftBtn.textContent='Frames ▾'; _ftBtn.classList.remove('active'); }
+  window._gcpGlobalFrameIdx = 0;
 
   // Si re-editamos una animación existente, restaurar sus capas serializadas
   if (window._gcpEdLayerIdx >= 0) {
     const gifLayer = edLayers[window._gcpEdLayerIdx];
     const hasData = gifLayer && gifLayer._gcpLayersData;
     if (hasData) {
-      // Restaurar también los frames si existen
-      if (gifLayer._gcpFramesData) window._gcpFrames = gifLayer._gcpFramesData.slice();
-      if (gifLayer._gcpFramesData && gifLayer._gcpFramesData.length) {
-        window._gcpFrames = gifLayer._gcpFramesData.map(snap => snap.map(s => ({...s})));
-      }
       const restoredLayers = gifLayer._gcpLayersData
         .map(ld => edDeserLayer(ld, edOrientation))
         .filter(Boolean);
-      restoredLayers.forEach(la => {
-        // Redirigir onload de imágenes a _gcpRedraw
+      restoredLayers.forEach((la, li) => {
+        // Restaurar _frames por layer (nuevo formato: array de arrays por layer)
+        if (gifLayer._gcpFramesData && Array.isArray(gifLayer._gcpFramesData[li])) {
+          la._frames = gifLayer._gcpFramesData[li].map(s => ({...s}));
+        } else {
+          // Compatibilidad con formato antiguo (array de snaps globales)
+          la._frames = [{x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true}];
+        }
         if (la.type === 'image' && la.img) {
           const prev = la.img.onload;
           la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
           if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
         }
-        // Redirigir fromDataUrl de stroke/draw a _gcpRedraw (ya parcheado en las clases)
+        // Inicializar visibilidad según el frame 0
+        la._gcpVisible = !(la._frames && la._frames[0] && la._frames[0].visible === false);
         window._gcpLayers.push(la);
       });
       window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
-      // Actualizar título con el nombre de la capa
       const titleEl = document.getElementById('gcpProjectTitle');
       if (titleEl) titleEl.textContent = 'Editar GIF';
     }
   }
-  // Inicializar _gcpTempState con el estado actual de las capas
-  _gcpInitTempState();
-  // Si hay frames guardados, restaurar el último frame activo
-  if (window._gcpFrames.length > 0) {
-    window._gcpTempState = window._gcpFrames[window._gcpFrameIdx].map(s => ({...s}));
-    _gcpApplyTempToLayers();
+  // Aplicar frame 0 si hay frames
+  if (_gcpGetTotalFrames() > 0) {
+    window._gcpGlobalFrameIdx = 0;
+    _gcpApplyFrame(0);
     requestAnimationFrame(() => _gcpUpdateFramesBar());
   }
   _gcpUpdateFrameNav();
@@ -16989,11 +16966,11 @@ function gcpOpen(edLayerIdx) {
     // Botones navegación de frames en topbar — entre frames guardados
     document.getElementById('gcpFramePrev')?.addEventListener('click', e => {
       e.stopPropagation();
-      if (window._gcpFrameIdx > 0) _gcpGoToFrame(window._gcpFrameIdx - 1);
+      if (window._gcpGlobalFrameIdx > 0) _gcpGoToFrame(window._gcpGlobalFrameIdx - 1);
     });
     document.getElementById('gcpFrameNext')?.addEventListener('click', e => {
       e.stopPropagation();
-      if (window._gcpFrameIdx < window._gcpFrames.length - 1) _gcpGoToFrame(window._gcpFrameIdx + 1);
+      if (window._gcpGlobalFrameIdx < _gcpGetTotalFrames() - 1) _gcpGoToFrame(window._gcpGlobalFrameIdx + 1);
     });
     // Botón Añadir Frame
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
@@ -17090,17 +17067,15 @@ function _gcpSaveToLib(onDone) {
   const layers  = window._gcpLayers.slice();
   const pageW   = Math.round(edPageW()),  pageH  = Math.round(edPageH());
   const marginX = Math.round(edMarginX()), marginY = Math.round(edMarginY());
-  // Frames: si hay frames definidos usarlos, si no: frame único con estado actual
-  const frameSnaps = window._gcpFrames.length
-    ? window._gcpFrames.slice()
-    : [layers.map(la => ({ x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1 }))];
+  // Total de frames globales usando el sistema por-layer
+  const totalFrames = _gcpGetTotalFrames() || 1;
 
   const extra = Math.round(Math.max(pageW, pageH) * 0.5);
   const wsW = pageW + marginX*2 + extra*2;
   const wsH = pageH + marginY*2 + extra*2;
   const offX = extra, offY = extra;
 
-  // Renderizar un snapshot de capas en un canvas de workspace a zoom=1
+  // Renderizar frame global fi respetando visible por layer
   const renderSnap = (snap, fi) => {
     _gcpApplyFrame(fi);
     const fc = document.createElement('canvas');
@@ -17109,6 +17084,8 @@ function _gcpSaveToLib(onDone) {
     fctx.setTransform(1, 0, 0, 1, offX, offY);
     layers.forEach(l => {
       if (!l || typeof l.draw !== 'function') return;
+      // Respetar visible por layer en este frame
+      if (l._frames && fi < l._frames.length && l._frames[fi]?.visible === false) return;
       if (l.type==='image'||l.type==='gif') l.draw(fctx, fc);
       else if (l.type==='text'||l.type==='bubble') l.draw(fctx, fc);
       else { fctx.globalAlpha = l.opacity??1; l.draw(fctx); fctx.globalAlpha=1; }
@@ -17117,8 +17094,8 @@ function _gcpSaveToLib(onDone) {
     return fc;
   };
 
-  // Renderizar todos los frames y calcular bbox global sobre todos
-  const renderedFrames = frameSnaps.map((snap, fi) => renderSnap(snap, fi));
+  // Renderizar todos los frames globales
+  const renderedFrames = Array.from({length: totalFrames}, (_, fi) => renderSnap(null, fi));
   let minX=wsW, minY=wsH, maxX=0, maxY=0;
   renderedFrames.forEach(fc => {
     const d = fc.getContext('2d').getImageData(0,0,wsW,wsH).data;
@@ -17162,11 +17139,11 @@ function _gcpSaveToLib(onDone) {
   // Serializar capas para re-edición
   const gcpLayersData = window._gcpLayers
     .map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean);
-  // Serializar frames
-  const gcpFramesData = window._gcpFrames.slice();
+  // Serializar frames por layer (nuevo formato: array de arrays)
+  const gcpFramesData = window._gcpLayers.map(la => (la._frames||[]).map(s=>({...s})));
 
   // Restaurar estado del frame activo
-  _gcpApplyFrame(window._gcpFrameIdx);
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
 
   // Guardar en biblioteca
   const data = _bibLoad();

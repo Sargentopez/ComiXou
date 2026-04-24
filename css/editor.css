@@ -1836,14 +1836,15 @@ body.editor-page #appView {
   position: absolute;
   top: 92px;   /* gcpMenuBar top(52) + height(40) */
   left: 0; right: 0;
-  overflow-x: auto; overflow-y: hidden;
+  max-height: 280px;
+  overflow-x: hidden; overflow-y: auto;
   background: var(--gray-100);
   border-bottom: 2px solid var(--gray-300);
   padding: 8px 10px;
   display: none;
-  align-items: flex-start;
-  gap: 8px;
-  overscroll-behavior-x: contain;
+  flex-direction: column;
+  gap: 6px;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--gray-300) transparent;
   z-index: 510;
