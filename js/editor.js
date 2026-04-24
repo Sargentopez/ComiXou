@@ -16479,9 +16479,9 @@ function _gcpToggleFramesBar() {
     bar.style.display = 'none';
     if (btn) { btn.textContent = 'Frames ▾'; btn.classList.remove('active'); }
   } else {
-    _gcpUpdateFramesBar();
     bar.style.display = 'flex';
     if (btn) { btn.textContent = 'Frames ▴'; btn.classList.add('active'); }
+    _gcpUpdateFramesBar();
   }
 }
 
@@ -16519,7 +16519,8 @@ function _gcpPreview() {
 // Patrón idéntico al refreshLayerTimelines() del HTML de referencia.
 function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
-  if (!bar || bar.style.display !== 'flex') return;
+  if (!bar) return;
+  if (bar.style.display !== 'flex') return;  // solo actualizar cuando visible
   bar.innerHTML = '';
   const total = _gcpGetTotalFrames();
   const gfi = window._gcpGlobalFrameIdx;
