@@ -16167,15 +16167,16 @@ function _gcpHandleMove(e) {
 function _gcpHandleUp(e) {
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  const _si = window._gcpSelIdx;
-  if (_si >= 0 && _si < window._gcpLayers.length) {
-    const _la = window._gcpLayers[_si];
-    if (_la.gcpFrames && _la.gcpFrames[window._gcpFrameIdx] !== undefined)
-      _la.gcpFrames[window._gcpFrameIdx] = _gcpSnapLayer(_la);
-  }
-  const newSnap = window._gcpLayers.map(la => _gcpSnapLayer(la));
+  // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
+  // El historial registra el estado en vivo (fuera de los frames guardados).
+  const newSnap = window._gcpLayers.map(la => ({
+    x:la.x, y:la.y, width:la.width, height:la.height,
+    rotation:la.rotation||0, opacity:la.opacity??1
+  }));
   const newJSON = JSON.stringify(newSnap);
-  if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) _gcpPushHistory(newJSON);
+  if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
+    _gcpPushHistory(newJSON);
+  }
   _gcpRedraw();
 }
 
@@ -16226,16 +16227,6 @@ window._gcpFrameIdx = 0;    // frame activo
 //   Transformar → modifica _gcpTempState + redraw (NO toca frames[])
 
 window._gcpTempState = []; // estado en vivo (equivalente a tempTransform)
-window._gcpFrameView  = -1; // -1=general, N=índice de capa N
-
-function _gcpTotalFrames() {
-  if (!window._gcpLayers||!window._gcpLayers.length) return 0;
-  return Math.max(...window._gcpLayers.map(la=>(la.gcpFrames||[]).length),0);
-}
-function _gcpSnapLayer(la) {
-  return {x:la.x,y:la.y,width:la.width,height:la.height,
-          rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
-}
 
 // ── Historial del editor GIF — por frame, se borra al cambiar de frame ──
 // Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
@@ -16331,22 +16322,21 @@ function _gcpApplyTempToLayers() {
 //   3. Avanzar al nuevo frame
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  const selIdx = window._gcpSelIdx >= 0 ? window._gcpSelIdx : 0;
-  const la = window._gcpLayers[selIdx];
-  if (!la) return;
-  if (!la.gcpFrames) la.gcpFrames = [];
-  while (la.gcpFrames.length <= window._gcpFrameIdx) {
-    const last = la.gcpFrames.length ? {...la.gcpFrames[la.gcpFrames.length-1]} : _gcpSnapLayer(la);
-    la.gcpFrames.push(last);
-  }
-  la.gcpFrames[window._gcpFrameIdx] = _gcpSnapLayer(la);
-  la.gcpFrames.push(_gcpSnapLayer(la));
-  window._gcpFrameIdx = la.gcpFrames.length - 1;
+  // Snapshot del estado actual — cada frame es independiente
+  const snap = window._gcpLayers.map(la => ({
+    x: la.x, y: la.y, width: la.width, height: la.height,
+    rotation: la.rotation || 0, opacity: la.opacity ?? 1
+  }));
+  window._gcpFrames.push(snap);
+  window._gcpFrameIdx = window._gcpFrames.length - 1;
+  window._gcpTempState = snap.map(s => ({...s}));
+  _gcpClearHistory();
+  _gcpPushHistory();
   _gcpUpdateFrameNav();
+  // Actualizar barra solo si ya está visible — no abrirla automáticamente
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
-  _gcpRedraw();
-  edToast('Frame '+la.gcpFrames.length+' · Obj '+(selIdx+1)+' ✓');
+  edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
 // Aplica un frame a las capas (usado para thumbs y exportación)
@@ -16396,42 +16386,85 @@ function _gcpFrameThumb(fi) {
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
   tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
-  if (!window._gcpLayers.length || !gcpCanvas || !gcpCanvas.width) return tc;
+  const snap = window._gcpFrames[fi];
+  if (!snap || !window._gcpLayers.length) return tc;
 
-  // Guardar estado actual de las capas
+  // Guardar estado
   const saved = window._gcpLayers.map(la=>({
-    x:la.x,y:la.y,width:la.width,height:la.height,
-    rotation:la.rotation||0,opacity:la.opacity??1,hidden:la._gcpHidden
+    x:la.x, y:la.y, width:la.width, height:la.height,
+    rotation:la.rotation||0, opacity:la.opacity??1
   }));
-  // Aplicar estado del frame fi
-  window._gcpLayers.forEach(la=>{
-    if(!la.gcpFrames||!la.gcpFrames.length){la._gcpHidden=false;return;}
-    const f=la.gcpFrames[fi];
-    if(!f||f.visible===false){la._gcpHidden=true;return;}
-    la._gcpHidden=false;
-    la.x=f.x;la.y=f.y;la.width=f.width;la.height=f.height;
-    la.rotation=f.rotation||0;la.opacity=f.opacity??1;
+  const _savedSelIdx = window._gcpSelIdx;
+  _gcpApplyFrame(fi);
+
+  _gcpWithEditorContext(() => {
+    const pw = edPageW(), ph = edPageH();
+    const mx = edMarginX(), my = edMarginY();
+
+    // Canvas ampliado con margen extra igual que _gcpSaveToLib:
+    // captura objetos rotados que sobresalen del borde de página
+    const extra = Math.round(Math.max(pw, ph) * 0.5);
+    const wsW = pw + mx*2 + extra*2;
+    const wsH = ph + my*2 + extra*2;
+    const offX = extra, offY = extra;
+
+    const off = document.createElement('canvas');
+    off.width = wsW; off.height = wsH;
+    const octx = off.getContext('2d');
+    // Sin relleno — transparente para detectar contenido real
+    octx.setTransform(1, 0, 0, 1, offX, offY);
+    edLayers.forEach(l => {
+      if (!l || typeof l.draw !== 'function') return;
+      if (l.type==='gif') {
+        if (l._oc && l._ready && l._oc.width > 0) {
+          const gc = document.createElement('canvas'); gc.width=wsW; gc.height=wsH;
+          const gcx = gc.getContext('2d');
+          gcx.setTransform(1,0,0,1,offX,offY);
+          const gx = edMarginX() + l.x*pw - (l.width*pw)/2;
+          const gy = edMarginY() + l.y*ph - (l.height*ph)/2;
+          gcx.drawImage(l._oc, gx, gy, l.width*pw, l.height*ph);
+          octx.save(); octx.setTransform(1,0,0,1,0,0);
+          octx.globalAlpha=l.opacity??1; octx.drawImage(gc,0,0);
+          octx.restore(); octx.setTransform(1,0,0,1,offX,offY);
+        }
+      } else if (l.type==='image') { l.draw(octx, off); }
+      else if (l.type==='draw')    { l.draw(octx); }
+      else { octx.globalAlpha=l.opacity??1; l.draw(octx); octx.globalAlpha=1; }
+    });
+    octx.setTransform(1,0,0,1,0,0);
+
+    // Bbox de píxeles con alpha > 10 (contenido real, transparente o coloreado)
+    const idata = octx.getImageData(0, 0, wsW, wsH).data;
+    let x0=wsW, y0=wsH, x1=0, y1=0;
+    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
+      if (idata[(y*wsW+x)*4+3] > 10) {
+        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+      }
+    }
+    if (x1<=x0 || y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
+    const pad=6;
+    x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
+    x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
+    const cw=x1-x0+1, ch=y1-y0+1;
+
+    // Fondo blanco + escalar bbox preservando proporciones
+    const scale = Math.min(S/cw, S/ch);
+    const dw=cw*scale, dh=ch*scale;
+    tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
+    tctx.fillStyle='#ffffff'; tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
+    tctx.drawImage(off, x0, y0, cw, ch, (S-dw)/2, (S-dh)/2, dw, dh);
   });
-  // Renderizar en gcpCanvas temporalmente
-  const prevIdx = window._gcpFrameIdx;
-  window._gcpFrameIdx = fi;
-  _gcpRedraw();
-  window._gcpFrameIdx = prevIdx;
-  // Escalar gcpCanvas al thumb
-  tctx.fillStyle='#ffffff'; tctx.fillRect(0,0,S,S);
-  tctx.drawImage(gcpCanvas, 0, 0, gcpCanvas.width, gcpCanvas.height, 0, 0, S, S);
-  // Restaurar estado anterior
-  saved.forEach((s,i)=>{
-    const la=window._gcpLayers[i]; if(!la) return;
-    la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;
-    la.rotation=s.rotation;la.opacity=s.opacity;la._gcpHidden=s.hidden;
+
+  window._gcpSelIdx = _savedSelIdx;
+  saved.forEach((s,i)=>{ const la=window._gcpLayers[i]; if(!la) return;
+    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+    la.rotation=s.rotation; la.opacity=s.opacity;
   });
-  // Restaurar render real
-  window._gcpFrameIdx = prevIdx;
-  _gcpRedraw();
   return tc;
 }
 
+// Renderizar el dropdown de frames con miniaturas
+// Actualizar el contador de frames en gcpTopbar
 function _gcpUpdateFrameNav() {
   const nav = document.getElementById('gcpFrameNav');
   const num = document.getElementById('gcpFrameNum');
@@ -16466,39 +16499,23 @@ function _gcpRefreshActiveThumb() {
 function _gcpToggleFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   const btn = document.getElementById('gcpFramesToggleBtn');
-  if (!bar||!btn) return;
-  if (bar.style.display==='flex') {
-    bar.style.display='none'; btn.textContent='Frames ▾'; btn.classList.remove('active');
-    document.getElementById('_gcpFVMenu')?.remove(); return;
+  if (!bar) return;
+  const isOpen = bar.style.display === 'flex';
+  if (isOpen) {
+    bar.style.display = 'none';
+    if (btn) { btn.textContent = 'Frames ▾'; btn.classList.remove('active'); }
+  } else {
+    _gcpUpdateFramesBar();
+    bar.style.display = 'flex';
+    if (btn) { btn.textContent = 'Frames ▴'; btn.classList.add('active'); }
   }
-  document.getElementById('_gcpFVMenu')?.remove();
-  const menu=document.createElement('div'); menu.id='_gcpFVMenu';
-  menu.style.cssText='position:absolute;z-index:520;background:var(--white);border:2px solid var(--gray-300);border-radius:10px;box-shadow:2px 4px 12px rgba(0,0,0,.18);padding:4px 0;min-width:160px;';
-  const br=btn.getBoundingClientRect(),sh=document.getElementById('gcpShell'),sr=sh.getBoundingClientRect();
-  menu.style.top=(br.bottom-sr.top+4)+'px'; menu.style.left=(br.left-sr.left)+'px';
-  const opt=(label,idx)=>{
-    const o=document.createElement('button');
-    o.style.cssText='display:block;width:100%;text-align:left;padding:7px 14px;background:none;border:none;cursor:pointer;font-size:.82rem;font-weight:600;color:var(--black);white-space:nowrap;';
-    o.textContent=(idx===(window._gcpFrameView??-1)?'✓ ':'  ')+label;
-    o.addEventListener('pointerenter',()=>o.style.background='var(--gray-100)');
-    o.addEventListener('pointerleave',()=>o.style.background='none');
-    o.addEventListener('click',e=>{e.stopPropagation();menu.remove();window._gcpFrameView=idx;_gcpUpdateFramesBar();bar.style.display='flex';btn.textContent='Frames ▴';btn.classList.add('active');});
-    return o;
-  };
-  menu.appendChild(opt('Animación general',-1));
-  if(window._gcpLayers&&window._gcpLayers.length){
-    const sep=document.createElement('div');sep.style.cssText='height:1px;background:var(--gray-200);margin:4px 0;';
-    menu.appendChild(sep);
-    window._gcpLayers.forEach((_,i)=>menu.appendChild(opt('Objeto '+(i+1),i)));
-  }
-  sh.appendChild(menu);
-  setTimeout(()=>{document.addEventListener('pointerdown',function _cl(e){if(!menu.contains(e.target)&&e.target!==btn){menu.remove();document.removeEventListener('pointerdown',_cl,true);}},{capture:true});},10);
 }
+
 // Previsualizar la animación en el canvas GIF (botón ▶)
 // Reproduce todos los frames en bucle sobre el gcpCanvas
 let _gcpPreviewTimer = null;
 function _gcpPreview() {
-  if (!_gcpTotalFrames()) { edToast('Sin frames para previsualizar'); return; }
+  if (!window._gcpFrames.length) { edToast('Sin frames para previsualizar'); return; }
   // Si ya está reproduciendo, detener
   if (_gcpPreviewTimer) {
     clearTimeout(_gcpPreviewTimer);
@@ -16515,11 +16532,15 @@ function _gcpPreview() {
   const delay = 150;
   const loop = () => {
     if (!_gcpPreviewTimer) return;
-    window._gcpFrameIdx=fi; _gcpRedraw();
-    fi=(fi+1)%_gcpTotalFrames();
+    _gcpApplyFrame(fi);
+    _gcpRedraw();
+    fi = (fi + 1) % window._gcpFrames.length;
     _gcpPreviewTimer = setTimeout(loop, delay);
   };
-  window._gcpFrameIdx=0; _gcpRedraw(); fi=1;
+  // Aplicar frame 0 inmediatamente y arrancar el timer desde frame 1
+  _gcpApplyFrame(0);
+  _gcpRedraw();
+  fi = 1;
   _gcpPreviewTimer = setTimeout(loop, delay);
 }
 
@@ -16531,14 +16552,8 @@ function _gcpUpdateFramesBar() {
   if (!bar) return;
   bar.innerHTML = '';
 
-  const _view = window._gcpFrameView ?? -1;
-  let _nF = _view===-1 ? _gcpTotalFrames() : (window._gcpLayers[_view]?.gcpFrames?.length||0);
-  const _vtEl = document.createElement('div');
-  _vtEl.style.cssText='flex-shrink:0;writing-mode:vertical-rl;font-size:.70rem;font-weight:700;color:var(--gray-400);padding:4px 2px;align-self:center;';
-  _vtEl.textContent = _view===-1 ? 'GENERAL' : 'OBJ '+(_view+1);
-  bar.appendChild(_vtEl);
-  Array.from({length:_nF},(_,fi)=>fi).forEach(fi => {
-    // Cards de frames
+  window._gcpFrames.forEach((snap, fi) => {
+    // Cards de frames guardados — ninguna marca como current (la live card es la activa)
     const card = document.createElement('div');
     card.className = 'ed-page-card';
     card.style.cursor = 'pointer';
@@ -16618,7 +16633,7 @@ function _gcpUpdateFramesBar() {
     liveHeader.className = 'ed-page-header';
     const liveNum = document.createElement('div');
     liveNum.className = 'ed-page-num';
-    liveNum.textContent = _gcpTotalFrames() + 1;
+    liveNum.textContent = window._gcpFrames.length + 1;
     liveHeader.appendChild(liveNum);
     liveCard.appendChild(liveHeader);
     const liveThumb = document.createElement('div');
@@ -16642,7 +16657,6 @@ function _gcpRedraw() {
   // Dibujar capas — mismo orden que edRedraw
   window._gcpLayers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
-    if (l._gcpHidden) return;
     if (l.type === 'image' || l.type === 'gif') {
       l.draw(gcpCtx, gcpCanvas);
     } else if (l.type === 'text' || l.type === 'bubble') {
@@ -16800,14 +16814,26 @@ function gcpInsertFromBib(entry) {
       const origOnload = la.img.onload;
       la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
     }
-    la.gcpFrames = [];
-    const _dfi = window._gcpFrameIdx || 0;
-    const _inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
-    for (let _di=0; _di<_dfi; _di++) la.gcpFrames.push({..._inv});
-    la.gcpFrames.push({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true});
     window._gcpLayers.push(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
-    _gcpUpdateFrameNav();
+    // Si ya hay frames guardados, rellenar cada uno con una entrada para este nuevo objeto.
+    // Frames anteriores al actual → opacity 0 (objeto no visible aún).
+    // Frame actual y posteriores → opacity 1 (objeto visible desde aquí).
+    if (window._gcpFrames && window._gcpFrames.length > 0) {
+      const curFi = window._gcpFrameIdx;
+      window._gcpFrames.forEach((snap, fi) => {
+        const entry = {
+          x: la.x, y: la.y,
+          width: la.width, height: la.height,
+          rotation: la.rotation || 0,
+          opacity: fi >= curFi ? (la.opacity ?? 1) : 0
+        };
+        snap.push(entry);
+      });
+      // Actualizar barra de frames si está visible
+      const _fb = document.getElementById('gcpFramesBar');
+      if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
+    }
     _gcpRedraw();
   };
 
@@ -16867,7 +16893,6 @@ function gcpOpen(edLayerIdx) {
   window._gcpFrameIdx = 0;
   window._gcpTempState = [];
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
-  window._gcpFrameView = -1;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
