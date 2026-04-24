@@ -16336,6 +16336,8 @@ function _gcpCaptureFrame() {
   window._gcpFrames.push(snap);
   window._gcpFrameIdx = window._gcpFrames.length - 1;
   window._gcpTempState = snap.map(s => ({...s}));
+  window._gcpInLiveEdit = true;
+  window._gcpLiveSnap = null; // siempre en modo edición tras crear frame
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
@@ -16369,12 +16371,19 @@ function _gcpGoToFrame(fi) {
     la.rotation=s.rotation; la.opacity=s.opacity;
   });
   window._gcpTempState = snap.map(s => ({...s}));
+  window._gcpInLiveEdit = false; // estamos viendo un frame guardado
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
   _gcpRedraw();
   const bar = document.getElementById('gcpFramesBar');
-  if (bar) bar.querySelectorAll('.ed-page-card').forEach((c, i) => c.classList.toggle('current', i === fi));
+  if (bar) bar.querySelectorAll('.ed-page-card').forEach((c, i) => {
+    c.classList.toggle('current', i === fi);
+    c.style.opacity = '';
+  });
+  // Quitar resaltado de la card live
+  const liveCard = bar ? bar.querySelector('.gcp-live-card') : null;
+  if (liveCard) liveCard.classList.remove('current');
 }
 
 // Genera miniatura 44×44 del frame fi — patrón exacto de _edRenderPageThumb
@@ -16473,14 +16482,17 @@ function _gcpUpdateFrameNav() {
   const hasLayers = window._gcpLayers && window._gcpLayers.length > 0;
   if (saved <= 0 && !hasLayers) { nav.style.display = 'none'; return; }
   nav.style.display = '';
-  // El frame "en edición" es siempre el último (saved+1)
-  const currentLabel = saved + 1;
-  const total = saved + 1; // frames guardados + 1 en edición
+  const total = saved + 1; // frames guardados + frame en edición
+  // Si estamos en un frame guardado, mostrar su posición; si estamos en "en edición", mostrar total
+  const inLive = window._gcpInLiveEdit !== false; // por defecto estamos en edición
+  const currentLabel = inLive ? total : (window._gcpFrameIdx + 1);
   num.textContent = currentLabel + ' / ' + total;
   const prev = document.getElementById('gcpFramePrev');
   const next = document.getElementById('gcpFrameNext');
-  if (prev) prev.disabled = window._gcpFrameIdx <= 0;
-  if (next) next.disabled = true; // no se puede ir "al siguiente" del frame en edición
+  // Prev: activo si hay frames guardados y estamos en live, o si hay frame anterior
+  if (prev) prev.disabled = inLive ? saved <= 0 : window._gcpFrameIdx <= 0;
+  // Next: activo si estamos en un frame guardado (no en live)
+  if (next) next.disabled = inLive ? true : window._gcpFrameIdx >= saved - 1;
 }
 
 // Refrescar solo la miniatura del frame activo en la barra
@@ -16872,6 +16884,7 @@ function gcpOpen(edLayerIdx) {
   window._gcpFrameIdx = 0;
   window._gcpTempState = [];
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
+  window._gcpInLiveEdit = true;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -16967,10 +16980,39 @@ function gcpOpen(edLayerIdx) {
     });
     // Botones navegación de frames en topbar
     document.getElementById('gcpFramePrev')?.addEventListener('click', e => {
-      e.stopPropagation(); if (window._gcpFrameIdx > 0) _gcpGoToFrame(window._gcpFrameIdx - 1);
+      e.stopPropagation();
+      if (window._gcpInLiveEdit !== false) {
+        // Guardar estado live antes de salir
+        window._gcpLiveSnap = window._gcpLayers.map(la => ({
+          x:la.x, y:la.y, width:la.width, height:la.height,
+          rotation:la.rotation||0, opacity:la.opacity??1
+        }));
+        // Desde frame en edición → ir al último frame guardado
+        if (window._gcpFrames.length > 0) _gcpGoToFrame(window._gcpFrames.length - 1);
+      } else if (window._gcpFrameIdx > 0) {
+        _gcpGoToFrame(window._gcpFrameIdx - 1);
+      }
     });
     document.getElementById('gcpFrameNext')?.addEventListener('click', e => {
-      e.stopPropagation(); if (window._gcpFrameIdx < window._gcpFrames.length - 1) _gcpGoToFrame(window._gcpFrameIdx + 1);
+      e.stopPropagation();
+      if (window._gcpInLiveEdit === false) {
+        if (window._gcpFrameIdx < window._gcpFrames.length - 1) {
+          _gcpGoToFrame(window._gcpFrameIdx + 1);
+        } else {
+          // Desde el último frame guardado → volver al frame en edición
+          window._gcpInLiveEdit = true;
+          // Restaurar el estado vivo guardado en _gcpLiveSnap
+          if (window._gcpLiveSnap) {
+            window._gcpLiveSnap.forEach((s, i) => {
+              const la = window._gcpLayers[i]; if (!la) return;
+              la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
+              la.rotation=s.rotation; la.opacity=s.opacity;
+            });
+          }
+          _gcpUpdateFrameNav();
+          _gcpRedraw();
+        }
+      }
     });
     // Botón Añadir Frame
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
