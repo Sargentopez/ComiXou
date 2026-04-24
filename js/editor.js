@@ -16469,14 +16469,18 @@ function _gcpUpdateFrameNav() {
   const nav = document.getElementById('gcpFrameNav');
   const num = document.getElementById('gcpFrameNum');
   if (!nav || !num) return;
-  const total = window._gcpFrames ? window._gcpFrames.length : 0;
-  if (total <= 0) { nav.style.display = 'none'; return; }
+  const saved = window._gcpFrames ? window._gcpFrames.length : 0;
+  const hasLayers = window._gcpLayers && window._gcpLayers.length > 0;
+  if (saved <= 0 && !hasLayers) { nav.style.display = 'none'; return; }
   nav.style.display = '';
-  num.textContent = (window._gcpFrameIdx + 1) + ' / ' + total;
+  // El frame "en edición" es siempre el último (saved+1)
+  const currentLabel = saved + 1;
+  const total = saved + 1; // frames guardados + 1 en edición
+  num.textContent = currentLabel + ' / ' + total;
   const prev = document.getElementById('gcpFramePrev');
   const next = document.getElementById('gcpFrameNext');
   if (prev) prev.disabled = window._gcpFrameIdx <= 0;
-  if (next) next.disabled = window._gcpFrameIdx >= total - 1;
+  if (next) next.disabled = true; // no se puede ir "al siguiente" del frame en edición
 }
 
 // Refrescar solo la miniatura del frame activo en la barra
@@ -16546,11 +16550,9 @@ function _gcpUpdateFramesBar() {
   bar.innerHTML = '';
 
   window._gcpFrames.forEach((snap, fi) => {
-    const isCurrent = fi === window._gcpFrameIdx;
-
-    // Card — igual que .ed-page-card
+    // Cards de frames guardados — ninguna marca como current (la live card es la activa)
     const card = document.createElement('div');
-    card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
+    card.className = 'ed-page-card';
     card.style.cursor = 'pointer';
 
     // Cabecera: número
@@ -16562,20 +16564,12 @@ function _gcpUpdateFramesBar() {
     header.appendChild(num);
     card.appendChild(header);
 
-    // Miniatura: frame activo muestra placeholder, resto genera thumb
-    let thumb;
-    if (isCurrent) {
-      thumb = document.createElement('div');
-      thumb.className = 'ed-page-thumb';
-      thumb.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:11px;background:#f8f8f8;border:1px solid #ddd;border-radius:6px';
-      thumb.textContent = 'en edición';
-    } else {
-      thumb = _gcpFrameThumb(fi);
-      thumb.className = 'ed-page-thumb';
-      thumb.style.width = '100%';
-      thumb.style.height = 'auto';
-      thumb.style.cursor = 'pointer';
-    }
+    // Miniatura del frame guardado
+    const thumb = _gcpFrameThumb(fi);
+    thumb.className = 'ed-page-thumb';
+    thumb.style.width = '100%';
+    thumb.style.height = 'auto';
+    thumb.style.cursor = 'pointer';
     card.appendChild(thumb);
 
     // Acciones — igual que .ed-page-actions
@@ -16625,6 +16619,27 @@ function _gcpUpdateFramesBar() {
 
     bar.appendChild(card);
   });
+
+  // Card "en edición" — representa el estado actual (no guardado como frame todavía)
+  // Se muestra siempre al final si hay capas, para indicar el estado en vivo
+  if (window._gcpLayers && window._gcpLayers.length > 0) {
+    const liveCard = document.createElement('div');
+    liveCard.className = 'ed-page-card current';
+    liveCard.style.cssText = 'cursor:default;opacity:.85';
+    const liveHeader = document.createElement('div');
+    liveHeader.className = 'ed-page-header';
+    const liveNum = document.createElement('div');
+    liveNum.className = 'ed-page-num';
+    liveNum.textContent = window._gcpFrames.length + 1;
+    liveHeader.appendChild(liveNum);
+    liveCard.appendChild(liveHeader);
+    const liveThumb = document.createElement('div');
+    liveThumb.className = 'ed-page-thumb';
+    liveThumb.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:11px;background:#f8f8f8;border:1px solid #ddd;border-radius:6px;flex-shrink:0';
+    liveThumb.textContent = 'en edición';
+    liveCard.appendChild(liveThumb);
+    bar.appendChild(liveCard);
+  }
 }
 
 // _gcpRedraw — copia de edRedraw usando gcpCanvas/gcpCtx/_gcpLayers
