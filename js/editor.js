@@ -16464,6 +16464,21 @@ function _gcpFrameThumb(fi) {
 }
 
 // Renderizar el dropdown de frames con miniaturas
+// Actualizar el contador de frames en gcpTopbar
+function _gcpUpdateFrameNav() {
+  const nav = document.getElementById('gcpFrameNav');
+  const num = document.getElementById('gcpFrameNum');
+  if (!nav || !num) return;
+  const total = window._gcpFrames ? window._gcpFrames.length : 0;
+  if (total <= 0) { nav.style.display = 'none'; return; }
+  nav.style.display = '';
+  num.textContent = (window._gcpFrameIdx + 1) + ' / ' + total;
+  const prev = document.getElementById('gcpFramePrev');
+  const next = document.getElementById('gcpFrameNext');
+  if (prev) prev.disabled = window._gcpFrameIdx <= 0;
+  if (next) next.disabled = window._gcpFrameIdx >= total - 1;
+}
+
 // Refrescar solo la miniatura del frame activo en la barra
 function _gcpRefreshActiveThumb() {
   const bar = document.getElementById('gcpFramesBar');
