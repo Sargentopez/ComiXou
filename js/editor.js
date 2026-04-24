@@ -16336,8 +16336,6 @@ function _gcpCaptureFrame() {
   window._gcpFrames.push(snap);
   window._gcpFrameIdx = window._gcpFrames.length - 1;
   window._gcpTempState = snap.map(s => ({...s}));
-  window._gcpInLiveEdit = true;
-  window._gcpLiveSnap = null; // siempre en modo edición tras crear frame
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
@@ -16371,7 +16369,6 @@ function _gcpGoToFrame(fi) {
     la.rotation=s.rotation; la.opacity=s.opacity;
   });
   window._gcpTempState = snap.map(s => ({...s}));
-  window._gcpInLiveEdit = false; // estamos viendo un frame guardado
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
@@ -16484,15 +16481,11 @@ function _gcpUpdateFrameNav() {
   nav.style.display = '';
   const total = saved + 1; // frames guardados + frame en edición
   // Si estamos en un frame guardado, mostrar su posición; si estamos en "en edición", mostrar total
-  const inLive = window._gcpInLiveEdit !== false; // por defecto estamos en edición
-  const currentLabel = inLive ? total : (window._gcpFrameIdx + 1);
-  num.textContent = currentLabel + ' / ' + total;
+  num.textContent = saved > 0 ? (window._gcpFrameIdx + 1) + ' / ' + saved : '—';
   const prev = document.getElementById('gcpFramePrev');
   const next = document.getElementById('gcpFrameNext');
-  // Prev: activo si hay frames guardados y estamos en live, o si hay frame anterior
-  if (prev) prev.disabled = inLive ? saved <= 0 : window._gcpFrameIdx <= 0;
-  // Next: activo si estamos en un frame guardado (no en live)
-  if (next) next.disabled = inLive ? true : window._gcpFrameIdx >= saved - 1;
+  if (prev) prev.disabled = window._gcpFrameIdx <= 0 || saved === 0;
+  if (next) next.disabled = window._gcpFrameIdx >= saved - 1 || saved === 0;
 }
 
 // Refrescar solo la miniatura del frame activo en la barra
@@ -16542,15 +16535,19 @@ function _gcpPreview() {
   const btn = document.getElementById('gcpPreviewBtn');
   if (btn) btn.textContent = '⏹';
   let fi = 0;
-  const delay = 150; // ms por frame — ajustable
+  const delay = 150;
   const loop = () => {
-    if (!_gcpPreviewTimer) return; // detenido externamente
+    if (!_gcpPreviewTimer) return;
     _gcpApplyFrame(fi);
     _gcpRedraw();
     fi = (fi + 1) % window._gcpFrames.length;
     _gcpPreviewTimer = setTimeout(loop, delay);
   };
-  _gcpPreviewTimer = setTimeout(loop, 0);
+  // Aplicar frame 0 inmediatamente y arrancar el timer desde frame 1
+  _gcpApplyFrame(0);
+  _gcpRedraw();
+  fi = 1;
+  _gcpPreviewTimer = setTimeout(loop, delay);
 }
 
 // Actualiza la barra de frames — miniaturas estilo hojas del editor general.
@@ -16884,7 +16881,6 @@ function gcpOpen(edLayerIdx) {
   window._gcpFrameIdx = 0;
   window._gcpTempState = [];
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
-  window._gcpInLiveEdit = true;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -16978,41 +16974,14 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpRedoBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpRedo();
     });
-    // Botones navegación de frames en topbar
+    // Botones navegación de frames en topbar — entre frames guardados
     document.getElementById('gcpFramePrev')?.addEventListener('click', e => {
       e.stopPropagation();
-      if (window._gcpInLiveEdit !== false) {
-        // Guardar estado live antes de salir
-        window._gcpLiveSnap = window._gcpLayers.map(la => ({
-          x:la.x, y:la.y, width:la.width, height:la.height,
-          rotation:la.rotation||0, opacity:la.opacity??1
-        }));
-        // Desde frame en edición → ir al último frame guardado
-        if (window._gcpFrames.length > 0) _gcpGoToFrame(window._gcpFrames.length - 1);
-      } else if (window._gcpFrameIdx > 0) {
-        _gcpGoToFrame(window._gcpFrameIdx - 1);
-      }
+      if (window._gcpFrameIdx > 0) _gcpGoToFrame(window._gcpFrameIdx - 1);
     });
     document.getElementById('gcpFrameNext')?.addEventListener('click', e => {
       e.stopPropagation();
-      if (window._gcpInLiveEdit === false) {
-        if (window._gcpFrameIdx < window._gcpFrames.length - 1) {
-          _gcpGoToFrame(window._gcpFrameIdx + 1);
-        } else {
-          // Desde el último frame guardado → volver al frame en edición
-          window._gcpInLiveEdit = true;
-          // Restaurar el estado vivo guardado en _gcpLiveSnap
-          if (window._gcpLiveSnap) {
-            window._gcpLiveSnap.forEach((s, i) => {
-              const la = window._gcpLayers[i]; if (!la) return;
-              la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-              la.rotation=s.rotation; la.opacity=s.opacity;
-            });
-          }
-          _gcpUpdateFrameNav();
-          _gcpRedraw();
-        }
-      }
+      if (window._gcpFrameIdx < window._gcpFrames.length - 1) _gcpGoToFrame(window._gcpFrameIdx + 1);
     });
     // Botón Añadir Frame
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
