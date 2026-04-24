@@ -15831,6 +15831,7 @@ function _bibRenderPanel(panel) {
           la._pngFrameIdx = 0;
           if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
           if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
+          if (entry.gcpLayerNames) la._gcpLayerNames = entry.gcpLayerNames;
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
@@ -16310,20 +16311,38 @@ function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
   const selLayer = window._gcpLayers[window._gcpSelIdx] ?? null;
   if (!selLayer) { edToast('Selecciona un objeto primero'); return; }
-  // Guardar estado live en frame activo de todos los layers
+
+  // Guardar estado live en frame activo de todos los layers que ya tienen frames
   _gcpSaveCurrentToFrame();
-  // Añadir nuevo frame al layer seleccionado
-  const newSnap = {x:selLayer.x,y:selLayer.y,width:selLayer.width,height:selLayer.height,rotation:selLayer.rotation||0,opacity:selLayer.opacity??1,visible:true};
-  selLayer._frames.push({...newSnap});
-  // Extender otros layers hasta el nuevo total con su último snap (visible:false si aún no activos)
+
+  // Calcular el índice global donde se insertará el nuevo frame de selLayer.
+  // Si selLayer aún no tiene frames, su primer frame va en la posición
+  // _gcpGlobalFrameIdx (columna actual) — igual que createNewLayer del HTML de ref.
+  const curGfi = window._gcpGlobalFrameIdx;
+
+  if (!selLayer._frames.length) {
+    // Primera vez que se toca + para este objeto:
+    // frames invisibles desde 0 hasta curGfi-1, visible en curGfi
+    _gcpInitLayerFrames(selLayer, curGfi);
+  } else {
+    // Objeto ya tiene frames: añadir uno nuevo al final
+    const newSnap = {x:selLayer.x,y:selLayer.y,width:selLayer.width,height:selLayer.height,
+                     rotation:selLayer.rotation||0,opacity:selLayer.opacity??1,visible:true};
+    selLayer._frames.push({...newSnap});
+  }
+
+  // Calcular nuevo total y extender los demás layers con celdas vacías (visible:false)
   const newTotal = _gcpGetTotalFrames();
   window._gcpLayers.forEach(la => {
     if (la === selLayer) return;
     while (la._frames.length < newTotal) {
-      const last = la._frames.length ? {...la._frames[la._frames.length-1], visible:false} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
+      const last = la._frames.length
+        ? {...la._frames[la._frames.length - 1], visible: false}
+        : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
       la._frames.push({...last});
     }
   });
+
   window._gcpGlobalFrameIdx = newTotal - 1;
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
   _gcpClearHistory();
@@ -16337,8 +16356,12 @@ function _gcpCaptureFrame() {
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
 function _gcpApplyFrame(fi) {
   window._gcpLayers.forEach(la => {
-    if (!la._frames || fi >= la._frames.length) {
-      // Frame global aún no existe para esta capa → ocultarla
+    if (!la._frames || !la._frames.length) {
+      // Sin frames aún: objeto recién insertado, siempre visible para editar
+      la._gcpVisible = true; return;
+    }
+    if (fi >= la._frames.length) {
+      // Columna más allá de los frames de esta capa → invisible
       la._gcpVisible = false; return;
     }
     const s = la._frames[fi]; if (!s) return;
@@ -16426,7 +16449,8 @@ function _gcpFrameThumb(fi) {
     const off=document.createElement('canvas');off.width=wsW;off.height=wsH;
     const octx=off.getContext('2d');octx.setTransform(1,0,0,1,offX,offY);
     window._gcpLayers.forEach(l=>{
-      if(!l||!l._frames||fi>=l._frames.length||l._frames[fi]?.visible===false) return;
+      if(!l||typeof l.draw!=='function') return;
+      if(l._gcpVisible===false) return;  // mismo guard que _gcpRedraw y renderSnap
       if(l.type==='gif'){if(l._oc&&l._ready&&l._oc.width>0){const gx=mx+l.x*pw-(l.width*pw)/2;const gy=my+l.y*ph-(l.height*ph)/2;octx.globalAlpha=l.opacity??1;octx.drawImage(l._oc,gx,gy,l.width*pw,l.height*ph);octx.globalAlpha=1;}}
       else if(l.type==='image'){l.draw(octx,off);}
       else if(l.type==='draw'){l.draw(octx);}
@@ -16520,121 +16544,166 @@ function _gcpPreview() {
 function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   if (!bar) return;
-  if (bar.style.display !== 'flex') return;  // solo actualizar cuando visible
+  if (bar.style.display !== 'flex') return;
   bar.innerHTML = '';
-  const total = _gcpGetTotalFrames();
-  const gfi = window._gcpGlobalFrameIdx;
-  if (!window._gcpLayers.length) return;
 
-  // Contenedor vertical (apila filas una sobre otra)
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'display:flex;flex-direction:column;gap:6px;width:100%;';
+  const total    = _gcpGetTotalFrames();
+  const gfi      = window._gcpGlobalFrameIdx;
+  const hasLayers = window._gcpLayers && window._gcpLayers.length > 0;
+  if (!hasLayers) return;
 
+  // ── Una fila por objeto, igual que refreshLayerTimelines() del HTML de referencia ──
   window._gcpLayers.forEach((la, layerIdx) => {
     const isSelLayer = (layerIdx === window._gcpSelIdx);
+    const layerName  = la._gcpName || ('Obj ' + (layerIdx + 1));
+    const layerFrames = la._frames ? la._frames.length : 0;
 
-    // Fila: etiqueta + miniaturas horizontales
+    // Fila contenedora
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:4px;';
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:6px;margin-bottom:4px;';
 
-    // Etiqueta de la capa
+    // Etiqueta lateral (estilo .ed-page-num pero vertical)
     const label = document.createElement('div');
-    const layerName = la._gcpName || ('Obj ' + (layerIdx + 1));
     label.textContent = layerName;
     label.title = layerName;
     label.style.cssText = [
-      'flex-shrink:0;width:52px;font-size:10px;font-weight:700;',
-      'color:' + (isSelLayer ? '#f59e0b' : '#94a3b8') + ';',
-      'text-align:right;padding-right:6px;overflow:hidden;',
+      'flex-shrink:0;width:40px;font-size:9px;font-weight:900;',
+      'color:' + (isSelLayer ? '#ff6600' : 'var(--gray-500)') + ';',
+      'padding-top:28px;text-align:right;overflow:hidden;',
       'text-overflow:ellipsis;white-space:nowrap;'
     ].join('');
     row.appendChild(label);
 
-    // Scroll horizontal de miniaturas para esta capa
+    // Scroll horizontal de cards para esta fila
     const scroll = document.createElement('div');
-    scroll.style.cssText = 'display:flex;gap:4px;overflow-x:auto;flex:1;padding-bottom:2px;';
+    scroll.style.cssText = 'display:flex;gap:6px;overflow-x:auto;flex:1;padding-bottom:4px;overscroll-behavior-x:contain;scrollbar-width:thin;';
 
-    // Columnas = total de frames global
+    // ── Cards de frames guardados para este layer ──
     for (let fi = 0; fi < total; fi++) {
-      const hasFrame = la._frames && fi < la._frames.length;
-      const snap = hasFrame ? la._frames[fi] : null;
+      const hasFrame  = fi < layerFrames;
+      const snap      = hasFrame ? la._frames[fi] : null;
       const isVisible = snap && snap.visible !== false;
-      const isCurrent = fi === gfi;
-      const isLayerCurrent = isCurrent && isSelLayer;
+      const isCurCol  = (fi === gfi);
+      const isCurrent = isCurCol && isSelLayer;
 
-      const cell = document.createElement('div');
-      cell.style.cssText = [
-        'position:relative;flex-shrink:0;cursor:pointer;',
-        'border-radius:6px;overflow:hidden;',
-        'border:2px solid ' + (isLayerCurrent ? '#f59e0b' : isCurrent ? '#3b82f6' : '#334155') + ';',
-        'box-shadow:' + (isLayerCurrent ? '0 0 0 1px #f59e0b' : 'none') + ';'
-      ].join('');
+      const card = document.createElement('div');
+      card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
+      card.style.cursor = hasFrame ? 'pointer' : 'default';
+
+      // Cabecera con número
+      const header = document.createElement('div');
+      header.className = 'ed-page-header';
+      const num = document.createElement('div');
+      num.className = 'ed-page-num';
+      num.textContent = fi + 1;
+      header.appendChild(num);
+      card.appendChild(header);
 
       if (!hasFrame) {
-        // Celda vacía — frame global que esta capa todavía no tiene
+        // Celda vacía — este layer aún no tiene frame aquí
         const empty = document.createElement('div');
-        empty.style.cssText = 'width:60px;height:60px;background:#111827;display:flex;align-items:center;justify-content:center;color:#374151;font-size:18px;';
+        empty.className = 'ed-page-thumb';
+        empty.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
+          'justify-content:center;color:var(--gray-300);font-size:22px;background:var(--gray-100);';
         empty.textContent = '·';
-        cell.appendChild(empty);
+        card.appendChild(empty);
+      } else if (!isVisible) {
+        // Frame existe pero invisible — overlay ✖ rojo
+        const hidden = document.createElement('div');
+        hidden.className = 'ed-page-thumb';
+        hidden.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
+          'justify-content:center;font-size:28px;background:#fff0f0;color:#e63030;';
+        hidden.textContent = '✖';
+        card.appendChild(hidden);
       } else {
-        // Miniatura de la capa en este frame
-        const thumb = _gcpLayerFrameThumb(la, fi, 60);
-        thumb.style.cssText = 'display:block;width:60px;height:60px;';
-        cell.appendChild(thumb);
+        // Miniatura real del layer en este frame
+        const thumb = _gcpLayerFrameThumb(la, fi, 88);
+        thumb.className = 'ed-page-thumb';
+        thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;';
+        card.appendChild(thumb);
+
+        // Acciones (solo en frames visibles con contenido)
+        const actions = document.createElement('div');
+        actions.className = 'ed-page-actions';
+
+        const dupBtn = document.createElement('button');
+        dupBtn.className = 'ed-page-action-btn';
+        dupBtn.title = 'Duplicar frame';
+        dupBtn.innerHTML = '⧉';
+        dupBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          // Duplicar: insertar copia del frame fi justo después, SOLO en esta capa.
+          // Los demás layers son independientes — no se tocan.
+          const copy = {...la._frames[fi]};
+          la._frames.splice(fi + 1, 0, copy);
+          window._gcpGlobalFrameIdx = fi + 1;
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpUpdateFrameNav();
+          _gcpRedraw();
+          _gcpUpdateFramesBar();
+        });
+        actions.appendChild(dupBtn);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'ed-page-action-btn ed-page-del';
+        delBtn.title = 'Eliminar frame';
+        delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
+        delBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (la._frames.length <= 1) return;
+          // Eliminar: splice solo en esta capa. Los frames posteriores se desplazan.
+          // Los demás layers son independientes — no se tocan.
+          la._frames.splice(fi, 1);
+          // Ajustar índice global si queda fuera del nuevo total
+          const newTotal = _gcpGetTotalFrames();
+          if (window._gcpGlobalFrameIdx >= newTotal)
+            window._gcpGlobalFrameIdx = Math.max(0, newTotal - 1);
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpUpdateFrameNav();
+          _gcpRedraw();
+          _gcpUpdateFramesBar();
+        });
+        actions.appendChild(delBtn);
+        card.appendChild(actions);
       }
 
-      // Número de frame encima
-      const numBadge = document.createElement('div');
-      numBadge.textContent = fi + 1;
-      numBadge.style.cssText = [
-        'position:absolute;top:2px;left:3px;',
-        'font-size:9px;font-weight:700;',
-        'color:' + (isCurrent ? '#fff' : '#94a3b8') + ';',
-        'text-shadow:0 1px 3px #000;pointer-events:none;'
-      ].join('');
-      cell.appendChild(numBadge);
-
-      // Click → navegar a ese frame y seleccionar esa capa
-      cell.addEventListener('click', e => {
-        e.stopPropagation();
-        if (hasFrame) {
+      // Click → navegar a frame y seleccionar esta capa
+      if (hasFrame) {
+        card.addEventListener('click', e => {
+          if (e.target.closest('.ed-page-action-btn')) return;
+          e.stopPropagation();
           window._gcpSelIdx = layerIdx;
           _gcpGoToFrame(fi);
-        }
-      });
+        });
+      }
 
-      scroll.appendChild(cell);
+      scroll.appendChild(card);
     }
 
-    // Celda "+" al final de la fila (añadir frame a esta capa)
-    const addCell = document.createElement('div');
-    addCell.title = 'Añadir frame a este objeto';
-    addCell.style.cssText = [
-      'flex-shrink:0;width:60px;height:60px;cursor:pointer;',
-      'border-radius:6px;border:2px dashed #334155;',
-      'display:flex;align-items:center;justify-content:center;',
-      'font-size:22px;color:#4b5563;',
-      'transition:color 0.15s,border-color 0.15s;'
-    ].join('');
-    addCell.textContent = '+';
-    addCell.addEventListener('click', e => {
-      e.stopPropagation();
-      window._gcpSelIdx = layerIdx;
-      _gcpCaptureFrame();
-    });
-    addCell.addEventListener('pointerenter', () => { addCell.style.color='#f59e0b'; addCell.style.borderColor='#f59e0b'; });
-    addCell.addEventListener('pointerleave', () => { addCell.style.color='#4b5563'; addCell.style.borderColor='#334155'; });
-    scroll.appendChild(addCell);
+    // Card "en edición" al final de cada fila — estado vivo de este layer
+    const liveCard = document.createElement('div');
+    liveCard.className = 'ed-page-card' + (isSelLayer && total === layerFrames ? ' current' : '');
+    liveCard.style.cssText = 'cursor:default;opacity:.85;';
+    const liveHeader = document.createElement('div');
+    liveHeader.className = 'ed-page-header';
+    const liveNum = document.createElement('div');
+    liveNum.className = 'ed-page-num';
+    liveNum.textContent = (isSelLayer ? '✏️' : '') + (total + 1);
+    liveHeader.appendChild(liveNum);
+    liveCard.appendChild(liveHeader);
+    const liveThumb = document.createElement('div');
+    liveThumb.className = 'ed-page-thumb';
+    liveThumb.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
+      'justify-content:center;color:#aaa;font-size:11px;background:#f8f8f8;border:1px solid #ddd;border-radius:6px;';
+    liveThumb.textContent = isSelLayer ? 'en edición' : '—';
+    liveCard.appendChild(liveThumb);
+    scroll.appendChild(liveCard);
 
     row.appendChild(scroll);
-    wrapper.appendChild(row);
+    bar.appendChild(row);
   });
-
-  bar.appendChild(wrapper);
 }
 
-// _gcpRedraw — copia de edRedraw usando gcpCanvas/gcpCtx/_gcpLayers
-// Misma cámara, mismo orden de render, mismo patrón exacto
 function _gcpRedraw() {
   if (!gcpCtx || !gcpCanvas) return;
   const cw = gcpCanvas.width, ch = gcpCanvas.height;
@@ -16803,12 +16872,10 @@ function gcpInsertFromBib(entry) {
       const origOnload = la.img.onload;
       la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
     }
-    // Nombre visible en la barra de frames
+    // Nombre visible en la barra (igual que v17.99: solo push, SIN crear frames)
     la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
-    // Inicializar _frames por layer: invisible antes del frame actual, visible desde aquí
-    _gcpInitLayerFrames(la, window._gcpGlobalFrameIdx);
-    // El objeto es visible en el frame actual (startFi = _gcpGlobalFrameIdx)
-    la._gcpVisible = true;
+    la._frames = [];      // vacío — frames se crean solo al pulsar +
+    la._gcpVisible = true; // visible mientras se edita (sin frame aún)
     window._gcpLayers.push(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpUpdateFrameNav();
@@ -16899,6 +16966,9 @@ function gcpOpen(edLayerIdx) {
           la.img.onload = function() { if (prev) prev.call(this); _gcpRedraw(); };
           if (la.img.complete && la.img.naturalWidth > 0) setTimeout(_gcpRedraw, 0);
         }
+        // Restaurar nombre de capa
+        la._gcpName = (gifLayer._gcpLayerNames && gifLayer._gcpLayerNames[li])
+          || (la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj'));
         // Inicializar visibilidad según el frame 0
         la._gcpVisible = !(la._frames && la._frames[0] && la._frames[0].visible === false);
         window._gcpLayers.push(la);
@@ -17076,17 +17146,17 @@ function _gcpSaveToLib(onDone) {
   const wsH = pageH + marginY*2 + extra*2;
   const offX = extra, offY = extra;
 
-  // Renderizar frame global fi respetando visible por layer
+  // Renderizar frame global fi — usa _gcpApplyFrame que setea _gcpVisible por layer.
+  // Idéntico a _gcpRedraw: si _gcpVisible===false el layer no se dibuja.
   const renderSnap = (snap, fi) => {
-    _gcpApplyFrame(fi);
+    _gcpApplyFrame(fi);   // actualiza posición Y _gcpVisible de cada layer
     const fc = document.createElement('canvas');
     fc.width = wsW; fc.height = wsH;
     const fctx = fc.getContext('2d');
     fctx.setTransform(1, 0, 0, 1, offX, offY);
     layers.forEach(l => {
       if (!l || typeof l.draw !== 'function') return;
-      // Respetar visible por layer en este frame
-      if (l._frames && fi < l._frames.length && l._frames[fi]?.visible === false) return;
+      if (l._gcpVisible === false) return;   // mismo guard que _gcpRedraw
       if (l.type==='image'||l.type==='gif') l.draw(fctx, fc);
       else if (l.type==='text'||l.type==='bubble') l.draw(fctx, fc);
       else { fctx.globalAlpha = l.opacity??1; l.draw(fctx); fctx.globalAlpha=1; }
@@ -17142,6 +17212,8 @@ function _gcpSaveToLib(onDone) {
     .map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean);
   // Serializar frames por layer (nuevo formato: array de arrays)
   const gcpFramesData = window._gcpLayers.map(la => (la._frames||[]).map(s=>({...s})));
+  // Preservar nombres de capas (_gcpName no lo guarda edSerLayer)
+  const gcpLayerNames = window._gcpLayers.map(la => la._gcpName || null);
 
   // Restaurar estado del frame activo
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
@@ -17153,7 +17225,7 @@ function _gcpSaveToLib(onDone) {
     isGroup:false, isGifAnim:true,
     gifDataUrl: pngFrames[0],  // primer frame como preview
     pngFrames,                  // todos los frames
-    gcpLayersData, gcpFramesData,
+    gcpLayersData, gcpFramesData, gcpLayerNames,
     normW:_gcpNormW, normH:_gcpNormH,
     layerData:null, thumb
   });
@@ -17165,6 +17237,7 @@ function _gcpSaveToLib(onDone) {
     const savedX=existingLayer.x, savedY=existingLayer.y, savedR=existingLayer.rotation;
     existingLayer._gcpLayersData=gcpLayersData;
     existingLayer._gcpFramesData=gcpFramesData;
+    existingLayer._gcpLayerNames=gcpLayerNames;
     existingLayer._isGcpImage=true;
     existingLayer._pngFrames=pngFrames;
     // Cargar primer frame como imagen visible
