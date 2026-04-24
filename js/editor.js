@@ -16336,13 +16336,12 @@ function _gcpCaptureFrame() {
   window._gcpFrames.push(snap);
   window._gcpFrameIdx = window._gcpFrames.length - 1;
   window._gcpTempState = snap.map(s => ({...s}));
-  // Historial nuevo para este frame
   _gcpClearHistory();
   _gcpPushHistory();
-  // Abrir panel si no está visible
+  _gcpUpdateFrameNav();
+  // Actualizar barra solo si ya está visible — no abrirla automáticamente
   const _fb = document.getElementById('gcpFramesBar');
-  if (_fb && _fb.style.display !== 'flex') _gcpToggleFramesBar();
-  else _gcpUpdateFramesBar();
+  if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
   edToast('Frame ' + window._gcpFrames.length + ' creado ✓');
 }
 
@@ -16370,12 +16369,10 @@ function _gcpGoToFrame(fi) {
     la.rotation=s.rotation; la.opacity=s.opacity;
   });
   window._gcpTempState = snap.map(s => ({...s}));
-  // Borrar historial al cambiar de frame — cada frame tiene su historial propio
   _gcpClearHistory();
-  // Empujar estado inicial del frame como primer snapshot del historial
   _gcpPushHistory();
+  _gcpUpdateFrameNav();
   _gcpRedraw();
-  // Actualizar resaltado de cards — usan .ed-page-card igual que la ventana de hojas
   const bar = document.getElementById('gcpFramesBar');
   if (bar) bar.querySelectorAll('.ed-page-card').forEach((c, i) => c.classList.toggle('current', i === fi));
 }
@@ -16550,12 +16547,20 @@ function _gcpUpdateFramesBar() {
     header.appendChild(num);
     card.appendChild(header);
 
-    // Miniatura — igual que .ed-page-thumb
-    const thumb = _gcpFrameThumb(fi);
-    thumb.className = 'ed-page-thumb';
-    thumb.style.width = '100%';
-    thumb.style.height = 'auto';
-    thumb.style.cursor = 'pointer';
+    // Miniatura: frame activo muestra placeholder, resto genera thumb
+    let thumb;
+    if (isCurrent) {
+      thumb = document.createElement('div');
+      thumb.className = 'ed-page-thumb';
+      thumb.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:11px;background:#f8f8f8;border:1px solid #ddd;border-radius:6px';
+      thumb.textContent = 'en edición';
+    } else {
+      thumb = _gcpFrameThumb(fi);
+      thumb.className = 'ed-page-thumb';
+      thumb.style.width = '100%';
+      thumb.style.height = 'auto';
+      thumb.style.cursor = 'pointer';
+    }
     card.appendChild(thumb);
 
     // Acciones — igual que .ed-page-actions
@@ -16880,6 +16885,7 @@ function gcpOpen(edLayerIdx) {
     _gcpApplyTempToLayers();
     requestAnimationFrame(() => _gcpUpdateFramesBar());
   }
+  _gcpUpdateFrameNav();
 
   // Deseleccionar objetos del editor
   edSelectedIdx = -1;
@@ -16928,6 +16934,13 @@ function gcpOpen(edLayerIdx) {
     });
     document.getElementById('gcpRedoBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpRedo();
+    });
+    // Botones navegación de frames en topbar
+    document.getElementById('gcpFramePrev')?.addEventListener('click', e => {
+      e.stopPropagation(); if (window._gcpFrameIdx > 0) _gcpGoToFrame(window._gcpFrameIdx - 1);
+    });
+    document.getElementById('gcpFrameNext')?.addEventListener('click', e => {
+      e.stopPropagation(); if (window._gcpFrameIdx < window._gcpFrames.length - 1) _gcpGoToFrame(window._gcpFrameIdx + 1);
     });
     // Botón Añadir Frame
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {

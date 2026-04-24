@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v17.91</footer>
+    <footer class="app-version">v17.92</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -511,6 +511,11 @@ Router.register('editor', {
       <div id="gcpTopbar">
         <span id="gcpProjectTitle">Gif 1</span>
         <span class="ed-top-spacer"></span>
+        <div class="ed-top-pagnav" id="gcpFrameNav" style="display:none">
+          <button class="ed-top-pagebn" id="gcpFramePrev" title="Frame anterior">&#9664;</button>
+          <span id="gcpFrameNum">1</span>
+          <button class="ed-top-pagebn" id="gcpFrameNext" title="Frame siguiente">&#9654;</button>
+        </div>
         <button class="ed-top-action" id="gcpPreviewBtn" title="Previsualizar">▶</button>
         <button id="gcpCloseBtn" title="Volver al editor">✕</button>
       </div>
@@ -531,7 +536,7 @@ Router.register('editor', {
           </div>
           <div class="ed-menu-sep"></div>
           <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
-          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;padding:0 10px">＋</button>
+          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;font-size:1.5rem;line-height:1;padding:0 14px;min-height:36px">＋</button>
         </div>
       </div>
       <!-- Panel de frames: toggle, deslizante horizontal, miniaturas 88×88 -->
