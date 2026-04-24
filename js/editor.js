@@ -16167,20 +16167,15 @@ function _gcpHandleMove(e) {
 function _gcpHandleUp(e) {
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  // Guardar siempre en historial si hay frames — cualquier interacción puede haber
-  // cambiado la posición del objeto (drag, resize, rotate)
-  if (window._gcpFrames.length > 0) {
-    const newSnap = window._gcpLayers.map(la => ({
-      x:la.x, y:la.y, width:la.width, height:la.height,
-      rotation:la.rotation||0, opacity:la.opacity??1
-    }));
-    const newJSON = JSON.stringify(newSnap);
-    // Solo guardar si el estado cambió respecto al último snapshot del historial
-    if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
-      window._gcpFrames[window._gcpFrameIdx] = newSnap;
-      _gcpPushHistory(newJSON);
-      _gcpRefreshActiveThumb();
-    }
+  // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
+  // El historial registra el estado en vivo (fuera de los frames guardados).
+  const newSnap = window._gcpLayers.map(la => ({
+    x:la.x, y:la.y, width:la.width, height:la.height,
+    rotation:la.rotation||0, opacity:la.opacity??1
+  }));
+  const newJSON = JSON.stringify(newSnap);
+  if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
+    _gcpPushHistory(newJSON);
   }
   _gcpRedraw();
 }
@@ -16266,8 +16261,7 @@ function _gcpRedo() {
 function _gcpApplyHistorySnap(snap) {
   if (!snap) return;
   const state = JSON.parse(snap);
-  window._gcpFrames[window._gcpFrameIdx] = state;
-  // Aplicar a las capas y redibujar
+  // Solo restaurar capas — NO tocar _gcpFrames (son inmutables)
   state.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
     la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
