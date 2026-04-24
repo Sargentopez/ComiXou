@@ -16309,48 +16309,47 @@ function _gcpApplyTempToLayers() {
 //   3. Avanzar al nuevo frame
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-  const selLayer = window._gcpLayers[window._gcpSelIdx] ?? null;
-  if (!selLayer) { edToast('Selecciona un objeto primero'); return; }
 
-  // Guardar estado live en frame activo de todos los layers que ya tienen frames
+  // Guardar estado live en el frame activo de todos los layers que ya tienen frames
   _gcpSaveCurrentToFrame();
 
-  // Calcular el índice global donde se insertará el nuevo frame de selLayer.
-  // Si selLayer aún no tiene frames, su primer frame va en la posición
-  // _gcpGlobalFrameIdx (columna actual) — igual que createNewLayer del HTML de ref.
   const curGfi = window._gcpGlobalFrameIdx;
 
-  if (!selLayer._frames.length) {
-    // Primera vez que se toca + para este objeto:
-    // frames invisibles desde 0 hasta curGfi-1, visible en curGfi
-    _gcpInitLayerFrames(selLayer, curGfi);
-  } else {
-    // Objeto ya tiene frames: añadir uno nuevo al final
-    const newSnap = {x:selLayer.x,y:selLayer.y,width:selLayer.width,height:selLayer.height,
-                     rotation:selLayer.rotation||0,opacity:selLayer.opacity??1,visible:true};
-    selLayer._frames.push({...newSnap});
-  }
-
-  // Calcular nuevo total y extender los demás layers con celdas vacías (visible:false)
-  const newTotal = _gcpGetTotalFrames();
+  // Pasada 1: los layers que YA tienen frames reciben un nuevo frame con estado actual.
+  // Esto determina el nuevo total global.
   window._gcpLayers.forEach(la => {
-    if (la === selLayer) return;
-    while (la._frames.length < newTotal) {
-      const last = la._frames.length
-        ? {...la._frames[la._frames.length - 1], visible: false}
-        : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
-      la._frames.push({...last});
-    }
+    if (!la._frames.length) return; // se inicializan en pasada 2
+    la._frames.push({
+      x: la.x, y: la.y,
+      width: la.width, height: la.height,
+      rotation: la.rotation || 0,
+      opacity: la.opacity ?? 1,
+      visible: true
+    });
   });
 
-  window._gcpGlobalFrameIdx = newTotal - 1;
+  // Pasada 2: los layers SIN frames se inicializan ahora que el total es conocido.
+  // Reciben frames invisibles 0..newTotal-2, visible en newTotal-1 (columna nueva).
+  const newTotal = _gcpGetTotalFrames();
+  window._gcpLayers.forEach(la => {
+    if (la._frames.length) return; // ya procesados en pasada 1
+    // Si no hay otros layers con frames, newTotal es 0 aquí — crear 1 frame visible
+    const targetLen = newTotal || 1;
+    la._frames = [];
+    const inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
+    for (let i = 0; i < targetLen - 1; i++) la._frames.push({...inv});
+    la._frames.push({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true});
+  });
+
+  const finalTotal = _gcpGetTotalFrames();
+  window._gcpGlobalFrameIdx = finalTotal - 1;
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
-  edToast('Frame ' + newTotal + ' creado ✓');
+  edToast('Frame ' + finalTotal + ' creado ✓');
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
