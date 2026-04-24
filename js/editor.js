@@ -16167,15 +16167,21 @@ function _gcpHandleMove(e) {
 function _gcpHandleUp(e) {
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
-  // El historial registra el estado en vivo (fuera de los frames guardados).
-  const newSnap = window._gcpLayers.map(la => ({
-    x:la.x, y:la.y, width:la.width, height:la.height,
-    rotation:la.rotation||0, opacity:la.opacity??1
-  }));
-  const newJSON = JSON.stringify(newSnap);
-  if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
-    _gcpPushHistory(newJSON);
+  if (_gcpGetTotalFrames() > 0) {
+    const _fi = window._gcpFrameIdx;
+    window._gcpLayers.forEach(la => {
+      if (la.gcpFrames && la.gcpFrames[_fi] !== undefined) la.gcpFrames[_fi] = _gcpSnapLayer(la);
+    });
+    const newSnap = window._gcpLayers.map(la => _gcpSnapLayer(la));
+    const newJSON = JSON.stringify(newSnap);
+    if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
+      window._gcpFrames[_fi] = newSnap;
+      _gcpPushHistory(newJSON);
+    }
+  } else {
+    const newSnap = window._gcpLayers.map(la => _gcpSnapLayer(la));
+    const newJSON = JSON.stringify(newSnap);
+    if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) _gcpPushHistory(newJSON);
   }
   _gcpRedraw();
 }
@@ -16386,16 +16392,10 @@ function _gcpFrameThumb(fi) {
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
   tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
-  const snap = window._gcpFrames[fi];
-  if (!snap || !window._gcpLayers.length) return tc;
-
-  // Guardar estado
-  const saved = window._gcpLayers.map(la=>({
-    x:la.x, y:la.y, width:la.width, height:la.height,
-    rotation:la.rotation||0, opacity:la.opacity??1
-  }));
+  if (!window._gcpLayers.length || _gcpGetTotalFrames() === 0) return tc;
+  const saved = window._gcpLayers.map(la=>({x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1}));
   const _savedSelIdx = window._gcpSelIdx;
-  _gcpApplyFrame(fi);
+  _gcpApplyGlobalFrame(fi);
 
   _gcpWithEditorContext(() => {
     const pw = edPageW(), ph = edPageH();
@@ -16814,6 +16814,11 @@ function gcpInsertFromBib(entry) {
       const origOnload = la.img.onload;
       la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
     }
+    la.gcpFrames = [];
+    const _fi = window._gcpFrameIdx || 0;
+    const _invis = { x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:0, visible:false };
+    for (let _i=0; _i<_fi; _i++) la.gcpFrames.push({..._invis});
+    la.gcpFrames.push({ x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1, visible:true });
     window._gcpLayers.push(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpRedraw();
@@ -16912,10 +16917,13 @@ function gcpOpen(edLayerIdx) {
   }
   // Inicializar _gcpTempState con el estado actual de las capas
   _gcpInitTempState();
-  // Si hay frames guardados, restaurar el último frame activo
-  if (window._gcpFrames.length > 0) {
-    window._gcpTempState = window._gcpFrames[window._gcpFrameIdx].map(s => ({...s}));
-    _gcpApplyTempToLayers();
+  // Restaurar gcpFrames por capa desde los snapshots globales guardados
+  if (window._gcpFrames.length > 0 && window._gcpLayers.length > 0) {
+    window._gcpLayers.forEach((la, li) => {
+      la.gcpFrames = window._gcpFrames.map(snap => snap[li] ? {...snap[li]} : _gcpSnapLayer(la));
+    });
+    window._gcpFrameIdx = Math.min(window._gcpFrameIdx, _gcpGetTotalFrames() - 1);
+    _gcpApplyGlobalFrame(window._gcpFrameIdx);
     requestAnimationFrame(() => _gcpUpdateFramesBar());
   }
   _gcpUpdateFrameNav();
@@ -16975,7 +16983,7 @@ function gcpOpen(edLayerIdx) {
     });
     document.getElementById('gcpFrameNext')?.addEventListener('click', e => {
       e.stopPropagation();
-      if (window._gcpFrameIdx < window._gcpFrames.length - 1) _gcpGoToFrame(window._gcpFrameIdx + 1);
+      if (window._gcpFrameIdx < _gcpGetTotalFrames() - 1) _gcpGoToFrame(window._gcpFrameIdx + 1);
     });
     // Botón Añadir Frame
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
