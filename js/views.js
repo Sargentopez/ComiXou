@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v18.09</footer>
+    <footer class="app-version">v18.10</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -531,6 +531,7 @@ Router.register('editor', {
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
           <div class="ed-menu-sep"></div>
           <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
+          <button class="ed-menu-btn" id="gcpSaveFrameBtn" title="Guardar frame actual" style="font-weight:700">💾 Frame</button>
           <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;font-size:1.5rem;line-height:1;padding:0 14px;min-height:36px">＋</button>
         </div>
       </div>

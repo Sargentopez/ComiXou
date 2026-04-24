@@ -16303,53 +16303,65 @@ function _gcpApplyTempToLayers() {
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
 }
 
-// Crear frame — equivalente a addFrameToActiveLayer del HTML de referencia:
-//   1. Actualizar el frame actual con el estado en vivo
-//   2. Crear nuevo frame con el estado en vivo
-//   3. Avanzar al nuevo frame
+// _gcpSaveFrame: guarda el estado actual de todos los layers en el frame activo.
+function _gcpSaveFrame() {
+  if (!window._gcpLayers.length) { edToast('Añade objetos primero'); return; }
+  const fi = window._gcpGlobalFrameIdx;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) la._frames = [];
+    const snap = {x:la.x,y:la.y,width:la.width,height:la.height,
+                  rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
+    if (fi < la._frames.length) {
+      la._frames[fi] = snap;
+    } else {
+      // Rellenar huecos con invisible hasta fi-1, luego visible en fi
+      while (la._frames.length < fi) {
+        la._frames.push(la._frames.length
+          ? {...la._frames[la._frames.length-1], visible:false}
+          : {...snap, visible:false});
+      }
+      la._frames.push(snap);
+    }
+  });
+  _gcpInvalidateAllThumbs();
+  _gcpUpdateFrameNav();
+  const _fb = document.getElementById('gcpFramesBar');
+  if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
+  edToast('Frame ' + (fi+1) + ' guardado ✓');
+}
+
+// _gcpCaptureFrame: botón +. Copia exacta del frame activo como nuevo frame
+// insertado justo después, avanza a él.
+// Si algún layer no tiene frame en fi, lo crea primero.
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
-
-  // Guardar estado live en el frame activo de todos los layers que ya tienen frames
-  _gcpSaveCurrentToFrame();
-
-  const curGfi = window._gcpGlobalFrameIdx;
-
-  // Pasada 1: los layers que YA tienen frames reciben un nuevo frame con estado actual.
-  // Esto determina el nuevo total global.
+  const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
-    if (!la._frames.length) return; // se inicializan en pasada 2
-    la._frames.push({
-      x: la.x, y: la.y,
-      width: la.width, height: la.height,
-      rotation: la.rotation || 0,
-      opacity: la.opacity ?? 1,
-      visible: true
-    });
+    if (!la._frames) la._frames = [];
+    const snap = {x:la.x,y:la.y,width:la.width,height:la.height,
+                  rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
+    // Asegurar que fi existe en este layer
+    if (fi >= la._frames.length) {
+      while (la._frames.length < fi) {
+        la._frames.push(la._frames.length
+          ? {...la._frames[la._frames.length-1], visible:false}
+          : {...snap, visible:false});
+      }
+      la._frames.push(snap);
+    }
+    // Insertar copia exacta del frame fi justo después
+    la._frames.splice(fi + 1, 0, {...la._frames[fi]});
   });
-
-  // Pasada 2: los layers SIN frames se inicializan ahora que el total es conocido.
-  // Reciben frames invisibles 0..newTotal-2, visible en newTotal-1 (columna nueva).
-  const newTotal = _gcpGetTotalFrames();
-  window._gcpLayers.forEach(la => {
-    if (la._frames.length) return; // ya procesados en pasada 1
-    // Si no hay otros layers con frames, newTotal es 0 aquí — crear 1 frame visible
-    const targetLen = newTotal || 1;
-    la._frames = [];
-    const inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
-    for (let i = 0; i < targetLen - 1; i++) la._frames.push({...inv});
-    la._frames.push({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true});
-  });
-
-  const finalTotal = _gcpGetTotalFrames();
-  window._gcpGlobalFrameIdx = finalTotal - 1;
-  _gcpApplyFrame(window._gcpGlobalFrameIdx);
+  const newFi = fi + 1;
+  window._gcpGlobalFrameIdx = newFi;
+  _gcpApplyFrame(newFi);
+  _gcpInvalidateAllThumbs();
   _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
-  edToast('Frame ' + finalTotal + ' creado ✓');
+  edToast('Frame ' + (newFi+1) + ' creado ✓');
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
@@ -16927,20 +16939,15 @@ function gcpInsertFromBib(entry) {
     la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
     la._gcpVisible = true;
     const _totalAtInsert = _gcpGetTotalFrames();
+    const _curFi = window._gcpGlobalFrameIdx;
+    la._frames = [];
     if (_totalAtInsert > 0) {
-      // Ya hay frames: inicializar este layer con invisible en anteriores,
-      // visible en el frame actual, invisible en los posteriores.
-      const _curFi = window._gcpGlobalFrameIdx;
-      la._frames = [];
+      // Rellenar con invisible en frames anteriores/posteriores, visible en frame actual
       const _inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
-      for (let _i = 0; _i < _totalAtInsert; _i++) {
-        la._frames.push(_i === _curFi
-          ? {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true}
-          : {..._inv});
-      }
-    } else {
-      la._frames = [];  // sin frames aún — se crean al pulsar +
+      const _vis = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
+      for (let _i = 0; _i < _totalAtInsert; _i++) la._frames.push(_i === _curFi ? {..._vis} : {..._inv});
     }
+    // Sin frames previos: _frames vacío hasta que se pulse Guardar Frame
     window._gcpLayers.push(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpInvalidateAllThumbs();
@@ -17044,11 +17051,13 @@ function gcpOpen(edLayerIdx) {
       if (titleEl) titleEl.textContent = 'Editar GIF';
     }
   }
-  // Aplicar frame 0 si hay frames
+  // Aplicar frame 0 si hay frames; sesión nueva queda en gfi=0 listo para recibir objetos
   if (_gcpGetTotalFrames() > 0) {
     window._gcpGlobalFrameIdx = 0;
     _gcpApplyFrame(0);
     requestAnimationFrame(() => _gcpUpdateFramesBar());
+  } else {
+    window._gcpGlobalFrameIdx = 0;
   }
   _gcpUpdateFrameNav();
 
@@ -17109,7 +17118,11 @@ function gcpOpen(edLayerIdx) {
       e.stopPropagation();
       if (window._gcpGlobalFrameIdx < _gcpGetTotalFrames() - 1) _gcpGoToFrame(window._gcpGlobalFrameIdx + 1);
     });
-    // Botón Añadir Frame
+    // Botón Guardar Frame
+    document.getElementById('gcpSaveFrameBtn')?.addEventListener('pointerup', e => {
+      e.stopPropagation(); _gcpSaveFrame();
+    });
+    // Botón Añadir Frame (+ copia del frame actual)
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpCaptureFrame();
     });
