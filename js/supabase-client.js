@@ -159,7 +159,7 @@ const SupabaseClient = (() => {
     const path = gifKey + '.gif';
     const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
       method:  'POST',
-      headers: { 'apikey': KEY, 'Authorization': `Bearer ${KEY}`, 'Content-Type': 'image/gif', 'x-upsert': 'true' },
+      headers: { ..._hdrsUser(), 'Content-Type': 'image/gif', 'x-upsert': 'true' },
       body:    blob,
     });
     if (!r.ok) throw new Error(`GIF upload: ${r.status} ${await r.text()}`);
@@ -172,8 +172,45 @@ const SupabaseClient = (() => {
     const path = gifUrl.replace(`${STORAGE}/object/public/gifs/`, '');
     await fetch(`${STORAGE}/object/gifs/${path}`, {
       method:  'DELETE',
-      headers: { 'apikey': KEY, 'Authorization': `Bearer ${KEY}` },
+      headers: _hdrsUser(),
     }).catch(() => {});
+  }
+
+  // Sube frames PNG (JSON string comprimido) al bucket 'anims'
+  async function _animUpload(key, framesJson) {
+    const compressed = await _czCompress(framesJson);
+    const b64 = compressed.startsWith('gz:') ? compressed.slice(3) : btoa(framesJson);
+    const bin = atob(b64);
+    const u8  = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const blob = new Blob([u8], { type: 'application/octet-stream' });
+    const path = key + '.anim';
+    const r = await fetch(`${STORAGE}/object/anims/${path}`, {
+      method:  'POST',
+      headers: { ..._hdrsUser(), 'Content-Type': 'application/octet-stream', 'x-upsert': 'true' },
+      body:    blob,
+    });
+    if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
+    return `${STORAGE}/object/public/anims/${path}`;
+  }
+
+  // Descarga frames PNG desde bucket 'anims' y devuelve array de dataUrls
+  async function _animDownload(animUrl) {
+    if (!animUrl) return null;
+    const r = await fetch(animUrl);
+    if (!r.ok) return null;
+    const buf   = await r.arrayBuffer();
+    const u8    = new Uint8Array(buf);
+    const CHUNK = 8192;
+    let b64 = '';
+    for (let i = 0; i < u8.length; i += CHUNK) {
+      b64 += btoa(String.fromCharCode(...u8.subarray(i, i + CHUNK)));
+    }
+    // Intentar descomprimir (puede ser gz: o plano)
+    const str = await _czDecompress('gz:' + b64).catch(() => null)
+      || await _czDecompress(b64).catch(() => null)
+      || String.fromCharCode(...u8);
+    try { return JSON.parse(str); } catch(e) { return null; }
   }
 
   async function _uploadPanels(comic) {
@@ -298,6 +335,7 @@ const SupabaseClient = (() => {
       id:             sid,
       title:          comic.title      || '',
       author_name:    comic.author     || comic.username || '',
+      author_id:      comic.userId     || null,
       genre:          comic.genre      || '',
       nav_mode:       comic.navMode    || 'fixed',
       social:         comic.social     || '',
@@ -316,6 +354,7 @@ const SupabaseClient = (() => {
       id:             comic.supabaseId,
       title:          comic.title   || '',
       author_name:    comic.author  || comic.username || '',
+      author_id:      comic.userId  || null,
       genre:          comic.genre   || '',
       nav_mode:       comic.navMode || 'fixed',
       social:         comic.social  || '',
