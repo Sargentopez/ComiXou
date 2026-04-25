@@ -576,7 +576,7 @@ const SupabaseClient = (() => {
   async function fetchWorksByIds(ids) {
     if (!ids || !ids.length) return [];
     const list = ids.join(',');
-    const r = await _get(`works?id=in.(${list})&select=id,updated_at,title,genre,nav_mode,published`);
+    const r = await _get(`works?id=in.(${list})&select=id,updated_at,title,genre,nav_mode,published,pending_review`);
     return r || [];
   }
 
