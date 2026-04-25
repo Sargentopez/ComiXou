@@ -329,7 +329,7 @@ const SupabaseClient = (() => {
             anim_url:    animUrl,
           });
         }
-        await _upsert('panel_layers', layerRows);
+        if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
       }
 
       // Textos para el reader (panel_texts sin cambios)

@@ -12142,6 +12142,20 @@ function edSaveProject(){
       texts,
     };
   });
+  // Mover _pngFrames grandes a IDB antes de guardar en localStorage
+  // para evitar QuotaExceededError. edSerLayer usará _pngFramesKey en su lugar.
+  edPages.forEach((pg, pi) => {
+    pg.layers.forEach((l, li) => {
+      if(l._pngFrames && l._pngFrames.length && !l._pngFramesKey) {
+        const _sz = JSON.stringify(l._pngFrames).length;
+        if(_sz >= 200000) {
+          const _idbKey = edProjectId + '_' + pi + '_' + li;
+          _edAnimIdbSave(_idbKey, l._pngFrames);
+          l._pngFramesKey = _idbKey;
+        }
+      }
+    });
+  });
   ComicStore.save({
     ...existing,
     id:edProjectId,
@@ -12607,8 +12621,12 @@ function edSerLayer(l){
     if(l.locked) _r.locked=true;
     if(l._keepSize) _r._keepSize=true;
     if(l._isGcpImage) _r._isGcpImage=true;
-    if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
-    if(l._pngFramesKey && !l._pngFrames) _r._pngFramesKey=l._pngFramesKey; // referencia IDB cuando frames no están en memoria
+    // Frames en IDB: usar clave (nunca guardar frames grandes en localStorage)
+    if(l._pngFramesKey) {
+      _r._pngFramesKey = l._pngFramesKey;
+    } else if(l._pngFrames && l._pngFrames.length) {
+      _r._pngFrames = l._pngFrames; // pequeños (<200KB) van inline
+    }
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
     return _r;
@@ -12777,6 +12795,20 @@ function _edAnimIdbLoad(key) {
       r.onerror   = () => res(null);
     };
     req.onerror = () => res(null);
+  });
+}
+
+function _edAnimIdbSave(key, frames) {
+  return new Promise(res => {
+    const req = indexedDB.open('cxAnims', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+    req.onsuccess = e => {
+      const tx = e.target.result.transaction('anims', 'readwrite');
+      tx.objectStore('anims').put(frames, key);
+      tx.oncomplete = () => res();
+      tx.onerror    = () => res();
+    };
+    req.onerror = () => res();
   });
 }
 
