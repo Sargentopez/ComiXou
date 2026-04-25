@@ -12745,6 +12745,20 @@ function edSerLayer(l){
     return _lobj;
   }
 }
+// Carga _pngFrames desde IndexedDB 'cxAnims' por clave _pngFramesKey
+function _edAnimIdbLoad(key) {
+  return new Promise(res => {
+    const req = indexedDB.open('cxAnims', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+    req.onsuccess = e => {
+      const r = e.target.result.transaction('anims').objectStore('anims').get(key);
+      r.onsuccess = e2 => res(e2.target.result || null);
+      r.onerror   = () => res(null);
+    };
+    req.onerror = () => res(null);
+  });
+}
+
 function edDeserLayer(d, pageOrientation){
   if(!d) return null;
   if(d.type==='group') return null; // obsoleto
@@ -12824,6 +12838,11 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
     if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
     if(d._pngFrames) l._pngFrames=d._pngFrames;
+    if(d._pngFramesKey && !d._pngFrames) {
+      _edAnimIdbLoad(d._pngFramesKey).then(frames => {
+        if(frames && frames.length) { l._pngFrames=frames; edRedraw(); }
+      });
+    }
     if(d.src){
       const img=new Image();
       img.onload=()=>{
