@@ -1223,6 +1223,19 @@ function startReader() {
 
   // Arrancar loop de animación GIF si hay alguno en la obra
   const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._pngReady));
+  // DEBUG temporal — mostrar estado de capas PNG
+  RS.panels.forEach((panel, pi) => {
+    (panel.layers||[]).forEach((l, li) => {
+      if (l._isGcpImage) {
+        const msg = 'Panel ' + pi + ' L' + li + ': _pngReady=' + l._pngReady + ' _pngOcs=' + (l._pngOcs ? l._pngOcs.length : 'null') + ' _pngFrames=' + (l._pngFrames ? l._pngFrames.length : 'null') + ' _hasGifs=' + _hasGifs;
+        const dbg = document.createElement('div');
+        dbg.style.cssText = 'position:fixed;top:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#0f0;font:11px monospace;padding:6px;z-index:9999;white-space:pre-wrap;';
+        dbg.textContent = msg;
+        document.body.appendChild(dbg);
+        setTimeout(() => dbg.remove(), 8000);
+      }
+    });
+  });
   if (_hasGifs) requestAnimationFrame(_readerGifTick);
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
