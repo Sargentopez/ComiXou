@@ -941,11 +941,23 @@ async function loadDraft(token) {
 const _CZ_PFX = 'gz:';
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
+  if (typeof DecompressionStream === 'undefined') return str;
   try {
     const b64 = str.slice(_CZ_PFX.length);
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    // atob por chunks de 8192 chars — evita fallo en Android con b64 muy largo
+    const CHUNK = 8192;
+    let byteLen = 0;
+    const parts = [];
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      const bin = atob(b64.slice(i, i + CHUNK));
+      const part = new Uint8Array(bin.length);
+      for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
+      parts.push(part);
+      byteLen += part.length;
+    }
+    const bytes = new Uint8Array(byteLen);
+    let off2 = 0;
+    for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
     writer.write(bytes);
@@ -1054,7 +1066,7 @@ async function preloadImages() {
           .catch(() => null);
       }
       // Animación PNG del editor GIF: precargar frames como canvas offscreen
-      if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length > 1) {
+      if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length >= 1) {
         return Promise.all(layer._pngFrames.map(dataUrl => new Promise(res => {
           const img = new Image();
           img.onload = () => {
