@@ -481,7 +481,10 @@ const SupabaseClient = (() => {
       social:        w.social       || '',
       published:     published,
       approved:      published,
-      pendingReview: !published,
+      // pendingReview es estado solo local — Supabase no lo almacena.
+      // Si está publicada en la nube, definitivamente no está en revisión.
+      // Si no está publicada, no sabemos (puede ser borrador o en revisión) — no tocar.
+      ...(published ? { pendingReview: false } : {}),
       updatedAt:     w.updated_at,
       panels:        thumb ? [{ dataUrl: thumb }] : [],
     };
