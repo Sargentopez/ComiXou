@@ -1126,7 +1126,13 @@ class GifLayer extends BaseLayer {
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
       if (typeof edRedraw === 'function' && typeof edCanvas !== 'undefined' && edCanvas) {
-        requestAnimationFrame(() => edRedraw());
+        requestAnimationFrame(() => {
+          if ($('editorViewer')?.classList.contains('open') && typeof edUpdateViewer === 'function') {
+            edUpdateViewer();
+          } else {
+            edRedraw();
+          }
+        });
       }
     }, frame.delay);
   }
