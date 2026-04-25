@@ -4,6 +4,33 @@
    Listado del autor con opciones Leer / Editar / Publicar.
    ============================================================ */
 
+// ── Cache de miniaturas en memoria (evita guardar base64 en localStorage) ──
+// Clave: supabaseId de la obra. Valor: dataUrl del thumbnail (solo vive en sesión).
+const _mcThumbCache = new Map();
+
+const _MC_BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
+const _MC_KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+const _MC_HDRS = { 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + _MC_KEY };
+
+// Carga el thumbnail de una obra desde Supabase y lo cachea en memoria.
+// Cuando llega, actualiza el div contenedor del DOM si está visible.
+function _mcLoadThumb(supabaseId) {
+  if (_mcThumbCache.has(supabaseId) && _mcThumbCache.get(supabaseId)) return;
+  _mcThumbCache.set(supabaseId, ''); // marca como en progreso
+  fetch(`${_MC_BASE}/panels?work_id=eq.${supabaseId}&order=panel_order.asc&limit=1&select=data_url`,
+    { headers: _MC_HDRS })
+    .then(r => r.json())
+    .then(rows => {
+      const url = rows?.[0]?.data_url || '';
+      if (!url) return;
+      _mcThumbCache.set(supabaseId, url);
+      // Actualizar contenedor en DOM si existe
+      const div = document.querySelector(`[data-thumb-id="${supabaseId}"]`);
+      if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:cover;display:block">`; }
+    })
+    .catch(() => {});
+}
+
 function _mcInjectModal() {
   // Inyectar el modal directamente en body (fuera de appView)
   // para que position:fixed funcione sin restricciones
@@ -71,13 +98,14 @@ async function _mcSyncCloudDates() {
         for(const w of cloudWorks) {
           // Guardar como obra cloudOnly (sin editorData local)
           const existing = ComicStore.getAll().find(c => c.supabaseId === w.id);
-          if(!existing) {
-            ComicStore.save({
-              ...w,
-              userId:    _mcUser.id,
-              cloudOnly: true,
-              editorData: null,
-            });
+      if(!existing) {
+            // No guardar thumbnail base64 en localStorage — cachearlo en memoria
+            const _wClean = { ...w, userId: _mcUser.id, cloudOnly: true, editorData: null };
+            if (_wClean.panels && _wClean.panels[0] && _wClean.panels[0].dataUrl) {
+              if (!_mcThumbCache.has(w.id)) _mcThumbCache.set(w.id, _wClean.panels[0].dataUrl);
+              _wClean.panels = [];
+            }
+            ComicStore.save(_wClean);
           }
         }
         _mcRenderList();
@@ -173,7 +201,11 @@ function _mcRenderList() {
     return;
   }
   wrap.innerHTML = _loginBanner + comics.map(comic => {
-    const thumb = comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '';
+    // Para obras cloudOnly: usar cache en memoria (no se persiste en localStorage).
+    // Para obras locales: usar el dataUrl guardado por el editor.
+    const thumb = (comic.supabaseId && _mcThumbCache.get(comic.supabaseId))
+      || (!comic.cloudOnly && comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '');
+    const needsThumb = !thumb && comic.supabaseId;
     const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
     const pubLabel = comic.approved
       ? '✅ Publicada'
@@ -181,10 +213,12 @@ function _mcRenderList() {
 
     return `
     <div class="comic-row" data-id="${comic.id}">
-      <div class="comic-row-thumb">
+      <div class="comic-row-thumb" ${needsThumb ? `data-thumb-id="${comic.supabaseId}"` : ''}>
         ${thumb
           ? `<img src="${thumb}" alt="${comic.title}" loading="lazy">`
-          : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:1.8rem;background:var(--gray-100)">📄</div>`
+          : needsThumb
+            ? `<span style="font-size:1.4rem;color:var(--gray-300)">⏳</span>`
+            : `<span style="font-size:1.8rem">📄</span>`
         }
       </div>
       <div class="comic-row-info">
@@ -211,6 +245,17 @@ function _mcRenderList() {
       </div>
     </div>`;
   }).join('');
+
+  // Cargar miniaturas lazy para obras cloudOnly (Intersection Observer)
+  const _thumbObs = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.dataset.thumbId;
+        if (id) { _mcLoadThumb(id); _thumbObs.unobserve(entry.target); }
+      }
+    });
+  }, { rootMargin: '200px' });
+  wrap.querySelectorAll('[data-thumb-id]').forEach(el => _thumbObs.observe(el));
 
   // Eventos de botones
   wrap.addEventListener('click', async e => {
@@ -480,14 +525,10 @@ async function _mcCloudLoad() {
 
   try {
     // Buscar en Supabase todas las obras donde author_name coincide con este usuario
-    // Usamos el username como identificador (el campo author_name en works)
-    const BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
-    const KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-    const hdrs = { 'apikey': KEY, 'Authorization': 'Bearer ' + KEY };
-
-    // Buscar por author_name = username del usuario actual
     const username = encodeURIComponent(user.username || '');
-    const works = await fetch(`${BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`, { headers: hdrs })
+    // Range: 0-999 garantiza hasta 1000 resultados (límite PostgREST por defecto)
+    const works = await fetch(`${_MC_BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`,
+      { headers: { ..._MC_HDRS, 'Range': '0-999' } })
       .then(r => r.json());
 
     if (!works || !works.length) {
@@ -533,18 +574,25 @@ async function _mcCloudLoad() {
           skipped++;
         }
 
+        // Migrar thumbnail base64 de localStorage a cache en memoria (libera espacio)
+        if (existing.panels && existing.panels[0] && existing.panels[0].dataUrl) {
+          if (!_mcThumbCache.has(w.id)) _mcThumbCache.set(w.id, existing.panels[0].dataUrl);
+          existing.panels = [];
+          dirty = true;
+        }
+
         if (dirty) ComicStore.save(existing);
         continue;
       }
 
-      // Obra nueva en nube — crear entrada local con thumbnail del primer panel
-      let thumbDataUrl = '';
+      // Obra nueva en nube — cachear thumbnail en memoria, NO en localStorage
       try {
         const firstPanels = await fetch(
-          `${BASE}/panels?work_id=eq.${w.id}&order=panel_order.asc&limit=1&select=data_url`,
-          { headers: hdrs }
+          `${_MC_BASE}/panels?work_id=eq.${w.id}&order=panel_order.asc&limit=1&select=data_url`,
+          { headers: _MC_HDRS }
         ).then(r => r.json());
-        thumbDataUrl = firstPanels?.[0]?.data_url || '';
+        const thumbDataUrl = firstPanels?.[0]?.data_url || '';
+        if (thumbDataUrl) _mcThumbCache.set(w.id, thumbDataUrl);
       } catch(e) { /* sin thumbnail */ }
 
       const localComic = {
@@ -556,7 +604,7 @@ async function _mcCloudLoad() {
         author:       w.author_name || user.username,
         genre:        w.genre       || '',
         navMode:      w.nav_mode    || 'fixed',
-        panels:       thumbDataUrl ? [{ dataUrl: thumbDataUrl }] : [],
+        panels:       [],        // NO persisitir base64 en localStorage — se carga lazy
         panelCount:   w.panel_count || 0,
         pages:        [],
         published:    w.published   ?? false,
