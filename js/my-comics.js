@@ -309,13 +309,18 @@ function _mcRenderList() {
           // Guardar _pngFrames en IndexedDB (como los GIFs) para no saturar localStorage.
           // Se usa IDB 'cxAnims' con clave '<comicId>_<pageIdx>_<layerIdx>'.
           const _animIdbSave = (key, frames) => new Promise(res => {
-            const req = indexedDB.open('cxAnims', 1);
-            req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+            const req = indexedDB.open('cxAnims', 2);
+            req.onupgradeneeded = e => {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains('anims')) db.createObjectStore('anims');
+            };
             req.onsuccess = e => {
-              const tx = e.target.result.transaction('anims', 'readwrite');
-              tx.objectStore('anims').put(frames, key);
-              tx.oncomplete = () => res();
-              tx.onerror = () => res();
+              try {
+                const tx = e.target.result.transaction('anims', 'readwrite');
+                tx.objectStore('anims').put(frames, key);
+                tx.oncomplete = () => res();
+                tx.onerror = () => res();
+              } catch(ex) { res(); }
             };
             req.onerror = () => res();
           });

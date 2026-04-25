@@ -12769,12 +12769,17 @@ function edSerLayer(l){
 // Carga _pngFrames desde IndexedDB 'cxAnims' por clave _pngFramesKey
 function _edAnimIdbLoad(key) {
   return new Promise(res => {
-    const req = indexedDB.open('cxAnims', 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+    const req = indexedDB.open('cxAnims', 2);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('anims')) db.createObjectStore('anims');
+    };
     req.onsuccess = e => {
-      const r = e.target.result.transaction('anims').objectStore('anims').get(key);
-      r.onsuccess = e2 => res(e2.target.result || null);
-      r.onerror   = () => res(null);
+      try {
+        const r = e.target.result.transaction('anims').objectStore('anims').get(key);
+        r.onsuccess = e2 => res(e2.target.result || null);
+        r.onerror   = () => res(null);
+      } catch(ex) { res(null); }
     };
     req.onerror = () => res(null);
   });
@@ -12782,8 +12787,11 @@ function _edAnimIdbLoad(key) {
 
 function _edAnimIdbSave(key, frames) {
   return new Promise(res => {
-    const req = indexedDB.open('cxAnims', 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+    const req = indexedDB.open('cxAnims', 2);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('anims')) db.createObjectStore('anims');
+    };
     req.onsuccess = e => {
       const tx = e.target.result.transaction('anims', 'readwrite');
       tx.objectStore('anims').put(frames, key);

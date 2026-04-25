@@ -596,6 +596,7 @@ const SupabaseClient = (() => {
     const filter = workId
       ? `author_id=eq.${authorId}&folder_id=like.${encodeURIComponent(workId + '::')}*&order=created_at.asc`
       : `author_id=eq.${authorId}&order=created_at.asc`;
+    if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/biblioteca?${filter}`, {
       headers: _hdrsUser(),
     });
@@ -628,6 +629,7 @@ const SupabaseClient = (() => {
       }
     }
     if (!rows.length) return;
+    if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/biblioteca`, {
       method:  'POST',
       headers: { ..._hdrsUser(), 'Prefer': 'resolution=merge-duplicates,return=minimal' },
