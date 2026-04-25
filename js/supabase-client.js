@@ -110,6 +110,7 @@ const SupabaseClient = (() => {
   }
 
   async function _upsert(table, data) {
+    if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/${table}`, {
       method:  'POST',
       headers: { ..._hdrsUser(), 'Prefer': 'resolution=merge-duplicates,return=representation' },
@@ -120,11 +121,13 @@ const SupabaseClient = (() => {
   }
 
   async function _delete(table, filter) {
+    if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/${table}?${filter}`, { method: 'DELETE', headers: _hdrsUser() });
     if (!r.ok) throw new Error(`DELETE ${table}: ${r.status} ${await r.text()}`);
   }
 
   async function _patch(table, filter, data) {
+    if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/${table}?${filter}`, {
       method:  'PATCH',
       headers: { ..._hdrsUser(), 'Prefer': 'return=minimal' },
@@ -179,6 +182,7 @@ const SupabaseClient = (() => {
 
   // Sube un dataUrl GIF al bucket y devuelve la URL pública
   async function _gifUpload(gifKey, dataUrl) {
+    if (window._authTryRefresh) await window._authTryRefresh();
     // dataUrl → Blob binario (sin fetch, compatible con todos los navegadores)
     const b64  = dataUrl.split(',')[1];
     const bin  = atob(b64);

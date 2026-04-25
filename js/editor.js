@@ -12894,8 +12894,10 @@ function edDeserLayer(d, pageOrientation){
           // Si el visor está abierto y reproduciendo, arrancar animación
           if($('editorViewer')?.classList.contains('open')) {
             l._playing = true;
-            l._preloadPngFrames(() => { if(l._playing) l._applyPngFrame(0); });
-            if(typeof edUpdateViewer==='function') edUpdateViewer();
+            l._preloadPngFrames(() => {
+              if(l._playing) l._applyPngFrame(0);
+              if(typeof edUpdateViewer==='function') edUpdateViewer(); // después de precargar
+            });
           } else {
             edRedraw();
           }

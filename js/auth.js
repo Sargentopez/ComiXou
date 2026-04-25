@@ -253,3 +253,32 @@ const Auth = (() => {
 
   return { login, register, logout, deleteAccount, currentUser, isLogged, isAdmin, canManage };
 })();
+
+// Exponer _tryRefresh globalmente para que supabase-client pueda refrescar el token antes de escribir
+window._authTryRefresh = (function() {
+  // Reimplementación mínima: lee cs_session y cs_refresh, refresca si el token está caducado
+  const SB_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
+  const SB_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+  function _jwtExp(t) { try { return JSON.parse(atob(t.split('.')[1])).exp || 0; } catch(e) { return 0; } }
+  function _expired(t) { if(!t) return true; const e=_jwtExp(t); return e>0 && (e-60)<(Date.now()/1000); }
+  return async function() {
+    try {
+      const s = JSON.parse(localStorage.getItem('cs_session')||'null');
+      if (!s || !_expired(s.token)) return; // no expirado, nada que hacer
+      const refresh = localStorage.getItem('cs_refresh');
+      if (!refresh) return;
+      const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.access_token) {
+        s.token = data.access_token;
+        localStorage.setItem('cs_session', JSON.stringify(s));
+        if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
+      }
+    } catch(e) {}
+  };
+})();
