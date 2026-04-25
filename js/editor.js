@@ -14706,14 +14706,16 @@ function EditorView_init(){
   $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
   $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
-  // Mostrar "Recuperar versión del dispositivo" solo si hay versión local guardada
+  // Mostrar "Recuperar versión del dispositivo" si hay versión local guardada
   function _edUpdateRecoverBtn() {
     const btn = $('dd-recoverlocal');
     if(!btn || !edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    // Mostrar si: tiene localEditorData guardado Y la nube es más reciente
-    const hasLocal = !!(comic?.localEditorData);
-    btn.style.display = hasLocal ? '' : 'none';
+    // Mostrar si: tiene localEditorData (nube más reciente que local)
+    // O si: tiene editorData local con páginas pero la nube está vacía (cloudOnly sin paneles)
+    const hasLocalBackup = !!(comic?.localEditorData);
+    const hasLocalData   = !!(comic?.editorData?.pages?.length) && (comic?.cloudOnly || comic?.cloudNewer);
+    btn.style.display = (hasLocalBackup || hasLocalData) ? '' : 'none';
   }
 
   // Actualizar al abrir el menú proyecto
@@ -14725,13 +14727,15 @@ function EditorView_init(){
     edCloseMenus();
     if(!edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    if(!comic?.localEditorData) { edToast('No hay versión local guardada'); return; }
+    const dataToRestore = comic?.localEditorData || comic?.editorData;
+    if(!dataToRestore?.pages?.length) { edToast('No hay versión local guardada'); return; }
     if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios actuales no guardados localmente.')) return;
-    // Restaurar localEditorData como editorData activo
-    comic.editorData = comic.localEditorData;
-    comic.cloudNewer = false;
+    // Restaurar como editorData activo
+    comic.editorData      = dataToRestore;
+    comic.localEditorData = null;
+    comic.cloudNewer      = false;
+    comic.cloudOnly       = false;
     ComicStore.save(comic);
-    // Recargar la obra
     edLoadProject(edProjectId);
     edToast('Versión del dispositivo restaurada ✓');
   });
