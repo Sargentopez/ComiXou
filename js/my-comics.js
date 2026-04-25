@@ -309,23 +309,16 @@ function _mcRenderList() {
           // Guardar _pngFrames en IndexedDB (como los GIFs) para no saturar localStorage.
           // Se usa IDB 'cxAnims' con clave '<comicId>_<pageIdx>_<layerIdx>'.
           const _animIdbSave = (key, frames) => new Promise(res => {
-            const req = indexedDB.open('cxAnims', 2);
-            req.onupgradeneeded = e => {
-              const db = e.target.result;
-              if (!db.objectStoreNames.contains('anims')) db.createObjectStore('anims');
-            };
+            const req = indexedDB.open('cxAnims', 1);
+            req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
             req.onsuccess = e => {
-              try {
-                const tx = e.target.result.transaction('anims', 'readwrite');
-                tx.objectStore('anims').put(frames, key);
-                tx.oncomplete = () => res();
-                tx.onerror = () => res();
-              } catch(ex) { res(); }
+              const tx = e.target.result.transaction('anims', 'readwrite');
+              tx.objectStore('anims').put(frames, key);
+              tx.oncomplete = () => res();
+              tx.onerror = () => res();
             };
             req.onerror = () => res();
           });
-          // Guardar _pngFrames en IndexedDB y construir editorData limpio
-          // Hay que esperar a que todos los IDB writes terminen antes de abrir el editor
           const _idbWrites = [];
           const _edataClean = {
             ...editorData,
@@ -340,8 +333,8 @@ function _mcRenderList() {
               }),
             })),
           };
-          // Esperar todos los writes antes de continuar
-          await Promise.all(_idbWrites);
+          // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
+          if (_idbWrites.length) await Promise.all(_idbWrites);
           ComicStore.save({
             ...comicToEdit,
             cloudOnly: false,
