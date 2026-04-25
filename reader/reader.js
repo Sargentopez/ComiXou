@@ -936,6 +936,31 @@ async function loadDraft(token) {
 // Rellena RS.panels con capas del editor (panel_layers) y textos (panel_texts).
 // panel_layers → render fiel por capas (imagen, draw, stroke, bubble, text)
 // panel_texts  → lógica sequential (text_order, text_mode, contador)
+
+// ── Descompresión gzip de layer_data (CompressionStream W3C nativo) ──
+const _CZ_PFX = 'gz:';
+async function _czDecompress(str) {
+  if (!str || !str.startsWith(_CZ_PFX)) return str;
+  try {
+    const b64 = str.slice(_CZ_PFX.length);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const chunks = [];
+    const reader2 = ds.readable.getReader();
+    let done, value;
+    while (!({ done, value } = await reader2.read(), done)) chunks.push(value);
+    const total = chunks.reduce((a,c)=>a+c.length,0);
+    const merged = new Uint8Array(total);
+    let off=0; for(const c of chunks){merged.set(c,off);off+=c.length;}
+    return new TextDecoder().decode(merged);
+  } catch(e) { return str; }
+}
+
 async function _loadPanels(workId) {
   const panels = await sbGet('panels?work_id=eq.' + workId + '&order=panel_order.asc');
   if (!panels || !panels.length) { showError('Esta obra no tiene páginas guardadas.'); return; }
@@ -948,19 +973,20 @@ async function _loadPanels(workId) {
     sbGet('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
   ]);
 
-  RS.panels = panels.map(panel => {
+  RS.panels = await Promise.all(panels.map(async panel => {
     // Capas del editor: parsear layer_data JSON
-    const layers = (layerRows || [])
+    const layers = (await Promise.all((layerRows || [])
       .filter(r => r.panel_id === panel.id)
       .sort((a, b) => a.layer_order - b.layer_order)
-      .map(r => {
+      .map(async r => {
         try {
-          const l = JSON.parse(r.layer_data);
+          const _raw = await _czDecompress(r.layer_data);
+          const l = JSON.parse(_raw);
           if (l && l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
           return l;
         } catch(e) { return null; }
       })
-      .filter(Boolean);
+    )).filter(Boolean);
 
     // Textos para lógica sequential
     const panelTexts = (texts || [])
@@ -982,7 +1008,7 @@ async function _loadPanels(workId) {
       layers,
       texts: panelTexts,
     };
-  });
+  }));
 }
 
 async function preloadImages() {
@@ -990,6 +1016,15 @@ async function preloadImages() {
   // RS.panels[i].layerImgs[j] = Image | null para cada capa del panel i.
   RS.images = []; // legacy, ya no se usa para render pero se mantiene para no romper nada
 
+  // Contar hojas con contenido real (excluir créditos y hojas sin capas)
+  const totalPanels = RS.panels.filter(p => !p.isCredits && (p.layers||[]).length > 0).length;
+  let loadedPanels = 0;
+  setLoadingProgress(0, '');
+
+  // Cargar todos los paneles en paralelo (máximo rendimiento)
+  // El progreso se actualiza con un contador atómico conforme cada panel termina.
+  // Esto evita el problema de cargar secuencialmente (N veces más lento).
+  setLoadingMsg('Cargando imágenes...');
   await Promise.all(RS.panels.map(async (panel, pi) => {
     panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
       // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
@@ -1054,7 +1089,17 @@ async function preloadImages() {
       });
     }));
     // (renderDataUrl de bubbles se carga via panel.layers en el paso anterior)
+
+    // Actualizar progreso conforme cada panel termina (paralelo — orden no garantizado)
+    if (!panel.isCredits && (panel.layers||[]).length > 0) {
+      loadedPanels++;
+      const pct = totalPanels > 0 ? (loadedPanels / totalPanels) * 95 : 0;
+      setLoadingMsg('Cargando hoja ' + loadedPanels + ' de ' + totalPanels + '...');
+      setLoadingProgress(pct, '');
+    }
   }));
+
+  setLoadingProgress(100, '');
 
   // Fallback: si algún panel no tiene capas, precargar data_url como antes
   RS.panels.forEach((panel, i) => {
@@ -2402,6 +2447,12 @@ function _handleCreditsClick(clientX, clientY) {
 
 
 function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }
+function setLoadingProgress(pct, label) {
+  const bar = document.getElementById('loadingBar');
+  const lbl = document.getElementById('loadingLabel');
+  if (bar) bar.style.width = Math.round(Math.min(100, Math.max(0, pct))) + '%';
+  if (lbl) lbl.textContent = label || '';
+}
 
 function _updateOGMeta(title, author) {
   const t = (title || 'ComiXow') + ' — ComiXow';

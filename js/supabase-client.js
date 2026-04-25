@@ -3,6 +3,63 @@
    Thin wrapper sobre fetch. Sin SDK externo.
    ============================================================ */
 
+// ── Compresión gzip de layer_data (CompressionStream W3C nativo) ──────────────
+// Comprime JSON strings grandes antes de subir a Supabase.
+// Prefijo 'gz:' + base64 identifica datos comprimidos. Sin prefijo = sin comprimir (legado).
+// Solo se comprimen strings mayores de 512 bytes — por debajo no merece la pena.
+const _CZ_MIN = 512;
+const _CZ_PFX = 'gz:';
+
+async function _czCompress(jsonStr) {
+  // No comprimir si las APIs no están disponibles en este navegador
+  if (!jsonStr || jsonStr.length < _CZ_MIN ||
+      typeof CompressionStream === 'undefined' ||
+      typeof DecompressionStream === 'undefined') return jsonStr;
+  try {
+    const bytes = new TextEncoder().encode(jsonStr);
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    let done, value;
+    while (!({ done, value } = await reader.read(), done)) chunks.push(value);
+    const merged = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+    let off = 0;
+    for (const c of chunks) { merged.set(c, off); off += c.length; }
+    // btoa por chunks de 8192 bytes — evita stack overflow en Android con arrays grandes
+    let b64 = '';
+    const CHUNK = 8192;
+    for (let i = 0; i < merged.length; i += CHUNK) {
+      b64 += btoa(String.fromCharCode(...merged.subarray(i, i + CHUNK)));
+    }
+    return _CZ_PFX + b64;
+  } catch(e) { return jsonStr; } // fallback: sin comprimir
+}
+
+async function _czDecompress(str) {
+  if (!str || !str.startsWith(_CZ_PFX)) return str;
+  try {
+    const b64 = str.slice(_CZ_PFX.length);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const chunks = [];
+    const reader = ds.readable.getReader();
+    let done, value;
+    while (!({ done, value } = await reader.read(), done)) chunks.push(value);
+    const total = chunks.reduce((a,c)=>a+c.length,0);
+    const merged = new Uint8Array(total);
+    let off=0; for(const c of chunks){merged.set(c,off);off+=c.length;}
+    return new TextDecoder().decode(merged);
+  } catch(e) { return str; }
+}
+
 const SupabaseClient = (() => {
   const BASE    = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
   const STORAGE = 'https://qqgsbyylaugsagbxsetc.supabase.co/storage/v1';
@@ -146,11 +203,12 @@ const SupabaseClient = (() => {
                 if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
             } catch(e) { console.warn('GIF cloud upload:', e); }
           }
+          const _ld = await _czCompress(JSON.stringify(l));
           layerRows.push({
             panel_id:    panelId,
             layer_order: j,
             layer_type:  l.type,
-            layer_data:  JSON.stringify(l), // para gif: solo metadatos (gifKey, pos, tamaño)
+            layer_data:  _ld, // comprimido con gzip si > 512 bytes (prefijo 'gz:')
             gif_url:     gifUrl,
           });
         }
@@ -292,7 +350,10 @@ const SupabaseClient = (() => {
       const layers = [];
       for (const row of layerRows) {
         let layerObj = null;
-        try { layerObj = JSON.parse(row.layer_data); } catch(e) {}
+        try {
+          const _raw = await _czDecompress(row.layer_data);
+          layerObj = JSON.parse(_raw);
+        } catch(e) {}
         if (!layerObj) continue;
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {
@@ -414,19 +475,20 @@ const SupabaseClient = (() => {
     const prefix = workId ? workId + '::' : '';
     const folders = (bibData && bibData.folders) ? bibData.folders : [];
     const rows = [];
-    folders.forEach(folder => {
-      (folder.items || []).forEach(entry => {
+    for (const folder of folders) {
+      for (const entry of (folder.items || [])) {
+        const _ld = await _czCompress(JSON.stringify(entry.layerData));
         rows.push({
           id:          entry.id,
           author_id:   authorId,
           layer_type:  (entry.layerData && entry.layerData.type) || 'unknown',
-          layer_data:  JSON.stringify(entry.layerData),
+          layer_data:  _ld,
           thumb:       entry.thumb,
           folder_id:   prefix + folder.id,
           folder_name: folder.name,
         });
-      });
-    });
+      }
+    }
     if (!rows.length) return;
     const r = await fetch(`${BASE}/biblioteca`, {
       method:  'POST',
@@ -441,21 +503,24 @@ const SupabaseClient = (() => {
     const rows = await bibFetch(authorId, workId);
     const prefix = workId ? workId + '::' : '';
     const folderMap = new Map();
-    rows.forEach(r => {
+    for (const r of rows) {
       // Quitar el prefijo del proyecto del folder_id para obtener el id real
       const rawFid = r.folder_id || '__root__';
       const fid  = prefix && rawFid.startsWith(prefix) ? rawFid.slice(prefix.length) : rawFid;
       const fname = r.folder_name || 'General';
       if (!folderMap.has(fid)) folderMap.set(fid, { id: fid, name: fname, items: [] });
       let ld = null;
-      try { ld = JSON.parse(r.layer_data); } catch(e) {}
+      try {
+        const _rld = await _czDecompress(r.layer_data);
+        ld = JSON.parse(_rld);
+      } catch(e) {}
       if (ld) folderMap.get(fid).items.push({
         id:        r.id,
         timestamp: new Date(r.created_at).getTime(),
         layerData: ld,
         thumb:     r.thumb,
       });
-    });
+    }
     return { folders: [...folderMap.values()] };
   }
 

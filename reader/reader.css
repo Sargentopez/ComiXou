@@ -31,6 +31,28 @@ html, body {
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-msg { font-size: .9rem; color: #888; }
 
+/* Barra de progreso de carga — estilo industria */
+.loading-progress-wrap {
+  width: min(280px, 80vw);
+  height: 6px;
+  background: rgba(0,0,0,.12);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.loading-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #f5c400, #f59000);
+  border-radius: 99px;
+  transition: width .25s ease-out;
+}
+.loading-progress-label {
+  font-size: .78rem;
+  color: #aaa;
+  min-height: 1.2em;
+  text-align: center;
+}
+
 /* ERROR */
 .error-screen {
   position: fixed; inset: 0; background: #e8e8e8;
