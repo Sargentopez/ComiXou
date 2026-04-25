@@ -98,7 +98,7 @@ const SupabaseClient = (() => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000); // 8s timeout
     try {
-      const r = await fetch(`${BASE}/${path}`, { headers: hdrs, signal: controller.signal });
+      const r = await fetch(`${BASE}/${path}`, { headers: _hdrsUser(), signal: controller.signal });
       clearTimeout(timer);
       if (!r.ok) throw new Error(`GET ${path}: ${r.status} ${await r.text()}`);
       return r.json();
@@ -148,6 +148,35 @@ const SupabaseClient = (() => {
     });
   }
 
+  // Lee frames PNG desde IndexedDB 'cxAnims' (guardados por el editor con _pngFramesKey)
+  function _sbAnimIdbLoad(key) {
+    return new Promise(res => {
+      const req = indexedDB.open('cxAnims', 1);
+      req.onsuccess = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('anims')) { res(null); return; }
+        const r = db.transaction('anims').objectStore('anims').get(key);
+        r.onsuccess = e2 => res(e2.target.result || null);
+        r.onerror   = () => res(null);
+      };
+      req.onerror = () => res(null);
+    });
+  }
+
+  function _sbAnimIdbSave(key, frames) {
+    return new Promise(res => {
+      const req = indexedDB.open('cxAnims', 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+      req.onsuccess = e => {
+        const tx = e.target.result.transaction('anims', 'readwrite');
+        tx.objectStore('anims').put(frames, key);
+        tx.oncomplete = () => res();
+        tx.onerror    = () => res();
+      };
+      req.onerror = () => res();
+    });
+  }
+
   // Sube un dataUrl GIF al bucket y devuelve la URL pública
   async function _gifUpload(gifKey, dataUrl) {
     // dataUrl → Blob binario (sin fetch, compatible con todos los navegadores)
@@ -179,10 +208,20 @@ const SupabaseClient = (() => {
   // Sube frames PNG (JSON string comprimido) al bucket 'anims'
   async function _animUpload(key, framesJson) {
     const compressed = await _czCompress(framesJson);
-    const b64 = compressed.startsWith('gz:') ? compressed.slice(3) : btoa(framesJson);
-    const bin = atob(b64);
-    const u8  = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const b64 = compressed.startsWith('gz:') ? compressed.slice(3) : btoa(unescape(encodeURIComponent(framesJson)));
+    // atob por chunks — evita stack overflow en Android con strings > 500KB
+    const CHUNK = 8192;
+    const parts = [];
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      const bin = atob(b64.slice(i, i + CHUNK));
+      const part = new Uint8Array(bin.length);
+      for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
+      parts.push(part);
+    }
+    const totalLen = parts.reduce((a, p) => a + p.length, 0);
+    const u8 = new Uint8Array(totalLen);
+    let off = 0;
+    for (const p of parts) { u8.set(p, off); off += p.length; }
     const blob = new Blob([u8], { type: 'application/octet-stream' });
     const path = key + '.anim';
     const r = await fetch(`${STORAGE}/object/anims/${path}`, {
@@ -257,9 +296,17 @@ const SupabaseClient = (() => {
           delete _lClean._gcpLayersData;
           delete _lClean._gcpFramesData;
           delete _lClean._gcpLayerNames;
+          delete _lClean._pngFramesKey;  // clave IDB local — no tiene sentido en Supabase
 
           // Frames PNG grandes (> 200KB) → bucket 'anims'; pequeños → layer_data
+          // Si los frames están en IDB (guardado local con _pngFramesKey), recuperarlos desde l (original)
           let animUrl = null;
+          if (l._pngFramesKey && !_lClean._pngFrames) {
+            try {
+              const _frames = await _sbAnimIdbLoad(l._pngFramesKey);
+              if (_frames && _frames.length) _lClean._pngFrames = _frames;
+            } catch(e) {}
+          }
           if (_lClean._pngFrames && _lClean._pngFrames.length) {
             const _framesStr = JSON.stringify(_lClean._pngFrames);
             if (_framesStr.length > 200000) {
@@ -431,8 +478,17 @@ const SupabaseClient = (() => {
         } catch(e) {}
         if (!layerObj) continue;
         // Animación PNG con frames en bucket 'anims' (> 200KB al guardar)
+        // Guardar en IDB en vez de en memoria para no saturar localStorage
         if (layerObj._isGcpImage && row.anim_url && !layerObj._pngFrames) {
-          try { layerObj._pngFrames = await _animDownload(row.anim_url); } catch(e) {}
+          try {
+            const _frames = await _animDownload(row.anim_url);
+            if (_frames && _frames.length) {
+              const _idbKey = 'sb_' + panel.id + '_' + row.layer_order;
+              await _sbAnimIdbSave(_idbKey, _frames);
+              layerObj._pngFramesKey = _idbKey;
+              // _pngFrames NO se guarda en layerObj — se carga lazy desde IDB
+            }
+          } catch(e) {}
         }
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {

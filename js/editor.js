@@ -12025,6 +12025,9 @@ async function edCloudSave() {
     return;
   }
 
+  // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
+  edSaveProject();
+
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
@@ -12605,6 +12608,7 @@ function edSerLayer(l){
     if(l._keepSize) _r._keepSize=true;
     if(l._isGcpImage) _r._isGcpImage=true;
     if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
+    if(l._pngFramesKey && !l._pngFrames) _r._pngFramesKey=l._pngFramesKey; // referencia IDB cuando frames no están en memoria
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
     return _r;
@@ -12840,7 +12844,21 @@ function edDeserLayer(d, pageOrientation){
     const l=new GifLayer(d.gifKey||'',d.x,d.y,d.width);
     l.height=d.height||0.3; l.rotation=d.rotation||0;
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{ if(src) l.load(src,()=>edRedraw()); }).catch(()=>{});
+    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{
+      if(!src) return;
+      l.load(src, () => {
+        // Si el visor está abierto y reproduciendo, arrancar animación en este layer
+        if($('editorViewer')?.classList.contains('open') && typeof _edGifSetPlaying==='function') {
+          l._playing = true;
+          l._applyFrame(0);
+        }
+        if(typeof edUpdateViewer==='function' && $('editorViewer')?.classList.contains('open')) {
+          edUpdateViewer();
+        } else if(typeof edRedraw==='function') {
+          edRedraw();
+        }
+      });
+    }).catch(()=>{});
     return l;
   }
   if(d.type==='image'){
@@ -12857,7 +12875,17 @@ function edDeserLayer(d, pageOrientation){
     if(d._pngFrames) l._pngFrames=d._pngFrames;
     if(d._pngFramesKey && !d._pngFrames) {
       _edAnimIdbLoad(d._pngFramesKey).then(frames => {
-        if(frames && frames.length) { l._pngFrames=frames; edRedraw(); }
+        if(frames && frames.length) {
+          l._pngFrames=frames;
+          // Si el visor está abierto y reproduciendo, arrancar animación
+          if($('editorViewer')?.classList.contains('open')) {
+            l._playing = true;
+            l._preloadPngFrames(() => { if(l._playing) l._applyPngFrame(0); });
+            if(typeof edUpdateViewer==='function') edUpdateViewer();
+          } else {
+            edRedraw();
+          }
+        }
       });
     }
     if(d.src){

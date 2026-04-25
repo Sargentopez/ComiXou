@@ -944,8 +944,16 @@ const _CZ_PFX = 'gz:';
 async function _animDownload(animUrl) {
   const r = await fetch(animUrl);
   if (!r.ok) throw new Error('anim download: ' + r.status);
-  const text = await r.text();
-  const json = await _czDecompress(text);
+  const buf  = await r.arrayBuffer();
+  const u8   = new Uint8Array(buf);
+  const CHUNK = 8192;
+  let b64 = '';
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    b64 += btoa(String.fromCharCode(...u8.subarray(i, i + CHUNK)));
+  }
+  // Intentar descomprimir gzip; si falla, asumir JSON plano
+  const json = await _czDecompress(_CZ_PFX + b64).catch(() => null)
+    || new TextDecoder().decode(u8);
   return JSON.parse(json);
 }
 

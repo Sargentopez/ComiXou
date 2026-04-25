@@ -17,8 +17,11 @@ const _MC_HDRS = { 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + _MC_KEY };
 function _mcLoadThumb(supabaseId) {
   if (_mcThumbCache.has(supabaseId) && _mcThumbCache.get(supabaseId)) return;
   _mcThumbCache.set(supabaseId, ''); // marca como en progreso
+  const _sess = JSON.parse(localStorage.getItem('cs_session') || 'null');
+  const _tok = _sess?.token || _MC_KEY;
+  const _hdrs = { 'apikey': _MC_KEY, 'Authorization': `Bearer ${_tok}` };
   fetch(`${_MC_BASE}/panels?work_id=eq.${supabaseId}&order=panel_order.asc&limit=1&select=data_url`,
-    { headers: _MC_HDRS })
+    { headers: _hdrs })
     .then(r => r.json())
     .then(rows => {
       const url = rows?.[0]?.data_url || '';
@@ -549,9 +552,13 @@ async function _mcCloudLoad() {
   try {
     // Buscar en Supabase todas las obras donde author_name coincide con este usuario
     const username = encodeURIComponent(user.username || '');
+    // Usar JWT del usuario para que RLS permita leer sus borradores (published=false)
+    const _session = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    const _token = _session?.token || _MC_KEY;
+    const _authHdrs = { 'apikey': _MC_KEY, 'Authorization': `Bearer ${_token}`, 'Range': '0-999' };
     // Range: 0-999 garantiza hasta 1000 resultados (límite PostgREST por defecto)
     const works = await fetch(`${_MC_BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`,
-      { headers: { ..._MC_HDRS, 'Range': '0-999' } })
+      { headers: _authHdrs })
       .then(r => r.json());
 
     if (!works || !works.length) {
@@ -613,7 +620,7 @@ async function _mcCloudLoad() {
       try {
         const firstPanels = await fetch(
           `${_MC_BASE}/panels?work_id=eq.${w.id}&order=panel_order.asc&limit=1&select=data_url`,
-          { headers: _MC_HDRS }
+          { headers: _authHdrs }
         ).then(r => r.json());
         const thumbDataUrl = firstPanels?.[0]?.data_url || '';
         if (thumbDataUrl) _mcThumbCache.set(w.id, thumbDataUrl);
