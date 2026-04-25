@@ -257,6 +257,9 @@ const SupabaseClient = (() => {
   }
 
   async function _uploadPanels(comic) {
+    window._edDiagUpload = (window._edDiagUpload||[]);
+    window._edUploadCallCount = (window._edUploadCallCount||0) + 1;
+    window._edDiagUpload.push('_uploadPanels llamado #' + window._edUploadCallCount + ' supabaseId:' + comic.supabaseId);
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
 
     // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)

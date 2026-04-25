@@ -12102,6 +12102,8 @@ async function edCloudSave() {
       _diagLines.push('localStorage total: ' + Math.round(_lsSize/1024) + ' KB');
     } catch(_e) { _diagLines.push('localStorage: error (' + _e.message + ')'); }
     _diagLines.push('--- Ejecutando saveDraft real... ---');
+    _diagLines.push('comic.userId: ' + (comic.userId || 'NULL'));
+    _diagLines.push('comic.supabaseId post-assign: ' + (comic.supabaseId || 'NINGUNO'));
     _edDiag(_diagLines);
   } catch(_diagErr) { /* si el diag falla, continuar normal */ }
   // ── FIN DIAGNÓSTICO PRE-UPLOAD ──
