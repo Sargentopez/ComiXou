@@ -315,8 +315,18 @@ const SupabaseClient = (() => {
           if (l._pngFramesKey && !_lClean._pngFrames) {
             try {
               const _frames = await _sbAnimIdbLoad(l._pngFramesKey);
-              if (_frames && _frames.length) _lClean._pngFrames = _frames;
-            } catch(e) {}
+              if (_frames && _frames.length) {
+                _lClean._pngFrames = _frames;
+                window._edDiagUpload = (window._edDiagUpload||[]);
+                window._edDiagUpload.push('IDB[' + l._pngFramesKey + ']: ' + _frames.length + ' frames ✅');
+              } else {
+                window._edDiagUpload = (window._edDiagUpload||[]);
+                window._edDiagUpload.push('IDB[' + l._pngFramesKey + ']: NULL ❌ (_sbAnimIdbLoad devolvió vacío)');
+              }
+            } catch(e) {
+              window._edDiagUpload = (window._edDiagUpload||[]);
+              window._edDiagUpload.push('IDB[' + l._pngFramesKey + ']: EXCEPCIÓN ❌ ' + e.message);
+            }
           }
           if (_lClean._pngFrames && _lClean._pngFrames.length) {
             const _framesStr = JSON.stringify(_lClean._pngFrames);

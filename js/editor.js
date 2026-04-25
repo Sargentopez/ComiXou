@@ -12063,7 +12063,7 @@ async function edCloudSave() {
 
   // ── DIAGNÓSTICO TEMPORAL ──
   try {
-    const _diagLines = ['=== edCloudSave DIAGNÓSTICO v18.60 ===', 'comic.id: ' + comic.id, 'supabaseId: ' + (comic.supabaseId || 'NINGUNO')];
+    const _diagLines = ['=== edCloudSave DIAGNÓSTICO v18.61 ===', 'comic.id: ' + comic.id, 'supabaseId: ' + (comic.supabaseId || 'NINGUNO')];
     const _pages = comic.editorData && comic.editorData.pages ? comic.editorData.pages : [];
     _diagLines.push('pages: ' + _pages.length);
     for (let _pi = 0; _pi < _pages.length; _pi++) {
@@ -12076,7 +12076,6 @@ async function edCloudSave() {
         const _frames = _l._pngFrames ? _l._pngFrames.length : 0;
         const _isGcp = _l._isGcpImage ? 'SÍ' : 'no';
         _diagLines.push('    L' + _li + ' type:' + _l.type + ' _isGcpImage:' + _isGcp + ' _pngFrames:' + _frames + ' _pngFramesKey:' + _key);
-        // Si tiene clave IDB, intentar leer
         if (_l._pngFramesKey) {
           try {
             await new Promise(res => {
@@ -12098,15 +12097,14 @@ async function edCloudSave() {
         }
       }
     }
-    // localStorage quota
     try {
       const _lsSize = JSON.stringify(localStorage).length;
       _diagLines.push('localStorage total: ' + Math.round(_lsSize/1024) + ' KB');
-    } catch(_e) { _diagLines.push('localStorage: error al leer (' + _e.message + ')'); }
+    } catch(_e) { _diagLines.push('localStorage: error (' + _e.message + ')'); }
+    _diagLines.push('--- Ejecutando saveDraft real... ---');
     _edDiag(_diagLines);
-    return; // ← DETENER AQUÍ — no subir aún, solo ver el diagnóstico
   } catch(_diagErr) { /* si el diag falla, continuar normal */ }
-  // ── FIN DIAGNÓSTICO ──
+  // ── FIN DIAGNÓSTICO PRE-UPLOAD ──
 
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
@@ -12122,6 +12120,15 @@ async function edCloudSave() {
 
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
+    // ── DIAGNÓSTICO POST-UPLOAD ──
+    try {
+      const _post = window._edDiagUpload || ['(sin datos de upload)'];
+      const _panel = document.getElementById('_edDiagTa');
+      if (_panel) _panel.value += '\n--- POST-UPLOAD ---\n' + _post.join('\n');
+      else _edDiag(['--- POST-UPLOAD ---'].concat(_post));
+      window._edDiagUpload = [];
+    } catch(_e) {}
+    // ── FIN DIAGNÓSTICO POST-UPLOAD ──
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
     // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
     // El autor deberá volver a solicitar publicación.
