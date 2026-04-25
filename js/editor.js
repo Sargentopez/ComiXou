@@ -12157,6 +12157,10 @@ function edSaveProject(){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
+    // Al guardar localmente: esta es la versión local canónica
+    cloudOnly:  false,
+    cloudNewer: false,
+    // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
   });
   edToast('Guardado ✓');
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
@@ -14711,11 +14715,9 @@ function EditorView_init(){
     const btn = $('dd-recoverlocal');
     if(!btn || !edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    // Mostrar si: tiene localEditorData (nube más reciente que local)
-    // O si: tiene editorData local con páginas pero la nube está vacía (cloudOnly sin paneles)
-    const hasLocalBackup = !!(comic?.localEditorData);
-    const hasLocalData   = !!(comic?.editorData?.pages?.length) && (comic?.cloudOnly || comic?.cloudNewer);
-    btn.style.display = (hasLocalBackup || hasLocalData) ? '' : 'none';
+    // Mostrar si hay backup local guardado (localEditorData)
+    // Se guarda cuando se descarga la nube sobre un editorData local existente
+    btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
   }
 
   // Actualizar al abrir el menú proyecto
@@ -14727,11 +14729,9 @@ function EditorView_init(){
     edCloseMenus();
     if(!edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    const dataToRestore = comic?.localEditorData || comic?.editorData;
-    if(!dataToRestore?.pages?.length) { edToast('No hay versión local guardada'); return; }
-    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios actuales no guardados localmente.')) return;
-    // Restaurar como editorData activo
-    comic.editorData      = dataToRestore;
+    if(!comic?.localEditorData?.pages?.length) { edToast('No hay versión local guardada'); return; }
+    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios de la nube no guardados localmente.')) return;
+    comic.editorData      = comic.localEditorData;
     comic.localEditorData = null;
     comic.cloudNewer      = false;
     comic.cloudOnly       = false;

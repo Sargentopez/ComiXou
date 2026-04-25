@@ -328,6 +328,11 @@ function _mcRenderList() {
           ComicStore.save({
             ...comicToEdit,
             cloudOnly: false,
+            cloudNewer: false,
+            // Preservar editorData local existente en localEditorData ANTES de sobreescribir
+            localEditorData: (comicToEdit.editorData?.pages?.length)
+              ? comicToEdit.editorData
+              : (comicToEdit.localEditorData || null),
             editorData: _edataClean,
             title:   work.title    || comicToEdit.title,
             genre:   work.genre    || comicToEdit.genre,
