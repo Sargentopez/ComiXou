@@ -15615,23 +15615,35 @@ function edBibGuardar() {
       }).catch(() => edToast('Error al leer el GIF'));
       return;
     }
+    const _la_layerData = edSerLayer(la);
+    // Para animaciones PNG con _pngFramesKey: cargar frames de IDB antes de guardar en biblioteca
+    // La biblioteca necesita _pngFrames inline — la clave IDB local no funciona en otros dispositivos
+    if (_la_layerData && _la_layerData._pngFramesKey && la._isGcpImage) {
+      const _idbKey = _la_layerData._pngFramesKey;
+      const _frames = la._pngFrames && la._pngFrames.length ? Promise.resolve(la._pngFrames)
+                    : _edAnimIdbLoad(_idbKey);
+      _frames.then(frames => {
+        if (frames && frames.length) {
+          _la_layerData._pngFrames = frames;
+        }
+        delete _la_layerData._pngFramesKey;
+        const _entry = {
+          id: Date.now() + '_' + Math.random().toString(36).slice(2,7),
+          timestamp: Date.now(), isGroup: false,
+          layerData: _la_layerData, thumb: _bibThumb(la),
+        };
+        const _d2 = _bibLoad();
+        const _realFolders2 = _d2.folders.filter(f => f.name !== 'Animaciones');
+        if (_realFolders2.length > 1) { _bibShowFolderPicker(_entry, _d2); }
+        else { _realFolders2[0].items.push(_entry); _bibSave(_d2); edToast('Guardado en la biblioteca ✓'); }
+      });
+      return;
+    }
     entry = {
       id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
       timestamp: Date.now(),
       isGroup:   false,
-      layerData: (() => {
-        const _ld = edSerLayer(la);
-        // Para animaciones PNG: la biblioteca SIEMPRE guarda _pngFrames inline
-        // (_pngFramesKey es una referencia IDB local — no funciona en otros dispositivos)
-        if (_ld && _ld._pngFramesKey) {
-          if (la._pngFrames && la._pngFrames.length) {
-            // Frames ya en memoria
-            _ld._pngFrames = la._pngFrames;
-          }
-          delete _ld._pngFramesKey;
-        }
-        return _ld;
-      })(),
+      layerData: _la_layerData,
       thumb:     _bibThumb(la),
     };
   }

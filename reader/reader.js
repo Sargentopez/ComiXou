@@ -910,11 +910,11 @@ async function loadWork(workId) {
 async function loadDraft(token) {
   setLoadingMsg('Cargando borrador...');
   try {
-    const work = await sbGet('works?id=eq.' + token);
+    const work = await sbGetAuth('works?id=eq.' + token);
     if (!work || !work.length) { showError('Borrador no encontrado o enlace caducado.'); return; }
 
     setLoadingMsg('Cargando páginas...');
-    await _loadPanels(token);
+    await _loadPanels(token, true);  // true = usar JWT para leer capas del borrador
     document.title = (work[0].title || 'Borrador') + ' — ComiXow';
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
@@ -991,16 +991,17 @@ async function _czDecompress(str) {
   } catch(e) { return str; }
 }
 
-async function _loadPanels(workId) {
-  const panels = await sbGet('panels?work_id=eq.' + workId + '&order=panel_order.asc');
+async function _loadPanels(workId, useAuth) {
+  const _sbFetch = useAuth ? sbGetAuth : sbGet;
+  const panels = await _sbFetch('panels?work_id=eq.' + workId + '&order=panel_order.asc');
   if (!panels || !panels.length) { showError('Esta obra no tiene páginas guardadas.'); return; }
 
   const panelIds = panels.map(p => p.id).join(',');
 
   // Descargar capas del editor y textos del reader en paralelo
   const [layerRows, texts] = await Promise.all([
-    sbGet('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc&select=*'),
-    sbGet('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
+    _sbFetch('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc&select=*'),
+    _sbFetch('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
   ]);
 
   RS.panels = await Promise.all(panels.map(async panel => {
@@ -1154,6 +1155,20 @@ async function sbGet(path) {
   const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
     headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
   });
+  if (!res.ok) throw new Error('Supabase ' + res.status);
+  return res.json();
+}
+
+// sbGetAuth: usa el JWT del usuario autenticado si está disponible (necesario para leer borradores propios)
+function _sbAuthHeaders() {
+  try {
+    const s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    if (s && s.token) return { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + s.token };
+  } catch(e) {}
+  return { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY };
+}
+async function sbGetAuth(path) {
+  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, { headers: _sbAuthHeaders() });
   if (!res.ok) throw new Error('Supabase ' + res.status);
   return res.json();
 }
