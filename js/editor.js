@@ -12886,7 +12886,11 @@ function edDeserLayer(d, pageOrientation){
     if(d._isGcpImage) l._isGcpImage=true;
     if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
     if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
-    if(d._pngFrames) l._pngFrames=d._pngFrames;
+    if(d._pngFrames) {
+      l._pngFrames=d._pngFrames;
+      // Precargar frames en canvas offscreen para que draw() pueda pintarlos
+      l._preloadPngFrames(() => { if(typeof edRedraw==='function') edRedraw(); });
+    }
     if(d._pngFramesKey && !d._pngFrames) {
       _edAnimIdbLoad(d._pngFramesKey).then(frames => {
         if(frames && frames.length) {
