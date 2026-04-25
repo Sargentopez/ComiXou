@@ -12009,36 +12009,6 @@ function _edCloudSavingStop() {
   const badge = document.getElementById('_edCloudSavingBadge');
   if (badge) badge.remove();
 }
-// ── DIAGNÓSTICO TEMPORAL — eliminar tras resolver bug animaciones PNG ──
-function _edDiag(lines) {
-  let p = document.getElementById('_edDiagPanel');
-  if (!p) {
-    p = document.createElement('div');
-    p.id = '_edDiagPanel';
-    p.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;';
-    const h = document.createElement('div');
-    h.style.cssText = 'color:#0f0;font:bold 13px monospace;margin-bottom:6px;';
-    h.textContent = '🔍 DIAGNÓSTICO ANIMACIÓN PNG';
-    const ta = document.createElement('textarea');
-    ta.id = '_edDiagTa';
-    ta.style.cssText = 'flex:1;background:#111;color:#0f0;font:11px monospace;border:1px solid #0f0;padding:8px;resize:none;';
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
-    const btnCopy = document.createElement('button');
-    btnCopy.textContent = '📋 Copiar';
-    btnCopy.style.cssText = 'flex:1;padding:10px;background:#0a0;color:#fff;border:none;font-size:14px;border-radius:6px;';
-    btnCopy.onclick = () => { ta.select(); document.execCommand('copy'); btnCopy.textContent = '✅ Copiado'; };
-    const btnClose = document.createElement('button');
-    btnClose.textContent = '✕ Cerrar';
-    btnClose.style.cssText = 'flex:1;padding:10px;background:#a00;color:#fff;border:none;font-size:14px;border-radius:6px;';
-    btnClose.onclick = () => p.remove();
-    row.appendChild(btnCopy); row.appendChild(btnClose);
-    p.appendChild(h); p.appendChild(ta); p.appendChild(row);
-    document.body.appendChild(p);
-  }
-  document.getElementById('_edDiagTa').value = lines.join('\n');
-}
-
 async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
@@ -12061,53 +12031,6 @@ async function edCloudSave() {
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
-  // ── DIAGNÓSTICO TEMPORAL ──
-  try {
-    const _diagLines = ['=== edCloudSave DIAGNÓSTICO v18.61 ===', 'comic.id: ' + comic.id, 'supabaseId: ' + (comic.supabaseId || 'NINGUNO')];
-    const _pages = comic.editorData && comic.editorData.pages ? comic.editorData.pages : [];
-    _diagLines.push('pages: ' + _pages.length);
-    for (let _pi = 0; _pi < _pages.length; _pi++) {
-      const _pg = _pages[_pi];
-      const _layers = _pg.layers || [];
-      _diagLines.push('  página ' + _pi + ': ' + _layers.length + ' capas');
-      for (let _li = 0; _li < _layers.length; _li++) {
-        const _l = _layers[_li];
-        const _key = _l._pngFramesKey || 'NINGUNA';
-        const _frames = _l._pngFrames ? _l._pngFrames.length : 0;
-        const _isGcp = _l._isGcpImage ? 'SÍ' : 'no';
-        _diagLines.push('    L' + _li + ' type:' + _l.type + ' _isGcpImage:' + _isGcp + ' _pngFrames:' + _frames + ' _pngFramesKey:' + _key);
-        if (_l._pngFramesKey) {
-          try {
-            await new Promise(res => {
-              const _req = indexedDB.open('cxAnims', 1);
-              _req.onsuccess = _e => {
-                const _db = _e.target.result;
-                if (!_db.objectStoreNames.contains('anims')) { _diagLines.push('      IDB: objectStore anims NO EXISTE'); res(); return; }
-                const _r = _db.transaction('anims').objectStore('anims').get(_l._pngFramesKey);
-                _r.onsuccess = _e2 => {
-                  const _v = _e2.target.result;
-                  _diagLines.push('      IDB[' + _l._pngFramesKey + ']: ' + (Array.isArray(_v) ? _v.length + ' frames ✅' : 'NULL ❌'));
-                  res();
-                };
-                _r.onerror = () => { _diagLines.push('      IDB error ❌'); res(); };
-              };
-              _req.onerror = () => { _diagLines.push('      IDB open error ❌'); res(); };
-            });
-          } catch(_e) { _diagLines.push('      IDB excepción: ' + _e.message); }
-        }
-      }
-    }
-    try {
-      const _lsSize = JSON.stringify(localStorage).length;
-      _diagLines.push('localStorage total: ' + Math.round(_lsSize/1024) + ' KB');
-    } catch(_e) { _diagLines.push('localStorage: error (' + _e.message + ')'); }
-    _diagLines.push('--- Ejecutando saveDraft real... ---');
-    _diagLines.push('comic.userId: ' + (comic.userId || 'NULL'));
-    _diagLines.push('comic.supabaseId post-assign: ' + (comic.supabaseId || 'NINGUNO'));
-    _edDiag(_diagLines);
-  } catch(_diagErr) { /* si el diag falla, continuar normal */ }
-  // ── FIN DIAGNÓSTICO PRE-UPLOAD ──
-
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
     comic.supabaseId = crypto.randomUUID();
@@ -12122,15 +12045,6 @@ async function edCloudSave() {
 
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
-    // ── DIAGNÓSTICO POST-UPLOAD ──
-    try {
-      const _post = window._edDiagUpload || ['(sin datos de upload)'];
-      const _panel = document.getElementById('_edDiagTa');
-      if (_panel) _panel.value += '\n--- POST-UPLOAD ---\n' + _post.join('\n');
-      else _edDiag(['--- POST-UPLOAD ---'].concat(_post));
-      window._edDiagUpload = [];
-    } catch(_e) {}
-    // ── FIN DIAGNÓSTICO POST-UPLOAD ──
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
     // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
     // El autor deberá volver a solicitar publicación.

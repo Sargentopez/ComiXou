@@ -257,9 +257,6 @@ const SupabaseClient = (() => {
   }
 
   async function _uploadPanels(comic) {
-    window._edDiagUpload = (window._edDiagUpload||[]);
-    window._edUploadCallCount = (window._edUploadCallCount||0) + 1;
-    window._edDiagUpload.push('_uploadPanels llamado #' + window._edUploadCallCount + ' supabaseId:' + comic.supabaseId);
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
 
     // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
@@ -293,12 +290,9 @@ const SupabaseClient = (() => {
       // Capas del editor: image, draw, stroke, bubble, text, gif — formato edSerLayer
       const edPage = edPages[i];
       if (edPage && edPage.layers && edPage.layers.length > 0) {
-        window._edDiagUpload = (window._edDiagUpload||[]);
-        window._edDiagUpload.push('panel[' + i + '] edPage.layers.length=' + edPage.layers.length);
         const layerRows = [];
         for (let j = 0; j < edPage.layers.length; j++) {
           const l = edPage.layers[j];
-          window._edDiagUpload.push('  L' + j + ' type:' + l.type + ' _isGcpImage:' + (l._isGcpImage||false) + ' _pngFramesKey:' + (l._pngFramesKey||'none') + ' _pngFrames:' + (l._pngFrames?l._pngFrames.length:0));
           let gifUrl = null;
           // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
           if (l.type === 'gif' && l.gifKey) {
@@ -321,18 +315,8 @@ const SupabaseClient = (() => {
           if (l._pngFramesKey && !_lClean._pngFrames) {
             try {
               const _frames = await _sbAnimIdbLoad(l._pngFramesKey);
-              if (_frames && _frames.length) {
-                _lClean._pngFrames = _frames;
-                window._edDiagUpload = (window._edDiagUpload||[]);
-                window._edDiagUpload.push('IDB[' + l._pngFramesKey + ']: ' + _frames.length + ' frames ✅');
-              } else {
-                window._edDiagUpload = (window._edDiagUpload||[]);
-                window._edDiagUpload.push('IDB[' + l._pngFramesKey + ']: NULL ❌ (_sbAnimIdbLoad devolvió vacío)');
-              }
-            } catch(e) {
-              window._edDiagUpload = (window._edDiagUpload||[]);
-              window._edDiagUpload.push('IDB[' + l._pngFramesKey + ']: EXCEPCIÓN ❌ ' + e.message);
-            }
+              if (_frames && _frames.length) _lClean._pngFrames = _frames;
+            } catch(e) {}
           }
           if (_lClean._pngFrames && _lClean._pngFrames.length) {
             const _framesStr = JSON.stringify(_lClean._pngFrames);
@@ -347,7 +331,6 @@ const SupabaseClient = (() => {
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
-          window._edDiagUpload.push('  L' + j + ' _ld bytes:' + _ld.length + ' prefix:' + _ld.slice(0,6) + ' _pngFrames_en_lClean:' + (_lClean._pngFrames?_lClean._pngFrames.length:0) + ' animUrl:' + (animUrl||'null'));
           layerRows.push({
             panel_id:    panelId,
             layer_order: j,
@@ -357,13 +340,7 @@ const SupabaseClient = (() => {
             anim_url:    animUrl,
           });
         } // end for j
-        window._edDiagUpload.push('  layerRows.length antes de upsert: ' + layerRows.length);
-        window._edDiagUpload.push('  payload bytes: ' + JSON.stringify(layerRows).length);
-        if(layerRows.length > 0) {
-          const _upsertResp = await _upsert('panel_layers', layerRows);
-          window._edDiagUpload.push('  upsert response rows: ' + (_upsertResp ? _upsertResp.length : 'null'));
-          if (_upsertResp) _upsertResp.forEach((r,ri) => window._edDiagUpload.push('    row['+ri+'] id:'+r.id+' layer_order:'+r.layer_order));
-        }
+        if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
       }
 
       // Textos para el reader (panel_texts sin cambios)
