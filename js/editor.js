@@ -12026,7 +12026,7 @@ async function edCloudSave() {
   }
 
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
-  edSaveProject();
+  await edSaveProject();
 
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
@@ -12071,7 +12071,7 @@ async function edCloudSave() {
   }
 }
 
-function edSaveProject(){
+async function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
@@ -12142,6 +12142,31 @@ function edSaveProject(){
       texts,
     };
   });
+  // Construir pages serializando capas y externalizando _pngFrames a IDB
+  // (evita QuotaExceededError silencioso en localStorage con frames PNG grandes)
+  const _savedOrient2=edOrientation, _savedPage2=edCurrentPage;
+  const _edPages = [];
+  for (let _pi=0; _pi<edPages.length; _pi++) {
+    const p = edPages[_pi];
+    edCurrentPage = _pi;
+    edOrientation = p.orientation || _savedOrient2;
+    const _pageLayers = [];
+    for (let _li=0; _li<p.layers.length; _li++) {
+      const _sl = edSerLayer(p.layers[_li]);
+      if (!_sl) continue;
+      // Externalizar _pngFrames a IndexedDB para no saturar localStorage
+      if (_sl._pngFrames && _sl._pngFrames.length) {
+        const _idbKey = edProjectId + '_' + _pi + '_' + _li;
+        try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); } catch(e) {}
+        delete _sl._pngFrames;
+        _sl._pngFramesKey = _idbKey;
+      }
+      _pageLayers.push(_sl);
+    }
+    _edPages.push({layers:_pageLayers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient2});
+  }
+  edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
+
   ComicStore.save({
     ...existing,
     id:edProjectId,
@@ -12149,17 +12174,7 @@ function edSaveProject(){
     panels,
     editorData:{
       orientation:edOrientation,
-      pages:(()=>{
-        const _savedOrient=edOrientation, _savedPage=edCurrentPage;
-        const result=edPages.map((p,_pi)=>{
-          edCurrentPage=_pi;
-          edOrientation=p.orientation||_savedOrient;
-          const layers=p.layers.map(edSerLayer).filter(Boolean);
-          return {layers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient};
-        });
-        edOrientation=_savedOrient; edCurrentPage=_savedPage;
-        return result;
-      })(),
+      pages:_edPages,
       _rules: edRules,
       _ruleNodes: edRuleNodes,
     },
@@ -14470,7 +14485,7 @@ function EditorView_init(){
     edRedraw();
     _edScrollbarsUpdate();
   });
-  $('edSaveBtn')?.addEventListener('click', edSaveProject);
+  $('edSaveBtn')?.addEventListener('click', () => edSaveProject());
   $('edCloudSaveBtn')?.addEventListener('click', edCloudSave);
   $('edPreviewBtn')?.addEventListener('click', edOpenViewer);
   // Botón pantalla completa en topbar

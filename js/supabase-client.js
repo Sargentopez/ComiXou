@@ -259,14 +259,16 @@ const SupabaseClient = (() => {
   async function _uploadPanels(comic) {
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
 
+    // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
+    // Usar editorData.pages como fuente de verdad para las capas
     const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
-    // comic.panels puede estar vacío para obras cloudOnly — usar editorData.pages como fallback
-    const panels = (comic.panels && comic.panels.length) ? comic.panels : edPages.map(p => ({
-      dataUrl: null,
+    const panels  = comic.panels && comic.panels.length ? comic.panels : edPages.map((p, i) => ({
+      dataUrl:     null,
       orientation: p.orientation === 'horizontal' ? 'h' : 'v',
-      textMode: p.textMode || 'sequential',
-      texts: p.texts || [],
+      textMode:    p.textMode || 'sequential',
+      texts:       p.texts || [],
     }));
+
     if (!panels.length) return;
 
     for (let i = 0; i < panels.length; i++) {
@@ -598,15 +600,18 @@ const SupabaseClient = (() => {
 
   // ── BIBLIOTECA ────────────────────────────────────────────────
   async function bibFetch(authorId, workId) {
-    const filter = workId
-      ? `author_id=eq.${authorId}&folder_id=like.${encodeURIComponent(workId + '::' + '%')}&order=created_at.asc`
-      : `author_id=eq.${authorId}&order=created_at.asc`;
+    // Filtrar por author_id — el filtrado por folder_id se hace en JS
+    // para evitar problemas de encoding del wildcard % en la URL
+    const filter = `author_id=eq.${authorId}&order=created_at.asc`;
     if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/biblioteca?${filter}`, {
       headers: _hdrsUser(),
     });
     if (!r.ok) throw new Error(`bibFetch: ${r.status} ${await r.text()}`);
-    return r.json();
+    const rows = await r.json();
+    // Filtrar en JS por workId si se especificó
+    if (!workId) return rows;
+    return rows.filter(row => row.folder_id && row.folder_id.startsWith(workId + '::'));
   }
 
   // Sincronización completa: sube todos los items locales a Supabase.
