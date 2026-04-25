@@ -594,7 +594,7 @@ const SupabaseClient = (() => {
   // ── BIBLIOTECA ────────────────────────────────────────────────
   async function bibFetch(authorId, workId) {
     const filter = workId
-      ? `author_id=eq.${authorId}&folder_id=like.${encodeURIComponent(workId + '::')}%&order=created_at.asc`
+      ? `author_id=eq.${authorId}&folder_id=like.${encodeURIComponent(workId + '::' + '%')}&order=created_at.asc`
       : `author_id=eq.${authorId}&order=created_at.asc`;
     if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/biblioteca?${filter}`, {
