@@ -210,27 +210,14 @@ const SupabaseClient = (() => {
   }
 
   // Sube frames PNG (JSON string comprimido) al bucket 'anims'
+  // Sube frames PNG (JSON string) al bucket 'anims' como texto plano
   async function _animUpload(key, framesJson) {
-    const compressed = await _czCompress(framesJson);
-    const b64 = compressed.startsWith('gz:') ? compressed.slice(3) : btoa(unescape(encodeURIComponent(framesJson)));
-    // atob por chunks — evita stack overflow en Android con strings > 500KB
-    const CHUNK = 8192;
-    const parts = [];
-    for (let i = 0; i < b64.length; i += CHUNK) {
-      const bin = atob(b64.slice(i, i + CHUNK));
-      const part = new Uint8Array(bin.length);
-      for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
-      parts.push(part);
-    }
-    const totalLen = parts.reduce((a, p) => a + p.length, 0);
-    const u8 = new Uint8Array(totalLen);
-    let off = 0;
-    for (const p of parts) { u8.set(p, off); off += p.length; }
-    const blob = new Blob([u8], { type: 'application/octet-stream' });
+    if (window._authTryRefresh) await window._authTryRefresh();
+    const blob = new Blob([framesJson], { type: 'application/json' });
     const path = key + '.anim';
     const r = await fetch(`${STORAGE}/object/anims/${path}`, {
       method:  'POST',
-      headers: { ..._hdrsUser(), 'Content-Type': 'application/octet-stream', 'x-upsert': 'true' },
+      headers: { ..._hdrsUser(), 'Content-Type': 'application/json', 'x-upsert': 'true' },
       body:    blob,
     });
     if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
@@ -242,18 +229,7 @@ const SupabaseClient = (() => {
     if (!animUrl) return null;
     const r = await fetch(animUrl);
     if (!r.ok) return null;
-    const buf   = await r.arrayBuffer();
-    const u8    = new Uint8Array(buf);
-    const CHUNK = 8192;
-    let b64 = '';
-    for (let i = 0; i < u8.length; i += CHUNK) {
-      b64 += btoa(String.fromCharCode(...u8.subarray(i, i + CHUNK)));
-    }
-    // Intentar descomprimir (puede ser gz: o plano)
-    const str = await _czDecompress('gz:' + b64).catch(() => null)
-      || await _czDecompress(b64).catch(() => null)
-      || String.fromCharCode(...u8);
-    try { return JSON.parse(str); } catch(e) { return null; }
+    try { return await r.json(); } catch(e) { return null; }
   }
 
   async function _uploadPanels(comic) {
@@ -323,7 +299,16 @@ const SupabaseClient = (() => {
               animUrl = await _animUpload('anim_' + panelId + '_' + j, _framesStr);
               delete _lClean._pngFrames;  // ya están en Storage
             } catch(e) {
-              console.warn('anim upload failed, keeping in layer_data:', e);
+              // Panel de error visible — no usar toast (no se puede copiar)
+              const _ep = document.createElement('div');
+              _ep.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#900;color:#fff;font:12px monospace;padding:8px;z-index:99999;white-space:pre-wrap;';
+              _ep.textContent = 'ERROR animUpload: ' + e.message;
+              const _eb = document.createElement('button');
+              _eb.textContent = '✕';
+              _eb.style.cssText = 'margin-left:8px;background:#fff;color:#900;border:none;padding:2px 8px;cursor:pointer;';
+              _eb.onclick = () => _ep.remove();
+              _ep.appendChild(_eb);
+              document.body && document.body.appendChild(_ep);
             }
           }
 
@@ -396,8 +381,8 @@ const SupabaseClient = (() => {
       social:         comic.social     || '',
       panel_count:    comic.panels?.length || 0,
       rules:          JSON.stringify(comic.editorData?._rules || []),
-      published:      false,
-      pending_review: false,
+      published:      comic.approved   ? true  : false,
+      pending_review: comic.pendingReview ? true : false,
       updated_at:     new Date().toISOString(),
     });
     await _uploadPanels(comic);
