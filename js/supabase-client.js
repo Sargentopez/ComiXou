@@ -112,7 +112,7 @@ const SupabaseClient = (() => {
   async function _upsert(table, data) {
     const r = await fetch(`${BASE}/${table}`, {
       method:  'POST',
-      headers: { ...hdrs, 'Prefer': 'resolution=merge-duplicates,return=representation' },
+      headers: { ..._hdrsUser(), 'Prefer': 'resolution=merge-duplicates,return=representation' },
       body:    JSON.stringify(data),
     });
     if (!r.ok) throw new Error(`UPSERT ${table}: ${r.status} ${await r.text()}`);

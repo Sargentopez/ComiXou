@@ -368,14 +368,16 @@ function _mcRenderList() {
         appAlert('No tienes permiso para publicar esta obra.');
         return;
       }
-      if (!comic.panels || !comic.panels.length) {
+      if (!comic.supabaseId) {
+        appAlert('La obra debe estar guardada en la nube antes de publicarse.\nÁbrela en el editor y pulsa el botón ☁️ Guardar en nube.');
+        return;
+      }
+      if (!comic.panelCount && (!comic.panels || !comic.panels.length)) {
         appAlert('Añade al menos una página antes de publicar.');
         return;
       }
-      const supabaseId = comic.supabaseId || crypto.randomUUID();
-      ComicStore.save({ ...comic, supabaseId, published: false, approved: false, pendingReview: true });
+      ComicStore.save({ ...comic, published: false, approved: false, pendingReview: true });
       _mcRenderList();
-      // Scroll a la ficha: usar posición real menos el padding del contenedor
       requestAnimationFrame(() => {
         const row  = document.querySelector(`.comic-row[data-id="${id}"]`);
         const list = document.getElementById('myComicsList');
@@ -385,10 +387,17 @@ function _mcRenderList() {
         window.scrollTo({ top: rowTop, behavior: 'smooth' });
       });
       if (typeof SupabaseClient !== 'undefined') {
-        SupabaseClient.submitForReview({ ...comic, supabaseId, published: false, pendingReview: true })
-          .catch(err => console.warn('Supabase submitForReview:', err));
+        SupabaseClient.submitForReview(comic)
+          .then(() => _mcToast('Enviada a revisión ✓'))
+          .catch(err => {
+            // Revertir estado local si falla Supabase
+            ComicStore.save({ ...comic, pendingReview: false });
+            _mcRenderList();
+            _mcToast('⚠️ Error al enviar: ' + err.message);
+          });
+      } else {
+        _mcToast('Enviada a revisión ✓');
       }
-      _mcToast('Enviada a revisión ✓');
     } else if (action === 'unpublish') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
@@ -562,7 +571,9 @@ async function _mcCloudLoad() {
         if (w.nav_mode && w.nav_mode !== existing.navMode) { existing.navMode = w.nav_mode; dirty = true; }
         existing.published     = w.published ?? existing.published;
         existing.approved      = w.published ?? existing.approved;
-        existing.pendingReview = !(w.published ?? true);
+        // pendingReview no se puede deducir de Supabase (no hay campo en la nube).
+        // Si la obra se publicó en la nube, ya no está en revisión. Si no, preservar valor local.
+        if (w.published) existing.pendingReview = false;
 
         if (cloudIsNewer) {
           // La nube tiene una versión más reciente

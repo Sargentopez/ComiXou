@@ -12037,6 +12037,13 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+    // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
+    // El autor deberá volver a solicitar publicación.
+    const _comicAfter = ComicStore.getById(edProjectId);
+    if (_comicAfter && (_comicAfter.approved || _comicAfter.pendingReview)) {
+      ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false });
+      if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
+    }
     // Sincronizar biblioteca con la nube
     const user = Auth?.currentUser?.();
     if (user && user.id) {
