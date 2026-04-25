@@ -390,7 +390,7 @@ function _mcRenderList() {
         appAlert('La obra debe estar guardada en la nube antes de publicarse.\nÁbrela en el editor y pulsa el botón ☁️ Guardar en nube.');
         return;
       }
-      if (!comic.panelCount && (!comic.panels || !comic.panels.length)) {
+      if (!comic.supabaseId && !comic.panelCount && (!comic.panels || !comic.panels.length)) {
         appAlert('Añade al menos una página antes de publicar.');
         return;
       }
