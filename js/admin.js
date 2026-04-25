@@ -186,8 +186,6 @@ function buildAdminRow(comic, mode) {
         return;
       }
     }
-    // Invalidar cache de portada para que la obra aparezca inmediatamente en el index
-    if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     // Actualizar localStorage solo si existe entrada local
     const local = ComicStore.getById(comic.id);
     if (local) {

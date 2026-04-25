@@ -1126,13 +1126,7 @@ class GifLayer extends BaseLayer {
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
       if (typeof edRedraw === 'function' && typeof edCanvas !== 'undefined' && edCanvas) {
-        requestAnimationFrame(() => {
-          if ($('editorViewer')?.classList.contains('open') && typeof edUpdateViewer === 'function') {
-            edUpdateViewer();
-          } else {
-            edRedraw();
-          }
-        });
+        requestAnimationFrame(() => edRedraw());
       }
     }, frame.delay);
   }
@@ -12025,21 +12019,6 @@ async function edCloudSave() {
     return;
   }
 
-  // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
-  edSaveProject();
-
-  // Esperar a que los writes de IDB (frames PNG) terminen antes de subir a la nube
-  // edSaveProject lanza _edAnimIdbSave sin await — aquí los completamos
-  const _idbWrites = [];
-  edPages.forEach((pg, pi) => {
-    pg.layers.forEach((l, li) => {
-      if(l._pngFrames && l._pngFrames.length && l._pngFramesKey) {
-        _idbWrites.push(_edAnimIdbSave(l._pngFramesKey, l._pngFrames));
-      }
-    });
-  });
-  if(_idbWrites.length) await Promise.all(_idbWrites);
-
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
@@ -12058,13 +12037,6 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
-    // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
-    // El autor deberá volver a solicitar publicación.
-    const _comicAfter = ComicStore.getById(edProjectId);
-    if (_comicAfter && (_comicAfter.approved || _comicAfter.pendingReview)) {
-      ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false });
-      if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
-    }
     // Sincronizar biblioteca con la nube
     const user = Auth?.currentUser?.();
     if (user && user.id) {
@@ -12154,20 +12126,6 @@ function edSaveProject(){
       texts,
     };
   });
-  // Mover _pngFrames grandes a IDB antes de guardar en localStorage
-  // para evitar QuotaExceededError. edSerLayer usará _pngFramesKey en su lugar.
-  edPages.forEach((pg, pi) => {
-    pg.layers.forEach((l, li) => {
-      if(l._pngFrames && l._pngFrames.length && !l._pngFramesKey) {
-        const _sz = JSON.stringify(l._pngFrames).length;
-        if(_sz >= 200000) {
-          const _idbKey = edProjectId + '_' + pi + '_' + li;
-          _edAnimIdbSave(_idbKey, l._pngFrames);
-          l._pngFramesKey = _idbKey;
-        }
-      }
-    });
-  });
   ComicStore.save({
     ...existing,
     id:edProjectId,
@@ -12192,10 +12150,6 @@ function edSaveProject(){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
-    // Al guardar localmente: esta es la versión local canónica
-    cloudOnly:  false,
-    cloudNewer: false,
-    // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
   });
   edToast('Guardado ✓');
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
@@ -12633,12 +12587,7 @@ function edSerLayer(l){
     if(l.locked) _r.locked=true;
     if(l._keepSize) _r._keepSize=true;
     if(l._isGcpImage) _r._isGcpImage=true;
-    // Frames en IDB: usar clave (nunca guardar frames grandes en localStorage)
-    if(l._pngFramesKey) {
-      _r._pngFramesKey = l._pngFramesKey;
-    } else if(l._pngFrames && l._pngFrames.length) {
-      _r._pngFrames = l._pngFrames; // pequeños (<200KB) van inline
-    }
+    if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
     return _r;
@@ -12810,20 +12759,6 @@ function _edAnimIdbLoad(key) {
   });
 }
 
-function _edAnimIdbSave(key, frames) {
-  return new Promise(res => {
-    const req = indexedDB.open('cxAnims', 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-    req.onsuccess = e => {
-      const tx = e.target.result.transaction('anims', 'readwrite');
-      tx.objectStore('anims').put(frames, key);
-      tx.oncomplete = () => res();
-      tx.onerror    = () => res();
-    };
-    req.onerror = () => res();
-  });
-}
-
 function edDeserLayer(d, pageOrientation){
   if(!d) return null;
   if(d.type==='group') return null; // obsoleto
@@ -12888,21 +12823,7 @@ function edDeserLayer(d, pageOrientation){
     const l=new GifLayer(d.gifKey||'',d.x,d.y,d.width);
     l.height=d.height||0.3; l.rotation=d.rotation||0;
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{
-      if(!src) return;
-      l.load(src, () => {
-        // Si el visor está abierto y reproduciendo, arrancar animación en este layer
-        if($('editorViewer')?.classList.contains('open') && typeof _edGifSetPlaying==='function') {
-          l._playing = true;
-          l._applyFrame(0);
-        }
-        if(typeof edUpdateViewer==='function' && $('editorViewer')?.classList.contains('open')) {
-          edUpdateViewer();
-        } else if(typeof edRedraw==='function') {
-          edRedraw();
-        }
-      });
-    }).catch(()=>{});
+    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{ if(src) l.load(src,()=>edRedraw()); }).catch(()=>{});
     return l;
   }
   if(d.type==='image'){
@@ -12919,17 +12840,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._pngFrames) l._pngFrames=d._pngFrames;
     if(d._pngFramesKey && !d._pngFrames) {
       _edAnimIdbLoad(d._pngFramesKey).then(frames => {
-        if(frames && frames.length) {
-          l._pngFrames=frames;
-          // Si el visor está abierto y reproduciendo, arrancar animación
-          if($('editorViewer')?.classList.contains('open')) {
-            l._playing = true;
-            l._preloadPngFrames(() => { if(l._playing) l._applyPngFrame(0); });
-            if(typeof edUpdateViewer==='function') edUpdateViewer();
-          } else {
-            edRedraw();
-          }
-        }
+        if(frames && frames.length) { l._pngFrames=frames; edRedraw(); }
       });
     }
     if(d.src){
@@ -14788,14 +14699,14 @@ function EditorView_init(){
   $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
   $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
-  // Mostrar "Recuperar versión del dispositivo" si hay versión local guardada
+  // Mostrar "Recuperar versión del dispositivo" solo si hay versión local guardada
   function _edUpdateRecoverBtn() {
     const btn = $('dd-recoverlocal');
     if(!btn || !edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    // Mostrar si hay backup local guardado (localEditorData)
-    // Se guarda cuando se descarga la nube sobre un editorData local existente
-    btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
+    // Mostrar si: tiene localEditorData guardado Y la nube es más reciente
+    const hasLocal = !!(comic?.localEditorData);
+    btn.style.display = hasLocal ? '' : 'none';
   }
 
   // Actualizar al abrir el menú proyecto
@@ -14807,13 +14718,13 @@ function EditorView_init(){
     edCloseMenus();
     if(!edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    if(!comic?.localEditorData?.pages?.length) { edToast('No hay versión local guardada'); return; }
-    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios de la nube no guardados localmente.')) return;
-    comic.editorData      = comic.localEditorData;
-    comic.localEditorData = null;
-    comic.cloudNewer      = false;
-    comic.cloudOnly       = false;
+    if(!comic?.localEditorData) { edToast('No hay versión local guardada'); return; }
+    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios actuales no guardados localmente.')) return;
+    // Restaurar localEditorData como editorData activo
+    comic.editorData = comic.localEditorData;
+    comic.cloudNewer = false;
     ComicStore.save(comic);
+    // Recargar la obra
     edLoadProject(edProjectId);
     edToast('Versión del dispositivo restaurada ✓');
   });
@@ -15615,35 +15526,11 @@ function edBibGuardar() {
       }).catch(() => edToast('Error al leer el GIF'));
       return;
     }
-    const _la_layerData = edSerLayer(la);
-    // Para animaciones PNG con _pngFramesKey: cargar frames de IDB antes de guardar en biblioteca
-    // La biblioteca necesita _pngFrames inline — la clave IDB local no funciona en otros dispositivos
-    if (_la_layerData && _la_layerData._pngFramesKey && la._isGcpImage) {
-      const _idbKey = _la_layerData._pngFramesKey;
-      const _frames = la._pngFrames && la._pngFrames.length ? Promise.resolve(la._pngFrames)
-                    : _edAnimIdbLoad(_idbKey);
-      _frames.then(frames => {
-        if (frames && frames.length) {
-          _la_layerData._pngFrames = frames;
-        }
-        delete _la_layerData._pngFramesKey;
-        const _entry = {
-          id: Date.now() + '_' + Math.random().toString(36).slice(2,7),
-          timestamp: Date.now(), isGroup: false,
-          layerData: _la_layerData, thumb: _bibThumb(la),
-        };
-        const _d2 = _bibLoad();
-        const _realFolders2 = _d2.folders.filter(f => f.name !== 'Animaciones');
-        if (_realFolders2.length > 1) { _bibShowFolderPicker(_entry, _d2); }
-        else { _realFolders2[0].items.push(_entry); _bibSave(_d2); edToast('Guardado en la biblioteca ✓'); }
-      });
-      return;
-    }
     entry = {
       id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
       timestamp: Date.now(),
       isGroup:   false,
-      layerData: _la_layerData,
+      layerData: edSerLayer(la),
       thumb:     _bibThumb(la),
     };
   }
