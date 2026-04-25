@@ -355,7 +355,12 @@ const SupabaseClient = (() => {
           });
         } // end for j
         window._edDiagUpload.push('  layerRows.length antes de upsert: ' + layerRows.length);
-        if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
+        window._edDiagUpload.push('  payload bytes: ' + JSON.stringify(layerRows).length);
+        if(layerRows.length > 0) {
+          const _upsertResp = await _upsert('panel_layers', layerRows);
+          window._edDiagUpload.push('  upsert response rows: ' + (_upsertResp ? _upsertResp.length : 'null'));
+          if (_upsertResp) _upsertResp.forEach((r,ri) => window._edDiagUpload.push('    row['+ri+'] id:'+r.id+' layer_order:'+r.layer_order));
+        }
       }
 
       // Textos para el reader (panel_texts sin cambios)
