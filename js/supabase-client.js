@@ -607,11 +607,15 @@ const SupabaseClient = (() => {
     const rows = [];
     for (const folder of folders) {
       for (const entry of (folder.items || [])) {
-        const _ld = await _czCompress(JSON.stringify(entry.layerData));
+        // Para GIFs: guardar gifDataUrl como layer_data con flag isGifAnim
+        const _payload = entry.isGifAnim
+          ? { isGifAnim: true, gifDataUrl: entry.gifDataUrl, pngFrames: entry.pngFrames }
+          : entry.layerData;
+        const _ld = await _czCompress(JSON.stringify(_payload));
         rows.push({
           id:          entry.id,
           author_id:   authorId,
-          layer_type:  (entry.layerData && entry.layerData.type) || 'unknown',
+          layer_type:  entry.isGifAnim ? 'gif' : ((entry.layerData && entry.layerData.type) || 'unknown'),
           layer_data:  _ld,
           thumb:       entry.thumb,
           folder_id:   prefix + folder.id,
@@ -634,7 +638,6 @@ const SupabaseClient = (() => {
     const prefix = workId ? workId + '::' : '';
     const folderMap = new Map();
     for (const r of rows) {
-      // Quitar el prefijo del proyecto del folder_id para obtener el id real
       const rawFid = r.folder_id || '__root__';
       const fid  = prefix && rawFid.startsWith(prefix) ? rawFid.slice(prefix.length) : rawFid;
       const fname = r.folder_name || 'General';
@@ -644,12 +647,27 @@ const SupabaseClient = (() => {
         const _rld = await _czDecompress(r.layer_data);
         ld = JSON.parse(_rld);
       } catch(e) {}
-      if (ld) folderMap.get(fid).items.push({
-        id:        r.id,
-        timestamp: new Date(r.created_at).getTime(),
-        layerData: ld,
-        thumb:     r.thumb,
-      });
+      if (!ld) continue;
+      // Reconstruir item: GIF o layer normal
+      if (ld.isGifAnim) {
+        folderMap.get(fid).items.push({
+          id:         r.id,
+          timestamp:  new Date(r.created_at).getTime(),
+          isGroup:    false,
+          isGifAnim:  true,
+          gifDataUrl: ld.gifDataUrl,
+          pngFrames:  ld.pngFrames || null,
+          layerData:  null,
+          thumb:      r.thumb,
+        });
+      } else {
+        folderMap.get(fid).items.push({
+          id:        r.id,
+          timestamp: new Date(r.created_at).getTime(),
+          layerData: ld,
+          thumb:     r.thumb,
+        });
+      }
     }
     return { folders: [...folderMap.values()] };
   }
