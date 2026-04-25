@@ -258,14 +258,21 @@ const SupabaseClient = (() => {
 
   async function _uploadPanels(comic) {
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
-    if (!comic.panels || comic.panels.length === 0) return;
 
-    // editorData.pages[] contiene las capas editables (edSerLayer).
-    // comic.panels[] contiene el render plano + textos para el reader.
+    // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
+    // Usar editorData.pages como fuente de verdad para las capas
     const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
+    const panels  = comic.panels && comic.panels.length ? comic.panels : edPages.map((p, i) => ({
+      dataUrl:     null,
+      orientation: p.orientation === 'horizontal' ? 'h' : 'v',
+      textMode:    p.textMode || 'sequential',
+      texts:       p.texts || [],
+    }));
 
-    for (let i = 0; i < comic.panels.length; i++) {
-      const p = comic.panels[i];
+    if (!panels.length) return;
+
+    for (let i = 0; i < panels.length; i++) {
+      const p = panels[i];
       const ins = await _upsert('panels', {
         work_id:     comic.supabaseId,
         panel_order: i,
