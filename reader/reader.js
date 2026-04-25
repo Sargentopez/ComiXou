@@ -939,6 +939,16 @@ async function loadDraft(token) {
 
 // ── Descompresión gzip de layer_data (CompressionStream W3C nativo) ──
 const _CZ_PFX = 'gz:';
+
+// Descarga y descomprime frames PNG desde bucket 'anims'
+async function _animDownload(animUrl) {
+  const r = await fetch(animUrl);
+  if (!r.ok) throw new Error('anim download: ' + r.status);
+  const text = await r.text();
+  const json = await _czDecompress(text);
+  return JSON.parse(json);
+}
+
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
   if (typeof DecompressionStream === 'undefined') return str;
@@ -994,7 +1004,11 @@ async function _loadPanels(workId) {
         try {
           const _raw = await _czDecompress(r.layer_data);
           const l = JSON.parse(_raw);
-          if (l && l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
+          if (!l) return null;
+          if (l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
+          if (l._isGcpImage && r.anim_url && !l._pngFrames) {
+            try { l._pngFrames = await _animDownload(r.anim_url); } catch(e) {}
+          }
           return l;
         } catch(e) { return null; }
       })

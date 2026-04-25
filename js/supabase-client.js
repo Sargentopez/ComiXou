@@ -215,13 +215,34 @@ const SupabaseClient = (() => {
                 if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
             } catch(e) { console.warn('GIF cloud upload:', e); }
           }
-          const _ld = await _czCompress(JSON.stringify(l));
+          // Serializar la capa — excluir campos de re-edición que el reader no necesita
+          const _lClean = {...l};
+          delete _lClean._gcpLayersData;
+          delete _lClean._gcpFramesData;
+          delete _lClean._gcpLayerNames;
+
+          // Frames PNG grandes (> 200KB) → bucket 'anims'; pequeños → layer_data
+          let animUrl = null;
+          if (_lClean._pngFrames && _lClean._pngFrames.length) {
+            const _framesStr = JSON.stringify(_lClean._pngFrames);
+            if (_framesStr.length > 200000) {
+              try {
+                animUrl = await _animUpload('anim_' + panelId + '_' + j, _framesStr);
+                delete _lClean._pngFrames;  // ya están en Storage
+              } catch(e) {
+                console.warn('anim upload failed, keeping in layer_data:', e);
+              }
+            }
+          }
+
+          const _ld = await _czCompress(JSON.stringify(_lClean));
           layerRows.push({
             panel_id:    panelId,
             layer_order: j,
             layer_type:  l.type,
-            layer_data:  _ld, // comprimido con gzip si > 512 bytes (prefijo 'gz:')
+            layer_data:  _ld,
             gif_url:     gifUrl,
+            anim_url:    animUrl,
           });
         }
         await _upsert('panel_layers', layerRows);
@@ -367,6 +388,10 @@ const SupabaseClient = (() => {
           layerObj = JSON.parse(_raw);
         } catch(e) {}
         if (!layerObj) continue;
+        // Animación PNG con frames en bucket 'anims' (> 200KB al guardar)
+        if (layerObj._isGcpImage && row.anim_url && !layerObj._pngFrames) {
+          try { layerObj._pngFrames = await _animDownload(row.anim_url); } catch(e) {}
+        }
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {
           try {
