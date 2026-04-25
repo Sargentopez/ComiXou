@@ -273,15 +273,20 @@ function _mcRenderList() {
     if (action === 'read') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
-      if (comic.supabaseId) {
-        // Tiene ID en nube: usar el reproductor externo
-        const param = comic.published ? `id=${comic.supabaseId}` : `draft=${comic.supabaseId}`;
+      if (comic.supabaseId && comic.published) {
+        // Obra publicada: usar el reproductor externo (anon key puede leer)
         const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
         if (_isFs2) sessionStorage.setItem('cx_was_fs', '1');
         else sessionStorage.removeItem('cx_was_fs');
-        window.location = 'reader/index.html?' + param + '&from=app' + (_isFs2 ? '&fs=1' : '');
+        window.location = 'reader/index.html?id=' + comic.supabaseId + '&from=app' + (_isFs2 ? '&fs=1' : '');
+      } else if (comic.supabaseId && comic.pendingReview) {
+        // En revisión: el reproductor externo puede leerla (RLS permite pending_review=true)
+        const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        if (_isFs2) sessionStorage.setItem('cx_was_fs', '1');
+        else sessionStorage.removeItem('cx_was_fs');
+        window.location = 'reader/index.html?draft=' + comic.supabaseId + '&from=app' + (_isFs2 ? '&fs=1' : '');
       } else {
-        // Solo local: visor interno del SPA
+        // Borrador local o cloudOnly: visor interno del SPA (usa panels[] locales)
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
@@ -314,20 +319,24 @@ function _mcRenderList() {
             };
             req.onerror = () => res();
           });
+          // Guardar _pngFrames en IndexedDB y construir editorData limpio
+          // Hay que esperar a que todos los IDB writes terminen antes de abrir el editor
+          const _idbWrites = [];
           const _edataClean = {
             ...editorData,
             pages: (editorData.pages || []).map((pg, pi) => ({
               ...pg,
               layers: (pg.layers || []).map((l, li) => {
                 if (!l._pngFrames) return l;
-                // Guardar frames en IDB y marcar el layer con la clave
                 const _idbKey = comicToEdit.id + '_' + pi + '_' + li;
-                _animIdbSave(_idbKey, l._pngFrames);
+                _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
                 const { _pngFrames, ...lClean } = l;
                 return { ...lClean, _pngFramesKey: _idbKey };
               }),
             })),
           };
+          // Esperar todos los writes antes de continuar
+          await Promise.all(_idbWrites);
           ComicStore.save({
             ...comicToEdit,
             cloudOnly: false,

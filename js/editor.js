@@ -12028,6 +12028,18 @@ async function edCloudSave() {
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
   edSaveProject();
 
+  // Esperar a que los writes de IDB (frames PNG) terminen antes de subir a la nube
+  // edSaveProject lanza _edAnimIdbSave sin await — aquí los completamos
+  const _idbWrites = [];
+  edPages.forEach((pg, pi) => {
+    pg.layers.forEach((l, li) => {
+      if(l._pngFrames && l._pngFrames.length && l._pngFramesKey) {
+        _idbWrites.push(_edAnimIdbSave(l._pngFramesKey, l._pngFrames));
+      }
+    });
+  });
+  if(_idbWrites.length) await Promise.all(_idbWrites);
+
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
@@ -15607,7 +15619,19 @@ function edBibGuardar() {
       id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
       timestamp: Date.now(),
       isGroup:   false,
-      layerData: edSerLayer(la),
+      layerData: (() => {
+        const _ld = edSerLayer(la);
+        // Para animaciones PNG: la biblioteca SIEMPRE guarda _pngFrames inline
+        // (_pngFramesKey es una referencia IDB local — no funciona en otros dispositivos)
+        if (_ld && _ld._pngFramesKey) {
+          if (la._pngFrames && la._pngFrames.length) {
+            // Frames ya en memoria
+            _ld._pngFrames = la._pngFrames;
+          }
+          delete _ld._pngFramesKey;
+        }
+        return _ld;
+      })(),
       thumb:     _bibThumb(la),
     };
   }
