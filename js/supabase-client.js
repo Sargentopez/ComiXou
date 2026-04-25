@@ -120,14 +120,14 @@ const SupabaseClient = (() => {
   }
 
   async function _delete(table, filter) {
-    const r = await fetch(`${BASE}/${table}?${filter}`, { method: 'DELETE', headers: hdrs });
-    if (!r.ok) throw new Error(`DELETE ${table}: ${r.status}`);
+    const r = await fetch(`${BASE}/${table}?${filter}`, { method: 'DELETE', headers: _hdrsUser() });
+    if (!r.ok) throw new Error(`DELETE ${table}: ${r.status} ${await r.text()}`);
   }
 
   async function _patch(table, filter, data) {
     const r = await fetch(`${BASE}/${table}?${filter}`, {
       method:  'PATCH',
-      headers: { ...hdrs, 'Prefer': 'return=minimal' },
+      headers: { ..._hdrsUser(), 'Prefer': 'return=minimal' },
       body:    JSON.stringify(data),
     });
     if (!r.ok) throw new Error(`PATCH ${table}: ${r.status}`);
@@ -336,7 +336,7 @@ const SupabaseClient = (() => {
   }
 
   async function deleteWork(supabaseId) {
-    // Borrar panel_texts → panels → work (en orden por FK)
+    // Borrar en orden FK: panel_layers → panel_texts → panels → works
     const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
     for (const p of (panels || [])) {
       // Borrar GIFs del bucket antes de borrar las capas
@@ -344,10 +344,11 @@ const SupabaseClient = (() => {
         const gifLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.gif&select=gif_url`);
         for (const gl of (gifLayers || [])) { await _gifDelete(gl.gif_url); }
       } catch(e) {}
-      await _delete('panel_texts', `panel_id=eq.${p.id}`);
+      await _delete('panel_layers', `panel_id=eq.${p.id}`);
+      await _delete('panel_texts',  `panel_id=eq.${p.id}`);
     }
     await _delete('panels', `work_id=eq.${supabaseId}`);
-    await _delete('works', `id=eq.${supabaseId}`);
+    await _delete('works',  `id=eq.${supabaseId}`);
   }
 
   // Borrar todas las obras de un autor y su perfil de authors

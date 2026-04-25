@@ -396,13 +396,15 @@ function _mcRenderList() {
         appAlert('No tienes permiso para retirar esta obra.');
         return;
       }
-      ComicStore.save({ ...comic, published: false, approved: false });
+      ComicStore.save({ ...comic, published: false, approved: false, pendingReview: false });
       if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
         SupabaseClient.unpublishWork(comic.id, comic.supabaseId)
-          .catch(err => console.warn('Supabase unpublishWork:', err));
+          .catch(err => { _mcToast('⚠️ Error al retirar en la nube: ' + err.message); });
       }
+      // Invalidar cache de portada para que desaparezca del índice
+      if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
       _mcRenderList();
-      _mcToast('Retirada del expositor');
+      _mcToast('Obra retirada de la portada');
     } else if (action === 'delete') {
       const comic = ComicStore.getById(id);
       if (comic && typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
@@ -410,13 +412,17 @@ function _mcRenderList() {
         return;
       }
       appConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
-        if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
-          SupabaseClient.deleteWork(comic.supabaseId)
-            .catch(err => console.warn('Supabase deleteWork:', err));
-        }
         ComicStore.remove(id);
         _mcRenderList();
-        _mcToast('Obra eliminada');
+        // Invalidar cache de portada
+        if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
+        if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+          SupabaseClient.deleteWork(comic.supabaseId)
+            .then(() => _mcToast('Obra eliminada ✓'))
+            .catch(err => _mcToast('⚠️ Eliminada localmente, error en nube: ' + err.message));
+        } else {
+          _mcToast('Obra eliminada');
+        }
       });
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
