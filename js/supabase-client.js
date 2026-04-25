@@ -290,9 +290,12 @@ const SupabaseClient = (() => {
       // Capas del editor: image, draw, stroke, bubble, text, gif — formato edSerLayer
       const edPage = edPages[i];
       if (edPage && edPage.layers && edPage.layers.length > 0) {
+        window._edDiagUpload = (window._edDiagUpload||[]);
+        window._edDiagUpload.push('panel[' + i + '] edPage.layers.length=' + edPage.layers.length);
         const layerRows = [];
         for (let j = 0; j < edPage.layers.length; j++) {
           const l = edPage.layers[j];
+          window._edDiagUpload.push('  L' + j + ' type:' + l.type + ' _isGcpImage:' + (l._isGcpImage||false) + ' _pngFramesKey:' + (l._pngFramesKey||'none') + ' _pngFrames:' + (l._pngFrames?l._pngFrames.length:0));
           let gifUrl = null;
           // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
           if (l.type === 'gif' && l.gifKey) {
@@ -341,6 +344,7 @@ const SupabaseClient = (() => {
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
+          window._edDiagUpload.push('  L' + j + ' _ld bytes:' + _ld.length + ' prefix:' + _ld.slice(0,6) + ' _pngFrames_en_lClean:' + (_lClean._pngFrames?_lClean._pngFrames.length:0) + ' animUrl:' + (animUrl||'null'));
           layerRows.push({
             panel_id:    panelId,
             layer_order: j,
@@ -349,7 +353,8 @@ const SupabaseClient = (() => {
             gif_url:     gifUrl,
             anim_url:    animUrl,
           });
-        }
+        } // end for j
+        window._edDiagUpload.push('  layerRows.length antes de upsert: ' + layerRows.length);
         if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
       }
 
