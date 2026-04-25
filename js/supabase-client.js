@@ -98,7 +98,7 @@ const SupabaseClient = (() => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000); // 8s timeout
     try {
-      const r = await fetch(`${BASE}/${path}`, { headers: hdrs, signal: controller.signal });
+      const r = await fetch(`${BASE}/${path}`, { headers: _hdrsUser(), signal: controller.signal });
       clearTimeout(timer);
       if (!r.ok) throw new Error(`GET ${path}: ${r.status} ${await r.text()}`);
       return r.json();
@@ -121,7 +121,7 @@ const SupabaseClient = (() => {
 
   async function _delete(table, filter) {
     const r = await fetch(`${BASE}/${table}?${filter}`, { method: 'DELETE', headers: _hdrsUser() });
-    if (!r.ok) throw new Error(`DELETE ${table}: ${r.status}`);
+    if (!r.ok) throw new Error(`DELETE ${table}: ${r.status} ${await r.text()}`);
   }
 
   async function _patch(table, filter, data) {
@@ -148,6 +148,35 @@ const SupabaseClient = (() => {
     });
   }
 
+  // Lee frames PNG desde IndexedDB 'cxAnims' (guardados por el editor con _pngFramesKey)
+  function _sbAnimIdbLoad(key) {
+    return new Promise(res => {
+      const req = indexedDB.open('cxAnims', 1);
+      req.onsuccess = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('anims')) { res(null); return; }
+        const r = db.transaction('anims').objectStore('anims').get(key);
+        r.onsuccess = e2 => res(e2.target.result || null);
+        r.onerror   = () => res(null);
+      };
+      req.onerror = () => res(null);
+    });
+  }
+
+  function _sbAnimIdbSave(key, frames) {
+    return new Promise(res => {
+      const req = indexedDB.open('cxAnims', 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+      req.onsuccess = e => {
+        const tx = e.target.result.transaction('anims', 'readwrite');
+        tx.objectStore('anims').put(frames, key);
+        tx.oncomplete = () => res();
+        tx.onerror    = () => res();
+      };
+      req.onerror = () => res();
+    });
+  }
+
   // Sube un dataUrl GIF al bucket y devuelve la URL pública
   async function _gifUpload(gifKey, dataUrl) {
     // dataUrl → Blob binario (sin fetch, compatible con todos los navegadores)
@@ -159,7 +188,7 @@ const SupabaseClient = (() => {
     const path = gifKey + '.gif';
     const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
       method:  'POST',
-      headers: { 'apikey': KEY, 'Authorization': `Bearer ${KEY}`, 'Content-Type': 'image/gif', 'x-upsert': 'true' },
+      headers: { ..._hdrsUser(), 'Content-Type': 'image/gif', 'x-upsert': 'true' },
       body:    blob,
     });
     if (!r.ok) throw new Error(`GIF upload: ${r.status} ${await r.text()}`);
@@ -172,8 +201,55 @@ const SupabaseClient = (() => {
     const path = gifUrl.replace(`${STORAGE}/object/public/gifs/`, '');
     await fetch(`${STORAGE}/object/gifs/${path}`, {
       method:  'DELETE',
-      headers: { 'apikey': KEY, 'Authorization': `Bearer ${KEY}` },
+      headers: _hdrsUser(),
     }).catch(() => {});
+  }
+
+  // Sube frames PNG (JSON string comprimido) al bucket 'anims'
+  async function _animUpload(key, framesJson) {
+    const compressed = await _czCompress(framesJson);
+    const b64 = compressed.startsWith('gz:') ? compressed.slice(3) : btoa(unescape(encodeURIComponent(framesJson)));
+    // atob por chunks — evita stack overflow en Android con strings > 500KB
+    const CHUNK = 8192;
+    const parts = [];
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      const bin = atob(b64.slice(i, i + CHUNK));
+      const part = new Uint8Array(bin.length);
+      for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
+      parts.push(part);
+    }
+    const totalLen = parts.reduce((a, p) => a + p.length, 0);
+    const u8 = new Uint8Array(totalLen);
+    let off = 0;
+    for (const p of parts) { u8.set(p, off); off += p.length; }
+    const blob = new Blob([u8], { type: 'application/octet-stream' });
+    const path = key + '.anim';
+    const r = await fetch(`${STORAGE}/object/anims/${path}`, {
+      method:  'POST',
+      headers: { ..._hdrsUser(), 'Content-Type': 'application/octet-stream', 'x-upsert': 'true' },
+      body:    blob,
+    });
+    if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
+    return `${STORAGE}/object/public/anims/${path}`;
+  }
+
+  // Descarga frames PNG desde bucket 'anims' y devuelve array de dataUrls
+  async function _animDownload(animUrl) {
+    if (!animUrl) return null;
+    const r = await fetch(animUrl);
+    if (!r.ok) return null;
+    const buf   = await r.arrayBuffer();
+    const u8    = new Uint8Array(buf);
+    const CHUNK = 8192;
+    let b64 = '';
+    for (let i = 0; i < u8.length; i += CHUNK) {
+      b64 += btoa(String.fromCharCode(...u8.subarray(i, i + CHUNK)));
+    }
+    // Intentar descomprimir (puede ser gz: o plano)
+    const str = await _czDecompress('gz:' + b64).catch(() => null)
+      || await _czDecompress(b64).catch(() => null)
+      || String.fromCharCode(...u8);
+    try { return JSON.parse(str); } catch(e) { return null; }
   }
 
   async function _uploadPanels(comic) {
@@ -220,9 +296,17 @@ const SupabaseClient = (() => {
           delete _lClean._gcpLayersData;
           delete _lClean._gcpFramesData;
           delete _lClean._gcpLayerNames;
+          delete _lClean._pngFramesKey;  // clave IDB local — no tiene sentido en Supabase
 
           // Frames PNG grandes (> 200KB) → bucket 'anims'; pequeños → layer_data
+          // Si los frames están en IDB (guardado local con _pngFramesKey), recuperarlos desde l (original)
           let animUrl = null;
+          if (l._pngFramesKey && !_lClean._pngFrames) {
+            try {
+              const _frames = await _sbAnimIdbLoad(l._pngFramesKey);
+              if (_frames && _frames.length) _lClean._pngFrames = _frames;
+            } catch(e) {}
+          }
           if (_lClean._pngFrames && _lClean._pngFrames.length) {
             const _framesStr = JSON.stringify(_lClean._pngFrames);
             if (_framesStr.length > 200000) {
@@ -245,7 +329,7 @@ const SupabaseClient = (() => {
             anim_url:    animUrl,
           });
         }
-        await _upsert('panel_layers', layerRows);
+        if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
       }
 
       // Textos para el reader (panel_texts sin cambios)
@@ -295,17 +379,18 @@ const SupabaseClient = (() => {
     }
 
     await _upsert('works', {
-      id:          sid,
-      title:       comic.title      || '',
-      author_name: comic.author     || comic.username || '',
-      author_id:   comic.userId     || null,
-      genre:       comic.genre      || '',
-      nav_mode:    comic.navMode    || 'fixed',
-      social:      comic.social     || '',
-      panel_count: comic.panels?.length || 0,
-      rules:       JSON.stringify(comic.editorData?._rules || []),
-      published:   false,
-      updated_at:  new Date().toISOString(),
+      id:             sid,
+      title:          comic.title      || '',
+      author_name:    comic.author     || comic.username || '',
+      author_id:      comic.userId     || null,
+      genre:          comic.genre      || '',
+      nav_mode:       comic.navMode    || 'fixed',
+      social:         comic.social     || '',
+      panel_count:    comic.panels?.length || 0,
+      rules:          JSON.stringify(comic.editorData?._rules || []),
+      published:      false,
+      pending_review: false,
+      updated_at:     new Date().toISOString(),
     });
     await _uploadPanels(comic);
     return { sizeKB };
@@ -313,15 +398,16 @@ const SupabaseClient = (() => {
 
   async function submitForReview(comic) {
     await _upsert('works', {
-      id:          comic.supabaseId,
-      title:       comic.title   || '',
-      author_name: comic.author  || comic.username || '',
-      author_id:   comic.userId  || null,
-      genre:       comic.genre   || '',
-      nav_mode:    comic.navMode || 'fixed',
-      social:      comic.social  || '',
-      panel_count: comic.panels?.length || 0,
-      published:   false,
+      id:             comic.supabaseId,
+      title:          comic.title   || '',
+      author_name:    comic.author  || comic.username || '',
+      author_id:      comic.userId  || null,
+      genre:          comic.genre   || '',
+      nav_mode:       comic.navMode || 'fixed',
+      social:         comic.social  || '',
+      panel_count:    comic.panels?.length || 0,
+      published:      false,
+      pending_review: true,
     });
     await _uploadPanels(comic);
   }
@@ -329,16 +415,16 @@ const SupabaseClient = (() => {
   async function approveWork(comic) {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId');
-    await _patch('works', `id=eq.${sid}`, { published: true });
+    await _patch('works', `id=eq.${sid}`, { published: true, pending_review: false });
   }
 
   async function unpublishWork(workId, supabaseId) {
     const sid = supabaseId || workId;
-    await _patch('works', `id=eq.${sid}`, { published: false });
+    await _patch('works', `id=eq.${sid}`, { published: false, pending_review: false });
   }
 
   async function deleteWork(supabaseId) {
-    // Borrar panel_texts → panels → work (en orden por FK)
+    // Borrar en orden FK: panel_layers → panel_texts → panels → works
     const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
     for (const p of (panels || [])) {
       // Borrar GIFs del bucket antes de borrar las capas
@@ -346,10 +432,11 @@ const SupabaseClient = (() => {
         const gifLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.gif&select=gif_url`);
         for (const gl of (gifLayers || [])) { await _gifDelete(gl.gif_url); }
       } catch(e) {}
-      await _delete('panel_texts', `panel_id=eq.${p.id}`);
+      await _delete('panel_layers', `panel_id=eq.${p.id}`);
+      await _delete('panel_texts',  `panel_id=eq.${p.id}`);
     }
     await _delete('panels', `work_id=eq.${supabaseId}`);
-    await _delete('works', `id=eq.${supabaseId}`);
+    await _delete('works',  `id=eq.${supabaseId}`);
   }
 
   // Borrar todas las obras de un autor y su perfil de authors
@@ -392,7 +479,10 @@ const SupabaseClient = (() => {
         if (!layerObj) continue;
         // Animación PNG con frames en bucket 'anims' (> 200KB al guardar)
         if (layerObj._isGcpImage && row.anim_url && !layerObj._pngFrames) {
-          try { layerObj._pngFrames = await _animDownload(row.anim_url); } catch(e) {}
+          try {
+            const _frames = await _animDownload(row.anim_url);
+            if (_frames && _frames.length) layerObj._pngFrames = _frames;
+          } catch(e) {}
         }
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {
@@ -444,7 +534,7 @@ const SupabaseClient = (() => {
   async function _fetchWorks(filter) {
     const works = await _get(
       `works?${filter}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,social,published,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at`
     );
     if (!works || !works.length) return [];
 
@@ -462,7 +552,7 @@ const SupabaseClient = (() => {
   }
 
   async function fetchPendingWorks() {
-    return _fetchWorks('published=eq.false');
+    return _fetchWorks('pending_review=eq.true&published=eq.false');
   }
 
   async function fetchPublishedWorks() {
@@ -476,13 +566,14 @@ const SupabaseClient = (() => {
       supabaseId:    w.id,
       title:         w.title        || '(sin título)',
       author:        w.author_name  || '',
-      username:      w.author_name  || '',   // home.js filtra por username
+      username:      w.author_name  || '',
       genre:         w.genre        || '',
       navMode:       w.nav_mode     || 'fixed',
       social:        w.social       || '',
       published:     published,
       approved:      published,
-      pendingReview: !published,
+      // pending_review viene de Supabase — fuente de verdad definitiva
+      pendingReview: published ? false : (w.pending_review || false),
       updatedAt:     w.updated_at,
       panels:        thumb ? [{ dataUrl: thumb }] : [],
     };
@@ -568,7 +659,7 @@ const SupabaseClient = (() => {
     if(!authorId) return [];
     const works = await _get(
       `works?author_id=eq.${authorId}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,social,published,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at`
     ).catch(() => []);
     if(!works || !works.length) return [];
     const ids = works.map(w => w.id).join(',');

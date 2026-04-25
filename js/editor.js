@@ -1126,7 +1126,13 @@ class GifLayer extends BaseLayer {
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
       if (typeof edRedraw === 'function' && typeof edCanvas !== 'undefined' && edCanvas) {
-        requestAnimationFrame(() => edRedraw());
+        requestAnimationFrame(() => {
+          if ($('editorViewer')?.classList.contains('open') && typeof edUpdateViewer === 'function') {
+            edUpdateViewer();
+          } else {
+            edRedraw();
+          }
+        });
       }
     }, frame.delay);
   }
@@ -12019,6 +12025,9 @@ async function edCloudSave() {
     return;
   }
 
+  // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
+  edSaveProject();
+
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
@@ -12037,6 +12046,13 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+    // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
+    // El autor deberá volver a solicitar publicación.
+    const _comicAfter = ComicStore.getById(edProjectId);
+    if (_comicAfter && (_comicAfter.approved || _comicAfter.pendingReview)) {
+      ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false });
+      if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
+    }
     // Sincronizar biblioteca con la nube
     const user = Auth?.currentUser?.();
     if (user && user.id) {
@@ -12150,6 +12166,10 @@ function edSaveProject(){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
+    // Al guardar localmente: esta es la versión local canónica
+    cloudOnly:  false,
+    cloudNewer: false,
+    // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
   });
   edToast('Guardado ✓');
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
@@ -12587,6 +12607,7 @@ function edSerLayer(l){
     if(l.locked) _r.locked=true;
     if(l._keepSize) _r._keepSize=true;
     if(l._isGcpImage) _r._isGcpImage=true;
+    // Frames en IDB: usar clave (nunca guardar frames grandes en localStorage)
     if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
@@ -12759,6 +12780,20 @@ function _edAnimIdbLoad(key) {
   });
 }
 
+function _edAnimIdbSave(key, frames) {
+  return new Promise(res => {
+    const req = indexedDB.open('cxAnims', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+    req.onsuccess = e => {
+      const tx = e.target.result.transaction('anims', 'readwrite');
+      tx.objectStore('anims').put(frames, key);
+      tx.oncomplete = () => res();
+      tx.onerror    = () => res();
+    };
+    req.onerror = () => res();
+  });
+}
+
 function edDeserLayer(d, pageOrientation){
   if(!d) return null;
   if(d.type==='group') return null; // obsoleto
@@ -12823,7 +12858,21 @@ function edDeserLayer(d, pageOrientation){
     const l=new GifLayer(d.gifKey||'',d.x,d.y,d.width);
     l.height=d.height||0.3; l.rotation=d.rotation||0;
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{ if(src) l.load(src,()=>edRedraw()); }).catch(()=>{});
+    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{
+      if(!src) return;
+      l.load(src, () => {
+        // Si el visor está abierto y reproduciendo, arrancar animación en este layer
+        if($('editorViewer')?.classList.contains('open') && typeof _edGifSetPlaying==='function') {
+          l._playing = true;
+          l._applyFrame(0);
+        }
+        if(typeof edUpdateViewer==='function' && $('editorViewer')?.classList.contains('open')) {
+          edUpdateViewer();
+        } else if(typeof edRedraw==='function') {
+          edRedraw();
+        }
+      });
+    }).catch(()=>{});
     return l;
   }
   if(d.type==='image'){
@@ -12840,7 +12889,17 @@ function edDeserLayer(d, pageOrientation){
     if(d._pngFrames) l._pngFrames=d._pngFrames;
     if(d._pngFramesKey && !d._pngFrames) {
       _edAnimIdbLoad(d._pngFramesKey).then(frames => {
-        if(frames && frames.length) { l._pngFrames=frames; edRedraw(); }
+        if(frames && frames.length) {
+          l._pngFrames=frames;
+          // Si el visor está abierto y reproduciendo, arrancar animación
+          if($('editorViewer')?.classList.contains('open')) {
+            l._playing = true;
+            l._preloadPngFrames(() => { if(l._playing) l._applyPngFrame(0); });
+            if(typeof edUpdateViewer==='function') edUpdateViewer();
+          } else {
+            edRedraw();
+          }
+        }
       });
     }
     if(d.src){
@@ -14699,14 +14758,14 @@ function EditorView_init(){
   $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
   $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
   $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
-  // Mostrar "Recuperar versión del dispositivo" solo si hay versión local guardada
+  // Mostrar "Recuperar versión del dispositivo" si hay versión local guardada
   function _edUpdateRecoverBtn() {
     const btn = $('dd-recoverlocal');
     if(!btn || !edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    // Mostrar si: tiene localEditorData guardado Y la nube es más reciente
-    const hasLocal = !!(comic?.localEditorData);
-    btn.style.display = hasLocal ? '' : 'none';
+    // Mostrar si hay backup local guardado (localEditorData)
+    // Se guarda cuando se descarga la nube sobre un editorData local existente
+    btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
   }
 
   // Actualizar al abrir el menú proyecto
@@ -14718,13 +14777,13 @@ function EditorView_init(){
     edCloseMenus();
     if(!edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    if(!comic?.localEditorData) { edToast('No hay versión local guardada'); return; }
-    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios actuales no guardados localmente.')) return;
-    // Restaurar localEditorData como editorData activo
-    comic.editorData = comic.localEditorData;
-    comic.cloudNewer = false;
+    if(!comic?.localEditorData?.pages?.length) { edToast('No hay versión local guardada'); return; }
+    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios de la nube no guardados localmente.')) return;
+    comic.editorData      = comic.localEditorData;
+    comic.localEditorData = null;
+    comic.cloudNewer      = false;
+    comic.cloudOnly       = false;
     ComicStore.save(comic);
-    // Recargar la obra
     edLoadProject(edProjectId);
     edToast('Versión del dispositivo restaurada ✓');
   });

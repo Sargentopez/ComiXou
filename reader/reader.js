@@ -914,7 +914,7 @@ async function loadDraft(token) {
     if (!work || !work.length) { showError('Borrador no encontrado o enlace caducado.'); return; }
 
     setLoadingMsg('Cargando páginas...');
-    await _loadPanels(token, true);
+    await _loadPanels(token, true);  // true = usar JWT para leer capas del borrador
     document.title = (work[0].title || 'Borrador') + ' — ComiXow';
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
@@ -944,8 +944,16 @@ const _CZ_PFX = 'gz:';
 async function _animDownload(animUrl) {
   const r = await fetch(animUrl);
   if (!r.ok) throw new Error('anim download: ' + r.status);
-  const text = await r.text();
-  const json = await _czDecompress(text);
+  const buf  = await r.arrayBuffer();
+  const u8   = new Uint8Array(buf);
+  const CHUNK = 8192;
+  let b64 = '';
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    b64 += btoa(String.fromCharCode(...u8.subarray(i, i + CHUNK)));
+  }
+  // Intentar descomprimir gzip; si falla, asumir JSON plano
+  const json = await _czDecompress(_CZ_PFX + b64).catch(() => null)
+    || new TextDecoder().decode(u8);
   return JSON.parse(json);
 }
 
@@ -984,16 +992,16 @@ async function _czDecompress(str) {
 }
 
 async function _loadPanels(workId, useAuth) {
-  const _fetch = useAuth ? sbGetAuth : sbGet;
-  const panels = await _fetch('panels?work_id=eq.' + workId + '&order=panel_order.asc');
+  const _sbFetch = useAuth ? sbGetAuth : sbGet;
+  const panels = await _sbFetch('panels?work_id=eq.' + workId + '&order=panel_order.asc');
   if (!panels || !panels.length) { showError('Esta obra no tiene páginas guardadas.'); return; }
 
   const panelIds = panels.map(p => p.id).join(',');
 
   // Descargar capas del editor y textos del reader en paralelo
   const [layerRows, texts] = await Promise.all([
-    _fetch('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc&select=*'),
-    _fetch('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
+    _sbFetch('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc&select=*'),
+    _sbFetch('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
   ]);
 
   RS.panels = await Promise.all(panels.map(async panel => {
@@ -1151,8 +1159,8 @@ async function sbGet(path) {
   return res.json();
 }
 
-// Para borradores propios: usa el JWT del autor si está logado en este dispositivo
-function _readerAuthHeaders() {
+// sbGetAuth: usa el JWT del usuario autenticado si está disponible (necesario para leer borradores propios)
+function _sbAuthHeaders() {
   try {
     const s = JSON.parse(localStorage.getItem('cs_session') || 'null');
     if (s && s.token) return { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + s.token };
@@ -1160,7 +1168,7 @@ function _readerAuthHeaders() {
   return { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY };
 }
 async function sbGetAuth(path) {
-  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, { headers: _readerAuthHeaders() });
+  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, { headers: _sbAuthHeaders() });
   if (!res.ok) throw new Error('Supabase ' + res.status);
   return res.json();
 }

@@ -5,6 +5,10 @@
 let activeFilter  = { type: null, value: null }; // tipo: 'genre' | 'author' | null
 let _homeWorks    = null;   // caché de obras publicadas desde Supabase
 
+// Invalida el cache de portada para forzar recarga desde Supabase.
+// Llamada desde my-comics.js tras unpublish/delete.
+function homeInvalidateCache() { _homeWorks = null; }
+
 // ── Punto de entrada SPA ──
 
 /* Refresco reactivo cuando ComicStore emite cx:store */
