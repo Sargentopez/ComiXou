@@ -309,8 +309,7 @@ const SupabaseClient = (() => {
           delete _lClean._gcpLayerNames;
           delete _lClean._pngFramesKey;  // clave IDB local — no tiene sentido en Supabase
 
-          // Frames PNG grandes (> 200KB) → bucket 'anims'; pequeños → layer_data
-          // Si los frames están en IDB (guardado local con _pngFramesKey), recuperarlos desde l (original)
+          // Frames PNG → siempre al bucket 'anims' (nunca en layer_data: gzip falla en Android con dataUrls grandes)
           let animUrl = null;
           if (l._pngFramesKey && !_lClean._pngFrames) {
             try {
@@ -320,13 +319,11 @@ const SupabaseClient = (() => {
           }
           if (_lClean._pngFrames && _lClean._pngFrames.length) {
             const _framesStr = JSON.stringify(_lClean._pngFrames);
-            if (_framesStr.length > 200000) {
-              try {
-                animUrl = await _animUpload('anim_' + panelId + '_' + j, _framesStr);
-                delete _lClean._pngFrames;  // ya están en Storage
-              } catch(e) {
-                console.warn('anim upload failed, keeping in layer_data:', e);
-              }
+            try {
+              animUrl = await _animUpload('anim_' + panelId + '_' + j, _framesStr);
+              delete _lClean._pngFrames;  // ya están en Storage
+            } catch(e) {
+              console.warn('anim upload failed, keeping in layer_data:', e);
             }
           }
 
