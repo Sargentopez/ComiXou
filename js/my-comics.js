@@ -134,6 +134,9 @@ async function _mcSyncCloudDates() {
       if (w.published !== undefined && w.published !== local.published) {
         local.published = w.published; dirty = true;
       }
+      // Sincronizar pendingReview desde la nube (ahora hay columna pending_review en Supabase)
+      const _cloudPending = w.published ? false : (w.pending_review || false);
+      if (_cloudPending !== local.pendingReview) { local.pendingReview = _cloudPending; dirty = true; }
 
       // Si la nube es más reciente: marcar cloudNewer pero preservar editorData local
       // El usuario puede recuperar la versión local desde Proyecto → Recuperar versión del dispositivo
@@ -571,9 +574,8 @@ async function _mcCloudLoad() {
         if (w.nav_mode && w.nav_mode !== existing.navMode) { existing.navMode = w.nav_mode; dirty = true; }
         existing.published     = w.published ?? existing.published;
         existing.approved      = w.published ?? existing.approved;
-        // pendingReview no se puede deducir de Supabase (no hay campo en la nube).
-        // Si la obra se publicó en la nube, ya no está en revisión. Si no, preservar valor local.
-        if (w.published) existing.pendingReview = false;
+        // Sincronizar pendingReview desde columna pending_review de Supabase
+        existing.pendingReview = w.published ? false : (w.pending_review || false);
 
         if (cloudIsNewer) {
           // La nube tiene una versión más reciente

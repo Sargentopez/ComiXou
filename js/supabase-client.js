@@ -295,16 +295,17 @@ const SupabaseClient = (() => {
     }
 
     await _upsert('works', {
-      id:          sid,
-      title:       comic.title      || '',
-      author_name: comic.author     || comic.username || '',
-      genre:       comic.genre      || '',
-      nav_mode:    comic.navMode    || 'fixed',
-      social:      comic.social     || '',
-      panel_count: comic.panels?.length || 0,
-      rules:       JSON.stringify(comic.editorData?._rules || []),
-      published:   false,
-      updated_at:  new Date().toISOString(),
+      id:             sid,
+      title:          comic.title      || '',
+      author_name:    comic.author     || comic.username || '',
+      genre:          comic.genre      || '',
+      nav_mode:       comic.navMode    || 'fixed',
+      social:         comic.social     || '',
+      panel_count:    comic.panels?.length || 0,
+      rules:          JSON.stringify(comic.editorData?._rules || []),
+      published:      false,
+      pending_review: false,
+      updated_at:     new Date().toISOString(),
     });
     await _uploadPanels(comic);
     return { sizeKB };
@@ -312,14 +313,15 @@ const SupabaseClient = (() => {
 
   async function submitForReview(comic) {
     await _upsert('works', {
-      id:          comic.supabaseId,
-      title:       comic.title   || '',
-      author_name: comic.author  || comic.username || '',
-      genre:       comic.genre   || '',
-      nav_mode:    comic.navMode || 'fixed',
-      social:      comic.social  || '',
-      panel_count: comic.panels?.length || 0,
-      published:   false,
+      id:             comic.supabaseId,
+      title:          comic.title   || '',
+      author_name:    comic.author  || comic.username || '',
+      genre:          comic.genre   || '',
+      nav_mode:       comic.navMode || 'fixed',
+      social:         comic.social  || '',
+      panel_count:    comic.panels?.length || 0,
+      published:      false,
+      pending_review: true,
     });
     await _uploadPanels(comic);
   }
@@ -327,12 +329,12 @@ const SupabaseClient = (() => {
   async function approveWork(comic) {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId');
-    await _patch('works', `id=eq.${sid}`, { published: true });
+    await _patch('works', `id=eq.${sid}`, { published: true, pending_review: false });
   }
 
   async function unpublishWork(workId, supabaseId) {
     const sid = supabaseId || workId;
-    await _patch('works', `id=eq.${sid}`, { published: false });
+    await _patch('works', `id=eq.${sid}`, { published: false, pending_review: false });
   }
 
   async function deleteWork(supabaseId) {
@@ -443,7 +445,7 @@ const SupabaseClient = (() => {
   async function _fetchWorks(filter) {
     const works = await _get(
       `works?${filter}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,social,published,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at`
     );
     if (!works || !works.length) return [];
 
@@ -461,7 +463,7 @@ const SupabaseClient = (() => {
   }
 
   async function fetchPendingWorks() {
-    return _fetchWorks('published=eq.false');
+    return _fetchWorks('pending_review=eq.true&published=eq.false');
   }
 
   async function fetchPublishedWorks() {
@@ -475,16 +477,14 @@ const SupabaseClient = (() => {
       supabaseId:    w.id,
       title:         w.title        || '(sin título)',
       author:        w.author_name  || '',
-      username:      w.author_name  || '',   // home.js filtra por username
+      username:      w.author_name  || '',
       genre:         w.genre        || '',
       navMode:       w.nav_mode     || 'fixed',
       social:        w.social       || '',
       published:     published,
       approved:      published,
-      // pendingReview es estado solo local — Supabase no lo almacena.
-      // Si está publicada en la nube, definitivamente no está en revisión.
-      // Si no está publicada, no sabemos (puede ser borrador o en revisión) — no tocar.
-      ...(published ? { pendingReview: false } : {}),
+      // pending_review viene de Supabase — fuente de verdad definitiva
+      pendingReview: published ? false : (w.pending_review || false),
       updatedAt:     w.updated_at,
       panels:        thumb ? [{ dataUrl: thumb }] : [],
     };
@@ -570,7 +570,7 @@ const SupabaseClient = (() => {
     if(!authorId) return [];
     const works = await _get(
       `works?author_id=eq.${authorId}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,social,published,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at`
     ).catch(() => []);
     if(!works || !works.length) return [];
     const ids = works.map(w => w.id).join(',');
