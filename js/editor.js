@@ -17551,28 +17551,42 @@ async function _gcpDownloadApng() {
   const dels = new Array(totalFrames).fill(totalFrames > 1 ? frameDelay : 0);
 
   try {
-    const apngBuf = UPNG.encode(bufs, cropW, cropH, 0, dels);
+    // UPNG.encode con forbidPlte=true: fuerza RGBA32 puro (sin paleta).
+    // Evita blend_op=1 que acumula frames y rompe la animación con transparencia.
+    const apngBuf = UPNG.encode(bufs, cropW, cropH, 0, dels, true);
 
-    // Parchear num_plays en chunk acTL: 0=infinito, 1=una vez, etc.
+    // Post-proceso del buffer APNG: recorrer todos los chunks y forzar en cada fcTL:
+    //   dispose_op = 1 (APNG_DISPOSE_OP_BACKGROUND: borrar antes del siguiente frame)
+    //   blend_op   = 0 (APNG_BLEND_OP_SOURCE: reemplazar, no mezclar)
+    // Esto garantiza animación correcta con transparencia en todos los visores.
+    // También parchear num_plays en acTL.
     const numPlays = (window._gcpRepeatCount != null ? window._gcpRepeatCount : 0);
-    if (totalFrames > 1 && numPlays !== 0) {
-      const view = new DataView(apngBuf);
-      for (let off = 8; off < apngBuf.byteLength - 12; ) {
-        const chunkLen  = view.getUint32(off);
-        const chunkType = view.getUint32(off + 4);
-        if (chunkType === 0x6163544C) { // 'acTL'
-          view.setUint32(off + 12, numPlays);
-          // Recalcular CRC del chunk (tipo + datos = 4 + 8 bytes)
-          const crcT = _gcpCrc32Table();
-          let crc = 0xFFFFFFFF;
-          for (let i = off + 4; i < off + 4 + 4 + chunkLen; i++) {
-            crc = (crcT[(crc ^ view.getUint8(i)) & 0xFF] ^ (crc >>> 8)) >>> 0;
-          }
-          view.setUint32(off + 4 + 4 + chunkLen, crc ^ 0xFFFFFFFF);
-          break;
+    const crcT = _gcpCrc32Table();
+    const view = new DataView(apngBuf);
+    for (let off = 8; off < apngBuf.byteLength - 12; ) {
+      const chunkLen  = view.getUint32(off);
+      const chunkType = view.getUint32(off + 4);
+      if (chunkType === 0x6163544C) { // 'acTL'
+        view.setUint32(off + 12, numPlays); // num_plays
+        // Recalcular CRC (cubre tipo + datos)
+        let crc = 0xFFFFFFFF;
+        for (let i = off + 4; i < off + 4 + 4 + chunkLen; i++) {
+          crc = (crcT[(crc ^ view.getUint8(i)) & 0xFF] ^ (crc >>> 8)) >>> 0;
         }
-        off += 12 + chunkLen;
+        view.setUint32(off + 4 + 4 + chunkLen, crc ^ 0xFFFFFFFF);
+      } else if (chunkType === 0x6663544C) { // 'fcTL'
+        // dispose_op está en byte 24 del chunk de datos (offset+4+4+24)
+        // blend_op está en byte 25
+        view.setUint8(off + 4 + 4 + 24, 1); // dispose_op = BACKGROUND
+        view.setUint8(off + 4 + 4 + 25, 0); // blend_op   = SOURCE
+        // Recalcular CRC del fcTL (26 bytes de datos)
+        let crc = 0xFFFFFFFF;
+        for (let i = off + 4; i < off + 4 + 4 + chunkLen; i++) {
+          crc = (crcT[(crc ^ view.getUint8(i)) & 0xFF] ^ (crc >>> 8)) >>> 0;
+        }
+        view.setUint32(off + 4 + 4 + chunkLen, crc ^ 0xFFFFFFFF);
       }
+      off += 12 + chunkLen;
     }
 
     const blob = new Blob([apngBuf], { type: 'image/png' });
