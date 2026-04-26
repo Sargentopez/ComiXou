@@ -4232,14 +4232,35 @@ function _edRenderPageThumb(canvas, page, pageIdx){
    ══════════════════════════════════════════ */
 function _edTryLoadApng(dataUrl, la, cb) {
   if (typeof UPNG === 'undefined') { cb(false); return; }
+  if (typeof ApngDecoder === 'undefined' && !window.ApngDecoder) { cb(false); return; }
   try {
     var b64=dataUrl.split(',')[1],bin=atob(b64),u8=new Uint8Array(bin.length);
     for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
     var decoded=UPNG.decode(u8.buffer);
     if(!decoded.frames||decoded.frames.length<=1){cb(false);return;}
-    la._pngFrames=[dataUrl]; la._animReady=false;
-    la.loadAnim(dataUrl,function(){ la._playing=true; la._applyFrame(0); cb(true); });
-  } catch(e){ cb(false); }
+    // Guardar el dataUrl del APNG completo como array de 1 elemento especial.
+    // loadAnim lo detecta como string único y usa decodeApng (UPNG).
+    // _pngFrames necesita length > 1 para que _edGifSetPlaying lo reconozca como animado.
+    // Solución: extraer los frames como dataUrls individuales para _pngFrames,
+    // pero pasar el APNG completo a loadAnim para decodificación correcta.
+    var rgba8 = UPNG.toRGBA8(decoded);
+    var W = decoded.width, H = decoded.height;
+    var oc = document.createElement('canvas'); oc.width=W; oc.height=H;
+    var ox = oc.getContext('2d');
+    // Construir array de dataUrls por frame — sirve como _pngFrames
+    var frameUrls = rgba8.map(function(buf) {
+      var imgd = new ImageData(new Uint8ClampedArray(buf), W, H);
+      ox.clearRect(0,0,W,H); ox.putImageData(imgd,0,0);
+      return oc.toDataURL('image/png');
+    });
+    la._pngFrames = frameUrls; // array length > 1 → reconocido por _edGifSetPlaying
+    la._animReady = false;
+    // loadAnim recibe el array de frames (mismo que biblioteca) → decodeFrameArray
+    la.loadAnim(frameUrls, function() {
+      // no arrancar _playing aquí — lo hará _edGifSetPlaying al abrir el visor
+      cb(true);
+    });
+  } catch(e){ console.warn('_edTryLoadApng error:', e); cb(false); }
 }
 function edAddImage(file){
   if(!file)return;
@@ -4268,7 +4289,20 @@ function edAddImage(file){
         edLayers.push(layer);
         edSelectedIdx = edLayers.length - 1;
       }
-      edPushHistory();edRedraw();edRenderOptionsPanel('props');edToast('Imagen añadida ✓');
+      // Intentar detectar si es APNG (solo para archivos PNG)
+      if (file.type === 'image/png' || file.name?.toLowerCase().endsWith('.png')) {
+        _edTryLoadApng(ev.target.result, layer, function(isApng) {
+          if (!isApng) {
+            // PNG estático — flujo normal
+            edPushHistory(); edRedraw(); edRenderOptionsPanel('props'); edToast('Imagen añadida ✓');
+          } else {
+            // APNG animado — _edTryLoadApng ya lo configuró
+            edPushHistory(); edRedraw(); edRenderOptionsPanel('props'); edToast('PNG animado añadido ✓');
+          }
+        });
+      } else {
+        edPushHistory();edRedraw();edRenderOptionsPanel('props');edToast('Imagen añadida ✓');
+      }
     };
     img.src=ev.target.result;
   };
