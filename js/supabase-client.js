@@ -138,45 +138,6 @@ const SupabaseClient = (() => {
 
   // ── STORAGE: GIFs en bucket 'gifs' ────────────────────────────────────────
   // Mini IDB propio para leer GIFs — mismo DB que editor.js (cxGifs)
-  // Diagnóstico temporal — muestra errores de upload en pantalla
-  function _diagMsg(msg) {
-    console.error('[DIAG]', msg);
-    let panel = document.getElementById('_sbDiagPanel');
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = '_sbDiagPanel';
-      panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#900;color:#fff;font:11px monospace;padding:6px;z-index:99999;max-height:50vh;overflow-y:auto;white-space:pre-wrap;';
-      const topBar = document.createElement('div');
-      topBar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px';
-      const title = document.createElement('b');
-      title.textContent = 'DIAGNÓSTICO UPLOAD';
-      const copyBtn = document.createElement('button');
-      copyBtn.textContent = '📋 Copiar';
-      copyBtn.style.cssText = 'background:#fff;color:#900;border:none;padding:4px 10px;cursor:pointer;font-weight:bold;border-radius:4px;margin-right:6px;font-size:12px;';
-      copyBtn.onclick = () => {
-        const ta = document.getElementById('_sbDiagText');
-        if (ta) { ta.select(); document.execCommand('copy'); copyBtn.textContent = '✓ Copiado'; }
-      };
-      const closeBtn = document.createElement('button');
-      closeBtn.textContent = '✕';
-      closeBtn.style.cssText = 'background:#fff;color:#900;border:none;padding:4px 10px;cursor:pointer;font-weight:bold;border-radius:4px;font-size:12px;';
-      closeBtn.onclick = () => panel.remove();
-      topBar.appendChild(title);
-      const btns = document.createElement('div');
-      btns.appendChild(copyBtn); btns.appendChild(closeBtn);
-      topBar.appendChild(btns);
-      panel.appendChild(topBar);
-      const ta = document.createElement('textarea');
-      ta.id = '_sbDiagText';
-      ta.style.cssText = 'width:100%;height:120px;background:#600;color:#fff;border:none;font:11px monospace;padding:4px;resize:vertical;box-sizing:border-box;';
-      ta.readOnly = true;
-      panel.appendChild(ta);
-      document.body && document.body.appendChild(panel);
-    }
-    const ta = document.getElementById('_sbDiagText');
-    if (ta) ta.value += msg + '\n';
-  }
-
   function _sbGifIdbLoad(key) {
     // Usar la función cacheada del editor si está disponible (evita doble conexión a cxGifs)
     if (window._gifIdbLoad) return window._gifIdbLoad(key).catch(() => null);
@@ -228,25 +189,25 @@ const SupabaseClient = (() => {
 
   // Reconstruye un APNG desde array de PNG dataUrls individuales usando UPNG
   async function _buildApngFromFrames(frameUrls, delayMs) {
-    if (typeof UPNG === 'undefined') { _diagMsg('APNG build: UPNG no disponible'); return null; }
-    if (!window.ApngDecoder) { _diagMsg('APNG build: ApngDecoder no disponible'); return null; }
-    if (!frameUrls || !frameUrls.length) { _diagMsg('APNG build: array vacío'); return null; }
-    _diagMsg('APNG build: ' + frameUrls.length + ' frames, frame[0] type=' + typeof frameUrls[0] + ' len=' + (frameUrls[0]||'').length);
+    if (typeof UPNG === 'undefined') { console.warn('APNG build: UPNG no disponible'); return null; }
+    if (!window.ApngDecoder) { console.warn('APNG build: ApngDecoder no disponible'); return null; }
+    if (!frameUrls || !frameUrls.length) { console.warn('APNG build: array vacío'); return null; }
+    console.warn('APNG build: ' + frameUrls.length + ' frames, frame[0] type=' + typeof frameUrls[0] + ' len=' + (frameUrls[0]||'').length);
     try {
       const result = await window.ApngDecoder.decodeFrameArray(frameUrls, delayMs || 100);
-      _diagMsg('APNG decode OK: ' + result.frames.length + ' frames ' + result.width + 'x' + result.height);
+      console.warn('APNG decode OK: ' + result.frames.length + ' frames ' + result.width + 'x' + result.height);
       const dels = new Array(result.frames.length).fill(delayMs || 100);
       const bufs = result.frames.map(f => f.imageData.data.buffer);
       const apngBuf = UPNG.encode(bufs, result.width, result.height, 0, dels, true);
-      _diagMsg('APNG encode OK: ' + apngBuf.byteLength + ' bytes');
+      console.warn('APNG encode OK: ' + apngBuf.byteLength + ' bytes');
       const blob = new Blob([apngBuf], {type: 'image/png'});
       return new Promise(res => {
         const fr = new FileReader();
-        fr.onload = e => { _diagMsg('APNG dataUrl OK: ' + e.target.result.length + ' chars'); res(e.target.result); };
-        fr.onerror = (e) => { _diagMsg('APNG FileReader error: ' + e); res(null); };
+        fr.onload = e => { console.warn('APNG dataUrl OK: ' + e.target.result.length + ' chars'); res(e.target.result); };
+        fr.onerror = (e) => { console.warn('APNG FileReader error: ' + e); res(null); };
         fr.readAsDataURL(blob);
       });
-    } catch(e) { _diagMsg('APNG build ERROR: ' + e.message); return null; }
+    } catch(e) { console.warn('APNG build ERROR: ' + e.message); return null; }
   }
 
   // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
@@ -377,11 +338,11 @@ const SupabaseClient = (() => {
               const _sess = JSON.parse(localStorage.getItem('cs_session')||'null');
               const _tok = _sess && _sess.token;
               const _tokInfo = _tok ? ('token=' + _tok.substring(0,20) + '... role=' + (JSON.parse(atob(_tok.split('.')[1])).role||'?')) : 'NO TOKEN';
-              _diagMsg('GIF attempt: ' + l.gifKey + ' | ' + _tokInfo);
+              console.warn('GIF attempt: ' + l.gifKey + ' | ' + _tokInfo);
               const dataUrl = await _sbGifIdbLoad(l.gifKey);
-              if (!dataUrl) { _diagMsg('GIF IDB null: gifKey=' + l.gifKey); }
-              else { gifUrl = await _gifUpload(l.gifKey, dataUrl); _diagMsg('GIF OK: ' + gifUrl); }
-            } catch(e) { _diagMsg('GIF upload ERROR: ' + e.message); }
+              if (!dataUrl) { console.warn('GIF IDB null: gifKey=' + l.gifKey); }
+              else { gifUrl = await _gifUpload(l.gifKey, dataUrl); console.warn('GIF OK: ' + gifUrl); }
+            } catch(e) { console.warn('GIF upload ERROR: ' + e.message); }
           }
           // Serializar la capa — excluir campos de re-edición que el reader no necesita
           const _lClean = {...l};
@@ -399,21 +360,21 @@ const SupabaseClient = (() => {
           let animUrl = null;
           if (l.animKey) {
             try {
-              _diagMsg('APNG attempt: animKey=' + l.animKey + ' pngFrames=' + (l._pngFrames ? l._pngFrames.length : 'none') + ' apngSrc=' + (l._apngSrc ? 'yes(' + (l._apngSrc||'').length + ')' : 'no'));
+              console.warn('APNG attempt: animKey=' + l.animKey + ' pngFrames=' + (l._pngFrames ? l._pngFrames.length : 'none') + ' apngSrc=' + (l._apngSrc ? 'yes(' + (l._apngSrc||'').length + ')' : 'no'));
               const _animData = await _sbAnimIdbLoad(l.animKey);
-              if (!_animData) { _diagMsg('APNG IDB null: animKey=' + l.animKey); }
+              if (!_animData) { console.warn('APNG IDB null: animKey=' + l.animKey); }
               else {
                 let _apngDataUrl = null;
                 if (typeof _animData === 'string') {
                   _apngDataUrl = _animData;
                 } else if (Array.isArray(_animData) && _animData.length) {
                   _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
-                  if (!_apngDataUrl) _diagMsg('APNG build null para ' + l.animKey);
+                  if (!_apngDataUrl) console.warn('APNG build null para ' + l.animKey);
                 }
                 if (_apngDataUrl) animUrl = await _animUpload(l.animKey, _apngDataUrl);
-                else _diagMsg('APNG dataUrl null para ' + l.animKey);
+                else console.warn('APNG dataUrl null para ' + l.animKey);
               }
-            } catch(e) { _diagMsg('APNG upload ERROR: ' + e.message); }
+            } catch(e) { console.warn('APNG upload ERROR: ' + e.message); }
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
@@ -574,16 +535,17 @@ const SupabaseClient = (() => {
           layerObj = JSON.parse(_raw);
         } catch(e) {}
         if (!layerObj) continue;
-        // APNG animado — patrón idéntico al GIF:
-        // descargar dataUrl del bucket → guardar en IDB local por animKey
-        if (layerObj.animKey && row.anim_url) {
+        // APNG animado: descargar si hay anim_url, con o sin animKey en layer_data
+        // (animKey puede no estar en layer_data de obras antiguas)
+        if (layerObj.type === 'image' && row.anim_url) {
           try {
             const _apngDataUrl = await _animDownload(row.anim_url);
             if (_apngDataUrl) {
-              // Guardar en IDB local por animKey (igual que GIF guarda en cxGifs)
+              // Si no tiene animKey, generarlo ahora para poder guardarlo en IDB
+              if (!layerObj.animKey) {
+                layerObj.animKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              }
               await _sbAnimIdbSave(layerObj.animKey, _apngDataUrl).catch(() => {});
-              // Guardar dataUrl APNG completo — edDeserLayer lo carga con loadAnim
-              // como string para que ApngDecoder.decodeApng extraiga todos los frames
               layerObj._apngSrc = _apngDataUrl;
             }
           } catch(e) { console.warn('APNG cloud download:', e); }

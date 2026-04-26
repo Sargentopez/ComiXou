@@ -8207,11 +8207,9 @@ function _cofHandleUp(e) {
 
 function _cofAfterStroke() {
   if (!_cof.on) return;
-  _cof.state = 'red_cool';
   _cof._strokeStarted = false;
-  _cofDraw();
   clearTimeout(_cof._timer);
-  _cof._timer = setTimeout(_cofExpire, _cof.MS_COOL);
+  _cofExpire();
 }
 
 function _cofExpire() {
@@ -13091,21 +13089,24 @@ function edDeserLayer(d, pageOrientation){
       l._fIdx=0;
       l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
     }
-    if(d._pngFramesKey && !d._pngFrames) {
-      _edAnimIdbLoad(d._pngFramesKey).then(frames => {
-        if(frames && frames.length) {
-          l._pngFrames=frames;
-          // Si el visor está abierto y reproduciendo, arrancar animación
+    if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
+      _edAnimIdbLoad(d._pngFramesKey).then(data => {
+        if(!data) return;
+        const input = (typeof data === 'string') ? data       // dataUrl APNG (sistema nuevo)
+                    : (Array.isArray(data) && data.length) ? data  // array frames (sistema antiguo)
+                    : null;
+        if(!input) return;
+        if(typeof data === 'string') l._apngSrc = data;
+        else l._pngFrames = data;
+        l.loadAnim(input, () => {
           if($('editorViewer')?.classList.contains('open')) {
             l._playing = true;
-            l.loadAnim(l._pngFrames, () => {
-              l._applyFrame(0);
-              if(typeof edUpdateViewer==='function') edUpdateViewer();
-            });
+            l._applyFrame(0);
+            if(typeof edUpdateViewer==='function') edUpdateViewer();
           } else {
-            edRedraw();
+            if(typeof edRedraw==='function') edRedraw();
           }
-        }
+        });
       });
     }
     if(d.src){
@@ -16094,11 +16095,13 @@ function _bibRenderPanel(panel) {
     btn.addEventListener('pointerup', e => {
       e.stopPropagation();
       const fi = parseInt(btn.dataset.fi), ii = parseInt(btn.dataset.ii);
-      const d = _bibLoad();
-      d.folders[fi].items.splice(ii, 1);
-      _bibSave(d);
-      edToast('Eliminado de la biblioteca');
-      _bibRenderPanel(panel);
+      edConfirm('¿Eliminar este objeto de la biblioteca?', () => {
+        const d = _bibLoad();
+        d.folders[fi].items.splice(ii, 1);
+        _bibSave(d);
+        edToast('Eliminado de la biblioteca');
+        _bibRenderPanel(panel);
+      });
     });
   });
 
