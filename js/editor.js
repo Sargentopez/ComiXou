@@ -1005,42 +1005,35 @@ class ImageLayer extends BaseLayer {
     ctx.drawImage(src, -w/2, -h/2, w, h);
     ctx.restore();
   }
-  // Precargar frames PNG y pintarlos en canvas offscreen — igual que GifLayer usa _oc
-  _preloadPngFrames(cb) {
-    if (!this._pngFrames || !this._pngFrames.length) { cb && cb(); return; }
-    if (this._pngOcs && this._pngOcs.length === this._pngFrames.length) { cb && cb(); return; }
-    this._pngOcs = [];
-    let loaded = 0;
-    const total = this._pngFrames.length;
-    this._pngFrames.forEach((dataUrl, i) => {
-      const img = new Image();
-      img.onload = () => {
-        const oc = document.createElement('canvas');
-        oc.width = img.naturalWidth; oc.height = img.naturalHeight;
-        oc.getContext('2d').drawImage(img, 0, 0);
-        this._pngOcs[i] = oc;
-        if (++loaded === total) cb && cb();
-      };
-      img.onerror = () => { if (++loaded === total) cb && cb(); };
-      img.src = dataUrl;
-    });
+  // ── loadAnim: carga frames en _animFrames + _oc único — patrón idéntico a GifLayer.load()
+  loadAnim(input, cb) {
+    if (!input || (Array.isArray(input) && !input.length)) { cb && cb(); return; }
+    if (this._animReady && this._animFrames && this._animFrames.length) { cb && cb(); return; }
+    const delay = this._gcpFrameDelay || window._gcpFrameDelay || 100;
+    window.ApngDecoder.decode(input, delay).then((result) => {
+      this._animFrames = result.frames;
+      this._fIdx  = 0;
+      this._oc    = document.createElement('canvas');
+      this._oc.width  = result.width;
+      this._oc.height = result.height;
+      this._animReady = true;
+      this._applyFrame(0);
+      cb && cb();
+    }).catch((e) => { console.warn('ApngDecoder:', e); cb && cb(); });
   }
 
-  // Animar PNG — exactamente igual que GifLayer._applyFrame
-  _applyPngFrame(i) {
-    if (!this._pngOcs || !this._pngOcs.length) return;
-    const total = this._pngOcs.length;
-    // Calcular índice real respetando comportamiento de reproducción
+  // ── _applyFrame: IDÉNTICO a GifLayer._applyFrame — putImageData en _oc único
+  _applyFrame(i) {
+    if (!this._animReady || !this._animFrames || !this._animFrames.length) return;
+    const total = this._animFrames.length;
+    const stopAtEnd   = this._gcpStopAtEnd   || false;
+    const repeatCount = this._gcpRepeatCount || 0;
     let idx = i;
-    const stopAtEnd   = this._gcpStopAtEnd   != null ? this._gcpStopAtEnd   : false;
-    const repeatCount = this._gcpRepeatCount != null ? this._gcpRepeatCount : 0;
     if (idx >= total) {
-      // Fin de ciclo
       this._gcpPlayCount = (this._gcpPlayCount || 0) + 1;
       if (stopAtEnd || (repeatCount > 0 && this._gcpPlayCount >= repeatCount)) {
-        // Detener en el último frame
-        this._pngFrameIdx = total - 1;
-        this._oc = this._pngOcs[this._pngFrameIdx];
+        this._fIdx = total - 1;
+        this._oc.getContext('2d').putImageData(this._animFrames[this._fIdx].imageData, 0, 0);
         this._playing = false;
         requestAnimationFrame(() => {
           if (typeof edRedraw === 'function') edRedraw();
@@ -1050,25 +1043,34 @@ class ImageLayer extends BaseLayer {
       }
       idx = idx % total;
     }
-    this._pngFrameIdx = idx;
-    this._oc = this._pngOcs[this._pngFrameIdx];
+    this._fIdx = idx;
+    const frame = this._animFrames[this._fIdx];
+    this._oc.getContext('2d').putImageData(frame.imageData, 0, 0);
     if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
-    const _delay = this._gcpFrameDelay != null ? this._gcpFrameDelay
-                 : (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
+    const delay = frame.delay || this._gcpFrameDelay || window._gcpFrameDelay || 100;
     this._timer = setTimeout(() => {
-      this._applyPngFrame(this._pngFrameIdx + 1);
+      this._applyFrame(this._fIdx + 1);
       requestAnimationFrame(() => {
-        if (typeof edRedraw === 'function') edRedraw();
-        if (typeof edUpdateViewer === 'function') edUpdateViewer();
+        if ($('editorViewer')?.classList.contains('open') && typeof edUpdateViewer === 'function') {
+          edUpdateViewer();
+        } else if (typeof edRedraw === 'function') {
+          edRedraw();
+        }
       });
-    }, _delay);
+    }, delay);
   }
+
+  // Stubs de compatibilidad (código externo que aún usa los nombres antiguos)
+  _preloadPngFrames(cb) { this.loadAnim(this._pngFrames, cb); }
+  _applyPngFrame(i)     { this._applyFrame(i); }
 
   stopAnim() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this._playing = false;
-    this._oc = this._pngOcs ? this._pngOcs[0] : null;
+    if (this._animReady && this._animFrames && this._animFrames.length) {
+      this._oc.getContext('2d').putImageData(this._animFrames[0].imageData, 0, 0);
+    }
     if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
   }
 
@@ -4136,6 +4138,17 @@ function _edRenderPageThumb(canvas, page, pageIdx){
 /* ══════════════════════════════════════════
    CAPAS
    ══════════════════════════════════════════ */
+function _edTryLoadApng(dataUrl, la, cb) {
+  if (typeof UPNG === 'undefined') { cb(false); return; }
+  try {
+    var b64=dataUrl.split(',')[1],bin=atob(b64),u8=new Uint8Array(bin.length);
+    for(var i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+    var decoded=UPNG.decode(u8.buffer);
+    if(!decoded.frames||decoded.frames.length<=1){cb(false);return;}
+    la._pngFrames=[dataUrl]; la._animReady=false;
+    la.loadAnim(dataUrl,function(){ la._playing=true; la._applyFrame(0); cb(true); });
+  } catch(e){ cb(false); }
+}
 function edAddImage(file){
   if(!file)return;
   const reader=new FileReader();
@@ -12931,8 +12944,8 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
     if(d._pngFrames) {
       l._pngFrames=d._pngFrames;
-      // Precargar frames en canvas offscreen para que draw() pueda pintarlos
-      l._preloadPngFrames(() => { if(typeof edRedraw==='function') edRedraw(); });
+      l._fIdx=0;
+      l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
     }
     if(d._pngFramesKey && !d._pngFrames) {
       _edAnimIdbLoad(d._pngFramesKey).then(frames => {
@@ -12941,9 +12954,9 @@ function edDeserLayer(d, pageOrientation){
           // Si el visor está abierto y reproduciendo, arrancar animación
           if($('editorViewer')?.classList.contains('open')) {
             l._playing = true;
-            l._preloadPngFrames(() => {
-              if(l._playing) l._applyPngFrame(0);
-              if(typeof edUpdateViewer==='function') edUpdateViewer(); // después de precargar
+            l.loadAnim(l._pngFrames, () => {
+              l._applyFrame(0);
+              if(typeof edUpdateViewer==='function') edUpdateViewer();
             });
           } else {
             edRedraw();
@@ -13062,8 +13075,8 @@ function _edGifSetPlaying(playing) {
         l._playing = playing;
         if (playing) {
           l._gcpPlayCount = 0; // resetear contador de repeticiones
-          l._preloadPngFrames(() => {
-            if (l._playing) l._applyPngFrame(l._pngFrameIdx || 0);
+          l.loadAnim(l._pngFrames, () => {
+            if (l._playing) l._applyFrame(l._fIdx || 0);
           });
         } else {
           l.stopAnim();
@@ -13695,7 +13708,7 @@ function edUpdateViewer(){
   // Animar GIFs y PNGs en el visor interno — el loop lo gestiona _applyFrame/_applyPngFrame
   const _hasAnim = page.layers.some(l =>
     (l.type==='gif' && l._playing) ||
-    (l.type==='image' && l._playing && l._pngFrames && l._pngFrames.length > 1)
+    (l.type==='image' && l._playing && l._animReady && l._animFrames && l._animFrames.length > 1)
   );
   if (!_hasAnim && edUpdateViewer._raf) {
     cancelAnimationFrame(edUpdateViewer._raf);
@@ -15955,7 +15968,7 @@ function _bibRenderPanel(panel) {
           la._keepSize = true;
           la._isGcpImage = true;
           la._pngFrames = frames;       // todos los frames
-          la._pngFrameIdx = 0;
+          la._fIdx = 0;
           if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
           if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
           if (entry.gcpLayerNames) la._gcpLayerNames = entry.gcpLayerNames;
@@ -15966,10 +15979,10 @@ function _bibRenderPanel(panel) {
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
           edPushHistory();
-          // Precargar canvas offscreen por frame y arrancar la animación
-          la._preloadPngFrames(() => {
+          // Cargar con ApngDecoder (patrón GifLayer) y arrancar
+          la.loadAnim(frames, () => {
             la._playing = true;
-            la._applyPngFrame(0);
+            la._applyFrame(0);
             edRedraw();
           });
         };
@@ -17533,6 +17546,7 @@ function _gcpSaveToLib(onDone) {
     existingLayer._gcpLayerNames=gcpLayerNames;
     existingLayer._isGcpImage=true;
     existingLayer._pngFrames=pngFrames;
+    existingLayer._animReady=false; existingLayer._animFrames=null;
     existingLayer._gcpFrameDelay  = window._gcpFrameDelay;
     existingLayer._gcpRepeatCount = window._gcpRepeatCount;
     existingLayer._gcpStopAtEnd   = window._gcpStopAtEnd;
