@@ -940,12 +940,6 @@ async function loadDraft(token) {
 // ── Descompresión gzip de layer_data (CompressionStream W3C nativo) ──
 const _CZ_PFX = 'gz:';
 
-// Descarga frames PNG desde bucket 'anims'
-async function _animDownload(animUrl) {
-  const r = await fetch(animUrl);
-  if (!r.ok) throw new Error('anim download: ' + r.status);
-  return r.json();
-}
 
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
@@ -981,6 +975,20 @@ async function _czDecompress(str) {
   } catch(e) { return str; }
 }
 
+// Descarga APNG del bucket 'anims' y devuelve dataUrl PNG
+async function _animDownload(animUrl) {
+  if (!animUrl) return null;
+  const r = await fetch(animUrl);
+  if (!r.ok) return null;
+  const blob = await r.blob();
+  return new Promise(res => {
+    const fr = new FileReader();
+    fr.onload  = e => res(e.target.result);
+    fr.onerror = () => res(null);
+    fr.readAsDataURL(blob);
+  });
+}
+
 async function _loadPanels(workId, useAuth) {
   const _sbFetch = useAuth ? sbGetAuth : sbGet;
   const panels = await _sbFetch('panels?work_id=eq.' + workId + '&order=panel_order.asc');
@@ -1005,8 +1013,12 @@ async function _loadPanels(workId, useAuth) {
           const l = JSON.parse(_raw);
           if (!l) return null;
           if (l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
-          if (l._isGcpImage && r.anim_url && !l._pngFrames) {
-            try { l._pngFrames = await _animDownload(r.anim_url); } catch(e) {}
+          // APNG: descargar del bucket por animKey — igual que GIF usa _gifUrl
+          if (l.animKey && r.anim_url) {
+            try {
+              const _apngDataUrl = await _animDownload(r.anim_url);
+              if (_apngDataUrl) l._apngSrc = _apngDataUrl;
+            } catch(e) { console.warn('APNG reader dl:', e); }
           }
           return l;
         } catch(e) { return null; }
@@ -1078,19 +1090,37 @@ async function preloadImages() {
           })
           .catch(() => null);
       }
-      // Animación PNG del editor GIF: precargar frames como canvas offscreen
+      // Animación APNG: decodificar con ApngDecoder (UPNG) → _animFrames + _animOc
+      if (layer.animKey && layer._apngSrc && window.ApngDecoder) {
+        return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
+          .then(function(result) {
+            layer._animFrames  = result.frames;
+            layer._animIdx     = 0;
+            layer._animLastTick = 0;
+            layer._animPlayCount = 0;
+            layer._animOc      = document.createElement('canvas');
+            layer._animOc.width  = result.width;
+            layer._animOc.height = result.height;
+            layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
+            layer._animReady   = true;
+            return layer._animOc;
+          }).catch(function(e) { console.warn('APNG reader load:', e); return null; });
+      }
+      // Compatibilidad: sistema antiguo _pngFrames/_pngOcs
       if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length >= 1) {
-        return Promise.all(layer._pngFrames.map(dataUrl => new Promise(res => {
-          const img = new Image();
-          img.onload = () => {
-            const oc = document.createElement('canvas');
-            oc.width = img.naturalWidth; oc.height = img.naturalHeight;
-            oc.getContext('2d').drawImage(img, 0, 0);
-            res(oc);
-          };
-          img.onerror = () => res(null);
-          img.src = dataUrl;
-        }))).then(ocs => {
+        return Promise.all(layer._pngFrames.map(function(dataUrl) {
+          return new Promise(function(res) {
+            const img = new Image();
+            img.onload = function() {
+              const oc = document.createElement('canvas');
+              oc.width = img.naturalWidth; oc.height = img.naturalHeight;
+              oc.getContext('2d').drawImage(img, 0, 0);
+              res(oc);
+            };
+            img.onerror = function() { res(null); };
+            img.src = dataUrl;
+          });
+        })).then(function(ocs) {
           layer._pngOcs = ocs.filter(Boolean);
           layer._pngIdx = 0;
           layer._pngOc  = layer._pngOcs[0] || null;

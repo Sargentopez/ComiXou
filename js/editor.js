@@ -16094,11 +16094,13 @@ function _bibRenderPanel(panel) {
     btn.addEventListener('pointerup', e => {
       e.stopPropagation();
       const fi = parseInt(btn.dataset.fi), ii = parseInt(btn.dataset.ii);
-      const d = _bibLoad();
-      d.folders[fi].items.splice(ii, 1);
-      _bibSave(d);
-      edToast('Eliminado de la biblioteca');
-      _bibRenderPanel(panel);
+      edConfirm('¿Eliminar este objeto de la biblioteca?', () => {
+        const d = _bibLoad();
+        d.folders[fi].items.splice(ii, 1);
+        _bibSave(d);
+        edToast('Eliminado de la biblioteca');
+        _bibRenderPanel(panel);
+      });
     });
   });
 
