@@ -570,20 +570,23 @@ const SupabaseClient = (() => {
           layerObj = JSON.parse(_raw);
         } catch(e) {}
         if (!layerObj) continue;
-        // APNG animado: descargar si hay anim_url, con o sin animKey en layer_data
-        // (animKey puede no estar en layer_data de obras antiguas)
+        // APNG animado: descargar si hay anim_url
         if (layerObj.type === 'image' && row.anim_url) {
           try {
+            _edDiag('APNG dl: ' + row.anim_url);
             const _apngDataUrl = await _animDownload(row.anim_url);
+            _edDiag('APNG dl result: ' + (_apngDataUrl ? 'dataUrl(' + _apngDataUrl.length + ')' : 'NULL'));
             if (_apngDataUrl) {
-              // Si no tiene animKey, generarlo ahora para poder guardarlo en IDB
               if (!layerObj.animKey) {
                 layerObj.animKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
               }
               await _sbAnimIdbSave(layerObj.animKey, _apngDataUrl).catch(() => {});
               layerObj._apngSrc = _apngDataUrl;
+              _edDiag('APNG dl OK, animKey=' + layerObj.animKey);
             }
-          } catch(e) { console.warn('APNG cloud download:', e); }
+          } catch(e) { _edDiag('APNG dl ERROR: ' + e.message); }
+        } else if (layerObj.type === 'image') {
+          _edDiag('APNG skip: no anim_url para layer type=image');
         }
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {
