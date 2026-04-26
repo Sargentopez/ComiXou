@@ -1029,11 +1029,33 @@ class ImageLayer extends BaseLayer {
   // Animar PNG — exactamente igual que GifLayer._applyFrame
   _applyPngFrame(i) {
     if (!this._pngOcs || !this._pngOcs.length) return;
-    this._pngFrameIdx = i % this._pngOcs.length;
-    this._oc = this._pngOcs[this._pngFrameIdx]; // _oc = lo que draw() usa
+    const total = this._pngOcs.length;
+    // Calcular índice real respetando comportamiento de reproducción
+    let idx = i;
+    const stopAtEnd   = this._gcpStopAtEnd   != null ? this._gcpStopAtEnd   : false;
+    const repeatCount = this._gcpRepeatCount != null ? this._gcpRepeatCount : 0;
+    if (idx >= total) {
+      // Fin de ciclo
+      this._gcpPlayCount = (this._gcpPlayCount || 0) + 1;
+      if (stopAtEnd || (repeatCount > 0 && this._gcpPlayCount >= repeatCount)) {
+        // Detener en el último frame
+        this._pngFrameIdx = total - 1;
+        this._oc = this._pngOcs[this._pngFrameIdx];
+        this._playing = false;
+        requestAnimationFrame(() => {
+          if (typeof edRedraw === 'function') edRedraw();
+          if (typeof edUpdateViewer === 'function') edUpdateViewer();
+        });
+        return;
+      }
+      idx = idx % total;
+    }
+    this._pngFrameIdx = idx;
+    this._oc = this._pngOcs[this._pngFrameIdx];
     if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
-    const _delay = (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
+    const _delay = this._gcpFrameDelay != null ? this._gcpFrameDelay
+                 : (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
     this._timer = setTimeout(() => {
       this._applyPngFrame(this._pngFrameIdx + 1);
       requestAnimationFrame(() => {
@@ -12626,6 +12648,9 @@ function edSerLayer(l){
     if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
+    if(l._gcpFrameDelay  != null) _r._gcpFrameDelay  = l._gcpFrameDelay;
+    if(l._gcpRepeatCount != null) _r._gcpRepeatCount = l._gcpRepeatCount;
+    if(l._gcpStopAtEnd)           _r._gcpStopAtEnd   = true;
     return _r;
   }
   if(l.type==='text'){const _o={type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
@@ -12901,6 +12926,9 @@ function edDeserLayer(d, pageOrientation){
     if(d._isGcpImage) l._isGcpImage=true;
     if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
     if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
+    if(d._gcpFrameDelay  != null) l._gcpFrameDelay  = d._gcpFrameDelay;
+    if(d._gcpRepeatCount != null) l._gcpRepeatCount = d._gcpRepeatCount;
+    if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
     if(d._pngFrames) {
       l._pngFrames=d._pngFrames;
       // Precargar frames en canvas offscreen para que draw() pueda pintarlos
@@ -13033,6 +13061,7 @@ function _edGifSetPlaying(playing) {
       if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 1) {
         l._playing = playing;
         if (playing) {
+          l._gcpPlayCount = 0; // resetear contador de repeticiones
           l._preloadPngFrames(() => {
             if (l._playing) l._applyPngFrame(l._pngFrameIdx || 0);
           });
@@ -15930,6 +15959,9 @@ function _bibRenderPanel(panel) {
           if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
           if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
           if (entry.gcpLayerNames) la._gcpLayerNames = entry.gcpLayerNames;
+          if (entry.gcpFrameDelay  != null) la._gcpFrameDelay  = entry.gcpFrameDelay;
+          if (entry.gcpRepeatCount != null) la._gcpRepeatCount = entry.gcpRepeatCount;
+          if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
@@ -16297,6 +16329,7 @@ function _gcpHandleUp(e) {
 // Opciones de comportamiento para exportar APNG (fps → delay ms, num_plays)
 window._gcpFrameDelay  = 100;  // ms por frame (default 10fps)
 window._gcpRepeatCount = 0;    // 0 = infinito
+window._gcpStopAtEnd   = false; // true = detener en el último frame
 let gcpCanvas = null;
 let gcpCtx    = null;
 
@@ -17158,6 +17191,27 @@ function gcpOpen(edLayerIdx) {
       if (titleEl) titleEl.textContent = 'Editar GIF';
     }
   }
+  // Leer comportamientos guardados de la capa y reflejarlos en la UI
+  if (window._gcpEdLayerIdx >= 0) {
+    const _gl = edLayers[window._gcpEdLayerIdx];
+    if (_gl) {
+      if (_gl._gcpFrameDelay  != null) window._gcpFrameDelay  = _gl._gcpFrameDelay;
+      if (_gl._gcpRepeatCount != null) window._gcpRepeatCount = _gl._gcpRepeatCount;
+      if (_gl._gcpStopAtEnd   != null) window._gcpStopAtEnd   = !!_gl._gcpStopAtEnd;
+    }
+    // Actualizar chips en la UI
+    document.querySelectorAll('[data-gcpfps]').forEach(b => {
+      const fps = Math.round(1000 / Math.max(window._gcpFrameDelay, 1));
+      b.classList.toggle('active', parseInt(b.dataset.gcpfps, 10) === fps);
+    });
+    document.querySelectorAll('[data-gcprep]').forEach(b => {
+      b.classList.toggle('active', parseInt(b.dataset.gcprep, 10) === window._gcpRepeatCount);
+    });
+    document.querySelectorAll('[data-gcpstop]').forEach(b => {
+      b.classList.toggle('active', !!window._gcpStopAtEnd);
+    });
+  }
+
   // Aplicar frame 0 si hay frames; sesión nueva queda en gfi=0 listo para recibir objetos
   if (_gcpGetTotalFrames() > 0) {
     window._gcpGlobalFrameIdx = 0;
@@ -17249,6 +17303,11 @@ function gcpOpen(edLayerIdx) {
       document.querySelectorAll('[id^="gdd-"]').forEach(d=>d.classList.remove('open'));
       _gcpDownloadApng();
     });
+    document.getElementById('gcpDownloadGifBtn')?.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      document.querySelectorAll('[id^="gdd-"]').forEach(d=>d.classList.remove('open'));
+      _gcpDownloadGif();
+    });
     // Botón Comportamiento — abre/cierra subpanel inline sin cerrar el dropdown
     document.getElementById('gcpBehaviourBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
@@ -17271,6 +17330,14 @@ function gcpOpen(edLayerIdx) {
         document.querySelectorAll('[data-gcprep]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         window._gcpRepeatCount = parseInt(btn.dataset.gcprep, 10);
+      });
+    });
+    // Chip Stop al final (toggle)
+    document.querySelectorAll('[data-gcpstop]').forEach(btn => {
+      btn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        window._gcpStopAtEnd = !window._gcpStopAtEnd;
+        btn.classList.toggle('active', window._gcpStopAtEnd);
       });
     });
 
@@ -17449,7 +17516,11 @@ function _gcpSaveToLib(onDone) {
     pngFrames,                  // todos los frames
     gcpLayersData, gcpFramesData, gcpLayerNames,
     normW:_gcpNormW, normH:_gcpNormH,
-    layerData:null, thumb
+    layerData:null, thumb,
+    // Comportamientos de reproducción
+    gcpFrameDelay:  window._gcpFrameDelay,
+    gcpRepeatCount: window._gcpRepeatCount,
+    gcpStopAtEnd:   window._gcpStopAtEnd
   });
   _bibSave(data);
 
@@ -17462,6 +17533,9 @@ function _gcpSaveToLib(onDone) {
     existingLayer._gcpLayerNames=gcpLayerNames;
     existingLayer._isGcpImage=true;
     existingLayer._pngFrames=pngFrames;
+    existingLayer._gcpFrameDelay  = window._gcpFrameDelay;
+    existingLayer._gcpRepeatCount = window._gcpRepeatCount;
+    existingLayer._gcpStopAtEnd   = window._gcpStopAtEnd;
     // Cargar primer frame como imagen visible
     const img=new Image();
     img.onload=()=>{
@@ -17560,7 +17634,9 @@ async function _gcpDownloadApng() {
     //   blend_op   = 0 (APNG_BLEND_OP_SOURCE: reemplazar, no mezclar)
     // Esto garantiza animación correcta con transparencia en todos los visores.
     // También parchear num_plays en acTL.
-    const numPlays = (window._gcpRepeatCount != null ? window._gcpRepeatCount : 0);
+    // num_plays: si stopAtEnd → 1 ciclo; si repeatCount > 0 → ese número; si no → 0 (infinito)
+    const numPlays = window._gcpStopAtEnd ? 1
+                   : (window._gcpRepeatCount > 0 ? window._gcpRepeatCount : 0);
     const crcT = _gcpCrc32Table();
     const view = new DataView(apngBuf);
     for (let off = 8; off < apngBuf.byteLength - 12; ) {
@@ -17612,4 +17688,141 @@ function _gcpCrc32Table() {
     t[n] = c;
   }
   return (window._gcpCrc32TableCache = t);
+}
+
+// _gcpDownloadGif — exporta animación GCP como GIF animado (compatible Windows)
+// Motor: omggif (GifWriter, MIT, Dean McNamee)
+// Nota: GIF tiene transparencia binaria (1 color = transparente), no alpha gradual.
+// Para transparencia real usar _gcpDownloadApng (APNG).
+function _gcpDownloadGif() {
+  if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
+    edToast('No hay contenido para descargar'); return;
+  }
+  if (typeof exports === 'undefined' || typeof exports.GifWriter === 'undefined') {
+    // omggif expone GifWriter en exports — en browser queda en window scope via try/catch
+    if (typeof GifWriter === 'undefined') { edToast('Error: GifWriter no disponible'); return; }
+  }
+  const GW = (typeof GifWriter !== 'undefined') ? GifWriter : exports.GifWriter;
+
+  edToast('Generando GIF...');
+
+  const layers      = window._gcpLayers.slice();
+  const pageW       = Math.round(edPageW()),  pageH   = Math.round(edPageH());
+  const marginX     = Math.round(edMarginX()), marginY = Math.round(edMarginY());
+  const totalFrames = _gcpGetTotalFrames() || 1;
+  const extra = Math.round(Math.max(pageW, pageH) * 0.5);
+  const wsW = pageW + marginX * 2 + extra * 2;
+  const wsH = pageH + marginY * 2 + extra * 2;
+  const offX = extra, offY = extra;
+
+  // Renderizar frames (mismo patrón que _gcpDownloadApng)
+  const renderFrame = function(fi) {
+    _gcpApplyFrame(fi);
+    const fc = document.createElement('canvas');
+    fc.width = wsW; fc.height = wsH;
+    const fctx = fc.getContext('2d');
+    fctx.clearRect(0, 0, wsW, wsH);
+    fctx.setTransform(1, 0, 0, 1, offX, offY);
+    layers.forEach(function(l) {
+      if (!l || typeof l.draw !== 'function') return;
+      if (l._gcpVisible === false) return;
+      if (l.type === 'image' || l.type === 'gif') l.draw(fctx, fc);
+      else if (l.type === 'text' || l.type === 'bubble') l.draw(fctx, fc);
+      else { fctx.globalAlpha = l.opacity != null ? l.opacity : 1; l.draw(fctx); fctx.globalAlpha = 1; }
+    });
+    fctx.setTransform(1, 0, 0, 1, 0, 0);
+    return fc;
+  };
+
+  const renderedFrames = Array.from({length: totalFrames}, function(_, fi) { return renderFrame(fi); });
+
+  // Auto-recorte
+  let minX=wsW, minY=wsH, maxX=0, maxY=0;
+  renderedFrames.forEach(function(fc) {
+    const d = fc.getContext('2d').getImageData(0,0,wsW,wsH).data;
+    for(let y=0;y<wsH;y++) for(let x=0;x<wsW;x++) {
+      if(d[(y*wsW+x)*4+3]>10){
+        if(x<minX)minX=x; if(x>maxX)maxX=x;
+        if(y<minY)minY=y; if(y>maxY)maxY=y;
+      }
+    }
+  });
+  if(maxX<minX||maxY<minY){minX=marginX+offX;minY=marginY+offY;maxX=minX+pageW-1;maxY=minY+pageH-1;}
+  const pad=4;
+  const cropX=Math.max(0,minX-pad), cropY=Math.max(0,minY-pad);
+  const cropW=Math.min(wsW,maxX+pad+1)-cropX;
+  const cropH=Math.min(wsH,maxY+pad+1)-cropY;
+
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
+
+  // Cuantización: recoger todos los colores únicos de todos los frames
+  // y construir paleta de 255 colores + índice 0 = transparente
+  // Usar canvas con fondo blanco para aplanar semi-transparencias
+  const croppedFrames = renderedFrames.map(function(fc) {
+    const c = document.createElement('canvas');
+    c.width = cropW; c.height = cropH;
+    const ctx = c.getContext('2d');
+    // Fondo blanco para aplanar transparencia (GIF no tiene alpha real)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, cropW, cropH);
+    ctx.drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+    return ctx.getImageData(0, 0, cropW, cropH);
+  });
+
+  // Construir paleta global de 256 colores via muestreo
+  // Índice 0 reservado para transparencia (blanco puro = fondo, tratado como opaco)
+  const colorMap = {};
+  const palette = new Array(256).fill(0);
+  palette[0] = 0xFFFFFF; // índice 0 = blanco (fondo, no se usa como transparente real)
+  let palSize = 1;
+
+  croppedFrames.forEach(function(imgd) {
+    const d = imgd.data;
+    for(let i=0;i<d.length;i+=4) {
+      if(palSize >= 255) return;
+      const key = (d[i]>>1<<17)|(d[i+1]>>1<<9)|(d[i+2]>>1);  // reducir a 7bit por canal
+      if(colorMap[key] == null) { colorMap[key]=palSize; palette[palSize++]=(d[i]<<16)|(d[i+1]<<8)|d[i+2]; }
+    }
+  });
+  // Rellenar el resto de la paleta hasta 256
+  while(palSize < 256) palette[palSize++] = 0;
+
+  // Convertir cada frame a índices de paleta
+  const indexFrames = croppedFrames.map(function(imgd) {
+    const d = imgd.data, pixels = new Uint8Array(cropW * cropH);
+    for(let i=0;i<pixels.length;i++) {
+      const key = (d[i*4]>>1<<17)|(d[i*4+1]>>1<<9)|(d[i*4+2]>>1);
+      pixels[i] = colorMap[key] != null ? colorMap[key] : 0;
+    }
+    return pixels;
+  });
+
+  // delay en centésimas de segundo (GIF usa 1/100s)
+  const frameDelay = window._gcpFrameDelay != null ? window._gcpFrameDelay : 100;
+  const gifDelay = Math.max(2, Math.round(frameDelay / 10)); // ms → cs
+  const loopCount = (window._gcpStopAtEnd || window._gcpRepeatCount === 1) ? 1
+                  : (window._gcpRepeatCount > 0 ? window._gcpRepeatCount : 0);
+
+  try {
+    const bufSize = cropW * cropH * totalFrames * 5 + 1024;
+    const buf = new Uint8Array(bufSize);
+    const gw = new GW(buf, cropW, cropH, {loop: loopCount, palette: palette});
+    indexFrames.forEach(function(pixels) {
+      gw.addFrame(0, 0, cropW, cropH, pixels, {
+        delay: gifDelay,
+        palette: palette,
+        disposal: 2  // RESTORE_TO_BACKGROUND — limpia entre frames
+      });
+    });
+    const gifBytes = buf.slice(0, gw.end());
+    const blob = new Blob([gifBytes], {type: 'image/gif'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'animacion_comixou.gif';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 2000);
+    edToast('GIF descargado');
+  } catch(err) {
+    edToast('Error al generar GIF: ' + err.message);
+  }
 }

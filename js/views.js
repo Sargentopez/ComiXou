@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v18.74</footer>
+    <footer class="app-version">v18.76</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -534,7 +534,8 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-gcpmenu="guardar" style="font-weight:700">Guardar ▾</button>
             <div class="ed-dropdown" id="gdd-guardar" style="min-width:220px">
               <button class="ed-dropdown-item" id="gcpSaveAppBtn"><span class="dd-icon">📥</span>Guardar en la aplicación</button>
-              <button class="ed-dropdown-item" id="gcpDownloadApngBtn"><span class="dd-icon">⬇️</span>Descargar PNG animado</button>
+              <button class="ed-dropdown-item" id="gcpDownloadApngBtn"><span class="dd-icon">⬇️</span>Descargar APNG <small style="opacity:.6">(web)</small></button>
+              <button class="ed-dropdown-item" id="gcpDownloadGifBtn"><span class="dd-icon">⬇️</span>Descargar GIF <small style="opacity:.6">(Windows)</small></button>
               <div class="ed-dropdown-sep"></div>
               <div class="ed-dropdown-submenu">
                 <button class="ed-dropdown-item ed-has-submenu" id="gcpBehaviourBtn"><span class="dd-icon">⚙️</span>Comportamiento</button>
@@ -552,6 +553,10 @@ Router.register('editor', {
                     <button class="gcp-chip" data-gcprep="1">×1</button>
                     <button class="gcp-chip" data-gcprep="2">×2</button>
                     <button class="gcp-chip" data-gcprep="3">×3</button>
+                  </div>
+                  <div class="ed-dropdown-sep" style="margin:2px 0"></div>
+                  <div style="display:flex;gap:5px;padding:4px 12px 8px">
+                    <button class="gcp-chip" data-gcpstop="1" style="width:100%">⏹ Stop al final</button>
                   </div>
                 </div>
               </div>
