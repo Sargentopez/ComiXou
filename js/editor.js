@@ -715,6 +715,85 @@ window.GifDecoder = (function(){
 })();
 /* ── fin gifuct-js ── */
 
+/* ── ApngDecoder — igual firma que GifDecoder: {frames:[{imageData,delay}],width,height}
+   Modo 1: array de PNG dataUrls individuales (sistema _pngFrames de biblioteca)
+   Modo 2: dataUrl APNG único — usa UPNG.decode + UPNG.toRGBA8
+   Canvas independiente por llamada — sin estado compartido entre llamadas concurrentes.
+   ─────────────────────────────────────────────────────────────────────────────────── */
+window.ApngDecoder = (function(){
+
+  function decodeFrameArray(dataUrls, delay) {
+    return new Promise(function(res, rej) {
+      if (!dataUrls || !dataUrls.length) { rej(new Error('sin frames')); return; }
+      var total = dataUrls.length;
+      var results = new Array(total);
+      var loaded = 0;
+      var W = 0, H = 0;
+      // Canvas PRIVADO por llamada — nunca compartido
+      var oc = document.createElement('canvas');
+      var ox = oc.getContext('2d');
+      dataUrls.forEach(function(url, i) {
+        var img = new Image();
+        img.onload = function() {
+          if (!W) { W = img.naturalWidth; H = img.naturalHeight; oc.width = W; oc.height = H; }
+          ox.clearRect(0, 0, W, H);
+          ox.drawImage(img, 0, 0);
+          results[i] = { imageData: ox.getImageData(0, 0, W, H), delay: delay || 100 };
+          if (++loaded === total) res({ frames: results, width: W, height: H });
+        };
+        img.onerror = function() {
+          results[i] = { imageData: new ImageData(W||1, H||1), delay: delay || 100 };
+          if (++loaded === total) res({ frames: results, width: W||1, height: H||1 });
+        };
+        img.src = url;
+      });
+    });
+  }
+
+  function decodeApng(dataUrl, delay) {
+    return new Promise(function(res, rej) {
+      try {
+        var b64 = dataUrl.split(',')[1];
+        var bin = atob(b64);
+        var u8  = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        var decoded = UPNG.decode(u8.buffer);
+        var rgba8   = UPNG.toRGBA8(decoded);
+        if (!rgba8 || !rgba8.length) { rej(new Error('UPNG: sin frames')); return; }
+        var W = decoded.width, H = decoded.height;
+        // Canvas PRIVADO por llamada
+        var oc = document.createElement('canvas'); oc.width = W; oc.height = H;
+        var ox = oc.getContext('2d');
+        var frames = rgba8.map(function(buf, fi) {
+          var imgd = new ImageData(new Uint8ClampedArray(buf), W, H);
+          ox.clearRect(0, 0, W, H);
+          ox.putImageData(imgd, 0, 0);
+          var frameDelay = delay || 100;
+          if (decoded.frames && decoded.frames[fi] && decoded.frames[fi].delay) {
+            frameDelay = Math.round(decoded.frames[fi].delay);
+          }
+          return { imageData: ox.getImageData(0, 0, W, H), delay: frameDelay };
+        });
+        res({ frames: frames, width: W, height: H });
+      } catch(e) { rej(e); }
+    });
+  }
+
+  function decode(input, delay) {
+    if (Array.isArray(input)) return decodeFrameArray(input, delay);
+    // dataUrl único: intentar como APNG, fallback a frame estático
+    if (typeof UPNG !== 'undefined') {
+      return decodeApng(input, delay).catch(function() {
+        return decodeFrameArray([input], delay);
+      });
+    }
+    return decodeFrameArray([input], delay);
+  }
+
+  return { decode: decode };
+})();
+/* ── fin ApngDecoder ── */
+
 /* ============================================================
    editor.js — ComiXow v5.4
    Motor canvas fiel al referEditor.
@@ -1008,7 +1087,9 @@ class ImageLayer extends BaseLayer {
   // ── loadAnim: carga frames en _animFrames + _oc único — patrón idéntico a GifLayer.load()
   loadAnim(input, cb) {
     if (!input || (Array.isArray(input) && !input.length)) { cb && cb(); return; }
+    // Si ya está listo Y no fue reseteado por stopAnim, reusar sin redecodificar
     if (this._animReady && this._animFrames && this._animFrames.length) { cb && cb(); return; }
+    if (!window.ApngDecoder) { console.warn('ApngDecoder no disponible'); cb && cb(); return; }
     const delay = this._gcpFrameDelay || window._gcpFrameDelay || 100;
     window.ApngDecoder.decode(input, delay).then((result) => {
       this._animFrames = result.frames;
@@ -1017,9 +1098,12 @@ class ImageLayer extends BaseLayer {
       this._oc.width  = result.width;
       this._oc.height = result.height;
       this._animReady = true;
-      this._applyFrame(0);
+      // Pintar frame 0 en _oc para que draw() tenga contenido inmediatamente
+      if (result.frames.length) {
+        this._oc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
+      }
       cb && cb();
-    }).catch((e) => { console.warn('ApngDecoder:', e); cb && cb(); });
+    }).catch(function(e) { console.warn('ApngDecoder error:', e); cb && cb(); });
   }
 
   // ── _applyFrame: IDÉNTICO a GifLayer._applyFrame — putImageData en _oc único
@@ -1068,6 +1152,8 @@ class ImageLayer extends BaseLayer {
   stopAnim() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this._playing = false;
+    this._fIdx = 0;
+    this._gcpPlayCount = 0;
     if (this._animReady && this._animFrames && this._animFrames.length) {
       this._oc.getContext('2d').putImageData(this._animFrames[0].imageData, 0, 0);
     }
@@ -1160,7 +1246,13 @@ class GifLayer extends BaseLayer {
       }
     }, frame.delay);
   }
-  stopAnim() { if (this._timer) { clearTimeout(this._timer); this._timer = null; } }
+  stopAnim() {
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    this._fIdx = 0;
+    if (this._ready && this._frames && this._frames.length && this._oc) {
+      this._oc.getContext('2d').putImageData(this._frames[0].imageData, 0, 0);
+    }
+  }
   draw(ctx) {
     if (!this._oc || !this._ready) return;
     const pw = edPageW(), ph = edPageH();
@@ -13066,20 +13158,25 @@ function _edGifSetPlaying(playing) {
     page.layers.forEach(l => {
       // GIF importado
       if (l.type === 'gif' && l._ready) {
-        l._playing = playing;
-        if (playing) l._applyFrame(l._fIdx || 0);
-        else l.stopAnim();
-      }
-      // Animación PNG del editor GIF
-      if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 1) {
-        l._playing = playing;
         if (playing) {
-          l._gcpPlayCount = 0; // resetear contador de repeticiones
+          l._fIdx = 0;  // siempre desde frame 0
+          l._playing = true;
+          l._applyFrame(0);
+        } else {
+          l.stopAnim(); // stopAnim ya resetea _fIdx a 0
+        }
+      }
+      // Animación PNG (APNG desde biblioteca o importado)
+      if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 1) {
+        if (playing) {
+          l._fIdx = 0;           // siempre desde frame 0
+          l._gcpPlayCount = 0;   // resetear contador de repeticiones
+          l._playing = true;
           l.loadAnim(l._pngFrames, () => {
-            if (l._playing) l._applyFrame(l._fIdx || 0);
+            if (l._playing) l._applyFrame(0); // siempre frame 0, no _fIdx
           });
         } else {
-          l.stopAnim();
+          l.stopAnim(); // stopAnim ya resetea _fIdx y _gcpPlayCount a 0
         }
       }
     });
@@ -13522,6 +13619,17 @@ function _vStartBubbleFade(){
 let _viewerAC = null;
 
 // ── Navegación del visor: funciones únicas usadas por swipe, botones y teclado ──
+// Resetear animaciones de una página al salir de ella en el visor
+function _edResetPageAnims(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page) return;
+  page.layers.forEach(function(l) {
+    // Parar cualquier layer con timer activo, independientemente del número de frames
+    if (l.type === 'gif' && l._ready) { l.stopAnim(); }
+    if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 0) { l.stopAnim(); }
+  });
+}
+
 function _viewerAdvance(){
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; _vPrevBubbleFade=0; }
   const page = edPages[edViewerIdx];
@@ -13532,6 +13640,7 @@ function _viewerAdvance(){
     edViewerTextStep++;
     edUpdateViewer();
   } else if(edViewerIdx < edPages.length - 1){
+    _edResetPageAnims(edViewerIdx);
     edViewerIdx++;
     const np = edPages[edViewerIdx];
     const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
@@ -13547,6 +13656,7 @@ function _viewerBack(){
     edViewerTextStep--;
     edUpdateViewer();
   } else if(edViewerIdx > 0){
+    _edResetPageAnims(edViewerIdx);
     edViewerIdx--;
     const pp = edPages[edViewerIdx];
     const ptl = (pp?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
