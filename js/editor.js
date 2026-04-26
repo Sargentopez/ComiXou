@@ -1033,14 +1033,14 @@ class ImageLayer extends BaseLayer {
     this._oc = this._pngOcs[this._pngFrameIdx]; // _oc = lo que draw() usa
     if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
+    const _delay = (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
     this._timer = setTimeout(() => {
       this._applyPngFrame(this._pngFrameIdx + 1);
       requestAnimationFrame(() => {
         if (typeof edRedraw === 'function') edRedraw();
-        // El visor tiene su propio canvas — actualizarlo también
         if (typeof edUpdateViewer === 'function') edUpdateViewer();
       });
-    }, 150);
+    }, _delay);
   }
 
   stopAnim() {
@@ -13033,7 +13033,6 @@ function _edGifSetPlaying(playing) {
       if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 1) {
         l._playing = playing;
         if (playing) {
-          // Precargar frames si no están listos, luego arrancar
           l._preloadPngFrames(() => {
             if (l._playing) l._applyPngFrame(l._pngFrameIdx || 0);
           });
@@ -15934,7 +15933,13 @@ function _bibRenderPanel(panel) {
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
-          edPushHistory(); edRedraw();
+          edPushHistory();
+          // Precargar canvas offscreen por frame y arrancar la animación
+          la._preloadPngFrames(() => {
+            la._playing = true;
+            la._applyPngFrame(0);
+            edRedraw();
+          });
         };
         img.src = frames[0];
         _bibClose(panel);
