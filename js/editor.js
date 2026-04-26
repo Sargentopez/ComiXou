@@ -790,7 +790,7 @@ window.ApngDecoder = (function(){
     return decodeFrameArray([input], delay);
   }
 
-  return { decode: decode };
+  return { decode: decode, decodeFrameArray: decodeFrameArray, decodeApng: decodeApng };
 })();
 /* ── fin ApngDecoder ── */
 
