@@ -293,6 +293,38 @@ const SupabaseClient = (() => {
     });
   }
 
+  // Diagnóstico temporal de upload
+  function _edDiag(msg) {
+    console.warn('[DIAG]', msg);
+    let p = document.getElementById('_edDiagBox');
+    if (!p) {
+      p = document.createElement('div');
+      p.id = '_edDiagBox';
+      p.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#111;color:#0f0;font:11px monospace;';
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'display:flex;justify-content:space-between;padding:4px 8px;background:#333';
+      hdr.innerHTML = '<b>DIAG UPLOAD</b>';
+      const btns = document.createElement('div');
+      const cp = document.createElement('button');
+      cp.textContent = '📋 Copiar';
+      cp.style.cssText = 'margin-right:6px;padding:2px 8px;cursor:pointer;';
+      cp.onclick = () => { const ta = document.getElementById('_edDiagTa'); ta.select(); document.execCommand('copy'); cp.textContent='✓'; };
+      const cl = document.createElement('button');
+      cl.textContent = '✕';
+      cl.style.cssText = 'padding:2px 8px;cursor:pointer;';
+      cl.onclick = () => p.remove();
+      btns.append(cp, cl); hdr.appendChild(btns); p.appendChild(hdr);
+      const ta = document.createElement('textarea');
+      ta.id = '_edDiagTa';
+      ta.style.cssText = 'width:100%;height:100px;background:#111;color:#0f0;border:none;font:11px monospace;padding:4px;box-sizing:border-box;';
+      ta.readOnly = true;
+      p.appendChild(ta);
+      document.body && document.body.appendChild(p);
+    }
+    const ta = document.getElementById('_edDiagTa');
+    if (ta) ta.value += msg + '\n';
+  }
+
   async function _uploadPanels(comic) {
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
 
@@ -360,6 +392,11 @@ const SupabaseClient = (() => {
             const _bucketKey = l.animKey || _idbKey;
             try {
               const _animData = await _sbAnimIdbLoad(_idbKey);
+              _edDiag('APNG upload: idbKey=' + _idbKey + ' data=' + (
+                _animData === null ? 'NULL' :
+                typeof _animData === 'string' ? 'string(' + _animData.length + ')' :
+                Array.isArray(_animData) ? 'array(' + _animData.length + ')' : typeof _animData
+              ));
               if (_animData) {
                 let _apngDataUrl = null;
                 if (typeof _animData === 'string') {
@@ -367,9 +404,12 @@ const SupabaseClient = (() => {
                 } else if (Array.isArray(_animData) && _animData.length) {
                   _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
                 }
-                if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
+                if (_apngDataUrl) { animUrl = await _animUpload(_bucketKey, _apngDataUrl); _edDiag('APNG OK: ' + animUrl); }
+                else _edDiag('APNG build null');
               }
-            } catch(e) { console.warn('APNG upload error:', e.message); }
+            } catch(e) { _edDiag('APNG upload ERROR: ' + e.message); }
+          } else if (l.type === 'image') {
+            _edDiag('APNG skip: no pngFramesKey ni animKey en layer ' + j);
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
