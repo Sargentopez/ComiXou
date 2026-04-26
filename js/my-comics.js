@@ -306,37 +306,34 @@ function _mcRenderList() {
         _mcToast('\u23f3 Descargando obra de la nube\u2026 (puede tardar si contiene GIFs)');
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
-          // Limpiar campos grandes de los layers antes de guardar en localStorage.
-          // El sistema de animaciones (animKey/IDB/bucket) ya está gestionado por
-          // supabase-client.js — aquí solo limpiamos para no saturar localStorage.
-          // Recoger todas las escrituras IDB de APNGs para esperarlas antes de continuar
+          // Guardar _pngFrames en IndexedDB (como los GIFs) para no saturar localStorage.
+          // Se usa IDB 'cxAnims' con clave '<comicId>_<pageIdx>_<layerIdx>'.
+          const _animIdbSave = (key, frames) => new Promise(res => {
+            const req = indexedDB.open('cxAnims', 1);
+            req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+            req.onsuccess = e => {
+              const tx = e.target.result.transaction('anims', 'readwrite');
+              tx.objectStore('anims').put(frames, key);
+              tx.oncomplete = () => res();
+              tx.onerror = () => res();
+            };
+            req.onerror = () => res();
+          });
           const _idbWrites = [];
           const _edataClean = {
             ...editorData,
-            pages: (editorData.pages || []).map((pg) => ({
+            pages: (editorData.pages || []).map((pg, pi) => ({
               ...pg,
-              layers: (pg.layers || []).map((l) => {
-                if (!l._apngSrc && !l._pngFrames && !l._animFrames) return l;
-                const lClean = Object.assign({}, l);
-                // _apngSrc: guardar en IDB por animKey y usar animKey como _pngFramesKey
-                if (lClean._apngSrc && lClean.animKey) {
-                  if (window._sbAnimIdbSave) {
-                    _idbWrites.push(
-                      window._sbAnimIdbSave(lClean.animKey, lClean._apngSrc).catch(() => {})
-                    );
-                  }
-                  lClean._pngFramesKey = lClean.animKey;
-                }
-                delete lClean._apngSrc;
-                delete lClean._animFrames;
-                delete lClean._animReady;
-                delete lClean._oc;
-                delete lClean._pngFrames;
-                return lClean;
+              layers: (pg.layers || []).map((l, li) => {
+                if (!l._pngFrames) return l;
+                const _idbKey = comicToEdit.id + '_' + pi + '_' + li;
+                _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
+                const { _pngFrames, ...lClean } = l;
+                return { ...lClean, _pngFramesKey: _idbKey };
               }),
             })),
           };
-          // Esperar a que todos los IDB writes terminen ANTES de guardar y abrir
+          // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
           if (_idbWrites.length) await Promise.all(_idbWrites);
           ComicStore.save({
             ...comicToEdit,
