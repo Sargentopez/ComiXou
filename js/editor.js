@@ -4255,11 +4255,19 @@ function _edTryLoadApng(dataUrl, la, cb) {
     });
     la._pngFrames = frameUrls; // array length > 1 → reconocido por _edGifSetPlaying
     la._animReady = false;
-    // loadAnim recibe el array de frames (mismo que biblioteca) → decodeFrameArray
-    la.loadAnim(frameUrls, function() {
-      // no arrancar _playing aquí — lo hará _edGifSetPlaying al abrir el visor
-      cb(true);
-    });
+    la._apngSrc = dataUrl; // APNG completo en memoria para _edGifSetPlaying y upload
+    // Generar animKey — guardar el APNG completo en IDB (patrón GIF)
+    var _ak = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+    la.animKey = _ak;
+    var _doLoadApng = function() {
+      la.loadAnim(frameUrls, function() { cb(true); });
+    };
+    if (window._sbAnimIdbSave) {
+      // Guardar el dataUrl APNG completo en IDB — cb solo después de que IDB complete
+      window._sbAnimIdbSave(_ak, dataUrl).then(_doLoadApng).catch(function(e) {
+        console.warn('animIdbSave:', e); _doLoadApng();
+      });
+    } else { _doLoadApng(); }
   } catch(e){ console.warn('_edTryLoadApng error:', e); cb(false); }
 }
 function edAddImage(file){
