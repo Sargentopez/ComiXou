@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v18.70</footer>
+    <footer class="app-version">v18.71</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -529,6 +529,14 @@ Router.register('editor', {
           <div class="ed-menu-sep"></div>
           <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
+          <div class="ed-menu-sep"></div>
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-gcpmenu="guardar" style="font-weight:700">Guardar ▾</button>
+            <div class="ed-dropdown" id="gdd-guardar" style="min-width:180px">
+              <button class="ed-dd-item" id="gcpSaveAppBtn">📥 Guardar en la aplicación</button>
+              <button class="ed-dd-item" id="gcpDownloadApngBtn">⬇️ Descargar PNG animado</button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
           <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
           <button class="ed-menu-btn" id="gcpSaveFrameBtn" title="Guardar frame actual" style="font-weight:700">💾 Frame</button>
