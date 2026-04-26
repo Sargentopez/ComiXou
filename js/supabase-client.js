@@ -316,20 +316,7 @@ const SupabaseClient = (() => {
     }).catch(() => {});
   }
 
-  // Sube frames PNG (JSON string comprimido) al bucket 'anims'
-  // Sube frames PNG (JSON string) al bucket 'anims' como texto plano
-  async function _animUpload(key, framesJson) {
-    if (window._authTryRefresh) await window._authTryRefresh();
-    const blob = new Blob([framesJson], { type: 'application/json' });
-    const path = key + '.anim';
-    const r = await fetch(`${STORAGE}/object/anims/${path}`, {
-      method:  'POST',
-      headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true' },
-      body:    blob,
-    });
-    if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
-    return `${STORAGE}/object/public/anims/${path}`;
-  }
+  // _animUpload antigua eliminada — usar la nueva (blob PNG con .png)
 
   // Descarga APNG del bucket 'anims' y devuelve dataUrl PNG — patrón idéntico al GIF
   async function _animDownload(animUrl) {
@@ -412,6 +399,7 @@ const SupabaseClient = (() => {
           let animUrl = null;
           if (l.animKey) {
             try {
+              _diagMsg('APNG attempt: animKey=' + l.animKey + ' pngFrames=' + (l._pngFrames ? l._pngFrames.length : 'none') + ' apngSrc=' + (l._apngSrc ? 'yes(' + (l._apngSrc||'').length + ')' : 'no'));
               const _animData = await _sbAnimIdbLoad(l.animKey);
               if (!_animData) { _diagMsg('APNG IDB null: animKey=' + l.animKey); }
               else {
