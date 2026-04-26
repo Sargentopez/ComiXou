@@ -8207,11 +8207,9 @@ function _cofHandleUp(e) {
 
 function _cofAfterStroke() {
   if (!_cof.on) return;
-  _cof.state = 'red_cool';
   _cof._strokeStarted = false;
-  _cofDraw();
   clearTimeout(_cof._timer);
-  _cof._timer = setTimeout(_cofExpire, _cof.MS_COOL);
+  _cofExpire();
 }
 
 function _cofExpire() {

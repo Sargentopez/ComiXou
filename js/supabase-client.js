@@ -334,15 +334,9 @@ const SupabaseClient = (() => {
           // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
           if (l.type === 'gif' && l.gifKey) {
             try {
-              // Diagnóstico del token
-              const _sess = JSON.parse(localStorage.getItem('cs_session')||'null');
-              const _tok = _sess && _sess.token;
-              const _tokInfo = _tok ? ('token=' + _tok.substring(0,20) + '... role=' + (JSON.parse(atob(_tok.split('.')[1])).role||'?')) : 'NO TOKEN';
-              console.warn('GIF attempt: ' + l.gifKey + ' | ' + _tokInfo);
               const dataUrl = await _sbGifIdbLoad(l.gifKey);
-              if (!dataUrl) { console.warn('GIF IDB null: gifKey=' + l.gifKey); }
-              else { gifUrl = await _gifUpload(l.gifKey, dataUrl); console.warn('GIF OK: ' + gifUrl); }
-            } catch(e) { console.warn('GIF upload ERROR: ' + e.message); }
+              if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
+            } catch(e) { console.warn('GIF upload error:', e.message); }
           }
           // Serializar la capa — excluir campos de re-edición que el reader no necesita
           const _lClean = {...l};
@@ -356,25 +350,26 @@ const SupabaseClient = (() => {
           delete _lClean._oc;
           delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
 
-          // APNG animado → bucket 'anims' — patrón idéntico al GIF
+          // APNG animado → bucket 'anims'
+          // Usa _pngFramesKey (siempre en layer_data tras ComicStore.save)
+          // o animKey si existe. Carga de IDB con _edAnimIdbLoad que es compatible
+          // con ambos formatos: string dataUrl (nuevo) o array frames (antiguo)
           let animUrl = null;
-          if (l.animKey) {
+          if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
+            const _idbKey = l._pngFramesKey || l.animKey;
+            const _bucketKey = l.animKey || _idbKey;
             try {
-              console.warn('APNG attempt: animKey=' + l.animKey + ' pngFrames=' + (l._pngFrames ? l._pngFrames.length : 'none') + ' apngSrc=' + (l._apngSrc ? 'yes(' + (l._apngSrc||'').length + ')' : 'no'));
-              const _animData = await _sbAnimIdbLoad(l.animKey);
-              if (!_animData) { console.warn('APNG IDB null: animKey=' + l.animKey); }
-              else {
+              const _animData = await _sbAnimIdbLoad(_idbKey);
+              if (_animData) {
                 let _apngDataUrl = null;
                 if (typeof _animData === 'string') {
                   _apngDataUrl = _animData;
                 } else if (Array.isArray(_animData) && _animData.length) {
                   _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
-                  if (!_apngDataUrl) console.warn('APNG build null para ' + l.animKey);
                 }
-                if (_apngDataUrl) animUrl = await _animUpload(l.animKey, _apngDataUrl);
-                else console.warn('APNG dataUrl null para ' + l.animKey);
+                if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
               }
-            } catch(e) { console.warn('APNG upload ERROR: ' + e.message); }
+            } catch(e) { console.warn('APNG upload error:', e.message); }
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
