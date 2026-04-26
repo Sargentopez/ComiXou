@@ -309,6 +309,8 @@ function _mcRenderList() {
           // Limpiar campos grandes de los layers antes de guardar en localStorage.
           // El sistema de animaciones (animKey/IDB/bucket) ya está gestionado por
           // supabase-client.js — aquí solo limpiamos para no saturar localStorage.
+          // Recoger todas las escrituras IDB de APNGs para esperarlas antes de continuar
+          const _idbWrites = [];
           const _edataClean = {
             ...editorData,
             pages: (editorData.pages || []).map((pg) => ({
@@ -316,20 +318,26 @@ function _mcRenderList() {
               layers: (pg.layers || []).map((l) => {
                 if (!l._apngSrc && !l._pngFrames && !l._animFrames) return l;
                 const lClean = Object.assign({}, l);
-                // Guardar _apngSrc en IDB por animKey antes de eliminarlo
-                if (lClean._apngSrc && lClean.animKey && window._sbAnimIdbSave) {
-                  window._sbAnimIdbSave(lClean.animKey, lClean._apngSrc).catch(() => {});
+                // _apngSrc: guardar en IDB por animKey y usar animKey como _pngFramesKey
+                if (lClean._apngSrc && lClean.animKey) {
+                  if (window._sbAnimIdbSave) {
+                    _idbWrites.push(
+                      window._sbAnimIdbSave(lClean.animKey, lClean._apngSrc).catch(() => {})
+                    );
+                  }
+                  lClean._pngFramesKey = lClean.animKey;
                 }
-                // Limpiar campos en memoria — nunca van a localStorage
                 delete lClean._apngSrc;
                 delete lClean._animFrames;
                 delete lClean._animReady;
                 delete lClean._oc;
-                delete lClean._pngFrames;  // el animKey en IDB es suficiente para el upload
+                delete lClean._pngFrames;
                 return lClean;
               }),
             })),
           };
+          // Esperar a que todos los IDB writes terminen ANTES de guardar y abrir
+          if (_idbWrites.length) await Promise.all(_idbWrites);
           ComicStore.save({
             ...comicToEdit,
             cloudOnly: false,

@@ -1106,28 +1106,7 @@ async function preloadImages() {
             return layer._animOc;
           }).catch(function(e) { console.warn('APNG reader load:', e); return null; });
       }
-      // Compatibilidad: sistema antiguo _pngFrames/_pngOcs
-      if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length >= 1) {
-        return Promise.all(layer._pngFrames.map(function(dataUrl) {
-          return new Promise(function(res) {
-            const img = new Image();
-            img.onload = function() {
-              const oc = document.createElement('canvas');
-              oc.width = img.naturalWidth; oc.height = img.naturalHeight;
-              oc.getContext('2d').drawImage(img, 0, 0);
-              res(oc);
-            };
-            img.onerror = function() { res(null); };
-            img.src = dataUrl;
-          });
-        })).then(function(ocs) {
-          layer._pngOcs = ocs.filter(Boolean);
-          layer._pngIdx = 0;
-          layer._pngOc  = layer._pngOcs[0] || null;
-          layer._pngReady = layer._pngOcs.length > 0;
-          return layer._pngOc;
-        });
-      }
+
 
       // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
       const src = layer.renderDataUrl || layer.src || layer.dataUrl;
@@ -1232,16 +1211,7 @@ function _readerGifTick() {
           panelChanged = true;
         }
       }
-      // Animación PNG antigua (compatibilidad)
-      if (layer._pngReady && layer._pngOcs && layer._pngOcs.length > 1) {
-        if (!layer._pngLastTick) layer._pngLastTick = now;
-        if (now - layer._pngLastTick >= 150) {
-          layer._pngIdx = (layer._pngIdx + 1) % layer._pngOcs.length;
-          layer._pngOc  = layer._pngOcs[layer._pngIdx];
-          layer._pngLastTick = now;
-          panelChanged = true;
-        }
-      }
+
     });
     if (panelChanged) {
       // Modo fixed: redibujar si es el panel activo
@@ -1263,7 +1233,7 @@ function startReader() {
   document.getElementById('readerApp').classList.remove('hidden');
 
   // Arrancar loop de animación GIF si hay alguno en la obra
-  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._pngReady || l._animReady));
+  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady));
   if (_hasGifs) requestAnimationFrame(_readerGifTick);
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
@@ -1708,8 +1678,8 @@ function _render() {
     }
     if (type === 'image' || type === 'draw' || type === 'stroke') {
       // Animación PNG del editor GIF — usar _pngOc en lugar de layerImgs[j]
-      if (type === 'image' && (layer._animReady && layer._animOc || layer._pngReady && layer._pngOc)) {
-        const _oc = (layer._animReady && layer._animOc) ? layer._animOc : layer._pngOc;
+      if (type === 'image' && layer._animReady && layer._animOc) {
+        const _oc = layer._animOc;
         const x = (layer.x || 0.5) * pw;
         const y = (layer.y || 0.5) * ph;
         const w = (layer.width || 1) * pw;
