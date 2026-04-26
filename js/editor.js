@@ -715,140 +715,6 @@ window.GifDecoder = (function(){
 })();
 /* ── fin gifuct-js ── */
 
-/* ── APNG encoder mínimo (inline, sin dependencias externas) ──
-   Genera PNG animado transparente (RGBA) desde array de canvas.
-   Usa CompressionStream (Chrome 80+/Android) para deflate.
-   Spec: https://wiki.mozilla.org/APNG_Spec
-   ─────────────────────────────────────────────────────────── */
-const _apng = (() => {
-  // CRC32 lookup table
-  const _crcT = (() => {
-    const t = new Uint32Array(256);
-    for (let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?0xEDB88320^(c>>>1):c>>>1;t[n]=c;}
-    return t;
-  })();
-  function _crc(buf, off, len) {
-    let c=0xFFFFFFFF;
-    for(let i=0;i<len;i++)c=_crcT[(c^buf[off+i])&0xFF]^(c>>>8);
-    return (c^0xFFFFFFFF)>>>0;
-  }
-  function _u32(v){return new Uint8Array([v>>>24&255,v>>>16&255,v>>>8&255,v&255]);}
-  function _chunk(type, data) {
-    const td = typeof type==='string'
-      ? new Uint8Array([type.charCodeAt(0),type.charCodeAt(1),type.charCodeAt(2),type.charCodeAt(3)])
-      : type;
-    const len = data ? data.length : 0;
-    const out = new Uint8Array(12+len);
-    const dv = new DataView(out.buffer);
-    dv.setUint32(0,len);
-    out.set(td,4);
-    if(data)out.set(data,8);
-    dv.setUint32(8+len,_crc(out,4,4+len));
-    return out;
-  }
-  function _concat(arrays){
-    const total=arrays.reduce((s,a)=>s+a.length,0);
-    const out=new Uint8Array(total);let off=0;
-    for(const a of arrays){out.set(a,off);off+=a.length;}
-    return out;
-  }
-  // deflate raw usando CompressionStream (navegadores modernos)
-  async function _deflate(raw) {
-    const cs = new CompressionStream('deflate');
-    const w = cs.writable.getWriter();
-    w.write(raw); w.close();
-    const chunks = [];
-    const r = cs.readable.getReader();
-    while(true){const{done,value}=await r.read();if(done)break;chunks.push(value);}
-    return _concat(chunks);
-  }
-  // Filtrar una fila de píxeles RGBA con filtro "None" (0) — simple y compatible
-  function _filterRow(row, prevRow, bpp) {
-    // Filtro Sub (1) suele ser mejor para imágenes con gradientes
-    const out = new Uint8Array(1+row.length);
-    out[0] = 1; // filter type Sub
-    for(let i=0;i<row.length;i++){
-      const a = i>=bpp ? row[i-bpp] : 0;
-      out[i+1] = (row[i]-a+256)&255;
-    }
-    return out;
-  }
-  // Construir datos IDAT/fdAT (scanlines filtradas) para un canvas
-  async function _buildIdat(canvas) {
-    const ctx = canvas.getContext('2d');
-    const w=canvas.width, h=canvas.height;
-    const imgd = ctx.getImageData(0,0,w,h).data; // Uint8ClampedArray RGBA
-    const rows = [];
-    for(let y=0;y<h;y++){
-      const row = imgd.subarray(y*w*4,(y+1)*w*4);
-      rows.push(_filterRow(row, null, 4));
-    }
-    const raw = _concat(rows);
-    const compressed = await _deflate(raw);
-    // Envolver en zlib wrapper (CMF=0x78, FLG calculado)
-    const adler = _adler32(raw);
-    const zlibHdr = new Uint8Array([0x78,0x01]); // deflate, preset dict=0, level 1
-    const zlibTrl = new Uint8Array([adler>>>24&255,adler>>>16&255,adler>>>8&255,adler&255]);
-    return _concat([zlibHdr, compressed, zlibTrl]);
-  }
-  function _adler32(data) {
-    let a=1,b=0;
-    for(let i=0;i<data.length;i++){a=(a+data[i])%65521;b=(b+a)%65521;}
-    return (b<<16)|a;
-  }
-
-  // Función principal: array de canvas + delayMs → Uint8Array APNG
-  async function encode(frames, delayMs) {
-    if(!frames||!frames.length)throw new Error('no frames');
-    if(!window.CompressionStream)throw new Error('CompressionStream not supported');
-    const W=frames[0].width, H=frames[0].height;
-    const nf=frames.length;
-    // PNG signature
-    const sig=new Uint8Array([137,80,78,71,13,10,26,10]);
-    // IHDR: width, height, bitdepth=8, colortype=6(RGBA), compression=0, filter=0, interlace=0
-    const ihdrData=new Uint8Array(13);
-    const ihdrDv=new DataView(ihdrData.buffer);
-    ihdrDv.setUint32(0,W);ihdrDv.setUint32(4,H);
-    ihdrData[8]=8;ihdrData[9]=6;ihdrData[10]=0;ihdrData[11]=0;ihdrData[12]=0;
-    const IHDR=_chunk('IHDR',ihdrData);
-    // acTL: num_frames, num_plays=0 (infinito)
-    const actlData=new Uint8Array(8);
-    new DataView(actlData.buffer).setUint32(0,nf);new DataView(actlData.buffer).setUint32(4,0);
-    const acTL=_chunk('acTL',actlData);
-    // Calcular delay: delayMs en unidades de 1/1000s
-    const dnum=Math.round(delayMs), dden=1000;
-    let seq=0;
-    const frameChunks=[];
-    for(let fi=0;fi<nf;fi++){
-      const idat=await _buildIdat(frames[fi]);
-      // fcTL
-      const fctlData=new Uint8Array(26);
-      const fctlDv=new DataView(fctlData.buffer);
-      fctlDv.setUint32(0,seq++);// sequence number
-      fctlDv.setUint32(4,W);fctlDv.setUint32(8,H);
-      fctlDv.setUint32(12,0);fctlDv.setUint32(16,0);// x_off, y_off
-      fctlDv.setUint16(20,dnum);fctlDv.setUint16(22,dden);// delay
-      fctlData[24]=0;// dispose_op=NONE
-      fctlData[25]=0;// blend_op=SOURCE
-      frameChunks.push(_chunk('fcTL',fctlData));
-      if(fi===0){
-        // Primer frame: IDAT estándar (compatibilidad con viewers PNG no-APNG)
-        frameChunks.push(_chunk('IDAT',idat));
-      } else {
-        // Frames siguientes: fdAT (4B seq + idat data)
-        const fdatData=new Uint8Array(4+idat.length);
-        new DataView(fdatData.buffer).setUint32(0,seq++);
-        fdatData.set(idat,4);
-        frameChunks.push(_chunk('fdAT',fdatData));
-      }
-    }
-    const IEND=_chunk('IEND',null);
-    return _concat([sig,IHDR,acTL,...frameChunks,IEND]);
-  }
-  return {encode};
-})();
-/* ── fin APNG encoder ── */
-
 /* ============================================================
    editor.js — ComiXow v5.4
    Motor canvas fiel al referEditor.
@@ -16423,6 +16289,9 @@ function _gcpHandleUp(e) {
    ═══════════════════════════════════════════════════════════════════════ */
 
 // Variables globales GCP — mismo patrón que: let edCanvas, edCtx;
+// Opciones de comportamiento para exportar APNG (fps → delay ms, num_plays)
+window._gcpFrameDelay  = 100;  // ms por frame (default 10fps)
+window._gcpRepeatCount = 0;    // 0 = infinito
 let gcpCanvas = null;
 let gcpCtx    = null;
 
@@ -17375,6 +17244,30 @@ function gcpOpen(edLayerIdx) {
       document.querySelectorAll('[id^="gdd-"]').forEach(d=>d.classList.remove('open'));
       _gcpDownloadApng();
     });
+    // Botón Comportamiento — abre/cierra subpanel inline sin cerrar el dropdown
+    document.getElementById('gcpBehaviourBtn')?.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      const panel = document.getElementById('gcpBehaviourPanel');
+      if (panel) panel.classList.toggle('open');
+    });
+    // Chips de velocidad (fps)
+    document.querySelectorAll('[data-gcpfps]').forEach(btn => {
+      btn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        document.querySelectorAll('[data-gcpfps]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        window._gcpFrameDelay = Math.round(1000 / parseInt(btn.dataset.gcpfps, 10));
+      });
+    });
+    // Chips de repeticiones
+    document.querySelectorAll('[data-gcprep]').forEach(btn => {
+      btn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        document.querySelectorAll('[data-gcprep]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        window._gcpRepeatCount = parseInt(btn.dataset.gcprep, 10);
+      });
+    });
 
     // Menús GIF
     document.querySelectorAll('[data-gcpmenu]').forEach(btn => {
@@ -17582,79 +17475,122 @@ function _gcpSaveToLib(onDone) {
 }
 
 
-// _gcpDownloadApng — genera APNG animado transparente y lo descarga al dispositivo
+// _gcpDownloadApng — exporta animacion GCP como APNG transparente
+// Motor: UPNG.js (photopea) + pako — mismo stack que Squoosh (Google).
 async function _gcpDownloadApng() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
     edToast('No hay contenido para descargar'); return;
   }
-  if (!window.CompressionStream) {
-    edToast('Tu navegador no soporta esta función'); return;
-  }
-  edToast('Generando PNG animado…');
-  const layers    = window._gcpLayers.slice();
-  const pageW     = Math.round(edPageW()),  pageH   = Math.round(edPageH());
-  const marginX   = Math.round(edMarginX()), marginY = Math.round(edMarginY());
-  const totalFrames = _gcpGetTotalFrames() || 1;
-  const extra = Math.round(Math.max(pageW,pageH)*0.5);
-  const wsW=pageW+marginX*2+extra*2, wsH=pageH+marginY*2+extra*2;
-  const offX=extra, offY=extra;
+  if (typeof UPNG === 'undefined') { edToast('Error interno: UPNG no cargado'); return; }
 
-  // Renderizar todos los frames en canvas temporales
-  const renderSnap = (fi) => {
+  edToast('Generando PNG animado...');
+
+  const layers      = window._gcpLayers.slice();
+  const pageW       = Math.round(edPageW()),  pageH   = Math.round(edPageH());
+  const marginX     = Math.round(edMarginX()), marginY = Math.round(edMarginY());
+  const totalFrames = _gcpGetTotalFrames() || 1;
+  const extra = Math.round(Math.max(pageW, pageH) * 0.5);
+  const wsW = pageW + marginX * 2 + extra * 2;
+  const wsH = pageH + marginY * 2 + extra * 2;
+  const offX = extra, offY = extra;
+
+  const renderFrame = (fi) => {
     _gcpApplyFrame(fi);
-    const fc=document.createElement('canvas'); fc.width=wsW; fc.height=wsH;
-    const fctx=fc.getContext('2d');
-    fctx.setTransform(1,0,0,1,offX,offY);
-    layers.forEach(l=>{
-      if(!l||typeof l.draw!=='function')return;
-      if(l._gcpVisible===false)return;
-      if(l.type==='image'||l.type==='gif')l.draw(fctx,fc);
-      else if(l.type==='text'||l.type==='bubble')l.draw(fctx,fc);
-      else{fctx.globalAlpha=l.opacity??1;l.draw(fctx);fctx.globalAlpha=1;}
+    const fc = document.createElement('canvas');
+    fc.width = wsW; fc.height = wsH;
+    const fctx = fc.getContext('2d');
+    fctx.clearRect(0, 0, wsW, wsH);
+    fctx.setTransform(1, 0, 0, 1, offX, offY);
+    layers.forEach(l => {
+      if (!l || typeof l.draw !== 'function') return;
+      if (l._gcpVisible === false) return;
+      if (l.type === 'image' || l.type === 'gif') l.draw(fctx, fc);
+      else if (l.type === 'text' || l.type === 'bubble') l.draw(fctx, fc);
+      else { fctx.globalAlpha = l.opacity != null ? l.opacity : 1; l.draw(fctx); fctx.globalAlpha = 1; }
     });
-    fctx.setTransform(1,0,0,1,0,0);
+    fctx.setTransform(1, 0, 0, 1, 0, 0);
     return fc;
   };
-  const renderedFrames = Array.from({length:totalFrames},(_,fi)=>renderSnap(fi));
 
-  // Auto-recorte al contenido con padding
-  let minX=wsW,minY=wsH,maxX=0,maxY=0;
-  renderedFrames.forEach(fc=>{
-    const d=fc.getContext('2d').getImageData(0,0,wsW,wsH).data;
-    for(let y=0;y<wsH;y++)for(let x=0;x<wsW;x++){
-      if(d[(y*wsW+x)*4+3]>10){
-        if(x<minX)minX=x;if(x>maxX)maxX=x;
-        if(y<minY)minY=y;if(y>maxY)maxY=y;
+  const renderedFrames = Array.from({length: totalFrames}, function(_, fi) { return renderFrame(fi); });
+
+  let minX = wsW, minY = wsH, maxX = 0, maxY = 0;
+  renderedFrames.forEach(function(fc) {
+    const d = fc.getContext('2d').getImageData(0, 0, wsW, wsH).data;
+    for (let y = 0; y < wsH; y++) for (let x = 0; x < wsW; x++) {
+      if (d[(y * wsW + x) * 4 + 3] > 10) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
       }
     }
   });
-  if(maxX<minX||maxY<minY){minX=marginX+offX;minY=marginY+offY;maxX=minX+pageW-1;maxY=minY+pageH-1;}
-  const pad=4;
-  const cropX=Math.max(0,minX-pad),cropY=Math.max(0,minY-pad);
-  const cropW=Math.min(wsW,maxX+pad+1)-cropX, cropH=Math.min(wsH,maxY+pad+1)-cropY;
+  if (maxX < minX || maxY < minY) {
+    minX = marginX + offX; minY = marginY + offY;
+    maxX = minX + pageW - 1; maxY = minY + pageH - 1;
+  }
+  const pad = 4;
+  const cropX = Math.max(0, minX - pad), cropY = Math.max(0, minY - pad);
+  const cropW = Math.min(wsW, maxX + pad + 1) - cropX;
+  const cropH = Math.min(wsH, maxY + pad + 1) - cropY;
 
-  // Recortar frames
-  const croppedFrames = renderedFrames.map(fc=>{
-    const c=document.createElement('canvas'); c.width=cropW; c.height=cropH;
-    c.getContext('2d').drawImage(fc,cropX,cropY,cropW,cropH,0,0,cropW,cropH);
-    return c;
+  const bufs = renderedFrames.map(function(fc) {
+    const c = document.createElement('canvas');
+    c.width = cropW; c.height = cropH;
+    c.getContext('2d').drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+    return c.getContext('2d').getImageData(0, 0, cropW, cropH).data.buffer;
   });
 
-  // Restaurar frame activo
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
 
+  const frameDelay = (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
+  const dels = new Array(totalFrames).fill(totalFrames > 1 ? frameDelay : 0);
+
   try {
-    // Delay por frame: 100ms por defecto (10fps) si hay frames, si solo 1 → 1000ms
-    const delayMs = totalFrames > 1 ? 100 : 1000;
-    const apngBytes = await _apng.encode(croppedFrames, delayMs);
-    const blob = new Blob([apngBytes], {type:'image/png'});
+    const apngBuf = UPNG.encode(bufs, cropW, cropH, 0, dels);
+
+    // Parchear num_plays en chunk acTL: 0=infinito, 1=una vez, etc.
+    const numPlays = (window._gcpRepeatCount != null ? window._gcpRepeatCount : 0);
+    if (totalFrames > 1 && numPlays !== 0) {
+      const view = new DataView(apngBuf);
+      for (let off = 8; off < apngBuf.byteLength - 12; ) {
+        const chunkLen  = view.getUint32(off);
+        const chunkType = view.getUint32(off + 4);
+        if (chunkType === 0x6163544C) { // 'acTL'
+          view.setUint32(off + 12, numPlays);
+          // Recalcular CRC del chunk (tipo + datos = 4 + 8 bytes)
+          const crcT = _gcpCrc32Table();
+          let crc = 0xFFFFFFFF;
+          for (let i = off + 4; i < off + 4 + 4 + chunkLen; i++) {
+            crc = (crcT[(crc ^ view.getUint8(i)) & 0xFF] ^ (crc >>> 8)) >>> 0;
+          }
+          view.setUint32(off + 4 + 4 + chunkLen, crc ^ 0xFFFFFFFF);
+          break;
+        }
+        off += 12 + chunkLen;
+      }
+    }
+
+    const blob = new Blob([apngBuf], { type: 'image/png' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'animacion_comixou.png';
-    document.body.appendChild(a); a.click();
-    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1000);
-    edToast('PNG animado descargado ✓');
-  } catch(err) {
+    a.href = url;
+    a.download = 'animacion_comixou.png';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    edToast('PNG animado descargado');
+  } catch (err) {
     edToast('Error al generar PNG: ' + err.message);
   }
+}
+
+function _gcpCrc32Table() {
+  if (window._gcpCrc32TableCache) return window._gcpCrc32TableCache;
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return (window._gcpCrc32TableCache = t);
 }

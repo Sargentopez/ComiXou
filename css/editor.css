@@ -1926,3 +1926,17 @@ body.editor-page #appView {
 
 /* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }
+
+/* ── Chips de comportamiento GCP (velocidad / repeticiones) ── */
+.gcp-chip {
+  padding: 4px 10px;
+  border: 1.5px solid var(--gray-300);
+  border-radius: 20px;
+  background: var(--white);
+  font-size: .78rem; font-weight: 700;
+  cursor: pointer; color: var(--black);
+  transition: background .12s, border-color .12s;
+  font-family: var(--font-body);
+}
+.gcp-chip:hover { background: var(--gray-100); }
+.gcp-chip.active { background: var(--yellow); border-color: var(--black); }
