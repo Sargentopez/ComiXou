@@ -139,11 +139,14 @@ const SupabaseClient = (() => {
   // ── STORAGE: GIFs en bucket 'gifs' ────────────────────────────────────────
   // Mini IDB propio para leer GIFs — mismo DB que editor.js (cxGifs)
   function _sbGifIdbLoad(key) {
-    return new Promise((res, rej) => {
+    // Usar la función cacheada del editor si está disponible (evita doble conexión a cxGifs)
+    if (window._gifIdbLoad) return window._gifIdbLoad(key).catch(() => null);
+    return new Promise((res) => {
       const req = indexedDB.open('cxGifs', 1);
       req.onsuccess = e => {
         const db = e.target.result;
-        const r  = db.transaction('gifs').objectStore('gifs').get(key);
+        if (!db.objectStoreNames.contains('gifs')) { res(null); return; }
+        const r = db.transaction('gifs').objectStore('gifs').get(key);
         r.onsuccess = e2 => res(e2.target.result || null);
         r.onerror   = () => res(null);
       };
@@ -277,7 +280,7 @@ const SupabaseClient = (() => {
     const path = key + '.anim';
     const r = await fetch(`${STORAGE}/object/anims/${path}`, {
       method:  'POST',
-      headers: { ..._hdrsUser(), 'Content-Type': 'application/json', 'x-upsert': 'true' },
+      headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true' },
       body:    blob,
     });
     if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
