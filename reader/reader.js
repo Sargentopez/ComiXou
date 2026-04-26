@@ -1181,7 +1181,28 @@ function _readerGifTick() {
           panelChanged = true;
         }
       }
-      // Animación PNG del editor GIF
+      // Animación APNG (nuevo sistema)
+      if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
+        if (!layer._animLastTick) layer._animLastTick = now;
+        const _animFrame = layer._animFrames[layer._animIdx];
+        const _animDelay = (_animFrame && _animFrame.delay) || layer._gcpFrameDelay || 100;
+        if (now - layer._animLastTick >= _animDelay) {
+          const _stopAtEnd   = layer._gcpStopAtEnd   || false;
+          const _repeatCount = layer._gcpRepeatCount || 0;
+          let _nextIdx = layer._animIdx + 1;
+          if (_nextIdx >= layer._animFrames.length) {
+            layer._animPlayCount = (layer._animPlayCount || 0) + 1;
+            if (_stopAtEnd || (_repeatCount > 0 && layer._animPlayCount >= _repeatCount)) {
+              _nextIdx = layer._animFrames.length - 1;
+            } else { _nextIdx = 0; }
+          }
+          layer._animIdx = _nextIdx;
+          layer._animOc.getContext('2d').putImageData(layer._animFrames[_nextIdx].imageData, 0, 0);
+          layer._animLastTick = now;
+          panelChanged = true;
+        }
+      }
+      // Animación PNG antigua (compatibilidad)
       if (layer._pngReady && layer._pngOcs && layer._pngOcs.length > 1) {
         if (!layer._pngLastTick) layer._pngLastTick = now;
         if (now - layer._pngLastTick >= 150) {
@@ -1212,7 +1233,7 @@ function startReader() {
   document.getElementById('readerApp').classList.remove('hidden');
 
   // Arrancar loop de animación GIF si hay alguno en la obra
-  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._pngReady));
+  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._pngReady || l._animReady));
   if (_hasGifs) requestAnimationFrame(_readerGifTick);
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
@@ -1657,7 +1678,8 @@ function _render() {
     }
     if (type === 'image' || type === 'draw' || type === 'stroke') {
       // Animación PNG del editor GIF — usar _pngOc en lugar de layerImgs[j]
-      if (type === 'image' && layer._pngReady && layer._pngOc) {
+      if (type === 'image' && (layer._animReady && layer._animOc || layer._pngReady && layer._pngOc)) {
+        const _oc = (layer._animReady && layer._animOc) ? layer._animOc : layer._pngOc;
         const x = (layer.x || 0.5) * pw;
         const y = (layer.y || 0.5) * ph;
         const w = (layer.width || 1) * pw;
@@ -1667,7 +1689,7 @@ function _render() {
         ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
         ctx.translate(x, y);
         if (rot) ctx.rotate(rot * Math.PI / 180);
-        ctx.drawImage(layer._pngOc, -w/2, -h/2, w, h);
+        ctx.drawImage(_oc, -w/2, -h/2, w, h);
         ctx.restore();
         return;
       }
