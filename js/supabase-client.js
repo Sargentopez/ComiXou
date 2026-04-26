@@ -151,33 +151,75 @@ const SupabaseClient = (() => {
     });
   }
 
-  // Lee frames PNG desde IndexedDB 'cxAnims' (guardados por el editor con _pngFramesKey)
-  function _sbAnimIdbLoad(key) {
-    return new Promise(res => {
-      const req = indexedDB.open('cxAnims', 1);
-      req.onsuccess = e => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains('anims')) { res(null); return; }
-        const r = db.transaction('anims').objectStore('anims').get(key);
-        r.onsuccess = e2 => res(e2.target.result || null);
-        r.onerror   = () => res(null);
-      };
-      req.onerror = () => res(null);
-    });
-  }
-
-  function _sbAnimIdbSave(key, frames) {
-    return new Promise(res => {
+  // ── STORAGE: APNGs animados en bucket 'anims' — patrón idéntico al de GIFs ──
+  // IDB cacheado (misma conexión para toda la sesión — evita conflictos de apertura múltiple)
+  let _animDb = null;
+  function _animIdbOpen() {
+    if (_animDb) return Promise.resolve(_animDb);
+    return new Promise((res, rej) => {
       const req = indexedDB.open('cxAnims', 1);
       req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-      req.onsuccess = e => {
-        const tx = e.target.result.transaction('anims', 'readwrite');
-        tx.objectStore('anims').put(frames, key);
-        tx.oncomplete = () => res();
-        tx.onerror    = () => res();
-      };
-      req.onerror = () => res();
+      req.onsuccess = e => { _animDb = e.target.result; res(_animDb); };
+      req.onerror   = e => rej(e.target.error);
     });
+  }
+  // Guarda dataUrl PNG (APNG completo) en IDB por animKey
+  function _sbAnimIdbSave(key, dataUrl) {
+    return _animIdbOpen().then(db => new Promise((res, rej) => {
+      const tx = db.transaction('anims', 'readwrite');
+      tx.objectStore('anims').put(dataUrl, key);
+      tx.oncomplete = () => res();
+      tx.onerror    = e => rej(e.target.error);
+    }));
+  }
+  // Lee dataUrl PNG (APNG completo) de IDB por animKey
+  function _sbAnimIdbLoad(key) {
+    return _animIdbOpen().then(db => new Promise((res, rej) => {
+      const r = db.transaction('anims').objectStore('anims').get(key);
+      r.onsuccess = e => res(e.target.result || null);
+      r.onerror   = e => rej(e.target.error);
+    }));
+  }
+  // Exponer para que editor.js pueda guardar el APNG completo en IDB al importar
+  window._sbAnimIdbSave = _sbAnimIdbSave;
+  window._sbAnimIdbLoad = _sbAnimIdbLoad;
+
+  // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
+  async function _animUpload(animKey, dataUrl) {
+    if (window._authTryRefresh) await window._authTryRefresh();
+    const b64 = dataUrl.split(',')[1];
+    const bin = atob(b64);
+    const u8  = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const blob = new Blob([u8], { type: 'image/png' });
+    const path = animKey + '.png';
+    const r = await fetch(`${STORAGE}/object/anims/${path}`, {
+      method:  'POST',
+      headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true' },
+      body:    blob,
+    });
+    if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
+    return `${STORAGE}/object/public/anims/${path}`;
+  }
+  // Descarga APNG del bucket y devuelve dataUrl PNG (= patrón GIF)
+  async function _animDownload(animUrl) {
+    if (!animUrl) return null;
+    const r = await fetch(animUrl);
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    return new Promise(res => {
+      const reader = new FileReader();
+      reader.onload = e => res(e.target.result);
+      reader.readAsDataURL(blob);
+    });
+  }
+  // Borra un APNG del bucket por su URL pública (= patrón GIF)
+  async function _animDelete(animUrl) {
+    if (!animUrl) return;
+    const path = animUrl.replace(`${STORAGE}/object/public/anims/`, '');
+    await fetch(`${STORAGE}/object/anims/${path}`, {
+      method: 'DELETE', headers: _hdrsUser(),
+    }).catch(() => {});
   }
 
   // Sube un dataUrl GIF al bucket y devuelve la URL pública
@@ -283,33 +325,20 @@ const SupabaseClient = (() => {
           delete _lClean._gcpLayersData;
           delete _lClean._gcpFramesData;
           delete _lClean._gcpLayerNames;
+          delete _lClean._pngFrames;     // nunca en layer_data — van al bucket
           delete _lClean._pngFramesKey;  // clave IDB local — no tiene sentido en Supabase
+          delete _lClean._animFrames;    // datos en memoria — no serializar
+          delete _lClean._animReady;
+          delete _lClean._oc;
 
-          // Frames PNG → siempre al bucket 'anims' (nunca en layer_data: gzip falla en Android con dataUrls grandes)
+          // APNG animado → bucket 'anims' — patrón idéntico al GIF
+          // El layer lleva animKey (generado al importar/guardar desde biblioteca)
           let animUrl = null;
-          if (l._pngFramesKey && !_lClean._pngFrames) {
+          if (l.animKey) {
             try {
-              const _frames = await _sbAnimIdbLoad(l._pngFramesKey);
-              if (_frames && _frames.length) _lClean._pngFrames = _frames;
-            } catch(e) {}
-          }
-          if (_lClean._pngFrames && _lClean._pngFrames.length) {
-            const _framesStr = JSON.stringify(_lClean._pngFrames);
-            try {
-              animUrl = await _animUpload('anim_' + panelId + '_' + j, _framesStr);
-              delete _lClean._pngFrames;  // ya están en Storage
-            } catch(e) {
-              // Panel de error visible — no usar toast (no se puede copiar)
-              const _ep = document.createElement('div');
-              _ep.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#900;color:#fff;font:12px monospace;padding:8px;z-index:99999;white-space:pre-wrap;';
-              _ep.textContent = 'ERROR animUpload: ' + e.message;
-              const _eb = document.createElement('button');
-              _eb.textContent = '✕';
-              _eb.style.cssText = 'margin-left:8px;background:#fff;color:#900;border:none;padding:2px 8px;cursor:pointer;';
-              _eb.onclick = () => _ep.remove();
-              _ep.appendChild(_eb);
-              document.body && document.body.appendChild(_ep);
-            }
+              const _apngDataUrl = await _sbAnimIdbLoad(l.animKey);
+              if (_apngDataUrl) animUrl = await _animUpload(l.animKey, _apngDataUrl);
+            } catch(e) { console.warn('APNG cloud upload:', e); }
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
@@ -470,12 +499,17 @@ const SupabaseClient = (() => {
           layerObj = JSON.parse(_raw);
         } catch(e) {}
         if (!layerObj) continue;
-        // Animación PNG con frames en bucket 'anims' (> 200KB al guardar)
-        if (layerObj._isGcpImage && row.anim_url && !layerObj._pngFrames) {
+        // APNG animado — patrón idéntico al GIF:
+        // descargar dataUrl del bucket → guardar en IDB local por animKey
+        if (layerObj.animKey && row.anim_url) {
           try {
-            const _frames = await _animDownload(row.anim_url);
-            if (_frames && _frames.length) layerObj._pngFrames = _frames;
-          } catch(e) {}
+            const _apngDataUrl = await _animDownload(row.anim_url);
+            if (_apngDataUrl) {
+              await _sbAnimIdbSave(layerObj.animKey, _apngDataUrl).catch(() => {});
+              // Reconstruir _pngFrames desde el APNG descargado para que loadAnim funcione
+              layerObj._pngFrames = [_apngDataUrl];
+            }
+          } catch(e) { console.warn('APNG cloud download:', e); }
         }
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {

@@ -13068,6 +13068,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpFrameDelay  != null) l._gcpFrameDelay  = d._gcpFrameDelay;
     if(d._gcpRepeatCount != null) l._gcpRepeatCount = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
+    if(d.animKey)                 l.animKey          = d.animKey;
     if(d._pngFrames) {
       l._pngFrames=d._pngFrames;
       l._fIdx=0;
@@ -17691,6 +17692,7 @@ function _gcpSaveToLib(onDone) {
     existingLayer._isGcpImage=true;
     existingLayer._pngFrames=pngFrames;
     existingLayer._animReady=false; existingLayer._animFrames=null;
+    // animKey se preserva si ya existía
     existingLayer._gcpFrameDelay  = window._gcpFrameDelay;
     existingLayer._gcpRepeatCount = window._gcpRepeatCount;
     existingLayer._gcpStopAtEnd   = window._gcpStopAtEnd;
