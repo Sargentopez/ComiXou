@@ -184,6 +184,24 @@ const SupabaseClient = (() => {
   window._sbAnimIdbSave = _sbAnimIdbSave;
   window._sbAnimIdbLoad = _sbAnimIdbLoad;
 
+  // Reconstruye un APNG desde array de PNG dataUrls individuales usando UPNG
+  async function _buildApngFromFrames(frameUrls, delayMs) {
+    if (typeof UPNG === 'undefined' || !window.ApngDecoder) return null;
+    try {
+      const result = await window.ApngDecoder.decodeFrameArray(frameUrls, delayMs || 100);
+      const dels = new Array(result.frames.length).fill(delayMs || 100);
+      const bufs = result.frames.map(f => f.imageData.data.buffer);
+      const apngBuf = UPNG.encode(bufs, result.width, result.height, 0, dels, true);
+      const blob = new Blob([apngBuf], {type: 'image/png'});
+      return new Promise(res => {
+        const fr = new FileReader();
+        fr.onload = e => res(e.target.result);
+        fr.onerror = () => res(null);
+        fr.readAsDataURL(blob);
+      });
+    } catch(e) { console.warn('_buildApngFromFrames:', e); return null; }
+  }
+
   // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
   async function _animUpload(animKey, dataUrl) {
     if (window._authTryRefresh) await window._authTryRefresh();
@@ -266,12 +284,18 @@ const SupabaseClient = (() => {
     return `${STORAGE}/object/public/anims/${path}`;
   }
 
-  // Descarga frames PNG desde bucket 'anims' y devuelve array de dataUrls
+  // Descarga APNG del bucket 'anims' y devuelve dataUrl PNG — patrón idéntico al GIF
   async function _animDownload(animUrl) {
     if (!animUrl) return null;
     const r = await fetch(animUrl);
     if (!r.ok) return null;
-    try { return await r.json(); } catch(e) { return null; }
+    const blob = await r.blob();
+    return new Promise(res => {
+      const reader = new FileReader();
+      reader.onload = e => res(e.target.result);
+      reader.onerror = () => res(null);
+      reader.readAsDataURL(blob);
+    });
   }
 
   async function _uploadPanels(comic) {
@@ -330,14 +354,25 @@ const SupabaseClient = (() => {
           delete _lClean._animFrames;    // datos en memoria — no serializar
           delete _lClean._animReady;
           delete _lClean._oc;
+          delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
 
           // APNG animado → bucket 'anims' — patrón idéntico al GIF
-          // El layer lleva animKey (generado al importar/guardar desde biblioteca)
           let animUrl = null;
           if (l.animKey) {
             try {
-              const _apngDataUrl = await _sbAnimIdbLoad(l.animKey);
-              if (_apngDataUrl) animUrl = await _animUpload(l.animKey, _apngDataUrl);
+              const _animData = await _sbAnimIdbLoad(l.animKey);
+              if (_animData) {
+                // _animData puede ser: string dataUrl APNG (archivo importado)
+                //                  o: array de dataUrls PNG individuales (biblioteca)
+                let _apngDataUrl = null;
+                if (typeof _animData === 'string') {
+                  _apngDataUrl = _animData; // ya es APNG completo
+                } else if (Array.isArray(_animData) && _animData.length) {
+                  // Reconstruir APNG desde frames individuales
+                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+                }
+                if (_apngDataUrl) animUrl = await _animUpload(l.animKey, _apngDataUrl);
+              }
             } catch(e) { console.warn('APNG cloud upload:', e); }
           }
 
@@ -505,9 +540,11 @@ const SupabaseClient = (() => {
           try {
             const _apngDataUrl = await _animDownload(row.anim_url);
             if (_apngDataUrl) {
+              // Guardar en IDB local por animKey (igual que GIF guarda en cxGifs)
               await _sbAnimIdbSave(layerObj.animKey, _apngDataUrl).catch(() => {});
-              // Reconstruir _pngFrames desde el APNG descargado para que loadAnim funcione
-              layerObj._pngFrames = [_apngDataUrl];
+              // Guardar dataUrl APNG completo — edDeserLayer lo carga con loadAnim
+              // como string para que ApngDecoder.decodeApng extraiga todos los frames
+              layerObj._apngSrc = _apngDataUrl;
             }
           } catch(e) { console.warn('APNG cloud download:', e); }
         }

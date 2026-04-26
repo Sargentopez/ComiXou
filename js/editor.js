@@ -12784,7 +12784,10 @@ function edSerLayer(l){
     if(l._keepSize) _r._keepSize=true;
     if(l._isGcpImage) _r._isGcpImage=true;
     // Frames en IDB: usar clave (nunca guardar frames grandes en localStorage)
-    if(l._pngFrames && l._pngFrames.length) _r._pngFrames=l._pngFrames;
+    // Solo serializar _pngFrames con contenido real (no strings vacíos de placeholder)
+    if(l._pngFrames && l._pngFrames.length && l._pngFrames[0]) _r._pngFrames=l._pngFrames;
+    if(l.animKey) _r.animKey = l.animKey; // clave del bucket — no el dataUrl completo
+    // _apngSrc NO se serializa — es el dataUrl enorme, va al bucket por animKey
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
     if(l._gcpFrameDelay  != null) _r._gcpFrameDelay  = l._gcpFrameDelay;
@@ -13068,8 +13071,14 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpFrameDelay  != null) l._gcpFrameDelay  = d._gcpFrameDelay;
     if(d._gcpRepeatCount != null) l._gcpRepeatCount = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
-    if(d.animKey)                 l.animKey          = d.animKey;
-    if(d._pngFrames) {
+    if(d.animKey) l.animKey = d.animKey;
+    if(d._apngSrc) {
+      // APNG descargado de nube — loadAnim con string → decodeApng → N frames reales
+      l._apngSrc = d._apngSrc;
+      l._fIdx = 0;
+      l.loadAnim(d._apngSrc, () => { if(typeof edRedraw==='function') edRedraw(); });
+    } else if(d._pngFrames && d._pngFrames.length && d._pngFrames[0]) {
+      // _pngFrames con contenido real (no strings vacíos)
       l._pngFrames=d._pngFrames;
       l._fIdx=0;
       l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
@@ -13201,17 +13210,19 @@ function _edGifSetPlaying(playing) {
           l.stopAnim(); // stopAnim ya resetea _fIdx a 0
         }
       }
-      // Animación PNG (APNG desde biblioteca o importado)
-      if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 1) {
+      // Animación PNG (APNG desde biblioteca, importado, o descargado de nube)
+      if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc)) {
         if (playing) {
-          l._fIdx = 0;           // siempre desde frame 0
-          l._gcpPlayCount = 0;   // resetear contador de repeticiones
+          l._fIdx = 0;
+          l._gcpPlayCount = 0;
           l._playing = true;
-          l.loadAnim(l._pngFrames, () => {
-            if (l._playing) l._applyFrame(0); // siempre frame 0, no _fIdx
+          // _apngSrc (descarga de nube) tiene prioridad — decodeApng extrae N frames
+          l.loadAnim(l._apngSrc || l._pngFrames, () => {
+            // Poblar _pngFrames con la longitud real para futuros ciclos
+            if (l._playing) l._applyFrame(0);
           });
         } else {
-          l.stopAnim(); // stopAnim ya resetea _fIdx y _gcpPlayCount a 0
+          l.stopAnim();
         }
       }
     });
@@ -13661,7 +13672,7 @@ function _edResetPageAnims(pageIdx) {
   page.layers.forEach(function(l) {
     // Parar cualquier layer con timer activo, independientemente del número de frames
     if (l.type === 'gif' && l._ready) { l.stopAnim(); }
-    if (l.type === 'image' && l._pngFrames && l._pngFrames.length > 0) { l.stopAnim(); }
+    if (l.type === 'image' && (l._pngFrames || l._apngSrc)) { l.stopAnim(); }
   });
 }
 
@@ -16120,6 +16131,16 @@ function _bibRenderPanel(panel) {
           if (entry.gcpFrameDelay  != null) la._gcpFrameDelay  = entry.gcpFrameDelay;
           if (entry.gcpRepeatCount != null) la._gcpRepeatCount = entry.gcpRepeatCount;
           if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
+          // Generar animKey — guardar frames individuales en IDB síncronamente
+          // (evita race condition con FileReader asíncrono)
+          const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+          la.animKey = _bibAnimKey;
+          la._apngSrc = null; // se generará del array de frames al abrir el visor
+          if (window._sbAnimIdbSave) {
+            // Guardar el array de frames PNG directamente — sin conversión asíncrona
+            // supabase-client lo reconstruirá como APNG al subir al bucket
+            window._sbAnimIdbSave(_bibAnimKey, frames).catch(function(e){ console.warn('bib IDB:', e); });
+          }
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
