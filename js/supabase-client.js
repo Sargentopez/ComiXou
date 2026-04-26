@@ -570,6 +570,7 @@ const SupabaseClient = (() => {
           layerObj = JSON.parse(_raw);
         } catch(e) {}
         if (!layerObj) continue;
+        _edDiag('layer order=' + row.layer_order + ' type=' + layerObj.type + ' anim_url=' + (row.anim_url ? 'YES' : 'NO') + ' gif_url=' + (row.gif_url ? 'YES' : 'NO'));
         // APNG animado: descargar si hay anim_url
         if (layerObj.type === 'image' && row.anim_url) {
           try {
