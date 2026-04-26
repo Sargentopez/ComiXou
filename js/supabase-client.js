@@ -228,20 +228,25 @@ const SupabaseClient = (() => {
 
   // Reconstruye un APNG desde array de PNG dataUrls individuales usando UPNG
   async function _buildApngFromFrames(frameUrls, delayMs) {
-    if (typeof UPNG === 'undefined' || !window.ApngDecoder) return null;
+    if (typeof UPNG === 'undefined') { _diagMsg('APNG build: UPNG no disponible'); return null; }
+    if (!window.ApngDecoder) { _diagMsg('APNG build: ApngDecoder no disponible'); return null; }
+    if (!frameUrls || !frameUrls.length) { _diagMsg('APNG build: array vacío'); return null; }
+    _diagMsg('APNG build: ' + frameUrls.length + ' frames, frame[0] type=' + typeof frameUrls[0] + ' len=' + (frameUrls[0]||'').length);
     try {
       const result = await window.ApngDecoder.decodeFrameArray(frameUrls, delayMs || 100);
+      _diagMsg('APNG decode OK: ' + result.frames.length + ' frames ' + result.width + 'x' + result.height);
       const dels = new Array(result.frames.length).fill(delayMs || 100);
       const bufs = result.frames.map(f => f.imageData.data.buffer);
       const apngBuf = UPNG.encode(bufs, result.width, result.height, 0, dels, true);
+      _diagMsg('APNG encode OK: ' + apngBuf.byteLength + ' bytes');
       const blob = new Blob([apngBuf], {type: 'image/png'});
       return new Promise(res => {
         const fr = new FileReader();
-        fr.onload = e => res(e.target.result);
-        fr.onerror = () => res(null);
+        fr.onload = e => { _diagMsg('APNG dataUrl OK: ' + e.target.result.length + ' chars'); res(e.target.result); };
+        fr.onerror = (e) => { _diagMsg('APNG FileReader error: ' + e); res(null); };
         fr.readAsDataURL(blob);
       });
-    } catch(e) { console.warn('_buildApngFromFrames:', e); return null; }
+    } catch(e) { _diagMsg('APNG build ERROR: ' + e.message); return null; }
   }
 
   // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
