@@ -138,6 +138,45 @@ const SupabaseClient = (() => {
 
   // ── STORAGE: GIFs en bucket 'gifs' ────────────────────────────────────────
   // Mini IDB propio para leer GIFs — mismo DB que editor.js (cxGifs)
+  // Diagnóstico temporal — muestra errores de upload en pantalla
+  function _diagMsg(msg) {
+    console.error('[DIAG]', msg);
+    let panel = document.getElementById('_sbDiagPanel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = '_sbDiagPanel';
+      panel.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#900;color:#fff;font:11px monospace;padding:6px;z-index:99999;max-height:50vh;overflow-y:auto;white-space:pre-wrap;';
+      const topBar = document.createElement('div');
+      topBar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px';
+      const title = document.createElement('b');
+      title.textContent = 'DIAGNÓSTICO UPLOAD';
+      const copyBtn = document.createElement('button');
+      copyBtn.textContent = '📋 Copiar';
+      copyBtn.style.cssText = 'background:#fff;color:#900;border:none;padding:4px 10px;cursor:pointer;font-weight:bold;border-radius:4px;margin-right:6px;font-size:12px;';
+      copyBtn.onclick = () => {
+        const ta = document.getElementById('_sbDiagText');
+        if (ta) { ta.select(); document.execCommand('copy'); copyBtn.textContent = '✓ Copiado'; }
+      };
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '✕';
+      closeBtn.style.cssText = 'background:#fff;color:#900;border:none;padding:4px 10px;cursor:pointer;font-weight:bold;border-radius:4px;font-size:12px;';
+      closeBtn.onclick = () => panel.remove();
+      topBar.appendChild(title);
+      const btns = document.createElement('div');
+      btns.appendChild(copyBtn); btns.appendChild(closeBtn);
+      topBar.appendChild(btns);
+      panel.appendChild(topBar);
+      const ta = document.createElement('textarea');
+      ta.id = '_sbDiagText';
+      ta.style.cssText = 'width:100%;height:120px;background:#600;color:#fff;border:none;font:11px monospace;padding:4px;resize:vertical;box-sizing:border-box;';
+      ta.readOnly = true;
+      panel.appendChild(ta);
+      document.body && document.body.appendChild(panel);
+    }
+    const ta = document.getElementById('_sbDiagText');
+    if (ta) ta.value += msg + '\n';
+  }
+
   function _sbGifIdbLoad(key) {
     // Usar la función cacheada del editor si está disponible (evita doble conexión a cxGifs)
     if (window._gifIdbLoad) return window._gifIdbLoad(key).catch(() => null);
@@ -342,10 +381,10 @@ const SupabaseClient = (() => {
           // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
           if (l.type === 'gif' && l.gifKey) {
             try {
-              // Intentar obtener el dataUrl desde IndexedDB del editor
               const dataUrl = await _sbGifIdbLoad(l.gifKey);
-                if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
-            } catch(e) { console.warn('GIF cloud upload:', e); }
+              if (!dataUrl) { _diagMsg('GIF IDB null: gifKey=' + l.gifKey); }
+              else { gifUrl = await _gifUpload(l.gifKey, dataUrl); }
+            } catch(e) { _diagMsg('GIF upload ERROR: ' + e.message); }
           }
           // Serializar la capa — excluir campos de re-edición que el reader no necesita
           const _lClean = {...l};
@@ -364,19 +403,19 @@ const SupabaseClient = (() => {
           if (l.animKey) {
             try {
               const _animData = await _sbAnimIdbLoad(l.animKey);
-              if (_animData) {
-                // _animData puede ser: string dataUrl APNG (archivo importado)
-                //                  o: array de dataUrls PNG individuales (biblioteca)
+              if (!_animData) { _diagMsg('APNG IDB null: animKey=' + l.animKey); }
+              else {
                 let _apngDataUrl = null;
                 if (typeof _animData === 'string') {
-                  _apngDataUrl = _animData; // ya es APNG completo
+                  _apngDataUrl = _animData;
                 } else if (Array.isArray(_animData) && _animData.length) {
-                  // Reconstruir APNG desde frames individuales
                   _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+                  if (!_apngDataUrl) _diagMsg('APNG build null para ' + l.animKey);
                 }
                 if (_apngDataUrl) animUrl = await _animUpload(l.animKey, _apngDataUrl);
+                else _diagMsg('APNG dataUrl null para ' + l.animKey);
               }
-            } catch(e) { console.warn('APNG cloud upload:', e); }
+            } catch(e) { _diagMsg('APNG upload ERROR: ' + e.message); }
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
