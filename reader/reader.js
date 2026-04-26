@@ -1014,7 +1014,8 @@ async function _loadPanels(workId, useAuth) {
           if (!l) return null;
           if (l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
           // APNG: descargar del bucket por animKey — igual que GIF usa _gifUrl
-          if (l.animKey && r.anim_url) {
+          // Descargar APNG si hay anim_url, con o sin animKey en layer_data
+          if (l.type === 'image' && r.anim_url) {
             try {
               const _apngDataUrl = await _animDownload(r.anim_url);
               if (_apngDataUrl) l._apngSrc = _apngDataUrl;
@@ -1091,7 +1092,7 @@ async function preloadImages() {
           .catch(() => null);
       }
       // Animación APNG: decodificar con ApngDecoder (UPNG) → _animFrames + _animOc
-      if (layer.animKey && layer._apngSrc && window.ApngDecoder) {
+      if (layer._apngSrc && window.ApngDecoder) {
         return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
           .then(function(result) {
             layer._animFrames  = result.frames;

@@ -535,16 +535,17 @@ const SupabaseClient = (() => {
           layerObj = JSON.parse(_raw);
         } catch(e) {}
         if (!layerObj) continue;
-        // APNG animado — patrón idéntico al GIF:
-        // descargar dataUrl del bucket → guardar en IDB local por animKey
-        if (layerObj.animKey && row.anim_url) {
+        // APNG animado: descargar si hay anim_url, con o sin animKey en layer_data
+        // (animKey puede no estar en layer_data de obras antiguas)
+        if (layerObj.type === 'image' && row.anim_url) {
           try {
             const _apngDataUrl = await _animDownload(row.anim_url);
             if (_apngDataUrl) {
-              // Guardar en IDB local por animKey (igual que GIF guarda en cxGifs)
+              // Si no tiene animKey, generarlo ahora para poder guardarlo en IDB
+              if (!layerObj.animKey) {
+                layerObj.animKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              }
               await _sbAnimIdbSave(layerObj.animKey, _apngDataUrl).catch(() => {});
-              // Guardar dataUrl APNG completo — edDeserLayer lo carga con loadAnim
-              // como string para que ApngDecoder.decodeApng extraiga todos los frames
               layerObj._apngSrc = _apngDataUrl;
             }
           } catch(e) { console.warn('APNG cloud download:', e); }
