@@ -319,19 +319,10 @@ function _mcRenderList() {
         _mcToast('\u23f3 Descargando obra de la nube\u2026 (puede tardar si contiene GIFs)');
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
-          // Guardar _pngFrames en IndexedDB (como los GIFs) para no saturar localStorage.
-          // Se usa IDB 'cxAnims' con clave '<comicId>_<pageIdx>_<layerIdx>'.
-          const _animIdbSave = (key, frames) => new Promise(res => {
-            const req = indexedDB.open('cxAnims', 1);
-            req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-            req.onsuccess = e => {
-              const tx = e.target.result.transaction('anims', 'readwrite');
-              tx.objectStore('anims').put(frames, key);
-              tx.oncomplete = () => res();
-              tx.onerror = () => res();
-            };
-            req.onerror = () => res();
-          });
+          // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
+          // conflictos con otras conexiones abiertas a cxAnims
+          const _animIdbSave = (key, data) =>
+            window._sbAnimIdbSave ? window._sbAnimIdbSave(key, data).catch(() => {}) : Promise.resolve();
           const _idbWrites = [];
           const _edataClean = {
             ...editorData,
