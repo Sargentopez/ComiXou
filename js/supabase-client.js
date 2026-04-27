@@ -227,18 +227,7 @@ const SupabaseClient = (() => {
     if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
     return `${STORAGE}/object/public/anims/${path}`;
   }
-  // Descarga APNG del bucket y devuelve dataUrl PNG (= patrón GIF)
-  async function _animDownload(animUrl) {
-    if (!animUrl) return null;
-    const r = await fetch(animUrl);
-    if (!r.ok) return null;
-    const blob = await r.blob();
-    return new Promise(res => {
-      const reader = new FileReader();
-      reader.onload = e => res(e.target.result);
-      reader.readAsDataURL(blob);
-    });
-  }
+  // _animDownload definida más abajo
   // Borra un APNG del bucket por su URL pública (= patrón GIF)
   async function _animDelete(animUrl) {
     if (!animUrl) return;
@@ -358,23 +347,21 @@ const SupabaseClient = (() => {
 
           // APNG animado → bucket 'anims' — patrón idéntico al GIF
           let animUrl = null;
-          if (l.animKey) {
+          if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
+            const _idbKey = l._pngFramesKey || l.animKey;
+            const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
             try {
-              console.warn('APNG attempt: animKey=' + l.animKey + ' pngFrames=' + (l._pngFrames ? l._pngFrames.length : 'none') + ' apngSrc=' + (l._apngSrc ? 'yes(' + (l._apngSrc||'').length + ')' : 'no'));
-              const _animData = await _sbAnimIdbLoad(l.animKey);
-              if (!_animData) { console.warn('APNG IDB null: animKey=' + l.animKey); }
-              else {
+              const _animData = await _sbAnimIdbLoad(_idbKey);
+              if (_animData) {
                 let _apngDataUrl = null;
                 if (typeof _animData === 'string') {
                   _apngDataUrl = _animData;
                 } else if (Array.isArray(_animData) && _animData.length) {
                   _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
-                  if (!_apngDataUrl) console.warn('APNG build null para ' + l.animKey);
                 }
-                if (_apngDataUrl) animUrl = await _animUpload(l.animKey, _apngDataUrl);
-                else console.warn('APNG dataUrl null para ' + l.animKey);
+                if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
               }
-            } catch(e) { console.warn('APNG upload ERROR: ' + e.message); }
+            } catch(e) { console.warn('APNG upload error:', e.message); }
           }
 
           const _ld = await _czCompress(JSON.stringify(_lClean));
@@ -535,18 +522,16 @@ const SupabaseClient = (() => {
           layerObj = JSON.parse(_raw);
         } catch(e) {}
         if (!layerObj) continue;
-        // APNG animado: descargar si hay anim_url, con o sin animKey en layer_data
-        // (animKey puede no estar en layer_data de obras antiguas)
+        // APNG animado — patrón idéntico al GIF:
+        // APNG: descargar si hay anim_url — sin depender de animKey
         if (layerObj.type === 'image' && row.anim_url) {
           try {
             const _apngDataUrl = await _animDownload(row.anim_url);
             if (_apngDataUrl) {
-              // Si no tiene animKey, generarlo ahora para poder guardarlo en IDB
-              if (!layerObj.animKey) {
-                layerObj.animKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-              }
-              await _sbAnimIdbSave(layerObj.animKey, _apngDataUrl).catch(() => {});
               layerObj._apngSrc = _apngDataUrl;
+              const _idbKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              layerObj._pngFramesKey = _idbKey;
+              await _sbAnimIdbSave(_idbKey, _apngDataUrl).catch(() => {});
             }
           } catch(e) { console.warn('APNG cloud download:', e); }
         }
