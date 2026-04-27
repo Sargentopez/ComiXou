@@ -338,11 +338,26 @@ function _mcRenderList() {
             pages: (editorData.pages || []).map((pg, pi) => ({
               ...pg,
               layers: (pg.layers || []).map((l, li) => {
-                if (!l._pngFrames) return l;
-                const _idbKey = comicToEdit.id + '_' + pi + '_' + li;
-                _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
-                const { _pngFrames, ...lClean } = l;
-                return { ...lClean, _pngFramesKey: _idbKey };
+                // _apngSrc: dataUrl enorme descargado de la nube — guardar en IDB y eliminar
+                if (l._apngSrc) {
+                  const _idbKey = l._pngFramesKey || (comicToEdit.id + '_' + pi + '_' + li);
+                  _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
+                  const lClean = Object.assign({}, l);
+                  delete lClean._apngSrc;
+                  delete lClean._animFrames;
+                  delete lClean._animReady;
+                  delete lClean._oc;
+                  lClean._pngFramesKey = _idbKey;
+                  return lClean;
+                }
+                // _pngFrames (sistema antiguo): externalizar a IDB
+                if (l._pngFrames) {
+                  const _idbKey = comicToEdit.id + '_' + pi + '_' + li;
+                  _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
+                  const { _pngFrames, ...lClean } = l;
+                  return { ...lClean, _pngFramesKey: _idbKey };
+                }
+                return l;
               }),
             })),
           };

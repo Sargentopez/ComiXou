@@ -13091,21 +13091,26 @@ function edDeserLayer(d, pageOrientation){
       l._fIdx=0;
       l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
     }
-    if(d._pngFramesKey && !d._pngFrames) {
-      _edAnimIdbLoad(d._pngFramesKey).then(frames => {
-        if(frames && frames.length) {
-          l._pngFrames=frames;
-          // Si el visor está abierto y reproduciendo, arrancar animación
+    if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
+      _edAnimIdbLoad(d._pngFramesKey).then(data => {
+        if(!data) return;
+        // data puede ser string dataUrl APNG o array de frames PNG
+        const input = (typeof data === 'string') ? data
+                    : (Array.isArray(data) && data.length) ? data : null;
+        if(!input) return;
+        // Asignar al campo correcto para que _edGifSetPlaying lo detecte
+        if(typeof data === 'string') { l._apngSrc = data; }
+        else { l._pngFrames = data; }
+        // Cargar frames
+        l.loadAnim(input, () => {
           if($('editorViewer')?.classList.contains('open')) {
             l._playing = true;
-            l.loadAnim(l._pngFrames, () => {
-              l._applyFrame(0);
-              if(typeof edUpdateViewer==='function') edUpdateViewer();
-            });
+            l._applyFrame(0);
+            if(typeof edUpdateViewer==='function') edUpdateViewer();
           } else {
-            edRedraw();
+            if(typeof edRedraw==='function') edRedraw();
           }
-        }
+        });
       });
     }
     if(d.src){
