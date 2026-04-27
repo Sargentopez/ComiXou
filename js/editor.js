@@ -16122,8 +16122,13 @@ function _bibRenderPanel(panel) {
       if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
 
       // GIF animado guardado desde el editor GIF
-      if (entry.isGifAnim && entry.gifDataUrl) {
-        const frames = entry.pngFrames && entry.pngFrames.length > 1 ? entry.pngFrames : [entry.gifDataUrl];
+      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || (entry.pngFrames && entry.pngFrames.length))) {
+        // apngSrc: APNG completo descargado de nube — usar directamente con decodeApng
+        // pngFrames: array de frames individuales (sistema local o GIF antiguo)
+        const frames = entry.apngSrc ? [entry.apngSrc]
+                     : (entry.pngFrames && entry.pngFrames.length > 1 ? entry.pngFrames
+                     : [entry.gifDataUrl]);
+        const _srcForImg = entry.apngSrc || (frames && frames[0]) || entry.gifDataUrl;
         const img = new Image();
         img.onload = () => {
           const pw = edPageW(), ph = edPageH();
@@ -16133,10 +16138,16 @@ function _bibRenderPanel(panel) {
           finalW /= sc; finalH /= sc;
           const la = new ImageLayer(img, 0.5, 0.5, finalW);
           la.height = finalH;
-          la.src = frames[0];
+          la.src = _srcForImg;
           la._keepSize = true;
           la._isGcpImage = true;
-          la._pngFrames = frames;       // todos los frames
+          // Si apngSrc: usar directamente para decodeApng (preserva todos los frames)
+          if (entry.apngSrc) {
+            la._apngSrc = entry.apngSrc;
+            la._pngFrames = [entry.apngSrc]; // length>1 no aplica pero necesario para IDB
+          } else {
+            la._pngFrames = frames;
+          }
           la._fIdx = 0;
           if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
           if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
@@ -16148,24 +16159,24 @@ function _bibRenderPanel(panel) {
           // (evita race condition con FileReader asíncrono)
           const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
           la.animKey = _bibAnimKey;
-          la._apngSrc = null; // se generará del array de frames al abrir el visor
           if (window._sbAnimIdbSave) {
-            // Guardar el array de frames PNG directamente — sin conversión asíncrona
-            // supabase-client lo reconstruirá como APNG al subir al bucket
-            window._sbAnimIdbSave(_bibAnimKey, frames).catch(function(e){ console.warn('bib IDB:', e); });
+            // Guardar en IDB: si apngSrc usar string, sino array de frames
+            const _idbData = entry.apngSrc || frames;
+            window._sbAnimIdbSave(_bibAnimKey, _idbData).catch(function(e){ console.warn('bib IDB:', e); });
           }
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
           edPushHistory();
-          // Cargar con ApngDecoder (patrón GifLayer) y arrancar
-          la.loadAnim(frames, () => {
+          // Cargar con ApngDecoder — si apngSrc usar string (decodeApng), sino array (decodeFrameArray)
+          const _animInput = entry.apngSrc || frames;
+          la.loadAnim(_animInput, () => {
             la._playing = true;
             la._applyFrame(0);
             edRedraw();
           });
         };
-        img.src = frames[0];
+        img.src = _srcForImg;
         _bibClose(panel);
         edToast('Animación insertada ✓');
         return;

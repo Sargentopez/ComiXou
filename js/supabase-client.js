@@ -662,9 +662,29 @@ const SupabaseClient = (() => {
     const rows = [];
     for (const folder of folders) {
       for (const entry of (folder.items || [])) {
-        // Para GIFs: guardar gifDataUrl como layer_data con flag isGifAnim
+        let _animUrl = null;
+        // APNG animado de biblioteca: subir al bucket 'anims'
+        if (entry.isGifAnim) {
+          try {
+            let _apngDataUrl = null;
+            if (entry.apngSrc) {
+              // Ya es un dataUrl APNG completo — subir directamente
+              _apngDataUrl = entry.apngSrc;
+            } else if (entry.pngFrames && entry.pngFrames.length > 1) {
+              // Array de frames individuales — reconstruir APNG
+              _apngDataUrl = await _buildApngFromFrames(entry.pngFrames, entry.gcpFrameDelay || 100);
+            }
+            if (_apngDataUrl) {
+              const _bucketKey = 'bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              _animUrl = await _animUpload(_bucketKey, _apngDataUrl);
+            }
+          } catch(e) { console.warn('bibSync APNG upload:', e); }
+        }
+        // Payload: para GIF/APNG guardar metadatos sin frames grandes
         const _payload = entry.isGifAnim
-          ? { isGifAnim: true, gifDataUrl: entry.gifDataUrl, pngFrames: entry.pngFrames }
+          ? { isGifAnim: true, gifDataUrl: entry.gifDataUrl,
+              gcpFrameDelay: entry.gcpFrameDelay, gcpRepeatCount: entry.gcpRepeatCount,
+              gcpStopAtEnd: entry.gcpStopAtEnd }
           : entry.layerData;
         const _ld = await _czCompress(JSON.stringify(_payload));
         rows.push({
@@ -672,6 +692,7 @@ const SupabaseClient = (() => {
           author_id:   authorId,
           layer_type:  entry.isGifAnim ? 'gif' : ((entry.layerData && entry.layerData.type) || 'unknown'),
           layer_data:  _ld,
+          anim_url:    _animUrl,
           thumb:       entry.thumb,
           folder_id:   prefix + folder.id,
           folder_name: folder.name,
@@ -706,15 +727,27 @@ const SupabaseClient = (() => {
       if (!ld) continue;
       // Reconstruir item: GIF o layer normal
       if (ld.isGifAnim) {
+        // Descargar APNG desde bucket si tiene anim_url
+        let _pngFrames = ld.pngFrames || null;
+        let _apngSrc = null;
+        if (r.anim_url) {
+          try {
+            _apngSrc = await _animDownload(r.anim_url);
+          } catch(e) { console.warn('bibDownload APNG:', e); }
+        }
         folderMap.get(fid).items.push({
-          id:         r.id,
-          timestamp:  new Date(r.created_at).getTime(),
-          isGroup:    false,
-          isGifAnim:  true,
-          gifDataUrl: ld.gifDataUrl,
-          pngFrames:  ld.pngFrames || null,
-          layerData:  null,
-          thumb:      r.thumb,
+          id:            r.id,
+          timestamp:     new Date(r.created_at).getTime(),
+          isGroup:       false,
+          isGifAnim:     true,
+          gifDataUrl:    ld.gifDataUrl,
+          pngFrames:     _pngFrames,   // frames originales si los hay (GIF antiguo)
+          apngSrc:       _apngSrc,     // dataUrl APNG completo descargado del bucket
+          gcpFrameDelay: ld.gcpFrameDelay || 100,
+          gcpRepeatCount:ld.gcpRepeatCount || 0,
+          gcpStopAtEnd:  ld.gcpStopAtEnd  || false,
+          layerData:     null,
+          thumb:         r.thumb,
         });
       } else {
         folderMap.get(fid).items.push({
