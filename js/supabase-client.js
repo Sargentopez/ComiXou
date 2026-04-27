@@ -335,9 +335,8 @@ const SupabaseClient = (() => {
           }
           // Serializar la capa — excluir campos de re-edición que el reader no necesita
           const _lClean = {...l};
-          delete _lClean._gcpLayersData;
-          delete _lClean._gcpFramesData;
-          delete _lClean._gcpLayerNames;
+          // _gcpLayersData/_gcpFramesData/_gcpLayerNames son datos vectoriales (no imágenes)
+          // Se mantienen en layer_data para que el editor GCP funcione en dispositivo B
           delete _lClean._pngFrames;     // nunca en layer_data — van al bucket
           delete _lClean._pngFramesKey;  // clave IDB local — no tiene sentido en Supabase
           delete _lClean._animFrames;    // datos en memoria — no serializar
