@@ -189,25 +189,20 @@ const SupabaseClient = (() => {
 
   // Reconstruye un APNG desde array de PNG dataUrls individuales usando UPNG
   async function _buildApngFromFrames(frameUrls, delayMs) {
-    if (typeof UPNG === 'undefined') { console.warn('APNG build: UPNG no disponible'); return null; }
-    if (!window.ApngDecoder) { console.warn('APNG build: ApngDecoder no disponible'); return null; }
-    if (!frameUrls || !frameUrls.length) { console.warn('APNG build: array vacío'); return null; }
-    console.warn('APNG build: ' + frameUrls.length + ' frames, frame[0] type=' + typeof frameUrls[0] + ' len=' + (frameUrls[0]||'').length);
+    if (typeof UPNG === 'undefined' || !window.ApngDecoder || !frameUrls || !frameUrls.length) return null;
     try {
       const result = await window.ApngDecoder.decodeFrameArray(frameUrls, delayMs || 100);
-      console.warn('APNG decode OK: ' + result.frames.length + ' frames ' + result.width + 'x' + result.height);
       const dels = new Array(result.frames.length).fill(delayMs || 100);
       const bufs = result.frames.map(f => f.imageData.data.buffer);
       const apngBuf = UPNG.encode(bufs, result.width, result.height, 0, dels, true);
-      console.warn('APNG encode OK: ' + apngBuf.byteLength + ' bytes');
       const blob = new Blob([apngBuf], {type: 'image/png'});
       return new Promise(res => {
         const fr = new FileReader();
-        fr.onload = e => { console.warn('APNG dataUrl OK: ' + e.target.result.length + ' chars'); res(e.target.result); };
-        fr.onerror = (e) => { console.warn('APNG FileReader error: ' + e); res(null); };
+        fr.onload = e => res(e.target.result);
+        fr.onerror = () => res(null);
         fr.readAsDataURL(blob);
       });
-    } catch(e) { console.warn('APNG build ERROR: ' + e.message); return null; }
+    } catch(e) { return null; }
   }
 
   // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
@@ -792,26 +787,5 @@ const SupabaseClient = (() => {
     return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
   }
 
-    // Test de compresión/descompresión — accessible desde consola o botón
-  async function testCompression() {
-    const results = [];
-    // Test 1: string corto (no se comprime por _CZ_MIN)
-    const short = JSON.stringify({test:'short', val:123});
-    const c1 = await _czCompress(short);
-    const d1 = await _czDecompress(c1);
-    results.push('SHORT: input=' + short.length + 'b compressed=' + c1.length + 'b match=' + (d1===short));
-    // Test 2: string largo con datos reales tipo gcpLayersData
-    const big = JSON.stringify({isGifAnim:true, gcpLayersData: new Array(50).fill({type:'draw',dataUrl:'data:image/png;base64,' + 'A'.repeat(5000)}), gcpFramesData: new Array(10).fill([{x:0.5,y:0.5,scale:1}]), normW:0.4, normH:0.3});
-    const c2 = await _czCompress(big);
-    const d2 = await _czDecompress(c2);
-    results.push('BIG: input=' + big.length + 'b compressed=' + c2.length + 'b ratio=' + Math.round(c2.length/big.length*100) + '% match=' + (d2===big));
-    // Test 3: roundtrip doble
-    const c3 = await _czCompress(c2);
-    const d3 = await _czDecompress(c3);
-    results.push('DOUBLE: compressed=' + c3.length + 'b match=' + (d3===c2));
-    return results;
-  }
-  window._czTest = testCompression;
-
-  return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
+    return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
 })();

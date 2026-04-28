@@ -800,35 +800,6 @@ window.ApngDecoder = (function(){
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
 
-/* ── Test compresión ──────────────────────────────────────────── */
-window._runCzTest = async function() {
-  if (!window._czTest) { alert('_czTest no disponible'); return; }
-  const res = await window._czTest();
-  let p = document.getElementById('_czTestPanel');
-  if (!p) {
-    p = document.createElement('div');
-    p.id = '_czTestPanel';
-    p.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;z-index:99999;background:#222;color:#0f0;font:12px monospace;padding:8px;border-radius:6px;';
-    const hdr = document.createElement('div');
-    hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px';
-    hdr.innerHTML = '<b>TEST COMPRESIÓN</b>';
-    const btns = document.createElement('div');
-    const cp = document.createElement('button');
-    cp.textContent='📋 Copiar'; cp.style.cssText='padding:2px 8px;cursor:pointer;margin-right:4px;';
-    cp.onclick=()=>{const ta=document.getElementById('_czTestTa');ta.select();document.execCommand('copy');cp.textContent='✓';};
-    const cl = document.createElement('button');
-    cl.textContent='✕'; cl.style.cssText='padding:2px 8px;cursor:pointer;';
-    cl.onclick=()=>p.remove();
-    btns.append(cp,cl); hdr.appendChild(btns); p.appendChild(hdr);
-    const ta = document.createElement('textarea');
-    ta.id='_czTestTa';
-    ta.style.cssText='width:100%;height:80px;background:#111;color:#0f0;border:none;font:12px monospace;padding:4px;box-sizing:border-box;';
-    ta.readOnly=true; p.appendChild(ta);
-    document.body&&document.body.appendChild(p);
-  }
-  document.getElementById('_czTestTa').value = res.join('\n');
-};
-
 /* ── ESTADO ── */
 let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
