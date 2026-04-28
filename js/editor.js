@@ -14534,8 +14534,7 @@ function EditorView_init(){
   if(!editId){Router.go('my-comics');return;}
   edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
-  // Auto-test de compresión al arrancar (diagnóstico temporal)
-  setTimeout(function() { if(window._runCzTest) window._runCzTest(); }, 3000);
+
   // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
   edSetOrientation(edPages[0]?.orientation || edOrientation, false);
   edActiveTool='select';
