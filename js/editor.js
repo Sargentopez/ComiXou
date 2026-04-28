@@ -16138,7 +16138,9 @@ function _bibRenderPanel(panel) {
           finalW /= sc; finalH /= sc;
           const la = new ImageLayer(img, 0.5, 0.5, finalW);
           la.height = finalH;
-          la.src = _srcForImg;
+          // src debe ser el primer frame PNG (pequeño) para layer_data en Supabase
+          // apngSrc completo va en IDB — no en src
+          la.src = entry.gifDataUrl || (entry.pngFrames && entry.pngFrames[0]) || _srcForImg;
           la._keepSize = true;
           la._isGcpImage = true;
           // Si apngSrc: usar directamente para decodeApng (preserva todos los frames)

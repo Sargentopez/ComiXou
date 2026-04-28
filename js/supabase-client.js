@@ -679,11 +679,20 @@ const SupabaseClient = (() => {
             }
           } catch(e) { console.warn('bibSync APNG upload:', e); }
         }
-        // Payload: para GIF/APNG guardar metadatos sin frames grandes
+        // Payload: para GIF/APNG incluir todo lo necesario para re-edición
+        // pngFrames van al bucket (anim_url), gifDataUrl/thumb son pequeños
+        // gcpLayersData/gcpFramesData son vectoriales — se comprimen bien
         const _payload = entry.isGifAnim
-          ? { isGifAnim: true, gifDataUrl: entry.gifDataUrl,
-              gcpFrameDelay: entry.gcpFrameDelay, gcpRepeatCount: entry.gcpRepeatCount,
-              gcpStopAtEnd: entry.gcpStopAtEnd }
+          ? { isGifAnim:      true,
+              gifDataUrl:     entry.gifDataUrl,
+              gcpFrameDelay:  entry.gcpFrameDelay,
+              gcpRepeatCount: entry.gcpRepeatCount,
+              gcpStopAtEnd:   entry.gcpStopAtEnd,
+              gcpLayersData:  entry.gcpLayersData  || null,
+              gcpFramesData:  entry.gcpFramesData  || null,
+              gcpLayerNames:  entry.gcpLayerNames  || null,
+              normW:          entry.normW           || null,
+              normH:          entry.normH           || null }
           : entry.layerData;
         const _ld = await _czCompress(JSON.stringify(_payload));
         rows.push({
@@ -735,18 +744,23 @@ const SupabaseClient = (() => {
           } catch(e) { console.warn('bibDownload APNG:', e); }
         }
         folderMap.get(fid).items.push({
-          id:            r.id,
-          timestamp:     new Date(r.created_at).getTime(),
-          isGroup:       false,
-          isGifAnim:     true,
-          gifDataUrl:    ld.gifDataUrl,
-          pngFrames:     _pngFrames,   // frames originales si los hay (GIF antiguo)
-          apngSrc:       _apngSrc,     // dataUrl APNG completo descargado del bucket
-          gcpFrameDelay: ld.gcpFrameDelay || 100,
-          gcpRepeatCount:ld.gcpRepeatCount || 0,
-          gcpStopAtEnd:  ld.gcpStopAtEnd  || false,
-          layerData:     null,
-          thumb:         r.thumb,
+          id:             r.id,
+          timestamp:      new Date(r.created_at).getTime(),
+          isGroup:        false,
+          isGifAnim:      true,
+          gifDataUrl:     ld.gifDataUrl,
+          pngFrames:      _pngFrames,
+          apngSrc:        _apngSrc,
+          gcpFrameDelay:  ld.gcpFrameDelay  || 100,
+          gcpRepeatCount: ld.gcpRepeatCount || 0,
+          gcpStopAtEnd:   ld.gcpStopAtEnd   || false,
+          gcpLayersData:  ld.gcpLayersData  || null,
+          gcpFramesData:  ld.gcpFramesData  || null,
+          gcpLayerNames:  ld.gcpLayerNames  || null,
+          normW:          ld.normW           || null,
+          normH:          ld.normH           || null,
+          layerData:      null,
+          thumb:          r.thumb,
         });
       } else {
         folderMap.get(fid).items.push({
