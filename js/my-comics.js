@@ -374,44 +374,7 @@ function _mcRenderList() {
             try {
               const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
               const cloudData = await SupabaseClient.bibDownload(_user.id, _sbId);
-              // Diagnóstico temporal — panel copiable
-              {
-                const _allItems = (cloudData?.folders||[]).flatMap(f=>f.items||[]);
-                const _lines = [
-                  'bibDownload result:',
-                  'supabaseId=' + _sbId,
-                  'folders=' + (cloudData?.folders||[]).length,
-                  'total items=' + _allItems.length,
-                  'isGifAnim items=' + _allItems.filter(i=>i.isGifAnim).length,
-                  'with apngSrc=' + _allItems.filter(i=>i.apngSrc).length,
-                  'with gcpLayersData=' + _allItems.filter(i=>i.gcpLayersData).length,
-                  'with normW=' + _allItems.filter(i=>i.normW).length,
-                  'folder ids=' + (cloudData?.folders||[]).map(f=>f.id).join(','),
-                ];
-                let _dp = document.getElementById('_bibDiagPanel');
-                if (!_dp) {
-                  _dp = document.createElement('div');
-                  _dp.id = '_bibDiagPanel';
-                  _dp.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#005;color:#fff;font:11px monospace;padding:6px;';
-                  const _hdr = document.createElement('div');
-                  _hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:4px';
-                  _hdr.innerHTML = '<b>BIB DIAGNÓSTICO</b>';
-                  const _btns = document.createElement('div');
-                  const _cp = document.createElement('button');
-                  _cp.textContent='📋'; _cp.style.cssText='padding:2px 6px;cursor:pointer;margin-right:4px;';
-                  _cp.onclick=()=>{const ta=document.getElementById('_bibDiagTa');ta.select();document.execCommand('copy');_cp.textContent='✓';};
-                  const _cl = document.createElement('button');
-                  _cl.textContent='✕'; _cl.style.cssText='padding:2px 6px;cursor:pointer;';
-                  _cl.onclick=()=>_dp.remove();
-                  _btns.append(_cp,_cl); _hdr.appendChild(_btns); _dp.appendChild(_hdr);
-                  const _ta = document.createElement('textarea');
-                  _ta.id='_bibDiagTa';
-                  _ta.style.cssText='width:100%;height:100px;background:#003;color:#fff;border:none;font:11px monospace;padding:4px;box-sizing:border-box;';
-                  _ta.readOnly=true; _dp.appendChild(_ta);
-                  document.body&&document.body.appendChild(_dp);
-                }
-                document.getElementById('_bibDiagTa').value = _lines.join('\n');
-              }
+
               if (cloudData && cloudData.folders && cloudData.folders.length) {
                 let localData;
                 try { localData = JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) {}
