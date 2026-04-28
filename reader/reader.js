@@ -720,6 +720,60 @@ window.GifDecoder = (function(){
 })();
 /* ── fin gifuct-js ── */
 
+/* ── ApngDecoder reader ── */
+window.ApngDecoder = (function(){
+  function decodeFrameArray(dataUrls, delay) {
+    return new Promise(function(res, rej) {
+      if (!dataUrls || !dataUrls.length) { rej(new Error('sin frames')); return; }
+      var total=dataUrls.length,results=new Array(total),loaded=0,W=0,H=0;
+      var oc=document.createElement('canvas'),ox=oc.getContext('2d');
+      dataUrls.forEach(function(url,i){
+        var img=new Image();
+        img.onload=function(){
+          if(!W){W=img.naturalWidth;H=img.naturalHeight;oc.width=W;oc.height=H;}
+          ox.clearRect(0,0,W,H);ox.drawImage(img,0,0);
+          results[i]={imageData:ox.getImageData(0,0,W,H),delay:delay||100};
+          if(++loaded===total)res({frames:results,width:W,height:H});
+        };
+        img.onerror=function(){
+          results[i]={imageData:new ImageData(W||1,H||1),delay:delay||100};
+          if(++loaded===total)res({frames:results,width:W||1,height:H||1});
+        };
+        img.src=url;
+      });
+    });
+  }
+  function decodeApng(dataUrl,delay){
+    return new Promise(function(res,rej){
+      try{
+        var b64=dataUrl.split(',')[1],bin=atob(b64),u8=new Uint8Array(bin.length);
+        for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+        var decoded=UPNG.decode(u8.buffer),rgba8=UPNG.toRGBA8(decoded);
+        if(!rgba8||!rgba8.length){rej(new Error('UPNG sin frames'));return;}
+        var W=decoded.width,H=decoded.height;
+        var oc=document.createElement('canvas');oc.width=W;oc.height=H;
+        var ox=oc.getContext('2d');
+        var frames=rgba8.map(function(buf,fi){
+          var imgd=new ImageData(new Uint8ClampedArray(buf),W,H);
+          ox.clearRect(0,0,W,H);ox.putImageData(imgd,0,0);
+          var fd=(decoded.frames&&decoded.frames[fi]&&decoded.frames[fi].delay)||delay||100;
+          return{imageData:ox.getImageData(0,0,W,H),delay:Math.round(fd)};
+        });
+        res({frames:frames,width:W,height:H});
+      }catch(e){rej(e);}
+    });
+  }
+  function decode(input,delay){
+    if(Array.isArray(input))return decodeFrameArray(input,delay);
+    if(typeof UPNG!=='undefined'){
+      return decodeApng(input,delay).catch(function(){return decodeFrameArray([input],delay);});
+    }
+    return decodeFrameArray([input],delay);
+  }
+  return{decode:decode,decodeFrameArray:decodeFrameArray,decodeApng:decodeApng};
+})();
+/* ── fin ApngDecoder reader ── */
+
 const SUPABASE_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
@@ -942,9 +996,16 @@ const _CZ_PFX = 'gz:';
 
 // Descarga frames PNG desde bucket 'anims'
 async function _animDownload(animUrl) {
+  if (!animUrl) return null;
   const r = await fetch(animUrl);
-  if (!r.ok) throw new Error('anim download: ' + r.status);
-  return r.json();
+  if (!r.ok) return null;
+  const blob = await r.blob();
+  return new Promise(res => {
+    const fr = new FileReader();
+    fr.onload  = e => res(e.target.result);
+    fr.onerror = () => res(null);
+    fr.readAsDataURL(blob);
+  });
 }
 
 async function _czDecompress(str) {
@@ -1005,8 +1066,11 @@ async function _loadPanels(workId, useAuth) {
           const l = JSON.parse(_raw);
           if (!l) return null;
           if (l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
-          if (l._isGcpImage && r.anim_url && !l._pngFrames) {
-            try { l._pngFrames = await _animDownload(r.anim_url); } catch(e) {}
+          if (l.type === 'image' && r.anim_url) {
+            try {
+              const _apngDl = await _animDownload(r.anim_url);
+              if (_apngDl) l._apngSrc = _apngDl;
+            } catch(e) {}
           }
           return l;
         } catch(e) { return null; }
@@ -1078,25 +1142,21 @@ async function preloadImages() {
           })
           .catch(() => null);
       }
-      // Animación PNG del editor GIF: precargar frames como canvas offscreen
-      if (layer._isGcpImage && layer._pngFrames && layer._pngFrames.length >= 1) {
-        return Promise.all(layer._pngFrames.map(dataUrl => new Promise(res => {
-          const img = new Image();
-          img.onload = () => {
-            const oc = document.createElement('canvas');
-            oc.width = img.naturalWidth; oc.height = img.naturalHeight;
-            oc.getContext('2d').drawImage(img, 0, 0);
-            res(oc);
-          };
-          img.onerror = () => res(null);
-          img.src = dataUrl;
-        }))).then(ocs => {
-          layer._pngOcs = ocs.filter(Boolean);
-          layer._pngIdx = 0;
-          layer._pngOc  = layer._pngOcs[0] || null;
-          layer._pngReady = layer._pngOcs.length > 0;
-          return layer._pngOc;
-        });
+      // APNG: decodificar con ApngDecoder
+      if (layer._apngSrc && window.ApngDecoder) {
+        return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
+          .then(function(result) {
+            layer._animFrames    = result.frames;
+            layer._animIdx       = 0;
+            layer._animLastTick  = 0;
+            layer._animPlayCount = 0;
+            layer._animOc        = document.createElement('canvas');
+            layer._animOc.width  = result.width;
+            layer._animOc.height = result.height;
+            layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
+            layer._animReady     = true;
+            return layer._animOc;
+          }).catch(function() { return null; });
       }
 
       // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
@@ -1181,13 +1241,26 @@ function _readerGifTick() {
           panelChanged = true;
         }
       }
-      // Animación PNG del editor GIF
-      if (layer._pngReady && layer._pngOcs && layer._pngOcs.length > 1) {
-        if (!layer._pngLastTick) layer._pngLastTick = now;
-        if (now - layer._pngLastTick >= 150) {
-          layer._pngIdx = (layer._pngIdx + 1) % layer._pngOcs.length;
-          layer._pngOc  = layer._pngOcs[layer._pngIdx];
-          layer._pngLastTick = now;
+      // APNG: tick con delay real por frame + comportamientos stopAtEnd/repeatCount
+      if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
+        if (!layer._animLastTick) layer._animLastTick = now;
+        const _af = layer._animFrames[layer._animIdx];
+        const _ad = (_af && _af.delay) || layer._gcpFrameDelay || 100;
+        if (now - layer._animLastTick >= _ad) {
+          const _stopAtEnd   = layer._gcpStopAtEnd   || false;
+          const _repeatCount = layer._gcpRepeatCount || 0;
+          let _nextIdx = layer._animIdx + 1;
+          if (_nextIdx >= layer._animFrames.length) {
+            layer._animPlayCount = (layer._animPlayCount || 0) + 1;
+            if (_stopAtEnd || (_repeatCount > 0 && layer._animPlayCount >= _repeatCount)) {
+              _nextIdx = layer._animFrames.length - 1; // detenerse en último frame
+            } else {
+              _nextIdx = 0; // loop infinito o más repeticiones
+            }
+          }
+          layer._animIdx = _nextIdx;
+          layer._animOc.getContext('2d').putImageData(layer._animFrames[_nextIdx].imageData, 0, 0);
+          layer._animLastTick = now;
           panelChanged = true;
         }
       }
@@ -1212,7 +1285,7 @@ function startReader() {
   document.getElementById('readerApp').classList.remove('hidden');
 
   // Arrancar loop de animación GIF si hay alguno en la obra
-  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._pngReady));
+  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady));
   if (_hasGifs) requestAnimationFrame(_readerGifTick);
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
@@ -1656,20 +1729,14 @@ function _render() {
       return;
     }
     if (type === 'image' || type === 'draw' || type === 'stroke') {
-      // Animación PNG del editor GIF — usar _pngOc en lugar de layerImgs[j]
-      if (type === 'image' && layer._pngReady && layer._pngOc) {
-        const x = (layer.x || 0.5) * pw;
-        const y = (layer.y || 0.5) * ph;
-        const w = (layer.width || 1) * pw;
-        const h = (layer.height || 1) * ph;
-        const rot = layer.rotation || 0;
-        ctx.save();
-        ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-        ctx.translate(x, y);
-        if (rot) ctx.rotate(rot * Math.PI / 180);
-        ctx.drawImage(layer._pngOc, -w/2, -h/2, w, h);
-        ctx.restore();
-        return;
+      // APNG animado
+      if (type === 'image' && layer._animReady && layer._animOc) {
+        const x=(layer.x||0.5)*pw, y=(layer.y||0.5)*ph;
+        const w=(layer.width||1)*pw, h=(layer.height||1)*ph;
+        const rot=(layer.rotation||0)*Math.PI/180;
+        ctx.save(); ctx.globalAlpha=layer.opacity!==undefined?layer.opacity:1;
+        ctx.translate(x,y); if(rot)ctx.rotate(rot);
+        ctx.drawImage(layer._animOc,-w/2,-h/2,w,h); ctx.restore(); return;
       }
       const img = layerImgs[j];
       if (!img) return;

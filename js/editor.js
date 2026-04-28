@@ -12794,7 +12794,8 @@ function edSerLayer(l){
     // Frames en IDB: usar clave (nunca guardar frames grandes en localStorage)
     // Solo serializar _pngFrames con contenido real (no strings vacíos de placeholder)
     if(l._pngFrames && l._pngFrames.length && l._pngFrames[0]) _r._pngFrames=l._pngFrames;
-    if(l.animKey) _r.animKey = l.animKey; // clave del bucket — no el dataUrl completo
+    if(l.animKey)    _r.animKey    = l.animKey;
+    if(l._bibItemId) _r._bibItemId = l._bibItemId; // id del item en biblioteca para re-edición
     // _apngSrc NO se serializa — es el dataUrl enorme, va al bucket por animKey
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
@@ -13079,7 +13080,8 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpFrameDelay  != null) l._gcpFrameDelay  = d._gcpFrameDelay;
     if(d._gcpRepeatCount != null) l._gcpRepeatCount = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
-    if(d.animKey) l.animKey = d.animKey;
+    if(d.animKey)    l.animKey    = d.animKey;
+    if(d._bibItemId) l._bibItemId = d._bibItemId;
     if(d._apngSrc) {
       // APNG descargado de nube — loadAnim con string → decodeApng → N frames reales
       l._apngSrc = d._apngSrc;
@@ -17753,21 +17755,40 @@ function _gcpSaveToLib(onDone) {
   // Restaurar estado del frame activo
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
 
-  // Guardar en biblioteca
+  // Guardar en biblioteca — si re-edición sobreescribir el item existente
   const data = _bibLoad();
-  _bibGetAnimFolder(data).items.push({
-    id: Date.now()+'_gif', timestamp:Date.now(),
-    isGroup:false, isGifAnim:true,
-    gifDataUrl: pngFrames[0],  // primer frame como preview
-    pngFrames,                  // todos los frames
+  const animFolder = _bibGetAnimFolder(data);
+  const existingLayerForBib = (window._gcpEdLayerIdx >= 0) ? edLayers[window._gcpEdLayerIdx] : null;
+  // Buscar item existente por animKey del layer o por _bibItemId guardado en el layer
+  const _existingBibIdx = existingLayerForBib
+    ? animFolder.items.findIndex(it =>
+        (existingLayerForBib._bibItemId && it.id === existingLayerForBib._bibItemId) ||
+        (existingLayerForBib.animKey && it.animKey === existingLayerForBib.animKey)
+      )
+    : -1;
+  const _bibItemId = _existingBibIdx >= 0
+    ? animFolder.items[_existingBibIdx].id   // conservar el mismo id
+    : Date.now() + '_gif';                    // nuevo id
+  const _newBibItem = {
+    id: _bibItemId, timestamp: Date.now(),
+    isGroup: false, isGifAnim: true,
+    gifDataUrl: pngFrames[0],
+    pngFrames,
     gcpLayersData, gcpFramesData, gcpLayerNames,
-    normW:_gcpNormW, normH:_gcpNormH,
-    layerData:null, thumb,
-    // Comportamientos de reproducción
+    normW: _gcpNormW, normH: _gcpNormH,
+    layerData: null, thumb,
     gcpFrameDelay:  window._gcpFrameDelay,
     gcpRepeatCount: window._gcpRepeatCount,
-    gcpStopAtEnd:   window._gcpStopAtEnd
-  });
+    gcpStopAtEnd:   window._gcpStopAtEnd,
+    animKey: existingLayerForBib?.animKey || null,
+  };
+  if (_existingBibIdx >= 0) {
+    animFolder.items[_existingBibIdx] = _newBibItem;  // sobreescribir
+  } else {
+    animFolder.items.push(_newBibItem);               // nuevo item
+  }
+  // Guardar el id del item en el layer para futuras re-ediciones
+  if (existingLayerForBib) existingLayerForBib._bibItemId = _bibItemId;
   _bibSave(data);
 
   // Si re-editamos capa existente, actualizarla in-place
