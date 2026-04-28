@@ -733,8 +733,9 @@ const SupabaseClient = (() => {
         ld = JSON.parse(_rld);
       } catch(e) {}
       if (!ld) continue;
-      // Reconstruir item: GIF o layer normal
-      if (ld.isGifAnim) {
+      // Reconstruir item: GIF/APNG animado o layer normal
+      // Usar layer_type='gif' como fallback si ld.isGifAnim no está en JSON antiguo
+      if (ld.isGifAnim || r.layer_type === 'gif') {
         // Descargar APNG desde bucket si tiene anim_url
         let _pngFrames = ld.pngFrames || null;
         let _apngSrc = null;
