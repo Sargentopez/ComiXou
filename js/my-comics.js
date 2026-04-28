@@ -378,14 +378,34 @@ function _mcRenderList() {
                 try { localData = JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) {}
                 if (!localData || !localData.folders) localData = { folders: [{ id: '__root__', name: 'General', items: [] }] };
                 const localAllIds = new Set(localData.folders.flatMap(f => f.items.map(i => i.id)));
+                // Procesar items nuevos: guardar apngSrc en IDB, no en localStorage
+                const _bibIdbWrites = [];
                 cloudData.folders.forEach(cf => {
                   const lf = localData.folders.find(f => f.id === cf.id);
-                  const newItems = cf.items.filter(i => !localAllIds.has(i.id));
+                  const newItems = cf.items.filter(i => !localAllIds.has(i.id)).map(item => {
+                    if (item.isGifAnim && item.apngSrc) {
+                      // Guardar APNG en IDB por id del item
+                      const _bibIdbKey = 'bib_' + item.id;
+                      if (window._sbAnimIdbSave) {
+                        _bibIdbWrites.push(
+                          window._sbAnimIdbSave(_bibIdbKey, item.apngSrc).catch(() => {})
+                        );
+                      }
+                      // Sustituir apngSrc por la clave IDB en el item
+                      const cleanItem = Object.assign({}, item);
+                      delete cleanItem.apngSrc;
+                      cleanItem._apngIdbKey = _bibIdbKey;
+                      return cleanItem;
+                    }
+                    return item;
+                  });
                   if (newItems.length) {
                     if (lf) { lf.items.push(...newItems); }
                     else { localData.folders.push({ id: cf.id, name: cf.name, items: newItems }); }
                   }
                 });
+                // Esperar IDB antes de guardar en localStorage
+                if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
                 try { localStorage.setItem(_bibKey, JSON.stringify(localData)); } catch(e) {}
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }

@@ -800,6 +800,35 @@ window.ApngDecoder = (function(){
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
 
+/* ── Test compresión ──────────────────────────────────────────── */
+window._runCzTest = async function() {
+  if (!window._czTest) { alert('_czTest no disponible'); return; }
+  const res = await window._czTest();
+  let p = document.getElementById('_czTestPanel');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = '_czTestPanel';
+    p.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;z-index:99999;background:#222;color:#0f0;font:12px monospace;padding:8px;border-radius:6px;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px';
+    hdr.innerHTML = '<b>TEST COMPRESIÓN</b>';
+    const btns = document.createElement('div');
+    const cp = document.createElement('button');
+    cp.textContent='📋 Copiar'; cp.style.cssText='padding:2px 8px;cursor:pointer;margin-right:4px;';
+    cp.onclick=()=>{const ta=document.getElementById('_czTestTa');ta.select();document.execCommand('copy');cp.textContent='✓';};
+    const cl = document.createElement('button');
+    cl.textContent='✕'; cl.style.cssText='padding:2px 8px;cursor:pointer;';
+    cl.onclick=()=>p.remove();
+    btns.append(cp,cl); hdr.appendChild(btns); p.appendChild(hdr);
+    const ta = document.createElement('textarea');
+    ta.id='_czTestTa';
+    ta.style.cssText='width:100%;height:80px;background:#111;color:#0f0;border:none;font:12px monospace;padding:4px;box-sizing:border-box;';
+    ta.readOnly=true; p.appendChild(ta);
+    document.body&&document.body.appendChild(p);
+  }
+  document.getElementById('_czTestTa').value = res.join('\n');
+};
+
 /* ── ESTADO ── */
 let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
@@ -14505,6 +14534,8 @@ function EditorView_init(){
   if(!editId){Router.go('my-comics');return;}
   edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
+  // Auto-test de compresión al arrancar (diagnóstico temporal)
+  setTimeout(function() { if(window._runCzTest) window._runCzTest(); }, 3000);
   // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
   edSetOrientation(edPages[0]?.orientation || edOrientation, false);
   edActiveTool='select';
@@ -16122,7 +16153,47 @@ function _bibRenderPanel(panel) {
       if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
 
       // GIF animado guardado desde el editor GIF
-      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || (entry.pngFrames && entry.pngFrames.length))) {
+      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
+        // Si el APNG está en IDB (dispositivo B), cargarlo antes de insertar
+        if (entry._apngIdbKey && !entry.apngSrc && window._sbAnimIdbLoad) {
+          window._sbAnimIdbLoad(entry._apngIdbKey)
+            .then(function(_data) { if (_data) entry.apngSrc = _data; })
+            .catch(function(){})
+            .finally(function() {
+              // apngSrc ya cargado — continuar con la inserción normal
+              const _img2 = new Image();
+              const _src2 = entry.apngSrc || entry.gifDataUrl;
+              const _frames2 = entry.apngSrc ? [entry.apngSrc]
+                             : (entry.pngFrames && entry.pngFrames.length > 1 ? entry.pngFrames : [entry.gifDataUrl]);
+              _img2.onload = function() {
+                const pw=edPageW(), ph=edPageH();
+                let fW=entry.normW||0.7, fH=entry.normH||fW*(_img2.naturalHeight/Math.max(_img2.naturalWidth,1))*(pw/ph);
+                const sc2=Math.max(fW/0.9,fH/0.9,1); fW/=sc2; fH/=sc2;
+                const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
+                la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
+                la2._keepSize=true; la2._isGcpImage=true;
+                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=[entry.apngSrc];}
+                else la2._pngFrames=_frames2;
+                la2._fIdx=0;
+                if(entry.gcpLayersData) la2._gcpLayersData=entry.gcpLayersData;
+                if(entry.gcpFramesData) la2._gcpFramesData=entry.gcpFramesData;
+                if(entry.gcpLayerNames) la2._gcpLayerNames=entry.gcpLayerNames;
+                if(entry.gcpFrameDelay!=null) la2._gcpFrameDelay=entry.gcpFrameDelay;
+                if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
+                if(entry.gcpStopAtEnd) la2._gcpStopAtEnd=true;
+                const _k2='anim_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
+                la2.animKey=_k2;
+                if(window._sbAnimIdbSave) window._sbAnimIdbSave(_k2,entry.apngSrc||_frames2).catch(function(){});
+                const fi2=edLayers.findIndex(l=>l.type==='text'||l.type==='bubble');
+                if(fi2>=0){edLayers.splice(fi2,0,la2);edSelectedIdx=fi2;}
+                else{edLayers.push(la2);edSelectedIdx=edLayers.length-1;}
+                edPushHistory();
+                la2.loadAnim(entry.apngSrc||_frames2,function(){la2._playing=true;la2._applyFrame(0);edRedraw();});
+              };
+              _img2.src=_src2;
+            });
+          _bibClose(panel); edToast('Animación insertada ✓'); return;
+        }
         // apngSrc: APNG completo descargado de nube — usar directamente con decodeApng
         // pngFrames: array de frames individuales (sistema local o GIF antiguo)
         const frames = entry.apngSrc ? [entry.apngSrc]
