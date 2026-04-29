@@ -14438,13 +14438,7 @@ function EditorView_destroy(){
   edHideGearIcon();
 }
 function edSaveProjectModal(){
-  const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
-  // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
-  if (_newTitle !== edProjectMeta.title) {
-    edProjectId = 'comic_' + Date.now();
-    sessionStorage.setItem('cx_edit_id', edProjectId);
-  }
-  edProjectMeta.title  = _newTitle;
+  edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
