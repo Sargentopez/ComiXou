@@ -780,7 +780,19 @@ window.ApngDecoder = (function(){
   }
 
   function decode(input, delay) {
-    if (Array.isArray(input)) return decodeFrameArray(input, delay);
+    if (Array.isArray(input)) {
+      // Array de 1 elemento: puede ser un APNG completo guardado como array por error histórico
+      // Intentar decodificarlo como APNG antes de tratarlo como frame estático individual
+      if (input.length === 1 && typeof input[0] === 'string') {
+        if (typeof UPNG !== 'undefined') {
+          return decodeApng(input[0], delay).catch(function() {
+            return decodeFrameArray(input, delay);
+          });
+        }
+        return decodeFrameArray(input, delay);
+      }
+      return decodeFrameArray(input, delay);
+    }
     // dataUrl único: intentar como APNG, fallback a frame estático
     if (typeof UPNG !== 'undefined') {
       return decodeApng(input, delay).catch(function() {
@@ -13128,6 +13140,24 @@ function edDeserLayer(d, pageOrientation){
         });
       });
     }
+    // Fallback: si solo hay animKey (sin _pngFramesKey/_pngFrames/_apngSrc),
+    // intentar recuperar de IDB local via _sbAnimIdbLoad
+    if(d.animKey && !d._pngFramesKey && !d._pngFrames && !d._apngSrc && window._sbAnimIdbLoad) {
+      window._sbAnimIdbLoad(d.animKey).then(data => {
+        if(!data) return;
+        if(typeof data === 'string') { l._apngSrc = data; }
+        else { l._pngFrames = data; }
+        const input = data;
+        l.loadAnim(input, () => {
+          if($('editorViewer')?.classList.contains('open')) {
+            l._playing = true; l._applyFrame(0);
+            if(typeof edUpdateViewer==='function') edUpdateViewer();
+          } else {
+            if(typeof edRedraw==='function') edRedraw();
+          }
+        });
+      }).catch(function(){});
+    }
     if(d.src){
       const img=new Image();
       img.onload=()=>{
@@ -16189,7 +16219,7 @@ function _bibRenderPanel(panel) {
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
-                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=[entry.apngSrc];}
+                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; /* _pngFrames queda vacío — edSerLayer lo serializa como _apngSrc */}
                 else la2._pngFrames=_frames2;
                 la2._fIdx=0;
                 if(entry.gcpLayersData) la2._gcpLayersData=entry.gcpLayersData;
@@ -16234,7 +16264,7 @@ function _bibRenderPanel(panel) {
           // Si apngSrc: usar directamente para decodeApng (preserva todos los frames)
           if (entry.apngSrc) {
             la._apngSrc = entry.apngSrc;
-            la._pngFrames = [entry.apngSrc]; // length>1 no aplica pero necesario para IDB
+            la._pngFrames = null; // _apngSrc es el APNG completo — no duplicar en _pngFrames
           } else {
             la._pngFrames = frames;
           }
