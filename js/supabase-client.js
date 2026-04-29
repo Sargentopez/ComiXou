@@ -548,14 +548,11 @@ const SupabaseClient = (() => {
       const layers = [];
       for (const row of layerRows) {
         let layerObj = null;
-        try {
-          const _raw = await _czDecompress(row.layer_data);
-          _dlDiag('layer ' + row.layer_order + ' raw[0:30]=' + String(_raw).slice(0,30) + ' len=' + String(_raw).length);
-          layerObj = JSON.parse(_raw);
-        } catch(e) {
-          _dlDiag('layer ' + row.layer_order + ' PARSE ERR: ' + e.message + ' raw=' + String(row.layer_data).slice(0,30));
-        }
-        if (!layerObj) { _dlDiag('layer ' + row.layer_order + ' PARSE FAILED: ' + String(row.layer_data).slice(0,30)); continue; }
+        let _raw = row.layer_data;
+        try { _raw = await _czDecompress(row.layer_data); } catch(e) { _dlDiag('DECOMP THROW ' + row.layer_order + ': ' + e.message); }
+        _dlDiag('L' + row.layer_order + ' raw0=' + String(_raw).slice(0,15) + ' rawLen=' + String(_raw).length);
+        try { layerObj = JSON.parse(_raw); } catch(e) { _dlDiag('JSON ERR L' + row.layer_order + ': ' + e.message.slice(0,40)); }
+        if (!layerObj) { _dlDiag('FAILED L' + row.layer_order); continue; }
         _dlDiag('layer ' + row.layer_order + ' type=' + layerObj.type + ' src=' + (layerObj.src||'').length + ' dataUrl=' + (layerObj.dataUrl||'').length + ' anim_url=' + (row.anim_url?'YES':'NO'));
         // APNG animado — patrón idéntico al GIF:
         // APNG: descargar si hay anim_url — sin depender de animKey
