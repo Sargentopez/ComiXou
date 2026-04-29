@@ -401,37 +401,22 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   upBtn.className = 'ed-layer-arrow';
   upBtn.title = 'Subir nivel';
   upBtn.textContent = '▲';
-  // Con groupId: deshabilitar si todos los vecinos superiores son del mismo grupo
-  const _grpAbove = la.groupId
-    ? visualAll.slice(posInList + 1).every(({l: _l}) => _l.groupId === la.groupId)
-    : false;
-  upBtn.disabled = posInList >= visualAll.length - 1 || _grpAbove;
+  upBtn.disabled = posInList >= visualAll.length - 1;
   upBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
-    if (la.groupId) {
-      _lyReorderGroup(la.groupId, +1);
-    } else {
-      const next = visualAll[posInList + 1];
-      if (next) _lyReorderLayers(realIdx, next.i + 1);
-    }
+    const next = visualAll[posInList + 1];
+    if (next) _lyReorderLayers(realIdx, next.i + 1);
   });
 
   const dnBtn = document.createElement('button');
   dnBtn.className = 'ed-layer-arrow';
   dnBtn.title = 'Bajar nivel';
   dnBtn.textContent = '▼';
-  const _grpBelow = la.groupId
-    ? visualAll.slice(0, posInList).every(({l: _l}) => _l.groupId === la.groupId)
-    : false;
-  dnBtn.disabled = posInList <= 0 || _grpBelow;
+  dnBtn.disabled = posInList <= 0;
   dnBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
-    if (la.groupId) {
-      _lyReorderGroup(la.groupId, -1);
-    } else {
-      const prev = visualAll[posInList - 1];
-      if (prev) _lyReorderLayers(realIdx, prev.i);
-    }
+    const prev = visualAll[posInList - 1];
+    if (prev) _lyReorderLayers(realIdx, prev.i);
   });
 
   /* Eliminar */
@@ -687,31 +672,8 @@ function _lyBindImgDrag(item, handle, realIdx) {
     item.classList.remove('dragging');
     document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
     if (_lyDragOver !== null && _lyDragOver !== startIdx) {
-      // Si la capa dragged tiene groupId, mover el bloque entero
-      const _draggedLayer = typeof edLayers !== 'undefined' ? edLayers[startIdx] : null;
-      const _dragGid = _draggedLayer ? _draggedLayer.groupId : null;
-      // Si el destino es miembro del mismo grupo → cancelar
-      const _destLayer = typeof edLayers !== 'undefined' ? edLayers[_lyDragOver] : null;
-      const _destGid = _destLayer ? _destLayer.groupId : null;
-      if (_dragGid && _destGid && _dragGid === _destGid) {
-        // Mismo grupo: no hacer nada
-      } else if (_dragGid) {
-        // Determinar dirección: destino por encima o por debajo del bloque
-        const _memberIdxs = [];
-        for (let _i = 0; _i < edLayers.length; _i++) {
-          if (edLayers[_i] && edLayers[_i].groupId === _dragGid) _memberIdxs.push(_i);
-        }
-        const _maxMember = _memberIdxs[_memberIdxs.length - 1];
-        const _minMember = _memberIdxs[0];
-        const _dir = _lyDragOver > _maxMember ? +1 : (_lyDragOver < _minMember ? -1 : 0);
-        if (_dir !== 0) {
-          item.classList.add('was-dragged');
-          _lyReorderGroup(_dragGid, _dir);
-        }
-      } else {
-        item.classList.add('was-dragged');
-        _lyReorderImages(startIdx, _lyDragOver);
-      }
+      item.classList.add('was-dragged');
+      _lyReorderImages(startIdx, _lyDragOver);
     }
     _lyDragIdx = _lyDragOver = null;
     window.removeEventListener('pointermove', onPointerMove);
@@ -803,75 +765,6 @@ function _lyAnimatedReorder(layerObj, doReorder) {
       });
     });
   });
-}
-
-/* Mueve todo el bloque de un grupo una posición arriba (+1) o abajo (-1) en la lista visual.
-   "Arriba" en la lista visual = índice mayor en edLayers (se dibuja encima).
-   dir: +1 = subir un nivel visual, -1 = bajar un nivel visual. */
-function _lyReorderGroup(groupId, dir) {
-  // Índices de miembros del grupo, ordenados ascendente
-  const memberIdxs = [];
-  for (let i = 0; i < edLayers.length; i++) {
-    if (edLayers[i] && edLayers[i].groupId === groupId) memberIdxs.push(i);
-  }
-  if (memberIdxs.length < 1) return;
-
-  // Todos los índices visuales (imagen/dibujo/shape/line)
-  const visualAll = edLayers.map((l, i) => ({ l, i }))
-    .filter(({ l }) => l.type === 'image' || l.type === 'gif' || l.type === 'stroke' ||
-                       l.type === 'draw' || l.type === 'shape' || l.type === 'line');
-
-  const minIdx = memberIdxs[0];
-  const maxIdx = memberIdxs[memberIdxs.length - 1];
-
-  if (dir === +1) {
-    // Subir: el vecino inmediatamente por encima del bloque (índice mayor en visualAll)
-    const above = visualAll.find(({ i }) => i > maxIdx && !memberIdxs.includes(i));
-    if (!above) return; // ya está en la cima
-    const movedLayer = edLayers[memberIdxs[0]];
-    _lyAnimatedReorder(movedLayer, () => {
-      // Extraer miembros (de mayor a menor para no desplazar índices)
-      const extracted = [];
-      for (let k = memberIdxs.length - 1; k >= 0; k--) {
-        extracted.unshift(edLayers.splice(memberIdxs[k], 1)[0]);
-      }
-      // Posición de inserción: justo después del vecino superior (que ahora está desplazado)
-      // Calcular nuevo índice del vecino superior después de los splices
-      let insertAt = above.i - memberIdxs.filter(mi => mi < above.i).length;
-      insertAt++; // insertar después de él
-      for (let k = extracted.length - 1; k >= 0; k--) {
-        edLayers.splice(insertAt, 0, extracted[k]);
-      }
-      if (memberIdxs.includes(edSelectedIdx)) {
-        const delta = insertAt - minIdx;
-        edSelectedIdx += delta;
-      }
-      edPushHistory(); edRedraw();
-    });
-  } else {
-    // Bajar: el vecino inmediatamente por debajo del bloque (índice menor en visualAll)
-    const belowArr = visualAll.filter(({ i }) => i < minIdx && !memberIdxs.includes(i));
-    if (!belowArr.length) return; // ya está en el fondo
-    const below = belowArr[belowArr.length - 1];
-    const movedLayer = edLayers[memberIdxs[0]];
-    _lyAnimatedReorder(movedLayer, () => {
-      // Extraer miembros de mayor a menor
-      const extracted = [];
-      for (let k = memberIdxs.length - 1; k >= 0; k--) {
-        extracted.unshift(edLayers.splice(memberIdxs[k], 1)[0]);
-      }
-      // El vecino inferior no se ve afectado por los splices (está debajo de todos los miembros)
-      const insertAt = below.i; // insertar en su posición (empujándolo hacia abajo)
-      for (let k = extracted.length - 1; k >= 0; k--) {
-        edLayers.splice(insertAt, 0, extracted[k]);
-      }
-      if (memberIdxs.includes(edSelectedIdx)) {
-        const delta = insertAt - minIdx;
-        edSelectedIdx += delta;
-      }
-      edPushHistory(); edRedraw();
-    });
-  }
 }
 
 function _lyReorderTexts(fromRealIdx, toRealIdx) {

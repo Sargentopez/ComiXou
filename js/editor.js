@@ -780,19 +780,7 @@ window.ApngDecoder = (function(){
   }
 
   function decode(input, delay) {
-    if (Array.isArray(input)) {
-      // Array de 1 elemento: puede ser un APNG completo guardado como array por error histórico
-      // Intentar decodificarlo como APNG antes de tratarlo como frame estático individual
-      if (input.length === 1 && typeof input[0] === 'string') {
-        if (typeof UPNG !== 'undefined') {
-          return decodeApng(input[0], delay).catch(function() {
-            return decodeFrameArray(input, delay);
-          });
-        }
-        return decodeFrameArray(input, delay);
-      }
-      return decodeFrameArray(input, delay);
-    }
+    if (Array.isArray(input)) return decodeFrameArray(input, delay);
     // dataUrl único: intentar como APNG, fallback a frame estático
     if (typeof UPNG !== 'undefined') {
       return decodeApng(input, delay).catch(function() {
@@ -2096,7 +2084,7 @@ class LineLayer extends BaseLayer {
     });
 
     // Helper: construye un contorno cerrado con radios opcionales en un Path2D
-    const _buildContour = (target, localPts, localCr, isClosed) => {
+    const _buildContour = (target, localPts, localCr) => {
       const _n = localPts.length; if(_n < 2) return;
       const _cr2 = localCr || {};
       const _px2b = p => ({x: p.x*pw, y: p.y*ph});
@@ -2113,18 +2101,15 @@ class LineLayer extends BaseLayer {
         return {p1:{x:cur.x-v1.x*r,y:cur.y-v1.y*r}, p2:{x:cur.x+v2.x*r,y:cur.y+v2.y*r}, cur, r};
       });
       const t0=_tgs[0];
-      // Abierto: empezar en el punto real; cerrado: empezar en p1 (antes del arco de esquina)
-      if(isClosed) target.moveTo(t0.p1.x, t0.p1.y);
-      else         target.moveTo(t0.cur.x, t0.cur.y);
-      const _limit = isClosed ? _n : _n - 1;
-      for(let i=0;i<_limit;i++){
+      target.moveTo(t0.p1.x, t0.p1.y);
+      for(let i=0;i<_n;i++){
         const {p1,p2,cur,r}=_tgs[i];
-        if(isClosed && r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
+        if(r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
         const next=_tgs[(i+1)%_n];
-        if(isClosed && next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
-        else                     { target.lineTo(next.cur.x,next.cur.y); }
+        if(next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
+        else         { target.lineTo(next.cur.x,next.cur.y); }
       }
-      if(isClosed) target.closePath();
+      target.closePath();
     };
 
     if(_multiContour){
@@ -2150,7 +2135,7 @@ class LineLayer extends BaseLayer {
           }
           _ptBase = _scan + 1; // saltar el null separador
           const _path = new Path2D();
-          _buildContour(_path, c, _crC, _cl);
+          _buildContour(_path, c, _crC);
           if(_cl && _fc && _fc !== 'none'){
             ctx.fillStyle = _fc;
             ctx.fill(_path);
@@ -2175,7 +2160,7 @@ class LineLayer extends BaseLayer {
               _gIdx++;
             }
           }
-          _buildContour(combined, c, _crC, this.closed);
+          _buildContour(combined, c, _crC);
         });
         if (this.fillColor && this.fillColor !== 'none') {
           ctx.fillStyle = this.fillColor;
@@ -5762,17 +5747,11 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       // ── Nuevo sistema cursor: timer 120ms para detectar segundo dedo (pinch) ──
       if(_cof.on){
-        const _cofIsRed = (_cof.state==='red_ready'||_cof.state==='red_cool');
-        if(_cofIsRed){
-          // Estado rojo: disparar inmediatamente sin esperar segundo dedo
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!['draw','eraser'].includes(edActiveTool)) return;
           _cofHandleTouch(_eSaved);
-        } else {
-          window._edDrawTouchTimer = setTimeout(() => {
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-            if(!['draw','eraser'].includes(edActiveTool)) return;
-            _cofHandleTouch(_eSaved);
-          }, 120);
-        }
+        }, 120);
         return;
       }
       // ── Modo dibujo normal (sin cursor offset) ──
@@ -6302,16 +6281,11 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       const _eSaved2 = e;
       if(e.pointerType === 'touch' && _cof.on){
-        const _cofIsRed2 = (_cof.state==='red_ready'||_cof.state==='red_cool');
-        if(_cofIsRed2){
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!['draw','eraser'].includes(edActiveTool)) return;
           _cofHandleTouch(_eSaved2);
-        } else {
-          window._edDrawTouchTimer = setTimeout(() => {
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-            if(!['draw','eraser'].includes(edActiveTool)) return;
-            _cofHandleTouch(_eSaved2);
-          }, 120);
-        }
+        }, 120);
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
           if(!window._edActivePointers || window._edActivePointers.size > 1) return;
@@ -8233,9 +8207,11 @@ function _cofHandleUp(e) {
 
 function _cofAfterStroke() {
   if (!_cof.on) return;
+  _cof.state = 'red_cool';
   _cof._strokeStarted = false;
+  _cofDraw();
   clearTimeout(_cof._timer);
-  _cofExpire();
+  _cof._timer = setTimeout(_cofExpire, _cof.MS_COOL);
 }
 
 function _cofExpire() {
@@ -11583,8 +11559,7 @@ function _edbSyncOffsetBtn(){
   const edbBtn = $('edb-offset');
   if(edbBtn){
     edbBtn.classList.toggle('active', _edCursorOffset);
-    edbBtn.style.opacity = '1';
-    edbBtn.style.color = _edCursorOffset ? '#fff' : 'rgba(255,255,255,0.5)';
+    edbBtn.style.opacity = _edCursorOffset ? '1' : '0.5';
   }
   // Botones izq/der en el popover de la BARRA FLOTANTE
   [{id:'edb-offset-pop-l', a:40},{id:'edb-offset-pop-r', a:-40}].forEach(({id,a}) => {
@@ -13140,24 +13115,6 @@ function edDeserLayer(d, pageOrientation){
         });
       });
     }
-    // Fallback: si solo hay animKey (sin _pngFramesKey/_pngFrames/_apngSrc),
-    // intentar recuperar de IDB local via _sbAnimIdbLoad
-    if(d.animKey && !d._pngFramesKey && !d._pngFrames && !d._apngSrc && window._sbAnimIdbLoad) {
-      window._sbAnimIdbLoad(d.animKey).then(data => {
-        if(!data) return;
-        if(typeof data === 'string') { l._apngSrc = data; }
-        else { l._pngFrames = data; }
-        const input = data;
-        l.loadAnim(input, () => {
-          if($('editorViewer')?.classList.contains('open')) {
-            l._playing = true; l._applyFrame(0);
-            if(typeof edUpdateViewer==='function') edUpdateViewer();
-          } else {
-            if(typeof edRedraw==='function') edRedraw();
-          }
-        });
-      }).catch(function(){});
-    }
     if(d.src){
       const img=new Image();
       img.onload=()=>{
@@ -13288,8 +13245,6 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
-  // Resetear estado de animaciones de TODAS las hojas antes de empezar
-  edPages.forEach((p, pi) => _edResetPageAnims(pi));
   _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -13552,7 +13507,6 @@ function _edOpenViewerScroll(navMode) {
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
-      _edResetPageAnims(_prevSI);
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
@@ -14471,29 +14425,7 @@ function EditorView_destroy(){
   edHideGearIcon();
 }
 function edSaveProjectModal(){
-  const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
-  // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
-  if (_newTitle !== edProjectMeta.title) {
-    const _oldComic = ComicStore.getById(edProjectId) || {};
-    edProjectId = 'comic_' + Date.now();
-    sessionStorage.setItem('cx_edit_id', edProjectId);
-    // Pre-guardar la entrada con los datos de identidad del comic original
-    // para que edSaveProject la encuentre con userId correcto
-    ComicStore.save({
-      ..._oldComic,
-      id: edProjectId,
-      title: _newTitle,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      published: false,
-      approved:  false,
-      pendingReview: false,
-      supabaseId: null,
-      cloudOnly:  false,
-      cloudNewer: false,
-    });
-  }
-  edProjectMeta.title  = _newTitle;
+  edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
@@ -16158,13 +16090,10 @@ function _bibRenderPanel(panel) {
         });
         return;
       }
-      edConfirm(`¿Eliminar la carpeta "${folder.name}"?`, ()=>{
-        const d2 = _bibLoad();
-        d2.folders.splice(fi, 1);
-        _bibSave(d2);
-        edToast('Carpeta eliminada');
-        _bibRenderPanel(panel);
-      });
+      d.folders.splice(fi, 1);
+      _bibSave(d);
+      edToast('Carpeta eliminada');
+      _bibRenderPanel(panel);
     });
   });
 
@@ -16174,14 +16103,10 @@ function _bibRenderPanel(panel) {
       e.stopPropagation();
       const fi = parseInt(btn.dataset.fi), ii = parseInt(btn.dataset.ii);
       const d = _bibLoad();
-      const _itemName = d.folders[fi]?.items[ii]?.name || 'este objeto';
-      edConfirm(`¿Eliminar "${_itemName}" de la biblioteca?`, ()=>{
-        const d2 = _bibLoad();
-        d2.folders[fi].items.splice(ii, 1);
-        _bibSave(d2);
-        edToast('Eliminado de la biblioteca');
-        _bibRenderPanel(panel);
-      });
+      d.folders[fi].items.splice(ii, 1);
+      _bibSave(d);
+      edToast('Eliminado de la biblioteca');
+      _bibRenderPanel(panel);
     });
   });
 
@@ -16219,7 +16144,7 @@ function _bibRenderPanel(panel) {
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
-                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; /* _pngFrames queda vacío — edSerLayer lo serializa como _apngSrc */}
+                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=[entry.apngSrc];}
                 else la2._pngFrames=_frames2;
                 la2._fIdx=0;
                 if(entry.gcpLayersData) la2._gcpLayersData=entry.gcpLayersData;
@@ -16264,7 +16189,7 @@ function _bibRenderPanel(panel) {
           // Si apngSrc: usar directamente para decodeApng (preserva todos los frames)
           if (entry.apngSrc) {
             la._apngSrc = entry.apngSrc;
-            la._pngFrames = null; // _apngSrc es el APNG completo — no duplicar en _pngFrames
+            la._pngFrames = [entry.apngSrc]; // length>1 no aplica pero necesario para IDB
           } else {
             la._pngFrames = frames;
           }

@@ -1439,11 +1439,6 @@ function _startScrollReader() {
     const dx = ex - _osx, dy = ey - _osy;
     _osx = null;
     const adx = Math.abs(dx), ady = Math.abs(dy);
-    // En pantalla de créditos: tap (movimiento mínimo) → detectar enlace/botón
-    if (RS.isCredits && adx < 20 && ady < 20) {
-      _handleCreditsClick(ex, ey);
-      return;
-    }
     if (isH && adx < 20) return;
     if (!isH && ady < 20) return;
     if (isH && ady > adx * 1.5) return;
@@ -1492,7 +1487,6 @@ function _startScrollReader() {
       const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
-      _resetPanelAnims(RS.panels[_prevSI]?.layers);
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
@@ -2142,7 +2136,6 @@ function advance() {
     _startFade(); RS.textStep++; _render(); return;
   }
   if (RS.idx < RS.panels.length - 1) {
-    _resetPanelAnims(RS.panels[RS.idx]?.layers);
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resizeCanvas(); _render();
   }
@@ -2155,7 +2148,6 @@ function goBack() {
 
   if (isSeq && RS.textStep > 1) { RS.textStep--; RS.fadeAlpha = 0; _render(); return; }
   if (RS.idx > 0) {
-    _resetPanelAnims(RS.panels[RS.idx]?.layers);
     RS.idx--;
     const pp = RS.panels[RS.idx];
     RS.textStep  = (pp?.text_mode || 'sequential') === 'sequential' ? (pp?.texts || []).length : 0;
@@ -2225,8 +2217,6 @@ function _creditsClick() {
   if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
   if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
   RS.isCredits = false;
-  // Resetear animaciones de todos los paneles al volver al inicio
-  RS.panels.forEach(p => _resetPanelAnims(p.layers));
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
 }
@@ -2516,9 +2506,10 @@ function _setupControls() {
     const dy   = Math.abs(endY - sy);
     sx = null;
     if (dy > 40) return;
-    // En créditos: cualquier tap detecta enlace/botón (ignorar división izq/dcha)
+    // En créditos: lado retroceder → goBack, lado avanzar → detecta enlace/botón
     if (RS.isCredits) {
-      _handleCreditsClick(endX, endY);
+      if (_isBackSide(endX, endY)) goBack();
+      else _handleCreditsClick(endX, endY);
       return;
     }
     // Navegación normal
