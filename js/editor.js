@@ -13258,8 +13258,6 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
-  // Resetear estado de animaciones de TODAS las hojas antes de empezar
-  edPages.forEach((p, pi) => _edResetPageAnims(pi));
   _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -13522,7 +13520,6 @@ function _edOpenViewerScroll(navMode) {
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
-      _edResetPageAnims(_prevSI);
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
