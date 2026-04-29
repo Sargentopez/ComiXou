@@ -76,7 +76,10 @@ async function _czDecompress(str) {
     const merged = new Uint8Array(total);
     let off=0; for(const c of chunks){merged.set(c,off);off+=c.length;}
     return new TextDecoder().decode(merged);
-  } catch(e) { return str; }
+  } catch(e) {
+    _dlDiag('DECOMP ERROR: ' + e.message + ' b64len=' + (str.length - 3));
+    return str;
+  }
 }
 
 const SupabaseClient = (() => {
