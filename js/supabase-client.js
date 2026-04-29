@@ -40,30 +40,35 @@ async function _czCompress(jsonStr) {
 
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
-  if (typeof DecompressionStream === 'undefined') return str;
+  // Decodificar base64 → Uint8Array (chunks de 32768 chars, múltiplos de 4)
+  const b64 = str.slice(_CZ_PFX.length);
+  const CHUNK = 32768;
+  let byteLen = 0;
+  const parts = [];
   try {
-    const b64 = str.slice(_CZ_PFX.length);
-    // Convertir base64 completo a Uint8Array en chunks de 8192 bytes DECODIFICADOS
-    // — chunks deben ser múltiplos de 3 chars base64 (4 chars base64 = 3 bytes)
-    // Para evitar cortar en medio de un bloque, usar chunks múltiplos de 4 chars
-    const CHUNK = 8192; // múltiplo de 4 ✓
-    // Añadir padding si hace falta
-    const padded = b64 + '==='.slice((b64.length + 3) % 4 || 3);
-    let byteLen = 0;
-    const parts = [];
-    for (let i = 0; i < padded.length; i += CHUNK) {
-      // Asegurar que el chunk termina en múltiplo de 4
-      let end = Math.min(i + CHUNK, padded.length);
-      while ((end - i) % 4 !== 0 && end < padded.length) end++;
-      const bin = atob(padded.slice(i, end));
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      const slice = b64.slice(i, Math.min(i + CHUNK, b64.length));
+      const rem = slice.length % 4;
+      const bin = atob(rem ? slice + '===='.slice(rem) : slice);
       const part = new Uint8Array(bin.length);
       for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
       parts.push(part);
       byteLen += part.length;
     }
-    const bytes = new Uint8Array(byteLen);
-    let off2 = 0;
-    for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+  } catch(e) { return str; }
+  const bytes = new Uint8Array(byteLen);
+  let off2 = 0;
+  for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+  // Usar pako si está disponible (más fiable en Android WebView)
+  if (typeof pako !== 'undefined') {
+    try {
+      const result = new TextDecoder().decode(pako.inflate(bytes));
+      if (result && result.length > 0) return result;
+    } catch(e) {}
+  }
+  // Fallback: DecompressionStream nativo
+  if (typeof DecompressionStream === 'undefined') return str;
+  try {
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
     writer.write(bytes);
@@ -75,13 +80,8 @@ async function _czDecompress(str) {
     const total = chunks.reduce((a,c)=>a+c.length,0);
     const merged = new Uint8Array(total);
     let off=0; for(const c of chunks){merged.set(c,off);off+=c.length;}
-    const result = new TextDecoder().decode(merged);
-    if (window._dlDiag) window._dlDiag('DECOMP OK bytes=' + bytes.length + ' chunks=' + chunks.length + ' total=' + total + ' result0=' + result.slice(0,15));
-    return result;
-  } catch(e) {
-    if (window._dlDiag) window._dlDiag('DECOMP ERR: ' + e.message.slice(0,60));
-    return str;
-  }
+    return new TextDecoder().decode(merged);
+  } catch(e) { return str; }
 }
 
 const SupabaseClient = (() => {
@@ -289,33 +289,6 @@ const SupabaseClient = (() => {
     });
   }
 
-  window._dlDiag = window._dlDiag || function() {};
-  function _dlDiag(msg) {
-    let p = document.getElementById('_dlDiagP');
-    if (!p) {
-      p = document.createElement('div');
-      p.id = '_dlDiagP';
-      p.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#400;color:#fff;font:11px monospace;padding:6px;max-height:50vh;overflow:auto;';
-      const h = document.createElement('div');
-      h.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:4px';
-      h.innerHTML = '<b>DOWNLOAD DIAG</b>';
-      const btns = document.createElement('div');
-      const cp = document.createElement('button');
-      cp.textContent='📋'; cp.style='padding:2px 6px;cursor:pointer;margin-right:4px';
-      cp.onclick=()=>{const ta=document.getElementById('_dlDiagTa');ta.select();document.execCommand('copy');cp.textContent='✓';};
-      const cl = document.createElement('button');
-      cl.textContent='✕'; cl.style='padding:2px 6px;cursor:pointer';
-      cl.onclick=()=>p.remove();
-      btns.append(cp,cl); h.appendChild(btns); p.appendChild(h);
-      const ta = document.createElement('textarea');
-      ta.id='_dlDiagTa';
-      ta.style.cssText='width:100%;height:120px;background:#300;color:#fff;border:none;font:11px monospace;padding:4px;box-sizing:border-box;';
-      ta.readOnly=true; p.appendChild(ta);
-      document.body&&document.body.appendChild(p);
-    }
-    const ta = document.getElementById('_dlDiagTa');
-    if (ta) ta.value += msg + '\n';
-  }
 
   async function _uploadPanels(comic) {
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
@@ -551,12 +524,11 @@ const SupabaseClient = (() => {
       const layers = [];
       for (const row of layerRows) {
         let layerObj = null;
-        let _raw = row.layer_data;
-        try { _raw = await _czDecompress(row.layer_data); } catch(e) { _dlDiag('DECOMP THROW ' + row.layer_order + ': ' + e.message); }
-        _dlDiag('L' + row.layer_order + ' raw0=' + String(_raw).slice(0,15) + ' rawLen=' + String(_raw).length);
-        try { layerObj = JSON.parse(_raw); } catch(e) { _dlDiag('JSON ERR L' + row.layer_order + ': ' + e.message.slice(0,40)); }
-        if (!layerObj) { _dlDiag('FAILED L' + row.layer_order); continue; }
-        _dlDiag('layer ' + row.layer_order + ' type=' + layerObj.type + ' src=' + (layerObj.src||'').length + ' dataUrl=' + (layerObj.dataUrl||'').length + ' anim_url=' + (row.anim_url?'YES':'NO'));
+        try {
+          const _raw = await _czDecompress(row.layer_data);
+          layerObj = JSON.parse(_raw);
+        } catch(e) {}
+        if (!layerObj) continue;
         // APNG animado — patrón idéntico al GIF:
         // APNG: descargar si hay anim_url — sin depender de animKey
         if (layerObj.type === 'image' && row.anim_url) {
