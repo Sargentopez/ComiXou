@@ -75,7 +75,9 @@ async function _czDecompress(str) {
     const total = chunks.reduce((a,c)=>a+c.length,0);
     const merged = new Uint8Array(total);
     let off=0; for(const c of chunks){merged.set(c,off);off+=c.length;}
-    return new TextDecoder().decode(merged);
+    const result = new TextDecoder().decode(merged);
+    if (window._dlDiag) window._dlDiag('DECOMP OK bytes=' + bytes.length + ' chunks=' + chunks.length + ' total=' + total + ' result0=' + result.slice(0,15));
+    return result;
   } catch(e) {
     if (window._dlDiag) window._dlDiag('DECOMP ERR: ' + e.message.slice(0,60));
     return str;
