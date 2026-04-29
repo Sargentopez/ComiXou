@@ -303,9 +303,10 @@ function _mcRenderList() {
         try {
           const _cloudMeta = await SupabaseClient.fetchWorksByIds([comicToEdit.supabaseId]);
           if (_cloudMeta && _cloudMeta[0]) {
-            const _cloudDate = new Date(_cloudMeta[0].updated_at || 0);
-            const _localDate = new Date(comicToEdit.updatedAt || comicToEdit.createdAt || 0);
-            _cloudNewer = _cloudDate > _localDate;
+            const _cloudDate  = new Date(_cloudMeta[0].updated_at || 0);
+            // Si este dispositivo guardó en local DESPUÉS de la fecha de nube → ya está al día
+            const _localSaved = new Date(comicToEdit.localSavedAt || comicToEdit.updatedAt || 0);
+            _cloudNewer = _cloudDate > _localSaved;
           }
         } catch(e) { console.warn('fecha nube:', e); }
       }
