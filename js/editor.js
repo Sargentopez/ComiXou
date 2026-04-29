@@ -14441,8 +14441,24 @@ function edSaveProjectModal(){
   const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
   // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
   if (_newTitle !== edProjectMeta.title) {
+    const _oldComic = ComicStore.getById(edProjectId) || {};
     edProjectId = 'comic_' + Date.now();
     sessionStorage.setItem('cx_edit_id', edProjectId);
+    // Pre-guardar la entrada con los datos de identidad del comic original
+    // para que edSaveProject la encuentre con userId correcto
+    ComicStore.save({
+      ..._oldComic,
+      id: edProjectId,
+      title: _newTitle,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      published: false,
+      approved:  false,
+      pendingReview: false,
+      supabaseId: null,
+      cloudOnly:  false,
+      cloudNewer: false,
+    });
   }
   edProjectMeta.title  = _newTitle;
   edProjectMeta.author =$('edMAuthor').value.trim();
