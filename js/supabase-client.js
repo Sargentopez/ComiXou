@@ -331,15 +331,9 @@ const SupabaseClient = (() => {
           // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
           if (l.type === 'gif' && l.gifKey) {
             try {
-              // Diagnóstico del token
-              const _sess = JSON.parse(localStorage.getItem('cs_session')||'null');
-              const _tok = _sess && _sess.token;
-              const _tokInfo = _tok ? ('token=' + _tok.substring(0,20) + '... role=' + (JSON.parse(atob(_tok.split('.')[1])).role||'?')) : 'NO TOKEN';
-              console.warn('GIF attempt: ' + l.gifKey + ' | ' + _tokInfo);
               const dataUrl = await _sbGifIdbLoad(l.gifKey);
-              if (!dataUrl) { console.warn('GIF IDB null: gifKey=' + l.gifKey); }
-              else { gifUrl = await _gifUpload(l.gifKey, dataUrl); console.warn('GIF OK: ' + gifUrl); }
-            } catch(e) { console.warn('GIF upload ERROR: ' + e.message); }
+              if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
+            } catch(e) { console.warn('GIF upload error:', e.message); }
           }
           // Serializar la capa — excluir campos de re-edición que el reader no necesita
           const _lClean = {...l};
@@ -371,7 +365,10 @@ const SupabaseClient = (() => {
             } catch(e) { console.warn('APNG upload error:', e.message); }
           }
 
-          const _ld = await _czCompress(JSON.stringify(_lClean));
+          // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
+          // El resto: JSON directo como v16.42 — sin riesgo de fallo de descompresión
+          const _isAnim = l.type === 'image' && (l._pngFramesKey || l.animKey);
+          const _ld = _isAnim ? await _czCompress(JSON.stringify(_lClean)) : JSON.stringify(_lClean);
           layerRows.push({
             panel_id:    panelId,
             layer_order: j,
@@ -702,7 +699,10 @@ const SupabaseClient = (() => {
               normW:          entry.normW           || null,
               normH:          entry.normH           || null }
           : entry.layerData;
-        const _ld = await _czCompress(JSON.stringify(_payload));
+        // Solo comprimir items animados (gcpLayersData grandes) — resto JSON directo
+        const _ld = entry.isGifAnim
+          ? await _czCompress(JSON.stringify(_payload))
+          : JSON.stringify(_payload);
         rows.push({
           id:          entry.id,
           author_id:   authorId,
