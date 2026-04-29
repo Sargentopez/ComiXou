@@ -1017,8 +1017,11 @@ async function _czDecompress(str) {
     const CHUNK = 8192;
     let byteLen = 0;
     const parts = [];
-    for (let i = 0; i < b64.length; i += CHUNK) {
-      const bin = atob(b64.slice(i, i + CHUNK));
+    const padded = b64 + '==='.slice((b64.length + 3) % 4 || 3);
+    for (let i = 0; i < padded.length; i += CHUNK) {
+      let end = Math.min(i + CHUNK, padded.length);
+      while ((end - i) % 4 !== 0 && end < padded.length) end++;
+      const bin = atob(padded.slice(i, end));
       const part = new Uint8Array(bin.length);
       for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
       parts.push(part);

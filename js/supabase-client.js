@@ -43,12 +43,19 @@ async function _czDecompress(str) {
   if (typeof DecompressionStream === 'undefined') return str;
   try {
     const b64 = str.slice(_CZ_PFX.length);
-    // atob por chunks de 8192 chars — evita fallo en Android con b64 muy largo
-    const CHUNK = 8192;
+    // Convertir base64 completo a Uint8Array en chunks de 8192 bytes DECODIFICADOS
+    // — chunks deben ser múltiplos de 3 chars base64 (4 chars base64 = 3 bytes)
+    // Para evitar cortar en medio de un bloque, usar chunks múltiplos de 4 chars
+    const CHUNK = 8192; // múltiplo de 4 ✓
+    // Añadir padding si hace falta
+    const padded = b64 + '==='.slice((b64.length + 3) % 4 || 3);
     let byteLen = 0;
     const parts = [];
-    for (let i = 0; i < b64.length; i += CHUNK) {
-      const bin = atob(b64.slice(i, i + CHUNK));
+    for (let i = 0; i < padded.length; i += CHUNK) {
+      // Asegurar que el chunk termina en múltiplo de 4
+      let end = Math.min(i + CHUNK, padded.length);
+      while ((end - i) % 4 !== 0 && end < padded.length) end++;
+      const bin = atob(padded.slice(i, end));
       const part = new Uint8Array(bin.length);
       for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
       parts.push(part);
