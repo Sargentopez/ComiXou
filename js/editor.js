@@ -723,31 +723,31 @@ window.GifDecoder = (function(){
 window.ApngDecoder = (function(){
 
   function decodeFrameArray(dataUrls, delay) {
-    return new Promise(function(res, rej) {
-      if (!dataUrls || !dataUrls.length) { rej(new Error('sin frames')); return; }
-      var total = dataUrls.length;
-      var results = new Array(total);
-      var loaded = 0;
-      var W = 0, H = 0;
-      // Canvas PRIVADO por llamada — nunca compartido
-      var oc = document.createElement('canvas');
-      var ox = oc.getContext('2d');
-      dataUrls.forEach(function(url, i) {
+    // Cargar frames en secuencia para garantizar orden correcto
+    // Cada frame usa su propio canvas — evita contaminación entre frames asíncronos
+    if (!dataUrls || !dataUrls.length) return Promise.reject(new Error('sin frames'));
+    var results = [];
+    var W = 0, H = 0;
+    function loadOne(i) {
+      if (i >= dataUrls.length) return Promise.resolve({ frames: results, width: W, height: H });
+      return new Promise(function(res) {
         var img = new Image();
         img.onload = function() {
-          if (!W) { W = img.naturalWidth; H = img.naturalHeight; oc.width = W; oc.height = H; }
-          ox.clearRect(0, 0, W, H);
+          if (!W) { W = img.naturalWidth; H = img.naturalHeight; }
+          var oc = document.createElement('canvas'); oc.width = W; oc.height = H;
+          var ox = oc.getContext('2d');
           ox.drawImage(img, 0, 0);
           results[i] = { imageData: ox.getImageData(0, 0, W, H), delay: delay || 100 };
-          if (++loaded === total) res({ frames: results, width: W, height: H });
+          res();
         };
         img.onerror = function() {
           results[i] = { imageData: new ImageData(W||1, H||1), delay: delay || 100 };
-          if (++loaded === total) res({ frames: results, width: W||1, height: H||1 });
+          res();
         };
-        img.src = url;
-      });
-    });
+        img.src = dataUrls[i];
+      }).then(function() { return loadOne(i + 1); });
+    }
+    return loadOne(0);
   }
 
   function decodeApng(dataUrl, delay) {

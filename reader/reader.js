@@ -723,25 +723,27 @@ window.GifDecoder = (function(){
 /* ── ApngDecoder reader ── */
 window.ApngDecoder = (function(){
   function decodeFrameArray(dataUrls, delay) {
-    return new Promise(function(res, rej) {
-      if (!dataUrls || !dataUrls.length) { rej(new Error('sin frames')); return; }
-      var total=dataUrls.length,results=new Array(total),loaded=0,W=0,H=0;
-      var oc=document.createElement('canvas'),ox=oc.getContext('2d');
-      dataUrls.forEach(function(url,i){
-        var img=new Image();
-        img.onload=function(){
-          if(!W){W=img.naturalWidth;H=img.naturalHeight;oc.width=W;oc.height=H;}
-          ox.clearRect(0,0,W,H);ox.drawImage(img,0,0);
-          results[i]={imageData:ox.getImageData(0,0,W,H),delay:delay||100};
-          if(++loaded===total)res({frames:results,width:W,height:H});
+    if (!dataUrls || !dataUrls.length) return Promise.reject(new Error('sin frames'));
+    var results = [], W = 0, H = 0;
+    function loadOne(i) {
+      if (i >= dataUrls.length) return Promise.resolve({frames:results,width:W,height:H});
+      return new Promise(function(res) {
+        var img = new Image();
+        img.onload = function() {
+          if (!W) { W=img.naturalWidth; H=img.naturalHeight; }
+          var oc=document.createElement('canvas'); oc.width=W; oc.height=H;
+          oc.getContext('2d').drawImage(img,0,0);
+          results[i]={imageData:oc.getContext('2d').getImageData(0,0,W,H),delay:delay||100};
+          res();
         };
         img.onerror=function(){
           results[i]={imageData:new ImageData(W||1,H||1),delay:delay||100};
-          if(++loaded===total)res({frames:results,width:W||1,height:H||1});
+          res();
         };
-        img.src=url;
-      });
-    });
+        img.src=dataUrls[i];
+      }).then(function(){return loadOne(i+1);});
+    }
+    return loadOne(0);
   }
   function decodeApng(dataUrl,delay){
     return new Promise(function(res,rej){
