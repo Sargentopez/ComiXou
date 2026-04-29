@@ -11571,7 +11571,8 @@ function _edbSyncOffsetBtn(){
   const edbBtn = $('edb-offset');
   if(edbBtn){
     edbBtn.classList.toggle('active', _edCursorOffset);
-    edbBtn.style.opacity = _edCursorOffset ? '1' : '0.5';
+    edbBtn.style.opacity = '1';
+    edbBtn.style.color = _edCursorOffset ? '#fff' : 'rgba(255,255,255,0.5)';
   }
   // Botones izq/der en el popover de la BARRA FLOTANTE
   [{id:'edb-offset-pop-l', a:40},{id:'edb-offset-pop-r', a:-40}].forEach(({id,a}) => {
@@ -14437,7 +14438,13 @@ function EditorView_destroy(){
   edHideGearIcon();
 }
 function edSaveProjectModal(){
-  edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
+  const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
+  // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
+  if (_newTitle !== edProjectMeta.title) {
+    edProjectId = 'comic_' + Date.now();
+    sessionStorage.setItem('cx_edit_id', edProjectId);
+  }
+  edProjectMeta.title  = _newTitle;
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
@@ -16102,10 +16109,13 @@ function _bibRenderPanel(panel) {
         });
         return;
       }
-      d.folders.splice(fi, 1);
-      _bibSave(d);
-      edToast('Carpeta eliminada');
-      _bibRenderPanel(panel);
+      edConfirm(`¿Eliminar la carpeta "${folder.name}"?`, ()=>{
+        const d2 = _bibLoad();
+        d2.folders.splice(fi, 1);
+        _bibSave(d2);
+        edToast('Carpeta eliminada');
+        _bibRenderPanel(panel);
+      });
     });
   });
 
@@ -16115,10 +16125,14 @@ function _bibRenderPanel(panel) {
       e.stopPropagation();
       const fi = parseInt(btn.dataset.fi), ii = parseInt(btn.dataset.ii);
       const d = _bibLoad();
-      d.folders[fi].items.splice(ii, 1);
-      _bibSave(d);
-      edToast('Eliminado de la biblioteca');
-      _bibRenderPanel(panel);
+      const _itemName = d.folders[fi]?.items[ii]?.name || 'este objeto';
+      edConfirm(`¿Eliminar "${_itemName}" de la biblioteca?`, ()=>{
+        const d2 = _bibLoad();
+        d2.folders[fi].items.splice(ii, 1);
+        _bibSave(d2);
+        edToast('Eliminado de la biblioteca');
+        _bibRenderPanel(panel);
+      });
     });
   });
 
