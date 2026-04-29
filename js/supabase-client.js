@@ -77,7 +77,7 @@ async function _czDecompress(str) {
     let off=0; for(const c of chunks){merged.set(c,off);off+=c.length;}
     return new TextDecoder().decode(merged);
   } catch(e) {
-    _dlDiag('DECOMP ERROR: ' + e.message + ' b64len=' + (str.length - 3));
+    if (window._dlDiag) window._dlDiag('DECOMP ERR: ' + e.message.slice(0,60));
     return str;
   }
 }
@@ -287,6 +287,7 @@ const SupabaseClient = (() => {
     });
   }
 
+  window._dlDiag = window._dlDiag || function() {};
   function _dlDiag(msg) {
     let p = document.getElementById('_dlDiagP');
     if (!p) {
