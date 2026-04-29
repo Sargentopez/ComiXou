@@ -13258,6 +13258,8 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
+  // Resetear estado de animaciones de TODAS las hojas antes de empezar
+  edPages.forEach((p, pi) => _edResetPageAnims(pi));
   _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -13520,6 +13522,7 @@ function _edOpenViewerScroll(navMode) {
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
+      _edResetPageAnims(_prevSI);
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
@@ -14441,8 +14444,24 @@ function edSaveProjectModal(){
   const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
   // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
   if (_newTitle !== edProjectMeta.title) {
+    const _oldComic = ComicStore.getById(edProjectId) || {};
     edProjectId = 'comic_' + Date.now();
     sessionStorage.setItem('cx_edit_id', edProjectId);
+    // Pre-guardar la entrada con los datos de identidad del comic original
+    // para que edSaveProject la encuentre con userId correcto
+    ComicStore.save({
+      ..._oldComic,
+      id: edProjectId,
+      title: _newTitle,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      published: false,
+      approved:  false,
+      pendingReview: false,
+      supabaseId: null,
+      cloudOnly:  false,
+      cloudNewer: false,
+    });
   }
   edProjectMeta.title  = _newTitle;
   edProjectMeta.author =$('edMAuthor').value.trim();
