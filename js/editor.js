@@ -2084,7 +2084,7 @@ class LineLayer extends BaseLayer {
     });
 
     // Helper: construye un contorno cerrado con radios opcionales en un Path2D
-    const _buildContour = (target, localPts, localCr) => {
+    const _buildContour = (target, localPts, localCr, isClosed) => {
       const _n = localPts.length; if(_n < 2) return;
       const _cr2 = localCr || {};
       const _px2b = p => ({x: p.x*pw, y: p.y*ph});
@@ -2101,15 +2101,18 @@ class LineLayer extends BaseLayer {
         return {p1:{x:cur.x-v1.x*r,y:cur.y-v1.y*r}, p2:{x:cur.x+v2.x*r,y:cur.y+v2.y*r}, cur, r};
       });
       const t0=_tgs[0];
-      target.moveTo(t0.p1.x, t0.p1.y);
-      for(let i=0;i<_n;i++){
+      // Abierto: empezar en el punto real; cerrado: empezar en p1 (antes del arco de esquina)
+      if(isClosed) target.moveTo(t0.p1.x, t0.p1.y);
+      else         target.moveTo(t0.cur.x, t0.cur.y);
+      const _limit = isClosed ? _n : _n - 1;
+      for(let i=0;i<_limit;i++){
         const {p1,p2,cur,r}=_tgs[i];
-        if(r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
+        if(isClosed && r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
         const next=_tgs[(i+1)%_n];
-        if(next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
-        else         { target.lineTo(next.cur.x,next.cur.y); }
+        if(isClosed && next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
+        else                     { target.lineTo(next.cur.x,next.cur.y); }
       }
-      target.closePath();
+      if(isClosed) target.closePath();
     };
 
     if(_multiContour){
@@ -2135,7 +2138,7 @@ class LineLayer extends BaseLayer {
           }
           _ptBase = _scan + 1; // saltar el null separador
           const _path = new Path2D();
-          _buildContour(_path, c, _crC);
+          _buildContour(_path, c, _crC, _cl);
           if(_cl && _fc && _fc !== 'none'){
             ctx.fillStyle = _fc;
             ctx.fill(_path);
@@ -2160,7 +2163,7 @@ class LineLayer extends BaseLayer {
               _gIdx++;
             }
           }
-          _buildContour(combined, c, _crC);
+          _buildContour(combined, c, _crC, this.closed);
         });
         if (this.fillColor && this.fillColor !== 'none') {
           ctx.fillStyle = this.fillColor;
@@ -5747,11 +5750,17 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       // ── Nuevo sistema cursor: timer 120ms para detectar segundo dedo (pinch) ──
       if(_cof.on){
-        window._edDrawTouchTimer = setTimeout(() => {
-          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-          if(!['draw','eraser'].includes(edActiveTool)) return;
+        const _cofIsRed = (_cof.state==='red_ready'||_cof.state==='red_cool');
+        if(_cofIsRed){
+          // Estado rojo: disparar inmediatamente sin esperar segundo dedo
           _cofHandleTouch(_eSaved);
-        }, 120);
+        } else {
+          window._edDrawTouchTimer = setTimeout(() => {
+            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!['draw','eraser'].includes(edActiveTool)) return;
+            _cofHandleTouch(_eSaved);
+          }, 120);
+        }
         return;
       }
       // ── Modo dibujo normal (sin cursor offset) ──
@@ -6281,11 +6290,16 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       const _eSaved2 = e;
       if(e.pointerType === 'touch' && _cof.on){
-        window._edDrawTouchTimer = setTimeout(() => {
-          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-          if(!['draw','eraser'].includes(edActiveTool)) return;
+        const _cofIsRed2 = (_cof.state==='red_ready'||_cof.state==='red_cool');
+        if(_cofIsRed2){
           _cofHandleTouch(_eSaved2);
-        }, 120);
+        } else {
+          window._edDrawTouchTimer = setTimeout(() => {
+            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!['draw','eraser'].includes(edActiveTool)) return;
+            _cofHandleTouch(_eSaved2);
+          }, 120);
+        }
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
           if(!window._edActivePointers || window._edActivePointers.size > 1) return;
@@ -8207,11 +8221,9 @@ function _cofHandleUp(e) {
 
 function _cofAfterStroke() {
   if (!_cof.on) return;
-  _cof.state = 'red_cool';
   _cof._strokeStarted = false;
-  _cofDraw();
   clearTimeout(_cof._timer);
-  _cof._timer = setTimeout(_cofExpire, _cof.MS_COOL);
+  _cofExpire();
 }
 
 function _cofExpire() {
