@@ -532,9 +532,43 @@ function _mcCreateProject() {
   if (!title) { document.getElementById('mcTitle')?.focus(); return; }
 
   const user = Auth.currentUser?.() || null;
+  const _userId = user ? user.id : '_anon_';
+
+  // Comprobar si ya existe una obra del mismo usuario con este título
+  const _dup = ComicStore.getAll().find(c =>
+    c.title && c.title.trim().toLowerCase() === title.toLowerCase() &&
+    c.userId === _userId
+  );
+  if (_dup) {
+    const _ok = confirm('Ya tienes una obra llamada "' + title + '".\n¿Quieres sobreescribirla?');
+    if (!_ok) {
+      // Volver a abrir la ventana limpiando solo el título
+      const titleEl = document.getElementById('mcTitle');
+      if (titleEl) { titleEl.value = ''; titleEl.focus(); }
+      return;
+    }
+    // Sobreescribir: reusar el ID existente para que ComicStore.save sobreescriba
+    const comic = {
+      ..._dup,
+      genre,
+      social:   social || '',
+      navMode,
+      updatedAt: new Date().toISOString(),
+    };
+    ComicStore.save(comic);
+    _mcCloseModal();
+    ['mcTitle','mcGenre','mcSocial'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    sessionStorage.setItem('cx_edit_id', comic.id);
+    Router.go('editor');
+    return;
+  }
+
   const comic = {
     id:       'comic_' + Date.now(),
-    userId:   user ? user.id : '_anon_',
+    userId:   _userId,
     username: user ? user.username : 'Anónimo',
     anonymous: !user,
     title,
