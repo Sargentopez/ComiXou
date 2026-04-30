@@ -14892,10 +14892,22 @@ async function edDiagnostico() {
       const _idx2 = JSON.parse(localStorage.getItem('cs_comics') || '[]');
       const _ent = _idx2.find(c => c.id === edProjectId);
       if (_ent) {
-        L.push(inf('Índice — localSavedAt: ' + (_ent.localSavedAt || 'VACÍO')));
+        L.push(inf('Índice — localSavedAt: ' + (_ent.localSavedAt || 'VACÍO ← BUG')));
         L.push(inf('Índice — cloudOnly: ' + !!_ent.cloudOnly + ' | cloudNewer: ' + !!_ent.cloudNewer));
+        L.push(inf('Índice — userId: ' + (_ent.userId || 'NULL')));
       } else {
-        L.push(err('Proyecto NO en índice localStorage'));
+        L.push(err('Proyecto NO en índice localStorage — _indexSave falló o id no coincide'));
+        // Buscar por supabaseId
+        const _bySupabase = _idx2.find(c => c.supabaseId === edProjectId);
+        if (_bySupabase) L.push(warn('  Encontrado por supabaseId con id: ' + _bySupabase.id + ' — id mismatch!'));
+      }
+      // Estado de _indexSave
+      const _isd = window._indexSaveDiag;
+      if (_isd) {
+        if (_isd.ok) L.push(ok('_indexSave: OK — ' + _isd.items + ' items, ' + _isd.bytes + ' bytes'));
+        else L.push(err('_indexSave: FALLO — ' + _isd.err + ' (escrito:' + _isd.written + ' leído:' + _isd.read + ')'));
+      } else {
+        L.push(warn('_indexSave: sin datos — guarda primero'));
       }
     } catch(e) {}
   }

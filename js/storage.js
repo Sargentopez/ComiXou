@@ -212,7 +212,16 @@ const ComicStore = (() => {
 
   function _indexSave(list) {
     try {
-      localStorage.setItem(KEY, JSON.stringify(list));
+      const _json = JSON.stringify(list);
+      localStorage.setItem(KEY, _json);
+      // Verificar que se escribió correctamente
+      const _verify = localStorage.getItem(KEY);
+      if (!_verify || _verify.length !== _json.length) {
+        console.error('[ComicStore] _indexSave: verificación fallida — escrito:', _json.length, 'leído:', _verify?.length);
+        window._indexSaveDiag = { ok: false, err: 'verification_failed', written: _json.length, read: _verify?.length };
+      } else {
+        window._indexSaveDiag = { ok: true, items: list.length, bytes: _json.length };
+      }
     } catch(e) {
       if (e.name === 'QuotaExceededError' || e.code === 22) {
         window.dispatchEvent(new CustomEvent('cx:storage:quota', { detail: { size: JSON.stringify(list).length } }));
