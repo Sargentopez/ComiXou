@@ -48,10 +48,17 @@ const ComicStore = (() => {
   function save(comic) {
     const list = getAll();
     const idx  = list.findIndex(c => c.id === comic.id);
+    // Limpiar dataUrl de todos los panels excepto el 0 (miniatura) para ahorrar espacio
+    const _clean = { ...comic };
+    if (_clean.panels && _clean.panels.length > 1) {
+      _clean.panels = _clean.panels.map((p, i) =>
+        i === 0 ? p : { ...p, dataUrl: null }
+      );
+    }
     if (idx >= 0) {
-      list[idx] = { ...list[idx], ...comic, updatedAt: new Date().toISOString() };
+      list[idx] = { ...list[idx], ..._clean, updatedAt: new Date().toISOString() };
     } else {
-      list.push({ ...comic, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      list.push({ ..._clean, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     }
     saveAll(list);
     _emit('save', comic.id);

@@ -12318,7 +12318,7 @@ async function edSaveProject(){
     });
     return {
       id:'panel_'+i,
-      dataUrl:edRenderPage(p),
+      dataUrl: i === 0 ? edRenderPage(p) : null,  // solo el panel 0 como miniatura — el resto satura localStorage
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
       textMode: p.textMode || 'sequential',
       texts,
