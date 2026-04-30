@@ -12300,8 +12300,14 @@ async function edCloudSave() {
   _edSaveOverlayUpdate('Subiendo a la nube...', 40);
 
   try {
-    const { sizeKB } = await SupabaseClient.saveDraft(comic);
+    const { sizeKB, savedAt } = await SupabaseClient.saveDraft(comic);
     _edSaveOverlayUpdate('Sincronizando biblioteca...', 90);
+    // Actualizar localSavedAt con la fecha exacta de Supabase
+    // para que _mcSyncCloudDates no marque esta obra como "cloudNewer" en la próxima sincronización
+    if (savedAt) {
+      const _syncComic = ComicStore.getById(edProjectId);
+      if (_syncComic) ComicStore.save({ ..._syncComic, localSavedAt: savedAt });
+    }
     // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
     const _comicAfter = ComicStore.getById(edProjectId);
     if (_comicAfter && (_comicAfter.approved || _comicAfter.pendingReview)) {

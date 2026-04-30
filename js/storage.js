@@ -265,6 +265,12 @@ const ComicStore = (() => {
     }
 
     // 3. Actualizar cache en memoria
+    // Preservar editorData del cache si el nuevo objeto no lo trae (viene del índice)
+    // para que getByIdFull no pierda los datos que ya cargó de OPFS
+    const _existing_cache = _cache.get(comic.id);
+    if (_existing_cache && _existing_cache.editorData && !full.editorData) {
+      full.editorData = _existing_cache.editorData;
+    }
     _cache.set(comic.id, full);
 
     // 4. Guardar índice ligero en localStorage

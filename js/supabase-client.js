@@ -449,8 +449,9 @@ const SupabaseClient = (() => {
       pending_review: comic.pendingReview ? true : false,
       updated_at:     new Date().toISOString(),
     });
+    const _savedAt = workPayload.updated_at; // guardar la fecha exacta para sincronización
     await _uploadPanels(comic);
-    return { sizeKB };
+    return { sizeKB, savedAt: _savedAt };
   }
 
   async function submitForReview(comic) {

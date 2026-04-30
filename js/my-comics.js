@@ -322,6 +322,16 @@ function _mcRenderList() {
       );
       if (comicToEdit && _needsDownload) {
         _mcToast('\u23f3 Descargando obra de la nube\u2026 (puede tardar si contiene GIFs)');
+        // Si hay datos locales en OPFS (_hasLocalOpfs), leerlos ANTES de descargar la nube
+        // para poder preservarlos en localEditorData correctamente
+        if (comicToEdit._hasLocalOpfs && !comicToEdit.localEditorData) {
+          const _opfsComic = ComicStore.getByIdFull
+            ? await ComicStore.getByIdFull(comicToEdit.id)
+            : null;
+          if (_opfsComic && _opfsComic.editorData && _opfsComic.editorData.pages && _opfsComic.editorData.pages.length) {
+            comicToEdit.localEditorData = _opfsComic.editorData;
+          }
+        }
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
           // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
@@ -706,9 +716,11 @@ async function _mcCloudLoad() {
 
         if (cloudIsNewer) {
           // La nube tiene una versión más reciente
-          // Preservar editorData local bajo localEditorData para poder restaurar
-          if (existing.editorData && !existing.localEditorData) {
-            existing.localEditorData = existing.editorData;
+          // IMPORTANTE: existing viene del índice (sin editorData — está en OPFS)
+          // Si localSavedAt existe, hay datos locales en OPFS que deben preservarse
+          // Marcar _hasLocalOpfs para que al abrir, my-comics lea OPFS y preserve localEditorData
+          if (existing.localSavedAt && !existing.localEditorData) {
+            existing._hasLocalOpfs = true; // señal: hay editorData en OPFS para preservar
           }
           existing.editorData = null; // forzar descarga al editar
           existing.cloudOnly  = true;
