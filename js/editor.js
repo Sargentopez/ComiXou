@@ -14909,6 +14909,14 @@ async function edDiagnostico() {
       } else {
         L.push(warn('_indexSave: sin datos — guarda primero'));
       }
+      // Diagnóstico de save()
+      const _sfd = window._saveFnDiag;
+      if (_sfd) {
+        L.push(inf('save() — id: ...' + _sfd.id));
+        L.push(_sfd.localSavedAt_in ? ok('save() — localSavedAt entrada: ' + _sfd.localSavedAt_in) : err('save() — localSavedAt entrada: NULL ← no llega a save()'));
+        L.push(_sfd.localSavedAt_full ? ok('save() — localSavedAt en full: ' + _sfd.localSavedAt_full) : err('save() — localSavedAt en full: NULL'));
+        L.push(inf('save() — idx en lista: ' + _sfd.idx + ' (' + (_sfd.idxFound ? 'encontrado' : 'NO encontrado — push nuevo') + ')'));
+      }
     } catch(e) {}
   }
 

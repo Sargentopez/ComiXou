@@ -280,6 +280,16 @@ const ComicStore = (() => {
     const full = { ...comic, updatedAt: now };
     if (idx < 0) full.createdAt = full.createdAt || now;
 
+    // DIAGNÓSTICO — ver qué llega a save()
+    window._saveFnDiag = {
+      id: comic.id?.slice(-8),
+      localSavedAt_in: comic.localSavedAt || null,
+      localSavedAt_full: full.localSavedAt || null,
+      idx,
+      idxFound: idx >= 0,
+      t: new Date().toISOString()
+    };
+
     // 2. Limpiar dataUrl de panels[1..n] (solo panel 0 como miniatura)
     if (full.panels && full.panels.length > 1) {
       full.panels = full.panels.map((p, i) => i === 0 ? p : { ...p, dataUrl: null });
