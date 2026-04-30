@@ -1425,7 +1425,10 @@ function _startScrollReader() {
   // ── Render inicial de todos los slides ──
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     // Paso 1: renderizar todos los panels sin textos secuenciales
+    // Saltar el panel de créditos en el render inicial — _showCredits lo gestiona
+    // cuando el usuario llega a él, no antes (evita que el fade pinte en canvas incorrecto)
     RS.panels.forEach((panel, pi) => {
+      if (panel.isCredits) return;
       _activateCanvas(pi);
       RS.idx      = pi;
       RS.textStep = 0;
@@ -1515,6 +1518,8 @@ function _startScrollReader() {
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
+      // Si llegamos al panel de créditos, resetear estado para que _showCredits arranque limpio
+      if (RS.panels[si]?.isCredits) _resetCredits();
       const np    = RS.panels[si];
       const ntxts = np?.texts || [];
       const isSeq = (np?.text_mode || 'sequential') === 'sequential';
