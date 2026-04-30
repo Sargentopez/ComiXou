@@ -12879,6 +12879,7 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='gif'){
     const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
+    if(l._gifUrl) _g._gifUrl=l._gifUrl; // URL pública de fallback si cxGifs está vacío
     if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; return _g;
   }
   if(l.type==='image'){
@@ -13146,8 +13147,20 @@ function edDeserLayer(d, pageOrientation){
     const l=new GifLayer(d.gifKey||'',d.x,d.y,d.width);
     l.height=d.height||0.3; l.rotation=d.rotation||0;
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{
-      if(!src) return;
+    if(d.gifKey) _gifIdbLoad(d.gifKey).then(async src=>{
+      if(!src) {
+        // No está en IDB local — intentar descargarlo de la URL pública si existe
+        if(d._gifUrl || l._gifUrl) {
+          try {
+            const _resp = await fetch(d._gifUrl || l._gifUrl);
+            if(_resp.ok) {
+              const _blob = await _resp.blob();
+              src = await new Promise(r => { const fr=new FileReader(); fr.onload=e=>r(e.target.result); fr.readAsDataURL(_blob); });
+              if(src && d.gifKey) _gifIdbSave(d.gifKey, src).catch(()=>{});
+            }
+          } catch(e) { return; }
+        } else { return; }
+      }
       l.load(src, () => {
         // Si el visor está abierto y reproduciendo, arrancar animación en este layer
         if($('editorViewer')?.classList.contains('open') && typeof _edGifSetPlaying==='function') {
@@ -14700,19 +14713,44 @@ async function edDiagnostico() {
           const bibK=keys.filter(k=>typeof k==='string'&&k.startsWith('bib_'));
           if(bibK.length) L.push(inf('  Entradas biblioteca: '+bibK.length));
           // Verificar animKeys de capas del proyecto activo
+          // anim_* → cxAnims/anims (ya tenemos las keys de esta IDB)
+          // gif_*  → cxGifs/gifs (IDB separada)
           if(edProjectId&&edPages.length){
-            const animKeys=[];
+            const animKeys=[], gifKeys=[];
             edPages.forEach(p=>(p.layers||[]).forEach(l=>{
-              if(l.animKey) animKeys.push(l.animKey);
-              if(l.gifKey)  animKeys.push(l.gifKey);
+              if(l.animKey)       animKeys.push(l.animKey);
+              if(l._pngFramesKey) animKeys.push(l._pngFramesKey);
+              if(l.gifKey)        gifKeys.push(l.gifKey);
             }));
-            if(animKeys.length){
-              L.push(inf('  AnimKeys del proyecto: '+animKeys.length));
-              for(const ak of animKeys){
-                const found=keys.includes(ak);
-                if(found) L.push(ok('  '+ak+': en IDB ✓'));
-                else      L.push(err('  '+ak+': NO en IDB — animación puede no reproducirse'));
-              }
+            if(animKeys.length||gifKeys.length){
+              L.push(inf('  AnimKeys del proyecto: '+animKeys.length+' anim, '+gifKeys.length+' gif'));
+            }
+            // Verificar anim_* en cxAnims (ya tenemos 'keys' de esta IDB)
+            for(const ak of animKeys){
+              if(keys.includes(ak)) L.push(ok('  '+ak+': en cxAnims ✓'));
+              else                  L.push(err('  '+ak+': NO en cxAnims — animación puede no reproducirse'));
+            }
+            // Verificar gif_* en cxGifs (IDB separada)
+            if(gifKeys.length){
+              await new Promise(res2=>{
+                const rg=indexedDB.open('cxGifs',1);
+                rg.onupgradeneeded=e=>e.target.result.createObjectStore('gifs');
+                rg.onsuccess=async e=>{
+                  try{
+                    const dbg=e.target.result;
+                    if(!dbg.objectStoreNames.contains('gifs')){ gifKeys.forEach(k=>L.push(err('  '+k+': cxGifs sin store gifs'))); res2(); return; }
+                    const txg=dbg.transaction('gifs','readonly');
+                    const stg=txg.objectStore('gifs');
+                    const ksg=await new Promise(r=>{const rk=stg.getAllKeys();rk.onsuccess=()=>r(rk.result);rk.onerror=()=>r([]);});
+                    for(const gk of gifKeys){
+                      if(ksg.includes(gk)) L.push(ok('  '+gk+': en cxGifs ✓'));
+                      else                 L.push(err('  '+gk+': NO en cxGifs — GIF puede no reproducirse'));
+                    }
+                  }catch(e2){ gifKeys.forEach(k=>L.push(warn('  '+k+': error consultando cxGifs'))); }
+                  res2();
+                };
+                rg.onerror=()=>{ gifKeys.forEach(k=>L.push(warn('  '+k+': no se pudo abrir cxGifs'))); res2(); };
+              });
             }
           }
         }catch(ie){L.push(err('Error IDB: '+ie.message));}

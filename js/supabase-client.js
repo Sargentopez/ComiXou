@@ -547,6 +547,7 @@ const SupabaseClient = (() => {
         }
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {
+          layerObj._gifUrl = row.gif_url; // URL pública de fallback
           try {
             const gifResp = await fetch(row.gif_url);
             if (gifResp.ok) {
