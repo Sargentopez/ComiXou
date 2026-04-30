@@ -379,37 +379,100 @@ const ComicStore = (() => {
   function getByUser(userId)  { return getAll().filter(c => c.userId === userId); }
   function getPublished()     { return getAll().filter(c => c.published); }
 
-  // Al arrancar: si el índice localStorage está vacío pero OPFS tiene datos,
-  // reconstruir el índice desde OPFS. Esto ocurre cuando el usuario borra
-  // localStorage (p.ej. "Clear site data" en DevTools) pero OPFS persiste.
+  // Al arrancar: si el índice localStorage está vacío, intentar reconstruir.
+  // Orden de prioridad: 1) OPFS (si no se borró), 2) directorio PC (si disponible)
   async function _rebuildIndexFromOpfs() {
     const current = _indexGetAll();
-    if (current.length > 0) return; // índice ya tiene datos — no reconstruir
+    if (current.length > 0) return; // índice ya tiene datos
+
+    // Intento 1: reconstruir desde OPFS
     try {
       const root = await navigator.storage.getDirectory();
       const dir  = await root.getDirectoryHandle('comics', { create: false }).catch(() => null);
-      if (!dir) return;
+      if (dir) {
+        const rebuilt = [];
+        for await (const [name, handle] of dir.entries()) {
+          if (handle.kind !== 'file' || !name.endsWith('.json')) continue;
+          try {
+            const file = await handle.getFile();
+            const data = JSON.parse(await file.text());
+            if (!data || !data.id) continue;
+            const entry = {};
+            INDEX_FIELDS.forEach(k => { if (data[k] !== undefined) entry[k] = data[k]; });
+            if (data.panels && data.panels[0]) entry._thumb = data.panels[0].dataUrl || null;
+            if (entry.id) rebuilt.push(entry);
+          } catch(e) {}
+        }
+        if (rebuilt.length > 0) {
+          console.log('[ComicStore] Reconstruido índice desde OPFS:', rebuilt.length, 'obras');
+          _indexSave(rebuilt);
+          rebuilt.forEach(e => { if (!_cache.has(e.id)) _cache.set(e.id, e); });
+          return; // OPFS OK — no necesitamos el directorio PC
+        }
+      }
+    } catch(e) {}
+
+    // Intento 2: reconstruir desde directorio PC (File System Access API)
+    // IDB también se borró con Clear site data — pedir al usuario que elija el directorio
+    if (!_FS_SUPPORTED) return;
+    try {
+      // Mostrar aviso y pedir directorio
+      const _wantRestore = confirm(
+        'Se han detectado datos del sitio borrados.\n\n' +
+        '¿Tienes una carpeta ComiXou en tu equipo con obras guardadas?\n' +
+        'Puedes seleccionarla para recuperar tus obras.'
+      );
+      if (!_wantRestore) return;
+
+      const handle = await window.showDirectoryPicker({ mode: 'read', startIn: 'documents' });
+      // Buscar subcarpeta ComiXou si existe
+      let comixouDir = handle;
+      try { comixouDir = await handle.getDirectoryHandle('ComiXou', { create: false }); } catch(e) {}
+
       const rebuilt = [];
-      for await (const [name, handle] of dir.entries()) {
-        if (handle.kind !== 'file' || !name.endsWith('.json')) continue;
+      const opfsRoot = await navigator.storage.getDirectory();
+      const opfsDir  = await opfsRoot.getDirectoryHandle('comics', { create: true });
+
+      for await (const [name, fh] of comixouDir.entries()) {
+        if (fh.kind !== 'file' || !name.endsWith('.json')) continue;
         try {
-          const file = await handle.getFile();
-          const data = JSON.parse(await file.text());
+          const file = await fh.getFile();
+          const text = await file.text();
+          const data = JSON.parse(text);
           if (!data || !data.id) continue;
-          // Reconstruir entrada de índice desde los datos OPFS
+
+          // Reconstruir entrada de índice
           const entry = {};
           INDEX_FIELDS.forEach(k => { if (data[k] !== undefined) entry[k] = data[k]; });
           if (data.panels && data.panels[0]) entry._thumb = data.panels[0].dataUrl || null;
-          if (entry.id) rebuilt.push(entry);
+          if (!entry.id) continue;
+
+          // Restaurar en OPFS
+          try {
+            const opfsFh = await opfsDir.getFileHandle(data.id + '.json', { create: true });
+            const w = await opfsFh.createWritable();
+            await w.write(text);
+            await w.close();
+          } catch(e) {}
+
+          rebuilt.push(entry);
+          _cache.set(entry.id, data);
         } catch(e) {}
       }
+
       if (rebuilt.length > 0) {
-        console.log('[ComicStore] Reconstruido índice desde OPFS:', rebuilt.length, 'obras');
+        console.log('[ComicStore] Reconstruido índice desde directorio PC:', rebuilt.length, 'obras');
         _indexSave(rebuilt);
-        // Actualizar cache
-        rebuilt.forEach(e => { if (!_cache.has(e.id)) _cache.set(e.id, e); });
+        // Guardar el handle para futuras sesiones
+        _fsDirHandle = comixouDir;
+        _fsSaveHandle(comixouDir).catch(() => {});
+        alert(rebuilt.length + ' obras recuperadas correctamente desde tu carpeta ComiXou.');
+      } else {
+        alert('No se encontraron obras en la carpeta seleccionada.');
       }
-    } catch(e) {}
+    } catch(e) {
+      if (e.name !== 'AbortError') console.warn('[ComicStore] Recuperación desde PC:', e.message);
+    }
   }
 
   // Iniciar reconstrucción al cargar (solo si índice vacío)
