@@ -557,6 +557,7 @@ function _mcBindNav() {
   document.getElementById('mcBackBtn')?.addEventListener('click', () => Router.go('home'));
   document.getElementById('mcCloudLoadBtn')?.addEventListener('click', _mcCloudLoad);
   document.getElementById('mcNewBtn')?.addEventListener('click', _mcOpenModal);
+  document.getElementById('mcSyncDiagBtn')?.addEventListener('click', _mcShowSyncDiag);
 
   // Diagnóstico de sincronización — doble tap en el título de la app
   let _diagTaps = 0, _diagTimer = null;

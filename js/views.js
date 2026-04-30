@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v19.89</footer>
+    <footer class="app-version">v19.90</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -143,6 +143,10 @@ Router.register('my-comics', {
       <div class="page-nav-sep"></div>
       <div class="page-nav-item">
         <button class="page-nav-btn" id="mcCloudLoadBtn" title="Cargar borradores guardados en la nube">☁️ Cargar de nube</button>
+      </div>
+      <div class="page-nav-sep"></div>
+      <div class="page-nav-item">
+        <button class="page-nav-btn" id="mcSyncDiagBtn" title="Diagnóstico sincronización" style="font-size:.75rem;opacity:.5">🔬</button>
       </div>
       <div class="page-nav-sep"></div>
       <div class="page-nav-item">
