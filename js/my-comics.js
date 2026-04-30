@@ -81,6 +81,7 @@ function MyComicsView_init() {
   _mcInjectModal();
   _mcRenderList();
   _mcBindNav();
+  _mcBindNavExtra();
   // Sincronizar fechas con Supabase en segundo plano (incluye descarga de biblioteca)
   _mcSyncCloudDates();
 }
@@ -556,6 +557,77 @@ function _mcBindNav() {
   document.getElementById('mcBackBtn')?.addEventListener('click', () => Router.go('home'));
   document.getElementById('mcCloudLoadBtn')?.addEventListener('click', _mcCloudLoad);
   document.getElementById('mcNewBtn')?.addEventListener('click', _mcOpenModal);
+
+  // Diagnóstico de sincronización — doble tap en el título de la app
+  let _diagTaps = 0, _diagTimer = null;
+  document.querySelector('.mc-header, h1, #mcTitle, .app-title')?.addEventListener('click', () => {
+    _diagTaps++;
+    clearTimeout(_diagTimer);
+    _diagTimer = setTimeout(() => { _diagTaps = 0; }, 800);
+    if (_diagTaps >= 3) { _diagTaps = 0; _mcShowSyncDiag(); }
+  });
+}
+
+function _mcShowSyncDiag() {
+  const L = [];
+  L.push('══ DIAGNÓSTICO SYNC FECHAS ══');
+  L.push(new Date().toLocaleString());
+
+  const diag = window._syncDiag || [];
+  if (!diag.length) {
+    L.push('Sin datos — espera a que _mcSyncCloudDates complete');
+  } else {
+    diag.forEach(d => {
+      L.push('\n── ' + (d.title || d.id) + ' ──');
+      L.push('cloudDate:    ' + d.cloudDate);
+      L.push('localSavedAt: ' + (d.localSavedAt || 'NULL'));
+      L.push('updatedAt:    ' + (d.updatedAt || 'NULL'));
+      L.push('cloudIsNewer: ' + d.cloudIsNewer);
+      L.push('cloudOnly (antes): ' + d.cloudOnly_before);
+      L.push('cloudNewer (antes): ' + d.cloudNewer_before);
+    });
+  }
+
+  // Índice completo
+  L.push('\n══ ÍNDICE localStorage ══');
+  try {
+    const idx = JSON.parse(localStorage.getItem('cs_comics') || '[]');
+    idx.forEach(c => {
+      L.push('\n' + (c.title||'?') + ' (' + (c.id||'').slice(-8) + ')');
+      L.push('  localSavedAt: ' + (c.localSavedAt || 'NULL'));
+      L.push('  updatedAt: ' + (c.updatedAt || 'NULL'));
+      L.push('  cloudOnly: ' + !!c.cloudOnly + ' | cloudNewer: ' + !!c.cloudNewer);
+      L.push('  supabaseId: ' + (c.supabaseId || 'ninguno'));
+    });
+  } catch(e) { L.push('Error: ' + e.message); }
+
+  const text = L.join('\n');
+
+  // Panel copiable
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#1a1a1a;color:#ddd;border-radius:10px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;font-family:monospace;font-size:.73rem';
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'padding:10px 14px;background:#111;display:flex;align-items:center;gap:8px;border-bottom:1px solid #333;flex-shrink:0';
+  hdr.innerHTML = '<span style="flex:1;font-weight:700;font-size:.85rem;color:#fff">🔬 Diagnóstico Sync</span>';
+  const cpBtn = document.createElement('button');
+  cpBtn.textContent = '📋 Copiar';
+  cpBtn.style.cssText = 'border:none;background:#297a4a;color:#fff;border-radius:5px;padding:4px 11px;cursor:pointer;font-size:.78rem;font-weight:700';
+  cpBtn.onclick = () => navigator.clipboard?.writeText(text).then(() => { cpBtn.textContent='✅'; setTimeout(()=>cpBtn.textContent='📋 Copiar',2000); });
+  const clBtn = document.createElement('button');
+  clBtn.textContent = '✕';
+  clBtn.style.cssText = 'border:none;background:transparent;color:#aaa;font-size:1.1rem;cursor:pointer;padding:2px 6px';
+  clBtn.onclick = () => ov.remove();
+  ov.addEventListener('pointerdown', e => { if(e.target===ov) ov.remove(); });
+  hdr.appendChild(cpBtn); hdr.appendChild(clBtn);
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.readOnly = true;
+  ta.style.cssText = 'flex:1;background:#1a1a1a;color:#ddd;border:none;padding:12px 14px;resize:none;outline:none;font-family:monospace;font-size:.72rem;line-height:1.55;overflow-y:auto;-webkit-user-select:text;user-select:text';
+  box.appendChild(hdr); box.appendChild(ta);
+  ov.appendChild(box); document.body.appendChild(ov);
+}
+function _mcBindNavExtra() {
   document.getElementById('mcNewCancel')?.addEventListener('click', _mcCloseModal);
   document.getElementById('mcNewCreate')?.addEventListener('click', _mcCreateProject);
 }
@@ -704,6 +776,20 @@ async function _mcCloudLoad() {
         // updatedAt se sobreescribe con la fecha de la nube, así que no sirve para comparar
         const localSaved = new Date(existing.localSavedAt || existing.updatedAt || 0);
         const cloudIsNewer = cloudDate > localSaved;
+
+        // Guardar diagnóstico para inspección
+        window._syncDiag = window._syncDiag || [];
+        window._syncDiag.push({
+          id: existing.id,
+          title: existing.title,
+          cloudDate: w.updated_at,
+          localSavedAt: existing.localSavedAt,
+          updatedAt: existing.updatedAt,
+          cloudIsNewer,
+          cloudOnly_before: existing.cloudOnly,
+          cloudNewer_before: existing.cloudNewer,
+          t: new Date().toISOString()
+        });
 
         // Siempre actualizar metadatos básicos
         let dirty = false;
