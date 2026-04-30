@@ -12432,7 +12432,7 @@ async function edSaveProject(_suppressOverlay){
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
   _edSaveOverlayUpdate('Guardando en OPFS...', 70);
 
-  ComicStore.save({
+  await ComicStore.save({
     ...existing,
     id:edProjectId,
     ...edProjectMeta,

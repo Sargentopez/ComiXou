@@ -359,7 +359,7 @@ function _mcRenderList() {
           };
           // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
           if (_idbWrites.length) await Promise.all(_idbWrites);
-          ComicStore.save({
+          await ComicStore.save({
             ...comicToEdit,
             cloudOnly: false,
             cloudNewer: false,

@@ -250,7 +250,7 @@ const ComicStore = (() => {
   }
 
   function save(comic) {
-    if (!comic || !comic.id) return comic;
+    if (!comic || !comic.id) return Promise.resolve(comic);
 
     // 1. Actualizar timestamps
     const now = new Date().toISOString();
@@ -273,13 +273,10 @@ const ComicStore = (() => {
     else          { list.push(entry); }
     _indexSave(list);
 
-    // 5. Guardar datos completos en OPFS (async, no bloquea)
-    _opfsWrite(comic.id, full).then(ok => {
-      if (!ok) {
-        // OPFS no disponible — fallback a localStorage con solo los datos esenciales
-        // (no editorData para evitar QuotaExceeded)
-        console.warn('[ComicStore] OPFS no disponible, obra guardada solo en índice');
-      }
+    // 5. Guardar datos completos en OPFS — retornar promesa para que el llamador pueda await
+    const _opfsPromise = _opfsWrite(comic.id, full).then(ok => {
+      if (!ok) console.warn('[ComicStore] OPFS no disponible, obra guardada solo en índice');
+      return comic;
     });
 
     // 6. Backup en directorio visible PC (async, no bloquea, primer uso pregunta)
@@ -291,7 +288,7 @@ const ComicStore = (() => {
     }
 
     _emit('save', comic.id);
-    return comic;
+    return _opfsPromise; // Promise que resuelve cuando OPFS termina
   }
 
   function remove(id) {
