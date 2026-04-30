@@ -15876,19 +15876,6 @@ function edBibGuardar() {
           animKey: la.animKey || null,
           layerData: null, thumb: _animThumb,
         };
-        // Externalizar frames a IDB
-        const _framesData = _apngEntry.apngSrc || _apngEntry.pngFrames;
-        if (window._sbAnimIdbSave && _framesData) {
-          const _idbBibKey = 'bib_' + _apngId;
-          _apngEntry._apngIdbKey = _idbBibKey;
-          _apngEntry.pngFrames   = null;
-          _apngEntry.apngSrc     = null;
-          window._sbAnimIdbSave(_idbBibKey, _framesData).catch(function() {
-            _apngEntry.pngFrames = Array.isArray(_framesData) ? _framesData : null;
-            _apngEntry.apngSrc   = typeof _framesData === 'string' ? _framesData : null;
-            _apngEntry._apngIdbKey = null;
-          });
-        }
         const d2 = _bibLoad();
         _bibGetAnimFolder(d2).items.push(_apngEntry);
         _bibSave(d2);
@@ -17879,18 +17866,6 @@ function _gcpSaveToLib(onDone) {
     gcpStopAtEnd:   window._gcpStopAtEnd,
     animKey: existingLayerForBib?.animKey || null,
   };
-  // Externalizar pngFrames a IDB para no saturar localStorage (cada frame ~100-500KB)
-  if (window._sbAnimIdbSave && pngFrames && pngFrames.length > 0) {
-    const _idbBibKey = 'bib_' + _bibItemId;
-    _newBibItem._apngIdbKey = _idbBibKey;
-    _newBibItem.pngFrames   = null; // no guardar en localStorage
-    window._sbAnimIdbSave(_idbBibKey, pngFrames).catch(function(e) {
-      // Si IDB falla, volver a incluir pngFrames en el item (fallback)
-      _newBibItem.pngFrames = pngFrames;
-      _newBibItem._apngIdbKey = null;
-      console.warn('bib IDB save:', e);
-    });
-  }
   if (_existingBibIdx >= 0) {
     animFolder.items[_existingBibIdx] = _newBibItem;  // sobreescribir
   } else {
