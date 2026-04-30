@@ -92,9 +92,28 @@ async function _mcSyncCloudDates() {
   const _mcUser = Auth.currentUser?.();
   if (typeof Auth === 'undefined' || !_mcUser) return;
 
-  // Si no hay obras locales del usuario, intentar traer las de la nube
-  const locals = ComicStore.getAll().filter(c => c.supabaseId &&
+  // Diagnóstico del estado del índice al inicio de la sincronización
+  const _allLocal = ComicStore.getAll();
+  const locals = _allLocal.filter(c => c.supabaseId &&
     (c.userId === _mcUser.id || c.username === _mcUser.username));
+
+  // Guardar para diagnóstico
+  window._syncDiag = window._syncDiag || [];
+  window._syncDiag.push({
+    _type: 'INIT',
+    t: new Date().toISOString(),
+    userId: _mcUser.id,
+    username: _mcUser.username,
+    totalInIndex: _allLocal.length,
+    localsFound: locals.length,
+    allIds: _allLocal.map(c => ({
+      id: c.id?.slice(-8),
+      userId: c.userId?.slice(-8),
+      localSavedAt: c.localSavedAt || null,
+      cloudOnly: c.cloudOnly,
+      supabaseId: c.supabaseId?.slice(-8)
+    }))
+  });
   if (!locals.length) {
     try {
       const cloudWorks = await SupabaseClient.fetchWorksByAuthor(_mcUser.id);
@@ -128,7 +147,9 @@ async function _mcSyncCloudDates() {
       if (!local) continue;
 
       const cloudDate = new Date(w.updated_at || 0);
-      const localDate = new Date(local.updatedAt || 0);
+      // CRÍTICO: comparar contra localSavedAt (cuándo se guardó localmente),
+      // NO contra updatedAt (que se sobreescribe con la fecha de la nube)
+      const localDate = new Date(local.localSavedAt || local.createdAt || 0);
 
       // Actualizar metadatos siempre (título, género, estado publicación)
       let dirty = false;
@@ -143,15 +164,13 @@ async function _mcSyncCloudDates() {
       if (_cloudPending !== local.pendingReview) { local.pendingReview = _cloudPending; dirty = true; }
 
       // Si la nube es más reciente: marcar cloudNewer pero preservar editorData local
-      // El usuario puede recuperar la versión local desde Proyecto → Recuperar versión del dispositivo
       if (cloudDate > localDate) {
         local.cloudNewer = true;
-        // Preservar editorData local bajo localEditorData (no sobreescribir nunca)
         if(local.editorData && !local.localEditorData) {
           local.localEditorData = local.editorData;
         }
-        local.editorData = null; // forzar descarga de la versión de nube al editar
-        local.updatedAt  = w.updated_at;
+        local.editorData = null;
+        // NO sobreescribir updatedAt con fecha de nube — localSavedAt es la fuente de verdad local
         dirty = true;
       }
 
