@@ -810,6 +810,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(window.location.search);
   const id     = params.get('id');
   const draft  = params.get('draft');   // token de borrador (obra no publicada)
+  const local  = params.get('local');   // clave localStorage — preview local sin Supabase
   const wantsFs = params.get('fs') === '1'; // heredar fullscreen de la app
 
   // Modo embed: incrustado en iframe desde admin/expositor
@@ -900,6 +901,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
   }
 
+  if (local) { loadLocal(local);  return; }
   if (draft) { loadDraft(draft); return; }
   if (id)    { loadWork(id);     return; }
   showError('No se indicó ninguna obra. Comprueba el enlace.');
@@ -960,6 +962,102 @@ async function loadWork(workId) {
     console.error('Error:', err);
     showError('Error de conexión. Comprueba tu internet e inténtalo de nuevo.');
   }
+}
+
+// ── CARGA LOCAL (preview desde editor sin pasar por Supabase) ──
+async function loadLocal(key) {
+  setLoadingMsg('Cargando vista previa...');
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) { showError('Vista previa no encontrada o expirada.'); return; }
+    setTimeout(() => { try { localStorage.removeItem(key); } catch(e) {} }, 10000);
+    const data = JSON.parse(raw);
+    if (!data || !data.pages || !data.pages.length) { showError('Sin páginas.'); return; }
+    RS._workTitle  = data.title  || 'Vista previa';
+    RS._workAuthor = data.author || '';
+    RS._workSocial = data.social || '';
+    RS.navMode     = data.navMode || 'fixed';
+    document.title = RS._workTitle + ' — ComiXow';
+    RS.panels = data.pages.map((p, pi) => ({
+      id: 'local_' + pi,
+      orientation: p.orientation || data.orientation || 'v',
+      text_mode: p.textMode || 'sequential',
+      layers: (p.layers || []).map(l => ({ ...l })),
+      texts: (p.layers || []).filter(l => l.type === 'text' || l.type === 'bubble')
+             .map((l, ti) => ({ text: l.text || '', seq_order: ti })),
+    }));
+    const _last = RS.panels[RS.panels.length - 1];
+    RS.panels.push({ id: 'credits', isCredits: true, orientation: _last?.orientation || 'v', layers: [], texts: [] });
+    setLoadingMsg('Preparando imágenes...');
+    await _preloadLocal();
+    startReader();
+  } catch(err) { console.error('loadLocal:', err); showError('Error en vista previa local.'); }
+}
+
+async function _preloadLocal() {
+  const total = RS.panels.filter(p => !p.isCredits).length;
+  let done = 0;
+  await Promise.all(RS.panels.map(async panel => {
+    if (panel.isCredits) return;
+    await Promise.all((panel.layers || []).map(async layer => {
+      if (layer.type === 'image') {
+        const _key = layer.animKey || layer._pngFramesKey;
+        if (_key) {
+          const _data = await _localIdbGet('cxAnims', 'anims', _key);
+          if (_data && window.ApngDecoder) {
+            try {
+              const _input = typeof _data === 'string' ? _data : (Array.isArray(_data) ? _data : null);
+              if (_input) {
+                const dec = await window.ApngDecoder.decode(_input, layer._gcpFrameDelay || 100);
+                layer._animFrames = dec.frames; layer._animOc = dec.oc;
+                layer._animReady  = true;       layer._gcpFrameDelay = dec.delay;
+              }
+            } catch(e) {}
+          }
+        }
+        if (!layer._animReady && layer.src) {
+          const img = new Image();
+          await new Promise(r => { img.onload = r; img.onerror = r; img.src = layer.src; });
+          layer.img = img;
+        }
+      } else if (layer.type === 'gif' && layer.gifKey) {
+        const src = await _localIdbGet('cxGifs', 'gifs', layer.gifKey);
+        if (src) {
+          const img = new Image();
+          await new Promise(r => { img.onload = r; img.onerror = r; img.src = src; });
+          layer.img = img; layer._gifReady = true;
+        } else if (layer._gifUrl) {
+          try {
+            const r = await fetch(layer._gifUrl);
+            if (r.ok) { const b = await r.blob(); const img = new Image(); const u = URL.createObjectURL(b); await new Promise(res => { img.onload = res; img.src = u; }); layer.img = img; layer._gifReady = true; }
+          } catch(e) {}
+        }
+      } else if ((layer.type === 'draw' || layer.type === 'stroke' || layer.type === 'line') && layer.src) {
+        const img = new Image();
+        await new Promise(r => { img.onload = r; img.onerror = r; img.src = layer.src; });
+        layer.img = img;
+      }
+    }));
+    done++;
+    setLoadingProgress((done / total) * 95, '');
+  }));
+  setLoadingProgress(100, '');
+}
+
+function _localIdbGet(dbName, storeName, key) {
+  return new Promise(res => {
+    const req = indexedDB.open(dbName, 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore(storeName);
+    req.onsuccess = e => {
+      try {
+        const tx = e.target.result.transaction(storeName, 'readonly');
+        const r  = tx.objectStore(storeName).get(key);
+        r.onsuccess = () => res(r.result || null);
+        r.onerror   = () => res(null);
+      } catch(e2) { res(null); }
+    };
+    req.onerror = () => res(null);
+  });
 }
 
 // ── CARGA BORRADOR (obra no publicada, acceso por token) ─────

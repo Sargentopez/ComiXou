@@ -569,7 +569,38 @@ function _mcRenderList() {
         appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
         return;
       }
-      if (typeof openShareModal !== 'undefined') openShareModal(comic);
+      // Verificar si la versión local es más reciente que la nube
+      // Si es así, subir antes de compartir para que el enlace muestre la versión correcta
+      const _doShare = async () => {
+        // Siempre construir con datos locales — mismos que usa el visor interno
+        const _comicFull = ComicStore.getByIdFull
+          ? await ComicStore.getByIdFull(id)
+          : comic;
+        if (!_comicFull?.editorData?.pages?.length) {
+          appAlert('Esta obra no tiene datos locales. Ábrela en el editor y guárdala primero.');
+          return;
+        }
+        const _previewKey = 'cx_preview_' + Date.now();
+        const _previewData = {
+          title:       _comicFull.title     || '',
+          author:      _comicFull.author    || '',
+          social:      _comicFull.social    || '',
+          navMode:     _comicFull.navMode   || 'fixed',
+          orientation: _comicFull.editorData.orientation || 'v',
+          pages:       _comicFull.editorData.pages,
+        };
+        try {
+          localStorage.setItem(_previewKey, JSON.stringify(_previewData));
+        } catch(e) {
+          appAlert('No hay espacio suficiente para la vista previa.');
+          return;
+        }
+        const base = window.location.origin + window.location.pathname
+          .replace(/\/index\.html$/, '').replace(/\/$/, '');
+        const url = base + '/reader/index.html?local=' + _previewKey + '&from=app';
+        window.open(url, '_blank');
+      };
+      _doShare();
     }
   });
 }
