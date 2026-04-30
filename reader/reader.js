@@ -1230,25 +1230,6 @@ async function sbGetAuth(path) {
 
 // ── INICIAR ───────────────────────────────────────────────────
 // ── Animación GIF en el reproductor ─────────────────────────────────────────
-function _resetPanelAnims(layers) {
-  if (!layers) return;
-  layers.forEach(function(layer) {
-    if (layer._gifReady && layer._gifFrames && layer._gifOc) {
-      layer._gifIdx      = 0;
-      layer._gifLastTick = 0;
-      var fd = layer._gifFrames[0];
-      if (fd) layer._gifOc.getContext('2d').putImageData(fd.imageData, 0, 0);
-    }
-    if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
-      layer._animIdx       = 0;
-      layer._animLastTick  = 0;
-      layer._animPlayCount = 0;
-      var fa = layer._animFrames[0];
-      if (fa && layer._animOc) layer._animOc.getContext('2d').putImageData(fa.imageData, 0, 0);
-    }
-  });
-}
-
 function _readerGifTick() {
   const now = Date.now();
   RS.panels.forEach((panel, pi) => {
@@ -1511,7 +1492,6 @@ function _startScrollReader() {
       const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
-      _resetPanelAnims(RS.panels[_prevSI]?.layers);
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
@@ -2161,7 +2141,6 @@ function advance() {
     _startFade(); RS.textStep++; _render(); return;
   }
   if (RS.idx < RS.panels.length - 1) {
-    _resetPanelAnims(RS.panels[RS.idx]?.layers);
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resizeCanvas(); _render();
   }
@@ -2174,7 +2153,6 @@ function goBack() {
 
   if (isSeq && RS.textStep > 1) { RS.textStep--; RS.fadeAlpha = 0; _render(); return; }
   if (RS.idx > 0) {
-    _resetPanelAnims(RS.panels[RS.idx]?.layers);
     RS.idx--;
     const pp = RS.panels[RS.idx];
     RS.textStep  = (pp?.text_mode || 'sequential') === 'sequential' ? (pp?.texts || []).length : 0;
@@ -2244,7 +2222,6 @@ function _creditsClick() {
   if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
   if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
   RS.isCredits = false;
-  RS.panels.forEach(function(p) { _resetPanelAnims(p.layers); });
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
 }
