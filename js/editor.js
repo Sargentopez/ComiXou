@@ -13258,6 +13258,8 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
+  // Resetear estado de animaciones de TODAS las hojas antes de empezar
+  edPages.forEach((p, pi) => _edResetPageAnims(pi));
   _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -13520,6 +13522,7 @@ function _edOpenViewerScroll(navMode) {
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
+      _edResetPageAnims(_prevSI);
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
@@ -14438,7 +14441,27 @@ function EditorView_destroy(){
   edHideGearIcon();
 }
 function edSaveProjectModal(){
-  edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
+  const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
+  // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
+  if (_newTitle !== edProjectMeta.title) {
+    const _oldComic = ComicStore.getById(edProjectId) || {};
+    edProjectId = 'comic_' + Date.now();
+    sessionStorage.setItem('cx_edit_id', edProjectId);
+    ComicStore.save({
+      ..._oldComic,
+      id: edProjectId,
+      title: _newTitle,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      published: false,
+      approved:  false,
+      pendingReview: false,
+      supabaseId: null,
+      cloudOnly:  false,
+      cloudNewer: false,
+    });
+  }
+  edProjectMeta.title  = _newTitle;
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
@@ -15830,6 +15853,60 @@ function edBibGuardar() {
         _bibSave(d2);
         edToast('GIF guardado en Biblioteca → Animaciones ✓');
       }).catch(() => edToast('Error al leer el GIF'));
+      return;
+    }
+    // APNG / imagen animada: guardar en carpeta Animaciones con sus frames
+    if (la._isGcpImage && (la._pngFrames?.length > 1 || la._apngSrc || la.animKey)) {
+      const _animThumb = _bibThumb(la);
+      const _doSaveApng = (frames) => {
+        const _apngId = Date.now() + '_gif';
+        const _apngEntry = {
+          id: _apngId, timestamp: Date.now(),
+          isGroup: false, isGifAnim: true,
+          gifDataUrl: (Array.isArray(frames) ? frames[0] : null) || la.src || '',
+          pngFrames:  Array.isArray(frames) ? frames : null,
+          apngSrc:    typeof frames === 'string' ? frames : null,
+          gcpLayersData: la._gcpLayersData || null,
+          gcpFramesData: la._gcpFramesData || null,
+          gcpLayerNames: la._gcpLayerNames || null,
+          normW: la.width, normH: la.height,
+          gcpFrameDelay:  la._gcpFrameDelay  ?? null,
+          gcpRepeatCount: la._gcpRepeatCount ?? null,
+          gcpStopAtEnd:   la._gcpStopAtEnd   ?? false,
+          animKey: la.animKey || null,
+          layerData: null, thumb: _animThumb,
+        };
+        // Externalizar frames a IDB
+        const _framesData = _apngEntry.apngSrc || _apngEntry.pngFrames;
+        if (window._sbAnimIdbSave && _framesData) {
+          const _idbBibKey = 'bib_' + _apngId;
+          _apngEntry._apngIdbKey = _idbBibKey;
+          _apngEntry.pngFrames   = null;
+          _apngEntry.apngSrc     = null;
+          window._sbAnimIdbSave(_idbBibKey, _framesData).catch(function() {
+            _apngEntry.pngFrames = Array.isArray(_framesData) ? _framesData : null;
+            _apngEntry.apngSrc   = typeof _framesData === 'string' ? _framesData : null;
+            _apngEntry._apngIdbKey = null;
+          });
+        }
+        const d2 = _bibLoad();
+        _bibGetAnimFolder(d2).items.push(_apngEntry);
+        _bibSave(d2);
+        edToast('Animación guardada en Biblioteca → Animaciones ✓');
+      };
+      // Obtener los frames: _pngFrames en memoria, _apngSrc, o cargar desde IDB por animKey
+      if (la._pngFrames && la._pngFrames.length > 1) {
+        _doSaveApng(la._pngFrames);
+      } else if (la._apngSrc) {
+        _doSaveApng(la._apngSrc);
+      } else if (la.animKey && window._sbAnimIdbLoad) {
+        window._sbAnimIdbLoad(la.animKey).then(data => {
+          if (data) _doSaveApng(data);
+          else edToast('No se pudieron recuperar los frames de la animación');
+        }).catch(() => edToast('Error al leer la animación'));
+      } else {
+        edToast('No se encontraron frames de animación');
+      }
       return;
     }
     entry = {
@@ -17802,6 +17879,18 @@ function _gcpSaveToLib(onDone) {
     gcpStopAtEnd:   window._gcpStopAtEnd,
     animKey: existingLayerForBib?.animKey || null,
   };
+  // Externalizar pngFrames a IDB para no saturar localStorage (cada frame ~100-500KB)
+  if (window._sbAnimIdbSave && pngFrames && pngFrames.length > 0) {
+    const _idbBibKey = 'bib_' + _bibItemId;
+    _newBibItem._apngIdbKey = _idbBibKey;
+    _newBibItem.pngFrames   = null; // no guardar en localStorage
+    window._sbAnimIdbSave(_idbBibKey, pngFrames).catch(function(e) {
+      // Si IDB falla, volver a incluir pngFrames en el item (fallback)
+      _newBibItem.pngFrames = pngFrames;
+      _newBibItem._apngIdbKey = null;
+      console.warn('bib IDB save:', e);
+    });
+  }
   if (_existingBibIdx >= 0) {
     animFolder.items[_existingBibIdx] = _newBibItem;  // sobreescribir
   } else {
