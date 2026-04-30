@@ -1,8 +1,9 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v19-66';
+const CACHE = 'comixow-v19-70';
 
-// Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
-// JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
+// Solo cacheamos assets verdaderamente estáticos (iconos que nunca cambian)
+// JS, CSS y HTML NO se cachean — el navegador gestiona su caché HTTP normal
+// Esto garantiza que el usuario siempre reciba la versión más reciente sin vaciar caché
 const STATIC_ASSETS = [
   './icon-192.png',
   './icon-512.png',
@@ -20,9 +21,14 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then(clients => {
+        // Notificar a todas las pestañas abiertas → recargar para usar nueva versión
+        clients.forEach(c => c.postMessage({ type: 'SW_UPDATED' }));
+      })
   );
 });
 
@@ -35,17 +41,12 @@ self.addEventListener('fetch', e => {
   // No interceptar el reproductor externo — tiene su propia lógica
   if (url.includes('/reader/')) return;
 
-  // HTML, JS y CSS: network-first siempre — nunca servir versión antigua
+  // JS, CSS y HTML: pasar directo a la red — no cachear en el SW
+  // El navegador gestiona su propia caché HTTP con los headers del servidor (GitHub Pages)
+  // Esto garantiza actualizaciones automáticas sin vaciar caché manualmente
   if (url.match(/\.(html|js|css)(\?|$)/) || e.request.mode === 'navigate') {
     e.respondWith(
       fetch(e.request)
-        .then(r => {
-          if (r.ok) {
-            const clone = r.clone();
-            caches.open(CACHE).then(c => c.put(e.request, clone));
-          }
-          return r;
-        })
         .catch(() => caches.match(e.request).then(r => r || caches.match('./index.html')))
     );
     return;

@@ -290,7 +290,11 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
-      const comicToEdit = ComicStore.getById(id);
+      // Cargar datos completos desde OPFS antes de abrir el editor
+      const _loadAndEdit = async () => {
+      const comicToEdit = ComicStore.getByIdFull
+        ? await ComicStore.getByIdFull(id)
+        : ComicStore.getById(id);
       // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero.
       // También re-descargar si hay strokes en formato antiguo (sin x/y/width/height) —
       // esos strokes se renderizan incorrectamente con las versiones nuevas del editor.
@@ -421,6 +425,8 @@ function _mcRenderList() {
       // Guardar qué proyecto editar y navegar al editor
       sessionStorage.setItem('cx_edit_id', id);
       Router.go('editor');
+      }; // fin _loadAndEdit
+      _loadAndEdit();
     } else if (action === 'publish') {
       const comic = ComicStore.getById(id);
       if (!comic) return;

@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v19.66</footer>
+    <footer class="app-version">v19.70</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -354,6 +354,8 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="dd-loadjson">Cargar obra (.json)</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-recoverlocal" style="display:none">↩ Recuperar versión del dispositivo</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-diagnostico" style="color:var(--gray-500);font-size:.8rem">🔬 Diagnóstico</button>
             </div>
           </div>
 

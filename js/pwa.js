@@ -25,6 +25,13 @@
             }
           });
         });
+
+        // Forzar comprobación de actualización al navegar a páginas clave
+        // Así el usuario ve la nueva versión sin tener que cerrar y reabrir la app
+        const _checkUpdate = () => reg.update().catch(() => {});
+        window.addEventListener('cx:view:change', _checkUpdate);
+        // También comprobar al recuperar el foco de la ventana (vuelve de otra app)
+        window.addEventListener('focus', _checkUpdate);
       })
       .catch(err => console.warn('SW error:', err));
 
@@ -32,6 +39,14 @@
     let refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!refreshing) { refreshing = true; window.location.reload(); }
+    });
+
+    // Mensaje directo del SW cuando se activa nueva versión
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data?.type === 'SW_UPDATED' && !refreshing) {
+        refreshing = true;
+        window.location.reload();
+      }
     });
   }
 

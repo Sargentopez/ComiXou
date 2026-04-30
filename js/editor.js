@@ -12256,7 +12256,7 @@ async function edCloudSave() {
 async function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
-  const existing=ComicStore.getById(edProjectId)||{};
+  const existing = await (ComicStore.getByIdFull ? ComicStore.getByIdFull(edProjectId) : Promise.resolve(ComicStore.getById(edProjectId))) || {};
   // Guardar estado de cámara para restaurarlo al volver a editar
   const _camState = { x: edCamera.x, y: edCamera.y, z: edCamera.z, page: edCurrentPage };
   const panels=edPages.map((p,i)=>{
@@ -13157,8 +13157,9 @@ function edDeserLayer(d, pageOrientation){
   }
   return null;
 }
-function edLoadProject(id){
-  const comic=ComicStore.getById(id);if(!comic)return;
+async function edLoadProject(id){
+  const comic = await (ComicStore.getByIdFull ? ComicStore.getByIdFull(id) : Promise.resolve(ComicStore.getById(id)));
+  if(!comic)return;
   edProjectId=id;
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
@@ -14479,6 +14480,255 @@ function edSaveProjectModal(){
 }
 
 /* ══════════════════════════════════════════
+   DIAGNÓSTICO
+   ══════════════════════════════════════════ */
+
+async function edDiagnostico() {
+  const L = [];
+  const ok   = s => '✅ ' + s;
+  const err  = s => '❌ ' + s;
+  const warn = s => '⚠️  ' + s;
+  const inf  = s => 'ℹ️  ' + s;
+
+  L.push('══════════════════════════════════════════');
+  L.push('DIAGNÓSTICO ComiXou ' + (document.querySelector('.app-version')?.textContent||'?'));
+  L.push(new Date().toLocaleString());
+  L.push('══════════════════════════════════════════');
+
+  // ── 1. PROYECTO ACTIVO ──────────────────────────────────────
+  L.push('\n── PROYECTO ACTIVO ──');
+  if (!edProjectId) {
+    L.push(warn('Sin proyecto activo'));
+  } else {
+    L.push(ok('ID: ' + edProjectId));
+    L.push(inf('Título: ' + (edProjectMeta?.title||'(sin título)')));
+    L.push(inf('Hojas en memoria: ' + edPages.length));
+    edPages.forEach((p, pi) => {
+      const ll = p.layers||[];
+      if (ll.length) {
+        const tipos = ll.map(l => l.type+(l._isGcpImage?'(anim)':'')).join(', ');
+        L.push(inf('  Hoja '+(pi+1)+': '+ll.length+' capas ['+tipos+']'));
+      } else {
+        L.push(warn('  Hoja '+(pi+1)+': sin capas'));
+      }
+    });
+  }
+
+  // ── 2. LOCALSTORAGE (índice) ─────────────────────────────────
+  L.push('\n── localStorage (índice) ──');
+  try {
+    const raw = localStorage.getItem('cs_comics')||'[]';
+    const idx = JSON.parse(raw);
+    L.push(ok('Índice: '+idx.length+' obras ('+( raw.length/1024).toFixed(1)+' KB)'));
+    if (edProjectId) {
+      const e = idx.find(c=>c.id===edProjectId);
+      if (e) {
+        L.push(ok('Entrada del proyecto: SÍ'));
+        L.push(inf('  updatedAt: '+(e.updatedAt||'-')));
+        L.push(inf('  localSavedAt: '+(e.localSavedAt||'-')));
+        L.push(inf('  supabaseId: '+(e.supabaseId||'ninguno')));
+        L.push(inf('  _thumb: '+(e._thumb?'sí ('+Math.round(e._thumb.length/1024)+'KB)':'no')));
+        L.push(e.editorData ? warn('  editorData en índice: SÍ (debería estar solo en OPFS)') : ok('  editorData en índice: no (correcto)'));
+      } else {
+        L.push(err('Proyecto NO en índice localStorage'));
+      }
+    }
+    let lsTotal=0;
+    for(let k in localStorage) if(localStorage.hasOwnProperty(k)) lsTotal+=(localStorage.getItem(k)||'').length;
+    const lsKB = (lsTotal/1024).toFixed(1);
+    L.push(inf('localStorage total: ~'+lsKB+' KB de ~5120 KB'));
+    if(lsTotal>4*1024*1024) L.push(warn('localStorage casi lleno'));
+  } catch(e){ L.push(err('Error localStorage: '+e.message)); }
+
+  // ── 3. OPFS ──────────────────────────────────────────────────
+  L.push('\n── OPFS ──');
+  if(!navigator.storage?.getDirectory){
+    L.push(err('OPFS NO disponible en este navegador'));
+  } else {
+    try {
+      const root = await navigator.storage.getDirectory();
+      L.push(ok('OPFS disponible'));
+      try {
+        const dir = await root.getDirectoryHandle('comics',{create:false});
+        let nFiles=0, totalSz=0, foundProj=false;
+        for await(const [name,handle] of dir.entries()){
+          if(handle.kind==='file'){
+            const f = await handle.getFile();
+            nFiles++; totalSz+=f.size;
+            if(edProjectId && name===edProjectId+'.json'){
+              foundProj=true;
+              try {
+                const data=JSON.parse(await f.text());
+                L.push(ok('Archivo proyecto en OPFS: '+name+' ('+(f.size/1024).toFixed(1)+' KB)'));
+                L.push(inf('  editorData.pages: '+(data.editorData?.pages?.length??'NO')));
+                L.push(inf('  panels: '+(data.panels?.length??'NO')));
+                L.push(inf('  updatedAt: '+(data.updatedAt||'-')));
+                // Verificar capas
+                let capOk=0,capErr=0;
+                (data.editorData?.pages||[]).forEach(p=>(p.layers||[]).forEach(l=>l.type?capOk++:capErr++));
+                L.push(capErr?warn('  Capas OK: '+capOk+' | Inválidas: '+capErr):ok('  Capas: '+capOk+' OK'));
+                // Verificar que los datos coinciden con los de memoria
+                if(edPages.length>0 && data.editorData?.pages){
+                  if(data.editorData.pages.length===edPages.length) L.push(ok('  Hojas OPFS == memoria: '+edPages.length));
+                  else L.push(err('  Hojas OPFS ('+data.editorData.pages.length+') != memoria ('+edPages.length+')'));
+                }
+              } catch(pe){ L.push(err('Error parseando OPFS: '+pe.message)); }
+            }
+          }
+        }
+        L.push(inf('Archivos en OPFS/comics: '+nFiles+' ('+(totalSz/1024).toFixed(1)+' KB)'));
+        if(edProjectId&&!foundProj) L.push(err('Proyecto NO en OPFS'));
+      } catch(e){
+        if(e.name==='NotFoundError') L.push(warn('Directorio OPFS/comics no existe aún'));
+        else L.push(err('Error OPFS: '+e.message));
+      }
+      try{
+        const est=await navigator.storage.estimate();
+        L.push(inf('Quota OPFS: '+((est.usage||0)/1024/1024).toFixed(2)+' MB usados de ~'+((est.quota||0)/1024/1024).toFixed(0)+' MB'));
+      }catch(e){}
+    } catch(e){ L.push(err('OPFS error: '+e.message)); }
+  }
+
+  // ── 4. IndexedDB (cxAnims) ───────────────────────────────────
+  L.push('\n── IndexedDB (cxAnims) ──');
+  try {
+    await new Promise(res=>{
+      const req=indexedDB.open('cxAnims',1);
+      req.onupgradeneeded=e=>e.target.result.createObjectStore('anims');
+      req.onsuccess=async e=>{
+        try{
+          const db=e.target.result;
+          const tx=db.transaction('anims','readonly');
+          const store=tx.objectStore('anims');
+          const keys=await new Promise(r=>{const rk=store.getAllKeys();rk.onsuccess=()=>r(rk.result);rk.onerror=()=>r([]);});
+          L.push(ok('IDB cxAnims: '+keys.length+' entradas'));
+          if(edProjectId){
+            const pk=keys.filter(k=>typeof k==='string'&&k.startsWith(edProjectId));
+            L.push(inf('  Entradas proyecto: '+pk.length));
+            for(const key of pk.slice(0,8)){
+              const val=await new Promise(r=>{const rg=store.get(key);rg.onsuccess=()=>r(rg.result);rg.onerror=()=>r(null);});
+              if(val===null||val===undefined) L.push(err('  '+key+': VACÍO'));
+              else if(Array.isArray(val))     L.push(ok('  '+key+': '+val.length+' frames'));
+              else if(typeof val==='string')  L.push(ok('  '+key+': dataUrl ('+(val.length/1024).toFixed(1)+'KB)'));
+              else                            L.push(warn('  '+key+': tipo '+typeof val));
+            }
+          }
+          const bibK=keys.filter(k=>typeof k==='string'&&k.startsWith('bib_'));
+          if(bibK.length) L.push(inf('  Entradas biblioteca: '+bibK.length));
+        }catch(ie){L.push(err('Error IDB: '+ie.message));}
+        res();
+      };
+      req.onerror=()=>{L.push(err('No se pudo abrir IDB'));res();};
+    });
+  }catch(e){L.push(err('IDB error: '+e.message));}
+
+  // ── 5. CAPAS EN MEMORIA — integridad ─────────────────────────
+  L.push('\n── CAPAS EN MEMORIA ──');
+  if(edProjectId&&edPages.length){
+    edPages.forEach((p,pi)=>{
+      (p.layers||[]).forEach((l,li)=>{
+        const ref='H'+(pi+1)+'C'+(li+1)+' ('+l.type+')';
+        if(l.type==='image'){
+          if(l._animReady&&l._animFrames)       L.push(ok(ref+': APNG listo — '+l._animFrames.length+' frames'));
+          else if(l._isGcpImage&&l._pngFramesKey)L.push(warn(ref+': pendiente key='+l._pngFramesKey));
+          else if(l._isGcpImage&&l.animKey)     L.push(warn(ref+': animKey='+l.animKey+' (no cargado)'));
+          else if(l._isGcpImage)                L.push(err(ref+': _isGcpImage sin key ni frames'));
+          else if(l.src)                        L.push(ok(ref+': imagen estática OK'));
+          else                                  L.push(err(ref+': sin src'));
+        } else if(l.type==='gif'){
+          if(l._ready||l._gifReady) L.push(ok(ref+': GIF listo'));
+          else if(l.gifKey)         L.push(warn(ref+': GIF no cargado (key='+l.gifKey+')'));
+          else                      L.push(err(ref+': GIF sin key'));
+        } else if(l.type==='draw'||l.type==='stroke'){
+          if(l.src||l.img)                      L.push(ok(ref+': OK (bitmap)'));
+          else if((l.points||[]).length>0)      L.push(ok(ref+': OK ('+l.points.length+' puntos)'));
+          else                                  L.push(warn(ref+': sin datos'));
+        } else if(l.type==='bubble'||l.type==='text'){
+          L.push(ok(ref+': "'+((l.text||'').slice(0,20)||'(vacío)')+'"'));
+        } else {
+          L.push(inf(ref+': OK'));
+        }
+      });
+    });
+  } else {
+    L.push(warn('Sin capas (proyecto no cargado)'));
+  }
+
+  // ── 6. BACKUP PC ─────────────────────────────────────────────
+  L.push('\n── Backup directorio PC ──');
+  if(!('showDirectoryPicker' in window)){
+    L.push(inf('File System Access API: no disponible (Android/Firefox)'));
+  } else {
+    L.push(ok('File System Access API: disponible'));
+    try{
+      const idb=await new Promise((res,rej)=>{const r=indexedDB.open('cx_fs_handles',1);r.onupgradeneeded=e=>e.target.result.createObjectStore('handles');r.onsuccess=e=>res(e.target.result);r.onerror=()=>res(null);});
+      if(idb){
+        const h=await new Promise(r=>{const tx=idb.transaction('handles','readonly');const rq=tx.objectStore('handles').get('cx_fs_dir_handle');rq.onsuccess=()=>r(rq.result||null);rq.onerror=()=>r(null);});
+        if(h){
+          L.push(ok('Handle guardado: '+(h.name||'?')));
+          try{ const p=await h.queryPermission({mode:'readwrite'}); L.push(inf('  Permiso: '+p)); }catch(e){ L.push(warn('  Permiso: no consultable')); }
+        } else {
+          L.push(warn('Sin carpeta de backup configurada'));
+        }
+      }
+    }catch(e){ L.push(warn('No se pudo leer handle: '+e.message)); }
+  }
+
+  // ── 7. NUBE ──────────────────────────────────────────────────
+  L.push('\n── Estado nube ──');
+  try {
+    const idx3=JSON.parse(localStorage.getItem('cs_comics')||'[]');
+    const e3=edProjectId?idx3.find(c=>c.id===edProjectId):null;
+    if(e3){
+      L.push(inf('supabaseId: '+(e3.supabaseId||'no publicado')));
+      L.push(inf('published: '+!!e3.published+' | pendingReview: '+!!e3.pendingReview));
+      L.push(inf('cloudOnly: '+!!e3.cloudOnly+' | cloudNewer: '+!!e3.cloudNewer));
+    } else {
+      L.push(inf('(proyecto no encontrado en índice)'));
+    }
+  }catch(e){}
+
+  // ── RESUMEN ───────────────────────────────────────────────────
+  L.push('\n══════════════════════════════════════════');
+  const nErr=L.filter(l=>l.startsWith('❌')).length;
+  const nWarn=L.filter(l=>l.startsWith('⚠️')).length;
+  L.push('RESUMEN: '+nErr+' errores, '+nWarn+' advertencias');
+  L.push('══════════════════════════════════════════');
+
+  const text=L.join('\n');
+
+  // ── PANEL VISUAL ──────────────────────────────────────────────
+  document.getElementById('_edDiagPanel')?.remove();
+  const overlay=document.createElement('div');
+  overlay.id='_edDiagPanel';
+  overlay.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+  const box=document.createElement('div');
+  box.style.cssText='background:#1a1a1a;color:#ddd;border-radius:10px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;font-family:monospace;font-size:.73rem;box-shadow:0 8px 32px #000a';
+  const hdr=document.createElement('div');
+  hdr.style.cssText='padding:10px 14px;background:#111;display:flex;align-items:center;gap:8px;border-bottom:1px solid #333;flex-shrink:0';
+  hdr.innerHTML='<span style="flex:1;font-weight:700;font-size:.85rem;color:#fff">🔬 Diagnóstico ComiXou</span>';
+  const cpBtn=document.createElement('button');
+  cpBtn.textContent='📋 Copiar';
+  cpBtn.style.cssText='border:none;background:#297a4a;color:#fff;border-radius:5px;padding:4px 11px;cursor:pointer;font-size:.78rem;font-weight:700';
+  cpBtn.onclick=()=>{ navigator.clipboard?.writeText(text).then(()=>{cpBtn.textContent='✅ Copiado!';setTimeout(()=>cpBtn.textContent='📋 Copiar',2000)}).catch(()=>{ta.select();document.execCommand('copy');}); };
+  const clBtn=document.createElement('button');
+  clBtn.textContent='✕';
+  clBtn.style.cssText='border:none;background:transparent;color:#aaa;font-size:1.1rem;cursor:pointer;padding:2px 6px';
+  clBtn.onclick=()=>overlay.remove();
+  overlay.addEventListener('pointerdown',e=>{if(e.target===overlay)overlay.remove();});
+  hdr.appendChild(cpBtn); hdr.appendChild(clBtn);
+  const ta=document.createElement('textarea');
+  ta.value=text; ta.readOnly=true;
+  ta.style.cssText='flex:1;background:#1a1a1a;color:#ddd;border:none;padding:12px 14px;resize:none;outline:none;font-family:monospace;font-size:.72rem;line-height:1.55;overflow-y:auto;-webkit-user-select:text;user-select:text';
+  box.appendChild(hdr); box.appendChild(ta);
+  overlay.appendChild(box); document.body.appendChild(overlay);
+  const firstErr=L.findIndex(l=>l.startsWith('❌'));
+  if(firstErr>0) setTimeout(()=>{ta.scrollTop=firstErr*20;},50);
+  console.log('[DIAG]\n'+text);
+  return text;
+}
+
+/* ══════════════════════════════════════════
    TOAST
    ══════════════════════════════════════════ */
 
@@ -14549,8 +14799,7 @@ function EditorView_init(){
 
   const editId=sessionStorage.getItem('cx_edit_id');
   if(!editId){Router.go('my-comics');return;}
-  edLoadProject(editId);
-  sessionStorage.removeItem('cx_edit_id');
+  edLoadProject(editId).then(() => sessionStorage.removeItem('cx_edit_id'));
 
   // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
   edSetOrientation(edPages[0]?.orientation || edOrientation, false);
@@ -14684,7 +14933,7 @@ function EditorView_init(){
       } else {
         // Restaurar último estado guardado
         const saved = ComicStore.getById(edProjectId);
-        if (saved) edLoadProject(edProjectId);
+        if (saved) edLoadProject(edProjectId).then(() => {});
       }
       Router.go('my-comics');
     };
@@ -15001,6 +15250,7 @@ function EditorView_init(){
   $('dd-editproject')?.addEventListener('click',()=>{edOpenProjectModal();edCloseMenus();});
   $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
+  $('dd-diagnostico')?.addEventListener('click',()=>{ edCloseMenus(); edDiagnostico(); });
   // Submenú Hoja actual (inline, igual que los demás submenús)
   $('dd-exportpagebtn')?.addEventListener('click', e => {
     e.stopPropagation();
@@ -15062,8 +15312,7 @@ function EditorView_init(){
     comic.cloudNewer      = false;
     comic.cloudOnly       = false;
     ComicStore.save(comic);
-    edLoadProject(edProjectId);
-    edToast('Versión del dispositivo restaurada ✓');
+    edLoadProject(edProjectId).then(() => edToast('Versión del dispositivo restaurada ✓'));
   });
 
   $('dd-deleteproject')?.addEventListener('click',()=>{

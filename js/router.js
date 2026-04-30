@@ -54,6 +54,9 @@ const Router = (() => {
     // Inicializar vista
     if (def.init) def.init(params);
 
+    // Notificar cambio de vista — pwa.js lo usa para comprobar actualizaciones del SW
+    window.dispatchEvent(new CustomEvent('cx:view:change', { detail: { view: name } }));
+
     window.scrollTo(0, 0);
   }
 
