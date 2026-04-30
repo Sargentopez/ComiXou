@@ -13339,16 +13339,24 @@ function _edGifSetPlaying(playing) {
         }
       }
       // Animación PNG (APNG desde biblioteca, importado, o descargado de nube)
-      if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc)) {
+      // Reconocer también layers con _animReady (cargados desde animKey/pngFramesKey en IDB)
+      const _isAnim = l.type === 'image' && (
+        (l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady
+      );
+      if (_isAnim) {
         if (playing) {
           l._fIdx = 0;
           l._gcpPlayCount = 0;
           l._playing = true;
-          // _apngSrc (descarga de nube) tiene prioridad — decodeApng extrae N frames
-          l.loadAnim(l._apngSrc || l._pngFrames, () => {
-            // Poblar _pngFrames con la longitud real para futuros ciclos
-            if (l._playing) l._applyFrame(0);
-          });
+          if (l._animReady && l._animFrames && l._animFrames.length) {
+            // Ya tiene frames decodificados — arrancar directamente sin redecodificar
+            l._applyFrame(0);
+          } else {
+            // _apngSrc (descarga de nube) tiene prioridad — decodeApng extrae N frames
+            l.loadAnim(l._apngSrc || l._pngFrames, () => {
+              if (l._playing) l._applyFrame(0);
+            });
+          }
         } else {
           l.stopAnim();
         }
@@ -15433,10 +15441,13 @@ function EditorView_init(){
   function _edUpdateRecoverBtn() {
     const btn = $('dd-recoverlocal');
     if(!btn || !edProjectId) return;
-    const comic = ComicStore.getById(edProjectId);
-    // Mostrar si hay backup local guardado (localEditorData)
-    // Se guarda cuando se descarga la nube sobre un editorData local existente
-    btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
+    btn.style.display = 'none';
+    const _p = ComicStore.getByIdFull
+      ? ComicStore.getByIdFull(edProjectId)
+      : Promise.resolve(ComicStore.getById(edProjectId));
+    _p.then(comic => {
+      if(btn) btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
+    }).catch(() => {});
   }
 
   // Actualizar al abrir el menú proyecto
@@ -15444,10 +15455,13 @@ function EditorView_init(){
     setTimeout(_edUpdateRecoverBtn, 50);
   });
 
-  $('dd-recoverlocal')?.addEventListener('click', () => {
+  $('dd-recoverlocal')?.addEventListener('click', async () => {
     edCloseMenus();
     if(!edProjectId) return;
-    const comic = ComicStore.getById(edProjectId);
+    // Usar getByIdFull para obtener localEditorData desde OPFS
+    const comic = ComicStore.getByIdFull
+      ? await ComicStore.getByIdFull(edProjectId)
+      : ComicStore.getById(edProjectId);
     if(!comic?.localEditorData?.pages?.length) { edToast('No hay versión local guardada'); return; }
     if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios de la nube no guardados localmente.')) return;
     comic.editorData      = comic.localEditorData;
