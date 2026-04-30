@@ -12278,7 +12278,10 @@ async function edCloudSave() {
   // Guardar localmente primero — suppressOverlay=true para no mostrar overlay doble
   _edSaveOverlayShow('Guardando...'); _edSaveOverlayUpdate('Guardando en dispositivo...', 15); await edSaveProject(true);
 
-  const comic = ComicStore.getById(edProjectId);
+  // Usar getByIdFull para obtener editorData desde OPFS — necesario para _uploadPanels
+  const comic = ComicStore.getByIdFull
+    ? await ComicStore.getByIdFull(edProjectId)
+    : ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
   // Asignar supabaseId si aún no tiene
@@ -13203,19 +13206,24 @@ function edDeserLayer(d, pageOrientation){
       l._fIdx = 0;
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
-      l._animPending = true; // señal: animación cargándose — img.onload no debe redibujar
-      _edAnimIdbLoad(d._pngFramesKey).then(data => {
-        if(!data) { l._animPending = false; return; }
-        // Asignar al campo correcto para que _edGifSetPlaying lo detecte
-        // NO llamar loadAnim aquí — _edGifSetPlaying lo hará al abrir el visor
+      // Carta v19.44: _pngFramesKey → IDB → string → l._apngSrc → loadAnim inmediatamente
+      // Usar window._sbAnimIdbSave/Load (conexión cacheada) — nunca abrir cxAnims directamente
+      const _loadFn = window._sbAnimIdbLoad || _edAnimIdbLoad;
+      _loadFn(d._pngFramesKey).then(data => {
+        if(!data) return;
         if(typeof data === 'string') {
-          l._apngSrc   = data;
-          l._pngFrames = [data]; // length > 1 no aplica pero señal para _edGifSetPlaying
+          l._apngSrc = data;
+          l.loadAnim(data, () => {
+            l._applyFrame(0);
+            if(typeof edRedraw === 'function') edRedraw();
+          });
         } else if(Array.isArray(data) && data.length) {
-          l._pngFrames = data;   // array de frames → _edGifSetPlaying lo reconoce
+          l._pngFrames = data;
+          l.loadAnim(data, () => {
+            l._applyFrame(0);
+            if(typeof edRedraw === 'function') edRedraw();
+          });
         }
-        l._animPending = false;
-        if(typeof edRedraw === 'function') edRedraw();
       });
     }
     if(d.src){

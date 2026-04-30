@@ -347,18 +347,26 @@ const SupabaseClient = (() => {
           delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
 
           // APNG animado → bucket 'anims' — patrón idéntico al GIF
+          // Preferir animKey (APNG completo en IDB) sobre _pngFramesKey (array de frames PNG)
           let animUrl = null;
-          if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
-            const _idbKey = l._pngFramesKey || l.animKey;
+          if (l.type === 'image' && (l.animKey || l._pngFramesKey)) {
+            const _idbKey = l.animKey || l._pngFramesKey;
             const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
             try {
               const _animData = await _sbAnimIdbLoad(_idbKey);
               if (_animData) {
                 let _apngDataUrl = null;
                 if (typeof _animData === 'string') {
-                  _apngDataUrl = _animData;
+                  _apngDataUrl = _animData; // APNG completo — subir directamente
                 } else if (Array.isArray(_animData) && _animData.length) {
-                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+                  // Array de frames — intentar también animKey si hay
+                  if (l.animKey && l.animKey !== _idbKey) {
+                    const _animFull = await _sbAnimIdbLoad(l.animKey).catch(() => null);
+                    if (typeof _animFull === 'string') _apngDataUrl = _animFull;
+                  }
+                  if (!_apngDataUrl) {
+                    _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+                  }
                 }
                 if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
               }
