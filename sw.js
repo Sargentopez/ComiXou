@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v19-65';
+const CACHE = 'comixow-v19-66';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -28,6 +28,9 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = e.request.url;
+
+  // Ignorar requests con esquemas no cacheables (chrome-extension, moz-extension, etc.)
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return;
 
   // No interceptar el reproductor externo — tiene su propia lógica
   if (url.includes('/reader/')) return;
