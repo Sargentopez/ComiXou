@@ -13193,48 +13193,35 @@ function edDeserLayer(d, pageOrientation){
     if(d.animKey)    l.animKey    = d.animKey;
     if(d._bibItemId) l._bibItemId = d._bibItemId;
     if(d._apngSrc) {
-      // APNG descargado de nube — loadAnim con string → decodeApng → N frames reales
+      // APNG descargado de nube — asignar, _edGifSetPlaying hará loadAnim al abrir visor
       l._apngSrc = d._apngSrc;
+      l._pngFrames = [d._apngSrc]; // señal para _edGifSetPlaying (length=1 con string APNG)
       l._fIdx = 0;
-      l.loadAnim(d._apngSrc, () => { l._applyFrame(0); if(typeof edRedraw==='function') edRedraw(); });
     } else if(d._pngFrames && d._pngFrames.length && d._pngFrames[0]) {
-      // _pngFrames con contenido real (no strings vacíos)
-      l._pngFrames=d._pngFrames;
-      l._fIdx=0;
-      l.loadAnim(l._pngFrames, () => { l._applyFrame(0); if(typeof edRedraw==='function') edRedraw(); });
+      // _pngFrames con contenido real — asignar directamente
+      l._pngFrames = d._pngFrames;
+      l._fIdx = 0;
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
       l._animPending = true; // señal: animación cargándose — img.onload no debe redibujar
       _edAnimIdbLoad(d._pngFramesKey).then(data => {
-        if(!data) return;
-        // data puede ser string dataUrl APNG o array de frames PNG
-        const input = (typeof data === 'string') ? data
-                    : (Array.isArray(data) && data.length) ? data : null;
-        if(!input) return;
+        if(!data) { l._animPending = false; return; }
         // Asignar al campo correcto para que _edGifSetPlaying lo detecte
-        if(typeof data === 'string') { l._apngSrc = data; }
-        else { l._pngFrames = data; }
-        // Cargar frames
-        l.loadAnim(input, () => {
-          l._animPending = false;
-          // Pintar frame 0 en _oc siempre — necesario para draw() aunque el visor esté cerrado
-          l._applyFrame(0);
-          if($('editorViewer')?.classList.contains('open')) {
-            l._playing = true;
-            l._applyFrame(0);
-            if(typeof edUpdateViewer==='function') edUpdateViewer();
-          } else {
-            if(typeof edRedraw==='function') edRedraw();
-          }
-        });
+        // NO llamar loadAnim aquí — _edGifSetPlaying lo hará al abrir el visor
+        if(typeof data === 'string') {
+          l._apngSrc   = data;
+          l._pngFrames = [data]; // length > 1 no aplica pero señal para _edGifSetPlaying
+        } else if(Array.isArray(data) && data.length) {
+          l._pngFrames = data;   // array de frames → _edGifSetPlaying lo reconoce
+        }
+        l._animPending = false;
+        if(typeof edRedraw === 'function') edRedraw();
       });
     }
     if(d.src){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        // Si hay animación cargándose, no redibujar — la animación actualizará _oc y redibujará
-        if(l._animPending) return;
         if(l._keepSize){ edRedraw(); if(window._gcpActive) _gcpRedraw(); return; }
         const _isV = (pageOrientation||'vertical') === 'vertical';
         const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
