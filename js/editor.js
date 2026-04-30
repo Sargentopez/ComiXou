@@ -13204,6 +13204,7 @@ function edDeserLayer(d, pageOrientation){
       l.loadAnim(l._pngFrames, () => { l._applyFrame(0); if(typeof edRedraw==='function') edRedraw(); });
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
+      l._animPending = true; // señal: animación cargándose — img.onload no debe redibujar
       _edAnimIdbLoad(d._pngFramesKey).then(data => {
         if(!data) return;
         // data puede ser string dataUrl APNG o array de frames PNG
@@ -13215,6 +13216,7 @@ function edDeserLayer(d, pageOrientation){
         else { l._pngFrames = data; }
         // Cargar frames
         l.loadAnim(input, () => {
+          l._animPending = false;
           // Pintar frame 0 en _oc siempre — necesario para draw() aunque el visor esté cerrado
           l._applyFrame(0);
           if($('editorViewer')?.classList.contains('open')) {
@@ -13231,6 +13233,8 @@ function edDeserLayer(d, pageOrientation){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
+        // Si hay animación cargándose, no redibujar — la animación actualizará _oc y redibujará
+        if(l._animPending) return;
         if(l._keepSize){ edRedraw(); if(window._gcpActive) _gcpRedraw(); return; }
         const _isV = (pageOrientation||'vertical') === 'vertical';
         const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
@@ -15452,7 +15456,7 @@ function EditorView_init(){
 
   // Actualizar al abrir el menú proyecto
   document.querySelector('[data-menu="project"]')?.addEventListener('pointerup', () => {
-    setTimeout(_edUpdateRecoverBtn, 50);
+    _edUpdateRecoverBtn(); // llamar inmediatamente — es async internamente
   });
 
   $('dd-recoverlocal')?.addEventListener('click', async () => {
