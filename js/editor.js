@@ -13196,12 +13196,12 @@ function edDeserLayer(d, pageOrientation){
       // APNG descargado de nube — loadAnim con string → decodeApng → N frames reales
       l._apngSrc = d._apngSrc;
       l._fIdx = 0;
-      l.loadAnim(d._apngSrc, () => { if(typeof edRedraw==='function') edRedraw(); });
+      l.loadAnim(d._apngSrc, () => { l._applyFrame(0); if(typeof edRedraw==='function') edRedraw(); });
     } else if(d._pngFrames && d._pngFrames.length && d._pngFrames[0]) {
       // _pngFrames con contenido real (no strings vacíos)
       l._pngFrames=d._pngFrames;
       l._fIdx=0;
-      l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
+      l.loadAnim(l._pngFrames, () => { l._applyFrame(0); if(typeof edRedraw==='function') edRedraw(); });
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
       _edAnimIdbLoad(d._pngFramesKey).then(data => {
@@ -13215,6 +13215,8 @@ function edDeserLayer(d, pageOrientation){
         else { l._pngFrames = data; }
         // Cargar frames
         l.loadAnim(input, () => {
+          // Pintar frame 0 en _oc siempre — necesario para draw() aunque el visor esté cerrado
+          l._applyFrame(0);
           if($('editorViewer')?.classList.contains('open')) {
             l._playing = true;
             l._applyFrame(0);
