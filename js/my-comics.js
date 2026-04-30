@@ -486,10 +486,38 @@ function _mcRenderList() {
         appAlert('No tienes permiso para eliminar esta obra.');
         return;
       }
-      appConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
+      appConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', async () => {
+        // Recoger animKeys/gifKeys antes de borrar para limpiar IDB
+        let _animKeys = [], _gifKeys = [];
+        try {
+          const full = ComicStore.getByIdFull
+            ? await ComicStore.getByIdFull(id)
+            : ComicStore.getById(id);
+          if (full && full.editorData && full.editorData.pages) {
+            full.editorData.pages.forEach(p => (p.layers||[]).forEach(l => {
+              if (l.animKey)       _animKeys.push(l.animKey);
+              if (l._pngFramesKey) _animKeys.push(l._pngFramesKey);
+              if (l.gifKey)        _gifKeys.push(l.gifKey);
+            }));
+          }
+        } catch(e) {}
+
+        // Borrar de ComicStore (OPFS + índice localStorage + cache + IDB prefijo <id>_*)
         ComicStore.remove(id);
+
+        // Borrar animKeys sueltas en IDB cxAnims (patrón anim_xxxx)
+        if (_animKeys.length) {
+          try {
+            const _idbReq = indexedDB.open('cxAnims', 1);
+            _idbReq.onsuccess = e => {
+              const _tx = e.target.result.transaction('anims', 'readwrite');
+              const _st = _tx.objectStore('anims');
+              _animKeys.forEach(k => { try { _st.delete(k); } catch(e2) {} });
+            };
+          } catch(e) {}
+        }
+
         _mcRenderList();
-        // Invalidar cache de portada
         if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
         if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
           SupabaseClient.deleteWork(comic.supabaseId)

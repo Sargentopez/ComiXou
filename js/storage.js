@@ -299,7 +299,38 @@ const ComicStore = (() => {
     _indexSave(list);
     _cache.delete(id);
     _opfsDelete(id); // async, no bloquea
+
+    // Borrar biblioteca del proyecto de localStorage
+    try { localStorage.removeItem('cs_biblioteca_' + id); } catch(e) {}
+
+    // Borrar entradas de animaciones en IDB cxAnims con prefijo del proyecto
+    _idbDeleteProjectAnims(id);
+
     _emit('remove', id);
+  }
+
+  // Borrar todas las entradas IDB de animaciones del proyecto
+  function _idbDeleteProjectAnims(id) {
+    try {
+      const req = indexedDB.open('cxAnims', 1);
+      req.onsuccess = e => {
+        try {
+          const db = e.target.result;
+          const tx = db.transaction('anims', 'readwrite');
+          const store = tx.objectStore('anims');
+          const rk = store.getAllKeys();
+          rk.onsuccess = () => {
+            const keys = rk.result || [];
+            keys.forEach(k => {
+              // Borrar claves con prefijo del proyecto: <id>_pi_li
+              if (typeof k === 'string' && k.startsWith(id + '_')) {
+                store.delete(k);
+              }
+            });
+          };
+        } catch(e) {}
+      };
+    } catch(e) {}
   }
 
   function createNew(userId, username) {

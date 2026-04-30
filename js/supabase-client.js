@@ -476,10 +476,16 @@ const SupabaseClient = (() => {
     // Borrar en orden FK: panel_layers → panel_texts → panels → works
     const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
     for (const p of (panels || [])) {
-      // Borrar GIFs del bucket antes de borrar las capas
+      // Borrar GIFs y APNGs del bucket antes de borrar las capas
       try {
         const gifLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.gif&select=gif_url`);
         for (const gl of (gifLayers || [])) { await _gifDelete(gl.gif_url); }
+      } catch(e) {}
+      try {
+        const animLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.image&select=anim_url`);
+        for (const al of (animLayers || [])) {
+          if (al.anim_url) { await _animDelete(al.anim_url).catch(() => {}); }
+        }
       } catch(e) {}
       await _delete('panel_layers', `panel_id=eq.${p.id}`);
       await _delete('panel_texts',  `panel_id=eq.${p.id}`);

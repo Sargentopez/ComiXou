@@ -12177,6 +12177,74 @@ function _edBubbleTailDir(l){
     return ex > 0 ? 'right' : 'left';
   }
 }
+/* ── Overlay de guardado — bloquea UI igual que el panel de Hojas ── */
+let _edSaveOverlayTimer  = null;
+let _edSaveOverlayStart  = 0;
+let _edSaveOverlayActive = false;
+
+function _edSaveOverlayShow(title) {
+  if (document.getElementById('_edSaveOverlay')) return;
+  _edSaveOverlayActive = true;
+  _edSaveOverlayStart  = Date.now();
+
+  const ov = document.createElement('div');
+  ov.id = '_edSaveOverlay';
+  ov.className = 'ed-fulloverlay';
+  ov.innerHTML = `
+    <div class="ed-fulloverlay-box" style="max-height:220px;padding:28px 24px 24px;text-align:center;gap:16px">
+      <div style="font-size:1.6rem" id="_edSaveOvIcon">💾</div>
+      <h2 style="font-size:1rem;font-weight:700;margin:0" id="_edSaveOvTitle">${title||'Guardando...'}</h2>
+      <div style="width:100%;height:8px;background:var(--gray-200,#eee);border-radius:99px;overflow:hidden;margin:4px 0">
+        <div id="_edSaveOvBar" style="height:100%;width:0%;background:var(--black,#111);border-radius:99px;transition:width .3s ease"></div>
+      </div>
+      <p id="_edSaveOvMsg" style="font-size:.82rem;color:var(--gray-600,#555);margin:0">Preparando...</p>
+      <p id="_edSaveOvTimer" style="font-size:.75rem;color:var(--gray-400,#999);margin:0">0s</p>
+    </div>`;
+  document.body.appendChild(ov);
+  // Forzar reflow para que la animación CSS arranque
+  requestAnimationFrame(() => requestAnimationFrame(() => ov.classList.add('open')));
+
+  // Actualizar contador de segundos
+  _edSaveOverlayTimer = setInterval(() => {
+    const el = document.getElementById('_edSaveOvTimer');
+    if (el) el.textContent = Math.floor((Date.now() - _edSaveOverlayStart) / 1000) + 's';
+  }, 1000);
+}
+
+function _edSaveOverlayUpdate(msg, pct) {
+  const msgEl = document.getElementById('_edSaveOvMsg');
+  const barEl = document.getElementById('_edSaveOvBar');
+  if (msgEl && msg  !== undefined) msgEl.textContent = msg;
+  if (barEl && pct  !== undefined) barEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
+}
+
+function _edSaveOverlayClose(success) {
+  _edSaveOverlayActive = false;
+  clearInterval(_edSaveOverlayTimer);
+  _edSaveOverlayTimer = null;
+  const ov = document.getElementById('_edSaveOverlay');
+  if (!ov) return;
+  // Mostrar resultado brevemente antes de cerrar
+  const icon  = document.getElementById('_edSaveOvIcon');
+  const title = document.getElementById('_edSaveOvTitle');
+  const msg   = document.getElementById('_edSaveOvMsg');
+  const bar   = document.getElementById('_edSaveOvBar');
+  if (success === false) {
+    if (icon)  icon.textContent  = '⚠️';
+    if (title) title.textContent = 'Error al guardar';
+    if (msg)   msg.textContent   = 'Comprueba tu conexión e inténtalo de nuevo';
+    if (bar)   bar.style.background = '#e63030';
+  } else {
+    if (icon)  icon.textContent  = '✅';
+    if (title) title.textContent = 'Guardado correctamente';
+    if (bar)   { bar.style.width = '100%'; }
+  }
+  setTimeout(() => {
+    ov.classList.remove('open');
+    setTimeout(() => ov.remove(), 260);
+  }, success === false ? 1800 : 800);
+}
+
 let _edCloudSavingStart = 0;
 let _edCloudSavingTimer = null;
 function _edCloudSavingUpdateBadge() {
@@ -12207,8 +12275,8 @@ async function edCloudSave() {
     return;
   }
 
-  // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
-  await edSaveProject();
+  // Guardar localmente primero — suppressOverlay=true para no mostrar overlay doble
+  _edSaveOverlayShow('Guardando...'); _edSaveOverlayUpdate('Guardando en dispositivo...', 15); await edSaveProject(true);
 
   const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
@@ -12225,11 +12293,13 @@ async function edCloudSave() {
   _edCloudSavingStart = Date.now();
   _edCloudSavingUpdateBadge();
 
+  // Actualizar overlay (ya abierto) para fase nube
+  _edSaveOverlayUpdate('Subiendo a la nube...', 40);
+
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
-    edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+    _edSaveOverlayUpdate('Sincronizando biblioteca...', 90);
     // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
-    // El autor deberá volver a solicitar publicación.
     const _comicAfter = ComicStore.getById(edProjectId);
     if (_comicAfter && (_comicAfter.approved || _comicAfter.pendingReview)) {
       ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false });
@@ -12243,7 +12313,11 @@ async function edCloudSave() {
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
       } catch(e) { console.warn('bibSync error:', e); }
     }
+    _edSaveOverlayUpdate('Guardado ✓', 100);
+    _edSaveOverlayClose(true);
+    edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
   } catch(err) {
+    _edSaveOverlayClose(false);
     edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
     console.error('edCloudSave:', err);
   } finally {
@@ -12253,8 +12327,13 @@ async function edCloudSave() {
   }
 }
 
-async function edSaveProject(){
+async function edSaveProject(_suppressOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
+  // Mostrar overlay de guardado solo si no lo suprime quien llama
+  if (!_suppressOverlay) {
+    _edSaveOverlayShow('Guardando en dispositivo...');
+    _edSaveOverlayUpdate('Preparando datos...', 5);
+  }
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing = await (ComicStore.getByIdFull ? ComicStore.getByIdFull(edProjectId) : Promise.resolve(ComicStore.getById(edProjectId))) || {};
   // Guardar estado de cámara para restaurarlo al volver a editar
@@ -12348,6 +12427,7 @@ async function edSaveProject(){
     _edPages.push({layers:_pageLayers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient2});
   }
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
+  _edSaveOverlayUpdate('Guardando en OPFS...', 70);
 
   ComicStore.save({
     ...existing,
@@ -12368,7 +12448,11 @@ async function edSaveProject(){
     cloudNewer: false,
     // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
   });
-  edToast('Guardado ✓');
+  _edSaveOverlayUpdate('Guardado en OPFS ✓', 100);
+  if (!_suppressOverlay) {
+    _edSaveOverlayClose(true);
+    edToast('Guardado ✓');
+  }
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
   _edSavedHistoryIdx = edHistoryIdx;
   edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
@@ -14615,6 +14699,22 @@ async function edDiagnostico() {
           }
           const bibK=keys.filter(k=>typeof k==='string'&&k.startsWith('bib_'));
           if(bibK.length) L.push(inf('  Entradas biblioteca: '+bibK.length));
+          // Verificar animKeys de capas del proyecto activo
+          if(edProjectId&&edPages.length){
+            const animKeys=[];
+            edPages.forEach(p=>(p.layers||[]).forEach(l=>{
+              if(l.animKey) animKeys.push(l.animKey);
+              if(l.gifKey)  animKeys.push(l.gifKey);
+            }));
+            if(animKeys.length){
+              L.push(inf('  AnimKeys del proyecto: '+animKeys.length));
+              for(const ak of animKeys){
+                const found=keys.includes(ak);
+                if(found) L.push(ok('  '+ak+': en IDB ✓'));
+                else      L.push(err('  '+ak+': NO en IDB — animación puede no reproducirse'));
+              }
+            }
+          }
         }catch(ie){L.push(err('Error IDB: '+ie.message));}
         res();
       };
@@ -14630,19 +14730,22 @@ async function edDiagnostico() {
         const ref='H'+(pi+1)+'C'+(li+1)+' ('+l.type+')';
         if(l.type==='image'){
           if(l._animReady&&l._animFrames)       L.push(ok(ref+': APNG listo — '+l._animFrames.length+' frames'));
-          else if(l._isGcpImage&&l._pngFramesKey)L.push(warn(ref+': pendiente key='+l._pngFramesKey));
-          else if(l._isGcpImage&&l.animKey)     L.push(warn(ref+': animKey='+l.animKey+' (no cargado)'));
-          else if(l._isGcpImage)                L.push(err(ref+': _isGcpImage sin key ni frames'));
+          else if(l._isGcpImage&&l._pngFramesKey)L.push(inf(ref+': animación key='+l._pngFramesKey+' (se carga al abrir visor)'));
+          else if(l._isGcpImage&&l.animKey)     L.push(inf(ref+': animación animKey='+l.animKey+' (se carga al abrir visor)'));
+          else if(l._isGcpImage)                L.push(err(ref+': _isGcpImage sin key ni frames — puede no reproducirse'));
           else if(l.src)                        L.push(ok(ref+': imagen estática OK'));
           else                                  L.push(err(ref+': sin src'));
         } else if(l.type==='gif'){
           if(l._ready||l._gifReady) L.push(ok(ref+': GIF listo'));
-          else if(l.gifKey)         L.push(warn(ref+': GIF no cargado (key='+l.gifKey+')'));
+          else if(l.gifKey)         L.push(inf(ref+': GIF key='+l.gifKey+' (se carga al abrir visor)'));
           else                      L.push(err(ref+': GIF sin key'));
         } else if(l.type==='draw'||l.type==='stroke'){
-          if(l.src||l.img)                      L.push(ok(ref+': OK (bitmap)'));
-          else if((l.points||[]).length>0)      L.push(ok(ref+': OK ('+l.points.length+' puntos)'));
-          else                                  L.push(warn(ref+': sin datos'));
+          // StrokeLayer/DrawLayer son vectoriales — src es cache opcional
+          if(l.src||l.img)                                   L.push(ok(ref+': OK (bitmap cache)'));
+          else if((l.points||[]).length>0)                   L.push(ok(ref+': OK vectorial ('+l.points.length+' pts)'));
+          else if(l.type==='stroke'&&(l.width>0||l.height>0))L.push(ok(ref+': OK (stroke, render diferido)'));
+          else if(l.type==='draw')                           L.push(ok(ref+': OK (draw, render diferido)'));
+          else                                               L.push(warn(ref+': sin datos detectables'));
         } else if(l.type==='bubble'||l.type==='text'){
           L.push(ok(ref+': "'+((l.text||'').slice(0,20)||'(vacío)')+'"'));
         } else {
