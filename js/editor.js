@@ -14444,9 +14444,17 @@ function edSaveProjectModal(){
   const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
   // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
   if (_newTitle !== edProjectMeta.title) {
-    const _oldComic = ComicStore.getById(edProjectId) || {};
+    const _oldId    = edProjectId;
+    const _oldComic = ComicStore.getById(_oldId) || {};
     edProjectId = 'comic_' + Date.now();
     sessionStorage.setItem('cx_edit_id', edProjectId);
+    // Migrar biblioteca del ID anterior al nuevo ID
+    try {
+      const _bibOldKey = 'cs_biblioteca_' + _oldId;
+      const _bibNewKey = 'cs_biblioteca_' + edProjectId;
+      const _bibData = localStorage.getItem(_bibOldKey);
+      if (_bibData) localStorage.setItem(_bibNewKey, _bibData);
+    } catch(e) {}
     ComicStore.save({
       ..._oldComic,
       id: edProjectId,
@@ -15702,7 +15710,7 @@ const _BIB_THUMB_SIZE = 80;
 
 // Clave de localStorage: por proyecto si hay proyecto activo
 function _bibKey() {
-  return edProjectId ? `${_BIB_KEY_PREFIX}_${edProjectId}` : _BIB_KEY_PREFIX;
+  return _BIB_KEY_PREFIX; // biblioteca global — compartida entre todos los proyectos
 }
 
 // ── Storage ──────────────────────────────────────────────────────
