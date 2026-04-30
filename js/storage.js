@@ -379,7 +379,47 @@ const ComicStore = (() => {
   function getByUser(userId)  { return getAll().filter(c => c.userId === userId); }
   function getPublished()     { return getAll().filter(c => c.published); }
 
-  // Migración: mover obras de localStorage a OPFS en segundo plano
+  // Al arrancar: si el índice localStorage está vacío pero OPFS tiene datos,
+  // reconstruir el índice desde OPFS. Esto ocurre cuando el usuario borra
+  // localStorage (p.ej. "Clear site data" en DevTools) pero OPFS persiste.
+  async function _rebuildIndexFromOpfs() {
+    const current = _indexGetAll();
+    if (current.length > 0) return; // índice ya tiene datos — no reconstruir
+    try {
+      const root = await navigator.storage.getDirectory();
+      const dir  = await root.getDirectoryHandle('comics', { create: false }).catch(() => null);
+      if (!dir) return;
+      const rebuilt = [];
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind !== 'file' || !name.endsWith('.json')) continue;
+        try {
+          const file = await handle.getFile();
+          const data = JSON.parse(await file.text());
+          if (!data || !data.id) continue;
+          // Reconstruir entrada de índice desde los datos OPFS
+          const entry = {};
+          INDEX_FIELDS.forEach(k => { if (data[k] !== undefined) entry[k] = data[k]; });
+          if (data.panels && data.panels[0]) entry._thumb = data.panels[0].dataUrl || null;
+          if (entry.id) rebuilt.push(entry);
+        } catch(e) {}
+      }
+      if (rebuilt.length > 0) {
+        console.log('[ComicStore] Reconstruido índice desde OPFS:', rebuilt.length, 'obras');
+        _indexSave(rebuilt);
+        // Actualizar cache
+        rebuilt.forEach(e => { if (!_cache.has(e.id)) _cache.set(e.id, e); });
+      }
+    } catch(e) {}
+  }
+
+  // Iniciar reconstrucción al cargar (solo si índice vacío)
+  let _rebuildPromise = Promise.resolve();
+  if (navigator.storage && navigator.storage.getDirectory) {
+    _rebuildPromise = _rebuildIndexFromOpfs().catch(() => {});
+  }
+
+  // Exponer para que otros módulos puedan esperar a que el índice esté listo
+  window._comicStoreReady = _rebuildPromise;
   async function _migrate() {
     const list = _indexGetAll();
     let migrated = 0;

@@ -92,6 +92,9 @@ async function _mcSyncCloudDates() {
   const _mcUser = Auth.currentUser?.();
   if (typeof Auth === 'undefined' || !_mcUser) return;
 
+  // Esperar a que el índice esté reconstruido desde OPFS si localStorage estaba vacío
+  if (window._comicStoreReady) await window._comicStoreReady;
+
   // Diagnóstico del estado del índice al inicio de la sincronización
   const _allLocal = ComicStore.getAll();
   const locals = _allLocal.filter(c => c.supabaseId &&
