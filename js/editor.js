@@ -15710,14 +15710,20 @@ const _BIB_THUMB_SIZE = 80;
 
 // Clave de localStorage: por proyecto si hay proyecto activo
 function _bibKey() {
-  return _BIB_KEY_PREFIX; // biblioteca global — compartida entre todos los proyectos
+  return edProjectId ? `${_BIB_KEY_PREFIX}_${edProjectId}` : _BIB_KEY_PREFIX;
 }
 
 // ── Storage ──────────────────────────────────────────────────────
 function _bibLoad() {
   try {
     const d = JSON.parse(localStorage.getItem(_bibKey()) || 'null');
-    if (d && Array.isArray(d.folders)) return d;
+    if (d && Array.isArray(d.folders)) {
+      // Garantizar que la carpeta Animaciones siempre existe
+      if (!d.folders.find(f => f.name === 'Animaciones')) {
+        d.folders.push({ id: '__anim__', name: 'Animaciones', items: [] });
+      }
+      return d;
+    }
   } catch(e) {}
   // Migración: formato antiguo era array plano o clave global
   let oldItems = [];
