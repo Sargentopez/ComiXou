@@ -598,7 +598,20 @@ function _mcShowSyncDiag() {
     L.push('Sin datos — espera a que _mcSyncCloudDates complete');
   } else {
     diag.forEach(d => {
-      L.push('\n── ' + (d.title || d.id) + ' ──');
+      if (d._type === 'INIT') {
+        L.push('\n── INIT sincronización ──');
+        L.push('userId sesión: ' + (d.userId || 'NULL'));
+        L.push('username: ' + (d.username || 'NULL'));
+        L.push('obras en índice: ' + d.totalInIndex);
+        L.push('obras que pasan filtro userId: ' + d.localsFound);
+        if (d.allIds) {
+          d.allIds.forEach(c => {
+            L.push('  id:' + c.id + ' userId:' + (c.userId||'NULL') + ' localSaved:' + (c.localSavedAt||'NULL') + ' cloudOnly:' + c.cloudOnly);
+          });
+        }
+        return;
+      }
+      L.push('\n── ' + (d.title || d.id || 'obra') + ' ──');
       L.push('cloudDate:    ' + d.cloudDate);
       L.push('localSavedAt: ' + (d.localSavedAt || 'NULL'));
       L.push('updatedAt:    ' + (d.updatedAt || 'NULL'));
