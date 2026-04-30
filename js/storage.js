@@ -42,14 +42,26 @@ const ComicStore = (() => {
 
   async function _opfsWrite(id, data) {
     const dir = await _opfsDir();
-    if (!dir) return false;
+    if (!dir) {
+      window._opfsDiag = (window._opfsDiag||[]);
+      window._opfsDiag.push({t:Date.now(), id, step:'NO_DIR', err:'_opfsDir() returned null'});
+      return false;
+    }
     try {
       const fh = await dir.getFileHandle(id + '.json', { create: true });
       const w  = await fh.createWritable();
-      await w.write(JSON.stringify(data));
+      const json = JSON.stringify(data);
+      await w.write(json);
       await w.close();
+      window._opfsDiag = (window._opfsDiag||[]);
+      window._opfsDiag.push({t:Date.now(), id, step:'OK', bytes:json.length, hasEditorData:!!(data.editorData?.pages?.length), localSavedAt:data.localSavedAt||null});
       return true;
-    } catch(e) { console.warn('[ComicStore] OPFS write error:', e); return false; }
+    } catch(e) {
+      window._opfsDiag = (window._opfsDiag||[]);
+      window._opfsDiag.push({t:Date.now(), id, step:'ERROR', err:e.message||String(e)});
+      console.warn('[ComicStore] OPFS write error:', e);
+      return false;
+    }
   }
 
   async function _opfsRead(id) {

@@ -314,11 +314,13 @@ function _mcRenderList() {
           }
         } catch(e) { console.warn('fecha nube:', e); }
       }
+      // Determinar si hay datos locales válidos — tiene localSavedAt o editorData en memoria
+      const _hasLocalData = !!(comicToEdit.editorData?.pages?.length || comicToEdit.localSavedAt);
       const _needsDownload = comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && (
-        comicToEdit.cloudOnly ||
-        !comicToEdit.editorData?.pages?.length ||
-        _hasLegacyStrokes ||
-        _cloudNewer  // la nube tiene versión más reciente → descargar siempre
+        comicToEdit.cloudOnly ||   // solo existe en la nube, nunca se guardó localmente
+        _hasLegacyStrokes ||       // tiene strokes en formato antiguo que hay que reescribir
+        _cloudNewer ||             // la nube es explícitamente más reciente
+        !_hasLocalData             // no hay ningún rastro de datos locales
       );
       if (comicToEdit && _needsDownload) {
         _mcToast('\u23f3 Descargando obra de la nube\u2026 (puede tardar si contiene GIFs)');

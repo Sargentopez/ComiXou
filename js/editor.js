@@ -12265,10 +12265,10 @@ async function edCloudSave() {
   if (!Auth?.currentUser?.()) {
     // Sin sesión: ofrecer login en lugar de rechazar
     edToast('Inicia sesión para guardar en la nube');
-    setTimeout(() => {
+    setTimeout(async () => {
       if (confirm('¿Quieres iniciar sesión para guardar en la nube?')) {
         // Guardar localmente antes de salir al login
-        edSaveProject();
+        await edSaveProject();
         Router.go('login');
       }
     }, 400);
@@ -12438,7 +12438,7 @@ async function edSaveProject(_suppressOverlay){
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
   _edSaveOverlayUpdate('Guardando en OPFS...', 70);
 
-  await ComicStore.save({
+  const _savePayload = {
     ...existing,
     id:edProjectId,
     ...edProjectMeta,
@@ -12452,11 +12452,14 @@ async function edSaveProject(_suppressOverlay){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
-    // Al guardar localmente: esta es la versión local canónica
     cloudOnly:  false,
     cloudNewer: false,
-    // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
-  });
+  };
+  window._saveDiag = {t_start: Date.now(), id: edProjectId, pages: _edPages.length, suppressOverlay: !!_suppressOverlay};
+  const _saveResult = await ComicStore.save(_savePayload);
+  window._saveDiag.t_end = Date.now();
+  window._saveDiag.ms = window._saveDiag.t_end - window._saveDiag.t_start;
+  window._saveDiag.opfsDiag = window._opfsDiag ? [...window._opfsDiag] : [];
   _edSaveOverlayUpdate('Guardado en OPFS ✓', 100);
   if (!_suppressOverlay) {
     _edSaveOverlayClose(true);
@@ -14553,7 +14556,7 @@ function EditorView_destroy(){
   }
   edHideGearIcon();
 }
-function edSaveProjectModal(){
+async function edSaveProjectModal(){
   const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
   // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
   if (_newTitle !== edProjectMeta.title) {
@@ -14588,7 +14591,7 @@ function edSaveProjectModal(){
   edProjectMeta.navMode=$('edMNavMode').value;
   edProjectMeta.social =($('edMSocial')?.value||'').trim().slice(0,300);
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
-  edCloseProjectModal();edSaveProject();
+  edCloseProjectModal(); await edSaveProject();
 }
 
 /* ══════════════════════════════════════════
@@ -14808,6 +14811,63 @@ async function edDiagnostico() {
     });
   } else {
     L.push(warn('Sin capas (proyecto no cargado)'));
+  }
+
+  // ── DIAGNÓSTICO GUARDADO LOCAL ──────────────────────────────
+  L.push('\n── GUARDADO LOCAL (última operación) ──');
+  // Test OPFS disponibilidad y escritura
+  if (!navigator.storage || !navigator.storage.getDirectory) {
+    L.push(err('OPFS: NO disponible en este navegador'));
+  } else {
+    try {
+      const _testRoot = await navigator.storage.getDirectory();
+      L.push(ok('OPFS: getDirectory() OK'));
+      try {
+        const _th = await _testRoot.getFileHandle('_diag_test.tmp', { create: true });
+        const _tw = await _th.createWritable();
+        await _tw.write('test_' + Date.now());
+        await _tw.close();
+        const _tf = await _th.getFile();
+        const _tc = await _tf.text();
+        await _testRoot.removeEntry('_diag_test.tmp');
+        if (_tc.startsWith('test_')) L.push(ok('OPFS: write+read test OK'));
+        else L.push(err('OPFS: write test — datos corruptos: ' + _tc));
+      } catch(we) {
+        L.push(err('OPFS: write test FALLA — ' + we.message));
+        L.push(warn('  Posible causa: modo incógnito, cuota llena, permisos bloqueados'));
+      }
+    } catch(ge) {
+      L.push(err('OPFS: getDirectory() FALLA — ' + ge.message));
+    }
+  }
+  // Datos de la última operación de guardado
+  const _sd = window._saveDiag;
+  if (!_sd) {
+    L.push(warn('Sin datos — pulsa 💾 Guardar primero, luego abre este diagnóstico'));
+  } else {
+    L.push(inf('Última guardado — ID: ' + _sd.id + ', páginas: ' + _sd.pages + ', duración: ' + (_sd.ms||'?') + 'ms'));
+    const _od = _sd.opfsDiag || [];
+    if (!_od.length) {
+      L.push(err('_opfsWrite NO se ejecutó en el último guardado'));
+    } else {
+      const _last = _od[_od.length - 1];
+      if (_last.step === 'OK') L.push(ok('_opfsWrite: OK — ' + _last.bytes + ' bytes, editorData=' + _last.hasEditorData + ', localSavedAt=' + (_last.localSavedAt || 'null')));
+      else if (_last.step === 'NO_DIR') L.push(err('_opfsWrite: NO_DIR — _opfsDir() devuelve null'));
+      else L.push(err('_opfsWrite: ERROR — ' + _last.err));
+    }
+  }
+  // Índice localStorage para este proyecto
+  if (edProjectId) {
+    try {
+      const _idx2 = JSON.parse(localStorage.getItem('cs_comics') || '[]');
+      const _ent = _idx2.find(c => c.id === edProjectId);
+      if (_ent) {
+        L.push(inf('Índice — localSavedAt: ' + (_ent.localSavedAt || 'VACÍO')));
+        L.push(inf('Índice — cloudOnly: ' + !!_ent.cloudOnly + ' | cloudNewer: ' + !!_ent.cloudNewer));
+      } else {
+        L.push(err('Proyecto NO en índice localStorage'));
+      }
+    } catch(e) {}
   }
 
   // ── 6. BACKUP PC ─────────────────────────────────────────────
@@ -15076,9 +15136,9 @@ function EditorView_init(){
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
 
-    document.getElementById('_edExitYes').onclick = () => {
+    document.getElementById('_edExitYes').onclick = async () => {
       dlg.remove();
-      edSaveProject();
+      await edSaveProject();
       Router.go('my-comics');
     };
     document.getElementById('_edExitNo').onclick = () => {
