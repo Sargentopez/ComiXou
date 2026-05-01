@@ -14615,35 +14615,33 @@ async function edSaveProjectModal(){
       cloudNewer: false,
     });
 
-    // Reasignar claves IDB para que la copia sea independiente de la original
-    // Recorrer layers en memoria y duplicar entradas en IDB con nuevas claves
-    _edPages.forEach((p, pi) => {
-      (p.layers || []).forEach((la, li) => {
-        if (la.type === 'gif' && la.gifKey) {
-          // Crear nueva gifKey independiente
-          const _newGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-          const _oldGifKey = la.gifKey;
-          if (window._gifIdbLoad && window._gifIdbSave) {
-            window._gifIdbLoad(_oldGifKey).then(data => {
-              if (data) window._gifIdbSave(_newGifKey, data);
-            }).catch(() => {});
+    // Reasignar claves IDB para que la copia sea completamente independiente del original.
+    // Fire-and-forget: no bloqueamos el guardado, las copias IDB se hacen en paralelo.
+    (async () => {
+      for (const p of _edPages) {
+        for (const la of (p.layers || [])) {
+          if (la.type === 'gif' && la.gifKey) {
+            try {
+              const _data = window._gifIdbLoad ? await window._gifIdbLoad(la.gifKey) : null;
+              const _newKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              if (_data && window._gifIdbSave) await window._gifIdbSave(_newKey, _data);
+              la.gifKey = _newKey;
+            } catch(e) {}
           }
-          la.gifKey = _newGifKey;
-        }
-        if ((la.type === 'image') && la.animKey) {
-          // Crear nueva animKey independiente
-          const _newAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-          if (window._sbAnimIdbLoad && window._sbAnimIdbSave) {
-            window._sbAnimIdbLoad(la.animKey).then(data => {
-              if (data) window._sbAnimIdbSave(_newAnimKey, data);
-            }).catch(() => {});
+          if (la.type === 'image' && la.animKey) {
+            try {
+              const _data = window._sbAnimIdbLoad ? await window._sbAnimIdbLoad(la.animKey) : null;
+              const _newKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              if (_data && window._sbAnimIdbSave) await window._sbAnimIdbSave(_newKey, _data);
+              la.animKey = _newKey;
+              la._pngFramesKey = null; // se regenerará en edSaveProject
+            } catch(e) {}
           }
-          la.animKey = _newAnimKey;
-          la._pngFramesKey = null; // se regenerará en edSaveProject
         }
-      });
-    });
-  } // fin if (_newTitle !== edProjectMeta.title)  = _newTitle;
+      }
+    })();
+  }
+  edProjectMeta.title  = _newTitle;
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
