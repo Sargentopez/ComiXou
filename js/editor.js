@@ -14713,6 +14713,7 @@ function EditorView_init(){
   });
   $('edSaveBtn')?.addEventListener('click', () => edSaveProject());
   $('edCloudSaveBtn')?.addEventListener('click', edCloudSave);
+  $('edDiagBtn')?.addEventListener('click', _edRunDiag);
   $('edPreviewBtn')?.addEventListener('click', edOpenViewer);
   // Botón pantalla completa en topbar
   // Llama requestFullscreen directamente (sin la guarda inPWA de Fullscreen.enter)
@@ -18114,4 +18115,110 @@ function _gcpDownloadGif() {
   } catch(err) {
     edToast('Error al generar GIF: ' + err.message);
   }
+}
+
+// ── DIAGNÓSTICO GUARDADO LOCAL Y NUBE ────────────────────────────────────────
+async function _edRunDiag() {
+  const lines = [];
+  const L = s => lines.push(s);
+
+  L('══ DIAGNÓSTICO EDITOR ══');
+  L(new Date().toLocaleString());
+  L('Proyecto: ' + edProjectId + ' | Versión: ' + (document.querySelector('.app-version')?.textContent||'?'));
+
+  // 1. localStorage
+  try {
+    let _lsSize = 0;
+    for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; }
+    L('localStorage: ' + Math.round(_lsSize/1024) + ' KB');
+  } catch(e) { L('localStorage ERROR: ' + e.message); }
+
+  // 2. Comic en ComicStore
+  const comic = ComicStore.getById(edProjectId);
+  if (comic) {
+    L('ComicStore: OK supabaseId=' + (comic.supabaseId||'NO') + ' cloudOnly=' + comic.cloudOnly);
+    L('  updatedAt=' + (comic.updatedAt||'?') + ' localSavedAt=' + (comic.localSavedAt||'NULL'));
+    const pages = comic.editorData?.pages || [];
+    L('  páginas=' + pages.length);
+    pages.forEach((p, pi) => {
+      (p.layers||[]).forEach((l, li) => {
+        if (l.type === 'image' || l.type === 'gif') {
+          L('  L' + pi + '_' + li + ' type=' + l.type + ' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' apngSrc=' + (l._apngSrc?'sí':'NO'));
+        }
+      });
+    });
+  } else { L('ComicStore: NO ENCONTRADO'); }
+
+  // 3. IDB cxAnims — claves relevantes
+  try {
+    await new Promise((res) => {
+      const r = indexedDB.open('cxAnims', 1);
+      r.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+      r.onsuccess = e => {
+        const tx = e.target.result.transaction('anims','readonly');
+        const req = tx.objectStore('anims').getAllKeys();
+        req.onsuccess = ev => {
+          const ks = ev.target.result || [];
+          L('IDB cxAnims: ' + ks.length + ' entradas');
+          ks.forEach(k => L('  ' + k));
+          res();
+        };
+        req.onerror = () => { L('IDB getAllKeys error'); res(); };
+      };
+      r.onerror = () => { L('IDB open error'); res(); };
+    });
+  } catch(e) { L('IDB error: ' + e.message); }
+
+  // 4. Layers vivos en memoria
+  L('\n── Layers en memoria ──');
+  edPages.forEach((p, pi) => {
+    (p.layers||[]).forEach((l, li) => {
+      if (l.type === 'image' || l.type === 'gif') {
+        L('  L' + pi + '_' + li + ' type=' + l.type
+          + ' animKey=' + (l.animKey||'-')
+          + ' pngKey=' + (l._pngFramesKey||'-')
+          + ' apngSrc=' + (l._apngSrc?'sí('+l._apngSrc.length+')':'NO')
+          + ' pngFrames=' + (l._pngFrames?l._pngFrames.length:'NO')
+          + ' animReady=' + (l._animReady?'sí':'NO'));
+      }
+    });
+  });
+
+  // 5. Biblioteca local
+  L('\n── Biblioteca ──');
+  const bib = _bibLoad();
+  (bib.folders||[]).forEach(f => {
+    L('Carpeta ' + f.id + ': ' + (f.items||[]).length + ' items');
+    (f.items||[]).forEach(item => {
+      L('  ' + item.id + ' isGifAnim=' + item.isGifAnim
+        + ' apngSrc=' + (item.apngSrc?'sí':'NO')
+        + ' _apngIdbKey=' + (item._apngIdbKey||'NO')
+        + ' pngFrames=' + (item.pngFrames?item.pngFrames.length:'NO'));
+    });
+  });
+
+  // Mostrar panel
+  let p = document.getElementById('_edDiagPanel');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = '_edDiagPanel';
+    p.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;background:#111;color:#0f0;font:11px monospace;display:flex;flex-direction:column;padding:8px;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px;flex-shrink:0';
+    hdr.innerHTML = '<b style="color:#fff">DIAGNÓSTICO EDITOR</b>';
+    const btns = document.createElement('div');
+    const cp = document.createElement('button');
+    cp.textContent='📋 Copiar'; cp.style.cssText='padding:2px 8px;cursor:pointer;margin-right:4px;';
+    cp.onclick=()=>{const ta=document.getElementById('_edDiagTa');ta.select();document.execCommand('copy');cp.textContent='✓';};
+    const cl = document.createElement('button');
+    cl.textContent='✕'; cl.style.cssText='padding:2px 8px;cursor:pointer;';
+    cl.onclick=()=>p.remove();
+    btns.append(cp,cl); hdr.appendChild(btns); p.appendChild(hdr);
+    const ta = document.createElement('textarea');
+    ta.id='_edDiagTa';
+    ta.style.cssText='flex:1;width:100%;background:#111;color:#0f0;border:none;font:11px monospace;padding:4px;box-sizing:border-box;resize:none;';
+    ta.readOnly=true; p.appendChild(ta);
+    document.body.appendChild(p);
+  }
+  document.getElementById('_edDiagTa').value = lines.join('\n');
 }

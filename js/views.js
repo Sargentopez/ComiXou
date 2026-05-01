@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v19.50</footer>
+    <footer class="app-version">v20.32</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -206,6 +206,7 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
+        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         <button class="ed-top-action" id="edSaveBtn" title="Guardar local">💾</button>
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>

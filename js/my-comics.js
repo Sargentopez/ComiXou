@@ -252,6 +252,19 @@ function _mcRenderList() {
     </div>`;
   }).join('');
 
+  // Botón de diagnóstico
+  {
+    let _diagDiv = document.getElementById('_mcDiagBtn');
+    if (!_diagDiv) {
+      _diagDiv = document.createElement('div');
+      _diagDiv.id = '_mcDiagBtn';
+      _diagDiv.style.cssText = 'text-align:center;padding:8px;margin-top:4px';
+      _diagDiv.innerHTML = '<button style="font-size:.7rem;padding:3px 10px;background:transparent;border:1px solid var(--gray-400);border-radius:8px;color:var(--gray-500);cursor:pointer">🔍 Diagnóstico</button>';
+      _diagDiv.querySelector('button').onclick = _mcRunDiag;
+      wrap.appendChild(_diagDiv);
+    }
+  }
+
   // Cargar miniaturas lazy para obras cloudOnly (Intersection Observer)
   const _thumbObs = new IntersectionObserver(entries => {
     entries.forEach(entry => {
@@ -418,6 +431,47 @@ function _mcRenderList() {
           return;
         }
       }
+
+      // Sincronizar biblioteca siempre — independiente de _needsDownload
+      // Solo afecta a localStorage de biblioteca, no a layers ni editorData
+      {
+        const _bibUser = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
+        const _bibSbId = comicToEdit.supabaseId || comicToEdit.id;
+        if (_bibUser && _bibUser.id && _bibSbId && typeof SupabaseClient.bibDownload === 'function') {
+          try {
+            const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
+            const _bibLocal = (() => { try { return JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) { return null; } })();
+            const _bibHasAnim = _bibLocal && _bibLocal.folders && _bibLocal.folders.some(f => f.id === '__anim__' && f.items.length > 0);
+            if (!_bibHasAnim) {
+              const _cloudBib = await SupabaseClient.bibDownload(_bibUser.id, _bibSbId);
+              if (_cloudBib && _cloudBib.folders && _cloudBib.folders.length) {
+                const _localBib = _bibLocal || { folders: [{ id: '__root__', name: 'General', items: [] }] };
+                const _localIds = new Set(_localBib.folders.flatMap(f => f.items.map(i => i.id)));
+                const _bibIdbW = [];
+                _cloudBib.folders.forEach(cf => {
+                  const lf = _localBib.folders.find(f => f.id === cf.id);
+                  const newItems = cf.items.filter(i => !_localIds.has(i.id)).map(item => {
+                    if (item.isGifAnim && item.apngSrc) {
+                      const _k = 'bib_' + item.id;
+                      if (window._sbAnimIdbSave) _bibIdbW.push(window._sbAnimIdbSave(_k, item.apngSrc).catch(() => {}));
+                      const c = Object.assign({}, item);
+                      delete c.apngSrc; c._apngIdbKey = _k; return c;
+                    }
+                    return item;
+                  });
+                  if (newItems.length) {
+                    if (lf) lf.items.push(...newItems);
+                    else _localBib.folders.push({ id: cf.id, name: cf.name, items: newItems });
+                  }
+                });
+                if (_bibIdbW.length) await Promise.all(_bibIdbW);
+                try { localStorage.setItem(_bibKey, JSON.stringify(_localBib)); } catch(e) {}
+              }
+            }
+          } catch(e) { console.warn('bibDownload:', e); }
+        }
+      }
+
       // Guardar qué proyecto editar y navegar al editor
       sessionStorage.setItem('cx_edit_id', id);
       Router.go('editor');
@@ -740,4 +794,118 @@ function _mcCloseReaderModal() {
   overlay.classList.add('hidden');
   overlay.querySelector('.reader-modal-frame').src = '';
   document.body.style.overflow = '';
+}
+
+// ── DIAGNÓSTICO ──────────────────────────────────────────────────────────────
+async function _mcRunDiag() {
+  const lines = [];
+  const L = s => lines.push(s);
+  const ok = s => '✅ ' + s;
+  const err = s => '❌ ' + s;
+  const warn = s => '⚠️ ' + s;
+
+  L('══ DIAGNÓSTICO BIBLIOTECA ══');
+  L(new Date().toLocaleString());
+
+  // 1. localStorage disponible y tamaño
+  try {
+    const _testKey = '__diag_test__';
+    localStorage.setItem(_testKey, '1');
+    localStorage.removeItem(_testKey);
+    let _lsSize = 0;
+    for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; }
+    L(ok('localStorage: OK (' + Math.round(_lsSize/1024) + ' KB usados)'));
+  } catch(e) { L(err('localStorage: ' + e.message)); }
+
+  // 2. IDB cxAnims disponible
+  try {
+    await new Promise((res, rej) => {
+      const r = indexedDB.open('cxAnims', 1);
+      r.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+      r.onsuccess = e => {
+        const db = e.target.result;
+        const keys = [];
+        const tx = db.transaction('anims', 'readonly');
+        const req = tx.objectStore('anims').getAllKeys();
+        req.onsuccess = ev => {
+          const ks = ev.target.result || [];
+          L(ok('IDB cxAnims: OK (' + ks.length + ' entradas) keys=' + ks.slice(0,5).join(',') + (ks.length>5?'...':'')));
+          res();
+        };
+        req.onerror = () => { L(warn('IDB cxAnims: getAllKeys falló')); res(); };
+      };
+      r.onerror = () => { L(err('IDB cxAnims: no disponible')); rej(); };
+    });
+  } catch(e) { L(err('IDB: ' + e.message)); }
+
+  // 3. Usuario y supabaseId de obras locales
+  const user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+  L(user ? ok('Usuario: ' + user.username + ' (' + user.id.slice(0,8) + '...)') : err('Sin usuario'));
+
+  // 4. Biblioteca local por obra
+  const comics = ComicStore.getAll().filter(c => c.supabaseId);
+  L('Obras con supabaseId: ' + comics.length);
+  for (const c of comics.slice(0,5)) {
+    const _bibKey = 'cs_biblioteca_' + c.id;
+    const _bib = (() => { try { return JSON.parse(localStorage.getItem(_bibKey)||'null'); } catch(e) { return null; } })();
+    const _animFolder = _bib && _bib.folders && _bib.folders.find(f => f.id === '__anim__');
+    const _animCount = _animFolder ? _animFolder.items.length : 0;
+    L('  ' + c.title + ' (' + c.id.slice(0,8) + '): bib=' + (_bib?'sí':'NO') + ' animItems=' + _animCount);
+    if (_animFolder && _animFolder.items.length) {
+      for (const item of _animFolder.items) {
+        const hasApngIdbKey = !!item._apngIdbKey;
+        const hasApngSrc = !!item.apngSrc;
+        L('    item ' + item.id + ': _apngIdbKey=' + (item._apngIdbKey||'NO') + ' apngSrc=' + (hasApngSrc?'sí':'NO'));
+        if (item._apngIdbKey && window._sbAnimIdbLoad) {
+          try {
+            const d = await window._sbAnimIdbLoad(item._apngIdbKey);
+            L('    IDB[' + item._apngIdbKey + ']: ' + (d ? (typeof d === 'string' ? 'string('+d.length+')' : 'array('+d.length+')') : 'NULL'));
+          } catch(e) { L('    IDB error: ' + e.message); }
+        }
+      }
+    }
+  }
+
+  // 5. Intentar bibDownload para la obra más reciente con supabaseId
+  if (user && comics.length) {
+    const c = comics[0];
+    L('\n── bibDownload test: ' + c.title + ' ──');
+    try {
+      const cloudData = await SupabaseClient.bibDownload(user.id, c.supabaseId || c.id);
+      L(ok('bibDownload: OK, folders=' + (cloudData?.folders?.length||0)));
+      if (cloudData && cloudData.folders) {
+        cloudData.folders.forEach(f => {
+          L('  folder ' + f.id + ': ' + f.items.length + ' items');
+          f.items.forEach(item => {
+            L('    ' + item.id + ' isGifAnim=' + item.isGifAnim + ' apngSrc=' + (item.apngSrc?'sí('+item.apngSrc.length+')':'NO') + ' gifDataUrl=' + (item.gifDataUrl?'sí':'NO'));
+          });
+        });
+      }
+    } catch(e) { L(err('bibDownload: ' + e.message)); }
+  }
+
+  // Mostrar panel
+  let p = document.getElementById('_mcDiagPanel');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = '_mcDiagPanel';
+    p.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;background:#111;color:#0f0;font:11px monospace;display:flex;flex-direction:column;padding:8px;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px;flex-shrink:0';
+    hdr.innerHTML = '<b style="color:#fff">DIAGNÓSTICO BIBLIOTECA</b>';
+    const btns = document.createElement('div');
+    const cp = document.createElement('button');
+    cp.textContent='📋 Copiar'; cp.style.cssText='padding:2px 8px;cursor:pointer;margin-right:4px;';
+    cp.onclick=()=>{const ta=document.getElementById('_mcDiagTa');ta.select();document.execCommand('copy');cp.textContent='✓';};
+    const cl = document.createElement('button');
+    cl.textContent='✕'; cl.style.cssText='padding:2px 8px;cursor:pointer;';
+    cl.onclick=()=>p.remove();
+    btns.append(cp,cl); hdr.appendChild(btns); p.appendChild(hdr);
+    const ta = document.createElement('textarea');
+    ta.id='_mcDiagTa';
+    ta.style.cssText='flex:1;width:100%;background:#111;color:#0f0;border:none;font:11px monospace;padding:4px;box-sizing:border-box;resize:none;';
+    ta.readOnly=true; p.appendChild(ta);
+    document.body.appendChild(p);
+  }
+  document.getElementById('_mcDiagTa').value = lines.join('\n');
 }
