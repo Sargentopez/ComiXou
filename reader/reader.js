@@ -965,85 +965,203 @@ async function loadWork(workId) {
 }
 
 // ── CARGA LOCAL (preview desde editor sin pasar por Supabase) ──
+// Replica exactamente el flujo de _loadPanels + preloadImages pero
+// obteniendo los datos de las IDB locales en lugar de URLs remotas.
 async function loadLocal(key) {
   setLoadingMsg('Cargando vista previa...');
   try {
     const raw = localStorage.getItem(key);
     if (!raw) { showError('Vista previa no encontrada o expirada.'); return; }
-    setTimeout(() => { try { localStorage.removeItem(key); } catch(e) {} }, 10000);
+    // Borrar la clave tras 30s (limpieza)
+    setTimeout(() => { try { localStorage.removeItem(key); } catch(e) {} }, 30000);
+
     const data = JSON.parse(raw);
     if (!data || !data.pages || !data.pages.length) { showError('Sin páginas.'); return; }
+
+    // Metadatos de la obra — igual que loadDraft asigna desde work[0]
     RS._workTitle  = data.title  || 'Vista previa';
     RS._workAuthor = data.author || '';
     RS._workSocial = data.social || '';
     RS.navMode     = data.navMode || 'fixed';
     document.title = RS._workTitle + ' — ComiXow';
-    RS.panels = data.pages.map((p, pi) => ({
-      id: 'local_' + pi,
-      orientation: p.orientation || data.orientation || 'v',
-      text_mode: p.textMode || 'sequential',
-      layers: (p.layers || []).map(l => ({ ...l })),
-      texts: (p.layers || []).filter(l => l.type === 'text' || l.type === 'bubble')
-             .map((l, ti) => ({ text: l.text || '', seq_order: ti })),
-    }));
-    const _last = RS.panels[RS.panels.length - 1];
-    RS.panels.push({ id: 'credits', isCredits: true, orientation: _last?.orientation || 'v', layers: [], texts: [] });
-    setLoadingMsg('Preparando imágenes...');
-    await _preloadLocal();
-    startReader();
-  } catch(err) { console.error('loadLocal:', err); showError('Error en vista previa local.'); }
-}
 
-async function _preloadLocal() {
-  const total = RS.panels.filter(p => !p.isCredits).length;
-  let done = 0;
-  await Promise.all(RS.panels.map(async panel => {
-    if (panel.isCredits) return;
-    await Promise.all((panel.layers || []).map(async layer => {
-      if (layer.type === 'image') {
-        const _key = layer.animKey || layer._pngFramesKey;
-        if (_key) {
-          const _data = await _localIdbGet('cxAnims', 'anims', _key);
-          if (_data && window.ApngDecoder) {
-            try {
-              const _input = typeof _data === 'string' ? _data : (Array.isArray(_data) ? _data : null);
-              if (_input) {
-                const dec = await window.ApngDecoder.decode(_input, layer._gcpFrameDelay || 100);
-                layer._animFrames = dec.frames; layer._animOc = dec.oc;
-                layer._animReady  = true;       layer._gcpFrameDelay = dec.delay;
-              }
-            } catch(e) {}
+    setLoadingMsg('Cargando páginas...');
+
+    // Construir RS.panels — mismo proceso que _loadPanels pero desde editorData.pages
+    RS.panels = await Promise.all(data.pages.map(async (p, pi) => {
+      // Capas — equivalente a parsear layer_data de panel_layers
+      // Los layers ya están deserializados (vienen de edSerLayer)
+      // Necesitan el mismo tratamiento que _loadPanels hace con layer_data:
+      // - gif: obtener datos desde IDB cxGifs (equivalente a gif_url)
+      // - image animada: obtener APNG desde IDB cxAnims (equivalente a anim_url → _apngSrc)
+      // - resto: usar src directamente
+      const layers = await Promise.all((p.layers || []).map(async l => {
+        const layer = { ...l };
+
+        if (layer.type === 'gif') {
+          // Equivale a: if (l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
+          // Pero aquí el gif está en IDB cxGifs por gifKey
+          if (layer.gifKey) {
+            const gifData = await _localIdbGet('cxGifs', 'gifs', layer.gifKey);
+            if (gifData) {
+              layer._gifDataUrl = gifData; // dataUrl del GIF — equivalente al _gifUrl descargado
+            } else if (layer._gifUrl) {
+              // Fallback: URL pública si existe (se guardó al descargar de nube)
+              layer._gifDataUrl = layer._gifUrl; // se usará como URL de fetch en preloadImages
+            }
           }
         }
-        if (!layer._animReady && layer.src) {
-          const img = new Image();
-          await new Promise(r => { img.onload = r; img.onerror = r; img.src = layer.src; });
-          layer.img = img;
+
+        if (layer.type === 'image' && (layer.animKey || layer._pngFramesKey)) {
+          // Equivale a: if (l.type === 'image' && r.anim_url) _apngSrc = await _animDownload(anim_url)
+          // Pero aquí el APNG está en IDB cxAnims por animKey o _pngFramesKey
+          const _idbKey = layer.animKey || layer._pngFramesKey;
+          const animData = await _localIdbGet('cxAnims', 'anims', _idbKey);
+          if (animData) {
+            if (typeof animData === 'string') {
+              layer._apngSrc = animData; // dataUrl APNG completo
+            } else if (Array.isArray(animData) && animData.length) {
+              // Array de frames PNG — usar el primero como src y guardar todos
+              layer._apngSrc   = animData[0];
+              layer._pngFrames = animData; // para que ApngDecoder use decodeFrameArray
+            }
+          }
         }
-      } else if (layer.type === 'gif' && layer.gifKey) {
-        const src = await _localIdbGet('cxGifs', 'gifs', layer.gifKey);
-        if (src) {
-          const img = new Image();
-          await new Promise(r => { img.onload = r; img.onerror = r; img.src = src; });
-          layer.img = img; layer._gifReady = true;
-        } else if (layer._gifUrl) {
-          try {
-            const r = await fetch(layer._gifUrl);
-            if (r.ok) { const b = await r.blob(); const img = new Image(); const u = URL.createObjectURL(b); await new Promise(res => { img.onload = res; img.src = u; }); layer.img = img; layer._gifReady = true; }
-          } catch(e) {}
-        }
-      } else if ((layer.type === 'draw' || layer.type === 'stroke' || layer.type === 'line') && layer.src) {
-        const img = new Image();
-        await new Promise(r => { img.onload = r; img.onerror = r; img.src = layer.src; });
-        layer.img = img;
-      }
+
+        return layer;
+      }));
+
+      // Textos — equivalente a panel_texts
+      // En local los textos están dentro de las capas (type=text o type=bubble)
+      const panelTexts = layers
+        .filter(l => l.type === 'bubble' || l.type === 'text')
+        .sort((a, b) => (a._seqOrder || 0) - (b._seqOrder || 0))
+        .map((l, i) => ({
+          text:       l.text       || '',
+          text_order: l._seqOrder  || i,
+          panel_id:   'local_' + pi,
+          id:         'lt_' + pi + '_' + i,
+        }));
+
+      return {
+        id:          'local_' + pi,
+        orientation: p.orientation || data.orientation || 'v',
+        text_mode:   p.textMode    || 'sequential',
+        textLayerOpacity: p.textLayerOpacity !== undefined ? p.textLayerOpacity : 1,
+        layers,
+        texts: panelTexts,
+      };
     }));
-    done++;
-    setLoadingProgress((done / total) * 95, '');
+
+    // Añadir hoja de créditos — igual que loadDraft
+    const _lastPanel = RS.panels[RS.panels.length - 1];
+    RS.panels.push({
+      id: 'credits', isCredits: true,
+      orientation: _lastPanel?.orientation || 'v',
+      layers: [], texts: [],
+    });
+
+    setLoadingMsg('Preparando imágenes...');
+    // Precargar imágenes — exactamente igual que preloadImages() de la nube
+    await preloadImagesLocal();
+    startReader();
+
+  } catch(err) {
+    console.error('Error loadLocal:', err);
+    showError('Error en vista previa local. Guarda la obra en el editor e inténtalo de nuevo.');
+  }
+}
+
+// Equivalente a preloadImages() pero para modo local.
+// Los GIFs vienen de IDB (ya como dataUrl), los APNGs de IDB (ya como _apngSrc).
+// El proceso de decodificación es idéntico a preloadImages().
+async function preloadImagesLocal() {
+  RS.images = [];
+  const totalPanels = RS.panels.filter(p => !p.isCredits && (p.layers||[]).length > 0).length;
+  let loadedPanels = 0;
+  setLoadingProgress(0, '');
+  setLoadingMsg('Cargando imágenes...');
+
+  await Promise.all(RS.panels.map(async (panel, pi) => {
+    panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
+
+      // GIF — equivalente al bloque gif de preloadImages
+      if (layer.type === 'gif') {
+        const gifSrc = layer._gifDataUrl;
+        if (!gifSrc) return Promise.resolve(null);
+
+        // Si es una URL pública (http), hacer fetch igual que preloadImages
+        // Si es un dataUrl (data:), leerlo directamente
+        const _getDataUrl = typeof gifSrc === 'string' && gifSrc.startsWith('data:')
+          ? Promise.resolve(gifSrc)
+          : fetch(gifSrc).then(r => r.blob()).then(blob => new Promise(res => {
+              const fr = new FileReader();
+              fr.onload = e => res(e.target.result);
+              fr.readAsDataURL(blob);
+            }));
+
+        return _getDataUrl
+          .then(dataUrl => window.GifDecoder ? window.GifDecoder.decode(dataUrl) : null)
+          .then(decoded => {
+            if (!decoded || !decoded.frames.length) return null;
+            const oc = document.createElement('canvas');
+            oc.width = decoded.width; oc.height = decoded.height;
+            oc.getContext('2d').putImageData(decoded.frames[0].imageData, 0, 0);
+            layer._gifFrames = decoded.frames;
+            layer._gifIdx    = 0;
+            layer._gifOc     = oc;
+            layer._gifReady  = true;
+            return oc;
+          })
+          .catch(() => null);
+      }
+
+      // APNG — equivalente al bloque _apngSrc de preloadImages
+      // Exactamente el mismo código
+      if (layer._apngSrc && window.ApngDecoder) {
+        return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
+          .then(function(result) {
+            layer._animFrames    = result.frames;
+            layer._animIdx       = 0;
+            layer._animLastTick  = 0;
+            layer._animPlayCount = 0;
+            layer._animOc        = document.createElement('canvas');
+            layer._animOc.width  = result.width;
+            layer._animOc.height = result.height;
+            layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
+            layer._animReady     = true;
+            return layer._animOc;
+          }).catch(function() { return null; });
+      }
+
+      // Imagen estática / draw / stroke / line / shape
+      // Exactamente igual que preloadImages
+      const src = layer.renderDataUrl || layer.src || layer.dataUrl;
+      if (!src) return Promise.resolve(null);
+      const needsImg = layer.renderDataUrl ||
+        layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
+        layer.type === 'line'  || layer.type === 'shape';
+      if (!needsImg) return Promise.resolve(null);
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload  = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = src;
+      });
+    }));
+
+    if (!panel.isCredits && (panel.layers||[]).length > 0) {
+      loadedPanels++;
+      const pct = totalPanels > 0 ? (loadedPanels / totalPanels) * 95 : 0;
+      setLoadingMsg('Cargando hoja ' + loadedPanels + ' de ' + totalPanels + '...');
+      setLoadingProgress(pct, '');
+    }
   }));
+
   setLoadingProgress(100, '');
 }
 
+// Leer de IndexedDB local por nombre de DB, store y clave
 function _localIdbGet(dbName, storeName, key) {
   return new Promise(res => {
     const req = indexedDB.open(dbName, 1);

@@ -98,6 +98,48 @@ async function openShareModal(comic) {
 
   const _hasLocal = !!(_comicFull?.editorData?.pages?.length);
 
+  // Iniciar registro de diagnóstico del envío
+  const _shareDiag = {
+    t:           new Date().toISOString(),
+    comicId:     comic.id,
+    title:       comic.title || '?',
+    hasLocal:    _hasLocal,
+    cloudOnly:   !!comic.cloudOnly,
+    supabaseId:  comic.supabaseId || null,
+    published:   !!comic.published,
+    pagesCount:  _comicFull?.editorData?.pages?.length || 0,
+    mode:        _hasLocal ? 'LOCAL' : (comic.supabaseId ? 'NUBE' : 'ERROR'),
+    layersSummary: [],
+    localStorageKey: null,
+    localStorageBytes: null,
+    url: null,
+    error: null,
+  };
+  // Analizar capas para diagnóstico
+  if (_hasLocal && _comicFull?.editorData?.pages) {
+    _comicFull.editorData.pages.forEach((p, pi) => {
+      (p.layers || []).forEach((l, li) => {
+        const info = { page: pi+1, layer: li+1, type: l.type };
+        if (l.type === 'image') {
+          info.animKey       = l.animKey       || null;
+          info.pngFramesKey  = l._pngFramesKey || null;
+          info.hasSrc        = !!l.src;
+        }
+        if (l.type === 'gif') {
+          info.gifKey   = l.gifKey   || null;
+          info.gifUrl   = l._gifUrl  || null;
+        }
+        if (l.type === 'draw' || l.type === 'stroke' || l.type === 'line') {
+          info.hasSrc   = !!l.src;
+          info.hasPoints = !!(l.points && l.points.length);
+        }
+        _shareDiag.layersSummary.push(info);
+      });
+    });
+  }
+  // Guardar diagnóstico en window para que el panel lo muestre
+  window._shareDiag = _shareDiag;
+
   if (_hasLocal) {
     // ── MODO LOCAL: serializar editorData en localStorage temporal ──
     // El reader lo leerá desde ?local=<key> sin tocar Supabase
@@ -138,17 +180,24 @@ async function openShareModal(comic) {
       })),
     };
     try {
-      localStorage.setItem(_key, JSON.stringify(_payload));
+      const _payloadStr = JSON.stringify(_payload);
+      localStorage.setItem(_key, _payloadStr);
+      _shareDiag.localStorageKey   = _key;
+      _shareDiag.localStorageBytes = _payloadStr.length;
     } catch(e) {
+      _shareDiag.error = 'localStorage.setItem falló: ' + e.message;
+      window._shareDiag = _shareDiag;
       appAlert('No hay espacio suficiente para compartir. Libera espacio e inténtalo de nuevo.');
       return;
     }
     url = base + '/reader/index.html?local=' + _key + '&from=app';
+    _shareDiag.url = url;
 
   } else if (comic.supabaseId) {
     // ── MODO NUBE: enlace directo a Supabase (obra cloudOnly) ──
     const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
     url = base + '/reader/index.html?' + param;
+    _shareDiag.url = url;
 
   } else {
     appAlert('Esta obra no tiene datos guardados. Ábrela en el editor y guárdala antes de compartir.');
