@@ -1439,6 +1439,11 @@ function _startScrollReader() {
     const dx = ex - _osx, dy = ey - _osy;
     _osx = null;
     const adx = Math.abs(dx), ady = Math.abs(dy);
+    // En pantalla de créditos: tap (movimiento mínimo) → detectar enlace/botón
+    if (RS.isCredits && adx < 20 && ady < 20) {
+      _handleCreditsClick(ex, ey);
+      return;
+    }
     if (isH && adx < 20) return;
     if (!isH && ady < 20) return;
     if (isH && ady > adx * 1.5) return;
@@ -2506,10 +2511,9 @@ function _setupControls() {
     const dy   = Math.abs(endY - sy);
     sx = null;
     if (dy > 40) return;
-    // En créditos: lado retroceder → goBack, lado avanzar → detecta enlace/botón
+    // En créditos: cualquier tap detecta enlace/botón (ignorar división izq/dcha)
     if (RS.isCredits) {
-      if (_isBackSide(endX, endY)) goBack();
-      else _handleCreditsClick(endX, endY);
+      _handleCreditsClick(endX, endY);
       return;
     }
     // Navegación normal
