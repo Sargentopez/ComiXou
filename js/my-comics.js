@@ -565,42 +565,50 @@ function _mcRenderList() {
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
-      if (!comic.supabaseId) {
-        appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
-        return;
-      }
-      // Verificar si la versión local es más reciente que la nube
-      // Si es así, subir antes de compartir para que el enlace muestre la versión correcta
-      const _doShare = async () => {
-        // Siempre construir con datos locales — mismos que usa el visor interno
+      // Construir enlace desde datos locales — sin depender de Supabase
+      (async () => {
         const _comicFull = ComicStore.getByIdFull
           ? await ComicStore.getByIdFull(id)
           : comic;
         if (!_comicFull?.editorData?.pages?.length) {
-          appAlert('Esta obra no tiene datos locales. Ábrela en el editor y guárdala primero.');
+          appAlert('Abre la obra en el editor y guárdala antes de compartirla.');
           return;
         }
-        const _previewKey = 'cx_preview_' + Date.now();
-        const _previewData = {
-          title:       _comicFull.title     || '',
-          author:      _comicFull.author    || '',
-          social:      _comicFull.social    || '',
-          navMode:     _comicFull.navMode   || 'fixed',
-          orientation: _comicFull.editorData.orientation || 'v',
-          pages:       _comicFull.editorData.pages,
-        };
+        // Serializar editorData en localStorage temporal para que el reader lo lea
+        const _key = 'cx_preview_' + Date.now();
         try {
-          localStorage.setItem(_previewKey, JSON.stringify(_previewData));
+          localStorage.setItem(_key, JSON.stringify({
+            title:       _comicFull.title     || '',
+            author:      _comicFull.author    || '',
+            social:      _comicFull.social    || '',
+            navMode:     _comicFull.navMode   || 'fixed',
+            orientation: _comicFull.editorData.orientation || 'v',
+            pages:       _comicFull.editorData.pages,
+          }));
         } catch(e) {
-          appAlert('No hay espacio suficiente para la vista previa.');
+          appAlert('No hay espacio suficiente. Libera espacio e inténtalo de nuevo.');
           return;
         }
-        const base = window.location.origin + window.location.pathname
+        const base  = window.location.origin + window.location.pathname
           .replace(/\/index\.html$/, '').replace(/\/$/, '');
-        const url = base + '/reader/index.html?local=' + _previewKey + '&from=app';
-        window.open(url, '_blank');
-      };
-      _doShare();
+        const url   = base + '/reader/index.html?local=' + _key + '&from=app';
+        const title = _comicFull.title || 'Una obra en ComiXow';
+        const text  = `Mira "${title}" en ComiXow`;
+
+        if ('share' in navigator) {
+          // Android/móvil: hoja nativa de compartir
+          navigator.share({ title, text, url }).catch(e => {
+            if (e.name !== 'AbortError') console.warn('share:', e);
+          });
+        } else {
+          // PC: copiar enlace al portapapeles
+          navigator.clipboard.writeText(url).then(() => {
+            appAlert('Enlace copiado al portapapeles:\n' + url);
+          }).catch(() => {
+            appAlert('Copia este enlace para compartirlo:\n' + url);
+          });
+        }
+      })();
     }
   });
 }
