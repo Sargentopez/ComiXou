@@ -399,7 +399,13 @@ const SupabaseClient = (() => {
                 if (typeof _data === 'string' && _data.startsWith('data:')) {
                   _apngDataUrl = _data;
                 } else if (Array.isArray(_data) && _data.length) {
-                  _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
+                  // Si el array tiene 1 elemento que es un APNG completo, usarlo directamente
+                  // (ocurre cuando se inserta desde biblioteca: _pngFrames=[apngSrc])
+                  if (_data.length === 1 && typeof _data[0] === 'string' && _data[0].startsWith('data:')) {
+                    _apngDataUrl = _data[0];
+                  } else {
+                    _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
+                  }
                   _animDiag.buildApngResult = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
                 }
               }
@@ -408,7 +414,12 @@ const SupabaseClient = (() => {
               if (!_apngDataUrl && l.animKey) {
                 const _dataAnim = await _sbAnimIdbLoad(l.animKey);
                 if (Array.isArray(_dataAnim) && _dataAnim.length) {
-                  _apngDataUrl = await _buildApngFromFrames(_dataAnim, l._gcpFrameDelay || 100);
+                  // Si array de 1 elemento APNG completo, usarlo directamente
+                  if (_dataAnim.length === 1 && typeof _dataAnim[0] === 'string' && _dataAnim[0].startsWith('data:')) {
+                    _apngDataUrl = _dataAnim[0];
+                  } else {
+                    _apngDataUrl = await _buildApngFromFrames(_dataAnim, l._gcpFrameDelay || 100);
+                  }
                   _animDiag.buildApngResult = _apngDataUrl ? 'ok(animKey):'+_apngDataUrl.length : 'null';
                 }
               }

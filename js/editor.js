@@ -12436,7 +12436,14 @@ async function edSaveProject(_suppressOverlay){
       // NUNCA reconstruir desde _animFrames y guardar en animKey — eso sobreescribe el original
       if (_sl.animKey && !_sl._pngFrames && !_sl._pngFramesKey) {
         const _existing = window._sbAnimIdbLoad ? await window._sbAnimIdbLoad(_sl.animKey).catch(()=>null) : null;
-        const _existingIsValid = typeof _existing === 'string' && _existing.startsWith('data:') && _existing.length > 10000;
+        // Válido: string APNG o array de frames con contenido real
+        const _existingIsValid = (typeof _existing === 'string' && _existing.startsWith('data:') && _existing.length > 10000)
+                               || (Array.isArray(_existing) && _existing.length > 0);
+        // Si ya existe dato válido en IDB por animKey, usar animKey como _pngFramesKey
+        // para que edDeserLayer y _uploadPanels lo encuentren
+        if (_existingIsValid && !_sl._pngFramesKey) {
+          _sl._pngFramesKey = _sl.animKey;
+        }
         if (!_existingIsValid) {
           // Solo guardar si tenemos _apngSrc original (no reconstruido)
           const _apng = _liveLayer._apngSrc;
@@ -16795,7 +16802,7 @@ function _bibRenderPanel(panel) {
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
-                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=[entry.apngSrc];}
+                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=null;}
                 else la2._pngFrames=_frames2;
                 la2._fIdx=0;
                 if(entry.gcpLayersData) la2._gcpLayersData=entry.gcpLayersData;
@@ -16856,9 +16863,16 @@ function _bibRenderPanel(panel) {
           const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
           la.animKey = _bibAnimKey;
           if (window._sbAnimIdbSave) {
-            // Guardar en IDB: si apngSrc usar string, sino array de frames
+            // Si apngSrc: guardar como STRING en IDB (no como array de 1)
+            // → _uploadPanels paso 1 lo detecta directamente como string APNG
             const _idbData = entry.apngSrc || frames;
             window._sbAnimIdbSave(_bibAnimKey, _idbData).catch(function(e){ console.warn('bib IDB:', e); });
+          }
+          // Si hay apngSrc, asegurarse que _pngFrames no interfiere con edSerLayer
+          // (edSerLayer serializa _pngFrames si existe — queremos que use animKey)
+          if (entry.apngSrc) {
+            la._pngFrames = null; // no serializar — animKey tiene el APNG en IDB
+            la._apngSrc = entry.apngSrc; // en memoria para _edGifSetPlaying
           }
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
