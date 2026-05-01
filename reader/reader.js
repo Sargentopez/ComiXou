@@ -1028,14 +1028,41 @@ async function loadLocal(key) {
       const bubbleLayersWithText = bubbleLayers.filter(l => l._hasText !== false);
 
       const panelTexts = bubbleLayersWithText.map((l, i) => ({
-        // Mismos campos que panel_texts de Supabase
+        // Campos de identificación — igual que panel_texts de Supabase
         id:          'lt_' + pi + '_' + i,
         panel_id:    'local_' + pi,
         text:        l.text        || '',
-        type:        l.type,                    // 'bubble' o 'text' — crítico para _drawBubble
+        type:        l.type,           // 'bubble' o 'text' — crítico para _drawBubble
         text_order:  l._seqOrder   !== undefined ? l._seqOrder : i,
-        // Campos de posición y estilo que _drawBubble necesita via t._bubbleLayer
-        // Estos se asignan automáticamente en _render via t._bubbleLayer = bubbleLayersWithText[i]
+        // Campos de posición y estilo — _drawBubble los lee de t directamente
+        // En modo panel_layers: x,y en 0-1 (centro), width,height en 0-1
+        x:           l.x,
+        y:           l.y,
+        width:       l.width,
+        height:      l.height,
+        rotation:    l.rotation    || 0,
+        fontSize:    l.fontSize    || 30,
+        fontFamily:  l.fontFamily  || 'Patrick Hand',
+        fontBold:    l.fontBold    || false,
+        fontItalic:  l.fontItalic  || false,
+        color:       l.color       || '#000000',
+        backgroundColor: l.backgroundColor || '#ffffff',
+        bgOpacity:   l.bgOpacity   !== undefined ? l.bgOpacity : 1,
+        borderColor: l.borderColor || '#000000',
+        borderWidth: l.borderWidth !== undefined ? l.borderWidth : 2,
+        padding:     l.padding     || (l.type === 'bubble' ? 15 : 10),
+        style:       l.style       || 'conventional',
+        tail:        l.tail,
+        tailStart:   l.tailStart,
+        tailEnd:     l.tailEnd,
+        tailStarts:  l.tailStarts,
+        tailEnds:    l.tailEnds,
+        voiceCount:  l.voiceCount  || 1,
+        hasTail:     l.hasTail     !== undefined ? l.hasTail : true,
+        renderDataUrl: l.renderDataUrl || null,
+        _renderW:    l._renderW,
+        _renderH:    l._renderH,
+        _renderPad:  l._renderPad,
       }));
 
       // Marcar _hasRenderLayer igual que _loadPanels
