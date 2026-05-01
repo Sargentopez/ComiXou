@@ -1256,6 +1256,7 @@ async function _animDownload(animUrl) {
 
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
+  // Decodificar base64 → Uint8Array en chunks de 32768 chars con padding correcto
   const b64 = str.slice(_CZ_PFX.length);
   const CHUNK = 32768;
   let byteLen = 0;
@@ -1274,12 +1275,14 @@ async function _czDecompress(str) {
   const bytes = new Uint8Array(byteLen);
   let off2 = 0;
   for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+  // Usar pako primero (más fiable que DecompressionStream en Android WebView)
   if (typeof pako !== 'undefined') {
     try {
       const result = new TextDecoder().decode(pako.inflate(bytes));
       if (result && result.length > 0) return result;
     } catch(e) {}
   }
+  // Fallback: DecompressionStream nativo
   if (typeof DecompressionStream === 'undefined') return str;
   try {
     const ds = new DecompressionStream('gzip');
