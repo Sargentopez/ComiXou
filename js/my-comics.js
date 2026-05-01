@@ -665,7 +665,7 @@ function _mcShowSyncDiag() {
             if (!l.gifKey && !l.gifUrl) info += ' ⚠️ SIN DATOS GIF';
           }
           if (l.type === 'draw' || l.type === 'stroke' || l.type === 'line') {
-            info += l.hasSrc ? ' src=✓' : (l.hasPoints ? ' points=✓' : ' ⚠️ SIN DATOS');
+            info += l.hasSrc ? ' src=✓' : (l.hasPoints ? ' points=✓' : ' (render diferido)');
           }
           L.push(info);
         });

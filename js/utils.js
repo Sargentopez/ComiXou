@@ -130,7 +130,7 @@ async function openShareModal(comic) {
           info.gifUrl   = l._gifUrl  || null;
         }
         if (l.type === 'draw' || l.type === 'stroke' || l.type === 'line') {
-          info.hasSrc   = !!l.src;
+          info.hasSrc   = !!(l.src || l.dataUrl);
           info.hasPoints = !!(l.points && l.points.length);
         }
         _shareDiag.layersSummary.push(info);
@@ -155,7 +155,8 @@ async function openShareModal(comic) {
       orientation: _comicFull.editorData.orientation || 'v',
       pages: _pages.map(p => ({
         // Incluir todos los campos de la hoja — igual que edSerLayer usa
-        orientation:        p.orientation || _comicFull.editorData.orientation || 'v',
+        // Normalizar orientación a 'v'/'h' igual que hace edSaveProject → panels[i].orientation
+        orientation:        (p.orientation || _comicFull.editorData.orientation || 'vertical') === 'vertical' ? 'v' : 'h',
         textMode:           p.textMode || 'sequential',
         textLayerOpacity:   p.textLayerOpacity !== undefined ? p.textLayerOpacity : 1,
         layers: (p.layers || []).map(l => {

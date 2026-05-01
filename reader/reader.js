@@ -1045,7 +1045,7 @@ async function loadLocal(key) {
 
       return {
         id:          'local_' + pi,
-        orientation: p.orientation || data.orientation || 'v',
+        orientation: (p.orientation === 'h' || p.orientation === 'horizontal') ? 'h' : 'v',
         text_mode:   p.textMode    || 'sequential',
         textLayerOpacity: p.textLayerOpacity !== undefined ? p.textLayerOpacity : 1,
         layers,
