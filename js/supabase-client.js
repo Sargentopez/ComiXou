@@ -311,6 +311,10 @@ const SupabaseClient = (() => {
 
     if (!panels.length) return;
 
+    // Borrar paneles existentes — garantiza que el INSERT devuelve el nuevo id correcto
+    // y que no quedan paneles huérfanos de versiones anteriores
+    await _delete('panels', `work_id=eq.${comic.supabaseId}`);
+
     for (let i = 0; i < panels.length; i++) {
       const p = panels[i];
       const ins = await _upsert('panels', {
