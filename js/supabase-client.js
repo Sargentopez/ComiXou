@@ -121,6 +121,12 @@ const SupabaseClient = (() => {
     }
   }
 
+  // Versiones autenticadas (con JWT) de _get y _upsert
+  async function _getAuth(path) { return _get(path); } // _get ya usa _hdrsUser() con JWT
+  async function _upsertAuth(table, data) {
+    return _upsert(table, data); // _upsert ya usa _hdrsUser() internamente
+  }
+
   async function _upsert(table, data) {
     if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/${table}`, {
@@ -816,5 +822,25 @@ const SupabaseClient = (() => {
     return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
   }
 
-    return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
+  // ── Preferencias de usuario (tabla authors.preferences) ──────
+  async function savePreferences(userId, prefs) {
+    if (!userId || !prefs) return;
+    try {
+      await _upsertAuth('authors', {
+        id:          userId,
+        preferences: prefs,
+      });
+    } catch(e) { console.warn('savePreferences:', e.message); }
+  }
+
+  async function loadPreferences(userId) {
+    if (!userId) return null;
+    try {
+      const rows = await _getAuth('authors?id=eq.' + userId + '&select=preferences');
+      if (rows && rows.length && rows[0].preferences) return rows[0].preferences;
+    } catch(e) { console.warn('loadPreferences:', e.message); }
+    return null;
+  }
+
+      return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, savePreferences, loadPreferences };
 })();

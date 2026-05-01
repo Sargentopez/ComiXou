@@ -162,6 +162,8 @@ const ComicStore = (() => {
       catch(e) { comixouDir = handle; }
       _fsDirHandle = comixouDir;
       await _fsSaveHandle(comixouDir);
+      // Guardar nombre en Supabase para recuperar tras Clear site data
+      _fsSaveNameToCloud(comixouDir.name).catch(() => {});
     } catch(e) { /* usuario canceló */ }
   }
 
@@ -379,6 +381,22 @@ const ComicStore = (() => {
   function getByUser(userId)  { return getAll().filter(c => c.userId === userId); }
   function getPublished()     { return getAll().filter(c => c.published); }
 
+  // ── Persistencia del nombre del directorio PC en Supabase ──────────
+  async function _fsSaveNameToCloud(dirName) {
+    if (!dirName || typeof SupabaseClient === 'undefined') return;
+    const user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
+    if (!user) return;
+    await SupabaseClient.savePreferences(user.id, { pc_dir_name: dirName });
+  }
+
+  async function _fsLoadNameFromCloud() {
+    if (typeof SupabaseClient === 'undefined') return null;
+    const user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
+    if (!user) return null;
+    const prefs = await SupabaseClient.loadPreferences(user.id).catch(() => null);
+    return prefs?.pc_dir_name || null;
+  }
+
   // Al arrancar: si el índice localStorage está vacío, intentar reconstruir.
   // Orden de prioridad: 1) OPFS (si no se borró), 2) directorio PC (si disponible)
   async function _rebuildIndexFromOpfs() {
@@ -416,18 +434,35 @@ const ComicStore = (() => {
     // IDB también se borró con Clear site data — pedir al usuario que elija el directorio
     if (!_FS_SUPPORTED) return;
     try {
-      // Mostrar aviso y pedir directorio
-      const _wantRestore = confirm(
-        'Se han detectado datos del sitio borrados.\n\n' +
-        '¿Tienes una carpeta ComiXou en tu equipo con obras guardadas?\n' +
-        'Puedes seleccionarla para recuperar tus obras.'
-      );
+      // Intentar recuperar el nombre del directorio desde Supabase
+      let _savedDirName = null;
+      try { _savedDirName = await _fsLoadNameFromCloud(); } catch(e) {}
+
+      const _confirmMsg = _savedDirName
+        ? 'Se han detectado datos del sitio borrados.\n\n' +
+          'Anteriormente guardabas tus obras en la carpeta "' + _savedDirName + '".\n' +
+          '¿Quieres seleccionarla para recuperar tus obras?'
+        : 'Se han detectado datos del sitio borrados.\n\n' +
+          '¿Tienes una carpeta ComiXou en tu equipo con obras guardadas?\n' +
+          'Puedes seleccionarla para recuperar tus obras.';
+
+      const _wantRestore = confirm(_confirmMsg);
       if (!_wantRestore) return;
 
-      const handle = await window.showDirectoryPicker({ mode: 'read', startIn: 'documents' });
-      // Buscar subcarpeta ComiXou si existe
+      // Pedir readwrite desde el inicio — así el handle sirve también para guardar
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+
+      // Buscar subcarpeta ComiXou si existe — NO crearla si no existe
+      // (si el usuario seleccionó directamente la carpeta ComiXou, usarla tal cual)
       let comixouDir = handle;
-      try { comixouDir = await handle.getDirectoryHandle('ComiXou', { create: false }); } catch(e) {}
+      try {
+        // Intentar entrar en subcarpeta ComiXou sin crear
+        const sub = await handle.getDirectoryHandle('ComiXou', { create: false });
+        comixouDir = sub;
+      } catch(e) {
+        // No existe subcarpeta ComiXou — el handle ya es la carpeta correcta
+        // (el usuario la seleccionó directamente)
+      }
 
       const rebuilt = [];
       const opfsRoot = await navigator.storage.getDirectory();
@@ -466,6 +501,7 @@ const ComicStore = (() => {
         // Guardar el handle para futuras sesiones
         _fsDirHandle = comixouDir;
         _fsSaveHandle(comixouDir).catch(() => {});
+        _fsSaveNameToCloud(comixouDir.name).catch(() => {});
         alert(rebuilt.length + ' obras recuperadas correctamente desde tu carpeta ComiXou.');
       } else {
         alert('No se encontraron obras en la carpeta seleccionada.');
