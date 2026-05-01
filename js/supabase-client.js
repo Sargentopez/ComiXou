@@ -352,31 +352,48 @@ const SupabaseClient = (() => {
           delete _lClean._oc;
           delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
 
-          // APNG animado → bucket 'anims' — patrón idéntico al GIF
-          // Preferir animKey (APNG completo en IDB) sobre _pngFramesKey (array de frames PNG)
+          // APNG animado → bucket 'anims'
+          // Carta v19.44: usar _pngFramesKey primero (siempre existe tras edSaveProject)
+          // Si no hay datos por esa clave, intentar animKey como fallback
           let animUrl = null;
-          if (l.type === 'image' && (l.animKey || l._pngFramesKey)) {
-            const _idbKey = l.animKey || l._pngFramesKey;
+          if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
             const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
             try {
-              const _animData = await _sbAnimIdbLoad(_idbKey);
-              if (_animData) {
-                let _apngDataUrl = null;
-                if (typeof _animData === 'string') {
-                  _apngDataUrl = _animData; // APNG completo — subir directamente
-                } else if (Array.isArray(_animData) && _animData.length) {
-                  // Array de frames — intentar también animKey si hay
-                  if (l.animKey && l.animKey !== _idbKey) {
-                    const _animFull = await _sbAnimIdbLoad(l.animKey).catch(() => null);
-                    if (typeof _animFull === 'string') _apngDataUrl = _animFull;
-                  }
-                  if (!_apngDataUrl) {
-                    _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+              let _apngDataUrl = null;
+
+              // 1. Intentar _pngFramesKey (array de frames — siempre existe en OPFS)
+              if (l._pngFramesKey) {
+                const _data = await _sbAnimIdbLoad(l._pngFramesKey);
+                if (_data) {
+                  if (typeof _data === 'string') {
+                    _apngDataUrl = _data;
+                  } else if (Array.isArray(_data) && _data.length) {
+                    _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
                   }
                 }
-                if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
               }
-            } catch(e) { console.warn('APNG upload error:', e.message); }
+
+              // 2. Fallback: animKey (puede tener el APNG completo como string)
+              if (!_apngDataUrl && l.animKey) {
+                const _data = await _sbAnimIdbLoad(l.animKey);
+                if (_data) {
+                  if (typeof _data === 'string') {
+                    _apngDataUrl = _data;
+                  } else if (Array.isArray(_data) && _data.length) {
+                    _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
+                  }
+                }
+              }
+
+              if (_apngDataUrl) {
+                animUrl = await _animUpload(_bucketKey, _apngDataUrl);
+              } else {
+                if (window._shareDiag) window._shareDiag.animUploadError = 'Sin datos APNG en IDB para key=' + (l._pngFramesKey||l.animKey);
+              }
+            } catch(e) {
+              console.warn('APNG upload error:', e.message);
+              if (window._shareDiag) window._shareDiag.animUploadError = e.message;
+            }
           }
 
           // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
@@ -395,9 +412,41 @@ const SupabaseClient = (() => {
         if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
       }
 
-      // Textos para el reader (panel_texts sin cambios)
-      if (!p.texts || p.texts.length === 0) continue;
-      await _upsert('panel_texts', p.texts.map((t, j) => ({
+      // Textos para el reader — reconstruir desde layers si p.texts no existe
+      // En la nueva arquitectura OPFS, editorData.pages no tiene texts separados
+      let _pTexts = p.texts || [];
+      if (!_pTexts.length) {
+        // Reconstruir desde layers (bubble/text con _hasText !== false)
+        _pTexts = (p.layers || [])
+          .filter(l => (l.type === 'bubble' || l.type === 'text') && l._hasText !== false)
+          .map((l, i) => ({
+            order:     l._seqOrder !== undefined ? l._seqOrder : i,
+            type:      l.type,
+            style:     l.style       || 'conventional',
+            hasTail:   l.hasTail     !== undefined ? l.hasTail : true,
+            tailStarts: l.tailStarts,
+            tailEnds:   l.tailEnds,
+            voiceCount: l.voiceCount || 1,
+            x:          l.x,
+            y:          l.y,
+            width:      l.width,
+            height:     l.height,
+            text:       l.text       || '',
+            fontFamily: l.fontFamily || 'Patrick Hand',
+            fontSize:   l.fontSize   ?? 30,
+            fontBold:   l.fontBold   ?? false,
+            fontItalic: l.fontItalic ?? false,
+            color:      l.color      || '#000000',
+            backgroundColor: l.backgroundColor || '#ffffff',
+            bgOpacity:  l.bgOpacity  !== undefined ? l.bgOpacity : 1,
+            borderWidth: l.borderWidth ?? 2,
+            borderColor: l.borderColor || '#000000',
+            rotation:   l.rotation   ?? 0,
+            padding:    l.padding    ?? 15,
+          }));
+      }
+      if (!_pTexts.length) continue;
+      await _upsert('panel_texts', _pTexts.map((t, j) => ({
         panel_id:     panelId,
         text_order:   t.order              ?? j,
         type:         t.type              || 'bubble',

@@ -635,6 +635,7 @@ function _mcShowSyncDiag() {
     if (_sd.supabaseUpload) {
       if (_sd.supabaseUpload.ok) {
         L.push('✅ Subida Supabase: OK (' + _sd.supabaseUpload.ms + 'ms) savedAt=' + _sd.supabaseUpload.savedAt);
+        if (_sd.animUploadError) L.push('⚠️ Error subida APNG: ' + _sd.animUploadError);
       } else {
         L.push('❌ Subida Supabase: FALLO — ' + _sd.supabaseUpload.error);
       }
