@@ -810,7 +810,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const params = new URLSearchParams(window.location.search);
   const id     = params.get('id');
   const draft  = params.get('draft');   // token de borrador (obra no publicada)
-  const local  = params.get('local');   // clave localStorage — preview local sin Supabase
   const wantsFs = params.get('fs') === '1'; // heredar fullscreen de la app
 
   // Modo embed: incrustado en iframe desde admin/expositor
@@ -901,7 +900,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
   }
 
-  if (local) { loadLocal(local);  return; }
   if (draft) { loadDraft(draft); return; }
   if (id)    { loadWork(id);     return; }
   showError('No se indicó ninguna obra. Comprueba el enlace.');
@@ -964,248 +962,6 @@ async function loadWork(workId) {
   }
 }
 
-// ── CARGA LOCAL (preview desde editor sin pasar por Supabase) ──
-// Replica exactamente el flujo de _loadPanels + preloadImages pero
-// obteniendo los datos de las IDB locales en lugar de URLs remotas.
-async function loadLocal(key) {
-  setLoadingMsg('Cargando vista previa...');
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) { showError('Vista previa no encontrada o expirada.'); return; }
-    // Borrar la clave tras 30s (limpieza)
-    setTimeout(() => { try { localStorage.removeItem(key); } catch(e) {} }, 30000);
-
-    const data = JSON.parse(raw);
-    if (!data || !data.pages || !data.pages.length) { showError('Sin páginas.'); return; }
-
-    // Metadatos de la obra — igual que loadDraft asigna desde work[0]
-    RS._workTitle  = data.title  || 'Vista previa';
-    RS._workAuthor = data.author || '';
-    RS._workSocial = data.social || '';
-    RS.navMode     = data.navMode || 'fixed';
-    document.title = RS._workTitle + ' — ComiXow';
-
-    setLoadingMsg('Cargando páginas...');
-
-    // Construir RS.panels — replicando exactamente _loadPanels de la nube
-    RS.panels = await Promise.all(data.pages.map(async (p, pi) => {
-
-      // ── Paso 1: construir layers (equivale a parsear panel_layers) ──
-      const layers = await Promise.all((p.layers || []).map(async l => {
-        const layer = { ...l };
-
-        // gif: obtener datos de IDB cxGifs (equivale a gif_url → _gifUrl)
-        if (layer.type === 'gif') {
-          if (layer.gifKey) {
-            const gifData = await _localIdbGet('cxGifs', 'gifs', layer.gifKey);
-            if (gifData) layer._gifDataUrl = gifData;
-            else if (layer._gifUrl) layer._gifDataUrl = layer._gifUrl;
-          }
-        }
-
-        // image animada: obtener APNG de IDB cxAnims (equivale a anim_url → _apngSrc)
-        if (layer.type === 'image' && (layer.animKey || layer._pngFramesKey)) {
-          const _idbKey = layer.animKey || layer._pngFramesKey;
-          const animData = await _localIdbGet('cxAnims', 'anims', _idbKey);
-          if (animData) {
-            if (typeof animData === 'string') {
-              layer._apngSrc = animData;   // APNG completo → decodeApng
-            } else if (Array.isArray(animData) && animData.length) {
-              layer._apngSrc = animData;   // array de frames → decodeFrameArray (NO solo el primero)
-            }
-          }
-        }
-
-        return layer;
-      }));
-
-      // ── Paso 2: construir texts (equivale a panel_texts de Supabase) ──
-      // Replica exactamente la lógica de _loadPanels:
-      // - bubbleLayers: todos los de tipo bubble/text
-      // - bubbleLayersWithText: los que tienen _hasText !== false
-      // - panelTexts: misma estructura que panel_texts de Supabase
-      const bubbleLayers = layers.filter(l => l.type === 'bubble' || l.type === 'text');
-      const bubbleLayersWithText = bubbleLayers.filter(l => l._hasText !== false);
-
-      const panelTexts = bubbleLayersWithText.map((l, i) => ({
-        // Campos de identificación — igual que panel_texts de Supabase
-        id:          'lt_' + pi + '_' + i,
-        panel_id:    'local_' + pi,
-        text:        l.text        || '',
-        type:        l.type,           // 'bubble' o 'text' — crítico para _drawBubble
-        text_order:  l._seqOrder   !== undefined ? l._seqOrder : i,
-        // Campos de posición y estilo — _drawBubble los lee de t directamente
-        // En modo panel_layers: x,y en 0-1 (centro), width,height en 0-1
-        x:           l.x,
-        y:           l.y,
-        width:       l.width,
-        height:      l.height,
-        rotation:    l.rotation    || 0,
-        fontSize:    l.fontSize    || 30,
-        fontFamily:  l.fontFamily  || 'Patrick Hand',
-        fontBold:    l.fontBold    || false,
-        fontItalic:  l.fontItalic  || false,
-        color:       l.color       || '#000000',
-        backgroundColor: l.backgroundColor || '#ffffff',
-        bgOpacity:   l.bgOpacity   !== undefined ? l.bgOpacity : 1,
-        borderColor: l.borderColor || '#000000',
-        borderWidth: l.borderWidth !== undefined ? l.borderWidth : 2,
-        padding:     l.padding     || (l.type === 'bubble' ? 15 : 10),
-        style:       l.style       || 'conventional',
-        tail:        l.tail,
-        tailStart:   l.tailStart,
-        tailEnd:     l.tailEnd,
-        tailStarts:  l.tailStarts,
-        tailEnds:    l.tailEnds,
-        voiceCount:  l.voiceCount  || 1,
-        hasTail:     l.hasTail     !== undefined ? l.hasTail : true,
-        renderDataUrl: l.renderDataUrl || null,
-        _renderW:    l._renderW,
-        _renderH:    l._renderH,
-        _renderPad:  l._renderPad,
-      }));
-
-      // Marcar _hasRenderLayer igual que _loadPanels
-      panelTexts.forEach((t, i) => {
-        const bl = bubbleLayersWithText[i];
-        if (bl && bl.renderDataUrl) t._hasRenderLayer = true;
-      });
-
-      return {
-        id:          'local_' + pi,
-        orientation: (p.orientation === 'h' || p.orientation === 'horizontal') ? 'h' : 'v',
-        text_mode:   p.textMode    || 'sequential',
-        textLayerOpacity: p.textLayerOpacity !== undefined ? p.textLayerOpacity : 1,
-        layers,
-        texts: panelTexts,
-      };
-    }));
-
-    // Añadir hoja de créditos — igual que loadDraft
-    const _lastPanel = RS.panels[RS.panels.length - 1];
-    RS.panels.push({
-      id: 'credits', isCredits: true,
-      orientation: _lastPanel?.orientation || 'v',
-      layers: [], texts: [],
-    });
-
-    setLoadingMsg('Preparando imágenes...');
-    // Precargar imágenes — exactamente igual que preloadImages() de la nube
-    await preloadImagesLocal();
-    startReader();
-
-  } catch(err) {
-    console.error('Error loadLocal:', err);
-    showError('Error en vista previa local. Guarda la obra en el editor e inténtalo de nuevo.');
-  }
-}
-
-// Equivalente a preloadImages() pero para modo local.
-// Los GIFs vienen de IDB (ya como dataUrl), los APNGs de IDB (ya como _apngSrc).
-// El proceso de decodificación es idéntico a preloadImages().
-async function preloadImagesLocal() {
-  RS.images = [];
-  const totalPanels = RS.panels.filter(p => !p.isCredits && (p.layers||[]).length > 0).length;
-  let loadedPanels = 0;
-  setLoadingProgress(0, '');
-  setLoadingMsg('Cargando imágenes...');
-
-  await Promise.all(RS.panels.map(async (panel, pi) => {
-    panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
-
-      // GIF — equivalente al bloque gif de preloadImages
-      if (layer.type === 'gif') {
-        const gifSrc = layer._gifDataUrl;
-        if (!gifSrc) return Promise.resolve(null);
-
-        // Si es una URL pública (http), hacer fetch igual que preloadImages
-        // Si es un dataUrl (data:), leerlo directamente
-        const _getDataUrl = typeof gifSrc === 'string' && gifSrc.startsWith('data:')
-          ? Promise.resolve(gifSrc)
-          : fetch(gifSrc).then(r => r.blob()).then(blob => new Promise(res => {
-              const fr = new FileReader();
-              fr.onload = e => res(e.target.result);
-              fr.readAsDataURL(blob);
-            }));
-
-        return _getDataUrl
-          .then(dataUrl => window.GifDecoder ? window.GifDecoder.decode(dataUrl) : null)
-          .then(decoded => {
-            if (!decoded || !decoded.frames.length) return null;
-            const oc = document.createElement('canvas');
-            oc.width = decoded.width; oc.height = decoded.height;
-            oc.getContext('2d').putImageData(decoded.frames[0].imageData, 0, 0);
-            layer._gifFrames = decoded.frames;
-            layer._gifIdx    = 0;
-            layer._gifOc     = oc;
-            layer._gifReady  = true;
-            return oc;
-          })
-          .catch(() => null);
-      }
-
-      // APNG — equivalente al bloque _apngSrc de preloadImages
-      // Exactamente el mismo código
-      if (layer._apngSrc && window.ApngDecoder) {
-        return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
-          .then(function(result) {
-            layer._animFrames    = result.frames;
-            layer._animIdx       = 0;
-            layer._animLastTick  = 0;
-            layer._animPlayCount = 0;
-            layer._animOc        = document.createElement('canvas');
-            layer._animOc.width  = result.width;
-            layer._animOc.height = result.height;
-            layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
-            layer._animReady     = true;
-            return layer._animOc;
-          }).catch(function() { return null; });
-      }
-
-      // Imagen estática / draw / stroke / line / shape
-      // Exactamente igual que preloadImages
-      const src = layer.renderDataUrl || layer.src || layer.dataUrl;
-      if (!src) return Promise.resolve(null);
-      const needsImg = layer.renderDataUrl ||
-        layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
-        layer.type === 'line'  || layer.type === 'shape';
-      if (!needsImg) return Promise.resolve(null);
-      return new Promise(resolve => {
-        const img = new Image();
-        img.onload  = () => resolve(img);
-        img.onerror = () => resolve(null);
-        img.src = src;
-      });
-    }));
-
-    if (!panel.isCredits && (panel.layers||[]).length > 0) {
-      loadedPanels++;
-      const pct = totalPanels > 0 ? (loadedPanels / totalPanels) * 95 : 0;
-      setLoadingMsg('Cargando hoja ' + loadedPanels + ' de ' + totalPanels + '...');
-      setLoadingProgress(pct, '');
-    }
-  }));
-
-  setLoadingProgress(100, '');
-}
-
-// Leer de IndexedDB local por nombre de DB, store y clave
-function _localIdbGet(dbName, storeName, key) {
-  return new Promise(res => {
-    const req = indexedDB.open(dbName, 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore(storeName);
-    req.onsuccess = e => {
-      try {
-        const tx = e.target.result.transaction(storeName, 'readonly');
-        const r  = tx.objectStore(storeName).get(key);
-        r.onsuccess = () => res(r.result || null);
-        r.onerror   = () => res(null);
-      } catch(e2) { res(null); }
-    };
-    req.onerror = () => res(null);
-  });
-}
-
 // ── CARGA BORRADOR (obra no publicada, acceso por token) ─────
 async function loadDraft(token) {
   setLoadingMsg('Cargando borrador...');
@@ -1256,32 +1012,26 @@ async function _animDownload(animUrl) {
 
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
-  const b64 = str.slice(_CZ_PFX.length);
-  const CHUNK = 32768;
-  let byteLen = 0;
-  const parts = [];
+  if (typeof DecompressionStream === 'undefined') return str;
   try {
-    for (let i = 0; i < b64.length; i += CHUNK) {
-      const slice = b64.slice(i, Math.min(i + CHUNK, b64.length));
-      const rem = slice.length % 4;
-      const bin = atob(rem ? slice + '===='.slice(rem) : slice);
+    const b64 = str.slice(_CZ_PFX.length);
+    // atob por chunks de 8192 chars — evita fallo en Android con b64 muy largo
+    const CHUNK = 8192;
+    let byteLen = 0;
+    const parts = [];
+    const padded = b64 + '==='.slice((b64.length + 3) % 4 || 3);
+    for (let i = 0; i < padded.length; i += CHUNK) {
+      let end = Math.min(i + CHUNK, padded.length);
+      while ((end - i) % 4 !== 0 && end < padded.length) end++;
+      const bin = atob(padded.slice(i, end));
       const part = new Uint8Array(bin.length);
       for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
       parts.push(part);
       byteLen += part.length;
     }
-  } catch(e) { return str; }
-  const bytes = new Uint8Array(byteLen);
-  let off2 = 0;
-  for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
-  if (typeof pako !== 'undefined') {
-    try {
-      const result = new TextDecoder().decode(pako.inflate(bytes));
-      if (result && result.length > 0) return result;
-    } catch(e) {}
-  }
-  if (typeof DecompressionStream === 'undefined') return str;
-  try {
+    const bytes = new Uint8Array(byteLen);
+    let off2 = 0;
+    for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
     writer.write(bytes);
@@ -1325,7 +1075,7 @@ async function _loadPanels(workId, useAuth) {
             try {
               const _apngDl = await _animDownload(r.anim_url);
               if (_apngDl) l._apngSrc = _apngDl;
-            } catch(e) { console.error('[reader] anim download error:', e); }
+            } catch(e) {}
           }
           return l;
         } catch(e) { return null; }
@@ -1411,7 +1161,7 @@ async function preloadImages() {
             layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
             layer._animReady     = true;
             return layer._animOc;
-          }).catch(function(e) { console.error('[reader] decode FAIL:', e); return null; });
+          }).catch(function() { return null; });
       }
 
       // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
@@ -1480,34 +1230,11 @@ async function sbGetAuth(path) {
 
 // ── INICIAR ───────────────────────────────────────────────────
 // ── Animación GIF en el reproductor ─────────────────────────────────────────
-function _resetPanelAnims(layers) {
-  if (!layers) return;
-  layers.forEach(function(layer) {
-    if (layer._gifReady && layer._gifFrames && layer._gifOc) {
-      layer._gifIdx      = 0;
-      layer._gifLastTick = 0;
-      var fd = layer._gifFrames[0];
-      if (fd) layer._gifOc.getContext('2d').putImageData(fd.imageData, 0, 0);
-    }
-    if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
-      layer._animIdx       = 0;
-      layer._animLastTick  = 0;
-      layer._animPlayCount = 0;
-      var fa = layer._animFrames[0];
-      if (fa && layer._animOc) layer._animOc.getContext('2d').putImageData(fa.imageData, 0, 0);
-    }
-  });
-}
-
 function _readerGifTick() {
   const now = Date.now();
   RS.panels.forEach((panel, pi) => {
     let panelChanged = false;
     (panel.layers || []).forEach(layer => {
-      // Debug: log estado animación primera vez
-      if (layer._animReady && !layer._dbgLogged) {
-        layer._dbgLogged = true;
-      }
       // GIF importado
       if (layer._gifReady && layer._gifFrames && layer._gifOc) {
         if (!layer._gifLastTick) layer._gifLastTick = now;
@@ -1679,10 +1406,7 @@ function _startScrollReader() {
   // ── Render inicial de todos los slides ──
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
     // Paso 1: renderizar todos los panels sin textos secuenciales
-    // Saltar el panel de créditos en el render inicial — _showCredits lo gestiona
-    // cuando el usuario llega a él, no antes (evita que el fade pinte en canvas incorrecto)
     RS.panels.forEach((panel, pi) => {
-      if (panel.isCredits) return;
       _activateCanvas(pi);
       RS.idx      = pi;
       RS.textStep = 0;
@@ -1715,11 +1439,6 @@ function _startScrollReader() {
     const dx = ex - _osx, dy = ey - _osy;
     _osx = null;
     const adx = Math.abs(dx), ady = Math.abs(dy);
-    // En pantalla de créditos: tap (movimiento mínimo) → detectar enlace/botón
-    if (RS.isCredits && adx < 20 && ady < 20) {
-      _handleCreditsClick(ex, ey);
-      return;
-    }
     if (isH && adx < 20) return;
     if (!isH && ady < 20) return;
     if (isH && ady > adx * 1.5) return;
@@ -1768,12 +1487,9 @@ function _startScrollReader() {
       const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
-      _resetPanelAnims(RS.panels[_prevSI]?.layers);
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
-      // Si llegamos al panel de créditos, resetear estado para que _showCredits arranque limpio
-      if (RS.panels[si]?.isCredits) _resetCredits();
       const np    = RS.panels[si];
       const ntxts = np?.texts || [];
       const isSeq = (np?.text_mode || 'sequential') === 'sequential';
@@ -2420,7 +2136,6 @@ function advance() {
     _startFade(); RS.textStep++; _render(); return;
   }
   if (RS.idx < RS.panels.length - 1) {
-    _resetPanelAnims(RS.panels[RS.idx]?.layers);
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resizeCanvas(); _render();
   }
@@ -2433,7 +2148,6 @@ function goBack() {
 
   if (isSeq && RS.textStep > 1) { RS.textStep--; RS.fadeAlpha = 0; _render(); return; }
   if (RS.idx > 0) {
-    _resetPanelAnims(RS.panels[RS.idx]?.layers);
     RS.idx--;
     const pp = RS.panels[RS.idx];
     RS.textStep  = (pp?.text_mode || 'sequential') === 'sequential' ? (pp?.texts || []).length : 0;
@@ -2503,7 +2217,6 @@ function _creditsClick() {
   if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
   if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
   RS.isCredits = false;
-  RS.panels.forEach(function(p) { _resetPanelAnims(p.layers); });
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
 }
@@ -2793,9 +2506,10 @@ function _setupControls() {
     const dy   = Math.abs(endY - sy);
     sx = null;
     if (dy > 40) return;
-    // En créditos: cualquier tap detecta enlace/botón (ignorar división izq/dcha)
+    // En créditos: lado retroceder → goBack, lado avanzar → detecta enlace/botón
     if (RS.isCredits) {
-      _handleCreditsClick(endX, endY);
+      if (_isBackSide(endX, endY)) goBack();
+      else _handleCreditsClick(endX, endY);
       return;
     }
     // Navegación normal

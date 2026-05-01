@@ -81,7 +81,6 @@ function MyComicsView_init() {
   _mcInjectModal();
   _mcRenderList();
   _mcBindNav();
-  _mcBindNavExtra();
   // Sincronizar fechas con Supabase en segundo plano (incluye descarga de biblioteca)
   _mcSyncCloudDates();
 }
@@ -92,31 +91,9 @@ async function _mcSyncCloudDates() {
   const _mcUser = Auth.currentUser?.();
   if (typeof Auth === 'undefined' || !_mcUser) return;
 
-  // Esperar a que el índice esté reconstruido desde OPFS si localStorage estaba vacío
-  if (window._comicStoreReady) await window._comicStoreReady;
-
-  // Diagnóstico del estado del índice al inicio de la sincronización
-  const _allLocal = ComicStore.getAll();
-  const locals = _allLocal.filter(c => c.supabaseId &&
+  // Si no hay obras locales del usuario, intentar traer las de la nube
+  const locals = ComicStore.getAll().filter(c => c.supabaseId &&
     (c.userId === _mcUser.id || c.username === _mcUser.username));
-
-  // Guardar para diagnóstico
-  window._syncDiag = window._syncDiag || [];
-  window._syncDiag.push({
-    _type: 'INIT',
-    t: new Date().toISOString(),
-    userId: _mcUser.id,
-    username: _mcUser.username,
-    totalInIndex: _allLocal.length,
-    localsFound: locals.length,
-    allIds: _allLocal.map(c => ({
-      id: c.id?.slice(-8),
-      userId: c.userId?.slice(-8),
-      localSavedAt: c.localSavedAt || null,
-      cloudOnly: c.cloudOnly,
-      supabaseId: c.supabaseId?.slice(-8)
-    }))
-  });
   if (!locals.length) {
     try {
       const cloudWorks = await SupabaseClient.fetchWorksByAuthor(_mcUser.id);
@@ -150,9 +127,7 @@ async function _mcSyncCloudDates() {
       if (!local) continue;
 
       const cloudDate = new Date(w.updated_at || 0);
-      // CRÍTICO: comparar contra localSavedAt (cuándo se guardó localmente),
-      // NO contra updatedAt (que se sobreescribe con la fecha de la nube)
-      const localDate = new Date(local.localSavedAt || local.createdAt || 0);
+      const localDate = new Date(local.updatedAt || 0);
 
       // Actualizar metadatos siempre (título, género, estado publicación)
       let dirty = false;
@@ -167,13 +142,15 @@ async function _mcSyncCloudDates() {
       if (_cloudPending !== local.pendingReview) { local.pendingReview = _cloudPending; dirty = true; }
 
       // Si la nube es más reciente: marcar cloudNewer pero preservar editorData local
+      // El usuario puede recuperar la versión local desde Proyecto → Recuperar versión del dispositivo
       if (cloudDate > localDate) {
         local.cloudNewer = true;
+        // Preservar editorData local bajo localEditorData (no sobreescribir nunca)
         if(local.editorData && !local.localEditorData) {
           local.localEditorData = local.editorData;
         }
-        local.editorData = null;
-        // NO sobreescribir updatedAt con fecha de nube — localSavedAt es la fuente de verdad local
+        local.editorData = null; // forzar descarga de la versión de nube al editar
+        local.updatedAt  = w.updated_at;
         dirty = true;
       }
 
@@ -313,11 +290,7 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
-      // Cargar datos completos desde OPFS antes de abrir el editor
-      const _loadAndEdit = async () => {
-      const comicToEdit = ComicStore.getByIdFull
-        ? await ComicStore.getByIdFull(id)
-        : ComicStore.getById(id);
+      const comicToEdit = ComicStore.getById(id);
       // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero.
       // También re-descargar si hay strokes en formato antiguo (sin x/y/width/height) —
       // esos strokes se renderizan incorrectamente con las versiones nuevas del editor.
@@ -337,26 +310,14 @@ function _mcRenderList() {
           }
         } catch(e) { console.warn('fecha nube:', e); }
       }
-      // Determinar si hay datos locales válidos — tiene localSavedAt o editorData en memoria
-      const _hasLocalData = !!(comicToEdit.editorData?.pages?.length || comicToEdit.localSavedAt);
       const _needsDownload = comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && (
-        comicToEdit.cloudOnly ||   // solo existe en la nube, nunca se guardó localmente
-        _hasLegacyStrokes ||       // tiene strokes en formato antiguo que hay que reescribir
-        _cloudNewer ||             // la nube es explícitamente más reciente
-        !_hasLocalData             // no hay ningún rastro de datos locales
+        comicToEdit.cloudOnly ||
+        !comicToEdit.editorData?.pages?.length ||
+        _hasLegacyStrokes ||
+        _cloudNewer  // la nube tiene versión más reciente → descargar siempre
       );
       if (comicToEdit && _needsDownload) {
         _mcToast('\u23f3 Descargando obra de la nube\u2026 (puede tardar si contiene GIFs)');
-        // Si hay datos locales en OPFS (_hasLocalOpfs), leerlos ANTES de descargar la nube
-        // para poder preservarlos en localEditorData correctamente
-        if (comicToEdit._hasLocalOpfs && !comicToEdit.localEditorData) {
-          const _opfsComic = ComicStore.getByIdFull
-            ? await ComicStore.getByIdFull(comicToEdit.id)
-            : null;
-          if (_opfsComic && _opfsComic.editorData && _opfsComic.editorData.pages && _opfsComic.editorData.pages.length) {
-            comicToEdit.localEditorData = _opfsComic.editorData;
-          }
-        }
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
           // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
@@ -394,7 +355,7 @@ function _mcRenderList() {
           };
           // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
           if (_idbWrites.length) await Promise.all(_idbWrites);
-          await ComicStore.save({
+          ComicStore.save({
             ...comicToEdit,
             cloudOnly: false,
             cloudNewer: false,
@@ -460,8 +421,6 @@ function _mcRenderList() {
       // Guardar qué proyecto editar y navegar al editor
       sessionStorage.setItem('cx_edit_id', id);
       Router.go('editor');
-      }; // fin _loadAndEdit
-      _loadAndEdit();
     } else if (action === 'publish') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
@@ -521,38 +480,10 @@ function _mcRenderList() {
         appAlert('No tienes permiso para eliminar esta obra.');
         return;
       }
-      appConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', async () => {
-        // Recoger animKeys/gifKeys antes de borrar para limpiar IDB
-        let _animKeys = [], _gifKeys = [];
-        try {
-          const full = ComicStore.getByIdFull
-            ? await ComicStore.getByIdFull(id)
-            : ComicStore.getById(id);
-          if (full && full.editorData && full.editorData.pages) {
-            full.editorData.pages.forEach(p => (p.layers||[]).forEach(l => {
-              if (l.animKey)       _animKeys.push(l.animKey);
-              if (l._pngFramesKey) _animKeys.push(l._pngFramesKey);
-              if (l.gifKey)        _gifKeys.push(l.gifKey);
-            }));
-          }
-        } catch(e) {}
-
-        // Borrar de ComicStore (OPFS + índice localStorage + cache + IDB prefijo <id>_*)
+      appConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
         ComicStore.remove(id);
-
-        // Borrar animKeys sueltas en IDB cxAnims (patrón anim_xxxx)
-        if (_animKeys.length) {
-          try {
-            const _idbReq = indexedDB.open('cxAnims', 1);
-            _idbReq.onsuccess = e => {
-              const _tx = e.target.result.transaction('anims', 'readwrite');
-              const _st = _tx.objectStore('anims');
-              _animKeys.forEach(k => { try { _st.delete(k); } catch(e2) {} });
-            };
-          } catch(e) {}
-        }
-
         _mcRenderList();
+        // Invalidar cache de portada
         if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
         if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
           SupabaseClient.deleteWork(comic.supabaseId)
@@ -565,6 +496,10 @@ function _mcRenderList() {
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
+      if (!comic.supabaseId) {
+        appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
+        return;
+      }
       if (typeof openShareModal !== 'undefined') openShareModal(comic);
     }
   });
@@ -575,163 +510,6 @@ function _mcBindNav() {
   document.getElementById('mcBackBtn')?.addEventListener('click', () => Router.go('home'));
   document.getElementById('mcCloudLoadBtn')?.addEventListener('click', _mcCloudLoad);
   document.getElementById('mcNewBtn')?.addEventListener('click', _mcOpenModal);
-  document.getElementById('mcSyncDiagBtn')?.addEventListener('click', _mcShowSyncDiag);
-
-  // Diagnóstico de sincronización — doble tap en el título de la app
-  let _diagTaps = 0, _diagTimer = null;
-  document.querySelector('.mc-header, h1, #mcTitle, .app-title')?.addEventListener('click', () => {
-    _diagTaps++;
-    clearTimeout(_diagTimer);
-    _diagTimer = setTimeout(() => { _diagTaps = 0; }, 800);
-    if (_diagTaps >= 3) { _diagTaps = 0; _mcShowSyncDiag(); }
-  });
-}
-
-function _mcShowSyncDiag() {
-  const L = [];
-  L.push('══ DIAGNÓSTICO SYNC FECHAS ══');
-  L.push(new Date().toLocaleString());
-
-  const diag = window._syncDiag || [];
-  if (!diag.length) {
-    L.push('Sin datos — espera a que _mcSyncCloudDates complete');
-  } else {
-    diag.forEach(d => {
-      if (d._type === 'INIT') {
-        L.push('\n── INIT sincronización ──');
-        L.push('userId sesión: ' + (d.userId || 'NULL'));
-        L.push('username: ' + (d.username || 'NULL'));
-        L.push('obras en índice: ' + d.totalInIndex);
-        L.push('obras que pasan filtro userId: ' + d.localsFound);
-        if (d.allIds) {
-          d.allIds.forEach(c => {
-            L.push('  id:' + c.id + ' userId:' + (c.userId||'NULL') + ' localSaved:' + (c.localSavedAt||'NULL') + ' cloudOnly:' + c.cloudOnly);
-          });
-        }
-        return;
-      }
-      L.push('\n── ' + (d.title || d.id || 'obra') + ' ──');
-      L.push('cloudDate:    ' + d.cloudDate);
-      L.push('localSavedAt: ' + (d.localSavedAt || 'NULL'));
-      L.push('updatedAt:    ' + (d.updatedAt || 'NULL'));
-      L.push('cloudIsNewer: ' + d.cloudIsNewer);
-      L.push('cloudOnly (antes): ' + d.cloudOnly_before);
-      L.push('cloudNewer (antes): ' + d.cloudNewer_before);
-    });
-  }
-
-  // ── ÚLTIMO ENVÍO ──────────────────────────────────────────
-  L.push('\n══ ÚLTIMO ENVÍO (botón 📤) ══');
-  const _sd = window._shareDiag;
-  if (!_sd) {
-    L.push('Sin datos — pulsa 📤 Enviar en una obra primero');
-  } else {
-    L.push('Obra: ' + _sd.title + ' (' + (_sd.comicId||'').slice(-8) + ')');
-    L.push('Hora: ' + _sd.t);
-    L.push('Modo: ' + _sd.mode);
-    L.push('Páginas: ' + _sd.pagesCount + ' | cloudOnly: ' + _sd.cloudOnly + ' | published: ' + _sd.published);
-
-    // Subida a Supabase
-    if (_sd.supabaseUpload) {
-      if (_sd.supabaseUpload.ok) {
-        L.push('✅ Subida Supabase: OK (' + _sd.supabaseUpload.ms + 'ms) savedAt=' + _sd.supabaseUpload.savedAt);
-        if (_sd.animUploadError) L.push('⚠️ Error subida APNG: ' + _sd.animUploadError);
-        if (_sd.animDiags && _sd.animDiags.length) {
-          L.push('Diagnóstico APNG (' + _sd.animDiags.length + ' layers animados):');
-          _sd.animDiags.forEach((d, i) => {
-            L.push('  [' + i + '] pngKey=' + (d.pngFramesKey||'null').slice(-12) + ' animKey=' + (d.animKey||'null').slice(-12));
-            if (d.pngFramesKeyData !== undefined) L.push('       pngKey IDB: ' + d.pngFramesKeyData);
-            if (d.animKeyData !== undefined)      L.push('       animKey IDB: ' + d.animKeyData);
-            if (d.buildApngResult !== undefined)  L.push('       buildApng: ' + d.buildApngResult);
-            L.push('       APNG ok: ' + !!d.apngDataUrlOk + ' | URL: ' + (d.animUrl ? '✅' : '❌'));
-            if (d.blobSize !== undefined) L.push('       blob: ' + d.blobSize + 'B status:' + d.uploadStatus + ' resp:' + d.uploadResponse);
-            if (d.error) L.push('       ❌ ' + d.error);
-          });
-        }
-      } else {
-        L.push('❌ Subida Supabase: FALLO — ' + _sd.supabaseUpload.error);
-      }
-    }
-
-    // Reguardado local tras subida
-    if (_sd.localSavedAtAfter) {
-      L.push('✅ localSavedAt actualizado: ' + _sd.localSavedAtAfter);
-      L.push('   → cloudIsNewer=false garantizado al volver a abrir');
-    } else if (_sd.mode === 'LOCAL→SUPABASE' && _sd.supabaseUpload?.ok) {
-      L.push('⚠️ localSavedAt NO actualizado — puede descargar de nube al volver');
-    }
-
-    if (_sd.error) {
-      L.push('❌ ERROR: ' + _sd.error);
-    } else if (_sd.url) {
-      L.push('✅ URL: ' + _sd.url);
-    } else {
-      L.push('❌ URL no generada');
-    }
-
-    // Diagnóstico de capas
-    if (_sd.layersSummary && _sd.layersSummary.length) {
-      L.push('Capas (' + _sd.layersSummary.length + '):');
-      _sd.layersSummary.forEach(l => {
-        let info = '  H' + l.page + 'C' + l.layer + ' (' + l.type + ')';
-        if (l.type === 'image') {
-          if (l.animKey)      info += ' animKey=' + l.animKey.slice(-12);
-          if (l.pngFramesKey) info += ' pngKey=✓';
-          if (!l.animKey && !l.pngFramesKey && l.hasSrc) info += ' src=✓';
-          if (!l.animKey && !l.pngFramesKey && !l.hasSrc) info += ' ⚠️ SIN DATOS ANIMACIÓN';
-        }
-        if (l.type === 'gif') {
-          if (l.gifKey)  info += ' gifKey=✓';
-          if (!l.gifKey) info += ' ⚠️ SIN gifKey';
-        }
-        if (l.type === 'draw' || l.type === 'stroke' || l.type === 'line') {
-          info += l.hasSrc ? ' src=✓' : (l.hasPoints ? ' points=✓' : ' (render diferido)');
-        }
-        L.push(info);
-      });
-    }
-  }
-
-  // Índice completo
-  L.push('\n══ ÍNDICE localStorage ══');
-  try {
-    const idx = JSON.parse(localStorage.getItem('cs_comics') || '[]');
-    idx.forEach(c => {
-      L.push('\n' + (c.title||'?') + ' (' + (c.id||'').slice(-8) + ')');
-      L.push('  localSavedAt: ' + (c.localSavedAt || 'NULL'));
-      L.push('  updatedAt: ' + (c.updatedAt || 'NULL'));
-      L.push('  cloudOnly: ' + !!c.cloudOnly + ' | cloudNewer: ' + !!c.cloudNewer);
-      L.push('  supabaseId: ' + (c.supabaseId || 'ninguno'));
-    });
-  } catch(e) { L.push('Error: ' + e.message); }
-
-  const text = L.join('\n');
-
-  // Panel copiable
-  const ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
-  const box = document.createElement('div');
-  box.style.cssText = 'background:#1a1a1a;color:#ddd;border-radius:10px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;font-family:monospace;font-size:.73rem';
-  const hdr = document.createElement('div');
-  hdr.style.cssText = 'padding:10px 14px;background:#111;display:flex;align-items:center;gap:8px;border-bottom:1px solid #333;flex-shrink:0';
-  hdr.innerHTML = '<span style="flex:1;font-weight:700;font-size:.85rem;color:#fff">🔬 Diagnóstico Sync</span>';
-  const cpBtn = document.createElement('button');
-  cpBtn.textContent = '📋 Copiar';
-  cpBtn.style.cssText = 'border:none;background:#297a4a;color:#fff;border-radius:5px;padding:4px 11px;cursor:pointer;font-size:.78rem;font-weight:700';
-  cpBtn.onclick = () => navigator.clipboard?.writeText(text).then(() => { cpBtn.textContent='✅'; setTimeout(()=>cpBtn.textContent='📋 Copiar',2000); });
-  const clBtn = document.createElement('button');
-  clBtn.textContent = '✕';
-  clBtn.style.cssText = 'border:none;background:transparent;color:#aaa;font-size:1.1rem;cursor:pointer;padding:2px 6px';
-  clBtn.onclick = () => ov.remove();
-  ov.addEventListener('pointerdown', e => { if(e.target===ov) ov.remove(); });
-  hdr.appendChild(cpBtn); hdr.appendChild(clBtn);
-  const ta = document.createElement('textarea');
-  ta.value = text; ta.readOnly = true;
-  ta.style.cssText = 'flex:1;background:#1a1a1a;color:#ddd;border:none;padding:12px 14px;resize:none;outline:none;font-family:monospace;font-size:.72rem;line-height:1.55;overflow-y:auto;-webkit-user-select:text;user-select:text';
-  box.appendChild(hdr); box.appendChild(ta);
-  ov.appendChild(box); document.body.appendChild(ov);
-}
-function _mcBindNavExtra() {
   document.getElementById('mcNewCancel')?.addEventListener('click', _mcCloseModal);
   document.getElementById('mcNewCreate')?.addEventListener('click', _mcCreateProject);
 }
@@ -754,41 +532,9 @@ function _mcCreateProject() {
   if (!title) { document.getElementById('mcTitle')?.focus(); return; }
 
   const user = Auth.currentUser?.() || null;
-  const _userId = user ? user.id : '_anon_';
-
-  // Comprobar si ya existe una obra del mismo usuario con este título
-  const _dup = ComicStore.getAll().find(c =>
-    c.title && c.title.trim().toLowerCase() === title.toLowerCase() &&
-    c.userId === _userId
-  );
-  if (_dup) {
-    const _ok = confirm('Ya tienes una obra llamada "' + title + '".\n¿Quieres sobreescribirla?');
-    if (!_ok) {
-      const titleEl = document.getElementById('mcTitle');
-      if (titleEl) { titleEl.value = ''; titleEl.focus(); }
-      return;
-    }
-    const comic = {
-      ..._dup,
-      genre,
-      social:   social || '',
-      navMode,
-      updatedAt: new Date().toISOString(),
-    };
-    ComicStore.save(comic);
-    _mcCloseModal();
-    ['mcTitle','mcGenre','mcSocial'].forEach(function(id) {
-      const el = document.getElementById(id);
-      if (el) el.value = '';
-    });
-    sessionStorage.setItem('cx_edit_id', comic.id);
-    Router.go('editor');
-    return;
-  }
-
   const comic = {
     id:       'comic_' + Date.now(),
-    userId:   _userId,
+    userId:   user ? user.id : '_anon_',
     username: user ? user.username : 'Anónimo',
     anonymous: !user,
     title,
@@ -881,20 +627,6 @@ async function _mcCloudLoad() {
         const localSaved = new Date(existing.localSavedAt || existing.updatedAt || 0);
         const cloudIsNewer = cloudDate > localSaved;
 
-        // Guardar diagnóstico para inspección
-        window._syncDiag = window._syncDiag || [];
-        window._syncDiag.push({
-          id: existing.id,
-          title: existing.title,
-          cloudDate: w.updated_at,
-          localSavedAt: existing.localSavedAt,
-          updatedAt: existing.updatedAt,
-          cloudIsNewer,
-          cloudOnly_before: existing.cloudOnly,
-          cloudNewer_before: existing.cloudNewer,
-          t: new Date().toISOString()
-        });
-
         // Siempre actualizar metadatos básicos
         let dirty = false;
         if (existing.userId !== user.id) { existing.userId = user.id; dirty = true; }
@@ -908,11 +640,9 @@ async function _mcCloudLoad() {
 
         if (cloudIsNewer) {
           // La nube tiene una versión más reciente
-          // IMPORTANTE: existing viene del índice (sin editorData — está en OPFS)
-          // Si localSavedAt existe, hay datos locales en OPFS que deben preservarse
-          // Marcar _hasLocalOpfs para que al abrir, my-comics lea OPFS y preserve localEditorData
-          if (existing.localSavedAt && !existing.localEditorData) {
-            existing._hasLocalOpfs = true; // señal: hay editorData en OPFS para preservar
+          // Preservar editorData local bajo localEditorData para poder restaurar
+          if (existing.editorData && !existing.localEditorData) {
+            existing.localEditorData = existing.editorData;
           }
           existing.editorData = null; // forzar descarga al editar
           existing.cloudOnly  = true;

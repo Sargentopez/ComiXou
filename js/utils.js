@@ -83,125 +83,24 @@ function closeReaderModalGlobal() {
 /* ══════════════════════════════════════════
    MODAL ENVIAR — compartir enlace al reader
    ══════════════════════════════════════════ */
-async function openShareModal(comic) {
-  const base = window.location.origin + window.location.pathname
-    .replace(/\/index\.html$/, '').replace(/\/$/, '');
-
-  let url;
-
-  // Decidir fuente de datos:
-  // 1. Si tiene datos locales (editorData en OPFS) → construir desde local
-  // 2. Si solo está en la nube (cloudOnly sin editorData) → usar enlace Supabase
-  const _comicFull = ComicStore.getByIdFull
-    ? await ComicStore.getByIdFull(comic.id)
-    : comic;
-
-  const _hasLocal = !!(_comicFull?.editorData?.pages?.length);
-
-  // Iniciar registro de diagnóstico del envío
-  const _shareDiag = {
-    t:           new Date().toISOString(),
-    comicId:     comic.id,
-    title:       comic.title || '?',
-    hasLocal:    _hasLocal,
-    cloudOnly:   !!comic.cloudOnly,
-    supabaseId:  comic.supabaseId || null,
-    published:   !!comic.published,
-    pagesCount:  _comicFull?.editorData?.pages?.length || 0,
-    mode:        _hasLocal && comic.supabaseId ? 'LOCAL→SUPABASE' : (_hasLocal ? 'LOCAL_SIN_SUBIR' : (comic.supabaseId ? 'NUBE' : 'ERROR')),
-    supabaseUpload: null,  // resultado de la subida a Supabase
-    localSavedAtAfter: null, // localSavedAt tras reguardar
-    layersSummary: [],
-    localStorageKey: null,
-    localStorageBytes: null,
-    url: null,
-    error: null,
-  };
-  // Analizar capas para diagnóstico
-  if (_hasLocal && _comicFull?.editorData?.pages) {
-    _comicFull.editorData.pages.forEach((p, pi) => {
-      (p.layers || []).forEach((l, li) => {
-        const info = { page: pi+1, layer: li+1, type: l.type };
-        if (l.type === 'image') {
-          info.animKey       = l.animKey       || null;
-          info.pngFramesKey  = l._pngFramesKey || null;
-          info.hasSrc        = !!l.src;
-        }
-        if (l.type === 'gif') {
-          info.gifKey   = l.gifKey   || null;
-          info.gifUrl   = l._gifUrl  || null;
-        }
-        if (l.type === 'draw' || l.type === 'stroke' || l.type === 'line') {
-          info.hasSrc   = !!(l.src || l.dataUrl);
-          info.hasPoints = !!(l.points && l.points.length);
-        }
-        _shareDiag.layersSummary.push(info);
-      });
-    });
-  }
-  // Guardar diagnóstico en window para que el panel lo muestre
-  window._shareDiag = _shareDiag;
-
-  if (_hasLocal && comic.supabaseId && typeof SupabaseClient !== 'undefined' && typeof Auth !== 'undefined' && Auth.currentUser?.()) {
-    // ── MODO LOCAL → SUBIR A SUPABASE → enlace Supabase ──
-    // Sube SIEMPRE los datos locales (no los que ya estén en Supabase)
-    // Así el receptor ve la versión correcta y el emisor no descarga la nube al volver
-    _shareDiag.mode = 'LOCAL→SUPABASE';
-    try {
-      // Asegurar que tiene supabaseId
-      if (!_comicFull.supabaseId) _comicFull.supabaseId = comic.supabaseId;
-      const _t0 = Date.now();
-      const { savedAt } = await SupabaseClient.saveDraft(_comicFull);
-      _shareDiag.supabaseUpload = { ok: true, ms: Date.now() - _t0, savedAt };
-      // Actualizar localSavedAt con la fecha exacta de Supabase
-      // → localSavedAt === updated_at → cloudIsNewer = false → no descarga al volver
-      if (savedAt && ComicStore.save) {
-        const _idx = ComicStore.getById(comic.id);
-        if (_idx) {
-          await ComicStore.save({ ..._idx, localSavedAt: savedAt });
-          _shareDiag.localSavedAtAfter = savedAt;
-        }
-      }
-    } catch(e) {
-      _shareDiag.supabaseUpload = { ok: false, error: e.message };
-      _shareDiag.error = 'saveDraft falló: ' + e.message;
-      console.warn('openShareModal saveDraft:', e);
-      // Si falla la subida, mostrar error — no compartir enlace roto
-      window._shareDiag = _shareDiag;
-      appAlert('Error al subir a la nube: ' + e.message + '\n\nComprueba tu conexión e inténtalo de nuevo.');
-      return;
-    }
-    const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
-    url = base + '/reader/index.html?' + param;
-    _shareDiag.url = url;
-
-  } else if (_hasLocal && !comic.supabaseId) {
-    // ── Sin supabaseId — obra nunca subida ──
-    appAlert('Esta obra no está en la nube. Ábrela en el editor, guárdala en la nube y vuelve a intentarlo.');
-    return;
-
-  } else if (comic.supabaseId) {
-    // ── MODO NUBE: sin datos locales (cloudOnly) — enlace directo ──
-    _shareDiag.mode = 'NUBE';
-    const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
-    url = base + '/reader/index.html?' + param;
-    _shareDiag.url = url;
-
-  } else {
-    appAlert('Esta obra no tiene datos guardados. Ábrela en el editor y guárdala antes de compartir.');
+function openShareModal(comic) {
+  if (!comic.supabaseId) {
+    appAlert('Esta obra no está en la nube. Súbela primero para poder compartirla.');
     return;
   }
 
+  const base  = window.location.origin + window.location.pathname.replace(/\/index\.html$/, '').replace(/\/$/, '');
+  const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
+  const url   = base + '/reader/index.html?' + param;
   const title = comic.title || 'Una obra en ComiXow';
   const text  = `Mira "${title}" en ComiXow`;
 
   if ('share' in navigator) {
-    // Android/móvil: hoja nativa de compartir (WhatsApp, Telegram, correo...)
     navigator.share({ title, text, url }).catch(e => {
       if (e.name !== 'AbortError') console.warn('share:', e);
     });
   } else {
-    // PC: copiar enlace al portapapeles
+    // Fallback: copiar enlace al portapapeles
     navigator.clipboard.writeText(url).then(() => {
       appAlert('Enlace copiado al portapapeles:\n' + url);
     }).catch(() => {

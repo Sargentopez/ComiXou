@@ -121,12 +121,6 @@ const SupabaseClient = (() => {
     }
   }
 
-  // Versiones autenticadas (con JWT) de _get y _upsert
-  async function _getAuth(path) { return _get(path); } // _get ya usa _hdrsUser() con JWT
-  async function _upsertAuth(table, data) {
-    return _upsert(table, data); // _upsert ya usa _hdrsUser() internamente
-  }
-
   async function _upsert(table, data) {
     if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/${table}`, {
@@ -225,12 +219,6 @@ const SupabaseClient = (() => {
 
   // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
   async function _animUpload(animKey, dataUrl) {
-    if (!dataUrl || !dataUrl.startsWith('data:')) {
-      const _err = 'animUpload: dataUrl inválido, tipo=' + typeof dataUrl + ' inicio=' + String(dataUrl).slice(0,30);
-      console.warn(_err);
-      if (window._shareDiag) window._shareDiag.animUploadError = _err;
-      return null;
-    }
     if (window._authTryRefresh) await window._authTryRefresh();
     const b64 = dataUrl.split(',')[1];
     const bin = atob(b64);
@@ -243,15 +231,7 @@ const SupabaseClient = (() => {
       headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true' },
       body:    blob,
     });
-    const _rText = await r.text();
-    if (!r.ok) throw new Error(`animUpload: ${r.status} ${_rText}`);
-    if (window._shareDiag) {
-      window._shareDiag.animDiags = window._shareDiag.animDiags || [];
-      const _last = window._shareDiag.animDiags[window._shareDiag.animDiags.length-1] || {};
-      _last.uploadResponse = _rText;
-      _last.uploadStatus = r.status;
-      _last.blobSize = blob.size;
-    }
+    if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
     return `${STORAGE}/object/public/anims/${path}`;
   }
   // _animDownload definida más abajo
@@ -325,10 +305,6 @@ const SupabaseClient = (() => {
 
     if (!panels.length) return;
 
-    // Borrar paneles existentes — garantiza que el INSERT devuelve el nuevo id correcto
-    // y que no quedan paneles huérfanos de versiones anteriores
-    await _delete('panels', `work_id=eq.${comic.supabaseId}`);
-
     for (let i = 0; i < panels.length; i++) {
       const p = panels[i];
       const ins = await _upsert('panels', {
@@ -370,58 +346,23 @@ const SupabaseClient = (() => {
           delete _lClean._oc;
           delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
 
-          // APNG animado → bucket 'anims'
-          // Carta v19.44: usar _pngFramesKey primero (siempre existe tras edSaveProject)
-          // Si no hay datos por esa clave, intentar animKey como fallback
+          // APNG animado → bucket 'anims' — patrón idéntico al GIF
           let animUrl = null;
           if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
+            const _idbKey = l._pngFramesKey || l.animKey;
             const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-            const _animDiag = { pngFramesKey: l._pngFramesKey||null, animKey: l.animKey||null };
             try {
-              let _apngDataUrl = null;
-
-              // Estrategia: animKey primero si tiene string APNG completo (mejor calidad)
-              // _pngFramesKey puede tener array de frames reconstruidos (peor calidad)
-
-              // Estrategia unificada: probar animKey y _pngFramesKey
-              // Acepta string APNG o array de frames
-              const _tryLoadApng = async (key) => {
-                if (!key) return null;
-                const d = await _sbAnimIdbLoad(key);
-                if (!d) return null;
-                if (typeof d === 'string' && d.startsWith('data:')) return d;
-                if (Array.isArray(d) && d.length) {
-                  if (d.length === 1 && typeof d[0] === 'string' && d[0].startsWith('data:')) return d[0];
-                  return await _buildApngFromFrames(d, l._gcpFrameDelay || 100);
+              const _animData = await _sbAnimIdbLoad(_idbKey);
+              if (_animData) {
+                let _apngDataUrl = null;
+                if (typeof _animData === 'string') {
+                  _apngDataUrl = _animData;
+                } else if (Array.isArray(_animData) && _animData.length) {
+                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
                 }
-                return null;
-              };
-              // 1. animKey — fuente primaria
-              if (l.animKey) {
-                _apngDataUrl = await _tryLoadApng(l.animKey);
-                _animDiag.animKeyData = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
+                if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
               }
-              // 2. _pngFramesKey — fuente secundaria
-              if (!_apngDataUrl && l._pngFramesKey) {
-                _apngDataUrl = await _tryLoadApng(l._pngFramesKey);
-                _animDiag.pngFramesKeyData = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
-              }
-
-              _animDiag.apngDataUrlOk = !!_apngDataUrl;
-              if (_apngDataUrl) {
-                animUrl = await _animUpload(_bucketKey, _apngDataUrl);
-                _animDiag.animUrl = animUrl;
-              } else {
-                _animDiag.error = 'Sin datos APNG en IDB';
-              }
-            } catch(e) {
-              _animDiag.error = e.message;
-              console.warn('APNG upload error:', e.message);
-            }
-            if (window._shareDiag) {
-              window._shareDiag.animDiags = window._shareDiag.animDiags || [];
-              window._shareDiag.animDiags.push(_animDiag);
-            }
+            } catch(e) { console.warn('APNG upload error:', e.message); }
           }
 
           // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
@@ -440,41 +381,9 @@ const SupabaseClient = (() => {
         if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
       }
 
-      // Textos para el reader — reconstruir desde editorData.pages[i].layers
-      // comic.panels son renders planos sin layers — usar edPages que sí los tiene
-      const _edPageForTexts = edPages[i];
-      let _pTexts = p.texts || [];
-      if (!_pTexts.length && _edPageForTexts) {
-        _pTexts = (_edPageForTexts.layers || [])
-          .filter(l => (l.type === 'bubble' || l.type === 'text') && l._hasText !== false)
-          .map((l, i) => ({
-            order:     l._seqOrder !== undefined ? l._seqOrder : i,
-            type:      l.type,
-            style:     l.style       || 'conventional',
-            hasTail:   l.hasTail     !== undefined ? l.hasTail : true,
-            tailStarts: l.tailStarts,
-            tailEnds:   l.tailEnds,
-            voiceCount: l.voiceCount || 1,
-            x:          l.x,
-            y:          l.y,
-            width:      l.width,
-            height:     l.height,
-            text:       l.text       || '',
-            fontFamily: l.fontFamily || 'Patrick Hand',
-            fontSize:   l.fontSize   ?? 30,
-            fontBold:   l.fontBold   ?? false,
-            fontItalic: l.fontItalic ?? false,
-            color:      l.color      || '#000000',
-            backgroundColor: l.backgroundColor || '#ffffff',
-            bgOpacity:  l.bgOpacity  !== undefined ? l.bgOpacity : 1,
-            borderWidth: l.borderWidth ?? 0,
-            borderColor: l.borderColor || '#000000',
-            rotation:   l.rotation   ?? 0,
-            padding:    l.padding    ?? 10,
-          }));
-      }
-      if (!_pTexts.length) continue;
-      await _upsert('panel_texts', _pTexts.map((t, j) => ({
+      // Textos para el reader (panel_texts sin cambios)
+      if (!p.texts || p.texts.length === 0) continue;
+      await _upsert('panel_texts', p.texts.map((t, j) => ({
         panel_id:     panelId,
         text_order:   t.order              ?? j,
         type:         t.type              || 'bubble',
@@ -518,7 +427,6 @@ const SupabaseClient = (() => {
       throw new Error(`La obra ocupa ~${Math.round(sizeKB/1024)}MB, supera el límite de 50MB. Reduce el número de páginas o el tamaño de las imágenes.`);
     }
 
-    const _savedAt = new Date().toISOString();
     await _upsert('works', {
       id:             sid,
       title:          comic.title      || '',
@@ -531,10 +439,10 @@ const SupabaseClient = (() => {
       rules:          JSON.stringify(comic.editorData?._rules || []),
       published:      comic.approved   ? true  : false,
       pending_review: comic.pendingReview ? true : false,
-      updated_at:     _savedAt,
+      updated_at:     new Date().toISOString(),
     });
     await _uploadPanels(comic);
-    return { sizeKB, savedAt: _savedAt };
+    return { sizeKB };
   }
 
   async function submitForReview(comic) {
@@ -568,16 +476,10 @@ const SupabaseClient = (() => {
     // Borrar en orden FK: panel_layers → panel_texts → panels → works
     const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
     for (const p of (panels || [])) {
-      // Borrar GIFs y APNGs del bucket antes de borrar las capas
+      // Borrar GIFs del bucket antes de borrar las capas
       try {
         const gifLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.gif&select=gif_url`);
         for (const gl of (gifLayers || [])) { await _gifDelete(gl.gif_url); }
-      } catch(e) {}
-      try {
-        const animLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.image&select=anim_url`);
-        for (const al of (animLayers || [])) {
-          if (al.anim_url) { await _animDelete(al.anim_url).catch(() => {}); }
-        }
       } catch(e) {}
       await _delete('panel_layers', `panel_id=eq.${p.id}`);
       await _delete('panel_texts',  `panel_id=eq.${p.id}`);
@@ -639,7 +541,6 @@ const SupabaseClient = (() => {
         }
         // GIF: descargar de Storage y meter en IndexedDB local
         if (layerObj.type === 'gif' && row.gif_url) {
-          layerObj._gifUrl = row.gif_url; // URL pública de fallback
           try {
             const gifResp = await fetch(row.gif_url);
             if (gifResp.ok) {
@@ -899,25 +800,5 @@ const SupabaseClient = (() => {
     return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
   }
 
-  // ── Preferencias de usuario (tabla authors.preferences) ──────
-  async function savePreferences(userId, prefs) {
-    if (!userId || !prefs) return;
-    try {
-      await _upsertAuth('authors', {
-        id:          userId,
-        preferences: prefs,
-      });
-    } catch(e) { console.warn('savePreferences:', e.message); }
-  }
-
-  async function loadPreferences(userId) {
-    if (!userId) return null;
-    try {
-      const rows = await _getAuth('authors?id=eq.' + userId + '&select=preferences');
-      if (rows && rows.length && rows[0].preferences) return rows[0].preferences;
-    } catch(e) { console.warn('loadPreferences:', e.message); }
-    return null;
-  }
-
-      return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, savePreferences, loadPreferences };
+    return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
 })();

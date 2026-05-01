@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v20.30</footer>
+    <footer class="app-version">v19.44</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -143,10 +143,6 @@ Router.register('my-comics', {
       <div class="page-nav-sep"></div>
       <div class="page-nav-item">
         <button class="page-nav-btn" id="mcCloudLoadBtn" title="Cargar borradores guardados en la nube">☁️ Cargar de nube</button>
-      </div>
-      <div class="page-nav-sep"></div>
-      <div class="page-nav-item">
-        <button class="page-nav-btn" id="mcSyncDiagBtn" title="Diagnóstico sincronización" style="font-size:.75rem;opacity:.5">🔬</button>
       </div>
       <div class="page-nav-sep"></div>
       <div class="page-nav-item">
@@ -358,8 +354,6 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="dd-loadjson">Cargar obra (.json)</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-recoverlocal" style="display:none">↩ Recuperar versión del dispositivo</button>
-              <div class="ed-dropdown-sep"></div>
-              <button class="ed-dropdown-item" id="dd-diagnostico" style="color:var(--gray-500);font-size:.8rem">🔬 Diagnóstico</button>
             </div>
           </div>
 

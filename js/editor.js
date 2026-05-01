@@ -2084,7 +2084,7 @@ class LineLayer extends BaseLayer {
     });
 
     // Helper: construye un contorno cerrado con radios opcionales en un Path2D
-    const _buildContour = (target, localPts, localCr, isClosed) => {
+    const _buildContour = (target, localPts, localCr) => {
       const _n = localPts.length; if(_n < 2) return;
       const _cr2 = localCr || {};
       const _px2b = p => ({x: p.x*pw, y: p.y*ph});
@@ -2101,18 +2101,15 @@ class LineLayer extends BaseLayer {
         return {p1:{x:cur.x-v1.x*r,y:cur.y-v1.y*r}, p2:{x:cur.x+v2.x*r,y:cur.y+v2.y*r}, cur, r};
       });
       const t0=_tgs[0];
-      // Abierto: empezar en el punto real; cerrado: empezar en p1 (antes del arco de esquina)
-      if(isClosed) target.moveTo(t0.p1.x, t0.p1.y);
-      else         target.moveTo(t0.cur.x, t0.cur.y);
-      const _limit = isClosed ? _n : _n - 1;
-      for(let i=0;i<_limit;i++){
+      target.moveTo(t0.p1.x, t0.p1.y);
+      for(let i=0;i<_n;i++){
         const {p1,p2,cur,r}=_tgs[i];
-        if(isClosed && r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
+        if(r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
         const next=_tgs[(i+1)%_n];
-        if(isClosed && next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
-        else                     { target.lineTo(next.cur.x,next.cur.y); }
+        if(next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
+        else         { target.lineTo(next.cur.x,next.cur.y); }
       }
-      if(isClosed) target.closePath();
+      target.closePath();
     };
 
     if(_multiContour){
@@ -2138,7 +2135,7 @@ class LineLayer extends BaseLayer {
           }
           _ptBase = _scan + 1; // saltar el null separador
           const _path = new Path2D();
-          _buildContour(_path, c, _crC, _cl);
+          _buildContour(_path, c, _crC);
           if(_cl && _fc && _fc !== 'none'){
             ctx.fillStyle = _fc;
             ctx.fill(_path);
@@ -2163,7 +2160,7 @@ class LineLayer extends BaseLayer {
               _gIdx++;
             }
           }
-          _buildContour(combined, c, _crC, this.closed);
+          _buildContour(combined, c, _crC);
         });
         if (this.fillColor && this.fillColor !== 'none') {
           ctx.fillStyle = this.fillColor;
@@ -5750,17 +5747,11 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       // ── Nuevo sistema cursor: timer 120ms para detectar segundo dedo (pinch) ──
       if(_cof.on){
-        const _cofIsRed = (_cof.state==='red_ready'||_cof.state==='red_cool');
-        if(_cofIsRed){
-          // Estado rojo: disparar inmediatamente sin esperar segundo dedo
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!['draw','eraser'].includes(edActiveTool)) return;
           _cofHandleTouch(_eSaved);
-        } else {
-          window._edDrawTouchTimer = setTimeout(() => {
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-            if(!['draw','eraser'].includes(edActiveTool)) return;
-            _cofHandleTouch(_eSaved);
-          }, 120);
-        }
+        }, 120);
         return;
       }
       // ── Modo dibujo normal (sin cursor offset) ──
@@ -6290,16 +6281,11 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       const _eSaved2 = e;
       if(e.pointerType === 'touch' && _cof.on){
-        const _cofIsRed2 = (_cof.state==='red_ready'||_cof.state==='red_cool');
-        if(_cofIsRed2){
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!['draw','eraser'].includes(edActiveTool)) return;
           _cofHandleTouch(_eSaved2);
-        } else {
-          window._edDrawTouchTimer = setTimeout(() => {
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-            if(!['draw','eraser'].includes(edActiveTool)) return;
-            _cofHandleTouch(_eSaved2);
-          }, 120);
-        }
+        }, 120);
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
           if(!window._edActivePointers || window._edActivePointers.size > 1) return;
@@ -8221,9 +8207,11 @@ function _cofHandleUp(e) {
 
 function _cofAfterStroke() {
   if (!_cof.on) return;
+  _cof.state = 'red_cool';
   _cof._strokeStarted = false;
+  _cofDraw();
   clearTimeout(_cof._timer);
-  _cofExpire();
+  _cof._timer = setTimeout(_cofExpire, _cof.MS_COOL);
 }
 
 function _cofExpire() {
@@ -11571,8 +11559,7 @@ function _edbSyncOffsetBtn(){
   const edbBtn = $('edb-offset');
   if(edbBtn){
     edbBtn.classList.toggle('active', _edCursorOffset);
-    edbBtn.style.opacity = '1';
-    edbBtn.style.color = _edCursorOffset ? '#fff' : 'rgba(255,255,255,0.5)';
+    edbBtn.style.opacity = _edCursorOffset ? '1' : '0.5';
   }
   // Botones izq/der en el popover de la BARRA FLOTANTE
   [{id:'edb-offset-pop-l', a:40},{id:'edb-offset-pop-r', a:-40}].forEach(({id,a}) => {
@@ -12177,74 +12164,6 @@ function _edBubbleTailDir(l){
     return ex > 0 ? 'right' : 'left';
   }
 }
-/* ── Overlay de guardado — bloquea UI igual que el panel de Hojas ── */
-let _edSaveOverlayTimer  = null;
-let _edSaveOverlayStart  = 0;
-let _edSaveOverlayActive = false;
-
-function _edSaveOverlayShow(title) {
-  if (document.getElementById('_edSaveOverlay')) return;
-  _edSaveOverlayActive = true;
-  _edSaveOverlayStart  = Date.now();
-
-  const ov = document.createElement('div');
-  ov.id = '_edSaveOverlay';
-  ov.className = 'ed-fulloverlay';
-  ov.innerHTML = `
-    <div class="ed-fulloverlay-box" style="max-height:220px;padding:28px 24px 24px;text-align:center;gap:16px">
-      <div style="font-size:1.6rem" id="_edSaveOvIcon">💾</div>
-      <h2 style="font-size:1rem;font-weight:700;margin:0" id="_edSaveOvTitle">${title||'Guardando...'}</h2>
-      <div style="width:100%;height:8px;background:var(--gray-200,#eee);border-radius:99px;overflow:hidden;margin:4px 0">
-        <div id="_edSaveOvBar" style="height:100%;width:0%;background:var(--black,#111);border-radius:99px;transition:width .3s ease"></div>
-      </div>
-      <p id="_edSaveOvMsg" style="font-size:.82rem;color:var(--gray-600,#555);margin:0">Preparando...</p>
-      <p id="_edSaveOvTimer" style="font-size:.75rem;color:var(--gray-400,#999);margin:0">0s</p>
-    </div>`;
-  document.body.appendChild(ov);
-  // Forzar reflow para que la animación CSS arranque
-  requestAnimationFrame(() => requestAnimationFrame(() => ov.classList.add('open')));
-
-  // Actualizar contador de segundos
-  _edSaveOverlayTimer = setInterval(() => {
-    const el = document.getElementById('_edSaveOvTimer');
-    if (el) el.textContent = Math.floor((Date.now() - _edSaveOverlayStart) / 1000) + 's';
-  }, 1000);
-}
-
-function _edSaveOverlayUpdate(msg, pct) {
-  const msgEl = document.getElementById('_edSaveOvMsg');
-  const barEl = document.getElementById('_edSaveOvBar');
-  if (msgEl && msg  !== undefined) msgEl.textContent = msg;
-  if (barEl && pct  !== undefined) barEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
-}
-
-function _edSaveOverlayClose(success) {
-  _edSaveOverlayActive = false;
-  clearInterval(_edSaveOverlayTimer);
-  _edSaveOverlayTimer = null;
-  const ov = document.getElementById('_edSaveOverlay');
-  if (!ov) return;
-  // Mostrar resultado brevemente antes de cerrar
-  const icon  = document.getElementById('_edSaveOvIcon');
-  const title = document.getElementById('_edSaveOvTitle');
-  const msg   = document.getElementById('_edSaveOvMsg');
-  const bar   = document.getElementById('_edSaveOvBar');
-  if (success === false) {
-    if (icon)  icon.textContent  = '⚠️';
-    if (title) title.textContent = 'Error al guardar';
-    if (msg)   msg.textContent   = 'Comprueba tu conexión e inténtalo de nuevo';
-    if (bar)   bar.style.background = '#e63030';
-  } else {
-    if (icon)  icon.textContent  = '✅';
-    if (title) title.textContent = 'Guardado correctamente';
-    if (bar)   { bar.style.width = '100%'; }
-  }
-  setTimeout(() => {
-    ov.classList.remove('open');
-    setTimeout(() => ov.remove(), 260);
-  }, success === false ? 1800 : 800);
-}
-
 let _edCloudSavingStart = 0;
 let _edCloudSavingTimer = null;
 function _edCloudSavingUpdateBadge() {
@@ -12265,23 +12184,20 @@ async function edCloudSave() {
   if (!Auth?.currentUser?.()) {
     // Sin sesión: ofrecer login en lugar de rechazar
     edToast('Inicia sesión para guardar en la nube');
-    setTimeout(async () => {
+    setTimeout(() => {
       if (confirm('¿Quieres iniciar sesión para guardar en la nube?')) {
         // Guardar localmente antes de salir al login
-        await edSaveProject();
+        edSaveProject();
         Router.go('login');
       }
     }, 400);
     return;
   }
 
-  // Guardar localmente primero — suppressOverlay=true para no mostrar overlay doble
-  _edSaveOverlayShow('Guardando...'); _edSaveOverlayUpdate('Guardando en dispositivo...', 15); await edSaveProject(true);
+  // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
+  await edSaveProject();
 
-  // Usar getByIdFull para obtener editorData desde OPFS — necesario para _uploadPanels
-  const comic = ComicStore.getByIdFull
-    ? await ComicStore.getByIdFull(edProjectId)
-    : ComicStore.getById(edProjectId);
+  const comic = ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
   // Asignar supabaseId si aún no tiene
@@ -12296,19 +12212,11 @@ async function edCloudSave() {
   _edCloudSavingStart = Date.now();
   _edCloudSavingUpdateBadge();
 
-  // Actualizar overlay (ya abierto) para fase nube
-  _edSaveOverlayUpdate('Subiendo a la nube...', 40);
-
   try {
-    const { sizeKB, savedAt } = await SupabaseClient.saveDraft(comic);
-    _edSaveOverlayUpdate('Sincronizando biblioteca...', 90);
-    // Actualizar localSavedAt con la fecha exacta de Supabase
-    // para que _mcSyncCloudDates no marque esta obra como "cloudNewer" en la próxima sincronización
-    if (savedAt) {
-      const _syncComic = ComicStore.getById(edProjectId);
-      if (_syncComic) ComicStore.save({ ..._syncComic, localSavedAt: savedAt });
-    }
+    const { sizeKB } = await SupabaseClient.saveDraft(comic);
+    edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
     // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
+    // El autor deberá volver a solicitar publicación.
     const _comicAfter = ComicStore.getById(edProjectId);
     if (_comicAfter && (_comicAfter.approved || _comicAfter.pendingReview)) {
       ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false });
@@ -12322,11 +12230,7 @@ async function edCloudSave() {
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
       } catch(e) { console.warn('bibSync error:', e); }
     }
-    _edSaveOverlayUpdate('Guardado ✓', 100);
-    _edSaveOverlayClose(true);
-    edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
   } catch(err) {
-    _edSaveOverlayClose(false);
     edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
     console.error('edCloudSave:', err);
   } finally {
@@ -12336,15 +12240,10 @@ async function edCloudSave() {
   }
 }
 
-async function edSaveProject(_suppressOverlay){
+async function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
-  // Mostrar overlay de guardado solo si no lo suprime quien llama
-  if (!_suppressOverlay) {
-    _edSaveOverlayShow('Guardando en dispositivo...');
-    _edSaveOverlayUpdate('Preparando datos...', 5);
-  }
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
-  const existing = await (ComicStore.getByIdFull ? ComicStore.getByIdFull(edProjectId) : Promise.resolve(ComicStore.getById(edProjectId))) || {};
+  const existing=ComicStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
   const _camState = { x: edCamera.x, y: edCamera.y, z: edCamera.z, page: edCurrentPage };
   const panels=edPages.map((p,i)=>{
@@ -12406,7 +12305,7 @@ async function edSaveProject(_suppressOverlay){
     });
     return {
       id:'panel_'+i,
-      dataUrl: i === 0 ? edRenderPage(p) : null,  // solo el panel 0 como miniatura — el resto satura localStorage
+      dataUrl:edRenderPage(p),
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
       textMode: p.textMode || 'sequential',
       texts,
@@ -12424,7 +12323,6 @@ async function edSaveProject(_suppressOverlay){
     for (let _li=0; _li<p.layers.length; _li++) {
       const _sl = edSerLayer(p.layers[_li]);
       if (!_sl) continue;
-      const _liveLayer = p.layers[_li];
       // Externalizar _pngFrames a IndexedDB para no saturar localStorage
       if (_sl._pngFrames && _sl._pngFrames.length) {
         const _idbKey = edProjectId + '_' + _pi + '_' + _li;
@@ -12432,56 +12330,13 @@ async function edSaveProject(_suppressOverlay){
         delete _sl._pngFrames;
         _sl._pngFramesKey = _idbKey;
       }
-      // Si tiene animKey pero no está en IDB con datos válidos, intentar guardar desde _apngSrc
-      // NUNCA reconstruir desde _animFrames y guardar en animKey — eso sobreescribe el original
-      if (_sl.animKey && !_sl._pngFrames && !_sl._pngFramesKey) {
-        const _existing = window._sbAnimIdbLoad ? await window._sbAnimIdbLoad(_sl.animKey).catch(()=>null) : null;
-        // Válido: string APNG o array de frames con contenido real
-        const _existingIsValid = (typeof _existing === 'string' && _existing.startsWith('data:') && _existing.length > 10000)
-                               || (Array.isArray(_existing) && _existing.length > 0);
-        // Si ya existe dato válido en IDB por animKey, usar animKey como _pngFramesKey
-        // para que edDeserLayer y _uploadPanels lo encuentren
-        if (_existingIsValid && !_sl._pngFramesKey) {
-          _sl._pngFramesKey = _sl.animKey;
-        }
-        if (!_existingIsValid) {
-          // Solo guardar si tenemos _apngSrc original (no reconstruido)
-          const _apng = _liveLayer._apngSrc;
-          if (_apng && _apng.startsWith('data:') && _apng.length > 10000 && window._sbAnimIdbSave) {
-            // Guardar APNG original en animKey
-            try { await window._sbAnimIdbSave(_sl.animKey, _apng); } catch(e) {}
-            // También guardar en _pngFramesKey para acceso futuro
-            const _idbKey2 = edProjectId + '_' + _pi + '_' + _li;
-            await _edAnimIdbSave(_idbKey2, _apng).catch(()=>{});
-            _sl._pngFramesKey = _idbKey2;
-          } else if (_liveLayer._animFrames && _liveLayer._animFrames.length && window._sbAnimIdbSave) {
-            // Solo guardar en _pngFramesKey (nueva clave del proyecto), NO en animKey
-            try {
-              const _oc2 = document.createElement('canvas');
-              _oc2.width = _liveLayer._animOc?.width || 100;
-              _oc2.height = _liveLayer._animOc?.height || 100;
-              const _ctx2 = _oc2.getContext('2d');
-              const _frames2 = _liveLayer._animFrames.map(f => {
-                _ctx2.clearRect(0,0,_oc2.width,_oc2.height);
-                _ctx2.putImageData(f.imageData,0,0);
-                return _oc2.toDataURL('image/png');
-              });
-              // Guardar SOLO en _pngFramesKey — no tocar animKey con datos reconstruidos
-              const _idbKey2 = edProjectId + '_' + _pi + '_' + _li;
-              await _edAnimIdbSave(_idbKey2, _frames2).catch(()=>{});
-              _sl._pngFramesKey = _idbKey2;
-            } catch(e) {}
-          }
-        }
-      }
       _pageLayers.push(_sl);
     }
     _edPages.push({layers:_pageLayers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient2});
   }
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
-  _edSaveOverlayUpdate('Guardando en OPFS...', 70);
 
-  const _savePayload = {
+  ComicStore.save({
     ...existing,
     id:edProjectId,
     ...edProjectMeta,
@@ -12495,19 +12350,12 @@ async function edSaveProject(_suppressOverlay){
     updatedAt:new Date().toISOString(),
     localSavedAt:new Date().toISOString(),
     cameraState: _camState,
+    // Al guardar localmente: esta es la versión local canónica
     cloudOnly:  false,
     cloudNewer: false,
-  };
-  window._saveDiag = {t_start: Date.now(), id: edProjectId, pages: _edPages.length, suppressOverlay: !!_suppressOverlay};
-  const _saveResult = await ComicStore.save(_savePayload);
-  window._saveDiag.t_end = Date.now();
-  window._saveDiag.ms = window._saveDiag.t_end - window._saveDiag.t_start;
-  window._saveDiag.opfsDiag = window._opfsDiag ? [...window._opfsDiag] : [];
-  _edSaveOverlayUpdate('Guardado en OPFS ✓', 100);
-  if (!_suppressOverlay) {
-    _edSaveOverlayClose(true);
-    edToast('Guardado ✓');
-  }
+    // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
+  });
+  edToast('Guardado ✓');
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
   _edSavedHistoryIdx = edHistoryIdx;
   edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
@@ -12934,7 +12782,6 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='gif'){
     const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
-    if(l._gifUrl) _g._gifUrl=l._gifUrl; // URL pública de fallback si cxGifs está vacío
     if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; return _g;
   }
   if(l.type==='image'){
@@ -13202,20 +13049,8 @@ function edDeserLayer(d, pageOrientation){
     const l=new GifLayer(d.gifKey||'',d.x,d.y,d.width);
     l.height=d.height||0.3; l.rotation=d.rotation||0;
     if(d.opacity!==undefined) l.opacity=d.opacity;
-    if(d.gifKey) _gifIdbLoad(d.gifKey).then(async src=>{
-      if(!src) {
-        // No está en IDB local — intentar descargarlo de la URL pública si existe
-        if(d._gifUrl || l._gifUrl) {
-          try {
-            const _resp = await fetch(d._gifUrl || l._gifUrl);
-            if(_resp.ok) {
-              const _blob = await _resp.blob();
-              src = await new Promise(r => { const fr=new FileReader(); fr.onload=e=>r(e.target.result); fr.readAsDataURL(_blob); });
-              if(src && d.gifKey) _gifIdbSave(d.gifKey, src).catch(()=>{});
-            }
-          } catch(e) { return; }
-        } else { return; }
-      }
+    if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{
+      if(!src) return;
       l.load(src, () => {
         // Si el visor está abierto y reproduciendo, arrancar animación en este layer
         if($('editorViewer')?.classList.contains('open') && typeof _edGifSetPlaying==='function') {
@@ -13248,34 +13083,36 @@ function edDeserLayer(d, pageOrientation){
     if(d.animKey)    l.animKey    = d.animKey;
     if(d._bibItemId) l._bibItemId = d._bibItemId;
     if(d._apngSrc) {
-      // APNG descargado de nube — asignar, _edGifSetPlaying hará loadAnim al abrir visor
+      // APNG descargado de nube — loadAnim con string → decodeApng → N frames reales
       l._apngSrc = d._apngSrc;
-      l._pngFrames = [d._apngSrc]; // señal para _edGifSetPlaying (length=1 con string APNG)
       l._fIdx = 0;
+      l.loadAnim(d._apngSrc, () => { if(typeof edRedraw==='function') edRedraw(); });
     } else if(d._pngFrames && d._pngFrames.length && d._pngFrames[0]) {
-      // _pngFrames con contenido real — asignar directamente
-      l._pngFrames = d._pngFrames;
-      l._fIdx = 0;
+      // _pngFrames con contenido real (no strings vacíos)
+      l._pngFrames=d._pngFrames;
+      l._fIdx=0;
+      l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
-      // Carta v19.44: _pngFramesKey → IDB → string → l._apngSrc → loadAnim inmediatamente
-      // Usar window._sbAnimIdbSave/Load (conexión cacheada) — nunca abrir cxAnims directamente
-      const _loadFn = window._sbAnimIdbLoad || _edAnimIdbLoad;
-      _loadFn(d._pngFramesKey).then(data => {
+      _edAnimIdbLoad(d._pngFramesKey).then(data => {
         if(!data) return;
-        if(typeof data === 'string') {
-          l._apngSrc = data;
-          l.loadAnim(data, () => {
+        // data puede ser string dataUrl APNG o array de frames PNG
+        const input = (typeof data === 'string') ? data
+                    : (Array.isArray(data) && data.length) ? data : null;
+        if(!input) return;
+        // Asignar al campo correcto para que _edGifSetPlaying lo detecte
+        if(typeof data === 'string') { l._apngSrc = data; }
+        else { l._pngFrames = data; }
+        // Cargar frames
+        l.loadAnim(input, () => {
+          if($('editorViewer')?.classList.contains('open')) {
+            l._playing = true;
             l._applyFrame(0);
-            if(typeof edRedraw === 'function') edRedraw();
-          });
-        } else if(Array.isArray(data) && data.length) {
-          l._pngFrames = data;
-          l.loadAnim(data, () => {
-            l._applyFrame(0);
-            if(typeof edRedraw === 'function') edRedraw();
-          });
-        }
+            if(typeof edUpdateViewer==='function') edUpdateViewer();
+          } else {
+            if(typeof edRedraw==='function') edRedraw();
+          }
+        });
       });
     }
     if(d.src){
@@ -13307,9 +13144,8 @@ function edDeserLayer(d, pageOrientation){
   }
   return null;
 }
-async function edLoadProject(id){
-  const comic = await (ComicStore.getByIdFull ? ComicStore.getByIdFull(id) : Promise.resolve(ComicStore.getById(id)));
-  if(!comic)return;
+function edLoadProject(id){
+  const comic=ComicStore.getById(id);if(!comic)return;
   edProjectId=id;
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
@@ -13390,24 +13226,16 @@ function _edGifSetPlaying(playing) {
         }
       }
       // Animación PNG (APNG desde biblioteca, importado, o descargado de nube)
-      // Reconocer también layers con _animReady (cargados desde animKey/pngFramesKey en IDB)
-      const _isAnim = l.type === 'image' && (
-        (l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady
-      );
-      if (_isAnim) {
+      if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc)) {
         if (playing) {
           l._fIdx = 0;
           l._gcpPlayCount = 0;
           l._playing = true;
-          if (l._animReady && l._animFrames && l._animFrames.length) {
-            // Ya tiene frames decodificados — arrancar directamente sin redecodificar
-            l._applyFrame(0);
-          } else {
-            // _apngSrc (descarga de nube) tiene prioridad — decodeApng extrae N frames
-            l.loadAnim(l._apngSrc || l._pngFrames, () => {
-              if (l._playing) l._applyFrame(0);
-            });
-          }
+          // _apngSrc (descarga de nube) tiene prioridad — decodeApng extrae N frames
+          l.loadAnim(l._apngSrc || l._pngFrames, () => {
+            // Poblar _pngFrames con la longitud real para futuros ciclos
+            if (l._playing) l._applyFrame(0);
+          });
         } else {
           l.stopAnim();
         }
@@ -13417,8 +13245,6 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
-  // Resetear estado de animaciones de TODAS las hojas antes de empezar
-  edPages.forEach((p, pi) => _edResetPageAnims(pi));
   _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -13681,7 +13507,6 @@ function _edOpenViewerScroll(navMode) {
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
-      _edResetPageAnims(_prevSI);
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
@@ -14599,438 +14424,14 @@ function EditorView_destroy(){
   }
   edHideGearIcon();
 }
-async function edSaveProjectModal(){
-  const _newTitle = $('edMTitle').value.trim() || edProjectMeta.title;
-  // Si el título cambia → crear obra nueva (nuevo ID), la anterior queda intacta
-  if (_newTitle !== edProjectMeta.title) {
-    const _oldId    = edProjectId;
-    const _oldComic = ComicStore.getById(_oldId) || {};
-    edProjectId = 'comic_' + Date.now();
-    sessionStorage.setItem('cx_edit_id', edProjectId);
-    // Migrar biblioteca del ID anterior al nuevo ID
-    try {
-      const _bibOldKey = 'cs_biblioteca_' + _oldId;
-      const _bibNewKey = 'cs_biblioteca_' + edProjectId;
-      const _bibData = localStorage.getItem(_bibOldKey);
-      if (_bibData) localStorage.setItem(_bibNewKey, _bibData);
-    } catch(e) {}
-    ComicStore.save({
-      ..._oldComic,
-      id: edProjectId,
-      title: _newTitle,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      published: false,
-      approved:  false,
-      pendingReview: false,
-      supabaseId: null,
-      cloudOnly:  false,
-      cloudNewer: false,
-    });
-
-    // Reasignar claves IDB para que la copia sea completamente independiente del original.
-    // Fire-and-forget: no bloqueamos el guardado, las copias IDB se hacen en paralelo.
-    await (async () => {
-      for (const p of _edPages) {
-        for (const la of (p.layers || [])) {
-          if (la.type === 'gif' && la.gifKey) {
-            try {
-              const _data = window._gifIdbLoad ? await window._gifIdbLoad(la.gifKey) : null;
-              const _newKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-              if (_data && window._gifIdbSave) await window._gifIdbSave(_newKey, _data);
-              la.gifKey = _newKey;
-            } catch(e) {}
-          }
-          if (la.type === 'image' && la.animKey) {
-            try {
-              const _data = window._sbAnimIdbLoad ? await window._sbAnimIdbLoad(la.animKey) : null;
-              const _newKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-              if (_data && window._sbAnimIdbSave) await window._sbAnimIdbSave(_newKey, _data);
-              la.animKey = _newKey;
-              la._pngFramesKey = null; // se regenerará en edSaveProject
-            } catch(e) {}
-          }
-        }
-      }
-    })();
-  }
-  edProjectMeta.title  = _newTitle;
+function edSaveProjectModal(){
+  edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
   edProjectMeta.social =($('edMSocial')?.value||'').trim().slice(0,300);
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
-  edCloseProjectModal(); await edSaveProject();
-}
-
-/* ══════════════════════════════════════════
-   DIAGNÓSTICO
-   ══════════════════════════════════════════ */
-
-async function edDiagnostico() {
-  const L = [];
-  const ok   = s => '✅ ' + s;
-  const err  = s => '❌ ' + s;
-  const warn = s => '⚠️  ' + s;
-  const inf  = s => 'ℹ️  ' + s;
-
-  L.push('══════════════════════════════════════════');
-  L.push('DIAGNÓSTICO ComiXou ' + (document.querySelector('.app-version')?.textContent||'?'));
-  L.push(new Date().toLocaleString());
-  L.push('══════════════════════════════════════════');
-
-  // ── 1. PROYECTO ACTIVO ──────────────────────────────────────
-  L.push('\n── PROYECTO ACTIVO ──');
-  if (!edProjectId) {
-    L.push(warn('Sin proyecto activo'));
-  } else {
-    L.push(ok('ID: ' + edProjectId));
-    L.push(inf('Título: ' + (edProjectMeta?.title||'(sin título)')));
-    L.push(inf('Hojas en memoria: ' + edPages.length));
-    edPages.forEach((p, pi) => {
-      const ll = p.layers||[];
-      if (ll.length) {
-        const tipos = ll.map(l => l.type+(l._isGcpImage?'(anim)':'')).join(', ');
-        L.push(inf('  Hoja '+(pi+1)+': '+ll.length+' capas ['+tipos+']'));
-      } else {
-        L.push(warn('  Hoja '+(pi+1)+': sin capas'));
-      }
-    });
-  }
-
-  // ── 2. LOCALSTORAGE (índice) ─────────────────────────────────
-  L.push('\n── localStorage (índice) ──');
-  try {
-    const raw = localStorage.getItem('cs_comics')||'[]';
-    const idx = JSON.parse(raw);
-    L.push(ok('Índice: '+idx.length+' obras ('+( raw.length/1024).toFixed(1)+' KB)'));
-    if (edProjectId) {
-      const e = idx.find(c=>c.id===edProjectId);
-      if (e) {
-        L.push(ok('Entrada del proyecto: SÍ'));
-        L.push(inf('  updatedAt: '+(e.updatedAt||'-')));
-        L.push(inf('  localSavedAt: '+(e.localSavedAt||'-')));
-        L.push(inf('  supabaseId: '+(e.supabaseId||'ninguno')));
-        L.push(inf('  _thumb: '+(e._thumb?'sí ('+Math.round(e._thumb.length/1024)+'KB)':'no')));
-        L.push(e.editorData ? warn('  editorData en índice: SÍ (debería estar solo en OPFS)') : ok('  editorData en índice: no (correcto)'));
-      } else {
-        L.push(err('Proyecto NO en índice localStorage'));
-      }
-    }
-    let lsTotal=0;
-    for(let k in localStorage) if(localStorage.hasOwnProperty(k)) lsTotal+=(localStorage.getItem(k)||'').length;
-    const lsKB = (lsTotal/1024).toFixed(1);
-    L.push(inf('localStorage total: ~'+lsKB+' KB de ~5120 KB'));
-    if(lsTotal>4*1024*1024) L.push(warn('localStorage casi lleno'));
-  } catch(e){ L.push(err('Error localStorage: '+e.message)); }
-
-  // ── 3. OPFS ──────────────────────────────────────────────────
-  L.push('\n── OPFS ──');
-  if(!navigator.storage?.getDirectory){
-    L.push(err('OPFS NO disponible en este navegador'));
-  } else {
-    try {
-      const root = await navigator.storage.getDirectory();
-      L.push(ok('OPFS disponible'));
-      try {
-        const dir = await root.getDirectoryHandle('comics',{create:false});
-        let nFiles=0, totalSz=0, foundProj=false;
-        for await(const [name,handle] of dir.entries()){
-          if(handle.kind==='file'){
-            const f = await handle.getFile();
-            nFiles++; totalSz+=f.size;
-            if(edProjectId && name===edProjectId+'.json'){
-              foundProj=true;
-              try {
-                const data=JSON.parse(await f.text());
-                L.push(ok('Archivo proyecto en OPFS: '+name+' ('+(f.size/1024).toFixed(1)+' KB)'));
-                L.push(inf('  editorData.pages: '+(data.editorData?.pages?.length??'NO')));
-                L.push(inf('  panels: '+(data.panels?.length??'NO')));
-                L.push(inf('  updatedAt: '+(data.updatedAt||'-')));
-                // Verificar capas
-                let capOk=0,capErr=0;
-                (data.editorData?.pages||[]).forEach(p=>(p.layers||[]).forEach(l=>l.type?capOk++:capErr++));
-                L.push(capErr?warn('  Capas OK: '+capOk+' | Inválidas: '+capErr):ok('  Capas: '+capOk+' OK'));
-                // Verificar que los datos coinciden con los de memoria
-                if(edPages.length>0 && data.editorData?.pages){
-                  if(data.editorData.pages.length===edPages.length) L.push(ok('  Hojas OPFS == memoria: '+edPages.length));
-                  else L.push(err('  Hojas OPFS ('+data.editorData.pages.length+') != memoria ('+edPages.length+')'));
-                }
-              } catch(pe){ L.push(err('Error parseando OPFS: '+pe.message)); }
-            }
-          }
-        }
-        L.push(inf('Archivos en OPFS/comics: '+nFiles+' ('+(totalSz/1024).toFixed(1)+' KB)'));
-        if(edProjectId&&!foundProj) L.push(err('Proyecto NO en OPFS'));
-      } catch(e){
-        if(e.name==='NotFoundError') L.push(warn('Directorio OPFS/comics no existe aún'));
-        else L.push(err('Error OPFS: '+e.message));
-      }
-      try{
-        const est=await navigator.storage.estimate();
-        L.push(inf('Quota OPFS: '+((est.usage||0)/1024/1024).toFixed(2)+' MB usados de ~'+((est.quota||0)/1024/1024).toFixed(0)+' MB'));
-      }catch(e){}
-    } catch(e){ L.push(err('OPFS error: '+e.message)); }
-  }
-
-  // ── 4. IndexedDB (cxAnims) ───────────────────────────────────
-  L.push('\n── IndexedDB (cxAnims) ──');
-  try {
-    await new Promise(res=>{
-      const req=indexedDB.open('cxAnims',1);
-      req.onupgradeneeded=e=>e.target.result.createObjectStore('anims');
-      req.onsuccess=async e=>{
-        try{
-          const db=e.target.result;
-          const tx=db.transaction('anims','readonly');
-          const store=tx.objectStore('anims');
-          const keys=await new Promise(r=>{const rk=store.getAllKeys();rk.onsuccess=()=>r(rk.result);rk.onerror=()=>r([]);});
-          L.push(ok('IDB cxAnims: '+keys.length+' entradas'));
-          if(edProjectId){
-            const pk=keys.filter(k=>typeof k==='string'&&k.startsWith(edProjectId));
-            L.push(inf('  Entradas proyecto: '+pk.length));
-            for(const key of pk.slice(0,8)){
-              const val=await new Promise(r=>{const rg=store.get(key);rg.onsuccess=()=>r(rg.result);rg.onerror=()=>r(null);});
-              if(val===null||val===undefined) L.push(err('  '+key+': VACÍO'));
-              else if(Array.isArray(val))     L.push(ok('  '+key+': '+val.length+' frames'));
-              else if(typeof val==='string')  L.push(ok('  '+key+': dataUrl ('+(val.length/1024).toFixed(1)+'KB)'));
-              else                            L.push(warn('  '+key+': tipo '+typeof val));
-            }
-          }
-          const bibK=keys.filter(k=>typeof k==='string'&&k.startsWith('bib_'));
-          if(bibK.length) L.push(inf('  Entradas biblioteca: '+bibK.length));
-          // Verificar animKeys de capas del proyecto activo
-          // anim_* → cxAnims/anims (ya tenemos las keys de esta IDB)
-          // gif_*  → cxGifs/gifs (IDB separada)
-          if(edProjectId&&edPages.length){
-            const animKeys=[], gifKeys=[];
-            edPages.forEach(p=>(p.layers||[]).forEach(l=>{
-              if(l.animKey)       animKeys.push(l.animKey);
-              if(l._pngFramesKey) animKeys.push(l._pngFramesKey);
-              if(l.gifKey)        gifKeys.push(l.gifKey);
-            }));
-            if(animKeys.length||gifKeys.length){
-              L.push(inf('  AnimKeys del proyecto: '+animKeys.length+' anim, '+gifKeys.length+' gif'));
-            }
-            // Verificar anim_* en cxAnims (ya tenemos 'keys' de esta IDB)
-            for(const ak of animKeys){
-              if(keys.includes(ak)) L.push(ok('  '+ak+': en cxAnims ✓'));
-              else                  L.push(err('  '+ak+': NO en cxAnims — animación puede no reproducirse'));
-            }
-            // Verificar gif_* en cxGifs (IDB separada)
-            if(gifKeys.length){
-              await new Promise(res2=>{
-                const rg=indexedDB.open('cxGifs',1);
-                rg.onupgradeneeded=e=>e.target.result.createObjectStore('gifs');
-                rg.onsuccess=async e=>{
-                  try{
-                    const dbg=e.target.result;
-                    if(!dbg.objectStoreNames.contains('gifs')){ gifKeys.forEach(k=>L.push(err('  '+k+': cxGifs sin store gifs'))); res2(); return; }
-                    const txg=dbg.transaction('gifs','readonly');
-                    const stg=txg.objectStore('gifs');
-                    const ksg=await new Promise(r=>{const rk=stg.getAllKeys();rk.onsuccess=()=>r(rk.result);rk.onerror=()=>r([]);});
-                    for(const gk of gifKeys){
-                      if(ksg.includes(gk)) L.push(ok('  '+gk+': en cxGifs ✓'));
-                      else                 L.push(err('  '+gk+': NO en cxGifs — GIF puede no reproducirse'));
-                    }
-                  }catch(e2){ gifKeys.forEach(k=>L.push(warn('  '+k+': error consultando cxGifs'))); }
-                  res2();
-                };
-                rg.onerror=()=>{ gifKeys.forEach(k=>L.push(warn('  '+k+': no se pudo abrir cxGifs'))); res2(); };
-              });
-            }
-          }
-        }catch(ie){L.push(err('Error IDB: '+ie.message));}
-        res();
-      };
-      req.onerror=()=>{L.push(err('No se pudo abrir IDB'));res();};
-    });
-  }catch(e){L.push(err('IDB error: '+e.message));}
-
-  // ── 5. CAPAS EN MEMORIA — integridad ─────────────────────────
-  L.push('\n── CAPAS EN MEMORIA ──');
-  if(edProjectId&&edPages.length){
-    edPages.forEach((p,pi)=>{
-      (p.layers||[]).forEach((l,li)=>{
-        const ref='H'+(pi+1)+'C'+(li+1)+' ('+l.type+')';
-        if(l.type==='image'){
-          if(l._animReady&&l._animFrames)       L.push(ok(ref+': APNG listo — '+l._animFrames.length+' frames'));
-          else if(l._isGcpImage&&l._pngFramesKey)L.push(inf(ref+': animación key='+l._pngFramesKey+' (se carga al abrir visor)'));
-          else if(l._isGcpImage&&l.animKey)     L.push(inf(ref+': animación animKey='+l.animKey+' (se carga al abrir visor)'));
-          else if(l._isGcpImage)                L.push(err(ref+': _isGcpImage sin key ni frames — puede no reproducirse'));
-          else if(l.src)                        L.push(ok(ref+': imagen estática OK'));
-          else                                  L.push(err(ref+': sin src'));
-        } else if(l.type==='gif'){
-          if(l._ready||l._gifReady) L.push(ok(ref+': GIF listo'));
-          else if(l.gifKey)         L.push(inf(ref+': GIF key='+l.gifKey+' (se carga al abrir visor)'));
-          else                      L.push(err(ref+': GIF sin key'));
-        } else if(l.type==='draw'||l.type==='stroke'){
-          // StrokeLayer/DrawLayer son vectoriales — src es cache opcional
-          if(l.src||l.img)                                   L.push(ok(ref+': OK (bitmap cache)'));
-          else if((l.points||[]).length>0)                   L.push(ok(ref+': OK vectorial ('+l.points.length+' pts)'));
-          else if(l.type==='stroke'&&(l.width>0||l.height>0))L.push(ok(ref+': OK (stroke, render diferido)'));
-          else if(l.type==='draw')                           L.push(ok(ref+': OK (draw, render diferido)'));
-          else                                               L.push(warn(ref+': sin datos detectables'));
-        } else if(l.type==='bubble'||l.type==='text'){
-          L.push(ok(ref+': "'+((l.text||'').slice(0,20)||'(vacío)')+'"'));
-        } else {
-          L.push(inf(ref+': OK'));
-        }
-      });
-    });
-  } else {
-    L.push(warn('Sin capas (proyecto no cargado)'));
-  }
-
-  // ── DIAGNÓSTICO GUARDADO LOCAL ──────────────────────────────
-  L.push('\n── GUARDADO LOCAL (última operación) ──');
-  // Test OPFS disponibilidad y escritura
-  if (!navigator.storage || !navigator.storage.getDirectory) {
-    L.push(err('OPFS: NO disponible en este navegador'));
-  } else {
-    try {
-      const _testRoot = await navigator.storage.getDirectory();
-      L.push(ok('OPFS: getDirectory() OK'));
-      try {
-        const _th = await _testRoot.getFileHandle('_diag_test.tmp', { create: true });
-        const _tw = await _th.createWritable();
-        await _tw.write('test_' + Date.now());
-        await _tw.close();
-        const _tf = await _th.getFile();
-        const _tc = await _tf.text();
-        await _testRoot.removeEntry('_diag_test.tmp');
-        if (_tc.startsWith('test_')) L.push(ok('OPFS: write+read test OK'));
-        else L.push(err('OPFS: write test — datos corruptos: ' + _tc));
-      } catch(we) {
-        L.push(err('OPFS: write test FALLA — ' + we.message));
-        L.push(warn('  Posible causa: modo incógnito, cuota llena, permisos bloqueados'));
-      }
-    } catch(ge) {
-      L.push(err('OPFS: getDirectory() FALLA — ' + ge.message));
-    }
-  }
-  // Datos de la última operación de guardado
-  const _sd = window._saveDiag;
-  if (!_sd) {
-    L.push(warn('Sin datos — pulsa 💾 Guardar primero, luego abre este diagnóstico'));
-  } else {
-    L.push(inf('Última guardado — ID: ' + _sd.id + ', páginas: ' + _sd.pages + ', duración: ' + (_sd.ms||'?') + 'ms'));
-    const _od = _sd.opfsDiag || [];
-    if (!_od.length) {
-      L.push(err('_opfsWrite NO se ejecutó en el último guardado'));
-    } else {
-      const _last = _od[_od.length - 1];
-      if (_last.step === 'OK') L.push(ok('_opfsWrite: OK — ' + _last.bytes + ' bytes, editorData=' + _last.hasEditorData + ', localSavedAt=' + (_last.localSavedAt || 'null')));
-      else if (_last.step === 'NO_DIR') L.push(err('_opfsWrite: NO_DIR — _opfsDir() devuelve null'));
-      else L.push(err('_opfsWrite: ERROR — ' + _last.err));
-    }
-  }
-  // Índice localStorage para este proyecto
-  if (edProjectId) {
-    try {
-      const _idx2 = JSON.parse(localStorage.getItem('cs_comics') || '[]');
-      const _ent = _idx2.find(c => c.id === edProjectId);
-      if (_ent) {
-        L.push(inf('Índice — localSavedAt: ' + (_ent.localSavedAt || 'VACÍO ← BUG')));
-        L.push(inf('Índice — cloudOnly: ' + !!_ent.cloudOnly + ' | cloudNewer: ' + !!_ent.cloudNewer));
-        L.push(inf('Índice — userId: ' + (_ent.userId || 'NULL')));
-      } else {
-        L.push(err('Proyecto NO en índice localStorage — _indexSave falló o id no coincide'));
-        // Buscar por supabaseId
-        const _bySupabase = _idx2.find(c => c.supabaseId === edProjectId);
-        if (_bySupabase) L.push(warn('  Encontrado por supabaseId con id: ' + _bySupabase.id + ' — id mismatch!'));
-      }
-      // Estado de _indexSave
-      const _isd = window._indexSaveDiag;
-      if (_isd) {
-        if (_isd.ok) L.push(ok('_indexSave: OK — ' + _isd.items + ' items, ' + _isd.bytes + ' bytes'));
-        else L.push(err('_indexSave: FALLO — ' + _isd.err + ' (escrito:' + _isd.written + ' leído:' + _isd.read + ')'));
-      } else {
-        L.push(warn('_indexSave: sin datos — guarda primero'));
-      }
-      // Diagnóstico de save()
-      const _sfd = window._saveFnDiag;
-      if (_sfd) {
-        L.push(inf('save() — id: ...' + _sfd.id));
-        L.push(_sfd.localSavedAt_in ? ok('save() — localSavedAt entrada: ' + _sfd.localSavedAt_in) : err('save() — localSavedAt entrada: NULL ← no llega a save()'));
-        L.push(_sfd.localSavedAt_full ? ok('save() — localSavedAt en full: ' + _sfd.localSavedAt_full) : err('save() — localSavedAt en full: NULL'));
-        L.push(inf('save() — idx en lista: ' + _sfd.idx + ' (' + (_sfd.idxFound ? 'encontrado' : 'NO encontrado — push nuevo') + ')'));
-      }
-    } catch(e) {}
-  }
-
-  // ── 6. BACKUP PC ─────────────────────────────────────────────
-  L.push('\n── Backup directorio PC ──');
-  if(!('showDirectoryPicker' in window)){
-    L.push(inf('File System Access API: no disponible (Android/Firefox)'));
-  } else {
-    L.push(ok('File System Access API: disponible'));
-    try{
-      const idb=await new Promise((res,rej)=>{const r=indexedDB.open('cx_fs_handles',1);r.onupgradeneeded=e=>e.target.result.createObjectStore('handles');r.onsuccess=e=>res(e.target.result);r.onerror=()=>res(null);});
-      if(idb){
-        const h=await new Promise(r=>{const tx=idb.transaction('handles','readonly');const rq=tx.objectStore('handles').get('cx_fs_dir_handle');rq.onsuccess=()=>r(rq.result||null);rq.onerror=()=>r(null);});
-        if(h){
-          L.push(ok('Handle guardado: '+(h.name||'?')));
-          try{ const p=await h.queryPermission({mode:'readwrite'}); L.push(inf('  Permiso: '+p)); }catch(e){ L.push(warn('  Permiso: no consultable')); }
-        } else {
-          L.push(warn('Sin carpeta de backup configurada'));
-        }
-      }
-    }catch(e){ L.push(warn('No se pudo leer handle: '+e.message)); }
-  }
-
-  // ── 7. NUBE ──────────────────────────────────────────────────
-  L.push('\n── Estado nube ──');
-  try {
-    const idx3=JSON.parse(localStorage.getItem('cs_comics')||'[]');
-    const e3=edProjectId?idx3.find(c=>c.id===edProjectId):null;
-    if(e3){
-      L.push(inf('supabaseId: '+(e3.supabaseId||'no publicado')));
-      L.push(inf('published: '+!!e3.published+' | pendingReview: '+!!e3.pendingReview));
-      L.push(inf('cloudOnly: '+!!e3.cloudOnly+' | cloudNewer: '+!!e3.cloudNewer));
-    } else {
-      L.push(inf('(proyecto no encontrado en índice)'));
-    }
-  }catch(e){}
-
-  // ── RESUMEN ───────────────────────────────────────────────────
-  L.push('\n══════════════════════════════════════════');
-  const nErr=L.filter(l=>l.startsWith('❌')).length;
-  const nWarn=L.filter(l=>l.startsWith('⚠️')).length;
-  L.push('RESUMEN: '+nErr+' errores, '+nWarn+' advertencias');
-  L.push('══════════════════════════════════════════');
-
-  const text=L.join('\n');
-
-  // ── PANEL VISUAL ──────────────────────────────────────────────
-  document.getElementById('_edDiagPanel')?.remove();
-  const overlay=document.createElement('div');
-  overlay.id='_edDiagPanel';
-  overlay.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
-  const box=document.createElement('div');
-  box.style.cssText='background:#1a1a1a;color:#ddd;border-radius:10px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;font-family:monospace;font-size:.73rem;box-shadow:0 8px 32px #000a';
-  const hdr=document.createElement('div');
-  hdr.style.cssText='padding:10px 14px;background:#111;display:flex;align-items:center;gap:8px;border-bottom:1px solid #333;flex-shrink:0';
-  hdr.innerHTML='<span style="flex:1;font-weight:700;font-size:.85rem;color:#fff">🔬 Diagnóstico ComiXou</span>';
-  const cpBtn=document.createElement('button');
-  cpBtn.textContent='📋 Copiar';
-  cpBtn.style.cssText='border:none;background:#297a4a;color:#fff;border-radius:5px;padding:4px 11px;cursor:pointer;font-size:.78rem;font-weight:700';
-  cpBtn.onclick=()=>{ navigator.clipboard?.writeText(text).then(()=>{cpBtn.textContent='✅ Copiado!';setTimeout(()=>cpBtn.textContent='📋 Copiar',2000)}).catch(()=>{ta.select();document.execCommand('copy');}); };
-  const clBtn=document.createElement('button');
-  clBtn.textContent='✕';
-  clBtn.style.cssText='border:none;background:transparent;color:#aaa;font-size:1.1rem;cursor:pointer;padding:2px 6px';
-  clBtn.onclick=()=>overlay.remove();
-  overlay.addEventListener('pointerdown',e=>{if(e.target===overlay)overlay.remove();});
-  hdr.appendChild(cpBtn); hdr.appendChild(clBtn);
-  const ta=document.createElement('textarea');
-  ta.value=text; ta.readOnly=true;
-  ta.style.cssText='flex:1;background:#1a1a1a;color:#ddd;border:none;padding:12px 14px;resize:none;outline:none;font-family:monospace;font-size:.72rem;line-height:1.55;overflow-y:auto;-webkit-user-select:text;user-select:text';
-  box.appendChild(hdr); box.appendChild(ta);
-  overlay.appendChild(box); document.body.appendChild(overlay);
-  const firstErr=L.findIndex(l=>l.startsWith('❌'));
-  if(firstErr>0) setTimeout(()=>{ta.scrollTop=firstErr*20;},50);
-  console.log('[DIAG]\n'+text);
-  return text;
+  edCloseProjectModal();edSaveProject();
 }
 
 /* ══════════════════════════════════════════
@@ -15104,7 +14505,8 @@ function EditorView_init(){
 
   const editId=sessionStorage.getItem('cx_edit_id');
   if(!editId){Router.go('my-comics');return;}
-  edLoadProject(editId).then(() => sessionStorage.removeItem('cx_edit_id'));
+  edLoadProject(editId);
+  sessionStorage.removeItem('cx_edit_id');
 
   // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
   edSetOrientation(edPages[0]?.orientation || edOrientation, false);
@@ -15225,9 +14627,9 @@ function EditorView_init(){
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
 
-    document.getElementById('_edExitYes').onclick = async () => {
+    document.getElementById('_edExitYes').onclick = () => {
       dlg.remove();
-      await edSaveProject();
+      edSaveProject();
       Router.go('my-comics');
     };
     document.getElementById('_edExitNo').onclick = () => {
@@ -15238,7 +14640,7 @@ function EditorView_init(){
       } else {
         // Restaurar último estado guardado
         const saved = ComicStore.getById(edProjectId);
-        if (saved) edLoadProject(edProjectId).then(() => {});
+        if (saved) edLoadProject(edProjectId);
       }
       Router.go('my-comics');
     };
@@ -15555,7 +14957,6 @@ function EditorView_init(){
   $('dd-editproject')?.addEventListener('click',()=>{edOpenProjectModal();edCloseMenus();});
   $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
   $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
-  $('dd-diagnostico')?.addEventListener('click',()=>{ edCloseMenus(); edDiagnostico(); });
   // Submenú Hoja actual (inline, igual que los demás submenús)
   $('dd-exportpagebtn')?.addEventListener('click', e => {
     e.stopPropagation();
@@ -15595,27 +14996,21 @@ function EditorView_init(){
   function _edUpdateRecoverBtn() {
     const btn = $('dd-recoverlocal');
     if(!btn || !edProjectId) return;
-    btn.style.display = 'none';
-    const _p = ComicStore.getByIdFull
-      ? ComicStore.getByIdFull(edProjectId)
-      : Promise.resolve(ComicStore.getById(edProjectId));
-    _p.then(comic => {
-      if(btn) btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
-    }).catch(() => {});
+    const comic = ComicStore.getById(edProjectId);
+    // Mostrar si hay backup local guardado (localEditorData)
+    // Se guarda cuando se descarga la nube sobre un editorData local existente
+    btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
   }
 
   // Actualizar al abrir el menú proyecto
   document.querySelector('[data-menu="project"]')?.addEventListener('pointerup', () => {
-    _edUpdateRecoverBtn(); // llamar inmediatamente — es async internamente
+    setTimeout(_edUpdateRecoverBtn, 50);
   });
 
-  $('dd-recoverlocal')?.addEventListener('click', async () => {
+  $('dd-recoverlocal')?.addEventListener('click', () => {
     edCloseMenus();
     if(!edProjectId) return;
-    // Usar getByIdFull para obtener localEditorData desde OPFS
-    const comic = ComicStore.getByIdFull
-      ? await ComicStore.getByIdFull(edProjectId)
-      : ComicStore.getById(edProjectId);
+    const comic = ComicStore.getById(edProjectId);
     if(!comic?.localEditorData?.pages?.length) { edToast('No hay versión local guardada'); return; }
     if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios de la nube no guardados localmente.')) return;
     comic.editorData      = comic.localEditorData;
@@ -15623,7 +15018,8 @@ function EditorView_init(){
     comic.cloudNewer      = false;
     comic.cloudOnly       = false;
     ComicStore.save(comic);
-    edLoadProject(edProjectId).then(() => edToast('Versión del dispositivo restaurada ✓'));
+    edLoadProject(edProjectId);
+    edToast('Versión del dispositivo restaurada ✓');
   });
 
   $('dd-deleteproject')?.addEventListener('click',()=>{
@@ -16277,13 +15673,7 @@ function _bibKey() {
 function _bibLoad() {
   try {
     const d = JSON.parse(localStorage.getItem(_bibKey()) || 'null');
-    if (d && Array.isArray(d.folders)) {
-      // Garantizar que la carpeta Animaciones siempre existe
-      if (!d.folders.find(f => f.name === 'Animaciones')) {
-        d.folders.push({ id: '__anim__', name: 'Animaciones', items: [] });
-      }
-      return d;
-    }
+    if (d && Array.isArray(d.folders)) return d;
   } catch(e) {}
   // Migración: formato antiguo era array plano o clave global
   let oldItems = [];
@@ -16427,47 +15817,6 @@ function edBibGuardar() {
         _bibSave(d2);
         edToast('GIF guardado en Biblioteca → Animaciones ✓');
       }).catch(() => edToast('Error al leer el GIF'));
-      return;
-    }
-    // APNG / imagen animada: guardar en carpeta Animaciones con sus frames
-    if (la._isGcpImage && (la._pngFrames?.length > 1 || la._apngSrc || la.animKey)) {
-      const _animThumb = _bibThumb(la);
-      const _doSaveApng = (frames) => {
-        const _apngId = Date.now() + '_gif';
-        const _apngEntry = {
-          id: _apngId, timestamp: Date.now(),
-          isGroup: false, isGifAnim: true,
-          gifDataUrl: (Array.isArray(frames) ? frames[0] : null) || la.src || '',
-          pngFrames:  Array.isArray(frames) ? frames : null,
-          apngSrc:    typeof frames === 'string' ? frames : null,
-          gcpLayersData: la._gcpLayersData || null,
-          gcpFramesData: la._gcpFramesData || null,
-          gcpLayerNames: la._gcpLayerNames || null,
-          normW: la.width, normH: la.height,
-          gcpFrameDelay:  la._gcpFrameDelay  ?? null,
-          gcpRepeatCount: la._gcpRepeatCount ?? null,
-          gcpStopAtEnd:   la._gcpStopAtEnd   ?? false,
-          animKey: la.animKey || null,
-          layerData: null, thumb: _animThumb,
-        };
-        const d2 = _bibLoad();
-        _bibGetAnimFolder(d2).items.push(_apngEntry);
-        _bibSave(d2);
-        edToast('Animación guardada en Biblioteca → Animaciones ✓');
-      };
-      // Obtener los frames: _pngFrames en memoria, _apngSrc, o cargar desde IDB por animKey
-      if (la._pngFrames && la._pngFrames.length > 1) {
-        _doSaveApng(la._pngFrames);
-      } else if (la._apngSrc) {
-        _doSaveApng(la._apngSrc);
-      } else if (la.animKey && window._sbAnimIdbLoad) {
-        window._sbAnimIdbLoad(la.animKey).then(data => {
-          if (data) _doSaveApng(data);
-          else edToast('No se pudieron recuperar los frames de la animación');
-        }).catch(() => edToast('Error al leer la animación'));
-      } else {
-        edToast('No se encontraron frames de animación');
-      }
       return;
     }
     entry = {
@@ -16741,13 +16090,10 @@ function _bibRenderPanel(panel) {
         });
         return;
       }
-      edConfirm(`¿Eliminar la carpeta "${folder.name}"?`, ()=>{
-        const d2 = _bibLoad();
-        d2.folders.splice(fi, 1);
-        _bibSave(d2);
-        edToast('Carpeta eliminada');
-        _bibRenderPanel(panel);
-      });
+      d.folders.splice(fi, 1);
+      _bibSave(d);
+      edToast('Carpeta eliminada');
+      _bibRenderPanel(panel);
     });
   });
 
@@ -16757,14 +16103,10 @@ function _bibRenderPanel(panel) {
       e.stopPropagation();
       const fi = parseInt(btn.dataset.fi), ii = parseInt(btn.dataset.ii);
       const d = _bibLoad();
-      const _itemName = d.folders[fi]?.items[ii]?.name || 'este objeto';
-      edConfirm(`¿Eliminar "${_itemName}" de la biblioteca?`, ()=>{
-        const d2 = _bibLoad();
-        d2.folders[fi].items.splice(ii, 1);
-        _bibSave(d2);
-        edToast('Eliminado de la biblioteca');
-        _bibRenderPanel(panel);
-      });
+      d.folders[fi].items.splice(ii, 1);
+      _bibSave(d);
+      edToast('Eliminado de la biblioteca');
+      _bibRenderPanel(panel);
     });
   });
 
@@ -16802,7 +16144,7 @@ function _bibRenderPanel(panel) {
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
-                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=null;}
+                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=[entry.apngSrc];}
                 else la2._pngFrames=_frames2;
                 la2._fIdx=0;
                 if(entry.gcpLayersData) la2._gcpLayersData=entry.gcpLayersData;
@@ -16863,16 +16205,9 @@ function _bibRenderPanel(panel) {
           const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
           la.animKey = _bibAnimKey;
           if (window._sbAnimIdbSave) {
-            // Si apngSrc: guardar como STRING en IDB (no como array de 1)
-            // → _uploadPanels paso 1 lo detecta directamente como string APNG
+            // Guardar en IDB: si apngSrc usar string, sino array de frames
             const _idbData = entry.apngSrc || frames;
             window._sbAnimIdbSave(_bibAnimKey, _idbData).catch(function(e){ console.warn('bib IDB:', e); });
-          }
-          // Si hay apngSrc, asegurarse que _pngFrames no interfiere con edSerLayer
-          // (edSerLayer serializa _pngFrames si existe — queremos que use animKey)
-          if (entry.apngSrc) {
-            la._pngFrames = null; // no serializar — animKey tiene el APNG en IDB
-            la._apngSrc = entry.apngSrc; // en memoria para _edGifSetPlaying
           }
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
