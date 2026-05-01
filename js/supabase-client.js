@@ -383,45 +383,28 @@ const SupabaseClient = (() => {
               // Estrategia: animKey primero si tiene string APNG completo (mejor calidad)
               // _pngFramesKey puede tener array de frames reconstruidos (peor calidad)
 
-              // 1. Intentar animKey — string APNG completo = calidad original
+              // Estrategia unificada: probar animKey y _pngFramesKey
+              // Acepta string APNG o array de frames
+              const _tryLoadApng = async (key) => {
+                if (!key) return null;
+                const d = await _sbAnimIdbLoad(key);
+                if (!d) return null;
+                if (typeof d === 'string' && d.startsWith('data:')) return d;
+                if (Array.isArray(d) && d.length) {
+                  if (d.length === 1 && typeof d[0] === 'string' && d[0].startsWith('data:')) return d[0];
+                  return await _buildApngFromFrames(d, l._gcpFrameDelay || 100);
+                }
+                return null;
+              };
+              // 1. animKey — fuente primaria
               if (l.animKey) {
-                const _dataAnim = await _sbAnimIdbLoad(l.animKey);
-                _animDiag.animKeyData = _dataAnim ? (typeof _dataAnim === 'string' ? 'string:'+_dataAnim.length : 'array:'+_dataAnim.length) : 'null';
-                if (typeof _dataAnim === 'string' && _dataAnim.startsWith('data:')) {
-                  _apngDataUrl = _dataAnim; // APNG completo original — usar directamente
-                }
+                _apngDataUrl = await _tryLoadApng(l.animKey);
+                _animDiag.animKeyData = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
               }
-
-              // 2. Intentar _pngFramesKey si animKey no tenía string APNG
+              // 2. _pngFramesKey — fuente secundaria
               if (!_apngDataUrl && l._pngFramesKey) {
-                const _data = await _sbAnimIdbLoad(l._pngFramesKey);
-                _animDiag.pngFramesKeyData = _data ? (typeof _data === 'string' ? 'string:'+_data.length : 'array:'+_data.length) : 'null';
-                if (typeof _data === 'string' && _data.startsWith('data:')) {
-                  _apngDataUrl = _data;
-                } else if (Array.isArray(_data) && _data.length) {
-                  // Si el array tiene 1 elemento que es un APNG completo, usarlo directamente
-                  // (ocurre cuando se inserta desde biblioteca: _pngFrames=[apngSrc])
-                  if (_data.length === 1 && typeof _data[0] === 'string' && _data[0].startsWith('data:')) {
-                    _apngDataUrl = _data[0];
-                  } else {
-                    _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
-                  }
-                  _animDiag.buildApngResult = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
-                }
-              }
-
-              // 3. Fallback: array de animKey
-              if (!_apngDataUrl && l.animKey) {
-                const _dataAnim = await _sbAnimIdbLoad(l.animKey);
-                if (Array.isArray(_dataAnim) && _dataAnim.length) {
-                  // Si array de 1 elemento APNG completo, usarlo directamente
-                  if (_dataAnim.length === 1 && typeof _dataAnim[0] === 'string' && _dataAnim[0].startsWith('data:')) {
-                    _apngDataUrl = _dataAnim[0];
-                  } else {
-                    _apngDataUrl = await _buildApngFromFrames(_dataAnim, l._gcpFrameDelay || 100);
-                  }
-                  _animDiag.buildApngResult = _apngDataUrl ? 'ok(animKey):'+_apngDataUrl.length : 'null';
-                }
+                _apngDataUrl = await _tryLoadApng(l._pngFramesKey);
+                _animDiag.pngFramesKeyData = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
               }
 
               _animDiag.apngDataUrlOk = !!_apngDataUrl;

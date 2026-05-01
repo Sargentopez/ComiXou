@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v20-26';
+const CACHE = 'comixow-v20-27';
 
 // Solo cacheamos assets verdaderamente estáticos (iconos que nunca cambian)
 // JS, CSS y HTML NO se cachean — el navegador gestiona su caché HTTP normal
