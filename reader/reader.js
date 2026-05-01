@@ -1318,8 +1318,9 @@ async function _loadPanels(workId, useAuth) {
           if (l.type === 'image' && r.anim_url) {
             try {
               const _apngDl = await _animDownload(r.anim_url);
+              console.log('[reader] anim_url:', r.anim_url, '→ _apngDl:', _apngDl ? (_apngDl.slice(0,30) + '... len=' + _apngDl.length) : 'NULL');
               if (_apngDl) l._apngSrc = _apngDl;
-            } catch(e) {}
+            } catch(e) { console.error('[reader] anim download error:', e); }
           }
           return l;
         } catch(e) { return null; }
@@ -1393,8 +1394,10 @@ async function preloadImages() {
       }
       // APNG: decodificar con ApngDecoder
       if (layer._apngSrc && window.ApngDecoder) {
+        console.log('[reader] decode APNG, _apngSrc type:', typeof layer._apngSrc, Array.isArray(layer._apngSrc)?'array:'+layer._apngSrc.length:'len:'+layer._apngSrc.length);
         return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
           .then(function(result) {
+            console.log('[reader] decode OK:', result.frames.length, 'frames', result.width+'x'+result.height);
             layer._animFrames    = result.frames;
             layer._animIdx       = 0;
             layer._animLastTick  = 0;
@@ -1405,7 +1408,7 @@ async function preloadImages() {
             layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
             layer._animReady     = true;
             return layer._animOc;
-          }).catch(function() { return null; });
+          }).catch(function(e) { console.error('[reader] decode FAIL:', e); return null; });
       }
 
       // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
