@@ -204,6 +204,7 @@ const SupabaseClient = (() => {
   // Exponer para que editor.js pueda guardar el APNG completo en IDB al importar
   window._sbAnimIdbSave = _sbAnimIdbSave;
   window._sbAnimIdbLoad = _sbAnimIdbLoad;
+  window._sbGifIdbLoad  = _sbGifIdbLoad;
 
   // Reconstruye un APNG desde array de PNG dataUrls individuales usando UPNG
   async function _buildApngFromFrames(frameUrls, delayMs) {

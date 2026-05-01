@@ -14614,8 +14614,36 @@ async function edSaveProjectModal(){
       cloudOnly:  false,
       cloudNewer: false,
     });
-  }
-  edProjectMeta.title  = _newTitle;
+
+    // Reasignar claves IDB para que la copia sea independiente de la original
+    // Recorrer layers en memoria y duplicar entradas en IDB con nuevas claves
+    _edPages.forEach((p, pi) => {
+      (p.layers || []).forEach((la, li) => {
+        if (la.type === 'gif' && la.gifKey) {
+          // Crear nueva gifKey independiente
+          const _newGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+          const _oldGifKey = la.gifKey;
+          if (window._gifIdbLoad && window._gifIdbSave) {
+            window._gifIdbLoad(_oldGifKey).then(data => {
+              if (data) window._gifIdbSave(_newGifKey, data);
+            }).catch(() => {});
+          }
+          la.gifKey = _newGifKey;
+        }
+        if ((la.type === 'image') && la.animKey) {
+          // Crear nueva animKey independiente
+          const _newAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+          if (window._sbAnimIdbLoad && window._sbAnimIdbSave) {
+            window._sbAnimIdbLoad(la.animKey).then(data => {
+              if (data) window._sbAnimIdbSave(_newAnimKey, data);
+            }).catch(() => {});
+          }
+          la.animKey = _newAnimKey;
+          la._pngFramesKey = null; // se regenerará en edSaveProject
+        }
+      });
+    });
+  } // fin if (_newTitle !== edProjectMeta.title)  = _newTitle;
   edProjectMeta.author =$('edMAuthor').value.trim();
   edProjectMeta.genre  =$('edMGenre').value.trim();
   edProjectMeta.navMode=$('edMNavMode').value;
