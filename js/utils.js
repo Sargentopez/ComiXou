@@ -108,7 +108,9 @@ async function openShareModal(comic) {
     supabaseId:  comic.supabaseId || null,
     published:   !!comic.published,
     pagesCount:  _comicFull?.editorData?.pages?.length || 0,
-    mode:        _hasLocal ? 'LOCAL' : (comic.supabaseId ? 'NUBE' : 'ERROR'),
+    mode:        _hasLocal && comic.supabaseId ? 'LOCAL→SUPABASE' : (_hasLocal ? 'LOCAL_SIN_SUBIR' : (comic.supabaseId ? 'NUBE' : 'ERROR')),
+    supabaseUpload: null,  // resultado de la subida a Supabase
+    localSavedAtAfter: null, // localSavedAt tras reguardar
     layersSummary: [],
     localStorageKey: null,
     localStorageBytes: null,
@@ -140,62 +142,47 @@ async function openShareModal(comic) {
   // Guardar diagnóstico en window para que el panel lo muestre
   window._shareDiag = _shareDiag;
 
-  if (_hasLocal) {
-    // ── MODO LOCAL: serializar editorData en localStorage temporal ──
-    // El reader lo leerá desde ?local=<key> sin tocar Supabase
-    const _key = 'cx_preview_' + Date.now();
-    // Construir payload con todos los datos necesarios para reconstruir la obra
-    // Mismo orden y estructura que usa edOpenViewer internamente
-    const _pages = _comicFull.editorData.pages;
-    const _payload = {
-      title:       _comicFull.title     || '',
-      author:      _comicFull.author    || '',
-      social:      _comicFull.social    || '',
-      navMode:     _comicFull.navMode   || 'fixed',
-      orientation: _comicFull.editorData.orientation || 'v',
-      pages: _pages.map(p => ({
-        // Incluir todos los campos de la hoja — igual que edSerLayer usa
-        // Normalizar orientación a 'v'/'h' igual que hace edSaveProject → panels[i].orientation
-        orientation:        (p.orientation || _comicFull.editorData.orientation || 'vertical') === 'vertical' ? 'v' : 'h',
-        textMode:           p.textMode || 'sequential',
-        textLayerOpacity:   p.textLayerOpacity !== undefined ? p.textLayerOpacity : 1,
-        layers: (p.layers || []).map(l => {
-          // Copia completa del layer serializado
-          // Incluye: type, x, y, width, height, rotation, src, opacity,
-          //          animKey, _pngFramesKey, gifKey, _gifUrl,
-          //          points, groupId, locked, text, bubbleType...
-          const _l = { ...l };
-          // NO incluir _pngFrames (pesado, está en IDB por _pngFramesKey)
-          // NO incluir _apngSrc, _animFrames, _animOc (datos en memoria)
-          delete _l._pngFrames;
-          delete _l._apngSrc;
-          delete _l._animFrames;
-          delete _l._animOc;
-          delete _l._animReady;
-          delete _l._playing;
-          delete _l._fIdx;
-          delete _l.img;
-          delete _l._oc;
-          return _l;
-        }),
-      })),
-    };
+  if (_hasLocal && comic.supabaseId && typeof SupabaseClient !== 'undefined' && typeof Auth !== 'undefined' && Auth.currentUser?.()) {
+    // ── MODO LOCAL → SUBIR A SUPABASE → enlace Supabase ──
+    // Sube SIEMPRE los datos locales (no los que ya estén en Supabase)
+    // Así el receptor ve la versión correcta y el emisor no descarga la nube al volver
+    _shareDiag.mode = 'LOCAL→SUPABASE';
     try {
-      const _payloadStr = JSON.stringify(_payload);
-      localStorage.setItem(_key, _payloadStr);
-      _shareDiag.localStorageKey   = _key;
-      _shareDiag.localStorageBytes = _payloadStr.length;
+      // Asegurar que tiene supabaseId
+      if (!_comicFull.supabaseId) _comicFull.supabaseId = comic.supabaseId;
+      const _t0 = Date.now();
+      const { savedAt } = await SupabaseClient.saveDraft(_comicFull);
+      _shareDiag.supabaseUpload = { ok: true, ms: Date.now() - _t0, savedAt };
+      // Actualizar localSavedAt con la fecha exacta de Supabase
+      // → localSavedAt === updated_at → cloudIsNewer = false → no descarga al volver
+      if (savedAt && ComicStore.save) {
+        const _idx = ComicStore.getById(comic.id);
+        if (_idx) {
+          await ComicStore.save({ ..._idx, localSavedAt: savedAt });
+          _shareDiag.localSavedAtAfter = savedAt;
+        }
+      }
     } catch(e) {
-      _shareDiag.error = 'localStorage.setItem falló: ' + e.message;
+      _shareDiag.supabaseUpload = { ok: false, error: e.message };
+      _shareDiag.error = 'saveDraft falló: ' + e.message;
+      console.warn('openShareModal saveDraft:', e);
+      // Si falla la subida, mostrar error — no compartir enlace roto
       window._shareDiag = _shareDiag;
-      appAlert('No hay espacio suficiente para compartir. Libera espacio e inténtalo de nuevo.');
+      appAlert('Error al subir a la nube: ' + e.message + '\n\nComprueba tu conexión e inténtalo de nuevo.');
       return;
     }
-    url = base + '/reader/index.html?local=' + _key + '&from=app';
+    const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
+    url = base + '/reader/index.html?' + param;
     _shareDiag.url = url;
 
+  } else if (_hasLocal && !comic.supabaseId) {
+    // ── Sin supabaseId — obra nunca subida ──
+    appAlert('Esta obra no está en la nube. Ábrela en el editor, guárdala en la nube y vuelve a intentarlo.');
+    return;
+
   } else if (comic.supabaseId) {
-    // ── MODO NUBE: enlace directo a Supabase (obra cloudOnly) ──
+    // ── MODO NUBE: sin datos locales (cloudOnly) — enlace directo ──
+    _shareDiag.mode = 'NUBE';
     const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
     url = base + '/reader/index.html?' + param;
     _shareDiag.url = url;

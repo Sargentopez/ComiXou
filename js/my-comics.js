@@ -628,48 +628,54 @@ function _mcShowSyncDiag() {
   } else {
     L.push('Obra: ' + _sd.title + ' (' + (_sd.comicId||'').slice(-8) + ')');
     L.push('Hora: ' + _sd.t);
-    L.push('Modo: ' + _sd.mode +
-      (_sd.mode === 'LOCAL' ? ' (datos de OPFS/IDB local)' :
-       _sd.mode === 'NUBE'  ? ' (enlace Supabase)' : ' (sin datos)'));
+    L.push('Modo: ' + _sd.mode);
     L.push('Páginas: ' + _sd.pagesCount + ' | cloudOnly: ' + _sd.cloudOnly + ' | published: ' + _sd.published);
+
+    // Subida a Supabase
+    if (_sd.supabaseUpload) {
+      if (_sd.supabaseUpload.ok) {
+        L.push('✅ Subida Supabase: OK (' + _sd.supabaseUpload.ms + 'ms) savedAt=' + _sd.supabaseUpload.savedAt);
+      } else {
+        L.push('❌ Subida Supabase: FALLO — ' + _sd.supabaseUpload.error);
+      }
+    }
+
+    // Reguardado local tras subida
+    if (_sd.localSavedAtAfter) {
+      L.push('✅ localSavedAt actualizado: ' + _sd.localSavedAtAfter);
+      L.push('   → cloudIsNewer=false garantizado al volver a abrir');
+    } else if (_sd.mode === 'LOCAL→SUPABASE' && _sd.supabaseUpload?.ok) {
+      L.push('⚠️ localSavedAt NO actualizado — puede descargar de nube al volver');
+    }
 
     if (_sd.error) {
       L.push('❌ ERROR: ' + _sd.error);
+    } else if (_sd.url) {
+      L.push('✅ URL: ' + _sd.url);
     } else {
-      if (_sd.url) L.push('✅ URL: ' + _sd.url);
-      else         L.push('❌ URL no generada');
+      L.push('❌ URL no generada');
     }
 
-    if (_sd.mode === 'LOCAL') {
-      if (_sd.localStorageKey) {
-        L.push('localStorage key: ' + _sd.localStorageKey);
-        L.push('localStorage bytes: ' + _sd.localStorageBytes + ' (' + (_sd.localStorageBytes/1024).toFixed(1) + ' KB)');
-        // Verificar si la clave sigue en localStorage (puede haberse borrado ya)
-        const _still = localStorage.getItem(_sd.localStorageKey);
-        L.push('Key aún en localStorage: ' + (_still ? 'sí' : 'no (ya leída/borrada por el reader)'));
-      }
-      // Diagnóstico de capas
-      if (_sd.layersSummary && _sd.layersSummary.length) {
-        L.push('Capas incluidas:');
-        _sd.layersSummary.forEach(l => {
-          let info = '  H' + l.page + 'C' + l.layer + ' (' + l.type + ')';
-          if (l.type === 'image') {
-            if (l.animKey)      info += ' animKey=' + l.animKey;
-            if (l.pngFramesKey) info += ' pngKey=' + l.pngFramesKey;
-            if (!l.animKey && !l.pngFramesKey && l.hasSrc) info += ' src=✓';
-            if (!l.animKey && !l.pngFramesKey && !l.hasSrc) info += ' ⚠️ SIN DATOS ANIMACIÓN';
-          }
-          if (l.type === 'gif') {
-            if (l.gifKey) info += ' gifKey=' + l.gifKey;
-            if (l.gifUrl) info += ' gifUrl=✓';
-            if (!l.gifKey && !l.gifUrl) info += ' ⚠️ SIN DATOS GIF';
-          }
-          if (l.type === 'draw' || l.type === 'stroke' || l.type === 'line') {
-            info += l.hasSrc ? ' src=✓' : (l.hasPoints ? ' points=✓' : ' (render diferido)');
-          }
-          L.push(info);
-        });
-      }
+    // Diagnóstico de capas
+    if (_sd.layersSummary && _sd.layersSummary.length) {
+      L.push('Capas (' + _sd.layersSummary.length + '):');
+      _sd.layersSummary.forEach(l => {
+        let info = '  H' + l.page + 'C' + l.layer + ' (' + l.type + ')';
+        if (l.type === 'image') {
+          if (l.animKey)      info += ' animKey=' + l.animKey.slice(-12);
+          if (l.pngFramesKey) info += ' pngKey=✓';
+          if (!l.animKey && !l.pngFramesKey && l.hasSrc) info += ' src=✓';
+          if (!l.animKey && !l.pngFramesKey && !l.hasSrc) info += ' ⚠️ SIN DATOS ANIMACIÓN';
+        }
+        if (l.type === 'gif') {
+          if (l.gifKey)  info += ' gifKey=✓';
+          if (!l.gifKey) info += ' ⚠️ SIN gifKey';
+        }
+        if (l.type === 'draw' || l.type === 'stroke' || l.type === 'line') {
+          info += l.hasSrc ? ' src=✓' : (l.hasPoints ? ' points=✓' : ' (render diferido)');
+        }
+        L.push(info);
+      });
     }
   }
 

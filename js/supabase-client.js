@@ -441,6 +441,7 @@ const SupabaseClient = (() => {
       throw new Error(`La obra ocupa ~${Math.round(sizeKB/1024)}MB, supera el límite de 50MB. Reduce el número de páginas o el tamaño de las imágenes.`);
     }
 
+    const _savedAt = new Date().toISOString();
     await _upsert('works', {
       id:             sid,
       title:          comic.title      || '',
@@ -453,9 +454,8 @@ const SupabaseClient = (() => {
       rules:          JSON.stringify(comic.editorData?._rules || []),
       published:      comic.approved   ? true  : false,
       pending_review: comic.pendingReview ? true : false,
-      updated_at:     new Date().toISOString(),
+      updated_at:     _savedAt,
     });
-    const _savedAt = workPayload.updated_at; // guardar la fecha exacta para sincronización
     await _uploadPanels(comic);
     return { sizeKB, savedAt: _savedAt };
   }

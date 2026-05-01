@@ -168,6 +168,7 @@ const ComicStore = (() => {
   }
 
   // Escribir backup en directorio visible del PC
+  // Guarda la obra (JSON) + sus animaciones (cxAnims/cxGifs) en subcarpetas
   async function _fsWrite(id, title, data) {
     if (!_fsDirHandle) return;
     try {
@@ -176,7 +177,7 @@ const ComicStore = (() => {
         const req = await _fsDirHandle.requestPermission({ mode: 'readwrite' });
         if (req !== 'granted') return;
       }
-      // Nombre de archivo: título sanitizado + id corto
+      // 1. Guardar JSON de la obra
       const safeName = (title || 'sin_titulo').replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑüÜ\s\-_]/g, '').trim().slice(0, 40);
       const shortId  = id.replace('comic_', '').slice(-6);
       const fname    = `${safeName}_${shortId}.json`;
@@ -184,7 +185,88 @@ const ComicStore = (() => {
       const w  = await fh.createWritable();
       await w.write(JSON.stringify(data, null, 2));
       await w.close();
+
+      // 2. Recoger claves de animaciones de las capas de esta obra
+      const _animKeys = [], _gifKeys = [];
+      if (data.editorData && data.editorData.pages) {
+        data.editorData.pages.forEach(p => (p.layers || []).forEach(l => {
+          if (l.animKey)       _animKeys.push(l.animKey);
+          if (l._pngFramesKey) _animKeys.push(l._pngFramesKey);
+          if (l.gifKey)        _gifKeys.push(l.gifKey);
+        }));
+      }
+
+      // 3. Guardar animaciones en subcarpeta 'anims/'
+      if (_animKeys.length) {
+        try {
+          const animDir = await _fsDirHandle.getDirectoryHandle('anims', { create: true });
+          for (const key of [...new Set(_animKeys)]) {
+            try {
+              const val = await _idbGetValue('cxAnims', 'anims', key);
+              if (!val) continue;
+              const str = typeof val === 'string' ? val
+                : Array.isArray(val) ? JSON.stringify(val)
+                : JSON.stringify(val);
+              const afh = await animDir.getFileHandle(key + '.txt', { create: true });
+              const aw  = await afh.createWritable();
+              await aw.write(str);
+              await aw.close();
+            } catch(e) {}
+          }
+        } catch(e) {}
+      }
+
+      // 4. Guardar GIFs en subcarpeta 'gifs/'
+      if (_gifKeys.length) {
+        try {
+          const gifDir = await _fsDirHandle.getDirectoryHandle('gifs', { create: true });
+          for (const key of [...new Set(_gifKeys)]) {
+            try {
+              const val = await _idbGetValue('cxGifs', 'gifs', key);
+              if (!val) continue;
+              const gfh = await gifDir.getFileHandle(key + '.txt', { create: true });
+              const gw  = await gfh.createWritable();
+              await gw.write(typeof val === 'string' ? val : JSON.stringify(val));
+              await gw.close();
+            } catch(e) {}
+          }
+        } catch(e) {}
+      }
     } catch(e) { console.warn('[ComicStore] FS backup error:', e); }
+  }
+
+  // Leer un valor de IDB
+  function _idbGetValue(dbName, storeName, key) {
+    return new Promise(res => {
+      const req = indexedDB.open(dbName, 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore(storeName);
+      req.onsuccess = e => {
+        try {
+          const tx = e.target.result.transaction(storeName, 'readonly');
+          const r  = tx.objectStore(storeName).get(key);
+          r.onsuccess = () => res(r.result || null);
+          r.onerror   = () => res(null);
+        } catch(e2) { res(null); }
+      };
+      req.onerror = () => res(null);
+    });
+  }
+
+  // Escribir un valor en IDB
+  function _idbPutValue(dbName, storeName, key, value) {
+    return new Promise(res => {
+      const req = indexedDB.open(dbName, 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore(storeName);
+      req.onsuccess = e => {
+        try {
+          const tx = e.target.result.transaction(storeName, 'readwrite');
+          tx.objectStore(storeName).put(value, key);
+          tx.oncomplete = () => res(true);
+          tx.onerror    = () => res(false);
+        } catch(e2) { res(false); }
+      };
+      req.onerror = () => res(false);
+    });
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -498,11 +580,50 @@ const ComicStore = (() => {
       if (rebuilt.length > 0) {
         console.log('[ComicStore] Reconstruido índice desde directorio PC:', rebuilt.length, 'obras');
         _indexSave(rebuilt);
-        // Guardar el handle para futuras sesiones
         _fsDirHandle = comixouDir;
         _fsSaveHandle(comixouDir).catch(() => {});
         _fsSaveNameToCloud(comixouDir.name).catch(() => {});
-        alert(rebuilt.length + ' obras recuperadas correctamente desde tu carpeta ComiXou.');
+
+        // Restaurar animaciones desde subcarpetas anims/ y gifs/
+        let _animRestored = 0, _gifRestored = 0;
+        try {
+          const animDir = await comixouDir.getDirectoryHandle('anims', { create: false }).catch(() => null);
+          if (animDir) {
+            for await (const [name, fh] of animDir.entries()) {
+              if (fh.kind !== 'file' || !name.endsWith('.txt')) continue;
+              try {
+                const file = await fh.getFile();
+                const text = await file.text();
+                const key  = name.slice(0, -4); // quitar .txt
+                // Determinar si es array (pngFrames) o string (apngSrc/gifDataUrl)
+                let val;
+                try { val = JSON.parse(text); } catch(e) { val = text; }
+                await _idbPutValue('cxAnims', 'anims', key, val);
+                _animRestored++;
+              } catch(e) {}
+            }
+          }
+        } catch(e) {}
+        try {
+          const gifDir = await comixouDir.getDirectoryHandle('gifs', { create: false }).catch(() => null);
+          if (gifDir) {
+            for await (const [name, fh] of gifDir.entries()) {
+              if (fh.kind !== 'file' || !name.endsWith('.txt')) continue;
+              try {
+                const file = await fh.getFile();
+                const text = await file.text();
+                const key  = name.slice(0, -4);
+                await _idbPutValue('cxGifs', 'gifs', key, text);
+                _gifRestored++;
+              } catch(e) {}
+            }
+          }
+        } catch(e) {}
+
+        const _animMsg = (_animRestored || _gifRestored)
+          ? `\n\nAnimaciones restauradas: ${_animRestored} APNGs, ${_gifRestored} GIFs.`
+          : '';
+        alert(rebuilt.length + ' obras recuperadas correctamente desde tu carpeta ComiXou.' + _animMsg);
       } else {
         alert('No se encontraron obras en la carpeta seleccionada.');
       }
