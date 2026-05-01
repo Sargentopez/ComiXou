@@ -1501,6 +1501,11 @@ function _readerGifTick() {
   RS.panels.forEach((panel, pi) => {
     let panelChanged = false;
     (panel.layers || []).forEach(layer => {
+      // Debug: log estado animación primera vez
+      if (layer._animReady && !layer._dbgLogged) {
+        layer._dbgLogged = true;
+        console.log('[tick] layer animReady, frames:', layer._animFrames?.length, 'animOc:', !!layer._animOc, 'animOc size:', layer._animOc?.width+'x'+layer._animOc?.height);
+      }
       // GIF importado
       if (layer._gifReady && layer._gifFrames && layer._gifOc) {
         if (!layer._gifLastTick) layer._gifLastTick = now;

@@ -14617,7 +14617,7 @@ async function edSaveProjectModal(){
 
     // Reasignar claves IDB para que la copia sea completamente independiente del original.
     // Fire-and-forget: no bloqueamos el guardado, las copias IDB se hacen en paralelo.
-    (async () => {
+    await (async () => {
       for (const p of _edPages) {
         for (const la of (p.layers || [])) {
           if (la.type === 'gif' && la.gifKey) {

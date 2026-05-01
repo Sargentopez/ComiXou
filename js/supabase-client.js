@@ -380,30 +380,36 @@ const SupabaseClient = (() => {
             try {
               let _apngDataUrl = null;
 
-              // 1. Intentar _pngFramesKey (array de frames — siempre existe en OPFS)
-              if (l._pngFramesKey) {
-                const _data = await _sbAnimIdbLoad(l._pngFramesKey);
-                _animDiag.pngFramesKeyData = _data ? (typeof _data === 'string' ? 'string:'+_data.length : 'array:'+_data.length) : 'null';
-                if (_data) {
-                  if (typeof _data === 'string') {
-                    _apngDataUrl = _data;
-                  } else if (Array.isArray(_data) && _data.length) {
-                    _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
-                    _animDiag.buildApngResult = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
-                  }
+              // Estrategia: animKey primero si tiene string APNG completo (mejor calidad)
+              // _pngFramesKey puede tener array de frames reconstruidos (peor calidad)
+
+              // 1. Intentar animKey — string APNG completo = calidad original
+              if (l.animKey) {
+                const _dataAnim = await _sbAnimIdbLoad(l.animKey);
+                _animDiag.animKeyData = _dataAnim ? (typeof _dataAnim === 'string' ? 'string:'+_dataAnim.length : 'array:'+_dataAnim.length) : 'null';
+                if (typeof _dataAnim === 'string' && _dataAnim.startsWith('data:')) {
+                  _apngDataUrl = _dataAnim; // APNG completo original — usar directamente
                 }
               }
 
-              // 2. Fallback: animKey
+              // 2. Intentar _pngFramesKey si animKey no tenía string APNG
+              if (!_apngDataUrl && l._pngFramesKey) {
+                const _data = await _sbAnimIdbLoad(l._pngFramesKey);
+                _animDiag.pngFramesKeyData = _data ? (typeof _data === 'string' ? 'string:'+_data.length : 'array:'+_data.length) : 'null';
+                if (typeof _data === 'string' && _data.startsWith('data:')) {
+                  _apngDataUrl = _data;
+                } else if (Array.isArray(_data) && _data.length) {
+                  _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
+                  _animDiag.buildApngResult = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
+                }
+              }
+
+              // 3. Fallback: array de animKey
               if (!_apngDataUrl && l.animKey) {
-                const _data = await _sbAnimIdbLoad(l.animKey);
-                _animDiag.animKeyData = _data ? (typeof _data === 'string' ? 'string:'+_data.length : 'array:'+_data.length) : 'null';
-                if (_data) {
-                  if (typeof _data === 'string') {
-                    _apngDataUrl = _data;
-                  } else if (Array.isArray(_data) && _data.length) {
-                    _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
-                  }
+                const _dataAnim = await _sbAnimIdbLoad(l.animKey);
+                if (Array.isArray(_dataAnim) && _dataAnim.length) {
+                  _apngDataUrl = await _buildApngFromFrames(_dataAnim, l._gcpFrameDelay || 100);
+                  _animDiag.buildApngResult = _apngDataUrl ? 'ok(animKey):'+_apngDataUrl.length : 'null';
                 }
               }
 
