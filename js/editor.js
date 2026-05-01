@@ -12432,16 +12432,23 @@ async function edSaveProject(_suppressOverlay){
         delete _sl._pngFrames;
         _sl._pngFramesKey = _idbKey;
       }
-      // Si tiene animKey pero no está en IDB, intentar guardar _apngSrc o reconstruir desde _animFrames
+      // Si tiene animKey pero no está en IDB con datos válidos, intentar guardar desde _apngSrc
+      // NUNCA reconstruir desde _animFrames y guardar en animKey — eso sobreescribe el original
       if (_sl.animKey && !_sl._pngFrames && !_sl._pngFramesKey) {
         const _existing = window._sbAnimIdbLoad ? await window._sbAnimIdbLoad(_sl.animKey).catch(()=>null) : null;
-        if (!_existing) {
-          // No está en IDB — intentar guardar desde _apngSrc o _animFrames en memoria
+        const _existingIsValid = typeof _existing === 'string' && _existing.startsWith('data:') && _existing.length > 10000;
+        if (!_existingIsValid) {
+          // Solo guardar si tenemos _apngSrc original (no reconstruido)
           const _apng = _liveLayer._apngSrc;
-          if (_apng && window._sbAnimIdbSave) {
+          if (_apng && _apng.startsWith('data:') && _apng.length > 10000 && window._sbAnimIdbSave) {
+            // Guardar APNG original en animKey
             try { await window._sbAnimIdbSave(_sl.animKey, _apng); } catch(e) {}
+            // También guardar en _pngFramesKey para acceso futuro
+            const _idbKey2 = edProjectId + '_' + _pi + '_' + _li;
+            await _edAnimIdbSave(_idbKey2, _apng).catch(()=>{});
+            _sl._pngFramesKey = _idbKey2;
           } else if (_liveLayer._animFrames && _liveLayer._animFrames.length && window._sbAnimIdbSave) {
-            // Reconstruir como array de dataUrls desde _animFrames
+            // Solo guardar en _pngFramesKey (nueva clave del proyecto), NO en animKey
             try {
               const _oc2 = document.createElement('canvas');
               _oc2.width = _liveLayer._animOc?.width || 100;
@@ -12452,8 +12459,7 @@ async function edSaveProject(_suppressOverlay){
                 _ctx2.putImageData(f.imageData,0,0);
                 return _oc2.toDataURL('image/png');
               });
-              await window._sbAnimIdbSave(_sl.animKey, _frames2);
-              // También guardar con _pngFramesKey para próximos guardados
+              // Guardar SOLO en _pngFramesKey — no tocar animKey con datos reconstruidos
               const _idbKey2 = edProjectId + '_' + _pi + '_' + _li;
               await _edAnimIdbSave(_idbKey2, _frames2).catch(()=>{});
               _sl._pngFramesKey = _idbKey2;
