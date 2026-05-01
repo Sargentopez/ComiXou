@@ -225,6 +225,12 @@ const SupabaseClient = (() => {
 
   // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
   async function _animUpload(animKey, dataUrl) {
+    if (!dataUrl || !dataUrl.startsWith('data:')) {
+      const _err = 'animUpload: dataUrl inválido, tipo=' + typeof dataUrl + ' inicio=' + String(dataUrl).slice(0,30);
+      console.warn(_err);
+      if (window._shareDiag) window._shareDiag.animUploadError = _err;
+      return null;
+    }
     if (window._authTryRefresh) await window._authTryRefresh();
     const b64 = dataUrl.split(',')[1];
     const bin = atob(b64);
@@ -362,24 +368,28 @@ const SupabaseClient = (() => {
           let animUrl = null;
           if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
             const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+            const _animDiag = { pngFramesKey: l._pngFramesKey||null, animKey: l.animKey||null };
             try {
               let _apngDataUrl = null;
 
               // 1. Intentar _pngFramesKey (array de frames — siempre existe en OPFS)
               if (l._pngFramesKey) {
                 const _data = await _sbAnimIdbLoad(l._pngFramesKey);
+                _animDiag.pngFramesKeyData = _data ? (typeof _data === 'string' ? 'string:'+_data.length : 'array:'+_data.length) : 'null';
                 if (_data) {
                   if (typeof _data === 'string') {
                     _apngDataUrl = _data;
                   } else if (Array.isArray(_data) && _data.length) {
                     _apngDataUrl = await _buildApngFromFrames(_data, l._gcpFrameDelay || 100);
+                    _animDiag.buildApngResult = _apngDataUrl ? 'ok:'+_apngDataUrl.length : 'null';
                   }
                 }
               }
 
-              // 2. Fallback: animKey (puede tener el APNG completo como string)
+              // 2. Fallback: animKey
               if (!_apngDataUrl && l.animKey) {
                 const _data = await _sbAnimIdbLoad(l.animKey);
+                _animDiag.animKeyData = _data ? (typeof _data === 'string' ? 'string:'+_data.length : 'array:'+_data.length) : 'null';
                 if (_data) {
                   if (typeof _data === 'string') {
                     _apngDataUrl = _data;
@@ -389,14 +399,20 @@ const SupabaseClient = (() => {
                 }
               }
 
+              _animDiag.apngDataUrlOk = !!_apngDataUrl;
               if (_apngDataUrl) {
                 animUrl = await _animUpload(_bucketKey, _apngDataUrl);
+                _animDiag.animUrl = animUrl;
               } else {
-                if (window._shareDiag) window._shareDiag.animUploadError = 'Sin datos APNG en IDB para key=' + (l._pngFramesKey||l.animKey);
+                _animDiag.error = 'Sin datos APNG en IDB';
               }
             } catch(e) {
+              _animDiag.error = e.message;
               console.warn('APNG upload error:', e.message);
-              if (window._shareDiag) window._shareDiag.animUploadError = e.message;
+            }
+            if (window._shareDiag) {
+              window._shareDiag.animDiags = window._shareDiag.animDiags || [];
+              window._shareDiag.animDiags.push(_animDiag);
             }
           }
 
@@ -416,12 +432,12 @@ const SupabaseClient = (() => {
         if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
       }
 
-      // Textos para el reader — reconstruir desde layers si p.texts no existe
-      // En la nueva arquitectura OPFS, editorData.pages no tiene texts separados
+      // Textos para el reader — reconstruir desde editorData.pages[i].layers
+      // comic.panels son renders planos sin layers — usar edPages que sí los tiene
+      const _edPageForTexts = edPages[i];
       let _pTexts = p.texts || [];
-      if (!_pTexts.length) {
-        // Reconstruir desde layers (bubble/text con _hasText !== false)
-        _pTexts = (p.layers || [])
+      if (!_pTexts.length && _edPageForTexts) {
+        _pTexts = (_edPageForTexts.layers || [])
           .filter(l => (l.type === 'bubble' || l.type === 'text') && l._hasText !== false)
           .map((l, i) => ({
             order:     l._seqOrder !== undefined ? l._seqOrder : i,
@@ -443,10 +459,10 @@ const SupabaseClient = (() => {
             color:      l.color      || '#000000',
             backgroundColor: l.backgroundColor || '#ffffff',
             bgOpacity:  l.bgOpacity  !== undefined ? l.bgOpacity : 1,
-            borderWidth: l.borderWidth ?? 2,
+            borderWidth: l.borderWidth ?? 0,
             borderColor: l.borderColor || '#000000',
             rotation:   l.rotation   ?? 0,
-            padding:    l.padding    ?? 15,
+            padding:    l.padding    ?? 10,
           }));
       }
       if (!_pTexts.length) continue;

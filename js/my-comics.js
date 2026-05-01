@@ -636,6 +636,17 @@ function _mcShowSyncDiag() {
       if (_sd.supabaseUpload.ok) {
         L.push('✅ Subida Supabase: OK (' + _sd.supabaseUpload.ms + 'ms) savedAt=' + _sd.supabaseUpload.savedAt);
         if (_sd.animUploadError) L.push('⚠️ Error subida APNG: ' + _sd.animUploadError);
+        if (_sd.animDiags && _sd.animDiags.length) {
+          L.push('Diagnóstico APNG (' + _sd.animDiags.length + ' layers animados):');
+          _sd.animDiags.forEach((d, i) => {
+            L.push('  [' + i + '] pngKey=' + (d.pngFramesKey||'null').slice(-12) + ' animKey=' + (d.animKey||'null').slice(-12));
+            if (d.pngFramesKeyData !== undefined) L.push('       pngKey IDB: ' + d.pngFramesKeyData);
+            if (d.animKeyData !== undefined)      L.push('       animKey IDB: ' + d.animKeyData);
+            if (d.buildApngResult !== undefined)  L.push('       buildApng: ' + d.buildApngResult);
+            L.push('       APNG ok: ' + !!d.apngDataUrlOk + ' | URL: ' + (d.animUrl ? '✅' : '❌'));
+            if (d.error) L.push('       ❌ ' + d.error);
+          });
+        }
       } else {
         L.push('❌ Subida Supabase: FALLO — ' + _sd.supabaseUpload.error);
       }
