@@ -83,24 +83,88 @@ function closeReaderModalGlobal() {
 /* ══════════════════════════════════════════
    MODAL ENVIAR — compartir enlace al reader
    ══════════════════════════════════════════ */
-function openShareModal(comic) {
-  if (!comic.supabaseId) {
-    appAlert('Esta obra no está en la nube. Súbela primero para poder compartirla.');
+async function openShareModal(comic) {
+  const base = window.location.origin + window.location.pathname
+    .replace(/\/index\.html$/, '').replace(/\/$/, '');
+
+  let url;
+
+  // Decidir fuente de datos:
+  // 1. Si tiene datos locales (editorData en OPFS) → construir desde local
+  // 2. Si solo está en la nube (cloudOnly sin editorData) → usar enlace Supabase
+  const _comicFull = ComicStore.getByIdFull
+    ? await ComicStore.getByIdFull(comic.id)
+    : comic;
+
+  const _hasLocal = !!(_comicFull?.editorData?.pages?.length);
+
+  if (_hasLocal) {
+    // ── MODO LOCAL: serializar editorData en localStorage temporal ──
+    // El reader lo leerá desde ?local=<key> sin tocar Supabase
+    const _key = 'cx_preview_' + Date.now();
+    // Construir payload con todos los datos necesarios para reconstruir la obra
+    // Mismo orden y estructura que usa edOpenViewer internamente
+    const _pages = _comicFull.editorData.pages;
+    const _payload = {
+      title:       _comicFull.title     || '',
+      author:      _comicFull.author    || '',
+      social:      _comicFull.social    || '',
+      navMode:     _comicFull.navMode   || 'fixed',
+      orientation: _comicFull.editorData.orientation || 'v',
+      pages: _pages.map(p => ({
+        // Incluir todos los campos de la hoja — igual que edSerLayer usa
+        orientation:        p.orientation || _comicFull.editorData.orientation || 'v',
+        textMode:           p.textMode || 'sequential',
+        textLayerOpacity:   p.textLayerOpacity !== undefined ? p.textLayerOpacity : 1,
+        layers: (p.layers || []).map(l => {
+          // Copia completa del layer serializado
+          // Incluye: type, x, y, width, height, rotation, src, opacity,
+          //          animKey, _pngFramesKey, gifKey, _gifUrl,
+          //          points, groupId, locked, text, bubbleType...
+          const _l = { ...l };
+          // NO incluir _pngFrames (pesado, está en IDB por _pngFramesKey)
+          // NO incluir _apngSrc, _animFrames, _animOc (datos en memoria)
+          delete _l._pngFrames;
+          delete _l._apngSrc;
+          delete _l._animFrames;
+          delete _l._animOc;
+          delete _l._animReady;
+          delete _l._playing;
+          delete _l._fIdx;
+          delete _l.img;
+          delete _l._oc;
+          return _l;
+        }),
+      })),
+    };
+    try {
+      localStorage.setItem(_key, JSON.stringify(_payload));
+    } catch(e) {
+      appAlert('No hay espacio suficiente para compartir. Libera espacio e inténtalo de nuevo.');
+      return;
+    }
+    url = base + '/reader/index.html?local=' + _key + '&from=app';
+
+  } else if (comic.supabaseId) {
+    // ── MODO NUBE: enlace directo a Supabase (obra cloudOnly) ──
+    const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
+    url = base + '/reader/index.html?' + param;
+
+  } else {
+    appAlert('Esta obra no tiene datos guardados. Ábrela en el editor y guárdala antes de compartir.');
     return;
   }
 
-  const base  = window.location.origin + window.location.pathname.replace(/\/index\.html$/, '').replace(/\/$/, '');
-  const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
-  const url   = base + '/reader/index.html?' + param;
   const title = comic.title || 'Una obra en ComiXow';
   const text  = `Mira "${title}" en ComiXow`;
 
   if ('share' in navigator) {
+    // Android/móvil: hoja nativa de compartir (WhatsApp, Telegram, correo...)
     navigator.share({ title, text, url }).catch(e => {
       if (e.name !== 'AbortError') console.warn('share:', e);
     });
   } else {
-    // Fallback: copiar enlace al portapapeles
+    // PC: copiar enlace al portapapeles
     navigator.clipboard.writeText(url).then(() => {
       appAlert('Enlace copiado al portapapeles:\n' + url);
     }).catch(() => {
