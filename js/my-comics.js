@@ -644,6 +644,7 @@ function _mcShowSyncDiag() {
             if (d.animKeyData !== undefined)      L.push('       animKey IDB: ' + d.animKeyData);
             if (d.buildApngResult !== undefined)  L.push('       buildApng: ' + d.buildApngResult);
             L.push('       APNG ok: ' + !!d.apngDataUrlOk + ' | URL: ' + (d.animUrl ? '✅' : '❌'));
+            if (d.blobSize !== undefined) L.push('       blob: ' + d.blobSize + 'B status:' + d.uploadStatus + ' resp:' + d.uploadResponse);
             if (d.error) L.push('       ❌ ' + d.error);
           });
         }

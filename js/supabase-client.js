@@ -243,7 +243,15 @@ const SupabaseClient = (() => {
       headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true' },
       body:    blob,
     });
-    if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
+    const _rText = await r.text();
+    if (!r.ok) throw new Error(`animUpload: ${r.status} ${_rText}`);
+    if (window._shareDiag) {
+      window._shareDiag.animDiags = window._shareDiag.animDiags || [];
+      const _last = window._shareDiag.animDiags[window._shareDiag.animDiags.length-1] || {};
+      _last.uploadResponse = _rText;
+      _last.uploadStatus = r.status;
+      _last.blobSize = blob.size;
+    }
     return `${STORAGE}/object/public/anims/${path}`;
   }
   // _animDownload definida más abajo
