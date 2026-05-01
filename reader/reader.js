@@ -1397,7 +1397,7 @@ async function preloadImages() {
         console.log('[reader] decode APNG, _apngSrc type:', typeof layer._apngSrc, Array.isArray(layer._apngSrc)?'array:'+layer._apngSrc.length:'len:'+layer._apngSrc.length);
         return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
           .then(function(result) {
-            console.log('[reader] decode OK:', result.frames.length, 'frames', result.width+'x'+result.height);
+            console.log('[reader] decode OK:', result.frames.length, 'frames', result.width+'x'+result.height, 'delays:', result.frames.map(f=>f.delay).join(','));
             layer._animFrames    = result.frames;
             layer._animIdx       = 0;
             layer._animLastTick  = 0;
