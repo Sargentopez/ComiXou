@@ -987,43 +987,31 @@ async function loadLocal(key) {
 
     setLoadingMsg('Cargando páginas...');
 
-    // Construir RS.panels — mismo proceso que _loadPanels pero desde editorData.pages
+    // Construir RS.panels — replicando exactamente _loadPanels de la nube
     RS.panels = await Promise.all(data.pages.map(async (p, pi) => {
-      // Capas — equivalente a parsear layer_data de panel_layers
-      // Los layers ya están deserializados (vienen de edSerLayer)
-      // Necesitan el mismo tratamiento que _loadPanels hace con layer_data:
-      // - gif: obtener datos desde IDB cxGifs (equivalente a gif_url)
-      // - image animada: obtener APNG desde IDB cxAnims (equivalente a anim_url → _apngSrc)
-      // - resto: usar src directamente
+
+      // ── Paso 1: construir layers (equivale a parsear panel_layers) ──
       const layers = await Promise.all((p.layers || []).map(async l => {
         const layer = { ...l };
 
+        // gif: obtener datos de IDB cxGifs (equivale a gif_url → _gifUrl)
         if (layer.type === 'gif') {
-          // Equivale a: if (l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
-          // Pero aquí el gif está en IDB cxGifs por gifKey
           if (layer.gifKey) {
             const gifData = await _localIdbGet('cxGifs', 'gifs', layer.gifKey);
-            if (gifData) {
-              layer._gifDataUrl = gifData; // dataUrl del GIF — equivalente al _gifUrl descargado
-            } else if (layer._gifUrl) {
-              // Fallback: URL pública si existe (se guardó al descargar de nube)
-              layer._gifDataUrl = layer._gifUrl; // se usará como URL de fetch en preloadImages
-            }
+            if (gifData) layer._gifDataUrl = gifData;
+            else if (layer._gifUrl) layer._gifDataUrl = layer._gifUrl;
           }
         }
 
+        // image animada: obtener APNG de IDB cxAnims (equivale a anim_url → _apngSrc)
         if (layer.type === 'image' && (layer.animKey || layer._pngFramesKey)) {
-          // Equivale a: if (l.type === 'image' && r.anim_url) _apngSrc = await _animDownload(anim_url)
-          // Pero aquí el APNG está en IDB cxAnims por animKey o _pngFramesKey
           const _idbKey = layer.animKey || layer._pngFramesKey;
           const animData = await _localIdbGet('cxAnims', 'anims', _idbKey);
           if (animData) {
             if (typeof animData === 'string') {
-              layer._apngSrc = animData; // dataUrl APNG completo
+              layer._apngSrc = animData;   // APNG completo → decodeApng
             } else if (Array.isArray(animData) && animData.length) {
-              // Array de frames PNG — usar el primero como src y guardar todos
-              layer._apngSrc   = animData[0];
-              layer._pngFrames = animData; // para que ApngDecoder use decodeFrameArray
+              layer._apngSrc = animData;   // array de frames → decodeFrameArray (NO solo el primero)
             }
           }
         }
@@ -1031,17 +1019,30 @@ async function loadLocal(key) {
         return layer;
       }));
 
-      // Textos — equivalente a panel_texts
-      // En local los textos están dentro de las capas (type=text o type=bubble)
-      const panelTexts = layers
-        .filter(l => l.type === 'bubble' || l.type === 'text')
-        .sort((a, b) => (a._seqOrder || 0) - (b._seqOrder || 0))
-        .map((l, i) => ({
-          text:       l.text       || '',
-          text_order: l._seqOrder  || i,
-          panel_id:   'local_' + pi,
-          id:         'lt_' + pi + '_' + i,
-        }));
+      // ── Paso 2: construir texts (equivale a panel_texts de Supabase) ──
+      // Replica exactamente la lógica de _loadPanels:
+      // - bubbleLayers: todos los de tipo bubble/text
+      // - bubbleLayersWithText: los que tienen _hasText !== false
+      // - panelTexts: misma estructura que panel_texts de Supabase
+      const bubbleLayers = layers.filter(l => l.type === 'bubble' || l.type === 'text');
+      const bubbleLayersWithText = bubbleLayers.filter(l => l._hasText !== false);
+
+      const panelTexts = bubbleLayersWithText.map((l, i) => ({
+        // Mismos campos que panel_texts de Supabase
+        id:          'lt_' + pi + '_' + i,
+        panel_id:    'local_' + pi,
+        text:        l.text        || '',
+        type:        l.type,                    // 'bubble' o 'text' — crítico para _drawBubble
+        text_order:  l._seqOrder   !== undefined ? l._seqOrder : i,
+        // Campos de posición y estilo que _drawBubble necesita via t._bubbleLayer
+        // Estos se asignan automáticamente en _render via t._bubbleLayer = bubbleLayersWithText[i]
+      }));
+
+      // Marcar _hasRenderLayer igual que _loadPanels
+      panelTexts.forEach((t, i) => {
+        const bl = bubbleLayersWithText[i];
+        if (bl && bl.renderDataUrl) t._hasRenderLayer = true;
+      });
 
       return {
         id:          'local_' + pi,
