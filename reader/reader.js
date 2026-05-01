@@ -1256,26 +1256,35 @@ async function _animDownload(animUrl) {
 
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
-  if (typeof DecompressionStream === 'undefined') return str;
+  // Decodificar base64 → Uint8Array en chunks de 32768 chars con padding correcto
+  const b64 = str.slice(_CZ_PFX.length);
+  const CHUNK = 32768;
+  let byteLen = 0;
+  const parts = [];
   try {
-    const b64 = str.slice(_CZ_PFX.length);
-    // atob por chunks de 8192 chars — evita fallo en Android con b64 muy largo
-    const CHUNK = 8192;
-    let byteLen = 0;
-    const parts = [];
-    const padded = b64 + '==='.slice((b64.length + 3) % 4 || 3);
-    for (let i = 0; i < padded.length; i += CHUNK) {
-      let end = Math.min(i + CHUNK, padded.length);
-      while ((end - i) % 4 !== 0 && end < padded.length) end++;
-      const bin = atob(padded.slice(i, end));
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      const slice = b64.slice(i, Math.min(i + CHUNK, b64.length));
+      const rem = slice.length % 4;
+      const bin = atob(rem ? slice + '===='.slice(rem) : slice);
       const part = new Uint8Array(bin.length);
       for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
       parts.push(part);
       byteLen += part.length;
     }
-    const bytes = new Uint8Array(byteLen);
-    let off2 = 0;
-    for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+  } catch(e) { return str; }
+  const bytes = new Uint8Array(byteLen);
+  let off2 = 0;
+  for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+  // Usar pako primero (más fiable que DecompressionStream en Android WebView)
+  if (typeof pako !== 'undefined') {
+    try {
+      const result = new TextDecoder().decode(pako.inflate(bytes));
+      if (result && result.length > 0) return result;
+    } catch(e) {}
+  }
+  // Fallback: DecompressionStream nativo
+  if (typeof DecompressionStream === 'undefined') return str;
+  try {
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
     writer.write(bytes);
@@ -1318,7 +1327,6 @@ async function _loadPanels(workId, useAuth) {
           if (l.type === 'image' && r.anim_url) {
             try {
               const _apngDl = await _animDownload(r.anim_url);
-              console.log('[reader] anim_url:', r.anim_url, '→ _apngDl:', _apngDl ? (_apngDl.slice(0,30) + '... len=' + _apngDl.length) : 'NULL');
               if (_apngDl) l._apngSrc = _apngDl;
             } catch(e) { console.error('[reader] anim download error:', e); }
           }
@@ -1394,10 +1402,8 @@ async function preloadImages() {
       }
       // APNG: decodificar con ApngDecoder
       if (layer._apngSrc && window.ApngDecoder) {
-        console.log('[reader] decode APNG, _apngSrc type:', typeof layer._apngSrc, Array.isArray(layer._apngSrc)?'array:'+layer._apngSrc.length:'len:'+layer._apngSrc.length);
         return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
           .then(function(result) {
-            console.log('[reader] decode OK:', result.frames.length, 'frames', result.width+'x'+result.height, 'delays:', result.frames.map(f=>f.delay).join(','));
             layer._animFrames    = result.frames;
             layer._animIdx       = 0;
             layer._animLastTick  = 0;
@@ -1504,7 +1510,6 @@ function _readerGifTick() {
       // Debug: log estado animación primera vez
       if (layer._animReady && !layer._dbgLogged) {
         layer._dbgLogged = true;
-        console.log('[tick] layer animReady, frames:', layer._animFrames?.length, 'animOc:', !!layer._animOc, 'animOc size:', layer._animOc?.width+'x'+layer._animOc?.height);
       }
       // GIF importado
       if (layer._gifReady && layer._gifFrames && layer._gifOc) {
