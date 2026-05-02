@@ -866,22 +866,37 @@ async function _mcRunDiag() {
     }
   }
 
-  // 5. Intentar bibDownload para la obra más reciente con supabaseId
+  // 5. bibDownload raw para cada obra con supabaseId — ver descompresión
   if (user && comics.length) {
-    const c = comics[0];
-    L('\n── bibDownload test: ' + c.title + ' ──');
-    try {
-      const cloudData = await SupabaseClient.bibDownload(user.id, c.supabaseId || c.id);
-      L(ok('bibDownload: OK, folders=' + (cloudData?.folders?.length||0)));
-      if (cloudData && cloudData.folders) {
-        cloudData.folders.forEach(f => {
+    for (const c of comics.slice(0,5)) {
+      const _sbId = c.supabaseId || c.id;
+      L('\n── bibDownload: ' + c.title + ' (sbId=' + _sbId.slice(0,8) + '...) ──');
+      try {
+        // Test directo de bibFetch sin procesar
+        const _rows = await SupabaseClient.bibFetchRaw ? await SupabaseClient.bibFetchRaw(user.id, _sbId) : null;
+        if (_rows !== null) {
+          L('  bibFetchRaw: ' + (_rows ? _rows.length + ' filas' : 'null'));
+          if (_rows) _rows.forEach(r => L('  row: id=' + r.id + ' folder=' + (r.folder_id||'?') + ' type=' + r.layer_type + ' anim=' + (r.anim_url?'sí':'NO') + ' bytes=' + (r.layer_data||'').length));
+        }
+        const cloudData = await SupabaseClient.bibDownload(user.id, _sbId);
+        L(ok('bibDownload OK: folders=' + (cloudData?.folders?.length||0)));
+        (cloudData?.folders||[]).forEach(f => {
           L('  folder ' + f.id + ': ' + f.items.length + ' items');
-          f.items.forEach(item => {
-            L('    ' + item.id + ' isGifAnim=' + item.isGifAnim + ' apngSrc=' + (item.apngSrc?'sí('+item.apngSrc.length+')':'NO') + ' gifDataUrl=' + (item.gifDataUrl?'sí':'NO'));
+          (f.items||[]).forEach(item => {
+            L('    ' + item.id.slice(0,16) + ' isGifAnim=' + item.isGifAnim + ' apng=' + (item.apngSrc?'sí('+item.apngSrc.length+')':'NO') + ' gif=' + (item.gifDataUrl?'sí':'NO'));
           });
         });
-      }
-    } catch(e) { L(err('bibDownload: ' + e.message)); }
+      } catch(e) { L(err('bibDownload: ' + e.message)); }
+    }
+
+    // Test directo de _czDecompress con un dato real de biblioteca
+    L('\n── Test _czDecompress ──');
+    try {
+      if (typeof pako !== 'undefined') { L(ok('pako disponible')); }
+      else { L(err('pako NO disponible')); }
+      if (typeof DecompressionStream !== 'undefined') { L(ok('DecompressionStream disponible')); }
+      else { L(warn('DecompressionStream NO disponible')); }
+    } catch(e) { L('APIs check error: ' + e.message); }
   }
 
   // Mostrar panel

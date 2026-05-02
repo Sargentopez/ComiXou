@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v20-32';
+const CACHE = 'comixow-v20-33';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
