@@ -18300,6 +18300,8 @@ async function _edRunDiag() {
   } catch(e) { L('IDB error: ' + e.message); }
 
   // 4. Layers vivos en memoria
+  L('\n── edPages[0].layers === edLayers: ' + (edPages[0]&&edPages[0].layers===edLayers));
+  L('edCurrentPage=' + edCurrentPage + ' edPages.length=' + edPages.length);
   L('\n── Layers en memoria (edLayers) ──');
   (edLayers||[]).forEach((l, li) => {
     if (!l) { L('  L' + li + ' = NULL'); return; }
