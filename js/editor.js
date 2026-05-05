@@ -14494,6 +14494,19 @@ async function edSaveProjectModal(){
     // Cambiar al nuevo id
     edProjectId = _newId;
 
+    // Pre-crear la entrada con userId correcto para que aparezca en la lista
+    const _forkUser = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+    if (_forkUser) {
+      ComicStore.save({
+        id: _newId,
+        userId:   _forkUser.id,
+        username: _forkUser.username,
+        title:    _newTitle,
+        cloudOnly: false,
+        published: false,
+      });
+    }
+
     // Guardar como obra nueva — supabaseId y cloudOnly reseteados
     edProjectMeta.title = _newTitle;
     edCloseProjectModal();
