@@ -14441,14 +14441,67 @@ function EditorView_destroy(){
   }
   edHideGearIcon();
 }
-function edSaveProjectModal(){
-  edProjectMeta.title  =$('edMTitle').value.trim()||edProjectMeta.title;
-  edProjectMeta.author =$('edMAuthor').value.trim();
-  edProjectMeta.genre  =$('edMGenre').value.trim();
-  edProjectMeta.navMode=$('edMNavMode').value;
-  edProjectMeta.social =($('edMSocial')?.value||'').trim().slice(0,300);
+async function edSaveProjectModal(){
+  const _newTitle  = $('edMTitle').value.trim() || edProjectMeta.title;
+  const _newAuthor = $('edMAuthor').value.trim();
+  const _newGenre  = $('edMGenre').value.trim();
+  const _newNavMode= $('edMNavMode').value;
+  const _newSocial = ($('edMSocial')?.value||'').trim().slice(0,300);
+
+  const _titleChanged = _newTitle !== edProjectMeta.title;
+
+  edProjectMeta.title   = _newTitle;
+  edProjectMeta.author  = _newAuthor;
+  edProjectMeta.genre   = _newGenre;
+  edProjectMeta.navMode = _newNavMode;
+  edProjectMeta.social  = _newSocial;
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
-  edCloseProjectModal();edSaveProject();
+
+  if (_titleChanged) {
+    // Crear obra nueva independiente con el nuevo nombre
+    const _oldId = edProjectId;
+    const _newId = 'comic_' + Date.now();
+
+    // Leer datos completos de la obra actual
+    const _oldComic = ComicStore.getByIdFull
+      ? (await ComicStore.getByIdFull(_oldId))
+      : ComicStore.getById(_oldId);
+
+    // Copiar datos de animación IDB: para cada layer con _pngFramesKey o animKey
+    const _pages = (_oldComic?.editorData?.pages || edPages.map(p => ({
+      layers: (p.layers||[]).map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean)
+    })));
+
+    // Reasignar claves IDB con el nuevo id
+    const _idbCopies = [];
+    for (let pi = 0; pi < _pages.length; pi++) {
+      for (let li = 0; li < (_pages[pi].layers||[]).length; li++) {
+        const l = _pages[pi].layers[li];
+        if (l && l._pngFramesKey && window._sbAnimIdbLoad) {
+          const _oldKey = l._pngFramesKey;
+          const _newKey = _newId + '_' + pi + '_' + li;
+          _idbCopies.push(
+            window._sbAnimIdbLoad(_oldKey).then(data => {
+              if (data && window._sbAnimIdbSave) return window._sbAnimIdbSave(_newKey, data);
+            }).catch(() => {})
+          );
+          _pages[pi].layers[li] = { ...l, _pngFramesKey: _newKey };
+        }
+      }
+    }
+    if (_idbCopies.length) await Promise.all(_idbCopies);
+
+    // Cambiar al nuevo id
+    edProjectId = _newId;
+
+    // Guardar como obra nueva — supabaseId y cloudOnly reseteados
+    edProjectMeta.title = _newTitle;
+    edCloseProjectModal();
+    await edSaveProject();
+  } else {
+    edCloseProjectModal();
+    await edSaveProject();
+  }
 }
 
 /* ══════════════════════════════════════════
