@@ -63,6 +63,7 @@ const ComicStore = (() => {
     return getAll().find(c => c.id === id) || null;
   }
 
+  // save() devuelve Promise — permite await cuando se necesita garantizar OPFS escrito
   function save(comic) {
     const list = getAll();
     const idx  = list.findIndex(c => c.id === comic.id);
@@ -73,17 +74,17 @@ const ComicStore = (() => {
       list.push({ ...light, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     }
     saveAll(list);
+    _emit('save', comic.id);
 
-    // Guardar editorData y thumbnail en OPFS (async, no bloquea)
-    if (comic.editorData || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl)) {
-      _opfsWrite(comic.id, comic).catch(e => console.warn('[ComicStore] OPFS write:', e));
-    }
+    // Guardar editorData en OPFS — devolver Promise para que el llamador pueda hacer await
+    const _opfsPromise = (comic.editorData || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl))
+      ? _opfsWrite(comic.id, comic).catch(e => console.warn('[ComicStore] OPFS write:', e))
+      : Promise.resolve();
 
-    // Backup en carpeta visible PC (primera vez pide, luego silencioso)
+    // Backup en carpeta visible PC (async, no bloquea)
     _fsWrite(comic.id, comic).catch(() => {});
 
-    _emit('save', comic.id);
-    return comic;
+    return _opfsPromise.then(() => comic);
   }
 
   function remove(id) {

@@ -2292,13 +2292,19 @@ class LineLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
+    if (!l || !l.type) return null;
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
       // Esto garantiza que restaurar un snapshot siempre produce un StrokeLayer
       // estático correcto, sin el problema del DrawLayer vacío al restaurar.
       const _bb = StrokeLayer._boundingBox(l._canvas);
       const _pw = edPageW(), _ph = edPageH();
-      if(!_bb) return null; // DrawLayer vacío: no incluir en snapshot
+      if(!_bb) {
+        // DrawLayer sin contenido visible — incluir como stroke vacío para preservar el layer
+        // (si se descarta con null, desaparece del historial y no puede recuperarse con redo)
+        return { type: 'stroke', dataUrl: '', x: 0.5, y: 0.5, width: 0.01, height: 0.01,
+                 rotation: 0, opacity: l.opacity ?? 1, locked: l.locked || false };
+      }
       const _cx = (_bb.x + _bb.w/2 - edMarginX()) / _pw;
       const _cy = (_bb.y + _bb.h/2 - edMarginY()) / _ph;
       const _fw = _bb.w / _pw;
@@ -2338,6 +2344,20 @@ function _edLayersSnapshot(){
     if(l.groupId) o.groupId = l.groupId;
     if(l.locked) o.locked = true;
     if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
+    // Preservar referencias de animación en el snapshot
+    if(l.type === 'image' || l.type === 'gif') {
+      if(l.animKey)       o.animKey       = l.animKey;
+      if(l._pngFramesKey) o._pngFramesKey = l._pngFramesKey;
+      if(l.animKey || l._pngFramesKey) o._isAnim = true;
+      if(l.gifKey)        o.gifKey        = l.gifKey;
+      if(l._gcpFrameDelay)   o._gcpFrameDelay   = l._gcpFrameDelay;
+      if(l._gcpRepeatCount)  o._gcpRepeatCount  = l._gcpRepeatCount;
+      if(l._gcpStopAtEnd)    o._gcpStopAtEnd    = l._gcpStopAtEnd;
+      if(l._gcpLayersData)   o._gcpLayersData   = l._gcpLayersData;
+      if(l._gcpFramesData)   o._gcpFramesData   = l._gcpFramesData;
+      if(l._gcpLayerNames)   o._gcpLayerNames   = l._gcpLayerNames;
+      if(l._bibItemId)       o._bibItemId        = l._bibItemId;
+    }
     return o;
   }));
 }
@@ -2376,11 +2396,48 @@ function edApplyHistory(snapshot){
   if(!snapshot) return;
   const raw = JSON.parse(snapshot.layersJSON);
   const imgPromises = [];
-  edLayers = raw.map(o => {
+  edLayers = raw.filter(o => o !== null && o !== undefined).map(o => {
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
-    else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
+    else if(o.type === 'image')  {
+      l = new ImageLayer(null, o.x, o.y);
+      // Restaurar referencias de animación desde el snapshot
+      if(o._isAnim || o.animKey || o._pngFramesKey) {
+        if(o.animKey)        l.animKey        = o.animKey;
+        if(o._pngFramesKey)  l._pngFramesKey  = o._pngFramesKey;
+        if(o._gcpFrameDelay)  l._gcpFrameDelay  = o._gcpFrameDelay;
+        if(o._gcpRepeatCount) l._gcpRepeatCount = o._gcpRepeatCount;
+        if(o._gcpStopAtEnd)   l._gcpStopAtEnd   = o._gcpStopAtEnd;
+        if(o._gcpLayersData)  l._gcpLayersData  = o._gcpLayersData;
+        if(o._gcpFramesData)  l._gcpFramesData  = o._gcpFramesData;
+        if(o._gcpLayerNames)  l._gcpLayerNames  = o._gcpLayerNames;
+        if(o._bibItemId)      l._bibItemId       = o._bibItemId;
+        // Cargar animación desde IDB
+        const _animKey = o._pngFramesKey || o.animKey;
+        if(_animKey && window._sbAnimIdbLoad) {
+          window._sbAnimIdbLoad(_animKey).then(data => {
+            if(!data) return;
+            if(typeof data === 'string') l._apngSrc = data;
+            else if(Array.isArray(data) && data.length) l._pngFrames = data;
+            if(l._apngSrc || l._pngFrames) {
+              l.loadAnim(l._apngSrc || l._pngFrames, () => { l._playing = true; l._applyFrame(0); edRedraw(); });
+            }
+          }).catch(() => {});
+        }
+      }
+      // Cargar _imgSrc (thumbnail/primer frame)
+      if(o._imgSrc) {
+        const p = new Promise(resolve => {
+          const img = new Image();
+          img.onload = () => { l.img = img; resolve(); };
+          img.onerror = () => resolve();
+          img.src = o._imgSrc;
+        });
+        imgPromises.push(p);
+      }
+      return l;
+    }
     else if(o.type === 'draw') {
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
@@ -2432,6 +2489,15 @@ function edApplyHistory(snapshot){
     else return o;
     for(const k of Object.keys(o)){
       if(k !== '_imgSrc') l[k] = o[k];
+    }
+    // Restaurar gifKey si es un gif animado
+    if(o.type === 'gif' && o.gifKey) {
+      l.gifKey = o.gifKey;
+      if(window._sbGifIdbLoad) {
+        window._sbGifIdbLoad(o.gifKey).then(dataUrl => {
+          if(dataUrl) { l._gifDataUrl = dataUrl; _edGifSetPlaying(l); edRedraw(); }
+        }).catch(() => {});
+      }
     }
     if(o._imgSrc){
       const p = new Promise(resolve => {
