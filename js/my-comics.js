@@ -554,6 +554,9 @@ function _mcRenderList() {
         appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
         return;
       }
+      // Actualizar localSavedAt al momento del envío — garantiza que la nube
+      // nunca se considere más nueva que la versión local actual
+      ComicStore.save({ ...comic, localSavedAt: new Date().toISOString() });
       if (typeof openShareModal !== 'undefined') openShareModal(comic);
     }
   });
