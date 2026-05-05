@@ -14459,37 +14459,35 @@ async function edSaveProjectModal(){
 
   if (_titleChanged) {
     // Crear obra nueva independiente con el nuevo nombre
-    const _oldId = edProjectId;
     const _newId = 'comic_' + Date.now();
 
-    // Leer datos completos de la obra actual
-    const _oldComic = ComicStore.getByIdFull
-      ? (await ComicStore.getByIdFull(_oldId))
-      : ComicStore.getById(_oldId);
-
-    // Copiar datos de animación IDB: para cada layer con _pngFramesKey o animKey
-    const _pages = (_oldComic?.editorData?.pages || edPages.map(p => ({
-      layers: (p.layers||[]).map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean)
-    })));
-
-    // Reasignar claves IDB con el nuevo id
-    const _idbCopies = [];
-    for (let pi = 0; pi < _pages.length; pi++) {
-      for (let li = 0; li < (_pages[pi].layers||[]).length; li++) {
-        const l = _pages[pi].layers[li];
-        if (l && l._pngFramesKey && window._sbAnimIdbLoad) {
-          const _oldKey = l._pngFramesKey;
-          const _newKey = _newId + '_' + pi + '_' + li;
-          _idbCopies.push(
-            window._sbAnimIdbLoad(_oldKey).then(data => {
-              if (data && window._sbAnimIdbSave) return window._sbAnimIdbSave(_newKey, data);
-            }).catch(() => {})
-          );
-          _pages[pi].layers[li] = { ...l, _pngFramesKey: _newKey };
+    // Restaurar _pngFrames/_apngSrc en los layers vivos desde IDB
+    // para que edSaveProject los re-externalice con las nuevas claves
+    for (const p of edPages) {
+      for (const l of (p.layers || [])) {
+        if (l.type === 'image' && l._pngFramesKey && !l._pngFrames && !l._apngSrc) {
+          if (window._sbAnimIdbLoad) {
+            try {
+              const _data = await window._sbAnimIdbLoad(l._pngFramesKey);
+              if (_data) {
+                if (typeof _data === 'string') l._apngSrc = _data;
+                else if (Array.isArray(_data) && _data.length) l._pngFrames = _data;
+              }
+            } catch(e) {}
+          }
+          // Borrar _pngFramesKey para que edSaveProject cree nueva clave con el nuevo id
+          delete l._pngFramesKey;
         }
       }
     }
-    if (_idbCopies.length) await Promise.all(_idbCopies);
+
+    // Copiar biblioteca de la obra original a la nueva (independientes desde ahora)
+    try {
+      const _oldBibKey = _BIB_KEY_PREFIX + '_' + edProjectId;
+      const _newBibKey = _BIB_KEY_PREFIX + '_' + _newId;
+      const _oldBib = localStorage.getItem(_oldBibKey);
+      if (_oldBib) localStorage.setItem(_newBibKey, _oldBib);
+    } catch(e) {}
 
     // Cambiar al nuevo id
     edProjectId = _newId;
