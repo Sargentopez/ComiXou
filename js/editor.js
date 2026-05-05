@@ -12210,7 +12210,9 @@ async function edCloudSave() {
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
   await edSaveProject();
 
-  const comic = ComicStore.getById(edProjectId);
+  const comic = ComicStore.getByIdFull
+    ? (await ComicStore.getByIdFull(edProjectId))
+    : ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
 
   // Asignar supabaseId si aún no tiene
@@ -13157,8 +13159,10 @@ function edDeserLayer(d, pageOrientation){
   }
   return null;
 }
-function edLoadProject(id){
-  const comic=ComicStore.getById(id);if(!comic)return;
+async function edLoadProject(id){
+  const comic = ComicStore.getByIdFull
+    ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
+  if(!comic)return;
   edProjectId=id;
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;

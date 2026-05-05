@@ -1,66 +1,106 @@
 /* ============================================================
-   storage.js  v4.7
-   Persistencia en localStorage + eventos reactivos para
-   que cualquier vista (home, my-comics) se actualice al instante
-   cuando cambian datos (publish, unpublish, delete).
+   storage.js  v5.0
+   Índice ligero en localStorage + editorData en OPFS.
+   Sin cambios en la API síncrona existente — solo se añade
+   getByIdFull() async para leer editorData completo.
+   PC: primera vez pide carpeta visible (File System Access API).
+   Android: OPFS silencioso, sin petición de permisos.
    ============================================================ */
 
 const ComicStore = (() => {
   const KEY  = 'cs_comics';
-  const CH   = 'cx_comics_change'; // BroadcastChannel name
+  const CH   = 'cx_comics_change';
 
   /* ── Canal de difusión entre pestañas / vistas ── */
   let _bc = null;
   try { _bc = new BroadcastChannel(CH); } catch(e) {}
 
-  /* Emitir cambio — notifica otras pestañas Y la propia (via CustomEvent) */
   function _emit(type, id) {
-    // Mismo tab
     window.dispatchEvent(new CustomEvent('cx:store', { detail: { type, id } }));
-    // Otras pestañas
     try { _bc && _bc.postMessage({ type, id }); } catch(e) {}
   }
 
-  /* Escuchar cambios desde otras pestañas */
   if (_bc) {
     _bc.onmessage = (e) => {
       window.dispatchEvent(new CustomEvent('cx:store', { detail: e.data }));
     };
   }
 
-  /* ── CRUD ── */
-  function getAll()       { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
+  /* ── Índice en localStorage (solo metadatos, sin editorData) ── */
+  function _stripHeavy(comic) {
+    // Eliminar campos grandes antes de guardar en localStorage
+    const c = { ...comic };
+    delete c.editorData;
+    // panels: conservar solo metadatos, eliminar dataUrl grande
+    if (c.panels && c.panels.length) {
+      c.panels = c.panels.map((p, i) => {
+        if (i === 0 && p.dataUrl) {
+          // Primer panel: guardar aparte en OPFS, aquí solo flag
+          return { ...p, _hasDataUrl: true, dataUrl: null };
+        }
+        return { ...p, dataUrl: null };
+      });
+    }
+    return c;
+  }
+
+  function getAll() {
+    return JSON.parse(localStorage.getItem(KEY) || '[]');
+  }
+
   function saveAll(list) {
     try {
       localStorage.setItem(KEY, JSON.stringify(list));
     } catch(e) {
       if (e.name === 'QuotaExceededError' || e.code === 22) {
-        // localStorage lleno — notificar al usuario
         window.dispatchEvent(new CustomEvent('cx:storage:quota', { detail: { size: JSON.stringify(list).length } }));
-        console.error('[ComicStore] localStorage lleno — guardado fallido:', e);
-      } else {
-        throw e;
-      }
+        console.error('[ComicStore] localStorage lleno:', e);
+      } else { throw e; }
     }
   }
-  function getById(id)    { return getAll().find(c => c.id === id) || null; }
+
+  function getById(id) {
+    return getAll().find(c => c.id === id) || null;
+  }
 
   function save(comic) {
     const list = getAll();
     const idx  = list.findIndex(c => c.id === comic.id);
+    const light = _stripHeavy(comic);
     if (idx >= 0) {
-      list[idx] = { ...list[idx], ...comic, updatedAt: new Date().toISOString() };
+      list[idx] = { ...list[idx], ...light, updatedAt: new Date().toISOString() };
     } else {
-      list.push({ ...comic, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      list.push({ ...light, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     }
     saveAll(list);
+
+    // Guardar editorData y thumbnail en OPFS (async, no bloquea)
+    if (comic.editorData || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl)) {
+      _opfsWrite(comic.id, comic).catch(e => console.warn('[ComicStore] OPFS write:', e));
+    }
+
+    // Backup en carpeta visible PC (primera vez pide, luego silencioso)
+    _fsWrite(comic.id, comic).catch(() => {});
+
     _emit('save', comic.id);
     return comic;
   }
 
   function remove(id) {
     saveAll(getAll().filter(c => c.id !== id));
+    _opfsDelete(id).catch(() => {});
     _emit('remove', id);
+  }
+
+  /* ── getByIdFull: async — devuelve comic completo con editorData ── */
+  async function getByIdFull(id) {
+    const meta = getById(id);
+    if (!meta) return null;
+    try {
+      const full = await _opfsRead(id);
+      if (full) return { ...meta, ...full };
+    } catch(e) {}
+    return meta;
   }
 
   function createNew(userId, username) {
@@ -78,5 +118,126 @@ const ComicStore = (() => {
   function getByUser(userId)  { return getAll().filter(c => c.userId === userId); }
   function getPublished()     { return getAll().filter(c => c.published); }
 
-  return { getAll, getById, save, remove, createNew, getByUser, getPublished };
+  /* ══════════════════════════════════════════════════════════════
+     OPFS — Origin Private File System
+     Soportado: Chrome 86+, Android Chrome 109+, Firefox 111+
+     Sin permisos de usuario, privado, persistente
+  ══════════════════════════════════════════════════════════════ */
+  async function _opfsRoot() {
+    if (!navigator.storage || !navigator.storage.getDirectory) return null;
+    try {
+      const root = await navigator.storage.getDirectory();
+      return await root.getDirectoryHandle('comixou', { create: true });
+    } catch(e) { return null; }
+  }
+
+  async function _opfsWrite(id, comic) {
+    const dir = await _opfsRoot();
+    if (!dir) return false;
+    try {
+      // Guardar solo los datos pesados
+      const payload = {
+        editorData: comic.editorData || null,
+        panels:     comic.panels     || [],
+      };
+      const fh = await dir.getFileHandle(id + '.json', { create: true });
+      const ws = await fh.createWritable();
+      await ws.write(JSON.stringify(payload));
+      await ws.close();
+      return true;
+    } catch(e) { console.warn('[OPFS] write error:', e); return false; }
+  }
+
+  async function _opfsRead(id) {
+    const dir = await _opfsRoot();
+    if (!dir) return null;
+    try {
+      const fh   = await dir.getFileHandle(id + '.json');
+      const file = await fh.getFile();
+      const text = await file.text();
+      return JSON.parse(text);
+    } catch(e) { return null; }
+  }
+
+  async function _opfsDelete(id) {
+    const dir = await _opfsRoot();
+    if (!dir) return;
+    try { await dir.removeEntry(id + '.json'); } catch(e) {}
+  }
+
+  /* ══════════════════════════════════════════════════════════════
+     File System Access API — carpeta visible en PC
+     Solo Chrome/Edge con esta API. Android: OPFS ya cubre.
+     Primera vez: pide al usuario dónde guardar la carpeta ComiXou.
+     Luego: guarda silenciosamente.
+  ══════════════════════════════════════════════════════════════ */
+  const _FS_SUPPORTED = 'showDirectoryPicker' in window;
+  let _fsDirHandle = null;
+
+  async function _fsAskDir() {
+    if (!_FS_SUPPORTED) return;
+    // Restaurar handle guardado
+    if (!_fsDirHandle) {
+      try {
+        const stored = localStorage.getItem('cx_fs_dir');
+        if (stored) {
+          // No podemos restaurar FileSystemDirectoryHandle desde JSON — pedir de nuevo si es necesario
+        }
+      } catch(e) {}
+    }
+    // Solo pedir la primera vez en sesión
+    if (_fsDirHandle) return;
+    const asked = localStorage.getItem('cx_fs_asked');
+    if (asked === 'no') return; // usuario rechazó
+    // Solo preguntar en PC (no mobile)
+    const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+    if (isMobile) return;
+    if (asked === 'yes') {
+      // Ya preguntamos antes — no preguntar de nuevo (handle no persiste entre sesiones)
+      return;
+    }
+    // Primera vez: preguntar
+    try {
+      _fsDirHandle = await window.showDirectoryPicker({
+        id: 'comixou',
+        mode: 'readwrite',
+        startIn: 'documents',
+      });
+      localStorage.setItem('cx_fs_asked', 'yes');
+      // Crear subcarpeta ComiXou
+      _fsDirHandle = await _fsDirHandle.getDirectoryHandle('ComiXou', { create: true });
+    } catch(e) {
+      // Usuario canceló
+      localStorage.setItem('cx_fs_asked', 'no');
+      _fsDirHandle = null;
+    }
+  }
+
+  async function _fsWrite(id, comic) {
+    if (!_FS_SUPPORTED) return;
+    await _fsAskDir();
+    if (!_fsDirHandle) return;
+    try {
+      const payload = {
+        editorData: comic.editorData || null,
+        panels:     comic.panels     || [],
+        meta:       _stripHeavy(comic),
+      };
+      const fh = await _fsDirHandle.getFileHandle(id + '.json', { create: true });
+      const ws = await fh.createWritable();
+      await ws.write(JSON.stringify(payload));
+      await ws.close();
+    } catch(e) { console.warn('[FS] write error:', e); }
+  }
+
+  return {
+    getAll,
+    getById,
+    getByIdFull,
+    save,
+    remove,
+    createNew,
+    getByUser,
+    getPublished,
+  };
 })();

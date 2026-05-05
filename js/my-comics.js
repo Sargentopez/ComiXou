@@ -303,7 +303,9 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
-      const comicToEdit = ComicStore.getById(id);
+      const comicToEdit = ComicStore.getByIdFull
+        ? (await ComicStore.getByIdFull(id))
+        : ComicStore.getById(id);
       // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero.
       // También re-descargar si hay strokes en formato antiguo (sin x/y/width/height) —
       // esos strokes se renderizan incorrectamente con las versiones nuevas del editor.
