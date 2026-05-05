@@ -18307,7 +18307,7 @@ async function _edRunDiag() {
     if (!l) { L('  L' + li + ' = NULL'); return; }
     L('  L' + li + ' type=' + l.type
       + (l.type==='image'?' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' animReady=' + (l._animReady?'sí':'NO'):'')
-      + (l.type==='stroke'?' dataUrl=' + (l.toDataUrl?l.toDataUrl().slice(0,20):'?'):'')
+      + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null') + ' x=' + l.x + ' y=' + l.y + ' w=' + l.width + ' h=' + l.height:'')
       + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?'):'')
       + (l.type==='gif'?' gifKey=' + (l.gifKey||'-'):''));
   });
