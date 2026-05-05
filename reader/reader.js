@@ -1012,26 +1012,40 @@ async function _animDownload(animUrl) {
 
 async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
-  if (typeof DecompressionStream === 'undefined') return str;
+  const b64 = str.slice(_CZ_PFX.length);
+  // Intentar atob completo primero; si falla (base64 corrupto), chunk a chunk
+  let bytes = null;
   try {
-    const b64 = str.slice(_CZ_PFX.length);
-    // atob por chunks de 8192 chars — evita fallo en Android con b64 muy largo
-    const CHUNK = 8192;
-    let byteLen = 0;
-    const parts = [];
-    const padded = b64 + '==='.slice((b64.length + 3) % 4 || 3);
-    for (let i = 0; i < padded.length; i += CHUNK) {
-      let end = Math.min(i + CHUNK, padded.length);
-      while ((end - i) % 4 !== 0 && end < padded.length) end++;
-      const bin = atob(padded.slice(i, end));
-      const part = new Uint8Array(bin.length);
-      for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
-      parts.push(part);
-      byteLen += part.length;
+    const rem0 = b64.length % 4;
+    const bin0 = atob(rem0 ? b64 + '===='.slice(rem0) : b64);
+    bytes = new Uint8Array(bin0.length);
+    for (let j = 0; j < bin0.length; j++) bytes[j] = bin0.charCodeAt(j);
+  } catch(e) {
+    const parts = []; let byteLen = 0;
+    for (let i = 0; i < b64.length; i += 4) {
+      const slice = b64.slice(i, i + 4);
+      if (slice.length < 4) continue;
+      try {
+        const bin = atob(slice);
+        const part = new Uint8Array(bin.length);
+        for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
+        parts.push(part); byteLen += part.length;
+      } catch(e2) { continue; }
     }
-    const bytes = new Uint8Array(byteLen);
+    if (!byteLen) return str;
+    bytes = new Uint8Array(byteLen);
     let off2 = 0;
     for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+  }
+  // Pako primero — más fiable en Android WebView
+  if (typeof pako !== 'undefined') {
+    try {
+      const result = new TextDecoder().decode(pako.inflate(bytes));
+      if (result && result.length > 0) return result;
+    } catch(e) {}
+  }
+  if (typeof DecompressionStream === 'undefined') return str;
+  try {
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
     writer.write(bytes);
