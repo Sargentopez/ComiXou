@@ -738,8 +738,15 @@ const SupabaseClient = (() => {
       let ld = null;
       try {
         const _rld = await _czDecompress(r.layer_data);
+        if (_rld && _rld.startsWith('gz:')) {
+          // _czDecompress devolvió sin descomprimir — registrar
+          if (window._bibDiagLog) window._bibDiagLog('DECOMP FAIL id=' + r.id + ' bytes=' + r.layer_data.length);
+          continue;
+        }
         ld = JSON.parse(_rld);
-      } catch(e) {}
+      } catch(e) {
+        if (window._bibDiagLog) window._bibDiagLog('PARSE ERR id=' + r.id + ': ' + e.message.slice(0,40));
+      }
       if (!ld) continue;
       // Reconstruir item: GIF/APNG animado o layer normal
       // Usar layer_type='gif' como fallback si ld.isGifAnim no está en JSON antiguo
