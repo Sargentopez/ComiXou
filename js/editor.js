@@ -2400,44 +2400,7 @@ function edApplyHistory(snapshot){
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
-    else if(o.type === 'image')  {
-      l = new ImageLayer(null, o.x, o.y);
-      // Restaurar referencias de animación desde el snapshot
-      if(o._isAnim || o.animKey || o._pngFramesKey) {
-        if(o.animKey)        l.animKey        = o.animKey;
-        if(o._pngFramesKey)  l._pngFramesKey  = o._pngFramesKey;
-        if(o._gcpFrameDelay)  l._gcpFrameDelay  = o._gcpFrameDelay;
-        if(o._gcpRepeatCount) l._gcpRepeatCount = o._gcpRepeatCount;
-        if(o._gcpStopAtEnd)   l._gcpStopAtEnd   = o._gcpStopAtEnd;
-        if(o._gcpLayersData)  l._gcpLayersData  = o._gcpLayersData;
-        if(o._gcpFramesData)  l._gcpFramesData  = o._gcpFramesData;
-        if(o._gcpLayerNames)  l._gcpLayerNames  = o._gcpLayerNames;
-        if(o._bibItemId)      l._bibItemId       = o._bibItemId;
-        // Cargar animación desde IDB
-        const _animKey = o._pngFramesKey || o.animKey;
-        if(_animKey && window._sbAnimIdbLoad) {
-          window._sbAnimIdbLoad(_animKey).then(data => {
-            if(!data) return;
-            if(typeof data === 'string') l._apngSrc = data;
-            else if(Array.isArray(data) && data.length) l._pngFrames = data;
-            if(l._apngSrc || l._pngFrames) {
-              l.loadAnim(l._apngSrc || l._pngFrames, () => { l._playing = true; l._applyFrame(0); edRedraw(); });
-            }
-          }).catch(() => {});
-        }
-      }
-      // Cargar _imgSrc (thumbnail/primer frame)
-      if(o._imgSrc) {
-        const p = new Promise(resolve => {
-          const img = new Image();
-          img.onload = () => { l.img = img; resolve(); };
-          img.onerror = () => resolve();
-          img.src = o._imgSrc;
-        });
-        imgPromises.push(p);
-      }
-      return l;
-    }
+    else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
     else if(o.type === 'draw') {
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
@@ -2510,6 +2473,26 @@ function edApplyHistory(snapshot){
         img.src = o._imgSrc;
       });
       imgPromises.push(p);
+    }
+    // Restaurar animación desde IDB si el layer es image animado
+    if(o.type === 'image' && (o.animKey || o._pngFramesKey)) {
+      const _animKey = o._pngFramesKey || o.animKey;
+      if(_animKey && window._sbAnimIdbLoad) {
+        window._sbAnimIdbLoad(_animKey).then(data => {
+          if(!data) return;
+          if(typeof data === 'string') l._apngSrc = data;
+          else if(Array.isArray(data) && data.length) l._pngFrames = data;
+          if(l._apngSrc || l._pngFrames) {
+            l.loadAnim(l._apngSrc || l._pngFrames, () => { l._playing = true; l._applyFrame(0); edRedraw(); });
+          }
+        }).catch(() => {});
+      }
+    }
+    // Restaurar gif desde IDB
+    if(o.type === 'gif' && o.gifKey && window._sbGifIdbLoad) {
+      window._sbGifIdbLoad(o.gifKey).then(dataUrl => {
+        if(dataUrl) { l._gifDataUrl = dataUrl; _edGifSetPlaying(l); edRedraw(); }
+      }).catch(() => {});
     }
     return l;
   });
@@ -18304,18 +18287,23 @@ async function _edRunDiag() {
   } catch(e) { L('IDB error: ' + e.message); }
 
   // 4. Layers vivos en memoria
-  L('\n── Layers en memoria ──');
-  edPages.forEach((p, pi) => {
-    (p.layers||[]).forEach((l, li) => {
-      if (l.type === 'image' || l.type === 'gif') {
-        L('  L' + pi + '_' + li + ' type=' + l.type
-          + ' animKey=' + (l.animKey||'-')
-          + ' pngKey=' + (l._pngFramesKey||'-')
-          + ' apngSrc=' + (l._apngSrc?'sí('+l._apngSrc.length+')':'NO')
-          + ' pngFrames=' + (l._pngFrames?l._pngFrames.length:'NO')
-          + ' animReady=' + (l._animReady?'sí':'NO'));
-      }
-    });
+  L('\n── Layers en memoria (edLayers) ──');
+  (edLayers||[]).forEach((l, li) => {
+    if (!l) { L('  L' + li + ' = NULL'); return; }
+    L('  L' + li + ' type=' + l.type
+      + (l.type==='image'?' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' animReady=' + (l._animReady?'sí':'NO'):'')
+      + (l.type==='stroke'?' dataUrl=' + (l.toDataUrl?l.toDataUrl().slice(0,20):'?'):'')
+      + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?'):'')
+      + (l.type==='gif'?' gifKey=' + (l.gifKey||'-'):''));
+  });
+  L('\n── Historial ──');
+  L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length);
+  edHistory.forEach((h, hi) => {
+    try {
+      const _raw = JSON.parse(h.layersJSON);
+      L('  idx' + hi + (hi===edHistoryIdx?' ← ACTUAL':'') + ': ' + _raw.length + ' layers → ' +
+        _raw.map((o,i) => o ? (o.type + (o.type==='image'?'(animKey='+o.animKey+')':'') + (o.type==='stroke'?'(dataUrl='+o.dataUrl.slice(0,15)+')':'')) : 'null').join(', '));
+    } catch(e) { L('  idx' + hi + ': error: ' + e.message); }
   });
 
   // 5. Biblioteca local
