@@ -2368,6 +2368,14 @@ function edPushHistory(force){
   // Los estados intermedios solo van al historial vectorial local (_vs*).
   if(_vsHistory.length > 0){ edUpdateUndoRedoBtns(); return; }
   const layersJSON = _edLayersSnapshot();
+  // Si el historial está vacío y no es un push forzado inicial,
+  // crear primero el estado base para que undo pueda volver a él
+  if(!force && edHistory.length === 0 && edHistoryIdx === -1) {
+    edHistory.push({ pageIdx: edCurrentPage, layersJSON });
+    edHistoryIdx = 0;
+    edUpdateUndoRedoBtns();
+    return; // el estado actual ya queda como base — no añadir duplicado
+  }
   if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
     if(last.layersJSON === layersJSON){ edUpdateUndoRedoBtns(); return; }
@@ -13273,11 +13281,12 @@ async function edLoadProject(id){
     setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
-      // Snapshot inicial — estado base del historial al abrir la obra
-      // Se guarda aquí para que las animaciones y strokes async ya estén cargados
-      edHistory=[]; edHistoryIdx=-1;
-      edPushHistory(true);
     }, 400);
+    // Snapshot inicial del historial — separado del reset de cámara
+    // para no interferir con acciones del usuario que ocurran antes de 400ms
+    setTimeout(()=>{
+      if(edHistory.length === 0) { edPushHistory(true); }
+    }, 600);
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
@@ -18300,14 +18309,12 @@ async function _edRunDiag() {
   } catch(e) { L('IDB error: ' + e.message); }
 
   // 4. Layers vivos en memoria
-  L('\n── edPages[0].layers === edLayers: ' + (edPages[0]&&edPages[0].layers===edLayers));
-  L('edCurrentPage=' + edCurrentPage + ' edPages.length=' + edPages.length);
   L('\n── Layers en memoria (edLayers) ──');
   (edLayers||[]).forEach((l, li) => {
     if (!l) { L('  L' + li + ' = NULL'); return; }
     L('  L' + li + ' type=' + l.type
       + (l.type==='image'?' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' animReady=' + (l._animReady?'sí':'NO'):'')
-      + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null') + ' x=' + l.x + ' y=' + l.y + ' w=' + l.width + ' h=' + l.height:'')
+      + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null'):'')
       + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?'):'')
       + (l.type==='gif'?' gifKey=' + (l.gifKey||'-'):''));
   });
