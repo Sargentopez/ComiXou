@@ -2510,7 +2510,13 @@ function edApplyHistory(snapshot){
     if(_po !== edOrientation) edOrientation = _po;
     edUpdateNavPages();
   }
+  // Redraw inmediato para layers que no necesitan carga async (line, shape, gif ya en caché)
+  edRedraw();
+  // Redraw adicional tras carga de imágenes async (stroke, image)
   Promise.all(imgPromises).then(() => edRedraw());
+  // Redraw de seguridad — por si img.onload no dispara (dataUrl en caché de browser)
+  setTimeout(() => edRedraw(), 50);
+  setTimeout(() => edRedraw(), 200);
 }
 
 function edUpdateUndoRedoBtns(){
@@ -13264,7 +13270,14 @@ async function edLoadProject(id){
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
     setTimeout(()=>{ _doLoadReset(); }, 150);
-    setTimeout(()=>{ _doLoadReset(); window._edLoadReset=false; }, 400);
+    setTimeout(()=>{
+      _doLoadReset();
+      window._edLoadReset=false;
+      // Snapshot inicial — estado base del historial al abrir la obra
+      // Se guarda aquí para que las animaciones y strokes async ya estén cargados
+      edHistory=[]; edHistoryIdx=-1;
+      edPushHistory(true);
+    }, 400);
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
