@@ -28,11 +28,15 @@ async function _czCompress(jsonStr) {
     const merged = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
     let off = 0;
     for (const c of chunks) { merged.set(c, off); off += c.length; }
-    // btoa por chunks de 8192 bytes — evita stack overflow en Android con arrays grandes
+    // btoa sin spread operator — evita stack overflow en Android
+    // String.fromCharCode con bucle explícito, chunks de 1024 bytes
     let b64 = '';
-    const CHUNK = 8192;
+    const CHUNK = 1024;
     for (let i = 0; i < merged.length; i += CHUNK) {
-      b64 += btoa(String.fromCharCode(...merged.subarray(i, i + CHUNK)));
+      const end = Math.min(i + CHUNK, merged.length);
+      let bin = '';
+      for (let j = i; j < end; j++) bin += String.fromCharCode(merged[j]);
+      b64 += btoa(bin);
     }
     return _CZ_PFX + b64;
   } catch(e) { return jsonStr; } // fallback: sin comprimir
@@ -42,23 +46,36 @@ async function _czDecompress(str) {
   if (!str || !str.startsWith(_CZ_PFX)) return str;
   // Decodificar base64 → Uint8Array (chunks de 32768 chars, múltiplos de 4)
   const b64 = str.slice(_CZ_PFX.length);
-  const CHUNK = 32768;
-  let byteLen = 0;
-  const parts = [];
+  // Intentar decodificar base64 completo de una vez primero
+  // Si falla (base64 corrupto por chunks), intentar chunk a chunk
+  let bytes = null;
   try {
+    // Intentar atob completo con padding
+    const rem0 = b64.length % 4;
+    const padded0 = rem0 ? b64 + '===='.slice(rem0) : b64;
+    const bin0 = atob(padded0);
+    bytes = new Uint8Array(bin0.length);
+    for (let j = 0; j < bin0.length; j++) bytes[j] = bin0.charCodeAt(j);
+  } catch(e) {
+    // Fallback: chunk a chunk ignorando chunks inválidos
+    const CHUNK = 4;  // múltiplo de 4 mínimo
+    const parts = [];
+    let byteLen = 0;
     for (let i = 0; i < b64.length; i += CHUNK) {
       const slice = b64.slice(i, Math.min(i + CHUNK, b64.length));
-      const rem = slice.length % 4;
-      const bin = atob(rem ? slice + '===='.slice(rem) : slice);
-      const part = new Uint8Array(bin.length);
-      for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
-      parts.push(part);
-      byteLen += part.length;
+      if (slice.length < 4) continue;
+      try {
+        const bin = atob(slice);
+        const part = new Uint8Array(bin.length);
+        for (let j = 0; j < bin.length; j++) part[j] = bin.charCodeAt(j);
+        parts.push(part); byteLen += part.length;
+      } catch(e2) { continue; }
     }
-  } catch(e) { return str; }
-  const bytes = new Uint8Array(byteLen);
-  let off2 = 0;
-  for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+    if (!byteLen) return str;
+    bytes = new Uint8Array(byteLen);
+    let off2 = 0;
+    for (const p of parts) { bytes.set(p, off2); off2 += p.length; }
+  }
   // Usar pako si está disponible (más fiable en Android WebView)
   if (typeof pako !== 'undefined') {
     try {
@@ -740,12 +757,10 @@ const SupabaseClient = (() => {
         const _rld = await _czDecompress(r.layer_data);
         if (_rld && _rld.startsWith('gz:')) {
           // _czDecompress devolvió sin descomprimir — registrar
-          if (window._bibDiagLog) window._bibDiagLog('DECOMP FAIL id=' + r.id + ' bytes=' + r.layer_data.length);
-          continue;
+continue;
         }
         ld = JSON.parse(_rld);
       } catch(e) {
-        if (window._bibDiagLog) window._bibDiagLog('PARSE ERR id=' + r.id + ': ' + e.message.slice(0,40));
       }
       if (!ld) continue;
       // Reconstruir item: GIF/APNG animado o layer normal

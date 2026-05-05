@@ -10,7 +10,7 @@ function AdminView_init() {
   if (hdr && tabs) tabs.style.top = hdr.getBoundingClientRect().height + 'px';
   renderTab('pending');
   setupTabs();
- }
+}
 
 function setupTabs() {
   document.querySelectorAll('.admin-tab').forEach(tab => {
