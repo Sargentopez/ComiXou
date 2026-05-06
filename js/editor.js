@@ -2368,6 +2368,8 @@ function edPushHistory(force){
   // Los estados intermedios solo van al historial vectorial local (_vs*).
   if(_vsHistory.length > 0){ edUpdateUndoRedoBtns(); return; }
   const layersJSON = _edLayersSnapshot();
+  // DIAG: registrar cada push
+  if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
 
   if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
@@ -18288,6 +18290,10 @@ async function _edRunDiag() {
   } catch(e) { L('IDB error: ' + e.message); }
 
   // 4. Layers vivos en memoria
+  // Activar log de edPushHistory
+  window._edHistDiag = window._edHistDiag || [];
+  L('── PushHistory log ──');
+  (window._edHistDiag||[]).forEach(m => L('  ' + m));
   L('edCamera: x=' + Math.round(edCamera.x) + ' y=' + Math.round(edCamera.y) + ' z=' + edCamera.z.toFixed(3) + ' | canvas: ' + (edCanvas?edCanvas.width+'x'+edCanvas.height:'null'));
   // Verificar si el canvas tiene píxeles no transparentes
   try {
