@@ -2347,12 +2347,14 @@ function _edLayersSnapshot(){
     if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
     // Preservar referencias de animación en el snapshot
     if(l.type === 'image' || l.type === 'gif') {
+      o._playing = l._playing || false;  // preservar estado de reproducción
       if(l.animKey)       o.animKey       = l.animKey;
       if(l._pngFramesKey) o._pngFramesKey = l._pngFramesKey;
       if(l._apngIdbKey)   o._apngIdbKey   = l._apngIdbKey;
 
       if(l.animKey || l._pngFramesKey || l._apngIdbKey) o._isAnim = true;
       if(l.gifKey)        o.gifKey        = l.gifKey;
+      o._playing = l._playing || false;  // preservar estado de reproducción
       if(l._gcpFrameDelay)   o._gcpFrameDelay   = l._gcpFrameDelay;
       if(l._gcpRepeatCount)  o._gcpRepeatCount  = l._gcpRepeatCount;
       if(l._gcpStopAtEnd)    o._gcpStopAtEnd    = l._gcpStopAtEnd;
@@ -2483,15 +2485,28 @@ function edApplyHistory(snapshot){
           if(typeof data === 'string') l._apngSrc = data;
           else if(Array.isArray(data) && data.length) l._pngFrames = data;
           if(l._apngSrc || l._pngFrames) {
-            l.loadAnim(l._apngSrc || l._pngFrames, () => { l._playing = true; l._applyFrame(0); edRedraw(); });
+            const _wasPlaying = o._playing || false;
+            l.loadAnim(l._apngSrc || l._pngFrames, () => {
+              l._playing = _wasPlaying;
+              if(_wasPlaying) l._applyFrame(l._fIdx || 0);
+              edRedraw();
+            });
           }
         }).catch(() => {});
       }
     }
     // Restaurar gif desde IDB
     if(o.type === 'gif' && o.gifKey && typeof _gifIdbLoad === 'function') {
+      const _gifWasPlaying = o._playing || false;
       _gifIdbLoad(o.gifKey).then(dataUrl => {
-        if(dataUrl) { l._gifDataUrl = dataUrl; _edGifSetPlaying(l); edRedraw(); }
+        if(dataUrl) {
+          l._gifDataUrl = dataUrl;
+          l.load(dataUrl, () => {
+            l._playing = _gifWasPlaying;
+            if(_gifWasPlaying) { l._applyFrame(0); }
+            edRedraw();
+          });
+        }
       }).catch(() => {});
     }
     return l;
