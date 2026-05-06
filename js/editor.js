@@ -18286,6 +18286,17 @@ async function _edRunDiag() {
 
   // 4. Layers vivos en memoria
   L('edCamera: x=' + Math.round(edCamera.x) + ' y=' + Math.round(edCamera.y) + ' z=' + edCamera.z.toFixed(3) + ' | canvas: ' + (edCanvas?edCanvas.width+'x'+edCanvas.height:'null'));
+  // Verificar si el canvas tiene píxeles no transparentes
+  try {
+    if(edCanvas && edCtx) {
+      edRedraw();
+      const _id = edCtx.getImageData(edCanvas.width/2|0, edCanvas.height/2|0, 1, 1);
+      L('pixel centro canvas: rgba(' + _id.data[0] + ',' + _id.data[1] + ',' + _id.data[2] + ',' + _id.data[3] + ')');
+      // También verificar si el canvas DOM es visible
+      const _cr = edCanvas.getBoundingClientRect();
+      L('canvas DOM rect: top=' + Math.round(_cr.top) + ' left=' + Math.round(_cr.left) + ' w=' + Math.round(_cr.width) + ' h=' + Math.round(_cr.height));
+    }
+  } catch(e) { L('pixel check error: ' + e.message); }
   L('\n── Layers en memoria (edLayers) ──');
   (edLayers||[]).forEach((l, li) => {
     if (!l) { L('  L' + li + ' = NULL'); return; }
