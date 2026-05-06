@@ -2369,14 +2369,14 @@ function edPushHistory(force){
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
-  if(_vsHistory.length > 0){ edUpdateUndoRedoBtns(); return; }
+  if(_vsHistory.length > 0){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return; }
   const layersJSON = _edLayersSnapshot();
   // DIAG: registrar cada push
   if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
 
   if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
-    if(last.layersJSON === layersJSON){ edUpdateUndoRedoBtns(); return; }
+    if(last.layersJSON === layersJSON){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('SKIP_SAME_JSON len='+layersJSON.length); edUpdateUndoRedoBtns(); return; }
   }
 
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
@@ -7367,6 +7367,8 @@ function edOnEnd(e){
     return;
   }
   if(wasDragging && (window._edMoved || edIsTailDragging)){
+    window._edHistDiag=window._edHistDiag||[];
+    window._edHistDiag.push('DRAG_END selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length+' histLen='+edHistory.length+' histIdx='+edHistoryIdx);
     // Pre-externalizar animaciones sin clave IDB antes del snapshot
     const _preExport = [];
     (edLayers||[]).forEach(l => {
@@ -7394,6 +7396,7 @@ function edOnEnd(e){
     if(_preExport.length) Promise.all(_preExport).then(_doPush);
     else _doPush();
   }
+  if(wasDragging && !window._edMoved && !edIsTailDragging){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('DRAG_END_NO_MOVE selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length); }
   window._edMoved = false;
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
   // Limpiar snapshots de LineLayer
@@ -13388,6 +13391,10 @@ async function edLoadProject(id){
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
     setTimeout(()=>{ _doLoadReset(); }, 150);
+    // Snapshot inicial síncrono: estado de apertura como punto de no-retorno.
+    // Se guarda antes de los timeouts para que cualquier cambio posterior sea deshacible.
+    // force=true: siempre guardar, aunque el historial esté vacío.
+    edPushHistory(true);
     setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
@@ -13405,7 +13412,7 @@ async function edLoadProject(id){
           }));
         }
       });
-      Promise.all(_loadPromises).then(() => { edPushHistory(true); });
+      Promise.all(_loadPromises).then(() => { edPushHistory(false); }); // false: no duplicar si no cambió nada
     }, 400);
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
@@ -18467,7 +18474,8 @@ async function _edRunDiag() {
       + (l.type==='gif'?' gifKey=' + (l.gifKey||'-'):''));
   });
   L('\n── Historial ──');
-  L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length);
+  L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length + ' | _vsHistory.length=' + _vsHistory.length + ' (>0 = bloquea push global)');
+  L('edIsDragging=' + edIsDragging + ' _edMoved=' + window._edMoved + ' edSelectedIdx=' + edSelectedIdx);
   edHistory.forEach((h, hi) => {
     try {
       const _raw = JSON.parse(h.layersJSON);
