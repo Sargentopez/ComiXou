@@ -2450,6 +2450,9 @@ function edApplyHistory(snapshot){
       return l;
     }
     else if(o.type === 'group') return null; // obsoleto
+    else if(o.type === 'gif') {
+      l = new GifLayer(null, o.x||0.5, o.y||0.5, o.width||0.3, o.height||0.3);
+    }
     else return o;
     for(const k of Object.keys(o)){
       if(k !== '_imgSrc') l[k] = o[k];
@@ -18312,7 +18315,7 @@ async function _edRunDiag() {
     try {
       const _raw = JSON.parse(h.layersJSON);
       L('  idx' + hi + (hi===edHistoryIdx?' ← ACTUAL':'') + ': ' + _raw.length + ' layers → ' +
-        _raw.map((o,i) => o ? (o.type + (o.type==='image'?'(animKey='+o.animKey+')':'') + (o.type==='stroke'?'(dataUrl='+o.dataUrl.slice(0,15)+')':'')) : 'null').join(', '));
+        _raw.map((o,i) => o ? (o.type + (o.type==='image'?'(animKey='+o.animKey+')':'') + (o.type==='stroke'?'(x='+(o.x||0).toFixed(3)+' y='+(o.y||0).toFixed(3)+')':'')) : 'null').join(', '));
     } catch(e) { L('  idx' + hi + ': error: ' + e.message); }
   });
 
