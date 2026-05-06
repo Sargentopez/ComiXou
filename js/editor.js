@@ -908,6 +908,7 @@ let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
 let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segmento de línea
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
+window._edHistDiag = []; // log de edPushHistory para diagnóstico
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
 let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
 const ED_MAX_HISTORY = 10;
@@ -18291,7 +18292,6 @@ async function _edRunDiag() {
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory
-  window._edHistDiag = window._edHistDiag || [];
   L('── PushHistory log ──');
   (window._edHistDiag||[]).forEach(m => L('  ' + m));
   L('edCamera: x=' + Math.round(edCamera.x) + ' y=' + Math.round(edCamera.y) + ' z=' + edCamera.z.toFixed(3) + ' | canvas: ' + (edCanvas?edCanvas.width+'x'+edCanvas.height:'null'));
