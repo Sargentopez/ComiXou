@@ -2349,7 +2349,9 @@ function _edLayersSnapshot(){
     if(l.type === 'image' || l.type === 'gif') {
       if(l.animKey)       o.animKey       = l.animKey;
       if(l._pngFramesKey) o._pngFramesKey = l._pngFramesKey;
-      if(l.animKey || l._pngFramesKey) o._isAnim = true;
+      if(l._apngIdbKey)   o._apngIdbKey   = l._apngIdbKey;
+
+      if(l.animKey || l._pngFramesKey || l._apngIdbKey) o._isAnim = true;
       if(l.gifKey)        o.gifKey        = l.gifKey;
       if(l._gcpFrameDelay)   o._gcpFrameDelay   = l._gcpFrameDelay;
       if(l._gcpRepeatCount)  o._gcpRepeatCount  = l._gcpRepeatCount;
@@ -2473,8 +2475,8 @@ function edApplyHistory(snapshot){
       imgPromises.push(p);
     }
     // Restaurar animación APNG desde IDB
-    if(o.type === 'image' && (o.animKey || o._pngFramesKey)) {
-      const _ak = o._pngFramesKey || o.animKey;
+    if(o.type === 'image' && (o.animKey || o._pngFramesKey || o._apngIdbKey)) {
+      const _ak = o._pngFramesKey || o.animKey || o._apngIdbKey;
       if(_ak && window._sbAnimIdbLoad) {
         window._sbAnimIdbLoad(_ak).then(data => {
           if(!data) return;
@@ -7365,16 +7367,32 @@ function edOnEnd(e){
     return;
   }
   if(wasDragging && (window._edMoved || edIsTailDragging)){
-    // Si el objeto activo es shape/line con panel abierto → historial local
-    const _panel=$('edOptionsPanel');
-    const _mode=_panel?.dataset.mode;
-    const _la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-    if((_mode==='shape'||_mode==='line'||$('edShapeBar')?.classList.contains('visible'))
-       && _la && (_la.type==='shape'||_la.type==='line')){
-      _edShapePushHistory();
-    } else {
-      edPushHistory();
-    }
+    // Pre-externalizar animaciones sin clave IDB antes del snapshot
+    const _preExport = [];
+    (edLayers||[]).forEach(l => {
+      if(l.type==='image' && !l.animKey && !l._pngFramesKey && !l._apngIdbKey) {
+        const _data = l._apngSrc || (l._pngFrames && l._pngFrames.length ? l._pngFrames : null);
+        if(_data && window._sbAnimIdbSave) {
+          const _k = (edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+          l._pngFramesKey = _k;
+          _preExport.push(window._sbAnimIdbSave(_k, _data).catch(()=>{}));
+        }
+      }
+    });
+    // Si hay writes pendientes, esperar antes de pushear
+    const _doPush = () => {
+      const _panel=$('edOptionsPanel');
+      const _mode=_panel?.dataset.mode;
+      const _la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+      if((_mode==='shape'||_mode==='line'||$('edShapeBar')?.classList.contains('visible'))
+         && _la && (_la.type==='shape'||_la.type==='line')){
+        _edShapePushHistory();
+      } else {
+        edPushHistory();
+      }
+    };
+    if(_preExport.length) Promise.all(_preExport).then(_doPush);
+    else _doPush();
   }
   window._edMoved = false;
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
@@ -13244,8 +13262,6 @@ async function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
-  // Snapshot inicial — estado base del historial al abrir la obra
-  edPushHistory(true);
   // Reconstruir _cache de grupos en todas las páginas (buildCache usa edOrientation/edCurrentPage)
   edPages.forEach((pg, _pgi) => {
     const _savedP=edCurrentPage, _savedO=edOrientation;
@@ -13267,6 +13283,21 @@ async function edLoadProject(id){
     setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
+      // Snapshot inicial — esperamos que strokes e imágenes hayan cargado
+      // Recopilamos promesas de todos los StrokeLayers y ImageLayers actuales
+      const _loadPromises = [];
+      (edPages[edCurrentPage]?.layers||[]).forEach(l => {
+        if(l.type==='stroke' && l._canvas && l._canvas.width > 0) {
+          // Ya cargado ✓
+        } else if(l.type==='stroke') {
+          // Esperar a que img.onload complete en el StrokeLayer
+          _loadPromises.push(new Promise(res => {
+            const _check = () => { if(l._canvas && l._canvas.width > 0) res(); else setTimeout(_check, 50); };
+            setTimeout(_check, 50);
+          }));
+        }
+      });
+      Promise.all(_loadPromises).then(() => { edPushHistory(true); });
     }, 400);
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
