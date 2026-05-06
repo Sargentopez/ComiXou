@@ -12967,8 +12967,10 @@ function edSerLayer(l){
     // Frames en IDB: usar clave (nunca guardar frames grandes en localStorage)
     // Solo serializar _pngFrames con contenido real (no strings vacíos de placeholder)
     if(l._pngFrames && l._pngFrames.length && l._pngFrames[0]) _r._pngFrames=l._pngFrames;
-    if(l.animKey)    _r.animKey    = l.animKey;
-    if(l._bibItemId) _r._bibItemId = l._bibItemId; // id del item en biblioteca para re-edición
+    if(l.animKey)       _r.animKey       = l.animKey;
+    if(l._pngFramesKey) _r._pngFramesKey = l._pngFramesKey;
+    if(l._apngIdbKey)   _r._apngIdbKey   = l._apngIdbKey;
+    if(l._bibItemId)    _r._bibItemId    = l._bibItemId; // id del item en biblioteca para re-edición
     // _apngSrc NO se serializa — es el dataUrl enorme, va al bucket por animKey
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
@@ -13253,8 +13255,10 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpFrameDelay  != null) l._gcpFrameDelay  = d._gcpFrameDelay;
     if(d._gcpRepeatCount != null) l._gcpRepeatCount = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
-    if(d.animKey)    l.animKey    = d.animKey;
-    if(d._bibItemId) l._bibItemId = d._bibItemId;
+    if(d.animKey)       l.animKey       = d.animKey;
+    if(d._pngFramesKey) l._pngFramesKey = d._pngFramesKey;
+    if(d._apngIdbKey)   l._apngIdbKey   = d._apngIdbKey;
+    if(d._bibItemId)    l._bibItemId    = d._bibItemId;
     if(d._apngSrc) {
       // APNG descargado de nube — loadAnim con string → decodeApng → N frames reales
       l._apngSrc = d._apngSrc;
@@ -13265,6 +13269,16 @@ function edDeserLayer(d, pageOrientation){
       l._pngFrames=d._pngFrames;
       l._fIdx=0;
       l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
+    }
+    // Cargar desde _apngIdbKey (animaciones de biblioteca en dispositivo B)
+    if(d._apngIdbKey && !d.animKey && !d._pngFramesKey && !d._pngFrames && !d._apngSrc && window._sbAnimIdbLoad) {
+      window._sbAnimIdbLoad(d._apngIdbKey).then(data => {
+        if(!data) return;
+        if(typeof data === 'string') l._apngSrc = data;
+        else if(Array.isArray(data) && data.length) l._pngFrames = data;
+        const _inp = l._apngSrc || l._pngFrames;
+        if(_inp) l.loadAnim(_inp, () => { if(typeof edRedraw==='function') edRedraw(); });
+      }).catch(()=>{});
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
       _edAnimIdbLoad(d._pngFramesKey).then(data => {

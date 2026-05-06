@@ -387,7 +387,8 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   } else if (la.type === 'gif') {
     name.textContent = '🎬 GIF ' + (realIdx + 1) + _grpTag;
   } else {
-    name.textContent = 'Imagen ' + (realIdx + 1) + _grpTag;
+    const _isApng = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length);
+    name.textContent = (_isApng ? '📽️ APNG ' : 'Imagen ') + (realIdx + 1) + _grpTag;
   }
   info.appendChild(name);
   item.appendChild(info);
@@ -540,7 +541,8 @@ function _lyBuildImgItem(la, realIdx, selected) {
   info.className = 'ed-layer-info';
   const name = document.createElement('span');
   name.className = 'ed-layer-name';
-  name.textContent = 'Imagen ' + (realIdx + 1);
+  const _isApngPanel = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length);
+  name.textContent = (_isApngPanel ? '📽️ APNG ' : 'Imagen ') + (realIdx + 1);
   info.appendChild(name);
 
   // Opacidad ahora en el panel de propiedades de imagen (⚙)
