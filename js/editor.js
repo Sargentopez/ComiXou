@@ -12295,6 +12295,8 @@ function _edSaveOverlayShow(title) {
     _edSaveOverlaySecs++;
     const el = document.getElementById('_edSaveOvSecs');
     if (el) el.textContent = _edSaveOverlaySecs + 's';
+    // Timeout de seguridad: cerrar overlay tras 30s si algo falla
+    if (_edSaveOverlaySecs >= 30) _edSaveOverlayHide();
   }, 1000);
   ov.style.display = 'flex';
 }
@@ -12304,10 +12306,31 @@ function _edSaveOverlayUpdate(title) {
   if (el) el.textContent = title;
 }
 
+let _edSaveErrors = []; // errores de guardado para diagnóstico
+
 function _edSaveOverlayHide() {
   clearInterval(_edSaveOverlayTimer);
   const ov = document.getElementById('_edSaveOverlay');
   if (ov) ov.style.display = 'none';
+}
+
+function _edSaveOverlayError(msg) {
+  // Registrar error en diagnóstico
+  _edSaveErrors.push(new Date().toLocaleTimeString() + ' ' + msg);
+  // Mostrar en overlay antes de cerrar
+  const title = document.getElementById('_edSaveOvTitle');
+  const msgEl = document.getElementById('_edSaveOvMsg');
+  if (title) title.textContent = '⚠️ Error de guardado';
+  if (title) title.style.color = '#e74c3c';
+  if (msgEl) msgEl.innerHTML = msg + '<br><br>Pulsa en cualquier lugar para cerrar.';
+  // Cambiar spinner por ✕
+  const spin = document.querySelector('#_edSaveOverlay div[style*="border-radius:50%"]');
+  if (spin) spin.style.cssText = 'font-size:1.5rem';
+  if (spin) spin.textContent = '✕';
+  const ov = document.getElementById('_edSaveOverlay');
+  if (ov) ov.onclick = () => _edSaveOverlayHide();
+  // Auto-cerrar tras 8 segundos
+  setTimeout(() => _edSaveOverlayHide(), 8000);
 }
 
 async function edCloudSave() {
@@ -12475,7 +12498,8 @@ async function edSaveProject(){
   }
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
 
-  ComicStore.save({
+  const _savedAt = new Date().toISOString();
+  await ComicStore.save({
     ...existing,
     id:edProjectId,
     ...edProjectMeta,
@@ -12486,15 +12510,25 @@ async function edSaveProject(){
       _rules: edRules,
       _ruleNodes: edRuleNodes,
     },
-    updatedAt:new Date().toISOString(),
-    localSavedAt:new Date().toISOString(),
+    updatedAt:_savedAt,
+    localSavedAt:_savedAt,
     cameraState: _camState,
     // Al guardar localmente: esta es la versión local canónica
     cloudOnly:  false,
     cloudNewer: false,
     // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
   });
-  edToast('Guardado ✓');
+  // Verificar que OPFS guardó correctamente
+  _edSaveOverlayUpdate('Verificando guardado…');
+  const _verify = ComicStore.getByIdFull ? await ComicStore.getByIdFull(edProjectId) : null;
+  if (_verify && _verify.editorData && _verify.editorData.pages && _verify.editorData.pages.length > 0) {
+    _edSaveOverlayHide(); edToast('Guardado ✓');
+  } else {
+    // OPFS no guardó — intentar de nuevo sin OPFS (solo localStorage)
+    const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
+    _edSaveOverlayError(_err);
+    edToast('⚠️ Guardado parcial');
+  }
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
   _edSavedHistoryIdx = edHistoryIdx;
   edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
@@ -18382,6 +18416,13 @@ async function _edRunDiag() {
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory
+  // Errores de guardado
+  if (_edSaveErrors && _edSaveErrors.length) {
+    L('\n── Errores de guardado ──');
+    _edSaveErrors.forEach(m => L('  ⚠️ ' + m));
+  } else {
+    L('\n── Errores de guardado: ninguno ──');
+  }
   L('── PushHistory log ──');
   (window._edHistDiag||[]).forEach(m => L('  ' + m));
   L('edCamera: x=' + Math.round(edCamera.x) + ' y=' + Math.round(edCamera.y) + ' z=' + edCamera.z.toFixed(3) + ' | canvas: ' + (edCanvas?edCanvas.width+'x'+edCanvas.height:'null'));
