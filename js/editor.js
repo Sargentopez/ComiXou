@@ -18300,6 +18300,7 @@ async function _edRunDiag() {
   } catch(e) { L('IDB error: ' + e.message); }
 
   // 4. Layers vivos en memoria
+  L('edCamera: x=' + Math.round(edCamera.x) + ' y=' + Math.round(edCamera.y) + ' z=' + edCamera.z.toFixed(3) + ' | canvas: ' + (edCanvas?edCanvas.width+'x'+edCanvas.height:'null'));
   L('\n── Layers en memoria (edLayers) ──');
   (edLayers||[]).forEach((l, li) => {
     if (!l) { L('  L' + li + ' = NULL'); return; }
