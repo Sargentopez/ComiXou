@@ -2397,7 +2397,7 @@ function edApplyHistory(snapshot){
   if(!snapshot) return;
   const raw = JSON.parse(snapshot.layersJSON);
   const imgPromises = [];
-  edLayers = raw.filter(o => o !== null && o !== undefined).map(o => {
+  edLayers = raw.map(o => {
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
@@ -2454,15 +2454,6 @@ function edApplyHistory(snapshot){
     for(const k of Object.keys(o)){
       if(k !== '_imgSrc') l[k] = o[k];
     }
-    // Restaurar gifKey si es un gif animado
-    if(o.type === 'gif' && o.gifKey) {
-      l.gifKey = o.gifKey;
-      if(window._sbGifIdbLoad) {
-        window._sbGifIdbLoad(o.gifKey).then(dataUrl => {
-          if(dataUrl) { l._gifDataUrl = dataUrl; _edGifSetPlaying(l); edRedraw(); }
-        }).catch(() => {});
-      }
-    }
     if(o._imgSrc){
       const p = new Promise(resolve => {
         const img = new Image();
@@ -2475,11 +2466,11 @@ function edApplyHistory(snapshot){
       });
       imgPromises.push(p);
     }
-    // Restaurar animación desde IDB si el layer es image animado
+    // Restaurar animación APNG desde IDB
     if(o.type === 'image' && (o.animKey || o._pngFramesKey)) {
-      const _animKey = o._pngFramesKey || o.animKey;
-      if(_animKey && window._sbAnimIdbLoad) {
-        window._sbAnimIdbLoad(_animKey).then(data => {
+      const _ak = o._pngFramesKey || o.animKey;
+      if(_ak && window._sbAnimIdbLoad) {
+        window._sbAnimIdbLoad(_ak).then(data => {
           if(!data) return;
           if(typeof data === 'string') l._apngSrc = data;
           else if(Array.isArray(data) && data.length) l._pngFrames = data;
@@ -2511,13 +2502,7 @@ function edApplyHistory(snapshot){
     if(_po !== edOrientation) edOrientation = _po;
     edUpdateNavPages();
   }
-  // Redraw inmediato para layers que no necesitan carga async (line, shape, gif ya en caché)
-  edRedraw();
-  // Redraw adicional tras carga de imágenes async (stroke, image)
   Promise.all(imgPromises).then(() => edRedraw());
-  // Redraw de seguridad — por si img.onload no dispara (dataUrl en caché de browser)
-  setTimeout(() => edRedraw(), 50);
-  setTimeout(() => edRedraw(), 200);
 }
 
 function edUpdateUndoRedoBtns(){
