@@ -13412,7 +13412,10 @@ async function edLoadProject(id){
           }));
         }
       });
-      Promise.all(_loadPromises).then(() => { edPushHistory(false); }); // false: no duplicar si no cambió nada
+      // Push tardío eliminado: el snapshot síncrono ya captura el estado correcto.
+      // Las coordenadas x/y existen desde la deserialización; que el canvas de
+      // un stroke tarde en renderizarse no afecta al JSON del historial.
+      void _loadPromises; // referencia para evitar warning
     }, 400);
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
