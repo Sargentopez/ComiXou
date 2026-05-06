@@ -2487,8 +2487,8 @@ function edApplyHistory(snapshot){
       }
     }
     // Restaurar gif desde IDB
-    if(o.type === 'gif' && o.gifKey && window._sbGifIdbLoad) {
-      window._sbGifIdbLoad(o.gifKey).then(dataUrl => {
+    if(o.type === 'gif' && o.gifKey && typeof _gifIdbLoad === 'function') {
+      _gifIdbLoad(o.gifKey).then(dataUrl => {
         if(dataUrl) { l._gifDataUrl = dataUrl; _edGifSetPlaying(l); edRedraw(); }
       }).catch(() => {});
     }
