@@ -13268,10 +13268,10 @@ async function edLoadProject(id){
       _doLoadReset();
       window._edLoadReset=false;
     }, 400);
-
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
+  window._edLoadingProject = false;
 }
 
 /* ══════════════════════════════════════════
@@ -18306,6 +18306,11 @@ async function _edRunDiag() {
       L('canvas DOM rect: top=' + Math.round(_cr.top) + ' left=' + Math.round(_cr.left) + ' w=' + Math.round(_cr.width) + ' h=' + Math.round(_cr.height));
     }
   } catch(e) { L('pixel check error: ' + e.message); }
+  L('\n── Todas las páginas ──');
+  edPages.forEach((p, pi) => {
+    L('  página ' + pi + (pi===edCurrentPage?' ← ACTUAL':'') + ': ' + p.layers.length + ' layers → ' +
+      p.layers.map(l => l ? l.type + (l.type==='stroke'?'(x='+(l.x||0).toFixed(3)+')':'') : 'null').join(', '));
+  });
   L('\n── Layers en memoria (edLayers) ──');
   (edLayers||[]).forEach((l, li) => {
     if (!l) { L('  L' + li + ' = NULL'); return; }
