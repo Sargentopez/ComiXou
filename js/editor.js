@@ -12256,6 +12256,60 @@ function _edCloudSavingStop() {
   const badge = document.getElementById('_edCloudSavingBadge');
   if (badge) badge.remove();
 }
+
+// ── OVERLAY DE GUARDADO ──────────────────────────────────────────────────────
+let _edSaveOverlayTimer = null;
+let _edSaveOverlaySecs  = 0;
+
+function _edSaveOverlayShow(title) {
+  let ov = document.getElementById('_edSaveOverlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = '_edSaveOverlay';
+    ov.style.cssText = [
+      'position:fixed;inset:0;z-index:99999',
+      'background:rgba(0,0,0,0.82)',
+      'display:flex;flex-direction:column;align-items:center;justify-content:center',
+      'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
+    ].join(';');
+    ov.innerHTML = `
+      <div style="font-size:2.2rem;margin-bottom:16px">💾</div>
+      <div id="_edSaveOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:10px"></div>
+      <div id="_edSaveOvMsg" style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
+        No salgas de la aplicación hasta finalizado el guardado.<br>
+        Interrumpir el proceso creará una obra defectuosa.
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:20px;height:20px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:_edSpin .8s linear infinite"></div>
+        <span id="_edSaveOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
+      </div>
+      <style>@keyframes _edSpin{to{transform:rotate(360deg)}}</style>
+    `;
+    document.body.appendChild(ov);
+  }
+  document.getElementById('_edSaveOvTitle').textContent = title || 'Guardando…';
+  _edSaveOverlaySecs = 0;
+  document.getElementById('_edSaveOvSecs').textContent = '0s';
+  clearInterval(_edSaveOverlayTimer);
+  _edSaveOverlayTimer = setInterval(() => {
+    _edSaveOverlaySecs++;
+    const el = document.getElementById('_edSaveOvSecs');
+    if (el) el.textContent = _edSaveOverlaySecs + 's';
+  }, 1000);
+  ov.style.display = 'flex';
+}
+
+function _edSaveOverlayUpdate(title) {
+  const el = document.getElementById('_edSaveOvTitle');
+  if (el) el.textContent = title;
+}
+
+function _edSaveOverlayHide() {
+  clearInterval(_edSaveOverlayTimer);
+  const ov = document.getElementById('_edSaveOverlay');
+  if (ov) ov.style.display = 'none';
+}
+
 async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
@@ -12273,7 +12327,9 @@ async function edCloudSave() {
   }
 
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
+  _edSaveOverlayShow('Guardando…'); _edSaveOverlayUpdate('Guardando en dispositivo…');
   await edSaveProject();
+  _edSaveOverlayUpdate('Subiendo a la nube…');
 
   const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
@@ -12311,9 +12367,11 @@ async function edCloudSave() {
       } catch(e) { console.warn('bibSync error:', e); }
     }
   } catch(err) {
+    _edSaveOverlayHide();
     edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
     console.error('edCloudSave:', err);
   } finally {
+    _edSaveOverlayHide();
     _edCloudSaving = false;
     _edCloudSavingStop();
     if (btn) { btn.textContent = '☁️'; btn.disabled = false; }
@@ -12322,6 +12380,7 @@ async function edCloudSave() {
 
 async function edSaveProject(){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
+  _edSaveOverlayShow('Guardando en dispositivo…');
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
