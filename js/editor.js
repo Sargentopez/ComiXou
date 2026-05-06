@@ -2424,7 +2424,28 @@ function edApplyHistory(snapshot){
       const _lsy = o.y != null ? o.y : 0.5;
       const _lsw = o.width  != null ? o.width  : 1.0;
       const _lsh = o.height != null ? o.height : 1.0;
-      l = StrokeLayer.fromDataUrl(o.dataUrl||'', _lsx, _lsy, _lsw, _lsh, _pw, _ph);
+      // Reconstruir stroke y trackear su carga asíncrona en imgPromises
+      // para que el edRedraw final espere a que el canvas esté pintado
+      if(o.dataUrl) {
+        const _strokeP = new Promise(res => {
+          const _bw = Math.max(1, Math.round(_lsw * _pw));
+          const _bh = Math.max(1, Math.round(_lsh * _ph));
+          const _sc = document.createElement('canvas');
+          _sc.width = _bw; _sc.height = _bh;
+          const _si = new Image();
+          _si.onload = () => { _sc.getContext('2d').drawImage(_si, 0, 0, _bw, _bh); res(_sc); };
+          _si.onerror = () => res(null);
+          _si.src = o.dataUrl;
+        });
+        l = new StrokeLayer(document.createElement('canvas'), _pw, _ph);
+        l.x = _lsx; l.y = _lsy; l.width = _lsw; l.height = _lsh;
+        l._canvas = document.createElement('canvas');
+        l._canvas.width  = Math.max(1, Math.round(_lsw * _pw));
+        l._canvas.height = Math.max(1, Math.round(_lsh * _ph));
+        imgPromises.push(_strokeP.then(sc => { if(sc) l._canvas.getContext('2d').drawImage(sc, 0, 0); }));
+      } else {
+        l = StrokeLayer.fromDataUrl('', _lsx, _lsy, _lsw, _lsh, _pw, _ph);
+      }
       if(o.frozenLine) l._frozenLine = o.frozenLine;
       if(o.rotation) l.rotation=o.rotation;
       if(o.opacity !== undefined) l.opacity=o.opacity;
