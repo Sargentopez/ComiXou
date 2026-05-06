@@ -12350,8 +12350,8 @@ async function edCloudSave() {
   }
 
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
-  _edSaveOverlayShow('Guardando…'); _edSaveOverlayUpdate('Guardando en dispositivo…');
-  await edSaveProject();
+  _edSaveOverlayShow('Guardando…');
+  await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate('Subiendo a la nube…');
 
   const comic = ComicStore.getByIdFull
@@ -12401,9 +12401,9 @@ async function edCloudSave() {
   }
 }
 
-async function edSaveProject(){
+async function edSaveProject(_keepOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
-  _edSaveOverlayShow('Guardando en dispositivo…');
+  if(!_keepOverlay) _edSaveOverlayShow('Guardando en dispositivo…');
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
@@ -12498,6 +12498,7 @@ async function edSaveProject(){
   }
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
 
+  _edSaveOverlayUpdate('Serializando capas…');
   const _savedAt = new Date().toISOString();
   await ComicStore.save({
     ...existing,
@@ -12519,12 +12520,12 @@ async function edSaveProject(){
     // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
   });
   // Verificar que OPFS guardó correctamente
-  _edSaveOverlayUpdate('Verificando guardado…');
+  _edSaveOverlayUpdate('Verificando integridad…');
   const _verify = ComicStore.getByIdFull ? await ComicStore.getByIdFull(edProjectId) : null;
   if (_verify && _verify.editorData && _verify.editorData.pages && _verify.editorData.pages.length > 0) {
-    _edSaveOverlayHide(); edToast('Guardado ✓');
+    if(!_keepOverlay) _edSaveOverlayHide();
+    edToast('Guardado ✓');
   } else {
-    // OPFS no guardó — intentar de nuevo sin OPFS (solo localStorage)
     const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
     edToast('⚠️ Guardado parcial');

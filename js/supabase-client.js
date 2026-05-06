@@ -308,6 +308,17 @@ const SupabaseClient = (() => {
 
 
   async function _uploadPanels(comic) {
+    // Antes de borrar los panels, recoger las URLs de bucket para limpiar archivos huérfanos
+    try {
+      const _oldPanels = await _get(`panels?work_id=eq.${comic.supabaseId}&select=id`);
+      for (const _op of (_oldPanels || [])) {
+        const _oldLayers = await _get(`panel_layers?panel_id=eq.${_op.id}&select=gif_url,anim_url`);
+        for (const _ol of (_oldLayers || [])) {
+          if (_ol.gif_url)  await _gifDelete(_ol.gif_url).catch(()=>{});
+          if (_ol.anim_url) await _animDelete(_ol.anim_url).catch(()=>{});
+        }
+      }
+    } catch(_e) { /* no bloquear el guardado si falla la limpieza */ }
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
 
     // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
@@ -493,10 +504,12 @@ const SupabaseClient = (() => {
     // Borrar en orden FK: panel_layers → panel_texts → panels → works
     const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
     for (const p of (panels || [])) {
-      // Borrar GIFs del bucket antes de borrar las capas
+      // Borrar GIFs y APNGs del bucket antes de borrar las capas
       try {
         const gifLayers = await _get(`panel_layers?panel_id=eq.${p.id}&layer_type=eq.gif&select=gif_url`);
         for (const gl of (gifLayers || [])) { await _gifDelete(gl.gif_url); }
+        const animLayers = await _get(`panel_layers?panel_id=eq.${p.id}&select=anim_url`);
+        for (const al of (animLayers || [])) { await _animDelete(al.anim_url); }
       } catch(e) {}
       await _delete('panel_layers', `panel_id=eq.${p.id}`);
       await _delete('panel_texts',  `panel_id=eq.${p.id}`);
@@ -511,6 +524,12 @@ const SupabaseClient = (() => {
     for (const w of (works || [])) {
       await deleteWork(w.id).catch(() => {});
     }
+    // Borrar archivos de biblioteca del bucket anims
+    try {
+      const _bibRows = await _get(`biblioteca?author_id=eq.${authorId}&select=anim_url`);
+      for (const _br of (_bibRows || [])) { await _animDelete(_br.anim_url).catch(()=>{}); }
+    } catch(_e) {}
+    await _delete('biblioteca', `author_id=eq.${authorId}`).catch(()=>{});
     await _delete('authors', `id=eq.${authorId}`);
   }
 
@@ -732,11 +751,32 @@ const SupabaseClient = (() => {
         });
       }
     }
-    if (!rows.length) return;
+    // Recuperar rows existentes para borrar archivos huérfanos del bucket
+    try {
+      const _existingRows = await bibFetch(authorId, workId);
+      // Construir set de anim_urls que van a seguir existiendo
+      const _keepUrls = new Set(rows.filter(r => r.anim_url).map(r => r.anim_url));
+      for (const _er of (_existingRows || [])) {
+        if (_er.anim_url && !_keepUrls.has(_er.anim_url)) {
+          await _animDelete(_er.anim_url).catch(()=>{});
+        }
+      }
+    } catch(_e) { /* no bloquear si falla la limpieza */ }
+
+    // Borrar todos los rows existentes del autor/workId y luego insertar limpio
+    // (merge-duplicates no borra los items que ya no existen en local)
     if (window._authTryRefresh) await window._authTryRefresh();
+    const _filterBib = workId
+      ? `author_id=eq.${authorId}&folder_id=like.${workId}::*`
+      : `author_id=eq.${authorId}`;
+    await fetch(`${BASE}/biblioteca?${_filterBib}`, {
+      method: 'DELETE', headers: _hdrsUser(),
+    }).catch(()=>{});
+
+    if (!rows.length) return;
     const r = await fetch(`${BASE}/biblioteca`, {
       method:  'POST',
-      headers: { ..._hdrsUser(), 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      headers: { ..._hdrsUser(), 'Prefer': 'return=minimal' },
       body:    JSON.stringify(rows),
     });
     if (!r.ok) throw new Error(`bibSync: ${r.status} ${await r.text()}`);
