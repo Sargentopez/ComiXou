@@ -484,11 +484,23 @@ function _mcRenderList() {
         appAlert('No tienes permiso para publicar esta obra.');
         return;
       }
-      if (!comic.supabaseId) {
+      // Cargar comic completo con editorData desde OPFS para comparar fechas y subir layers
+      const _comicFull = ComicStore.getByIdFull
+        ? (await ComicStore.getByIdFull(comic.id)) || comic
+        : comic;
+      // Comparar versión local vs nube
+      // localSavedAt: cuándo se guardó en este dispositivo
+      // updatedAt: cuándo se subió a la nube (lo actualiza saveDraft/edCloudSave)
+      const _localAt = _comicFull.localSavedAt || '';
+      const _cloudAt = _comicFull.updatedAt    || '';
+      const _localNewer = _localAt && _cloudAt && _localAt > _cloudAt;
+      const _neverUploaded = !_comicFull.supabaseId;
+      if (_neverUploaded) {
+        // Sin supabaseId: nunca se subió — mostrar mensaje
         appAlert('La obra debe estar guardada en la nube antes de publicarse.\nÁbrela en el editor y pulsa el botón ☁️ Guardar en nube.');
         return;
       }
-      if (!comic.supabaseId && !comic.panelCount && (!comic.panels || !comic.panels.length)) {
+      if (!_comicFull.panelCount && (!_comicFull.panels || !_comicFull.panels.length)) {
         appAlert('Añade al menos una página antes de publicar.');
         return;
       }
@@ -505,21 +517,16 @@ function _mcRenderList() {
       if (typeof SupabaseClient !== 'undefined') {
         _mcSubmitOverlayShow();
         try {
-          // Cargar comic completo con editorData desde OPFS
-          const _comicFull = ComicStore.getByIdFull
-            ? (await ComicStore.getByIdFull(comic.id)) || comic
-            : comic;
-          // Si la versión local es más nueva que la nube, guardar primero
-          const _localAt = _comicFull.localSavedAt || _comicFull.updatedAt || '';
-          const _cloudAt = _comicFull.updatedAt || '';
-          const _localNewer = _localAt && _cloudAt && _localAt > _cloudAt;
-          if (_localNewer || !_comicFull.updatedAt) {
-            // Guardar en nube antes de enviar a revisión
-            await SupabaseClient.saveDraft(_comicFull);
-          }
+          // submitForReview siempre sube los layers completos desde editorData
+          // Si la local es más nueva, se envía la versión local (que es la más reciente)
+          // No hace falta saveDraft previo — submitForReview ya llama _uploadPanels
           await SupabaseClient.submitForReview(_comicFull);
           _mcSubmitOverlayHide();
-          _mcToast('Enviada a revisión ✓');
+          if (_localNewer) {
+            _mcToast('Guardado en nube y enviada a revisión ✓');
+          } else {
+            _mcToast('Enviada a revisión ✓');
+          }
         } catch(err) {
           _mcSubmitOverlayHide();
           ComicStore.save({ ...comic, pendingReview: false });
@@ -571,9 +578,14 @@ function _mcRenderList() {
         appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
         return;
       }
-      // Actualizar localSavedAt al momento del envío — garantiza que la nube
-      // nunca se considere más nueva que la versión local actual
-      ComicStore.save({ ...comic, localSavedAt: new Date().toISOString() });
+      // Si la versión local es más nueva que la nube, el enlace apuntaría a datos
+      // desactualizados — avisar al usuario para que guarde primero
+      const _localAt = comic.localSavedAt || '';
+      const _cloudAt = comic.updatedAt    || '';
+      if (_localAt && _cloudAt && _localAt > _cloudAt) {
+        appAlert('La versión local es más reciente que la guardada en la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube antes de compartirla.');
+        return;
+      }
       if (typeof openShareModal !== 'undefined') openShareModal(comic);
     }
   });
