@@ -1117,6 +1117,9 @@ async function _loadPanels(workId, useAuth) {
       texts: panelTexts,
     };
   }));
+
+
+
 }
 
 async function preloadImages() {

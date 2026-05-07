@@ -503,9 +503,15 @@ function _mcRenderList() {
         window.scrollTo({ top: rowTop, behavior: 'smooth' });
       });
       if (typeof SupabaseClient !== 'undefined') {
+        // Mostrar overlay bloqueante igual que edCloudSave — el guardado puede tardar
+        _mcSubmitOverlayShow();
         SupabaseClient.submitForReview(comic)
-          .then(() => _mcToast('Enviada a revisión ✓'))
+          .then(() => {
+            _mcSubmitOverlayHide();
+            _mcToast('Enviada a revisión ✓');
+          })
           .catch(err => {
+            _mcSubmitOverlayHide();
             // Revertir estado local si falla Supabase
             ComicStore.save({ ...comic, pendingReview: false });
             _mcRenderList();
@@ -930,4 +936,49 @@ async function _mcRunDiag() {
     document.body.appendChild(p);
   }
   document.getElementById('_mcDiagTa').value = lines.join('\n');
+}
+
+// ── Overlay de guardado para envío a revisión ──────────────────────────────
+function _mcSubmitOverlayShow() {
+  let ov = document.getElementById('_mcSubmitOverlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = '_mcSubmitOverlay';
+    ov.style.cssText = [
+      'position:fixed;inset:0;z-index:99999',
+      'background:rgba(0,0,0,0.82)',
+      'display:flex;flex-direction:column;align-items:center;justify-content:center',
+      'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
+    ].join(';');
+    ov.innerHTML = `
+      <div style="font-size:2.2rem;margin-bottom:16px">☁️</div>
+      <div style="font-size:1.1rem;font-weight:700;margin-bottom:10px">Guardando en la nube…</div>
+      <div style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
+        No salgas de la aplicación hasta finalizado el guardado.<br>
+        Interrumpir el proceso creará una obra defectuosa.
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:20px;height:20px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:_mcSpin .8s linear infinite"></div>
+        <span id="_mcSubmitOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
+      </div>
+      <style>@keyframes _mcSpin{to{transform:rotate(360deg)}}</style>
+    `;
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  let _secs = 0;
+  document.getElementById('_mcSubmitOvSecs').textContent = '0s';
+  ov._timer = setInterval(() => {
+    _secs++;
+    const el = document.getElementById('_mcSubmitOvSecs');
+    if (el) el.textContent = _secs + 's';
+    if (_secs >= 120) _mcSubmitOverlayHide(); // seguridad: cierra tras 2 min
+  }, 1000);
+}
+
+function _mcSubmitOverlayHide() {
+  const ov = document.getElementById('_mcSubmitOverlay');
+  if (!ov) return;
+  if (ov._timer) { clearInterval(ov._timer); ov._timer = null; }
+  ov.style.display = 'none';
 }
