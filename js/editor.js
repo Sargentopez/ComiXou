@@ -16486,11 +16486,21 @@ function _bibRenderPanel(panel) {
     });
   });
 
-  // ── Insertar item (tap rápido sin drag) ───────────────────────
+  // ── Insertar item (tap rápido sin drag ni scroll) ────────────
+  // Usamos pointerdown para registrar origen y pointerup para confirmar
+  // que no hubo desplazamiento horizontal (scroll del slider).
+  const _BIB_TAP_H_THRESHOLD = 8; // px — si dx supera esto es scroll, no tap
   panel.querySelectorAll('._bib-item').forEach(el => {
+    let _tapStartX = 0;
+    el.addEventListener('pointerdown', e => {
+      if (e.target.classList.contains('_bib-del-item')) return;
+      _tapStartX = e.clientX;
+    }, { passive: true });
     el.addEventListener('pointerup', e => {
       if (e.target.classList.contains('_bib-del-item')) return;
       if (el._wasDrag) { el._wasDrag = false; return; }
+      // Si el dedo se desplazó horizontalmente más del umbral → era scroll
+      if (Math.abs(e.clientX - _tapStartX) > _BIB_TAP_H_THRESHOLD) return;
       e.stopPropagation();
       const fi = parseInt(el.dataset.fi), ii = parseInt(el.dataset.ii);
       const d = _bibLoad();
@@ -16643,22 +16653,28 @@ function _bibBindDrag(panel) {
 
   const DRAG_THRESHOLD = 6; // px de movimiento para confirmar drag (PC y táctil)
   const LONG_MS = 350;      // ms adicional de long-press solo para táctil
+  // Si el movimiento horizontal supera al vertical Y al umbral → el usuario
+  // está haciendo scroll horizontal en el slider: cancelar drag.
+  const H_SCROLL_RATIO = 1.5; // dx/dy mínimo para considerar "scroll horizontal"
 
   panel.querySelectorAll('._bib-item').forEach(el => {
     let _startX = 0, _startY = 0;
     let _longPressTimer = null;
     let _dragActive = false;
+    let _scrolling = false; // true cuando detectamos scroll horizontal nativo
     let _downEvent = null;
 
     el.addEventListener('pointerdown', e => {
       if (e.target.classList.contains('_bib-del-item')) return;
       _startX = e.clientX; _startY = e.clientY;
       _dragActive = false;
+      _scrolling = false;
       _downEvent = e;
 
       if (e.pointerType === 'touch') {
         // Táctil: activar con long-press
         _longPressTimer = setTimeout(() => {
+          if (_scrolling) return; // ya está haciendo scroll — no activar drag
           _dragActive = true;
           _bibDragStart(_downEvent, el, panel);
         }, LONG_MS);
@@ -16667,29 +16683,47 @@ function _bibBindDrag(panel) {
     }, { passive: true });
 
     el.addEventListener('pointermove', e => {
-      const dist = Math.hypot(e.clientX - _startX, e.clientY - _startY);
+      if (_scrolling || _dragActive) return;
+      const dx = Math.abs(e.clientX - _startX);
+      const dy = Math.abs(e.clientY - _startY);
+      const dist = Math.hypot(dx, dy);
+
       if (e.pointerType === 'touch') {
-        // En táctil, cancelar long-press si hay movimiento antes de que expire
-        if (dist > DRAG_THRESHOLD && _longPressTimer) {
-          clearTimeout(_longPressTimer); _longPressTimer = null;
+        // Detectar primero si es scroll horizontal antes de que expire el long-press
+        if (dist > DRAG_THRESHOLD) {
+          if (dx > dy * H_SCROLL_RATIO) {
+            // Movimiento claramente horizontal → scroll nativo, cancelar long-press
+            _scrolling = true;
+            if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
+            // Liberar captura para que el contenedor pueda hacer scroll
+            try { el.releasePointerCapture(e.pointerId); } catch(_) {}
+          } else if (_longPressTimer) {
+            // Movimiento no horizontal antes del long-press → cancelar drag
+            clearTimeout(_longPressTimer); _longPressTimer = null;
+          }
         }
       } else {
-        // PC: activar drag al superar el umbral de movimiento
-        if (!_dragActive && dist > DRAG_THRESHOLD && _downEvent) {
-          _dragActive = true;
-          _bibDragStart(_downEvent, el, panel);
+        // PC: activar drag al superar el umbral de movimiento (excepto scroll horizontal)
+        if (dist > DRAG_THRESHOLD && _downEvent) {
+          if (dx > dy * H_SCROLL_RATIO) {
+            // Scroll horizontal en PC — no iniciar drag
+            _scrolling = true;
+          } else {
+            _dragActive = true;
+            _bibDragStart(_downEvent, el, panel);
+          }
         }
       }
     }, { passive: true });
 
     el.addEventListener('pointerup', () => {
       if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
-      _dragActive = false; _downEvent = null;
+      _dragActive = false; _scrolling = false; _downEvent = null;
     });
 
     el.addEventListener('pointercancel', () => {
       if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
-      _dragActive = false; _downEvent = null;
+      _dragActive = false; _scrolling = false; _downEvent = null;
       _bibDragCancel();
     });
   });
