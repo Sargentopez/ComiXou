@@ -1940,3 +1940,25 @@ body.editor-page #appView {
 }
 .gcp-chip:hover { background: var(--gray-100); }
 .gcp-chip.active { background: var(--yellow); border-color: var(--black); }
+
+/* ── Sistema de ayuda editor de animaciones ─────────────────────────── */
+/* Barra naranja interior en el borde inferior del botón, por encima del
+   gradiente ::after de gcpMenuBar (z-index:511 > 509 del gradiente) */
+@keyframes _gcpHintBar {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.gcp-hint-pulse {
+  position: relative;
+}
+.gcp-hint-pulse::before {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 4px; right: 4px;
+  height: 3px;
+  background: #ff7a00;
+  border-radius: 2px 2px 0 0;
+  animation: _gcpHintBar 0.8s ease-in-out infinite;
+  z-index: 511;
+  pointer-events: none;
+}

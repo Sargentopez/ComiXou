@@ -16920,6 +16920,28 @@ function _gcpHandleDown(e) {
   _gcpRedraw();
 }
 
+// ══════════════════════════════════════════════════════════════════
+// SISTEMA DE AYUDA DEL EDITOR DE ANIMACIONES
+// outline/box-shadow — no interfiere con background de .ed-menu-btn
+// ══════════════════════════════════════════════════════════════════
+let _gcpHintState = 'none';
+const _GCP_HINT_BTNS = {
+  bib: 'gcpBibBtn', saveFrame: 'gcpSaveFrameBtn', addFrame: 'gcpAddFrameBtn'
+};
+function _gcpHintSet(state) {
+  if (_gcpHintState === state) return;
+  _gcpHintStop();
+  _gcpHintState = state;
+  if (state === 'none') return;
+  const btn = document.getElementById(_GCP_HINT_BTNS[state] || '');
+  if (btn) btn.classList.add('gcp-hint-pulse');
+}
+function _gcpHintStop() {
+  Object.values(_GCP_HINT_BTNS).forEach(id =>
+    document.getElementById(id)?.classList.remove('gcp-hint-pulse'));
+  _gcpHintState = 'none';
+}
+
 function _gcpHandleMove(e) {
   _gcpWithEditorContext(() => { edOnMove(e); });
   _gcpRedraw();
@@ -16937,6 +16959,7 @@ function _gcpHandleUp(e) {
   const newJSON = JSON.stringify(newSnap);
   if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
     _gcpPushHistory(newJSON);
+    _gcpHintSet('saveFrame');
   }
   _gcpRedraw();
 }
@@ -17092,6 +17115,7 @@ function _gcpSaveFrame() {
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
   edToast('Frame ' + (fi+1) + ' guardado ✓');
+  _gcpHintSet('addFrame');
 }
 
 // _gcpCaptureFrame: botón +. Copia exacta del frame activo como nuevo frame
@@ -17126,6 +17150,7 @@ function _gcpCaptureFrame() {
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
   edToast('Frame ' + (newFi+1) + ' creado ✓');
+  _gcpHintStop();
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
@@ -17719,6 +17744,7 @@ function gcpInsertFromBib(entry) {
     const _fb = document.getElementById('gcpFramesBar');
     if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
     _gcpRedraw();
+    _gcpHintSet('saveFrame');
   };
 
   const insertLayer = (la) => {
@@ -17812,8 +17838,21 @@ function gcpOpen(edLayerIdx) {
       });
       window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
       const titleEl = document.getElementById('gcpProjectTitle');
-      if (titleEl) titleEl.textContent = 'Editar GIF';
+      if (titleEl) titleEl.textContent = 'Editar animación';
     }
+  }
+  // Si es nueva animación (sin capas previas), calcular título con contador de bib
+  if (window._gcpLayers.length === 0) {
+    const _tEl = document.getElementById('gcpProjectTitle');
+    if (_tEl) {
+      const _bib2 = _bibLoad();
+      const _af2 = _bib2.folders.find(f => f.id === '__anim__');
+      const _ac2 = (_af2?.items?.length || 0) + 1;
+      _tEl.textContent = 'Animación ' + _ac2;
+    }
+    setTimeout(() => _gcpHintSet('bib'), 300);
+  } else {
+    _gcpHintStop();
   }
   // Leer comportamientos guardados de la capa y reflejarlos en la UI
   if (window._gcpEdLayerIdx >= 0) {
@@ -18016,6 +18055,7 @@ function _gcpDoClose() {
   document.getElementById('editorCanvas')?.classList.remove('gcp-active');
   const blocker = document.getElementById('gcpBlocker');
   if (blocker) blocker.style.display = 'none';
+  _gcpHintStop();
   // Restaurar título del gcpShell para próxima apertura
   const titleEl = document.getElementById('gcpProjectTitle');
   if (titleEl) titleEl.textContent = 'Gif 1';

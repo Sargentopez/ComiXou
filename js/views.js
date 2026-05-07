@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v20.95</footer>
+    <footer class="app-version">v21.02</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -521,7 +521,7 @@ Router.register('editor', {
         <button id="gcpCloseBtn" title="Volver al editor">✕</button>
       </div>
       <div id="gcpMenuBar">
-        <button class="ed-menu-pin ed-hide-btn" style="pointer-events:none;opacity:0;flex-shrink:0;visibility:hidden"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem">OCULTAR</b></button>
+        <button class="ed-menu-pin ed-hide-btn" style="display:none"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem">OCULTAR</b></button>
         <div class="ed-menu-sep"></div>
         <div id="gcpMenuScroll">
           <div class="ed-menu-item" style="position:relative">
