@@ -1251,7 +1251,7 @@ function _readerGifTick() {
     (panel.layers || []).forEach(layer => {
       // GIF importado
       if (layer._gifReady && layer._gifFrames && layer._gifOc) {
-        if (!layer._gifLastTick) layer._gifLastTick = now;
+        if (!layer._gifLastTick) return; // no iniciado aún — esperar a que se visualice la hoja
         const frame = layer._gifFrames[layer._gifIdx];
         if (now - layer._gifLastTick >= (frame.delay || 100)) {
           layer._gifIdx = (layer._gifIdx + 1) % layer._gifFrames.length;
@@ -1262,7 +1262,7 @@ function _readerGifTick() {
       }
       // APNG: tick con delay real por frame + comportamientos stopAtEnd/repeatCount
       if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
-        if (!layer._animLastTick) layer._animLastTick = now;
+        if (!layer._animLastTick) return; // no iniciado aún — esperar a que se visualice la hoja
         const _af = layer._animFrames[layer._animIdx];
         const _ad = (_af && _af.delay) || layer._gcpFrameDelay || 100;
         if (now - layer._animLastTick >= _ad) {
@@ -1305,7 +1305,10 @@ function startReader() {
 
   // Arrancar loop de animación GIF si hay alguno en la obra
   const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady));
-  if (_hasGifs) requestAnimationFrame(_readerGifTick);
+  if (_hasGifs) {
+    _resetPanelAnims(0); // inicializar animaciones del primer panel
+    requestAnimationFrame(_readerGifTick);
+  }
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
     _startScrollReader();
@@ -1509,6 +1512,7 @@ function _startScrollReader() {
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
+      _resetPanelAnims(si); // reiniciar animaciones al llegar a un nuevo panel
       const np    = RS.panels[si];
       const ntxts = np?.texts || [];
       const isSeq = (np?.text_mode || 'sequential') === 'sequential';
@@ -2145,6 +2149,29 @@ function _initTextStep(idx) {
   return ((p?.text_mode || 'sequential') === 'sequential' && (p?.texts || []).length > 0) ? 1 : 0;
 }
 
+// Resetear animaciones de un panel al frame 0 para que se reproduzcan desde el inicio
+function _resetPanelAnims(idx) {
+  const panel = RS.panels[idx];
+  if (!panel) return;
+  (panel.layers || []).forEach(layer => {
+    if (layer._gifReady) {
+      layer._gifIdx      = 0;
+      layer._gifLastTick = Date.now(); // iniciar tick desde ahora
+      if (layer._gifOc && layer._gifFrames && layer._gifFrames.length) {
+        layer._gifOc.getContext('2d').putImageData(layer._gifFrames[0].imageData, 0, 0);
+      }
+    }
+    if (layer._animReady && layer._animFrames) {
+      layer._animIdx       = 0;
+      layer._animLastTick  = Date.now(); // iniciar tick desde ahora
+      layer._animPlayCount = 0;
+      if (layer._animOc && layer._animFrames.length) {
+        layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
+      }
+    }
+  });
+}
+
 function advance() {
   if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
   const panel = RS.panels[RS.idx];
@@ -2156,6 +2183,7 @@ function advance() {
   }
   if (RS.idx < RS.panels.length - 1) {
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
+    _resetPanelAnims(RS.idx); // reiniciar animaciones desde frame 0
     _resizeCanvas(); _render();
   }
 }
@@ -2171,6 +2199,7 @@ function goBack() {
     const pp = RS.panels[RS.idx];
     RS.textStep  = (pp?.text_mode || 'sequential') === 'sequential' ? (pp?.texts || []).length : 0;
     RS.fadeAlpha = 0;
+    _resetPanelAnims(RS.idx); // reiniciar animaciones desde frame 0
     _resizeCanvas(); _render();
   }
 }

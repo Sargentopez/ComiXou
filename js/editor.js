@@ -1249,6 +1249,7 @@ class GifLayer extends BaseLayer {
   }
   stopAnim() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    this._playing = false;
     this._fIdx = 0;
     if (this._ready && this._frames && this._frames.length && this._oc) {
       this._oc.getContext('2d').putImageData(this._frames[0].imageData, 0, 0);
@@ -13278,13 +13279,14 @@ function edDeserLayer(d, pageOrientation){
     if(d.gifKey) _gifIdbLoad(d.gifKey).then(src=>{
       if(!src) return;
       l.load(src, () => {
-        // Si el visor está abierto y reproduciendo, arrancar animación en este layer
-        if($('editorViewer')?.classList.contains('open') && typeof _edGifSetPlaying==='function') {
-          l._playing = true;
-          l._applyFrame(0);
-        }
-        if(typeof edUpdateViewer==='function' && $('editorViewer')?.classList.contains('open')) {
-          edUpdateViewer();
+        if($('editorViewer')?.classList.contains('open')) {
+          // Solo activar si este layer pertenece a la hoja visible actualmente
+          const _visPage = edPages[edViewerIdx];
+          if(_visPage && _visPage.layers.includes(l)) {
+            l._playing = true;
+            l._applyFrame(0);
+            if(typeof edUpdateViewer==='function') edUpdateViewer();
+          }
         } else if(typeof edRedraw==='function') {
           edRedraw();
         }
@@ -13344,9 +13346,14 @@ function edDeserLayer(d, pageOrientation){
         // Cargar frames
         l.loadAnim(input, () => {
           if($('editorViewer')?.classList.contains('open')) {
-            l._playing = true;
-            l._applyFrame(0);
-            if(typeof edUpdateViewer==='function') edUpdateViewer();
+            // Solo activar si este layer pertenece a la hoja visible actualmente
+            const _visPage = edPages[edViewerIdx];
+            if(_visPage && _visPage.layers.includes(l)) {
+              l._playing = true;
+              l._applyFrame(0);
+              if(typeof edUpdateViewer==='function') edUpdateViewer();
+            }
+            // Si no es la hoja visible, no activar — _edStartPageAnims lo hará al navegar
           } else {
             if(typeof edRedraw==='function') edRedraw();
           }
@@ -13439,8 +13446,13 @@ async function edLoadProject(id){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
     setTimeout(()=>{ _doLoadReset(); }, 150);
     // Snapshot inicial síncrono: estado de apertura como punto de no-retorno.
-    // Se guarda antes de los timeouts para que cualquier cambio posterior sea deshacible.
-    // force=true: siempre guardar, aunque el historial esté vacío.
+    // Forzar _playing=false en todos los layers antes del snapshot para que
+    // el estado de apertura siempre sea "todo parado".
+    edPages.forEach(p => (p.layers||[]).forEach(l => {
+      if(l && (l.type==='gif' || l.type==='image')) {
+        if(l._playing) { if(typeof l.stopAnim==='function') l.stopAnim(); else l._playing=false; }
+      }
+    }));
     edPushHistory(true);
     setTimeout(()=>{
       _doLoadReset();
@@ -13511,8 +13523,8 @@ function _edGifSetPlaying(playing) {
 }
 function edOpenViewer(){
   edHideGearIcon();
-  _edGifSetPlaying(true); // activar animación GIF al entrar al visor
   edViewerIdx=0;
+  _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
@@ -13773,9 +13785,11 @@ function _edOpenViewerScroll(navMode) {
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
+      _edResetPageAnims(_prevSI);   // parar animaciones de la hoja que se deja
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
+      _edStartPageAnims(si);        // arrancar animaciones de la nueva hoja desde frame 0
       const np  = edPages[si];
       const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
       const isSeq = (np?.textMode || 'sequential') === 'sequential';
@@ -13951,9 +13965,29 @@ function _edResetPageAnims(pageIdx) {
   const page = edPages[pageIdx];
   if (!page) return;
   page.layers.forEach(function(l) {
-    // Parar cualquier layer con timer activo, independientemente del número de frames
     if (l.type === 'gif' && l._ready) { l.stopAnim(); }
     if (l.type === 'image' && (l._pngFrames || l._apngSrc)) { l.stopAnim(); }
+  });
+}
+
+// Arrancar animaciones de una hoja desde frame 0 — llamar al entrar a cada hoja del visor
+function _edStartPageAnims(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page) return;
+  page.layers.forEach(function(l) {
+    if (l.type === 'gif' && l._ready) {
+      l._fIdx = 0;
+      l._playing = true;
+      l._applyFrame(0);
+    }
+    if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc)) {
+      l._fIdx = 0;
+      l._gcpPlayCount = 0;
+      l._playing = true;
+      l.loadAnim(l._apngSrc || l._pngFrames, () => {
+        if (l._playing) l._applyFrame(0);
+      });
+    }
   });
 }
 
@@ -13972,6 +14006,7 @@ function _viewerAdvance(){
     const np = edPages[edViewerIdx];
     const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
     edViewerTextStep = (np?.textMode==='sequential' && ntl.length > 0) ? 1 : 0;
+    _edStartPageAnims(edViewerIdx); // arrancar animaciones de la nueva hoja
     edUpdateViewer();
   }
 }
@@ -13988,6 +14023,7 @@ function _viewerBack(){
     const pp = edPages[edViewerIdx];
     const ptl = (pp?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
     edViewerTextStep = pp?.textMode==='sequential' ? ptl.length : 0;
+    _edStartPageAnims(edViewerIdx); // arrancar animaciones de la hoja anterior
     edUpdateViewer();
   }
 }
@@ -16498,7 +16534,7 @@ function _bibRenderPanel(panel) {
                 if(fi2>=0){edLayers.splice(fi2,0,la2);edSelectedIdx=fi2;}
                 else{edLayers.push(la2);edSelectedIdx=edLayers.length-1;}
                 edPushHistory();
-                la2.loadAnim(entry.apngSrc||_frames2,function(){la2._playing=true;la2._applyFrame(0);edRedraw();});
+                la2.loadAnim(entry.apngSrc||_frames2,function(){la2._playing=false;la2._applyFrame(0);edRedraw();});
               };
               _img2.src=_src2;
             });
@@ -16554,7 +16590,7 @@ function _bibRenderPanel(panel) {
           // Cargar con ApngDecoder — si apngSrc usar string (decodeApng), sino array (decodeFrameArray)
           const _animInput = entry.apngSrc || frames;
           la.loadAnim(_animInput, () => {
-            la._playing = true;
+            la._playing = false; // no reproducir en el canvas — solo en el visor/reproductor
             la._applyFrame(0);
             edRedraw();
           });
