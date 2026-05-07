@@ -2424,25 +2424,38 @@ function edApplyHistory(snapshot){
       const _lsy = o.y != null ? o.y : 0.5;
       const _lsw = o.width  != null ? o.width  : 1.0;
       const _lsh = o.height != null ? o.height : 1.0;
-      // Reconstruir stroke: cargar dataUrl directamente en el canvas del layer
-      // sin pasar por fromDataUrl (que tiene su propio img.onload no trackeable).
-      l = StrokeLayer.fromDataUrl(o.dataUrl||'', _lsx, _lsy, _lsw, _lsh, _pw, _ph);
-      if(o.dataUrl) {
-        // Trackear la carga en imgPromises para que el edRedraw final espere
-        const _lRef = l;
-        imgPromises.push(new Promise(res => {
-          const _bw = Math.max(1, Math.round(_lsw * _pw));
-          const _bh = Math.max(1, Math.round(_lsh * _ph));
-          const _si = new Image();
-          _si.onload = () => {
-            _lRef._canvas = document.createElement('canvas');
-            _lRef._canvas.width = _bw; _lRef._canvas.height = _bh;
-            _lRef._canvas.getContext('2d').drawImage(_si, 0, 0, _bw, _bh);
-            res();
-          };
-          _si.onerror = () => res();
-          _si.src = o.dataUrl;
-        }));
+      // Reconstruir stroke: buscar primero si el layer vivo actual tiene el mismo
+      // dataUrl y reusar su canvas ya pintado (evita parpadeo/invisibilidad).
+      // Solo reconstruir desde dataUrl si no hay canvas vivo reutilizable.
+      { const _bw = Math.max(1, Math.round(_lsw * _pw));
+        const _bh = Math.max(1, Math.round(_lsh * _ph));
+        // Buscar canvas vivo en la misma posición del array de la página actual
+        // (mismo índice y tipo stroke) para reusar sin comparar dataUrl (costoso).
+        const _curPage = edPages[snapshot.pageIdx];
+        const _rawIdx = raw.indexOf(o);
+        const _liveAtIdx = (_curPage?.layers||[])[_rawIdx];
+        const _liveSrc = (_liveAtIdx && _liveAtIdx.type === 'stroke' &&
+          _liveAtIdx._canvas && _liveAtIdx._canvas.width === _bw &&
+          _liveAtIdx._canvas.height === _bh) ? _liveAtIdx : null;
+        l = new StrokeLayer(document.createElement('canvas'), _pw, _ph);
+        l.x = _lsx; l.y = _lsy; l.width = _lsw; l.height = _lsh;
+        if(_liveSrc) {
+          // Reusar canvas ya pintado — visible inmediatamente sin carga async
+          l._canvas = _liveSrc._canvas;
+        } else {
+          const _sc = document.createElement('canvas');
+          _sc.width = _bw; _sc.height = _bh;
+          l._canvas = _sc;
+          if(o.dataUrl) {
+            const _lRef = l;
+            imgPromises.push(new Promise(res => {
+              const _si = new Image();
+              _si.onload = () => { _lRef._canvas.getContext('2d').drawImage(_si, 0, 0, _bw, _bh); res(); };
+              _si.onerror = () => res();
+              _si.src = o.dataUrl;
+            }));
+          }
+        }
       }
       if(o.frozenLine) l._frozenLine = o.frozenLine;
       if(o.rotation) l.rotation=o.rotation;
