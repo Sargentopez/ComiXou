@@ -155,6 +155,7 @@ function buildAdminRow(comic, mode) {
     </div>
     <div class="admin-row-actions">
       ${comic.supabaseId ? `<button class="admin-btn admin-btn-read" id="read_${comic.id}">👁 Leer</button>` : ''}
+      ${comic.supabaseId ? `<button class="admin-btn" id="diag_${comic.id}" style="background:#ff0;color:#000;font-weight:700">🔍 Diag BD</button>` : ''}
       ${mode === 'pending'   ? `<button class="admin-btn admin-btn-ok"   id="approve_${comic.id}">✓ Aprobar</button>`  : ''}
       ${mode === 'published' ? `<button class="admin-btn admin-btn-warn" id="unpub_${comic.id}">Retirar</button>`      : ''}
       <button class="admin-btn admin-btn-del" id="del_${comic.id}">Eliminar</button>
@@ -165,6 +166,66 @@ function buildAdminRow(comic, mode) {
     const sid = comic.supabaseId;
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
     window.location = 'reader/index.html?' + param + '&from=app';
+  });
+
+  // Diagnóstico Supabase
+  row.querySelector(`#diag_${comic.id}`)?.addEventListener('click', async () => {
+    const _sid = comic.supabaseId;
+    if (!_sid) return;
+    const _SB_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
+    const _SB_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+    const _h = { 'apikey': _SB_KEY, 'Authorization': `Bearer ${_SB_KEY}` };
+    const _get = async path => {
+      const r = await fetch(`${_SB_URL}/rest/v1/${path}`, { headers: _h });
+      return r.ok ? r.json() : [];
+    };
+    const _btn = row.querySelector(`#diag_${comic.id}`);
+    _btn.textContent = '⏳';
+    try {
+      const lines = ['=== DIAGNÓSTICO SUPABASE ===', 'work_id: ' + _sid];
+      const panels = await _get(`panels?work_id=eq.${_sid}&order=panel_order.asc&select=*`);
+      lines.push('panels: ' + (panels||[]).length);
+      for (const [pi, p] of (panels||[]).entries()) {
+        lines.push('\nPanel ' + pi + ' id=' + p.id + ' orient=' + p.orientation + ' textMode=' + p.text_mode);
+        const layers = await _get(`panel_layers?panel_id=eq.${p.id}&order=layer_order.asc&select=*`);
+        const texts  = await _get(`panel_texts?panel_id=eq.${p.id}&order=text_order.asc&select=*`);
+        lines.push('  panel_layers: ' + layers.length);
+        layers.forEach((l, li) => {
+          lines.push('  L'+li+' type='+l.layer_type
+            +' layer_data='+(l.layer_data ? l.layer_data.length+'ch' : 'NULL')
+            +' gif_url='+(l.gif_url?'OK':'null')
+            +' anim_url='+(l.anim_url?'OK':'null'));
+          // Mostrar inicio del layer_data para ver si es JSON o gz:
+          if (l.layer_data) lines.push('    data_start: '+l.layer_data.slice(0,60));
+        });
+        lines.push('  panel_texts: ' + texts.length);
+        texts.forEach((t, ti) => {
+          lines.push('  T'+ti+' content='+JSON.stringify((t.content||t.text||'').slice(0,30))
+            +' bg_opacity='+t.bg_opacity);
+        });
+      }
+      // Mostrar panel copiable
+      const _ov = document.createElement('div');
+      _ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px';
+      const _ta = document.createElement('textarea');
+      _ta.value = lines.join('\n');
+      _ta.style.cssText = 'width:95%;height:70vh;font-size:11px;font-family:monospace;background:#111;color:#0f0;border:2px solid #0f0;padding:8px';
+      const _row = document.createElement('div');
+      _row.style.cssText = 'display:flex;gap:8px;margin-top:8px';
+      const _cp = document.createElement('button');
+      _cp.textContent = '📋 Copiar'; _cp.style.cssText = 'padding:8px 16px;font-weight:700;cursor:pointer';
+      _cp.onclick = () => { _ta.select(); document.execCommand('copy'); _cp.textContent = '✓ Copiado'; };
+      const _cl = document.createElement('button');
+      _cl.textContent = '✕ Cerrar'; _cl.style.cssText = 'padding:8px 16px;font-weight:700;cursor:pointer;background:#c00;color:#fff;border:none';
+      _cl.onclick = () => _ov.remove();
+      _row.appendChild(_cp); _row.appendChild(_cl);
+      _ov.appendChild(_ta); _ov.appendChild(_row);
+      document.body.appendChild(_ov);
+      _ta.select();
+    } catch(e) {
+      alert('Error diagnóstico: ' + e.message);
+    }
+    _btn.textContent = '🔍 Diag BD';
   });
 
   // Aprobar

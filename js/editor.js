@@ -18613,6 +18613,32 @@ async function _edRunDiag() {
     } catch(e) { L('  idx' + hi + ': error: ' + e.message); }
   });
 
+  // 5. Datos que se subirían a Supabase (diagnóstico sin subir nada)
+  L('\n── Datos para Supabase (edPages → panel_layers/panel_texts) ──');
+  try {
+    const _epDiag = (typeof edPages !== 'undefined') ? edPages : [];
+    _epDiag.forEach((p, pi) => {
+      L('  Página ' + pi + ': ' + (p.layers||[]).length + ' layers, texts array: ' + (p.texts?p.texts.length:'undefined'));
+      (p.layers||[]).forEach((l, li) => {
+        if (!l) { L('    L'+li+' NULL'); return; }
+        const _info = 'L'+li+' type='+l.type
+          + (l.type==='stroke'?' dataUrl='+(l.toDataUrl?(l.toDataUrl().length>10?l.toDataUrl().slice(0,20)+'…':'EMPTY'):'NO-FN'):'')
+          + (l.type==='draw'?' dataUrl='+(l.toDataUrl?(l.toDataUrl().length>10?'OK('+l.toDataUrl().length+'ch)':'EMPTY'):'NO-FN'):'')
+          + (l.type==='image'?' animKey='+(l.animKey||'-')+' pngKey='+(l._pngFramesKey||'-'):'')
+          + (l.type==='gif'?' gifKey='+(l.gifKey||'-'):'')
+          + (l.type==='text'||l.type==='bubble'?' text='+JSON.stringify((l.text||'').slice(0,30)):'')
+          + ' x='+(l.x||0).toFixed(3)+' y='+(l.y||0).toFixed(3);
+        L('    '+_info);
+      });
+      // Verificar si hay textos en p.texts (array separado)
+      if (p.texts && p.texts.length) {
+        L('    panel.texts ('+p.texts.length+'): ' + p.texts.map(t=>'['+((t.content||t.text||'').slice(0,15))+']').join(', '));
+      } else {
+        L('    panel.texts: VACÍO — textos solo en layers');
+      }
+    });
+  } catch(_de) { L('  Error diagnóstico Supabase: ' + _de.message); }
+
   // 5. Biblioteca local
   L('\n── Biblioteca ──');
   const bib = _bibLoad();
