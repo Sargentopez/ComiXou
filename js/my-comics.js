@@ -503,20 +503,29 @@ function _mcRenderList() {
         window.scrollTo({ top: rowTop, behavior: 'smooth' });
       });
       if (typeof SupabaseClient !== 'undefined') {
-        // Mostrar overlay bloqueante igual que edCloudSave — el guardado puede tardar
         _mcSubmitOverlayShow();
-        SupabaseClient.submitForReview(comic)
-          .then(() => {
-            _mcSubmitOverlayHide();
-            _mcToast('Enviada a revisión ✓');
-          })
-          .catch(err => {
-            _mcSubmitOverlayHide();
-            // Revertir estado local si falla Supabase
-            ComicStore.save({ ...comic, pendingReview: false });
-            _mcRenderList();
-            _mcToast('⚠️ Error al enviar: ' + err.message);
-          });
+        try {
+          // Cargar comic completo con editorData desde OPFS
+          const _comicFull = ComicStore.getByIdFull
+            ? (await ComicStore.getByIdFull(comic.id)) || comic
+            : comic;
+          // Si la versión local es más nueva que la nube, guardar primero
+          const _localAt = _comicFull.localSavedAt || _comicFull.updatedAt || '';
+          const _cloudAt = _comicFull.updatedAt || '';
+          const _localNewer = _localAt && _cloudAt && _localAt > _cloudAt;
+          if (_localNewer || !_comicFull.updatedAt) {
+            // Guardar en nube antes de enviar a revisión
+            await SupabaseClient.saveDraft(_comicFull);
+          }
+          await SupabaseClient.submitForReview(_comicFull);
+          _mcSubmitOverlayHide();
+          _mcToast('Enviada a revisión ✓');
+        } catch(err) {
+          _mcSubmitOverlayHide();
+          ComicStore.save({ ...comic, pendingReview: false });
+          _mcRenderList();
+          _mcToast('⚠️ Error al enviar: ' + err.message);
+        }
       } else {
         _mcToast('Enviada a revisión ✓');
       }
