@@ -2424,27 +2424,25 @@ function edApplyHistory(snapshot){
       const _lsy = o.y != null ? o.y : 0.5;
       const _lsw = o.width  != null ? o.width  : 1.0;
       const _lsh = o.height != null ? o.height : 1.0;
-      // Reconstruir stroke y trackear su carga asíncrona en imgPromises
-      // para que el edRedraw final espere a que el canvas esté pintado
+      // Reconstruir stroke: cargar dataUrl directamente en el canvas del layer
+      // sin pasar por fromDataUrl (que tiene su propio img.onload no trackeable).
+      l = StrokeLayer.fromDataUrl(o.dataUrl||'', _lsx, _lsy, _lsw, _lsh, _pw, _ph);
       if(o.dataUrl) {
-        const _strokeP = new Promise(res => {
+        // Trackear la carga en imgPromises para que el edRedraw final espere
+        const _lRef = l;
+        imgPromises.push(new Promise(res => {
           const _bw = Math.max(1, Math.round(_lsw * _pw));
           const _bh = Math.max(1, Math.round(_lsh * _ph));
-          const _sc = document.createElement('canvas');
-          _sc.width = _bw; _sc.height = _bh;
           const _si = new Image();
-          _si.onload = () => { _sc.getContext('2d').drawImage(_si, 0, 0, _bw, _bh); res(_sc); };
-          _si.onerror = () => res(null);
+          _si.onload = () => {
+            _lRef._canvas = document.createElement('canvas');
+            _lRef._canvas.width = _bw; _lRef._canvas.height = _bh;
+            _lRef._canvas.getContext('2d').drawImage(_si, 0, 0, _bw, _bh);
+            res();
+          };
+          _si.onerror = () => res();
           _si.src = o.dataUrl;
-        });
-        l = new StrokeLayer(document.createElement('canvas'), _pw, _ph);
-        l.x = _lsx; l.y = _lsy; l.width = _lsw; l.height = _lsh;
-        l._canvas = document.createElement('canvas');
-        l._canvas.width  = Math.max(1, Math.round(_lsw * _pw));
-        l._canvas.height = Math.max(1, Math.round(_lsh * _ph));
-        imgPromises.push(_strokeP.then(sc => { if(sc) l._canvas.getContext('2d').drawImage(sc, 0, 0); }));
-      } else {
-        l = StrokeLayer.fromDataUrl('', _lsx, _lsy, _lsw, _lsh, _pw, _ph);
+        }));
       }
       if(o.frozenLine) l._frozenLine = o.frozenLine;
       if(o.rotation) l.rotation=o.rotation;
@@ -18510,7 +18508,8 @@ async function _edRunDiag() {
       + (l.type==='image'?' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' animReady=' + (l._animReady?'sí':'NO'):'')
       + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null'):'')
       + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?'):'')
-      + (l.type==='gif'?' gifKey=' + (l.gifKey||'-'):''));
+      + (l.type==='gif'?' gifKey=' + (l.gifKey||'-') + ' _playing=' + l._playing + ' _ready=' + l._ready:'')
+      + (l.type==='image'?' _playing=' + l._playing:''));
   });
   L('\n── Historial ──');
   L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length + ' | _vsHistory.length=' + _vsHistory.length + ' (>0 = bloquea push global)');
@@ -18519,7 +18518,7 @@ async function _edRunDiag() {
     try {
       const _raw = JSON.parse(h.layersJSON);
       L('  idx' + hi + (hi===edHistoryIdx?' ← ACTUAL':'') + ': ' + _raw.length + ' layers → ' +
-        _raw.map((o,i) => o ? (o.type + (o.type==='image'?'(animKey='+o.animKey+')':'') + (o.type==='stroke'?'(x='+(o.x||0).toFixed(3)+' y='+(o.y||0).toFixed(3)+')':'')) : 'null').join(', '));
+        _raw.map((o,i) => o ? (o.type + (o.type==='image'?'(animKey='+o.animKey+' _pl='+o._playing+')':'') + (o.type==='gif'?'(_pl='+o._playing+')':'') + (o.type==='stroke'?'(x='+(o.x||0).toFixed(3)+' y='+(o.y||0).toFixed(3)+')':'')) : 'null').join(', '));
     } catch(e) { L('  idx' + hi + ': error: ' + e.message); }
   });
 
