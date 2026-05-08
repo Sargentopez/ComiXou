@@ -1346,7 +1346,7 @@ function startReader() {
   _setupControls();
   requestAnimationFrame(_positionBtns);
 
-  RS.resizeFn = () => { _resizeCanvas(); _render(); };
+  RS.resizeFn = () => { _resizeCanvas(); _render(); if (RS.isCredits) _updateCreditsLinks(); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -2252,12 +2252,14 @@ function _resetCredits() {
   if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
   RS.creditsAlpha = 0;
   RS.isCredits    = false;
+  _hideCreditsLinks();
 }
 
 function _creditsClick() {
   if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
   if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
   RS.isCredits = false;
+  _hideCreditsLinks();
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
 }
@@ -2486,6 +2488,8 @@ function _renderCredits(pw, ph) {
     ctx.globalAlpha = 1;
     RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
   }
+  // Posicionar el elemento <a> real sobre la zona del enlace
+  _updateCreditsLinks();
 }
 
 
@@ -2592,23 +2596,50 @@ function _readerToast(msg, duration) {
 
 
 function _handleCreditsClick(clientX, clientY) {
-  // Convertir coordenadas de pantalla a coordenadas del canvas lógico
+  // Solo gestiona "Volver a leer" — los enlaces reales los gestionan elementos <a>
   const rect   = RS.canvas.getBoundingClientRect();
   const scaleX = RS.canvas.width  / rect.width;
   const scaleY = RS.canvas.height / rect.height;
   const cx = (clientX - rect.left) * scaleX;
   const cy = (clientY - rect.top)  * scaleY;
 
-  const la = RS.creditsLinkArea;
-  if (la && cx >= la.x && cx <= la.x + la.w && cy >= la.y && cy <= la.y + la.h) {
-    window.open('https://sargentopez.github.io/ComiXou/index.html', '_blank');
-    return;
-  }
   const ra = RS.creditsRestartArea;
   if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
     _creditsClick(); // Volver a leer → reinicia desde la primera hoja
   }
-  // Tap fuera de ambas zonas → no hacer nada
+}
+
+// Crear/actualizar los elementos <a> superpuestos sobre las zonas clicables de créditos.
+// Se posicionan en coordenadas de pantalla usando getBoundingClientRect del canvas.
+function _updateCreditsLinks() {
+  if (!RS.canvas || !RS.creditsLinkArea) return;
+  const rect   = RS.canvas.getBoundingClientRect();
+  const scaleX = rect.width  / RS.canvas.width;
+  const scaleY = rect.height / RS.canvas.height;
+
+  // Enlace principal: "Visita más obras del autor"
+  let linkEl = document.getElementById('_creditsLinkEl');
+  if (!linkEl) {
+    linkEl = document.createElement('a');
+    linkEl.id     = '_creditsLinkEl';
+    linkEl.target = '_blank';
+    linkEl.rel    = 'noopener noreferrer';
+    linkEl.style.cssText = 'position:fixed;z-index:500;display:block;cursor:pointer;' +
+      'background:transparent;border:none;text-decoration:none;';
+    document.getElementById('readerApp').appendChild(linkEl);
+  }
+  linkEl.href = 'https://sargentopez.github.io/ComiXou/index.html';
+  const la = RS.creditsLinkArea;
+  linkEl.style.left   = Math.round(rect.left + la.x * scaleX) + 'px';
+  linkEl.style.top    = Math.round(rect.top  + la.y * scaleY) + 'px';
+  linkEl.style.width  = Math.round(la.w * scaleX) + 'px';
+  linkEl.style.height = Math.round(la.h * scaleY) + 'px';
+  linkEl.style.display = 'block';
+}
+
+function _hideCreditsLinks() {
+  const el = document.getElementById('_creditsLinkEl');
+  if (el) el.style.display = 'none';
 }
 
 
