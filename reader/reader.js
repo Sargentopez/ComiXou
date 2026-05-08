@@ -2554,14 +2554,11 @@ function _setupControls() {
     if (sx === null || cancelled) { sx = null; return; }
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
-    const dx   = Math.abs(endX - sx);
     const dy   = Math.abs(endY - sy);
     sx = null;
     if (dy > 40) return;
-    // En créditos: si el gesto es un swipe horizontal claro → navegar atrás,
-    // si es un tap (sin desplazamiento significativo) → detectar enlace/botón.
+    // En créditos: cualquier tap detecta enlace/botón (ignorar división izq/dcha)
     if (RS.isCredits) {
-      if (dx > 30 && dx > dy * 1.5) { goBack(); return; }
       _handleCreditsClick(endX, endY);
       return;
     }
