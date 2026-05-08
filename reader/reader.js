@@ -2517,6 +2517,22 @@ function _setupControls() {
   // Click ratón en canvas: en créditos detecta enlace
   RS.canvas.addEventListener('click', e => {
     if (RS.isCredits) { _handleCreditsClick(e.clientX, e.clientY); }
+    else { advance(); }
+  });
+
+  // Cursor pointer sobre zonas clicables en créditos (PC)
+  RS.canvas.addEventListener('mousemove', e => {
+    if (!RS.isCredits) { RS.canvas.style.cursor = 'default'; return; }
+    const rect   = RS.canvas.getBoundingClientRect();
+    const scaleX = RS.canvas.width  / rect.width;
+    const scaleY = RS.canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top)  * scaleY;
+    const la = RS.creditsLinkArea;
+    const ra = RS.creditsRestartArea;
+    const overLink    = la && cx >= la.x && cx <= la.x + la.w && cy >= la.y && cy <= la.y + la.h;
+    const overRestart = ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h;
+    RS.canvas.style.cursor = (overLink || overRestart) ? 'pointer' : 'default';
   });
 
   // Swipe táctil con AbortController
