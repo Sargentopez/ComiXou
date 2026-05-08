@@ -2596,50 +2596,108 @@ function _readerToast(msg, duration) {
 
 
 function _handleCreditsClick(clientX, clientY) {
-  // Solo gestiona "Volver a leer" — los enlaces reales los gestionan elementos <a>
-  const rect   = RS.canvas.getBoundingClientRect();
-  const scaleX = RS.canvas.width  / rect.width;
-  const scaleY = RS.canvas.height / rect.height;
-  const cx = (clientX - rect.left) * scaleX;
-  const cy = (clientY - rect.top)  * scaleY;
-
-  const ra = RS.creditsRestartArea;
-  if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
-    _creditsClick(); // Volver a leer → reinicia desde la primera hoja
-  }
+  // Los enlaces y "Volver a leer" los gestionan elementos HTML reales.
+  // Este handler ya no necesita hacer nada — se mantiene por si acaso.
 }
 
 // Crear/actualizar los elementos <a> superpuestos sobre las zonas clicables de créditos.
 // Se posicionan en coordenadas de pantalla usando getBoundingClientRect del canvas.
 function _updateCreditsLinks() {
-  if (!RS.canvas || !RS.creditsLinkArea) return;
-  const rect   = RS.canvas.getBoundingClientRect();
-  const scaleX = rect.width  / RS.canvas.width;
-  const scaleY = rect.height / RS.canvas.height;
+  if (!RS.canvas) return;
+  const rect = RS.canvas.getBoundingClientRect();
+  const { pw, ph } = _panelDims(RS.idx);
+  const isHoriz = pw > ph;
+  const scaleX = rect.width  / pw;
+  const scaleY = rect.height / ph;
 
-  // Enlace principal: "Visita más obras del autor"
+  // Calcular posición del enlace basándose en las mismas proporciones que _renderCredits
+  // sin depender de measureText (que puede fallar con fuentes no cargadas)
+  let linkX, linkY, linkW, linkH, restartX, restartY, restartW, restartH;
+
+  if (isHoriz) {
+    const fRef    = ph;
+    const leftW   = pw * 0.52;
+    const colGap  = pw * 0.04;
+    const rightW  = pw * 0.44;
+    const rightCX = leftW + colGap + rightW / 2;
+    const logoFS   = Math.round(fRef * 0.11);
+    const sloganFS = Math.round(fRef * 0.042);
+    const linkFS   = Math.round(fRef * 0.038);
+    const lineH    = ph * 0.09;
+    const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
+    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
+    const sloganY  = rightStartY + sloganFS * 2;
+    const lY       = sloganY + sloganFS * 3;
+    const rY       = lY + linkFS * 2.2;
+    linkW    = rightW * 0.8; linkH = linkFS * 2.5;
+    linkX    = rightCX - linkW / 2; linkY = lY - linkFS * 1.2;
+    restartW = rightW * 0.6; restartH = linkFS * 2.5;
+    restartX = rightCX - restartW / 2; restartY = rY - linkFS;
+  } else {
+    const fRef   = pw;
+    const cx     = pw / 2;
+    const logoFS   = Math.round(fRef * 0.11);
+    const sloganFS = Math.round(fRef * 0.042);
+    const linkFS   = Math.round(fRef * 0.038);
+    const lineH    = ph * 0.09;
+    // authorY aproximado (sin texto social)
+    const authorY  = ph * 0.11;
+    const logoY    = authorY + lineH * 1.3;
+    const sloganY  = logoY + sloganFS * 2;
+    const lY       = sloganY + sloganFS * 3;
+    const rY       = lY + linkFS * 2.2;
+    linkW    = pw * 0.75; linkH = linkFS * 2.5;
+    linkX    = cx - linkW / 2; linkY = lY - linkFS * 1.2;
+    restartW = pw * 0.55; restartH = linkFS * 2.5;
+    restartX = cx - restartW / 2; restartY = rY - linkFS;
+  }
+
+  // Convertir coordenadas canvas → pantalla
+  const toScreen = (x, y, w, h) => ({
+    left:   Math.round(rect.left + x * scaleX),
+    top:    Math.round(rect.top  + y * scaleY),
+    width:  Math.round(w * scaleX),
+    height: Math.round(h * scaleY),
+  });
+
+  // Enlace externo: "Visita más obras del autor"
   let linkEl = document.getElementById('_creditsLinkEl');
   if (!linkEl) {
     linkEl = document.createElement('a');
-    linkEl.id     = '_creditsLinkEl';
+    linkEl.id  = '_creditsLinkEl';
     linkEl.target = '_blank';
     linkEl.rel    = 'noopener noreferrer';
-    linkEl.style.cssText = 'position:fixed;z-index:500;display:block;cursor:pointer;' +
-      'background:transparent;border:none;text-decoration:none;';
-    document.getElementById('readerApp').appendChild(linkEl);
+    linkEl.style.cssText = 'position:fixed;z-index:9000;display:block;cursor:pointer;';
+    document.body.appendChild(linkEl);
   }
   linkEl.href = 'https://sargentopez.github.io/ComiXou/index.html';
-  const la = RS.creditsLinkArea;
-  linkEl.style.left   = Math.round(rect.left + la.x * scaleX) + 'px';
-  linkEl.style.top    = Math.round(rect.top  + la.y * scaleY) + 'px';
-  linkEl.style.width  = Math.round(la.w * scaleX) + 'px';
-  linkEl.style.height = Math.round(la.h * scaleY) + 'px';
+  const ls = toScreen(linkX, linkY, linkW, linkH);
+  linkEl.style.left = ls.left + 'px'; linkEl.style.top = ls.top + 'px';
+  linkEl.style.width = ls.width + 'px'; linkEl.style.height = ls.height + 'px';
   linkEl.style.display = 'block';
+
+  // Botón "Volver a leer" — también como elemento clicable real
+  let restartEl = document.getElementById('_creditsRestartEl');
+  if (!restartEl) {
+    restartEl = document.createElement('button');
+    restartEl.id = '_creditsRestartEl';
+    restartEl.style.cssText = 'position:fixed;z-index:9000;display:block;cursor:pointer;' +
+      'background:transparent;border:none;padding:0;';
+    restartEl.addEventListener('click', e => { e.stopPropagation(); _creditsClick(); });
+    restartEl.addEventListener('touchend', e => { e.stopPropagation(); _creditsClick(); }, { passive: false });
+    document.body.appendChild(restartEl);
+  }
+  const rs = toScreen(restartX, restartY, restartW, restartH);
+  restartEl.style.left = rs.left + 'px'; restartEl.style.top = rs.top + 'px';
+  restartEl.style.width = rs.width + 'px'; restartEl.style.height = rs.height + 'px';
+  restartEl.style.display = 'block';
 }
 
 function _hideCreditsLinks() {
-  const el = document.getElementById('_creditsLinkEl');
-  if (el) el.style.display = 'none';
+  const a = document.getElementById('_creditsLinkEl');
+  if (a) a.style.display = 'none';
+  const b = document.getElementById('_creditsRestartEl');
+  if (b) b.style.display = 'none';
 }
 
 
