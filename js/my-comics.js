@@ -383,24 +383,30 @@ function _mcRenderList() {
             genre:   work.genre    || comicToEdit.genre,
             navMode: work.nav_mode || comicToEdit.navMode,
           });
-          // Sincronizar biblioteca del proyecto desde la nube
+          // Sincronizar biblioteca: la nube manda — reemplazar biblioteca local con la de la nube.
+          // Primero preservar la biblioteca local actual como backup, igual que hacemos con localEditorData.
           const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
           const _sbId = comicToEdit.supabaseId || comicToEdit.id;
           if (_user && _user.id && _sbId && typeof SupabaseClient.bibDownload === 'function') {
             try {
               const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
+              const _bibLocalKey = `cs_biblioteca_local_${comicToEdit.id}`;
+              // Guardar la biblioteca local actual como backup (solo si no existe ya un backup)
+              const _bibLocalExists = localStorage.getItem(_bibLocalKey);
+              if (!_bibLocalExists) {
+                const _bibCurrentRaw = localStorage.getItem(_bibKey);
+                if (_bibCurrentRaw) {
+                  try { localStorage.setItem(_bibLocalKey, _bibCurrentRaw); } catch(e) {}
+                }
+              }
+              // Descargar biblioteca de la nube y reemplazar ÍNTEGRAMENTE la local
               const cloudData = await SupabaseClient.bibDownload(_user.id, _sbId);
-
-              if (cloudData && cloudData.folders && cloudData.folders.length) {
-                // Merge: añadir a local lo que viene de la nube y no existe aún.
-                // Local es siempre preservado — nunca se sobreescribe con la nube.
-                let localData;
-                try { localData = JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) {}
-                if (!localData || !localData.folders) localData = { folders: [{ id: '__root__', name: 'General', items: [] }] };
-                const localAllIds = new Set(localData.folders.flatMap(f => f.items.map(i => i.id)));
-                const _bibIdbWrites = [];
-                cloudData.folders.forEach(cf => {
-                  const newItems = cf.items.filter(i => !localAllIds.has(i.id)).map(item => {
+              const _bibIdbWrites = [];
+              if (cloudData && cloudData.folders) {
+                // Procesar animaciones: guardar en IDB y limpiar apngSrc del JSON
+                const cleanFolders = cloudData.folders.map(cf => ({
+                  ...cf,
+                  items: cf.items.map(item => {
                     if (item.isGifAnim && item.apngSrc) {
                       const _bibIdbKey = 'bib_' + item.id;
                       if (window._sbAnimIdbSave) {
@@ -412,17 +418,14 @@ function _mcRenderList() {
                       return cleanItem;
                     }
                     return item;
-                  });
-                  const lf = localData.folders.find(f => f.id === cf.id);
-                  if (!lf) {
-                    // Carpeta no existe localmente — crearla con sus items
-                    localData.folders.push({ id: cf.id, name: cf.name, items: newItems });
-                  } else if (newItems.length) {
-                    lf.items.push(...newItems);
-                  }
-                });
+                  })
+                }));
                 if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
-                try { localStorage.setItem(_bibKey, JSON.stringify(localData)); } catch(e) {}
+                // Reemplazar la biblioteca local con la de la nube (no merge)
+                try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {}
+              } else {
+                // La nube no tiene biblioteca — limpiar la local para no mezclar datos
+                try { localStorage.removeItem(_bibKey); } catch(e) {}
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
@@ -432,30 +435,26 @@ function _mcRenderList() {
         }
       }
 
-      // Sincronizar biblioteca desde la nube cuando local no es más reciente
-      // Solo afecta a localStorage de biblioteca, no a layers ni editorData
+      // Cuando local es más nueva: no tocar la biblioteca.
+      // La biblioteca local (cs_biblioteca_{id}) ya tiene los datos correctos del dispositivo.
+      // Solo si NO hay datos locales de biblioteca descargamos la de la nube como punto de partida.
       if (!_needsDownload) {
-        // Si _needsDownload fue true, el bloque anterior ya sincronizó la biblioteca.
-        // Aquí solo sincronizamos cuando local es más reciente que la nube,
-        // pero solo para añadir items/carpetas que falten localmente — no reemplazar.
         const _bibUser = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
         const _bibSbId = comicToEdit.supabaseId || comicToEdit.id;
         if (_bibUser && _bibUser.id && _bibSbId && typeof SupabaseClient.bibDownload === 'function') {
           try {
             const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
-            const _bibLocal = (() => { try { return JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) { return null; } })();
-            const _bibHasAnim = _bibLocal && _bibLocal.folders && _bibLocal.folders.some(f => f.id === '__anim__' && f.items.length > 0);
-            if (!_bibHasAnim) {
-              // Faltan animaciones localmente — descargar solo para añadir lo que falta
-              // Local sigue siendo la fuente de verdad: solo añadimos, nunca reemplazamos
+            const _bibRaw = localStorage.getItem(_bibKey);
+            const _bibLocal = (() => { try { return JSON.parse(_bibRaw || 'null'); } catch(e) { return null; } })();
+            const _bibEmpty = !_bibLocal || !_bibLocal.folders || _bibLocal.folders.every(f => !f.items || f.items.length === 0);
+            if (_bibEmpty) {
+              // No hay biblioteca local — descargar la de la nube como punto de partida
               const _cloudBib = await SupabaseClient.bibDownload(_bibUser.id, _bibSbId);
-              if (_cloudBib && _cloudBib.folders && _cloudBib.folders.length) {
-                const _localBib = _bibLocal || { folders: [{ id: '__root__', name: 'General', items: [] }] };
-                const _localIds = new Set(_localBib.folders.flatMap(f => f.items.map(i => i.id)));
+              if (_cloudBib && _cloudBib.folders) {
                 const _bibIdbW = [];
-                _cloudBib.folders.forEach(cf => {
-                  // Solo añadir items que no existen localmente
-                  const newItems = cf.items.filter(i => !_localIds.has(i.id)).map(item => {
+                const cleanFolders = _cloudBib.folders.map(cf => ({
+                  ...cf,
+                  items: cf.items.map(item => {
                     if (item.isGifAnim && item.apngSrc) {
                       const _k = 'bib_' + item.id;
                       if (window._sbAnimIdbSave) _bibIdbW.push(window._sbAnimIdbSave(_k, item.apngSrc).catch(() => {}));
@@ -463,19 +462,13 @@ function _mcRenderList() {
                       delete c.apngSrc; c._apngIdbKey = _k; return c;
                     }
                     return item;
-                  });
-                  const lf = _localBib.folders.find(f => f.id === cf.id);
-                  if (!lf) {
-                    // Carpeta no existe localmente — crearla con sus items
-                    _localBib.folders.push({ id: cf.id, name: cf.name, items: newItems });
-                  } else if (newItems.length) {
-                    lf.items.push(...newItems);
-                  }
-                });
+                  })
+                }));
                 if (_bibIdbW.length) await Promise.all(_bibIdbW);
-                try { localStorage.setItem(_bibKey, JSON.stringify(_localBib)); } catch(e) {}
+                try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {}
               }
             }
+            // Si hay biblioteca local → no tocar nada (la versión local es la canónica)
           } catch(e) { console.warn('bibDownload:', e); }
         }
       }

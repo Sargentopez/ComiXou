@@ -12553,6 +12553,19 @@ async function edSaveProject(_keepOverlay){
 
   _edSaveOverlayUpdate('Serializando capas…');
   const _savedAt = new Date().toISOString();
+  // Al guardar localmente: restaurar la biblioteca local si existe un backup previo a la apertura de nube.
+  // cs_biblioteca_local_{id} se crea en my-comics.js cuando se abre una obra desde la nube.
+  // Al guardar localmente el usuario confirma que quiere la versión local, incluyendo su biblioteca.
+  if (edProjectId) {
+    const _bibLocalBackupKey = `cs_biblioteca_local_${edProjectId}`;
+    const _bibBackup = localStorage.getItem(_bibLocalBackupKey);
+    if (_bibBackup) {
+      try {
+        localStorage.setItem(`cs_biblioteca_${edProjectId}`, _bibBackup);
+        localStorage.removeItem(_bibLocalBackupKey);
+      } catch(_e) {}
+    }
+  }
   await ComicStore.save({
     ...existing,
     id:edProjectId,
