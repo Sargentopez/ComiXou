@@ -2328,7 +2328,7 @@ function _edLayersSnapshot(){
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadius: l.cornerRadius||0, locked:l.locked||false,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
-    if(l.type === 'line')   return { type:'line', points:l.points.slice(),
+    if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
       grouped: l.grouped||false,
@@ -7753,6 +7753,9 @@ function _edShapeApplyHistory(snapshot){
   // T1: restaurar _fusionId para que el historial vectorial sea coherente
   if(d._fusionId !== undefined){ la._fusionId = d._fusionId; }
   else { delete la._fusionId; } // snapshot sin _fusionId → objeto ya no es miembro de fusión
+  // Restaurar flag de unión y estilos por contorno
+  if(d.grouped !== undefined) la.grouped = d.grouped; else delete la.grouped;
+  if(d.groupedStyles) la.groupedStyles = d.groupedStyles.map(s=>({...s})); else delete la.groupedStyles;
   if(d.closed       !== undefined) la.closed      = d.closed;
   if(d.cornerRadius !== undefined) la.cornerRadius= d.cornerRadius;
   la.cornerRadii = d.cornerRadii
@@ -13146,7 +13149,7 @@ function edSerLayer(l){
   if(l.type==='line'){
     const _cr=l.cornerRadii||{};
     const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);
-    const _lobj={type:'line', points:l.points.slice(),
+    const _lobj={type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
       _fromEllipse:l._fromEllipse||false,
@@ -13155,6 +13158,9 @@ function edSerLayer(l){
     if(l.groupId)_lobj.groupId=l.groupId;
     if(l.locked)_lobj.locked=true;
     if(l._fusionId)_lobj._fusionId=l._fusionId; // T1: preservar en historial vectorial
+    // Objeto unido (⊕ Unir): preservar flag y estilos individuales por contorno
+    if(l.grouped) _lobj.grouped=true;
+    if(l.groupedStyles) _lobj.groupedStyles=l.groupedStyles.map(s=>({...s}));
     if(_hasR){
       try{
         const _pw=edPageW(),_ph=edPageH();
@@ -13252,7 +13258,7 @@ function edDeserLayer(d, pageOrientation){
   }
   if(d.type==='line'){
     const l=new LineLayer();
-    l.points=d.points||[]; l.closed=d.closed||false;
+    l.points=(d.points||[]).map(p=>p?{...p}:null); l.closed=d.closed||false;
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
     if(d._fromEllipse) l._fromEllipse=true;
@@ -13262,6 +13268,9 @@ function edDeserLayer(d, pageOrientation){
     else l._updateBbox();
     if(d.groupId) l.groupId=d.groupId;
     if(d.locked) l.locked=true;
+    // Objeto unido (⊕ Unir): restaurar flag y estilos individuales por contorno
+    if(d.grouped) l.grouped=true;
+    if(d.groupedStyles) l.groupedStyles=d.groupedStyles.map(s=>({...s}));
     return l;
   }
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
