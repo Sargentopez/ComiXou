@@ -483,49 +483,99 @@ function _mcRenderList() {
         appAlert('No tienes permiso para publicar esta obra.');
         return;
       }
-      // Cargar comic completo con editorData desde OPFS para comparar fechas y subir layers
-      const _comicFull = ComicStore.getByIdFull
-        ? (await ComicStore.getByIdFull(comic.id)) || comic
-        : comic;
-      // Comparar versión local vs nube
-      // localSavedAt: cuándo se guardó en este dispositivo
-      // updatedAt: cuándo se subió a la nube (lo actualiza saveDraft/edCloudSave)
-      const _localAt = _comicFull.localSavedAt || '';
-      const _cloudAt = _comicFull.updatedAt    || '';
-      const _localNewer = _localAt && _cloudAt && _localAt > _cloudAt;
-      const _neverUploaded = !_comicFull.supabaseId;
+      const _neverUploaded = !comic.supabaseId;
       if (_neverUploaded) {
-        // Sin supabaseId: nunca se subió — mostrar mensaje
         appAlert('La obra debe estar guardada en la nube antes de publicarse.\nÁbrela en el editor y pulsa el botón ☁️ Guardar en nube.');
         return;
       }
-      if (!_comicFull.panelCount && (!_comicFull.panels || !_comicFull.panels.length)) {
-        appAlert('Añade al menos una página antes de publicar.');
-        return;
-      }
-      ComicStore.save({ ...comic, published: false, approved: false, pendingReview: true });
-      _mcRenderList();
-      requestAnimationFrame(() => {
-        const row  = document.querySelector(`.comic-row[data-id="${id}"]`);
-        const list = document.getElementById('myComicsList');
-        if (!row || !list) return;
-        const pt   = parseInt(list.style.paddingTop) || 0;
-        const rowTop = row.getBoundingClientRect().top + window.scrollY - pt;
-        window.scrollTo({ top: rowTop, behavior: 'smooth' });
-      });
+      // Comparar fechas para saber qué versión es más nueva
+      const _comicFull = ComicStore.getByIdFull
+        ? (await ComicStore.getByIdFull(comic.id)) || comic
+        : comic;
+      const _localAt   = _comicFull.localSavedAt || '';
+      const _cloudAt   = _comicFull.updatedAt    || '';
+      const _localNewer = _localAt && _cloudAt && _localAt > _cloudAt;
+      // Determinar qué editorData publicar
+      // Si la nube es más nueva (o no hay editorData local válido): descargar de la nube
+      const _hasLocalData = (_comicFull.editorData?.pages?.length > 0);
+      const _useCloud = !_hasLocalData || (!_localNewer && _comicFull.supabaseId);
       if (typeof SupabaseClient !== 'undefined') {
         _mcSubmitOverlayShow();
         try {
-          // submitForReview siempre sube los layers completos desde editorData
-          // Si la local es más nueva, se envía la versión local (que es la más reciente)
-          // No hace falta saveDraft previo — submitForReview ya llama _uploadPanels
-          await SupabaseClient.submitForReview(_comicFull);
-          _mcSubmitOverlayHide();
-          if (_localNewer) {
-            _mcToast('Guardado en nube y enviada a revisión ✓');
+          let _comicToPublish = _comicFull;
+          if (_useCloud) {
+            // Descargar la versión de la nube para asegurarnos de publicar la más reciente
+            _mcToast('⏳ Descargando versión de la nube…');
+            const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(_comicFull.supabaseId);
+            // Procesar animaciones igual que al abrir para editar
+            const _animIdbSave = (key, data) =>
+              window._sbAnimIdbSave ? window._sbAnimIdbSave(key, data).catch(() => {}) : Promise.resolve();
+            const _idbWrites = [];
+            const _edataClean = {
+              ...editorData,
+              pages: (editorData.pages || []).map((pg, pi) => ({
+                ...pg,
+                layers: (pg.layers || []).map((l, li) => {
+                  if (l._apngSrc) {
+                    const _idbKey = l._pngFramesKey || (_comicFull.id + '_pub_' + pi + '_' + li);
+                    _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
+                    const lClean = Object.assign({}, l);
+                    delete lClean._apngSrc; delete lClean._animFrames;
+                    delete lClean._animReady; delete lClean._oc;
+                    lClean._pngFramesKey = _idbKey;
+                    return lClean;
+                  }
+                  if (l._pngFrames) {
+                    const _idbKey = _comicFull.id + '_pub_' + pi + '_' + li;
+                    _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
+                    const { _pngFrames, ...lClean } = l;
+                    return { ...lClean, _pngFramesKey: _idbKey };
+                  }
+                  return l;
+                }),
+              })),
+            };
+            if (_idbWrites.length) await Promise.all(_idbWrites);
+            // Construir el comic a publicar con los datos de la nube
+            // panels[] debe derivarse SIEMPRE de editorData.pages para evitar desajustes
+            const _cloudPanels = _edataClean.pages.map((p, i) => ({
+              dataUrl:     null,
+              orientation: (p.orientation === 'horizontal' || p.orientation === 'h') ? 'h' : 'v',
+              textMode:    p.textMode || 'sequential',
+              texts:       p.texts || [],
+            }));
+            _comicToPublish = {
+              ..._comicFull,
+              editorData: _edataClean,
+              panels: _cloudPanels,
+              title:   work.title    || _comicFull.title,
+              genre:   work.genre    || _comicFull.genre,
+              navMode: work.nav_mode || _comicFull.navMode,
+            };
           } else {
-            _mcToast('Enviada a revisión ✓');
+            // Local es más nueva — publicar la versión local
+            // panels[] debe derivarse de editorData.pages para evitar desajustes
+            const _localPanels = (_comicFull.editorData?.pages || []).map((p, i) => ({
+              dataUrl:     (_comicFull.panels?.[i]?.dataUrl) || null,
+              orientation: (p.orientation === 'horizontal' || p.orientation === 'h') ? 'h' : 'v',
+              textMode:    p.textMode || 'sequential',
+              texts:       p.texts || [],
+            }));
+            _comicToPublish = { ..._comicFull, panels: _localPanels };
           }
+          ComicStore.save({ ...comic, published: false, approved: false, pendingReview: true });
+          _mcRenderList();
+          requestAnimationFrame(() => {
+            const row  = document.querySelector(`.comic-row[data-id="${id}"]`);
+            const list = document.getElementById('myComicsList');
+            if (!row || !list) return;
+            const pt   = parseInt(list.style.paddingTop) || 0;
+            const rowTop = row.getBoundingClientRect().top + window.scrollY - pt;
+            window.scrollTo({ top: rowTop, behavior: 'smooth' });
+          });
+          await SupabaseClient.submitForReview(_comicToPublish);
+          _mcSubmitOverlayHide();
+          _mcToast('Enviada a revisión ✓');
         } catch(err) {
           _mcSubmitOverlayHide();
           ComicStore.save({ ...comic, pendingReview: false });

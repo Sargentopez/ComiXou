@@ -465,8 +465,10 @@ const SupabaseClient = (() => {
       social:         comic.social     || '',
       panel_count:    comic.panels?.length || 0,
       rules:          JSON.stringify(comic.editorData?._rules || []),
-      published:      comic.approved   ? true  : false,
-      pending_review: comic.pendingReview ? true : false,
+      // Guardar en nube siempre vuelve la obra a borrador.
+      // El admin deberá aprobarla de nuevo si se vuelve a publicar.
+      published:      false,
+      pending_review: false,
       updated_at:     new Date().toISOString(),
     });
     await _uploadPanels(comic);

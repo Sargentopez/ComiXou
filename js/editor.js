@@ -12425,10 +12425,10 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
-    // Si la obra estaba publicada o en revisión, guardar en nube la vuelve a borrador.
-    // El autor deberá volver a solicitar publicación.
+    // Guardar en nube siempre vuelve la obra a borrador (published=false en Supabase).
+    // El admin deberá aprobarla de nuevo. Limpiar estado local incondicionalmente.
     const _comicAfter = ComicStore.getById(edProjectId);
-    if (_comicAfter && (_comicAfter.approved || _comicAfter.pendingReview)) {
+    if (_comicAfter) {
       ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
