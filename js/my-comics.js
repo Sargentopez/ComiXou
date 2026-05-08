@@ -392,42 +392,43 @@ function _mcRenderList() {
               const cloudData = await SupabaseClient.bibDownload(_user.id, _sbId);
 
               if (cloudData && cloudData.folders && cloudData.folders.length) {
+                // La nube es la fuente de verdad para la biblioteca.
+                // Construir la estructura desde la nube, añadiendo al final
+                // cualquier item local que no esté en la nube (solo por seguridad).
                 let localData;
                 try { localData = JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) {}
-                if (!localData || !localData.folders) localData = { folders: [{ id: '__root__', name: 'General', items: [] }] };
-                const localAllIds = new Set(localData.folders.flatMap(f => f.items.map(i => i.id)));
-                // Procesar items nuevos: guardar apngSrc en IDB, no en localStorage
+                const cloudAllIds = new Set(cloudData.folders.flatMap(f => f.items.map(i => i.id)));
                 const _bibIdbWrites = [];
-                cloudData.folders.forEach(cf => {
-                  const lf = localData.folders.find(f => f.id === cf.id);
-                  const newItems = cf.items.filter(i => !localAllIds.has(i.id)).map(item => {
+                // Procesar todos los items de la nube: guardar apngSrc en IDB
+                const mergedData = { folders: cloudData.folders.map(cf => ({
+                  id: cf.id, name: cf.name,
+                  items: cf.items.map(item => {
                     if (item.isGifAnim && item.apngSrc) {
-                      // Guardar APNG en IDB por id del item
                       const _bibIdbKey = 'bib_' + item.id;
                       if (window._sbAnimIdbSave) {
-                        _bibIdbWrites.push(
-                          window._sbAnimIdbSave(_bibIdbKey, item.apngSrc).catch(() => {})
-                        );
+                        _bibIdbWrites.push(window._sbAnimIdbSave(_bibIdbKey, item.apngSrc).catch(() => {}));
                       }
-                      // Sustituir apngSrc por la clave IDB en el item
                       const cleanItem = Object.assign({}, item);
                       delete cleanItem.apngSrc;
                       cleanItem._apngIdbKey = _bibIdbKey;
                       return cleanItem;
                     }
                     return item;
+                  })
+                }))};
+                // Añadir items locales que no están en la nube (preservar trabajo offline)
+                if (localData && localData.folders) {
+                  localData.folders.forEach(lf => {
+                    const onlyLocal = lf.items.filter(i => !cloudAllIds.has(i.id));
+                    if (onlyLocal.length) {
+                      const mf = mergedData.folders.find(f => f.id === lf.id);
+                      if (mf) mf.items.push(...onlyLocal);
+                      else mergedData.folders.push({ id: lf.id, name: lf.name, items: onlyLocal });
+                    }
                   });
-                  // Añadir carpeta si no existe localmente, aunque no haya items nuevos
-                  // (evita que carpetas como Animaciones desaparezcan si todos sus items ya están en local)
-                  if (!lf) {
-                    localData.folders.push({ id: cf.id, name: cf.name, items: newItems });
-                  } else if (newItems.length) {
-                    lf.items.push(...newItems);
-                  }
-                });
-                // Esperar IDB antes de guardar en localStorage
+                }
                 if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
-                try { localStorage.setItem(_bibKey, JSON.stringify(localData)); } catch(e) {}
+                try { localStorage.setItem(_bibKey, JSON.stringify(mergedData)); } catch(e) {}
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
@@ -437,9 +438,12 @@ function _mcRenderList() {
         }
       }
 
-      // Sincronizar biblioteca siempre — independiente de _needsDownload
+      // Sincronizar biblioteca desde la nube cuando local no es más reciente
       // Solo afecta a localStorage de biblioteca, no a layers ni editorData
-      {
+      if (!_needsDownload) {
+        // Si _needsDownload fue true, el bloque anterior ya sincronizó la biblioteca.
+        // Aquí solo sincronizamos cuando local es más reciente que la nube,
+        // pero solo para añadir items/carpetas que falten localmente — no reemplazar.
         const _bibUser = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
         const _bibSbId = comicToEdit.supabaseId || comicToEdit.id;
         if (_bibUser && _bibUser.id && _bibSbId && typeof SupabaseClient.bibDownload === 'function') {
@@ -448,13 +452,15 @@ function _mcRenderList() {
             const _bibLocal = (() => { try { return JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) { return null; } })();
             const _bibHasAnim = _bibLocal && _bibLocal.folders && _bibLocal.folders.some(f => f.id === '__anim__' && f.items.length > 0);
             if (!_bibHasAnim) {
+              // Faltan animaciones localmente — descargar solo para añadir lo que falta
+              // Local sigue siendo la fuente de verdad: solo añadimos, nunca reemplazamos
               const _cloudBib = await SupabaseClient.bibDownload(_bibUser.id, _bibSbId);
               if (_cloudBib && _cloudBib.folders && _cloudBib.folders.length) {
                 const _localBib = _bibLocal || { folders: [{ id: '__root__', name: 'General', items: [] }] };
                 const _localIds = new Set(_localBib.folders.flatMap(f => f.items.map(i => i.id)));
                 const _bibIdbW = [];
                 _cloudBib.folders.forEach(cf => {
-                  const lf = _localBib.folders.find(f => f.id === cf.id);
+                  // Solo añadir items que no existen localmente
                   const newItems = cf.items.filter(i => !_localIds.has(i.id)).map(item => {
                     if (item.isGifAnim && item.apngSrc) {
                       const _k = 'bib_' + item.id;
@@ -464,8 +470,9 @@ function _mcRenderList() {
                     }
                     return item;
                   });
-                  // Añadir carpeta si no existe localmente, aunque no haya items nuevos
+                  const lf = _localBib.folders.find(f => f.id === cf.id);
                   if (!lf) {
+                    // Carpeta no existe localmente — crearla con sus items
                     _localBib.folders.push({ id: cf.id, name: cf.name, items: newItems });
                   } else if (newItems.length) {
                     lf.items.push(...newItems);
