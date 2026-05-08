@@ -392,17 +392,15 @@ function _mcRenderList() {
               const cloudData = await SupabaseClient.bibDownload(_user.id, _sbId);
 
               if (cloudData && cloudData.folders && cloudData.folders.length) {
-                // La nube es la fuente de verdad para la biblioteca.
-                // Construir la estructura desde la nube, añadiendo al final
-                // cualquier item local que no esté en la nube (solo por seguridad).
+                // Merge: añadir a local lo que viene de la nube y no existe aún.
+                // Local es siempre preservado — nunca se sobreescribe con la nube.
                 let localData;
                 try { localData = JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) {}
-                const cloudAllIds = new Set(cloudData.folders.flatMap(f => f.items.map(i => i.id)));
+                if (!localData || !localData.folders) localData = { folders: [{ id: '__root__', name: 'General', items: [] }] };
+                const localAllIds = new Set(localData.folders.flatMap(f => f.items.map(i => i.id)));
                 const _bibIdbWrites = [];
-                // Procesar todos los items de la nube: guardar apngSrc en IDB
-                const mergedData = { folders: cloudData.folders.map(cf => ({
-                  id: cf.id, name: cf.name,
-                  items: cf.items.map(item => {
+                cloudData.folders.forEach(cf => {
+                  const newItems = cf.items.filter(i => !localAllIds.has(i.id)).map(item => {
                     if (item.isGifAnim && item.apngSrc) {
                       const _bibIdbKey = 'bib_' + item.id;
                       if (window._sbAnimIdbSave) {
@@ -414,21 +412,17 @@ function _mcRenderList() {
                       return cleanItem;
                     }
                     return item;
-                  })
-                }))};
-                // Añadir items locales que no están en la nube (preservar trabajo offline)
-                if (localData && localData.folders) {
-                  localData.folders.forEach(lf => {
-                    const onlyLocal = lf.items.filter(i => !cloudAllIds.has(i.id));
-                    if (onlyLocal.length) {
-                      const mf = mergedData.folders.find(f => f.id === lf.id);
-                      if (mf) mf.items.push(...onlyLocal);
-                      else mergedData.folders.push({ id: lf.id, name: lf.name, items: onlyLocal });
-                    }
                   });
-                }
+                  const lf = localData.folders.find(f => f.id === cf.id);
+                  if (!lf) {
+                    // Carpeta no existe localmente — crearla con sus items
+                    localData.folders.push({ id: cf.id, name: cf.name, items: newItems });
+                  } else if (newItems.length) {
+                    lf.items.push(...newItems);
+                  }
+                });
                 if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
-                try { localStorage.setItem(_bibKey, JSON.stringify(mergedData)); } catch(e) {}
+                try { localStorage.setItem(_bibKey, JSON.stringify(localData)); } catch(e) {}
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
