@@ -2603,53 +2603,50 @@ function _handleCreditsClick(clientX, clientY) {
 // Crear/actualizar los elementos <a> superpuestos sobre las zonas clicables de créditos.
 // Se posicionan en coordenadas de pantalla usando getBoundingClientRect del canvas.
 function _showCreditsOverlay() {
-  // Eliminar overlay previo si existe
-  const prev = document.getElementById('_creditsOverlay');
-  if (prev) prev.remove();
+  _hideCreditsOverlay();
+  if (!RS.canvas || !RS.creditsLinkArea || !RS.creditsRestartArea) return;
 
-  const ov = document.createElement('div');
-  ov.id = '_creditsOverlay';
-  ov.style.cssText = [
-    'position:fixed', 'inset:0', 'z-index:9999',
-    'display:flex', 'flex-direction:column',
-    'align-items:center', 'justify-content:flex-end',
-    'padding-bottom:12%', 'pointer-events:none',
-  ].join(';');
+  const rect   = RS.canvas.getBoundingClientRect();
+  const { pw, ph } = _panelDims(RS.idx);
+  const sx = rect.width  / pw;
+  const sy = rect.height / ph;
+  const toR = a => ({
+    left:   rect.left + a.x * sx,
+    top:    rect.top  + a.y * sy,
+    width:  a.w * sx,
+    height: a.h * sy,
+  });
 
-  // Enlace a ComiXou
+  const la = toR(RS.creditsLinkArea);
+  const ra = toR(RS.creditsRestartArea);
+
+  // <a> invisible exactamente sobre el texto "Visita más obras del autor"
   const link = document.createElement('a');
+  link.id      = '_creditsOverlayLink';
   link.href    = 'https://sargentopez.github.io/ComiXou/index.html';
   link.target  = '_blank';
   link.rel     = 'noopener noreferrer';
-  link.textContent = '🔗 Visita más obras en ComiXou';
-  link.style.cssText = [
-    'pointer-events:all', 'cursor:pointer',
-    'color:#e63946', 'font-size:1rem', 'font-weight:700',
-    'text-decoration:underline', 'margin-bottom:12px',
-    'padding:10px 18px', 'border-radius:8px',
-    'background:rgba(255,255,255,0.92)',
-  ].join(';');
+  link.style.cssText = `position:fixed;z-index:9999;cursor:pointer;` +
+    `left:${la.left}px;top:${la.top}px;width:${la.width}px;height:${la.height}px;` +
+    `opacity:0;`;
+  document.body.appendChild(link);
 
-  // Botón volver a leer
-  const restart = document.createElement('button');
-  restart.textContent = '↩ Volver a leer';
-  restart.style.cssText = [
-    'pointer-events:all', 'cursor:pointer',
-    'color:#333', 'font-size:0.9rem', 'font-weight:600',
-    'border:2px solid #999', 'border-radius:8px',
-    'padding:8px 16px', 'background:rgba(255,255,255,0.92)',
-  ].join(';');
-  restart.addEventListener('click',    () => _creditsClick());
-  restart.addEventListener('touchend', e  => { e.preventDefault(); _creditsClick(); }, { passive: false });
-
-  ov.appendChild(link);
-  ov.appendChild(restart);
-  document.body.appendChild(ov);
+  // <button> invisible exactamente sobre el texto "↩ Volver a leer"
+  const btn = document.createElement('button');
+  btn.id = '_creditsOverlayBtn';
+  btn.style.cssText = `position:fixed;z-index:9999;cursor:pointer;border:none;background:none;padding:0;` +
+    `left:${ra.left}px;top:${ra.top}px;width:${ra.width}px;height:${ra.height}px;` +
+    `opacity:0;`;
+  btn.addEventListener('click',    () => _creditsClick());
+  btn.addEventListener('touchend', e  => { e.preventDefault(); _creditsClick(); }, { passive: false });
+  document.body.appendChild(btn);
 }
 
 function _hideCreditsOverlay() {
-  const ov = document.getElementById('_creditsOverlay');
-  if (ov) ov.remove();
+  const a = document.getElementById('_creditsOverlayLink');
+  if (a) a.remove();
+  const b = document.getElementById('_creditsOverlayBtn');
+  if (b) b.remove();
 }
 
 
