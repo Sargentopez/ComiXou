@@ -1347,6 +1347,26 @@ function startReader() {
   requestAnimationFrame(_positionBtns);
 
   RS.resizeFn = () => { _resizeCanvas(); _render(); if (RS.isCredits) _updateCreditsLinks(); };
+
+  // Swipe hacia atrás desde la pantalla de créditos — registrado en document
+  // (el canvas tiene pointer-events:none en créditos, así que no recibe touch)
+  let _csx = null, _csy = null;
+  document.addEventListener('touchstart', e => {
+    if (!RS.isCredits) { _csx = null; return; }
+    if (e.touches.length !== 1) { _csx = null; return; }
+    _csx = e.touches[0].clientX;
+    _csy = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', e => {
+    if (!RS.isCredits || _csx === null) { _csx = null; return; }
+    const ex = e.changedTouches[0].clientX;
+    const ey = e.changedTouches[0].clientY;
+    const dx = Math.abs(ex - _csx);
+    const dy = Math.abs(ey - _csy);
+    _csx = null;
+    // Solo swipe horizontal claro → goBack (tap simple lo gestiona el <a>/<button>)
+    if (dx > 30 && dx > dy * 1.5) goBack();
+  }, { passive: true });
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -2243,6 +2263,8 @@ function _showCredits() {
   // Mostrar todo con alpha=1 directamente — sin fade, sin timer, sin riesgo de cancelación
   RS.creditsAlpha = 1;
   RS.creditsShown = true;
+  // Desactivar pointer-events del canvas para que los elementos HTML encima reciban clicks
+  if (RS.canvas) RS.canvas.style.pointerEvents = 'none';
   const { pw, ph } = _panelDims(RS.idx);
   _renderCredits(pw, ph);
 }
@@ -2252,6 +2274,7 @@ function _resetCredits() {
   if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
   RS.creditsAlpha = 0;
   RS.isCredits    = false;
+  if (RS.canvas) RS.canvas.style.pointerEvents = '';
   _hideCreditsLinks();
 }
 
@@ -2259,6 +2282,7 @@ function _creditsClick() {
   if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
   if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
   RS.isCredits = false;
+  if (RS.canvas) RS.canvas.style.pointerEvents = '';
   _hideCreditsLinks();
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
@@ -2566,11 +2590,7 @@ function _setupControls() {
     if (dy > 40) return;
     // En créditos: si el gesto es un swipe horizontal claro → navegar atrás,
     // si es un tap (sin desplazamiento significativo) → detectar enlace/botón.
-    if (RS.isCredits) {
-      if (dx > 30 && dx > dy * 1.5) { goBack(); return; }
-      _handleCreditsClick(endX, endY);
-      return;
-    }
+    if (RS.isCredits) return; // créditos: gestionado por document listener y elementos HTML
     // Navegación normal
     if (_isBackSide(endX, endY)) goBack(); else advance();
   }, { passive: true, ...sig });
@@ -2603,91 +2623,47 @@ function _handleCreditsClick(clientX, clientY) {
 // Crear/actualizar los elementos <a> superpuestos sobre las zonas clicables de créditos.
 // Se posicionan en coordenadas de pantalla usando getBoundingClientRect del canvas.
 function _updateCreditsLinks() {
-  if (!RS.canvas) return;
-  const rect = RS.canvas.getBoundingClientRect();
+  if (!RS.canvas || !RS.creditsLinkArea || !RS.creditsRestartArea) return;
+  const rect  = RS.canvas.getBoundingClientRect();
   const { pw, ph } = _panelDims(RS.idx);
-  const isHoriz = pw > ph;
   const scaleX = rect.width  / pw;
   const scaleY = rect.height / ph;
 
-  // Calcular posición del enlace basándose en las mismas proporciones que _renderCredits
-  // sin depender de measureText (que puede fallar con fuentes no cargadas)
-  let linkX, linkY, linkW, linkH, restartX, restartY, restartW, restartH;
-
-  if (isHoriz) {
-    const fRef    = ph;
-    const leftW   = pw * 0.52;
-    const colGap  = pw * 0.04;
-    const rightW  = pw * 0.44;
-    const rightCX = leftW + colGap + rightW / 2;
-    const logoFS   = Math.round(fRef * 0.11);
-    const sloganFS = Math.round(fRef * 0.042);
-    const linkFS   = Math.round(fRef * 0.038);
-    const lineH    = ph * 0.09;
-    const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
-    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
-    const sloganY  = rightStartY + sloganFS * 2;
-    const lY       = sloganY + sloganFS * 3;
-    const rY       = lY + linkFS * 2.2;
-    linkW    = rightW * 0.8; linkH = linkFS * 2.5;
-    linkX    = rightCX - linkW / 2; linkY = lY - linkFS * 1.2;
-    restartW = rightW * 0.6; restartH = linkFS * 2.5;
-    restartX = rightCX - restartW / 2; restartY = rY - linkFS;
-  } else {
-    const fRef   = pw;
-    const cx     = pw / 2;
-    const logoFS   = Math.round(fRef * 0.11);
-    const sloganFS = Math.round(fRef * 0.042);
-    const linkFS   = Math.round(fRef * 0.038);
-    const lineH    = ph * 0.09;
-    // authorY aproximado (sin texto social)
-    const authorY  = ph * 0.11;
-    const logoY    = authorY + lineH * 1.3;
-    const sloganY  = logoY + sloganFS * 2;
-    const lY       = sloganY + sloganFS * 3;
-    const rY       = lY + linkFS * 2.2;
-    linkW    = pw * 0.75; linkH = linkFS * 2.5;
-    linkX    = cx - linkW / 2; linkY = lY - linkFS * 1.2;
-    restartW = pw * 0.55; restartH = linkFS * 2.5;
-    restartX = cx - restartW / 2; restartY = rY - linkFS;
-  }
-
-  // Convertir coordenadas canvas → pantalla
-  const toScreen = (x, y, w, h) => ({
-    left:   Math.round(rect.left + x * scaleX),
-    top:    Math.round(rect.top  + y * scaleY),
-    width:  Math.round(w * scaleX),
-    height: Math.round(h * scaleY),
+  const toScreen = (a) => ({
+    left:   Math.round(rect.left + a.x * scaleX),
+    top:    Math.round(rect.top  + a.y * scaleY),
+    width:  Math.max(10, Math.round(a.w * scaleX)),
+    height: Math.max(10, Math.round(a.h * scaleY)),
   });
 
-  // Enlace externo: "Visita más obras del autor"
+  // Enlace externo: usa las coordenadas exactas guardadas por _renderCredits
   let linkEl = document.getElementById('_creditsLinkEl');
   if (!linkEl) {
     linkEl = document.createElement('a');
-    linkEl.id  = '_creditsLinkEl';
+    linkEl.id     = '_creditsLinkEl';
     linkEl.target = '_blank';
     linkEl.rel    = 'noopener noreferrer';
     linkEl.style.cssText = 'position:fixed;z-index:9000;display:block;cursor:pointer;';
     document.body.appendChild(linkEl);
   }
   linkEl.href = 'https://sargentopez.github.io/ComiXou/index.html';
-  const ls = toScreen(linkX, linkY, linkW, linkH);
+  const ls = toScreen(RS.creditsLinkArea);
   linkEl.style.left = ls.left + 'px'; linkEl.style.top = ls.top + 'px';
   linkEl.style.width = ls.width + 'px'; linkEl.style.height = ls.height + 'px';
   linkEl.style.display = 'block';
 
-  // Botón "Volver a leer" — también como elemento clicable real
+  // Botón "Volver a leer"
   let restartEl = document.getElementById('_creditsRestartEl');
   if (!restartEl) {
     restartEl = document.createElement('button');
     restartEl.id = '_creditsRestartEl';
     restartEl.style.cssText = 'position:fixed;z-index:9000;display:block;cursor:pointer;' +
       'background:transparent;border:none;padding:0;';
-    restartEl.addEventListener('click', e => { e.stopPropagation(); _creditsClick(); });
-    restartEl.addEventListener('touchend', e => { e.stopPropagation(); _creditsClick(); }, { passive: false });
+    restartEl.addEventListener('click',    e => { e.stopPropagation(); _creditsClick(); });
+    restartEl.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive: false });
     document.body.appendChild(restartEl);
   }
-  const rs = toScreen(restartX, restartY, restartW, restartH);
+  const rs = toScreen(RS.creditsRestartArea);
   restartEl.style.left = rs.left + 'px'; restartEl.style.top = rs.top + 'px';
   restartEl.style.width = rs.width + 'px'; restartEl.style.height = rs.height + 'px';
   restartEl.style.display = 'block';
