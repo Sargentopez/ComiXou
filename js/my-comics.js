@@ -417,9 +417,12 @@ function _mcRenderList() {
                     }
                     return item;
                   });
-                  if (newItems.length) {
-                    if (lf) { lf.items.push(...newItems); }
-                    else { localData.folders.push({ id: cf.id, name: cf.name, items: newItems }); }
+                  // Añadir carpeta si no existe localmente, aunque no haya items nuevos
+                  // (evita que carpetas como Animaciones desaparezcan si todos sus items ya están en local)
+                  if (!lf) {
+                    localData.folders.push({ id: cf.id, name: cf.name, items: newItems });
+                  } else if (newItems.length) {
+                    lf.items.push(...newItems);
                   }
                 });
                 // Esperar IDB antes de guardar en localStorage
@@ -461,9 +464,11 @@ function _mcRenderList() {
                     }
                     return item;
                   });
-                  if (newItems.length) {
-                    if (lf) lf.items.push(...newItems);
-                    else _localBib.folders.push({ id: cf.id, name: cf.name, items: newItems });
+                  // Añadir carpeta si no existe localmente, aunque no haya items nuevos
+                  if (!lf) {
+                    _localBib.folders.push({ id: cf.id, name: cf.name, items: newItems });
+                  } else if (newItems.length) {
+                    lf.items.push(...newItems);
                   }
                 });
                 if (_bibIdbW.length) await Promise.all(_bibIdbW);

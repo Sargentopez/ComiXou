@@ -8,31 +8,55 @@
   if ('serviceWorker' in navigator) {
     const swPath = window.location.pathname.includes('/pages/')
       ? '../sw.js' : './sw.js';
-    navigator.serviceWorker.register(swPath)
-      .then(reg => {
-        // Si hay un SW esperando (nueva versión descargada), activarlo de inmediato
-        if (reg.waiting) {
-          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-        }
-        // Cuando se instala una nueva versión, forzar activación
-        reg.addEventListener('updatefound', () => {
-          const newWorker = reg.installing;
-          if (!newWorker) return;
-          newWorker.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // Nueva versión lista — recargar para usarla
-              newWorker.postMessage({ type: 'SKIP_WAITING' });
-            }
-          });
-        });
-      })
-      .catch(err => console.warn('SW error:', err));
 
     // Cuando el SW toma el control (tras SKIP_WAITING), recargar la página
+    // Registrar ANTES del register() para no perder el evento
     let refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!refreshing) { refreshing = true; window.location.reload(); }
     });
+
+    const _activateWaiting = (reg) => {
+      if (reg.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        return true;
+      }
+      return false;
+    };
+
+    navigator.serviceWorker.register(swPath)
+      .then(reg => {
+        // Si ya hay un SW esperando al cargar (PWA en background), activarlo
+        _activateWaiting(reg);
+
+        // Cuando se instala una nueva versión durante la sesión
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed') {
+              // Hay nuevo SW listo — activarlo inmediatamente
+              _activateWaiting(reg);
+            }
+          });
+        });
+
+        // Comprobar updates periódicamente (cada 60s) — cubre el caso de PWA
+        // que permanece en background y no detecta updatefound automáticamente
+        setInterval(() => {
+          reg.update().catch(() => {});
+        }, 60000);
+
+        // Comprobar también al volver al foco (usuario cambia de app y vuelve)
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            reg.update().catch(() => {});
+            // Si hay un SW esperando que no habíamos detectado, activarlo
+            setTimeout(() => _activateWaiting(reg), 500);
+          }
+        });
+      })
+      .catch(err => console.warn('SW error:', err));
   }
 
   const DISMISSED_KEY  = 'cx_install_dismissed';
