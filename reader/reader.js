@@ -788,19 +788,8 @@ const ED_PAGE_H = 780;
 const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
 
 // ── ESTADO ──────────────────────────────────────────────────
-// Imagen del logo precargada para _renderCredits (evita drawImage en blanco por timing)
+// Imagen del logo — se precarga completamente en preloadImages() antes de mostrar créditos
 let _logoImg = null;
-if (typeof _LOGO_DATA_URL !== 'undefined') {
-  _logoImg = new Image();
-  _logoImg.onload = () => {
-    // Si ya se está mostrando la pantalla de créditos, redibujar con el logo ya listo
-    if (RS.canvas && RS.panels[RS.idx]?.isCredits) {
-      const { pw, ph } = _panelDims(RS.idx);
-      _renderCredits(pw, ph);
-    }
-  };
-  _logoImg.src = _LOGO_DATA_URL;
-}
 
 const RS = {
   panels:       [],   // [{id, orientation, text_mode, data_url, texts:[]}]
@@ -821,6 +810,7 @@ const RS = {
 
 // ── ARRANQUE ─────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+
   const params = new URLSearchParams(window.location.search);
   const id     = params.get('id');
   const draft  = params.get('draft');   // token de borrador (obra no publicada)
@@ -1140,6 +1130,16 @@ async function preloadImages() {
   // Precargar todos los data base64 de capas image/draw/stroke de todos los paneles.
   // RS.panels[i].layerImgs[j] = Image | null para cada capa del panel i.
   RS.images = []; // legacy, ya no se usa para render pero se mantiene para no romper nada
+
+  // Precargar el logo aquí, garantizando que complete=true antes de mostrar créditos
+  if (typeof _LOGO_DATA_URL !== 'undefined') {
+    await new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => { _logoImg = img; resolve(); };
+      img.onerror = () => resolve(); // no bloquear si falla
+      img.src = _LOGO_DATA_URL;
+    });
+  }
 
   // Contar hojas con contenido real (excluir créditos y hojas sin capas)
   const totalPanels = RS.panels.filter(p => !p.isCredits && (p.layers||[]).length > 0).length;
@@ -2240,35 +2240,11 @@ function _startFade() {
 // Se llama desde _render() cuando el panel actual es el de créditos.
 // La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 function _showCredits() {
-  // Si ya se mostró antes: renderizar directamente con alpha=1, sin fade ni parpadeo
-  if (RS.creditsShown) {
-    RS.creditsAlpha = 1;
-    const { pw, ph } = _panelDims(RS.idx);
-    _renderCredits(pw, ph);
-    return;
-  }
-  // Evitar relanzar si ya está en curso
-  if (RS.creditsTimer || RS.creditsAlpha > 0) return;
-  RS.creditsAlpha = 0;
-
-  // Dibujar inmediatamente solo la parte estática (autor + social) sin parpadeo
-  // El logo/eslogan/enlace aparecerán con fade tras 1 segundo
-  const { pw: pw0, ph: ph0 } = _panelDims(RS.idx);
-  _renderCredits(pw0, ph0);
-
-  // Tras 1 segundo, iniciar fade-in del resto
-  RS.creditsTimer = setTimeout(() => {
-    const start = performance.now();
-    const dur   = 1200;
-    function fadeStep(now) {
-      RS.creditsAlpha = Math.min(1, (now - start) / dur);
-      const { pw, ph } = _panelDims(RS.idx);
-      _renderCredits(pw, ph);
-      if (RS.creditsAlpha < 1) RS.fadeRaf = requestAnimationFrame(fadeStep);
-      else { RS.fadeRaf = null; RS.creditsShown = true; }
-    }
-    RS.fadeRaf = requestAnimationFrame(fadeStep);
-  }, 1000);
+  // Mostrar todo con alpha=1 directamente — sin fade, sin timer, sin riesgo de cancelación
+  RS.creditsAlpha = 1;
+  RS.creditsShown = true;
+  const { pw, ph } = _panelDims(RS.idx);
+  _renderCredits(pw, ph);
 }
 
 function _resetCredits() {
