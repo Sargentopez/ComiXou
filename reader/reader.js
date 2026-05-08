@@ -1346,27 +1346,9 @@ function startReader() {
   _setupControls();
   requestAnimationFrame(_positionBtns);
 
-  RS.resizeFn = () => { _resizeCanvas(); _render(); if (RS.isCredits) _updateCreditsLinks(); };
+  RS.resizeFn = () => { _resizeCanvas(); _render(); };
 
-  // Swipe hacia atrás desde la pantalla de créditos — registrado en document
-  // (el canvas tiene pointer-events:none en créditos, así que no recibe touch)
-  let _csx = null, _csy = null;
-  document.addEventListener('touchstart', e => {
-    if (!RS.isCredits) { _csx = null; return; }
-    if (e.touches.length !== 1) { _csx = null; return; }
-    _csx = e.touches[0].clientX;
-    _csy = e.touches[0].clientY;
-  }, { passive: true });
-  document.addEventListener('touchend', e => {
-    if (!RS.isCredits || _csx === null) { _csx = null; return; }
-    const ex = e.changedTouches[0].clientX;
-    const ey = e.changedTouches[0].clientY;
-    const dx = Math.abs(ex - _csx);
-    const dy = Math.abs(ey - _csy);
-    _csx = null;
-    // Solo swipe horizontal claro → goBack (tap simple lo gestiona el <a>/<button>)
-    if (dx > 30 && dx > dy * 1.5) goBack();
-  }, { passive: true });
+
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -2260,13 +2242,11 @@ function _startFade() {
 // Se llama desde _render() cuando el panel actual es el de créditos.
 // La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 function _showCredits() {
-  // Mostrar todo con alpha=1 directamente — sin fade, sin timer, sin riesgo de cancelación
   RS.creditsAlpha = 1;
   RS.creditsShown = true;
-  // Desactivar pointer-events del canvas para que los elementos HTML encima reciban clicks
-  if (RS.canvas) RS.canvas.style.pointerEvents = 'none';
   const { pw, ph } = _panelDims(RS.idx);
   _renderCredits(pw, ph);
+  _showCreditsOverlay();
 }
 
 function _resetCredits() {
@@ -2274,16 +2254,14 @@ function _resetCredits() {
   if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
   RS.creditsAlpha = 0;
   RS.isCredits    = false;
-  if (RS.canvas) RS.canvas.style.pointerEvents = '';
-  _hideCreditsLinks();
+  _hideCreditsOverlay();
 }
 
 function _creditsClick() {
-  if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
-  if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
+  if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer); RS.creditsTimer = null; }
+  if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
   RS.isCredits = false;
-  if (RS.canvas) RS.canvas.style.pointerEvents = '';
-  _hideCreditsLinks();
+  _hideCreditsOverlay();
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
 }
@@ -2513,7 +2491,6 @@ function _renderCredits(pw, ph) {
     RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
   }
   // Posicionar el elemento <a> real sobre la zona del enlace
-  _updateCreditsLinks();
 }
 
 
@@ -2590,7 +2567,10 @@ function _setupControls() {
     if (dy > 40) return;
     // En créditos: si el gesto es un swipe horizontal claro → navegar atrás,
     // si es un tap (sin desplazamiento significativo) → detectar enlace/botón.
-    if (RS.isCredits) return; // créditos: gestionado por document listener y elementos HTML
+    if (RS.isCredits) {
+      if (dx > 30 && dx > dy * 1.5) goBack();
+      return;
+    }
     // Navegación normal
     if (_isBackSide(endX, endY)) goBack(); else advance();
   }, { passive: true, ...sig });
@@ -2622,58 +2602,54 @@ function _handleCreditsClick(clientX, clientY) {
 
 // Crear/actualizar los elementos <a> superpuestos sobre las zonas clicables de créditos.
 // Se posicionan en coordenadas de pantalla usando getBoundingClientRect del canvas.
-function _updateCreditsLinks() {
-  if (!RS.canvas || !RS.creditsLinkArea || !RS.creditsRestartArea) return;
-  const rect  = RS.canvas.getBoundingClientRect();
-  const { pw, ph } = _panelDims(RS.idx);
-  const scaleX = rect.width  / pw;
-  const scaleY = rect.height / ph;
+function _showCreditsOverlay() {
+  // Eliminar overlay previo si existe
+  const prev = document.getElementById('_creditsOverlay');
+  if (prev) prev.remove();
 
-  const toScreen = (a) => ({
-    left:   Math.round(rect.left + a.x * scaleX),
-    top:    Math.round(rect.top  + a.y * scaleY),
-    width:  Math.max(10, Math.round(a.w * scaleX)),
-    height: Math.max(10, Math.round(a.h * scaleY)),
-  });
+  const ov = document.createElement('div');
+  ov.id = '_creditsOverlay';
+  ov.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:9999',
+    'display:flex', 'flex-direction:column',
+    'align-items:center', 'justify-content:flex-end',
+    'padding-bottom:12%', 'pointer-events:none',
+  ].join(';');
 
-  // Enlace externo: usa las coordenadas exactas guardadas por _renderCredits
-  let linkEl = document.getElementById('_creditsLinkEl');
-  if (!linkEl) {
-    linkEl = document.createElement('a');
-    linkEl.id     = '_creditsLinkEl';
-    linkEl.target = '_blank';
-    linkEl.rel    = 'noopener noreferrer';
-    linkEl.style.cssText = 'position:fixed;z-index:9000;display:block;cursor:pointer;';
-    document.body.appendChild(linkEl);
-  }
-  linkEl.href = 'https://sargentopez.github.io/ComiXou/index.html';
-  const ls = toScreen(RS.creditsLinkArea);
-  linkEl.style.left = ls.left + 'px'; linkEl.style.top = ls.top + 'px';
-  linkEl.style.width = ls.width + 'px'; linkEl.style.height = ls.height + 'px';
-  linkEl.style.display = 'block';
+  // Enlace a ComiXou
+  const link = document.createElement('a');
+  link.href    = 'https://sargentopez.github.io/ComiXou/index.html';
+  link.target  = '_blank';
+  link.rel     = 'noopener noreferrer';
+  link.textContent = '🔗 Visita más obras en ComiXou';
+  link.style.cssText = [
+    'pointer-events:all', 'cursor:pointer',
+    'color:#e63946', 'font-size:1rem', 'font-weight:700',
+    'text-decoration:underline', 'margin-bottom:12px',
+    'padding:10px 18px', 'border-radius:8px',
+    'background:rgba(255,255,255,0.92)',
+  ].join(';');
 
-  // Botón "Volver a leer"
-  let restartEl = document.getElementById('_creditsRestartEl');
-  if (!restartEl) {
-    restartEl = document.createElement('button');
-    restartEl.id = '_creditsRestartEl';
-    restartEl.style.cssText = 'position:fixed;z-index:9000;display:block;cursor:pointer;' +
-      'background:transparent;border:none;padding:0;';
-    restartEl.addEventListener('click',    e => { e.stopPropagation(); _creditsClick(); });
-    restartEl.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive: false });
-    document.body.appendChild(restartEl);
-  }
-  const rs = toScreen(RS.creditsRestartArea);
-  restartEl.style.left = rs.left + 'px'; restartEl.style.top = rs.top + 'px';
-  restartEl.style.width = rs.width + 'px'; restartEl.style.height = rs.height + 'px';
-  restartEl.style.display = 'block';
+  // Botón volver a leer
+  const restart = document.createElement('button');
+  restart.textContent = '↩ Volver a leer';
+  restart.style.cssText = [
+    'pointer-events:all', 'cursor:pointer',
+    'color:#333', 'font-size:0.9rem', 'font-weight:600',
+    'border:2px solid #999', 'border-radius:8px',
+    'padding:8px 16px', 'background:rgba(255,255,255,0.92)',
+  ].join(';');
+  restart.addEventListener('click',    () => _creditsClick());
+  restart.addEventListener('touchend', e  => { e.preventDefault(); _creditsClick(); }, { passive: false });
+
+  ov.appendChild(link);
+  ov.appendChild(restart);
+  document.body.appendChild(ov);
 }
 
-function _hideCreditsLinks() {
-  const a = document.getElementById('_creditsLinkEl');
-  if (a) a.style.display = 'none';
-  const b = document.getElementById('_creditsRestartEl');
-  if (b) b.style.display = 'none';
+function _hideCreditsOverlay() {
+  const ov = document.getElementById('_creditsOverlay');
+  if (ov) ov.remove();
 }
 
 
