@@ -1842,9 +1842,8 @@ body.editor-page #appView {
   left: 0; right: 0;
   /* Altura máxima: 55% del viewport — suficiente para 3-4 filas sin tapar el canvas */
   max-height: 55vh;
-  /* Scroll vertical para ver más filas; cada fila tiene su propio scroll horizontal */
-  overflow-x: hidden;
-  overflow-y: auto;
+  /* overflow visible para que z-index entre filas funcione correctamente */
+  overflow: visible;
   background: var(--gray-100);
   border-bottom: 2px solid var(--gray-300);
   padding: 6px 0 6px 0;
@@ -1860,6 +1859,14 @@ body.editor-page #appView {
   /* Borde superior sutil para separar del menú */
   border-top: 1px solid var(--gray-300);
 }
+#gcpFramesBar-inner {
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 55vh;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-400) var(--gray-200);
+}
+#gcpFramesBar-inner::-webkit-scrollbar { width: 6px; }
 #gcpFramesBar::-webkit-scrollbar { width: 6px; }
 #gcpFramesBar::-webkit-scrollbar-track { background: var(--gray-200); }
 #gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-400); border-radius: 4px; }
@@ -1872,6 +1879,7 @@ body.editor-page #appView {
   border-bottom: 1px solid var(--gray-200);
   flex-shrink: 0;             /* la fila nunca se comprime — el bar hace scroll */
   height: 148px;              /* altura fija: suficiente para card completa */
+  position: relative;         /* necesario para z-index entre filas */
 }
 .gcp-layer-row:last-child { border-bottom: none; }
 

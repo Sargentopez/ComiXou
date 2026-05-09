@@ -17880,61 +17880,89 @@ function _gcpPreview() {
 
 // _gcpUpdateFramesBar — matriz 2D: una fila por objeto, columnas = frames globales.
 // Patrón idéntico al refreshLayerTimelines() del HTML de referencia.
-// Animación FLIP para reorden de capas en la barra de frames (igual que _lyAnimatedReorder)
+// Animación FLIP para reorden de capas en la barra de frames
+// Opera directamente sobre los nodos DOM existentes sin reconstruir
 function _gcpAnimatedSwap(idxA, idxB) {
   const bar = document.getElementById('gcpFramesBar');
-  if (!bar) {
-    // Sin animación: solo intercambiar y redibujar
+  const container = document.getElementById('gcpFramesBar-inner') || bar;
+  const rows = container ? Array.from(container.querySelectorAll('.gcp-layer-row')) : [];
+
+  if (!container || rows.length < 2) {
+    // Fallback sin animación
     [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
+    if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
+    else if (window._gcpSelIdx === idxB) window._gcpSelIdx = idxA;
     window._gcpDirty = true; _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
     return;
   }
 
-  // FIRST: capturar posición Y de todas las filas
-  const rows = bar.querySelectorAll('.gcp-layer-row');
-  const snapBefore = new Map();
-  rows.forEach((r, i) => snapBefore.set(i, r.getBoundingClientRect().top));
+  const rowA = rows[idxA];
+  const rowB = rows[idxB];
+  if (!rowA || !rowB) { _gcpUpdateFramesBar(); return; }
 
-  // Ejecutar el intercambio + reconstruir
+  // FIRST: capturar posición Y de cada fila
+  const topA = rowA.getBoundingClientRect().top;
+  const topB = rowB.getBoundingClientRect().top;
+
+  // Intercambiar en el DOM directamente (sin reconstruir)
+  const parentA = rowA.parentNode;
+  const afterA  = rowA.nextSibling;
+  const afterB  = rowB.nextSibling;
+
+  if (afterA === rowB) {
+    // Son adyacentes: A está justo antes de B
+    parentA.insertBefore(rowB, rowA);
+  } else if (afterB === rowA) {
+    // Son adyacentes: B está justo antes de A
+    parentA.insertBefore(rowA, rowB);
+  } else {
+    // No adyacentes: intercambio genérico
+    parentA.insertBefore(rowB, afterA);
+    parentA.insertBefore(rowA, afterB);
+  }
+
+  // Actualizar z-index de las dos filas intercambiadas
+  rowA.style.zIndex = String(idxB + 1);
+  rowB.style.zIndex = String(idxA + 1);
+
+  // LAST: posición nueva
+  const newTopA = rowA.getBoundingClientRect().top;
+  const newTopB = rowB.getBoundingClientRect().top;
+  const deltaA  = topA - newTopA;
+  const deltaB  = topB - newTopB;
+
+  // INVERT: colocar en posición anterior
+  rowA.style.transition = 'none';
+  rowA.style.transform  = 'translateY(' + deltaA + 'px)';
+  rowA.style.opacity    = '0.55';
+  rowB.style.transition = 'none';
+  rowB.style.transform  = 'translateY(' + deltaB + 'px)';
+  rowB.style.opacity    = '0.55';
+
+  // PLAY
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const DUR = 320;
+    const ease = 'transform ' + DUR + 'ms cubic-bezier(.4,0,.2,1), opacity ' + DUR + 'ms ease';
+    rowA.style.transition = ease;
+    rowA.style.transform  = 'translateY(0)';
+    rowA.style.opacity    = '1';
+    rowB.style.transition = ease;
+    rowB.style.transform  = 'translateY(0)';
+    rowB.style.opacity    = '1';
+    const cleanup = el => () => {
+      el.style.transition = ''; el.style.transform = ''; el.style.opacity = '';
+    };
+    rowA.addEventListener('transitionend', cleanup(rowA), { once: true });
+    rowB.addEventListener('transitionend', cleanup(rowB), { once: true });
+  }));
+
+  // Actualizar datos y redibujar (sin reconstruir la barra)
   [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
   if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
   else if (window._gcpSelIdx === idxB) window._gcpSelIdx = idxA;
   window._gcpDirty = true;
-  _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
-
-  // LAST: calcular deltas
-  const newRows = bar.querySelectorAll('.gcp-layer-row');
-  const toAnimate = [];
-  newRows.forEach((el, i) => {
-    if (!snapBefore.has(i)) return;
-    const delta = snapBefore.get(i) - el.getBoundingClientRect().top;
-    if (Math.abs(delta) < 2) return;
-    toAnimate.push({ el, delta, isMoved: i === idxB || i === idxA });
-  });
-
-  if (!toAnimate.length) return;
-
-  // INVERT: colocar en posición anterior sin transición
-  toAnimate.forEach(({ el, delta, isMoved }) => {
-    el.style.transition = 'none';
-    el.style.transform  = 'translateY(' + delta + 'px)';
-    el.style.opacity    = isMoved ? '0.5' : '0.72';
-  });
-
-  // PLAY: doble rAF para forzar paint
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    toAnimate.forEach(({ el, isMoved }) => {
-      const dur = isMoved ? 360 : 280;
-      el.style.transition = 'transform ' + dur + 'ms cubic-bezier(.4,0,.2,1), opacity ' + dur + 'ms ease';
-      el.style.transform  = 'translateY(0)';
-      el.style.opacity    = '1';
-      el.addEventListener('transitionend', () => {
-        el.style.transition = '';
-        el.style.transform  = '';
-        el.style.opacity    = '';
-      }, { once: true });
-    });
-  }));
+  _gcpPushHistory();
+  _gcpRedraw();
 }
 
 function _gcpUpdateFramesBar() {
@@ -17942,6 +17970,11 @@ function _gcpUpdateFramesBar() {
   if (!bar) return;
   if (bar.style.display !== 'flex') return;
   bar.innerHTML = '';
+
+  // Wrapper interno con scroll — permite z-index entre filas hermanas
+  const inner = document.createElement('div');
+  inner.id = 'gcpFramesBar-inner';
+  bar.appendChild(inner);
 
   const total     = _gcpGetTotalFrames();
   const gfi       = window._gcpGlobalFrameIdx;
@@ -18161,7 +18194,7 @@ function _gcpUpdateFramesBar() {
     scroll.appendChild(liveCard);
 
     row.appendChild(scroll);
-    bar.appendChild(row);
+    inner.appendChild(row);
   });
 }
 
