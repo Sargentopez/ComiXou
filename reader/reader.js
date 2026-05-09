@@ -1415,8 +1415,10 @@ function _startScrollReader() {
   RS.scrollOverlay = overlay;
 
   // ── Estado ──
-  RS.idx      = 0;
-  RS.textStep = 0;
+  RS.idx        = 0;
+  RS.textStep   = 0;
+  RS.scrollCont = container;  // para poder resetear desde _creditsClick
+  RS.scrollIsH  = isH;
 
   function _activateCanvas(pi) {
     RS.canvas = _canvases[pi];
@@ -2477,7 +2479,14 @@ function _creditsClick() {
   RS.isCredits = false;
   _hideCreditsButtons();
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
-  _resizeCanvas(); _render();
+  // En modo scroll: resetear posición al panel 0 instantáneamente
+  if (RS.scrollCont) {
+    RS.scrollCont.scrollTo({
+      left: 0, top: 0, behavior: 'instant'
+    });
+  } else {
+    _resizeCanvas(); _render();
+  }
 }
 
 
