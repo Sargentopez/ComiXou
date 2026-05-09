@@ -512,6 +512,12 @@ const SupabaseClient = (() => {
     await _uploadPanels(comic);
   }
 
+  // Marca la obra como "en revisión" SIN re-subir paneles ni editorData.
+  // Usar cuando el contenido ya está en Supabase y solo hay que cambiar el estado.
+  async function submitForReviewOnly(supabaseId) {
+    await _patch('works', `id=eq.${supabaseId}`, { published: false, pending_review: true });
+  }
+
   async function approveWork(comic) {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId');
@@ -885,5 +891,5 @@ continue;
     return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
   }
 
-    return { saveDraft, submitForReview, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
 })();
