@@ -220,12 +220,14 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   line-height: 1.2;
 }
 .credits-link {
-  /* Invisibles visualmente — el canvas dibuja el texto, el HTML captura los clicks */
+  /* Borde rojo temporal para ver dónde está el elemento */
   color: transparent;
   text-decoration: none;
-  background: transparent;
+  background: rgba(255,0,0,0.15);
+  border: 2px solid red !important;
 }
 .credits-restart {
   color: transparent;
-  background: transparent;
+  background: rgba(0,0,255,0.15);
+  border: 2px solid blue !important;
 }
