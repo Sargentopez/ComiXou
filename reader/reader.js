@@ -1385,6 +1385,9 @@ function _startScrollReader() {
   const _canvases = [];
 
   RS.panels.forEach((panel, pi) => {
+    // El panel de créditos no tiene slide propio — se muestra como overlay HTML
+    if (panel.isCredits) { _canvases.push(null); return; }
+
     const { pw, ph } = _panelDims(pi);
     const scale = Math.min(vw / pw, vh / ph);
 
@@ -1403,7 +1406,6 @@ function _startScrollReader() {
     slide.appendChild(canvas);
     container.appendChild(slide);
     _canvases.push(canvas);
-    // Guardar ctx para que _readerGifTick pueda redibujar en modo scroll
     RS.panels[pi]._scrollCtx = canvas.getContext('2d');
   });
 
@@ -1421,6 +1423,7 @@ function _startScrollReader() {
   RS.scrollIsH  = isH;
 
   function _activateCanvas(pi) {
+    if (_canvases[pi] === null) return; // panel de créditos: sin canvas propio
     RS.canvas = _canvases[pi];
     RS.ctx    = _canvases[pi]?.getContext('2d');
   }
@@ -1503,6 +1506,18 @@ function _startScrollReader() {
 
   // ── Retroceder ──
   function _vsBack() {
+    if (RS.isCredits) {
+      // Salir de créditos: ocultar overlay y volver al último panel real
+      RS.isCredits  = false;
+      RS.animPaused = false;
+      _hideCreditsButtons();
+      RS.idx--;
+      _resetPanelAnims(RS.idx);
+      _activateCanvas(RS.idx);
+      _render();
+      _updateOverlay();
+      return;
+    }
     if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
     const panel = RS.panels[RS.idx];
     const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
@@ -1542,12 +1557,12 @@ function _startScrollReader() {
       } else {
         RS.textStep = 1;
       }
-      _render();
-      _updateOverlay();
-      // Si es la hoja de créditos en modo scroll, esperar a que el scroll
-      // se detenga completamente antes de montar los botones interactivos
       if (RS.panels[si]?.isCredits) {
-        _mountCreditsWhenScrollEnds(container, isH);
+        // Créditos: mostrar overlay HTML a pantalla completa, sin canvas
+        if (!RS.isCredits) _showCreditsFullscreen();
+      } else {
+        _render();
+        _updateOverlay();
       }
     });
   }, { passive: true });
@@ -1561,7 +1576,12 @@ function _startScrollReader() {
       if (_hasPendingTexts()) {
         _startFade(); RS.textStep++; _activateCanvas(RS.idx); _render(); _updateOverlay();
       } else if (RS.idx < RS.panels.length - 1) {
-        _snapTo(RS.idx + 1);
+        if (RS.panels[RS.idx + 1]?.isCredits) {
+          RS.idx++;
+          if (!RS.isCredits) _showCreditsFullscreen();
+        } else {
+          _snapTo(RS.idx + 1);
+        }
       }
     }
     if (bwd) { e.preventDefault(); _vsBack(); }
@@ -2244,7 +2264,8 @@ function _startFade() {
 function _hideCreditsButtons() {
   const el = document.getElementById('creditsOverlay');
   if (el) el.remove();
-  // NO borrar _creditsLink/_creditsRestart — se reutilizan cuando se vuelve a créditos
+  const el2 = document.getElementById('creditsOverlayRestart');
+  if (el2) el2.remove();
 }
 
 function _mountCreditsWhenScrollEnds(container, isH) {
@@ -2268,6 +2289,106 @@ function _mountCreditsWhenScrollEnds(container, isH) {
     requestAnimationFrame(check);
   }
   requestAnimationFrame(check);
+}
+
+
+function _showCreditsFullscreen() {
+  RS.isCredits  = true;
+  RS.animPaused = true;
+
+  const prev = document.getElementById('creditsOverlay');
+  if (prev) prev.remove();
+
+  const isHoriz    = (RS.panels[RS.idx]?.orientation || 'v') === 'h';
+  const socialText = RS._workSocial || '';
+  const authorText = RS._workAuthor || '';
+
+  // Overlay a pantalla completa — no depende de ningún canvas
+  const ov = document.createElement('div');
+  ov.id = 'creditsOverlay';
+  ov.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:9000',
+    'background:#ffffff',
+    'display:flex',
+    'font-family:Patrick Hand,sans-serif',
+    'box-sizing:border-box',
+    'overflow:hidden',
+  ].join(';');
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  if (isHoriz) {
+    ov.style.flexDirection = 'row';
+    const left = document.createElement('div');
+    left.style.cssText = 'width:52%;display:flex;flex-direction:column;justify-content:center;padding:0 4% 0 4%;border-right:1px solid rgba(0,0,0,0.1);box-sizing:border-box;';
+    if (socialText) {
+      const s = document.createElement('p');
+      s.textContent = socialText;
+      s.style.cssText = 'font-size:' + Math.round(vh*0.055) + 'px;color:#444;margin:0 0 ' + Math.round(vh*0.04) + 'px;line-height:1.4;white-space:pre-wrap;word-break:break-word;';
+      left.appendChild(s);
+    }
+    const a = document.createElement('p');
+    a.textContent = authorText;
+    a.style.cssText = 'font-size:' + Math.round(vh*0.072) + 'px;font-weight:600;color:#222;margin:0;text-align:center;';
+    left.appendChild(a);
+    ov.appendChild(left);
+    const right = document.createElement('div');
+    right.style.cssText = 'width:48%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:' + Math.round(vh*0.04) + 'px;padding:0 4%;box-sizing:border-box;';
+    _buildCreditsContent(right, vw, vh);
+    ov.appendChild(right);
+  } else {
+    ov.style.flexDirection = 'column';
+    ov.style.alignItems = 'center';
+    ov.style.padding = '0 9%';
+    if (socialText) {
+      const s = document.createElement('p');
+      s.textContent = socialText;
+      s.style.cssText = 'font-size:' + Math.round(vw*0.038) + 'px;color:#444;margin:' + Math.round(vh*0.26) + 'px 0 0;line-height:1.4;white-space:pre-wrap;word-break:break-word;width:100%;';
+      ov.appendChild(s);
+    }
+    const a = document.createElement('p');
+    a.textContent = authorText;
+    a.style.cssText = 'font-size:' + Math.round(vw*0.055) + 'px;font-weight:600;color:#222;margin:' + (socialText ? Math.round(vw*0.02) : Math.round(vh*0.11)) + 'px 0 0;text-align:center;';
+    ov.appendChild(a);
+    const mid = document.createElement('div');
+    mid.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:' + Math.round(vh*0.03) + 'px;margin-top:' + Math.round(vh*0.06) + 'px;';
+    _buildCreditsContent(mid, vw, vh);
+    ov.appendChild(mid);
+  }
+
+  document.getElementById('readerApp').appendChild(ov);
+}
+
+function _buildCreditsContent(container, vw, vh) {
+  const ref = Math.min(vw, vh);
+  if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+    const lh = Math.round(ref * 0.12);
+    const lw = Math.round(_logoImg.naturalWidth * (lh / _logoImg.naturalHeight));
+    const img = document.createElement('img');
+    img.src = _logoImg.src;
+    img.style.cssText = 'width:' + lw + 'px;height:' + lh + 'px;display:block;';
+    container.appendChild(img);
+  }
+  const sl = document.createElement('p');
+  sl.textContent = 'Crea y Comparte';
+  sl.style.cssText = 'font-size:' + Math.round(ref*0.042) + 'px;color:#555;margin:0;text-align:center;';
+  container.appendChild(sl);
+
+  const lk = document.createElement('a');
+  lk.textContent = 'Visita más obras del autor';
+  lk.href = 'https://sargentopez.github.io/ComiXou/index.html';
+  lk.style.cssText = 'font-size:' + Math.round(ref*0.038) + 'px;color:#1a73e8;text-decoration:underline;cursor:pointer;text-align:center;touch-action:manipulation;padding:12px 8px;display:block;';
+  container.appendChild(lk);
+
+  const rb = document.createElement('button');
+  rb.textContent = '↩ Volver a leer';
+  rb.style.cssText = 'font-size:' + Math.round(ref*0.038) + 'px;font-family:Patrick Hand,sans-serif;color:#888;background:none;border:none;cursor:pointer;touch-action:manipulation;padding:12px 8px;';
+  rb.addEventListener('click',    e => { e.stopPropagation(); _creditsClick(); });
+  rb.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive:false });
+  container.appendChild(rb);
 }
 
 function _showCredits() {
@@ -2420,33 +2541,28 @@ function _mountCreditsButtons() {
   const cr = RS._creditsRestart;
   if (!cl || !cr) return;
 
-  // Posición real del canvas en pantalla (funciona en modo fixed y scroll)
+  // Coordenadas reales del canvas en pantalla
   const rect = RS.canvas.getBoundingClientRect();
-  const cL = rect.left;
-  const cT = rect.top;
-  const cW = rect.width;
-  const cH = rect.height;
-  const sx = cW / cl.pw;
-  const sy = cH / cl.ph;
+  if (!rect.width || !rect.height) return;
+  const sx = rect.width  / cl.pw;
+  const sy = rect.height / cl.ph;
 
-  // Contenedor invisible encima del canvas
-  const ov = document.createElement('div');
-  ov.id = 'creditsOverlay';
-  ov.style.cssText = 'position:fixed;left:' + cL + 'px;top:' + cT + 'px;width:' + cW + 'px;height:' + cH + 'px;z-index:9000;pointer-events:none;';
-
+  // Botones directamente en document.body — por encima de TODO sin excepción
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
     if (isLink) { el.href = 'https://sargentopez.github.io/ComiXou/index.html'; }
-    const bw = Math.round(data.fs * 8 * sx);   // ancho generoso
-    const bh = Math.round(data.fs * 2.5 * sy);  // alto generoso
-    const bx = Math.round(data.cx * sx - bw / 2);
-    const by = Math.round(data.cy * sy - bh / 2);
+    // Convertir coordenadas canvas → pantalla
+    const screenX = rect.left + data.cx * sx;
+    const screenY = rect.top  + data.cy * sy;
+    const bw = Math.round(data.fs * 10 * sx);  // zona ancha
+    const bh = Math.round(data.fs * 3  * sy);  // zona alta
     el.style.cssText = [
-      'position:absolute',
-      'left:' + bx + 'px',
-      'top:' + by + 'px',
-      'width:' + bw + 'px',
+      'position:fixed',
+      'left:' + Math.round(screenX - bw/2) + 'px',
+      'top:'  + Math.round(screenY - bh/2) + 'px',
+      'width:'  + bw + 'px',
       'height:' + bh + 'px',
+      'z-index:2147483647',  // máximo z-index posible
       'background:transparent',
       'border:none',
       'cursor:pointer',
@@ -2455,19 +2571,22 @@ function _mountCreditsButtons() {
       '-webkit-tap-highlight-color:rgba(0,0,0,0)',
       'display:block',
       'padding:0',
+      'margin:0',
     ].join(';');
     return el;
   }
 
   const lk = makeBtn(cl, true);
-  ov.appendChild(lk);
+  document.body.appendChild(lk);
 
   const rb = makeBtn(cr, false);
   rb.addEventListener('click',    e => { e.stopPropagation(); _creditsClick(); });
-  rb.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive: false });
-  ov.appendChild(rb);
+  rb.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive:false });
+  document.body.appendChild(rb);
 
-  document.getElementById('readerApp').appendChild(ov);
+  // Wrapper para poder eliminarlos juntos
+  lk.id = 'creditsOverlay';
+  rb.id = 'creditsOverlayRestart';
 }
 
 function _resetCredits() {
@@ -2481,13 +2600,11 @@ function _creditsClick() {
   RS.isCredits  = false;
   RS.animPaused = false;
   _hideCreditsButtons();
-  _resetPanelAnims(0);
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
-  // En modo scroll: resetear posición al panel 0 instantáneamente
+  _resetPanelAnims(0);
   if (RS.scrollCont) {
-    RS.scrollCont.scrollTo({
-      left: 0, top: 0, behavior: 'instant'
-    });
+    // Modo scroll: ir al panel 0 instantáneamente
+    RS.scrollCont.scrollTo({ left: 0, top: 0, behavior: 'instant' });
   } else {
     _resizeCanvas(); _render();
   }
