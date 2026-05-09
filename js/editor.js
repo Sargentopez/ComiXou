@@ -17880,6 +17880,63 @@ function _gcpPreview() {
 
 // _gcpUpdateFramesBar — matriz 2D: una fila por objeto, columnas = frames globales.
 // Patrón idéntico al refreshLayerTimelines() del HTML de referencia.
+// Animación FLIP para reorden de capas en la barra de frames (igual que _lyAnimatedReorder)
+function _gcpAnimatedSwap(idxA, idxB) {
+  const bar = document.getElementById('gcpFramesBar');
+  if (!bar) {
+    // Sin animación: solo intercambiar y redibujar
+    [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
+    window._gcpDirty = true; _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
+    return;
+  }
+
+  // FIRST: capturar posición Y de todas las filas
+  const rows = bar.querySelectorAll('.gcp-layer-row');
+  const snapBefore = new Map();
+  rows.forEach((r, i) => snapBefore.set(i, r.getBoundingClientRect().top));
+
+  // Ejecutar el intercambio + reconstruir
+  [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
+  if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
+  else if (window._gcpSelIdx === idxB) window._gcpSelIdx = idxA;
+  window._gcpDirty = true;
+  _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
+
+  // LAST: calcular deltas
+  const newRows = bar.querySelectorAll('.gcp-layer-row');
+  const toAnimate = [];
+  newRows.forEach((el, i) => {
+    if (!snapBefore.has(i)) return;
+    const delta = snapBefore.get(i) - el.getBoundingClientRect().top;
+    if (Math.abs(delta) < 2) return;
+    toAnimate.push({ el, delta, isMoved: i === idxB || i === idxA });
+  });
+
+  if (!toAnimate.length) return;
+
+  // INVERT: colocar en posición anterior sin transición
+  toAnimate.forEach(({ el, delta, isMoved }) => {
+    el.style.transition = 'none';
+    el.style.transform  = 'translateY(' + delta + 'px)';
+    el.style.opacity    = isMoved ? '0.5' : '0.72';
+  });
+
+  // PLAY: doble rAF para forzar paint
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    toAnimate.forEach(({ el, isMoved }) => {
+      const dur = isMoved ? 360 : 280;
+      el.style.transition = 'transform ' + dur + 'ms cubic-bezier(.4,0,.2,1), opacity ' + dur + 'ms ease';
+      el.style.transform  = 'translateY(0)';
+      el.style.opacity    = '1';
+      el.addEventListener('transitionend', () => {
+        el.style.transition = '';
+        el.style.transform  = '';
+        el.style.opacity    = '';
+      }, { once: true });
+    });
+  }));
+}
+
 function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   if (!bar) return;
@@ -17898,6 +17955,9 @@ function _gcpUpdateFramesBar() {
     // ── Fila ──────────────────────────────────────────────────────────
     const row = document.createElement('div');
     row.className = 'gcp-layer-row';
+    // Mayor layerIdx = se renderiza encima → mayor z-index visual
+    row.style.zIndex = String(layerIdx + 1);
+    row.style.position = 'relative';
 
     // Columna izquierda: flechas orden + botón eliminar + etiqueta
     const leftCol = document.createElement('div');
@@ -17921,13 +17981,7 @@ function _gcpUpdateFramesBar() {
     upBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (layerIdx >= window._gcpLayers.length - 1) return;
-      // Intercambiar con la capa superior (índice mayor = se dibuja encima)
-      [window._gcpLayers[layerIdx], window._gcpLayers[layerIdx + 1]] =
-        [window._gcpLayers[layerIdx + 1], window._gcpLayers[layerIdx]];
-      if (window._gcpSelIdx === layerIdx) window._gcpSelIdx = layerIdx + 1;
-      else if (window._gcpSelIdx === layerIdx + 1) window._gcpSelIdx = layerIdx;
-      window._gcpDirty = true;
-      _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
+      _gcpAnimatedSwap(layerIdx, layerIdx + 1);
     });
 
     const dnBtn = document.createElement('button');
@@ -17940,12 +17994,7 @@ function _gcpUpdateFramesBar() {
     dnBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (layerIdx <= 0) return;
-      [window._gcpLayers[layerIdx], window._gcpLayers[layerIdx - 1]] =
-        [window._gcpLayers[layerIdx - 1], window._gcpLayers[layerIdx]];
-      if (window._gcpSelIdx === layerIdx) window._gcpSelIdx = layerIdx - 1;
-      else if (window._gcpSelIdx === layerIdx - 1) window._gcpSelIdx = layerIdx;
-      window._gcpDirty = true;
-      _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
+      _gcpAnimatedSwap(layerIdx, layerIdx - 1);
     });
 
     arrowRow.appendChild(upBtn);
