@@ -17896,8 +17896,12 @@ function _gcpAnimatedSwap(idxA, idxB) {
     return;
   }
 
-  const rowA = rows[idxA];
-  const rowB = rows[idxB];
+  // Las filas están en orden inverso al array: fila DOM 0 = capa de mayor índice
+  const n = rows.length;
+  const domIdxA = (n - 1) - idxA;
+  const domIdxB = (n - 1) - idxB;
+  const rowA = rows[domIdxA];
+  const rowB = rows[domIdxB];
   if (!rowA || !rowB) { _gcpUpdateFramesBar(); return; }
 
   // FIRST: capturar posición Y de cada fila
@@ -17980,7 +17984,9 @@ function _gcpUpdateFramesBar() {
   const gfi       = window._gcpGlobalFrameIdx;
   if (!window._gcpLayers || !window._gcpLayers.length) return;
 
-  window._gcpLayers.forEach((la, layerIdx) => {
+  // Iterar en orden inverso: el último índice (más arriba en canvas) aparece primero en la UI
+  const _layersCopy = window._gcpLayers.map((la, i) => ({ la, layerIdx: i })).reverse();
+  _layersCopy.forEach(({ la, layerIdx }) => {
     const isSelLayer  = (layerIdx === window._gcpSelIdx);
     const layerName   = la._gcpName || ('Obj ' + (layerIdx + 1));
     const layerFrames = la._frames ? la._frames.length : 0;
@@ -17989,7 +17995,7 @@ function _gcpUpdateFramesBar() {
     const row = document.createElement('div');
     row.className = 'gcp-layer-row';
     // Mayor layerIdx = se renderiza encima → mayor z-index visual
-    row.style.zIndex = String(layerIdx + 1);
+    row.style.zIndex = String(layerIdx + 1); // mayor índice = encima en canvas = primera fila
     row.style.position = 'relative';
 
     // Columna izquierda: flechas orden + botón eliminar + etiqueta
