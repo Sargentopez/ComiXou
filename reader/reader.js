@@ -1304,8 +1304,8 @@ function _readerGifTick() {
     if (panelChanged) {
       // Modo fixed: redibujar si es el panel activo
       if (pi === RS.idx && RS.ctx) { _render(); }
-      // Modo scroll: redibujar en el canvas del slide
-      else if (panel._scrollCtx) {
+      // Modo scroll: redibujar en el canvas del slide (no si estamos en créditos)
+      else if (panel._scrollCtx && !RS.isCredits) {
         const _sc = RS.idx; RS.idx = pi;
         const _sctx = RS.ctx; RS.ctx = panel._scrollCtx;
         _render();
@@ -1745,7 +1745,7 @@ function _render() {
 
   // Si venimos de los créditos, limpiar el overlay HTML
   // Verificar también RS.panels[RS.idx] para no fallar cuando el tick cambia RS.idx temporalmente
-  if (RS.isCredits && !RS.panels[RS.idx]?.isCredits) _resetCredits();
+  if (RS.isCredits) _resetCredits();
 
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
