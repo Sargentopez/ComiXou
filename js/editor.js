@@ -17195,30 +17195,80 @@ function _gcpOpenPropsPanel(la, laIdx) {
     _gcpAutoSaveFrame(); _gcpRedraw();
   });
 
-  // Reflejar
-  document.getElementById('gcppp-mirror')?.addEventListener('click', () => {
-    _gcpWithEditorContext(() => {
-      window._gcpSelIdx = laIdx;
-      edSelectedIdx = laIdx;
-      edMirrorSelected();
-    });
-    _gcpAutoSaveFrame(); _gcpRedraw();
-  });
-
-  // Duplicar
+  // Duplicar — copia independiente visible solo desde el frame actual
   document.getElementById('gcppp-dup')?.addEventListener('click', () => {
     const newLa = edDeserLayer(edSerLayer(la), edOrientation);
     if (!newLa) return;
     newLa.x += 0.03; newLa.y += 0.03;
-    // Copiar frames del objeto original
-    newLa._frames = (la._frames || []).map(s => ({...s}));
     newLa._gcpName = (la._gcpName || '') + ' copia';
+    // Objeto nuevo: invisible en frames anteriores, visible solo desde fi
+    const fi = window._gcpGlobalFrameIdx || 0;
+    _gcpInitLayerFrames(newLa, fi);
     window._gcpLayers.push(newLa);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpClosePropsPanel();
     _gcpUpdateFramesBar();
     _gcpRedraw();
     edToast('Objeto duplicado');
+  });
+
+  // Reflejar — crea objeto nuevo reflejado, el original no cambia
+  document.getElementById('gcppp-mirror')?.addEventListener('click', () => {
+    const newLa = edDeserLayer(edSerLayer(la), edOrientation);
+    if (!newLa) return;
+    newLa._gcpName = (la._gcpName || '') + ' reflejo';
+    // Aplicar reflejo sobre la copia según su tipo
+    if (newLa.type === 'image') {
+      const img = newLa.img;
+      if (img) {
+        const tmp = document.createElement('canvas');
+        tmp.width  = img.naturalWidth  || img.width;
+        tmp.height = img.naturalHeight || img.height;
+        const tctx = tmp.getContext('2d');
+        tctx.translate(tmp.width, 0);
+        tctx.scale(-1, 1);
+        tctx.drawImage(img, 0, 0);
+        const mirroredImg = new Image();
+        mirroredImg.onload = () => { newLa.img = mirroredImg; _gcpRedraw(); };
+        mirroredImg.src = tmp.toDataURL();
+      }
+      newLa.rotation = -(newLa.rotation || 0);
+    } else if (newLa.type === 'stroke') {
+      const c = document.createElement('canvas');
+      c.width  = newLa._canvas.width;
+      c.height = newLa._canvas.height;
+      const cctx = c.getContext('2d');
+      cctx.translate(c.width, 0);
+      cctx.scale(-1, 1);
+      cctx.drawImage(newLa._canvas, 0, 0);
+      newLa._canvas = c;
+      newLa._ctx    = c.getContext('2d');
+      newLa.rotation = -(newLa.rotation || 0);
+    } else if (newLa.type === 'shape') {
+      newLa.rotation = -(newLa.rotation || 0);
+      if (newLa.cornerRadii && newLa.cornerRadii.length === 4) {
+        const [tl,tr,br,bl] = newLa.cornerRadii;
+        newLa.cornerRadii = [tr, tl, bl, br];
+      }
+    } else if (newLa.type === 'line') {
+      newLa.points = newLa.points.map(p => p ? ({
+        ...p, x: -p.x,
+        cx1: p.cx1 !== undefined ? -p.cx1 : undefined,
+        cx2: p.cx2 !== undefined ? -p.cx2 : undefined
+      }) : null);
+      newLa.rotation = -(newLa.rotation || 0);
+    } else if (newLa.type === 'text' || newLa.type === 'bubble') {
+      newLa.rotation = -(newLa.rotation || 0);
+    }
+    // Objeto nuevo: invisible en frames anteriores, visible solo desde fi
+    const fi = window._gcpGlobalFrameIdx || 0;
+    _gcpInitLayerFrames(newLa, fi);
+    window._gcpLayers.push(newLa);
+    window._gcpSelIdx = window._gcpLayers.length - 1;
+    _gcpClosePropsPanel();
+    _gcpUpdateFramesBar();
+    _gcpRedraw();
+    edToast('Objeto reflejado en nueva capa');
   });
 
   // Eliminar
