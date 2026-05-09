@@ -16911,6 +16911,47 @@ let _gcpLastTapTime = 0;
 let _gcpLastTapX = 0, _gcpLastTapY = 0;
 
 function _gcpHandleDown(e) {
+  // ── DETECCIÓN DE DOBLE TAP: debe ser lo primero, antes de handles/drag ──
+  {
+    const gc2 = document.getElementById('gcpCanvas');
+    if (gc2) {
+      const rect2 = gc2.getBoundingClientRect();
+      const _src0 = e.touches ? e.touches[0] : e;
+      const _tx = _src0 ? _src0.clientX : e.clientX;
+      const _ty = _src0 ? _src0.clientY : e.clientY;
+      // Solo si el toque cae dentro del canvas
+      if (_tx >= rect2.left && _tx <= rect2.right && _ty >= rect2.top && _ty <= rect2.bottom) {
+        // Calcular qué objeto se tocó
+        const _c0 = edCoords(e);
+        let _hit0 = -1;
+        for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
+          if (window._gcpLayers[_i]?.contains?.(_c0.nx, _c0.ny)) { _hit0 = _i; break; }
+        }
+        // También comprobar si el objeto ya seleccionado cubre el punto (por su bbox)
+        if (_hit0 < 0 && window._gcpSelIdx >= 0) {
+          const _sel = window._gcpLayers[window._gcpSelIdx];
+          if (_sel?.contains?.(_c0.nx, _c0.ny)) _hit0 = window._gcpSelIdx;
+        }
+        if (_hit0 >= 0) {
+          const _now0 = Date.now();
+          const _dtap0 = _now0 - _gcpLastTapTime < 380
+            && Math.abs(_tx - _gcpLastTapX) < 36
+            && Math.abs(_ty - _gcpLastTapY) < 36;
+          _gcpLastTapTime = _now0;
+          _gcpLastTapX = _tx; _gcpLastTapY = _ty;
+          if (_dtap0) {
+            edIsDragging = false; edIsResizing = false; edIsRotating = false;
+            window._gcpSelIdx = _hit0;
+            _gcpOpenPropsPanel(window._gcpLayers[_hit0], _hit0);
+            _gcpRedraw();
+            return;
+          }
+        } else {
+          _gcpLastTapTime = 0; // tap en vacío → resetear
+        }
+      }
+    }
+  }
   // Si el panel de propiedades GCP está abierto y se toca fuera de él → cerrarlo
   const _gppEl = document.getElementById('gcpPropsPanel');
   if (_gppEl && _gppEl.classList.contains('open')) {
@@ -17007,28 +17048,9 @@ function _gcpHandleDown(e) {
   }
   window._gcpSelIdx = hit;
   if (hit >= 0) {
-    // Detección de doble tap
-    const _now = Date.now();
-    const _src2 = e.touches ? e.touches[0] : e;
-    const _tapX = _src2 ? _src2.clientX : e.clientX;
-    const _tapY = _src2 ? _src2.clientY : e.clientY;
-    const _dtap = _now - _gcpLastTapTime < 350
-      && Math.abs(_tapX - _gcpLastTapX) < 28
-      && Math.abs(_tapY - _gcpLastTapY) < 28;
-    _gcpLastTapTime = _now;
-    _gcpLastTapX = _tapX; _gcpLastTapY = _tapY;
-    if (_dtap) {
-      edIsDragging = false;
-      _gcpOpenPropsPanel(window._gcpLayers[hit], hit);
-      _gcpRedraw();
-      return;
-    }
     edIsDragging = true;
     edDragOffX = c.nx - window._gcpLayers[hit].x;
     edDragOffY = c.ny - window._gcpLayers[hit].y;
-  } else {
-    // Tap en vacío: resetear timer de doble tap
-    _gcpLastTapTime = 0;
   }
   _gcpRedraw();
 }
@@ -17092,39 +17114,39 @@ function _gcpOpenPropsPanel(la, laIdx) {
   const nameTxt = la._gcpName || typeLabel;
 
   p.innerHTML = `
-    <div class="gcp-pp-title">
-      <span>${typeLabel}</span>
-      <span style="flex:1;font-size:.78rem;font-weight:700;color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nameTxt}</span>
-      <span style="font-size:.72rem;color:var(--gray-400);font-weight:700;font-family:var(--font-body)">Frame ${fi + 1}</span>
+    <div class="op-row" style="margin-bottom:4px;gap:6px">
+      <span style="font-family:var(--font-display);font-size:.88rem;font-weight:900;letter-spacing:.3px">${typeLabel}</span>
+      <span style="flex:1;font-size:.75rem;font-weight:700;color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nameTxt}</span>
+      <span style="font-size:.7rem;color:var(--gray-400);font-weight:700;font-family:var(--font-body);flex-shrink:0">Frame ${fi + 1}</span>
     </div>
-    <div class="gcp-pp-row">
-      <span class="gcp-pp-label">Opacidad</span>
-      <span class="gcp-pp-val" id="gcppp-op-val">${opPct}%</span>
+    <div class="op-prop-row">
+      <span class="op-prop-label">Opacidad</span>
+      <span id="gcppp-op-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${opPct}%</span>
       <input type="range" id="gcppp-op" min="0" max="100" value="${opPct}">
     </div>
-    <div class="gcp-pp-row">
-      <span class="gcp-pp-label">Rotación</span>
+    <div class="op-prop-row">
+      <span class="op-prop-label">Rotación</span>
       <input type="number" id="gcppp-rot" value="${rot}" min="-180" max="180" inputmode="numeric"> °
     </div>
-    <div class="gcp-pp-row">
-      <span class="gcp-pp-label">Posición</span>
-      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">X:</span>
-      <input type="number" id="gcppp-x" value="${xPx}" inputmode="numeric" style="width:60px">
-      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">Y:</span>
-      <input type="number" id="gcppp-y" value="${yPx}" inputmode="numeric" style="width:60px">
+    <div class="op-prop-row">
+      <span class="op-prop-label">Posición</span>
+      <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">X</span>
+      <input type="number" id="gcppp-x" value="${xPx}" inputmode="numeric">
+      <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">Y</span>
+      <input type="number" id="gcppp-y" value="${yPx}" inputmode="numeric">
     </div>
-    <div class="gcp-pp-row">
-      <span class="gcp-pp-label">Tamaño</span>
-      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">W:</span>
-      <input type="number" id="gcppp-w" value="${wPx}" inputmode="numeric" style="width:60px" min="4">
-      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">H:</span>
-      <input type="number" id="gcppp-h" value="${hPx}" inputmode="numeric" style="width:60px" min="4">
+    <div class="op-prop-row">
+      <span class="op-prop-label">Tamaño</span>
+      <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">W</span>
+      <input type="number" id="gcppp-w" value="${wPx}" inputmode="numeric" min="4">
+      <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">H</span>
+      <input type="number" id="gcppp-h" value="${hPx}" inputmode="numeric" min="4">
     </div>
-    <div class="gcp-pp-btns">
-      <button class="gcp-pp-btn" id="gcppp-mirror" title="Reflejar horizontalmente">${_ED_MIRROR_ICON} Reflejar</button>
-      <button class="gcp-pp-btn" id="gcppp-dup">⧉ Duplicar</button>
-      <button class="gcp-pp-btn danger" id="gcppp-del">✕ Eliminar</button>
-      <button class="gcp-pp-btn primary" id="gcppp-ok">✓ OK</button>
+    <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
+      <button class="op-btn danger" id="gcppp-del" style="flex:1">✕ Eliminar</button>
+      <button class="op-btn" id="gcppp-dup" style="flex:1">⧉ Duplicar</button>
+      <button class="op-btn" id="gcppp-mirror" title="Reflejar horizontalmente" style="flex-shrink:0">${_ED_MIRROR_ICON}</button>
+      <button id="gcppp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:18px;padding:6px 14px;font-family:var(--font-body);font-weight:900;font-size:.78rem;cursor:pointer;flex-shrink:0">✓ OK</button>
     </div>`;
 
   p.classList.add('open');
