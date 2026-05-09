@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v21.88</footer>
+    <footer class="app-version">v21.93</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -579,49 +579,61 @@ Router.register('editor', {
         <button class="ed-menu-pin ed-hide-btn" style="display:none"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem">OCULTAR</b></button>
         <div class="ed-menu-sep"></div>
         <div id="gcpMenuScroll">
+          <!-- Biblioteca -->
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" id="gcpBibBtn">Biblioteca ▾</button>
           </div>
           <div class="ed-menu-sep"></div>
+          <!-- Guardar Frame + Añadir Frame -->
+          <button class="ed-menu-btn" id="gcpSaveFrameBtn" title="Guardar frame actual" style="font-weight:700">💾 Frame</button>
+          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;font-size:1.5rem;line-height:1;padding:0 14px;min-height:36px">＋</button>
+          <div class="ed-menu-sep"></div>
+          <!-- Deshacer / Rehacer -->
           <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
           <div class="ed-menu-sep"></div>
+          <!-- Frames -->
+          <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
+          <div class="ed-menu-sep"></div>
+          <!-- Comportamiento -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-gcpmenu="comportamiento">Comportamiento ▾</button>
+            <div class="ed-dropdown" id="gdd-comportamiento" style="min-width:210px">
+              <div class="ed-dropdown-label">Velocidad</div>
+              <div style="display:flex;gap:5px;padding:4px 12px 8px;flex-wrap:wrap">
+                <button class="gcp-chip" data-gcpfps="20">20fps</button>
+                <button class="gcp-chip active" data-gcpfps="10">10fps</button>
+                <button class="gcp-chip" data-gcpfps="5">5fps</button>
+                <button class="gcp-chip" data-gcpfps="2">2fps</button>
+              </div>
+              <div class="ed-dropdown-label">Repeticiones</div>
+              <div style="display:flex;gap:5px;padding:4px 12px 8px;flex-wrap:wrap">
+                <button class="gcp-chip active" data-gcprep="0">∞</button>
+                <button class="gcp-chip" data-gcprep="1">×1</button>
+                <button class="gcp-chip" data-gcprep="2">×2</button>
+                <button class="gcp-chip" data-gcprep="3">×3</button>
+              </div>
+              <div class="ed-dropdown-sep" style="margin:2px 0"></div>
+              <div style="display:flex;gap:5px;padding:4px 12px 8px">
+                <button class="gcp-chip" data-gcpstop="1" style="width:100%">⏹ Stop al final</button>
+              </div>
+            </div>
+          </div>
+          <div class="ed-menu-sep"></div>
+          <!-- Guardar -->
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-gcpmenu="guardar" style="font-weight:700">Guardar ▾</button>
             <div class="ed-dropdown" id="gdd-guardar" style="min-width:220px">
               <button class="ed-dropdown-item" id="gcpSaveAppBtn"><span class="dd-icon">📥</span>Guardar en la aplicación</button>
               <button class="ed-dropdown-item" id="gcpDownloadApngBtn"><span class="dd-icon">⬇️</span>Descargar APNG <small style="opacity:.6">(web)</small></button>
               <button class="ed-dropdown-item" id="gcpDownloadGifBtn"><span class="dd-icon">⬇️</span>Descargar GIF <small style="opacity:.6">(Windows)</small></button>
-              <div class="ed-dropdown-sep"></div>
-              <div class="ed-dropdown-submenu">
-                <button class="ed-dropdown-item ed-has-submenu" id="gcpBehaviourBtn"><span class="dd-icon">⚙️</span>Comportamiento</button>
-                <div class="ed-submenu" id="gcpBehaviourPanel">
-                  <div class="ed-dropdown-label">Velocidad</div>
-                  <div style="display:flex;gap:5px;padding:4px 12px 8px;flex-wrap:wrap">
-                    <button class="gcp-chip" data-gcpfps="20">20fps</button>
-                    <button class="gcp-chip active" data-gcpfps="10">10fps</button>
-                    <button class="gcp-chip" data-gcpfps="5">5fps</button>
-                    <button class="gcp-chip" data-gcpfps="2">2fps</button>
-                  </div>
-                  <div class="ed-dropdown-label">Repeticiones</div>
-                  <div style="display:flex;gap:5px;padding:4px 12px 8px;flex-wrap:wrap">
-                    <button class="gcp-chip active" data-gcprep="0">∞</button>
-                    <button class="gcp-chip" data-gcprep="1">×1</button>
-                    <button class="gcp-chip" data-gcprep="2">×2</button>
-                    <button class="gcp-chip" data-gcprep="3">×3</button>
-                  </div>
-                  <div class="ed-dropdown-sep" style="margin:2px 0"></div>
-                  <div style="display:flex;gap:5px;padding:4px 12px 8px">
-                    <button class="gcp-chip" data-gcpstop="1" style="width:100%">⏹ Stop al final</button>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
-          <button class="ed-menu-btn" id="gcpSaveFrameBtn" title="Guardar frame actual" style="font-weight:700">💾 Frame</button>
-          <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;font-size:1.5rem;line-height:1;padding:0 14px;min-height:36px">＋</button>
+          <!-- Ayuda (mismo contenido que el editor general) -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" id="gcpHelpBtn">Ayuda ▾</button>
+          </div>
         </div>
       </div>
       <!-- Panel de frames: toggle, deslizante horizontal, miniaturas 88×88 -->

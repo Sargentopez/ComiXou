@@ -17827,6 +17827,7 @@ let _gcpPreviewTimer = null;
 function _gcpPreview() {
   const total = _gcpGetTotalFrames();
   if (!total) { edToast('Sin frames para previsualizar'); return; }
+  // Detener si ya está en marcha
   if (_gcpPreviewTimer) {
     clearTimeout(_gcpPreviewTimer);
     _gcpPreviewTimer = null;
@@ -17837,15 +17838,40 @@ function _gcpPreview() {
   }
   const btn = document.getElementById('gcpPreviewBtn');
   if (btn) btn.textContent = '⏹';
-  let fi = 0;
-  const delay = 150;
+
+  // Leer parámetros de comportamiento
+  const delay       = window._gcpFrameDelay  || 100;   // ms por frame
+  const repeatMax   = window._gcpRepeatCount || 0;     // 0 = infinito
+  const stopAtEnd   = window._gcpStopAtEnd   || false; // true = detener en último frame
+
+  let fi      = 0;
+  let loopN   = 0; // contador de repeticiones completadas
+
+  const stop = () => {
+    clearTimeout(_gcpPreviewTimer);
+    _gcpPreviewTimer = null;
+    if (btn) btn.textContent = '▶';
+    // Al parar, quedarse en el último frame si stopAtEnd, si no volver al frame activo
+    if (!stopAtEnd) _gcpGoToFrame(window._gcpGlobalFrameIdx);
+  };
+
   const loop = () => {
     if (!_gcpPreviewTimer) return;
     _gcpApplyFrame(fi);
     _gcpRedraw();
-    fi = (fi + 1) % total;
+    const next = fi + 1;
+    if (next >= total) {
+      // Fin de un ciclo
+      if (stopAtEnd) { stop(); return; }
+      loopN++;
+      if (repeatMax > 0 && loopN >= repeatMax) { stop(); return; }
+      fi = 0;
+    } else {
+      fi = next;
+    }
     _gcpPreviewTimer = setTimeout(loop, delay);
   };
+
   _gcpApplyFrame(0);
   _gcpRedraw();
   fi = 1;
@@ -18411,6 +18437,11 @@ function gcpOpen(edLayerIdx) {
       _gcpPreview();
     });
 
+    document.getElementById('gcpHelpBtn')?.addEventListener('click', () => {
+      _gcpCloseAllDropdowns();
+      const m = document.getElementById('edShortcutsModal');
+      if (m) m.classList.add('open');
+    });
     document.getElementById('gcpBibBtn')?.addEventListener('click', () => {
       const panel = $('edOptionsPanel');
       if (panel) _bibRenderPanel(panel);
@@ -18460,12 +18491,6 @@ function gcpOpen(edLayerIdx) {
       e.stopPropagation();
       _gcpCloseAllDropdowns();
       _gcpDownloadGif();
-    });
-    // Botón Comportamiento — abre/cierra subpanel inline sin cerrar el dropdown
-    document.getElementById('gcpBehaviourBtn')?.addEventListener('pointerup', e => {
-      e.stopPropagation();
-      const panel = document.getElementById('gcpBehaviourPanel');
-      if (panel) panel.classList.toggle('open');
     });
     // Chips de velocidad (fps)
     document.querySelectorAll('[data-gcpfps]').forEach(btn => {
