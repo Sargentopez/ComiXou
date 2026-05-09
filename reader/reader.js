@@ -1416,7 +1416,6 @@ function _startScrollReader() {
   // ── Estado ──
   RS.idx        = 0;
   RS.textStep   = 0;
-  RS.scrollCont = container;  // para poder resetear desde _creditsClick
 
   function _activateCanvas(pi) {
     RS.canvas = _canvases[pi];
@@ -1516,8 +1515,6 @@ function _startScrollReader() {
 
   // ── Scroll nativo: detectar llegada a nuevo panel ──
   let _prevSI = 0, _scrollRaf = null;
-  RS._scrollPrevSI = () => _prevSI;
-  RS._scrollSetPrevSI = (v) => { _prevSI = v; };
   container.addEventListener('scroll', () => {
     if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
     _scrollRaf = requestAnimationFrame(() => {
@@ -2467,18 +2464,8 @@ function _resetCredits() {
 }
 
 function _creditsClick() {
-  RS.isCredits = false;
-  _hideCreditsButtons();
-  RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
-  // En modo scroll: resetear posición al panel 0 instantáneamente
-  if (RS.scrollCont) {
-    if (RS._scrollSetPrevSI) RS._scrollSetPrevSI(0); // evitar goingBack al panel 0
-    RS.scrollCont.scrollTo({
-      left: 0, top: 0, behavior: 'instant'
-    });
-  } else {
-    _resizeCanvas(); _render();
-  }
+  // Recargar la obra desde el principio — la forma más simple y fiable
+  window.location.reload();
 }
 
 
