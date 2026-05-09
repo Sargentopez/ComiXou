@@ -17840,19 +17840,17 @@ function _gcpPreview() {
   if (btn) btn.textContent = '⏹';
 
   // Leer parámetros de comportamiento
-  const delay       = window._gcpFrameDelay  || 100;   // ms por frame
-  const repeatMax   = window._gcpRepeatCount || 0;     // 0 = infinito
-  const stopAtEnd   = window._gcpStopAtEnd   || false; // true = detener en último frame
+  const delay     = window._gcpFrameDelay  || 100; // ms por frame
+  const repeatMax = window._gcpRepeatCount || 0;   // 0 = infinito
 
-  let fi      = 0;
-  let loopN   = 0; // contador de repeticiones completadas
+  let fi    = 0;
+  let loopN = 0; // contador de repeticiones completadas
 
   const stop = () => {
     clearTimeout(_gcpPreviewTimer);
     _gcpPreviewTimer = null;
     if (btn) btn.textContent = '▶';
-    // Al parar, quedarse en el último frame si stopAtEnd, si no volver al frame activo
-    if (!stopAtEnd) _gcpGoToFrame(window._gcpGlobalFrameIdx);
+    _gcpGoToFrame(window._gcpGlobalFrameIdx);
   };
 
   const loop = () => {
@@ -17861,8 +17859,6 @@ function _gcpPreview() {
     _gcpRedraw();
     const next = fi + 1;
     if (next >= total) {
-      // Fin de un ciclo
-      if (stopAtEnd) { stop(); return; }
       loopN++;
       if (repeatMax > 0 && loopN >= repeatMax) { stop(); return; }
       fi = 0;
@@ -18378,17 +18374,8 @@ function gcpOpen(edLayerIdx) {
       if (_gl._gcpRepeatCount != null) window._gcpRepeatCount = _gl._gcpRepeatCount;
       if (_gl._gcpStopAtEnd   != null) window._gcpStopAtEnd   = !!_gl._gcpStopAtEnd;
     }
-    // Actualizar chips en la UI
-    document.querySelectorAll('[data-gcpfps]').forEach(b => {
-      const fps = Math.round(1000 / Math.max(window._gcpFrameDelay, 1));
-      b.classList.toggle('active', parseInt(b.dataset.gcpfps, 10) === fps);
-    });
-    document.querySelectorAll('[data-gcprep]').forEach(b => {
-      b.classList.toggle('active', parseInt(b.dataset.gcprep, 10) === window._gcpRepeatCount);
-    });
-    document.querySelectorAll('[data-gcpstop]').forEach(b => {
-      b.classList.toggle('active', !!window._gcpStopAtEnd);
-    });
+    // Sincronizar UI de comportamiento al abrir
+    requestAnimationFrame(() => { if (typeof _gcpSyncComportamiento === 'function') _gcpSyncComportamiento(); });
   }
 
   // Aplicar frame 0 si hay frames; sesión nueva queda en gfi=0 listo para recibir objetos
@@ -18492,31 +18479,56 @@ function gcpOpen(edLayerIdx) {
       _gcpCloseAllDropdowns();
       _gcpDownloadGif();
     });
-    // Chips de velocidad (fps)
-    document.querySelectorAll('[data-gcpfps]').forEach(btn => {
-      btn.addEventListener('pointerup', e => {
-        e.stopPropagation();
-        document.querySelectorAll('[data-gcpfps]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        window._gcpFrameDelay = Math.round(1000 / parseInt(btn.dataset.gcpfps, 10));
-      });
+    // ── Comportamiento: sliders de velocidad y repeticiones ──
+    const _gcpSyncComportamiento = () => {
+      const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
+      const fpsSlider = document.getElementById('gcpFpsSlider');
+      const fpsNum    = document.getElementById('gcpFpsNum');
+      if (fpsSlider) fpsSlider.value = Math.min(24, Math.max(1, fps));
+      if (fpsNum)    fpsNum.value    = Math.min(24, Math.max(1, fps));
+      const infChk    = document.getElementById('gcpRepInfinite');
+      const repSlider = document.getElementById('gcpRepSlider');
+      const repNum    = document.getElementById('gcpRepNum');
+      const repRow    = document.getElementById('gcpRepSliderRow');
+      const isInf     = (window._gcpRepeatCount || 0) === 0;
+      if (infChk)    infChk.checked = isInf;
+      if (repRow)    repRow.style.display = isInf ? 'none' : 'flex';
+      const repVal = Math.max(1, window._gcpRepeatCount || 1);
+      if (repSlider) repSlider.value = repVal;
+      if (repNum)    repNum.value    = repVal;
+    };
+    // Slider fps ↔ número fps (bidireccional)
+    document.getElementById('gcpFpsSlider')?.addEventListener('input', e => {
+      const fps = parseInt(e.target.value, 10);
+      window._gcpFrameDelay = Math.round(1000 / fps);
+      const n = document.getElementById('gcpFpsNum'); if (n) n.value = fps;
     });
-    // Chips de repeticiones
-    document.querySelectorAll('[data-gcprep]').forEach(btn => {
-      btn.addEventListener('pointerup', e => {
-        e.stopPropagation();
-        document.querySelectorAll('[data-gcprep]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        window._gcpRepeatCount = parseInt(btn.dataset.gcprep, 10);
-      });
+    document.getElementById('gcpFpsNum')?.addEventListener('input', e => {
+      const fps = Math.min(24, Math.max(1, parseInt(e.target.value, 10) || 1));
+      window._gcpFrameDelay = Math.round(1000 / fps);
+      const s = document.getElementById('gcpFpsSlider'); if (s) s.value = fps;
     });
-    // Chip Stop al final (toggle)
-    document.querySelectorAll('[data-gcpstop]').forEach(btn => {
-      btn.addEventListener('pointerup', e => {
-        e.stopPropagation();
-        window._gcpStopAtEnd = !window._gcpStopAtEnd;
-        btn.classList.toggle('active', window._gcpStopAtEnd);
-      });
+    // Checkbox infinito
+    document.getElementById('gcpRepInfinite')?.addEventListener('change', e => {
+      const isInf = e.target.checked;
+      window._gcpRepeatCount = isInf ? 0 : (parseInt(document.getElementById('gcpRepSlider')?.value, 10) || 1);
+      const repRow = document.getElementById('gcpRepSliderRow');
+      if (repRow) repRow.style.display = isInf ? 'none' : 'flex';
+    });
+    // Slider rep ↔ número rep (bidireccional)
+    document.getElementById('gcpRepSlider')?.addEventListener('input', e => {
+      const n = parseInt(e.target.value, 10);
+      window._gcpRepeatCount = n;
+      const num = document.getElementById('gcpRepNum'); if (num) num.value = n;
+    });
+    document.getElementById('gcpRepNum')?.addEventListener('input', e => {
+      const n = Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 1));
+      window._gcpRepeatCount = n;
+      const s = document.getElementById('gcpRepSlider'); if (s) s.value = n;
+    });
+    // Sincronizar UI al abrir el dropdown de comportamiento
+    document.querySelector('[data-gcpmenu="comportamiento"]')?.addEventListener('pointerup', () => {
+      requestAnimationFrame(_gcpSyncComportamiento);
     });
 
     // Menús GIF

@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v21.94</footer>
+    <footer class="app-version">v21.96</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -598,24 +598,34 @@ Router.register('editor', {
           <!-- Comportamiento -->
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-gcpmenu="comportamiento">Comportamiento ▾</button>
-            <div class="ed-dropdown" id="gdd-comportamiento" style="min-width:210px">
-              <div class="ed-dropdown-label">Velocidad</div>
-              <div style="display:flex;gap:5px;padding:4px 12px 8px;flex-wrap:wrap">
-                <button class="gcp-chip" data-gcpfps="20">20fps</button>
-                <button class="gcp-chip active" data-gcpfps="10">10fps</button>
-                <button class="gcp-chip" data-gcpfps="5">5fps</button>
-                <button class="gcp-chip" data-gcpfps="2">2fps</button>
+            <div class="ed-dropdown" id="gdd-comportamiento" style="min-width:210px;padding:12px 14px;background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.6);display:none;flex-direction:column;gap:12px">
+              <!-- Velocidad -->
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <span style="color:rgba(255,255,255,.55);font-size:.65rem;font-weight:900;text-transform:uppercase;letter-spacing:.06em">Velocidad</span>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <input type="number" id="gcpFpsNum" min="1" max="24" value="10"
+                    style="width:46px;text-align:center;font-size:1rem;font-weight:700;border:1px solid rgba(255,255,255,0.4);border-radius:8px;background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;-moz-appearance:textfield">
+                  <span style="color:#ccc;font-size:.75rem;flex-shrink:0">fps</span>
+                </div>
+                <input type="range" id="gcpFpsSlider" min="1" max="24" value="10" step="1"
+                  style="width:100%;accent-color:#FFE135;cursor:pointer">
               </div>
-              <div class="ed-dropdown-label">Repeticiones</div>
-              <div style="display:flex;gap:5px;padding:4px 12px 8px;flex-wrap:wrap">
-                <button class="gcp-chip active" data-gcprep="0">∞</button>
-                <button class="gcp-chip" data-gcprep="1">×1</button>
-                <button class="gcp-chip" data-gcprep="2">×2</button>
-                <button class="gcp-chip" data-gcprep="3">×3</button>
-              </div>
-              <div class="ed-dropdown-sep" style="margin:2px 0"></div>
-              <div style="display:flex;gap:5px;padding:4px 12px 8px">
-                <button class="gcp-chip" data-gcpstop="1" style="width:100%">⏹ Stop al final</button>
+              <!-- Repeticiones -->
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <span style="color:rgba(255,255,255,.55);font-size:.65rem;font-weight:900;text-transform:uppercase;letter-spacing:.06em">Repeticiones</span>
+                <label style="display:flex;align-items:center;gap:7px;cursor:pointer;color:#fff;font-size:.82rem;font-weight:700">
+                  <input type="checkbox" id="gcpRepInfinite" checked style="width:15px;height:15px;accent-color:#FFE135;flex:none">
+                  ∞ Infinito
+                </label>
+                <div id="gcpRepSliderRow" style="display:none;flex-direction:column;gap:6px">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <input type="number" id="gcpRepNum" min="1" max="10" value="1"
+                      style="width:46px;text-align:center;font-size:1rem;font-weight:700;border:1px solid rgba(255,255,255,0.4);border-radius:8px;background:rgba(0,0,0,.4);color:#fff;padding:4px 6px;-moz-appearance:textfield">
+                    <span style="color:#ccc;font-size:.75rem;flex-shrink:0">veces</span>
+                  </div>
+                  <input type="range" id="gcpRepSlider" min="1" max="10" value="1" step="1"
+                    style="width:100%;accent-color:#FFE135;cursor:pointer">
+                </div>
               </div>
             </div>
           </div>

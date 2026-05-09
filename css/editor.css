@@ -2080,3 +2080,9 @@ body.editor-page #appView {
   white-space: nowrap;
   color: var(--black);
 }
+
+/* Dropdown comportamiento GCP — popover oscuro, flex al abrirse */
+#gdd-comportamiento { display: none; flex-direction: column; }
+#gdd-comportamiento.open { display: flex; }
+#gdd-comportamiento input[type=number]::-webkit-inner-spin-button,
+#gdd-comportamiento input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
