@@ -18479,53 +18479,86 @@ function gcpOpen(edLayerIdx) {
       _gcpCloseAllDropdowns();
       _gcpDownloadGif();
     });
-    // ── Comportamiento: sliders de velocidad y repeticiones ──
+    // ── Comportamiento: sliders con burbuja flotante ──
+    const _gcpUpdateBehaviourSummary = () => {
+      const el = document.getElementById('gcpBehaviourSummary');
+      if (!el) return;
+      const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
+      const rep = (window._gcpRepeatCount || 0) === 0 ? '∞' : '×' + window._gcpRepeatCount;
+      el.textContent = fps + ' fps · ' + rep;
+    };
     const _gcpSyncComportamiento = () => {
       const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
       const fpsSlider = document.getElementById('gcpFpsSlider');
-      const fpsNum    = document.getElementById('gcpFpsNum');
       if (fpsSlider) fpsSlider.value = Math.min(24, Math.max(1, fps));
-      if (fpsNum)    fpsNum.value    = Math.min(24, Math.max(1, fps));
       const infChk    = document.getElementById('gcpRepInfinite');
       const repSlider = document.getElementById('gcpRepSlider');
-      const repNum    = document.getElementById('gcpRepNum');
       const repRow    = document.getElementById('gcpRepSliderRow');
       const isInf     = (window._gcpRepeatCount || 0) === 0;
       if (infChk)    infChk.checked = isInf;
-      if (repRow)    repRow.style.display = isInf ? 'none' : 'flex';
-      const repVal = Math.max(1, window._gcpRepeatCount || 1);
-      if (repSlider) repSlider.value = repVal;
-      if (repNum)    repNum.value    = repVal;
+      if (repRow)    repRow.style.display = isInf ? 'none' : 'block';
+      if (repSlider) repSlider.value = Math.max(1, window._gcpRepeatCount || 1);
+      _gcpUpdateBehaviourSummary();
     };
-    // Slider fps ↔ número fps (bidireccional)
-    document.getElementById('gcpFpsSlider')?.addEventListener('input', e => {
+
+    // Burbuja flotante: aparece sobre el thumb mientras se arrastra
+    const _gcpShowBubble = (slider, text) => {
+      const bubble = document.getElementById('gcpSliderBubble');
+      if (!bubble) return;
+      const r   = slider.getBoundingClientRect();
+      const min = parseFloat(slider.min) || 0;
+      const max = parseFloat(slider.max) || 1;
+      const val = parseFloat(slider.value);
+      const pct = (val - min) / (max - min);
+      // El thumb no recorre todo el ancho: tiene un margen de ~10px en cada extremo
+      const THUMB_R = 10;
+      const trackW  = r.width - THUMB_R * 2;
+      const thumbX  = r.left + THUMB_R + pct * trackW;
+      // Colocar la burbuja justo encima del thumb (misma separación que edb-size-pop)
+      const thumbY  = r.top - 28;
+      bubble.textContent = text;
+      bubble.style.left = thumbX + 'px';
+      bubble.style.top  = thumbY + 'px';
+      bubble.style.display = 'block';
+    };
+    const _gcpHideBubble = () => {
+      const bubble = document.getElementById('gcpSliderBubble');
+      if (bubble) bubble.style.display = 'none';
+    };
+
+    // Slider fps
+    const _fpsSlider = document.getElementById('gcpFpsSlider');
+    _fpsSlider?.addEventListener('input', e => {
       const fps = parseInt(e.target.value, 10);
       window._gcpFrameDelay = Math.round(1000 / fps);
-      const n = document.getElementById('gcpFpsNum'); if (n) n.value = fps;
+      _gcpShowBubble(e.target, fps + ' fps');
+      _gcpUpdateBehaviourSummary();
     });
-    document.getElementById('gcpFpsNum')?.addEventListener('input', e => {
-      const fps = Math.min(24, Math.max(1, parseInt(e.target.value, 10) || 1));
-      window._gcpFrameDelay = Math.round(1000 / fps);
-      const s = document.getElementById('gcpFpsSlider'); if (s) s.value = fps;
-    });
+    _fpsSlider?.addEventListener('pointerdown', e => { e.stopPropagation(); _gcpShowBubble(e.target, parseInt(e.target.value) + ' fps'); });
+    _fpsSlider?.addEventListener('pointerup',   () => _gcpHideBubble());
+    _fpsSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
+
     // Checkbox infinito
     document.getElementById('gcpRepInfinite')?.addEventListener('change', e => {
       const isInf = e.target.checked;
       window._gcpRepeatCount = isInf ? 0 : (parseInt(document.getElementById('gcpRepSlider')?.value, 10) || 1);
       const repRow = document.getElementById('gcpRepSliderRow');
-      if (repRow) repRow.style.display = isInf ? 'none' : 'flex';
+      if (repRow) repRow.style.display = isInf ? 'none' : 'block';
+      _gcpUpdateBehaviourSummary();
     });
-    // Slider rep ↔ número rep (bidireccional)
-    document.getElementById('gcpRepSlider')?.addEventListener('input', e => {
+
+    // Slider repeticiones
+    const _repSlider = document.getElementById('gcpRepSlider');
+    _repSlider?.addEventListener('input', e => {
       const n = parseInt(e.target.value, 10);
       window._gcpRepeatCount = n;
-      const num = document.getElementById('gcpRepNum'); if (num) num.value = n;
+      _gcpShowBubble(e.target, '×' + n);
+      _gcpUpdateBehaviourSummary();
     });
-    document.getElementById('gcpRepNum')?.addEventListener('input', e => {
-      const n = Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 1));
-      window._gcpRepeatCount = n;
-      const s = document.getElementById('gcpRepSlider'); if (s) s.value = n;
-    });
+    _repSlider?.addEventListener('pointerdown', e => { e.stopPropagation(); _gcpShowBubble(e.target, '×' + parseInt(e.target.value)); });
+    _repSlider?.addEventListener('pointerup',   () => _gcpHideBubble());
+    _repSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
+
     // Sincronizar UI al abrir el dropdown de comportamiento
     document.querySelector('[data-gcpmenu="comportamiento"]')?.addEventListener('pointerup', () => {
       requestAnimationFrame(_gcpSyncComportamiento);
