@@ -2236,141 +2236,203 @@ function _startFade() {
 function _hideCreditsButtons() {
   const el = document.getElementById('creditsOverlay');
   if (el) el.remove();
+  RS._creditsLink = null;
+  RS._creditsRestart = null;
 }
 
 function _showCredits() {
   RS.isCredits = true;
-  const _capturedIdx = RS.idx;
-  // Esperar a que el layout esté pintado antes de leer getBoundingClientRect
-  requestAnimationFrame(() => {
-    // Si el usuario ya navegó a otro panel antes del frame, cancelar
-    if (RS.idx !== _capturedIdx || !RS.isCredits) return;
-    _buildCreditsOverlay();
-  });
+  // Primero dibujar el canvas (fondo blanco + contenido visual) para que no haya negro
+  _renderCredits();
+  // Luego montar los botones HTML encima para capturar clicks
+  _mountCreditsButtons();
 }
 
-function _buildCreditsOverlay() {
-  const isHoriz     = (RS.panels[RS.idx]?.orientation || 'v') === 'h';
-  const socialText  = RS._workSocial || '';
-  const authorText  = RS._workAuthor || '';
+function _renderCredits() {
+  const { pw, ph } = _panelDims(RS.idx);
+  const ctx = RS.ctx;
+  const isHoriz    = pw > ph;
+  const socialText = RS._workSocial || '';
+  const authorText = RS._workAuthor || '';
 
-  // Eliminar overlay anterior si existe
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+  ctx.textBaseline = 'middle';
+
+  function wrapText(text, maxW) {
+    const result = [];
+    text.split('\n').forEach(para => {
+      if (!para.trim()) { result.push(''); return; }
+      const words = para.split(' ');
+      let cur = '';
+      words.forEach(w => {
+        if (ctx.measureText(w).width > maxW) {
+          if (cur) { result.push(cur); cur = ''; }
+          let chunk = '';
+          for (const ch of w) {
+            const test = chunk + ch;
+            if (ctx.measureText(test).width > maxW && chunk) { result.push(chunk); chunk = ch; }
+            else chunk = test;
+          }
+          if (chunk) cur = chunk;
+          return;
+        }
+        const test = cur ? cur + ' ' + w : w;
+        if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
+        else cur = test;
+      });
+      if (cur) result.push(cur);
+    });
+    return result;
+  }
+
+  if (isHoriz) {
+    const fRef = ph;
+    const leftW = pw * 0.52, leftX = pw * 0.04, colGap = pw * 0.04;
+    const rightCX = leftW + colGap + pw * 0.44 / 2;
+    const socialMaxW = leftW - leftX - pw * 0.02;
+    const socialFS = Math.round(fRef * 0.055);
+    const authorFS = Math.round(fRef * 0.072);
+
+    ctx.globalAlpha = 0.15; ctx.fillStyle = '#888';
+    ctx.fillRect(leftW + colGap * 0.4, ph * 0.1, 1, ph * 0.8);
+    ctx.globalAlpha = 1;
+
+    let socialLines = [];
+    if (socialText) {
+      ctx.font = '400 ' + socialFS + 'px Patrick Hand, sans-serif';
+      socialLines = wrapText(socialText, socialMaxW);
+    }
+    const socialLineH = socialFS * 1.5;
+    const blockH = socialLines.length * socialLineH + (socialText ? socialFS * 1.2 : 0) + authorFS * 1.5;
+    let y = (ph - blockH) / 2 + socialLineH * 0.5;
+    if (socialText) {
+      ctx.font = '400 ' + socialFS + 'px Patrick Hand, sans-serif';
+      ctx.fillStyle = '#444'; ctx.textAlign = 'left';
+      socialLines.forEach(line => { ctx.fillText(line, leftX, y); y += socialLineH; });
+      y += socialFS * 0.8;
+    }
+    ctx.font = '600 ' + authorFS + 'px Patrick Hand, sans-serif';
+    ctx.fillStyle = '#222'; ctx.textAlign = 'center';
+    ctx.fillText(authorText, leftX + leftW / 2, y);
+
+    const logoFS = Math.round(fRef * 0.11), sloganFS = Math.round(fRef * 0.042), linkFS = Math.round(fRef * 0.038);
+    const lineH = ph * 0.09;
+    const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
+    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
+    if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+      const lh = logoFS * 1.1, lw2 = _logoImg.naturalWidth * (lh / _logoImg.naturalHeight);
+      ctx.drawImage(_logoImg, rightCX - lw2/2, rightStartY - lh * 0.8, lw2, lh);
+    }
+    const sloganY = rightStartY + sloganFS * 2;
+    ctx.font = '400 ' + sloganFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#555';
+    ctx.fillText('Crea y Comparte', rightCX, sloganY);
+    const linkY = sloganY + sloganFS * 3;
+    ctx.font = '400 ' + linkFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#1a73e8';
+    ctx.fillText('Visita más obras del autor', rightCX, linkY);
+    const lw = ctx.measureText('Visita más obras del autor').width;
+    ctx.beginPath(); ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6); ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6); ctx.stroke();
+    const restartFS = Math.round(fRef * 0.038), restartY = linkY + linkFS * 2.2;
+    ctx.font = '600 ' + restartFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#888';
+    ctx.fillText('↩ Volver a leer', rightCX, restartY);
+    // Guardar coordenadas canvas para los botones HTML
+    RS._creditsLink    = { cx: rightCX, cy: linkY,    fs: linkFS,    pw, ph };
+    RS._creditsRestart = { cx: rightCX, cy: restartY, fs: restartFS, pw, ph };
+
+  } else {
+    const fRef = pw, cx = pw / 2, marginX = pw * 0.09, maxW = pw * 0.82;
+    let authorY = ph * 0.11;
+    if (socialText) {
+      const socialFS = Math.round(fRef * 0.038);
+      ctx.font = '400 ' + socialFS + 'px Patrick Hand, sans-serif';
+      ctx.fillStyle = '#444'; ctx.textAlign = 'left';
+      const socialLines = wrapText(socialText, maxW);
+      const socialLineH = socialFS * 1.4, socialStartY = ph * 0.26;
+      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+      authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
+    }
+    ctx.font = '600 ' + Math.round(fRef * 0.055) + 'px Patrick Hand, sans-serif';
+    ctx.fillStyle = '#222'; ctx.textAlign = 'center';
+    ctx.fillText(authorText, cx, authorY);
+    const lineH = ph * 0.09, logoFS = Math.round(fRef * 0.11), logoY = authorY + lineH * 1.3;
+    if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+      const lh2 = logoFS * 1.1, lw2 = _logoImg.naturalWidth * (lh2 / _logoImg.naturalHeight);
+      ctx.drawImage(_logoImg, cx - lw2/2, logoY - lh2 * 0.8, lw2, lh2);
+    }
+    const sloganFS = Math.round(fRef * 0.042), sloganY = logoY + sloganFS * 2;
+    ctx.font = '400 ' + sloganFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#555';
+    ctx.fillText('Crea y Comparte', cx, sloganY);
+    const linkFS = Math.round(fRef * 0.038), linkY = sloganY + sloganFS * 3;
+    ctx.font = '400 ' + linkFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#1a73e8';
+    ctx.fillText('Visita más obras del autor', cx, linkY);
+    const lw = ctx.measureText('Visita más obras del autor').width;
+    ctx.beginPath(); ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = Math.max(1, linkFS * 0.06);
+    ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6); ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6); ctx.stroke();
+    const restartFS = Math.round(fRef * 0.038), restartY = linkY + linkFS * 2.2;
+    ctx.font = '600 ' + restartFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#888';
+    ctx.fillText('↩ Volver a leer', cx, restartY);
+    RS._creditsLink    = { cx, cy: linkY,    fs: linkFS,    pw, ph };
+    RS._creditsRestart = { cx, cy: restartY, fs: restartFS, pw, ph };
+  }
+}
+
+function _mountCreditsButtons() {
   const prev = document.getElementById('creditsOverlay');
   if (prev) prev.remove();
 
-  // Leer posición del canvas desde sus estilos CSS (fiables tras _resizeCanvas)
-  const cLeft   = parseInt(RS.canvas.style.left)   || 0;
-  const cTop    = parseInt(RS.canvas.style.top)    || 0;
-  const cWidth  = parseInt(RS.canvas.style.width)  || 0;
-  const cHeight = parseInt(RS.canvas.style.height) || 0;
+  const cl = RS._creditsLink;
+  const cr = RS._creditsRestart;
+  if (!cl || !cr) return;
 
-  // Si el canvas aún no tiene dimensiones, reintentar
-  if (cWidth === 0 || cHeight === 0) {
-    requestAnimationFrame(() => _buildCreditsOverlay());
-    return;
-  }
+  // Escala canvas→pantalla desde estilos CSS calculados por _resizeCanvas
+  const cW = parseInt(RS.canvas.style.width)  || RS.canvas.width;
+  const cH = parseInt(RS.canvas.style.height) || RS.canvas.height;
+  const cL = parseInt(RS.canvas.style.left)   || 0;
+  const cT = parseInt(RS.canvas.style.top)    || 0;
+  const sx = cW / cl.pw;
+  const sy = cH / cl.ph;
 
+  // Contenedor invisible encima del canvas
   const ov = document.createElement('div');
   ov.id = 'creditsOverlay';
-  ov.style.cssText = [
-    'position:fixed',
-    'left:' + cLeft + 'px',
-    'top:' + cTop + 'px',
-    'width:' + cWidth + 'px',
-    'height:' + cHeight + 'px',
-    'background:#ffffff',
-    'z-index:5',
-    'overflow:hidden',
-    'border-radius:10px',
-    'box-shadow:0 8px 32px rgba(0,0,0,.35)',
-    'font-family:Patrick Hand, sans-serif',
-    'display:flex',
-    'box-sizing:border-box',
-  ].join(';');
+  ov.style.cssText = 'position:fixed;left:' + cL + 'px;top:' + cT + 'px;width:' + cW + 'px;height:' + cH + 'px;z-index:10;pointer-events:none;';
 
-  const W = cWidth;
-  const H = cHeight;
-
-  if (isHoriz) {
-    // ── HORIZONTAL: dos columnas ──
-    ov.style.flexDirection = 'row';
-
-    // Columna izquierda: social + autor
-    const left = document.createElement('div');
-    left.style.cssText = 'width:52%;display:flex;flex-direction:column;justify-content:center;padding:0 4% 0 4%;border-right:1px solid rgba(0,0,0,0.1);box-sizing:border-box;';
-    if (socialText) {
-      const s = document.createElement('p');
-      s.textContent = socialText;
-      s.style.cssText = 'font-size:' + Math.round(H*0.055) + 'px;color:#444;margin:0 0 ' + Math.round(H*0.04) + 'px;line-height:1.4;white-space:pre-wrap;word-break:break-word;';
-      left.appendChild(s);
-    }
-    const a = document.createElement('p');
-    a.textContent = authorText;
-    a.style.cssText = 'font-size:' + Math.round(H*0.072) + 'px;font-weight:600;color:#222;margin:0;text-align:center;';
-    left.appendChild(a);
-    ov.appendChild(left);
-
-    // Columna derecha: logo + eslogan + enlace + restart
-    const right = document.createElement('div');
-    right.style.cssText = 'width:48%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:' + Math.round(H*0.04) + 'px;padding:0 4%;box-sizing:border-box;';
-    _buildRightColumn(right, W, H);
-    ov.appendChild(right);
-
-  } else {
-    // ── VERTICAL: columna única ──
-    ov.style.flexDirection = 'column';
-    ov.style.alignItems = 'center';
-    ov.style.padding = '0 9%';
-
-    if (socialText) {
-      const s = document.createElement('p');
-      s.textContent = socialText;
-      s.style.cssText = 'font-size:' + Math.round(W*0.038) + 'px;color:#444;margin:' + Math.round(H*0.26) + 'px 0 0;line-height:1.4;white-space:pre-wrap;word-break:break-word;width:100%;';
-      ov.appendChild(s);
-    }
-    const a = document.createElement('p');
-    a.textContent = authorText;
-    a.style.cssText = 'font-size:' + Math.round(W*0.055) + 'px;font-weight:600;color:#222;margin:' + (socialText ? Math.round(W*0.02) : Math.round(H*0.11)) + 'px 0 0;text-align:center;';
-    ov.appendChild(a);
-
-    // Logo + eslogan + enlace + restart centrados
-    const mid = document.createElement('div');
-    mid.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:' + Math.round(H*0.03) + 'px;margin-top:' + Math.round(H*0.06) + 'px;';
-    _buildRightColumn(mid, W, H);
-    ov.appendChild(mid);
+  function makeBtn(data, isLink) {
+    const el = isLink ? document.createElement('a') : document.createElement('button');
+    if (isLink) { el.href = 'https://sargentopez.github.io/ComiXou/index.html'; }
+    const bw = Math.round(data.fs * 8 * sx);   // ancho generoso
+    const bh = Math.round(data.fs * 2.5 * sy);  // alto generoso
+    const bx = Math.round(data.cx * sx - bw / 2);
+    const by = Math.round(data.cy * sy - bh / 2);
+    el.style.cssText = [
+      'position:absolute',
+      'left:' + bx + 'px',
+      'top:' + by + 'px',
+      'width:' + bw + 'px',
+      'height:' + bh + 'px',
+      'background:transparent',
+      'border:none',
+      'cursor:pointer',
+      'pointer-events:all',
+      'touch-action:manipulation',
+      '-webkit-tap-highlight-color:rgba(0,0,0,0)',
+      'display:block',
+      'padding:0',
+    ].join(';');
+    return el;
   }
+
+  const lk = makeBtn(cl, true);
+  ov.appendChild(lk);
+
+  const rb = makeBtn(cr, false);
+  rb.addEventListener('click',    e => { e.stopPropagation(); _creditsClick(); });
+  rb.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive: false });
+  ov.appendChild(rb);
 
   document.getElementById('readerApp').appendChild(ov);
-}
-
-function _buildRightColumn(container, W, H) {
-  // Logo
-  if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
-    const logoH = Math.round(Math.min(W,H) * 0.12);
-    const logoW = Math.round(_logoImg.naturalWidth * (logoH / _logoImg.naturalHeight));
-    const img = document.createElement('img');
-    img.src = _logoImg.src;
-    img.style.cssText = 'width:' + logoW + 'px;height:' + logoH + 'px;display:block;';
-    container.appendChild(img);
-  }
-  // Eslogan
-  const sl = document.createElement('p');
-  sl.textContent = 'Crea y Comparte';
-  sl.style.cssText = 'font-size:' + Math.round(Math.min(W,H)*0.042) + 'px;color:#555;margin:0;text-align:center;';
-  container.appendChild(sl);
-  // Enlace
-  const lk = document.createElement('a');
-  lk.textContent = 'Visita más obras del autor';
-  lk.href = 'https://sargentopez.github.io/ComiXou/index.html';
-  lk.style.cssText = 'font-size:' + Math.round(Math.min(W,H)*0.038) + 'px;color:#1a73e8;text-decoration:underline;cursor:pointer;text-align:center;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);padding:8px 4px;display:block;';
-  container.appendChild(lk);
-  // Botón volver
-  const rb = document.createElement('button');
-  rb.textContent = '↩ Volver a leer';
-  rb.style.cssText = 'font-size:' + Math.round(Math.min(W,H)*0.038) + 'px;font-family:Patrick Hand,sans-serif;color:#888;background:none;border:none;cursor:pointer;text-align:center;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);padding:8px 4px;';
-  rb.addEventListener('click', e => { e.stopPropagation(); _creditsClick(); });
-  rb.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive: false });
-  container.appendChild(rb);
 }
 
 function _resetCredits() {
