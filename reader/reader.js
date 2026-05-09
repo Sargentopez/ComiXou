@@ -2309,7 +2309,7 @@ function _showCreditsFullscreen() {
   ov.style.cssText = [
     'position:fixed',
     'inset:0',
-    'z-index:9000',
+    'z-index:2147483647',
     'background:#ffffff',
     'display:flex',
     'font-family:Patrick Hand,sans-serif',
@@ -2359,7 +2359,7 @@ function _showCreditsFullscreen() {
     ov.appendChild(mid);
   }
 
-  document.getElementById('readerApp').appendChild(ov);
+  document.body.appendChild(ov);
 }
 
 function _buildCreditsContent(container, vw, vh) {
