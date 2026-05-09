@@ -1516,6 +1516,8 @@ function _startScrollReader() {
 
   // ── Scroll nativo: detectar llegada a nuevo panel ──
   let _prevSI = 0, _scrollRaf = null;
+  RS._scrollPrevSI = () => _prevSI;
+  RS._scrollSetPrevSI = (v) => { _prevSI = v; };
   container.addEventListener('scroll', () => {
     if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
     _scrollRaf = requestAnimationFrame(() => {
@@ -2470,6 +2472,7 @@ function _creditsClick() {
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   // En modo scroll: resetear posición al panel 0 instantáneamente
   if (RS.scrollCont) {
+    if (RS._scrollSetPrevSI) RS._scrollSetPrevSI(0); // evitar goingBack al panel 0
     RS.scrollCont.scrollTo({
       left: 0, top: 0, behavior: 'instant'
     });
