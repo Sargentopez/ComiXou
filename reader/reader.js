@@ -1734,15 +1734,14 @@ function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
 
-  // Panel de créditos — HTML puro, solo montar una vez
+  // Panel de créditos — redibujar y remontar botones cada vez que se navega a él
   if (panel.isCredits) {
-    if (!RS.isCredits) _showCredits();
+    _showCredits();
     return;
   }
 
-  // Si venimos de los créditos, limpiar — pero no si los botones ya están montados
-  // (el tick cambia RS.idx temporalmente y dispararía _resetCredits incorrectamente)
-  if (RS.isCredits && !document.querySelector('._cxCreditBtn')) _resetCredits();
+  // Si venimos de los créditos, limpiar siempre al salir
+  if (RS.isCredits) _resetCredits();
 
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
@@ -2267,6 +2266,7 @@ function _mountCreditsWhenScrollEnds(container, isH) {
 
 function _showCredits() {
   RS.isCredits = true;
+  _hideCreditsButtons(); // limpiar botones previos antes de remontar
   _renderCredits();
 
   const isScrollMode = document.getElementById('scrollReader')?.className?.includes('scroll-');
