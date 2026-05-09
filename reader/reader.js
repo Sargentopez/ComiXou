@@ -870,6 +870,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Botón "Volver a leer" en créditos — elemento HTML nativo, siempre funciona
+  const creditsRestartEl = document.getElementById('creditsRestart');
+  if (creditsRestartEl) {
+    creditsRestartEl.addEventListener('click', e => { e.stopPropagation(); _creditsClick(); });
+  }
+
   // Botón cerrar: siempre visible, pegado a la hoja por _positionBtns()
   const closeBtnEl = document.getElementById('closeBtn');
   if (closeBtnEl) {
@@ -1723,6 +1729,11 @@ function _resizeCanvas() {
   RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
   RS.canvas.style.touchAction = 'manipulation';
   _positionBtns();
+  // Si estamos en créditos, re-posicionar botones HTML al redimensionar
+  if (RS.isCredits) {
+    const { pw: _pw, ph: _ph } = _panelDims(RS.idx);
+    _positionCreditsButtons(_pw, _ph);
+  }
 }
 
 // ── RENDER PRINCIPAL ──────────────────────────────────────────
@@ -2240,12 +2251,65 @@ function _startFade() {
 // ── PANTALLA FINAL DE CRÉDITOS ────────────────────────────────
 // Se llama desde _render() cuando el panel actual es el de créditos.
 // La posición del canvas ya la gestiona _resizeCanvas() normalmente.
+
+// Posiciona los botones HTML sobre el canvas en las mismas coordenadas
+// que los textos del canvas. Se llama desde _renderCredits al final.
+function _positionCreditsButtons(pw, ph) {
+  const linkEl    = document.getElementById('creditsLink');
+  const restartEl = document.getElementById('creditsRestart');
+  if (!linkEl || !restartEl) return;
+
+  const rect   = RS.canvas.getBoundingClientRect();
+  const scaleX = rect.width  / pw;
+  const scaleY = rect.height / ph;
+
+  const la = RS.creditsLinkArea;
+  const ra = RS.creditsRestartArea;
+
+  // Posicionar usando left = borde izquierdo del área en coordenadas de pantalla
+  // transform: translateX(-50%) está en CSS, así que usamos el centro X
+  if (la) {
+    const screenX = rect.left + (la.x + la.w / 2) * scaleX;
+    const screenY = rect.top  + la.y * scaleY;
+    const screenW = la.w * scaleX;
+    const screenH = la.h * scaleY;
+    linkEl.style.left    = Math.round(screenX) + 'px';
+    linkEl.style.top     = Math.round(screenY) + 'px';
+    linkEl.style.width   = Math.round(screenW) + 'px';
+    linkEl.style.height  = Math.round(screenH + screenH * 0.5) + 'px'; // zona táctil más generosa
+    linkEl.style.padding = '0';
+    linkEl.style.display = 'block';
+  }
+
+  if (ra) {
+    const screenX = rect.left + (ra.x + ra.w / 2) * scaleX;
+    const screenY = rect.top  + ra.y * scaleY;
+    const screenW = ra.w * scaleX;
+    const screenH = ra.h * scaleY;
+    restartEl.style.left    = Math.round(screenX) + 'px';
+    restartEl.style.top     = Math.round(screenY) + 'px';
+    restartEl.style.width   = Math.round(screenW) + 'px';
+    restartEl.style.height  = Math.round(screenH + screenH * 0.5) + 'px';
+    restartEl.style.padding = '0';
+    restartEl.style.display = 'block';
+  }
+}
+
+function _hideCreditsButtons() {
+  const linkEl    = document.getElementById('creditsLink');
+  const restartEl = document.getElementById('creditsRestart');
+  if (linkEl)    linkEl.style.display    = 'none';
+  if (restartEl) restartEl.style.display = 'none';
+}
+
 function _showCredits() {
   // Mostrar todo con alpha=1 directamente — sin fade, sin timer, sin riesgo de cancelación
   RS.creditsAlpha = 1;
   RS.creditsShown = true;
   const { pw, ph } = _panelDims(RS.idx);
   _renderCredits(pw, ph);
+  // Posicionar botones HTML sobre el canvas (funcionan en PC y touch sin problemas)
+  _positionCreditsButtons(pw, ph);
 }
 
 function _resetCredits() {
@@ -2253,12 +2317,14 @@ function _resetCredits() {
   if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
   RS.creditsAlpha = 0;
   RS.isCredits    = false;
+  _hideCreditsButtons();
 }
 
 function _creditsClick() {
   if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
   if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
   RS.isCredits = false;
+  _hideCreditsButtons();
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
 }

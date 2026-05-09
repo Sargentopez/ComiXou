@@ -199,3 +199,33 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   box-shadow: 0 8px 32px rgba(0,0,0,.45);
   pointer-events: none;
 }
+
+/* ── Botones HTML de pantalla de créditos ── */
+.credits-html-btn {
+  position: fixed;
+  z-index: 50;
+  transform: translateX(-50%);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-family: 'Patrick Hand', sans-serif;
+  text-align: center;
+  /* touch-action explícito para asegurar respuesta táctil */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(0,0,0,0.1);
+  /* padding generoso para zona táctil cómoda */
+  padding: 10px 16px;
+  border-radius: 8px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.credits-link {
+  /* Invisibles visualmente — el canvas dibuja el texto, el HTML captura los clicks */
+  color: transparent;
+  text-decoration: none;
+  background: transparent;
+}
+.credits-restart {
+  color: transparent;
+  background: transparent;
+}
