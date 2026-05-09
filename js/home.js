@@ -318,12 +318,25 @@ function buildRow(comic, currentUser) {
     unpubBtn.className = 'comic-row-btn unpub';
     unpubBtn.textContent = I18n.t('unpublish');
     unpubBtn.addEventListener('click', () => {
-      appConfirm(I18n.t('confirmUnpublish'), ()=>{
-        comic.published = false;
-        ComicStore.save(comic);
+      appConfirm(I18n.t('confirmUnpublish'), async () => {
+        // Quitar inmediatamente del cache en memoria para que desaparezca del render
+        if (_homeWorks) {
+          _homeWorks = _homeWorks.filter(w => w.supabaseId !== comic.supabaseId && w.id !== comic.id);
+        }
         showFiltrosLevel1();
         renderComics();
         showToast(I18n.t('unpublishOk'));
+        // Retirar en Supabase (async, no bloquea la UI)
+        if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+          try {
+            await SupabaseClient.unpublishWork(comic.supabaseId, comic.supabaseId);
+          } catch(err) { console.warn('unpublishWork:', err); }
+        }
+        // Actualizar entrada local si existe
+        const _local = ComicStore.getById(comic.id) || ComicStore.getById(comic.supabaseId);
+        if (_local) { _local.published = false; _local.approved = false; ComicStore.save(_local); }
+        // Invalidar cache para que la próxima carga traiga datos frescos de Supabase
+        if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
       }, I18n.t('unpublish') || 'Retirar');
     });
     actions.appendChild(unpubBtn);

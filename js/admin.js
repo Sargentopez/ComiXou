@@ -268,6 +268,8 @@ function buildAdminRow(comic, mode) {
     }
     const local = ComicStore.getById(comic.id);
     if (local) { local.published = false; local.approved = false; ComicStore.save(local); }
+    // Invalidar cache del home para que la obra desaparezca inmediatamente del índice
+    if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     showToast(I18n.t('retireOk'));
     renderTab('published');
   });
