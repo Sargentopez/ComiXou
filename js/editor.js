@@ -17460,8 +17460,11 @@ function _gcpSaveFrame() {
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
+    // Respetar visibilidad: si el objeto no existe en este frame, no forzar visible
+    const _wasVisible = la._gcpVisible !== false
+      && !(la._frames[fi] && la._frames[fi].visible === false);
     const snap = {x:la.x,y:la.y,width:la.width,height:la.height,
-                  rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
+                  rotation:la.rotation||0,opacity:la.opacity??1,visible:_wasVisible};
     if (fi < la._frames.length) {
       la._frames[fi] = snap;
     } else {
@@ -17501,8 +17504,13 @@ function _gcpCaptureFrame() {
       }
       la._frames.push(snap);
     }
-    // Insertar copia exacta del frame fi justo después
-    la._frames.splice(fi + 1, 0, {...la._frames[fi]});
+    // Insertar copia del frame fi justo después.
+    // Si el objeto no existía en fi (visible:false), el nuevo frame también es invisible.
+    const _srcFrame = la._frames[fi];
+    const _newFrame = (_srcFrame && _srcFrame.visible === false)
+      ? {..._srcFrame, visible: false}
+      : {..._srcFrame};
+    la._frames.splice(fi + 1, 0, _newFrame);
   });
   const newFi = fi + 1;
   window._gcpGlobalFrameIdx = newFi;
