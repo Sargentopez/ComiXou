@@ -2397,7 +2397,7 @@ function _mountCreditsButtons() {
   // Contenedor invisible encima del canvas
   const ov = document.createElement('div');
   ov.id = 'creditsOverlay';
-  ov.style.cssText = 'position:fixed;left:' + cL + 'px;top:' + cT + 'px;width:' + cW + 'px;height:' + cH + 'px;z-index:10;pointer-events:none;';
+  ov.style.cssText = 'position:fixed;left:' + cL + 'px;top:' + cT + 'px;width:' + cW + 'px;height:' + cH + 'px;z-index:9000;pointer-events:none;';
 
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
