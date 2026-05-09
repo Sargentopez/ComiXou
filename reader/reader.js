@@ -2239,10 +2239,12 @@ function _hideCreditsButtons() {
 }
 
 function _showCredits() {
-  // Ocultar el canvas — la hoja de créditos es 100% HTML
-  RS.canvas.style.display = 'none';
   RS.isCredits = true;
+  // Esperar a que el layout esté pintado antes de leer getBoundingClientRect
+  requestAnimationFrame(() => _buildCreditsOverlay());
+}
 
+function _buildCreditsOverlay() {
   const isHoriz     = (RS.panels[RS.idx]?.orientation || 'v') === 'h';
   const socialText  = RS._workSocial || '';
   const authorText  = RS._workAuthor || '';
@@ -2251,8 +2253,15 @@ function _showCredits() {
   const prev = document.getElementById('creditsOverlay');
   if (prev) prev.remove();
 
-  // Crear overlay HTML que ocupa exactamente el mismo espacio que el canvas
+  // Leer posición REAL del canvas tras el layout
   const rect = RS.canvas.getBoundingClientRect();
+
+  // Si el canvas no tiene dimensiones reales todavía, reintentar
+  if (rect.width === 0 || rect.height === 0) {
+    requestAnimationFrame(() => _buildCreditsOverlay());
+    return;
+  }
+
   const ov = document.createElement('div');
   ov.id = 'creditsOverlay';
   ov.style.cssText = [
@@ -2359,14 +2368,11 @@ function _buildRightColumn(container, W, H) {
 function _resetCredits() {
   RS.isCredits = false;
   _hideCreditsButtons();
-  // Restaurar canvas que se ocultó durante los créditos
-  if (RS.canvas) RS.canvas.style.display = '';
 }
 
 function _creditsClick() {
   RS.isCredits = false;
   _hideCreditsButtons();
-  if (RS.canvas) RS.canvas.style.display = '';
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
 }
