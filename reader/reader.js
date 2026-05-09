@@ -1541,6 +1541,11 @@ function _startScrollReader() {
       }
       _render();
       _updateOverlay();
+      // Si es la hoja de créditos en modo scroll, esperar a que el scroll
+      // se detenga completamente antes de montar los botones interactivos
+      if (RS.panels[si]?.isCredits) {
+        _mountCreditsWhenScrollEnds(container, isH);
+      }
     });
   }, { passive: true });
 
@@ -2240,12 +2245,39 @@ function _hideCreditsButtons() {
   RS._creditsRestart = null;
 }
 
+function _mountCreditsWhenScrollEnds(container, isH) {
+  // Esperar a que el scroll-snap termine: detectar que la posición no cambia
+  let lastPos = isH ? container.scrollLeft : container.scrollTop;
+  let stable  = 0;
+  function check() {
+    if (!RS.isCredits) return; // el usuario ya navegó a otro panel
+    const pos = isH ? container.scrollLeft : container.scrollTop;
+    if (pos === lastPos) {
+      stable++;
+      if (stable >= 3) {
+        // Scroll detenido: montar botones ahora que el canvas está en su posición final
+        _mountCreditsButtons();
+        return;
+      }
+    } else {
+      stable  = 0;
+      lastPos = pos;
+    }
+    requestAnimationFrame(check);
+  }
+  requestAnimationFrame(check);
+}
+
 function _showCredits() {
   RS.isCredits = true;
   // Primero dibujar el canvas (fondo blanco + contenido visual) para que no haya negro
   _renderCredits();
-  // Luego montar los botones HTML encima para capturar clicks
-  _mountCreditsButtons();
+  // En modo fixed montar botones inmediatamente; en modo scroll los monta
+  // _mountCreditsWhenScrollEnds cuando el canvas está en su posición final
+  const isScrollMode = document.getElementById('scrollReader')?.className?.includes('scroll-');
+  if (!isScrollMode) {
+    _mountCreditsButtons();
+  }
 }
 
 function _renderCredits() {
