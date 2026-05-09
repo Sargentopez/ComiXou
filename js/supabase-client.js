@@ -488,6 +488,27 @@ const SupabaseClient = (() => {
       published:      false,
       pending_review: true,
     });
+    // Si los panels llegan sin dataUrl (p.ej. publicando desde datos de la nube),
+    // recuperar los data_url existentes en Supabase para no perder los thumbnails.
+    const _panelsNeedThumb = comic.panels && comic.panels.every(p => !p.dataUrl);
+    if (_panelsNeedThumb && comic.supabaseId) {
+      try {
+        const _existing = await _get(
+          `panels?work_id=eq.${comic.supabaseId}&order=panel_order.asc&select=panel_order,data_url`
+        );
+        if (_existing && _existing.length) {
+          const _thumbByOrder = {};
+          _existing.forEach(p => { _thumbByOrder[p.panel_order] = p.data_url; });
+          comic = {
+            ...comic,
+            panels: comic.panels.map((p, i) => ({
+              ...p,
+              dataUrl: _thumbByOrder[i] || null,
+            })),
+          };
+        }
+      } catch(_e) { /* preservar thumbnails es best-effort */ }
+    }
     await _uploadPanels(comic);
   }
 
