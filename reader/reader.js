@@ -1441,8 +1441,9 @@ function _startScrollReader() {
 
   // ── Render inicial de todos los slides ──
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    // Paso 1: renderizar todos los panels sin textos secuenciales
+    // Paso 1: renderizar todos los panels sin textos secuenciales (saltar créditos)
     RS.panels.forEach((panel, pi) => {
+      if (panel.isCredits) return; // los créditos se renderizan cuando el usuario llega
       _activateCanvas(pi);
       RS.idx      = pi;
       RS.textStep = 0;
@@ -2243,8 +2244,7 @@ function _startFade() {
 function _hideCreditsButtons() {
   const el = document.getElementById('creditsOverlay');
   if (el) el.remove();
-  RS._creditsLink = null;
-  RS._creditsRestart = null;
+  // NO borrar _creditsLink/_creditsRestart — se reutilizan cuando se vuelve a créditos
 }
 
 function _mountCreditsWhenScrollEnds(container, isH) {
@@ -2432,7 +2432,7 @@ function _mountCreditsButtons() {
   // Contenedor invisible encima del canvas
   const ov = document.createElement('div');
   ov.id = 'creditsOverlay';
-  ov.style.cssText = 'position:fixed;left:' + cL + 'px;top:' + cT + 'px;width:' + cW + 'px;height:' + cH + 'px;z-index:9000;pointer-events:none;outline:3px solid green;';
+  ov.style.cssText = 'position:fixed;left:' + cL + 'px;top:' + cT + 'px;width:' + cW + 'px;height:' + cH + 'px;z-index:9000;pointer-events:none;';
 
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
@@ -2447,8 +2447,8 @@ function _mountCreditsButtons() {
       'top:' + by + 'px',
       'width:' + bw + 'px',
       'height:' + bh + 'px',
-      'background:' + (isLink ? 'rgba(255,0,0,0.25)' : 'rgba(0,0,255,0.25)'),
-      'border:2px solid ' + (isLink ? 'red' : 'blue'),
+      'background:transparent',
+      'border:none',
       'cursor:pointer',
       'pointer-events:all',
       'touch-action:manipulation',
