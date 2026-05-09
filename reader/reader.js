@@ -870,12 +870,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Botón "Volver a leer" en créditos — elemento HTML nativo, siempre funciona
-  const creditsRestartEl = document.getElementById('creditsRestart');
-  if (creditsRestartEl) {
-    creditsRestartEl.addEventListener('click', e => { e.stopPropagation(); _creditsClick(); });
-  }
-
   // Botón cerrar: siempre visible, pegado a la hoja por _positionBtns()
   const closeBtnEl = document.getElementById('closeBtn');
   if (closeBtnEl) {
@@ -1481,8 +1475,7 @@ function _startScrollReader() {
     const adx = Math.abs(dx), ady = Math.abs(dy);
     // En pantalla de créditos: tap (movimiento mínimo) → detectar enlace/botón
     if (RS.isCredits && adx < 20 && ady < 20) {
-      _handleCreditsClick(ex, ey);
-      return;
+      return; // el overlay HTML gestiona los clicks en créditos
     }
     if (isH && adx < 20) return;
     if (!isH && ady < 20) return;
@@ -1729,11 +1722,7 @@ function _resizeCanvas() {
   RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
   RS.canvas.style.touchAction = 'manipulation';
   _positionBtns();
-  // Si estamos en créditos, re-posicionar botones HTML al redimensionar
-  if (RS.isCredits) {
-    const { pw: _pw, ph: _ph } = _panelDims(RS.idx);
-    _positionCreditsButtons(_pw, _ph);
-  }
+
 }
 
 // ── RENDER PRINCIPAL ──────────────────────────────────────────
@@ -1741,22 +1730,14 @@ function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
 
-  // Panel de créditos — render especial con fade
+  // Panel de créditos — HTML puro, solo montar una vez
   if (panel.isCredits) {
-    RS.isCredits = true;
-    const { pw, ph } = _panelDims(RS.idx);
-    // Solo llamar _showCredits si no hay fade en marcha ni ya mostrado
-    // para evitar el parpadeo al redibujar con alpha=0
-    if (!RS.creditsTimer && !RS.fadeRaf) {
-      _showCredits();
-    } else {
-      _renderCredits(pw, ph);
-    }
+    if (!RS.isCredits) _showCredits();
     return;
   }
 
-  // Si venimos de los créditos, resetear su estado
-  if (RS.creditsTimer || RS.creditsAlpha > 0) _resetCredits();
+  // Si venimos de los créditos, limpiar el overlay HTML
+  if (RS.isCredits) _resetCredits();
 
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
@@ -2252,308 +2233,142 @@ function _startFade() {
 // Se llama desde _render() cuando el panel actual es el de créditos.
 // La posición del canvas ya la gestiona _resizeCanvas() normalmente.
 
-// Posiciona los botones HTML sobre el canvas en las mismas coordenadas
-// que los textos del canvas. Se llama desde _renderCredits al final.
-function _positionCreditsButtons(pw, ph) {
-  const linkEl    = document.getElementById('creditsLink');
-  const restartEl = document.getElementById('creditsRestart');
-  prompt('Copia esto:', '_positionCreditsButtons | linkEl=' + (linkEl?'SI':'NO') + ' restartEl=' + (restartEl?'SI':'NO') + ' | la=' + JSON.stringify(RS.creditsLinkArea) + ' | ra=' + JSON.stringify(RS.creditsRestartArea));
-  if (!linkEl || !restartEl) return;
-
-  const rect   = RS.canvas.getBoundingClientRect();
-  const scaleX = rect.width  / pw;
-  const scaleY = rect.height / ph;
-
-  const la = RS.creditsLinkArea;
-  const ra = RS.creditsRestartArea;
-
-  // Posicionar usando left = borde izquierdo del área en coordenadas de pantalla
-  // transform: translateX(-50%) está en CSS, así que usamos el centro X
-  if (la) {
-    const screenX = rect.left + (la.x + la.w / 2) * scaleX;
-    const screenY = rect.top  + la.y * scaleY;
-    const screenW = la.w * scaleX;
-    const screenH = la.h * scaleY;
-    linkEl.style.left    = Math.round(screenX) + 'px';
-    linkEl.style.top     = Math.round(screenY) + 'px';
-    linkEl.style.width   = Math.round(screenW) + 'px';
-    linkEl.style.height  = Math.round(screenH + screenH * 0.5) + 'px'; // zona táctil más generosa
-    linkEl.style.padding = '0';
-    linkEl.style.display = 'block';
-  }
-
-  if (ra) {
-    const screenX = rect.left + (ra.x + ra.w / 2) * scaleX;
-    const screenY = rect.top  + ra.y * scaleY;
-    const screenW = ra.w * scaleX;
-    const screenH = ra.h * scaleY;
-    restartEl.style.left    = Math.round(screenX) + 'px';
-    restartEl.style.top     = Math.round(screenY) + 'px';
-    restartEl.style.width   = Math.round(screenW) + 'px';
-    restartEl.style.height  = Math.round(screenH + screenH * 0.5) + 'px';
-    restartEl.style.padding = '0';
-    restartEl.style.display = 'block';
-  }
-}
-
 function _hideCreditsButtons() {
-  const linkEl    = document.getElementById('creditsLink');
-  const restartEl = document.getElementById('creditsRestart');
-  if (linkEl)    linkEl.style.display    = 'none';
-  if (restartEl) restartEl.style.display = 'none';
+  const el = document.getElementById('creditsOverlay');
+  if (el) el.remove();
 }
 
 function _showCredits() {
-  // Mostrar todo con alpha=1 directamente — sin fade, sin timer, sin riesgo de cancelación
-  RS.creditsAlpha = 1;
-  RS.creditsShown = true;
-  const { pw, ph } = _panelDims(RS.idx);
-  _renderCredits(pw, ph);
-  // Posicionar botones HTML sobre el canvas (funcionan en PC y touch sin problemas)
-  _positionCreditsButtons(pw, ph);
+  // Ocultar el canvas — la hoja de créditos es 100% HTML
+  RS.canvas.style.display = 'none';
+  RS.isCredits = true;
+
+  const isHoriz     = (RS.panels[RS.idx]?.orientation || 'v') === 'h';
+  const socialText  = RS._workSocial || '';
+  const authorText  = RS._workAuthor || '';
+
+  // Eliminar overlay anterior si existe
+  const prev = document.getElementById('creditsOverlay');
+  if (prev) prev.remove();
+
+  // Crear overlay HTML que ocupa exactamente el mismo espacio que el canvas
+  const rect = RS.canvas.getBoundingClientRect();
+  const ov = document.createElement('div');
+  ov.id = 'creditsOverlay';
+  ov.style.cssText = [
+    'position:fixed',
+    'left:' + Math.round(rect.left) + 'px',
+    'top:' + Math.round(rect.top) + 'px',
+    'width:' + Math.round(rect.width) + 'px',
+    'height:' + Math.round(rect.height) + 'px',
+    'background:#ffffff',
+    'z-index:5',
+    'overflow:hidden',
+    'border-radius:10px',
+    'box-shadow:0 8px 32px rgba(0,0,0,.35)',
+    'font-family:Patrick Hand, sans-serif',
+    'display:flex',
+    'box-sizing:border-box',
+  ].join(';');
+
+  const W = rect.width;
+  const H = rect.height;
+
+  if (isHoriz) {
+    // ── HORIZONTAL: dos columnas ──
+    ov.style.flexDirection = 'row';
+
+    // Columna izquierda: social + autor
+    const left = document.createElement('div');
+    left.style.cssText = 'width:52%;display:flex;flex-direction:column;justify-content:center;padding:0 4% 0 4%;border-right:1px solid rgba(0,0,0,0.1);box-sizing:border-box;';
+    if (socialText) {
+      const s = document.createElement('p');
+      s.textContent = socialText;
+      s.style.cssText = 'font-size:' + Math.round(H*0.055) + 'px;color:#444;margin:0 0 ' + Math.round(H*0.04) + 'px;line-height:1.4;white-space:pre-wrap;word-break:break-word;';
+      left.appendChild(s);
+    }
+    const a = document.createElement('p');
+    a.textContent = authorText;
+    a.style.cssText = 'font-size:' + Math.round(H*0.072) + 'px;font-weight:600;color:#222;margin:0;text-align:center;';
+    left.appendChild(a);
+    ov.appendChild(left);
+
+    // Columna derecha: logo + eslogan + enlace + restart
+    const right = document.createElement('div');
+    right.style.cssText = 'width:48%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:' + Math.round(H*0.04) + 'px;padding:0 4%;box-sizing:border-box;';
+    _buildRightColumn(right, W, H);
+    ov.appendChild(right);
+
+  } else {
+    // ── VERTICAL: columna única ──
+    ov.style.flexDirection = 'column';
+    ov.style.alignItems = 'center';
+    ov.style.padding = '0 9%';
+
+    if (socialText) {
+      const s = document.createElement('p');
+      s.textContent = socialText;
+      s.style.cssText = 'font-size:' + Math.round(W*0.038) + 'px;color:#444;margin:' + Math.round(H*0.26) + 'px 0 0;line-height:1.4;white-space:pre-wrap;word-break:break-word;width:100%;';
+      ov.appendChild(s);
+    }
+    const a = document.createElement('p');
+    a.textContent = authorText;
+    a.style.cssText = 'font-size:' + Math.round(W*0.055) + 'px;font-weight:600;color:#222;margin:' + (socialText ? Math.round(W*0.02) : Math.round(H*0.11)) + 'px 0 0;text-align:center;';
+    ov.appendChild(a);
+
+    // Logo + eslogan + enlace + restart centrados
+    const mid = document.createElement('div');
+    mid.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:' + Math.round(H*0.03) + 'px;margin-top:' + Math.round(H*0.06) + 'px;';
+    _buildRightColumn(mid, W, H);
+    ov.appendChild(mid);
+  }
+
+  document.getElementById('readerApp').appendChild(ov);
+}
+
+function _buildRightColumn(container, W, H) {
+  // Logo
+  if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+    const logoH = Math.round(Math.min(W,H) * 0.12);
+    const logoW = Math.round(_logoImg.naturalWidth * (logoH / _logoImg.naturalHeight));
+    const img = document.createElement('img');
+    img.src = _logoImg.src;
+    img.style.cssText = 'width:' + logoW + 'px;height:' + logoH + 'px;display:block;';
+    container.appendChild(img);
+  }
+  // Eslogan
+  const sl = document.createElement('p');
+  sl.textContent = 'Crea y Comparte';
+  sl.style.cssText = 'font-size:' + Math.round(Math.min(W,H)*0.042) + 'px;color:#555;margin:0;text-align:center;';
+  container.appendChild(sl);
+  // Enlace
+  const lk = document.createElement('a');
+  lk.textContent = 'Visita más obras del autor';
+  lk.href = 'https://sargentopez.github.io/ComiXou/index.html';
+  lk.style.cssText = 'font-size:' + Math.round(Math.min(W,H)*0.038) + 'px;color:#1a73e8;text-decoration:underline;cursor:pointer;text-align:center;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);padding:8px 4px;display:block;';
+  container.appendChild(lk);
+  // Botón volver
+  const rb = document.createElement('button');
+  rb.textContent = '↩ Volver a leer';
+  rb.style.cssText = 'font-size:' + Math.round(Math.min(W,H)*0.038) + 'px;font-family:Patrick Hand,sans-serif;color:#888;background:none;border:none;cursor:pointer;text-align:center;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);padding:8px 4px;';
+  rb.addEventListener('click', e => { e.stopPropagation(); _creditsClick(); });
+  rb.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive: false });
+  container.appendChild(rb);
 }
 
 function _resetCredits() {
-  if (RS.creditsTimer) { clearTimeout(RS.creditsTimer); RS.creditsTimer = null; }
-  if (RS.fadeRaf)      { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; }
-  RS.creditsAlpha = 0;
-  RS.isCredits    = false;
+  RS.isCredits = false;
   _hideCreditsButtons();
+  // Restaurar canvas que se ocultó durante los créditos
+  if (RS.canvas) RS.canvas.style.display = '';
 }
 
 function _creditsClick() {
-  if (RS.creditsTimer)  { clearTimeout(RS.creditsTimer);        RS.creditsTimer = null; }
-  if (RS.fadeRaf)       { cancelAnimationFrame(RS.fadeRaf);     RS.fadeRaf = null; }
   RS.isCredits = false;
   _hideCreditsButtons();
+  if (RS.canvas) RS.canvas.style.display = '';
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   _resizeCanvas(); _render();
-}
-
-function _renderCredits(pw, ph) {
-  const ctx   = RS.ctx;
-  const alpha = RS.creditsAlpha || 0;
-  ctx.clearRect(0, 0, pw, ph);
-
-  // Fondo blanco limpio
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, pw, ph);
-
-  const isHoriz = pw > ph;
-  const socialText = RS._workSocial || '';
-  const authorText = RS._workAuthor || '';
-  ctx.textBaseline = 'middle';
-
-  // Función auxiliar: divide texto en líneas respetando \n explícitos y wrap por maxW.
-  // Si una palabra sola supera maxW, se corta carácter a carácter.
-  function wrapText(text, maxW) {
-    const result = [];
-    const paragraphs = text.split('\n');
-    paragraphs.forEach(para => {
-      if (!para.trim()) { result.push(''); return; }
-      const words = para.split(' ');
-      let cur = '';
-      words.forEach(w => {
-        // Si la palabra sola es más ancha que maxW, cortarla por caracteres
-        if (ctx.measureText(w).width > maxW) {
-          if (cur) { result.push(cur); cur = ''; }
-          let chunk = '';
-          for (const ch of w) {
-            const test = chunk + ch;
-            if (ctx.measureText(test).width > maxW && chunk) {
-              result.push(chunk); chunk = ch;
-            } else { chunk = test; }
-          }
-          if (chunk) {
-            // intentar unir con lo que siga
-            cur = chunk;
-          }
-          return;
-        }
-        const test = cur ? cur + ' ' + w : w;
-        if (ctx.measureText(test).width > maxW && cur) { result.push(cur); cur = w; }
-        else cur = test;
-      });
-      if (cur) result.push(cur);
-    });
-    return result;
-  }
-
-  if (isHoriz) {
-    // ── LAYOUT HORIZONTAL: dos columnas ──────────────────────
-    // Columna izquierda (55%): social + autor
-    // Columna derecha (45%): logo + eslogan + enlace (con fade)
-    const fRef   = ph;  // base de escala = altura (dimensión corta)
-    const colGap = pw * 0.04;
-    const leftW  = pw * 0.52;
-    const rightW = pw * 0.44;
-    const leftX  = pw * 0.04;
-    const rightCX = leftW + colGap + rightW / 2;
-    const padV   = ph * 0.08;
-
-    // Separador vertical central
-    ctx.globalAlpha = 0.15;
-    ctx.fillStyle = '#888888';
-    ctx.fillRect(leftW + colGap * 0.4, ph * 0.1, 1, ph * 0.8);
-    ctx.globalAlpha = 1;
-
-    // ── Columna izquierda: social + autor ──
-    const socialFS   = Math.round(fRef * 0.055);
-    const authorFS   = Math.round(fRef * 0.072);
-    const socialMaxW = leftW - leftX - pw * 0.02;  // ancho disponible desde leftX hasta borde columna
-
-    let socialLines = [];
-    if (socialText) {
-      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
-      socialLines   = wrapText(socialText, socialMaxW);
-    }
-    const socialLineH  = socialFS * 1.5;
-    const totalSocialH = socialLines.length * socialLineH;
-    const blockH       = totalSocialH + (socialText ? socialFS * 1.2 : 0) + authorFS * 1.5;
-    let y = (ph - blockH) / 2 + socialLineH * 0.5;
-
-    if (socialText) {
-      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
-      ctx.fillStyle = '#444444';
-      ctx.textAlign = 'left';
-      socialLines.forEach(line => {
-        ctx.fillText(line, leftX, y);
-        y += socialLineH;
-      });
-      y += socialFS * 0.8;
-    }
-
-    // Nombre del autor — centrado en columna izquierda
-    ctx.font      = `600 ${authorFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#222222';
-    ctx.textAlign = 'center';
-    ctx.fillText(authorText, leftX + leftW / 2, y);
-
-    // ── Columna derecha: logo + eslogan + enlace (con fade) ──
-    // Mismas proporciones que el layout vertical, ancladas desde el centro vertical
-    ctx.globalAlpha = alpha;
-
-    const logoFS   = Math.round(fRef * 0.11);
-    const sloganFS = Math.round(fRef * 0.042);
-    const linkFS   = Math.round(fRef * 0.038);
-    const lineH    = ph * 0.09;
-    // Bloque centrado verticalmente en la columna derecha
-    const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
-    const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
-
-    // Logo imagen precargada al inicio para garantizar naturalWidth disponible
-    if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
-      const _lh = logoFS * 1.1;
-      const _lw = _logoImg.naturalWidth * (_lh / _logoImg.naturalHeight);
-      ctx.drawImage(_logoImg, rightCX - _lw/2, rightStartY - _lh * 0.8, _lw, _lh);
-    }
-
-    const sloganY = rightStartY + sloganFS * 2;
-    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#555555';
-    ctx.fillText('Crea y Comparte', rightCX, sloganY);
-
-    const linkY   = sloganY + sloganFS * 3;
-    const linkText = 'Visita más obras del autor';
-    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#1a73e8';
-    ctx.fillText(linkText, rightCX, linkY);
-    const lw = ctx.measureText(linkText).width;
-    ctx.beginPath();
-    ctx.strokeStyle = '#1a73e8';
-    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
-    ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6);
-    ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6);
-    ctx.stroke();
-
-    // Botón "Volver a leer"
-    const restartFS   = Math.round(fRef * 0.038);
-    const restartY    = linkY + linkFS * 2.2;
-    const restartText = '↩ Volver a leer';
-    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#888888';
-    ctx.textAlign = 'center';
-    ctx.fillText(restartText, rightCX, restartY);
-    const rw = ctx.measureText(restartText).width;
-    RS.creditsRestartArea = { x: rightCX - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
-
-    ctx.globalAlpha = 1;
-    RS.creditsLinkArea = { x: rightCX - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
-
-  } else {
-    // ── LAYOUT VERTICAL: columna única ───────────────────────
-    const fRef   = pw;
-    const cx     = pw / 2;
-    const marginX = pw * 0.09;
-    const maxW    = pw * 0.82;
-
-    // Social
-    let authorY = ph * 0.11;
-    if (socialText) {
-      const socialFS    = Math.round(fRef * 0.038);
-      ctx.font          = `400 ${socialFS}px Patrick Hand, sans-serif`;
-      ctx.fillStyle     = '#444444';
-      ctx.textAlign     = 'left';
-      const socialLines = wrapText(socialText, maxW);
-      const socialLineH = socialFS * 1.4;
-      const socialStartY = ph * 0.26;
-      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
-      authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
-    }
-
-    // Autor
-    ctx.font      = `600 ${Math.round(fRef * 0.055)}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#222222';
-    ctx.textAlign = 'center';
-    ctx.fillText(authorText, cx, authorY);
-
-    // Resto con fade
-    ctx.globalAlpha = alpha;
-
-    const lineH    = ph * 0.09;
-    const logoFS   = Math.round(fRef * 0.11);
-    const logoY    = authorY + lineH * 1.3;
-    // Logo imagen precargada al inicio para garantizar naturalWidth disponible
-    if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
-      const _lh2 = logoFS * 1.1;
-      const _lw2 = _logoImg.naturalWidth * (_lh2 / _logoImg.naturalHeight);
-      ctx.drawImage(_logoImg, cx - _lw2/2, logoY - _lh2 * 0.8, _lw2, _lh2);
-    }
-
-    const sloganFS = Math.round(fRef * 0.042);
-    const sloganY  = logoY + sloganFS * 2;
-    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#555555';
-    ctx.fillText('Crea y Comparte', cx, sloganY);
-
-    const linkFS   = Math.round(fRef * 0.038);
-    const linkY    = sloganY + sloganFS * 3;
-    const linkText = 'Visita más obras del autor';
-    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#1a73e8';
-    ctx.fillText(linkText, cx, linkY);
-    const lw = ctx.measureText(linkText).width;
-    ctx.beginPath();
-    ctx.strokeStyle = '#1a73e8';
-    ctx.lineWidth   = Math.max(1, linkFS * 0.06);
-    ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6);
-    ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6);
-    ctx.stroke();
-
-    // Botón "Volver a leer"
-    const restartFS   = Math.round(fRef * 0.038);
-    const restartY    = linkY + linkFS * 2.2;
-    const restartText = '↩ Volver a leer';
-    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
-    ctx.fillStyle = '#888888';
-    ctx.textAlign = 'center';
-    ctx.fillText(restartText, cx, restartY);
-    const rw = ctx.measureText(restartText).width;
-    RS.creditsRestartArea = { x: cx - rw/2 - 10, y: restartY - restartFS, w: rw + 20, h: restartFS * 2.2 };
-
-    ctx.globalAlpha = 1;
-    RS.creditsLinkArea = { x: cx - lw/2, y: linkY - linkFS, w: lw, h: linkFS * 2 };
-  }
 }
 
 
@@ -2581,11 +2396,6 @@ function _setupControls() {
     }
   };
   document.addEventListener('keydown', RS.keyHandler);
-
-  // Click ratón en canvas: en créditos detecta enlace
-  RS.canvas.addEventListener('click', e => {
-    if (RS.isCredits) { _handleCreditsClick(e.clientX, e.clientY); }
-  });
 
   // Swipe táctil con AbortController
   RS.ac = new AbortController();
@@ -2616,8 +2426,7 @@ function _setupControls() {
     // si es un tap (sin desplazamiento significativo) → detectar enlace/botón.
     if (RS.isCredits) {
       if (dx > 30 && dx > dy * 1.5) { goBack(); return; }
-      _handleCreditsClick(endX, endY);
-      return;
+      return; // tap en el canvas durante créditos: el overlay HTML gestiona los clicks
     }
     // Navegación normal
     if (_isBackSide(endX, endY)) goBack(); else advance();
@@ -2643,26 +2452,6 @@ function _readerToast(msg, duration) {
 }
 
 
-function _handleCreditsClick(clientX, clientY) {
-  // Convertir coordenadas de pantalla a coordenadas del canvas lógico
-  const rect   = RS.canvas.getBoundingClientRect();
-  const scaleX = RS.canvas.width  / rect.width;
-  const scaleY = RS.canvas.height / rect.height;
-  const cx = (clientX - rect.left) * scaleX;
-  const cy = (clientY - rect.top)  * scaleY;
-
-  const la = RS.creditsLinkArea;
-  if (la && cx >= la.x && cx <= la.x + la.w && cy >= la.y && cy <= la.y + la.h) {
-    // En Android PWA window.open('_blank') puede bloquearse — usar location.href
-    window.location.href = 'https://sargentopez.github.io/ComiXou/index.html';
-    return;
-  }
-  const ra = RS.creditsRestartArea;
-  if (ra && cx >= ra.x && cx <= ra.x + ra.w && cy >= ra.y && cy <= ra.y + ra.h) {
-    _creditsClick(); // Volver a leer → reinicia desde la primera hoja
-  }
-  // Tap fuera de ambas zonas → no hacer nada
-}
 
 
 function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }
