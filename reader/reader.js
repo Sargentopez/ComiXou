@@ -1744,7 +1744,8 @@ function _render() {
   }
 
   // Si venimos de los créditos, limpiar el overlay HTML
-  if (RS.isCredits) _resetCredits();
+  // Verificar también RS.panels[RS.idx] para no fallar cuando el tick cambia RS.idx temporalmente
+  if (RS.isCredits && !RS.panels[RS.idx]?.isCredits) _resetCredits();
 
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
