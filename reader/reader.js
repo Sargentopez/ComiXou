@@ -804,7 +804,6 @@ const RS = {
   ac:           null,
   keyHandler:   null,
   resizeFn:     null,
-  creditsShown: false, // true tras mostrarse la primera vez — no vuelve a aparecer
   navMode:      'fixed', // 'fixed' | 'horizontal' | 'vertical'
 };
 
@@ -1418,7 +1417,6 @@ function _startScrollReader() {
   RS.idx        = 0;
   RS.textStep   = 0;
   RS.scrollCont = container;  // para poder resetear desde _creditsClick
-  RS.scrollIsH  = isH;
 
   function _activateCanvas(pi) {
     RS.canvas = _canvases[pi];
@@ -2409,17 +2407,12 @@ function _renderCredits() {
 }
 
 function _mountCreditsButtons() {
-  const prev = document.getElementById('creditsOverlay');
-  if (prev) prev.remove();
-
   const cl = RS._creditsLink;
   const cr = RS._creditsRestart;
   if (!cl || !cr) return;
 
   // Posición real del canvas en pantalla (funciona en modo fixed y scroll)
   const rect = RS.canvas.getBoundingClientRect();
-  const cL = rect.left;
-  const cT = rect.top;
   const cW = rect.width;
   const cH = rect.height;
   const sx = cW / cl.pw;
