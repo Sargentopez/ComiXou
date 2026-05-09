@@ -17899,35 +17899,81 @@ function _gcpUpdateFramesBar() {
     const row = document.createElement('div');
     row.className = 'gcp-layer-row';
 
-    // Columna izquierda: botón eliminar capa + etiqueta
+    // Columna izquierda: flechas orden + botón eliminar + etiqueta
     const leftCol = document.createElement('div');
     leftCol.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;' +
-      'width:44px;min-width:44px;border-right:1px solid var(--gray-200);padding:2px 0;gap:2px;';
+      'width:52px;min-width:52px;border-right:1px solid var(--gray-200);padding:2px 0;gap:1px;';
 
-    // Botón eliminar capa
+    // Fila superior: ▲ arriba y ▼ abajo (reordenar capas)
+    const arrowRow = document.createElement('div');
+    arrowRow.style.cssText = 'display:flex;gap:1px;align-items:center;';
+
+    const _arrowBtnStyle = 'background:none;border:none;cursor:pointer;padding:1px 3px;' +
+      'border-radius:3px;font-size:10px;line-height:1;color:var(--gray-500);transition:background .12s;';
+
+    const upBtn = document.createElement('button');
+    upBtn.title = 'Subir capa';
+    upBtn.textContent = '▲';
+    upBtn.style.cssText = _arrowBtnStyle;
+    upBtn.disabled = layerIdx >= window._gcpLayers.length - 1; // visualmente arriba = mayor índice
+    upBtn.addEventListener('pointerenter', () => { if (!upBtn.disabled) upBtn.style.background = 'var(--gray-200)'; });
+    upBtn.addEventListener('pointerleave', () => { upBtn.style.background = 'none'; });
+    upBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (layerIdx >= window._gcpLayers.length - 1) return;
+      // Intercambiar con la capa superior (índice mayor = se dibuja encima)
+      [window._gcpLayers[layerIdx], window._gcpLayers[layerIdx + 1]] =
+        [window._gcpLayers[layerIdx + 1], window._gcpLayers[layerIdx]];
+      if (window._gcpSelIdx === layerIdx) window._gcpSelIdx = layerIdx + 1;
+      else if (window._gcpSelIdx === layerIdx + 1) window._gcpSelIdx = layerIdx;
+      window._gcpDirty = true;
+      _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
+    });
+
+    const dnBtn = document.createElement('button');
+    dnBtn.title = 'Bajar capa';
+    dnBtn.textContent = '▼';
+    dnBtn.style.cssText = _arrowBtnStyle;
+    dnBtn.disabled = layerIdx <= 0;
+    dnBtn.addEventListener('pointerenter', () => { if (!dnBtn.disabled) dnBtn.style.background = 'var(--gray-200)'; });
+    dnBtn.addEventListener('pointerleave', () => { dnBtn.style.background = 'none'; });
+    dnBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (layerIdx <= 0) return;
+      [window._gcpLayers[layerIdx], window._gcpLayers[layerIdx - 1]] =
+        [window._gcpLayers[layerIdx - 1], window._gcpLayers[layerIdx]];
+      if (window._gcpSelIdx === layerIdx) window._gcpSelIdx = layerIdx - 1;
+      else if (window._gcpSelIdx === layerIdx - 1) window._gcpSelIdx = layerIdx;
+      window._gcpDirty = true;
+      _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
+    });
+
+    arrowRow.appendChild(upBtn);
+    arrowRow.appendChild(dnBtn);
+    leftCol.appendChild(arrowRow);
+
+    // Botón eliminar capa (con confirmación)
     const delLayerBtn = document.createElement('button');
-    delLayerBtn.title = 'Eliminar capa ' + layerName;
-    delLayerBtn.innerHTML = '<span style="color:#e63030;font-size:14px;font-weight:900;line-height:1">✕</span>';
+    delLayerBtn.title = 'Eliminar ' + layerName;
+    delLayerBtn.innerHTML = '<span style="color:#e63030;font-size:12px;font-weight:900;line-height:1">✕</span>';
     delLayerBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:2px 4px;' +
       'border-radius:4px;transition:background .15s;flex-shrink:0;';
     delLayerBtn.addEventListener('pointerenter', () => { delLayerBtn.style.background = '#fff0f0'; });
     delLayerBtn.addEventListener('pointerleave', () => { delLayerBtn.style.background = 'none'; });
     delLayerBtn.addEventListener('click', e => {
       e.stopPropagation();
-      window._gcpLayers.splice(layerIdx, 1);
-      _gcpInvalidateAllThumbs();
-      // Ajustar selección
-      if (window._gcpSelIdx >= window._gcpLayers.length)
-        window._gcpSelIdx = window._gcpLayers.length - 1;
-      // Ajustar frame global si el total cambia
-      const newTotal = _gcpGetTotalFrames();
-      if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
-        window._gcpGlobalFrameIdx = newTotal - 1;
-      _gcpApplyFrame(window._gcpGlobalFrameIdx);
-      _gcpPushHistory();
-      _gcpUpdateFrameNav();
-      _gcpRedraw();
-      _gcpUpdateFramesBar();
+      edConfirm('¿Eliminar el objeto "' + layerName + '" de la animación?', () => {
+        window._gcpLayers.splice(layerIdx, 1);
+        _gcpInvalidateAllThumbs();
+        if (window._gcpSelIdx >= window._gcpLayers.length)
+          window._gcpSelIdx = window._gcpLayers.length - 1;
+        const newTotal = _gcpGetTotalFrames();
+        if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
+          window._gcpGlobalFrameIdx = newTotal - 1;
+        _gcpApplyFrame(window._gcpGlobalFrameIdx);
+        window._gcpDirty = true;
+        _gcpPushHistory(); _gcpUpdateFrameNav(); _gcpRedraw(); _gcpUpdateFramesBar();
+      });
     });
     leftCol.appendChild(delLayerBtn);
 

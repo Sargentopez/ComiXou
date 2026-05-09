@@ -352,7 +352,7 @@ function _mcRenderList() {
         _cloudNewer  // la nube tiene versión más reciente → descargar siempre
       );
       if (comicToEdit && _needsDownload) {
-        _mcToast('\u23f3 Descargando obra de la nube\u2026 (puede tardar si contiene GIFs)');
+        _mcToast('\u23f3 Descargando obra de la nube\u2026 ');
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
           // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
