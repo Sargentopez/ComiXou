@@ -1743,9 +1743,9 @@ function _render() {
     return;
   }
 
-  // Si venimos de los créditos, limpiar el overlay HTML
-  // Verificar también RS.panels[RS.idx] para no fallar cuando el tick cambia RS.idx temporalmente
-  if (RS.isCredits) _resetCredits();
+  // Si venimos de los créditos, limpiar — pero no si los botones ya están montados
+  // (el tick cambia RS.idx temporalmente y dispararía _resetCredits incorrectamente)
+  if (RS.isCredits && !document.querySelector('._cxCreditBtn')) _resetCredits();
 
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
