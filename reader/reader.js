@@ -2310,6 +2310,63 @@ function _showCredits() {
   _renderCredits(pw, ph);
   // Posicionar botones HTML sobre el canvas (funcionan en PC y touch sin problemas)
   _positionCreditsButtons(pw, ph);
+  // ── DIAGNÓSTICO TEMPORAL ─────────────────────────────────────
+  _showDiag();
+}
+
+function _showDiag() {
+  let d = document.getElementById('_cxDiag');
+  if (!d) {
+    d = document.createElement('div');
+    d.id = '_cxDiag';
+    d.style.cssText = 'position:fixed;top:40px;left:8px;right:8px;z-index:99999;background:rgba(0,0,0,0.85);color:#0f0;font-size:11px;font-family:monospace;padding:8px;border-radius:6px;max-height:50vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;';
+    document.body.appendChild(d);
+    const btn = document.createElement('button');
+    btn.textContent = 'COPIAR';
+    btn.style.cssText = 'position:fixed;top:8px;right:8px;z-index:99999;padding:6px 12px;background:#f5c400;border:none;border-radius:4px;font-weight:bold;cursor:pointer;font-size:12px;';
+    btn.addEventListener('click', e => { e.stopPropagation(); navigator.clipboard?.writeText(d.textContent).catch(()=>{}); });
+    document.body.appendChild(btn);
+  }
+  const rect = RS.canvas ? RS.canvas.getBoundingClientRect() : {};
+  const la = RS.creditsLinkArea;
+  const ra = RS.creditsRestartArea;
+  const linkEl = document.getElementById('creditsLink');
+  const restEl = document.getElementById('creditsRestart');
+  const lines = [
+    'isCredits=' + RS.isCredits,
+    'canvas rect: left=' + Math.round(rect.left) + ' top=' + Math.round(rect.top) + ' w=' + Math.round(rect.width) + ' h=' + Math.round(rect.height),
+    'creditsLinkArea: ' + JSON.stringify(la),
+    'creditsRestartArea: ' + JSON.stringify(ra),
+    'linkEl display=' + (linkEl ? linkEl.style.display : 'NO EXISTE'),
+    'linkEl pos: left=' + (linkEl ? linkEl.style.left : '-') + ' top=' + (linkEl ? linkEl.style.top : '-') + ' w=' + (linkEl ? linkEl.style.width : '-') + ' h=' + (linkEl ? linkEl.style.height : '-'),
+    'restEl display=' + (restEl ? restEl.style.display : 'NO EXISTE'),
+    'restEl pos: left=' + (restEl ? restEl.style.left : '-') + ' top=' + (restEl ? restEl.style.top : '-'),
+  ];
+  d.textContent = lines.join('\n');
+  // Capturar clicks en canvas
+  const _diagClick = e => {
+    d.textContent += '\n[CANVAS CLICK] clientX=' + e.clientX + ' clientY=' + e.clientY + ' isCredits=' + RS.isCredits;
+  };
+  RS.canvas.removeEventListener('click', _diagClick);
+  RS.canvas.addEventListener('click', _diagClick);
+  // Capturar touchend en canvas
+  const _diagTouch = e => {
+    const t = e.changedTouches[0];
+    d.textContent += '\n[CANVAS TOUCH] x=' + Math.round(t.clientX) + ' y=' + Math.round(t.clientY) + ' isCredits=' + RS.isCredits;
+  };
+  RS.canvas.removeEventListener('touchend', _diagTouch);
+  RS.canvas.addEventListener('touchend', _diagTouch);
+  // Capturar clicks en botones HTML
+  if (linkEl) {
+    linkEl.addEventListener('click', e => {
+      d.textContent += '\n[LINK HTML CLICK] ← este debería navegar';
+    }, { once: false });
+  }
+  if (restEl) {
+    restEl.addEventListener('click', e => {
+      d.textContent += '\n[RESTART HTML CLICK] ← este debería reiniciar';
+    }, { once: false });
+  }
 }
 
 function _resetCredits() {
