@@ -17406,6 +17406,7 @@ function _gcpOpenPropsPanel(la, laIdx) {
 
 // Guarda el estado actual de todas las capas en el frame activo (sin user action)
 function _gcpAutoSaveFrame() {
+  window._gcpDirty = true;
   const fi = window._gcpGlobalFrameIdx || 0;
   if (!window._gcpLayers || !window._gcpLayers.length) return;
   window._gcpLayers.forEach(la => {
@@ -17455,6 +17456,7 @@ function _gcpHandleUp(e) {
 window._gcpFrameDelay  = 100;  // ms por frame (default 10fps)
 window._gcpRepeatCount = 0;    // 0 = infinito
 window._gcpStopAtEnd   = false; // true = detener en el último frame
+window._gcpDirty       = false; // true si hay cambios sin guardar
 let gcpCanvas = null;
 let gcpCtx    = null;
 
@@ -17595,6 +17597,7 @@ function _gcpSaveFrame() {
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
+  window._gcpDirty = true;
   edToast('Frame ' + (fi+1) + ' guardado ✓');
   _gcpHintSet('addFrame');
 }
@@ -17635,6 +17638,7 @@ function _gcpCaptureFrame() {
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
+  window._gcpDirty = true;
   edToast('Frame ' + (newFi+1) + ' creado ✓');
   _gcpHintStop();
 }
@@ -18531,6 +18535,7 @@ function gcpOpen(edLayerIdx) {
     _fpsSlider?.addEventListener('input', e => {
       const fps = parseInt(e.target.value, 10);
       window._gcpFrameDelay = Math.round(1000 / fps);
+      window._gcpDirty = true;
       _gcpShowBubble(e.target, fps + ' fps');
       _gcpUpdateBehaviourSummary();
     });
@@ -18627,6 +18632,8 @@ function _gcpDoClose() {
 
 function gcpClose() {
   if (!window._gcpLayers || !window._gcpLayers.length) { _gcpDoClose(); return; }
+  // Si no hay cambios desde el último guardado, cerrar directamente
+  if (!window._gcpDirty) { _gcpDoClose(); return; }
   document.getElementById('_gcpSavePop')?.remove();
   const pop = document.createElement('div');
   pop.id = '_gcpSavePop';
@@ -18650,6 +18657,7 @@ function gcpClose() {
 }
 
 function _gcpSaveToLib(onDone) {
+  window._gcpDirty = false; // marcar como guardado
   if (!window._gcpLayers.length || !gcpCanvas || !gcpCtx) { onDone && onDone(); return; }
   const layers  = window._gcpLayers.slice();
   const pageW   = Math.round(edPageW()),  pageH  = Math.round(edPageH());
