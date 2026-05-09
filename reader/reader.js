@@ -2256,17 +2256,6 @@ function _mountCreditsWhenScrollEnds(container, isH) {
     if (pos === lastPos) {
       stable++;
       if (stable >= 3) {
-        // Scroll detenido
-        const cl2 = RS._creditsLink;
-        const rect2 = RS.canvas ? RS.canvas.getBoundingClientRect() : {};
-        const d2 = [
-          'DIAG _mountCreditsWhenScrollEnds',
-          'isCredits=' + RS.isCredits,
-          '_creditsLink=' + JSON.stringify(cl2),
-          'canvas rect: left=' + Math.round(rect2.left||0) + ' top=' + Math.round(rect2.top||0) + ' w=' + Math.round(rect2.width||0) + ' h=' + Math.round(rect2.height||0),
-          'stable=' + stable,
-        ];
-        prompt('DIAG scroll detenido - copia esto:', d2.join(' | '));
         _mountCreditsButtons();
         return;
       }
@@ -2283,24 +2272,7 @@ function _showCredits() {
   RS.isCredits = true;
   _renderCredits();
 
-  // ── DIAGNÓSTICO ──
-  const cl = RS._creditsLink;
-  const cr = RS._creditsRestart;
-  const rect = RS.canvas ? RS.canvas.getBoundingClientRect() : {};
   const isScrollMode = document.getElementById('scrollReader')?.className?.includes('scroll-');
-  const diagLines = [
-    'isCredits=' + RS.isCredits,
-    'isScrollMode=' + isScrollMode,
-    '_creditsLink=' + JSON.stringify(cl),
-    '_creditsRestart=' + JSON.stringify(cr),
-    'canvas.id=' + (RS.canvas?.id || 'sin id'),
-    'canvas rect: left=' + Math.round(rect.left||0) + ' top=' + Math.round(rect.top||0) + ' w=' + Math.round(rect.width||0) + ' h=' + Math.round(rect.height||0),
-    'canvas style.left=' + (RS.canvas?.style?.left||'-') + ' style.top=' + (RS.canvas?.style?.top||'-'),
-    'canvas style.width=' + (RS.canvas?.style?.width||'-') + ' style.height=' + (RS.canvas?.style?.height||'-'),
-    'scrollReader.class=' + (document.getElementById('scrollReader')?.className||'-'),
-  ];
-  prompt('DIAG _showCredits - copia esto:', diagLines.join(' | '));
-
   if (!isScrollMode) {
     _mountCreditsButtons();
   }
