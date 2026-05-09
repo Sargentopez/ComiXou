@@ -2257,6 +2257,7 @@ function _startFade() {
 function _positionCreditsButtons(pw, ph) {
   const linkEl    = document.getElementById('creditsLink');
   const restartEl = document.getElementById('creditsRestart');
+  prompt('Copia esto:', '_positionCreditsButtons | linkEl=' + (linkEl?'SI':'NO') + ' restartEl=' + (restartEl?'SI':'NO') + ' | la=' + JSON.stringify(RS.creditsLinkArea) + ' | ra=' + JSON.stringify(RS.creditsRestartArea));
   if (!linkEl || !restartEl) return;
 
   const rect   = RS.canvas.getBoundingClientRect();
