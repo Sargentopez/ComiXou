@@ -34,6 +34,20 @@ function _mcLoadThumb(supabaseId) {
     .catch(() => {});
 }
 
+// Carga el thumbnail de una obra LOCAL desde OPFS y lo cachea en memoria.
+async function _mcLoadLocalThumb(comicId) {
+  if (_mcThumbCache.has(comicId)) return;
+  _mcThumbCache.set(comicId, ''); // marca como en progreso
+  try {
+    const full = ComicStore.getByIdFull ? await ComicStore.getByIdFull(comicId) : null;
+    const url = full && full.panels && full.panels[0] ? full.panels[0].dataUrl : '';
+    if (!url) return;
+    _mcThumbCache.set(comicId, url);
+    const div = document.querySelector(`[data-local-thumb-id="${comicId}"]`);
+    if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:cover;display:block">`; }
+  } catch(_e) {}
+}
+
 function _mcInjectModal() {
   // Inyectar el modal directamente en body (fuera de appView)
   // para que position:fixed funcione sin restricciones
@@ -208,10 +222,14 @@ function _mcRenderList() {
   }
   wrap.innerHTML = _loginBanner + comics.map(comic => {
     // Para obras cloudOnly: usar cache en memoria (no se persiste en localStorage).
-    // Para obras locales: usar el dataUrl guardado por el editor.
+    // Para obras locales: el dataUrl está en OPFS (_hasDataUrl flag), cargarlo lazy.
     const thumb = (comic.supabaseId && _mcThumbCache.get(comic.supabaseId))
+      || _mcThumbCache.get(comic.id)
       || (!comic.cloudOnly && comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '');
-    const needsThumb = !thumb && comic.supabaseId;
+    const needsCloudThumb = !thumb && !!comic.supabaseId;
+    const needsLocalThumb = !thumb && !comic.supabaseId
+      && comic.panels && comic.panels[0] && comic.panels[0]._hasDataUrl;
+    const needsThumb = needsCloudThumb || needsLocalThumb;
     const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
     const pubLabel = comic.approved
       ? '✅ Publicada'
@@ -219,7 +237,7 @@ function _mcRenderList() {
 
     return `
     <div class="comic-row" data-id="${comic.id}">
-      <div class="comic-row-thumb" ${needsThumb ? `data-thumb-id="${comic.supabaseId}"` : ''}>
+      <div class="comic-row-thumb" ${needsCloudThumb ? `data-thumb-id="${comic.supabaseId}"` : ''} ${needsLocalThumb ? `data-local-thumb-id="${comic.id}"` : ''}>
         ${thumb
           ? `<img src="${thumb}" alt="${comic.title}" loading="lazy">`
           : needsThumb
@@ -265,16 +283,18 @@ function _mcRenderList() {
     }
   }
 
-  // Cargar miniaturas lazy para obras cloudOnly (Intersection Observer)
+  // Cargar miniaturas lazy — tanto obras cloud (data-thumb-id) como locales (data-local-thumb-id)
   const _thumbObs = new IntersectionObserver(entries => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {
-        const id = entry.target.dataset.thumbId;
-        if (id) { _mcLoadThumb(id); _thumbObs.unobserve(entry.target); }
+        const cloudId = entry.target.dataset.thumbId;
+        const localId = entry.target.dataset.localThumbId;
+        if (cloudId) { _mcLoadThumb(cloudId); _thumbObs.unobserve(entry.target); }
+        if (localId) { _mcLoadLocalThumb(localId); _thumbObs.unobserve(entry.target); }
       }
     });
   }, { rootMargin: '200px' });
-  wrap.querySelectorAll('[data-thumb-id]').forEach(el => _thumbObs.observe(el));
+  wrap.querySelectorAll('[data-thumb-id],[data-local-thumb-id]').forEach(el => _thumbObs.observe(el));
 
   // Eventos de botones
   wrap.addEventListener('click', async e => {
