@@ -2471,13 +2471,17 @@ function _mountCreditsButtons() {
 }
 
 function _resetCredits() {
-  RS.isCredits = false;
+  RS.isCredits  = false;
+  RS.animPaused = false;
   _hideCreditsButtons();
+  _resetPanelAnims(RS.idx);
 }
 
 function _creditsClick() {
-  RS.isCredits = false;
+  RS.isCredits  = false;
+  RS.animPaused = false;
   _hideCreditsButtons();
+  _resetPanelAnims(0);
   RS.idx = 0; RS.textStep = _initTextStep(0); RS.fadeAlpha = 0;
   // En modo scroll: resetear posición al panel 0 instantáneamente
   if (RS.scrollCont) {
