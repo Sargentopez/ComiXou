@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v21.76</footer>
+    <footer class="app-version">v21.77</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -572,6 +572,8 @@ Router.register('editor', {
       <!-- Panel de frames: toggle, deslizante horizontal, miniaturas 88×88 -->
       <div id="gcpFramesBar">
       </div>
+      <!-- Panel de propiedades del objeto seleccionado (doble tap) -->
+      <div id="gcpPropsPanel"></div>
     </div>
 
     <div id="edBrushCursor"></div>

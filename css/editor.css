@@ -1962,3 +1962,94 @@ body.editor-page #appView {
   z-index: 511;
   pointer-events: none;
 }
+
+/* ── Panel de propiedades del objeto GCP (doble tap) ─────────────────── */
+#gcpPropsPanel {
+  display: none;
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: var(--white);
+  border-top: 2px solid var(--gray-300);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -4px 18px rgba(0,0,0,.18);
+  z-index: 515;
+  pointer-events: auto;
+  padding: 8px 10px 10px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+#gcpPropsPanel.open { display: block; }
+#gcpPropsPanel .gcp-pp-title {
+  font-family: var(--font-display);
+  font-size: .9rem;
+  font-weight: 900;
+  letter-spacing: .4px;
+  margin-bottom: 6px;
+  color: var(--black);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#gcpPropsPanel .gcp-pp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  flex-wrap: wrap;
+}
+#gcpPropsPanel .gcp-pp-label {
+  font-size: .75rem;
+  font-weight: 700;
+  color: var(--gray-600);
+  min-width: 60px;
+}
+#gcpPropsPanel input[type=range] {
+  flex: 1;
+  accent-color: var(--black);
+  min-width: 80px;
+}
+#gcpPropsPanel input[type=number] {
+  width: 52px;
+  border: 1.5px solid var(--gray-300);
+  border-radius: 6px;
+  padding: 3px 5px;
+  font-family: var(--font-body);
+  font-size: .82rem;
+}
+#gcpPropsPanel .gcp-pp-val {
+  font-size: .75rem;
+  font-weight: 900;
+  min-width: 30px;
+  text-align: left;
+}
+#gcpPropsPanel .gcp-pp-btns {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+#gcpPropsPanel .gcp-pp-btn {
+  flex: 1;
+  min-width: 60px;
+  border: 1.5px solid var(--gray-300);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-family: var(--font-body);
+  font-size: .8rem;
+  font-weight: 900;
+  background: var(--gray-100);
+  color: var(--black);
+  cursor: pointer;
+  text-align: center;
+}
+#gcpPropsPanel .gcp-pp-btn.primary {
+  background: var(--black);
+  color: var(--white);
+  border-color: var(--black);
+}
+#gcpPropsPanel .gcp-pp-btn.danger {
+  background: var(--gray-100);
+  color: #d00;
+  border-color: #f88;
+}
+#gcpPropsPanel .gcp-pp-btn.danger:active { background: #fdd; }

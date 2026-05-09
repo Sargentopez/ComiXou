@@ -15732,7 +15732,7 @@ function EditorView_init(){
   window._edDocDownFn = e => {
     if (window._gcpActive) {
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
-      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, [data-gcpmenu]');
+      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu]');
       if (_gcpUiEl) {
         return; // Es UI del GIF — dejar que sus propios listeners actúen
       } else {
@@ -16906,7 +16906,21 @@ function _gcpWithEditorContext(fn) {
   }
 }
 
+// ── Variables para doble tap en GCP ─────────────────────────────────────
+let _gcpLastTapTime = 0;
+let _gcpLastTapX = 0, _gcpLastTapY = 0;
+
 function _gcpHandleDown(e) {
+  // Si el panel de propiedades GCP está abierto y se toca fuera de él → cerrarlo
+  const _gppEl = document.getElementById('gcpPropsPanel');
+  if (_gppEl && _gppEl.classList.contains('open')) {
+    if (!e.target?.closest?.('#gcpPropsPanel')) {
+      _gcpClosePropsPanel();
+      return;
+    }
+    return; // dentro del panel → dejar que actúe el panel
+  }
+
   // Solo actuar si el target ES el gcpCanvas — no elementos UI superpuestos
   const gc = document.getElementById('gcpCanvas');
   if (!gc) return;
@@ -16914,7 +16928,7 @@ function _gcpHandleDown(e) {
   // verificar que no pertenece a ningún elemento de UI del editor GIF
   if (e.target && e.target !== gc) {
     // Si el target tiene un ancestro que es UI del GIF → ignorar
-    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, [data-gcpmenu]')) return;
+    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu]')) return;
   }
   const rect = gc.getBoundingClientRect();
   const src2 = e.touches ? e.touches[0] : e;
@@ -16993,9 +17007,28 @@ function _gcpHandleDown(e) {
   }
   window._gcpSelIdx = hit;
   if (hit >= 0) {
+    // Detección de doble tap
+    const _now = Date.now();
+    const _src2 = e.touches ? e.touches[0] : e;
+    const _tapX = _src2 ? _src2.clientX : e.clientX;
+    const _tapY = _src2 ? _src2.clientY : e.clientY;
+    const _dtap = _now - _gcpLastTapTime < 350
+      && Math.abs(_tapX - _gcpLastTapX) < 28
+      && Math.abs(_tapY - _gcpLastTapY) < 28;
+    _gcpLastTapTime = _now;
+    _gcpLastTapX = _tapX; _gcpLastTapY = _tapY;
+    if (_dtap) {
+      edIsDragging = false;
+      _gcpOpenPropsPanel(window._gcpLayers[hit], hit);
+      _gcpRedraw();
+      return;
+    }
     edIsDragging = true;
     edDragOffX = c.nx - window._gcpLayers[hit].x;
     edDragOffY = c.ny - window._gcpLayers[hit].y;
+  } else {
+    // Tap en vacío: resetear timer de doble tap
+    _gcpLastTapTime = 0;
   }
   _gcpRedraw();
 }
@@ -17020,6 +17053,185 @@ function _gcpHintStop() {
   Object.values(_GCP_HINT_BTNS).forEach(id =>
     document.getElementById(id)?.classList.remove('gcp-hint-pulse'));
   _gcpHintState = 'none';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PANEL DE PROPIEDADES GCP — doble tap sobre objeto
+// ══════════════════════════════════════════════════════════════════
+function _gcpClosePropsPanel() {
+  const p = document.getElementById('gcpPropsPanel');
+  if (p) { p.classList.remove('open'); p.innerHTML = ''; }
+}
+
+function _gcpOpenPropsPanel(la, laIdx) {
+  const p = document.getElementById('gcpPropsPanel');
+  if (!p || !la) return;
+  _gcpClosePropsPanel();
+
+  const fi = window._gcpGlobalFrameIdx || 0;
+  const rot = Math.round(la.rotation || 0);
+  const opPct = Math.round((la.opacity ?? 1) * 100);
+  const pw = edPageW(), ph = edPageH();
+
+  // Etiqueta del tipo de objeto
+  const typeLabel = la.type === 'gif' ? '🎞️ GIF'
+    : la.type === 'image' ? '🖼️ Imagen'
+    : la.type === 'text' ? '💬 Texto'
+    : la.type === 'bubble' ? '💭 Bocadillo'
+    : la.type === 'shape' ? '⬛ Forma'
+    : la.type === 'stroke' ? '✏️ Dibujo'
+    : la.type === 'line' ? '📐 Recta'
+    : '📦 Objeto';
+
+  // Posición en px del canvas (para mostrar al usuario)
+  const xPx = Math.round(la.x * pw);
+  const yPx = Math.round(la.y * ph);
+  const wPx = Math.round(la.width * pw);
+  const hPx = Math.round(la.height * ph);
+
+  const nameTxt = la._gcpName || typeLabel;
+
+  p.innerHTML = `
+    <div class="gcp-pp-title">
+      <span>${typeLabel}</span>
+      <span style="flex:1;font-size:.78rem;font-weight:700;color:var(--gray-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nameTxt}</span>
+      <span style="font-size:.72rem;color:var(--gray-400);font-weight:700;font-family:var(--font-body)">Frame ${fi + 1}</span>
+    </div>
+    <div class="gcp-pp-row">
+      <span class="gcp-pp-label">Opacidad</span>
+      <span class="gcp-pp-val" id="gcppp-op-val">${opPct}%</span>
+      <input type="range" id="gcppp-op" min="0" max="100" value="${opPct}">
+    </div>
+    <div class="gcp-pp-row">
+      <span class="gcp-pp-label">Rotación</span>
+      <input type="number" id="gcppp-rot" value="${rot}" min="-180" max="180" inputmode="numeric"> °
+    </div>
+    <div class="gcp-pp-row">
+      <span class="gcp-pp-label">Posición</span>
+      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">X:</span>
+      <input type="number" id="gcppp-x" value="${xPx}" inputmode="numeric" style="width:60px">
+      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">Y:</span>
+      <input type="number" id="gcppp-y" value="${yPx}" inputmode="numeric" style="width:60px">
+    </div>
+    <div class="gcp-pp-row">
+      <span class="gcp-pp-label">Tamaño</span>
+      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">W:</span>
+      <input type="number" id="gcppp-w" value="${wPx}" inputmode="numeric" style="width:60px" min="4">
+      <span style="font-size:.75rem;font-weight:700;color:var(--gray-500)">H:</span>
+      <input type="number" id="gcppp-h" value="${hPx}" inputmode="numeric" style="width:60px" min="4">
+    </div>
+    <div class="gcp-pp-btns">
+      <button class="gcp-pp-btn" id="gcppp-mirror" title="Reflejar horizontalmente">${_ED_MIRROR_ICON} Reflejar</button>
+      <button class="gcp-pp-btn" id="gcppp-dup">⧉ Duplicar</button>
+      <button class="gcp-pp-btn danger" id="gcppp-del">✕ Eliminar</button>
+      <button class="gcp-pp-btn primary" id="gcppp-ok">✓ OK</button>
+    </div>`;
+
+  p.classList.add('open');
+
+  // Live update de opacidad
+  const opSlider = document.getElementById('gcppp-op');
+  const opVal = document.getElementById('gcppp-op-val');
+  opSlider?.addEventListener('input', () => {
+    la.opacity = parseInt(opSlider.value) / 100;
+    opVal.textContent = opSlider.value + '%';
+    _gcpAutoSaveFrame();
+    _gcpRedraw();
+  });
+
+  // Rotación
+  const rotInp = document.getElementById('gcppp-rot');
+  rotInp?.addEventListener('input', () => {
+    la.rotation = parseFloat(rotInp.value) || 0;
+    _gcpAutoSaveFrame();
+    _gcpRedraw();
+  });
+
+  // Posición X/Y
+  const xInp = document.getElementById('gcppp-x');
+  const yInp = document.getElementById('gcppp-y');
+  xInp?.addEventListener('input', () => {
+    la.x = (parseInt(xInp.value) || 0) / pw;
+    _gcpAutoSaveFrame(); _gcpRedraw();
+  });
+  yInp?.addEventListener('input', () => {
+    la.y = (parseInt(yInp.value) || 0) / ph;
+    _gcpAutoSaveFrame(); _gcpRedraw();
+  });
+
+  // Tamaño W/H
+  const wInp = document.getElementById('gcppp-w');
+  const hInp = document.getElementById('gcppp-h');
+  wInp?.addEventListener('input', () => {
+    const v = parseInt(wInp.value) || 4;
+    la.width = v / pw;
+    _gcpAutoSaveFrame(); _gcpRedraw();
+  });
+  hInp?.addEventListener('input', () => {
+    const v = parseInt(hInp.value) || 4;
+    la.height = v / ph;
+    _gcpAutoSaveFrame(); _gcpRedraw();
+  });
+
+  // Reflejar
+  document.getElementById('gcppp-mirror')?.addEventListener('click', () => {
+    _gcpWithEditorContext(() => {
+      window._gcpSelIdx = laIdx;
+      edSelectedIdx = laIdx;
+      edMirrorSelected();
+    });
+    _gcpAutoSaveFrame(); _gcpRedraw();
+  });
+
+  // Duplicar
+  document.getElementById('gcppp-dup')?.addEventListener('click', () => {
+    const newLa = edDeserLayer(edSerLayer(la), edOrientation);
+    if (!newLa) return;
+    newLa.x += 0.03; newLa.y += 0.03;
+    // Copiar frames del objeto original
+    newLa._frames = (la._frames || []).map(s => ({...s}));
+    newLa._gcpName = (la._gcpName || '') + ' copia';
+    window._gcpLayers.push(newLa);
+    window._gcpSelIdx = window._gcpLayers.length - 1;
+    _gcpClosePropsPanel();
+    _gcpUpdateFramesBar();
+    _gcpRedraw();
+    edToast('Objeto duplicado');
+  });
+
+  // Eliminar
+  document.getElementById('gcppp-del')?.addEventListener('click', () => {
+    edConfirm('¿Eliminar este objeto de la animación?', () => {
+      window._gcpLayers.splice(laIdx, 1);
+      if (window._gcpSelIdx >= window._gcpLayers.length)
+        window._gcpSelIdx = window._gcpLayers.length - 1;
+      _gcpClosePropsPanel();
+      _gcpUpdateFramesBar();
+      _gcpRedraw();
+    });
+  });
+
+  // OK / cerrar
+  document.getElementById('gcppp-ok')?.addEventListener('click', () => {
+    _gcpAutoSaveFrame();
+    _gcpClosePropsPanel();
+  });
+}
+
+// Guarda el estado actual de todas las capas en el frame activo (sin user action)
+function _gcpAutoSaveFrame() {
+  const fi = window._gcpGlobalFrameIdx || 0;
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) la._frames = [];
+    while (la._frames.length <= fi) la._frames.push(null);
+    la._frames[fi] = {
+      x: la.x, y: la.y, width: la.width, height: la.height,
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1,
+      visible: la._gcpVisible !== false
+    };
+  });
+  _gcpUpdateFramesBar();
 }
 
 function _gcpHandleMove(e) {
@@ -17235,6 +17447,8 @@ function _gcpCaptureFrame() {
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
 function _gcpApplyFrame(fi) {
+  // Cerrar panel de propiedades al cambiar de frame
+  _gcpClosePropsPanel();
   window._gcpLayers.forEach(la => {
     if (!la._frames || !la._frames.length) {
       // Sin frames aún: objeto recién insertado, siempre visible para editar
@@ -18115,6 +18329,8 @@ function gcpOpen(edLayerIdx) {
 
 // gcpClose
 function _gcpDoClose() {
+  // Cerrar panel de propiedades si está abierto
+  _gcpClosePropsPanel();
   // Detener preview si está activa
   if (_gcpPreviewTimer) { clearTimeout(_gcpPreviewTimer); _gcpPreviewTimer = null; }
   const preBtn = document.getElementById('gcpPreviewBtn');
