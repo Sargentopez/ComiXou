@@ -2240,8 +2240,13 @@ function _hideCreditsButtons() {
 
 function _showCredits() {
   RS.isCredits = true;
+  const _capturedIdx = RS.idx;
   // Esperar a que el layout esté pintado antes de leer getBoundingClientRect
-  requestAnimationFrame(() => _buildCreditsOverlay());
+  requestAnimationFrame(() => {
+    // Si el usuario ya navegó a otro panel antes del frame, cancelar
+    if (RS.idx !== _capturedIdx || !RS.isCredits) return;
+    _buildCreditsOverlay();
+  });
 }
 
 function _buildCreditsOverlay() {
@@ -2253,11 +2258,14 @@ function _buildCreditsOverlay() {
   const prev = document.getElementById('creditsOverlay');
   if (prev) prev.remove();
 
-  // Leer posición REAL del canvas tras el layout
-  const rect = RS.canvas.getBoundingClientRect();
+  // Leer posición del canvas desde sus estilos CSS (fiables tras _resizeCanvas)
+  const cLeft   = parseInt(RS.canvas.style.left)   || 0;
+  const cTop    = parseInt(RS.canvas.style.top)    || 0;
+  const cWidth  = parseInt(RS.canvas.style.width)  || 0;
+  const cHeight = parseInt(RS.canvas.style.height) || 0;
 
-  // Si el canvas no tiene dimensiones reales todavía, reintentar
-  if (rect.width === 0 || rect.height === 0) {
+  // Si el canvas aún no tiene dimensiones, reintentar
+  if (cWidth === 0 || cHeight === 0) {
     requestAnimationFrame(() => _buildCreditsOverlay());
     return;
   }
@@ -2266,10 +2274,10 @@ function _buildCreditsOverlay() {
   ov.id = 'creditsOverlay';
   ov.style.cssText = [
     'position:fixed',
-    'left:' + Math.round(rect.left) + 'px',
-    'top:' + Math.round(rect.top) + 'px',
-    'width:' + Math.round(rect.width) + 'px',
-    'height:' + Math.round(rect.height) + 'px',
+    'left:' + cLeft + 'px',
+    'top:' + cTop + 'px',
+    'width:' + cWidth + 'px',
+    'height:' + cHeight + 'px',
     'background:#ffffff',
     'z-index:5',
     'overflow:hidden',
@@ -2280,8 +2288,8 @@ function _buildCreditsOverlay() {
     'box-sizing:border-box',
   ].join(';');
 
-  const W = rect.width;
-  const H = rect.height;
+  const W = cWidth;
+  const H = cHeight;
 
   if (isHoriz) {
     // ── HORIZONTAL: dos columnas ──
