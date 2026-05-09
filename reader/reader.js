@@ -2386,11 +2386,12 @@ function _mountCreditsButtons() {
   const cr = RS._creditsRestart;
   if (!cl || !cr) return;
 
-  // Escala canvas→pantalla desde estilos CSS calculados por _resizeCanvas
-  const cW = parseInt(RS.canvas.style.width)  || RS.canvas.width;
-  const cH = parseInt(RS.canvas.style.height) || RS.canvas.height;
-  const cL = parseInt(RS.canvas.style.left)   || 0;
-  const cT = parseInt(RS.canvas.style.top)    || 0;
+  // Posición real del canvas en pantalla (funciona en modo fixed y scroll)
+  const rect = RS.canvas.getBoundingClientRect();
+  const cL = rect.left;
+  const cT = rect.top;
+  const cW = rect.width;
+  const cH = rect.height;
   const sx = cW / cl.pw;
   const sy = cH / cl.ph;
 
