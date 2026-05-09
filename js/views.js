@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v21.81</footer>
+    <footer class="app-version">v21.88</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -232,14 +232,7 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-gallery">Galería</button>
                   <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
                 </div>
-                <button class="ed-dropdown-item" id="dd-animation">Animación (GIF)</button>
-              </div>
-              <div class="ed-dropdown-submenu">
-                <button class="ed-dropdown-item ed-has-submenu" id="dd-texto-btn">Texto ▸</button>
-                <div class="ed-submenu" id="dd-texto-sub">
-                  <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
-                  <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
-                </div>
+                <button class="ed-dropdown-item" id="dd-animation">Animación</button>
               </div>
 
             </div>
@@ -265,7 +258,16 @@ Router.register('editor', {
           </div>
 
           <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="edAnimacionesBtn">Animaciones</button>
+          <!-- ESCRIBIR -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="escribir">Escribir ▾</button>
+            <div class="ed-dropdown" id="dd-escribir">
+              <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
+              <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
+            </div>
+          </div>
+          <div class="ed-menu-sep"></div>
+          <button class="ed-menu-btn" id="edAnimacionesBtn">Animar</button>
           <div class="ed-menu-sep"></div>
 
           <!-- DESHACER / REHACER -->
@@ -355,6 +357,16 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="dd-loadjson">Cargar obra (.json)</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-recoverlocal" style="display:none">↩ Recuperar versión del dispositivo</button>
+            </div>
+          </div>
+
+          <div class="ed-menu-sep"></div>
+
+          <!-- AYUDA -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-menu="help">Ayuda ▾</button>
+            <div class="ed-dropdown" id="dd-help">
+              <button class="ed-dropdown-item" id="dd-shortcuts">⌨ Atajos de teclado</button>
             </div>
           </div>
 
@@ -492,8 +504,51 @@ Router.register('editor', {
     </div>
 
     <!-- Inputs ocultos -->
-    <input type="file" id="edFileGallery" accept="image/*,.psd,.xcf,.tif,.tiff,.bmp,.avif,.heic,.heif,.webp,.svg" style="display:none">
+    <input type="file" id="edFileGallery" accept="image/jpeg,image/png,image/webp,image/svg+xml,image/bmp,image/avif,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.svg,.bmp,.avif,.heic,.heif,.tif,.tiff,.psd,.xcf" style="display:none">
+    <!-- Modal de atajos de teclado -->
+    <div id="edShortcutsModal">
+      <div class="sc-box">
+        <div class="sc-header">
+          <span class="sc-title">⌨ Atajos de teclado</span>
+          <button class="sc-close" id="edShortcutsClose">✕</button>
+        </div>
+        <div class="sc-body">
+
+          <div class="sc-section">Historial</div>
+          <div class="sc-row"><span class="sc-desc">Deshacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Rehacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Y</kbd></span></div>
+
+          <div class="sc-section">Selección y objetos</div>
+          <div class="sc-row"><span class="sc-desc">Mover objeto 1 px</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Mover objeto 10 px</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Añadir a multiselección</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Duplicar objeto seleccionado</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>D</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Eliminar objeto seleccionado</span><span class="sc-keys"><kbd>Supr</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Cancelar selección / cerrar panel</span><span class="sc-keys"><kbd>Esc</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Confirmar / cerrar panel (OK)</span><span class="sc-keys"><kbd>Enter</kbd></span></div>
+
+          <div class="sc-section">Orden de capas</div>
+          <div class="sc-row"><span class="sc-desc">Subir capa un nivel</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>]</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Bajar capa un nivel</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>[</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Traer al frente</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>]</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Enviar al fondo</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>[</kbd></span></div>
+
+          <div class="sc-section">Zoom y navegación</div>
+          <div class="sc-row"><span class="sc-desc">Zoom acercar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Rueda ↑</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Zoom alejar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Rueda ↓</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Desplazar canvas</span><span class="sc-keys"><kbd>Rueda</kbd></span></div>
+
+          <div class="sc-section">Editor de animaciones (GCP)</div>
+          <div class="sc-row"><span class="sc-desc">Mover objeto seleccionado 1 px</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Mover objeto seleccionado 10 px</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Navegar entre frames (sin selección)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
+
+        </div>
+      </div>
+    </div>
+
     <input type="file" id="edFileGif" accept=".gif,image/gif" style="display:none">
+    <input type="file" id="edFileAnim" accept=".gif,image/gif,.apng,image/apng,image/vnd.mozilla.apng" style="display:none">
     <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">

@@ -2872,12 +2872,11 @@ function _edUpdateMultiSelPanel(){
   $('_ms-merge')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edMergeSelected(); });
   const btn = $('edMultiSelBtn');
   if(btn){
-    const r = btn.getBoundingClientRect();
-    dd.style.top  = r.bottom + 'px';
-    dd.style.right = (window.innerWidth - r.right) + 'px';
-    dd.style.left  = 'auto';
+    dd.classList.add('open');
+    _edPositionDropdown(dd, btn.getBoundingClientRect());
+  } else {
+    dd.classList.add('open');
   }
-  dd.classList.add('open');
 }
 
 // Recalcula edMultiBbox en espacio LOCAL del grupo (desrotado por edMultiGroupRot).
@@ -8641,6 +8640,28 @@ function edCloseMenus(){
   edMenuOpen=null;
 }
 
+// Posiciona un dropdown centrado bajo su botón con clamp a bordes de pantalla.
+// Llamar DESPUÉS de que el dropdown ya esté en el DOM con display!=none.
+function _edPositionDropdown(dd, btnRect) {
+  dd.style.position = 'fixed';
+  dd.style.top  = (btnRect.bottom + 2) + 'px';
+  dd.style.zIndex = '9999';
+  dd.style.left = '-9999px';
+  dd.style.right = 'auto';
+  dd.style.visibility = 'hidden';
+  // Medir y clampar en el siguiente frame (layout ya calculado)
+  requestAnimationFrame(() => {
+    const ddW = dd.offsetWidth || 220;
+    const vw  = window.innerWidth;
+    const PAD = 6;
+    let left = btnRect.left + (btnRect.width - ddW) / 2;
+    if (left + ddW + PAD > vw) left = vw - ddW - PAD;
+    if (left < PAD) left = PAD;
+    dd.style.left = left + 'px';
+    dd.style.visibility = '';
+  });
+}
+
 function edToggleMenu(id){
   if(edMenuOpen===id){edCloseMenus();return;}
   edCloseMenus();
@@ -8669,21 +8690,11 @@ function edToggleMenu(id){
   dd._origParent = dd._origParent || dd.parentNode;
   document.body.appendChild(dd);
 
-  // Posicionar con fixed relativo al botón
+  // Posicionar con fixed relativo al botón — centrado bajo el padre con clamp a bordes
   const r = btn.getBoundingClientRect();
-  dd.style.position = 'fixed';
-  dd.style.top  = r.bottom + 'px';
-  dd.style.zIndex = '9999';
-  // Proyecto: siempre alineado por la derecha con el botón
-  if(id === 'project' || id === 'rules' || id === 'biblioteca'){
-    dd.style.left = 'auto';
-    dd.style.right = (window.innerWidth - r.right) + 'px';
-  } else {
-    dd.style.left = r.left + 'px';
-    dd.style.right = 'auto';
-  }
-
   dd.classList.add('open');
+  _edPositionDropdown(dd, r);
+
   btn.classList.add('open');
   edMenuOpen = id;
   if(id === 'nav') edUpdateNavPages();
@@ -15131,7 +15142,7 @@ function EditorView_init(){
   });
   $('dd-animation')?.addEventListener('click',()=>{
     window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    $('edFileGif').click();
+    $('edFileAnim').click();
     edCloseMenus();
   });
   $('edAnimacionesBtn')?.addEventListener('click', () => { edCloseMenus(); gcpOpen(); });
@@ -15144,8 +15155,36 @@ function EditorView_init(){
     }
     window._edWasFullscreen = false;
   });
+  $('edFileAnim')?.addEventListener('change', async e => {
+    const _f = e.target.files[0]; e.target.value = '';
+    if (!_f) return;
+    // GIF → edAddGif; APNG → edAddImage (se renderiza como imagen estática en el editor,
+    // el visor/lector reproduce la animación nativamente por ser PNG animado)
+    const _isGif = _f.type === 'image/gif' || _f.name.toLowerCase().endsWith('.gif');
+    if (_isGif) {
+      edAddGif(_f);
+    } else {
+      edAddImage(_f); // APNG: el navegador lo reproduce como animación
+    }
+    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
+      setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
+    }
+    window._edWasFullscreen = false;
+  });
 
   $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
+  $('dd-shortcuts')?.addEventListener('click', () => {
+    edCloseMenus();
+    const m = document.getElementById('edShortcutsModal');
+    if (m) m.classList.add('open');
+  });
+  $('edShortcutsClose')?.addEventListener('click', () => {
+    document.getElementById('edShortcutsModal')?.classList.remove('open');
+  });
+  document.getElementById('edShortcutsModal')?.addEventListener('pointerdown', e => {
+    if (e.target === document.getElementById('edShortcutsModal'))
+      document.getElementById('edShortcutsModal').classList.remove('open');
+  });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
   $('edFileGallery')?.addEventListener('change', async e=>{
@@ -15509,16 +15548,32 @@ function EditorView_init(){
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
-    // Editor GIF activo: flechas navegan entre frames
-    if (window._gcpActive && _gcpGetTotalFrames() > 1) {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        _gcpGoToFrame(Math.min(window._gcpGlobalFrameIdx + 1, _gcpGetTotalFrames() - 1));
-        return;
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        _gcpGoToFrame(Math.max(window._gcpGlobalFrameIdx - 1, 0));
-        return;
+    // Editor GIF activo: flechas mueven objeto seleccionado (si hay) o navegan entre frames
+    if (window._gcpActive) {
+      const _isArrow = e.key==='ArrowRight'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowUp';
+      if (_isArrow) {
+        const _gcpSel = window._gcpSelIdx >= 0 ? window._gcpLayers?.[window._gcpSelIdx] : null;
+        if (_gcpSel) {
+          // Mover objeto seleccionado en el GCP — estándar industria
+          e.preventDefault();
+          const _step = e.shiftKey ? 10 : 1;
+          const _pw = edPageW(), _ph = edPageH();
+          const _dx = (e.key==='ArrowLeft' ? -_step : e.key==='ArrowRight' ? _step : 0) / _pw;
+          const _dy = (e.key==='ArrowUp'   ? -_step : e.key==='ArrowDown'  ? _step : 0) / _ph;
+          _gcpSel.x += _dx; _gcpSel.y += _dy;
+          _gcpAutoSaveFrame();
+          _gcpRedraw();
+          return;
+        } else if (_gcpGetTotalFrames() > 1) {
+          // Sin objeto seleccionado: navegar entre frames
+          e.preventDefault();
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            _gcpGoToFrame(Math.min(window._gcpGlobalFrameIdx + 1, _gcpGetTotalFrames() - 1));
+          } else {
+            _gcpGoToFrame(Math.max(window._gcpGlobalFrameIdx - 1, 0));
+          }
+          return;
+        }
       }
     }
     const tag = document.activeElement?.tagName?.toLowerCase();
@@ -15542,6 +15597,9 @@ function EditorView_init(){
     }
     // ESC: cerrar menús desplegables y panel de opciones sin guardar
     if(e.key === 'Escape' && !ctrl){
+      // Cerrar modal de atajos si está abierto
+      const scModal = document.getElementById('edShortcutsModal');
+      if(scModal && scModal.classList.contains('open')){ scModal.classList.remove('open'); return; }
       // Cerrar modal de guardado si está abierto
       const saveModal=document.querySelector('div[style*="z-index:99999"]');
       if(saveModal){ e.preventDefault(); saveModal.remove(); return; }
@@ -15630,6 +15688,42 @@ function EditorView_init(){
       }
       return;
     }
+    // Flechas (PC): mover objeto(s) seleccionado(s) — estándar Figma/Illustrator/Photoshop
+    // Arrow = 1px pantalla | Shift+Arrow = 10px pantalla
+    // Solo actúa si: es PC, no hay panel abierto, hay selección y no hay Ctrl
+    if(!window._edIsTouch && !ctrl &&
+       (e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight')){
+      const _panel2 = $('edOptionsPanel');
+      const _panelOpen = _panel2 && _panel2.classList.contains('open');
+      // Solo mover si no hay panel abierto Y hay objeto seleccionado (único o multi)
+      const _hasSel = edSelectedIdx >= 0 || (edActiveTool==='multiselect' && edMultiSel.length > 0);
+      if(!_panelOpen && _hasSel){
+        e.preventDefault();
+        const _step = e.shiftKey ? 10 : 1; // px pantalla
+        const _pw = edPageW(), _ph = edPageH();
+        // Convertir px pantalla a espacio normalizado (0-1) considerando zoom
+        const _dx = (e.key==='ArrowLeft' ? -_step : e.key==='ArrowRight' ? _step : 0) / (edCamera.z * _pw);
+        const _dy = (e.key==='ArrowUp'   ? -_step : e.key==='ArrowDown'  ? _step : 0) / (edCamera.z * _ph);
+        if(edActiveTool==='multiselect' && edMultiSel.length > 0){
+          edMultiSel.forEach(i => {
+            const _la = edLayers[i]; if(!_la || _la.locked) return;
+            _la.x += _dx; _la.y += _dy;
+          });
+          _msRecalcBbox();
+          _edUpdateMultiSelPanel();
+        } else if(edSelectedIdx >= 0){
+          const _la = edLayers[edSelectedIdx];
+          if(_la && !_la.locked){ _la.x += _dx; _la.y += _dy; }
+        }
+        edRedraw();
+        // Empujar historial con debounce para no saturarlo con teclas mantenidas
+        clearTimeout(window._edArrowKeyHistTimer);
+        window._edArrowKeyHistTimer = setTimeout(() => { edPushHistory(); }, 400);
+        return;
+      }
+      // Si hay panel abierto o no hay selección, dejar caer al bloque de Shift+multiselección
+    }
+
     // Shift+flechas (PC): añadir a la multiselección el objeto más cercano en esa dirección
     // Busca siempre desde el objeto ANCLA (el primero seleccionado), no desde el centroide.
     // Así se puede saltar objetos intermedios y seleccionar cualquier objeto no contiguo.
@@ -15731,6 +15825,17 @@ function EditorView_init(){
   // Cerrar herramienta de dibujo al tocar fuera del canvas
   window._edDocDownFn = e => {
     if (window._gcpActive) {
+      // Cerrar panels flotantes del GCP si el tap es fuera de ellos
+      const _bar = document.getElementById('gcpFramesBar');
+      const _bib = document.getElementById('edOptionsPanel');
+      const _insideBar = e.target?.closest?.('#gcpFramesBar, #gcpFramesToggleBtn');
+      const _insideBib = e.target?.closest?.('#edOptionsPanel, #gcpBibBtn');
+      if (_bar && _bar.style.display === 'flex' && !_insideBar) {
+        _gcpToggleFramesBar(); // cierra
+      }
+      if (_bib && _bib.classList.contains('open') && !_insideBib) {
+        _bib.classList.remove('open'); _bib.innerHTML = ''; delete _bib.dataset.mode;
+      }
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
       const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu]');
       if (_gcpUiEl) {
@@ -17080,6 +17185,15 @@ function _gcpHintStop() {
 // ══════════════════════════════════════════════════════════════════
 // PANEL DE PROPIEDADES GCP — doble tap sobre objeto
 // ══════════════════════════════════════════════════════════════════
+function _gcpCloseAllDropdowns() {
+  document.querySelectorAll('[id^="gdd-"]').forEach(d => {
+    d.classList.remove('open');
+    if (d._gcpOrigParent && d.parentNode === document.body) {
+      d._gcpOrigParent.appendChild(d);
+    }
+  });
+}
+
 function _gcpClosePropsPanel() {
   const p = document.getElementById('gcpPropsPanel');
   if (p) { p.classList.remove('open'); p.innerHTML = ''; }
@@ -18333,18 +18447,18 @@ function gcpOpen(edLayerIdx) {
     // Botones del dropdown Guardar
     document.getElementById('gcpSaveAppBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
-      document.querySelectorAll('[id^="gdd-"]').forEach(d=>d.classList.remove('open'));
+      _gcpCloseAllDropdowns();
       edToast('Guardando…');
       _gcpSaveToLib(null);
     });
     document.getElementById('gcpDownloadApngBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
-      document.querySelectorAll('[id^="gdd-"]').forEach(d=>d.classList.remove('open'));
+      _gcpCloseAllDropdowns();
       _gcpDownloadApng();
     });
     document.getElementById('gcpDownloadGifBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
-      document.querySelectorAll('[id^="gdd-"]').forEach(d=>d.classList.remove('open'));
+      _gcpCloseAllDropdowns();
       _gcpDownloadGif();
     });
     // Botón Comportamiento — abre/cierra subpanel inline sin cerrar el dropdown
@@ -18388,10 +18502,11 @@ function gcpOpen(edLayerIdx) {
         const dd = document.getElementById('gdd-' + id);
         if (!dd) return;
         const open = dd.classList.contains('open');
-        document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
+        _gcpCloseAllDropdowns();
         if (!open) {
           if (id === 'capas') _gcpRenderLayersDropdown(dd);
           dd.classList.add('open');
+          _edPositionDropdown(dd, btn.getBoundingClientRect());
         }
       });
     });
@@ -18399,7 +18514,7 @@ function gcpOpen(edLayerIdx) {
     document.addEventListener('pointerdown', e => {
       if (!window._gcpActive) return;
       if (!e.target.closest('[data-gcpmenu]') && !e.target.closest('[id^="gdd-"]'))
-        document.querySelectorAll('[id^="gdd-"]').forEach(d => d.classList.remove('open'));
+        _gcpCloseAllDropdowns();
     }, { passive: true });
 
     // Los handlers de selección/drag/rotate/resize se registran en document
