@@ -12429,7 +12429,9 @@ async function edCloudSave() {
     // El admin deberá aprobarla de nuevo. Limpiar estado local incondicionalmente.
     const _comicAfter = ComicStore.getById(edProjectId);
     if (_comicAfter) {
-      ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false });
+      // cloudSavedAt marca el momento exacto de la última subida exitosa a la nube.
+      // Se usa en my-comics para saber si hay cambios locales sin subir antes de publicar.
+      ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false, cloudSavedAt: new Date().toISOString() });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
     // Sincronizar biblioteca con la nube

@@ -508,14 +508,18 @@ function _mcRenderList() {
         appAlert('La obra debe estar guardada en la nube antes de publicarse.\nÁbrela en el editor y pulsa el botón ☁️ Guardar en nube.');
         return;
       }
-      // 2. Comparar fechas: local vs nube
+      // 2. Comparar fechas: localSavedAt vs cloudSavedAt
+      //    - localSavedAt: se actualiza cada vez que se guarda en local (editor)
+      //    - cloudSavedAt: se actualiza SOLO cuando se sube a la nube con éxito
+      //    Si localSavedAt > cloudSavedAt (o cloudSavedAt no existe) → hay cambios sin subir
       const _comicFull = ComicStore.getByIdFull
         ? (await ComicStore.getByIdFull(comic.id)) || comic
         : comic;
       const _localAt  = _comicFull.localSavedAt || '';
-      const _cloudAt  = _comicFull.updatedAt    || '';
+      const _cloudAt  = _comicFull.cloudSavedAt || '';
       const _hasLocalData = !!(_comicFull.editorData?.pages?.length);
-      const _localNewer = _hasLocalData && _localAt && _cloudAt && _localAt > _cloudAt;
+      // Local más nueva: tiene datos locales Y (nunca subida a la nube O guardado local posterior a la subida)
+      const _localNewer = _hasLocalData && (_localAt > _cloudAt || !_cloudAt);
       // 3. Si la versión local es más nueva que la nube → pedir que guarde primero
       if (_localNewer) {
         appAlert('Tienes cambios sin subir a la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube antes de publicar.');
