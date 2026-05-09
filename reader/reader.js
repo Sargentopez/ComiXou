@@ -2425,45 +2425,45 @@ function _mountCreditsButtons() {
   const sx = cW / cl.pw;
   const sy = cH / cl.ph;
 
-  // Contenedor invisible encima del canvas
-  const ov = document.createElement('div');
-  ov.id = 'creditsOverlay';
-  ov.style.cssText = 'position:fixed;left:' + cL + 'px;top:' + cT + 'px;width:' + cW + 'px;height:' + cH + 'px;z-index:9000;pointer-events:none;';
-
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
     if (isLink) { el.href = 'https://sargentopez.github.io/ComiXou/index.html'; }
-    const bw = Math.round(data.fs * 8 * sx);   // ancho generoso
-    const bh = Math.round(data.fs * 2.5 * sy);  // alto generoso
-    const bx = Math.round(data.cx * sx - bw / 2);
-    const by = Math.round(data.cy * sy - bh / 2);
+    el.className = '_cxCreditBtn';
+    // Coordenadas canvas → pantalla
+    const screenX = rect.left + data.cx * sx;
+    const screenY = rect.top  + data.cy * sy;
+    const bw = Math.round(data.fs * 10 * sx);
+    const bh = Math.round(data.fs * 3  * sy);
     el.style.cssText = [
-      'position:absolute',
-      'left:' + bx + 'px',
-      'top:' + by + 'px',
-      'width:' + bw + 'px',
+      'position:fixed',
+      'left:'   + Math.round(screenX - bw/2) + 'px',
+      'top:'    + Math.round(screenY - bh/2) + 'px',
+      'width:'  + bw + 'px',
       'height:' + bh + 'px',
+      'z-index:2147483647',
       'background:transparent',
       'border:none',
+      'outline:none',
+      '-webkit-appearance:none',
+      'appearance:none',
       'cursor:pointer',
       'pointer-events:all',
       'touch-action:manipulation',
-      '-webkit-tap-highlight-color:rgba(0,0,0,0)',
-      'display:block',
+      '-webkit-tap-highlight-color:transparent',
       'padding:0',
+      'margin:0',
+      'display:block',
     ].join(';');
     return el;
   }
 
   const lk = makeBtn(cl, true);
-  ov.appendChild(lk);
+  document.body.appendChild(lk);
 
   const rb = makeBtn(cr, false);
   rb.addEventListener('click',    e => { e.stopPropagation(); _creditsClick(); });
   rb.addEventListener('touchend', e => { e.stopPropagation(); e.preventDefault(); _creditsClick(); }, { passive: false });
-  ov.appendChild(rb);
-
-  document.getElementById('readerApp').appendChild(ov);
+  document.body.appendChild(rb);
 }
 
 function _resetCredits() {
