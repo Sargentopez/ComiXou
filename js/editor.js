@@ -17950,6 +17950,26 @@ function _gcpReinterpolateAround(fi) {
 }
 
 // ── Modal de interpolación ────────────────────────────────────────────────────
+// Elimina interpolados adyacentes a fi en todas las capas.
+// Se llama cuando un frame clave queda invisible (ya no puede ser extremo de interpolación).
+function _gcpPurgeInterpAround(fi) {
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    // Eliminar interpolados DESPUÉS de fi (entre fi y el siguiente clave)
+    let afterCount = 0;
+    let i = fi + 1;
+    while (i < la._frames.length && la._frames[i]?._interp) { afterCount++; i++; }
+    if (afterCount > 0) la._frames.splice(fi + 1, afterCount);
+    // Eliminar interpolados ANTES de fi (entre el clave anterior y fi)
+    // fi puede haberse desplazado si había interp después — recalcular
+    let beforeEnd = fi; // fi sigue igual porque splice fue hacia adelante
+    let j = beforeEnd - 1;
+    let beforeCount = 0;
+    while (j >= 0 && la._frames[j]?._interp) { beforeCount++; j--; }
+    if (beforeCount > 0) la._frames.splice(j + 1, beforeCount);
+  });
+}
+
 // Menú contextual para interpolación existente (botón rojo)
 let _gcpInterpMenuOpen = null;
 function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
@@ -18661,10 +18681,16 @@ function _gcpUpdateFramesBar() {
           e.stopPropagation();
           if (la._frames && fi < la._frames.length) {
             la._frames[fi] = {...la._frames[fi], visible: false};
+            // Eliminar interpolados adyacentes: un frame invisible no puede ser extremo de interpolación
+            _gcpPurgeInterpAround(fi);
           }
+          // Ajustar índice si quedó fuera de rango
+          const _nt = _gcpGetTotalFrames();
+          if (window._gcpGlobalFrameIdx >= _nt && _nt > 0) window._gcpGlobalFrameIdx = _nt - 1;
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpUpdateFrameNav();
           _gcpRedraw();
           _gcpUpdateFramesBar();
         });
