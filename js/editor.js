@@ -2372,6 +2372,9 @@ function edPushHistory(force){
   // Actualizar indicador de tamaño con debounce (no bloquea el flujo)
   clearTimeout(window._edSizeCheckTimer);
   window._edSizeCheckTimer = setTimeout(_edSizeCheck, 800);
+  // Autosave diferido — no bloquear el flujo de historia
+  clearTimeout(window._edAutosavePushTimer);
+  window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 5000);
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
@@ -12513,6 +12516,15 @@ function _edSizeCheck() {
 
 function _edSizeMonitorStart() {
   _edSizeMonitorStop();
+  _edAutosaveStop();
+  if (window._edBeforeUnloadFn) {
+    window.removeEventListener('beforeunload', window._edBeforeUnloadFn);
+    window._edBeforeUnloadFn = null;
+  }
+  if (window._edPageHideFn) {
+    window.removeEventListener('pagehide', window._edPageHideFn);
+    window._edPageHideFn = null;
+  }
   _edSizeCheck(); // comprobación inmediata
   _edSizeMonitorTimer = setInterval(_edSizeCheck, 15000); // cada 15 segundos
 }
@@ -12663,6 +12675,7 @@ async function edSaveProject(_keepOverlay){
     if(!_keepOverlay) _edSaveOverlayHide();
     edToast('Guardado ✓');
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
+    _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
   } else {
     const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
@@ -13482,6 +13495,73 @@ function edDeserLayer(d, pageOrientation){
   }
   return null;
 }
+// ══════════════════════════════════════════════════════════════════
+// AUTOSAVE TEMPORAL — IndexedDB 'cxAutosave' / objectStore 'saves'
+// ══════════════════════════════════════════════════════════════════
+const _AS_DB   = 'cxAutosave';
+const _AS_STORE = 'saves';
+let _edAutosaveTimer = null;
+
+function _asDb() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(_AS_DB, 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore(_AS_STORE);
+    req.onsuccess = e => res(e.target.result);
+    req.onerror   = () => rej(req.error);
+  });
+}
+
+async function _edAutosaveWrite() {
+  if (!edProjectId || !edPages || !edPages.length) return;
+  try {
+    // Incluir biblioteca en el snapshot
+    let bibData = null;
+    try { bibData = _bibLoad(); } catch(_) {}
+    const snapshot = {
+      ts: Date.now(),
+      pages: edPages.map(p => ({
+        orientation: p.orientation,
+        dataUrl: p.dataUrl || null,
+        layers: (p.layers || []).map(l => { try { return edSerLayer(l); } catch(_) { return null; } }).filter(Boolean)
+      })),
+      bib: bibData || null
+    };
+    const db    = await _asDb();
+    const tx    = db.transaction(_AS_STORE, 'readwrite');
+    tx.objectStore(_AS_STORE).put(snapshot, edProjectId);
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+  } catch(_) {}
+}
+
+async function _edAutosaveRead(id) {
+  try {
+    const db  = await _asDb();
+    const tx  = db.transaction(_AS_STORE, 'readonly');
+    return await new Promise((res, rej) => {
+      const req = tx.objectStore(_AS_STORE).get(id);
+      req.onsuccess = () => res(req.result || null);
+      req.onerror   = () => res(null);
+    });
+  } catch(_) { return null; }
+}
+
+async function _edAutosaveClear(id) {
+  try {
+    const db = await _asDb();
+    const tx = db.transaction(_AS_STORE, 'readwrite');
+    tx.objectStore(_AS_STORE).delete(id || edProjectId);
+  } catch(_) {}
+}
+
+function _edAutosaveStart() {
+  _edAutosaveStop();
+  _edAutosaveTimer = setInterval(_edAutosaveWrite, 30000); // cada 30s
+}
+
+function _edAutosaveStop() {
+  if (_edAutosaveTimer) { clearInterval(_edAutosaveTimer); _edAutosaveTimer = null; }
+}
+
 async function edLoadProject(id){
   const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
@@ -13490,6 +13570,41 @@ async function edLoadProject(id){
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
+
+  // Comprobar si hay autosave temporal pendiente
+  const _asSave = await _edAutosaveRead(id);
+  if (_asSave && _asSave.pages && _asSave.pages.length && _asSave.ts) {
+    // Mostrar diálogo de recuperación antes de cargar
+    const _asRecovered = await new Promise(res => {
+      const _asDlg = document.createElement('div');
+      _asDlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
+      const _asDate = new Date(_asSave.ts).toLocaleString();
+      _asDlg.innerHTML = `
+        <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+          <div style="font-size:1.8rem;margin-bottom:12px">🔄</div>
+          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">Cambios sin guardar</p>
+          <p style="font-size:.85rem;color:#666;margin-bottom:6px">Los últimos cambios no se guardaron.</p>
+          <p style="font-size:.75rem;color:#999;margin-bottom:20px">${_asDate}</p>
+          <p style="font-weight:700;font-size:.9rem;margin-bottom:20px">¿Quieres recuperarlos?</p>
+          <div style="display:flex;gap:10px;justify-content:center">
+            <button id="_asNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">No</button>
+            <button id="_asYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">Sí, recuperar</button>
+          </div>
+        </div>`;
+      document.body.appendChild(_asDlg);
+      document.getElementById('_asYes').onclick = () => { _asDlg.remove(); res(true); };
+      document.getElementById('_asNo').onclick  = () => { _asDlg.remove(); _edAutosaveClear(id); res(false); };
+    });
+    if (_asRecovered) {
+      // Cargar el autosave en lugar de los datos del disco
+      comic.editorData = comic.editorData || {};
+      comic.editorData.pages = _asSave.pages;
+      // Restaurar biblioteca si estaba en el snapshot
+      if (_asSave.bib) {
+        try { localStorage.setItem(_bibKey(), JSON.stringify(_asSave.bib)); } catch(_) {}
+      }
+    }
+  }
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
@@ -15089,11 +15204,13 @@ function EditorView_init(){
 
     document.getElementById('_edExitYes').onclick = () => {
       dlg.remove();
+      _edAutosaveClear(); // salida controlada → borrar autosave
       edSaveProject();
       Router.go('my-comics');
     };
     document.getElementById('_edExitNo').onclick = () => {
       dlg.remove();
+      _edAutosaveClear(); // salida controlada sin guardar → borrar autosave
       // Si era obra nueva sin guardado previo, eliminarla
       if (isNew && edProjectId) {
         ComicStore.remove(edProjectId);
@@ -15576,6 +15693,18 @@ function EditorView_init(){
   window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
   _edSizeMonitorStart();
+  _edAutosaveStart();
+  // Aviso nativo al cerrar pestaña/navegador si hay cambios sin guardar
+  window._edBeforeUnloadFn = e => {
+    if (edHistoryIdx !== _edSavedHistoryIdx) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  };
+  window.addEventListener('beforeunload', window._edBeforeUnloadFn);
+  // pagehide: disparar autosave de emergencia al salir sin guardar
+  window._edPageHideFn = () => { _edAutosaveWrite(); };
+  window.addEventListener('pagehide', window._edPageHideFn);
 
   // ── VISOR ──
   // Botón cerrar desktop (dentro de pastilla)
