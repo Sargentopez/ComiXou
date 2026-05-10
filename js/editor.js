@@ -18362,25 +18362,19 @@ function _gcpUpdateFramesBar() {
         dupBtn.innerHTML = '⧉';
         dupBtn.addEventListener('click', e => {
           e.stopPropagation();
-          // Insertar frame en TODAS las capas para mantener columnas alineadas
+          // Duplicar la columna ENTERA (todas las capas) igual que _gcpCaptureFrame
           window._gcpLayers.forEach(otherLa => {
             if (!otherLa._frames) otherLa._frames = [];
-            if (otherLa === la) {
-              // Esta capa: duplicar el frame actual
-              const copy = {...la._frames[fi]};
-              otherLa._frames.splice(fi + 1, 0, copy);
-            } else {
-              // Resto de capas: insertar frame invisible en la misma posición
-              const _src = otherLa._frames[fi];
-              const _blank = _src
-                ? {..._src, visible: false}
-                : {x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
-                   rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false};
-              otherLa._frames.splice(fi + 1, 0, _blank);
-            }
+            const _src = otherLa._frames[fi];
+            const _copy = _src ? {..._src} : {
+              x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
+              rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false
+            };
+            otherLa._frames.splice(fi + 1, 0, _copy);
           });
           window._gcpDirty = true;
           window._gcpGlobalFrameIdx = fi + 1;
+          _gcpInvalidateAllThumbs();
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
           _gcpUpdateFrameNav();
           _gcpRedraw();
@@ -18426,6 +18420,45 @@ function _gcpUpdateFramesBar() {
       }
 
       scroll.appendChild(card);
+
+      // Botón de interpolación entre frames (excepto después del último frame)
+      if (fi < total - 1) {
+        const interpBtn = document.createElement('button');
+        interpBtn.title = 'Interpolación (próximamente)';
+        interpBtn.style.cssText = [
+          'flex-shrink:0',
+          'align-self:center',
+          'width:18px', 'height:18px',
+          'border-radius:50%',
+          'border:1.5px solid var(--gray-300)',
+          'background:var(--white)',
+          'color:var(--gray-400)',
+          'font-size:9px', 'line-height:1',
+          'cursor:pointer',
+          'display:flex', 'align-items:center', 'justify-content:center',
+          'padding:0',
+          'transition:border-color .15s, color .15s, background .15s',
+          'z-index:1',
+        ].join(';');
+        interpBtn.textContent = '⟳';
+        interpBtn.dataset.interpFi = fi;
+        interpBtn.dataset.interpLayer = layerIdx;
+        interpBtn.addEventListener('pointerenter', () => {
+          interpBtn.style.borderColor = 'var(--black)';
+          interpBtn.style.color = 'var(--black)';
+          interpBtn.style.background = 'var(--gray-100)';
+        });
+        interpBtn.addEventListener('pointerleave', () => {
+          interpBtn.style.borderColor = 'var(--gray-300)';
+          interpBtn.style.color = 'var(--gray-400)';
+          interpBtn.style.background = 'var(--white)';
+        });
+        interpBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          edToast('Interpolación — próximamente');
+        });
+        scroll.appendChild(interpBtn);
+      }
     }
 
     // Card "en edición" al final de cada fila
