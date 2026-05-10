@@ -24,11 +24,8 @@
       return true;
     };
 
-    // Cuando el SW toma el control (tras SKIP_WAITING), recargar SOLO si no editamos
-    let refreshing = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!refreshing && !_inEditor()) { refreshing = true; window.location.reload(); }
-    });
+    // controllerchange: NO recargar — JS/CSS son network-first, ya sirven la versión nueva.
+    // Recargar aquí causaría interrupciones inesperadas durante la edición.
 
     navigator.serviceWorker.register(swPath)
       .then(reg => {

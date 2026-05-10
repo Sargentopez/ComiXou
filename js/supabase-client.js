@@ -472,7 +472,7 @@ const SupabaseClient = (() => {
       updated_at:     new Date().toISOString(),
     });
     await _uploadPanels(comic);
-    return { sizeKB };
+    return { sizeKB: Math.round(sizeBytes / 1024) };
   }
 
   async function submitForReview(comic) {
