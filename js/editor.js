@@ -17953,6 +17953,35 @@ function _gcpReinterpolateAround(fi) {
 }
 
 // ── Modal de interpolación ────────────────────────────────────────────────────
+// Elimina columnas finales donde TODOS los frames de todas las capas son invisibles.
+// Una columna final "invisible" puede ser clave o interpolada — se elimina directamente.
+function _gcpTrimTrailingInvisible() {
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const total = _gcpGetTotalFrames();
+    if (total === 0) break;
+    const lastFi = total - 1;
+    // Comprobar si en la última columna TODAS las capas tienen frame invisible (o vacío)
+    const allInvis = window._gcpLayers.every(la => {
+      if (!la._frames || lastFi >= la._frames.length) return true; // sin frame = cuenta como invisible
+      return la._frames[lastFi].visible === false;
+    });
+    if (allInvis) {
+      // Eliminar la última columna de todas las capas
+      window._gcpLayers.forEach(la => {
+        if (la._frames && lastFi < la._frames.length) la._frames.splice(lastFi, 1);
+      });
+      changed = true;
+    }
+  }
+  // Ajustar índice de frame activo si quedó fuera de rango
+  const newTotal = _gcpGetTotalFrames();
+  if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
+    window._gcpGlobalFrameIdx = newTotal - 1;
+}
+
 // Elimina interpolados adyacentes a fi en todas las capas.
 // Se llama cuando un frame clave queda invisible (ya no puede ser extremo de interpolación).
 function _gcpPurgeInterpAround(fi) {
@@ -18089,10 +18118,8 @@ function _gcpDeleteInterp(fi) {
     while (i < la._frames.length && la._frames[i]?._interp) { count++; i++; }
     if (count > 0) la._frames.splice(fi + 1, count);
   });
-  // Si el frame actual era un interpolado, retroceder
-  const newTotal = _gcpGetTotalFrames();
-  if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
-    window._gcpGlobalFrameIdx = newTotal - 1;
+  // Eliminar columnas finales invisibles que pudieran quedar
+  _gcpTrimTrailingInvisible();
   _gcpInvalidateAllThumbs();
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
   _gcpUpdateFrameNav();
@@ -18735,9 +18762,8 @@ function _gcpUpdateFramesBar() {
             // Eliminar interpolados adyacentes: un frame invisible no puede ser extremo de interpolación
             _gcpPurgeInterpAround(fi);
           }
-          // Ajustar índice si quedó fuera de rango
-          const _nt = _gcpGetTotalFrames();
-          if (window._gcpGlobalFrameIdx >= _nt && _nt > 0) window._gcpGlobalFrameIdx = _nt - 1;
+          // Eliminar columnas finales donde todas las capas sean invisibles
+          _gcpTrimTrailingInvisible();
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
