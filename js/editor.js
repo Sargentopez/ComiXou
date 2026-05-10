@@ -12465,6 +12465,38 @@ async function edCloudSave() {
   }
 }
 
+// ── Monitor de tamaño de obra ────────────────────────────────────────────
+const _ED_MAX_BYTES = 60 * 1024 * 1024; // 60 MB
+let _edSizeMonitorTimer = null;
+
+function _edCalcProjectBytes() {
+  if (!edProjectId) return 0;
+  try {
+    const data = ComicStore.getById(edProjectId);
+    if (!data) return 0;
+    return new Blob([JSON.stringify(data)]).size;
+  } catch(_) { return 0; }
+}
+
+function _edSizeCheck() {
+  const banner = document.getElementById('edSizeBanner');
+  if (!banner) return;
+  const bytes = _edCalcProjectBytes();
+  banner.style.display = bytes >= _ED_MAX_BYTES ? 'block' : 'none';
+}
+
+function _edSizeMonitorStart() {
+  _edSizeMonitorStop();
+  _edSizeCheck(); // comprobación inmediata
+  _edSizeMonitorTimer = setInterval(_edSizeCheck, 15000); // cada 15 segundos
+}
+
+function _edSizeMonitorStop() {
+  if (_edSizeMonitorTimer) { clearInterval(_edSizeMonitorTimer); _edSizeMonitorTimer = null; }
+  const banner = document.getElementById('edSizeBanner');
+  if (banner) banner.style.display = 'none';
+}
+
 async function edSaveProject(_keepOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   if(!_keepOverlay) _edSaveOverlayShow('Guardando en dispositivo…');
@@ -12604,6 +12636,7 @@ async function edSaveProject(_keepOverlay){
   if (_verify && _verify.editorData && _verify.editorData.pages && _verify.editorData.pages.length > 0) {
     if(!_keepOverlay) _edSaveOverlayHide();
     edToast('Guardado ✓');
+    setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
   } else {
     const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
@@ -14747,6 +14780,7 @@ function EditorView_destroy(){
     window.removeEventListener('cx:storage:quota', window._edQuotaFn);
     window._edQuotaFn = null;
   }
+  _edSizeMonitorStop();
   if(window._edPointerTypeFn){
     document.removeEventListener('pointerdown', window._edPointerTypeFn, true);
     window._edPointerTypeFn = null;
@@ -15436,6 +15470,27 @@ function EditorView_init(){
     setTimeout(_edUpdateRecoverBtn, 50);
   });
 
+  // Actualizar indicador de tamaño al abrir el menú Proyecto
+  document.querySelector('[data-menu="project"]')?.addEventListener('pointerup', () => {
+    requestAnimationFrame(() => {
+      const pct  = document.getElementById('dd-project-size-pct');
+      const bar  = document.getElementById('dd-project-size-bar');
+      const used = document.getElementById('dd-project-size-used');
+      if (!pct || !bar || !used) return;
+      const bytes   = _edCalcProjectBytes();
+      const MAX     = 60 * 1024 * 1024;
+      const pctVal  = Math.min(100, Math.round(bytes / MAX * 100));
+      const mbUsed  = (bytes / 1024 / 1024).toFixed(1);
+      pct.textContent  = pctVal + '%';
+      used.textContent = mbUsed + ' MB';
+      bar.style.width  = pctVal + '%';
+      // Color según nivel
+      const color = pctVal >= 100 ? '#d00' : pctVal >= 80 ? '#e67e00' : 'var(--black)';
+      bar.style.background = color;
+      pct.style.color      = color;
+    });
+  });
+
   $('dd-recoverlocal')?.addEventListener('click', () => {
     edCloseMenus();
     if(!edProjectId) return;
@@ -15494,6 +15549,7 @@ function EditorView_init(){
   // Avisar al usuario si localStorage se llena al guardar
   window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
+  _edSizeMonitorStart();
 
   // ── VISOR ──
   // Botón cerrar desktop (dentro de pastilla)
@@ -16156,7 +16212,7 @@ function edLoadFromJSON(file){
 // ═══════════════════════════════════════════════════════════════
 
 const _BIB_KEY_PREFIX = 'cs_biblioteca';
-const _BIB_MAX_BYTES  = 3 * 1024 * 1024; // 3 MB — tope de memoria para la biblioteca
+const _BIB_MAX_BYTES  = 0; // Sin tope local — el límite es el de la obra completa (60 MB nube)
 const _BIB_THUMB_SIZE = 80;
 
 // Clave de localStorage: por proyecto si hay proyecto activo
@@ -16272,7 +16328,7 @@ function _bibGetAnimFolder(data) {
 // ── Guardar objeto o grupo ────────────────────────────────────────
 function edBibGuardar() {
   const data = _bibLoad();
-  if (_bibUsedBytes(data) >= _BIB_MAX_BYTES) {
+  if (_BIB_MAX_BYTES > 0 && _bibUsedBytes(data) >= _BIB_MAX_BYTES) {
     edToast(`Biblioteca llena (${_bibFormatSize(_bibUsedBytes(data))} / ${_bibFormatSize(_BIB_MAX_BYTES)}). Elimina algún objeto para añadir más.`, 3500);
     return;
   }
@@ -17884,10 +17940,10 @@ function _gcpPreview() {
 // Opera directamente sobre los nodos DOM existentes sin reconstruir
 function _gcpAnimatedSwap(idxA, idxB) {
   const bar = document.getElementById('gcpFramesBar');
-  const container = document.getElementById('gcpFramesBar-inner') || bar;
-  const rows = container ? Array.from(container.querySelectorAll('.gcp-layer-row')) : [];
+  const leftPane   = document.getElementById('gcpFramesLeftPane');
+  const framesPane = document.getElementById('gcpFramesPane');
 
-  if (!container || rows.length < 2) {
+  if (!leftPane || !framesPane) {
     // Fallback sin animación
     [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
     if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
@@ -17896,71 +17952,64 @@ function _gcpAnimatedSwap(idxA, idxB) {
     return;
   }
 
-  // Las filas están en orden inverso al array: fila DOM 0 = capa de mayor índice
-  const n = rows.length;
-  const domIdxA = (n - 1) - idxA;
-  const domIdxB = (n - 1) - idxB;
-  const rowA = rows[domIdxA];
-  const rowB = rows[domIdxB];
-  if (!rowA || !rowB) { _gcpUpdateFramesBar(); return; }
+  const leftChildren   = Array.from(leftPane.children);
+  const framesChildren = Array.from(framesPane.children);
+  const n = leftChildren.length;
+  if (n < 2) { _gcpUpdateFramesBar(); return; }
 
-  // FIRST: capturar posición Y de cada fila
-  const topA = rowA.getBoundingClientRect().top;
-  const topB = rowB.getBoundingClientRect().top;
+  // Orden DOM invertido respecto al array de capas
+  const domA = (n - 1) - idxA;
+  const domB = (n - 1) - idxB;
 
-  // Intercambiar en el DOM directamente (sin reconstruir)
-  const parentA = rowA.parentNode;
-  const afterA  = rowA.nextSibling;
-  const afterB  = rowB.nextSibling;
+  const lA = leftChildren[domA],   lB = leftChildren[domB];
+  const fA = framesChildren[domA], fB = framesChildren[domB];
+  if (!lA || !lB || !fA || !fB) { _gcpUpdateFramesBar(); return; }
 
-  if (afterA === rowB) {
-    // Son adyacentes: A está justo antes de B
-    parentA.insertBefore(rowB, rowA);
-  } else if (afterB === rowA) {
-    // Son adyacentes: B está justo antes de A
-    parentA.insertBefore(rowA, rowB);
-  } else {
-    // No adyacentes: intercambio genérico
-    parentA.insertBefore(rowB, afterA);
-    parentA.insertBefore(rowA, afterB);
-  }
+  // FIRST: capturar Y
+  const topLA = lA.getBoundingClientRect().top;
+  const topLB = lB.getBoundingClientRect().top;
+  const topFA = fA.getBoundingClientRect().top;
+  const topFB = fB.getBoundingClientRect().top;
 
-  // Actualizar z-index de las dos filas intercambiadas
-  rowA.style.zIndex = String(idxB + 1);
-  rowB.style.zIndex = String(idxA + 1);
+  // Intercambiar en DOM — ambos paneles
+  const _swapSiblings = (pa, elA, elB) => {
+    const afterA = elA.nextSibling;
+    const afterB = elB.nextSibling;
+    if (afterA === elB) { pa.insertBefore(elB, elA); }
+    else if (afterB === elA) { pa.insertBefore(elA, elB); }
+    else { pa.insertBefore(elB, afterA); pa.insertBefore(elA, afterB); }
+  };
+  _swapSiblings(leftPane,   lA, lB);
+  _swapSiblings(framesPane, fA, fB);
 
-  // LAST: posición nueva
-  const newTopA = rowA.getBoundingClientRect().top;
-  const newTopB = rowB.getBoundingClientRect().top;
-  const deltaA  = topA - newTopA;
-  const deltaB  = topB - newTopB;
+  // LAST: deltas
+  const dLA = topLA - lA.getBoundingClientRect().top;
+  const dLB = topLB - lB.getBoundingClientRect().top;
+  const dFA = topFA - fA.getBoundingClientRect().top;
+  const dFB = topFB - fB.getBoundingClientRect().top;
 
-  // INVERT: colocar en posición anterior
-  rowA.style.transition = 'none';
-  rowA.style.transform  = 'translateY(' + deltaA + 'px)';
-  rowA.style.opacity    = '0.55';
-  rowB.style.transition = 'none';
-  rowB.style.transform  = 'translateY(' + deltaB + 'px)';
-  rowB.style.opacity    = '0.55';
+  // INVERT
+  [lA, lB, fA, fB].forEach((el, i) => {
+    const d = [dLA, dLB, dFA, dFB][i];
+    el.style.transition = 'none';
+    el.style.transform  = 'translateY(' + d + 'px)';
+    el.style.opacity    = '0.55';
+  });
 
   // PLAY
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    const DUR = 320;
-    const ease = 'transform ' + DUR + 'ms cubic-bezier(.4,0,.2,1), opacity ' + DUR + 'ms ease';
-    rowA.style.transition = ease;
-    rowA.style.transform  = 'translateY(0)';
-    rowA.style.opacity    = '1';
-    rowB.style.transition = ease;
-    rowB.style.transform  = 'translateY(0)';
-    rowB.style.opacity    = '1';
-    const cleanup = el => () => {
-      el.style.transition = ''; el.style.transform = ''; el.style.opacity = '';
-    };
-    rowA.addEventListener('transitionend', cleanup(rowA), { once: true });
-    rowB.addEventListener('transitionend', cleanup(rowB), { once: true });
+    const ease = 'transform 320ms cubic-bezier(.4,0,.2,1), opacity 320ms ease';
+    [lA, lB, fA, fB].forEach(el => {
+      el.style.transition = ease;
+      el.style.transform  = 'translateY(0)';
+      el.style.opacity    = '1';
+      el.addEventListener('transitionend', () => {
+        el.style.transition = ''; el.style.transform = ''; el.style.opacity = '';
+      }, { once: true });
+    });
   }));
 
-  // Actualizar datos y redibujar (sin reconstruir la barra)
+  // Actualizar datos y redibujar
   [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
   if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
   else if (window._gcpSelIdx === idxB) window._gcpSelIdx = idxA;
@@ -17975,10 +18024,26 @@ function _gcpUpdateFramesBar() {
   if (bar.style.display !== 'flex') return;
   bar.innerHTML = '';
 
-  // Wrapper interno con scroll — permite z-index entre filas hermanas
+  // Estructura: columna izquierda fija + zona de frames con UN SOLO scroll horizontal compartido
   const inner = document.createElement('div');
   inner.id = 'gcpFramesBar-inner';
+  inner.style.cssText = 'display:flex;flex-direction:row;overflow:hidden;';
   bar.appendChild(inner);
+
+  // Columna izquierda: controles de cada capa (fija, sin scroll)
+  const leftPane = document.createElement('div');
+  leftPane.id = 'gcpFramesLeftPane';
+  leftPane.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;overflow:visible;z-index:1;';
+  inner.appendChild(leftPane);
+
+  // Zona de frames: scroll horizontal compartido para TODAS las capas
+  const framesPane = document.createElement('div');
+  framesPane.id = 'gcpFramesPane';
+  framesPane.style.cssText = 'flex:1;overflow-x:auto;overflow-y:hidden;display:flex;flex-direction:column;';
+  framesPane.addEventListener('scroll', () => {
+    // El scroll es único — no hay nada que sincronizar, ya está en un solo contenedor
+  }, { passive: true });
+  inner.appendChild(framesPane);
 
   const total     = _gcpGetTotalFrames();
   const gfi       = window._gcpGlobalFrameIdx;
@@ -17992,11 +18057,7 @@ function _gcpUpdateFramesBar() {
     const layerFrames = la._frames ? la._frames.length : 0;
 
     // ── Fila ──────────────────────────────────────────────────────────
-    const row = document.createElement('div');
-    row.className = 'gcp-layer-row';
-    // Mayor layerIdx = se renderiza encima → mayor z-index visual
-    row.style.zIndex = String(layerIdx + 1); // mayor índice = encima en canvas = primera fila
-    row.style.position = 'relative';
+    // (row eliminado — estructura nueva: leftPane + framesPane separados)
 
     // Columna izquierda: flechas orden + botón eliminar + etiqueta
     const leftCol = document.createElement('div');
@@ -18075,11 +18136,14 @@ function _gcpUpdateFramesBar() {
     label.title = layerName;
     leftCol.appendChild(label);
 
-    row.appendChild(leftCol);
+    // leftCol → leftPane (columna fija)
+    leftCol.style.height = '148px';
+    leftPane.appendChild(leftCol);
 
-    // Scroll horizontal de cards
+    // Scroll de frames → framesPane (scroll horizontal compartido)
     const scroll = document.createElement('div');
     scroll.className = 'gcp-layer-scroll';
+    scroll.style.cssText = 'display:flex;flex-direction:row;overflow:visible;flex-shrink:0;height:148px;';
 
     // ── Cards de frames ───────────────────────────────────────────────
     for (let fi = 0; fi < total; fi++) {
@@ -18198,9 +18262,7 @@ function _gcpUpdateFramesBar() {
     liveThumb.innerHTML = isSelLayer ? '✏️<br>editando' : '—';
     liveCard.appendChild(liveThumb);
     scroll.appendChild(liveCard);
-
-    row.appendChild(scroll);
-    inner.appendChild(row);
+    framesPane.appendChild(scroll);
   });
 }
 

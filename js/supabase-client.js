@@ -447,12 +447,12 @@ const SupabaseClient = (() => {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId para guardar borrador');
 
-    // Calcular tamaño aproximado antes de subir
+    // Calcular tamaño antes de subir — límite 60 MB
     const payload = JSON.stringify(comic);
-    const sizeKB  = Math.round(payload.length * 0.75 / 1024); // base64 → bytes
-    const LIMIT_KB = 50 * 1024; // 50 MB
-    if (sizeKB > LIMIT_KB) {
-      throw new Error(`La obra ocupa ~${Math.round(sizeKB/1024)}MB, supera el límite de 50MB. Reduce el número de páginas o el tamaño de las imágenes.`);
+    const sizeBytes = new Blob([payload]).size;
+    const LIMIT_BYTES = 60 * 1024 * 1024; // 60 MB
+    if (sizeBytes > LIMIT_BYTES) {
+      throw new Error(`La obra supera el tamaño máximo permitido (${Math.round(sizeBytes/1024/1024)} MB de 60 MB). Reduce el número de páginas o el tamaño de las imágenes.`);
     }
 
     await _upsert('works', {

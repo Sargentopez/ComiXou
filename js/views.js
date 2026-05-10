@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.07</footer>
+    <footer class="app-version">v22.10</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -165,6 +165,13 @@ Router.register('editor', {
   css: ['css/editor.css'],
   html: () => `
     <div id="editorShell">
+
+      <!-- Banner de tamaño máximo superado -->
+      <div id="edSizeBanner" style="display:none;position:absolute;top:52px;left:0;right:0;z-index:9500;
+        background:#d00;color:#fff;font-family:var(--font-body);font-size:.82rem;font-weight:700;
+        padding:8px 14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.3);pointer-events:none;">
+        ⚠️ Has superado el tamaño máximo permitido para subir tu obra a la nube
+      </div>
 
       <!-- CANVAS (fondo, ocupa todo) -->
       <div id="editorCanvasWrap">
@@ -357,6 +364,20 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="dd-loadjson">Cargar obra (.json)</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-recoverlocal" style="display:none">↩ Recuperar versión del dispositivo</button>
+              <div class="ed-dropdown-sep"></div>
+              <div id="dd-project-size" style="padding:7px 14px 8px;font-family:var(--font-body);font-size:.75rem;color:var(--gray-500);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                  <span style="font-weight:700;">Tamaño de la obra</span>
+                  <span id="dd-project-size-pct" style="font-weight:900;color:var(--black);">—</span>
+                </div>
+                <div style="height:6px;background:var(--gray-200);border-radius:3px;overflow:hidden;">
+                  <div id="dd-project-size-bar" style="height:100%;width:0%;background:var(--black);border-radius:3px;transition:width .3s ease;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:.68rem;">
+                  <span id="dd-project-size-used">— MB</span>
+                  <span>máx. 60 MB</span>
+                </div>
+              </div>
             </div>
           </div>
 

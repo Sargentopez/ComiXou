@@ -1838,12 +1838,10 @@ body.editor-page #appView {
    La barra ocupa desde top:92px hasta max 55vh para dejar canvas visible */
 #gcpFramesBar {
   position: absolute;
-  top: 92px;   /* gcpTopbar(52) + gcpMenuBar(40) */
+  top: 92px;
   left: 0; right: 0;
-  /* Altura máxima: 55% del viewport — suficiente para 3-4 filas sin tapar el canvas */
   max-height: 55vh;
-  /* overflow visible para que z-index entre filas funcione correctamente */
-  overflow: visible;
+  overflow: hidden;
   background: var(--gray-100);
   border-bottom: 2px solid var(--gray-300);
   padding: 6px 0 6px 0;
@@ -1860,28 +1858,56 @@ body.editor-page #appView {
   border-top: 1px solid var(--gray-300);
 }
 #gcpFramesBar-inner {
-  overflow-x: hidden;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: row;
   max-height: 55vh;
+  overflow: hidden;
+}
+/* Columna izquierda fija */
+#gcpFramesLeftPane {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  z-index: 2;
+  background: var(--gray-100);
+  border-right: 1.5px solid var(--gray-300);
+}
+/* Zona de frames: único scroll horizontal para todas las capas */
+#gcpFramesPane {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
   scrollbar-width: thin;
   scrollbar-color: var(--gray-400) var(--gray-200);
 }
-#gcpFramesBar-inner::-webkit-scrollbar { width: 6px; }
+#gcpFramesPane::-webkit-scrollbar { height: 6px; }
+#gcpFramesPane::-webkit-scrollbar-track { background: var(--gray-200); }
+#gcpFramesPane::-webkit-scrollbar-thumb { background: var(--gray-400); border-radius: 4px; }
 #gcpFramesBar::-webkit-scrollbar { width: 6px; }
 #gcpFramesBar::-webkit-scrollbar-track { background: var(--gray-200); }
 #gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-400); border-radius: 4px; }
 
 /* Cada fila de layer — altura fija para que las cards no se solapen.
    La card mide: header(24) + thumb(72) + actions(26) + padding(8) + gaps = 136px */
-.gcp-layer-row {
+/* gcp-layer-scroll: fila de frames de una capa en el scroll compartido */
+.gcp-layer-scroll {
   display: flex;
-  align-items: stretch;       /* columna izq y scroll se estiran a la misma altura */
+  flex-direction: row;
+  flex-shrink: 0;
+  height: 148px;
   border-bottom: 1px solid var(--gray-200);
-  flex-shrink: 0;             /* la fila nunca se comprime — el bar hace scroll */
-  height: 148px;              /* altura fija: suficiente para card completa */
-  position: relative;         /* necesario para z-index entre filas */
+  overflow: visible;
 }
-.gcp-layer-row:last-child { border-bottom: none; }
+.gcp-layer-scroll:last-child { border-bottom: none; }
+/* leftPane: cada bloque de controles */
+#gcpFramesLeftPane > div {
+  border-bottom: 1px solid var(--gray-200);
+  box-sizing: border-box;
+}
+#gcpFramesLeftPane > div:last-child { border-bottom: none; }
 
 /* Etiqueta/controles del layer: columna fija a la izquierda */
 .gcp-layer-label {
