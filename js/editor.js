@@ -2369,6 +2369,9 @@ function _edLayersSnapshot(){
 }
 
 function edPushHistory(force){
+  // Actualizar indicador de tamaño con debounce (no bloquea el flujo)
+  clearTimeout(window._edSizeCheckTimer);
+  window._edSizeCheckTimer = setTimeout(_edSizeCheck, 800);
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
@@ -12470,11 +12473,34 @@ const _ED_MAX_BYTES = 60 * 1024 * 1024; // 60 MB
 let _edSizeMonitorTimer = null;
 
 function _edCalcProjectBytes() {
-  if (!edProjectId) return 0;
+  // Calcula desde el estado VIVO en memoria (edPages), no desde el guardado en disco.
+  // Así el autor ve el tamaño real aunque no haya guardado todavía.
   try {
-    const data = ComicStore.getById(edProjectId);
-    if (!data) return 0;
-    return new Blob([JSON.stringify(data)]).size;
+    if (!edPages || !edPages.length) {
+      // Fallback: leer del disco si no hay estado en memoria
+      if (!edProjectId) return 0;
+      const data = ComicStore.getById(edProjectId);
+      return data ? new Blob([JSON.stringify(data)]).size : 0;
+    }
+    // Serializar cada capa de cada página igual que edSaveProject
+    let total = 0;
+    edPages.forEach(p => {
+      if (!p || !p.layers) return;
+      p.layers.forEach(l => {
+        try {
+          const ser = edSerLayer(l);
+          if (ser) total += new Blob([JSON.stringify(ser)]).size;
+        } catch(_) {}
+      });
+      // Thumbnail de la página
+      if (p.dataUrl) total += Math.round(p.dataUrl.length * 0.75);
+    });
+    // Sumar contenido de la biblioteca
+    try {
+      const _bib = _bibLoad();
+      if (_bib) total += _bibUsedBytes(_bib);
+    } catch(_) {}
+    return total;
   } catch(_) { return 0; }
 }
 
