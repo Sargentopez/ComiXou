@@ -17870,13 +17870,14 @@ function _gcpCaptureFrame() {
 
 // Lerp lineal entre dos frames para una capa
 function _gcpLerpFrame(a, b, t) {
+  const r = v => Math.round(v * 100) / 100;
   return {
-    x:        a.x        + (b.x        - a.x)        * t,
-    y:        a.y        + (b.y        - a.y)        * t,
-    width:    a.width    + (b.width    - a.width)    * t,
-    height:   a.height   + (b.height   - a.height)   * t,
-    rotation: a.rotation + (b.rotation - a.rotation) * t,
-    opacity:  a.opacity  + (b.opacity  - a.opacity)  * t,
+    x:        r(a.x        + (b.x        - a.x)        * t),
+    y:        r(a.y        + (b.y        - a.y)        * t),
+    width:    r(a.width    + (b.width    - a.width)    * t),
+    height:   r(a.height   + (b.height   - a.height)   * t),
+    rotation: r(a.rotation + (b.rotation - a.rotation) * t),
+    opacity:  Math.round((a.opacity + (b.opacity - a.opacity) * t) * 1000) / 1000,
     visible:  a.visible !== false && b.visible !== false,
     _interp:  true,
   };
@@ -17894,10 +17895,10 @@ function _gcpCountInterpBetween(la, fi) {
 // Genera n frames interpolados entre la._frames[fi] y la._frames[fi+n+1]
 // para UNA sola capa. Reemplaza los _interp existentes en ese hueco.
 function _gcpInterpolateSingleLayer(la, fi, n) {
-  if (!la._frames) return;
+  if (!la._frames || n < 1) return;
   const a = la._frames[fi];
-  // frame clave derecho: fi + n + 1 (después de los interpolados)
-  const bIdx = fi + n + 1;
+  // El frame clave derecho está en fi+1 (ya se eliminaron los interp previos)
+  const bIdx = fi + 1;
   if (!a || bIdx >= la._frames.length) return;
   const b = la._frames[bIdx];
   if (!b) return;
@@ -17905,33 +17906,37 @@ function _gcpInterpolateSingleLayer(la, fi, n) {
   for (let k = 1; k <= n; k++) {
     newFrames.push(_gcpLerpFrame(a, b, k / (n + 1)));
   }
-  la._frames.splice(fi + 1, n, ...newFrames);
+  // Insertar sin reemplazar (bIdx sigue en su sitio)
+  la._frames.splice(fi + 1, 0, ...newFrames);
 }
 
-// Detecta si entre la._frames[fi] y el siguiente frame clave ya hay interpolados
-// y los reinterpolona (el nº de frames interpolados ya está en el array).
+// Elimina los interpolados entre fi y el siguiente clave, y los regenera.
 function _gcpReinterpolateAfter(fi) {
   window._gcpLayers.forEach(la => {
     if (!la._frames || fi >= la._frames.length - 1) return;
-    // Contar interpolados actuales a partir de fi+1
+    // Contar y eliminar interpolados actuales
     let n = _gcpCountInterpBetween(la, fi);
-    if (n === 0) return; // no había interpolados → nada que reinterpolinar
+    if (n === 0) return;
+    la._frames.splice(fi + 1, n); // eliminar existentes
+    if (fi + 1 >= la._frames.length) return; // no hay clave derecho
     _gcpInterpolateSingleLayer(la, fi, n);
   });
 }
 
-// Reinterpolación también hacia atrás (el frame fi es el derecho de otro grupo)
+// Reinterpolación hacia atrás (fi es el frame clave derecho de otro grupo)
 function _gcpReinterpolateBefore(fi) {
   if (fi === 0) return;
   window._gcpLayers.forEach(la => {
     if (!la._frames || fi >= la._frames.length) return;
-    // Buscar frame clave a la izquierda de fi
+    // Buscar frame clave a la izquierda de fi (saltando interpolados)
     let leftKey = fi - 1;
     while (leftKey > 0 && la._frames[leftKey]?._interp) leftKey--;
-    if (la._frames[leftKey]?._interp) return; // no hay clave a la izquierda
+    if (la._frames[leftKey]?._interp) return;
     // Contar interpolados entre leftKey y fi
     let n = fi - leftKey - 1;
     if (n === 0) return;
+    la._frames.splice(leftKey + 1, n); // eliminar existentes
+    // fi se ha desplazado: el nuevo índice del clave derecho es leftKey+1
     _gcpInterpolateSingleLayer(la, leftKey, n);
   });
 }
@@ -17954,10 +17959,10 @@ function _gcpShowInterpModal(fi, layerIdx) {
   _gcpInterpPendingLayer = layerIdx;
   _gcpInterpN            = 1;
 
-  // Pre-rellenar con el nº actual de interpolados (si ya existen)
-  const la = window._gcpLayers[layerIdx];
-  if (la) {
-    const existing = _gcpCountInterpBetween(la, fi);
+  // Pre-rellenar con el nº de interpolados ya existentes entre fi y fi+1 (globales)
+  const _anyLa = window._gcpLayers.find(l => l._frames && l._frames.length > fi + 1);
+  if (_anyLa) {
+    const existing = _gcpCountInterpBetween(_anyLa, fi);
     if (existing > 0) _gcpInterpN = existing;
   }
 
@@ -17966,15 +17971,9 @@ function _gcpShowInterpModal(fi, layerIdx) {
   const f1El    = document.getElementById('gcpInterpF1');
   const f2El    = document.getElementById('gcpInterpF2');
 
-  // Calcular número real del frame clave siguiente (ignorando interpolados)
-  const la2 = window._gcpLayers[layerIdx];
-  let rightKeyFi = fi + 1;
-  if (la2?._frames) {
-    while (rightKeyFi < la2._frames.length - 1 && la2._frames[rightKeyFi]?._interp) rightKeyFi++;
-  }
-
-  f1El.textContent  = fi + 1;
-  f2El.textContent  = rightKeyFi + 1;
+  // fi y fi+1 son columnas globales
+  f1El.textContent    = fi + 1;
+  f2El.textContent    = fi + 2;
   countEl.textContent = _gcpInterpN;
 
   modal.classList.add('open');
@@ -17994,29 +17993,49 @@ function _gcpShowInterpModal(fi, layerIdx) {
   };
 }
 
-// Ejecutar interpolación: afecta a TODAS las capas de la fila entre fi y el siguiente clave
+// Ejecutar interpolación global: inserta n columnas interpoladas entre la columna fi y fi+1.
+// Afecta a TODAS las capas — la matriz pasa de (L capas × T cols) a (L capas × T+n cols).
+// Si una capa no tiene frame en fi o fi+1, se usa el último frame disponible (o invisible).
 function _gcpDoInterpolate(fi, n) {
-  if (!window._gcpLayers.length) return;
+  if (!window._gcpLayers.length || n < 1) return;
+
+  // Primero eliminar cualquier bloque de interpolados que ya exista en fi+1..nextKey-1
+  // (para poder reinterpolinar con distinto n sin duplicar)
   window._gcpLayers.forEach(la => {
-    if (!la._frames || fi >= la._frames.length) return;
-    // Eliminar interpolados existentes entre fi y el siguiente clave
+    if (!la._frames) return;
+    // Saltar interpolados existentes a partir de fi+1
     let nextKey = fi + 1;
     while (nextKey < la._frames.length && la._frames[nextKey]?._interp) nextKey++;
-    const existingInterp = nextKey - fi - 1;
-    if (existingInterp > 0) la._frames.splice(fi + 1, existingInterp);
-
-    // Insertar n frames interpolados
-    if (fi + 1 < la._frames.length) {
-      _gcpInterpolateSingleLayer(la, fi, n);
-    }
+    const existing = nextKey - (fi + 1);
+    if (existing > 0) la._frames.splice(fi + 1, existing);
   });
+
+  // Ahora insertar n frames interpolados en todas las capas en la columna fi+1
+  const _inv = la => ({
+    x: la.x, y: la.y, width: la.width, height: la.height,
+    rotation: la.rotation || 0, opacity: la.opacity ?? 1, visible: false
+  });
+
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) la._frames = [];
+    // Frame izquierdo (columna fi): si no existe, usar estado actual del layer
+    const a = la._frames[fi] ?? _inv(la);
+    // Frame derecho (columna fi+1 tras el splice): si no existe, clonar a (sin cambio)
+    const b = la._frames[fi + 1] ?? {...a};
+    const newFrames = [];
+    for (let k = 1; k <= n; k++) {
+      newFrames.push(_gcpLerpFrame(a, b, k / (n + 1)));
+    }
+    la._frames.splice(fi + 1, 0, ...newFrames);
+  });
+
   _gcpInvalidateAllThumbs();
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
   _gcpUpdateFrameNav();
   _gcpRedraw();
   _gcpUpdateFramesBar();
   window._gcpDirty = true;
-  edToast(n + ' frame' + (n > 1 ? 's' : '') + ' interpolado' + (n > 1 ? 's' : '') + ' creado' + (n > 1 ? 's' : '') + ' ✓');
+  edToast(n + ' frame' + (n > 1 ? 's' : '') + ' interpolado' + (n > 1 ? 's' : '') + ' añadido' + (n > 1 ? 's' : '') + ' ✓');
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
