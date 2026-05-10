@@ -5306,6 +5306,8 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
 }
 
 function edOnStart(e){
+  // Ignorar completamente cuando el editor de animaciones está activo
+  if(window._gcpActive) return;
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
   if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
   // ── REGLAS: prioridad máxima — siempre antes de cualquier bloqueo de UI ──
@@ -7201,6 +7203,7 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
+  if(window._gcpActive) return;
   // Limpiar pan de _edLineLayer si se sueltan dedos
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
@@ -17983,14 +17986,14 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
     'border:2px solid var(--black)',
     'border-radius:10px',
     'box-shadow:3px 3px 0 var(--black)',
-    'overflow:hidden',
-    'min-width:180px',
+    'overflow:visible',
     'font-family:var(--font-body)',
   ].join(';');
 
   const title = document.createElement('div');
   title.style.cssText = 'padding:8px 12px;font-size:0.75rem;font-weight:900;' +
-    'color:var(--gray-500);border-bottom:1px solid var(--gray-200);background:var(--gray-100);';
+    'color:var(--gray-500);border-bottom:1px solid var(--gray-200);background:var(--gray-100);' +
+    'border-radius:8px 8px 0 0;';
   title.textContent = interpCount + ' frame' + (interpCount > 1 ? 's' : '') + ' interpolado' + (interpCount > 1 ? 's' : '');
   menu.appendChild(title);
 
@@ -18032,16 +18035,18 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
   });
   menu.appendChild(blurItem);
 
-  menu.appendChild(mkItem('✕', 'Eliminar interpolación', '#cc2200', () => {
+  const _delBtn = mkItem('✕', 'Eliminar interpolación', '#cc2200', () => {
     _gcpDeleteInterp(fi);
-  }));
+  });
+  _delBtn.style.borderRadius = '0 0 8px 8px';
+  menu.appendChild(_delBtn);
 
   document.body.appendChild(menu);
   _gcpInterpMenuOpen = menu;
 
   // Posicionar bajo el botón anchor
   const rect = anchor.getBoundingClientRect();
-  const mw = 190;
+  const mw = 230;
   let left = rect.left + rect.width / 2 - mw / 2;
   left = Math.max(8, Math.min(left, window.innerWidth - mw - 8));
   menu.style.left = left + 'px';
@@ -19221,6 +19226,8 @@ function gcpOpen(edLayerIdx) {
   // Bloquear editor general
   ec.classList.add('gcp-active');
   window._gcpActive = true;
+  // Resetear detección de doble tap del editor principal — evita falsos doble tap al volver
+  _edLastTapTime = 0; _edLastTapIdx = -1;
   document.getElementById('editorShell')?.classList.add('gcp-open');
 
 
