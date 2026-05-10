@@ -17815,6 +17815,8 @@ function _gcpSaveFrame() {
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
+  // Reinterpolación automática si hay frames interpolados adyacentes
+  _gcpReinterpolateAround(fi);
   window._gcpDirty = true;
   edToast('Frame ' + (fi+1) + ' guardado ✓');
   _gcpHintSet('addFrame');
@@ -17859,6 +17861,162 @@ function _gcpCaptureFrame() {
   window._gcpDirty = true;
   edToast('Frame ' + (newFi+1) + ' creado ✓');
   _gcpHintStop();
+}
+
+// ── SISTEMA DE INTERPOLACIÓN DE FRAMES ───────────────────────────────────────
+// Cada frame interpolado tiene: {x,y,width,height,rotation,opacity,visible,_interp:true}
+// Los frames clave (del autor) NO tienen _interp.
+// Al modificar un frame clave, los interpolados adyacentes se regeneran.
+
+// Lerp lineal entre dos frames para una capa
+function _gcpLerpFrame(a, b, t) {
+  return {
+    x:        a.x        + (b.x        - a.x)        * t,
+    y:        a.y        + (b.y        - a.y)        * t,
+    width:    a.width    + (b.width    - a.width)    * t,
+    height:   a.height   + (b.height   - a.height)   * t,
+    rotation: a.rotation + (b.rotation - a.rotation) * t,
+    opacity:  a.opacity  + (b.opacity  - a.opacity)  * t,
+    visible:  a.visible !== false && b.visible !== false,
+    _interp:  true,
+  };
+}
+
+// Cuenta cuántos frames interpolados hay entre fi y el siguiente frame clave
+function _gcpCountInterpBetween(la, fi) {
+  if (!la._frames) return 0;
+  let count = 0;
+  let i = fi + 1;
+  while (i < la._frames.length && la._frames[i]?._interp) { count++; i++; }
+  return count;
+}
+
+// Genera n frames interpolados entre la._frames[fi] y la._frames[fi+n+1]
+// para UNA sola capa. Reemplaza los _interp existentes en ese hueco.
+function _gcpInterpolateSingleLayer(la, fi, n) {
+  if (!la._frames) return;
+  const a = la._frames[fi];
+  // frame clave derecho: fi + n + 1 (después de los interpolados)
+  const bIdx = fi + n + 1;
+  if (!a || bIdx >= la._frames.length) return;
+  const b = la._frames[bIdx];
+  if (!b) return;
+  const newFrames = [];
+  for (let k = 1; k <= n; k++) {
+    newFrames.push(_gcpLerpFrame(a, b, k / (n + 1)));
+  }
+  la._frames.splice(fi + 1, n, ...newFrames);
+}
+
+// Detecta si entre la._frames[fi] y el siguiente frame clave ya hay interpolados
+// y los reinterpolona (el nº de frames interpolados ya está en el array).
+function _gcpReinterpolateAfter(fi) {
+  window._gcpLayers.forEach(la => {
+    if (!la._frames || fi >= la._frames.length - 1) return;
+    // Contar interpolados actuales a partir de fi+1
+    let n = _gcpCountInterpBetween(la, fi);
+    if (n === 0) return; // no había interpolados → nada que reinterpolinar
+    _gcpInterpolateSingleLayer(la, fi, n);
+  });
+}
+
+// Reinterpolación también hacia atrás (el frame fi es el derecho de otro grupo)
+function _gcpReinterpolateBefore(fi) {
+  if (fi === 0) return;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames || fi >= la._frames.length) return;
+    // Buscar frame clave a la izquierda de fi
+    let leftKey = fi - 1;
+    while (leftKey > 0 && la._frames[leftKey]?._interp) leftKey--;
+    if (la._frames[leftKey]?._interp) return; // no hay clave a la izquierda
+    // Contar interpolados entre leftKey y fi
+    let n = fi - leftKey - 1;
+    if (n === 0) return;
+    _gcpInterpolateSingleLayer(la, leftKey, n);
+  });
+}
+
+// Reinterpolación completa (después de editar un frame clave)
+function _gcpReinterpolateAround(fi) {
+  _gcpReinterpolateAfter(fi);
+  _gcpReinterpolateBefore(fi);
+  _gcpInvalidateAllThumbs();
+  _gcpUpdateFramesBar();
+}
+
+// ── Modal de interpolación ────────────────────────────────────────────────────
+let _gcpInterpPendingFi    = -1;
+let _gcpInterpPendingLayer = -1;
+let _gcpInterpN            = 1;
+
+function _gcpShowInterpModal(fi, layerIdx) {
+  _gcpInterpPendingFi    = fi;
+  _gcpInterpPendingLayer = layerIdx;
+  _gcpInterpN            = 1;
+
+  // Pre-rellenar con el nº actual de interpolados (si ya existen)
+  const la = window._gcpLayers[layerIdx];
+  if (la) {
+    const existing = _gcpCountInterpBetween(la, fi);
+    if (existing > 0) _gcpInterpN = existing;
+  }
+
+  const modal   = document.getElementById('gcpInterpModal');
+  const countEl = document.getElementById('gcpInterpCount');
+  const f1El    = document.getElementById('gcpInterpF1');
+  const f2El    = document.getElementById('gcpInterpF2');
+
+  // Calcular número real del frame clave siguiente (ignorando interpolados)
+  const la2 = window._gcpLayers[layerIdx];
+  let rightKeyFi = fi + 1;
+  if (la2?._frames) {
+    while (rightKeyFi < la2._frames.length - 1 && la2._frames[rightKeyFi]?._interp) rightKeyFi++;
+  }
+
+  f1El.textContent  = fi + 1;
+  f2El.textContent  = rightKeyFi + 1;
+  countEl.textContent = _gcpInterpN;
+
+  modal.classList.add('open');
+
+  document.getElementById('gcpInterpMinus').onclick = () => {
+    if (_gcpInterpN > 1) { _gcpInterpN--; countEl.textContent = _gcpInterpN; }
+  };
+  document.getElementById('gcpInterpPlus').onclick = () => {
+    if (_gcpInterpN < 20) { _gcpInterpN++; countEl.textContent = _gcpInterpN; }
+  };
+  document.getElementById('gcpInterpCancel').onclick = () => {
+    modal.classList.remove('open');
+  };
+  document.getElementById('gcpInterpOk').onclick = () => {
+    modal.classList.remove('open');
+    _gcpDoInterpolate(_gcpInterpPendingFi, _gcpInterpN);
+  };
+}
+
+// Ejecutar interpolación: afecta a TODAS las capas de la fila entre fi y el siguiente clave
+function _gcpDoInterpolate(fi, n) {
+  if (!window._gcpLayers.length) return;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames || fi >= la._frames.length) return;
+    // Eliminar interpolados existentes entre fi y el siguiente clave
+    let nextKey = fi + 1;
+    while (nextKey < la._frames.length && la._frames[nextKey]?._interp) nextKey++;
+    const existingInterp = nextKey - fi - 1;
+    if (existingInterp > 0) la._frames.splice(fi + 1, existingInterp);
+
+    // Insertar n frames interpolados
+    if (fi + 1 < la._frames.length) {
+      _gcpInterpolateSingleLayer(la, fi, n);
+    }
+  });
+  _gcpInvalidateAllThumbs();
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
+  _gcpUpdateFrameNav();
+  _gcpRedraw();
+  _gcpUpdateFramesBar();
+  window._gcpDirty = true;
+  edToast(n + ' frame' + (n > 1 ? 's' : '') + ' interpolado' + (n > 1 ? 's' : '') + ' creado' + (n > 1 ? 's' : '') + ' ✓');
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
@@ -18313,10 +18471,11 @@ function _gcpUpdateFramesBar() {
       const snap      = hasFrame ? la._frames[fi] : null;
       const isVisible = snap && snap.visible !== false;
       const isCurrent = (fi === gfi) && isSelLayer;
+      const isInterp  = !!(snap?._interp);
 
       const card = document.createElement('div');
-      card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
-      card.style.cursor = hasFrame ? 'pointer' : 'default';
+      card.className = 'ed-page-card' + (isCurrent ? ' current' : '') + (isInterp ? ' interp' : '');
+      card.style.cursor = hasFrame && !isInterp ? 'pointer' : 'default';
 
       // Cabecera con número de columna
       const header = document.createElement('div');
@@ -18352,58 +18511,59 @@ function _gcpUpdateFramesBar() {
         thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;';
         card.appendChild(thumb);
 
-        // Acciones ⧉ ✕
-        const actions = document.createElement('div');
-        actions.className = 'ed-page-actions';
+        // Acciones ⧉ ✕ — solo para frames clave (no interpolados)
+        if (!isInterp) {
+          const actions = document.createElement('div');
+          actions.className = 'ed-page-actions';
 
-        const dupBtn = document.createElement('button');
-        dupBtn.className = 'ed-page-action-btn';
-        dupBtn.title = 'Duplicar frame';
-        dupBtn.innerHTML = '⧉';
-        dupBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          // Duplicar la columna ENTERA (todas las capas) igual que _gcpCaptureFrame
-          window._gcpLayers.forEach(otherLa => {
-            if (!otherLa._frames) otherLa._frames = [];
-            const _src = otherLa._frames[fi];
-            const _copy = _src ? {..._src} : {
-              x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
-              rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false
-            };
-            otherLa._frames.splice(fi + 1, 0, _copy);
+          const dupBtn = document.createElement('button');
+          dupBtn.className = 'ed-page-action-btn';
+          dupBtn.title = 'Duplicar frame';
+          dupBtn.innerHTML = '⧉';
+          dupBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            window._gcpLayers.forEach(otherLa => {
+              if (!otherLa._frames) otherLa._frames = [];
+              const _src = otherLa._frames[fi];
+              const _copy = _src ? {..._src} : {
+                x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
+                rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false
+              };
+              delete _copy._interp;
+              otherLa._frames.splice(fi + 1, 0, _copy);
+            });
+            window._gcpDirty = true;
+            window._gcpGlobalFrameIdx = fi + 1;
+            _gcpInvalidateAllThumbs();
+            _gcpApplyFrame(window._gcpGlobalFrameIdx);
+            _gcpUpdateFrameNav();
+            _gcpRedraw();
+            _gcpUpdateFramesBar();
           });
-          window._gcpDirty = true;
-          window._gcpGlobalFrameIdx = fi + 1;
-          _gcpInvalidateAllThumbs();
-          _gcpApplyFrame(window._gcpGlobalFrameIdx);
-          _gcpUpdateFrameNav();
-          _gcpRedraw();
-          _gcpUpdateFramesBar();
-        });
-        actions.appendChild(dupBtn);
+          actions.appendChild(dupBtn);
 
-        const delBtn = document.createElement('button');
-        delBtn.className = 'ed-page-action-btn ed-page-del';
-        delBtn.title = 'Eliminar frame';
-        delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
-        delBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          // Marcar el frame como invisible en esta capa — no afecta al resto
-          if (la._frames && fi < la._frames.length) {
-            la._frames[fi] = {...la._frames[fi], visible: false};
-          }
-          window._gcpDirty = true;
-          _gcpInvalidateAllThumbs();
-          _gcpApplyFrame(window._gcpGlobalFrameIdx);
-          _gcpRedraw();
-          _gcpUpdateFramesBar();
-        });
-        actions.appendChild(delBtn);
-        card.appendChild(actions);
+          const delBtn = document.createElement('button');
+          delBtn.className = 'ed-page-action-btn ed-page-del';
+          delBtn.title = 'Eliminar frame';
+          delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
+          delBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            if (la._frames && fi < la._frames.length) {
+              la._frames[fi] = {...la._frames[fi], visible: false};
+            }
+            window._gcpDirty = true;
+            _gcpInvalidateAllThumbs();
+            _gcpApplyFrame(window._gcpGlobalFrameIdx);
+            _gcpRedraw();
+            _gcpUpdateFramesBar();
+          });
+          actions.appendChild(delBtn);
+          card.appendChild(actions);
+        } // fin !isInterp actions
       }
 
-      // Click → navegar al frame y seleccionar esta capa
-      if (hasFrame) {
+      // Click → navegar al frame y seleccionar esta capa (solo frames clave)
+      if (hasFrame && !isInterp) {
         card.addEventListener('click', e => {
           if (e.target.closest('.ed-page-action-btn')) return;
           e.stopPropagation();
@@ -18414,18 +18574,21 @@ function _gcpUpdateFramesBar() {
 
       scroll.appendChild(card);
 
-      // Botón de interpolación entre frames (excepto después del último frame)
-      if (fi < total - 1) {
+      // Botón de interpolación — solo después de frames clave (no interpolados) y no al final
+      if (fi < total - 1 && !isInterp) {
         const interpBtn = document.createElement('button');
-        interpBtn.title = 'Interpolación (próximamente)';
+        // Detectar si ya hay interpolados en esta fila entre fi y el siguiente clave
+        const _hasInterp = window._gcpLayers.some(l => l._frames && l._frames[fi + 1]?._interp);
+        const _firstLaWithFrames = window._gcpLayers.find(l => l._frames && l._frames.length > fi + 1) || window._gcpLayers[0];
+        interpBtn.title = _hasInterp ? 'Reinterpolación (' + _gcpCountInterpBetween(_firstLaWithFrames, fi) + ' frames)' : 'Añadir interpolación';
         interpBtn.style.cssText = [
           'flex-shrink:0',
           'align-self:center',
           'width:18px', 'height:18px',
           'border-radius:50%',
-          'border:1.5px solid var(--gray-300)',
-          'background:var(--white)',
-          'color:var(--gray-400)',
+          'border:1.5px solid ' + (_hasInterp ? '#5566cc' : 'var(--gray-300)'),
+          'background:' + (_hasInterp ? '#eef0ff' : 'var(--white)'),
+          'color:' + (_hasInterp ? '#5566cc' : 'var(--gray-400)'),
           'font-size:9px', 'line-height:1',
           'cursor:pointer',
           'display:flex', 'align-items:center', 'justify-content:center',
@@ -18436,19 +18599,21 @@ function _gcpUpdateFramesBar() {
         interpBtn.textContent = '⟳';
         interpBtn.dataset.interpFi = fi;
         interpBtn.dataset.interpLayer = layerIdx;
-        interpBtn.addEventListener('pointerenter', () => {
-          interpBtn.style.borderColor = 'var(--black)';
-          interpBtn.style.color = 'var(--black)';
-          interpBtn.style.background = 'var(--gray-100)';
-        });
-        interpBtn.addEventListener('pointerleave', () => {
-          interpBtn.style.borderColor = 'var(--gray-300)';
-          interpBtn.style.color = 'var(--gray-400)';
-          interpBtn.style.background = 'var(--white)';
-        });
+        if (!_hasInterp) {
+          interpBtn.addEventListener('pointerenter', () => {
+            interpBtn.style.borderColor = 'var(--black)';
+            interpBtn.style.color = 'var(--black)';
+            interpBtn.style.background = 'var(--gray-100)';
+          });
+          interpBtn.addEventListener('pointerleave', () => {
+            interpBtn.style.borderColor = 'var(--gray-300)';
+            interpBtn.style.color = 'var(--gray-400)';
+            interpBtn.style.background = 'var(--white)';
+          });
+        }
         interpBtn.addEventListener('click', e => {
           e.stopPropagation();
-          edToast('Interpolación — próximamente');
+          _gcpShowInterpModal(fi, layerIdx);
         });
         scroll.appendChild(interpBtn);
       }

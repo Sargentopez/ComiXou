@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.24</footer>
+    <footer class="app-version">v22.25</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -188,6 +188,25 @@ Router.register('editor', {
 
         <div id="edToast"></div>
         <div id="edCofHint" style="display:none;position:fixed;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.78);color:#fff;padding:8px 18px;border-radius:14px;font-size:0.78rem;font-weight:700;line-height:1.6;text-align:center;pointer-events:none;z-index:61;white-space:nowrap;box-shadow:0 2px 12px rgba(0,0,0,.4)"></div>
+
+      <!-- Modal de interpolación de frames GCP -->
+      <div id="gcpInterpModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box" style="max-width:320px;">
+          <p class="ed-confirm-msg" style="margin-bottom:12px;">Interpolación de frames</p>
+          <p style="font-size:0.8rem;color:var(--gray-500);text-align:center;margin:0 0 16px;line-height:1.5;">
+            Frames intermedios a insertar entre el fotograma <strong id="gcpInterpF1"></strong> y el <strong id="gcpInterpF2"></strong> de esta fila:
+          </p>
+          <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:20px;">
+            <button id="gcpInterpMinus" class="ed-modal-btn cancel" style="flex:0 0 40px;padding:10px 0;font-size:1.2rem;">−</button>
+            <span id="gcpInterpCount" style="font-size:2rem;font-weight:900;min-width:40px;text-align:center;">1</span>
+            <button id="gcpInterpPlus"  class="ed-modal-btn ok"     style="flex:0 0 40px;padding:10px 0;font-size:1.2rem;">+</button>
+          </div>
+          <div class="ed-modal-actions">
+            <button id="gcpInterpCancel" class="ed-modal-btn cancel">Cancelar</button>
+            <button id="gcpInterpOk"     class="ed-modal-btn ok">Interpolar</button>
+          </div>
+        </div>
+      </div>
 
       <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
       <div id="edConfirmModal" class="ed-confirm-overlay">
