@@ -18362,8 +18362,24 @@ function _gcpUpdateFramesBar() {
         dupBtn.innerHTML = '⧉';
         dupBtn.addEventListener('click', e => {
           e.stopPropagation();
-          const copy = {...la._frames[fi]};
-          la._frames.splice(fi + 1, 0, copy);
+          // Insertar frame en TODAS las capas para mantener columnas alineadas
+          window._gcpLayers.forEach(otherLa => {
+            if (!otherLa._frames) otherLa._frames = [];
+            if (otherLa === la) {
+              // Esta capa: duplicar el frame actual
+              const copy = {...la._frames[fi]};
+              otherLa._frames.splice(fi + 1, 0, copy);
+            } else {
+              // Resto de capas: insertar frame invisible en la misma posición
+              const _src = otherLa._frames[fi];
+              const _blank = _src
+                ? {..._src, visible: false}
+                : {x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
+                   rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false};
+              otherLa._frames.splice(fi + 1, 0, _blank);
+            }
+          });
+          window._gcpDirty = true;
           window._gcpGlobalFrameIdx = fi + 1;
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
           _gcpUpdateFrameNav();
@@ -18378,12 +18394,19 @@ function _gcpUpdateFramesBar() {
         delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
-          if (la._frames.length <= 1) return;
-          la._frames.splice(fi, 1);
+          if (_gcpGetTotalFrames() <= 1) return; // no eliminar si es el único frame global
+          // Eliminar en TODAS las capas para mantener columnas alineadas
+          window._gcpLayers.forEach(otherLa => {
+            if (otherLa._frames && fi < otherLa._frames.length) {
+              otherLa._frames.splice(fi, 1);
+            }
+          });
+          window._gcpDirty = true;
           const newTotal = _gcpGetTotalFrames();
           if (window._gcpGlobalFrameIdx >= newTotal)
             window._gcpGlobalFrameIdx = Math.max(0, newTotal - 1);
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpInvalidateAllThumbs();
           _gcpUpdateFrameNav();
           _gcpRedraw();
           _gcpUpdateFramesBar();

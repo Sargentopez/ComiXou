@@ -2,8 +2,11 @@
    home.js — Lógica de la página de inicio
    ============================================================ */
 
-let activeFilter  = { type: null, value: null }; // tipo: 'genre' | 'author' | null
-let _homeWorks    = null;   // caché de obras publicadas desde Supabase
+let activeFilter       = { type: null, value: null }; // tipo: 'genre' | 'author' | null
+let _homeWorks         = null;   // caché de obras publicadas desde Supabase
+let _homeRefreshTimer  = null;   // intervalo de actualización periódica
+let _homeLastFetch     = 0;      // timestamp de la última carga
+const _HOME_REFRESH_MS = 5 * 60 * 1000; // 5 minutos
 
 // Invalida el cache de portada para forzar recarga desde Supabase.
 // Llamada desde my-comics.js tras unpublish/delete.
@@ -26,6 +29,38 @@ function HomeView_init() {
 
   setupPageNav();
   _loadPublishedWorks();  // carga desde Supabase y luego renderiza
+
+  // Actualización periódica cada 5 minutos
+  _homeRefreshTimer = setInterval(() => {
+    if (!document.getElementById('comicsGrid')) { _homeStopRefresh(); return; }
+    _homeWorks = null; // forzar recarga
+    _loadPublishedWorks();
+  }, _HOME_REFRESH_MS);
+
+  // Al volver al foco: recargar si han pasado más de 5 minutos
+  window._homeVisibilityFn = () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!document.getElementById('comicsGrid')) return;
+    if (Date.now() - _homeLastFetch > _HOME_REFRESH_MS) {
+      _homeWorks = null;
+      _loadPublishedWorks();
+    }
+  };
+  document.addEventListener('visibilitychange', window._homeVisibilityFn);
+
+  // Limpiar al salir de la vista
+  window._homeStoreCleanup = () => {
+    window.removeEventListener('cx:store', _onStoreChange);
+    _homeStopRefresh();
+  };
+}
+
+function _homeStopRefresh() {
+  if (_homeRefreshTimer) { clearInterval(_homeRefreshTimer); _homeRefreshTimer = null; }
+  if (window._homeVisibilityFn) {
+    document.removeEventListener('visibilitychange', window._homeVisibilityFn);
+    window._homeVisibilityFn = null;
+  }
 }
 
 async function _loadPublishedWorks() {
@@ -40,6 +75,7 @@ async function _loadPublishedWorks() {
 
   try {
     _homeWorks = await SupabaseClient.fetchPublishedWorks();
+    _homeLastFetch = Date.now();
   } catch(e) {
     console.error('Error cargando obras:', e);
     _homeWorks = [];
