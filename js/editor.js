@@ -17950,6 +17950,94 @@ function _gcpReinterpolateAround(fi) {
 }
 
 // ── Modal de interpolación ────────────────────────────────────────────────────
+// Menú contextual para interpolación existente (botón rojo)
+let _gcpInterpMenuOpen = null;
+function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
+  // Cerrar menú anterior si existe
+  if (_gcpInterpMenuOpen) { _gcpInterpMenuOpen.remove(); _gcpInterpMenuOpen = null; }
+
+  const menu = document.createElement('div');
+  menu.style.cssText = [
+    'position:fixed', 'z-index:10000',
+    'background:var(--white)',
+    'border:2px solid var(--black)',
+    'border-radius:10px',
+    'box-shadow:3px 3px 0 var(--black)',
+    'overflow:hidden',
+    'min-width:180px',
+    'font-family:var(--font-body)',
+  ].join(';');
+
+  const title = document.createElement('div');
+  title.style.cssText = 'padding:8px 12px;font-size:0.75rem;font-weight:900;' +
+    'color:var(--gray-500);border-bottom:1px solid var(--gray-200);background:var(--gray-100);';
+  title.textContent = interpCount + ' frame' + (interpCount > 1 ? 's' : '') + ' interpolado' + (interpCount > 1 ? 's' : '');
+  menu.appendChild(title);
+
+  const mkItem = (icon, label, color, onClick) => {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;' +
+      'background:none;border:none;cursor:pointer;font-family:var(--font-body);' +
+      'font-size:0.85rem;font-weight:700;color:' + (color || 'var(--black)') + ';' +
+      'transition:background .12s;text-align:left;';
+    btn.innerHTML = '<span style="font-size:1rem">' + icon + '</span>' + label;
+    btn.addEventListener('pointerenter', () => { btn.style.background = 'var(--gray-100)'; });
+    btn.addEventListener('pointerleave', () => { btn.style.background = 'none'; });
+    btn.addEventListener('click', e => { e.stopPropagation(); menu.remove(); _gcpInterpMenuOpen = null; onClick(); });
+    return btn;
+  };
+
+  menu.appendChild(mkItem('✎', 'Cambiar nº de fotogramas', null, () => {
+    _gcpShowInterpModal(fi, layerIdx);
+  }));
+  menu.appendChild(mkItem('✕', 'Eliminar interpolación', '#cc2200', () => {
+    _gcpDeleteInterp(fi);
+  }));
+
+  document.body.appendChild(menu);
+  _gcpInterpMenuOpen = menu;
+
+  // Posicionar bajo el botón anchor
+  const rect = anchor.getBoundingClientRect();
+  const mw = 190;
+  let left = rect.left + rect.width / 2 - mw / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - mw - 8));
+  menu.style.left = left + 'px';
+  menu.style.top  = (rect.bottom + 6) + 'px';
+  menu.style.width = mw + 'px';
+
+  // Cerrar al tocar fuera
+  const _close = ev => {
+    if (!menu.contains(ev.target)) {
+      menu.remove(); _gcpInterpMenuOpen = null;
+      document.removeEventListener('pointerdown', _close, true);
+    }
+  };
+  setTimeout(() => document.addEventListener('pointerdown', _close, true), 10);
+}
+
+// Eliminar interpolados entre fi y el siguiente frame clave — los elimina del array
+function _gcpDeleteInterp(fi) {
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    let count = 0;
+    let i = fi + 1;
+    while (i < la._frames.length && la._frames[i]?._interp) { count++; i++; }
+    if (count > 0) la._frames.splice(fi + 1, count);
+  });
+  // Si el frame actual era un interpolado, retroceder
+  const newTotal = _gcpGetTotalFrames();
+  if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
+    window._gcpGlobalFrameIdx = newTotal - 1;
+  _gcpInvalidateAllThumbs();
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
+  _gcpUpdateFrameNav();
+  _gcpRedraw();
+  _gcpUpdateFramesBar();
+  window._gcpDirty = true;
+  edToast('Interpolación eliminada ✓');
+}
+
 let _gcpInterpPendingFi    = -1;
 let _gcpInterpPendingLayer = -1;
 let _gcpInterpN            = 1;
@@ -18484,19 +18572,28 @@ function _gcpUpdateFramesBar() {
     scroll.className = 'gcp-layer-scroll';
     scroll.style.cssText = 'display:flex;flex-direction:row;overflow:visible;flex-shrink:0;height:148px;';
 
-    // ── Cards de frames ───────────────────────────────────────────────
+    // ── Cards de frames (solo frames clave; los interpolados se ocultan) ─────────
+    // Construir lista de índices visibles: saltar frames interpolados
+    // Los frames interpolados existen en el array pero no se muestran como card.
+    // Entre dos frames clave puede haber N interpolados: se representa con el botón ⟳.
+    let _visibleFiList = [];
     for (let fi = 0; fi < total; fi++) {
+      const _snap = fi < (la._frames ? la._frames.length : 0) ? la._frames[fi] : null;
+      if (!(_snap?._interp)) _visibleFiList.push(fi);
+    }
+
+    for (let _vi = 0; _vi < _visibleFiList.length; _vi++) {
+      const fi        = _visibleFiList[_vi];
       const hasFrame  = fi < layerFrames;
       const snap      = hasFrame ? la._frames[fi] : null;
       const isVisible = snap && snap.visible !== false;
       const isCurrent = (fi === gfi) && isSelLayer;
-      const isInterp  = !!(snap?._interp);
 
       const card = document.createElement('div');
-      card.className = 'ed-page-card' + (isCurrent ? ' current' : '') + (isInterp ? ' interp' : '');
-      card.style.cursor = hasFrame && !isInterp ? 'pointer' : 'default';
+      card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
+      card.style.cursor = hasFrame ? 'pointer' : 'default';
 
-      // Cabecera con número de columna
+      // Cabecera con número de columna (número real en el array)
       const header = document.createElement('div');
       header.className = 'ed-page-header';
       const num = document.createElement('div');
@@ -18506,7 +18603,6 @@ function _gcpUpdateFramesBar() {
       card.appendChild(header);
 
       if (!hasFrame) {
-        // Celda vacía — capa sin frame en esta columna
         const empty = document.createElement('div');
         empty.className = 'ed-page-thumb';
         empty.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
@@ -18515,7 +18611,6 @@ function _gcpUpdateFramesBar() {
         card.appendChild(empty);
 
       } else if (!isVisible) {
-        // Frame invisible
         const hidden = document.createElement('div');
         hidden.className = 'ed-page-thumb';
         hidden.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
@@ -18524,65 +18619,60 @@ function _gcpUpdateFramesBar() {
         card.appendChild(hidden);
 
       } else {
-        // Miniatura real
         const thumb = _gcpLayerFrameThumb(la, fi, 88);
         thumb.className = 'ed-page-thumb';
         thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;';
         card.appendChild(thumb);
 
-        // Acciones ⧉ ✕ — solo para frames clave (no interpolados)
-        if (!isInterp) {
-          const actions = document.createElement('div');
-          actions.className = 'ed-page-actions';
+        const actions = document.createElement('div');
+        actions.className = 'ed-page-actions';
 
-          const dupBtn = document.createElement('button');
-          dupBtn.className = 'ed-page-action-btn';
-          dupBtn.title = 'Duplicar frame';
-          dupBtn.innerHTML = '⧉';
-          dupBtn.addEventListener('click', e => {
-            e.stopPropagation();
-            window._gcpLayers.forEach(otherLa => {
-              if (!otherLa._frames) otherLa._frames = [];
-              const _src = otherLa._frames[fi];
-              const _copy = _src ? {..._src} : {
-                x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
-                rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false
-              };
-              delete _copy._interp;
-              otherLa._frames.splice(fi + 1, 0, _copy);
-            });
-            window._gcpDirty = true;
-            window._gcpGlobalFrameIdx = fi + 1;
-            _gcpInvalidateAllThumbs();
-            _gcpApplyFrame(window._gcpGlobalFrameIdx);
-            _gcpUpdateFrameNav();
-            _gcpRedraw();
-            _gcpUpdateFramesBar();
+        const dupBtn = document.createElement('button');
+        dupBtn.className = 'ed-page-action-btn';
+        dupBtn.title = 'Duplicar frame';
+        dupBtn.innerHTML = '⧉';
+        dupBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          window._gcpLayers.forEach(otherLa => {
+            if (!otherLa._frames) otherLa._frames = [];
+            const _src = otherLa._frames[fi];
+            const _copy = _src ? {..._src} : {
+              x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
+              rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false
+            };
+            delete _copy._interp;
+            otherLa._frames.splice(fi + 1, 0, _copy);
           });
-          actions.appendChild(dupBtn);
+          window._gcpDirty = true;
+          window._gcpGlobalFrameIdx = fi + 1;
+          _gcpInvalidateAllThumbs();
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpUpdateFrameNav();
+          _gcpRedraw();
+          _gcpUpdateFramesBar();
+        });
+        actions.appendChild(dupBtn);
 
-          const delBtn = document.createElement('button');
-          delBtn.className = 'ed-page-action-btn ed-page-del';
-          delBtn.title = 'Eliminar frame';
-          delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
-          delBtn.addEventListener('click', e => {
-            e.stopPropagation();
-            if (la._frames && fi < la._frames.length) {
-              la._frames[fi] = {...la._frames[fi], visible: false};
-            }
-            window._gcpDirty = true;
-            _gcpInvalidateAllThumbs();
-            _gcpApplyFrame(window._gcpGlobalFrameIdx);
-            _gcpRedraw();
-            _gcpUpdateFramesBar();
-          });
-          actions.appendChild(delBtn);
-          card.appendChild(actions);
-        } // fin !isInterp actions
+        const delBtn = document.createElement('button');
+        delBtn.className = 'ed-page-action-btn ed-page-del';
+        delBtn.title = 'Eliminar frame';
+        delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
+        delBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (la._frames && fi < la._frames.length) {
+            la._frames[fi] = {...la._frames[fi], visible: false};
+          }
+          window._gcpDirty = true;
+          _gcpInvalidateAllThumbs();
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpRedraw();
+          _gcpUpdateFramesBar();
+        });
+        actions.appendChild(delBtn);
+        card.appendChild(actions);
       }
 
-      // Click → navegar al frame y seleccionar esta capa (solo frames clave)
-      if (hasFrame && !isInterp) {
+      if (hasFrame) {
         card.addEventListener('click', e => {
           if (e.target.closest('.ed-page-action-btn')) return;
           e.stopPropagation();
@@ -18593,22 +18683,25 @@ function _gcpUpdateFramesBar() {
 
       scroll.appendChild(card);
 
-      // Botón de interpolación — solo después de frames clave (no interpolados) y no al final
-      if (fi < total - 1 && !isInterp) {
+      // Botón ⟳ entre este frame clave y el siguiente (si existe siguiente clave)
+      const _nextKeyFi = _visibleFiList[_vi + 1];
+      if (_nextKeyFi !== undefined) {
+        // Contar interpolados entre fi y _nextKeyFi
+        const _interpCount = _nextKeyFi - fi - 1;
+        const _hasInterp   = _interpCount > 0;
+
         const interpBtn = document.createElement('button');
-        // Detectar si ya hay interpolados en esta fila entre fi y el siguiente clave
-        const _hasInterp = window._gcpLayers.some(l => l._frames && l._frames[fi + 1]?._interp);
-        const _firstLaWithFrames = window._gcpLayers.find(l => l._frames && l._frames.length > fi + 1) || window._gcpLayers[0];
-        interpBtn.title = _hasInterp ? 'Reinterpolación (' + _gcpCountInterpBetween(_firstLaWithFrames, fi) + ' frames)' : 'Añadir interpolación';
+        interpBtn.title = _hasInterp
+          ? _interpCount + ' frame' + (_interpCount > 1 ? 's' : '') + ' interpolado' + (_interpCount > 1 ? 's' : '') + ' — pulsa para opciones'
+          : 'Añadir interpolación';
         interpBtn.style.cssText = [
-          'flex-shrink:0',
-          'align-self:center',
-          'width:18px', 'height:18px',
+          'flex-shrink:0', 'align-self:center',
+          'width:20px', 'height:20px',
           'border-radius:50%',
-          'border:1.5px solid ' + (_hasInterp ? '#5566cc' : 'var(--gray-300)'),
-          'background:' + (_hasInterp ? '#eef0ff' : 'var(--white)'),
-          'color:' + (_hasInterp ? '#5566cc' : 'var(--gray-400)'),
-          'font-size:9px', 'line-height:1',
+          'border:1.5px solid ' + (_hasInterp ? '#cc2200' : 'var(--gray-300)'),
+          'background:' + (_hasInterp ? '#ffeeeb' : 'var(--white)'),
+          'color:' + (_hasInterp ? '#cc2200' : 'var(--gray-400)'),
+          'font-size:9px', 'line-height:1', 'font-weight:900',
           'cursor:pointer',
           'display:flex', 'align-items:center', 'justify-content:center',
           'padding:0',
@@ -18616,8 +18709,9 @@ function _gcpUpdateFramesBar() {
           'z-index:1',
         ].join(';');
         interpBtn.textContent = '⟳';
-        interpBtn.dataset.interpFi = fi;
+        interpBtn.dataset.interpFi    = fi;
         interpBtn.dataset.interpLayer = layerIdx;
+
         if (!_hasInterp) {
           interpBtn.addEventListener('pointerenter', () => {
             interpBtn.style.borderColor = 'var(--black)';
@@ -18629,11 +18723,18 @@ function _gcpUpdateFramesBar() {
             interpBtn.style.color = 'var(--gray-400)';
             interpBtn.style.background = 'var(--white)';
           });
+          interpBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            _gcpShowInterpModal(fi, layerIdx);
+          });
+        } else {
+          // Botón rojo → menú contextual inline
+          interpBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
+          });
         }
-        interpBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          _gcpShowInterpModal(fi, layerIdx);
-        });
+
         scroll.appendChild(interpBtn);
       }
     }

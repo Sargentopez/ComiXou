@@ -1961,33 +1961,8 @@ body.editor-page #appView {
 /* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }
 
-/* ── Frames interpolados (generados automáticamente) ── */
-.gcp-layer-scroll .ed-page-card.interp {
-  background: #f0f4ff;
-  border-color: #99aadd;
-  opacity: 0.85;
-}
-.gcp-layer-scroll .ed-page-card.interp .ed-page-num {
-  color: #5566cc;
-}
-.gcp-layer-scroll .ed-page-card.interp .ed-page-thumb {
-  cursor: default !important;
-  position: relative;
-}
-.gcp-layer-scroll .ed-page-card.interp .ed-page-thumb::after {
-  content: '~';
-  position: absolute;
-  top: 2px; right: 4px;
-  font-size: 11px; font-weight: 900;
-  color: #5566cc; opacity: 0.7;
-  pointer-events: none;
-}
-/* Botón interp activo (ya tiene interpolaciones) */
-button.gcp-interp-btn-active {
-  border-color: #5566cc !important;
-  color: #5566cc !important;
-  background: #eef0ff !important;
-}
+/* Los frames interpolados no se muestran como cards — se representan
+   mediante el botón ⟳ rojo entre dos frames clave */
 
 
 /* ── Chips de comportamiento GCP (velocidad / repeticiones) ── */
