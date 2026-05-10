@@ -18010,6 +18010,28 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
   menu.appendChild(mkItem('✎', 'Cambiar nº de fotogramas', null, () => {
     _gcpShowInterpModal(fi, layerIdx);
   }));
+
+  // Toggle blur — detectar si los interpolados ya tienen _blur
+  const _hasBluNow = window._gcpLayers.some(l => l._frames && l._frames[fi + 1]?._interp && l._frames[fi + 1]?._blur);
+  const blurItem = document.createElement('button');
+  blurItem.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;' +
+    'background:none;border:none;cursor:pointer;font-family:var(--font-body);' +
+    'font-size:0.85rem;font-weight:700;color:var(--black);transition:background .12s;text-align:left;';
+  blurItem.innerHTML = '<span style="font-size:1rem">◎</span>' +
+    'Blur de movimiento' +
+    '<span id="_gcpBlurTogglePill" style="margin-left:auto;font-size:0.7rem;font-weight:900;padding:2px 8px;border-radius:20px;' +
+    'background:' + (_hasBluNow ? '#cc2200' : 'var(--gray-200)') + ';' +
+    'color:' + (_hasBluNow ? '#fff' : 'var(--gray-500)') + '">' +
+    (_hasBluNow ? 'ON' : 'OFF') + '</span>';
+  blurItem.addEventListener('pointerenter', () => { blurItem.style.background = 'var(--gray-100)'; });
+  blurItem.addEventListener('pointerleave', () => { blurItem.style.background = 'none'; });
+  blurItem.addEventListener('click', e => {
+    e.stopPropagation();
+    menu.remove(); _gcpInterpMenuOpen = null;
+    _gcpToggleInterpBlur(fi, !_hasBluNow);
+  });
+  menu.appendChild(blurItem);
+
   menu.appendChild(mkItem('✕', 'Eliminar interpolación', '#cc2200', () => {
     _gcpDeleteInterp(fi);
   }));
@@ -18034,6 +18056,23 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
     }
   };
   setTimeout(() => document.addEventListener('pointerdown', _close, true), 10);
+}
+
+// Activar/desactivar blur en los frames interpolados entre fi y el siguiente clave
+function _gcpToggleInterpBlur(fi, enable) {
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    let i = fi + 1;
+    while (i < la._frames.length && la._frames[i]?._interp) {
+      if (enable) la._frames[i]._blur = true;
+      else delete la._frames[i]._blur;
+      i++;
+    }
+  });
+  _gcpRedraw();
+  _gcpUpdateFramesBar();
+  window._gcpDirty = true;
+  edToast('Blur de movimiento ' + (enable ? 'activado' : 'desactivado') + ' ✓');
 }
 
 // Eliminar interpolados entre fi y el siguiente frame clave — los elimina del array
@@ -18097,6 +18136,10 @@ function _gcpShowInterpModal(fi, layerIdx) {
   };
   document.getElementById('gcpInterpOk').onclick = () => {
     modal.classList.remove('open');
+    // Preservar blur previo si existía
+    const _hadBlur = window._gcpLayers.some(l =>
+      l._frames && l._frames[_gcpInterpPendingFi + 1]?._interp && l._frames[_gcpInterpPendingFi + 1]?._blur);
+    if (_hadBlur) _gcpDoInterpolate._blur = true;
     _gcpDoInterpolate(_gcpInterpPendingFi, _gcpInterpN);
   };
 }
@@ -18132,7 +18175,9 @@ function _gcpDoInterpolate(fi, n) {
     const b = la._frames[fi + 1] ?? {...a};
     const newFrames = [];
     for (let k = 1; k <= n; k++) {
-      newFrames.push(_gcpLerpFrame(a, b, k / (n + 1)));
+      const f = _gcpLerpFrame(a, b, k / (n + 1));
+      if (_gcpDoInterpolate._blur) f._blur = true;
+      newFrames.push(f);
     }
     la._frames.splice(fi + 1, 0, ...newFrames);
   });
@@ -18144,6 +18189,7 @@ function _gcpDoInterpolate(fi, n) {
   _gcpUpdateFramesBar();
   window._gcpDirty = true;
   edToast(n + ' frame' + (n > 1 ? 's' : '') + ' interpolado' + (n > 1 ? 's' : '') + ' añadido' + (n > 1 ? 's' : '') + ' ✓');
+  delete _gcpDoInterpolate._blur;
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
@@ -18717,14 +18763,18 @@ function _gcpUpdateFramesBar() {
         const _hasInterp   = _interpCount > 0;
 
         const interpBtn = document.createElement('button');
+        const _hasBlur = _hasInterp && window._gcpLayers.some(l =>
+          l._frames && l._frames[fi + 1]?._interp && l._frames[fi + 1]?._blur);
         interpBtn.title = _hasInterp
-          ? _interpCount + ' frame' + (_interpCount > 1 ? 's' : '') + ' interpolado' + (_interpCount > 1 ? 's' : '') + ' — pulsa para opciones'
+          ? _interpCount + ' frame' + (_interpCount > 1 ? 's' : '') + ' interpolado' + (_interpCount > 1 ? 's' : '') +
+            (_hasBlur ? ' + blur' : '') + ' — pulsa para opciones'
           : 'Añadir interpolación';
         interpBtn.style.cssText = [
           'flex-shrink:0', 'align-self:center',
           'width:20px', 'height:20px',
           'border-radius:50%',
-          'border:1.5px solid ' + (_hasInterp ? '#cc2200' : 'var(--gray-300)'),
+          'border:1.5px ' + (_hasInterp ? (_hasBlur ? 'dashed' : 'solid') : 'solid') +
+            ' ' + (_hasInterp ? '#cc2200' : 'var(--gray-300)'),
           'background:' + (_hasInterp ? '#ffeeeb' : 'var(--white)'),
           'color:' + (_hasInterp ? '#cc2200' : 'var(--gray-400)'),
           'font-size:9px', 'line-height:1', 'font-weight:900',
@@ -18788,6 +18838,38 @@ function _gcpUpdateFramesBar() {
   });
 }
 
+// Dibuja un layer GCP en el contexto dado, con un alpha específico
+function _gcpDrawLayerAt(ctx, l, alpha) {
+  const prevAlpha = ctx.globalAlpha;
+  if (l.type === 'image' || l.type === 'gif') {
+    ctx.globalAlpha = alpha;
+    l.draw(ctx, gcpCanvas);
+  } else if (l.type === 'text' || l.type === 'bubble') {
+    ctx.globalAlpha = alpha;
+    l.draw(ctx, gcpCanvas);
+  } else {
+    ctx.globalAlpha = (l.opacity ?? 1) * alpha;
+    l.draw(ctx);
+  }
+  ctx.globalAlpha = prevAlpha;
+}
+
+// Aplica temporalmente el estado de frame previo a un layer y lo dibuja con alpha dado
+function _gcpDrawLayerBlurGhost(ctx, l, prevSnap, alpha) {
+  if (!prevSnap) return;
+  const pw = edPageW(), ph = edPageH();
+  // Guardar estado actual
+  const cx = l.x, cy = l.y, cw2 = l.width, ch2 = l.height, cr = l.rotation, co = l.opacity;
+  // Aplicar estado previo
+  l.x = prevSnap.x; l.y = prevSnap.y;
+  l.width = prevSnap.width; l.height = prevSnap.height;
+  l.rotation = prevSnap.rotation ?? 0;
+  l.opacity = prevSnap.opacity ?? 1;
+  _gcpDrawLayerAt(ctx, l, alpha);
+  // Restaurar
+  l.x = cx; l.y = cy; l.width = cw2; l.height = ch2; l.rotation = cr; l.opacity = co;
+}
+
 function _gcpRedraw() {
   if (!gcpCtx || !gcpCanvas) return;
   const cw = gcpCanvas.width, ch = gcpCanvas.height;
@@ -18795,20 +18877,41 @@ function _gcpRedraw() {
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
   gcpCtx.clearRect(0, 0, cw, ch);
   gcpCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+
+  const fi = window._gcpGlobalFrameIdx;
+
   // Dibujar capas — mismo orden que edRedraw, respetando visibilidad por frame
   window._gcpLayers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
-    if (l._gcpVisible === false) return;  // oculto en este frame global
-    if (l.type === 'image' || l.type === 'gif') {
-      l.draw(gcpCtx, gcpCanvas);
-    } else if (l.type === 'text' || l.type === 'bubble') {
-      l.draw(gcpCtx, gcpCanvas);
-    } else {
-      gcpCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(gcpCtx);
-      gcpCtx.globalAlpha = 1;
+    if (l._gcpVisible === false) return;
+
+    // ── Blur de movimiento ────────────────────────────────────────────────────
+    // Si el frame actual es interpolado y tiene _blur, dibujar fantasmas hacia el anterior
+    const _curSnap = l._frames?.[fi];
+    if (_curSnap?._interp && _curSnap?._blur && fi > 0) {
+      const _prevSnap = l._frames[fi - 1];
+      if (_prevSnap) {
+        const _nGhosts = 4; // copias semitransparentes
+        for (let _g = 1; _g <= _nGhosts; _g++) {
+          const _t = _g / (_nGhosts + 1);        // 0.2, 0.4, 0.6, 0.8
+          const _gAlpha = (1 - _t) * 0.35;       // más cercano al pasado = más transparente
+          // Snap interpolado entre previo y actual para posicionar el fantasma
+          const _ghostSnap = {
+            x:        _prevSnap.x        + (_curSnap.x        - _prevSnap.x)        * (1 - _t),
+            y:        _prevSnap.y        + (_curSnap.y        - _prevSnap.y)        * (1 - _t),
+            width:    _prevSnap.width    + (_curSnap.width    - _prevSnap.width)    * (1 - _t),
+            height:   _prevSnap.height   + (_curSnap.height   - _prevSnap.height)   * (1 - _t),
+            rotation: _prevSnap.rotation + (_curSnap.rotation - _prevSnap.rotation) * (1 - _t),
+            opacity:  _prevSnap.opacity  + (_curSnap.opacity  - _prevSnap.opacity)  * (1 - _t),
+          };
+          _gcpDrawLayerBlurGhost(gcpCtx, l, _ghostSnap, _gAlpha);
+        }
+      }
     }
+    // ── Dibujo normal ─────────────────────────────────────────────────────────
+    _gcpDrawLayerAt(gcpCtx, l, l.opacity ?? 1);
   });
+
   // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
   _gcpDrawSel();
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
