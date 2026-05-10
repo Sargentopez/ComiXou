@@ -12515,6 +12515,12 @@ function _edSizeCheck() {
 }
 
 function _edSizeMonitorStart() {
+  sessionStorage.removeItem('cx_editing'); // permitir actualizaciones del SW
+  // Si había una actualización pendiente, activarla ahora que salimos del editor
+  if (window._swPendingReg && window._swPendingReg.waiting) {
+    window._swPendingReg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    window._swPendingReg = null;
+  }
   _edSizeMonitorStop();
   _edAutosaveStop();
   if (window._edBeforeUnloadFn) {
@@ -15692,6 +15698,7 @@ function EditorView_init(){
   // Avisar al usuario si localStorage se llena al guardar
   window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
+  sessionStorage.setItem('cx_editing', '1'); // bloquear actualizaciones del SW
   _edSizeMonitorStart();
   _edAutosaveStart();
   // Aviso nativo al cerrar pestaña/navegador si hay cambios sin guardar

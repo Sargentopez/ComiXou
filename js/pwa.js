@@ -9,24 +9,30 @@
     const swPath = window.location.pathname.includes('/pages/')
       ? '../sw.js' : './sw.js';
 
-    // Cuando el SW toma el control (tras SKIP_WAITING), recargar la página
-    // Registrar ANTES del register() para no perder el evento
+    // Función para saber si el usuario está en el editor (editando una obra)
+    const _inEditor = () => !!sessionStorage.getItem('cx_editing');
+
+    // Activar SW esperando solo si no estamos en el editor
+    const _activateWaiting = (reg) => {
+      if (!reg.waiting) return false;
+      if (_inEditor()) {
+        // Posponer — se activará cuando el usuario salga del editor
+        window._swPendingReg = reg;
+        return false;
+      }
+      reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      return true;
+    };
+
+    // Cuando el SW toma el control (tras SKIP_WAITING), recargar SOLO si no editamos
     let refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!refreshing) { refreshing = true; window.location.reload(); }
+      if (!refreshing && !_inEditor()) { refreshing = true; window.location.reload(); }
     });
-
-    const _activateWaiting = (reg) => {
-      if (reg.waiting) {
-        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-        return true;
-      }
-      return false;
-    };
 
     navigator.serviceWorker.register(swPath)
       .then(reg => {
-        // Si ya hay un SW esperando al cargar (PWA en background), activarlo
+        // Si ya hay un SW esperando al cargar, activarlo si es seguro
         _activateWaiting(reg);
 
         // Cuando se instala una nueva versión durante la sesión
@@ -35,24 +41,21 @@
           if (!newWorker) return;
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed') {
-              // Hay nuevo SW listo — activarlo inmediatamente
               _activateWaiting(reg);
             }
           });
         });
 
-        // Comprobar updates periódicamente (cada 60s) — cubre el caso de PWA
-        // que permanece en background y no detecta updatefound automáticamente
-        setInterval(() => {
-          reg.update().catch(() => {});
-        }, 60000);
+        // Comprobar updates periódicamente (cada 60s)
+        setInterval(() => { reg.update().catch(() => {}); }, 60000);
 
-        // Comprobar también al volver al foco (usuario cambia de app y vuelve)
+        // Al volver al foco: comprobar updates, activar si no editamos
         document.addEventListener('visibilitychange', () => {
           if (document.visibilityState === 'visible') {
             reg.update().catch(() => {});
-            // Si hay un SW esperando que no habíamos detectado, activarlo
-            setTimeout(() => _activateWaiting(reg), 500);
+            if (!_inEditor()) {
+              setTimeout(() => _activateWaiting(reg), 500);
+            }
           }
         });
       })

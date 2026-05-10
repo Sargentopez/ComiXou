@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v22-14';
+const CACHE = 'comixow-v22-15';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -14,15 +14,16 @@ self.addEventListener('message', e => {
 });
 
 self.addEventListener('install', e => {
+  // NO llamar skipWaiting() aquí — pwa.js lo hará cuando sea seguro
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC_ASSETS)));
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    )
+    // NO llamar clients.claim() — evita forzar recarga en pestañas abiertas
   );
 });
 
