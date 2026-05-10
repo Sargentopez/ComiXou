@@ -18388,20 +18388,13 @@ function _gcpUpdateFramesBar() {
         delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
-          if (_gcpGetTotalFrames() <= 1) return; // no eliminar si es el único frame global
-          // Eliminar en TODAS las capas para mantener columnas alineadas
-          window._gcpLayers.forEach(otherLa => {
-            if (otherLa._frames && fi < otherLa._frames.length) {
-              otherLa._frames.splice(fi, 1);
-            }
-          });
+          // Marcar el frame como invisible en esta capa — no afecta al resto
+          if (la._frames && fi < la._frames.length) {
+            la._frames[fi] = {...la._frames[fi], visible: false};
+          }
           window._gcpDirty = true;
-          const newTotal = _gcpGetTotalFrames();
-          if (window._gcpGlobalFrameIdx >= newTotal)
-            window._gcpGlobalFrameIdx = Math.max(0, newTotal - 1);
-          _gcpApplyFrame(window._gcpGlobalFrameIdx);
           _gcpInvalidateAllThumbs();
-          _gcpUpdateFrameNav();
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
           _gcpRedraw();
           _gcpUpdateFramesBar();
         });
