@@ -18891,26 +18891,33 @@ function _gcpRedraw() {
     if (l._gcpVisible === false) return;
 
     // ── Blur de movimiento ────────────────────────────────────────────────────
-    // Si el frame actual es interpolado y tiene _blur, dibujar fantasmas hacia el anterior
-    const _curSnap = l._frames?.[fi];
-    if (_curSnap?._interp && _curSnap?._blur && fi > 0) {
-      const _prevSnap = l._frames[fi - 1];
-      if (_prevSnap) {
-        const _nGhosts = 4; // copias semitransparentes
-        for (let _g = 1; _g <= _nGhosts; _g++) {
-          const _t = _g / (_nGhosts + 1);        // 0.2, 0.4, 0.6, 0.8
-          const _gAlpha = (1 - _t) * 0.35;       // más cercano al pasado = más transparente
-          // Snap interpolado entre previo y actual para posicionar el fantasma
-          const _ghostSnap = {
-            x:        _prevSnap.x        + (_curSnap.x        - _prevSnap.x)        * (1 - _t),
-            y:        _prevSnap.y        + (_curSnap.y        - _prevSnap.y)        * (1 - _t),
-            width:    _prevSnap.width    + (_curSnap.width    - _prevSnap.width)    * (1 - _t),
-            height:   _prevSnap.height   + (_curSnap.height   - _prevSnap.height)   * (1 - _t),
-            rotation: _prevSnap.rotation + (_curSnap.rotation - _prevSnap.rotation) * (1 - _t),
-            opacity:  _prevSnap.opacity  + (_curSnap.opacity  - _prevSnap.opacity)  * (1 - _t),
-          };
-          _gcpDrawLayerBlurGhost(gcpCtx, l, _ghostSnap, _gAlpha);
-        }
+    // El blur aplica a CUALQUIER frame (clave o interpolado) que esté dentro de
+    // un bloque blur: basta con que el frame anterior o el siguiente sea _blur,
+    // O que el propio frame sea _blur.
+    // Detectar: ¿hay un frame adyacente (fi-1 o fi+1) con _blur, o el propio fi lo tiene?
+    const _frames = l._frames;
+    const _curSnap  = _frames?.[fi];
+    const _prevSnap = fi > 0 ? _frames?.[fi - 1] : null;
+    const _nextSnap = _frames?.[fi + 1] ?? null;
+
+    // Un frame pertenece a un bloque blur si él mismo o algún vecino inmediato tiene _blur
+    const _inBlurBlock = !!(_curSnap?._blur || _prevSnap?._blur || _nextSnap?._blur);
+
+    if (_inBlurBlock && _prevSnap && fi > 0) {
+      const _nGhosts = 4;
+      for (let _g = 1; _g <= _nGhosts; _g++) {
+        // t va de 0 (posición actual) hacia atrás (posición previa)
+        const _t = _g / (_nGhosts + 1);   // 0.2, 0.4, 0.6, 0.8
+        const _gAlpha = (1 - _t) * 0.32;  // el más cercano al pasado es más transparente
+        const _ghostSnap = {
+          x:        _curSnap.x        + (_prevSnap.x        - _curSnap.x)        * _t,
+          y:        _curSnap.y        + (_prevSnap.y        - _curSnap.y)        * _t,
+          width:    _curSnap.width    + (_prevSnap.width    - _curSnap.width)    * _t,
+          height:   _curSnap.height   + (_prevSnap.height   - _curSnap.height)   * _t,
+          rotation: _curSnap.rotation + (_prevSnap.rotation - _curSnap.rotation) * _t,
+          opacity:  _curSnap.opacity  + (_prevSnap.opacity  - _curSnap.opacity)  * _t,
+        };
+        _gcpDrawLayerBlurGhost(gcpCtx, l, _ghostSnap, _gAlpha);
       }
     }
     // ── Dibujo normal ─────────────────────────────────────────────────────────
