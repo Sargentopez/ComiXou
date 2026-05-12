@@ -19452,12 +19452,14 @@ function gcpOpen(edLayerIdx) {
   if (!gcpCanvas) return;
   gcpCtx = gcpCanvas.getContext('2d');
 
-  gcpCanvas.width  = ec.width;
-  gcpCanvas.height = ec.height;
+  // Dejar 12px libres en right y bottom para las scrollbars de PC
+  const _sbSize = 12;
+  gcpCanvas.width  = ec.width  - _sbSize;
+  gcpCanvas.height = ec.height - _sbSize;
   gcpCanvas.style.left   = '0';
   gcpCanvas.style.top    = ec.style.top;
-  gcpCanvas.style.width  = ec.style.width;
-  gcpCanvas.style.height = ec.style.height;
+  gcpCanvas.style.width  = (ec.width  - _sbSize) + 'px';
+  gcpCanvas.style.height = (ec.height - _sbSize) + 'px';
   gcpCanvas.style.display       = 'block';
   gcpCanvas.style.pointerEvents = 'auto';
 
