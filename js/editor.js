@@ -992,9 +992,9 @@ function _edSyncSizeDots(){
 }
 // ¿Necesita scrollbars? (el lienzo no cabe entero en el viewport)
 function edNeedsScroll(){
-  // En PC: siempre mostrar barras para permitir navegación a cualquier zoom
   if(!edCanvas) return { h: false, v: false };
-  if(window._edIsTouch) return { h: false, v: false };
+  // Mostrar scrollbars si hay ratón/stylus conectado (aunque el dispositivo sea táctil)
+  if(!window._edHasMousePointer) return { h: false, v: false };
   return { h: true, v: true };
 }
 
@@ -4956,8 +4956,8 @@ function _edScrollbarsUpdate(){
 }
 
 function _edScrollbarsDraw(){
-  // Barras de navegación HTML — solo PC (no táctil)
-  if(window._edIsTouch){ _edHideHTMLScrollbars(); return; }
+  // Barras de navegación — solo si hay ratón/stylus conectado
+  if(!window._edHasMousePointer){ _edHideHTMLScrollbars(); return; }
   if(!edCanvas) return;
   const W = edCanvas.width, H = edCanvas.height;
 
@@ -5017,8 +5017,45 @@ function _edHideHTMLScrollbars(){
   if(v) v.style.display = 'none';
 }
 
+// ── Panel de diagnóstico scrollbar (temporal) ──────────────────────────────
+let _edSbLogLines = [];
+function _edSbLog(msg) {
+  _edSbLogLines.push(new Date().toISOString().slice(11,23) + ' ' + msg);
+  if (_edSbLogLines.length > 40) _edSbLogLines.shift();
+  const el = document.getElementById('_edSbDiagTA');
+  if (el) el.value = _edSbLogLines.join('\n');
+}
+function _edSbDiagOpen() {
+  let panel = document.getElementById('_edSbDiagPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = '_edSbDiagPanel';
+    panel.style.cssText = 'position:fixed;bottom:60px;left:8px;z-index:99999;background:#fff;border:2px solid #000;border-radius:8px;padding:8px;width:320px;font-family:monospace;font-size:10px';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.onclick = () => panel.remove();
+    const ta = document.createElement('textarea');
+    ta.id = '_edSbDiagTA';
+    ta.style.cssText = 'width:100%;height:180px;font-size:9px;resize:none;display:block';
+    const clrBtn = document.createElement('button');
+    clrBtn.textContent = 'Clear';
+    clrBtn.onclick = () => { _edSbLogLines = []; ta.value = ''; };
+    const title = document.createElement('b');
+    title.textContent = 'SB Diag ';
+    panel.appendChild(title); panel.appendChild(closeBtn);
+    panel.appendChild(document.createElement('br'));
+    panel.appendChild(ta); panel.appendChild(clrBtn);
+    document.body.appendChild(panel);
+  }
+  const el = document.getElementById('_edSbDiagTA');
+  if (el) el.value = _edSbLogLines.join('\n');
+}
+window._edSbDiagOpen = _edSbDiagOpen;
+window._edSbLog = _edSbLog;
+
 function _edInitHTMLScrollbars(){
-  if(window._edIsTouch) return;
+  // Inicializar siempre — el ratón puede conectarse después
+  // La visibilidad se controla en _edScrollbarsDraw
   let _sbAxis = null, _sbDragStart = 0, _sbCamStart = 0;
 
   const MARGIN_RATIO_SB = 0.4;
@@ -5053,6 +5090,7 @@ function _edInitHTMLScrollbars(){
     const clamped = Math.max(0, Math.min(m.maxScroll, val));
     if(axis === 'h') edCamera.x = (m.marginX !== undefined ? m.marginX : 0) - clamped;
     else             edCamera.y = (m.marginY !== undefined ? m.marginY : 0) - clamped;
+    _edSbLog('applyScroll axis=' + axis + ' clamped=' + clamped.toFixed(1) + ' camX=' + edCamera.x.toFixed(1) + ' camY=' + edCamera.y.toFixed(1) + ' gcpActive=' + window._gcpActive);
     edRedraw();
     if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
   }
@@ -5072,11 +5110,13 @@ function _edInitHTMLScrollbars(){
       thumb.setPointerCapture(e.pointerId);
       thumb.style.cursor = 'grabbing';
       e.preventDefault();
+      _edSbLog('thumb DOWN axis=' + axis + ' camStart=' + _sbCamStart.toFixed(1) + ' gcpActive=' + window._gcpActive);
     });
     thumb.addEventListener('pointermove', e => {
       if(_sbAxis !== axis) return;
       const delta = (axis === 'h' ? e.clientX : e.clientY) - _sbDragStart;
       const m = getMetrics(axis);
+      _edSbLog('thumb MOVE delta=' + delta.toFixed(1) + ' m=' + (m ? 'ok' : 'null') + (m ? ' track=' + m.trackLen.toFixed(0) + ' thumb=' + m.thumbLen.toFixed(0) : ''));
       if(!m || m.trackLen <= m.thumbLen) return;
       applyScroll(axis, _sbCamStart + delta * (m.maxScroll / (m.trackLen - m.thumbLen)));
     });
@@ -16020,6 +16060,16 @@ function EditorView_init(){
   // Detectar si el dispositivo está usando táctil — se actualiza con cualquier pointerdown
   // Se usa en _edPickColor para elegir el picker correcto (HSL vs nativo)
   window._edIsTouch = navigator.maxTouchPoints > 0 && !window.matchMedia('(pointer:fine)').matches;
+  // Detección dinámica de ratón: si llega un pointermove de tipo mouse, mostrar scrollbars
+  window._edHasMousePointer = window.matchMedia('(pointer:fine)').matches;
+  document.addEventListener('pointermove', _e => {
+    if (_e.pointerType === 'mouse' || _e.pointerType === 'pen') {
+      if (!window._edHasMousePointer) {
+        window._edHasMousePointer = true;
+        _edScrollbarsUpdate();
+      }
+    }
+  }, { passive: true, capture: true });
   window._edPointerTypeFn = ev => {
     if(ev.pointerType==='touch') window._edIsTouch=true;
     else if(ev.pointerType==='mouse') window._edIsTouch=false;
@@ -19016,6 +19066,75 @@ function _gcpUpdateFramesBar() {
   });
 }
 
+// ── Diagnóstico scrollbars GCP ───────────────────────────────────────────────
+function _gcpSbDiag() {
+  const lines = [];
+  const L = s => lines.push(s);
+
+  L('── Estado scrollbars en GCP ──');
+  L('_edIsTouch: ' + window._edIsTouch);
+  L('_edHasMousePointer: ' + window._edHasMousePointer);
+  L('_gcpActive: ' + window._gcpActive);
+  L('_edRedrawOverride: ' + window._edRedrawOverride);
+
+  const hBar = document.getElementById('ed-hscroll');
+  const vBar = document.getElementById('ed-vscroll');
+  const hThumb = document.getElementById('ed-hscroll-thumb');
+  const vThumb = document.getElementById('ed-vscroll-thumb');
+  L('hBar display: ' + (hBar ? hBar.style.display : 'NO ELEMENT'));
+  L('vBar display: ' + (vBar ? vBar.style.display : 'NO ELEMENT'));
+  L('hBar zIndex: ' + (hBar ? hBar.style.zIndex : '-'));
+  L('vBar zIndex: ' + (vBar ? vBar.style.zIndex : '-'));
+  if (hBar) {
+    const r = hBar.getBoundingClientRect();
+    L('hBar rect: ' + JSON.stringify({x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}));
+  }
+  if (vBar) {
+    const r = vBar.getBoundingClientRect();
+    L('vBar rect: ' + JSON.stringify({x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}));
+  }
+  if (gcpCanvas) {
+    const r = gcpCanvas.getBoundingClientRect();
+    L('gcpCanvas rect: ' + JSON.stringify({x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}));
+    L('gcpCanvas zIndex: ' + gcpCanvas.style.zIndex);
+    L('gcpCanvas pointerEvents: ' + gcpCanvas.style.pointerEvents);
+  }
+  L('edCamera: x=' + edCamera.x.toFixed(1) + ' y=' + edCamera.y.toFixed(1) + ' z=' + edCamera.z.toFixed(3));
+  L('edCanvas size: ' + (edCanvas ? edCanvas.width + 'x' + edCanvas.height : 'null'));
+
+  // Simular lo que haría _edScrollbarsDraw
+  L('── Logs recientes scrollbar ──');
+  (_edSbLogLines || []).forEach(l2 => lines.push(l2));
+
+  // Mostrar panel
+  let p = document.getElementById('_gcpSbDiagPanel');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = '_gcpSbDiagPanel';
+    p.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;background:#111;color:#0f0;font:11px monospace;display:flex;flex-direction:column;padding:8px;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px;flex-shrink:0';
+    const title = document.createElement('b');
+    title.style.color = '#fff'; title.textContent = 'DIAGNÓSTICO SCROLLBARS GCP';
+    const btns = document.createElement('div');
+    const cp = document.createElement('button');
+    cp.textContent = '📋 Copiar'; cp.style.cssText = 'padding:2px 8px;cursor:pointer;margin-right:4px;';
+    const ta2 = document.createElement('textarea');
+    ta2.id = '_gcpSbDiagTa';
+    ta2.style.cssText = 'flex:1;width:100%;background:#111;color:#0f0;border:none;font:11px monospace;padding:4px;box-sizing:border-box;resize:none;';
+    ta2.readOnly = true;
+    cp.onclick = () => { ta2.select(); document.execCommand('copy'); cp.textContent = '✓'; };
+    const cl = document.createElement('button');
+    cl.textContent = '✕'; cl.style.cssText = 'padding:2px 8px;cursor:pointer;';
+    cl.onclick = () => p.remove();
+    btns.appendChild(cp); btns.appendChild(cl);
+    hdr.appendChild(title); hdr.appendChild(btns);
+    p.appendChild(hdr); p.appendChild(ta2);
+    document.body.appendChild(p);
+  }
+  document.getElementById('_gcpSbDiagTa').value = lines.join('\n');
+}
+
 // Dibuja un layer GCP en el contexto dado, con un alpha específico
 function _gcpDrawLayerAt(ctx, l, alpha) {
   const prevAlpha = ctx.globalAlpha;
@@ -19465,6 +19584,9 @@ function gcpOpen(edLayerIdx) {
 
     document.getElementById('gcpCloseBtn')?.addEventListener('click', gcpClose);
     // Lupa: mismo comportamiento que en el editor general
+    document.getElementById('gcpSbDiagBtn')?.addEventListener('click', () => {
+      _gcpSbDiag();
+    });
     document.getElementById('gcpZoomResetBtn')?.addEventListener('click', () => {
       const pw = edPageW(), ph = edPageH();
       const cw = gcpCanvas ? gcpCanvas.width : (edCanvas ? edCanvas.width : 800);
