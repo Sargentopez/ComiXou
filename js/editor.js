@@ -19832,7 +19832,7 @@ function _gcpDoClose() {
   document.getElementById('editorShell')?.classList.remove('gcp-open');
   document.getElementById('editorCanvas')?.classList.remove('gcp-active');
   const blocker = document.getElementById('gcpBlocker');
-  if (blocker) blocker.style.display = 'none';
+  if (blocker) { blocker.style.display = 'none'; blocker.style.right = ''; blocker.style.bottom = ''; }
   _gcpHintStop();
   // Restaurar título del gcpShell para próxima apertura
   const titleEl = document.getElementById('gcpProjectTitle');
