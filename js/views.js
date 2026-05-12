@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.48</footer>
+    <footer class="app-version">v22.49</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -600,7 +600,7 @@ Router.register('editor', {
       </div>
     </div>
     <!-- Bloqueante GIF: cubre toda la pantalla bajo gcpShell para absorber eventos -->
-    <div id="gcpBlocker" style="display:none;position:fixed;inset:0;z-index:498;touch-action:none;-webkit-user-select:none;user-select:none"></div>
+    <div id="gcpBlocker" style="display:none;position:fixed;inset:0;z-index:498;touch-action:none;-webkit-user-select:none;user-select:none;pointer-events:none"></div>
 
     <!-- Editor GIF: mismo diseño que el editor (mismas clases CSS) -->
     <div id="gcpShell">

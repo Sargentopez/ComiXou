@@ -19483,6 +19483,12 @@ function gcpOpen(edLayerIdx) {
   gcpCanvas.style.height = (ec.height - _sbSize) + 'px';
   gcpCanvas.style.display       = 'block';
   gcpCanvas.style.pointerEvents = 'auto';
+  // Bloquear scroll nativo en Android (antes lo hacía gcpBlocker, ahora con pointer-events:none no puede)
+  if (!gcpCanvas._touchBlocked) {
+    gcpCanvas._touchBlocked = true;
+    gcpCanvas.addEventListener('touchstart', e => { if (e.touches.length === 1) e.preventDefault(); }, { passive: false });
+    gcpCanvas.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
+  }
 
   // Guardar qué capa del editor se está editando (para actualizarla al cerrar)
   window._gcpEdLayerIdx = (typeof edLayerIdx === 'number' && edLayerIdx >= 0) ? edLayerIdx : -1;
@@ -19592,13 +19598,8 @@ function gcpOpen(edLayerIdx) {
   const blocker = document.getElementById('gcpBlocker');
   if (blocker) {
     blocker.style.display = 'block';
-    if (!blocker._gcpBound) {
-      blocker._gcpBound = true;
-      // El bloqueante es solo visual — los eventos los gestiona _edDocDownFn/_gcpDocDownFn
-      // Solo bloquear touchstart para evitar scroll en Android
-      blocker.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
-      blocker.addEventListener('touchmove',  e => e.preventDefault(), { passive: false });
-    }
+    // pointer-events:none en el blocker — no puede capturar touch
+    // El bloqueo de scroll nativo en Android se hace en gcpCanvas
   }
 
   // Registrar botones (solo primera vez)
