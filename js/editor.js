@@ -18870,12 +18870,13 @@ function _gcpUpdateFramesBar() {
       fp.scrollLeft = frac * maxScroll;
     });
 
-    // ── Scrollbar vertical custom (PC) ──────────────────────────────────────
+    // ── Scrollbar vertical custom (PC) — columna flex junto al scrollWrap ──
+    // Nota: no se usa position:absolute porque bar tiene overflow:hidden
     const vScrollBar = document.createElement('div');
     vScrollBar.id = 'gcpFrVScroll';
     vScrollBar.style.cssText = [
       'width:10px', 'background:var(--gray-200)', 'cursor:pointer',
-      'flex-shrink:0', 'position:absolute', 'right:0', 'top:0', 'bottom:10px',
+      'flex-shrink:0', 'display:none', 'position:relative',
     ].join(';');
     const vThumb = document.createElement('div');
     vThumb.id = 'gcpFrVThumb';
@@ -18884,23 +18885,23 @@ function _gcpUpdateFramesBar() {
       'background:var(--gray-400)', 'border-radius:4px', 'cursor:grab', 'min-height:20px',
     ].join(';');
     vScrollBar.appendChild(vThumb);
-    bar.style.position = 'relative';
-    bar.appendChild(vScrollBar);
+    // Insertar como columna dentro del scrollWrap (junto a framesPane)
+    scrollWrap.appendChild(vScrollBar);
 
     const _syncVThumb = () => {
       const sw = scrollWrap;
       const maxScroll = sw.scrollHeight - sw.clientHeight;
       if (maxScroll <= 0) { vScrollBar.style.display = 'none'; return; }
       vScrollBar.style.display = 'block';
-      const trackH = vScrollBar.clientHeight;
+      const trackH = sw.clientHeight;
       const ratio  = sw.clientHeight / sw.scrollHeight;
       const thumbH = Math.max(20, trackH * ratio);
-      const frac   = sw.scrollTop / maxScroll;
+      const frac   = maxScroll > 0 ? sw.scrollTop / maxScroll : 0;
       vThumb.style.height = thumbH + 'px';
       vThumb.style.top    = (frac * (trackH - thumbH)) + 'px';
     };
     scrollWrap.addEventListener('scroll', _syncVThumb, { passive: true });
-    setTimeout(_syncVThumb, 50);
+    setTimeout(_syncVThumb, 80);
 
     let _vDragY = 0, _vDragScroll = 0, _vDragging = false;
     vThumb.addEventListener('pointerdown', e => {
@@ -18913,18 +18914,18 @@ function _gcpUpdateFramesBar() {
       if (!_vDragging) return;
       const sw = scrollWrap;
       const maxScroll = sw.scrollHeight - sw.clientHeight;
-      const trackH = vScrollBar.clientHeight;
+      const trackH = sw.clientHeight;
       const thumbH = vThumb.offsetHeight;
       const delta = e.clientY - _vDragY;
-      sw.scrollTop = Math.max(0, Math.min(maxScroll, _vDragScroll + delta * maxScroll / (trackH - thumbH)));
+      sw.scrollTop = Math.max(0, Math.min(maxScroll, _vDragScroll + delta * maxScroll / Math.max(1, trackH - thumbH)));
     });
     vThumb.addEventListener('pointerup', () => { _vDragging = false; vThumb.style.cursor = 'grab'; });
     vThumb.addEventListener('pointercancel', () => { _vDragging = false; vThumb.style.cursor = 'grab'; });
     vScrollBar.addEventListener('pointerdown', e => {
       if (e.target === vThumb) return;
       e.stopPropagation();
-      const rect = vScrollBar.getBoundingClientRect();
       const sw = scrollWrap;
+      const rect = vScrollBar.getBoundingClientRect();
       const maxScroll = sw.scrollHeight - sw.clientHeight;
       const frac = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
       sw.scrollTop = frac * maxScroll;
@@ -19173,12 +19174,8 @@ function _gcpUpdateFramesBar() {
           if (la._frames && fi < la._frames.length) {
             const _nowVis = la._frames[fi].visible !== false;
             la._frames[fi] = {...la._frames[fi], visible: !_nowVis};
-            if (_nowVis) {
-              // Al ocultar: purgar interpolados adyacentes y trim
-              _gcpPurgeInterpAround(fi);
-              _gcpTrimLeadingInvisible();
-              _gcpTrimTrailingInvisible();
-            }
+            // Al ocultar: purgar interpolados adyacentes (no trim — el frame sigue en el array)
+            if (_nowVis) _gcpPurgeInterpAround(fi);
           }
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
@@ -19196,22 +19193,23 @@ function _gcpUpdateFramesBar() {
         delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
-          // Splice real en todas las capas — la columna fi desaparece
-          window._gcpLayers.forEach(otherLa => {
-            if (otherLa._frames && fi < otherLa._frames.length)
-              otherLa._frames.splice(fi, 1);
+          edConfirm('¿Eliminar el fotograma ' + (fi + 1) + ' de todas las capas?', () => {
+            window._gcpLayers.forEach(otherLa => {
+              if (otherLa._frames && fi < otherLa._frames.length)
+                otherLa._frames.splice(fi, 1);
+            });
+            const _nt = _gcpGetTotalFrames();
+            if (window._gcpGlobalFrameIdx >= _nt && _nt > 0)
+              window._gcpGlobalFrameIdx = _nt - 1;
+            _gcpTrimLeadingInvisible();
+            _gcpTrimTrailingInvisible();
+            window._gcpDirty = true;
+            _gcpInvalidateAllThumbs();
+            _gcpApplyFrame(window._gcpGlobalFrameIdx);
+            _gcpUpdateFrameNav();
+            _gcpRedraw();
+            _gcpUpdateFramesBar();
           });
-          const _nt = _gcpGetTotalFrames();
-          if (window._gcpGlobalFrameIdx >= _nt && _nt > 0)
-            window._gcpGlobalFrameIdx = _nt - 1;
-          _gcpTrimLeadingInvisible();
-          _gcpTrimTrailingInvisible();
-          window._gcpDirty = true;
-          _gcpInvalidateAllThumbs();
-          _gcpApplyFrame(window._gcpGlobalFrameIdx);
-          _gcpUpdateFrameNav();
-          _gcpRedraw();
-          _gcpUpdateFramesBar();
         });
         actions.appendChild(delBtn);
         card.appendChild(actions);
