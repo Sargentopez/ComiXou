@@ -16116,9 +16116,9 @@ function EditorView_init(){
         _bib.classList.remove('open'); _bib.innerHTML = ''; delete _bib.dataset.mode;
       }
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
-      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu]');
+      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
       if (_gcpUiEl) {
-        return; // Es UI del GIF — dejar que sus propios listeners actúen
+        return; // Es UI del GIF o scrollbar — dejar que sus propios listeners actúen
       } else {
         _gcpHandleDown(e);
         return;
