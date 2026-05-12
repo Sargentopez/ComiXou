@@ -18647,11 +18647,21 @@ function _gcpPreview() {
   let fi    = 0;
   let loopN = 0; // contador de repeticiones completadas
 
-  const stop = () => {
+  const _previewStartFi = window._gcpGlobalFrameIdx; // frame donde estaba antes de previsualizar
+
+  const stop = (goToLastFrame) => {
     clearTimeout(_gcpPreviewTimer);
     _gcpPreviewTimer = null;
     if (btn) btn.textContent = '▶';
-    _gcpGoToFrame(window._gcpGlobalFrameIdx);
+    // Si se detuvo por fin de reproducción → quedarse en el último frame
+    // Si se detuvo manualmente (botón) → volver al frame original
+    if (goToLastFrame) {
+      const _lastFi = total - 1;
+      window._gcpGlobalFrameIdx = _lastFi;
+      _gcpGoToFrame(_lastFi);
+    } else {
+      _gcpGoToFrame(_previewStartFi);
+    }
   };
 
   const loop = () => {
@@ -18661,7 +18671,7 @@ function _gcpPreview() {
     const next = fi + 1;
     if (next >= total) {
       loopN++;
-      if (repeatMax > 0 && loopN >= repeatMax) { stop(); return; }
+      if (repeatMax > 0 && loopN >= repeatMax) { stop(true); return; } // fin natural → último frame
       fi = 0;
     } else {
       fi = next;
@@ -18931,6 +18941,26 @@ function _gcpUpdateFramesBar() {
           'justify-content:center;font-size:28px;background:#fff0f0;color:#e63030;';
         hidden.textContent = '✖';
         card.appendChild(hidden);
+        // Botón ojo para restaurar visibilidad
+        const _eyeRestoreActions = document.createElement('div');
+        _eyeRestoreActions.className = 'ed-page-actions';
+        const _eyeRestoreBtn = document.createElement('button');
+        _eyeRestoreBtn.className = 'ed-page-action-btn';
+        _eyeRestoreBtn.title = 'Mostrar frame';
+        _eyeRestoreBtn.innerHTML = '<span style="opacity:0.45">👁</span>';
+        _eyeRestoreBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (la._frames && fi < la._frames.length)
+            la._frames[fi] = {...la._frames[fi], visible: true};
+          window._gcpDirty = true;
+          _gcpInvalidateAllThumbs();
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpUpdateFrameNav();
+          _gcpRedraw();
+          _gcpUpdateFramesBar();
+        });
+        _eyeRestoreActions.appendChild(_eyeRestoreBtn);
+        card.appendChild(_eyeRestoreActions);
 
       } else {
         const thumb = _gcpLayerFrameThumb(la, fi, 88);
@@ -18967,18 +18997,50 @@ function _gcpUpdateFramesBar() {
         });
         actions.appendChild(dupBtn);
 
+        // ── Botón ojo: ocultar/mostrar el frame de esta capa ──────────────
+        const eyeBtn = document.createElement('button');
+        eyeBtn.className = 'ed-page-action-btn';
+        eyeBtn.title = isVisible ? 'Ocultar frame' : 'Mostrar frame';
+        eyeBtn.innerHTML = isVisible ? '👁' : '<span style="opacity:0.45">👁</span>';
+        eyeBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (la._frames && fi < la._frames.length) {
+            const _cur = la._frames[fi];
+            const _nowVisible = _cur.visible !== false;
+            la._frames[fi] = {..._cur, visible: !_nowVisible};
+            if (_nowVisible) {
+              // Al ocultar: purgar interpolados adyacentes
+              _gcpPurgeInterpAround(fi);
+              _gcpTrimLeadingInvisible();
+              _gcpTrimTrailingInvisible();
+            }
+          }
+          window._gcpDirty = true;
+          _gcpInvalidateAllThumbs();
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpUpdateFrameNav();
+          _gcpRedraw();
+          _gcpUpdateFramesBar();
+        });
+        actions.appendChild(eyeBtn);
+
+        // ── Botón ✕: eliminar completamente el frame de TODAS las capas ──
         const delBtn = document.createElement('button');
         delBtn.className = 'ed-page-action-btn ed-page-del';
         delBtn.title = 'Eliminar frame';
         delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
-          if (la._frames && fi < la._frames.length) {
-            la._frames[fi] = {...la._frames[fi], visible: false};
-            // Eliminar interpolados adyacentes: un frame invisible no puede ser extremo de interpolación
-            _gcpPurgeInterpAround(fi);
-          }
-          // Eliminar columnas (iniciales y finales) donde todas las capas sean invisibles
+          // Eliminar la columna fi de todas las capas (splice real)
+          window._gcpLayers.forEach(otherLa => {
+            if (otherLa._frames && fi < otherLa._frames.length) {
+              otherLa._frames.splice(fi, 1);
+            }
+          });
+          // Purgar interpolados que pudieran haber quedado huérfanos
+          const _newTotal = _gcpGetTotalFrames();
+          if (window._gcpGlobalFrameIdx >= _newTotal && _newTotal > 0)
+            window._gcpGlobalFrameIdx = _newTotal - 1;
           _gcpTrimLeadingInvisible();
           _gcpTrimTrailingInvisible();
           window._gcpDirty = true;
