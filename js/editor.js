@@ -5649,6 +5649,8 @@ function edOnStart(e){
     if(window._edDrawTouchTimer){ clearTimeout(window._edDrawTouchTimer); window._edDrawTouchTimer = null; }
     // Cancelar timer de recorte pendiente — era un pinch, no un tap
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
+    // Cancelar timer de selección/drag pendiente — era un pinch
+    if(window._edSelectTouchTimer){ clearTimeout(window._edSelectTouchTimer); window._edSelectTouchTimer = null; edIsDragging = false; }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
     if(edActiveTool==='multiselect' && edMultiSel.length){
       edMultiDragging=false; edMultiDragOffs=[];
@@ -6615,6 +6617,27 @@ function edOnStart(e){
     }
     // LOCK: objeto bloqueado — seleccionar pero no arrastrar
     if(_fl && _fl.locked){
+      edRedraw(); return;
+    }
+    // En táctil: esperar 120ms antes de iniciar drag — por si llega segundo dedo (pinch)
+    if(e.pointerType === 'touch'){
+      const _selFound = found, _selE = e, _selC = c;
+      clearTimeout(window._edSelectTouchTimer);
+      window._edSelectTouchTimer = setTimeout(() => {
+        window._edSelectTouchTimer = null;
+        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+        if(edSelectedIdx !== _selFound) return; // ya cambió la selección
+        edDragOffX = _selC.nx - edLayers[_selFound].x;
+        edDragOffY = _selC.ny - edLayers[_selFound].y;
+        edIsDragging = true;
+        window._edMoved = false;
+        if(edLayers[_selFound]?.type==='line'||edLayers[_selFound]?.type==='shape'){
+          const _pm=$('edOptionsPanel')?.dataset.mode;
+          if(_pm==='line'||_pm==='shape'||$('edShapeBar')?.classList.contains('visible')){
+            _edShapePushHistory();
+          }
+        }
+      }, 120);
       edRedraw(); return;
     }
     edDragOffX = c.nx - edLayers[found].x;
@@ -17994,6 +18017,9 @@ function _gcpHandleUp(e) {
   if (_gcpPtrMap.size === 0) _gcpPanActive = false;
 
   _gcpRuleDrag = null; // fin drag de guía GCP
+  // Cancelar timers táctiles si el dedo se levanta antes de que expiren
+  if(window._edSelectTouchTimer){ clearTimeout(window._edSelectTouchTimer); window._edSelectTouchTimer = null; }
+  if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
@@ -19960,6 +19986,8 @@ function gcpOpen(edLayerIdx) {
   // Limpiar pointers del editor general al entrar en GCP (evita fantasmas)
   if(window._edActivePointers) window._edActivePointers.clear();
   edPinching = false; edIsDragging = false; edIsResizing = false; edIsRotating = false;
+  if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
+  _gcpPtrMap.clear(); _gcpPinching = false; _gcpPanActive = false;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -20296,6 +20324,8 @@ function _gcpDoClose() {
   if (window._edActivePointers) window._edActivePointers.clear();
   edPinching = false; edIsDragging = false; edIsResizing = false; edIsRotating = false;
   _edPinchHappened = false;
+  if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
+  _gcpPtrMap.clear(); _gcpPinching = false; _gcpPanActive = false;
   window._gcpActive = false;
   window._gcpEdLayerIdx = -1;
   _gs = null;
