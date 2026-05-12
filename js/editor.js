@@ -5021,9 +5021,29 @@ function _edHideHTMLScrollbars(){
 let _edSbLogLines = [];
 function _edSbLog(msg) {
   _edSbLogLines.push(new Date().toISOString().slice(11,23) + ' ' + msg);
-  if (_edSbLogLines.length > 40) _edSbLogLines.shift();
+  if (_edSbLogLines.length > 60) _edSbLogLines.shift();
   const el = document.getElementById('_edSbDiagTA');
   if (el) el.value = _edSbLogLines.join('\n');
+}
+// Listener global capture para ver TODOS los pointerdown y quién los recibe
+function _edSbStartCapture() {
+  if (window._edSbCaptureActive) return;
+  window._edSbCaptureActive = true;
+  document.addEventListener('pointerdown', function _sbCapture(e) {
+    const t = e.target;
+    const info = [
+      'id=' + (t.id || '-'),
+      'tag=' + t.tagName,
+      'cls=' + (t.className || '-').slice(0,30),
+      'pt=' + e.pointerType,
+      'xy=(' + Math.round(e.clientX) + ',' + Math.round(e.clientY) + ')',
+      'gcpActive=' + window._gcpActive,
+    ].join(' ');
+    _edSbLog('PDOWN ' + info);
+    // También loguear si _edDocDownFn va a secuestrar el evento
+    const isScrollbar = !!t.closest('#ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
+    _edSbLog('  isScrollbar=' + isScrollbar);
+  }, true); // capture=true → antes de cualquier otra cosa
 }
 function _edSbDiagOpen() {
   let panel = document.getElementById('_edSbDiagPanel');
@@ -19068,6 +19088,7 @@ function _gcpUpdateFramesBar() {
 
 // ── Diagnóstico scrollbars GCP ───────────────────────────────────────────────
 function _gcpSbDiag() {
+  _edSbStartCapture(); // activar captura global si no está activa
   const lines = [];
   const L = s => lines.push(s);
 
