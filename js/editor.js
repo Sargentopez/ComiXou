@@ -5222,15 +5222,17 @@ function _edHandleDoubleTap(idx){
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
   } else if (la && la.type === 'gif') {
-    // GifLayer importado: abrir editor GIF
+    // GifLayer importado: abrir panel de propiedades de animación
     edSelectedIdx = idx;
     edRedraw();
-    gcpOpen(idx);
-  } else if (la && la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames)) {
-    // ImageLayer de animación: abrir editor GIF para re-editar
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
+  } else if (la && la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames || la.animKey)) {
+    // ImageLayer de animación: abrir panel de propiedades de animación
     edSelectedIdx = idx;
     edRedraw();
-    gcpOpen(idx);
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
   } else {
     // image, text, bubble y cualquier otro tipo
     edSelectedIdx = idx;
@@ -5367,8 +5369,6 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
 }
 
 function edOnStart(e){
-  // Ignorar completamente cuando el editor de animaciones está activo
-  if(window._gcpActive) return;
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
   if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
   // ── REGLAS: prioridad máxima — siempre antes de cualquier bloqueo de UI ──
@@ -7268,6 +7268,11 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
+  // Siempre limpiar _edActivePointers aunque GCP esté activo
+  // (evita pointers fantasma que rompen pinch/drag al volver al editor general)
+  if(e && e.pointerId !== undefined && window._edActivePointers){
+    window._edActivePointers.delete(e.pointerId);
+  }
   if(window._gcpActive) return;
   // Limpiar pan de _edLineLayer si se sueltan dedos
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
@@ -10601,7 +10606,8 @@ function edRenderOptionsPanel(mode){
         <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
-    } else if(la.type==='image'){
+    } else if(la.type==='image' || la.type==='gif'){
+      const _isAnim = la.type==='gif' || la._isGcpImage || la._gcpLayersData || la._pngFrames || la.animKey;
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
         <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
@@ -10610,9 +10616,14 @@ function edRenderOptionsPanel(mode){
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>
-      <div class="op-prop-row">
+      ${_isAnim
+        ? `<div class="op-prop-row">
+        <button id="pp-edit-anim" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar animación</button>
+      </div>`
+        : `<div class="op-prop-row">
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
-      </div>`;
+      </div>`
+      }`;
     } else if(la.type==='shape'){
       html+=`
       <div class="op-prop-row">
@@ -10708,6 +10719,11 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
+    $('pp-edit-anim')?.addEventListener('click',()=>{
+      edCloseOptionsPanel();
+      _edDrawUnlockUI();
+      gcpOpen(edSelectedIdx);
+    });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
@@ -15010,6 +15026,17 @@ function EditorView_destroy(){
     _edCameraStream = null;
   }
   edHideGearIcon();
+  // Limpiar beforeunload/pagehide — el router destruye la vista sin pasar por _edSizeMonitorStart
+  if (window._edBeforeUnloadFn) {
+    window.removeEventListener('beforeunload', window._edBeforeUnloadFn);
+    window._edBeforeUnloadFn = null;
+  }
+  if (window._edPageHideFn) {
+    window.removeEventListener('pagehide', window._edPageHideFn);
+    window._edPageHideFn = null;
+  }
+  _edAutosaveStop();
+  sessionStorage.removeItem('cx_editing');
 }
 async function edSaveProjectModal(){
   const _newTitle  = $('edMTitle').value.trim() || edProjectMeta.title;
@@ -19917,6 +19944,9 @@ function gcpOpen(edLayerIdx) {
   window._gcpGlobalFrameIdx = 0;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null;
+  // Limpiar pointers del editor general al entrar en GCP (evita fantasmas)
+  if(window._edActivePointers) window._edActivePointers.clear();
+  edPinching = false; edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -20249,6 +20279,10 @@ function _gcpDoClose() {
   if (_sbVc) _sbVc.style.zIndex = '';
   const shell = document.getElementById('gcpShell');
   if (shell) shell.style.display = 'none';
+  // Limpiar pointers del editor general — al volver desde GCP no deben quedar fantasmas
+  if (window._edActivePointers) window._edActivePointers.clear();
+  edPinching = false; edIsDragging = false; edIsResizing = false; edIsRotating = false;
+  _edPinchHappened = false;
   window._gcpActive = false;
   window._gcpEdLayerIdx = -1;
   _gs = null;
