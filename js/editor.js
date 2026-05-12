@@ -13644,6 +13644,8 @@ async function edLoadProject(id){
   }
   if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
   edCurrentPage=0;edLayers=edPages[0].layers;
+  // Aplicar la orientación REAL de la primera hoja (puede diferir de la orientación global de la obra)
+  edOrientation = edPages[0].orientation || edOrientation;
   // Reconstruir _cache de grupos en todas las páginas (buildCache usa edOrientation/edCurrentPage)
   edPages.forEach((pg, _pgi) => {
     const _savedP=edCurrentPage, _savedO=edOrientation;
