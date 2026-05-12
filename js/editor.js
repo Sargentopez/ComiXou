@@ -15020,6 +15020,35 @@ async function edSaveProjectModal(){
 
   const _titleChanged = _newTitle !== edProjectMeta.title;
 
+  // ── Comprobar duplicado de título al renombrar ──────────────────────────
+  if (_titleChanged) {
+    const _edUser = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+    const _edDup  = (typeof ComicStore !== 'undefined') && ComicStore.getAll().find(c =>
+      c.id !== edProjectId &&
+      c.title === _newTitle &&
+      (c.userId === _edUser?.id || c.username === _edUser?.username)
+    );
+    if (_edDup) {
+      // Mostrar confirmación: sobrescribir (abrir la existente) o volver al modal
+      edConfirm(
+        `Ya tienes una obra llamada "${_newTitle.replace(/"/g,'\"')}".
+
+` +
+        '¿Abrir la obra existente o quedarte aquí para cambiar el nombre?',
+        function(confirmed) {
+          if (confirmed) {
+            edCloseProjectModal();
+            sessionStorage.setItem('cx_edit_id', _edDup.id);
+            if (typeof Router !== 'undefined') Router.go('editor');
+          }
+          // Si cancela: el modal queda abierto para que edite el título
+        },
+        { confirmText: 'Abrir obra existente', cancelText: 'Cambiar nombre' }
+      );
+      return;
+    }
+  }
+
   edProjectMeta.title   = _newTitle;
   edProjectMeta.author  = _newAuthor;
   edProjectMeta.genre   = _newGenre;
@@ -16136,7 +16165,7 @@ function EditorView_init(){
         _bib.classList.remove('open'); _bib.innerHTML = ''; delete _bib.dataset.mode;
       }
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
-      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
+      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], #gcp-rule-pop, #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
       if (_gcpUiEl) {
         return; // Es UI del GIF o scrollbar — dejar que sus propios listeners actúen
       } else {
@@ -17431,7 +17460,7 @@ function _gcpHandleDown(e) {
   // verificar que no pertenece a ningún elemento de UI del editor GIF
   if (e.target && e.target !== gc) {
     // Si el target tiene un ancestro que es UI del GIF → ignorar
-    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu]')) return;
+    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], #gcp-rule-pop')) return;
   }
   const rect = gc.getBoundingClientRect();
   const src2 = e.touches ? e.touches[0] : e;
@@ -17441,6 +17470,49 @@ function _gcpHandleDown(e) {
 
   const c = edCoords(e);
   const idx = window._gcpSelIdx;
+
+  // ── Hit de guías GCP (prioridad antes que handles de capas) ──────────────
+  if (_gcpRules.length || _gcpRuleNodes.length) {
+    const _gHit = _gcpRulesHit(c.px, c.py, e.pointerType === 'touch');
+    if (_gHit) {
+      if (_gHit.nodeId !== undefined) {
+        const _gn = _gcpRuleNodes.find(n => n.id === _gHit.nodeId);
+        if (_gn) {
+          const _now = Date.now();
+          const _isDoubleTap = window._gcpRuleLastTap && (_now - window._gcpRuleLastTap < 350) &&
+                               window._gcpRuleLastTapId === _gHit.nodeId;
+          if (_isDoubleTap) {
+            window._gcpRuleLastTap = 0;
+            _gcpRulesNodePanel(_gn); return;
+          }
+          window._gcpRuleLastTap = _now;
+          window._gcpRuleLastTapId = _gHit.nodeId;
+          if (!_gn.locked) _gcpRuleDrag = { nodeId: _gn.id, offX: c.px-_gn.x, offY: c.py-_gn.y };
+        }
+      } else {
+        const _snapId = _gHit.ruleId, _snapPart = _gHit.part;
+        const _hitWx = c.px, _hitWy = c.py;
+        const _now = Date.now();
+        const _isDoubleTap = window._gcpRuleLastTap && (_now - window._gcpRuleLastTap < 350) &&
+                             window._gcpRuleLastTapId === _snapId;
+        if (_isDoubleTap) {
+          window._gcpRuleLastTap = 0;
+          clearTimeout(window._gcpRuleTapTimer);
+          window._gcpRuleTapTimer = null;
+          _gcpRuleDrag = null;
+          _gcpRulesOpenPanel(_snapId, _snapPart, _hitWx, _hitWy); return;
+        }
+        window._gcpRuleLastTap = _now;
+        window._gcpRuleLastTapId = _snapId;
+        clearTimeout(window._gcpRuleTapTimer);
+        window._gcpRuleTapTimer = setTimeout(() => {
+          window._gcpRuleLastTap = 0; window._gcpRuleTapTimer = null;
+        }, 400);
+        _gcpRuleDrag = { ruleId: _snapId, part: _snapPart, offX: undefined, offY: undefined };
+      }
+      return; // hit de guía — no procesar capas
+    }
+  }
 
   // Handles: usar getControlPoints() igual que el editor, pero siempre permitir
   // resize/rotate aunque sea táctil (el editor los desactiva en móvil, nosotros no)
@@ -17819,7 +17891,56 @@ function _gcpHandleMove(e) {
   }
   // Pan con un dedo: desactivado — solo pinch (dos dedos) mueve la cámara
   // ── Drag / resize / rotate normales ─────────────────────────────────────
-  _gcpWithEditorContext(() => { edOnMove(e); });
+  _gcpWithEditorContext(() => {
+    // Drag de guía GCP — tiene prioridad sobre edOnMove si hay drag activo de guía
+    if (_gcpRuleDrag) {
+      const _c2 = edCoords(e);
+      if (_gcpRuleDrag.nodeId !== undefined) {
+        const _n = _gcpRuleNodes.find(n => n.id === _gcpRuleDrag.nodeId);
+        if (_n && !_n.locked) {
+          _n.x = _c2.px - _gcpRuleDrag.offX;
+          _n.y = _c2.py - _gcpRuleDrag.offY;
+          for (const rid of _n.ruleIds) {
+            const _rr = _gcpRules.find(r => r.id === rid);
+            if (_rr) {
+              if (_rr.nodeA === _n.id) { _rr.x1 = _n.x; _rr.y1 = _n.y; }
+              if (_rr.nodeB === _n.id) { _rr.x2 = _n.x; _rr.y2 = _n.y; }
+            }
+          }
+        }
+      } else if (_gcpRuleDrag.ruleId !== undefined) {
+        const _r = _gcpRules.find(r => r.id === _gcpRuleDrag.ruleId);
+        if (_r && !_r.locked) {
+          if (_gcpRuleDrag.offX === undefined) {
+            _gcpRuleDrag.offX = _c2.px - _r.x1;
+            _gcpRuleDrag.offY = _c2.py - _r.y1;
+            _gcpRuleDrag.dx   = _r.x2 - _r.x1;
+            _gcpRuleDrag.dy   = _r.y2 - _r.y1;
+          }
+          if (_gcpRuleDrag.part === 'a') {
+            _r.x1 = _c2.px - _gcpRuleDrag.offX;
+            _r.y1 = _c2.py - _gcpRuleDrag.offY;
+          } else if (_gcpRuleDrag.part === 'b') {
+            _r.x2 = _c2.px - _gcpRuleDrag.offX + _gcpRuleDrag.dx;
+            _r.y2 = _c2.py - _gcpRuleDrag.offY + _gcpRuleDrag.dy;
+          } else {
+            const _nx1 = _c2.px - _gcpRuleDrag.offX;
+            const _ny1 = _c2.py - _gcpRuleDrag.offY;
+            _r.x2 = _nx1 + _gcpRuleDrag.dx;
+            _r.y2 = _ny1 + _gcpRuleDrag.dy;
+            _r.x1 = _nx1; _r.y1 = _ny1;
+          }
+        }
+      }
+      _gcpRedraw(); return;
+    }
+    edOnMove(e);
+    // Snap a guías GCP si hay drag activo de una capa
+    if (edIsDragging && window._gcpSelIdx >= 0) {
+      const _la = window._gcpLayers[window._gcpSelIdx];
+      if (_la) _gcpSnapToRules(_la);
+    }
+  });
   _gcpRedraw();
 }
 
@@ -17832,6 +17953,7 @@ function _gcpHandleUp(e) {
   }
   if (_gcpPtrMap.size === 0) _gcpPanActive = false;
 
+  _gcpRuleDrag = null; // fin drag de guía GCP
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
@@ -17897,6 +18019,14 @@ window._gcpGlobalFrameIdx = 0;
 // Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
 window._gcpHistory    = [];  // array de snapshots del frame activo
 window._gcpHistoryIdx = -1;  // índice actual
+
+// ── Variables del sistema de guías GCP (independientes del editor general) ──
+let _gcpRules      = [];       // guías del editor de animaciones
+let _gcpRuleNodes  = [];       // nodos compartidos (puntos de fuga)
+let _gcpRulesHidden = false;   // visibilidad global
+let _gcpRuleId     = 0;        // contador IDs
+let _gcpRuleDrag   = null;     // drag activo de guía
+let _gcpRulePanelId = null;    // id de guía con panel abierto
 
 function _gcpPushHistory(snapJSON) {
   if (!window._gcpLayers.length) return;
@@ -19545,6 +19675,11 @@ function _gcpRedraw() {
     _gcpDrawLayerAt(gcpCtx, l, l.opacity ?? 1);
   });
 
+  // Dibujar guías GCP (encima de capas, debajo del handle de selección)
+  if (_gcpRules.length || _gcpRuleNodes.length) {
+    _gcpRulesDraw(gcpCtx);
+  }
+
   // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
   _gcpDrawSel();
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -19775,12 +19910,13 @@ function gcpOpen(edLayerIdx) {
   // Guardar qué capa del editor se está editando (para actualizarla al cerrar)
   window._gcpEdLayerIdx = (typeof edLayerIdx === 'number' && edLayerIdx >= 0) ? edLayerIdx : -1;
 
-  // Limpiar y resetear capas
+  // Limpiar y resetear capas + guías
   gcpCtx.clearRect(0, 0, gcpCanvas.width, gcpCanvas.height);
   window._gcpLayers         = [];
   window._gcpSelIdx         = -1;
   window._gcpGlobalFrameIdx = 0;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
+  _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -20053,6 +20189,7 @@ function gcpOpen(edLayerIdx) {
     _repSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
 
     // Sincronizar UI al abrir el dropdown de comportamiento
+    _gcpInitRules(); // botones Guías GCP
     document.querySelector('[data-gcpmenu="comportamiento"]')?.addEventListener('pointerup', () => {
       requestAnimationFrame(_gcpSyncComportamiento);
     });
@@ -20304,6 +20441,307 @@ function _gcpSaveToLib(onDone) {
 }
 
 
+/* ══════════════════════════════════════════════════════════════════════
+   MÓDULO GUÍAS GCP — funciona igual que el sistema edRules del editor general
+   Coordenadas workspace compartidas (edCamera, edMarginX, edPageW, etc.)
+   ══════════════════════════════════════════════════════════════════════ */
+
+function _gcpRuleAdd() {
+  const mx = edMarginX(), my = edMarginY();
+  const pw = edPageW(),   ph = edPageH();
+  const cy = my + ph / 2;
+  const id = ++_gcpRuleId;
+  _gcpRules.push({ id, x1: mx - _ED_RULE_R*2, y1: cy, x2: mx + pw + _ED_RULE_R*2, y2: cy });
+  _gcpRedraw();
+}
+
+function _gcpRuleClear() {
+  if (!_gcpRules.length) return;
+  edConfirm('¿Borrar todas las guías de esta hoja?', () => {
+    _gcpRules = []; _gcpRuleNodes = [];
+    _gcpRulesPanelClose(); _gcpRedraw();
+  }, 'Borrar');
+}
+
+function _gcpRuleDelete(id) {
+  const _rDel = _gcpRules.find(r => r.id === id);
+  if (_rDel) {
+    const _nodeIds = [];
+    if (_rDel.nodeA) _nodeIds.push(_rDel.nodeA);
+    if (_rDel.nodeB) _nodeIds.push(_rDel.nodeB);
+    if (_nodeIds.length) {
+      const _groupRuleIds = new Set([id]);
+      for (const nid of _nodeIds) {
+        const _n = _gcpRuleNodes.find(n => n.id === nid);
+        if (_n) _n.ruleIds.forEach(rid => _groupRuleIds.add(rid));
+      }
+      _gcpRules      = _gcpRules.filter(r => !_groupRuleIds.has(r.id));
+      _gcpRuleNodes  = _gcpRuleNodes.filter(n => !_nodeIds.includes(n.id));
+    } else {
+      _gcpRules = _gcpRules.filter(r => r.id !== id);
+    }
+  } else {
+    _gcpRules = _gcpRules.filter(r => r.id !== id);
+  }
+  _gcpRulesPanelClose(); _gcpRedraw();
+}
+
+function _gcpRuleDuplicate(id) {
+  const r = _gcpRules.find(r => r.id === id); if (!r) return;
+  const newId = ++_gcpRuleId;
+  _gcpRules.push({ id: newId, x1: r.x1+20, y1: r.y1+20, x2: r.x2+20, y2: r.y2+20 });
+  _gcpRulesPanelClose(); _gcpRedraw();
+}
+
+function _gcpRulesDraw(ctx) {
+  if (!_gcpRules.length && !_gcpRuleNodes.length) return;
+  if (_gcpRulesHidden) return;
+  const z = edCamera.z;
+  ctx.save();
+  const _sharedEnds = new Set();
+  for (const n of _gcpRuleNodes) {
+    for (const rid of n.ruleIds) {
+      const _rr = _gcpRules.find(r => r.id === rid);
+      if (!_rr) continue;
+      if (_rr.nodeA === n.id) _sharedEnds.add(rid+'_a');
+      if (_rr.nodeB === n.id) _sharedEnds.add(rid+'_b');
+    }
+  }
+  for (const r of _gcpRules) {
+    if (r.hidden) continue;
+    const isActive = (_gcpRulePanelId === r.id) || (_gcpRuleDrag?.ruleId === r.id);
+    const lineColor = r.locked ? 'rgba(255,160,30,0.8)' : (isActive ? '#1a8cff' : 'rgba(30,140,255,0.7)');
+    const dotColor  = r.locked ? 'rgba(255,160,30,0.9)' : (isActive ? '#1a8cff' : 'rgba(30,140,255,0.75)');
+    ctx.beginPath();
+    ctx.moveTo(r.x1, r.y1); ctx.lineTo(r.x2, r.y2);
+    ctx.strokeStyle = lineColor; ctx.lineWidth = 1.5/z;
+    ctx.setLineDash([8/z, 5/z]); ctx.stroke(); ctx.setLineDash([]);
+    for (const [ex, ey, key] of [[r.x1,r.y1,r.id+'_a'],[r.x2,r.y2,r.id+'_b']]) {
+      if (_sharedEnds.has(key)) continue;
+      ctx.beginPath(); ctx.arc(ex, ey, _ED_RULE_R/z, 0, Math.PI*2);
+      ctx.fillStyle = dotColor; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5/z; ctx.stroke();
+    }
+  }
+  for (const n of _gcpRuleNodes) {
+    const isActiveN = (_gcpRuleDrag?.nodeId === n.id);
+    const nodeColor = n.locked ? 'rgba(255,160,30,0.95)' : (isActiveN ? '#ff9900' : 'rgba(255,140,0,0.9)');
+    const nr = (_ED_RULE_R*1.5)/z;
+    ctx.beginPath(); ctx.arc(n.x, n.y, nr, 0, Math.PI*2);
+    ctx.fillStyle = nodeColor; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2/z; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.2/z;
+    ctx.beginPath();
+    ctx.moveTo(n.x-nr*0.5, n.y); ctx.lineTo(n.x+nr*0.5, n.y);
+    ctx.moveTo(n.x, n.y-nr*0.5); ctx.lineTo(n.x, n.y+nr*0.5);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function _gcpRulesHit(wx, wy, isTouch) {
+  if (_gcpRulesHidden) return null;
+  const z = edCamera.z;
+  const rPx = (isTouch ? 22 : _ED_RULE_R)/z;
+  const lPx = (isTouch ? _ED_RULE_LINE_HIT_TOUCH : _ED_RULE_LINE_HIT)/z;
+  const nPx = (_ED_RULE_R*1.5)/z;
+  for (let i = _gcpRuleNodes.length-1; i >= 0; i--) {
+    const n = _gcpRuleNodes[i];
+    if (Math.hypot(wx-n.x, wy-n.y) <= nPx) return { nodeId: n.id };
+  }
+  for (let i = _gcpRules.length-1; i >= 0; i--) {
+    const r = _gcpRules[i];
+    if (r.hidden) continue;
+    if (!r.nodeA && Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
+    if (!r.nodeB && Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
+    if (!r.locked) {
+      const dx = r.x2-r.x1, dy = r.y2-r.y1, len2 = dx*dx+dy*dy;
+      if (len2 > 0) {
+        const t = Math.max(0, Math.min(1, ((wx-r.x1)*dx+(wy-r.y1)*dy)/len2));
+        if (Math.hypot(wx-(r.x1+t*dx), wy-(r.y1+t*dy)) <= lPx) return { ruleId: r.id, part: 'line' };
+      }
+    }
+  }
+  return null;
+}
+
+function _gcpRulesClosePop() {
+  const pop = document.getElementById('gcp-rule-pop');
+  if (pop) pop.remove();
+  document.removeEventListener('pointerdown', _gcpRulesPopOutside);
+}
+
+function _gcpRulesPanelClose() { _gcpRulesClosePop(); _gcpRulePanelId = null; }
+
+function _gcpRulesPopOutside(e) {
+  if (e.target.closest('#gcpMenuBar') || e.target.closest('.ed-dropdown') ||
+      e.target.closest('.ed-submenu') || e.target.closest('#gcp-rule-pop')) return;
+  _gcpRulesClosePop();
+}
+
+function _gcpRulesOpenPanel(id, part, wx, wy) {
+  _gcpRulesClosePop();
+  const r = _gcpRules.find(r => r.id === id); if (!r) return;
+  _gcpRulePanelId = id;
+  const sc = edWorldToScreen(wx, wy);
+  const pop = document.createElement('div');
+  pop.id = 'gcp-rule-pop';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
+  const _svgH = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="2" y1="12" x2="22" y2="12" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+  const _svgV = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><line x1="12" y1="2" x2="12" y2="22" stroke="white" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+  const _svgDup = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><rect x="9" y="9" width="11" height="11" rx="1.5" stroke="white" stroke-width="2" fill="none"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" stroke="white" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`;
+  const _svgEye = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="white" stroke-width="2" fill="none"/></svg>`;
+  const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+  const _bsLock = `background:${r.locked?'rgba(255,255,255,0.25)':'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
+  const _sep = '<div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div>';
+  const _inGroup = !!(r.nodeA || r.nodeB);
+  if (_inGroup) {
+    pop.innerHTML = `<button id="grp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="grp-lock" title="${r.locked?'Desbloquear':'Bloquear'}" style="${_bsLock}">${r.locked?'🔒':'🔓'}</button>${_sep}<button id="grp-hide" title="Ocultar esta guía" style="${_bs}">${_svgEye}</button>${_sep}<button id="grp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  } else {
+    pop.innerHTML = `<button id="grp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="grp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="grp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="grp-lock" title="${r.locked?'Desbloquear':'Bloquear'}" style="${_bsLock}">${r.locked?'🔒':'🔓'}</button>${_sep}<button id="grp-hide" title="Ocultar esta guía" style="${_bs}">${_svgEye}</button>${_sep}<button id="grp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  }
+  document.body.appendChild(pop);
+  const PW = pop.offsetWidth||150, PH = pop.offsetHeight||44;
+  let px = sc.x+22, py = sc.y-PH/2;
+  if (px+PW > window.innerWidth-8) px = sc.x-PW-22;
+  if (py < 8) py = 8;
+  if (py+PH > window.innerHeight-8) py = window.innerHeight-PH-8;
+  pop.style.left = px+'px'; pop.style.top = py+'px';
+  document.getElementById('grp-dup')?.addEventListener('click', e => { e.stopPropagation(); _gcpRuleDuplicate(id); });
+  document.getElementById('grp-horiz')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
+    if (part==='a'){r.x2=r.x1+dist;r.y2=r.y1;}else{r.x1=r.x2-dist;r.y1=r.y2;}
+    _gcpRulesClosePop(); _gcpRedraw();
+  });
+  document.getElementById('grp-vert')?.addEventListener('click', e => {
+    e.stopPropagation();
+    const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
+    if (part==='a'){r.x2=r.x1;r.y2=r.y1+dist;}else{r.x1=r.x2;r.y1=r.y2-dist;}
+    _gcpRulesClosePop(); _gcpRedraw();
+  });
+  document.getElementById('grp-lock')?.addEventListener('click', e => {
+    e.stopPropagation(); r.locked = !r.locked; _gcpRulesClosePop(); _gcpRedraw();
+  });
+  document.getElementById('grp-hide')?.addEventListener('click', e => {
+    e.stopPropagation(); r.hidden = true; _gcpRulesClosePop(); _gcpRedraw();
+  });
+  document.getElementById('grp-del')?.addEventListener('click', e => {
+    e.stopPropagation(); _gcpRuleDelete(id);
+  });
+  ['pointerdown','touchstart'].forEach(ev => pop.addEventListener(ev, e => e.stopPropagation(), {passive:true}));
+  setTimeout(() => { document.addEventListener('pointerdown', _gcpRulesPopOutside, {passive:true}); }, 50);
+}
+
+function _gcpRulesNodePanel(n) {
+  _gcpRulesClosePop();
+  const sc = edWorldToScreen(n.x, n.y);
+  const pop = document.createElement('div');
+  pop.id = 'gcp-rule-pop';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
+  const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+  const _bsLock = `background:${n.locked?'rgba(255,255,255,0.25)':'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
+  pop.innerHTML = `<button id="gnp-lock" style="${_bsLock}">${n.locked?'🔒':'🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="gnp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  document.body.appendChild(pop);
+  const PW = pop.offsetWidth||100, PH = pop.offsetHeight||44;
+  let px = sc.x+22, py = sc.y-PH/2;
+  if (px+PW > window.innerWidth-8) px = sc.x-PW-22;
+  if (py < 8) py = 8;
+  if (py+PH > window.innerHeight-8) py = window.innerHeight-PH-8;
+  pop.style.left = px+'px'; pop.style.top = py+'px';
+  document.getElementById('gnp-lock')?.addEventListener('click', e => {
+    e.stopPropagation(); n.locked = !n.locked;
+    for (const rid of n.ruleIds) { const _rr=_gcpRules.find(r=>r.id===rid); if(_rr) _rr.locked=n.locked; }
+    _gcpRulesClosePop(); _gcpRedraw();
+  });
+  document.getElementById('gnp-del')?.addEventListener('click', e => {
+    e.stopPropagation();
+    for (const rid of n.ruleIds) {
+      const _rr = _gcpRules.find(r=>r.id===rid);
+      if (_rr) { if(_rr.nodeA===n.id)_rr.nodeA=null; if(_rr.nodeB===n.id)_rr.nodeB=null; }
+    }
+    _gcpRuleNodes = _gcpRuleNodes.filter(nn=>nn.id!==n.id);
+    _gcpRulesClosePop(); _gcpRedraw();
+  });
+  ['pointerdown','touchstart'].forEach(ev => pop.addEventListener(ev, e => e.stopPropagation(), {passive:true}));
+  setTimeout(() => { document.addEventListener('pointerdown', _gcpRulesPopOutside, {passive:true}); }, 50);
+}
+
+function _gcpRuleToggleSync() {
+  const _txt = document.getElementById('gcp-rule-toggle-txt'); if (!_txt) return;
+  const _anyHidden = _gcpRulesHidden || _gcpRules.some(r => r.hidden);
+  _txt.textContent = _anyHidden ? 'Mostrar guías' : 'Ocultar guías';
+}
+
+function _gcpSnapToRules(la) {
+  if (!_gcpRules.length || _gcpRulesHidden) return;
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const z  = edCamera.z;
+  const threshold = _ED_SNAP_THRESHOLD_PX / z;
+  const objCx = mx + la.x * pw, objCy = my + la.y * ph;
+  const hw = (la.width||0)*pw/2, hh = (la.height||0)*ph/2;
+  const candidates = [{ox:0,oy:0},{ox:-hw,oy:0},{ox:hw,oy:0},{ox:0,oy:-hh},{ox:0,oy:hh}];
+  let bestDistX=threshold, bestDistY=threshold, snapDx=0, snapDy=0;
+  for (const r of _gcpRules) {
+    if (r.hidden) continue;
+    const rdx=r.x2-r.x1, rdy=r.y2-r.y1, rlen=Math.hypot(rdx,rdy);
+    if (rlen<1) continue;
+    const rnx=-rdy/rlen, rny=rdx/rlen;
+    for (const cand of candidates) {
+      const px=objCx+cand.ox, py=objCy+cand.oy;
+      const vx=px-r.x1, vy=py-r.y1;
+      const proj=vx*rnx+vy*rny, dist=Math.abs(proj);
+      if (dist < threshold) {
+        const dx=-proj*rnx, dy=-proj*rny;
+        const isMoreVertical = Math.abs(rdy) > Math.abs(rdx);
+        if (isMoreVertical) { if(dist<bestDistX){bestDistX=dist;snapDx=dx;} }
+        else { if(dist<bestDistY){bestDistY=dist;snapDy=dy;} }
+        if (Math.abs(Math.abs(rdx)-Math.abs(rdy))<rlen*0.2) {
+          if(dist<bestDistX){bestDistX=dist;snapDx=dx;}
+          if(dist<bestDistY){bestDistY=dist;snapDy=dy;}
+        }
+      }
+    }
+  }
+  if (snapDx!==0) la.x += snapDx/pw;
+  if (snapDy!==0) la.y += snapDy/ph;
+}
+
+function _gcpInitRules() {
+  document.getElementById('gcp-rule-add')?.addEventListener('click', () => {
+    _gcpRuleAdd();
+    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+  });
+  document.getElementById('gcp-rule-clear')?.addEventListener('click', () => {
+    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    _gcpRuleClear();
+  });
+  document.getElementById('gcp-rule-toggle')?.addEventListener('click', () => {
+    const _anyHidden = _gcpRulesHidden || _gcpRules.some(r => r.hidden);
+    if (_anyHidden) { _gcpRulesHidden=false; _gcpRules.forEach(r=>{r.hidden=false;}); }
+    else { _gcpRulesHidden = true; }
+    _gcpRuleToggleSync();
+    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    _gcpRedraw();
+  });
+  document.getElementById('gcp-rule-lock-all')?.addEventListener('click', () => {
+    _gcpRules.forEach(r=>{r.locked=true;});
+    _gcpRuleNodes.forEach(n=>{n.locked=true;});
+    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    _gcpRedraw();
+  });
+  // Dropdown de Guías — mismo patrón que los otros dropdowns del GCP
+  document.querySelector('[data-gcpmenu="gcpRules"]')?.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const dd = document.getElementById('gdd-gcpRules');
+    if (!dd) return;
+    const wasOpen = dd.classList.contains('open');
+    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    if (!wasOpen) { dd.classList.add('open'); _gcpRuleToggleSync(); }
+  });
+}
+
 // _gcpDownloadApng — exporta animacion GCP como APNG transparente
 // Motor: UPNG.js (photopea) + pako — mismo stack que Squoosh (Google).
 async function _gcpDownloadApng() {
@@ -20353,15 +20791,25 @@ async function _gcpDownloadApng() {
       }
     }
   });
+  // Garantizar que el bounding box NUNCA es menor que la zona de la página.
+  // Así si frame 1 tiene contenido pequeño y frame 5 lo tiene grande, el APNG
+  // exportado siempre tiene el tamaño correcto para todos los frames.
+  const pageMinX = marginX + offX, pageMinY = marginY + offY;
+  const pageMaxX = pageMinX + pageW - 1, pageMaxY = pageMinY + pageH - 1;
   if (maxX < minX || maxY < minY) {
-    minX = marginX + offX; minY = marginY + offY;
-    maxX = minX + pageW - 1; maxY = minY + pageH - 1;
+    minX = pageMinX; minY = pageMinY; maxX = pageMaxX; maxY = pageMaxY;
+  } else {
+    minX = Math.min(minX, pageMinX); minY = Math.min(minY, pageMinY);
+    maxX = Math.max(maxX, pageMaxX); maxY = Math.max(maxY, pageMaxY);
   }
   const pad = 4;
   const cropX = Math.max(0, minX - pad), cropY = Math.max(0, minY - pad);
   const cropW = Math.min(wsW, maxX + pad + 1) - cropX;
   const cropH = Math.min(wsH, maxY + pad + 1) - cropY;
 
+  // Todos los frames se renderizan al MISMO tamaño (cropW×cropH) con el MISMO
+  // offset (cropX,cropY). UPNG recibe frames idénticos en dimensiones → no
+  // aplica optimizaciones de sub-frame que causan recortes incorrectos.
   const bufs = renderedFrames.map(function(fc) {
     const c = document.createElement('canvas');
     c.width = cropW; c.height = cropH;
@@ -20497,7 +20945,11 @@ function _gcpDownloadGif() {
       }
     }
   });
-  if(maxX<minX||maxY<minY){minX=marginX+offX;minY=marginY+offY;maxX=minX+pageW-1;maxY=minY+pageH-1;}
+  // Bounding box mínimo = zona de página completa (mismo fix que APNG)
+  const _gifPMinX=marginX+offX, _gifPMinY=marginY+offY;
+  const _gifPMaxX=_gifPMinX+pageW-1, _gifPMaxY=_gifPMinY+pageH-1;
+  if(maxX<minX||maxY<minY){minX=_gifPMinX;minY=_gifPMinY;maxX=_gifPMaxX;maxY=_gifPMaxY;}
+  else{minX=Math.min(minX,_gifPMinX);minY=Math.min(minY,_gifPMinY);maxX=Math.max(maxX,_gifPMaxX);maxY=Math.max(maxY,_gifPMaxY);}
   const pad=4;
   const cropX=Math.max(0,minX-pad), cropY=Math.max(0,minY-pad);
   const cropW=Math.min(wsW,maxX+pad+1)-cropX;
@@ -20505,44 +20957,116 @@ function _gcpDownloadGif() {
 
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
 
-  // Cuantización: recoger todos los colores únicos de todos los frames
-  // y construir paleta de 255 colores + índice 0 = transparente
-  // Usar canvas con fondo blanco para aplanar semi-transparencias
+  // ── GIF: recortar + pre-componer alfa sobre fondo blanco ─────────────────
+  // Los píxeles semi-transparentes se COMPOSITAN manualmente sobre blanco
+  // (premultiplication correcta: R_out = R*A/255 + 255*(1-A/255))
+  // índice 0 de paleta = color transparente GIF (para áreas totalmente vacías)
+  const GIF_ALPHA_THRESH = 32; // píxeles con alpha < umbral → transparentes GIF
   const croppedFrames = renderedFrames.map(function(fc) {
-    const c = document.createElement('canvas');
-    c.width = cropW; c.height = cropH;
-    const ctx = c.getContext('2d');
-    // Fondo blanco para aplanar transparencia (GIF no tiene alpha real)
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, cropW, cropH);
-    ctx.drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-    return ctx.getImageData(0, 0, cropW, cropH);
+    const raw = fc.getContext('2d').getImageData(cropX, cropY, cropW, cropH);
+    const d = raw.data;
+    // Pre-compositar alpha sobre blanco IN-PLACE
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i+3];
+      if (a < GIF_ALPHA_THRESH) {
+        d[i]=255; d[i+1]=255; d[i+2]=255; d[i+3]=0; // marcado transparente
+      } else if (a < 255) {
+        const t = a / 255;
+        d[i]   = Math.round(d[i]   * t + 255 * (1 - t));
+        d[i+1] = Math.round(d[i+1] * t + 255 * (1 - t));
+        d[i+2] = Math.round(d[i+2] * t + 255 * (1 - t));
+        d[i+3] = 255;
+      }
+    }
+    return raw;
   });
 
-  // Construir paleta global de 256 colores via muestreo
-  // Índice 0 reservado para transparencia (blanco puro = fondo, tratado como opaco)
-  const colorMap = {};
-  const palette = new Array(256).fill(0);
-  palette[0] = 0xFFFFFF; // índice 0 = blanco (fondo, no se usa como transparente real)
-  let palSize = 1;
+  // ── Median-cut quantization (255 colores opacos + índice 0 = transparente) ──
+  // Recogemos todos los píxeles opacos de todos los frames
+  function _gifMedianCut(samples, maxColors) {
+    // Cada muestra: [r,g,b]
+    function makeBox(pts) {
+      let rMin=255,rMax=0,gMin=255,gMax=0,bMin=255,bMax=0;
+      for (const p of pts) {
+        if(p[0]<rMin)rMin=p[0]; if(p[0]>rMax)rMax=p[0];
+        if(p[1]<gMin)gMin=p[1]; if(p[1]>gMax)gMax=p[1];
+        if(p[2]<bMin)bMin=p[2]; if(p[2]>bMax)bMax=p[2];
+      }
+      return {pts, rMin,rMax,gMin,gMax,bMin,bMax};
+    }
+    function splitBox(box) {
+      const rRange = box.rMax-box.rMin, gRange = box.gMax-box.gMin, bRange = box.bMax-box.bMin;
+      let axis = 0;
+      if (gRange >= rRange && gRange >= bRange) axis = 1;
+      else if (bRange >= rRange && bRange >= gRange) axis = 2;
+      box.pts.sort(function(a,b){return a[axis]-b[axis];});
+      const mid = box.pts.length >> 1;
+      return [makeBox(box.pts.slice(0,mid)), makeBox(box.pts.slice(mid))];
+    }
+    function avgColor(box) {
+      let r=0,g=0,b=0;
+      for(const p of box.pts){r+=p[0];g+=p[1];b+=p[2];}
+      const n=box.pts.length;
+      return [Math.round(r/n),Math.round(g/n),Math.round(b/n)];
+    }
+    // Muestrear píxeles (máx 8000 para velocidad)
+    const step = Math.max(1, Math.floor(samples.length / 8000));
+    const pts = [];
+    for (let i = 0; i < samples.length; i += step) pts.push(samples[i]);
+    if (!pts.length) return [[255,255,255]];
+    let boxes = [makeBox(pts)];
+    while (boxes.length < maxColors) {
+      // Ordenar por volumen × cantidad y dividir el mayor
+      boxes.sort(function(a,b){
+        const va=(a.rMax-a.rMin)*(a.gMax-a.gMin+1)*(a.bMax-a.bMin+1)*a.pts.length;
+        const vb=(b.rMax-b.rMin)*(b.gMax-b.gMin+1)*(b.bMax-b.bMin+1)*b.pts.length;
+        return vb-va;
+      });
+      if (boxes[0].pts.length < 2) break;
+      const [a,bx] = splitBox(boxes.shift());
+      boxes.push(a); boxes.push(bx);
+    }
+    return boxes.map(avgColor);
+  }
 
+  // Recoger muestras [r,g,b] de píxeles opacos
+  const allSamples = [];
   croppedFrames.forEach(function(imgd) {
     const d = imgd.data;
-    for(let i=0;i<d.length;i+=4) {
-      if(palSize >= 255) return;
-      const key = (d[i]>>1<<17)|(d[i+1]>>1<<9)|(d[i+2]>>1);  // reducir a 7bit por canal
-      if(colorMap[key] == null) { colorMap[key]=palSize; palette[palSize++]=(d[i]<<16)|(d[i+1]<<8)|d[i+2]; }
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i+3] === 255) allSamples.push([d[i], d[i+1], d[i+2]]);
     }
   });
-  // Rellenar el resto de la paleta hasta 256
-  while(palSize < 256) palette[palSize++] = 0;
 
-  // Convertir cada frame a índices de paleta
+  // Paleta: índice 0 = transparente (color marcador), índices 1..N = colores reales
+  const mcColors = _gifMedianCut(allSamples, 255);
+  const palette = new Array(256).fill(0);
+  palette[0] = 0xFFFFFF; // marcador transparente (no se mostrará nunca como opaco)
+  mcColors.forEach(function(c, i) { palette[i+1] = (c[0]<<16)|(c[1]<<8)|c[2]; });
+  const palSize = mcColors.length + 1;
+  while(palette.length < 256) palette.push(0);
+
+  // Construir k-d tree simplificado para nearest-color (búsqueda lineal en paleta pequeña)
+  function _gifNearestPalIdx(r,g,b) {
+    let bestIdx=1, bestDist=Infinity;
+    for (let i=1; i<palSize; i++) {
+      const pc=palette[i];
+      const dr=r-((pc>>16)&0xFF), dg=g-((pc>>8)&0xFF), db=b-(pc&0xFF);
+      const dist=dr*dr+dg*dg+db*db;
+      if(dist<bestDist){bestDist=dist;bestIdx=i;}
+    }
+    return bestIdx;
+  }
+
+  // Convertir cada frame a índices de paleta con nearest-color
   const indexFrames = croppedFrames.map(function(imgd) {
     const d = imgd.data, pixels = new Uint8Array(cropW * cropH);
-    for(let i=0;i<pixels.length;i++) {
-      const key = (d[i*4]>>1<<17)|(d[i*4+1]>>1<<9)|(d[i*4+2]>>1);
-      pixels[i] = colorMap[key] != null ? colorMap[key] : 0;
+    for (let i = 0; i < pixels.length; i++) {
+      if (d[i*4+3] < GIF_ALPHA_THRESH) {
+        pixels[i] = 0; // transparente GIF
+      } else {
+        pixels[i] = _gifNearestPalIdx(d[i*4], d[i*4+1], d[i*4+2]);
+      }
     }
     return pixels;
   });

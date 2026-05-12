@@ -111,7 +111,9 @@ function AuthView_init() {
 
       if (!result.ok) {
         const msg = result.detail ? `${I18n.t(result.err)} (${result.detail})` : I18n.t(result.err);
-        showError('emailError', msg);
+        // errUsernameExists → señalar el campo username, no el email
+        const errField = result.err === 'errUsernameExists' ? 'usernameError' : 'emailError';
+        showError(errField, msg);
         return;
       }
 

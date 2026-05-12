@@ -63,6 +63,32 @@ const Auth = (() => {
     } catch (_) {}
   }
 
+  // Versión que detecta conflicto de username único (constraint DB)
+  async function _upsertProfileSafe(id, username, email, role, token) {
+    try {
+      const r = await fetch(`${SB_URL}/rest/v1/authors`, {
+        method: 'POST',
+        headers: {
+          'apikey': SB_KEY,
+          'Authorization': `Bearer ${token || SB_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify({ id, username, email, role })
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        // Código 23505 = unique_violation en PostgreSQL
+        if (r.status === 409 || (d.code === '23505') ||
+            (d.message || '').toLowerCase().includes('unique') ||
+            (d.message || '').toLowerCase().includes('username')) {
+          return 'duplicate_username';
+        }
+      }
+    } catch (_) {}
+    return 'ok';
+  }
+
   async function login(email, password) {
     const key = email.toLowerCase().trim();
     try {
@@ -102,26 +128,37 @@ const Auth = (() => {
   async function register(username, email, password) {
     const key = email.toLowerCase().trim();
     if (FIXED_USERS[key]) return { ok: false, err: 'errUserExists' };
+    const uname = username.trim();
+    // Verificar username único contra tabla authors ANTES de crear la cuenta
+    try {
+      const uCheck = await fetch(
+        `${SB_URL}/rest/v1/authors?username=eq.${encodeURIComponent(uname)}&select=id&limit=1`,
+        { headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' } }
+      );
+      const uData = await uCheck.json();
+      if (Array.isArray(uData) && uData.length > 0) return { ok: false, err: 'errUsernameExists' };
+    } catch (_) { /* sin red: dejar que el signup falle después */ }
     try {
       const res = await fetch(`${SB_URL}/auth/v1/signup`, {
         method: 'POST',
         headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: key, password, data: { username: username.trim(), role: 'author' } }),
+        body: JSON.stringify({ email: key, password, data: { username: uname, role: 'author' } }),
       });
       const data = await res.json();
       // Supabase signup OK: res.ok y sin campo 'error' en la respuesta
       const userId = data.user?.id || data.id;
       const token  = data.session?.access_token || data.access_token;
       if (res.ok && !data.error && !data.error_description) {
-        const uid = userId || 'pending'; // puede no haber id si requiere confirmación
-        if (userId) await _upsertProfile(userId, username.trim(), key, 'author', token);
+        if (userId) {
+          const upRes = await _upsertProfileSafe(userId, uname, key, 'author', token);
+          if (upRes === 'duplicate_username') return { ok: false, err: 'errUsernameExists' };
+        }
         return { ok: true };
       }
       const errMsg = (data.error_description || data.msg || data.message || '').toLowerCase();
       console.warn('Supabase signup error:', data);
       if (errMsg.includes('already') || errMsg.includes('exists')) return { ok: false, err: 'errUserExists' };
       if (errMsg.includes('password') || errMsg.includes('weak')) return { ok: false, err: 'errPassLen' };
-      // Devolver mensaje real para diagnóstico
       return { ok: false, err: 'errRegisterFail', detail: data.error_description || data.msg || data.message || JSON.stringify(data) };
     } catch (e) {
       console.warn('register fetch error:', e);

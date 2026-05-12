@@ -641,6 +641,30 @@ function _mcCreateProject() {
   if (!title) { document.getElementById('mcTitle')?.focus(); return; }
 
   const user = Auth.currentUser?.() || null;
+
+  // ── Comprobar si ya existe una obra con ese título para este usuario ──────
+  const _mcDuplicateWork = ComicStore.getAll().find(c =>
+    c.title === title &&
+    (c.userId === (user?.id) || c.username === (user?.username))
+  );
+
+  if (_mcDuplicateWork) {
+    _mcConfirmDuplicate(title, _mcDuplicateWork, function(overwrite) {
+      if (overwrite) {
+        // Sobrescribir: abrir el editor con la obra existente
+        _mcCloseModal();
+        sessionStorage.setItem('cx_edit_id', _mcDuplicateWork.id);
+        Router.go('editor');
+      }
+      // Si no sobrescribe: el modal de nueva obra sigue abierto para que edite el nombre
+    });
+    return;
+  }
+
+  _mcDoCreateProject(title, genre, social, navMode, user);
+}
+
+function _mcDoCreateProject(title, genre, social, navMode, user) {
   const comic = {
     id:       'comic_' + Date.now(),
     userId:   user ? user.id : '_anon_',
@@ -671,6 +695,36 @@ function _mcCreateProject() {
   // Abrir el editor con este proyecto
   sessionStorage.setItem('cx_edit_id', comic.id);
   Router.go('editor');
+}
+
+// Modal de confirmación de título duplicado desde "Nuevo proyecto"
+function _mcConfirmDuplicate(title, existingComic, callback) {
+  // Eliminar modal anterior si existe
+  document.getElementById('mcDupModal')?.remove();
+  const ov = document.createElement('div');
+  ov.className = 'mc-modal-overlay open';
+  ov.id = 'mcDupModal';
+  ov.innerHTML = `
+    <div class="mc-modal-box" style="gap:14px">
+      <h3 class="mc-modal-title" style="font-size:1.05rem">Título duplicado</h3>
+      <p style="margin:0;color:var(--gray-600);font-size:.9rem;line-height:1.5">
+        Ya tienes una obra llamada <strong style="color:var(--primary)">${title.replace(/</g,'&lt;')}</strong>.<br>
+        ¿Qué deseas hacer?
+      </p>
+      <div class="mc-modal-actions" style="flex-direction:column;gap:8px">
+        <button class="btn btn-primary" id="mcDupOverwrite" style="width:100%">Abrir la obra existente</button>
+        <button class="btn" id="mcDupBack" style="width:100%">Cambiar el nombre</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  document.getElementById('mcDupOverwrite').addEventListener('click', function() {
+    ov.remove();
+    callback(true);
+  });
+  document.getElementById('mcDupBack').addEventListener('click', function() {
+    ov.remove();
+    callback(false);
+  });
 }
 
 /* ── TOAST ── */
