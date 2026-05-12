@@ -18199,21 +18199,28 @@ function _gcpTrimLeadingInvisible() {
 
 // Elimina interpolados adyacentes a fi en todas las capas.
 // Se llama cuando un frame clave queda invisible (ya no puede ser extremo de interpolación).
+// Oculta o muestra los frames interpolados adyacentes a fi en todas las capas.
+// Al ocultar un frame clave, sus interpolados vecinos se ocultan también (visible:false).
+// Al volver a mostrar el frame clave, sus interpolados vecinos se muestran también.
 function _gcpPurgeInterpAround(fi) {
+  // Alias por compatibilidad — delega a _gcpSetInterpVisibilityAround(fi, false)
+  _gcpSetInterpVisibilityAround(fi, false);
+}
+function _gcpSetInterpVisibilityAround(fi, visible) {
   window._gcpLayers.forEach(la => {
     if (!la._frames) return;
-    // Eliminar interpolados DESPUÉS de fi (entre fi y el siguiente clave)
-    let afterCount = 0;
+    // Interpolados DESPUÉS de fi
     let i = fi + 1;
-    while (i < la._frames.length && la._frames[i]?._interp) { afterCount++; i++; }
-    if (afterCount > 0) la._frames.splice(fi + 1, afterCount);
-    // Eliminar interpolados ANTES de fi (entre el clave anterior y fi)
-    // fi puede haberse desplazado si había interp después — recalcular
-    let beforeEnd = fi; // fi sigue igual porque splice fue hacia adelante
-    let j = beforeEnd - 1;
-    let beforeCount = 0;
-    while (j >= 0 && la._frames[j]?._interp) { beforeCount++; j--; }
-    if (beforeCount > 0) la._frames.splice(j + 1, beforeCount);
+    while (i < la._frames.length && la._frames[i]?._interp) {
+      la._frames[i] = {...la._frames[i], visible};
+      i++;
+    }
+    // Interpolados ANTES de fi
+    let j = fi - 1;
+    while (j >= 0 && la._frames[j]?._interp) {
+      la._frames[j] = {...la._frames[j], visible};
+      j--;
+    }
   });
 }
 
@@ -19138,8 +19145,11 @@ function _gcpUpdateFramesBar() {
         eyeBtnH.textContent = '👁';
         eyeBtnH.addEventListener('click', e => {
           e.stopPropagation();
-          if (la._frames && fi < la._frames.length)
+          if (la._frames && fi < la._frames.length) {
             la._frames[fi] = {...la._frames[fi], visible: true};
+            // Restaurar visibilidad de interpolados adyacentes
+            _gcpSetInterpVisibilityAround(fi, true);
+          }
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
