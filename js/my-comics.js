@@ -412,9 +412,12 @@ function _mcRenderList() {
               const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
               const _bibLocalKey = `cs_biblioteca_local_${comicToEdit.id}`;
               // Guardar la biblioteca local actual como backup (solo si no existe ya un backup)
+              // Backup: guardar la biblioteca local actual antes de reemplazar con la nube
+              // (solo si no existe ya un backup)
               const _bibLocalExists = localStorage.getItem(_bibLocalKey);
               if (!_bibLocalExists) {
-                const _bibCurrentRaw = localStorage.getItem(_bibKey);
+                const _bibCurrentData = window._bibLoad ? window._bibLoad() : null;
+                const _bibCurrentRaw = _bibCurrentData ? JSON.stringify(_bibCurrentData) : localStorage.getItem(_bibKey);
                 if (_bibCurrentRaw) {
                   try { localStorage.setItem(_bibLocalKey, _bibCurrentRaw); } catch(e) {}
                 }
@@ -442,10 +445,12 @@ function _mcRenderList() {
                 }));
                 if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
                 // Reemplazar la biblioteca local con la de la nube (no merge)
-                try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {}
+                if (window._bibSave) { window._bibSave({ folders: cleanFolders }); }
+                else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
               } else {
                 // La nube no tiene biblioteca — limpiar la local para no mezclar datos
-                try { localStorage.removeItem(_bibKey); } catch(e) {}
+                if (window._bibSave) { window._bibSave({ folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }] }); }
+                else { try { localStorage.removeItem(_bibKey); } catch(e) {} }
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
@@ -464,8 +469,9 @@ function _mcRenderList() {
         if (_bibUser && _bibUser.id && _bibSbId && typeof SupabaseClient.bibDownload === 'function') {
           try {
             const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
-            const _bibRaw = localStorage.getItem(_bibKey);
-            const _bibLocal = (() => { try { return JSON.parse(_bibRaw || 'null'); } catch(e) { return null; } })();
+            const _bibLocal = window._bibLoad ? window._bibLoad() : (() => {
+              try { return JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) { return null; }
+            })();
             const _bibEmpty = !_bibLocal || !_bibLocal.folders || _bibLocal.folders.every(f => !f.items || f.items.length === 0);
             if (_bibEmpty) {
               // No hay biblioteca local — descargar la de la nube como punto de partida
@@ -485,7 +491,8 @@ function _mcRenderList() {
                   })
                 }));
                 if (_bibIdbW.length) await Promise.all(_bibIdbW);
-                try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {}
+                if (window._bibSave) { window._bibSave({ folders: cleanFolders }); }
+                else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
               }
             }
             // Si hay biblioteca local → no tocar nada (la versión local es la canónica)

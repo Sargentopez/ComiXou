@@ -12653,7 +12653,7 @@ async function edSaveProject(_keepOverlay){
     const _bibBackup = localStorage.getItem(_bibLocalBackupKey);
     if (_bibBackup) {
       try {
-        localStorage.setItem(`cs_biblioteca_${edProjectId}`, _bibBackup);
+        try { _bibSave(JSON.parse(_bibBackup)); } catch(_e) {}
         localStorage.removeItem(_bibLocalBackupKey);
       } catch(_e) {}
     }
@@ -13610,7 +13610,7 @@ async function edLoadProject(id){
       comic.editorData.pages = _asSave.pages;
       // Restaurar biblioteca si estaba en el snapshot
       if (_asSave.bib) {
-        try { localStorage.setItem(_bibKey(), JSON.stringify(_asSave.bib)); } catch(_) {}
+        try { _bibSave(_asSave.bib); } catch(_) {}
       }
     }
   }
@@ -16379,46 +16379,104 @@ function edLoadFromJSON(file){
 const _BIB_KEY_PREFIX = 'cs_biblioteca';
 const _BIB_MAX_BYTES  = 0; // Sin tope local — el límite es el de la obra completa (60 MB nube)
 const _BIB_THUMB_SIZE = 80;
+// Inicializar IDB al cargar el módulo (async en background)
+setTimeout(() => { try { _bibInitIdb(); } catch(_) {} }, 0);
 
 // Clave de localStorage: por proyecto si hay proyecto activo
 function _bibKey() {
   return edProjectId ? `${_BIB_KEY_PREFIX}_${edProjectId}` : _BIB_KEY_PREFIX;
 }
 
-// ── Storage ──────────────────────────────────────────────────────
-function _bibLoad() {
-  try {
-    const d = JSON.parse(localStorage.getItem(_bibKey()) || 'null');
-    if (d && Array.isArray(d.folders)) {
-      // Migración: garantizar que la carpeta Animaciones siempre existe
-      if (!d.folders.find(f => f.id === '__anim__' || f.name === 'Animaciones')) {
-        d.folders.push({ id: '__anim__', name: 'Animaciones', items: [] });
-        try { localStorage.setItem(_bibKey(), JSON.stringify(d)); } catch(_) {}
+// ── Storage (IndexedDB — sin límite de 5MB de localStorage) ─────
+// Se usa un caché en memoria (_bibCache) para mantener la API síncrona.
+// _bibInitIdb() carga la IDB al inicio; _bibSave() persiste en background.
+const _BIB_IDB_NAME  = 'cxBiblioteca';
+const _BIB_IDB_STORE = 'bib';
+let _bibCache = null; // caché en memoria, siempre actualizada
+
+function _bibOpenIdb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(_BIB_IDB_NAME, 1);
+    r.onupgradeneeded = e => e.target.result.createObjectStore(_BIB_IDB_STORE);
+    r.onsuccess = e => res(e.target.result);
+    r.onerror   = () => rej(r.error);
+  });
+}
+
+// Llamado una vez al arrancar el editor — carga IDB en _bibCache
+function _bibInitIdb() {
+  _bibOpenIdb().then(db => {
+    const tx  = db.transaction(_BIB_IDB_STORE, 'readonly');
+    const req = tx.objectStore(_BIB_IDB_STORE).get(_bibKey());
+    req.onsuccess = () => {
+      let data = req.result;
+      if (data && Array.isArray(data.folders)) {
+        if (!data.folders.find(f => f.id === '__anim__' || f.name === 'Animaciones'))
+          data.folders.push({ id: '__anim__', name: 'Animaciones', items: [] });
+        _bibCache = data;
+      } else {
+        // Migración desde localStorage si existe
+        let migrated = null;
+        try {
+          const raw = localStorage.getItem(_bibKey());
+          if (raw) {
+            const d = JSON.parse(raw);
+            if (d && Array.isArray(d.folders)) migrated = d;
+            else if (Array.isArray(d)) migrated = { folders: [
+              { id: '__root__', name: 'General', items: d },
+              { id: '__anim__', name: 'Animaciones', items: [] }
+            ]};
+          }
+        } catch(_) {}
+        _bibCache = migrated || { folders: [
+          { id: '__root__', name: 'General', items: [] },
+          { id: '__anim__', name: 'Animaciones', items: [] }
+        ]};
+        _bibSave(_bibCache); // persistir migración
       }
-      return d;
-    }
-  } catch(e) {}
-  // Migración: formato antiguo era array plano o clave global
-  let oldItems = [];
-  try {
-    // Intentar migrar desde la clave global si existe y este proyecto no tiene datos propios
-    const global = JSON.parse(localStorage.getItem(_BIB_KEY_PREFIX) || 'null');
-    if(global && Array.isArray(global.folders)) {
-      // No migrar automáticamente — cada proyecto empieza vacío
-    }
-    oldItems = JSON.parse(localStorage.getItem(_bibKey()) || '[]');
-    if (!Array.isArray(oldItems)) oldItems = [];
-  } catch(e) {}
-  const defaultData = { folders: [
-    { id: '__root__', name: 'General', items: oldItems },
-    { id: '__anim__', name: 'Animaciones', items: [] }
-  ]};
-  return defaultData;
+    };
+    req.onerror = () => {
+      _bibCache = { folders: [
+        { id: '__root__', name: 'General', items: [] },
+        { id: '__anim__', name: 'Animaciones', items: [] }
+      ]};
+    };
+  }).catch(() => {
+    _bibCache = { folders: [
+      { id: '__root__', name: 'General', items: [] },
+      { id: '__anim__', name: 'Animaciones', items: [] }
+    ]};
+  });
 }
+
+// Síncrona: devuelve el caché (siempre actualizado)
+function _bibLoad() {
+  if (!_bibCache) {
+    // Fallback mientras IDB no ha cargado aún (muy raro): usar localStorage
+    let d = null;
+    try { d = JSON.parse(localStorage.getItem(_bibKey()) || 'null'); } catch(_) {}
+    if (!d || !Array.isArray(d.folders)) d = { folders: [
+      { id: '__root__', name: 'General', items: [] },
+      { id: '__anim__', name: 'Animaciones', items: [] }
+    ]};
+    return d;
+  }
+  return _bibCache;
+}
+
+// Persiste en IDB en background; actualiza el caché de forma síncrona
 function _bibSave(data) {
-  try { localStorage.setItem(_bibKey(), JSON.stringify(data)); }
-  catch(e) { edToast('⚠️ Sin espacio en biblioteca'); }
+  _bibCache = data; // actualizar caché inmediatamente
+  _bibOpenIdb().then(db => {
+    const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+    tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
+    tx.onerror = () => edToast('⚠️ Error al guardar en biblioteca');
+  }).catch(() => edToast('⚠️ Error al guardar en biblioteca'));
 }
+// Exposición global para my-comics.js y otros módulos externos
+window._bibSave = _bibSave;
+window._bibLoad = _bibLoad;
+window._bibKey  = _bibKey;
 // Bytes estimados de la biblioteca (suma del JSON de cada item)
 function _bibUsedBytes(data) {
   return data.folders.reduce((s, f) =>
@@ -17954,7 +18012,6 @@ function _gcpReinterpolateAround(fi) {
 
 // ── Modal de interpolación ────────────────────────────────────────────────────
 // Elimina columnas finales donde TODOS los frames de todas las capas son invisibles.
-// Una columna final "invisible" puede ser clave o interpolada — se elimina directamente.
 function _gcpTrimTrailingInvisible() {
   if (!window._gcpLayers || !window._gcpLayers.length) return;
   let changed = true;
@@ -17963,20 +18020,44 @@ function _gcpTrimTrailingInvisible() {
     const total = _gcpGetTotalFrames();
     if (total === 0) break;
     const lastFi = total - 1;
-    // Comprobar si en la última columna TODAS las capas tienen frame invisible (o vacío)
     const allInvis = window._gcpLayers.every(la => {
-      if (!la._frames || lastFi >= la._frames.length) return true; // sin frame = cuenta como invisible
+      if (!la._frames || lastFi >= la._frames.length) return true;
       return la._frames[lastFi].visible === false;
     });
     if (allInvis) {
-      // Eliminar la última columna de todas las capas
       window._gcpLayers.forEach(la => {
         if (la._frames && lastFi < la._frames.length) la._frames.splice(lastFi, 1);
       });
       changed = true;
     }
   }
-  // Ajustar índice de frame activo si quedó fuera de rango
+  const newTotal = _gcpGetTotalFrames();
+  if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
+    window._gcpGlobalFrameIdx = newTotal - 1;
+}
+
+// Elimina columnas INICIALES donde TODOS los frames de todas las capas son invisibles.
+function _gcpTrimLeadingInvisible() {
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const total = _gcpGetTotalFrames();
+    if (total === 0) break;
+    const allInvis = window._gcpLayers.every(la => {
+      if (!la._frames || la._frames.length === 0) return true;
+      return la._frames[0].visible === false;
+    });
+    if (allInvis) {
+      window._gcpLayers.forEach(la => {
+        if (la._frames && la._frames.length > 0) la._frames.splice(0, 1);
+      });
+      // El índice de frame activo se desplaza una posición hacia atrás
+      if (window._gcpGlobalFrameIdx > 0) window._gcpGlobalFrameIdx--;
+      changed = true;
+    }
+  }
+  // Ajustar índice si quedó fuera de rango
   const newTotal = _gcpGetTotalFrames();
   if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
     window._gcpGlobalFrameIdx = newTotal - 1;
@@ -18118,7 +18199,8 @@ function _gcpDeleteInterp(fi) {
     while (i < la._frames.length && la._frames[i]?._interp) { count++; i++; }
     if (count > 0) la._frames.splice(fi + 1, count);
   });
-  // Eliminar columnas finales invisibles que pudieran quedar
+  // Eliminar columnas (iniciales y finales) invisibles que pudieran quedar
+  _gcpTrimLeadingInvisible();
   _gcpTrimTrailingInvisible();
   _gcpInvalidateAllThumbs();
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
@@ -18762,7 +18844,8 @@ function _gcpUpdateFramesBar() {
             // Eliminar interpolados adyacentes: un frame invisible no puede ser extremo de interpolación
             _gcpPurgeInterpAround(fi);
           }
-          // Eliminar columnas finales donde todas las capas sean invisibles
+          // Eliminar columnas (iniciales y finales) donde todas las capas sean invisibles
+          _gcpTrimLeadingInvisible();
           _gcpTrimTrailingInvisible();
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
@@ -18917,31 +19000,57 @@ function _gcpRedraw() {
     if (l._gcpVisible === false) return;
 
     // ── Blur de movimiento ────────────────────────────────────────────────────
-    // El blur aplica a CUALQUIER frame (clave o interpolado) que esté dentro de
-    // un bloque blur: basta con que el frame anterior o el siguiente sea _blur,
-    // O que el propio frame sea _blur.
-    // Detectar: ¿hay un frame adyacente (fi-1 o fi+1) con _blur, o el propio fi lo tiene?
+    // Detectar si este frame pertenece a un bloque blur.
+    // El bloque va desde el frame clave izquierdo (A) hasta el clave derecho (B).
+    // Los ghosts se dibujan entre la posición del frame clave A y la posición actual,
+    // así el blur es visible aunque el salto entre frames interpolados sea pequeño.
     const _frames = l._frames;
-    const _curSnap  = _frames?.[fi];
-    const _prevSnap = fi > 0 ? _frames?.[fi - 1] : null;
-    const _nextSnap = _frames?.[fi + 1] ?? null;
+    const _curSnap = _frames?.[fi];
 
-    // Un frame pertenece a un bloque blur si él mismo o algún vecino inmediato tiene _blur
-    const _inBlurBlock = !!(_curSnap?._blur || _prevSnap?._blur || _nextSnap?._blur);
+    // Buscar si este frame tiene _blur o está dentro de un bloque _blur
+    let _blurKeyA = null; // frame clave izquierdo del bloque blur
+    if (_curSnap && fi > 0) {
+      // Caso 1: frame interpolado con _blur — buscar el clave izquierdo
+      if (_curSnap._blur) {
+        let _ki = fi - 1;
+        while (_ki >= 0 && _frames[_ki]?._interp) _ki--;
+        if (_ki >= 0 && !_frames[_ki]?._interp) _blurKeyA = _frames[_ki];
+      }
+      // Caso 2: frame clave derecho (fi-1 es interpolado con _blur)
+      if (!_blurKeyA && !_curSnap._interp) {
+        let _ki = fi - 1;
+        while (_ki >= 0 && _frames[_ki]?._interp) {
+          if (_frames[_ki]._blur) {
+            // Encontrar el clave izquierdo del bloque
+            let _ki2 = _ki - 1;
+            while (_ki2 >= 0 && _frames[_ki2]?._interp) _ki2--;
+            if (_ki2 >= 0) _blurKeyA = _frames[_ki2];
+            break;
+          }
+          _ki--;
+        }
+      }
+      // Caso 3: frame clave izquierdo (fi+1 es interpolado con _blur)
+      if (!_blurKeyA && !_curSnap._interp && _frames[fi + 1]?._interp && _frames[fi + 1]?._blur) {
+        // No dibujar ghosts en el frame A (no hay nada "antes" del bloque)
+        // El blur desde A se verá cuando se reproduzcan los frames siguientes
+        _blurKeyA = null;
+      }
+    }
 
-    if (_inBlurBlock && _prevSnap && fi > 0) {
+    if (_blurKeyA) {
       const _nGhosts = 4;
       for (let _g = 1; _g <= _nGhosts; _g++) {
-        // t va de 0 (posición actual) hacia atrás (posición previa)
-        const _t = _g / (_nGhosts + 1);   // 0.2, 0.4, 0.6, 0.8
-        const _gAlpha = (1 - _t) * 0.32;  // el más cercano al pasado es más transparente
+        // t=1 → posición de keyA (más transparente), t→0 → posición actual (más opaco)
+        const _t = _g / (_nGhosts + 1);  // 0.2, 0.4, 0.6, 0.8
+        const _gAlpha = (1 - _t) * 0.38;
         const _ghostSnap = {
-          x:        _curSnap.x        + (_prevSnap.x        - _curSnap.x)        * _t,
-          y:        _curSnap.y        + (_prevSnap.y        - _curSnap.y)        * _t,
-          width:    _curSnap.width    + (_prevSnap.width    - _curSnap.width)    * _t,
-          height:   _curSnap.height   + (_prevSnap.height   - _curSnap.height)   * _t,
-          rotation: _curSnap.rotation + (_prevSnap.rotation - _curSnap.rotation) * _t,
-          opacity:  _curSnap.opacity  + (_prevSnap.opacity  - _curSnap.opacity)  * _t,
+          x:        _curSnap.x        + (_blurKeyA.x        - _curSnap.x)        * _t,
+          y:        _curSnap.y        + (_blurKeyA.y        - _curSnap.y)        * _t,
+          width:    _curSnap.width    + (_blurKeyA.width    - _curSnap.width)    * _t,
+          height:   _curSnap.height   + (_blurKeyA.height   - _curSnap.height)   * _t,
+          rotation: _curSnap.rotation + (_blurKeyA.rotation - _curSnap.rotation) * _t,
+          opacity:  _curSnap.opacity  + (_blurKeyA.opacity  - _curSnap.opacity)  * _t,
         };
         _gcpDrawLayerBlurGhost(gcpCtx, l, _ghostSnap, _gAlpha);
       }
@@ -19637,14 +19746,8 @@ function _gcpSaveToLib(onDone) {
   }
   // Guardar el id del item en el layer para futuras re-ediciones
   if (existingLayerForBib) existingLayerForBib._bibItemId = _bibItemId;
-  // Guardar con comprobación explícita de espacio
-  try {
-    localStorage.setItem(_bibKey(), JSON.stringify(data));
-  } catch(e) {
-    edToast('⚠️ Sin espacio para guardar la animación. Elimina objetos de la biblioteca.', 4000);
-    onDone && onDone();
-    return;
-  }
+  // Guardar en IDB (sin límite de 5MB de localStorage)
+  _bibSave(data);
 
   // Si re-editamos capa existente, actualizarla in-place
   const existingLayer = (window._gcpEdLayerIdx>=0) ? edLayers[window._gcpEdLayerIdx] : null;
