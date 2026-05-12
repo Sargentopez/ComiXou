@@ -19127,6 +19127,55 @@ function _gcpUpdateFramesBar() {
         hidden.textContent = '✖';
         card.appendChild(hidden);
 
+        // Botones ojo y ✕ también en frames invisibles
+        const hiddenActions = document.createElement('div');
+        hiddenActions.className = 'ed-page-actions';
+
+        const eyeBtnH = document.createElement('button');
+        eyeBtnH.className = 'ed-page-action-btn';
+        eyeBtnH.title = 'Mostrar frame';
+        eyeBtnH.style.opacity = '0.4';
+        eyeBtnH.textContent = '👁';
+        eyeBtnH.addEventListener('click', e => {
+          e.stopPropagation();
+          if (la._frames && fi < la._frames.length)
+            la._frames[fi] = {...la._frames[fi], visible: true};
+          window._gcpDirty = true;
+          _gcpInvalidateAllThumbs();
+          _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpUpdateFrameNav();
+          _gcpRedraw();
+          _gcpUpdateFramesBar();
+        });
+        hiddenActions.appendChild(eyeBtnH);
+
+        const delBtnH = document.createElement('button');
+        delBtnH.className = 'ed-page-action-btn ed-page-del';
+        delBtnH.title = 'Eliminar frame';
+        delBtnH.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
+        delBtnH.addEventListener('click', e => {
+          e.stopPropagation();
+          edConfirm('¿Eliminar el fotograma ' + (fi + 1) + ' de todas las capas?', () => {
+            window._gcpLayers.forEach(otherLa => {
+              if (otherLa._frames && fi < otherLa._frames.length)
+                otherLa._frames.splice(fi, 1);
+            });
+            const _nt = _gcpGetTotalFrames();
+            if (window._gcpGlobalFrameIdx >= _nt && _nt > 0)
+              window._gcpGlobalFrameIdx = _nt - 1;
+            _gcpTrimLeadingInvisible();
+            _gcpTrimTrailingInvisible();
+            window._gcpDirty = true;
+            _gcpInvalidateAllThumbs();
+            _gcpApplyFrame(window._gcpGlobalFrameIdx);
+            _gcpUpdateFrameNav();
+            _gcpRedraw();
+            _gcpUpdateFramesBar();
+          });
+        });
+        hiddenActions.appendChild(delBtnH);
+        card.appendChild(hiddenActions);
+
       } else {
         const thumb = _gcpLayerFrameThumb(la, fi, 88);
         thumb.className = 'ed-page-thumb';
