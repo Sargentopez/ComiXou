@@ -1844,25 +1844,35 @@ body.editor-page #appView {
   overflow: hidden;
   background: var(--gray-100);
   border-bottom: 2px solid var(--gray-300);
-  padding: 6px 0 6px 0;
+  padding: 0;
   display: none;
   flex-direction: column;
   gap: 0;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--gray-400) var(--gray-200);
   z-index: 510;
   box-shadow: 0 4px 12px rgba(0,0,0,.15);
   pointer-events: auto;
-  /* Borde superior sutil para separar del menú */
   border-top: 1px solid var(--gray-300);
 }
 #gcpFramesBar-inner {
   display: flex;
-  flex-direction: row;
-  max-height: 55vh;
+  flex-direction: column;
+  flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
+/* Wrapper con scroll vertical de filas */
+#gcpFramesScrollWrap {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-400) var(--gray-200);
+  min-height: 0;
+}
+#gcpFramesScrollWrap::-webkit-scrollbar { width: 0; } /* ocultar nativo — usamos custom */
 /* Columna izquierda fija */
 #gcpFramesLeftPane {
   flex-shrink: 0;
@@ -1872,23 +1882,29 @@ body.editor-page #appView {
   z-index: 2;
   background: var(--gray-100);
   border-right: 1.5px solid var(--gray-300);
+  position: sticky;
+  left: 0;
 }
-/* Zona de frames: único scroll horizontal para todas las capas */
+/* Zona de frames: scroll horizontal para todas las capas */
 #gcpFramesPane {
   flex: 1;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   display: flex;
   flex-direction: column;
-  scrollbar-width: thin;
-  scrollbar-color: var(--gray-400) var(--gray-200);
+  scrollbar-width: none; /* ocultar nativo — usamos custom */
 }
-#gcpFramesPane::-webkit-scrollbar { height: 6px; }
-#gcpFramesPane::-webkit-scrollbar-track { background: var(--gray-200); }
-#gcpFramesPane::-webkit-scrollbar-thumb { background: var(--gray-400); border-radius: 4px; }
-#gcpFramesBar::-webkit-scrollbar { width: 6px; }
-#gcpFramesBar::-webkit-scrollbar-track { background: var(--gray-200); }
-#gcpFramesBar::-webkit-scrollbar-thumb { background: var(--gray-400); border-radius: 4px; }
+#gcpFramesPane::-webkit-scrollbar { display: none; }
+/* Scrollbar H custom PC */
+#gcpFrHScroll { flex-shrink: 0; position: relative; }
+#gcpFrHThumb { position: absolute; top: 1px; height: 8px; background: var(--gray-400); border-radius: 4px; cursor: grab; min-width: 20px; }
+#gcpFrHThumb:active { cursor: grabbing; }
+/* Scrollbar V custom PC */
+#gcpFrVScroll { position: absolute; right: 0; top: 0; bottom: 10px; width: 10px; background: var(--gray-200); }
+#gcpFrVThumb { position: absolute; left: 1px; width: 8px; background: var(--gray-400); border-radius: 4px; cursor: grab; min-height: 20px; }
+#gcpFrVThumb:active { cursor: grabbing; }
+/* Slider V táctil */
+#gcpFrVSlider { touch-action: none; }
 
 /* Cada fila de layer — altura fija para que las cards no se solapen.
    La card mide: header(24) + thumb(72) + actions(26) + padding(8) + gaps = 136px */

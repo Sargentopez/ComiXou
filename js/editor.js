@@ -18775,26 +18775,210 @@ function _gcpUpdateFramesBar() {
   if (bar.style.display !== 'flex') return;
   bar.innerHTML = '';
 
-  // Estructura: columna izquierda fija + zona de frames con UN SOLO scroll horizontal compartido
+  // Estructura: columna izquierda fija + zona de frames con scroll H+V
+  // Wrapper vertical: permite scroll vertical de filas
   const inner = document.createElement('div');
   inner.id = 'gcpFramesBar-inner';
-  inner.style.cssText = 'display:flex;flex-direction:row;overflow:hidden;';
+  inner.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;flex:1;';
   bar.appendChild(inner);
+
+  // Zona scrollable: contiene leftPane + framesPane, scroll vertical aquí
+  const scrollWrap = document.createElement('div');
+  scrollWrap.id = 'gcpFramesScrollWrap';
+  scrollWrap.style.cssText = [
+    'display:flex', 'flex-direction:row', 'flex:1',
+    'overflow-x:hidden', 'overflow-y:auto',
+    'scrollbar-width:thin', 'scrollbar-color:var(--gray-400) var(--gray-200)',
+  ].join(';');
+  inner.appendChild(scrollWrap);
 
   // Columna izquierda: controles de cada capa (fija, sin scroll)
   const leftPane = document.createElement('div');
   leftPane.id = 'gcpFramesLeftPane';
-  leftPane.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;overflow:visible;z-index:1;';
-  inner.appendChild(leftPane);
+  leftPane.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;overflow:visible;z-index:1;position:sticky;left:0;';
+  scrollWrap.appendChild(leftPane);
 
   // Zona de frames: scroll horizontal compartido para TODAS las capas
   const framesPane = document.createElement('div');
   framesPane.id = 'gcpFramesPane';
-  framesPane.style.cssText = 'flex:1;overflow-x:auto;overflow-y:hidden;display:flex;flex-direction:column;';
-  framesPane.addEventListener('scroll', () => {
-    // El scroll es único — no hay nada que sincronizar, ya está en un solo contenedor
-  }, { passive: true });
-  inner.appendChild(framesPane);
+  framesPane.style.cssText = 'flex:1;overflow-x:auto;overflow-y:visible;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--gray-400) var(--gray-200);';
+  framesPane.addEventListener('scroll', () => {}, { passive: true });
+  scrollWrap.appendChild(framesPane);
+
+  // ── Scrollbar horizontal custom (PC) ─────────────────────────────────────
+  // Solo en PC (no táctil) — barra bajo los frames
+  if (!window._edIsTouch) {
+    const hScrollBar = document.createElement('div');
+    hScrollBar.id = 'gcpFrHScroll';
+    hScrollBar.style.cssText = [
+      'height:10px', 'background:var(--gray-200)', 'cursor:pointer',
+      'flex-shrink:0', 'position:relative', 'border-top:1px solid var(--gray-300)',
+    ].join(';');
+    const hThumb = document.createElement('div');
+    hThumb.id = 'gcpFrHThumb';
+    hThumb.style.cssText = [
+      'position:absolute', 'top:1px', 'height:8px',
+      'background:var(--gray-400)', 'border-radius:4px', 'cursor:grab', 'min-width:20px',
+    ].join(';');
+    hScrollBar.appendChild(hThumb);
+    inner.appendChild(hScrollBar);
+
+    // Sincronizar thumb con scroll del framesPane
+    const _syncHThumb = () => {
+      const fp = framesPane;
+      const maxScroll = fp.scrollWidth - fp.clientWidth;
+      if (maxScroll <= 0) { hScrollBar.style.display = 'none'; return; }
+      hScrollBar.style.display = 'block';
+      const trackW = hScrollBar.clientWidth;
+      const ratio  = fp.clientWidth / fp.scrollWidth;
+      const thumbW = Math.max(20, trackW * ratio);
+      const frac   = fp.scrollLeft / maxScroll;
+      hThumb.style.width = thumbW + 'px';
+      hThumb.style.left  = (frac * (trackW - thumbW)) + 'px';
+    };
+    framesPane.addEventListener('scroll', _syncHThumb, { passive: true });
+    // Actualizar al renderizar — llamada diferida
+    setTimeout(_syncHThumb, 50);
+
+    // Drag del thumb horizontal
+    let _hDragX = 0, _hDragScroll = 0, _hDragging = false;
+    hThumb.addEventListener('pointerdown', e => {
+      e.stopPropagation(); e.preventDefault();
+      _hDragging = true; _hDragX = e.clientX; _hDragScroll = framesPane.scrollLeft;
+      hThumb.setPointerCapture(e.pointerId);
+      hThumb.style.cursor = 'grabbing';
+    });
+    hThumb.addEventListener('pointermove', e => {
+      if (!_hDragging) return;
+      const fp = framesPane;
+      const maxScroll = fp.scrollWidth - fp.clientWidth;
+      const trackW = hScrollBar.clientWidth;
+      const thumbW = hThumb.offsetWidth;
+      const delta = e.clientX - _hDragX;
+      fp.scrollLeft = Math.max(0, Math.min(maxScroll, _hDragScroll + delta * maxScroll / (trackW - thumbW)));
+    });
+    hThumb.addEventListener('pointerup', () => { _hDragging = false; hThumb.style.cursor = 'grab'; });
+    hThumb.addEventListener('pointercancel', () => { _hDragging = false; hThumb.style.cursor = 'grab'; });
+    // Click en la pista
+    hScrollBar.addEventListener('pointerdown', e => {
+      if (e.target === hThumb) return;
+      e.stopPropagation();
+      const rect = hScrollBar.getBoundingClientRect();
+      const fp = framesPane;
+      const maxScroll = fp.scrollWidth - fp.clientWidth;
+      const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      fp.scrollLeft = frac * maxScroll;
+    });
+
+    // ── Scrollbar vertical custom (PC) ──────────────────────────────────────
+    const vScrollBar = document.createElement('div');
+    vScrollBar.id = 'gcpFrVScroll';
+    vScrollBar.style.cssText = [
+      'width:10px', 'background:var(--gray-200)', 'cursor:pointer',
+      'flex-shrink:0', 'position:absolute', 'right:0', 'top:0', 'bottom:10px',
+    ].join(';');
+    const vThumb = document.createElement('div');
+    vThumb.id = 'gcpFrVThumb';
+    vThumb.style.cssText = [
+      'position:absolute', 'left:1px', 'width:8px',
+      'background:var(--gray-400)', 'border-radius:4px', 'cursor:grab', 'min-height:20px',
+    ].join(';');
+    vScrollBar.appendChild(vThumb);
+    bar.style.position = 'relative';
+    bar.appendChild(vScrollBar);
+
+    const _syncVThumb = () => {
+      const sw = scrollWrap;
+      const maxScroll = sw.scrollHeight - sw.clientHeight;
+      if (maxScroll <= 0) { vScrollBar.style.display = 'none'; return; }
+      vScrollBar.style.display = 'block';
+      const trackH = vScrollBar.clientHeight;
+      const ratio  = sw.clientHeight / sw.scrollHeight;
+      const thumbH = Math.max(20, trackH * ratio);
+      const frac   = sw.scrollTop / maxScroll;
+      vThumb.style.height = thumbH + 'px';
+      vThumb.style.top    = (frac * (trackH - thumbH)) + 'px';
+    };
+    scrollWrap.addEventListener('scroll', _syncVThumb, { passive: true });
+    setTimeout(_syncVThumb, 50);
+
+    let _vDragY = 0, _vDragScroll = 0, _vDragging = false;
+    vThumb.addEventListener('pointerdown', e => {
+      e.stopPropagation(); e.preventDefault();
+      _vDragging = true; _vDragY = e.clientY; _vDragScroll = scrollWrap.scrollTop;
+      vThumb.setPointerCapture(e.pointerId);
+      vThumb.style.cursor = 'grabbing';
+    });
+    vThumb.addEventListener('pointermove', e => {
+      if (!_vDragging) return;
+      const sw = scrollWrap;
+      const maxScroll = sw.scrollHeight - sw.clientHeight;
+      const trackH = vScrollBar.clientHeight;
+      const thumbH = vThumb.offsetHeight;
+      const delta = e.clientY - _vDragY;
+      sw.scrollTop = Math.max(0, Math.min(maxScroll, _vDragScroll + delta * maxScroll / (trackH - thumbH)));
+    });
+    vThumb.addEventListener('pointerup', () => { _vDragging = false; vThumb.style.cursor = 'grab'; });
+    vThumb.addEventListener('pointercancel', () => { _vDragging = false; vThumb.style.cursor = 'grab'; });
+    vScrollBar.addEventListener('pointerdown', e => {
+      if (e.target === vThumb) return;
+      e.stopPropagation();
+      const rect = vScrollBar.getBoundingClientRect();
+      const sw = scrollWrap;
+      const maxScroll = sw.scrollHeight - sw.clientHeight;
+      const frac = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      sw.scrollTop = frac * maxScroll;
+    });
+
+  } else {
+    // ── Slider vertical táctil ─────────────────────────────────────────────
+    // Un thumb arrastrable en el lateral derecho para scroll de filas en táctil
+    const vSlider = document.createElement('div');
+    vSlider.id = 'gcpFrVSlider';
+    vSlider.style.cssText = [
+      'position:absolute', 'right:2px', 'top:0', 'bottom:0', 'width:16px',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'z-index:5', 'pointer-events:auto',
+    ].join(';');
+    const vSliderThumb = document.createElement('div');
+    vSliderThumb.style.cssText = [
+      'width:6px', 'min-height:28px', 'border-radius:3px',
+      'background:var(--gray-400)', 'opacity:0.7', 'cursor:pointer', 'touch-action:none',
+    ].join(';');
+    vSlider.appendChild(vSliderThumb);
+    bar.style.position = 'relative';
+    bar.appendChild(vSlider);
+
+    const _syncVSlider = () => {
+      const sw = scrollWrap;
+      const maxScroll = sw.scrollHeight - sw.clientHeight;
+      if (maxScroll <= 0) { vSlider.style.display = 'none'; return; }
+      vSlider.style.display = 'flex';
+      const trackH = vSlider.clientHeight;
+      const ratio  = sw.clientHeight / sw.scrollHeight;
+      const thumbH = Math.max(28, trackH * ratio);
+      const frac   = sw.scrollTop / maxScroll;
+      vSliderThumb.style.height = thumbH + 'px';
+      vSliderThumb.style.transform = 'translateY(' + (frac * (trackH - thumbH)) + 'px)';
+    };
+    scrollWrap.addEventListener('scroll', _syncVSlider, { passive: true });
+    setTimeout(_syncVSlider, 50);
+
+    let _vsY0 = 0, _vsScroll0 = 0;
+    vSliderThumb.addEventListener('pointerdown', e => {
+      e.stopPropagation(); e.preventDefault();
+      _vsY0 = e.clientY; _vsScroll0 = scrollWrap.scrollTop;
+      vSliderThumb.setPointerCapture(e.pointerId);
+    });
+    vSliderThumb.addEventListener('pointermove', e => {
+      const sw = scrollWrap;
+      const maxScroll = sw.scrollHeight - sw.clientHeight;
+      const trackH = vSlider.clientHeight;
+      const thumbH = vSliderThumb.offsetHeight;
+      const delta = e.clientY - _vsY0;
+      sw.scrollTop = Math.max(0, Math.min(maxScroll, _vsScroll0 + delta * maxScroll / (trackH - thumbH)));
+    });
+  }
 
   const total     = _gcpGetTotalFrames();
   const gfi       = window._gcpGlobalFrameIdx;
@@ -18941,26 +19125,6 @@ function _gcpUpdateFramesBar() {
           'justify-content:center;font-size:28px;background:#fff0f0;color:#e63030;';
         hidden.textContent = '✖';
         card.appendChild(hidden);
-        // Botón ojo para restaurar visibilidad
-        const _eyeRestoreActions = document.createElement('div');
-        _eyeRestoreActions.className = 'ed-page-actions';
-        const _eyeRestoreBtn = document.createElement('button');
-        _eyeRestoreBtn.className = 'ed-page-action-btn';
-        _eyeRestoreBtn.title = 'Mostrar frame';
-        _eyeRestoreBtn.innerHTML = '<span style="opacity:0.45">👁</span>';
-        _eyeRestoreBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          if (la._frames && fi < la._frames.length)
-            la._frames[fi] = {...la._frames[fi], visible: true};
-          window._gcpDirty = true;
-          _gcpInvalidateAllThumbs();
-          _gcpApplyFrame(window._gcpGlobalFrameIdx);
-          _gcpUpdateFrameNav();
-          _gcpRedraw();
-          _gcpUpdateFramesBar();
-        });
-        _eyeRestoreActions.appendChild(_eyeRestoreBtn);
-        card.appendChild(_eyeRestoreActions);
 
       } else {
         const thumb = _gcpLayerFrameThumb(la, fi, 88);
@@ -18997,19 +19161,20 @@ function _gcpUpdateFramesBar() {
         });
         actions.appendChild(dupBtn);
 
-        // ── Botón ojo: ocultar/mostrar el frame de esta capa ──────────────
+        // ── Botón ojo: ocultar/mostrar frame de esta capa ──────────────
         const eyeBtn = document.createElement('button');
         eyeBtn.className = 'ed-page-action-btn';
-        eyeBtn.title = isVisible ? 'Ocultar frame' : 'Mostrar frame';
-        eyeBtn.innerHTML = isVisible ? '👁' : '<span style="opacity:0.45">👁</span>';
+        const _curVisible = snap && snap.visible !== false;
+        eyeBtn.title = _curVisible ? 'Ocultar frame' : 'Mostrar frame';
+        eyeBtn.style.cssText = _curVisible ? '' : 'opacity:0.4';
+        eyeBtn.textContent = '👁';
         eyeBtn.addEventListener('click', e => {
           e.stopPropagation();
           if (la._frames && fi < la._frames.length) {
-            const _cur = la._frames[fi];
-            const _nowVisible = _cur.visible !== false;
-            la._frames[fi] = {..._cur, visible: !_nowVisible};
-            if (_nowVisible) {
-              // Al ocultar: purgar interpolados adyacentes
+            const _nowVis = la._frames[fi].visible !== false;
+            la._frames[fi] = {...la._frames[fi], visible: !_nowVis};
+            if (_nowVis) {
+              // Al ocultar: purgar interpolados adyacentes y trim
               _gcpPurgeInterpAround(fi);
               _gcpTrimLeadingInvisible();
               _gcpTrimTrailingInvisible();
@@ -19024,23 +19189,21 @@ function _gcpUpdateFramesBar() {
         });
         actions.appendChild(eyeBtn);
 
-        // ── Botón ✕: eliminar completamente el frame de TODAS las capas ──
+        // ── Botón ✕: eliminar frame físicamente de todas las capas ──────
         const delBtn = document.createElement('button');
         delBtn.className = 'ed-page-action-btn ed-page-del';
         delBtn.title = 'Eliminar frame';
         delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
-          // Eliminar la columna fi de todas las capas (splice real)
+          // Splice real en todas las capas — la columna fi desaparece
           window._gcpLayers.forEach(otherLa => {
-            if (otherLa._frames && fi < otherLa._frames.length) {
+            if (otherLa._frames && fi < otherLa._frames.length)
               otherLa._frames.splice(fi, 1);
-            }
           });
-          // Purgar interpolados que pudieran haber quedado huérfanos
-          const _newTotal = _gcpGetTotalFrames();
-          if (window._gcpGlobalFrameIdx >= _newTotal && _newTotal > 0)
-            window._gcpGlobalFrameIdx = _newTotal - 1;
+          const _nt = _gcpGetTotalFrames();
+          if (window._gcpGlobalFrameIdx >= _nt && _nt > 0)
+            window._gcpGlobalFrameIdx = _nt - 1;
           _gcpTrimLeadingInvisible();
           _gcpTrimTrailingInvisible();
           window._gcpDirty = true;
