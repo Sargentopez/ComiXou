@@ -5369,6 +5369,19 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
 }
 
 function edOnStart(e){
+  // Registrar pointer SIEMPRE primero — incluso si luego se redirige al GCP,
+  // edOnEnd necesita poder eliminarlo de _edActivePointers
+  if(!window._edActivePointers) window._edActivePointers = new Map();
+  const _tgtES = e.target;
+  if(!_tgtES.closest('#edDrawBar') && !_tgtES.closest('#edShapeBar') &&
+     !_tgtES.closest('#edb-size-pop') && !_tgtES.closest('#esb-slider-panel') &&
+     !_tgtES.closest('#edb-palette-pop') && !_tgtES.closest('#ed-hsl-picker') &&
+     !_tgtES.closest('#edConfirmModal')){
+    window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  }
+  // Cuando el editor de animaciones está activo, no procesar gestos del editor general
+  // (el GCP tiene su propio _gcpHandleDown vía _edDocDownFn)
+  if(window._gcpActive) return;
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
   if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
   // ── REGLAS: prioridad máxima — siempre antes de cualquier bloqueo de UI ──
