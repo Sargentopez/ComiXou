@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.39</footer>
+    <footer class="app-version">v22.40</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -612,7 +612,6 @@ Router.register('editor', {
           <span id="gcpFrameNum">1</span>
           <button class="ed-top-pagebn" id="gcpFrameNext" title="Frame siguiente">&#9654;</button>
         </div>
-        <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" title="Ver lienzo completo / workspace" style="font-size:1rem;padding:0 8px">🔍</button>
         <button class="ed-top-action" id="gcpPreviewBtn" title="Previsualizar">▶</button>
         <button id="gcpCloseBtn" title="Volver al editor">✕</button>
       </div>
@@ -632,6 +631,7 @@ Router.register('editor', {
           <!-- Deshacer / Rehacer -->
           <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
+          <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
           <div class="ed-menu-sep"></div>
           <!-- Frames -->
           <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>

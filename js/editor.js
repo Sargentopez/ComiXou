@@ -19126,6 +19126,8 @@ function _gcpRedraw() {
   // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
   _gcpDrawSel();
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
+  // Mantener scrollbars sincronizadas con la cámara
+  if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
 }
 
 // Copia de edDrawSel adaptada al canvas GIF
