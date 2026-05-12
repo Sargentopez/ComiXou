@@ -20205,6 +20205,10 @@ function gcpOpen(edLayerIdx) {
         _gcpCloseAllDropdowns();
         if (!open) {
           if (id === 'capas') _gcpRenderLayersDropdown(dd);
+          if (id === 'gcpRules') _gcpRuleToggleSync();
+          // Mover al body para escapar de stacking contexts (igual que edToggleMenu)
+          dd._gcpOrigParent = dd._gcpOrigParent || dd.parentNode;
+          document.body.appendChild(dd);
           dd.classList.add('open');
           _edPositionDropdown(dd, btn.getBoundingClientRect());
         }
@@ -20730,15 +20734,6 @@ function _gcpInitRules() {
     _gcpRuleNodes.forEach(n=>{n.locked=true;});
     document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
     _gcpRedraw();
-  });
-  // Dropdown de Guías — mismo patrón que los otros dropdowns del GCP
-  document.querySelector('[data-gcpmenu="gcpRules"]')?.addEventListener('pointerup', e => {
-    e.stopPropagation();
-    const dd = document.getElementById('gdd-gcpRules');
-    if (!dd) return;
-    const wasOpen = dd.classList.contains('open');
-    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
-    if (!wasOpen) { dd.classList.add('open'); _gcpRuleToggleSync(); }
   });
 }
 
