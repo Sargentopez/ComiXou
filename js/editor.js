@@ -962,13 +962,12 @@ function edWorldToScreen(wx, wy){
 }
 // Zoom hacia un punto de pantalla (sx,sy), con factor multiplicativo
 function edZoomAt(sx, sy, factor){
-  // Límites
   const newZ = Math.min(Math.max(edCamera.z * factor, 0.05), 8);
   const fReal = newZ / edCamera.z;
   edCamera.x = sx - (sx - edCamera.x) * fReal;
   edCamera.y = sy - (sy - edCamera.y) * fReal;
   edCamera.z = newZ;
-  // Actualizar dots de grosor en barras flotantes para reflejar el nuevo zoom
+  if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
   _edSyncSizeDots();
 }
 function _edSyncSizeDots(){
@@ -2658,6 +2657,7 @@ function edFitCanvas(resetCamera){
 function _edResetCameraToFit(){
   window._edUserRequestedReset = true;
   edFitCanvas(true);
+  if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
 }
 
 /* ── Resetea la cámara para que el LIENZO ocupe el viewport centrado ── */
@@ -4870,6 +4870,7 @@ function edPinchMove(e) {
     edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
     edCamera.z = newZ;
     edRedraw();
+    if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
   }
 }
 function edPinchEnd() {
@@ -5050,10 +5051,10 @@ function _edInitHTMLScrollbars(){
     const m = getMetrics(axis);
     if(!m) return;
     const clamped = Math.max(0, Math.min(m.maxScroll, val));
-    // Convertir posición navegable → camera
     if(axis === 'h') edCamera.x = (m.marginX !== undefined ? m.marginX : 0) - clamped;
     else             edCamera.y = (m.marginY !== undefined ? m.marginY : 0) - clamped;
     edRedraw();
+    if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
   }
 
   ['h','v'].forEach(axis => {
@@ -6616,13 +6617,17 @@ function edOnStart(e){
     // Clic en vacío: cerrar panel si no es draw
     edRenderOptionsPanel();
   }
-  // PC/ratón clic en vacío → marcar para posible rubber band en edOnMove
-  // Condición: no táctil, dentro del editor, sin objeto seleccionado, herramienta select
-  // tgt puede ser el canvas O la zona gris del workspace (editorCanvasWrap)
-  if(e.pointerType !== 'touch' && tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
-    const c = edCoords(e);
-    edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
-    window._edRubberBandEndPos = null;
+  // Clic/toque en vacío → iniciar rubber band (PC y táctil)
+  // Condición: dentro del editor, sin objeto seleccionado, herramienta select
+  if(tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
+    // En táctil: solo si hay un único dedo (no pinch)
+    if(e.pointerType === 'touch' && window._edActivePointers && window._edActivePointers.size > 1) {
+      // Dos o más dedos → no iniciar rubber band
+    } else {
+      const c = edCoords(e);
+      edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
+      window._edRubberBandEndPos = null;
+    }
   }
   edRedraw();
 }
@@ -15764,6 +15769,7 @@ function EditorView_init(){
       edCamera.y -= e.deltaY;
     }
     edRedraw();
+    if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     _edScrollbarsUpdate();
   };
   window.addEventListener('wheel', window._edWheelFn, {passive: false});
@@ -17427,6 +17433,22 @@ function _gcpHandleDown(e) {
     }
   }
 
+  // Registrar pointer para pinch/pan
+  _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  // Dos dedos → pinch (zoom + pan)
+  if (_gcpPtrMap.size === 2) {
+    edIsDragging = false; edIsResizing = false; edIsRotating = false;
+    _gcpPanActive = false;
+    const _pts = [..._gcpPtrMap.values()];
+    _gcpPinchDist0 = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
+    _gcpPinchMidX  = (_pts[0].x + _pts[1].x) / 2;
+    _gcpPinchMidY  = (_pts[0].y + _pts[1].y) / 2;
+    _gcpPinchCam0  = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
+    _gcpPinching   = true;
+    _gcpRedraw(); return;
+  }
+
   // Buscar capa tocada
   let hit = -1;
   for (let i = window._gcpLayers.length-1; i >= 0; i--) {
@@ -17437,6 +17459,10 @@ function _gcpHandleDown(e) {
     edIsDragging = true;
     edDragOffX = c.nx - window._gcpLayers[hit].x;
     edDragOffY = c.ny - window._gcpLayers[hit].y;
+    _gcpPanActive = false;
+  } else {
+    // Sin objeto tocado — no hacer pan (pan solo con dos dedos/pinch)
+    _gcpPanActive = false;
   }
   _gcpRedraw();
 }
@@ -17703,11 +17729,39 @@ function _gcpAutoSaveFrame() {
 }
 
 function _gcpHandleMove(e) {
+  // Actualizar pointer en el mapa
+  if (_gcpPtrMap.has(e.pointerId)) {
+    _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+  // ── Pinch: zoom + pan ────────────────────────────────────────────────────
+  if (_gcpPinching && _gcpPtrMap.size >= 2) {
+    const pts  = [..._gcpPtrMap.values()].slice(0, 2);
+    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    const midX = (pts[0].x + pts[1].x) / 2;
+    const midY = (pts[0].y + pts[1].y) / 2;
+    const ratio = dist / Math.max(_gcpPinchDist0, 1);
+    const newZ  = Math.min(Math.max(_gcpPinchCam0.z * ratio, 0.05), 8);
+    edCamera.x = midX - (_gcpPinchMidX - _gcpPinchCam0.x) / _gcpPinchCam0.z * newZ;
+    edCamera.y = midY - (_gcpPinchMidY - _gcpPinchCam0.y) / _gcpPinchCam0.z * newZ;
+    edCamera.z = newZ;
+    edRedraw(); _gcpRedraw(); _edScrollbarsUpdate();
+    return;
+  }
+  // Pan con un dedo: desactivado — solo pinch (dos dedos) mueve la cámara
+  // ── Drag / resize / rotate normales ─────────────────────────────────────
   _gcpWithEditorContext(() => { edOnMove(e); });
   _gcpRedraw();
 }
 
 function _gcpHandleUp(e) {
+  // Gestión de punteros: pinch/pan
+  _gcpPtrMap.delete(e.pointerId);
+  if (_gcpPtrMap.size < 2 && _gcpPinching) {
+    _gcpPinching   = false;
+    _gcpPinchDist0 = 0;
+  }
+  if (_gcpPtrMap.size === 0) _gcpPanActive = false;
+
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
@@ -17740,6 +17794,14 @@ window._gcpStopAtEnd   = false; // true = detener en el último frame
 window._gcpDirty       = false; // true si hay cambios sin guardar
 let gcpCanvas = null;
 let gcpCtx    = null;
+// Mapa de pointers activos para pinch/pan en el canvas GCP
+const _gcpPtrMap = new Map();
+let _gcpPinching = false, _gcpPinchDist0 = 0;
+let _gcpPinchMidX = 0, _gcpPinchMidY = 0;
+let _gcpPinchCam0 = { x: 0, y: 0, z: 1 };
+let _gcpPanActive = false;
+let _gcpPanStartX = 0, _gcpPanStartY = 0;
+let _gcpPanCam0X = 0, _gcpPanCam0Y = 0;
 
 // Lista de capas GIF — equivalente a edLayers
 window._gcpLayers = [];
@@ -19395,6 +19457,25 @@ function gcpOpen(edLayerIdx) {
     shell._gcpBound = true;
 
     document.getElementById('gcpCloseBtn')?.addEventListener('click', gcpClose);
+    // Lupa: mismo comportamiento que en el editor general
+    document.getElementById('gcpZoomResetBtn')?.addEventListener('click', () => {
+      const pw = edPageW(), ph = edPageH();
+      const cw = gcpCanvas ? gcpCanvas.width : (edCanvas ? edCanvas.width : 800);
+      const ch = gcpCanvas ? gcpCanvas.height : (edCanvas ? edCanvas.height : 600);
+      const fullZoom = Math.min(cw / pw, ch / ph);
+      const workZoom = Math.min(cw / ED_CANVAS_W, ch / ED_CANVAS_H);
+      const isAtFull = Math.abs(edCamera.z - fullZoom) < 0.01;
+      window._edUserRequestedReset = true;
+      if (isAtFull) {
+        edCamera.z = workZoom;
+        edCamera.x = cw / 2 - ED_CANVAS_W / 2 * workZoom;
+        edCamera.y = ch / 2 - ED_CANVAS_H / 2 * workZoom;
+        window._edUserRequestedReset = false;
+      } else {
+        _edCameraReset();
+      }
+      edRedraw(); _gcpRedraw(); _edScrollbarsUpdate();
+    });
     document.getElementById('gcpPreviewBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
       _gcpPreview();
