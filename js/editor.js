@@ -19436,6 +19436,11 @@ function gcpOpen(edLayerIdx) {
   window._gcpActive = true;
   // Resetear detección de doble tap del editor principal — evita falsos doble tap al volver
   _edLastTapTime = 0; _edLastTapIdx = -1;
+  // Subir scrollbars por encima del gcpCanvas (z-index:10) para que sean clicables
+  const _sbH = document.getElementById('ed-hscroll');
+  const _sbV = document.getElementById('ed-vscroll');
+  if (_sbH) _sbH.style.zIndex = '11';
+  if (_sbV) _sbV.style.zIndex = '11';
   document.getElementById('editorShell')?.classList.add('gcp-open');
 
 
@@ -19668,6 +19673,11 @@ function _gcpDoClose() {
     requestAnimationFrame(edFitCanvas);
   }
   if (gcpCanvas) { gcpCanvas.style.display = 'none'; gcpCanvas.style.pointerEvents = 'none'; }
+  // Restaurar z-index de scrollbars
+  const _sbHc = document.getElementById('ed-hscroll');
+  const _sbVc = document.getElementById('ed-vscroll');
+  if (_sbHc) _sbHc.style.zIndex = '';
+  if (_sbVc) _sbVc.style.zIndex = '';
   const shell = document.getElementById('gcpShell');
   if (shell) shell.style.display = 'none';
   window._gcpActive = false;
