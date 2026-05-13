@@ -20194,22 +20194,14 @@ function gcpOpen(edLayerIdx) {
       _gcpPreview();
     });
 
-    // Botón Ayuda GCP — mismo dropdown que el editor general, mismo comportamiento
-    document.querySelectorAll('#gcpMenuBar [data-menu]').forEach(btn => {
-      const id = btn.dataset.menu;
-      btn.addEventListener('pointerup', e => {
-        e.stopPropagation();
-        edToggleMenu(id);
-        if (id === 'gcp-rules') _gcpRuleToggleSync();
-      });
-    });
+    // Ítems del menú Ayuda GCP — abren las mismas ventanas que el editor general
     document.getElementById('gcp-dd-shortcuts')?.addEventListener('click', () => {
-      edCloseMenus();
+      _gcpCloseAllDropdowns();
       const m = document.getElementById('edShortcutsModal');
       if (m) m.classList.add('open');
     });
     document.getElementById('gcp-dd-anim-tutorial')?.addEventListener('click', () => {
-      edCloseMenus();
+      _gcpCloseAllDropdowns();
       const m = document.getElementById('edAnimTutorialModal');
       if (m) m.classList.add('open');
     });

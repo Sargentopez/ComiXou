@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.81</footer>
+    <footer class="app-version">v22.82</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -694,10 +694,10 @@ Router.register('editor', {
             </div>
           </div>
           <div class="ed-menu-sep"></div>
-          <!-- Ayuda — mismo submenú que el editor general, IDs con prefijo gcp- -->
+          <!-- Ayuda — sistema nativo GCP (data-gcpmenu + gdd- prefix) -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-menu="gcp-help">Ayuda ▾</button>
-            <div class="ed-dropdown" id="dd-gcp-help">
+            <button class="ed-menu-btn" data-gcpmenu="gcp-help">Ayuda ▾</button>
+            <div class="ed-dropdown" id="gdd-gcp-help">
               <button class="ed-dropdown-item" id="gcp-dd-shortcuts">⌨ Atajos de teclado</button>
               <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial">🎬 Crear animaciones</button>
             </div>
