@@ -1766,6 +1766,14 @@ body.editor-page #appView {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #gcpTopbar .ed-top-spacer { flex: 1; }
+/* gcpFrameNav: siempre en flujo flex (los dos spacers centran), nunca position:absolute */
+#gcpTopbar .ed-top-pagnav {
+  position: static !important;
+  left: auto !important;
+  transform: none !important;
+  align-self: center !important;
+  padding-bottom: 0 !important;
+}
 #gcpCloseBtn {
   background: none; border: none;
   font-size: 1.4rem; font-weight: 900;

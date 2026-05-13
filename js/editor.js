@@ -18874,7 +18874,7 @@ function _gcpUpdateFrameNav() {
   const total = _gcpGetTotalFrames();
   const hasLayers = window._gcpLayers && window._gcpLayers.length > 0;
   if (total <= 0 && !hasLayers) { nav.style.display = 'none'; return; }
-  nav.style.display = '';
+  nav.style.display = 'flex';
   num.textContent = total > 0 ? (window._gcpGlobalFrameIdx + 1) + ' / ' + total : '—';
   const prev = document.getElementById('gcpFramePrev');
   const next = document.getElementById('gcpFrameNext');
