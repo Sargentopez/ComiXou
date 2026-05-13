@@ -6619,14 +6619,25 @@ function edOnStart(e){
     if(_fl && _fl.locked){
       edRedraw(); return;
     }
-    // En táctil: esperar 120ms antes de iniciar drag — por si llega segundo dedo (pinch)
-    if(e.pointerType === 'touch'){
-      const _selFound = found, _selE = e, _selC = c;
+    edHideGearIcon();
+    clearTimeout(window._edLongPress);
+    if(_isTouch){
+      // TÁCTIL: detectar doble tap ANTES del timer — si es doble tap, actuar inmediatamente
+      const _now0 = Date.now();
+      if(found === _edLastTapIdx && _now0 - _edLastTapTime < 350){
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+        clearTimeout(window._edSelectTouchTimer); window._edSelectTouchTimer = null;
+        _edHandleDoubleTap(found);
+        return;
+      }
+      _edLastTapTime = _now0; _edLastTapIdx = found;
+      // Esperar 120ms antes de iniciar drag — por si llega segundo dedo (pinch)
+      const _selFound = found, _selC = c;
       clearTimeout(window._edSelectTouchTimer);
       window._edSelectTouchTimer = setTimeout(() => {
         window._edSelectTouchTimer = null;
         if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-        if(edSelectedIdx !== _selFound) return; // ya cambió la selección
+        if(edSelectedIdx !== _selFound) return;
         edDragOffX = _selC.nx - edLayers[_selFound].x;
         edDragOffY = _selC.ny - edLayers[_selFound].y;
         edIsDragging = true;
@@ -6651,23 +6662,7 @@ function edOnStart(e){
         _edShapePushHistory();
       }
     }
-    edHideGearIcon();
-    clearTimeout(window._edLongPress);
-    if(_isTouch){
-      // TÁCTIL: toque simple = solo seleccionar
-      // Doble toque rápido (≤350ms) → abrir panel de propiedades
-      const now = Date.now();
-      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
-        edIsDragging = false;
-        clearTimeout(window._edLongPress);
-        _edHandleDoubleTap(found);
-        _edLastTapTime = 0; _edLastTapIdx = -1;
-        return; // no continuar procesando este evento
-      } else {
-        _edLastTapTime = now; _edLastTapIdx = found;
-        // Sin long-press en táctil — solo doble toque abre el panel
-      }
-    } else {
+    { // scope PC/ratón
       // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
       const now = Date.now();
       if(found === _edLastTapIdx && now - _edLastTapTime < 350){
@@ -6688,7 +6683,7 @@ function edOnStart(e){
           }
         }, 600);
       }
-    }
+    } // fin scope PC/ratón
   } else {
     const _wasType = edSelectedIdx >= 0 ? edLayers[edSelectedIdx]?.type : null;
     const _wasLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
@@ -6714,12 +6709,21 @@ function edOnStart(e){
     edRenderOptionsPanel();
   }
   // Clic/toque en vacío → iniciar rubber band (PC y táctil)
-  // Condición: dentro del editor, sin objeto seleccionado, herramienta select
   if(tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
-    // En táctil: solo si hay un único dedo (no pinch)
-    if(e.pointerType === 'touch' && window._edActivePointers && window._edActivePointers.size > 1) {
-      // Dos o más dedos → no iniciar rubber band
+    if(e.pointerType === 'touch'){
+      // Táctil: esperar 120ms por si llega segundo dedo (pinch)
+      const _rbE = e;
+      clearTimeout(window._edSelectTouchTimer);
+      window._edSelectTouchTimer = setTimeout(() => {
+        window._edSelectTouchTimer = null;
+        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+        const _rc = edCoords(_rbE);
+        edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
+        window._edRubberBandEndPos = null;
+        edRedraw();
+      }, 120);
     } else {
+      // PC: inmediato
       const c = edCoords(e);
       edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
       window._edRubberBandEndPos = null;
