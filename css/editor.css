@@ -1743,6 +1743,7 @@ body.editor-page #appView {
   display: none;
   position: fixed;
   inset: 0;
+  padding-top: env(safe-area-inset-top, 0px);
   z-index: 500;
   pointer-events: none;
 }
