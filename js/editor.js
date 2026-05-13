@@ -17438,6 +17438,8 @@ function _gcpWithEditorContext(fn) {
 // ── Variables para doble tap en GCP ─────────────────────────────────────
 let _gcpLastTapTime = 0;
 let _gcpLastTapX = 0, _gcpLastTapY = 0;
+// Doble tap para objetos no-seleccionados (en _gcpDoSelectDrag)
+let _gcpLastTapTime2 = 0, _gcpLastTapIdx2 = -1;
 
 function _gcpHandleDown(e) {
   // ── DETECCIÓN DE DOBLE TAP: debe ser lo primero, antes de handles/drag ──
@@ -17569,75 +17571,66 @@ function _gcpHandleDown(e) {
     _gcpRedraw(); return;
   }
 
-  // Táctil: esperar 120ms antes de actuar (por si llega segundo dedo)
-  if (e.pointerType === 'touch') {
-    const _gcpE = e, _gcpC = c;
-    clearTimeout(_gcpTouchTimer);
-    _gcpTouchTimer = setTimeout(() => {
-      _gcpTouchTimer = null;
-      if (_gcpPtrMap.size !== 1) return; // llegó segundo dedo o se levantó
-      _gcpDoSelectDrag(_gcpE, _gcpC);
-    }, 120);
-    _gcpRedraw(); return;
-  }
-
-  // PC: actuar inmediatamente
+  // Actuar inmediatamente igual que el editor general
+  // El pinch se cancela en el bloque size===2 de arriba cuando llega el segundo dedo
   _gcpDoSelectDrag(e, c);
 }
 
 // Lógica real de selección/drag/handles en GCP (tras confirmar que es un solo puntero)
+// Idéntico al editor general: mismos radios, mismas restricciones táctiles, misma lógica
 function _gcpDoSelectDrag(e, c) {
   const _isTouch = e.pointerType === 'touch';
   const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
-  const hitScreen = _isTouch ? 28 : 18; // radio táctil mayor, igual que editor general
+  const hitScreen = _isTouch ? 28 : 18;
 
-  // ── Handles del objeto seleccionado ──────────────────────────────────────
+  // ── Handles del objeto seleccionado (solo si no es bubble) ───────────────
   const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
-  if (_la && _la.type !== 'bubble' && !_la.locked) {
-    for (const p of _la.getControlPoints()) {
-      const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
-      if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
-        if (p.corner === 'rotate') {
-          edIsRotating = true;
-          edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
-          _gcpRedraw(); return;
+  if (_la && _la.type !== 'bubble') {
+    if (!_la.locked) {
+      for (const p of _la.getControlPoints()) {
+        const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
+        if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
+          if (p.corner === 'rotate') {
+            if (_isTouch) continue; // táctil: rotación por pinch, igual que editor general
+            edIsRotating = true;
+            edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
+            return;
+          }
+          if (!_isTouch) { // táctil: resize por pinch, igual que editor general
+            edIsResizing = true; edResizeCorner = p.corner;
+            const _rot0 = (_la.rotation||0)*Math.PI/180;
+            const _hw0 = _la.width/2, _hh0 = _la.height/2;
+            const _anchorLocal = (corner) => {
+              const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
+                         corner==='tl'||corner==='bl'?_hw0 :
+                         corner==='tr'||corner==='br'?-_hw0 : 0;
+              const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
+                         corner==='tl'||corner==='tr'?_hh0 :
+                         corner==='bl'||corner==='br'?-_hh0 : 0;
+              const rx=ax*_pw, ry=ay*_ph;
+              return { x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw,
+                       y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph };
+            };
+            const _anch = _anchorLocal(p.corner);
+            edInitialSize = { width:_la.width, height:_la.height,
+              cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
+              rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
+              anchorX:_anch.x, anchorY:_anch.y };
+            if (_la.type==='line') {
+              edInitialSize._linePoints = _la.points.map(p=>p?({...p}):null);
+              edInitialSize._subPaths = _la.subPaths?.length
+                ? _la.subPaths.map(sp=>{const s=sp.map(p=>({...p}));if(sp.cornerRadii)s.cornerRadii={...sp.cornerRadii};return s;})
+                : null;
+            }
+            edInitialSize._cornerRadii = _la.cornerRadii
+              ? (Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii})
+              : null;
+            return;
+          }
         }
-        // Resize
-        edIsResizing = true; edResizeCorner = p.corner;
-        const _rot0 = (_la.rotation||0)*Math.PI/180;
-        const _hw0 = _la.width/2, _hh0 = _la.height/2;
-        const _anchorLocal = (corner) => {
-          const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
-                     corner==='tl'||corner==='bl'?_hw0 :
-                     corner==='tr'||corner==='br'?-_hw0 : 0;
-          const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
-                     corner==='tl'||corner==='tr'?_hh0 :
-                     corner==='bl'||corner==='br'?-_hh0 : 0;
-          const rx=ax*_pw, ry=ay*_ph;
-          return { x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw,
-                   y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph };
-        };
-        const _anch = _anchorLocal(p.corner);
-        edInitialSize = { width:_la.width, height:_la.height,
-          cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
-          rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
-          anchorX:_anch.x, anchorY:_anch.y };
-        if (_la.type==='line') {
-          edInitialSize._linePoints = _la.points.map(p=>p?({...p}):null);
-          edInitialSize._subPaths = _la.subPaths?.length
-            ? _la.subPaths.map(sp=>{const s=sp.map(p=>({...p}));if(sp.cornerRadii)s.cornerRadii={...sp.cornerRadii};return s;})
-            : null;
-        }
-        edInitialSize._cornerRadii = _la.cornerRadii
-          ? (Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii})
-          : null;
-        _gcpRedraw(); return;
       }
     }
-  }
-
-  // ── Drag del objeto seleccionado dentro de su bbox ───────────────────────
-  if (_la) {
+    // ── Drag del objeto seleccionado dentro de su bbox ─────────────────────
     const _rot = (_la.rotation||0)*Math.PI/180;
     const _dx = c.nx-_la.x, _dy = c.ny-_la.y;
     const _lx = _dx*Math.cos(-_rot)*_pw - _dy*Math.sin(-_rot)*_ph;
@@ -17647,29 +17640,48 @@ function _gcpDoSelectDrag(e, c) {
         edIsDragging = true;
         edDragOffX = c.nx - _la.x;
         edDragOffY = c.ny - _la.y;
+        window._edMoved = false;
       }
       _gcpRedraw(); return;
     }
   }
 
-  // ── Buscar otro objeto bajo el toque ─────────────────────────────────────
+  // ── Buscar cualquier objeto bajo el toque (3 pasadas, igual que editor general) ──
   let hit = -1;
+  // Pasada 1: textos y bocadillos primero (siempre encima visualmente)
   for (let i = window._gcpLayers.length-1; i >= 0; i--) {
-    if (window._gcpLayers[i]?.contains?.(c.nx, c.ny)) { hit = i; break; }
+    const _l = window._gcpLayers[i];
+    if ((_l.type==='text'||_l.type==='bubble') && _l.contains?.(c.nx, c.ny)) { hit = i; break; }
+  }
+  // Pasada 2: resto de capas (hit exacto)
+  if (hit < 0) {
+    for (let i = window._gcpLayers.length-1; i >= 0; i--) {
+      const _l = window._gcpLayers[i];
+      if (_l.type==='text'||_l.type==='bubble') continue;
+      if (_l.contains?.(c.nx, c.ny)) { hit = i; break; }
+    }
   }
   if (hit >= 0) {
     window._gcpSelIdx = hit;
     const _hitLa = window._gcpLayers[hit];
+    // Doble tap sobre objeto → abrir panel de propiedades (igual que editor general)
+    const _nowH = Date.now();
+    if (hit === _gcpLastTapIdx2 && _nowH - _gcpLastTapTime2 < 350) {
+      _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
+      _gcpOpenPropsPanel(_hitLa, hit);
+      _gcpRedraw(); return;
+    }
+    _gcpLastTapTime2 = _nowH; _gcpLastTapIdx2 = hit;
     if (_hitLa && !_hitLa.locked) {
       edIsDragging = true;
       edDragOffX = c.nx - _hitLa.x;
       edDragOffY = c.ny - _hitLa.y;
+      window._edMoved = false;
     }
-    _gcpPanActive = false;
   } else {
     // Toque en vacío — deseleccionar
     window._gcpSelIdx = -1;
-    _gcpPanActive = false;
+    _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
   }
   _gcpRedraw();
 }
