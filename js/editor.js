@@ -5225,16 +5225,12 @@ function _edHandleDoubleTap(idx){
     edDrawColor = la.color || '#000000';
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
-  } else if (la && la.type === 'gif') {
-    // GifLayer importado: abrir editor GIF
+  } else if (la && (la.type === 'gif' || (la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames)))) {
+    // Animación: abrir panel de propiedades (con botón "Editar animación" que abre el GCP)
     edSelectedIdx = idx;
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
     edRedraw();
-    gcpOpen(idx);
-  } else if (la && la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames)) {
-    // ImageLayer de animación: abrir editor GIF para re-editar
-    edSelectedIdx = idx;
-    edRedraw();
-    gcpOpen(idx);
   } else {
     // image, text, bubble y cualquier otro tipo
     edSelectedIdx = idx;
@@ -10625,6 +10621,19 @@ function edRenderOptionsPanel(mode){
         <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
+    } else if(la.type==='gif' || (la.type==='image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames))) {
+      // Animación — sin recorte, con botón de editar en GCP
+      html+=`
+      <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
+        <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
+      </div>
+      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+        <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
+        <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+      </div>
+      <div class="op-prop-row">
+        <button id="pp-edit-anim" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎬 Editar animación</button>
+      </div>`;
     } else if(la.type==='image'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
@@ -10732,6 +10741,12 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
+    $('pp-edit-anim')?.addEventListener('click',()=>{
+      const _animIdx = edSelectedIdx;
+      edCloseOptionsPanel();
+      _edDrawUnlockUI(); _edPropsOverlayHide();
+      gcpOpen(_animIdx);
+    });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
