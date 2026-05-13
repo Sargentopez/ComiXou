@@ -17429,6 +17429,9 @@ function _gcpPushLayer(la) {
   window._gcpLayers.push(la);
   _gcpLastTapTime2 = 0;
   _gcpLastTapIdx2 = -1;
+  // Limpiar pointers fantasma que pudieran quedar del gesto de inserción
+  _gcpPtrMap.clear();
+  _gcpPinching = false; _gcpPinchDist0 = 0; _gcpPinchObj = null; _gcpSelBeforePinch = -1;
 }
 let _gcpPinchObj      = null;  // snapshot del objeto al iniciar pinch
 let _gcpPinchAngle0  = 0;     // ángulo inicial del pinch para rotación
