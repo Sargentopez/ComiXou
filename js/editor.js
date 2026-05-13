@@ -5636,6 +5636,10 @@ function edOnStart(e){
     if(window._edDrawTouchTimer){ clearTimeout(window._edDrawTouchTimer); window._edDrawTouchTimer = null; }
     // Cancelar timer de recorte pendiente — era un pinch, no un tap
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
+    // Cancelar timer de rubber band — era un pinch, no una selección múltiple
+    if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
+    // Si rubber band ya había empezado (caso borde), cancelarla
+    if(edRubberBand){ edRubberBand = null; edRedraw(); }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
     if(edActiveTool==='multiselect' && edMultiSel.length){
       edMultiDragging=false; edMultiDragOffs=[];
@@ -5820,9 +5824,16 @@ function edOnStart(e){
     } else {
       // Tocar en vacío fuera del bbox
       if(e.pointerType === 'touch'){
-        // Táctil: mantener herramienta multiselect y comenzar nueva rubber band
+        // Táctil: esperar 120ms por si llega segundo dedo antes de iniciar rubber band
         _msClear();
-        edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+        clearTimeout(window._edRbTouchTimer);
+        const _rbC2 = c;
+        window._edRbTouchTimer = setTimeout(() => {
+          window._edRbTouchTimer = null;
+          if(window._edActivePointers && window._edActivePointers.size > 1) return;
+          edRubberBand={x0:_rbC2.nx,y0:_rbC2.ny,x1:_rbC2.nx,y1:_rbC2.ny};
+          edRedraw();
+        }, 120);
       } else {
         // PC: deseleccionar y volver a modo select
         _msClear();
@@ -6680,10 +6691,21 @@ function edOnStart(e){
   // Clic/toque en vacío → iniciar rubber band (PC y táctil)
   // Condición: dentro del editor, sin objeto seleccionado, herramienta select
   if(tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
-    // En táctil: solo si hay un único dedo (no pinch)
-    if(e.pointerType === 'touch' && window._edActivePointers && window._edActivePointers.size > 1) {
-      // Dos o más dedos → no iniciar rubber band
+    if(e.pointerType === 'touch'){
+      // Táctil: esperar 120ms por si llega segundo dedo (pinch/zoom)
+      const _rbE = e;
+      clearTimeout(window._edRbTouchTimer);
+      window._edRbTouchTimer = setTimeout(() => {
+        window._edRbTouchTimer = null;
+        // Si llegó un segundo dedo durante la espera, no iniciar rubber band
+        if(window._edActivePointers && window._edActivePointers.size > 1) return;
+        const _rc = edCoords(_rbE);
+        edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
+        window._edRubberBandEndPos = null;
+        edRedraw();
+      }, 120);
     } else {
+      // PC: inmediato
       const c = edCoords(e);
       edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
       window._edRubberBandEndPos = null;
@@ -17965,6 +17987,8 @@ function _gcpHandleUp(e) {
   if (_gcpPtrMap.size === 0) _gcpPanActive = false;
 
   _gcpRuleDrag = null; // fin drag de guía GCP
+  // Cancelar timer de rubber band si el dedo se levanta antes de que expire
+  if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
