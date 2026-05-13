@@ -10791,11 +10791,13 @@ function edRenderOptionsPanel(mode){
       la2.rotation=parseFloat(e.target.value)||0;
       edRedraw();
     });
+    $('pp-rot')?.addEventListener('change',()=>{ edPushHistory(); });
     $('pp-opacity')?.addEventListener('input',e=>{
       la.opacity = e.target.value/100;
       const v=$('pp-opacity-val'); if(v) v.textContent=e.target.value+'%';
       edRedraw();
     });
+    $('pp-opacity')?.addEventListener('change',()=>{ edPushHistory(); });
     // Si el texto es placeholder, seleccionar todo para sobreescribir directamente
     const ppText = $('pp-text');
     if(ppText && (edLayers[edSelectedIdx]?.text === 'Escribe aquí')){
