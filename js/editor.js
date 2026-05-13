@@ -17440,6 +17440,9 @@ let _gcpLastTapTime = 0;
 let _gcpLastTapX = 0, _gcpLastTapY = 0;
 // Doble tap para objetos no-seleccionados (en _gcpDoSelectDrag)
 let _gcpLastTapTime2 = 0, _gcpLastTapIdx2 = -1;
+let _gcpPinchObj      = null;  // snapshot del objeto al iniciar pinch
+let _gcpPinchAngle0  = 0;     // ángulo inicial del pinch para rotación
+let _gcpSelBeforePinch = -1;  // selección antes del primer dedo (para restaurar en pinch)
 
 function _gcpHandleDown(e) {
   // ── DETECCIÓN DE DOBLE TAP: debe ser lo primero, antes de handles/drag ──
@@ -17557,19 +17560,33 @@ function _gcpHandleDown(e) {
   // Registrar pointer en mapa propio del GCP
   _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // Dos dedos → pinch de cámara (zoom + pan solidario con editor general)
+  // Dos dedos → pinch
   if (_gcpPtrMap.size === 2) {
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     const _pts = [..._gcpPtrMap.values()];
-    _gcpPinchDist0 = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
-    _gcpPinchMidX  = (_pts[0].x + _pts[1].x) / 2;
-    _gcpPinchMidY  = (_pts[0].y + _pts[1].y) / 2;
-    _gcpPinchCam0  = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
-    _gcpPinching   = true;
+    _gcpPinchDist0  = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
+    _gcpPinchMidX   = (_pts[0].x + _pts[1].x) / 2;
+    _gcpPinchMidY   = (_pts[0].y + _pts[1].y) / 2;
+    _gcpPinchCam0   = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
+    _gcpPinchAngle0 = Math.atan2(_pts[1].y - _pts[0].y, _pts[1].x - _pts[0].x);
+    _gcpPinching    = true;
+    // Restaurar selección previa si el primer dedo la borró, y capturar objeto para pinch
+    // (_gcpSelBeforePinch guarda el índice antes de que _gcpDoSelectDrag lo cambie)
+    const _selForPinch = (_gcpSelBeforePinch >= 0) ? _gcpSelBeforePinch : window._gcpSelIdx;
+    if (_selForPinch >= 0) window._gcpSelIdx = _selForPinch; // restaurar
+    _gcpSelBeforePinch = -1;
+    const _pla = _selForPinch >= 0 ? window._gcpLayers[_selForPinch] : null;
+    if (_pla && !_pla.locked) {
+      _gcpPinchObj = { w: _pla.width, h: _pla.height, rot: _pla.rotation || 0,
+                       x: _pla.x, y: _pla.y };
+    } else {
+      _gcpPinchObj = null;
+    }
     _gcpRedraw(); return;
   }
 
-  // Un solo dedo → selección / drag / handles
+  // Un solo dedo → guardar selección actual ANTES de que _gcpDoSelectDrag la cambie
+  _gcpSelBeforePinch = window._gcpSelIdx;
   _gcpDoSelectDrag(e, c);
 }
 
@@ -17949,18 +17966,35 @@ function _gcpHandleMove(e) {
   if (_gcpPtrMap.has(e.pointerId)) {
     _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
   }
-  // ── Pinch: zoom + pan solidario con edCamera ─────────────────────────────
+  // ── Pinch: objeto seleccionado → escalar+rotar; sin objeto → zoom+pan cámara ──
   if (_gcpPinching && _gcpPtrMap.size >= 2) {
     const pts  = [..._gcpPtrMap.values()].slice(0, 2);
     const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
     const midX = (pts[0].x + pts[1].x) / 2;
     const midY = (pts[0].y + pts[1].y) / 2;
     const ratio = dist / Math.max(_gcpPinchDist0, 1);
-    const newZ  = Math.min(Math.max(_gcpPinchCam0.z * ratio, 0.05), 8);
-    edCamera.x = midX - (_gcpPinchMidX - _gcpPinchCam0.x) / _gcpPinchCam0.z * newZ;
-    edCamera.y = midY - (_gcpPinchMidY - _gcpPinchCam0.y) / _gcpPinchCam0.z * newZ;
-    edCamera.z = newZ;
-    edRedraw(); _gcpRedraw(); _edScrollbarsUpdate();
+    const angle = Math.atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x);
+    const dAngle = (angle - _gcpPinchAngle0) * 180 / Math.PI;
+    if (_gcpPinchObj) {
+      // Escalar y rotar el objeto seleccionado (igual que edPinchScale0 en el editor general)
+      const _pla = window._gcpSelIdx >= 0 ? window._gcpLayers[window._gcpSelIdx] : null;
+      if (_pla && !_pla.locked) {
+        const newW = Math.min(Math.max(_gcpPinchObj.w * ratio, 0.04), 2.0);
+        const newH = newW * (_gcpPinchObj.h / Math.max(_gcpPinchObj.w, 0.01));
+        _pla.width    = newW;
+        _pla.height   = newH;
+        _pla.rotation = _gcpPinchObj.rot + dAngle;
+        _gcpAutoSaveFrame();
+      }
+    } else {
+      // Sin objeto → mover cámara (zoom + pan solidario)
+      const newZ = Math.min(Math.max(_gcpPinchCam0.z * ratio, 0.05), 8);
+      edCamera.x = midX - (_gcpPinchMidX - _gcpPinchCam0.x) / _gcpPinchCam0.z * newZ;
+      edCamera.y = midY - (_gcpPinchMidY - _gcpPinchCam0.y) / _gcpPinchCam0.z * newZ;
+      edCamera.z = newZ;
+      edRedraw(); _edScrollbarsUpdate();
+    }
+    _gcpRedraw();
     return;
   }
   // ── Drag / resize / rotate normales ─────────────────────────────────────
@@ -18020,7 +18054,7 @@ function _gcpHandleMove(e) {
 function _gcpHandleUp(e) {
   // Limpiar mapa propio de pinch
   _gcpPtrMap.delete(e.pointerId);
-  if (_gcpPtrMap.size < 2) { _gcpPinching = false; _gcpPinchDist0 = 0; }
+  if (_gcpPtrMap.size < 2) { _gcpPinching = false; _gcpPinchDist0 = 0; _gcpPinchObj = null; _gcpSelBeforePinch = -1; }
   // Limpiar también _edActivePointers para que no queden pointers fantasma
   // (el pointer fue registrado por edOnStart pero edOnEnd no se llama en GCP)
   if (window._edActivePointers) window._edActivePointers.delete(e.pointerId);
