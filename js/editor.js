@@ -10759,10 +10759,12 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
-    $('pp-edit-anim')?.addEventListener('click',()=>{
+    $('pp-edit-anim')?.addEventListener('pointerup', e =>{
+      e.stopPropagation();
+      const _animIdx = edSelectedIdx; // capturar antes de cerrar
       edCloseOptionsPanel();
       _edDrawUnlockUI();
-      gcpOpen(edSelectedIdx);
+      gcpOpen(_animIdx);
     });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
