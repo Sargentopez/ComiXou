@@ -17554,25 +17554,10 @@ function _gcpHandleDown(e) {
     }
   }
 
-  // Registrar pointer para pinch/pan (siempre antes del timer)
-  _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-  // Dos dedos → pinch inmediato, cancelar cualquier timer pendiente
-  if (_gcpPtrMap.size === 2) {
-    if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
-    edIsDragging = false; edIsResizing = false; edIsRotating = false;
-    _gcpPanActive = false;
-    const _pts = [..._gcpPtrMap.values()];
-    _gcpPinchDist0 = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
-    _gcpPinchMidX  = (_pts[0].x + _pts[1].x) / 2;
-    _gcpPinchMidY  = (_pts[0].y + _pts[1].y) / 2;
-    _gcpPinchCam0  = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
-    _gcpPinching   = true;
-    _gcpRedraw(); return;
-  }
-
-  // Actuar inmediatamente igual que el editor general
-  // El pinch se cancela en el bloque size===2 de arriba cuando llega el segundo dedo
+  // Actuar inmediatamente — el pinch lo gestiona edOnStart/edPinchStart/edPinchMove
+  // (sistema compartido con el editor general vía _edActivePointers)
+  // Si ya hay 2 dedos activos (registrados por edOnStart), no procesar drag
+  if (window._edActivePointers && window._edActivePointers.size >= 2) return;
   _gcpDoSelectDrag(e, c);
 }
 
@@ -17948,25 +17933,10 @@ function _gcpAutoSaveFrame() {
 }
 
 function _gcpHandleMove(e) {
-  // Actualizar pointer en el mapa
-  if (_gcpPtrMap.has(e.pointerId)) {
-    _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  }
-  // ── Pinch: zoom + pan ────────────────────────────────────────────────────
-  if (_gcpPinching && _gcpPtrMap.size >= 2) {
-    const pts  = [..._gcpPtrMap.values()].slice(0, 2);
-    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    const midX = (pts[0].x + pts[1].x) / 2;
-    const midY = (pts[0].y + pts[1].y) / 2;
-    const ratio = dist / Math.max(_gcpPinchDist0, 1);
-    const newZ  = Math.min(Math.max(_gcpPinchCam0.z * ratio, 0.05), 8);
-    edCamera.x = midX - (_gcpPinchMidX - _gcpPinchCam0.x) / _gcpPinchCam0.z * newZ;
-    edCamera.y = midY - (_gcpPinchMidY - _gcpPinchCam0.y) / _gcpPinchCam0.z * newZ;
-    edCamera.z = newZ;
-    edRedraw(); _gcpRedraw(); _edScrollbarsUpdate();
-    return;
-  }
-  // Pan con un dedo: desactivado — solo pinch (dos dedos) mueve la cámara
+  // ── Pinch: gestionado por edPinchMove vía edOnMove (sistema compartido) ──
+  // edOnMove ya llama edPinchMove() que mueve edCamera y llama _gcpRedraw()
+  // Solo procesar drag/resize/rotate si no hay pinch activo
+  if (edPinching) { e.preventDefault(); return; }
   // ── Drag / resize / rotate normales ─────────────────────────────────────
   _gcpWithEditorContext(() => {
     // Drag de guía GCP — tiene prioridad sobre edOnMove si hay drag activo de guía
@@ -18022,14 +17992,7 @@ function _gcpHandleMove(e) {
 }
 
 function _gcpHandleUp(e) {
-  // Gestión de punteros: pinch/pan
-  _gcpPtrMap.delete(e.pointerId);
-  if (_gcpPtrMap.size < 2 && _gcpPinching) {
-    _gcpPinching   = false;
-    _gcpPinchDist0 = 0;
-  }
-  if (_gcpPtrMap.size === 0) _gcpPanActive = false;
-
+  // El pinch lo gestiona edOnEnd/edPinchEnd (sistema compartido con editor general)
   _gcpRuleDrag = null; // fin drag de guía GCP
   // Cancelar timer de rubber band si el dedo se levanta antes de que expire
   if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
