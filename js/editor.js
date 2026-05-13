@@ -15505,6 +15505,18 @@ function EditorView_init(){
     if (e.target === document.getElementById('edShortcutsModal'))
       document.getElementById('edShortcutsModal').classList.remove('open');
   });
+  $('dd-anim-tutorial')?.addEventListener('click', () => {
+    edCloseMenus();
+    const m = document.getElementById('edAnimTutorialModal');
+    if (m) m.classList.add('open');
+  });
+  $('edAnimTutorialClose')?.addEventListener('click', () => {
+    document.getElementById('edAnimTutorialModal')?.classList.remove('open');
+  });
+  document.getElementById('edAnimTutorialModal')?.addEventListener('pointerdown', e => {
+    if (e.target === document.getElementById('edAnimTutorialModal'))
+      document.getElementById('edAnimTutorialModal').classList.remove('open');
+  });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
   $('edFileGallery')?.addEventListener('change', async e=>{
@@ -15704,8 +15716,6 @@ function EditorView_init(){
 
   // ── PROYECTO ──
   $('dd-editproject')?.addEventListener('click',()=>{edOpenProjectModal();edCloseMenus();});
-  $('dd-viewerjson')?.addEventListener('click',()=>{edOpenViewer();edCloseMenus();});
-  $('dd-savejson')?.addEventListener('click',()=>{edDownloadJSON();edCloseMenus();});
   // Submenú Hoja actual (inline, igual que los demás submenús)
   $('dd-exportpagebtn')?.addEventListener('click', e => {
     e.stopPropagation();
@@ -15740,7 +15750,6 @@ function EditorView_init(){
   });
   $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
   $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
-  $('dd-loadjson')?.addEventListener('click',()=>{$('edLoadFile').click();edCloseMenus();});
   // Mostrar "Recuperar versión del dispositivo" si hay versión local guardada
   function _edUpdateRecoverBtn() {
     const btn = $('dd-recoverlocal');
@@ -15801,7 +15810,6 @@ function EditorView_init(){
       setTimeout(()=>Router.go('my-comics'),600);
     });
   });
-  $('edLoadFile')?.addEventListener('change',e=>{edLoadFromJSON(e.target.files[0]);e.target.value='';});
 
   // ── CAPAS ──
   const _layersBtn = document.querySelector('[data-menu="layers"]');
@@ -15956,6 +15964,9 @@ function EditorView_init(){
       // Cerrar modal de atajos si está abierto
       const scModal = document.getElementById('edShortcutsModal');
       if(scModal && scModal.classList.contains('open')){ scModal.classList.remove('open'); return; }
+      // Cerrar modal de animaciones si está abierto
+      const atModal = document.getElementById('edAnimTutorialModal');
+      if(atModal && atModal.classList.contains('open')){ atModal.classList.remove('open'); return; }
       // Cerrar modal de guardado si está abierto
       const saveModal=document.querySelector('div[style*="z-index:99999"]');
       if(saveModal){ e.preventDefault(); saveModal.remove(); return; }
@@ -16332,16 +16343,6 @@ function EditorView_init(){
 }
 
 /* ── DESCARGAR / CARGAR JSON ── */
-function edDownloadJSON(){
-  edSaveProject();
-  const data=localStorage.getItem('cs_comics');
-  const comic=ComicStore.getById(edProjectId);if(!comic)return;
-  const blob=new Blob([JSON.stringify(comic,null,2)],{type:'application/json'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download=(edProjectMeta.title||'proyecto').replace(/\s+/g,'_')+'.json';
-  a.click();
-}
 // Exportar la hoja actual como PNG o JPG
 // Renderiza en canvas offscreen con transform z=1, desplazado al origen de la página
 function edExportPagePNG(format){
@@ -16486,32 +16487,6 @@ function edExportSelectionPNG(format) {
   }, mimeType, quality);
 }
 
-function edLoadFromJSON(file){
-  if(!file)return;
-  const reader=new FileReader();
-  reader.onload=e=>{
-    try{
-      const data=JSON.parse(e.target.result);
-      if(data.editorData){
-        edProjectMeta={title:data.title||'',author:data.author||'',genre:data.genre||'',navMode:data.navMode||'fixed',social:data.social||''};
-        edOrientation=data.editorData.orientation||'vertical';
-        edPages=(data.editorData.pages||[]).map(pd=>({
-          drawData:pd.drawData||null,
-          layers:(pd.layers||[]).map(d=>edDeserLayer(d, pd.orientation||data.editorData.orientation||'vertical')).filter(Boolean),
-          textLayerOpacity:pd.textLayerOpacity??1,
-          textMode:pd.textMode||'sequential',
-          orientation:pd.orientation||data.editorData.orientation||'vertical',
-        }));
-        if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
-        edCurrentPage=0;edLayers=edPages[0].layers;
-        edSetOrientation(edOrientation);
-        const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title;
-        edToast('Proyecto cargado ✓');
-      }
-    }catch(err){edToast('Error al cargar el archivo');}
-  };
-  reader.readAsText(file);
-}
 
 // ═══════════════════════════════════════════════════════════════
 // ── BIBLIOTECA (T8) ─────────────────────────────────────────────
@@ -18058,7 +18033,56 @@ function _gcpHandleUp(e) {
   // Limpiar también _edActivePointers para que no queden pointers fantasma
   // (el pointer fue registrado por edOnStart pero edOnEnd no se llama en GCP)
   if (window._edActivePointers) window._edActivePointers.delete(e.pointerId);
-  _gcpRuleDrag = null; // fin drag de guía GCP
+  // ── Fusión de guías GCP (igual que editor general) ──────────────────
+  if (_gcpRuleDrag) {
+    const _finDrag = _gcpRuleDrag;
+    _gcpRuleDrag = null;
+    if (_finDrag.part === 'a' || _finDrag.part === 'b') {
+      const _rDragged = _gcpRules.find(r => r.id === _finDrag.ruleId);
+      if (_rDragged && !_rDragged.nodeA && !_rDragged.nodeB) {
+        const _ex = _finDrag.part === 'a' ? _rDragged.x1 : _rDragged.x2;
+        const _ey = _finDrag.part === 'a' ? _rDragged.y1 : _rDragged.y2;
+        const _isTouch = e.pointerType === 'touch';
+        const _rPx = (_ED_RULE_R * 2) / Math.max(0.1, edCamera.z);
+        const _fusionThresh = _isTouch ? (28 / Math.max(0.1, edCamera.z)) : _rPx * 0.2;
+        const _nPx = _isTouch ? (32 / Math.max(0.1, edCamera.z)) : (_ED_RULE_R * 1.5) / Math.max(0.1, edCamera.z);
+        let _fused = false;
+        // CASO A: arrastrar sobre nodo compartido existente → incorporar al grupo
+        for (const _node of _gcpRuleNodes) {
+          if (_fused) break;
+          if (_node.ruleIds.includes(_rDragged.id)) continue;
+          if (Math.hypot(_ex - _node.x, _ey - _node.y) <= _nPx) {
+            if (_finDrag.part === 'a') { _rDragged.x1 = _node.x; _rDragged.y1 = _node.y; _rDragged.nodeA = _node.id; }
+            else                       { _rDragged.x2 = _node.x; _rDragged.y2 = _node.y; _rDragged.nodeB = _node.id; }
+            _node.ruleIds.push(_rDragged.id);
+            _fused = true;
+          }
+        }
+        // CASO B: arrastrar sobre el círculo libre de otra guía → crear nodo nuevo
+        if (!_fused) {
+          for (const _rOther of _gcpRules) {
+            if (_rOther.id === _rDragged.id || _fused) continue;
+            for (const [_ox, _oy, _oPart] of [[_rOther.x1, _rOther.y1, 'a'], [_rOther.x2, _rOther.y2, 'b']]) {
+              if (_oPart === 'a' && _rOther.nodeA) continue;
+              if (_oPart === 'b' && _rOther.nodeB) continue;
+              if (Math.hypot(_ex - _ox, _ey - _oy) <= _fusionThresh) {
+                const _nx = (_ex + _ox) / 2, _ny = (_ey + _oy) / 2;
+                const _nid = ++_gcpRuleNodeId;
+                _gcpRuleNodes.push({ id: _nid, x: _nx, y: _ny, ruleIds: [_rDragged.id, _rOther.id], locked: false });
+                if (_finDrag.part === 'a') { _rDragged.x1 = _nx; _rDragged.y1 = _ny; _rDragged.nodeA = _nid; }
+                else                       { _rDragged.x2 = _nx; _rDragged.y2 = _ny; _rDragged.nodeB = _nid; }
+                if (_oPart === 'a') { _rOther.x1 = _nx; _rOther.y1 = _ny; _rOther.nodeA = _nid; }
+                else                { _rOther.x2 = _nx; _rOther.y2 = _ny; _rOther.nodeB = _nid; }
+                _fused = true; break;
+              }
+            }
+          }
+        }
+      }
+    }
+  } else {
+    _gcpRuleDrag = null;
+  }
   // Cancelar timer de rubber band si el dedo se levanta antes de que expire
   if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
   // Si no quedan dedos activos y hay una rubber band huérfana, limpiarla
@@ -18140,6 +18164,7 @@ let _gcpRules      = [];       // guías del editor de animaciones
 let _gcpRuleNodes  = [];       // nodos compartidos (puntos de fuga)
 let _gcpRulesHidden = false;   // visibilidad global
 let _gcpRuleId     = 0;        // contador IDs
+let _gcpRuleNodeId = 0;        // contador IDs de nodos compartidos
 let _gcpRuleDrag   = null;     // drag activo de guía
 let _gcpRulePanelId = null;    // id de guía con panel abierto
 
@@ -20031,7 +20056,7 @@ function gcpOpen(edLayerIdx) {
   window._gcpSelIdx         = -1;
   window._gcpGlobalFrameIdx = 0;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
-  _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null;
+  _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null; _gcpRuleNodeId = 0;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }

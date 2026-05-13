@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.75</footer>
+    <footer class="app-version">v22.79</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -358,8 +358,6 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
             <div class="ed-dropdown" id="dd-project">
               <button class="ed-dropdown-item" id="dd-editproject">Editar datos de la obra</button>
-              <button class="ed-dropdown-item" id="dd-viewerjson">Previsualizar</button>
-              <div class="ed-dropdown-sep"></div>
               <div class="ed-dropdown-submenu" id="dd-export-wrap">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-exportbtn">⬇ Descargar… ▸</button>
                 <div class="ed-submenu" id="dd-export-sub">
@@ -370,7 +368,6 @@ Router.register('editor', {
                       <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
                     </div>
                   </div>
-                  <button class="ed-dropdown-item" id="dd-savejson">Obra (.json)</button>
                   <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
                     <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn">Selección ▸</button>
                     <div class="ed-submenu" id="dd-export-sel-sub">
@@ -380,7 +377,6 @@ Router.register('editor', {
                   </div>
                 </div>
               </div>
-              <button class="ed-dropdown-item" id="dd-loadjson">Cargar obra (.json)</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-recoverlocal" style="display:none">↩ Recuperar versión del dispositivo</button>
               <div class="ed-dropdown-sep"></div>
@@ -407,6 +403,7 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="help">Ayuda ▾</button>
             <div class="ed-dropdown" id="dd-help">
               <button class="ed-dropdown-item" id="dd-shortcuts">⌨ Atajos de teclado</button>
+              <button class="ed-dropdown-item" id="dd-anim-tutorial">🎬 Crear animaciones</button>
             </div>
           </div>
 
@@ -587,9 +584,21 @@ Router.register('editor', {
       </div>
     </div>
 
+    <!-- Modal de tutorial Crear animaciones -->
+    <div id="edAnimTutorialModal">
+      <div class="sc-box">
+        <div class="sc-header">
+          <span class="sc-title">🎬 Crear animaciones</span>
+          <button class="sc-close" id="edAnimTutorialClose">✕</button>
+        </div>
+        <div class="sc-body">
+          <p style="text-align:center;color:var(--gray-500);font-style:italic;padding:24px 0;">Próximamente...</p>
+        </div>
+      </div>
+    </div>
+
     <input type="file" id="edFileGif" accept=".gif,image/gif" style="display:none">
     <input type="file" id="edFileAnim" accept=".gif,image/gif,.apng,image/apng,image/vnd.mozilla.apng" style="display:none">
-    <input type="file" id="edLoadFile" accept=".json" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">
       <video id="edCameraVideo" autoplay playsinline muted></video>
