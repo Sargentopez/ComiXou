@@ -1750,7 +1750,7 @@ body.editor-page #appView {
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 52px;
-  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
+  background: linear-gradient(to right, #5ab4f0 33%, #d6eeff 50%, #5ab4f0 67%);
   border-bottom: 2.5px solid var(--black);
   display: flex;
   align-items: center;
