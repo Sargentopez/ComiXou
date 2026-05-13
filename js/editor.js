@@ -2868,14 +2868,27 @@ function _edUpdateMultiSelPanel(){
   const _mergeTypes = _edMergeableTypes();
   dd.innerHTML = `
     <button class="ed-dropdown-item" id="_ms-group">⊞ Agrupar</button>
-    ${_hasGroup ? `<button class="ed-dropdown-item" id="_ms-ungroup">⊟ Desagrupar</button>` : ''}
-    ${_mergeTypes ? `<button class="ed-dropdown-item" id="_ms-merge">⊕ Unir</button>` : ''}`;
+    ${_mergeTypes ? `<button class="ed-dropdown-item" id="_ms-merge">⊕ Unir</button>` : ''}
+    <div class="ed-dropdown-sep"></div>
+    <button class="ed-dropdown-item" id="_ms-delete" style="color:#c00">✕ Eliminar selección</button>`;
   $('_ms-group')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edGroupSelected(); });
-  $('_ms-ungroup')?.addEventListener('click', ()=>{
-    dd.classList.remove('open');
-    edUngroupSelected();
-  });
   $('_ms-merge')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edMergeSelected(); });
+  $('_ms-delete')?.addEventListener('click', ()=>{
+    dd.classList.remove('open');
+    const _n = edMultiSel.length;
+    edConfirm(`¿Eliminar ${_n} objeto${_n===1?'':'s'}?`, () => {
+      edPushHistory();
+      const page = edPages[edCurrentPage]; if(!page) return;
+      // Ordenar desc para eliminar sin desfasar índices
+      const _toDelete = [...edMultiSel].sort((a,b)=>b-a);
+      _toDelete.forEach(i => { page.layers.splice(i,1); });
+      edLayers = page.layers;
+      _msClear();
+      edSelectedIdx = -1;
+      edActiveTool = 'select'; edCanvas.className = '';
+      edRedraw();
+    }, 'Eliminar');
+  });
   const btn = $('edMultiSelBtn');
   if(btn){
     dd.classList.add('open');
@@ -6585,7 +6598,7 @@ function edOnStart(e){
       if(edMultiSel.length >= 2){
         edActiveTool = 'multiselect';
         edCanvas.className = 'tool-multiselect';
-        $('edMultiSelBtn')?.classList.add('active');
+        // botón nunca queda active — opciones disponibles vía tap en botón
         _msRecalcBbox();
         _edUpdateMultiSelPanel();
       } else if(edMultiSel.length === 1){
@@ -7399,7 +7412,7 @@ function edOnEnd(e){
         edActiveTool='multiselect';
         edCanvas.className='tool-multiselect';
         _msRecalcBbox();
-        $('edMultiSelBtn')?.classList.add('active');
+        // botón nunca queda active — opciones disponibles vía tap en botón
         _edUpdateMultiSelPanel();
       }
     }
@@ -15363,32 +15376,18 @@ function EditorView_init(){
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
   $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
   function _edToggleMultiSel(){
-    if(edActiveTool==='multiselect'){
-      _edDeactivateMultiSel();
-    } else {
-      _msClear();
-      edSelectedIdx=-1;
-      edActiveTool='multiselect';
-      edCanvas.className='tool-multiselect';
-      $('edMultiSelBtn')?.classList.add('active');
-      const panel=$('edOptionsPanel');
-      if(panel){panel.classList.remove('open');panel.innerHTML='';}
-      edRedraw();
-    }
+    // Solo desactiva — la herramienta se activa únicamente via rubber band
+    if(edActiveTool==='multiselect') _edDeactivateMultiSel();
   }
   // _edDeactivateMultiSel definida en scope global
 
   // Botón multi-selección
-  $('edMultiSelBtn')?.addEventListener('click', _edToggleMultiSel);
-  // Tecla M para activar/desactivar
-  // (el listener de teclado principal ya existe; lo añadimos aquí una sola vez)
+  $('edMultiSelBtn')?.addEventListener('click', () => {
+    // El botón nunca activa la herramienta — solo muestra opciones si hay selección múltiple
+    if(edMultiSel.length >= 2) _edUpdateMultiSelPanel();
+  });
   if(!window._edMultiSelKeyFn){
     window._edMultiSelKeyFn = e => {
-      if(e.key==='m'||e.key==='M'){
-        const active=document.activeElement;
-        if(active && (active.tagName==='INPUT'||active.tagName==='TEXTAREA'||active.isContentEditable)) return;
-        _edToggleMultiSel();
-      }
       if(e.key==='Escape' && edActiveTool==='multiselect'){
         _edDeactivateMultiSel();
       }
@@ -16114,7 +16113,7 @@ function EditorView_init(){
           edSelectedIdx = -1;
           edActiveTool = 'multiselect';
           edCanvas.className = 'tool-multiselect';
-          $('edMultiSelBtn')?.classList.add('active');
+          // botón nunca queda active — opciones disponibles vía tap en botón
           _msRecalcBbox();
           _edUpdateMultiSelPanel();
         }
