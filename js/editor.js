@@ -5843,7 +5843,8 @@ function edOnStart(e){
         const _rbC2 = c;
         window._edRbTouchTimer = setTimeout(() => {
           window._edRbTouchTimer = null;
-          if(window._edActivePointers && window._edActivePointers.size > 1) return;
+          const _rbSz = window._edActivePointers ? window._edActivePointers.size : 0;
+          if(_rbSz !== 1) return; // cancelar si no hay exactamente 1 dedo activo
           edRubberBand={x0:_rbC2.nx,y0:_rbC2.ny,x1:_rbC2.nx,y1:_rbC2.ny};
           edRedraw();
         }, 120);
@@ -6710,8 +6711,8 @@ function edOnStart(e){
       clearTimeout(window._edRbTouchTimer);
       window._edRbTouchTimer = setTimeout(() => {
         window._edRbTouchTimer = null;
-        // Si llegó un segundo dedo durante la espera, no iniciar rubber band
-        if(window._edActivePointers && window._edActivePointers.size > 1) return;
+        const _rbSz2 = window._edActivePointers ? window._edActivePointers.size : 0;
+        if(_rbSz2 !== 1) return; // cancelar si no hay exactamente 1 dedo activo
         const _rc = edCoords(_rbE);
         edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
         window._edRubberBandEndPos = null;
@@ -15199,6 +15200,11 @@ function edConfirm(msg, onOk, okLabel='Eliminar'){
     cancelBtn.removeEventListener('click', onNo);
     if(exec && _edConfirmCb) _edConfirmCb();
     _edConfirmCb = null;
+    // Si el modo multiselect sigue activo tras cerrar el modal (ej: el usuario canceló),
+    // desactivarlo para que no bloquee el editor
+    if(edActiveTool === 'multiselect' && typeof _edDeactivateMultiSel === 'function'){
+      _edDeactivateMultiSel();
+    }
   };
   const onYes = () => close(true);
   const onNo  = () => close(false);
@@ -17988,6 +17994,10 @@ function _gcpHandleUp(e) {
   _gcpRuleDrag = null; // fin drag de guía GCP
   // Cancelar timer de rubber band si el dedo se levanta antes de que expire
   if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
+  // Si no quedan dedos activos y hay una rubber band huérfana, limpiarla
+  if((!window._edActivePointers || window._edActivePointers.size === 0) && edRubberBand){
+    edRubberBand = null;
+  }
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
