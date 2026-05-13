@@ -5222,17 +5222,15 @@ function _edHandleDoubleTap(idx){
     edDrawSize  = la.lineWidth || 3;
     _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
   } else if (la && la.type === 'gif') {
-    // GifLayer importado: abrir panel de propiedades de animación
+    // GifLayer importado: abrir editor GIF
     edSelectedIdx = idx;
     edRedraw();
-    _edDrawLockUI(); _edPropsOverlayShow();
-    edRenderOptionsPanel('props');
-  } else if (la && la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames || la.animKey)) {
-    // ImageLayer de animación: abrir panel de propiedades de animación
+    gcpOpen(idx);
+  } else if (la && la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames)) {
+    // ImageLayer de animación: abrir editor GIF para re-editar
     edSelectedIdx = idx;
     edRedraw();
-    _edDrawLockUI(); _edPropsOverlayShow();
-    edRenderOptionsPanel('props');
+    gcpOpen(idx);
   } else {
     // image, text, bubble y cualquier otro tipo
     edSelectedIdx = idx;
@@ -5369,18 +5367,7 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
 }
 
 function edOnStart(e){
-  // Registrar pointer SIEMPRE primero — incluso si luego se redirige al GCP,
-  // edOnEnd necesita poder eliminarlo de _edActivePointers
-  if(!window._edActivePointers) window._edActivePointers = new Map();
-  const _tgtES = e.target;
-  if(!_tgtES.closest('#edDrawBar') && !_tgtES.closest('#edShapeBar') &&
-     !_tgtES.closest('#edb-size-pop') && !_tgtES.closest('#esb-slider-panel') &&
-     !_tgtES.closest('#edb-palette-pop') && !_tgtES.closest('#ed-hsl-picker') &&
-     !_tgtES.closest('#edConfirmModal')){
-    window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-  }
-  // Cuando el editor de animaciones está activo, no procesar gestos del editor general
-  // (el GCP tiene su propio _gcpHandleDown vía _edDocDownFn)
+  // Ignorar completamente cuando el editor de animaciones está activo
   if(window._gcpActive) return;
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
   if(window._edIgnoreNextTap){ window._edIgnoreNextTap=false; return; }
@@ -5649,8 +5636,6 @@ function edOnStart(e){
     if(window._edDrawTouchTimer){ clearTimeout(window._edDrawTouchTimer); window._edDrawTouchTimer = null; }
     // Cancelar timer de recorte pendiente — era un pinch, no un tap
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
-    // Cancelar timer de selección/drag pendiente — era un pinch
-    if(window._edSelectTouchTimer){ clearTimeout(window._edSelectTouchTimer); window._edSelectTouchTimer = null; edIsDragging = false; }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
     if(edActiveTool==='multiselect' && edMultiSel.length){
       edMultiDragging=false; edMultiDragOffs=[];
@@ -6619,38 +6604,6 @@ function edOnStart(e){
     if(_fl && _fl.locked){
       edRedraw(); return;
     }
-    edHideGearIcon();
-    clearTimeout(window._edLongPress);
-    if(_isTouch){
-      // TÁCTIL: detectar doble tap ANTES del timer — si es doble tap, actuar inmediatamente
-      const _now0 = Date.now();
-      if(found === _edLastTapIdx && _now0 - _edLastTapTime < 350){
-        _edLastTapTime = 0; _edLastTapIdx = -1;
-        clearTimeout(window._edSelectTouchTimer); window._edSelectTouchTimer = null;
-        _edHandleDoubleTap(found);
-        return;
-      }
-      _edLastTapTime = _now0; _edLastTapIdx = found;
-      // Esperar 120ms antes de iniciar drag — por si llega segundo dedo (pinch)
-      const _selFound = found, _selC = c;
-      clearTimeout(window._edSelectTouchTimer);
-      window._edSelectTouchTimer = setTimeout(() => {
-        window._edSelectTouchTimer = null;
-        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-        if(edSelectedIdx !== _selFound) return;
-        edDragOffX = _selC.nx - edLayers[_selFound].x;
-        edDragOffY = _selC.ny - edLayers[_selFound].y;
-        edIsDragging = true;
-        window._edMoved = false;
-        if(edLayers[_selFound]?.type==='line'||edLayers[_selFound]?.type==='shape'){
-          const _pm=$('edOptionsPanel')?.dataset.mode;
-          if(_pm==='line'||_pm==='shape'||$('edShapeBar')?.classList.contains('visible')){
-            _edShapePushHistory();
-          }
-        }
-      }, 120);
-      edRedraw(); return;
-    }
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
@@ -6662,7 +6615,23 @@ function edOnStart(e){
         _edShapePushHistory();
       }
     }
-    { // scope PC/ratón
+    edHideGearIcon();
+    clearTimeout(window._edLongPress);
+    if(_isTouch){
+      // TÁCTIL: toque simple = solo seleccionar
+      // Doble toque rápido (≤350ms) → abrir panel de propiedades
+      const now = Date.now();
+      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+        edIsDragging = false;
+        clearTimeout(window._edLongPress);
+        _edHandleDoubleTap(found);
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+        return; // no continuar procesando este evento
+      } else {
+        _edLastTapTime = now; _edLastTapIdx = found;
+        // Sin long-press en táctil — solo doble toque abre el panel
+      }
+    } else {
       // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
       const now = Date.now();
       if(found === _edLastTapIdx && now - _edLastTapTime < 350){
@@ -6683,7 +6652,7 @@ function edOnStart(e){
           }
         }, 600);
       }
-    } // fin scope PC/ratón
+    }
   } else {
     const _wasType = edSelectedIdx >= 0 ? edLayers[edSelectedIdx]?.type : null;
     const _wasLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
@@ -6709,21 +6678,12 @@ function edOnStart(e){
     edRenderOptionsPanel();
   }
   // Clic/toque en vacío → iniciar rubber band (PC y táctil)
+  // Condición: dentro del editor, sin objeto seleccionado, herramienta select
   if(tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
-    if(e.pointerType === 'touch'){
-      // Táctil: esperar 120ms por si llega segundo dedo (pinch)
-      const _rbE = e;
-      clearTimeout(window._edSelectTouchTimer);
-      window._edSelectTouchTimer = setTimeout(() => {
-        window._edSelectTouchTimer = null;
-        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-        const _rc = edCoords(_rbE);
-        edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
-        window._edRubberBandEndPos = null;
-        edRedraw();
-      }, 120);
+    // En táctil: solo si hay un único dedo (no pinch)
+    if(e.pointerType === 'touch' && window._edActivePointers && window._edActivePointers.size > 1) {
+      // Dos o más dedos → no iniciar rubber band
     } else {
-      // PC: inmediato
       const c = edCoords(e);
       edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
       window._edRubberBandEndPos = null;
@@ -7308,11 +7268,6 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
-  // Siempre limpiar _edActivePointers aunque GCP esté activo
-  // (evita pointers fantasma que rompen pinch/drag al volver al editor general)
-  if(e && e.pointerId !== undefined && window._edActivePointers){
-    window._edActivePointers.delete(e.pointerId);
-  }
   if(window._gcpActive) return;
   // Limpiar pan de _edLineLayer si se sueltan dedos
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
@@ -10646,8 +10601,7 @@ function edRenderOptionsPanel(mode){
         <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
-    } else if(la.type==='image' || la.type==='gif'){
-      const _isAnim = la.type==='gif' || la._isGcpImage || la._gcpLayersData || la._pngFrames || la.animKey;
+    } else if(la.type==='image'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
         <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-rot" value="${la.rotation}" min="-180" max="180"> °
@@ -10656,14 +10610,9 @@ function edRenderOptionsPanel(mode){
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>
-      ${_isAnim
-        ? `<div class="op-prop-row">
-        <button id="pp-edit-anim" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar animación</button>
-      </div>`
-        : `<div class="op-prop-row">
+      <div class="op-prop-row">
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
-      </div>`
-      }`;
+      </div>`;
     } else if(la.type==='shape'){
       html+=`
       <div class="op-prop-row">
@@ -10759,16 +10708,6 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
-    $('pp-edit-anim')?.addEventListener('pointerdown', e =>{
-      e.preventDefault(); e.stopPropagation();
-      const _animIdx = edSelectedIdx;
-      // Usar setTimeout 0 para que el stack de eventos actuales termine antes de abrir GCP
-      setTimeout(() => {
-        edCloseOptionsPanel();
-        _edDrawUnlockUI();
-        gcpOpen(_animIdx);
-      }, 0);
-    });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
@@ -18026,9 +17965,6 @@ function _gcpHandleUp(e) {
   if (_gcpPtrMap.size === 0) _gcpPanActive = false;
 
   _gcpRuleDrag = null; // fin drag de guía GCP
-  // Cancelar timers táctiles si el dedo se levanta antes de que expiren
-  if(window._edSelectTouchTimer){ clearTimeout(window._edSelectTouchTimer); window._edSelectTouchTimer = null; }
-  if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
   window._edMoved = false;
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
@@ -19992,11 +19928,6 @@ function gcpOpen(edLayerIdx) {
   window._gcpGlobalFrameIdx = 0;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null;
-  // Limpiar pointers del editor general al entrar en GCP (evita fantasmas)
-  if(window._edActivePointers) window._edActivePointers.clear();
-  edPinching = false; edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
-  _gcpPtrMap.clear(); _gcpPinching = false; _gcpPanActive = false;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -20329,12 +20260,6 @@ function _gcpDoClose() {
   if (_sbVc) _sbVc.style.zIndex = '';
   const shell = document.getElementById('gcpShell');
   if (shell) shell.style.display = 'none';
-  // Limpiar pointers del editor general — al volver desde GCP no deben quedar fantasmas
-  if (window._edActivePointers) window._edActivePointers.clear();
-  edPinching = false; edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  _edPinchHappened = false;
-  if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
-  _gcpPtrMap.clear(); _gcpPinching = false; _gcpPanActive = false;
   window._gcpActive = false;
   window._gcpEdLayerIdx = -1;
   _gs = null;
