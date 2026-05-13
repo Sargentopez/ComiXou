@@ -2763,35 +2763,31 @@ function edDrawMultiSel(){
   edCtx.strokeRect(-bw/2, -bh/2, bw, bh);
   edCtx.setLineDash([]);
 
-  // En táctil: handles invisibles — la interacción es solo por gestos (pinch)
-  const _drawHandles = !edLastPointerIsTouch;
-  if(!edLastPointerIsTouch){
-    // Handles de escala (en espacio local)
-    const corners=[
-      [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
-      [0,-bh/2],[0,bh/2],[-bw/2,0],[bw/2,0],
-    ];
-    for(const [hx,hy] of corners){
-      edCtx.beginPath(); edCtx.arc(hx,hy,hr,0,Math.PI*2);
-      edCtx.fillStyle='#fff'; edCtx.fill();
-      edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
-    }
-    // Handle de rotación — línea + círculo + flecha
-    const rotY = -bh/2 - 28/z;
-    edCtx.beginPath(); edCtx.moveTo(0,-bh/2); edCtx.lineTo(0,rotY+hrRot);
-    edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw; edCtx.stroke();
-    edCtx.beginPath(); edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
-    edCtx.fillStyle='#1a8cff'; edCtx.fill();
-    edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
-    edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5;
-    const ar=hrRot*0.55;
-    edCtx.beginPath(); edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5); edCtx.stroke();
-    const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
-    edCtx.beginPath();
-    edCtx.moveTo(ax,ay); edCtx.lineTo(ax-3/z,ay-5/z);
-    edCtx.moveTo(ax,ay); edCtx.lineTo(ax+4/z,ay-3/z);
-    edCtx.stroke();
+  // Handles de escala (en espacio local)
+  const corners=[
+    [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
+    [0,-bh/2],[0,bh/2],[-bw/2,0],[bw/2,0],
+  ];
+  for(const [hx,hy] of corners){
+    edCtx.beginPath(); edCtx.arc(hx,hy,hr,0,Math.PI*2);
+    edCtx.fillStyle='#fff'; edCtx.fill();
+    edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
   }
+  // Handle de rotación — línea + círculo + flecha
+  const rotY = -bh/2 - 28/z;
+  edCtx.beginPath(); edCtx.moveTo(0,-bh/2); edCtx.lineTo(0,rotY+hrRot);
+  edCtx.strokeStyle='#1a8cff'; edCtx.lineWidth=lw; edCtx.stroke();
+  edCtx.beginPath(); edCtx.arc(0,rotY,hrRot,0,Math.PI*2);
+  edCtx.fillStyle='#1a8cff'; edCtx.fill();
+  edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
+  edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5;
+  const ar=hrRot*0.55;
+  edCtx.beginPath(); edCtx.arc(0,rotY,ar,-Math.PI*0.9,Math.PI*0.5); edCtx.stroke();
+  const ax=ar*Math.cos(Math.PI*0.5), ay=rotY+ar*Math.sin(Math.PI*0.5);
+  edCtx.beginPath();
+  edCtx.moveTo(ax,ay); edCtx.lineTo(ax-3/z,ay-5/z);
+  edCtx.moveTo(ax,ay); edCtx.lineTo(ax+4/z,ay-3/z);
+  edCtx.stroke();
 
   edCtx.restore();
 
@@ -3316,15 +3312,12 @@ function edDrawSel(){
   const _curveMode=_edCurveModeActive&&_edCurveModeActive();
   edCtx.strokeStyle='#1a8cff';
   edCtx.lineWidth=lw;
-  // En táctil, ocultar el rectángulo guía del bbox para objetos vectoriales (solo ruido visual)
-  const _isVectorial = la.type==='line' || la.type==='shape';
-  if(!edLastPointerIsTouch || !_isVectorial){
-    edCtx.setLineDash([5/z,3/z]);
-    edCtx.strokeRect(-w/2,-h/2,w,h);
-    edCtx.setLineDash([]);
-  }
-  // Handles de escala y rotación — solo en PC (no táctil)
-  if(la.type!=='bubble' && !edLastPointerIsTouch){
+  // Rect bbox y handles de selección
+  edCtx.setLineDash([5/z,3/z]);
+  edCtx.strokeRect(-w/2,-h/2,w,h);
+  edCtx.setLineDash([]);
+  // Handles de escala y rotación
+  if(la.type!=='bubble'){
     if(!_curveMode){
     // Para rect (LineLayer 4-nodos cerrado): solo handles en centros de segmentos
     // (las esquinas son nodos de edición, no handles de resize)
@@ -3338,8 +3331,7 @@ function edDrawSel(){
       edCtx.fillStyle='#fff';edCtx.fill();
       edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
     });
-    // Handle de rotación: solo en PC (en táctil se usa gesto pinch)
-    if(!edLastPointerIsTouch){
+    // Handle de rotación
       const rotY=-h/2-28/z;
       edCtx.beginPath();edCtx.moveTo(0,-h/2);edCtx.lineTo(0,rotY+hrRot);
       edCtx.strokeStyle='#1a8cff';edCtx.lineWidth=lw;edCtx.stroke();
@@ -3355,9 +3347,8 @@ function edDrawSel(){
       edCtx.moveTo(ax,ay);edCtx.lineTo(ax-3/z,ay-5/z);
       edCtx.moveTo(ax,ay);edCtx.lineTo(ax+4/z,ay-3/z);
       edCtx.stroke();
-    }
   } // cierra if(!_curveMode)
-  } // cierra if(la.type!=='bubble' && !edLastPointerIsTouch)
+  } // cierra if(la.type!=='bubble')
   // Cerrar el bloque rotado antes de dibujar los handles de cola
   edCtx.restore();
   // Handles cola bocadillo — en coordenadas de workspace absolutas (sin rotación)
@@ -6260,7 +6251,6 @@ function edOnStart(e){
         // Si es el segundo clic de un doble clic, ignorar handles y dejar pasar al doble clic
         if(_isPotentialDbl) break;
         if(p.corner==='rotate'){
-          if(_isT) continue;  // en táctil la rotación es por gesto pinch
           // Pre-snapshot para objetos vectoriales con panel abierto
           if(_la.type==='line'||_la.type==='shape'){
             const _pm=$('edOptionsPanel')?.dataset.mode;
@@ -6271,9 +6261,8 @@ function edOnStart(e){
           edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
           return;
         }
-        if(!_isT){
-          // Pre-snapshot para objetos vectoriales con panel abierto
-          if(_la.type==='line'||_la.type==='shape'){
+        // Pre-snapshot para objetos vectoriales con panel abierto
+        if(_la.type==='line'||_la.type==='shape'){
             const _pm=$('edOptionsPanel')?.dataset.mode;
             if(_pm==='line'||_pm==='shape'||$('edShapeBar')?.classList.contains('visible'))
               _edShapePushHistory();
@@ -6328,7 +6317,6 @@ function edOnStart(e){
             else edInitialSize._cornerRadii={..._la.cornerRadii};
           } else { edInitialSize._cornerRadii=null; }
           return;
-        }
       }
     }
   }
@@ -16000,14 +15988,15 @@ function EditorView_init(){
     }
     // Ctrl+D → duplicar objeto seleccionado
     if(ctrl && e.key.toLowerCase() === 'd'){
-      if(edSelectedIdx >= 0){ e.preventDefault(); edDuplicateSelected(); }
+      e.preventDefault(); // evita "Añadir a favoritos" del navegador
+      if(edSelectedIdx >= 0) edDuplicateSelected();
       return;
     }
     // Ctrl+] subir | Ctrl+[ bajar | Ctrl+Alt+] al frente | Ctrl+Alt+[ al fondo
     // (estándar Figma / Illustrator / Photoshop)
     if(ctrl && (e.key === ']' || e.key === '[')){
+      e.preventDefault(); // evita historial atrás/adelante en Safari
       if(edSelectedIdx >= 0){
-        e.preventDefault();
         const page = edPages[edCurrentPage]; if(!page) return;
         const layers = page.layers;
         const idx = edSelectedIdx;
@@ -16038,6 +16027,7 @@ function EditorView_init(){
       return;
     }
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
+      e.preventDefault(); // evita navegación atrás en Firefox (Backspace sin input)
       if(edActiveTool==='multiselect' && edMultiSel.length){
         e.preventDefault();
         const page=edPages[edCurrentPage]; if(!page) return;
@@ -17580,13 +17570,11 @@ function _gcpDoSelectDrag(e, c) {
         const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
         if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
           if (p.corner === 'rotate') {
-            if (_isTouch) continue; // táctil: rotación por pinch, igual que editor general
             edIsRotating = true;
             edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
             return;
           }
-          if (!_isTouch) { // táctil: resize por pinch, igual que editor general
-            edIsResizing = true; edResizeCorner = p.corner;
+          edIsResizing = true; edResizeCorner = p.corner;
             const _rot0 = (_la.rotation||0)*Math.PI/180;
             const _hw0 = _la.width/2, _hh0 = _la.height/2;
             const _anchorLocal = (corner) => {
@@ -17615,7 +17603,6 @@ function _gcpDoSelectDrag(e, c) {
               ? (Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii})
               : null;
             return;
-          }
         }
       }
     }
@@ -20192,9 +20179,23 @@ function gcpOpen(edLayerIdx) {
       _gcpPreview();
     });
 
-    document.getElementById('gcpHelpBtn')?.addEventListener('click', () => {
-      _gcpCloseAllDropdowns();
+    // Botón Ayuda GCP — mismo dropdown que el editor general, mismo comportamiento
+    document.querySelectorAll('#gcpMenuBar [data-menu]').forEach(btn => {
+      const id = btn.dataset.menu;
+      btn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        edToggleMenu(id);
+        if (id === 'gcp-rules') _gcpRuleToggleSync();
+      });
+    });
+    document.getElementById('gcp-dd-shortcuts')?.addEventListener('click', () => {
+      edCloseMenus();
       const m = document.getElementById('edShortcutsModal');
+      if (m) m.classList.add('open');
+    });
+    document.getElementById('gcp-dd-anim-tutorial')?.addEventListener('click', () => {
+      edCloseMenus();
+      const m = document.getElementById('edAnimTutorialModal');
       if (m) m.classList.add('open');
     });
     document.getElementById('gcpBibBtn')?.addEventListener('click', () => {

@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.79</footer>
+    <footer class="app-version">v22.80</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -558,9 +558,9 @@ Router.register('editor', {
           <div class="sc-section">Selección y objetos</div>
           <div class="sc-row"><span class="sc-desc">Mover objeto 1 px</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Mover objeto 10 px</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
-          <div class="sc-row"><span class="sc-desc">Añadir a multiselección</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Añadir a multiselección</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Duplicar objeto seleccionado</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>D</kbd></span></div>
-          <div class="sc-row"><span class="sc-desc">Eliminar objeto seleccionado</span><span class="sc-keys"><kbd>Supr</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Eliminar objeto seleccionado</span><span class="sc-keys"><kbd>Supr</kbd><kbd>/</kbd><kbd>Retroceso</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Cancelar selección / cerrar panel</span><span class="sc-keys"><kbd>Esc</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Confirmar / cerrar panel (OK)</span><span class="sc-keys"><kbd>Enter</kbd></span></div>
 
@@ -694,9 +694,13 @@ Router.register('editor', {
             </div>
           </div>
           <div class="ed-menu-sep"></div>
-          <!-- Ayuda (mismo contenido que el editor general) -->
+          <!-- Ayuda — mismo submenú que el editor general, IDs con prefijo gcp- -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" id="gcpHelpBtn">Ayuda ▾</button>
+            <button class="ed-menu-btn" data-menu="gcp-help">Ayuda ▾</button>
+            <div class="ed-dropdown" id="dd-gcp-help">
+              <button class="ed-dropdown-item" id="gcp-dd-shortcuts">⌨ Atajos de teclado</button>
+              <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial">🎬 Crear animaciones</button>
+            </div>
           </div>
         </div>
       </div>
