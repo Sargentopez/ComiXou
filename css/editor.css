@@ -1766,18 +1766,6 @@ body.editor-page #appView {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 #gcpTopbar .ed-top-spacer { flex: 1; }
-/* Centrar el frame nav en el gcpTopbar — necesita position:absolute relativo al propio topbar */
-#gcpTopbar {
-  position: absolute; /* ya era así — añadimos overflow:visible para que el hijo absolute se vea */
-}
-#gcpTopbar .ed-top-pagnav {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  align-self: unset;
-  padding-bottom: 0;
-}
 #gcpCloseBtn {
   background: none; border: none;
   font-size: 1.4rem; font-weight: 900;
