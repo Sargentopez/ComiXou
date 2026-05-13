@@ -17552,72 +17552,12 @@ function _gcpHandleDown(e) {
     }
   }
 
-  // Handles: usar getControlPoints() igual que el editor, pero siempre permitir
-  // resize/rotate aunque sea táctil (el editor los desactiva en móvil, nosotros no)
-  // Handles y selección — copia exacta de _edDocDownFn usando _gcpLayers
-  const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
-  if (_la && _la.type !== 'bubble') {
-    const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
-    const hitScreen = 18; // PC
-    if (!_la.locked) {
-      for (const p of _la.getControlPoints()) {
-        const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
-        if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
-          if (p.corner === 'rotate') {
-            edIsRotating = true;
-            edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
-            return;
-          }
-          // Resize — mismo código exacto que _edDocDownFn
-          edIsResizing = true; edResizeCorner = p.corner;
-          const _rot0 = (_la.rotation||0)*Math.PI/180;
-          const _hw0 = _la.width/2, _hh0 = _la.height/2;
-          const _pw0 = edPageW(), _ph0 = edPageH();
-          const _anchorLocal = (corner) => {
-            const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
-                       corner==='tl'||corner==='bl'?_hw0 :
-                       corner==='tr'||corner==='br'?-_hw0 : 0;
-            const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
-                       corner==='tl'||corner==='tr'?_hh0 :
-                       corner==='bl'||corner==='br'?-_hh0 : 0;
-            const rx=ax*_pw0, ry=ay*_ph0;
-            return { x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw0,
-                     y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph0 };
-          };
-          const _anch = _anchorLocal(p.corner);
-          edInitialSize = { width:_la.width, height:_la.height,
-            cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
-            rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
-            anchorX:_anch.x, anchorY:_anch.y };
-          if (_la.type==='line') {
-            edInitialSize._linePoints = _la.points.map(p=>p?({...p}):null);
-            edInitialSize._subPaths = _la.subPaths?.length ? _la.subPaths.map(sp=>{const s=sp.map(p=>({...p}));if(sp.cornerRadii)s.cornerRadii={...sp.cornerRadii};return s;}) : null;
-          }
-          if (_la.cornerRadii) {
-            edInitialSize._cornerRadii = Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii};
-          } else { edInitialSize._cornerRadii = null; }
-          return;
-        }
-      }
-    }
-    // Drag dentro del bbox
-    const _rot = (_la.rotation||0)*Math.PI/180;
-    const _dx = c.nx-_la.x, _dy = c.ny-_la.y;
-    const _lx = _dx*Math.cos(-_rot)*_pw - _dy*Math.sin(-_rot)*_ph;
-    const _ly = _dx*Math.sin(-_rot)*_pw + _dy*Math.cos(-_rot)*_ph;
-    if (Math.abs(_lx) <= _la.width/2*_pw + 10/_z && Math.abs(_ly) <= _la.height/2*_ph + 10/_z) {
-      edIsDragging = true;
-      edDragOffX = c.nx - _la.x;
-      edDragOffY = c.ny - _la.y;
-      return;
-    }
-  }
-
-  // Registrar pointer para pinch/pan
+  // Registrar pointer para pinch/pan (siempre antes del timer)
   _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // Dos dedos → pinch (zoom + pan)
+  // Dos dedos → pinch inmediato, cancelar cualquier timer pendiente
   if (_gcpPtrMap.size === 2) {
+    if (_gcpTouchTimer) { clearTimeout(_gcpTouchTimer); _gcpTouchTimer = null; }
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     _gcpPanActive = false;
     const _pts = [..._gcpPtrMap.values()];
@@ -17629,19 +17569,106 @@ function _gcpHandleDown(e) {
     _gcpRedraw(); return;
   }
 
-  // Buscar capa tocada
+  // Táctil: esperar 120ms antes de actuar (por si llega segundo dedo)
+  if (e.pointerType === 'touch') {
+    const _gcpE = e, _gcpC = c;
+    clearTimeout(_gcpTouchTimer);
+    _gcpTouchTimer = setTimeout(() => {
+      _gcpTouchTimer = null;
+      if (_gcpPtrMap.size !== 1) return; // llegó segundo dedo o se levantó
+      _gcpDoSelectDrag(_gcpE, _gcpC);
+    }, 120);
+    _gcpRedraw(); return;
+  }
+
+  // PC: actuar inmediatamente
+  _gcpDoSelectDrag(e, c);
+}
+
+// Lógica real de selección/drag/handles en GCP (tras confirmar que es un solo puntero)
+function _gcpDoSelectDrag(e, c) {
+  const _isTouch = e.pointerType === 'touch';
+  const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
+  const hitScreen = _isTouch ? 28 : 18; // radio táctil mayor, igual que editor general
+
+  // ── Handles del objeto seleccionado ──────────────────────────────────────
+  const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
+  if (_la && _la.type !== 'bubble' && !_la.locked) {
+    for (const p of _la.getControlPoints()) {
+      const _dpx = (c.nx - p.x)*_pw, _dpy = (c.ny - p.y)*_ph;
+      if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
+        if (p.corner === 'rotate') {
+          edIsRotating = true;
+          edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
+          _gcpRedraw(); return;
+        }
+        // Resize
+        edIsResizing = true; edResizeCorner = p.corner;
+        const _rot0 = (_la.rotation||0)*Math.PI/180;
+        const _hw0 = _la.width/2, _hh0 = _la.height/2;
+        const _anchorLocal = (corner) => {
+          const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
+                     corner==='tl'||corner==='bl'?_hw0 :
+                     corner==='tr'||corner==='br'?-_hw0 : 0;
+          const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
+                     corner==='tl'||corner==='tr'?_hh0 :
+                     corner==='bl'||corner==='br'?-_hh0 : 0;
+          const rx=ax*_pw, ry=ay*_ph;
+          return { x: _la.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw,
+                   y: _la.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph };
+        };
+        const _anch = _anchorLocal(p.corner);
+        edInitialSize = { width:_la.width, height:_la.height,
+          cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
+          rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
+          anchorX:_anch.x, anchorY:_anch.y };
+        if (_la.type==='line') {
+          edInitialSize._linePoints = _la.points.map(p=>p?({...p}):null);
+          edInitialSize._subPaths = _la.subPaths?.length
+            ? _la.subPaths.map(sp=>{const s=sp.map(p=>({...p}));if(sp.cornerRadii)s.cornerRadii={...sp.cornerRadii};return s;})
+            : null;
+        }
+        edInitialSize._cornerRadii = _la.cornerRadii
+          ? (Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii})
+          : null;
+        _gcpRedraw(); return;
+      }
+    }
+  }
+
+  // ── Drag del objeto seleccionado dentro de su bbox ───────────────────────
+  if (_la) {
+    const _rot = (_la.rotation||0)*Math.PI/180;
+    const _dx = c.nx-_la.x, _dy = c.ny-_la.y;
+    const _lx = _dx*Math.cos(-_rot)*_pw - _dy*Math.sin(-_rot)*_ph;
+    const _ly = _dx*Math.sin(-_rot)*_pw + _dy*Math.cos(-_rot)*_ph;
+    if (Math.abs(_lx) <= _la.width/2*_pw + 10/_z && Math.abs(_ly) <= _la.height/2*_ph + 10/_z) {
+      if (!_la.locked) {
+        edIsDragging = true;
+        edDragOffX = c.nx - _la.x;
+        edDragOffY = c.ny - _la.y;
+      }
+      _gcpRedraw(); return;
+    }
+  }
+
+  // ── Buscar otro objeto bajo el toque ─────────────────────────────────────
   let hit = -1;
   for (let i = window._gcpLayers.length-1; i >= 0; i--) {
     if (window._gcpLayers[i]?.contains?.(c.nx, c.ny)) { hit = i; break; }
   }
-  window._gcpSelIdx = hit;
   if (hit >= 0) {
-    edIsDragging = true;
-    edDragOffX = c.nx - window._gcpLayers[hit].x;
-    edDragOffY = c.ny - window._gcpLayers[hit].y;
+    window._gcpSelIdx = hit;
+    const _hitLa = window._gcpLayers[hit];
+    if (_hitLa && !_hitLa.locked) {
+      edIsDragging = true;
+      edDragOffX = c.nx - _hitLa.x;
+      edDragOffY = c.ny - _hitLa.y;
+    }
     _gcpPanActive = false;
   } else {
-    // Sin objeto tocado — no hacer pan (pan solo con dos dedos/pinch)
+    // Toque en vacío — deseleccionar
+    window._gcpSelIdx = -1;
     _gcpPanActive = false;
   }
   _gcpRedraw();
@@ -17999,6 +18026,10 @@ function _gcpHandleUp(e) {
     edRubberBand = null;
   }
   window._edMoved = false;
+  // Guardar estado en el frame activo si hubo transformación
+  if (edIsDragging || edIsResizing || edIsRotating) {
+    _gcpAutoSaveFrame();
+  }
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
   // El historial registra el estado en vivo (fuera de los frames guardados).
