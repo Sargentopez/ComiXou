@@ -10759,12 +10759,15 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
-    $('pp-edit-anim')?.addEventListener('pointerup', e =>{
-      e.stopPropagation();
-      const _animIdx = edSelectedIdx; // capturar antes de cerrar
-      edCloseOptionsPanel();
-      _edDrawUnlockUI();
-      gcpOpen(_animIdx);
+    $('pp-edit-anim')?.addEventListener('pointerdown', e =>{
+      e.preventDefault(); e.stopPropagation();
+      const _animIdx = edSelectedIdx;
+      // Usar setTimeout 0 para que el stack de eventos actuales termine antes de abrir GCP
+      setTimeout(() => {
+        edCloseOptionsPanel();
+        _edDrawUnlockUI();
+        gcpOpen(_animIdx);
+      }, 0);
     });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
