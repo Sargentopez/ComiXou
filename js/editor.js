@@ -17422,6 +17422,14 @@ let _gcpLastTapTime = 0;
 let _gcpLastTapX = 0, _gcpLastTapY = 0;
 // Doble tap para objetos no-seleccionados (en _gcpDoSelectDrag)
 let _gcpLastTapTime2 = 0, _gcpLastTapIdx2 = -1;
+
+// Resetear estado de doble tap al insertar una capa nueva — evita que el primer
+// toque sobre el objeto recién insertado se interprete erróneamente como doble tap.
+function _gcpPushLayer(la) {
+  window._gcpLayers.push(la);
+  _gcpLastTapTime2 = 0;
+  _gcpLastTapIdx2 = -1;
+}
 let _gcpPinchObj      = null;  // snapshot del objeto al iniciar pinch
 let _gcpPinchAngle0  = 0;     // ángulo inicial del pinch para rotación
 let _gcpSelBeforePinch = -1;  // selección antes del primer dedo (para restaurar en pinch)
@@ -17837,7 +17845,7 @@ function _gcpOpenPropsPanel(la, laIdx) {
     // Objeto nuevo: invisible en frames anteriores, visible solo desde fi
     const fi = window._gcpGlobalFrameIdx || 0;
     _gcpInitLayerFrames(newLa, fi);
-    window._gcpLayers.push(newLa);
+    _gcpPushLayer(newLa);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpClosePropsPanel();
     _gcpUpdateFramesBar();
@@ -17896,7 +17904,7 @@ function _gcpOpenPropsPanel(la, laIdx) {
     // Objeto nuevo: invisible en frames anteriores, visible solo desde fi
     const fi = window._gcpGlobalFrameIdx || 0;
     _gcpInitLayerFrames(newLa, fi);
-    window._gcpLayers.push(newLa);
+    _gcpPushLayer(newLa);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpClosePropsPanel();
     _gcpUpdateFramesBar();
@@ -19986,7 +19994,7 @@ function gcpInsertFromBib(entry) {
       for (let _i = 0; _i < _totalAtInsert; _i++) la._frames.push(_i === _curFi ? {..._vis} : {..._inv});
     }
     // Sin frames previos: _frames vacío hasta que se pulse Guardar Frame
-    window._gcpLayers.push(la);
+    _gcpPushLayer(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpInvalidateAllThumbs();
     _gcpUpdateFrameNav();
@@ -20094,9 +20102,10 @@ function gcpOpen(edLayerIdx) {
           || (la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj'));
         // Inicializar visibilidad según el frame 0
         la._gcpVisible = !(la._frames && la._frames[0] && la._frames[0].visible === false);
-        window._gcpLayers.push(la);
+        _gcpPushLayer(la);
       });
       window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
+      _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
       const titleEl = document.getElementById('gcpProjectTitle');
       if (titleEl) titleEl.textContent = 'Editar animación';
     }
