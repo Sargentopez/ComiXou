@@ -2588,7 +2588,9 @@ function edFitCanvas(resetCamera){
 
   const topH  = (!edMinimized && topbar)  ? topbar.getBoundingClientRect().height  : 0;
   const menuH = (!edMinimized && menu)    ? menu.getBoundingClientRect().height    : 0;
-  const optsH = (opts && opts.classList.contains('open') && opts.style.visibility !== 'hidden') ? opts.getBoundingClientRect().height : 0;
+  // Si el panel está colapsado (panel-collapsed), su altura efectiva es 0 aunque tenga 'open'
+  const _optsCollapsed = opts && opts.classList.contains('panel-collapsed');
+  const optsH = (opts && opts.classList.contains('open') && !_optsCollapsed && opts.style.visibility !== 'hidden') ? opts.getBoundingClientRect().height : 0;
   if(menu && !edMinimized) menu.style.top = topH + 'px';
   if(opts) opts.style.top = (topH + menuH) + 'px';
   const totalBarsH = topH + menuH + optsH;
@@ -2612,12 +2614,10 @@ function edFitCanvas(resetCamera){
   if(_sizeChanged){
     edCanvas.width  = newW;
     edCanvas.height = newH;
-    // Cuando el canvas ENCOGE por la apertura de un panel inferior,
-    // compensar camera.y para que el workspace suba con el canvas
-    // y el contenido que estaba visible siga visible.
-    // Cuando crece (panel cerrándose), no compensar — el espacio extra aparece abajo.
-    if(!_doReset && newH < _prevH){
-      _savedCam.y -= (_prevH - newH);
+    // Compensar cámara en ambas direcciones para que el contenido no salte visualmente
+    // cuando el panel de opciones se abre o se colapsa.
+    if(!_doReset){
+      _savedCam.y -= (_prevH - newH); // negativo si crece (panel cierra), positivo si encoge (panel abre)
     }
   }
   edCanvas.style.width  = newW + 'px';
@@ -8824,6 +8824,21 @@ function edDeactivateDrawTool(){
 
 
 // ── Pestaña del panel colapsado ──────────────────────────────────
+// Preservar estado colapsado al regenerar el panel
+function _edPanelSetInnerHTML(panel, html) {
+  const _wasCollapsed = panel.classList.contains('panel-collapsed');
+  panel.innerHTML = html;
+  if (_wasCollapsed) {
+    panel.classList.add('panel-collapsed');
+    // Re-registrar listener de la pestaña (el DOM fue reemplazado)
+    const _tab = document.getElementById('edPanelTab');
+    if (_tab) {
+      _tab.removeEventListener('pointerup', _edPanelTabClick);
+      _tab.addEventListener('pointerup', _edPanelTabClick);
+    }
+  }
+}
+
 function _edPanelTabShow() {
   const _p = $('edOptionsPanel');
   const _tab = document.getElementById('edPanelTab');
@@ -8846,12 +8861,15 @@ function _edPanelTabClick(e) {
   if (!_p) return;
   _p.classList.remove('panel-collapsed');
   _edPanelTabHide();
+  void _p.offsetHeight;
+  edFitCanvas();
 }
 
 function _edDrawCollapseHandler() {
   const _p = $('edOptionsPanel'); if (!_p) return;
   const _collapsed = _p.classList.toggle('panel-collapsed');
   if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+  edFitCanvas();
 }
 
 /* ── HERRAMIENTA SHAPE (rectángulo / elipse) ── */
@@ -8986,7 +9004,7 @@ function _edActivateShapeTool(isNew) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'shape';
-  edFitCanvas(); // actualizar _edCanvasTop
+  edFitCanvas();
   _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global (objeto existente)
   if(_sel) edPushHistory(); else if(isNew) edPushHistory(); // estado previo a objeto nuevo
@@ -9135,6 +9153,7 @@ function _edActivateShapeTool(isNew) {
     const _p = $('edOptionsPanel'); if (!_p) return;
     const _collapsed = _p.classList.toggle('panel-collapsed');
     if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+    edFitCanvas();
   });
 
   // ── Curva de vértice ──
@@ -9354,7 +9373,7 @@ function _edActivateLineTool(isNew, isCreating) {
   panel.classList.add('open');
   panel.style.visibility='';
   panel.dataset.mode = 'line';
-  edFitCanvas(); // actualizar _edCanvasTop
+  edFitCanvas();
   _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global
   // - isNew: primera apertura (panel cerrado) → guardar estado antes de crear objeto
@@ -9610,6 +9629,8 @@ function _edActivateLineTool(isNew, isCreating) {
     if (!_p) return;
     const _collapsed = _p.classList.toggle('panel-collapsed');
     if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+    void _p.offsetHeight;
+    edFitCanvas();
   });
 
   // ── OK ──
@@ -10178,7 +10199,7 @@ function edRenderOptionsPanel(mode){
     const _drawPanelAlreadyOpen = panel.classList.contains('open') && panel.dataset.mode === 'draw';
     panel.classList.add('open');
     panel.dataset.mode = 'draw';
-    edFitCanvas(); // actualizar _edCanvasTop
+    edFitCanvas();
     _edInitSliderBubbles(panel);
     // Centrar cámara en el contenido del DrawLayer al abrir el panel,
     // pero NO si ya estaba abierto en modo draw (cambio lápiz↔goma no mueve la cámara)
@@ -16298,7 +16319,7 @@ function EditorView_init(){
     }
 
     if(['draw','eraser','fill','shape','line'].includes(edActiveTool)){
-      const inCanvas   = e.target.closest('#editorCanvas');
+      const inCanvas   = e.target.closest('#editorCanvas') || e.target.closest('#editorCanvasWrap');
       const inPanel    = e.target.closest('#edOptionsPanel');
       const inMenu     = e.target.closest('#edMenuBar');
       const inTopbar   = e.target.closest('#edTopbar');

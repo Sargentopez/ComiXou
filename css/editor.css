@@ -576,7 +576,7 @@ body.editor-page #appView {
   z-index: 200;
   overflow: hidden;
   max-height: 0;
-  transition: max-height .2s cubic-bezier(.4,0,.2,1), padding .2s, border-bottom-width .2s;
+  transition: max-height .25s cubic-bezier(.4,0,.2,1), padding .25s, border-bottom-width .25s;
   padding: 0 12px;
 }
 #edOptionsPanel.open {
@@ -614,17 +614,14 @@ body.editor-page #appView {
 #edOptionsPanel.open[data-mode="line"] #edPanelHeader {
   display: flex;
 }
-/* ── Panel colapsado: sube hasta quedar oculto bajo la barra de menús ── */
-#edOptionsPanel {
-  transition: transform .25s cubic-bezier(.4,0,.2,1),
-              max-height .2s cubic-bezier(.4,0,.2,1),
-              padding .2s, border-bottom-width .2s;
-}
-#edOptionsPanel.panel-collapsed {
-  transform: translateY(calc(-100% - 2px));
-  background: transparent;
-  border-bottom-width: 0;
-  box-shadow: none;
+/* ── Panel colapsado: se cierra igual que al cerrar, pero pestaña visible ── */
+#edOptionsPanel.open.panel-collapsed {
+  max-height: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-bottom-width: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
 }
 /* ── Pestaña — hermana del panel, se posiciona relativa al editorShell ── */
 #edPanelTab {
@@ -654,14 +651,15 @@ body.editor-page #appView {
 /* ── Botón ▲ en la fila de acciones ── */
 #op-panel-collapse {
   flex-shrink: 0;
-  background: var(--gray-100);
-  border: 1px solid var(--gray-300);
+  background: var(--yellow);
+  border: 1.5px solid var(--black);
   border-radius: 6px;
   padding: 3px 10px;
   font-size: .9rem;
   cursor: pointer;
-  color: var(--gray-600);
+  color: var(--black);
   line-height: 1;
+  font-weight: 900;
 }
 
 /* Filas de opciones */
