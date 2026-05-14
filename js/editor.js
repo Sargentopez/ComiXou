@@ -19590,6 +19590,12 @@ function _gcpUpdateFramesBar() {
       const card = document.createElement('div');
       card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
       card.style.cursor = hasFrame ? 'pointer' : 'default';
+      // Frame oculto: fondo azul muy pálido para distinguirlo visualmente
+      // (permite ver la miniatura semitransparente encima con buen contraste)
+      if (hasFrame && !isVisible) {
+        card.style.background = '#dbeafe'; // azul pálido — estándar apps animación
+        card.style.borderColor = '#93c5fd';
+      }
 
       // Cabecera con número de columna (número real en el array)
       const header = document.createElement('div');
