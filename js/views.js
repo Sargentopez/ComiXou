@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v22.93</footer>
+    <footer class="app-version">v22.99</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -413,6 +413,7 @@ Router.register('editor', {
 
       <!-- ── PANEL DE OPCIONES CONTEXTUAL ── -->
       <div id="edOptionsPanel"></div>
+      <div id="edPanelTab">▼</div>
 
       <!-- ── BOTÓN FLOTANTE (cuando está minimizado) ── -->
       <div id="edFloatBtn" title="Menú">☰</div>

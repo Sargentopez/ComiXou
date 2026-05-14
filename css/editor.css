@@ -592,6 +592,78 @@ body.editor-page #appView {
   max-height: 480px;
 }
 
+/* ── Colapso del panel draw/shape/line ─────────────────────────── */
+/* Cabecera fija del panel con botón OK y flecha */
+/* ── Cabecera del panel (OK arriba a la derecha) ── */
+#edPanelHeader {
+  display: none;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 2px 0 4px 0;
+  border-bottom: 1px solid var(--gray-300);
+  margin-bottom: 4px;
+  gap: 6px;
+  background: var(--white);
+  margin: -8px -12px 4px -12px;
+  padding: 6px 12px;
+  border-radius: 0;
+}
+#edOptionsPanel.open[data-mode="draw"] #edPanelHeader,
+#edOptionsPanel.open[data-mode="shape"] #edPanelHeader,
+#edOptionsPanel.open[data-mode="line"] #edPanelHeader {
+  display: flex;
+}
+/* ── Panel colapsado: sube hasta quedar oculto bajo la barra de menús ── */
+#edOptionsPanel {
+  transition: transform .25s cubic-bezier(.4,0,.2,1),
+              max-height .2s cubic-bezier(.4,0,.2,1),
+              padding .2s, border-bottom-width .2s;
+}
+#edOptionsPanel.panel-collapsed {
+  transform: translateY(calc(-100% - 2px));
+  background: transparent;
+  border-bottom-width: 0;
+  box-shadow: none;
+}
+/* ── Pestaña — hermana del panel, se posiciona relativa al editorShell ── */
+#edPanelTab {
+  display: none;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 24px;
+  padding: 0 22px;
+  background: var(--yellow);
+  border: 1.5px solid var(--black);
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  cursor: pointer;
+  font-size: .82rem; font-weight: 900;
+  color: var(--black);
+  align-items: center; justify-content: center;
+  z-index: 400;
+  white-space: nowrap;
+  box-shadow: 0 4px 10px rgba(0,0,0,.13);
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+#edPanelTab.visible {
+  display: flex;
+}
+/* ── Botón ▲ en la fila de acciones ── */
+#op-panel-collapse {
+  flex-shrink: 0;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: .9rem;
+  cursor: pointer;
+  color: var(--gray-600);
+  line-height: 1;
+}
+
 /* Filas de opciones */
 .op-row {
   display: flex; flex-wrap: wrap;

@@ -5512,7 +5512,8 @@ function edOnStart(e){
                tgt.closest('#ed-hsl-picker')   ||
                tgt.closest('#editorViewer')   ||
                tgt.closest('#edProjectModal') ||
-               tgt.closest('#edConfirmModal');
+               tgt.closest('#edConfirmModal') ||
+               tgt.closest('#edPanelTab');
   if(isUI) return;
 
   // ── MODO RECORTE: interceptar todos los toques en el canvas ──
@@ -8821,6 +8822,38 @@ function edDeactivateDrawTool(){
   requestAnimationFrame(edFitCanvas);
 }
 
+
+// ── Pestaña del panel colapsado ──────────────────────────────────
+function _edPanelTabShow() {
+  const _p = $('edOptionsPanel');
+  const _tab = document.getElementById('edPanelTab');
+  if (!_tab || !_p) return;
+  _tab.style.top = _p.offsetTop + 'px';
+  _tab.classList.add('visible');
+  // Usar pointerup para fiabilidad en táctil; limpiar listener previo si existe
+  _tab.removeEventListener('pointerup', _edPanelTabClick);
+  _tab.addEventListener('pointerup', _edPanelTabClick);
+}
+function _edPanelTabHide() {
+  const _tab = document.getElementById('edPanelTab');
+  if (!_tab) return;
+  _tab.classList.remove('visible');
+  _tab.removeEventListener('pointerup', _edPanelTabClick);
+}
+function _edPanelTabClick(e) {
+  if (e) e.stopPropagation();
+  const _p = $('edOptionsPanel');
+  if (!_p) return;
+  _p.classList.remove('panel-collapsed');
+  _edPanelTabHide();
+}
+
+function _edDrawCollapseHandler() {
+  const _p = $('edOptionsPanel'); if (!_p) return;
+  const _collapsed = _p.classList.toggle('panel-collapsed');
+  if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+}
+
 /* ── HERRAMIENTA SHAPE (rectángulo / elipse) ── */
 /* ══════════════════════════════════════════
    HERRAMIENTA SHAPE (rectángulo / elipse)
@@ -8888,6 +8921,7 @@ function _edActivateShapeTool(isNew) {
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
+  <div id="edPanelHeader"><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
   <!-- FILA 1: Tipo + cambiar a Rectas -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     <button id="op-tool-shape" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:rgba(0,0,0,.08);color:var(--black)">Objeto</button>
@@ -8946,7 +8980,7 @@ function _edActivateShapeTool(isNew) {
     <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_sel?.locked?'var(--gray-800)':'transparent'};color:${_sel?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_sel?.locked?'Desbloquear':'Bloquear'}">${_sel?.locked?'🔒':'🔓'}</button>
 
     <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':'Sin objeto'}</span>
-    <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
+    <button id="op-panel-collapse" title="Minimizar panel">▲</button>
   </div>
 </div>`;
   panel.classList.add('open');
@@ -9097,6 +9131,11 @@ function _edActivateShapeTool(isNew) {
   });
 
   // ── Minimizar (idéntico a draw) ──
+  $('op-panel-collapse')?.addEventListener('click', () => {
+    const _p = $('edOptionsPanel'); if (!_p) return;
+    const _collapsed = _p.classList.toggle('panel-collapsed');
+    if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+  });
 
   // ── Curva de vértice ──
   $('op-shape-curve-btn')?.addEventListener('click',()=>{
@@ -9243,6 +9282,7 @@ function _edActivateLineTool(isNew, isCreating) {
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
+  <div id="edPanelHeader"><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
   <!-- FILA 1: Tipo de objeto + selección -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='draw'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edLineType==='draw'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="Pol\u00edgono">╱</button>
@@ -9306,7 +9346,7 @@ function _edActivateLineTool(isNew, isCreating) {
     <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_cur?.locked?'var(--gray-800)':'transparent'};color:${_cur?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_cur?.locked?'Desbloquear':'Bloquear'}">${_cur?.locked?'🔒':'🔓'}</button>
 
     <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
-    <button id="op-draw-ok" style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
+    <button id="op-panel-collapse" title="Minimizar panel">▲</button>
   </div>
 </div>`;
   // Capturar ANTES de abrir el panel si ya estaba abierto en modo 'line'
@@ -9564,6 +9604,13 @@ function _edActivateLineTool(isNew, isCreating) {
   });
 
   // ── Minimizar (idéntico a draw) ──
+  // ── Colapso del panel ──
+  $('op-panel-collapse')?.addEventListener('click', () => {
+    const _p = $('edOptionsPanel');
+    if (!_p) return;
+    const _collapsed = _p.classList.toggle('panel-collapsed');
+    if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+  });
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
@@ -9765,7 +9812,7 @@ function edCloseOptionsPanel(){
   const panel=$('edOptionsPanel');
   if(panel){
     const _mode=panel.dataset.mode;
-    panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode;
+    panel.classList.remove('open','panel-collapsed'); panel.innerHTML=''; delete panel.dataset.mode; _edPanelTabHide();
     if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
     if(_mode==='crop'){
       const _wdl = _edCropLayer && _edCropLayer.type === 'draw';
@@ -10042,6 +10089,7 @@ function edRenderOptionsPanel(mode){
     };
     panel.innerHTML=`
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
+  <div id="edPanelHeader"><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
   <!-- FILA 1: Herramientas con scroll horizontal -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     <button id="op-tool-pen"
@@ -10124,8 +10172,7 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'var(--gray-800)':'transparent'})()};color:${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'var(--white)':'var(--gray-700)'})()};cursor:pointer" title="${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'Desbloquear':'Bloquear'})()}">${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'🔒':'🔓'})()}</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
-    <button id="op-draw-ok"
-      style="flex-shrink:0;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:5px 12px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓</button>
+    <button id="op-panel-collapse" title="Minimizar panel">▲</button>
   </div>
 </div>`;
     const _drawPanelAlreadyOpen = panel.classList.contains('open') && panel.dataset.mode === 'draw';
@@ -10346,7 +10393,11 @@ function edRenderOptionsPanel(mode){
     _edDrawUpdateUndoRedoBtns();
 
     // ── Minimizar (desde el panel draw) ──
-
+    const _drawCollapseBtn = $('op-panel-collapse');
+    if (_drawCollapseBtn) {
+      _drawCollapseBtn.removeEventListener('click', _edDrawCollapseHandler);
+      _drawCollapseBtn.addEventListener('click', _edDrawCollapseHandler);
+    }
 
     // ── OK: congelar ──
     $('op-draw-ok')?.addEventListener('click',()=>{
@@ -12801,6 +12852,8 @@ async function edSaveProject(_keepOverlay){
   edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
   edHistoryIdx = edHistory.length - 1;
   _edSavedHistoryIdx = edHistoryIdx;
+  // Limpiar autosave — ya está todo guardado, no hay nada que recuperar
+  _edAutosaveClear(edProjectId);
 }
 function edRenderPage(page){
   const _savedOrient = edOrientation;
@@ -13628,6 +13681,8 @@ function _asDb() {
 
 async function _edAutosaveWrite() {
   if (!edProjectId || !edPages || !edPages.length) return;
+  // Solo escribir si hay cambios reales desde el último guardado explícito
+  if (edHistoryIdx === _edSavedHistoryIdx) return;
   try {
     // Incluir biblioteca en el snapshot
     let bibData = null;
@@ -16253,9 +16308,10 @@ function EditorView_init(){
       const inPalPop   = e.target.closest('#edb-palette-pop');
       const inShapePop = e.target.closest('#edb-palette-pop');
       const inHSL      = e.target.closest('#ed-hsl-picker');
+      const inPanelTab = e.target.closest('#edPanelTab');
       // Guards: no cancelar si estamos pintando activamente o timer táctil pendiente
       const _drawSafe = edPainting || !!window._edDrawTouchTimer || !!window._edLineTouchTimer;
-      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL && !_drawSafe){
+      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL && !inPanelTab && !_drawSafe){
         if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       }
     }
