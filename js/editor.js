@@ -13860,6 +13860,16 @@ async function edLoadProject(id){
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
   if (_asSave && _asSave.pages && _asSave.pages.length && _asSave.ts) {
+    // Descartar el autosave silenciosamente si el comic fue guardado (local o nube)
+    // DESPUÉS del autosave. Esto cubre el caso de abrir una obra descargada de la
+    // nube: my-comics.js actualiza localSavedAt al guardar los datos de nube, con
+    // lo que ese timestamp es posterior al autosave → el autosave está obsoleto.
+    const _localSavedTs = new Date(comic.localSavedAt || comic.updatedAt || 0).getTime();
+    if (_localSavedTs >= _asSave.ts) {
+      // El comic en disco es igual o más nuevo que el autosave → descartar sin preguntar
+      _edAutosaveClear(id);
+      // Continuar con la carga normal (sin diálogo)
+    } else {
     // Mostrar diálogo de recuperación antes de cargar
     const _asRecovered = await new Promise(res => {
       const _asDlg = document.createElement('div');
@@ -13890,6 +13900,7 @@ async function edLoadProject(id){
         try { _bibSave(_asSave.bib); } catch(_) {}
       }
     }
+    } // cierre del else (autosave más nuevo que el comic guardado)
   }
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   if(comic.editorData){
@@ -18968,8 +18979,9 @@ function _gcpInvalidateThumb(la, fi) {
 }
 function _gcpInvalidateAllThumbs() { _gcpThumbCache.clear(); }
 
-// Miniatura de UN layer en frame fi (60x60). visible=false → overlay rojo ✖.
-function _gcpLayerFrameThumb(la, fi, S) {
+// Miniatura de UN layer en frame fi (60x60).
+// ignoreVisibility=true: renderiza el contenido aunque visible===false (para mostrar miniatura semitransparente).
+function _gcpLayerFrameThumb(la, fi, S, ignoreVisibility) {
   S = S || 72;
   // Consultar cache antes de renderizar
   const cacheKey = _gcpThumbCacheKey(la, fi) + '-' + S;
@@ -18979,7 +18991,7 @@ function _gcpLayerFrameThumb(la, fi, S) {
   tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
   if (!la._frames || fi >= la._frames.length) return tc;
   const snap = la._frames[fi];
-  if (!snap || snap.visible === false) {
+  if (!snap || (snap.visible === false && !ignoreVisibility)) {
     tctx.fillStyle='#1e293b'; tctx.fillRect(0,0,S,S);
     tctx.fillStyle='rgba(239,68,68,0.6)'; tctx.fillRect(0,0,S,S);
     tctx.fillStyle='#fff'; tctx.font='bold '+(S*0.4)+'px sans-serif';
@@ -19598,7 +19610,7 @@ function _gcpUpdateFramesBar() {
 
       } else if (!isVisible) {
         // Frame oculto: mostrar miniatura con opacidad 50% (no la ✖ roja)
-        const thumb = _gcpLayerFrameThumb(la, fi, 88);
+        const thumb = _gcpLayerFrameThumb(la, fi, 88, true); // ignoreVisibility=true → renderiza el contenido
         thumb.className = 'ed-page-thumb';
         thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;opacity:0.5;filter:grayscale(30%);';
         card.appendChild(thumb);
