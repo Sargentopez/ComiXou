@@ -16180,32 +16180,41 @@ function EditorView_init(){
       if(edSelectedIdx >= 0) edDuplicateSelected();
       return;
     }
-    // Ctrl+] subir | Ctrl+[ bajar | Ctrl+Alt+] al frente | Ctrl+Alt+[ al fondo
-    // (estándar Figma / Illustrator / Photoshop)
-    if(ctrl && (e.key === ']' || e.key === '[')){
-      e.preventDefault(); // evita historial atrás/adelante en Safari
+    // Ctrl+] / Ctrl+Shift+↑  subir capa   | Ctrl+Alt+] / Ctrl+Shift+Alt+↑  al frente
+    // Ctrl+[ / Ctrl+Shift+↓  bajar capa   | Ctrl+Alt+[ / Ctrl+Shift+Alt+↓  al fondo
+    // Nota: Ctrl+[/] no funciona en Mac (Chrome lo intercepta como historial).
+    // Ctrl+Shift+↑/↓ es el atajo alternativo universal que funciona en todos los OS.
+    // (estándar Figma / Illustrator / Photoshop — en Mac usan Cmd+[/] que sí se puede bloquear)
+    const _isBracketUp   = ctrl && !e.shiftKey && e.key === ']';
+    const _isBracketDown = ctrl && !e.shiftKey && e.key === '[';
+    const _isArrowUp     = ctrl && e.shiftKey && e.key === 'ArrowUp';
+    const _isArrowDown   = ctrl && e.shiftKey && e.key === 'ArrowDown';
+    if(_isBracketUp || _isBracketDown || _isArrowUp || _isArrowDown){
+      e.preventDefault();
+      const _goUp  = _isBracketUp  || _isArrowUp;
+      const _goDown= _isBracketDown || _isArrowDown;
       if(edSelectedIdx >= 0){
         const page = edPages[edCurrentPage]; if(!page) return;
         const layers = page.layers;
         const idx = edSelectedIdx;
         if(e.altKey){
-          if(e.key === ']' && idx < layers.length - 1){
+          if(_goUp && idx < layers.length - 1){
             const [moved] = layers.splice(idx, 1);
             layers.push(moved);
             edSelectedIdx = layers.length - 1;
             edPushHistory(); edRedraw(); edToast('Al frente ⬆');
-          } else if(e.key === '[' && idx > 0){
+          } else if(_goDown && idx > 0){
             const [moved] = layers.splice(idx, 1);
             layers.unshift(moved);
             edSelectedIdx = 0;
             edPushHistory(); edRedraw(); edToast('Al fondo ⬇');
           }
         } else {
-          if(e.key === ']' && idx < layers.length - 1){
+          if(_goUp && idx < layers.length - 1){
             [layers[idx], layers[idx+1]] = [layers[idx+1], layers[idx]];
             edSelectedIdx = idx + 1;
             edPushHistory(); edRedraw(); edToast('Capa subida ▲');
-          } else if(e.key === '[' && idx > 0){
+          } else if(_goDown && idx > 0){
             [layers[idx], layers[idx-1]] = [layers[idx-1], layers[idx]];
             edSelectedIdx = idx - 1;
             edPushHistory(); edRedraw(); edToast('Capa bajada ▼');
@@ -19237,6 +19246,8 @@ function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   if (!bar) return;
   if (bar.style.display !== 'flex') return;
+  // Preservar posición de scroll horizontal antes de reconstruir el DOM
+  const _prevScrollLeft = document.getElementById('gcpFramesPane')?.scrollLeft || 0;
   bar.innerHTML = '';
 
   // Estructura: columna izquierda fija + zona de frames con scroll H+V
@@ -19268,6 +19279,8 @@ function _gcpUpdateFramesBar() {
   framesPane.style.cssText = 'flex:1;overflow-x:auto;overflow-y:visible;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--gray-400) var(--gray-200);';
   framesPane.addEventListener('scroll', () => {}, { passive: true });
   scrollWrap.appendChild(framesPane);
+  // Restaurar posición de scroll horizontal (preserva el foco visual al duplicar/eliminar)
+  if (_prevScrollLeft > 0) requestAnimationFrame(() => { framesPane.scrollLeft = _prevScrollLeft; });
 
   // ── Scrollbar horizontal custom (PC) ─────────────────────────────────────
   // Solo en PC (no táctil) — barra bajo los frames
@@ -19584,12 +19597,11 @@ function _gcpUpdateFramesBar() {
         card.appendChild(empty);
 
       } else if (!isVisible) {
-        const hidden = document.createElement('div');
-        hidden.className = 'ed-page-thumb';
-        hidden.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
-          'justify-content:center;font-size:28px;background:#fff0f0;color:#e63030;';
-        hidden.textContent = '✖';
-        card.appendChild(hidden);
+        // Frame oculto: mostrar miniatura con opacidad 50% (no la ✖ roja)
+        const thumb = _gcpLayerFrameThumb(la, fi, 88);
+        thumb.className = 'ed-page-thumb';
+        thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;opacity:0.5;filter:grayscale(30%);';
+        card.appendChild(thumb);
 
         // Botones ojo y ✕ también en frames invisibles
         const hiddenActions = document.createElement('div');
@@ -20441,6 +20453,11 @@ function gcpOpen(edLayerIdx) {
       _gcpCloseAllDropdowns();
       _gcpDownloadGif();
     });
+    document.getElementById('gcpDownloadMp4Btn')?.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      _gcpCloseAllDropdowns();
+      _gcpDownloadMp4();
+    });
     // ── Comportamiento: sliders con burbuja flotante ──
     const _gcpUpdateBehaviourSummary = () => {
       const el = document.getElementById('gcpBehaviourSummary');
@@ -21120,17 +21137,16 @@ async function _gcpDownloadApng() {
       }
     }
   });
-  // Garantizar que el bounding box NUNCA es menor que la zona de la página.
-  // Así si frame 1 tiene contenido pequeño y frame 5 lo tiene grande, el APNG
-  // exportado siempre tiene el tamaño correcto para todos los frames.
+  // Si no hay ningún píxel opaco → usar la zona de página completa como fallback.
+  // Si hay contenido, recortar ajustado al contenido real (sin forzar expansión
+  // al ancho/alto de página, que causaba exports con grandes márgenes vacíos).
   const pageMinX = marginX + offX, pageMinY = marginY + offY;
   const pageMaxX = pageMinX + pageW - 1, pageMaxY = pageMinY + pageH - 1;
   if (maxX < minX || maxY < minY) {
+    // Sin contenido opaco: usar página completa como fallback
     minX = pageMinX; minY = pageMinY; maxX = pageMaxX; maxY = pageMaxY;
-  } else {
-    minX = Math.min(minX, pageMinX); minY = Math.min(minY, pageMinY);
-    maxX = Math.max(maxX, pageMaxX); maxY = Math.max(maxY, pageMaxY);
   }
+  // Con contenido: respetar el bounding box real del contenido sin expandirlo.
   const pad = 4;
   const cropX = Math.max(0, minX - pad), cropY = Math.max(0, minY - pad);
   const cropW = Math.min(wsW, maxX + pad + 1) - cropX;
@@ -21274,11 +21290,11 @@ function _gcpDownloadGif() {
       }
     }
   });
-  // Bounding box mínimo = zona de página completa (mismo fix que APNG)
+  // Sin contenido opaco: usar página completa como fallback.
+  // Con contenido: respetar el bounding box real del contenido sin expandirlo.
   const _gifPMinX=marginX+offX, _gifPMinY=marginY+offY;
   const _gifPMaxX=_gifPMinX+pageW-1, _gifPMaxY=_gifPMinY+pageH-1;
   if(maxX<minX||maxY<minY){minX=_gifPMinX;minY=_gifPMinY;maxX=_gifPMaxX;maxY=_gifPMaxY;}
-  else{minX=Math.min(minX,_gifPMinX);minY=Math.min(minY,_gifPMinY);maxX=Math.max(maxX,_gifPMaxX);maxY=Math.max(maxY,_gifPMaxY);}
   const pad=4;
   const cropX=Math.max(0,minX-pad), cropY=Math.max(0,minY-pad);
   const cropW=Math.min(wsW,maxX+pad+1)-cropX;
@@ -21427,6 +21443,170 @@ function _gcpDownloadGif() {
     edToast('GIF descargado');
   } catch(err) {
     edToast('Error al generar GIF: ' + err.message);
+  }
+}
+
+// _gcpDownloadMp4 — exporta animación GCP como MP4 H.264 para WhatsApp y uso general.
+// Motor: WebCodecs API (nativo en Android Chrome 94+) + mp4-muxer (pure JS, sin WASM).
+// El video se genera completamente en el navegador, sin servidores externos.
+// WhatsApp acepta MP4 H.264 + reproduce en bucle si la duración es ≤ 6 segundos.
+async function _gcpDownloadMp4() {
+  if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
+    edToast('No hay contenido para exportar'); return;
+  }
+
+  // Verificar soporte WebCodecs (Chrome Android 94+, Chrome Desktop 94+)
+  if (typeof VideoEncoder === 'undefined') {
+    edToast('Tu navegador no soporta exportación MP4. Usa Chrome actualizado.');
+    return;
+  }
+
+  // Verificar que mp4-muxer está cargado
+  if (typeof Mp4Muxer === 'undefined') {
+    edToast('Error: librería MP4 no cargada. Recarga la página.');
+    return;
+  }
+
+  edToast('Generando MP4…');
+
+  const layers      = window._gcpLayers.slice();
+  const pageW       = Math.round(edPageW());
+  const pageH       = Math.round(edPageH());
+  const marginX     = Math.round(edMarginX());
+  const marginY     = Math.round(edMarginY());
+  const totalFrames = _gcpGetTotalFrames() || 1;
+  const extra = Math.round(Math.max(pageW, pageH) * 0.5);
+  const wsW = pageW + marginX * 2 + extra * 2;
+  const wsH = pageH + marginY * 2 + extra * 2;
+  const offX = extra, offY = extra;
+
+  // H.264 requiere dimensiones múltiplos de 2
+  const makeEven = n => n % 2 === 0 ? n : n + 1;
+
+  // Renderizar frames al canvas completo (mismo patrón que _gcpDownloadApng)
+  const renderFrame = (fi) => {
+    _gcpApplyFrame(fi);
+    const fc = document.createElement('canvas');
+    fc.width = wsW; fc.height = wsH;
+    const fctx = fc.getContext('2d');
+    fctx.clearRect(0, 0, wsW, wsH);
+    // Fondo blanco para MP4 (no hay canal alpha en H.264 estándar)
+    fctx.fillStyle = '#ffffff';
+    fctx.fillRect(0, 0, wsW, wsH);
+    fctx.setTransform(1, 0, 0, 1, offX, offY);
+    layers.forEach(l => {
+      if (!l || typeof l.draw !== 'function') return;
+      if (l._gcpVisible === false) return;
+      if (l.type === 'image' || l.type === 'gif') l.draw(fctx, fc);
+      else if (l.type === 'text' || l.type === 'bubble') l.draw(fctx, fc);
+      else { fctx.globalAlpha = l.opacity != null ? l.opacity : 1; l.draw(fctx); fctx.globalAlpha = 1; }
+    });
+    fctx.setTransform(1, 0, 0, 1, 0, 0);
+    return fc;
+  };
+
+  const renderedFrames = Array.from({length: totalFrames}, (_, fi) => renderFrame(fi));
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
+
+  // Calcular bounding box del contenido (igual que APNG), garantizando zona de página
+  let minX = wsW, minY = wsH, maxX = 0, maxY = 0;
+  renderedFrames.forEach(fc => {
+    const d = fc.getContext('2d').getImageData(0, 0, wsW, wsH).data;
+    for (let y = 0; y < wsH; y++) for (let x = 0; x < wsW; x++) {
+      // Para MP4 buscamos píxeles no blancos (fondo blanco = #fff)
+      const idx = (y * wsW + x) * 4;
+      if (d[idx] < 250 || d[idx+1] < 250 || d[idx+2] < 250) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+    }
+  });
+  const pageMinX = marginX + offX, pageMinY = marginY + offY;
+  const pageMaxX = pageMinX + pageW - 1, pageMaxY = pageMinY + pageH - 1;
+  if (maxX < minX || maxY < minY) {
+    minX = pageMinX; minY = pageMinY; maxX = pageMaxX; maxY = pageMaxY;
+  }
+  const pad = 4;
+  const cropX = Math.max(0, minX - pad), cropY = Math.max(0, minY - pad);
+  const cropW = makeEven(Math.min(wsW, maxX + pad + 1) - cropX);
+  const cropH = makeEven(Math.min(wsH, maxY + pad + 1) - cropY);
+
+  const frameDelay = (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
+  // microsegundos por frame (WebCodecs usa µs)
+  const frameDurationUs = frameDelay * 1000;
+
+  try {
+    // Verificar soporte H.264 en este dispositivo
+    const codecStr = 'avc1.42001f'; // H.264 Baseline profile level 3.1
+    const support = await VideoEncoder.isConfigSupported({
+      codec: codecStr,
+      width: cropW,
+      height: cropH,
+      framerate: Math.round(1000 / frameDelay)
+    });
+    if (!support.supported) {
+      edToast('H.264 no soportado en este dispositivo. Usa GIF o APNG.');
+      return;
+    }
+
+    // Configurar mp4-muxer con ArrayBuffer en memoria (fastStart para compatibilidad)
+    const { Muxer, ArrayBufferTarget } = Mp4Muxer;
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target,
+      video: { codec: 'avc', width: cropW, height: cropH },
+      fastStart: 'in-memory'
+    });
+
+    // Configurar VideoEncoder
+    const chunks = [];
+    const encoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: e => { throw e; }
+    });
+
+    encoder.configure({
+      codec: codecStr,
+      width: cropW,
+      height: cropH,
+      bitrate: 2_000_000,
+      framerate: Math.round(1000 / frameDelay)
+    });
+
+    // Codificar cada frame
+    for (let fi = 0; fi < renderedFrames.length; fi++) {
+      const fc = renderedFrames[fi];
+      // Crear canvas recortado
+      const cropped = document.createElement('canvas');
+      cropped.width = cropW; cropped.height = cropH;
+      cropped.getContext('2d').drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+      const frame = new VideoFrame(cropped, {
+        timestamp: fi * frameDurationUs,
+        duration: frameDurationUs
+      });
+      const isKey = fi === 0 || fi % 30 === 0;
+      encoder.encode(frame, { keyFrame: isKey });
+      frame.close();
+    }
+
+    await encoder.flush();
+    encoder.close();
+    muxer.finalize();
+
+    const { buffer } = target;
+    const blob = new Blob([buffer], { type: 'video/mp4' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'animacion_comixou.mp4';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    const kb = Math.round(blob.size / 1024);
+    edToast('MP4 descargado (' + kb + ' KB) ✓');
+  } catch (err) {
+    edToast('Error MP4: ' + err.message);
   }
 }
 

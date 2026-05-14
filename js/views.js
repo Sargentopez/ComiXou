@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v23.22</footer>
+    <footer class="app-version">v23.26</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -566,10 +566,10 @@ Router.register('editor', {
           <div class="sc-row"><span class="sc-desc">Confirmar / cerrar panel (OK)</span><span class="sc-keys"><kbd>Enter</kbd></span></div>
 
           <div class="sc-section">Orden de capas</div>
-          <div class="sc-row"><span class="sc-desc">Subir capa un nivel</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>]</kbd></span></div>
-          <div class="sc-row"><span class="sc-desc">Bajar capa un nivel</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>[</kbd></span></div>
-          <div class="sc-row"><span class="sc-desc">Traer al frente</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>]</kbd></span></div>
-          <div class="sc-row"><span class="sc-desc">Enviar al fondo</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>[</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Subir capa un nivel</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>]</kbd> <small style="opacity:.6">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>↑</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Bajar capa un nivel</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>[</kbd> <small style="opacity:.6">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>↓</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Traer al frente</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>]</kbd> <small style="opacity:.6">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Alt</kbd><kbd>↑</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Enviar al fondo</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>[</kbd> <small style="opacity:.6">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Alt</kbd><kbd>↓</kbd></span></div>
 
           <div class="sc-section">Zoom y navegación</div>
           <div class="sc-row"><span class="sc-desc">Zoom acercar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Rueda ↑</kbd></span></div>
@@ -682,6 +682,7 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="gcpSaveAppBtn"><span class="dd-icon">📥</span>Guardar en la aplicación</button>
               <button class="ed-dropdown-item" id="gcpDownloadApngBtn"><span class="dd-icon">⬇️</span>Descargar APNG <small style="opacity:.6">(web)</small></button>
               <button class="ed-dropdown-item" id="gcpDownloadGifBtn"><span class="dd-icon">⬇️</span>Descargar GIF <small style="opacity:.6">(Windows)</small></button>
+              <button class="ed-dropdown-item" id="gcpDownloadMp4Btn"><span class="dd-icon">⬇️</span>Descargar MP4 <small style="opacity:.6">(WhatsApp y redes)</small></button>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
