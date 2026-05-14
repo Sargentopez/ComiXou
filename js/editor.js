@@ -8859,17 +8859,22 @@ function _edPanelTabClick(e) {
   if (e) e.stopPropagation();
   const _p = $('edOptionsPanel');
   if (!_p) return;
-  _p.classList.remove('panel-collapsed');
+  const _mode = _p.dataset.mode;
+  _p.classList.remove('panel-collapsed'); // quitar ANTES de hide para desbloquear el guard
   _edPanelTabHide();
-  void _p.offsetHeight;
+  if (_mode === 'draw' || _mode === 'eraser' || _mode === 'fill') edDrawBarHide();
+  else edShapeBarHide();
   edFitCanvas();
+  _edRefocusAfterCollapse();
 }
 
 function _edDrawCollapseHandler() {
   const _p = $('edOptionsPanel'); if (!_p) return;
   const _collapsed = _p.classList.toggle('panel-collapsed');
-  if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+  if (_collapsed) { _edPanelTabShow(); edDrawBarShow(true); }
+  else             { _edPanelTabHide(); edDrawBarHide(); }
   edFitCanvas();
+  _edRefocusAfterCollapse();
 }
 
 /* ── HERRAMIENTA SHAPE (rectángulo / elipse) ── */
@@ -9152,8 +9157,10 @@ function _edActivateShapeTool(isNew) {
   $('op-panel-collapse')?.addEventListener('click', () => {
     const _p = $('edOptionsPanel'); if (!_p) return;
     const _collapsed = _p.classList.toggle('panel-collapsed');
-    if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
+    if (_collapsed) { _edPanelTabShow(); edShapeBarShow(true); }
+    else             { _edPanelTabHide(); edShapeBarHide(); }
     edFitCanvas();
+    _edRefocusAfterCollapse();
   });
 
   // ── Curva de vértice ──
@@ -9628,9 +9635,10 @@ function _edActivateLineTool(isNew, isCreating) {
     const _p = $('edOptionsPanel');
     if (!_p) return;
     const _collapsed = _p.classList.toggle('panel-collapsed');
-    if (_collapsed) { _edPanelTabShow(); } else { _edPanelTabHide(); }
-    void _p.offsetHeight;
+    if (_collapsed) { _edPanelTabShow(); edShapeBarShow(true); }
+    else             { _edPanelTabHide(); edShapeBarHide(); }
     edFitCanvas();
+    _edRefocusAfterCollapse();
   });
 
   // ── OK ──
@@ -10925,16 +10933,34 @@ function edMinimize(){
     // Guardar modo para restaurar al maximizar
     if(mode) window._edMinimizedDrawMode = mode;
     _panel.style.visibility='hidden';
-    // Mostrar barra flotante si corresponde al modo
-    if(['draw','eraser','fill'].includes(edActiveTool)){
-      edDrawBarShow();
-    } else if(mode==='shape' || mode==='line'){
-      edShapeBarShow();
-    }
     // Para props (imagen, texto, bocadillo, stroke): panel oculto sin barra flotante
   }
+  // Mostrar barra flotante según herramienta activa (independiente de si el panel estaba abierto)
+  const _minMode = window._edMinimizedDrawMode || $('edOptionsPanel')?.dataset.mode || '';
+  if(['draw','eraser','fill'].includes(edActiveTool)){
+    edDrawBarShow(false);
+  } else if(_minMode==='shape' || _minMode==='line' || edActiveTool==='shape' || edActiveTool==='line'){
+    edShapeBarShow(false);
+  }
   _edResetCameraToFit();
-  requestAnimationFrame(_edBarClampToScreen);
+  requestAnimationFrame(() => {
+    // Tras el reset de cámara, reposicionar la barra pegada al lienzo
+    const _bar = $('edDrawBar');
+    const _sbar = $('edShapeBar');
+    if (_bar?.classList.contains('visible')) {
+      const pos = _edBarSnapToCanvas(_bar, _edbX, _edbY);
+      _edbX = pos.x; _edbY = pos.y;
+      _bar.style.left = _edbX + 'px';
+      _bar.style.top  = _edbY + 'px';
+    }
+    if (_sbar?.classList.contains('visible')) {
+      const pos = _edBarSnapToCanvas(_sbar, _esbX, _esbY);
+      _esbX = pos.x; _esbY = pos.y;
+      _sbar.style.left = _esbX + 'px';
+      _sbar.style.top  = _esbY + 'px';
+    }
+    _edBarClampToScreen();
+  });
 }
 function edMaximize(keepBar=false){
   edMinimized=false;
@@ -12006,11 +12032,75 @@ function _edBarDefaultPos(barEl) {
   return { x, y };
 }
 
-function edDrawBarShow() {
+
+// Recentrar cámara en el objeto seleccionado tras colapso/expansión del panel
+function _edRefocusAfterCollapse() {
+  const _la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if (!_la) return;
+  _edFocusDone = false;
+  setTimeout(() => _edFocusOnLayer(_la), 30); // pequeño delay para que edFitCanvas termine
+}
+
+// Posicionar barra flotante pegada al lienzo según orientación del lienzo
+// - Lienzo vertical  → barra vertical, pegada al lado izquierdo, centrada verticalmente
+// - Lienzo horizontal → barra horizontal, pegada encima, centrada horizontalmente
+function _edBarSnapToCanvas(bar, xVar, yVar) {
+  if (!bar) return { x: xVar, y: yVar };
+  const shell = document.getElementById('editorShell');
+  const canv  = document.getElementById('editorCanvas');
+  if (!shell || !canv) return { x: xVar, y: yVar };
+  const shellR = shell.getBoundingClientRect();
+  const canvR  = canv.getBoundingClientRect();
+  const isVert = (edOrientation || 'vertical') !== 'horizontal';
+
+  // Posición del lienzo blanco en coordenadas de pantalla (relativas al shell)
+  const pageW = edPageW(), pageH = edPageH();
+  const mxW = edMarginX(), myW = edMarginY();
+  // Esquina superior-izquierda del lienzo blanco en pantalla (relativa al shell)
+  const pageLeft   = (canvR.left - shellR.left) + edCamera.x + mxW * edCamera.z;
+  const pageTop    = (canvR.top  - shellR.top)  + edCamera.y + myW * edCamera.z;
+  const pageRight  = pageLeft + pageW * edCamera.z;
+  const pageBottom = pageTop  + pageH * edCamera.z;
+  // Centro del lienzo blanco visible (clampado al viewport del canvas)
+  const visLeft   = Math.max(pageLeft,   0);
+  const visTop    = Math.max(pageTop,    canvR.top - shellR.top);
+  const visRight  = Math.min(pageRight,  canvR.right  - shellR.left);
+  const visBottom = Math.min(pageBottom, canvR.bottom - shellR.top);
+  const visCx = (visLeft + visRight)  / 2;
+  const visCy = (visTop  + visBottom) / 2;
+
+  if (isVert) {
+    bar.classList.remove('horiz');
+    const bw = bar.offsetWidth  || 40;
+    const bh = bar.offsetHeight || 200;
+    // X: pegada a la izquierda del lienzo blanco
+    const x = Math.max(0, Math.round(pageLeft - bw - 6));
+    // Y: centrada verticalmente en la zona visible del lienzo
+    const y = Math.max(0, Math.round(visCy - bh / 2));
+    return { x, y };
+  } else {
+    bar.classList.add('horiz');
+    const bw = bar.offsetWidth  || 200;
+    const bh = bar.offsetHeight || 40;
+    // Y: pegada encima del lienzo blanco, pero por debajo de las barras superiores
+    const canvasTop = canvR.top - shellR.top;
+    const y = Math.max(canvasTop + 4, Math.round(pageTop - bh - 6));
+    // X: centrada horizontalmente en la zona visible del lienzo
+    const x = Math.max(0, Math.round(visCx - bw / 2));
+    return { x, y };
+  }
+}
+function _edPanelIsCollapsed() {
+  return !!$('edOptionsPanel')?.classList.contains('panel-collapsed');
+}
+
+function edDrawBarShow(snapToCanvas) {
   const bar = $('edDrawBar'); if (!bar) return;
   bar.classList.add('visible'); // visible primero para medir offsetHeight
-  // Si sigue en la posición inicial, centrar en el borde izquierdo del lienzo
-  if (_edbX === 64 && _edbY === 12) {
+  if (snapToCanvas) {
+    const pos = _edBarSnapToCanvas(bar, _edbX, _edbY);
+    _edbX = pos.x; _edbY = pos.y;
+  } else if (_edbX === 64 && _edbY === 12) {
     const pos = _edBarDefaultPos(bar);
     _edbX = pos.x; _edbY = pos.y;
   }
@@ -12025,6 +12115,7 @@ function edDrawBarShow() {
 }
 
 function edDrawBarHide() {
+  if (_edPanelIsCollapsed()) return;
   $('edDrawBar')?.classList.remove('visible');
   _edbClosePalette();
   _edOffsetHide();
@@ -12035,12 +12126,15 @@ function edDrawBarHide() {
    ══════════════════════════════════════════ */
 let _esbX = 12, _esbY = 120;
 
-function edShapeBarShow() {
+function edShapeBarShow(snapToCanvas) {
   const bar = $('edShapeBar'); if(!bar) return;
   bar.classList.add('visible');
   _edShapeInitHistory();
   if(_vsHistory.length === 0) _vsInit(false);
-  if (_esbX === 12 && _esbY === 120) {
+  if (snapToCanvas) {
+    const pos = _edBarSnapToCanvas(bar, _esbX, _esbY);
+    _esbX = pos.x; _esbY = pos.y;
+  } else if (_esbX === 12 && _esbY === 120) {
     const pos = _edBarDefaultPos(bar);
     _esbX = pos.x; _esbY = pos.y;
   }
@@ -12049,6 +12143,7 @@ function edShapeBarShow() {
   _esbSync();
 }
 function edShapeBarHide() {
+  if (_edPanelIsCollapsed()) return;
   // Ocultar slider directamente por DOM (no depender del closure de edInitShapeBar)
   const _sp=$('esb-slider-panel');
   if(_sp){ _sp.style.display='none'; _sp._mode=null; }
