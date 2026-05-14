@@ -3160,6 +3160,7 @@ function edRedraw(){
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
     if(_editingDraw && l.type==='draw') return; // en modo draw, el draw va al final
+    if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='image'){
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
@@ -3184,6 +3185,7 @@ function edRedraw(){
   });
   // Textos/bocadillos: aplicar dimming individual por capa
   _textLayers.forEach(l=>{
+    if(l.hidden) return; // capa oculta por el usuario
     const i = edLayers.indexOf(l);
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     edCtx.globalAlpha = _textGroupAlpha * dimFactor;
@@ -3576,14 +3578,25 @@ function _edFocusOnLayer(la) {
   const pw = edPageW(), ph = edPageH();
   const canvasRect = edCanvas.getBoundingClientRect();
   const panel = $('edOptionsPanel');
-  const panelBottom = (panel && panel.classList.contains('open'))
+  // Panel colapsado (panel-collapsed): no ocupa espacio vertical útil — usar solo
+  // la barra flotante como referencia. Panel abierto y visible: usar su bottom.
+  const _panelOpen       = panel && panel.classList.contains('open');
+  const _panelCollapsed  = panel && panel.classList.contains('panel-collapsed');
+  const panelBottom = (_panelOpen && !_panelCollapsed)
     ? panel.getBoundingClientRect().bottom : canvasRect.top;
+  // Barras flotantes (edDrawBar / edShapeBar): solo contar si están visibles
+  // y tienen dimensiones reales (evitar valores erróneos durante la transición de collapse).
   let floatBottom = 0;
   ['edDrawBar','edShapeBar'].forEach(id => {
     const bar = $(id);
     if (!bar || !bar.classList.contains('visible')) return;
     const r = bar.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) floatBottom = Math.max(floatBottom, r.bottom);
+    // Ignorar si la barra está fuera de la pantalla o tiene tamaño cero
+    if (r.width < 4 || r.height < 4) return;
+    // Solo contar si está por encima del centro del canvas (es una barra superior/lateral)
+    // Una barra posicionada más abajo que el centro del canvas no restringe el espacio libre
+    const canvasMidY = canvasRect.top + canvasRect.height / 2;
+    if (r.bottom <= canvasMidY + 40) floatBottom = Math.max(floatBottom, r.bottom);
   });
   const freeTop    = Math.max(panelBottom, floatBottom);
   const freeBottom = canvasRect.bottom;
@@ -3598,10 +3611,11 @@ function _edFocusOnLayer(la) {
   const MARGIN = 0.75;
   const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
   const zForH  = (freeH * MARGIN) / Math.max(objH, 1);
-  const targetZ = Math.min(Math.min(zForW, zForH), 8);
+  // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños
+  const targetZ = Math.min(Math.min(zForW, zForH), 4);
   const currentlyFitsW = objW * edCamera.z <= freeW * MARGIN;
   const currentlyFitsH = objH * edCamera.z <= freeH * MARGIN;
-  const newZ = (currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.1);
+  const newZ = (currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2);
   const freeCx = freeLeft + freeW / 2;
   const freeCy = freeTop  + freeH / 2;
   const camOffX = freeCx - canvasRect.left;
@@ -5800,7 +5814,7 @@ function edOnStart(e){
     } else if(e.shiftKey && e.pointerType !== 'touch'){
       // Shift+clic fuera del bbox en multiselect: buscar objeto y hacer toggle
       const _sfound = edLayers.map((_,i)=>i).reverse().find(i=>{
-        const _la=edLayers[i]; return _la && !_la.type?.startsWith('_') && _la.contains && _la.contains(c.nx,c.ny);
+        const _la=edLayers[i]; return _la && !_la.hidden && !_la.type?.startsWith('_') && _la.contains && _la.contains(c.nx,c.ny);
       });
       if(_sfound !== undefined){
         const _si = edMultiSel.indexOf(_sfound);
@@ -5841,7 +5855,7 @@ function edOnStart(e){
         _msClear();
         edActiveTool = 'select'; edCanvas.className = '';
         // Si hay un objeto bajo el clic, seleccionarlo inmediatamente
-        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && edLayers[i].contains(c.nx,c.ny));
+        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && !edLayers[i].hidden && edLayers[i].contains(c.nx,c.ny));
         if(_hit !== undefined){
           edSelectedIdx = _hit;
           _edDrawLockUI(); _edPropsOverlayShow();
@@ -6395,7 +6409,7 @@ function edOnStart(e){
     );
     let _hitVec = null;
     for(let i = _vecLayers.length - 1; i >= 0; i--){
-      if(_vecLayers[i].contains(c.nx, c.ny)){ _hitVec = _vecLayers[i]; break; }
+      if(!_vecLayers[i].hidden && _vecLayers[i].contains(c.nx, c.ny)){ _hitVec = _vecLayers[i]; break; }
     }
     if(_hitVec){
       edSelectedIdx = edLayers.indexOf(_hitVec);
@@ -6423,7 +6437,7 @@ function edOnStart(e){
   // Primero textos/bocadillos (siempre encima)
   for(let i = edLayers.length - 1; i >= 0; i--){
     const l = edLayers[i];
-    if((l.type==='text'||l.type==='bubble') && l.contains(c.nx,c.ny)){
+    if((l.type==='text'||l.type==='bubble') && !l.hidden && l.contains(c.nx,c.ny)){
       found = i; break;
     }
   }
@@ -6434,7 +6448,7 @@ function edOnStart(e){
     for(let i = edLayers.length - 1; i >= 0; i--){
       const l = edLayers[i];
       if(l.type==='text'||l.type==='bubble') continue;
-      const _hit = l.type==='draw' ? l.contains(c.nx,c.ny,true) : l.contains(c.nx,c.ny);
+      const _hit = !l.hidden && (l.type==='draw' ? l.contains(c.nx,c.ny,true) : l.contains(c.nx,c.ny));
       if(_hit){ found = i; break; }
     }
   }
@@ -6445,7 +6459,7 @@ function edOnStart(e){
       const l = edLayers[i];
       if(l.type==='text'||l.type==='bubble') continue;
       if(l.type!=='draw') continue; // solo DrawLayer tiene radio expandido; el resto ya se probó
-      if(l.contains(c.nx,c.ny,false)){ found = i; break; }
+      if(!l.hidden && l.contains(c.nx,c.ny,false)){ found = i; break; }
     }
   }
   if(found>=0){
@@ -7386,7 +7400,7 @@ function edOnEnd(e){
     edRubberBand=null;
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
       const _found=[];
-      edLayers.forEach((la,i)=>{ if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
+      edLayers.forEach((la,i)=>{ if(!la.hidden && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
       if(_found.length===1){
         // Un solo objeto → selección normal
         edSelectedIdx=_found[0];
@@ -7417,7 +7431,8 @@ function edOnEnd(e){
         edMultiSel=[];
         edLayers.forEach((la,i)=>{
           // Los objetos bloqueados se incluyen — solo se impide moverlos
-          if(_edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
+          // Los objetos ocultos se excluyen — no son seleccionables
+          if(!la.hidden && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
         });
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
@@ -13391,13 +13406,14 @@ function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='gif'){
     const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
-    if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; return _g;
+    if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; if(l.hidden) _g.hidden=true; return _g;
   }
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
     if(l.groupId) _r.groupId=l.groupId;
     if(l.locked) _r.locked=true;
+    if(l.hidden) _r.hidden=true;
     if(l._keepSize) _r._keepSize=true;
     if(l._isGcpImage) _r._isGcpImage=true;
     // Frames en IDB: usar clave (nunca guardar frames grandes en localStorage)
@@ -13420,7 +13436,7 @@ function edSerLayer(l){
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
-    if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; return _o;}
+    if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; return _o;}
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
       _hasText:!!(l.text&&l.text!=='Escribe aquí'),
@@ -13435,6 +13451,7 @@ function edSerLayer(l){
       ...op};
     if(l.groupId)_bobj.groupId=l.groupId;
     if(l.locked)_bobj.locked=true;
+    if(l.hidden)_bobj.hidden=true;
     // Para estilos complejos: guardar bitmap completo (forma+cola+texto) para reproducción fiel
     if(l.style==='thought'||l.style==='explosion'){
       try{
@@ -13492,10 +13509,10 @@ function edSerLayer(l){
     return _bobj;
   }
   if(l.type==='group') return null; // obsoleto
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -13504,6 +13521,7 @@ function edSerLayer(l){
       cornerRadius:l.cornerRadius||0};
     if(l.groupId)_sobj.groupId=l.groupId;
     if(l.locked)_sobj.locked=true;
+    if(l.hidden)_sobj.hidden=true;
     // Si tiene cornerRadii con valores, generar bitmap fiel
     const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
     const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
@@ -13539,6 +13557,7 @@ function edSerLayer(l){
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined};
     if(l.groupId)_lobj.groupId=l.groupId;
     if(l.locked)_lobj.locked=true;
+    if(l.hidden)_lobj.hidden=true;
     if(l._fusionId)_lobj._fusionId=l._fusionId; // T1: preservar en historial vectorial
     // Objeto unido (⊕ Unir): preservar flag y estilos individuales por contorno
     if(l.grouped) _lobj.grouped=true;
@@ -13609,6 +13628,7 @@ function edDeserLayer(d, pageOrientation){
     const dl = d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer();
     if(d.groupId) dl.groupId=d.groupId;
     if(d.locked) dl.locked=true;
+    if(d.hidden) dl.hidden=true;
     return dl;
   }
   if(d.type==='stroke'){
@@ -13627,6 +13647,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.lineWidth !== undefined) sl.lineWidth = d.lineWidth;
     if(d.groupId) sl.groupId = d.groupId;
     if(d.locked) sl.locked = true;
+    if(d.hidden) sl.hidden = true;
     return sl;
   }
   if(d.type==='shape'){
@@ -13636,6 +13657,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     if(d.groupId) l.groupId=d.groupId;
     if(d.locked) l.locked=true;
+    if(d.hidden) l.hidden=true;
     return l;
   }
   if(d.type==='line'){
@@ -13653,6 +13675,7 @@ function edDeserLayer(d, pageOrientation){
     // Objeto unido (⊕ Unir): restaurar flag y estilos individuales por contorno
     if(d.grouped) l.grouped=true;
     if(d.groupedStyles) l.groupedStyles=d.groupedStyles.map(s=>({...s}));
+    if(d.hidden) l.hidden=true;
     return l;
   }
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
@@ -13682,6 +13705,7 @@ function edDeserLayer(d, pageOrientation){
         }
       });
     }).catch(()=>{});
+    if(d.hidden) l.hidden=true;
     return l;
   }
   if(d.type==='image'){
@@ -13689,6 +13713,7 @@ function edDeserLayer(d, pageOrientation){
     l.rotation=d.rotation||0; l.src=d.src||'';
     if(d.opacity!==undefined) l.opacity=d.opacity;
     if(d.locked) l.locked=true;
+    if(d.hidden) l.hidden=true;
     if(d._keepSize) l._keepSize=true;
     if(d.height) l.height = d.height;
     if(d.groupId) l.groupId=d.groupId;

@@ -225,12 +225,30 @@ function _lyRender() {
   }
 }
 
+
+/* ── Botón ojo: ocultar/mostrar capa en el canvas (mismo icono que matriz de frames) ── */
+function _lyBuildEyeBtn(la) {
+  const btn = document.createElement('button');
+  btn.className = 'ed-layer-del';
+  btn.title = la.hidden ? 'Mostrar capa' : 'Ocultar capa';
+  btn.style.opacity = la.hidden ? '0.4' : '';
+  btn.textContent = '👁';
+  btn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    la.hidden = !la.hidden;
+    edRedraw();
+    _lyRender();
+  });
+  return btn;
+}
+
 /* ──────────────────────────────────────────
    FILA DE TEXTO/BOCADILLO
 ────────────────────────────────────────── */
 function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   const row = document.createElement('div');
   row.className = 'ed-layer-text-row' + (selected ? ' selected' : '') + (draggable ? ' draggable' : '');
+  if (la.hidden) row.style.opacity = '0.45'; // capa oculta: item atenuado
   row.dataset.realIdx = realIdx;
   if (!la._uid) la._uid = ++_lyUidCounter;
   row.dataset.uid = la._uid;
@@ -315,6 +333,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   acts.className = 'ed-layer-actions';
   acts.appendChild(upBtn);
   acts.appendChild(dnBtn);
+  acts.appendChild(_lyBuildEyeBtn(la));
   acts.appendChild(del);
   row.appendChild(acts);
 
@@ -338,6 +357,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   const isGroup = false; // obsoleto
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
+  if (la.hidden) item.style.opacity = '0.45';
   item.dataset.realIdx = realIdx;
   if (!la._uid) la._uid = ++_lyUidCounter;
   item.dataset.uid = la._uid;
@@ -472,6 +492,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   acts.className = 'ed-layer-actions';
   acts.appendChild(upBtn);
   acts.appendChild(dnBtn);
+  acts.appendChild(_lyBuildEyeBtn(la));
   acts.appendChild(del);
   item.appendChild(acts);
 
