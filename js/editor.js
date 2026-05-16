@@ -1619,17 +1619,27 @@ function _edAdaptPageToOrientation(page, prev, next) {
     const mx_s = (ED_CANVAS_W - pw_s) / 2, my_s = (ED_CANVAS_H - ph_s) / 2;
     const sw = pw_s / pw_n, sh = ph_s / ph_n;
 
-    if (l.type === 'draw' && l._canvas && l._ctx) {
+    // DrawLayer y FillLayer comparten el mismo sistema de coordenadas de workspace.
+    // Al cambiar orientación, ambos se reubican con la misma operación: recortar
+    // la zona de página anterior (mx_s,my_s) y pegarla en la nueva (mx_n,my_n).
+    if ((l.type === 'draw' || l.type === 'fill') && l._canvas && l._ctx) {
       const tmp = document.createElement('canvas');
       tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
       tmp.getContext('2d').drawImage(l._canvas, mx_s, my_s, pw_s, ph_s, mx_n, my_n, pw_s, ph_s);
       l._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
       l._ctx.drawImage(tmp, 0, 0);
+      // FillLayer: sincronizar _baseX/_baseY con el stroke vinculado para que
+      // bakeAutoOffset futuro calcule offset correcto
+      if (l.type === 'fill') {
+        const _pair = page.layers.find(x => x !== l && x._fillLayerId === l._drawLayerId);
+        if (_pair) { l._baseX = _pair.x; l._baseY = _pair.y; }
+      }
       l._orient = next; return;
     }
 
     if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
 
+    // StrokeLayer con FillLayer vinculado: el fill ya se reubicó arriba
     if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
 
     if (l.width  != null) l.width  = Math.min(1, l.width  * sw);
@@ -1652,15 +1662,6 @@ function _edAdaptPageToOrientation(page, prev, next) {
 
 function edSetOrientation(o, persist=true){
   const prevOrientation = edOrientation;
-  // Bake del offset de FillLayers con la orientación ANTERIOR aún activa
-  // (bakeAutoOffset usa edPageW()/edPageH() — deben ser los valores viejos)
-  if(persist && prevOrientation !== o){
-    (edPages[edCurrentPage]?.layers || []).forEach(l => {
-      if (l && l.type === 'fill' && typeof l.bakeAutoOffset === 'function') {
-        l.bakeAutoOffset();
-      }
-    });
-  }
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
@@ -2564,7 +2565,8 @@ function _edLayersSnapshot(){
       // Historial global: guardar canvas completo para no perder contenido fuera del lienzo
       return { type:'fill', dataUrl:l.toDataUrlFull(),
         _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
-        hidden: l.hidden||false, opacity: l.opacity, _isFull:true };
+        hidden: l.hidden||false, opacity: l.opacity, _isFull:true,
+        _orient:l._orient||null, _baseX:l._baseX, _baseY:l._baseY };
     }
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
@@ -2603,6 +2605,7 @@ function _edLayersSnapshot(){
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
+      _orient:l._orient||null,
       grouped: l.grouped||false,
       groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
