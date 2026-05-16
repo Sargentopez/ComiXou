@@ -1738,38 +1738,32 @@ class FillLayer extends BaseLayer {
     this._canvas.height = ED_CANVAS_H;
     this._ctx = this._canvas.getContext('2d');
     this._baseX = null; this._baseY = null;
-    this._ready = Promise.resolve(); // se reemplaza con promesa real en fromDataUrl*
   }
   static fromDataUrl(dataUrl, pw, ph) {
+    // Restaurar solo la zona de página (cloud/guardado)
     const fl = new FillLayer();
     if (!dataUrl) return fl;
-    fl._ready = new Promise(res => {
-      const img = new Image();
-      img.onload = () => {
-        const mx = (ED_CANVAS_W - pw) / 2;
-        const my = (ED_CANVAS_H - ph) / 2;
-        fl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
-        if (typeof edRedraw === 'function') edRedraw();
-        res();
-      };
-      img.onerror = () => res();
-      img.src = dataUrl;
-    });
+    const img = new Image();
+    img.onload = () => {
+      const mx = (ED_CANVAS_W - pw) / 2;
+      const my = (ED_CANVAS_H - ph) / 2;
+      fl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
+      if (typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
     return fl;
   }
   static fromDataUrlFull(dataUrl, offsetX, offsetY) {
+    // Restaurar canvas workspace completo (historial local)
+    // offsetX/offsetY: desplazamiento opcional en px de workspace
     const fl = new FillLayer();
     if (!dataUrl) return fl;
-    fl._ready = new Promise(res => {
-      const img = new Image();
-      img.onload = () => {
-        fl._ctx.drawImage(img, offsetX||0, offsetY||0, ED_CANVAS_W, ED_CANVAS_H);
-        if (typeof edRedraw === 'function') edRedraw();
-        res();
-      };
-      img.onerror = () => res();
-      img.src = dataUrl;
-    });
+    const img = new Image();
+    img.onload = () => {
+      fl._ctx.drawImage(img, offsetX||0, offsetY||0, ED_CANVAS_W, ED_CANVAS_H);
+      if (typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
     return fl;
   }
   toDataUrl() {
@@ -1780,46 +1774,6 @@ class FillLayer extends BaseLayer {
     tmp.getContext('2d').drawImage(this._canvas,
       edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
     return tmp.toDataURL();
-  }
-  // Igual que StrokeLayer: recortar al bbox del contenido (incluyendo zonas fuera del lienzo)
-  // Devuelve { dataUrl, bx, by, bw, bh } en px del workspace, o null si vacío
-  toDataUrlCropped() {
-    const W = ED_CANVAS_W, H = ED_CANVAS_H;
-    const d = this._ctx.getImageData(0, 0, W, H).data;
-    let minX=W, minY=H, maxX=0, maxY=0, found=false;
-    for(let y=0;y<H;y++){
-      for(let x=0;x<W;x++){
-        if(d[(y*W+x)*4+3]>10){
-          if(x<minX)minX=x; if(x>maxX)maxX=x;
-          if(y<minY)minY=y; if(y>maxY)maxY=y;
-          found=true;
-        }
-      }
-    }
-    if(!found) return null;
-    const pad=1;
-    const bx=Math.max(0,minX-pad), by=Math.max(0,minY-pad);
-    const bw=Math.min(W,maxX-minX+1+pad*2), bh=Math.min(H,maxY-minY+1+pad*2);
-    const tmp=document.createElement('canvas');
-    tmp.width=bw; tmp.height=bh;
-    tmp.getContext('2d').drawImage(this._canvas,bx,by,bw,bh,0,0,bw,bh);
-    return { dataUrl:tmp.toDataURL(), bx, by, bw, bh };
-  }
-  // Restaurar desde datos cropped
-  static fromDataUrlCropped(dataUrl, bx, by, bw, bh) {
-    const fl = new FillLayer();
-    if (!dataUrl) return fl;
-    fl._ready = new Promise(res => {
-      const img = new Image();
-      img.onload = () => {
-        fl._ctx.drawImage(img, 0, 0, bw, bh, bx, by, bw, bh);
-        if (typeof edRedraw === 'function') edRedraw();
-        res();
-      };
-      img.onerror = () => res();
-      img.src = dataUrl;
-    });
-    return fl;
   }
   toDataUrlFull() {
     // Canvas workspace completo — para historial local (no pierde contenido fuera del lienzo)
@@ -13465,18 +13419,8 @@ async function edSaveProject(_keepOverlay){
       texts,
     };
   });
-  // Esperar a que todos los FillLayers tengan sus imágenes cargadas
-  const _fillReadyPromises = [];
-  for (const _rp of edPages) {
-    for (const _rl of (_rp.layers||[])) {
-      if (_rl && _rl.type === 'fill' && _rl._ready instanceof Promise) {
-        _fillReadyPromises.push(_rl._ready);
-      }
-    }
-  }
-  if (_fillReadyPromises.length) await Promise.all(_fillReadyPromises);
-
   // Construir pages serializando capas y externalizando _pngFrames a IDB
+  // (evita QuotaExceededError silencioso en localStorage con frames PNG grandes)
   const _savedOrient2=edOrientation, _savedPage2=edCurrentPage;
   const _edPages = [];
   for (let _pi=0; _pi<edPages.length; _pi++) {
@@ -13974,11 +13918,7 @@ function edMergeSelected(){
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='fill'){
-    const _fCropped = (typeof l.toDataUrlCropped==='function') ? l.toDataUrlCropped() : null;
-    const _f = _fCropped
-      ? { type:'fill', dataUrl:_fCropped.dataUrl, _isCropped:true,
-          bx:_fCropped.bx, by:_fCropped.by, bw:_fCropped.bw, bh:_fCropped.bh }
-      : { type:'fill', dataUrl:null };
+    const _f={type:'fill', dataUrl:l.toDataUrlFull(), _isFull:true};
     if(l._drawLayerId) _f._drawLayerId=l._drawLayerId;
     if(l._uid) _f._uid=l._uid;
     if(l.hidden) _f.hidden=true;
@@ -14204,21 +14144,13 @@ function edDeserLayer(d, pageOrientation){
   if(d.type==='group') return null; // obsoleto
   if(d.type==='fill'){
     const _isV=(pageOrientation||'vertical')==='vertical';
-    let fl;
-    if (d._isCropped && d.bx !== undefined) {
-      fl = FillLayer.fromDataUrlCropped(d.dataUrl||'', d.bx, d.by, d.bw, d.bh);
-    } else if (d._isFull) {
-      fl = FillLayer.fromDataUrlFull(d.dataUrl||'');
-    } else {
-      fl = FillLayer.fromDataUrl(d.dataUrl||'', _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
-    }
+    const fl = d._isFull
+      ? FillLayer.fromDataUrlFull(d.dataUrl||'')
+      : FillLayer.fromDataUrl(d.dataUrl||'', _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
     if(d._drawLayerId) fl._drawLayerId=d._drawLayerId;
     if(d._uid) fl._uid=d._uid;
     if(d.hidden) fl.hidden=true;
     if(d._baseX !== undefined) { fl._baseX=d._baseX; fl._baseY=d._baseY; }
-    // Guardar metadata del JSON descargado para diagnóstico
-    fl._diagSrc = { _isCropped:d._isCropped, bx:d.bx, by:d.by, bw:d.bw, bh:d.bh,
-      urlLen:(d.dataUrl||'').length, _isFull:d._isFull };
     return fl;
   }
   if(d.type==='draw'){
@@ -22423,8 +22355,6 @@ async function _gcpDownloadMp4() {
 
 // ── DIAGNÓSTICO GUARDADO LOCAL Y NUBE ────────────────────────────────────────
 async function _edRunDiag() {
-  // Esperar 1.5s para que los img.onload de fills async terminen
-  await new Promise(r => setTimeout(r, 1500));
   const lines = [];
   const L = s => lines.push(s);
 
@@ -22450,13 +22380,6 @@ async function _edRunDiag() {
       (p.layers||[]).forEach((l, li) => {
         if (l.type === 'image' || l.type === 'gif') {
           L('  L' + pi + '_' + li + ' type=' + l.type + ' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' apngSrc=' + (l._apngSrc?'sí':'NO'));
-        }
-        if (l.type === 'fill') {
-          L('  L' + pi + '_' + li + ' type=fill _isCropped=' + l._isCropped
-            + ' bx=' + l.bx + ' by=' + l.by + ' bw=' + l.bw + ' bh=' + l.bh
-            + ' urlLen=' + ((l.dataUrl||'').length)
-            + ' _drawLayerId=' + (l._drawLayerId||'?')
-            + ' _baseX=' + (l._baseX!==undefined?l._baseX:'undef'));
         }
       });
     });
@@ -22517,11 +22440,6 @@ async function _edRunDiag() {
       + (l.type==='image'?' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' animReady=' + (l._animReady?'sí':'NO'):'')
       + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null'):'')
       + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?'):'')
-      + (l.type==='fill'?' canvas='+(l._canvas?l._canvas.width+'x'+l._canvas.height:'null')
-        +' _drawLayerId='+(l._drawLayerId||'?')
-        +' _baseX='+(l._baseX!==null&&l._baseX!==undefined?l._baseX.toFixed(3):'null')
-        +' hasPixels='+(()=>{try{const d=l._ctx.getImageData(0,0,l._canvas.width,l._canvas.height).data;for(let i=3;i<d.length;i+=4){if(d[i]>10)return'SÍ';}return'NO';}catch(_){return'ERR';}})()  
-        +(l._diagSrc?' diagSrc:_isCropped='+l._diagSrc._isCropped+' bx='+l._diagSrc.bx+' bw='+l._diagSrc.bw+' bh='+l._diagSrc.bh+' urlLen='+l._diagSrc.urlLen:''):'') 
       + (l.type==='gif'?' gifKey=' + (l.gifKey||'-') + ' _playing=' + l._playing + ' _ready=' + l._ready:'')
       + (l.type==='image'?' _playing=' + l._playing:''));
   });
@@ -22537,25 +22455,6 @@ async function _edRunDiag() {
   });
 
   // 5. Datos que se subirían a Supabase (diagnóstico sin subir nada)
-  // Lo que realmente subirá a Supabase: resultado de edSerLayer
-  L('\n── edSerLayer fill (lo que se subirá a Supabase) ──');
-  try {
-    const _savedO=edOrientation, _savedP=edCurrentPage;
-    for(let _pi=0;_pi<edPages.length;_pi++){
-      const _p=edPages[_pi]; edCurrentPage=_pi; edOrientation=_p.orientation||_savedO;
-      for(let _li=0;_li<(_p.layers||[]).length;_li++){
-        const _l=_p.layers[_li];
-        if(!_l||_l.type!=='fill') continue;
-        const _ser=edSerLayer(_l);
-        L('  p'+_pi+' L'+_li+' ser:_isCropped='+_ser?._isCropped
-          +' bx='+_ser?.bx+' bw='+_ser?.bw+' bh='+_ser?.bh
-          +' urlLen='+(_ser?.dataUrl||'').length
-          +' hasPixels='+(_l._ctx?(()=>{try{const d=_l._ctx.getImageData(0,0,_l._canvas.width,_l._canvas.height).data;for(let i=3;i<d.length;i+=4)if(d[i]>10)return'SÍ';return'NO';}catch(_){return'ERR';}})():'NO-CTX'));
-      }
-    }
-    edOrientation=_savedO; edCurrentPage=_savedP;
-  } catch(e) { L('  ERROR edSerLayer: '+e.message); }
-
   L('\n── Datos para Supabase (edPages → panel_layers/panel_texts) ──');
   try {
     const _epDiag = (typeof edPages !== 'undefined') ? edPages : [];
@@ -22564,8 +22463,6 @@ async function _edRunDiag() {
       (p.layers||[]).forEach((l, li) => {
         if (!l) { L('    L'+li+' NULL'); return; }
         const _info = 'L'+li+' type='+l.type
-          + (l.type==='fill'?(()=>{try{const cr=l.toDataUrlCropped?l.toDataUrlCropped():null;return cr?' crop:bx='+cr.bx+' by='+cr.by+' bw='+cr.bw+' bh='+cr.bh+' urlLen='+cr.dataUrl.length:' crop:NULL';}catch(e){return' crop:ERR:'+e.message;}})():'')
-          + (l.type==='fill'?' _drawLayerId='+(l._drawLayerId||'?')+' _baseX='+(l._baseX!==null&&l._baseX!==undefined?l._baseX.toFixed(3):'null'):'')
           + (l.type==='stroke'?' dataUrl='+(l.toDataUrl?(l.toDataUrl().length>10?l.toDataUrl().slice(0,20)+'…':'EMPTY'):'NO-FN'):'')
           + (l.type==='draw'?' dataUrl='+(l.toDataUrl?(l.toDataUrl().length>10?'OK('+l.toDataUrl().length+'ch)':'EMPTY'):'NO-FN'):'')
           + (l.type==='image'?' animKey='+(l.animKey||'-')+' pngKey='+(l._pngFramesKey||'-'):'')
@@ -22582,35 +22479,6 @@ async function _edRunDiag() {
       }
     });
   } catch(_de) { L('  Error diagnóstico Supabase: ' + _de.message); }
-
-  // 5b. Consulta Supabase: panel_layers fill
-  L('\n── Supabase panel_layers fill ──');
-  try {
-    const _comic = ComicStore.getById(edProjectId);
-    const _sbId = _comic?.supabaseId;
-    if (_sbId) {
-      const _SB = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
-      const _KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-      const _hdrs = { 'apikey': _KEY, 'Authorization': 'Bearer ' + (_KEY) };
-      const _rPanels = await fetch(`${_SB}/panels?work_id=eq.${_sbId}&order=panel_order.asc&select=id,panel_order`, { headers: _hdrs });
-      const _panels = _rPanels.ok ? await _rPanels.json() : [];
-      for (const _panel of _panels) {
-        const _rRows = await fetch(`${_SB}/panel_layers?panel_id=eq.${_panel.id}&layer_type=eq.fill&select=layer_order,layer_data,anim_url`, { headers: _hdrs });
-        const _rows = _rRows.ok ? await _rRows.json() : [];
-        if (!_rows.length) { L('  panel '+_panel.panel_order+': sin fill layers'); continue; }
-        for (const _row of _rows) {
-          let _parsed = null;
-          try { _parsed = JSON.parse(_row.layer_data); } catch(_) {}
-          L('  panel '+_panel.panel_order+' layer '+_row.layer_order
-            +' layer_data_len='+(_row.layer_data||'').length
-            +' anim_url='+(_row.anim_url||'NO')
-            +' _isCropped='+(_parsed?._isCropped)
-            +' bx='+(_parsed?.bx)+' bw='+(_parsed?.bw)+' bh='+(_parsed?.bh)
-            +' urlLen='+(_parsed?.dataUrl||'').length);
-        }
-      }
-    } else { L('  sin supabaseId'); }
-  } catch(e) { L('  ERROR Supabase fill: '+e.message); }
 
   // 5. Biblioteca local
   L('\n── Biblioteca ──');

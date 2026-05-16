@@ -363,12 +363,22 @@ const SupabaseClient = (() => {
               if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
             } catch(e) { console.warn('GIF upload error:', e.message); }
           }
-          // FillLayer: el objeto ya viene serializado por edSerLayer (objeto plano con dataUrl)
-          // Pasarlo directamente a layer_data sin re-serializar
+          // FillLayer: serializar el canvas como dataUrl (zona de página)
           if (l.type === 'fill') {
-            layerRows.push({ panel_id:panelId, layer_order:j, layer_type:'fill',
-              layer_data: JSON.stringify(l), gif_url:null, anim_url:null });
-            continue;
+            const _flData = {
+              type: 'fill',
+              dataUrl: (typeof l.toDataUrlFull === 'function') ? l.toDataUrlFull() : null,
+              _drawLayerId: l._drawLayerId || null,
+              _uid: l._uid || null,
+              hidden: l.hidden || false,
+              opacity: l.opacity,
+              _isFull: true,
+              _baseX: (l._baseX !== null && l._baseX !== undefined) ? l._baseX : undefined,
+              _baseY: (l._baseY !== null && l._baseY !== undefined) ? l._baseY : undefined,
+            };
+            const _ld = JSON.stringify(_flData);
+            layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });
+            continue; // siguiente capa
           }
 
           // Serializar la capa — excluir campos de re-edición que el reader no necesita
