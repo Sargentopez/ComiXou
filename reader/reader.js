@@ -786,6 +786,8 @@ const ED_PAGE_H = 780;
 // El workspace del editor es 5×ancho × 3×alto del panel vertical
 // Necesario para reproducir el tamaño de las burbujas de cola "thought"
 const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
+const ED_CANVAS_W = ED_PAGE_W * 5; // 1800 - workspace completo
+const ED_CANVAS_H = ED_PAGE_H * 3; // 2340 - workspace completo
 
 // ── ESTADO ──────────────────────────────────────────────────
 // Imagen del logo — se precarga completamente en preloadImages() antes de mostrar créditos
@@ -1775,7 +1777,16 @@ function _render() {
       if (!img) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      ctx.drawImage(img, 0, 0, pw, ph);
+      if (layer._isFull) {
+        // dataUrl es el canvas workspace completo (ED_CANVAS_W x ED_CANVAS_H)
+        // recortar la zona de página centrada en el workspace
+        const mx = (ED_CANVAS_W - pw) / 2;
+        const my = (ED_CANVAS_H - ph) / 2;
+        ctx.drawImage(img, mx, my, pw, ph, 0, 0, pw, ph);
+      } else {
+        // dataUrl ya es la zona de página (pw x ph)
+        ctx.drawImage(img, 0, 0, pw, ph);
+      }
       ctx.restore();
       return;
     }

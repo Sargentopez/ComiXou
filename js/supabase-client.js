@@ -363,16 +363,17 @@ const SupabaseClient = (() => {
               if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
             } catch(e) { console.warn('GIF upload error:', e.message); }
           }
-          // FillLayer: serializar el canvas como dataUrl (zona de página)
+          // FillLayer: el layer es un objeto plano JSON (no instancia de FillLayer)
+          // dataUrl ya está serializado en el objeto (toDataUrl fue llamado al guardar)
           if (l.type === 'fill') {
             const _flData = {
               type: 'fill',
-              dataUrl: (typeof l.toDataUrl === 'function') ? l.toDataUrl() : null,
+              dataUrl: l.dataUrl || null,
               _drawLayerId: l._drawLayerId || null,
               _uid: l._uid || null,
               hidden: l.hidden || false,
               opacity: l.opacity,
-              _isFull: false,
+              _isFull: l._isFull || false,
               _baseX: (l._baseX !== null && l._baseX !== undefined) ? l._baseX : undefined,
               _baseY: (l._baseY !== null && l._baseY !== undefined) ? l._baseY : undefined,
             };
