@@ -367,12 +367,12 @@ const SupabaseClient = (() => {
           if (l.type === 'fill') {
             const _flData = {
               type: 'fill',
-              dataUrl: (typeof l.toDataUrl === 'function') ? l.toDataUrl() : null,
+              dataUrl: (typeof l.toDataUrlFull === 'function') ? l.toDataUrlFull() : null,
               _drawLayerId: l._drawLayerId || null,
               _uid: l._uid || null,
               hidden: l.hidden || false,
               opacity: l.opacity,
-              _isFull: false,
+              _isFull: true,
               _baseX: (l._baseX !== null && l._baseX !== undefined) ? l._baseX : undefined,
               _baseY: (l._baseY !== null && l._baseY !== undefined) ? l._baseY : undefined,
             };

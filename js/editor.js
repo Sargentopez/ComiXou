@@ -13918,7 +13918,7 @@ function edMergeSelected(){
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='fill'){
-    const _f={type:'fill', dataUrl:l.toDataUrl()};
+    const _f={type:'fill', dataUrl:l.toDataUrlFull(), _isFull:true};
     if(l._drawLayerId) _f._drawLayerId=l._drawLayerId;
     if(l._uid) _f._uid=l._uid;
     if(l.hidden) _f.hidden=true;
@@ -14144,7 +14144,9 @@ function edDeserLayer(d, pageOrientation){
   if(d.type==='group') return null; // obsoleto
   if(d.type==='fill'){
     const _isV=(pageOrientation||'vertical')==='vertical';
-    const fl=FillLayer.fromDataUrl(d.dataUrl||'', _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
+    const fl = d._isFull
+      ? FillLayer.fromDataUrlFull(d.dataUrl||'')
+      : FillLayer.fromDataUrl(d.dataUrl||'', _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
     if(d._drawLayerId) fl._drawLayerId=d._drawLayerId;
     if(d._uid) fl._uid=d._uid;
     if(d.hidden) fl.hidden=true;
