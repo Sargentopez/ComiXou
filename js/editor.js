@@ -1744,12 +1744,16 @@ class FillLayer extends BaseLayer {
     const fl = new FillLayer();
     if (!dataUrl) return fl;
     const img = new Image();
-    img.onload = () => {
-      const mx = (ED_CANVAS_W - pw) / 2;
-      const my = (ED_CANVAS_H - ph) / 2;
-      fl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
-      if (typeof edRedraw === 'function') edRedraw();
-    };
+    fl._loadPromise = new Promise(res => {
+      img.onload = () => {
+        const mx = (ED_CANVAS_W - pw) / 2;
+        const my = (ED_CANVAS_H - ph) / 2;
+        fl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
+        if (typeof edRedraw === 'function') edRedraw();
+        res();
+      };
+      img.onerror = () => res();
+    });
     img.src = dataUrl;
     return fl;
   }
@@ -1759,10 +1763,14 @@ class FillLayer extends BaseLayer {
     const fl = new FillLayer();
     if (!dataUrl) return fl;
     const img = new Image();
-    img.onload = () => {
-      fl._ctx.drawImage(img, offsetX||0, offsetY||0, ED_CANVAS_W, ED_CANVAS_H);
-      if (typeof edRedraw === 'function') edRedraw();
-    };
+    fl._loadPromise = new Promise(res => {
+      img.onload = () => {
+        fl._ctx.drawImage(img, offsetX||0, offsetY||0, ED_CANVAS_W, ED_CANVAS_H);
+        if (typeof edRedraw === 'function') edRedraw();
+        res();
+      };
+      img.onerror = () => res();
+    });
     img.src = dataUrl;
     return fl;
   }
@@ -2690,19 +2698,31 @@ function edApplyHistory(snapshot){
       return l;
     }
     else if(o.type === 'fill') {
-      // Si el snapshot tiene el canvas completo (_isFull), restaurar sin recortar
-      let fl;
-      if(o._isFull) {
-        fl = FillLayer.fromDataUrlFull(o.dataUrl||'');
-      } else {
-        const _isV2 = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
-        const _fpw = _isV2?ED_PAGE_W:ED_PAGE_H, _fph = _isV2?ED_PAGE_H:ED_PAGE_W;
-        fl = FillLayer.fromDataUrl(o.dataUrl||'', _fpw, _fph);
-      }
+      const fl = new FillLayer();
       if(o._drawLayerId) fl._drawLayerId = o._drawLayerId;
       if(o._uid) fl._uid = o._uid;
       if(o.hidden) fl.hidden = o.hidden;
       if(o.opacity !== undefined) fl.opacity = o.opacity;
+      if(o._baseX !== undefined) { fl._baseX = o._baseX; fl._baseY = o._baseY; }
+      if(o.dataUrl) {
+        imgPromises.push(new Promise(res => {
+          const _fi = new Image();
+          _fi.onload = () => {
+            if(o._isFull) {
+              fl._ctx.drawImage(_fi, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
+            } else {
+              const _isV2 = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+              const _fpw = _isV2?ED_PAGE_W:ED_PAGE_H, _fph = _isV2?ED_PAGE_H:ED_PAGE_W;
+              const mx = (ED_CANVAS_W - _fpw) / 2;
+              const my = (ED_CANVAS_H - _fph) / 2;
+              fl._ctx.drawImage(_fi, 0, 0, _fi.naturalWidth, _fi.naturalHeight, mx, my, _fpw, _fph);
+            }
+            res();
+          };
+          _fi.onerror = () => res();
+          _fi.src = o.dataUrl;
+        }));
+      }
       return fl;
     }
     else if(o.type === 'group') return null; // obsoleto
@@ -14521,7 +14541,18 @@ async function edLoadProject(id){
         if(l._playing) { if(typeof l.stopAnim==='function') l.stopAnim(); else l._playing=false; }
       }
     }));
-    edPushHistory(true);
+    // Esperar a que los FillLayers terminen de cargar antes del snapshot inicial
+    // (evita guardar un canvas vacío en el historial porque img.onload es async)
+    const _fillLoadPromises = [];
+    edPages.forEach(p => (p.layers||[]).forEach(l => {
+      if(l && l.type === 'fill' && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
+    }));
+    const _doPushHistory = () => edPushHistory(true);
+    if(_fillLoadPromises.length) {
+      Promise.all(_fillLoadPromises).then(_doPushHistory);
+    } else {
+      _doPushHistory();
+    }
     setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
