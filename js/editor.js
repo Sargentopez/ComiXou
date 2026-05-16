@@ -910,6 +910,7 @@ let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 window._edHistDiag = []; // log de edPushHistory para diagnóstico
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
+let _edSavedHistoryTs  = 0;  // timestamp del último guardado explícito con 💾
 let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
@@ -2587,7 +2588,7 @@ function edPushHistory(force){
   }
 
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
-  edHistory.push({ pageIdx: edCurrentPage, layersJSON });
+  edHistory.push({ pageIdx: edCurrentPage, layersJSON, ts: Date.now() });
   if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
   edHistoryIdx = edHistory.length - 1;
   edUpdateUndoRedoBtns();
@@ -13514,6 +13515,7 @@ async function edSaveProject(_keepOverlay){
   }
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
   _edSavedHistoryIdx = edHistoryIdx;
+  _edSavedHistoryTs  = edHistory[edHistoryIdx]?.ts || Date.now();
   edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
   edHistoryIdx = edHistory.length - 1;
   _edSavedHistoryIdx = edHistoryIdx;
@@ -13532,13 +13534,18 @@ function edRenderPage(page){
   const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
   // Imágenes, DrawLayer y Strokes — SIN textos/bocadillos.
   // Los textos se superponen en el reader por encima del data_url, igual que el visor del editor.
-  page.layers.filter(l=>l.type==='image').forEach(l=>l.draw(ctx,full));
-  page.layers.filter(l=>l.type==='gif').forEach(l=>l.draw(ctx));
-  const _rdl=page.layers.find(l=>l.type==='draw');
-  if(_rdl) _rdl.draw(ctx);
-  page.layers.filter(l=>l.type==='fill').forEach(l=>l.draw(ctx));
-  page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(ctx));
-  page.layers.filter(l=>l.type==='shape'||l.type==='line').forEach(l=>l.draw(ctx));
+  // Renderizar en el mismo orden que el array de capas (igual que edRedraw)
+  // así fill queda debajo del DrawLayer que lo cubre con sus trazos
+  const _textTypes = new Set(['text', 'bubble']);
+  page.layers.forEach(l => {
+    if (!l || _textTypes.has(l.type)) return;
+    if (l.type === 'image') { l.draw(ctx, full); return; }
+    if (l.type === 'gif')   { l.draw(ctx); return; }
+    if (l.type === 'fill')  { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
+    if (l.type === 'draw')  { l.draw(ctx); return; }
+    if (l.type === 'stroke'){ ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
+    if (l.type === 'shape' || l.type === 'line') { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
+  });
   // Recortar zona de la página del canvas de trabajo
   const outCtx=tmp.getContext('2d');
   outCtx.drawImage(full, edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
@@ -14381,7 +14388,9 @@ function _asDb() {
 async function _edAutosaveWrite() {
   if (!edProjectId || !edPages || !edPages.length) return;
   // Solo escribir si hay cambios reales desde el último guardado explícito
-  if (edHistoryIdx === _edSavedHistoryIdx) return;
+  // Comparar por timestamp de la entrada actual vs timestamp del último guardado
+  const _curTs = edHistory[edHistoryIdx]?.ts || 0;
+  if (_curTs && _curTs <= _edSavedHistoryTs) return;
   try {
     // Incluir biblioteca en el snapshot
     let bibData = null;
@@ -14391,7 +14400,17 @@ async function _edAutosaveWrite() {
       pages: edPages.map(p => ({
         orientation: p.orientation,
         dataUrl: p.dataUrl || null,
-        layers: (p.layers || []).map(l => { try { return edSerLayer(l); } catch(_) { return null; } }).filter(Boolean)
+        layers: (p.layers || []).map(l => {
+          try {
+            // FillLayer: si es objeto plano (sin toDataUrlFull), usar dataUrl ya existente
+            if (l && l.type === 'fill' && typeof l.toDataUrlFull !== 'function') {
+              return { type:'fill', dataUrl: l.dataUrl||null, _isFull: l._isFull||false,
+                _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
+                hidden: l.hidden||false, opacity: l.opacity };
+            }
+            return edSerLayer(l);
+          } catch(_) { return null; }
+        }).filter(Boolean)
       })),
       bib: bibData || null
     };
@@ -14437,7 +14456,7 @@ async function edLoadProject(id){
   if(!comic)return;
   edProjectId=id;
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
-  edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
+  edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1; _edSavedHistoryTs=0;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
 
   // Comprobar si hay autosave temporal pendiente
@@ -16118,7 +16137,9 @@ function EditorView_init(){
       return;
     }
 
-    const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
+    // Hay cambios si el ts de la entrada actual es posterior al del último guardado
+    const _exitCurTs = edHistory[edHistoryIdx]?.ts || 0;
+    const hasUnsaved = _exitCurTs > _edSavedHistoryTs && edHistoryIdx > 0;
     if (!hasUnsaved) { Router.go('my-comics'); return; }
 
     // Hay cambios sin guardar — preguntar
@@ -16142,10 +16163,10 @@ function EditorView_init(){
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
 
-    document.getElementById('_edExitYes').onclick = () => {
+    document.getElementById('_edExitYes').onclick = async () => {
       dlg.remove();
       _edAutosaveClear(); // salida controlada → borrar autosave
-      edSaveProject();
+      await edSaveProject();
       Router.go('my-comics');
     };
     document.getElementById('_edExitNo').onclick = () => {
@@ -16631,7 +16652,8 @@ function EditorView_init(){
   _edAutosaveStart();
   // Aviso nativo al cerrar pestaña/navegador si hay cambios sin guardar
   window._edBeforeUnloadFn = e => {
-    if (edHistoryIdx !== _edSavedHistoryIdx) {
+    const _buCurTs = edHistory[edHistoryIdx]?.ts || 0;
+    if (_buCurTs > _edSavedHistoryTs && edHistoryIdx > 0) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -17215,12 +17237,16 @@ function edExportPagePNG(format){
   const _textLayers   = edLayers.filter(l => l.type==='text' || l.type==='bubble');
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
-  // Mismo orden que edRedraw: imagen → stroke → draw → shape/line → textos al final
+  // Mismo orden que edRedraw: imagen → fill → draw → stroke → shape/line → textos al final
   edLayers.forEach(l => {
     if(!l) return;
     if(l.type==='text' || l.type==='bubble') return; // textos al final
     if(l.type === 'image'){
       l.draw(offCtx, off);
+    } else if(l.type === 'fill'){
+      offCtx.globalAlpha = l.opacity ?? 1;
+      l.draw(offCtx);
+      offCtx.globalAlpha = 1;
     } else if(l.type === 'draw'){
       offCtx.globalAlpha = 1;
       l.draw(offCtx);
@@ -17239,20 +17265,17 @@ function edExportPagePNG(format){
   _textLayers.forEach(l => l.draw(offCtx, off));
   offCtx.globalAlpha = 1;
 
-  // Descargar
+  // Descargar con diálogo nativo si está disponible
   const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format === 'jpg' ? 0.92 : undefined;
-  off.toBlob(blob => {
+  const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
+  const pg    = edCurrentPage + 1;
+  off.toBlob(async blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const url   = URL.createObjectURL(blob);
-    const a     = document.createElement('a');
-    const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
-    const pg    = edCurrentPage + 1;
-    a.href      = url;
-    a.download  = `${title}_hoja${pg}.${format}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    edToast(`Hoja ${pg} exportada ✓`);
+    const ext = format === 'jpg' ? 'jpg' : 'png';
+    const desc = format === 'jpg' ? 'Imagen JPEG' : 'Imagen PNG';
+    const saved = await _gcpSaveFile(blob, `${title}_hoja${pg}.${ext}`, desc, [`.${ext}`]);
+    if (saved) edToast(`Hoja ${pg} exportada ✓`);
   }, mimeType, quality);
 }
 
@@ -17304,11 +17327,22 @@ function edExportSelectionPNG(format) {
     ? new Set(edMultiSel.map(i => edLayers[i]).filter(Boolean))
     : new Set([edLayers[edSelectedIdx]].filter(Boolean));
 
+  // Incluir FillLayers vinculados a capas seleccionadas (draw/stroke con _fillLayerId)
+  const _allLayers = page.layers || [];
+  [...selSet].forEach(l => {
+    if (l && l._fillLayerId) {
+      const fl = _allLayers.find(x => x.type === 'fill' && x._drawLayerId === l._fillLayerId);
+      if (fl) selSet.add(fl);
+    }
+  });
+
+  // Renderizar en orden del array de capas (fill antes que draw/stroke)
   const _textLayers = [...selSet].filter(l => l.type==='text'||l.type==='bubble');
   const _textAlpha  = page.textLayerOpacity ?? 1;
 
-  [...selSet].forEach(l => {
-    if(!l || l.type==='text'||l.type==='bubble') return;
+  _allLayers.forEach(l => {
+    if (!l || !selSet.has(l)) return;
+    if (l.type==='text'||l.type==='bubble') return;
     if(l.type==='image'){ l.draw(offCtx, off); }
     else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
   });
@@ -17318,15 +17352,13 @@ function edExportSelectionPNG(format) {
 
   const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format==='jpg' ? 0.92 : undefined;
-  off.toBlob(blob => {
+  const _selTitle = (edProjectMeta.title||'seleccion').replace(/\s+/g,'_');
+  off.toBlob(async blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const url = URL.createObjectURL(blob);
-    const a   = document.createElement('a');
-    a.href    = url;
-    a.download = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    edToast('Selección exportada ✓');
+    const ext = format === 'jpg' ? 'jpg' : 'png';
+    const desc = format === 'jpg' ? 'Imagen JPEG' : 'Imagen PNG';
+    const saved = await _gcpSaveFile(blob, `${_selTitle}_sel.${ext}`, desc, [`.${ext}`]);
+    if (saved) edToast('Selección exportada ✓');
   }, mimeType, quality);
 }
 
@@ -21864,6 +21896,34 @@ function _gcpInitRules() {
   });
 }
 
+// _gcpSaveFile — guarda un Blob con nombre nativo usando File System Access API
+// (showSaveFilePicker: Chrome 86+ desktop, Chrome 109+ Android).
+// Fallback: <a download> para Safari / Firefox / Chrome antiguo.
+async function _gcpSaveFile(blob, suggestedName, description, exts) {
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{ description, accept: { [blob.type]: exts } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (e) {
+      // AbortError = usuario canceló → silencioso. Otro error → fallback a <a>.
+      if (e.name === 'AbortError') return false;
+    }
+  }
+  // Fallback
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = suggestedName;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+  return true;
+}
+
 // _gcpDownloadApng — exporta animacion GCP como APNG transparente
 // Motor: UPNG.js (photopea) + pako — mismo stack que Squoosh (Google).
 async function _gcpDownloadApng() {
@@ -21985,14 +22045,8 @@ async function _gcpDownloadApng() {
     }
 
     const blob = new Blob([apngBuf], { type: 'image/png' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'animacion_comixou.png';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 2000);
-    edToast('PNG animado descargado');
+    const _saved = await _gcpSaveFile(blob, 'animacion_comixou.png', 'PNG animado', ['.png']);
+    if (_saved) edToast('PNG animado descargado');
   } catch (err) {
     edToast('Error al generar PNG: ' + err.message);
   }
@@ -22013,7 +22067,7 @@ function _gcpCrc32Table() {
 // Motor: omggif (GifWriter, MIT, Dean McNamee)
 // Nota: GIF tiene transparencia binaria (1 color = transparente), no alpha gradual.
 // Para transparencia real usar _gcpDownloadApng (APNG).
-function _gcpDownloadGif() {
+async function _gcpDownloadGif() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
     edToast('No hay contenido para descargar'); return;
   }
@@ -22211,12 +22265,8 @@ function _gcpDownloadGif() {
     });
     const gifBytes = buf.slice(0, gw.end());
     const blob = new Blob([gifBytes], {type: 'image/gif'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'animacion_comixou.gif';
-    document.body.appendChild(a); a.click();
-    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 2000);
-    edToast('GIF descargado');
+    const _saved = await _gcpSaveFile(blob, 'animacion_comixou.gif', 'GIF animado', ['.gif']);
+    if (_saved) edToast('GIF descargado');
   } catch(err) {
     edToast('Error al generar GIF: ' + err.message);
   }
@@ -22372,15 +22422,9 @@ async function _gcpDownloadMp4() {
 
     const { buffer } = target;
     const blob = new Blob([buffer], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'animacion_comixou.mp4';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
     const kb = Math.round(blob.size / 1024);
-    edToast('MP4 descargado (' + kb + ' KB) ✓');
+    const _saved = await _gcpSaveFile(blob, 'animacion_comixou.mp4', 'Video MP4', ['.mp4']);
+    if (_saved) edToast('MP4 descargado (' + kb + ' KB) ✓');
   } catch (err) {
     edToast('Error MP4: ' + err.message);
   }

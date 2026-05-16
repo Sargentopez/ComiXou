@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v24.00</footer>
+    <footer class="app-version">v24.06</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -542,7 +542,7 @@ Router.register('editor', {
     </div>
 
     <!-- Inputs ocultos -->
-    <input type="file" id="edFileGallery" accept="image/jpeg,image/png,image/webp,image/svg+xml,image/bmp,image/avif,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.svg,.bmp,.avif,.heic,.heif,.tif,.tiff,.psd,.xcf" style="display:none">
+    <input type="file" id="edFileGallery" accept="image/*" style="display:none">
     <!-- Modal de atajos de teclado -->
     <div id="edShortcutsModal">
       <div class="sc-box">
