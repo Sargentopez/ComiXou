@@ -1604,8 +1604,25 @@ function _edAdaptPageToOrientation(page, prev, next) {
   const pw_p = pv ? ED_PAGE_W : ED_PAGE_H, ph_p = pv ? ED_PAGE_H : ED_PAGE_W;
   const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
   const sw = pw_p / pw_n, sh = ph_p / ph_n;
+  const mx_p = (ED_CANVAS_W - pw_p) / 2, my_p = (ED_CANVAS_H - ph_p) / 2;
+  const mx_n = (ED_CANVAS_W - pw_n) / 2, my_n = (ED_CANVAS_H - ph_n) / 2;
   page.layers.forEach(l => {
-    if (!l || !['image','gif','stroke','shape','line'].includes(l.type)) return;
+    if (!l) return;
+    // FillLayer: reubicar contenido al nuevo margen de página en el workspace
+    if (l.type === 'fill' && l._canvas && l._ctx) {
+      const tmp = document.createElement('canvas');
+      tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+      // Recortar zona de página anterior y pegar en zona de página nueva
+      tmp.getContext('2d').drawImage(l._canvas, mx_p, my_p, pw_p, ph_p, mx_n, my_n, pw_p, ph_p);
+      l._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+      l._ctx.drawImage(tmp, 0, 0);
+      // Actualizar _baseX/_baseY al nuevo centro de página normalizado
+      if (l._baseX !== null && l._baseX !== undefined) {
+        l._baseX = 0.5; l._baseY = 0.5;
+      }
+      return;
+    }
+    if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
     if (l.width != null) l.width = Math.min(1, l.width * sw);
     if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
       l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
