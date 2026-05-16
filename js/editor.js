@@ -1592,8 +1592,16 @@ function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
   const pw_s = srcIsV ? ED_PAGE_W : ED_PAGE_H, ph_s = srcIsV ? ED_PAGE_H : ED_PAGE_W;
   const pw_d = dstIsV ? ED_PAGE_W : ED_PAGE_H, ph_d = dstIsV ? ED_PAGE_H : ED_PAGE_W;
   const a = Object.assign({}, ld);
-  if (a.width  != null) a.width  = Math.min(1, a.width  * pw_s / pw_d);
-  if (a.height != null) a.height = Math.min(1, a.height * ph_s / ph_d);
+  const _rw = pw_s / pw_d, _rh = ph_s / ph_d;
+  if (a.width  != null) a.width  = Math.min(1, a.width  * _rw);
+  if (a.height != null) a.height = Math.min(1, a.height * _rh);
+  // LineLayer: escalar puntos locales
+  if (a.type === 'line' && Array.isArray(a.points)) {
+    a.points = a.points.map(p => p ? { x: p.x * _rw, y: p.y * _rh } : null);
+    if (Array.isArray(a.subPaths)) {
+      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * _rw, y: p.y * _rh } : null));
+    }
+  }
   return a;
 }
 
@@ -1616,6 +1624,13 @@ function _edAdaptPageToOrientation(page, prev, next) {
     } else if (l.height != null) {
       l.height = Math.min(1, l.height * sh);
     }
+    // LineLayer: escalar puntos locales en proporción al cambio de dimensiones
+    if (l.type === 'line' && Array.isArray(l.points)) {
+      l.points = l.points.map(p => p ? { x: p.x * sw, y: p.y * sh } : null);
+      if (Array.isArray(l.subPaths)) {
+        l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * sw, y: p.y * sh } : null));
+      }
+    }
   });
 }
 
@@ -1626,6 +1641,14 @@ function edSetOrientation(o, persist=true){
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
   // Recalcular height de ImageLayers si la orientacion realmente cambio
   if(persist && prevOrientation !== o){
+    // Bake del offset de todos los FillLayers ANTES de cambiar la orientación
+    // para que el canvas quede alineado con _pair.x/_pair.y actuales.
+    // Después del bake, _baseX === _pair.x → offset 0 con cualquier edPageW().
+    (edPages[edCurrentPage]?.layers || []).forEach(l => {
+      if (l && l.type === 'fill' && typeof l.bakeAutoOffset === 'function') {
+        l.bakeAutoOffset();
+      }
+    });
     _edAdaptPageToOrientation(edPages[edCurrentPage], prevOrientation, o);
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
