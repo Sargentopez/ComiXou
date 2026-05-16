@@ -22537,6 +22537,25 @@ async function _edRunDiag() {
   });
 
   // 5. Datos que se subirían a Supabase (diagnóstico sin subir nada)
+  // Lo que realmente subirá a Supabase: resultado de edSerLayer
+  L('\n── edSerLayer fill (lo que se subirá a Supabase) ──');
+  try {
+    const _savedO=edOrientation, _savedP=edCurrentPage;
+    for(let _pi=0;_pi<edPages.length;_pi++){
+      const _p=edPages[_pi]; edCurrentPage=_pi; edOrientation=_p.orientation||_savedO;
+      for(let _li=0;_li<(_p.layers||[]).length;_li++){
+        const _l=_p.layers[_li];
+        if(!_l||_l.type!=='fill') continue;
+        const _ser=edSerLayer(_l);
+        L('  p'+_pi+' L'+_li+' ser:_isCropped='+_ser?._isCropped
+          +' bx='+_ser?.bx+' bw='+_ser?.bw+' bh='+_ser?.bh
+          +' urlLen='+(_ser?.dataUrl||'').length
+          +' hasPixels='+(_l._ctx?(()=>{try{const d=_l._ctx.getImageData(0,0,_l._canvas.width,_l._canvas.height).data;for(let i=3;i<d.length;i+=4)if(d[i]>10)return'SÍ';return'NO';}catch(_){return'ERR';}})():'NO-CTX'));
+      }
+    }
+    edOrientation=_savedO; edCurrentPage=_savedP;
+  } catch(e) { L('  ERROR edSerLayer: '+e.message); }
+
   L('\n── Datos para Supabase (edPages → panel_layers/panel_texts) ──');
   try {
     const _epDiag = (typeof edPages !== 'undefined') ? edPages : [];
