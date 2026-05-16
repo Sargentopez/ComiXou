@@ -4573,6 +4573,7 @@ function _edRenderPageThumb(canvas, page, pageIdx){
       }
     } else if(l.type==='image')  l.draw(offCtx,off);
     else if(l.type==='draw')   l.draw(offCtx);
+    else if(l.type==='fill'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
     else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
     else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
   });
@@ -13535,6 +13536,7 @@ function edRenderPage(page){
   page.layers.filter(l=>l.type==='gif').forEach(l=>l.draw(ctx));
   const _rdl=page.layers.find(l=>l.type==='draw');
   if(_rdl) _rdl.draw(ctx);
+  page.layers.filter(l=>l.type==='fill').forEach(l=>l.draw(ctx));
   page.layers.filter(l=>l.type==='stroke').forEach(l=>l.draw(ctx));
   page.layers.filter(l=>l.type==='shape'||l.type==='line').forEach(l=>l.draw(ctx));
   // Recortar zona de la página del canvas de trabajo
