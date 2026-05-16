@@ -910,7 +910,6 @@ let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 window._edHistDiag = []; // log de edPushHistory para diagnóstico
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
-let _edSavedHistoryTs  = 0;  // timestamp del último guardado explícito con 💾
 let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
 const ED_MAX_HISTORY = 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
@@ -1582,95 +1581,21 @@ class BubbleLayer extends BaseLayer {
 /* ══════════════════════════════════════════
    CANVAS: TAMAÑO Y FIT
    ══════════════════════════════════════════ */
-
-// Adaptar dimensiones de un layerData de srcOrient a dstOrient
-function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
-  const _src = ld._orient || srcOrient;
-  if (!ld || _src === dstOrient) return ld;
-  if (!['image','gif','stroke','shape','line'].includes(ld.type)) return ld;
-  const sv = _src === 'vertical', dv = dstOrient === 'vertical';
-  const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
-  const pw_d = dv ? ED_PAGE_W : ED_PAGE_H, ph_d = dv ? ED_PAGE_H : ED_PAGE_W;
-  const rw = pw_s / pw_d, rh = ph_s / ph_d;
-  const a = Object.assign({}, ld);
-  if (a.width  != null) a.width  = Math.min(1, a.width  * rw);
-  if (a.height != null) a.height = Math.min(1, a.height * rh);
-  if (a.type === 'line' && Array.isArray(a.points)) {
-    a.points = a.points.map(p => p ? { x: p.x * rw, y: p.y * rh } : null);
-    if (Array.isArray(a.subPaths))
-      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * rw, y: p.y * rh } : null));
-  }
-  a._orient = dstOrient;
-  return a;
-}
-
-// Redimensionar todos los objetos de la página al cambiar orientación
-function _edAdaptPageToOrientation(page, prev, next) {
-  if (!page || !page.layers || prev === next) return;
-  const nv = next === 'vertical';
-  const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
-  const mx_n = (ED_CANVAS_W - pw_n) / 2, my_n = (ED_CANVAS_H - ph_n) / 2;
-
-  page.layers.forEach(l => {
-    if (!l) return;
-    const srcOrient = l._orient || prev;
-    const sv = srcOrient === 'vertical';
-    const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
-    const mx_s = (ED_CANVAS_W - pw_s) / 2, my_s = (ED_CANVAS_H - ph_s) / 2;
-    const sw = pw_s / pw_n, sh = ph_s / ph_n;
-
-    // DrawLayer y FillLayer comparten el mismo sistema de coordenadas de workspace.
-    // Al cambiar orientación, ambos se reubican con la misma operación: recortar
-    // la zona de página anterior (mx_s,my_s) y pegarla en la nueva (mx_n,my_n).
-    if ((l.type === 'draw' || l.type === 'fill') && l._canvas && l._ctx) {
-      const tmp = document.createElement('canvas');
-      tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
-      tmp.getContext('2d').drawImage(l._canvas, mx_s, my_s, pw_s, ph_s, mx_n, my_n, pw_s, ph_s);
-      l._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
-      l._ctx.drawImage(tmp, 0, 0);
-      // FillLayer: sincronizar _baseX/_baseY con el stroke vinculado para que
-      // bakeAutoOffset futuro calcule offset correcto
-      if (l.type === 'fill') {
-        const _pair = page.layers.find(x => x !== l && x._fillLayerId === l._drawLayerId);
-        if (_pair) { l._baseX = _pair.x; l._baseY = _pair.y; }
-      }
-      l._orient = next; return;
-    }
-
-    if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
-
-    // StrokeLayer con FillLayer vinculado: el fill ya se reubicó arriba
-    if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
-
-    if (l.width  != null) l.width  = Math.min(1, l.width  * sw);
-    if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
-      l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
-      if (l.height > 1) { const s = 1/l.height; l.height = 1; l.width = Math.min(1, l.width*s); }
-    } else if (l.height != null) {
-      l.height = Math.min(1, l.height * sh);
-    }
-
-    if (l.type === 'line' && Array.isArray(l.points)) {
-      l.points = l.points.map(p => p ? { x: p.x * sw, y: p.y * sh } : null);
-      if (Array.isArray(l.subPaths))
-        l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * sw, y: p.y * sh } : null));
-    }
-
-    l._orient = next;
-  });
-}
-
 function edSetOrientation(o, persist=true){
   const prevOrientation = edOrientation;
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // Recalcular dimensiones si la orientacion realmente cambio
+  // Recalcular height de ImageLayers si la orientacion realmente cambio
   if(persist && prevOrientation !== o){
-    _edAdaptPageToOrientation(edPages[edCurrentPage], prevOrientation, o);
-    // Push al historial para que los valores adaptados sean el nuevo baseline
-    // Sin esto, undo/redo o autosave restauran los points/dimensions previos
-    edPushHistory(true);
+    const _isV = o === 'vertical';
+    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
+    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
+    (edPages[edCurrentPage]?.layers || []).forEach(l => {
+      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
+        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
+      }
+    });
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -2565,8 +2490,7 @@ function _edLayersSnapshot(){
       // Historial global: guardar canvas completo para no perder contenido fuera del lienzo
       return { type:'fill', dataUrl:l.toDataUrlFull(),
         _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
-        hidden: l.hidden||false, opacity: l.opacity, _isFull:true,
-        _orient:l._orient||null, _baseX:l._baseX, _baseY:l._baseY };
+        hidden: l.hidden||false, opacity: l.opacity, _isFull:true };
     }
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
@@ -2600,12 +2524,11 @@ function _edLayersSnapshot(){
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
-      cornerRadius: l.cornerRadius||0, locked:l.locked||false, _orient:l._orient||null,
+      cornerRadius: l.cornerRadius||0, locked:l.locked||false,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
-      _orient:l._orient||null,
       grouped: l.grouped||false,
       groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
@@ -2664,7 +2587,7 @@ function edPushHistory(force){
   }
 
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
-  edHistory.push({ pageIdx: edCurrentPage, layersJSON, ts: Date.now() });
+  edHistory.push({ pageIdx: edCurrentPage, layersJSON });
   if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
   edHistoryIdx = edHistory.length - 1;
   edUpdateUndoRedoBtns();
@@ -13591,7 +13514,6 @@ async function edSaveProject(_keepOverlay){
   }
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
   _edSavedHistoryIdx = edHistoryIdx;
-  _edSavedHistoryTs  = edHistory[edHistoryIdx]?.ts || Date.now();
   edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
   edHistoryIdx = edHistory.length - 1;
   _edSavedHistoryIdx = edHistoryIdx;
@@ -14148,7 +14070,6 @@ function edSerLayer(l){
     if(l.groupId)_sobj.groupId=l.groupId;
     if(l.locked)_sobj.locked=true;
     if(l.hidden)_sobj.hidden=true;
-    if(l._orient)_sobj._orient=l._orient;
     // Si tiene cornerRadii con valores, generar bitmap fiel
     const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
     const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
@@ -14465,9 +14386,7 @@ function _asDb() {
 async function _edAutosaveWrite() {
   if (!edProjectId || !edPages || !edPages.length) return;
   // Solo escribir si hay cambios reales desde el último guardado explícito
-  // Comparar por timestamp de la entrada actual vs timestamp del último guardado
-  const _curTs = edHistory[edHistoryIdx]?.ts || 0;
-  if (_curTs && _curTs <= _edSavedHistoryTs) return;
+  if (edHistoryIdx === _edSavedHistoryIdx) return;
   try {
     // Incluir biblioteca en el snapshot
     let bibData = null;
@@ -14477,17 +14396,7 @@ async function _edAutosaveWrite() {
       pages: edPages.map(p => ({
         orientation: p.orientation,
         dataUrl: p.dataUrl || null,
-        layers: (p.layers || []).map(l => {
-          try {
-            // FillLayer: si es objeto plano (sin toDataUrlFull), usar dataUrl ya existente
-            if (l && l.type === 'fill' && typeof l.toDataUrlFull !== 'function') {
-              return { type:'fill', dataUrl: l.dataUrl||null, _isFull: l._isFull||false,
-                _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
-                hidden: l.hidden||false, opacity: l.opacity };
-            }
-            return edSerLayer(l);
-          } catch(_) { return null; }
-        }).filter(Boolean)
+        layers: (p.layers || []).map(l => { try { return edSerLayer(l); } catch(_) { return null; } }).filter(Boolean)
       })),
       bib: bibData || null
     };
@@ -14532,11 +14441,8 @@ async function edLoadProject(id){
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
   if(!comic)return;
   edProjectId=id;
-  // Recargar caché de biblioteca con la key correcta para este proyecto
-  _bibCache = null;
-  _bibInitIdb();
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
-  edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1; _edSavedHistoryTs=0;
+  edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
 
   // Comprobar si hay autosave temporal pendiente
@@ -14579,7 +14485,7 @@ async function edLoadProject(id){
       comic.editorData.pages = _asSave.pages;
       // Restaurar biblioteca si estaba en el snapshot
       if (_asSave.bib) {
-        try { _bibCache = _asSave.bib; _bibSave(_asSave.bib); } catch(_) {}
+        try { _bibSave(_asSave.bib); } catch(_) {}
       }
     }
     } // cierre del else (autosave más nuevo que el comic guardado)
@@ -16217,9 +16123,7 @@ function EditorView_init(){
       return;
     }
 
-    // Hay cambios si el ts de la entrada actual es posterior al del último guardado
-    const _exitCurTs = edHistory[edHistoryIdx]?.ts || 0;
-    const hasUnsaved = _exitCurTs > _edSavedHistoryTs && edHistoryIdx > 0;
+    const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
     if (!hasUnsaved) { Router.go('my-comics'); return; }
 
     // Hay cambios sin guardar — preguntar
@@ -16243,10 +16147,10 @@ function EditorView_init(){
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
 
-    document.getElementById('_edExitYes').onclick = async () => {
+    document.getElementById('_edExitYes').onclick = () => {
       dlg.remove();
       _edAutosaveClear(); // salida controlada → borrar autosave
-      await edSaveProject();
+      edSaveProject();
       Router.go('my-comics');
     };
     document.getElementById('_edExitNo').onclick = () => {
@@ -16732,8 +16636,7 @@ function EditorView_init(){
   _edAutosaveStart();
   // Aviso nativo al cerrar pestaña/navegador si hay cambios sin guardar
   window._edBeforeUnloadFn = e => {
-    const _buCurTs = edHistory[edHistoryIdx]?.ts || 0;
-    if (_buCurTs > _edSavedHistoryTs && edHistoryIdx > 0) {
+    if (edHistoryIdx !== _edSavedHistoryIdx) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -17317,16 +17220,12 @@ function edExportPagePNG(format){
   const _textLayers   = edLayers.filter(l => l.type==='text' || l.type==='bubble');
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
-  // Mismo orden que edRedraw: imagen → fill → draw → stroke → shape/line → textos al final
+  // Mismo orden que edRedraw: imagen → stroke → draw → shape/line → textos al final
   edLayers.forEach(l => {
     if(!l) return;
     if(l.type==='text' || l.type==='bubble') return; // textos al final
     if(l.type === 'image'){
       l.draw(offCtx, off);
-    } else if(l.type === 'fill'){
-      offCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(offCtx);
-      offCtx.globalAlpha = 1;
     } else if(l.type === 'draw'){
       offCtx.globalAlpha = 1;
       l.draw(offCtx);
@@ -17345,17 +17244,20 @@ function edExportPagePNG(format){
   _textLayers.forEach(l => l.draw(offCtx, off));
   offCtx.globalAlpha = 1;
 
-  // Descargar con diálogo nativo si está disponible
+  // Descargar
   const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format === 'jpg' ? 0.92 : undefined;
-  const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
-  const pg    = edCurrentPage + 1;
-  off.toBlob(async blob => {
+  off.toBlob(blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const ext = format === 'jpg' ? 'jpg' : 'png';
-    const desc = format === 'jpg' ? 'Imagen JPEG' : 'Imagen PNG';
-    const saved = await _gcpSaveFile(blob, `${title}_hoja${pg}.${ext}`, desc, [`.${ext}`]);
-    if (saved) edToast(`Hoja ${pg} exportada ✓`);
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
+    const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
+    const pg    = edCurrentPage + 1;
+    a.href      = url;
+    a.download  = `${title}_hoja${pg}.${format}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    edToast(`Hoja ${pg} exportada ✓`);
   }, mimeType, quality);
 }
 
@@ -17407,22 +17309,11 @@ function edExportSelectionPNG(format) {
     ? new Set(edMultiSel.map(i => edLayers[i]).filter(Boolean))
     : new Set([edLayers[edSelectedIdx]].filter(Boolean));
 
-  // Incluir FillLayers vinculados a capas seleccionadas (draw/stroke con _fillLayerId)
-  const _allLayers = page.layers || [];
-  [...selSet].forEach(l => {
-    if (l && l._fillLayerId) {
-      const fl = _allLayers.find(x => x.type === 'fill' && x._drawLayerId === l._fillLayerId);
-      if (fl) selSet.add(fl);
-    }
-  });
-
-  // Renderizar en orden del array de capas (fill antes que draw/stroke)
   const _textLayers = [...selSet].filter(l => l.type==='text'||l.type==='bubble');
   const _textAlpha  = page.textLayerOpacity ?? 1;
 
-  _allLayers.forEach(l => {
-    if (!l || !selSet.has(l)) return;
-    if (l.type==='text'||l.type==='bubble') return;
+  [...selSet].forEach(l => {
+    if(!l || l.type==='text'||l.type==='bubble') return;
     if(l.type==='image'){ l.draw(offCtx, off); }
     else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
   });
@@ -17432,13 +17323,15 @@ function edExportSelectionPNG(format) {
 
   const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format==='jpg' ? 0.92 : undefined;
-  const _selTitle = (edProjectMeta.title||'seleccion').replace(/\s+/g,'_');
-  off.toBlob(async blob => {
+  off.toBlob(blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const ext = format === 'jpg' ? 'jpg' : 'png';
-    const desc = format === 'jpg' ? 'Imagen JPEG' : 'Imagen PNG';
-    const saved = await _gcpSaveFile(blob, `${_selTitle}_sel.${ext}`, desc, [`.${ext}`]);
-    if (saved) edToast('Selección exportada ✓');
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href    = url;
+    a.download = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    edToast('Selección exportada ✓');
   }, mimeType, quality);
 }
 
@@ -17455,7 +17348,7 @@ const _BIB_KEY_PREFIX = 'cs_biblioteca';
 const _BIB_MAX_BYTES  = 0; // Sin tope local — el límite es el de la obra completa (60 MB nube)
 const _BIB_THUMB_SIZE = 80;
 // Inicializar IDB al cargar el módulo (async en background)
-// _bibInitIdb() se llama desde edLoadProject una vez que edProjectId está asignado
+setTimeout(() => { try { _bibInitIdb(); } catch(_) {} }, 0);
 
 // Clave de localStorage: por proyecto si hay proyecto activo
 function _bibKey() {
@@ -17665,10 +17558,9 @@ function edBibGuardar() {
     // Miniatura: renderizar todas las capas del grupo juntas
     const thumb = _bibThumbGroup(idxs);
     entry = {
-      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp:   Date.now(),
-      isGroup:     true,
-      orientation: edOrientation,
+      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp: Date.now(),
+      isGroup:   true,
       layers,
       thumb,
     };
@@ -17684,7 +17576,7 @@ function edBibGuardar() {
         if (!gifDataUrl) { edToast('No se pudo cargar el GIF'); return; }
         const gifEntry = {
           id: Date.now() + '_gif', timestamp: Date.now(),
-          isGroup: false, isGifAnim: true, orientation: edOrientation,
+          isGroup: false, isGifAnim: true,
           gifDataUrl, layerData: null, thumb: gifThumb
         };
         const d2 = _bibLoad();
@@ -17699,11 +17591,10 @@ function edBibGuardar() {
       ? edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId)
       : null;
     entry = {
-      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp:   Date.now(),
-      isGroup:     false,
-      orientation: edOrientation,
-      layerData:   edSerLayer(la),
+      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp: Date.now(),
+      isGroup:   false,
+      layerData: edSerLayer(la),
       fillLayerData: _flBib ? { dataUrl: _flBib.toDataUrlFull(), type:'fill', strokeX: la.x, strokeY: la.y } : null,
       thumb:     _bibThumb(la),
     };
@@ -18140,11 +18031,10 @@ function _bibRenderPanel(panel) {
 
       if (entry.isGroup && Array.isArray(entry.layers)) {
         // Insertar grupo: deserializar cada capa con nuevo groupId común
-        const _eo1 = entry.orientation || edOrientation;
         const newGroupId = _edNewGroupId();
         let inserted = 0;
         entry.layers.forEach(ld => {
-          const la = edDeserLayer(_edAdaptLayerOrientation(ld, _eo1, edOrientation), edOrientation);
+          const la = edDeserLayer(ld, edOrientation);
           if (!la) return;
           // Asignar nuevo groupId (no reusar el del momento del guardado)
           la.groupId = newGroupId;
@@ -18156,8 +18046,7 @@ function _bibRenderPanel(panel) {
         if (!inserted) { edToast('Error al insertar el grupo'); return; }
       } else {
         // Objeto individual
-        const _eo1s = entry.orientation || edOrientation;
-        const newLayer = edDeserLayer(_edAdaptLayerOrientation(entry.layerData, _eo1s, edOrientation), edOrientation);
+        const newLayer = edDeserLayer(entry.layerData, edOrientation);
         if (!newLayer) { edToast('Error al insertar el objeto'); return; }
         delete newLayer._fusionId;
         // Restaurar FillLayer vinculado si existe en el entry
@@ -21024,18 +20913,17 @@ function gcpInsertFromBib(entry) {
     }
   };
 
-  const _eo2 = entry.orientation || edOrientation;
   if (entry.isGroup && Array.isArray(entry.layers)) {
     const newGroupId = _edNewGroupId();
     entry.layers.forEach(ld => {
-      const la = edDeserLayer(_edAdaptLayerOrientation(ld, _eo2, edOrientation), edOrientation);
+      const la = edDeserLayer(ld, edOrientation);
       if (!la) return;
       la.groupId = newGroupId;
       delete la._fusionId;
       insertLayer(la);
     });
   } else {
-    const la = edDeserLayer(_edAdaptLayerOrientation(entry.layerData, _eo2, edOrientation), edOrientation);
+    const la = edDeserLayer(entry.layerData, edOrientation);
     if (!la) return;
     delete la._fusionId;
     // Si tiene FillLayer: fusionar ambos en un único StrokeLayer antes de insertar
@@ -21981,34 +21869,6 @@ function _gcpInitRules() {
   });
 }
 
-// _gcpSaveFile — guarda un Blob con nombre nativo usando File System Access API
-// (showSaveFilePicker: Chrome 86+ desktop, Chrome 109+ Android).
-// Fallback: <a download> para Safari / Firefox / Chrome antiguo.
-async function _gcpSaveFile(blob, suggestedName, description, exts) {
-  if (window.showSaveFilePicker) {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName,
-        types: [{ description, accept: { [blob.type]: exts } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return true;
-    } catch (e) {
-      // AbortError = usuario canceló → silencioso. Otro error → fallback a <a>.
-      if (e.name === 'AbortError') return false;
-    }
-  }
-  // Fallback
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = suggestedName;
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
-  return true;
-}
-
 // _gcpDownloadApng — exporta animacion GCP como APNG transparente
 // Motor: UPNG.js (photopea) + pako — mismo stack que Squoosh (Google).
 async function _gcpDownloadApng() {
@@ -22130,8 +21990,14 @@ async function _gcpDownloadApng() {
     }
 
     const blob = new Blob([apngBuf], { type: 'image/png' });
-    const _saved = await _gcpSaveFile(blob, 'animacion_comixou.png', 'PNG animado', ['.png']);
-    if (_saved) edToast('PNG animado descargado');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'animacion_comixou.png';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    edToast('PNG animado descargado');
   } catch (err) {
     edToast('Error al generar PNG: ' + err.message);
   }
@@ -22152,7 +22018,7 @@ function _gcpCrc32Table() {
 // Motor: omggif (GifWriter, MIT, Dean McNamee)
 // Nota: GIF tiene transparencia binaria (1 color = transparente), no alpha gradual.
 // Para transparencia real usar _gcpDownloadApng (APNG).
-async function _gcpDownloadGif() {
+function _gcpDownloadGif() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
     edToast('No hay contenido para descargar'); return;
   }
@@ -22350,8 +22216,12 @@ async function _gcpDownloadGif() {
     });
     const gifBytes = buf.slice(0, gw.end());
     const blob = new Blob([gifBytes], {type: 'image/gif'});
-    const _saved = await _gcpSaveFile(blob, 'animacion_comixou.gif', 'GIF animado', ['.gif']);
-    if (_saved) edToast('GIF descargado');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'animacion_comixou.gif';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 2000);
+    edToast('GIF descargado');
   } catch(err) {
     edToast('Error al generar GIF: ' + err.message);
   }
@@ -22507,9 +22377,15 @@ async function _gcpDownloadMp4() {
 
     const { buffer } = target;
     const blob = new Blob([buffer], { type: 'video/mp4' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'animacion_comixou.mp4';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
     const kb = Math.round(blob.size / 1024);
-    const _saved = await _gcpSaveFile(blob, 'animacion_comixou.mp4', 'Video MP4', ['.mp4']);
-    if (_saved) edToast('MP4 descargado (' + kb + ' KB) ✓');
+    edToast('MP4 descargado (' + kb + ' KB) ✓');
   } catch (err) {
     edToast('Error MP4: ' + err.message);
   }
