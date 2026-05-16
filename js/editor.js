@@ -1738,32 +1738,38 @@ class FillLayer extends BaseLayer {
     this._canvas.height = ED_CANVAS_H;
     this._ctx = this._canvas.getContext('2d');
     this._baseX = null; this._baseY = null;
+    this._ready = Promise.resolve(); // se reemplaza con promesa real en fromDataUrl*
   }
   static fromDataUrl(dataUrl, pw, ph) {
-    // Restaurar solo la zona de página (cloud/guardado)
     const fl = new FillLayer();
     if (!dataUrl) return fl;
-    const img = new Image();
-    img.onload = () => {
-      const mx = (ED_CANVAS_W - pw) / 2;
-      const my = (ED_CANVAS_H - ph) / 2;
-      fl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
-      if (typeof edRedraw === 'function') edRedraw();
-    };
-    img.src = dataUrl;
+    fl._ready = new Promise(res => {
+      const img = new Image();
+      img.onload = () => {
+        const mx = (ED_CANVAS_W - pw) / 2;
+        const my = (ED_CANVAS_H - ph) / 2;
+        fl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
+        if (typeof edRedraw === 'function') edRedraw();
+        res();
+      };
+      img.onerror = () => res();
+      img.src = dataUrl;
+    });
     return fl;
   }
   static fromDataUrlFull(dataUrl, offsetX, offsetY) {
-    // Restaurar canvas workspace completo (historial local)
-    // offsetX/offsetY: desplazamiento opcional en px de workspace
     const fl = new FillLayer();
     if (!dataUrl) return fl;
-    const img = new Image();
-    img.onload = () => {
-      fl._ctx.drawImage(img, offsetX||0, offsetY||0, ED_CANVAS_W, ED_CANVAS_H);
-      if (typeof edRedraw === 'function') edRedraw();
-    };
-    img.src = dataUrl;
+    fl._ready = new Promise(res => {
+      const img = new Image();
+      img.onload = () => {
+        fl._ctx.drawImage(img, offsetX||0, offsetY||0, ED_CANVAS_W, ED_CANVAS_H);
+        if (typeof edRedraw === 'function') edRedraw();
+        res();
+      };
+      img.onerror = () => res();
+      img.src = dataUrl;
+    });
     return fl;
   }
   toDataUrl() {
@@ -1803,12 +1809,16 @@ class FillLayer extends BaseLayer {
   static fromDataUrlCropped(dataUrl, bx, by, bw, bh) {
     const fl = new FillLayer();
     if (!dataUrl) return fl;
-    const img = new Image();
-    img.onload = () => {
-      fl._ctx.drawImage(img, 0, 0, bw, bh, bx, by, bw, bh);
-      if (typeof edRedraw === 'function') edRedraw();
-    };
-    img.src = dataUrl;
+    fl._ready = new Promise(res => {
+      const img = new Image();
+      img.onload = () => {
+        fl._ctx.drawImage(img, 0, 0, bw, bh, bx, by, bw, bh);
+        if (typeof edRedraw === 'function') edRedraw();
+        res();
+      };
+      img.onerror = () => res();
+      img.src = dataUrl;
+    });
     return fl;
   }
   toDataUrlFull() {
@@ -13455,8 +13465,18 @@ async function edSaveProject(_keepOverlay){
       texts,
     };
   });
+  // Esperar a que todos los FillLayers tengan sus imágenes cargadas
+  const _fillReadyPromises = [];
+  for (const _rp of edPages) {
+    for (const _rl of (_rp.layers||[])) {
+      if (_rl && _rl.type === 'fill' && _rl._ready instanceof Promise) {
+        _fillReadyPromises.push(_rl._ready);
+      }
+    }
+  }
+  if (_fillReadyPromises.length) await Promise.all(_fillReadyPromises);
+
   // Construir pages serializando capas y externalizando _pngFrames a IDB
-  // (evita QuotaExceededError silencioso en localStorage con frames PNG grandes)
   const _savedOrient2=edOrientation, _savedPage2=edCurrentPage;
   const _edPages = [];
   for (let _pi=0; _pi<edPages.length; _pi++) {
@@ -14196,6 +14216,9 @@ function edDeserLayer(d, pageOrientation){
     if(d._uid) fl._uid=d._uid;
     if(d.hidden) fl.hidden=true;
     if(d._baseX !== undefined) { fl._baseX=d._baseX; fl._baseY=d._baseY; }
+    // Guardar metadata del JSON descargado para diagnóstico
+    fl._diagSrc = { _isCropped:d._isCropped, bx:d.bx, by:d.by, bw:d.bw, bh:d.bh,
+      urlLen:(d.dataUrl||'').length, _isFull:d._isFull };
     return fl;
   }
   if(d.type==='draw'){
@@ -22400,6 +22423,8 @@ async function _gcpDownloadMp4() {
 
 // ── DIAGNÓSTICO GUARDADO LOCAL Y NUBE ────────────────────────────────────────
 async function _edRunDiag() {
+  // Esperar 1.5s para que los img.onload de fills async terminen
+  await new Promise(r => setTimeout(r, 1500));
   const lines = [];
   const L = s => lines.push(s);
 
@@ -22495,7 +22520,8 @@ async function _edRunDiag() {
       + (l.type==='fill'?' canvas='+(l._canvas?l._canvas.width+'x'+l._canvas.height:'null')
         +' _drawLayerId='+(l._drawLayerId||'?')
         +' _baseX='+(l._baseX!==null&&l._baseX!==undefined?l._baseX.toFixed(3):'null')
-        +' hasPixels='+(()=>{try{const d=l._ctx.getImageData(0,0,l._canvas.width,l._canvas.height).data;for(let i=3;i<d.length;i+=4){if(d[i]>10)return'SÍ';}return'NO';}catch(_){return'ERR';}})():'')  
+        +' hasPixels='+(()=>{try{const d=l._ctx.getImageData(0,0,l._canvas.width,l._canvas.height).data;for(let i=3;i<d.length;i+=4){if(d[i]>10)return'SÍ';}return'NO';}catch(_){return'ERR';}})()  
+        +(l._diagSrc?' diagSrc:_isCropped='+l._diagSrc._isCropped+' bx='+l._diagSrc.bx+' bw='+l._diagSrc.bw+' bh='+l._diagSrc.bh+' urlLen='+l._diagSrc.urlLen:''):'') 
       + (l.type==='gif'?' gifKey=' + (l.gifKey||'-') + ' _playing=' + l._playing + ' _ready=' + l._ready:'')
       + (l.type==='image'?' _playing=' + l._playing:''));
   });
@@ -22537,6 +22563,35 @@ async function _edRunDiag() {
       }
     });
   } catch(_de) { L('  Error diagnóstico Supabase: ' + _de.message); }
+
+  // 5b. Consulta Supabase: panel_layers fill
+  L('\n── Supabase panel_layers fill ──');
+  try {
+    const _comic = ComicStore.getById(edProjectId);
+    const _sbId = _comic?.supabaseId;
+    if (_sbId) {
+      const _SB = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
+      const _KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+      const _hdrs = { 'apikey': _KEY, 'Authorization': 'Bearer ' + (_KEY) };
+      const _rPanels = await fetch(`${_SB}/panels?work_id=eq.${_sbId}&order=panel_order.asc&select=id,panel_order`, { headers: _hdrs });
+      const _panels = _rPanels.ok ? await _rPanels.json() : [];
+      for (const _panel of _panels) {
+        const _rRows = await fetch(`${_SB}/panel_layers?panel_id=eq.${_panel.id}&layer_type=eq.fill&select=layer_order,layer_data,anim_url`, { headers: _hdrs });
+        const _rows = _rRows.ok ? await _rRows.json() : [];
+        if (!_rows.length) { L('  panel '+_panel.panel_order+': sin fill layers'); continue; }
+        for (const _row of _rows) {
+          let _parsed = null;
+          try { _parsed = JSON.parse(_row.layer_data); } catch(_) {}
+          L('  panel '+_panel.panel_order+' layer '+_row.layer_order
+            +' layer_data_len='+(_row.layer_data||'').length
+            +' anim_url='+(_row.anim_url||'NO')
+            +' _isCropped='+(_parsed?._isCropped)
+            +' bx='+(_parsed?.bx)+' bw='+(_parsed?.bw)+' bh='+(_parsed?.bh)
+            +' urlLen='+(_parsed?.dataUrl||'').length);
+        }
+      }
+    } else { L('  sin supabaseId'); }
+  } catch(e) { L('  ERROR Supabase fill: '+e.message); }
 
   // 5. Biblioteca local
   L('\n── Biblioteca ──');
