@@ -1775,6 +1775,42 @@ class FillLayer extends BaseLayer {
       edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
     return tmp.toDataURL();
   }
+  // Igual que StrokeLayer: recortar al bbox del contenido (incluyendo zonas fuera del lienzo)
+  // Devuelve { dataUrl, bx, by, bw, bh } en px del workspace, o null si vacío
+  toDataUrlCropped() {
+    const W = ED_CANVAS_W, H = ED_CANVAS_H;
+    const d = this._ctx.getImageData(0, 0, W, H).data;
+    let minX=W, minY=H, maxX=0, maxY=0, found=false;
+    for(let y=0;y<H;y++){
+      for(let x=0;x<W;x++){
+        if(d[(y*W+x)*4+3]>10){
+          if(x<minX)minX=x; if(x>maxX)maxX=x;
+          if(y<minY)minY=y; if(y>maxY)maxY=y;
+          found=true;
+        }
+      }
+    }
+    if(!found) return null;
+    const pad=1;
+    const bx=Math.max(0,minX-pad), by=Math.max(0,minY-pad);
+    const bw=Math.min(W,maxX-minX+1+pad*2), bh=Math.min(H,maxY-minY+1+pad*2);
+    const tmp=document.createElement('canvas');
+    tmp.width=bw; tmp.height=bh;
+    tmp.getContext('2d').drawImage(this._canvas,bx,by,bw,bh,0,0,bw,bh);
+    return { dataUrl:tmp.toDataURL(), bx, by, bw, bh };
+  }
+  // Restaurar desde datos cropped
+  static fromDataUrlCropped(dataUrl, bx, by, bw, bh) {
+    const fl = new FillLayer();
+    if (!dataUrl) return fl;
+    const img = new Image();
+    img.onload = () => {
+      fl._ctx.drawImage(img, 0, 0, bw, bh, bx, by, bw, bh);
+      if (typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return fl;
+  }
   toDataUrlFull() {
     // Canvas workspace completo — para historial local (no pierde contenido fuera del lienzo)
     return this._canvas.toDataURL();
@@ -13918,7 +13954,11 @@ function edMergeSelected(){
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='fill'){
-    const _f={type:'fill', dataUrl:l.toDataUrlFull(), _isFull:true};
+    const _fCropped = (typeof l.toDataUrlCropped==='function') ? l.toDataUrlCropped() : null;
+    const _f = _fCropped
+      ? { type:'fill', dataUrl:_fCropped.dataUrl, _isCropped:true,
+          bx:_fCropped.bx, by:_fCropped.by, bw:_fCropped.bw, bh:_fCropped.bh }
+      : { type:'fill', dataUrl:null };
     if(l._drawLayerId) _f._drawLayerId=l._drawLayerId;
     if(l._uid) _f._uid=l._uid;
     if(l.hidden) _f.hidden=true;
@@ -14144,9 +14184,14 @@ function edDeserLayer(d, pageOrientation){
   if(d.type==='group') return null; // obsoleto
   if(d.type==='fill'){
     const _isV=(pageOrientation||'vertical')==='vertical';
-    const fl = d._isFull
-      ? FillLayer.fromDataUrlFull(d.dataUrl||'')
-      : FillLayer.fromDataUrl(d.dataUrl||'', _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
+    let fl;
+    if (d._isCropped && d.bx !== undefined) {
+      fl = FillLayer.fromDataUrlCropped(d.dataUrl||'', d.bx, d.by, d.bw, d.bh);
+    } else if (d._isFull) {
+      fl = FillLayer.fromDataUrlFull(d.dataUrl||'');
+    } else {
+      fl = FillLayer.fromDataUrl(d.dataUrl||'', _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
+    }
     if(d._drawLayerId) fl._drawLayerId=d._drawLayerId;
     if(d._uid) fl._uid=d._uid;
     if(d.hidden) fl.hidden=true;
