@@ -22426,6 +22426,13 @@ async function _edRunDiag() {
         if (l.type === 'image' || l.type === 'gif') {
           L('  L' + pi + '_' + li + ' type=' + l.type + ' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' apngSrc=' + (l._apngSrc?'sí':'NO'));
         }
+        if (l.type === 'fill') {
+          L('  L' + pi + '_' + li + ' type=fill _isCropped=' + l._isCropped
+            + ' bx=' + l.bx + ' by=' + l.by + ' bw=' + l.bw + ' bh=' + l.bh
+            + ' urlLen=' + ((l.dataUrl||'').length)
+            + ' _drawLayerId=' + (l._drawLayerId||'?')
+            + ' _baseX=' + (l._baseX!==undefined?l._baseX:'undef'));
+        }
       });
     });
   } else { L('ComicStore: NO ENCONTRADO'); }
@@ -22485,6 +22492,10 @@ async function _edRunDiag() {
       + (l.type==='image'?' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' animReady=' + (l._animReady?'sí':'NO'):'')
       + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null'):'')
       + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?'):'')
+      + (l.type==='fill'?' canvas='+(l._canvas?l._canvas.width+'x'+l._canvas.height:'null')
+        +' _drawLayerId='+(l._drawLayerId||'?')
+        +' _baseX='+(l._baseX!==null&&l._baseX!==undefined?l._baseX.toFixed(3):'null')
+        +' hasPixels='+(()=>{try{const d=l._ctx.getImageData(0,0,l._canvas.width,l._canvas.height).data;for(let i=3;i<d.length;i+=4){if(d[i]>10)return'SÍ';}return'NO';}catch(_){return'ERR';}})():'')  
       + (l.type==='gif'?' gifKey=' + (l.gifKey||'-') + ' _playing=' + l._playing + ' _ready=' + l._ready:'')
       + (l.type==='image'?' _playing=' + l._playing:''));
   });
@@ -22508,6 +22519,8 @@ async function _edRunDiag() {
       (p.layers||[]).forEach((l, li) => {
         if (!l) { L('    L'+li+' NULL'); return; }
         const _info = 'L'+li+' type='+l.type
+          + (l.type==='fill'?(()=>{try{const cr=l.toDataUrlCropped?l.toDataUrlCropped():null;return cr?' crop:bx='+cr.bx+' by='+cr.by+' bw='+cr.bw+' bh='+cr.bh+' urlLen='+cr.dataUrl.length:' crop:NULL';}catch(e){return' crop:ERR:'+e.message;}})():'')
+          + (l.type==='fill'?' _drawLayerId='+(l._drawLayerId||'?')+' _baseX='+(l._baseX!==null&&l._baseX!==undefined?l._baseX.toFixed(3):'null'):'')
           + (l.type==='stroke'?' dataUrl='+(l.toDataUrl?(l.toDataUrl().length>10?l.toDataUrl().slice(0,20)+'…':'EMPTY'):'NO-FN'):'')
           + (l.type==='draw'?' dataUrl='+(l.toDataUrl?(l.toDataUrl().length>10?'OK('+l.toDataUrl().length+'ch)':'EMPTY'):'NO-FN'):'')
           + (l.type==='image'?' animKey='+(l.animKey||'-')+' pngKey='+(l._pngFramesKey||'-'):'')
