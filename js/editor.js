@@ -1612,7 +1612,21 @@ function _edAdaptPageToOrientation(page, prev, next) {
   const pw_p = pv ? ED_PAGE_W : ED_PAGE_H, ph_p = pv ? ED_PAGE_H : ED_PAGE_W;
   const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
   const sw = pw_p / pw_n, sh = ph_p / ph_n;
+  // Márgenes de la zona de página en el workspace para ambas orientaciones
+  const mx_p = (ED_CANVAS_W - pw_p) / 2, my_p = (ED_CANVAS_H - ph_p) / 2;
+  const mx_n = (ED_CANVAS_W - pw_n) / 2, my_n = (ED_CANVAS_H - ph_n) / 2;
   page.layers.forEach(l => {
+    // DrawLayer: reubicar su canvas al nuevo margen de página (igual que FillLayer)
+    if (l && l.type === 'draw' && l._canvas && l._ctx) {
+      const tmp = document.createElement('canvas');
+      tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+      // Recortar zona de página anterior y pegar en zona nueva — dimensiones iguales
+      // porque la página siempre mide pw_p×ph_p = pw_n×ph_n en píxeles totales (360×780)
+      tmp.getContext('2d').drawImage(l._canvas, mx_p, my_p, pw_p, ph_p, mx_n, my_n, pw_p, ph_p);
+      l._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+      l._ctx.drawImage(tmp, 0, 0);
+      return;
+    }
     if (!l || !['image','gif','stroke','shape','line'].includes(l.type)) return;
     // StrokeLayer con FillLayer vinculado: el fill tiene contenido en coordenadas
     // absolutas del workspace y no puede seguir el redimensionado → excluir ambos.
@@ -1651,6 +1665,9 @@ function edSetOrientation(o, persist=true){
   // Recalcular dimensiones si la orientacion realmente cambio
   if(persist && prevOrientation !== o){
     _edAdaptPageToOrientation(edPages[edCurrentPage], prevOrientation, o);
+    // Push al historial para que los valores adaptados sean el nuevo baseline
+    // Sin esto, undo/redo o autosave restauran los points/dimensions previos
+    edPushHistory(true);
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -14509,6 +14526,9 @@ async function edLoadProject(id){
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
   if(!comic)return;
   edProjectId=id;
+  // Recargar caché de biblioteca con la key correcta para este proyecto
+  _bibCache = null;
+  _bibInitIdb();
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1; _edSavedHistoryTs=0;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
@@ -14553,7 +14573,7 @@ async function edLoadProject(id){
       comic.editorData.pages = _asSave.pages;
       // Restaurar biblioteca si estaba en el snapshot
       if (_asSave.bib) {
-        try { _bibSave(_asSave.bib); } catch(_) {}
+        try { _bibCache = _asSave.bib; _bibSave(_asSave.bib); } catch(_) {}
       }
     }
     } // cierre del else (autosave más nuevo que el comic guardado)
@@ -17429,7 +17449,7 @@ const _BIB_KEY_PREFIX = 'cs_biblioteca';
 const _BIB_MAX_BYTES  = 0; // Sin tope local — el límite es el de la obra completa (60 MB nube)
 const _BIB_THUMB_SIZE = 80;
 // Inicializar IDB al cargar el módulo (async en background)
-setTimeout(() => { try { _bibInitIdb(); } catch(_) {} }, 0);
+// _bibInitIdb() se llama desde edLoadProject una vez que edProjectId está asignado
 
 // Clave de localStorage: por proyecto si hay proyecto activo
 function _bibKey() {
