@@ -363,19 +363,11 @@ const SupabaseClient = (() => {
               if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
             } catch(e) { console.warn('GIF upload error:', e.message); }
           }
-          // FillLayer: mismo patrón que StrokeLayer — bbox recortado, pequeño y completo
+          // FillLayer: el objeto ya viene serializado por edSerLayer (objeto plano con dataUrl)
+          // Pasarlo directamente a layer_data sin re-serializar
           if (l.type === 'fill') {
-            const _fCrop = (typeof l.toDataUrlCropped==='function') ? l.toDataUrlCropped() : null;
-            const _flData = _fCrop
-              ? { type:'fill', dataUrl:_fCrop.dataUrl, _isCropped:true,
-                  bx:_fCrop.bx, by:_fCrop.by, bw:_fCrop.bw, bh:_fCrop.bh,
-                  _drawLayerId:l._drawLayerId||null, _uid:l._uid||null,
-                  hidden:l.hidden||false, opacity:l.opacity,
-                  _baseX:(l._baseX!==null&&l._baseX!==undefined)?l._baseX:undefined,
-                  _baseY:(l._baseY!==null&&l._baseY!==undefined)?l._baseY:undefined }
-              : { type:'fill', dataUrl:null, _drawLayerId:l._drawLayerId||null,
-                  _uid:l._uid||null, hidden:l.hidden||false };
-            layerRows.push({ panel_id:panelId, layer_order:j, layer_type:'fill', layer_data:JSON.stringify(_flData), gif_url:null, anim_url:null });
+            layerRows.push({ panel_id:panelId, layer_order:j, layer_type:'fill',
+              layer_data: JSON.stringify(l), gif_url:null, anim_url:null });
             continue;
           }
 
