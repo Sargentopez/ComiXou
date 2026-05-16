@@ -363,6 +363,24 @@ const SupabaseClient = (() => {
               if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
             } catch(e) { console.warn('GIF upload error:', e.message); }
           }
+          // FillLayer: serializar el canvas como dataUrl (zona de página)
+          if (l.type === 'fill') {
+            const _flData = {
+              type: 'fill',
+              dataUrl: (typeof l.toDataUrl === 'function') ? l.toDataUrl() : null,
+              _drawLayerId: l._drawLayerId || null,
+              _uid: l._uid || null,
+              hidden: l.hidden || false,
+              opacity: l.opacity,
+              _isFull: false,
+              _baseX: (l._baseX !== null && l._baseX !== undefined) ? l._baseX : undefined,
+              _baseY: (l._baseY !== null && l._baseY !== undefined) ? l._baseY : undefined,
+            };
+            const _ld = JSON.stringify(_flData);
+            layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });
+            continue; // siguiente capa
+          }
+
           // Serializar la capa — excluir campos de re-edición que el reader no necesita
           const _lClean = {...l};
           // _gcpLayersData/_gcpFramesData/_gcpLayerNames son datos vectoriales (no imágenes)
@@ -752,7 +770,8 @@ const SupabaseClient = (() => {
         // Payload: para GIF/APNG incluir todo lo necesario para re-edición
         // pngFrames van al bucket (anim_url), gifDataUrl/thumb son pequeños
         // gcpLayersData/gcpFramesData son vectoriales — se comprimen bien
-        const _payload = entry.isGifAnim
+        // Para items con fill: embeber fillLayerData en el payload
+        const _payloadBase = entry.isGifAnim
           ? { isGifAnim:      true,
               gifDataUrl:     entry.gifDataUrl,
               gcpFrameDelay:  entry.gcpFrameDelay,
@@ -764,6 +783,10 @@ const SupabaseClient = (() => {
               normW:          entry.normW           || null,
               normH:          entry.normH           || null }
           : entry.layerData;
+        // Embeber fillLayerData si existe (sin columna extra en Supabase)
+        const _payload = (entry.fillLayerData && !entry.isGifAnim)
+          ? { ..._payloadBase, _fillLayerData: entry.fillLayerData }
+          : _payloadBase;
         // Solo comprimir items animados (gcpLayersData grandes) — resto JSON directo
         const _ld = entry.isGifAnim
           ? await _czCompress(JSON.stringify(_payload))
@@ -863,11 +886,16 @@ continue;
           thumb:          r.thumb,
         });
       } else {
+        // Extraer fillLayerData si fue embebido en el payload
+        const _fillData = ld._fillLayerData || null;
+        const _layerDataClean = _fillData ? { ...ld, _fillLayerData: undefined } : ld;
+        delete _layerDataClean._fillLayerData;
         folderMap.get(fid).items.push({
-          id:        r.id,
-          timestamp: new Date(r.created_at).getTime(),
-          layerData: ld,
-          thumb:     r.thumb,
+          id:            r.id,
+          timestamp:     new Date(r.created_at).getTime(),
+          layerData:     _layerDataClean,
+          fillLayerData: _fillData,
+          thumb:         r.thumb,
         });
       }
     }

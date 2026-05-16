@@ -1723,6 +1723,190 @@ class DrawLayer extends BaseLayer {
   }
 }
 
+/* ══════════════════════════════════════════
+   FILL LAYER — capa de relleno ligada al DrawLayer.
+   Mismo canvas workspace que DrawLayer.
+   Se crea automáticamente junto al DrawLayer.
+   La herramienta bucket (flood fill) escribe aquí,
+   no en el DrawLayer, para mantener dibujo y relleno separados.
+   ══════════════════════════════════════════ */
+class FillLayer extends BaseLayer {
+  constructor() {
+    super('fill', 0.5, 0.5, 1.0, 1.0);
+    this._canvas = document.createElement('canvas');
+    this._canvas.width  = ED_CANVAS_W;
+    this._canvas.height = ED_CANVAS_H;
+    this._ctx = this._canvas.getContext('2d');
+    this._baseX = null; this._baseY = null;
+  }
+  static fromDataUrl(dataUrl, pw, ph) {
+    // Restaurar solo la zona de página (cloud/guardado)
+    const fl = new FillLayer();
+    if (!dataUrl) return fl;
+    const img = new Image();
+    img.onload = () => {
+      const mx = (ED_CANVAS_W - pw) / 2;
+      const my = (ED_CANVAS_H - ph) / 2;
+      fl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
+      if (typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return fl;
+  }
+  static fromDataUrlFull(dataUrl, offsetX, offsetY) {
+    // Restaurar canvas workspace completo (historial local)
+    // offsetX/offsetY: desplazamiento opcional en px de workspace
+    const fl = new FillLayer();
+    if (!dataUrl) return fl;
+    const img = new Image();
+    img.onload = () => {
+      fl._ctx.drawImage(img, offsetX||0, offsetY||0, ED_CANVAS_W, ED_CANVAS_H);
+      if (typeof edRedraw === 'function') edRedraw();
+    };
+    img.src = dataUrl;
+    return fl;
+  }
+  toDataUrl() {
+    // Solo la zona de página — para serialización cloud/guardado
+    const pw = edPageW(), ph = edPageH();
+    const tmp = document.createElement('canvas');
+    tmp.width = pw; tmp.height = ph;
+    tmp.getContext('2d').drawImage(this._canvas,
+      edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);
+    return tmp.toDataURL();
+  }
+  toDataUrlFull() {
+    // Canvas workspace completo — para historial local (no pierde contenido fuera del lienzo)
+    return this._canvas.toDataURL();
+  }
+  clear() { this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H); }
+  draw(ctx) {
+    ctx.save();
+    // Buscar capa vinculada para offset automático y clip
+    const _pair = this._drawLayerId && (typeof edLayers !== 'undefined') &&
+      edLayers.find(l => l !== this && l._fillLayerId === this._drawLayerId);
+    // Clip para shape/line cerrado
+    if (_pair && (_pair.type === 'shape' || (_pair.type === 'line' && _pair.closed)) &&
+        typeof _pair.buildClipPath === 'function') {
+      _pair.buildClipPath(ctx); ctx.clip();
+    }
+    // Transformación: liveTransform tiene prioridad, si no offset automático por posición
+    if (this._liveTransform) {
+      const t = this._liveTransform;
+      ctx.transform(t.a, t.b, t.c, t.d, t.e, t.f);
+    } else if (_pair && this._baseX !== null && this._baseX !== undefined) {
+      const _ox = (_pair.x - this._baseX) * edPageW();
+      const _oy = (_pair.y - this._baseY) * edPageH();
+      if (_ox || _oy) ctx.transform(1, 0, 0, 1, _ox, _oy);
+    }
+    ctx.drawImage(this._canvas, 0, 0);
+    ctx.restore();
+  }
+  // Transformación en tiempo real sin tocar el canvas
+  // Transformación en tiempo real.
+  // Para resize con rotación: initRot es la rotación actual del objeto (rad)
+  // La escala se aplica en espacio LOCAL del objeto, no en espacio mundo.
+  // Matriz: T(anc+d) * R(initRot) * S(sw,sh) * R(-initRot) * T(-anc)
+  setLiveTransform(cx0, cy0, scaleX, scaleY, rotDelta, dxPx, dyPx, initRot) {
+    const ri = initRot || 0; // rotación inicial del objeto en radianes
+    const rd = rotDelta || 0;
+    const sx = scaleX||1, sy = scaleY||1;
+    const tx = cx0+(dxPx||0), ty = cy0+(dyPx||0);
+    // Componer R(ri+rd)*S(sx,sy)*R(-ri) = escala en espacio local + rotación total
+    const cosR = Math.cos(ri+rd), sinR = Math.sin(ri+rd);
+    const cosI = Math.cos(ri),    sinI = Math.sin(ri);
+    // M = R(ri+rd) * S(sx,sy) * R(-ri)
+    const a  = cosR*sx*cosI + (-sinR)*sy*(-sinI);
+    const b  = sinR*sx*cosI + cosR*sy*(-sinI);
+    const cc = cosR*sx*sinI + (-sinR)*sy*cosI;
+    const d  = sinR*sx*sinI + cosR*sy*cosI;
+    // Traslación: T(tx,ty) * M * T(-cx0,-cy0)
+    const e  = tx - cx0*a - cy0*cc;
+    const f  = ty - cx0*b - cy0*d;
+    this._liveTransform = {a, b, c: cc, d, e, f};
+  }
+  // Aplicar _liveTransform permanentemente al canvas y resetearla
+  bakeAutoOffset() {
+    const _p = this._drawLayerId && (typeof edLayers !== 'undefined') &&
+      edLayers.find(l => l !== this && l._fillLayerId === this._drawLayerId);
+    if (!_p || this._baseX === null || this._baseX === undefined) return;
+    const dx = (_p.x - this._baseX) * edPageW();
+    const dy = (_p.y - this._baseY) * edPageH();
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    const tmp = document.createElement('canvas');
+    tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+    tmp.getContext('2d').drawImage(this._canvas, dx, dy);
+    this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    this._ctx.drawImage(tmp, 0, 0);
+    this._baseX = _p.x; this._baseY = _p.y;
+  }
+  bakeTransform() {
+    if (!this._liveTransform) return;
+    const t = this._liveTransform;
+    const tmp = document.createElement('canvas');
+    tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+    const tctx = tmp.getContext('2d');
+    tctx.save();
+    tctx.transform(t.a, t.b, t.c, t.d, t.e, t.f);
+    tctx.drawImage(this._canvas, 0, 0);
+    tctx.restore();
+    this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    this._ctx.drawImage(tmp, 0, 0);
+    this._liveTransform = null;
+    const _p2 = this._drawLayerId && (typeof edLayers !== 'undefined') &&
+      edLayers.find(l => l !== this && l._fillLayerId === this._drawLayerId);
+    if (_p2) { this._baseX = _p2.x; this._baseY = _p2.y; }
+  }
+  // Desplazar el contenido del canvas permanentemente (al soltar el drag)
+  applyOffset(dxPx, dyPx) {
+    if (!dxPx && !dyPx) return;
+    const tmp = document.createElement('canvas');
+    tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+    tmp.getContext('2d').drawImage(this._canvas, dxPx, dyPx);
+    this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    this._ctx.drawImage(tmp, 0, 0);
+    this._renderOffX = 0; this._renderOffY = 0;
+  }
+  // Aplicar transformación afín al canvas (rotate + scale + translate)
+  // cx/cy: centro de transformación en px de workspace
+  // scaleX/scaleY: factores de escala
+  // rotDelta: diferencia de rotación en radianes
+  // dxPx/dyPx: traslación adicional en px
+  applyTransform(cx, cy, scaleX, scaleY, rotDelta, dxPx, dyPx) {
+    const tmp = document.createElement('canvas');
+    tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+    const tctx = tmp.getContext('2d');
+    tctx.save();
+    tctx.translate(cx + (dxPx||0), cy + (dyPx||0));
+    if (rotDelta) tctx.rotate(rotDelta);
+    if (scaleX !== 1 || scaleY !== 1) tctx.scale(scaleX||1, scaleY||1);
+    tctx.translate(-cx, -cy);
+    tctx.drawImage(this._canvas, 0, 0);
+    tctx.restore();
+    this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    this._ctx.drawImage(tmp, 0, 0);
+    this._renderOffX = 0; this._renderOffY = 0;
+    this._liveTransform = null;
+    const _p3 = this._drawLayerId && (typeof edLayers !== 'undefined') &&
+      edLayers.find(l => l !== this && l._fillLayerId === this._drawLayerId);
+    if (_p3) { this._baseX = _p3.x; this._baseY = _p3.y; }
+  }
+  contains(px, py) {
+    try {
+      const wx = Math.round(edMarginX() + px * edPageW());
+      const wy = Math.round(edMarginY() + py * edPageH());
+      const R = 10;
+      const x0 = Math.max(0, wx-R), y0 = Math.max(0, wy-R);
+      const x1 = Math.min(this._canvas.width-1, wx+R);
+      const y1 = Math.min(this._canvas.height-1, wy+R);
+      if (x1<x0||y1<y0) return false;
+      const data = this._ctx.getImageData(x0, y0, x1-x0+1, y1-y0+1).data;
+      for (let i=3; i<data.length; i+=4) { if (data[i]>10) return true; }
+      return false;
+    } catch(e) { return true; }
+  }
+}
+
 
 class StrokeLayer extends BaseLayer {
   constructor(srcCanvas){
@@ -2294,6 +2478,12 @@ class LineLayer extends BaseLayer {
 function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
     if (!l || !l.type) return null;
+    if(l.type === 'fill'){
+      // Historial global: guardar canvas completo para no perder contenido fuera del lienzo
+      return { type:'fill', dataUrl:l.toDataUrlFull(),
+        _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
+        hidden: l.hidden||false, opacity: l.opacity, _isFull:true };
+    }
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
       // Esto garantiza que restaurar un snapshot siempre produce un StrokeLayer
@@ -2321,7 +2511,8 @@ function _edLayersSnapshot(){
     }
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-      color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false };
+      color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false,
+      _uid:l._uid||null, _fillLayerId:l._fillLayerId||null };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
@@ -2420,6 +2611,8 @@ function edApplyHistory(snapshot){
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
                     : new DrawLayer();
       if(o.locked) l.locked = true;
+      if(o._uid) l._uid=o._uid;
+      if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
       return l;
     }
     else if(o.type === 'stroke') {
@@ -2468,6 +2661,8 @@ function edApplyHistory(snapshot){
       if(o.opacity !== undefined) l.opacity=o.opacity;
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
+      if(o._uid) l._uid=o._uid;
+      if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
       return l;
     }
     else if(o.type === 'shape') {
@@ -2493,6 +2688,22 @@ function edApplyHistory(snapshot){
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       return l;
+    }
+    else if(o.type === 'fill') {
+      // Si el snapshot tiene el canvas completo (_isFull), restaurar sin recortar
+      let fl;
+      if(o._isFull) {
+        fl = FillLayer.fromDataUrlFull(o.dataUrl||'');
+      } else {
+        const _isV2 = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+        const _fpw = _isV2?ED_PAGE_W:ED_PAGE_H, _fph = _isV2?ED_PAGE_H:ED_PAGE_W;
+        fl = FillLayer.fromDataUrl(o.dataUrl||'', _fpw, _fph);
+      }
+      if(o._drawLayerId) fl._drawLayerId = o._drawLayerId;
+      if(o._uid) fl._uid = o._uid;
+      if(o.hidden) fl.hidden = o.hidden;
+      if(o.opacity !== undefined) fl.opacity = o.opacity;
+      return fl;
     }
     else if(o.type === 'group') return null; // obsoleto
     else if(o.type === 'gif') {
@@ -3162,7 +3373,11 @@ function edRedraw(){
     if(_editingDraw && l.type==='draw') return; // en modo draw, el draw va al final
     if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
-    if(l.type==='image'){
+    if(l.type==='fill'){
+      edCtx.globalAlpha = (l.opacity??1)*dimFactor;
+      l.draw(edCtx);
+      edCtx.globalAlpha = 1;
+    } else if(l.type==='image'){
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
       l.draw(edCtx, edCanvas);
       l.opacity = _orig;
@@ -4537,9 +4752,11 @@ function edAddBubble(){
 function edDuplicateSelected(){
   if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return;
   const la = edLayers[edSelectedIdx];
-  // Serializar completamente el original y deserializar como copia independiente.
-  // Garantiza que TODAS las propiedades (puntos, colores, animaciones, bitmaps…)
-  // se copian en profundidad sin compartir ninguna referencia con el original.
+  // Buscar FillLayer vinculado ANTES de serializar
+  const _flOrig = la._fillLayerId
+    ? edLayers.find(l=>l.type==='fill'&&l._drawLayerId===la._fillLayerId)
+    : null;
+  // Serializar y deserializar la capa principal
   const serialized = edSerLayer(la);
   if(!serialized) return;
   const copy = edDeserLayer(serialized, edOrientation);
@@ -4547,18 +4764,41 @@ function edDuplicateSelected(){
   // Desplazar ligeramente para distinguirlo visualmente del original
   copy.x = la.x + 0.02;
   copy.y = la.y + 0.02;
-  // LineLayer: desplazar también cada punto
   if(copy.type === 'line' && Array.isArray(copy.points)){
     copy.points = copy.points.map(p => p ? {...p, x: p.x + 0.02, y: p.y + 0.02} : null);
     copy._updateBbox();
   }
-  // Eliminar _fusionId para que el duplicado sea siempre independiente
   delete copy._fusionId;
-  // El duplicado no pertenece a ningún grupo del original
   delete copy.groupId;
-  // Insertar justo encima del original
-  edLayers.splice(edSelectedIdx + 1, 0, copy);
-  edSelectedIdx = edSelectedIdx + 1;
+  // Si había FillLayer: crear copia independiente con nuevo ID
+  let _flCopy = null;
+  if(_flOrig){
+    const _npid = Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+    copy._uid = _npid;
+    copy._fillLayerId = _npid;
+    // Desplazar el canvas del FillLayer igual que la capa (+0.02 normalizado → px workspace)
+    const _offPx = 0.02 * edPageW();
+    const _offPy = 0.02 * edPageH();
+    _flCopy = FillLayer.fromDataUrlFull(_flOrig.toDataUrlFull(), _offPx, _offPy);
+    _flCopy._drawLayerId = _npid;
+    _flCopy._uid = 'fl_'+_npid;
+    // _baseX/_baseY = posición de la COPIA (no del original)
+    // Se calcula tras insertar la copia (copy.x ya tiene el +0.02)
+    _flCopy._baseX = copy.x; _flCopy._baseY = copy.y;
+  } else {
+    // Sin FillLayer: limpiar _fillLayerId para que no apunte al del original
+    delete copy._fillLayerId;
+    delete copy._uid;
+  }
+  // Insertar: FillLayer debajo, capa encima
+  const insertAt = edSelectedIdx + 1;
+  if(_flCopy){
+    edLayers.splice(insertAt, 0, _flCopy, copy);
+    edSelectedIdx = insertAt + 1; // apuntar al DrawLayer/StrokeLayer
+  } else {
+    edLayers.splice(insertAt, 0, copy);
+    edSelectedIdx = insertAt;
+  }
   edPushHistory(); edRedraw();
   edToast('Objeto duplicado');
 }
@@ -4583,6 +4823,19 @@ function edMirrorSelected(){
       tctx.drawImage(la._canvas, 0, 0);
       la._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
       la._ctx.drawImage(tmp, 0, 0);
+      // Reflejar también el FillLayer vinculado con el mismo eje
+      if(la._fillLayerId){
+        const _flMir=edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===la._fillLayerId);
+        if(_flMir){
+          const _ftmp=document.createElement('canvas');
+          _ftmp.width=ED_CANVAS_W; _ftmp.height=ED_CANVAS_H;
+          const _ftctx=_ftmp.getContext('2d');
+          _ftctx.translate(axisPx*2,0); _ftctx.scale(-1,1);
+          _ftctx.drawImage(_flMir._canvas,0,0);
+          _flMir._ctx.clearRect(0,0,ED_CANVAS_W,ED_CANVAS_H);
+          _flMir._ctx.drawImage(_ftmp,0,0);
+        }
+      }
       edRedraw();
       edToast('Dibujo reflejado');
     }
@@ -4684,7 +4937,13 @@ function edDeleteSelected(){
   if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
   // Si el modo recorte está activo, cancelarlo antes de eliminar
   if(_edCropMode){ _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edDrawUnlockUI(); _edPropsOverlayHide(); }
-  const _delType=edLayers[edSelectedIdx]?.type;
+  const _delLay=edLayers[edSelectedIdx];
+  const _delType=_delLay?.type;
+  // Eliminar FillLayer vinculado si existe
+  if(_delLay?._fillLayerId){
+    const _flDI=edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===_delLay._fillLayerId);
+    if(_flDI>=0){ edLayers.splice(_flDI,1); if(_flDI<edSelectedIdx) edSelectedIdx--; }
+  }
   edLayers.splice(edSelectedIdx,1);edSelectedIdx=-1;
   // Si era shape/line con barra flotante activa, limpiar y desbloquear
   if(_delType==='shape'||_delType==='line'){
@@ -5206,6 +5465,12 @@ function _edHandleDoubleTap(idx){
     edPushHistory();
     const dl=la.toDrawLayer();
     if(la.locked) dl.locked = true; // propagar bloqueo al convertir
+    // Propagar vínculo con FillLayer al DrawLayer (evita crear un nuevo FillLayer)
+    if(la._uid) dl._uid = la._uid;
+    if(la._fillLayerId) dl._fillLayerId = la._fillLayerId;
+    // Actualizar _drawLayerId en el FillLayer vinculado
+    const _flEdit = page.layers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId);
+    if(_flEdit){ _flEdit._drawLayerId = dl._uid || dl._fillLayerId; _flEdit._baseX=dl.x; _flEdit._baseY=dl.y; }
     // T9: Quitar stroke e insertar DrawLayer en la MISMA posición (preservar orden de capas)
     page.layers.splice(idx, 1, dl);  // reemplaza en sitio
     edLayers=page.layers;
@@ -5784,7 +6049,7 @@ function edOnStart(e){
             _edLastTapTime = _now2; _edLastTapIdx = -999; // centinela grupo
             if(_isDbl){
               // Encontrar el miembro más cercano al toque
-              const _hit = edMultiSel.find(i => edLayers[i]?.contains(c.nx, c.ny)) ?? edMultiSel[0];
+              const _hit = edMultiSel.find(i => edLayers[i]?.type!=='fill' && edLayers[i]?.contains(c.nx, c.ny)) ?? edMultiSel[0];
               edSelectedIdx = _hit ?? -1;
               edMultiSel = []; edMultiBbox = null;
               edActiveTool = window._edGroupSilentTool;
@@ -5814,7 +6079,7 @@ function edOnStart(e){
     } else if(e.shiftKey && e.pointerType !== 'touch'){
       // Shift+clic fuera del bbox en multiselect: buscar objeto y hacer toggle
       const _sfound = edLayers.map((_,i)=>i).reverse().find(i=>{
-        const _la=edLayers[i]; return _la && !_la.hidden && !_la.type?.startsWith('_') && _la.contains && _la.contains(c.nx,c.ny);
+        const _la=edLayers[i]; return _la && !_la.hidden && _la.type!=='fill' && !_la.type?.startsWith('_') && _la.contains && _la.contains(c.nx,c.ny);
       });
       if(_sfound !== undefined){
         const _si = edMultiSel.indexOf(_sfound);
@@ -5855,7 +6120,7 @@ function edOnStart(e){
         _msClear();
         edActiveTool = 'select'; edCanvas.className = '';
         // Si hay un objeto bajo el clic, seleccionarlo inmediatamente
-        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && !edLayers[i].hidden && edLayers[i].contains(c.nx,c.ny));
+        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && !edLayers[i].hidden && edLayers[i].type!=='fill' && edLayers[i].contains(c.nx,c.ny));
         if(_hit !== undefined){
           edSelectedIdx = _hit;
           _edDrawLockUI(); _edPropsOverlayShow();
@@ -6270,6 +6535,9 @@ function edOnStart(e){
           }
           edIsRotating = true;
           edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
+          window._edRotateInitRot = _la.rotation||0;
+          window._edRotateFillLayerId = _la._fillLayerId||null;
+          if(_la._fillLayerId) window._edFillInitPos={x:_la.x,y:_la.y,w:_la.width,h:_la.height,rot:_la.rotation||0};
           return;
         }
         // Pre-snapshot para objetos vectoriales con panel abierto
@@ -6303,7 +6571,9 @@ function edOnStart(e){
           edInitialSize={width:_la.width,height:_la.height,
                          cx:_la.x, cy:_la.y, asp:_la.height/_la.width,
                          rot:(_la.rotation||0), ox:_la.x, oy:_la.y,
-                         anchorX:_anch.x, anchorY:_anch.y};
+                         anchorX:_anch.x, anchorY:_anch.y,
+                         _fillLayerId:_la._fillLayerId||null};
+          if(_la._fillLayerId) window._edFillInitPos={x:_la.x,y:_la.y,w:_la.width,h:_la.height,rot:_la.rotation||0};
           if(_la.type==='line'){
             edInitialSize._linePoints=_la.points.map(p=>p?({...p}):null);
             edInitialSize._subPaths=_la.subPaths&&_la.subPaths.length ? _la.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null;
@@ -6437,19 +6707,27 @@ function edOnStart(e){
   // Primero textos/bocadillos (siempre encima)
   for(let i = edLayers.length - 1; i >= 0; i--){
     const l = edLayers[i];
-    if((l.type==='text'||l.type==='bubble') && !l.hidden && l.contains(c.nx,c.ny)){
+    if((l.type==='text'||l.type==='bubble') && !l.hidden && l.type!=='fill' && l.contains(c.nx,c.ny)){
       found = i; break;
     }
   }
   // Pasada 1 (exacta): resto de layers de mayor a menor índice.
-  // DrawLayer usa exactMode=true → radio=1px, no da positivo en huecos.
-  // Esto permite que capas inferiores sean seleccionables a través de huecos de DrawLayer.
+  // El FillLayer se incluye: si hay píxeles bajo el cursor, redirige a su capa vinculada.
+  // Esto garantiza que el fill tiene la misma prioridad que el stroke que lo contiene.
   if(found < 0){
     for(let i = edLayers.length - 1; i >= 0; i--){
       const l = edLayers[i];
       if(l.type==='text'||l.type==='bubble') continue;
-      const _hit = !l.hidden && (l.type==='draw' ? l.contains(c.nx,c.ny,true) : l.contains(c.nx,c.ny));
-      if(_hit){ found = i; break; }
+      if(l.hidden) continue;
+      if(l.type==='fill'){
+        // Hit en FillLayer: verificar píxeles y redirigir a la capa de dibujo vinculada
+        if(!l.contains(c.nx,c.ny)) continue;
+        const _dlIdx=edLayers.findIndex(dl=>dl._fillLayerId===l._drawLayerId);
+        if(_dlIdx>=0){found=_dlIdx;break;}
+        continue;
+      }
+      const _hit = l.type==='draw' ? l.contains(c.nx,c.ny,true) : l.contains(c.nx,c.ny);
+      if(_hit){found=i;break;}
     }
   }
   // Pasada 2 (expandida): solo si pasada 1 no encontró nada.
@@ -6459,7 +6737,19 @@ function edOnStart(e){
       const l = edLayers[i];
       if(l.type==='text'||l.type==='bubble') continue;
       if(l.type!=='draw') continue; // solo DrawLayer tiene radio expandido; el resto ya se probó
-      if(!l.hidden && l.contains(c.nx,c.ny,false)){ found = i; break; }
+      if(!l.hidden && l.type!=='fill' && l.contains(c.nx,c.ny,false)){ found = i; break; }
+    }
+  }
+  // Pasada 3: si nada encontrado, buscar en FillLayers y redirigir a su capa de dibujo
+  if(found < 0){
+    for(let i = edLayers.length - 1; i >= 0; i--){
+      const l = edLayers[i];
+      if(l.type !== 'fill' || l.hidden) continue;
+      if(l.contains(c.nx, c.ny)){
+        // Redirigir al StrokeLayer/DrawLayer vinculado
+        const _dlIdx = edLayers.findIndex(dl => dl._fillLayerId === l._drawLayerId);
+        if(_dlIdx >= 0){ found = _dlIdx; break; }
+      }
     }
   }
   if(found>=0){
@@ -6632,6 +6922,10 @@ function edOnStart(e){
     edDragOffY = c.ny - edLayers[found].y;
     edIsDragging = true;
     window._edMoved = false;
+    if(edLayers[found]?._fillLayerId){
+      const _l0=edLayers[found];
+      window._edFillInitPos={x:_l0.x,y:_l0.y,w:_l0.width,h:_l0.height,rot:_l0.rotation||0};
+    } else { window._edFillInitPos=null; }
     // Pre-snapshot para objetos vectoriales (permite deshacer el desplazamiento)
     if(edLayers[found]?.type==='line'||edLayers[found]?.type==='shape'){
       const _pm=$('edOptionsPanel')?.dataset.mode;
@@ -7168,6 +7462,15 @@ function edOnMove(e){
     const la=edLayers[edSelectedIdx];
     const angle = Math.atan2(c.ny-la.y, c.nx-la.x) - edRotateStartAngle;
     la.rotation = angle*180/Math.PI;
+    if(la._fillLayerId&&window._edFillInitPos){
+      const _flR=edLayers.find(l=>l.type==='fill'&&l._drawLayerId===la._fillLayerId);
+      if(_flR){
+        const _ip=window._edFillInitPos;
+        const _cx0=edMarginX()+la.x*edPageW(), _cy0=edMarginY()+la.y*edPageH();
+        const _dRot=((la.rotation||0)-(_ip.rot||0))*Math.PI/180;
+        _flR.setLiveTransform(_cx0,_cy0,1,1,_dRot,0,0);
+      }
+    }
     window._edMoved = true;
     edRedraw();
     return;
@@ -7241,6 +7544,20 @@ function edOnMove(e){
         _setCenterFromAnchor(la.width, la.height, aLocalX, aLocalY);
       }
     }
+    if(la._fillLayerId&&window._edFillInitPos&&edInitialSize.anchorX!==undefined){
+      const _flS=edLayers.find(l=>l.type==='fill'&&l._drawLayerId===la._fillLayerId);
+      if(_flS){
+        const _ip=window._edFillInitPos;
+        const pw=edPageW(),ph=edPageH();
+        const _sw=_ip.w>0?la.width/_ip.w:1;
+        const _sh=_ip.h>0?la.height/_ip.h:1;
+        // Ancla en px del workspace + rotación inicial del objeto
+        const _ancPx=edMarginX()+edInitialSize.anchorX*pw;
+        const _ancPy=edMarginY()+edInitialSize.anchorY*ph;
+        const _initRotRad=(_ip.rot||0)*Math.PI/180;
+        _flS.setLiveTransform(_ancPx,_ancPy,_sw,_sh,0,0,0,_initRotRad);
+      }
+    }
     window._edMoved = true;
     // Escalar cornerRadii según resize no proporcional (estándar Figma/Illustrator)
     if(edInitialSize._cornerRadii && la.cornerRadii){
@@ -7293,10 +7610,12 @@ function edOnMove(e){
   }
   if(!edIsDragging||edSelectedIdx<0)return;
   const la=edLayers[edSelectedIdx];
+  const _prevX = la.x, _prevY = la.y;
   la.x = c.nx - edDragOffX;
   la.y = c.ny - edDragOffY;
   // ── Snap a reglas (T29) ──────────────────────────────────────────────────
   if(edRules.length) _edSnapToRules(la);
+  // FillLayer: offset automático en draw() via _baseX/_baseY
   window._edMoved = true;
   edRedraw();
   edHideGearIcon();
@@ -7400,7 +7719,7 @@ function edOnEnd(e){
     edRubberBand=null;
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
       const _found=[];
-      edLayers.forEach((la,i)=>{ if(!la.hidden && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
+      edLayers.forEach((la,i)=>{ if(!la.hidden && la.type!=='fill' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
       if(_found.length===1){
         // Un solo objeto → selección normal
         edSelectedIdx=_found[0];
@@ -7432,7 +7751,7 @@ function edOnEnd(e){
         edLayers.forEach((la,i)=>{
           // Los objetos bloqueados se incluyen — solo se impide moverlos
           // Los objetos ocultos se excluyen — no son seleccionables
-          if(!la.hidden && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
+          if(!la.hidden && la.type!=='fill' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
         });
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
@@ -7530,6 +7849,19 @@ function edOnEnd(e){
       }
     });
     // Si hay writes pendientes, esperar antes de pushear
+    // Bake del FillLayer ANTES del snapshot
+    if(edSelectedIdx>=0){
+      const _laE=edLayers[edSelectedIdx];
+      if(_laE?._fillLayerId){
+        const _flE=edLayers.find(l=>l.type==='fill'&&l._drawLayerId===_laE._fillLayerId);
+        if(_flE){
+          if(_flE._liveTransform) _flE.bakeTransform();
+          else _flE.bakeAutoOffset();
+        }
+      }
+    }
+    window._edFillInitPos=null;
+    window._edRotateFillLayerId=null; window._edRotateInitRot=null;
     const _doPush = () => {
       const _panel=$('edOptionsPanel');
       const _mode=_panel?.dataset.mode;
@@ -7899,20 +8231,20 @@ function _edShapeUpdateUndoRedoBtns(){
 }
 
 function _edDrawPushHistory(){
-  // Guardar snapshot del DrawLayer actual
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
-  // Cortar el futuro si hay
+  const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
   edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
-  edDrawHistory.push(dl.toDataUrlFull());
+  edDrawHistory.push({ draw: dl.toDataUrlFull(), fill: fl ? fl.toDataUrlFull() : null });
   if(edDrawHistory.length > ED_MAX_DRAW_HISTORY) edDrawHistory.shift();
   edDrawHistoryIdx = edDrawHistory.length - 1;
   _edDrawUpdateUndoRedoBtns();
 }
-function _edDrawApplyHistory(dataUrl){
-  // El historial ahora guarda el workspace completo (toDataUrlFull)
-  // → restaurar 1:1 sin recortar ni reposicionar
+function _edDrawApplyHistory(snapshot){
   const page = edPages[edCurrentPage]; if(!page) return;
+  // Compatibilidad: snapshot puede ser string (historial antiguo) u objeto {draw,fill}
+  const drawUrl = typeof snapshot === 'string' ? snapshot : snapshot?.draw;
+  const fillUrl = typeof snapshot === 'object' ? snapshot?.fill : null;
   let dl = page.layers.find(l => l.type === 'draw');
   if(!dl){
     dl = new DrawLayer();
@@ -7921,15 +8253,29 @@ function _edDrawApplyHistory(dataUrl){
     else page.layers.push(dl);
     edLayers = page.layers;
   }
+  // Restaurar DrawLayer
   dl.clear();
-  if(dataUrl){
+  if(drawUrl){
     const img = new Image();
-    img.onload = () => {
-      dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    img.onload = () => { dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H); edRedraw(); };
+    img.src = drawUrl;
+  }
+  // Restaurar FillLayer
+  const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
+  if(fl){
+    fl.clear();
+    if(fillUrl){
+      const fimg = new Image();
+      fimg.onload = () => {
+        // Restaurar canvas completo (toDataUrlFull guarda ED_CANVAS_W × ED_CANVAS_H)
+        fl._ctx.drawImage(fimg, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
+        edRedraw();
+      };
+      fimg.src = fillUrl;
+    } else {
       edRedraw();
-    };
-    img.src = dataUrl;
-  } else {
+    }
+  } else if(!drawUrl){
     edRedraw();
   }
 }
@@ -7959,11 +8305,10 @@ function _edDrawClearHistory(){
   _edDrawUpdateUndoRedoBtns();
 }
 function _edDrawInitHistory(){
-  // Captura el estado actual del DrawLayer como punto de partida.
-  // El primer trazo nuevo quedará en idx=1 y podrá deshacerse hasta idx=0.
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw');
-  edDrawHistory = [dl ? dl.toDataUrlFull() : null];
+  const fl = dl?._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
+  edDrawHistory = [{ draw: dl ? dl.toDataUrlFull() : null, fill: fl ? fl.toDataUrlFull() : null }];
   edDrawHistoryIdx = 0;
   _edDrawUpdateUndoRedoBtns();
 }
@@ -7976,13 +8321,30 @@ function _edGetOrCreateDrawLayer(){
   if(dl){
     // T9: DrawLayer ya existe — usarlo en su posición actual sin moverlo
     edLayers = page.layers;
+    // Crear FillLayer vinculado si no existe
+    if (!dl._fillLayerId) {
+      const fl = new FillLayer();
+      fl._drawLayerId = dl._uid = dl._uid || ('dl_' + Date.now().toString(36));
+      dl._fillLayerId = fl._drawLayerId;
+      fl._uid = 'fl_' + dl._uid;
+      fl._baseX = dl.x; fl._baseY = dl.y;
+      const dlIdx = page.layers.indexOf(dl);
+      page.layers.splice(dlIdx, 0, fl); // FillLayer DEBAJO del DrawLayer
+      edLayers = page.layers;
+    }
     return dl;
   }
-  // No existe: crear nuevo e insertar antes del primer texto (o al final)
+  // No existe: crear nuevo DrawLayer + FillLayer vinculado
   dl = new DrawLayer();
+  dl._uid = 'dl_' + Date.now().toString(36);
+  dl._fillLayerId = dl._uid;
+  const fl = new FillLayer();
+  fl._drawLayerId = dl._uid;
+  fl._uid = 'fl_' + dl._uid;
+  fl._baseX = dl.x; fl._baseY = dl.y;
   const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
-  if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
-  else page.layers.push(dl);
+  if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, fl, dl);
+  else { page.layers.push(fl); page.layers.push(dl); }
   edLayers = page.layers;
   return dl;
 }
@@ -7990,8 +8352,112 @@ function _edGetOrCreateDrawLayer(){
 /* ══════════════════════════════════════════
    FLOOD FILL (Scanline algorithm)
    ══════════════════════════════════════════ */
+// Flood fill usando refCanvas como referencia de bordes,
+// escribiendo el resultado en flTarget._ctx (FillLayer).
+// refCanvas puede ser el _canvas del StrokeLayer (ya renderizado en workspace).
+// wx0,wy0: offset donde refCanvas comienza en coords workspace.
+function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny, rx0, ry0, rW, rH, useStrokeAsRef) {
+  const wx = Math.round(edMarginX() + nx * edPageW());
+  const wy = Math.round(edMarginY() + ny * edPageH());
+  // Coordenadas relativas al canvas del stroke
+  const lx = wx - rx0, ly = wy - ry0;
+  if(lx < 0 || lx >= rW || ly < 0 || ly >= rH) return;
+
+  // Construir canvas workspace del StrokeLayer en coords absolutas
+  // El refCanvas del StrokeLayer tiene su propio sistema de coordenadas (bbox recortado)
+  // Necesitamos leerlo en coords del workspace completo (ED_CANVAS_W x ED_CANVAS_H)
+  const wsRef = document.createElement('canvas');
+  wsRef.width = ED_CANVAS_W; wsRef.height = ED_CANVAS_H;
+  const wsCtx = wsRef.getContext('2d');
+  wsCtx.globalAlpha = 1;
+  // Dibujar el StrokeLayer en el canvas workspace de referencia
+  const _selLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if (_selLa && typeof _selLa.draw === 'function') {
+    _selLa.draw(wsCtx);
+  }
+  // También dibujar el FillLayer actual para que sea opaco a su propio color
+  if (flTarget._canvas) wsCtx.drawImage(flTarget._canvas, 0, 0);
+
+  const W = ED_CANVAS_W, H = ED_CANVAS_H;
+  const wxAbs = wx, wyAbs = wy;
+
+  const fc = edDrawColor;
+  const fR=parseInt(fc.slice(1,3),16), fG=parseInt(fc.slice(3,5),16),
+        fB=parseInt(fc.slice(5,7),16), fA=Math.round((edDrawOpacity/100)*255);
+
+  // Binarizar canvas de referencia
+  const orig = wsCtx.getImageData(0, 0, W, H).data;
+  const fd = new Uint8Array(W * H * 4);
+  for(let i=0; i<W*H; i++){
+    const pi=i*4, a=orig[pi+3];
+    if(a >= 128){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
+    else { fd[pi]=0; fd[pi+1]=0; fd[pi+2]=0; fd[pi+3]=0; }
+  }
+
+  const si0=(wyAbs*W+wxAbs)*4;
+  const tR=fd[si0], tG=fd[si0+1], tB=fd[si0+2], tA=fd[si0+3];
+  if(tR===fR && tG===fG && tB===fB && tA===fA) return;
+
+  const TOL=15;
+  function match(i){ return Math.abs(fd[i]-tR)<=TOL&&Math.abs(fd[i+1]-tG)<=TOL&&Math.abs(fd[i+2]-tB)<=TOL&&Math.abs(fd[i+3]-tA)<=TOL; }
+  const filled = new Uint8Array(W*H);
+  const stack = [];
+  stack.push({y:wyAbs,left:wxAbs,right:wxAbs,dy:1});
+  stack.push({y:wyAbs,left:wxAbs,right:wxAbs,dy:-1});
+  filled[wyAbs*W+wxAbs]=1;
+  const si=si0; fd[si]=fR;fd[si+1]=fG;fd[si+2]=fB;fd[si+3]=fA;
+  while(stack.length){
+    const {y,left,right,dy}=stack.pop();
+    const ny2=y+dy; if(ny2<0||ny2>=H) continue;
+    let x=left; while(x>0&&!filled[ny2*W+(x-1)]&&match((ny2*W+(x-1))*4)) x--;
+    let rx=right; while(rx<W-1&&!filled[ny2*W+(rx+1)]&&match((ny2*W+(rx+1))*4)) rx++;
+    let segStart=-1;
+    for(let sx=x;sx<=rx;sx++){
+      const idx=ny2*W+sx;
+      if(!filled[idx]&&match(idx*4)){
+        if(segStart===-1) segStart=sx;
+        filled[idx]=1;
+        const pi=idx*4; fd[pi]=fR;fd[pi+1]=fG;fd[pi+2]=fB;fd[pi+3]=fA;
+      } else if(segStart!==-1){
+        stack.push({y:ny2,left:segStart,right:sx-1,dy:dy});
+        stack.push({y:ny2,left:segStart,right:sx-1,dy:-dy});
+        segStart=-1;
+      }
+    }
+    if(segStart!==-1){ stack.push({y:ny2,left:segStart,right:rx,dy:dy}); stack.push({y:ny2,left:segStart,right:rx,dy:-dy}); }
+  }
+
+  // Escribir en el FillLayer
+  _edDrawPushHistory();
+  const _flPrevData = flTarget._ctx.getImageData(0, 0, W, H).data;
+  const _flResult = flTarget._ctx.createImageData(W, H);
+  const _rd = _flResult.data;
+  for(let i=0;i<W*H;i++){
+    const pi=i*4;
+    if(filled[i]){ _rd[pi]=fR;_rd[pi+1]=fG;_rd[pi+2]=fB;_rd[pi+3]=fA; }
+    else { _rd[pi]=_flPrevData[pi];_rd[pi+1]=_flPrevData[pi+1];_rd[pi+2]=_flPrevData[pi+2];_rd[pi+3]=_flPrevData[pi+3]; }
+  }
+  flTarget._ctx.putImageData(_flResult, 0, 0);
+  edPushHistory(); edRedraw();
+}
+
 function edFloodFill(nx, ny){
   const page = edPages[edCurrentPage]; if(!page) return;
+
+  // Si hay un StrokeLayer seleccionado con FillLayer vinculado (barra flotante),
+  // usar directamente el canvas del StrokeLayer como referencia y el FillLayer como destino
+  const _selLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if (_selLa && _selLa.type === 'stroke' && _selLa._fillLayerId &&
+      $('edDrawBar')?.classList.contains('visible')) {
+    const _flTarget = page.layers.find(l => l.type==='fill' && l._drawLayerId===_selLa._fillLayerId);
+    if (_flTarget) {
+      _edFloodFillOnLayer(_selLa._canvas, _flTarget, nx, ny,
+        0, 0, _selLa._canvas.width, _selLa._canvas.height,
+        true /* useStrokeAsRef */);
+      return;
+    }
+  }
+
   const dl = _edGetOrCreateDrawLayer();
   if(dl.locked && !($('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw')){ _edShowLockIconDraw(dl); return; }
   const canvas = dl._canvas, ctx = dl._ctx;
@@ -8001,12 +8467,10 @@ function edFloodFill(nx, ny){
   const wy = Math.round(edMarginY() + ny * edPageH());
   if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
 
-  const mx = Math.round(edMarginX()), my = Math.round(edMarginY());
-  const pw = Math.round(edPageW()),   ph = Math.round(edPageH());
-  const insidePage = wx >= mx && wx < mx+pw && wy >= my && wy < my+ph;
-  const x0 = insidePage ? mx : 0,      y0 = insidePage ? my : 0;
-  const x1 = insidePage ? mx+pw-1 : W-1, y1 = insidePage ? my+ph-1 : H-1;
-  const fw = x1-x0+1, fh = y1-y0+1;
+  // Trabajar siempre sobre el canvas completo para que el fill
+  // cruce la frontera lienzo/margen sin restricciones
+  const x0 = 0, y0 = 0;
+  const fw = W, fh = H;
 
   // Leer datos originales del DrawLayer
   const origImageData = ctx.getImageData(x0, y0, fw, fh);
@@ -8103,8 +8567,30 @@ function edFloodFill(nx, ny){
     }
   }
 
+  // Snapshot del estado actual antes del relleno (para deshacer en el panel)
   _edDrawPushHistory();
-  ctx.putImageData(resultImageData, x0, y0);
+  // Escribir el resultado en el FillLayer vinculado (no en el DrawLayer)
+  const _flFill = page.layers.find(l => l.type==='fill' && l._drawLayerId === dl._fillLayerId);
+  if (_flFill) {
+    // Combinar con el contenido existente del FillLayer (no borrarlo)
+    const _flResult = _flFill._ctx.createImageData(fw, fh);
+    const _flPrev   = _flFill._ctx.getImageData(x0, y0, fw, fh).data;
+    const _flRd     = _flResult.data;
+    for (let i=0; i<fw*fh; i++) {
+      const pi = i*4;
+      if (filled[i]) {
+        _flRd[pi]=fR; _flRd[pi+1]=fG; _flRd[pi+2]=fB; _flRd[pi+3]=fA;
+      } else {
+        _flRd[pi]=_flPrev[pi]; _flRd[pi+1]=_flPrev[pi+1];
+        _flRd[pi+2]=_flPrev[pi+2]; _flRd[pi+3]=_flPrev[pi+3];
+      }
+    }
+    _flFill._ctx.putImageData(_flResult, x0, y0);
+  } else {
+    // Fallback: escribir en DrawLayer (compatibilidad si no hay FillLayer)
+    _edDrawPushHistory();
+    ctx.putImageData(resultImageData, x0, y0);
+  }
   edRedraw();
 }
 
@@ -9803,14 +10289,21 @@ function _edFreezeAllDrawLayers(){
     const dl = page.layers[dlIdx];
     const bb = StrokeLayer._boundingBox(dl._canvas);
     if(!bb){
-      // DrawLayer vacío: eliminar sin congelar
-      page.layers.splice(dlIdx, 1);
+      // DrawLayer vacío: eliminar sin congelar (y su FillLayer)
+      const _flEmp2 = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
+      if(_flEmp2) page.layers.splice(page.layers.indexOf(_flEmp2), 1);
+      page.layers.splice(page.layers.indexOf(dl), 1);
       edLayers = page.layers;
       continue;
     }
     const sl = new StrokeLayer(dl._canvas);
     if(dl.locked) sl.locked = true;
     if(dl.groupId) sl.groupId = dl.groupId;
+    // Propagar vínculo con FillLayer
+    if(dl._uid) sl._uid = dl._uid;
+    if(dl._fillLayerId) sl._fillLayerId = dl._fillLayerId;
+    const _flAll = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
+    if(_flAll){ _flAll._drawLayerId = sl._uid || sl._fillLayerId; _flAll._baseX=sl.x; _flAll._baseY=sl.y; }
     // Sustituir DrawLayer por StrokeLayer en la misma posición
     page.layers.splice(dlIdx, 1, sl);
     edLayers = page.layers;
@@ -9829,8 +10322,10 @@ function _edFreezeDrawLayer(){
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){
-    // Dibujo vacío: eliminar el DrawLayer y registrar en historial global
-    page.layers.splice(dlIdx, 1);
+    // Dibujo vacío: eliminar DrawLayer y su FillLayer vinculado
+    const _flEmpty = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
+    if(_flEmpty) page.layers.splice(page.layers.indexOf(_flEmpty), 1);
+    page.layers.splice(page.layers.indexOf(dl), 1);
     edLayers = page.layers;
     edPushHistory();  // registrar eliminación en historial global
     return;
@@ -9838,13 +10333,20 @@ function _edFreezeDrawLayer(){
   const sl = new StrokeLayer(dl._canvas);
   if(dl.locked) sl.locked = true;
   if(dl.groupId) sl.groupId = dl.groupId;
+  // Propagar vínculo con FillLayer al nuevo StrokeLayer
+  if(dl._uid) sl._uid = dl._uid;
+  if(dl._fillLayerId) sl._fillLayerId = dl._fillLayerId;
+  // Actualizar _drawLayerId en el FillLayer vinculado
+  const _flFreeze = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
+  if(_flFreeze){
+    _flFreeze._drawLayerId = sl._uid || sl._fillLayerId;
+    _flFreeze._baseX = sl.x; _flFreeze._baseY = sl.y;
+  }
   // T9: Quitar el DrawLayer y reinsertar el StrokeLayer en la MISMA posición (preservar orden de capas)
   page.layers.splice(dlIdx, 1, sl);  // reemplaza en sitio
   edLayers = page.layers;
   edSelectedIdx = page.layers.indexOf(sl);
   // Registrar el resultado final (StrokeLayer) en el historial global.
-  // Este es el único punto donde el dibujo "se confirma" — los trazos
-  // intermedios solo viven en edDrawHistory (historial local del panel).
   edPushHistory(true); // force: el resultado del dibujo siempre se guarda
   edRedraw();
 }
@@ -10464,6 +10966,11 @@ function edRenderOptionsPanel(mode){
       const _dl = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
       if(!_dl) return;
       _dl.locked = !_dl.locked;
+      // Bloquear también el FillLayer vinculado
+      if(_dl._fillLayerId){
+        const _flLock=edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dl._fillLayerId);
+        if(_flLock) _flLock.locked=_dl.locked;
+      }
       edPushHistory();
       const _btn = $('op-draw-lock');
       if(_btn){
@@ -10478,6 +10985,12 @@ function edRenderOptionsPanel(mode){
     $('op-draw-del')?.addEventListener('click',()=>{
       edConfirm('¿Eliminar el dibujo?', ()=>{
         const page=edPages[edCurrentPage];if(!page)return;
+        const _dlDel=page.layers.find(l=>l.type==='draw');
+        // Eliminar FillLayer vinculado primero
+        if(_dlDel?._fillLayerId){
+          const _flDelIdx=page.layers.findIndex(l=>l.type==='fill'&&l._drawLayerId===_dlDel._fillLayerId);
+          if(_flDelIdx>=0) page.layers.splice(_flDelIdx,1);
+        }
         const dlIdx=page.layers.findIndex(l=>l.type==='draw');
         if(dlIdx>=0){page.layers.splice(dlIdx,1);edLayers=page.layers;}
         edActiveTool='select'; edCanvas.className='';
@@ -13404,6 +13917,14 @@ function edMergeSelected(){
 
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
+  if(l.type==='fill'){
+    const _f={type:'fill', dataUrl:l.toDataUrl()};
+    if(l._drawLayerId) _f._drawLayerId=l._drawLayerId;
+    if(l._uid) _f._uid=l._uid;
+    if(l.hidden) _f.hidden=true;
+    if(l._baseX !== null && l._baseX !== undefined) { _f._baseX=l._baseX; _f._baseY=l._baseY; }
+    return _f;
+  }
   if(l.type==='gif'){
     const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
     if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; if(l.hidden) _g.hidden=true; return _g;
@@ -13509,10 +14030,10 @@ function edSerLayer(l){
     return _bobj;
   }
   if(l.type==='group') return null; // obsoleto
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -13621,6 +14142,15 @@ function _edAnimIdbSave(key, frames) {
 function edDeserLayer(d, pageOrientation){
   if(!d) return null;
   if(d.type==='group') return null; // obsoleto
+  if(d.type==='fill'){
+    const _isV=(pageOrientation||'vertical')==='vertical';
+    const fl=FillLayer.fromDataUrl(d.dataUrl||'', _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W);
+    if(d._drawLayerId) fl._drawLayerId=d._drawLayerId;
+    if(d._uid) fl._uid=d._uid;
+    if(d.hidden) fl.hidden=true;
+    if(d._baseX !== undefined) { fl._baseX=d._baseX; fl._baseY=d._baseY; }
+    return fl;
+  }
   if(d.type==='draw'){
     const _isV = (pageOrientation||'vertical')==='vertical';
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
@@ -13629,6 +14159,8 @@ function edDeserLayer(d, pageOrientation){
     if(d.groupId) dl.groupId=d.groupId;
     if(d.locked) dl.locked=true;
     if(d.hidden) dl.hidden=true;
+    if(d._uid) dl._uid=d._uid;
+    if(d._fillLayerId) dl._fillLayerId=d._fillLayerId;
     return dl;
   }
   if(d.type==='stroke'){
@@ -13648,6 +14180,8 @@ function edDeserLayer(d, pageOrientation){
     if(d.groupId) sl.groupId = d.groupId;
     if(d.locked) sl.locked = true;
     if(d.hidden) sl.hidden = true;
+    if(d._uid) sl._uid = d._uid;
+    if(d._fillLayerId) sl._fillLayerId = d._fillLayerId;
     return sl;
   }
   if(d.type==='shape'){
@@ -14680,6 +15214,8 @@ function edUpdateViewer(){
     if(l.type==='text'||l.type==='bubble') return;
     if(l.type==='image'){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx, full); fctx.globalAlpha = 1;
+    } else if(l.type==='fill'){
+      fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx, page.layers); fctx.globalAlpha = 1;
     } else if(l.type==='draw'){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx); fctx.globalAlpha = 1;
     } else if(l.type==='stroke'){
@@ -16212,7 +16748,7 @@ function EditorView_init(){
     }
     // Ctrl+D → duplicar objeto seleccionado
     if(ctrl && e.key.toLowerCase() === 'd'){
-      e.preventDefault(); // evita "Añadir a favoritos" del navegador
+      e.preventDefault();
       if(edSelectedIdx >= 0) edDuplicateSelected();
       return;
     }
@@ -16233,27 +16769,54 @@ function EditorView_init(){
         const page = edPages[edCurrentPage]; if(!page) return;
         const layers = page.layers;
         const idx = edSelectedIdx;
+        // Helper: mover también el FillLayer vinculado junto a su capa
+        const _la = layers[idx];
+        const _flOrd = _la?._fillLayerId
+          ? layers.find(l=>l.type==='fill'&&l._drawLayerId===_la._fillLayerId)
+          : null;
         if(e.altKey){
           if(_goUp && idx < layers.length - 1){
             const [moved] = layers.splice(idx, 1);
             layers.push(moved);
-            edSelectedIdx = layers.length - 1;
+            // Mover FillLayer al final - 1 (debajo del DrawLayer)
+            if(_flOrd){
+              const _fi=layers.indexOf(_flOrd); if(_fi>=0) layers.splice(_fi,1);
+              layers.splice(layers.length-1,0,_flOrd);
+            }
+            edSelectedIdx = layers.indexOf(moved);
             edPushHistory(); edRedraw(); edToast('Al frente ⬆');
           } else if(_goDown && idx > 0){
             const [moved] = layers.splice(idx, 1);
             layers.unshift(moved);
-            edSelectedIdx = 0;
+            if(_flOrd){
+              const _fi=layers.indexOf(_flOrd); if(_fi>=0) layers.splice(_fi,1);
+              layers.splice(1,0,_flOrd);
+            }
+            edSelectedIdx = layers.indexOf(moved);
             edPushHistory(); edRedraw(); edToast('Al fondo ⬇');
           }
         } else {
           if(_goUp && idx < layers.length - 1){
-            [layers[idx], layers[idx+1]] = [layers[idx+1], layers[idx]];
-            edSelectedIdx = idx + 1;
-            edPushHistory(); edRedraw(); edToast('Capa subida ▲');
+            // Saltar el FillLayer de la capa destino si la hay
+            let target = idx + 1;
+            if(layers[target]?.type==='fill') target++;
+            if(target < layers.length){
+              const [moved] = layers.splice(idx, 1);
+              layers.splice(target, 0, moved);
+              if(_flOrd){ const _fi=layers.indexOf(_flOrd); if(_fi>=0){ layers.splice(_fi,1); layers.splice(layers.indexOf(moved),0,_flOrd); } }
+              edSelectedIdx = layers.indexOf(moved);
+              edPushHistory(); edRedraw(); edToast('Capa subida ▲');
+            }
           } else if(_goDown && idx > 0){
-            [layers[idx], layers[idx-1]] = [layers[idx-1], layers[idx]];
-            edSelectedIdx = idx - 1;
-            edPushHistory(); edRedraw(); edToast('Capa bajada ▼');
+            let target = idx - 1;
+            if(layers[target]?.type==='fill') target--;
+            if(target >= 0){
+              const [moved] = layers.splice(idx, 1);
+              layers.splice(target, 0, moved);
+              if(_flOrd){ const _fi=layers.indexOf(_flOrd); if(_fi>=0){ layers.splice(_fi,1); layers.splice(layers.indexOf(moved),0,_flOrd); } }
+              edSelectedIdx = layers.indexOf(moved);
+              edPushHistory(); edRedraw(); edToast('Capa bajada ▼');
+            }
           }
         }
       }
@@ -16267,7 +16830,17 @@ function EditorView_init(){
         // Guardar estado actual (con objetos) antes de borrar
         // Usamos el mismo patrón que edDeleteSelected
         const toDelete=[...edMultiSel].sort((a,b)=>b-a);
-        toDelete.forEach(i=>{ page.layers.splice(i,1); });
+        // Eliminar también los FillLayers vinculados
+        toDelete.forEach(i=>{
+          const _ld=page.layers[i];
+          if(_ld?._fillLayerId){
+            const _fdi=page.layers.findIndex(l=>l.type==='fill'&&l._drawLayerId===_ld._fillLayerId);
+            if(_fdi>=0) page.layers.splice(_fdi,1);
+          }
+        });
+        // Recalcular índices tras eliminar FillLayers
+        const toDelete2=[...edMultiSel.map(i=>page.layers.indexOf(edLayers[i])).filter(i=>i>=0)].sort((a,b)=>b-a);
+        toDelete2.forEach(i=>{ page.layers.splice(i,1); });
         edLayers=page.layers;
         _edDeactivateMultiSel();
         edSelectedIdx=-1;
@@ -16303,12 +16876,23 @@ function EditorView_init(){
           _edUpdateMultiSelPanel();
         } else if(edSelectedIdx >= 0){
           const _la = edLayers[edSelectedIdx];
-          if(_la && !_la.locked){ _la.x += _dx; _la.y += _dy; }
+          if(_la && !_la.locked){
+            _la.x += _dx; _la.y += _dy;
+            // FillLayer: offset automático en draw() via _baseX/_baseY
+          }
         }
         edRedraw();
-        // Empujar historial con debounce para no saturarlo con teclas mantenidas
         clearTimeout(window._edArrowKeyHistTimer);
-        window._edArrowKeyHistTimer = setTimeout(() => { edPushHistory(); }, 400);
+        window._edArrowKeyHistTimer = setTimeout(() => {
+          if(edSelectedIdx>=0){
+            const _laK=edLayers[edSelectedIdx];
+            if(_laK?._fillLayerId){
+              const _flK=edLayers.find(l=>l.type==='fill'&&l._drawLayerId===_laK._fillLayerId);
+              if(_flK) _flK.bakeAutoOffset();
+            }
+          }
+          edPushHistory();
+        }, 400);
         return;
       }
       // Si hay panel abierto o no hay selección, dejar caer al bloque de Shift+multiselección
@@ -16852,14 +17436,32 @@ function _bibThumb(la) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
 
+  // Buscar FillLayer vinculado para incluirlo en la miniatura
+  const _flThumb = la._fillLayerId
+    ? edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId)
+    : null;
   if (la.type === 'stroke' && la._canvas && la._canvas.width > 0) {
     const lw = la.width * pw, lh = la.height * ph;
     const scale = Math.min((S-pad*2)/Math.max(lw,1), (S-pad*2)/Math.max(lh,1));
     const dw=lw*scale, dh=lh*scale, dx=(S-dw)/2, dy=(S-dh)/2;
+    // El StrokeLayer bbox en px workspace: centro (la.x*pw+mx, la.y*ph+my)
+    const _sbx = Math.round(mx + (la.x - la.width/2) * pw);
+    const _sby = Math.round(my + (la.y - la.height/2) * ph);
+    // Dibujar FillLayer primero (debajo): recortar la misma zona del workspace
+    if (_flThumb && _flThumb._canvas) {
+      tc.drawImage(_flThumb._canvas,
+        Math.max(0,_sbx), Math.max(0,_sby),
+        Math.min(lw, _flThumb._canvas.width-Math.max(0,_sbx)),
+        Math.min(lh, _flThumb._canvas.height-Math.max(0,_sby)),
+        dx, dy, dw, dh);
+    }
     tc.drawImage(la._canvas, 0, 0, la._canvas.width, la._canvas.height, dx, dy, dw, dh);
   } else if (la.type === 'draw' && la._canvas) {
     const scale = Math.min((S-pad*2)/Math.max(pw,1), (S-pad*2)/Math.max(ph,1));
     const dw=pw*scale, dh=ph*scale, dx=(S-dw)/2, dy=(S-dh)/2;
+    if (_flThumb && _flThumb._canvas) {
+      tc.drawImage(_flThumb._canvas, mx, my, pw, ph, dx, dy, dw, dh);
+    }
     tc.drawImage(la._canvas, mx, my, pw, ph, dx, dy, dw, dh);
   } else if (la.type === 'shape' || la.type === 'line') {
     _lyDrawShapeThumb(thumb, la);
@@ -16944,11 +17546,16 @@ function edBibGuardar() {
       }).catch(() => edToast('Error al leer el GIF'));
       return;
     }
+    // Buscar FillLayer vinculado para guardarlo junto al objeto
+    const _flBib = la._fillLayerId
+      ? edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId)
+      : null;
     entry = {
       id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
       timestamp: Date.now(),
       isGroup:   false,
       layerData: edSerLayer(la),
+      fillLayerData: _flBib ? { dataUrl: _flBib.toDataUrlFull(), type:'fill', strokeX: la.x, strokeY: la.y } : null,
       thumb:     _bibThumb(la),
     };
   }
@@ -17401,8 +18008,28 @@ function _bibRenderPanel(panel) {
         // Objeto individual
         const newLayer = edDeserLayer(entry.layerData, edOrientation);
         if (!newLayer) { edToast('Error al insertar el objeto'); return; }
-        // Limpiar _fusionId para evitar fusión involuntaria con sesión vectorial activa
         delete newLayer._fusionId;
+        // Restaurar FillLayer vinculado si existe en el entry
+        if (entry.fillLayerData && entry.fillLayerData.dataUrl) {
+          const _fd = entry.fillLayerData;
+          const _nid = Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+          newLayer._uid = _nid; newLayer._fillLayerId = _nid;
+          const _flNew = new FillLayer();
+          _flNew._drawLayerId = _nid; _flNew._uid = 'fl_'+_nid;
+          const _fimg = new Image();
+          _fimg.onload = () => {
+            const pw=edPageW(), ph=edPageH();
+            const _dxPx = (newLayer.x - (_fd.strokeX ?? newLayer.x)) * pw;
+            const _dyPx = (newLayer.y - (_fd.strokeY ?? newLayer.y)) * ph;
+            _flNew._ctx.drawImage(_fimg, _dxPx, _dyPx, ED_CANVAS_W, ED_CANVAS_H);
+            _flNew._baseX = newLayer.x; _flNew._baseY = newLayer.y;
+            edRedraw();
+          };
+          _fimg.src = _fd.dataUrl;
+          edLayers.push(_flNew);
+        } else {
+          delete newLayer._fillLayerId; delete newLayer._uid;
+        }
         edLayers.push(newLayer);
       }
 
@@ -17817,6 +18444,9 @@ function _gcpDoSelectDrag(e, c) {
           if (p.corner === 'rotate') {
             edIsRotating = true;
             edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
+            window._edRotateInitRot = _la.rotation||0;
+            window._edRotateFillLayerId = _la._fillLayerId||null;
+            if(_la._fillLayerId) window._edFillInitPos={x:_la.x,y:_la.y,w:_la.width,h:_la.height,rot:_la.rotation||0};
             return;
           }
           edIsResizing = true; edResizeCorner = p.corner;
@@ -20256,6 +20886,74 @@ function gcpInsertFromBib(entry) {
     const la = edDeserLayer(entry.layerData, edOrientation);
     if (!la) return;
     delete la._fusionId;
+    // Si tiene FillLayer: fusionar ambos en un único StrokeLayer antes de insertar
+    if (entry.fillLayerData) {
+      // Fusionar FillLayer + StrokeLayer en una sola ImageLayer para el GCP
+      // fromDataUrlFull es async — esperar con onload antes de hacer el merge
+      const _doMergeGcp = (_flCanvas) => {
+        const pw=edPageW(),ph=edPageH(),mx=edMarginX(),my=edMarginY();
+        const extra=Math.round(Math.max(pw,ph)*0.5);
+        const wsW=pw+mx*2+extra*2, wsH=ph+my*2+extra*2;
+        const offX=extra, offY=extra;
+        const off=document.createElement('canvas');
+        off.width=wsW; off.height=wsH;
+        const octx=off.getContext('2d');
+        // 1. FillLayer debajo: el canvas fill está en coords workspace absolutas
+        // Hay que copiarlo al canvas tmp sin el transform del octx
+        if(_flCanvas) octx.drawImage(_flCanvas, offX, offY);
+        // 2. StrokeLayer encima: con transform (igual que _gcpVectorToImage)
+        octx.setTransform(1,0,0,1,offX,offY);
+        octx.globalAlpha=la.opacity??1; la.draw(octx); octx.globalAlpha=1;
+        octx.setTransform(1,0,0,1,0,0);
+        // Bbox
+        const d=octx.getImageData(0,0,wsW,wsH).data;
+        let x0=wsW,y0=wsH,x1=0,y1=0;
+        for(let y=0;y<wsH;y++) for(let x=0;x<wsW;x++){
+          if(d[(y*wsW+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+        }
+        if(x1<=x0||y1<=y0){x0=mx+offX;y0=my+offY;x1=x0+pw-1;y1=y0+ph-1;}
+        const pad=4;
+        x0=Math.max(0,x0-pad);y0=Math.max(0,y0-pad);
+        x1=Math.min(wsW-1,x1+pad);y1=Math.min(wsH-1,y1+pad);
+        const cw=x1-x0+1,ch=y1-y0+1;
+        const crop=document.createElement('canvas');
+        crop.width=cw;crop.height=ch;
+        crop.getContext('2d').drawImage(off,x0,y0,cw,ch,0,0,cw,ch);
+        const dataUrl=crop.toDataURL('image/png');
+        const normW=cw/pw,normH=ch/ph;
+        const scale=Math.max(normW/0.9,normH/0.9,1);
+        const img=new Image();
+        img.onload=()=>{
+          const imgLayer=new ImageLayer(img,la.x,la.y,normW/scale);
+          imgLayer.height=normH/scale;
+          imgLayer.rotation=la.rotation||0;
+          imgLayer.opacity=la.opacity??1;
+          imgLayer.src=dataUrl;
+          imgLayer._keepSize=true;
+          doInsert(imgLayer);
+        };
+        img.src=dataUrl;
+      };
+      // Cargar el fill (recortado al bbox del stroke) y posicionarlo en workspace
+      const _flSer = entry.fillLayerData;
+      const _flUrl2 = (_flSer && _flSer.dataUrl) ? _flSer.dataUrl : '';
+      if (!_flUrl2) { _doMergeGcp(null); } else {
+        const _fillImg = new Image();
+        _fillImg.onload = () => {
+          const _ftmp = document.createElement('canvas');
+          _ftmp.width = ED_CANVAS_W; _ftmp.height = ED_CANVAS_H;
+          const pw=edPageW(), ph=edPageH();
+          const _dxPx = (la.x - (_flSer.strokeX ?? la.x)) * pw;
+          const _dyPx = (la.y - (_flSer.strokeY ?? la.y)) * ph;
+          _ftmp.getContext('2d').drawImage(_fillImg, _dxPx, _dyPx, ED_CANVAS_W, ED_CANVAS_H);
+          _doMergeGcp(_ftmp);
+        };
+        _fillImg.onerror = () => { _doMergeGcp(null); };
+        _fillImg.src = _flUrl2;
+      }
+      return;
+    }
+    delete la._fillLayerId; delete la._uid;
     insertLayer(la);
   }
 }

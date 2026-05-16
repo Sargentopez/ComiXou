@@ -130,6 +130,29 @@ function _lyRender() {
   if (!list) return;
   list.innerHTML = '';
 
+  // Garantizar que cada DrawLayer tiene su FillLayer vinculado
+  const _lrPage = edPages?.[edCurrentPage];
+  if (_lrPage?.layers) {
+    _lrPage.layers.filter(l=>l.type==='draw'||l.type==='stroke').forEach(dl => {
+      if (dl._fillLayerId) return; // ya vinculado
+      // Buscar FillLayer huérfano o crear uno nuevo
+      let fl = _lrPage.layers.find(l => l.type==='fill' && !l._drawLayerId);
+      if (!fl) {
+        fl = new FillLayer();
+        const dlIdx = _lrPage.layers.indexOf(dl);
+        _lrPage.layers.splice(dlIdx, 0, fl);
+        if (typeof edLayers !== 'undefined') edLayers = _lrPage.layers;
+      }
+      const uid = 'dl_' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+      dl._uid = dl._uid || uid;
+      dl._fillLayerId = dl._uid;
+      fl._drawLayerId = dl._uid;
+      fl._uid = 'fl_' + dl._uid;
+    });
+    // Reasignar edLayers para asegurar que refleja los cambios del splice
+    if (typeof edLayers !== 'undefined') edLayers = _lrPage.layers;
+  }
+
   const page     = edPages[edCurrentPage];
   if(!page.textMode) page.textMode = 'immediate'; // fallback para proyectos antiguos
   const isSeq    = page.textMode === 'sequential';
@@ -210,7 +233,7 @@ function _lyRender() {
   // Combinar imágenes y dibujos (stroke/draw) en una sola lista
   const visualPairs = edLayers
     .map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='gif'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
+    .filter(({l})=>l.type==='image'||l.type==='gif'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line'||l.type==='fill');
 
   if (visualPairs.length === 0) {
     const e = document.createElement('p');
@@ -219,8 +242,22 @@ function _lyRender() {
     list.appendChild(e);
   } else {
     // El primero del array edLayers aparece el último en la lista (más abajo visualmente)
+    console.log('[LAYERS] visualPairs:', visualPairs.map(p=>p.l.type+':'+p.i));
     [...visualPairs].reverse().forEach(({l, i}) => {
-      list.appendChild(_lyBuildVisualItem(l, i, i === edSelectedIdx));
+      if (l.type === 'fill') return; // los FillLayer se renderizan como sub-fila del DrawLayer
+      const item = _lyBuildVisualItem(l, i, i === edSelectedIdx);
+      list.appendChild(item);
+      // Si este DrawLayer tiene un FillLayer vinculado, añadirlo como sub-fila
+      console.log('[LAYERS] layer:', l.type, '_fillLayerId:', l._fillLayerId);
+      // Sub-fila de relleno para DrawLayer Y StrokeLayer vinculados
+      if ((l.type === 'draw' || l.type === 'stroke') && l._fillLayerId) {
+        const flPair = edLayers.find(la => la.type==='fill' && la._drawLayerId===l._fillLayerId);
+        console.log('[LAYERS] flPair found:', !!flPair, flPair?._drawLayerId);
+        if (flPair) {
+          const flIdx = edLayers.indexOf(flPair);
+          list.appendChild(_lyBuildFillSubRow(flPair, flIdx));
+        }
+      }
     });
   }
 }
@@ -245,6 +282,79 @@ function _lyBuildEyeBtn(la) {
 /* ──────────────────────────────────────────
    FILA DE TEXTO/BOCADILLO
 ────────────────────────────────────────── */
+
+/* -- Sub-fila del FillLayer en el panel de capas -- */
+function _lyBuildFillSubRow(la, realIdx) {
+  const row = document.createElement('div');
+  row.className = 'ed-layer-item';
+  row.style.cssText = 'margin-left:18px;border-style:dashed;border-color:#93c5fd;opacity:'+(la.hidden?'0.45':'1')+';';
+  row.dataset.realIdx = realIdx;
+
+  // Miniatura
+  const thumb = document.createElement('canvas');
+  thumb.className = 'ed-layer-thumb';
+  thumb.width = 80; thumb.height = 60;
+  const tctx = thumb.getContext('2d');
+  tctx.fillStyle = '#f0f8ff';
+  tctx.fillRect(0, 0, 80, 60);
+  if (la._canvas && la._canvas.width > 0) {
+    const pw = (typeof edPageW==='function')?edPageW():800;
+    const ph = (typeof edPageH==='function')?edPageH():1100;
+    const mx = (typeof edMarginX==='function')?edMarginX():0;
+    const my = (typeof edMarginY==='function')?edMarginY():0;
+    tctx.drawImage(la._canvas, mx, my, pw, ph, 0, 0, 80, 60);
+  }
+  tctx.strokeStyle = '#93c5fd'; tctx.lineWidth = 2;
+  tctx.setLineDash([4,3]); tctx.strokeRect(1,1,78,58); tctx.setLineDash([]);
+  row.appendChild(thumb);
+
+  // Nombre
+  const info = document.createElement('div');
+  info.className = 'ed-layer-info';
+  const name = document.createElement('span');
+  name.className = 'ed-layer-name';
+  name.textContent = '🧪 Relleno';
+  info.appendChild(name); row.appendChild(info);
+
+  // Acciones: ojo + limpiar
+  const acts = document.createElement('div');
+  acts.className = 'ed-layer-actions';
+
+  // Ojo
+  const eyeBtn = document.createElement('button');
+  eyeBtn.className = 'ed-layer-del';
+  eyeBtn.textContent = '👁';
+  eyeBtn.style.opacity = la.hidden ? '0.4' : '';
+  eyeBtn.title = la.hidden ? 'Mostrar relleno' : 'Ocultar relleno';
+  eyeBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    la.hidden = !la.hidden;
+    edRedraw(); _lyRender();
+  });
+  acts.appendChild(eyeBtn);
+
+  // Eliminar relleno (igual que el ✕ del resto de capas)
+  const clrBtn = document.createElement('button');
+  clrBtn.className = 'ed-layer-del';
+  clrBtn.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
+  clrBtn.title = 'Eliminar relleno';
+  clrBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    edConfirm('¿Eliminar el relleno?', () => {
+      const _flIdx = edLayers.indexOf(la);
+      if (_flIdx >= 0) edLayers.splice(_flIdx, 1);
+      // Desconectar el vínculo en la capa de dibujo
+      const _pair = edLayers.find(l => l._fillLayerId && l._fillLayerId === la._drawLayerId);
+      if (_pair) { delete _pair._fillLayerId; delete _pair._uid; }
+      edPushHistory(); edRedraw(); _lyRender();
+    });
+  });
+  acts.appendChild(clrBtn);
+
+  row.appendChild(acts);
+  return row;
+}
+
 function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   const row = document.createElement('div');
   row.className = 'ed-layer-text-row' + (selected ? ' selected' : '') + (draggable ? ' draggable' : '');
@@ -323,6 +433,11 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
     edConfirm('¿Eliminar esta capa?', ()=>{
+      // Eliminar FillLayer vinculado si existe
+      if (la._fillLayerId) {
+        const _flDV=edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===la._fillLayerId);
+        if(_flDV>=0){ edLayers.splice(_flDV,1); if(_flDV<realIdx) realIdx--; }
+      }
       edLayers.splice(realIdx, 1);
       if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
       edPushHistory(); edRedraw(); _lyRender();
@@ -433,7 +548,14 @@ function _lyBuildVisualItem(la, realIdx, selected) {
       _lyReorderGroup(la.groupId, +1);
     } else {
       const next = visualAll[posInList + 1];
-      if (next) _lyReorderLayers(realIdx, next.i + 1);
+      if (next) {
+        // Si la capa destino tiene un FillLayer por debajo, insertar sobre el fill
+        const _nextFl = next.l._fillLayerId
+          ? edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===next.l._fillLayerId)
+          : -1;
+        const _dest = _nextFl >= 0 ? Math.max(next.i, _nextFl) + 1 : next.i + 1;
+        _lyReorderLayers(realIdx, _dest);
+      }
     }
   });
 
@@ -451,7 +573,14 @@ function _lyBuildVisualItem(la, realIdx, selected) {
       _lyReorderGroup(la.groupId, -1);
     } else {
       const prev = visualAll[posInList - 1];
-      if (prev) _lyReorderLayers(realIdx, prev.i);
+      if (prev) {
+        // Insertar debajo del pair fill+stroke anterior completo
+        const _prevFl = prev.l._fillLayerId
+          ? edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===prev.l._fillLayerId)
+          : -1;
+        const _dest = _prevFl >= 0 ? Math.min(prev.i, _prevFl) : prev.i;
+        _lyReorderLayers(realIdx, _dest);
+      }
     }
   });
 
@@ -918,10 +1047,25 @@ function _lyReorderTexts(fromRealIdx, toRealIdx) {
 function _lyReorderLayers(fromRealIdx, toRealIdx) {
   const _moved = edLayers[fromRealIdx];
   _lyAnimatedReorder(_moved, () => {
-    const moved = edLayers.splice(fromRealIdx, 1)[0];
-    const to = fromRealIdx < toRealIdx ? toRealIdx - 1 : toRealIdx;
-    edLayers.splice(to, 0, moved);
-    if (edSelectedIdx === fromRealIdx) edSelectedIdx = to;
+    // Si la capa tiene FillLayer vinculado, moverlos juntos
+    const _fl = _moved._fillLayerId
+      ? edLayers.find(l => l.type==='fill' && l._drawLayerId===_moved._fillLayerId)
+      : null;
+    const _flIdx = _fl ? edLayers.indexOf(_fl) : -1;
+    // Quitar ambas capas (de mayor a menor índice para no desplazar)
+    const _removeIdxs = [fromRealIdx, _flIdx].filter(i=>i>=0).sort((a,b)=>b-a);
+    _removeIdxs.forEach(i => edLayers.splice(i, 1));
+    // Calcular destino ajustado
+    const _removed = _removeIdxs.length;
+    const _toAdj = Math.max(0, toRealIdx - (fromRealIdx < toRealIdx ? _removed : 0));
+    // Reinsertar: FillLayer debajo del stroke (primero fill, luego stroke)
+    if (_fl) {
+      edLayers.splice(_toAdj, 0, _fl, _moved);
+      if (edSelectedIdx === fromRealIdx) edSelectedIdx = _toAdj + 1;
+    } else {
+      edLayers.splice(_toAdj, 0, _moved);
+      if (edSelectedIdx === fromRealIdx) edSelectedIdx = _toAdj;
+    }
     edPushHistory(); edRedraw();
   });
 }
