@@ -1582,6 +1582,40 @@ class BubbleLayer extends BaseLayer {
 /* ══════════════════════════════════════════
    CANVAS: TAMAÑO Y FIT
    ══════════════════════════════════════════ */
+
+// Adaptar dimensiones de un layerData de srcOrient a dstOrient
+function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
+  if (!ld || srcOrient === dstOrient) return ld;
+  if (!['image','gif','stroke','shape','line'].includes(ld.type)) return ld;
+  const srcIsV = srcOrient === 'vertical';
+  const dstIsV = dstOrient === 'vertical';
+  const pw_s = srcIsV ? ED_PAGE_W : ED_PAGE_H, ph_s = srcIsV ? ED_PAGE_H : ED_PAGE_W;
+  const pw_d = dstIsV ? ED_PAGE_W : ED_PAGE_H, ph_d = dstIsV ? ED_PAGE_H : ED_PAGE_W;
+  const a = Object.assign({}, ld);
+  if (a.width  != null) a.width  = Math.min(1, a.width  * pw_s / pw_d);
+  if (a.height != null) a.height = Math.min(1, a.height * ph_s / ph_d);
+  return a;
+}
+
+// Redimensionar todos los objetos de la página al cambiar orientación
+function _edAdaptPageToOrientation(page, prev, next) {
+  if (!page || !page.layers || prev === next) return;
+  const pv = prev === 'vertical', nv = next === 'vertical';
+  const pw_p = pv ? ED_PAGE_W : ED_PAGE_H, ph_p = pv ? ED_PAGE_H : ED_PAGE_W;
+  const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
+  const sw = pw_p / pw_n, sh = ph_p / ph_n;
+  page.layers.forEach(l => {
+    if (!l || !['image','gif','stroke','shape','line'].includes(l.type)) return;
+    if (l.width != null) l.width = Math.min(1, l.width * sw);
+    if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
+      l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
+      if (l.height > 1) { const s = 1/l.height; l.height = 1; l.width = Math.min(1, l.width*s); }
+    } else if (l.height != null) {
+      l.height = Math.min(1, l.height * sh);
+    }
+  });
+}
+
 function edSetOrientation(o, persist=true){
   const prevOrientation = edOrientation;
   edOrientation=o;
@@ -1589,14 +1623,7 @@ function edSetOrientation(o, persist=true){
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
   // Recalcular height de ImageLayers si la orientacion realmente cambio
   if(persist && prevOrientation !== o){
-    const _isV = o === 'vertical';
-    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
-    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-    (edPages[edCurrentPage]?.layers || []).forEach(l => {
-      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
-        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
-      }
-    });
+    _edAdaptPageToOrientation(edPages[edCurrentPage], prevOrientation, o);
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -17585,9 +17612,10 @@ function edBibGuardar() {
     // Miniatura: renderizar todas las capas del grupo juntas
     const thumb = _bibThumbGroup(idxs);
     entry = {
-      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp: Date.now(),
-      isGroup:   true,
+      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp:   Date.now(),
+      isGroup:     true,
+      orientation: edOrientation,
       layers,
       thumb,
     };
@@ -17603,7 +17631,7 @@ function edBibGuardar() {
         if (!gifDataUrl) { edToast('No se pudo cargar el GIF'); return; }
         const gifEntry = {
           id: Date.now() + '_gif', timestamp: Date.now(),
-          isGroup: false, isGifAnim: true,
+          isGroup: false, isGifAnim: true, orientation: edOrientation,
           gifDataUrl, layerData: null, thumb: gifThumb
         };
         const d2 = _bibLoad();
@@ -17618,10 +17646,11 @@ function edBibGuardar() {
       ? edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId)
       : null;
     entry = {
-      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp: Date.now(),
-      isGroup:   false,
-      layerData: edSerLayer(la),
+      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp:   Date.now(),
+      isGroup:     false,
+      orientation: edOrientation,
+      layerData:   edSerLayer(la),
       fillLayerData: _flBib ? { dataUrl: _flBib.toDataUrlFull(), type:'fill', strokeX: la.x, strokeY: la.y } : null,
       thumb:     _bibThumb(la),
     };
@@ -18058,10 +18087,11 @@ function _bibRenderPanel(panel) {
 
       if (entry.isGroup && Array.isArray(entry.layers)) {
         // Insertar grupo: deserializar cada capa con nuevo groupId común
+        const _eo1 = entry.orientation || edOrientation;
         const newGroupId = _edNewGroupId();
         let inserted = 0;
         entry.layers.forEach(ld => {
-          const la = edDeserLayer(ld, edOrientation);
+          const la = edDeserLayer(_edAdaptLayerOrientation(ld, _eo1, edOrientation), edOrientation);
           if (!la) return;
           // Asignar nuevo groupId (no reusar el del momento del guardado)
           la.groupId = newGroupId;
@@ -18073,7 +18103,8 @@ function _bibRenderPanel(panel) {
         if (!inserted) { edToast('Error al insertar el grupo'); return; }
       } else {
         // Objeto individual
-        const newLayer = edDeserLayer(entry.layerData, edOrientation);
+        const _eo1s = entry.orientation || edOrientation;
+        const newLayer = edDeserLayer(_edAdaptLayerOrientation(entry.layerData, _eo1s, edOrientation), edOrientation);
         if (!newLayer) { edToast('Error al insertar el objeto'); return; }
         delete newLayer._fusionId;
         // Restaurar FillLayer vinculado si existe en el entry
@@ -20940,17 +20971,18 @@ function gcpInsertFromBib(entry) {
     }
   };
 
+  const _eo2 = entry.orientation || edOrientation;
   if (entry.isGroup && Array.isArray(entry.layers)) {
     const newGroupId = _edNewGroupId();
     entry.layers.forEach(ld => {
-      const la = edDeserLayer(ld, edOrientation);
+      const la = edDeserLayer(_edAdaptLayerOrientation(ld, _eo2, edOrientation), edOrientation);
       if (!la) return;
       la.groupId = newGroupId;
       delete la._fusionId;
       insertLayer(la);
     });
   } else {
-    const la = edDeserLayer(entry.layerData, edOrientation);
+    const la = edDeserLayer(_edAdaptLayerOrientation(entry.layerData, _eo2, edOrientation), edOrientation);
     if (!la) return;
     delete la._fusionId;
     // Si tiene FillLayer: fusionar ambos en un único StrokeLayer antes de insertar
