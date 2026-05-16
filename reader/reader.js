@@ -1199,7 +1199,7 @@ async function preloadImages() {
       if (!src) return Promise.resolve(null);
       const needsImg = layer.renderDataUrl ||
         layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
-        layer.type === 'line' || layer.type === 'shape';
+        layer.type === 'line' || layer.type === 'shape' || layer.type === 'fill';
       if (!needsImg) return Promise.resolve(null);
       return new Promise(resolve => {
         const img = new Image();
@@ -1767,6 +1767,15 @@ function _render() {
       ctx.translate(_gx, _gy);
       if (_gr) ctx.rotate(_gr);
       ctx.drawImage(layer._gifOc, -_gw/2, -_gh/2, _gw, _gh);
+      ctx.restore();
+      return;
+    }
+    if (type === 'fill') {
+      const img = layerImgs[j];
+      if (!img) return;
+      ctx.save();
+      ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      ctx.drawImage(img, 0, 0, pw, ph);
       ctx.restore();
       return;
     }
