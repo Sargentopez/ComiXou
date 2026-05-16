@@ -1585,66 +1585,68 @@ class BubbleLayer extends BaseLayer {
 
 // Adaptar dimensiones de un layerData de srcOrient a dstOrient
 function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
-  if (!ld || srcOrient === dstOrient) return ld;
+  const _src = ld._orient || srcOrient;
+  if (!ld || _src === dstOrient) return ld;
   if (!['image','gif','stroke','shape','line'].includes(ld.type)) return ld;
-  const srcIsV = srcOrient === 'vertical';
-  const dstIsV = dstOrient === 'vertical';
-  const pw_s = srcIsV ? ED_PAGE_W : ED_PAGE_H, ph_s = srcIsV ? ED_PAGE_H : ED_PAGE_W;
-  const pw_d = dstIsV ? ED_PAGE_W : ED_PAGE_H, ph_d = dstIsV ? ED_PAGE_H : ED_PAGE_W;
+  const sv = _src === 'vertical', dv = dstOrient === 'vertical';
+  const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
+  const pw_d = dv ? ED_PAGE_W : ED_PAGE_H, ph_d = dv ? ED_PAGE_H : ED_PAGE_W;
+  const rw = pw_s / pw_d, rh = ph_s / ph_d;
   const a = Object.assign({}, ld);
-  const _rw = pw_s / pw_d, _rh = ph_s / ph_d;
-  if (a.width  != null) a.width  = Math.min(1, a.width  * _rw);
-  if (a.height != null) a.height = Math.min(1, a.height * _rh);
-  // LineLayer: escalar puntos locales
+  if (a.width  != null) a.width  = Math.min(1, a.width  * rw);
+  if (a.height != null) a.height = Math.min(1, a.height * rh);
   if (a.type === 'line' && Array.isArray(a.points)) {
-    a.points = a.points.map(p => p ? { x: p.x * _rw, y: p.y * _rh } : null);
-    if (Array.isArray(a.subPaths)) {
-      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * _rw, y: p.y * _rh } : null));
-    }
+    a.points = a.points.map(p => p ? { x: p.x * rw, y: p.y * rh } : null);
+    if (Array.isArray(a.subPaths))
+      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * rw, y: p.y * rh } : null));
   }
+  a._orient = dstOrient;
   return a;
 }
 
 // Redimensionar todos los objetos de la página al cambiar orientación
 function _edAdaptPageToOrientation(page, prev, next) {
   if (!page || !page.layers || prev === next) return;
-  const pv = prev === 'vertical', nv = next === 'vertical';
-  const pw_p = pv ? ED_PAGE_W : ED_PAGE_H, ph_p = pv ? ED_PAGE_H : ED_PAGE_W;
+  const nv = next === 'vertical';
   const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
-  const sw = pw_p / pw_n, sh = ph_p / ph_n;
-  // Márgenes de la zona de página en el workspace para ambas orientaciones
-  const mx_p = (ED_CANVAS_W - pw_p) / 2, my_p = (ED_CANVAS_H - ph_p) / 2;
   const mx_n = (ED_CANVAS_W - pw_n) / 2, my_n = (ED_CANVAS_H - ph_n) / 2;
+
   page.layers.forEach(l => {
-    // DrawLayer: reubicar su canvas al nuevo margen de página (igual que FillLayer)
-    if (l && l.type === 'draw' && l._canvas && l._ctx) {
+    if (!l) return;
+    const srcOrient = l._orient || prev;
+    const sv = srcOrient === 'vertical';
+    const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
+    const mx_s = (ED_CANVAS_W - pw_s) / 2, my_s = (ED_CANVAS_H - ph_s) / 2;
+    const sw = pw_s / pw_n, sh = ph_s / ph_n;
+
+    if (l.type === 'draw' && l._canvas && l._ctx) {
       const tmp = document.createElement('canvas');
       tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
-      // Recortar zona de página anterior y pegar en zona nueva — dimensiones iguales
-      // porque la página siempre mide pw_p×ph_p = pw_n×ph_n en píxeles totales (360×780)
-      tmp.getContext('2d').drawImage(l._canvas, mx_p, my_p, pw_p, ph_p, mx_n, my_n, pw_p, ph_p);
+      tmp.getContext('2d').drawImage(l._canvas, mx_s, my_s, pw_s, ph_s, mx_n, my_n, pw_s, ph_s);
       l._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
       l._ctx.drawImage(tmp, 0, 0);
-      return;
+      l._orient = next; return;
     }
-    if (!l || !['image','gif','stroke','shape','line'].includes(l.type)) return;
-    // StrokeLayer con FillLayer vinculado: el fill tiene contenido en coordenadas
-    // absolutas del workspace y no puede seguir el redimensionado → excluir ambos.
-    if (l.type === 'stroke' && l._fillLayerId) return;
-    if (l.width != null) l.width = Math.min(1, l.width * sw);
+
+    if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
+
+    if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
+
+    if (l.width  != null) l.width  = Math.min(1, l.width  * sw);
     if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
       l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
       if (l.height > 1) { const s = 1/l.height; l.height = 1; l.width = Math.min(1, l.width*s); }
     } else if (l.height != null) {
       l.height = Math.min(1, l.height * sh);
     }
-    // LineLayer: escalar puntos locales en proporción al cambio de dimensiones
+
     if (l.type === 'line' && Array.isArray(l.points)) {
       l.points = l.points.map(p => p ? { x: p.x * sw, y: p.y * sh } : null);
-      if (Array.isArray(l.subPaths)) {
+      if (Array.isArray(l.subPaths))
         l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * sw, y: p.y * sh } : null));
-      }
     }
+
+    l._orient = next;
   });
 }
 
@@ -2596,7 +2598,7 @@ function _edLayersSnapshot(){
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
-      cornerRadius: l.cornerRadius||0, locked:l.locked||false,
+      cornerRadius: l.cornerRadius||0, locked:l.locked||false, _orient:l._orient||null,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
@@ -14143,6 +14145,7 @@ function edSerLayer(l){
     if(l.groupId)_sobj.groupId=l.groupId;
     if(l.locked)_sobj.locked=true;
     if(l.hidden)_sobj.hidden=true;
+    if(l._orient)_sobj._orient=l._orient;
     // Si tiene cornerRadii con valores, generar bitmap fiel
     const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
     const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
