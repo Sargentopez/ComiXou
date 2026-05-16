@@ -1636,19 +1636,20 @@ function _edAdaptPageToOrientation(page, prev, next) {
 
 function edSetOrientation(o, persist=true){
   const prevOrientation = edOrientation;
-  edOrientation=o;
-  // Persistir en la hoja actual (no al inicializar el editor)
-  if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // Recalcular height de ImageLayers si la orientacion realmente cambio
+  // Bake del offset de FillLayers con la orientación ANTERIOR aún activa
+  // (bakeAutoOffset usa edPageW()/edPageH() — deben ser los valores viejos)
   if(persist && prevOrientation !== o){
-    // Bake del offset de todos los FillLayers ANTES de cambiar la orientación
-    // para que el canvas quede alineado con _pair.x/_pair.y actuales.
-    // Después del bake, _baseX === _pair.x → offset 0 con cualquier edPageW().
     (edPages[edCurrentPage]?.layers || []).forEach(l => {
       if (l && l.type === 'fill' && typeof l.bakeAutoOffset === 'function') {
         l.bakeAutoOffset();
       }
     });
+  }
+  edOrientation=o;
+  // Persistir en la hoja actual (no al inicializar el editor)
+  if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
+  // Recalcular dimensiones si la orientacion realmente cambio
+  if(persist && prevOrientation !== o){
     _edAdaptPageToOrientation(edPages[edCurrentPage], prevOrientation, o);
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
