@@ -437,34 +437,13 @@ function _pgRotatePage(idx) {
   const phNew = sv ? ED_PAGE_W : ED_PAGE_H;   // px alto  página destino
 
 
-  // Calcular delta de márgenes del workspace (canvas 1800×2340)
-  // Los canvases de draw/fill tienen píxeles en coordenadas absolutas del workspace.
-  // Al cambiar orientación, el centro de la página se mueve → hay que mover los píxeles.
-  const oldMx = (ED_CANVAS_W - pwOld) / 2;
-  const oldMy = (ED_CANVAS_H - phOld) / 2;
-  const newMx = (ED_CANVAS_W - pwNew) / 2;
-  const newMy = (ED_CANVAS_H - phNew) / 2;
-  const dxPx = newMx - oldMx;  // -210 vert→horiz, +210 horiz→vert
-  const dyPx = newMy - oldMy;  // +210 vert→horiz, -210 horiz→vert
-
   page.layers.forEach(la => {
     if (!la) return;
 
-    // draw/fill: mover los píxeles del canvas por el delta de márgenes
-    // para que el dibujo siga alineado con la nueva posición de la página en el workspace
-    if (la.type === 'draw' || la.type === 'fill') {
-      if (la._canvas && (dxPx || dyPx)) {
-        const tmp = document.createElement('canvas');
-        tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
-        tmp.getContext('2d').drawImage(la._canvas, dxPx, dyPx);
-        la._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
-        la._ctx.drawImage(tmp, 0, 0);
-      }
-      return;
-    }
+    // draw/fill: no tienen x/y/width/height significativos — skip
+    if (la.type === 'draw' || la.type === 'fill') return;
 
-    // Reposicionar el centro: misma operación que draw/fill pero en fracciones de página
-    // No hay rotación — solo reescalar la posición al nuevo sistema de coordenadas
+    // Reposicionar el centro: reescalar al nuevo sistema de coordenadas
     const w_px = (la.width  || 0) * pwOld;
     const h_px = (la.height || 0) * phOld;
     la.x = Math.max(0, Math.min(1, (la.x || 0.5) * pwOld / pwNew));
@@ -479,6 +458,12 @@ function _pgRotatePage(idx) {
       // StrokeLayer bitmap: preservar tamaño físico en px
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
+      // Sincronizar _baseX/_baseY del FillLayer vinculado con la nueva posición del stroke.
+      // Sin esto, FillLayer.draw() aplica un offset incorrecto = (newY - oldBaseY) * phNew.
+      if (la._fillLayerId) {
+        const _flSync = page.layers.find(l => l.type === 'fill' && l._drawLayerId === la._fillLayerId);
+        if (_flSync) { _flSync._baseX = la.x; _flSync._baseY = la.y; }
+      }
     } else if (la.type === 'line' && Array.isArray(la.points)) {
       // LineLayer: reescalar puntos al nuevo sistema sin rotar
       const scW = pwOld / pwNew, scH = phOld / phNew;
@@ -502,50 +487,6 @@ function _pgRotatePage(idx) {
 
   if (idx === edCurrentPage) {
     if (typeof edSetOrientation === 'function') edSetOrientation(newOrient, false);
-
-    // DIAGNÓSTICO: volcar estado de todos los fills tras mover píxeles
-    const _diagLines = [];
-    page.layers.forEach((la, i) => {
-      if (!la) return;
-      if (la.type === 'fill') {
-        const _pair = la._drawLayerId && (typeof edLayers !== 'undefined') &&
-          edLayers.find(l => l !== la && l._fillLayerId === la._drawLayerId);
-        const _ox = (_pair && la._baseX !== null && la._baseX !== undefined)
-          ? (_pair.x - la._baseX) * edPageW() : 0;
-        const _oy = (_pair && la._baseX !== null && la._baseX !== undefined)
-          ? (_pair.y - la._baseY) * edPageH() : 0;
-        _diagLines.push(
-          'FillLayer[' + i + '] _baseX=' + (la._baseX ?? 'null') +
-          ' _baseY=' + (la._baseY ?? 'null') +
-          ' pairType=' + (_pair ? _pair.type : 'NO_PAIR') +
-          ' pair.x=' + (_pair ? _pair.x : '?') +
-          ' pair.y=' + (_pair ? _pair.y : '?') +
-          ' ox=' + _ox.toFixed(1) + ' oy=' + _oy.toFixed(1) +
-          ' dxPx=' + dxPx + ' dyPx=' + dyPx
-        );
-      }
-      if (la.type === 'draw') {
-        _diagLines.push('DrawLayer[' + i + '] x=' + la.x + ' y=' + la.y + ' _fillLayerId=' + (la._fillLayerId || 'none'));
-      }
-    });
-    // Mostrar en panel de diagnóstico si existe, si no crear uno temporal
-    let _dp = document.getElementById('_pgDiagPanel');
-    if (!_dp) {
-      _dp = document.createElement('div');
-      _dp.id = '_pgDiagPanel';
-      _dp.style.cssText = 'position:fixed;top:60px;left:4px;right:4px;z-index:99999;background:#111;color:#0f0;font-size:11px;padding:8px;border-radius:8px;white-space:pre-wrap;max-height:40vh;overflow-y:auto;font-family:monospace';
-      const _cl = document.createElement('button');
-      _cl.textContent = '✕';
-      _cl.style.cssText = 'float:right;background:red;color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:13px';
-      _cl.onclick = () => _dp.remove();
-      _dp.appendChild(_cl);
-      document.body.appendChild(_dp);
-    }
-    const _ta = document.createElement('textarea');
-    _ta.style.cssText = 'width:100%;height:120px;background:#111;color:#0f0;font-size:11px;border:none;font-family:monospace;resize:vertical';
-    _ta.value = 'orient: ' + currentOrient + ' → ' + newOrient + '\ndxPx=' + dxPx + ' dyPx=' + dyPx + '\n' + _diagLines.join('\n');
-    _dp.appendChild(_ta);
-
     if (typeof edPushHistory === 'function') edPushHistory(true);
     if (typeof edFitCanvas === 'function') edFitCanvas(true);
     if (typeof edRedraw === 'function') edRedraw();
