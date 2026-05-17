@@ -1581,26 +1581,81 @@ class BubbleLayer extends BaseLayer {
 /* ══════════════════════════════════════════
    CANVAS: TAMAÑO Y FIT
    ══════════════════════════════════════════ */
+
+// ── Adaptar layerData plano de biblioteca de srcOrient a dstOrient ──
+function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
+  const src = ld._orient || srcOrient;
+  if (!ld || src === dstOrient) return ld;
+  if (!['image','gif','stroke','shape','line'].includes(ld.type)) return ld;
+  const sv = src === 'vertical', dv = dstOrient === 'vertical';
+  const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
+  const pw_d = dv ? ED_PAGE_W : ED_PAGE_H, ph_d = dv ? ED_PAGE_H : ED_PAGE_W;
+  const rw = pw_s / pw_d, rh = ph_s / ph_d;
+  const a = Object.assign({}, ld);
+  if (a.width  != null) a.width  = Math.min(1, a.width  * rw);
+  if (a.height != null) a.height = Math.min(1, a.height * rh);
+  if (a.type === 'line' && Array.isArray(a.points)) {
+    a.points = a.points.map(p => p ? { x: p.x * rw, y: p.y * rh } : null);
+    if (Array.isArray(a.subPaths))
+      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * rw, y: p.y * rh } : null));
+  }
+  a._orient = dstOrient;
+  return a;
+}
+
+// ── Adaptar todos los objetos del canvas al cambiar orientación ──
+function _edAdaptPageToOrientation(page, prev, next) {
+  if (!page || !page.layers || prev === next) return;
+  const nv = next === 'vertical';
+  const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
+  const mx_n = (ED_CANVAS_W - pw_n) / 2, my_n = (ED_CANVAS_H - ph_n) / 2;
+  page.layers.forEach(l => {
+    if (!l) return;
+    const src = l._orient || prev;
+    const sv = src === 'vertical';
+    const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
+    const mx_s = (ED_CANVAS_W - pw_s) / 2, my_s = (ED_CANVAS_H - ph_s) / 2;
+    const sw = pw_s / pw_n, sh = ph_s / ph_n;
+    // DrawLayer y FillLayer: misma operación — reubicar canvas de página vieja a nueva
+    if ((l.type === 'draw' || l.type === 'fill') && l._canvas && l._ctx) {
+      const tmp = document.createElement('canvas');
+      tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+      tmp.getContext('2d').drawImage(l._canvas, mx_s, my_s, pw_s, ph_s, mx_n, my_n, pw_s, ph_s);
+      l._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+      l._ctx.drawImage(tmp, 0, 0);
+      if (l.type === 'fill') {
+        const _pair = page.layers.find(x => x !== l && x._fillLayerId === l._drawLayerId);
+        if (_pair) { l._baseX = _pair.x; l._baseY = _pair.y; }
+      }
+      l._orient = next; return;
+    }
+    if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
+    if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
+    if (l.width != null) l.width = Math.min(1, l.width * sw);
+    if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
+      l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
+      if (l.height > 1) { const s = 1/l.height; l.height = 1; l.width = Math.min(1, l.width*s); }
+    } else if (l.height != null) {
+      l.height = Math.min(1, l.height * sh);
+    }
+    if (l.type === 'line' && Array.isArray(l.points)) {
+      l.points = l.points.map(p => p ? { x: p.x * sw, y: p.y * sh } : null);
+      if (Array.isArray(l.subPaths))
+        l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * sw, y: p.y * sh } : null));
+    }
+    l._orient = next;
+  });
+}
+
 function edSetOrientation(o, persist=true){
   const prevOrientation = edOrientation;
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // Al cambiar orientación con persist: aplicar solidariamente a TODAS las hojas de la obra
+  // Adaptar todos los objetos y guardar estado en historial
   if(persist && prevOrientation !== o){
-    const _isV = o === 'vertical';
-    const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
-    const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-    edPages.forEach((pg, _pgi) => {
-      // Cambiar orientación de cada hoja
-      pg.orientation = o;
-      // Recalcular height de ImageLayers en cada hoja para que se adapten al nuevo ratio
-      (pg.layers || []).forEach(l => {
-        if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
-          l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
-        }
-      });
-    });
+    _edAdaptPageToOrientation(edPages[edCurrentPage], prevOrientation, o);
+    edPushHistory(true);
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -2495,7 +2550,8 @@ function _edLayersSnapshot(){
       // Historial global: guardar canvas completo para no perder contenido fuera del lienzo
       return { type:'fill', dataUrl:l.toDataUrlFull(),
         _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
-        hidden: l.hidden||false, opacity: l.opacity, _isFull:true };
+        hidden: l.hidden||false, opacity: l.opacity, _isFull:true,
+        _orient:l._orient||null, _baseX:l._baseX, _baseY:l._baseY };
     }
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
@@ -2507,7 +2563,7 @@ function _edLayersSnapshot(){
         // DrawLayer sin contenido visible — incluir como stroke vacío para preservar el layer
         // (si se descarta con null, desaparece del historial y no puede recuperarse con redo)
         return { type: 'stroke', dataUrl: '', x: 0.5, y: 0.5, width: 0.01, height: 0.01,
-                 rotation: 0, opacity: l.opacity ?? 1, locked: l.locked || false };
+                 rotation: 0, opacity: l.opacity ?? 1, locked: l.locked || false, _orient: l._orient||null };
       }
       const _cx = (_bb.x + _bb.w/2 - edMarginX()) / _pw;
       const _cy = (_bb.y + _bb.h/2 - edMarginY()) / _ph;
@@ -2520,20 +2576,21 @@ function _edLayersSnapshot(){
       return { type: 'stroke', dataUrl: _tmp.toDataURL(),
         x: _cx, y: _cy, width: _fw, height: _fh,
         rotation: 0, opacity: l.opacity ?? 1,
-        locked: l.locked || false };
+        locked: l.locked || false, _orient: l._orient||null };
     }
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
-      x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
+      x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity, _orient:l._orient||null,
       color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false,
       _uid:l._uid||null, _fillLayerId:l._fillLayerId||null };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
-      cornerRadius: l.cornerRadius||0, locked:l.locked||false,
+      cornerRadius: l.cornerRadius||0, locked:l.locked||false, _orient:l._orient||null,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
+      _orient:l._orient||null,
       grouped: l.grouped||false,
       groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
@@ -2709,6 +2766,7 @@ function edApplyHistory(snapshot){
       if(o.hidden) fl.hidden = o.hidden;
       if(o.opacity !== undefined) fl.opacity = o.opacity;
       if(o._baseX !== undefined) { fl._baseX = o._baseX; fl._baseY = o._baseY; }
+      if(o._orient) fl._orient = o._orient;
       if(o.dataUrl) {
         imgPromises.push(new Promise(res => {
           const _fi = new Image();
@@ -4645,6 +4703,7 @@ function edAddImage(file){
       const w=0.7;
       // height calculado por el constructor como fraccion de pw (h = w*(natH/natW))
       const layer=new ImageLayer(img,0.5,0.5,w);
+      layer._orient = edOrientation;
       // Limitar: no superar 0.85*ph en pixeles → 0.85*(ph/pw) como fraccion de pw
       const maxH = 0.85;  // fraccion de ph
       if(layer.height > maxH){
@@ -4690,6 +4749,7 @@ function edAddGif(file, onLayerReady) {
     const gifSrc = ev.target.result;
     edToast('Procesando GIF…');
     const layer = new GifLayer(gifKey, 0.5, 0.5, 0.7);
+    layer._orient = edOrientation;
     layer.load(gifSrc, () => {
       if (layer._oc) {
         const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
@@ -4746,6 +4806,7 @@ window._gifIdbLoad = _gifIdbLoad;
 
 /* Insertar capa en la posición más alta, justo debajo de textos/bocadillos */
 function _edInsertLayerAbove(layer) {
+  if (layer && !layer._orient) layer._orient = edOrientation;
   // Insertar justo antes del DrawLayer activo (si existe) o antes del primer texto
   // Así el draw siempre queda en la capa más alta entre los no-textos
   const drawIdx = edLayers.findIndex(l => l.type==='draw');
@@ -13955,11 +14016,12 @@ function edSerLayer(l){
     if(l._uid) _f._uid=l._uid;
     if(l.hidden) _f.hidden=true;
     if(l._baseX !== null && l._baseX !== undefined) { _f._baseX=l._baseX; _f._baseY=l._baseY; }
+    if(l._orient) _f._orient=l._orient;
     return _f;
   }
   if(l.type==='gif'){
     const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
-    if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; if(l.hidden) _g.hidden=true; return _g;
+    if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; if(l.hidden) _g.hidden=true; if(l._orient) _g._orient=l._orient; return _g;
   }
   if(l.type==='image'){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
@@ -13976,6 +14038,7 @@ function edSerLayer(l){
     if(l._pngFramesKey) _r._pngFramesKey = l._pngFramesKey;
     if(l._apngIdbKey)   _r._apngIdbKey   = l._apngIdbKey;
     if(l._bibItemId)    _r._bibItemId    = l._bibItemId; // id del item en biblioteca para re-edición
+    if(l._orient)       _r._orient       = l._orient;
     // _apngSrc NO se serializa — es el dataUrl enorme, va al bucket por animKey
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
@@ -14065,7 +14128,7 @@ function edSerLayer(l){
   if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._orient)_o._orient=l._orient; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -14075,6 +14138,7 @@ function edSerLayer(l){
     if(l.groupId)_sobj.groupId=l.groupId;
     if(l.locked)_sobj.locked=true;
     if(l.hidden)_sobj.hidden=true;
+    if(l._orient)_sobj._orient=l._orient;
     // Si tiene cornerRadii con valores, generar bitmap fiel
     const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
     const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
@@ -14216,6 +14280,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.hidden) sl.hidden = true;
     if(d._uid) sl._uid = d._uid;
     if(d._fillLayerId) sl._fillLayerId = d._fillLayerId;
+    if(d._orient) sl._orient = d._orient;
     return sl;
   }
   if(d.type==='shape'){
@@ -14226,6 +14291,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.groupId) l.groupId=d.groupId;
     if(d.locked) l.locked=true;
     if(d.hidden) l.hidden=true;
+    if(d._orient) l._orient=d._orient;
     return l;
   }
   if(d.type==='line'){
@@ -17567,9 +17633,10 @@ function edBibGuardar() {
     // Miniatura: renderizar todas las capas del grupo juntas
     const thumb = _bibThumbGroup(idxs);
     entry = {
-      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp: Date.now(),
-      isGroup:   true,
+      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp:   Date.now(),
+      isGroup:     true,
+      orientation: edOrientation,
       layers,
       thumb,
     };
@@ -17585,7 +17652,7 @@ function edBibGuardar() {
         if (!gifDataUrl) { edToast('No se pudo cargar el GIF'); return; }
         const gifEntry = {
           id: Date.now() + '_gif', timestamp: Date.now(),
-          isGroup: false, isGifAnim: true,
+          isGroup: false, isGifAnim: true, orientation: edOrientation,
           gifDataUrl, layerData: null, thumb: gifThumb
         };
         const d2 = _bibLoad();
@@ -17600,10 +17667,11 @@ function edBibGuardar() {
       ? edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId)
       : null;
     entry = {
-      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp: Date.now(),
-      isGroup:   false,
-      layerData: edSerLayer(la),
+      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp:   Date.now(),
+      isGroup:     false,
+      orientation: edOrientation,
+      layerData:   edSerLayer(la),
       fillLayerData: _flBib ? { dataUrl: _flBib.toDataUrlFull(), type:'fill', strokeX: la.x, strokeY: la.y } : null,
       thumb:     _bibThumb(la),
     };
@@ -18043,7 +18111,9 @@ function _bibRenderPanel(panel) {
         const newGroupId = _edNewGroupId();
         let inserted = 0;
         entry.layers.forEach(ld => {
-          const la = edDeserLayer(ld, edOrientation);
+          const la = edDeserLayer(
+            _edAdaptLayerOrientation(ld, entry.orientation || edOrientation, edOrientation),
+            edOrientation);
           if (!la) return;
           // Asignar nuevo groupId (no reusar el del momento del guardado)
           la.groupId = newGroupId;
@@ -18055,7 +18125,9 @@ function _bibRenderPanel(panel) {
         if (!inserted) { edToast('Error al insertar el grupo'); return; }
       } else {
         // Objeto individual
-        const newLayer = edDeserLayer(entry.layerData, edOrientation);
+        const newLayer = edDeserLayer(
+          _edAdaptLayerOrientation(entry.layerData, entry.orientation || edOrientation, edOrientation),
+          edOrientation);
         if (!newLayer) { edToast('Error al insertar el objeto'); return; }
         delete newLayer._fusionId;
         // Restaurar FillLayer vinculado si existe en el entry
@@ -20925,14 +20997,18 @@ function gcpInsertFromBib(entry) {
   if (entry.isGroup && Array.isArray(entry.layers)) {
     const newGroupId = _edNewGroupId();
     entry.layers.forEach(ld => {
-      const la = edDeserLayer(ld, edOrientation);
+      const la = edDeserLayer(
+        _edAdaptLayerOrientation(ld, entry.orientation || edOrientation, edOrientation),
+        edOrientation);
       if (!la) return;
       la.groupId = newGroupId;
       delete la._fusionId;
       insertLayer(la);
     });
   } else {
-    const la = edDeserLayer(entry.layerData, edOrientation);
+    const la = edDeserLayer(
+      _edAdaptLayerOrientation(entry.layerData, entry.orientation || edOrientation, edOrientation),
+      edOrientation);
     if (!la) return;
     delete la._fusionId;
     // Si tiene FillLayer: fusionar ambos en un único StrokeLayer antes de insertar

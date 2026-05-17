@@ -376,6 +376,7 @@ const SupabaseClient = (() => {
               _isFull: l._isFull || false,
               _baseX: (l._baseX !== null && l._baseX !== undefined) ? l._baseX : undefined,
               _baseY: (l._baseY !== null && l._baseY !== undefined) ? l._baseY : undefined,
+              _orient: l._orient || null,
             };
             const _ld = JSON.stringify(_flData);
             layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });
