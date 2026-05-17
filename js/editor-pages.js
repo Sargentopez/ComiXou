@@ -483,6 +483,13 @@ function _pgRotatePage(idx) {
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
     }
+
+    // StrokeLayer con fill vinculado: actualizar _baseX/_baseY del fill
+    // para que el offset en FillLayer.draw() sea 0 con la nueva posición
+    if (la.type === 'stroke' && la._fillLayerId) {
+      const _fl = page.layers.find(x => x && x.type === 'fill' && x._drawLayerId === la._fillLayerId);
+      if (_fl) { _fl._baseX = la.x; _fl._baseY = la.y; }
+    }
   });
 
   page.orientation = newOrient;
