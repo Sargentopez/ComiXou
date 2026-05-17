@@ -419,7 +419,7 @@ function _pgOrientIcon(currentOrient) {
   }
 }
 
-// Cambia la orientación de una hoja sin alterar las proporciones de sus imágenes
+// Cambia la orientación de una hoja preservando el aspecto visual de todos los objetos
 function _pgRotatePage(idx) {
   const page = edPages[idx];
   if (!page) return;
@@ -427,56 +427,22 @@ function _pgRotatePage(idx) {
   const currentOrient = page.orientation || edOrientation;
   const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
 
-  // Ratio de escala entre el lienzo anterior y el nuevo
-  // Antes: pw × ph (ej. 360×780 vertical)
-  // Después: ph × pw (ej. 780×360 horizontal)
-  // Las coordenadas normalizadas (0-1) de cada capa son relativas al lienzo.
-  // Al cambiar de orientación el lienzo rota, pero los objetos deben
-  // mantener su tamaño físico (en mm/px reales), no su tamaño normalizado.
-  //
-  // Tamaño físico de un objeto: w_px = la.width * pw, h_px = la.height * ph
-  // En el nuevo lienzo (pw',ph') = (ph,pw):
-  //   la.width_new  = w_px / pw' = la.width * pw / ph
-  //   la.height_new = h_px / ph' = la.height * ph / pw
-  // La posición también se reescala igual.
-  const pwOld = currentOrient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-  const phOld = currentOrient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-  const pwNew = phOld;  // el nuevo ancho es la altura anterior
-  const phNew = pwOld;  // la nueva altura es el ancho anterior
-
-  const scaleW = pwOld / pwNew;  // = pwOld / phOld
-  const scaleH = phOld / phNew;  // = phOld / pwOld
-
-  page.layers.forEach(la => {
-    if (!la) return;
-    // Reescalar posición y dimensiones para preservar tamaño físico
-    la.x      = la.x      * scaleW;
-    la.y      = la.y      * scaleH;
-    la.width  = la.width  * scaleW;
-    la.height = la.height * scaleH;
-  });
-
-  // El drawData (dibujo libre) se descarta — no tiene forma trivial de rotar
-  // y el texto/imágenes ya se recolocan. Avisar al usuario.
-  const hadDraw = !!page.drawData;
-
-  // Guardar el historial ANTES de borrar drawData — así el undo puede recuperarlo
-  if (idx === edCurrentPage) {
-    if (typeof edPushHistory === 'function') edPushHistory();
+  // Usar _edAdaptPageToOrientation para adaptar todos los objetos correctamente
+  // (misma función que usa el botón de orientación del menú principal)
+  if (typeof _edAdaptPageToOrientation === 'function') {
+    _edAdaptPageToOrientation(page, currentOrient, newOrient);
   }
 
-  page.drawData = null;
   page.orientation = newOrient;
 
-  // Si es la hoja activa: edLoadPage sincroniza edOrientation, recalcula
-  // el height de las imágenes para la nueva orientación y redibuja —
-  // todo ocurre inmediatamente al clicar el icono, sin esperar a cerrar el panel.
   if (idx === edCurrentPage) {
-    if (typeof edLoadPage === 'function') edLoadPage(idx);
-    else if (typeof edFitCanvas === 'function') edFitCanvas(true);
+    // edSetOrientation con persist=false para no re-adaptar (ya adaptado arriba)
+    if (typeof edSetOrientation === 'function') edSetOrientation(newOrient, false);
+    if (typeof edPushHistory === 'function') edPushHistory(true);
+    if (typeof edFitCanvas === 'function') edFitCanvas(true);
+    if (typeof edRedraw === 'function') edRedraw();
   }
 
-  if (hadDraw) edToast('Orientación cambiada · el dibujo libre no se puede rotar y fue borrado');
-  else         edToast('Orientación cambiada');
+  edToast('Orientación cambiada');
   _pgRender();
 }
