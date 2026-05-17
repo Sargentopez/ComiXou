@@ -18043,26 +18043,43 @@ function _bibRenderPanel(panel) {
       }
 
       // Si el objeto se guardó en orientación diferente a la actual,
-      // convertir x,y,width,height preservando el tamaño físico en px.
-      // width_px = width*pwOrig → newWidth = width_px/pwDest = width*pwOrig/pwDest
+      // convertir coordenadas preservando el tamaño físico en px.
       const _entryOrig = entry.orientation || edOrientation;
       const _needsOrientConv = _entryOrig !== edOrientation;
       const _pwO = _entryOrig === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
       const _phO = _entryOrig === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
       const _pwD = edPageW(), _phD = edPageH();
+      const _mxO = (ED_CANVAS_W - _pwO) / 2, _myO = (ED_CANVAS_H - _phO) / 2;
+      const _mxD = (ED_CANVAS_W - _pwD) / 2, _myD = (ED_CANVAS_H - _phD) / 2;
+      // Convierte una coordenada x (fracción de página origen) a fracción de página destino
+      function _convX(x) { return (_mxO + x * _pwO - _mxD) / _pwD; }
+      function _convY(y) { return (_myO + y * _phO - _myD) / _phD; }
       function _adaptLayerOrientation(la) {
         if (!la || !_needsOrientConv) return;
-        if (la.type === 'fill' || la.type === 'draw') return; // píxeles, no fracciones
-        // Convertir tamaño físico preservado en px a fracciones de la página destino
+        if (la.type === 'fill' || la.type === 'draw') return; // canvas de píxeles — se trata aparte
+        // Convertir tamaño físico (px) a fracciones de página destino
         if (la.width  != null) la.width  = la.width  * _pwO / _pwD;
         if (la.height != null) la.height = la.height * _phO / _phD;
-        // Posición: preservar px absoluto en workspace
-        if (la.x != null) la.x = (((ED_CANVAS_W - _pwO) / 2) + la.x * _pwO - ((ED_CANVAS_W - _pwD) / 2)) / _pwD;
-        if (la.y != null) la.y = (((ED_CANVAS_H - _phO) / 2) + la.y * _phO - ((ED_CANVAS_H - _phD) / 2)) / _phD;
-        // Clamp x,y a [0,1] para tipos que deben estar dentro de la página
+        // Convertir posición
+        if (la.x != null) la.x = _convX(la.x);
+        if (la.y != null) la.y = _convY(la.y);
+        // Clamp para tipos que deben estar dentro de la página (no stroke)
         if (la.type !== 'stroke') {
           if (la.x != null) la.x = Math.max(0, Math.min(1, la.x));
           if (la.y != null) la.y = Math.max(0, Math.min(1, la.y));
+        }
+        // LineLayer: convertir cada punto del path
+        if (la.type === 'line' && Array.isArray(la.points)) {
+          const _cvPt = p => {
+            if (!p) return p;
+            const np = { ...p, x: _convX(p.x), y: _convY(p.y) };
+            if (p.cp1) np.cp1 = { x: _convX(p.cp1.x), y: _convY(p.cp1.y) };
+            if (p.cp2) np.cp2 = { x: _convX(p.cp2.x), y: _convY(p.cp2.y) };
+            return np;
+          };
+          la.points = la.points.map(_cvPt);
+          if (Array.isArray(la.subPaths))
+            la.subPaths = la.subPaths.map(sp => sp.map(_cvPt));
         }
       }
 
@@ -18097,13 +18114,12 @@ function _bibRenderPanel(panel) {
           _flNew._drawLayerId = _nid; _flNew._uid = 'fl_'+_nid;
           const _fimg = new Image();
           _fimg.onload = () => {
-            const pw=edPageW(), ph=edPageH();
-            const mx=edMarginX(), my=edMarginY();
-            // El fill se guardó como zona de página (toDataUrl).
-            // Restaurarlo en los márgenes de la orientación DESTINO actual,
-            // independientemente de la orientación en que se guardó.
+            // El fill se guardó con toDataUrl() — zona de página en orientación origen (pwO×phO).
+            // Pegarlo SIN escalar en los márgenes de la orientación destino.
+            // Mismo sistema que _reframeFill en _pgRotatePage: preserva tamaño físico en px.
             _flNew._ctx.drawImage(_fimg, 0, 0, _fimg.naturalWidth, _fimg.naturalHeight,
-              mx, my, pw, ph);
+              _mxD, _myD, _fimg.naturalWidth, _fimg.naturalHeight);
+            // _baseX/_baseY = posición del stroke en destino → offset en draw() = 0
             _flNew._baseX = newLayer.x; _flNew._baseY = newLayer.y;
             edRedraw();
           };
