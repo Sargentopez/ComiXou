@@ -14441,6 +14441,10 @@ async function edLoadProject(id){
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
   if(!comic)return;
   edProjectId=id;
+  // Resetar caché de biblioteca para forzar recarga con la clave correcta del proyecto
+  // (evita que al navegar entre obras en la SPA se muestre la biblioteca de la obra anterior)
+  _bibCache = null;
+  _bibInitIdb();
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
