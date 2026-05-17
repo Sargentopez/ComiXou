@@ -435,9 +435,29 @@ function _pgRotatePage(idx) {
   const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;
   const phNew = sv ? ED_PAGE_W : ED_PAGE_H;
 
-  // Reescalar dimensiones. draw/fill no se tocan — sus canvases son workspace absoluto.
+  // Calcular desplazamiento de márgenes del workspace
+  const ED_CW = 1800, ED_CH = 2340;
+  const mxOld = (ED_CW - pwOld) / 2, myOld = (ED_CH - phOld) / 2;
+  const mxNew = (ED_CW - pwNew) / 2, myNew = (ED_CH - phNew) / 2;
+  const dxM = mxNew - mxOld, dyM = myNew - myOld;
+
   page.layers.forEach(la => {
-    if (!la || la.type === 'draw' || la.type === 'fill') return;
+    if (!la) return;
+
+    // draw y fill: mover JUNTOS con el mismo desplazamiento de márgenes.
+    // Son inseparables — mismo sistema de coordenadas, misma operación.
+    if ((la.type === 'draw' || la.type === 'fill') && la._canvas && la._ctx) {
+      const tmp = document.createElement('canvas');
+      tmp.width = ED_CW; tmp.height = ED_CH;
+      tmp.getContext('2d').drawImage(la._canvas, dxM, dyM);
+      la._ctx.clearRect(0, 0, ED_CW, ED_CH);
+      la._ctx.drawImage(tmp, 0, 0);
+      // Actualizar _baseX/_baseY del fill para que el offset sea 0
+      if (la.type === 'fill') { la._baseX = la._baseX; la._baseY = la._baseY; } // sin cambio
+      return;
+    }
+
+    // Resto: reescalar dimensiones
     const w_px = (la.width  || 0) * pwOld;
     const h_px = (la.height || 0) * phOld;
     if (la.type === 'image' && la.img && la.img.naturalWidth > 0) {
@@ -463,13 +483,6 @@ function _pgRotatePage(idx) {
 
   if (idx === edCurrentPage) {
     if (typeof edSetOrientation === 'function') edSetOrientation(newOrient, false);
-    // bakeAutoOffset alinea cada FillLayer con su stroke vinculado.
-    // Debe llamarse DESPUÉS de edSetOrientation (necesita edPageW/H correctos).
-    page.layers.forEach(la => {
-      if (la && la.type === 'fill' && typeof la.bakeAutoOffset === 'function') {
-        la.bakeAutoOffset();
-      }
-    });
     if (typeof edPushHistory === 'function') edPushHistory(true);
     if (typeof edFitCanvas === 'function') edFitCanvas(true);
     if (typeof edRedraw === 'function') edRedraw();
