@@ -502,6 +502,50 @@ function _pgRotatePage(idx) {
 
   if (idx === edCurrentPage) {
     if (typeof edSetOrientation === 'function') edSetOrientation(newOrient, false);
+
+    // DIAGNÓSTICO: volcar estado de todos los fills tras mover píxeles
+    const _diagLines = [];
+    page.layers.forEach((la, i) => {
+      if (!la) return;
+      if (la.type === 'fill') {
+        const _pair = la._drawLayerId && (typeof edLayers !== 'undefined') &&
+          edLayers.find(l => l !== la && l._fillLayerId === la._drawLayerId);
+        const _ox = (_pair && la._baseX !== null && la._baseX !== undefined)
+          ? (_pair.x - la._baseX) * edPageW() : 0;
+        const _oy = (_pair && la._baseX !== null && la._baseX !== undefined)
+          ? (_pair.y - la._baseY) * edPageH() : 0;
+        _diagLines.push(
+          'FillLayer[' + i + '] _baseX=' + (la._baseX ?? 'null') +
+          ' _baseY=' + (la._baseY ?? 'null') +
+          ' pairType=' + (_pair ? _pair.type : 'NO_PAIR') +
+          ' pair.x=' + (_pair ? _pair.x : '?') +
+          ' pair.y=' + (_pair ? _pair.y : '?') +
+          ' ox=' + _ox.toFixed(1) + ' oy=' + _oy.toFixed(1) +
+          ' dxPx=' + dxPx + ' dyPx=' + dyPx
+        );
+      }
+      if (la.type === 'draw') {
+        _diagLines.push('DrawLayer[' + i + '] x=' + la.x + ' y=' + la.y + ' _fillLayerId=' + (la._fillLayerId || 'none'));
+      }
+    });
+    // Mostrar en panel de diagnóstico si existe, si no crear uno temporal
+    let _dp = document.getElementById('_pgDiagPanel');
+    if (!_dp) {
+      _dp = document.createElement('div');
+      _dp.id = '_pgDiagPanel';
+      _dp.style.cssText = 'position:fixed;top:60px;left:4px;right:4px;z-index:99999;background:#111;color:#0f0;font-size:11px;padding:8px;border-radius:8px;white-space:pre-wrap;max-height:40vh;overflow-y:auto;font-family:monospace';
+      const _cl = document.createElement('button');
+      _cl.textContent = '✕';
+      _cl.style.cssText = 'float:right;background:red;color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:13px';
+      _cl.onclick = () => _dp.remove();
+      _dp.appendChild(_cl);
+      document.body.appendChild(_dp);
+    }
+    const _ta = document.createElement('textarea');
+    _ta.style.cssText = 'width:100%;height:120px;background:#111;color:#0f0;font-size:11px;border:none;font-family:monospace;resize:vertical';
+    _ta.value = 'orient: ' + currentOrient + ' → ' + newOrient + '\ndxPx=' + dxPx + ' dyPx=' + dyPx + '\n' + _diagLines.join('\n');
+    _dp.appendChild(_ta);
+
     if (typeof edPushHistory === 'function') edPushHistory(true);
     if (typeof edFitCanvas === 'function') edFitCanvas(true);
     if (typeof edRedraw === 'function') edRedraw();
