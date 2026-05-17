@@ -435,36 +435,24 @@ function _pgRotatePage(idx) {
   const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;
   const phNew = sv ? ED_PAGE_W : ED_PAGE_H;
 
-  // Desplazamiento de márgenes del workspace: igual para draw y fill
-  // porque ambos usan coordenadas absolutas de workspace
-  const ED_CW = 1800, ED_CH = 2340;
-  const mxOld = (ED_CW - pwOld) / 2, myOld = (ED_CH - phOld) / 2;
-  const mxNew = (ED_CW - pwNew) / 2, myNew = (ED_CH - phNew) / 2;
-  const dxM = mxNew - mxOld, dyM = myNew - myOld;
-
+  // Reescalar objetos al nuevo sistema de coordenadas.
+  // draw y fill NO se tocan: sus canvases tienen coordenadas absolutas de workspace.
+  // El FillLayer.draw() usa offset (_pair.x - _baseX)*edPageW() para alinearse al stroke.
+  // Al reescalar el stroke, guardamos x_antes como _baseX del fill, así el offset
+  // compensa exactamente el cambio de posición del stroke en el workspace.
   page.layers.forEach(la => {
     if (!la) return;
+    if (la.type === 'draw' || la.type === 'fill') return;
 
-    // draw y fill: mover su canvas con el desplazamiento de márgenes
-    // así el contenido sigue alineado con la zona de página
-    if ((la.type === 'draw' || la.type === 'fill') && la._canvas && la._ctx) {
-      const tmp = document.createElement('canvas');
-      tmp.width = ED_CW; tmp.height = ED_CH;
-      tmp.getContext('2d').drawImage(la._canvas, dxM, dyM);
-      la._ctx.clearRect(0, 0, ED_CW, ED_CH);
-      la._ctx.drawImage(tmp, 0, 0);
-      if (la.type === 'fill') {
-        const _pair = page.layers.find(x => x && x !== la && x._fillLayerId === la._drawLayerId);
-        if (_pair) { la._baseX = _pair.x; la._baseY = _pair.y; }
-      }
-      return;
-    }
+    // Guardar x,y antes de reescalar — necesario para actualizar _baseX del fill
+    const xBefore = la.x || 0.5;
+    const yBefore = la.y || 0.5;
 
-    // Resto de objetos: reescalar posición y dimensiones
     const w_px = (la.width  || 0) * pwOld;
     const h_px = (la.height || 0) * phOld;
-    la.x = Math.max(0, Math.min(1, (la.x || 0.5) * pwOld / pwNew));
-    la.y = Math.max(0, Math.min(1, (la.y || 0.5) * phOld / phNew));
+    // Mantener posición relativa en la nueva página (misma fracción 0-1)
+    la.x = xBefore;
+    la.y = yBefore;
 
     if (la.type === 'image' && la.img && la.img.naturalWidth > 0) {
       la.width  = Math.min(1, w_px / pwNew);
@@ -484,10 +472,15 @@ function _pgRotatePage(idx) {
       la.height = Math.min(1, h_px / phNew);
     }
 
-    // StrokeLayer con fill vinculado: actualizar _baseX/_baseY del fill
-    // para que el offset en FillLayer.draw() sea 0 con la nueva posición
-    if (la.type === 'stroke' && la._fillLayerId) {
-      const _fl = page.layers.find(x => x && x.type === 'fill' && x._drawLayerId === la._fillLayerId);
+    // StrokeLayer con fill vinculado:
+    // El fill tiene su canvas pintado donde estaba el stroke (xBefore, yBefore).
+    // Ponemos _baseX = xBefore para que el offset del fill sea:
+    //   (la.x_nuevo - xBefore) * edPageW()
+    // Ese offset desplaza el canvas del fill exactamente donde está el stroke ahora.
+    // El fill vinculado: _baseX = la.x (que no cambió), offset = 0
+    if (la._fillLayerId) {
+      const _fl = page.layers.find(x => x && x.type === 'fill' &&
+        (x._drawLayerId === la._fillLayerId || x._drawLayerId === la._uid));
       if (_fl) { _fl._baseX = la.x; _fl._baseY = la.y; }
     }
   });
