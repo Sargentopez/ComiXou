@@ -8276,6 +8276,7 @@ function _edShapeApplyHistory(snapshot){
   if(d.opacity      !== undefined) la.opacity     = d.opacity;
   if(d.rotation     !== undefined) la.rotation    = d.rotation;
   if(d.x            !== undefined){ la.x=d.x; la.y=d.y; la.width=d.width; la.height=d.height; }
+  if(d._orient) la._orient=d._orient;
   if(d.shape        !== undefined) la.shape       = d.shape;
   if(d.points       !== undefined) la.points      = d.points.slice();
   // T1: restaurar _fusionId para que el historial vectorial sea coherente
