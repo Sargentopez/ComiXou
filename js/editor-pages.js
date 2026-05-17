@@ -436,27 +436,10 @@ function _pgRotatePage(idx) {
   const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;
   const phNew = sv ? ED_PAGE_W : ED_PAGE_H;
 
-  // Márgenes en el workspace antes y después del cambio
-  const mxOld = (ED_CANVAS_W - pwOld) / 2;
-  const myOld = (ED_CANVAS_H - phOld) / 2;
-  const mxNew = (ED_CANVAS_W - pwNew) / 2;
-  const myNew = (ED_CANVAS_H - phNew) / 2;
-
-  // Reencuadrar el canvas de un FillLayer sin escalar ni acumular:
-  // copia la zona de página antigua (mxOld,myOld,pwOld,phOld) a la zona nueva (mxNew,myNew).
-  // El offset interno de cada píxel dentro de la página se preserva exactamente,
-  // lo que garantiza alineación perfecta con el StrokeLayer (que también preserva
-  // su tamaño físico en px). Sin acumulado: la segunda rotación deshace la primera.
-  function _reframeFill(fl) {
-    if (!fl._canvas) return;
-    const tmp = document.createElement('canvas');
-    tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
-    tmp.getContext('2d').drawImage(fl._canvas,
-      mxOld, myOld, pwOld, phOld,  // fuente: zona de página en orientación vieja
-      mxNew, myNew, pwOld, phOld); // destino: zona nueva, mismo tamaño sin escalar
-    fl._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
-    fl._ctx.drawImage(tmp, 0, 0);
-  }
+  // Delta de márgenes: constante para esta rotación, se invierte en la siguiente.
+  // Es el único desplazamiento necesario para que el fill siga al stroke.
+  const dxPx = (ED_CANVAS_W - pwNew) / 2 - (ED_CANVAS_W - pwOld) / 2;
+  const dyPx = (ED_CANVAS_H - phNew) / 2 - (ED_CANVAS_H - phOld) / 2;
 
   page.layers.forEach(la => {
     if (!la) return;
@@ -464,31 +447,36 @@ function _pgRotatePage(idx) {
     // draw: no tiene x/y/width/height significativos — skip
     if (la.type === 'draw') return;
 
-    // FillLayer: reencuadrar sin escalar ni acumular
+    // FillLayer: mover píxeles por el delta de márgenes para seguir al stroke.
+    // dxPx/dyPx es constante (±210px) y se invierte en cada rotación → sin acumulado.
     if (la.type === 'fill') {
-      _reframeFill(la);
+      if (la._canvas && (dxPx || dyPx)) {
+        const _tmp = document.createElement('canvas');
+        _tmp.width = ED_CANVAS_W; _tmp.height = ED_CANVAS_H;
+        _tmp.getContext('2d').drawImage(la._canvas, dxPx, dyPx);
+        la._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+        la._ctx.drawImage(_tmp, 0, 0);
+      }
       return;
     }
 
-    // Reposicionar el centro: x*pwOld/pwNew preserva la posición relativa dentro de la página.
-    // El StrokeLayer preserva su tamaño físico en px, igual que _reframeFill para el fill,
-    // garantizando alineación exacta entre ambos.
+    // Reposicionar: x*pwOld/pwNew preserva posición relativa dentro de la página.
+    // SIN clamp a [0,1]: un objeto puede quedar parcialmente fuera al cambiar proporción,
+    // igual que en cualquier editor. El clamp rompía la simetría vert↔horiz↔vert.
     const w_px = (la.width  || 0) * pwOld;
     const h_px = (la.height || 0) * phOld;
-    la.x = Math.max(0, Math.min(1, (la.x || 0.5) * pwOld / pwNew));
-    la.y = Math.max(0, Math.min(1, (la.y || 0.5) * phOld / phNew));
+    la.x = (la.x || 0.5) * pwOld / pwNew;
+    la.y = (la.y || 0.5) * phOld / phNew;
 
     if (la.type === 'image' && la.img && la.img.naturalWidth > 0) {
-      // Imagen: mantener ratio de aspecto natural
       la.width  = Math.min(1, w_px / pwNew);
       la.height = la.width * (la.img.naturalHeight / la.img.naturalWidth) * (pwNew / phNew);
       if (la.height > 1) { const s = 1 / la.height; la.height = 1; la.width = Math.min(1, la.width * s); }
     } else if (la.type === 'stroke' && la._canvas) {
-      // StrokeLayer bitmap: preservar tamaño físico en px
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
-      // Sincronizar _baseX/_baseY del fill con la nueva x/y del stroke.
-      // Los píxeles ya fueron reencuadrados por _reframeFill → offset en draw() = 0.
+      // Sincronizar _baseX/_baseY del fill: píxeles ya movidos por dxPx/dyPx,
+      // stroke en nueva x/y → offset en FillLayer.draw() = 0.
       if (la._fillLayerId) {
         const _flSync = page.layers.find(l => l.type === 'fill' && l._drawLayerId === la._fillLayerId);
         if (_flSync) { _flSync._baseX = la.x; _flSync._baseY = la.y; }
