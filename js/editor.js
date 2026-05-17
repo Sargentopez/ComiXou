@@ -1586,15 +1586,20 @@ function edSetOrientation(o, persist=true){
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // Recalcular height de ImageLayers si la orientacion realmente cambio
+  // Al cambiar orientación con persist: aplicar solidariamente a TODAS las hojas de la obra
   if(persist && prevOrientation !== o){
     const _isV = o === 'vertical';
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-    (edPages[edCurrentPage]?.layers || []).forEach(l => {
-      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
-        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
-      }
+    edPages.forEach((pg, _pgi) => {
+      // Cambiar orientación de cada hoja
+      pg.orientation = o;
+      // Recalcular height de ImageLayers en cada hoja para que se adapten al nuevo ratio
+      (pg.layers || []).forEach(l => {
+        if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
+          l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
+        }
+      });
     });
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
