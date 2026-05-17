@@ -431,17 +431,47 @@ function _pgRotatePage(idx) {
   const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
 
   const sv = currentOrient === 'vertical';
-  const pwOld = sv ? ED_PAGE_W : ED_PAGE_H;   // px ancho página origen
-  const phOld = sv ? ED_PAGE_H : ED_PAGE_W;   // px alto  página origen
-  const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;   // px ancho página destino
-  const phNew = sv ? ED_PAGE_W : ED_PAGE_H;   // px alto  página destino
+  const pwOld = sv ? ED_PAGE_W : ED_PAGE_H;
+  const phOld = sv ? ED_PAGE_H : ED_PAGE_W;
+  const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;
+  const phNew = sv ? ED_PAGE_W : ED_PAGE_H;
 
+  // Márgenes en el workspace antes y después del cambio
+  const mxOld = (ED_CANVAS_W - pwOld) / 2;
+  const myOld = (ED_CANVAS_H - phOld) / 2;
+  const mxNew = (ED_CANVAS_W - pwNew) / 2;
+  const myNew = (ED_CANVAS_H - phNew) / 2;
+
+  // Reencuadrar el canvas de un FillLayer: extrae la zona de página antigua
+  // y la repega centrada en la zona de página nueva. Sin acumulado — siempre
+  // trabaja sobre coordenadas absolutas de página, no sobre deltas.
+  function _reframeFill(fl) {
+    if (!fl._canvas) return;
+    const tmp = document.createElement('canvas');
+    tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+    const tctx = tmp.getContext('2d');
+    // Copiar solo la zona de página antigua del canvas del fill
+    tctx.drawImage(fl._canvas,
+      mxOld, myOld, pwOld, phOld,   // fuente: zona de página en orientación vieja
+      mxNew, myNew, pwOld, phOld);  // destino: misma posición física en orientación nueva
+    // Nota: el contenido se pega en mxNew/myNew porque es el centro del workspace nuevo,
+    // pero se mantiene el tamaño original (pwOld×phOld) — el stroke también preserva
+    // su tamaño físico en px, así que la alineación es exacta.
+    fl._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    fl._ctx.drawImage(tmp, 0, 0);
+  }
 
   page.layers.forEach(la => {
     if (!la) return;
 
-    // draw/fill: no tienen x/y/width/height significativos — skip
-    if (la.type === 'draw' || la.type === 'fill') return;
+    // draw: no tiene x/y/width/height significativos — skip
+    if (la.type === 'draw') return;
+
+    // FillLayer: reencuadrar sin acumulado
+    if (la.type === 'fill') {
+      _reframeFill(la);
+      return;
+    }
 
     // Reposicionar el centro: reescalar al nuevo sistema de coordenadas
     const w_px = (la.width  || 0) * pwOld;
@@ -458,8 +488,7 @@ function _pgRotatePage(idx) {
       // StrokeLayer bitmap: preservar tamaño físico en px
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
-      // Sincronizar _baseX/_baseY del FillLayer vinculado con la nueva posición del stroke.
-      // Sin esto, FillLayer.draw() aplica un offset incorrecto = (newY - oldBaseY) * phNew.
+      // Sincronizar _baseX/_baseY del fill vinculado para que offset en draw() = 0
       if (la._fillLayerId) {
         const _flSync = page.layers.find(l => l.type === 'fill' && l._drawLayerId === la._fillLayerId);
         if (_flSync) { _flSync._baseX = la.x; _flSync._baseY = la.y; }
