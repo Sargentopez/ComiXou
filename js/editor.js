@@ -1591,7 +1591,7 @@ function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
   const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
   const pw_n = dv ? ED_PAGE_W : ED_PAGE_H, ph_n = dv ? ED_PAGE_H : ED_PAGE_W;
   const toH = sv && !dv; // vertical→horizontal
-  const angle = toH ? Math.PI/2 : -Math.PI/2;
+  const angle = toH ? -Math.PI/2 : Math.PI/2;
   const cos = Math.cos(angle), sin = Math.sin(angle);
   const a = Object.assign({}, ld);
 
@@ -1642,7 +1642,7 @@ function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
 function _edAdaptPageToOrientation(page, prev, next) {
   if (!page || !page.layers || prev === next) return;
   const toH = (prev === 'vertical'); // true = vertical→horizontal
-  const angle = toH ? Math.PI/2 : -Math.PI/2; // rotación de compensación
+  const angle = toH ? -Math.PI/2 : Math.PI/2; // rotación de compensación (inversa al giro de la página)
   const sv = prev === 'vertical';
   const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
   const nv = !toH;
@@ -1669,6 +1669,8 @@ function _edAdaptPageToOrientation(page, prev, next) {
 
     // StrokeLayer vinculado a FillLayer: coordenadas absolutas de workspace
     if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
+    // StrokeLayer congelado desde DrawLayer: canvas workspace completo — no rotar
+    if (l.type === 'stroke' && l._canvas && l._canvas.width === ED_CANVAS_W) { l._orient = next; return; }
 
     // ── Girar el centro del objeto 90° en el espacio de la página de origen ──
     // Centro en px respecto a la página de origen
