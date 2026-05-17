@@ -419,7 +419,10 @@ function _pgOrientIcon(currentOrient) {
   }
 }
 
-// Cambia la orientación de una hoja preservando el aspecto visual de todos los objetos
+// Cambia la orientación de una hoja preservando el aspecto visual de todos los objetos.
+// Estrategia: rotar cada objeto 90° en el espacio de página para compensar el giro del lienzo.
+// vertical→horizontal: lienzo gira -90°, objetos compensan +90°.
+// horizontal→vertical: lienzo gira +90°, objetos compensan -90°.
 function _pgRotatePage(idx) {
   const page = edPages[idx];
   if (!page) return;
@@ -427,16 +430,107 @@ function _pgRotatePage(idx) {
   const currentOrient = page.orientation || edOrientation;
   const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
 
-  // Usar _edAdaptPageToOrientation para adaptar todos los objetos correctamente
-  // (misma función que usa el botón de orientación del menú principal)
-  if (typeof _edAdaptPageToOrientation === 'function') {
-    _edAdaptPageToOrientation(page, currentOrient, newOrient);
-  }
+  const sv = currentOrient === 'vertical';
+  const pwOld = sv ? ED_PAGE_W : ED_PAGE_H;   // px ancho página origen
+  const phOld = sv ? ED_PAGE_H : ED_PAGE_W;   // px alto  página origen
+  const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;   // px ancho página destino
+  const phNew = sv ? ED_PAGE_W : ED_PAGE_H;   // px alto  página destino
+
+  // Ángulo de compensación: +90° para v→h, -90° para h→v
+  const angle = sv ? Math.PI / 2 : -Math.PI / 2;
+  const cos = Math.cos(angle), sin = Math.sin(angle); // cos=0, sin=±1
+
+  // Función para rotar un punto (en px de página origen) 90° alrededor del centro de la página
+  const rotPx = (px, py) => ({
+    rx: ( px * cos - py * sin + (sv ? phOld : phNew) / 2 * (1 - cos) + (sv ? pwOld : pwNew) / 2 * sin),
+    ry: ( px * sin + py * cos + (sv ? phOld : phNew) / 2 * (-sin)    + (sv ? pwOld : pwNew) / 2 * (1 - cos))
+  });
+  // Simplificado para cos=0, sin=±1:
+  // v→h (+90°): rx = -py + phOld/2 + pwOld/2*1  =  phOld/2 - py + pwOld/2   Hmm, usemos forma directa:
+  // v→h: girar (px,py) respecto al centro (pwOld/2, phOld/2)
+  //   dx=px-pwOld/2, dy=py-phOld/2
+  //   rx_new = -dy = phOld/2 - py   → en nueva página: x_new = rx_new / pwNew
+  //   ry_new =  dx = px - pwOld/2   → en nueva página: y_new = (ry_new + phNew/2) / phNew
+  // Usamos fórmula matricial directa:
+  const rotCenter = (x_frac, y_frac) => {
+    // x_frac, y_frac: fracciones de página origen
+    const dx = x_frac - 0.5, dy = y_frac - 0.5;
+    // Rotar (dx,dy) por angle alrededor de (0,0) en espacio normalizado
+    // pero las páginas no son cuadradas, hay que trabajar en px
+    const dx_px = dx * pwOld, dy_px = dy * phOld;
+    const rx_px = dx_px * cos - dy_px * sin;
+    const ry_px = dx_px * sin + dy_px * cos;
+    // Convertir al nuevo espacio normalizado
+    return {
+      x: Math.max(0, Math.min(1, rx_px / pwNew + 0.5)),
+      y: Math.max(0, Math.min(1, ry_px / phNew + 0.5))
+    };
+  };
+
+  page.layers.forEach(la => {
+    if (!la) return;
+
+    // draw/fill: coordenadas absolutas del workspace — no tocar
+    if (la.type === 'draw' || la.type === 'fill') return;
+
+    // Rotar el centro
+    const newCenter = rotCenter(la.x || 0.5, la.y || 0.5);
+    la.x = newCenter.x;
+    la.y = newCenter.y;
+
+    // Intercambiar width↔height (en px físicos se preservan, pero cambia a qué eje van)
+    const w_px = (la.width  || 0) * pwOld;
+    const h_px = (la.height || 0) * phOld;
+
+    if (la.type === 'image' && la.img && la.img.naturalWidth > 0) {
+      // Imagen: mantener ratio de aspecto natural
+      la.width  = Math.min(1, h_px / pwNew);
+      la.height = la.width * (la.img.naturalHeight / la.img.naturalWidth) * (pwNew / phNew);
+      if (la.height > 1) { const s = 1 / la.height; la.height = 1; la.width = Math.min(1, la.width * s); }
+    } else if (la.type === 'stroke' && la._canvas) {
+      // StrokeLayer: rotar el bitmap 90° y ajustar dimensiones
+      const ow = la._canvas.width, oh = la._canvas.height;
+      const rot = document.createElement('canvas');
+      rot.width = oh; rot.height = ow;
+      const rctx = rot.getContext('2d');
+      rctx.translate(oh / 2, ow / 2);
+      rctx.rotate(angle);
+      rctx.drawImage(la._canvas, -ow / 2, -oh / 2);
+      la._canvas = rot;
+      la.width  = Math.min(1, h_px / pwNew);
+      la.height = Math.min(1, w_px / phNew);
+    } else if (la.type === 'line' && Array.isArray(la.points)) {
+      // LineLayer: rotar puntos en espacio de página
+      const rotPt = p => {
+        if (!p) return null;
+        const dx_px = p.x * pwOld, dy_px = p.y * phOld;
+        const r = {
+          ...p,
+          x: (dx_px * cos - dy_px * sin) / pwNew,
+          y: (dx_px * sin + dy_px * cos) / phNew,
+        };
+        if (p.cp1) r.cp1 = { x: (p.cp1.x*pwOld*cos - p.cp1.y*phOld*sin)/pwNew, y: (p.cp1.x*pwOld*sin + p.cp1.y*phOld*cos)/phNew };
+        if (p.cp2) r.cp2 = { x: (p.cp2.x*pwOld*cos - p.cp2.y*phOld*sin)/pwNew, y: (p.cp2.x*pwOld*sin + p.cp2.y*phOld*cos)/phNew };
+        return r;
+      };
+      la.points = la.points.map(rotPt);
+      if (Array.isArray(la.subPaths))
+        la.subPaths = la.subPaths.map(sp => sp.map(rotPt));
+      la.width  = Math.min(1, h_px / pwNew);
+      la.height = Math.min(1, w_px / phNew);
+    } else {
+      // image sin img cargada, gif, shape, text, bubble
+      la.width  = Math.min(1, h_px / pwNew);
+      la.height = Math.min(1, w_px / phNew);
+    }
+
+    // Sumar ángulo de rotación propia del objeto
+    if (la.rotation != null) la.rotation = (la.rotation + angle) % (2 * Math.PI);
+  });
 
   page.orientation = newOrient;
 
   if (idx === edCurrentPage) {
-    // edSetOrientation con persist=false para no re-adaptar (ya adaptado arriba)
     if (typeof edSetOrientation === 'function') edSetOrientation(newOrient, false);
     if (typeof edPushHistory === 'function') edPushHistory(true);
     if (typeof edFitCanvas === 'function') edFitCanvas(true);
