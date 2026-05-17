@@ -442,21 +442,18 @@ function _pgRotatePage(idx) {
   const mxNew = (ED_CANVAS_W - pwNew) / 2;
   const myNew = (ED_CANVAS_H - phNew) / 2;
 
-  // Reencuadrar el canvas de un FillLayer: extrae la zona de página antigua
-  // y la repega centrada en la zona de página nueva. Sin acumulado — siempre
-  // trabaja sobre coordenadas absolutas de página, no sobre deltas.
+  // Reencuadrar el canvas de un FillLayer sin escalar ni acumular:
+  // copia la zona de página antigua (mxOld,myOld,pwOld,phOld) a la zona nueva (mxNew,myNew).
+  // El offset interno de cada píxel dentro de la página se preserva exactamente,
+  // lo que garantiza alineación perfecta con el StrokeLayer (que también preserva
+  // su tamaño físico en px). Sin acumulado: la segunda rotación deshace la primera.
   function _reframeFill(fl) {
     if (!fl._canvas) return;
     const tmp = document.createElement('canvas');
     tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
-    const tctx = tmp.getContext('2d');
-    // Copiar solo la zona de página antigua del canvas del fill
-    tctx.drawImage(fl._canvas,
-      mxOld, myOld, pwOld, phOld,   // fuente: zona de página en orientación vieja
-      mxNew, myNew, pwOld, phOld);  // destino: misma posición física en orientación nueva
-    // Nota: el contenido se pega en mxNew/myNew porque es el centro del workspace nuevo,
-    // pero se mantiene el tamaño original (pwOld×phOld) — el stroke también preserva
-    // su tamaño físico en px, así que la alineación es exacta.
+    tmp.getContext('2d').drawImage(fl._canvas,
+      mxOld, myOld, pwOld, phOld,  // fuente: zona de página en orientación vieja
+      mxNew, myNew, pwOld, phOld); // destino: zona nueva, mismo tamaño sin escalar
     fl._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
     fl._ctx.drawImage(tmp, 0, 0);
   }
@@ -467,13 +464,15 @@ function _pgRotatePage(idx) {
     // draw: no tiene x/y/width/height significativos — skip
     if (la.type === 'draw') return;
 
-    // FillLayer: reencuadrar sin acumulado
+    // FillLayer: reencuadrar sin escalar ni acumular
     if (la.type === 'fill') {
       _reframeFill(la);
       return;
     }
 
-    // Reposicionar el centro: reescalar al nuevo sistema de coordenadas
+    // Reposicionar el centro: x*pwOld/pwNew preserva la posición relativa dentro de la página.
+    // El StrokeLayer preserva su tamaño físico en px, igual que _reframeFill para el fill,
+    // garantizando alineación exacta entre ambos.
     const w_px = (la.width  || 0) * pwOld;
     const h_px = (la.height || 0) * phOld;
     la.x = Math.max(0, Math.min(1, (la.x || 0.5) * pwOld / pwNew));
@@ -488,7 +487,8 @@ function _pgRotatePage(idx) {
       // StrokeLayer bitmap: preservar tamaño físico en px
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
-      // Sincronizar _baseX/_baseY del fill vinculado para que offset en draw() = 0
+      // Sincronizar _baseX/_baseY del fill con la nueva x/y del stroke.
+      // Los píxeles ya fueron reencuadrados por _reframeFill → offset en draw() = 0.
       if (la._fillLayerId) {
         const _flSync = page.layers.find(l => l.type === 'fill' && l._drawLayerId === la._fillLayerId);
         if (_flSync) { _flSync._baseX = la.x; _flSync._baseY = la.y; }
