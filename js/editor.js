@@ -17599,7 +17599,14 @@ function edBibGuardar() {
       timestamp: Date.now(),
       isGroup:   false,
       layerData: edSerLayer(la),
-      fillLayerData: _flBib ? { dataUrl: _flBib.toDataUrlFull(), type:'fill', strokeX: la.x, strokeY: la.y } : null,
+      // fill: guardar solo zona de página (no workspace completo) para que al insertar
+      // en cualquier orientación se pueda reponer en los márgenes correctos.
+      fillLayerData: _flBib ? {
+        dataUrl: _flBib.toDataUrl(),   // zona de página solamente
+        type: 'fill',
+        strokeX: la.x, strokeY: la.y,
+        orientation: edOrientation,    // orientación en el momento del guardado
+      } : null,
       thumb:     _bibThumb(la),
     };
   }
@@ -18063,9 +18070,12 @@ function _bibRenderPanel(panel) {
           const _fimg = new Image();
           _fimg.onload = () => {
             const pw=edPageW(), ph=edPageH();
-            const _dxPx = (newLayer.x - (_fd.strokeX ?? newLayer.x)) * pw;
-            const _dyPx = (newLayer.y - (_fd.strokeY ?? newLayer.y)) * ph;
-            _flNew._ctx.drawImage(_fimg, _dxPx, _dyPx, ED_CANVAS_W, ED_CANVAS_H);
+            const mx=edMarginX(), my=edMarginY();
+            // El fill se guardó como zona de página (toDataUrl).
+            // Restaurarlo en los márgenes de la orientación DESTINO actual,
+            // independientemente de la orientación en que se guardó.
+            _flNew._ctx.drawImage(_fimg, 0, 0, _fimg.naturalWidth, _fimg.naturalHeight,
+              mx, my, pw, ph);
             _flNew._baseX = newLayer.x; _flNew._baseY = newLayer.y;
             edRedraw();
           };

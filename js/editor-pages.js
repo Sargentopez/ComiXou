@@ -472,18 +472,22 @@ function _pgRotatePage(idx) {
     }
 
     // Reposicionar: x*pwOld/pwNew preserva posición relativa dentro de la página.
-    // SIN clamp a [0,1]: un objeto puede quedar parcialmente fuera al cambiar proporción,
-    // igual que en cualquier editor. El clamp rompía la simetría vert↔horiz↔vert.
+    // Se permite x/y fuera de [0,1] para stroke (objeto parcialmente fuera de página),
+    // pero se clampea para el resto (texto, shapes, etc. deben estar dentro).
     const w_px = (la.width  || 0) * pwOld;
     const h_px = (la.height || 0) * phOld;
-    la.x = (la.x || 0.5) * pwOld / pwNew;
-    la.y = (la.y || 0.5) * phOld / phNew;
+    const _xNew = (la.x || 0.5) * pwOld / pwNew;
+    const _yNew = (la.y || 0.5) * phOld / phNew;
+    la.x = _xNew;
+    la.y = _yNew;
 
     if (la.type === 'image' && la.img && la.img.naturalWidth > 0) {
       la.width  = Math.min(1, w_px / pwNew);
       la.height = la.width * (la.img.naturalHeight / la.img.naturalWidth) * (pwNew / phNew);
       if (la.height > 1) { const s = 1 / la.height; la.height = 1; la.width = Math.min(1, la.width * s); }
     } else if (la.type === 'stroke' && la._canvas) {
+      // Stroke: x/y puede quedar fuera de [0,1] si el dibujo estaba en zona que no cabe
+      // en la nueva orientación — es correcto, el bitmap se ve parcialmente fuera de página.
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
       // Sincronizar _baseX/_baseY del fill: píxeles ya movidos por dxPx/dyPx,
@@ -503,10 +507,14 @@ function _pgRotatePage(idx) {
         la.subPaths = la.subPaths.map(sp => sp.map(scalePt));
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
+      la.x = Math.max(0, Math.min(1, _xNew));
+      la.y = Math.max(0, Math.min(1, _yNew));
     } else {
-      // gif, shape, text, bubble
+      // gif, shape, text, bubble — clamp: deben estar dentro de la página
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
+      la.x = Math.max(0, Math.min(1, _xNew));
+      la.y = Math.max(0, Math.min(1, _yNew));
     }
     // Sin cambio de rotation — el objeto no se gira
   });
