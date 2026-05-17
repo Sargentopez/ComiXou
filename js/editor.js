@@ -1608,41 +1608,45 @@ function _edAdaptPageToOrientation(page, prev, next) {
   if (!page || !page.layers || prev === next) return;
   const nv = next === 'vertical';
   const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
-  const mx_n = (ED_CANVAS_W - pw_n) / 2, my_n = (ED_CANVAS_H - ph_n) / 2;
   page.layers.forEach(l => {
     if (!l) return;
     const src = l._orient || prev;
     const sv = src === 'vertical';
     const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
-    const mx_s = (ED_CANVAS_W - pw_s) / 2, my_s = (ED_CANVAS_H - ph_s) / 2;
     const sw = pw_s / pw_n, sh = ph_s / ph_n;
-    // DrawLayer y FillLayer: misma operación — reubicar canvas de página vieja a nueva
-    if ((l.type === 'draw' || l.type === 'fill') && l._canvas && l._ctx) {
-      const tmp = document.createElement('canvas');
-      tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
-      tmp.getContext('2d').drawImage(l._canvas, mx_s, my_s, pw_s, ph_s, mx_n, my_n, pw_s, ph_s);
-      l._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
-      l._ctx.drawImage(tmp, 0, 0);
+
+    // DrawLayer y FillLayer: sus píxeles están en coordenadas absolutas del workspace.
+    // El render ya usa edMarginX/Y para delimitar la zona visible — no hay que mover nada.
+    // Solo sincronizar _baseX/_baseY del fill con su pair para que el offset sea 0.
+    if (l.type === 'draw' || l.type === 'fill') {
       if (l.type === 'fill') {
         const _pair = page.layers.find(x => x !== l && x._fillLayerId === l._drawLayerId);
         if (_pair) { l._baseX = _pair.x; l._baseY = _pair.y; }
       }
       l._orient = next; return;
     }
+
     if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
+
+    // StrokeLayer con FillLayer vinculado: el fill tiene coordenadas absolutas de workspace
     if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
-    if (l.width != null) l.width = Math.min(1, l.width * sw);
+
+    // Preservar píxeles físicos: escalar width/height
+    if (l.width  != null) l.width  = Math.min(1, l.width  * sw);
     if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
       l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
       if (l.height > 1) { const s = 1/l.height; l.height = 1; l.width = Math.min(1, l.width*s); }
     } else if (l.height != null) {
       l.height = Math.min(1, l.height * sh);
     }
+
+    // LineLayer: escalar puntos para preservar píxeles físicos
     if (l.type === 'line' && Array.isArray(l.points)) {
       l.points = l.points.map(p => p ? { x: p.x * sw, y: p.y * sh } : null);
       if (Array.isArray(l.subPaths))
         l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * sw, y: p.y * sh } : null));
     }
+
     l._orient = next;
   });
 }
@@ -1655,6 +1659,8 @@ function edSetOrientation(o, persist=true){
   // Adaptar todos los objetos y guardar estado en historial
   if(persist && prevOrientation !== o){
     _edAdaptPageToOrientation(edPages[edCurrentPage], prevOrientation, o);
+    if(typeof _vsHistory !== 'undefined'){ _vsHistory=[]; _vsHistIdx=-1; }
+    if(typeof _edShapeHistory !== 'undefined'){ _edShapeHistory=[]; _edShapeHistIdx=-1; }
     edPushHistory(true);
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
