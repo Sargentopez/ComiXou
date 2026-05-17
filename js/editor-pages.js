@@ -422,6 +422,7 @@ function _pgOrientIcon(currentOrient) {
 // Cambia la orientación de una hoja preservando el aspecto visual de todos los objetos.
 // Estrategia: rotar cada objeto 90° en el espacio de página para compensar el giro del lienzo.
 // vertical→horizontal: lienzo gira -90°, objetos compensan +90°.
+// horizontal→vertical: lienzo gira +90°, objetos compensan -90°.
 function _pgRotatePage(idx) {
   const page = edPages[idx];
   if (!page) return;
@@ -430,53 +431,71 @@ function _pgRotatePage(idx) {
   const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
 
   const sv = currentOrient === 'vertical';
-  const pwOld = sv ? ED_PAGE_W : ED_PAGE_H;
-  const phOld = sv ? ED_PAGE_H : ED_PAGE_W;
-  const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;
-  const phNew = sv ? ED_PAGE_W : ED_PAGE_H;
+  const pwOld = sv ? ED_PAGE_W : ED_PAGE_H;   // px ancho página origen
+  const phOld = sv ? ED_PAGE_H : ED_PAGE_W;   // px alto  página origen
+  const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;   // px ancho página destino
+  const phNew = sv ? ED_PAGE_W : ED_PAGE_H;   // px alto  página destino
 
-  // Calcular desplazamiento de márgenes del workspace
-  const ED_CW = 1800, ED_CH = 2340;
-  const mxOld = (ED_CW - pwOld) / 2, myOld = (ED_CH - phOld) / 2;
-  const mxNew = (ED_CW - pwNew) / 2, myNew = (ED_CH - phNew) / 2;
-  const dxM = mxNew - mxOld, dyM = myNew - myOld;
+
+  // Calcular delta de márgenes del workspace (canvas 1800×2340)
+  // Los canvases de draw/fill tienen píxeles en coordenadas absolutas del workspace.
+  // Al cambiar orientación, el centro de la página se mueve → hay que mover los píxeles.
+  const oldMx = (ED_CANVAS_W - pwOld) / 2;
+  const oldMy = (ED_CANVAS_H - phOld) / 2;
+  const newMx = (ED_CANVAS_W - pwNew) / 2;
+  const newMy = (ED_CANVAS_H - phNew) / 2;
+  const dxPx = newMx - oldMx;  // -210 vert→horiz, +210 horiz→vert
+  const dyPx = newMy - oldMy;  // +210 vert→horiz, -210 horiz→vert
 
   page.layers.forEach(la => {
     if (!la) return;
 
-    // draw y fill: mover JUNTOS con el mismo desplazamiento de márgenes.
-    // Son inseparables — mismo sistema de coordenadas, misma operación.
-    if ((la.type === 'draw' || la.type === 'fill') && la._canvas && la._ctx) {
-      const tmp = document.createElement('canvas');
-      tmp.width = ED_CW; tmp.height = ED_CH;
-      tmp.getContext('2d').drawImage(la._canvas, dxM, dyM);
-      la._ctx.clearRect(0, 0, ED_CW, ED_CH);
-      la._ctx.drawImage(tmp, 0, 0);
-      // Actualizar _baseX/_baseY del fill para que el offset sea 0
-      if (la.type === 'fill') { la._baseX = la._baseX; la._baseY = la._baseY; } // sin cambio
+    // draw/fill: mover los píxeles del canvas por el delta de márgenes
+    // para que el dibujo siga alineado con la nueva posición de la página en el workspace
+    if (la.type === 'draw' || la.type === 'fill') {
+      if (la._canvas && (dxPx || dyPx)) {
+        const tmp = document.createElement('canvas');
+        tmp.width = ED_CANVAS_W; tmp.height = ED_CANVAS_H;
+        tmp.getContext('2d').drawImage(la._canvas, dxPx, dyPx);
+        la._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+        la._ctx.drawImage(tmp, 0, 0);
+      }
       return;
     }
 
-    // Resto: reescalar dimensiones
+    // Reposicionar el centro: misma operación que draw/fill pero en fracciones de página
+    // No hay rotación — solo reescalar la posición al nuevo sistema de coordenadas
     const w_px = (la.width  || 0) * pwOld;
     const h_px = (la.height || 0) * phOld;
+    la.x = Math.max(0, Math.min(1, (la.x || 0.5) * pwOld / pwNew));
+    la.y = Math.max(0, Math.min(1, (la.y || 0.5) * phOld / phNew));
+
     if (la.type === 'image' && la.img && la.img.naturalWidth > 0) {
+      // Imagen: mantener ratio de aspecto natural
       la.width  = Math.min(1, w_px / pwNew);
       la.height = la.width * (la.img.naturalHeight / la.img.naturalWidth) * (pwNew / phNew);
-      if (la.height > 1) { const s = 1/la.height; la.height = 1; la.width = Math.min(1, la.width*s); }
+      if (la.height > 1) { const s = 1 / la.height; la.height = 1; la.width = Math.min(1, la.width * s); }
+    } else if (la.type === 'stroke' && la._canvas) {
+      // StrokeLayer bitmap: preservar tamaño físico en px
+      la.width  = Math.min(1, w_px / pwNew);
+      la.height = Math.min(1, h_px / phNew);
     } else if (la.type === 'line' && Array.isArray(la.points)) {
+      // LineLayer: reescalar puntos al nuevo sistema sin rotar
       const scW = pwOld / pwNew, scH = phOld / phNew;
-      const sp = p => p ? { ...p, x: p.x*scW, y: p.y*scH,
-        cp1: p.cp1?{x:p.cp1.x*scW,y:p.cp1.y*scH}:p.cp1,
-        cp2: p.cp2?{x:p.cp2.x*scW,y:p.cp2.y*scH}:p.cp2 } : null;
-      la.points = la.points.map(sp);
-      if (Array.isArray(la.subPaths)) la.subPaths = la.subPaths.map(s => s.map(sp));
+      const scalePt = p => p ? { ...p, x: p.x * scW, y: p.y * scH,
+        cp1: p.cp1 ? { x: p.cp1.x * scW, y: p.cp1.y * scH } : p.cp1,
+        cp2: p.cp2 ? { x: p.cp2.x * scW, y: p.cp2.y * scH } : p.cp2 } : null;
+      la.points = la.points.map(scalePt);
+      if (Array.isArray(la.subPaths))
+        la.subPaths = la.subPaths.map(sp => sp.map(scalePt));
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
     } else {
+      // gif, shape, text, bubble
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
     }
+    // Sin cambio de rotation — el objeto no se gira
   });
 
   page.orientation = newOrient;
@@ -488,6 +507,6 @@ function _pgRotatePage(idx) {
     if (typeof edRedraw === 'function') edRedraw();
   }
 
-    edToast('Orientación cambiada');
+  edToast('Orientación cambiada');
   _pgRender();
 }
