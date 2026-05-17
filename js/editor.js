@@ -17562,9 +17562,10 @@ function edBibGuardar() {
     // Miniatura: renderizar todas las capas del grupo juntas
     const thumb = _bibThumbGroup(idxs);
     entry = {
-      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp: Date.now(),
-      isGroup:   true,
+      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp:   Date.now(),
+      isGroup:     true,
+      orientation: edOrientation,
       layers,
       thumb,
     };
@@ -17595,10 +17596,11 @@ function edBibGuardar() {
       ? edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId)
       : null;
     entry = {
-      id:        Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      timestamp: Date.now(),
-      isGroup:   false,
-      layerData: edSerLayer(la),
+      id:          Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      timestamp:   Date.now(),
+      isGroup:     false,
+      orientation: edOrientation,
+      layerData:   edSerLayer(la),
       // fill: guardar solo zona de página (no workspace completo) para que al insertar
       // en cualquier orientación se pueda reponer en los márgenes correctos.
       fillLayerData: _flBib ? {
@@ -18040,6 +18042,30 @@ function _bibRenderPanel(panel) {
         _edDrawUnlockUI();
       }
 
+      // Si el objeto se guardó en orientación diferente a la actual,
+      // convertir x,y,width,height preservando el tamaño físico en px.
+      // width_px = width*pwOrig → newWidth = width_px/pwDest = width*pwOrig/pwDest
+      const _entryOrig = entry.orientation || edOrientation;
+      const _needsOrientConv = _entryOrig !== edOrientation;
+      const _pwO = _entryOrig === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+      const _phO = _entryOrig === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+      const _pwD = edPageW(), _phD = edPageH();
+      function _adaptLayerOrientation(la) {
+        if (!la || !_needsOrientConv) return;
+        if (la.type === 'fill' || la.type === 'draw') return; // píxeles, no fracciones
+        // Convertir tamaño físico preservado en px a fracciones de la página destino
+        if (la.width  != null) la.width  = la.width  * _pwO / _pwD;
+        if (la.height != null) la.height = la.height * _phO / _phD;
+        // Posición: preservar px absoluto en workspace
+        if (la.x != null) la.x = (((ED_CANVAS_W - _pwO) / 2) + la.x * _pwO - ((ED_CANVAS_W - _pwD) / 2)) / _pwD;
+        if (la.y != null) la.y = (((ED_CANVAS_H - _phO) / 2) + la.y * _phO - ((ED_CANVAS_H - _phD) / 2)) / _phD;
+        // Clamp x,y a [0,1] para tipos que deben estar dentro de la página
+        if (la.type !== 'stroke') {
+          if (la.x != null) la.x = Math.max(0, Math.min(1, la.x));
+          if (la.y != null) la.y = Math.max(0, Math.min(1, la.y));
+        }
+      }
+
       if (entry.isGroup && Array.isArray(entry.layers)) {
         // Insertar grupo: deserializar cada capa con nuevo groupId común
         const newGroupId = _edNewGroupId();
@@ -18047,6 +18073,7 @@ function _bibRenderPanel(panel) {
         entry.layers.forEach(ld => {
           const la = edDeserLayer(ld, edOrientation);
           if (!la) return;
+          _adaptLayerOrientation(la);
           // Asignar nuevo groupId (no reusar el del momento del guardado)
           la.groupId = newGroupId;
           // Limpiar _fusionId para evitar fusión involuntaria con sesión vectorial activa
@@ -18059,6 +18086,7 @@ function _bibRenderPanel(panel) {
         // Objeto individual
         const newLayer = edDeserLayer(entry.layerData, edOrientation);
         if (!newLayer) { edToast('Error al insertar el objeto'); return; }
+        _adaptLayerOrientation(newLayer);
         delete newLayer._fusionId;
         // Restaurar FillLayer vinculado si existe en el entry
         if (entry.fillLayerData && entry.fillLayerData.dataUrl) {
