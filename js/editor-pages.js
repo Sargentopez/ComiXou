@@ -296,10 +296,21 @@ function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
 ────────────────────────────────────────── */
 function _pgDuplicate(idx) {
   const src = edPages[idx];
-  // Copia profunda de layers (sin img — se reconstruye)
+  // Copia profunda de layers: los canvas se clonan para que cada hoja
+  // tenga sus propios píxeles independientes (fill, draw, stroke).
   const newLayers = src.layers.map(l => {
     if (!l) return null;
     const copy = Object.assign(Object.create(Object.getPrototypeOf(l)), l);
+    // Clonar canvas propio si existe — sin esto, mover píxeles en una hoja
+    // afecta a la otra porque comparten el mismo HTMLCanvasElement por referencia.
+    if (l._canvas && l._canvas instanceof HTMLCanvasElement) {
+      const cloned = document.createElement('canvas');
+      cloned.width  = l._canvas.width;
+      cloned.height = l._canvas.height;
+      cloned.getContext('2d').drawImage(l._canvas, 0, 0);
+      copy._canvas = cloned;
+      copy._ctx    = cloned.getContext('2d');
+    }
     // La imagen se reutiliza por referencia (mismo HTMLImageElement)
     return copy;
   }).filter(Boolean);
