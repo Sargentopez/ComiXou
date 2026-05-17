@@ -1648,8 +1648,13 @@ function _edAdaptPageToOrientation(page, prev, next) {
   const nv = !toH;
   const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
 
+  // DIAG: verificar que la función se ejecuta
+  if(window._edHistDiag) window._edHistDiag.push('ADAPT_ORIENT: prev='+prev+' next='+next+' layers='+page.layers.length);
   page.layers.forEach(l => {
     if (!l) return;
+    if(window._edHistDiag && (l.type==='line'||l.type==='shape')) {
+      window._edHistDiag.push('  BEFORE '+l.type+' x='+l.x.toFixed(3)+' y='+l.y.toFixed(3)+' w='+l.width.toFixed(3)+' h='+l.height.toFixed(3));
+    }
 
     // draw/fill: coordenadas absolutas de workspace, no se tocan.
     if (l.type === 'draw' || l.type === 'fill') {
@@ -1720,6 +1725,9 @@ function _edAdaptPageToOrientation(page, prev, next) {
     }
 
     l._orient = next;
+    if(window._edHistDiag && (l.type==='line'||l.type==='shape')) {
+      window._edHistDiag.push('  AFTER '+l.type+' x='+l.x.toFixed(3)+' y='+l.y.toFixed(3)+' w='+l.width.toFixed(3)+' h='+l.height.toFixed(3)+' rot='+(l.rotation||0).toFixed(3));
+    }
   });
 }
 
