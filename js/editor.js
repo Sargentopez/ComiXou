@@ -1591,19 +1591,30 @@ function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
   const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
   const pw_d = dv ? ED_PAGE_W : ED_PAGE_H, ph_d = dv ? ED_PAGE_H : ED_PAGE_W;
   const rw = pw_s / pw_d, rh = ph_s / ph_d;
+  const ru = Math.min(rw, rh); // escala uniforme para preservar forma
   const a = Object.assign({}, ld);
-  if (a.width  != null) a.width  = Math.min(1, a.width  * rw);
-  if (a.height != null) a.height = Math.min(1, a.height * rh);
+  if (a.width  != null) a.width  = Math.min(1, a.width  * ru);
+  if (a.height != null) a.height = Math.min(1, a.height * ru);
+  if (a.type === 'image') {
+    // Imagen: mantener ratio de aspecto natural si está disponible
+    // (no hay img.naturalWidth en datos planos, mantener ru uniforme)
+  }
   if (a.type === 'line' && Array.isArray(a.points)) {
-    a.points = a.points.map(p => p ? { x: p.x * rw, y: p.y * rh } : null);
+    a.points = a.points.map(p => p ? {
+      ...p, x: p.x * ru, y: p.y * ru,
+      cp1: p.cp1 ? { x: p.cp1.x * ru, y: p.cp1.y * ru } : p.cp1,
+      cp2: p.cp2 ? { x: p.cp2.x * ru, y: p.cp2.y * ru } : p.cp2,
+    } : null);
     if (Array.isArray(a.subPaths))
-      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * rw, y: p.y * rh } : null));
+      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * ru, y: p.y * ru } : null));
   }
   a._orient = dstOrient;
   return a;
 }
 
 // ── Adaptar todos los objetos del canvas al cambiar orientación ──
+// Objetivo: aspecto visual idéntico. Factor de escala uniforme (min(sw,sh))
+// para preservar forma y tamaño en píxeles. Centro en la misma posición relativa.
 function _edAdaptPageToOrientation(page, prev, next) {
   if (!page || !page.layers || prev === next) return;
   const nv = next === 'vertical';
@@ -1613,11 +1624,12 @@ function _edAdaptPageToOrientation(page, prev, next) {
     const src = l._orient || prev;
     const sv = src === 'vertical';
     const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
+    // Factor uniforme: el menor de sw/sh para preservar forma sin deformar
     const sw = pw_s / pw_n, sh = ph_s / ph_n;
+    const su = Math.min(sw, sh); // escala uniforme
 
-    // DrawLayer y FillLayer: sus píxeles están en coordenadas absolutas del workspace.
-    // El render ya usa edMarginX/Y para delimitar la zona visible — no hay que mover nada.
-    // Solo sincronizar _baseX/_baseY del fill con su pair para que el offset sea 0.
+    // draw y fill: coordenadas absolutas de workspace, no se tocan.
+    // Solo sincronizar _baseX/_baseY del fill para que el offset en draw() sea 0.
     if (l.type === 'draw' || l.type === 'fill') {
       if (l.type === 'fill') {
         const _pair = page.layers.find(x => x !== l && x._fillLayerId === l._drawLayerId);
@@ -1628,24 +1640,32 @@ function _edAdaptPageToOrientation(page, prev, next) {
 
     if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
 
-    // StrokeLayer con FillLayer vinculado: el fill tiene coordenadas absolutas de workspace
+    // StrokeLayer vinculado a FillLayer: coordenadas de workspace, no escalar
     if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
 
-    // Preservar píxeles físicos: escalar width/height
-    if (l.width  != null) l.width  = Math.min(1, l.width  * sw);
+    // Escala uniforme para width/height — mismo aspecto visual
+    if (l.width  != null) l.width  = Math.min(1, l.width  * su);
     if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
+      // Imagen: mantener ratio de aspecto natural
       l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
       if (l.height > 1) { const s = 1/l.height; l.height = 1; l.width = Math.min(1, l.width*s); }
     } else if (l.height != null) {
-      l.height = Math.min(1, l.height * sh);
+      l.height = Math.min(1, l.height * su);
     }
 
-    // LineLayer: escalar puntos para preservar píxeles físicos
+    // LineLayer: escala uniforme en puntos para preservar forma
     if (l.type === 'line' && Array.isArray(l.points)) {
-      l.points = l.points.map(p => p ? { x: p.x * sw, y: p.y * sh } : null);
+      l.points = l.points.map(p => p ? {
+        ...p, x: p.x * su, y: p.y * su,
+        cp1: p.cp1 ? { x: p.cp1.x * su, y: p.cp1.y * su } : p.cp1,
+        cp2: p.cp2 ? { x: p.cp2.x * su, y: p.cp2.y * su } : p.cp2,
+      } : null);
       if (Array.isArray(l.subPaths))
-        l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * sw, y: p.y * sh } : null));
+        l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * su, y: p.y * su } : null));
     }
+
+    // Centro: mantener posición relativa escalada uniformemente
+    // x,y ya son fracciones de página — no cambiar (el centro visual se conserva)
 
     l._orient = next;
   });
@@ -22566,12 +22586,21 @@ async function _edRunDiag() {
   L('\n── Layers en memoria (edLayers) ──');
   (edLayers||[]).forEach((l, li) => {
     if (!l) { L('  L' + li + ' = NULL'); return; }
+    let _fillInfo = '';
+    if (l.type === 'fill') {
+      const _fp = edLayers.find(x => x !== l && x._fillLayerId === l._drawLayerId);
+      _fillInfo = ' baseX=' + (l._baseX!=null?l._baseX.toFixed(3):'null')
+        + ' baseY=' + (l._baseY!=null?l._baseY.toFixed(3):'null')
+        + ' _orient=' + (l._orient||'null')
+        + (_fp ? ' pair.x=' + (_fp.x||0).toFixed(3) + ' pair.y=' + (_fp.y||0).toFixed(3) + ' pair.type=' + _fp.type : ' pair=NULL');
+    }
     L('  L' + li + ' type=' + l.type
       + (l.type==='image'?' animKey=' + (l.animKey||'-') + ' pngKey=' + (l._pngFramesKey||'-') + ' animReady=' + (l._animReady?'sí':'NO'):'')
-      + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null'):'')
-      + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?'):'')
+      + (l.type==='stroke'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'null') + ' x='+(l.x||0).toFixed(3)+' _fillLayerId='+(l._fillLayerId||'null'):'')
+      + (l.type==='draw'?' canvas=' + (l._canvas?l._canvas.width+'x'+l._canvas.height:'?') + ' _fillLayerId='+(l._fillLayerId||'null'):'')
       + (l.type==='gif'?' gifKey=' + (l.gifKey||'-') + ' _playing=' + l._playing + ' _ready=' + l._ready:'')
-      + (l.type==='image'?' _playing=' + l._playing:''));
+      + (l.type==='image'?' _playing=' + l._playing:'')
+      + _fillInfo);
   });
   L('\n── Historial ──');
   L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length + ' | _vsHistory.length=' + _vsHistory.length + ' (>0 = bloquea push global)');
