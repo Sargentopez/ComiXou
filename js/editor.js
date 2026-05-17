@@ -1589,47 +1589,69 @@ function _edAdaptLayerOrientation(ld, srcOrient, dstOrient) {
   if (!['image','gif','stroke','shape','line'].includes(ld.type)) return ld;
   const sv = src === 'vertical', dv = dstOrient === 'vertical';
   const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
-  const pw_d = dv ? ED_PAGE_W : ED_PAGE_H, ph_d = dv ? ED_PAGE_H : ED_PAGE_W;
-  const rw = pw_s / pw_d, rh = ph_s / ph_d;
-  const ru = Math.min(rw, rh); // escala uniforme para preservar forma
+  const pw_n = dv ? ED_PAGE_W : ED_PAGE_H, ph_n = dv ? ED_PAGE_H : ED_PAGE_W;
+  const toH = sv && !dv; // vertical→horizontal
+  const angle = toH ? Math.PI/2 : -Math.PI/2;
+  const cos = Math.cos(angle), sin = Math.sin(angle);
   const a = Object.assign({}, ld);
-  if (a.width  != null) a.width  = Math.min(1, a.width  * ru);
-  if (a.height != null) a.height = Math.min(1, a.height * ru);
-  if (a.type === 'image') {
-    // Imagen: mantener ratio de aspecto natural si está disponible
-    // (no hay img.naturalWidth en datos planos, mantener ru uniforme)
-  }
+
+  // Girar centro alrededor del centro de la página de origen
+  const cx_px = (a.x || 0.5) * pw_s, cy_px = (a.y || 0.5) * ph_s;
+  const ox = pw_s / 2, oy = ph_s / 2;
+  const nx_px = ox + (cx_px - ox) * cos - (cy_px - oy) * sin;
+  const ny_px = oy + (cx_px - ox) * sin + (cy_px - oy) * cos;
+  a.x = Math.max(0, Math.min(1, nx_px / pw_n));
+  a.y = Math.max(0, Math.min(1, ny_px / ph_n));
+
+  // Intercambiar width↔height
+  const w_px = (a.width  || 0) * pw_s;
+  const h_px = (a.height || 0) * ph_s;
+  a.width  = Math.min(1, h_px / pw_n);
+  a.height = Math.min(1, w_px / ph_n);
+
+  // Rotación del objeto
+  if (a.rotation != null) a.rotation = (a.rotation + angle) % (2 * Math.PI);
+
+  // LineLayer: rotar puntos locales
   if (a.type === 'line' && Array.isArray(a.points)) {
-    a.points = a.points.map(p => p ? {
-      ...p, x: p.x * ru, y: p.y * ru,
-      cp1: p.cp1 ? { x: p.cp1.x * ru, y: p.cp1.y * ru } : p.cp1,
-      cp2: p.cp2 ? { x: p.cp2.x * ru, y: p.cp2.y * ru } : p.cp2,
-    } : null);
+    const rotPt = (p) => {
+      if (!p) return null;
+      const px = p.x * pw_s, py = p.y * ph_s;
+      const result = { ...p, x: (px * cos - py * sin) / pw_n, y: (px * sin + py * cos) / ph_n };
+      if (p.cp1) result.cp1 = { x: (p.cp1.x*pw_s*cos - p.cp1.y*ph_s*sin)/pw_n,
+                                  y: (p.cp1.x*pw_s*sin + p.cp1.y*ph_s*cos)/ph_n };
+      if (p.cp2) result.cp2 = { x: (p.cp2.x*pw_s*cos - p.cp2.y*ph_s*sin)/pw_n,
+                                  y: (p.cp2.x*pw_s*sin + p.cp2.y*ph_s*cos)/ph_n };
+      return result;
+    };
+    a.points = a.points.map(rotPt);
     if (Array.isArray(a.subPaths))
-      a.subPaths = a.subPaths.map(sp => sp.map(p => p ? { x: p.x * ru, y: p.y * ru } : null));
+      a.subPaths = a.subPaths.map(sp => sp.map(rotPt));
   }
+
   a._orient = dstOrient;
   return a;
 }
 
 // ── Adaptar todos los objetos del canvas al cambiar orientación ──
-// Objetivo: aspecto visual idéntico. Factor de escala uniforme (min(sw,sh))
-// para preservar forma y tamaño en píxeles. Centro en la misma posición relativa.
+// Estrategia: girar cada objeto 90° en el espacio de página (equivalente a la
+// rotación de la hoja), de modo que al redibujar con la nueva orientación el
+// aspecto visual sea idéntico al original.
+// vertical→horizontal: la página rota -90°, los objetos compensan +90°.
+// horizontal→vertical: la página rota +90°, los objetos compensan -90°.
 function _edAdaptPageToOrientation(page, prev, next) {
   if (!page || !page.layers || prev === next) return;
-  const nv = next === 'vertical';
+  const toH = (prev === 'vertical'); // true = vertical→horizontal
+  const angle = toH ? Math.PI/2 : -Math.PI/2; // rotación de compensación
+  const sv = prev === 'vertical';
+  const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
+  const nv = !toH;
   const pw_n = nv ? ED_PAGE_W : ED_PAGE_H, ph_n = nv ? ED_PAGE_H : ED_PAGE_W;
+
   page.layers.forEach(l => {
     if (!l) return;
-    const src = l._orient || prev;
-    const sv = src === 'vertical';
-    const pw_s = sv ? ED_PAGE_W : ED_PAGE_H, ph_s = sv ? ED_PAGE_H : ED_PAGE_W;
-    // Factor uniforme: el menor de sw/sh para preservar forma sin deformar
-    const sw = pw_s / pw_n, sh = ph_s / ph_n;
-    const su = Math.min(sw, sh); // escala uniforme
 
-    // draw y fill: coordenadas absolutas de workspace, no se tocan.
-    // Solo sincronizar _baseX/_baseY del fill para que el offset en draw() sea 0.
+    // draw/fill: coordenadas absolutas de workspace, no se tocan.
     if (l.type === 'draw' || l.type === 'fill') {
       if (l.type === 'fill') {
         const _pair = page.layers.find(x => x !== l && x._fillLayerId === l._drawLayerId);
@@ -1640,32 +1662,62 @@ function _edAdaptPageToOrientation(page, prev, next) {
 
     if (!['image','gif','stroke','shape','line'].includes(l.type)) return;
 
-    // StrokeLayer vinculado a FillLayer: coordenadas de workspace, no escalar
+    // StrokeLayer vinculado a FillLayer: coordenadas absolutas de workspace
     if (l.type === 'stroke' && l._fillLayerId) { l._orient = next; return; }
 
-    // Escala uniforme para width/height — mismo aspecto visual
-    if (l.width  != null) l.width  = Math.min(1, l.width  * su);
+    // ── Girar el centro del objeto 90° en el espacio de la página de origen ──
+    // Centro en px respecto a la página de origen
+    const cx_px = l.x * pw_s;
+    const cy_px = l.y * ph_s;
+    // Punto pivot = centro de la página de origen
+    const ox = pw_s / 2, oy = ph_s / 2;
+    // Rotar alrededor del centro de la página
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const dx = cx_px - ox, dy = cy_px - oy;
+    const nx_px = ox + dx * cos - dy * sin;
+    const ny_px = oy + dx * sin + dy * cos;
+    // Convertir a fracciones de la nueva página
+    l.x = Math.max(0, Math.min(1, nx_px / pw_n));
+    l.y = Math.max(0, Math.min(1, ny_px / ph_n));
+
+    // ── Intercambiar width/height para adaptarse a la nueva orientación ──
+    // Un objeto que medía w×h en vertical mide h×w en horizontal (mismo nº píxeles)
     if (l.type === 'image' && l.img && l.img.naturalWidth > 0) {
       // Imagen: mantener ratio de aspecto natural
-      l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
+      const _w = Math.min(1, l.width * pw_s / pw_n);
+      l.width = _w;
+      l.height = _w * (l.img.naturalHeight / l.img.naturalWidth) * (pw_n / ph_n);
       if (l.height > 1) { const s = 1/l.height; l.height = 1; l.width = Math.min(1, l.width*s); }
-    } else if (l.height != null) {
-      l.height = Math.min(1, l.height * su);
+    } else {
+      // Para el resto: intercambiar width↔height y escalar a la nueva página
+      const w_px = l.width  * pw_s;
+      const h_px = l.height * ph_s;
+      l.width  = Math.min(1, h_px / pw_n);
+      l.height = Math.min(1, w_px / ph_n);
     }
 
-    // LineLayer: escala uniforme en puntos para preservar forma
+    // ── Rotar la orientación propia del objeto ──
+    if (l.rotation != null) l.rotation = (l.rotation + angle) % (2 * Math.PI);
+
+    // ── LineLayer: rotar los puntos locales ──
     if (l.type === 'line' && Array.isArray(l.points)) {
-      l.points = l.points.map(p => p ? {
-        ...p, x: p.x * su, y: p.y * su,
-        cp1: p.cp1 ? { x: p.cp1.x * su, y: p.cp1.y * su } : p.cp1,
-        cp2: p.cp2 ? { x: p.cp2.x * su, y: p.cp2.y * su } : p.cp2,
-      } : null);
+      // Los puntos son fracciones de página de origen → convertir a px, rotar, convertir a nueva página
+      const rotPt = (p) => {
+        if (!p) return null;
+        const px = p.x * pw_s, py = p.y * ph_s;
+        const rx = px * cos - py * sin;
+        const ry = px * sin + py * cos;
+        const result = { ...p, x: rx / pw_n, y: ry / ph_n };
+        if (p.cp1) result.cp1 = { x: p.cp1.x * pw_s / pw_n * cos - p.cp1.y * ph_s / ph_n * sin,
+                                   y: p.cp1.x * pw_s / pw_n * sin + p.cp1.y * ph_s / ph_n * cos };
+        if (p.cp2) result.cp2 = { x: p.cp2.x * pw_s / pw_n * cos - p.cp2.y * ph_s / ph_n * sin,
+                                   y: p.cp2.x * pw_s / pw_n * sin + p.cp2.y * ph_s / ph_n * cos };
+        return result;
+      };
+      l.points = l.points.map(rotPt);
       if (Array.isArray(l.subPaths))
-        l.subPaths = l.subPaths.map(sp => sp.map(p => p ? { x: p.x * su, y: p.y * su } : null));
+        l.subPaths = l.subPaths.map(sp => sp.map(rotPt));
     }
-
-    // Centro: mantener posición relativa escalada uniformemente
-    // x,y ya son fracciones de página — no cambiar (el centro visual se conserva)
 
     l._orient = next;
   });
