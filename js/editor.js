@@ -3364,27 +3364,35 @@ function edRedraw(){
   const _anyEditing = !window._edEyedropActive &&
     (_editingDraw || _editingShape || _editingProps || _manipulating);
 
+
   // Función que decide si una capa concreta debe dimearse
   // Objeto activo del panel line (puede ser distinto de edSelectedIdx durante construcción)
   const _activePanelLine = (_editingShape && _panelMode==='line')
     ? (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : edLayers.find(l=>l.type==='line'&&l._fusionId===_edLineFusionId))
     : null;
 
-  // FillLayer vinculado al DrawLayer activo — no debe dimearse durante edición de dibujo
+  // DrawLayer activo en modo edición de dibujo (herramienta draw/eraser/fill)
   const _activeDraw = _editingDraw
     ? (edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.type === 'draw'
         ? edLayers[edSelectedIdx]
         : edLayers.find(l => l.type === 'draw'))
     : null;
-  const _activeFill = _activeDraw?._fillLayerId
-    ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === _activeDraw._fillLayerId)
+  // Objeto seleccionado que puede tener FillLayer vinculado: draw o stroke
+  const _selectedWithFill = edSelectedIdx >= 0
+    ? edLayers[edSelectedIdx] : null;
+  // FillLayer vinculado al DrawLayer activo o al objeto seleccionado — siempre al 100%
+  const _linkedFillId = (_activeDraw || _selectedWithFill)?._fillLayerId || null;
+  const _linkedFill = _linkedFillId
+    ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === _linkedFillId)
     : null;
 
   const _isDimmed = (l, i) => {
     if (!_anyEditing) return false;
+    // El FillLayer vinculado al DrawLayer activo/seleccionado nunca se dimea
+    if (_linkedFill && l === _linkedFill) return false;
     if (_editingDraw) {
-      // El DrawLayer activo y su FillLayer vinculado van siempre al 100%
-      if (l === _activeDraw || l === _activeFill) return false;
+      // En modo dibujo: solo el DrawLayer activo y su FillLayer van al 100%
+      if (l === _activeDraw) return false;
       return l.type !== 'draw';
     }
     if (i === edSelectedIdx) return false;
@@ -14455,8 +14463,7 @@ async function edLoadProject(id){
   if(!comic)return;
   edProjectId=id;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
-  // cuando el usuario abra el panel. Se pasa supabaseId para que, si IDB está vacía,
-  // intente descargar de Supabase usando la clave correcta del proyecto.
+  // cuando el usuario abra el panel.
   _bibCache = null;
   await _bibInitIdb(comic.supabaseId || null);
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
@@ -17380,7 +17387,6 @@ const _BIB_MAX_BYTES  = 0; // Sin tope local — el límite es el de la obra com
 const _BIB_THUMB_SIZE = 80;
 // Inicializar IDB al cargar el módulo (async en background)
 // _bibInitIdb() se llama con await desde edLoadProject al abrir cada obra.
-// No hay llamada inicial — _bibCache permanece null hasta que se cargue una obra.
 
 // Clave de localStorage: por proyecto si hay proyecto activo
 function _bibKey() {
@@ -18932,7 +18938,15 @@ function _gcpOpenPropsPanel(la, laIdx) {
       window._gcpLayers.splice(laIdx, 1);
       if (window._gcpSelIdx >= window._gcpLayers.length)
         window._gcpSelIdx = window._gcpLayers.length - 1;
+      // Recalcular matriz: recortar columnas vacías y ajustar frame índice
+      _gcpTrimLeadingInvisible();
+      _gcpTrimTrailingInvisible();
+      const _ntDel = _gcpGetTotalFrames();
+      if (_ntDel === 0) window._gcpGlobalFrameIdx = 0;
+      else if (window._gcpGlobalFrameIdx >= _ntDel) window._gcpGlobalFrameIdx = _ntDel - 1;
+      _gcpApplyFrame(window._gcpGlobalFrameIdx);
       _gcpClosePropsPanel();
+      _gcpUpdateFrameNav();
       _gcpUpdateFramesBar();
       _gcpRedraw();
     });
@@ -20360,15 +20374,45 @@ function _gcpUpdateFramesBar() {
         _gcpInvalidateAllThumbs();
         if (window._gcpSelIdx >= window._gcpLayers.length)
           window._gcpSelIdx = window._gcpLayers.length - 1;
+        // Recalcular matriz: recortar columnas vacías y ajustar frame índice
+        _gcpTrimLeadingInvisible();
+        _gcpTrimTrailingInvisible();
         const newTotal = _gcpGetTotalFrames();
-        if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
-          window._gcpGlobalFrameIdx = newTotal - 1;
+        if (newTotal === 0) window._gcpGlobalFrameIdx = 0;
+        else if (window._gcpGlobalFrameIdx >= newTotal) window._gcpGlobalFrameIdx = newTotal - 1;
         _gcpApplyFrame(window._gcpGlobalFrameIdx);
         window._gcpDirty = true;
         _gcpPushHistory(); _gcpUpdateFrameNav(); _gcpRedraw(); _gcpUpdateFramesBar();
       });
     });
     leftCol.appendChild(delLayerBtn);
+
+    // Botón ojo — alterna visibilidad de todos los frames de la fila
+    const _allHidden = la._frames && la._frames.length > 0 &&
+      la._frames.every(f => f && f.visible === false);
+    const eyeBtn = document.createElement('button');
+    eyeBtn.title = 'Mostrar/ocultar todos los frames';
+    eyeBtn.textContent = '👁';
+    eyeBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:2px 4px;' +
+      'border-radius:4px;font-size:13px;line-height:1;transition:background .15s;flex-shrink:0;' +
+      'opacity:' + (_allHidden ? '0.4' : '1') + ';';
+    eyeBtn.addEventListener('pointerenter', () => { eyeBtn.style.background = 'var(--gray-200)'; });
+    eyeBtn.addEventListener('pointerleave', () => { eyeBtn.style.background = 'none'; });
+    eyeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (!la._frames || !la._frames.length) return;
+      const _nowHidden = la._frames.every(f => f && f.visible === false);
+      const _newVisible = _nowHidden; // toggle: ocultos→visibles, cualquier otro estado→ocultos
+      la._frames = la._frames.map(f => f ? { ...f, visible: _newVisible } : f);
+      eyeBtn.style.opacity = _newVisible ? '1' : '0.4';
+      _gcpInvalidateAllThumbs();
+      _gcpApplyFrame(window._gcpGlobalFrameIdx);
+      window._gcpDirty = true;
+      _gcpPushHistory();
+      _gcpRedraw();
+      _gcpUpdateFramesBar();
+    });
+    leftCol.appendChild(eyeBtn);
 
     // Etiqueta
     const label = document.createElement('div');
@@ -22560,6 +22604,40 @@ async function _edRunDiag() {
   L('══ DIAGNÓSTICO EDITOR ══');
   L(new Date().toLocaleString());
   L('Proyecto: ' + edProjectId + ' | Versión: ' + (document.querySelector('.app-version')?.textContent||'?'));
+
+  // ── DIMMING: estado actual cuando hay un draw seleccionado ──
+  L('');
+  L('── DIMMING ──');
+  const _panel_ = document.getElementById('edOptionsPanel');
+  const _panelOpen_ = !!_panel_?.classList.contains('open');
+  const _panelMode_ = _panel_?.dataset.mode || '';
+  const _editingDraw_  = ['draw','eraser','fill'].includes(edActiveTool) &&
+    (_panelOpen_ || !!document.getElementById('edDrawBar')?.classList.contains('visible'));
+  const _editingShape_ = (_panelOpen_ && (_panelMode_==='shape'||_panelMode_==='line'))
+    || !!window._edShapePreview || !!window._edLineLayer
+    || !!document.getElementById('edShapeBar')?.classList.contains('visible');
+  const _editingProps_ = _panelOpen_ && _panelMode_ === 'props' && edSelectedIdx >= 0;
+  const _manipulating_ = edSelectedIdx >= 0 &&
+    (edIsDragging || edIsResizing || edIsRotating || edIsTailDragging);
+  const _anyEditing_ = !window._edEyedropActive &&
+    (_editingDraw_ || _editingShape_ || _editingProps_ || _manipulating_);
+  L('edSelectedIdx: ' + edSelectedIdx);
+  L('selectedType: ' + (edSelectedIdx>=0 ? (edLayers[edSelectedIdx]?.type||'?') : '-'));
+  L('edActiveTool: ' + edActiveTool);
+  L('panelOpen: ' + _panelOpen_ + ' | panelMode: ' + _panelMode_);
+  L('drawBar.visible: ' + !!document.getElementById('edDrawBar')?.classList.contains('visible'));
+  L('shapeBar.visible: ' + !!document.getElementById('edShapeBar')?.classList.contains('visible'));
+  L('editingDraw: ' + _editingDraw_);
+  L('editingShape: ' + _editingShape_);
+  L('editingProps: ' + _editingProps_);
+  L('manipulating: ' + _manipulating_ + ' (drag='+edIsDragging+' resize='+edIsResizing+' rotate='+edIsRotating+' tail='+edIsTailDragging+')');
+  L('anyEditing: ' + _anyEditing_);
+  if (edSelectedIdx >= 0) {
+    const _sl = edLayers[edSelectedIdx];
+    L('_fillLayerId: ' + (_sl?._fillLayerId||'null'));
+    const _fl = _sl?._fillLayerId ? edLayers.find(l=>l.type==='fill'&&l._drawLayerId===_sl._fillLayerId) : null;
+    L('linkedFill found: ' + !!_fl);
+  }
 
   // 1. localStorage
   try {
