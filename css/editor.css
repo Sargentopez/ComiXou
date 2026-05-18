@@ -611,7 +611,8 @@ body.editor-page #appView {
 }
 #edOptionsPanel.open[data-mode="draw"] #edPanelHeader,
 #edOptionsPanel.open[data-mode="shape"] #edPanelHeader,
-#edOptionsPanel.open[data-mode="line"] #edPanelHeader {
+#edOptionsPanel.open[data-mode="line"] #edPanelHeader,
+#edOptionsPanel.open[data-mode="props"] #edPanelHeader {
   display: flex;
 }
 /* ── Panel colapsado: se cierra igual que al cerrar, pero pestaña visible ── */
@@ -622,6 +623,16 @@ body.editor-page #appView {
   border-bottom-width: 0 !important;
   overflow: hidden !important;
   pointer-events: none !important;
+}
+/* En modo props (text/bubble) colapsado: el textarea sigue recibiendo input
+   aunque esté oculto — el usuario escribe a ciegas y ve el resultado en canvas */
+#edOptionsPanel.open.panel-collapsed[data-mode="props"] #pp-text {
+  pointer-events: auto !important;
+  position: fixed !important;
+  left: -9999px !important;
+  opacity: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
 }
 /* ── Pestaña — hermana del panel, se posiciona relativa al editorShell ── */
 #edPanelTab {

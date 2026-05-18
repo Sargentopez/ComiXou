@@ -9406,7 +9406,9 @@ function _edPanelTabClick(e) {
   _p.classList.remove('panel-collapsed'); // quitar ANTES de hide para desbloquear el guard
   _edPanelTabHide();
   if (_mode === 'draw' || _mode === 'eraser' || _mode === 'fill') edDrawBarHide();
-  else edShapeBarHide();
+  else if (_mode === 'shape' || _mode === 'line') edShapeBarHide();
+  // mode='props' (text/bubble): no hay barra flotante, solo reajustar canvas
+  if (_mode === 'props') setTimeout(() => { $('pp-text')?.focus(); }, 50);
   edFitCanvas();
   _edRefocusAfterCollapse();
 }
@@ -11210,6 +11212,7 @@ function edRenderOptionsPanel(mode){
 
     if(la.type==='text'||la.type==='bubble'){
       html+=`
+      <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
       <div class="op-prop-row"><span class="op-prop-label">Texto</span>
         <textarea id="pp-text" style="border-radius:8px;resize:vertical;min-height:40px;flex:1;border:2px solid var(--gray-300);padding:4px 8px;font-family:var(--font-body);font-size:.84rem;">${la.text.replace(/</g,'&lt;')}</textarea></div>
       <div class="op-prop-row"><span class="op-prop-label">Fuente</span>
@@ -11318,14 +11321,17 @@ function edRenderOptionsPanel(mode){
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>`;
     }
+    const _isTextBubble = (la.type==='text'||la.type==='bubble');
     html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
       ${la.groupId
         ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
         : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`}
-      ${(la.type!=='text'&&la.type!=='bubble')?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
+      ${(!_isTextBubble)?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
       <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:${la.locked?'var(--gray-800)':'var(--gray-100)'};color:${la.locked?'var(--white)':'var(--gray-700)'}" title="${la.locked?'Desbloquear':'Bloquear'}">${la.locked?'🔒':'🔓'}</button>
-      <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
+      ${_isTextBubble
+        ? `<button id="op-panel-collapse" title="Minimizar panel" style="background:var(--yellow);border:1.5px solid var(--black);font-weight:900;border-radius:6px;padding:4px 8px;font-size:.82rem;cursor:pointer;flex-shrink:0">▲</button>`
+        : `<button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>`}
     </div>`;
 
     panel.innerHTML=html;
@@ -11390,6 +11396,21 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
+    // Botón colapso para text/bubble — mismo patrón que panel draw/shape
+    $('op-panel-collapse')?.addEventListener('click', () => {
+      const _p = $('edOptionsPanel'); if (!_p) return;
+      const _collapsed = _p.classList.toggle('panel-collapsed');
+      if (_collapsed) {
+        _edPanelTabShow();
+        // textarea oculto pero accesible via CSS — mantener foco para seguir escribiendo
+        setTimeout(() => { $('pp-text')?.focus(); }, 50);
+      } else {
+        _edPanelTabHide();
+        setTimeout(() => { $('pp-text')?.focus(); }, 50);
+      }
+      edFitCanvas();
+      _edRefocusAfterCollapse();
+    });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
     $('pp-edit-anim')?.addEventListener('click',()=>{
       const _animIdx = edSelectedIdx;
@@ -11505,6 +11526,8 @@ function edMinimize(){
     _panel.style.visibility='hidden';
     // Para props (imagen, texto, bocadillo, stroke): panel oculto sin barra flotante
   }
+  // Ocultar también la lengüeta si el panel estaba colapsado
+  _edPanelTabHide();
   // Mostrar barra flotante según herramienta activa (independiente de si el panel estaba abierto)
   const _minMode = window._edMinimizedDrawMode || $('edOptionsPanel')?.dataset.mode || '';
   if(['draw','eraser','fill'].includes(edActiveTool)){
@@ -11540,6 +11563,8 @@ function edMaximize(keepBar=false){
   $('edFloatBtn')?.classList.remove('visible');
   if(!keepBar){ edDrawBarHide(); }
   edShapeBarHide();
+  // Restaurar lengüeta si el panel sigue colapsado tras maximizar
+  if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
   // Restaurar panel si estaba activo al minimizar
   if(window._edMinimizedDrawMode){
     const mode = window._edMinimizedDrawMode;
