@@ -384,6 +384,9 @@ function buildRow(comic, currentUser) {
     delBtn.textContent = '✕';
     delBtn.addEventListener('click', () => {
       appConfirm(I18n.t('confirmDelete'), ()=>{
+        if (comic.supabaseId && typeof SupabaseClient !== 'undefined') {
+          SupabaseClient.deleteWork(comic.supabaseId).catch(() => {});
+        }
         ComicStore.remove(comic.id);
         showFiltrosLevel1();
         renderComics();

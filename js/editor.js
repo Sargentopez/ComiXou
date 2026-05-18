@@ -16597,7 +16597,11 @@ function EditorView_init(){
     edCloseMenus();
     if(!edProjectId){edToast('Sin proyecto activo');return;}
     edConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
+      const _comic = ComicStore.getById(edProjectId);
       ComicStore.remove(edProjectId);
+      if (_comic?.supabaseId && typeof SupabaseClient !== 'undefined') {
+        SupabaseClient.deleteWork(_comic.supabaseId).catch(() => {});
+      }
       edToast('Obra eliminada');
       setTimeout(()=>Router.go('my-comics'),600);
     });
