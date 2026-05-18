@@ -823,13 +823,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const fromApp = params.get('from') === 'app';
 
   const _doClose = () => {
-    if (history.length > 1) { history.back(); return; }
-    // Sin historial previo: volver al index solo si se abrió desde dentro de ComiXow
     if (fromApp) {
+      // Abierto desde dentro de la app: volver con history.back().
+      // En Android PWA, history.length puede ser 1 aunque haya página anterior,
+      // así que intentamos back() siempre y, si no hay historial, vamos al index.
+      if (history.length > 1) { history.back(); return; }
       const base = window.location.href.replace(/\/reader\/.*$/, '/');
       if (base) { window.location.href = base; return; }
     }
-    // Acceso externo: intentar cerrar la pestaña
+    // Acceso externo (enlace compartido): intentar cerrar la pestaña
+    if (history.length > 1) { history.back(); return; }
     window.close();
     setTimeout(() => {
       _readerToast('Cierra esta pestaña con el botón ✕ del navegador', 4000);
@@ -2539,11 +2542,12 @@ function _setupControls() {
     const dy   = Math.abs(endY - sy);
     sx = null;
     if (dy > 40) return;
-    // En créditos: si el gesto es un swipe horizontal claro → navegar atrás,
-    // si es un tap (sin desplazamiento significativo) → detectar enlace/botón.
+    // En créditos: swipe horizontal o tap en mitad izquierda → navegar atrás.
+    // Tap en mitad derecha o sobre botones HTML → el overlay gestiona.
     if (RS.isCredits) {
-      if (dx > 30 && dx > dy * 1.5) { goBack(); return; }
-      return; // tap en el canvas durante créditos: el overlay HTML gestiona los clicks
+      if (dx > 30 && dx > dy * 1.5) { goBack(); return; } // swipe
+      if (dx < 20 && dy < 20 && endX < window.innerWidth * 0.5) { goBack(); return; } // tap izq
+      return; // tap derecha: el overlay HTML gestiona los clicks
     }
     // Navegación normal
     if (_isBackSide(endX, endY)) goBack(); else advance();

@@ -18441,12 +18441,13 @@ function _gcpHandleDown(e) {
         const _c0 = edCoords(e);
         let _hit0 = -1;
         for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
+          if (window._gcpLayers[_i]?._gcpVisible === false) continue;
           if (window._gcpLayers[_i]?.contains?.(_c0.nx, _c0.ny)) { _hit0 = _i; break; }
         }
         // También comprobar si el objeto ya seleccionado cubre el punto (por su bbox)
         if (_hit0 < 0 && window._gcpSelIdx >= 0) {
           const _sel = window._gcpLayers[window._gcpSelIdx];
-          if (_sel?.contains?.(_c0.nx, _c0.ny)) _hit0 = window._gcpSelIdx;
+          if (_sel?._gcpVisible !== false && _sel?.contains?.(_c0.nx, _c0.ny)) _hit0 = window._gcpSelIdx;
         }
         if (_hit0 >= 0) {
           const _now0 = Date.now();
@@ -18647,12 +18648,14 @@ function _gcpDoSelectDrag(e, c) {
   // Pasada 1: textos y bocadillos primero (siempre encima visualmente)
   for (let i = window._gcpLayers.length-1; i >= 0; i--) {
     const _l = window._gcpLayers[i];
+    if (_l._gcpVisible === false) continue; // frame no visible → no seleccionable
     if ((_l.type==='text'||_l.type==='bubble') && _l.contains?.(c.nx, c.ny)) { hit = i; break; }
   }
   // Pasada 2: resto de capas (hit exacto)
   if (hit < 0) {
     for (let i = window._gcpLayers.length-1; i >= 0; i--) {
       const _l = window._gcpLayers[i];
+      if (_l._gcpVisible === false) continue; // frame no visible → no seleccionable
       if (_l.type==='text'||_l.type==='bubble') continue;
       if (_l.contains?.(c.nx, c.ny)) { hit = i; break; }
     }
