@@ -14559,7 +14559,12 @@ async function edLoadProject(id){
     edPages.forEach(p => (p.layers||[]).forEach(l => {
       if(l && l.type === 'fill' && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
     }));
-    const _doPushHistory = () => edPushHistory(true);
+    const _doPushHistory = () => {
+      edPushHistory(true);
+      // Sincronizar el marcador de "guardado" con el snapshot inicial,
+      // para que salir sin hacer cambios no pregunte si guardar.
+      _edSavedHistoryIdx = edHistoryIdx;
+    };
     if(_fillLoadPromises.length) {
       Promise.all(_fillLoadPromises).then(_doPushHistory);
     } else {
