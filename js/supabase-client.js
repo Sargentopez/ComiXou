@@ -784,10 +784,13 @@ const SupabaseClient = (() => {
               normW:          entry.normW           || null,
               normH:          entry.normH           || null }
           : entry.layerData;
-        // Embeber fillLayerData si existe (sin columna extra en Supabase)
-        const _payload = (entry.fillLayerData && !entry.isGifAnim)
-          ? { ..._payloadBase, _fillLayerData: entry.fillLayerData }
-          : _payloadBase;
+        // Embeber fillLayerData, orientation e isGroup en el payload (sin columnas extra)
+        const _payload = entry.isGifAnim ? _payloadBase : {
+          ..._payloadBase,
+          ...(entry.fillLayerData ? { _fillLayerData: entry.fillLayerData } : {}),
+          ...(entry.orientation   ? { _orientation:   entry.orientation   } : {}),
+          ...(entry.isGroup       ? { _isGroup: true, _layers: entry.layers } : {}),
+        };
         // Solo comprimir items animados (gcpLayersData grandes) — resto JSON directo
         const _ld = entry.isGifAnim
           ? await _czCompress(JSON.stringify(_payload))
@@ -887,17 +890,27 @@ continue;
           thumb:          r.thumb,
         });
       } else {
-        // Extraer fillLayerData si fue embebido en el payload
-        const _fillData = ld._fillLayerData || null;
-        const _layerDataClean = _fillData ? { ...ld, _fillLayerData: undefined } : ld;
+        // Extraer campos embebidos en el payload
+        const _fillData    = ld._fillLayerData || null;
+        const _orientation = ld._orientation   || null;
+        const _isGroup     = ld._isGroup       || false;
+        const _groupLayers = ld._layers        || null;
+        const _layerDataClean = { ...ld };
         delete _layerDataClean._fillLayerData;
-        folderMap.get(fid).items.push({
+        delete _layerDataClean._orientation;
+        delete _layerDataClean._isGroup;
+        delete _layerDataClean._layers;
+        const _item = {
           id:            r.id,
           timestamp:     new Date(r.created_at).getTime(),
-          layerData:     _layerDataClean,
+          isGroup:       _isGroup,
+          layerData:     _isGroup ? null : _layerDataClean,
+          layers:        _isGroup ? _groupLayers : null,
           fillLayerData: _fillData,
           thumb:         r.thumb,
-        });
+        };
+        if (_orientation) _item.orientation = _orientation;
+        folderMap.get(fid).items.push(_item);
       }
     }
     return { folders: [...folderMap.values()] };
