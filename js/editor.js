@@ -18118,15 +18118,15 @@ function _bibRenderPanel(panel) {
           _flNew._drawLayerId = _nid; _flNew._uid = 'fl_'+_nid;
           const _fimg = new Image();
           _fimg.onload = () => {
-            // El fill se guardó con toDataUrl() — zona de página origen (pwO×phO), origen en (0,0).
-            // El centro del fill en origen estaba en: mxO + strokeX*pwO, myO + strokeY*phO
-            // El stroke en destino está en:           mxD + newLayer.x*pwD, myD + newLayer.y*phD
-            // Pegamos el fill desplazado para que su centro coincida con el stroke en destino.
+            // El fill viene de toDataUrl(): imagen de pwO×phO con píxeles relativos a la página origen.
+            // El centro del relleno en la imagen está en: strokeX*pwO, strokeY*phO
+            // El stroke en el workspace destino está en:  mxD + newLayer.x*pwD, myD + newLayer.y*phD
+            // Fórmula: pegar en (mxD + nx*pwD - ox*pwO,  myD + ny*phD - oy*phO)
+            // así el centro del fill coincide exactamente con el stroke. Sin escalar.
             const _ox = _fd.strokeX ?? 0.5, _oy = _fd.strokeY ?? 0.5;
-            const _fillDx = (_mxD + newLayer.x * _pwD) - (_mxO + _ox * _pwO);
-            const _fillDy = (_myD + newLayer.y * _phD) - (_myO + _oy * _phO);
-            _flNew._ctx.drawImage(_fimg, 0, 0, _fimg.naturalWidth, _fimg.naturalHeight,
-              _mxD + _fillDx, _myD + _fillDy, _fimg.naturalWidth, _fimg.naturalHeight);
+            const _pasteX = _mxD + newLayer.x * _pwD - _ox * _pwO;
+            const _pasteY = _myD + newLayer.y * _phD - _oy * _phO;
+            _flNew._ctx.drawImage(_fimg, _pasteX, _pasteY);
             // _baseX/_baseY = posición del stroke en destino → offset en FillLayer.draw() = 0
             _flNew._baseX = newLayer.x; _flNew._baseY = newLayer.y;
             edRedraw();
