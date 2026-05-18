@@ -90,7 +90,63 @@ const ComicStore = (() => {
   function remove(id) {
     saveAll(getAll().filter(c => c.id !== id));
     _opfsDelete(id).catch(() => {});
+    _purgeLocalData(id);
     _emit('remove', id);
+  }
+
+  // Borra todos los datos locales asociados a una obra:
+  // biblioteca IDB, autosave IDB, frames de animación IDB y localStorage.
+  function _purgeLocalData(id) {
+    if (!id) return;
+    // 1. localStorage: biblioteca y cualquier clave con el id
+    const _bibKey = 'cs_biblioteca_' + id;
+    localStorage.removeItem(_bibKey);
+
+    // 2. IDB biblioteca (cxBiblioteca)
+    try {
+      const _r = indexedDB.open('cxBiblioteca', 1);
+      _r.onsuccess = e => {
+        try {
+          const db = e.target.result;
+          if (db.objectStoreNames.contains('bib')) {
+            db.transaction('bib', 'readwrite').objectStore('bib').delete(_bibKey);
+          }
+        } catch(_) {}
+      };
+    } catch(_) {}
+
+    // 3. IDB autosave (cxAutosave)
+    try {
+      const _r2 = indexedDB.open('cxAutosave', 1);
+      _r2.onsuccess = e => {
+        try {
+          const db = e.target.result;
+          if (db.objectStoreNames.contains('saves')) {
+            db.transaction('saves', 'readwrite').objectStore('saves').delete(id);
+          }
+        } catch(_) {}
+      };
+    } catch(_) {}
+
+    // 4. IDB frames de animación (cxAnims): borrar todas las claves que empiecen por id_
+    try {
+      const _r3 = indexedDB.open('cxAnims', 1);
+      _r3.onsuccess = e => {
+        try {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('anims')) return;
+          const tx  = db.transaction('anims', 'readwrite');
+          const st  = tx.objectStore('anims');
+          const req = st.openCursor();
+          req.onsuccess = ev => {
+            const cursor = ev.target.result;
+            if (!cursor) return;
+            if (String(cursor.key).startsWith(id + '_')) cursor.delete();
+            cursor.continue();
+          };
+        } catch(_) {}
+      };
+    } catch(_) {}
   }
 
   /* ── getByIdFull: async — devuelve comic completo con editorData ── */

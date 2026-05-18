@@ -17412,13 +17412,11 @@ function _bibInitIdb() {
           ]};
           const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
           if (_user && typeof SupabaseClient !== 'undefined') {
-            SupabaseClient.bibDownload(_user.id).then(downloaded => {
+            SupabaseClient.bibDownload(_user.id, edProjectId || null).then(downloaded => {
               if (downloaded && Array.isArray(downloaded.folders) &&
                   downloaded.folders.some(f => f.items && f.items.length > 0)) {
                 _bibCache = downloaded;
-                _bibSave(_bibCache); // persistir en IDB local
-                // Re-renderizar si el panel de biblioteca está abierto
-                if (typeof _bibRender === 'function') _bibRender();
+                _bibSave(_bibCache);
               }
             }).catch(() => {});
           }
@@ -17752,7 +17750,7 @@ function edBibAbrir() {
     // Mostrar panel con indicador de carga mientras descarga
     panel.classList.add('open');
     panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--gray-500);font-size:.85rem">Cargando biblioteca…</div>';
-    SupabaseClient.bibDownload(_user.id).then(downloaded => {
+    SupabaseClient.bibDownload(_user.id, edProjectId || null).then(downloaded => {
       if (downloaded && Array.isArray(downloaded.folders) &&
           downloaded.folders.some(f => f.items && f.items.length > 0)) {
         _bibCache = downloaded;

@@ -564,6 +564,12 @@ const SupabaseClient = (() => {
     }
     await _delete('panels', `work_id=eq.${supabaseId}`);
     await _delete('works',  `id=eq.${supabaseId}`);
+    // Borrar biblioteca de esta obra: archivos del bucket y filas en tabla biblioteca
+    try {
+      const _bibRows = await _get(`biblioteca?folder_id=like.${supabaseId}::*&select=anim_url`);
+      for (const _br of (_bibRows || [])) { await _animDelete(_br.anim_url).catch(() => {}); }
+      await _delete('biblioteca', `folder_id=like.${supabaseId}::*`);
+    } catch(_e) {}
   }
 
   // Borrar todas las obras de un autor y su perfil de authors
