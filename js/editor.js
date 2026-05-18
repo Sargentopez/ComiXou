@@ -14442,10 +14442,11 @@ async function edLoadProject(id){
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
   if(!comic)return;
   edProjectId=id;
-  // Resetar caché de biblioteca para forzar recarga con la clave correcta del proyecto
-  // (evita que al navegar entre obras en la SPA se muestre la biblioteca de la obra anterior)
+  // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
+  // cuando el usuario abra el panel. Se pasa supabaseId para que, si IDB está vacía,
+  // intente descargar de Supabase usando la clave correcta del proyecto.
   _bibCache = null;
-  _bibInitIdb();
+  await _bibInitIdb(comic.supabaseId || null);
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
@@ -17366,7 +17367,8 @@ const _BIB_KEY_PREFIX = 'cs_biblioteca';
 const _BIB_MAX_BYTES  = 0; // Sin tope local — el límite es el de la obra completa (60 MB nube)
 const _BIB_THUMB_SIZE = 80;
 // Inicializar IDB al cargar el módulo (async en background)
-setTimeout(() => { try { _bibInitIdb(); } catch(_) {} }, 0);
+// _bibInitIdb() se llama con await desde edLoadProject al abrir cada obra.
+// No hay llamada inicial — _bibCache permanece null hasta que se cargue una obra.
 
 // Clave de localStorage: por proyecto si hay proyecto activo
 function _bibKey() {
@@ -17389,8 +17391,9 @@ function _bibOpenIdb() {
   });
 }
 
-// Llamado una vez al arrancar el editor — carga IDB en _bibCache
-function _bibInitIdb() {
+// Carga la biblioteca en _bibCache desde IDB. Devuelve Promise que se resuelve cuando está lista.
+async function _bibInitIdb(supabaseWorkId) {
+  return new Promise(resolve => {
   _bibOpenIdb().then(db => {
     const tx  = db.transaction(_BIB_IDB_STORE, 'readonly');
     const req = tx.objectStore(_BIB_IDB_STORE).get(_bibKey());
@@ -17400,6 +17403,7 @@ function _bibInitIdb() {
         if (!data.folders.find(f => f.id === '__anim__' || f.name === 'Animaciones'))
           data.folders.push({ id: '__anim__', name: 'Animaciones', items: [] });
         _bibCache = data;
+        resolve();
       } else {
         // Migración desde localStorage si existe
         let migrated = null;
@@ -17417,6 +17421,7 @@ function _bibInitIdb() {
         if (migrated) {
           _bibCache = migrated;
           _bibSave(_bibCache);
+          resolve();
         } else {
           // IDB vacía y sin localStorage: intentar descargar de Supabase
           // (caso habitual en modo incógnito o dispositivo nuevo)
@@ -17425,14 +17430,17 @@ function _bibInitIdb() {
             { id: '__anim__', name: 'Animaciones', items: [] }
           ]};
           const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
-          if (_user && typeof SupabaseClient !== 'undefined') {
-            SupabaseClient.bibDownload(_user.id, edProjectId || null).then(downloaded => {
+          if (_user && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
+            SupabaseClient.bibDownload(_user.id, supabaseWorkId).then(downloaded => {
               if (downloaded && Array.isArray(downloaded.folders) &&
                   downloaded.folders.some(f => f.items && f.items.length > 0)) {
                 _bibCache = downloaded;
                 _bibSave(_bibCache);
               }
-            }).catch(() => {});
+              resolve();
+            }).catch(() => { resolve(); });
+          } else {
+            resolve();
           }
         }
       }
@@ -17442,13 +17450,16 @@ function _bibInitIdb() {
         { id: '__root__', name: 'General', items: [] },
         { id: '__anim__', name: 'Animaciones', items: [] }
       ]};
+      resolve();
     };
   }).catch(() => {
     _bibCache = { folders: [
       { id: '__root__', name: 'General', items: [] },
       { id: '__anim__', name: 'Animaciones', items: [] }
     ]};
+    resolve();
   });
+  }); // cierre new Promise
 }
 
 // Síncrona: devuelve el caché (siempre actualizado)
@@ -17755,25 +17766,8 @@ function _bibShowFolderPicker(entry, data) {
 function edBibAbrir() {
   const panel = $('edOptionsPanel');
   if (!panel) return;
-  // Si la biblioteca está vacía y hay usuario autenticado, intentar descargar de Supabase.
-  // Cubre el caso de modo incógnito o dispositivo nuevo donde IDB está vacía.
-  const _bib = _bibLoad();
-  const _isEmpty = !_bib.folders.some(f => f.items && f.items.length > 0);
-  const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
-  if (_isEmpty && _user && typeof SupabaseClient !== 'undefined') {
-    // Mostrar panel con indicador de carga mientras descarga
-    panel.classList.add('open');
-    panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--gray-500);font-size:.85rem">Cargando biblioteca…</div>';
-    SupabaseClient.bibDownload(_user.id, edProjectId || null).then(downloaded => {
-      if (downloaded && Array.isArray(downloaded.folders) &&
-          downloaded.folders.some(f => f.items && f.items.length > 0)) {
-        _bibCache = downloaded;
-        _bibSave(_bibCache);
-      }
-      _bibRenderPanel(panel);
-    }).catch(() => _bibRenderPanel(panel));
-    return;
-  }
+  // La biblioteca ya está cargada en _bibCache desde edLoadProject (await _bibInitIdb).
+  // El botón solo abre el panel y renderiza lo que ya está en memoria.
   _bibRenderPanel(panel);
 }
 
