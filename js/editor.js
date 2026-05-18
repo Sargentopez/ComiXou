@@ -3370,9 +3370,21 @@ function edRedraw(){
     ? (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : edLayers.find(l=>l.type==='line'&&l._fusionId===_edLineFusionId))
     : null;
 
+  // FillLayer vinculado al DrawLayer activo — no debe dimearse durante edición de dibujo
+  const _activeDraw = _editingDraw
+    ? (edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.type === 'draw'
+        ? edLayers[edSelectedIdx]
+        : edLayers.find(l => l.type === 'draw'))
+    : null;
+  const _activeFill = _activeDraw?._fillLayerId
+    ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === _activeDraw._fillLayerId)
+    : null;
+
   const _isDimmed = (l, i) => {
     if (!_anyEditing) return false;
     if (_editingDraw) {
+      // El DrawLayer activo y su FillLayer vinculado van siempre al 100%
+      if (l === _activeDraw || l === _activeFill) return false;
       return l.type !== 'draw';
     }
     if (i === edSelectedIdx) return false;
