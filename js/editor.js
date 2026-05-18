@@ -21033,11 +21033,46 @@ function gcpInsertFromBib(entry) {
     }
   };
 
+  // Conversión de orientación — igual que en el editor general
+  const _entryOrigGcp = entry.orientation || edOrientation;
+  const _needsConvGcp = _entryOrigGcp !== edOrientation;
+  const _pwOGcp = _entryOrigGcp === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const _phOGcp = _entryOrigGcp === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const _pwDGcp = edPageW(), _phDGcp = edPageH();
+  const _mxOGcp = (ED_CANVAS_W - _pwOGcp) / 2, _myOGcp = (ED_CANVAS_H - _phOGcp) / 2;
+  const _mxDGcp = (ED_CANVAS_W - _pwDGcp) / 2, _myDGcp = (ED_CANVAS_H - _phDGcp) / 2;
+  function _adaptGcp(la) {
+    if (!la || !_needsConvGcp) return;
+    if (la.type === 'fill' || la.type === 'draw') return;
+    if (la.width  != null) la.width  = la.width  * _pwOGcp / _pwDGcp;
+    if (la.height != null) la.height = la.height * _phOGcp / _phDGcp;
+    const _cx = (_mxOGcp + (la.x||0.5) * _pwOGcp - _mxDGcp) / _pwDGcp;
+    const _cy = (_myOGcp + (la.y||0.5) * _phOGcp - _myDGcp) / _phDGcp;
+    la.x = _cx; la.y = _cy;
+    if (la.type !== 'stroke') {
+      la.x = Math.max(0, Math.min(1, la.x));
+      la.y = Math.max(0, Math.min(1, la.y));
+    }
+    if (la.type === 'line' && Array.isArray(la.points)) {
+      const _cvP = p => {
+        if (!p) return p;
+        const np = {...p, x: p.x*_pwOGcp/_pwDGcp, y: p.y*_phOGcp/_phDGcp};
+        if (p.cp1) np.cp1 = {x:p.cp1.x*_pwOGcp/_pwDGcp, y:p.cp1.y*_phOGcp/_phDGcp};
+        if (p.cp2) np.cp2 = {x:p.cp2.x*_pwOGcp/_pwDGcp, y:p.cp2.y*_phOGcp/_phDGcp};
+        return np;
+      };
+      la.points = la.points.map(_cvP);
+      if (Array.isArray(la.subPaths)) la.subPaths = la.subPaths.map(sp => sp.map(_cvP));
+      if (typeof la._updateBbox === 'function') la._updateBbox();
+    }
+  }
+
   if (entry.isGroup && Array.isArray(entry.layers)) {
     const newGroupId = _edNewGroupId();
     entry.layers.forEach(ld => {
       const la = edDeserLayer(ld, edOrientation);
       if (!la) return;
+      _adaptGcp(la);
       la.groupId = newGroupId;
       delete la._fusionId;
       insertLayer(la);
@@ -21045,11 +21080,10 @@ function gcpInsertFromBib(entry) {
   } else {
     const la = edDeserLayer(entry.layerData, edOrientation);
     if (!la) return;
+    _adaptGcp(la);
     delete la._fusionId;
-    // Si tiene FillLayer: fusionar ambos en un único StrokeLayer antes de insertar
+    // Si tiene FillLayer: fusionar ambos en un único ImageLayer antes de insertar en GCP
     if (entry.fillLayerData) {
-      // Fusionar FillLayer + StrokeLayer en una sola ImageLayer para el GCP
-      // fromDataUrlFull es async — esperar con onload antes de hacer el merge
       const _doMergeGcp = (_flCanvas) => {
         const pw=edPageW(),ph=edPageH(),mx=edMarginX(),my=edMarginY();
         const extra=Math.round(Math.max(pw,ph)*0.5);
@@ -21058,14 +21092,14 @@ function gcpInsertFromBib(entry) {
         const off=document.createElement('canvas');
         off.width=wsW; off.height=wsH;
         const octx=off.getContext('2d');
-        // 1. FillLayer debajo: el canvas fill está en coords workspace absolutas
-        // Hay que copiarlo al canvas tmp sin el transform del octx
-        if(_flCanvas) octx.drawImage(_flCanvas, offX, offY);
-        // 2. StrokeLayer encima: con transform (igual que _gcpVectorToImage)
+        // 1. FillLayer debajo — sus píxeles están en el canvas workspace (ED_CANVAS_W×ED_CANVAS_H)
+        // Copiar la zona visible recortando al canvas temporal con offset
+        if (_flCanvas) octx.drawImage(_flCanvas, offX, offY);
+        // 2. StrokeLayer encima
         octx.setTransform(1,0,0,1,offX,offY);
         octx.globalAlpha=la.opacity??1; la.draw(octx); octx.globalAlpha=1;
         octx.setTransform(1,0,0,1,0,0);
-        // Bbox
+        // Bbox del contenido combinado
         const d=octx.getImageData(0,0,wsW,wsH).data;
         let x0=wsW,y0=wsH,x1=0,y1=0;
         for(let y=0;y<wsH;y++) for(let x=0;x<wsW;x++){
@@ -21094,7 +21128,8 @@ function gcpInsertFromBib(entry) {
         };
         img.src=dataUrl;
       };
-      // Cargar el fill (recortado al bbox del stroke) y posicionarlo en workspace
+      // Cargar fill y posicionarlo en el canvas workspace usando la misma fórmula
+      // que el editor general: pasteX = mxD + la.x*pwD - strokeX*pwO (sin escalar)
       const _flSer = entry.fillLayerData;
       const _flUrl2 = (_flSer && _flSer.dataUrl) ? _flSer.dataUrl : '';
       if (!_flUrl2) { _doMergeGcp(null); } else {
@@ -21102,10 +21137,10 @@ function gcpInsertFromBib(entry) {
         _fillImg.onload = () => {
           const _ftmp = document.createElement('canvas');
           _ftmp.width = ED_CANVAS_W; _ftmp.height = ED_CANVAS_H;
-          const pw=edPageW(), ph=edPageH();
-          const _dxPx = (la.x - (_flSer.strokeX ?? la.x)) * pw;
-          const _dyPx = (la.y - (_flSer.strokeY ?? la.y)) * ph;
-          _ftmp.getContext('2d').drawImage(_fillImg, _dxPx, _dyPx, ED_CANVAS_W, ED_CANVAS_H);
+          const _ox = _flSer.strokeX ?? 0.5, _oy = _flSer.strokeY ?? 0.5;
+          const _pasteX = _mxDGcp + la.x * _pwDGcp - _ox * _pwOGcp;
+          const _pasteY = _myDGcp + la.y * _phDGcp - _oy * _phOGcp;
+          _ftmp.getContext('2d').drawImage(_fillImg, _pasteX, _pasteY);
           _doMergeGcp(_ftmp);
         };
         _fillImg.onerror = () => { _doMergeGcp(null); };
