@@ -17066,7 +17066,11 @@ function EditorView_init(){
       // Cerrar panels flotantes del GCP si el tap es fuera de ellos
       const _bar = document.getElementById('gcpFramesBar');
       const _bib = document.getElementById('edOptionsPanel');
-      const _insideBar = e.target?.closest?.('#gcpFramesBar, #gcpFramesToggleBtn');
+      // También considerar "dentro del panel" cualquier menú flotante del GCP
+      // que haya sido abierto desde él (se insertan en body fuera de #gcpFramesBar).
+      const _insideFloating = (_gcpInterpMenuOpen && _gcpInterpMenuOpen.contains(e.target))
+        || e.target?.closest?.('#gcpInterpModal');
+      const _insideBar = e.target?.closest?.('#gcpFramesBar, #gcpFramesToggleBtn') || _insideFloating;
       const _insideBib = e.target?.closest?.('#edOptionsPanel, #gcpBibBtn');
       if (_bar && _bar.style.display === 'flex' && !_insideBar) {
         _gcpToggleFramesBar(); // cierra
@@ -20662,6 +20666,8 @@ function _gcpUpdateFramesBar() {
     scroll.appendChild(liveCard);
     framesPane.appendChild(scroll);
   });
+  // Limpiar flag de reconstrucción en el siguiente frame
+  requestAnimationFrame(() => { window._gcpFramesBarRebuilding = false; });
 }
 
 // ── Diagnóstico scrollbars GCP ───────────────────────────────────────────────
