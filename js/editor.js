@@ -5813,6 +5813,7 @@ function edOnStart(e){
                tgt.closest('#editorViewer')   ||
                tgt.closest('#edProjectModal') ||
                tgt.closest('#edConfirmModal') ||
+               tgt.closest('.ed-autosave-dlg') ||
                tgt.closest('#edPanelTab');
   if(isUI) return;
 

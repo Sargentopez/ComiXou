@@ -64,21 +64,30 @@ function _homeStopRefresh() {
 }
 
 async function _loadPublishedWorks() {
-  const grid = document.getElementById('comicsGrid');
-  if (grid) grid.innerHTML = '';
-
   if (typeof SupabaseClient === 'undefined' || typeof SupabaseClient.fetchPublishedWorks !== 'function') {
     _homeWorks = [];
     renderComics();
     return;
   }
 
+  // Mostrar inmediatamente lo que haya en caché local (stale-while-revalidate)
+  // para que el grid no aparezca vacío mientras llega Supabase.
+  if (_homeWorks === null) {
+    const local = typeof ComicStore !== 'undefined' ? ComicStore.getPublished() : [];
+    if (local && local.length > 0) {
+      _homeWorks = local;
+      renderComics();
+      _homeWorks = null; // marcar como pendiente de actualización real
+    }
+  }
+
   try {
-    _homeWorks = await SupabaseClient.fetchPublishedWorks();
+    const fresh = await SupabaseClient.fetchPublishedWorks();
+    _homeWorks = fresh;
     _homeLastFetch = Date.now();
   } catch(e) {
     console.error('Error cargando obras:', e);
-    _homeWorks = [];
+    if (_homeWorks === null) _homeWorks = [];
   }
   renderComics();
 }

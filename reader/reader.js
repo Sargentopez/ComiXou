@@ -824,12 +824,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const _doClose = () => {
     if (fromApp) {
-      // Abierto desde dentro de la app: volver con history.back().
-      // En Android PWA, history.length puede ser 1 aunque haya página anterior,
-      // así que intentamos back() siempre y, si no hay historial, vamos al index.
-      if (history.length > 1) { history.back(); return; }
+      // Abierto desde dentro de la app: volver siempre al index directamente.
+      // NO usar history.back() — en Android Chrome PWA lleva al inicio del
+      // navegador en lugar de al index de la app.
       const base = window.location.href.replace(/\/reader\/.*$/, '/');
-      if (base) { window.location.href = base; return; }
+      window.location.href = base;
+      return;
     }
     // Acceso externo (enlace compartido): intentar cerrar la pestaña
     if (history.length > 1) { history.back(); return; }
