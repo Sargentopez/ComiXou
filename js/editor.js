@@ -17400,11 +17400,29 @@ function _bibInitIdb() {
             ]};
           }
         } catch(_) {}
-        _bibCache = migrated || { folders: [
-          { id: '__root__', name: 'General', items: [] },
-          { id: '__anim__', name: 'Animaciones', items: [] }
-        ]};
-        _bibSave(_bibCache); // persistir migración
+        if (migrated) {
+          _bibCache = migrated;
+          _bibSave(_bibCache);
+        } else {
+          // IDB vacía y sin localStorage: intentar descargar de Supabase
+          // (caso habitual en modo incógnito o dispositivo nuevo)
+          _bibCache = { folders: [
+            { id: '__root__', name: 'General', items: [] },
+            { id: '__anim__', name: 'Animaciones', items: [] }
+          ]};
+          const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+          if (_user && typeof SupabaseClient !== 'undefined') {
+            SupabaseClient.bibDownload(_user.id).then(downloaded => {
+              if (downloaded && Array.isArray(downloaded.folders) &&
+                  downloaded.folders.some(f => f.items && f.items.length > 0)) {
+                _bibCache = downloaded;
+                _bibSave(_bibCache); // persistir en IDB local
+                // Re-renderizar si el panel de biblioteca está abierto
+                if (typeof _bibRender === 'function') _bibRender();
+              }
+            }).catch(() => {});
+          }
+        }
       }
     };
     req.onerror = () => {
