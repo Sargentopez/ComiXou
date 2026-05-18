@@ -17743,6 +17743,25 @@ function _bibShowFolderPicker(entry, data) {
 function edBibAbrir() {
   const panel = $('edOptionsPanel');
   if (!panel) return;
+  // Si la biblioteca está vacía y hay usuario autenticado, intentar descargar de Supabase.
+  // Cubre el caso de modo incógnito o dispositivo nuevo donde IDB está vacía.
+  const _bib = _bibLoad();
+  const _isEmpty = !_bib.folders.some(f => f.items && f.items.length > 0);
+  const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+  if (_isEmpty && _user && typeof SupabaseClient !== 'undefined') {
+    // Mostrar panel con indicador de carga mientras descarga
+    panel.classList.add('open');
+    panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--gray-500);font-size:.85rem">Cargando biblioteca…</div>';
+    SupabaseClient.bibDownload(_user.id).then(downloaded => {
+      if (downloaded && Array.isArray(downloaded.folders) &&
+          downloaded.folders.some(f => f.items && f.items.length > 0)) {
+        _bibCache = downloaded;
+        _bibSave(_bibCache);
+      }
+      _bibRenderPanel(panel);
+    }).catch(() => _bibRenderPanel(panel));
+    return;
+  }
   _bibRenderPanel(panel);
 }
 
