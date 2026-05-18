@@ -18068,18 +18068,22 @@ function _bibRenderPanel(panel) {
           if (la.x != null) la.x = Math.max(0, Math.min(1, la.x));
           if (la.y != null) la.y = Math.max(0, Math.min(1, la.y));
         }
-        // LineLayer: convertir cada punto del path
+        // LineLayer: los puntos son coordenadas LOCALES relativas al centro (no absolutas).
+        // Solo hay que reescalar los deltas: p.x * pwO/pwD, p.y * phO/phD.
+        // _updateBbox() recalculará x,y,width,height correctamente al renderizar.
         if (la.type === 'line' && Array.isArray(la.points)) {
           const _cvPt = p => {
             if (!p) return p;
-            const np = { ...p, x: _convX(p.x), y: _convY(p.y) };
-            if (p.cp1) np.cp1 = { x: _convX(p.cp1.x), y: _convY(p.cp1.y) };
-            if (p.cp2) np.cp2 = { x: _convX(p.cp2.x), y: _convY(p.cp2.y) };
+            const np = { ...p, x: p.x * _pwO / _pwD, y: p.y * _phO / _phD };
+            if (p.cp1) np.cp1 = { x: p.cp1.x * _pwO / _pwD, y: p.cp1.y * _phO / _phD };
+            if (p.cp2) np.cp2 = { x: p.cp2.x * _pwO / _pwD, y: p.cp2.y * _phO / _phD };
             return np;
           };
           la.points = la.points.map(_cvPt);
           if (Array.isArray(la.subPaths))
             la.subPaths = la.subPaths.map(sp => sp.map(_cvPt));
+          // Forzar recálculo del bbox con los puntos convertidos
+          if (typeof la._updateBbox === 'function') la._updateBbox();
         }
       }
 
@@ -18114,12 +18118,16 @@ function _bibRenderPanel(panel) {
           _flNew._drawLayerId = _nid; _flNew._uid = 'fl_'+_nid;
           const _fimg = new Image();
           _fimg.onload = () => {
-            // El fill se guardó con toDataUrl() — zona de página en orientación origen (pwO×phO).
-            // Pegarlo SIN escalar en los márgenes de la orientación destino.
-            // Mismo sistema que _reframeFill en _pgRotatePage: preserva tamaño físico en px.
+            // El fill se guardó con toDataUrl() — zona de página origen (pwO×phO), origen en (0,0).
+            // El centro del fill en origen estaba en: mxO + strokeX*pwO, myO + strokeY*phO
+            // El stroke en destino está en:           mxD + newLayer.x*pwD, myD + newLayer.y*phD
+            // Pegamos el fill desplazado para que su centro coincida con el stroke en destino.
+            const _ox = _fd.strokeX ?? 0.5, _oy = _fd.strokeY ?? 0.5;
+            const _fillDx = (_mxD + newLayer.x * _pwD) - (_mxO + _ox * _pwO);
+            const _fillDy = (_myD + newLayer.y * _phD) - (_myO + _oy * _phO);
             _flNew._ctx.drawImage(_fimg, 0, 0, _fimg.naturalWidth, _fimg.naturalHeight,
-              _mxD, _myD, _fimg.naturalWidth, _fimg.naturalHeight);
-            // _baseX/_baseY = posición del stroke en destino → offset en draw() = 0
+              _mxD + _fillDx, _myD + _fillDy, _fimg.naturalWidth, _fimg.naturalHeight);
+            // _baseX/_baseY = posición del stroke en destino → offset en FillLayer.draw() = 0
             _flNew._baseX = newLayer.x; _flNew._baseY = newLayer.y;
             edRedraw();
           };
