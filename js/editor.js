@@ -6146,8 +6146,9 @@ function edOnStart(e){
     } else {
       // Tocar en vacío fuera del bbox
       if(e.pointerType === 'touch'){
-        // Táctil: esperar 120ms por si llega segundo dedo antes de iniciar rubber band
+        // Táctil: volver a select inmediatamente para que taps y doble taps funcionen
         _msClear();
+        edActiveTool = 'select'; edCanvas.className = '';
         clearTimeout(window._edRbTouchTimer);
         const _rbC2 = c;
         window._edRbTouchTimer = setTimeout(() => {
