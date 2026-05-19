@@ -4399,16 +4399,15 @@ function _edApplyCropStroke(la, pts, pw, ph) {
 
 function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   // El DrawLayer trabaja en coordenadas ABSOLUTAS del workspace (ED_CANVAS_W × ED_CANVAS_H).
-  // Convertimos los puntos fraccionarios de página a coordenadas de workspace.
   const mxWS = edMarginX(), myWS = edMarginY();
-
-  const wsPts = pts.map(p => ({
-    x: mxWS + p.x * pw,
-    y: myWS + p.y * ph
-  }));
-
+  const wsPts = pts.map(p => ({ x: mxWS + p.x * pw, y: myWS + p.y * ph }));
   const W = ED_CANVAS_W, H = ED_CANVAS_H;
   const srcCanvas = dl._canvas;
+
+  // FillLayer vinculado al DrawLayer (puede no existir)
+  const fl = dl._fillLayerId
+    ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === dl._fillLayerId)
+    : null;
 
   const _drawPoly = (ctx) => {
     ctx.beginPath();
@@ -4417,61 +4416,134 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
     ctx.closePath();
   };
 
-  // ── 1. DrawLayer "dentro": área interior del polígono ──
-  const offInside = document.createElement('canvas');
-  offInside.width = W; offInside.height = H;
-  const ctxInside = offInside.getContext('2d');
-  ctxInside.save();
-  _drawPoly(ctxInside);
-  ctxInside.clip();
-  ctxInside.drawImage(srcCanvas, 0, 0);
-  ctxInside.restore();
+  // Helper: recortar un canvas en dos (dentro/fuera del polígono)
+  const _splitCanvas = (src) => {
+    const inside = document.createElement('canvas');
+    inside.width = W; inside.height = H;
+    const ctxIn = inside.getContext('2d');
+    ctxIn.save(); _drawPoly(ctxIn); ctxIn.clip();
+    ctxIn.drawImage(src, 0, 0); ctxIn.restore();
 
-  // ── 2. DrawLayer "fuera": área exterior del polígono ──
-  const offOutside = document.createElement('canvas');
-  offOutside.width = W; offOutside.height = H;
-  const ctxOutside = offOutside.getContext('2d');
-  ctxOutside.drawImage(srcCanvas, 0, 0);
-  ctxOutside.globalCompositeOperation = 'destination-out';
-  _drawPoly(ctxOutside);
-  ctxOutside.fill();
-  ctxOutside.globalCompositeOperation = 'source-over';
+    const outside = document.createElement('canvas');
+    outside.width = W; outside.height = H;
+    const ctxOut = outside.getContext('2d');
+    ctxOut.drawImage(src, 0, 0);
+    ctxOut.globalCompositeOperation = 'destination-out';
+    _drawPoly(ctxOut); ctxOut.fill();
+    ctxOut.globalCompositeOperation = 'source-over';
+    return { inside, outside };
+  };
 
-  // ── 3. Verificar que haya contenido en la zona interior ──
-  const idCheck = ctxInside.getImageData(0, 0, W, H).data;
+  // ── 1. Recortar DrawLayer ──
+  const { inside: drawInside, outside: drawOutside } = _splitCanvas(srcCanvas);
+
+  // ── 2. Verificar contenido interior del dibujo ──
+  const idCheck = drawInside.getContext('2d').getImageData(0, 0, W, H).data;
   let hasContent = false;
   for (let i = 3; i < idCheck.length; i += 4) { if (idCheck[i] > 4) { hasContent = true; break; } }
-  if (!hasContent) {
-    // Nada dentro del polígono — cancelar silenciosamente
-    if (_onDone) _onDone(null);
-    return;
+  if (!hasContent) { if (_onDone) _onDone(null); return; }
+
+  // ── 3. Recortar FillLayer si existe ──
+  let fillInside = null, fillOutside = null;
+  if (fl && fl._canvas) {
+    const _fs = _splitCanvas(fl._canvas);
+    fillInside  = _fs.inside;
+    fillOutside = _fs.outside;
   }
 
-  // ── 4. Crear nuevo DrawLayer con el contenido DENTRO del polígono ──
+  // ── 4. Crear DrawLayer DENTRO con su FillLayer vinculado ──
   const dlInside = new DrawLayer();
-  dlInside._ctx.drawImage(offInside, 0, 0);
+  dlInside._ctx.drawImage(drawInside, 0, 0);
   dlInside.opacity = dl.opacity ?? 1;
   dlInside.locked  = false;
+  if (fillInside) {
+    const uidIn = Date.now().toString(36) + '_ci_' + Math.random().toString(36).slice(2,5);
+    dlInside._uid         = uidIn;
+    dlInside._fillLayerId = uidIn;
+    const flInside = new FillLayer();
+    flInside._drawLayerId = uidIn;
+    flInside._uid         = 'fl_' + uidIn;
+    flInside._baseX       = dlInside.x;
+    flInside._baseY       = dlInside.y;
+    flInside._ctx.drawImage(fillInside, 0, 0);
+    dlInside._flInside = flInside; // referencia temporal para inserción en _finish
+  }
 
-  // ── 5. Reemplazar el canvas del DrawLayer original con el contenido FUERA ──
-  // (crear nuevo DrawLayer para "fuera" y sustituir el original en edLayers)
+  // ── 5. Crear DrawLayer FUERA con su FillLayer vinculado ──
   const dlOutside = new DrawLayer();
-  dlOutside._ctx.drawImage(offOutside, 0, 0);
+  dlOutside._ctx.drawImage(drawOutside, 0, 0);
   dlOutside.opacity = dl.opacity ?? 1;
   dlOutside.locked  = dl.locked || false;
+  if (fillOutside) {
+    const uidOut = (Date.now()+1).toString(36) + '_co_' + Math.random().toString(36).slice(2,5);
+    dlOutside._uid         = uidOut;
+    dlOutside._fillLayerId = uidOut;
+    const flOutside = new FillLayer();
+    flOutside._drawLayerId = uidOut;
+    flOutside._uid         = 'fl_' + uidOut;
+    flOutside._baseX       = dlOutside.x;
+    flOutside._baseY       = dlOutside.y;
+    flOutside._ctx.drawImage(fillOutside, 0, 0);
+    dlOutside._flOutside = flOutside; // referencia temporal
+  }
 
-  // Sustituir el original (dl) por dlOutside en el array de layers
+  // ── 6. Sustituir el DrawLayer original (y su fill) en edLayers ──
   const page = edPages[edCurrentPage];
   const origIdx = page ? page.layers.indexOf(dl) : -1;
   if (origIdx >= 0) {
-    page.layers.splice(origIdx, 1, dlOutside);
+    // Eliminar el FillLayer original si existe
+    if (fl) {
+      const flOrigIdx = page.layers.indexOf(fl);
+      if (flOrigIdx >= 0) page.layers.splice(flOrigIdx, 1);
+    }
+    // Obtener índice actualizado del DrawLayer original tras posible eliminación del fill
+    const dlIdx = page.layers.indexOf(dl);
+    if (dlIdx >= 0) {
+      // Insertar dlOutside + su fill (fill primero, luego draw)
+      const replacements = [];
+      if (dlOutside._flOutside) replacements.push(dlOutside._flOutside);
+      replacements.push(dlOutside);
+      page.layers.splice(dlIdx, 1, ...replacements);
+    }
     edLayers = page.layers;
-    // Asegurarse de que la referencia en _edCropLayer apunta al nuevo
     _edCropLayer = dlOutside;
   }
 
-  // El _finish de _edApplyCrop insertará dlInside justo después de dlOutside
+  // Insertar flInside en edLayers ANTES de llamar _onDone/_finish,
+  // porque _finish llama _edFreezeAllDrawLayers que busca el fill en page.layers.
+  // Si el fill no está aún en layers, el StrokeLayer resultante queda sin fill.
+  if (dlInside._flInside) {
+    // dlOutside ya está en edLayers (lo insertamos antes). dlInside aún no.
+    // Insertamos flInside al final provisionalmente — _finish lo recolocará
+    // cuando inserte dlInside en la posición correcta.
+    edLayers.push(dlInside._flInside);
+    edPages[edCurrentPage].layers = edLayers;
+  }
+
+  // Llamar _finish con dlInside — _finish lo inserta en edLayers y llama
+  // _edFreezeAllDrawLayers, que encontrará flInside en page.layers y lo vinculará.
   if (_onDone) _onDone(dlInside);
+
+  // Recolocar flInside justo antes de su StrokeLayer (tras el freeze, dlInside
+  // ya fue convertido a StrokeLayer; buscarlo por _uid)
+  if (dlInside._flInside) {
+    const _uidIn = dlInside._uid;
+    const _sl = edLayers.find(l => l.type === 'stroke' && l._uid === _uidIn);
+    const _fl = edLayers.find(l => l.type === 'fill' && l._drawLayerId === _uidIn);
+    if (_sl && _fl) {
+      const _slIdx = edLayers.indexOf(_sl);
+      const _flIdx = edLayers.indexOf(_fl);
+      // Mover fill justo antes del stroke si no está ya en esa posición
+      if (_flIdx !== _slIdx - 1) {
+        edLayers.splice(_flIdx, 1);
+        const _newSlIdx = edLayers.indexOf(_sl);
+        edLayers.splice(_newSlIdx, 0, _fl);
+        edPages[edCurrentPage].layers = edLayers;
+      }
+    }
+    delete dlInside._flInside;
+  }
+  if (dlOutside._flOutside) delete dlOutside._flOutside;
 }
 
 function edDeletePage(){
@@ -6193,13 +6265,16 @@ function edOnStart(e){
     // En touch/pen: guardar coordenadas y esperar a pointerup para confirmar
     // que fue toque simple y no inicio de pinch
     if(e.pointerType === 'touch'){
-      window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
+      const _cFP = edCoords(e);
+      const _srcFP = e.touches ? e.touches[0] : e;
+      window._edFillPending = { nx: _cFP.nx, ny: _cFP.ny, sx: _srcFP.clientX, sy: _srcFP.clientY - _edCanvasTop, pid: e.pointerId };
       if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       return;
     }
     // Mouse/pen: ejecutar inmediatamente
     const c = edCoords(e);
-    edFloodFill(c.nx, c.ny);
+    const _src1 = e.touches ? e.touches[0] : e;
+    edFloodFill(c.nx, c.ny, _src1.clientX, _src1.clientY - _edCanvasTop);
     return;
   }
   // Color Erase: un toque = borrar zona del color tocado
@@ -7747,8 +7822,8 @@ function edOnEnd(e){
         if(_la && (_la.type==='shape' || _la.type==='line')){
           _la.fillColor = edDrawColor;
           edPushHistory(); edRedraw();
-        } else { edFloodFill(fp.nx, fp.ny); }
-      } else { edFloodFill(fp.nx, fp.ny); }
+        } else { edFloodFill(fp.nx, fp.ny, fp.sx, fp.sy); }
+      } else { edFloodFill(fp.nx, fp.ny, fp.sx, fp.sy); }
     }
   }
   // ── RUBBER BAND en modo select (PC) → activar multiselect ──
@@ -8399,36 +8474,61 @@ function _edGetOrCreateDrawLayer(){
 // escribiendo el resultado en flTarget._ctx (FillLayer).
 // refCanvas puede ser el _canvas del StrokeLayer (ya renderizado en workspace).
 // wx0,wy0: offset donde refCanvas comienza en coords workspace.
-function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny, rx0, ry0, rW, rH, useStrokeAsRef) {
-  const wx = Math.round(edMarginX() + nx * edPageW());
-  const wy = Math.round(edMarginY() + ny * edPageH());
-  // Coordenadas relativas al canvas del stroke
-  const lx = wx - rx0, ly = wy - ry0;
-  if(lx < 0 || lx >= rW || ly < 0 || ly >= rH) return;
-
-  // Construir canvas workspace del StrokeLayer en coords absolutas
-  // El refCanvas del StrokeLayer tiene su propio sistema de coordenadas (bbox recortado)
-  // Necesitamos leerlo en coords del workspace completo (ED_CANVAS_W x ED_CANVAS_H)
-  const wsRef = document.createElement('canvas');
-  wsRef.width = ED_CANVAS_W; wsRef.height = ED_CANVAS_H;
-  const wsCtx = wsRef.getContext('2d');
-  wsCtx.globalAlpha = 1;
-  // Dibujar el StrokeLayer en el canvas workspace de referencia
+function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny, sx, sy) {
+  // Leer el pixel del canvas RENDERIZADO (edCtx) en el punto tocado.
+  // Este pixel es la composición exacta de lo que ve el usuario —
+  // incluyendo StrokeLayer, FillLayer, cámara y zoom.
+  // Es la semilla de color correcta para el flood fill.
   const _selLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  if (_selLa && typeof _selLa.draw === 'function') {
-    _selLa.draw(wsCtx);
-  }
-  // También dibujar el FillLayer actual para que sea opaco a su propio color
-  if (flTarget._canvas) wsCtx.drawImage(flTarget._canvas, 0, 0);
+  if(!_selLa) return;
 
   const W = ED_CANVAS_W, H = ED_CANVAS_H;
-  const wxAbs = wx, wyAbs = wy;
+  const pw = edPageW(), ph = edPageH();
 
-  const fc = edDrawColor;
-  const fR=parseInt(fc.slice(1,3),16), fG=parseInt(fc.slice(3,5),16),
-        fB=parseInt(fc.slice(5,7),16), fA=Math.round((edDrawOpacity/100)*255);
+  // Coordenadas workspace del punto tocado
+  const wx = Math.round(edMarginX() + nx * pw);
+  const wy = Math.round(edMarginY() + ny * ph);
+  if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
 
-  // Binarizar canvas de referencia
+  // Leer semilla del canvas renderizado en pantalla
+  let tR=0, tG=0, tB=0, tA=0;
+  let _pixelRead = false;
+  if(sx !== undefined && sy !== undefined && edCtx) {
+    try {
+      const _sd = edCtx.getImageData(Math.round(sx), Math.round(sy), 1, 1).data;
+      tR=_sd[0]; tG=_sd[1]; tB=_sd[2]; tA=_sd[3];
+      _pixelRead = true;
+      // DIAGNÓSTICO temporal — mostrar en pantalla para depurar
+      let _dp = document.getElementById('_fillDiag');
+      if(!_dp){ _dp=document.createElement('div'); _dp.id='_fillDiag';
+        _dp.style.cssText='position:fixed;top:60px;left:4px;right:4px;z-index:99999;background:#111;color:#0f0;font-size:12px;padding:8px;border-radius:8px;font-family:monospace;white-space:pre';
+        const _cl=document.createElement('button'); _cl.textContent='✕';
+        _cl.style.cssText='float:right;background:red;color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer';
+        _cl.onclick=()=>_dp.remove(); _dp.appendChild(_cl); document.body.appendChild(_dp); }
+      _dp.childNodes[1] ? (_dp.childNodes[1].textContent = '') : null;
+      _dp.insertAdjacentText('beforeend',
+        'sx='+Math.round(sx)+' sy='+Math.round(sy)+
+        '\npixel leído: rgba('+tR+','+tG+','+tB+','+tA+')'+
+        '\nwx='+wx+' wy='+wy+
+        '\ncanvas size: '+edCanvas.width+'×'+edCanvas.height+
+        '\ncámara: z='+edCamera.z.toFixed(2)+' x='+edCamera.x.toFixed(0)+' y='+edCamera.y.toFixed(0)
+      );
+    } catch(e) {
+      let _dp2 = document.getElementById('_fillDiag');
+      if(!_dp2){ _dp2=document.createElement('div'); _dp2.id='_fillDiag';
+        _dp2.style.cssText='position:fixed;top:60px;left:4px;right:4px;z-index:99999;background:#111;color:red;font-size:12px;padding:8px;border-radius:8px;font-family:monospace';
+        document.body.appendChild(_dp2); }
+      _dp2.textContent='ERROR getImageData: '+e.message;
+    }
+  }
+
+  // Componer StrokeLayer + FillLayer en canvas workspace binarizado (igual que v20.38)
+  const wsRef = document.createElement('canvas');
+  wsRef.width = W; wsRef.height = H;
+  const wsCtx = wsRef.getContext('2d');
+  if (flTarget._canvas) wsCtx.drawImage(flTarget._canvas, 0, 0);
+  if (_selLa && typeof _selLa.draw === 'function') _selLa.draw(wsCtx);
+
   const orig = wsCtx.getImageData(0, 0, W, H).data;
   const fd = new Uint8Array(W * H * 4);
   for(let i=0; i<W*H; i++){
@@ -8437,66 +8537,81 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny, rx0, ry0, rW, rH, useS
     else { fd[pi]=0; fd[pi+1]=0; fd[pi+2]=0; fd[pi+3]=0; }
   }
 
-  const si0=(wyAbs*W+wxAbs)*4;
-  const tR=fd[si0], tG=fd[si0+1], tB=fd[si0+2], tA=fd[si0+3];
+  // Si no obtuvimos semilla del canvas renderizado, usar el pixel del workspace binarizado
+  if(tA === 0 && tR === 0 && tG === 0) {
+    const _si0 = (wy*W+wx)*4;
+    tR=fd[_si0]; tG=fd[_si0+1]; tB=fd[_si0+2]; tA=fd[_si0+3];
+  }
+
+  const fc = edDrawColor;
+  const fR=parseInt(fc.slice(1,3),16), fG=parseInt(fc.slice(3,5),16),
+        fB=parseInt(fc.slice(5,7),16), fA=Math.round((edDrawOpacity/100)*255);
+
   if(tR===fR && tG===fG && tB===fB && tA===fA) return;
 
-  const TOL=15;
-  function match(i){ return Math.abs(fd[i]-tR)<=TOL&&Math.abs(fd[i+1]-tG)<=TOL&&Math.abs(fd[i+2]-tB)<=TOL&&Math.abs(fd[i+3]-tA)<=TOL; }
+  const TOL = 15;
+  function match(i){
+    return Math.abs(fd[i  ]-tR)<=TOL && Math.abs(fd[i+1]-tG)<=TOL &&
+           Math.abs(fd[i+2]-tB)<=TOL && Math.abs(fd[i+3]-tA)<=TOL;
+  }
+
   const filled = new Uint8Array(W*H);
   const stack = [];
-  stack.push({y:wyAbs,left:wxAbs,right:wxAbs,dy:1});
-  stack.push({y:wyAbs,left:wxAbs,right:wxAbs,dy:-1});
-  filled[wyAbs*W+wxAbs]=1;
-  const si=si0; fd[si]=fR;fd[si+1]=fG;fd[si+2]=fB;fd[si+3]=fA;
+  const si0 = (wy*W+wx)*4;
+  stack.push({y:wy, left:wx, right:wx, dy:1});
+  stack.push({y:wy, left:wx, right:wx, dy:-1});
+  filled[wy*W+wx]=1;
+  fd[si0]=fR; fd[si0+1]=fG; fd[si0+2]=fB; fd[si0+3]=fA;
+
   while(stack.length){
-    const {y,left,right,dy}=stack.pop();
-    const ny2=y+dy; if(ny2<0||ny2>=H) continue;
-    let x=left; while(x>0&&!filled[ny2*W+(x-1)]&&match((ny2*W+(x-1))*4)) x--;
-    let rx=right; while(rx<W-1&&!filled[ny2*W+(rx+1)]&&match((ny2*W+(rx+1))*4)) rx++;
+    const {y, left, right, dy} = stack.pop();
+    const ny2 = y+dy; if(ny2<0||ny2>=H) continue;
+    let x=left;
+    while(x>0 && !filled[ny2*W+(x-1)] && match((ny2*W+(x-1))*4)) x--;
+    let rx=right;
+    while(rx<W-1 && !filled[ny2*W+(rx+1)] && match((ny2*W+(rx+1))*4)) rx++;
     let segStart=-1;
-    for(let sx=x;sx<=rx;sx++){
-      const idx=ny2*W+sx;
-      if(!filled[idx]&&match(idx*4)){
-        if(segStart===-1) segStart=sx;
+    for(let sx2=x; sx2<=rx; sx2++){
+      const idx=ny2*W+sx2;
+      if(!filled[idx] && match(idx*4)){
+        if(segStart===-1) segStart=sx2;
         filled[idx]=1;
         const pi=idx*4; fd[pi]=fR;fd[pi+1]=fG;fd[pi+2]=fB;fd[pi+3]=fA;
       } else if(segStart!==-1){
-        stack.push({y:ny2,left:segStart,right:sx-1,dy:dy});
-        stack.push({y:ny2,left:segStart,right:sx-1,dy:-dy});
+        stack.push({y:ny2,left:segStart,right:sx2-1,dy:dy});
+        stack.push({y:ny2,left:segStart,right:sx2-1,dy:-dy});
         segStart=-1;
       }
     }
-    if(segStart!==-1){ stack.push({y:ny2,left:segStart,right:rx,dy:dy}); stack.push({y:ny2,left:segStart,right:rx,dy:-dy}); }
+    if(segStart!==-1){
+      stack.push({y:ny2,left:segStart,right:rx,dy:dy});
+      stack.push({y:ny2,left:segStart,right:rx,dy:-dy});
+    }
   }
 
-  // Escribir en el FillLayer
   _edDrawPushHistory();
-  const _flPrevData = flTarget._ctx.getImageData(0, 0, W, H).data;
+  const prevFill = flTarget._ctx.getImageData(0, 0, W, H).data;
   const _flResult = flTarget._ctx.createImageData(W, H);
   const _rd = _flResult.data;
-  for(let i=0;i<W*H;i++){
+  for(let i=0; i<W*H; i++){
     const pi=i*4;
     if(filled[i]){ _rd[pi]=fR;_rd[pi+1]=fG;_rd[pi+2]=fB;_rd[pi+3]=fA; }
-    else { _rd[pi]=_flPrevData[pi];_rd[pi+1]=_flPrevData[pi+1];_rd[pi+2]=_flPrevData[pi+2];_rd[pi+3]=_flPrevData[pi+3]; }
+    else { _rd[pi]=prevFill[pi];_rd[pi+1]=prevFill[pi+1];_rd[pi+2]=prevFill[pi+2];_rd[pi+3]=prevFill[pi+3]; }
   }
   flTarget._ctx.putImageData(_flResult, 0, 0);
   edPushHistory(); edRedraw();
 }
 
-function edFloodFill(nx, ny){
+function edFloodFill(nx, ny, sx, sy){
   const page = edPages[edCurrentPage]; if(!page) return;
 
-  // Si hay un StrokeLayer seleccionado con FillLayer vinculado (barra flotante),
-  // usar directamente el canvas del StrokeLayer como referencia y el FillLayer como destino
+  // Si hay un StrokeLayer seleccionado con FillLayer vinculado,
+  // usar el pixel del canvas renderizado como semilla de color
   const _selLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  if (_selLa && _selLa.type === 'stroke' && _selLa._fillLayerId &&
-      $('edDrawBar')?.classList.contains('visible')) {
+  if (_selLa && _selLa.type === 'stroke' && _selLa._fillLayerId) {
     const _flTarget = page.layers.find(l => l.type==='fill' && l._drawLayerId===_selLa._fillLayerId);
     if (_flTarget) {
-      _edFloodFillOnLayer(_selLa._canvas, _flTarget, nx, ny,
-        0, 0, _selLa._canvas.width, _selLa._canvas.height,
-        true /* useStrokeAsRef */);
+      _edFloodFillOnLayer(_selLa._canvas, _flTarget, nx, ny, sx, sy);
       return;
     }
   }
@@ -10334,9 +10449,22 @@ function _edFreezeAllDrawLayers(){
     const dl = page.layers[dlIdx];
     const bb = StrokeLayer._boundingBox(dl._canvas);
     if(!bb){
-      // DrawLayer vacío: eliminar sin congelar (y su FillLayer)
-      const _flEmp2 = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
-      if(_flEmp2) page.layers.splice(page.layers.indexOf(_flEmp2), 1);
+      // DrawLayer vacío: verificar si su FillLayer tiene contenido
+      const _flEmp2 = dl._fillLayerId
+        ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId)
+        : null;
+      const _flBb = _flEmp2 && _flEmp2._canvas
+        ? StrokeLayer._boundingBox(_flEmp2._canvas) : null;
+      if(_flBb){
+        // El fill tiene contenido aunque el draw esté vacío.
+        // Convertir el fill en StrokeLayer independiente y eliminar el draw vacío.
+        const _slFromFill = new StrokeLayer(_flEmp2._canvas);
+        const _flEmpIdx = page.layers.indexOf(_flEmp2);
+        if(_flEmpIdx >= 0) page.layers.splice(_flEmpIdx, 1, _slFromFill);
+      } else {
+        // Ambos vacíos: eliminar fill si existe
+        if(_flEmp2) page.layers.splice(page.layers.indexOf(_flEmp2), 1);
+      }
       page.layers.splice(page.layers.indexOf(dl), 1);
       edLayers = page.layers;
       continue;
