@@ -242,17 +242,14 @@ function _lyRender() {
     list.appendChild(e);
   } else {
     // El primero del array edLayers aparece el último en la lista (más abajo visualmente)
-    console.log('[LAYERS] visualPairs:', visualPairs.map(p=>p.l.type+':'+p.i));
     [...visualPairs].reverse().forEach(({l, i}) => {
       if (l.type === 'fill') return; // los FillLayer se renderizan como sub-fila del DrawLayer
       const item = _lyBuildVisualItem(l, i, i === edSelectedIdx);
       list.appendChild(item);
       // Si este DrawLayer tiene un FillLayer vinculado, añadirlo como sub-fila
-      console.log('[LAYERS] layer:', l.type, '_fillLayerId:', l._fillLayerId);
       // Sub-fila de relleno para DrawLayer Y StrokeLayer vinculados
       if ((l.type === 'draw' || l.type === 'stroke') && l._fillLayerId) {
         const flPair = edLayers.find(la => la.type==='fill' && la._drawLayerId===l._fillLayerId);
-        console.log('[LAYERS] flPair found:', !!flPair, flPair?._drawLayerId);
         if (flPair) {
           const flIdx = edLayers.indexOf(flPair);
           list.appendChild(_lyBuildFillSubRow(flPair, flIdx));
@@ -302,7 +299,14 @@ function _lyBuildFillSubRow(la, realIdx) {
     const ph = (typeof edPageH==='function')?edPageH():1100;
     const mx = (typeof edMarginX==='function')?edMarginX():0;
     const my = (typeof edMarginY==='function')?edMarginY():0;
-    tctx.drawImage(la._canvas, mx, my, pw, ph, 0, 0, 80, 60);
+    // Usar draw() que maneja tanto canvas workspace como canvas local (bbox)
+    // Escalar para que la página entera quepa en el thumb 80×60
+    const scX = 80 / pw, scY = 60 / ph;
+    tctx.save();
+    // Transformar: mover origen para que la página empiece en (0,0) del thumb, escalada
+    tctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    if (typeof la.draw === 'function') la.draw(tctx);
+    tctx.restore();
   }
   tctx.strokeStyle = '#93c5fd'; tctx.lineWidth = 2;
   tctx.setLineDash([4,3]); tctx.strokeRect(1,1,78,58); tctx.setLineDash([]);
@@ -636,25 +640,31 @@ function _lyDrawStrokeThumb(canvas, la) {
   ctx.fillStyle = '#f5f5f5';
   ctx.fillRect(0, 0, tw, th);
   if (la.type === 'stroke' && la._canvas && la._canvas.width > 0) {
-    // Dibujar el canvas del stroke escalado al thumb, con posición relativa
     const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-    const lw = la.width * pw, lh = la.height * ph;
-    const cx = la.x * pw, cy = la.y * ph;
-    // Escalar todo al thumb
-    const sx = tw / pw, sy = th / ph;
+    const mx = edMarginX ? edMarginX() : 0, my = edMarginY ? edMarginY() : 0;
+    // Escalar página completa al thumb
+    const scX = tw / pw, scY = th / ph;
     ctx.save();
-    ctx.drawImage(la._canvas,
-      0, 0, la._canvas.width, la._canvas.height,
-      (cx - lw/2) * sx, (cy - lh/2) * sy,
-      lw * sx, lh * sy);
+    ctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    // Primero el fill vinculado (si existe)
+    const _flS = (typeof edLayers !== 'undefined' && la._fillLayerId)
+      ? edLayers.find(f => f && f.type==='fill' && f._drawLayerId===la._fillLayerId) : null;
+    if (_flS && typeof _flS.draw === 'function') _flS.draw(ctx);
+    // Luego el stroke encima
+    if (typeof la.draw === 'function') la.draw(ctx);
     ctx.restore();
   } else if (la.type === 'draw' && la._canvas) {
-    // DrawLayer ocupa todo el workspace
     const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-    ctx.drawImage(la._canvas,
-      edMarginX ? edMarginX() : 0, edMarginY ? edMarginY() : 0,
-      pw, ph,
-      0, 0, tw, th);
+    const mx = edMarginX ? edMarginX() : 0, my = edMarginY ? edMarginY() : 0;
+    const scX = tw / pw, scY = th / ph;
+    ctx.save();
+    ctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    // Fill vinculado al DrawLayer
+    const _flD = (typeof edLayers !== 'undefined' && la._fillLayerId)
+      ? edLayers.find(f => f && f.type==='fill' && f._drawLayerId===la._fillLayerId) : null;
+    if (_flD && typeof _flD.draw === 'function') _flD.draw(ctx);
+    la.draw(ctx);
+    ctx.restore();
   } else {
     ctx.fillStyle = '#ddd';
     ctx.font = '20px sans-serif';

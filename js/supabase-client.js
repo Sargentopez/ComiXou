@@ -373,9 +373,14 @@ const SupabaseClient = (() => {
               _uid: l._uid || null,
               hidden: l.hidden || false,
               opacity: l.opacity,
-              _isFull: l._isFull || false,
-              _baseX: (l._baseX !== null && l._baseX !== undefined) ? l._baseX : undefined,
-              _baseY: (l._baseY !== null && l._baseY !== undefined) ? l._baseY : undefined,
+              // SF: propiedades de posición/tamaño/rotación (nuevo sistema)
+              x:        l.x        != null ? l.x        : 0.5,
+              y:        l.y        != null ? l.y        : 0.5,
+              width:    l.width    != null ? l.width    : 1.0,
+              height:   l.height   != null ? l.height   : 1.0,
+              rotation: l.rotation != null ? l.rotation : 0,
+              // _isFull:true para que edDeserLayer SF lo reconozca como nuevo formato
+              _isFull: true,
             };
             const _ld = JSON.stringify(_flData);
             layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });

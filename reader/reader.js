@@ -1780,16 +1780,16 @@ function _render() {
       if (!img) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      if (layer._isFull) {
-        // dataUrl es el canvas workspace completo (ED_CANVAS_W x ED_CANVAS_H)
-        // recortar la zona de página centrada en el workspace
-        const mx = (ED_CANVAS_W - pw) / 2;
-        const my = (ED_CANVAS_H - ph) / 2;
-        ctx.drawImage(img, mx, my, pw, ph, 0, 0, pw, ph);
-      } else {
-        // dataUrl ya es la zona de página (pw x ph)
-        ctx.drawImage(img, 0, 0, pw, ph);
-      }
+      // SF: el fill tiene x/y/width/height/rotation — igual que StrokeLayer.
+      // Renderizar con translate+rotate+drawImage centrado en (x*pw, y*ph).
+      const _fx = (layer.x != null ? layer.x : 0.5) * pw;
+      const _fy = (layer.y != null ? layer.y : 0.5) * ph;
+      const _fw = (layer.width  != null ? layer.width  : 1) * pw;
+      const _fh = (layer.height != null ? layer.height : 1) * ph;
+      const _fr = (layer.rotation || 0) * Math.PI / 180;
+      ctx.translate(_fx, _fy);
+      if (_fr) ctx.rotate(_fr);
+      ctx.drawImage(img, -_fw / 2, -_fh / 2, _fw, _fh);
       ctx.restore();
       return;
     }
