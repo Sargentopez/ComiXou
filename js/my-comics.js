@@ -403,17 +403,16 @@ function _mcRenderList() {
             genre:   work.genre    || comicToEdit.genre,
             navMode: work.nav_mode || comicToEdit.navMode,
           });
-          // Sincronizar biblioteca: la nube manda — reemplazar biblioteca local con la de la nube.
-          // Primero preservar la biblioteca local actual como backup, igual que hacemos con localEditorData.
+          // Sincronizar biblioteca: usar la de la nube si la nube es más nueva o la obra es cloudOnly.
+          // Si la local es más reciente (solo _hasLegacyStrokes forzó la descarga), preservar la local.
           const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
           const _sbId = comicToEdit.supabaseId || comicToEdit.id;
-          if (_user && _user.id && _sbId && typeof SupabaseClient.bibDownload === 'function') {
+          const _useCloudBib = comicToEdit.cloudOnly === true || _cloudNewer;
+          if (_useCloudBib && _user && _user.id && _sbId && typeof SupabaseClient.bibDownload === 'function') {
             try {
               const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
               const _bibLocalKey = `cs_biblioteca_local_${comicToEdit.id}`;
               // Guardar la biblioteca local actual como backup (solo si no existe ya un backup)
-              // Backup: guardar la biblioteca local actual antes de reemplazar con la nube
-              // (solo si no existe ya un backup)
               const _bibLocalExists = localStorage.getItem(_bibLocalKey);
               if (!_bibLocalExists) {
                 const _bibCurrentData = window._bibLoad ? window._bibLoad() : null;
@@ -422,7 +421,7 @@ function _mcRenderList() {
                   try { localStorage.setItem(_bibLocalKey, _bibCurrentRaw); } catch(e) {}
                 }
               }
-              // Descargar biblioteca de la nube y reemplazar ÍNTEGRAMENTE la local
+              // Solo para obras cloud: descargar biblioteca de la nube y reemplazar la local
               const cloudData = await SupabaseClient.bibDownload(_user.id, _sbId);
               const _bibIdbWrites = [];
               if (cloudData && cloudData.folders) {
