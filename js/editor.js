@@ -10824,9 +10824,8 @@ function edCloseOptionsPanel(){
   if(panel){
     const _mode=panel.dataset.mode;
     panel.classList.remove('open','panel-collapsed'); panel.innerHTML=''; delete panel.dataset.mode; _edPanelTabHide();
-    // Siempre limpiar overlay y unlock al cerrar — el modo draw los reactiva si es necesario
-    _edDrawUnlockUI(); _edPropsOverlayHide();
-    if(_mode==='props'){ /* ya hecho arriba */ }
+    _edMenuLock(false); // siempre desbloquear al cerrar — cada modo lo reactiva si necesita
+    if(_mode==='props'){ /* desbloqueo ya hecho */ }
     if(_mode==='crop'){
       const _wdl = _edCropLayer && _edCropLayer.type === 'draw';
       const _cropSelIdx = edSelectedIdx;
@@ -13615,26 +13614,35 @@ function edInitShapeBar() {
     edRedraw();
   });
 }
-function _edDrawLockUI()   { $('editorShell')?.classList.add('draw-active'); }
-function _edDrawUnlockUI() { $('editorShell')?.classList.remove('draw-active'); }
+// ── Bloqueo unificado de la barra de menús ──────────────────────────────────
+// Una sola función controla AMBOS mecanismos (draw-active + overlay).
+// lock=true: bloquear. lock=false: desbloquear.
+function _edMenuLock(lock) {
+  if (lock) {
+    $('editorShell')?.classList.add('draw-active');
+    let ov = document.getElementById('_edPropsOverlay');
+    if (!ov) {
+      ov = document.createElement('div');
+      ov.id = '_edPropsOverlay';
+      ov.style.cssText = 'position:absolute;inset:0;z-index:500;background:transparent;cursor:default;';
+      $('edMenuBar')?.appendChild(ov);
+    }
+    ov.style.display = 'block';
+  } else {
+    $('editorShell')?.classList.remove('draw-active');
+    const ov = document.getElementById('_edPropsOverlay');
+    if (ov) ov.style.display = 'none';
+  }
+}
+// Aliases para compatibilidad con el código existente
+function _edDrawLockUI()        { _edMenuLock(true);  }
+function _edDrawUnlockUI()      { _edMenuLock(false); }
+function _edPropsOverlayShow()  { _edMenuLock(true);  }
+function _edPropsOverlayHide()  { _edMenuLock(false); }
 
 // Overlay transparente sobre el canvas para bloquear clicks cuando panel props abierto
 // No usa pointer-events en la barra — así los clicks en barra no llegan al canvas
-function _edPropsOverlayShow(){
-  let ov=document.getElementById('_edPropsOverlay');
-  if(!ov){
-    ov=document.createElement('div');
-    ov.id='_edPropsOverlay';
-    // Overlay encima de la barra de menús — absorbe clicks sin hacer nada
-    ov.style.cssText='position:absolute;inset:0;z-index:500;background:transparent;cursor:default;';
-    $('edMenuBar')?.appendChild(ov);
-  }
-  ov.style.display='block';
-}
-function _edPropsOverlayHide(){
-  const ov=document.getElementById('_edPropsOverlay');
-  if(ov) ov.style.display='none';
-}
+// _edPropsOverlayShow/_edPropsOverlayHide → ver _edMenuLock arriba
 
 function edDrawBarUpdate() {
   if (!$('edDrawBar')?.classList.contains('visible')) return;
@@ -15176,7 +15184,7 @@ async function edLoadProject(id){
   };
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
-    setTimeout(()=>{ _doLoadReset(); }, 150);
+    window._edLoadResetTimer = setTimeout(()=>{ _doLoadReset(); }, 150);
     // Snapshot inicial síncrono: estado de apertura como punto de no-retorno.
     // Forzar _playing=false en todos los layers antes del snapshot para que
     // el estado de apertura siempre sea "todo parado".
@@ -15202,7 +15210,7 @@ async function edLoadProject(id){
     } else {
       _doPushHistory();
     }
-    setTimeout(()=>{
+    window._edLoadResetTimer2 = setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
       // Snapshot inicial — esperamos que strokes e imágenes hayan cargado
@@ -16486,6 +16494,10 @@ function EditorView_destroy(){
     window._edPageHideFn = null;
   }
   _edAutosaveStop();
+  // Cancelar timers de reset de cámara pendientes de la carga anterior
+  // para evitar que se disparen cuando ya estamos en otra vista
+  if (window._edLoadResetTimer) { clearTimeout(window._edLoadResetTimer); window._edLoadResetTimer = null; }
+  if (window._edLoadResetTimer2) { clearTimeout(window._edLoadResetTimer2); window._edLoadResetTimer2 = null; }
   sessionStorage.removeItem('cx_editing');
 }
 async function edSaveProjectModal(){
@@ -16667,11 +16679,15 @@ function EditorView_init(){
 
   const editId=sessionStorage.getItem('cx_edit_id');
   if(!editId){Router.go('my-comics');return;}
-  edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
-
-  // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
-  edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  // edLoadProject es async: encadenar con .then() para que edSetOrientation
+  // se ejecute DESPUÉS de que los datos estén cargados.
+  // En Android el microtask de IndexedDB tarda más que en PC, por lo que
+  // sin await edPages[0] todavía está vacío cuando se llama edSetOrientation.
+  edLoadProject(editId).then(() => {
+    // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
+    edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  });
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
