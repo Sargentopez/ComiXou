@@ -110,6 +110,8 @@ function _mcRemoveModal() {
    Solo muestra el aviso si hay algo que limpiar.
 ──────────────────────────────────────────────────────────────────────── */
 async function _mcCheckOrphanData() {
+  // Si el usuario ya salió de la vista, no hacer nada
+  if (!document.getElementById('mcContent')) return;
   const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
   if (!_user) return;
 
@@ -283,7 +285,8 @@ async function _mcCheckOrphanData() {
                  _orphans.autosave.length + _orphans.bib.length + _orphans.ls.length;
   if (_total === 0) return;
 
-  // ── Aviso al usuario ─────────────────────────────────────────────────
+  // ── Aviso al usuario — solo si el usuario sigue en my-comics ───────
+  if (!document.getElementById('mcContent')) return;
   appConfirm(
     'Se han encontrado datos en el almacenamiento local de ComiXow que no pertenecen a ninguna de tus obras. ¿Borrarlos?',
     async () => {
@@ -358,7 +361,7 @@ function MyComicsView_init() {
   // Sincronizar fechas con Supabase en segundo plano (incluye descarga de biblioteca)
   _mcSyncCloudDates();
   // Buscar y ofrecer limpieza de datos huérfanos (en segundo plano, sin bloquear la UI)
-  setTimeout(_mcCheckOrphanData, 2000);
+  window._mcOrphanTimer = setTimeout(_mcCheckOrphanData, 2000);
 }
 
 /* ── SINCRONIZAR FECHAS CON SUPABASE ── */
@@ -1018,7 +1021,11 @@ function _mcToast(msg) {
   }, 2200);
 }
 
-function MyComicsView_destroy() { _mcRemoveModal(); }
+function MyComicsView_destroy() {
+  _mcRemoveModal();
+  // Cancelar el check de huérfanos si aún no se ha ejecutado
+  if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
+}
 
 /* ── CARGAR BORRADORES DESDE NUBE ── */
 async function _mcCloudLoad() {
