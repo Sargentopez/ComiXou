@@ -1592,31 +1592,38 @@ function edSetOrientation(o, persist=true){
     const _isV  = o === 'vertical';
     const _pw   = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph   = _isV ? ED_PAGE_H : ED_PAGE_W;
+    // Diagnóstico orientación — fills ANTES del resize
+    window._edOrientFillDiag = (edPages[edCurrentPage]?.layers||[])
+      .filter(l=>l.type==='fill')
+      .map(f=>({uid:f._uid,isWS:f._isWorkspaceCanvas,cw:f._canvas?.width,ch:f._canvas?.height,x:f.x?.toFixed(3),y:f.y?.toFixed(3),w:f.width?.toFixed(3),h:f.height?.toFixed(3)}));
     (edPages[edCurrentPage]?.layers || []).forEach(l => {
       if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
         l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
       }
-      // SF: el fill tiene x/y/width/height como fracciones de página — igual que strokes.
-      // draw() usa drawImage(canvas, -w/2, -h/2, w, h) con w=width*edPageW() en tiempo real,
-      // escalando el canvas al tamaño correcto independientemente de sus píxeles.
-      // Solo limpiar estado de preview pendiente.
-      if(l.type === 'fill'){
+      // SF FillLayer de StrokeLayer: redimensionar canvas al nuevo tamaño en píxeles.
+      // x/y/width/height NO cambian (fracciones de página, igual que strokes).
+      // El canvas pasa de w*pwViejo×h*phViejo a w*pwNuevo×h*phNuevo.
+      if(l.type === 'fill' && !l._isWorkspaceCanvas){
+        l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
+        const _nWpx = Math.max(1, Math.round((l.width  || 1) * _pw));
+        const _nHpx = Math.max(1, Math.round((l.height || 1) * _ph));
+        if(l._canvas && (l._canvas.width !== _nWpx || l._canvas.height !== _nHpx)){
+          const _tmp = document.createElement('canvas');
+          _tmp.width = _nWpx; _tmp.height = _nHpx;
+          _tmp.getContext('2d').drawImage(l._canvas,
+            0, 0, l._canvas.width, l._canvas.height,
+            0, 0, _nWpx, _nHpx);
+          l._canvas = _tmp;
+          l._ctx    = _tmp.getContext('2d');
+        }
+      }
+      // Fill de DrawLayer (_isWorkspaceCanvas): canvas ED_CANVAS_W×H fijo, sin cambios.
+      if(l.type === 'fill' && l._isWorkspaceCanvas){
         l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
       }
     });
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
-  // Diagnóstico orientación: mostrar estado fills
-  if(persist && prevOrientation !== o){
-    const _diagFills = (edPages[edCurrentPage]?.layers||[]).filter(l=>l.type==='fill');
-    window._edOrientDiag = _diagFills.map(f=>({
-      uid: f._uid, drawId: f._drawLayerId,
-      cw: f._canvas?.width, ch: f._canvas?.height,
-      x: f.x, y: f.y, w: f.width, h: f.height, rot: f.rotation,
-      hasSrc: !!f._srcCanvas, previewSx: f._previewSx
-    }));
-    console.log('ORIENT DIAG fills:', JSON.stringify(window._edOrientDiag));
-  }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     window._edUserRequestedReset=true; edFitCanvas(true);
     edRedraw();
@@ -4870,9 +4877,32 @@ function _edRenderPageThumb(canvas, page, pageIdx){
         offCtx.setTransform(1,0,0,1,-mx,-my);
       }
     } else if(l.type==='image')  l.draw(offCtx,off);
-    else if(l.type==='draw')   l.draw(offCtx);
-    else if(l.type==='fill'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
-    else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
+    else if(l.type==='draw'){
+      // DrawLayer: dibujar fill vinculado primero, luego el draw
+      const _flDraw = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flDraw){ offCtx.globalAlpha=_flDraw.opacity??1; _flDraw.draw(offCtx); offCtx.globalAlpha=1; }
+      l.draw(offCtx);
+    }
+    else if(l.type==='fill') return; // el fill se dibuja con su stroke/draw vinculado
+    else if(l.type==='stroke'){
+      // StrokeLayer: dibujar fill vinculado primero con código inline
+      const _flStroke = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flStroke && _flStroke._canvas && _flStroke._canvas.width > 0){
+        const _fsrc = (_flStroke._previewSx != null && _flStroke._srcCanvas) ? _flStroke._srcCanvas : _flStroke._canvas;
+        const _fpx = edMarginX() + _flStroke.x * pw;
+        const _fpy = edMarginY() + _flStroke.y * ph;
+        const _fw  = _flStroke.width  * pw;
+        const _fh  = _flStroke.height * ph;
+        offCtx.save();
+        offCtx.globalAlpha = _flStroke.opacity ?? 1;
+        offCtx.translate(_fpx, _fpy);
+        if(_flStroke.rotation) offCtx.rotate(_flStroke.rotation * Math.PI / 180);
+        offCtx.drawImage(_fsrc, -_fw/2, -_fh/2, _fw, _fh);
+        offCtx.restore();
+        offCtx.globalAlpha = 1;
+      }
+      offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1;
+    }
     else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
   });
   offCtx.globalAlpha=_textAlpha;
@@ -8175,7 +8205,7 @@ function edOnEnd(e){
       if(l.type==='image' && !l.animKey && !l._pngFramesKey && !l._apngIdbKey) {
         const _data = l._apngSrc || (l._pngFrames && l._pngFrames.length ? l._pngFrames : null);
         if(_data && window._sbAnimIdbSave) {
-          const _k = (edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+          const _k = _edAnimKey((edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6));
           l._pngFramesKey = _k;
           _preExport.push(window._sbAnimIdbSave(_k, _data).catch(()=>{}));
         }
@@ -11089,6 +11119,11 @@ function edRenderOptionsPanel(mode){
       return;
     }
     edDrawBarHide();
+    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar
+    if(mode === 'draw' && edActiveTool !== 'eraser' && edActiveTool !== 'fill'){
+      _edDrawLayerTarget = 'draw';
+      edActiveTool = 'draw';
+    }
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
@@ -11868,6 +11903,8 @@ function edRenderOptionsPanel(mode){
       _edDrawInitHistory();
       _edPropsOverlayHide();
       _edDrawLockUI();
+      _edDrawLayerTarget = 'draw';  // capa dibujo por defecto
+      edActiveTool = 'draw';        // herramienta dibujar por defecto
       edRenderOptionsPanel('draw');
       edRedraw();
     });
@@ -13784,10 +13821,42 @@ async function edCloudSave() {
   await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate('Subiendo a la nube…');
 
-  const comic = ComicStore.getByIdFull
+  let comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
     : ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
+  // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
+  // construir editorData en línea para poder subirlo a la nube correctamente.
+  if ((!comic.editorData || !comic.editorData.pages || !comic.editorData.pages.length) && edPages && edPages.length) {
+    const _savedOrientFb = edOrientation, _savedPageFb = edCurrentPage;
+    const _fbPages = [];
+    for (let _fpi = 0; _fpi < edPages.length; _fpi++) {
+      const _fp = edPages[_fpi];
+      edCurrentPage = _fpi;
+      edOrientation = _fp.orientation || _savedOrientFb;
+      const _fbLayers = [];
+      for (let _fli = 0; _fli < _fp.layers.length; _fli++) {
+        const _fsl = edSerLayer(_fp.layers[_fli]);
+        if (!_fsl) continue;
+        // En incógnito no hay IDB, así que si hay _pngFrames los dejamos inline
+        // (serán pequeños o se perderán — lo importante es que la subida no quede vacía)
+        _fbLayers.push(_fsl);
+      }
+      _fbPages.push({ layers: _fbLayers, textLayerOpacity: _fp.textLayerOpacity ?? 1, textMode: _fp.textMode || 'sequential', orientation: _fp.orientation || _savedOrientFb });
+    }
+    edOrientation = _savedOrientFb; edCurrentPage = _savedPageFb;
+    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes } };
+    // También reconstruir panels (renders) si están vacíos
+    if (!comic.panels || !comic.panels.length) {
+      comic.panels = edPages.map((p, i) => ({
+        id: 'panel_' + i,
+        dataUrl: edRenderPage(p),
+        orientation: (p.orientation || edOrientation) === 'vertical' ? 'v' : 'h',
+        textMode: p.textMode || 'sequential',
+        texts: [],
+      }));
+    }
+  }
 
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
@@ -13991,7 +14060,7 @@ async function edSaveProject(_keepOverlay){
       if (!_sl) continue;
       // Externalizar _pngFrames a IndexedDB para no saturar localStorage
       if (_sl._pngFrames && _sl._pngFrames.length) {
-        const _idbKey = edProjectId + '_' + _pi + '_' + _li;
+        const _idbKey = _edAnimKey(edProjectId + '_' + _pi + '_' + _li);
         try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); } catch(e) {}
         delete _sl._pngFrames;
         _sl._pngFramesKey = _idbKey;
@@ -14045,9 +14114,13 @@ async function edSaveProject(_keepOverlay){
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
     _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
   } else {
-    const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
+    // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
+    const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
+    const _err = _isIncognito
+      ? 'Modo incógnito: el guardado local no está disponible. Usa ☁️ Guardar en nube para conservar la obra.'
+      : 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
-    edToast('⚠️ Guardado parcial');
+    edToast(_isIncognito ? '⚠️ Modo incógnito: usa Guardar en nube' : '⚠️ Guardado parcial');
   }
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
   _edSavedHistoryIdx = edHistoryIdx;
@@ -14076,9 +14149,30 @@ function edRenderPage(page){
     if (!l || _textTypes.has(l.type)) return;
     if (l.type === 'image') { l.draw(ctx, full); return; }
     if (l.type === 'gif')   { l.draw(ctx); return; }
-    if (l.type === 'fill')  { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
-    if (l.type === 'draw')  { l.draw(ctx); return; }
-    if (l.type === 'stroke'){ ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
+    if (l.type === 'fill')  return; // el fill se dibuja con su stroke/draw vinculado
+    if (l.type === 'draw')  {
+      // DrawLayer: fill vinculado primero
+      const _flD2 = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flD2){ ctx.save(); ctx.globalAlpha=_flD2.opacity??1; _flD2.draw(ctx); ctx.globalAlpha=1; ctx.restore(); }
+      l.draw(ctx); return;
+    }
+    if (l.type === 'stroke'){
+      // StrokeLayer: fill vinculado con código inline (igual que edRedraw)
+      const _flS2 = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flS2 && _flS2._canvas && _flS2._canvas.width > 0){
+        const _fsrc2 = (_flS2._previewSx != null && _flS2._srcCanvas) ? _flS2._srcCanvas : _flS2._canvas;
+        const _fpx2 = edMarginX() + _flS2.x * edPageW();
+        const _fpy2 = edMarginY() + _flS2.y * edPageH();
+        const _fw2  = _flS2.width  * edPageW();
+        const _fh2  = _flS2.height * edPageH();
+        ctx.save(); ctx.globalAlpha = _flS2.opacity??1;
+        ctx.translate(_fpx2, _fpy2);
+        if(_flS2.rotation) ctx.rotate(_flS2.rotation * Math.PI / 180);
+        ctx.drawImage(_fsrc2, -_fw2/2, -_fh2/2, _fw2, _fh2);
+        ctx.restore(); ctx.globalAlpha = 1;
+      }
+      ctx.save(); ctx.globalAlpha=l.opacity??1; l.draw(ctx); ctx.globalAlpha=1; ctx.restore(); return;
+    }
     if (l.type === 'shape' || l.type === 'line') { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
   });
   // Recortar zona de la página del canvas de trabajo
@@ -15015,6 +15109,24 @@ const _AS_DB   = 'cxAutosave';
 const _AS_STORE = 'saves';
 let _edAutosaveTimer = null;
 
+// Clave de autosave: prefijada con userId para aislar entre autores en el mismo dispositivo
+// Clave de animación IDB: prefijada con userId para aislar frames entre autores
+function _edAnimKey(rawKey) {
+  try {
+    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+    return _uid + '__' + rawKey;
+  } catch(_e) { return rawKey; }
+}
+
+function _edAutosaveKey(id) {
+  try {
+    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+    return _uid + '_' + (id || edProjectId || 'tmp');
+  } catch(_e) { return String(id || edProjectId || 'tmp'); }
+}
+
 function _asDb() {
   return new Promise((res, rej) => {
     const req = indexedDB.open(_AS_DB, 1);
@@ -15043,7 +15155,7 @@ async function _edAutosaveWrite() {
     };
     const db    = await _asDb();
     const tx    = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).put(snapshot, edProjectId);
+    tx.objectStore(_AS_STORE).put(snapshot, _edAutosaveKey(edProjectId));
     await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
   } catch(_) {}
 }
@@ -15053,7 +15165,7 @@ async function _edAutosaveRead(id) {
     const db  = await _asDb();
     const tx  = db.transaction(_AS_STORE, 'readonly');
     return await new Promise((res, rej) => {
-      const req = tx.objectStore(_AS_STORE).get(id);
+      const req = tx.objectStore(_AS_STORE).get(_edAutosaveKey(id));
       req.onsuccess = () => res(req.result || null);
       req.onerror   = () => res(null);
     });
@@ -15064,7 +15176,7 @@ async function _edAutosaveClear(id) {
   try {
     const db = await _asDb();
     const tx = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).delete(id || edProjectId);
+    tx.objectStore(_AS_STORE).delete(_edAutosaveKey(id || edProjectId));
   } catch(_) {}
 }
 
@@ -15184,7 +15296,7 @@ async function edLoadProject(id){
   };
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
-    setTimeout(()=>{ _doLoadReset(); }, 150);
+    window._edLoadResetTimer = setTimeout(()=>{ _doLoadReset(); }, 150);
     // Snapshot inicial síncrono: estado de apertura como punto de no-retorno.
     // Forzar _playing=false en todos los layers antes del snapshot para que
     // el estado de apertura siempre sea "todo parado".
@@ -15210,7 +15322,7 @@ async function edLoadProject(id){
     } else {
       _doPushHistory();
     }
-    setTimeout(()=>{
+    window._edLoadResetTimer2 = setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
       // Snapshot inicial — esperamos que strokes e imágenes hayan cargado
@@ -16494,6 +16606,10 @@ function EditorView_destroy(){
     window._edPageHideFn = null;
   }
   _edAutosaveStop();
+  // Cancelar timers de reset de cámara pendientes de la carga anterior
+  // para evitar que se disparen cuando ya estamos en otra vista
+  if (window._edLoadResetTimer) { clearTimeout(window._edLoadResetTimer); window._edLoadResetTimer = null; }
+  if (window._edLoadResetTimer2) { clearTimeout(window._edLoadResetTimer2); window._edLoadResetTimer2 = null; }
   sessionStorage.removeItem('cx_editing');
 }
 async function edSaveProjectModal(){
@@ -16675,11 +16791,15 @@ function EditorView_init(){
 
   const editId=sessionStorage.getItem('cx_edit_id');
   if(!editId){Router.go('my-comics');return;}
-  edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
-
-  // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
-  edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  // edLoadProject es async: encadenar con .then() para que edSetOrientation
+  // se ejecute DESPUÉS de que los datos estén cargados.
+  // En Android el microtask de IndexedDB tarda más que en PC, por lo que
+  // sin await edPages[0] todavía está vacío cuando se llama edSetOrientation.
+  edLoadProject(editId).then(() => {
+    // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
+    edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  });
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
@@ -18218,7 +18338,19 @@ function _bibGetAnimFolder(data) {
 
 // ── Guardar objeto o grupo ────────────────────────────────────────
 function edBibGuardar() {
+  // Asegurar que _bibCache y carpeta General existen (obra nueva sin IDB inicializada)
+  if (!_bibLoad()) {
+    _bibCache = { folders: [
+      { id: '__root__', name: 'General', items: [] },
+      { id: '__anim__', name: 'Animaciones', items: [] }
+    ]};
+  }
   const data = _bibLoad();
+  if (!data || !Array.isArray(data.folders)) { edToast('Error al acceder a la biblioteca'); return; }
+  if (!data.folders.find(f => f.id === '__root__')) {
+    data.folders.unshift({ id: '__root__', name: 'General', items: [] });
+    _bibSave(data);
+  }
   if (_BIB_MAX_BYTES > 0 && _bibUsedBytes(data) >= _BIB_MAX_BYTES) {
     edToast(`Biblioteca llena (${_bibFormatSize(_bibUsedBytes(data))} / ${_bibFormatSize(_BIB_MAX_BYTES)}). Elimina algún objeto para añadir más.`, 3500);
     return;
@@ -18639,7 +18771,7 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpFrameDelay!=null) la2._gcpFrameDelay=entry.gcpFrameDelay;
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd) la2._gcpStopAtEnd=true;
-                const _k2='anim_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
+                const _k2=_edAnimKey('bib_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8));
                 la2.animKey=_k2;
                 if(window._sbAnimIdbSave) window._sbAnimIdbSave(_k2,entry.apngSrc||_frames2).catch(function(){});
                 const fi2=edLayers.findIndex(l=>l.type==='text'||l.type==='bubble');
@@ -18688,7 +18820,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
-          const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+          const _bibAnimKey = _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
           la.animKey = _bibAnimKey;
           if (window._sbAnimIdbSave) {
             // Guardar en IDB: si apngSrc usar string, sino array de frames
@@ -23306,6 +23438,7 @@ async function _edRunDiag() {
     if (_sl && _fl && _fl._canvas) {
       // SF: canvas local del fill (no workspace)
       const _flW = _fl._canvas.width, _flH = _fl._canvas.height;
+      L('fill _isWorkspaceCanvas: ' + _fl._isWorkspaceCanvas);
       const _flCtx = _fl._ctx || _fl._canvas.getContext('2d');
       const _flImg = _flCtx.getImageData(0, 0, _flW, _flH);
       let _fx0=_flW,_fy0=_flH,_fx1=0,_fy1=0,_fCount=0;
@@ -23391,7 +23524,8 @@ async function _edRunDiag() {
     L('\n── Errores de guardado ──');
     _edSaveErrors.forEach(m => L('  ⚠️ ' + m));
   } else {
-    L('\n── Errores de guardado: ninguno ──');
+    if(window._edOrientFillDiag){L('\n── Orient Fill Diag ──');L(JSON.stringify(window._edOrientFillDiag));}
+  L('\n── Errores de guardado: ninguno ──');
   }
   L('── PushHistory log ──');
   (window._edHistDiag||[]).forEach(m => L('  ' + m));

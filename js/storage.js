@@ -98,11 +98,19 @@ const ComicStore = (() => {
   // biblioteca IDB, autosave IDB, frames de animación IDB y localStorage.
   function _purgeLocalData(id) {
     if (!id) return;
+    // Obtener userId para construir las claves con prefijo correcto
+    const _uid = (() => {
+      try {
+        const s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+        return (s && s.id) ? String(s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+      } catch(_) { return '_anon_'; }
+    })();
+
     // 1. localStorage: biblioteca y cualquier clave con el id
     const _bibKey = 'cs_biblioteca_' + id;
     localStorage.removeItem(_bibKey);
 
-    // 2. IDB biblioteca (cxBiblioteca)
+    // 2. IDB biblioteca (cxBiblioteca): clave = cs_biblioteca_{comicId}
     try {
       const _r = indexedDB.open('cxBiblioteca', 1);
       _r.onsuccess = e => {
@@ -115,20 +123,27 @@ const ComicStore = (() => {
       };
     } catch(_) {}
 
-    // 3. IDB autosave (cxAutosave)
+    // 3. IDB autosave (cxAutosave): clave = {userId}_{comicId}
+    const _autosaveKey = _uid + '_' + id;
     try {
       const _r2 = indexedDB.open('cxAutosave', 1);
       _r2.onsuccess = e => {
         try {
           const db = e.target.result;
           if (db.objectStoreNames.contains('saves')) {
-            db.transaction('saves', 'readwrite').objectStore('saves').delete(id);
+            const tx = db.transaction('saves', 'readwrite');
+            tx.objectStore('saves').delete(_autosaveKey);
+            // Compatibilidad: borrar también clave sin prefijo (versiones anteriores)
+            tx.objectStore('saves').delete(id);
           }
         } catch(_) {}
       };
     } catch(_) {}
 
-    // 4. IDB frames de animación (cxAnims): borrar todas las claves que empiecen por id_
+    // 4. IDB frames de animación (cxAnims): clave = {userId}__{comicId}_{pi}_{li}
+    // Borrar todas las entradas que contengan el comicId en la clave
+    const _animPrefix1 = _uid + '__' + id + '_'; // nuevo formato
+    const _animPrefix2 = id + '_';                // formato antiguo (compatibilidad)
     try {
       const _r3 = indexedDB.open('cxAnims', 1);
       _r3.onsuccess = e => {
@@ -141,7 +156,8 @@ const ComicStore = (() => {
           req.onsuccess = ev => {
             const cursor = ev.target.result;
             if (!cursor) return;
-            if (String(cursor.key).startsWith(id + '_')) cursor.delete();
+            const k = String(cursor.key);
+            if (k.startsWith(_animPrefix1) || k.startsWith(_animPrefix2)) cursor.delete();
             cursor.continue();
           };
         } catch(_) {}
@@ -153,6 +169,12 @@ const ComicStore = (() => {
   async function getByIdFull(id) {
     const meta = getById(id);
     if (!meta) return null;
+    // Seguridad: verificar que la obra pertenece al usuario actual
+    const _sess = (() => { try { return JSON.parse(localStorage.getItem('cs_session') || 'null'); } catch(_) { return null; } })();
+    if (_sess && _sess.id && meta.userId && meta.userId !== '_anon_' && meta.userId !== _sess.id && meta.username !== _sess.username) {
+      console.warn('[ComicStore] Acceso denegado: obra pertenece a otro autor.');
+      return null;
+    }
     try {
       const full = await _opfsRead(id);
       if (full) return { ...meta, ...full };
@@ -183,8 +205,16 @@ const ComicStore = (() => {
   async function _opfsRoot() {
     if (!navigator.storage || !navigator.storage.getDirectory) return null;
     try {
-      const root = await navigator.storage.getDirectory();
-      return await root.getDirectoryHandle('comixou', { create: true });
+      const root  = await navigator.storage.getDirectory();
+      const base  = await root.getDirectoryHandle('comixou', { create: true });
+      // Aislar por userId — cada autor tiene su propia subcarpeta en OPFS
+      const _uid  = (() => {
+        try {
+          const s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+          return (s && s.id) ? String(s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+        } catch(_) { return '_anon_'; }
+      })();
+      return await base.getDirectoryHandle(_uid, { create: true });
     } catch(e) { return null; }
   }
 
