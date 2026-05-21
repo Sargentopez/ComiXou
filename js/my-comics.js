@@ -14,6 +14,17 @@ const _MC_HDRS = { 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + _MC_KEY };
 
 // Carga el thumbnail de una obra desde Supabase y lo cachea en memoria.
 // Cuando llega, actualiza el div contenedor del DOM si está visible.
+// Verificar que una obra pertenece al usuario autenticado actual
+function _mcOwns(comic) {
+  if (!comic) return false;
+  const _user = Auth.currentUser?.() || null;
+  if (!_user) {
+    // Sin sesión: solo obras anónimas
+    return comic.userId === '_anon_' || comic.anonymous === true;
+  }
+  return comic.userId === _user.id || comic.username === _user.username;
+}
+
 function _mcLoadThumb(supabaseId) {
   if (_mcThumbCache.has(supabaseId) && _mcThumbCache.get(supabaseId)) return;
   _mcThumbCache.set(supabaseId, ''); // marca como en progreso
@@ -305,7 +316,7 @@ function _mcRenderList() {
 
     if (action === 'read') {
       const comic = ComicStore.getById(id);
-      if (!comic) return;
+      if (!comic || !_mcOwns(comic)) return;
       if (comic.supabaseId && comic.published) {
         // Obra publicada: usar el reproductor externo (anon key puede leer)
         const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -323,6 +334,8 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
+      const _comicMeta = ComicStore.getById(id);
+      if (!_comicMeta || !_mcOwns(_comicMeta)) return;
       const comicToEdit = ComicStore.getByIdFull
         ? (await ComicStore.getByIdFull(id))
         : ComicStore.getById(id);
@@ -367,7 +380,8 @@ function _mcRenderList() {
               layers: (pg.layers || []).map((l, li) => {
                 // _apngSrc: dataUrl enorme descargado de la nube — guardar en IDB y eliminar
                 if (l._apngSrc) {
-                  const _idbKey = l._pngFramesKey || (comicToEdit.id + '_' + pi + '_' + li);
+                  const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+              const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
                   _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
                   const lClean = Object.assign({}, l);
                   delete lClean._apngSrc;
@@ -379,7 +393,8 @@ function _mcRenderList() {
                 }
                 // _pngFrames (sistema antiguo): externalizar a IDB
                 if (l._pngFrames) {
-                  const _idbKey = comicToEdit.id + '_' + pi + '_' + li;
+                  const _uid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                  const _idbKey = _uid2 + '__' + comicToEdit.id + '_' + pi + '_' + li;
                   _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
                   const { _pngFrames, ...lClean } = l;
                   return { ...lClean, _pngFramesKey: _idbKey };
@@ -430,7 +445,8 @@ function _mcRenderList() {
                   ...cf,
                   items: cf.items.map(item => {
                     if (item.isGifAnim && item.apngSrc) {
-                      const _bibIdbKey = 'bib_' + item.id;
+                      const _bibUid1 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                      const _bibIdbKey = _bibUid1 + '__bib_' + item.id;
                       if (window._sbAnimIdbSave) {
                         _bibIdbWrites.push(window._sbAnimIdbSave(_bibIdbKey, item.apngSrc).catch(() => {}));
                       }
@@ -481,7 +497,8 @@ function _mcRenderList() {
                   ...cf,
                   items: cf.items.map(item => {
                     if (item.isGifAnim && item.apngSrc) {
-                      const _k = 'bib_' + item.id;
+                      const _bibUid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                      const _k = _bibUid2 + '__bib_' + item.id;
                       if (window._sbAnimIdbSave) _bibIdbW.push(window._sbAnimIdbSave(_k, item.apngSrc).catch(() => {}));
                       const c = Object.assign({}, item);
                       delete c.apngSrc; c._apngIdbKey = _k; return c;
@@ -576,6 +593,7 @@ function _mcRenderList() {
       _mcToast('Obra retirada de la portada');
     } else if (action === 'delete') {
       const comic = ComicStore.getById(id);
+      if (!comic || !_mcOwns(comic)) return;
       if (comic && typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
         appAlert('No tienes permiso para eliminar esta obra.');
         return;
@@ -595,7 +613,7 @@ function _mcRenderList() {
       });
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
-      if (!comic) return;
+      if (!comic || !_mcOwns(comic)) return;
       if (!comic.supabaseId) {
         appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
         return;
