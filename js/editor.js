@@ -8175,7 +8175,7 @@ function edOnEnd(e){
       if(l.type==='image' && !l.animKey && !l._pngFramesKey && !l._apngIdbKey) {
         const _data = l._apngSrc || (l._pngFrames && l._pngFrames.length ? l._pngFrames : null);
         if(_data && window._sbAnimIdbSave) {
-          const _k = _edAnimKey((edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6));
+          const _k = (edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
           l._pngFramesKey = _k;
           _preExport.push(window._sbAnimIdbSave(_k, _data).catch(()=>{}));
         }
@@ -13784,42 +13784,10 @@ async function edCloudSave() {
   await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate('Subiendo a la nube…');
 
-  let comic = ComicStore.getByIdFull
+  const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
     : ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
-  // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
-  // construir editorData en línea para poder subirlo a la nube correctamente.
-  if ((!comic.editorData || !comic.editorData.pages || !comic.editorData.pages.length) && edPages && edPages.length) {
-    const _savedOrientFb = edOrientation, _savedPageFb = edCurrentPage;
-    const _fbPages = [];
-    for (let _fpi = 0; _fpi < edPages.length; _fpi++) {
-      const _fp = edPages[_fpi];
-      edCurrentPage = _fpi;
-      edOrientation = _fp.orientation || _savedOrientFb;
-      const _fbLayers = [];
-      for (let _fli = 0; _fli < _fp.layers.length; _fli++) {
-        const _fsl = edSerLayer(_fp.layers[_fli]);
-        if (!_fsl) continue;
-        // En incógnito no hay IDB, así que si hay _pngFrames los dejamos inline
-        // (serán pequeños o se perderán — lo importante es que la subida no quede vacía)
-        _fbLayers.push(_fsl);
-      }
-      _fbPages.push({ layers: _fbLayers, textLayerOpacity: _fp.textLayerOpacity ?? 1, textMode: _fp.textMode || 'sequential', orientation: _fp.orientation || _savedOrientFb });
-    }
-    edOrientation = _savedOrientFb; edCurrentPage = _savedPageFb;
-    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes } };
-    // También reconstruir panels (renders) si están vacíos
-    if (!comic.panels || !comic.panels.length) {
-      comic.panels = edPages.map((p, i) => ({
-        id: 'panel_' + i,
-        dataUrl: edRenderPage(p),
-        orientation: (p.orientation || edOrientation) === 'vertical' ? 'v' : 'h',
-        textMode: p.textMode || 'sequential',
-        texts: [],
-      }));
-    }
-  }
 
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
@@ -14023,7 +13991,7 @@ async function edSaveProject(_keepOverlay){
       if (!_sl) continue;
       // Externalizar _pngFrames a IndexedDB para no saturar localStorage
       if (_sl._pngFrames && _sl._pngFrames.length) {
-        const _idbKey = _edAnimKey(edProjectId + '_' + _pi + '_' + _li);
+        const _idbKey = edProjectId + '_' + _pi + '_' + _li;
         try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); } catch(e) {}
         delete _sl._pngFrames;
         _sl._pngFramesKey = _idbKey;
@@ -14077,13 +14045,9 @@ async function edSaveProject(_keepOverlay){
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
     _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
   } else {
-    // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
-    const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
-    const _err = _isIncognito
-      ? 'Modo incógnito: el guardado local no está disponible. Usa ☁️ Guardar en nube para conservar la obra.'
-      : 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
+    const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
-    edToast(_isIncognito ? '⚠️ Modo incógnito: usa Guardar en nube' : '⚠️ Guardado parcial');
+    edToast('⚠️ Guardado parcial');
   }
   // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
   _edSavedHistoryIdx = edHistoryIdx;
@@ -15051,24 +15015,6 @@ const _AS_DB   = 'cxAutosave';
 const _AS_STORE = 'saves';
 let _edAutosaveTimer = null;
 
-// Clave de autosave: prefijada con userId para aislar entre autores en el mismo dispositivo
-// Clave de animación IDB: prefijada con userId para aislar frames entre autores
-function _edAnimKey(rawKey) {
-  try {
-    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
-    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-    return _uid + '__' + rawKey;
-  } catch(_e) { return rawKey; }
-}
-
-function _edAutosaveKey(id) {
-  try {
-    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
-    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-    return _uid + '_' + (id || edProjectId || 'tmp');
-  } catch(_e) { return String(id || edProjectId || 'tmp'); }
-}
-
 function _asDb() {
   return new Promise((res, rej) => {
     const req = indexedDB.open(_AS_DB, 1);
@@ -15097,7 +15043,7 @@ async function _edAutosaveWrite() {
     };
     const db    = await _asDb();
     const tx    = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).put(snapshot, _edAutosaveKey(edProjectId));
+    tx.objectStore(_AS_STORE).put(snapshot, edProjectId);
     await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
   } catch(_) {}
 }
@@ -15107,7 +15053,7 @@ async function _edAutosaveRead(id) {
     const db  = await _asDb();
     const tx  = db.transaction(_AS_STORE, 'readonly');
     return await new Promise((res, rej) => {
-      const req = tx.objectStore(_AS_STORE).get(_edAutosaveKey(id));
+      const req = tx.objectStore(_AS_STORE).get(id);
       req.onsuccess = () => res(req.result || null);
       req.onerror   = () => res(null);
     });
@@ -15118,7 +15064,7 @@ async function _edAutosaveClear(id) {
   try {
     const db = await _asDb();
     const tx = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).delete(_edAutosaveKey(id || edProjectId));
+    tx.objectStore(_AS_STORE).delete(id || edProjectId);
   } catch(_) {}
 }
 
@@ -15238,7 +15184,7 @@ async function edLoadProject(id){
   };
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
-    window._edLoadResetTimer = setTimeout(()=>{ _doLoadReset(); }, 150);
+    setTimeout(()=>{ _doLoadReset(); }, 150);
     // Snapshot inicial síncrono: estado de apertura como punto de no-retorno.
     // Forzar _playing=false en todos los layers antes del snapshot para que
     // el estado de apertura siempre sea "todo parado".
@@ -15264,7 +15210,7 @@ async function edLoadProject(id){
     } else {
       _doPushHistory();
     }
-    window._edLoadResetTimer2 = setTimeout(()=>{
+    setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
       // Snapshot inicial — esperamos que strokes e imágenes hayan cargado
@@ -16548,10 +16494,6 @@ function EditorView_destroy(){
     window._edPageHideFn = null;
   }
   _edAutosaveStop();
-  // Cancelar timers de reset de cámara pendientes de la carga anterior
-  // para evitar que se disparen cuando ya estamos en otra vista
-  if (window._edLoadResetTimer) { clearTimeout(window._edLoadResetTimer); window._edLoadResetTimer = null; }
-  if (window._edLoadResetTimer2) { clearTimeout(window._edLoadResetTimer2); window._edLoadResetTimer2 = null; }
   sessionStorage.removeItem('cx_editing');
 }
 async function edSaveProjectModal(){
@@ -16733,15 +16675,11 @@ function EditorView_init(){
 
   const editId=sessionStorage.getItem('cx_edit_id');
   if(!editId){Router.go('my-comics');return;}
+  edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
-  // edLoadProject es async: encadenar con .then() para que edSetOrientation
-  // se ejecute DESPUÉS de que los datos estén cargados.
-  // En Android el microtask de IndexedDB tarda más que en PC, por lo que
-  // sin await edPages[0] todavía está vacío cuando se llama edSetOrientation.
-  edLoadProject(editId).then(() => {
-    // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
-    edSetOrientation(edPages[0]?.orientation || edOrientation, false);
-  });
+
+  // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
+  edSetOrientation(edPages[0]?.orientation || edOrientation, false);
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
@@ -18701,7 +18639,7 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpFrameDelay!=null) la2._gcpFrameDelay=entry.gcpFrameDelay;
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd) la2._gcpStopAtEnd=true;
-                const _k2=_edAnimKey('bib_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8));
+                const _k2='anim_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
                 la2.animKey=_k2;
                 if(window._sbAnimIdbSave) window._sbAnimIdbSave(_k2,entry.apngSrc||_frames2).catch(function(){});
                 const fi2=edLayers.findIndex(l=>l.type==='text'||l.type==='bubble');
@@ -18750,7 +18688,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
-          const _bibAnimKey = _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+          const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
           la.animKey = _bibAnimKey;
           if (window._sbAnimIdbSave) {
             // Guardar en IDB: si apngSrc usar string, sino array de frames

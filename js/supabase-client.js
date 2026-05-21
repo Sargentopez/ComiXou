@@ -382,8 +382,7 @@ const SupabaseClient = (() => {
               // _isFull:true para que edDeserLayer SF lo reconozca como nuevo formato
               _isFull: true,
             };
-            const _flRaw = JSON.stringify(_flData);
-            const _ld = _flRaw.length >= _CZ_MIN ? await _czCompress(_flRaw) : _flRaw;
+            const _ld = JSON.stringify(_flData);
             layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });
             continue; // siguiente capa
           }
@@ -420,9 +419,8 @@ const SupabaseClient = (() => {
 
           // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
           // El resto: JSON directo como v16.42 — sin riesgo de fallo de descompresión
-          // Comprimir cualquier layer cuyo JSON supere el umbral (fill ya comprimido arriba)
-          const _lRaw = JSON.stringify(_lClean);
-          const _ld = _lRaw.length >= _CZ_MIN ? await _czCompress(_lRaw) : _lRaw;
+          const _isAnim = l.type === 'image' && (l._pngFramesKey || l.animKey);
+          const _ld = _isAnim ? await _czCompress(JSON.stringify(_lClean)) : JSON.stringify(_lClean);
           layerRows.push({
             panel_id:    panelId,
             layer_order: j,
@@ -599,7 +597,7 @@ const SupabaseClient = (() => {
   // como editorData listo para edLoadProject(). El editor las pasa por edDeserLayer
   // sin ninguna conversion — es el mismo formato que guardo edSaveProject.
   async function downloadDraftAsEditorData(supabaseId) {
-    const works = await _get(`works?id=eq.${supabaseId}&limit=1&select=*`);
+    const works = await _get(`works?id=eq.${supabaseId}&limit=1&select=*,rules`);
     if (!works || !works.length) throw new Error('Obra no encontrada en la nube');
     const work = works[0];
     let _projectRules = [];
@@ -629,11 +627,10 @@ const SupabaseClient = (() => {
           try {
             const _apngDataUrl = await _animDownload(row.anim_url);
             if (_apngDataUrl) {
-              // Solo asignar _apngSrc — my-comics.js se encarga de guardarlo en IDB
-              // con la clave correcta prefijada por userId. No guardar aquí para evitar
-              // duplicados en IDB con claves sin userId.
               layerObj._apngSrc = _apngDataUrl;
-              // No asignar _pngFramesKey aquí — my-comics.js la generará con prefijo userId
+              const _idbKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              layerObj._pngFramesKey = _idbKey;
+              await _sbAnimIdbSave(_idbKey, _apngDataUrl).catch(() => {});
             }
           } catch(e) { console.warn('APNG cloud download:', e); }
         }
