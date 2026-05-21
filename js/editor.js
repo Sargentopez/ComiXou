@@ -3516,6 +3516,8 @@ function edRedraw(){
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
     if(_editingDraw && l.type==='draw') return; // en modo draw, el draw va al final
+    // En modo fill: el fill vinculado va al final (encima del draw) para ver el efecto
+    if(_editingDraw && _edDrawLayerTarget==='fill' && l.type==='fill' && _linkedFill && l===_linkedFill) return;
     if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='fill'){
@@ -3556,6 +3558,16 @@ function edRedraw(){
   if(_editingDraw){
     const _dl = edLayers.find(l => l.type==='draw');
     if(_dl) _dl.draw(edCtx);
+    // Si la capa activa es el relleno, renderizar el fill encima del DrawLayer
+    // para que el pincel y el borrador sobre el fill sean visibles
+    if(_edDrawLayerTarget === 'fill' && _dl?._fillLayerId){
+      const _flTop = edLayers.find(l => l.type==='fill' && l._drawLayerId===_dl._fillLayerId);
+      if(_flTop){
+        edCtx.globalAlpha = _flTop.opacity ?? 1;
+        _flTop.draw(edCtx);
+        edCtx.globalAlpha = 1;
+      }
+    }
   }
   edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
@@ -4294,16 +4306,24 @@ function _edApplyCrop() {
   if (!la || pts.length < 3) return;
 
   // Función de finalización — se llama cuando todas las imágenes han cargado
-  const _wasDrawLayer = la && la.type === 'draw';
+  const _wasDrawLayer = la && (la.type === 'draw' || (la.type === 'stroke' && la._fillLayerId));
   const _finish = (newLayer) => {
     if (newLayer) {
       // Para DrawLayer: _edApplyCropDraw ya sustituyó el original por dlOutside,
       // insertamos dlInside (newLayer) justo después del dlOutside (que está en origIdx)
       const origIdx = edLayers.indexOf(_edCropLayer !== null ? _edCropLayer : la);
       const insertAt = origIdx >= 0 ? origIdx + 1 : edLayers.length;
-      edLayers.splice(insertAt, 0, newLayer);
+      // Si newLayer tiene fill vinculado (_newFill), insertarlo antes del stroke
+      if (newLayer._newFill) {
+        const _nf = newLayer._newFill;
+        delete newLayer._newFill;
+        edLayers.splice(insertAt, 0, _nf, newLayer);
+        edSelectedIdx = insertAt + 1; // stroke va después del fill
+      } else {
+        edLayers.splice(insertAt, 0, newLayer);
+        edSelectedIdx = insertAt;
+      }
       edPages[edCurrentPage].layers = edLayers;
-      edSelectedIdx = insertAt;
     }
     _edCropMode         = false;
     _edCropLayer        = null;
@@ -4346,8 +4366,39 @@ function _edApplyCrop() {
   if (la.type === 'image') {
     _edApplyCropImage(la, pts, pw, ph, _finish);
   } else if (la.type === 'stroke') {
-    const newLayer = _edApplyCropStroke(la, pts, pw, ph);
-    _finish(newLayer); // stroke es síncrono, llamar directamente
+    if (la._fillLayerId) {
+      // Stroke con fill: convertir a DrawLayer, recortar como Draw, luego freeze
+      // Reutiliza exactamente el mismo flujo que la edición de dibujos
+      const _dlTmp = la.toDrawLayer();
+      if(la._uid) _dlTmp._uid = la._uid;
+      if(la._fillLayerId) _dlTmp._fillLayerId = la._fillLayerId;
+      // Expandir el fill al canvas workspace (igual que toDrawLayer hace en edición)
+      const _flTmp = edLayers.find(f => f.type==='fill' && f._drawLayerId===la._fillLayerId);
+      if (_flTmp) {
+        _flTmp._srcCanvas = null; _flTmp._previewSx = null; _flTmp._previewSy = null;
+        const _fExp = document.createElement('canvas');
+        _fExp.width = ED_CANVAS_W; _fExp.height = ED_CANVAS_H;
+        const _fExpCtx = _fExp.getContext('2d');
+        // draw() renderiza el fill en su posición workspace correcta
+        // (_isWorkspaceCanvas=false → translate+rotate+drawImage)
+        _flTmp.draw(_fExpCtx);
+
+        _flTmp._canvas = _fExp; _flTmp._ctx = _fExpCtx;
+        _flTmp._isWorkspaceCanvas = true;
+        _flTmp.x = 0.5; _flTmp.y = 0.5; _flTmp.width = 1; _flTmp.height = 1; _flTmp.rotation = 0;
+        _flTmp._drawLayerId = _dlTmp._uid || _dlTmp._fillLayerId;
+      }
+      // Sustituir stroke por DrawLayer en edLayers
+      const _stIdx = edLayers.indexOf(la);
+      if (_stIdx >= 0) edLayers.splice(_stIdx, 1, _dlTmp);
+      edPages[edCurrentPage].layers = edLayers;
+      _edCropLayer = _dlTmp;
+      // Recortar como DrawLayer — _finish llamará _edFreezeAllDrawLayers
+      _edApplyCropDraw(_dlTmp, pts, pw, ph, _finish);
+    } else {
+      const newLayer = _edApplyCropStroke(la, pts, pw, ph);
+      _finish(newLayer);
+    }
   } else if (la.type === 'draw') {
     _edApplyCropDraw(la, pts, pw, ph, _finish);
   } else {
@@ -4499,6 +4550,48 @@ function _edApplyCropStroke(la, pts, pw, ph) {
   ctxOrig.fill();
   ctxOrig.globalCompositeOperation = 'source-over';
 
+  // ── 3. Recortar FillLayer vinculado ──
+  // El fill se recorta primero manteniendo sus proporciones (canvas sw×sh completo).
+  // El stroke se recorta a su bbox. Ambos comparten los mismos handlers (sw×sh, la.x/y/w/h).
+  const _flCropS = la._fillLayerId
+    ? edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId) : null;
+  if (_flCropS && _flCropS._canvas) {
+    const flc = _flCropS._canvas; // mismo sw×sh que el stroke
+
+    // Recortar fill con el mismo clip — canvas sw×sh completo, proporciones intactas
+    const _fcNew = document.createElement('canvas');
+    _fcNew.width = sw; _fcNew.height = sh;
+    const _fcCtx = _fcNew.getContext('2d');
+    _fcCtx.save(); _drawPoly(_fcCtx); _fcCtx.clip();
+    _fcCtx.drawImage(flc, 0, 0); _fcCtx.restore();
+
+    // Nuevo FillLayer: canvas sw×sh, mismas propiedades que la (stroke original)
+    // → handlers idénticos, proporciones intactas
+    const _newFlUid = newLayer._uid || (newLayer._uid = Date.now().toString(36)+'_nf_'+Math.random().toString(36).slice(2,5));
+    newLayer._fillLayerId = _newFlUid;
+    const _newFl = new FillLayer();
+    _newFl._drawLayerId = _newFlUid;
+    _newFl._uid = 'fl_' + _newFlUid;
+    _newFl._canvas = _fcNew; _newFl._ctx = _fcNew.getContext('2d');
+    _newFl._isWorkspaceCanvas = false;
+    // Mismo centro y dimensiones que el stroke original — handlers iguales
+    _newFl.x = la.x; _newFl.y = la.y;
+    _newFl.width = la.width; _newFl.height = la.height;
+    _newFl.rotation = la.rotation || 0;
+    // El stroke nuevo también usa los mismos handlers que la original
+    newLayer.x = la.x; newLayer.y = la.y;
+    newLayer.width = la.width; newLayer.height = la.height;
+    // Canvas del stroke: sw×sh completo con el clip aplicado (offNew ya lo tiene)
+    newLayer._canvas = offNew; newLayer._ctx = offNew.getContext('2d');
+    newLayer._newFill = _newFl;
+
+    // Fill original: destination-out del polígono
+    _flCropS._ctx.globalCompositeOperation = 'destination-out';
+    _drawPoly(_flCropS._ctx); _flCropS._ctx.fill();
+    _flCropS._ctx.globalCompositeOperation = 'source-over';
+    // Fill original mantiene propiedades (la.x/y/w/h no cambiaron)
+  }
+
   return newLayer;
 }
 
@@ -4560,20 +4653,6 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
     fillOutside = _fs.outside;
   }
 
-  // Helper: extraer bbox de un canvas workspace al espacio local de un DrawLayer
-  const _cropFillToDrawLayer = (fillWS, dlRef) => {
-    const _cpw = edPageW(), _cph = edPageH();
-    const _cBW = Math.max(1, Math.round(dlRef.width  * _cpw));
-    const _cBH = Math.max(1, Math.round(dlRef.height * _cph));
-    const _cBX = Math.round(dlRef.x * _cpw - _cBW / 2);
-    const _cBY = Math.round(dlRef.y * _cph - _cBH / 2);
-    const _c = document.createElement('canvas');
-    _c.width = _cBW; _c.height = _cBH;
-    _c.getContext('2d').drawImage(fillWS,
-      edMarginX() + _cBX, edMarginY() + _cBY, _cBW, _cBH, 0, 0, _cBW, _cBH);
-    return _c;
-  };
-
   // ── 4. Crear DrawLayer DENTRO con su FillLayer vinculado ──
   const dlInside = new DrawLayer();
   dlInside._ctx.drawImage(drawInside, 0, 0);
@@ -4586,12 +4665,12 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
     const flInside = new FillLayer();
     flInside._drawLayerId = uidIn;
     flInside._uid         = 'fl_' + uidIn;
-    // Recortar fill workspace al bbox del DrawLayer interno
-    const _fIn = _cropFillToDrawLayer(fillInside, dlInside);
-    flInside._canvas = _fIn; flInside._ctx = _fIn.getContext('2d');
-    flInside.x = dlInside.x; flInside.y = dlInside.y;
-    flInside.width = dlInside.width; flInside.height = dlInside.height;
-    flInside.rotation = dlInside.rotation || 0;
+    // SF: el fill del DrawLayer es siempre canvas workspace ED_CANVAS_W×H (_isWorkspaceCanvas=true)
+    // fillInside ya es un canvas workspace con el clip aplicado — usarlo directamente
+    flInside._canvas = fillInside;
+    flInside._ctx    = fillInside.getContext('2d');
+    flInside._isWorkspaceCanvas = true;
+    flInside.x = 0.5; flInside.y = 0.5; flInside.width = 1; flInside.height = 1; flInside.rotation = 0;
     dlInside._flInside = flInside;
   }
 
@@ -4607,11 +4686,10 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
     const flOutside = new FillLayer();
     flOutside._drawLayerId = uidOut;
     flOutside._uid         = 'fl_' + uidOut;
-    const _fOut = _cropFillToDrawLayer(fillOutside, dlOutside);
-    flOutside._canvas = _fOut; flOutside._ctx = _fOut.getContext('2d');
-    flOutside.x = dlOutside.x; flOutside.y = dlOutside.y;
-    flOutside.width = dlOutside.width; flOutside.height = dlOutside.height;
-    flOutside.rotation = dlOutside.rotation || 0;
+    flOutside._canvas = fillOutside;
+    flOutside._ctx    = fillOutside.getContext('2d');
+    flOutside._isWorkspaceCanvas = true;
+    flOutside.x = 0.5; flOutside.y = 0.5; flOutside.width = 1; flOutside.height = 1; flOutside.rotation = 0;
     dlOutside._flOutside = flOutside;
   }
 
@@ -5072,16 +5150,14 @@ function edMirrorSelected(){
       // Reflejar también el FillLayer vinculado con el mismo eje
       if(la._fillLayerId){
         const _flMir=edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===la._fillLayerId);
-        if(_flMir){
-          // SF: canvas del fill es pw×ph. Mirror con el mismo tamaño.
+        if(_flMir && _flMir._canvas){
+          // Fill del DrawLayer: _isWorkspaceCanvas=true, canvas ED_CANVAS_W×H
+          // Usar el mismo axisPx workspace que el DrawLayer
           const _fmW=_flMir._canvas.width, _fmH=_flMir._canvas.height;
           const _ftmp=document.createElement('canvas');
           _ftmp.width=_fmW; _ftmp.height=_fmH;
           const _ftctx=_ftmp.getContext('2d');
-          // axisPx está en workspace absoluto; el fill está centrado en (fmW/2, fmH/2)
-          // El eje de mirror en coordenadas del canvas local del fill:
-          const _axisLocal = edMarginX() + axisPx - (edMarginX() + la.x * edPageW() - _fmW/2);
-          _ftctx.translate(_axisLocal*2,0); _ftctx.scale(-1,1);
+          _ftctx.translate(axisPx*2,0); _ftctx.scale(-1,1);
           _ftctx.drawImage(_flMir._canvas,0,0);
           _flMir._ctx.clearRect(0,0,_fmW,_fmH);
           _flMir._ctx.drawImage(_ftmp,0,0);
@@ -5129,6 +5205,23 @@ function edMirrorSelected(){
     la._canvas = c;
     la._ctx    = c.getContext('2d');
     la.rotation = -(la.rotation || 0);
+    // Reflejar también el FillLayer vinculado (mismo tamaño de canvas que el stroke)
+    const _flMirS = edPages[edCurrentPage]?.layers.find(
+      l => l.type==='fill' && l._drawLayerId===la._fillLayerId);
+    if(_flMirS && _flMirS._canvas){
+      const _fmSW = _flMirS._canvas.width, _fmSH = _flMirS._canvas.height;
+      const _ftmpS = document.createElement('canvas');
+      _ftmpS.width = _fmSW; _ftmpS.height = _fmSH;
+      const _ftctxS = _ftmpS.getContext('2d');
+      // El canvas del fill tiene el mismo tamaño que el stroke (bbox union).
+      // Reflejar alrededor del eje central (width/2).
+      _ftctxS.translate(_fmSW, 0); _ftctxS.scale(-1, 1);
+      _ftctxS.drawImage(_flMirS._canvas, 0, 0);
+      _flMirS._canvas = _ftmpS;
+      _flMirS._ctx    = _ftmpS.getContext('2d');
+      // rotation del fill sigue al stroke
+      _flMirS.rotation = la.rotation;
+    }
   }
 
   else if(la.type === 'draw'){
@@ -5702,86 +5795,37 @@ function _edRoundRect(ctx, x, y, w, h, r){
 function _edHandleDoubleTap(idx){
   const la = edLayers[idx];
   if(la && la.type === 'draw'){
-    // DrawLayer bloqueado: abrir panel draw para que el botón lock sea accesible
+    // DrawLayer: doble tap → abrir panel de propiedades (editar desde el botón del panel)
     edSelectedIdx = idx;
-    edActiveTool = 'draw';
-    edCanvas.className = 'tool-draw';
-    const cur=$('edBrushCursor');if(cur)cur.style.display='block';
-    _edDrawInitHistory();
-    _edDrawLockUI();
-    edRenderOptionsPanel('draw');
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
     edRedraw();
     return;
   }
   if(la && la.type === 'stroke'){
-    const page=edPages[edCurrentPage]; if(!page) return;
-    // Guardar estado global con el StrokeLayer antes de convertirlo a DrawLayer.
-    // Así al deshacer desde el historial global se recupera el StrokeLayer.
-    edPushHistory();
-    const dl=la.toDrawLayer();
-    if(la.locked) dl.locked = true; // propagar bloqueo al convertir
-    // Propagar vínculo con FillLayer al DrawLayer (evita crear un nuevo FillLayer)
-    if(la._uid) dl._uid = la._uid;
-    if(la._fillLayerId) dl._fillLayerId = la._fillLayerId;
-    // Propagar origen exacto del bbox al DrawLayer para que el fill pueda usarlo
-    if(la._bboxOriginX != null) dl._bboxOriginX = la._bboxOriginX;
-    if(la._bboxOriginY != null) dl._bboxOriginY = la._bboxOriginY;
-    // Actualizar _drawLayerId en el FillLayer vinculado
-    const _flEdit = page.layers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId);
-    if(_flEdit){
-      _flEdit._drawLayerId = dl._uid || dl._fillLayerId;
-      // SF: expandir el canvas del fill de vuelta a workspace (ED_CANVAS_W×H).
-      // Las propiedades x/y/w/h/rotation del fill son idénticas a las del stroke
-      // tras las transformaciones. Usar draw() para renderizar el fill con su
-      // transformación completa (translate+rotate+drawImage) al canvas workspace.
-      _flEdit._srcCanvas = null; _flEdit._previewSx = null; _flEdit._previewSy = null;
-      const _fExp = document.createElement('canvas');
-      _fExp.width  = ED_CANVAS_W;
-      _fExp.height = ED_CANVAS_H;
-      // Renderizar el fill tal como aparece visualmente usando draw()
-      // que aplica translate(cx,cy)+rotate+drawImage(-w/2,-h/2,w,h)
-      _flEdit.draw(_fExp.getContext('2d'));
-      _flEdit._canvas = _fExp;
-      _flEdit._ctx    = _fExp.getContext('2d');
-      _flEdit._isWorkspaceCanvas = true;
-      // El DrawLayer no tiene rotación — resetear propiedades a página completa
-      _flEdit.x = 0.5; _flEdit.y = 0.5;
-      _flEdit.width = 1; _flEdit.height = 1;
-      _flEdit.rotation = 0;
-    }
-    // T9: Quitar stroke e insertar DrawLayer en la MISMA posición (preservar orden de capas)
-    page.layers.splice(idx, 1, dl);  // reemplaza en sitio
-    edLayers=page.layers;
-    edSelectedIdx=-1;
-    edActiveTool='draw';
-    edCanvas.className='tool-draw';
-    const cur=$('edBrushCursor');if(cur)cur.style.display='block';
-    _edDrawInitHistory();
-    _edDrawLockUI();
-    edRenderOptionsPanel('draw');
+    // StrokeLayer: doble tap → abrir panel de propiedades (editar desde el botón del panel)
+    edSelectedIdx = idx;
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
     edRedraw();
   } else if(la && la.type === 'shape' && la._fusionId) {
-    // Shape con _fusionId (rect en sesión de fusión) → panel line
+    // Shape fusionada: doble tap → panel de propiedades (editar desde botón del panel)
     edSelectedIdx = idx;
-    edActiveTool='select'; edCanvas.className='';
-    _edLineType = 'select';
-    edDrawColor = la.color || '#000000';
-    edDrawSize  = la.lineWidth || 3;
-    _edActivateLineTool(true);
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
+    edRedraw();
   } else if(la && la.type === 'shape') {
+    // Shape: doble tap → panel de propiedades (editar desde botón del panel)
     edSelectedIdx = idx;
-    edActiveTool='select'; edCanvas.className='';
-    _edShapeType = 'select';
-    edDrawColor  = la.color || '#000000';
-    edDrawSize   = la.lineWidth || 3;
-    _edActivateShapeTool(true);
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
+    edRedraw();
   } else if(la && la.type === 'line') {
+    // Line: doble tap → panel de propiedades (editar desde botón del panel)
     edSelectedIdx = idx;
-    edActiveTool='select'; edCanvas.className='';
-    _edLineType = 'select';
-    edDrawColor = la.color || '#000000';
-    edDrawSize  = la.lineWidth || 3;
-    _edActivateLineTool(false); // re-editar objeto existente: isNew=false para no borrar historial
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('props');
+    edRedraw();
   } else if (la && (la.type === 'gif' || (la.type === 'image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames)))) {
     // Animación: abrir panel de propiedades (con botón "Editar animación" que abre el GCP)
     edSelectedIdx = idx;
@@ -7170,13 +7214,13 @@ function edOnStart(e){
         _msRecalcBbox();
         _edUpdateMultiSelPanel();
       } else if(edMultiSel.length === 1){
-        // Quedó uno solo → volver a selección normal
+        // Quedó uno solo → volver a selección normal (sin abrir panel; doble tap lo abre)
         edSelectedIdx = edMultiSel[0];
         edMultiSel = []; edMultiBbox = null;
         edActiveTool = 'select'; edCanvas.className = '';
         $('edMultiSelBtn')?.classList.remove('active');
-        _edDrawLockUI(); _edPropsOverlayShow();
-        edRenderOptionsPanel('props');
+        _edDrawLockUI();
+        edRenderOptionsPanel();
       } else {
         _msClear();
         edActiveTool = 'select'; edCanvas.className = '';
@@ -8009,10 +8053,10 @@ function edOnEnd(e){
       const _found=[];
       edLayers.forEach((la,i)=>{ if(!la.hidden && la.type!=='fill' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
       if(_found.length===1){
-        // Un solo objeto → selección normal
+        // Un solo objeto → selección normal (sin abrir panel; doble tap lo abre)
         edSelectedIdx=_found[0];
-        _edDrawLockUI(); _edPropsOverlayShow();
-        edRenderOptionsPanel('props');
+        _edDrawLockUI();
+        edRenderOptionsPanel();
       } else if(_found.length>=2){
         edMultiSel=_found;
         edSelectedIdx=-1;
@@ -10658,16 +10702,9 @@ function _edFreezeAllDrawLayers(){
       edLayers = page.layers;
       continue;
     }
-    const sl = new StrokeLayer(dl._canvas);
-    if(dl.locked) sl.locked = true;
-    if(dl.groupId) sl.groupId = dl.groupId;
-    // Propagar vínculo con FillLayer
-    if(dl._uid) sl._uid = dl._uid;
-    if(dl._fillLayerId) sl._fillLayerId = dl._fillLayerId;
-    const _flAll = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
-    if(_flAll){ _flAll._drawLayerId = sl._uid || sl._fillLayerId; _flAll.syncFrom(sl); }
-    // Sustituir DrawLayer por StrokeLayer en la misma posición
-    page.layers.splice(dlIdx, 1, sl);
+    // Usar _edFreezeDrawLayer para calcular el bbox union correctamente
+    _edFreezeDrawLayer();
+    // _edFreezeDrawLayer ya sustituyó el DrawLayer por StrokeLayer en page.layers
     edLayers = page.layers;
   }
   _edDrawClearHistory();
@@ -10787,7 +10824,9 @@ function edCloseOptionsPanel(){
   if(panel){
     const _mode=panel.dataset.mode;
     panel.classList.remove('open','panel-collapsed'); panel.innerHTML=''; delete panel.dataset.mode; _edPanelTabHide();
-    if(_mode==='props'){ _edDrawUnlockUI(); _edPropsOverlayHide(); }
+    // Siempre limpiar overlay y unlock al cerrar — el modo draw los reactiva si es necesario
+    _edDrawUnlockUI(); _edPropsOverlayHide();
+    if(_mode==='props'){ /* ya hecho arriba */ }
     if(_mode==='crop'){
       const _wdl = _edCropLayer && _edCropLayer.type === 'draw';
       const _cropSelIdx = edSelectedIdx;
@@ -11659,6 +11698,15 @@ function edRenderOptionsPanel(mode){
           </label>
         </div>`;
       }
+    } else if(la.type==='draw'){
+      html+=`
+      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+        <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
+        <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+      </div>
+      <div class="op-prop-row">
+        <button id="pp-edit-draw" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
+      </div>`;
     } else if(la.type==='stroke'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
@@ -11813,12 +11861,39 @@ function edRenderOptionsPanel(mode){
       _edDrawUnlockUI(); _edPropsOverlayHide();
       gcpOpen(_animIdx);
     });
+    $('pp-edit-draw')?.addEventListener('click',()=>{
+      const dl=edLayers[edSelectedIdx]; if(!dl||dl.type!=='draw') return;
+      edActiveTool='draw';
+      edCanvas.className='tool-draw';
+      const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+      _edDrawInitHistory();
+      _edPropsOverlayHide();
+      _edDrawLockUI();
+      edRenderOptionsPanel('draw');
+      edRedraw();
+    });
     $('pp-edit-stroke')?.addEventListener('click',()=>{
       const page=edPages[edCurrentPage]; if(!page) return;
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
       // Guardar estado global con el StrokeLayer antes de editar
       edPushHistory();
       const dl=sl.toDrawLayer();
+      if(sl._uid) dl._uid = sl._uid;
+      if(sl._fillLayerId) dl._fillLayerId = sl._fillLayerId;
+      // Expandir el fill al canvas workspace ED_CANVAS_W×H (_isWorkspaceCanvas=true)
+      if (sl._fillLayerId) {
+        const _flEdit = page.layers.find(f => f.type==='fill' && f._drawLayerId===sl._fillLayerId);
+        if (_flEdit) {
+          _flEdit._srcCanvas = null; _flEdit._previewSx = null; _flEdit._previewSy = null;
+          const _fExp = document.createElement('canvas');
+          _fExp.width = ED_CANVAS_W; _fExp.height = ED_CANVAS_H;
+          try { _flEdit.draw(_fExp.getContext('2d')); } catch(e) {}
+          _flEdit._canvas = _fExp; _flEdit._ctx = _fExp.getContext('2d');
+          _flEdit._isWorkspaceCanvas = true;
+          _flEdit.x = 0.5; _flEdit.y = 0.5; _flEdit.width = 1; _flEdit.height = 1; _flEdit.rotation = 0;
+          _flEdit._drawLayerId = dl._uid || dl._fillLayerId;
+        }
+      }
       page.layers.splice(edSelectedIdx, 1, dl);
       edLayers=page.layers;
       edSelectedIdx=-1;
@@ -11830,26 +11905,34 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('draw');
       edRedraw();
     });
-    // Shape props — editar objeto abre submenú Objeto con este shape seleccionado
+    // Shape props — editar objeto abre submenú Objeto o Rectas (según _fusionId)
     $('pp-edit-shape')?.addEventListener('click',()=>{
-      edActiveTool='shape';
-      edCanvas.className='tool-shape';
-      _edShapeType = la.shape || 'rect';
-      edDrawColor  = la.color || '#000000';
-      edDrawSize   = la.lineWidth || 3;
-      _edActivateShapeTool(true);
+      const _sla = edLayers[edSelectedIdx]; if(!_sla) return;
+      edActiveTool='select'; edCanvas.className='';
+      if(_sla._fusionId){
+        _edLineType = 'select';
+        edDrawColor = _sla.color || '#000000';
+        edDrawSize  = _sla.lineWidth || 3;
+        _edActivateLineTool(true);
+      } else {
+        _edShapeType = _sla.shape || 'rect';
+        edDrawColor  = _sla.color || '#000000';
+        edDrawSize   = _sla.lineWidth || 3;
+        _edActivateShapeTool(true);
+      }
     });
     $('pp-shape-rect')?.addEventListener('click',()=>{ la.shape='rect'; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-shape-ellipse')?.addEventListener('click',()=>{ la.shape='ellipse'; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-shape-color')?.addEventListener('input',e=>{ la.color=e.target.value; edRedraw(); });
     $('pp-shape-lw')?.addEventListener('change',e=>{ la.lineWidth=Math.max(0,Math.min(20,+e.target.value)); edRedraw(); });
-    // Line props — editar recta abre submenú Rectas
+    // Line props — editar recta abre submenú Rectas (re-editar objeto existente)
     $('pp-edit-line')?.addEventListener('click',()=>{
-      edActiveTool='line';
-      edCanvas.className='tool-line';
-      edDrawColor = la.color || '#000000';
-      edDrawSize  = la.lineWidth || 3;
-      _edActivateLineTool();
+      const _lla = edLayers[edSelectedIdx]; if(!_lla) return;
+      edActiveTool='select'; edCanvas.className='';
+      _edLineType = 'select';
+      edDrawColor = _lla.color || '#000000';
+      edDrawSize  = _lla.lineWidth || 3;
+      _edActivateLineTool(false); // isNew=false: no borrar historial
     });
     $('pp-line-toggle-close')?.addEventListener('click',()=>{ la.closed=!la.closed; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-rot')?.addEventListener('input',e=>{
@@ -11860,6 +11943,11 @@ function edRenderOptionsPanel(mode){
     $('pp-rot')?.addEventListener('change',()=>{ edPushHistory(); });
     $('pp-opacity')?.addEventListener('input',e=>{
       la.opacity = e.target.value/100;
+      // Sincronizar opacidad con el FillLayer vinculado
+      if (la._fillLayerId) {
+        const _flOp = edLayers.find(l => l.type==='fill' && l._drawLayerId===la._fillLayerId);
+        if (_flOp) _flOp.opacity = la.opacity;
+      }
       const v=$('pp-opacity-val'); if(v) v.textContent=e.target.value+'%';
       edRedraw();
     });
