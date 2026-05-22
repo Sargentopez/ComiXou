@@ -13912,7 +13912,8 @@ async function edCloudSave() {
       try {
         const _bib = _bibLoad();
         const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
-        window._edLastBibSync = { items: _bibItems, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, ts: new Date().toISOString() };
+        const _bibFolderInfo = (_bib?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
+        window._edLastBibSync = { items: _bibItems, folders: _bibFolderInfo, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, cacheNull: _bibCache===null, ts: new Date().toISOString() };
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
 
         // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
@@ -23609,7 +23610,21 @@ async function _edRunDiag() {
     _edSaveErrors.forEach(m => L('  ⚠️ ' + m));
   } else {
     if(window._edOrientFillDiag){L('\n── Orient Fill Diag ──');L(JSON.stringify(window._edOrientFillDiag));}
-  if(window._edLastBibSync){L('\n── Último bibSync ──');L(JSON.stringify(window._edLastBibSync));}
+  if(window._edLastBibSync){
+    L('\n── Último bibSync ──');
+    L(JSON.stringify(window._edLastBibSync));
+  }
+  // Estado actual de _bibCache
+  L('\n── bibCache actual ──');
+  try {
+    const _bNow = _bibLoad();
+    const _bFolders = (_bNow?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
+    L('items total: ' + (_bNow?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0));
+    L('folders: ' + _bFolders);
+    L('_bibIdbUnavailable: ' + _bibIdbUnavailable);
+    L('_bibCache===null: ' + (_bibCache===null));
+    L('_bibIncognitoChanged: ' + (typeof _bibIncognitoChanged !== 'undefined' ? _bibIncognitoChanged : 'N/A'));
+  } catch(e) { L('error: ' + e.message); }
   L('\n── Errores de guardado: ninguno ──');
   }
   L('── PushHistory log ──');
