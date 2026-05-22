@@ -2737,7 +2737,28 @@ function edApplyHistory(snapshot){
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
-    else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
+    else if(o.type === 'image') {
+      // Buscar layer vivo con la misma _uid o animKey para preservar _pngFrames/_apngSrc
+      const _rawIdx = raw.indexOf(o);
+      const _curPage = edPages[snapshot.pageIdx];
+      const _liveLayers = _curPage ? _curPage.layers : edLayers;
+      const _liveImg = _liveLayers?.find(lv =>
+        lv && lv.type === 'image' && (
+          (o._uid && lv._uid === o._uid) ||
+          (o.animKey && lv.animKey === o.animKey) ||
+          (o._pngFramesKey && lv._pngFramesKey === o._pngFramesKey)
+        )
+      );
+      l = new ImageLayer(null, o.x, o.y);
+      // Preservar datos de animación del layer vivo
+      if (_liveImg) {
+        if (_liveImg._pngFrames) l._pngFrames = _liveImg._pngFrames;
+        if (_liveImg._apngSrc)   l._apngSrc   = _liveImg._apngSrc;
+        if (_liveImg._animOc)    l._animOc     = _liveImg._animOc;
+        if (_liveImg._animReady) l._animReady  = _liveImg._animReady;
+        if (_liveImg.img)        l.img         = _liveImg.img;
+      }
+    }
     else if(o.type === 'draw') {
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
