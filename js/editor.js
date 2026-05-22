@@ -13911,6 +13911,8 @@ async function edCloudSave() {
     if (user && user.id) {
       try {
         const _bib = _bibLoad();
+        const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+        window._edLastBibSync = { items: _bibItems, workId: comic.supabaseId, idbUnavail: _bibIdbUnavailable, ts: new Date().toISOString() };
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
       } catch(e) { console.warn('bibSync error:', e); }
     }
@@ -23590,6 +23592,7 @@ async function _edRunDiag() {
     _edSaveErrors.forEach(m => L('  ⚠️ ' + m));
   } else {
     if(window._edOrientFillDiag){L('\n── Orient Fill Diag ──');L(JSON.stringify(window._edOrientFillDiag));}
+  if(window._edLastBibSync){L('\n── Último bibSync ──');L(JSON.stringify(window._edLastBibSync));}
   L('\n── Errores de guardado: ninguno ──');
   }
   L('── PushHistory log ──');
