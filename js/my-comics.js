@@ -272,9 +272,10 @@ async function _mcCheckOrphanData() {
       const k = localStorage.key(i);
       if (!k) continue;
       if (k.startsWith('cs_biblioteca_')) {
-        const _rest = k.startsWith('cs_biblioteca_local_')
-          ? k.slice('cs_biblioteca_local_'.length)
-          : k.slice('cs_biblioteca_'.length);
+        // cs_biblioteca_local_* son backups temporales gestionados por su propio ciclo de vida
+        // (creados en my-comics, borrados en edSaveProject o al salir) — nunca son huérfanos
+        if (k.startsWith('cs_biblioteca_local_')) continue;
+        const _rest = k.slice('cs_biblioteca_'.length);
         if (_rest && !_validIds.has(_rest)) _orphans.ls.push(k);
       }
     }

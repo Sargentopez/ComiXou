@@ -17033,7 +17033,12 @@ function EditorView_init(){
     }
 
     const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
-    if (!hasUnsaved) { Router.go('my-comics'); return; }
+    if (!hasUnsaved) {
+      // Esperar a que biblioteca IDB haya completado antes de salir
+      if (typeof _bibFlush === 'function') _bibFlush().then(() => Router.go('my-comics'));
+      else Router.go('my-comics');
+      return;
+    }
 
     // Hay cambios sin guardar — preguntar
     const isNew = !ComicStore.getById(edProjectId)?.updatedAt ||
@@ -17060,6 +17065,8 @@ function EditorView_init(){
       dlg.remove();
       _edAutosaveClear(); // salida controlada → borrar autosave
       await edSaveProject();
+      // Esperar a que biblioteca IDB complete
+      if (typeof _bibFlush === 'function') await _bibFlush();
       // La versión local es ahora la canónica — limpiar backup de versión de nube
       if (edProjectId) {
         const _cSave = ComicStore.getById(edProjectId);
@@ -18444,28 +18451,35 @@ function _bibLoad() {
   return _bibCache;
 }
 
-// Persiste en IDB en background; actualiza el caché de forma síncrona
-// En modo incógnito (IDB no disponible), solo actualiza el caché en memoria
+// Persiste en IDB; retorna Promise para poder awaitar si es necesario.
+// En modo incógnito (IDB no disponible), solo actualiza el caché en memoria.
 let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
 let _bibIncognitoChanged = false; // cambios pendientes de subir en modo incógnito
+let _bibSavePromise = null; // última operación de guardado pendiente
 function _bibSave(data) {
   _bibCache = data; // actualizar caché inmediatamente
   if (_bibIdbUnavailable) {
-    // Modo incógnito: marcar cambios pendientes y avisar
     _bibIncognitoChanged = true;
     if (typeof _edShowIncognitoWarning === 'function') {
       _edShowIncognitoWarning('Los cambios en la biblioteca solo se guardarán si subes la obra a la nube. Pulsa el botón ☁️ para guardar.');
     }
-    return;
+    return Promise.resolve();
   }
-  _bibOpenIdb().then(db => {
-    const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
-    tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
-    tx.onerror = () => {}; // silencioso — IDB puede no estar disponible
+  _bibSavePromise = _bibOpenIdb().then(db => {
+    return new Promise((res, rej) => {
+      const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+      tx.oncomplete = () => res();
+      tx.onerror = () => res(); // silencioso
+      tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
+    });
   }).catch(() => {
-    _bibIdbUnavailable = true; // marcar IDB como no disponible
-    // No mostrar toast — _edShowIncognitoWarning() ya habrá avisado
+    _bibIdbUnavailable = true;
   });
+  return _bibSavePromise;
+}
+// Esperar a que la última escritura de biblioteca en IDB complete
+async function _bibFlush() {
+  if (_bibSavePromise) { try { await _bibSavePromise; } catch(_) {} }
 }
 // Exposición global para my-comics.js y otros módulos externos
 window._bibSave = _bibSave;
