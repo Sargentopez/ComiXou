@@ -1293,8 +1293,72 @@ async function _mcRunDiag() {
       else { L(warn('DecompressionStream NO disponible')); }
     } catch(e) { L('APIs check error: ' + e.message); }
 
-
   }
+
+  // ── Preview de lo que detectaría el borrador de huérfanos ──────────────
+  L('\n══ PREVIEW BORRADOR DE HUÉRFANOS ══');
+  try {
+    const _user2 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+    if (!_user2) { L('Sin sesión — no se puede analizar'); }
+    else {
+      const _validIds2 = new Set(
+        ComicStore.getAll()
+          .filter(c => c.userId === _user2.id || c.username === _user2.username)
+          .map(c => c.id)
+      );
+      L('IDs válidos en ComicStore: ' + _validIds2.size);
+      [..._validIds2].forEach(id => L('  ' + id));
+
+      // localStorage: cs_biblioteca_ y cs_biblioteca_local_
+      L('\n── localStorage (cs_biblioteca_*) ──');
+      let _lsOrphans = [], _lsValid = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('cs_biblioteca_')) continue;
+        const _rest = k.startsWith('cs_biblioteca_local_')
+          ? k.slice('cs_biblioteca_local_'.length)
+          : k.slice('cs_biblioteca_'.length);
+        if (_rest && !_validIds2.has(_rest)) _lsOrphans.push(k + ' (id=' + _rest + ')');
+        else _lsValid.push(k + ' (id=' + _rest + ')');
+      }
+      if (_lsValid.length) _lsValid.forEach(k => L('  ✅ válida: ' + k));
+      if (_lsOrphans.length) _lsOrphans.forEach(k => L('  ❌ HUÉRFANA: ' + k));
+      if (!_lsValid.length && !_lsOrphans.length) L('  (vacío)');
+
+      // IDB cxBiblioteca
+      L('\n── IDB cxBiblioteca ──');
+      await new Promise(res => {
+        try {
+          const _req = indexedDB.open('cxBiblioteca', 1);
+          _req.onsuccess = e => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('bib')) { L('  (sin store bib)'); db.close(); res(); return; }
+            const tx = db.transaction('bib', 'readonly');
+            const cur = tx.objectStore('bib').openCursor();
+            cur.onsuccess = ev => {
+              const c = ev.target.result;
+              if (!c) { db.close(); res(); return; }
+              const k = String(c.key);
+              if (k.startsWith('cs_biblioteca_')) {
+                const _rest = k.startsWith('cs_biblioteca_local_')
+                  ? k.slice('cs_biblioteca_local_'.length)
+                  : k.slice('cs_biblioteca_'.length);
+                const items = (c.value?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+                if (_rest && !_validIds2.has(_rest))
+                  L('  ❌ HUÉRFANA: ' + k + ' (id=' + _rest + ', items=' + items + ')');
+                else
+                  L('  ✅ válida: ' + k + ' (id=' + _rest + ', items=' + items + ')');
+              }
+              c.continue();
+            };
+            cur.onerror = () => { db.close(); res(); };
+          };
+          _req.onerror = () => { L('  IDB error: ' + _req.error); res(); };
+          setTimeout(res, 3000);
+        } catch(e) { L('  IDB excepción: ' + e.message); res(); }
+      });
+    }
+  } catch(e) { L('Error preview huérfanos: ' + e.message); }
 
   // Mostrar panel
   let p = document.getElementById('_mcDiagPanel');

@@ -16807,13 +16807,26 @@ async function edSaveProjectModal(){
       }
     }
 
-    // Copiar biblioteca de la obra original a la nueva (independientes desde ahora)
-    try {
-      const _oldBibKey = _BIB_KEY_PREFIX + '_' + edProjectId;
-      const _newBibKey = _BIB_KEY_PREFIX + '_' + _newId;
-      const _oldBib = localStorage.getItem(_oldBibKey);
-      if (_oldBib) localStorage.setItem(_newBibKey, _oldBib);
-    } catch(e) {}
+    // Migrar biblioteca al nuevo ID — la biblioteca real está en IDB, no localStorage
+    const _oldBibId = edProjectId;
+    const _newBibId = _newId;
+    // Migrar en IDB (ruta principal)
+    _bibOpenIdb().then(db => {
+      const _oldKey = _BIB_KEY_PREFIX + '_' + _oldBibId;
+      const _newKey = _BIB_KEY_PREFIX + '_' + _newBibId;
+      const tx = db.transaction('bib', 'readwrite');
+      const store = tx.objectStore('bib');
+      const req = store.get(_oldKey);
+      req.onsuccess = () => {
+        if (req.result) {
+          store.put(req.result, _newKey); // copiar al nuevo ID
+          // NO borrar el antiguo aquí — edSaveProject actualizará _bibCache con el nuevo ID
+        }
+      };
+    }).catch(() => {});
+    // También migrar _bibCache en memoria
+    // (_bibCache ya tiene los datos correctos, edSaveProject los guardará con el nuevo key
+    // porque edProjectId ya será _newId cuando se llame _bibSave)
 
     // Cambiar al nuevo id
     edProjectId = _newId;
