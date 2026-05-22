@@ -22153,8 +22153,8 @@ function gcpInsertFromBib(entry) {
   };
 
   const insertLayer = (la) => {
-    if (la.type === 'shape' || la.type === 'line') {
-      // Convertir vectorial a imagen PNG — así cada frame tiene su propia imagen independiente
+    if (la.type === 'shape' || la.type === 'line' || la.type === 'text' || la.type === 'bubble') {
+      // Convertir a imagen PNG — textos/bocadillos/vectoriales no son animables directamente
       _gcpVectorToImage(la, imgLayer => doInsert(imgLayer));
     } else {
       doInsert(la);
