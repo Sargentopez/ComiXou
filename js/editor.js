@@ -13914,6 +13914,7 @@ async function edCloudSave() {
         const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
         window._edLastBibSync = { items: _bibItems, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, ts: new Date().toISOString() };
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
+
         // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
         if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
           _edShowIncognitoWarning('Biblioteca sincronizada con la nube: ' + _bibItems + ' item(s). Al abrir en modo normal se cargará desde la nube.');
@@ -18314,9 +18315,17 @@ function _bibLoad() {
 // Persiste en IDB en background; actualiza el caché de forma síncrona
 // En modo incógnito (IDB no disponible), solo actualiza el caché en memoria
 let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
+let _bibIncognitoChanged = false; // cambios pendientes de subir en modo incógnito
 function _bibSave(data) {
   _bibCache = data; // actualizar caché inmediatamente
-  if (_bibIdbUnavailable) return; // modo incógnito: solo en memoria, sin error
+  if (_bibIdbUnavailable) {
+    // Modo incógnito: marcar cambios pendientes y avisar
+    _bibIncognitoChanged = true;
+    if (typeof _edShowIncognitoWarning === 'function') {
+      _edShowIncognitoWarning('Los cambios en la biblioteca solo se guardarán si subes la obra a la nube. Pulsa el botón ☁️ para guardar.');
+    }
+    return;
+  }
   _bibOpenIdb().then(db => {
     const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
     tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());

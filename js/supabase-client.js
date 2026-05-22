@@ -770,13 +770,13 @@ const SupabaseClient = (() => {
     const rows = await r.json();
     // Filtrar en JS por workId si se especificó
     if (!workId) return rows;
-    // Incluir items con prefijo workId:: Y items sin prefijo (guardados antes de tener workId)
-    // Un folder_id sin prefijo NO contiene '::' — es '__root__', '__anim__', etc.
+    // Incluir items con prefijo workId:: Y items legacy sin prefijo UUID
+    // (solo __root__ y __anim__ exactos — no folder_ids de otras obras)
+    const _legacyFolders = new Set(['__root__', '__anim__']);
     return rows.filter(row => {
       if (!row.folder_id) return false;
       if (row.folder_id.startsWith(workId + '::')) return true;
-      // Item sin prefijo: folder_id no contiene '::' (no pertenece a otra obra)
-      if (!row.folder_id.includes('::')) return true;
+      if (_legacyFolders.has(row.folder_id)) return true;
       return false;
     });
   }
