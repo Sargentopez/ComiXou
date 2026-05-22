@@ -860,7 +860,10 @@ function _mcRenderList() {
     } else if (action === 'delete') {
       const comic = ComicStore.getById(id);
       if (!comic || !_mcOwns(comic)) return;
-      if (comic && typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
+      // Obras solo locales (sin supabaseId) pueden eliminarse sin sesión
+      const _canDel = !comic.supabaseId ||
+        (typeof Auth !== 'undefined' && Auth.canManage(comic));
+      if (!_canDel) {
         appAlert('No tienes permiso para eliminar esta obra.');
         return;
       }

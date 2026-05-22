@@ -12145,8 +12145,13 @@ function edMaximize(keepBar=false){
   $('edFloatBtn')?.classList.remove('visible');
   if(!keepBar){ edDrawBarHide(); }
   edShapeBarHide();
-  // Restaurar lengüeta si el panel sigue colapsado tras maximizar
-  if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
+  // Restaurar lengüeta tras maximizar — diferir al siguiente frame para que
+  // el layout recalcule con menuBar+topbar visibles antes de leer offsetTop
+  if($('edOptionsPanel')?.classList.contains('panel-collapsed')) {
+    requestAnimationFrame(() => {
+      if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
+    });
+  }
   // Restaurar panel si estaba activo al minimizar
   if(window._edMinimizedDrawMode){
     const mode = window._edMinimizedDrawMode;
