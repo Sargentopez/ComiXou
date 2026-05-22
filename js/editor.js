@@ -23544,8 +23544,8 @@ async function _edRunDiag() {
   // 1. localStorage
   try {
     let _lsSize = 0;
-    for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; }
-    L('localStorage: ' + Math.round(_lsSize/1024) + ' KB');
+    try { for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; } } catch(_ls_e) {}
+    L('localStorage: ' + (_bibIdbUnavailable ? 'modo incógnito' : Math.round(_lsSize/1024) + ' KB'));
   } catch(e) { L('localStorage ERROR: ' + e.message); }
 
   // 2. Comic en ComicStore
@@ -23565,24 +23565,28 @@ async function _edRunDiag() {
   } else { L('ComicStore: NO ENCONTRADO'); }
 
   // 3. IDB cxAnims — claves relevantes
-  try {
-    await new Promise((res) => {
-      const r = indexedDB.open('cxAnims', 1);
-      r.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-      r.onsuccess = e => {
-        const tx = e.target.result.transaction('anims','readonly');
-        const req = tx.objectStore('anims').getAllKeys();
-        req.onsuccess = ev => {
-          const ks = ev.target.result || [];
-          L('IDB cxAnims: ' + ks.length + ' entradas');
-          ks.forEach(k => L('  ' + k));
-          res();
+  if (_bibIdbUnavailable) {
+    L('IDB cxAnims: no disponible (modo incógnito)');
+  } else {
+    try {
+      await new Promise((res) => {
+        let _r;
+        try { _r = indexedDB.open('cxAnims', 1); } catch(e) { L('IDB no disponible: ' + e.message); res(); return; }
+        _r.onupgradeneeded = e => { try { e.target.result.createObjectStore('anims'); } catch(_){} };
+        _r.onsuccess = e => {
+          try {
+            const tx = e.target.result.transaction('anims','readonly');
+            const req = tx.objectStore('anims').getAllKeys();
+            req.onsuccess = ev => { const ks = ev.target.result||[]; L('IDB cxAnims: '+ks.length+' entradas'); ks.slice(0,5).forEach(k=>L('  '+k)); if(ks.length>5)L('  ...('+ks.length+' total)'); res(); };
+            req.onerror = () => { L('IDB getAllKeys error'); res(); };
+          } catch(e2) { L('IDB tx error: '+e2.message); res(); }
         };
-        req.onerror = () => { L('IDB getAllKeys error'); res(); };
-      };
-      r.onerror = () => { L('IDB open error'); res(); };
-    });
-  } catch(e) { L('IDB error: ' + e.message); }
+        _r.onerror = () => { L('IDB open error'); res(); };
+        _r.onblocked = () => { L('IDB blocked'); res(); };
+        setTimeout(res, 3000); // timeout de seguridad
+      });
+    } catch(e) { L('IDB error: ' + e.message); }
+  }
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory
