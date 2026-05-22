@@ -382,8 +382,9 @@ const SupabaseClient = (() => {
               // _isFull:true para que edDeserLayer SF lo reconozca como nuevo formato
               _isFull: true,
             };
-            const _flRaw = JSON.stringify(_flData);
-            const _ld = _flRaw.length >= _CZ_MIN ? await _czCompress(_flRaw) : _flRaw;
+            // No comprimir fills — su dataUrl PNG ya es binario comprimido internamente.
+            // La compresión gzip sobre base64 PNG no mejora el tamaño y puede fallar.
+            const _ld = JSON.stringify(_flData);
             layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });
             continue; // siguiente capa
           }
@@ -629,11 +630,19 @@ const SupabaseClient = (() => {
           try {
             const _apngDataUrl = await _animDownload(row.anim_url);
             if (_apngDataUrl) {
-              // Solo asignar _apngSrc — my-comics.js se encarga de guardarlo en IDB
-              // con la clave correcta prefijada por userId. No guardar aquí para evitar
-              // duplicados en IDB con claves sin userId.
               layerObj._apngSrc = _apngDataUrl;
-              // No asignar _pngFramesKey aquí — my-comics.js la generará con prefijo userId
+              // Guardar en IDB con clave prefijada por userId para que el visor la encuentre
+              try {
+                const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+                const _uid2 = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+                const _idbKey2 = _uid2 + '__anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+                await _sbAnimIdbSave(_idbKey2, _apngDataUrl);
+                layerObj._pngFramesKey = _idbKey2;
+              } catch(_idbErr) {
+                // IDB no disponible (modo incógnito) — datos en _apngSrc solamente
+                // El visor usará _apngSrc directamente si _pngFramesKey no existe
+                window._edIdbUnavailable = true;
+              }
             }
           } catch(e) { console.warn('APNG cloud download:', e); }
         }
