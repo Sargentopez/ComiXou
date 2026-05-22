@@ -18317,7 +18317,11 @@ function _bibLoad() {
 // En modo incógnito (IDB no disponible), solo actualiza el caché en memoria
 let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
 let _bibIncognitoChanged = false; // cambios pendientes de subir en modo incógnito
+let _bibSaveLog = []; // log de llamadas a _bibSave para diagnóstico
 function _bibSave(data) {
+  const _items = (data?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+  _bibSaveLog.push({ items: _items, stack: new Error().stack.split('\n').slice(1,4).join(' | '), t: new Date().toISOString() });
+  if (_bibSaveLog.length > 20) _bibSaveLog.shift();
   _bibCache = data; // actualizar caché inmediatamente
   if (_bibIdbUnavailable) {
     // Modo incógnito: marcar cambios pendientes y avisar
@@ -23624,6 +23628,10 @@ async function _edRunDiag() {
     L('_bibIdbUnavailable: ' + _bibIdbUnavailable);
     L('_bibCache===null: ' + (_bibCache===null));
     L('_bibIncognitoChanged: ' + (typeof _bibIncognitoChanged !== 'undefined' ? _bibIncognitoChanged : 'N/A'));
+  if (typeof _bibSaveLog !== 'undefined' && _bibSaveLog.length) {
+    L('_bibSave calls:');
+    _bibSaveLog.forEach(e => L('  items=' + e.items + ' | ' + e.stack.slice(0,120)));
+  }
   } catch(e) { L('error: ' + e.message); }
   L('\n── Errores de guardado: ninguno ──');
   }
