@@ -2496,11 +2496,12 @@ function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
     if (!l || !l.type) return null;
     if(l.type === 'fill'){
-      // Historial global: guardar canvas completo para no perder contenido fuera del lienzo
-      return { type:'fill', dataUrl:l.toDataUrlFull(),
+      // Guardar dataUrl del canvas local (bbox del stroke) con sus propiedades exactas
+      return { type:'fill', dataUrl: l.toDataUrl(),
         x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
         _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
-        hidden: l.hidden||false, opacity: l.opacity, _isFull:true };
+        hidden: l.hidden||false, opacity: l.opacity,
+        _isWorkspaceCanvas: l._isWorkspaceCanvas||false };
     }
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
@@ -2682,7 +2683,15 @@ function edPushHistory(force){
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
-  if(_vsHistory.length > 0){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return; }
+  // Si _vsHistory activo pero no hay shape/line seleccionada, limpiar (sesión vectorial huérfana)
+  if(_vsHistory.length > 0){
+    const _curL = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    if(!_curL || (_curL.type!=='shape' && _curL.type!=='line')){
+      _vsHistory=[]; _vsHistIdx=-1; // limpiar sesión vectorial huérfana
+    } else {
+      window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return;
+    }
+  }
   const layersJSON = _edLayersSnapshot();
   // DIAG: registrar cada push
   if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
@@ -2813,11 +2822,30 @@ function edApplyHistory(snapshot){
       if(o.opacity !== undefined) fl.opacity = o.opacity;
       if(o.x != null) { fl.x=o.x; fl.y=o.y; fl.width=o.width||1; fl.height=o.height||1; fl.rotation=o.rotation||0; }
       if(o.dataUrl) {
+        // Determinar si el fill era workspace (DrawLayer activo) o local (StrokeLayer)
+        const _wasWS = o._isWorkspaceCanvas === true;
+        if (_wasWS) {
+          // Fill workspace: canvas ED_CANVAS_W × ED_CANVAS_H
+          fl._canvas.width  = ED_CANVAS_W;
+          fl._canvas.height = ED_CANVAS_H;
+          fl._ctx = fl._canvas.getContext('2d');
+          fl._isWorkspaceCanvas = true;
+          fl.x=0.5; fl.y=0.5; fl.width=1; fl.height=1; fl.rotation=0;
+        } else {
+          // Fill local: canvas bbox (width*pw × height*ph)
+          const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+          const _rpw = _isV ? ED_PAGE_W : ED_PAGE_H;
+          const _rph = _isV ? ED_PAGE_H : ED_PAGE_W;
+          const _rw = Math.max(1, Math.round((o.width||1) * _rpw));
+          const _rh = Math.max(1, Math.round((o.height||1) * _rph));
+          fl._canvas.width  = _rw;
+          fl._canvas.height = _rh;
+          fl._ctx = fl._canvas.getContext('2d');
+          fl._isWorkspaceCanvas = false;
+        }
         imgPromises.push(new Promise(res => {
           const _fi = new Image();
           _fi.onload = () => {
-            // SF: el canvas del fill es local (stroke-size). Restaurar directamente.
-            // Las propiedades x/y/w/h ya fueron asignadas arriba.
             fl._ctx.clearRect(0, 0, fl._canvas.width, fl._canvas.height);
             fl._ctx.drawImage(_fi, 0, 0, fl._canvas.width, fl._canvas.height);
             res();
@@ -16984,10 +17012,12 @@ function EditorView_init(){
       }
       Router.go('my-comics');
     };
-    document.getElementById('_edExitNo').onclick = () => {
+    document.getElementById('_edExitNo').onclick = async () => {
       dlg.remove();
-      _edAutosaveClear(); // salida controlada sin guardar → borrar autosave
-      // Limpiar datos temporales — se descarta la sesión de edición
+      // Cancelar timer de huérfanos si está pendiente — la limpieza la hacemos nosotros
+      if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
+      // Limpiar todos los datos temporales ANTES de navegar
+      await _edAutosaveClear(); // borrar autosave (async IDB)
       if (edProjectId) {
         try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
         const _cNoSave = ComicStore.getById(edProjectId);
@@ -16998,11 +17028,26 @@ function EditorView_init(){
       // Si era obra nueva sin guardado previo, eliminarla
       if (isNew && edProjectId) {
         ComicStore.remove(edProjectId);
+        // Borrar OPFS de la obra nueva si existe
+        try {
+          if (navigator.storage?.getDirectory) {
+            const _user = Auth?.currentUser?.();
+            if (_user) {
+              const _uid = String(_user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+              const _root = await navigator.storage.getDirectory();
+              const _base = await _root.getDirectoryHandle('comixou', { create: false }).catch(() => null);
+              const _uDir = _base ? await _base.getDirectoryHandle(_uid, { create: false }).catch(() => null) : null;
+              if (_uDir) await _uDir.removeEntry(edProjectId + '.json').catch(() => {});
+            }
+          }
+        } catch(_) {}
       } else {
         // Restaurar último estado guardado
         const saved = ComicStore.getById(edProjectId);
         if (saved) edLoadProject(edProjectId);
       }
+      // Navegar — el detector de huérfanos en my-comics se lanzará con delay normal
+      // pero ya no habrá nada que detectar
       Router.go('my-comics');
     };
   });
@@ -19439,8 +19484,10 @@ function _gcpHandleDown(e) {
   // Registrar pointer en mapa propio del GCP
   _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // Dos dedos → pinch
+  // Dos dedos → pinch (cancelar rubber band si estaba pendiente)
   if (_gcpPtrMap.size === 2) {
+    if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
+    if (edRubberBand) { edRubberBand = null; }
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     const _pts = [..._gcpPtrMap.values()];
     _gcpPinchDist0  = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
@@ -19464,6 +19511,46 @@ function _gcpHandleDown(e) {
     _gcpRedraw(); return;
   }
 
+  // ── Multiselect activo: drag grupal o nuevo rubber band ──────────────────
+  if (edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox) {
+    const _isTouch5 = e.pointerType === 'touch';
+    const _z5 = edCamera.z;
+    const _pw5 = edPageW(), _ph5 = edPageH();
+    const _bb = edMultiBbox;
+    // Hit en handle de rotación
+    const _rotY = _bb.cy - _bb.h/2 - 28/_z5/_ph5;
+    if (Math.hypot((c.nx-_bb.cx)*_pw5, (c.ny-_rotY)*_ph5)*_z5 < (_isTouch5?28:18)) {
+      edMultiRotating = true;
+      edRotateStartAngle = Math.atan2(c.ny-_bb.cy, c.nx-_bb.cx) - edMultiGroupRot*Math.PI/180;
+      window._edRotateInitRot = edMultiGroupRot;
+      _gcpRedraw(); return;
+    }
+    // Hit en handles de escala
+    const _handles5 = _msHandles(_bb);
+    for (const h of _handles5) {
+      if (Math.hypot((c.nx-h.x)*_pw5, (c.ny-h.y)*_ph5)*_z5 < (_isTouch5?28:18)) {
+        edMultiResizing = true; edResizeCorner = h.c;
+        edInitialSize = { width:_bb.w, height:_bb.h, cx:_bb.cx, cy:_bb.cy,
+                          asp:_bb.h/_bb.w, rot:edMultiGroupRot,
+                          ox:_bb.cx, oy:_bb.cy, anchorX:_bb.cx, anchorY:_bb.cy };
+        edMultiDragOffs = edMultiSel.map(i => ({ dx:c.nx-window._gcpLayers[i].x, dy:c.ny-window._gcpLayers[i].y }));
+        _gcpRedraw(); return;
+      }
+    }
+    // Hit dentro del bbox grupal → drag grupal
+    const _gr5 = edMultiGroupRot*Math.PI/180;
+    const _dx5 = c.nx-_bb.cx, _dy5 = c.ny-_bb.cy;
+    const _lx5 = _dx5*Math.cos(-_gr5)*_pw5 - _dy5*Math.sin(-_gr5)*_ph5;
+    const _ly5 = _dx5*Math.sin(-_gr5)*_pw5 + _dy5*Math.cos(-_gr5)*_ph5;
+    if (Math.abs(_lx5) <= _bb.w/2*_pw5+10/_z5 && Math.abs(_ly5) <= _bb.h/2*_ph5+10/_z5) {
+      edMultiDragging = true;
+      edMultiDragOffs = edMultiSel.map(i => ({ dx:c.nx-window._gcpLayers[i].x, dy:c.ny-window._gcpLayers[i].y }));
+      window._edMoved = false;
+      _gcpRedraw(); return;
+    }
+    // Toque fuera del bbox → nuevo rubber band
+    _msClear(); window._gcpSelIdx = -1; edActiveTool = 'select';
+  }
   // Un solo dedo → guardar selección actual ANTES de que _gcpDoSelectDrag la cambie
   _gcpSelBeforePinch = window._gcpSelIdx;
   _gcpDoSelectDrag(e, c);
@@ -19572,9 +19659,30 @@ function _gcpDoSelectDrag(e, c) {
       window._edMoved = false;
     }
   } else {
-    // Toque en vacío — deseleccionar
-    window._gcpSelIdx = -1;
-    _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
+    // Toque en vacío
+    if (edActiveTool === 'multiselect') {
+      // En multiselect: empezar nuevo rubber band desde el vacío
+      _msClear();
+      edActiveTool = 'multiselect';
+      edRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+    } else if (!_isTouch) {
+      // PC: empezar rubber band directamente al arrastrar en vacío
+      window._gcpSelIdx = -1;
+      edRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+    } else {
+      // Táctil: longpress para activar rubber band
+      window._gcpSelIdx = -1;
+      const _rbC = { ...c };
+      clearTimeout(window._gcpRbTimer);
+      window._gcpRbTimer = setTimeout(() => {
+        window._gcpRbTimer = null;
+        if (!edIsDragging && !edIsResizing && !edIsRotating) {
+          edRubberBand = { x0: _rbC.nx, y0: _rbC.ny, x1: _rbC.nx, y1: _rbC.ny };
+          _gcpRedraw();
+        }
+      }, 400);
+      _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
+    }
   }
   _gcpRedraw();
 }
@@ -19849,6 +19957,8 @@ function _gcpAutoSaveFrame() {
 }
 
 function _gcpHandleMove(e) {
+  // Cancelar timer de rubber band táctil si el dedo se mueve
+  if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   // Actualizar pointer en el mapa propio del GCP
   if (_gcpPtrMap.has(e.pointerId)) {
     _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -19928,6 +20038,12 @@ function _gcpHandleMove(e) {
       }
       _gcpRedraw(); return;
     }
+    // Actualizar rubber band si activo
+    if (edRubberBand && !edIsDragging && !edIsResizing && !edIsRotating && !edMultiDragging && !edMultiResizing && !edMultiRotating) {
+      const _c3 = edCoords(e);
+      edRubberBand.x1 = _c3.nx; edRubberBand.y1 = _c3.ny;
+      _gcpRedraw(); return;
+    }
     edOnMove(e);
     // Snap a guías GCP si hay drag activo de una capa
     if (edIsDragging && window._gcpSelIdx >= 0) {
@@ -20001,12 +20117,56 @@ function _gcpHandleUp(e) {
   if((!window._edActivePointers || window._edActivePointers.size === 0) && edRubberBand){
     edRubberBand = null;
   }
+  // Cancelar timer de rubber band táctil si el dedo se levanta
+  if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   window._edMoved = false;
-  // Guardar estado en el frame activo si hubo transformación
-  if (edIsDragging || edIsResizing || edIsRotating) {
+  // ── Confirmar rubber band → activar multiselect sin menú ─────────────────
+  if (edRubberBand) {
+    const rx0 = Math.min(edRubberBand.x0, edRubberBand.x1);
+    const ry0 = Math.min(edRubberBand.y0, edRubberBand.y1);
+    const rx1 = Math.max(edRubberBand.x0, edRubberBand.x1);
+    const ry1 = Math.max(edRubberBand.y0, edRubberBand.y1);
+    edRubberBand = null;
+    if ((rx1 - rx0) > 0.01 || (ry1 - ry0) > 0.01) {
+      const _found = [];
+      window._gcpLayers.forEach((la, i) => {
+        if (!la || la._gcpVisible === false) return;
+        // GCP solo tiene strokes e images
+        if (la.type !== 'stroke' && la.type !== 'image') return;
+        if (la.locked) return;
+        if (_edAllCornersInside(la, rx0, ry0, rx1, ry1)) _found.push(i);
+      });
+      if (_found.length === 1) {
+        window._gcpSelIdx = _found[0];
+        edActiveTool = 'select';
+        _msClear();
+      } else if (_found.length >= 2) {
+        window._gcpSelIdx = -1;
+        edMultiSel = _found;
+        edActiveTool = 'multiselect';
+        gcpCanvas.className = 'tool-multiselect';
+        _msRecalcBbox();
+        // NO llamar _edUpdateMultiSelPanel — sin menú de unir/agrupar
+      }
+    } else {
+      // Rubber band demasiado pequeño → deseleccionar
+      _msClear();
+      window._gcpSelIdx = -1;
+      edActiveTool = 'select';
+    }
+    edIsDragging = false; edIsResizing = false; edIsRotating = false;
+    _gcpRedraw();
+    return;
+  }
+  // Guardar estado en el frame activo si hubo transformación (individual o grupal)
+  if (edIsDragging || edIsResizing || edIsRotating || edMultiDragging || edMultiResizing || edMultiRotating) {
     _gcpAutoSaveFrame();
+    if (edMultiDragging || edMultiResizing || edMultiRotating) {
+      _msRecalcBbox(); // recalcular bbox tras transformación grupal
+    }
   }
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
+  edMultiDragging = false; edMultiResizing = false; edMultiRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
   // El historial registra el estado en vivo (fuera de los frames guardados).
   const newSnap = window._gcpLayers.map(la => ({
@@ -21783,7 +21943,15 @@ function _gcpRedraw() {
 
 // Copia de edDrawSel adaptada al canvas GIF
 function _gcpDrawSel() {
+  // ── Multiselección GCP ──────────────────────────────────────────────────
+  if (edActiveTool === 'multiselect' && edMultiSel.length) {
+    _gcpWithEditorContext(() => edDrawMultiSel());
+  } else if (edRubberBand) {
+    _gcpWithEditorContext(() => edDrawRubberBand());
+  }
+
   const idx = window._gcpSelIdx;
+  if (edActiveTool === 'multiselect') return; // multiselect dibuja sus propios handles
   if (idx < 0 || idx >= window._gcpLayers.length) return;
   const la = window._gcpLayers[idx];
   if (!la) return;
