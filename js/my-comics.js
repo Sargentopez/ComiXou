@@ -431,6 +431,11 @@ async function _mcSyncCloudDates() {
         local.editorData = null; // forzar descarga de la versión de nube al editar
         local.updatedAt  = w.updated_at;
         dirty = true;
+        // Actualizar miniatura con la de la nube (más reciente)
+        if (w.id) {
+          _mcThumbCache.delete(w.id); // invalidar caché para forzar recarga
+          _mcLoadThumb(w.id);
+        }
       }
 
       if (dirty) { ComicStore.save(local); changed = true; }

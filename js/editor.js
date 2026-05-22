@@ -16970,15 +16970,31 @@ function EditorView_init(){
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
 
-    document.getElementById('_edExitYes').onclick = () => {
+    document.getElementById('_edExitYes').onclick = async () => {
       dlg.remove();
       _edAutosaveClear(); // salida controlada → borrar autosave
-      edSaveProject();
+      await edSaveProject();
+      // La versión local es ahora la canónica — limpiar backup de versión de nube
+      if (edProjectId) {
+        const _cSave = ComicStore.getById(edProjectId);
+        if (_cSave && _cSave.localEditorData) {
+          ComicStore.save({ ..._cSave, localEditorData: null });
+        }
+        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
+      }
       Router.go('my-comics');
     };
     document.getElementById('_edExitNo').onclick = () => {
       dlg.remove();
       _edAutosaveClear(); // salida controlada sin guardar → borrar autosave
+      // Limpiar datos temporales — se descarta la sesión de edición
+      if (edProjectId) {
+        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
+        const _cNoSave = ComicStore.getById(edProjectId);
+        if (_cNoSave && _cNoSave.localEditorData) {
+          ComicStore.save({ ..._cNoSave, localEditorData: null });
+        }
+      }
       // Si era obra nueva sin guardado previo, eliminarla
       if (isNew && edProjectId) {
         ComicStore.remove(edProjectId);
