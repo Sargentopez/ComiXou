@@ -770,7 +770,15 @@ const SupabaseClient = (() => {
     const rows = await r.json();
     // Filtrar en JS por workId si se especificó
     if (!workId) return rows;
-    return rows.filter(row => row.folder_id && row.folder_id.startsWith(workId + '::'));
+    // Incluir items con prefijo workId:: Y items sin prefijo (guardados antes de tener workId)
+    // Un folder_id sin prefijo NO contiene '::' — es '__root__', '__anim__', etc.
+    return rows.filter(row => {
+      if (!row.folder_id) return false;
+      if (row.folder_id.startsWith(workId + '::')) return true;
+      // Item sin prefijo: folder_id no contiene '::' (no pertenece a otra obra)
+      if (!row.folder_id.includes('::')) return true;
+      return false;
+    });
   }
 
   // Sincronización completa: sube todos los items locales a Supabase.
@@ -853,12 +861,25 @@ const SupabaseClient = (() => {
     // Borrar todos los rows existentes del autor/workId y luego insertar limpio
     // (merge-duplicates no borra los items que ya no existen en local)
     if (window._authTryRefresh) await window._authTryRefresh();
-    const _filterBib = workId
-      ? `author_id=eq.${authorId}&folder_id=like.${workId}::*`
-      : `author_id=eq.${authorId}`;
-    await fetch(`${BASE}/biblioteca?${_filterBib}`, {
-      method: 'DELETE', headers: _hdrsUser(),
-    }).catch(()=>{});
+    // Borrar items de esta obra (con prefijo workId::) Y items sin prefijo del autor
+    // (items legacy sin workId que serán reinsertados con el prefijo correcto)
+    if (workId) {
+      // Borrar con prefijo
+      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=like.${workId}::*`, {
+        method: 'DELETE', headers: _hdrsUser(),
+      }).catch(()=>{});
+      // Borrar sin prefijo (legacy — no contienen '::')
+      // PostgREST no soporta NOT LIKE directamente en todos los contextos,
+      // así que borramos los que tienen folder_id exactamente '__root__' o '__anim__'
+      // que son los únicos folder_id posibles sin prefijo
+      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=in.(__root__,__anim__)`, {
+        method: 'DELETE', headers: _hdrsUser(),
+      }).catch(()=>{});
+    } else {
+      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}`, {
+        method: 'DELETE', headers: _hdrsUser(),
+      }).catch(()=>{});
+    }
 
     if (!rows.length) return;
     const r = await fetch(`${BASE}/biblioteca`, {

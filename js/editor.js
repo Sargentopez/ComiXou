@@ -13912,8 +13912,12 @@ async function edCloudSave() {
       try {
         const _bib = _bibLoad();
         const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
-        window._edLastBibSync = { items: _bibItems, workId: comic.supabaseId, idbUnavail: _bibIdbUnavailable, ts: new Date().toISOString() };
+        window._edLastBibSync = { items: _bibItems, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, ts: new Date().toISOString() };
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
+        // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
+        if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
+          _edShowIncognitoWarning('Biblioteca sincronizada con la nube: ' + _bibItems + ' item(s). Al abrir en modo normal se cargará desde la nube.');
+        }
       } catch(e) { console.warn('bibSync error:', e); }
     }
   } catch(err) {
