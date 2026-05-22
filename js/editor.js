@@ -2711,12 +2711,19 @@ function edPushHistory(force){
 }
 
 function edUndo(){
+  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
   if(edHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
+  // Verificar que el snapshot al que vamos tiene layers (no es un estado vacío de carga)
+  const _prevSnap = edHistory[edHistoryIdx - 1];
+  if(!_prevSnap || !_prevSnap.layersJSON) { edToast('Nada que deshacer'); return; }
+  const _prevLayers = JSON.parse(_prevSnap.layersJSON);
+  if(!_prevLayers.length && edLayers.length > 0) { edToast('Nada que deshacer'); return; }
   edHistoryIdx--;
   edApplyHistory(edHistory[edHistoryIdx]);
 }
 
 function edRedo(){
+  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
   if(edHistoryIdx >= edHistory.length - 1){ edToast('Nada que rehacer'); return; }
   edHistoryIdx++;
   edApplyHistory(edHistory[edHistoryIdx]);
@@ -14034,6 +14041,8 @@ function _edSizeMonitorStop() {
 
 async function edSaveProject(_keepOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
+  // Capturar historyIdx ahora — puede cambiar durante los awaits posteriores
+  const _saveHistoryIdx = edHistoryIdx;
   if(!_keepOverlay) _edSaveOverlayShow('Guardando en dispositivo…');
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
@@ -14193,9 +14202,10 @@ async function edSaveProject(_keepOverlay){
     _edSaveOverlayError(_err);
     edToast(_isIncognito ? '⚠️ Modo incógnito: usa Guardar en nube' : '⚠️ Guardado parcial');
   }
-  // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
-  _edSavedHistoryIdx = edHistoryIdx;
-  edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
+  // Compactar historial usando el idx capturado al inicio (evita race condition con undo async)
+  const _snapToKeep = (_saveHistoryIdx >= 0 && _saveHistoryIdx < edHistory.length)
+    ? edHistory[_saveHistoryIdx] : (edHistory.length > 0 ? edHistory[edHistoryIdx] : null);
+  edHistory = _snapToKeep ? [_snapToKeep] : [];
   edHistoryIdx = edHistory.length - 1;
   _edSavedHistoryIdx = edHistoryIdx;
   // Limpiar autosave — ya está todo guardado, no hay nada que recuperar
@@ -15391,9 +15401,14 @@ async function edLoadProject(id){
       // Sincronizar el marcador de "guardado" con el snapshot inicial,
       // para que salir sin hacer cambios no pregunte si guardar.
       _edSavedHistoryIdx = edHistoryIdx;
+      // Liberar el flag aquí si hubo callbacks async (fills pendientes)
+      if (_fillLoadPromises.length) _edLoadProjectInProgress = false;
     };
     if(_fillLoadPromises.length) {
-      Promise.all(_fillLoadPromises).then(_doPushHistory);
+      // Mantener el flag activo hasta que los fills carguen y el historial se inicialice
+      Promise.all(_fillLoadPromises).then(_doPushHistory).catch(() => {
+        _doPushHistory(); // push aunque fallen los fills
+      });
     } else {
       _doPushHistory();
     }
@@ -15426,9 +15441,11 @@ async function edLoadProject(id){
   } catch(_le) {
     console.error('edLoadProject error:', _le);
     edToast('⚠️ Error al cargar la obra');
-  } finally {
-    _edLoadProjectInProgress = false;
+    _edLoadProjectInProgress = false; // liberar solo en error
   }
+  // En éxito: el flag se libera en _doPushHistory si hay fills async,
+  // o inmediatamente si no hay fills pendientes
+  if (!_fillLoadPromises?.length) _edLoadProjectInProgress = false;
 }
 
 /* ══════════════════════════════════════════
