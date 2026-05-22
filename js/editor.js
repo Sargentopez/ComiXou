@@ -13654,6 +13654,30 @@ function edInitShapeBar() {
 // ── Bloqueo unificado de la barra de menús ──────────────────────────────────
 // Una sola función controla AMBOS mecanismos (draw-active + overlay).
 // lock=true: bloquear. lock=false: desbloquear.
+// Ventana de aviso modo incógnito — fija y cerrable
+function _edShowIncognitoWarning(msg) {
+  if (document.getElementById('_edIncognitoWarn')) return; // ya visible
+  const box = document.createElement('div');
+  box.id = '_edIncognitoWarn';
+  box.style.cssText = [
+    'position:fixed','bottom:20px','left:50%','transform:translateX(-50%)',
+    'background:#1e293b','color:#f1f5f9','border-radius:12px',
+    'padding:16px 20px','max-width:340px','width:90%','z-index:99999',
+    'box-shadow:0 8px 32px rgba(0,0,0,0.5)','font-size:14px','line-height:1.5',
+    'display:flex','flex-direction:column','gap:10px'
+  ].join(';');
+  box.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:flex-start">
+      <span style="font-size:20px;flex-shrink:0">⚠️</span>
+      <span>${msg}</span>
+    </div>
+    <button id="_edIncognitoWarnClose" style="align-self:flex-end;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">Entendido</button>
+  `;
+  document.body.appendChild(box);
+  document.getElementById('_edIncognitoWarnClose').addEventListener('click', () => box.remove());
+}
+window._edShowIncognitoWarning = _edShowIncognitoWarning;
+
 function _edMenuLock(lock) {
   if (lock) {
     $('editorShell')?.classList.add('draw-active');
@@ -14060,10 +14084,19 @@ async function edSaveProject(_keepOverlay){
       if (!_sl) continue;
       // Externalizar _pngFrames a IndexedDB para no saturar localStorage
       if (_sl._pngFrames && _sl._pngFrames.length) {
-        const _idbKey = _edAnimKey(edProjectId + '_' + _pi + '_' + _li);
-        try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); } catch(e) {}
-        delete _sl._pngFrames;
-        _sl._pngFramesKey = _idbKey;
+        if (_bibIdbUnavailable) {
+          // Modo incógnito: mantener _pngFrames en memoria, no asignar clave IDB
+          // (el upload a la nube los usará directamente desde _pngFrames)
+        } else {
+          const _idbKey = _edAnimKey(edProjectId + '_' + _pi + '_' + _li);
+          let _idbSaved = false;
+          try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); _idbSaved = true; } catch(e) {}
+          if (_idbSaved) {
+            delete _sl._pngFrames;
+            _sl._pngFramesKey = _idbKey;
+          }
+          // Si IDB falló, mantener _pngFrames y no asignar _pngFramesKey
+        }
       }
       _pageLayers.push(_sl);
     }
@@ -18222,11 +18255,37 @@ async function _bibInitIdb(supabaseWorkId) {
       resolve();
     };
   }).catch(() => {
+    _bibIdbUnavailable = true; // IDB no disponible (modo incógnito u otro error)
     _bibCache = { folders: [
       { id: '__root__', name: 'General', items: [] },
       { id: '__anim__', name: 'Animaciones', items: [] }
     ]};
-    resolve();
+    // Intentar cargar de Supabase en memoria aunque IDB no esté disponible
+    const _user3 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+    if (_user3 && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
+      SupabaseClient.bibDownload(_user3.id, supabaseWorkId).then(downloaded => {
+        if (downloaded && Array.isArray(downloaded.folders) &&
+            downloaded.folders.some(f => f.items && f.items.length > 0)) {
+          _bibCache = downloaded;
+          // No guardar en IDB — solo en memoria
+        }
+        // Mostrar aviso modo incógnito
+        if (typeof _edShowIncognitoWarning === 'function') {
+          _edShowIncognitoWarning('Modo incógnito: la biblioteca y animaciones se cargan en memoria y no se guardarán entre sesiones. Para guardar cambios, abre la app en modo normal.');
+        }
+        resolve();
+      }).catch(() => {
+        if (typeof _edShowIncognitoWarning === 'function') {
+          _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible en este modo. Abre la app en modo normal para acceder a ella.');
+        }
+        resolve();
+      });
+    } else {
+      if (typeof _edShowIncognitoWarning === 'function') {
+        setTimeout(() => _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible. Abre la app en modo normal para acceder a ella.'), 1500);
+      }
+      resolve();
+    }
   });
   }); // cierre new Promise
 }
@@ -18247,13 +18306,19 @@ function _bibLoad() {
 }
 
 // Persiste en IDB en background; actualiza el caché de forma síncrona
+// En modo incógnito (IDB no disponible), solo actualiza el caché en memoria
+let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
 function _bibSave(data) {
   _bibCache = data; // actualizar caché inmediatamente
+  if (_bibIdbUnavailable) return; // modo incógnito: solo en memoria, sin error
   _bibOpenIdb().then(db => {
     const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
     tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
-    tx.onerror = () => edToast('⚠️ Error al guardar en biblioteca');
-  }).catch(() => edToast('⚠️ Error al guardar en biblioteca'));
+    tx.onerror = () => {}; // silencioso — IDB puede no estar disponible
+  }).catch(() => {
+    _bibIdbUnavailable = true; // marcar IDB como no disponible
+    // No mostrar toast — _edShowIncognitoWarning() ya habrá avisado
+  });
 }
 // Exposición global para my-comics.js y otros módulos externos
 window._bibSave = _bibSave;

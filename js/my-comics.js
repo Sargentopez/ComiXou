@@ -770,15 +770,7 @@ function _mcRenderList() {
         }
       }
 
-      // Avisar si IDB no disponible (modo incógnito) al abrir el editor
-      if (window._edIdbUnavailable) {
-        window._edIdbUnavailable = false;
-        setTimeout(() => {
-          if (typeof edToast === 'function') {
-            edToast('⚠️ Modo incógnito: las animaciones pueden no reproducirse. Abre la app en modo normal para mejor experiencia.', 6000);
-          }
-        }, 2500);
-      }
+      // El aviso de modo incógnito lo gestiona _edShowIncognitoWarning en editor.js
       // Guardar qué proyecto editar y navegar al editor
       sessionStorage.setItem('cx_edit_id', id);
       Router.go('editor');

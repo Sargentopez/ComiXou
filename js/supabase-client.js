@@ -400,22 +400,30 @@ const SupabaseClient = (() => {
           delete _lClean._oc;
           delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
 
-          // APNG animado → bucket 'anims' — patrón idéntico al GIF
+          // APNG animado → bucket 'anims'
+          // Fuentes de datos en orden de prioridad:
+          // 1. IDB (caso normal), 2. _apngSrc en memoria (modo incógnito), 3. _pngFrames en memoria
           let animUrl = null;
-          if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
-            const _idbKey = l._pngFramesKey || l.animKey;
+          if (l.type === 'image' && (l._pngFramesKey || l.animKey || l._apngSrc || (l._pngFrames && l._pngFrames.length))) {
             const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
             try {
-              const _animData = await _sbAnimIdbLoad(_idbKey);
-              if (_animData) {
-                let _apngDataUrl = null;
-                if (typeof _animData === 'string') {
-                  _apngDataUrl = _animData;
-                } else if (Array.isArray(_animData) && _animData.length) {
-                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+              let _apngDataUrl = null;
+              // 1. Intentar IDB si hay clave
+              if (l._pngFramesKey || l.animKey) {
+                const _idbKey = l._pngFramesKey || l.animKey;
+                const _animData = await _sbAnimIdbLoad(_idbKey).catch(() => null);
+                if (_animData) {
+                  if (typeof _animData === 'string') _apngDataUrl = _animData;
+                  else if (Array.isArray(_animData) && _animData.length)
+                    _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
                 }
-                if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
               }
+              // 2. Fallback: _apngSrc en memoria (modo incógnito o descarga reciente)
+              if (!_apngDataUrl && l._apngSrc) _apngDataUrl = l._apngSrc;
+              // 3. Fallback: _pngFrames en memoria
+              if (!_apngDataUrl && l._pngFrames && l._pngFrames.length)
+                _apngDataUrl = await _buildApngFromFrames(l._pngFrames, l._gcpFrameDelay || 100);
+              if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
             } catch(e) { console.warn('APNG upload error:', e.message); }
           }
 
