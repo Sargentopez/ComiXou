@@ -3661,13 +3661,14 @@ function edRedraw(){
     // Solicitar siguiente frame para animar el parpadeo
     requestAnimationFrame(()=>{ if(_edLineLayer?.points.length===1) edRedraw(); });
   }
-  // Multi-selección: bbox colectivo encima de todo, o marquesina si está arrastrando
-  if(edActiveTool==='multiselect'){
-    if(edMultiSel.length) edDrawMultiSel();
-    else edDrawRubberBand();
+  // Multi-selección y rubber band: no dibujar si GCP activo (tiene su propio canvas)
+  if(!window._gcpActive){
+    if(edActiveTool==='multiselect'){
+      if(edMultiSel.length) edDrawMultiSel();
+      else edDrawRubberBand();
+    }
+    if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
   }
-  // Rubber band en modo select (PC, sin pulsar botón multiselect)
-  if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
   // ── Reglas (T29): solo visibles en el editor, encima de todo ──
   _edRulesDraw(edCtx);
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
@@ -3765,11 +3766,8 @@ function edDrawSel(){
     if(!_curveMode){
     // Para rect (LineLayer 4-nodos cerrado): solo handles en centros de segmentos
     // (las esquinas son nodos de edición, no handles de resize)
-    const _isLineRect = la.type==='line' && la.closed && !la._fromEllipse
-      && la.points && la.points.filter(Boolean).length === 4;
-    const corners = _isLineRect
-      ? [[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]]  // solo centros de segmento
-      : [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
+    // Siempre 8 handlers (4 esquinas + 4 centros de lado)
+    const corners = [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
     corners.forEach(([hx,hy])=>{
       edCtx.beginPath();edCtx.arc(hx,hy,hr,0,Math.PI*2);
       edCtx.fillStyle='#fff';edCtx.fill();
@@ -3835,8 +3833,8 @@ function edDrawSel(){
     edCtx.fillStyle='#e63030';edCtx.fill();
     edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
   }
-  // Handles 4 vértices del rect cuando modo curva activo
-  if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape'){
+  // Handles 4 vértices del rect: solo en modo v/c (no en modo selección)
+  if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape' && _edLineType !== 'select'){
     if(_edCurveModeActive()){
       const corners=[[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]];
       const rot2=(la.rotation||0)*Math.PI/180;
@@ -3912,8 +3910,11 @@ function edDrawSel(){
       edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
     });
   }
-  // Handles vértices de LineLayer seleccionado (panel abierto, solo si no es ellipse)
-  if(la.type==='line' && la.points.length>=1 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+  // Handles vértices de LineLayer seleccionado: solo en modo v/c, no en modo selección
+  const _showLineNodes = la.type==='line' && la.points.length>=1 && !la._fromEllipse &&
+    ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) &&
+    !(_edLineType === 'select' && !_edLineLayer); // ocultar en modo selección
+  if(_showLineNodes){
     const rot=(la.rotation||0)*Math.PI/180;
     const cos=Math.cos(rot),sin=Math.sin(rot);
     const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
@@ -6260,12 +6261,39 @@ function edOnStart(e){
       if(la.type==='line'&&la.points.length>=2){
         const rot2=(la.rotation||0)*Math.PI/180;
         const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+        const _vcNow=Date.now();
         for(let i=0;i<la.points.length;i++){
           const p=la.points[i]; if(!p) continue;
           const lpx=p.x*pw2,lpy=p.y*ph2;
           const ax2=la.x+(lpx*cos2-lpy*sin2)/pw2;
           const ay2=la.y+(lpx*sin2+lpy*cos2)/ph2;
           if(Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z<_vcHitR){
+            // Doble tap en nodo ya seleccionado → eliminar nodo
+            const _isDblNode = window._edCurveVertIdx===i &&
+              (_vcNow - (window._edCurveLastTapTime||0)) < 350;
+            window._edCurveLastTapTime = _vcNow;
+            if(_isDblNode){
+              // Eliminar nodo si quedan al menos 2 puntos reales
+              const _realPts = la.points.filter(Boolean);
+              if(_realPts.length > 2){
+                _edShapePushHistory(); // guardar estado antes de eliminar
+                la.points[i] = null; // marcar como eliminado
+                // Limpiar nulls al inicio/fin de cada contorno
+                while(la.points.length > 0 && la.points[0] === null) la.points.shift();
+                while(la.points.length > 0 && la.points[la.points.length-1] === null) la.points.pop();
+                // Eliminar nulls consecutivos
+                la.points = la.points.filter((p,j,a) => p !== null || (j>0 && a[j-1]!==null));
+                la._boundsDirty = true;
+                window._edCurveVertIdx = -1;
+                window._edCurveLastTapTime = 0;
+                _edShapePushHistory();
+                edRedraw();
+              } else {
+                edToast('Mínimo 2 vértices');
+              }
+              return;
+            }
+            // Primer tap: seleccionar nodo
             window._edCurveVertIdx=i;
             if(!la.cornerRadii)la.cornerRadii={};
             const existing=la.cornerRadii[i]||0;
@@ -6530,7 +6558,7 @@ function edOnStart(e){
           window._edRbTouchTimer = null;
           const _rbSz = window._edActivePointers ? window._edActivePointers.size : 0;
           if(_rbSz !== 1) return; // cancelar si no hay exactamente 1 dedo activo
-          edRubberBand={x0:_rbC2.nx,y0:_rbC2.ny,x1:_rbC2.nx,y1:_rbC2.ny};
+          if(!window._gcpActive) edRubberBand={x0:_rbC2.nx,y0:_rbC2.ny,x1:_rbC2.nx,y1:_rbC2.ny};
           edRedraw();
         }, 120);
       } else {
@@ -6545,7 +6573,7 @@ function edOnStart(e){
           edRenderOptionsPanel('props');
         } else {
           // Vacío real → iniciar rubber band
-          edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+          if(!window._gcpActive) edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
         }
       }
       edRedraw();
@@ -7312,7 +7340,7 @@ function edOnStart(e){
         edMultiSel = []; edMultiBbox = null;
         edActiveTool = 'select'; edCanvas.className = '';
         $('edMultiSelBtn')?.classList.remove('active');
-        _edDrawLockUI();
+        // Sin panel abierto: no bloquear menús
         edRenderOptionsPanel();
       } else {
         _msClear();
@@ -7419,14 +7447,14 @@ function edOnStart(e){
         const _rbSz2 = window._edActivePointers ? window._edActivePointers.size : 0;
         if(_rbSz2 !== 1) return; // cancelar si no hay exactamente 1 dedo activo
         const _rc = edCoords(_rbE);
-        edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
+        if(!window._gcpActive) edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
         window._edRubberBandEndPos = null;
         edRedraw();
       }, 120);
     } else {
       // PC: inmediato
       const c = edCoords(e);
-      edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
+      if(!window._gcpActive) edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
       window._edRubberBandEndPos = null;
     }
   }
@@ -7536,7 +7564,7 @@ function edOnMove(e){
     return;
   }
   // ── RUBBER BAND en modo select (PC) ────────────────────────
-  if(edActiveTool==='select' && edRubberBand){
+  if(!window._gcpActive && edActiveTool==='select' && edRubberBand){
     e.preventDefault();
     const c=edCoords(e);
     edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
@@ -8134,7 +8162,7 @@ function edOnEnd(e){
     }
   }
   // ── RUBBER BAND en modo select (PC) → activar multiselect ──
-  if(edActiveTool==='select' && edRubberBand){
+  if(!window._gcpActive && edActiveTool==='select' && edRubberBand){
     const _rbPos = window._edRubberBandEndPos || {clientX: window.innerWidth/2, clientY: window.innerHeight/2};
     window._edRubberBandEndPos = null;
     const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
@@ -8155,6 +8183,7 @@ function edOnEnd(e){
         edSelectedIdx=-1;
         edActiveTool='multiselect';
         edCanvas.className='tool-multiselect';
+        _edMenuLock(false); // multiselect sin panel: desbloquear menús
         _msRecalcBbox();
         // botón nunca queda active — opciones disponibles vía tap en botón
         _edUpdateMultiSelPanel();
@@ -10945,7 +10974,14 @@ function edCloseOptionsPanel(){
     // impidiendo guardar movimientos/resize/rotate de cualquier objeto posterior.
     if(_mode==='line' || _mode==='shape'){
       _edLineFusionId = null;
-      if(typeof _vsClear === 'function') _vsClear();
+      // Cerrar sin OK → descartar cambios: restaurar snapshot inicial de la sesión
+      if(typeof _vsClear === 'function'){
+        if(typeof _vsHistIdx !== 'undefined' && _vsHistory && _vsHistory.length > 0 && _vsHistIdx > 0){
+          // Restaurar al estado antes de la sesión
+          if(typeof _vsApply === 'function') _vsApply(_vsHistory[0]);
+        }
+        _vsClear();
+      }
     }
   }
   _edFocusDone = false;
@@ -19570,7 +19606,7 @@ function _gcpHandleDown(e) {
   // Dos dedos → pinch (cancelar rubber band si estaba pendiente)
   if (_gcpPtrMap.size === 2) {
     if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
-    if (edRubberBand) { edRubberBand = null; }
+    if (window._gcpRubberBand) { window._gcpRubberBand = null; }
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     const _pts = [..._gcpPtrMap.values()];
     _gcpPinchDist0  = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
@@ -19632,7 +19668,7 @@ function _gcpHandleDown(e) {
       _gcpRedraw(); return;
     }
     // Toque fuera del bbox → nuevo rubber band
-    _msClear(); window._gcpSelIdx = -1; edActiveTool = 'select';
+    window._gcpRubberBand = null; _msClear(); window._gcpSelIdx = -1; edActiveTool = 'select';
   }
   // Un solo dedo → guardar selección actual ANTES de que _gcpDoSelectDrag la cambie
   _gcpSelBeforePinch = window._gcpSelIdx;
@@ -19751,11 +19787,11 @@ function _gcpDoSelectDrag(e, c) {
       // En multiselect: empezar nuevo rubber band desde el vacío
       _msClear();
       edActiveTool = 'multiselect';
-      edRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+      window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
     } else if (!_isTouch) {
       // PC: empezar rubber band directamente al arrastrar en vacío
       window._gcpSelIdx = -1;
-      edRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+      window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
     } else {
       // Táctil: longpress para activar rubber band
       window._gcpSelIdx = -1;
@@ -19764,7 +19800,7 @@ function _gcpDoSelectDrag(e, c) {
       window._gcpRbTimer = setTimeout(() => {
         window._gcpRbTimer = null;
         if (!edIsDragging && !edIsResizing && !edIsRotating) {
-          edRubberBand = { x0: _rbC.nx, y0: _rbC.ny, x1: _rbC.nx, y1: _rbC.ny };
+          window._gcpRubberBand = { x0: _rbC.nx, y0: _rbC.ny, x1: _rbC.nx, y1: _rbC.ny };
           _gcpRedraw();
         }
       }, 400);
@@ -20126,9 +20162,9 @@ function _gcpHandleMove(e) {
       _gcpRedraw(); return;
     }
     // Actualizar rubber band si activo
-    if (edRubberBand && !edIsDragging && !edIsResizing && !edIsRotating && !edMultiDragging && !edMultiResizing && !edMultiRotating) {
+    if (window._gcpRubberBand && !edIsDragging && !edIsResizing && !edIsRotating && !edMultiDragging && !edMultiResizing && !edMultiRotating) {
       const _c3 = edCoords(e);
-      edRubberBand.x1 = _c3.nx; edRubberBand.y1 = _c3.ny;
+      window._gcpRubberBand.x1 = _c3.nx; window._gcpRubberBand.y1 = _c3.ny;
       _gcpRedraw(); return;
     }
     edOnMove(e);
@@ -20207,13 +20243,13 @@ function _gcpHandleUp(e) {
   // Cancelar timer de rubber band táctil si el dedo se levanta
   if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   window._edMoved = false;
-  // ── Confirmar rubber band → activar multiselect sin menú ─────────────────
-  if (edRubberBand) {
-    const rx0 = Math.min(edRubberBand.x0, edRubberBand.x1);
-    const ry0 = Math.min(edRubberBand.y0, edRubberBand.y1);
-    const rx1 = Math.max(edRubberBand.x0, edRubberBand.x1);
-    const ry1 = Math.max(edRubberBand.y0, edRubberBand.y1);
-    edRubberBand = null;
+  // ── Confirmar rubber band GCP → activar multiselect sin menú ──────────────
+  if (window._gcpRubberBand) {
+    const rx0 = Math.min(window._gcpRubberBand.x0, window._gcpRubberBand.x1);
+    const ry0 = Math.min(window._gcpRubberBand.y0, window._gcpRubberBand.y1);
+    const rx1 = Math.max(window._gcpRubberBand.x0, window._gcpRubberBand.x1);
+    const ry1 = Math.max(window._gcpRubberBand.y0, window._gcpRubberBand.y1);
+    window._gcpRubberBand = null;
     if ((rx1 - rx0) > 0.01 || (ry1 - ry0) > 0.01) {
       const _found = [];
       window._gcpLayers.forEach((la, i) => {
@@ -22030,11 +22066,25 @@ function _gcpRedraw() {
 
 // Copia de edDrawSel adaptada al canvas GIF
 function _gcpDrawSel() {
-  // ── Multiselección GCP ──────────────────────────────────────────────────
+  // ── Multiselección y rubber band GCP ────────────────────────────────────
   if (edActiveTool === 'multiselect' && edMultiSel.length) {
     _gcpWithEditorContext(() => edDrawMultiSel());
-  } else if (edRubberBand) {
-    _gcpWithEditorContext(() => edDrawRubberBand());
+  } else if (window._gcpRubberBand) {
+    // Dibujar rubber band GCP directamente en gcpCtx (sin usar edRubberBand)
+    const _rb = window._gcpRubberBand;
+    const pw = edPageW(), ph = edPageH();
+    const rx = edMarginX() + Math.min(_rb.x0, _rb.x1) * pw;
+    const ry = edMarginY() + Math.min(_rb.y0, _rb.y1) * ph;
+    const rw = Math.abs(_rb.x1 - _rb.x0) * pw;
+    const rh = Math.abs(_rb.y1 - _rb.y0) * ph;
+    gcpCtx.save();
+    gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = 1 / edCamera.z;
+    gcpCtx.setLineDash([4 / edCamera.z, 3 / edCamera.z]);
+    gcpCtx.strokeRect(rx, ry, rw, rh);
+    gcpCtx.fillStyle = 'rgba(26,140,255,0.08)';
+    gcpCtx.fillRect(rx, ry, rw, rh);
+    gcpCtx.setLineDash([]);
+    gcpCtx.restore();
   }
 
   const idx = window._gcpSelIdx;
