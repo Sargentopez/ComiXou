@@ -3023,6 +3023,13 @@ function edFitCanvas(resetCamera){
   edCanvas.style.height = newH + 'px';
   edCanvas.style.position = 'absolute';
   edCanvas.style.left = '0';
+  // Sincronizar gcpCanvas si está activo
+  if (window._gcpActive && gcpCanvas) {
+    gcpCanvas.width  = newW;
+    gcpCanvas.height = newH;
+    gcpCanvas.style.width  = newW + 'px';
+    gcpCanvas.style.height = newH + 'px';
+  }
   edCanvas.style.top  = totalBarsH + 'px';
   _edCanvasTop = totalBarsH; // cachear para edCoords
   edCanvas.style.margin = '0';
@@ -19597,6 +19604,10 @@ function _gcpHandleDown(e) {
 // Lógica real de selección/drag/handles en GCP (tras confirmar que es un solo puntero)
 // Idéntico al editor general: mismos radios, mismas restricciones táctiles, misma lógica
 function _gcpDoSelectDrag(e, c) {
+  // No iniciar selección si el origen está en UI del GCP (submenús, paneles, barras)
+  if (e.target && e.target !== gcpCanvas) {
+    if (e.target.closest?.('#gcpFramesBar,#gcpMenuBar,#gcpTopbar,#gcpPropsPanel,#gcpShell,[data-gcpmenu],#gcp-rule-pop,#gcpInterpModal,#gcpInterpMenu,._gcpDropdown')) return;
+  }
   const _isTouch = e.pointerType === 'touch';
   const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
   const hitScreen = _isTouch ? 28 : 18;
@@ -22309,14 +22320,13 @@ function gcpOpen(edLayerIdx) {
   if (!gcpCanvas) return;
   gcpCtx = gcpCanvas.getContext('2d');
 
-  // Dejar 12px libres en right y bottom para las scrollbars de PC
-  const _sbSize = 12;
-  gcpCanvas.width  = ec.width  - _sbSize;
-  gcpCanvas.height = ec.height - _sbSize;
+  // gcpCanvas mismo tamaño y posición que edCanvas — las scrollbars tienen z-index propio
+  gcpCanvas.width  = ec.width;
+  gcpCanvas.height = ec.height;
   gcpCanvas.style.left   = '0';
-  gcpCanvas.style.top    = ec.style.top;
-  gcpCanvas.style.width  = (ec.width  - _sbSize) + 'px';
-  gcpCanvas.style.height = (ec.height - _sbSize) + 'px';
+  gcpCanvas.style.top    = '0';
+  gcpCanvas.style.width  = ec.width  + 'px';
+  gcpCanvas.style.height = ec.height + 'px';
   gcpCanvas.style.display       = 'block';
   gcpCanvas.style.pointerEvents = 'auto';
   // Bloquear scroll nativo en Android (antes lo hacía gcpBlocker, ahora con pointer-events:none no puede)
