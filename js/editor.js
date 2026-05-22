@@ -6934,7 +6934,7 @@ function edOnStart(e){
     const _now = Date.now();
     const _isPotentialDbl = (_la === edLayers[_edLastTapIdx] || edSelectedIdx === _edLastTapIdx)
                             && (_now - _edLastTapTime < 350);
-    const hitScreen = _isT ? 28 : 18;
+    const hitScreen = _isT ? 22 : 14;
     // LOCK: si el objeto está bloqueado no activar handles de resize/rotate
     if(!_la.locked)
     for(const p of _la.getControlPoints()){
@@ -12099,14 +12099,13 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
-  // Ocultar siempre el panel de opciones, sea cual sea su modo
+  // Ocultar panel y lengüeta al minimizar
   const _panel=$('edOptionsPanel');
   if(_panel?.classList.contains('open')){
     const mode = _panel.dataset.mode || '';
-    // Guardar modo para restaurar al maximizar
     if(mode) window._edMinimizedDrawMode = mode;
+    if(_panel.classList.contains('panel-collapsed')) window._edMinimizedCollapsed = true;
     _panel.style.visibility='hidden';
-    // Para props (imagen, texto, bocadillo, stroke): panel oculto sin barra flotante
   }
   // Ocultar también la lengüeta si el panel estaba colapsado
   _edPanelTabHide();
@@ -12145,21 +12144,20 @@ function edMaximize(keepBar=false){
   $('edFloatBtn')?.classList.remove('visible');
   if(!keepBar){ edDrawBarHide(); }
   edShapeBarHide();
-  // Restaurar lengüeta tras maximizar — diferir al siguiente frame para que
-  // el layout recalcule con menuBar+topbar visibles antes de leer offsetTop
-  if($('edOptionsPanel')?.classList.contains('panel-collapsed')) {
-    requestAnimationFrame(() => {
-      if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
-    });
-  }
   // Restaurar panel si estaba activo al minimizar
   if(window._edMinimizedDrawMode){
     const mode = window._edMinimizedDrawMode;
+    const wasCollapsed = window._edMinimizedCollapsed || false;
     window._edMinimizedDrawMode = null;
+    window._edMinimizedCollapsed = false;
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
     _edResetCameraToFit();
-    requestAnimationFrame(_edBarClampToScreen);
+    requestAnimationFrame(() => {
+      _edBarClampToScreen();
+      // Restaurar lengüeta DESPUÉS del layout recalculado
+      if(wasCollapsed && panel?.classList.contains('panel-collapsed')) _edPanelTabShow();
+    });
     if(mode === 'shape'){
       edShapeBarHide();
       _edActivateShapeTool(false); // false = no resetear cámara al restaurar desde barra
@@ -12179,8 +12177,16 @@ function edMaximize(keepBar=false){
       _edActivateLineTool(false);
     }
   } else {
+    // Restaurar visibility si el panel colapsado quedó oculto
+    const _panelElse = $('edOptionsPanel');
+    if(_panelElse?.classList.contains('panel-collapsed')) {
+      _panelElse.style.visibility = '';
+    }
     _edResetCameraToFit();
-    requestAnimationFrame(_edBarClampToScreen);
+    requestAnimationFrame(() => {
+      _edBarClampToScreen();
+      if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
+    });
   }
 }
 function edInitFloatDrag(){
@@ -18804,7 +18810,7 @@ function _bibRenderPanel(panel) {
     <button id="_bib-btn-folder" style="flex-shrink:0;border:none;background:transparent;font-size:.75rem;font-weight:700;cursor:pointer;color:var(--gray-600);padding:3px 6px;border-radius:5px;white-space:nowrap">+ Carpeta</button>
     <span style="flex:1"></span>
     <span style="font-size:.72rem;color:var(--gray-500)">${_bibFormatSize(total)} / ${_bibFormatSize(_BIB_MAX_BYTES)}</span>
-    <button id="_bib-close-btn" style="border:none;background:transparent;font-size:1rem;cursor:pointer;color:var(--gray-500);padding:2px 4px;line-height:1">✕</button>
+    <button id="_bib-close-btn" style="border:none;background:transparent;font-size:1rem;cursor:pointer;color:var(--blue-500,#3b82f6);padding:2px 4px;line-height:1">✕</button>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>`;
 
@@ -19596,7 +19602,7 @@ function _gcpHandleDown(e) {
     const _bb = edMultiBbox;
     // Hit en handle de rotación
     const _rotY = _bb.cy - _bb.h/2 - 28/_z5/_ph5;
-    if (Math.hypot((c.nx-_bb.cx)*_pw5, (c.ny-_rotY)*_ph5)*_z5 < (_isTouch5?28:18)) {
+    if (Math.hypot((c.nx-_bb.cx)*_pw5, (c.ny-_rotY)*_ph5)*_z5 < (_isTouch5?22:14)) {
       edMultiRotating = true;
       edRotateStartAngle = Math.atan2(c.ny-_bb.cy, c.nx-_bb.cx) - edMultiGroupRot*Math.PI/180;
       window._edRotateInitRot = edMultiGroupRot;
@@ -19605,7 +19611,7 @@ function _gcpHandleDown(e) {
     // Hit en handles de escala
     const _handles5 = _msHandles(_bb);
     for (const h of _handles5) {
-      if (Math.hypot((c.nx-h.x)*_pw5, (c.ny-h.y)*_ph5)*_z5 < (_isTouch5?28:18)) {
+      if (Math.hypot((c.nx-h.x)*_pw5, (c.ny-h.y)*_ph5)*_z5 < (_isTouch5?22:14)) {
         edMultiResizing = true; edResizeCorner = h.c;
         edInitialSize = { width:_bb.w, height:_bb.h, cx:_bb.cx, cy:_bb.cy,
                           asp:_bb.h/_bb.w, rot:edMultiGroupRot,
@@ -19642,7 +19648,7 @@ function _gcpDoSelectDrag(e, c) {
   }
   const _isTouch = e.pointerType === 'touch';
   const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
-  const hitScreen = _isTouch ? 28 : 18;
+  const hitScreen = _isTouch ? 22 : 14;
 
   // ── Handles del objeto seleccionado (solo si no es bubble) ───────────────
   const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
