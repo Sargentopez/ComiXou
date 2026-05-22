@@ -606,17 +606,19 @@ function _mcRenderList() {
           const _cloudMeta = await SupabaseClient.fetchWorksByIds([comicToEdit.supabaseId]);
           if (_cloudMeta && _cloudMeta[0]) {
             const _cloudDate  = new Date(_cloudMeta[0].updated_at || 0);
-            // Comparar con cloudSavedAt (última subida desde ESTE dispositivo).
-            // Si la nube es más nueva que la última subida local → otro dispositivo subió algo.
-            // Fallback a localSavedAt si nunca se ha subido desde este dispositivo.
-            const _lastUpload = new Date(comicToEdit.cloudSavedAt || comicToEdit.localSavedAt || comicToEdit.updatedAt || 0);
-            _cloudNewer = _cloudDate > _lastUpload;
+            // Comparar con localSavedAt — cuándo guardó localmente este dispositivo.
+            // Si la nube es más nueva que el último guardado local → descargar.
+            const _localSaved = new Date(comicToEdit.localSavedAt || comicToEdit.updatedAt || 0);
+            _cloudNewer = _cloudDate > _localSaved;
           }
         } catch(e) { console.warn('fecha nube:', e); }
       }
+      // Si localSavedAt es reciente y la nube no es más nueva, confiar en OPFS local
+      // aunque editorData no esté en el índice ligero (puede estar en OPFS)
+      const _hasLocalSaved = !!(comicToEdit.localSavedAt);
       const _needsDownload = comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && (
         comicToEdit.cloudOnly ||
-        !comicToEdit.editorData?.pages?.length ||
+        (!comicToEdit.editorData?.pages?.length && !_hasLocalSaved) ||
         _hasLegacyStrokes ||
         _cloudNewer  // la nube tiene versión más reciente → descargar siempre
       );
