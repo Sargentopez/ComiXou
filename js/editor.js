@@ -15232,10 +15232,14 @@ function _edAutosaveStop() {
   if (_edAutosaveTimer) { clearInterval(_edAutosaveTimer); _edAutosaveTimer = null; }
 }
 
+let _edLoadProjectInProgress = false;
 async function edLoadProject(id){
+  if(_edLoadProjectInProgress) return;
+  _edLoadProjectInProgress = true;
   const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
-  if(!comic)return;
+  if(!comic){ _edLoadProjectInProgress = false; return; }
+  try {
   edProjectId=id;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
   // cuando el usuario abra el panel.
@@ -15391,6 +15395,12 @@ async function edLoadProject(id){
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
   window._edLoadingProject = false;
+  } catch(_le) {
+    console.error('edLoadProject error:', _le);
+    edToast('⚠️ Error al cargar la obra');
+  } finally {
+    _edLoadProjectInProgress = false;
+  }
 }
 
 /* ══════════════════════════════════════════

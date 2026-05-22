@@ -728,6 +728,7 @@ function _mcRenderList() {
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
         } catch(err) {
+          if (_dlBtn) _dlBtn.style.pointerEvents = '';
           _mcToast('\u26a0\ufe0f Error al descargar de la nube: ' + err.message);
           return;
         }
