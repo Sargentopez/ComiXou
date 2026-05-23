@@ -18817,6 +18817,20 @@ function _bibSave(data) {
 // Esperar a que la última escritura de biblioteca en IDB complete
 async function _bibFlush() {
   if (_bibSavePromise) { try { await _bibSavePromise; } catch(_) {} }
+  // Si la escritura IDB falló, reintentar una vez con _bibCache actual
+  // para garantizar que los datos de biblioteca no se pierdan al borrar el autosave
+  if (_bibCache && !_bibIdbUnavailable) {
+    try {
+      await new Promise(res => {
+        _bibOpenIdb().then(db => {
+          const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+          tx.objectStore(_BIB_IDB_STORE).put(_bibCache, _bibKey());
+          tx.oncomplete = res;
+          tx.onerror = res;
+        }).catch(res);
+      });
+    } catch(_) {}
+  }
 }
 // Exposición global para my-comics.js y otros módulos externos
 window._bibSave = _bibSave;
