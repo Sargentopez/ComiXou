@@ -1,5 +1,5 @@
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v26-53';
+const CACHE = 'comixow-v26-54';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -14,16 +14,21 @@ self.addEventListener('message', e => {
 });
 
 self.addEventListener('install', e => {
-  // NO llamar skipWaiting() aquí — pwa.js lo hará cuando sea seguro
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(STATIC_ASSETS)));
+  // skipWaiting inmediato: JS/CSS son network-first, no hay riesgo de assets inconsistentes.
+  // Sin esto, en Android como PWA instalada el SW nuevo queda en "waiting" indefinidamente
+  // si el tab anterior sigue abierto (cx_editing bloqueaba pwa.js).
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(STATIC_ASSETS)).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {
+  // clients.claim(): el SW nuevo toma control de todos los tabs abiertos inmediatamente.
+  // Sin esto, el tab Android con el SW viejo nunca recibe el nuevo SW hasta que recarga.
   e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    )
-    // NO llamar clients.claim() — evita forzar recarga en pestañas abiertas
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
