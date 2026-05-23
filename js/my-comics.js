@@ -14,6 +14,17 @@ const _MC_HDRS = { 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + _MC_KEY };
 
 // Carga el thumbnail de una obra desde Supabase y lo cachea en memoria.
 // Cuando llega, actualiza el div contenedor del DOM si está visible.
+// Verificar que una obra pertenece al usuario autenticado actual
+function _mcOwns(comic) {
+  if (!comic) return false;
+  const _user = Auth.currentUser?.() || null;
+  if (!_user) {
+    // Sin sesión: solo obras anónimas
+    return comic.userId === '_anon_' || comic.anonymous === true;
+  }
+  return comic.userId === _user.id || comic.username === _user.username;
+}
+
 function _mcLoadThumb(supabaseId) {
   if (_mcThumbCache.has(supabaseId) && _mcThumbCache.get(supabaseId)) return;
   _mcThumbCache.set(supabaseId, ''); // marca como en progreso
@@ -91,12 +102,277 @@ function _mcRemoveModal() {
   if (m) m.remove();
 }
 
+
+/* ── LIMPIEZA DE DATOS HUÉRFANOS ──────────────────────────────────────────
+   Busca en OPFS, IDB cxAnims, cxAutosave, cxBiblioteca y localStorage
+   datos que no corresponden a ninguna obra del usuario actual.
+   Se ejecuta en segundo plano al entrar en la vista del autor.
+   Solo muestra el aviso si hay algo que limpiar.
+──────────────────────────────────────────────────────────────────────── */
+async function _mcCheckOrphanData() {
+  // Si el usuario ya salió de la vista, no hacer nada
+  if (!document.getElementById('mcContent')) return;
+  const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+  if (!_user) return;
+
+  const _uid = String(_user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+  // IDs de obras válidas del usuario actual
+  const _validIds = new Set(
+    ComicStore.getAll()
+      .filter(c => c.userId === _user.id || c.username === _user.username)
+      .map(c => c.id)
+  );
+
+  const _orphans = { opfs: [], anims: [], autosave: [], bib: [], ls: [] };
+
+  // ── 1. OPFS: comixou/{uid}/{comicId}.json ────────────────────────────
+  try {
+    if (navigator.storage && navigator.storage.getDirectory) {
+      const _root = await navigator.storage.getDirectory();
+      const _base = await _root.getDirectoryHandle('comixou', { create: false }).catch(() => null);
+      if (_base) {
+        const _userDir = await _base.getDirectoryHandle(_uid, { create: false }).catch(() => null);
+        if (_userDir) {
+          for await (const [name] of _userDir.entries()) {
+            if (!name.endsWith('.json')) continue;
+            const _id = name.slice(0, -5);
+            if (!_validIds.has(_id)) _orphans.opfs.push({ dir: _userDir, name });
+          }
+        }
+      }
+    }
+  } catch(_e) {}
+
+  // ── 2. IDB cxBiblioteca: claves cs_biblioteca_{comicId} ─────────────
+  // Cada obra tiene su propia biblioteca — clave vinculada por comicId.
+  // También recopilar los item.id de animaciones (_apngIdbKey) de las bibliotecas
+  // VÁLIDAS, para usarlos en el paso 3.
+  const _validBibAnimIds = new Set(); // item.id de animaciones en bibliotecas válidas
+  try {
+    await new Promise(res => {
+      const req = indexedDB.open('cxBiblioteca', 1);
+      req.onsuccess = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('bib')) { res(); return; }
+        const tx  = db.transaction('bib', 'readonly');
+        const cur = tx.objectStore('bib').openCursor();
+        cur.onsuccess = ev => {
+          const c = ev.target.result;
+          if (!c) { res(); return; }
+          const k = String(c.key);
+          if (k.startsWith('cs_biblioteca_')) {
+            const _comicId = k.slice('cs_biblioteca_'.length);
+            if (!_comicId) { c.continue(); return; }
+            if (!_validIds.has(_comicId)) {
+              // Biblioteca huérfana — también recopilar sus animKeys para borrarlas de cxAnims
+              try {
+                const _bib = c.value;
+                if (_bib && Array.isArray(_bib.folders)) {
+                  // Biblioteca huérfana: NO añadir sus _apngIdbKey a _validBibAnimIds
+                  // → sus animaciones en cxAnims quedarán también como huérfanas
+                }
+              } catch(_) {}
+              _orphans.bib.push(k);
+            } else {
+              // Biblioteca válida — recopilar sus item.id de animaciones para NO borrarlos
+              try {
+                const _bib = c.value;
+                if (_bib && Array.isArray(_bib.folders)) {
+                  _bib.folders.forEach(f => (f.items || []).forEach(item => {
+                    if (item._apngIdbKey) _validBibAnimIds.add(item._apngIdbKey);
+                  }));
+                }
+              } catch(_) {}
+            }
+          }
+          c.continue();
+        };
+        cur.onerror = () => res();
+        tx.onerror  = () => res();
+      };
+      req.onerror = () => res();
+    });
+  } catch(_e) {}
+
+  // ── 3. IDB cxAnims: claves {uid}__{comicId}_{pi}_{li} y {uid}__bib_{item.id} ──
+  // Una clave de obra es huérfana si su comicId no está en _validIds.
+  // Una clave de biblioteca es huérfana si su item.id no está en _validBibAnimIds
+  // (ninguna biblioteca válida la referencia).
+  const _animOrphanKeys = []; // para borrar también las animaciones de bibliotecas huérfanas
+  try {
+    const _animOrphans = await new Promise(res => {
+      const req = indexedDB.open('cxAnims', 1);
+      req.onsuccess = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('anims')) { res([]); return; }
+        const keys = [];
+        const tx  = db.transaction('anims', 'readonly');
+        const cur = tx.objectStore('anims').openCursor();
+        const _pfx = _uid + '__';
+        cur.onsuccess = ev => {
+          const c = ev.target.result;
+          if (!c) { res(keys); return; }
+          const k = String(c.key);
+          if (k.startsWith(_pfx)) {
+            const _rest = k.slice(_pfx.length); // quitar '{uid}__'
+            if (_rest.startsWith('bib_')) {
+              // Clave de animación de biblioteca: {uid}__bib_{item.id}
+              // Huérfana si nadie en ninguna biblioteca válida la referencia
+              if (!_validBibAnimIds.has(k)) keys.push(k);
+            } else if (_rest.startsWith('as_')) {
+              // Clave temporal de autosave: {uid}__as_{comicId}_{timestamp}
+              // Formato: as_comic_{timestamp}_{ts36} → comicId = comic_{timestamp}
+              // Válida si su comicId sigue en _validIds. Si no, es huérfana.
+              const _asRest = _rest.slice(3); // quitar "as_"
+              // comicId = todo menos el último segmento (el timestamp base36)
+              const _asParts = _asRest.split('_');
+              const _asComicId = _asParts.slice(0, -1).join('_');
+              if (_asComicId && !_validIds.has(_asComicId)) keys.push(k);
+            } else {
+              // Clave de animación de obra: {uid}__{comicId}_{pi}_{li}
+              // comicId = todo antes de los dos últimos segmentos (pi y li, numéricos)
+              const _parts = _rest.split('_');
+              const _comicId = _parts.slice(0, -2).join('_');
+              if (_comicId && !_validIds.has(_comicId)) keys.push(k);
+            }
+          }
+          c.continue();
+        };
+        cur.onerror = () => res(keys);
+        tx.onerror  = () => res(keys);
+      };
+      req.onerror = () => res([]);
+    });
+    _orphans.anims = _animOrphans;
+  } catch(_e) {}
+
+  // ── 4. IDB cxAutosave: claves {uid}_{comicId} ────────────────────────
+  try {
+    const _asOrphans = await new Promise(res => {
+      const req = indexedDB.open('cxAutosave', 1);
+      req.onsuccess = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('saves')) { res([]); return; }
+        const keys = [];
+        const tx  = db.transaction('saves', 'readonly');
+        const cur = tx.objectStore('saves').openCursor();
+        const _prefix = _uid + '_';
+        cur.onsuccess = ev => {
+          const c = ev.target.result;
+          if (!c) { res(keys); return; }
+          const k = String(c.key);
+          if (k.startsWith(_prefix)) {
+            const _comicId = k.slice(_prefix.length);
+            if (_comicId && !_validIds.has(_comicId)) keys.push(k);
+          }
+          c.continue();
+        };
+        cur.onerror = () => res(keys);
+        tx.onerror  = () => res(keys);
+      };
+      req.onerror = () => res([]);
+    });
+    _orphans.autosave = _asOrphans;
+  } catch(_e) {}
+
+  // ── 5. localStorage: cs_biblioteca_{comicId} y cs_biblioteca_local_{comicId} ──
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k.startsWith('cs_biblioteca_')) {
+        // cs_biblioteca_local_* son backups temporales gestionados por su propio ciclo de vida
+        // (creados en my-comics, borrados en edSaveProject o al salir) — nunca son huérfanos
+        if (k.startsWith('cs_biblioteca_local_')) continue;
+        const _rest = k.slice('cs_biblioteca_'.length);
+        if (_rest && !_validIds.has(_rest)) _orphans.ls.push(k);
+      }
+    }
+  } catch(_e) {}
+
+  // ── ¿Hay algo que limpiar? ────────────────────────────────────────────
+  const _total = _orphans.opfs.length + _orphans.anims.length +
+                 _orphans.autosave.length + _orphans.bib.length + _orphans.ls.length;
+  if (_total === 0) return;
+
+  // ── Aviso al usuario — solo si el usuario sigue en my-comics ───────
+  if (!document.getElementById('mcContent')) return;
+  appConfirm(
+    'Se han encontrado datos en el almacenamiento local de ComiXow que no pertenecen a ninguna de tus obras. ¿Borrarlos?',
+    async () => {
+      // OPFS
+      for (const { dir, name } of _orphans.opfs) {
+        try { await dir.removeEntry(name); } catch(_e) {}
+      }
+      // IDB cxAnims (animaciones de obra huérfanas + animaciones de biblioteca huérfana)
+      if (_orphans.anims.length) {
+        try {
+          await new Promise(res => {
+            const req = indexedDB.open('cxAnims', 1);
+            req.onsuccess = e => {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains('anims')) { res(); return; }
+              const tx = db.transaction('anims', 'readwrite');
+              const st = tx.objectStore('anims');
+              _orphans.anims.forEach(k => st.delete(k));
+              tx.oncomplete = res; tx.onerror = res;
+            };
+            req.onerror = res;
+          });
+        } catch(_e) {}
+      }
+      // IDB cxAutosave
+      if (_orphans.autosave.length) {
+        try {
+          await new Promise(res => {
+            const req = indexedDB.open('cxAutosave', 1);
+            req.onsuccess = e => {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains('saves')) { res(); return; }
+              const tx = db.transaction('saves', 'readwrite');
+              const st = tx.objectStore('saves');
+              _orphans.autosave.forEach(k => st.delete(k));
+              tx.oncomplete = res; tx.onerror = res;
+            };
+            req.onerror = res;
+          });
+        } catch(_e) {}
+      }
+      // IDB cxBiblioteca
+      if (_orphans.bib.length) {
+        try {
+          await new Promise(res => {
+            const req = indexedDB.open('cxBiblioteca', 1);
+            req.onsuccess = e => {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains('bib')) { res(); return; }
+              const tx = db.transaction('bib', 'readwrite');
+              const st = tx.objectStore('bib');
+              _orphans.bib.forEach(k => st.delete(k));
+              tx.oncomplete = res; tx.onerror = res;
+            };
+            req.onerror = res;
+          });
+        } catch(_e) {}
+      }
+      // localStorage
+      _orphans.ls.forEach(k => { try { localStorage.removeItem(k); } catch(_e) {} });
+
+      _mcToast('Datos no utilizados eliminados ✓');
+    },
+    'Sí, borrar'
+  );
+}
+
 function MyComicsView_init() {
+  _mcCheckStorage(); // aviso modal si el almacenamiento supera el 85%
   _mcInjectModal();
   _mcRenderList();
   _mcBindNav();
   // Sincronizar fechas con Supabase en segundo plano (incluye descarga de biblioteca)
   _mcSyncCloudDates();
+  // Buscar y ofrecer limpieza de datos huérfanos (en segundo plano, sin bloquear la UI)
+  window._mcOrphanTimer = setTimeout(_mcCheckOrphanData, 2000);
 }
 
 /* ── SINCRONIZAR FECHAS CON SUPABASE ── */
@@ -166,6 +442,11 @@ async function _mcSyncCloudDates() {
         local.editorData = null; // forzar descarga de la versión de nube al editar
         local.updatedAt  = w.updated_at;
         dirty = true;
+        // Actualizar miniatura con la de la nube (más reciente)
+        if (w.id) {
+          _mcThumbCache.delete(w.id); // invalidar caché para forzar recarga
+          _mcLoadThumb(w.id);
+        }
       }
 
       if (dirty) { ComicStore.save(local); changed = true; }
@@ -305,7 +586,7 @@ function _mcRenderList() {
 
     if (action === 'read') {
       const comic = ComicStore.getById(id);
-      if (!comic) return;
+      if (!comic || !_mcOwns(comic)) return;
       if (comic.supabaseId && comic.published) {
         // Obra publicada: usar el reproductor externo (anon key puede leer)
         const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -323,6 +604,8 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
+      const _comicMeta = ComicStore.getById(id);
+      if (!_comicMeta || !_mcOwns(_comicMeta)) return;
       const comicToEdit = ComicStore.getByIdFull
         ? (await ComicStore.getByIdFull(id))
         : ComicStore.getById(id);
@@ -339,15 +622,19 @@ function _mcRenderList() {
           const _cloudMeta = await SupabaseClient.fetchWorksByIds([comicToEdit.supabaseId]);
           if (_cloudMeta && _cloudMeta[0]) {
             const _cloudDate  = new Date(_cloudMeta[0].updated_at || 0);
-            // Si este dispositivo guardó en local DESPUÉS de la fecha de nube → ya está al día
+            // Comparar con localSavedAt — cuándo guardó localmente este dispositivo.
+            // Si la nube es más nueva que el último guardado local → descargar.
             const _localSaved = new Date(comicToEdit.localSavedAt || comicToEdit.updatedAt || 0);
             _cloudNewer = _cloudDate > _localSaved;
           }
         } catch(e) { console.warn('fecha nube:', e); }
       }
+      // Si localSavedAt es reciente y la nube no es más nueva, confiar en OPFS local
+      // aunque editorData no esté en el índice ligero (puede estar en OPFS)
+      const _hasLocalSaved = !!(comicToEdit.localSavedAt);
       const _needsDownload = comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && (
         comicToEdit.cloudOnly ||
-        !comicToEdit.editorData?.pages?.length ||
+        (!comicToEdit.editorData?.pages?.length && !_hasLocalSaved) ||
         _hasLegacyStrokes ||
         _cloudNewer  // la nube tiene versión más reciente → descargar siempre
       );
@@ -367,7 +654,8 @@ function _mcRenderList() {
               layers: (pg.layers || []).map((l, li) => {
                 // _apngSrc: dataUrl enorme descargado de la nube — guardar en IDB y eliminar
                 if (l._apngSrc) {
-                  const _idbKey = l._pngFramesKey || (comicToEdit.id + '_' + pi + '_' + li);
+                  const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+              const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
                   _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
                   const lClean = Object.assign({}, l);
                   delete lClean._apngSrc;
@@ -379,7 +667,8 @@ function _mcRenderList() {
                 }
                 // _pngFrames (sistema antiguo): externalizar a IDB
                 if (l._pngFrames) {
-                  const _idbKey = comicToEdit.id + '_' + pi + '_' + li;
+                  const _uid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                  const _idbKey = _uid2 + '__' + comicToEdit.id + '_' + pi + '_' + li;
                   _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
                   const { _pngFrames, ...lClean } = l;
                   return { ...lClean, _pngFramesKey: _idbKey };
@@ -402,6 +691,11 @@ function _mcRenderList() {
             title:   work.title    || comicToEdit.title,
             genre:   work.genre    || comicToEdit.genre,
             navMode: work.nav_mode || comicToEdit.navMode,
+            // Actualizar localSavedAt al momento de la descarga para que cualquier
+            // autosave anterior quede marcado como obsoleto y no aparezca como
+            // "cambios sin guardar" al abrir el editor. Sin esto, el autosave
+            // creado durante la sesión anterior podría tener ts > localSavedAt heredado.
+            localSavedAt: new Date().toISOString(),
           });
           // Sincronizar biblioteca: usar la de la nube si la nube es más nueva o la obra es cloudOnly.
           // Si la local es más reciente (solo _hasLegacyStrokes forzó la descarga), preservar la local.
@@ -430,7 +724,8 @@ function _mcRenderList() {
                   ...cf,
                   items: cf.items.map(item => {
                     if (item.isGifAnim && item.apngSrc) {
-                      const _bibIdbKey = 'bib_' + item.id;
+                      const _bibUid1 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                      const _bibIdbKey = _bibUid1 + '__bib_' + item.id;
                       if (window._sbAnimIdbSave) {
                         _bibIdbWrites.push(window._sbAnimIdbSave(_bibIdbKey, item.apngSrc).catch(() => {}));
                       }
@@ -454,6 +749,7 @@ function _mcRenderList() {
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
         } catch(err) {
+          if (_dlBtn) _dlBtn.style.pointerEvents = '';
           _mcToast('\u26a0\ufe0f Error al descargar de la nube: ' + err.message);
           return;
         }
@@ -481,7 +777,8 @@ function _mcRenderList() {
                   ...cf,
                   items: cf.items.map(item => {
                     if (item.isGifAnim && item.apngSrc) {
-                      const _k = 'bib_' + item.id;
+                      const _bibUid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                      const _k = _bibUid2 + '__bib_' + item.id;
                       if (window._sbAnimIdbSave) _bibIdbW.push(window._sbAnimIdbSave(_k, item.apngSrc).catch(() => {}));
                       const c = Object.assign({}, item);
                       delete c.apngSrc; c._apngIdbKey = _k; return c;
@@ -499,6 +796,7 @@ function _mcRenderList() {
         }
       }
 
+      // El aviso de modo incógnito lo gestiona _edShowIncognitoWarning en editor.js
       // Guardar qué proyecto editar y navegar al editor
       sessionStorage.setItem('cx_edit_id', id);
       Router.go('editor');
@@ -576,7 +874,11 @@ function _mcRenderList() {
       _mcToast('Obra retirada de la portada');
     } else if (action === 'delete') {
       const comic = ComicStore.getById(id);
-      if (comic && typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
+      if (!comic || !_mcOwns(comic)) return;
+      // Obras solo locales (sin supabaseId) pueden eliminarse sin sesión
+      const _canDel = !comic.supabaseId ||
+        (typeof Auth !== 'undefined' && Auth.canManage(comic));
+      if (!_canDel) {
         appAlert('No tienes permiso para eliminar esta obra.');
         return;
       }
@@ -595,7 +897,7 @@ function _mcRenderList() {
       });
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
-      if (!comic) return;
+      if (!comic || !_mcOwns(comic)) return;
       if (!comic.supabaseId) {
         appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
         return;
@@ -680,6 +982,9 @@ function _mcDoCreateProject(title, genre, social, navMode, user) {
     approved:  false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    // localSavedAt en la creación garantiza que cualquier autosave anterior
+    // (de otra obra) no sea más nuevo que esta obra y no aparezca al abrirla.
+    localSavedAt: new Date().toISOString(),
   };
   ComicStore.save(comic);
 
@@ -749,7 +1054,11 @@ function _mcToast(msg) {
   }, 2200);
 }
 
-function MyComicsView_destroy() { _mcRemoveModal(); }
+function MyComicsView_destroy() {
+  _mcRemoveModal();
+  // Cancelar el check de huérfanos si aún no se ha ejecutado
+  if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
+}
 
 /* ── CARGAR BORRADORES DESDE NUBE ── */
 async function _mcCloudLoad() {
@@ -1006,8 +1315,72 @@ async function _mcRunDiag() {
       else { L(warn('DecompressionStream NO disponible')); }
     } catch(e) { L('APIs check error: ' + e.message); }
 
-
   }
+
+  // ── Preview de lo que detectaría el borrador de huérfanos ──────────────
+  L('\n══ PREVIEW BORRADOR DE HUÉRFANOS ══');
+  try {
+    const _user2 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+    if (!_user2) { L('Sin sesión — no se puede analizar'); }
+    else {
+      const _validIds2 = new Set(
+        ComicStore.getAll()
+          .filter(c => c.userId === _user2.id || c.username === _user2.username)
+          .map(c => c.id)
+      );
+      L('IDs válidos en ComicStore: ' + _validIds2.size);
+      [..._validIds2].forEach(id => L('  ' + id));
+
+      // localStorage: cs_biblioteca_ y cs_biblioteca_local_
+      L('\n── localStorage (cs_biblioteca_*) ──');
+      let _lsOrphans = [], _lsValid = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('cs_biblioteca_')) continue;
+        const _rest = k.startsWith('cs_biblioteca_local_')
+          ? k.slice('cs_biblioteca_local_'.length)
+          : k.slice('cs_biblioteca_'.length);
+        if (_rest && !_validIds2.has(_rest)) _lsOrphans.push(k + ' (id=' + _rest + ')');
+        else _lsValid.push(k + ' (id=' + _rest + ')');
+      }
+      if (_lsValid.length) _lsValid.forEach(k => L('  ✅ válida: ' + k));
+      if (_lsOrphans.length) _lsOrphans.forEach(k => L('  ❌ HUÉRFANA: ' + k));
+      if (!_lsValid.length && !_lsOrphans.length) L('  (vacío)');
+
+      // IDB cxBiblioteca
+      L('\n── IDB cxBiblioteca ──');
+      await new Promise(res => {
+        try {
+          const _req = indexedDB.open('cxBiblioteca', 1);
+          _req.onsuccess = e => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('bib')) { L('  (sin store bib)'); db.close(); res(); return; }
+            const tx = db.transaction('bib', 'readonly');
+            const cur = tx.objectStore('bib').openCursor();
+            cur.onsuccess = ev => {
+              const c = ev.target.result;
+              if (!c) { db.close(); res(); return; }
+              const k = String(c.key);
+              if (k.startsWith('cs_biblioteca_')) {
+                const _rest = k.startsWith('cs_biblioteca_local_')
+                  ? k.slice('cs_biblioteca_local_'.length)
+                  : k.slice('cs_biblioteca_'.length);
+                const items = (c.value?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+                if (_rest && !_validIds2.has(_rest))
+                  L('  ❌ HUÉRFANA: ' + k + ' (id=' + _rest + ', items=' + items + ')');
+                else
+                  L('  ✅ válida: ' + k + ' (id=' + _rest + ', items=' + items + ')');
+              }
+              c.continue();
+            };
+            cur.onerror = () => { db.close(); res(); };
+          };
+          _req.onerror = () => { L('  IDB error: ' + _req.error); res(); };
+          setTimeout(res, 3000);
+        } catch(e) { L('  IDB excepción: ' + e.message); res(); }
+      });
+    }
+  } catch(e) { L('Error preview huérfanos: ' + e.message); }
 
   // Mostrar panel
   let p = document.getElementById('_mcDiagPanel');

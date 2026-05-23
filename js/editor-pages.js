@@ -232,8 +232,9 @@ function _pgDrawThumb(canvas, page) {
     if (!l || l.type === 'text' || l.type === 'bubble') return;
     if (l.type === 'gif')              l.draw(offCtx);
     else if (l.type === 'image')        l.draw(offCtx, off);
-    else if (l.type === 'draw')    l.draw(offCtx);
-    else if (l.type === 'stroke') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+    else if (l.type === 'draw')         l.draw(offCtx);
+    else if (l.type === 'fill')         l.draw(offCtx); // igual que _lyBuildFillSubRow
+    else if (l.type === 'stroke') {     offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
     else if (l.type === 'shape' || l.type === 'line') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
     else if (l.type === 'group') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
   });
@@ -458,18 +459,11 @@ function _pgRotatePage(idx) {
     // draw: no tiene x/y/width/height significativos — skip
     if (la.type === 'draw') return;
 
-    // FillLayer: mover píxeles por el delta de márgenes para seguir al stroke.
-    // dxPx/dyPx es constante (±210px) y se invierte en cada rotación → sin acumulado.
-    if (la.type === 'fill') {
-      if (la._canvas && (dxPx || dyPx)) {
-        const _tmp = document.createElement('canvas');
-        _tmp.width = ED_CANVAS_W; _tmp.height = ED_CANVAS_H;
-        _tmp.getContext('2d').drawImage(la._canvas, dxPx, dyPx);
-        la._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
-        la._ctx.drawImage(_tmp, 0, 0);
-      }
-      return;
-    }
+    // SF: el FillLayer sigue al stroke vinculado.
+    // Sus propiedades (x/y/w/h) se sincronizan después del loop.
+    // El canvas local (SF, _isWorkspaceCanvas=false) no necesita mover píxeles
+    // porque draw() usa las propiedades x/y/w/h para posicionarlo correctamente.
+    if (la.type === 'fill') return;
 
     // Reposicionar: x*pwOld/pwNew preserva posición relativa dentro de la página.
     // Se permite x/y fuera de [0,1] para stroke (objeto parcialmente fuera de página),
@@ -490,12 +484,7 @@ function _pgRotatePage(idx) {
       // en la nueva orientación — es correcto, el bitmap se ve parcialmente fuera de página.
       la.width  = Math.min(1, w_px / pwNew);
       la.height = Math.min(1, h_px / phNew);
-      // Sincronizar _baseX/_baseY del fill: píxeles ya movidos por dxPx/dyPx,
-      // stroke en nueva x/y → offset en FillLayer.draw() = 0.
-      if (la._fillLayerId) {
-        const _flSync = page.layers.find(l => l.type === 'fill' && l._drawLayerId === la._fillLayerId);
-        if (_flSync) { _flSync._baseX = la.x; _flSync._baseY = la.y; }
-      }
+      // SF: el fill se sincroniza con el stroke en el paso posterior al loop
     } else if (la.type === 'line' && Array.isArray(la.points)) {
       // LineLayer: reescalar puntos al nuevo sistema sin rotar
       const scW = pwOld / pwNew, scH = phOld / phNew;
@@ -517,6 +506,18 @@ function _pgRotatePage(idx) {
       la.y = Math.max(0, Math.min(1, _yNew));
     }
     // Sin cambio de rotation — el objeto no se gira
+  });
+
+  // Sincronizar fills con sus strokes vinculados (mismas propiedades)
+  page.layers.forEach(l => {
+    if (l.type === 'fill' && l._drawLayerId) {
+      const _sl = page.layers.find(s => s._fillLayerId === l._drawLayerId);
+      if (_sl) {
+        l.x = _sl.x; l.y = _sl.y;
+        l.width = _sl.width; l.height = _sl.height;
+        l.rotation = _sl.rotation || 0;
+      }
+    }
   });
 
   page.orientation = newOrient;

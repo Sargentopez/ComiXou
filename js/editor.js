@@ -1592,31 +1592,38 @@ function edSetOrientation(o, persist=true){
     const _isV  = o === 'vertical';
     const _pw   = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph   = _isV ? ED_PAGE_H : ED_PAGE_W;
+    // Diagnóstico orientación — fills ANTES del resize
+    window._edOrientFillDiag = (edPages[edCurrentPage]?.layers||[])
+      .filter(l=>l.type==='fill')
+      .map(f=>({uid:f._uid,isWS:f._isWorkspaceCanvas,cw:f._canvas?.width,ch:f._canvas?.height,x:f.x?.toFixed(3),y:f.y?.toFixed(3),w:f.width?.toFixed(3),h:f.height?.toFixed(3)}));
     (edPages[edCurrentPage]?.layers || []).forEach(l => {
       if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
         l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
       }
-      // SF: el fill tiene x/y/width/height como fracciones de página — igual que strokes.
-      // draw() usa drawImage(canvas, -w/2, -h/2, w, h) con w=width*edPageW() en tiempo real,
-      // escalando el canvas al tamaño correcto independientemente de sus píxeles.
-      // Solo limpiar estado de preview pendiente.
-      if(l.type === 'fill'){
+      // SF FillLayer de StrokeLayer: redimensionar canvas al nuevo tamaño en píxeles.
+      // x/y/width/height NO cambian (fracciones de página, igual que strokes).
+      // El canvas pasa de w*pwViejo×h*phViejo a w*pwNuevo×h*phNuevo.
+      if(l.type === 'fill' && !l._isWorkspaceCanvas){
+        l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
+        const _nWpx = Math.max(1, Math.round((l.width  || 1) * _pw));
+        const _nHpx = Math.max(1, Math.round((l.height || 1) * _ph));
+        if(l._canvas && (l._canvas.width !== _nWpx || l._canvas.height !== _nHpx)){
+          const _tmp = document.createElement('canvas');
+          _tmp.width = _nWpx; _tmp.height = _nHpx;
+          _tmp.getContext('2d').drawImage(l._canvas,
+            0, 0, l._canvas.width, l._canvas.height,
+            0, 0, _nWpx, _nHpx);
+          l._canvas = _tmp;
+          l._ctx    = _tmp.getContext('2d');
+        }
+      }
+      // Fill de DrawLayer (_isWorkspaceCanvas): canvas ED_CANVAS_W×H fijo, sin cambios.
+      if(l.type === 'fill' && l._isWorkspaceCanvas){
         l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
       }
     });
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
-  // Diagnóstico orientación: mostrar estado fills
-  if(persist && prevOrientation !== o){
-    const _diagFills = (edPages[edCurrentPage]?.layers||[]).filter(l=>l.type==='fill');
-    window._edOrientDiag = _diagFills.map(f=>({
-      uid: f._uid, drawId: f._drawLayerId,
-      cw: f._canvas?.width, ch: f._canvas?.height,
-      x: f.x, y: f.y, w: f.width, h: f.height, rot: f.rotation,
-      hasSrc: !!f._srcCanvas, previewSx: f._previewSx
-    }));
-    console.log('ORIENT DIAG fills:', JSON.stringify(window._edOrientDiag));
-  }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     window._edUserRequestedReset=true; edFitCanvas(true);
     edRedraw();
@@ -2489,11 +2496,12 @@ function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
     if (!l || !l.type) return null;
     if(l.type === 'fill'){
-      // Historial global: guardar canvas completo para no perder contenido fuera del lienzo
-      return { type:'fill', dataUrl:l.toDataUrlFull(),
+      // Guardar dataUrl del canvas local (bbox del stroke) con sus propiedades exactas
+      return { type:'fill', dataUrl: l.toDataUrl(),
         x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
         _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
-        hidden: l.hidden||false, opacity: l.opacity, _isFull:true };
+        hidden: l.hidden||false, opacity: l.opacity,
+        _isWorkspaceCanvas: l._isWorkspaceCanvas||false };
     }
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
@@ -2675,7 +2683,15 @@ function edPushHistory(force){
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
-  if(_vsHistory.length > 0){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return; }
+  // Si _vsHistory activo pero no hay shape/line seleccionada, limpiar (sesión vectorial huérfana)
+  if(_vsHistory.length > 0){
+    const _curL = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    if(!_curL || (_curL.type!=='shape' && _curL.type!=='line')){
+      _vsHistory=[]; _vsHistIdx=-1; // limpiar sesión vectorial huérfana
+    } else {
+      window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return;
+    }
+  }
   const layersJSON = _edLayersSnapshot();
   // DIAG: registrar cada push
   if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
@@ -2695,12 +2711,19 @@ function edPushHistory(force){
 }
 
 function edUndo(){
+  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
   if(edHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
+  // Verificar que el snapshot al que vamos tiene layers (no es un estado vacío de carga)
+  const _prevSnap = edHistory[edHistoryIdx - 1];
+  if(!_prevSnap || !_prevSnap.layersJSON) { edToast('Nada que deshacer'); return; }
+  const _prevLayers = JSON.parse(_prevSnap.layersJSON);
+  if(!_prevLayers.length && edLayers.length > 0) { edToast('Nada que deshacer'); return; }
   edHistoryIdx--;
   edApplyHistory(edHistory[edHistoryIdx]);
 }
 
 function edRedo(){
+  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
   if(edHistoryIdx >= edHistory.length - 1){ edToast('Nada que rehacer'); return; }
   edHistoryIdx++;
   edApplyHistory(edHistory[edHistoryIdx]);
@@ -2714,7 +2737,28 @@ function edApplyHistory(snapshot){
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
-    else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
+    else if(o.type === 'image') {
+      // Buscar layer vivo con la misma _uid o animKey para preservar _pngFrames/_apngSrc
+      const _rawIdx = raw.indexOf(o);
+      const _curPage = edPages[snapshot.pageIdx];
+      const _liveLayers = _curPage ? _curPage.layers : edLayers;
+      const _liveImg = _liveLayers?.find(lv =>
+        lv && lv.type === 'image' && (
+          (o._uid && lv._uid === o._uid) ||
+          (o.animKey && lv.animKey === o.animKey) ||
+          (o._pngFramesKey && lv._pngFramesKey === o._pngFramesKey)
+        )
+      );
+      l = new ImageLayer(null, o.x, o.y);
+      // Preservar datos de animación del layer vivo
+      if (_liveImg) {
+        if (_liveImg._pngFrames) l._pngFrames = _liveImg._pngFrames;
+        if (_liveImg._apngSrc)   l._apngSrc   = _liveImg._apngSrc;
+        if (_liveImg._animOc)    l._animOc     = _liveImg._animOc;
+        if (_liveImg._animReady) l._animReady  = _liveImg._animReady;
+        if (_liveImg.img)        l.img         = _liveImg.img;
+      }
+    }
     else if(o.type === 'draw') {
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
@@ -2806,11 +2850,30 @@ function edApplyHistory(snapshot){
       if(o.opacity !== undefined) fl.opacity = o.opacity;
       if(o.x != null) { fl.x=o.x; fl.y=o.y; fl.width=o.width||1; fl.height=o.height||1; fl.rotation=o.rotation||0; }
       if(o.dataUrl) {
+        // Determinar si el fill era workspace (DrawLayer activo) o local (StrokeLayer)
+        const _wasWS = o._isWorkspaceCanvas === true;
+        if (_wasWS) {
+          // Fill workspace: canvas ED_CANVAS_W × ED_CANVAS_H
+          fl._canvas.width  = ED_CANVAS_W;
+          fl._canvas.height = ED_CANVAS_H;
+          fl._ctx = fl._canvas.getContext('2d');
+          fl._isWorkspaceCanvas = true;
+          fl.x=0.5; fl.y=0.5; fl.width=1; fl.height=1; fl.rotation=0;
+        } else {
+          // Fill local: canvas bbox (width*pw × height*ph)
+          const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+          const _rpw = _isV ? ED_PAGE_W : ED_PAGE_H;
+          const _rph = _isV ? ED_PAGE_H : ED_PAGE_W;
+          const _rw = Math.max(1, Math.round((o.width||1) * _rpw));
+          const _rh = Math.max(1, Math.round((o.height||1) * _rph));
+          fl._canvas.width  = _rw;
+          fl._canvas.height = _rh;
+          fl._ctx = fl._canvas.getContext('2d');
+          fl._isWorkspaceCanvas = false;
+        }
         imgPromises.push(new Promise(res => {
           const _fi = new Image();
           _fi.onload = () => {
-            // SF: el canvas del fill es local (stroke-size). Restaurar directamente.
-            // Las propiedades x/y/w/h ya fueron asignadas arriba.
             fl._ctx.clearRect(0, 0, fl._canvas.width, fl._canvas.height);
             fl._ctx.drawImage(_fi, 0, 0, fl._canvas.width, fl._canvas.height);
             res();
@@ -2962,6 +3025,14 @@ function edFitCanvas(resetCamera){
   edCanvas.style.left = '0';
   edCanvas.style.top  = totalBarsH + 'px';
   _edCanvasTop = totalBarsH; // cachear para edCoords
+  // Sincronizar gcpCanvas si está activo — mismo top que edCanvas
+  if (window._gcpActive && gcpCanvas) {
+    gcpCanvas.width  = newW;
+    gcpCanvas.height = newH;
+    gcpCanvas.style.width  = newW + 'px';
+    gcpCanvas.style.height = newH + 'px';
+    gcpCanvas.style.top    = totalBarsH + 'px'; // mismo top que edCanvas
+  }
   edCanvas.style.margin = '0';
   // Mantener el canvas de dibujo libre sincronizado en posición y tamaño
   if(edDrawCanvas){
@@ -3591,13 +3662,14 @@ function edRedraw(){
     // Solicitar siguiente frame para animar el parpadeo
     requestAnimationFrame(()=>{ if(_edLineLayer?.points.length===1) edRedraw(); });
   }
-  // Multi-selección: bbox colectivo encima de todo, o marquesina si está arrastrando
-  if(edActiveTool==='multiselect'){
-    if(edMultiSel.length) edDrawMultiSel();
-    else edDrawRubberBand();
+  // Multi-selección y rubber band: no dibujar si GCP activo (tiene su propio canvas)
+  if(!window._gcpActive){
+    if(edActiveTool==='multiselect'){
+      if(edMultiSel.length) edDrawMultiSel();
+      else edDrawRubberBand();
+    }
+    if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
   }
-  // Rubber band en modo select (PC, sin pulsar botón multiselect)
-  if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
   // ── Reglas (T29): solo visibles en el editor, encima de todo ──
   _edRulesDraw(edCtx);
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
@@ -3695,11 +3767,8 @@ function edDrawSel(){
     if(!_curveMode){
     // Para rect (LineLayer 4-nodos cerrado): solo handles en centros de segmentos
     // (las esquinas son nodos de edición, no handles de resize)
-    const _isLineRect = la.type==='line' && la.closed && !la._fromEllipse
-      && la.points && la.points.filter(Boolean).length === 4;
-    const corners = _isLineRect
-      ? [[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]]  // solo centros de segmento
-      : [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
+    // Siempre 8 handlers (4 esquinas + 4 centros de lado)
+    const corners = [[-w/2,-h/2],[w/2,-h/2],[-w/2,h/2],[w/2,h/2],[0,-h/2],[0,h/2],[-w/2,0],[w/2,0]];
     corners.forEach(([hx,hy])=>{
       edCtx.beginPath();edCtx.arc(hx,hy,hr,0,Math.PI*2);
       edCtx.fillStyle='#fff';edCtx.fill();
@@ -3765,8 +3834,8 @@ function edDrawSel(){
     edCtx.fillStyle='#e63030';edCtx.fill();
     edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
   }
-  // Handles 4 vértices del rect cuando modo curva activo
-  if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape'){
+  // Handles 4 vértices del rect: solo en modo v/c (no en modo selección)
+  if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape' && _edLineType !== 'select'){
     if(_edCurveModeActive()){
       const corners=[[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]];
       const rot2=(la.rotation||0)*Math.PI/180;
@@ -3842,8 +3911,12 @@ function edDrawSel(){
       edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
     });
   }
-  // Handles vértices de LineLayer seleccionado (panel abierto, solo si no es ellipse)
-  if(la.type==='line' && la.points.length>=1 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+  // Handles vértices de LineLayer seleccionado: SOLO en modo V/C (curveMode activo)
+  // En modo selección (select) solo se ven los 8 handles de bbox y el de rotación
+  const _showLineNodes = la.type==='line' && la.points.length>=1 && !la._fromEllipse &&
+    ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) &&
+    _edCurveModeActive && _edCurveModeActive(); // solo visibles en modo V/C
+  if(_showLineNodes){
     const rot=(la.rotation||0)*Math.PI/180;
     const cos=Math.cos(rot),sin=Math.sin(rot);
     const cx=edMarginX()+la.x*pw, cy=edMarginY()+la.y*ph;
@@ -4870,9 +4943,32 @@ function _edRenderPageThumb(canvas, page, pageIdx){
         offCtx.setTransform(1,0,0,1,-mx,-my);
       }
     } else if(l.type==='image')  l.draw(offCtx,off);
-    else if(l.type==='draw')   l.draw(offCtx);
-    else if(l.type==='fill'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
-    else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
+    else if(l.type==='draw'){
+      // DrawLayer: dibujar fill vinculado primero, luego el draw
+      const _flDraw = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flDraw){ offCtx.globalAlpha=_flDraw.opacity??1; _flDraw.draw(offCtx); offCtx.globalAlpha=1; }
+      l.draw(offCtx);
+    }
+    else if(l.type==='fill') return; // el fill se dibuja con su stroke/draw vinculado
+    else if(l.type==='stroke'){
+      // StrokeLayer: dibujar fill vinculado primero con código inline
+      const _flStroke = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flStroke && _flStroke._canvas && _flStroke._canvas.width > 0){
+        const _fsrc = (_flStroke._previewSx != null && _flStroke._srcCanvas) ? _flStroke._srcCanvas : _flStroke._canvas;
+        const _fpx = edMarginX() + _flStroke.x * pw;
+        const _fpy = edMarginY() + _flStroke.y * ph;
+        const _fw  = _flStroke.width  * pw;
+        const _fh  = _flStroke.height * ph;
+        offCtx.save();
+        offCtx.globalAlpha = _flStroke.opacity ?? 1;
+        offCtx.translate(_fpx, _fpy);
+        if(_flStroke.rotation) offCtx.rotate(_flStroke.rotation * Math.PI / 180);
+        offCtx.drawImage(_fsrc, -_fw/2, -_fh/2, _fw, _fh);
+        offCtx.restore();
+        offCtx.globalAlpha = 1;
+      }
+      offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1;
+    }
     else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
   });
   offCtx.globalAlpha=_textAlpha;
@@ -5305,12 +5401,8 @@ function edDeleteSelected(){
    ══════════════════════════════════════════ */
 function edCoords(e){
   const src = e.touches ? e.touches[0] : e;
-  // sx: canvas siempre tiene left=0 en el shell, clientX no necesita ajuste.
-  // sy: usar _edCanvasTop cacheado síncronamente en edFitCanvas.
-  //     Más fiable que style.top (puede quedar desactualizado entre layout
-  //     y el siguiente evento) y que getBoundingClientRect (puede incluir
-  //     scroll del contenedor en algunos navegadores Android).
   const sx = src.clientX;
+  // _edCanvasTop es válido para ambos canvas (editor y GCP tienen el mismo top)
   const sy = src.clientY - _edCanvasTop;
   // Convertir pantalla → workspace
   const w = edScreenToWorld(sx, sy);
@@ -6167,12 +6259,39 @@ function edOnStart(e){
       if(la.type==='line'&&la.points.length>=2){
         const rot2=(la.rotation||0)*Math.PI/180;
         const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
+        const _vcNow=Date.now();
         for(let i=0;i<la.points.length;i++){
           const p=la.points[i]; if(!p) continue;
           const lpx=p.x*pw2,lpy=p.y*ph2;
           const ax2=la.x+(lpx*cos2-lpy*sin2)/pw2;
           const ay2=la.y+(lpx*sin2+lpy*cos2)/ph2;
           if(Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z<_vcHitR){
+            // Doble tap en nodo ya seleccionado → eliminar nodo
+            const _isDblNode = window._edCurveVertIdx===i &&
+              (_vcNow - (window._edCurveLastTapTime||0)) < 350;
+            window._edCurveLastTapTime = _vcNow;
+            if(_isDblNode){
+              // Eliminar nodo si quedan al menos 2 puntos reales
+              const _realPts = la.points.filter(Boolean);
+              if(_realPts.length > 2){
+                _edShapePushHistory(); // guardar estado antes de eliminar
+                la.points[i] = null; // marcar como eliminado
+                // Limpiar nulls al inicio/fin de cada contorno
+                while(la.points.length > 0 && la.points[0] === null) la.points.shift();
+                while(la.points.length > 0 && la.points[la.points.length-1] === null) la.points.pop();
+                // Eliminar nulls consecutivos
+                la.points = la.points.filter((p,j,a) => p !== null || (j>0 && a[j-1]!==null));
+                la._boundsDirty = true;
+                window._edCurveVertIdx = -1;
+                window._edCurveLastTapTime = 0;
+                _edShapePushHistory();
+                edRedraw();
+              } else {
+                edToast('Mínimo 2 vértices');
+              }
+              return;
+            }
+            // Primer tap: seleccionar nodo
             window._edCurveVertIdx=i;
             if(!la.cornerRadii)la.cornerRadii={};
             const existing=la.cornerRadii[i]||0;
@@ -6437,7 +6556,7 @@ function edOnStart(e){
           window._edRbTouchTimer = null;
           const _rbSz = window._edActivePointers ? window._edActivePointers.size : 0;
           if(_rbSz !== 1) return; // cancelar si no hay exactamente 1 dedo activo
-          edRubberBand={x0:_rbC2.nx,y0:_rbC2.ny,x1:_rbC2.nx,y1:_rbC2.ny};
+          if(!window._gcpActive) edRubberBand={x0:_rbC2.nx,y0:_rbC2.ny,x1:_rbC2.nx,y1:_rbC2.ny};
           edRedraw();
         }, 120);
       } else {
@@ -6452,7 +6571,7 @@ function edOnStart(e){
           edRenderOptionsPanel('props');
         } else {
           // Vacío real → iniciar rubber band
-          edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+          if(!window._gcpActive) edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
         }
       }
       edRedraw();
@@ -6695,7 +6814,9 @@ function edOnStart(e){
         }
       }
     }
-    if(la.points.length>=2 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+    // Nodos: solo interactuables en modo V/C — en modo select solo handles de bbox
+    if(la.points.length>=2 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))
+       && (_edCurveModeActive && _edCurveModeActive())){
       const rot=(la.rotation||0)*Math.PI/180;
       const cos=Math.cos(rot),sin=Math.sin(rot);
       const pw=edPageW(),ph=edPageH();
@@ -6841,7 +6962,7 @@ function edOnStart(e){
     const _now = Date.now();
     const _isPotentialDbl = (_la === edLayers[_edLastTapIdx] || edSelectedIdx === _edLastTapIdx)
                             && (_now - _edLastTapTime < 350);
-    const hitScreen = _isT ? 28 : 18;
+    const hitScreen = _isT ? 22 : 14;
     // LOCK: si el objeto está bloqueado no activar handles de resize/rotate
     if(!_la.locked)
     for(const p of _la.getControlPoints()){
@@ -6931,8 +7052,8 @@ function edOnStart(e){
   const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
   // En modo selección del panel line/shape: permitir seleccionar objetos de la fusión y drag
   const _lineSelectMode = (_activeMode === 'line' || _activeMode === 'shape') && _edLineType === 'select' && !_edLineLayer;
-  // Bug2-fix: en táctil con panel line abierto y edActiveTool='select', permitir drag de nodos
-  if(_lineSelectMode && e.pointerType === 'touch' && edSelectedIdx >= 0){
+  // Nodos táctiles: solo en modo V/C (curveMode activo)
+  if(_lineSelectMode && e.pointerType === 'touch' && edSelectedIdx >= 0 && _edCurveModeActive && _edCurveModeActive()){
     const _lsLa = edLayers[edSelectedIdx];
     if(_lsLa && _lsLa.type === 'line'){
       // Radio normal para detectar nodos y candidatos de doble-tap
@@ -7219,7 +7340,7 @@ function edOnStart(e){
         edMultiSel = []; edMultiBbox = null;
         edActiveTool = 'select'; edCanvas.className = '';
         $('edMultiSelBtn')?.classList.remove('active');
-        _edDrawLockUI();
+        // Sin panel abierto: no bloquear menús
         edRenderOptionsPanel();
       } else {
         _msClear();
@@ -7326,20 +7447,21 @@ function edOnStart(e){
         const _rbSz2 = window._edActivePointers ? window._edActivePointers.size : 0;
         if(_rbSz2 !== 1) return; // cancelar si no hay exactamente 1 dedo activo
         const _rc = edCoords(_rbE);
-        edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
+        if(!window._gcpActive) edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
         window._edRubberBandEndPos = null;
         edRedraw();
       }, 120);
     } else {
       // PC: inmediato
       const c = edCoords(e);
-      edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
+      if(!window._gcpActive) edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
       window._edRubberBandEndPos = null;
     }
   }
   edRedraw();
 }
 function edOnMove(e){
+  if(window._gcpActive) return; // GCP tiene su propio handler de move
   // Actualizar _edTouchMoved siempre (para cancelar long-press aunque gestureActive sea false)
   if(e.pointerType === 'touch'){
     _edTouchMoved = true;
@@ -7443,7 +7565,7 @@ function edOnMove(e){
     return;
   }
   // ── RUBBER BAND en modo select (PC) ────────────────────────
-  if(edActiveTool==='select' && edRubberBand){
+  if(!window._gcpActive && edActiveTool==='select' && edRubberBand){
     e.preventDefault();
     const c=edCoords(e);
     edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
@@ -8041,7 +8163,7 @@ function edOnEnd(e){
     }
   }
   // ── RUBBER BAND en modo select (PC) → activar multiselect ──
-  if(edActiveTool==='select' && edRubberBand){
+  if(!window._gcpActive && edActiveTool==='select' && edRubberBand){
     const _rbPos = window._edRubberBandEndPos || {clientX: window.innerWidth/2, clientY: window.innerHeight/2};
     window._edRubberBandEndPos = null;
     const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
@@ -8055,13 +8177,13 @@ function edOnEnd(e){
       if(_found.length===1){
         // Un solo objeto → selección normal (sin abrir panel; doble tap lo abre)
         edSelectedIdx=_found[0];
-        _edDrawLockUI();
         edRenderOptionsPanel();
       } else if(_found.length>=2){
         edMultiSel=_found;
         edSelectedIdx=-1;
         edActiveTool='multiselect';
         edCanvas.className='tool-multiselect';
+        _edMenuLock(false); // multiselect sin panel: desbloquear menús
         _msRecalcBbox();
         // botón nunca queda active — opciones disponibles vía tap en botón
         _edUpdateMultiSelPanel();
@@ -8175,7 +8297,7 @@ function edOnEnd(e){
       if(l.type==='image' && !l.animKey && !l._pngFramesKey && !l._apngIdbKey) {
         const _data = l._apngSrc || (l._pngFrames && l._pngFrames.length ? l._pngFrames : null);
         if(_data && window._sbAnimIdbSave) {
-          const _k = (edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+          const _k = _edAnimKey((edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6));
           l._pngFramesKey = _k;
           _preExport.push(window._sbAnimIdbSave(_k, _data).catch(()=>{}));
         }
@@ -10066,7 +10188,8 @@ function _edActivateShapeTool(isNew) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
-    if(!open){ window._edCurveVertIdx=-1; edRedraw(); }
+    if(!open){ window._edCurveVertIdx=-1; }
+    edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
   $('op-shape-curve-r')?.addEventListener('input',e=>{
     const v=+e.target.value;
@@ -10197,7 +10320,9 @@ function _edActivateLineTool(isNew, isCreating) {
   // canFuse: mostrar botón Fusionar si hay ≥2 objetos line cerrados en la página.
   // Se muestra independientemente de selección y de _vsPreSessionLayers.
   // El handler de fusión ya filtra qué objetos fusionar (solo los de sesión actual).
-  const canFuse = edLayers.filter(l => l.type==='line' && l.closed).length >= 2;
+  // canFuse: ≥2 layers line cerrados, O un layer único con grouped=true (multicontorno unido)
+  const _canFuseGrouped = _cur && _cur.type==='line' && _cur.grouped && _cur.points && _cur.points.includes(null);
+  const canFuse = _canFuseGrouped || edLayers.filter(l => l.type==='line' && l.closed).length >= 2;
   // nSubPaths eliminado (T1: huecos son objetos independientes hasta OK)
 
   panel.innerHTML = `
@@ -10447,11 +10572,24 @@ function _edActivateLineTool(isNew, isCreating) {
   window._edCurveVertIdx=-1; // resetear al abrir el panel
   // ── Fusionar — combina todos los objetos cerrados en uno con huecos ──
   $('op-line-fuse-btn')?.addEventListener('click', () => {
-    const _closedLayers = edLayers.filter(l =>
-      l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l)
-    );
+    // Caso A: layer único con grouped=true (resultado de ⊕ Unir) → convertir a evenodd
+    const _selLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if (_selLayer && _selLayer.type === 'line' && _selLayer.grouped && _selLayer.points && _selLayer.points.includes(null)) {
+      _edShapePushHistory();
+      _selLayer.grouped = false;
+      delete _selLayer.groupedStyles;
+      _selLayer.closed = true;
+      _selLayer.fillColor = edDrawFillColor || _selLayer.fillColor || '#ffffff';
+      _edShapePushHistory();
+      edRedraw();
+      _edActivateLineTool(false, true);
+      edToast('Objetos fusionados ✓');
+      return;
+    }
+    // Caso B: ≥2 layers line cerrados en la página (incluyendo pre-existentes)
+    const _closedLayers = edLayers.filter(l => l.type === 'line' && l.closed);
     if (_closedLayers.length < 2) {
-      edToast('Necesitas al menos 2 objetos cerrados en esta sesión para fusionar');
+      edToast('Necesitas al menos 2 objetos cerrados para fusionar');
       return;
     }
     // Fusionar — crea un LineLayer NUEVO independiente (no modifica los originales)
@@ -10465,15 +10603,26 @@ function _edActivateLineTool(isNew, isCreating) {
     _newLayer.rotation = 0; // el nuevo layer no tiene rotación propia
     _newLayer.x = _origin.x;
     _newLayer.y = _origin.y;
-    // Añadir puntos de cada objeto en coords locales del nuevo layer
+    // Añadir puntos de cada objeto en coords locales del nuevo layer,
+    // preservando cornerRadii con los índices correctos (incluyendo nulls)
+    if (!_newLayer.cornerRadii) _newLayer.cornerRadii = {};
     for (let i = 0; i < _closedLayers.length; i++) {
       const _ll = _closedLayers[i];
-      if (i > 0) _newLayer.points.push(null); // separador de contorno
-      const _absPoints = _ll.absPoints();
-      _absPoints.forEach(p => {
-        if (!p) { _newLayer.points.push(null); return; }
-        _newLayer.points.push({ x: p.x - _newLayer.x, y: p.y - _newLayer.y });
-      });
+      if (i > 0) _newLayer.points.push(null); // separador de contorno (ocupa un índice)
+      const _rot = (_ll.rotation || 0) * Math.PI / 180;
+      const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
+      const _cr = _ll.cornerRadii || {};
+      // Iterar sobre la.points original para preservar el índice _pi → cornerRadii
+      for (let _pi = 0; _pi < _ll.points.length; _pi++) {
+        const p = _ll.points[_pi];
+        if (!p) { _newLayer.points.push(null); continue; }
+        // Convertir punto local del layer original a abs, luego a local del nuevo layer
+        const _ax = _ll.x + p.x * _cos - p.y * _sin;
+        const _ay = _ll.y + p.x * _sin + p.y * _cos;
+        // Copiar cornerRadius si existe para este punto, al índice actual en _newLayer.points
+        if (_cr[_pi]) _newLayer.cornerRadii[_newLayer.points.length] = _cr[_pi];
+        _newLayer.points.push({ x: _ax - _newLayer.x, y: _ay - _newLayer.y });
+      }
     }
     _newLayer.closed = true;
     _newLayer._updateBbox();
@@ -10501,7 +10650,8 @@ function _edActivateLineTool(isNew, isCreating) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
-    if(!open){ window._edCurveVertIdx=-1; edRedraw(); }
+    if(!open){ window._edCurveVertIdx=-1; }
+    edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
   $('op-line-curve-r')?.addEventListener('input',e=>{
     const v=+e.target.value;
@@ -10852,7 +11002,14 @@ function edCloseOptionsPanel(){
     // impidiendo guardar movimientos/resize/rotate de cualquier objeto posterior.
     if(_mode==='line' || _mode==='shape'){
       _edLineFusionId = null;
-      if(typeof _vsClear === 'function') _vsClear();
+      // Cerrar sin OK → descartar cambios: restaurar snapshot inicial de la sesión
+      if(typeof _vsClear === 'function'){
+        if(typeof _vsHistIdx !== 'undefined' && _vsHistory && _vsHistory.length > 0 && _vsHistIdx > 0){
+          // Restaurar al estado antes de la sesión
+          if(typeof _vsApply === 'function') _vsApply(_vsHistory[0]);
+        }
+        _vsClear();
+      }
     }
   }
   _edFocusDone = false;
@@ -11089,6 +11246,11 @@ function edRenderOptionsPanel(mode){
       return;
     }
     edDrawBarHide();
+    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar
+    if(mode === 'draw' && edActiveTool !== 'eraser' && edActiveTool !== 'fill'){
+      _edDrawLayerTarget = 'draw';
+      edActiveTool = 'draw';
+    }
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
@@ -11868,6 +12030,8 @@ function edRenderOptionsPanel(mode){
       _edDrawInitHistory();
       _edPropsOverlayHide();
       _edDrawLockUI();
+      _edDrawLayerTarget = 'draw';  // capa dibujo por defecto
+      edActiveTool = 'draw';        // herramienta dibujar por defecto
       edRenderOptionsPanel('draw');
       edRedraw();
     });
@@ -11999,14 +12163,13 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
-  // Ocultar siempre el panel de opciones, sea cual sea su modo
+  // Ocultar panel y lengüeta al minimizar
   const _panel=$('edOptionsPanel');
   if(_panel?.classList.contains('open')){
     const mode = _panel.dataset.mode || '';
-    // Guardar modo para restaurar al maximizar
     if(mode) window._edMinimizedDrawMode = mode;
+    if(_panel.classList.contains('panel-collapsed')) window._edMinimizedCollapsed = true;
     _panel.style.visibility='hidden';
-    // Para props (imagen, texto, bocadillo, stroke): panel oculto sin barra flotante
   }
   // Ocultar también la lengüeta si el panel estaba colapsado
   _edPanelTabHide();
@@ -12045,16 +12208,20 @@ function edMaximize(keepBar=false){
   $('edFloatBtn')?.classList.remove('visible');
   if(!keepBar){ edDrawBarHide(); }
   edShapeBarHide();
-  // Restaurar lengüeta si el panel sigue colapsado tras maximizar
-  if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
   // Restaurar panel si estaba activo al minimizar
   if(window._edMinimizedDrawMode){
     const mode = window._edMinimizedDrawMode;
+    const wasCollapsed = window._edMinimizedCollapsed || false;
     window._edMinimizedDrawMode = null;
+    window._edMinimizedCollapsed = false;
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
     _edResetCameraToFit();
-    requestAnimationFrame(_edBarClampToScreen);
+    requestAnimationFrame(() => {
+      _edBarClampToScreen();
+      // Restaurar lengüeta DESPUÉS del layout recalculado
+      if(wasCollapsed && panel?.classList.contains('panel-collapsed')) _edPanelTabShow();
+    });
     if(mode === 'shape'){
       edShapeBarHide();
       _edActivateShapeTool(false); // false = no resetear cámara al restaurar desde barra
@@ -12074,8 +12241,16 @@ function edMaximize(keepBar=false){
       _edActivateLineTool(false);
     }
   } else {
+    // Restaurar visibility si el panel colapsado quedó oculto
+    const _panelElse = $('edOptionsPanel');
+    if(_panelElse?.classList.contains('panel-collapsed')) {
+      _panelElse.style.visibility = '';
+    }
     _edResetCameraToFit();
-    requestAnimationFrame(_edBarClampToScreen);
+    requestAnimationFrame(() => {
+      _edBarClampToScreen();
+      if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
+    });
   }
 }
 function edInitFloatDrag(){
@@ -13617,6 +13792,30 @@ function edInitShapeBar() {
 // ── Bloqueo unificado de la barra de menús ──────────────────────────────────
 // Una sola función controla AMBOS mecanismos (draw-active + overlay).
 // lock=true: bloquear. lock=false: desbloquear.
+// Ventana de aviso modo incógnito — fija y cerrable
+function _edShowIncognitoWarning(msg) {
+  if (document.getElementById('_edIncognitoWarn')) return; // ya visible
+  const box = document.createElement('div');
+  box.id = '_edIncognitoWarn';
+  box.style.cssText = [
+    'position:fixed','bottom:20px','left:50%','transform:translateX(-50%)',
+    'background:#1e293b','color:#f1f5f9','border-radius:12px',
+    'padding:16px 20px','max-width:340px','width:90%','z-index:99999',
+    'box-shadow:0 8px 32px rgba(0,0,0,0.5)','font-size:14px','line-height:1.5',
+    'display:flex','flex-direction:column','gap:10px'
+  ].join(';');
+  box.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:flex-start">
+      <span style="font-size:20px;flex-shrink:0">⚠️</span>
+      <span>${msg}</span>
+    </div>
+    <button id="_edIncognitoWarnClose" style="align-self:flex-end;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">Entendido</button>
+  `;
+  document.body.appendChild(box);
+  document.getElementById('_edIncognitoWarnClose').addEventListener('click', () => box.remove());
+}
+window._edShowIncognitoWarning = _edShowIncognitoWarning;
+
 function _edMenuLock(lock) {
   if (lock) {
     $('editorShell')?.classList.add('draw-active');
@@ -13784,10 +13983,64 @@ async function edCloudSave() {
   await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate('Subiendo a la nube…');
 
-  const comic = ComicStore.getByIdFull
+  let comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
     : ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
+  // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
+  // construir editorData en línea para poder subirlo a la nube correctamente.
+  if ((!comic.editorData || !comic.editorData.pages || !comic.editorData.pages.length) && edPages && edPages.length) {
+    const _savedOrientFb = edOrientation, _savedPageFb = edCurrentPage;
+    const _fbPages = [];
+    for (let _fpi = 0; _fpi < edPages.length; _fpi++) {
+      const _fp = edPages[_fpi];
+      edCurrentPage = _fpi;
+      edOrientation = _fp.orientation || _savedOrientFb;
+      const _fbLayers = [];
+      for (let _fli = 0; _fli < _fp.layers.length; _fli++) {
+        const _fsl = edSerLayer(_fp.layers[_fli]);
+        if (!_fsl) continue;
+        // En incógnito no hay IDB, así que si hay _pngFrames los dejamos inline
+        // (serán pequeños o se perderán — lo importante es que la subida no quede vacía)
+        _fbLayers.push(_fsl);
+      }
+      _fbPages.push({ layers: _fbLayers, textLayerOpacity: _fp.textLayerOpacity ?? 1, textMode: _fp.textMode || 'sequential', orientation: _fp.orientation || _savedOrientFb });
+    }
+    edOrientation = _savedOrientFb; edCurrentPage = _savedPageFb;
+    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes } };
+    // También reconstruir panels (renders) si están vacíos
+    if (!comic.panels || !comic.panels.length) {
+      comic.panels = edPages.map((p, i) => ({
+        id: 'panel_' + i,
+        dataUrl: edRenderPage(p),
+        orientation: (p.orientation || edOrientation) === 'vertical' ? 'v' : 'h',
+        textMode: p.textMode || 'sequential',
+        texts: [],
+      }));
+    }
+  }
+
+  // Enriquecer comic.editorData con _pngFrames y _apngSrc del layer vivo en memoria.
+  // edSaveProject serializa los layers a OPFS sin frames (van a IDB).
+  // _uploadPanels los recupera de IDB con _sbAnimIdbLoad → _buildApngFromFrames.
+  // En Android, _buildApngFromFrames puede fallar (OOM, UPNG crash).
+  // Si el layer vivo tiene _pngFrames o _apngSrc, los inyectamos directamente
+  // para que _uploadPanels los use como fallback sin pasar por UPNG.
+  if (comic.editorData && comic.editorData.pages && edPages && edPages.length) {
+    comic.editorData.pages.forEach((pg, pi) => {
+      const livePage = edPages[pi];
+      if (!livePage) return;
+      (pg.layers || []).forEach((sl, li) => {
+        const liveLayer = livePage.layers[li];
+        if (!liveLayer || sl.type !== 'image') return;
+        // Inyectar _apngSrc si el layer vivo lo tiene (APNG completo → upload directo)
+        if (liveLayer._apngSrc && !sl._apngSrc) sl._apngSrc = liveLayer._apngSrc;
+        // Inyectar _pngFrames si el layer vivo los tiene y no hay _apngSrc
+        if (!sl._apngSrc && liveLayer._pngFrames && liveLayer._pngFrames.length && !sl._pngFrames)
+          sl._pngFrames = liveLayer._pngFrames;
+      });
+    });
+  }
 
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
@@ -13804,6 +14057,11 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+    // Borrar autosave explícitamente tras guardado en nube exitoso.
+    // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
+    // por versionchange. Este segundo intento garantiza que no queda autosave espurio
+    // que se muestre como "cambios sin guardar" al volver a abrir la obra.
+    await _edAutosaveClear(edProjectId);
     // Guardar en nube siempre vuelve la obra a borrador (published=false en Supabase).
     // El admin deberá aprobarla de nuevo. Limpiar estado local incondicionalmente.
     const _comicAfter = ComicStore.getById(edProjectId);
@@ -13818,7 +14076,15 @@ async function edCloudSave() {
     if (user && user.id) {
       try {
         const _bib = _bibLoad();
+        const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+        const _bibFolderInfo = (_bib?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
+        window._edLastBibSync = { items: _bibItems, folders: _bibFolderInfo, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, cacheNull: _bibCache===null, ts: new Date().toISOString() };
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
+
+        // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
+        if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
+          _edShowIncognitoWarning('Biblioteca sincronizada con la nube: ' + _bibItems + ' item(s). Al abrir en modo normal se cargará desde la nube.');
+        }
       } catch(e) { console.warn('bibSync error:', e); }
     }
   } catch(err) {
@@ -13905,6 +14171,8 @@ function _edSizeMonitorStop() {
 
 async function edSaveProject(_keepOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
+  // Capturar historyIdx ahora — puede cambiar durante los awaits posteriores
+  const _saveHistoryIdx = edHistoryIdx;
   if(!_keepOverlay) _edSaveOverlayShow('Guardando en dispositivo…');
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
@@ -13991,10 +14259,27 @@ async function edSaveProject(_keepOverlay){
       if (!_sl) continue;
       // Externalizar _pngFrames a IndexedDB para no saturar localStorage
       if (_sl._pngFrames && _sl._pngFrames.length) {
-        const _idbKey = edProjectId + '_' + _pi + '_' + _li;
-        try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); } catch(e) {}
-        delete _sl._pngFrames;
-        _sl._pngFramesKey = _idbKey;
+        if (_bibIdbUnavailable) {
+          // Modo incógnito: mantener _pngFrames en memoria, no asignar clave IDB
+          // (el upload a la nube los usará directamente desde _pngFrames)
+        } else {
+          const _idbKey = _edAnimKey(edProjectId + '_' + _pi + '_' + _li);
+          let _idbSaved = false;
+          try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); _idbSaved = true; } catch(e) {}
+          if (_idbSaved) {
+            // Si el layer tenía una clave temporal "as_" del autosave, borrarla ahora
+            // que ya tenemos la clave definitiva — evita acumulación de basura en cxAnims
+            const _prevKey = p.layers[_li]._pngFramesKey;
+            if (_prevKey && _prevKey !== _idbKey) {
+              _edAnimIdbDelete(_prevKey).catch(() => {});
+            }
+            delete _sl._pngFrames;
+            _sl._pngFramesKey = _idbKey;
+            // Propagar clave definitiva al layer vivo
+            if (p.layers[_li]) p.layers[_li]._pngFramesKey = _idbKey;
+          }
+          // Si IDB falló, mantener _pngFrames y no asignar _pngFramesKey
+        }
       }
       _pageLayers.push(_sl);
     }
@@ -14007,7 +14292,9 @@ async function edSaveProject(_keepOverlay){
   // Al guardar localmente: restaurar la biblioteca local si existe un backup previo a la apertura de nube.
   // cs_biblioteca_local_{id} se crea en my-comics.js cuando se abre una obra desde la nube.
   // Al guardar localmente el usuario confirma que quiere la versión local, incluyendo su biblioteca.
-  if (edProjectId) {
+  if (edProjectId && !_bibIdbUnavailable) {
+    // Solo restaurar backup local si IDB está disponible (no en modo incógnito).
+    // En modo incógnito _bibCache ya tiene la versión correcta de Supabase — no sobreescribir.
     const _bibLocalBackupKey = `cs_biblioteca_local_${edProjectId}`;
     const _bibBackup = localStorage.getItem(_bibLocalBackupKey);
     if (_bibBackup) {
@@ -14016,6 +14303,10 @@ async function edSaveProject(_keepOverlay){
         localStorage.removeItem(_bibLocalBackupKey);
       } catch(_e) {}
     }
+    // Esperar a que la última escritura de biblioteca en IDB complete antes de guardar en OPFS.
+    // En Android el proceso puede morir entre el _bibSave async y el ComicStore.save,
+    // dejando la IDB sin los datos más recientes. El await garantiza consistencia.
+    if (typeof _bibFlush === 'function') await _bibFlush();
   }
   await ComicStore.save({
     ...existing,
@@ -14045,13 +14336,18 @@ async function edSaveProject(_keepOverlay){
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
     _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
   } else {
-    const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
+    // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
+    const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
+    const _err = _isIncognito
+      ? 'Modo incógnito: el guardado local no está disponible. Usa ☁️ Guardar en nube para conservar la obra.'
+      : 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
-    edToast('⚠️ Guardado parcial');
+    edToast(_isIncognito ? '⚠️ Modo incógnito: usa Guardar en nube' : '⚠️ Guardado parcial');
   }
-  // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
-  _edSavedHistoryIdx = edHistoryIdx;
-  edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
+  // Compactar historial usando el idx capturado al inicio (evita race condition con undo async)
+  const _snapToKeep = (_saveHistoryIdx >= 0 && _saveHistoryIdx < edHistory.length)
+    ? edHistory[_saveHistoryIdx] : (edHistory.length > 0 ? edHistory[edHistoryIdx] : null);
+  edHistory = _snapToKeep ? [_snapToKeep] : [];
   edHistoryIdx = edHistory.length - 1;
   _edSavedHistoryIdx = edHistoryIdx;
   // Limpiar autosave — ya está todo guardado, no hay nada que recuperar
@@ -14076,9 +14372,30 @@ function edRenderPage(page){
     if (!l || _textTypes.has(l.type)) return;
     if (l.type === 'image') { l.draw(ctx, full); return; }
     if (l.type === 'gif')   { l.draw(ctx); return; }
-    if (l.type === 'fill')  { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
-    if (l.type === 'draw')  { l.draw(ctx); return; }
-    if (l.type === 'stroke'){ ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
+    if (l.type === 'fill')  return; // el fill se dibuja con su stroke/draw vinculado
+    if (l.type === 'draw')  {
+      // DrawLayer: fill vinculado primero
+      const _flD2 = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flD2){ ctx.save(); ctx.globalAlpha=_flD2.opacity??1; _flD2.draw(ctx); ctx.globalAlpha=1; ctx.restore(); }
+      l.draw(ctx); return;
+    }
+    if (l.type === 'stroke'){
+      // StrokeLayer: fill vinculado con código inline (igual que edRedraw)
+      const _flS2 = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
+      if(_flS2 && _flS2._canvas && _flS2._canvas.width > 0){
+        const _fsrc2 = (_flS2._previewSx != null && _flS2._srcCanvas) ? _flS2._srcCanvas : _flS2._canvas;
+        const _fpx2 = edMarginX() + _flS2.x * edPageW();
+        const _fpy2 = edMarginY() + _flS2.y * edPageH();
+        const _fw2  = _flS2.width  * edPageW();
+        const _fh2  = _flS2.height * edPageH();
+        ctx.save(); ctx.globalAlpha = _flS2.opacity??1;
+        ctx.translate(_fpx2, _fpy2);
+        if(_flS2.rotation) ctx.rotate(_flS2.rotation * Math.PI / 180);
+        ctx.drawImage(_fsrc2, -_fw2/2, -_fh2/2, _fw2, _fh2);
+        ctx.restore(); ctx.globalAlpha = 1;
+      }
+      ctx.save(); ctx.globalAlpha=l.opacity??1; l.draw(ctx); ctx.globalAlpha=1; ctx.restore(); return;
+    }
     if (l.type === 'shape' || l.type === 'line') { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
   });
   // Recortar zona de la página del canvas de trabajo
@@ -14316,7 +14633,7 @@ function edMergeSelected(){
         }
         if(cur.length) contours.push(cur);
       } else {
-        // ShapeLayer → polígono en px (sin datos de curva)
+        // ShapeLayer → polígono en px, preservando cornerRadii si los tiene
         const cx = mx + la.x * pw;
         const cy = my + la.y * ph;
         const rot = (la.rotation || 0) * Math.PI / 180;
@@ -14330,9 +14647,15 @@ function edMergeSelected(){
             pts.push({ x: cx + lpx*cos - lpy*sin, y: cy + lpx*sin + lpy*cos });
           }
         } else {
+          // rect: 4 esquinas TL, TR, BR, BL — mismo orden que cornerRadii [0,1,2,3]
           const hw = la.width * pw / 2, hh = la.height * ph / 2;
+          const _shCr = Array.isArray(la.cornerRadii) ? la.cornerRadii : [0,0,0,0];
+          let _shIdx = 0;
           for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]) {
-            pts.push({ x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos });
+            const pt = { x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos };
+            if(_shCr[_shIdx]) pt._cr = _shCr[_shIdx];
+            _shIdx++;
+            pts.push(pt);
           }
         }
         contours.push(pts);
@@ -14581,6 +14904,7 @@ function edSerLayer(l){
     if(l._drawLayerId) _f._drawLayerId=l._drawLayerId;
     if(l._uid) _f._uid=l._uid;
     if(l.hidden) _f.hidden=true;
+    if(l.opacity !== undefined) _f.opacity=l.opacity;
     return _f;
   }
   if(l.type==='gif'){
@@ -14688,7 +15012,7 @@ function edSerLayer(l){
     return _bobj;
   }
   if(l.type==='group') return null; // obsoleto
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.opacity!==undefined)_o.opacity=l.opacity; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
     color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
@@ -14770,31 +15094,55 @@ function edSerLayer(l){
   }
 }
 // Carga _pngFrames desde IndexedDB 'cxAnims' por clave _pngFramesKey
-function _edAnimIdbLoad(key) {
-  return new Promise(res => {
+// Singleton para cxAnims — mismo patrón que _bibOpenIdb.
+// onversionchange/onclose invalidan la referencia cuando el SW toma control,
+// evitando que _edAnimIdbLoad devuelva null en Android tras clients.claim().
+let _edAnimDb = null;
+function _edAnimIdbOpen() {
+  // Validar que el singleton tiene el store — puede estar en una versión sin él
+  if (_edAnimDb) {
+    if (_edAnimDb.objectStoreNames.contains('anims')) return Promise.resolve(_edAnimDb);
+    // Store no existe en esta conexión — cerrar y reconectar
+    try { _edAnimDb.close(); } catch(_) {}
+    _edAnimDb = null;
+  }
+  return new Promise((res, rej) => {
     const req = indexedDB.open('cxAnims', 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
     req.onsuccess = e => {
-      const r = e.target.result.transaction('anims').objectStore('anims').get(key);
-      r.onsuccess = e2 => res(e2.target.result || null);
-      r.onerror   = () => res(null);
+      _edAnimDb = e.target.result;
+      _edAnimDb.onversionchange = () => { _edAnimDb.close(); _edAnimDb = null; };
+      _edAnimDb.onclose        = () => { _edAnimDb = null; };
+      res(_edAnimDb);
     };
-    req.onerror = () => res(null);
+    req.onerror = () => rej(req.error);
   });
 }
 
+function _edAnimIdbLoad(key) {
+  return _edAnimIdbOpen().then(db => new Promise(res => {
+    const r = db.transaction('anims').objectStore('anims').get(key);
+    r.onsuccess = e => res(e.target.result || null);
+    r.onerror   = () => res(null);
+  })).catch(() => { _edAnimDb = null; return null; });
+}
+
+function _edAnimIdbDelete(key) {
+  return _edAnimIdbOpen().then(db => new Promise(res => {
+    const tx = db.transaction('anims', 'readwrite');
+    tx.objectStore('anims').delete(key);
+    tx.oncomplete = () => res();
+    tx.onerror    = () => res();
+  })).catch(() => { _edAnimDb = null; });
+}
+
 function _edAnimIdbSave(key, frames) {
-  return new Promise(res => {
-    const req = indexedDB.open('cxAnims', 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-    req.onsuccess = e => {
-      const tx = e.target.result.transaction('anims', 'readwrite');
-      tx.objectStore('anims').put(frames, key);
-      tx.oncomplete = () => res();
-      tx.onerror    = () => res();
-    };
-    req.onerror = () => res();
-  });
+  return _edAnimIdbOpen().then(db => new Promise(res => {
+    const tx = db.transaction('anims', 'readwrite');
+    tx.objectStore('anims').put(frames, key);
+    tx.oncomplete = () => res();
+    tx.onerror    = () => res();
+  })).catch(() => { _edAnimDb = null; });
 }
 
 function edDeserLayer(d, pageOrientation){
@@ -14819,6 +15167,7 @@ function edDeserLayer(d, pageOrientation){
     fl.width    = d.width    != null ? d.width    : 1.0;
     fl.height   = d.height   != null ? d.height   : 1.0;
     fl.rotation = d.rotation != null ? d.rotation : 0;
+    if(d.opacity !== undefined) fl.opacity = d.opacity;
     return fl;
   }
   if(d.type==='draw'){
@@ -14831,6 +15180,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.hidden) dl.hidden=true;
     if(d._uid) dl._uid=d._uid;
     if(d._fillLayerId) dl._fillLayerId=d._fillLayerId;
+    if(d.opacity !== undefined) dl.opacity = d.opacity;
     return dl;
   }
   if(d.type==='stroke'){
@@ -14953,26 +15303,24 @@ function edDeserLayer(d, pageOrientation){
       }).catch(()=>{});
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
-      _edAnimIdbLoad(d._pngFramesKey).then(data => {
+      // Guardar la promesa en l._animLoadPromise para que edLoadProject pueda esperarla.
+      // En Android la IDB tarda más que en PC — sin await el visor se abre antes de que
+      // los frames lleguen y la animación queda congelada (race condition).
+      l._animLoadPromise = _edAnimIdbLoad(d._pngFramesKey).then(data => {
         if(!data) return;
-        // data puede ser string dataUrl APNG o array de frames PNG
         const input = (typeof data === 'string') ? data
                     : (Array.isArray(data) && data.length) ? data : null;
         if(!input) return;
-        // Asignar al campo correcto para que _edGifSetPlaying lo detecte
         if(typeof data === 'string') { l._apngSrc = data; }
         else { l._pngFrames = data; }
-        // Cargar frames
         l.loadAnim(input, () => {
           if($('editorViewer')?.classList.contains('open')) {
-            // Solo activar si este layer pertenece a la hoja visible actualmente
             const _visPage = edPages[edViewerIdx];
             if(_visPage && _visPage.layers.includes(l)) {
               l._playing = true;
               l._applyFrame(0);
               if(typeof edUpdateViewer==='function') edUpdateViewer();
             }
-            // Si no es la hoja visible, no activar — _edStartPageAnims lo hará al navegar
           } else {
             if(typeof edRedraw==='function') edRedraw();
           }
@@ -15015,12 +15363,37 @@ const _AS_DB   = 'cxAutosave';
 const _AS_STORE = 'saves';
 let _edAutosaveTimer = null;
 
+// Clave de autosave: prefijada con userId para aislar entre autores en el mismo dispositivo
+// Clave de animación IDB: prefijada con userId para aislar frames entre autores
+function _edAnimKey(rawKey) {
+  try {
+    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+    return _uid + '__' + rawKey;
+  } catch(_e) { return rawKey; }
+}
+
+function _edAutosaveKey(id) {
+  try {
+    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+    return _uid + '_' + (id || edProjectId || 'tmp');
+  } catch(_e) { return String(id || edProjectId || 'tmp'); }
+}
+
+let _asDbSingleton = null;
 function _asDb() {
+  if (_asDbSingleton) return Promise.resolve(_asDbSingleton);
   return new Promise((res, rej) => {
     const req = indexedDB.open(_AS_DB, 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore(_AS_STORE);
-    req.onsuccess = e => res(e.target.result);
-    req.onerror   = () => rej(req.error);
+    req.onsuccess = e => {
+      _asDbSingleton = e.target.result;
+      _asDbSingleton.onversionchange = () => { _asDbSingleton.close(); _asDbSingleton = null; };
+      _asDbSingleton.onclose        = () => { _asDbSingleton = null; };
+      res(_asDbSingleton);
+    };
+    req.onerror = () => rej(req.error);
   });
 }
 
@@ -15032,18 +15405,58 @@ async function _edAutosaveWrite() {
     // Incluir biblioteca en el snapshot
     let bibData = null;
     try { bibData = _bibLoad(); } catch(_) {}
+    // Serializar capas para el snapshot — los _pngFrames NO van inline en el snapshot.
+    // Si están en memoria pero sin clave IDB (animación recién insertada, nunca guardada),
+    // los externalizamos a cxAnims con una clave temporal "as_" para que el autosave
+    // pueda recuperarlos. Esto evita el OOM (frames fuera del JSON) y preserva la animación.
+    const _asExternalize = async (l, s) => {
+      if (!s._pngFrames || !s._pngFrames.length) return s;
+      // Ya tiene clave IDB → los frames ya están externalizados, solo usar la clave
+      if (s._pngFramesKey) { delete s._pngFrames; return s; }
+      // Sin clave: externalizar ahora con clave temporal "as_"
+      const _asKey = _edAnimKey('as_' + edProjectId + '_' + Date.now().toString(36));
+      try {
+        await _edAnimIdbSave(_asKey, s._pngFrames);
+        delete s._pngFrames;
+        s._pngFramesKey = _asKey;
+        // Propagar la clave al layer vivo para que edSaveProject la reutilice
+        if (l) l._pngFramesKey = _asKey;
+      } catch(_) {
+        // IDB falló — descartar frames del snapshot (mejor perderlos que crashear)
+        delete s._pngFrames;
+        s._asFramesMissing = true;
+      }
+      return s;
+    };
+    // Medir tamaño estimado antes de escribir (diagnóstico de memoria)
+    let _asEstBytes = 0;
+    const _asPages = [];
+    for (let _asi = 0; _asi < edPages.length; _asi++) {
+      const p = edPages[_asi];
+      const layers = [];
+      for (let _ali = 0; _ali < (p.layers || []).length; _ali++) {
+        const l = p.layers[_ali];
+        try {
+          let s = edSerLayer(l);
+          if (!s) continue;
+          s = await _asExternalize(l, s);
+          _asEstBytes += JSON.stringify(s).length;
+          layers.push(s);
+        } catch(_) {}
+      }
+      _asPages.push({ orientation: p.orientation, dataUrl: p.dataUrl || null, layers });
+    }
     const snapshot = {
       ts: Date.now(),
-      pages: edPages.map(p => ({
-        orientation: p.orientation,
-        dataUrl: p.dataUrl || null,
-        layers: (p.layers || []).map(l => { try { return edSerLayer(l); } catch(_) { return null; } }).filter(Boolean)
-      })),
+      pages: _asPages,
       bib: bibData || null
     };
+    // Guardar tamaño del último autosave para diagnóstico (botón 🩺)
+    window._edLastAutosaveBytes = _asEstBytes;
+    window._edLastAutosaveTs = Date.now();
     const db    = await _asDb();
     const tx    = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).put(snapshot, edProjectId);
+    tx.objectStore(_AS_STORE).put(snapshot, _edAutosaveKey(edProjectId));
     await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
   } catch(_) {}
 }
@@ -15053,7 +15466,7 @@ async function _edAutosaveRead(id) {
     const db  = await _asDb();
     const tx  = db.transaction(_AS_STORE, 'readonly');
     return await new Promise((res, rej) => {
-      const req = tx.objectStore(_AS_STORE).get(id);
+      const req = tx.objectStore(_AS_STORE).get(_edAutosaveKey(id));
       req.onsuccess = () => res(req.result || null);
       req.onerror   = () => res(null);
     });
@@ -15061,10 +15474,32 @@ async function _edAutosaveRead(id) {
 }
 
 async function _edAutosaveClear(id) {
+  const _clearId = id || edProjectId;
   try {
     const db = await _asDb();
     const tx = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).delete(id || edProjectId);
+    tx.objectStore(_AS_STORE).delete(_edAutosaveKey(_clearId));
+  } catch(_) {}
+  // Borrar también las claves "as_" de cxAnims de esta obra
+  // que el autosave pudo haber creado con _asExternalize
+  if (!_clearId) return;
+  try {
+    const _animDb2 = await _edAnimIdbOpen();
+    const _prefix = _edAnimKey('as_' + _clearId + '_');
+    await new Promise(res => {
+      const tx = _animDb2.transaction('anims', 'readwrite');
+      const st = tx.objectStore('anims');
+      const cur = st.openCursor();
+      cur.onsuccess = ev => {
+        const c = ev.target.result;
+        if (!c) { res(); return; }
+        if (String(c.key).startsWith(_prefix)) c.delete();
+        c.continue();
+      };
+      cur.onerror = () => res();
+      tx.oncomplete = () => res();
+      tx.onerror = () => res();
+    });
   } catch(_) {}
 }
 
@@ -15077,10 +15512,14 @@ function _edAutosaveStop() {
   if (_edAutosaveTimer) { clearInterval(_edAutosaveTimer); _edAutosaveTimer = null; }
 }
 
+let _edLoadProjectInProgress = false;
 async function edLoadProject(id){
+  if(_edLoadProjectInProgress) return;
+  _edLoadProjectInProgress = true;
   const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
-  if(!comic)return;
+  if(!comic){ _edLoadProjectInProgress = false; return; }
+  try {
   edProjectId=id;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
   // cuando el usuario abra el panel.
@@ -15093,15 +15532,23 @@ async function edLoadProject(id){
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
   if (_asSave && _asSave.pages && _asSave.pages.length && _asSave.ts) {
-    // Descartar el autosave silenciosamente si el comic fue guardado (local o nube)
-    // DESPUÉS del autosave. Esto cubre el caso de abrir una obra descargada de la
-    // nube: my-comics.js actualiza localSavedAt al guardar los datos de nube, con
-    // lo que ese timestamp es posterior al autosave → el autosave está obsoleto.
     const _localSavedTs = new Date(comic.localSavedAt || comic.updatedAt || 0).getTime();
+    // Registrar la decisión de autosave para diagnóstico (botón 🩺)
+    window._edLastAutosaveDecision = {
+      autosaveTs:    _asSave.ts,
+      autosaveDate:  new Date(_asSave.ts).toISOString(),
+      localSavedAt:  comic.localSavedAt || null,
+      updatedAt:     comic.updatedAt    || null,
+      localSavedTs:  _localSavedTs,
+      comicTitle:    comic.title        || '',
+      cloudOnly:     comic.cloudOnly    || false,
+      cloudNewer:    comic.cloudNewer   || false,
+      decision:      _localSavedTs >= _asSave.ts ? 'DESCARTADO' : 'MOSTRADO_DIALOGO',
+    };
     if (_localSavedTs >= _asSave.ts) {
       // El comic en disco es igual o más nuevo que el autosave → descartar sin preguntar
+      window._edLastAutosaveDecision.decision = 'DESCARTADO_SIN_DIALOGO';
       _edAutosaveClear(id);
-      // Continuar con la carga normal (sin diálogo)
     } else {
     // Mostrar diálogo de recuperación antes de cargar
     const _asRecovered = await new Promise(res => {
@@ -15184,7 +15631,7 @@ async function edLoadProject(id){
   };
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
-    setTimeout(()=>{ _doLoadReset(); }, 150);
+    window._edLoadResetTimer = setTimeout(()=>{ _doLoadReset(); }, 150);
     // Snapshot inicial síncrono: estado de apertura como punto de no-retorno.
     // Forzar _playing=false en todos los layers antes del snapshot para que
     // el estado de apertura siempre sea "todo parado".
@@ -15198,19 +15645,28 @@ async function edLoadProject(id){
     const _fillLoadPromises = [];
     edPages.forEach(p => (p.layers||[]).forEach(l => {
       if(l && l.type === 'fill' && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
+      // Esperar la carga async de frames de animación desde IDB.
+      // En Android la IDB es más lenta — sin esto el visor se abre antes de que
+      // los frames lleguen y la animación queda congelada.
+      if(l && l._animLoadPromise) _fillLoadPromises.push(l._animLoadPromise);
     }));
     const _doPushHistory = () => {
       edPushHistory(true);
       // Sincronizar el marcador de "guardado" con el snapshot inicial,
       // para que salir sin hacer cambios no pregunte si guardar.
       _edSavedHistoryIdx = edHistoryIdx;
+      // Liberar el flag aquí si hubo callbacks async (fills pendientes)
+      if (_fillLoadPromises.length) _edLoadProjectInProgress = false;
     };
     if(_fillLoadPromises.length) {
-      Promise.all(_fillLoadPromises).then(_doPushHistory);
+      // Mantener el flag activo hasta que los fills carguen y el historial se inicialice
+      Promise.all(_fillLoadPromises).then(_doPushHistory).catch(() => {
+        _doPushHistory(); // push aunque fallen los fills
+      });
     } else {
       _doPushHistory();
     }
-    setTimeout(()=>{
+    window._edLoadResetTimer2 = setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
       // Snapshot inicial — esperamos que strokes e imágenes hayan cargado
@@ -15236,6 +15692,14 @@ async function edLoadProject(id){
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
   window._edLoadingProject = false;
+  } catch(_le) {
+    console.error('edLoadProject error:', _le);
+    edToast('⚠️ Error al cargar la obra');
+    _edLoadProjectInProgress = false; // liberar solo en error
+  }
+  // En éxito: el flag se libera en _doPushHistory si hay fills async,
+  // o inmediatamente si no hay fills pendientes
+  if (!_fillLoadPromises?.length) _edLoadProjectInProgress = false;
 }
 
 /* ══════════════════════════════════════════
@@ -15260,16 +15724,19 @@ function _edGifSetPlaying(playing) {
         }
       }
       // Animación PNG (APNG desde biblioteca, importado, o descargado de nube)
-      if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc)) {
+      // _animReady cubre el caso de frames externalizados a IDB y ya decodificados en memoria
+      if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady)) {
         if (playing) {
           l._fIdx = 0;
           l._gcpPlayCount = 0;
           l._playing = true;
-          // _apngSrc (descarga de nube) tiene prioridad — decodeApng extrae N frames
-          l.loadAnim(l._apngSrc || l._pngFrames, () => {
-            // Poblar _pngFrames con la longitud real para futuros ciclos
-            if (l._playing) l._applyFrame(0);
-          });
+          if (l._animReady && l._animFrames && l._animFrames.length > 0) {
+            l._applyFrame(0); // frames ya decodificados — arrancar directamente
+          } else if (l._apngSrc || l._pngFrames) {
+            l.loadAnim(l._apngSrc || l._pngFrames, () => {
+              if (l._playing) l._applyFrame(0);
+            });
+          }
         } else {
           l.stopAnim();
         }
@@ -15736,13 +16203,21 @@ function _edStartPageAnims(pageIdx) {
       l._playing = true;
       l._applyFrame(0);
     }
-    if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc)) {
+    if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady)) {
       l._fIdx = 0;
       l._gcpPlayCount = 0;
       l._playing = true;
-      l.loadAnim(l._apngSrc || l._pngFrames, () => {
-        if (l._playing) l._applyFrame(0);
-      });
+      // Si los frames ya están decodificados en memoria (_animReady), arrancar directamente.
+      // Si no, loadAnim los decodifica (desde _apngSrc o _pngFrames en memoria).
+      // En v26+ los frames se externalizan a IDB y se decodifican via _animLoadPromise,
+      // por lo que _animReady=true pero _pngFrames y _apngSrc pueden ser null.
+      if (l._animReady && l._animFrames && l._animFrames.length > 0) {
+        l._applyFrame(0);
+      } else if (l._apngSrc || l._pngFrames) {
+        l.loadAnim(l._apngSrc || l._pngFrames, () => {
+          if (l._playing) l._applyFrame(0);
+        });
+      }
     }
   });
 }
@@ -15843,6 +16318,9 @@ function edInitViewerTap(){
 }
 function edCloseViewer(){
   _edGifSetPlaying(false); // detener animación GIF al salir del visor
+  // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
+  _edViewerFullCanvas = null;
+  _edViewerFullCtx    = null;
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');
@@ -15879,6 +16357,11 @@ function edCloseViewer(){
     _viewerFsFn = null;
   }
 }
+// Canvas de trabajo reutilizable para edUpdateViewer — evita crear 1800x2340 en cada frame.
+// Se crea una sola vez y se reutiliza mientras el visor esté abierto (crítico en Android).
+let _edViewerFullCanvas = null;
+let _edViewerFullCtx    = null;
+
 function edUpdateViewer(){
   if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
@@ -15890,10 +16373,16 @@ function edUpdateViewer(){
   const my = (ED_CANVAS_H - ph) / 2;  // margen Y para esta orientación
   // Ajustar canvas del visor para esta hoja
   edUpdateViewerSize(pw, ph);
-  // Canvas de trabajo con margen (igual que el editor)
-  const full=document.createElement('canvas');
-  full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
-  const fctx=full.getContext('2d');
+  // Canvas de trabajo reutilizable — nunca crear uno nuevo por frame en Android
+  if (!_edViewerFullCanvas) {
+    _edViewerFullCanvas = document.createElement('canvas');
+    _edViewerFullCanvas.width  = ED_CANVAS_W;
+    _edViewerFullCanvas.height = ED_CANVAS_H;
+    _edViewerFullCtx = _edViewerFullCanvas.getContext('2d');
+  }
+  const full = _edViewerFullCanvas;
+  const fctx = _edViewerFullCtx;
+  fctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
   fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
   // Renderizar capas: temporalmente setear edOrientation para que draw() funcione
   // (draw() usa edMarginX/edPageW internamente)
@@ -16494,6 +16983,10 @@ function EditorView_destroy(){
     window._edPageHideFn = null;
   }
   _edAutosaveStop();
+  // Cancelar timers de reset de cámara pendientes de la carga anterior
+  // para evitar que se disparen cuando ya estamos en otra vista
+  if (window._edLoadResetTimer) { clearTimeout(window._edLoadResetTimer); window._edLoadResetTimer = null; }
+  if (window._edLoadResetTimer2) { clearTimeout(window._edLoadResetTimer2); window._edLoadResetTimer2 = null; }
   sessionStorage.removeItem('cx_editing');
 }
 async function edSaveProjectModal(){
@@ -16565,13 +17058,26 @@ async function edSaveProjectModal(){
       }
     }
 
-    // Copiar biblioteca de la obra original a la nueva (independientes desde ahora)
-    try {
-      const _oldBibKey = _BIB_KEY_PREFIX + '_' + edProjectId;
-      const _newBibKey = _BIB_KEY_PREFIX + '_' + _newId;
-      const _oldBib = localStorage.getItem(_oldBibKey);
-      if (_oldBib) localStorage.setItem(_newBibKey, _oldBib);
-    } catch(e) {}
+    // Migrar biblioteca al nuevo ID — la biblioteca real está en IDB, no localStorage
+    const _oldBibId = edProjectId;
+    const _newBibId = _newId;
+    // Migrar en IDB (ruta principal)
+    _bibOpenIdb().then(db => {
+      const _oldKey = _BIB_KEY_PREFIX + '_' + _oldBibId;
+      const _newKey = _BIB_KEY_PREFIX + '_' + _newBibId;
+      const tx = db.transaction('bib', 'readwrite');
+      const store = tx.objectStore('bib');
+      const req = store.get(_oldKey);
+      req.onsuccess = () => {
+        if (req.result) {
+          store.put(req.result, _newKey); // copiar al nuevo ID
+          // NO borrar el antiguo aquí — edSaveProject actualizará _bibCache con el nuevo ID
+        }
+      };
+    }).catch(() => {});
+    // También migrar _bibCache en memoria
+    // (_bibCache ya tiene los datos correctos, edSaveProject los guardará con el nuevo key
+    // porque edProjectId ya será _newId cuando se llame _bibSave)
 
     // Cambiar al nuevo id
     edProjectId = _newId;
@@ -16675,11 +17181,15 @@ function EditorView_init(){
 
   const editId=sessionStorage.getItem('cx_edit_id');
   if(!editId){Router.go('my-comics');return;}
-  edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
-
-  // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
-  edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  // edLoadProject es async: encadenar con .then() para que edSetOrientation
+  // se ejecute DESPUÉS de que los datos estén cargados.
+  // En Android el microtask de IndexedDB tarda más que en PC, por lo que
+  // sin await edPages[0] todavía está vacío cuando se llama edSetOrientation.
+  edLoadProject(editId).then(() => {
+    // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
+    edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  });
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
@@ -16774,7 +17284,12 @@ function EditorView_init(){
     }
 
     const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
-    if (!hasUnsaved) { Router.go('my-comics'); return; }
+    if (!hasUnsaved) {
+      // Esperar a que biblioteca IDB haya completado antes de salir
+      if (typeof _bibFlush === 'function') _bibFlush().then(() => Router.go('my-comics'));
+      else Router.go('my-comics');
+      return;
+    }
 
     // Hay cambios sin guardar — preguntar
     const isNew = !ComicStore.getById(edProjectId)?.updatedAt ||
@@ -16797,23 +17312,58 @@ function EditorView_init(){
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
 
-    document.getElementById('_edExitYes').onclick = () => {
+    document.getElementById('_edExitYes').onclick = async () => {
       dlg.remove();
       _edAutosaveClear(); // salida controlada → borrar autosave
-      edSaveProject();
+      await edSaveProject();
+      // Esperar a que biblioteca IDB complete
+      if (typeof _bibFlush === 'function') await _bibFlush();
+      // La versión local es ahora la canónica — limpiar backup de versión de nube
+      if (edProjectId) {
+        const _cSave = ComicStore.getById(edProjectId);
+        if (_cSave && _cSave.localEditorData) {
+          ComicStore.save({ ..._cSave, localEditorData: null });
+        }
+        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
+      }
       Router.go('my-comics');
     };
-    document.getElementById('_edExitNo').onclick = () => {
+    document.getElementById('_edExitNo').onclick = async () => {
       dlg.remove();
-      _edAutosaveClear(); // salida controlada sin guardar → borrar autosave
+      // Cancelar timer de huérfanos si está pendiente — la limpieza la hacemos nosotros
+      if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
+      // Limpiar todos los datos temporales ANTES de navegar
+      await _edAutosaveClear(); // borrar autosave (async IDB)
+      if (edProjectId) {
+        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
+        const _cNoSave = ComicStore.getById(edProjectId);
+        if (_cNoSave && _cNoSave.localEditorData) {
+          ComicStore.save({ ..._cNoSave, localEditorData: null });
+        }
+      }
       // Si era obra nueva sin guardado previo, eliminarla
       if (isNew && edProjectId) {
         ComicStore.remove(edProjectId);
+        // Borrar OPFS de la obra nueva si existe
+        try {
+          if (navigator.storage?.getDirectory) {
+            const _user = Auth?.currentUser?.();
+            if (_user) {
+              const _uid = String(_user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+              const _root = await navigator.storage.getDirectory();
+              const _base = await _root.getDirectoryHandle('comixou', { create: false }).catch(() => null);
+              const _uDir = _base ? await _base.getDirectoryHandle(_uid, { create: false }).catch(() => null) : null;
+              if (_uDir) await _uDir.removeEntry(edProjectId + '.json').catch(() => {});
+            }
+          }
+        } catch(_) {}
       } else {
         // Restaurar último estado guardado
         const saved = ComicStore.getById(edProjectId);
         if (saved) edLoadProject(edProjectId);
       }
+      // Navegar — el detector de huérfanos en my-comics se lanzará con delay normal
+      // pero ya no habrá nada que detectar
       Router.go('my-comics');
     };
   });
@@ -17850,6 +18400,48 @@ function EditorView_init(){
 /* ── DESCARGAR / CARGAR JSON ── */
 // Exportar la hoja actual como PNG o JPG
 // Renderiza en canvas offscreen con transform z=1, desplazado al origen de la página
+
+// ── Descarga con File System Access API (showSaveFilePicker) en PC ────────
+// Usa el diálogo nativo del SO si está disponible (Chrome/Edge desktop).
+// Fallback automático a <a>.click() en Android, Firefox y Safari.
+async function _edSaveBlob(blob, suggestedName, mimeType) {
+  // showSaveFilePicker: disponible en Chrome/Edge desktop (no en Android Chrome)
+  const _supportsFilePicker = (
+    typeof window.showSaveFilePicker === 'function' &&
+    !navigator.maxTouchPoints // excluir táctil (Android/tablet)
+  );
+  if (_supportsFilePicker) {
+    const ext = suggestedName.split('.').pop().toLowerCase();
+    const _typeMap = {
+      png:  [{description:'Imagen PNG', accept:{'image/png':['.png']}}],
+      jpg:  [{description:'Imagen JPEG', accept:{'image/jpeg':['.jpg','.jpeg']}}],
+      jpeg: [{description:'Imagen JPEG', accept:{'image/jpeg':['.jpg','.jpeg']}}],
+      gif:  [{description:'GIF animado', accept:{'image/gif':['.gif']}}],
+      mp4:  [{description:'Vídeo MP4', accept:{'video/mp4':['.mp4']}}],
+    };
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: _typeMap[ext] || [{description:'Archivo', accept:{[mimeType]:['.'+ext]}}],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true; // descargado con éxito via picker
+    } catch(e) {
+      if (e.name === 'AbortError') return true; // usuario canceló → no hacer fallback
+      // Cualquier otro error: caer al método clásico
+    }
+  }
+  // Fallback: <a>.click()
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = suggestedName;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+  return false;
+}
+
 function edExportPagePNG(format){
   format = format || 'png';
   edSaveProject();
@@ -17908,16 +18500,11 @@ function edExportPagePNG(format){
   // Descargar
   const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format === 'jpg' ? 0.92 : undefined;
-  off.toBlob(blob => {
+  off.toBlob(async blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const url   = URL.createObjectURL(blob);
-    const a     = document.createElement('a');
     const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
     const pg    = edCurrentPage + 1;
-    a.href      = url;
-    a.download  = `${title}_hoja${pg}.${format}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    await _edSaveBlob(blob, `${title}_hoja${pg}.${format}`, mimeType);
     edToast(`Hoja ${pg} exportada ✓`);
   }, mimeType, quality);
 }
@@ -17992,14 +18579,10 @@ function edExportSelectionPNG(format) {
 
   const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format==='jpg' ? 0.92 : undefined;
-  off.toBlob(blob => {
+  off.toBlob(async blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const url = URL.createObjectURL(blob);
-    const a   = document.createElement('a');
-    a.href    = url;
-    a.download = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
+    await _edSaveBlob(blob, _selName, mimeType);
     edToast('Selección exportada ✓');
   }, mimeType, quality);
 }
@@ -18031,12 +18614,24 @@ const _BIB_IDB_NAME  = 'cxBiblioteca';
 const _BIB_IDB_STORE = 'bib';
 let _bibCache = null; // caché en memoria, siempre actualizada
 
+// Singleton de conexión IDB para la biblioteca — evita bloqueos por múltiples aperturas
+// simultáneas en Android Chrome (el patrón no-singleton causaba IDB 'blocked' silencioso).
+// onversionchange/onclose invalidan la referencia cuando el SW nuevo toma control (clients.claim),
+// forzando reapertura en la siguiente operación en lugar de usar una conexión cerrada.
+let _bibDb = null;
 function _bibOpenIdb() {
+  if (_bibDb) return Promise.resolve(_bibDb);
   return new Promise((res, rej) => {
     const r = indexedDB.open(_BIB_IDB_NAME, 1);
     r.onupgradeneeded = e => e.target.result.createObjectStore(_BIB_IDB_STORE);
-    r.onsuccess = e => res(e.target.result);
-    r.onerror   = () => rej(r.error);
+    r.onsuccess = e => {
+      _bibDb = e.target.result;
+      // Invalidar singleton si el SW cierra/actualiza la IDB
+      _bibDb.onversionchange = () => { _bibDb.close(); _bibDb = null; };
+      _bibDb.onclose        = () => { _bibDb = null; };
+      res(_bibDb);
+    };
+    r.onerror = () => rej(r.error);
   });
 }
 
@@ -18102,11 +18697,44 @@ async function _bibInitIdb(supabaseWorkId) {
       resolve();
     };
   }).catch(() => {
+    // IDB falló — puede ser modo incógnito real O un error transitorio (IDB bloqueada,
+    // interrupción del SW, etc.). Usar OPFS como detector fiable: si navigator.storage
+    // no existe o getDirectory no existe, ESO sí indica modo incógnito real.
+    const _realIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
+    _bibIdbUnavailable = _realIncognito; // solo true si es incógnito real
     _bibCache = { folders: [
       { id: '__root__', name: 'General', items: [] },
       { id: '__anim__', name: 'Animaciones', items: [] }
     ]};
-    resolve();
+    // Intentar cargar de Supabase en memoria
+    const _user3 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+    if (_user3 && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
+      SupabaseClient.bibDownload(_user3.id, supabaseWorkId).then(downloaded => {
+        if (downloaded && Array.isArray(downloaded.folders) &&
+            downloaded.folders.some(f => f.items && f.items.length > 0)) {
+          _bibCache = downloaded;
+          if (!_realIncognito) {
+            // IDB tuvo un error transitorio pero sí existe — intentar guardar ahora
+            _bibSave(_bibCache);
+          }
+        }
+        // Solo mostrar aviso si es incógnito real
+        if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
+          _edShowIncognitoWarning('Modo incógnito: la biblioteca y animaciones se cargan en memoria y no se guardarán entre sesiones. Para guardar cambios, abre la app en modo normal.');
+        }
+        resolve();
+      }).catch(() => {
+        if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
+          _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible en este modo. Abre la app en modo normal para acceder a ella.');
+        }
+        resolve();
+      });
+    } else {
+      if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
+        setTimeout(() => _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible. Abre la app en modo normal para acceder a ella.'), 1500);
+      }
+      resolve();
+    }
   });
   }); // cierre new Promise
 }
@@ -18126,14 +18754,40 @@ function _bibLoad() {
   return _bibCache;
 }
 
-// Persiste en IDB en background; actualiza el caché de forma síncrona
+// Persiste en IDB; retorna Promise para poder awaitar si es necesario.
+// En modo incógnito (IDB no disponible), solo actualiza el caché en memoria.
+let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
+let _bibIncognitoChanged = false; // cambios pendientes de subir en modo incógnito
+let _bibSavePromise = null; // última operación de guardado pendiente
 function _bibSave(data) {
   _bibCache = data; // actualizar caché inmediatamente
-  _bibOpenIdb().then(db => {
-    const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
-    tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
-    tx.onerror = () => edToast('⚠️ Error al guardar en biblioteca');
-  }).catch(() => edToast('⚠️ Error al guardar en biblioteca'));
+  if (_bibIdbUnavailable) {
+    _bibIncognitoChanged = true;
+    if (typeof _edShowIncognitoWarning === 'function') {
+      _edShowIncognitoWarning('Los cambios en la biblioteca solo se guardarán si subes la obra a la nube. Pulsa el botón ☁️ para guardar.');
+    }
+    return Promise.resolve();
+  }
+  _bibSavePromise = _bibOpenIdb().then(db => {
+    return new Promise((res, rej) => {
+      const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+      tx.oncomplete = () => res();
+      tx.onerror = () => res(); // silencioso
+      tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
+    });
+  }).catch(() => {
+    // IDB falló — puede ser transitorio (SW tomó control, versionchange).
+    // Invalidar singleton para forzar reapertura en el siguiente intento.
+    // Solo marcar _bibIdbUnavailable si OPFS tampoco existe (incógnito real).
+    _bibDb = null;
+    const _realIncognito2 = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
+    if (_realIncognito2) _bibIdbUnavailable = true;
+  });
+  return _bibSavePromise;
+}
+// Esperar a que la última escritura de biblioteca en IDB complete
+async function _bibFlush() {
+  if (_bibSavePromise) { try { await _bibSavePromise; } catch(_) {} }
 }
 // Exposición global para my-comics.js y otros módulos externos
 window._bibSave = _bibSave;
@@ -18218,7 +18872,19 @@ function _bibGetAnimFolder(data) {
 
 // ── Guardar objeto o grupo ────────────────────────────────────────
 function edBibGuardar() {
+  // Asegurar que _bibCache y carpeta General existen (obra nueva sin IDB inicializada)
+  if (!_bibLoad()) {
+    _bibCache = { folders: [
+      { id: '__root__', name: 'General', items: [] },
+      { id: '__anim__', name: 'Animaciones', items: [] }
+    ]};
+  }
   const data = _bibLoad();
+  if (!data || !Array.isArray(data.folders)) { edToast('Error al acceder a la biblioteca'); return; }
+  if (!data.folders.find(f => f.id === '__root__')) {
+    data.folders.unshift({ id: '__root__', name: 'General', items: [] });
+    _bibSave(data);
+  }
   if (_BIB_MAX_BYTES > 0 && _bibUsedBytes(data) >= _BIB_MAX_BYTES) {
     edToast(`Biblioteca llena (${_bibFormatSize(_bibUsedBytes(data))} / ${_bibFormatSize(_BIB_MAX_BYTES)}). Elimina algún objeto para añadir más.`, 3500);
     return;
@@ -18441,7 +19107,7 @@ function _bibRenderPanel(panel) {
     <button id="_bib-btn-folder" style="flex-shrink:0;border:none;background:transparent;font-size:.75rem;font-weight:700;cursor:pointer;color:var(--gray-600);padding:3px 6px;border-radius:5px;white-space:nowrap">+ Carpeta</button>
     <span style="flex:1"></span>
     <span style="font-size:.72rem;color:var(--gray-500)">${_bibFormatSize(total)} / ${_bibFormatSize(_BIB_MAX_BYTES)}</span>
-    <button id="_bib-close-btn" style="border:none;background:transparent;font-size:1rem;cursor:pointer;color:var(--gray-500);padding:2px 4px;line-height:1">✕</button>
+    <button id="_bib-close-btn" style="border:none;background:transparent;font-size:1rem;cursor:pointer;color:var(--blue-500,#3b82f6);padding:2px 4px;line-height:1">✕</button>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>`;
 
@@ -18626,7 +19292,7 @@ function _bibRenderPanel(panel) {
               _img2.onload = function() {
                 const pw=edPageW(), ph=edPageH();
                 let fW=entry.normW||0.7, fH=entry.normH||fW*(_img2.naturalHeight/Math.max(_img2.naturalWidth,1))*(pw/ph);
-                const sc2=Math.max(fW/0.9,fH/0.9,1); fW/=sc2; fH/=sc2;
+                // normW/normH ya refleja el tamaño real en el GCP — no reducir
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
@@ -18639,7 +19305,7 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpFrameDelay!=null) la2._gcpFrameDelay=entry.gcpFrameDelay;
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd) la2._gcpStopAtEnd=true;
-                const _k2='anim_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
+                const _k2=_edAnimKey('bib_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8));
                 la2.animKey=_k2;
                 if(window._sbAnimIdbSave) window._sbAnimIdbSave(_k2,entry.apngSrc||_frames2).catch(function(){});
                 const fi2=edLayers.findIndex(l=>l.type==='text'||l.type==='bubble');
@@ -18663,8 +19329,7 @@ function _bibRenderPanel(panel) {
           const pw = edPageW(), ph = edPageH();
           let finalW = entry.normW || 0.7;
           let finalH = entry.normH || finalW*(img.naturalHeight/Math.max(img.naturalWidth,1))*(pw/ph);
-          const sc = Math.max(finalW/0.9, finalH/0.9, 1);
-          finalW /= sc; finalH /= sc;
+          // normW/normH ya refleja el tamaño real en el GCP — no reducir
           const la = new ImageLayer(img, 0.5, 0.5, finalW);
           la.height = finalH;
           // src debe ser el primer frame PNG (pequeño) para layer_data en Supabase
@@ -18688,7 +19353,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
-          const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+          const _bibAnimKey = _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
           la.animKey = _bibAnimKey;
           if (window._sbAnimIdbSave) {
             // Guardar en IDB: si apngSrc usar string, sino array de frames
@@ -19038,26 +19703,56 @@ let _gs = null;
 // _gcpWithEditorContext: ejecuta fn() con edLayers/edSelectedIdx/edCanvas/edCtx
 // apuntando al GIF. Desactiva _gcpActive para evitar loop en _edDocDownFn.
 function _gcpWithEditorContext(fn) {
-  const savedLayers = edLayers,  savedSel    = edSelectedIdx;
-  const savedCanvas = edCanvas,  savedCtx    = edCtx;
+  const savedLayers = edLayers,  savedSel     = edSelectedIdx;
+  const savedCanvas = edCanvas,  savedCtx     = edCtx;
   const savedActive = window._gcpActive;
   const savedOvrd   = window._edRedrawOverride;
+  // Guardar estado multiselección del editor
+  const savedMultiSel   = edMultiSel,    savedMultiBbox  = edMultiBbox;
+  const savedMultiGRot  = edMultiGroupRot;
+  const savedMultiDrag  = edMultiDragging,  savedMultiRes = edMultiResizing;
+  const savedMultiRot   = edMultiRotating,  savedMultiTr  = edMultiTransform;
+  const savedMultiDOffs = edMultiDragOffs,  savedActTool  = edActiveTool;
   let selAfter = window._gcpSelIdx;
   try {
     edLayers      = window._gcpLayers;
     edSelectedIdx = window._gcpSelIdx;
     edCanvas      = gcpCanvas;
     edCtx         = gcpCtx;
+    // Inyectar estado multiselección del GCP en las variables del editor
+    edMultiSel       = window._gcpMultiSel    || [];
+    edMultiBbox      = window._gcpMultiBbox   || null;
+    edMultiGroupRot  = window._gcpMultiGroupRot || 0;
+    edMultiDragging  = window._gcpMultiDragging || false;
+    edMultiResizing  = window._gcpMultiResizing || false;
+    edMultiRotating  = window._gcpMultiRotating || false;
+    edMultiTransform = window._gcpMultiTransform || null;
+    edMultiDragOffs  = window._gcpMultiDragOffs  || [];
+    if (edMultiSel.length >= 2) edActiveTool = 'multiselect';
     window._gcpActive        = false;
     window._edRedrawOverride = true;
     fn();
-    selAfter = edSelectedIdx; // capturar selección modificada dentro del contexto
+    selAfter = edSelectedIdx;
+    // Capturar estado multiselección actualizado
+    window._gcpMultiSel      = edMultiSel;
+    window._gcpMultiBbox     = edMultiBbox;
+    window._gcpMultiGroupRot = edMultiGroupRot;
+    window._gcpMultiDragging = edMultiDragging;
+    window._gcpMultiResizing = edMultiResizing;
+    window._gcpMultiRotating = edMultiRotating;
+    window._gcpMultiTransform= edMultiTransform;
+    window._gcpMultiDragOffs = edMultiDragOffs;
   } finally {
     edLayers      = savedLayers;  edSelectedIdx = savedSel;
     edCanvas      = savedCanvas;  edCtx         = savedCtx;
+    edMultiSel    = savedMultiSel;   edMultiBbox     = savedMultiBbox;
+    edMultiGroupRot = savedMultiGRot;
+    edMultiDragging = savedMultiDrag; edMultiResizing = savedMultiRes;
+    edMultiRotating = savedMultiRot;  edMultiTransform= savedMultiTr;
+    edMultiDragOffs = savedMultiDOffs; edActiveTool   = savedActTool;
     window._gcpActive        = savedActive;
     window._edRedrawOverride = savedOvrd;
-    window._gcpSelIdx = selAfter; // usar el valor de dentro del contexto
+    window._gcpSelIdx = selAfter;
   }
 }
 
@@ -19071,8 +19766,12 @@ let _gcpLastTapTime2 = 0, _gcpLastTapIdx2 = -1;
 // toque sobre el objeto recién insertado se interprete erróneamente como doble tap.
 function _gcpPushLayer(la) {
   window._gcpLayers.push(la);
-  _gcpLastTapTime2 = 0;
-  _gcpLastTapIdx2 = -1;
+  // Resetear AMBOS sistemas de doble tap al insertar un objeto.
+  // Sin esto, el primer toque sobre el objeto recién insertado puede disparar el doble tap
+  // si el tap de inserción ocurrió hace menos de 380ms en una posición cercana.
+  _gcpLastTapTime  = 0;  // sistema 1: pointerdown con delta tiempo+posición
+  _gcpLastTapTime2 = 0;  // sistema 2: pointerup sobre mismo objeto
+  _gcpLastTapIdx2  = -1;
   // Limpiar pointers fantasma que pudieran quedar del gesto de inserción
   _gcpPtrMap.clear();
   _gcpPinching = false; _gcpPinchDist0 = 0; _gcpPinchObj = null; _gcpSelBeforePinch = -1;
@@ -19080,6 +19779,107 @@ function _gcpPushLayer(la) {
 let _gcpPinchObj      = null;  // snapshot del objeto al iniciar pinch
 let _gcpPinchAngle0  = 0;     // ángulo inicial del pinch para rotación
 let _gcpSelBeforePinch = -1;  // selección antes del primer dedo (para restaurar en pinch)
+
+// ── GCP Multiselección independiente del editor general ──────────────────
+function _gcpRecalcMultiBbox() {
+  if (!window._gcpMultiSel || !window._gcpMultiSel.length) { window._gcpMultiBbox = null; return; }
+  const pw = edPageW(), ph = edPageH();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  window._gcpMultiSel.forEach(i => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    const hw = la.width/2, hh = la.height/2;
+    const rot = (la.rotation||0)*Math.PI/180;
+    [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]].forEach(([dx,dy]) => {
+      const wx = la.x + (dx*pw*Math.cos(rot) - dy*ph*Math.sin(rot))/pw;
+      const wy = la.y + (dx*pw*Math.sin(rot) + dy*ph*Math.cos(rot))/ph;
+      minX = Math.min(minX, wx); minY = Math.min(minY, wy);
+      maxX = Math.max(maxX, wx); maxY = Math.max(maxY, wy);
+    });
+  });
+  window._gcpMultiBbox = { cx:(minX+maxX)/2, cy:(minY+maxY)/2, w:maxX-minX, h:maxY-minY, rot:0 };
+}
+
+function _gcpMultiHandles(bb) {
+  const hw = bb.w/2, hh = bb.h/2;
+  const cx = bb.cx, cy = bb.cy;
+  return [
+    {x:cx-hw, y:cy-hh, c:'tl'}, {x:cx,    y:cy-hh, c:'tm'}, {x:cx+hw, y:cy-hh, c:'tr'},
+    {x:cx+hw, y:cy,    c:'mr'}, {x:cx+hw, y:cy+hh, c:'br'}, {x:cx,    y:cy+hh, c:'bm'},
+    {x:cx-hw, y:cy+hh, c:'bl'}, {x:cx-hw, y:cy,    c:'ml'},
+  ];
+}
+
+function _gcpDrawMultiSel() {
+  if (!window._gcpMultiBbox || !window._gcpMultiSel || !window._gcpMultiSel.length) return;
+  const bb = window._gcpMultiBbox;
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const mx = edMarginX(), my = edMarginY();
+  const lw = 1/z, hr = 6/z, hrRot = 8/z;
+  // Dimensiones visuales del bbox (durante resize se escalan)
+  const bw = bb.w * pw * (window._gcpMultiTransform?._curSx ?? 1);
+  const bh = bb.h * ph * (window._gcpMultiTransform?._curSy ?? 1);
+  const grRad = (window._gcpMultiGroupRot || 0) * Math.PI / 180;
+  const gcx = mx + bb.cx * pw;
+  const gcy = my + bb.cy * ph;
+
+  gcpCtx.save();
+
+  // Contornos individuales
+  for (const i of window._gcpMultiSel) {
+    const la = window._gcpLayers[i]; if (!la) continue;
+    const rot = (la.rotation || 0) * Math.PI / 180;
+    const cx2 = mx + la.x * pw, cy2 = my + la.y * ph;
+    const w2 = la.width * pw, h2 = la.height * ph;
+    gcpCtx.save();
+    gcpCtx.translate(cx2, cy2); gcpCtx.rotate(rot);
+    gcpCtx.strokeStyle = 'rgba(26,140,255,0.4)';
+    gcpCtx.lineWidth = lw; gcpCtx.setLineDash([4/z, 3/z]);
+    gcpCtx.strokeRect(-w2/2, -h2/2, w2, h2);
+    gcpCtx.setLineDash([]);
+    gcpCtx.restore();
+  }
+
+  // Bbox colectivo con rotate (igual que edDrawMultiSel)
+  gcpCtx.save();
+  gcpCtx.translate(gcx, gcy);
+  gcpCtx.rotate(grRad);
+
+  // Marco del bbox
+  gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = 1.5/z;
+  gcpCtx.setLineDash([6/z, 3/z]);
+  gcpCtx.strokeRect(-bw/2, -bh/2, bw, bh);
+  gcpCtx.setLineDash([]);
+
+  // Handles de escala (en espacio local)
+  const corners = [
+    [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
+    [0,-bh/2],[0,bh/2],[-bw/2,0],[bw/2,0],
+  ];
+  for (const [hx, hy] of corners) {
+    gcpCtx.beginPath(); gcpCtx.arc(hx, hy, hr, 0, Math.PI*2);
+    gcpCtx.fillStyle = '#fff'; gcpCtx.fill();
+    gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw*1.5; gcpCtx.stroke();
+  }
+
+  // Handle de rotación — línea + círculo + flecha (idéntico a edDrawMultiSel)
+  const rotY = -bh/2 - 28/z;
+  gcpCtx.beginPath(); gcpCtx.moveTo(0, -bh/2); gcpCtx.lineTo(0, rotY + hrRot);
+  gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw; gcpCtx.stroke();
+  gcpCtx.beginPath(); gcpCtx.arc(0, rotY, hrRot, 0, Math.PI*2);
+  gcpCtx.fillStyle = '#1a8cff'; gcpCtx.fill();
+  gcpCtx.strokeStyle = '#fff'; gcpCtx.lineWidth = lw*1.5; gcpCtx.stroke();
+  const ar = hrRot * 0.55;
+  gcpCtx.strokeStyle = '#fff'; gcpCtx.lineWidth = lw*1.5;
+  gcpCtx.beginPath(); gcpCtx.arc(0, rotY, ar, -Math.PI*0.9, Math.PI*0.5); gcpCtx.stroke();
+  const ax = ar * Math.cos(Math.PI*0.5), ay = rotY + ar * Math.sin(Math.PI*0.5);
+  gcpCtx.beginPath();
+  gcpCtx.moveTo(ax, ay); gcpCtx.lineTo(ax-3/z, ay-5/z);
+  gcpCtx.moveTo(ax, ay); gcpCtx.lineTo(ax+4/z, ay-3/z);
+  gcpCtx.stroke();
+
+  gcpCtx.restore();
+  gcpCtx.restore();
+}
 
 function _gcpHandleDown(e) {
   // ── DETECCIÓN DE DOBLE TAP: debe ser lo primero, antes de handles/drag ──
@@ -19198,8 +19998,10 @@ function _gcpHandleDown(e) {
   // Registrar pointer en mapa propio del GCP
   _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // Dos dedos → pinch
+  // Dos dedos → pinch (cancelar rubber band si estaba pendiente)
   if (_gcpPtrMap.size === 2) {
+    if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
+    if (window._gcpRubberBand) { window._gcpRubberBand = null; }
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     const _pts = [..._gcpPtrMap.values()];
     _gcpPinchDist0  = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
@@ -19223,6 +20025,102 @@ function _gcpHandleDown(e) {
     _gcpRedraw(); return;
   }
 
+  // ── Multiselect activo: hit-test con misma geometría que edOnStart ──────
+  if (window._gcpMultiSel && window._gcpMultiSel.length >= 2 && window._gcpMultiBbox) {
+    const bb = window._gcpMultiBbox;
+    const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+    const grRad = (window._gcpMultiGroupRot || 0) * Math.PI / 180;
+    const _isT = e.pointerType === 'touch';
+    const hitR = _isT ? 22 : 14;
+    let _gcpHandled = false;
+
+    // ── Handle rotación (misma fórmula que edOnStart) ──
+    const _offWs = bb.h * ph / 2 + 28 / z;
+    const rotHx = bb.cx + Math.sin(grRad) * _offWs / pw;
+    const rotHy = bb.cy - Math.cos(grRad) * _offWs / ph;
+    if (Math.hypot((c.nx - rotHx)*pw, (c.ny - rotHy)*ph) < hitR) {
+      _gcpWithEditorContext(() => {
+        edMultiRotating = true;
+        edMultiTransform = {
+          items: edMultiSel.map(i => { const la=edLayers[i]; return la?{i,x:la.x,y:la.y,rot:la.rotation||0}:null; }).filter(Boolean),
+          cx: bb.cx, cy: bb.cy,
+          startAngle: Math.atan2(c.ny - bb.cy, c.nx - bb.cx),
+          startGroupRot: edMultiGroupRot || 0,
+        };
+      });
+      _gcpHandled = true;
+    }
+
+    // ── Handles de escala: desrotar cursor al espacio local del bbox (igual que edOnStart) ──
+    if (!_gcpHandled) {
+      const cg = Math.cos(-grRad), sg = Math.sin(-grRad);
+      const dcxPx = (c.nx - bb.cx)*pw, dcyPx = (c.ny - bb.cy)*ph;
+      const lxCur = bb.cx + (dcxPx*cg - dcyPx*sg)/pw;
+      const lyCur = bb.cy + (dcxPx*sg + dcyPx*cg)/ph;
+      for (const p of _msHandles(bb)) {
+        if (Math.hypot((lxCur - p.x)*pw, (lyCur - p.y)*ph) < hitR) {
+          _gcpWithEditorContext(() => {
+            edMultiResizing = true;
+            edMultiTransform = {
+              items: edMultiSel.map(i => { const la=edLayers[i]; return la?{i,x:la.x,y:la.y,w:la.width,h:la.height,rot:la.rotation||0}:null; }).filter(Boolean),
+              bb: { cx:bb.cx, cy:bb.cy, w:bb.w, h:bb.h },
+              corner: p.c,
+              sx: lxCur, sy: lyCur,
+              groupRot: edMultiGroupRot || 0,
+              _curSx: 1, _curSy: 1,
+            };
+          });
+          _gcpHandled = true; break;
+        }
+      }
+    }
+
+    // ── Hit dentro del bbox → drag (desrotado, igual que edOnStart) ──
+    if (!_gcpHandled) {
+      const cg2 = Math.cos(-grRad), sg2 = Math.sin(-grRad);
+      const ddxPx = (c.nx - bb.cx)*pw, ddyPx = (c.ny - bb.cy)*ph;
+      const lxD = (ddxPx*cg2 - ddyPx*sg2)/pw;
+      const lyD = (ddxPx*sg2 + ddyPx*cg2)/ph;
+      if (Math.abs(lxD) <= bb.w/2 && Math.abs(lyD) <= bb.h/2) {
+        _gcpWithEditorContext(() => {
+          edMultiDragging = true;
+          edMultiDragOffs = edMultiSel.map(i => {
+            const la=edLayers[i]; return la ? {dx:c.nx-la.x, dy:c.ny-la.y} : {dx:0,dy:0};
+          });
+        });
+        _gcpHandled = true;
+      }
+    }
+
+    if (_gcpHandled) { _gcpRedraw(); return; }
+
+    // ── Fuera del bbox: Shift+clic (PC) → toggle; sin Shift → rubber band ──
+    window._gcpMultiSel = []; window._gcpMultiBbox = null;
+    if (e.shiftKey && e.pointerType !== 'touch') {
+      let _sfound = -1;
+      for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
+        const _l = window._gcpLayers[_i];
+        if (_l && _l._gcpVisible !== false && !_l.locked && _l.contains?.(c.nx, c.ny)) { _sfound = _i; break; }
+      }
+      if (_sfound >= 0) {
+        const _prev = window._gcpSelIdx >= 0 ? [window._gcpSelIdx] : [];
+        const _si = _prev.indexOf(_sfound);
+        if (_si >= 0) _prev.splice(_si, 1); else _prev.push(_sfound);
+        if (_prev.length >= 2) {
+          window._gcpMultiSel = _prev; window._gcpMultiBbox = null;
+          _gcpWithEditorContext(() => { _msRecalcBbox(); });
+        } else if (_prev.length === 1) {
+          window._gcpSelIdx = _prev[0]; window._gcpMultiSel = []; window._gcpMultiBbox = null;
+        } else { window._gcpSelIdx = -1; }
+        _gcpRedraw(); return;
+      }
+    }
+    if (e.pointerType !== 'touch') {
+      window._gcpSelIdx = -1;
+      window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+      _gcpRedraw(); return;
+    }
+  }
   // Un solo dedo → guardar selección actual ANTES de que _gcpDoSelectDrag la cambie
   _gcpSelBeforePinch = window._gcpSelIdx;
   _gcpDoSelectDrag(e, c);
@@ -19231,9 +20129,13 @@ function _gcpHandleDown(e) {
 // Lógica real de selección/drag/handles en GCP (tras confirmar que es un solo puntero)
 // Idéntico al editor general: mismos radios, mismas restricciones táctiles, misma lógica
 function _gcpDoSelectDrag(e, c) {
+  // No iniciar selección si el origen está en UI del GCP (submenús, paneles, barras)
+  if (e.target && e.target !== gcpCanvas) {
+    if (e.target.closest?.('#gcpFramesBar,#gcpMenuBar,#gcpTopbar,#gcpPropsPanel,#gcpShell,[data-gcpmenu],#gcp-rule-pop,#gcpInterpModal,#gcpInterpMenu,._gcpDropdown')) return;
+  }
   const _isTouch = e.pointerType === 'touch';
   const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
-  const hitScreen = _isTouch ? 28 : 18;
+  const hitScreen = _isTouch ? 22 : 14;
 
   // ── Handles del objeto seleccionado (solo si no es bubble) ───────────────
   const _la = window._gcpLayers[window._gcpSelIdx] ?? null;
@@ -19331,9 +20233,29 @@ function _gcpDoSelectDrag(e, c) {
       window._edMoved = false;
     }
   } else {
-    // Toque en vacío — deseleccionar
-    window._gcpSelIdx = -1;
-    _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
+    // Toque en vacío
+    if (window._gcpMultiSel && window._gcpMultiSel.length) {
+      // En multiselect: empezar nuevo rubber band desde el vacío
+      window._gcpMultiSel = []; window._gcpMultiBbox = null;
+      window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+    } else if (!_isTouch) {
+      // PC: empezar rubber band directamente al arrastrar en vacío
+      window._gcpSelIdx = -1;
+      window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+    } else {
+      // Táctil: longpress para activar rubber band
+      window._gcpSelIdx = -1;
+      const _rbC = { ...c };
+      clearTimeout(window._gcpRbTimer);
+      window._gcpRbTimer = setTimeout(() => {
+        window._gcpRbTimer = null;
+        if (!edIsDragging && !edIsResizing && !edIsRotating) {
+          window._gcpRubberBand = { x0: _rbC.nx, y0: _rbC.ny, x1: _rbC.nx, y1: _rbC.ny };
+          _gcpRedraw();
+        }
+      }, 400);
+      _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
+    }
   }
   _gcpRedraw();
 }
@@ -19595,6 +20517,8 @@ function _gcpAutoSaveFrame() {
   window._gcpDirty = true;
   const fi = window._gcpGlobalFrameIdx || 0;
   if (!window._gcpLayers || !window._gcpLayers.length) return;
+  // Eliminar interpolación circular si existía (el frame guardado la invalida)
+  _gcpRemoveCircularInterp();
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi) la._frames.push(null);
@@ -19607,7 +20531,66 @@ function _gcpAutoSaveFrame() {
   _gcpUpdateFramesBar();
 }
 
+// Crea/actualiza la interpolación circular (último frame → primer frame) automáticamente.
+// Se marca con _circular:true para poder borrarla al añadir un nuevo frame.
+function _gcpUpdateCircularInterp() {
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
+  // Calcular el número de frames clave totales
+  const _totalFrames = _gcpGetTotalFrames();
+  if (_totalFrames < 2) return; // necesitamos al menos 2 frames para interpolar
+
+  // Buscar el último frame clave (no interpolado)
+  let _lastKeyFi = -1;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    for (let i = la._frames.length - 1; i >= 0; i--) {
+      if (la._frames[i] && !la._frames[i]._interp) { _lastKeyFi = Math.max(_lastKeyFi, i); break; }
+    }
+  });
+  if (_lastKeyFi < 1) return;
+
+  // Eliminar interpolación circular anterior si existe
+  _gcpRemoveCircularInterp();
+
+  // Calcular número de frames de la interpolación circular (igual al número entre otros frames o mínimo 3)
+  const _circN = window._gcpCircularInterpN || 3;
+
+  // Crear frames interpolados circulares (del último al primero) en todas las capas
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    const a = la._frames[_lastKeyFi];
+    const b = la._frames[0];
+    if (!a || !b) return;
+    const newFrames = [];
+    for (let k = 1; k <= _circN; k++) {
+      const f = _gcpLerpFrame(a, b, k / (_circN + 1));
+      f._circular = true; // marcar como interpolación circular
+      newFrames.push(f);
+    }
+    la._frames.splice(_lastKeyFi + 1, 0, ...newFrames);
+  });
+
+  window._gcpCircularInterpFi = _lastKeyFi; // recordar posición
+  window._gcpCircularInterpN  = _circN;
+  _gcpInvalidateAllThumbs();
+}
+
+// Elimina la interpolación circular del final si existe
+function _gcpRemoveCircularInterp() {
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    // Eliminar todos los frames _circular al final del array
+    while (la._frames.length > 0 && la._frames[la._frames.length - 1]?._circular) {
+      la._frames.pop();
+    }
+  });
+  window._gcpCircularInterpFi = -1;
+}
+
 function _gcpHandleMove(e) {
+  // Cancelar timer de rubber band táctil si el dedo se mueve
+  if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   // Actualizar pointer en el mapa propio del GCP
   if (_gcpPtrMap.has(e.pointerId)) {
     _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -19687,6 +20670,18 @@ function _gcpHandleMove(e) {
       }
       _gcpRedraw(); return;
     }
+    // Actualizar rubber band si activo
+    if (window._gcpRubberBand && !edIsDragging && !edIsResizing && !edIsRotating &&
+        !window._gcpMultiDragging && !window._gcpMultiResizing && !window._gcpMultiRotating) {
+      const _c3 = edCoords(e);
+      window._gcpRubberBand.x1 = _c3.nx; window._gcpRubberBand.y1 = _c3.ny;
+      _gcpRedraw(); return;
+    }
+    // Drag/resize/rotate grupal GCP — edOnMove ya está dentro del contexto del editor
+    if (edMultiDragging || edMultiResizing || edMultiRotating) {
+      edOnMove(e);
+      _gcpRedraw(); return;
+    }
     edOnMove(e);
     // Snap a guías GCP si hay drag activo de una capa
     if (edIsDragging && window._gcpSelIdx >= 0) {
@@ -19760,12 +20755,53 @@ function _gcpHandleUp(e) {
   if((!window._edActivePointers || window._edActivePointers.size === 0) && edRubberBand){
     edRubberBand = null;
   }
+  // Cancelar timer de rubber band táctil si el dedo se levanta
+  if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   window._edMoved = false;
-  // Guardar estado en el frame activo si hubo transformación
-  if (edIsDragging || edIsResizing || edIsRotating) {
+  // ── Confirmar rubber band GCP → activar multiselect sin menú ──────────────
+  if (window._gcpRubberBand) {
+    const rx0 = Math.min(window._gcpRubberBand.x0, window._gcpRubberBand.x1);
+    const ry0 = Math.min(window._gcpRubberBand.y0, window._gcpRubberBand.y1);
+    const rx1 = Math.max(window._gcpRubberBand.x0, window._gcpRubberBand.x1);
+    const ry1 = Math.max(window._gcpRubberBand.y0, window._gcpRubberBand.y1);
+    window._gcpRubberBand = null;
+    if ((rx1 - rx0) > 0.01 || (ry1 - ry0) > 0.01) {
+      const _found = [];
+      window._gcpLayers.forEach((la, i) => {
+        if (!la || la._gcpVisible === false) return;
+        // GCP: strokes, images y gifs
+        if (la.type !== 'stroke' && la.type !== 'image' && la.type !== 'gif') return;
+        if (la.locked) return;
+        if (_edAllCornersInside(la, rx0, ry0, rx1, ry1)) _found.push(i);
+      });
+      if (_found.length === 1) {
+        window._gcpSelIdx = _found[0];
+        window._gcpMultiSel = [];
+      } else if (_found.length >= 2) {
+        window._gcpSelIdx = -1;
+        window._gcpMultiSel = _found;
+        window._gcpMultiGroupRot = 0;
+        _gcpWithEditorContext(() => { _msRecalcBbox(); });
+      }
+    } else {
+      // Rubber band demasiado pequeño → deseleccionar
+      window._gcpMultiSel = [];
+      window._gcpSelIdx = -1;
+    }
+    edIsDragging = false; edIsResizing = false; edIsRotating = false;
+    _gcpRedraw();
+    return;
+  }
+  // Guardar estado en el frame activo si hubo transformación (individual o grupal)
+  if (edIsDragging || edIsResizing || edIsRotating ||
+      window._gcpMultiDragging || window._gcpMultiResizing || window._gcpMultiRotating) {
     _gcpAutoSaveFrame();
+    if (window._gcpMultiDragging || window._gcpMultiResizing || window._gcpMultiRotating) {
+      _gcpWithEditorContext(() => { _msRecalcBbox(); });
+    }
   }
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
+  window._gcpMultiDragging = false; window._gcpMultiResizing = false; window._gcpMultiRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
   // El historial registra el estado en vivo (fuera de los frames guardados).
   const newSnap = window._gcpLayers.map(la => ({
@@ -19829,6 +20865,13 @@ window._gcpGlobalFrameIdx = 0;
 // Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
 window._gcpHistory    = [];  // array de snapshots del frame activo
 window._gcpHistoryIdx = -1;  // índice actual
+window._gcpCircularInterpFi = -1;
+window._gcpCircularInterpN  =  3;
+window._gcpMultiSel         = [];
+window._gcpMultiBbox        = null;
+window._gcpMultiDragging    = false;
+window._gcpMultiResizing    = false;
+window._gcpMultiRotating    = false;
 
 // ── Variables del sistema de guías GCP (independientes del editor general) ──
 let _gcpRules      = [];       // guías del editor de animaciones
@@ -19963,6 +21006,8 @@ function _gcpSaveFrame() {
 // Si algún layer no tiene frame en fi, lo crea primero.
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
+  // Al añadir un nuevo frame, borrar la interpolación circular automática
+  _gcpRemoveCircularInterp();
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
@@ -20386,6 +21431,44 @@ function _gcpDoInterpolate(fi, n) {
   window._gcpDirty = true;
   edToast(n + ' frame' + (n > 1 ? 's' : '') + ' interpolado' + (n > 1 ? 's' : '') + ' añadido' + (n > 1 ? 's' : '') + ' ✓');
   delete _gcpDoInterpolate._blur;
+}
+
+// Modal para ajustar la interpolación circular automática
+function _gcpShowCircularInterpModal(fi) {
+  const _n = window._gcpCircularInterpN || 3;
+  const _msg = 'Interpolación circular: ' + _n + ' frame' + (_n !== 1 ? 's' : '') + ' entre el último y el primero. ¿Cambiar?';
+  // Usar el modal existente de interpolación reutilizando _gcpShowInterpModal
+  _gcpInterpPendingFi = fi;
+  _gcpInterpN = _n;
+  const modal = document.getElementById('gcpInterpModal');
+  if (!modal) { _gcpRemoveCircularInterp(); _gcpUpdateCircularInterp(); return; }
+  const f1El    = document.getElementById('gcpInterpF1');
+  const f2El    = document.getElementById('gcpInterpF2');
+  const countEl = document.getElementById('gcpInterpCount');
+  if (f1El) f1El.textContent = fi + 1;
+  if (f2El) f2El.textContent = '1 (circular)';
+  if (countEl) countEl.textContent = _gcpInterpN;
+  modal.classList.add('open');
+  document.getElementById('gcpInterpMinus').onclick = () => {
+    if (_gcpInterpN > 1) { _gcpInterpN--; if(countEl) countEl.textContent = _gcpInterpN; }
+  };
+  document.getElementById('gcpInterpPlus').onclick = () => {
+    if (_gcpInterpN < 20) { _gcpInterpN++; if(countEl) countEl.textContent = _gcpInterpN; }
+  };
+  document.getElementById('gcpInterpCancel').onclick = () => { modal.classList.remove('open'); };
+  document.getElementById('gcpInterpOk').onclick = () => {
+    modal.classList.remove('open');
+    window._gcpCircularInterpN = _gcpInterpN;
+    // Crear (o recrear) la interpolación circular
+    _gcpRemoveCircularInterp();
+    _gcpUpdateCircularInterp();
+    _gcpInvalidateAllThumbs();
+    _gcpApplyFrame(window._gcpGlobalFrameIdx);
+    _gcpUpdateFrameNav();
+    _gcpUpdateFramesBar();
+    _gcpRedraw();
+    edToast(_gcpInterpN + ' frame' + (_gcpInterpN > 1 ? 's' : '') + ' circular' + (_gcpInterpN > 1 ? 'es' : '') + ' añadido' + (_gcpInterpN > 1 ? 's' : '') + ' ✓');
+  };
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
@@ -21182,16 +22265,31 @@ function _gcpUpdateFramesBar() {
         dupBtn.innerHTML = '⧉';
         dupBtn.addEventListener('click', e => {
           e.stopPropagation();
+          // Duplicar solo en la fila del layer activo (la):
+          // insertar copia de fi justo después en este layer.
+          // En el resto de layers: añadir al final una copia de su último frame
+          // con visible:false para mantener la longitud de la matriz sin alterar su contenido.
+          if (!la._frames) la._frames = [];
+          const _src = la._frames[fi];
+          const _copy = _src ? {..._src} : {
+            x: la.x, y: la.y, width: la.width, height: la.height,
+            rotation: la.rotation || 0, opacity: la.opacity ?? 1, visible: true
+          };
+          delete _copy._interp;
+          la._frames.splice(fi + 1, 0, _copy);
+
+          // Para los demás layers: añadir al final una copia de su último frame invisible
           window._gcpLayers.forEach(otherLa => {
+            if (otherLa === la) return;
             if (!otherLa._frames) otherLa._frames = [];
-            const _src = otherLa._frames[fi];
-            const _copy = _src ? {..._src} : {
-              x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
-              rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false
-            };
-            delete _copy._interp;
-            otherLa._frames.splice(fi + 1, 0, _copy);
+            const _last = otherLa._frames.length > 0
+              ? {...otherLa._frames[otherLa._frames.length - 1], visible: false}
+              : { x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
+                  rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false };
+            delete _last._interp;
+            otherLa._frames.push(_last);
           });
+
           window._gcpDirty = true;
           window._gcpGlobalFrameIdx = fi + 1;
           _gcpInvalidateAllThumbs();
@@ -21266,12 +22364,24 @@ function _gcpUpdateFramesBar() {
 
       scroll.appendChild(card);
 
-      // Botón ⟳ entre este frame clave y el siguiente (si existe siguiente clave)
+      // Botón ⟳ entre este frame clave y el siguiente (o circular al final)
       const _nextKeyFi = _visibleFiList[_vi + 1];
-      if (_nextKeyFi !== undefined) {
-        // Contar interpolados entre fi y _nextKeyFi
-        const _interpCount = _nextKeyFi - fi - 1;
-        const _hasInterp   = _interpCount > 0;
+      const _isLastFrame = _nextKeyFi === undefined && _visibleFiList.length > 1;
+      if (_nextKeyFi !== undefined || _isLastFrame) {
+        // Para el último frame: simular que el "siguiente" es el frame 0 (circular)
+        // Contar interpolados entre fi y _nextKeyFi (o circulares si es el último)
+        let _interpCount, _hasInterp, _isCircular = false;
+        if (_isLastFrame) {
+          // Contar frames _circular después de fi
+          _interpCount = window._gcpLayers[0]?._frames
+            ? window._gcpLayers[0]._frames.slice(fi + 1).filter(f => f?._circular).length
+            : 0;
+          _hasInterp  = _interpCount > 0;
+          _isCircular = true;
+        } else {
+          _interpCount = _nextKeyFi - fi - 1;
+          _hasInterp   = _interpCount > 0;
+        }
 
         const interpBtn = document.createElement('button');
         const _hasBlur = _hasInterp && window._gcpLayers.some(l =>
@@ -21312,13 +22422,22 @@ function _gcpUpdateFramesBar() {
           });
           interpBtn.addEventListener('click', e => {
             e.stopPropagation();
-            _gcpShowInterpModal(fi, layerIdx);
+            if (_isCircular) {
+              // Último frame sin frame a la derecha → interpolación circular
+              _gcpShowCircularInterpModal(fi);
+            } else {
+              _gcpShowInterpModal(fi, layerIdx);
+            }
           });
         } else {
-          // Botón rojo → menú contextual inline
+          // Botón rojo → menú contextual inline (o modal circular si es el último frame)
           interpBtn.addEventListener('click', e => {
             e.stopPropagation();
-            _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
+            if (_isCircular) {
+              _gcpShowCircularInterpModal(fi);
+            } else {
+              _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
+            }
           });
         }
 
@@ -21542,7 +22661,29 @@ function _gcpRedraw() {
 
 // Copia de edDrawSel adaptada al canvas GIF
 function _gcpDrawSel() {
+  // ── Multiselección y rubber band GCP ────────────────────────────────────
+  if (window._gcpMultiSel && window._gcpMultiSel.length >= 2 && window._gcpMultiBbox) {
+    _gcpDrawMultiSel();
+  } else if (window._gcpRubberBand) {
+    // Dibujar rubber band GCP directamente en gcpCtx (sin usar edRubberBand)
+    const _rb = window._gcpRubberBand;
+    const pw = edPageW(), ph = edPageH();
+    const rx = edMarginX() + Math.min(_rb.x0, _rb.x1) * pw;
+    const ry = edMarginY() + Math.min(_rb.y0, _rb.y1) * ph;
+    const rw = Math.abs(_rb.x1 - _rb.x0) * pw;
+    const rh = Math.abs(_rb.y1 - _rb.y0) * ph;
+    gcpCtx.save();
+    gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = 1 / edCamera.z;
+    gcpCtx.setLineDash([4 / edCamera.z, 3 / edCamera.z]);
+    gcpCtx.strokeRect(rx, ry, rw, rh);
+    gcpCtx.fillStyle = 'rgba(26,140,255,0.08)';
+    gcpCtx.fillRect(rx, ry, rw, rh);
+    gcpCtx.setLineDash([]);
+    gcpCtx.restore();
+  }
+
   const idx = window._gcpSelIdx;
+  if (window._gcpMultiSel && window._gcpMultiSel.length >= 2) return; // multiselect dibuja sus propios handles
   if (idx < 0 || idx >= window._gcpLayers.length) return;
   const la = window._gcpLayers[idx];
   if (!la) return;
@@ -21655,10 +22796,9 @@ function _gcpVectorToImage(la, cb) {
   crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
   const dataUrl = crop.toDataURL('image/png');
 
-  // Proporciones normalizadas (fracción de página)
-  const normW = cw/pw, normH = ch/ph;
-  const scale = Math.max(normW/0.9, normH/0.9, 1);
-  const finalW = normW/scale, finalH = normH/scale;
+  // Usar el tamaño visual original del objeto — preservar width/height exactos del GCP
+  const finalW = la.width;
+  const finalH = la.height;
 
   // Crear ImageLayer con proporciones correctas
   const img = new Image();
@@ -21706,8 +22846,8 @@ function gcpInsertFromBib(entry) {
   };
 
   const insertLayer = (la) => {
-    if (la.type === 'shape' || la.type === 'line') {
-      // Convertir vectorial a imagen PNG — así cada frame tiene su propia imagen independiente
+    if (la.type === 'shape' || la.type === 'line' || la.type === 'text' || la.type === 'bubble') {
+      // Convertir a imagen PNG — textos/bocadillos/vectoriales no son animables directamente
       _gcpVectorToImage(la, imgLayer => doInsert(imgLayer));
     } else {
       doInsert(la);
@@ -21862,14 +23002,13 @@ function gcpOpen(edLayerIdx) {
   if (!gcpCanvas) return;
   gcpCtx = gcpCanvas.getContext('2d');
 
-  // Dejar 12px libres en right y bottom para las scrollbars de PC
-  const _sbSize = 12;
-  gcpCanvas.width  = ec.width  - _sbSize;
-  gcpCanvas.height = ec.height - _sbSize;
-  gcpCanvas.style.left   = '0';
-  gcpCanvas.style.top    = ec.style.top;
-  gcpCanvas.style.width  = (ec.width  - _sbSize) + 'px';
-  gcpCanvas.style.height = (ec.height - _sbSize) + 'px';
+  // gcpCanvas mismo tamaño y posición que edCanvas
+  gcpCanvas.width  = ec.width;
+  gcpCanvas.height = ec.height;
+  gcpCanvas.style.left   = ec.style.left || '0';
+  gcpCanvas.style.top    = ec.style.top  || '0'; // mismo top que edCanvas dentro del wrap
+  gcpCanvas.style.width  = ec.width  + 'px';
+  gcpCanvas.style.height = ec.height + 'px';
   gcpCanvas.style.display       = 'block';
   gcpCanvas.style.pointerEvents = 'auto';
   // Bloquear scroll nativo en Android (antes lo hacía gcpBlocker, ahora con pointer-events:none no puede)
@@ -21887,6 +23026,10 @@ function gcpOpen(edLayerIdx) {
   window._gcpLayers         = [];
   window._gcpSelIdx         = -1;
   window._gcpGlobalFrameIdx = 0;
+  window._gcpCircularInterpFi = -1;
+  window._gcpCircularInterpN  =  3;
+  window._gcpMultiSel = []; window._gcpMultiBbox = null;
+  window._gcpMultiDragging = window._gcpMultiResizing = window._gcpMultiRotating = false;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null; _gcpRuleNodeId = 0;
   // Cerrar barra de frames al abrir editor
@@ -22345,9 +23488,28 @@ function _gcpSaveToLib(onDone) {
   tc2.drawImage(renderedFrames[0], cropX,cropY,cropW,cropH, (S-cropW*sc)/2,(S-cropH*sc)/2,cropW*sc,cropH*sc);
   const thumb=thumbC.toDataURL('image/png',0.7);
 
-  // Proporciones normalizadas (fracción de página)
-  const _gcpNormW = cropW/pageW;
-  const _gcpNormH = cropH/pageH;
+  // Proporciones normalizadas = bbox AABB de los objetos en el GCP (coords normalizadas).
+  // Usar el tamaño visual real en el GCP, no el del render recortado,
+  // para que al insertar en el editor el objeto tenga el mismo tamaño aparente.
+  {
+    let _bx0=Infinity,_by0=Infinity,_bx1=-Infinity,_by1=-Infinity;
+    const _bpw=edPageW(), _bph=edPageH();
+    for (const _la of layers) {
+      if (!_la) continue;
+      const _rot=(_la.rotation||0)*Math.PI/180;
+      const _hw=_la.width/2, _hh=_la.height/2;
+      for (const [_cx,_cy] of [[-_hw,-_hh],[_hw,-_hh],[-_hw,_hh],[_hw,_hh]]) {
+        const _wx=_cx*_bpw, _wy=_cy*_bph;
+        const _rx=(_wx*Math.cos(_rot)-_wy*Math.sin(_rot))/_bpw;
+        const _ry=(_wx*Math.sin(_rot)+_wy*Math.cos(_rot))/_bph;
+        _bx0=Math.min(_bx0,_la.x+_rx); _by0=Math.min(_by0,_la.y+_ry);
+        _bx1=Math.max(_bx1,_la.x+_rx); _by1=Math.max(_by1,_la.y+_ry);
+      }
+    }
+    if (_bx1<=_bx0||_by1<=_by0) { _bx0=0;_by0=0;_bx1=1;_by1=1; }
+    var _gcpNormW = _bx1-_bx0;
+    var _gcpNormH = _by1-_by0;
+  }
 
   // Serializar capas para re-edición
   const gcpLayersData = window._gcpLayers
@@ -22416,8 +23578,8 @@ function _gcpSaveToLib(onDone) {
     img.onload=()=>{
       existingLayer.img=img; existingLayer.src=pngFrames[0];
       existingLayer.x=savedX; existingLayer.y=savedY; existingLayer.rotation=savedR;
-      const sc2=Math.max(_gcpNormW/0.9,_gcpNormH/0.9,1);
-      existingLayer.width=_gcpNormW/sc2; existingLayer.height=_gcpNormH/sc2;
+      // usar tamaño real del GCP directamente
+      existingLayer.width=_gcpNormW; existingLayer.height=_gcpNormH;
       edPushHistory(); requestAnimationFrame(()=>edRedraw());
     };
     img.src=pngFrames[0];
@@ -22842,13 +24004,8 @@ async function _gcpDownloadApng() {
     }
 
     const blob = new Blob([apngBuf], { type: 'image/png' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'animacion_comixou.png';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    const _animTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.png';
+    await _edSaveBlob(blob, _animTitle, 'image/png');
     edToast('PNG animado descargado');
   } catch (err) {
     edToast('Error al generar PNG: ' + err.message);
@@ -22870,7 +24027,7 @@ function _gcpCrc32Table() {
 // Motor: omggif (GifWriter, MIT, Dean McNamee)
 // Nota: GIF tiene transparencia binaria (1 color = transparente), no alpha gradual.
 // Para transparencia real usar _gcpDownloadApng (APNG).
-function _gcpDownloadGif() {
+async function _gcpDownloadGif() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
     edToast('No hay contenido para descargar'); return;
   }
@@ -23068,11 +24225,8 @@ function _gcpDownloadGif() {
     });
     const gifBytes = buf.slice(0, gw.end());
     const blob = new Blob([gifBytes], {type: 'image/gif'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'animacion_comixou.gif';
-    document.body.appendChild(a); a.click();
-    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 2000);
+    const _gifTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.gif';
+    await _edSaveBlob(blob, _gifTitle, 'image/gif');
     edToast('GIF descargado');
   } catch(err) {
     edToast('Error al generar GIF: ' + err.message);
@@ -23229,13 +24383,8 @@ async function _gcpDownloadMp4() {
 
     const { buffer } = target;
     const blob = new Blob([buffer], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'animacion_comixou.mp4';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    const _mp4Title = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.mp4';
+    await _edSaveBlob(blob, _mp4Title, 'video/mp4');
     const kb = Math.round(blob.size / 1024);
     edToast('MP4 descargado (' + kb + ' KB) ✓');
   } catch (err) {
@@ -23306,6 +24455,7 @@ async function _edRunDiag() {
     if (_sl && _fl && _fl._canvas) {
       // SF: canvas local del fill (no workspace)
       const _flW = _fl._canvas.width, _flH = _fl._canvas.height;
+      L('fill _isWorkspaceCanvas: ' + _fl._isWorkspaceCanvas);
       const _flCtx = _fl._ctx || _fl._canvas.getContext('2d');
       const _flImg = _flCtx.getImageData(0, 0, _flW, _flH);
       let _fx0=_flW,_fy0=_flH,_fx1=0,_fy1=0,_fCount=0;
@@ -23344,8 +24494,8 @@ async function _edRunDiag() {
   // 1. localStorage
   try {
     let _lsSize = 0;
-    for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; }
-    L('localStorage: ' + Math.round(_lsSize/1024) + ' KB');
+    try { for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; } } catch(_ls_e) {}
+    L('localStorage: ' + (_bibIdbUnavailable ? 'modo incógnito' : Math.round(_lsSize/1024) + ' KB'));
   } catch(e) { L('localStorage ERROR: ' + e.message); }
 
   // 2. Comic en ComicStore
@@ -23364,25 +24514,68 @@ async function _edRunDiag() {
     });
   } else { L('ComicStore: NO ENCONTRADO'); }
 
-  // 3. IDB cxAnims — claves relevantes
+  // 3. IDB cxAnims — usar singleton _edAnimIdbOpen para evitar conflictos
   try {
+    const _diagDb = await _edAnimIdbOpen();
     await new Promise((res) => {
-      const r = indexedDB.open('cxAnims', 1);
-      r.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-      r.onsuccess = e => {
-        const tx = e.target.result.transaction('anims','readonly');
+      try {
+        const tx = _diagDb.transaction('anims', 'readonly');
         const req = tx.objectStore('anims').getAllKeys();
         req.onsuccess = ev => {
           const ks = ev.target.result || [];
           L('IDB cxAnims: ' + ks.length + ' entradas');
-          ks.forEach(k => L('  ' + k));
+          ks.slice(0, 5).forEach(k => L('  ' + k));
+          if (ks.length > 5) L('  ...(' + ks.length + ' total)');
           res();
         };
         req.onerror = () => { L('IDB getAllKeys error'); res(); };
-      };
-      r.onerror = () => { L('IDB open error'); res(); };
+      } catch(e2) { L('IDB tx error: ' + e2.message); res(); }
+      setTimeout(res, 3000);
     });
-  } catch(e) { L('IDB error: ' + e.message); }
+  } catch(e) { L('IDB cxAnims error: ' + e.message); }
+
+  // 4b. Diagnóstico autosave y memoria
+  L('\n── Autosave (fix OOM Android) ──');
+  // Decisión tomada al cargar esta obra
+  if (window._edLastAutosaveDecision) {
+    const _d = window._edLastAutosaveDecision;
+    L('Decisión al cargar: ' + _d.decision);
+    L('  autosave.ts:   ' + _d.autosaveDate);
+    L('  localSavedAt:  ' + (_d.localSavedAt || 'NULL — usando updatedAt: ' + _d.updatedAt));
+    L('  localSavedTs >= autosaveTs: ' + (_d.localSavedTs >= _d.autosaveTs));
+    L('  comic.title al cargar: "' + _d.comicTitle + '"');
+    L('  cloudOnly: ' + _d.cloudOnly + ' | cloudNewer: ' + _d.cloudNewer);
+  } else {
+    L('Sin decisión registrada (obra no se cargó en esta sesión)');
+  }
+  try {
+    // Tamaño del último snapshot de autosave (sin _pngFrames)
+    if (window._edLastAutosaveBytes !== undefined) {
+      const _asKB = Math.round(window._edLastAutosaveBytes / 1024);
+      const _asSec = window._edLastAutosaveTs ? Math.round((Date.now() - window._edLastAutosaveTs) / 1000) : '?';
+      L('Último snapshot: ' + _asKB + ' KB (hace ' + _asSec + 's)');
+      if (_asKB > 10240) L('  ⚠️ GRANDE: ' + _asKB + ' KB — revisar capas en memoria');
+      else L('  ✓ Tamaño OK');
+    } else {
+      L('Sin datos (autosave no ejecutado aún en esta sesión)');
+    }
+    // Detectar capas con _pngFrames en memoria (no deberían estar en snapshot autosave)
+    let _framesInMem = 0;
+    let _framesMB = 0;
+    edPages.forEach((p, pi) => {
+      (p.layers || []).forEach((l, li) => {
+        if (l && l._pngFrames && l._pngFrames.length) {
+          _framesInMem++;
+          let _sz = 0;
+          l._pngFrames.forEach(f => { try { _sz += (f||'').length * 0.75; } catch(_){} });
+          _framesMB += _sz / (1024*1024);
+          L('  P'+pi+'L'+li+' type='+l.type+' _pngFrames='+l._pngFrames.length+' (~'+Math.round(_sz/1024)+'KB en memoria)');
+        }
+      });
+    });
+    if (_framesInMem === 0) L('  ✓ Sin _pngFrames en memoria (correcto para autosave)');
+    else L('  ⚠️ ' + _framesInMem + ' capas con frames en RAM (~' + _framesMB.toFixed(1) + ' MB) — excluidos del autosave correctamente');
+  } catch(_asE) { L('Error: ' + _asE.message); }
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory
@@ -23391,7 +24584,24 @@ async function _edRunDiag() {
     L('\n── Errores de guardado ──');
     _edSaveErrors.forEach(m => L('  ⚠️ ' + m));
   } else {
-    L('\n── Errores de guardado: ninguno ──');
+    if(window._edOrientFillDiag){L('\n── Orient Fill Diag ──');L(JSON.stringify(window._edOrientFillDiag));}
+  if(window._edLastBibSync){
+    L('\n── Último bibSync ──');
+    L(JSON.stringify(window._edLastBibSync));
+  }
+  // Estado actual de _bibCache
+  L('\n── bibCache actual ──');
+  try {
+    const _bNow = _bibLoad();
+    const _bFolders = (_bNow?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
+    L('items total: ' + (_bNow?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0));
+    L('folders: ' + _bFolders);
+    L('_bibIdbUnavailable: ' + _bibIdbUnavailable);
+    L('_bibCache===null: ' + (_bibCache===null));
+    L('_bibIncognitoChanged: ' + (typeof _bibIncognitoChanged !== 'undefined' ? _bibIncognitoChanged : 'N/A'));
+
+  } catch(e) { L('error: ' + e.message); }
+  L('\n── Errores de guardado: ninguno ──');
   }
   L('── PushHistory log ──');
   (window._edHistDiag||[]).forEach(m => L('  ' + m));
