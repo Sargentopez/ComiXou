@@ -364,6 +364,49 @@ async function _mcCheckOrphanData() {
   );
 }
 
+function _mcCheckStorage() {
+  setTimeout(function() {
+    try {
+      if (!navigator.storage || typeof navigator.storage.estimate !== 'function') return;
+      try { if (sessionStorage.getItem('cx_storage_warned')) return; } catch(_) {}
+      navigator.storage.estimate().then(function(est) {
+        try {
+          var usage = est.usage || 0, quota = est.quota || 0;
+          if (quota < 1024 * 1024) return;
+          var pct = usage / quota;
+          if (pct < 0.85) return;
+          try { sessionStorage.setItem('cx_storage_warned', '1'); } catch(_) {}
+          var usedMB  = Math.round(usage  / (1024 * 1024));
+          var quotaMB = Math.round(quota  / (1024 * 1024));
+          var pctStr  = Math.round(pct * 100) + '%';
+          try { document.getElementById('cx-storage-warning')?.remove(); } catch(_) {}
+          var ov = document.createElement('div');
+          ov.id = 'cx-storage-warning';
+          ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box';
+          ov.innerHTML = '<div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:380px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,0.28);text-align:center;font-family:sans-serif">'
+            + '<div style="font-size:2.4rem;margin-bottom:12px">⚠️</div>'
+            + '<div style="font-weight:700;font-size:1.1rem;margin-bottom:10px;color:#c0392b">Almacenamiento casi lleno</div>'
+            + '<div style="font-size:.95rem;color:#444;margin-bottom:18px;line-height:1.5">'
+            + 'El navegador tiene <b>' + usedMB + ' MB</b> usados de <b>' + quotaMB + ' MB</b> disponibles (<b>' + pctStr + '</b>).<br><br>'
+            + 'Guarda tus obras en la nube y elimina las locales que ya no necesites. '
+            + 'Si el almacenamiento se llena, las obras podrían perderse.</div>'
+            + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">'
+            + '<button id="_cxSwDismiss" style="padding:10px 22px;border-radius:8px;border:1.5px solid #ccc;background:#f5f5f5;font-size:.95rem;cursor:pointer;font-weight:500">Entendido</button>'
+            + '<button id="_cxSwPurge" style="padding:10px 22px;border-radius:8px;border:none;background:#e74c3c;color:#fff;font-size:.95rem;cursor:pointer;font-weight:600">Limpiar huérfanos</button>'
+            + '</div></div>';
+          document.body.appendChild(ov);
+          document.getElementById('_cxSwDismiss').onclick = function() { ov.remove(); };
+          document.getElementById('_cxSwPurge').onclick = function() {
+            ov.remove();
+            var btn = document.getElementById('mcOrphanBtn');
+            if (btn) btn.click();
+          };
+        } catch(_ie) {}
+      }).catch(function() {});
+    } catch(_e) {}
+  }, 1500);
+}
+
 function MyComicsView_init() {
   _mcCheckStorage(); // aviso modal si el almacenamiento supera el 85%
   _mcInjectModal();
