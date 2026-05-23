@@ -972,6 +972,9 @@ function _mcDoCreateProject(title, genre, social, navMode, user) {
     approved:  false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    // localSavedAt en la creación garantiza que cualquier autosave anterior
+    // (de otra obra) no sea más nuevo que esta obra y no aparezca al abrirla.
+    localSavedAt: new Date().toISOString(),
   };
   ComicStore.save(comic);
 
