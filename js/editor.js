@@ -14020,6 +14020,28 @@ async function edCloudSave() {
     }
   }
 
+  // Enriquecer comic.editorData con _pngFrames y _apngSrc del layer vivo en memoria.
+  // edSaveProject serializa los layers a OPFS sin frames (van a IDB).
+  // _uploadPanels los recupera de IDB con _sbAnimIdbLoad → _buildApngFromFrames.
+  // En Android, _buildApngFromFrames puede fallar (OOM, UPNG crash).
+  // Si el layer vivo tiene _pngFrames o _apngSrc, los inyectamos directamente
+  // para que _uploadPanels los use como fallback sin pasar por UPNG.
+  if (comic.editorData && comic.editorData.pages && edPages && edPages.length) {
+    comic.editorData.pages.forEach((pg, pi) => {
+      const livePage = edPages[pi];
+      if (!livePage) return;
+      (pg.layers || []).forEach((sl, li) => {
+        const liveLayer = livePage.layers[li];
+        if (!liveLayer || sl.type !== 'image') return;
+        // Inyectar _apngSrc si el layer vivo lo tiene (APNG completo → upload directo)
+        if (liveLayer._apngSrc && !sl._apngSrc) sl._apngSrc = liveLayer._apngSrc;
+        // Inyectar _pngFrames si el layer vivo los tiene y no hay _apngSrc
+        if (!sl._apngSrc && liveLayer._pngFrames && liveLayer._pngFrames.length && !sl._pngFrames)
+          sl._pngFrames = liveLayer._pngFrames;
+      });
+    });
+  }
+
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
     comic.supabaseId = crypto.randomUUID();
@@ -24436,29 +24458,25 @@ async function _edRunDiag() {
     });
   } else { L('ComicStore: NO ENCONTRADO'); }
 
-  // 3. IDB cxAnims — claves relevantes
-  if (_bibIdbUnavailable) {
-    L('IDB cxAnims: no disponible (modo incógnito)');
-  } else {
-    try {
-      await new Promise((res) => {
-        let _r;
-        try { _r = indexedDB.open('cxAnims', 1); } catch(e) { L('IDB no disponible: ' + e.message); res(); return; }
-        _r.onupgradeneeded = e => { try { e.target.result.createObjectStore('anims'); } catch(_){} };
-        _r.onsuccess = e => {
-          try {
-            const tx = e.target.result.transaction('anims','readonly');
-            const req = tx.objectStore('anims').getAllKeys();
-            req.onsuccess = ev => { const ks = ev.target.result||[]; L('IDB cxAnims: '+ks.length+' entradas'); ks.slice(0,5).forEach(k=>L('  '+k)); if(ks.length>5)L('  ...('+ks.length+' total)'); res(); };
-            req.onerror = () => { L('IDB getAllKeys error'); res(); };
-          } catch(e2) { L('IDB tx error: '+e2.message); res(); }
+  // 3. IDB cxAnims — usar singleton _edAnimIdbOpen para evitar conflictos
+  try {
+    const _diagDb = await _edAnimIdbOpen();
+    await new Promise((res) => {
+      try {
+        const tx = _diagDb.transaction('anims', 'readonly');
+        const req = tx.objectStore('anims').getAllKeys();
+        req.onsuccess = ev => {
+          const ks = ev.target.result || [];
+          L('IDB cxAnims: ' + ks.length + ' entradas');
+          ks.slice(0, 5).forEach(k => L('  ' + k));
+          if (ks.length > 5) L('  ...(' + ks.length + ' total)');
+          res();
         };
-        _r.onerror = () => { L('IDB open error'); res(); };
-        _r.onblocked = () => { L('IDB blocked'); res(); };
-        setTimeout(res, 3000); // timeout de seguridad
-      });
-    } catch(e) { L('IDB error: ' + e.message); }
-  }
+        req.onerror = () => { L('IDB getAllKeys error'); res(); };
+      } catch(e2) { L('IDB tx error: ' + e2.message); res(); }
+      setTimeout(res, 3000);
+    });
+  } catch(e) { L('IDB cxAnims error: ' + e.message); }
 
   // 4b. Diagnóstico autosave y memoria
   L('\n── Autosave (fix OOM Android) ──');
