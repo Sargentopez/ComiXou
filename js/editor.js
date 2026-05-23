@@ -15306,11 +15306,10 @@ function edDeserLayer(d, pageOrientation){
       // Guardar la promesa en l._animLoadPromise para que edLoadProject pueda esperarla.
       // En Android la IDB tarda más que en PC — sin await el visor se abre antes de que
       // los frames lleguen y la animación queda congelada (race condition).
-      l._animLoadPromise = _edAnimIdbLoad(d._pngFramesKey).then(data => {
-        if(!data) return;
+      const _onAnimLoaded = (data) => {
         const input = (typeof data === 'string') ? data
                     : (Array.isArray(data) && data.length) ? data : null;
-        if(!input) return;
+        if(!input) return false;
         if(typeof data === 'string') { l._apngSrc = data; }
         else { l._pngFrames = data; }
         l.loadAnim(input, () => {
@@ -15325,6 +15324,21 @@ function edDeserLayer(d, pageOrientation){
             if(typeof edRedraw==='function') edRedraw();
           }
         });
+        return true;
+      };
+      l._animLoadPromise = _edAnimIdbLoad(d._pngFramesKey).then(data => {
+        if(data && _onAnimLoaded(data)) return;
+        // pngFramesKey no encontrada en IDB (clave huérfana borrada por el limpiador).
+        // Intentar con animKey como fallback (clave de biblioteca en cxAnims).
+        if(d.animKey && window._sbAnimIdbLoad) {
+          return window._sbAnimIdbLoad(d.animKey).then(data2 => {
+            if(data2 && _onAnimLoaded(data2)) {
+              // Actualizar la clave IDB del layer al animKey que sí funciona
+              l._pngFramesKey = d.animKey;
+            }
+            // Si tampoco hay datos, el layer queda sin animación hasta que se descargue de la nube
+          }).catch(()=>{});
+        }
       });
     }
     if(d.src){

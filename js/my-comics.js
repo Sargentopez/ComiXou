@@ -117,11 +117,12 @@ async function _mcCheckOrphanData() {
 
   const _uid = String(_user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
   // IDs de obras válidas del usuario actual
-  const _validIds = new Set(
-    ComicStore.getAll()
-      .filter(c => c.userId === _user.id || c.username === _user.username)
-      .map(c => c.id)
-  );
+  const _validComics = ComicStore.getAll()
+    .filter(c => c.userId === _user.id || c.username === _user.username);
+  const _validIds = new Set(_validComics.map(c => c.id));
+  // Añadir también supabaseId al set — las claves IDB de obras descargadas de la nube
+  // usan el supabaseId como comicId (formato {uid}__{supabaseId}_{pi}_{li})
+  _validComics.forEach(c => { if (c.supabaseId) _validIds.add(c.supabaseId); });
 
   const _orphans = { opfs: [], anims: [], autosave: [], bib: [], ls: [] };
 

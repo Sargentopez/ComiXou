@@ -628,13 +628,15 @@ const SupabaseClient = (() => {
     ) || [];
 
     const pages = [];
-    for (const panel of panels) {
+    for (let pi = 0; pi < panels.length; pi++) {
+      const panel = panels[pi];
       const layerRows = await _get(
         `panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`
       ) || [];
 
       const layers = [];
-      for (const row of layerRows) {
+      for (let li = 0; li < layerRows.length; li++) {
+        const row = layerRows[li];
         let layerObj = null;
         try {
           const _raw = await _czDecompress(row.layer_data);
@@ -652,7 +654,10 @@ const SupabaseClient = (() => {
               try {
                 const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
                 const _uid2 = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-                const _idbKey2 = _uid2 + '__anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+                // Usar clave con supabaseId embebido para que el detector de huérfanos
+                // la reconozca correctamente. Formato: {uid}__{supabaseId}_{pi}_{li}
+                // idéntico al que usa edSaveProject, así son intercambiables.
+                const _idbKey2 = _uid2 + '__' + supabaseId + '_' + pi + '_' + li;
                 await _sbAnimIdbSave(_idbKey2, _apngDataUrl);
                 layerObj._pngFramesKey = _idbKey2;
               } catch(_idbErr) {
