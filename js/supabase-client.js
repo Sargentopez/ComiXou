@@ -382,8 +382,6 @@ const SupabaseClient = (() => {
               // _isFull:true para que edDeserLayer SF lo reconozca como nuevo formato
               _isFull: true,
             };
-            // No comprimir fills — su dataUrl PNG ya es binario comprimido internamente.
-            // La compresión gzip sobre base64 PNG no mejora el tamaño y puede fallar.
             const _ld = JSON.stringify(_flData);
             layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });
             continue; // siguiente capa
@@ -400,38 +398,29 @@ const SupabaseClient = (() => {
           delete _lClean._oc;
           delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
 
-          // APNG animado → bucket 'anims'
-          // Fuentes de datos en orden de prioridad:
-          // 1. IDB (caso normal), 2. _apngSrc en memoria (modo incógnito), 3. _pngFrames en memoria
+          // APNG animado → bucket 'anims' — patrón idéntico al GIF
           let animUrl = null;
-          if (l.type === 'image' && (l._pngFramesKey || l.animKey || l._apngSrc || (l._pngFrames && l._pngFrames.length))) {
+          if (l.type === 'image' && (l._pngFramesKey || l.animKey)) {
+            const _idbKey = l._pngFramesKey || l.animKey;
             const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
             try {
-              let _apngDataUrl = null;
-              // 1. Intentar IDB si hay clave
-              if (l._pngFramesKey || l.animKey) {
-                const _idbKey = l._pngFramesKey || l.animKey;
-                const _animData = await _sbAnimIdbLoad(_idbKey).catch(() => null);
-                if (_animData) {
-                  if (typeof _animData === 'string') _apngDataUrl = _animData;
-                  else if (Array.isArray(_animData) && _animData.length)
-                    _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+              const _animData = await _sbAnimIdbLoad(_idbKey);
+              if (_animData) {
+                let _apngDataUrl = null;
+                if (typeof _animData === 'string') {
+                  _apngDataUrl = _animData;
+                } else if (Array.isArray(_animData) && _animData.length) {
+                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
                 }
+                if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
               }
-              // 2. Fallback: _apngSrc en memoria (modo incógnito o descarga reciente)
-              if (!_apngDataUrl && l._apngSrc) _apngDataUrl = l._apngSrc;
-              // 3. Fallback: _pngFrames en memoria
-              if (!_apngDataUrl && l._pngFrames && l._pngFrames.length)
-                _apngDataUrl = await _buildApngFromFrames(l._pngFrames, l._gcpFrameDelay || 100);
-              if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
             } catch(e) { console.warn('APNG upload error:', e.message); }
           }
 
           // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
           // El resto: JSON directo como v16.42 — sin riesgo de fallo de descompresión
-          // Comprimir cualquier layer cuyo JSON supere el umbral (fill ya comprimido arriba)
-          const _lRaw = JSON.stringify(_lClean);
-          const _ld = _lRaw.length >= _CZ_MIN ? await _czCompress(_lRaw) : _lRaw;
+          const _isAnim = l.type === 'image' && (l._pngFramesKey || l.animKey);
+          const _ld = _isAnim ? await _czCompress(JSON.stringify(_lClean)) : JSON.stringify(_lClean);
           layerRows.push({
             panel_id:    panelId,
             layer_order: j,
@@ -608,7 +597,7 @@ const SupabaseClient = (() => {
   // como editorData listo para edLoadProject(). El editor las pasa por edDeserLayer
   // sin ninguna conversion — es el mismo formato que guardo edSaveProject.
   async function downloadDraftAsEditorData(supabaseId) {
-    const works = await _get(`works?id=eq.${supabaseId}&limit=1&select=*`);
+    const works = await _get(`works?id=eq.${supabaseId}&limit=1&select=*,rules`);
     if (!works || !works.length) throw new Error('Obra no encontrada en la nube');
     const work = works[0];
     let _projectRules = [];
@@ -639,18 +628,9 @@ const SupabaseClient = (() => {
             const _apngDataUrl = await _animDownload(row.anim_url);
             if (_apngDataUrl) {
               layerObj._apngSrc = _apngDataUrl;
-              // Guardar en IDB con clave prefijada por userId para que el visor la encuentre
-              try {
-                const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
-                const _uid2 = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-                const _idbKey2 = _uid2 + '__anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-                await _sbAnimIdbSave(_idbKey2, _apngDataUrl);
-                layerObj._pngFramesKey = _idbKey2;
-              } catch(_idbErr) {
-                // IDB no disponible (modo incógnito) — datos en _apngSrc solamente
-                // El visor usará _apngSrc directamente si _pngFramesKey no existe
-                window._edIdbUnavailable = true;
-              }
+              const _idbKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+              layerObj._pngFramesKey = _idbKey;
+              await _sbAnimIdbSave(_idbKey, _apngDataUrl).catch(() => {});
             }
           } catch(e) { console.warn('APNG cloud download:', e); }
         }
@@ -770,15 +750,7 @@ const SupabaseClient = (() => {
     const rows = await r.json();
     // Filtrar en JS por workId si se especificó
     if (!workId) return rows;
-    // Incluir items con prefijo workId:: Y items legacy sin prefijo UUID
-    // (solo __root__ y __anim__ exactos — no folder_ids de otras obras)
-    const _legacyFolders = new Set(['__root__', '__anim__']);
-    return rows.filter(row => {
-      if (!row.folder_id) return false;
-      if (row.folder_id.startsWith(workId + '::')) return true;
-      if (_legacyFolders.has(row.folder_id)) return true;
-      return false;
-    });
+    return rows.filter(row => row.folder_id && row.folder_id.startsWith(workId + '::'));
   }
 
   // Sincronización completa: sube todos los items locales a Supabase.
@@ -861,25 +833,12 @@ const SupabaseClient = (() => {
     // Borrar todos los rows existentes del autor/workId y luego insertar limpio
     // (merge-duplicates no borra los items que ya no existen en local)
     if (window._authTryRefresh) await window._authTryRefresh();
-    // Borrar items de esta obra (con prefijo workId::) Y items sin prefijo del autor
-    // (items legacy sin workId que serán reinsertados con el prefijo correcto)
-    if (workId) {
-      // Borrar con prefijo
-      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=like.${workId}::*`, {
-        method: 'DELETE', headers: _hdrsUser(),
-      }).catch(()=>{});
-      // Borrar sin prefijo (legacy — no contienen '::')
-      // PostgREST no soporta NOT LIKE directamente en todos los contextos,
-      // así que borramos los que tienen folder_id exactamente '__root__' o '__anim__'
-      // que son los únicos folder_id posibles sin prefijo
-      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=in.(__root__,__anim__)`, {
-        method: 'DELETE', headers: _hdrsUser(),
-      }).catch(()=>{});
-    } else {
-      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}`, {
-        method: 'DELETE', headers: _hdrsUser(),
-      }).catch(()=>{});
-    }
+    const _filterBib = workId
+      ? `author_id=eq.${authorId}&folder_id=like.${workId}::*`
+      : `author_id=eq.${authorId}`;
+    await fetch(`${BASE}/biblioteca?${_filterBib}`, {
+      method: 'DELETE', headers: _hdrsUser(),
+    }).catch(()=>{});
 
     if (!rows.length) return;
     const r = await fetch(`${BASE}/biblioteca`, {

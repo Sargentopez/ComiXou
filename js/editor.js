@@ -1592,38 +1592,31 @@ function edSetOrientation(o, persist=true){
     const _isV  = o === 'vertical';
     const _pw   = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph   = _isV ? ED_PAGE_H : ED_PAGE_W;
-    // Diagnóstico orientación — fills ANTES del resize
-    window._edOrientFillDiag = (edPages[edCurrentPage]?.layers||[])
-      .filter(l=>l.type==='fill')
-      .map(f=>({uid:f._uid,isWS:f._isWorkspaceCanvas,cw:f._canvas?.width,ch:f._canvas?.height,x:f.x?.toFixed(3),y:f.y?.toFixed(3),w:f.width?.toFixed(3),h:f.height?.toFixed(3)}));
     (edPages[edCurrentPage]?.layers || []).forEach(l => {
       if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
         l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
       }
-      // SF FillLayer de StrokeLayer: redimensionar canvas al nuevo tamaño en píxeles.
-      // x/y/width/height NO cambian (fracciones de página, igual que strokes).
-      // El canvas pasa de w*pwViejo×h*phViejo a w*pwNuevo×h*phNuevo.
-      if(l.type === 'fill' && !l._isWorkspaceCanvas){
-        l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
-        const _nWpx = Math.max(1, Math.round((l.width  || 1) * _pw));
-        const _nHpx = Math.max(1, Math.round((l.height || 1) * _ph));
-        if(l._canvas && (l._canvas.width !== _nWpx || l._canvas.height !== _nHpx)){
-          const _tmp = document.createElement('canvas');
-          _tmp.width = _nWpx; _tmp.height = _nHpx;
-          _tmp.getContext('2d').drawImage(l._canvas,
-            0, 0, l._canvas.width, l._canvas.height,
-            0, 0, _nWpx, _nHpx);
-          l._canvas = _tmp;
-          l._ctx    = _tmp.getContext('2d');
-        }
-      }
-      // Fill de DrawLayer (_isWorkspaceCanvas): canvas ED_CANVAS_W×H fijo, sin cambios.
-      if(l.type === 'fill' && l._isWorkspaceCanvas){
+      // SF: el fill tiene x/y/width/height como fracciones de página — igual que strokes.
+      // draw() usa drawImage(canvas, -w/2, -h/2, w, h) con w=width*edPageW() en tiempo real,
+      // escalando el canvas al tamaño correcto independientemente de sus píxeles.
+      // Solo limpiar estado de preview pendiente.
+      if(l.type === 'fill'){
         l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
       }
     });
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
+  // Diagnóstico orientación: mostrar estado fills
+  if(persist && prevOrientation !== o){
+    const _diagFills = (edPages[edCurrentPage]?.layers||[]).filter(l=>l.type==='fill');
+    window._edOrientDiag = _diagFills.map(f=>({
+      uid: f._uid, drawId: f._drawLayerId,
+      cw: f._canvas?.width, ch: f._canvas?.height,
+      x: f.x, y: f.y, w: f.width, h: f.height, rot: f.rotation,
+      hasSrc: !!f._srcCanvas, previewSx: f._previewSx
+    }));
+    console.log('ORIENT DIAG fills:', JSON.stringify(window._edOrientDiag));
+  }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
     window._edUserRequestedReset=true; edFitCanvas(true);
     edRedraw();
@@ -2496,12 +2489,11 @@ function _edLayersSnapshot(){
   return JSON.stringify(edLayers.map(l => {
     if (!l || !l.type) return null;
     if(l.type === 'fill'){
-      // Guardar dataUrl del canvas local (bbox del stroke) con sus propiedades exactas
-      return { type:'fill', dataUrl: l.toDataUrl(),
+      // Historial global: guardar canvas completo para no perder contenido fuera del lienzo
+      return { type:'fill', dataUrl:l.toDataUrlFull(),
         x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
         _drawLayerId: l._drawLayerId||null, _uid: l._uid||null,
-        hidden: l.hidden||false, opacity: l.opacity,
-        _isWorkspaceCanvas: l._isWorkspaceCanvas||false };
+        hidden: l.hidden||false, opacity: l.opacity, _isFull:true };
     }
     if(l.type === 'draw'){
       // Serializar DrawLayer como StrokeLayer en el historial global.
@@ -2683,15 +2675,7 @@ function edPushHistory(force){
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
-  // Si _vsHistory activo pero no hay shape/line seleccionada, limpiar (sesión vectorial huérfana)
-  if(_vsHistory.length > 0){
-    const _curL = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-    if(!_curL || (_curL.type!=='shape' && _curL.type!=='line')){
-      _vsHistory=[]; _vsHistIdx=-1; // limpiar sesión vectorial huérfana
-    } else {
-      window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return;
-    }
-  }
+  if(_vsHistory.length > 0){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return; }
   const layersJSON = _edLayersSnapshot();
   // DIAG: registrar cada push
   if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
@@ -2711,19 +2695,12 @@ function edPushHistory(force){
 }
 
 function edUndo(){
-  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
   if(edHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
-  // Verificar que el snapshot al que vamos tiene layers (no es un estado vacío de carga)
-  const _prevSnap = edHistory[edHistoryIdx - 1];
-  if(!_prevSnap || !_prevSnap.layersJSON) { edToast('Nada que deshacer'); return; }
-  const _prevLayers = JSON.parse(_prevSnap.layersJSON);
-  if(!_prevLayers.length && edLayers.length > 0) { edToast('Nada que deshacer'); return; }
   edHistoryIdx--;
   edApplyHistory(edHistory[edHistoryIdx]);
 }
 
 function edRedo(){
-  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
   if(edHistoryIdx >= edHistory.length - 1){ edToast('Nada que rehacer'); return; }
   edHistoryIdx++;
   edApplyHistory(edHistory[edHistoryIdx]);
@@ -2737,28 +2714,7 @@ function edApplyHistory(snapshot){
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
-    else if(o.type === 'image') {
-      // Buscar layer vivo con la misma _uid o animKey para preservar _pngFrames/_apngSrc
-      const _rawIdx = raw.indexOf(o);
-      const _curPage = edPages[snapshot.pageIdx];
-      const _liveLayers = _curPage ? _curPage.layers : edLayers;
-      const _liveImg = _liveLayers?.find(lv =>
-        lv && lv.type === 'image' && (
-          (o._uid && lv._uid === o._uid) ||
-          (o.animKey && lv.animKey === o.animKey) ||
-          (o._pngFramesKey && lv._pngFramesKey === o._pngFramesKey)
-        )
-      );
-      l = new ImageLayer(null, o.x, o.y);
-      // Preservar datos de animación del layer vivo
-      if (_liveImg) {
-        if (_liveImg._pngFrames) l._pngFrames = _liveImg._pngFrames;
-        if (_liveImg._apngSrc)   l._apngSrc   = _liveImg._apngSrc;
-        if (_liveImg._animOc)    l._animOc     = _liveImg._animOc;
-        if (_liveImg._animReady) l._animReady  = _liveImg._animReady;
-        if (_liveImg.img)        l.img         = _liveImg.img;
-      }
-    }
+    else if(o.type === 'image')  l = new ImageLayer(null, o.x, o.y);
     else if(o.type === 'draw') {
       const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
@@ -2850,30 +2806,11 @@ function edApplyHistory(snapshot){
       if(o.opacity !== undefined) fl.opacity = o.opacity;
       if(o.x != null) { fl.x=o.x; fl.y=o.y; fl.width=o.width||1; fl.height=o.height||1; fl.rotation=o.rotation||0; }
       if(o.dataUrl) {
-        // Determinar si el fill era workspace (DrawLayer activo) o local (StrokeLayer)
-        const _wasWS = o._isWorkspaceCanvas === true;
-        if (_wasWS) {
-          // Fill workspace: canvas ED_CANVAS_W × ED_CANVAS_H
-          fl._canvas.width  = ED_CANVAS_W;
-          fl._canvas.height = ED_CANVAS_H;
-          fl._ctx = fl._canvas.getContext('2d');
-          fl._isWorkspaceCanvas = true;
-          fl.x=0.5; fl.y=0.5; fl.width=1; fl.height=1; fl.rotation=0;
-        } else {
-          // Fill local: canvas bbox (width*pw × height*ph)
-          const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
-          const _rpw = _isV ? ED_PAGE_W : ED_PAGE_H;
-          const _rph = _isV ? ED_PAGE_H : ED_PAGE_W;
-          const _rw = Math.max(1, Math.round((o.width||1) * _rpw));
-          const _rh = Math.max(1, Math.round((o.height||1) * _rph));
-          fl._canvas.width  = _rw;
-          fl._canvas.height = _rh;
-          fl._ctx = fl._canvas.getContext('2d');
-          fl._isWorkspaceCanvas = false;
-        }
         imgPromises.push(new Promise(res => {
           const _fi = new Image();
           _fi.onload = () => {
+            // SF: el canvas del fill es local (stroke-size). Restaurar directamente.
+            // Las propiedades x/y/w/h ya fueron asignadas arriba.
             fl._ctx.clearRect(0, 0, fl._canvas.width, fl._canvas.height);
             fl._ctx.drawImage(_fi, 0, 0, fl._canvas.width, fl._canvas.height);
             res();
@@ -3023,13 +2960,6 @@ function edFitCanvas(resetCamera){
   edCanvas.style.height = newH + 'px';
   edCanvas.style.position = 'absolute';
   edCanvas.style.left = '0';
-  // Sincronizar gcpCanvas si está activo
-  if (window._gcpActive && gcpCanvas) {
-    gcpCanvas.width  = newW;
-    gcpCanvas.height = newH;
-    gcpCanvas.style.width  = newW + 'px';
-    gcpCanvas.style.height = newH + 'px';
-  }
   edCanvas.style.top  = totalBarsH + 'px';
   _edCanvasTop = totalBarsH; // cachear para edCoords
   edCanvas.style.margin = '0';
@@ -4940,32 +4870,9 @@ function _edRenderPageThumb(canvas, page, pageIdx){
         offCtx.setTransform(1,0,0,1,-mx,-my);
       }
     } else if(l.type==='image')  l.draw(offCtx,off);
-    else if(l.type==='draw'){
-      // DrawLayer: dibujar fill vinculado primero, luego el draw
-      const _flDraw = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
-      if(_flDraw){ offCtx.globalAlpha=_flDraw.opacity??1; _flDraw.draw(offCtx); offCtx.globalAlpha=1; }
-      l.draw(offCtx);
-    }
-    else if(l.type==='fill') return; // el fill se dibuja con su stroke/draw vinculado
-    else if(l.type==='stroke'){
-      // StrokeLayer: dibujar fill vinculado primero con código inline
-      const _flStroke = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
-      if(_flStroke && _flStroke._canvas && _flStroke._canvas.width > 0){
-        const _fsrc = (_flStroke._previewSx != null && _flStroke._srcCanvas) ? _flStroke._srcCanvas : _flStroke._canvas;
-        const _fpx = edMarginX() + _flStroke.x * pw;
-        const _fpy = edMarginY() + _flStroke.y * ph;
-        const _fw  = _flStroke.width  * pw;
-        const _fh  = _flStroke.height * ph;
-        offCtx.save();
-        offCtx.globalAlpha = _flStroke.opacity ?? 1;
-        offCtx.translate(_fpx, _fpy);
-        if(_flStroke.rotation) offCtx.rotate(_flStroke.rotation * Math.PI / 180);
-        offCtx.drawImage(_fsrc, -_fw/2, -_fh/2, _fw, _fh);
-        offCtx.restore();
-        offCtx.globalAlpha = 1;
-      }
-      offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1;
-    }
+    else if(l.type==='draw')   l.draw(offCtx);
+    else if(l.type==='fill'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
+    else if(l.type==='stroke'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
     else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
   });
   offCtx.globalAlpha=_textAlpha;
@@ -8268,7 +8175,7 @@ function edOnEnd(e){
       if(l.type==='image' && !l.animKey && !l._pngFramesKey && !l._apngIdbKey) {
         const _data = l._apngSrc || (l._pngFrames && l._pngFrames.length ? l._pngFrames : null);
         if(_data && window._sbAnimIdbSave) {
-          const _k = _edAnimKey((edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6));
+          const _k = (edProjectId||'tmp')+'_h'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
           l._pngFramesKey = _k;
           _preExport.push(window._sbAnimIdbSave(_k, _data).catch(()=>{}));
         }
@@ -11182,11 +11089,6 @@ function edRenderOptionsPanel(mode){
       return;
     }
     edDrawBarHide();
-    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar
-    if(mode === 'draw' && edActiveTool !== 'eraser' && edActiveTool !== 'fill'){
-      _edDrawLayerTarget = 'draw';
-      edActiveTool = 'draw';
-    }
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
@@ -11966,8 +11868,6 @@ function edRenderOptionsPanel(mode){
       _edDrawInitHistory();
       _edPropsOverlayHide();
       _edDrawLockUI();
-      _edDrawLayerTarget = 'draw';  // capa dibujo por defecto
-      edActiveTool = 'draw';        // herramienta dibujar por defecto
       edRenderOptionsPanel('draw');
       edRedraw();
     });
@@ -13717,30 +13617,6 @@ function edInitShapeBar() {
 // ── Bloqueo unificado de la barra de menús ──────────────────────────────────
 // Una sola función controla AMBOS mecanismos (draw-active + overlay).
 // lock=true: bloquear. lock=false: desbloquear.
-// Ventana de aviso modo incógnito — fija y cerrable
-function _edShowIncognitoWarning(msg) {
-  if (document.getElementById('_edIncognitoWarn')) return; // ya visible
-  const box = document.createElement('div');
-  box.id = '_edIncognitoWarn';
-  box.style.cssText = [
-    'position:fixed','bottom:20px','left:50%','transform:translateX(-50%)',
-    'background:#1e293b','color:#f1f5f9','border-radius:12px',
-    'padding:16px 20px','max-width:340px','width:90%','z-index:99999',
-    'box-shadow:0 8px 32px rgba(0,0,0,0.5)','font-size:14px','line-height:1.5',
-    'display:flex','flex-direction:column','gap:10px'
-  ].join(';');
-  box.innerHTML = `
-    <div style="display:flex;gap:10px;align-items:flex-start">
-      <span style="font-size:20px;flex-shrink:0">⚠️</span>
-      <span>${msg}</span>
-    </div>
-    <button id="_edIncognitoWarnClose" style="align-self:flex-end;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">Entendido</button>
-  `;
-  document.body.appendChild(box);
-  document.getElementById('_edIncognitoWarnClose').addEventListener('click', () => box.remove());
-}
-window._edShowIncognitoWarning = _edShowIncognitoWarning;
-
 function _edMenuLock(lock) {
   if (lock) {
     $('editorShell')?.classList.add('draw-active');
@@ -13908,42 +13784,10 @@ async function edCloudSave() {
   await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate('Subiendo a la nube…');
 
-  let comic = ComicStore.getByIdFull
+  const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
     : ComicStore.getById(edProjectId);
   if (!comic) { edToast('Error: obra no encontrada'); return; }
-  // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
-  // construir editorData en línea para poder subirlo a la nube correctamente.
-  if ((!comic.editorData || !comic.editorData.pages || !comic.editorData.pages.length) && edPages && edPages.length) {
-    const _savedOrientFb = edOrientation, _savedPageFb = edCurrentPage;
-    const _fbPages = [];
-    for (let _fpi = 0; _fpi < edPages.length; _fpi++) {
-      const _fp = edPages[_fpi];
-      edCurrentPage = _fpi;
-      edOrientation = _fp.orientation || _savedOrientFb;
-      const _fbLayers = [];
-      for (let _fli = 0; _fli < _fp.layers.length; _fli++) {
-        const _fsl = edSerLayer(_fp.layers[_fli]);
-        if (!_fsl) continue;
-        // En incógnito no hay IDB, así que si hay _pngFrames los dejamos inline
-        // (serán pequeños o se perderán — lo importante es que la subida no quede vacía)
-        _fbLayers.push(_fsl);
-      }
-      _fbPages.push({ layers: _fbLayers, textLayerOpacity: _fp.textLayerOpacity ?? 1, textMode: _fp.textMode || 'sequential', orientation: _fp.orientation || _savedOrientFb });
-    }
-    edOrientation = _savedOrientFb; edCurrentPage = _savedPageFb;
-    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes } };
-    // También reconstruir panels (renders) si están vacíos
-    if (!comic.panels || !comic.panels.length) {
-      comic.panels = edPages.map((p, i) => ({
-        id: 'panel_' + i,
-        dataUrl: edRenderPage(p),
-        orientation: (p.orientation || edOrientation) === 'vertical' ? 'v' : 'h',
-        textMode: p.textMode || 'sequential',
-        texts: [],
-      }));
-    }
-  }
 
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
@@ -13974,15 +13818,7 @@ async function edCloudSave() {
     if (user && user.id) {
       try {
         const _bib = _bibLoad();
-        const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
-        const _bibFolderInfo = (_bib?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
-        window._edLastBibSync = { items: _bibItems, folders: _bibFolderInfo, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, cacheNull: _bibCache===null, ts: new Date().toISOString() };
         await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
-
-        // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
-        if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
-          _edShowIncognitoWarning('Biblioteca sincronizada con la nube: ' + _bibItems + ' item(s). Al abrir en modo normal se cargará desde la nube.');
-        }
       } catch(e) { console.warn('bibSync error:', e); }
     }
   } catch(err) {
@@ -14069,8 +13905,6 @@ function _edSizeMonitorStop() {
 
 async function edSaveProject(_keepOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
-  // Capturar historyIdx ahora — puede cambiar durante los awaits posteriores
-  const _saveHistoryIdx = edHistoryIdx;
   if(!_keepOverlay) _edSaveOverlayShow('Guardando en dispositivo…');
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
@@ -14157,19 +13991,10 @@ async function edSaveProject(_keepOverlay){
       if (!_sl) continue;
       // Externalizar _pngFrames a IndexedDB para no saturar localStorage
       if (_sl._pngFrames && _sl._pngFrames.length) {
-        if (_bibIdbUnavailable) {
-          // Modo incógnito: mantener _pngFrames en memoria, no asignar clave IDB
-          // (el upload a la nube los usará directamente desde _pngFrames)
-        } else {
-          const _idbKey = _edAnimKey(edProjectId + '_' + _pi + '_' + _li);
-          let _idbSaved = false;
-          try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); _idbSaved = true; } catch(e) {}
-          if (_idbSaved) {
-            delete _sl._pngFrames;
-            _sl._pngFramesKey = _idbKey;
-          }
-          // Si IDB falló, mantener _pngFrames y no asignar _pngFramesKey
-        }
+        const _idbKey = edProjectId + '_' + _pi + '_' + _li;
+        try { await _edAnimIdbSave(_idbKey, _sl._pngFrames); } catch(e) {}
+        delete _sl._pngFrames;
+        _sl._pngFramesKey = _idbKey;
       }
       _pageLayers.push(_sl);
     }
@@ -14182,9 +14007,7 @@ async function edSaveProject(_keepOverlay){
   // Al guardar localmente: restaurar la biblioteca local si existe un backup previo a la apertura de nube.
   // cs_biblioteca_local_{id} se crea en my-comics.js cuando se abre una obra desde la nube.
   // Al guardar localmente el usuario confirma que quiere la versión local, incluyendo su biblioteca.
-  if (edProjectId && !_bibIdbUnavailable) {
-    // Solo restaurar backup local si IDB está disponible (no en modo incógnito).
-    // En modo incógnito _bibCache ya tiene la versión correcta de Supabase — no sobreescribir.
+  if (edProjectId) {
     const _bibLocalBackupKey = `cs_biblioteca_local_${edProjectId}`;
     const _bibBackup = localStorage.getItem(_bibLocalBackupKey);
     if (_bibBackup) {
@@ -14222,18 +14045,13 @@ async function edSaveProject(_keepOverlay){
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
     _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
   } else {
-    // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
-    const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
-    const _err = _isIncognito
-      ? 'Modo incógnito: el guardado local no está disponible. Usa ☁️ Guardar en nube para conservar la obra.'
-      : 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
+    const _err = 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
-    edToast(_isIncognito ? '⚠️ Modo incógnito: usa Guardar en nube' : '⚠️ Guardado parcial');
+    edToast('⚠️ Guardado parcial');
   }
-  // Compactar historial usando el idx capturado al inicio (evita race condition con undo async)
-  const _snapToKeep = (_saveHistoryIdx >= 0 && _saveHistoryIdx < edHistory.length)
-    ? edHistory[_saveHistoryIdx] : (edHistory.length > 0 ? edHistory[edHistoryIdx] : null);
-  edHistory = _snapToKeep ? [_snapToKeep] : [];
+  // Marcar punto de guardado y limpiar historial (los estados anteriores ya no son relevantes)
+  _edSavedHistoryIdx = edHistoryIdx;
+  edHistory = edHistory.length > 0 ? [edHistory[edHistoryIdx]] : [];
   edHistoryIdx = edHistory.length - 1;
   _edSavedHistoryIdx = edHistoryIdx;
   // Limpiar autosave — ya está todo guardado, no hay nada que recuperar
@@ -14258,30 +14076,9 @@ function edRenderPage(page){
     if (!l || _textTypes.has(l.type)) return;
     if (l.type === 'image') { l.draw(ctx, full); return; }
     if (l.type === 'gif')   { l.draw(ctx); return; }
-    if (l.type === 'fill')  return; // el fill se dibuja con su stroke/draw vinculado
-    if (l.type === 'draw')  {
-      // DrawLayer: fill vinculado primero
-      const _flD2 = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
-      if(_flD2){ ctx.save(); ctx.globalAlpha=_flD2.opacity??1; _flD2.draw(ctx); ctx.globalAlpha=1; ctx.restore(); }
-      l.draw(ctx); return;
-    }
-    if (l.type === 'stroke'){
-      // StrokeLayer: fill vinculado con código inline (igual que edRedraw)
-      const _flS2 = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
-      if(_flS2 && _flS2._canvas && _flS2._canvas.width > 0){
-        const _fsrc2 = (_flS2._previewSx != null && _flS2._srcCanvas) ? _flS2._srcCanvas : _flS2._canvas;
-        const _fpx2 = edMarginX() + _flS2.x * edPageW();
-        const _fpy2 = edMarginY() + _flS2.y * edPageH();
-        const _fw2  = _flS2.width  * edPageW();
-        const _fh2  = _flS2.height * edPageH();
-        ctx.save(); ctx.globalAlpha = _flS2.opacity??1;
-        ctx.translate(_fpx2, _fpy2);
-        if(_flS2.rotation) ctx.rotate(_flS2.rotation * Math.PI / 180);
-        ctx.drawImage(_fsrc2, -_fw2/2, -_fh2/2, _fw2, _fh2);
-        ctx.restore(); ctx.globalAlpha = 1;
-      }
-      ctx.save(); ctx.globalAlpha=l.opacity??1; l.draw(ctx); ctx.globalAlpha=1; ctx.restore(); return;
-    }
+    if (l.type === 'fill')  { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
+    if (l.type === 'draw')  { l.draw(ctx); return; }
+    if (l.type === 'stroke'){ ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
     if (l.type === 'shape' || l.type === 'line') { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
   });
   // Recortar zona de la página del canvas de trabajo
@@ -15218,24 +15015,6 @@ const _AS_DB   = 'cxAutosave';
 const _AS_STORE = 'saves';
 let _edAutosaveTimer = null;
 
-// Clave de autosave: prefijada con userId para aislar entre autores en el mismo dispositivo
-// Clave de animación IDB: prefijada con userId para aislar frames entre autores
-function _edAnimKey(rawKey) {
-  try {
-    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
-    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-    return _uid + '__' + rawKey;
-  } catch(_e) { return rawKey; }
-}
-
-function _edAutosaveKey(id) {
-  try {
-    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
-    const _uid = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-    return _uid + '_' + (id || edProjectId || 'tmp');
-  } catch(_e) { return String(id || edProjectId || 'tmp'); }
-}
-
 function _asDb() {
   return new Promise((res, rej) => {
     const req = indexedDB.open(_AS_DB, 1);
@@ -15264,7 +15043,7 @@ async function _edAutosaveWrite() {
     };
     const db    = await _asDb();
     const tx    = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).put(snapshot, _edAutosaveKey(edProjectId));
+    tx.objectStore(_AS_STORE).put(snapshot, edProjectId);
     await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
   } catch(_) {}
 }
@@ -15274,7 +15053,7 @@ async function _edAutosaveRead(id) {
     const db  = await _asDb();
     const tx  = db.transaction(_AS_STORE, 'readonly');
     return await new Promise((res, rej) => {
-      const req = tx.objectStore(_AS_STORE).get(_edAutosaveKey(id));
+      const req = tx.objectStore(_AS_STORE).get(id);
       req.onsuccess = () => res(req.result || null);
       req.onerror   = () => res(null);
     });
@@ -15285,7 +15064,7 @@ async function _edAutosaveClear(id) {
   try {
     const db = await _asDb();
     const tx = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).delete(_edAutosaveKey(id || edProjectId));
+    tx.objectStore(_AS_STORE).delete(id || edProjectId);
   } catch(_) {}
 }
 
@@ -15298,14 +15077,10 @@ function _edAutosaveStop() {
   if (_edAutosaveTimer) { clearInterval(_edAutosaveTimer); _edAutosaveTimer = null; }
 }
 
-let _edLoadProjectInProgress = false;
 async function edLoadProject(id){
-  if(_edLoadProjectInProgress) return;
-  _edLoadProjectInProgress = true;
   const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
-  if(!comic){ _edLoadProjectInProgress = false; return; }
-  try {
+  if(!comic)return;
   edProjectId=id;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
   // cuando el usuario abra el panel.
@@ -15409,7 +15184,7 @@ async function edLoadProject(id){
   };
   if(edCanvas){
     requestAnimationFrame(()=>requestAnimationFrame(()=>{ _doLoadReset(); }));
-    window._edLoadResetTimer = setTimeout(()=>{ _doLoadReset(); }, 150);
+    setTimeout(()=>{ _doLoadReset(); }, 150);
     // Snapshot inicial síncrono: estado de apertura como punto de no-retorno.
     // Forzar _playing=false en todos los layers antes del snapshot para que
     // el estado de apertura siempre sea "todo parado".
@@ -15429,18 +15204,13 @@ async function edLoadProject(id){
       // Sincronizar el marcador de "guardado" con el snapshot inicial,
       // para que salir sin hacer cambios no pregunte si guardar.
       _edSavedHistoryIdx = edHistoryIdx;
-      // Liberar el flag aquí si hubo callbacks async (fills pendientes)
-      if (_fillLoadPromises.length) _edLoadProjectInProgress = false;
     };
     if(_fillLoadPromises.length) {
-      // Mantener el flag activo hasta que los fills carguen y el historial se inicialice
-      Promise.all(_fillLoadPromises).then(_doPushHistory).catch(() => {
-        _doPushHistory(); // push aunque fallen los fills
-      });
+      Promise.all(_fillLoadPromises).then(_doPushHistory);
     } else {
       _doPushHistory();
     }
-    window._edLoadResetTimer2 = setTimeout(()=>{
+    setTimeout(()=>{
       _doLoadReset();
       window._edLoadReset=false;
       // Snapshot inicial — esperamos que strokes e imágenes hayan cargado
@@ -15466,14 +15236,6 @@ async function edLoadProject(id){
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
   window._edLoadingProject = false;
-  } catch(_le) {
-    console.error('edLoadProject error:', _le);
-    edToast('⚠️ Error al cargar la obra');
-    _edLoadProjectInProgress = false; // liberar solo en error
-  }
-  // En éxito: el flag se libera en _doPushHistory si hay fills async,
-  // o inmediatamente si no hay fills pendientes
-  if (!_fillLoadPromises?.length) _edLoadProjectInProgress = false;
 }
 
 /* ══════════════════════════════════════════
@@ -16732,10 +16494,6 @@ function EditorView_destroy(){
     window._edPageHideFn = null;
   }
   _edAutosaveStop();
-  // Cancelar timers de reset de cámara pendientes de la carga anterior
-  // para evitar que se disparen cuando ya estamos en otra vista
-  if (window._edLoadResetTimer) { clearTimeout(window._edLoadResetTimer); window._edLoadResetTimer = null; }
-  if (window._edLoadResetTimer2) { clearTimeout(window._edLoadResetTimer2); window._edLoadResetTimer2 = null; }
   sessionStorage.removeItem('cx_editing');
 }
 async function edSaveProjectModal(){
@@ -16807,26 +16565,13 @@ async function edSaveProjectModal(){
       }
     }
 
-    // Migrar biblioteca al nuevo ID — la biblioteca real está en IDB, no localStorage
-    const _oldBibId = edProjectId;
-    const _newBibId = _newId;
-    // Migrar en IDB (ruta principal)
-    _bibOpenIdb().then(db => {
-      const _oldKey = _BIB_KEY_PREFIX + '_' + _oldBibId;
-      const _newKey = _BIB_KEY_PREFIX + '_' + _newBibId;
-      const tx = db.transaction('bib', 'readwrite');
-      const store = tx.objectStore('bib');
-      const req = store.get(_oldKey);
-      req.onsuccess = () => {
-        if (req.result) {
-          store.put(req.result, _newKey); // copiar al nuevo ID
-          // NO borrar el antiguo aquí — edSaveProject actualizará _bibCache con el nuevo ID
-        }
-      };
-    }).catch(() => {});
-    // También migrar _bibCache en memoria
-    // (_bibCache ya tiene los datos correctos, edSaveProject los guardará con el nuevo key
-    // porque edProjectId ya será _newId cuando se llame _bibSave)
+    // Copiar biblioteca de la obra original a la nueva (independientes desde ahora)
+    try {
+      const _oldBibKey = _BIB_KEY_PREFIX + '_' + edProjectId;
+      const _newBibKey = _BIB_KEY_PREFIX + '_' + _newId;
+      const _oldBib = localStorage.getItem(_oldBibKey);
+      if (_oldBib) localStorage.setItem(_newBibKey, _oldBib);
+    } catch(e) {}
 
     // Cambiar al nuevo id
     edProjectId = _newId;
@@ -16930,15 +16675,11 @@ function EditorView_init(){
 
   const editId=sessionStorage.getItem('cx_edit_id');
   if(!editId){Router.go('my-comics');return;}
+  edLoadProject(editId);
   sessionStorage.removeItem('cx_edit_id');
-  // edLoadProject es async: encadenar con .then() para que edSetOrientation
-  // se ejecute DESPUÉS de que los datos estén cargados.
-  // En Android el microtask de IndexedDB tarda más que en PC, por lo que
-  // sin await edPages[0] todavía está vacío cuando se llama edSetOrientation.
-  edLoadProject(editId).then(() => {
-    // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
-    edSetOrientation(edPages[0]?.orientation || edOrientation, false);
-  });
+
+  // Aplicar orientación de la hoja 0 sin sobreescribir las demás hojas
+  edSetOrientation(edPages[0]?.orientation || edOrientation, false);
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
 
@@ -17033,12 +16774,7 @@ function EditorView_init(){
     }
 
     const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
-    if (!hasUnsaved) {
-      // Esperar a que biblioteca IDB haya completado antes de salir
-      if (typeof _bibFlush === 'function') _bibFlush().then(() => Router.go('my-comics'));
-      else Router.go('my-comics');
-      return;
-    }
+    if (!hasUnsaved) { Router.go('my-comics'); return; }
 
     // Hay cambios sin guardar — preguntar
     const isNew = !ComicStore.getById(edProjectId)?.updatedAt ||
@@ -17061,58 +16797,23 @@ function EditorView_init(){
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
 
-    document.getElementById('_edExitYes').onclick = async () => {
+    document.getElementById('_edExitYes').onclick = () => {
       dlg.remove();
       _edAutosaveClear(); // salida controlada → borrar autosave
-      await edSaveProject();
-      // Esperar a que biblioteca IDB complete
-      if (typeof _bibFlush === 'function') await _bibFlush();
-      // La versión local es ahora la canónica — limpiar backup de versión de nube
-      if (edProjectId) {
-        const _cSave = ComicStore.getById(edProjectId);
-        if (_cSave && _cSave.localEditorData) {
-          ComicStore.save({ ..._cSave, localEditorData: null });
-        }
-        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
-      }
+      edSaveProject();
       Router.go('my-comics');
     };
-    document.getElementById('_edExitNo').onclick = async () => {
+    document.getElementById('_edExitNo').onclick = () => {
       dlg.remove();
-      // Cancelar timer de huérfanos si está pendiente — la limpieza la hacemos nosotros
-      if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
-      // Limpiar todos los datos temporales ANTES de navegar
-      await _edAutosaveClear(); // borrar autosave (async IDB)
-      if (edProjectId) {
-        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
-        const _cNoSave = ComicStore.getById(edProjectId);
-        if (_cNoSave && _cNoSave.localEditorData) {
-          ComicStore.save({ ..._cNoSave, localEditorData: null });
-        }
-      }
+      _edAutosaveClear(); // salida controlada sin guardar → borrar autosave
       // Si era obra nueva sin guardado previo, eliminarla
       if (isNew && edProjectId) {
         ComicStore.remove(edProjectId);
-        // Borrar OPFS de la obra nueva si existe
-        try {
-          if (navigator.storage?.getDirectory) {
-            const _user = Auth?.currentUser?.();
-            if (_user) {
-              const _uid = String(_user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-              const _root = await navigator.storage.getDirectory();
-              const _base = await _root.getDirectoryHandle('comixou', { create: false }).catch(() => null);
-              const _uDir = _base ? await _base.getDirectoryHandle(_uid, { create: false }).catch(() => null) : null;
-              if (_uDir) await _uDir.removeEntry(edProjectId + '.json').catch(() => {});
-            }
-          }
-        } catch(_) {}
       } else {
         // Restaurar último estado guardado
         const saved = ComicStore.getById(edProjectId);
         if (saved) edLoadProject(edProjectId);
       }
-      // Navegar — el detector de huérfanos en my-comics se lanzará con delay normal
-      // pero ya no habrá nada que detectar
       Router.go('my-comics');
     };
   });
@@ -18401,37 +18102,11 @@ async function _bibInitIdb(supabaseWorkId) {
       resolve();
     };
   }).catch(() => {
-    _bibIdbUnavailable = true; // IDB no disponible (modo incógnito u otro error)
     _bibCache = { folders: [
       { id: '__root__', name: 'General', items: [] },
       { id: '__anim__', name: 'Animaciones', items: [] }
     ]};
-    // Intentar cargar de Supabase en memoria aunque IDB no esté disponible
-    const _user3 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
-    if (_user3 && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
-      SupabaseClient.bibDownload(_user3.id, supabaseWorkId).then(downloaded => {
-        if (downloaded && Array.isArray(downloaded.folders) &&
-            downloaded.folders.some(f => f.items && f.items.length > 0)) {
-          _bibCache = downloaded;
-          // No guardar en IDB — solo en memoria
-        }
-        // Mostrar aviso modo incógnito
-        if (typeof _edShowIncognitoWarning === 'function') {
-          _edShowIncognitoWarning('Modo incógnito: la biblioteca y animaciones se cargan en memoria y no se guardarán entre sesiones. Para guardar cambios, abre la app en modo normal.');
-        }
-        resolve();
-      }).catch(() => {
-        if (typeof _edShowIncognitoWarning === 'function') {
-          _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible en este modo. Abre la app en modo normal para acceder a ella.');
-        }
-        resolve();
-      });
-    } else {
-      if (typeof _edShowIncognitoWarning === 'function') {
-        setTimeout(() => _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible. Abre la app en modo normal para acceder a ella.'), 1500);
-      }
-      resolve();
-    }
+    resolve();
   });
   }); // cierre new Promise
 }
@@ -18451,35 +18126,14 @@ function _bibLoad() {
   return _bibCache;
 }
 
-// Persiste en IDB; retorna Promise para poder awaitar si es necesario.
-// En modo incógnito (IDB no disponible), solo actualiza el caché en memoria.
-let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
-let _bibIncognitoChanged = false; // cambios pendientes de subir en modo incógnito
-let _bibSavePromise = null; // última operación de guardado pendiente
+// Persiste en IDB en background; actualiza el caché de forma síncrona
 function _bibSave(data) {
   _bibCache = data; // actualizar caché inmediatamente
-  if (_bibIdbUnavailable) {
-    _bibIncognitoChanged = true;
-    if (typeof _edShowIncognitoWarning === 'function') {
-      _edShowIncognitoWarning('Los cambios en la biblioteca solo se guardarán si subes la obra a la nube. Pulsa el botón ☁️ para guardar.');
-    }
-    return Promise.resolve();
-  }
-  _bibSavePromise = _bibOpenIdb().then(db => {
-    return new Promise((res, rej) => {
-      const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
-      tx.oncomplete = () => res();
-      tx.onerror = () => res(); // silencioso
-      tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
-    });
-  }).catch(() => {
-    _bibIdbUnavailable = true;
-  });
-  return _bibSavePromise;
-}
-// Esperar a que la última escritura de biblioteca en IDB complete
-async function _bibFlush() {
-  if (_bibSavePromise) { try { await _bibSavePromise; } catch(_) {} }
+  _bibOpenIdb().then(db => {
+    const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+    tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
+    tx.onerror = () => edToast('⚠️ Error al guardar en biblioteca');
+  }).catch(() => edToast('⚠️ Error al guardar en biblioteca'));
 }
 // Exposición global para my-comics.js y otros módulos externos
 window._bibSave = _bibSave;
@@ -18564,19 +18218,7 @@ function _bibGetAnimFolder(data) {
 
 // ── Guardar objeto o grupo ────────────────────────────────────────
 function edBibGuardar() {
-  // Asegurar que _bibCache y carpeta General existen (obra nueva sin IDB inicializada)
-  if (!_bibLoad()) {
-    _bibCache = { folders: [
-      { id: '__root__', name: 'General', items: [] },
-      { id: '__anim__', name: 'Animaciones', items: [] }
-    ]};
-  }
   const data = _bibLoad();
-  if (!data || !Array.isArray(data.folders)) { edToast('Error al acceder a la biblioteca'); return; }
-  if (!data.folders.find(f => f.id === '__root__')) {
-    data.folders.unshift({ id: '__root__', name: 'General', items: [] });
-    _bibSave(data);
-  }
   if (_BIB_MAX_BYTES > 0 && _bibUsedBytes(data) >= _BIB_MAX_BYTES) {
     edToast(`Biblioteca llena (${_bibFormatSize(_bibUsedBytes(data))} / ${_bibFormatSize(_BIB_MAX_BYTES)}). Elimina algún objeto para añadir más.`, 3500);
     return;
@@ -18997,7 +18639,7 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpFrameDelay!=null) la2._gcpFrameDelay=entry.gcpFrameDelay;
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd) la2._gcpStopAtEnd=true;
-                const _k2=_edAnimKey('bib_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8));
+                const _k2='anim_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
                 la2.animKey=_k2;
                 if(window._sbAnimIdbSave) window._sbAnimIdbSave(_k2,entry.apngSrc||_frames2).catch(function(){});
                 const fi2=edLayers.findIndex(l=>l.type==='text'||l.type==='bubble');
@@ -19046,7 +18688,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
-          const _bibAnimKey = _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+          const _bibAnimKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
           la.animKey = _bibAnimKey;
           if (window._sbAnimIdbSave) {
             // Guardar en IDB: si apngSrc usar string, sino array de frames
@@ -19556,10 +19198,8 @@ function _gcpHandleDown(e) {
   // Registrar pointer en mapa propio del GCP
   _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  // Dos dedos → pinch (cancelar rubber band si estaba pendiente)
+  // Dos dedos → pinch
   if (_gcpPtrMap.size === 2) {
-    if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
-    if (edRubberBand) { edRubberBand = null; }
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     const _pts = [..._gcpPtrMap.values()];
     _gcpPinchDist0  = Math.hypot(_pts[0].x - _pts[1].x, _pts[0].y - _pts[1].y);
@@ -19583,46 +19223,6 @@ function _gcpHandleDown(e) {
     _gcpRedraw(); return;
   }
 
-  // ── Multiselect activo: drag grupal o nuevo rubber band ──────────────────
-  if (edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox) {
-    const _isTouch5 = e.pointerType === 'touch';
-    const _z5 = edCamera.z;
-    const _pw5 = edPageW(), _ph5 = edPageH();
-    const _bb = edMultiBbox;
-    // Hit en handle de rotación
-    const _rotY = _bb.cy - _bb.h/2 - 28/_z5/_ph5;
-    if (Math.hypot((c.nx-_bb.cx)*_pw5, (c.ny-_rotY)*_ph5)*_z5 < (_isTouch5?28:18)) {
-      edMultiRotating = true;
-      edRotateStartAngle = Math.atan2(c.ny-_bb.cy, c.nx-_bb.cx) - edMultiGroupRot*Math.PI/180;
-      window._edRotateInitRot = edMultiGroupRot;
-      _gcpRedraw(); return;
-    }
-    // Hit en handles de escala
-    const _handles5 = _msHandles(_bb);
-    for (const h of _handles5) {
-      if (Math.hypot((c.nx-h.x)*_pw5, (c.ny-h.y)*_ph5)*_z5 < (_isTouch5?28:18)) {
-        edMultiResizing = true; edResizeCorner = h.c;
-        edInitialSize = { width:_bb.w, height:_bb.h, cx:_bb.cx, cy:_bb.cy,
-                          asp:_bb.h/_bb.w, rot:edMultiGroupRot,
-                          ox:_bb.cx, oy:_bb.cy, anchorX:_bb.cx, anchorY:_bb.cy };
-        edMultiDragOffs = edMultiSel.map(i => ({ dx:c.nx-window._gcpLayers[i].x, dy:c.ny-window._gcpLayers[i].y }));
-        _gcpRedraw(); return;
-      }
-    }
-    // Hit dentro del bbox grupal → drag grupal
-    const _gr5 = edMultiGroupRot*Math.PI/180;
-    const _dx5 = c.nx-_bb.cx, _dy5 = c.ny-_bb.cy;
-    const _lx5 = _dx5*Math.cos(-_gr5)*_pw5 - _dy5*Math.sin(-_gr5)*_ph5;
-    const _ly5 = _dx5*Math.sin(-_gr5)*_pw5 + _dy5*Math.cos(-_gr5)*_ph5;
-    if (Math.abs(_lx5) <= _bb.w/2*_pw5+10/_z5 && Math.abs(_ly5) <= _bb.h/2*_ph5+10/_z5) {
-      edMultiDragging = true;
-      edMultiDragOffs = edMultiSel.map(i => ({ dx:c.nx-window._gcpLayers[i].x, dy:c.ny-window._gcpLayers[i].y }));
-      window._edMoved = false;
-      _gcpRedraw(); return;
-    }
-    // Toque fuera del bbox → nuevo rubber band
-    _msClear(); window._gcpSelIdx = -1; edActiveTool = 'select';
-  }
   // Un solo dedo → guardar selección actual ANTES de que _gcpDoSelectDrag la cambie
   _gcpSelBeforePinch = window._gcpSelIdx;
   _gcpDoSelectDrag(e, c);
@@ -19631,10 +19231,6 @@ function _gcpHandleDown(e) {
 // Lógica real de selección/drag/handles en GCP (tras confirmar que es un solo puntero)
 // Idéntico al editor general: mismos radios, mismas restricciones táctiles, misma lógica
 function _gcpDoSelectDrag(e, c) {
-  // No iniciar selección si el origen está en UI del GCP (submenús, paneles, barras)
-  if (e.target && e.target !== gcpCanvas) {
-    if (e.target.closest?.('#gcpFramesBar,#gcpMenuBar,#gcpTopbar,#gcpPropsPanel,#gcpShell,[data-gcpmenu],#gcp-rule-pop,#gcpInterpModal,#gcpInterpMenu,._gcpDropdown')) return;
-  }
   const _isTouch = e.pointerType === 'touch';
   const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
   const hitScreen = _isTouch ? 28 : 18;
@@ -19735,30 +19331,9 @@ function _gcpDoSelectDrag(e, c) {
       window._edMoved = false;
     }
   } else {
-    // Toque en vacío
-    if (edActiveTool === 'multiselect') {
-      // En multiselect: empezar nuevo rubber band desde el vacío
-      _msClear();
-      edActiveTool = 'multiselect';
-      edRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
-    } else if (!_isTouch) {
-      // PC: empezar rubber band directamente al arrastrar en vacío
-      window._gcpSelIdx = -1;
-      edRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
-    } else {
-      // Táctil: longpress para activar rubber band
-      window._gcpSelIdx = -1;
-      const _rbC = { ...c };
-      clearTimeout(window._gcpRbTimer);
-      window._gcpRbTimer = setTimeout(() => {
-        window._gcpRbTimer = null;
-        if (!edIsDragging && !edIsResizing && !edIsRotating) {
-          edRubberBand = { x0: _rbC.nx, y0: _rbC.ny, x1: _rbC.nx, y1: _rbC.ny };
-          _gcpRedraw();
-        }
-      }, 400);
-      _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
-    }
+    // Toque en vacío — deseleccionar
+    window._gcpSelIdx = -1;
+    _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
   }
   _gcpRedraw();
 }
@@ -20033,8 +19608,6 @@ function _gcpAutoSaveFrame() {
 }
 
 function _gcpHandleMove(e) {
-  // Cancelar timer de rubber band táctil si el dedo se mueve
-  if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   // Actualizar pointer en el mapa propio del GCP
   if (_gcpPtrMap.has(e.pointerId)) {
     _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -20114,12 +19687,6 @@ function _gcpHandleMove(e) {
       }
       _gcpRedraw(); return;
     }
-    // Actualizar rubber band si activo
-    if (edRubberBand && !edIsDragging && !edIsResizing && !edIsRotating && !edMultiDragging && !edMultiResizing && !edMultiRotating) {
-      const _c3 = edCoords(e);
-      edRubberBand.x1 = _c3.nx; edRubberBand.y1 = _c3.ny;
-      _gcpRedraw(); return;
-    }
     edOnMove(e);
     // Snap a guías GCP si hay drag activo de una capa
     if (edIsDragging && window._gcpSelIdx >= 0) {
@@ -20193,56 +19760,12 @@ function _gcpHandleUp(e) {
   if((!window._edActivePointers || window._edActivePointers.size === 0) && edRubberBand){
     edRubberBand = null;
   }
-  // Cancelar timer de rubber band táctil si el dedo se levanta
-  if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   window._edMoved = false;
-  // ── Confirmar rubber band → activar multiselect sin menú ─────────────────
-  if (edRubberBand) {
-    const rx0 = Math.min(edRubberBand.x0, edRubberBand.x1);
-    const ry0 = Math.min(edRubberBand.y0, edRubberBand.y1);
-    const rx1 = Math.max(edRubberBand.x0, edRubberBand.x1);
-    const ry1 = Math.max(edRubberBand.y0, edRubberBand.y1);
-    edRubberBand = null;
-    if ((rx1 - rx0) > 0.01 || (ry1 - ry0) > 0.01) {
-      const _found = [];
-      window._gcpLayers.forEach((la, i) => {
-        if (!la || la._gcpVisible === false) return;
-        // GCP solo tiene strokes e images
-        if (la.type !== 'stroke' && la.type !== 'image') return;
-        if (la.locked) return;
-        if (_edAllCornersInside(la, rx0, ry0, rx1, ry1)) _found.push(i);
-      });
-      if (_found.length === 1) {
-        window._gcpSelIdx = _found[0];
-        edActiveTool = 'select';
-        _msClear();
-      } else if (_found.length >= 2) {
-        window._gcpSelIdx = -1;
-        edMultiSel = _found;
-        edActiveTool = 'multiselect';
-        gcpCanvas.className = 'tool-multiselect';
-        _msRecalcBbox();
-        // NO llamar _edUpdateMultiSelPanel — sin menú de unir/agrupar
-      }
-    } else {
-      // Rubber band demasiado pequeño → deseleccionar
-      _msClear();
-      window._gcpSelIdx = -1;
-      edActiveTool = 'select';
-    }
-    edIsDragging = false; edIsResizing = false; edIsRotating = false;
-    _gcpRedraw();
-    return;
-  }
-  // Guardar estado en el frame activo si hubo transformación (individual o grupal)
-  if (edIsDragging || edIsResizing || edIsRotating || edMultiDragging || edMultiResizing || edMultiRotating) {
+  // Guardar estado en el frame activo si hubo transformación
+  if (edIsDragging || edIsResizing || edIsRotating) {
     _gcpAutoSaveFrame();
-    if (edMultiDragging || edMultiResizing || edMultiRotating) {
-      _msRecalcBbox(); // recalcular bbox tras transformación grupal
-    }
   }
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  edMultiDragging = false; edMultiResizing = false; edMultiRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
   // El historial registra el estado en vivo (fuera de los frames guardados).
   const newSnap = window._gcpLayers.map(la => ({
@@ -22019,15 +21542,7 @@ function _gcpRedraw() {
 
 // Copia de edDrawSel adaptada al canvas GIF
 function _gcpDrawSel() {
-  // ── Multiselección GCP ──────────────────────────────────────────────────
-  if (edActiveTool === 'multiselect' && edMultiSel.length) {
-    _gcpWithEditorContext(() => edDrawMultiSel());
-  } else if (edRubberBand) {
-    _gcpWithEditorContext(() => edDrawRubberBand());
-  }
-
   const idx = window._gcpSelIdx;
-  if (edActiveTool === 'multiselect') return; // multiselect dibuja sus propios handles
   if (idx < 0 || idx >= window._gcpLayers.length) return;
   const la = window._gcpLayers[idx];
   if (!la) return;
@@ -22191,8 +21706,8 @@ function gcpInsertFromBib(entry) {
   };
 
   const insertLayer = (la) => {
-    if (la.type === 'shape' || la.type === 'line' || la.type === 'text' || la.type === 'bubble') {
-      // Convertir a imagen PNG — textos/bocadillos/vectoriales no son animables directamente
+    if (la.type === 'shape' || la.type === 'line') {
+      // Convertir vectorial a imagen PNG — así cada frame tiene su propia imagen independiente
       _gcpVectorToImage(la, imgLayer => doInsert(imgLayer));
     } else {
       doInsert(la);
@@ -22347,13 +21862,14 @@ function gcpOpen(edLayerIdx) {
   if (!gcpCanvas) return;
   gcpCtx = gcpCanvas.getContext('2d');
 
-  // gcpCanvas mismo tamaño y posición que edCanvas — las scrollbars tienen z-index propio
-  gcpCanvas.width  = ec.width;
-  gcpCanvas.height = ec.height;
+  // Dejar 12px libres en right y bottom para las scrollbars de PC
+  const _sbSize = 12;
+  gcpCanvas.width  = ec.width  - _sbSize;
+  gcpCanvas.height = ec.height - _sbSize;
   gcpCanvas.style.left   = '0';
-  gcpCanvas.style.top    = '0';
-  gcpCanvas.style.width  = ec.width  + 'px';
-  gcpCanvas.style.height = ec.height + 'px';
+  gcpCanvas.style.top    = ec.style.top;
+  gcpCanvas.style.width  = (ec.width  - _sbSize) + 'px';
+  gcpCanvas.style.height = (ec.height - _sbSize) + 'px';
   gcpCanvas.style.display       = 'block';
   gcpCanvas.style.pointerEvents = 'auto';
   // Bloquear scroll nativo en Android (antes lo hacía gcpBlocker, ahora con pointer-events:none no puede)
@@ -23790,7 +23306,6 @@ async function _edRunDiag() {
     if (_sl && _fl && _fl._canvas) {
       // SF: canvas local del fill (no workspace)
       const _flW = _fl._canvas.width, _flH = _fl._canvas.height;
-      L('fill _isWorkspaceCanvas: ' + _fl._isWorkspaceCanvas);
       const _flCtx = _fl._ctx || _fl._canvas.getContext('2d');
       const _flImg = _flCtx.getImageData(0, 0, _flW, _flH);
       let _fx0=_flW,_fy0=_flH,_fx1=0,_fy1=0,_fCount=0;
@@ -23829,8 +23344,8 @@ async function _edRunDiag() {
   // 1. localStorage
   try {
     let _lsSize = 0;
-    try { for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; } } catch(_ls_e) {}
-    L('localStorage: ' + (_bibIdbUnavailable ? 'modo incógnito' : Math.round(_lsSize/1024) + ' KB'));
+    for (let k in localStorage) { if (localStorage.hasOwnProperty(k)) _lsSize += (localStorage[k]||'').length + k.length; }
+    L('localStorage: ' + Math.round(_lsSize/1024) + ' KB');
   } catch(e) { L('localStorage ERROR: ' + e.message); }
 
   // 2. Comic en ComicStore
@@ -23850,28 +23365,24 @@ async function _edRunDiag() {
   } else { L('ComicStore: NO ENCONTRADO'); }
 
   // 3. IDB cxAnims — claves relevantes
-  if (_bibIdbUnavailable) {
-    L('IDB cxAnims: no disponible (modo incógnito)');
-  } else {
-    try {
-      await new Promise((res) => {
-        let _r;
-        try { _r = indexedDB.open('cxAnims', 1); } catch(e) { L('IDB no disponible: ' + e.message); res(); return; }
-        _r.onupgradeneeded = e => { try { e.target.result.createObjectStore('anims'); } catch(_){} };
-        _r.onsuccess = e => {
-          try {
-            const tx = e.target.result.transaction('anims','readonly');
-            const req = tx.objectStore('anims').getAllKeys();
-            req.onsuccess = ev => { const ks = ev.target.result||[]; L('IDB cxAnims: '+ks.length+' entradas'); ks.slice(0,5).forEach(k=>L('  '+k)); if(ks.length>5)L('  ...('+ks.length+' total)'); res(); };
-            req.onerror = () => { L('IDB getAllKeys error'); res(); };
-          } catch(e2) { L('IDB tx error: '+e2.message); res(); }
+  try {
+    await new Promise((res) => {
+      const r = indexedDB.open('cxAnims', 1);
+      r.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+      r.onsuccess = e => {
+        const tx = e.target.result.transaction('anims','readonly');
+        const req = tx.objectStore('anims').getAllKeys();
+        req.onsuccess = ev => {
+          const ks = ev.target.result || [];
+          L('IDB cxAnims: ' + ks.length + ' entradas');
+          ks.forEach(k => L('  ' + k));
+          res();
         };
-        _r.onerror = () => { L('IDB open error'); res(); };
-        _r.onblocked = () => { L('IDB blocked'); res(); };
-        setTimeout(res, 3000); // timeout de seguridad
-      });
-    } catch(e) { L('IDB error: ' + e.message); }
-  }
+        req.onerror = () => { L('IDB getAllKeys error'); res(); };
+      };
+      r.onerror = () => { L('IDB open error'); res(); };
+    });
+  } catch(e) { L('IDB error: ' + e.message); }
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory
@@ -23880,24 +23391,7 @@ async function _edRunDiag() {
     L('\n── Errores de guardado ──');
     _edSaveErrors.forEach(m => L('  ⚠️ ' + m));
   } else {
-    if(window._edOrientFillDiag){L('\n── Orient Fill Diag ──');L(JSON.stringify(window._edOrientFillDiag));}
-  if(window._edLastBibSync){
-    L('\n── Último bibSync ──');
-    L(JSON.stringify(window._edLastBibSync));
-  }
-  // Estado actual de _bibCache
-  L('\n── bibCache actual ──');
-  try {
-    const _bNow = _bibLoad();
-    const _bFolders = (_bNow?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
-    L('items total: ' + (_bNow?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0));
-    L('folders: ' + _bFolders);
-    L('_bibIdbUnavailable: ' + _bibIdbUnavailable);
-    L('_bibCache===null: ' + (_bibCache===null));
-    L('_bibIncognitoChanged: ' + (typeof _bibIncognitoChanged !== 'undefined' ? _bibIncognitoChanged : 'N/A'));
-
-  } catch(e) { L('error: ' + e.message); }
-  L('\n── Errores de guardado: ninguno ──');
+    L('\n── Errores de guardado: ninguno ──');
   }
   L('── PushHistory log ──');
   (window._edHistDiag||[]).forEach(m => L('  ' + m));
