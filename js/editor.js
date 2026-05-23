@@ -10320,7 +10320,9 @@ function _edActivateLineTool(isNew, isCreating) {
   // canFuse: mostrar botón Fusionar si hay ≥2 objetos line cerrados en la página.
   // Se muestra independientemente de selección y de _vsPreSessionLayers.
   // El handler de fusión ya filtra qué objetos fusionar (solo los de sesión actual).
-  const canFuse = edLayers.filter(l => l.type==='line' && l.closed).length >= 2;
+  // canFuse: ≥2 layers line cerrados, O un layer único con grouped=true (multicontorno unido)
+  const _canFuseGrouped = _cur && _cur.type==='line' && _cur.grouped && _cur.points && _cur.points.includes(null);
+  const canFuse = _canFuseGrouped || edLayers.filter(l => l.type==='line' && l.closed).length >= 2;
   // nSubPaths eliminado (T1: huecos son objetos independientes hasta OK)
 
   panel.innerHTML = `
@@ -10570,11 +10572,24 @@ function _edActivateLineTool(isNew, isCreating) {
   window._edCurveVertIdx=-1; // resetear al abrir el panel
   // ── Fusionar — combina todos los objetos cerrados en uno con huecos ──
   $('op-line-fuse-btn')?.addEventListener('click', () => {
-    const _closedLayers = edLayers.filter(l =>
-      l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l)
-    );
+    // Caso A: layer único con grouped=true (resultado de ⊕ Unir) → convertir a evenodd
+    const _selLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if (_selLayer && _selLayer.type === 'line' && _selLayer.grouped && _selLayer.points && _selLayer.points.includes(null)) {
+      _edShapePushHistory();
+      _selLayer.grouped = false;
+      delete _selLayer.groupedStyles;
+      _selLayer.closed = true;
+      _selLayer.fillColor = edDrawFillColor || _selLayer.fillColor || '#ffffff';
+      _edShapePushHistory();
+      edRedraw();
+      _edActivateLineTool(false, true);
+      edToast('Objetos fusionados ✓');
+      return;
+    }
+    // Caso B: ≥2 layers line cerrados en la página (incluyendo pre-existentes)
+    const _closedLayers = edLayers.filter(l => l.type === 'line' && l.closed);
     if (_closedLayers.length < 2) {
-      edToast('Necesitas al menos 2 objetos cerrados en esta sesión para fusionar');
+      edToast('Necesitas al menos 2 objetos cerrados para fusionar');
       return;
     }
     // Fusionar — crea un LineLayer NUEVO independiente (no modifica los originales)
@@ -10588,15 +10603,26 @@ function _edActivateLineTool(isNew, isCreating) {
     _newLayer.rotation = 0; // el nuevo layer no tiene rotación propia
     _newLayer.x = _origin.x;
     _newLayer.y = _origin.y;
-    // Añadir puntos de cada objeto en coords locales del nuevo layer
+    // Añadir puntos de cada objeto en coords locales del nuevo layer,
+    // preservando cornerRadii con los índices correctos (incluyendo nulls)
+    if (!_newLayer.cornerRadii) _newLayer.cornerRadii = {};
     for (let i = 0; i < _closedLayers.length; i++) {
       const _ll = _closedLayers[i];
-      if (i > 0) _newLayer.points.push(null); // separador de contorno
-      const _absPoints = _ll.absPoints();
-      _absPoints.forEach(p => {
-        if (!p) { _newLayer.points.push(null); return; }
-        _newLayer.points.push({ x: p.x - _newLayer.x, y: p.y - _newLayer.y });
-      });
+      if (i > 0) _newLayer.points.push(null); // separador de contorno (ocupa un índice)
+      const _rot = (_ll.rotation || 0) * Math.PI / 180;
+      const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
+      const _cr = _ll.cornerRadii || {};
+      // Iterar sobre la.points original para preservar el índice _pi → cornerRadii
+      for (let _pi = 0; _pi < _ll.points.length; _pi++) {
+        const p = _ll.points[_pi];
+        if (!p) { _newLayer.points.push(null); continue; }
+        // Convertir punto local del layer original a abs, luego a local del nuevo layer
+        const _ax = _ll.x + p.x * _cos - p.y * _sin;
+        const _ay = _ll.y + p.x * _sin + p.y * _cos;
+        // Copiar cornerRadius si existe para este punto, al índice actual en _newLayer.points
+        if (_cr[_pi]) _newLayer.cornerRadii[_newLayer.points.length] = _cr[_pi];
+        _newLayer.points.push({ x: _ax - _newLayer.x, y: _ay - _newLayer.y });
+      }
     }
     _newLayer.closed = true;
     _newLayer._updateBbox();
@@ -14839,6 +14865,7 @@ function edSerLayer(l){
     if(l._drawLayerId) _f._drawLayerId=l._drawLayerId;
     if(l._uid) _f._uid=l._uid;
     if(l.hidden) _f.hidden=true;
+    if(l.opacity !== undefined) _f.opacity=l.opacity;
     return _f;
   }
   if(l.type==='gif'){
@@ -14946,7 +14973,7 @@ function edSerLayer(l){
     return _bobj;
   }
   if(l.type==='group') return null; // obsoleto
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.opacity!==undefined)_o.opacity=l.opacity; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
     color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; return _o;}
@@ -15077,6 +15104,7 @@ function edDeserLayer(d, pageOrientation){
     fl.width    = d.width    != null ? d.width    : 1.0;
     fl.height   = d.height   != null ? d.height   : 1.0;
     fl.rotation = d.rotation != null ? d.rotation : 0;
+    if(d.opacity !== undefined) fl.opacity = d.opacity;
     return fl;
   }
   if(d.type==='draw'){
@@ -15089,6 +15117,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.hidden) dl.hidden=true;
     if(d._uid) dl._uid=d._uid;
     if(d._fillLayerId) dl._fillLayerId=d._fillLayerId;
+    if(d.opacity !== undefined) dl.opacity = d.opacity;
     return dl;
   }
   if(d.type==='stroke'){
@@ -18204,6 +18233,48 @@ function EditorView_init(){
 /* ── DESCARGAR / CARGAR JSON ── */
 // Exportar la hoja actual como PNG o JPG
 // Renderiza en canvas offscreen con transform z=1, desplazado al origen de la página
+
+// ── Descarga con File System Access API (showSaveFilePicker) en PC ────────
+// Usa el diálogo nativo del SO si está disponible (Chrome/Edge desktop).
+// Fallback automático a <a>.click() en Android, Firefox y Safari.
+async function _edSaveBlob(blob, suggestedName, mimeType) {
+  // showSaveFilePicker: disponible en Chrome/Edge desktop (no en Android Chrome)
+  const _supportsFilePicker = (
+    typeof window.showSaveFilePicker === 'function' &&
+    !navigator.maxTouchPoints // excluir táctil (Android/tablet)
+  );
+  if (_supportsFilePicker) {
+    const ext = suggestedName.split('.').pop().toLowerCase();
+    const _typeMap = {
+      png:  [{description:'Imagen PNG', accept:{'image/png':['.png']}}],
+      jpg:  [{description:'Imagen JPEG', accept:{'image/jpeg':['.jpg','.jpeg']}}],
+      jpeg: [{description:'Imagen JPEG', accept:{'image/jpeg':['.jpg','.jpeg']}}],
+      gif:  [{description:'GIF animado', accept:{'image/gif':['.gif']}}],
+      mp4:  [{description:'Vídeo MP4', accept:{'video/mp4':['.mp4']}}],
+    };
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: _typeMap[ext] || [{description:'Archivo', accept:{[mimeType]:['.'+ext]}}],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true; // descargado con éxito via picker
+    } catch(e) {
+      if (e.name === 'AbortError') return true; // usuario canceló → no hacer fallback
+      // Cualquier otro error: caer al método clásico
+    }
+  }
+  // Fallback: <a>.click()
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = suggestedName;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+  return false;
+}
+
 function edExportPagePNG(format){
   format = format || 'png';
   edSaveProject();
@@ -18262,16 +18333,11 @@ function edExportPagePNG(format){
   // Descargar
   const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format === 'jpg' ? 0.92 : undefined;
-  off.toBlob(blob => {
+  off.toBlob(async blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const url   = URL.createObjectURL(blob);
-    const a     = document.createElement('a');
     const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
     const pg    = edCurrentPage + 1;
-    a.href      = url;
-    a.download  = `${title}_hoja${pg}.${format}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    await _edSaveBlob(blob, `${title}_hoja${pg}.${format}`, mimeType);
     edToast(`Hoja ${pg} exportada ✓`);
   }, mimeType, quality);
 }
@@ -18346,14 +18412,10 @@ function edExportSelectionPNG(format) {
 
   const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format==='jpg' ? 0.92 : undefined;
-  off.toBlob(blob => {
+  off.toBlob(async blob => {
     if(!blob){ edToast('Error al exportar'); return; }
-    const url = URL.createObjectURL(blob);
-    const a   = document.createElement('a');
-    a.href    = url;
-    a.download = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
+    await _edSaveBlob(blob, _selName, mimeType);
     edToast('Selección exportada ✓');
   }, mimeType, quality);
 }
@@ -22008,16 +22070,31 @@ function _gcpUpdateFramesBar() {
         dupBtn.innerHTML = '⧉';
         dupBtn.addEventListener('click', e => {
           e.stopPropagation();
+          // Duplicar solo en la fila del layer activo (la):
+          // insertar copia de fi justo después en este layer.
+          // En el resto de layers: añadir al final una copia de su último frame
+          // con visible:false para mantener la longitud de la matriz sin alterar su contenido.
+          if (!la._frames) la._frames = [];
+          const _src = la._frames[fi];
+          const _copy = _src ? {..._src} : {
+            x: la.x, y: la.y, width: la.width, height: la.height,
+            rotation: la.rotation || 0, opacity: la.opacity ?? 1, visible: true
+          };
+          delete _copy._interp;
+          la._frames.splice(fi + 1, 0, _copy);
+
+          // Para los demás layers: añadir al final una copia de su último frame invisible
           window._gcpLayers.forEach(otherLa => {
+            if (otherLa === la) return;
             if (!otherLa._frames) otherLa._frames = [];
-            const _src = otherLa._frames[fi];
-            const _copy = _src ? {..._src} : {
-              x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
-              rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false
-            };
-            delete _copy._interp;
-            otherLa._frames.splice(fi + 1, 0, _copy);
+            const _last = otherLa._frames.length > 0
+              ? {...otherLa._frames[otherLa._frames.length - 1], visible: false}
+              : { x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
+                  rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false };
+            delete _last._interp;
+            otherLa._frames.push(_last);
           });
+
           window._gcpDirty = true;
           window._gcpGlobalFrameIdx = fi + 1;
           _gcpInvalidateAllThumbs();
@@ -23732,13 +23809,8 @@ async function _gcpDownloadApng() {
     }
 
     const blob = new Blob([apngBuf], { type: 'image/png' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'animacion_comixou.png';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    const _animTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.png';
+    await _edSaveBlob(blob, _animTitle, 'image/png');
     edToast('PNG animado descargado');
   } catch (err) {
     edToast('Error al generar PNG: ' + err.message);
@@ -23760,7 +23832,7 @@ function _gcpCrc32Table() {
 // Motor: omggif (GifWriter, MIT, Dean McNamee)
 // Nota: GIF tiene transparencia binaria (1 color = transparente), no alpha gradual.
 // Para transparencia real usar _gcpDownloadApng (APNG).
-function _gcpDownloadGif() {
+async function _gcpDownloadGif() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
     edToast('No hay contenido para descargar'); return;
   }
@@ -23958,11 +24030,8 @@ function _gcpDownloadGif() {
     });
     const gifBytes = buf.slice(0, gw.end());
     const blob = new Blob([gifBytes], {type: 'image/gif'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'animacion_comixou.gif';
-    document.body.appendChild(a); a.click();
-    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 2000);
+    const _gifTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.gif';
+    await _edSaveBlob(blob, _gifTitle, 'image/gif');
     edToast('GIF descargado');
   } catch(err) {
     edToast('Error al generar GIF: ' + err.message);
@@ -24119,13 +24188,8 @@ async function _gcpDownloadMp4() {
 
     const { buffer } = target;
     const blob = new Blob([buffer], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'animacion_comixou.mp4';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    const _mp4Title = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.mp4';
+    await _edSaveBlob(blob, _mp4Title, 'video/mp4');
     const kb = Math.round(blob.size / 1024);
     edToast('MP4 descargado (' + kb + ' KB) ✓');
   } catch (err) {
