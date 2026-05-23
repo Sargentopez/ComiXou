@@ -17194,6 +17194,9 @@ function EditorView_init(){
   if(edViewerCanvas)edViewerCtx=edViewerCanvas.getContext('2d');
 
   const editId=sessionStorage.getItem('cx_edit_id');
+  // Diagnóstico: registrar qué id se carga y cuándo
+  window._edLastLoadId = editId;
+  window._edLastLoadTs = new Date().toISOString();
   if(!editId){Router.go('my-comics');return;}
   sessionStorage.removeItem('cx_edit_id');
   // edLoadProject es async: encadenar con .then() para que edSetOrientation
@@ -24549,6 +24552,13 @@ async function _edRunDiag() {
   } catch(e) { L('IDB cxAnims error: ' + e.message); }
 
   // 4b. Diagnóstico autosave y memoria
+  L('\n── Carga del editor ──');
+  L('editId al cargar: ' + (window._edLastLoadId || 'null'));
+  L('edProjectId actual: ' + (edProjectId || 'null'));
+  L('ts carga: ' + (window._edLastLoadTs || '-'));
+  if (window._edLastLoadId && edProjectId && window._edLastLoadId !== edProjectId)
+    L('  ⚠️ MISMATCH: editId !== edProjectId actual');
+
   L('\n── Autosave (fix OOM Android) ──');
   // Decisión tomada al cargar esta obra
   if (window._edLastAutosaveDecision) {

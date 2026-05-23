@@ -296,6 +296,42 @@ async function _mcCheckOrphanData() {
                  _orphans.autosave.length + _orphans.bib.length + _orphans.ls.length;
   if (_total === 0) return;
 
+  // Umbral mínimo: si solo hay claves IDB menores (anims+autosave ≤ 5) y nada en OPFS/bib/ls,
+  // limpiar silenciosamente sin molestar al usuario.
+  // El diálogo solo aparece cuando hay datos significativos que el usuario debería conocer.
+  const _silentOnly = _orphans.opfs.length === 0 && _orphans.bib.length === 0 && _orphans.ls.length === 0
+                   && (_orphans.anims.length + _orphans.autosave.length) <= 5;
+  if (_silentOnly) {
+    // Limpiar silenciosamente
+    if (_orphans.anims.length) {
+      try {
+        const _sDb = await new Promise(res => {
+          const r = indexedDB.open('cxAnims', 1);
+          r.onsuccess = e => res(e.target.result);
+          r.onerror = () => res(null);
+        });
+        if (_sDb && _sDb.objectStoreNames.contains('anims')) {
+          const _stx = _sDb.transaction('anims', 'readwrite');
+          _orphans.anims.forEach(k => _stx.objectStore('anims').delete(k));
+        }
+      } catch(_) {}
+    }
+    if (_orphans.autosave.length) {
+      try {
+        const _sDb2 = await new Promise(res => {
+          const r = indexedDB.open('cxAutosave', 1);
+          r.onsuccess = e => res(e.target.result);
+          r.onerror = () => res(null);
+        });
+        if (_sDb2 && _sDb2.objectStoreNames.contains('saves')) {
+          const _stx2 = _sDb2.transaction('saves', 'readwrite');
+          _orphans.autosave.forEach(k => _stx2.objectStore('saves').delete(k));
+        }
+      } catch(_) {}
+    }
+    return; // sin diálogo
+  }
+
   // ── Aviso al usuario — solo si el usuario sigue en my-comics ───────
   if (!document.getElementById('mcContent')) return;
   appConfirm(
@@ -415,8 +451,11 @@ function MyComicsView_init() {
   _mcBindNav();
   // Sincronizar fechas con Supabase en segundo plano (incluye descarga de biblioteca)
   _mcSyncCloudDates();
-  // Buscar y ofrecer limpieza de datos huérfanos (en segundo plano, sin bloquear la UI)
-  window._mcOrphanTimer = setTimeout(_mcCheckOrphanData, 2000);
+  // Buscar y ofrecer limpieza de datos huérfanos — diferido 10s para que:
+  // 1. Los guardados asíncronos (OPFS, IDB) terminen antes de escanear
+  // 2. _mcSyncCloudDates haya terminado de actualizar el índice
+  // 3. No interfiera con la navegación inmediata del usuario
+  window._mcOrphanTimer = setTimeout(_mcCheckOrphanData, 10000);
 }
 
 /* ── SINCRONIZAR FECHAS CON SUPABASE ── */
@@ -648,8 +687,12 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
+      // Protección anti-doble-tap: en Android touch el evento puede dispararse dos veces
+      if (window._mcEditLock) return;
+      window._mcEditLock = true;
+      setTimeout(() => { window._mcEditLock = false; }, 3000);
       const _comicMeta = ComicStore.getById(id);
-      if (!_comicMeta || !_mcOwns(_comicMeta)) return;
+      if (!_comicMeta || !_mcOwns(_comicMeta)) { window._mcEditLock = false; return; }
       const comicToEdit = ComicStore.getByIdFull
         ? (await ComicStore.getByIdFull(id))
         : ComicStore.getById(id);
