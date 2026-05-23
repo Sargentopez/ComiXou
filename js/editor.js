@@ -15337,15 +15337,37 @@ async function _edAutosaveWrite() {
     // Incluir biblioteca en el snapshot
     let bibData = null;
     try { bibData = _bibLoad(); } catch(_) {}
+    // Serializar capas para el snapshot — NUNCA incluir _pngFrames en autosave.
+    // edSerLayer los incluye si están en memoria (pueden ser 30-150 MB por obra),
+    // lo que causaría un write IDB masivo cada 30s → OOM en Android.
+    // Solo guardamos la clave IDB (_pngFramesKey) para que edSaveProject los recupere.
+    function _asSerLayer(l) {
+      try {
+        const s = edSerLayer(l);
+        if (!s) return null;
+        // Eliminar _pngFrames del snapshot de autosave — son los frames PNG en memoria
+        if (s._pngFrames) {
+          delete s._pngFrames;
+          // Si no tiene clave IDB, marcar para que edSaveProject lo regenere
+          if (!s._pngFramesKey) s._asFramesMissing = true;
+        }
+        return s;
+      } catch(_) { return null; }
+    }
+    // Medir tamaño estimado antes de escribir (diagnóstico de memoria)
+    let _asEstBytes = 0;
     const snapshot = {
       ts: Date.now(),
-      pages: edPages.map(p => ({
-        orientation: p.orientation,
-        dataUrl: p.dataUrl || null,
-        layers: (p.layers || []).map(l => { try { return edSerLayer(l); } catch(_) { return null; } }).filter(Boolean)
-      })),
+      pages: edPages.map(p => {
+        const layers = (p.layers || []).map(l => _asSerLayer(l)).filter(Boolean);
+        layers.forEach(l => { try { _asEstBytes += JSON.stringify(l).length; } catch(_){} });
+        return { orientation: p.orientation, dataUrl: p.dataUrl || null, layers };
+      }),
       bib: bibData || null
     };
+    // Guardar tamaño del último autosave para diagnóstico (botón 🩺)
+    window._edLastAutosaveBytes = _asEstBytes;
+    window._edLastAutosaveTs = Date.now();
     const db    = await _asDb();
     const tx    = db.transaction(_AS_STORE, 'readwrite');
     tx.objectStore(_AS_STORE).put(snapshot, _edAutosaveKey(edProjectId));
@@ -24342,6 +24364,37 @@ async function _edRunDiag() {
       });
     } catch(e) { L('IDB error: ' + e.message); }
   }
+
+  // 4b. Diagnóstico autosave y memoria
+  L('\n── Autosave (fix OOM Android) ──');
+  try {
+    // Tamaño del último snapshot de autosave (sin _pngFrames)
+    if (window._edLastAutosaveBytes !== undefined) {
+      const _asKB = Math.round(window._edLastAutosaveBytes / 1024);
+      const _asSec = window._edLastAutosaveTs ? Math.round((Date.now() - window._edLastAutosaveTs) / 1000) : '?';
+      L('Último snapshot: ' + _asKB + ' KB (hace ' + _asSec + 's)');
+      if (_asKB > 10240) L('  ⚠️ GRANDE: ' + _asKB + ' KB — revisar capas en memoria');
+      else L('  ✓ Tamaño OK');
+    } else {
+      L('Sin datos (autosave no ejecutado aún en esta sesión)');
+    }
+    // Detectar capas con _pngFrames en memoria (no deberían estar en snapshot autosave)
+    let _framesInMem = 0;
+    let _framesMB = 0;
+    edPages.forEach((p, pi) => {
+      (p.layers || []).forEach((l, li) => {
+        if (l && l._pngFrames && l._pngFrames.length) {
+          _framesInMem++;
+          let _sz = 0;
+          l._pngFrames.forEach(f => { try { _sz += (f||'').length * 0.75; } catch(_){} });
+          _framesMB += _sz / (1024*1024);
+          L('  P'+pi+'L'+li+' type='+l.type+' _pngFrames='+l._pngFrames.length+' (~'+Math.round(_sz/1024)+'KB en memoria)');
+        }
+      });
+    });
+    if (_framesInMem === 0) L('  ✓ Sin _pngFrames en memoria (correcto para autosave)');
+    else L('  ⚠️ ' + _framesInMem + ' capas con frames en RAM (~' + _framesMB.toFixed(1) + ' MB) — excluidos del autosave correctamente');
+  } catch(_asE) { L('Error: ' + _asE.message); }
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory

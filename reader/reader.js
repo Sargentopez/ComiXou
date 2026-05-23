@@ -1241,12 +1241,26 @@ async function preloadImages() {
   });
 }
 
+// sbGet / sbGetAuth: timeout de 12s con AbortController para evitar freeze en Android
+// con conexión móvil inestable (patrón idéntico a _get() en supabase-client.js)
+const _SB_TIMEOUT_MS = 12000;
+
 async function sbGet(path) {
-  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
-  });
-  if (!res.ok) throw new Error('Supabase ' + res.status);
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), _SB_TIMEOUT_MS);
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error('Supabase ' + res.status);
+    return res.json();
+  } catch(e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error('Timeout cargando obra (sin respuesta en ' + (_SB_TIMEOUT_MS/1000) + 's)');
+    throw e;
+  }
 }
 
 // sbGetAuth: usa el JWT del usuario autenticado si está disponible (necesario para leer borradores propios)
@@ -1258,9 +1272,21 @@ function _sbAuthHeaders() {
   return { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY };
 }
 async function sbGetAuth(path) {
-  const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, { headers: _sbAuthHeaders() });
-  if (!res.ok) throw new Error('Supabase ' + res.status);
-  return res.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), _SB_TIMEOUT_MS);
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
+      headers: _sbAuthHeaders(),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error('Supabase ' + res.status);
+    return res.json();
+  } catch(e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error('Timeout cargando obra (sin respuesta en ' + (_SB_TIMEOUT_MS/1000) + 's)');
+    throw e;
+  }
 }
 
 // ── INICIAR ───────────────────────────────────────────────────
