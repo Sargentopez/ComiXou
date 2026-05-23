@@ -14268,6 +14268,10 @@ async function edSaveProject(_keepOverlay){
         localStorage.removeItem(_bibLocalBackupKey);
       } catch(_e) {}
     }
+    // Esperar a que la última escritura de biblioteca en IDB complete antes de guardar en OPFS.
+    // En Android el proceso puede morir entre el _bibSave async y el ComicStore.save,
+    // dejando la IDB sin los datos más recientes. El await garantiza consistencia.
+    if (typeof _bibFlush === 'function') await _bibFlush();
   }
   await ComicStore.save({
     ...existing,
@@ -15249,26 +15253,24 @@ function edDeserLayer(d, pageOrientation){
       }).catch(()=>{});
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
-      _edAnimIdbLoad(d._pngFramesKey).then(data => {
+      // Guardar la promesa en l._animLoadPromise para que edLoadProject pueda esperarla.
+      // En Android la IDB tarda más que en PC — sin await el visor se abre antes de que
+      // los frames lleguen y la animación queda congelada (race condition).
+      l._animLoadPromise = _edAnimIdbLoad(d._pngFramesKey).then(data => {
         if(!data) return;
-        // data puede ser string dataUrl APNG o array de frames PNG
         const input = (typeof data === 'string') ? data
                     : (Array.isArray(data) && data.length) ? data : null;
         if(!input) return;
-        // Asignar al campo correcto para que _edGifSetPlaying lo detecte
         if(typeof data === 'string') { l._apngSrc = data; }
         else { l._pngFrames = data; }
-        // Cargar frames
         l.loadAnim(input, () => {
           if($('editorViewer')?.classList.contains('open')) {
-            // Solo activar si este layer pertenece a la hoja visible actualmente
             const _visPage = edPages[edViewerIdx];
             if(_visPage && _visPage.layers.includes(l)) {
               l._playing = true;
               l._applyFrame(0);
               if(typeof edUpdateViewer==='function') edUpdateViewer();
             }
-            // Si no es la hoja visible, no activar — _edStartPageAnims lo hará al navegar
           } else {
             if(typeof edRedraw==='function') edRedraw();
           }
@@ -15556,6 +15558,10 @@ async function edLoadProject(id){
     const _fillLoadPromises = [];
     edPages.forEach(p => (p.layers||[]).forEach(l => {
       if(l && l.type === 'fill' && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
+      // Esperar la carga async de frames de animación desde IDB.
+      // En Android la IDB es más lenta — sin esto el visor se abre antes de que
+      // los frames lleguen y la animación queda congelada.
+      if(l && l._animLoadPromise) _fillLoadPromises.push(l._animLoadPromise);
     }));
     const _doPushHistory = () => {
       edPushHistory(true);
