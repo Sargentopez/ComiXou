@@ -14035,6 +14035,11 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+    // Borrar autosave explícitamente tras guardado en nube exitoso.
+    // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
+    // por versionchange. Este segundo intento garantiza que no queda autosave espurio
+    // que se muestre como "cambios sin guardar" al volver a abrir la obra.
+    await _edAutosaveClear(edProjectId);
     // Guardar en nube siempre vuelve la obra a borrador (published=false en Supabase).
     // El admin deberá aprobarla de nuevo. Limpiar estado local incondicionalmente.
     const _comicAfter = ComicStore.getById(edProjectId);
@@ -15331,12 +15336,19 @@ function _edAutosaveKey(id) {
   } catch(_e) { return String(id || edProjectId || 'tmp'); }
 }
 
+let _asDbSingleton = null;
 function _asDb() {
+  if (_asDbSingleton) return Promise.resolve(_asDbSingleton);
   return new Promise((res, rej) => {
     const req = indexedDB.open(_AS_DB, 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore(_AS_STORE);
-    req.onsuccess = e => res(e.target.result);
-    req.onerror   = () => rej(req.error);
+    req.onsuccess = e => {
+      _asDbSingleton = e.target.result;
+      _asDbSingleton.onversionchange = () => { _asDbSingleton.close(); _asDbSingleton = null; };
+      _asDbSingleton.onclose        = () => { _asDbSingleton = null; };
+      res(_asDbSingleton);
+    };
+    req.onerror = () => rej(req.error);
   });
 }
 
@@ -15453,15 +15465,23 @@ async function edLoadProject(id){
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
   if (_asSave && _asSave.pages && _asSave.pages.length && _asSave.ts) {
-    // Descartar el autosave silenciosamente si el comic fue guardado (local o nube)
-    // DESPUÉS del autosave. Esto cubre el caso de abrir una obra descargada de la
-    // nube: my-comics.js actualiza localSavedAt al guardar los datos de nube, con
-    // lo que ese timestamp es posterior al autosave → el autosave está obsoleto.
     const _localSavedTs = new Date(comic.localSavedAt || comic.updatedAt || 0).getTime();
+    // Registrar la decisión de autosave para diagnóstico (botón 🩺)
+    window._edLastAutosaveDecision = {
+      autosaveTs:    _asSave.ts,
+      autosaveDate:  new Date(_asSave.ts).toISOString(),
+      localSavedAt:  comic.localSavedAt || null,
+      updatedAt:     comic.updatedAt    || null,
+      localSavedTs:  _localSavedTs,
+      comicTitle:    comic.title        || '',
+      cloudOnly:     comic.cloudOnly    || false,
+      cloudNewer:    comic.cloudNewer   || false,
+      decision:      _localSavedTs >= _asSave.ts ? 'DESCARTADO' : 'MOSTRADO_DIALOGO',
+    };
     if (_localSavedTs >= _asSave.ts) {
       // El comic en disco es igual o más nuevo que el autosave → descartar sin preguntar
+      window._edLastAutosaveDecision.decision = 'DESCARTADO_SIN_DIALOGO';
       _edAutosaveClear(id);
-      // Continuar con la carga normal (sin diálogo)
     } else {
     // Mostrar diálogo de recuperación antes de cargar
     const _asRecovered = await new Promise(res => {
@@ -24442,6 +24462,18 @@ async function _edRunDiag() {
 
   // 4b. Diagnóstico autosave y memoria
   L('\n── Autosave (fix OOM Android) ──');
+  // Decisión tomada al cargar esta obra
+  if (window._edLastAutosaveDecision) {
+    const _d = window._edLastAutosaveDecision;
+    L('Decisión al cargar: ' + _d.decision);
+    L('  autosave.ts:   ' + _d.autosaveDate);
+    L('  localSavedAt:  ' + (_d.localSavedAt || 'NULL — usando updatedAt: ' + _d.updatedAt));
+    L('  localSavedTs >= autosaveTs: ' + (_d.localSavedTs >= _d.autosaveTs));
+    L('  comic.title al cargar: "' + _d.comicTitle + '"');
+    L('  cloudOnly: ' + _d.cloudOnly + ' | cloudNewer: ' + _d.cloudNewer);
+  } else {
+    L('Sin decisión registrada (obra no se cargó en esta sesión)');
+  }
   try {
     // Tamaño del último snapshot de autosave (sin _pngFrames)
     if (window._edLastAutosaveBytes !== undefined) {

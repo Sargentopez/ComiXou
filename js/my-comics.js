@@ -681,6 +681,11 @@ function _mcRenderList() {
             title:   work.title    || comicToEdit.title,
             genre:   work.genre    || comicToEdit.genre,
             navMode: work.nav_mode || comicToEdit.navMode,
+            // Actualizar localSavedAt al momento de la descarga para que cualquier
+            // autosave anterior quede marcado como obsoleto y no aparezca como
+            // "cambios sin guardar" al abrir el editor. Sin esto, el autosave
+            // creado durante la sesión anterior podría tener ts > localSavedAt heredado.
+            localSavedAt: new Date().toISOString(),
           });
           // Sincronizar biblioteca: usar la de la nube si la nube es más nueva o la obra es cloudOnly.
           // Si la local es más reciente (solo _hasLegacyStrokes forzó la descarga), preservar la local.
