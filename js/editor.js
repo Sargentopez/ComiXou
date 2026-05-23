@@ -16205,6 +16205,9 @@ function edInitViewerTap(){
 }
 function edCloseViewer(){
   _edGifSetPlaying(false); // detener animación GIF al salir del visor
+  // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
+  _edViewerFullCanvas = null;
+  _edViewerFullCtx    = null;
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');
@@ -16241,6 +16244,11 @@ function edCloseViewer(){
     _viewerFsFn = null;
   }
 }
+// Canvas de trabajo reutilizable para edUpdateViewer — evita crear 1800x2340 en cada frame.
+// Se crea una sola vez y se reutiliza mientras el visor esté abierto (crítico en Android).
+let _edViewerFullCanvas = null;
+let _edViewerFullCtx    = null;
+
 function edUpdateViewer(){
   if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
@@ -16252,10 +16260,16 @@ function edUpdateViewer(){
   const my = (ED_CANVAS_H - ph) / 2;  // margen Y para esta orientación
   // Ajustar canvas del visor para esta hoja
   edUpdateViewerSize(pw, ph);
-  // Canvas de trabajo con margen (igual que el editor)
-  const full=document.createElement('canvas');
-  full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
-  const fctx=full.getContext('2d');
+  // Canvas de trabajo reutilizable — nunca crear uno nuevo por frame en Android
+  if (!_edViewerFullCanvas) {
+    _edViewerFullCanvas = document.createElement('canvas');
+    _edViewerFullCanvas.width  = ED_CANVAS_W;
+    _edViewerFullCanvas.height = ED_CANVAS_H;
+    _edViewerFullCtx = _edViewerFullCanvas.getContext('2d');
+  }
+  const full = _edViewerFullCanvas;
+  const fctx = _edViewerFullCtx;
+  fctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
   fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
   // Renderizar capas: temporalmente setear edOrientation para que draw() funcione
   // (draw() usa edMarginX/edPageW internamente)
@@ -18487,11 +18501,15 @@ const _BIB_IDB_NAME  = 'cxBiblioteca';
 const _BIB_IDB_STORE = 'bib';
 let _bibCache = null; // caché en memoria, siempre actualizada
 
+// Singleton de conexión IDB para la biblioteca — evita bloqueos por múltiples aperturas
+// simultáneas en Android Chrome (el patrón no-singleton causaba IDB 'blocked' silencioso)
+let _bibDb = null;
 function _bibOpenIdb() {
+  if (_bibDb) return Promise.resolve(_bibDb);
   return new Promise((res, rej) => {
     const r = indexedDB.open(_BIB_IDB_NAME, 1);
     r.onupgradeneeded = e => e.target.result.createObjectStore(_BIB_IDB_STORE);
-    r.onsuccess = e => res(e.target.result);
+    r.onsuccess = e => { _bibDb = e.target.result; res(_bibDb); };
     r.onerror   = () => rej(r.error);
   });
 }
@@ -18558,33 +18576,40 @@ async function _bibInitIdb(supabaseWorkId) {
       resolve();
     };
   }).catch(() => {
-    _bibIdbUnavailable = true; // IDB no disponible (modo incógnito u otro error)
+    // IDB falló — puede ser modo incógnito real O un error transitorio (IDB bloqueada,
+    // interrupción del SW, etc.). Usar OPFS como detector fiable: si navigator.storage
+    // no existe o getDirectory no existe, ESO sí indica modo incógnito real.
+    const _realIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
+    _bibIdbUnavailable = _realIncognito; // solo true si es incógnito real
     _bibCache = { folders: [
       { id: '__root__', name: 'General', items: [] },
       { id: '__anim__', name: 'Animaciones', items: [] }
     ]};
-    // Intentar cargar de Supabase en memoria aunque IDB no esté disponible
+    // Intentar cargar de Supabase en memoria
     const _user3 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
     if (_user3 && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
       SupabaseClient.bibDownload(_user3.id, supabaseWorkId).then(downloaded => {
         if (downloaded && Array.isArray(downloaded.folders) &&
             downloaded.folders.some(f => f.items && f.items.length > 0)) {
           _bibCache = downloaded;
-          // No guardar en IDB — solo en memoria
+          if (!_realIncognito) {
+            // IDB tuvo un error transitorio pero sí existe — intentar guardar ahora
+            _bibSave(_bibCache);
+          }
         }
-        // Mostrar aviso modo incógnito
-        if (typeof _edShowIncognitoWarning === 'function') {
+        // Solo mostrar aviso si es incógnito real
+        if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
           _edShowIncognitoWarning('Modo incógnito: la biblioteca y animaciones se cargan en memoria y no se guardarán entre sesiones. Para guardar cambios, abre la app en modo normal.');
         }
         resolve();
       }).catch(() => {
-        if (typeof _edShowIncognitoWarning === 'function') {
+        if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
           _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible en este modo. Abre la app en modo normal para acceder a ella.');
         }
         resolve();
       });
     } else {
-      if (typeof _edShowIncognitoWarning === 'function') {
+      if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
         setTimeout(() => _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible. Abre la app en modo normal para acceder a ella.'), 1500);
       }
       resolve();
