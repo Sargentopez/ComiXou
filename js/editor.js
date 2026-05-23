@@ -7461,6 +7461,7 @@ function edOnStart(e){
   edRedraw();
 }
 function edOnMove(e){
+  if(window._gcpActive) return; // GCP tiene su propio handler de move
   // Actualizar _edTouchMoved siempre (para cancelar long-press aunque gestureActive sea false)
   if(e.pointerType === 'touch'){
     _edTouchMoved = true;
