@@ -5399,13 +5399,12 @@ function edDeleteSelected(){
    ══════════════════════════════════════════ */
 function edCoords(e){
   const src = e.touches ? e.touches[0] : e;
-  // sx: canvas siempre tiene left=0 en el shell, clientX no necesita ajuste.
-  // sy: usar _edCanvasTop cacheado síncronamente en edFitCanvas.
-  //     Más fiable que style.top (puede quedar desactualizado entre layout
-  //     y el siguiente evento) y que getBoundingClientRect (puede incluir
-  //     scroll del contenedor en algunos navegadores Android).
   const sx = src.clientX;
-  const sy = src.clientY - _edCanvasTop;
+  // Cuando GCP activo, usar el top real del gcpCanvas para coordenadas correctas
+  const _canvasTop = (window._gcpActive && gcpCanvas)
+    ? gcpCanvas.getBoundingClientRect().top
+    : _edCanvasTop;
+  const sy = src.clientY - _canvasTop;
   // Convertir pantalla → workspace
   const w = edScreenToWorld(sx, sy);
   // Convertir workspace → coordenadas de página (0-1)
