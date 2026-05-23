@@ -20065,6 +20065,8 @@ function _gcpAutoSaveFrame() {
   window._gcpDirty = true;
   const fi = window._gcpGlobalFrameIdx || 0;
   if (!window._gcpLayers || !window._gcpLayers.length) return;
+  // Eliminar interpolación circular antes de guardar (se regenerará si es el último frame)
+  _gcpRemoveCircularInterp();
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi) la._frames.push(null);
@@ -20074,7 +20076,76 @@ function _gcpAutoSaveFrame() {
       visible: la._gcpVisible !== false
     };
   });
+  // Crear/actualizar interpolación circular solo si este es el último frame clave
+  // (el botón siempre aparece, pero la interpolación automática solo al guardar el último)
+  const _totalAfter = _gcpGetTotalFrames();
+  // Verificar si fi es el último frame clave (ignorando circulares)
+  const _isLastKey = window._gcpLayers.every(la => {
+    if (!la._frames) return true;
+    for (let _i = fi + 1; _i < la._frames.length; _i++) {
+      if (la._frames[_i] && !la._frames[_i]._interp && !la._frames[_i]._circular) return false;
+    }
+    return true;
+  });
+  if (_isLastKey && fi > 0) _gcpUpdateCircularInterp();
   _gcpUpdateFramesBar();
+}
+
+// Crea/actualiza la interpolación circular (último frame → primer frame) automáticamente.
+// Se marca con _circular:true para poder borrarla al añadir un nuevo frame.
+function _gcpUpdateCircularInterp() {
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
+  // Calcular el número de frames clave totales
+  const _totalFrames = _gcpGetTotalFrames();
+  if (_totalFrames < 2) return; // necesitamos al menos 2 frames para interpolar
+
+  // Buscar el último frame clave (no interpolado)
+  let _lastKeyFi = -1;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    for (let i = la._frames.length - 1; i >= 0; i--) {
+      if (la._frames[i] && !la._frames[i]._interp) { _lastKeyFi = Math.max(_lastKeyFi, i); break; }
+    }
+  });
+  if (_lastKeyFi < 1) return;
+
+  // Eliminar interpolación circular anterior si existe
+  _gcpRemoveCircularInterp();
+
+  // Calcular número de frames de la interpolación circular (igual al número entre otros frames o mínimo 3)
+  const _circN = window._gcpCircularInterpN || 3;
+
+  // Crear frames interpolados circulares (del último al primero) en todas las capas
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    const a = la._frames[_lastKeyFi];
+    const b = la._frames[0];
+    if (!a || !b) return;
+    const newFrames = [];
+    for (let k = 1; k <= _circN; k++) {
+      const f = _gcpLerpFrame(a, b, k / (_circN + 1));
+      f._circular = true; // marcar como interpolación circular
+      newFrames.push(f);
+    }
+    la._frames.splice(_lastKeyFi + 1, 0, ...newFrames);
+  });
+
+  window._gcpCircularInterpFi = _lastKeyFi; // recordar posición
+  window._gcpCircularInterpN  = _circN;
+  _gcpInvalidateAllThumbs();
+}
+
+// Elimina la interpolación circular del final si existe
+function _gcpRemoveCircularInterp() {
+  if (!window._gcpLayers || !window._gcpLayers.length) return;
+  window._gcpLayers.forEach(la => {
+    if (!la._frames) return;
+    // Eliminar todos los frames _circular al final del array
+    while (la._frames.length > 0 && la._frames[la._frames.length - 1]?._circular) {
+      la._frames.pop();
+    }
+  });
+  window._gcpCircularInterpFi = -1;
 }
 
 function _gcpHandleMove(e) {
@@ -20351,6 +20422,8 @@ window._gcpGlobalFrameIdx = 0;
 // Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
 window._gcpHistory    = [];  // array de snapshots del frame activo
 window._gcpHistoryIdx = -1;  // índice actual
+window._gcpCircularInterpFi = -1; // índice del último frame clave con interpolación circular
+window._gcpCircularInterpN  =  3; // número de frames de la interpolación circular
 
 // ── Variables del sistema de guías GCP (independientes del editor general) ──
 let _gcpRules      = [];       // guías del editor de animaciones
@@ -20485,6 +20558,8 @@ function _gcpSaveFrame() {
 // Si algún layer no tiene frame en fi, lo crea primero.
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
+  // Al añadir un nuevo frame, borrar la interpolación circular automática
+  _gcpRemoveCircularInterp();
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
@@ -20908,6 +20983,42 @@ function _gcpDoInterpolate(fi, n) {
   window._gcpDirty = true;
   edToast(n + ' frame' + (n > 1 ? 's' : '') + ' interpolado' + (n > 1 ? 's' : '') + ' añadido' + (n > 1 ? 's' : '') + ' ✓');
   delete _gcpDoInterpolate._blur;
+}
+
+// Modal para ajustar la interpolación circular automática
+function _gcpShowCircularInterpModal(fi) {
+  const _n = window._gcpCircularInterpN || 3;
+  const _msg = 'Interpolación circular: ' + _n + ' frame' + (_n !== 1 ? 's' : '') + ' entre el último y el primero. ¿Cambiar?';
+  // Usar el modal existente de interpolación reutilizando _gcpShowInterpModal
+  _gcpInterpPendingFi = fi;
+  _gcpInterpN = _n;
+  const modal = document.getElementById('gcpInterpModal');
+  if (!modal) { _gcpRemoveCircularInterp(); _gcpUpdateCircularInterp(); return; }
+  const f1El    = document.getElementById('gcpInterpF1');
+  const f2El    = document.getElementById('gcpInterpF2');
+  const countEl = document.getElementById('gcpInterpCount');
+  if (f1El) f1El.textContent = fi + 1;
+  if (f2El) f2El.textContent = '1 (circular)';
+  if (countEl) countEl.textContent = _gcpInterpN;
+  modal.classList.add('open');
+  document.getElementById('gcpInterpMinus').onclick = () => {
+    if (_gcpInterpN > 1) { _gcpInterpN--; if(countEl) countEl.textContent = _gcpInterpN; }
+  };
+  document.getElementById('gcpInterpPlus').onclick = () => {
+    if (_gcpInterpN < 20) { _gcpInterpN++; if(countEl) countEl.textContent = _gcpInterpN; }
+  };
+  document.getElementById('gcpInterpCancel').onclick = () => { modal.classList.remove('open'); };
+  document.getElementById('gcpInterpOk').onclick = () => {
+    modal.classList.remove('open');
+    window._gcpCircularInterpN = _gcpInterpN;
+    _gcpRemoveCircularInterp();
+    _gcpUpdateCircularInterp();
+    _gcpInvalidateAllThumbs();
+    _gcpUpdateFrameNav();
+    _gcpUpdateFramesBar();
+    _gcpRedraw();
+    edToast(_gcpInterpN + ' frame' + (_gcpInterpN > 1 ? 's' : '') + ' de interpolación circular ✓');
+  };
 }
 
 // Aplica un frame global fi: lee la._frames[fi] de cada layer
@@ -21788,12 +21899,24 @@ function _gcpUpdateFramesBar() {
 
       scroll.appendChild(card);
 
-      // Botón ⟳ entre este frame clave y el siguiente (si existe siguiente clave)
+      // Botón ⟳ entre este frame clave y el siguiente (o circular al final)
       const _nextKeyFi = _visibleFiList[_vi + 1];
-      if (_nextKeyFi !== undefined) {
-        // Contar interpolados entre fi y _nextKeyFi
-        const _interpCount = _nextKeyFi - fi - 1;
-        const _hasInterp   = _interpCount > 0;
+      const _isLastFrame = _nextKeyFi === undefined && _visibleFiList.length > 1;
+      if (_nextKeyFi !== undefined || _isLastFrame) {
+        // Para el último frame: simular que el "siguiente" es el frame 0 (circular)
+        // Contar interpolados entre fi y _nextKeyFi (o circulares si es el último)
+        let _interpCount, _hasInterp, _isCircular = false;
+        if (_isLastFrame) {
+          // Contar frames _circular después de fi
+          _interpCount = window._gcpLayers[0]?._frames
+            ? window._gcpLayers[0]._frames.slice(fi + 1).filter(f => f?._circular).length
+            : 0;
+          _hasInterp  = _interpCount > 0;
+          _isCircular = true;
+        } else {
+          _interpCount = _nextKeyFi - fi - 1;
+          _hasInterp   = _interpCount > 0;
+        }
 
         const interpBtn = document.createElement('button');
         const _hasBlur = _hasInterp && window._gcpLayers.some(l =>
@@ -21834,13 +21957,32 @@ function _gcpUpdateFramesBar() {
           });
           interpBtn.addEventListener('click', e => {
             e.stopPropagation();
-            _gcpShowInterpModal(fi, layerIdx);
+            if (_isCircular) {
+              if (_hasInterp) {
+                // Ya existe interpolación circular → mostrar modal para cambiar N
+                _gcpShowCircularInterpModal(fi);
+              } else {
+                // No existe aún → crear con N por defecto y mostrar modal
+                _gcpUpdateCircularInterp();
+                _gcpInvalidateAllThumbs();
+                _gcpUpdateFrameNav();
+                _gcpUpdateFramesBar();
+                _gcpRedraw();
+                _gcpShowCircularInterpModal(fi);
+              }
+            } else {
+              _gcpShowInterpModal(fi, layerIdx);
+            }
           });
         } else {
-          // Botón rojo → menú contextual inline
+          // Botón rojo → menú contextual inline (o modal circular si es el último frame)
           interpBtn.addEventListener('click', e => {
             e.stopPropagation();
-            _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
+            if (_isCircular) {
+              _gcpShowCircularInterpModal(fi);
+            } else {
+              _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
+            }
           });
         }
 
@@ -22430,6 +22572,8 @@ function gcpOpen(edLayerIdx) {
   window._gcpLayers         = [];
   window._gcpSelIdx         = -1;
   window._gcpGlobalFrameIdx = 0;
+  window._gcpCircularInterpFi = -1;
+  window._gcpCircularInterpN  =  3;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null; _gcpRuleNodeId = 0;
   // Cerrar barra de frames al abrir editor
