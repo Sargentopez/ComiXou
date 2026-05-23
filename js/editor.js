@@ -19640,8 +19640,12 @@ let _gcpLastTapTime2 = 0, _gcpLastTapIdx2 = -1;
 // toque sobre el objeto recién insertado se interprete erróneamente como doble tap.
 function _gcpPushLayer(la) {
   window._gcpLayers.push(la);
-  _gcpLastTapTime2 = 0;
-  _gcpLastTapIdx2 = -1;
+  // Resetear AMBOS sistemas de doble tap al insertar un objeto.
+  // Sin esto, el primer toque sobre el objeto recién insertado puede disparar el doble tap
+  // si el tap de inserción ocurrió hace menos de 380ms en una posición cercana.
+  _gcpLastTapTime  = 0;  // sistema 1: pointerdown con delta tiempo+posición
+  _gcpLastTapTime2 = 0;  // sistema 2: pointerup sobre mismo objeto
+  _gcpLastTapIdx2  = -1;
   // Limpiar pointers fantasma que pudieran quedar del gesto de inserción
   _gcpPtrMap.clear();
   _gcpPinching = false; _gcpPinchDist0 = 0; _gcpPinchObj = null; _gcpSelBeforePinch = -1;
