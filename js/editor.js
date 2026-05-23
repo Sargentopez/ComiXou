@@ -14334,7 +14334,7 @@ async function edSaveProject(_keepOverlay){
     if(!_keepOverlay) _edSaveOverlayHide();
     edToast('Guardado ✓');
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
-    _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
+    await _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
   } else {
     // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
     const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
@@ -14350,8 +14350,8 @@ async function edSaveProject(_keepOverlay){
   edHistory = _snapToKeep ? [_snapToKeep] : [];
   edHistoryIdx = edHistory.length - 1;
   _edSavedHistoryIdx = edHistoryIdx;
-  // Limpiar autosave — ya está todo guardado, no hay nada que recuperar
-  _edAutosaveClear(edProjectId);
+  // Limpiar autosave — awaitar para garantizar que se borra antes de retornar
+  await _edAutosaveClear(edProjectId);
 }
 function edRenderPage(page){
   const _savedOrient = edOrientation;
@@ -15413,6 +15413,8 @@ function _asDb() {
 
 async function _edAutosaveWrite() {
   if (!edProjectId || !edPages || !edPages.length) return;
+  // No escribir si las páginas están vacías (edLoadProject aún no completó)
+  if (edPages.every(p => !p.layers || p.layers.length === 0)) return;
   // Solo escribir si hay cambios reales desde el último guardado explícito
   if (edHistoryIdx === _edSavedHistoryIdx) return;
   try {
@@ -15491,8 +15493,12 @@ async function _edAutosaveClear(id) {
   const _clearId = id || edProjectId;
   try {
     const db = await _asDb();
-    const tx = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).delete(_edAutosaveKey(_clearId));
+    await new Promise(res => {
+      const tx = db.transaction(_AS_STORE, 'readwrite');
+      tx.objectStore(_AS_STORE).delete(_edAutosaveKey(_clearId));
+      tx.oncomplete = res;
+      tx.onerror    = res; // no bloquear aunque falle
+    });
   } catch(_) {}
   // Borrar también las claves "as_" de cxAnims de esta obra
   // que el autosave pudo haber creado con _asExternalize
@@ -15545,6 +15551,12 @@ async function edLoadProject(id){
 
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
+  // Si hay un snapshot pero está vacío (pages=[]) → basura → borrar sin preguntar
+  if (_asSave && (!_asSave.pages || !_asSave.pages.length || !_asSave.ts)) {
+    _edAutosaveClear(id);
+    // Tratar como si no hubiera autosave
+    Object.assign(_asSave || {}, { pages: null });
+  }
   if (_asSave && _asSave.pages && _asSave.pages.length && _asSave.ts) {
     const _localSavedTs = new Date(comic.localSavedAt || comic.updatedAt || 0).getTime();
     // Registrar la decisión de autosave para diagnóstico (botón 🩺)
