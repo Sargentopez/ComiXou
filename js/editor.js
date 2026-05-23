@@ -14020,28 +14020,6 @@ async function edCloudSave() {
     }
   }
 
-  // Enriquecer comic.editorData con _pngFrames y _apngSrc del layer vivo en memoria.
-  // edSaveProject serializa los layers a OPFS sin frames (van a IDB).
-  // _uploadPanels los recupera de IDB con _sbAnimIdbLoad → _buildApngFromFrames.
-  // En Android, _buildApngFromFrames puede fallar (OOM, UPNG crash).
-  // Si el layer vivo tiene _pngFrames o _apngSrc, los inyectamos directamente
-  // para que _uploadPanels los use como fallback sin pasar por UPNG.
-  if (comic.editorData && comic.editorData.pages && edPages && edPages.length) {
-    comic.editorData.pages.forEach((pg, pi) => {
-      const livePage = edPages[pi];
-      if (!livePage) return;
-      (pg.layers || []).forEach((sl, li) => {
-        const liveLayer = livePage.layers[li];
-        if (!liveLayer || sl.type !== 'image') return;
-        // Inyectar _apngSrc si el layer vivo lo tiene (APNG completo → upload directo)
-        if (liveLayer._apngSrc && !sl._apngSrc) sl._apngSrc = liveLayer._apngSrc;
-        // Inyectar _pngFrames si el layer vivo los tiene y no hay _apngSrc
-        if (!sl._apngSrc && liveLayer._pngFrames && liveLayer._pngFrames.length && !sl._pngFrames)
-          sl._pngFrames = liveLayer._pngFrames;
-      });
-    });
-  }
-
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
     comic.supabaseId = crypto.randomUUID();
@@ -14057,11 +14035,6 @@ async function edCloudSave() {
   try {
     const { sizeKB } = await SupabaseClient.saveDraft(comic);
     edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
-    // Borrar autosave explícitamente tras guardado en nube exitoso.
-    // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
-    // por versionchange. Este segundo intento garantiza que no queda autosave espurio
-    // que se muestre como "cambios sin guardar" al volver a abrir la obra.
-    await _edAutosaveClear(edProjectId);
     // Guardar en nube siempre vuelve la obra a borrador (published=false en Supabase).
     // El admin deberá aprobarla de nuevo. Limpiar estado local incondicionalmente.
     const _comicAfter = ComicStore.getById(edProjectId);
@@ -14295,10 +14268,6 @@ async function edSaveProject(_keepOverlay){
         localStorage.removeItem(_bibLocalBackupKey);
       } catch(_e) {}
     }
-    // Esperar a que la última escritura de biblioteca en IDB complete antes de guardar en OPFS.
-    // En Android el proceso puede morir entre el _bibSave async y el ComicStore.save,
-    // dejando la IDB sin los datos más recientes. El await garantiza consistencia.
-    if (typeof _bibFlush === 'function') await _bibFlush();
   }
   await ComicStore.save({
     ...existing,
@@ -15086,40 +15055,31 @@ function edSerLayer(l){
   }
 }
 // Carga _pngFrames desde IndexedDB 'cxAnims' por clave _pngFramesKey
-// Singleton para cxAnims — mismo patrón que _bibOpenIdb.
-// onversionchange/onclose invalidan la referencia cuando el SW toma control,
-// evitando que _edAnimIdbLoad devuelva null en Android tras clients.claim().
-let _edAnimDb = null;
-function _edAnimIdbOpen() {
-  if (_edAnimDb) return Promise.resolve(_edAnimDb);
-  return new Promise((res, rej) => {
+function _edAnimIdbLoad(key) {
+  return new Promise(res => {
     const req = indexedDB.open('cxAnims', 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
     req.onsuccess = e => {
-      _edAnimDb = e.target.result;
-      _edAnimDb.onversionchange = () => { _edAnimDb.close(); _edAnimDb = null; };
-      _edAnimDb.onclose        = () => { _edAnimDb = null; };
-      res(_edAnimDb);
+      const r = e.target.result.transaction('anims').objectStore('anims').get(key);
+      r.onsuccess = e2 => res(e2.target.result || null);
+      r.onerror   = () => res(null);
     };
-    req.onerror = () => rej(req.error);
+    req.onerror = () => res(null);
   });
 }
 
-function _edAnimIdbLoad(key) {
-  return _edAnimIdbOpen().then(db => new Promise(res => {
-    const r = db.transaction('anims').objectStore('anims').get(key);
-    r.onsuccess = e => res(e.target.result || null);
-    r.onerror   = () => res(null);
-  })).catch(() => { _edAnimDb = null; return null; });
-}
-
 function _edAnimIdbSave(key, frames) {
-  return _edAnimIdbOpen().then(db => new Promise(res => {
-    const tx = db.transaction('anims', 'readwrite');
-    tx.objectStore('anims').put(frames, key);
-    tx.oncomplete = () => res();
-    tx.onerror    = () => res();
-  })).catch(() => { _edAnimDb = null; });
+  return new Promise(res => {
+    const req = indexedDB.open('cxAnims', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+    req.onsuccess = e => {
+      const tx = e.target.result.transaction('anims', 'readwrite');
+      tx.objectStore('anims').put(frames, key);
+      tx.oncomplete = () => res();
+      tx.onerror    = () => res();
+    };
+    req.onerror = () => res();
+  });
 }
 
 function edDeserLayer(d, pageOrientation){
@@ -15280,24 +15240,26 @@ function edDeserLayer(d, pageOrientation){
       }).catch(()=>{});
     }
     if(d._pngFramesKey && !d._pngFrames && !d._apngSrc) {
-      // Guardar la promesa en l._animLoadPromise para que edLoadProject pueda esperarla.
-      // En Android la IDB tarda más que en PC — sin await el visor se abre antes de que
-      // los frames lleguen y la animación queda congelada (race condition).
-      l._animLoadPromise = _edAnimIdbLoad(d._pngFramesKey).then(data => {
+      _edAnimIdbLoad(d._pngFramesKey).then(data => {
         if(!data) return;
+        // data puede ser string dataUrl APNG o array de frames PNG
         const input = (typeof data === 'string') ? data
                     : (Array.isArray(data) && data.length) ? data : null;
         if(!input) return;
+        // Asignar al campo correcto para que _edGifSetPlaying lo detecte
         if(typeof data === 'string') { l._apngSrc = data; }
         else { l._pngFrames = data; }
+        // Cargar frames
         l.loadAnim(input, () => {
           if($('editorViewer')?.classList.contains('open')) {
+            // Solo activar si este layer pertenece a la hoja visible actualmente
             const _visPage = edPages[edViewerIdx];
             if(_visPage && _visPage.layers.includes(l)) {
               l._playing = true;
               l._applyFrame(0);
               if(typeof edUpdateViewer==='function') edUpdateViewer();
             }
+            // Si no es la hoja visible, no activar — _edStartPageAnims lo hará al navegar
           } else {
             if(typeof edRedraw==='function') edRedraw();
           }
@@ -15358,19 +15320,12 @@ function _edAutosaveKey(id) {
   } catch(_e) { return String(id || edProjectId || 'tmp'); }
 }
 
-let _asDbSingleton = null;
 function _asDb() {
-  if (_asDbSingleton) return Promise.resolve(_asDbSingleton);
   return new Promise((res, rej) => {
     const req = indexedDB.open(_AS_DB, 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore(_AS_STORE);
-    req.onsuccess = e => {
-      _asDbSingleton = e.target.result;
-      _asDbSingleton.onversionchange = () => { _asDbSingleton.close(); _asDbSingleton = null; };
-      _asDbSingleton.onclose        = () => { _asDbSingleton = null; };
-      res(_asDbSingleton);
-    };
-    req.onerror = () => rej(req.error);
+    req.onsuccess = e => res(e.target.result);
+    req.onerror   = () => rej(req.error);
   });
 }
 
@@ -15382,55 +15337,15 @@ async function _edAutosaveWrite() {
     // Incluir biblioteca en el snapshot
     let bibData = null;
     try { bibData = _bibLoad(); } catch(_) {}
-    // Serializar capas para el snapshot — los _pngFrames NO van inline en el snapshot.
-    // Si están en memoria pero sin clave IDB (animación recién insertada, nunca guardada),
-    // los externalizamos a cxAnims con una clave temporal "as_" para que el autosave
-    // pueda recuperarlos. Esto evita el OOM (frames fuera del JSON) y preserva la animación.
-    const _asExternalize = async (l, s) => {
-      if (!s._pngFrames || !s._pngFrames.length) return s;
-      // Ya tiene clave IDB → los frames ya están externalizados, solo usar la clave
-      if (s._pngFramesKey) { delete s._pngFrames; return s; }
-      // Sin clave: externalizar ahora con clave temporal "as_"
-      const _asKey = _edAnimKey('as_' + edProjectId + '_' + Date.now().toString(36));
-      try {
-        await _edAnimIdbSave(_asKey, s._pngFrames);
-        delete s._pngFrames;
-        s._pngFramesKey = _asKey;
-        // Propagar la clave al layer vivo para que edSaveProject la reutilice
-        if (l) l._pngFramesKey = _asKey;
-      } catch(_) {
-        // IDB falló — descartar frames del snapshot (mejor perderlos que crashear)
-        delete s._pngFrames;
-        s._asFramesMissing = true;
-      }
-      return s;
-    };
-    // Medir tamaño estimado antes de escribir (diagnóstico de memoria)
-    let _asEstBytes = 0;
-    const _asPages = [];
-    for (let _asi = 0; _asi < edPages.length; _asi++) {
-      const p = edPages[_asi];
-      const layers = [];
-      for (let _ali = 0; _ali < (p.layers || []).length; _ali++) {
-        const l = p.layers[_ali];
-        try {
-          let s = edSerLayer(l);
-          if (!s) continue;
-          s = await _asExternalize(l, s);
-          _asEstBytes += JSON.stringify(s).length;
-          layers.push(s);
-        } catch(_) {}
-      }
-      _asPages.push({ orientation: p.orientation, dataUrl: p.dataUrl || null, layers });
-    }
     const snapshot = {
       ts: Date.now(),
-      pages: _asPages,
+      pages: edPages.map(p => ({
+        orientation: p.orientation,
+        dataUrl: p.dataUrl || null,
+        layers: (p.layers || []).map(l => { try { return edSerLayer(l); } catch(_) { return null; } }).filter(Boolean)
+      })),
       bib: bibData || null
     };
-    // Guardar tamaño del último autosave para diagnóstico (botón 🩺)
-    window._edLastAutosaveBytes = _asEstBytes;
-    window._edLastAutosaveTs = Date.now();
     const db    = await _asDb();
     const tx    = db.transaction(_AS_STORE, 'readwrite');
     tx.objectStore(_AS_STORE).put(snapshot, _edAutosaveKey(edProjectId));
@@ -15487,23 +15402,15 @@ async function edLoadProject(id){
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
   if (_asSave && _asSave.pages && _asSave.pages.length && _asSave.ts) {
+    // Descartar el autosave silenciosamente si el comic fue guardado (local o nube)
+    // DESPUÉS del autosave. Esto cubre el caso de abrir una obra descargada de la
+    // nube: my-comics.js actualiza localSavedAt al guardar los datos de nube, con
+    // lo que ese timestamp es posterior al autosave → el autosave está obsoleto.
     const _localSavedTs = new Date(comic.localSavedAt || comic.updatedAt || 0).getTime();
-    // Registrar la decisión de autosave para diagnóstico (botón 🩺)
-    window._edLastAutosaveDecision = {
-      autosaveTs:    _asSave.ts,
-      autosaveDate:  new Date(_asSave.ts).toISOString(),
-      localSavedAt:  comic.localSavedAt || null,
-      updatedAt:     comic.updatedAt    || null,
-      localSavedTs:  _localSavedTs,
-      comicTitle:    comic.title        || '',
-      cloudOnly:     comic.cloudOnly    || false,
-      cloudNewer:    comic.cloudNewer   || false,
-      decision:      _localSavedTs >= _asSave.ts ? 'DESCARTADO' : 'MOSTRADO_DIALOGO',
-    };
     if (_localSavedTs >= _asSave.ts) {
       // El comic en disco es igual o más nuevo que el autosave → descartar sin preguntar
-      window._edLastAutosaveDecision.decision = 'DESCARTADO_SIN_DIALOGO';
       _edAutosaveClear(id);
+      // Continuar con la carga normal (sin diálogo)
     } else {
     // Mostrar diálogo de recuperación antes de cargar
     const _asRecovered = await new Promise(res => {
@@ -15600,10 +15507,6 @@ async function edLoadProject(id){
     const _fillLoadPromises = [];
     edPages.forEach(p => (p.layers||[]).forEach(l => {
       if(l && l.type === 'fill' && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
-      // Esperar la carga async de frames de animación desde IDB.
-      // En Android la IDB es más lenta — sin esto el visor se abre antes de que
-      // los frames lleguen y la animación queda congelada.
-      if(l && l._animLoadPromise) _fillLoadPromises.push(l._animLoadPromise);
     }));
     const _doPushHistory = () => {
       edPushHistory(true);
@@ -16262,9 +16165,6 @@ function edInitViewerTap(){
 }
 function edCloseViewer(){
   _edGifSetPlaying(false); // detener animación GIF al salir del visor
-  // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
-  _edViewerFullCanvas = null;
-  _edViewerFullCtx    = null;
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');
@@ -16301,11 +16201,6 @@ function edCloseViewer(){
     _viewerFsFn = null;
   }
 }
-// Canvas de trabajo reutilizable para edUpdateViewer — evita crear 1800x2340 en cada frame.
-// Se crea una sola vez y se reutiliza mientras el visor esté abierto (crítico en Android).
-let _edViewerFullCanvas = null;
-let _edViewerFullCtx    = null;
-
 function edUpdateViewer(){
   if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
@@ -16317,16 +16212,10 @@ function edUpdateViewer(){
   const my = (ED_CANVAS_H - ph) / 2;  // margen Y para esta orientación
   // Ajustar canvas del visor para esta hoja
   edUpdateViewerSize(pw, ph);
-  // Canvas de trabajo reutilizable — nunca crear uno nuevo por frame en Android
-  if (!_edViewerFullCanvas) {
-    _edViewerFullCanvas = document.createElement('canvas');
-    _edViewerFullCanvas.width  = ED_CANVAS_W;
-    _edViewerFullCanvas.height = ED_CANVAS_H;
-    _edViewerFullCtx = _edViewerFullCanvas.getContext('2d');
-  }
-  const full = _edViewerFullCanvas;
-  const fctx = _edViewerFullCtx;
-  fctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+  // Canvas de trabajo con margen (igual que el editor)
+  const full=document.createElement('canvas');
+  full.width=ED_CANVAS_W; full.height=ED_CANVAS_H;
+  const fctx=full.getContext('2d');
   fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
   // Renderizar capas: temporalmente setear edOrientation para que draw() funcione
   // (draw() usa edMarginX/edPageW internamente)
@@ -18558,24 +18447,12 @@ const _BIB_IDB_NAME  = 'cxBiblioteca';
 const _BIB_IDB_STORE = 'bib';
 let _bibCache = null; // caché en memoria, siempre actualizada
 
-// Singleton de conexión IDB para la biblioteca — evita bloqueos por múltiples aperturas
-// simultáneas en Android Chrome (el patrón no-singleton causaba IDB 'blocked' silencioso).
-// onversionchange/onclose invalidan la referencia cuando el SW nuevo toma control (clients.claim),
-// forzando reapertura en la siguiente operación en lugar de usar una conexión cerrada.
-let _bibDb = null;
 function _bibOpenIdb() {
-  if (_bibDb) return Promise.resolve(_bibDb);
   return new Promise((res, rej) => {
     const r = indexedDB.open(_BIB_IDB_NAME, 1);
     r.onupgradeneeded = e => e.target.result.createObjectStore(_BIB_IDB_STORE);
-    r.onsuccess = e => {
-      _bibDb = e.target.result;
-      // Invalidar singleton si el SW cierra/actualiza la IDB
-      _bibDb.onversionchange = () => { _bibDb.close(); _bibDb = null; };
-      _bibDb.onclose        = () => { _bibDb = null; };
-      res(_bibDb);
-    };
-    r.onerror = () => rej(r.error);
+    r.onsuccess = e => res(e.target.result);
+    r.onerror   = () => rej(r.error);
   });
 }
 
@@ -18641,40 +18518,33 @@ async function _bibInitIdb(supabaseWorkId) {
       resolve();
     };
   }).catch(() => {
-    // IDB falló — puede ser modo incógnito real O un error transitorio (IDB bloqueada,
-    // interrupción del SW, etc.). Usar OPFS como detector fiable: si navigator.storage
-    // no existe o getDirectory no existe, ESO sí indica modo incógnito real.
-    const _realIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
-    _bibIdbUnavailable = _realIncognito; // solo true si es incógnito real
+    _bibIdbUnavailable = true; // IDB no disponible (modo incógnito u otro error)
     _bibCache = { folders: [
       { id: '__root__', name: 'General', items: [] },
       { id: '__anim__', name: 'Animaciones', items: [] }
     ]};
-    // Intentar cargar de Supabase en memoria
+    // Intentar cargar de Supabase en memoria aunque IDB no esté disponible
     const _user3 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
     if (_user3 && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
       SupabaseClient.bibDownload(_user3.id, supabaseWorkId).then(downloaded => {
         if (downloaded && Array.isArray(downloaded.folders) &&
             downloaded.folders.some(f => f.items && f.items.length > 0)) {
           _bibCache = downloaded;
-          if (!_realIncognito) {
-            // IDB tuvo un error transitorio pero sí existe — intentar guardar ahora
-            _bibSave(_bibCache);
-          }
+          // No guardar en IDB — solo en memoria
         }
-        // Solo mostrar aviso si es incógnito real
-        if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
+        // Mostrar aviso modo incógnito
+        if (typeof _edShowIncognitoWarning === 'function') {
           _edShowIncognitoWarning('Modo incógnito: la biblioteca y animaciones se cargan en memoria y no se guardarán entre sesiones. Para guardar cambios, abre la app en modo normal.');
         }
         resolve();
       }).catch(() => {
-        if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
+        if (typeof _edShowIncognitoWarning === 'function') {
           _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible en este modo. Abre la app en modo normal para acceder a ella.');
         }
         resolve();
       });
     } else {
-      if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
+      if (typeof _edShowIncognitoWarning === 'function') {
         setTimeout(() => _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible. Abre la app en modo normal para acceder a ella.'), 1500);
       }
       resolve();
@@ -18720,12 +18590,7 @@ function _bibSave(data) {
       tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
     });
   }).catch(() => {
-    // IDB falló — puede ser transitorio (SW tomó control, versionchange).
-    // Invalidar singleton para forzar reapertura en el siguiente intento.
-    // Solo marcar _bibIdbUnavailable si OPFS tampoco existe (incógnito real).
-    _bibDb = null;
-    const _realIncognito2 = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
-    if (_realIncognito2) _bibIdbUnavailable = true;
+    _bibIdbUnavailable = true;
   });
   return _bibSavePromise;
 }
@@ -19710,12 +19575,8 @@ let _gcpLastTapTime2 = 0, _gcpLastTapIdx2 = -1;
 // toque sobre el objeto recién insertado se interprete erróneamente como doble tap.
 function _gcpPushLayer(la) {
   window._gcpLayers.push(la);
-  // Resetear AMBOS sistemas de doble tap al insertar un objeto.
-  // Sin esto, el primer toque sobre el objeto recién insertado puede disparar el doble tap
-  // si el tap de inserción ocurrió hace menos de 380ms en una posición cercana.
-  _gcpLastTapTime  = 0;  // sistema 1: pointerdown con delta tiempo+posición
-  _gcpLastTapTime2 = 0;  // sistema 2: pointerup sobre mismo objeto
-  _gcpLastTapIdx2  = -1;
+  _gcpLastTapTime2 = 0;
+  _gcpLastTapIdx2 = -1;
   // Limpiar pointers fantasma que pudieran quedar del gesto de inserción
   _gcpPtrMap.clear();
   _gcpPinching = false; _gcpPinchDist0 = 0; _gcpPinchObj = null; _gcpSelBeforePinch = -1;
@@ -24458,68 +24319,29 @@ async function _edRunDiag() {
     });
   } else { L('ComicStore: NO ENCONTRADO'); }
 
-  // 3. IDB cxAnims — usar singleton _edAnimIdbOpen para evitar conflictos
-  try {
-    const _diagDb = await _edAnimIdbOpen();
-    await new Promise((res) => {
-      try {
-        const tx = _diagDb.transaction('anims', 'readonly');
-        const req = tx.objectStore('anims').getAllKeys();
-        req.onsuccess = ev => {
-          const ks = ev.target.result || [];
-          L('IDB cxAnims: ' + ks.length + ' entradas');
-          ks.slice(0, 5).forEach(k => L('  ' + k));
-          if (ks.length > 5) L('  ...(' + ks.length + ' total)');
-          res();
-        };
-        req.onerror = () => { L('IDB getAllKeys error'); res(); };
-      } catch(e2) { L('IDB tx error: ' + e2.message); res(); }
-      setTimeout(res, 3000);
-    });
-  } catch(e) { L('IDB cxAnims error: ' + e.message); }
-
-  // 4b. Diagnóstico autosave y memoria
-  L('\n── Autosave (fix OOM Android) ──');
-  // Decisión tomada al cargar esta obra
-  if (window._edLastAutosaveDecision) {
-    const _d = window._edLastAutosaveDecision;
-    L('Decisión al cargar: ' + _d.decision);
-    L('  autosave.ts:   ' + _d.autosaveDate);
-    L('  localSavedAt:  ' + (_d.localSavedAt || 'NULL — usando updatedAt: ' + _d.updatedAt));
-    L('  localSavedTs >= autosaveTs: ' + (_d.localSavedTs >= _d.autosaveTs));
-    L('  comic.title al cargar: "' + _d.comicTitle + '"');
-    L('  cloudOnly: ' + _d.cloudOnly + ' | cloudNewer: ' + _d.cloudNewer);
+  // 3. IDB cxAnims — claves relevantes
+  if (_bibIdbUnavailable) {
+    L('IDB cxAnims: no disponible (modo incógnito)');
   } else {
-    L('Sin decisión registrada (obra no se cargó en esta sesión)');
-  }
-  try {
-    // Tamaño del último snapshot de autosave (sin _pngFrames)
-    if (window._edLastAutosaveBytes !== undefined) {
-      const _asKB = Math.round(window._edLastAutosaveBytes / 1024);
-      const _asSec = window._edLastAutosaveTs ? Math.round((Date.now() - window._edLastAutosaveTs) / 1000) : '?';
-      L('Último snapshot: ' + _asKB + ' KB (hace ' + _asSec + 's)');
-      if (_asKB > 10240) L('  ⚠️ GRANDE: ' + _asKB + ' KB — revisar capas en memoria');
-      else L('  ✓ Tamaño OK');
-    } else {
-      L('Sin datos (autosave no ejecutado aún en esta sesión)');
-    }
-    // Detectar capas con _pngFrames en memoria (no deberían estar en snapshot autosave)
-    let _framesInMem = 0;
-    let _framesMB = 0;
-    edPages.forEach((p, pi) => {
-      (p.layers || []).forEach((l, li) => {
-        if (l && l._pngFrames && l._pngFrames.length) {
-          _framesInMem++;
-          let _sz = 0;
-          l._pngFrames.forEach(f => { try { _sz += (f||'').length * 0.75; } catch(_){} });
-          _framesMB += _sz / (1024*1024);
-          L('  P'+pi+'L'+li+' type='+l.type+' _pngFrames='+l._pngFrames.length+' (~'+Math.round(_sz/1024)+'KB en memoria)');
-        }
+    try {
+      await new Promise((res) => {
+        let _r;
+        try { _r = indexedDB.open('cxAnims', 1); } catch(e) { L('IDB no disponible: ' + e.message); res(); return; }
+        _r.onupgradeneeded = e => { try { e.target.result.createObjectStore('anims'); } catch(_){} };
+        _r.onsuccess = e => {
+          try {
+            const tx = e.target.result.transaction('anims','readonly');
+            const req = tx.objectStore('anims').getAllKeys();
+            req.onsuccess = ev => { const ks = ev.target.result||[]; L('IDB cxAnims: '+ks.length+' entradas'); ks.slice(0,5).forEach(k=>L('  '+k)); if(ks.length>5)L('  ...('+ks.length+' total)'); res(); };
+            req.onerror = () => { L('IDB getAllKeys error'); res(); };
+          } catch(e2) { L('IDB tx error: '+e2.message); res(); }
+        };
+        _r.onerror = () => { L('IDB open error'); res(); };
+        _r.onblocked = () => { L('IDB blocked'); res(); };
+        setTimeout(res, 3000); // timeout de seguridad
       });
-    });
-    if (_framesInMem === 0) L('  ✓ Sin _pngFrames en memoria (correcto para autosave)');
-    else L('  ⚠️ ' + _framesInMem + ' capas con frames en RAM (~' + _framesMB.toFixed(1) + ' MB) — excluidos del autosave correctamente');
-  } catch(_asE) { L('Error: ' + _asE.message); }
+    } catch(e) { L('IDB error: ' + e.message); }
+  }
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory
