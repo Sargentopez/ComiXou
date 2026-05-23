@@ -15337,32 +15337,50 @@ async function _edAutosaveWrite() {
     // Incluir biblioteca en el snapshot
     let bibData = null;
     try { bibData = _bibLoad(); } catch(_) {}
-    // Serializar capas para el snapshot — NUNCA incluir _pngFrames en autosave.
-    // edSerLayer los incluye si están en memoria (pueden ser 30-150 MB por obra),
-    // lo que causaría un write IDB masivo cada 30s → OOM en Android.
-    // Solo guardamos la clave IDB (_pngFramesKey) para que edSaveProject los recupere.
-    function _asSerLayer(l) {
+    // Serializar capas para el snapshot — los _pngFrames NO van inline en el snapshot.
+    // Si están en memoria pero sin clave IDB (animación recién insertada, nunca guardada),
+    // los externalizamos a cxAnims con una clave temporal "as_" para que el autosave
+    // pueda recuperarlos. Esto evita el OOM (frames fuera del JSON) y preserva la animación.
+    const _asExternalize = async (l, s) => {
+      if (!s._pngFrames || !s._pngFrames.length) return s;
+      // Ya tiene clave IDB → los frames ya están externalizados, solo usar la clave
+      if (s._pngFramesKey) { delete s._pngFrames; return s; }
+      // Sin clave: externalizar ahora con clave temporal "as_"
+      const _asKey = _edAnimKey('as_' + edProjectId + '_' + Date.now().toString(36));
       try {
-        const s = edSerLayer(l);
-        if (!s) return null;
-        // Eliminar _pngFrames del snapshot de autosave — son los frames PNG en memoria
-        if (s._pngFrames) {
-          delete s._pngFrames;
-          // Si no tiene clave IDB, marcar para que edSaveProject lo regenere
-          if (!s._pngFramesKey) s._asFramesMissing = true;
-        }
-        return s;
-      } catch(_) { return null; }
-    }
+        await _edAnimIdbSave(_asKey, s._pngFrames);
+        delete s._pngFrames;
+        s._pngFramesKey = _asKey;
+        // Propagar la clave al layer vivo para que edSaveProject la reutilice
+        if (l) l._pngFramesKey = _asKey;
+      } catch(_) {
+        // IDB falló — descartar frames del snapshot (mejor perderlos que crashear)
+        delete s._pngFrames;
+        s._asFramesMissing = true;
+      }
+      return s;
+    };
     // Medir tamaño estimado antes de escribir (diagnóstico de memoria)
     let _asEstBytes = 0;
+    const _asPages = [];
+    for (let _asi = 0; _asi < edPages.length; _asi++) {
+      const p = edPages[_asi];
+      const layers = [];
+      for (let _ali = 0; _ali < (p.layers || []).length; _ali++) {
+        const l = p.layers[_ali];
+        try {
+          let s = edSerLayer(l);
+          if (!s) continue;
+          s = await _asExternalize(l, s);
+          _asEstBytes += JSON.stringify(s).length;
+          layers.push(s);
+        } catch(_) {}
+      }
+      _asPages.push({ orientation: p.orientation, dataUrl: p.dataUrl || null, layers });
+    }
     const snapshot = {
       ts: Date.now(),
-      pages: edPages.map(p => {
-        const layers = (p.layers || []).map(l => _asSerLayer(l)).filter(Boolean);
-        layers.forEach(l => { try { _asEstBytes += JSON.stringify(l).length; } catch(_){} });
-        return { orientation: p.orientation, dataUrl: p.dataUrl || null, layers };
-      }),
+      pages: _asPages,
       bib: bibData || null
     };
     // Guardar tamaño del último autosave para diagnóstico (botón 🩺)
