@@ -191,8 +191,14 @@ const SupabaseClient = (() => {
     return new Promise((res, rej) => {
       const req = indexedDB.open('cxAnims', 1);
       req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-      req.onsuccess = e => { _animDb = e.target.result; res(_animDb); };
-      req.onerror   = e => rej(e.target.error);
+      req.onsuccess = e => {
+        _animDb = e.target.result;
+        // Invalidar singleton si el SW cierra/actualiza la IDB (clients.claim en Android)
+        _animDb.onversionchange = () => { _animDb.close(); _animDb = null; };
+        _animDb.onclose        = () => { _animDb = null; };
+        res(_animDb);
+      };
+      req.onerror = e => rej(e.target.error);
     });
   }
   // Guarda dataUrl PNG (APNG completo) en IDB por animKey

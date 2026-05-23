@@ -15055,31 +15055,40 @@ function edSerLayer(l){
   }
 }
 // Carga _pngFrames desde IndexedDB 'cxAnims' por clave _pngFramesKey
-function _edAnimIdbLoad(key) {
-  return new Promise(res => {
+// Singleton para cxAnims — mismo patrón que _bibOpenIdb.
+// onversionchange/onclose invalidan la referencia cuando el SW toma control,
+// evitando que _edAnimIdbLoad devuelva null en Android tras clients.claim().
+let _edAnimDb = null;
+function _edAnimIdbOpen() {
+  if (_edAnimDb) return Promise.resolve(_edAnimDb);
+  return new Promise((res, rej) => {
     const req = indexedDB.open('cxAnims', 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
     req.onsuccess = e => {
-      const r = e.target.result.transaction('anims').objectStore('anims').get(key);
-      r.onsuccess = e2 => res(e2.target.result || null);
-      r.onerror   = () => res(null);
+      _edAnimDb = e.target.result;
+      _edAnimDb.onversionchange = () => { _edAnimDb.close(); _edAnimDb = null; };
+      _edAnimDb.onclose        = () => { _edAnimDb = null; };
+      res(_edAnimDb);
     };
-    req.onerror = () => res(null);
+    req.onerror = () => rej(req.error);
   });
 }
 
+function _edAnimIdbLoad(key) {
+  return _edAnimIdbOpen().then(db => new Promise(res => {
+    const r = db.transaction('anims').objectStore('anims').get(key);
+    r.onsuccess = e => res(e.target.result || null);
+    r.onerror   = () => res(null);
+  })).catch(() => { _edAnimDb = null; return null; });
+}
+
 function _edAnimIdbSave(key, frames) {
-  return new Promise(res => {
-    const req = indexedDB.open('cxAnims', 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore('anims');
-    req.onsuccess = e => {
-      const tx = e.target.result.transaction('anims', 'readwrite');
-      tx.objectStore('anims').put(frames, key);
-      tx.oncomplete = () => res();
-      tx.onerror    = () => res();
-    };
-    req.onerror = () => res();
-  });
+  return _edAnimIdbOpen().then(db => new Promise(res => {
+    const tx = db.transaction('anims', 'readwrite');
+    tx.objectStore('anims').put(frames, key);
+    tx.oncomplete = () => res();
+    tx.onerror    = () => res();
+  })).catch(() => { _edAnimDb = null; });
 }
 
 function edDeserLayer(d, pageOrientation){
@@ -18502,15 +18511,23 @@ const _BIB_IDB_STORE = 'bib';
 let _bibCache = null; // caché en memoria, siempre actualizada
 
 // Singleton de conexión IDB para la biblioteca — evita bloqueos por múltiples aperturas
-// simultáneas en Android Chrome (el patrón no-singleton causaba IDB 'blocked' silencioso)
+// simultáneas en Android Chrome (el patrón no-singleton causaba IDB 'blocked' silencioso).
+// onversionchange/onclose invalidan la referencia cuando el SW nuevo toma control (clients.claim),
+// forzando reapertura en la siguiente operación en lugar de usar una conexión cerrada.
 let _bibDb = null;
 function _bibOpenIdb() {
   if (_bibDb) return Promise.resolve(_bibDb);
   return new Promise((res, rej) => {
     const r = indexedDB.open(_BIB_IDB_NAME, 1);
     r.onupgradeneeded = e => e.target.result.createObjectStore(_BIB_IDB_STORE);
-    r.onsuccess = e => { _bibDb = e.target.result; res(_bibDb); };
-    r.onerror   = () => rej(r.error);
+    r.onsuccess = e => {
+      _bibDb = e.target.result;
+      // Invalidar singleton si el SW cierra/actualiza la IDB
+      _bibDb.onversionchange = () => { _bibDb.close(); _bibDb = null; };
+      _bibDb.onclose        = () => { _bibDb = null; };
+      res(_bibDb);
+    };
+    r.onerror = () => rej(r.error);
   });
 }
 
@@ -18655,7 +18672,12 @@ function _bibSave(data) {
       tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
     });
   }).catch(() => {
-    _bibIdbUnavailable = true;
+    // IDB falló — puede ser transitorio (SW tomó control, versionchange).
+    // Invalidar singleton para forzar reapertura en el siguiente intento.
+    // Solo marcar _bibIdbUnavailable si OPFS tampoco existe (incógnito real).
+    _bibDb = null;
+    const _realIncognito2 = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
+    if (_realIncognito2) _bibIdbUnavailable = true;
   });
   return _bibSavePromise;
 }
