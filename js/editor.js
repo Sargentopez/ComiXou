@@ -3911,10 +3911,11 @@ function edDrawSel(){
       edCtx.strokeStyle='#fff'; edCtx.lineWidth=lw*1.5; edCtx.stroke();
     });
   }
-  // Handles vértices de LineLayer seleccionado: solo en modo v/c, no en modo selección
+  // Handles vértices de LineLayer seleccionado: SOLO en modo V/C (curveMode activo)
+  // En modo selección (select) solo se ven los 8 handles de bbox y el de rotación
   const _showLineNodes = la.type==='line' && la.points.length>=1 && !la._fromEllipse &&
     ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) &&
-    !(_edLineType === 'select' && !_edLineLayer); // ocultar en modo selección
+    _edCurveModeActive && _edCurveModeActive(); // solo visibles en modo V/C
   if(_showLineNodes){
     const rot=(la.rotation||0)*Math.PI/180;
     const cos=Math.cos(rot),sin=Math.sin(rot);
@@ -6813,7 +6814,9 @@ function edOnStart(e){
         }
       }
     }
-    if(la.points.length>=2 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
+    // Nodos: solo interactuables en modo V/C — en modo select solo handles de bbox
+    if(la.points.length>=2 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))
+       && (_edCurveModeActive && _edCurveModeActive())){
       const rot=(la.rotation||0)*Math.PI/180;
       const cos=Math.cos(rot),sin=Math.sin(rot);
       const pw=edPageW(),ph=edPageH();
@@ -7049,8 +7052,8 @@ function edOnStart(e){
   const _editingVectorial = (_activeMode === 'shape' || _activeMode === 'line') || _shapeBarOpen || !!_edLineLayer;
   // En modo selección del panel line/shape: permitir seleccionar objetos de la fusión y drag
   const _lineSelectMode = (_activeMode === 'line' || _activeMode === 'shape') && _edLineType === 'select' && !_edLineLayer;
-  // Bug2-fix: en táctil con panel line abierto y edActiveTool='select', permitir drag de nodos
-  if(_lineSelectMode && e.pointerType === 'touch' && edSelectedIdx >= 0){
+  // Nodos táctiles: solo en modo V/C (curveMode activo)
+  if(_lineSelectMode && e.pointerType === 'touch' && edSelectedIdx >= 0 && _edCurveModeActive && _edCurveModeActive()){
     const _lsLa = edLayers[edSelectedIdx];
     if(_lsLa && _lsLa.type === 'line'){
       // Radio normal para detectar nodos y candidatos de doble-tap
@@ -8174,7 +8177,6 @@ function edOnEnd(e){
       if(_found.length===1){
         // Un solo objeto → selección normal (sin abrir panel; doble tap lo abre)
         edSelectedIdx=_found[0];
-        _edDrawLockUI();
         edRenderOptionsPanel();
       } else if(_found.length>=2){
         edMultiSel=_found;
@@ -10186,7 +10188,8 @@ function _edActivateShapeTool(isNew) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
-    if(!open){ window._edCurveVertIdx=-1; edRedraw(); }
+    if(!open){ window._edCurveVertIdx=-1; }
+    edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
   $('op-shape-curve-r')?.addEventListener('input',e=>{
     const v=+e.target.value;
@@ -10621,7 +10624,8 @@ function _edActivateLineTool(isNew, isCreating) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
-    if(!open){ window._edCurveVertIdx=-1; edRedraw(); }
+    if(!open){ window._edCurveVertIdx=-1; }
+    edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
   $('op-line-curve-r')?.addEventListener('input',e=>{
     const v=+e.target.value;
@@ -14564,7 +14568,7 @@ function edMergeSelected(){
         }
         if(cur.length) contours.push(cur);
       } else {
-        // ShapeLayer → polígono en px (sin datos de curva)
+        // ShapeLayer → polígono en px, preservando cornerRadii si los tiene
         const cx = mx + la.x * pw;
         const cy = my + la.y * ph;
         const rot = (la.rotation || 0) * Math.PI / 180;
@@ -14578,9 +14582,15 @@ function edMergeSelected(){
             pts.push({ x: cx + lpx*cos - lpy*sin, y: cy + lpx*sin + lpy*cos });
           }
         } else {
+          // rect: 4 esquinas TL, TR, BR, BL — mismo orden que cornerRadii [0,1,2,3]
           const hw = la.width * pw / 2, hh = la.height * ph / 2;
+          const _shCr = Array.isArray(la.cornerRadii) ? la.cornerRadii : [0,0,0,0];
+          let _shIdx = 0;
           for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]) {
-            pts.push({ x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos });
+            const pt = { x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos };
+            if(_shCr[_shIdx]) pt._cr = _shCr[_shIdx];
+            _shIdx++;
+            pts.push(pt);
           }
         }
         contours.push(pts);
@@ -19029,7 +19039,7 @@ function _bibRenderPanel(panel) {
               _img2.onload = function() {
                 const pw=edPageW(), ph=edPageH();
                 let fW=entry.normW||0.7, fH=entry.normH||fW*(_img2.naturalHeight/Math.max(_img2.naturalWidth,1))*(pw/ph);
-                const sc2=Math.max(fW/0.9,fH/0.9,1); fW/=sc2; fH/=sc2;
+                // normW/normH ya refleja el tamaño real en el GCP — no reducir
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
@@ -19066,8 +19076,7 @@ function _bibRenderPanel(panel) {
           const pw = edPageW(), ph = edPageH();
           let finalW = entry.normW || 0.7;
           let finalH = entry.normH || finalW*(img.naturalHeight/Math.max(img.naturalWidth,1))*(pw/ph);
-          const sc = Math.max(finalW/0.9, finalH/0.9, 1);
-          finalW /= sc; finalH /= sc;
+          // normW/normH ya refleja el tamaño real en el GCP — no reducir
           const la = new ImageLayer(img, 0.5, 0.5, finalW);
           la.height = finalH;
           // src debe ser el primer frame PNG (pequeño) para layer_data en Supabase
@@ -19441,26 +19450,56 @@ let _gs = null;
 // _gcpWithEditorContext: ejecuta fn() con edLayers/edSelectedIdx/edCanvas/edCtx
 // apuntando al GIF. Desactiva _gcpActive para evitar loop en _edDocDownFn.
 function _gcpWithEditorContext(fn) {
-  const savedLayers = edLayers,  savedSel    = edSelectedIdx;
-  const savedCanvas = edCanvas,  savedCtx    = edCtx;
+  const savedLayers = edLayers,  savedSel     = edSelectedIdx;
+  const savedCanvas = edCanvas,  savedCtx     = edCtx;
   const savedActive = window._gcpActive;
   const savedOvrd   = window._edRedrawOverride;
+  // Guardar estado multiselección del editor
+  const savedMultiSel   = edMultiSel,    savedMultiBbox  = edMultiBbox;
+  const savedMultiGRot  = edMultiGroupRot;
+  const savedMultiDrag  = edMultiDragging,  savedMultiRes = edMultiResizing;
+  const savedMultiRot   = edMultiRotating,  savedMultiTr  = edMultiTransform;
+  const savedMultiDOffs = edMultiDragOffs,  savedActTool  = edActiveTool;
   let selAfter = window._gcpSelIdx;
   try {
     edLayers      = window._gcpLayers;
     edSelectedIdx = window._gcpSelIdx;
     edCanvas      = gcpCanvas;
     edCtx         = gcpCtx;
+    // Inyectar estado multiselección del GCP en las variables del editor
+    edMultiSel       = window._gcpMultiSel    || [];
+    edMultiBbox      = window._gcpMultiBbox   || null;
+    edMultiGroupRot  = window._gcpMultiGroupRot || 0;
+    edMultiDragging  = window._gcpMultiDragging || false;
+    edMultiResizing  = window._gcpMultiResizing || false;
+    edMultiRotating  = window._gcpMultiRotating || false;
+    edMultiTransform = window._gcpMultiTransform || null;
+    edMultiDragOffs  = window._gcpMultiDragOffs  || [];
+    if (edMultiSel.length >= 2) edActiveTool = 'multiselect';
     window._gcpActive        = false;
     window._edRedrawOverride = true;
     fn();
-    selAfter = edSelectedIdx; // capturar selección modificada dentro del contexto
+    selAfter = edSelectedIdx;
+    // Capturar estado multiselección actualizado
+    window._gcpMultiSel      = edMultiSel;
+    window._gcpMultiBbox     = edMultiBbox;
+    window._gcpMultiGroupRot = edMultiGroupRot;
+    window._gcpMultiDragging = edMultiDragging;
+    window._gcpMultiResizing = edMultiResizing;
+    window._gcpMultiRotating = edMultiRotating;
+    window._gcpMultiTransform= edMultiTransform;
+    window._gcpMultiDragOffs = edMultiDragOffs;
   } finally {
     edLayers      = savedLayers;  edSelectedIdx = savedSel;
     edCanvas      = savedCanvas;  edCtx         = savedCtx;
+    edMultiSel    = savedMultiSel;   edMultiBbox     = savedMultiBbox;
+    edMultiGroupRot = savedMultiGRot;
+    edMultiDragging = savedMultiDrag; edMultiResizing = savedMultiRes;
+    edMultiRotating = savedMultiRot;  edMultiTransform= savedMultiTr;
+    edMultiDragOffs = savedMultiDOffs; edActiveTool   = savedActTool;
     window._gcpActive        = savedActive;
     window._edRedrawOverride = savedOvrd;
-    window._gcpSelIdx = selAfter; // usar el valor de dentro del contexto
+    window._gcpSelIdx = selAfter;
   }
 }
 
@@ -19483,6 +19522,107 @@ function _gcpPushLayer(la) {
 let _gcpPinchObj      = null;  // snapshot del objeto al iniciar pinch
 let _gcpPinchAngle0  = 0;     // ángulo inicial del pinch para rotación
 let _gcpSelBeforePinch = -1;  // selección antes del primer dedo (para restaurar en pinch)
+
+// ── GCP Multiselección independiente del editor general ──────────────────
+function _gcpRecalcMultiBbox() {
+  if (!window._gcpMultiSel || !window._gcpMultiSel.length) { window._gcpMultiBbox = null; return; }
+  const pw = edPageW(), ph = edPageH();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  window._gcpMultiSel.forEach(i => {
+    const la = window._gcpLayers[i]; if (!la) return;
+    const hw = la.width/2, hh = la.height/2;
+    const rot = (la.rotation||0)*Math.PI/180;
+    [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]].forEach(([dx,dy]) => {
+      const wx = la.x + (dx*pw*Math.cos(rot) - dy*ph*Math.sin(rot))/pw;
+      const wy = la.y + (dx*pw*Math.sin(rot) + dy*ph*Math.cos(rot))/ph;
+      minX = Math.min(minX, wx); minY = Math.min(minY, wy);
+      maxX = Math.max(maxX, wx); maxY = Math.max(maxY, wy);
+    });
+  });
+  window._gcpMultiBbox = { cx:(minX+maxX)/2, cy:(minY+maxY)/2, w:maxX-minX, h:maxY-minY, rot:0 };
+}
+
+function _gcpMultiHandles(bb) {
+  const hw = bb.w/2, hh = bb.h/2;
+  const cx = bb.cx, cy = bb.cy;
+  return [
+    {x:cx-hw, y:cy-hh, c:'tl'}, {x:cx,    y:cy-hh, c:'tm'}, {x:cx+hw, y:cy-hh, c:'tr'},
+    {x:cx+hw, y:cy,    c:'mr'}, {x:cx+hw, y:cy+hh, c:'br'}, {x:cx,    y:cy+hh, c:'bm'},
+    {x:cx-hw, y:cy+hh, c:'bl'}, {x:cx-hw, y:cy,    c:'ml'},
+  ];
+}
+
+function _gcpDrawMultiSel() {
+  if (!window._gcpMultiBbox || !window._gcpMultiSel || !window._gcpMultiSel.length) return;
+  const bb = window._gcpMultiBbox;
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const mx = edMarginX(), my = edMarginY();
+  const lw = 1/z, hr = 6/z, hrRot = 8/z;
+  // Dimensiones visuales del bbox (durante resize se escalan)
+  const bw = bb.w * pw * (window._gcpMultiTransform?._curSx ?? 1);
+  const bh = bb.h * ph * (window._gcpMultiTransform?._curSy ?? 1);
+  const grRad = (window._gcpMultiGroupRot || 0) * Math.PI / 180;
+  const gcx = mx + bb.cx * pw;
+  const gcy = my + bb.cy * ph;
+
+  gcpCtx.save();
+
+  // Contornos individuales
+  for (const i of window._gcpMultiSel) {
+    const la = window._gcpLayers[i]; if (!la) continue;
+    const rot = (la.rotation || 0) * Math.PI / 180;
+    const cx2 = mx + la.x * pw, cy2 = my + la.y * ph;
+    const w2 = la.width * pw, h2 = la.height * ph;
+    gcpCtx.save();
+    gcpCtx.translate(cx2, cy2); gcpCtx.rotate(rot);
+    gcpCtx.strokeStyle = 'rgba(26,140,255,0.4)';
+    gcpCtx.lineWidth = lw; gcpCtx.setLineDash([4/z, 3/z]);
+    gcpCtx.strokeRect(-w2/2, -h2/2, w2, h2);
+    gcpCtx.setLineDash([]);
+    gcpCtx.restore();
+  }
+
+  // Bbox colectivo con rotate (igual que edDrawMultiSel)
+  gcpCtx.save();
+  gcpCtx.translate(gcx, gcy);
+  gcpCtx.rotate(grRad);
+
+  // Marco del bbox
+  gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = 1.5/z;
+  gcpCtx.setLineDash([6/z, 3/z]);
+  gcpCtx.strokeRect(-bw/2, -bh/2, bw, bh);
+  gcpCtx.setLineDash([]);
+
+  // Handles de escala (en espacio local)
+  const corners = [
+    [-bw/2,-bh/2],[bw/2,-bh/2],[-bw/2,bh/2],[bw/2,bh/2],
+    [0,-bh/2],[0,bh/2],[-bw/2,0],[bw/2,0],
+  ];
+  for (const [hx, hy] of corners) {
+    gcpCtx.beginPath(); gcpCtx.arc(hx, hy, hr, 0, Math.PI*2);
+    gcpCtx.fillStyle = '#fff'; gcpCtx.fill();
+    gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw*1.5; gcpCtx.stroke();
+  }
+
+  // Handle de rotación — línea + círculo + flecha (idéntico a edDrawMultiSel)
+  const rotY = -bh/2 - 28/z;
+  gcpCtx.beginPath(); gcpCtx.moveTo(0, -bh/2); gcpCtx.lineTo(0, rotY + hrRot);
+  gcpCtx.strokeStyle = '#1a8cff'; gcpCtx.lineWidth = lw; gcpCtx.stroke();
+  gcpCtx.beginPath(); gcpCtx.arc(0, rotY, hrRot, 0, Math.PI*2);
+  gcpCtx.fillStyle = '#1a8cff'; gcpCtx.fill();
+  gcpCtx.strokeStyle = '#fff'; gcpCtx.lineWidth = lw*1.5; gcpCtx.stroke();
+  const ar = hrRot * 0.55;
+  gcpCtx.strokeStyle = '#fff'; gcpCtx.lineWidth = lw*1.5;
+  gcpCtx.beginPath(); gcpCtx.arc(0, rotY, ar, -Math.PI*0.9, Math.PI*0.5); gcpCtx.stroke();
+  const ax = ar * Math.cos(Math.PI*0.5), ay = rotY + ar * Math.sin(Math.PI*0.5);
+  gcpCtx.beginPath();
+  gcpCtx.moveTo(ax, ay); gcpCtx.lineTo(ax-3/z, ay-5/z);
+  gcpCtx.moveTo(ax, ay); gcpCtx.lineTo(ax+4/z, ay-3/z);
+  gcpCtx.stroke();
+
+  gcpCtx.restore();
+  gcpCtx.restore();
+}
 
 function _gcpHandleDown(e) {
   // ── DETECCIÓN DE DOBLE TAP: debe ser lo primero, antes de handles/drag ──
@@ -19628,45 +19768,101 @@ function _gcpHandleDown(e) {
     _gcpRedraw(); return;
   }
 
-  // ── Multiselect activo: drag grupal o nuevo rubber band ──────────────────
-  if (edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox) {
-    const _isTouch5 = e.pointerType === 'touch';
-    const _z5 = edCamera.z;
-    const _pw5 = edPageW(), _ph5 = edPageH();
-    const _bb = edMultiBbox;
-    // Hit en handle de rotación
-    const _rotY = _bb.cy - _bb.h/2 - 28/_z5/_ph5;
-    if (Math.hypot((c.nx-_bb.cx)*_pw5, (c.ny-_rotY)*_ph5)*_z5 < (_isTouch5?22:14)) {
-      edMultiRotating = true;
-      edRotateStartAngle = Math.atan2(c.ny-_bb.cy, c.nx-_bb.cx) - edMultiGroupRot*Math.PI/180;
-      window._edRotateInitRot = edMultiGroupRot;
-      _gcpRedraw(); return;
+  // ── Multiselect activo: hit-test con misma geometría que edOnStart ──────
+  if (window._gcpMultiSel && window._gcpMultiSel.length >= 2 && window._gcpMultiBbox) {
+    const bb = window._gcpMultiBbox;
+    const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+    const grRad = (window._gcpMultiGroupRot || 0) * Math.PI / 180;
+    const _isT = e.pointerType === 'touch';
+    const hitR = _isT ? 22 : 14;
+    let _gcpHandled = false;
+
+    // ── Handle rotación (misma fórmula que edOnStart) ──
+    const _offWs = bb.h * ph / 2 + 28 / z;
+    const rotHx = bb.cx + Math.sin(grRad) * _offWs / pw;
+    const rotHy = bb.cy - Math.cos(grRad) * _offWs / ph;
+    if (Math.hypot((c.nx - rotHx)*pw, (c.ny - rotHy)*ph) < hitR) {
+      _gcpWithEditorContext(() => {
+        edMultiRotating = true;
+        edMultiTransform = {
+          items: edMultiSel.map(i => { const la=edLayers[i]; return la?{i,x:la.x,y:la.y,rot:la.rotation||0}:null; }).filter(Boolean),
+          cx: bb.cx, cy: bb.cy,
+          startAngle: Math.atan2(c.ny - bb.cy, c.nx - bb.cx),
+          startGroupRot: edMultiGroupRot || 0,
+        };
+      });
+      _gcpHandled = true;
     }
-    // Hit en handles de escala
-    const _handles5 = _msHandles(_bb);
-    for (const h of _handles5) {
-      if (Math.hypot((c.nx-h.x)*_pw5, (c.ny-h.y)*_ph5)*_z5 < (_isTouch5?22:14)) {
-        edMultiResizing = true; edResizeCorner = h.c;
-        edInitialSize = { width:_bb.w, height:_bb.h, cx:_bb.cx, cy:_bb.cy,
-                          asp:_bb.h/_bb.w, rot:edMultiGroupRot,
-                          ox:_bb.cx, oy:_bb.cy, anchorX:_bb.cx, anchorY:_bb.cy };
-        edMultiDragOffs = edMultiSel.map(i => ({ dx:c.nx-window._gcpLayers[i].x, dy:c.ny-window._gcpLayers[i].y }));
+
+    // ── Handles de escala: desrotar cursor al espacio local del bbox (igual que edOnStart) ──
+    if (!_gcpHandled) {
+      const cg = Math.cos(-grRad), sg = Math.sin(-grRad);
+      const dcxPx = (c.nx - bb.cx)*pw, dcyPx = (c.ny - bb.cy)*ph;
+      const lxCur = bb.cx + (dcxPx*cg - dcyPx*sg)/pw;
+      const lyCur = bb.cy + (dcxPx*sg + dcyPx*cg)/ph;
+      for (const p of _msHandles(bb)) {
+        if (Math.hypot((lxCur - p.x)*pw, (lyCur - p.y)*ph) < hitR) {
+          _gcpWithEditorContext(() => {
+            edMultiResizing = true;
+            edMultiTransform = {
+              items: edMultiSel.map(i => { const la=edLayers[i]; return la?{i,x:la.x,y:la.y,w:la.width,h:la.height,rot:la.rotation||0}:null; }).filter(Boolean),
+              bb: { cx:bb.cx, cy:bb.cy, w:bb.w, h:bb.h },
+              corner: p.c,
+              sx: lxCur, sy: lyCur,
+              groupRot: edMultiGroupRot || 0,
+              _curSx: 1, _curSy: 1,
+            };
+          });
+          _gcpHandled = true; break;
+        }
+      }
+    }
+
+    // ── Hit dentro del bbox → drag (desrotado, igual que edOnStart) ──
+    if (!_gcpHandled) {
+      const cg2 = Math.cos(-grRad), sg2 = Math.sin(-grRad);
+      const ddxPx = (c.nx - bb.cx)*pw, ddyPx = (c.ny - bb.cy)*ph;
+      const lxD = (ddxPx*cg2 - ddyPx*sg2)/pw;
+      const lyD = (ddxPx*sg2 + ddyPx*cg2)/ph;
+      if (Math.abs(lxD) <= bb.w/2 && Math.abs(lyD) <= bb.h/2) {
+        _gcpWithEditorContext(() => {
+          edMultiDragging = true;
+          edMultiDragOffs = edMultiSel.map(i => {
+            const la=edLayers[i]; return la ? {dx:c.nx-la.x, dy:c.ny-la.y} : {dx:0,dy:0};
+          });
+        });
+        _gcpHandled = true;
+      }
+    }
+
+    if (_gcpHandled) { _gcpRedraw(); return; }
+
+    // ── Fuera del bbox: Shift+clic (PC) → toggle; sin Shift → rubber band ──
+    window._gcpMultiSel = []; window._gcpMultiBbox = null;
+    if (e.shiftKey && e.pointerType !== 'touch') {
+      let _sfound = -1;
+      for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
+        const _l = window._gcpLayers[_i];
+        if (_l && _l._gcpVisible !== false && !_l.locked && _l.contains?.(c.nx, c.ny)) { _sfound = _i; break; }
+      }
+      if (_sfound >= 0) {
+        const _prev = window._gcpSelIdx >= 0 ? [window._gcpSelIdx] : [];
+        const _si = _prev.indexOf(_sfound);
+        if (_si >= 0) _prev.splice(_si, 1); else _prev.push(_sfound);
+        if (_prev.length >= 2) {
+          window._gcpMultiSel = _prev; window._gcpMultiBbox = null;
+          _gcpWithEditorContext(() => { _msRecalcBbox(); });
+        } else if (_prev.length === 1) {
+          window._gcpSelIdx = _prev[0]; window._gcpMultiSel = []; window._gcpMultiBbox = null;
+        } else { window._gcpSelIdx = -1; }
         _gcpRedraw(); return;
       }
     }
-    // Hit dentro del bbox grupal → drag grupal
-    const _gr5 = edMultiGroupRot*Math.PI/180;
-    const _dx5 = c.nx-_bb.cx, _dy5 = c.ny-_bb.cy;
-    const _lx5 = _dx5*Math.cos(-_gr5)*_pw5 - _dy5*Math.sin(-_gr5)*_ph5;
-    const _ly5 = _dx5*Math.sin(-_gr5)*_pw5 + _dy5*Math.cos(-_gr5)*_ph5;
-    if (Math.abs(_lx5) <= _bb.w/2*_pw5+10/_z5 && Math.abs(_ly5) <= _bb.h/2*_ph5+10/_z5) {
-      edMultiDragging = true;
-      edMultiDragOffs = edMultiSel.map(i => ({ dx:c.nx-window._gcpLayers[i].x, dy:c.ny-window._gcpLayers[i].y }));
-      window._edMoved = false;
+    if (e.pointerType !== 'touch') {
+      window._gcpSelIdx = -1;
+      window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
       _gcpRedraw(); return;
     }
-    // Toque fuera del bbox → nuevo rubber band
-    window._gcpRubberBand = null; _msClear(); window._gcpSelIdx = -1; edActiveTool = 'select';
   }
   // Un solo dedo → guardar selección actual ANTES de que _gcpDoSelectDrag la cambie
   _gcpSelBeforePinch = window._gcpSelIdx;
@@ -19781,10 +19977,9 @@ function _gcpDoSelectDrag(e, c) {
     }
   } else {
     // Toque en vacío
-    if (edActiveTool === 'multiselect') {
+    if (window._gcpMultiSel && window._gcpMultiSel.length) {
       // En multiselect: empezar nuevo rubber band desde el vacío
-      _msClear();
-      edActiveTool = 'multiselect';
+      window._gcpMultiSel = []; window._gcpMultiBbox = null;
       window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
     } else if (!_isTouch) {
       // PC: empezar rubber band directamente al arrastrar en vacío
@@ -20065,7 +20260,7 @@ function _gcpAutoSaveFrame() {
   window._gcpDirty = true;
   const fi = window._gcpGlobalFrameIdx || 0;
   if (!window._gcpLayers || !window._gcpLayers.length) return;
-  // Eliminar interpolación circular antes de guardar (se regenerará si es el último frame)
+  // Eliminar interpolación circular si existía (el frame guardado la invalida)
   _gcpRemoveCircularInterp();
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
@@ -20076,18 +20271,6 @@ function _gcpAutoSaveFrame() {
       visible: la._gcpVisible !== false
     };
   });
-  // Crear/actualizar interpolación circular solo si este es el último frame clave
-  // (el botón siempre aparece, pero la interpolación automática solo al guardar el último)
-  const _totalAfter = _gcpGetTotalFrames();
-  // Verificar si fi es el último frame clave (ignorando circulares)
-  const _isLastKey = window._gcpLayers.every(la => {
-    if (!la._frames) return true;
-    for (let _i = fi + 1; _i < la._frames.length; _i++) {
-      if (la._frames[_i] && !la._frames[_i]._interp && !la._frames[_i]._circular) return false;
-    }
-    return true;
-  });
-  if (_isLastKey && fi > 0) _gcpUpdateCircularInterp();
   _gcpUpdateFramesBar();
 }
 
@@ -20231,9 +20414,15 @@ function _gcpHandleMove(e) {
       _gcpRedraw(); return;
     }
     // Actualizar rubber band si activo
-    if (window._gcpRubberBand && !edIsDragging && !edIsResizing && !edIsRotating && !edMultiDragging && !edMultiResizing && !edMultiRotating) {
+    if (window._gcpRubberBand && !edIsDragging && !edIsResizing && !edIsRotating &&
+        !window._gcpMultiDragging && !window._gcpMultiResizing && !window._gcpMultiRotating) {
       const _c3 = edCoords(e);
       window._gcpRubberBand.x1 = _c3.nx; window._gcpRubberBand.y1 = _c3.ny;
+      _gcpRedraw(); return;
+    }
+    // Drag/resize/rotate grupal GCP — edOnMove ya está dentro del contexto del editor
+    if (edMultiDragging || edMultiResizing || edMultiRotating) {
+      edOnMove(e);
       _gcpRedraw(); return;
     }
     edOnMove(e);
@@ -20323,42 +20512,39 @@ function _gcpHandleUp(e) {
       const _found = [];
       window._gcpLayers.forEach((la, i) => {
         if (!la || la._gcpVisible === false) return;
-        // GCP solo tiene strokes e images
-        if (la.type !== 'stroke' && la.type !== 'image') return;
+        // GCP: strokes, images y gifs
+        if (la.type !== 'stroke' && la.type !== 'image' && la.type !== 'gif') return;
         if (la.locked) return;
         if (_edAllCornersInside(la, rx0, ry0, rx1, ry1)) _found.push(i);
       });
       if (_found.length === 1) {
         window._gcpSelIdx = _found[0];
-        edActiveTool = 'select';
-        _msClear();
+        window._gcpMultiSel = [];
       } else if (_found.length >= 2) {
         window._gcpSelIdx = -1;
-        edMultiSel = _found;
-        edActiveTool = 'multiselect';
-        gcpCanvas.className = 'tool-multiselect';
-        _msRecalcBbox();
-        // NO llamar _edUpdateMultiSelPanel — sin menú de unir/agrupar
+        window._gcpMultiSel = _found;
+        window._gcpMultiGroupRot = 0;
+        _gcpWithEditorContext(() => { _msRecalcBbox(); });
       }
     } else {
       // Rubber band demasiado pequeño → deseleccionar
-      _msClear();
+      window._gcpMultiSel = [];
       window._gcpSelIdx = -1;
-      edActiveTool = 'select';
     }
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     _gcpRedraw();
     return;
   }
   // Guardar estado en el frame activo si hubo transformación (individual o grupal)
-  if (edIsDragging || edIsResizing || edIsRotating || edMultiDragging || edMultiResizing || edMultiRotating) {
+  if (edIsDragging || edIsResizing || edIsRotating ||
+      window._gcpMultiDragging || window._gcpMultiResizing || window._gcpMultiRotating) {
     _gcpAutoSaveFrame();
-    if (edMultiDragging || edMultiResizing || edMultiRotating) {
-      _msRecalcBbox(); // recalcular bbox tras transformación grupal
+    if (window._gcpMultiDragging || window._gcpMultiResizing || window._gcpMultiRotating) {
+      _gcpWithEditorContext(() => { _msRecalcBbox(); });
     }
   }
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
-  edMultiDragging = false; edMultiResizing = false; edMultiRotating = false;
+  window._gcpMultiDragging = false; window._gcpMultiResizing = false; window._gcpMultiRotating = false;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
   // El historial registra el estado en vivo (fuera de los frames guardados).
   const newSnap = window._gcpLayers.map(la => ({
@@ -20422,8 +20608,13 @@ window._gcpGlobalFrameIdx = 0;
 // Cada entrada = snapshot JSON de _gcpFrames[_gcpFrameIdx] en ese momento
 window._gcpHistory    = [];  // array de snapshots del frame activo
 window._gcpHistoryIdx = -1;  // índice actual
-window._gcpCircularInterpFi = -1; // índice del último frame clave con interpolación circular
-window._gcpCircularInterpN  =  3; // número de frames de la interpolación circular
+window._gcpCircularInterpFi = -1;
+window._gcpCircularInterpN  =  3;
+window._gcpMultiSel         = [];
+window._gcpMultiBbox        = null;
+window._gcpMultiDragging    = false;
+window._gcpMultiResizing    = false;
+window._gcpMultiRotating    = false;
 
 // ── Variables del sistema de guías GCP (independientes del editor general) ──
 let _gcpRules      = [];       // guías del editor de animaciones
@@ -21011,13 +21202,15 @@ function _gcpShowCircularInterpModal(fi) {
   document.getElementById('gcpInterpOk').onclick = () => {
     modal.classList.remove('open');
     window._gcpCircularInterpN = _gcpInterpN;
+    // Crear (o recrear) la interpolación circular
     _gcpRemoveCircularInterp();
     _gcpUpdateCircularInterp();
     _gcpInvalidateAllThumbs();
+    _gcpApplyFrame(window._gcpGlobalFrameIdx);
     _gcpUpdateFrameNav();
     _gcpUpdateFramesBar();
     _gcpRedraw();
-    edToast(_gcpInterpN + ' frame' + (_gcpInterpN > 1 ? 's' : '') + ' de interpolación circular ✓');
+    edToast(_gcpInterpN + ' frame' + (_gcpInterpN > 1 ? 's' : '') + ' circular' + (_gcpInterpN > 1 ? 'es' : '') + ' añadido' + (_gcpInterpN > 1 ? 's' : '') + ' ✓');
   };
 }
 
@@ -21958,18 +22151,8 @@ function _gcpUpdateFramesBar() {
           interpBtn.addEventListener('click', e => {
             e.stopPropagation();
             if (_isCircular) {
-              if (_hasInterp) {
-                // Ya existe interpolación circular → mostrar modal para cambiar N
-                _gcpShowCircularInterpModal(fi);
-              } else {
-                // No existe aún → crear con N por defecto y mostrar modal
-                _gcpUpdateCircularInterp();
-                _gcpInvalidateAllThumbs();
-                _gcpUpdateFrameNav();
-                _gcpUpdateFramesBar();
-                _gcpRedraw();
-                _gcpShowCircularInterpModal(fi);
-              }
+              // Último frame sin frame a la derecha → interpolación circular
+              _gcpShowCircularInterpModal(fi);
             } else {
               _gcpShowInterpModal(fi, layerIdx);
             }
@@ -22207,8 +22390,8 @@ function _gcpRedraw() {
 // Copia de edDrawSel adaptada al canvas GIF
 function _gcpDrawSel() {
   // ── Multiselección y rubber band GCP ────────────────────────────────────
-  if (edActiveTool === 'multiselect' && edMultiSel.length) {
-    _gcpWithEditorContext(() => edDrawMultiSel());
+  if (window._gcpMultiSel && window._gcpMultiSel.length >= 2 && window._gcpMultiBbox) {
+    _gcpDrawMultiSel();
   } else if (window._gcpRubberBand) {
     // Dibujar rubber band GCP directamente en gcpCtx (sin usar edRubberBand)
     const _rb = window._gcpRubberBand;
@@ -22228,7 +22411,7 @@ function _gcpDrawSel() {
   }
 
   const idx = window._gcpSelIdx;
-  if (edActiveTool === 'multiselect') return; // multiselect dibuja sus propios handles
+  if (window._gcpMultiSel && window._gcpMultiSel.length >= 2) return; // multiselect dibuja sus propios handles
   if (idx < 0 || idx >= window._gcpLayers.length) return;
   const la = window._gcpLayers[idx];
   if (!la) return;
@@ -22341,10 +22524,9 @@ function _gcpVectorToImage(la, cb) {
   crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
   const dataUrl = crop.toDataURL('image/png');
 
-  // Proporciones normalizadas (fracción de página)
-  const normW = cw/pw, normH = ch/ph;
-  const scale = Math.max(normW/0.9, normH/0.9, 1);
-  const finalW = normW/scale, finalH = normH/scale;
+  // Usar el tamaño visual original del objeto — preservar width/height exactos del GCP
+  const finalW = la.width;
+  const finalH = la.height;
 
   // Crear ImageLayer con proporciones correctas
   const img = new Image();
@@ -22574,6 +22756,8 @@ function gcpOpen(edLayerIdx) {
   window._gcpGlobalFrameIdx = 0;
   window._gcpCircularInterpFi = -1;
   window._gcpCircularInterpN  =  3;
+  window._gcpMultiSel = []; window._gcpMultiBbox = null;
+  window._gcpMultiDragging = window._gcpMultiResizing = window._gcpMultiRotating = false;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null; _gcpRuleNodeId = 0;
   // Cerrar barra de frames al abrir editor
@@ -23032,9 +23216,28 @@ function _gcpSaveToLib(onDone) {
   tc2.drawImage(renderedFrames[0], cropX,cropY,cropW,cropH, (S-cropW*sc)/2,(S-cropH*sc)/2,cropW*sc,cropH*sc);
   const thumb=thumbC.toDataURL('image/png',0.7);
 
-  // Proporciones normalizadas (fracción de página)
-  const _gcpNormW = cropW/pageW;
-  const _gcpNormH = cropH/pageH;
+  // Proporciones normalizadas = bbox AABB de los objetos en el GCP (coords normalizadas).
+  // Usar el tamaño visual real en el GCP, no el del render recortado,
+  // para que al insertar en el editor el objeto tenga el mismo tamaño aparente.
+  {
+    let _bx0=Infinity,_by0=Infinity,_bx1=-Infinity,_by1=-Infinity;
+    const _bpw=edPageW(), _bph=edPageH();
+    for (const _la of layers) {
+      if (!_la) continue;
+      const _rot=(_la.rotation||0)*Math.PI/180;
+      const _hw=_la.width/2, _hh=_la.height/2;
+      for (const [_cx,_cy] of [[-_hw,-_hh],[_hw,-_hh],[-_hw,_hh],[_hw,_hh]]) {
+        const _wx=_cx*_bpw, _wy=_cy*_bph;
+        const _rx=(_wx*Math.cos(_rot)-_wy*Math.sin(_rot))/_bpw;
+        const _ry=(_wx*Math.sin(_rot)+_wy*Math.cos(_rot))/_bph;
+        _bx0=Math.min(_bx0,_la.x+_rx); _by0=Math.min(_by0,_la.y+_ry);
+        _bx1=Math.max(_bx1,_la.x+_rx); _by1=Math.max(_by1,_la.y+_ry);
+      }
+    }
+    if (_bx1<=_bx0||_by1<=_by0) { _bx0=0;_by0=0;_bx1=1;_by1=1; }
+    var _gcpNormW = _bx1-_bx0;
+    var _gcpNormH = _by1-_by0;
+  }
 
   // Serializar capas para re-edición
   const gcpLayersData = window._gcpLayers
@@ -23103,8 +23306,8 @@ function _gcpSaveToLib(onDone) {
     img.onload=()=>{
       existingLayer.img=img; existingLayer.src=pngFrames[0];
       existingLayer.x=savedX; existingLayer.y=savedY; existingLayer.rotation=savedR;
-      const sc2=Math.max(_gcpNormW/0.9,_gcpNormH/0.9,1);
-      existingLayer.width=_gcpNormW/sc2; existingLayer.height=_gcpNormH/sc2;
+      // usar tamaño real del GCP directamente
+      existingLayer.width=_gcpNormW; existingLayer.height=_gcpNormH;
       edPushHistory(); requestAnimationFrame(()=>edRedraw());
     };
     img.src=pngFrames[0];
