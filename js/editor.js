@@ -3023,15 +3023,16 @@ function edFitCanvas(resetCamera){
   edCanvas.style.height = newH + 'px';
   edCanvas.style.position = 'absolute';
   edCanvas.style.left = '0';
-  // Sincronizar gcpCanvas si está activo
+  edCanvas.style.top  = totalBarsH + 'px';
+  _edCanvasTop = totalBarsH; // cachear para edCoords
+  // Sincronizar gcpCanvas si está activo — mismo top que edCanvas
   if (window._gcpActive && gcpCanvas) {
     gcpCanvas.width  = newW;
     gcpCanvas.height = newH;
     gcpCanvas.style.width  = newW + 'px';
     gcpCanvas.style.height = newH + 'px';
+    gcpCanvas.style.top    = totalBarsH + 'px'; // mismo top que edCanvas
   }
-  edCanvas.style.top  = totalBarsH + 'px';
-  _edCanvasTop = totalBarsH; // cachear para edCoords
   edCanvas.style.margin = '0';
   // Mantener el canvas de dibujo libre sincronizado en posición y tamaño
   if(edDrawCanvas){
@@ -5400,11 +5401,8 @@ function edDeleteSelected(){
 function edCoords(e){
   const src = e.touches ? e.touches[0] : e;
   const sx = src.clientX;
-  // Cuando GCP activo, usar el top real del gcpCanvas para coordenadas correctas
-  const _canvasTop = (window._gcpActive && gcpCanvas)
-    ? gcpCanvas.getBoundingClientRect().top
-    : _edCanvasTop;
-  const sy = src.clientY - _canvasTop;
+  // _edCanvasTop es válido para ambos canvas (editor y GCP tienen el mismo top)
+  const sy = src.clientY - _edCanvasTop;
   // Convertir pantalla → workspace
   const w = edScreenToWorld(sx, sy);
   // Convertir workspace → coordenadas de página (0-1)
@@ -22408,11 +22406,11 @@ function gcpOpen(edLayerIdx) {
   if (!gcpCanvas) return;
   gcpCtx = gcpCanvas.getContext('2d');
 
-  // gcpCanvas mismo tamaño y posición que edCanvas — las scrollbars tienen z-index propio
+  // gcpCanvas mismo tamaño y posición que edCanvas
   gcpCanvas.width  = ec.width;
   gcpCanvas.height = ec.height;
-  gcpCanvas.style.left   = '0';
-  gcpCanvas.style.top    = '0';
+  gcpCanvas.style.left   = ec.style.left || '0';
+  gcpCanvas.style.top    = ec.style.top  || '0'; // mismo top que edCanvas dentro del wrap
   gcpCanvas.style.width  = ec.width  + 'px';
   gcpCanvas.style.height = ec.height + 'px';
   gcpCanvas.style.display       = 'block';
