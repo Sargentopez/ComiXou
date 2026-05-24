@@ -263,6 +263,11 @@ const ComicStore = (() => {
 
   async function _fsAskDir() {
     if (!_FS_SUPPORTED) return;
+    // En modo incógnito no tiene sentido pedir el directorio:
+    // localStorage no persiste entre sesiones y el handle se perdería al cerrar.
+    // Detectar incógnito via OPFS (igual que el resto de la app).
+    const _isIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
+    if (_isIncognito) return;
     // Restaurar handle guardado
     if (!_fsDirHandle) {
       try {

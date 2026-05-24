@@ -739,17 +739,23 @@ function _mcRenderList() {
             pages: (editorData.pages || []).map((pg, pi) => ({
               ...pg,
               layers: (pg.layers || []).map((l, li) => {
-                // _apngSrc: dataUrl enorme descargado de la nube — guardar en IDB y eliminar
+                // _apngSrc: dataUrl APNG descargado de la nube
                 if (l._apngSrc) {
-                  const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
-              const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
-                  _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
                   const lClean = Object.assign({}, l);
-                  delete lClean._apngSrc;
                   delete lClean._animFrames;
                   delete lClean._animReady;
                   delete lClean._oc;
-                  lClean._pngFramesKey = _idbKey;
+                  // En modo incógnito IDB no está disponible — conservar _apngSrc en el
+                  // editorData para que edDeserLayer lo use directamente sin pasar por IDB.
+                  const _idbAvail = navigator.storage && typeof navigator.storage.getDirectory === 'function';
+                  if (_idbAvail) {
+                    const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                    const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
+                    _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
+                    delete lClean._apngSrc;
+                    lClean._pngFramesKey = _idbKey;
+                  }
+                  // En incógnito: _apngSrc se conserva en lClean para carga directa
                   return lClean;
                 }
                 // _pngFrames (sistema antiguo): externalizar a IDB
