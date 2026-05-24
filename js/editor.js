@@ -24749,7 +24749,7 @@ async function _edRunDiag() {
   L('ts carga: ' + (window._edLastLoadTs || '-'));
   if (window._edLastLoadId && edProjectId && window._edLastLoadId !== edProjectId)
     L('  ⚠️ MISMATCH: editId !== edProjectId actual');
-  L('_mcIsIncognito: ' + window._mcIsIncognito);
+  L('_mcIsIncognito: ' + window._mcIsIncognito + ' | _mcIdbAvail: ' + window._mcIdbAvail);
   const _incogFrames = window._mcIncognitoFrames && window._mcIncognitoFrames[edProjectId];
   if (_incogFrames) {
     const _keys = Object.keys(_incogFrames);

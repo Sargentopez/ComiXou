@@ -445,9 +445,44 @@ function _mcCheckStorage() {
 }
 
 function MyComicsView_init() {
-  // Detectar incógnito una sola vez al entrar en la hoja del autor.
-  // Se usa para decidir cómo guardar/reconstruir obras descargadas de la nube.
-  window._mcIsIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
+  // Detectar disponibilidad real de IDB probando una escritura en cxAnims.
+  // Más fiable que detectar incógnito por APIs — en Chrome incógnito IDB existe
+  // pero puede fallar silenciosamente o tener cuota insuficiente.
+  window._mcIdbAvail = true; // asumir disponible hasta que la prueba falle
+  window._mcIsIncognito = false; // legacy, se mantiene por compatibilidad
+  (async () => {
+    try {
+      await new Promise((res, rej) => {
+        const r = indexedDB.open('cxAnims', 1);
+        r.onupgradeneeded = e => e.target.result.createObjectStore('anims');
+        r.onsuccess = e => {
+          const db = e.target.result;
+          const tx = db.transaction('anims', 'readwrite');
+          tx.objectStore('anims').put('__test__', '__idb_probe__');
+          tx.oncomplete = () => {
+            // Leer de vuelta para confirmar
+            const tx2 = db.transaction('anims', 'readonly');
+            const req = tx2.objectStore('anims').get('__idb_probe__');
+            req.onsuccess = ev => {
+              if (ev.target.result === '__test__') {
+                // IDB funciona — limpiar la clave de prueba
+                const tx3 = db.transaction('anims', 'readwrite');
+                tx3.objectStore('anims').delete('__idb_probe__');
+                window._mcIdbAvail = true;
+              } else {
+                window._mcIdbAvail = false;
+              }
+              res();
+            };
+            req.onerror = () => { window._mcIdbAvail = false; res(); };
+          };
+          tx.onerror = () => { window._mcIdbAvail = false; res(); };
+        };
+        r.onerror = () => { window._mcIdbAvail = false; res(); };
+        setTimeout(res, 2000); // timeout de seguridad
+      });
+    } catch(_) { window._mcIdbAvail = false; }
+  })();
   _mcCheckStorage(); // aviso modal si el almacenamiento supera el 85%
   _mcInjectModal();
   _mcRenderList();
@@ -748,7 +783,7 @@ function _mcRenderList() {
                   delete lClean._animFrames;
                   delete lClean._animReady;
                   delete lClean._oc;
-                  if (!window._mcIsIncognito) {
+                  if (window._mcIdbAvail !== false) {
                     // Modo normal: externalizar a IDB y eliminar _apngSrc del editorData
                     const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
                     const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
@@ -771,7 +806,7 @@ function _mcRenderList() {
                 }
                 // _pngFrames (sistema antiguo): externalizar a IDB
                 if (l._pngFrames) {
-                  if (window._mcIsIncognito) {
+                  if (window._mcIdbAvail === false) {
                     // Incógnito: guardar en store de memoria
                     if (!window._mcIncognitoFrames) window._mcIncognitoFrames = {};
                     if (!window._mcIncognitoFrames[comicToEdit.id]) window._mcIncognitoFrames[comicToEdit.id] = {};
