@@ -15693,15 +15693,19 @@ async function edLoadProject(id){
       window._edDeserPageIdx = _pi2; // diferir carga IDB para páginas no activas
       const layers = (pd.layers||[]).map((d, _li2)=>{
         // Incógnito: inyectar _apngSrc desde el store de memoria antes de deserializar
-        if (d && d._mcIncognitoKey && window._mcIncognitoFrames &&
-            window._mcIncognitoFrames[edProjectId]) {
-          const _frameData = window._mcIncognitoFrames[edProjectId][d._mcIncognitoKey];
-          if (_frameData) {
-            d = Object.assign({}, d);
-            if (typeof _frameData === 'string') d._apngSrc = _frameData;
-            else d._pngFrames = _frameData;
-            delete d._mcIncognitoKey;
+        if (d && d._mcIncognitoKey) {
+          const _framesStore = window._mcIncognitoFrames && window._mcIncognitoFrames[edProjectId];
+          if (_framesStore) {
+            const _frameData = _framesStore[d._mcIncognitoKey];
+            if (_frameData) {
+              d = Object.assign({}, d);
+              if (typeof _frameData === 'string') d._apngSrc = _frameData;
+              else d._pngFrames = _frameData;
+              delete d._mcIncognitoKey;
+            }
           }
+          // Si no hay store → la obra se abrió sin pasar por la descarga de my-comics
+          // El layer quedará sin frames — es el caso esperado en incógnito sin descarga previa
         }
         return edDeserLayer(d, orient);
       }).filter(Boolean);
@@ -24745,6 +24749,14 @@ async function _edRunDiag() {
   L('ts carga: ' + (window._edLastLoadTs || '-'));
   if (window._edLastLoadId && edProjectId && window._edLastLoadId !== edProjectId)
     L('  ⚠️ MISMATCH: editId !== edProjectId actual');
+  L('_mcIsIncognito: ' + window._mcIsIncognito);
+  const _incogFrames = window._mcIncognitoFrames && window._mcIncognitoFrames[edProjectId];
+  if (_incogFrames) {
+    const _keys = Object.keys(_incogFrames);
+    L('_mcIncognitoFrames[comicId]: ' + _keys.length + ' entradas → ' + _keys.join(', '));
+  } else {
+    L('_mcIncognitoFrames[comicId]: vacío o no existe');
+  }
 
   L('\n── Autosave (fix OOM Android) ──');
   // Decisión tomada al cargar esta obra
