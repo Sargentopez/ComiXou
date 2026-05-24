@@ -445,6 +445,9 @@ function _mcCheckStorage() {
 }
 
 function MyComicsView_init() {
+  // Detectar incógnito una sola vez al entrar en la hoja del autor.
+  // Se usa para decidir cómo guardar/reconstruir obras descargadas de la nube.
+  window._mcIsIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
   _mcCheckStorage(); // aviso modal si el almacenamiento supera el 85%
   _mcInjectModal();
   _mcRenderList();
@@ -745,21 +748,39 @@ function _mcRenderList() {
                   delete lClean._animFrames;
                   delete lClean._animReady;
                   delete lClean._oc;
-                  // En modo incógnito IDB no está disponible — conservar _apngSrc en el
-                  // editorData para que edDeserLayer lo use directamente sin pasar por IDB.
-                  const _idbAvail = navigator.storage && typeof navigator.storage.getDirectory === 'function';
-                  if (_idbAvail) {
+                  if (!window._mcIsIncognito) {
+                    // Modo normal: externalizar a IDB y eliminar _apngSrc del editorData
                     const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
                     const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
                     _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
                     delete lClean._apngSrc;
                     lClean._pngFramesKey = _idbKey;
+                  } else {
+                    // Modo incógnito: OPFS/IDB tienen cuota insuficiente o no persisten.
+                    // Guardar _apngSrc en store de memoria por comicId+pi+li.
+                    // edLoadProject lo inyectará en el layer antes de deserializar.
+                    if (!window._mcIncognitoFrames) window._mcIncognitoFrames = {};
+                    if (!window._mcIncognitoFrames[comicToEdit.id]) window._mcIncognitoFrames[comicToEdit.id] = {};
+                    const _frameKey = pi + '_' + li;
+                    window._mcIncognitoFrames[comicToEdit.id][_frameKey] = l._apngSrc;
+                    // El layer solo lleva una referencia ligera — el _apngSrc real está en memoria
+                    delete lClean._apngSrc;
+                    lClean._mcIncognitoKey = _frameKey; // marca para reconstrucción
                   }
-                  // En incógnito: _apngSrc se conserva en lClean para carga directa
                   return lClean;
                 }
                 // _pngFrames (sistema antiguo): externalizar a IDB
                 if (l._pngFrames) {
+                  if (window._mcIsIncognito) {
+                    // Incógnito: guardar en store de memoria
+                    if (!window._mcIncognitoFrames) window._mcIncognitoFrames = {};
+                    if (!window._mcIncognitoFrames[comicToEdit.id]) window._mcIncognitoFrames[comicToEdit.id] = {};
+                    const _fk2 = pi + '_' + li;
+                    window._mcIncognitoFrames[comicToEdit.id][_fk2] = l._pngFrames;
+                    const { _pngFrames, ...lClean } = l;
+                    lClean._mcIncognitoKey = _fk2;
+                    return lClean;
+                  }
                   const _uid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
                   const _idbKey = _uid2 + '__' + comicToEdit.id + '_' + pi + '_' + li;
                   _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));

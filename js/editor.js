@@ -15691,7 +15691,20 @@ async function edLoadProject(id){
     edPages=(comic.editorData.pages||[]).map((pd, _pi2)=>{
       const orient = pd.orientation||comic.editorData.orientation||'vertical';
       window._edDeserPageIdx = _pi2; // diferir carga IDB para páginas no activas
-      const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
+      const layers = (pd.layers||[]).map((d, _li2)=>{
+        // Incógnito: inyectar _apngSrc desde el store de memoria antes de deserializar
+        if (d && d._mcIncognitoKey && window._mcIncognitoFrames &&
+            window._mcIncognitoFrames[edProjectId]) {
+          const _frameData = window._mcIncognitoFrames[edProjectId][d._mcIncognitoKey];
+          if (_frameData) {
+            d = Object.assign({}, d);
+            if (typeof _frameData === 'string') d._apngSrc = _frameData;
+            else d._pngFrames = _frameData;
+            delete d._mcIncognitoKey;
+          }
+        }
+        return edDeserLayer(d, orient);
+      }).filter(Boolean);
       window._edDeserPageIdx = 0;
       // Migrar drawData legado (versiones <5.20) a DrawLayer si no hay DrawLayer ya
       if(pd.drawData && !layers.find(l=>l.type==='draw')){
