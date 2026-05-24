@@ -912,7 +912,10 @@ let edHistory = [], edHistoryIdx = -1;
 window._edHistDiag = []; // log de edPushHistory para diagnóstico
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
 let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
-const ED_MAX_HISTORY = 10;
+// En Android (táctil) reducir el historial a 5 para limitar el consumo de RAM.
+// Cada snapshot serializa los dataUrls de todos los fills/strokes → 10 snapshots
+// pueden acumular 10-20 MB en el heap. En PC mantenemos 10 para mejor UX.
+const ED_MAX_HISTORY = (navigator.maxTouchPoints > 0) ? 5 : 10;
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 // ── Multi-selección ──
 let edMultiSel = [];        // índices seleccionados
@@ -14115,8 +14118,8 @@ async function edCloudSave() {
   _edCloudSavingUpdateBadge();
 
   try {
-    const { sizeKB } = await SupabaseClient.saveDraft(comic);
-    edToast(`☁️ Guardado en nube (${sizeKB < 1024 ? sizeKB + ' KB' : Math.round(sizeKB/1024) + ' MB'})`);
+    await SupabaseClient.saveDraft(comic);
+    edToast('☁️ Guardado en nube');
     // Borrar autosave explícitamente tras guardado en nube exitoso.
     // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
     // por versionchange. Este segundo intento garantiza que no queda autosave espurio
@@ -17109,6 +17112,10 @@ function EditorView_destroy(){
   if (window._edPageHideFn) {
     window.removeEventListener('pagehide', window._edPageHideFn);
     window._edPageHideFn = null;
+  }
+  if (window._edVisibilityFn) {
+    document.removeEventListener('visibilitychange', window._edVisibilityFn);
+    window._edVisibilityFn = null;
   }
   _edAutosaveStop();
   // Cancelar timers de reset de cámara pendientes de la carga anterior
