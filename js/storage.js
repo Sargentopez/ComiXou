@@ -263,11 +263,6 @@ const ComicStore = (() => {
 
   async function _fsAskDir() {
     if (!_FS_SUPPORTED) return;
-    // En modo incógnito no tiene sentido pedir el directorio:
-    // localStorage no persiste entre sesiones y el handle se perdería al cerrar.
-    // Detectar incógnito via OPFS (igual que el resto de la app).
-    const _isIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
-    if (_isIncognito) return;
     // Restaurar handle guardado
     if (!_fsDirHandle) {
       try {
@@ -307,6 +302,24 @@ const ComicStore = (() => {
 
   async function _fsWrite(id, comic) {
     if (!_FS_SUPPORTED) return;
+    // No pedir directorio si localStorage está vacío y no hay cx_fs_asked previo
+    // (señal de sesión incógnito o contexto restringido donde el popup no tiene sentido).
+    // En modo normal: cx_fs_asked='yes'/'no' persiste entre sesiones → _fsAskDir lo corta.
+    // En incógnito: localStorage vacío cada sesión → cx_fs_asked=null siempre.
+    // Solución: usar sessionStorage para recordar la decisión dentro de la sesión incógnito.
+    if (!localStorage.getItem('cx_fs_asked') && !sessionStorage.getItem('cx_fs_session')) {
+      // Sin historial previo de respuesta. Usar editorData como señal definitiva:
+      // - Modo normal: la obra tiene editorData con páginas (guardado local real).
+      // - Incógnito/nube: obra sin editorData o sin páginas (solo metadatos).
+      // Esto cubre: usuario nuevo, usuario anónimo, e incógnito correctamente.
+      const _hasLocalData = !!(comic.editorData && comic.editorData.pages &&
+                                comic.editorData.pages.length > 0);
+      if (!_hasLocalData) {
+        sessionStorage.setItem('cx_fs_session', 'no');
+        return;
+      }
+    }
+    if (sessionStorage.getItem('cx_fs_session') === 'no') return;
     await _fsAskDir();
     if (!_fsDirHandle) return;
     try {
