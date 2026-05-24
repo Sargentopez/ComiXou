@@ -4837,11 +4837,17 @@ function _edUnloadPageAnims(pageIdx) {
   const page = edPages[pageIdx];
   if (!page) return;
   (page.layers || []).forEach(l => {
-    if (l && l.type === 'image' && l._animReady && l._animFrames && l._animFrames.length > 1) {
-      // Mantener _oc con el primer frame pintado → draw() sigue funcionando para thumbnails
-      l._animFrames = null;
-      l._animReady  = false;
-      l._animDeferred = true; // marcar para recarga bajo demanda
+    if (!l || l.type !== 'image') return;
+    // Liberar si hay frames en RAM o si la animación está lista para reproducirse.
+    // El guard original requería _animReady=true pero podía fallar si la carga
+    // aún estaba en curso. Ahora liberamos si hay frames O si tiene clave IDB para recargar.
+    const hasFrames  = l._animFrames && l._animFrames.length > 0;
+    const canReload  = l._pngFramesKey || l.animKey; // tiene clave para recargar de IDB
+    if ((hasFrames || l._animReady) && canReload) {
+      // _oc mantiene el último frame pintado → draw() sigue funcionando para thumbnails
+      l._animFrames   = null;
+      l._animReady    = false;
+      l._animDeferred = true;
     }
   });
 }
@@ -4853,9 +4859,17 @@ async function _edLoadPageAnims(pageIdx) {
   const promises = [];
   (page.layers || []).forEach(l => {
     if (!l || l.type !== 'image' || !l._animDeferred) return;
-    if (!l._pngFramesKey && !l.animKey) return;
     l._animDeferred = false;
+    // Caso 1: ya tiene _apngSrc o _pngFrames en memoria (diferido con datos)
+    const _inMem = l._apngSrc || (l._pngFrames && l._pngFrames.length);
+    if (_inMem) {
+      const input = l._apngSrc || l._pngFrames;
+      promises.push(new Promise(res => l.loadAnim(input, res)));
+      return;
+    }
+    // Caso 2: solo tiene clave IDB — leer y decodificar
     const key = l._pngFramesKey || l.animKey;
+    if (!key) return;
     const p = _edAnimIdbLoad(key).then(data => {
       if (!data) return;
       const input = (typeof data === 'string') ? data
@@ -15327,16 +15341,23 @@ function edDeserLayer(d, pageOrientation){
     if(d._pngFramesKey) l._pngFramesKey = d._pngFramesKey;
     if(d._apngIdbKey)   l._apngIdbKey   = d._apngIdbKey;
     if(d._bibItemId)    l._bibItemId    = d._bibItemId;
-    if(d._apngSrc) {
-      // APNG descargado de nube — loadAnim con string → decodeApng → N frames reales
-      l._apngSrc = d._apngSrc;
-      l._fIdx = 0;
-      l.loadAnim(d._apngSrc, () => { if(typeof edRedraw==='function') edRedraw(); });
-    } else if(d._pngFrames && d._pngFrames.length && d._pngFrames[0]) {
-      // _pngFrames con contenido real (no strings vacíos)
-      l._pngFrames=d._pngFrames;
-      l._fIdx=0;
-      l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
+    if(d._apngSrc || (d._pngFrames && d._pngFrames.length && d._pngFrames[0])) {
+      if (window._edDeserPageIdx > 0) {
+        // Página no activa: guardar los datos pero no decodificar todavía
+        if (d._apngSrc) l._apngSrc = d._apngSrc;
+        else { l._pngFrames = d._pngFrames; l._fIdx = 0; }
+        l._animDeferred = true;
+      } else if (d._apngSrc) {
+        // Página activa con APNG — decodificar inmediatamente
+        l._apngSrc = d._apngSrc;
+        l._fIdx = 0;
+        l.loadAnim(d._apngSrc, () => { if(typeof edRedraw==='function') edRedraw(); });
+      } else {
+        // Página activa con _pngFrames — decodificar inmediatamente
+        l._pngFrames = d._pngFrames;
+        l._fIdx = 0;
+        l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
+      }
     }
     // Cargar desde _apngIdbKey (animaciones de biblioteca en dispositivo B)
     if(d._apngIdbKey && !d.animKey && !d._pngFramesKey && !d._pngFrames && !d._apngSrc && window._sbAnimIdbLoad) {
