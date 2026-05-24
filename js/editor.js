@@ -4832,9 +4832,51 @@ function edDeletePage(){
     edLoadPage(Math.min(edCurrentPage,edPages.length-1));
   });
 }
+// Liberar _animFrames de una página (mantiene _oc con último frame para thumbnails)
+function _edUnloadPageAnims(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page) return;
+  (page.layers || []).forEach(l => {
+    if (l && l.type === 'image' && l._animReady && l._animFrames && l._animFrames.length > 1) {
+      // Mantener _oc con el primer frame pintado → draw() sigue funcionando para thumbnails
+      l._animFrames = null;
+      l._animReady  = false;
+      l._animDeferred = true; // marcar para recarga bajo demanda
+    }
+  });
+}
+
+// Cargar _animFrames de una página bajo demanda (si tiene layers diferidos)
+async function _edLoadPageAnims(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page) return;
+  const promises = [];
+  (page.layers || []).forEach(l => {
+    if (!l || l.type !== 'image' || !l._animDeferred) return;
+    if (!l._pngFramesKey && !l.animKey) return;
+    l._animDeferred = false;
+    const key = l._pngFramesKey || l.animKey;
+    const p = _edAnimIdbLoad(key).then(data => {
+      if (!data) return;
+      const input = (typeof data === 'string') ? data
+                  : (Array.isArray(data) && data.length) ? data : null;
+      if (!input) return;
+      if (typeof data === 'string') l._apngSrc = data;
+      else l._pngFrames = data;
+      return new Promise(res => l.loadAnim(input, res));
+    }).catch(() => {});
+    promises.push(p);
+  });
+  if (promises.length) await Promise.all(promises);
+}
+
 function edLoadPage(idx){
   // Limpiar sesión vectorial al cambiar de página
   if(typeof _vsClear==='function') _vsClear();
+
+  // Liberar _animFrames de la página anterior para recuperar RAM
+  if (idx !== edCurrentPage) _edUnloadPageAnims(edCurrentPage);
+
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
   const _po = edPages[idx]?.orientation || 'vertical';
   if(_po !== edOrientation){
@@ -4851,6 +4893,10 @@ function edLoadPage(idx){
     });
   }
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
+  // Cargar bajo demanda los _animFrames de la nueva página (liberados al salir de otras)
+  _edLoadPageAnims(idx).then(() => {
+    if (edCurrentPage === idx) edRedraw();
+  });
 }
 function edUpdateNavPages(){
   // Actualizar número de página en topbar
@@ -15326,6 +15372,11 @@ function edDeserLayer(d, pageOrientation){
         });
         return true;
       };
+      // _edDeserPageIdx se setea en edLoadProject para diferir carga de páginas no activas
+      if (window._edDeserPageIdx > 0) {
+        l._animDeferred = true;
+        // No lanzar la promesa IDB — se cargará bajo demanda al navegar a esta página
+      } else {
       l._animLoadPromise = _edAnimIdbLoad(d._pngFramesKey).then(data => {
         if(data && _onAnimLoaded(data)) return;
         // pngFramesKey no encontrada en IDB (clave huérfana borrada por el limpiador).
@@ -15340,6 +15391,7 @@ function edDeserLayer(d, pageOrientation){
           }).catch(()=>{});
         }
       });
+      } // fin else (_edDeserPageIdx === 0)
     }
     if(d.src){
       const img=new Image();
@@ -15615,9 +15667,11 @@ async function edLoadProject(id){
     edRuleNodes = comic.editorData._ruleNodes || [];
     _edRuleNodeId = edRuleNodes.reduce((m,n)=>Math.max(m,n.id),0);
     _edRuleId     = edRules.reduce((m,r)=>Math.max(m,r.id||0),0); // evitar colisión de IDs
-    edPages=(comic.editorData.pages||[]).map(pd=>{
+    edPages=(comic.editorData.pages||[]).map((pd, _pi2)=>{
       const orient = pd.orientation||comic.editorData.orientation||'vertical';
+      window._edDeserPageIdx = _pi2; // diferir carga IDB para páginas no activas
       const layers = (pd.layers||[]).map(d=>edDeserLayer(d, orient)).filter(Boolean);
+      window._edDeserPageIdx = 0;
       // Migrar drawData legado (versiones <5.20) a DrawLayer si no hay DrawLayer ya
       if(pd.drawData && !layers.find(l=>l.type==='draw')){
         const _isV = orient==='vertical';
@@ -15669,12 +15723,19 @@ async function edLoadProject(id){
     // Esperar a que los FillLayers terminen de cargar antes del snapshot inicial
     // (evita guardar un canvas vacío en el historial porque img.onload es async)
     const _fillLoadPromises = [];
-    edPages.forEach(p => (p.layers||[]).forEach(l => {
+    edPages.forEach((p, _pIdx) => (p.layers||[]).forEach(l => {
       if(l && l.type === 'fill' && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
-      // Esperar la carga async de frames de animación desde IDB.
-      // En Android la IDB es más lenta — sin esto el visor se abre antes de que
-      // los frames lleguen y la animación queda congelada.
-      if(l && l._animLoadPromise) _fillLoadPromises.push(l._animLoadPromise);
+      // Cargar _animFrames solo de la página activa (página 0 al cargar).
+      // Las demás páginas se cargarán bajo demanda al navegar — ahorra N_páginas × RAM_animación.
+      if(l && l._animLoadPromise) {
+        if (_pIdx === 0) {
+          _fillLoadPromises.push(l._animLoadPromise);
+        } else {
+          // Marcar como diferido: los frames se cargarán cuando se navegue a esta página
+          l._animDeferred = true;
+          l._animLoadPromise = null;
+        }
+      }
     }));
     const _doPushHistory = () => {
       edPushHistory(true);
@@ -19004,8 +19065,31 @@ function edBibGuardar() {
     };
   }
 
+  // Si el objeto es una animación PNG (image con _pngFrames, _apngSrc, _animReady o animKey),
+  // guardarlo directamente en la carpeta Animaciones igual que los GIFs.
+  // Los grupos nunca son animaciones directas — solo layers individuales type=image.
+  const _la2 = (!entry.isGroup) ? edLayers[edSelectedIdx] : null;
+  const _isAnimEntry = _la2 && _la2.type === 'image' &&
+    ((_la2._pngFrames && _la2._pngFrames.length > 1) ||
+     _la2._apngSrc || _la2._animReady || _la2.animKey);
+
+  if (_isAnimEntry) {
+    // Marcar como animación y guardar en carpeta Animaciones
+    entry.isGifAnim = true;
+    // Preservar los frames en el entry para que se puedan reproducir al insertar
+    if (_la2._apngSrc) entry.apngSrc = _la2._apngSrc;
+    if (_la2._pngFrames && _la2._pngFrames.length) entry.pngFrames = _la2._pngFrames;
+    if (_la2.animKey) entry.animKey = _la2.animKey;
+    if (_la2._pngFramesKey) entry._apngIdbKey = _la2._pngFramesKey;
+    if (_la2._gcpFrameDelay) entry.gcpFrameDelay = _la2._gcpFrameDelay;
+    _bibGetAnimFolder(data).items.push(entry);
+    _bibSave(data);
+    edToast('Animación guardada en Biblioteca → Animaciones ✓');
+    return;
+  }
+
   // Excluir carpeta Animaciones — los objetos normales nunca van ahí
-  const realFolders = data.folders.filter(f => f.name !== 'Animaciones');
+  const realFolders = data.folders.filter(f => f.id !== '__anim__' && f.name !== 'Animaciones');
   if (realFolders.length > 1) {
     _bibShowFolderPicker(entry, data);
   } else {
@@ -24578,6 +24662,33 @@ async function _edRunDiag() {
   } catch(e) { L('IDB cxAnims error: ' + e.message); }
 
   // 4b. Diagnóstico autosave y memoria
+  L('\n── Memoria de animaciones ──');
+  try {
+    let _totalFrames = 0, _totalBytes = 0, _deferred = 0, _loaded = 0;
+    edPages.forEach((p, pi) => {
+      (p.layers || []).forEach((l, li) => {
+        if (l && l.type === 'image') {
+          if (l._animFrames && l._animFrames.length) {
+            const f = l._animFrames[0];
+            const _fb = f && f.imageData ? f.imageData.data.byteLength : 0;
+            const _bytes = _fb * l._animFrames.length;
+            _totalFrames += l._animFrames.length;
+            _totalBytes  += _bytes;
+            _loaded++;
+            L('  P'+pi+'L'+li+': '+l._animFrames.length+' frames en RAM (~'+Math.round(_bytes/1024)+'KB)');
+          } else if (l._animDeferred) {
+            _deferred++;
+            L('  P'+pi+'L'+li+': diferido (se carga al navegar a P'+pi+')');
+          } else if (l._animReady) {
+            L('  P'+pi+'L'+li+': listo sin frames (solo _oc)');
+          }
+        }
+      });
+    });
+    L('Total: '+_loaded+' páginas con frames en RAM, '+_deferred+' diferidas');
+    L('RAM _animFrames: ~'+Math.round(_totalBytes/1024)+'KB ('+_totalFrames+' frames)');
+  } catch(_me) { L('Error: '+_me.message); }
+
   L('\n── Carga del editor ──');
   L('editId al cargar: ' + (window._edLastLoadId || 'null'));
   L('edProjectId actual: ' + (edProjectId || 'null'));
