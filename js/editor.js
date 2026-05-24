@@ -16305,6 +16305,13 @@ function _edResetPageAnims(pageIdx) {
 function _edStartPageAnims(pageIdx) {
   const page = edPages[pageIdx];
   if (!page) return;
+  // Si la página tiene layers diferidos (lazy loading), cargarlos de IDB primero.
+  // Esto permite que el visor reproduzca animaciones en páginas no visitadas en el editor.
+  const _hasDeferredAnims = page.layers.some(l => l && l.type === 'image' && l._animDeferred);
+  if (_hasDeferredAnims) {
+    _edLoadPageAnims(pageIdx).then(() => _edStartPageAnims(pageIdx));
+    return;
+  }
   page.layers.forEach(function(l) {
     if (l.type === 'gif' && l._ready) {
       l._fIdx = 0;
@@ -16315,10 +16322,6 @@ function _edStartPageAnims(pageIdx) {
       l._fIdx = 0;
       l._gcpPlayCount = 0;
       l._playing = true;
-      // Si los frames ya están decodificados en memoria (_animReady), arrancar directamente.
-      // Si no, loadAnim los decodifica (desde _apngSrc o _pngFrames en memoria).
-      // En v26+ los frames se externalizan a IDB y se decodifican via _animLoadPromise,
-      // por lo que _animReady=true pero _pngFrames y _apngSrc pueden ser null.
       if (l._animReady && l._animFrames && l._animFrames.length > 0) {
         l._applyFrame(0);
       } else if (l._apngSrc || l._pngFrames) {
@@ -17293,6 +17296,14 @@ function EditorView_init(){
   window._edLastLoadTs = new Date().toISOString();
   if(!editId){Router.go('my-comics');return;}
   sessionStorage.removeItem('cx_edit_id');
+  // Pre-pintar el título con lo que ya tiene ComicStore (ligero, síncrono)
+  // para evitar el flash de "Sin título" mientras edLoadProject carga async.
+  try {
+    const _preMeta = (typeof ComicStore !== 'undefined') ? ComicStore.getById(editId) : null;
+    const _preTitle = _preMeta?.title || '';
+    const _pt = document.getElementById('edProjectTitle');
+    if (_pt && _preTitle) _pt.textContent = _preTitle;
+  } catch(_) {}
   // edLoadProject es async: encadenar con .then() para que edSetOrientation
   // se ejecute DESPUÉS de que los datos estén cargados.
   // En Android el microtask de IndexedDB tarda más que en PC, por lo que
@@ -24685,7 +24696,7 @@ async function _edRunDiag() {
   // 4b. Diagnóstico autosave y memoria
   L('\n── Memoria de animaciones ──');
   try {
-    let _totalFrames = 0, _totalBytes = 0, _deferred = 0, _loaded = 0;
+    let _totalFrames = 0, _totalBytes = 0, _deferred = 0, _loaded = 0, _unloaded = 0;
     edPages.forEach((p, pi) => {
       (p.layers || []).forEach((l, li) => {
         if (l && l.type === 'image') {
@@ -24696,18 +24707,23 @@ async function _edRunDiag() {
             _totalFrames += l._animFrames.length;
             _totalBytes  += _bytes;
             _loaded++;
-            L('  P'+pi+'L'+li+': '+l._animFrames.length+' frames en RAM (~'+Math.round(_bytes/1024)+'KB)');
+            const _canRel = !!(l._pngFramesKey || l.animKey);
+            L('  P'+pi+'L'+li+': '+l._animFrames.length+' frames RAM (~'+Math.round(_bytes/1024)+'KB) animReady='+l._animReady+' canUnload='+_canRel);
           } else if (l._animDeferred) {
             _deferred++;
-            L('  P'+pi+'L'+li+': diferido (se carga al navegar a P'+pi+')');
+            L('  P'+pi+'L'+li+': DIFERIDO pngKey='+(l._pngFramesKey?'sí':'no')+' animKey='+(l.animKey?'sí':'no'));
           } else if (l._animReady) {
-            L('  P'+pi+'L'+li+': listo sin frames (solo _oc)');
+            _unloaded++;
+            L('  P'+pi+'L'+li+': descargado (solo _oc) animReady='+l._animReady+' pngKey='+(l._pngFramesKey||'-'));
+          } else if (l._pngFramesKey || l.animKey) {
+            L('  P'+pi+'L'+li+': sin frames, sin deferred, pngKey='+(l._pngFramesKey||'-')+' (¿no cargado?)');
           }
         }
       });
     });
-    L('Total: '+_loaded+' páginas con frames en RAM, '+_deferred+' diferidas');
+    L('Total: '+_loaded+' con frames RAM, '+_deferred+' diferidas, '+_unloaded+' descargadas');
     L('RAM _animFrames: ~'+Math.round(_totalBytes/1024)+'KB ('+_totalFrames+' frames)');
+    L('_edDeserPageIdx actual: '+window._edDeserPageIdx);
   } catch(_me) { L('Error: '+_me.message); }
 
   L('\n── Carga del editor ──');
