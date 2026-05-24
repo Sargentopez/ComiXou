@@ -111,16 +111,19 @@ const ComicStore = (() => {
     localStorage.removeItem(_bibKey);
 
     // 2. IDB biblioteca (cxBiblioteca): clave = cs_biblioteca_{comicId}
+    // Usar el singleton _bibDb del editor si está disponible para evitar conflictos
     try {
-      const _r = indexedDB.open('cxBiblioteca', 1);
-      _r.onsuccess = e => {
-        try {
-          const db = e.target.result;
-          if (db.objectStoreNames.contains('bib')) {
-            db.transaction('bib', 'readwrite').objectStore('bib').delete(_bibKey);
-          }
-        } catch(_) {}
+      const _delFromBibDb = db => {
+        if (db && db.objectStoreNames.contains('bib')) {
+          try { db.transaction('bib', 'readwrite').objectStore('bib').delete(_bibKey); } catch(_) {}
+        }
       };
+      if (window._bibDb) {
+        _delFromBibDb(window._bibDb);
+      } else {
+        const _r = indexedDB.open('cxBiblioteca', 1);
+        _r.onsuccess = e => _delFromBibDb(e.target.result);
+      }
     } catch(_) {}
 
     // 3. IDB autosave (cxAutosave): clave = {userId}_{comicId}

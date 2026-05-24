@@ -18914,12 +18914,15 @@ function _bibSave(data) {
     }
     return Promise.resolve();
   }
+  // Capturar la clave AHORA — _bibKey() usa edProjectId que puede cambiar
+  // si edLoadProject carga otra obra mientras esta promesa async está pendiente.
+  const _bibSaveKey = _bibKey();
   _bibSavePromise = _bibOpenIdb().then(db => {
     return new Promise((res, rej) => {
       const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
       tx.oncomplete = () => res();
       tx.onerror = () => res(); // silencioso
-      tx.objectStore(_BIB_IDB_STORE).put(data, _bibKey());
+      tx.objectStore(_BIB_IDB_STORE).put(data, _bibSaveKey);
     });
   }).catch(() => {
     // IDB falló — puede ser transitorio (SW tomó control, versionchange).
@@ -18937,11 +18940,14 @@ async function _bibFlush() {
   // Si la escritura IDB falló, reintentar una vez con _bibCache actual
   // para garantizar que los datos de biblioteca no se pierdan al borrar el autosave
   if (_bibCache && !_bibIdbUnavailable) {
+    // Capturar clave y datos en el momento del flush — no después de awaits
+    const _flushKey  = _bibKey();
+    const _flushData = _bibCache;
     try {
       await new Promise(res => {
         _bibOpenIdb().then(db => {
           const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
-          tx.objectStore(_BIB_IDB_STORE).put(_bibCache, _bibKey());
+          tx.objectStore(_BIB_IDB_STORE).put(_flushData, _flushKey);
           tx.oncomplete = res;
           tx.onerror = res;
         }).catch(res);
@@ -18953,6 +18959,12 @@ async function _bibFlush() {
 window._bibSave = _bibSave;
 window._bibLoad = _bibLoad;
 window._bibKey  = _bibKey;
+// Exponer _bibDb para que storage.js pueda usarlo en _purgeLocalData
+// sin abrir una conexión IDB separada que conflicte con el singleton del editor
+Object.defineProperty(window, '_bibDb', {
+  get: () => _bibDb,
+  configurable: true,
+});
 // Bytes estimados de la biblioteca (suma del JSON de cada item)
 function _bibUsedBytes(data) {
   return data.folders.reduce((s, f) =>
