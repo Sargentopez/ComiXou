@@ -10934,12 +10934,53 @@ function _edFreezeDrawLayer(){
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){
-    // Dibujo vacío: eliminar DrawLayer y su FillLayer vinculado
+    // DrawLayer vacío: comprobar si el FillLayer vinculado tiene contenido
     const _flEmpty = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
-    if(_flEmpty) page.layers.splice(page.layers.indexOf(_flEmpty), 1);
-    page.layers.splice(page.layers.indexOf(dl), 1);
+    const _bbFillOnly = _flEmpty ? StrokeLayer._boundingBox(_flEmpty._canvas) : null;
+    if(!_bbFillOnly){
+      // Ambas capas vacías: eliminar ambas
+      if(_flEmpty) page.layers.splice(page.layers.indexOf(_flEmpty), 1);
+      page.layers.splice(page.layers.indexOf(dl), 1);
+      edLayers = page.layers;
+      edPushHistory();  // registrar eliminación en historial global
+      return;
+    }
+    // DrawLayer vacío pero FillLayer con contenido: usar bbox del fill como bbox union
+    // El StrokeLayer se crea con un canvas transparente del mismo tamaño que el fill
+    const _fpwE = edPageW(), _fphE = edPageH();
+    const _mxE  = edMarginX(), _myE = edMarginY();
+    const _uX0E = _bbFillOnly.x, _uY0E = _bbFillOnly.y;
+    const _uWE  = Math.max(1, _bbFillOnly.w), _uHE = Math.max(1, _bbFillOnly.h);
+    const _slEmpty = new StrokeLayer(dl._canvas);
+    _slEmpty.x      = (_uX0E + _uWE/2 - _mxE) / _fpwE;
+    _slEmpty.y      = (_uY0E + _uHE/2 - _myE) / _fphE;
+    _slEmpty.width  = _uWE / _fpwE;
+    _slEmpty.height = _uHE / _fphE;
+    _slEmpty._bboxOriginX = _uX0E;
+    _slEmpty._bboxOriginY = _uY0E;
+    const _slEmptyCrop = document.createElement('canvas');
+    _slEmptyCrop.width = _uWE; _slEmptyCrop.height = _uHE;
+    // canvas transparente — el dibujo estaba vacío
+    _slEmpty._canvas = _slEmptyCrop;
+    if(dl.locked) _slEmpty.locked = true;
+    if(dl.groupId) _slEmpty.groupId = dl.groupId;
+    if(dl._uid) _slEmpty._uid = dl._uid;
+    if(dl._fillLayerId) _slEmpty._fillLayerId = dl._fillLayerId;
+    // Recortar FillLayer al bbox
+    _flEmpty._drawLayerId = _slEmpty._uid || _slEmpty._fillLayerId;
+    _flEmpty._srcCanvas = null; _flEmpty._previewSx = null; _flEmpty._previewSy = null;
+    const _feCrop = document.createElement('canvas');
+    _feCrop.width = _uWE; _feCrop.height = _uHE;
+    _feCrop.getContext('2d').drawImage(_flEmpty._canvas, _uX0E, _uY0E, _uWE, _uHE, 0, 0, _uWE, _uHE);
+    _flEmpty._canvas = _feCrop; _flEmpty._ctx = _feCrop.getContext('2d');
+    _flEmpty.x = _slEmpty.x; _flEmpty.y = _slEmpty.y;
+    _flEmpty.width = _slEmpty.width; _flEmpty.height = _slEmpty.height;
+    _flEmpty._isWorkspaceCanvas = false;
+    page.layers.splice(dlIdx, 1, _slEmpty);
     edLayers = page.layers;
-    edPushHistory();  // registrar eliminación en historial global
+    _edDrawClearHistory();
+    edPushHistory();
+    edRedraw();
     return;
   }
   // ── Calcular bbox UNION de stroke + fill ──────────────────────────────────
@@ -11310,8 +11351,14 @@ function edRenderOptionsPanel(mode){
     }
     edDrawBarHide();
     // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar
+    // _edKeepFillTarget: flag temporal activada desde el diálogo de confirmación
+    // para preservar 'fill' solo en ese re-render puntual, sin afectar aperturas nuevas.
     if(mode === 'draw' && edActiveTool !== 'eraser' && edActiveTool !== 'fill'){
-      _edDrawLayerTarget = 'draw';
+      if(window._edKeepFillTarget) {
+        window._edKeepFillTarget = false; // consumir la flag — solo vale una vez
+      } else {
+        _edDrawLayerTarget = 'draw';
+      }
       edActiveTool = 'draw';
     }
     const isFill = edActiveTool === 'fill';
@@ -11326,7 +11373,7 @@ function edRenderOptionsPanel(mode){
     };
     panel.innerHTML=`
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-layer-draw" style="flex-shrink:0;border:2px solid ${_edDrawLayerTarget==='draw'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:${_edDrawLayerTarget==='draw'?'var(--black)':'transparent'};color:${_edDrawLayerTarget==='draw'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Capa de dibujo</button><button id="op-layer-fill" style="flex-shrink:0;border:2px solid ${_edDrawLayerTarget==='fill'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:${_edDrawLayerTarget==='fill'?'var(--black)':'transparent'};color:${_edDrawLayerTarget==='fill'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Capa de relleno</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
+  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-layer-draw" style="flex-shrink:0;border:2px solid ${_edDrawLayerTarget==='draw'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:${_edDrawLayerTarget==='draw'?'var(--black)':'transparent'};color:${_edDrawLayerTarget==='draw'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Capa de dibujo</button><button id="op-layer-fill" style="flex-shrink:0;border:2px solid ${_edDrawLayerTarget==='fill'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:${_edDrawLayerTarget==='fill'?'var(--black)':'transparent'};color:${_edDrawLayerTarget==='fill'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Capa de relleno</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑 Borrar capa</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     <button id="op-tool-pen"
       style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isPen?'rgba(0,0,0,.08)':'transparent'};color:${isPen?'var(--black)':'var(--gray-600)'}">Dibujar</button>
@@ -11451,13 +11498,53 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel(edActiveTool==='eraser'?'eraser':edActiveTool==='fill'?'fill':'draw');
     });
     $('op-layer-fill')?.addEventListener('click',()=>{
-      _edDrawLayerTarget='fill';
-      edRenderOptionsPanel(edActiveTool==='eraser'?'eraser':edActiveTool==='fill'?'fill':'draw');
+      if (edActiveTool === 'draw') {
+        // El pincel normalmente trabaja sobre la capa de dibujo — pedir confirmación
+        edConfirm('¿Quieres usar el pincel en la capa de relleno?', () => {
+          _edDrawLayerTarget = 'fill';
+          window._edKeepFillTarget = true; // preservar 'fill' en el re-render del panel
+          edRenderOptionsPanel('draw');
+        }, 'Sí');
+      } else {
+        _edDrawLayerTarget='fill';
+        edRenderOptionsPanel(edActiveTool==='eraser'?'eraser':edActiveTool==='fill'?'fill':'draw');
+      }
+    });
+    $('op-layer-clear')?.addEventListener('click',()=>{
+      const _layerName = _edDrawLayerTarget === 'fill' ? 'la capa de relleno' : 'la capa de dibujo';
+      edConfirm('¿Borrar todo el contenido de ' + _layerName + '?', () => {
+        const _page = edPages[edCurrentPage]; if(!_page) return;
+        const _dl = _page.layers.find(l => l.type === 'draw');
+        if (_edDrawLayerTarget === 'fill') {
+          // Borrar capa de relleno: limpiar el canvas del FillLayer vinculado
+          const _fl = _dl?._fillLayerId
+            ? _page.layers.find(l => l.type === 'fill' && l._drawLayerId === _dl._fillLayerId)
+            : null;
+          if (_fl && _fl._canvas) {
+            _fl._ctx.clearRect(0, 0, _fl._canvas.width, _fl._canvas.height);
+          }
+        } else {
+          // Borrar capa de dibujo: limpiar el DrawLayer completo
+          if (_dl && _dl._canvas) {
+            _dl._ctx.clearRect(0, 0, _dl._canvas.width, _dl._canvas.height);
+            _dl.points = [];
+          }
+        }
+        edPushHistory(); edRedraw();
+      }, 'Borrar');
     });
     $('op-tool-pen')?.addEventListener('click',()=>{
-      edActiveTool='draw'; edCanvas.className='tool-draw';
-      _edDrawLayerTarget='draw'; // pincel → siempre capa de dibujo
-      edRenderOptionsPanel('draw');
+      if (_edDrawLayerTarget === 'fill') {
+        // Ya estaba en capa de relleno — confirmar antes de cambiar herramienta
+        edConfirm('¿Quieres usar el pincel en la capa de relleno?', () => {
+          edActiveTool='draw'; edCanvas.className='tool-draw';
+          window._edKeepFillTarget = true;
+          edRenderOptionsPanel('draw');
+        }, 'Sí');
+      } else {
+        edActiveTool='draw'; edCanvas.className='tool-draw';
+        edRenderOptionsPanel('draw');
+      }
     });
     $('op-tool-eraser')?.addEventListener('click',()=>{
       edActiveTool='eraser'; edCanvas.className='tool-eraser';

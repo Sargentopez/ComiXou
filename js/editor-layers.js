@@ -356,6 +356,35 @@ function _lyBuildFillSubRow(la, realIdx) {
   acts.appendChild(clrBtn);
 
   row.appendChild(acts);
+
+  // Tap en la sub-fila de relleno: si la herramienta de dibujo está activa, ofrecer dibujar en ella
+  row.addEventListener('pointerup', e => {
+    if (e.target.closest('.ed-layer-actions')) return; // toques en botones: ya manejados
+    const _isTool = typeof edActiveTool !== 'undefined' &&
+                    ['draw','eraser'].includes(edActiveTool);
+    const _panelDraw = typeof _edDrawLayerTarget !== 'undefined';
+    if (!_isTool || !_panelDraw) return;
+
+    // Encontrar el DrawLayer vinculado para saber el índice a seleccionar
+    const _drawLa = (typeof edLayers !== 'undefined')
+      ? edLayers.find(l => l._fillLayerId && l._fillLayerId === la._drawLayerId)
+      : null;
+
+    edConfirm('¿Quieres usar las herramientas de dibujo en la capa de relleno?', () => {
+      // Seleccionar el DrawLayer vinculado en el editor
+      if (_drawLa && typeof edSelectedIdx !== 'undefined') {
+        edSelectedIdx = edLayers.indexOf(_drawLa);
+      }
+      // Activar capa de relleno como destino de dibujo
+      if (typeof _edDrawLayerTarget !== 'undefined') _edDrawLayerTarget = 'fill';
+      // Cerrar panel de capas y abrir panel de dibujo
+      edCloseLayers();
+      if (typeof edRenderOptionsPanel === 'function') {
+        edRenderOptionsPanel(edActiveTool === 'eraser' ? 'eraser' : 'draw');
+      }
+    }, 'Sí');
+  });
+
   return row;
 }
 
