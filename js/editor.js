@@ -14063,8 +14063,15 @@ async function edCloudSave() {
       for (let _fli = 0; _fli < _fp.layers.length; _fli++) {
         const _fsl = edSerLayer(_fp.layers[_fli]);
         if (!_fsl) continue;
-        // En incógnito no hay IDB, así que si hay _pngFrames los dejamos inline
-        // (serán pequeños o se perderán — lo importante es que la subida no quede vacía)
+        // Externalizar _pngFrames a IDB igual que hace edSaveProject
+        // para que _uploadPanels pueda leerlos al subir a la nube
+        if (_fsl._pngFrames && _fsl._pngFrames.length && !_bibIdbUnavailable) {
+          const _fbUid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+          const _fbKey = _fbUid + '__' + edProjectId + '_' + _fpi + '_' + _fli;
+          _edAnimIdbSave(_fbKey, _fsl._pngFrames).catch(()=>{});
+          delete _fsl._pngFrames;
+          _fsl._pngFramesKey = _fbKey;
+        }
         _fbLayers.push(_fsl);
       }
       _fbPages.push({ layers: _fbLayers, textLayerOpacity: _fp.textLayerOpacity ?? 1, textMode: _fp.textMode || 'sequential', orientation: _fp.orientation || _savedOrientFb });
@@ -18959,12 +18966,20 @@ async function _bibFlush() {
 window._bibSave = _bibSave;
 window._bibLoad = _bibLoad;
 window._bibKey  = _bibKey;
-// Exponer _bibDb para que storage.js pueda usarlo en _purgeLocalData
-// sin abrir una conexión IDB separada que conflicte con el singleton del editor
-Object.defineProperty(window, '_bibDb', {
-  get: () => _bibDb,
-  configurable: true,
-});
+// _bibSaveWithKey: igual que _bibSave pero con clave IDB explícita.
+// Usar desde my-comics para evitar race condition con edProjectId.
+window._bibSaveWithKey = function(data, explicitKey) {
+  _bibCache = data;
+  if (_bibIdbUnavailable) return Promise.resolve();
+  const _k = explicitKey || _bibKey();
+  _bibSavePromise = _bibOpenIdb().then(db => new Promise(res => {
+    const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+    tx.objectStore(_BIB_IDB_STORE).put(data, _k);
+    tx.oncomplete = res;
+    tx.onerror    = res;
+  })).catch(() => {});
+  return _bibSavePromise;
+};
 // Bytes estimados de la biblioteca (suma del JSON de cada item)
 function _bibUsedBytes(data) {
   return data.folders.reduce((s, f) =>

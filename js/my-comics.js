@@ -887,13 +887,15 @@ function _mcRenderList() {
                   })
                 }));
                 if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
-                // Reemplazar la biblioteca local con la de la nube (no merge)
-                if (window._bibSave) { window._bibSave({ folders: cleanFolders }); }
+                // Guardar con clave explícita para evitar race condition con edProjectId del editor
+                if (window._bibSaveWithKey) window._bibSaveWithKey({ folders: cleanFolders }, _bibKey);
+                else if (window._bibSave) window._bibSave({ folders: cleanFolders });
                 else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
               } else {
-                // La nube no tiene biblioteca — limpiar la local para no mezclar datos
-                if (window._bibSave) { window._bibSave({ folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }] }); }
-                else { try { localStorage.removeItem(_bibKey); } catch(e) {} }
+                // La nube no tiene biblioteca — limpiar la local con clave correcta
+                const _emptyBib = { folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }] };
+                if (window._bibSaveWithKey) window._bibSaveWithKey(_emptyBib, _bibKey);
+                else if (window._bibSave) window._bibSave(_emptyBib);
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
