@@ -17638,9 +17638,17 @@ function EditorView_init(){
   $('edFileAnim')?.addEventListener('change', async e => {
     const _f = e.target.files[0]; e.target.value = '';
     if (!_f) return;
+    // Validar que sea una animación compatible (GIF o APNG)
+    const _animExt = _f.name.split('.').pop().toLowerCase();
+    const _isGif  = _f.type === 'image/gif'  || _animExt === 'gif';
+    const _isApng = _f.type === 'image/apng' || _f.type === 'image/vnd.mozilla.apng' || _animExt === 'apng';
+    if (!_isGif && !_isApng) {
+      edToast('Selecciona un GIF o APNG animado');
+      window._edWasFullscreen = false;
+      return;
+    }
     // GIF → edAddGif; APNG → edAddImage (se renderiza como imagen estática en el editor,
     // el visor/lector reproduce la animación nativamente por ser PNG animado)
-    const _isGif = _f.type === 'image/gif' || _f.name.toLowerCase().endsWith('.gif');
     if (_isGif) {
       edAddGif(_f);
     } else {
@@ -17683,7 +17691,16 @@ function EditorView_init(){
     const _f = e.target.files[0];
     e.target.value = '';
     if(!_f) return;
+    // Rechazar animaciones — para eso existe Insertar → Animación
     const _ext = _f.name.split('.').pop().toLowerCase();
+    const _isAnim = _f.type === 'image/gif' || _f.type === 'image/apng' ||
+                    _f.type === 'image/vnd.mozilla.apng' ||
+                    _ext === 'gif' || _ext === 'apng';
+    if (_isAnim) {
+      edToast('Para animaciones usa Insertar → Animación 🎬');
+      window._edWasFullscreen = false;
+      return;
+    }
     if(_ext === 'psd' || _ext === 'xcf' || _ext === 'tif' || _ext === 'tiff'){
       await edImportLayers(_f);
     } else {
