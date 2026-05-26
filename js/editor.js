@@ -14363,19 +14363,24 @@ async function edSaveProject(_keepOverlay){
   // cs_biblioteca_local_{id} se crea en my-comics.js cuando se abre una obra desde la nube.
   // Al guardar localmente el usuario confirma que quiere la versión local, incluyendo su biblioteca.
   if (edProjectId && !_bibIdbUnavailable) {
-    // Solo restaurar backup local si IDB está disponible (no en modo incógnito).
-    // En modo incógnito _bibCache ya tiene la versión correcta de Supabase — no sobreescribir.
+    // Restaurar backup local SOLO si _bibCache está vacío (sin items).
+    // Si _bibCache ya tiene items (descargados de la nube o editados por el usuario),
+    // el backup NO debe sobreescribirlos — preservar lo que el usuario tiene en pantalla.
+    // NUNCA restaurar el backup al guardar en nube (_keepOverlay=true) ya que
+    // el usuario está confirmando que quiere subir su versión actual a Supabase.
     const _bibLocalBackupKey = `cs_biblioteca_local_${edProjectId}`;
     const _bibBackup = localStorage.getItem(_bibLocalBackupKey);
-    if (_bibBackup) {
+    const _bibCurrentItems = (_bibCache?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+    if (_bibBackup && _bibCurrentItems === 0 && !_keepOverlay) {
       try {
         try { _bibSave(JSON.parse(_bibBackup)); } catch(_e) {}
         localStorage.removeItem(_bibLocalBackupKey);
       } catch(_e) {}
+    } else if (_bibBackup && _bibCurrentItems > 0) {
+      // Hay datos actuales válidos — borrar el backup sin restaurarlo
+      try { localStorage.removeItem(_bibLocalBackupKey); } catch(_) {}
     }
     // Esperar a que la última escritura de biblioteca en IDB complete antes de guardar en OPFS.
-    // En Android el proceso puede morir entre el _bibSave async y el ComicStore.save,
-    // dejando la IDB sin los datos más recientes. El await garantiza consistencia.
     if (typeof _bibFlush === 'function') await _bibFlush();
   }
   await ComicStore.save({
