@@ -8,6 +8,40 @@
 // Clave: supabaseId de la obra. Valor: dataUrl del thumbnail (solo vive en sesión).
 const _mcThumbCache = new Map();
 
+// ── Borrar autosave de una obra desde my-comics ──────────────────────────────
+// Usa la misma IDB («cxAutosave» / store «saves») y la misma lógica de clave
+// que editor.js (_edAutosaveKey). Se llama tras descargar la nube (nube más nueva)
+// para que el editor no muestre un autosave de sesiones anteriores como
+// «cambios sin guardar» por encima de la versión recién descargada.
+async function _mcAutosaveClear(comicId) {
+  if (!comicId) return;
+  try {
+    // Calcular la clave exacta que usa editor.js: uid + '_' + comicId
+    let _uid = '_anon_';
+    try {
+      const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+      if (_s && _s.id) _uid = String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    } catch(_e) {}
+    const _asKey = _uid + '_' + comicId;
+    await new Promise((res, rej) => {
+      const req = indexedDB.open('cxAutosave', 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore('saves');
+      req.onsuccess = e => {
+        const db = e.target.result;
+        try {
+          const tx = db.transaction('saves', 'readwrite');
+          tx.objectStore('saves').delete(_asKey);
+          tx.oncomplete = () => { db.close(); res(); };
+          tx.onerror    = () => { db.close(); res(); }; // no crítico
+        } catch(_) { db.close(); res(); }
+      };
+      req.onerror = () => res(); // no crítico
+    });
+  } catch(_e) {
+    console.warn('[mc] _mcAutosaveClear error (no crítico):', _e);
+  }
+}
+
 const _MC_BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
 const _MC_KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 const _MC_HDRS = { 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + _MC_KEY };
@@ -846,6 +880,15 @@ function _mcRenderList() {
             // creado durante la sesión anterior podría tener ts > localSavedAt heredado.
             localSavedAt: new Date().toISOString(),
           });
+          // La nube es más nueva (o la obra era cloudOnly) → borrar el autosave local
+          // ANTES de abrir el editor. Si no se borra aquí, el editor podría mostrar
+          // el autosave de una sesión anterior por encima de la versión recién descargada,
+          // obligando al usuario a recargar la página para ver la versión correcta.
+          // El autosave se preserva SOLO si la versión local era más reciente que la nube
+          // (caso _hasLegacyStrokes sin _cloudNewer), donde puede contener trabajo no subido.
+          if (_cloudNewer || comicToEdit.cloudOnly) {
+            await _mcAutosaveClear(comicToEdit.id);
+          }
           // Sincronizar biblioteca: usar la de la nube si la nube es más nueva o la obra es cloudOnly.
           // Si la local es más reciente (solo _hasLegacyStrokes forzó la descarga), preservar la local.
           const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
