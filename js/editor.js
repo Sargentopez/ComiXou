@@ -842,6 +842,8 @@ const ED_MAX_DRAW_HISTORY = 20;
 // Icono simetría (T14): triángulo izq (cateto horiz + cateto vertical derecho) | gap | línea discontinua | gap | triángulo der (espejo)
 const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16" width="20" height="14" style="display:block;pointer-events:none"><polygon points="1,1 9,1 9,15" fill="currentColor"/><line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.5 2"/><polygon points="15,1 23,1 15,15" fill="currentColor"/></svg>`;
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
+let edDrawBrushType = 'pen';   // 'pen' = estilógrafo (actual) | 'pencil' = lápiz
+let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'watercolor' = pincel acuarela
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
@@ -1698,10 +1700,28 @@ class DrawLayer extends BaseLayer {
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
-    this._ctx.globalAlpha = alpha;
-    if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.fillStyle='rgba(0,0,0,1)'; }
-    else { this._ctx.globalCompositeOperation='source-over'; this._ctx.fillStyle=color; }
-    this._ctx.beginPath(); this._ctx.arc(x,y,size/2,0,Math.PI*2); this._ctx.fill();
+    if(isEraser){
+      this._ctx.globalAlpha = alpha;
+      this._ctx.globalCompositeOperation='destination-out'; this._ctx.fillStyle='rgba(0,0,0,1)';
+      this._ctx.beginPath(); this._ctx.arc(x,y,size/2,0,Math.PI*2); this._ctx.fill();
+    } else if(typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil'){
+      // Lápiz: punto de arranque con fibras de grafito
+      this._ctx.globalCompositeOperation='source-over';
+      const _pFibers = Math.max(3, Math.round(size * 0.8));
+      const _pAlpha = alpha * 0.25;
+      for(let i=0;i<_pFibers;i++){
+        const jx = x + (Math.random()-0.5)*size*0.7;
+        const jy = y + (Math.random()-0.5)*size*0.7;
+        const r  = size * (0.08 + Math.random()*0.18);
+        this._ctx.globalAlpha = _pAlpha * (0.5 + Math.random()*0.5);
+        this._ctx.fillStyle = color;
+        this._ctx.beginPath(); this._ctx.arc(jx,jy,r,0,Math.PI*2); this._ctx.fill();
+      }
+    } else {
+      this._ctx.globalAlpha = alpha;
+      this._ctx.globalCompositeOperation='source-over'; this._ctx.fillStyle=color;
+      this._ctx.beginPath(); this._ctx.arc(x,y,size/2,0,Math.PI*2); this._ctx.fill();
+    }
     this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
     this._lastX=x; this._lastY=y;
   }
@@ -1715,11 +1735,39 @@ class DrawLayer extends BaseLayer {
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
-    this._ctx.globalAlpha = alpha;
-    this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
-    if(isEraser){ this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)'; }
-    else { this._ctx.globalCompositeOperation='source-over'; this._ctx.strokeStyle=color; }
-    this._ctx.lineWidth=size; this._ctx.lineCap='round'; this._ctx.lineJoin='round'; this._ctx.stroke();
+    if(isEraser){
+      this._ctx.globalAlpha = alpha;
+      this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
+      this._ctx.globalCompositeOperation='destination-out'; this._ctx.strokeStyle='rgba(0,0,0,1)';
+      this._ctx.lineWidth=size; this._ctx.lineCap='round'; this._ctx.lineJoin='round'; this._ctx.stroke();
+    } else if(typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil'){
+      // Lápiz: segmento con fibras de grafito a lo largo del trazo
+      this._ctx.globalCompositeOperation='source-over';
+      const dx = x - this._lastX, dy = y - this._lastY;
+      const dist = Math.sqrt(dx*dx+dy*dy) || 1;
+      // Número de puntos de fibra proporcional a la distancia recorrida
+      const steps = Math.max(1, Math.round(dist / (size*0.15)));
+      const _cAlpha = alpha * 0.18;
+      for(let s=0;s<=steps;s++){
+        const t  = s/steps;
+        const bx = this._lastX + dx*t;
+        const by = this._lastY + dy*t;
+        const fibers = Math.max(2, Math.round(size * 0.7));
+        for(let i=0;i<fibers;i++){
+          const jx = bx + (Math.random()-0.5)*size*0.65;
+          const jy = by + (Math.random()-0.5)*size*0.65;
+          const r  = size * (0.06 + Math.random()*0.16);
+          this._ctx.globalAlpha = _cAlpha * (0.4 + Math.random()*0.6);
+          this._ctx.fillStyle = color;
+          this._ctx.beginPath(); this._ctx.arc(jx,jy,r,0,Math.PI*2); this._ctx.fill();
+        }
+      }
+    } else {
+      this._ctx.globalAlpha = alpha;
+      this._ctx.beginPath(); this._ctx.moveTo(this._lastX,this._lastY); this._ctx.lineTo(x,y);
+      this._ctx.globalCompositeOperation='source-over'; this._ctx.strokeStyle=color;
+      this._ctx.lineWidth=size; this._ctx.lineCap='round'; this._ctx.lineJoin='round'; this._ctx.stroke();
+    }
     this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
     this._lastX=x; this._lastY=y;
   }
@@ -6657,12 +6705,36 @@ function edOnStart(e){
     // En touch/pen: guardar coordenadas y esperar a pointerup para confirmar
     // que fue toque simple y no inicio de pinch
     if(e.pointerType === 'touch'){
+      if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+        // Acuarela en touch: iniciar trazo inmediato (continuo en pointermove)
+        const _cWCt = edCoords(e);
+        const _dlWCi = _edGetOrCreateDrawLayer();
+        const _flWCi = _dlWCi ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCi._fillLayerId) : null;
+        if(_flWCi){
+          edPainting = true;
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+          window._edWcLast = _edWatercolorStroke(_flWCi,_cWCt.nx,_cWCt.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null);
+          window._edWcFl = _flWCi;
+          edRedraw(); return;
+        }
+      }
       window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
       if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       return;
     }
     // Mouse/pen: ejecutar inmediatamente
     const c = edCoords(e);
+    if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+      const _dlWC = _edGetOrCreateDrawLayer();
+      const _flWC = _dlWC ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWC._fillLayerId) : null;
+      if(_flWC){
+        edPainting = true;
+        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+        window._edWcFl = _flWC;
+        window._edWcLast = _edWatercolorStroke(_flWC, c.nx, c.ny, edDrawColor, edDrawSize, edDrawOpacity, null, null);
+        edRedraw(); return;
+      }
+    }
     edFloodFill(c.nx, c.ny);
     return;
   }
@@ -7860,7 +7932,19 @@ function edOnMove(e){
   if(_edPinchHappened && edPainting) _edPinchHappened = false;
   if(_edPinchHappened) return; // hubo pinch — ignorar movimiento del dedo que queda
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
-  if(edActiveTool==='fill'){edMoveBrush(e);return;}
+  if(edActiveTool==='fill'){
+    // Acuarela: trazo continuo en pointermove mientras edPainting
+    if(edPainting && typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor' && window._edWcFl){
+      const _cWC = edCoords(e);
+      const _prev = window._edWcLast;
+      window._edWcLast = _edWatercolorStroke(
+        window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
+        _prev ? _prev.wx : null, _prev ? _prev.wy : null
+      );
+      edRedraw();
+    }
+    edMoveBrush(e);return;
+  }
   // ── SHAPE: preview en tiempo real durante el drag ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
     const c=edCoords(e);
@@ -8221,8 +8305,22 @@ function edOnEnd(e){
         if(_la && (_la.type==='shape' || _la.type==='line')){
           _la.fillColor = edDrawColor;
           edPushHistory(); edRedraw();
+        } else {
+          if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+            const _dlWCt = _edGetOrCreateDrawLayer();
+            const _flWCt = _dlWCt ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCt._fillLayerId) : null;
+            if(_flWCt){ _edWatercolorStroke(_flWCt,fp.nx,fp.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null); edRedraw(); }
+            else { edFloodFill(fp.nx, fp.ny); }
+          } else { edFloodFill(fp.nx, fp.ny); }
+        }
+      } else {
+        if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+          const _dlWCt2 = _edGetOrCreateDrawLayer();
+          const _flWCt2 = _dlWCt2 ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCt2._fillLayerId) : null;
+          if(_flWCt2){ _edWatercolorStroke(_flWCt2,fp.nx,fp.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null); edRedraw(); }
+          else { edFloodFill(fp.nx, fp.ny); }
         } else { edFloodFill(fp.nx, fp.ny); }
-      } else { edFloodFill(fp.nx, fp.ny); }
+      }
     }
   }
   // ── RUBBER BAND en modo select (PC) → activar multiselect ──
@@ -8315,7 +8413,7 @@ function edOnEnd(e){
     edPinchEnd();
     return;
   }
-  if(edPainting && edActiveTool !== 'fill'){
+  if(edPainting && (edActiveTool !== 'fill' || (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'))){
     // Nuevo sistema cursor: el trazo lo gestiona _cofHandleUp → no duplicar
     if(_cof.on && _cof._strokeStarted) return;
     edSaveDrawData(); _edOffsetFirstMove = false; _edFromSaved = false;
@@ -9624,6 +9722,67 @@ function _edPenPressure(e) {
   return Math.max(0.05, Math.min(1, p));
 }
 
+// ── Pincel acuarela ─────────────────────────────────────────────────────────
+// Simula acuarela real con las siguientes propiedades físicas:
+//  1. Borde oscuro / centro claro (wet-edge cauliflower effect)
+//  2. Transparencia acumulativa: repasar oscurece, un solo trazo es sutil
+//  3. Textura de papel: ruido aleatorio en alpha por punto
+//  4. Trazo interpolado denso para continuidad visual
+// No está limitada por el DrawLayer.
+function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
+  if(!fl || !fl._canvas) return null;
+  const ctx = fl._ctx;
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const wx = mx + nx * pw, wy = my + ny * ph;
+  const alpha = Math.min(1, (opacity ?? 100) / 100);
+
+  // Parsear color hex a rgb
+  let r=0,g=0,b=0;
+  const _m = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if(_m){ r=parseInt(_m[1],16); g=parseInt(_m[2],16); b=parseInt(_m[3],16); }
+
+  // Interpolar puntos cada ~2px para trazo continuo suave
+  const pts = [];
+  if(lastWx !== null && lastWy !== null){
+    const dx = wx - lastWx, dy = wy - lastWy;
+    const dist = Math.sqrt(dx*dx+dy*dy) || 1;
+    const steps = Math.max(1, Math.round(dist / Math.max(2, size * 0.15)));
+    for(let s=1;s<=steps;s++) pts.push({ x: lastWx+dx*(s/steps), y: lastWy+dy*(s/steps) });
+  } else {
+    pts.push({ x: wx, y: wy });
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+
+  for(const pt of pts){
+    // Radio base con variación de textura de papel (±15%)
+    const rad = size * (0.85 + Math.random()*0.3);
+
+    // Gradiente radial: centro claro → cuerpo → borde acumulado → exterior suave
+    // Reproduce el "wet edge" / "cauliflower effect" de la acuarela real
+    const grd = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, rad);
+    const aCenter = alpha * 0.04 * (0.7 + Math.random()*0.6);  // centro casi transparente
+    const aBody   = alpha * 0.09 * (0.8 + Math.random()*0.4);  // cuerpo suave
+    const aEdge   = alpha * 0.22 * (0.8 + Math.random()*0.4);  // borde acumulado
+    grd.addColorStop(0,    `rgba(${r},${g},${b},${aCenter})`);
+    grd.addColorStop(0.55, `rgba(${r},${g},${b},${aBody})`);
+    grd.addColorStop(0.82, `rgba(${r},${g},${b},${aEdge})`);
+    grd.addColorStop(1.0,  `rgba(${r},${g},${b},0)`);
+
+    ctx.globalAlpha = 1; // el alpha está dentro del gradiente
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, rad, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+  ctx.globalCompositeOperation = 'source-over';
+  return { wx, wy };
+}
+
 function edStartPaint(e){
   edPainting = true;
   const _pp=$('edOptionsPanel');
@@ -9755,8 +9914,15 @@ function edSaveDrawData(){
   _edPenCanDraw = false;
   edPainting = false;
   window._edFillProxy = null; // limpiar proxy al soltar el trazo
-  _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
-  // NO llamar edPushHistory aquí — el historial global se guarda al congelar
+  // Acuarela: limpiar estado y guardar en historial global al soltar
+  if(window._edWcFl){
+    window._edWcFl  = null;
+    window._edWcLast = null;
+    edPushHistory();
+  } else {
+    _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
+  }
+  // NO llamar edPushHistory aquí para trazos normales — el historial global se guarda al congelar
 }
 function edClearDraw(){
   const page=edPages[edCurrentPage];if(!page)return;
@@ -11390,6 +11556,8 @@ function edRenderOptionsPanel(mode){
   <!-- FILA 2: Controles -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
     ${!isEr ? `
+    ${isPen ? `<button id="op-brush-pen" title="Estilógrafo" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edDrawBrushType==='pen'?'rgba(0,0,0,.12)':'transparent'};opacity:${edDrawBrushType==='pen'?1:0.4}">🖊</button><button id="op-brush-pencil" title="Lápiz" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edDrawBrushType==='pencil'?'rgba(0,0,0,.12)':'transparent'};opacity:${edDrawBrushType==='pencil'?1:0.4}">✏️</button>` : ''}
+    ${isFill ? `<button id="op-fill-bucket" title="Bote de pintura" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='bucket'?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='bucket'?1:0.4}">🪣</button><button id="op-fill-watercolor" title="Pincel acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='watercolor'?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='watercolor'?1:0.4}">🖌️</button>` : ''}
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
       <button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="Color personalizado">🎨
         <input type="color" id="op-dcolor" value="${edDrawColor}"
@@ -11398,7 +11566,7 @@ function edRenderOptionsPanel(mode){
     </div>
     <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="Cuentagotas">💧</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
-    ${!isFill ? `
+    ${(!isFill || edFillBrushType === 'watercolor') ? `
     <button id="op-size-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider"
@@ -11546,6 +11714,14 @@ function edRenderOptionsPanel(mode){
         edRenderOptionsPanel('draw');
       }
     });
+    $('op-brush-pen')?.addEventListener('click', () => {
+      edDrawBrushType = 'pen';
+      edRenderOptionsPanel('draw');
+    });
+    $('op-brush-pencil')?.addEventListener('click', () => {
+      edDrawBrushType = 'pencil';
+      edRenderOptionsPanel('draw');
+    });
     $('op-tool-eraser')?.addEventListener('click',()=>{
       edActiveTool='eraser'; edCanvas.className='tool-eraser';
       // borrador mantiene la capa activa actual
@@ -11554,6 +11730,20 @@ function edRenderOptionsPanel(mode){
     $('op-tool-fill')?.addEventListener('click',()=>{
       edActiveTool='fill'; edCanvas.className='tool-fill';
       _edDrawLayerTarget='fill'; // relleno → siempre capa de relleno
+      edRenderOptionsPanel('fill');
+    });
+    $('op-fill-watercolor')?.addEventListener('click', e => {
+      e.stopPropagation();
+      edFillBrushType = 'watercolor';
+      edDrawOpacity = 15; // opacidad por defecto de la acuarela
+      edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
+      _edDrawLayerTarget = 'fill';
+      edRenderOptionsPanel('fill');
+    });
+    $('op-fill-bucket')?.addEventListener('click', e => {
+      e.stopPropagation();
+      edFillBrushType = 'bucket';
+      edDrawOpacity = 100; // restaurar opacidad completa al volver al bote
       edRenderOptionsPanel('fill');
     });
     $('op-tool-shape')?.addEventListener('click',()=>{
