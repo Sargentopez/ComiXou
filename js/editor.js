@@ -17135,6 +17135,8 @@ function EditorView_destroy(){
   if (window._edLoadResetTimer) { clearTimeout(window._edLoadResetTimer); window._edLoadResetTimer = null; }
   if (window._edLoadResetTimer2) { clearTimeout(window._edLoadResetTimer2); window._edLoadResetTimer2 = null; }
   sessionStorage.removeItem('cx_editing');
+  // Liberar el lock de carga para que la siguiente obra pueda iniciar correctamente
+  _edLoadProjectInProgress = false;
 }
 async function edSaveProjectModal(){
   const _newTitle  = $('edMTitle').value.trim() || edProjectMeta.title;
@@ -17332,6 +17334,18 @@ function EditorView_init(){
   window._edLastLoadTs = new Date().toISOString();
   if(!editId){Router.go('my-comics');return;}
   sessionStorage.removeItem('cx_edit_id');
+
+  // Resetear estado de sesión anterior ANTES de la carga asíncrona.
+  // Evita que el canvas renderice datos de la obra previa durante el await de IDB.
+  // _edLoadProjectInProgress se fuerza a false para que la nueva carga no quede bloqueada
+  // si la sesión anterior terminó en error sin liberarlo.
+  _edLoadProjectInProgress = false;
+  edProjectId   = null;
+  edPages       = [];
+  edLayers      = [];
+  edCurrentPage = 0;
+  edSelectedIdx = -1;
+  edHistory     = []; edHistoryIdx = -1; _edSavedHistoryIdx = -1;
   // Pre-pintar el título con lo que ya tiene ComicStore (ligero, síncrono)
   // para evitar el flash de "Sin título" mientras edLoadProject carga async.
   try {
