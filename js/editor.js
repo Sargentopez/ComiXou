@@ -7344,14 +7344,14 @@ function edOnStart(e){
         } else {
           window._edDrawTouchTimer = setTimeout(() => {
             if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-            if(!['draw','eraser'].includes(edActiveTool)) return;
+            if(!['draw','eraser'].includes(edActiveTool) && !(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
             _cofHandleTouch(_eSaved2);
           }, 120);
         }
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
           if(!window._edActivePointers || window._edActivePointers.size > 1) return;
-          if(!['draw','eraser'].includes(edActiveTool)) return;
+          if(!['draw','eraser'].includes(edActiveTool) && !(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
           edStartPaint(_eSaved2);
         }, 120);
       }
@@ -13140,26 +13140,102 @@ function edInitDrawBar() {
   bar.addEventListener('pointercancel', _edbEndDrag);
 
   // ── Botones herramienta ──
-  $('edb-pen')?.addEventListener('click', () => {
-    edPushHistory(); // guardar estado previo antes de entrar a dibujo
-    edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
-    _edbSyncTool();
-    $('op-tool-pen')?.click();
+  // ── Popup sub-herramienta (lápiz/tinta, bote/acuarela) ──────────────────
+  function _edbOpenBrushPop(anchorBtn, items) {
+    const pop = $('edb-brush-pop'); if (!pop) return;
+    if (pop.style.display === 'flex' && pop._anchor === anchorBtn) {
+      pop.style.display = 'none'; pop._anchor = null; return;
+    }
+    pop.innerHTML = '';
+    items.forEach(item => {
+      const btn = document.createElement('button');
+      btn.style.cssText = [
+        'display:flex;align-items:center;gap:8px;width:100%;border:none;border-radius:8px',
+        'padding:7px 10px;cursor:pointer;font-family:inherit;font-size:.85rem;font-weight:700',
+        'text-align:left;white-space:nowrap',
+        item.active
+          ? 'background:rgba(255,255,255,.18);color:#fff'
+          : 'background:transparent;color:rgba(255,255,255,.75)'
+      ].join(';');
+      btn.innerHTML = `<span style="font-size:1.1rem">${item.icon}</span><span>${item.label}</span>`;
+      if (item.active) {
+        const dot = document.createElement('span');
+        dot.style.cssText = 'margin-left:auto;width:6px;height:6px;border-radius:50%;background:#fff;flex-shrink:0';
+        btn.appendChild(dot);
+      }
+      btn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        item.action();
+        pop.style.display = 'none'; pop._anchor = null;
+      });
+      pop.appendChild(btn);
+    });
+    pop.style.display = 'flex';
+    pop._anchor = anchorBtn;
+    const bar = $('edDrawBar');
+    const br  = bar ? bar.getBoundingClientRect() : anchorBtn.getBoundingClientRect();
+    const pw  = pop.offsetWidth  || 150;
+    const ph  = pop.offsetHeight || 90;
+    const W   = window.innerWidth, H = window.innerHeight, GAP = 8;
+    const spaceRight = W - br.right - GAP;
+    const spaceLeft  = br.left - GAP;
+    let left = (spaceRight >= pw || spaceRight >= spaceLeft) ? br.right + GAP : br.left - pw - GAP;
+    let top  = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
+    left = Math.max(GAP, Math.min(W - pw - GAP, left));
+    pop.style.left = left + 'px';
+    pop.style.top  = top  + 'px';
+  }
+  function _edbCloseBrushPop() {
+    const pop = $('edb-brush-pop');
+    if (pop) { pop.style.display = 'none'; pop._anchor = null; }
+  }
+
+  // pointerup en lugar de click porque pointerdown tiene preventDefault
+  // lo que cancela el evento click en Android Chrome
+  $('edb-pen')?.addEventListener('pointerup', e => {
+    if (_edbDragLocked) return;
+    e.stopPropagation();
+    if (edActiveTool !== 'draw') {
+      edPushHistory();
+      edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
+      _edbSyncTool();
+      $('op-tool-pen')?.click();
+    }
+    _edbOpenBrushPop($('edb-pen'), [
+      { icon:'🖊', label:'Tinta (estilógrafo)', active: edDrawBrushType==='pen',
+        action:()=>{ edDrawBrushType='pen'; $('op-brush-pen')?.click(); _edbSyncTool(); } },
+      { icon:'✏️', label:'Lápiz', active: edDrawBrushType==='pencil',
+        action:()=>{ edDrawBrushType='pencil'; $('op-brush-pencil')?.click(); _edbSyncTool(); } }
+    ]);
   });
-  $('edb-eraser')?.addEventListener('click', () => {
+  $('edb-eraser')?.addEventListener('pointerup', e => {
+    if (_edbDragLocked) return;
+    e.stopPropagation();
+    _edbCloseBrushPop();
     edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
     _edbSyncTool();
     $('op-tool-eraser')?.click();
   });
-  $('edb-fill')?.addEventListener('click', () => {
-    edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
-    _edbSyncTool();
-    $('op-tool-fill')?.click();
+  $('edb-fill')?.addEventListener('pointerup', e => {
+    if (_edbDragLocked) return;
+    e.stopPropagation();
+    if (edActiveTool !== 'fill') {
+      edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
+      _edbSyncTool();
+      $('op-tool-fill')?.click();
+    }
+    _edbOpenBrushPop($('edb-fill'), [
+      { icon:'🪣', label:'Bote de pintura', active: edFillBrushType==='bucket',
+        action:()=>{ edFillBrushType='bucket'; edDrawOpacity=100; $('op-fill-bucket')?.click(); _edbSyncTool(); } },
+      { icon:'🖌️', label:'Acuarela', active: edFillBrushType==='watercolor',
+        action:()=>{ edFillBrushType='watercolor'; edDrawOpacity=15; $('op-fill-watercolor')?.click(); _edbSyncTool(); } }
+    ]);
   });
 
   // ── Color: abre popover de paleta ──
   $('edb-color')?.addEventListener('click', e => {
     e.stopPropagation();
+    _edbCloseBrushPop();
     _edbTogglePalette();
   });
 
