@@ -6706,17 +6706,29 @@ function edOnStart(e){
     // que fue toque simple y no inicio de pinch
     if(e.pointerType === 'touch'){
       if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
-        // Acuarela en touch: iniciar trazo inmediato (continuo en pointermove)
-        const _cWCt = edCoords(e);
-        const _dlWCi = _edGetOrCreateDrawLayer();
-        const _flWCi = _dlWCi ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCi._fillLayerId) : null;
-        if(_flWCi){
-          edPainting = true;
-          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
-          window._edWcLast = _edWatercolorStroke(_flWCi,_cWCt.nx,_cWCt.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null);
-          window._edWcFl = _flWCi;
-          edRedraw(); return;
+        // Acuarela en touch: usar sistema _cof si está activo (cursor offset),
+        // igual que la herramienta de dibujo normal
+        const _eSavedWC = e;
+        if(_cof.on){
+          const _cofIsRedWC = (_cof.state==='red_ready'||_cof.state==='red_cool');
+          if(_cofIsRedWC){
+            _cofHandleTouch(_eSavedWC);
+          } else {
+            window._edDrawTouchTimer = setTimeout(() => {
+              if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+              if(edActiveTool !== 'fill' || edFillBrushType !== 'watercolor') return;
+              _cofHandleTouch(_eSavedWC);
+            }, 120);
+          }
+          return;
         }
+        // Sin cursor offset: iniciar trazo inmediato
+        clearTimeout(window._edDrawTouchTimer);
+        window._edDrawTouchTimer = setTimeout(() => {
+          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          edStartPaint(_eSavedWC);
+        }, 120);
+        return;
       }
       window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
       if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
@@ -9785,6 +9797,22 @@ function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
 
 function edStartPaint(e){
   edPainting = true;
+  // Acuarela: intercept antes del sistema de DrawLayer
+  if(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor'){
+    const _dlWCS = _edGetOrCreateDrawLayer();
+    const _flWCS = _dlWCS ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCS._fillLayerId) : null;
+    if(_flWCS){
+      if(e.pointerId !== undefined && edCanvas){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      window._edWcFl = _flWCS;
+      // Usar coords del cursor desplazado si _cof está activo
+      const _eWCS = (_cof.on && _cof._strokeStarted)
+        ? { clientX: _cof.cursorX, clientY: _cof.cursorY } : e;
+      const _cWCS = edCoords(_eWCS);
+      window._edWcLast = _edWatercolorStroke(_flWCS, _cWCS.nx, _cWCS.ny, edDrawColor, edDrawSize, edDrawOpacity, null, null);
+      edRedraw();
+      return;
+    }
+  }
   const _pp=$('edOptionsPanel');
   if(_pp&&_pp.classList.contains('open')&&_pp.dataset.mode!=='draw'){
     _pp.classList.remove('open'); _pp.innerHTML='';
@@ -9852,6 +9880,18 @@ function edStartPaint(e){
 }
 function edContinuePaint(e){
   if(!edPainting) return;
+  // Acuarela: usar su propio sistema de trazo sobre el FillLayer
+  if(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor' && window._edWcFl){
+    const _eCOF = _cof.on ? { clientX: _cof.cursorX, clientY: _cof.cursorY, pointerType: e.pointerType } : e;
+    const _cWC = edCoords(_eCOF);
+    const _prev = window._edWcLast;
+    window._edWcLast = _edWatercolorStroke(
+      window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
+      _prev ? _prev.wx : null, _prev ? _prev.wy : null
+    );
+    edRedraw();
+    return;
+  }
   // Máquina de estados de presión para lápiz gráfico
   if(e.pointerType === 'pen'){
     if(e.buttons === 0){ edSaveDrawData(); return; } // hover sin contacto
@@ -13147,24 +13187,24 @@ function edInitDrawBar() {
       pop.style.display = 'none'; pop._anchor = null; return;
     }
     pop.innerHTML = '';
+    pop.style.flexDirection = 'row';
+    pop.style.minWidth = 'unset';
     items.forEach(item => {
       const btn = document.createElement('button');
       btn.style.cssText = [
-        'display:flex;align-items:center;gap:8px;width:100%;border:none;border-radius:8px',
-        'padding:7px 10px;cursor:pointer;font-family:inherit;font-size:.85rem;font-weight:700',
-        'text-align:left;white-space:nowrap',
+        'display:flex;align-items:center;justify-content:center;border:none;border-radius:8px',
+        'padding:6px 8px;cursor:pointer;width:44px;height:44px',
         item.active
           ? 'background:rgba(255,255,255,.18);color:#fff'
           : 'background:transparent;color:rgba(255,255,255,.75)'
       ].join(';');
-      btn.innerHTML = `<span style="font-size:1.1rem">${item.icon}</span><span>${item.label}</span>`;
+      btn.innerHTML = `<span style="font-size:1.4rem">${item.icon}</span>`;
       if (item.active) {
-        const dot = document.createElement('span');
-        dot.style.cssText = 'margin-left:auto;width:6px;height:6px;border-radius:50%;background:#fff;flex-shrink:0';
-        btn.appendChild(dot);
+        btn.style.outline = '2px solid rgba(255,255,255,0.7)';
       }
       btn.addEventListener('pointerup', e => {
         e.stopPropagation();
+        _edbClearPhantomPointers();
         item.action();
         pop.style.display = 'none'; pop._anchor = null;
       });
@@ -13190,6 +13230,17 @@ function edInitDrawBar() {
     if (pop) { pop.style.display = 'none'; pop._anchor = null; }
   }
 
+  function _edbClearPhantomPointers() {
+    // Al cambiar herramienta desde el popup, el pointerup se consumió en el botón
+    // (stopPropagation) y nunca llegó a edOnEnd → pointer fantasma en el mapa.
+    // Limpiar para evitar que el siguiente toque sea interpretado como pinch.
+    if (window._edActivePointers) window._edActivePointers.clear();
+    clearTimeout(window._edDrawTouchTimer);
+    edPinching = false;
+    edPainting = false;
+    if (window._edWcFl) { window._edWcFl = null; window._edWcLast = null; }
+  }
+
   // pointerup en lugar de click porque pointerdown tiene preventDefault
   // lo que cancela el evento click en Android Chrome
   $('edb-pen')?.addEventListener('pointerup', e => {
@@ -13203,9 +13254,9 @@ function edInitDrawBar() {
     }
     _edbOpenBrushPop($('edb-pen'), [
       { icon:'🖊', label:'Tinta (estilógrafo)', active: edDrawBrushType==='pen',
-        action:()=>{ edDrawBrushType='pen'; $('op-brush-pen')?.click(); _edbSyncTool(); } },
+        action:()=>{ if(typeof edFillBrushType!=='undefined'&&edFillBrushType==='watercolor'){edDrawOpacity=100;edFillBrushType='bucket';} edDrawBrushType='pen'; $('op-brush-pen')?.click(); _edbSyncTool(); } },
       { icon:'✏️', label:'Lápiz', active: edDrawBrushType==='pencil',
-        action:()=>{ edDrawBrushType='pencil'; $('op-brush-pencil')?.click(); _edbSyncTool(); } }
+        action:()=>{ if(typeof edFillBrushType!=='undefined'&&edFillBrushType==='watercolor'){edDrawOpacity=100;edFillBrushType='bucket';} edDrawBrushType='pencil'; $('op-brush-pencil')?.click(); _edbSyncTool(); } }
     ]);
   });
   $('edb-eraser')?.addEventListener('pointerup', e => {
