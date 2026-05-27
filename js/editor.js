@@ -1,3 +1,26 @@
+/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/*
+ * Librerías y código de terceros utilizados en este proyecto:
+ *
+ * - omggif (GIF encoder/decoder)
+ *     Autor: Dean McNamee <dean@gmail.com>
+ *     Licencia: MIT
+ *     https://github.com/deanm/omggif
+ *
+ * - pako (compresión zlib/gzip)
+ *     Autores: Andrei Tuputcyn, Vitaly Puzrin y colaboradores (Nodeca project)
+ *     Licencia: MIT
+ *     https://github.com/nodeca/pako
+ *
+ * - UPNG.js (codificador/decodificador PNG)
+ *     Autor: Ivan Kutskir
+ *     Licencia: MIT
+ *     https://github.com/photopea/UPNG.js
+ *
+ * - LZW decompression (puerto JavaScript de implementación Java)
+ *     Referencia original: https://gist.github.com/devunwired/4479231
+ *     Licencia: dominio público / uso libre
+ */
 /* ── gifuct-js embebido (MIT, Matt Way github.com/matt-way/gifuct-js) ── */
 var _gm = {};
 function _gr(id) { return _gm[id]; }
@@ -986,7 +1009,11 @@ function _edSyncSizeDots(){
   const _bCur = $('edBrushCursor');
   if(_bCur && _bCur.style.display !== 'none'){
     const _szB = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * z);
+    const _isEr = edActiveTool === 'eraser';
+    const _sc = _isEr ? '#000000' : edDrawColor;
     _bCur.style.width = _szB + 'px'; _bCur.style.height = _szB + 'px';
+    _bCur.style.borderColor = _sc;
+    _bCur.style.background = _isEr ? 'rgba(255,255,255,0.4)' : (_sc + '33');
   }
   // Dot barra flotante de objetos
   const dotS = $('esb-size-dot');
@@ -7618,6 +7645,18 @@ function edOnStart(e){
 }
 function edOnMove(e){
   if(window._gcpActive) return; // GCP tiene su propio handler de move
+  // Cursor personalizado en PC para herramientas de dibujo (hover sin gesto activo)
+  if(e.pointerType !== 'touch' && !_cof.on &&
+     ['draw','eraser','fill'].includes(edActiveTool)){
+    // Ocultar cursor circular si el puntero está sobre el panel, no sobre el canvas
+    const _overPanel = !!document.elementFromPoint(e.clientX, e.clientY)?.closest('#edOptionsPanel');
+    if(_overPanel){
+      const _cur = document.getElementById('edBrushCursor');
+      if(_cur) _cur.style.display = 'none';
+    } else {
+      edMoveBrush(e);
+    }
+  }
   // Actualizar _edTouchMoved siempre (para cancelar long-press aunque gestureActive sea false)
   if(e.pointerType === 'touch'){
     _edTouchMoved = true;
@@ -9082,7 +9121,6 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
   }
 
   // Escribir en el FillLayer (igual que el flujo normal)
-  _edDrawPushHistory();
   const prevFill = flTarget._ctx.getImageData(0, 0, W, H).data;
   const _flResult = flTarget._ctx.createImageData(W, H);
   const _rd = _flResult.data;
@@ -9091,19 +9129,18 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
     if(filled[i]){ _rd[pi]=fR;_rd[pi+1]=fG;_rd[pi+2]=fB;_rd[pi+3]=fA; }
     else { _rd[pi]=prevFill[pi];_rd[pi+1]=prevFill[pi+1];_rd[pi+2]=prevFill[pi+2];_rd[pi+3]=prevFill[pi+3]; }
   }
-  // Ajustar canvas del fill al nuevo tamaño si es necesario
   if (flTarget._canvas.width !== W || flTarget._canvas.height !== H) {
     flTarget._canvas.width = W; flTarget._canvas.height = H;
     flTarget._ctx = flTarget._canvas.getContext('2d');
   }
   flTarget._ctx.putImageData(_flResult, 0, 0);
-  // syncFrom actualiza propiedades pero no toca píxeles si _srcCanvas=null y tamaño igual.
-  // Solo llamar si _selLa existe para mantener propiedades actualizadas.
   if (_selLa) {
     flTarget.x = _selLa.x; flTarget.y = _selLa.y;
     flTarget.width = _selLa.width; flTarget.height = _selLa.height;
     flTarget.rotation = _selLa.rotation || 0;
   }
+  // Guardar DESPUÉS del fill — igual que edFloodFill
+  _edDrawPushHistory();
   edPushHistory(); edRedraw();
 }
 
@@ -9249,13 +9286,9 @@ function edFloodFill(nx, ny){
     }
   }
 
-  // Snapshot del estado actual antes del relleno (para deshacer en el panel)
-  _edDrawPushHistory();
   // Escribir el resultado en el FillLayer vinculado (no en el DrawLayer)
   const _flFill = page.layers.find(l => l.type==='fill' && l._drawLayerId === dl._fillLayerId);
   if (_flFill) {
-    // El fill del DrawLayer usa canvas ED_CANVAS_W×H (mismo que DrawLayer).
-    // Las coordenadas workspace mapean directamente — sin conversión.
     const _flW = _flFill._canvas.width, _flH = _flFill._canvas.height;
     const _flPrev = _flFill._ctx.getImageData(0, 0, _flW, _flH);
     const _flPrevD = _flPrev.data;
@@ -9269,9 +9302,11 @@ function edFloodFill(nx, ny){
     _flFill._ctx.putImageData(_flPrev, 0, 0);
   } else {
     // Fallback: escribir en DrawLayer (compatibilidad si no hay FillLayer)
-    _edDrawPushHistory();
     ctx.putImageData(resultImageData, x0, y0);
   }
+  // Guardar en historial del panel DESPUÉS del relleno — así cada entrada
+  // representa el estado resultante y deshacer restaura el estado anterior.
+  _edDrawPushHistory();
   edPushHistory(); edRedraw();
 }
 
@@ -9696,8 +9731,12 @@ function _cofDraw() {
 function _cofHide() {
   const w = document.getElementById('edOffsetWrap');
   if (w) { w.style.display = 'none'; w.innerHTML = ''; }
-  const c = document.getElementById('edBrushCursor');
-  if (c) c.style.display = '';
+  // Solo resetear edBrushCursor si el sistema _cof estaba activo;
+  // si no, edMoveBrush ya gestiona su display y no debe ser pisado
+  if (_cof.on) {
+    const c = document.getElementById('edBrushCursor');
+    if (c) c.style.display = '';
+  }
 }
 
 // Stubs de compatibilidad
@@ -10039,25 +10078,41 @@ function edClearDraw(){
   edPainting = false;
   edRedraw(); edToast('Dibujos borrados');
 }
+function _edSyncFillCursor(){
+  if(!edCanvas) return;
+  if(edActiveTool !== 'fill') return;
+  if(edFillBrushType === 'watercolor'){
+    edCanvas.classList.add('tool-watercolor');
+  } else {
+    edCanvas.classList.remove('tool-watercolor');
+  }
+}
+
 function edMoveBrush(e){
   const src = e.touches ? e.touches[0] : e;
   const cur = $('edBrushCursor');
+
   if(!cur) return;
-  if(edActiveTool==='fill'){
+  const sz = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
+  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
+  if(edActiveTool==='fill' && (typeof edFillBrushType==='undefined' || edFillBrushType!=='watercolor')){
+    // Relleno normal: sin cursor circular
     cur.style.display='none';
     _edOffsetHide();
     return;
   }
-  const sz = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
-  const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(_cof.on){
-    // Nuevo sistema: el visual lo gestiona _cofDraw, solo ocultar cursor normal
+    cur.style.display = 'none';
+  } else if(isTouch){
     cur.style.display = 'none';
   } else {
+    const isEr = edActiveTool === 'eraser';
+    const strokeColor = isEr ? '#000000' : edDrawColor;
     cur.style.display = 'block';
     cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
     cur.style.width = sz + 'px'; cur.style.height = sz + 'px';
-    cur.style.background = ''; cur.style.borderColor = '';
+    cur.style.borderColor = strokeColor;
+    cur.style.background = isEr ? 'rgba(255,255,255,0.4)' : (strokeColor + '33');
     _edOffsetHide();
   }
 }
@@ -10348,11 +10403,8 @@ function _edActivateShapeTool(isNew) {
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-shape-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
-    <button id="op-shape-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
-    <button id="op-shape-mirror" title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
-    <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_sel?.locked?'var(--gray-800)':'transparent'};color:${_sel?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_sel?.locked?'Desbloquear':'Bloquear'}">${_sel?.locked?'🔒':'🔓'}</button>
 
     <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':'Sin objeto'}</span>
     <button id="op-panel-collapse" title="Minimizar panel">▲</button>
@@ -10591,41 +10643,11 @@ function _edActivateShapeTool(isNew) {
 
   // ── Duplicar ──
 
-  $('op-shape-dup')?.addEventListener('click',()=>{
-    const s=_curShape(); if(!s) return;
-    const origSnapshot = JSON.stringify(edSerLayer(s));
-    // Usar ser/deser para copia completamente independiente
-    const copy = edDeserLayer(edSerLayer(s), edOrientation);
-    if(!copy) return;
-    copy.x = s.x + 0.03; copy.y = s.y + 0.03;
-    delete copy._fusionId; delete copy.groupId;
-    _edInsertLayerAbove(copy);
-    _edShapeClearHistory(); _vsClear(); edPushHistory(); edRedraw(); _edActivateShapeTool();
-    _edShapeHistory = [origSnapshot];
-    _edShapeHistIdx = 0;
-    _edShapeHistIdxBase = 0;
-    _edShapeUpdateUndoRedoBtns();
-  });
-  $('op-shape-mirror')?.addEventListener('click',()=>{ _edShapePushHistory(); edMirrorSelected(); });
-
   // ── Deshacer / Rehacer — usa historial LOCAL, no el global ──
   const _updURShape = ()=>{ _edShapeUpdateUndoRedoBtns(); };
   _updURShape();
   $('op-shape-undo')?.addEventListener('click',()=>{ edShapeUndo(); });
   $('op-shape-redo')?.addEventListener('click',()=>{ edShapeRedo(); });
-  $('op-lock-btn')?.addEventListener('click',()=>{
-    const _ls = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null; if(!_ls) return;
-    _ls.locked = !_ls.locked;
-    edPushHistory();
-    const _btn = $('op-lock-btn');
-    if(_btn){
-      _btn.textContent = _ls.locked ? '🔒' : '🔓';
-      _btn.style.background = _ls.locked ? 'var(--gray-800)' : 'transparent';
-      _btn.style.color = _ls.locked ? 'var(--white)' : 'var(--gray-700)';
-      _btn.title = _ls.locked ? 'Desbloquear' : 'Bloquear';
-    }
-  });
-
   if(isNew) requestAnimationFrame(edFitCanvas);
 }
 
@@ -10720,11 +10742,8 @@ function _edActivateLineTool(isNew, isCreating) {
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
     <button id="op-line-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
-    <button id="op-line-dup" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
-    <button id="op-line-mirror" title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
-    <button id="op-lock-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${_cur?.locked?'var(--gray-800)':'transparent'};color:${_cur?.locked?'var(--white)':'var(--gray-700)'};cursor:pointer" title="${_cur?.locked?'Desbloquear':'Bloquear'}">${_cur?.locked?'🔒':'🔓'}</button>
 
     <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
     <button id="op-panel-collapse" title="Minimizar panel">▲</button>
@@ -11062,56 +11081,10 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── Duplicar ──
 
-  $('op-line-dup')?.addEventListener('click',()=>{
-    const l=_curLine(); if(!l||l.points.length<2) return;
-    // Capturar snapshot del original ANTES de insertar el duplicado
-    const origSnapshot = JSON.stringify(edSerLayer(l));
-    // Usar ser/deser para copia completamente independiente
-    const copy = edDeserLayer(edSerLayer(l), edOrientation);
-    if(!copy) return;
-    // Desplazar objeto y puntos
-    copy.x = l.x + 0.03; copy.y = l.y + 0.03;
-    if(Array.isArray(copy.points)){
-      copy.points = copy.points.map(p => p ? {...p, x: p.x + 0.03, y: p.y + 0.03} : null);
-    }
-    if(Array.isArray(copy.subPaths)){
-      copy.subPaths = copy.subPaths.map(sp => {
-        if(!sp) return sp;
-        const ns = sp.map(p => p ? {...p, x: p.x + 0.03, y: p.y + 0.03} : null);
-        if(sp.cornerRadii) ns.cornerRadii = {...sp.cornerRadii};
-        return ns;
-      });
-    }
-    delete copy._fusionId; delete copy.groupId;
-    copy._updateBbox();
-    _edInsertLayerAbove(copy);
-    _edShapeClearHistory(); _vsClear(); edPushHistory(); edRedraw();
-    _edActivateLineTool();
-    _edShapeHistory = [origSnapshot];
-    _edShapeHistIdx = 0;
-    _edShapeHistIdxBase = 0;
-    _edShapeUpdateUndoRedoBtns();
-  });
-  $('op-line-mirror')?.addEventListener('click',()=>{ _edShapePushHistory(); edMirrorSelected(); });
-
   // ── Deshacer / Rehacer ──
   _updUR();
   $('op-line-undo')?.addEventListener('click',()=>{ edShapeUndo(); });
   $('op-line-redo')?.addEventListener('click',()=>{ edShapeRedo(); });
-  $('op-lock-btn')?.addEventListener('click',()=>{
-    const _ll = (edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null) || _edLineLayer;
-    if(!_ll) return;
-    _ll.locked = !_ll.locked;
-    edPushHistory();
-    const _btn = $('op-lock-btn');
-    if(_btn){
-      _btn.textContent = _ll.locked ? '🔒' : '🔓';
-      _btn.style.background = _ll.locked ? 'var(--gray-800)' : 'transparent';
-      _btn.style.color = _ll.locked ? 'var(--white)' : 'var(--gray-700)';
-      _btn.title = _ll.locked ? 'Desbloquear' : 'Bloquear';
-    }
-  });
-
   // No mover cámara al abrir panel line
 }
 
@@ -11708,18 +11681,10 @@ function edRenderOptionsPanel(mode){
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
     <button id="op-draw-del"
       style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
-    <button id="op-draw-dup"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">⧉</button>
-    <button id="op-draw-mirror"
-      title="Reflejar" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 6px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${_ED_MIRROR_ICON}</button>
-    <button id="op-draw-crop"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Recortar">✂</button>
     <button id="op-draw-undo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
-    <button id="op-draw-lock"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'var(--gray-800)':'transparent'})()};color:${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'var(--white)':'var(--gray-700)'})()};cursor:pointer" title="${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'Desbloquear':'Bloquear'})()}">${(()=>{const _dl=edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');return _dl?.locked?'🔒':'🔓'})()}</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
     <button id="op-panel-collapse" title="Minimizar panel">▲</button>
@@ -11784,7 +11749,6 @@ function edRenderOptionsPanel(mode){
         const _page = edPages[edCurrentPage]; if(!_page) return;
         const _dl = _page.layers.find(l => l.type === 'draw');
         if (_edDrawLayerTarget === 'fill') {
-          // Borrar capa de relleno: limpiar el canvas del FillLayer vinculado
           const _fl = _dl?._fillLayerId
             ? _page.layers.find(l => l.type === 'fill' && l._drawLayerId === _dl._fillLayerId)
             : null;
@@ -11792,12 +11756,12 @@ function edRenderOptionsPanel(mode){
             _fl._ctx.clearRect(0, 0, _fl._canvas.width, _fl._canvas.height);
           }
         } else {
-          // Borrar capa de dibujo: limpiar el DrawLayer completo
           if (_dl && _dl._canvas) {
             _dl._ctx.clearRect(0, 0, _dl._canvas.width, _dl._canvas.height);
             _dl.points = [];
           }
         }
+        _edDrawPushHistory(); // guardar después del borrado
         edPushHistory(); edRedraw();
       }, 'Borrar');
     });
@@ -11837,8 +11801,8 @@ function edRenderOptionsPanel(mode){
     $('op-fill-watercolor')?.addEventListener('click', e => {
       e.stopPropagation();
       edFillBrushType = 'watercolor';
-      edDrawOpacity = 15; // opacidad por defecto de la acuarela
-      edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
+      edDrawOpacity = 7; // opacidad por defecto de la acuarela
+      edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
       _edDrawLayerTarget = 'fill';
       edRenderOptionsPanel('fill');
     });
@@ -11846,6 +11810,7 @@ function edRenderOptionsPanel(mode){
       e.stopPropagation();
       edFillBrushType = 'bucket';
       edDrawOpacity = 100; // restaurar opacidad completa al volver al bote
+      _edSyncFillCursor();
       edRenderOptionsPanel('fill');
     });
     $('op-tool-shape')?.addEventListener('click',()=>{
@@ -12011,11 +11976,6 @@ function edRenderOptionsPanel(mode){
 
     // ── Deshacer / Rehacer ──
     $('op-draw-undo')?.addEventListener('click', edDrawUndo);
-    $('op-draw-crop')?.addEventListener('click',()=>{
-      const _page = edPages[edCurrentPage]; if(!_page) return;
-      const _dl = _page.layers.find(l=>l.type==='draw'); if(!_dl) return;
-      _edStartCrop(_dl);
-    });
     $('op-draw-redo')?.addEventListener('click', edDrawRedo);
     _edDrawUpdateUndoRedoBtns();
 
@@ -12032,34 +11992,6 @@ function edRenderOptionsPanel(mode){
       if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       if(edMinimized){ window._edMinimizedDrawMode = null; edMaximize(); }
       else { _edResetCameraToFit(); }
-    });
-
-    // ── Duplicar ──
-    $('op-draw-dup')?.addEventListener('click',()=>{
-      if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
-      edDuplicateSelected();
-      edCloseOptionsPanel();
-    });
-    $('op-draw-mirror')?.addEventListener('click',()=>{ _edDrawPushHistory(); edMirrorSelected(); });
-
-    // ── Bloquear ──
-    $('op-draw-lock')?.addEventListener('click',()=>{
-      const _dl = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
-      if(!_dl) return;
-      _dl.locked = !_dl.locked;
-      // Bloquear también el FillLayer vinculado
-      if(_dl._fillLayerId){
-        const _flLock=edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dl._fillLayerId);
-        if(_flLock) _flLock.locked=_dl.locked;
-      }
-      edPushHistory();
-      const _btn = $('op-draw-lock');
-      if(_btn){
-        _btn.textContent = _dl.locked ? '🔒' : '🔓';
-        _btn.style.background = _dl.locked ? 'var(--gray-800)' : 'transparent';
-        _btn.style.color = _dl.locked ? 'var(--white)' : 'var(--gray-700)';
-        _btn.title = _dl.locked ? 'Desbloquear' : 'Bloquear';
-      }
     });
 
     // ── Eliminar ──
@@ -13404,9 +13336,9 @@ function edInitDrawBar() {
     }
     _edbOpenBrushPop($('edb-fill'), [
       { icon:'🪣', label:'Bote de pintura', active: edFillBrushType==='bucket',
-        action:()=>{ edFillBrushType='bucket'; edDrawOpacity=100; _edbSyncTool(); } },
+        action:()=>{ edFillBrushType='bucket'; edDrawOpacity=100; _edSyncFillCursor(); _edbSyncTool(); } },
       { icon:'🖌️', label:'Acuarela', active: edFillBrushType==='watercolor',
-        action:()=>{ edFillBrushType='watercolor'; edDrawOpacity=15; _edbSyncTool(); } }
+        action:()=>{ edFillBrushType='watercolor'; edDrawOpacity=7; _edSyncFillCursor(); _edbSyncTool(); } }
     ]);
   });
 
@@ -17919,6 +17851,14 @@ function EditorView_init(){
     [document, 'pointercancel',edOnEnd,   {}],
   ];
   window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
+  // Ocultar cursor circular al salir del canvas (PC)
+  if(edCanvas){
+    edCanvas.addEventListener('pointerleave', e => {
+      if(e.pointerType === 'touch') return;
+      const _cur = document.getElementById('edBrushCursor');
+      if(_cur) _cur.style.display = 'none';
+    });
+  }
   // Bloquear gestos de borde de Android al dibujar (passive:false para poder preventDefault)
   // Solo se previene cuando el usuario está activamente dibujando (edPainting)
   if(edCanvas){
@@ -21964,12 +21904,13 @@ function _gcpTrimLeadingInvisible() {
 // Oculta o muestra los frames interpolados adyacentes a fi en todas las capas.
 // Al ocultar un frame clave, sus interpolados vecinos se ocultan también (visible:false).
 // Al volver a mostrar el frame clave, sus interpolados vecinos se muestran también.
-function _gcpPurgeInterpAround(fi) {
-  // Alias por compatibilidad — delega a _gcpSetInterpVisibilityAround(fi, false)
-  _gcpSetInterpVisibilityAround(fi, false);
+function _gcpPurgeInterpAround(fi, layerTarget) {
+  _gcpSetInterpVisibilityAround(fi, false, layerTarget);
 }
-function _gcpSetInterpVisibilityAround(fi, visible) {
-  window._gcpLayers.forEach(la => {
+function _gcpSetInterpVisibilityAround(fi, visible, layerTarget) {
+  // Si se pasa layerTarget, operar solo sobre esa capa; si no, sobre todas (compatibilidad)
+  const layers = layerTarget ? [layerTarget] : (window._gcpLayers || []);
+  layers.forEach(la => {
     if (!la._frames) return;
     // Interpolados DESPUÉS de fi
     let i = fi + 1;
@@ -22988,7 +22929,7 @@ function _gcpUpdateFramesBar() {
           if (la._frames && fi < la._frames.length) {
             la._frames[fi] = {...la._frames[fi], visible: true};
             // Restaurar visibilidad de interpolados adyacentes
-            _gcpSetInterpVisibilityAround(fi, true);
+            _gcpSetInterpVisibilityAround(fi, true, la);
           }
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
@@ -23089,7 +23030,7 @@ function _gcpUpdateFramesBar() {
             const _nowVis = la._frames[fi].visible !== false;
             la._frames[fi] = {...la._frames[fi], visible: !_nowVis};
             // Al ocultar: purgar interpolados adyacentes (no trim — el frame sigue en el array)
-            if (_nowVis) _gcpPurgeInterpAround(fi);
+            if (_nowVis) _gcpPurgeInterpAround(fi, la);
           }
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();

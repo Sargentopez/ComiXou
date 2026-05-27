@@ -1,5 +1,28 @@
+/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/*
+ * Librerías y código de terceros utilizados en este proyecto:
+ *
+ * - omggif (GIF encoder/decoder)
+ *     Autor: Dean McNamee <dean@gmail.com>
+ *     Licencia: MIT
+ *     https://github.com/deanm/omggif
+ *
+ * - pako (compresión zlib/gzip)
+ *     Autores: Andrei Tuputcyn, Vitaly Puzrin y colaboradores (Nodeca project)
+ *     Licencia: MIT
+ *     https://github.com/nodeca/pako
+ *
+ * - UPNG.js (codificador/decodificador PNG)
+ *     Autor: Ivan Kutskir
+ *     Licencia: MIT
+ *     https://github.com/photopea/UPNG.js
+ *
+ * - LZW decompression (puerto JavaScript de implementación Java)
+ *     Referencia original: https://gist.github.com/devunwired/4479231
+ *     Licencia: dominio público / uso libre
+ */
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v27-32';
+const CACHE = 'comixow-v27-47';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas

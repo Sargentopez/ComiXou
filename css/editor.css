@@ -1,3 +1,26 @@
+/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/*
+ * Librerías y código de terceros utilizados en este proyecto:
+ *
+ * - omggif (GIF encoder/decoder)
+ *     Autor: Dean McNamee <dean@gmail.com>
+ *     Licencia: MIT
+ *     https://github.com/deanm/omggif
+ *
+ * - pako (compresión zlib/gzip)
+ *     Autores: Andrei Tuputcyn, Vitaly Puzrin y colaboradores (Nodeca project)
+ *     Licencia: MIT
+ *     https://github.com/nodeca/pako
+ *
+ * - UPNG.js (codificador/decodificador PNG)
+ *     Autor: Ivan Kutskir
+ *     Licencia: MIT
+ *     https://github.com/photopea/UPNG.js
+ *
+ * - LZW decompression (puerto JavaScript de implementación Java)
+ *     Referencia original: https://gist.github.com/devunwired/4479231
+ *     Licencia: dominio público / uso libre
+ */
 /* ============================================================
    editor.css — ComiXow v4.3
    Canvas fullscreen. Barra superior + menú tipo home.
@@ -560,8 +583,10 @@ body.editor-page #appView {
   will-change: transform;  /* capa de compositing — reduce latencia en Android */
   /* Sin borde/sombra — el lienzo se dibuja dentro del canvas via JS */
 }
-#editorCanvas.tool-draw   { cursor: crosshair; }
-#editorCanvas.tool-eraser { cursor: cell; }
+#editorCanvas.tool-draw          { cursor: none; }
+#editorCanvas.tool-eraser        { cursor: none; }
+#editorCanvas.tool-fill          { cursor: crosshair; }
+#editorCanvas.tool-fill.tool-watercolor { cursor: none; }
 
 
 /* ══════════════════════════════
@@ -1119,8 +1144,9 @@ body.editor-page #appView {
 /* Cursor dibujo */
 #edBrushCursor {
   position: fixed; pointer-events: none; z-index: 999;
-  border-radius: 50%; border: 1.5px solid rgba(0,0,0,.35);
+  border-radius: 50%; border: 1.5px solid currentColor;
   transform: translate(-50%,-50%); display: none;
+  transition: width 0.08s, height 0.08s;
 }
 
 /* Cursor offset (T18) */

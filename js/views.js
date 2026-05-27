@@ -1,3 +1,26 @@
+/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/*
+ * Librerías y código de terceros utilizados en este proyecto:
+ *
+ * - omggif (GIF encoder/decoder)
+ *     Autor: Dean McNamee <dean@gmail.com>
+ *     Licencia: MIT
+ *     https://github.com/deanm/omggif
+ *
+ * - pako (compresión zlib/gzip)
+ *     Autores: Andrei Tuputcyn, Vitaly Puzrin y colaboradores (Nodeca project)
+ *     Licencia: MIT
+ *     https://github.com/nodeca/pako
+ *
+ * - UPNG.js (codificador/decodificador PNG)
+ *     Autor: Ivan Kutskir
+ *     Licencia: MIT
+ *     https://github.com/photopea/UPNG.js
+ *
+ * - LZW decompression (puerto JavaScript de implementación Java)
+ *     Referencia original: https://gist.github.com/devunwired/4479231
+ *     Licencia: dominio público / uso libre
+ */
 /* ============================================================
    views.js — Registro de todas las vistas de la SPA
    Cada vista define: bodyClass, css[], html(), init(), destroy()
@@ -27,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v27.32</footer>
+    <footer class="app-version">v27.47</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
