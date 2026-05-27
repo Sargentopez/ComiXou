@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v27.11</footer>
+    <footer class="app-version">v27.13</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -453,6 +453,8 @@ Router.register('editor', {
       </div>
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
+      <!-- Popup sub-herramienta: selección lápiz/tinta y bote/acuarela -->
+      <div id="edb-brush-pop" style="display:none;position:fixed;z-index:1200;background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:8px;box-shadow:0 4px 18px rgba(0,0,0,.6);flex-direction:column;align-items:stretch;gap:4px;min-width:130px"></div>
       <!-- Panel grosor anclado a la barra flotante de dibujo -->
       <div id="edb-size-pop" style="display:none;position:fixed;z-index:1200;background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.6);flex-direction:column;align-items:center;gap:10px;min-width:170px">
         <!-- Preview: número a la izquierda + círculo a la derecha -->
