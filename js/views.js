@@ -27,7 +27,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v27.19</footer>
+    <footer class="app-version">v27.32</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -215,6 +215,16 @@ Router.register('editor', {
           <div class="ed-modal-actions">
             <button id="edConfirmCancel" class="ed-modal-btn cancel">Cancelar</button>
             <button id="edConfirmOk" class="ed-modal-btn ok">Eliminar</button>
+          </div>
+        </div>
+      </div>
+      <!-- Modal selección de capa (barra flotante) -->
+      <div id="edLayerPickModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box">
+          <p id="edLayerPickMsg" class="ed-confirm-msg"></p>
+          <div class="ed-modal-actions">
+            <button id="edLayerPickDraw" class="ed-modal-btn cancel">Capa de dibujo</button>
+            <button id="edLayerPickFill" class="ed-modal-btn ok">Capa de relleno</button>
           </div>
         </div>
       </div>

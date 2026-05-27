@@ -844,6 +844,7 @@ const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 let edDrawBrushType = 'pen';   // 'pen' = estilógrafo (actual) | 'pencil' = lápiz
 let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'watercolor' = pincel acuarela
+function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } }
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
@@ -5058,6 +5059,14 @@ function _edRenderPageThumb(canvas, page, pageIdx){
       // DrawLayer: dibujar fill vinculado primero, luego el draw
       const _flDraw = l._fillLayerId ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===l._fillLayerId) : null;
       if(_flDraw){ offCtx.globalAlpha=_flDraw.opacity??1; _flDraw.draw(offCtx); offCtx.globalAlpha=1; }
+      // Preview del trazo de acuarela en curso (offscreen) — se muestra mientras se traza
+      if(window._edWcFl && window._wcOffscreen && _flDraw && window._edWcFl === _flDraw){
+        offCtx.save();
+        offCtx.globalAlpha = Math.min(1, (edDrawOpacity ?? 100) / 100);
+        offCtx.globalCompositeOperation = 'source-over';
+        offCtx.drawImage(window._wcOffscreen, 0, 0);
+        offCtx.restore();
+      }
       l.draw(offCtx);
     }
     else if(l.type==='fill') return; // el fill se dibuja con su stroke/draw vinculado
@@ -7953,7 +7962,7 @@ function edOnMove(e){
         window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
         _prev ? _prev.wx : null, _prev ? _prev.wy : null
       );
-      edRedraw();
+      edRedraw(); // preview del offscreen durante el trazo
     }
     edMoveBrush(e);return;
   }
@@ -9735,64 +9744,113 @@ function _edPenPressure(e) {
 }
 
 // ── Pincel acuarela ─────────────────────────────────────────────────────────
-// Simula acuarela real con las siguientes propiedades físicas:
-//  1. Borde oscuro / centro claro (wet-edge cauliflower effect)
-//  2. Transparencia acumulativa: repasar oscurece, un solo trazo es sutil
-//  3. Textura de papel: ruido aleatorio en alpha por punto
-//  4. Trazo interpolado denso para continuidad visual
-// No está limitada por el DrawLayer.
+// Técnica real-time con ctx.filter='blur()':
+//  - Cada segmento se pinta en un mini-canvas (bbox del segmento + padding)
+//  - Se composita sobre el FillLayer con ctx.filter='blur(Xpx)' en tiempo real
+//  - ctx.filter al hacer drawImage aplica el blur en GPU → muy rápido en Android
+//  - Al soltar: commit final del offscreen acumulado para el historial
+//
+// El offscreen acumula el trazo SIN blur durante el trazo (para la preview).
+// El FillLayer recibe cada segmento CON blur aplicado en el composite.
+
+let _wcOffscreen = null, _wcOffCtx = null;
+let _wcColor = '#000000';
+
 function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
   if(!fl || !fl._canvas) return null;
-  const ctx = fl._ctx;
+  const cw = fl._canvas.width, ch = fl._canvas.height;
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const wx = mx + nx * pw, wy = my + ny * ph;
   const alpha = Math.min(1, (opacity ?? 100) / 100);
+  const blurPx = Math.max(1, size * 0.4); // radio de blur proporcional al grosor
 
-  // Parsear color hex a rgb
-  let r=0,g=0,b=0;
-  const _m = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
-  if(_m){ r=parseInt(_m[1],16); g=parseInt(_m[2],16); b=parseInt(_m[3],16); }
+  // Parsear color una vez
+  if(color !== _wcColor || !_wcOffscreen){
+    _wcColor = color;
+  }
 
-  // Interpolar puntos cada ~2px para trazo continuo suave
-  const pts = [];
-  if(lastWx !== null && lastWy !== null){
-    const dx = wx - lastWx, dy = wy - lastWy;
-    const dist = Math.sqrt(dx*dx+dy*dy) || 1;
-    const steps = Math.max(1, Math.round(dist / Math.max(2, size * 0.15)));
-    for(let s=1;s<=steps;s++) pts.push({ x: lastWx+dx*(s/steps), y: lastWy+dy*(s/steps) });
+  // Inicializar offscreen (trazo acumulado sin blur, para preview)
+  if(!_wcOffscreen || _wcOffscreen.width !== cw || _wcOffscreen.height !== ch){
+    _wcOffscreen = document.createElement('canvas');
+    _wcOffscreen.width  = cw;
+    _wcOffscreen.height = ch;
+    _wcOffCtx = _wcOffscreen.getContext('2d');
+  }
+
+  // ── Mini-canvas para este segmento ───────────────────────────────────────
+  // Tamaño = bbox del segmento + padding del blur para evitar clipping
+  const pad  = Math.ceil(blurPx * 3);
+  const x0   = lastWx !== null ? Math.min(lastWx, wx) : wx;
+  const y0   = lastWy !== null ? Math.min(lastWy, wy) : wy;
+  const x1   = lastWx !== null ? Math.max(lastWx, wx) : wx;
+  const y1   = lastWy !== null ? Math.max(lastWy, wy) : wy;
+  const bx   = Math.max(0, Math.floor(x0 - size/2 - pad));
+  const by   = Math.max(0, Math.floor(y0 - size/2 - pad));
+  const bw   = Math.min(cw - bx, Math.ceil(x1 - x0 + size + pad*2));
+  const bh   = Math.min(ch - by, Math.ceil(y1 - y0 + size + pad*2));
+  if(bw <= 0 || bh <= 0) return { wx, wy };
+
+  const seg  = document.createElement('canvas');
+  seg.width  = bw; seg.height = bh;
+  const sCtx = seg.getContext('2d');
+
+  // Pintar segmento en coords locales del mini-canvas
+  sCtx.strokeStyle = color;
+  sCtx.fillStyle   = color;
+  sCtx.lineWidth   = size;
+  sCtx.lineCap     = 'round';
+  sCtx.lineJoin    = 'round';
+  sCtx.globalAlpha = 1;
+
+  if(lastWx === null || lastWy === null){
+    sCtx.beginPath();
+    sCtx.arc(wx - bx, wy - by, size/2, 0, Math.PI*2);
+    sCtx.fill();
   } else {
-    pts.push({ x: wx, y: wy });
+    sCtx.beginPath();
+    sCtx.moveTo(lastWx - bx, lastWy - by);
+    sCtx.lineTo(wx - bx, wy - by);
+    sCtx.stroke();
   }
 
-  ctx.save();
-  ctx.globalCompositeOperation = 'source-over';
+  // ── Compositar sobre FillLayer con blur (GPU) ─────────────────────────────
+  fl._ctx.save();
+  fl._ctx.globalAlpha = alpha * 0.85; // ligeramente reducida — el blur expande
+  fl._ctx.globalCompositeOperation = 'source-over';
+  fl._ctx.filter = `blur(${blurPx.toFixed(1)}px)`;
+  fl._ctx.drawImage(seg, bx, by);
+  fl._ctx.filter = 'none';
+  fl._ctx.restore();
 
-  for(const pt of pts){
-    // Radio base con variación de textura de papel (±15%)
-    const rad = size * (0.85 + Math.random()*0.3);
-
-    // Gradiente radial: centro claro → cuerpo → borde acumulado → exterior suave
-    // Reproduce el "wet edge" / "cauliflower effect" de la acuarela real
-    const grd = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, rad);
-    const aCenter = alpha * 0.04 * (0.7 + Math.random()*0.6);  // centro casi transparente
-    const aBody   = alpha * 0.09 * (0.8 + Math.random()*0.4);  // cuerpo suave
-    const aEdge   = alpha * 0.22 * (0.8 + Math.random()*0.4);  // borde acumulado
-    grd.addColorStop(0,    `rgba(${r},${g},${b},${aCenter})`);
-    grd.addColorStop(0.55, `rgba(${r},${g},${b},${aBody})`);
-    grd.addColorStop(0.82, `rgba(${r},${g},${b},${aEdge})`);
-    grd.addColorStop(1.0,  `rgba(${r},${g},${b},0)`);
-
-    ctx.globalAlpha = 1; // el alpha está dentro del gradiente
-    ctx.fillStyle = grd;
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, rad, 0, Math.PI*2);
-    ctx.fill();
+  // ── Acumular en offscreen (sin blur) para preview en edRedraw ────────────
+  _wcOffCtx.save();
+  _wcOffCtx.strokeStyle = color;
+  _wcOffCtx.fillStyle   = color;
+  _wcOffCtx.lineWidth   = size;
+  _wcOffCtx.lineCap     = 'round';
+  _wcOffCtx.lineJoin    = 'round';
+  _wcOffCtx.globalAlpha = 1;
+  if(lastWx === null || lastWy === null){
+    _wcOffCtx.beginPath();
+    _wcOffCtx.arc(wx, wy, size/2, 0, Math.PI*2);
+    _wcOffCtx.fill();
+  } else {
+    _wcOffCtx.beginPath();
+    _wcOffCtx.moveTo(lastWx, lastWy);
+    _wcOffCtx.lineTo(wx, wy);
+    _wcOffCtx.stroke();
   }
+  _wcOffCtx.restore();
 
-  ctx.restore();
-  ctx.globalCompositeOperation = 'source-over';
   return { wx, wy };
+}
+
+// Al soltar: limpiar offscreen (el FillLayer ya tiene el resultado)
+function _edWatercolorCommit(fl, size, opacity){
+  if(_wcOffscreen && _wcOffCtx){
+    _wcOffCtx.clearRect(0, 0, _wcOffscreen.width, _wcOffscreen.height);
+  }
 }
 
 function edStartPaint(e){
@@ -9889,7 +9947,7 @@ function edContinuePaint(e){
       window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
       _prev ? _prev.wx : null, _prev ? _prev.wy : null
     );
-    edRedraw();
+    edRedraw(); // preview del offscreen durante el trazo
     return;
   }
   // Máquina de estados de presión para lápiz gráfico
@@ -9954,11 +10012,19 @@ function edSaveDrawData(){
   _edPenCanDraw = false;
   edPainting = false;
   window._edFillProxy = null; // limpiar proxy al soltar el trazo
-  // Acuarela: limpiar estado y guardar en historial global al soltar
+  // Acuarela: limpiar estado y guardar en historial global al soltar.
+  // Se usa force=true para evitar que la deduplicación por JSON descarte el push
+  // (el FillLayer en workspace puede producir el mismo JSON aparente aunque
+  //  el canvas haya cambiado, si toDataURL() es lento o el DrawLayer vacío lo iguala).
   if(window._edWcFl){
+    // Limpiar offscreen de preview (el resultado ya está en el FillLayer)
+    _edWatercolorCommit(window._edWcFl, edDrawSize, edDrawOpacity);
     window._edWcFl  = null;
     window._edWcLast = null;
-    edPushHistory();
+    edRedraw();
+    // Usar historial local del panel de dibujo — preserva el DrawLayer activo
+    // y permite deshacer cada trazo de acuarela individualmente sin romper vínculos
+    _edDrawPushHistory();
   } else {
     _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
   }
@@ -10080,6 +10146,7 @@ function edToggleMenu(id){
 }
 
 function edDeactivateDrawTool(){
+  _edWcReset();
   _edFocusDone = false;
   // Cancelar herramientas shape/line en curso
   _edShapeStart = null; _edShapePreview = null; _edPendingShape = null;
@@ -11694,6 +11761,7 @@ function edRenderOptionsPanel(mode){
     // ── Herramientas ──
     // ── Selector de capa destino ──
     $('op-layer-draw')?.addEventListener('click',()=>{
+      _edWcReset();
       _edDrawLayerTarget='draw';
       edRenderOptionsPanel(edActiveTool==='eraser'?'eraser':edActiveTool==='fill'?'fill':'draw');
     });
@@ -11734,6 +11802,7 @@ function edRenderOptionsPanel(mode){
       }, 'Borrar');
     });
     $('op-tool-pen')?.addEventListener('click',()=>{
+      _edWcReset();
       if (_edDrawLayerTarget === 'fill') {
         // Ya estaba en capa de relleno — confirmar antes de cambiar herramienta
         edConfirm('¿Quieres usar el pincel en la capa de relleno?', () => {
@@ -11755,6 +11824,7 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('draw');
     });
     $('op-tool-eraser')?.addEventListener('click',()=>{
+      _edWcReset();
       edActiveTool='eraser'; edCanvas.className='tool-eraser';
       // borrador mantiene la capa activa actual
       edRenderOptionsPanel('eraser');
@@ -13202,11 +13272,20 @@ function edInitDrawBar() {
       if (item.active) {
         btn.style.outline = '2px solid rgba(255,255,255,0.7)';
       }
+      btn.addEventListener('pointerdown', e => {
+        e.stopPropagation();
+        // Marcar que el toque fue en el popup para que edb-pen no lo reabra
+        window._edbPopItemTouched = true;
+      });
       btn.addEventListener('pointerup', e => {
         e.stopPropagation();
         _edbClearPhantomPointers();
-        item.action();
-        pop.style.display = 'none'; pop._anchor = null;
+        pop.style.display = 'none'; pop._anchor = null; // cerrar ANTES de action
+        // Delay mínimo para que edb-pen pointerup llegue primero y vea la flag
+        setTimeout(() => {
+          window._edbPopItemTouched = false;
+          item.action();
+        }, 0);
       });
       pop.appendChild(btn);
     });
@@ -13230,6 +13309,30 @@ function edInitDrawBar() {
     if (pop) { pop.style.display = 'none'; pop._anchor = null; }
   }
 
+  // Diálogo "¿En qué capa quieres dibujar?" con dos botones de acción.
+  function _edbAskLayer(msg, onDraw, onFill) {
+    const overlay = $('edLayerPickModal');
+    const msgEl   = $('edLayerPickMsg');
+    const drawBtn = $('edLayerPickDraw');
+    const fillBtn = $('edLayerPickFill');
+    if (!overlay) { onDraw(); return; }
+    msgEl.textContent = msg;
+    overlay.classList.add('open');
+    const _stop = e => e.stopPropagation();
+    overlay.addEventListener('pointerdown', _stop, { capture: true });
+    const close = (cb) => {
+      overlay.classList.remove('open');
+      overlay.removeEventListener('pointerdown', _stop, { capture: true });
+      drawBtn.removeEventListener('click', onDrawClick);
+      fillBtn.removeEventListener('click', onFillClick);
+      if (cb) cb();
+    };
+    const onDrawClick = () => close(onDraw);
+    const onFillClick = () => close(onFill);
+    drawBtn.addEventListener('click', onDrawClick);
+    fillBtn.addEventListener('click', onFillClick);
+  }
+
   function _edbClearPhantomPointers() {
     // Al cambiar herramienta desde el popup, el pointerup se consumió en el botón
     // (stopPropagation) y nunca llegó a edOnEnd → pointer fantasma en el mapa.
@@ -13246,23 +13349,46 @@ function edInitDrawBar() {
   $('edb-pen')?.addEventListener('pointerup', e => {
     if (_edbDragLocked) return;
     e.stopPropagation();
+    // Si el pointerup viene de un botón del popup, no reabrir
+    if (window._edbPopItemTouched) return;
     if (edActiveTool !== 'draw') {
       edPushHistory();
       edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
       _edbSyncTool();
-      $('op-tool-pen')?.click();
     }
     _edbOpenBrushPop($('edb-pen'), [
       { icon:'🖊', label:'Tinta (estilógrafo)', active: edDrawBrushType==='pen',
-        action:()=>{ if(typeof edFillBrushType!=='undefined'&&edFillBrushType==='watercolor'){edDrawOpacity=100;edFillBrushType='bucket';} edDrawBrushType='pen'; $('op-brush-pen')?.click(); _edbSyncTool(); } },
+        action:()=>{
+          // Aplicar tipo de brocha directamente sin depender del panel
+          const _apply = () => { edDrawBrushType='pen'; _edbSyncTool(); };
+          if (_edDrawLayerTarget === 'fill') {
+            _edbCloseBrushPop(); // cerrar popup antes de abrir modal
+            _edbAskLayer('¿En qué capa quieres dibujar?',
+              () => { _edWcReset(); _edDrawLayerTarget='draw'; _apply(); },
+              () => { window._edKeepFillTarget=true; _apply(); }
+            );
+          } else { _apply(); }
+        }
+      },
       { icon:'✏️', label:'Lápiz', active: edDrawBrushType==='pencil',
-        action:()=>{ if(typeof edFillBrushType!=='undefined'&&edFillBrushType==='watercolor'){edDrawOpacity=100;edFillBrushType='bucket';} edDrawBrushType='pencil'; $('op-brush-pencil')?.click(); _edbSyncTool(); } }
+        action:()=>{
+          const _apply = () => { edDrawBrushType='pencil'; _edbSyncTool(); };
+          if (_edDrawLayerTarget === 'fill') {
+            _edbCloseBrushPop();
+            _edbAskLayer('¿En qué capa quieres dibujar?',
+              () => { _edWcReset(); _edDrawLayerTarget='draw'; _apply(); },
+              () => { window._edKeepFillTarget=true; _apply(); }
+            );
+          } else { _apply(); }
+        }
+      }
     ]);
   });
   $('edb-eraser')?.addEventListener('pointerup', e => {
     if (_edbDragLocked) return;
     e.stopPropagation();
     _edbCloseBrushPop();
+    _edWcReset();
     edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
     _edbSyncTool();
     $('op-tool-eraser')?.click();
@@ -13270,6 +13396,7 @@ function edInitDrawBar() {
   $('edb-fill')?.addEventListener('pointerup', e => {
     if (_edbDragLocked) return;
     e.stopPropagation();
+    if (window._edbPopItemTouched) return;
     if (edActiveTool !== 'fill') {
       edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
       _edbSyncTool();
@@ -13277,9 +13404,9 @@ function edInitDrawBar() {
     }
     _edbOpenBrushPop($('edb-fill'), [
       { icon:'🪣', label:'Bote de pintura', active: edFillBrushType==='bucket',
-        action:()=>{ edFillBrushType='bucket'; edDrawOpacity=100; $('op-fill-bucket')?.click(); _edbSyncTool(); } },
+        action:()=>{ edFillBrushType='bucket'; edDrawOpacity=100; _edbSyncTool(); } },
       { icon:'🖌️', label:'Acuarela', active: edFillBrushType==='watercolor',
-        action:()=>{ edFillBrushType='watercolor'; edDrawOpacity=15; $('op-fill-watercolor')?.click(); _edbSyncTool(); } }
+        action:()=>{ edFillBrushType='watercolor'; edDrawOpacity=15; _edbSyncTool(); } }
     ]);
   });
 
@@ -13616,8 +13743,10 @@ function _edbSyncTool() {
   // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
   const offsetBtn = $('edb-offset');
-  if(offsetBtn) offsetBtn.style.display = (isFill || !window._edIsTouch) ? 'none' : '';
-  if(isFill || !window._edIsTouch) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
+  const _isWatercolor = isFill && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor';
+  const _hideOffset = (!_isWatercolor && isFill) || !window._edIsTouch;
+  if(offsetBtn) offsetBtn.style.display = _hideOffset ? 'none' : '';
+  if(_hideOffset) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
   _edbSyncOffsetBtn();
   _edbSyncSize();
   _edbSyncColor();
