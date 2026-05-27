@@ -23147,14 +23147,10 @@ function _gcpUpdateFramesBar() {
             }
           });
         } else {
-          // Botón rojo → menú contextual inline (o modal circular si es el último frame)
+          // Botón rojo → menú contextual inline (igual para circular y no circular)
           interpBtn.addEventListener('click', e => {
             e.stopPropagation();
-            if (_isCircular) {
-              _gcpShowCircularInterpModal(fi);
-            } else {
-              _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
-            }
+            _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
           });
         }
 
