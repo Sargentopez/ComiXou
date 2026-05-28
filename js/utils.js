@@ -116,10 +116,9 @@ function openShareModal(comic) {
   const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
   const url   = base + '/reader/index.html?' + param;
   const title = comic.title || 'Una obra en ComiXow';
-  const text  = `Mira "${title}" en ComiXow`;
 
   if ('share' in navigator) {
-    navigator.share({ title, text, url }).catch(e => {
+    navigator.share({ title, url }).catch(e => {
       if (e.name !== 'AbortError') console.warn('share:', e);
     });
   } else {

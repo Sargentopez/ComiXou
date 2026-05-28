@@ -312,6 +312,39 @@ const SupabaseClient = (() => {
     return `${STORAGE}/object/public/gifs/${path}`;
   }
 
+  // Sube el thumbnail de la primera hoja al bucket 'gifs' como JPEG público
+  // Devuelve la URL pública o null si falla
+  async function _thumbUpload(supabaseId, dataUrl) {
+    if (!dataUrl || !supabaseId) return null;
+    try {
+      if (window._authTryRefresh) await window._authTryRefresh();
+      // Convertir dataUrl a JPEG si no lo es ya
+      let jpegUrl = dataUrl;
+      if (!dataUrl.startsWith('data:image/jpeg')) {
+        const _cvs = document.createElement('canvas');
+        const _img = await new Promise((res, rej) => {
+          const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl;
+        });
+        _cvs.width = _img.naturalWidth; _cvs.height = _img.naturalHeight;
+        _cvs.getContext('2d').drawImage(_img, 0, 0);
+        jpegUrl = _cvs.toDataURL('image/jpeg', 0.82);
+      }
+      const b64  = jpegUrl.split(',')[1];
+      const bin  = atob(b64);
+      const u8   = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const blob = new Blob([u8], { type: 'image/jpeg' });
+      const path = 'thumb_' + supabaseId + '.jpg';
+      const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
+        method:  'POST',
+        headers: { ..._hdrsUser(), 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+        body:    blob,
+      });
+      if (!r.ok) return null;
+      return `${STORAGE}/object/public/gifs/${path}`;
+    } catch(_e) { return null; }
+  }
+
   // Borra un GIF del bucket por su URL pública
   async function _gifDelete(gifUrl) {
     if (!gifUrl) return;
@@ -364,6 +397,16 @@ const SupabaseClient = (() => {
     }));
 
     if (!panels.length) return;
+
+    // Subir thumbnail de la primera hoja (best-effort, no bloquea el guardado)
+    const _firstDataUrl = panels[0]?.dataUrl || null;
+    let _coverUrlResult = null;
+    if (_firstDataUrl) {
+      _coverUrlResult = await _thumbUpload(comic.supabaseId, _firstDataUrl).catch(() => null);
+      if (_coverUrlResult) {
+        await _patch('works', `id=eq.${comic.supabaseId}`, { cover_url: _coverUrlResult }).catch(() => {});
+      }
+    }
 
     for (let i = 0; i < panels.length; i++) {
       const p = panels[i];
@@ -782,7 +825,7 @@ const SupabaseClient = (() => {
   async function fetchWorksByIds(ids) {
     if (!ids || !ids.length) return [];
     const list = ids.join(',');
-    const r = await _get(`works?id=in.(${list})&select=id,updated_at,title,genre,nav_mode,published,pending_review`);
+    const r = await _get(`works?id=in.(${list})&select=id,updated_at,title,genre,nav_mode,published,pending_review,cover_url`);
     return r || [];
   }
 

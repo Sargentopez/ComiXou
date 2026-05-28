@@ -979,7 +979,7 @@ async function loadWork(workId) {
     RS._workTitle  = work[0].title       || '';
     RS.navMode     = work[0].nav_mode    || 'fixed';
     // Actualizar meta OG con datos reales de la obra
-    _updateOGMeta(work[0].title, work[0].author_name);
+    _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -1007,7 +1007,7 @@ async function loadDraft(token) {
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
     RS.navMode     = work[0].nav_mode    || 'fixed';
-    _updateOGMeta(work[0].title, work[0].author_name);
+    _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
     setLoadingMsg('Preparando imágenes...');
@@ -2632,14 +2632,20 @@ function setLoadingProgress(pct, label) {
   if (lbl) lbl.textContent = label || '';
 }
 
-function _updateOGMeta(title, author) {
+function _updateOGMeta(title, author, coverUrl) {
   const t = (title || 'ComiXow') + ' — ComiXow';
   const d = author ? `Una obra de ${author} en ComiXow` : 'Abre esta obra en el reproductor de ComiXow';
   document.title = t;
-  document.querySelector('meta[property="og:title"]')      ?.setAttribute('content', t);
-  document.querySelector('meta[property="og:description"]')?.setAttribute('content', d);
-  document.querySelector('meta[name="twitter:title"]')     ?.setAttribute('content', t);
+  document.querySelector('meta[property="og:title"]')       ?.setAttribute('content', t);
+  document.querySelector('meta[property="og:description"]') ?.setAttribute('content', d);
+  document.querySelector('meta[name="twitter:title"]')      ?.setAttribute('content', t);
   document.querySelector('meta[name="twitter:description"]')?.setAttribute('content', d);
+  if (coverUrl) {
+    document.querySelector('meta[property="og:image"]')      ?.setAttribute('content', coverUrl);
+    document.querySelector('meta[property="og:image:width"]') ?.setAttribute('content', '');
+    document.querySelector('meta[property="og:image:height"]')?.setAttribute('content', '');
+    document.querySelector('meta[name="twitter:image"]')      ?.setAttribute('content', coverUrl);
+  }
 }
 function showError(msg) {
   document.getElementById('loadingScreen').classList.add('hidden');
