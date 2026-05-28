@@ -867,7 +867,9 @@ const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 let edDrawBrushType = 'pen';   // 'pen' = estilógrafo (actual) | 'pencil' = lápiz
 let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'watercolor' = pincel acuarela
-function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } }
+let edDodgeBurnSign = 1;         // +1 = iluminar (dodge), -1 = oscurecer (burn)
+let _edDodgeBurnActive = false; // true = modo iluminar/oscurecer activo
+function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } _edDodgeBurnActive = false; }
 
 // ── Capas temporales de dibujo (sesión activa) ──────────────────
 // Cuatro canvases independientes, compositan al hacer OK.
@@ -6807,7 +6809,7 @@ function edOnStart(e){
     // En touch/pen: guardar coordenadas y esperar a pointerup para confirmar
     // que fue toque simple y no inicio de pinch
     if(e.pointerType === 'touch'){
-      if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+      if(!_edDodgeBurnActive && typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
         // Acuarela en touch: usar sistema _cof si está activo (cursor offset),
         // igual que la herramienta de dibujo normal
         const _eSavedWC = e;
@@ -6838,6 +6840,14 @@ function edOnStart(e){
     }
     // Mouse/pen: ejecutar inmediatamente
     const c = edCoords(e);
+    if(_edDodgeBurnActive){
+      // Dodge/burn: solo modifica luminosidad, NO pinta color
+      _edGetOrCreateDrawLayer();
+      edPainting = true;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      window._edDbLast = edDodgeBurnStroke(c.nx, c.ny, null, null);
+      edRedraw(); return;
+    }
     if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
       _edGetOrCreateDrawLayer(); // asegurar que existen las capas reales
       const _flWC = (_edTmp.watercolor?._canvas ? { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true } : null);
@@ -6846,7 +6856,6 @@ function edOnStart(e){
         if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
         window._edWcFl = _flWC;
         window._edWcLast = _edWatercolorStroke(_flWC, c.nx, c.ny, edDrawColor, edDrawSize, edDrawOpacity, null, null);
-        // Sincronizar _edWcFl con el temporal si está activo
         if(_edTmp.watercolor?._canvas) window._edWcFl = { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true };
         edRedraw(); return;
       }
@@ -8061,15 +8070,22 @@ function edOnMove(e){
   if(_edPinchHappened) return; // hubo pinch — ignorar movimiento del dedo que queda
   if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
   if(edActiveTool==='fill'){
-    // Acuarela: trazo continuo en pointermove mientras edPainting
-    if(edPainting && typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor' && window._edWcFl){
+    if(edPainting && _edDodgeBurnActive){
+      // Dodge/burn: trazo continuo — solo modifica luminosidad, no pinta color
+      const _cDB = edCoords(e);
+      const _prevDB = window._edDbLast;
+      window._edDbLast = edDodgeBurnStroke(_cDB.nx, _cDB.ny,
+        _prevDB ? _prevDB.wx : null, _prevDB ? _prevDB.wy : null);
+      edRedraw();
+    } else if(edPainting && typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor' && window._edWcFl){
+      // Acuarela: trazo continuo en pointermove mientras edPainting
       const _cWC = edCoords(e);
       const _prev = window._edWcLast;
       window._edWcLast = _edWatercolorStroke(
         window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
         _prev ? _prev.wx : null, _prev ? _prev.wy : null
       );
-      edRedraw(); // preview del offscreen durante el trazo
+      edRedraw();
     }
     edMoveBrush(e);return;
   }
@@ -8434,17 +8450,19 @@ function edOnEnd(e){
           _la.fillColor = edDrawColor;
           edPushHistory(); edRedraw();
         } else {
-          if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+          if(!_edDodgeBurnActive && typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
             const _flWCt = (_edTmp.watercolor?._canvas ? { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true } : null);
             if(_flWCt){ _edWatercolorStroke(_flWCt,fp.nx,fp.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null); edRedraw(); }
             else { edFloodFill(fp.nx, fp.ny); }
+          } else if(_edDodgeBurnActive){ edDodgeBurnStroke(fp.nx,fp.ny,null,null); edRedraw();
           } else { edFloodFill(fp.nx, fp.ny); }
         }
       } else {
-        if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+        if(!_edDodgeBurnActive && typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
           const _flWCt2 = (_edTmp.watercolor?._canvas ? { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true } : null);
           if(_flWCt2){ _edWatercolorStroke(_flWCt2,fp.nx,fp.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null); edRedraw(); }
           else { edFloodFill(fp.nx, fp.ny); }
+        } else if(_edDodgeBurnActive){ edDodgeBurnStroke(fp.nx,fp.ny,null,null); edRedraw();
         } else { edFloodFill(fp.nx, fp.ny); }
       }
     }
@@ -8966,16 +8984,20 @@ function _edShapeUpdateUndoRedoBtns(){
 
 function _edDrawPushHistory(){
   const _snapTmp = (dl) => dl?._canvas ? dl._canvas.toDataURL() : null;
+  // Incluir DrawLayer real para restaurar cambios de dodge/burn
+  const _dlReal = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
   const snap = {
     pen:       _snapTmp(_edTmp.pen),
     pencil:    _snapTmp(_edTmp.pencil),
     watercolor:_snapTmp(_edTmp.watercolor),
     bucket:    _snapTmp(_edTmp.bucket),
+    drawLayer: _dlReal?._canvas ? _dlReal._canvas.toDataURL() : null,
   };
   if(edDrawHistoryIdx >= 0 && edDrawHistory.length > 0){
     const last = edDrawHistory[edDrawHistoryIdx];
     if(last.pen===snap.pen && last.pencil===snap.pencil &&
-       last.watercolor===snap.watercolor && last.bucket===snap.bucket) return;
+       last.watercolor===snap.watercolor && last.bucket===snap.bucket &&
+       last.drawLayer===snap.drawLayer) return;
   }
   edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
   edDrawHistory.push(snap);
@@ -8999,6 +9021,18 @@ function _edDrawApplyHistory(snapshot){
   _restoreTmp('pencil',     snapshot.pencil);
   _restoreTmp('watercolor', snapshot.watercolor);
   _restoreTmp('bucket',     snapshot.bucket);
+  // Restaurar DrawLayer real (afectado por dodge/burn)
+  if(snapshot.drawLayer !== undefined){
+    const _dlR = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
+    if(_dlR?._canvas){
+      _dlR._ctx.clearRect(0,0,_dlR._canvas.width,_dlR._canvas.height);
+      if(snapshot.drawLayer){
+        const _imgDl = new Image();
+        _imgDl.onload = () => { _dlR._ctx.drawImage(_imgDl,0,0); edRedraw(); };
+        _imgDl.src = snapshot.drawLayer;
+      }
+    }
+  }
   edRedraw();
 }
 function edDrawUndo(){
@@ -9029,16 +9063,15 @@ function _edDrawClearHistory(){
 }
 function _edDrawInitHistory(){
   const page = edPages[edCurrentPage]; if(!page) return;
-  const dl = page.layers.find(l => l.type === 'draw');
-  const fl = dl?._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
   // Crear canvases temporales para la sesión
   _edTmpCreate();
   _edTmp.active = 'pen';
   // Si hay contenido previo (edición de trazo existente), cargarlo en los temporales
   _edTmpLoadFromLayers();
-  edDrawHistory = [{ draw: dl ? dl.toDataUrlFull() : null, fill: fl ? fl.toDataUrlFull() : null }];
-  edDrawHistoryIdx = 0;
-  _edDrawUpdateUndoRedoBtns();
+  // Guardar punto inicial con el mismo formato que _edDrawPushHistory
+  edDrawHistory = [];
+  edDrawHistoryIdx = -1;
+  _edDrawPushHistory(); // primer punto = estado al abrir el editor
 }
 /* ══════════════════════════════════════════
    DIBUJO LIBRE  (DrawLayer)
@@ -9872,6 +9905,97 @@ function _edPenPressure(e) {
 let _wcOffscreen = null, _wcOffCtx = null;
 let _wcColor = '#000000';
 
+// ══════════════════════════════════════════
+//  DODGE / BURN  — iluminar u oscurecer píxeles en RGB puro
+//  Sin conversión HSL: escala canales hacia blanco (dodge) o hacia negro (burn)
+//  Preserva hue y saturación sin errores de redondeo
+// ══════════════════════════════════════════
+function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
+  const page = edPages[edCurrentPage]; if (!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
+  const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
+
+  // Canvases a afectar: temporales de acuarela y bote
+  const _dbTargets = [];
+  if (_edTmp.watercolor?._canvas) _dbTargets.push({canvas:_edTmp.watercolor._canvas, ctx:_edTmp.watercolor._ctx});
+  if (_edTmp.bucket?._canvas)     _dbTargets.push({canvas:_edTmp.bucket._canvas,     ctx:_edTmp.bucket._ctx});
+  if (fl?._canvas && _dbTargets.length === 0) _dbTargets.push({canvas:fl._canvas, ctx:fl._ctx});
+  if (_dbTargets.length === 0) return;
+
+  const canvas = _dbTargets[0].canvas;
+  const W = canvas.width, H = canvas.height;
+  const sign = edDodgeBurnSign; // +1 = iluminar, -1 = oscurecer
+
+  // Coordenadas workspace
+  const wx = edMarginX() + nx * edPageW();
+  const wy = edMarginY() + ny * edPageH();
+  const size = edDrawSize;
+  const blurPx = Math.max(2, size * 0.5);
+  const pad = Math.ceil(blurPx * 3);
+
+  // Bbox del segmento
+  const x0s = lastWx !== null ? Math.min(lastWx, wx) : wx;
+  const y0s = lastWy !== null ? Math.min(lastWy, wy) : wy;
+  const x1s = lastWx !== null ? Math.max(lastWx, wx) : wx;
+  const y1s = lastWy !== null ? Math.max(lastWy, wy) : wy;
+  const bx = Math.max(0, Math.floor(x0s - size / 2 - pad));
+  const by = Math.max(0, Math.floor(y0s - size / 2 - pad));
+  const bw = Math.min(W - bx, Math.ceil(x1s - x0s + size + pad * 2));
+  const bh = Math.min(H - by, Math.ceil(y1s - y0s + size + pad * 2));
+  if (bw <= 0 || bh <= 0) return;
+
+  // Máscara gaussiana del pincel
+  const seg = document.createElement('canvas');
+  seg.width = bw; seg.height = bh;
+  const sCtx = seg.getContext('2d');
+  sCtx.fillStyle = '#000';
+  sCtx.filter = `blur(${blurPx.toFixed(1)}px)`;
+  if (lastWx === null || lastWy === null) {
+    sCtx.beginPath();
+    sCtx.arc(wx - bx, wy - by, size / 2, 0, Math.PI * 2);
+    sCtx.fill();
+  } else {
+    sCtx.lineWidth = size; sCtx.lineCap = 'round'; sCtx.lineJoin = 'round';
+    sCtx.beginPath(); sCtx.moveTo(lastWx - bx, lastWy - by); sCtx.lineTo(wx - bx, wy - by);
+    sCtx.stroke();
+  }
+  sCtx.filter = 'none';
+  const maskData = sCtx.getImageData(0, 0, bw, bh).data;
+
+  // Factor de intensidad por pasada: ~6% hacia blanco o negro
+  // En RGB puro: dodge = r + (255-r)*f, burn = r*(1-f)
+  // No hay conversión HSL → sin desviación de tono
+  const factor = 0.06;
+
+  function _applyDodgeBurn(tgt) {
+    if (!tgt.canvas || tgt.canvas.width < bx + bw || tgt.canvas.height < by + bh) return;
+    const imgD = tgt.ctx.getImageData(bx, by, bw, bh);
+    const d = imgD.data;
+    for (let i = 0; i < bw * bh; i++) {
+      const pi = i * 4;
+      if (d[pi + 3] < 4) continue;           // píxel transparente
+      const maskA = maskData[pi + 3] / 255;   // intensidad gaussiana 0-1
+      if (maskA < 0.01) continue;
+      const f = factor * maskA;
+      if (sign > 0) {
+        // Dodge: acercar cada canal a 255 (blanco)
+        d[pi]     = Math.min(255, Math.round(d[pi]     + (255 - d[pi])     * f));
+        d[pi + 1] = Math.min(255, Math.round(d[pi + 1] + (255 - d[pi + 1]) * f));
+        d[pi + 2] = Math.min(255, Math.round(d[pi + 2] + (255 - d[pi + 2]) * f));
+      } else {
+        // Burn: acercar cada canal a 0 (negro)
+        d[pi]     = Math.max(0, Math.round(d[pi]     * (1 - f)));
+        d[pi + 1] = Math.max(0, Math.round(d[pi + 1] * (1 - f)));
+        d[pi + 2] = Math.max(0, Math.round(d[pi + 2] * (1 - f)));
+      }
+      // alpha sin tocar
+    }
+    tgt.ctx.putImageData(imgD, bx, by);
+  }
+  _dbTargets.forEach(_applyDodgeBurn);
+  return { wx, wy };
+}
+
 function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
   if(!fl || !fl._canvas) return null;
   const cw = fl._canvas.width, ch = fl._canvas.height;
@@ -9971,8 +10095,8 @@ function _edWatercolorCommit(fl, size, opacity){
 
 function edStartPaint(e){
   edPainting = true;
-  // Acuarela: intercept antes del sistema de DrawLayer
-  if(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor'){
+  // Acuarela: intercept antes del sistema de DrawLayer (no ejecutar si dodge activo)
+  if(!_edDodgeBurnActive && edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor'){
     // Asegurar que la capa activa sea watercolor
     _edTmp.active = 'watercolor';
     _edGetOrCreateDrawLayer(); // asegurar que existe DrawLayer/FillLayer
@@ -10059,8 +10183,17 @@ function edStartPaint(e){
 }
 function edContinuePaint(e){
   if(!edPainting) return;
+  // Dodge/burn en modo continuo (táctil con COF)
+  if(_edDodgeBurnActive && edActiveTool==='fill'){
+    const _eCOFdb = _cof.on ? { clientX: _cof.cursorX, clientY: _cof.cursorY, pointerType: e.pointerType } : e;
+    const _cDB2 = edCoords(_eCOFdb);
+    const _prevDB2 = window._edDbLast;
+    window._edDbLast = edDodgeBurnStroke(_cDB2.nx, _cDB2.ny,
+      _prevDB2 ? _prevDB2.wx : null, _prevDB2 ? _prevDB2.wy : null);
+    edRedraw(); return;
+  }
   // Acuarela: usar su propio sistema de trazo sobre el FillLayer
-  if(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor' && window._edWcFl){
+  if(!_edDodgeBurnActive && edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor' && window._edWcFl){
     const _eCOF = _cof.on ? { clientX: _cof.cursorX, clientY: _cof.cursorY, pointerType: e.pointerType } : e;
     const _cWC = edCoords(_eCOF);
     const _prev = window._edWcLast;
@@ -10068,8 +10201,7 @@ function edContinuePaint(e){
       window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
       _prev ? _prev.wx : null, _prev ? _prev.wy : null
     );
-    edRedraw(); // preview del offscreen durante el trazo
-    return;
+    edRedraw(); return;
   }
   // Máquina de estados de presión para lápiz gráfico
   if(e.pointerType === 'pen'){
@@ -10133,14 +10265,16 @@ function edSaveDrawData(){
   // Se usa force=true para evitar que la deduplicación por JSON descarte el push
   // (el FillLayer en workspace puede producir el mismo JSON aparente aunque
   //  el canvas haya cambiado, si toDataURL() es lento o el DrawLayer vacío lo iguala).
-  if(window._edWcFl){
-    // Limpiar offscreen de preview (el resultado ya está en el FillLayer)
+  if(_edDodgeBurnActive){
+    // Dodge/burn: solo guardar historial, no ejecutar commit de acuarela
+    window._edDbLast = undefined;
+    _edDrawPushHistory();
+  } else if(window._edWcFl){
+    // Acuarela: limpiar offscreen y guardar historial
     _edWatercolorCommit(window._edWcFl, edDrawSize, edDrawOpacity);
     window._edWcFl  = null;
     window._edWcLast = null;
     edRedraw();
-    // Usar historial local del panel de dibujo — preserva el DrawLayer activo
-    // y permite deshacer cada trazo de acuarela individualmente sin romper vínculos
     _edDrawPushHistory();
   } else {
     _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
@@ -11719,8 +11853,9 @@ function edRenderOptionsPanel(mode){
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
     ${!isEr ? `
     ${isPen ? `<button id="op-brush-pen" title="Estilógrafo" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edDrawBrushType==='pen'?'rgba(0,0,0,.12)':'transparent'};opacity:${edDrawBrushType==='pen'?1:0.4}">🖊</button><button id="op-brush-pencil" title="Lápiz" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edDrawBrushType==='pencil'?'rgba(0,0,0,.12)':'transparent'};opacity:${edDrawBrushType==='pencil'?1:0.4}">✏️</button>` : ''}
-    ${isFill ? `<button id="op-fill-bucket" title="Bote de pintura" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='bucket'?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='bucket'?1:0.4}">🪣</button><button id="op-fill-watercolor" title="Pincel acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='watercolor'?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='watercolor'?1:0.4}">🖌️</button>` : ''}` : ''}
+    ${isFill ? `<button id="op-fill-bucket" title="Bote de pintura" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='bucket'?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='bucket'?1:0.4}">🪣</button><button id="op-fill-watercolor" title="Pincel acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='watercolor'&&!_edDodgeBurnActive?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='watercolor'&&!_edDodgeBurnActive?1:0.4}">🖌️</button><button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:34px;height:26px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="Oscurecer (izq) / Iluminar (der)"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button>` : ''}` : ''}
     ${(!isFill || edFillBrushType === 'watercolor') ? `
+
     <button id="op-size-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
     <div id="op-size-slider"
@@ -11837,6 +11972,8 @@ function edRenderOptionsPanel(mode){
     $('op-tmp-wc')?.addEventListener('click',()=>{
       _activateTmpLayer('watercolor','fill',null,'watercolor', 7);
     });
+
+
     $('op-tmp-bucket')?.addEventListener('click',()=>{
       _activateTmpLayer('bucket','fill',null,'bucket',100);
     });
@@ -11844,12 +11981,14 @@ function edRenderOptionsPanel(mode){
       const _names = {pen:'Estilógrafo',pencil:'Lápiz',watercolor:'Acuarela',bucket:'Bote de pintura'};
       const _name = _names[_edTmp.active] || _edTmp.active;
       edConfirm('¿Borrar todo el contenido de la capa de ' + _name + '?', () => {
+        _edDrawPushHistory(); // guardar estado ANTES de borrar (permite deshacer)
         const _dlCl = _edTmp[_edTmp.active];
         if(_dlCl?._canvas) _dlCl._ctx.clearRect(0,0,_dlCl._canvas.width,_dlCl._canvas.height);
         _edDrawPushHistory(); edRedraw();
       }, 'Borrar');
     });
     $('op-tool-pen')?.addEventListener('click',()=>{
+      _edDodgeBurnActive = false;
       _edTmp.active='pen'; edDrawBrushType='pen';
       edActiveTool='draw'; edCanvas.className='tool-draw';
       edDrawOpacity = 100;
@@ -11866,26 +12005,47 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('draw');
     });
     $('op-tool-eraser')?.addEventListener('click',()=>{
+      _edDodgeBurnActive = false;
       _edWcReset();
       edActiveTool='eraser'; edCanvas.className='tool-eraser';
       edDrawOpacity = 100;
-      // borrador mantiene la capa activa actual
       edRenderOptionsPanel('eraser');
     });
     $('op-tool-fill')?.addEventListener('click',()=>{
+      _edDodgeBurnActive = false;
       _edTmp.active='bucket'; edFillBrushType='bucket';
       edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor();
       edRenderOptionsPanel('fill');
     });
     $('op-fill-watercolor')?.addEventListener('click', e => {
       e.stopPropagation();
+      _edDodgeBurnActive = false; // deseleccionar dodge si estaba activo
       _edTmp.active='watercolor'; edFillBrushType = 'watercolor';
       edDrawOpacity = 7;
       edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
       edRenderOptionsPanel('fill');
     });
+    // Icono dodge: un solo listener — sign por offsetX (hijos tienen pointer-events:none)
+    $('op-fill-dodge')?.addEventListener('click', e => {
+      e.stopPropagation();
+      const _btn = $('op-fill-dodge');
+      if (!_edDodgeBurnActive) {
+        // Primera activación
+        _edDodgeBurnActive = true;
+        _edTmp.active = 'watercolor'; edFillBrushType = 'watercolor';
+        edDrawOpacity = 7;
+        edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
+        edRenderOptionsPanel('fill');
+        return;
+      }
+      // Ya activo: izquierda = burn, derecha = dodge
+      const _half = _btn ? _btn.offsetWidth / 2 : 17;
+      edDodgeBurnSign = (e.offsetX < _half) ? -1 : 1;
+      _edUpdateDodgeIcon();
+    });
     $('op-fill-bucket')?.addEventListener('click', e => {
       e.stopPropagation();
+      _edDodgeBurnActive = false;
       _edTmp.active='bucket'; edFillBrushType = 'bucket';
       edDrawOpacity = 100;
       _edSyncFillCursor();
@@ -12329,6 +12489,9 @@ function edRenderOptionsPanel(mode){
       <div class="op-prop-row">
         <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
+      </div>
+      <div class="op-prop-row">
+        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎨 Editar relleno</button>
       </div>`;
     } else if(la.type==='gif' || (la.type==='image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames))) {
       // Animación — sin recorte, con botón de editar en GCP
@@ -12359,6 +12522,7 @@ function edRenderOptionsPanel(mode){
       html+=`
       <div class="op-prop-row">
         <button id="pp-edit-shape" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar objeto</button>
+        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎨 Editar relleno</button>
       </div>
       <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
@@ -12368,6 +12532,7 @@ function edRenderOptionsPanel(mode){
       html+=`
       <div class="op-prop-row">
         <button id="pp-edit-line" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar recta</button>
+        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎨 Editar relleno</button>
       </div>
       <div class="op-prop-row"><span class="op-prop-label">Polígono</span>
         <button id="pp-line-toggle-close" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px;font-weight:700;cursor:pointer">${la.closed?'Abrir':'Cerrar'}</button>
@@ -12520,6 +12685,88 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('draw');
       edRedraw();
     });
+    // ── Editar relleno: convierte el objeto en DrawLayer (pen=trazo, bucket=relleno) ──
+    $('pp-edit-fill')?.addEventListener('click', () => {
+      const page = edPages[edCurrentPage]; if (!page) return;
+      const la = edLayers[edSelectedIdx]; if (!la) return;
+      edPushHistory();
+
+      let dl = null;
+
+      if (la.type === 'stroke') {
+        // Reutilizar exactamente el mismo flujo que pp-edit-stroke
+        dl = la.toDrawLayer();
+        if (la._uid)        dl._uid        = la._uid;
+        if (la._fillLayerId) dl._fillLayerId = la._fillLayerId;
+        // Expandir FillLayer al canvas workspace
+        if (la._fillLayerId) {
+          const _flEdit = page.layers.find(f => f.type==='fill' && f._drawLayerId===la._fillLayerId);
+          if (_flEdit) {
+            _flEdit._srcCanvas = null; _flEdit._previewSx = null; _flEdit._previewSy = null;
+            const _fExp = document.createElement('canvas');
+            _fExp.width = ED_CANVAS_W; _fExp.height = ED_CANVAS_H;
+            try { _flEdit.draw(_fExp.getContext('2d')); } catch(e) {}
+            _flEdit._canvas = _fExp; _flEdit._ctx = _fExp.getContext('2d');
+            _flEdit._isWorkspaceCanvas = true;
+            _flEdit.x = 0.5; _flEdit.y = 0.5; _flEdit.width = 1; _flEdit.height = 1; _flEdit.rotation = 0;
+            _flEdit._drawLayerId = dl._uid || dl._fillLayerId;
+          }
+        }
+        page.layers.splice(edSelectedIdx, 1, dl);
+
+      } else if (la.type === 'shape' || la.type === 'line') {
+        // Bake del objeto vectorial en canvas workspace
+        const _bakeCanvas = document.createElement('canvas');
+        _bakeCanvas.width = ED_CANVAS_W; _bakeCanvas.height = ED_CANVAS_H;
+        const _bakeCtx = _bakeCanvas.getContext('2d');
+        // Dibujar solo el trazo (sin relleno) en el DrawLayer (pen)
+        const _laNoFill = Object.assign(Object.create(Object.getPrototypeOf(la)), la);
+        _laNoFill.fillColor = 'none';
+        _laNoFill.draw(_bakeCtx);
+        dl = new DrawLayer();
+        dl._ctx.drawImage(_bakeCanvas, 0, 0);
+        dl._uid = la._uid || ('dl_' + Date.now().toString(36));
+        dl._fillLayerId = dl._uid;
+        dl._fromStroke = true;
+        // Si tiene relleno, crear FillLayer con el relleno pintado
+        if (la.fillColor && la.fillColor !== 'none') {
+          const _fillCanvas = document.createElement('canvas');
+          _fillCanvas.width = ED_CANVAS_W; _fillCanvas.height = ED_CANVAS_H;
+          const _fillCtx = _fillCanvas.getContext('2d');
+          const _laFillOnly = Object.assign(Object.create(Object.getPrototypeOf(la)), la);
+          _laFillOnly.lineWidth = 0;
+          _laFillOnly.draw(_fillCtx);
+          const _fl = new FillLayer();
+          _fl._drawLayerId = dl._uid;
+          _fl._uid = 'fl_' + dl._uid;
+          _fl._canvas = _fillCanvas; _fl._ctx = _fillCanvas.getContext('2d');
+          _fl._isWorkspaceCanvas = true;
+          _fl.x = 0.5; _fl.y = 0.5; _fl.width = 1; _fl.height = 1; _fl.rotation = 0;
+          // Insertar FillLayer antes del DrawLayer
+          page.layers.splice(edSelectedIdx, 0, _fl);
+          // DrawLayer va después del FillLayer
+          page.layers.splice(edSelectedIdx + 1, 1, dl);
+        } else {
+          page.layers.splice(edSelectedIdx, 1, dl);
+        }
+      } else { return; }
+
+      edLayers = page.layers;
+      edSelectedIdx = -1;
+      edActiveTool = 'fill';
+      edCanvas.className = 'tool-fill';
+      const cur = $('edBrushCursor'); if (cur) cur.style.display = 'block';
+      _edDrawInitHistory();
+      _edDrawLockUI();
+      // Activar capa bote para que el foco esté en el relleno
+      _edTmp.active = 'bucket';
+      edFillBrushType = 'bucket';
+      edDrawOpacity = 100;
+      _edSyncFillCursor();
+      edRenderOptionsPanel('fill');
+      edRedraw();
+    });
+
     // Shape props — editar objeto abre submenú Objeto o Rectas (según _fusionId)
     $('pp-edit-shape')?.addEventListener('click',()=>{
       const _sla = edLayers[edSelectedIdx]; if(!_sla) return;
@@ -13270,6 +13517,8 @@ function edInitDrawBar() {
     pop.style.flexDirection = 'row';
     pop.style.minWidth = 'unset';
     items.forEach(item => {
+      // Soporte para elemento completamente personalizado
+      if (item.customEl) { pop.appendChild(item.customEl); return; }
       const btn = document.createElement('button');
       btn.style.cssText = [
         'display:flex;align-items:center;justify-content:center;border:none;border-radius:8px',
@@ -13413,10 +13662,51 @@ function edInitDrawBar() {
       $('op-tool-fill')?.click();
     }
     _edbOpenBrushPop($('edb-fill'), [
-      { icon:'🪣', label:'Bote de pintura', active: edFillBrushType==='bucket',
-        action:()=>{ edFillBrushType='bucket'; edDrawOpacity=100; _edSyncFillCursor(); _edbSyncTool(); } },
-      { icon:'🖌️', label:'Acuarela', active: edFillBrushType==='watercolor',
-        action:()=>{ edFillBrushType='watercolor'; edDrawOpacity=7; _edSyncFillCursor(); _edbSyncTool(); } }
+      { icon:'🪣', label:'Bote de pintura', active: edFillBrushType==='bucket' && !_edDodgeBurnActive,
+        action:()=>{ _edDodgeBurnActive=false; edFillBrushType='bucket'; edDrawOpacity=100; _edSyncFillCursor(); _edbSyncTool(); $('op-fill-bucket')?.click(); } },
+      { icon:'🖌️', label:'Acuarela', active: edFillBrushType==='watercolor' && !_edDodgeBurnActive,
+        action:()=>{ _edDodgeBurnActive=false; edFillBrushType='watercolor'; edDrawOpacity=7; _edSyncFillCursor(); _edbSyncTool(); $('op-fill-watercolor')?.click(); } },
+      (()=>{
+        // Elemento custom: icono bicolor lado a lado, llena el marco 44x44 del popover
+        const _wrap = document.createElement('div');
+        _wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;' +
+          'width:44px;height:44px;padding:5px;box-sizing:border-box;border-radius:8px;cursor:pointer;' +
+          (_edDodgeBurnActive ? 'background:rgba(255,255,255,.18);outline:2px solid rgba(255,255,255,0.7);outline-offset:-1px;' : '');
+        _wrap.title = 'Oscurecer / Iluminar';
+        const _inner = document.createElement('div');
+        _inner.style.cssText = 'display:flex;width:100%;height:100%;border-radius:5px;overflow:hidden;';
+        const _makeHalf = (sign, bg, fg, txt) => {
+          const h = document.createElement('button');
+          const isActive = _edDodgeBurnActive && edDodgeBurnSign === sign;
+          h.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;' +
+            'border:none;cursor:pointer;font-size:16px;font-weight:900;line-height:1;' +
+            'background:' + bg + ';color:' + fg + ';' +
+            (isActive ? 'outline:2px solid #f90;outline-offset:-2px;' : '');
+          h.textContent = txt;
+          h.addEventListener('pointerdown', e => { e.stopPropagation(); window._edbPopItemTouched = true; });
+          h.addEventListener('pointerup', e => {
+            e.stopPropagation();
+            _edbClearPhantomPointers();
+            const _pop = $('edb-brush-pop');
+            if (_pop) { _pop.style.display = 'none'; _pop._anchor = null; }
+            setTimeout(() => {
+              window._edbPopItemTouched = false;
+              _edDodgeBurnActive = true;
+              edDodgeBurnSign = sign;
+              _edTmp.active = 'watercolor'; edFillBrushType = 'watercolor';
+              edDrawOpacity = 7;
+              edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
+              _edbSyncTool();
+              edRenderOptionsPanel('fill');
+            }, 0);
+          });
+          return h;
+        };
+        _inner.appendChild(_makeHalf(-1, '#111', '#fff', '−'));
+        _inner.appendChild(_makeHalf( 1, '#fff', '#111', '+'));
+        _wrap.appendChild(_inner);
+        return { customEl: _wrap };
+      })()
     ]);
   });
 
@@ -13746,7 +14036,17 @@ function _edbSyncTool() {
   const penBtn = $('edb-pen');
   if (penBtn) penBtn.textContent = (typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') ? '✏️' : '🖊';
   const fillBtn = $('edb-fill');
-  if (fillBtn) fillBtn.textContent = (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor') ? '🖌️' : '🪣';
+  if (fillBtn) {
+    if (_edDodgeBurnActive) {
+      if (edDodgeBurnSign === -1) {
+        fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#111;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#fff;line-height:1">−</span></span>';
+      } else {
+        fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#fff;border:1px solid #888;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#111;line-height:1">+</span></span>';
+      }
+    } else {
+      fillBtn.textContent = (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor') ? '🖌️' : '🪣';
+    }
+  }
   $('edb-pen')?.classList.toggle('active', t === 'draw');
   $('edb-eraser')?.classList.toggle('active', t === 'eraser');
   $('edb-fill')?.classList.toggle('active', t === 'fill');
@@ -13800,6 +14100,25 @@ function _edbSyncColor() {
   _edRefreshOffsetCursor();
 }
 
+function _edUpdateDodgeIcon(){
+  const wrap = $('op-fill-dodge'); if(!wrap) return;
+  const spans = wrap.querySelectorAll('span > span');
+  const burnSpan  = spans[0];
+  const dodgeSpan = spans[1];
+  if(burnSpan)  burnSpan.style.outline  = (edDodgeBurnSign === -1) ? '2px solid #f90' : 'none';
+  if(dodgeSpan) dodgeSpan.style.outline = (edDodgeBurnSign ===  1) ? '2px solid #f90' : 'none';
+  wrap.style.borderColor = _edDodgeBurnActive ? 'var(--black)' : 'var(--gray-300)';
+  wrap.style.opacity = _edDodgeBurnActive ? '1' : '0.4';
+  // Actualizar también el botón de la barra flotante
+  const _fillBtn = $('edb-fill');
+  if (_fillBtn && _edDodgeBurnActive) {
+    if (edDodgeBurnSign === -1) {
+      _fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#111;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#fff;line-height:1">−</span></span>';
+    } else {
+      _fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#fff;border:1px solid #888;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#111;line-height:1">+</span></span>';
+    }
+  }
+}
 function _edUpdateDrawInfo() {
   const info = $('op-draw-info'); if (!info) return;
   const isEr = edActiveTool === 'eraser';
@@ -13972,7 +14291,12 @@ function edDrawBarShow(snapToCanvas) {
 function edDrawBarHide() {
   if (_edPanelIsCollapsed()) return;
   $('edDrawBar')?.classList.remove('visible');
+  // Cerrar todos los submenús flotantes de la barra
   _edbClosePalette();
+  const _bp = $('edb-brush-pop'); if (_bp) { _bp.style.display = 'none'; _bp._anchor = null; }
+  const _sp = $('edb-size-pop');  if (_sp) _sp.style.display = 'none';
+  const _op = $('edb-offset-pop'); if (_op) _op.style.display = 'none';
+  window._edbPopItemTouched = false;
   _edOffsetHide();
 }
 
