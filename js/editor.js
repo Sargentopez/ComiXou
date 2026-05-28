@@ -868,6 +868,73 @@ let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 
 let edDrawBrushType = 'pen';   // 'pen' = estilógrafo (actual) | 'pencil' = lápiz
 let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'watercolor' = pincel acuarela
 function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } }
+
+// ── Capas temporales de dibujo (sesión activa) ──────────────────
+// Cuatro canvases independientes, compositan al hacer OK.
+// _edTmp.active: 'pen'|'pencil'|'watercolor'|'bucket'
+let _edTmp = { pen:null, pencil:null, watercolor:null, bucket:null, active:'pen' };
+
+function _edTmpCreate() {
+  _edTmp.pen        = new DrawLayer();
+  _edTmp.pencil     = new DrawLayer();
+  _edTmp.watercolor = new DrawLayer();
+  _edTmp.bucket     = new DrawLayer();
+}
+
+function _edTmpDestroy() {
+  _edTmp.pen=null; _edTmp.pencil=null; _edTmp.watercolor=null; _edTmp.bucket=null;
+}
+
+// Canvas activo según herramienta
+function _edTmpCanvas() {
+  const dl = _edTmp[_edTmp.active] || _edTmp.pen;
+  return dl ? dl._canvas : null;
+}
+function _edTmpCtx() {
+  const dl = _edTmp[_edTmp.active] || _edTmp.pen;
+  return dl ? dl._ctx : null;
+}
+
+// DrawLayer activo (objeto real)
+function _edTmpProxy() {
+  return _edTmp[_edTmp.active] || _edTmp.pen;
+}
+
+// Compositar las 4 capas temporales sobre DrawLayer/FillLayer reales
+// Orden: bucket → watercolor → pencil → pen
+function _edTmpComposite() {
+  const page = edPages[edCurrentPage]; if (!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
+  const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
+
+  // FillLayer: bucket (abajo, source-over primero) + watercolor (encima, source-over después)
+  if (fl) {
+    const fCtx = fl._ctx;
+    if (_edTmp.bucket?._canvas)    { fCtx.drawImage(_edTmp.bucket._canvas,    0, 0); }
+    if (_edTmp.watercolor?._canvas){ fCtx.drawImage(_edTmp.watercolor._canvas, 0, 0); }
+  }
+  // DrawLayer: pencil (abajo) + pen (encima)
+  const dCtx = dl._ctx;
+  if (_edTmp.pencil?._canvas){ dCtx.drawImage(_edTmp.pencil._canvas, 0, 0); }
+  if (_edTmp.pen?._canvas)   { dCtx.drawImage(_edTmp.pen._canvas,    0, 0); }
+}
+
+// Cargar DrawLayer/FillLayer existentes en los canvases temporales al entrar a editar
+function _edTmpLoadFromLayers() {
+  const page = edPages[edCurrentPage]; if (!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
+  const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
+  // DrawLayer real → pen (perdemos distinción pen/pencil: todo va a pen)
+  if (dl._canvas && _edTmp.pen) {
+    _edTmp.pen._ctx.drawImage(dl._canvas, 0, 0);
+    dl._ctx.clearRect(0, 0, dl._canvas.width, dl._canvas.height);
+  }
+  // FillLayer real → bucket (perdemos distinción bucket/watercolor: todo va a bucket)
+  if (fl && fl._canvas && _edTmp.bucket) {
+    _edTmp.bucket._ctx.drawImage(fl._canvas, 0, 0);
+    fl._ctx.clearRect(0, 0, fl._canvas.width, fl._canvas.height);
+  }
+}
 // Cursor desplazado (T18): el trazado se aplica 1cm más arriba del toque real
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
@@ -3666,8 +3733,8 @@ function edRedraw(){
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
     if(_editingDraw && l.type==='draw') return; // en modo draw, el draw va al final
-    // En modo fill: el fill vinculado va al final (encima del draw) para ver el efecto
-    if(_editingDraw && _edDrawLayerTarget==='fill' && l.type==='fill' && _linkedFill && l===_linkedFill) return;
+    // En modo draw: el fill vinculado al DrawLayer activo se pinta como capa temporal
+    if(_editingDraw && l.type==='fill' && _linkedFill && l===_linkedFill) return;
     if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='fill'){
@@ -3704,20 +3771,19 @@ function edRedraw(){
     l.draw(edCtx, edCanvas);
   });
   edCtx.globalAlpha = 1;
-  // En modo draw: DrawLayer al final, encima de shapes/textos dimeados
+  // En modo draw: renderizar capas temporales en orden bucket→watercolor→pencil→pen
   if(_editingDraw){
-    const _dl = edLayers.find(l => l.type==='draw');
-    if(_dl) _dl.draw(edCtx);
-    // Si la capa activa es el relleno, renderizar el fill encima del DrawLayer
-    // para que el pincel y el borrador sobre el fill sean visibles
-    if(_edDrawLayerTarget === 'fill' && _dl?._fillLayerId){
-      const _flTop = edLayers.find(l => l.type==='fill' && l._drawLayerId===_dl._fillLayerId);
-      if(_flTop){
-        edCtx.globalAlpha = _flTop.opacity ?? 1;
-        _flTop.draw(edCtx);
-        edCtx.globalAlpha = 1;
-      }
-    }
+    // Capas temporales en orden composición (el FillLayer/DrawLayer reales están vacíos)
+    const _drawTmp = (dl, alpha) => {
+      if(!dl?._canvas) return;
+      edCtx.globalAlpha = alpha ?? 1;
+      edCtx.drawImage(dl._canvas, 0, 0);
+      edCtx.globalAlpha = 1;
+    };
+    _drawTmp(_edTmp.bucket,    1);
+    _drawTmp(_edTmp.watercolor,1);
+    _drawTmp(_edTmp.pencil,    1);
+    _drawTmp(_edTmp.pen,       1);
   }
   edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
@@ -6773,13 +6839,15 @@ function edOnStart(e){
     // Mouse/pen: ejecutar inmediatamente
     const c = edCoords(e);
     if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
-      const _dlWC = _edGetOrCreateDrawLayer();
-      const _flWC = _dlWC ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWC._fillLayerId) : null;
+      _edGetOrCreateDrawLayer(); // asegurar que existen las capas reales
+      const _flWC = (_edTmp.watercolor?._canvas ? { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true } : null);
       if(_flWC){
         edPainting = true;
         if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
         window._edWcFl = _flWC;
         window._edWcLast = _edWatercolorStroke(_flWC, c.nx, c.ny, edDrawColor, edDrawSize, edDrawOpacity, null, null);
+        // Sincronizar _edWcFl con el temporal si está activo
+        if(_edTmp.watercolor?._canvas) window._edWcFl = { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true };
         edRedraw(); return;
       }
     }
@@ -8367,16 +8435,14 @@ function edOnEnd(e){
           edPushHistory(); edRedraw();
         } else {
           if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
-            const _dlWCt = _edGetOrCreateDrawLayer();
-            const _flWCt = _dlWCt ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCt._fillLayerId) : null;
+            const _flWCt = (_edTmp.watercolor?._canvas ? { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true } : null);
             if(_flWCt){ _edWatercolorStroke(_flWCt,fp.nx,fp.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null); edRedraw(); }
             else { edFloodFill(fp.nx, fp.ny); }
           } else { edFloodFill(fp.nx, fp.ny); }
         }
       } else {
         if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
-          const _dlWCt2 = _edGetOrCreateDrawLayer();
-          const _flWCt2 = _dlWCt2 ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCt2._fillLayerId) : null;
+          const _flWCt2 = (_edTmp.watercolor?._canvas ? { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true } : null);
           if(_flWCt2){ _edWatercolorStroke(_flWCt2,fp.nx,fp.ny,edDrawColor,edDrawSize,edDrawOpacity,null,null); edRedraw(); }
           else { edFloodFill(fp.nx, fp.ny); }
         } else { edFloodFill(fp.nx, fp.ny); }
@@ -8899,54 +8965,41 @@ function _edShapeUpdateUndoRedoBtns(){
 }
 
 function _edDrawPushHistory(){
-  const page = edPages[edCurrentPage]; if(!page) return;
-  const dl = page.layers.find(l => l.type === 'draw'); if(!dl) return;
-  const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
+  const _snapTmp = (dl) => dl?._canvas ? dl._canvas.toDataURL() : null;
+  const snap = {
+    pen:       _snapTmp(_edTmp.pen),
+    pencil:    _snapTmp(_edTmp.pencil),
+    watercolor:_snapTmp(_edTmp.watercolor),
+    bucket:    _snapTmp(_edTmp.bucket),
+  };
+  if(edDrawHistoryIdx >= 0 && edDrawHistory.length > 0){
+    const last = edDrawHistory[edDrawHistoryIdx];
+    if(last.pen===snap.pen && last.pencil===snap.pencil &&
+       last.watercolor===snap.watercolor && last.bucket===snap.bucket) return;
+  }
   edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
-  edDrawHistory.push({ draw: dl.toDataUrlFull(), fill: fl ? fl.toDataUrlFull() : null });
+  edDrawHistory.push(snap);
   if(edDrawHistory.length > ED_MAX_DRAW_HISTORY) edDrawHistory.shift();
   edDrawHistoryIdx = edDrawHistory.length - 1;
   _edDrawUpdateUndoRedoBtns();
 }
 function _edDrawApplyHistory(snapshot){
-  const page = edPages[edCurrentPage]; if(!page) return;
-  // Compatibilidad: snapshot puede ser string (historial antiguo) u objeto {draw,fill}
-  const drawUrl = typeof snapshot === 'string' ? snapshot : snapshot?.draw;
-  const fillUrl = typeof snapshot === 'object' ? snapshot?.fill : null;
-  let dl = page.layers.find(l => l.type === 'draw');
-  if(!dl){
-    dl = new DrawLayer();
-    const firstTextIdx = page.layers.findIndex(l => l.type==='text' || l.type==='bubble');
-    if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, dl);
-    else page.layers.push(dl);
-    edLayers = page.layers;
-  }
-  // Restaurar DrawLayer
-  dl.clear();
-  if(drawUrl){
-    const img = new Image();
-    img.onload = () => { dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H); edRedraw(); };
-    img.src = drawUrl;
-  }
-  // Restaurar FillLayer
-  const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
-  if(fl){
-    fl.clear();
-    if(fillUrl){
-      const fimg = new Image();
-      fimg.onload = () => {
-        // SF: el canvas del fill es pw×ph (tamaño de página) — restaurar a ese tamaño
-        const _fw = fl._canvas.width, _fh = fl._canvas.height;
-        fl._ctx.drawImage(fimg, 0, 0, _fw, _fh);
-        edRedraw();
-      };
-      fimg.src = fillUrl;
-    } else {
-      edRedraw();
+  if(!snapshot) return;
+  const _restoreTmp = (key, url) => {
+    const dl = _edTmp[key]; if(!dl?._canvas) return;
+    const c = dl._canvas; const ctx = dl._ctx;
+    ctx.clearRect(0, 0, c.width, c.height);
+    if(url){
+      const img = new Image();
+      img.onload = () => { ctx.drawImage(img, 0, 0); edRedraw(); };
+      img.src = url;
     }
-  } else if(!drawUrl){
-    edRedraw();
-  }
+  };
+  _restoreTmp('pen',        snapshot.pen);
+  _restoreTmp('pencil',     snapshot.pencil);
+  _restoreTmp('watercolor', snapshot.watercolor);
+  _restoreTmp('bucket',     snapshot.bucket);
+  edRedraw();
 }
 function edDrawUndo(){
   if(edDrawHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
@@ -8972,11 +9025,17 @@ function _edDrawUpdateUndoRedoBtns(){
 function _edDrawClearHistory(){
   edDrawHistory = []; edDrawHistoryIdx = -1;
   _edDrawUpdateUndoRedoBtns();
+  _edTmpDestroy();
 }
 function _edDrawInitHistory(){
   const page = edPages[edCurrentPage]; if(!page) return;
   const dl = page.layers.find(l => l.type === 'draw');
   const fl = dl?._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
+  // Crear canvases temporales para la sesión
+  _edTmpCreate();
+  _edTmp.active = 'pen';
+  // Si hay contenido previo (edición de trazo existente), cargarlo en los temporales
+  _edTmpLoadFromLayers();
   edDrawHistory = [{ draw: dl ? dl.toDataUrlFull() : null, fill: fl ? fl.toDataUrlFull() : null }];
   edDrawHistoryIdx = 0;
   _edDrawUpdateUndoRedoBtns();
@@ -9183,12 +9242,17 @@ function edFloodFill(nx, ny){
   const _compRef = document.createElement('canvas');
   _compRef.width = fw; _compRef.height = fh;
   const _compCtx = _compRef.getContext('2d');
-  const _flFillRef = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
-  if (_flFillRef) {
-    // Renderizar el fill en coords workspace usando su draw() (translate+rotate+drawImage)
-    _flFillRef.draw(_compCtx);
+  // En sesión con capas temporales: componer todos los canvases como referencia
+  if (_edTmp.bucket?._canvas)    _compCtx.drawImage(_edTmp.bucket._canvas,     0, 0);
+  if (_edTmp.watercolor?._canvas)_compCtx.drawImage(_edTmp.watercolor._canvas, 0, 0);
+  if (_edTmp.pencil?._canvas)    _compCtx.drawImage(_edTmp.pencil._canvas,     0, 0);
+  if (_edTmp.pen?._canvas)       _compCtx.drawImage(_edTmp.pen._canvas,        0, 0);
+  // Si no hay temporales, usar el FillLayer/DrawLayer reales (compatibilidad)
+  if (!_edTmp.bucket && !_edTmp.pen) {
+    const _flFillRef = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
+    if (_flFillRef) _flFillRef.draw(_compCtx);
+    _compCtx.drawImage(dl._canvas, x0, y0, fw, fh, 0, 0, fw, fh);
   }
-  _compCtx.drawImage(dl._canvas, x0, y0, fw, fh, 0, 0, fw, fh);
   const origImageData = _compCtx.getImageData(0, 0, fw, fh);
   const orig = origImageData.data;
 
@@ -9286,23 +9350,36 @@ function edFloodFill(nx, ny){
     }
   }
 
-  // Escribir el resultado en el FillLayer vinculado (no en el DrawLayer)
-  const _flFill = page.layers.find(l => l.type==='fill' && l._drawLayerId === dl._fillLayerId);
-  if (_flFill) {
-    const _flW = _flFill._canvas.width, _flH = _flFill._canvas.height;
-    const _flPrev = _flFill._ctx.getImageData(0, 0, _flW, _flH);
-    const _flPrevD = _flPrev.data;
+  // Escribir resultado en _edTmp.bucket (capa temporal del bote) si existe
+  const _ffDest = _edTmp.bucket;
+  if (_ffDest?._canvas) {
+    const _ffCtx = _ffDest._ctx;
+    const _ffPrev = _ffCtx.getImageData(0, 0, fw, fh);
+    const _ffPrevD = _ffPrev.data;
     for (let _fi = 0; _fi < fw * fh; _fi++) {
       if (!filled[_fi]) continue;
-      const _wsx = x0 + (_fi % fw), _wsy = y0 + Math.floor(_fi / fw);
-      if (_wsx < 0 || _wsy < 0 || _wsx >= _flW || _wsy >= _flH) continue;
-      const _pi = (_wsy * _flW + _wsx) * 4;
-      _flPrevD[_pi]=fR; _flPrevD[_pi+1]=fG; _flPrevD[_pi+2]=fB; _flPrevD[_pi+3]=fA;
+      const _pi = _fi * 4;
+      _ffPrevD[_pi]=fR; _ffPrevD[_pi+1]=fG; _ffPrevD[_pi+2]=fB; _ffPrevD[_pi+3]=fA;
     }
-    _flFill._ctx.putImageData(_flPrev, 0, 0);
+    _ffCtx.putImageData(_ffPrev, 0, 0);
   } else {
-    // Fallback: escribir en DrawLayer (compatibilidad si no hay FillLayer)
-    ctx.putImageData(resultImageData, x0, y0);
+    // Fallback: escribir en FillLayer real (fuera de sesión de dibujo)
+    const _flFill = page.layers.find(l => l.type==='fill' && l._drawLayerId === dl._fillLayerId);
+    if (_flFill) {
+      const _flW = _flFill._canvas.width, _flH = _flFill._canvas.height;
+      const _flPrev = _flFill._ctx.getImageData(0, 0, _flW, _flH);
+      const _flPrevD = _flPrev.data;
+      for (let _fi = 0; _fi < fw * fh; _fi++) {
+        if (!filled[_fi]) continue;
+        const _wsx = x0 + (_fi % fw), _wsy = y0 + Math.floor(_fi / fw);
+        if (_wsx < 0 || _wsy < 0 || _wsx >= _flW || _wsy >= _flH) continue;
+        const _pi = (_wsy * _flW + _wsx) * 4;
+        _flPrevD[_pi]=fR; _flPrevD[_pi+1]=fG; _flPrevD[_pi+2]=fB; _flPrevD[_pi+3]=fA;
+      }
+      _flFill._ctx.putImageData(_flPrev, 0, 0);
+    } else {
+      ctx.putImageData(resultImageData, x0, y0);
+    }
   }
   // Guardar en historial del panel DESPUÉS del relleno — así cada entrada
   // representa el estado resultante y deshacer restaura el estado anterior.
@@ -9896,16 +9973,19 @@ function edStartPaint(e){
   edPainting = true;
   // Acuarela: intercept antes del sistema de DrawLayer
   if(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor'){
-    const _dlWCS = _edGetOrCreateDrawLayer();
-    const _flWCS = _dlWCS ? edPages[edCurrentPage]?.layers.find(l=>l.type==='fill'&&l._drawLayerId===_dlWCS._fillLayerId) : null;
-    if(_flWCS){
+    // Asegurar que la capa activa sea watercolor
+    _edTmp.active = 'watercolor';
+    _edGetOrCreateDrawLayer(); // asegurar que existe DrawLayer/FillLayer
+    // Crear FillLayer-like proxy sobre el canvas temporal de acuarela
+    const _wcDl = _edTmp.watercolor;
+    if(_wcDl?._canvas){
       if(e.pointerId !== undefined && edCanvas){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
-      window._edWcFl = _flWCS;
-      // Usar coords del cursor desplazado si _cof está activo
+      const _flProxy = { _canvas: _wcDl._canvas, _ctx: _wcDl._ctx, _isWorkspaceCanvas: true };
+      window._edWcFl = _flProxy;
       const _eWCS = (_cof.on && _cof._strokeStarted)
         ? { clientX: _cof.cursorX, clientY: _cof.cursorY } : e;
       const _cWCS = edCoords(_eWCS);
-      window._edWcLast = _edWatercolorStroke(_flWCS, _cWCS.nx, _cWCS.ny, edDrawColor, edDrawSize, edDrawOpacity, null, null);
+      window._edWcLast = _edWatercolorStroke(_flProxy, _cWCS.nx, _cWCS.ny, edDrawColor, edDrawSize, edDrawOpacity, null, null);
       edRedraw();
       return;
     }
@@ -9925,17 +10005,19 @@ function edStartPaint(e){
   if(edMultiSel.length){ _msClear(); edActiveTool='draw'; edCanvas.className='tool-draw'; }
   // Limpiar sesión vectorial si quedó activa (evita que BLOCKED_VS bloquee edPushHistory)
   if(_vsHistory.length > 0){ _edShapeClearHistory(); _vsClear(); }
-  const _dlBase = _edGetOrCreateDrawLayer(); if(!_dlBase) return;
-  let dl;
-  if (_edDrawLayerTarget === 'fill' && _dlBase._fillLayerId) {
-    const _pageB = edPages[edCurrentPage];
-    const _fl = _pageB?.layers.find(l => l.type==='fill' && l._drawLayerId===_dlBase._fillLayerId);
-    window._edFillProxy = _fl ? _edFillDrawProxy(_fl, {x:0.5,y:0.5,width:1,height:1,rotation:0}) : null;
-    dl = window._edFillProxy || _dlBase;
+  _edGetOrCreateDrawLayer(); // asegurar DrawLayer/FillLayer reales existen
+  // Seleccionar capa temporal según herramienta activa
+  if (edActiveTool === 'fill') {
+    _edTmp.active = 'bucket';
+  } else if (edActiveTool === 'eraser') {
+    // Borrador: mantiene la capa activa actual
+  } else if (typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') {
+    _edTmp.active = 'pencil';
   } else {
-    window._edFillProxy = null;
-    dl = _dlBase;
+    _edTmp.active = 'pen';
   }
+  window._edFillProxy = null;
+  const dl = _edTmpProxy(); if(!dl) return;
   const _eTmp = _edApplyCursorOffset(e);
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   const er = edActiveTool==='eraser';
@@ -10011,11 +10093,7 @@ function edContinuePaint(e){
       return;
     }
   }
-  const page = edPages[edCurrentPage]; if(!page) return;
-  const _dlCont = page.layers.find(l => l.type === 'draw'); if(!_dlCont) return;
-  const dl = (_edDrawLayerTarget === 'fill' && window._edFillProxy)
-    ? window._edFillProxy
-    : _dlCont;
+  const dl = _edTmpProxy(); if(!dl) return;
   if(_edFromSaved){ _edFromSaved = false; edMoveBrush(e); return; }
   const _eTmp = _edApplyCursorOffset(e);
   const c = edCoords(_eTmp), er = edActiveTool==='eraser';
@@ -11177,6 +11255,10 @@ function _edFreezeDrawLayer(){
 
   if(dlIdx < 0) return;
   const dl = page.layers[dlIdx];
+  // Compositar las 4 capas temporales sobre DrawLayer/FillLayer antes de congelar
+  if(_edTmp.pen || _edTmp.pencil || _edTmp.watercolor || _edTmp.bucket){
+    _edTmpComposite();
+  }
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){
@@ -11619,7 +11701,7 @@ function edRenderOptionsPanel(mode){
     };
     panel.innerHTML=`
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-layer-draw" style="flex-shrink:0;border:2px solid ${_edDrawLayerTarget==='draw'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:${_edDrawLayerTarget==='draw'?'var(--black)':'transparent'};color:${_edDrawLayerTarget==='draw'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Capa de dibujo</button><button id="op-layer-fill" style="flex-shrink:0;border:2px solid ${_edDrawLayerTarget==='fill'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:${_edDrawLayerTarget==='fill'?'var(--black)':'transparent'};color:${_edDrawLayerTarget==='fill'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Capa de relleno</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 9px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑 Borrar capa</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
+  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-tmp-pen" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pen'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pen'?'var(--black)':'transparent'};color:${_edTmp.active==='pen'?'var(--white)':'var(--gray-600)'};white-space:nowrap">✒ Estiló</button><button id="op-tmp-pencil" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pencil'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pencil'?'var(--black)':'transparent'};color:${_edTmp.active==='pencil'?'var(--white)':'var(--gray-600)'};white-space:nowrap">✏ Lápiz</button><button id="op-tmp-wc" style="flex-shrink:0;border:2px solid ${_edTmp.active==='watercolor'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='watercolor'?'var(--black)':'transparent'};color:${_edTmp.active==='watercolor'?'var(--white)':'var(--gray-600)'};white-space:nowrap">💧 Acuarela</button><button id="op-tmp-bucket" style="flex-shrink:0;border:2px solid ${_edTmp.active==='bucket'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='bucket'?'var(--black)':'transparent'};color:${_edTmp.active==='bucket'?'var(--white)':'var(--gray-600)'};white-space:nowrap">🪣 Bote</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     <button id="op-tool-pen"
       style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isPen?'rgba(0,0,0,.08)':'transparent'};color:${isPen?'var(--black)':'var(--gray-600)'}">Dibujar</button>
@@ -11725,91 +11807,87 @@ function edRenderOptionsPanel(mode){
 
     // ── Herramientas ──
     // ── Selector de capa destino ──
-    $('op-layer-draw')?.addEventListener('click',()=>{
-      _edWcReset();
-      _edDrawLayerTarget='draw';
-      edRenderOptionsPanel(edActiveTool==='eraser'?'eraser':edActiveTool==='fill'?'fill':'draw');
-    });
-    $('op-layer-fill')?.addEventListener('click',()=>{
-      if (edActiveTool === 'draw') {
-        // El pincel normalmente trabaja sobre la capa de dibujo — pedir confirmación
-        edConfirm('¿Quieres usar el pincel en la capa de relleno?', () => {
-          _edDrawLayerTarget = 'fill';
-          window._edKeepFillTarget = true; // preservar 'fill' en el re-render del panel
-          edRenderOptionsPanel('draw');
-        }, 'Sí');
-      } else {
-        _edDrawLayerTarget='fill';
-        edRenderOptionsPanel(edActiveTool==='eraser'?'eraser':edActiveTool==='fill'?'fill':'draw');
+    // ── Selectores de capa temporal ──
+    const _activateTmpLayer = (key, toolActive, brushType, fillType, opacity) => {
+      _edTmp.active = key;
+      if(toolActive === 'draw'){
+        edActiveTool='draw'; edCanvas.className='tool-draw';
+        if(brushType) edDrawBrushType = brushType;
+        edDrawOpacity = 100; // siempre 100% salvo acuarela
+      } else if(toolActive === 'fill'){
+        edActiveTool='fill';
+        if(fillType) edFillBrushType = fillType;
+        // acuarela: restaurar su opacidad guardada; resto: 100%
+        if(fillType === 'watercolor'){
+          if(opacity !== undefined) edDrawOpacity = opacity;
+        } else {
+          edDrawOpacity = 100;
+        }
+        _edSyncFillCursor();
+        edCanvas.className = 'tool-fill' + (edFillBrushType==='watercolor'?' tool-watercolor':'');
       }
+      edRenderOptionsPanel('draw');
+    };
+    $('op-tmp-pen')?.addEventListener('click',()=>{
+      _activateTmpLayer('pen','draw','pen');
+    });
+    $('op-tmp-pencil')?.addEventListener('click',()=>{
+      _activateTmpLayer('pencil','draw','pencil');
+    });
+    $('op-tmp-wc')?.addEventListener('click',()=>{
+      _activateTmpLayer('watercolor','fill',null,'watercolor', 7);
+    });
+    $('op-tmp-bucket')?.addEventListener('click',()=>{
+      _activateTmpLayer('bucket','fill',null,'bucket',100);
     });
     $('op-layer-clear')?.addEventListener('click',()=>{
-      const _layerName = _edDrawLayerTarget === 'fill' ? 'la capa de relleno' : 'la capa de dibujo';
-      edConfirm('¿Borrar todo el contenido de ' + _layerName + '?', () => {
-        const _page = edPages[edCurrentPage]; if(!_page) return;
-        const _dl = _page.layers.find(l => l.type === 'draw');
-        if (_edDrawLayerTarget === 'fill') {
-          const _fl = _dl?._fillLayerId
-            ? _page.layers.find(l => l.type === 'fill' && l._drawLayerId === _dl._fillLayerId)
-            : null;
-          if (_fl && _fl._canvas) {
-            _fl._ctx.clearRect(0, 0, _fl._canvas.width, _fl._canvas.height);
-          }
-        } else {
-          if (_dl && _dl._canvas) {
-            _dl._ctx.clearRect(0, 0, _dl._canvas.width, _dl._canvas.height);
-            _dl.points = [];
-          }
-        }
-        _edDrawPushHistory(); // guardar después del borrado
-        edPushHistory(); edRedraw();
+      const _names = {pen:'Estilógrafo',pencil:'Lápiz',watercolor:'Acuarela',bucket:'Bote de pintura'};
+      const _name = _names[_edTmp.active] || _edTmp.active;
+      edConfirm('¿Borrar todo el contenido de la capa de ' + _name + '?', () => {
+        const _dlCl = _edTmp[_edTmp.active];
+        if(_dlCl?._canvas) _dlCl._ctx.clearRect(0,0,_dlCl._canvas.width,_dlCl._canvas.height);
+        _edDrawPushHistory(); edRedraw();
       }, 'Borrar');
     });
     $('op-tool-pen')?.addEventListener('click',()=>{
-      _edWcReset();
-      if (_edDrawLayerTarget === 'fill') {
-        // Ya estaba en capa de relleno — confirmar antes de cambiar herramienta
-        edConfirm('¿Quieres usar el pincel en la capa de relleno?', () => {
-          edActiveTool='draw'; edCanvas.className='tool-draw';
-          window._edKeepFillTarget = true;
-          edRenderOptionsPanel('draw');
-        }, 'Sí');
-      } else {
-        edActiveTool='draw'; edCanvas.className='tool-draw';
-        edRenderOptionsPanel('draw');
-      }
+      _edTmp.active='pen'; edDrawBrushType='pen';
+      edActiveTool='draw'; edCanvas.className='tool-draw';
+      edDrawOpacity = 100;
+      edRenderOptionsPanel('draw');
     });
     $('op-brush-pen')?.addEventListener('click', () => {
-      edDrawBrushType = 'pen';
+      _edTmp.active='pen'; edDrawBrushType = 'pen';
+      edDrawOpacity = 100;
       edRenderOptionsPanel('draw');
     });
     $('op-brush-pencil')?.addEventListener('click', () => {
-      edDrawBrushType = 'pencil';
+      _edTmp.active='pencil'; edDrawBrushType = 'pencil';
+      edDrawOpacity = 100;
       edRenderOptionsPanel('draw');
     });
     $('op-tool-eraser')?.addEventListener('click',()=>{
       _edWcReset();
       edActiveTool='eraser'; edCanvas.className='tool-eraser';
+      edDrawOpacity = 100;
       // borrador mantiene la capa activa actual
       edRenderOptionsPanel('eraser');
     });
     $('op-tool-fill')?.addEventListener('click',()=>{
-      edActiveTool='fill'; edCanvas.className='tool-fill';
-      _edDrawLayerTarget='fill'; // relleno → siempre capa de relleno
+      _edTmp.active='bucket'; edFillBrushType='bucket';
+      edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor();
       edRenderOptionsPanel('fill');
     });
     $('op-fill-watercolor')?.addEventListener('click', e => {
       e.stopPropagation();
-      edFillBrushType = 'watercolor';
-      edDrawOpacity = 7; // opacidad por defecto de la acuarela
+      _edTmp.active='watercolor'; edFillBrushType = 'watercolor';
+      edDrawOpacity = 7;
       edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
-      _edDrawLayerTarget = 'fill';
       edRenderOptionsPanel('fill');
     });
     $('op-fill-bucket')?.addEventListener('click', e => {
       e.stopPropagation();
-      edFillBrushType = 'bucket';
-      edDrawOpacity = 100; // restaurar opacidad completa al volver al bote
+      _edTmp.active='bucket'; edFillBrushType = 'bucket';
+      edDrawOpacity = 100;
       _edSyncFillCursor();
       edRenderOptionsPanel('fill');
     });
