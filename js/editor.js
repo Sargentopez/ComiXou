@@ -2893,6 +2893,18 @@ function edPushHistory(force){
   // Autosave diferido — no bloquear el flujo de historia
   clearTimeout(window._edAutosavePushTimer);
   window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 5000);
+  // Durante una sesión de dibujo a mano (panel draw abierto), bloquear push global
+  // excepto force=true (congelar el resultado final con _edFreezeDrawLayer).
+  // Los estados intermedios (trazos, flood fill, mirror durante draw) solo van
+  // al historial local del panel (_edDrawHistory).
+  if(!force){
+    const _dpanel = $('edOptionsPanel');
+    if(_dpanel && _dpanel.classList.contains('open') && _dpanel.dataset.mode === 'draw'){
+      window._edHistDiag = window._edHistDiag||[];
+      window._edHistDiag.push('BLOCKED_DRAW_PANEL');
+      return;
+    }
+  }
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
