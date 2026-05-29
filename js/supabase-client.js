@@ -438,29 +438,28 @@ const SupabaseClient = (() => {
               if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
             } catch(e) { console.warn('GIF upload error:', e.message); }
           }
-          // FillLayer: el layer es un objeto plano JSON (no instancia de FillLayer)
-          // dataUrl ya está serializado en el objeto (toDataUrl fue llamado al guardar)
-          if (l.type === 'fill') {
-            const _flData = {
-              type: 'fill',
-              dataUrl: l.dataUrl || null,
+          // FillLayer, PencilLayer, WatercolorLayer: instancias de clase con canvas
+          // Serializar mediante toDataUrl() para obtener el dataUrl correcto
+          if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') {
+            const _groupData = {
+              type: l.type,
+              dataUrl: (typeof l.toDataUrl === 'function') ? l.toDataUrl() : (l.dataUrl || null),
               _drawLayerId: l._drawLayerId || null,
               _uid: l._uid || null,
               hidden: l.hidden || false,
               opacity: l.opacity,
-              // SF: propiedades de posición/tamaño/rotación (nuevo sistema)
+              // Propiedades de posición/tamaño/rotación
               x:        l.x        != null ? l.x        : 0.5,
               y:        l.y        != null ? l.y        : 0.5,
               width:    l.width    != null ? l.width    : 1.0,
               height:   l.height   != null ? l.height   : 1.0,
               rotation: l.rotation != null ? l.rotation : 0,
-              // _isFull:true para que edDeserLayer SF lo reconozca como nuevo formato
+              // _isFull:true para que edDeserLayer lo reconozca como nuevo formato
               _isFull: true,
             };
-            // No comprimir fills — su dataUrl PNG ya es binario comprimido internamente.
-            // La compresión gzip sobre base64 PNG no mejora el tamaño y puede fallar.
-            const _ld = JSON.stringify(_flData);
-            layerRows.push({ panel_id: panelId, layer_order: j, layer_type: 'fill', layer_data: _ld, gif_url: null, anim_url: null });
+            // No comprimir: el dataUrl PNG ya es binario comprimido internamente
+            const _ld = JSON.stringify(_groupData);
+            layerRows.push({ panel_id: panelId, layer_order: j, layer_type: l.type, layer_data: _ld, gif_url: null, anim_url: null });
             continue; // siguiente capa
           }
 

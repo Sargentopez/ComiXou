@@ -1227,7 +1227,8 @@ async function preloadImages() {
       if (!src) return Promise.resolve(null);
       const needsImg = layer.renderDataUrl ||
         layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
-        layer.type === 'line' || layer.type === 'shape' || layer.type === 'fill';
+        layer.type === 'line' || layer.type === 'shape' || layer.type === 'fill' ||
+        layer.type === 'pencil' || layer.type === 'watercolor';
       if (!needsImg) return Promise.resolve(null);
       return new Promise(resolve => {
         const img = new Image();
@@ -1824,7 +1825,7 @@ function _render() {
       ctx.restore();
       return;
     }
-    if (type === 'fill') {
+    if (type === 'fill' || type === 'pencil' || type === 'watercolor') {
       const img = layerImgs[j];
       if (!img) return;
       ctx.save();

@@ -251,13 +251,45 @@ function _pgDrawThumb(canvas, page) {
   const _textLayers = page.layers.filter(l => l.type === 'text' || l.type === 'bubble');
   const _textAlpha  = page.textLayerOpacity ?? 1;
 
+  // Helper: dibuja sub-capa (fill/pencil/watercolor) respetando posición, tamaño y opacidad
+  const _drawGroupLayer = (la) => {
+    if (!la || !la._canvas || la._canvas.width === 0) return;
+    const _src = (la._previewSx != null && la._srcCanvas) ? la._srcCanvas : la._canvas;
+    const _lpx = edMarginX() + la.x * pw;
+    const _lpy = edMarginY() + la.y * ph;
+    const _lw  = la.width  * pw;
+    const _lh  = la.height * ph;
+    offCtx.save();
+    offCtx.globalAlpha = la.opacity ?? 1;
+    offCtx.translate(_lpx, _lpy);
+    if (la.rotation) offCtx.rotate(la.rotation * Math.PI / 180);
+    offCtx.drawImage(_src, -_lw/2, -_lh/2, _lw, _lh);
+    offCtx.restore();
+    offCtx.globalAlpha = 1;
+  };
+
   page.layers.forEach(l => {
     if (!l || l.type === 'text' || l.type === 'bubble') return;
     if (l.type === 'gif')              l.draw(offCtx);
     else if (l.type === 'image')        l.draw(offCtx, off);
-    else if (l.type === 'draw')         l.draw(offCtx);
-    else if (l.type === 'fill')         l.draw(offCtx); // igual que _lyBuildFillSubRow
-    else if (l.type === 'stroke') {     offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+    else if (l.type === 'draw') {
+      // Sub-capas vinculadas (fill → watercolor → pencil) + el propio draw
+      const _uid = l._uid || l._fillLayerId;
+      ['fill', 'watercolor', 'pencil'].forEach(_t => {
+        const _lnk = _uid ? page.layers.find(f => f.type === _t && f._drawLayerId === _uid) : null;
+        if (_lnk) _drawGroupLayer(_lnk);
+      });
+      l.draw(offCtx);
+    }
+    else if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') return; // renderizadas desde su stroke/draw
+    else if (l.type === 'stroke') {
+      const _uid = l._uid || l._fillLayerId;
+      ['fill', 'watercolor', 'pencil'].forEach(_t => {
+        const _lnk = _uid ? page.layers.find(f => f.type === _t && f._drawLayerId === _uid) : null;
+        if (_lnk) _drawGroupLayer(_lnk);
+      });
+      offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1;
+    }
     else if (l.type === 'shape' || l.type === 'line') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
     else if (l.type === 'group') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
   });

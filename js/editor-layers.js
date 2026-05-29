@@ -257,6 +257,7 @@ function _lyRender() {
   const visualPairs = edLayers
     .map((l,i)=>({l,i}))
     .filter(({l})=>l.type==='image'||l.type==='gif'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line'||l.type==='fill');
+  // pencil y watercolor se muestran como sub-filas, no como items principales
 
   if (visualPairs.length === 0) {
     const e = document.createElement('p');
@@ -266,16 +267,19 @@ function _lyRender() {
   } else {
     // El primero del array edLayers aparece el último en la lista (más abajo visualmente)
     [...visualPairs].reverse().forEach(({l, i}) => {
-      if (l.type === 'fill') return; // los FillLayer se renderizan como sub-fila del DrawLayer
+      if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') return; // sub-filas
       const item = _lyBuildVisualItem(l, i, i === edSelectedIdx);
       list.appendChild(item);
-      // Si este DrawLayer tiene un FillLayer vinculado, añadirlo como sub-fila
-      // Sub-fila de relleno para DrawLayer Y StrokeLayer vinculados
-      if ((l.type === 'draw' || l.type === 'stroke') && l._fillLayerId) {
-        const flPair = edLayers.find(la => la.type==='fill' && la._drawLayerId===l._fillLayerId);
-        if (flPair) {
-          const flIdx = edLayers.indexOf(flPair);
-          list.appendChild(_lyBuildFillSubRow(flPair, flIdx));
+      // Sub-filas para capas vinculadas: fill, watercolor, pencil
+      if ((l.type === 'draw' || l.type === 'stroke')) {
+        const _lyUid = l._uid || l._fillLayerId;
+        if (_lyUid) {
+          const _lyFlPair = edLayers.find(la => la.type==='fill'       && la._drawLayerId===_lyUid);
+          const _lyPencil = edLayers.find(la => la.type==='pencil'     && la._drawLayerId===_lyUid);
+          const _lyWc     = edLayers.find(la => la.type==='watercolor' && la._drawLayerId===_lyUid);
+          if (_lyFlPair) list.appendChild(_lyBuildGroupSubRow(_lyFlPair, edLayers.indexOf(_lyFlPair), '🧪 Relleno',   '#93c5fd'));
+          if (_lyWc)     list.appendChild(_lyBuildGroupSubRow(_lyWc,     edLayers.indexOf(_lyWc),     '💧 Acuarela',  '#6ee7b7'));
+          if (_lyPencil) list.appendChild(_lyBuildGroupSubRow(_lyPencil, edLayers.indexOf(_lyPencil), '✏️ Lápiz',     '#c4b5fd'));
         }
       }
     });
@@ -303,8 +307,89 @@ function _lyBuildEyeBtn(la) {
    FILA DE TEXTO/BOCADILLO
 ────────────────────────────────────────── */
 
-/* -- Sub-fila del FillLayer en el panel de capas -- */
+/* -- Sub-fila genérica para capas del grupo (fill/pencil/watercolor) en el panel de capas -- */
+function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
+  const row = document.createElement('div');
+  row.className = 'ed-layer-item';
+  row.style.cssText = 'margin-left:18px;border-style:dashed;border-color:'+borderColor+';opacity:'+(la.hidden?'0.45':'1')+';';
+  row.dataset.realIdx = realIdx;
+
+  // Miniatura
+  const thumb = document.createElement('canvas');
+  thumb.className = 'ed-layer-thumb';
+  thumb.width = 80; thumb.height = 60;
+  const tctx = thumb.getContext('2d');
+  tctx.fillStyle = '#f0f8ff';
+  tctx.fillRect(0, 0, 80, 60);
+  if (la._canvas && la._canvas.width > 0) {
+    const pw = (typeof edPageW==='function')?edPageW():800;
+    const ph = (typeof edPageH==='function')?edPageH():1100;
+    const mx = (typeof edMarginX==='function')?edMarginX():0;
+    const my = (typeof edMarginY==='function')?edMarginY():0;
+    const scX = 80 / pw, scY = 60 / ph;
+    tctx.save();
+    tctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    if (typeof la.draw === 'function') la.draw(tctx);
+    tctx.restore();
+  }
+  tctx.strokeStyle = borderColor; tctx.lineWidth = 2;
+  tctx.setLineDash([4,3]); tctx.strokeRect(1,1,78,58); tctx.setLineDash([]);
+  row.appendChild(thumb);
+
+  const info = document.createElement('div');
+  info.className = 'ed-layer-info';
+  const name = document.createElement('span');
+  name.className = 'ed-layer-name';
+  name.textContent = label;
+  info.appendChild(name); row.appendChild(info);
+
+  const acts = document.createElement('div');
+  acts.className = 'ed-layer-actions';
+
+  const eyeBtn = document.createElement('button');
+  eyeBtn.className = 'ed-layer-del';
+  eyeBtn.textContent = '👁';
+  eyeBtn.style.opacity = la.hidden ? '0.4' : '';
+  eyeBtn.title = la.hidden ? 'Mostrar' : 'Ocultar';
+  eyeBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    la.hidden = !la.hidden;
+    edRedraw(); _lyRender();
+  });
+  acts.appendChild(eyeBtn);
+
+  const clrBtn = document.createElement('button');
+  clrBtn.className = 'ed-layer-del';
+  clrBtn.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
+  clrBtn.title = 'Eliminar esta sub-capa';
+  clrBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    edConfirm('¿Eliminar esta sub-capa?', () => {
+      const _flIdx = edLayers.indexOf(la);
+      if (_flIdx >= 0) edLayers.splice(_flIdx, 1);
+      const _pair = edLayers.find(l => l._uid && (l._fillLayerId===la._drawLayerId ||
+                                                    l._pencilLayerId===la._drawLayerId ||
+                                                    l._watercolorLayerId===la._drawLayerId));
+      if (_pair) {
+        if (la.type==='fill')       delete _pair._fillLayerId;
+        if (la.type==='pencil')     delete _pair._pencilLayerId;
+        if (la.type==='watercolor') delete _pair._watercolorLayerId;
+      }
+      edPushHistory(); edRedraw(); _lyRender();
+    });
+  });
+  acts.appendChild(clrBtn);
+  row.appendChild(acts);
+  return row;
+}
+
+/* -- Sub-fila del FillLayer en el panel de capas (alias por compatibilidad) -- */
 function _lyBuildFillSubRow(la, realIdx) {
+  return _lyBuildGroupSubRow(la, realIdx, '🧪 Relleno', '#93c5fd');
+}
+
+/* -- Sub-fila real (conservada por si se usa desde algún otro lugar) -- */
+function _lyBuildFillSubRowOld(la, realIdx) {
   const row = document.createElement('div');
   row.className = 'ed-layer-item';
   row.style.cssText = 'margin-left:18px;border-style:dashed;border-color:#93c5fd;opacity:'+(la.hidden?'0.45':'1')+';';
@@ -699,9 +784,13 @@ function _lyDrawStrokeThumb(canvas, la) {
     ctx.save();
     ctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
     // Primero el fill vinculado (si existe)
-    const _flS = (typeof edLayers !== 'undefined' && la._fillLayerId)
-      ? edLayers.find(f => f && f.type==='fill' && f._drawLayerId===la._fillLayerId) : null;
-    if (_flS && typeof _flS.draw === 'function') _flS.draw(ctx);
+    const _thumbUid = la._uid || la._fillLayerId;
+    const _flS      = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='fill'       && f._drawLayerId===_thumbUid) : null;
+    const _wcS      = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='watercolor' && f._drawLayerId===_thumbUid) : null;
+    const _pencilS  = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='pencil'     && f._drawLayerId===_thumbUid) : null;
+    if (_flS     && typeof _flS.draw     === 'function') _flS.draw(ctx);
+    if (_wcS     && typeof _wcS.draw     === 'function') _wcS.draw(ctx);
+    if (_pencilS && typeof _pencilS.draw === 'function') _pencilS.draw(ctx);
     // Luego el stroke encima
     if (typeof la.draw === 'function') la.draw(ctx);
     ctx.restore();
@@ -711,10 +800,14 @@ function _lyDrawStrokeThumb(canvas, la) {
     const scX = tw / pw, scY = th / ph;
     ctx.save();
     ctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
-    // Fill vinculado al DrawLayer
-    const _flD = (typeof edLayers !== 'undefined' && la._fillLayerId)
-      ? edLayers.find(f => f && f.type==='fill' && f._drawLayerId===la._fillLayerId) : null;
-    if (_flD && typeof _flD.draw === 'function') _flD.draw(ctx);
+    // Capas vinculadas al DrawLayer (en orden de render)
+    const _thumbDlUid = la._uid || la._fillLayerId;
+    const _flD     = (typeof edLayers !== 'undefined' && _thumbDlUid) ? edLayers.find(f => f && f.type==='fill'       && f._drawLayerId===_thumbDlUid) : null;
+    const _wcD     = (typeof edLayers !== 'undefined' && _thumbDlUid) ? edLayers.find(f => f && f.type==='watercolor' && f._drawLayerId===_thumbDlUid) : null;
+    const _pencilD = (typeof edLayers !== 'undefined' && _thumbDlUid) ? edLayers.find(f => f && f.type==='pencil'     && f._drawLayerId===_thumbDlUid) : null;
+    if (_flD     && typeof _flD.draw     === 'function') _flD.draw(ctx);
+    if (_wcD     && typeof _wcD.draw     === 'function') _wcD.draw(ctx);
+    if (_pencilD && typeof _pencilD.draw === 'function') _pencilD.draw(ctx);
     la.draw(ctx);
     ctx.restore();
   } else {
@@ -1109,25 +1202,27 @@ function _lyReorderTexts(fromRealIdx, toRealIdx) {
 function _lyReorderLayers(fromRealIdx, toRealIdx) {
   const _moved = edLayers[fromRealIdx];
   _lyAnimatedReorder(_moved, () => {
-    // Si la capa tiene FillLayer vinculado, moverlos juntos
-    const _fl = _moved._fillLayerId
-      ? edLayers.find(l => l.type==='fill' && l._drawLayerId===_moved._fillLayerId)
-      : null;
-    const _flIdx = _fl ? edLayers.indexOf(_fl) : -1;
-    // Quitar ambas capas (de mayor a menor índice para no desplazar)
-    const _removeIdxs = [fromRealIdx, _flIdx].filter(i=>i>=0).sort((a,b)=>b-a);
+    // Recoger todas las capas del grupo vinculadas (fill, pencil, watercolor)
+    const _uid = _moved._uid || _moved._fillLayerId;
+    const _groupLayers = _uid ? edLayers.filter(l =>
+      l !== _moved &&
+      (l.type==='fill' || l.type==='pencil' || l.type==='watercolor') &&
+      l._drawLayerId === _uid
+    ) : [];
+    // Quitar la capa principal + grupo (de mayor a menor índice para no desplazar)
+    const _removeIdxs = [fromRealIdx, ..._groupLayers.map(l=>edLayers.indexOf(l))]
+      .filter(i=>i>=0).sort((a,b)=>b-a);
     _removeIdxs.forEach(i => edLayers.splice(i, 1));
     // Calcular destino ajustado
     const _removed = _removeIdxs.length;
     const _toAdj = Math.max(0, toRealIdx - (fromRealIdx < toRealIdx ? _removed : 0));
-    // Reinsertar: FillLayer debajo del stroke (primero fill, luego stroke)
-    if (_fl) {
-      edLayers.splice(_toAdj, 0, _fl, _moved);
-      if (edSelectedIdx === fromRealIdx) edSelectedIdx = _toAdj + 1;
-    } else {
-      edLayers.splice(_toAdj, 0, _moved);
-      if (edSelectedIdx === fromRealIdx) edSelectedIdx = _toAdj;
-    }
+    // Reinsertar en orden: fill → watercolor → pencil → stroke
+    const _fl     = _groupLayers.find(l=>l.type==='fill');
+    const _wc     = _groupLayers.find(l=>l.type==='watercolor');
+    const _pencil = _groupLayers.find(l=>l.type==='pencil');
+    const _toInsert = [_fl, _wc, _pencil, _moved].filter(Boolean);
+    edLayers.splice(_toAdj, 0, ..._toInsert);
+    if (edSelectedIdx === fromRealIdx) edSelectedIdx = _toAdj + _toInsert.length - 1;
     edPushHistory(); edRedraw();
   });
 }
