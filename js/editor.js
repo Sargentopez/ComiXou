@@ -3029,6 +3029,8 @@ function edApplyHistory(snapshot){
       if(o.locked) l.locked=true;
       if(o._uid) l._uid=o._uid;
       if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
+      if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
+      if(o._watercolorLayerId) l._watercolorLayerId=o._watercolorLayerId;
       return l;
     }
     else if(o.type === 'shape') {
@@ -3096,6 +3098,42 @@ function edApplyHistory(snapshot){
         }));
       }
       return fl;
+    }
+    else if(o.type === 'pencil' || o.type === 'watercolor') {
+      const _LayerCls = o.type === 'pencil' ? PencilLayer : WatercolorLayer;
+      const _gl = new _LayerCls();
+      if(o._drawLayerId) _gl._drawLayerId = o._drawLayerId;
+      if(o._uid) _gl._uid = o._uid;
+      if(o.hidden) _gl.hidden = o.hidden;
+      if(o.opacity !== undefined) _gl.opacity = o.opacity;
+      if(o.x != null) { _gl.x=o.x; _gl.y=o.y; _gl.width=o.width||1; _gl.height=o.height||1; _gl.rotation=o.rotation||0; }
+      if(o.dataUrl) {
+        const _wasWS = o._isWorkspaceCanvas === true;
+        if (_wasWS) {
+          _gl._canvas.width  = ED_CANVAS_W;
+          _gl._canvas.height = ED_CANVAS_H;
+          _gl._ctx = _gl._canvas.getContext('2d');
+          _gl._isWorkspaceCanvas = true;
+          _gl.x=0.5; _gl.y=0.5; _gl.width=1; _gl.height=1; _gl.rotation=0;
+        } else {
+          const _isV = (edPages[snapshot.pageIdx]?.orientation||edOrientation)==='vertical';
+          const _rpw = _isV ? ED_PAGE_W : ED_PAGE_H;
+          const _rph = _isV ? ED_PAGE_H : ED_PAGE_W;
+          const _rw = Math.max(1, Math.round((o.width||1) * _rpw));
+          const _rh = Math.max(1, Math.round((o.height||1) * _rph));
+          _gl._canvas.width  = _rw;
+          _gl._canvas.height = _rh;
+          _gl._ctx = _gl._canvas.getContext('2d');
+          _gl._isWorkspaceCanvas = false;
+        }
+        imgPromises.push(new Promise(res => {
+          const _gi = new Image();
+          _gi.onload = () => { _gl._ctx.clearRect(0,0,_gl._canvas.width,_gl._canvas.height); _gl._ctx.drawImage(_gi,0,0,_gl._canvas.width,_gl._canvas.height); res(); };
+          _gi.onerror = () => res();
+          _gi.src = o.dataUrl;
+        }));
+      }
+      return _gl;
     }
     else if(o.type === 'group') return null; // obsoleto
     else if(o.type === 'gif') {
