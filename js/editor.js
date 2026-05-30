@@ -2893,17 +2893,12 @@ function edPushHistory(force){
   // Autosave diferido — no bloquear el flujo de historia
   clearTimeout(window._edAutosavePushTimer);
   window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 5000);
-  // Durante una sesión de dibujo a mano (panel draw abierto), bloquear push global
-  // excepto force=true (congelar el resultado final con _edFreezeDrawLayer).
-  // Los estados intermedios (trazos, flood fill, mirror durante draw) solo van
-  // al historial local del panel (_edDrawHistory).
-  if(!force){
-    const _dpanel = $('edOptionsPanel');
-    if(_dpanel && _dpanel.classList.contains('open') && _dpanel.dataset.mode === 'draw'){
-      window._edHistDiag = window._edHistDiag||[];
-      window._edHistDiag.push('BLOCKED_DRAW_PANEL');
-      return;
-    }
+  // Durante una sesión de dibujo a mano activa, bloquear push global (salvo force=true).
+  // La flag _edDrawSessionActive se activa en _edDrawInitHistory y se desactiva al congelar.
+  if(!force && window._edDrawSessionActive){
+    window._edHistDiag = window._edHistDiag||[];
+    window._edHistDiag.push('BLOCKED_DRAW_SESSION');
+    return;
   }
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
@@ -2942,7 +2937,7 @@ function edUndo(){
   const _prevSnap = edHistory[edHistoryIdx - 1];
   if(!_prevSnap || !_prevSnap.layersJSON) { edToast('Nada que deshacer'); return; }
   const _prevLayers = JSON.parse(_prevSnap.layersJSON);
-  if(!_prevLayers.length && edLayers.length > 0) { edToast('Nada que deshacer'); return; }
+  // No bloquear deshacer a estado vacío — es válido (canvas antes del primer objeto)
   edHistoryIdx--;
   edApplyHistory(edHistory[edHistoryIdx]);
 }
@@ -8674,7 +8669,7 @@ function edOnEnd(e){
     edRubberBand=null;
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
       const _found=[];
-      edLayers.forEach((la,i)=>{ if(!la.hidden && la.type!=='fill' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
+      edLayers.forEach((la,i)=>{ if(!la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
       if(_found.length===1){
         // Un solo objeto → selección normal (sin abrir panel; doble tap lo abre)
         edSelectedIdx=_found[0];
@@ -8706,7 +8701,8 @@ function edOnEnd(e){
         edLayers.forEach((la,i)=>{
           // Los objetos bloqueados se incluyen — solo se impide moverlos
           // Los objetos ocultos se excluyen — no son seleccionables
-          if(!la.hidden && la.type!=='fill' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
+          // Las sub-capas fill/pencil/watercolor no son seleccionables independientemente
+          if(!la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
         });
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
@@ -9254,6 +9250,7 @@ function _edDrawUpdateUndoRedoBtns(){
 }
 function _edDrawClearHistory(){
   edDrawHistory = []; edDrawHistoryIdx = -1;
+  window._edDrawSessionActive = false; // fin de sesión — desbloquear edPushHistory
   _edDrawUpdateUndoRedoBtns();
   _edTmpDestroy();
 }
@@ -9267,6 +9264,7 @@ function _edDrawInitHistory(){
   // Guardar punto inicial con el mismo formato que _edDrawPushHistory
   edDrawHistory = [];
   edDrawHistoryIdx = -1;
+  window._edDrawSessionActive = true; // bloquear edPushHistory durante la sesión
   _edDrawPushHistory(); // primer punto = estado al abrir el editor
 }
 /* ══════════════════════════════════════════
@@ -11622,6 +11620,7 @@ function _edFreezeAllDrawLayers(){
   }
   _edDrawClearHistory();
   edSelectedIdx = -1;
+  window._edDrawSessionActive = false; // permitir edPushHistory de nuevo
   edPushHistory(true); // force: resultado del recorte siempre se guarda
 }
 
@@ -11799,6 +11798,7 @@ function _edFreezeDrawLayer(){
   edLayers = page.layers;
   edSelectedIdx = page.layers.indexOf(sl);
   // Registrar el resultado final (StrokeLayer) en el historial global.
+  window._edDrawSessionActive = false; // permitir edPushHistory de nuevo
   edPushHistory(true); // force: el resultado del dibujo siempre se guarda
   edRedraw();
 }
@@ -12583,12 +12583,56 @@ function edRenderOptionsPanel(mode){
         const idxs = _edGroupMemberIdxs(gid);
         const newGid = _edNewGroupId();
         edPushHistory();
-        const copies = idxs.map(i=>{
-          const copy = edDeserLayer(edSerLayer(edLayers[i]));
-          if(copy){ copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03; }
-          return copy;
-        }).filter(Boolean);
-        copies.forEach(c=>edLayers.push(c));
+        const copies = [];
+        // Rastrear qué _uid ya se procesaron para no duplicar sub-capas dos veces
+        const _processedUids = new Set();
+        idxs.forEach(i=>{
+          const la = edLayers[i]; if(!la) return;
+          const _uid = la._uid || la._fillLayerId;
+          // Si es stroke con sub-capas, duplicar el grupo completo
+          if(la.type === 'stroke' && _uid && !_processedUids.has(_uid)){
+            _processedUids.add(_uid);
+            const _npid = Date.now().toString(36)+Math.random().toString(36).slice(2,5)+'_'+i;
+            // Clonar stroke
+            const slCopy = edDeserLayer(edSerLayer(la));
+            if(!slCopy) return;
+            slCopy.groupId = newGid;
+            slCopy.x += 0.03; slCopy.y += 0.03;
+            slCopy._uid = _npid;
+            // Función helper para clonar sub-capa
+            function _cloneGrpSub(type, LayerClass, prefix){
+              const orig = edLayers.find(l=>l.type===type&&l._drawLayerId===_uid);
+              if(!orig) return null;
+              const cl = new LayerClass();
+              cl._drawLayerId = _npid;
+              cl._uid = prefix + _npid;
+              cl.x = slCopy.x; cl.y = slCopy.y;
+              cl.width = orig.width; cl.height = orig.height;
+              cl.rotation = orig.rotation||0;
+              cl.opacity = orig.opacity??1;
+              cl.hidden = orig.hidden||false;
+              const w = orig._canvas.width, h = orig._canvas.height;
+              cl._canvas.width = w; cl._canvas.height = h;
+              cl._ctx = cl._canvas.getContext('2d');
+              cl._ctx.drawImage(orig._canvas, 0, 0);
+              return cl;
+            }
+            const flCopy = _cloneGrpSub('fill', FillLayer, 'fl_');
+            const plCopy = _cloneGrpSub('pencil', PencilLayer, 'pencil_');
+            const wlCopy = _cloneGrpSub('watercolor', WatercolorLayer, 'wc_');
+            if(flCopy){ slCopy._fillLayerId = _npid; copies.push(flCopy); }
+            if(plCopy){ slCopy._pencilLayerId = _npid; copies.push(plCopy); }
+            if(wlCopy){ slCopy._watercolorLayerId = _npid; copies.push(wlCopy); }
+            copies.push(slCopy);
+          } else if(la.type !== 'fill' && la.type !== 'pencil' && la.type !== 'watercolor'){
+            // Otros tipos sin sub-capas (image, shape, line, text, bubble)
+            const copy = edDeserLayer(edSerLayer(la));
+            if(copy){ copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03; }
+            copies.push(copy);
+          }
+          // fill/pencil/watercolor: se procesan junto con su stroke — ignorar aquí
+        });
+        copies.filter(Boolean).forEach(c=>edLayers.push(c));
         edPushHistory(); edRedraw();
         edToast('Grupo duplicado ✓');
       });
@@ -12597,15 +12641,66 @@ function edRenderOptionsPanel(mode){
         const idxs = _edGroupMemberIdxs(gid);
         if(!idxs.length) return;
         edPushHistory();
-        // Centro horizontal del grupo = promedio de los centros de los miembros
-        const gcx = idxs.reduce((s,i)=>s+(edLayers[i].x||0), 0) / idxs.length;
-        // Aplicar simetría a cada miembro
-        idxs.forEach(i=>{
+        const _pg = edPages[edCurrentPage];
+        // Centro horizontal: solo miembros principales (no sub-capas fill/pencil/watercolor)
+        const _mainIdxs = idxs.filter(i=>{
+          const t = edLayers[i]?.type;
+          return t && t!=='fill' && t!=='pencil' && t!=='watercolor';
+        });
+        if(!_mainIdxs.length) return;
+        const gcx = _mainIdxs.reduce((s,i)=>s+(edLayers[i].x||0),0) / _mainIdxs.length;
+
+        // Helper: crear canvas reflejado horizontalmente
+        function _mirrorCanvas(src){
+          const c=document.createElement('canvas');
+          c.width=src.width; c.height=src.height;
+          const ctx=c.getContext('2d');
+          ctx.translate(c.width,0); ctx.scale(-1,1); ctx.drawImage(src,0,0);
+          ctx.setTransform(1,0,0,1,0,0);
+          return c;
+        }
+
+        _mainIdxs.forEach(i=>{
           const m = edLayers[i]; if(!m) return;
-          // Reflejar posición respecto al eje central del grupo
-          m.x = 2*gcx - m.x;
-          // Aplicar simetría interna del objeto (misma lógica que edMirrorSelected)
-          if(m.type==='image'){
+          const newX = 2*gcx - m.x;
+
+          if(m.type==='stroke'){
+            // Crear StrokeLayer nuevo limpio (mismo patrón que edMirrorSelected individual)
+            const _uid = m._uid || m._fillLayerId;
+            const _mIdx = _pg.layers.indexOf(m);
+            const _nc = _mirrorCanvas(m._canvas);
+            const _newSl = new StrokeLayer(_nc, edPageW(), edPageH());
+            _newSl._canvas=_nc; _newSl._ctx=_nc.getContext('2d');
+            _newSl.x=newX; _newSl.y=m.y;
+            _newSl.width=m.width; _newSl.height=m.height;
+            _newSl.rotation=-(m.rotation||0);
+            _newSl.opacity=m.opacity??1; _newSl.hidden=m.hidden||false;
+            _newSl._uid=m._uid; _newSl.groupId=m.groupId; _newSl.locked=m.locked||false;
+            _newSl._fillLayerId=m._fillLayerId;
+            _newSl._pencilLayerId=m._pencilLayerId;
+            _newSl._watercolorLayerId=m._watercolorLayerId;
+            if(_mIdx>=0) _pg.layers.splice(_mIdx,1,_newSl);
+            // Sub-capas: objetos nuevos limpios
+            if(_uid){
+              for(const _st of ['fill','pencil','watercolor']){
+                const _LC=_st==='pencil'?PencilLayer:(_st==='watercolor'?WatercolorLayer:FillLayer);
+                const _lnk=_pg.layers.find(l=>l.type===_st&&l._drawLayerId===_uid);
+                if(!_lnk||!_lnk._canvas||_lnk._canvas.width===0) continue;
+                const _mc=_mirrorCanvas(_lnk._canvas);
+                const _n=new _LC();
+                _n._canvas=_mc; _n._ctx=_mc.getContext('2d');
+                _n.x=newX; _n.y=_lnk.y;
+                _n.width=_lnk.width; _n.height=_lnk.height;
+                _n.rotation=_newSl.rotation;
+                _n.opacity=_lnk.opacity??1; _n.hidden=_lnk.hidden||false;
+                _n._drawLayerId=_lnk._drawLayerId; _n._uid=_lnk._uid;
+                _n._isWorkspaceCanvas=false;
+                const _li=_pg.layers.indexOf(_lnk);
+                if(_li>=0) _pg.layers.splice(_li,1,_n);
+              }
+            }
+          } else if(m.type==='image'){
+            m.x=newX;
             const img=m.img; if(!img) return;
             const tmp=document.createElement('canvas');
             tmp.width=img.naturalWidth||img.width; tmp.height=img.naturalHeight||img.height;
@@ -12614,43 +12709,34 @@ function edRenderOptionsPanel(mode){
             const mi=new Image();
             mi.onload=()=>{ m.img=mi; m.rotation=-(m.rotation||0); edRedraw(); };
             mi.src=tmp.toDataURL();
-          } else if(m.type==='stroke'){
-            const c=document.createElement('canvas');
-            c.width=m._canvas.width; c.height=m._canvas.height;
-            const cctx=c.getContext('2d');
-            cctx.translate(c.width,0); cctx.scale(-1,1); cctx.drawImage(m._canvas,0,0);
-            m._canvas=c; m._ctx=c.getContext('2d');
-            m.rotation=-(m.rotation||0);
-          } else if(m.type==='draw'){
-            const pw=edPageW(), ph=edPageH();
-            const axisPx=edMarginX()+gcx*pw;
-            const tmp=document.createElement('canvas');
-            tmp.width=ED_CANVAS_W; tmp.height=ED_CANVAS_H;
-            const tctx=tmp.getContext('2d');
-            tctx.translate(axisPx*2,0); tctx.scale(-1,1); tctx.drawImage(m._canvas,0,0);
-            m._ctx.clearRect(0,0,ED_CANVAS_W,ED_CANVAS_H);
-            m._ctx.drawImage(tmp,0,0);
+          } else if(m.type==='gif'){
+            // GIF: reflejar solo posición y rotación (frames no se alteran — operación costosa)
+            m.x=newX; m.rotation=-(m.rotation||0);
           } else if(m.type==='shape'){
-            m.rotation=-(m.rotation||0);
+            m.x=newX; m.rotation=-(m.rotation||0);
             if(m.cornerRadii&&m.cornerRadii.length===4){
               const [tl,tr,br,bl]=m.cornerRadii; m.cornerRadii=[tr,tl,bl,br];
             }
           } else if(m.type==='line'){
-            m.points=m.points.map(p=>({...p,x:-p.x,
+            m.x=newX; m.rotation=-(m.rotation||0);
+            m.points=m.points.map(p=>p?({...p,x:-p.x,
               cx1:p.cx1!==undefined?-p.cx1:undefined,
-              cx2:p.cx2!==undefined?-p.cx2:undefined}));
-            m.rotation=-(m.rotation||0);
+              cx2:p.cx2!==undefined?-p.cx2:undefined}):null);
             if(typeof m._updateBbox==='function') m._updateBbox();
           } else if(m.type==='text'||m.type==='bubble'){
-            m.rotation=-(m.rotation||0);
+            m.x=newX; m.rotation=-(m.rotation||0);
             if(m.type==='bubble'){
               if(m.tailStart) m.tailStart={x:1-m.tailStart.x,y:m.tailStart.y};
               if(m.tailEnd)   m.tailEnd  ={x:1-m.tailEnd.x,  y:m.tailEnd.y};
               if(m.tailStarts) m.tailStarts=m.tailStarts.map(s=>({x:1-s.x,y:s.y}));
               if(m.tailEnds)   m.tailEnds  =m.tailEnds.map(e=>({x:1-e.x,y:e.y}));
             }
+          } else {
+            // Tipo no reconocido: reflejar solo posición
+            m.x=newX;
           }
         });
+        edLayers=_pg.layers;
         edPushHistory(); edRedraw();
       });
       // Desagrupar
@@ -15709,7 +15795,11 @@ function edGroupSelected(){
   if(!edMultiSel.length || edMultiSel.length < 2) return;
   edPushHistory();
   const gid = _edNewGroupId();
-  edMultiSel.forEach(i => { if(edLayers[i]) edLayers[i].groupId = gid; });
+  edMultiSel.forEach(i => {
+    const _l = edLayers[i];
+    // No asignar groupId a sub-capas vinculadas (fill/pencil/watercolor) — son parte del stroke
+    if(_l && _l.type !== 'fill' && _l.type !== 'pencil' && _l.type !== 'watercolor') _l.groupId = gid;
+  });
   // Volver a herramienta select tras agrupar
   _edDeactivateMultiSel();
   edPushHistory(); edRedraw();
@@ -15759,9 +15849,11 @@ function _edMergeableTypes(){
     if(layers.every(l => isVec(l.type))) return 'vector';
     return null;
   }
-  // Stroke, draw e image solo se pueden unir con su mismo tipo
+  // Stroke, draw e image solo se pueden unir con su mismo tipo.
+  // Ignorar sub-capas fill/pencil/watercolor al evaluar — no son objetos independientes.
   if(t0 === 'stroke' || t0 === 'draw' || t0 === 'image'){
-    if(layers.every(l => l.type === t0)) return t0;
+    const _mainLayers = layers.filter(l => l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor');
+    if(_mainLayers.length >= 2 && _mainLayers.every(l => l.type === t0)) return t0;
     return null;
   }
   return null;
@@ -15970,35 +16062,51 @@ function edMergeSelected(){
     const ctxF = wcFill.getContext('2d');
     let _hasFill = false;
 
+    // Canvas adicionales para pencil y watercolor
+    const wcPencil = document.createElement('canvas');
+    wcPencil.width = ED_CANVAS_W; wcPencil.height = ED_CANVAS_H;
+    const ctxP = wcPencil.getContext('2d');
+    const wcWatercolor = document.createElement('canvas');
+    wcWatercolor.width = ED_CANVAS_W; wcWatercolor.height = ED_CANVAS_H;
+    const ctxW = wcWatercolor.getContext('2d');
+    let _hasPencil = false, _hasWatercolor = false;
+
     for(const la of layers){
-      // 1. Acumular fill en el canvas de fills (píxeles en coords absolutas del workspace)
-      const _fl = la._fillLayerId
-        ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === la._fillLayerId)
-        : null;
+      const _uid = la._uid || la._fillLayerId;
+      // 1. Acumular fill
+      const _fl = _uid ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === _uid) : null;
       if(_fl && _fl._canvas){
-        ctxF.save();
-        ctxF.globalAlpha = _fl.opacity ?? 1;
-        // SF: el canvas del fill es local (bbox del stroke). Renderizar con draw()
-        // para que quede en la posición correcta del workspace.
-        _fl.draw(ctxF);
-        ctxF.restore();
-        _hasFill = true;
+        ctxF.save(); ctxF.globalAlpha = _fl.opacity ?? 1;
+        _fl.draw(ctxF); ctxF.restore(); _hasFill = true;
       }
-      // 2. Acumular stroke en el canvas de strokes
-      ctxS.save();
-      ctxS.globalAlpha = la.opacity ?? 1;
-      la.draw(ctxS);
-      ctxS.restore();
+      // 2. Acumular pencil
+      const _pl = _uid ? edLayers.find(l => l.type === 'pencil' && l._drawLayerId === _uid) : null;
+      if(_pl && _pl._canvas){
+        ctxP.save(); ctxP.globalAlpha = _pl.opacity ?? 1;
+        _pl.draw(ctxP); ctxP.restore(); _hasPencil = true;
+      }
+      // 3. Acumular watercolor
+      const _wl = _uid ? edLayers.find(l => l.type === 'watercolor' && l._drawLayerId === _uid) : null;
+      if(_wl && _wl._canvas){
+        ctxW.save(); ctxW.globalAlpha = _wl.opacity ?? 1;
+        _wl.draw(ctxW); ctxW.restore(); _hasWatercolor = true;
+      }
+      // 4. Acumular stroke
+      ctxS.save(); ctxS.globalAlpha = la.opacity ?? 1;
+      la.draw(ctxS); ctxS.restore();
     }
 
-    // Eliminar FillLayers vinculados de edLayers — se reemplazarán por el nuevo fill unificado
+    // Eliminar sub-capas vinculadas (fill, pencil, watercolor) de edLayers
     for(const la of layers){
-      if(!la._fillLayerId) continue;
-      const _fIdx = edLayers.findIndex(l => l.type==='fill' && l._drawLayerId===la._fillLayerId);
-      if(_fIdx >= 0){
-        edLayers.splice(_fIdx, 1);
-        for(let _i = 0; _i < idxs.length; _i++){
-          if(_fIdx < idxs[_i]) idxs[_i]--;
+      const _uid = la._uid || la._fillLayerId;
+      if(!_uid) continue;
+      for(const _subType of ['fill','pencil','watercolor']){
+        const _sIdx = edLayers.findIndex(l => l.type===_subType && l._drawLayerId===_uid);
+        if(_sIdx >= 0){
+          edLayers.splice(_sIdx, 1);
+          for(let _i = 0; _i < idxs.length; _i++){
+            if(_sIdx < idxs[_i]) idxs[_i]--;
+          }
         }
       }
     }
@@ -16035,21 +16143,41 @@ function edMergeSelected(){
       newFL.rotation = newSL.rotation || 0;
       newSL._fillLayerId = _mergeUid;
 
-      // Insertar fill justo antes del stroke en edLayers (mismo orden que la arquitectura normal)
-      const _insertAt = Math.min(idxs[0], edLayers.length);
-      // _finishMerge elimina los layers originales e inserta newSL en idxs[0].
-      // Insertamos el fill DESPUÉS de que _finishMerge haga su trabajo.
-      const _origFinish = _finishMerge;
+      // Crear pencil y watercolor del merge si hay contenido
+      let newPL = null, newWL = null;
+      function _makeMergedGroupLayer(wc, LayerClass) {
+        const _mPw2 = edPageW(), _mPh2 = edPageH();
+        const _mBW2 = Math.max(1, Math.round(newSL.width  * _mPw2));
+        const _mBH2 = Math.max(1, Math.round(newSL.height * _mPh2));
+        const _mBX2 = Math.round(newSL.x * _mPw2 - _mBW2 / 2);
+        const _mBY2 = Math.round(newSL.y * _mPh2 - _mBH2 / 2);
+        const _mCrop2 = document.createElement('canvas');
+        _mCrop2.width = _mBW2; _mCrop2.height = _mBH2;
+        _mCrop2.getContext('2d').drawImage(wc,
+          edMarginX() + _mBX2, edMarginY() + _mBY2, _mBW2, _mBH2, 0, 0, _mBW2, _mBH2);
+        const _gl = new LayerClass();
+        _gl._drawLayerId = _mergeUid;
+        _gl._canvas = _mCrop2; _gl._ctx = _mCrop2.getContext('2d');
+        _gl.x = newSL.x; _gl.y = newSL.y;
+        _gl.width = newSL.width; _gl.height = newSL.height;
+        _gl.rotation = newSL.rotation || 0;
+        return _gl;
+      }
+      if(_hasPencil) { newPL = _makeMergedGroupLayer(wcPencil, PencilLayer); newSL._pencilLayerId = _mergeUid; }
+      if(_hasWatercolor) { newWL = _makeMergedGroupLayer(wcWatercolor, WatercolorLayer); newSL._watercolorLayerId = _mergeUid; }
+
       function _finishMergeWithFill(sl){
         const _insertStrokeAt = idxs[0];
         // Eliminar originales
         for(let i = idxs.length - 1; i >= 0; i--) edLayers.splice(idxs[i], 1);
-        // Insertar fill primero (debajo del stroke)
-        edLayers.splice(Math.min(_insertStrokeAt, edLayers.length), 0, newFL);
-        // Insertar stroke encima del fill
-        edLayers.splice(Math.min(_insertStrokeAt + 1, edLayers.length), 0, sl);
+        // Insertar sub-capas en orden: fill, pencil, watercolor, stroke
+        let _ins = Math.min(_insertStrokeAt, edLayers.length);
+        edLayers.splice(_ins++, 0, newFL);
+        if(newPL) edLayers.splice(_ins++, 0, newPL);
+        if(newWL) edLayers.splice(_ins++, 0, newWL);
+        edLayers.splice(_ins, 0, sl);
         edPages[edCurrentPage].layers = edLayers;
-        edSelectedIdx = Math.min(_insertStrokeAt + 1, edLayers.length - 1);
+        edSelectedIdx = _ins;
         _msClear();
         edActiveTool = 'select';
         if(edCanvas) edCanvas.className = '';
@@ -16980,7 +17108,7 @@ async function edLoadProject(id){
     // (evita guardar un canvas vacío en el historial porque img.onload es async)
     const _fillLoadPromises = [];
     edPages.forEach((p, _pIdx) => (p.layers||[]).forEach(l => {
-      if(l && l.type === 'fill' && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
+      if(l && (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
       // Cargar _animFrames solo de la página activa (página 0 al cargar).
       // Las demás páginas se cargarán bajo demanda al navegar — ahorra N_páginas × RAM_animación.
       if(l && l._animLoadPromise) {
@@ -16998,8 +17126,8 @@ async function edLoadProject(id){
       // Sincronizar el marcador de "guardado" con el snapshot inicial,
       // para que salir sin hacer cambios no pregunte si guardar.
       _edSavedHistoryIdx = edHistoryIdx;
-      // Liberar el flag aquí si hubo callbacks async (fills pendientes)
-      if (_fillLoadPromises.length) _edLoadProjectInProgress = false;
+      // Siempre liberar el flag al finalizar — independientemente de si hubo promises
+      _edLoadProjectInProgress = false;
     };
     if(_fillLoadPromises.length) {
       // Mantener el flag activo hasta que los fills carguen y el historial se inicialice
