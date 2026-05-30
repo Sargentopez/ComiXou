@@ -10617,7 +10617,6 @@ function edMoveBrush(e){
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
-  _edEraserPickClose(); // cerrar picker del borrador al cerrar menús
   document.querySelectorAll('.ed-dropdown').forEach(d=>{
     d.classList.remove('open');
     // Devolver al padre original si fue movido a body
@@ -10761,7 +10760,6 @@ function _edPanelTabClick(e) {
   if (e) e.stopPropagation();
   const _p = $('edOptionsPanel');
   if (!_p) return;
-  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _mode = _p.dataset.mode;
   _p.classList.remove('panel-collapsed'); // quitar ANTES de hide para desbloquear el guard
   _edPanelTabHide();
@@ -10773,15 +10771,8 @@ function _edPanelTabClick(e) {
   _edRefocusAfterCollapse();
 }
 
-// Cierra el selector de capa del borrador si está abierto
-function _edEraserPickClose() {
-  const _ov = document.getElementById('_edEraserPickOverlay');
-  if (_ov) _ov.remove();
-}
-
 function _edDrawCollapseHandler() {
   const _p = $('edOptionsPanel'); if (!_p) return;
-  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _collapsed = _p.classList.toggle('panel-collapsed');
   if (_collapsed) { _edPanelTabShow(); edDrawBarShow(true); }
   else             { _edPanelTabHide(); edDrawBarHide(); }
@@ -11875,7 +11866,6 @@ function _edFreezeDrawLayer(){
    PANEL DE OPCIONES
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
-  _edEraserPickClose(); // cerrar picker del borrador si está abierto
   const panel=$('edOptionsPanel');
   if(panel){
     const _mode=panel.dataset.mode;
@@ -12152,24 +12142,16 @@ function edRenderOptionsPanel(mode){
       return;
     }
     edDrawBarHide();
-    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar.
-    // Reset SIEMPRE a capa Tinta (pen) + Estilógrafo al abrir (cualquier entrada nueva).
+    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar
     // _edKeepFillTarget: flag temporal activada desde el diálogo de confirmación
     // para preservar 'fill' solo en ese re-render puntual, sin afectar aperturas nuevas.
-    if(mode === 'draw'){
+    if(mode === 'draw' && edActiveTool !== 'eraser' && edActiveTool !== 'fill'){
       if(window._edKeepFillTarget) {
         window._edKeepFillTarget = false; // consumir la flag — solo vale una vez
       } else {
         _edDrawLayerTarget = 'draw';
-        // Reset a valores por defecto: capa Tinta y herramienta Dibujar
-        _edTmp.active = 'pen';
-        edDrawBrushType = 'pen';
-        edActiveTool = 'draw';
-        edCanvas.className = 'tool-draw';
-        _edDodgeBurnActive = false;
       }
-    } else if(mode === 'eraser' || mode === 'fill'){
-      // Al volver de borrador/relleno, no tocar la capa ni la herramienta
+      edActiveTool = 'draw';
     }
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
@@ -14823,7 +14805,6 @@ function edDrawBarShow(snapToCanvas) {
 }
 
 function edDrawBarHide() {
-  _edEraserPickClose(); // cerrar picker del borrador al ocultar la barra
   if (_edPanelIsCollapsed()) return;
   $('edDrawBar')?.classList.remove('visible');
   // Cerrar todos los submenús flotantes de la barra
