@@ -1093,10 +1093,11 @@ function _edSyncSizeDots(){
   if(_bCur && _bCur.style.display !== 'none'){
     const _szB = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * z);
     const _isEr = edActiveTool === 'eraser';
-    const _sc = _isEr ? '#000000' : edDrawColor;
+    const _isDb = !!_edDodgeBurnActive; // dodge/burn: sin color, solo contorno negro
+    const _sc = (_isEr || _isDb) ? '#000000' : edDrawColor;
     _bCur.style.width = _szB + 'px'; _bCur.style.height = _szB + 'px';
     _bCur.style.borderColor = _sc;
-    _bCur.style.background = _isEr ? 'rgba(255,255,255,0.4)' : (_sc + '33');
+    _bCur.style.background = _isEr ? 'rgba(255,255,255,0.4)' : _isDb ? 'transparent' : (_sc + '33');
   }
   // Dot barra flotante de objetos
   const dotS = $('esb-size-dot');
@@ -1151,15 +1152,9 @@ class BaseLayer {
     const ml=rp(-hw,0),     mr=rp(hw,0),      mt=rp(0,-hhPh), mb=rp(0,hhPh);
     const rotOffset = 28/(ph * edCamera.z);
     const rotHandle = rp(0,-hhPh-rotOffset);
-    // Para LineLayer rect (4 nodos cerrado): handles solo en centros de segmento
-    // Los nodos están en las esquinas — no superponer handles con nodos
-    const _isRect = this.type==='line' && this.closed && !this._fromEllipse
-      && this.points && this.points.filter(Boolean).length === 4;
-    if (_isRect) return [
-      {...ml,corner:'ml'}, {...mr,corner:'mr'},
-      {...mt,corner:'mt'}, {...mb,corner:'mb'},
-      {...rotHandle,corner:'rotate'},
-    ];
+    // Todos los objetos usan los 8 handlers (4 esquinas + 4 laterales)
+    // Nota: en LineLayer rect con modo V/C activo, las esquinas son nodos
+    // de edición y se gestionan antes (edOnStart bloque especial con _cm2).
     return[
       {...tl,corner:'tl'}, {...tr,corner:'tr'},
       {...bl,corner:'bl'}, {...br,corner:'br'},
@@ -7217,12 +7212,15 @@ function edOnStart(e){
       const _hitR2 = 18; // mismo que handles PC
       const _pw2=edPageW(), _ph2=edPageH(), _z2=edCamera.z;
       const _rot2=(_laForH.rotation||0)*Math.PI/180;
+      const _cm2 = _edCurveModeActive && _edCurveModeActive();
       for(const hp of _laForH.getControlPoints()){
         if(hp.corner==='rotate') continue; // rotate se gestiona por el bloque de handles
+        // En modo V/C las esquinas son nodos de edición — no activar resize en ellas
+        if(_cm2 && (hp.corner==='tl'||hp.corner==='tr'||hp.corner==='bl'||hp.corner==='br')) continue;
         const _dpx=(c.nx-hp.x)*_pw2, _dpy=(c.ny-hp.y)*_ph2;
         const _dist=Math.hypot(_dpx,_dpy)*_z2;
         if(_dist < _hitR2){
-          // Hit en handle ml/mr/mt/mb: iniciar resize igual que el bloque de handles
+          // Hit en handle de resize (ml/mr/mt/mb/tl/tr/bl/br): iniciar resize
           if(_laForH.locked) break;
           if(typeof _edShapePushHistory==='function'){
             const _pm=$('edOptionsPanel')?.dataset.mode;
@@ -7232,9 +7230,14 @@ function edOnStart(e){
           edIsResizing=true; edResizeCorner=hp.corner;
           const _rot0=(_laForH.rotation||0)*Math.PI/180;
           const _hw0=_laForH.width/2, _hh0=_laForH.height/2;
+          // Ancla = punto opuesto al handle arrastrado (igual que bloque general)
           const _anchorLocal2 = (corner) => {
-            const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 : 0;
-            const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 : 0;
+            const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 :
+                       corner==='tl'||corner==='bl'?_hw0 :
+                       corner==='tr'||corner==='br'?-_hw0 : 0;
+            const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 :
+                       corner==='tl'||corner==='tr'?_hh0 :
+                       corner==='bl'||corner==='br'?-_hh0 : 0;
             const rx=ax*_pw2, ry=ay*_ph2;
             return { x: _laForH.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pw2,
                      y: _laForH.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_ph2 };
@@ -10028,7 +10031,8 @@ function _cofDraw() {
   const sz = Math.max(2, Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1)));
   const cursorR = sz / 2; // radio real sin forzar mínimo — el centrado usa transform
   const isEr = edActiveTool === 'eraser';
-  const dotColor = isEr ? '#888' : edDrawColor;
+  const _isDbC = !!_edDodgeBurnActive; // dodge/burn: sin color
+  const dotColor = (isEr || _isDbC) ? '#333' : edDrawColor;
   const dotSize = 18;
   const dist = Math.max(10, _cof.dist);
   const lineLen = Math.max(0, dist - cursorR - dotSize / 2);
@@ -10063,8 +10067,8 @@ function _cofDraw() {
     'left:0px;top:' + (-dotSize/2 - lineLen - sz) + 'px;' +
     'width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;' +
     'transform:translateX(-50%);' +
-    'border:1.5px solid ' + (isEr ? 'rgba(150,150,150,0.6)' : lineColor) + ';' +
-    'background:' + (isEr ? 'rgba(255,255,255,0.5)' : dotColor + '33') + ';"></div>';
+    'border:1.5px solid ' + (isEr ? 'rgba(150,150,150,0.6)' : _isDbC ? 'rgba(0,0,0,0.75)' : lineColor) + ';' +
+    'background:' + (isEr ? 'rgba(255,255,255,0.5)' : _isDbC ? 'transparent' : dotColor + '33') + ';"></div>';
 
   const cur = document.getElementById('edBrushCursor');
   if (cur) cur.style.display = 'none';
@@ -10200,10 +10204,15 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
   sCtx.filter = 'none';
   const maskData = sCtx.getImageData(0, 0, bw, bh).data;
 
-  // Factor de intensidad por pasada: ~6% hacia blanco o negro
-  // En RGB puro: dodge = r + (255-r)*f, burn = r*(1-f)
-  // No hay conversión HSL → sin desviación de tono
-  const factor = 0.06;
+  // Factor de intensidad por pasada (~3.5%).
+  // Implementación HSV profesional (modo "diagonal"):
+  //   Burn: oscurece (V *= 1-f) + aumenta saturación (S += (1-S)*f*1.5)
+  //         → el color se acerca al tono puro oscuro, no al negro puro.
+  //   Dodge: aclara (V += (1-V)*f) + reduce saturación (S *= 1-f*1.5)
+  //          → el color se acerca al blanco suave, no al blanco puro chato.
+  // Resultado: curva "diagonal" en el espacio de color, igual que
+  // burn/dodge profesional en Photoshop/Affinity con modo Midtones.
+  const factor = 0.035;
 
   function _applyDodgeBurn(tgt) {
     if (!tgt.canvas || tgt.canvas.width < bx + bw || tgt.canvas.height < by + bh) return;
@@ -10211,21 +10220,57 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
     const d = imgD.data;
     for (let i = 0; i < bw * bh; i++) {
       const pi = i * 4;
-      if (d[pi + 3] < 4) continue;           // píxel transparente
-      const maskA = maskData[pi + 3] / 255;   // intensidad gaussiana 0-1
+      if (d[pi + 3] < 4) continue;
+      const maskA = maskData[pi + 3] / 255;
       if (maskA < 0.01) continue;
       const f = factor * maskA;
-      if (sign > 0) {
-        // Dodge: acercar cada canal a 255 (blanco)
-        d[pi]     = Math.min(255, Math.round(d[pi]     + (255 - d[pi])     * f));
-        d[pi + 1] = Math.min(255, Math.round(d[pi + 1] + (255 - d[pi + 1]) * f));
-        d[pi + 2] = Math.min(255, Math.round(d[pi + 2] + (255 - d[pi + 2]) * f));
-      } else {
-        // Burn: acercar cada canal a 0 (negro)
-        d[pi]     = Math.max(0, Math.round(d[pi]     * (1 - f)));
-        d[pi + 1] = Math.max(0, Math.round(d[pi + 1] * (1 - f)));
-        d[pi + 2] = Math.max(0, Math.round(d[pi + 2] * (1 - f)));
+
+      // RGB → HSV
+      const r = d[pi] / 255, g = d[pi + 1] / 255, b = d[pi + 2] / 255;
+      const maxC = Math.max(r, g, b);
+      const minC = Math.min(r, g, b);
+      const delta = maxC - minC;
+      let h = 0, s = maxC > 0 ? delta / maxC : 0, v = maxC;
+      if (delta > 0) {
+        if (maxC === r)      h = ((g - b) / delta + (g < b ? 6 : 0)) / 6;
+        else if (maxC === g) h = ((b - r) / delta + 2) / 6;
+        else                 h = ((r - g) / delta + 4) / 6;
       }
+
+      if (sign > 0) {
+        // Dodge: aclarar + desaturar (hacia blanco suave)
+        v = v + (1 - v) * f;
+        s = s * (1 - f * 1.5);
+        if (s < 0) s = 0;
+      } else {
+        // Burn: oscurecer + saturar (hacia tono puro oscuro)
+        v = v * (1 - f);
+        if (s > 0.02) s = s + (1 - s) * (f * 1.5); // solo colores no grises
+      }
+
+      // HSV → RGB
+      let rOut, gOut, bOut;
+      if (s <= 0 || v <= 0) {
+        rOut = gOut = bOut = v;
+      } else {
+        const hi = Math.floor(h * 6) % 6;
+        const ff = h * 6 - Math.floor(h * 6);
+        const p  = v * (1 - s);
+        const q  = v * (1 - s * ff);
+        const tt = v * (1 - s * (1 - ff));
+        switch (hi) {
+          case 0: rOut=v;  gOut=tt; bOut=p;  break;
+          case 1: rOut=q;  gOut=v;  bOut=p;  break;
+          case 2: rOut=p;  gOut=v;  bOut=tt; break;
+          case 3: rOut=p;  gOut=q;  bOut=v;  break;
+          case 4: rOut=tt; gOut=p;  bOut=v;  break;
+          default:rOut=v;  gOut=p;  bOut=q;  break;
+        }
+      }
+
+      d[pi]     = Math.min(255, Math.max(0, Math.round(rOut * 255)));
+      d[pi + 1] = Math.min(255, Math.max(0, Math.round(gOut * 255)));
+      d[pi + 2] = Math.min(255, Math.max(0, Math.round(bOut * 255)));
       // alpha sin tocar
     }
     tgt.ctx.putImageData(imgD, bx, by);
@@ -10557,12 +10602,13 @@ function edMoveBrush(e){
     cur.style.display = 'none';
   } else {
     const isEr = edActiveTool === 'eraser';
-    const strokeColor = isEr ? '#000000' : edDrawColor;
+    const isDb = !!_edDodgeBurnActive; // dodge/burn: contorno negro, sin relleno
+    const strokeColor = (isEr || isDb) ? '#000000' : edDrawColor;
     cur.style.display = 'block';
     cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
     cur.style.width = sz + 'px'; cur.style.height = sz + 'px';
     cur.style.borderColor = strokeColor;
-    cur.style.background = isEr ? 'rgba(255,255,255,0.4)' : (strokeColor + '33');
+    cur.style.background = isEr ? 'rgba(255,255,255,0.4)' : isDb ? 'transparent' : (strokeColor + '33');
     _edOffsetHide();
   }
 }
@@ -10571,6 +10617,7 @@ function edMoveBrush(e){
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
+  _edEraserPickClose(); // cerrar picker del borrador al cerrar menús
   document.querySelectorAll('.ed-dropdown').forEach(d=>{
     d.classList.remove('open');
     // Devolver al padre original si fue movido a body
@@ -10714,6 +10761,7 @@ function _edPanelTabClick(e) {
   if (e) e.stopPropagation();
   const _p = $('edOptionsPanel');
   if (!_p) return;
+  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _mode = _p.dataset.mode;
   _p.classList.remove('panel-collapsed'); // quitar ANTES de hide para desbloquear el guard
   _edPanelTabHide();
@@ -10725,8 +10773,15 @@ function _edPanelTabClick(e) {
   _edRefocusAfterCollapse();
 }
 
+// Cierra el selector de capa del borrador si está abierto
+function _edEraserPickClose() {
+  const _ov = document.getElementById('_edEraserPickOverlay');
+  if (_ov) _ov.remove();
+}
+
 function _edDrawCollapseHandler() {
   const _p = $('edOptionsPanel'); if (!_p) return;
+  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _collapsed = _p.classList.toggle('panel-collapsed');
   if (_collapsed) { _edPanelTabShow(); edDrawBarShow(true); }
   else             { _edPanelTabHide(); edDrawBarHide(); }
@@ -11591,7 +11646,7 @@ function _edFreezeAllDrawLayers(){
     const dl = page.layers[dlIdx];
     const bb = StrokeLayer._boundingBox(dl._canvas);
     if(!bb){
-      // DrawLayer vacío: verificar si alguna capa del grupo tiene contenido
+      // DrawLayer (pen) vacío: verificar si alguna sub-capa del grupo tiene contenido
       const _dlUid = dl._uid || dl._fillLayerId;
       const _flEmp2      = _dlUid ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===_dlUid) : null;
       const _pencilEmp2  = _dlUid ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===_dlUid) : null;
@@ -11600,18 +11655,18 @@ function _edFreezeAllDrawLayers(){
       const _pencilBb    = _pencilEmp2?._canvas  ? StrokeLayer._boundingBox(_pencilEmp2._canvas)  : null;
       const _wcBb        = _wcEmp2?._canvas      ? StrokeLayer._boundingBox(_wcEmp2._canvas)      : null;
       const _anyContent  = _flBb || _pencilBb || _wcBb;
-      if(_anyContent){
-        // Al menos una capa tiene contenido aunque el draw esté vacío.
-        // _edFreezeDrawLayer lo gestionará correctamente.
-      } else {
+      if(!_anyContent){
         // Todo vacío: eliminar el grupo completo
         for (const _emp of [_wcEmp2, _pencilEmp2, _flEmp2]) {
           if (_emp) page.layers.splice(page.layers.indexOf(_emp), 1);
         }
+        page.layers.splice(page.layers.indexOf(dl), 1);
+        edLayers = page.layers;
+        continue;
       }
-      page.layers.splice(page.layers.indexOf(dl), 1);
-      edLayers = page.layers;
-      continue;
+      // Al menos una sub-capa tiene contenido: NO eliminar el DrawLayer aquí.
+      // _edFreezeDrawLayer calculará el bbox union de todas las sub-capas
+      // y creará correctamente el StrokeLayer + sub-capas recortadas.
     }
     // Usar _edFreezeDrawLayer para calcular el bbox union correctamente
     _edFreezeDrawLayer();
@@ -11637,52 +11692,65 @@ function _edFreezeDrawLayer(){
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){
-    // DrawLayer vacío: comprobar si el FillLayer vinculado tiene contenido
-    const _flEmpty = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
-    const _bbFillOnly = _flEmpty ? StrokeLayer._boundingBox(_flEmpty._canvas) : null;
-    if(!_bbFillOnly){
-      // Ambas capas vacías: eliminar ambas
-      if(_flEmpty) page.layers.splice(page.layers.indexOf(_flEmpty), 1);
+    // DrawLayer (pen/estilógrafo) vacío: comprobar TODAS las sub-capas del grupo
+    const _uid0 = dl._uid || dl._fillLayerId;
+    const _flEm = _uid0 ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===_uid0) : null;
+    const _pcEm = _uid0 ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===_uid0) : null;
+    const _wcEm = _uid0 ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===_uid0) : null;
+    const _bbFm = _flEm?._canvas ? StrokeLayer._boundingBox(_flEm._canvas) : null;
+    const _bbPm = _pcEm?._canvas ? StrokeLayer._boundingBox(_pcEm._canvas) : null;
+    const _bbWm = _wcEm?._canvas ? StrokeLayer._boundingBox(_wcEm._canvas) : null;
+    if(!_bbFm && !_bbPm && !_bbWm){
+      // Todo el grupo vacío: eliminar todas las capas
+      for (const _e of [_wcEm, _pcEm, _flEm]) {
+        if (_e) page.layers.splice(page.layers.indexOf(_e), 1);
+      }
       page.layers.splice(page.layers.indexOf(dl), 1);
       edLayers = page.layers;
-      edPushHistory();  // registrar eliminación en historial global
+      edPushHistory();
       return;
     }
-    // DrawLayer vacío pero FillLayer con contenido: usar bbox del fill como bbox union
-    // El StrokeLayer se crea con un canvas transparente del mismo tamaño que el fill
-    const _fpwE = edPageW(), _fphE = edPageH();
-    const _mxE  = edMarginX(), _myE = edMarginY();
-    const _uX0E = _bbFillOnly.x, _uY0E = _bbFillOnly.y;
-    const _uWE  = Math.max(1, _bbFillOnly.w), _uHE = Math.max(1, _bbFillOnly.h);
-    const _slEmpty = new StrokeLayer(dl._canvas);
-    _slEmpty.x      = (_uX0E + _uWE/2 - _mxE) / _fpwE;
-    _slEmpty.y      = (_uY0E + _uHE/2 - _myE) / _fphE;
-    _slEmpty.width  = _uWE / _fpwE;
-    _slEmpty.height = _uHE / _fphE;
-    _slEmpty._bboxOriginX = _uX0E;
-    _slEmpty._bboxOriginY = _uY0E;
-    const _slEmptyCrop = document.createElement('canvas');
-    _slEmptyCrop.width = _uWE; _slEmptyCrop.height = _uHE;
-    // canvas transparente — el dibujo estaba vacío
-    _slEmpty._canvas = _slEmptyCrop;
-    if(dl.locked) _slEmpty.locked = true;
-    if(dl.groupId) _slEmpty.groupId = dl.groupId;
-    if(dl._uid) _slEmpty._uid = dl._uid;
-    if(dl._fillLayerId) _slEmpty._fillLayerId = dl._fillLayerId;
-    // Recortar FillLayer al bbox
-    _flEmpty._drawLayerId = _slEmpty._uid || _slEmpty._fillLayerId;
-    _flEmpty._srcCanvas = null; _flEmpty._previewSx = null; _flEmpty._previewSy = null;
-    const _feCrop = document.createElement('canvas');
-    _feCrop.width = _uWE; _feCrop.height = _uHE;
-    _feCrop.getContext('2d').drawImage(_flEmpty._canvas, _uX0E, _uY0E, _uWE, _uHE, 0, 0, _uWE, _uHE);
-    _flEmpty._canvas = _feCrop; _flEmpty._ctx = _feCrop.getContext('2d');
-    _flEmpty.x = _slEmpty.x; _flEmpty.y = _slEmpty.y;
-    _flEmpty.width = _slEmpty.width; _flEmpty.height = _slEmpty.height;
-    _flEmpty._isWorkspaceCanvas = false;
-    page.layers.splice(dlIdx, 1, _slEmpty);
+    // Al menos una sub-capa tiene contenido: calcular union bbox de todas
+    const _fpwE=edPageW(), _fphE=edPageH(), _mxE=edMarginX(), _myE=edMarginY();
+    let _uX0E=Infinity, _uY0E=Infinity, _uX1E=-Infinity, _uY1E=-Infinity;
+    for (const _bx of [_bbFm, _bbPm, _bbWm]) {
+      if (!_bx) continue;
+      _uX0E=Math.min(_uX0E,_bx.x); _uY0E=Math.min(_uY0E,_bx.y);
+      _uX1E=Math.max(_uX1E,_bx.x+_bx.w); _uY1E=Math.max(_uY1E,_bx.y+_bx.h);
+    }
+    const _uWE=Math.max(1,_uX1E-_uX0E), _uHE=Math.max(1,_uY1E-_uY0E);
+    // Crear StrokeLayer con canvas transparente (pen estaba vacío) y bbox union
+    const _slE=new StrokeLayer(dl._canvas);
+    const _slCropE=document.createElement('canvas'); _slCropE.width=_uWE; _slCropE.height=_uHE;
+    _slE._canvas=_slCropE;
+    _slE.x=(_uX0E+_uWE/2-_mxE)/_fpwE; _slE.y=(_uY0E+_uHE/2-_myE)/_fphE;
+    _slE.width=_uWE/_fpwE; _slE.height=_uHE/_fphE;
+    _slE._bboxOriginX=_uX0E; _slE._bboxOriginY=_uY0E;
+    if(dl.locked) _slE.locked=true;
+    if(dl.groupId) _slE.groupId=dl.groupId;
+    if(dl._uid) _slE._uid=dl._uid;
+    if(dl._fillLayerId)       _slE._fillLayerId       = dl._fillLayerId;
+    if(dl._pencilLayerId)     _slE._pencilLayerId     = dl._pencilLayerId;
+    if(dl._watercolorLayerId) _slE._watercolorLayerId = dl._watercolorLayerId;
+    // Recortar cada sub-capa al union bbox (si existe)
+    const _cropSubE = (la, refId) => {
+      if (!la) return;
+      la._drawLayerId = _slE._uid || refId;
+      la._srcCanvas=null; la._previewSx=null; la._previewSy=null;
+      const _c=document.createElement('canvas'); _c.width=_uWE; _c.height=_uHE;
+      if(la._canvas) _c.getContext('2d').drawImage(la._canvas,_uX0E,_uY0E,_uWE,_uHE,0,0,_uWE,_uHE);
+      la._canvas=_c; la._ctx=_c.getContext('2d');
+      la._isWorkspaceCanvas=false;
+      la._bboxOriginX=_uX0E; la._bboxOriginY=_uY0E;
+      la.x=_slE.x; la.y=_slE.y; la.width=_slE.width; la.height=_slE.height; la.rotation=0;
+    };
+    _cropSubE(_flEm, _slE._fillLayerId);
+    _cropSubE(_pcEm, _slE._pencilLayerId);
+    _cropSubE(_wcEm, _slE._watercolorLayerId);
+    page.layers.splice(dlIdx, 1, _slE);
     edLayers = page.layers;
     _edDrawClearHistory();
-    edPushHistory();
+    edPushHistory(true);
     edRedraw();
     return;
   }
@@ -11807,6 +11875,7 @@ function _edFreezeDrawLayer(){
    PANEL DE OPCIONES
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
+  _edEraserPickClose(); // cerrar picker del borrador si está abierto
   const panel=$('edOptionsPanel');
   if(panel){
     const _mode=panel.dataset.mode;
@@ -12083,16 +12152,24 @@ function edRenderOptionsPanel(mode){
       return;
     }
     edDrawBarHide();
-    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar
+    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar.
+    // Reset SIEMPRE a capa Tinta (pen) + Estilógrafo al abrir (cualquier entrada nueva).
     // _edKeepFillTarget: flag temporal activada desde el diálogo de confirmación
     // para preservar 'fill' solo en ese re-render puntual, sin afectar aperturas nuevas.
-    if(mode === 'draw' && edActiveTool !== 'eraser' && edActiveTool !== 'fill'){
+    if(mode === 'draw'){
       if(window._edKeepFillTarget) {
         window._edKeepFillTarget = false; // consumir la flag — solo vale una vez
       } else {
         _edDrawLayerTarget = 'draw';
+        // Reset a valores por defecto: capa Tinta y herramienta Dibujar
+        _edTmp.active = 'pen';
+        edDrawBrushType = 'pen';
+        edActiveTool = 'draw';
+        edCanvas.className = 'tool-draw';
+        _edDodgeBurnActive = false;
       }
-      edActiveTool = 'draw';
+    } else if(mode === 'eraser' || mode === 'fill'){
+      // Al volver de borrador/relleno, no tocar la capa ni la herramienta
     }
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
@@ -12106,7 +12183,7 @@ function edRenderOptionsPanel(mode){
     };
     panel.innerHTML=`
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-tmp-pen" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pen'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pen'?'var(--black)':'transparent'};color:${_edTmp.active==='pen'?'var(--white)':'var(--gray-600)'};white-space:nowrap">✒ Estiló</button><button id="op-tmp-pencil" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pencil'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pencil'?'var(--black)':'transparent'};color:${_edTmp.active==='pencil'?'var(--white)':'var(--gray-600)'};white-space:nowrap">✏ Lápiz</button><button id="op-tmp-wc" style="flex-shrink:0;border:2px solid ${_edTmp.active==='watercolor'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='watercolor'?'var(--black)':'transparent'};color:${_edTmp.active==='watercolor'?'var(--white)':'var(--gray-600)'};white-space:nowrap">💧 Acuarela</button><button id="op-tmp-bucket" style="flex-shrink:0;border:2px solid ${_edTmp.active==='bucket'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='bucket'?'var(--black)':'transparent'};color:${_edTmp.active==='bucket'?'var(--white)':'var(--gray-600)'};white-space:nowrap">🪣 Bote</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
+  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-tmp-pen" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pen'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pen'?'var(--black)':'transparent'};color:${_edTmp.active==='pen'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Tinta</button><button id="op-tmp-pencil" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pencil'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pencil'?'var(--black)':'transparent'};color:${_edTmp.active==='pencil'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Lápiz</button><button id="op-tmp-wc" style="flex-shrink:0;border:2px solid ${_edTmp.active==='watercolor'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='watercolor'?'var(--black)':'transparent'};color:${_edTmp.active==='watercolor'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Acuarela</button><button id="op-tmp-bucket" style="flex-shrink:0;border:2px solid ${_edTmp.active==='bucket'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='bucket'?'var(--black)':'transparent'};color:${_edTmp.active==='bucket'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Fondo</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     <button id="op-tool-pen"
       style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isPen?'rgba(0,0,0,.08)':'transparent'};color:${isPen?'var(--black)':'var(--gray-600)'}">Dibujar</button>
@@ -12249,7 +12326,7 @@ function edRenderOptionsPanel(mode){
       _activateTmpLayer('bucket','fill',null,'bucket',100);
     });
     $('op-layer-clear')?.addEventListener('click',()=>{
-      const _names = {pen:'Estilógrafo',pencil:'Lápiz',watercolor:'Acuarela',bucket:'Bote de pintura'};
+      const _names = {pen:'Tinta',pencil:'Lápiz',watercolor:'Acuarela',bucket:'Fondo'};
       const _name = _names[_edTmp.active] || _edTmp.active;
       edConfirm('¿Borrar todo el contenido de la capa de ' + _name + '?', () => {
         _edDrawPushHistory(); // guardar estado ANTES de borrar (permite deshacer)
@@ -12275,12 +12352,9 @@ function edRenderOptionsPanel(mode){
       edDrawOpacity = 100;
       edRenderOptionsPanel('draw');
     });
-    $('op-tool-eraser')?.addEventListener('click',()=>{
-      _edDodgeBurnActive = false;
-      _edWcReset();
-      edActiveTool='eraser'; edCanvas.className='tool-eraser';
-      edDrawOpacity = 100;
-      edRenderOptionsPanel('eraser');
+    $('op-tool-eraser')?.addEventListener('click', e => {
+      // Mostrar menú de selección de capa antes de activar el borrador
+      _edEraserPick($('op-tool-eraser'));
     });
     $('op-tool-fill')?.addEventListener('click',()=>{
       _edDodgeBurnActive = false;
@@ -13754,6 +13828,90 @@ function _edSnapToRules(la) {
 }
 
 /* ══════════════════════════════════════════
+   SELECTOR DE CAPA PARA EL BORRADOR
+   ══════════════════════════════════════════ */
+// Muestra un pequeño menú para elegir en cuál de las 4 sub-capas actúa el borrador.
+// Se llama tanto desde el botón del panel (op-tool-eraser) como desde la barra flotante.
+function _edEraserPick(anchorEl) {
+  // Toggle: si ya está abierto, cerrar
+  const _old = document.getElementById('_edEraserPickOverlay');
+  if (_old) { _old.remove(); return; }
+
+  const _opts = [
+    { key:'pen',        icon:'✒', label:'Tinta' },
+    { key:'pencil',     icon:'✏️', label:'Lápiz' },
+    { key:'watercolor', icon:'💧', label:'Acuarela' },
+    { key:'bucket',     icon:'🪣', label:'Fondo' },
+  ];
+
+  // Capa transparente para cerrar al pulsar fuera
+  const overlay = document.createElement('div');
+  overlay.id = '_edEraserPickOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:1070;';
+
+  // Popup con los 4 botones
+  const pop = document.createElement('div');
+  pop.style.cssText = 'position:fixed;display:flex;flex-direction:row;gap:4px;' +
+    'background:rgba(25,25,25,0.97);border-radius:12px;padding:6px;' +
+    'box-shadow:0 4px 20px rgba(0,0,0,.55);' +
+    'border:1px solid rgba(255,255,255,.13);z-index:1071;';
+
+  _opts.forEach(({ key, icon, label }) => {
+    const isActive = _edTmp && _edTmp.active === key;
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'border:none;border-radius:8px;padding:6px 10px;cursor:pointer;min-width:44px;gap:3px;' +
+      (isActive
+        ? 'background:rgba(255,255,255,.18);outline:2px solid rgba(255,255,255,0.7);outline-offset:-1px;color:#fff;'
+        : 'background:transparent;color:rgba(255,255,255,.75);');
+    btn.innerHTML = '<span style="font-size:1.3rem;pointer-events:none">' + icon + '</span>' +
+                    '<span style="font-size:0.58rem;white-space:nowrap;pointer-events:none">' + label + '</span>';
+    btn.addEventListener('pointerdown', e => e.stopPropagation());
+    btn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      overlay.remove();
+      // Limpiar pointers fantasma (táctil)
+      if (window._edActivePointers) window._edActivePointers.clear();
+      clearTimeout(window._edDrawTouchTimer);
+      edPinching = false; edPainting = false;
+      if (window._edWcFl) { window._edWcFl = null; window._edWcLast = null; }
+      // Activar borrador en la capa elegida
+      if (_edTmp) _edTmp.active = key;
+      _edWcReset();
+      edActiveTool = 'eraser';
+      edCanvas.className = 'tool-eraser';
+      edDrawOpacity = 100;
+      edRenderOptionsPanel('eraser');
+      _edbSyncTool();
+    });
+    pop.appendChild(btn);
+  });
+
+  overlay.appendChild(pop);
+  document.body.appendChild(overlay);
+
+  // Posicionar el popup cerca del botón ancla
+  requestAnimationFrame(() => {
+    const ar = anchorEl
+      ? anchorEl.getBoundingClientRect()
+      : { left: window.innerWidth * 0.1, bottom: 80, top: 50, right: window.innerWidth * 0.3 };
+    const pw = pop.offsetWidth || 224;
+    const ph = pop.offsetHeight || 72;
+    const W = window.innerWidth, H = window.innerHeight, G = 8;
+    let left = ar.left;
+    let top = ar.bottom + G;
+    if (top + ph > H - G) top = Math.max(G, ar.top - ph - G);
+    left = Math.max(G, Math.min(W - pw - G, left));
+    pop.style.left = left + 'px';
+    pop.style.top  = top  + 'px';
+  });
+
+  overlay.addEventListener('pointerdown', e => {
+    if (!pop.contains(e.target)) overlay.remove();
+  });
+}
+
+/* ══════════════════════════════════════════
    BARRA HERRAMIENTAS DIBUJO FLOTANTE (T5)
    ══════════════════════════════════════════ */
 let _edbX = 64, _edbY = 12;  // posición persistente de la barra
@@ -14025,10 +14183,8 @@ function edInitDrawBar() {
     if (_edbDragLocked) return;
     e.stopPropagation();
     _edbCloseBrushPop();
-    _edWcReset();
-    edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
-    _edbSyncTool();
-    $('op-tool-eraser')?.click();
+    // Mostrar menú de selección de capa para el borrador
+    _edEraserPick($('edb-eraser'));
   });
   $('edb-fill')?.addEventListener('pointerup', e => {
     if (_edbDragLocked) return;
@@ -14667,6 +14823,7 @@ function edDrawBarShow(snapToCanvas) {
 }
 
 function edDrawBarHide() {
+  _edEraserPickClose(); // cerrar picker del borrador al ocultar la barra
   if (_edPanelIsCollapsed()) return;
   $('edDrawBar')?.classList.remove('visible');
   // Cerrar todos los submenús flotantes de la barra
