@@ -1753,6 +1753,14 @@ class DrawLayer extends BaseLayer {
     this._ctx = this._canvas.getContext('2d');
     this._lastX = 0;
     this._lastY = 0;
+    // Dirty rect para cierre de huecos (gap closing) del trazo de tinta
+    this._gcX0 = Infinity;  this._gcY0 = Infinity;
+    this._gcX1 = -Infinity; this._gcY1 = -Infinity;
+    this._gcDirty = false;
+    // Posicion inicio/fin del trazo para gap closing restringido
+    this._gcStartX = undefined; this._gcStartY = undefined;
+    this._gcEndX   = undefined; this._gcEndY   = undefined;
+    this._gcStrokeSize = 4;
   }
   static fromDataUrl(dataUrl, pw, ph){
     const dl = new DrawLayer();
@@ -1793,6 +1801,11 @@ class DrawLayer extends BaseLayer {
   }
   clear(){
     this._ctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    this._gcX0 = Infinity;  this._gcY0 = Infinity;
+    this._gcX1 = -Infinity; this._gcY1 = -Infinity;
+    this._gcDirty = false;
+    this._gcStartX = undefined; this._gcStartY = undefined;
+    this._gcEndX   = undefined; this._gcEndY   = undefined;
   }
   // Coordenadas en workspace (px absoluto dentro del canvas de trabajo)
   _wsCoords(nx, ny){
@@ -1803,6 +1816,16 @@ class DrawLayer extends BaseLayer {
   }
   beginStroke(nx, ny, color, size, isEraser, opacity, clipR){
     const {x,y} = this._wsCoords(nx, ny);
+    // Dirty rect + posicion inicio para gap closing
+    if (!isEraser) {
+      const _gr = Math.ceil(size / 2) + 3;
+      this._gcX0 = Math.min(this._gcX0, x - _gr); this._gcY0 = Math.min(this._gcY0, y - _gr);
+      this._gcX1 = Math.max(this._gcX1, x + _gr); this._gcY1 = Math.max(this._gcY1, y + _gr);
+      this._gcDirty = true;
+      this._gcStartX = x; this._gcStartY = y; // inicio del trazo
+      this._gcEndX   = x; this._gcEndY   = y; // end = start hasta continueStroke
+      this._gcStrokeSize = size;
+    }
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
@@ -1838,6 +1861,18 @@ class DrawLayer extends BaseLayer {
   }
   continueStroke(nx, ny, color, size, isEraser, opacity, clipR){
     const {x,y} = this._wsCoords(nx, ny);
+    // Dirty rect + posicion fin para gap closing
+    if (!isEraser) {
+      const _gr = Math.ceil(size / 2) + 3;
+      const _lx = this._lastX, _ly = this._lastY;
+      this._gcX0 = Math.min(this._gcX0, Math.min(_lx, x) - _gr);
+      this._gcY0 = Math.min(this._gcY0, Math.min(_ly, y) - _gr);
+      this._gcX1 = Math.max(this._gcX1, Math.max(_lx, x) + _gr);
+      this._gcY1 = Math.max(this._gcY1, Math.max(_ly, y) + _gr);
+      this._gcDirty = true;
+      this._gcEndX = x; this._gcEndY = y; // actualizar fin del trazo
+      if (size > (this._gcStrokeSize || 0)) this._gcStrokeSize = size;
+    }
     const alpha = (opacity ?? 100) / 100;
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
@@ -6448,6 +6483,14 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
 }
 
 function edOnStart(e){
+  // Interceptar zoom rect antes de cualquier otra lógica
+  if (_edZoomRectActive) {
+    _edZoomRectStart = { sx: e.clientX, sy: e.clientY };
+    _edZoomRectCur   = { sx: e.clientX, sy: e.clientY };
+    if(e.pointerId!==undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+    e.preventDefault();
+    return;
+  }
   // Ignorar completamente cuando el editor de animaciones está activo
   if(window._gcpActive) return;
   // Ignorar toque inmediatamente tras cerrar panel vectorial por undo
@@ -7007,6 +7050,17 @@ function edOnStart(e){
         }, 120);
         return;
       }
+      // Dodge/burn en touch: NO usar fill-pending (flood fill), actuar directamente
+      if(_edDodgeBurnActive){
+        _edGetOrCreateDrawLayer();
+        edPainting = true;
+        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+        const _cDbTouch = _cof.on && (_cof.state==='red_ready'||_cof.state==='red_cool')
+          ? { nx: (_cof.cursorX - edMarginX()) / edPageW(), ny: (_cof.cursorY - edMarginY()) / edPageH() }
+          : edCoords(e);
+        window._edDbLast = edDodgeBurnStroke(_cDbTouch.nx, _cDbTouch.ny, null, null);
+        edRedraw(); return;
+      }
       window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
       if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       return;
@@ -7421,7 +7475,9 @@ function edOnStart(e){
               _edShapePushHistory();
           }
           edIsRotating = true;
-          edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x)-(_la.rotation||0)*Math.PI/180;
+          // Enfoque delta: guardamos solo el ángulo inicial de la palanca.
+          // edOnMove acumula deltas entre frames consecutivos → soporta giros >180°.
+          window._edRotateLastAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x);
           window._edRotateInitRot = _la.rotation||0;
           return;
         }
@@ -7903,8 +7959,31 @@ function edOnStart(e){
   }
   edRedraw();
 }
+function _edZoomRectDraw() {
+  if (!_edZoomRectStart || !_edZoomRectCur) return;
+  edRedraw();
+  const ctx = edCtx;
+  const sx = Math.min(_edZoomRectStart.sx, _edZoomRectCur.sx);
+  const sy = Math.min(_edZoomRectStart.sy, _edZoomRectCur.sy) - _edCanvasTop;
+  const sw = Math.abs(_edZoomRectCur.sx - _edZoomRectStart.sx);
+  const sh = Math.abs(_edZoomRectCur.sy - _edZoomRectStart.sy);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(30,120,255,0.9)'; ctx.lineWidth = 2;
+  ctx.setLineDash([6,4]);
+  ctx.strokeRect(sx, sy, sw, sh);
+  ctx.fillStyle = 'rgba(30,120,255,0.08)';
+  ctx.fillRect(sx, sy, sw, sh);
+  ctx.restore();
+}
+
 function edOnMove(e){
-  if(window._gcpActive) return; // GCP tiene su propio handler de move
+  if(window._gcpActive) return;
+  // Zoom rect: actualizar esquina y redibujar
+  if (_edZoomRectActive && _edZoomRectStart) {
+    _edZoomRectCur = { sx: e.clientX, sy: e.clientY };
+    _edZoomRectDraw();
+    return;
+  }
   // Cursor personalizado en PC para herramientas de dibujo (hover sin gesto activo)
   if(e.pointerType !== 'touch' && !_cof.on &&
      ['draw','eraser','fill'].includes(edActiveTool)){
@@ -8380,8 +8459,18 @@ function edOnMove(e){
   }
   if(edIsRotating&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
-    const angle = Math.atan2(c.ny-la.y, c.nx-la.x) - edRotateStartAngle;
-    la.rotation = angle*180/Math.PI;
+    const _curAng = Math.atan2(c.ny-la.y, c.nx-la.x);
+    // Sistema delta: acumular diferencias angulares pequeñas en cada pointermove.
+    // Esto permite giros superiores a 180° (e incluso vueltas completas de 360°+)
+    // sin los saltos que produce el límite ±180° de Math.atan2.
+    if (window._edRotateLastAngle !== undefined) {
+      let _delta = (_curAng - window._edRotateLastAngle) * 180/Math.PI;
+      // Normalizar el delta al rango [-180, 180] para manejar el cruce ±π de atan2
+      if (_delta >  180) _delta -= 360;
+      if (_delta < -180) _delta += 360;
+      la.rotation = (la.rotation || 0) + _delta;
+    }
+    window._edRotateLastAngle = _curAng;
     _edSyncFill(la, true);
     window._edMoved = true;
     edRedraw();
@@ -8562,7 +8651,35 @@ function edOnMove(e){
 }
 function edOnEnd(e){
   if(window._gcpActive) return;
-  // Limpiar pan de _edLineLayer si se sueltan dedos
+  // Zoom rect: aplicar zoom al rect seleccionado y restaurar herramienta
+  if (_edZoomRectActive && _edZoomRectStart) {
+    _edZoomRectActive = false;
+    edCanvas.style.cursor = '';
+    const _rs = _edZoomRectStart, _re = _edZoomRectCur || _rs;
+    _edZoomRectStart = null; _edZoomRectCur = null;
+    const _sc2ws = (sx, sy) => ({
+      wx: (sx - edCamera.x) / edCamera.z,
+      wy: (sy - _edCanvasTop - edCamera.y) / edCamera.z
+    });
+    const _p1 = _sc2ws(_rs.sx, _rs.sy);
+    const _p2 = _sc2ws(_re.sx, _re.sy);
+    const _rw = Math.abs(_p2.wx - _p1.wx), _rh = Math.abs(_p2.wy - _p1.wy);
+    if (_rw > 10 && _rh > 10) {
+      const _cx = (_p1.wx + _p2.wx) / 2, _cy = (_p1.wy + _p2.wy) / 2;
+      edCamera.z = Math.min(8, Math.min(edCanvas.width / _rw, edCanvas.height / _rh) * 0.88);
+      edCamera.x = edCanvas.width  / 2 - _cx * edCamera.z;
+      edCamera.y = edCanvas.height / 2 - _cy * edCamera.z;
+    } else {
+      // Click puntual: zoom x2 centrado en el punto
+      const _newZ = Math.min(8, edCamera.z * 2);
+      const _fr = _newZ / edCamera.z;
+      edCamera.x = _rs.sx - (_rs.sx - edCamera.x) * _fr;
+      edCamera.y = (_rs.sy - _edCanvasTop) - ((_rs.sy - _edCanvasTop) - edCamera.y) * _fr;
+      edCamera.z = _newZ;
+    }
+    edRedraw();
+    return;
+  }
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
   }
@@ -8809,6 +8926,7 @@ function edOnEnd(e){
       if(edSelectedIdx>=0) _edSyncFill(edLayers[edSelectedIdx], false);
     }
     window._edRotateInitRot=null;
+    window._edRotateLastAngle=undefined;
     const _doPush = () => {
       const _panel=$('edOptionsPanel');
       const _mode=_panel?.dataset.mode;
@@ -10376,8 +10494,54 @@ function _edWatercolorCommit(fl, size, opacity){
   }
 }
 
+// ── Herramienta borrar color ─────────────────────────────────────────────────
+// Borra todos los pixeles de la capa activa cuyo color sea parecido al del pixel tocado.
+// Tolerancia: distancia Euclidea en RGB < 30. Opera en un radio del tamaño del pincel.
+function _edColorErase(nx, ny) {
+  const _dl = _edTmpProxy(); if (!_dl?._canvas) return;
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const px = Math.round(mx + nx * pw), py = Math.round(my + ny * ph); // coords workspace
+  const R = Math.ceil(edEraserSize / 2);
+  const x0 = Math.max(0, px - R), y0 = Math.max(0, py - R);
+  const x1 = Math.min(_dl._canvas.width  - 1, px + R);
+  const y1 = Math.min(_dl._canvas.height - 1, py + R);
+  const rw = x1 - x0 + 1, rh = y1 - y0 + 1;
+  if (rw < 1 || rh < 1) return;
+  const imgD = _dl._ctx.getImageData(x0, y0, rw, rh);
+  const d = imgD.data;
+  // Tomar color de referencia del pixel central tocado
+  const _cpx = Math.max(0, Math.min(rw - 1, px - x0));
+  const _cpy = Math.max(0, Math.min(rh - 1, py - y0));
+  const _ci = (_cpy * rw + _cpx) * 4;
+  if (d[_ci + 3] < 10) return; // pixel transparente: nada que borrar
+  const _cr = d[_ci], _cg = d[_ci + 1], _cb = d[_ci + 2];
+  const _TOL = 30; // tolerancia de color
+  let _changed = false;
+  for (let y = 0; y < rh; y++) {
+    for (let x = 0; x < rw; x++) {
+      if ((x - (px - x0)) * (x - (px - x0)) + (y - (py - y0)) * (y - (py - y0)) > R * R) continue;
+      const i = (y * rw + x) * 4;
+      if (d[i + 3] < 10) continue;
+      const _dr = d[i] - _cr, _dg = d[i + 1] - _cg, _db = d[i + 2] - _cb;
+      if (Math.sqrt(_dr*_dr + _dg*_dg + _db*_db) <= _TOL) {
+        d[i + 3] = 0; _changed = true;
+      }
+    }
+  }
+  if (_changed) _dl._ctx.putImageData(imgD, x0, y0);
+}
+
 function edStartPaint(e){
   edPainting = true;
+  // Herramienta borrar color
+  if (edActiveTool === 'color-erase') {
+    _edGetOrCreateDrawLayer();
+    if(e.pointerId !== undefined && edCanvas){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+    const _cCE = edCoords(e);
+    _edColorErase(_cCE.nx, _cCE.ny);
+    edRedraw(); return;
+  }
   // Acuarela: intercept antes del sistema de DrawLayer (no ejecutar si dodge activo)
   if(!_edDodgeBurnActive && edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor'){
     // Asegurar que la capa activa sea watercolor
@@ -10466,6 +10630,9 @@ function edStartPaint(e){
 }
 function edContinuePaint(e){
   if(!edPainting) return;
+  if (edActiveTool === 'color-erase') {
+    const _cCE2 = edCoords(e); _edColorErase(_cCE2.nx, _cCE2.ny); edRedraw(); return;
+  }
   // Dodge/burn en modo continuo (táctil con COF)
   if(_edDodgeBurnActive && edActiveTool==='fill'){
     const _eCOFdb = _cof.on ? { clientX: _cof.cursorX, clientY: _cof.cursorY, pointerType: e.pointerType } : e;
@@ -10538,6 +10705,119 @@ function edContinuePaint(e){
   edRedraw();
   edMoveBrush(e);
 }
+// Cierre de huecos para la capa de tinta (pen/estilografo).
+// Escanea SOLO DOS VENTANAS PEQUENAS: una alrededor del inicio del trazo
+// y otra alrededor del fin. Esto evita conexiones en angulos agudos del
+// cuerpo del trazo. Para giros diagonales tambien rellena los pixeles
+// adyacentes en L para bloquear el relleno con conectividad 8.
+function _edPenCloseGaps(dl) {
+  if (!dl?._canvas || !dl._gcDirty) return;
+  if (dl._gcStartX === undefined) {
+    dl._gcX0=Infinity; dl._gcY0=Infinity; dl._gcX1=-Infinity; dl._gcY1=-Infinity;
+    dl._gcDirty=false; return;
+  }
+  const src = dl._canvas;
+  const SOLID=200, EMPTY=30, MAX_SEP=2;
+  const sz = dl._gcStrokeSize || 8;
+  // Radio: cubre el borde del cap redondeado + separacion maxima + margen
+  const radius = Math.ceil(sz / 2) + MAX_SEP + 6;
+
+  // Limpiar estado antes de cualquier return
+  dl._gcX0=Infinity; dl._gcY0=Infinity; dl._gcX1=-Infinity; dl._gcY1=-Infinity;
+  dl._gcDirty=false;
+  const sx=dl._gcStartX, sy=dl._gcStartY;
+  const ex=dl._gcEndX,   ey=dl._gcEndY;
+  dl._gcStartX=undefined; dl._gcStartY=undefined;
+  dl._gcEndX=undefined;   dl._gcEndY=undefined;
+
+  const dirs8=[[1,0],[0,1],[-1,0],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+
+  // Procesa UNA sola ventana centrada en (cx,cy) de radio=radius
+  const _processWindow = (cx, cy) => {
+    const wx0=Math.max(0, Math.floor(cx)-radius);
+    const wy0=Math.max(0, Math.floor(cy)-radius);
+    const wx1=Math.min(src.width -1, Math.ceil(cx)+radius);
+    const wy1=Math.min(src.height-1, Math.ceil(cy)+radius);
+    const rw=wx1-wx0+1, rh=wy1-wy0+1;
+    if (rw<3||rh<3) return;
+
+    const imgD=dl._ctx.getImageData(wx0,wy0,rw,rh);
+    const d=imgD.data;
+    const toFill=new Map(); // idx → {r,g,b}
+
+    // Encolar pixel (lx,ly) si es transparente (alpha < EMPTY) y no esta ya encolado
+    const _tryQ=(lx,ly,r,g,b)=>{
+      if(lx<0||lx>=rw||ly<0||ly>=rh) return;
+      const idx=(ly*rw+lx)*4;
+      if(d[idx+3]>=EMPTY||toFill.has(idx)) return;
+      toFill.set(idx,{r,g,b});
+    };
+
+    for(let y=0;y<rh;y++){
+      for(let x=0;x<rw;x++){
+        const pi=(y*rw+x)*4;
+        if(d[pi+3]<SOLID) continue; // solo desde pixeles solidos
+        const r0=d[pi],g0=d[pi+1],b0=d[pi+2];
+
+        for(let di=0;di<8;di++){
+          const dx=dirs8[di][0], dy=dirs8[di][1];
+          const isDiag=(dx!==0&&dy!==0);
+          const gapLocs=[]; // coords locales de pixeles de hueco
+
+          for(let step=1;step<=MAX_SEP+1;step++){
+            const nx=x+dx*step, ny=y+dy*step;
+            if(nx<0||nx>=rw||ny<0||ny>=rh) break;
+            const np=(ny*rw+nx)*4, na=d[np+3];
+            if(na>=SOLID){
+              // Extremo solido encontrado: si hay hueco valido, rellenar
+              if(gapLocs.length>=1){
+                const r1=d[np],g1=d[np+1],b1=d[np+2],n=gapLocs.length;
+                for(let i=0;i<n;i++){
+                  const {lx:gx,ly:gy}=gapLocs[i];
+                  const t=(i+1)/(n+1);
+                  const rf=Math.round(r0*(1-t)+r1*t);
+                  const gf=Math.round(g0*(1-t)+g1*t);
+                  const bf=Math.round(b0*(1-t)+b1*t);
+                  // Rellenar el pixel del hueco (primer escritura gana)
+                  const gpi=(gy*rw+gx)*4;
+                  if(!toFill.has(gpi)) toFill.set(gpi,{r:rf,g:gf,b:bf});
+                  // Escalon diagonal: rellenar pixeles en L adyacentes
+                  // para evitar que el relleno pase por conectividad diagonal
+                  if(isDiag){
+                    _tryQ(gx-dx,gy,rf,gf,bf); // componente horizontal inversa
+                    _tryQ(gx,gy-dy,rf,gf,bf); // componente vertical inversa
+                  }
+                }
+              }
+              break;
+            } else if(na<EMPTY){
+              gapLocs.push({lx:nx,ly:ny});
+              if(gapLocs.length>MAX_SEP) break;
+            } else { break; } // semitrasnparente: ni hueco ni solido, parar
+          }
+        }
+      }
+    }
+    if(!toFill.size) return;
+    for(const [idx,{r,g,b}] of toFill){
+      // Nunca sobreescribir tinta existente
+      if(d[idx+3]>=SOLID) continue;
+      d[idx]=r; d[idx+1]=g; d[idx+2]=b; d[idx+3]=255;
+    }
+    dl._ctx.putImageData(imgD,wx0,wy0);
+  };
+
+  // Dos ventanas INDEPENDIENTES: inicio y fin del trazo.
+  // NO se usa su bounding box union: eso escanea el trayecto completo
+  // y generaria conexiones en angulos agudos del cuerpo del trazo.
+  _processWindow(sx, sy);
+  const _dist=Math.hypot(ex-sx, ey-sy);
+  if(_dist > radius * 0.5) {
+    // Solo procesar la ventana del fin si esta suficientemente lejos del inicio
+    _processWindow(ex, ey);
+  }
+}
+
 function edSaveDrawData(){
   _edPenPendingStroke = null;
   if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
@@ -10560,7 +10840,13 @@ function edSaveDrawData(){
     edRedraw();
     _edDrawPushHistory();
   } else {
-    _edDrawPushHistory();  // historial local de dibujo (deshacer trazo)
+    // Gap closing para tinta (pen): cierra huecos 1-2px ANTES de guardar
+    if (_edTmp.active === 'pen' && _edTmp.pen?._gcDirty) {
+      _edPenCloseGaps(_edTmp.pen);
+    }
+    _edDrawPushHistory();
+    // Color-erase: volver a la herramienta de dibujo al levantar el dedo
+    if (edActiveTool === 'color-erase') { /* mantener activa hasta que el usuario cambie */ }
   }
   // NO llamar edPushHistory aquí para trazos normales — el historial global se guarda al congelar
 }
@@ -10588,6 +10874,11 @@ function edMoveBrush(e){
   const cur = $('edBrushCursor');
 
   if(!cur) return;
+  // Cuando el puntero está sobre la barra flotante u el panel, ocultar cursor de brocha
+  if (e.target && e.target.closest && (e.target.closest('#edDrawBar') || e.target.closest('#edOptionsPanel'))) {
+    cur.style.display = 'none';
+    return;
+  }
   const sz = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
   if(edActiveTool==='fill' && (typeof edFillBrushType==='undefined' || edFillBrushType!=='watercolor')){
@@ -10617,6 +10908,7 @@ function edMoveBrush(e){
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
+  _edEraserPickClose(); // cerrar picker del borrador al cerrar menús
   document.querySelectorAll('.ed-dropdown').forEach(d=>{
     d.classList.remove('open');
     // Devolver al padre original si fue movido a body
@@ -10760,6 +11052,7 @@ function _edPanelTabClick(e) {
   if (e) e.stopPropagation();
   const _p = $('edOptionsPanel');
   if (!_p) return;
+  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _mode = _p.dataset.mode;
   _p.classList.remove('panel-collapsed'); // quitar ANTES de hide para desbloquear el guard
   _edPanelTabHide();
@@ -10771,8 +11064,15 @@ function _edPanelTabClick(e) {
   _edRefocusAfterCollapse();
 }
 
+// Cierra el selector de capa del borrador si está abierto
+function _edEraserPickClose() {
+  const _ov = document.getElementById('_edEraserPickOverlay');
+  if (_ov) _ov.remove();
+}
+
 function _edDrawCollapseHandler() {
   const _p = $('edOptionsPanel'); if (!_p) return;
+  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _collapsed = _p.classList.toggle('panel-collapsed');
   if (_collapsed) { _edPanelTabShow(); edDrawBarShow(true); }
   else             { _edPanelTabHide(); edDrawBarHide(); }
@@ -11866,6 +12166,7 @@ function _edFreezeDrawLayer(){
    PANEL DE OPCIONES
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
+  _edEraserPickClose(); // cerrar picker del borrador si está abierto
   const panel=$('edOptionsPanel');
   if(panel){
     const _mode=panel.dataset.mode;
@@ -12142,17 +12443,27 @@ function edRenderOptionsPanel(mode){
       return;
     }
     edDrawBarHide();
-    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar
-    // _edKeepFillTarget: flag temporal activada desde el diálogo de confirmación
-    // para preservar 'fill' solo en ese re-render puntual, sin afectar aperturas nuevas.
-    if(mode === 'draw' && edActiveTool !== 'eraser' && edActiveTool !== 'fill'){
+    // Defaults al abrir el panel de dibujo: capa de dibujo + herramienta dibujar.
+    // Reset a capa Tinta (pen) + Estilógrafo SOLO en apertura fresca (no en re-render).
+    // Un re-render ocurre cuando el panel ya está abierto en modo draw
+    // (clic en botones internos: Acuarela, Fondo, Rellenar, etc.)
+    // _edKeepFillTarget: flag temporal del diálogo de confirmación.
+    if(mode === 'draw'){
+      const _freshOpen = !(panel.classList.contains('open') && panel.dataset.mode === 'draw');
       if(window._edKeepFillTarget) {
         window._edKeepFillTarget = false; // consumir la flag — solo vale una vez
-      } else {
+      } else if(_freshOpen) {
         _edDrawLayerTarget = 'draw';
+        // Reset a valores por defecto SOLO en apertura fresca (no en re-render)
+        _edTmp.active = 'pen';
+        edDrawBrushType = 'pen';
+        edActiveTool = 'draw';
+        edCanvas.className = 'tool-draw';
+        _edDodgeBurnActive = false;
       }
-      edActiveTool = 'draw';
     }
+    const _actIsWc     = _edTmp.active === 'watercolor';
+    const _actIsBucket = _edTmp.active === 'bucket';
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
@@ -12167,23 +12478,26 @@ function edRenderOptionsPanel(mode){
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
   <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-tmp-pen" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pen'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pen'?'var(--black)':'transparent'};color:${_edTmp.active==='pen'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Tinta</button><button id="op-tmp-pencil" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pencil'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pencil'?'var(--black)':'transparent'};color:${_edTmp.active==='pencil'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Lápiz</button><button id="op-tmp-wc" style="flex-shrink:0;border:2px solid ${_edTmp.active==='watercolor'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='watercolor'?'var(--black)':'transparent'};color:${_edTmp.active==='watercolor'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Acuarela</button><button id="op-tmp-bucket" style="flex-shrink:0;border:2px solid ${_edTmp.active==='bucket'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='bucket'?'var(--black)':'transparent'};color:${_edTmp.active==='bucket'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Fondo</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
-    <button id="op-tool-pen"
-      style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isPen?'rgba(0,0,0,.08)':'transparent'};color:${isPen?'var(--black)':'var(--gray-600)'}">Dibujar</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    ${!_actIsWc ? `<button id="op-tool-layer-icon"
+      style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isPen||isFill?'rgba(0,0,0,.12)':'transparent'};opacity:${isPen||isFill?1:0.5}">${_edTmp.active==='pen'?'✒️':_edTmp.active==='pencil'?'✏️':'🪣'}</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
+    ${_actIsWc ? `<button id="op-fill-watercolor" title="Acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${!_edDodgeBurnActive?'rgba(0,0,0,.12)':'transparent'};opacity:${!_edDodgeBurnActive?1:0.4}">🖌️</button>
+    <button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:34px;height:26px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="Oscurecer (izq) / Iluminar (der)"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
+    <button id="op-color-erase"
+      style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${edActiveTool==='color-erase'?'rgba(0,0,0,.12)':'transparent'};opacity:${edActiveTool==='color-erase'?1:0.5}" title="Borrar color">🫧</button>
     <button id="op-tool-eraser"
-      style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isEr?'rgba(0,0,0,.08)':'transparent'};color:${isEr?'var(--black)':'var(--gray-600)'}">Borrar</button>
+      style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isEr?'rgba(0,0,0,.12)':'transparent'};opacity:${isEr?1:0.5}">🧹</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-fill"
-      style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;text-align:center;white-space:nowrap;background:${isFill?'rgba(0,0,0,.08)':'transparent'};color:${isFill?'var(--black)':'var(--gray-600)'}">Rellenar</button>
+    <button id="op-zoom-btn"
+      style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:transparent;opacity:0.6" title="Herramienta zoom">🔍</button>
 
   </div>
   <!-- SEP H -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: Controles -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
-    ${!isEr ? `
-    ${isPen ? `<button id="op-brush-pen" title="Estilógrafo" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edDrawBrushType==='pen'?'rgba(0,0,0,.12)':'transparent'};opacity:${edDrawBrushType==='pen'?1:0.4}">🖊</button><button id="op-brush-pencil" title="Lápiz" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edDrawBrushType==='pencil'?'rgba(0,0,0,.12)':'transparent'};opacity:${edDrawBrushType==='pencil'?1:0.4}">✏️</button>` : ''}
-    ${isFill ? `<button id="op-fill-bucket" title="Bote de pintura" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='bucket'?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='bucket'?1:0.4}">🪣</button><button id="op-fill-watercolor" title="Pincel acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${edFillBrushType==='watercolor'&&!_edDodgeBurnActive?'rgba(0,0,0,.12)':'transparent'};opacity:${edFillBrushType==='watercolor'&&!_edDodgeBurnActive?1:0.4}">🖌️</button><button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:34px;height:26px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="Oscurecer (izq) / Iluminar (der)"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button>` : ''}` : ''}
+
     ${(!isFill || edFillBrushType === 'watercolor') ? `
 
     <button id="op-size-btn"
@@ -12213,7 +12527,7 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);white-space:nowrap">Borrar color</button>` : ''}
 
   </div>
-  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    <div style="position:relative;display:flex;align-items:center;flex-shrink:0"><button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="Color personalizado">🎨<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none"></button></div>\n    <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="Cuentagotas">💧</button>\n    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n    ${window._edIsTouch ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ CURSOR</button><div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:center;gap:6px;"><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>` : ''}\n  </div>` : ''}\n  ${isEr && window._edIsTouch ? `
+  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    <div style="position:relative;display:flex;align-items:center;flex-shrink:0"><button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="Color personalizado">🎨<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none"></button></div>\n    <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="Cuentagotas">💧</button>\n    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>\n    ${edColorPalette.map((c,i) => `<button class="op-pal-dot" data-colidx="${i}" style="width:22px;height:22px;border-radius:50%;background:${c};border:${i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0" title="${c}"></button>`).join('')}\n    ${window._edIsTouch && !_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}">↑ CURSOR</button><div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:center;gap:6px;"><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>` : ''}\n  </div>` : ''}\n  ${isEr && window._edIsTouch && !_actIsBucket ? `
   <!-- SEP H --><div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA CURSOR BORRADOR -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%;position:relative">
@@ -12307,13 +12621,37 @@ function edRenderOptionsPanel(mode){
     $('op-tmp-bucket')?.addEventListener('click',()=>{
       _activateTmpLayer('bucket','fill',null,'bucket',100);
     });
+    // Icono de la capa activa (✒/✏️/🪣): reactiva la herramienta de dibujo
+    $('op-tool-layer-icon')?.addEventListener('click', () => {
+      _edDodgeBurnActive = false;
+      if (_edTmp.active === 'bucket') {
+        edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
+        edFillBrushType = 'bucket'; edDrawOpacity = 100; _edSyncFillCursor();
+      } else {
+        edActiveTool = 'draw'; edCanvas.className = 'tool-draw'; edDrawOpacity = 100;
+      }
+      edRenderOptionsPanel('draw');
+    });
     $('op-layer-clear')?.addEventListener('click',()=>{
       const _names = {pen:'Tinta',pencil:'Lápiz',watercolor:'Acuarela',bucket:'Fondo'};
       const _name = _names[_edTmp.active] || _edTmp.active;
       edConfirm('¿Borrar todo el contenido de la capa de ' + _name + '?', () => {
-        _edDrawPushHistory(); // guardar estado ANTES de borrar (permite deshacer)
+        _edDrawPushHistory();
         const _dlCl = _edTmp[_edTmp.active];
         if(_dlCl?._canvas) _dlCl._ctx.clearRect(0,0,_dlCl._canvas.width,_dlCl._canvas.height);
+        // Bug fix: nullar _preEditCanvas del layer real correspondiente para que
+        // _cropGroupLayer no restaure el contenido borrado explicitamente
+        const _pageCl = edPages[edCurrentPage];
+        const _drawCl = _pageCl?.layers.find(l => l.type === 'draw');
+        if (_drawCl) {
+          const _uidCl = _drawCl._uid || _drawCl._fillLayerId;
+          const _typeMapCl = {pencil:'pencil', watercolor:'watercolor', bucket:'fill'};
+          const _realTypeCl = _typeMapCl[_edTmp.active];
+          if (_realTypeCl && _uidCl) {
+            const _realLaCl = _pageCl.layers.find(l => l.type===_realTypeCl && l._drawLayerId===_uidCl);
+            if (_realLaCl) _realLaCl._preEditCanvas = null;
+          }
+        }
         _edDrawPushHistory(); edRedraw();
       }, 'Borrar');
     });
@@ -12334,9 +12672,20 @@ function edRenderOptionsPanel(mode){
       edDrawOpacity = 100;
       edRenderOptionsPanel('draw');
     });
-    $('op-tool-eraser')?.addEventListener('click', e => {
-      // Mostrar menú de selección de capa antes de activar el borrador
-      _edEraserPick($('op-tool-eraser'));
+    $('op-zoom-btn')?.addEventListener('click', e => {
+      e.stopPropagation();
+      _edZoomPick($('op-zoom-btn'));
+    });
+    $('op-color-erase')?.addEventListener('click', () => {
+      _edDodgeBurnActive = false;
+      edActiveTool = 'color-erase'; edCanvas.className = 'tool-draw';
+      edRenderOptionsPanel('draw');
+    });
+    $('op-tool-eraser')?.addEventListener('click', () => {
+      _edDodgeBurnActive = false;
+      edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
+      edDrawOpacity = 100;
+      edRenderOptionsPanel('eraser');
     });
     $('op-tool-fill')?.addEventListener('click',()=>{
       _edDodgeBurnActive = false;
@@ -12346,11 +12695,11 @@ function edRenderOptionsPanel(mode){
     });
     $('op-fill-watercolor')?.addEventListener('click', e => {
       e.stopPropagation();
-      _edDodgeBurnActive = false; // deseleccionar dodge si estaba activo
-      _edTmp.active='watercolor'; edFillBrushType = 'watercolor';
+      _edDodgeBurnActive = false;
+      _edTmp.active = 'watercolor'; edFillBrushType = 'watercolor';
       edDrawOpacity = 7;
       edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
-      edRenderOptionsPanel('fill');
+      edRenderOptionsPanel('draw');
     });
     // Icono dodge: un solo listener — sign por offsetX (hijos tienen pointer-events:none)
     $('op-fill-dodge')?.addEventListener('click', e => {
@@ -12362,7 +12711,7 @@ function edRenderOptionsPanel(mode){
         _edTmp.active = 'watercolor'; edFillBrushType = 'watercolor';
         edDrawOpacity = 7;
         edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
-        edRenderOptionsPanel('fill');
+        edRenderOptionsPanel('draw');
         return;
       }
       // Ya activo: izquierda = burn, derecha = dodge
@@ -13810,6 +14159,62 @@ function _edSnapToRules(la) {
 }
 
 /* ══════════════════════════════════════════
+   HERRAMIENTA ZOOM (lupa + zoom rect)
+   ══════════════════════════════════════════ */
+let _edZoomPrevTool = 'draw'; // herramienta previa para restaurar tras zoom
+let _edZoomRectActive = false; // true cuando el usuario arrastra el rect de zoom
+
+function _edZoomPick(anchorEl) {
+  const _old = document.getElementById('_edZoomPickOverlay');
+  if (_old) { _old.remove(); return; }
+  const overlay = document.createElement('div');
+  overlay.id = '_edZoomPickOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:1070;';
+  const pop = document.createElement('div');
+  pop.style.cssText = 'position:fixed;display:flex;flex-direction:row;gap:4px;' +
+    'background:rgba(25,25,25,0.97);border-radius:12px;padding:6px;' +
+    'box-shadow:0 4px 20px rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.13);z-index:1071;';
+  const _opts = [
+    { label:'🔍+', title:'Zoom in (arrastrar rectángulo)', action: () => {
+        overlay.remove();
+        _edZoomPrevTool = edActiveTool;
+        _edZoomRectActive = true;
+        edCanvas.style.cursor = 'crosshair';
+      }
+    },
+    { label:'🔍−', title:'Restablecer zoom', action: () => {
+        overlay.remove();
+        _edResetCameraToFit();
+      }
+    }
+  ];
+  _opts.forEach(o => {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+      'border:none;border-radius:8px;padding:6px 12px;cursor:pointer;min-width:52px;gap:3px;' +
+      'background:transparent;color:rgba(255,255,255,.85);font-size:1.4rem;';
+    btn.title = o.title;
+    btn.textContent = o.label;
+    btn.addEventListener('pointerdown', e => e.stopPropagation());
+    btn.addEventListener('pointerup', e => { e.stopPropagation(); o.action(); });
+    pop.appendChild(btn);
+  });
+  overlay.appendChild(pop);
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => {
+    const ar = anchorEl ? anchorEl.getBoundingClientRect() : {left:10,bottom:80,top:50,right:80};
+    const pw = pop.offsetWidth||120, ph = pop.offsetHeight||60, G=8;
+    let left=ar.left, top=ar.bottom+G;
+    if(top+ph>window.innerHeight-G) top=Math.max(G,ar.top-ph-G);
+    left=Math.max(G,Math.min(window.innerWidth-pw-G,left));
+    pop.style.left=left+'px'; pop.style.top=top+'px';
+  });
+  overlay.addEventListener('pointerdown', e => { if(!pop.contains(e.target)){e.stopPropagation();e.preventDefault();overlay.remove();} });
+  overlay.addEventListener('pointerup',   e => { if(!pop.contains(e.target)){e.stopPropagation();e.preventDefault();} });
+  overlay.addEventListener('click',       e => { if(!pop.contains(e.target)){e.stopPropagation();e.preventDefault();} });
+}
+
+/* ══════════════════════════════════════════
    SELECTOR DE CAPA PARA EL BORRADOR
    ══════════════════════════════════════════ */
 // Muestra un pequeño menú para elegir en cuál de las 4 sub-capas actúa el borrador.
@@ -13888,8 +14293,20 @@ function _edEraserPick(anchorEl) {
     pop.style.top  = top  + 'px';
   });
 
+  // Bloquear eventos fuera del popup: stopPropagation evita que lleguen
+  // a los botones del panel que quedan debajo del overlay
   overlay.addEventListener('pointerdown', e => {
-    if (!pop.contains(e.target)) overlay.remove();
+    if (!pop.contains(e.target)) {
+      e.stopPropagation();
+      e.preventDefault();
+      overlay.remove();
+    }
+  });
+  overlay.addEventListener('pointerup', e => {
+    if (!pop.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
+  });
+  overlay.addEventListener('click', e => {
+    if (!pop.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
   });
 }
 
@@ -14126,106 +14543,84 @@ function edInitDrawBar() {
   $('edb-pen')?.addEventListener('pointerup', e => {
     if (_edbDragLocked) return;
     e.stopPropagation();
-    // Si el pointerup viene de un botón del popup, no reabrir
     if (window._edbPopItemTouched) return;
-    if (edActiveTool !== 'draw') {
-      edPushHistory();
-      edActiveTool = 'draw'; edCanvas.className = 'tool-draw';
-      _edbSyncTool();
+    // Activar inmediatamente con la última capa y herramienta usadas (sin esperar picker)
+    if (_edDodgeBurnActive) {
+      edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool();
+    } else if (_edTmp.active==='watercolor' || edFillBrushType==='watercolor') {
+      edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool();
+    } else if (_edTmp.active==='bucket') {
+      edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool();
+    } else {
+      edActiveTool='draw'; edCanvas.className='tool-draw'; _edbSyncTool();
     }
     _edbOpenBrushPop($('edb-pen'), [
-      { icon:'🖊', label:'Tinta (estilógrafo)', active: edDrawBrushType==='pen',
-        action:()=>{
-          // Aplicar tipo de brocha directamente sin depender del panel
-          const _apply = () => { edDrawBrushType='pen'; _edbSyncTool(); };
-          if (_edDrawLayerTarget === 'fill') {
-            _edbCloseBrushPop(); // cerrar popup antes de abrir modal
-            _edbAskLayer('¿En qué capa quieres dibujar?',
-              () => { _edWcReset(); _edDrawLayerTarget='draw'; _apply(); },
-              () => { window._edKeepFillTarget=true; _apply(); }
-            );
-          } else { _apply(); }
-        }
+      // Tinta
+      { icon:'✒️', active: edActiveTool==='draw' && edDrawBrushType==='pen' && !_edDodgeBurnActive,
+        action:()=>{ _edDodgeBurnActive=false; _edTmp.active='pen'; edDrawBrushType='pen'; edActiveTool='draw'; edCanvas.className='tool-draw'; edDrawOpacity=100; _edbSyncTool(); edRenderOptionsPanel('draw'); }
       },
-      { icon:'✏️', label:'Lápiz', active: edDrawBrushType==='pencil',
-        action:()=>{
-          const _apply = () => { edDrawBrushType='pencil'; _edbSyncTool(); };
-          if (_edDrawLayerTarget === 'fill') {
-            _edbCloseBrushPop();
-            _edbAskLayer('¿En qué capa quieres dibujar?',
-              () => { _edWcReset(); _edDrawLayerTarget='draw'; _apply(); },
-              () => { window._edKeepFillTarget=true; _apply(); }
-            );
-          } else { _apply(); }
-        }
-      }
+      // Lápiz
+      { icon:'✏️', active: edActiveTool==='draw' && edDrawBrushType==='pencil' && !_edDodgeBurnActive,
+        action:()=>{ _edDodgeBurnActive=false; _edTmp.active='pencil'; edDrawBrushType='pencil'; edActiveTool='draw'; edCanvas.className='tool-draw'; edDrawOpacity=100; _edbSyncTool(); edRenderOptionsPanel('draw'); }
+      },
+      // Acuarela
+      { icon:'🖌️', active: edActiveTool==='fill' && edFillBrushType==='watercolor' && !_edDodgeBurnActive,
+        action:()=>{ _edDodgeBurnActive=false; _edTmp.active='watercolor'; edFillBrushType='watercolor'; edDrawOpacity=7; edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool(); edRenderOptionsPanel('draw'); }
+      },
+      // Iluminar/Oscurecer (elemento custom bicolor)
+      (()=>{
+        const _wrap = document.createElement('div');
+        _wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;width:44px;height:44px;padding:5px;box-sizing:border-box;border-radius:8px;cursor:pointer;' + (_edDodgeBurnActive ? 'background:rgba(255,255,255,.18);outline:2px solid rgba(255,255,255,0.7);outline-offset:-1px;' : '');
+        _wrap.title = 'Oscurecer / Iluminar';
+        const _inner = document.createElement('div');
+        _inner.style.cssText = 'display:flex;width:100%;height:100%;border-radius:5px;overflow:hidden;';
+        const _makeHalf = (sign, bg, fg, txt) => {
+          const h = document.createElement('button');
+          const isA = _edDodgeBurnActive && edDodgeBurnSign===sign;
+          h.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;border:none;cursor:pointer;font-size:16px;font-weight:900;line-height:1;background:'+bg+';color:'+fg+';'+(isA?'outline:2px solid #f90;outline-offset:-2px;':'');
+          h.textContent = txt;
+          h.addEventListener('pointerdown', e2=>{ e2.stopPropagation(); window._edbPopItemTouched=true; });
+          h.addEventListener('pointerup', e2=>{
+            e2.stopPropagation(); _edbClearPhantomPointers();
+            const _pop=$('edb-brush-pop'); if(_pop){_pop.style.display='none';_pop._anchor=null;}
+            setTimeout(()=>{
+              window._edbPopItemTouched=false;
+              _edDodgeBurnActive=true; edDodgeBurnSign=sign;
+              _edTmp.active='watercolor'; edFillBrushType='watercolor'; edDrawOpacity=7;
+              edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor();
+              _edbSyncTool(); edRenderOptionsPanel('draw');
+            },0);
+          });
+          return h;
+        };
+        _inner.appendChild(_makeHalf(-1,'#111','#fff','−'));
+        _inner.appendChild(_makeHalf( 1,'#fff','#111','+'));
+        _wrap.appendChild(_inner);
+        return { customEl: _wrap };
+      })(),
+      // Bote de pintura (Fondo)
+      { icon:'🪣', active: edActiveTool==='fill' && edFillBrushType==='bucket' && !_edDodgeBurnActive,
+        action:()=>{ _edDodgeBurnActive=false; _edTmp.active='bucket'; edFillBrushType='bucket'; edDrawOpacity=100; edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool(); edRenderOptionsPanel('draw'); }
+      },
     ]);
   });
   $('edb-eraser')?.addEventListener('pointerup', e => {
     if (_edbDragLocked) return;
     e.stopPropagation();
     _edbCloseBrushPop();
-    // Mostrar menú de selección de capa para el borrador
-    _edEraserPick($('edb-eraser'));
+    // Activar borrador directamente en la última capa activa, sin picker
+    _edDodgeBurnActive = false; _edWcReset();
+    edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
+    edDrawOpacity = 100;
+    edRenderOptionsPanel('eraser');
+    _edbSyncTool();
   });
-  $('edb-fill')?.addEventListener('pointerup', e => {
+  $('edb-zoom')?.addEventListener('pointerup', e => {
     if (_edbDragLocked) return;
     e.stopPropagation();
-    if (window._edbPopItemTouched) return;
-    if (edActiveTool !== 'fill') {
-      edActiveTool = 'fill'; edCanvas.className = 'tool-fill';
-      _edbSyncTool();
-      $('op-tool-fill')?.click();
-    }
-    _edbOpenBrushPop($('edb-fill'), [
-      { icon:'🪣', label:'Bote de pintura', active: edFillBrushType==='bucket' && !_edDodgeBurnActive,
-        action:()=>{ _edDodgeBurnActive=false; edFillBrushType='bucket'; edDrawOpacity=100; _edSyncFillCursor(); _edbSyncTool(); $('op-fill-bucket')?.click(); } },
-      { icon:'🖌️', label:'Acuarela', active: edFillBrushType==='watercolor' && !_edDodgeBurnActive,
-        action:()=>{ _edDodgeBurnActive=false; edFillBrushType='watercolor'; edDrawOpacity=7; _edSyncFillCursor(); _edbSyncTool(); $('op-fill-watercolor')?.click(); } },
-      (()=>{
-        // Elemento custom: icono bicolor lado a lado, llena el marco 44x44 del popover
-        const _wrap = document.createElement('div');
-        _wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;' +
-          'width:44px;height:44px;padding:5px;box-sizing:border-box;border-radius:8px;cursor:pointer;' +
-          (_edDodgeBurnActive ? 'background:rgba(255,255,255,.18);outline:2px solid rgba(255,255,255,0.7);outline-offset:-1px;' : '');
-        _wrap.title = 'Oscurecer / Iluminar';
-        const _inner = document.createElement('div');
-        _inner.style.cssText = 'display:flex;width:100%;height:100%;border-radius:5px;overflow:hidden;';
-        const _makeHalf = (sign, bg, fg, txt) => {
-          const h = document.createElement('button');
-          const isActive = _edDodgeBurnActive && edDodgeBurnSign === sign;
-          h.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;' +
-            'border:none;cursor:pointer;font-size:16px;font-weight:900;line-height:1;' +
-            'background:' + bg + ';color:' + fg + ';' +
-            (isActive ? 'outline:2px solid #f90;outline-offset:-2px;' : '');
-          h.textContent = txt;
-          h.addEventListener('pointerdown', e => { e.stopPropagation(); window._edbPopItemTouched = true; });
-          h.addEventListener('pointerup', e => {
-            e.stopPropagation();
-            _edbClearPhantomPointers();
-            const _pop = $('edb-brush-pop');
-            if (_pop) { _pop.style.display = 'none'; _pop._anchor = null; }
-            setTimeout(() => {
-              window._edbPopItemTouched = false;
-              _edDodgeBurnActive = true;
-              edDodgeBurnSign = sign;
-              _edTmp.active = 'watercolor'; edFillBrushType = 'watercolor';
-              edDrawOpacity = 7;
-              edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
-              _edbSyncTool();
-              edRenderOptionsPanel('fill');
-            }, 0);
-          });
-          return h;
-        };
-        _inner.appendChild(_makeHalf(-1, '#111', '#fff', '−'));
-        _inner.appendChild(_makeHalf( 1, '#fff', '#111', '+'));
-        _wrap.appendChild(_inner);
-        return { customEl: _wrap };
-      })()
-    ]);
+    _edbCloseBrushPop();
+    _edZoomPick($('edb-zoom'));
   });
-
   // ── Color: abre popover de paleta ──
   $('edb-color')?.addEventListener('click', e => {
     e.stopPropagation();
@@ -14549,23 +14944,22 @@ function _edbSyncTool() {
   const bar = $('edDrawBar'); if (!bar) return;
   const t = edActiveTool;
   // Icono dinámico según sub-herramienta activa
+  // edb-pen muestra el icono de la herramienta activa actual
   const penBtn = $('edb-pen');
-  if (penBtn) penBtn.textContent = (typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') ? '✏️' : '🖊';
-  const fillBtn = $('edb-fill');
-  if (fillBtn) {
-    if (_edDodgeBurnActive) {
-      if (edDodgeBurnSign === -1) {
-        fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#111;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#fff;line-height:1">−</span></span>';
+  if (penBtn) {
+    if (t === 'fill') {
+      if (_edDodgeBurnActive) {
+        const _s = edDodgeBurnSign === -1;
+        penBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:'+(_s?'#111':'#fff')+';border:'+(_s?'none':'1px solid #888')+';align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:'+(_s?'#fff':'#111')+';line-height:1">'+(_s?'−':'+')+'</span></span>';
       } else {
-        fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#fff;border:1px solid #888;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#111;line-height:1">+</span></span>';
+        penBtn.textContent = (typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor') ? '🖌️' : '🪣';
       }
     } else {
-      fillBtn.textContent = (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor') ? '🖌️' : '🪣';
+      penBtn.textContent = (typeof edDrawBrushType!=='undefined' && edDrawBrushType==='pencil') ? '✏️' : '✒️';
     }
   }
-  $('edb-pen')?.classList.toggle('active', t === 'draw');
+  $('edb-pen')?.classList.toggle('active', t === 'draw' || t === 'fill');
   $('edb-eraser')?.classList.toggle('active', t === 'eraser');
-  $('edb-fill')?.classList.toggle('active', t === 'fill');
   // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
   const offsetBtn = $('edb-offset');
@@ -14625,15 +15019,8 @@ function _edUpdateDodgeIcon(){
   if(dodgeSpan) dodgeSpan.style.outline = (edDodgeBurnSign ===  1) ? '2px solid #f90' : 'none';
   wrap.style.borderColor = _edDodgeBurnActive ? 'var(--black)' : 'var(--gray-300)';
   wrap.style.opacity = _edDodgeBurnActive ? '1' : '0.4';
-  // Actualizar también el botón de la barra flotante
-  const _fillBtn = $('edb-fill');
-  if (_fillBtn && _edDodgeBurnActive) {
-    if (edDodgeBurnSign === -1) {
-      _fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#111;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#fff;line-height:1">−</span></span>';
-    } else {
-      _fillBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:#fff;border:1px solid #888;align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:#111;line-height:1">+</span></span>';
-    }
-  }
+  // Actualizar icono edb-pen (herramienta consolidada en barra flotante)
+  _edbSyncTool();
 }
 function _edUpdateDrawInfo() {
   const info = $('op-draw-info'); if (!info) return;
@@ -14805,6 +15192,7 @@ function edDrawBarShow(snapToCanvas) {
 }
 
 function edDrawBarHide() {
+  _edEraserPickClose(); // cerrar picker del borrador al ocultar la barra
   if (_edPanelIsCollapsed()) return;
   $('edDrawBar')?.classList.remove('visible');
   // Cerrar todos los submenús flotantes de la barra
@@ -21670,6 +22058,11 @@ function _gcpHandleDown(e) {
       }
     }
   }
+  // ── Registrar pointer SIEMPRE antes de cualquier return —————————————————
+  // Imprescindible para que el mapa tenga tamaño 2 al llegar el segundo dedo
+  // (sin esto, los returns anticipados dejan el puntero sin rastrear y el pinch falla)
+  _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
   // Si el panel de propiedades GCP está abierto y se toca fuera de él → cerrarlo
   const _gppEl = document.getElementById('gcpPropsPanel');
   if (_gppEl && _gppEl.classList.contains('open')) {
@@ -21740,9 +22133,6 @@ function _gcpHandleDown(e) {
       return; // hit de guía — no procesar capas
     }
   }
-
-  // Registrar pointer en mapa propio del GCP
-  _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
   // Dos dedos → pinch (cancelar rubber band si estaba pendiente)
   if (_gcpPtrMap.size === 2) {
@@ -21892,8 +22282,9 @@ function _gcpDoSelectDrag(e, c) {
         if (Math.hypot(_dpx, _dpy)*_z < hitScreen) {
           if (p.corner === 'rotate') {
             edIsRotating = true;
-            edRotateStartAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x) - (_la.rotation||0)*Math.PI/180;
+            window._edRotateLastAngle = Math.atan2(c.ny-_la.y, c.nx-_la.x);
             window._edRotateInitRot = _la.rotation||0;
+            if(e.pointerId!==undefined && gcpCanvas){ try{ gcpCanvas.setPointerCapture(e.pointerId); }catch(_){} }
               return;
           }
           edIsResizing = true; edResizeCorner = p.corner;
@@ -21924,6 +22315,7 @@ function _gcpDoSelectDrag(e, c) {
             edInitialSize._cornerRadii = _la.cornerRadii
               ? (Array.isArray(_la.cornerRadii) ? [..._la.cornerRadii] : {..._la.cornerRadii})
               : null;
+            if(e.pointerId!==undefined && gcpCanvas){ try{ gcpCanvas.setPointerCapture(e.pointerId); }catch(_){} }
             return;
         }
       }
@@ -21939,6 +22331,7 @@ function _gcpDoSelectDrag(e, c) {
         edDragOffX = c.nx - _la.x;
         edDragOffY = c.ny - _la.y;
         window._edMoved = false;
+        if(e.pointerId!==undefined && gcpCanvas){ try{ gcpCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       }
       _gcpRedraw(); return;
     }
@@ -21977,6 +22370,7 @@ function _gcpDoSelectDrag(e, c) {
       edDragOffX = c.nx - _hitLa.x;
       edDragOffY = c.ny - _hitLa.y;
       window._edMoved = false;
+      if(e.pointerId!==undefined && gcpCanvas){ try{ gcpCanvas.setPointerCapture(e.pointerId); }catch(_){} }
     }
   } else {
     // Toque en vacío
@@ -22263,6 +22657,13 @@ function _gcpAutoSaveFrame() {
   window._gcpDirty = true;
   const fi = window._gcpGlobalFrameIdx || 0;
   if (!window._gcpLayers || !window._gcpLayers.length) return;
+  // Nunca sobreescribir frames interpolados o circulares con frames clave:
+  // eso eliminaría el flag _interp y convertiría el interpolado en clave,
+  // rompiendo la secuencia de interpolación.
+  const _isInterp = window._gcpLayers.some(la =>
+    la._frames?.[fi]?._interp || la._frames?.[fi]?._circular
+  );
+  if (_isInterp) return;
   // Eliminar interpolación circular si existía (el frame guardado la invalida)
   _gcpRemoveCircularInterp();
   window._gcpLayers.forEach(la => {
@@ -22274,7 +22675,8 @@ function _gcpAutoSaveFrame() {
       visible: la._gcpVisible !== false
     };
   });
-  _gcpUpdateFramesBar();
+  // Recalcular interpolaciones adyacentes si existen (preservando _blur)
+  _gcpReinterpolateAround(fi);
 }
 
 // Crea/actualiza la interpolación circular (último frame → primer frame) automáticamente.
@@ -22337,10 +22739,8 @@ function _gcpRemoveCircularInterp() {
 function _gcpHandleMove(e) {
   // Cancelar timer de rubber band táctil si el dedo se mueve
   if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
-  // Actualizar pointer en el mapa propio del GCP
-  if (_gcpPtrMap.has(e.pointerId)) {
-    _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  }
+  // Actualizar pointer en el mapa propio del GCP (siempre, aunque no estuviera rastreado)
+  _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
   // ── Pinch: objeto seleccionado → escalar+rotar; sin objeto → zoom+pan cámara ──
   if (_gcpPinching && _gcpPtrMap.size >= 2) {
     const pts  = [..._gcpPtrMap.values()].slice(0, 2);
@@ -22821,7 +23221,8 @@ function _gcpCountInterpBetween(la, fi) {
 
 // Genera n frames interpolados entre la._frames[fi] y la._frames[fi+n+1]
 // para UNA sola capa. Reemplaza los _interp existentes en ese hueco.
-function _gcpInterpolateSingleLayer(la, fi, n) {
+// withBlur: si true, los frames generados heredan el flag _blur del bloque anterior.
+function _gcpInterpolateSingleLayer(la, fi, n, withBlur) {
   if (!la._frames || n < 1) return;
   const a = la._frames[fi];
   // El frame clave derecho está en fi+1 (ya se eliminaron los interp previos)
@@ -22831,7 +23232,9 @@ function _gcpInterpolateSingleLayer(la, fi, n) {
   if (!b) return;
   const newFrames = [];
   for (let k = 1; k <= n; k++) {
-    newFrames.push(_gcpLerpFrame(a, b, k / (n + 1)));
+    const f = _gcpLerpFrame(a, b, k / (n + 1));
+    if (withBlur) f._blur = true;
+    newFrames.push(f);
   }
   // Insertar sin reemplazar (bIdx sigue en su sitio)
   la._frames.splice(fi + 1, 0, ...newFrames);
@@ -22841,12 +23244,13 @@ function _gcpInterpolateSingleLayer(la, fi, n) {
 function _gcpReinterpolateAfter(fi) {
   window._gcpLayers.forEach(la => {
     if (!la._frames || fi >= la._frames.length - 1) return;
-    // Contar y eliminar interpolados actuales
+    // Contar y eliminar interpolados actuales, preservando flag _blur
     let n = _gcpCountInterpBetween(la, fi);
     if (n === 0) return;
+    const _hadBlur = la._frames.slice(fi + 1, fi + 1 + n).some(f => f?._blur);
     la._frames.splice(fi + 1, n); // eliminar existentes
     if (fi + 1 >= la._frames.length) return; // no hay clave derecho
-    _gcpInterpolateSingleLayer(la, fi, n);
+    _gcpInterpolateSingleLayer(la, fi, n, _hadBlur);
   });
 }
 
@@ -22859,12 +23263,13 @@ function _gcpReinterpolateBefore(fi) {
     let leftKey = fi - 1;
     while (leftKey > 0 && la._frames[leftKey]?._interp) leftKey--;
     if (la._frames[leftKey]?._interp) return;
-    // Contar interpolados entre leftKey y fi
+    // Contar interpolados entre leftKey y fi, preservando flag _blur
     let n = fi - leftKey - 1;
     if (n === 0) return;
+    const _hadBlur = la._frames.slice(leftKey + 1, leftKey + 1 + n).some(f => f?._blur);
     la._frames.splice(leftKey + 1, n); // eliminar existentes
     // fi se ha desplazado: el nuevo índice del clave derecho es leftKey+1
-    _gcpInterpolateSingleLayer(la, leftKey, n);
+    _gcpInterpolateSingleLayer(la, leftKey, n, _hadBlur);
   });
 }
 
@@ -24330,60 +24735,47 @@ function _gcpRedraw() {
     if (!l || typeof l.draw !== 'function') return;
     if (l._gcpVisible === false) return;
 
-    // ── Blur de movimiento ────────────────────────────────────────────────────
-    // Detectar si este frame pertenece a un bloque blur.
-    // El bloque va desde el frame clave izquierdo (A) hasta el clave derecho (B).
-    // Los ghosts se dibujan entre la posición del frame clave A y la posición actual,
-    // así el blur es visible aunque el salto entre frames interpolados sea pequeño.
+    // ── Blur de movimiento ─────────────────────────────────────────────────────
+    // Diseño: usar los N frames ANTERIORES reales como fantasmas de trail.
+    // Ventajas vs. interpolación desde keyA:
+    //   · Trayectoria exacta (los datos ya están en _frames[fi-k])
+    //   · Sin cálculo extra de lerp
+    //   · 0 memoria adicional (solo referencias a datos ya existentes)
+    //   · 3 ghosts en vez de 4 → rendering ~25% más rápido
     const _frames = l._frames;
     const _curSnap = _frames?.[fi];
 
-    // Buscar si este frame tiene _blur o está dentro de un bloque _blur
-    let _blurKeyA = null; // frame clave izquierdo del bloque blur
+    // Determinar si el frame actual debe mostrar blur:
+    //   · Frame interpolado con _blur activo
+    //   · Frame clave al FINAL de un bloque blur (fi-1 es interp+blur)
+    let _showBlur = false;
     if (_curSnap && fi > 0) {
-      // Caso 1: frame interpolado con _blur — buscar el clave izquierdo
       if (_curSnap._blur) {
-        let _ki = fi - 1;
-        while (_ki >= 0 && _frames[_ki]?._interp) _ki--;
-        if (_ki >= 0 && !_frames[_ki]?._interp) _blurKeyA = _frames[_ki];
-      }
-      // Caso 2: frame clave derecho (fi-1 es interpolado con _blur)
-      if (!_blurKeyA && !_curSnap._interp) {
-        let _ki = fi - 1;
-        while (_ki >= 0 && _frames[_ki]?._interp) {
-          if (_frames[_ki]._blur) {
-            // Encontrar el clave izquierdo del bloque
-            let _ki2 = _ki - 1;
-            while (_ki2 >= 0 && _frames[_ki2]?._interp) _ki2--;
-            if (_ki2 >= 0) _blurKeyA = _frames[_ki2];
-            break;
-          }
-          _ki--;
-        }
-      }
-      // Caso 3: frame clave izquierdo (fi+1 es interpolado con _blur)
-      if (!_blurKeyA && !_curSnap._interp && _frames[fi + 1]?._interp && _frames[fi + 1]?._blur) {
-        // No dibujar ghosts en el frame A (no hay nada "antes" del bloque)
-        // El blur desde A se verá cuando se reproduzcan los frames siguientes
-        _blurKeyA = null;
+        _showBlur = true; // interpolado con blur
+      } else if (!_curSnap._interp) {
+        _showBlur = !!(_frames[fi - 1]?._interp && _frames[fi - 1]?._blur);
       }
     }
 
-    if (_blurKeyA) {
-      const _nGhosts = 4;
-      for (let _g = 1; _g <= _nGhosts; _g++) {
-        // t=1 → posición de keyA (más transparente), t→0 → posición actual (más opaco)
-        const _t = _g / (_nGhosts + 1);  // 0.2, 0.4, 0.6, 0.8
-        const _gAlpha = (1 - _t) * 0.38;
-        const _ghostSnap = {
-          x:        _curSnap.x        + (_blurKeyA.x        - _curSnap.x)        * _t,
-          y:        _curSnap.y        + (_blurKeyA.y        - _curSnap.y)        * _t,
-          width:    _curSnap.width    + (_blurKeyA.width    - _curSnap.width)    * _t,
-          height:   _curSnap.height   + (_blurKeyA.height   - _curSnap.height)   * _t,
-          rotation: _curSnap.rotation + (_blurKeyA.rotation - _curSnap.rotation) * _t,
-          opacity:  _curSnap.opacity  + (_blurKeyA.opacity  - _curSnap.opacity)  * _t,
-        };
-        _gcpDrawLayerBlurGhost(gcpCtx, l, _ghostSnap, _gAlpha);
+    if (_showBlur) {
+      // Recoger hasta 3 frames previos que sean parte del bloque blur
+      const _maxG = 3;
+      const _trailSnaps = [];
+      for (let _k = 1; _k <= _maxG; _k++) {
+        const _pfi = fi - _k;
+        if (_pfi < 0) break;
+        const _ps = _frames[_pfi];
+        if (!_ps || _ps.visible === false) break;
+        _trailSnaps.push(_ps);
+        // Incluir el frame clave de inicio (sin _interp) como último ghost y parar
+        if (!_ps._interp && !_ps._blur) break;
+      }
+      // Dibujar de más lejano a más cercano (el más cercano queda encima)
+      for (let _gi = _trailSnaps.length - 1; _gi >= 0; _gi--) {
+        const _dist = _gi + 1; // 1 = más cercano, N = más lejano
+        // Alpha: cercano = 0.42, medio = 0.24, lejano = 0.12
+        const _gAlpha = (1 - (_dist - 0.5) / (_maxG + 0.5)) * 0.52;
+        _gcpDrawLayerBlurGhost(gcpCtx, l, _trailSnaps[_gi], Math.max(0.05, _gAlpha));
       }
     }
     // ── Dibujo normal ─────────────────────────────────────────────────────────
