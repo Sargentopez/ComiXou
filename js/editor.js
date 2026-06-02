@@ -25263,12 +25263,12 @@ function gcpInsertFromBib(entry) {
     const _curFi = window._gcpGlobalFrameIdx;
     la._frames = [];
     if (_totalAtInsert > 0) {
-      // Inicializar solo hasta el frame actual: invisible 0.._curFi-1, visible en _curFi.
-      // Los frames posteriores son implícitamente invisibles (fi >= _frames.length → _gcpVisible=false).
-      // Esto evita que el nuevo objeto ocupe todos los slots de una animación ya existente.
-      _gcpInitLayerFrames(la, _curFi);
+      // Rellenar con invisible en frames anteriores/posteriores, visible en frame actual
+      const _inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
+      const _vis = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
+      for (let _i = 0; _i < _totalAtInsert; _i++) la._frames.push(_i === _curFi ? {..._vis} : {..._inv});
     }
-    // Si _totalAtInsert === 0: _frames vacío — el usuario guarda su primer frame con "Guardar Frame".
+    // Sin frames previos: _frames vacío hasta que se pulse Guardar Frame
     _gcpPushLayer(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpInvalidateAllThumbs();
