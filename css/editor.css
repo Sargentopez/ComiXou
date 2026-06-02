@@ -532,6 +532,23 @@ body.editor-page #appView {
 /* En horiz la paleta se despliega en fila */
 #edb-palette-pop.horiz-pop { flex-direction: row; flex-wrap: wrap; max-width: 180px; }
 
+/* ── Popover sub-herramientas (trazos/capas borrador) ── */
+#edb-brush-pop {
+  position: absolute;
+  z-index: 52;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: rgba(20,20,20,.93);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 10px;
+  box-shadow: 0 3px 12px rgba(0,0,0,.45);
+  /* la posición se calcula por JS */
+}
+#edb-brush-pop.open { display: flex; }
+#edb-brush-pop.horiz-pop { flex-direction: row; }
+
 #edb-shapes-pop {
   position: fixed;
   z-index: 1300;

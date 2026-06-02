@@ -29,6 +29,8 @@ let _lyDragIdx  = null;
 let _lyDragOver = null;
 let _lyDragType = null; // 'text' | 'image'
 let _lyUidCounter = 0;  // IDs únicos estables para animación FLIP
+// UIDs de grupos de dibujo con sub-capas colapsadas (por defecto todos colapsados)
+const _lyExpandedGroups = new Set(); // UIDs explícitamente expandidos; vacío = todos colapsados
 
 /* ── Doble tap en miniatura ──
    lastTapTime/lastTapEl se comparten por closure en cada listener.
@@ -274,12 +276,15 @@ function _lyRender() {
       if ((l.type === 'draw' || l.type === 'stroke')) {
         const _lyUid = l._uid || l._fillLayerId;
         if (_lyUid) {
-          const _lyFlPair = edLayers.find(la => la.type==='fill'       && la._drawLayerId===_lyUid);
-          const _lyPencil = edLayers.find(la => la.type==='pencil'     && la._drawLayerId===_lyUid);
-          const _lyWc     = edLayers.find(la => la.type==='watercolor' && la._drawLayerId===_lyUid);
-          if (_lyFlPair) list.appendChild(_lyBuildGroupSubRow(_lyFlPair, edLayers.indexOf(_lyFlPair), '🧪 Relleno',   '#93c5fd'));
-          if (_lyWc)     list.appendChild(_lyBuildGroupSubRow(_lyWc,     edLayers.indexOf(_lyWc),     '💧 Acuarela',  '#6ee7b7'));
-          if (_lyPencil) list.appendChild(_lyBuildGroupSubRow(_lyPencil, edLayers.indexOf(_lyPencil), '✏️ Lápiz',     '#c4b5fd'));
+          // Solo mostrar sub-filas si está en _lyExpandedGroups (colapsado por defecto)
+          if (_lyExpandedGroups.has(_lyUid)) {
+            const _lyFlPair = edLayers.find(la => la.type==='fill'       && la._drawLayerId===_lyUid);
+            const _lyPencil = edLayers.find(la => la.type==='pencil'     && la._drawLayerId===_lyUid);
+            const _lyWc     = edLayers.find(la => la.type==='watercolor' && la._drawLayerId===_lyUid);
+            if (_lyFlPair) list.appendChild(_lyBuildGroupSubRow(_lyFlPair, edLayers.indexOf(_lyFlPair), '🧪 Relleno',   '#93c5fd'));
+            if (_lyWc)     list.appendChild(_lyBuildGroupSubRow(_lyWc,     edLayers.indexOf(_lyWc),     '💧 Acuarela',  '#6ee7b7'));
+            if (_lyPencil) list.appendChild(_lyBuildGroupSubRow(_lyPencil, edLayers.indexOf(_lyPencil), '✏️ Lápiz',     '#c4b5fd'));
+          }
         }
       }
     });
@@ -763,6 +768,26 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   acts.appendChild(upBtn);
   acts.appendChild(dnBtn);
   acts.appendChild(_lyBuildEyeBtn(la));
+  // Botón colapsar/expandir sub-capas solo para stroke/draw con capas vinculadas
+  if (isDrawType) {
+    const _colUid = la._uid || la._fillLayerId;
+    const _hasSubs = _colUid && (typeof edLayers !== 'undefined') && edLayers.some(l =>
+      (l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_colUid);
+    if (_hasSubs) {
+      const _colBtn = document.createElement('button');
+      _colBtn.className = 'ed-layer-del';
+      _colBtn.title = _lyExpandedGroups.has(_colUid) ? 'Colapsar sub-capas' : 'Mostrar sub-capas';
+      _colBtn.textContent = _lyExpandedGroups.has(_colUid) ? '▼' : '▶';
+      _colBtn.style.cssText = 'font-size:0.7rem;padding:2px 5px;opacity:0.7;';
+      _colBtn.addEventListener('pointerup', e => {
+        e.stopPropagation();
+        if (_lyExpandedGroups.has(_colUid)) _lyExpandedGroups.delete(_colUid);
+        else _lyExpandedGroups.add(_colUid);
+        _lyRender();
+      });
+      acts.appendChild(_colBtn);
+    }
+  }
   acts.appendChild(del);
   item.appendChild(acts);
 

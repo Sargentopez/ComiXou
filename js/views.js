@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v28.38</footer>
+    <footer class="app-version">v28.63</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -457,7 +457,6 @@ Router.register('editor', {
         <div class="edb-content">
           <button id="edb-pen"    class="edb-tool" title="Dibujar">✒️</button>
           <button id="edb-eraser" class="edb-tool" title="Borrar">🧹</button>
-          <button id="edb-zoom"   class="edb-tool" title="Zoom">🔍</button>
           <div class="edb-sep"></div>
           <button id="edb-color"  class="edb-swatch" title="Color"></button>
           <button id="edb-eyedrop" class="edb-tool" title="Cuentagotas">💧</button>
@@ -468,6 +467,7 @@ Router.register('editor', {
           <div class="edb-sep"></div>
           <button id="edb-undo"   class="edb-tool" title="Deshacer">↩</button>
           <button id="edb-redo"   class="edb-tool" title="Rehacer">↪</button>
+          <button id="edb-zoom"   class="edb-tool" title="Zoom">🔍</button>
           <div class="edb-sep"></div>
           <button id="edb-ok"     class="edb-ok" title="Finalizar">✓</button>
         </div>
@@ -486,8 +486,8 @@ Router.register('editor', {
       </div>
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
-      <!-- Popup sub-herramienta: selección lápiz/tinta y bote/acuarela -->
-      <div id="edb-brush-pop" style="display:none;position:fixed;z-index:1200;background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:8px;box-shadow:0 4px 18px rgba(0,0,0,.6);flex-direction:column;align-items:stretch;gap:4px;min-width:130px"></div>
+      <!-- Popup sub-herramienta: selección lápiz/tinta y capas borrador -->
+      <div id="edb-brush-pop"></div>
       <!-- Panel grosor anclado a la barra flotante de dibujo -->
       <div id="edb-size-pop" style="display:none;position:fixed;z-index:1200;background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:12px 14px;box-shadow:0 4px 18px rgba(0,0,0,.6);flex-direction:column;align-items:center;gap:10px;min-width:170px">
         <!-- Preview: número a la izquierda + círculo a la derecha -->
@@ -714,7 +714,7 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-gcpmenu="guardar" style="font-weight:700">Guardar ▾</button>
             <div class="ed-dropdown" id="gdd-guardar" style="min-width:220px">
-              <button class="ed-dropdown-item" id="gcpSaveAppBtn"><span class="dd-icon">📥</span>Guardar en la aplicación</button>
+              <button class="ed-dropdown-item" id="gcpSaveAppBtn"><span class="dd-icon">📥</span>Insertar en el canvas</button>
               <button class="ed-dropdown-item" id="gcpDownloadApngBtn"><span class="dd-icon">⬇️</span>Descargar APNG <small style="opacity:.6">(web)</small></button>
               <button class="ed-dropdown-item" id="gcpDownloadGifBtn"><span class="dd-icon">⬇️</span>Descargar GIF <small style="opacity:.6">(Windows)</small></button>
               <button class="ed-dropdown-item" id="gcpDownloadMp4Btn"><span class="dd-icon">⬇️</span>Descargar MP4 <small style="opacity:.6">(WhatsApp y redes)</small></button>
