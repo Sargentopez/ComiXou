@@ -12817,7 +12817,10 @@ function edRenderOptionsPanel(mode){
 
     $('op-eyedrop-btn')?.addEventListener('click', ()=>{ _edStartEyedrop(); });
     // ── Color: botón arcoíris abre picker propio en táctil, nativo en PC ──
-    $('op-custom-color-btn')?.addEventListener('click',()=>{
+    // NOTA: usar pointerup (no click) — edOnStart llama preventDefault en pointerdown
+    // lo que cancela el evento click en Android Chrome.
+    $('op-custom-color-btn')?.addEventListener('pointerup', e => {
+      e.stopPropagation();
       if(edSelectedPaletteIdx <= 1){ edToast('Este color no es editable'); return; }
       if(window._edIsTouch){
         _edShowColorPicker((hex, final)=>{
@@ -25020,17 +25023,8 @@ function _gcpRedraw() {
     }
 
     if (_showBlur) {
-      // 1. Recoger el snapshot más lejano disponible (hasta 8 frames atrás)
-      const _collectMax = 8;
-      let _farSnap = null;
-      for (let _k = 1; _k <= _collectMax; _k++) {
-        const _pfi = fi - _k;
-        if (_pfi < 0) break;
-        const _ps = _frames[_pfi];
-        if (!_ps || _ps.visible === false) break;
-        _farSnap = _ps;
-        if (!_ps._interp && !_ps._blur) break; // parar en keyframe de inicio
-      }
+      // El trail se extiende exactamente un frame: desde fi-1 hasta fi.
+      const _farSnap = (fi > 0 && _frames[fi-1]?.visible !== false) ? _frames[fi-1] : null;
 
       if (_farSnap) {
         // 2. Velocidad en píxeles de pantalla entre posición lejana y actual
@@ -25263,12 +25257,12 @@ function gcpInsertFromBib(entry) {
     const _curFi = window._gcpGlobalFrameIdx;
     la._frames = [];
     if (_totalAtInsert > 0) {
-      // Rellenar con invisible en frames anteriores/posteriores, visible en frame actual
-      const _inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
-      const _vis = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
-      for (let _i = 0; _i < _totalAtInsert; _i++) la._frames.push(_i === _curFi ? {..._vis} : {..._inv});
+      // Inicializar solo hasta el frame actual: invisible 0.._curFi-1, visible en _curFi.
+      // Los frames posteriores son implícitamente invisibles (fi >= _frames.length).
+      // Evita que el nuevo objeto ocupe todos los slots de una animación previa eliminada.
+      _gcpInitLayerFrames(la, _curFi);
     }
-    // Sin frames previos: _frames vacío hasta que se pulse Guardar Frame
+    // Si _totalAtInsert === 0: _frames vacío — el usuario guarda su primer frame con "Guardar Frame".
     _gcpPushLayer(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpInvalidateAllThumbs();
@@ -25668,7 +25662,7 @@ function gcpOpen(edLayerIdx) {
       e.stopPropagation();
       _gcpCloseAllDropdowns();
       edToast('Procesando…');
-      _gcpSaveToLib(null);
+      _gcpSaveToLib(() => _gcpDoClose()); // inserta y sale inmediatamente
     });
     document.getElementById('gcpDownloadApngBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
@@ -25844,7 +25838,6 @@ function _gcpDoClose() {
 
 function gcpClose() {
   if (!window._gcpLayers || !window._gcpLayers.length) { _gcpDoClose(); return; }
-  // Si no hay cambios desde el último guardado, cerrar directamente
   if (!window._gcpDirty) { _gcpDoClose(); return; }
   document.getElementById('_gcpSavePop')?.remove();
   const pop = document.createElement('div');
@@ -25855,18 +25848,21 @@ function gcpClose() {
   pop.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
     <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">¿${_actionLabel}?</p>
     <div style="display:flex;gap:10px;justify-content:center">
-      <button id="_gcpPopNo" style="flex:1;padding:10px;border:1.5px solid #ccc;border-radius:8px;background:#f5f5f5;font-size:.9rem;cursor:pointer">Descartar</button>
+      <button id="_gcpPopNo" style="flex:1;padding:10px;border:1.5px solid #ccc;border-radius:8px;background:#f5f5f5;font-size:.9rem;cursor:pointer">Cancelar</button>
       <button id="_gcpPopSi" style="flex:1;padding:10px;border:none;border-radius:8px;background:#ffe066;font-size:.9rem;font-weight:700;cursor:pointer">${_actionLabel}</button>
     </div>
   </div>`;
   document.body.appendChild(pop);
+  // Bloquear todos los eventos táctiles para que no pasen al canvas GCP
+  pop.addEventListener('pointerdown', e => e.stopPropagation(), true);
+  pop.addEventListener('touchstart',  e => e.stopPropagation(), { passive: true, capture: true });
   pop.querySelector('#_gcpPopNo').addEventListener('pointerup', () => {
-    pop.remove(); _gcpDoClose();
+    pop.remove(); // solo cierra el popup, NO sale del GCP
   });
   pop.querySelector('#_gcpPopSi').addEventListener('pointerup', () => {
     pop.remove();
     edToast('Procesando...');
-    _gcpSaveToLib(() => _gcpDoClose());
+    _gcpSaveToLib(() => _gcpDoClose()); // inserta y sale inmediatamente
   });
 }
 
@@ -25884,21 +25880,70 @@ function _gcpSaveToLib(onDone) {
   const wsH = pageH + marginY*2 + extra*2;
   const offX = extra, offY = extra;
 
-  // Renderizar frame global fi — usa _gcpApplyFrame que setea _gcpVisible por layer.
-  // Idéntico a _gcpRedraw: si _gcpVisible===false el layer no se dibuja.
+  // Renderizar frame global fi con blur de acumulación igual que _gcpRedraw.
+  // Usa pageW como escala de velocidad (píxeles en el canvas de exportación).
   const renderSnap = (snap, fi) => {
-    _gcpApplyFrame(fi);   // actualiza posición Y _gcpVisible de cada layer
+    window._gcpGlobalFrameIdx = fi; // necesario para que el blur calcule bien los frames previos
+    _gcpApplyFrame(fi);
     const fc = document.createElement('canvas');
     fc.width = wsW; fc.height = wsH;
     const fctx = fc.getContext('2d');
     fctx.setTransform(1, 0, 0, 1, offX, offY);
+
     layers.forEach(l => {
       if (!l || typeof l.draw !== 'function') return;
-      if (l._gcpVisible === false) return;   // mismo guard que _gcpRedraw
+      if (l._gcpVisible === false) return;
+
+      // ── Accumulation blur (mismo algoritmo que _gcpRedraw) ──
+      const _frames = l._frames;
+      const _curSnap = _frames?.[fi];
+      let _showBlur = false;
+      if (_curSnap && fi > 0) {
+        if (_curSnap._blur) { _showBlur = true; }
+        else if (!_curSnap._interp) { _showBlur = !!(_frames[fi-1]?._interp && _frames[fi-1]?._blur); }
+      }
+      if (_showBlur) {
+        // Trail de exactamente un frame: desde fi-1 hasta fi
+        const _farSnap = (fi > 0 && _frames[fi-1]?.visible !== false) ? _frames[fi-1] : null;
+        if (_farSnap) {
+          // Velocidad en píxeles del canvas de exportación (pageW = ref de escala)
+          const _edx = (l.x - _farSnap.x) * pageW;
+          const _edy = (l.y - _farSnap.y) * pageH;
+          const _dist = Math.hypot(_edx, _edy);
+          const _velFactor = Math.max(0, Math.min(1, (_dist - 3) / 60));
+          if (_velFactor > 0.01) {
+            const _M = Math.round(6 + _velFactor * 8);
+            const _totalAlpha = 0.12 + _velFactor * 0.28;
+            const _wSum = _M * (_M + 1) / 2;
+            for (let _si = 0; _si < _M; _si++) {
+              const _t = _si / _M;
+              const _iSnap = {
+                x:        _farSnap.x + _t * (l.x - _farSnap.x),
+                y:        _farSnap.y + _t * (l.y - _farSnap.y),
+                width:    (_farSnap.width  || l.width)  + _t * (l.width  - (_farSnap.width  || l.width)),
+                height:   (_farSnap.height || l.height) + _t * (l.height - (_farSnap.height || l.height)),
+                rotation: (_farSnap.rotation || 0) + _t * ((l.rotation || 0) - (_farSnap.rotation || 0)),
+                opacity:  (_farSnap.opacity ?? 1) + _t * ((l.opacity ?? 1) - (_farSnap.opacity ?? 1)),
+              };
+              const _alpha = Math.max(0.004, _totalAlpha * (_si + 1) / _wSum);
+              // _gcpDrawLayerBlurGhost adaptado para fctx/fc
+              const _cx=l.x,_cy=l.y,_cw=l.width,_ch=l.height,_cr=l.rotation,_co=l.opacity;
+              l.x=_iSnap.x; l.y=_iSnap.y; l.width=_iSnap.width; l.height=_iSnap.height;
+              l.rotation=_iSnap.rotation; l.opacity=(_iSnap.opacity??1)*_alpha;
+              if (l.type==='image'||l.type==='gif') l.draw(fctx, fc);
+              else if (l.type==='text'||l.type==='bubble') l.draw(fctx, fc);
+              else { fctx.globalAlpha=l.opacity; l.draw(fctx); fctx.globalAlpha=1; }
+              l.x=_cx; l.y=_cy; l.width=_cw; l.height=_ch; l.rotation=_cr; l.opacity=_co;
+            }
+          }
+        }
+      }
+      // ── Dibujo normal ──
       if (l.type==='image'||l.type==='gif') l.draw(fctx, fc);
       else if (l.type==='text'||l.type==='bubble') l.draw(fctx, fc);
       else { fctx.globalAlpha = l.opacity??1; l.draw(fctx); fctx.globalAlpha=1; }
     });
+
     fctx.setTransform(1,0,0,1,0,0);
     return fc;
   };
