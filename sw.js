@@ -22,7 +22,7 @@
  *     Licencia: dominio público / uso libre
  */
 /* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v28-69';
+const CACHE = 'comixow-v28-70';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas

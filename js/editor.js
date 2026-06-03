@@ -25103,36 +25103,27 @@ function _gcpRedraw() {
     }
 
     if (_showBlur) {
-      // Trail entre fotograma clave A (izquierdo) y fotograma clave B (derecho).
-      // Se muestra el arco completo del movimiento de A→B, independientemente
-      // de en qué frame del bloque (interpolado o key B) nos encontremos.
+      // Trail desde el fotograma clave A (izquierdo) hasta la POSICIÓN ACTUAL del objeto.
+      // El rastro crece conforme el objeto se aleja de A → nunca muestra posiciones
+      // donde el objeto aún no ha llegado. Al llegar a key B el trail cubre A→B completo.
 
       // ── Encontrar A (key frame izq del bloque interp) ──────────────────────
       let _lFi = fi;
       if (!_gcpIsKeyFrame(fi)) {
-        // Estamos en un frame interpolado: escanear hacia la izquierda hasta key A
         while (_lFi > 0 && !_gcpIsKeyFrame(_lFi)) _lFi--;
       } else {
-        // Estamos en el key frame B: A es el key frame antes del bloque interp
+        // Estamos en key B: A es el key frame antes del bloque interp
         _lFi = fi - 1;
         while (_lFi > 0 && !_gcpIsKeyFrame(_lFi)) _lFi--;
       }
 
-      // ── Encontrar B (key frame der del bloque interp) ───────────────────────
-      let _rFi = fi;
-      if (!_gcpIsKeyFrame(fi)) {
-        const _totF = _gcpGetTotalFrames();
-        while (_rFi < _totF - 1 && !_gcpIsKeyFrame(_rFi)) _rFi++;
-      }
-      // Si fi ya es el key frame B, _rFi = fi (correcto)
+      // _farSnap = key A; near = posición actual de l (nunca más allá del objeto)
+      const _farSnap = (_lFi >= 0 && _lFi !== fi && _frames[_lFi]?.visible !== false) ? _frames[_lFi] : null;
 
-      const _farSnap  = (_lFi >= 0 && _frames[_lFi]?.visible !== false) ? _frames[_lFi] : null;
-      const _nearSnap = (_rFi < _frames.length && _frames[_rFi]?.visible !== false) ? _frames[_rFi] : null;
-
-      if (_farSnap && _nearSnap && _lFi !== _rFi) {
+      if (_farSnap) {
         const _bpw = edPageW(), _bph = edPageH();
-        const _sdx = (_nearSnap.x - _farSnap.x) * _bpw * edCamera.z;
-        const _sdy = (_nearSnap.y - _farSnap.y) * _bph * edCamera.z;
+        const _sdx = (l.x - _farSnap.x) * _bpw * edCamera.z;
+        const _sdy = (l.y - _farSnap.y) * _bph * edCamera.z;
         const _screenDist = Math.hypot(_sdx, _sdy);
 
         const _minPx = 6, _maxPx = 150;
@@ -25147,12 +25138,12 @@ function _gcpRedraw() {
 
           for (let _si = 0; _si < _M; _si++) {
             const _t = _si / _M;
-            const _gx = _farSnap.x + _t * (_nearSnap.x - _farSnap.x);
-            const _gy = _farSnap.y + _t * (_nearSnap.y - _farSnap.y);
-            const _gw = (_farSnap.width  || _nearSnap.width)  + _t * (_nearSnap.width  - (_farSnap.width  || _nearSnap.width));
-            const _gh = (_farSnap.height || _nearSnap.height) + _t * (_nearSnap.height - (_farSnap.height || _nearSnap.height));
-            const _gr = (_farSnap.rotation || 0) + _t * ((_nearSnap.rotation || 0) - (_farSnap.rotation || 0));
-            const _go = (_farSnap.opacity ?? 1) + _t * ((_nearSnap.opacity ?? 1) - (_farSnap.opacity ?? 1));
+            const _gx = _farSnap.x + _t * (l.x - _farSnap.x);
+            const _gy = _farSnap.y + _t * (l.y - _farSnap.y);
+            const _gw = (_farSnap.width  || l.width)  + _t * (l.width  - (_farSnap.width  || l.width));
+            const _gh = (_farSnap.height || l.height) + _t * (l.height - (_farSnap.height || l.height));
+            const _gr = (_farSnap.rotation || 0) + _t * ((l.rotation || 0) - (_farSnap.rotation || 0));
+            const _go = (_farSnap.opacity ?? 1) + _t * ((l.opacity ?? 1) - (_farSnap.opacity ?? 1));
             const _w  = (_si + 1) / _wSum;
             const _alpha = _totalAlpha * _w;
             const _iSnap = { x: _gx, y: _gy, width: _gw, height: _gh, rotation: _gr, opacity: _go };
