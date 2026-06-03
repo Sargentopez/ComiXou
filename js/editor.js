@@ -20028,6 +20028,7 @@ function EditorView_init(){
   });
   $('dd-exportselpng')?.addEventListener('click',()=>{ edExportSelectionPNG('png'); edCloseMenus(); });
   $('dd-exportseljpg')?.addEventListener('click',()=>{ edExportSelectionPNG('jpg'); edCloseMenus(); });
+  $('dd-exportselsvg')?.addEventListener('click',()=>{ edExportSelectionSVG(); edCloseMenus(); });
   // Submenú exportar: toggle inline al clicar
   // Submenús inline — mismo patrón que exportar
   $('dd-imagen-btn')?.addEventListener('click', e => {
@@ -20798,15 +20799,16 @@ function edExportPagePNG(format){
   // Mismo orden que edRedraw: imagen → fill → stroke → draw → shape/line → textos al final
   edLayers.forEach(l => {
     if(!l) return;
-    if(l.type==='text' || l.type==='bubble') return; // textos al final
-    if(l.type === 'image'){
+    if(l.hidden) return;                               // capa oculta: no exportar
+    if(l.type==='text' || l.type==='bubble') return;  // textos al final
+    if(l.type === 'image' || l.type === 'gif'){
       l.draw(offCtx, off);
     } else if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
       offCtx.globalAlpha = l.opacity ?? 1;
       l.draw(offCtx);
       offCtx.globalAlpha = 1;
     } else if(l.type === 'draw'){
-      offCtx.globalAlpha = 1;
+      offCtx.globalAlpha = l.opacity ?? 1;  // Bug fix: respeta opacidad del draw
       l.draw(offCtx);
       offCtx.globalAlpha = 1;
     } else if(l.type === 'stroke'){
@@ -20878,25 +20880,31 @@ function edExportSelectionPNG(format) {
   // El origen del canvas exportado corresponde a (mx + bb.x0*pw, my + bb.y0*ph) en workspace
   offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
 
-  // Renderizar solo las capas seleccionadas (incluyendo fills vinculados a strokes)
+  // Capas a exportar: incluir sub-capas (pencil, fill, watercolor) vinculadas a draw/stroke
   const _selBase = edMultiSel.length >= 2
     ? edMultiSel.map(i => edLayers[i]).filter(Boolean)
     : [edLayers[edSelectedIdx]].filter(Boolean);
-  // Añadir automáticamente las capas fill vinculadas a los strokes seleccionados
   const selSet = new Set(_selBase);
   _selBase.forEach(l => {
-    if (l && l.type === 'stroke' && l._fillLayerId) {
-      const _fl = edLayers.find(f => f && f.type === 'fill' && f._drawLayerId === l._fillLayerId);
-      if (_fl) selSet.add(_fl);
+    if (!l) return;
+    // Draw y stroke: añadir automáticamente todas las sub-capas vinculadas
+    const _groupUid = l._fillLayerId || l._uid;
+    if (_groupUid && (l.type === 'draw' || l.type === 'stroke')) {
+      edLayers.forEach(f => {
+        if (f && (f.type==='fill'||f.type==='pencil'||f.type==='watercolor') && f._drawLayerId===_groupUid)
+          selSet.add(f);
+      });
     }
   });
 
-  const _textLayers = [...selSet].filter(l => l.type==='text'||l.type==='bubble');
+  // Renderizar en ORDEN DE edLayers (no orden de inserción en Set) para respetar la pila visual
+  const _selOrdered = edLayers.filter(l => l && selSet.has(l) && !l.hidden);
+  const _textLayers = _selOrdered.filter(l => l.type==='text'||l.type==='bubble');
   const _textAlpha  = page.textLayerOpacity ?? 1;
 
-  [...selSet].forEach(l => {
-    if(!l || l.type==='text'||l.type==='bubble') return;
-    if(l.type==='image'){ l.draw(offCtx, off); }
+  _selOrdered.forEach(l => {
+    if(l.type==='text'||l.type==='bubble') return;
+    if(l.type==='image'||l.type==='gif'){ l.draw(offCtx, off); }
     else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
   });
   offCtx.globalAlpha = _textAlpha;
@@ -20913,6 +20921,85 @@ function edExportSelectionPNG(format) {
   }, mimeType, quality);
 }
 
+
+async function edExportSelectionSVG() {
+  // Cálculo de bbox: mismo que edExportSelectionPNG
+  let bb = null;
+  if(edMultiSel.length >= 2) {
+    bb = _msBBox();
+  } else if(edSelectedIdx >= 0) {
+    const la = edLayers[edSelectedIdx];
+    if(la) {
+      const pw2 = edPageW(), ph2 = edPageH();
+      const rot = (la.rotation||0)*Math.PI/180;
+      const hw = la.width/2, hh = la.height/2;
+      let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+      for(const [cx,cy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
+        const wx=cx*pw2, wy=cy*ph2;
+        const rx=(wx*Math.cos(rot)-wy*Math.sin(rot))/pw2;
+        const ry=(wx*Math.sin(rot)+wy*Math.cos(rot))/ph2;
+        x0=Math.min(x0,la.x+rx); y0=Math.min(y0,la.y+ry);
+        x1=Math.max(x1,la.x+rx); y1=Math.max(y1,la.y+ry);
+      }
+      bb = {x0,y0,x1,y1,w:x1-x0,h:y1-y0};
+    }
+  }
+  if(!bb || bb.w < 0.001 || bb.h < 0.001) { edToast('Selecciona objetos primero'); return; }
+
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const page = edPages[edCurrentPage]; if(!page) return;
+
+  const bxPx = Math.ceil(bb.w * pw);
+  const byPx = Math.ceil(bb.h * ph);
+  const off = document.createElement('canvas');
+  off.width = bxPx; off.height = byPx;
+  const offCtx = off.getContext('2d', { alpha: true }); // transparente
+  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
+
+  // Mismo conjunto de capas que edExportSelectionPNG (sub-capas incluidas, orden edLayers)
+  const _selBase2 = edMultiSel.length >= 2
+    ? edMultiSel.map(i => edLayers[i]).filter(Boolean)
+    : [edLayers[edSelectedIdx]].filter(Boolean);
+  const selSet2 = new Set(_selBase2);
+  _selBase2.forEach(l => {
+    if (!l) return;
+    const _groupUid = l._fillLayerId || l._uid;
+    if (_groupUid && (l.type === 'draw' || l.type === 'stroke')) {
+      edLayers.forEach(f => {
+        if (f && (f.type==='fill'||f.type==='pencil'||f.type==='watercolor') && f._drawLayerId===_groupUid)
+          selSet2.add(f);
+      });
+    }
+  });
+  const _svgOrdered = edLayers.filter(l => l && selSet2.has(l) && !l.hidden);
+  const _svgTexts   = _svgOrdered.filter(l => l.type==='text'||l.type==='bubble');
+  const _textAlpha2 = page.textLayerOpacity ?? 1;
+
+  _svgOrdered.forEach(l => {
+    if(l.type==='text'||l.type==='bubble') return;
+    if(l.type==='image'||l.type==='gif'){ l.draw(offCtx, off); }
+    else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+  });
+  offCtx.globalAlpha = _textAlpha2;
+  _svgTexts.forEach(l => l.draw(offCtx, off));
+  offCtx.globalAlpha = 1;
+
+  // Embeber el canvas renderizado como PNG base64 dentro de un SVG
+  const b64 = off.toDataURL('image/png');
+  const svgStr = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`,
+    `     width="${bxPx}" height="${byPx}" viewBox="0 0 ${bxPx} ${byPx}">`,
+    `  <image href="${b64}" x="0" y="0" width="${bxPx}" height="${byPx}"/>`,
+    '</svg>'
+  ].join('\n');
+
+  const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+  const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.svg`;
+  await _edSaveBlob(blob, _selName, 'image/svg+xml');
+  edToast('SVG exportado ✓');
+}
 
 // ═══════════════════════════════════════════════════════════════
 // ── BIBLIOTECA (T8) ─────────────────────────────────────────────

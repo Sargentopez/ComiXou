@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v28.70</footer>
+    <footer class="app-version">v28.71</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -406,6 +406,7 @@ Router.register('editor', {
                     <div class="ed-submenu" id="dd-export-sel-sub">
                       <button class="ed-dropdown-item" id="dd-exportselpng">PNG (transparencias)</button>
                       <button class="ed-dropdown-item" id="dd-exportseljpg">JPG (fondo blanco)</button>
+                      <button class="ed-dropdown-item" id="dd-exportselsvg">SVG</button>
                     </div>
                   </div>
                 </div>
