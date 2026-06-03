@@ -1161,7 +1161,9 @@ body.editor-page #appView {
 /* Cursor dibujo */
 #edBrushCursor {
   position: fixed; pointer-events: none; z-index: 999;
-  border-radius: 50%; border: 1.5px solid currentColor;
+  border-radius: 50%;
+  border: 1.5px solid #000000;           /* siempre negro */
+  box-shadow: 0 0 0 1.5px #ffffff;       /* anillo blanco exterior */
   transform: translate(-50%,-50%); display: none;
   transition: width 0.08s, height 0.08s;
 }

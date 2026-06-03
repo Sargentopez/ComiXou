@@ -869,6 +869,7 @@ let edDrawBrushType = 'pen';   // 'pen' = estilógrafo (actual) | 'pencil' = lá
 let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'watercolor' = pincel acuarela
 let edDodgeBurnSign = 1;         // +1 = iluminar (dodge), -1 = oscurecer (burn)
 let _edDodgeBurnActive = false; // true = modo iluminar/oscurecer activo
+let _edGapCloseEnabled = true;  // true = cerrar huecos automáticamente al soltar el trazo de tinta
 function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } _edDodgeBurnActive = false; }
 
 // ── Capas temporales de dibujo (sesión activa) ──────────────────
@@ -1099,7 +1100,7 @@ function _edSyncSizeDots(){
     const _isDb = !!_edDodgeBurnActive; // dodge/burn: sin color, solo contorno negro
     const _sc = (_isEr || _isDb) ? '#000000' : edDrawColor;
     _bCur.style.width = _szB + 'px'; _bCur.style.height = _szB + 'px';
-    _bCur.style.borderColor = _sc;
+    // borderColor gestionado por CSS (siempre negro + anillo blanco)
     _bCur.style.background = _isEr ? 'rgba(255,255,255,0.4)' : _isDb ? 'transparent' : (_sc + '33');
   }
   // Dot barra flotante de objetos
@@ -7097,15 +7098,28 @@ function edOnStart(e){
         }, 120);
         return;
       }
-      // Dodge/burn en touch: NO usar fill-pending (flood fill), actuar directamente
+      // Dodge/burn en touch: actuar directamente (o a través de cursor desplazado)
       if(_edDodgeBurnActive){
         _edGetOrCreateDrawLayer();
+        // Si el cursor desplazado está activo, usar el mismo sistema que draw/eraser
+        if(_cof.on){
+          const _cofIsRedDb = (_cof.state==='red_ready'||_cof.state==='red_cool');
+          if(_cofIsRedDb){
+            _cofHandleTouch(e);
+          } else {
+            clearTimeout(window._edDrawTouchTimer);
+            window._edDrawTouchTimer = setTimeout(() => {
+              if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+              if(!_edDodgeBurnActive) return;
+              _cofHandleTouch(e);
+            }, 120);
+          }
+          return;
+        }
+        // Sin cursor desplazado: pintar directamente
         edPainting = true;
         if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
-        const _cDbTouch = _cof.on && (_cof.state==='red_ready'||_cof.state==='red_cool')
-          ? { nx: (_cof.cursorX - edMarginX()) / edPageW(), ny: (_cof.cursorY - edMarginY()) / edPageH() }
-          : edCoords(e);
-        window._edDbLast = edDodgeBurnStroke(_cDbTouch.nx, _cDbTouch.ny, null, null);
+        window._edDbLast = edDodgeBurnStroke(edCoords(e).nx, edCoords(e).ny, null, null);
         edRedraw(); return;
       }
       window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
@@ -10939,7 +10953,7 @@ function edSaveDrawData(){
     _edDrawPushHistory();
   } else {
     // Gap closing para tinta (pen): cierra huecos 1-2px ANTES de guardar
-    if (_edTmp.active === 'pen' && _edTmp.pen?._gcDirty) {
+    if (_edTmp.active === 'pen' && _edTmp.pen?._gcDirty && _edGapCloseEnabled) {
       _edPenCloseGaps(_edTmp.pen);
     }
     _edDrawPushHistory();
@@ -10996,7 +11010,7 @@ function edMoveBrush(e){
     cur.style.display = 'block';
     cur.style.left = src.clientX + 'px'; cur.style.top = src.clientY + 'px';
     cur.style.width = sz + 'px'; cur.style.height = sz + 'px';
-    cur.style.borderColor = strokeColor;
+    // borderColor gestionado por CSS (siempre negro + anillo blanco)
     cur.style.background = isEr ? 'rgba(255,255,255,0.4)' : isDb ? 'transparent' : (strokeColor + '33');
     _edOffsetHide();
   }
@@ -11037,12 +11051,19 @@ function _edPositionDropdown(dd, btnRect) {
   // Medir y clampar en el siguiente frame (layout ya calculado)
   requestAnimationFrame(() => {
     const ddW = dd.offsetWidth || 220;
+    const ddH = dd.offsetHeight || 0;
     const vw  = window.innerWidth;
+    const vh  = window.innerHeight;
     const PAD = 6;
+    // Horizontal
     let left = btnRect.left + (btnRect.width - ddW) / 2;
     if (left + ddW + PAD > vw) left = vw - ddW - PAD;
     if (left < PAD) left = PAD;
     dd.style.left = left + 'px';
+    // Vertical: si el menú se va de pantalla hacia abajo, abrirlo hacia arriba del botón
+    let top = btnRect.bottom + 2;
+    if (ddH > 0 && top + ddH + PAD > vh) top = Math.max(PAD, btnRect.top - ddH - 2);
+    dd.style.top = top + 'px';
     dd.style.visibility = '';
   });
 }
@@ -12579,6 +12600,10 @@ function edRenderOptionsPanel(mode){
     ${!_actIsWc ? `<button id="op-tool-layer-icon"
       style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isPen||isFill?'rgba(0,0,0,.12)':'transparent'};opacity:${isPen||isFill?1:0.5}">${_edTmp.active==='pen'?'✒️':_edTmp.active==='pencil'?'✏️':'🪣'}</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
+    ${_edTmp.active === 'pen' ? `<button id="op-gap-close-btn"
+      style="flex-shrink:0;border:1.5px solid ${_edGapCloseEnabled ? 'var(--black)' : 'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edGapCloseEnabled ? 'var(--black)' : 'transparent'};color:${_edGapCloseEnabled ? 'var(--white)' : 'var(--gray-600)'};white-space:nowrap"
+      title="Cerrar huecos automáticamente al soltar el trazo — desactivar para dibujos muy pequeños">Cerrar huecos</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${_actIsWc ? `<button id="op-fill-watercolor" title="Acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${!_edDodgeBurnActive?'rgba(0,0,0,.12)':'transparent'};opacity:${!_edDodgeBurnActive?1:0.4}">🖌️</button>
     <button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:34px;height:26px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="Oscurecer (izq) / Iluminar (der)"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
@@ -12773,6 +12798,10 @@ function edRenderOptionsPanel(mode){
       _edDodgeBurnActive = false;
       edActiveTool = 'color-erase'; edCanvas.className = 'tool-draw';
       edRenderOptionsPanel('draw');
+    });
+    $('op-gap-close-btn')?.addEventListener('click', () => {
+      _edGapCloseEnabled = !_edGapCloseEnabled;
+      edRenderOptionsPanel('draw'); // re-render para actualizar estado visual del botón
     });
     $('op-tool-eraser')?.addEventListener('click', () => {
       _edDodgeBurnActive = false;
