@@ -5013,10 +5013,24 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   // ── 1. Recortar DrawLayer ──
   const { inside: drawInside, outside: drawOutside } = _splitCanvas(srcCanvas);
 
-  // ── 2. Verificar contenido interior del dibujo ──
+  // ── 2. Verificar contenido interior del dibujo o de sus sub-capas ──
+  // Si el canvas principal está vacío (ej: solo hay dibujo en la capa de lápiz),
+  // comprobar pencilL, fl y wcL antes de rechazar el recorte.
   const idCheck = drawInside.getContext('2d').getImageData(0, 0, W, H).data;
   let hasContent = false;
   for (let i = 3; i < idCheck.length; i += 4) { if (idCheck[i] > 4) { hasContent = true; break; } }
+  if (!hasContent) {
+    for (const _subLa of [fl, pencilL, wcL]) {
+      if (!_subLa || !_subLa._canvas) continue;
+      const _wsCk = document.createElement('canvas');
+      _wsCk.width = W; _wsCk.height = H;
+      _subLa.draw(_wsCk.getContext('2d'));
+      const { inside: _inCk } = _splitCanvas(_wsCk);
+      const _dat = _inCk.getContext('2d').getImageData(0, 0, W, H).data;
+      for (let i = 3; i < _dat.length; i += 4) { if (_dat[i] > 4) { hasContent = true; break; } }
+      if (hasContent) break;
+    }
+  }
   if (!hasContent) { if (_onDone) _onDone(null); return; }
 
   // ── 3. Recortar capas vinculadas (fill, pencil, watercolor) si existen ──
@@ -13336,6 +13350,7 @@ function edRenderOptionsPanel(mode){
       </div>
       <div class="op-prop-row">
         <button id="pp-edit-draw" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar dibujo</button>
+        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>`;
     } else if(la.type==='stroke'){
       html+=`
@@ -20215,13 +20230,15 @@ function EditorView_init(){
           _gcpAutoSaveFrame();
           _gcpRedraw();
           return;
-        } else if (_gcpGetTotalFrames() > 1) {
-          // Sin objeto seleccionado: navegar entre frames
+        } else if (_gcpGetTotalKeyFrames() > 1) {
+          // Sin objeto seleccionado: navegar entre fotogramas CLAVE
           e.preventDefault();
           if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-            _gcpGoToFrame(Math.min(window._gcpGlobalFrameIdx + 1, _gcpGetTotalFrames() - 1));
+            const _nk = _gcpGetNextKeyFrameIdx(window._gcpGlobalFrameIdx);
+            if (_nk >= 0) _gcpGoToFrame(_nk);
           } else {
-            _gcpGoToFrame(Math.max(window._gcpGlobalFrameIdx - 1, 0));
+            const _pk = _gcpGetPrevKeyFrameIdx(window._gcpGlobalFrameIdx);
+            if (_pk >= 0) _gcpGoToFrame(_pk);
           }
           return;
         }
@@ -23341,6 +23358,60 @@ function _gcpGetTotalFrames() {
   return Math.max(...window._gcpLayers.map(la => (la._frames||[]).length), 0);
 }
 
+// ── Helpers de fotogramas clave (key frames) ──────────────────────────────────
+// Fotograma clave = frame SIN _interp (guardado por el autor).
+// Fotograma interpolado = frame CON _interp:true (lineal o circular).
+
+// true si el frame global fi es un fotograma clave.
+function _gcpIsKeyFrame(fi) {
+  if (!window._gcpLayers || !window._gcpLayers.length) return true;
+  for (const la of window._gcpLayers) {
+    if (la._frames && fi < la._frames.length) {
+      return !la._frames[fi]?._interp;
+    }
+  }
+  return true;
+}
+
+// Número total de fotogramas clave.
+function _gcpGetTotalKeyFrames() {
+  const total = _gcpGetTotalFrames();
+  let count = 0;
+  for (let fi = 0; fi < total; fi++) {
+    if (_gcpIsKeyFrame(fi)) count++;
+  }
+  return count;
+}
+
+// Número ordinal (1-based) del fotograma clave en fi.
+// Devuelve 0 si fi es un frame interpolado.
+function _gcpGetKeyFrameNumber(fi) {
+  if (!_gcpIsKeyFrame(fi)) return 0;
+  const total = _gcpGetTotalFrames();
+  let count = 0;
+  for (let i = 0; i <= fi && i < total; i++) {
+    if (_gcpIsKeyFrame(i)) count++;
+  }
+  return count;
+}
+
+// Índice global del siguiente fotograma clave después de fi. -1 si no hay.
+function _gcpGetNextKeyFrameIdx(fi) {
+  const total = _gcpGetTotalFrames();
+  for (let i = fi + 1; i < total; i++) {
+    if (_gcpIsKeyFrame(i)) return i;
+  }
+  return -1;
+}
+
+// Índice global del fotograma clave anterior a fi. -1 si no hay.
+function _gcpGetPrevKeyFrameIdx(fi) {
+  for (let i = fi - 1; i >= 0; i--) {
+    if (_gcpIsKeyFrame(i)) return i;
+  }
+  return -1;
+}
+
 // Inicializar _frames de un layer en el frame de inserción
 function _gcpInitLayerFrames(la, startFi) {
   la._frames = [];
@@ -23384,7 +23455,7 @@ function _gcpSaveFrame() {
   // Reinterpolación automática si hay frames interpolados adyacentes
   _gcpReinterpolateAround(fi);
   window._gcpDirty = true;
-  edToast('Frame ' + (fi+1) + ' guardado ✓');
+  edToast('Fotograma clave ' + _gcpGetKeyFrameNumber(fi) + ' guardado ✓');
   _gcpHintSet('addFrame');
 }
 
@@ -23427,7 +23498,7 @@ function _gcpCaptureFrame() {
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
   window._gcpDirty = true;
-  edToast('Frame ' + (newFi+1) + ' creado ✓');
+  edToast('Fotograma clave ' + _gcpGetKeyFrameNumber(newFi) + ' creado ✓');
   _gcpHintStop();
 }
 
@@ -24010,7 +24081,8 @@ function _gcpFrameThumb(fi) {
   return tc;
 }
 
-// Actualizar contador de frames en topbar
+// Actualizar contador en topbar — muestra solo fotogramas CLAVE (autor).
+// Los interpolados no cuentan ni se muestran.
 function _gcpUpdateFrameNav() {
   const nav = document.getElementById('gcpFrameNav');
   const num = document.getElementById('gcpFrameNum');
@@ -24019,11 +24091,19 @@ function _gcpUpdateFrameNav() {
   const hasLayers = window._gcpLayers && window._gcpLayers.length > 0;
   if (total <= 0 && !hasLayers) { nav.style.display = 'none'; return; }
   nav.style.display = 'flex';
-  num.textContent = total > 0 ? (window._gcpGlobalFrameIdx + 1) + ' / ' + total : '—';
+  if (total > 0) {
+    const totalKey = _gcpGetTotalKeyFrames();
+    const keyNum   = _gcpGetKeyFrameNumber(window._gcpGlobalFrameIdx);
+    // keyNum === 0 → estamos en un interpolado (ej. final de preview circular)
+    num.textContent = keyNum > 0 ? keyNum + ' / ' + totalKey : '· / ' + totalKey;
+  } else {
+    num.textContent = '—';
+  }
   const prev = document.getElementById('gcpFramePrev');
   const next = document.getElementById('gcpFrameNext');
-  if (prev) prev.disabled = window._gcpGlobalFrameIdx <= 0 || total === 0;
-  if (next) next.disabled = window._gcpGlobalFrameIdx >= total - 1 || total === 0;
+  // Flechas deshabilitadas si no hay fotograma clave en esa dirección
+  if (prev) prev.disabled = total === 0 || _gcpGetPrevKeyFrameIdx(window._gcpGlobalFrameIdx) < 0;
+  if (next) next.disabled = total === 0 || _gcpGetNextKeyFrameIdx(window._gcpGlobalFrameIdx) < 0;
 }
 
 // Refrescar miniatura del frame activo (no-op ahora que la barra se reconstruye entera)
@@ -24591,12 +24671,12 @@ function _gcpUpdateFramesBar() {
         card.style.borderColor = '#93c5fd';
       }
 
-      // Cabecera con número de columna (número real en el array)
+      // Cabecera con número de fotograma clave (_vi+1, no índice global fi+1)
       const header = document.createElement('div');
       header.className = 'ed-page-header';
       const num = document.createElement('div');
       num.className = 'ed-page-num';
-      num.textContent = fi + 1;
+      num.textContent = _vi + 1;
       header.appendChild(num);
       card.appendChild(header);
 
@@ -24646,7 +24726,7 @@ function _gcpUpdateFramesBar() {
         delBtnH.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
         delBtnH.addEventListener('click', e => {
           e.stopPropagation();
-          edConfirm('¿Eliminar el fotograma ' + (fi + 1) + ' de todas las capas?', () => {
+          edConfirm('¿Eliminar el fotograma clave ' + (_vi + 1) + ' de todas las capas?', () => {
             window._gcpLayers.forEach(otherLa => {
               if (otherLa._frames && fi < otherLa._frames.length)
                 otherLa._frames.splice(fi, 1);
@@ -24748,7 +24828,7 @@ function _gcpUpdateFramesBar() {
         delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
-          edConfirm('¿Eliminar el fotograma ' + (fi + 1) + ' de todas las capas?', () => {
+          edConfirm('¿Eliminar el fotograma clave ' + (_vi + 1) + ' de todas las capas?', () => {
             window._gcpLayers.forEach(otherLa => {
               if (otherLa._frames && fi < otherLa._frames.length)
                 otherLa._frames.splice(fi, 1);
@@ -24866,7 +24946,7 @@ function _gcpUpdateFramesBar() {
     liveHeader.className = 'ed-page-header';
     const liveNum = document.createElement('div');
     liveNum.className = 'ed-page-num';
-    liveNum.textContent = total + 1;
+    liveNum.textContent = _visibleFiList.length + 1;
     liveHeader.appendChild(liveNum);
     liveCard.appendChild(liveHeader);
     const liveThumb = document.createElement('div');
@@ -25023,47 +25103,57 @@ function _gcpRedraw() {
     }
 
     if (_showBlur) {
-      // El trail se extiende exactamente un frame: desde fi-1 hasta fi.
-      const _farSnap = (fi > 0 && _frames[fi-1]?.visible !== false) ? _frames[fi-1] : null;
+      // Trail entre fotograma clave A (izquierdo) y fotograma clave B (derecho).
+      // Se muestra el arco completo del movimiento de A→B, independientemente
+      // de en qué frame del bloque (interpolado o key B) nos encontremos.
 
-      if (_farSnap) {
-        // 2. Velocidad en píxeles de pantalla entre posición lejana y actual
+      // ── Encontrar A (key frame izq del bloque interp) ──────────────────────
+      let _lFi = fi;
+      if (!_gcpIsKeyFrame(fi)) {
+        // Estamos en un frame interpolado: escanear hacia la izquierda hasta key A
+        while (_lFi > 0 && !_gcpIsKeyFrame(_lFi)) _lFi--;
+      } else {
+        // Estamos en el key frame B: A es el key frame antes del bloque interp
+        _lFi = fi - 1;
+        while (_lFi > 0 && !_gcpIsKeyFrame(_lFi)) _lFi--;
+      }
+
+      // ── Encontrar B (key frame der del bloque interp) ───────────────────────
+      let _rFi = fi;
+      if (!_gcpIsKeyFrame(fi)) {
+        const _totF = _gcpGetTotalFrames();
+        while (_rFi < _totF - 1 && !_gcpIsKeyFrame(_rFi)) _rFi++;
+      }
+      // Si fi ya es el key frame B, _rFi = fi (correcto)
+
+      const _farSnap  = (_lFi >= 0 && _frames[_lFi]?.visible !== false) ? _frames[_lFi] : null;
+      const _nearSnap = (_rFi < _frames.length && _frames[_rFi]?.visible !== false) ? _frames[_rFi] : null;
+
+      if (_farSnap && _nearSnap && _lFi !== _rFi) {
         const _bpw = edPageW(), _bph = edPageH();
-        const _sdx = (l.x - _farSnap.x) * _bpw * edCamera.z;
-        const _sdy = (l.y - _farSnap.y) * _bph * edCamera.z;
+        const _sdx = (_nearSnap.x - _farSnap.x) * _bpw * edCamera.z;
+        const _sdy = (_nearSnap.y - _farSnap.y) * _bph * edCamera.z;
         const _screenDist = Math.hypot(_sdx, _sdy);
 
-        // 3. Factor de velocidad: sin movimiento = 0, movimiento rápido = 1
-        const _minPx = 6;   // umbral mínimo para activar blur
-        const _maxPx = 150; // velocidad para blur máximo
+        const _minPx = 6, _maxPx = 150;
         const _velFactor = Math.max(0, Math.min(1,
           (_screenDist - _minPx) / (_maxPx - _minPx)
         ));
 
         if (_velFactor > 0.01) {
-          // 4. M sub-posiciones interpoladas entre _farSnap y current
-          //    M escala con la velocidad para que haya cobertura continua
-          const _M = Math.round(6 + _velFactor * 8); // 6 a 14 pasos
-
-          // 5. Alpha total proporcional a velocidad (máx 0.40 para no saturar)
-          //    Alpha por paso = total / M → imperceptible individualmente
-          const _totalAlpha = 0.12 + _velFactor * 0.28; // 0.12 a 0.40
-          //    Falloff suave: los más lejanos son más tenues (se "desvanecen")
-          //    Pesos: w_i = (i+1)/M, normalización: sum = M*(M+1)/2
+          const _M = Math.round(6 + _velFactor * 8);
+          const _totalAlpha = 0.12 + _velFactor * 0.28;
           const _wSum = _M * (_M + 1) / 2;
 
-          // 6. Dibujar de más lejano (i=0) a más cercano (i=M-1, no llega a 1.0)
           for (let _si = 0; _si < _M; _si++) {
-            const _t = _si / _M; // 0..(_M-1)/_M — nunca llega a 1 (posición actual)
-            // Interpolación lineal entre farSnap y posición actual
-            const _gx = _farSnap.x + _t * (l.x - _farSnap.x);
-            const _gy = _farSnap.y + _t * (l.y - _farSnap.y);
-            const _gw = (_farSnap.width  || l.width)  + _t * (l.width  - (_farSnap.width  || l.width));
-            const _gh = (_farSnap.height || l.height) + _t * (l.height - (_farSnap.height || l.height));
-            const _gr = (_farSnap.rotation || 0) + _t * ((l.rotation || 0) - (_farSnap.rotation || 0));
-            const _go = (_farSnap.opacity ?? 1) + _t * ((l.opacity ?? 1) - (_farSnap.opacity ?? 1));
-            // Peso por posición: más cercano = más visible (falloff natural)
-            const _w = (_si + 1) / _wSum;
+            const _t = _si / _M;
+            const _gx = _farSnap.x + _t * (_nearSnap.x - _farSnap.x);
+            const _gy = _farSnap.y + _t * (_nearSnap.y - _farSnap.y);
+            const _gw = (_farSnap.width  || _nearSnap.width)  + _t * (_nearSnap.width  - (_farSnap.width  || _nearSnap.width));
+            const _gh = (_farSnap.height || _nearSnap.height) + _t * (_nearSnap.height - (_farSnap.height || _nearSnap.height));
+            const _gr = (_farSnap.rotation || 0) + _t * ((_nearSnap.rotation || 0) - (_farSnap.rotation || 0));
+            const _go = (_farSnap.opacity ?? 1) + _t * ((_nearSnap.opacity ?? 1) - (_farSnap.opacity ?? 1));
+            const _w  = (_si + 1) / _wSum;
             const _alpha = _totalAlpha * _w;
             const _iSnap = { x: _gx, y: _gy, width: _gw, height: _gh, rotation: _gr, opacity: _go };
             _gcpDrawLayerBlurGhost(gcpCtx, l, _iSnap, Math.max(0.004, _alpha));
@@ -25636,14 +25726,16 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpRedoBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpRedo();
     });
-    // Botones navegación de frames en topbar — entre frames guardados
+    // Botones navegación — saltan SOLO entre fotogramas clave (autor)
     document.getElementById('gcpFramePrev')?.addEventListener('click', e => {
       e.stopPropagation();
-      if (window._gcpGlobalFrameIdx > 0) _gcpGoToFrame(window._gcpGlobalFrameIdx - 1);
+      const _pk = _gcpGetPrevKeyFrameIdx(window._gcpGlobalFrameIdx);
+      if (_pk >= 0) _gcpGoToFrame(_pk);
     });
     document.getElementById('gcpFrameNext')?.addEventListener('click', e => {
       e.stopPropagation();
-      if (window._gcpGlobalFrameIdx < _gcpGetTotalFrames() - 1) _gcpGoToFrame(window._gcpGlobalFrameIdx + 1);
+      const _nk = _gcpGetNextKeyFrameIdx(window._gcpGlobalFrameIdx);
+      if (_nk >= 0) _gcpGoToFrame(_nk);
     });
     // Botón Guardar Frame
     document.getElementById('gcpSaveFrameBtn')?.addEventListener('pointerup', e => {

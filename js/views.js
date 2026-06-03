@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v28.67</footer>
+    <footer class="app-version">v28.69</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -653,9 +653,9 @@ Router.register('editor', {
         <span id="gcpProjectTitle">Gif 1</span>
         <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav" id="gcpFrameNav" style="display:none">
-          <button class="ed-top-pagebn" id="gcpFramePrev" title="Frame anterior">&#9664;</button>
+          <button class="ed-top-pagebn" id="gcpFramePrev" title="Fotograma clave anterior">&#9664;</button>
           <span id="gcpFrameNum">1</span>
-          <button class="ed-top-pagebn" id="gcpFrameNext" title="Frame siguiente">&#9654;</button>
+          <button class="ed-top-pagebn" id="gcpFrameNext" title="Fotograma clave siguiente">&#9654;</button>
         </div>
         <span class="ed-top-spacer"></span>
         <button class="ed-top-action" id="gcpPreviewBtn" title="Previsualizar">▶</button>
