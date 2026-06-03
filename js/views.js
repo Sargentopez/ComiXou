@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v28.73</footer>
+    <footer class="app-version">v28.75</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -457,7 +457,7 @@ Router.register('editor', {
         <div class="edb-handle" title="Mover barra">⠿</div>
         <div class="edb-content">
           <button id="edb-pen"    class="edb-tool" title="Dibujar">✒️</button>
-          <button id="edb-eraser" class="edb-tool" title="Borrar">🧹</button>
+          <button id="edb-eraser" class="edb-tool" title="Borrar"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSIyMSIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDIxIDIwIj4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFCVUFBQUFVQ0FZQUFBQmlTM1l6QUFBRUZVbEVRVlI0QWJTU2YweVVkUnpIUDkvbkYyZUFRQndKaG9hRnpybXhydkZqSWJVd0NZMVowOHdMYTVXTmlVNjNhblBKeWorNldFd2JZTG1BbEJoSktjZWdXb1dMTUptaXN3NEZzZFdKRUwrRy9EZzhQZTdoemp1T2U1N24yK2Q1NEc0bVRQL1I3ejd2NzgvUDkvVjlQOS92dzhBREtQY0xxbkxDQXY3VVFhQi8xN2ErSGxpckZRUktZYjQ5Q202V1VGck1sNkF0ekZiazlEZmJkTC9YRjBTOGtMb3gzT3ZOangwZmYxUC9WM04ycU1rMEJ6NDF1MmZPUW1BZU1nMlJrWjJkMnlJKy85NlNVMXgxcWlObDdZWFJyS3phZjFOVG12czM1RjA4VmwwZHR0dHFYU1VFTjl6V21jOHBhVy9QNSt0KzJ5ZHMzblNpNGcvTDJBOFpxdzJQSC8vdUU2R3o0eWd4bXd2NXJWdGZYQ2ZMUWtGYVd1L1BPZzR5NFk1eUo1UlFDdXoyN1QrK3VtTEZ4NTBaejZUa1hteXJwZ1VmdkVVTWhrUW1SaC9KR1o1Y3poY1Y3aEI2dWhvV3ZQM0crZ1NmVEtxUTJZcGFpTkxpZGlpVG1RbHNlQ2o3NVVDL3A3S2liRTljVmVWSHNIaXhucWlaRklCZ0FZWVF3SU1aUVFpTEtDa3RXbXF4RkI0QmdDZFFjU2d0Z3REdzhKQU41ODZScnVUVXBKeXVLM1U2NDVZc29LQVFoQUVnbGlVTTVUZ09XSTRIeW9TRFFxTVl4MFRQQXAxQTlnTkFMNjQ5aXEwV0twVG5lYWJNNTVNT0YzMjZ3LzlyWTBsb2RGUUVTeFdLbHJTY21Rb2RFcUpENkRKMEdnWDJHMVlReFI1MEx1T1JNQ3BKVXV4TUlvQUtyWStMMVNkZEd6eXRmLy9kM0NVY3h6K003b2pxTHBDazlVa0lBaDhEV2RhQi9mb2xFSjFYaWFKTWc5MCtPWUo1eWFpbEtDMVVxS0htNkh0SlFFUUVSZkU0UzdCUXdoQVU2eUhNd2dGQzlFRFlKZUNibG1IYzFncWkySTJmTDlIMjltRzZOcnZVaVh0T29BNmd0RkNoTGxHOEh1RndkTE1UNGhDbmdCNFlMZ0ZZUGhFNElaSGgrV1VQRWVZUmNMdWN4R1pySmE3SmJnQkZocnE2RHVtZHZLK244ZEhLa2JRSEZRd1Y2bTVwK2VlTUludXA0K2Jmek9CQU16aWRJMERJSWxSTWlDUXhNUTY4dnh2MlA0SHQ3c09OTWhRZlBLa2MrT3lYY1J6a3hNZkhmNHV0eXNGbUp0VEI1YktLbHFpZVhwdGRsdjNFTDdueG5pNFF1OTFDRkVVaEhxK05jVGc2WWNvM1JtWEpUL04zMWpqckd5em5FeEpDVmlQaS9QRHdzQmRiQlJVTUZib2JQK0hZcGxmSzlXWnptNkkrdVNTSklEcXQ0UEdNd0sxYi9mZzRMdHJkUFVvem55L3U2N295L0ZOTnpjYjFmWDNlYTBpWlJzMEpGWXFQRFFkNUh0S0tTNXJhc3RlVjJxOTJqZUhKVTVUUVVhcElOK254MmpZd3Z2YVZIMys5eXNPVkwrMDBHaHRVZDNOZ2dRa1Zxdlg5ZnJoVVcwdWZGU2M5aDNKZlB6THhkUG8rMTFQSlJ2dktWWG4waTBNbnorcjF3c3ZwNlN2TEVUaXZPdzB5V3dXaDZ0aG9CSG52WG1tLzJieDVrY3ZsZm01d2NHUkxkSFRJOHFhbWpLeGR1ejQ4MWRqWTRWSHo3cVgvUWRWa2t3a1VkQ09qODh1U0JHZUhoc1QrTld2T1NDYVRDYTlFemJpMy9nTUFBUC8vREM3b1R3QUFBQVpKUkVGVUF3QlRnYWc0d2ZFMDZnQUFBQUJKUlU1RXJrSmdnZz09IiB4PSIwIiB5PSIwIiB3aWR0aD0iMjEiIGhlaWdodD0iMjAiLz4KPC9zdmc+" width="21" height="20" style="image-rendering:pixelated;vertical-align:middle"/></button>
           <div class="edb-sep"></div>
           <button id="edb-color"  class="edb-swatch" title="Color"></button>
           <button id="edb-eyedrop" class="edb-tool" title="Cuentagotas">💧</button>
