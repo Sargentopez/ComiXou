@@ -20967,8 +20967,187 @@ function edExportSelectionPNG(format) {
 }
 
 
+// ── Helper: ¿puede esta capa exportarse como SVG vectorial puro? ──────────────
+function _edLayerIsPureVector(la) {
+  if (!la) return false;
+  if (la.type === 'shape') return true;
+  if (la.type === 'line')  return true; // incluye arcos Bézier en vértices
+  return false;
+}
+
+// ── Helper: rect con radios por vértice como path SVG ────────────────────────
+function _edRectRadiiToPath(x, y, w, h, crs) {
+  let tl, tr, br, bl;
+  if (Array.isArray(crs) && crs.length === 4) {
+    const maxR = Math.min(w, h) / 2;
+    [tl, tr, br, bl] = crs.map(r => Math.max(0, Math.min(r || 0, maxR)));
+  } else {
+    const r = Math.max(0, Math.min(crs || 0, Math.min(w, h) / 2));
+    tl = tr = br = bl = r;
+  }
+  if (!tl && !tr && !br && !bl) return `M ${x} ${y} H ${x+w} V ${y+h} H ${x} Z`;
+  return [
+    `M ${x+tl} ${y}`,
+    `H ${x+w-tr}`, `Q ${x+w} ${y} ${x+w} ${y+tr}`,
+    `V ${y+h-br}`, `Q ${x+w} ${y+h} ${x+w-br} ${y+h}`,
+    `H ${x+bl}`,   `Q ${x} ${y+h} ${x} ${y+h-bl}`,
+    `V ${y+tl}`,   `Q ${x} ${y} ${x+tl} ${y}`, `Z`
+  ].join(' ');
+}
+
+// ── Helper: construir path SVG para un contorno de LineLayer ─────────────────
+// Replica exactamente la lógica de _buildContour del canvas, con Q en vez de
+// quadraticCurveTo y L/M/Z en lugar de lineTo/moveTo/closePath.
+function _edBuildLineSvgPath(localPts, crObj, isClosed, pw, ph) {
+  const n = localPts.length;
+  if (n < 2) return '';
+  const cr  = crObj || {};
+  const f   = v => (+v).toFixed(3);
+  const px2 = p => ({ x: p.x * pw, y: p.y * ph });
+  const norm = (vx, vy) => { const l = Math.hypot(vx, vy); return l > 0 ? { x: vx/l, y: vy/l } : { x: 0, y: 0 }; };
+
+  const effR = i => {
+    const r = cr[i] || 0; if (!r) return 0;
+    const prev = px2(localPts[(i-1+n)%n]), cur = px2(localPts[i]), next = px2(localPts[(i+1)%n]);
+    const d1 = Math.hypot(cur.x-prev.x, cur.y-prev.y);
+    const d2 = Math.hypot(next.x-cur.x, next.y-cur.y);
+    return Math.max(0, Math.min(r, Math.min(d1/2, d2/2)));
+  };
+
+  const tgs = Array.from({ length: n }, (_, i) => {
+    const prev = px2(localPts[(i-1+n)%n]), cur = px2(localPts[i]), next = px2(localPts[(i+1)%n]);
+    const v1 = norm(cur.x-prev.x, cur.y-prev.y);
+    const v2 = norm(next.x-cur.x, next.y-cur.y);
+    const r  = effR(i);
+    return { p1: { x: cur.x-v1.x*r, y: cur.y-v1.y*r },
+             p2: { x: cur.x+v2.x*r, y: cur.y+v2.y*r }, cur, r };
+  });
+
+  const parts = [];
+  if (!isClosed) {
+    // Abierto: empieza en el punto real del primer vértice
+    parts.push(`M ${f(tgs[0].cur.x)} ${f(tgs[0].cur.y)}`);
+    for (let i = 1; i < n; i++) {
+      const { p1, p2, cur, r } = tgs[i];
+      if (r > 0 && i < n-1) {
+        parts.push(`L ${f(p1.x)} ${f(p1.y)}`);
+        parts.push(`Q ${f(cur.x)} ${f(cur.y)} ${f(p2.x)} ${f(p2.y)}`);
+      } else {
+        parts.push(`L ${f(cur.x)} ${f(cur.y)}`);
+      }
+    }
+  } else {
+    // Cerrado: empieza en p1 del primer vértice (antes del arco de esquina)
+    parts.push(`M ${f(tgs[0].p1.x)} ${f(tgs[0].p1.y)}`);
+    for (let i = 0; i < n; i++) {
+      const { p2, cur, r } = tgs[i];
+      if (r > 0) parts.push(`Q ${f(cur.x)} ${f(cur.y)} ${f(p2.x)} ${f(p2.y)}`);
+      const next = tgs[(i+1)%n];
+      parts.push(next.r > 0
+        ? `L ${f(next.p1.x)} ${f(next.p1.y)}`
+        : `L ${f(next.cur.x)} ${f(next.cur.y)}`);
+    }
+    parts.push('Z');
+  }
+  return parts.join(' ');
+}
+
+// ── Helper: serializar una capa vector a elemento SVG ────────────────────────
+function _edLayerToSvgElement(la, bb, pw, ph) {
+  const svgCx = ((la.x - bb.x0) * pw).toFixed(3);
+  const svgCy = ((la.y - bb.y0) * ph).toFixed(3);
+  const rot   = la.rotation || 0;
+  const op    = (la.opacity != null && la.opacity < 1) ? ` opacity="${(la.opacity).toFixed(3)}"` : '';
+  const xform = rot ? ` transform="rotate(${rot} ${svgCx} ${svgCy})"` : '';
+
+  if (la.type === 'shape') {
+    const sw   = la.lineWidth || 0;
+    const fill = (la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
+    const strk = sw > 0 ? ` stroke="${la.color||'#000'}" stroke-width="${sw}"` : ' stroke="none"';
+    const w    = +(la.width  * pw).toFixed(3);
+    const h    = +(la.height * ph).toFixed(3);
+    const base = `fill="${fill}"${strk}${xform}${op}`;
+
+    if (la.shape === 'ellipse') {
+      return `<ellipse cx="${svgCx}" cy="${svgCy}" rx="${(w/2).toFixed(3)}" ry="${(h/2).toFixed(3)}" ${base}/>`;
+    }
+    // Rect — con radios opcionales
+    const hasCrs = Array.isArray(la.cornerRadii) && la.cornerRadii.some(r=>r>0);
+    const hasCr  = (la.cornerRadius || 0) > 0;
+    if (hasCrs || hasCr) {
+      const d = _edRectRadiiToPath(+(-w/2).toFixed(3), +(-h/2).toFixed(3), w, h,
+                                    hasCrs ? la.cornerRadii : la.cornerRadius);
+      return `<g transform="translate(${svgCx} ${svgCy})${rot ? ` rotate(${rot})` : ''}"${op}>`
+           + `<path d="${d}" fill="${fill}"${strk}/></g>`;
+    }
+    const rxAttr = (la.cornerRadius||0) > 0 ? ` rx="${la.cornerRadius}"` : '';
+    return `<rect x="${(+svgCx - w/2).toFixed(3)}" y="${(+svgCy - h/2).toFixed(3)}" width="${w}" height="${h}"${rxAttr} ${base}/>`;
+  }
+
+  if (la.type === 'line') {
+    const sw    = la.lineWidth || 1;
+    const cr    = la.cornerRadii || {};
+    const gXform = `translate(${svgCx} ${svgCy})${rot ? ` rotate(${rot})` : ''}`;
+
+    // ── Construir contornos, llevando el índice global para mapear cornerRadii ──
+    const contoursWithGIdx = [];
+    let _curC = [], _gIdx = 0;
+    for (const p of la.points) {
+      if (p === null) {
+        if (_curC.length >= 2) contoursWithGIdx.push(_curC);
+        _curC = []; _gIdx++;
+      } else {
+        _curC.push({ p, gi: _gIdx++ });
+      }
+    }
+    if (_curC.length >= 2) contoursWithGIdx.push(_curC);
+
+    const hasSubs = la.subPaths && la.subPaths.length > 0;
+
+    // ── Grouped: cada contorno tiene su propio estilo ──────────────────────
+    if (la.grouped && la.groupedStyles && la.groupedStyles.length > 0) {
+      const _ptBase = [0];
+      const parts = contoursWithGIdx.map((c, ci) => {
+        const localCr = {};
+        c.forEach(({ p, gi }, li) => { const r = cr[gi]; if (r) localCr[li] = r; });
+        const pts  = c.map(({ p }) => p);
+        const st   = la.groupedStyles[ci] || {};
+        const gcl  = st.closed  !== undefined ? st.closed  : la.closed;
+        const gf   = (gcl && st.fillColor && st.fillColor !== 'none') ? st.fillColor
+                   : (gcl && la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
+        const gc   = st.color     || la.color     || '#000';
+        const glw  = st.lineWidth !== undefined ? st.lineWidth : sw;
+        const d    = _edBuildLineSvgPath(pts, localCr, gcl, pw, ph);
+        return `<path d="${d}" fill="${gf}" stroke="${gc}" stroke-width="${glw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+      }).join('');
+      return `<g transform="${gXform}"${op}>${parts}</g>`;
+    }
+
+    // ── Sin grouped: un único <path> con todos los contornos ──────────────
+    const fill = (la.closed && la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
+    const strk = `stroke="${la.color||'#000'}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"`;
+
+    const allD = contoursWithGIdx.map(c => {
+      const localCr = {};
+      c.forEach(({ p, gi }, li) => { const r = cr[gi]; if (r) localCr[li] = r; });
+      return _edBuildLineSvgPath(c.map(({ p }) => p), localCr, la.closed, pw, ph);
+    });
+    if (hasSubs) la.subPaths.forEach(sp => {
+      if (sp && sp.length >= 2)
+        allD.push(_edBuildLineSvgPath(sp, {}, true, pw, ph));
+    });
+
+    const d  = allD.join(' ');
+    const fr = (contoursWithGIdx.length > 1 || hasSubs) ? ' fill-rule="evenodd"' : '';
+    return `<g transform="${gXform}"${op}><path d="${d}" fill="${fill}" ${strk}${fr}/></g>`;
+  }
+
+  return '';
+}
+
+// ── Exportar selección como SVG ───────────────────────────────────────────────
 async function edExportSelectionSVG() {
-  // Cálculo de bbox: mismo que edExportSelectionPNG
+  // ── 1. Calcular bbox ──────────────────────────────────────────────────────
   let bb = null;
   if(edMultiSel.length >= 2) {
     bb = _msBBox();
@@ -20995,42 +21174,62 @@ async function edExportSelectionSVG() {
   const mx = edMarginX(), my = edMarginY();
   const page = edPages[edCurrentPage]; if(!page) return;
 
-  const bxPx = Math.ceil(bb.w * pw);
-  const byPx = Math.ceil(bb.h * ph);
-  const off = document.createElement('canvas');
-  off.width = bxPx; off.height = byPx;
-  const offCtx = off.getContext('2d', { alpha: true }); // transparente
-  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
-
-  // Mismo conjunto de capas que edExportSelectionPNG (sub-capas incluidas, orden edLayers)
-  const _selBase2 = edMultiSel.length >= 2
+  // ── 2. Determinar capas a exportar ────────────────────────────────────────
+  const _selBase = edMultiSel.length >= 2
     ? edMultiSel.map(i => edLayers[i]).filter(Boolean)
     : [edLayers[edSelectedIdx]].filter(Boolean);
-  const selSet2 = new Set(_selBase2);
-  _selBase2.forEach(l => {
+  const selSet = new Set(_selBase);
+  _selBase.forEach(l => {
     if (!l) return;
     const _groupUid = l._fillLayerId || l._uid;
     if (_groupUid && (l.type === 'draw' || l.type === 'stroke')) {
       edLayers.forEach(f => {
         if (f && (f.type==='fill'||f.type==='pencil'||f.type==='watercolor') && f._drawLayerId===_groupUid)
-          selSet2.add(f);
+          selSet.add(f);
       });
     }
   });
-  const _svgOrdered = edLayers.filter(l => l && selSet2.has(l) && !l.hidden);
-  const _svgTexts   = _svgOrdered.filter(l => l.type==='text'||l.type==='bubble');
-  const _textAlpha2 = page.textLayerOpacity ?? 1;
+  const _ordered = edLayers.filter(l => l && selSet.has(l) && !l.hidden);
 
-  _svgOrdered.forEach(l => {
+  const bxPx = Math.ceil(bb.w * pw);
+  const byPx = Math.ceil(bb.h * ph);
+  const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.svg`;
+
+  // ── 3. ¿Sólo capas vectoriales? → SVG puro ───────────────────────────────
+  const _isPureVector = _ordered.every(l => _edLayerIsPureVector(l));
+
+  if (_isPureVector && _ordered.length > 0) {
+    // Generar elementos SVG reales para cada capa (orden edLayers = fondo→frente)
+    const _svgEls = _ordered.map(l => '  ' + _edLayerToSvgElement(l, bb, pw, ph)).join('\n');
+    const svgStr = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${bxPx}" height="${byPx}" viewBox="0 0 ${bxPx} ${byPx}">`,
+      _svgEls,
+      '</svg>'
+    ].join('\n');
+    const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+    await _edSaveBlob(blob, _selName, 'image/svg+xml');
+    edToast('SVG vectorial exportado ✓');
+    return;
+  }
+
+  // ── 4. Fallback: hay capas raster → PNG embebido en SVG ──────────────────
+  const off = document.createElement('canvas');
+  off.width = bxPx; off.height = byPx;
+  const offCtx = off.getContext('2d', { alpha: true });
+  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
+
+  const _textLayers = _ordered.filter(l => l.type==='text'||l.type==='bubble');
+  const _textAlpha  = page.textLayerOpacity ?? 1;
+  _ordered.forEach(l => {
     if(l.type==='text'||l.type==='bubble') return;
     if(l.type==='image'||l.type==='gif'){ l.draw(offCtx, off); }
     else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
   });
-  offCtx.globalAlpha = _textAlpha2;
-  _svgTexts.forEach(l => l.draw(offCtx, off));
+  offCtx.globalAlpha = _textAlpha;
+  _textLayers.forEach(l => l.draw(offCtx, off));
   offCtx.globalAlpha = 1;
 
-  // Embeber el canvas renderizado como PNG base64 dentro de un SVG
   const b64 = off.toDataURL('image/png');
   const svgStr = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -21039,9 +21238,7 @@ async function edExportSelectionSVG() {
     `  <image href="${b64}" x="0" y="0" width="${bxPx}" height="${byPx}"/>`,
     '</svg>'
   ].join('\n');
-
   const blob = new Blob([svgStr], { type: 'image/svg+xml' });
-  const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.svg`;
   await _edSaveBlob(blob, _selName, 'image/svg+xml');
   edToast('SVG exportado ✓');
 }
