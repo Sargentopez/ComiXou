@@ -7122,8 +7122,10 @@ function edOnStart(e){
         window._edDbLast = edDodgeBurnStroke(edCoords(e).nx, edCoords(e).ny, null, null);
         edRedraw(); return;
       }
-      window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
-      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      if(!window._edEyedropActive){ // cuentagotas activo: no encolar relleno
+        window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
+        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      }
       return;
     }
     // Mouse/pen: ejecutar inmediatamente
@@ -7136,6 +7138,7 @@ function edOnStart(e){
       window._edDbLast = edDodgeBurnStroke(c.nx, c.ny, null, null);
       edRedraw(); return;
     }
+    if(window._edEyedropActive) return; // cuentagotas activo: no pintar ni rellenar
     if(typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
       _edGetOrCreateDrawLayer(); // asegurar que existen las capas reales
       const _flWC = (_edTmp.watercolor?._canvas ? { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true } : null);
@@ -8806,7 +8809,7 @@ function edOnEnd(e){
     window._edActivePointers.delete(e.pointerId);
   }
   // Fill touch: confirmar siempre que no haya pinch activo — fuera de la guarda gestureActive
-  if(edActiveTool === 'fill' && window._edFillPending){
+  if(edActiveTool === 'fill' && window._edFillPending && !window._edEyedropActive){
     const fp = window._edFillPending; window._edFillPending = null;
     if(!window._edActivePointers || window._edActivePointers.size === 0){
       // Si hay shape/line seleccionada en modo barra flotante, aplicar fillColor
@@ -12586,6 +12589,12 @@ function edRenderOptionsPanel(mode){
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
+    // ── Defaults por herramienta ─────────────────────────────────────
+    // Se aplican en cada render del panel: cubre selección directa Y
+    // cualquier cambio de capa mientras la herramienta está activa.
+    if (_actIsWc || _edDodgeBurnActive) edDrawSize = 20;
+    if (_edTmp.active === 'pencil')      edDrawColor = '#7A2E20';
+    // ────────────────────────────────────────────────────────────────
     const curSize = isEr ? edEraserSize : edDrawSize;
     const curOpacity = 100; // future: per-tool opacity
     // Función helper para generar info de estado
@@ -12717,9 +12726,11 @@ function edRenderOptionsPanel(mode){
         // acuarela: restaurar su opacidad guardada; resto: 100%
         if(fillType === 'watercolor'){
           if(opacity !== undefined) edDrawOpacity = opacity;
+          edDrawSize = 20; // grosor por defecto acuarela / iluminar-oscurecer
         } else {
           edDrawOpacity = 100;
         }
+        if(key === 'pencil') edDrawColor = '#7A2E20'; // color por defecto lápiz
         _edSyncFillCursor();
         edCanvas.className = 'tool-fill' + (edFillBrushType==='watercolor'?' tool-watercolor':'');
       }
@@ -12824,7 +12835,7 @@ function edRenderOptionsPanel(mode){
       e.stopPropagation();
       _edDodgeBurnActive = false;
       _edTmp.active = 'watercolor'; edFillBrushType = 'watercolor';
-      edDrawOpacity = 7;
+      edDrawOpacity = 7; edDrawSize = 20;
       edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
       edRenderOptionsPanel('draw');
     });
@@ -12836,7 +12847,7 @@ function edRenderOptionsPanel(mode){
         // Primera activación
         _edDodgeBurnActive = true;
         _edTmp.active = 'watercolor'; edFillBrushType = 'watercolor';
-        edDrawOpacity = 7;
+        edDrawOpacity = 7; edDrawSize = 20;
         edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
         edRenderOptionsPanel('draw');
         return;
@@ -14743,7 +14754,7 @@ function edInitDrawBar() {
     e.stopPropagation();
     // Cambio inmediato de cursor al tocar el botón de dibujo
     if (_edTmp.active === 'watercolor') {
-      edFillBrushType='watercolor'; edDrawOpacity=7;
+      edFillBrushType='watercolor'; edDrawOpacity=7; edDrawSize=20;
       edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor();
     } else if (_edTmp.active === 'bucket') {
       edFillBrushType='bucket'; edDrawOpacity=100;
@@ -14779,7 +14790,7 @@ function edInitDrawBar() {
       if (_edDodgeBurnActive) {
         edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor();
       } else if (_edTmp.active === 'watercolor') {
-        _edDodgeBurnActive=false; edFillBrushType='watercolor'; edDrawOpacity=7;
+        _edDodgeBurnActive=false; edFillBrushType='watercolor'; edDrawOpacity=7; edDrawSize=20;
         edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor();
       } else if (_edTmp.active === 'bucket') {
         _edDodgeBurnActive=false; edFillBrushType='bucket'; edDrawOpacity=100;
@@ -14808,7 +14819,7 @@ function edInitDrawBar() {
       },
       // Acuarela
       { icon:'🖌️', active: _edTmp.active === 'watercolor' && !_edDodgeBurnActive,
-        action:()=>{ _edDodgeBurnActive=false; _edTmp.active='watercolor'; edFillBrushType='watercolor'; edDrawOpacity=7; edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool(); edRenderOptionsPanel('draw'); }
+        action:()=>{ _edDodgeBurnActive=false; _edTmp.active='watercolor'; edFillBrushType='watercolor'; edDrawOpacity=7; edDrawSize=20; edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool(); edRenderOptionsPanel('draw'); }
       },
       // Iluminar/Oscurecer (elemento custom bicolor)
       (()=>{
@@ -14829,7 +14840,7 @@ function edInitDrawBar() {
             setTimeout(()=>{
               window._edbPopItemTouched=false;
               _edDodgeBurnActive=true; edDodgeBurnSign=sign;
-              _edTmp.active='watercolor'; edFillBrushType='watercolor'; edDrawOpacity=7;
+              _edTmp.active='watercolor'; edFillBrushType='watercolor'; edDrawOpacity=7; edDrawSize=20;
               edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor();
               _edbSyncTool(); edRenderOptionsPanel('draw');
             },0);
@@ -24254,11 +24265,13 @@ let _gcpPreviewTimer = null;
 function _gcpPreview() {
   const total = _gcpGetTotalFrames();
   if (!total) { edToast('Sin frames para previsualizar'); return; }
-  // Detener si ya está en marcha
+  // Detener si ya está en marcha → saltar siempre al último frame
   if (_gcpPreviewTimer) {
     clearTimeout(_gcpPreviewTimer);
     _gcpPreviewTimer = null;
-    _gcpGoToFrame(window._gcpGlobalFrameIdx);
+    const _lastFi = total - 1;
+    window._gcpGlobalFrameIdx = _lastFi;
+    _gcpGoToFrame(_lastFi);
     const btn = document.getElementById('gcpPreviewBtn');
     if (btn) btn.textContent = '▶';
     // Restaurar canvas del editor al terminar el preview
@@ -26049,24 +26062,32 @@ function gcpClose() {
   pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;touch-action:none';
   const _isReEdit = (window._gcpEdLayerIdx >= 0) && edLayers[window._gcpEdLayerIdx]?._isGcpImage;
   const _actionLabel = _isReEdit ? 'Actualizar animación' : 'Insertar en el canvas';
-  pop.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
-    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">¿${_actionLabel}?</p>
-    <div style="display:flex;gap:10px;justify-content:center">
-      <button id="_gcpPopNo" style="flex:1;padding:10px;border:1.5px solid #ccc;border-radius:8px;background:#f5f5f5;font-size:.9rem;cursor:pointer">Cancelar</button>
-      <button id="_gcpPopSi" style="flex:1;padding:10px;border:none;border-radius:8px;background:#ffe066;font-size:.9rem;font-weight:700;cursor:pointer">${_actionLabel}</button>
+  pop.innerHTML = `<div id="_gcpSaveBox" style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
+    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">Tienes cambios sin guardar</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button id="_gcpPopSi" style="padding:12px;border:none;border-radius:8px;background:#ffe066;font-size:.95rem;font-weight:700;cursor:pointer">${_actionLabel}</button>
+      <button id="_gcpPopDiscard" style="padding:10px;border:1.5px solid #e88;border-radius:8px;background:#fff0f0;font-size:.9rem;color:#c00;cursor:pointer">Salir sin guardar</button>
     </div>
   </div>`;
   document.body.appendChild(pop);
-  // Bloquear todos los eventos táctiles para que no pasen al canvas GCP
-  pop.addEventListener('pointerdown', e => e.stopPropagation(), true);
-  pop.addEventListener('touchstart',  e => e.stopPropagation(), { passive: true, capture: true });
-  pop.querySelector('#_gcpPopNo').addEventListener('pointerup', () => {
-    pop.remove(); // solo cierra el popup, NO sale del GCP
+  // Tocar fuera del cuadro → volver al editor de animaciones sin hacer nada
+  pop.addEventListener('pointerdown', e => {
+    if (!e.target.closest('#_gcpSaveBox')) { pop.remove(); }
+    e.stopPropagation();
+  }, true);
+  pop.addEventListener('touchstart', e => e.stopPropagation(), { passive: true, capture: true });
+  // Salir sin guardar → cerrar sin guardar
+  pop.querySelector('#_gcpPopDiscard').addEventListener('pointerup', e => {
+    e.stopPropagation();
+    pop.remove();
+    _gcpDoClose();
   });
-  pop.querySelector('#_gcpPopSi').addEventListener('pointerup', () => {
+  // Guardar e insertar → guarda y cierra
+  pop.querySelector('#_gcpPopSi').addEventListener('pointerup', e => {
+    e.stopPropagation();
     pop.remove();
     edToast('Procesando...');
-    _gcpSaveToLib(() => _gcpDoClose()); // inserta y sale inmediatamente
+    _gcpSaveToLib(() => _gcpDoClose());
   });
 }
 
