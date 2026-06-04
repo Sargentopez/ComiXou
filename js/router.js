@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -21,9 +21,9 @@
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
  */
-/* ComiXow v4.2 */
+/* ComXow v4.2 */
 /* ============================================================
-   router.js — SPA Router ComiXow
+   router.js — SPA Router ComXow
    ============================================================ */
 
 const Router = (() => {

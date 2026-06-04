@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -115,7 +115,7 @@ function openShareModal(comic) {
   const base  = window.location.origin + window.location.pathname.replace(/\/index\.html$/, '').replace(/\/$/, '');
   const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
   const url   = base + '/reader/index.html?' + param;
-  const title = comic.title || 'Una obra en ComiXow';
+  const title = comic.title || 'Una creación en ComiXou';
 
   if ('share' in navigator) {
     navigator.share({ title, url }).catch(e => {

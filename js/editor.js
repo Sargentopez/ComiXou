@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -818,7 +818,7 @@ window.ApngDecoder = (function(){
 /* ── fin ApngDecoder ── */
 
 /* ============================================================
-   editor.js — ComiXow v5.4
+   editor.js — ComXow v5.4
    Motor canvas fiel al referEditor.
    Menú tipo page-nav, botón flotante al minimizar.
    ============================================================ */
@@ -13356,6 +13356,8 @@ function edRenderOptionsPanel(mode){
           <option value="Bebas Neue" ${la.fontFamily==='Bebas Neue'?'selected':''}>Bebas Neue</option>
           <option value="Oswald" ${la.fontFamily==='Oswald'?'selected':''}>Oswald</option>
           <option value="Comic Neue" ${la.fontFamily==='Comic Neue'?'selected':''}>Comic Neue</option>
+          <option value="Lora" ${la.fontFamily==='Lora'?'selected':''}>Lora (Serif)</option>
+          <option value="Press Start 2P" ${la.fontFamily==='Press Start 2P'?'selected':''}>Press Start 2P (8-bit)</option>
           <option value="Arial" ${la.fontFamily==='Arial'?'selected':''}>Arial</option>
           <option value="Verdana" ${la.fontFamily==='Verdana'?'selected':''}>Verdana</option>
         </select>

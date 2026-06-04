@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -67,7 +67,7 @@
 
     ctx.font = '14px sans-serif';
     ctx.fillStyle = '#888';
-    ctx.fillText('ComiXow', 150, 380);
+    ctx.fillText('ComXow', 150, 380);
 
     return canvas.toDataURL('image/jpeg', 0.7);
   }

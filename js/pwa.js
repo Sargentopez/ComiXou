@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -121,8 +121,8 @@
     if (document.getElementById('installBanner')) return;
     const lang = (localStorage.getItem('cs_lang') || navigator.language || 'es').slice(0, 2);
     const msg  = lang === 'en'
-      ? 'Install ComiXow on your device — works offline and fullscreen'
-      : 'Instala ComiXow en tu dispositivo — funciona sin conexión y a pantalla completa';
+      ? 'Install ComXow on your device — works offline and fullscreen'
+      : 'Instala ComXow en tu dispositivo — funciona sin conexión y a pantalla completa';
     const installLabel = lang === 'en' ? 'Install' : 'Instalar';
     const laterLabel   = lang === 'en' ? 'Not now' : 'Ahora no';
 
@@ -132,7 +132,7 @@
     banner.innerHTML = `
       <div class="install-banner-icon">📲</div>
       <div class="install-banner-text">
-        <img src="logo_long.png" alt="ComiXow" style="height:18px;width:auto;vertical-align:middle;">${msg}
+        <img src="logo_long.png" alt="ComXow" style="height:18px;width:auto;vertical-align:middle;">${msg}
       </div>
       <div class="install-banner-actions">
         <button class="install-btn install-btn-ok"      id="installBtnOk">${installLabel}</button>
@@ -170,7 +170,7 @@
     const lang = (localStorage.getItem('cs_lang') || navigator.language || 'es').slice(0, 2);
     const msg  = lang === 'en'
       ? '✓ Installed! You can now open it from your home screen.'
-      : '✓ ¡ComiXow instalada! Ya puedes abrirla desde tu pantalla de inicio.';
+      : '✓ ¡ComXow instalada! Ya puedes abrirla desde tu pantalla de inicio.';
 
     const toast = document.createElement('div');
     toast.id = 'installedToast';
@@ -195,15 +195,15 @@
       if (document.getElementById('installBanner')) return;
       const lang = (localStorage.getItem('cs_lang') || navigator.language || 'es').slice(0, 2);
       const msg  = lang === 'en'
-        ? 'Tap <strong>Share ↑</strong> → <strong>"Add to Home Screen"</strong> to install ComiXow'
-        : 'Pulsa <strong>Compartir ↑</strong> → <strong>"Añadir a inicio"</strong> para instalar ComiXow';
+        ? 'Tap <strong>Share ↑</strong> → <strong>"Add to Home Screen"</strong> to install ComXow'
+        : 'Pulsa <strong>Compartir ↑</strong> → <strong>"Añadir a inicio"</strong> para instalar ComXow';
 
       const banner = document.createElement('div');
       banner.id = 'installBanner';
       banner.className = 'install-banner';
       banner.innerHTML = `
         <div class="install-banner-icon">📲</div>
-        <div class="install-banner-text"><img src="logo_long.png" alt="ComiXow" style="height:18px;width:auto;vertical-align:middle;">${msg}</div>
+        <div class="install-banner-text"><img src="logo_long.png" alt="ComXow" style="height:18px;width:auto;vertical-align:middle;">${msg}</div>
         <div class="install-banner-actions">
           <button class="install-btn install-btn-dismiss" id="installBtnDismiss">
             ${lang === 'en' ? 'Got it' : 'Entendido'}

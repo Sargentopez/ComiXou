@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -22,7 +22,7 @@
  *     Licencia: dominio público / uso libre
  */
 /* ============================================================
-   ComiXow Reader — Reproductor externo standalone
+   ComXow Reader — Reproductor externo standalone
    Canvas idéntico al visor interno del editor.
    ============================================================ */
 
@@ -938,7 +938,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function _toggleFullscreen() {
   if (RS.isEmbed) return;
-  // Usar el mismo módulo Fullscreen que el editor de ComiXow
+  // Usar el mismo módulo Fullscreen que el editor de ComXow
   if (typeof Fullscreen !== 'undefined') {
     Fullscreen.request();
   } else {
@@ -973,7 +973,7 @@ async function loadWork(workId) {
 
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(workId);
-    document.title = (work[0].title || 'Obra') + ' — ComiXow';
+    document.title = (work[0].title || 'Obra') + ' — ComXow';
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
@@ -1002,7 +1002,7 @@ async function loadDraft(token) {
 
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(token, true);  // true = usar JWT para leer capas del borrador
-    document.title = (work[0].title || 'Borrador') + ' — ComiXow';
+    document.title = (work[0].title || 'Borrador') + ' — ComXow';
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
@@ -2634,8 +2634,8 @@ function setLoadingProgress(pct, label) {
 }
 
 function _updateOGMeta(title, author, coverUrl) {
-  const t = (title || 'ComiXow') + ' — ComiXow';
-  const d = author ? `Una obra de ${author} en ComiXow` : 'Abre esta obra en el reproductor de ComiXow';
+  const t = (title || 'ComXow') + ' — ComXow';
+  const d = author ? `Una obra de ${author} en ComXow` : 'Abre esta obra en el reproductor de ComXow';
   document.title = t;
   document.querySelector('meta[property="og:title"]')       ?.setAttribute('content', t);
   document.querySelector('meta[property="og:description"]') ?.setAttribute('content', d);

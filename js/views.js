@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v28.90</footer>
+    <footer class="app-version">v28.93</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -763,7 +763,7 @@ Router.register('reader', {
     <div class="reader-topbar" id="readerTopbar">
       <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
         <a href="#home" onclick="Router.go('home');return false;" class="logo-link logo-img-link">
-          <img src="logo_long.png" alt="ComiXow" class="logo-img" style="height:22px;width:auto;">
+          <img src="logo_long.png" alt="ComXow" class="logo-img" style="height:22px;width:auto;">
         </a>
       </div>
       <div class="reader-info">

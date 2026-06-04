@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -21,7 +21,7 @@
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
  */
-/* ComiXow v4.2 */
+/* ComXow v4.2 */
 /* ============================================================
    my-comics.js — Vista "Mis creaciones"
    Listado del autor con opciones Leer / Editar / Publicar.
@@ -358,7 +358,7 @@ async function _mcCheckOrphanData() {
   // ── Aviso al usuario — solo si el usuario sigue en my-comics ───────
   if (!document.getElementById('mcContent')) return;
   appConfirm(
-    'Se han encontrado datos en el almacenamiento local de ComiXow que no pertenecen a ninguna de tus obras. ¿Borrarlos?',
+    'Se han encontrado datos en el almacenamiento local de ComXow que no pertenecen a ninguna de tus obras. ¿Borrarlos?',
     async () => {
       // OPFS
       for (const { dir, name } of _orphans.opfs) {

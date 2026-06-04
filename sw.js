@@ -1,4 +1,4 @@
-/* Comixow/COMIXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -21,8 +21,8 @@
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
  */
-/* ComiXow Service Worker — SPA */
-const CACHE = 'comixow-v28-90';
+/* ComXow Service Worker — SPA */
+const CACHE = 'comixow-v28-93';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
