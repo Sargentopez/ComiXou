@@ -281,9 +281,12 @@ function _lyRender() {
             const _lyFlPair = edLayers.find(la => la.type==='fill'       && la._drawLayerId===_lyUid);
             const _lyPencil = edLayers.find(la => la.type==='pencil'     && la._drawLayerId===_lyUid);
             const _lyWc     = edLayers.find(la => la.type==='watercolor' && la._drawLayerId===_lyUid);
-            if (_lyFlPair) list.appendChild(_lyBuildGroupSubRow(_lyFlPair, edLayers.indexOf(_lyFlPair), '🧪 Relleno',   '#93c5fd'));
-            if (_lyWc)     list.appendChild(_lyBuildGroupSubRow(_lyWc,     edLayers.indexOf(_lyWc),     '💧 Acuarela',  '#6ee7b7'));
-            if (_lyPencil) list.appendChild(_lyBuildGroupSubRow(_lyPencil, edLayers.indexOf(_lyPencil), '✏️ Lápiz',     '#c4b5fd'));
+            // Sub-fila de la capa de tinta (solo su propio canvas, no el compuesto)
+            list.appendChild(_lyBuildGroupSubRow(l, i, l.type==='stroke' ? '✒️ Tinta' : '✒️ Tinta', '#374151'));
+            // Resto de sub-capas en orden visual (de arriba a abajo)
+            if (_lyPencil) list.appendChild(_lyBuildGroupSubRow(_lyPencil, edLayers.indexOf(_lyPencil), '✏️ Lápiz',    '#c4b5fd'));
+            if (_lyWc)     list.appendChild(_lyBuildGroupSubRow(_lyWc,     edLayers.indexOf(_lyWc),     '💧 Acuarela', '#6ee7b7'));
+            if (_lyFlPair) list.appendChild(_lyBuildGroupSubRow(_lyFlPair, edLayers.indexOf(_lyFlPair), '🧪 Relleno',  '#93c5fd'));
           }
         }
       }
@@ -757,7 +760,23 @@ function _lyBuildVisualItem(la, realIdx, selected) {
         if (_cur) _cur.style.display = 'none';
         if (edSelectedIdx === realIdx) edSelectedIdx = -1;
       }
-      edLayers.splice(realIdx, 1);
+      // Para draw/stroke: eliminar también fill, pencil y watercolor vinculados
+      if (isDrawType) {
+        const _delUid = la._uid || la._fillLayerId;
+        if (_delUid) {
+          // Eliminar de mayor a menor índice para no desplazar los índices
+          const _subIdxs = edLayers
+            .map((l, idx) => ({ l, idx }))
+            .filter(({ l }) =>
+              (l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_delUid)
+            .map(({ idx }) => idx)
+            .sort((a, b) => b - a); // mayor a menor
+          _subIdxs.forEach(idx => { edLayers.splice(idx, 1); });
+        }
+      }
+      // Actualizar realIdx por si los splices anteriores lo desplazaron
+      const _newRealIdx = edLayers.indexOf(la);
+      if (_newRealIdx >= 0) edLayers.splice(_newRealIdx, 1);
       if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
       edPushHistory(); edRedraw(); _lyRender();
     });
@@ -767,7 +786,37 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   acts.className = 'ed-layer-actions';
   acts.appendChild(upBtn);
   acts.appendChild(dnBtn);
-  acts.appendChild(_lyBuildEyeBtn(la));
+  // Ojo: para draw/stroke afecta a TODAS las sub-capas vinculadas
+  if (isDrawType) {
+    const _eyeGroupUid = la._uid || la._fillLayerId;
+    const _eyeBtn = document.createElement('button');
+    _eyeBtn.className = 'ed-layer-del';
+    _eyeBtn.textContent = '👁';
+    const _eyeAllHidden = () => {
+      if (la.hidden) return true;
+      if (!_eyeGroupUid) return false;
+      const _subs = edLayers.filter(l =>
+        (l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_eyeGroupUid);
+      return _subs.length > 0 && _subs.every(l => l.hidden);
+    };
+    _eyeBtn.title  = _eyeAllHidden() ? 'Mostrar grupo' : 'Ocultar grupo';
+    _eyeBtn.style.opacity = _eyeAllHidden() ? '0.4' : '';
+    _eyeBtn.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      const _newHidden = !la.hidden;
+      la.hidden = _newHidden;
+      if (_eyeGroupUid) {
+        edLayers.forEach(l => {
+          if ((l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_eyeGroupUid)
+            l.hidden = _newHidden;
+        });
+      }
+      edRedraw(); _lyRender();
+    });
+    acts.appendChild(_eyeBtn);
+  } else {
+    acts.appendChild(_lyBuildEyeBtn(la));
+  }
   // Botón colapsar/expandir sub-capas solo para stroke/draw con capas vinculadas
   if (isDrawType) {
     const _colUid = la._uid || la._fillLayerId;
