@@ -334,9 +334,10 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
     const ph = (typeof edPageH==='function')?edPageH():1100;
     const mx = (typeof edMarginX==='function')?edMarginX():0;
     const my = (typeof edMarginY==='function')?edMarginY():0;
-    const scX = 80 / pw, scY = 60 / ph;
+    const _sc = Math.min(80 / pw, 60 / ph);
+    const _ox = (80 - pw * _sc) / 2, _oy = (60 - ph * _sc) / 2;
     tctx.save();
-    tctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    tctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
     if (typeof la.draw === 'function') la.draw(tctx);
     tctx.restore();
   }
@@ -417,10 +418,11 @@ function _lyBuildFillSubRowOld(la, realIdx) {
     const my = (typeof edMarginY==='function')?edMarginY():0;
     // Usar draw() que maneja tanto canvas workspace como canvas local (bbox)
     // Escalar para que la página entera quepa en el thumb 80×60
-    const scX = 80 / pw, scY = 60 / ph;
+    const _sc = Math.min(80 / pw, 60 / ph);
+    const _ox = (80 - pw * _sc) / 2, _oy = (60 - ph * _sc) / 2;
     tctx.save();
-    // Transformar: mover origen para que la página empiece en (0,0) del thumb, escalada
-    tctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    // Escala uniforme con centrado — preserva ratio de la página
+    tctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
     if (typeof la.draw === 'function') la.draw(tctx);
     tctx.restore();
   }
@@ -621,6 +623,8 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   const isGroup = false; // obsoleto
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
+  item.style.position = 'relative';
+  item.style.paddingBottom = '22px';
   if (la.hidden) item.style.opacity = '0.45';
   item.dataset.realIdx = realIdx;
   if (!la._uid) la._uid = ++_lyUidCounter;
@@ -654,7 +658,10 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     item.classList.remove('was-dragged');
   });
   _lyBindThumbDoubleTap(thumb, () => realIdx);
-  item.appendChild(thumb);
+  const _thumbWrap = document.createElement('div');
+  _thumbWrap.style.cssText = 'position:relative;flex-shrink:0;width:80px;height:60px;';
+  _thumbWrap.appendChild(thumb);
+  item.appendChild(_thumbWrap);
 
   /* Info */
   const info = document.createElement('div');
@@ -823,18 +830,21 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     const _hasSubs = _colUid && (typeof edLayers !== 'undefined') && edLayers.some(l =>
       (l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_colUid);
     if (_hasSubs) {
+      const _isExp = _lyExpandedGroups.has(_colUid);
       const _colBtn = document.createElement('button');
-      _colBtn.className = 'ed-layer-del';
-      _colBtn.title = _lyExpandedGroups.has(_colUid) ? 'Colapsar sub-capas' : 'Mostrar sub-capas';
-      _colBtn.textContent = _lyExpandedGroups.has(_colUid) ? '▼' : '▶';
-      _colBtn.style.cssText = 'font-size:0.7rem;padding:2px 5px;opacity:0.7;';
+      _colBtn.title = _isExp ? 'Colapsar sub-capas' : 'Mostrar sub-capas';
+      _colBtn.textContent = _isExp ? '▲' : '▼';
+      _colBtn.style.cssText = 'position:absolute;bottom:3px;left:50%;transform:translateX(-50%);' +
+        'border:none;border-radius:4px;padding:0 10px;font-size:0.8rem;line-height:1.6;cursor:pointer;' +
+        'background:rgba(255,255,255,0.88);font-weight:900;white-space:nowrap;' +
+        'color:' + (_isExp ? '#e63030' : '#22c55e') + ';';
       _colBtn.addEventListener('pointerup', e => {
         e.stopPropagation();
         if (_lyExpandedGroups.has(_colUid)) _lyExpandedGroups.delete(_colUid);
         else _lyExpandedGroups.add(_colUid);
         _lyRender();
       });
-      acts.appendChild(_colBtn);
+      item.appendChild(_colBtn);
     }
   }
   acts.appendChild(del);
@@ -854,9 +864,10 @@ function _lyDrawStrokeThumb(canvas, la) {
     const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
     const mx = edMarginX ? edMarginX() : 0, my = edMarginY ? edMarginY() : 0;
     // Escalar página completa al thumb
-    const scX = tw / pw, scY = th / ph;
+    const _sc = Math.min(tw / pw, th / ph);
+    const _ox = (tw - pw * _sc) / 2, _oy = (th - ph * _sc) / 2;
     ctx.save();
-    ctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    ctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
     // Primero el fill vinculado (si existe)
     const _thumbUid = la._uid || la._fillLayerId;
     const _flS      = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='fill'       && f._drawLayerId===_thumbUid) : null;
@@ -871,9 +882,10 @@ function _lyDrawStrokeThumb(canvas, la) {
   } else if (la.type === 'draw' && la._canvas) {
     const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
     const mx = edMarginX ? edMarginX() : 0, my = edMarginY ? edMarginY() : 0;
-    const scX = tw / pw, scY = th / ph;
+    const _sc = Math.min(tw / pw, th / ph);
+    const _ox = (tw - pw * _sc) / 2, _oy = (th - ph * _sc) / 2;
     ctx.save();
-    ctx.setTransform(scX, 0, 0, scY, -mx * scX, -my * scY);
+    ctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
     // Capas vinculadas al DrawLayer (en orden de render)
     const _thumbDlUid = la._uid || la._fillLayerId;
     const _flD     = (typeof edLayers !== 'undefined' && _thumbDlUid) ? edLayers.find(f => f && f.type==='fill'       && f._drawLayerId===_thumbDlUid) : null;
@@ -1342,23 +1354,32 @@ function _lyDrawThumb(canvas, la) {
   const sw = canvas.width, sh = canvas.height;
   ctx.fillStyle = '#f5f5f5';
   ctx.fillRect(0, 0, sw, sh);
+  // Escala uniforme respetando el ratio de la página (sin distorsión)
+  const _pw5 = typeof edPageW === 'function' ? edPageW() : sw;
+  const _ph5 = typeof edPageH === 'function' ? edPageH() : sh;
+  const _sc5 = Math.min(sw / _pw5, sh / _ph5);
+  const _ox5 = (sw - _pw5 * _sc5) / 2, _oy5 = (sh - _ph5 * _sc5) / 2;
+  const _tx5 = nx => nx * _pw5 * _sc5 + _ox5;
+  const _ty5 = ny => ny * _ph5 * _sc5 + _oy5;
+  const _tw5 = nw => nw * _pw5 * _sc5;
+  const _th5 = nh => nh * _ph5 * _sc5;
   ctx.save();
   ctx.globalAlpha = la.opacity ?? 1;
   if (la.type === 'gif' && la._oc && la._ready) {
-    ctx.drawImage(la._oc, (la.x-la.width/2)*sw, (la.y-la.height/2)*sh, la.width*sw, la.height*sh);
+    ctx.drawImage(la._oc, _tx5(la.x-la.width/2), _ty5(la.y-la.height/2), _tw5(la.width), _th5(la.height));
   } else if (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0) {
-    ctx.drawImage(la.img, (la.x-la.width/2)*sw, (la.y-la.height/2)*sh, la.width*sw, la.height*sh);
+    ctx.drawImage(la.img, _tx5(la.x-la.width/2), _ty5(la.y-la.height/2), _tw5(la.width), _th5(la.height));
   } else if (la.type === 'text' || la.type === 'bubble') {
-    const x=(la.x-la.width/2)*sw, y=(la.y-la.height/2)*sh, w=la.width*sw, h=la.height*sh;
+    const x=_tx5(la.x-la.width/2), y=_ty5(la.y-la.height/2), w=_tw5(la.width), h=_th5(la.height);
     ctx.fillStyle = la.backgroundColor || '#fff';
     ctx.fillRect(x,y,w,h);
     ctx.strokeStyle = la.borderColor || '#bbb';
     ctx.lineWidth = 1;
     ctx.strokeRect(x,y,w,h);
     ctx.fillStyle = la.color || '#222';
-    ctx.font = Math.max(7, Math.round(sw*0.13)) + 'px sans-serif';
+    ctx.font = Math.max(7, Math.round(Math.min(w*0.25, h*0.45))) + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText((la.text||'').substring(0,14), sw/2, sh/2);
+    ctx.fillText((la.text||'').substring(0,14), x + w/2, y + h/2);
   }
   ctx.restore();
 }

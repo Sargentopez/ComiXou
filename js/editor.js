@@ -26420,30 +26420,24 @@ function _gcpSaveToLib(onDone) {
   tc2.drawImage(renderedFrames[0], cropX,cropY,cropW,cropH, (S-cropW*sc)/2,(S-cropH*sc)/2,cropW*sc,cropH*sc);
   const thumb=thumbC.toDataURL('image/png',0.7);
 
-  // Proporciones normalizadas = bbox AABB de los objetos en el GCP (coords normalizadas).
-  // Usar el tamaño visual real en el GCP, no el del render recortado,
-  // para que al insertar en el editor el objeto tenga el mismo tamaño aparente.
-  {
-    let _bx0=Infinity,_by0=Infinity,_bx1=-Infinity,_by1=-Infinity;
-    const _bpw=edPageW(), _bph=edPageH();
-    for (const _la of layers) {
-      if (!_la) continue;
-      const _rot=(_la.rotation||0)*Math.PI/180;
-      const _hw=_la.width/2, _hh=_la.height/2;
-      for (const [_cx,_cy] of [[-_hw,-_hh],[_hw,-_hh],[-_hw,_hh],[_hw,_hh]]) {
-        const _wx=_cx*_bpw, _wy=_cy*_bph;
-        const _rx=(_wx*Math.cos(_rot)-_wy*Math.sin(_rot))/_bpw;
-        const _ry=(_wx*Math.sin(_rot)+_wy*Math.cos(_rot))/_bph;
-        _bx0=Math.min(_bx0,_la.x+_rx); _by0=Math.min(_by0,_la.y+_ry);
-        _bx1=Math.max(_bx1,_la.x+_rx); _by1=Math.max(_by1,_la.y+_ry);
-      }
-    }
-    if (_bx1<=_bx0||_by1<=_by0) { _bx0=0;_by0=0;_bx1=1;_by1=1; }
-    var _gcpNormW = _bx1-_bx0;
-    var _gcpNormH = _by1-_by0;
-    // Centro visual del AABB para posicionar en el canvas del editor
-    var _gcpCenterX = (_bx0+_bx1)/2;
-    var _gcpCenterY = (_by0+_by1)/2;
+  // Posición y tamaño derivados del RECORTE REAL de píxeles renderizados.
+  // Garantiza que la animación se inserta exactamente donde y con las
+  // proporciones que se ven en el GCP, sin depender de la geometría declarada.
+  //
+  // El canvas de render usa setTransform(1,0,0,1, offX, offY), por lo que:
+  //   pixel canvas (cx, cy) → workspace (cx - offX, cy - offY)
+  //   workspace → página normalizada: (wx - marginX) / pageW
+  //
+  var _gcpNormW, _gcpNormH, _gcpCenterX, _gcpCenterY;
+  if (cropW > 0 && cropH > 0) {
+    _gcpNormW   = cropW / pageW;
+    _gcpNormH   = cropH / pageH;
+    // Centro del recorte en coords de página normalizadas
+    _gcpCenterX = (cropX - offX - marginX + cropW / 2) / pageW;
+    _gcpCenterY = (cropY - offY - marginY + cropH / 2) / pageH;
+  } else {
+    // Fallback: ocupar el centro de la página
+    _gcpNormW = 1; _gcpNormH = 1; _gcpCenterX = 0.5; _gcpCenterY = 0.5;
   }
 
   // Serializar capas para re-edición
