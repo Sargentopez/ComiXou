@@ -21097,7 +21097,8 @@ function _edLayerToSvgElement(la, bb, pw, ph) {
   }
 
   if (la.type === 'line') {
-    const sw    = la.lineWidth || 1;
+    // ?? en vez de || para respetar lineWidth=0 explícito (sin stroke)
+    const sw    = la.lineWidth ?? 1;
     const cr    = la.cornerRadii || {};
     const gXform = `translate(${svgCx} ${svgCy})${rot ? ` rotate(${rot})` : ''}`;
 
@@ -21130,14 +21131,21 @@ function _edLayerToSvgElement(la, bb, pw, ph) {
         const gc   = st.color     || la.color     || '#000';
         const glw  = st.lineWidth !== undefined ? st.lineWidth : sw;
         const d    = _edBuildLineSvgPath(pts, localCr, gcl, pw, ph);
-        return `<path d="${d}" fill="${gf}" stroke="${gc}" stroke-width="${glw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+        // Respetar grosor 0: sin stroke (igual que canvas: if(_lw > 0) ctx.stroke)
+        const strokePart = glw > 0
+          ? `stroke="${gc}" stroke-width="${glw}" stroke-linecap="round" stroke-linejoin="round"`
+          : 'stroke="none"';
+        return `<path d="${d}" fill="${gf}" ${strokePart}/>`;
       }).join('');
       return `<g transform="${gXform}"${op}>${parts}</g>`;
     }
 
     // ── Sin grouped: un único <path> con todos los contornos ──────────────
     const fill = (la.closed && la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
-    const strk = `stroke="${la.color||'#000'}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"`;
+    // Respetar grosor 0: sin stroke (igual que canvas: if(this.lineWidth > 0) ctx.stroke)
+    const strk = sw > 0
+      ? `stroke="${la.color||'#000'}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"`
+      : 'stroke="none"';
 
     const allD = contoursWithGIdx.map(c => {
       const localCr = {};
