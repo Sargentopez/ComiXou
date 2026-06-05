@@ -1314,6 +1314,38 @@ async function sbGetAuth(path) {
 }
 
 // ── INICIAR ───────────────────────────────────────────────────
+// ── Helper: posición normalizada a lo largo de un trayecto (t = 0..1) ──────────
+function _pathPositionAt(points, closed, t) {
+  if (!points || points.length === 0) return null;
+  if (points.length === 1) return { x: points[0].x, y: points[0].y };
+  // Para recorridos cerrados repetir el primer punto al final
+  const pts = closed ? [...points, points[0]] : points;
+  // Longitudes acumuladas (longitud de arco)
+  const dists = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const d = Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+    dists.push(d);
+    total += d;
+  }
+  if (total === 0) return { x: pts[0].x, y: pts[0].y };
+  const _t = ((t % 1) + 1) % 1; // siempre en [0,1), cicla automáticamente
+  const target = _t * total;
+  let cum = 0;
+  for (let i = 0; i < dists.length; i++) {
+    const seg = dists[i];
+    if (cum + seg >= target) {
+      const f = seg > 0 ? (target - cum) / seg : 0;
+      return {
+        x: pts[i].x + (pts[i+1].x - pts[i].x) * f,
+        y: pts[i].y + (pts[i+1].y - pts[i].y) * f
+      };
+    }
+    cum += seg;
+  }
+  return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
+}
+
 // ── Animación GIF en el reproductor ─────────────────────────────────────────
 function _readerGifTick() {
   const now = Date.now();
@@ -1354,6 +1386,16 @@ function _readerGifTick() {
           panelChanged = true;
         }
       }
+      // ── Recorrido de animación (motion path) ─────────────────────────────
+      if (layer._motionPath && layer._motionPath.length >= 2) {
+        if (!layer._pathStartTime) layer._pathStartTime = now;
+        const _mpSpeed   = layer._motionSpeed || 5;
+        const _mpElapsed = (now - layer._pathStartTime) / 1000;
+        const _mpT       = _mpElapsed / _mpSpeed;
+        const _mpPos     = _pathPositionAt(layer._motionPath, layer._motionPathClosed || false, _mpT);
+        if (_mpPos) { layer._pathCurX = _mpPos.x; layer._pathCurY = _mpPos.y; }
+        panelChanged = true; // redibujar en cada frame para movimiento fluido
+      }
     });
     if (panelChanged) {
       // Modo fixed: redibujar si es el panel activo
@@ -1375,7 +1417,7 @@ function startReader() {
   document.getElementById('readerApp').classList.remove('hidden');
 
   // Arrancar loop de animación GIF si hay alguno en la obra
-  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady));
+  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2)));
   if (_hasGifs) {
     _resetPanelAnims(0); // inicializar animaciones del primer panel
     requestAnimationFrame(_readerGifTick);
@@ -1814,8 +1856,8 @@ function _render() {
       if (!layer._gifReady || !layer._gifOc) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      const _gx = (layer.x || 0.5) * pw;
-      const _gy = (layer.y || 0.5) * ph;
+      const _gx = (layer._pathCurX != null ? layer._pathCurX : (layer.x || 0.5)) * pw;
+      const _gy = (layer._pathCurY != null ? layer._pathCurY : (layer.y || 0.5)) * ph;
       const _gw = (layer.width  || 0.5) * pw;
       const _gh = (layer.height || 0.5) * ph;
       const _gr = (layer.rotation || 0) * Math.PI / 180;
@@ -1846,7 +1888,8 @@ function _render() {
     if (type === 'image' || type === 'draw' || type === 'stroke') {
       // APNG animado
       if (type === 'image' && layer._animReady && layer._animOc) {
-        const x=(layer.x||0.5)*pw, y=(layer.y||0.5)*ph;
+        const x=(layer._pathCurX != null ? layer._pathCurX : (layer.x||0.5))*pw;
+        const y=(layer._pathCurY != null ? layer._pathCurY : (layer.y||0.5))*ph;
         const w=(layer.width||1)*pw, h=(layer.height||1)*ph;
         const rot=(layer.rotation||0)*Math.PI/180;
         ctx.save(); ctx.globalAlpha=layer.opacity!==undefined?layer.opacity:1;
@@ -2255,6 +2298,12 @@ function _resetPanelAnims(idx) {
       if (layer._animOc && layer._animFrames.length) {
         layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
       }
+    }
+    // Recorrido: reiniciar desde el primer punto
+    if (layer._motionPath && layer._motionPath.length >= 2) {
+      layer._pathStartTime = Date.now();
+      layer._pathCurX = layer._motionPath[0].x;
+      layer._pathCurY = layer._motionPath[0].y;
     }
   });
 }

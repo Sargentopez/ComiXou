@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v29.02</footer>
+    <footer class="app-version">v29.09</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -534,6 +534,19 @@ Router.register('editor', {
           <div class="edb-sep"></div>
           <button id="esb-ok"       class="edb-ok"   title="Finalizar">✓</button>
         </div>
+      </div>
+
+      <!-- ── BARRA RECORRIDO DE ANIMACIÓN ── -->
+      <div id="edMotionBar" style="display:none;position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:200;align-items:center;gap:8px;background:rgba(20,20,20,0.92);border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px 14px;box-shadow:0 4px 20px rgba(0,0,0,.55);color:#fff;font-size:.82rem;font-weight:700;white-space:nowrap;-webkit-tap-highlight-color:transparent;flex-wrap:wrap;max-width:calc(100vw - 24px)">
+        <span style="font-size:1rem">🛤️</span>
+        <span style="color:rgba(255,255,255,0.3)">│</span>
+        <span style="font-size:.78rem;opacity:.8">⏱</span>
+        <input type="range" id="mpb-speed" min="1" max="30" value="5" style="width:72px;accent-color:#FFE135;cursor:pointer;vertical-align:middle">
+        <span id="mpb-speed-val" style="min-width:64px;font-size:.78rem">5s/vuelta</span>
+        <span style="color:rgba(255,255,255,0.3)">│</span>
+        <button id="mpb-undo" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.9rem;font-weight:900" title="Borrar recorrido y redibujar">🗑</button>
+        <button id="mpb-ok" style="background:#16a34a;border:none;border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-weight:900;font-size:.88rem">✓ OK</button>
+        <button id="mpb-cancel" style="background:rgba(220,38,38,0.25);border:1px solid rgba(220,38,38,0.4);border-radius:7px;padding:5px 11px;color:#ff9999;cursor:pointer;font-size:.88rem;font-weight:900" title="Cancelar">✕</button>
       </div>
 
     </div>
