@@ -1314,34 +1314,31 @@ async function sbGetAuth(path) {
 }
 
 // ── INICIAR ───────────────────────────────────────────────────
-// ── Helper: posición normalizada a lo largo de un trayecto (t = 0..1) ──────────
-function _pathPositionAt(points, closed, t) {
+// ── Helper: posición a lo largo de un trayecto (t = fracción de longitud de arco) ─
+// pw/ph: dimensiones reales del lienzo en px para arc-length en espacio píxel real
+function _pathPositionAt(points, closed, t, pw, ph) {
   if (!points || points.length === 0) return null;
   if (points.length === 1) return { x: points[0].x, y: points[0].y };
-  // Para recorridos cerrados repetir el primer punto al final
   const pts = closed ? [...points, points[0]] : points;
-  // Longitudes acumuladas (longitud de arco)
+  const _pw = pw || 360, _ph = ph || 780;
   const dists = [];
   let total = 0;
   for (let i = 1; i < pts.length; i++) {
-    const d = Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+    const d = Math.hypot((pts[i].x - pts[i-1].x) * _pw, (pts[i].y - pts[i-1].y) * _ph);
     dists.push(d);
     total += d;
   }
   if (total === 0) return { x: pts[0].x, y: pts[0].y };
-  const _t = ((t % 1) + 1) % 1; // siempre en [0,1), cicla automáticamente
+  const _t = ((t % 1) + 1) % 1;
   const target = _t * total;
   let cum = 0;
   for (let i = 0; i < dists.length; i++) {
-    const seg = dists[i];
-    if (cum + seg >= target) {
-      const f = seg > 0 ? (target - cum) / seg : 0;
-      return {
-        x: pts[i].x + (pts[i+1].x - pts[i].x) * f,
-        y: pts[i].y + (pts[i+1].y - pts[i].y) * f
-      };
+    if (cum + dists[i] >= target) {
+      const f = dists[i] > 0 ? (target - cum) / dists[i] : 0;
+      return { x: pts[i].x + (pts[i+1].x - pts[i].x) * f,
+               y: pts[i].y + (pts[i+1].y - pts[i].y) * f };
     }
-    cum += seg;
+    cum += dists[i];
   }
   return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
 }
@@ -1386,15 +1383,27 @@ function _readerGifTick() {
           panelChanged = true;
         }
       }
-      // ── Recorrido de animación (motion path) ─────────────────────────────
+      // ── Recorrido de animación (motion path) — velocidad en px/s ─────────────
       if (layer._motionPath && layer._motionPath.length >= 2) {
         if (!layer._pathStartTime) layer._pathStartTime = now;
-        const _mpSpeed   = layer._motionSpeed || 5;
+        const { pw: _mpPw, ph: _mpPh } = _panelDims(pi);
+        const _mpSpeed   = layer._motionSpeed || 100; // px/s
         const _mpElapsed = (now - layer._pathStartTime) / 1000;
-        const _mpT       = _mpElapsed / _mpSpeed;
-        const _mpPos     = _pathPositionAt(layer._motionPath, layer._motionPathClosed || false, _mpT);
-        if (_mpPos) { layer._pathCurX = _mpPos.x; layer._pathCurY = _mpPos.y; }
-        panelChanged = true; // redibujar en cada frame para movimiento fluido
+        // Longitud total del recorrido en px para convertir px/s → t
+        const _mpClosed  = layer._motionPathClosed || false;
+        const _mpPts     = _mpClosed ? [...layer._motionPath, layer._motionPath[0]] : layer._motionPath;
+        let _mpTotalPx = 0;
+        for (let _i = 1; _i < _mpPts.length; _i++)
+          _mpTotalPx += Math.hypot((_mpPts[_i].x - _mpPts[_i-1].x) * _mpPw,
+                                   (_mpPts[_i].y - _mpPts[_i-1].y) * _mpPh);
+        if (_mpTotalPx < 1) _mpTotalPx = 1;
+        const _mpT   = (_mpElapsed * _mpSpeed) / _mpTotalPx;
+        const _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpT, _mpPw, _mpPh);
+        if (_mpPos) {
+          layer._pathCurX = (layer.x || 0.5) + _mpPos.x;
+          layer._pathCurY = (layer.y || 0.5) + _mpPos.y;
+        }
+        panelChanged = true;
       }
     });
     if (panelChanged) {
@@ -2299,11 +2308,11 @@ function _resetPanelAnims(idx) {
         layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
       }
     }
-    // Recorrido: reiniciar desde el primer punto
+    // Recorrido: reiniciar desde el centro de la capa (offset relativo 0,0)
     if (layer._motionPath && layer._motionPath.length >= 2) {
       layer._pathStartTime = Date.now();
-      layer._pathCurX = layer._motionPath[0].x;
-      layer._pathCurY = layer._motionPath[0].y;
+      layer._pathCurX = layer.x || 0.5;
+      layer._pathCurY = layer.y || 0.5;
     }
   });
 }

@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v29.10</footer>
+    <footer class="app-version">v29.16</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -541,8 +541,10 @@ Router.register('editor', {
         <span style="font-size:1rem">🛤️</span>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <span style="font-size:.78rem;opacity:.8">⏱</span>
-        <input type="range" id="mpb-speed" min="1" max="30" value="5" style="width:72px;accent-color:#FFE135;cursor:pointer;vertical-align:middle">
-        <span id="mpb-speed-val" style="min-width:64px;font-size:.78rem">5s/vuelta</span>
+        <input type="range" id="mpb-speed" min="10" max="500" step="10" value="100" style="width:80px;accent-color:#FFE135;cursor:pointer;vertical-align:middle">
+        <span id="mpb-speed-val" style="min-width:64px;font-size:.78rem">100px/s</span>
+        <span style="color:rgba(255,255,255,0.3)">│</span>
+        <button id="mpb-play" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-size:1rem;font-weight:900" title="Preview">▶</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-undo" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.9rem;font-weight:900" title="Borrar recorrido y redibujar">🗑</button>
         <button id="mpb-ok" style="background:#16a34a;border:none;border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-weight:900;font-size:.88rem">✓ OK</button>

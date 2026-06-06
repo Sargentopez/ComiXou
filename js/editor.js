@@ -1020,15 +1020,18 @@ let _edCropHistIdx = -1;        // índice actual en el historial
 const edCamera = { x: 0, y: 0, z: 1 };
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
 // ── Recorrido de animación (motion path) ─────────────────────────────────
-let _edViewerMode     = false;  // true solo mientras edUpdateViewer() está dibujando
-let _edViewerMpRaf    = null;   // RAF del ticker de path en el visor
+let _edViewerMode       = false;  // true solo mientras edUpdateViewer() está dibujando
+let _edViewerMpRaf      = null;   // RAF del ticker de path en el visor
+let _edMpPreviewActive  = false;  // true mientras el preview play del recorrido está activo
+let _edMotionPathPlaying = false; // botón ▶ pulsado en la barra de recorrido
+let _edMpPreviewRaf     = null;   // RAF del ticker de preview
 let _edMotionPathMode    = false; // modo edición de recorrido activo
 let _edMotionPathTarget  = -1;    // índice de la capa objetivo
 let _edMotionPathPts     = [];    // puntos simplificados guardados [{x,y}]
 let _edMotionPathRaw     = [];    // puntos brutos del trazo actual
 let _edMotionPathDrawing = false; // usuario arrastrando activamente
 let _edMotionPathClosed  = false; // recorrido cerrado
-let _edMotionPathSpeed   = 5;     // segundos por vuelta
+let _edMotionPathSpeed   = 100;   // velocidad en píxeles del canvas por segundo
 let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segmento de línea
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
@@ -1201,8 +1204,8 @@ class ImageLayer extends BaseLayer {
     const pw=edPageW(), ph=edPageH();
     const w = this.width  * pw;
     const h = this.height * ph;
-    const _iCurX = (_edViewerMode && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _iCurY = (_edViewerMode && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _iCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
+    const _iCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
     const px = edMarginX() + _iCurX*pw;
     const py = edMarginY() + _iCurY*ph;
     ctx.save();
@@ -1387,8 +1390,8 @@ class GifLayer extends BaseLayer {
     const pw = edPageW(), ph = edPageH();
     const w  = this.width  * pw;
     const h  = this.height * ph;
-    const _gCurX = (_edViewerMode && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _gCurY = (_edViewerMode && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _gCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
+    const _gCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
     const px = edMarginX() + _gCurX * pw;
     const py = edMarginY() + _gCurY * ph;
     ctx.save();
@@ -3997,11 +4000,11 @@ function edRedraw(){
   if (_edCropMode && _edCropLayer) _edCropDrawOverlay();
   // ── Overlay recorrido de animación ──────────────────────────────────────
   if (_edMotionPathMode) {
-    _edDrawMotionPath(_edMotionPathPts, _edMotionPathClosed, true);
+    _edDrawMotionPath(_edMotionPathPts, _edMotionPathClosed, true, _edMotionPathTarget);
   } else if (edSelectedIdx >= 0) {
     const _mpLa = edLayers[edSelectedIdx];
     if (_mpLa && _mpLa._motionPath && _mpLa._motionPath.length >= 2) {
-      _edDrawMotionPath(_mpLa._motionPath, _mpLa._motionPathClosed || false, false);
+      _edDrawMotionPath(_mpLa._motionPath, _mpLa._motionPathClosed || false, false, edSelectedIdx);
     }
   }
   // Restaurar transform para UI sobre el canvas (scrollbars)
@@ -6410,15 +6413,17 @@ function _edAllCornersInside(la, rx0, ry0, rx1, ry1){
   });
 }
 
-// ── Motion path: interpolación por longitud de arco ─────────────────────────
-function _edPathPositionAt(points, closed, t) {
+// ── Motion path: interpolación por longitud de arco en espacio píxel ───────────
+// pw/ph: dimensiones reales del lienzo en px (corrige anisotropía horizontal/vertical)
+function _edPathPositionAt(points, closed, t, pw, ph) {
   if (!points || points.length === 0) return null;
   if (points.length === 1) return { x: points[0].x, y: points[0].y };
   const pts = closed ? [...points, points[0]] : points;
+  const _pw = pw || ED_PAGE_W, _ph = ph || ED_PAGE_H;
   const dists = [];
   let total = 0;
   for (let i = 1; i < pts.length; i++) {
-    const d = Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+    const d = Math.hypot((pts[i].x - pts[i-1].x) * _pw, (pts[i].y - pts[i-1].y) * _ph);
     dists.push(d);
     total += d;
   }
@@ -6437,6 +6442,17 @@ function _edPathPositionAt(points, closed, t) {
   return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
 }
 
+// Longitud total del recorrido en píxeles (para calcular t a partir de px/s)
+function _edPathArcLengthPx(points, closed, pw, ph) {
+  if (!points || points.length < 2) return 1;
+  const pts = closed ? [...points, points[0]] : points;
+  const _pw = pw || ED_PAGE_W, _ph = ph || ED_PAGE_H;
+  let total = 0;
+  for (let i = 1; i < pts.length; i++)
+    total += Math.hypot((pts[i].x - pts[i-1].x) * _pw, (pts[i].y - pts[i-1].y) * _ph);
+  return total || 1;
+}
+
 // ── Ticker RAF del motion path — solo activo durante la previsualización ────────
 function _edViewerMpTick() {
   if (!$('editorViewer')?.classList.contains('open')) {
@@ -6447,12 +6463,19 @@ function _edViewerMpTick() {
   if (!hasPath) { _edViewerMpRaf = null; return; } // sin paths — parar
 
   const now = Date.now();
+  // Dimensiones del lienzo para la página visible en el viewer
+  const _vpo = page.orientation || edOrientation;
+  const _vpw = _vpo === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const _vph = _vpo === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
   (page.layers||[]).forEach(l => {
     if (!l._motionPath || l._motionPath.length < 2) return;
     if (!l._pathStartTime) l._pathStartTime = now;
-    const t = (now - l._pathStartTime) / 1000 / (l._motionSpeed || 5);
-    const pos = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, t);
-    if (pos) { l._pathCurX = pos.x; l._pathCurY = pos.y; }
+    const _elapsed  = (now - l._pathStartTime) / 1000;
+    const _speed    = l._motionSpeed || 100; // px/s
+    const _totalPx  = _edPathArcLengthPx(l._motionPath, l._motionPathClosed || false, _vpw, _vph);
+    const t         = (_elapsed * _speed) / _totalPx;
+    const rel       = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, t, _vpw, _vph);
+    if (rel) { l._pathCurX = (l.x || 0.5) + rel.x; l._pathCurY = (l.y || 0.5) + rel.y; }
   });
 
   edUpdateViewer();
@@ -6466,6 +6489,39 @@ function _edViewerMpTickStop() {
   // Limpiar posiciones de path para que el canvas editor no las use
   const page = edPages[edCurrentPage];
   if (page) (page.layers||[]).forEach(l => { delete l._pathCurX; delete l._pathCurY; delete l._pathStartTime; });
+}
+
+// ── Ticker de preview play del recorrido (solo en modo edición de recorrido) ─────
+function _edMpPreviewTick() {
+  if (!_edMotionPathMode || !_edMotionPathPlaying) {
+    _edMpPreviewRaf = null; return;
+  }
+  // Usar el path en edición (_edMotionPathPts), no el guardado en la capa
+  if (!_edMotionPathPts || _edMotionPathPts.length < 2) { _edMpPreviewStop(); return; }
+  const la = edLayers[_edMotionPathTarget];
+  if (!la) { _edMpPreviewStop(); return; }
+  const now = Date.now();
+  if (!la._pathStartTime) la._pathStartTime = now;
+  const _po  = edPages[edCurrentPage]?.orientation || edOrientation;
+  const _pw  = _po === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const _ph  = _po === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const _tot = _edPathArcLengthPx(_edMotionPathPts, _edMotionPathClosed, _pw, _ph);
+  const t    = ((now - la._pathStartTime) / 1000 * _edMotionPathSpeed) / _tot;
+  const rel  = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, t, _pw, _ph);
+  if (rel) { la._pathCurX = (la.x || 0.5) + rel.x; la._pathCurY = (la.y || 0.5) + rel.y; }
+  _edMpPreviewActive = true;
+  edRedraw();
+  _edMpPreviewRaf = requestAnimationFrame(_edMpPreviewTick);
+}
+
+function _edMpPreviewStop() {
+  _edMotionPathPlaying = false;
+  _edMpPreviewActive   = false;
+  if (_edMpPreviewRaf) { cancelAnimationFrame(_edMpPreviewRaf); _edMpPreviewRaf = null; }
+  const la = edLayers[_edMotionPathTarget];
+  if (la) { delete la._pathCurX; delete la._pathCurY; delete la._pathStartTime; }
+  const btn = $('mpb-play'); if (btn) btn.textContent = '▶';
+  edRedraw();
 }
 
 // ── Simplificación Ramer-Douglas-Peucker para trayectos ─────────────────────
@@ -6497,12 +6553,12 @@ function _edStartMotionPath(idx) {
   const la = edLayers[idx]; if (!la) return;
   _edMotionPathMode    = true;
   _edMotionPathTarget  = idx;
-  // El trayecto siempre empieza en el centro de la animación
-  _edMotionPathPts     = [];
+  // Cargar el path existente si lo hay — solo se borra con el botón 🗑
+  _edMotionPathPts     = la._motionPath ? la._motionPath.map(p => ({x: p.x, y: p.y})) : [];
   _edMotionPathRaw     = [];
   _edMotionPathDrawing = false;
-  _edMotionPathClosed  = false;
-  _edMotionPathSpeed   = la._motionSpeed || 5;
+  _edMotionPathClosed  = la._motionPathClosed || false;
+  _edMotionPathSpeed   = la._motionSpeed || 100;
   _edDrawLockUI();
   edSelectedIdx = idx;
   if (edCanvas) edCanvas.style.cursor = 'crosshair';
@@ -6511,7 +6567,8 @@ function _edStartMotionPath(idx) {
   bar.style.top = (_edCanvasTop + 8) + 'px';
   bar.style.display = 'flex';
   const sp = $('mpb-speed'); if (sp) sp.value = _edMotionPathSpeed;
-  const sv = $('mpb-speed-val'); if (sv) sv.textContent = _edMotionPathSpeed + 's/vuelta';
+  const sv = $('mpb-speed-val'); if (sv) sv.textContent = _edMotionPathSpeed + 'px/s';
+  const pb = $('mpb-play'); if (pb) pb.textContent = '▶'; // asegurar estado inicial
   edRedraw();
 }
 
@@ -6530,6 +6587,8 @@ function _edEndMotionPath(save) {
       edPushHistory();
     }
   }
+  // Detener preview play si estaba activo
+  if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
   _edMotionPathMode    = false;
   _edMotionPathTarget  = -1;
   _edMotionPathPts     = [];
@@ -6542,11 +6601,15 @@ function _edEndMotionPath(save) {
 }
 
 // Dibuja el overlay del recorrido sobre el canvas (curvas bezier suaves)
-function _edDrawMotionPath(pts, closed, editing) {
+// pts: coords relativas al centro de la capa; layerIdx: índice en edLayers
+function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   if (!pts || pts.length < 1) return;
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
-  const toWs = p => ({ x: mx + p.x * pw, y: my + p.y * ph });
+  const _la = (layerIdx != null && layerIdx >= 0) ? edLayers[layerIdx] : null;
+  const bx = _la ? _la.x : 0, by = _la ? _la.y : 0;
+  // Convertir coords relativas → absolutas de workspace
+  const toWs = p => ({ x: mx + (bx + p.x) * pw, y: my + (by + p.y) * ph });
   edCtx.save();
   const lw  = 2.5 / edCamera.z;
   const col = editing ? '#2563eb' : 'rgba(37,99,235,0.55)';
@@ -6610,24 +6673,6 @@ function _edDrawMotionPath(pts, closed, editing) {
   if (pts.length >= 1) drawDot(pts[0], '#16a34a');
   if (pts.length >= 2 && !closed) drawDot(pts[pts.length - 1], col);
 
-  // ── En modo edición: indicar posición base del objeto ───────────────────
-  if (editing && _edMotionPathTarget >= 0) {
-    const la = edLayers[_edMotionPathTarget];
-    if (la) {
-      const cx = mx + la.x * pw, cy = my + la.y * ph;
-      edCtx.beginPath();
-      edCtx.arc(cx, cy, 9 / edCamera.z, 0, Math.PI * 2);
-      edCtx.strokeStyle = '#f59e0b';
-      edCtx.lineWidth = 2 / edCamera.z;
-      edCtx.setLineDash([4 / edCamera.z, 3 / edCamera.z]);
-      edCtx.stroke();
-      edCtx.setLineDash([]);
-      edCtx.beginPath();
-      edCtx.arc(cx, cy, 3 / edCamera.z, 0, Math.PI * 2);
-      edCtx.fillStyle = '#f59e0b';
-      edCtx.fill();
-    }
-  }
   edCtx.restore();
 }
 
@@ -6759,13 +6804,12 @@ function edOnStart(e){
   if (_edMotionPathMode) {
     // No iniciar trazo si se está tocando la barra de controles
     if (e.target && e.target.closest('#edMotionBar')) return;
-    const _la0 = edLayers[_edMotionPathTarget];
-    // Primer punto: siempre el centro de la animación
-    const _startX = _la0 ? +_la0.x.toFixed(4) : 0.5;
-    const _startY = _la0 ? +_la0.y.toFixed(4) : 0.5;
+    // Si estaba reproduciendo preview, detenerlo antes de redibujar
+    if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
+    // Primer punto: siempre el centro de la animación — en coords relativas = (0,0)
     _edMotionPathDrawing = true;
     _edMotionPathClosed  = false;
-    _edMotionPathRaw = [{ x: _startX, y: _startY }];
+    _edMotionPathRaw = [{ x: 0, y: 0 }];
     _edMotionPathPts = _edMotionPathRaw.slice();
     if (e.pointerId !== undefined) {
       try { edCanvas.setPointerCapture(e.pointerId); } catch(_) {}
@@ -8302,14 +8346,16 @@ function edOnMove(e){
   if (_edMotionPathMode) {
     if (_edMotionPathDrawing) {
       const _mm = edCoords(e);
+      const _la1 = edLayers[_edMotionPathTarget];
+      const _bx  = _la1 ? _la1.x : 0.5, _by = _la1 ? _la1.y : 0.5;
       const _last = _edMotionPathRaw[_edMotionPathRaw.length - 1];
       if (_last) {
-        const _mdx = _mm.nx - _last.x, _mdy = _mm.ny - _last.y;
-        if (Math.hypot(_mdx, _mdy) > 0.004) { // ~0.4% del lienzo entre puntos
-          _edMotionPathRaw.push({
-            x: +_mm.nx.toFixed(4),
-            y: +_mm.ny.toFixed(4)
-          });
+        // Coords relativas al centro de la capa
+        const _rx = +(_mm.nx - _bx).toFixed(4);
+        const _ry = +(_mm.ny - _by).toFixed(4);
+        const _mdx = _rx - _last.x, _mdy = _ry - _last.y;
+        if (Math.hypot(_mdx, _mdy) > 0.004) {
+          _edMotionPathRaw.push({ x: _rx, y: _ry });
           _edMotionPathPts = _edMotionPathRaw.slice();
           edRedraw();
         }
@@ -8999,15 +9045,11 @@ function edOnEnd(e){
         _edMotionPathPts = _edMotionPathRaw.slice();
       }
       _edMotionPathRaw = [];
-      // Auto-cierre: si el último punto está cerca del primero (~6% del lienzo)
+      // Auto-cierre: si el último punto está cerca de (0,0) (centro = inicio)
       if (_edMotionPathPts.length >= 3) {
-        const _fp = _edMotionPathPts[0];
         const _lp = _edMotionPathPts[_edMotionPathPts.length - 1];
-        _edMotionPathClosed = Math.hypot(_lp.x - _fp.x, _lp.y - _fp.y) < 0.06;
-        if (_edMotionPathClosed) {
-          // Eliminar el último punto para que cierre limpiamente al primer punto
-          _edMotionPathPts.pop();
-        }
+        _edMotionPathClosed = Math.hypot(_lp.x, _lp.y) < 0.06;
+        if (_edMotionPathClosed) _edMotionPathPts.pop();
       }
       edRedraw();
     }
@@ -13745,8 +13787,8 @@ function edRenderOptionsPanel(mode){
       </div>
       ${la._motionPath ? `<div class="op-prop-row">
         <span class="op-prop-label">⏱ Ciclo</span>
-        <input type="range" id="pp-path-speed" min="1" max="30" value="${la._motionSpeed || 5}" style="flex:1;accent-color:var(--black)">
-        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:36px;text-align:right">${la._motionSpeed || 5}s</span>
+        <input type="range" id="pp-path-speed" min="10" max="500" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
       </div>` : ''}`;
     } else if(la.type==='image'){
       html+=`
@@ -13896,7 +13938,7 @@ function edRenderOptionsPanel(mode){
     $('pp-path-speed')?.addEventListener('input', (ev) => {
       const _pla = edLayers[edSelectedIdx]; if (!_pla) return;
       _pla._motionSpeed = +ev.target.value;
-      const _psv = $('pp-path-speed-val'); if (_psv) _psv.textContent = _pla._motionSpeed + 's';
+      const _psv = $('pp-path-speed-val'); if (_psv) _psv.textContent = _pla._motionSpeed + 'px/s';
     });
     $('pp-path-speed')?.addEventListener('change', () => { edPushHistory(); });
 
@@ -18399,12 +18441,12 @@ function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
   _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
-  // Inicializar recorridos de animación y arrancar el ticker del visor
+  // Inicializar recorridos de animación — posición base = centro de la capa (offset 0)
   edPages.forEach(pg => (pg.layers||[]).forEach(l => {
     if (l._motionPath && l._motionPath.length >= 2) {
       l._pathStartTime = Date.now();
-      l._pathCurX = l._motionPath[0].x;
-      l._pathCurY = l._motionPath[0].y;
+      l._pathCurX = l.x || 0.5; // offset relativo (0,0) → posición absoluta = la.x
+      l._pathCurY = l.y || 0.5;
     }
   }));
   _edViewerMpTickStart();
@@ -20405,9 +20447,26 @@ function EditorView_init(){
   });
 
   // ── Barra de recorrido de animación (edMotionBar) ──
+  $('mpb-play')?.addEventListener('click', () => {
+    if (_edMotionPathPlaying) {
+      _edMpPreviewStop();
+    } else {
+      if (!_edMotionPathPts || _edMotionPathPts.length < 2) return; // no hay recorrido
+      _edMotionPathPlaying = true;
+      const _pla = edLayers[_edMotionPathTarget];
+      if (_pla) _pla._pathStartTime = Date.now(); // reiniciar desde el inicio
+      const btn = $('mpb-play'); if (btn) btn.textContent = '⏹';
+      _edMpPreviewRaf = requestAnimationFrame(_edMpPreviewTick);
+    }
+  });
   $('mpb-speed')?.addEventListener('input', (e) => {
     _edMotionPathSpeed = +e.target.value;
-    const _msv = $('mpb-speed-val'); if (_msv) _msv.textContent = _edMotionPathSpeed + 's/vuelta';
+    const _msv = $('mpb-speed-val'); if (_msv) _msv.textContent = _edMotionPathSpeed + 'px/s';
+    // Si está reproduciendo, reiniciar para reflejar la nueva velocidad inmediatamente
+    if (_edMotionPathPlaying) {
+      const _pla = edLayers[_edMotionPathTarget];
+      if (_pla) _pla._pathStartTime = Date.now();
+    }
   });
   $('mpb-undo')?.addEventListener('click', () => {
     // Borrar el trayecto dibujado para poder redibujarlo
