@@ -1020,6 +1020,8 @@ let _edCropHistIdx = -1;        // índice actual en el historial
 const edCamera = { x: 0, y: 0, z: 1 };
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
 // ── Recorrido de animación (motion path) ─────────────────────────────────
+let _edViewerMode     = false;  // true solo mientras edUpdateViewer() está dibujando
+let _edViewerMpRaf    = null;   // RAF del ticker de path en el visor
 let _edMotionPathMode    = false; // modo edición de recorrido activo
 let _edMotionPathTarget  = -1;    // índice de la capa objetivo
 let _edMotionPathPts     = [];    // puntos simplificados guardados [{x,y}]
@@ -1199,8 +1201,10 @@ class ImageLayer extends BaseLayer {
     const pw=edPageW(), ph=edPageH();
     const w = this.width  * pw;
     const h = this.height * ph;
-    const px = edMarginX() + (this._pathCurX ?? this.x)*pw;
-    const py = edMarginY() + (this._pathCurY ?? this.y)*ph;
+    const _iCurX = (_edViewerMode && this._pathCurX != null) ? this._pathCurX : this.x;
+    const _iCurY = (_edViewerMode && this._pathCurY != null) ? this._pathCurY : this.y;
+    const px = edMarginX() + _iCurX*pw;
+    const py = edMarginY() + _iCurY*ph;
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px,py);
@@ -1383,8 +1387,10 @@ class GifLayer extends BaseLayer {
     const pw = edPageW(), ph = edPageH();
     const w  = this.width  * pw;
     const h  = this.height * ph;
-    const px = edMarginX() + (this._pathCurX ?? this.x) * pw;
-    const py = edMarginY() + (this._pathCurY ?? this.y) * ph;
+    const _gCurX = (_edViewerMode && this._pathCurX != null) ? this._pathCurX : this.x;
+    const _gCurY = (_edViewerMode && this._pathCurY != null) ? this._pathCurY : this.y;
+    const px = edMarginX() + _gCurX * pw;
+    const py = edMarginY() + _gCurY * ph;
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px, py);
@@ -5272,7 +5278,7 @@ function edLoadPage(idx){
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
   // Cargar bajo demanda los _animFrames de la nueva página (liberados al salir de otras)
   _edLoadPageAnims(idx).then(() => {
-    if (edCurrentPage === idx) { edRedraw(); _edMpTickStart(); }
+    if (edCurrentPage === idx) edRedraw();
   });
 }
 function edUpdateNavPages(){
@@ -6431,34 +6437,35 @@ function _edPathPositionAt(points, closed, t) {
   return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
 }
 
-// ── Ticker RAF del motion path en el editor ───────────────────────────────────
-let _edMpTickId = null;
-
-function _edMpTick() {
-  // Detener si el editor de animaciones GCP está activo o estamos editando el path
-  if (window._gcpActive || _edMotionPathMode) { _edMpTickId = null; return; }
-  const page = edPages[edCurrentPage];
-  if (!page) { _edMpTickId = null; return; }
-
-  const hasPath = (page.layers || []).some(l => l._motionPath && l._motionPath.length >= 2);
-  if (!hasPath) { _edMpTickId = null; return; } // no hay paths — parar
+// ── Ticker RAF del motion path — solo activo durante la previsualización ────────
+function _edViewerMpTick() {
+  if (!$('editorViewer')?.classList.contains('open')) {
+    _edViewerMpRaf = null; return; // viewer cerrado — parar
+  }
+  const page = edPages[edViewerIdx];
+  const hasPath = page && (page.layers||[]).some(l => l._motionPath && l._motionPath.length >= 2);
+  if (!hasPath) { _edViewerMpRaf = null; return; } // sin paths — parar
 
   const now = Date.now();
-  (page.layers || []).forEach(l => {
+  (page.layers||[]).forEach(l => {
     if (!l._motionPath || l._motionPath.length < 2) return;
     if (!l._pathStartTime) l._pathStartTime = now;
-    const speed   = l._motionSpeed || 5;
-    const elapsed = (now - l._pathStartTime) / 1000;
-    const pos     = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, elapsed / speed);
+    const t = (now - l._pathStartTime) / 1000 / (l._motionSpeed || 5);
+    const pos = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, t);
     if (pos) { l._pathCurX = pos.x; l._pathCurY = pos.y; }
   });
 
-  edRedraw();
-  _edMpTickId = requestAnimationFrame(_edMpTick);
+  edUpdateViewer();
+  _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick);
 }
-
-function _edMpTickStart() {
-  if (!_edMpTickId) _edMpTickId = requestAnimationFrame(_edMpTick);
+function _edViewerMpTickStart() {
+  if (!_edViewerMpRaf) _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick);
+}
+function _edViewerMpTickStop() {
+  if (_edViewerMpRaf) { cancelAnimationFrame(_edViewerMpRaf); _edViewerMpRaf = null; }
+  // Limpiar posiciones de path para que el canvas editor no las use
+  const page = edPages[edCurrentPage];
+  if (page) (page.layers||[]).forEach(l => { delete l._pathCurX; delete l._pathCurY; delete l._pathStartTime; });
 }
 
 // ── Simplificación Ramer-Douglas-Peucker para trayectos ─────────────────────
@@ -6521,7 +6528,6 @@ function _edEndMotionPath(save) {
         delete la._motionPath; delete la._motionPathClosed; delete la._motionSpeed;
       }
       edPushHistory();
-      _edMpTickStart(); // arrancar animación preview en editor
     }
   }
   _edMotionPathMode    = false;
@@ -18393,6 +18399,15 @@ function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
   _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
+  // Inicializar recorridos de animación y arrancar el ticker del visor
+  edPages.forEach(pg => (pg.layers||[]).forEach(l => {
+    if (l._motionPath && l._motionPath.length >= 2) {
+      l._pathStartTime = Date.now();
+      l._pathCurX = l._motionPath[0].x;
+      l._pathCurY = l._motionPath[0].y;
+    }
+  }));
+  _edViewerMpTickStart();
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
@@ -18966,6 +18981,7 @@ function edInitViewerTap(){
 }
 function edCloseViewer(){
   _edGifSetPlaying(false); // detener animación GIF al salir del visor
+  _edViewerMpTickStop();   // detener ticker de recorrido y limpiar posiciones
   // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
   _edViewerFullCanvas = null;
   _edViewerFullCtx    = null;
@@ -19013,6 +19029,7 @@ let _edViewerFullCtx    = null;
 function edUpdateViewer(){
   if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
+  _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY si está disponible
   // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
   const _po = page.orientation || edOrientation;
   const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
@@ -19054,6 +19071,7 @@ function edUpdateViewer(){
     }
   });
   const _finishViewer = () => {
+    _edViewerMode = false; // restaurar antes de cualquier redibujado del canvas editor
     _edViewerDrawTextsOnCtx(page, fctx, full);
     // Restaurar antes de manipular el DOM
     edOrientation=_savedOrient;
@@ -19866,7 +19884,6 @@ function EditorView_init(){
   edLoadProject(editId).then(() => {
     // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
     edSetOrientation(edPages[0]?.orientation || edOrientation, false);
-    _edMpTickStart(); // arrancar motion path si hay alguno en la obra
   });
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
