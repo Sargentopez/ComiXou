@@ -22145,7 +22145,8 @@ function edBibGuardar() {
     if (_la2._apngSrc) entry.apngSrc = _la2._apngSrc;
     if (_la2._pngFrames && _la2._pngFrames.length) entry.pngFrames = _la2._pngFrames;
     if (_la2.animKey) entry.animKey = _la2.animKey;
-    if (_la2._pngFramesKey) entry._apngIdbKey = _la2._pngFramesKey;
+    if (_la2._pngFramesKey)  entry._apngIdbKey = _la2._pngFramesKey;
+    else if (_la2.animKey)     entry._apngIdbKey = _la2.animKey; // animKey es clave IDB en cxAnims
     if (_la2._gcpFrameDelay) entry.gcpFrameDelay = _la2._gcpFrameDelay;
     _bibGetAnimFolder(data).items.push(entry);
     _bibSave(data);
@@ -22469,10 +22470,11 @@ function _bibRenderPanel(panel) {
       if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
 
       // GIF animado guardado desde el editor GIF
-      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
+      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || entry.animKey || (entry.pngFrames && entry.pngFrames.length))) {
         // Si el APNG está en IDB (dispositivo B), cargarlo antes de insertar
-        if (entry._apngIdbKey && !entry.apngSrc && window._sbAnimIdbLoad) {
-          window._sbAnimIdbLoad(entry._apngIdbKey)
+        const _idbKey = entry._apngIdbKey || entry.animKey;
+        if (_idbKey && !entry.apngSrc && window._sbAnimIdbLoad) {
+          window._sbAnimIdbLoad(_idbKey)
             .then(function(_data) { if (_data) entry.apngSrc = _data; })
             .catch(function(){})
             .finally(function() {
