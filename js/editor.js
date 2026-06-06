@@ -6413,13 +6413,40 @@ function _edAllCornersInside(la, rx0, ry0, rx1, ry1){
   });
 }
 
+// ── Bezier sampling para recorridos cerrados ─────────────────────────────────────
+// Genera numSamples puntos sobre la curva bezier de punto medio (igual que el render)
+// Garantiza que la animación siga la misma curva suave que se dibuja visualmente
+function _edBezierSampleClosed(pts, numSamples) {
+  const n = pts.length;
+  const result = [];
+  for (let s = 0; s < numSamples; s++) {
+    const tFull = (s / numSamples) * n;
+    const seg   = Math.floor(tFull) % n;
+    const u     = tFull - Math.floor(tFull);
+    const prev  = (seg - 1 + n) % n;
+    const next  = (seg + 1) % n;
+    const mp0x  = (pts[prev].x + pts[seg].x) / 2, mp0y = (pts[prev].y + pts[seg].y) / 2;
+    const mp1x  = (pts[seg].x + pts[next].x)  / 2, mp1y = (pts[seg].y + pts[next].y)  / 2;
+    result.push({
+      x: (1-u)*(1-u)*mp0x + 2*(1-u)*u*pts[seg].x + u*u*mp1x,
+      y: (1-u)*(1-u)*mp0y + 2*(1-u)*u*pts[seg].y + u*u*mp1y
+    });
+  }
+  result.push({ x: result[0].x, y: result[0].y }); // cerrar el bucle
+  return result;
+}
+
 // ── Motion path: interpolación por longitud de arco en espacio píxel ───────────
 // pw/ph: dimensiones reales del lienzo en px (corrige anisotropía horizontal/vertical)
 function _edPathPositionAt(points, closed, t, pw, ph) {
   if (!points || points.length === 0) return null;
   if (points.length === 1) return { x: points[0].x, y: points[0].y };
-  const pts = closed ? [...points, points[0]] : points;
   const _pw = pw || ED_PAGE_W, _ph = ph || ED_PAGE_H;
+  // Para bucles cerrados: pre-muestrear la curva bezier (misma curva que el render)
+  // Elimina la discontinuidad de velocidad en la costura del bucle
+  const pts = (closed && points.length >= 3)
+    ? _edBezierSampleClosed(points, 200)
+    : (closed ? [...points, points[0]] : points);
   const dists = [];
   let total = 0;
   for (let i = 1; i < pts.length; i++) {
@@ -6442,11 +6469,14 @@ function _edPathPositionAt(points, closed, t, pw, ph) {
   return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
 }
 
-// Longitud total del recorrido en píxeles (para calcular t a partir de px/s)
+// Longitud total del recorrido en píxeles — usa bezier sample para bucles cerrados
+// (misma base que _edPathPositionAt, garantizando velocidad constante)
 function _edPathArcLengthPx(points, closed, pw, ph) {
   if (!points || points.length < 2) return 1;
-  const pts = closed ? [...points, points[0]] : points;
   const _pw = pw || ED_PAGE_W, _ph = ph || ED_PAGE_H;
+  const pts = (closed && points.length >= 3)
+    ? _edBezierSampleClosed(points, 200)
+    : (closed ? [...points, points[0]] : points);
   let total = 0;
   for (let i = 1; i < pts.length; i++)
     total += Math.hypot((pts[i].x - pts[i-1].x) * _pw, (pts[i].y - pts[i-1].y) * _ph);
@@ -6469,7 +6499,8 @@ function _edViewerMpTick() {
   const _vph = _vpo === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
   (page.layers||[]).forEach(l => {
     if (!l._motionPath || l._motionPath.length < 2) return;
-    if (!l._pathStartTime) l._pathStartTime = now;
+    // No auto-inicializar: solo animar si _edStartPageAnims inicializó esta hoja
+    if (!l._pathStartTime) return;
     const _elapsed  = (now - l._pathStartTime) / 1000;
     const _speed    = l._motionSpeed || 100; // px/s
     const _totalPx  = _edPathArcLengthPx(l._motionPath, l._motionPathClosed || false, _vpw, _vph);
@@ -18441,15 +18472,8 @@ function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
   _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
-  // Inicializar recorridos de animación — posición base = centro de la capa (offset 0)
-  edPages.forEach(pg => (pg.layers||[]).forEach(l => {
-    if (l._motionPath && l._motionPath.length >= 2) {
-      l._pathStartTime = Date.now();
-      l._pathCurX = l.x || 0.5; // offset relativo (0,0) → posición absoluta = la.x
-      l._pathCurY = l.y || 0.5;
-    }
-  }));
-  _edViewerMpTickStart();
+  // _edStartPageAnims(0) (llamado arriba) ya inicializa el path de la primera hoja
+  // y arranca el ticker. Las siguientes hojas se inicializan al navegar a ellas.
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
@@ -18892,6 +18916,12 @@ function _edResetPageAnims(pageIdx) {
   page.layers.forEach(function(l) {
     if (l.type === 'gif' && l._ready) { l.stopAnim(); }
     if (l.type === 'image' && (l._pngFrames || l._apngSrc)) { l.stopAnim(); }
+    // Recorrido: limpiar estado al salir de la hoja para que reinicie al volver
+    if (l._motionPath) {
+      delete l._pathStartTime;
+      delete l._pathCurX;
+      delete l._pathCurY;
+    }
   });
 }
 
@@ -18924,7 +18954,14 @@ function _edStartPageAnims(pageIdx) {
         });
       }
     }
+    // Recorrido: arrancar desde el inicio al entrar en la hoja (tanto yendo adelante como atrás)
+    if (l._motionPath && l._motionPath.length >= 2) {
+      l._pathStartTime = Date.now();
+      l._pathCurX = (l.x || 0.5);
+      l._pathCurY = (l.y || 0.5);
+    }
   });
+  _edViewerMpTickStart(); // arrancar ticker si esta hoja tiene paths
 }
 
 function _viewerAdvance(){

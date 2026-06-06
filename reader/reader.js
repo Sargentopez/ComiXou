@@ -1314,13 +1314,36 @@ async function sbGetAuth(path) {
 }
 
 // ── INICIAR ───────────────────────────────────────────────────
+// ── Bezier sampling para recorridos cerrados (reader) ────────────────────────────
+function _bezierSampleClosed(pts, numSamples) {
+  const n = pts.length;
+  const result = [];
+  for (let s = 0; s < numSamples; s++) {
+    const tFull = (s / numSamples) * n;
+    const seg  = Math.floor(tFull) % n;
+    const u    = tFull - Math.floor(tFull);
+    const prev = (seg - 1 + n) % n, next = (seg + 1) % n;
+    const mp0x = (pts[prev].x + pts[seg].x) / 2, mp0y = (pts[prev].y + pts[seg].y) / 2;
+    const mp1x = (pts[seg].x + pts[next].x)  / 2, mp1y = (pts[seg].y + pts[next].y)  / 2;
+    result.push({
+      x: (1-u)*(1-u)*mp0x + 2*(1-u)*u*pts[seg].x + u*u*mp1x,
+      y: (1-u)*(1-u)*mp0y + 2*(1-u)*u*pts[seg].y + u*u*mp1y
+    });
+  }
+  result.push({ x: result[0].x, y: result[0].y });
+  return result;
+}
+
 // ── Helper: posición a lo largo de un trayecto (t = fracción de longitud de arco) ─
 // pw/ph: dimensiones reales del lienzo en px para arc-length en espacio píxel real
 function _pathPositionAt(points, closed, t, pw, ph) {
   if (!points || points.length === 0) return null;
   if (points.length === 1) return { x: points[0].x, y: points[0].y };
-  const pts = closed ? [...points, points[0]] : points;
   const _pw = pw || 360, _ph = ph || 780;
+  // Para bucles cerrados: bezier sample → misma curva que el render, sin costura brusca
+  const pts = (closed && points.length >= 3)
+    ? _bezierSampleClosed(points, 200)
+    : (closed ? [...points, points[0]] : points);
   const dists = [];
   let total = 0;
   for (let i = 1; i < pts.length; i++) {
@@ -1385,13 +1408,17 @@ function _readerGifTick() {
       }
       // ── Recorrido de animación (motion path) — velocidad en px/s ─────────────
       if (layer._motionPath && layer._motionPath.length >= 2) {
-        if (!layer._pathStartTime) layer._pathStartTime = now;
+        // No auto-inicializar: solo animar si _resetPanelAnims inicializó esta hoja
+        if (!layer._pathStartTime) return;
         const { pw: _mpPw, ph: _mpPh } = _panelDims(pi);
         const _mpSpeed   = layer._motionSpeed || 100; // px/s
         const _mpElapsed = (now - layer._pathStartTime) / 1000;
         // Longitud total del recorrido en px para convertir px/s → t
         const _mpClosed  = layer._motionPathClosed || false;
-        const _mpPts     = _mpClosed ? [...layer._motionPath, layer._motionPath[0]] : layer._motionPath;
+        // Usar bezier sample para bucles cerrados (misma base que _pathPositionAt)
+        const _mpPts     = (_mpClosed && layer._motionPath.length >= 3)
+          ? _bezierSampleClosed(layer._motionPath, 200)
+          : (_mpClosed ? [...layer._motionPath, layer._motionPath[0]] : layer._motionPath);
         let _mpTotalPx = 0;
         for (let _i = 1; _i < _mpPts.length; _i++)
           _mpTotalPx += Math.hypot((_mpPts[_i].x - _mpPts[_i-1].x) * _mpPw,
@@ -2290,6 +2317,14 @@ function _initTextStep(idx) {
 
 // Resetear animaciones de un panel al frame 0 para que se reproduzcan desde el inicio
 function _resetPanelAnims(idx) {
+  // Limpiar estado de motion path en TODAS las hojas excepto la nueva
+  // para que reinicien desde el principio al volver a visitarlas
+  RS.panels.forEach((p, pi) => {
+    if (pi === idx) return;
+    (p.layers || []).forEach(l => {
+      if (l._motionPath) { delete l._pathStartTime; delete l._pathCurX; delete l._pathCurY; }
+    });
+  });
   const panel = RS.panels[idx];
   if (!panel) return;
   (panel.layers || []).forEach(layer => {
