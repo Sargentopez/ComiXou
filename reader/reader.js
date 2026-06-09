@@ -1408,8 +1408,7 @@ function _readerGifTick() {
       }
       // ── Recorrido de animación (motion path) — velocidad en px/s ─────────────
       if (layer._motionPath && layer._motionPath.length >= 2) {
-        // No auto-inicializar: solo animar si _resetPanelAnims inicializó esta hoja
-        if (!layer._pathStartTime) return;
+        if (!layer._pathStartTime) layer._pathStartTime = now;
         const { pw: _mpPw, ph: _mpPh } = _panelDims(pi);
         const _mpSpeed   = layer._motionSpeed || 100; // px/s
         const _mpElapsed = (now - layer._pathStartTime) / 1000;
@@ -2317,14 +2316,6 @@ function _initTextStep(idx) {
 
 // Resetear animaciones de un panel al frame 0 para que se reproduzcan desde el inicio
 function _resetPanelAnims(idx) {
-  // Limpiar estado de motion path en TODAS las hojas excepto la nueva
-  // para que reinicien desde el principio al volver a visitarlas
-  RS.panels.forEach((p, pi) => {
-    if (pi === idx) return;
-    (p.layers || []).forEach(l => {
-      if (l._motionPath) { delete l._pathStartTime; delete l._pathCurX; delete l._pathCurY; }
-    });
-  });
   const panel = RS.panels[idx];
   if (!panel) return;
   (panel.layers || []).forEach(layer => {

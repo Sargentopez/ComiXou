@@ -6499,8 +6499,7 @@ function _edViewerMpTick() {
   const _vph = _vpo === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
   (page.layers||[]).forEach(l => {
     if (!l._motionPath || l._motionPath.length < 2) return;
-    // No auto-inicializar: solo animar si _edStartPageAnims inicializó esta hoja
-    if (!l._pathStartTime) return;
+    if (!l._pathStartTime) l._pathStartTime = now;
     const _elapsed  = (now - l._pathStartTime) / 1000;
     const _speed    = l._motionSpeed || 100; // px/s
     const _totalPx  = _edPathArcLengthPx(l._motionPath, l._motionPathClosed || false, _vpw, _vph);
@@ -18472,8 +18471,15 @@ function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
   _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
-  // _edStartPageAnims(0) (llamado arriba) ya inicializa el path de la primera hoja
-  // y arranca el ticker. Las siguientes hojas se inicializan al navegar a ellas.
+  // Inicializar recorridos de animación — posición base = centro de la capa (offset 0)
+  edPages.forEach(pg => (pg.layers||[]).forEach(l => {
+    if (l._motionPath && l._motionPath.length >= 2) {
+      l._pathStartTime = Date.now();
+      l._pathCurX = l.x || 0.5; // offset relativo (0,0) → posición absoluta = la.x
+      l._pathCurY = l.y || 0.5;
+    }
+  }));
+  _edViewerMpTickStart();
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
   edPages.forEach(p=>{ if(!p.orientation) p.orientation=edOrientation; });
@@ -18916,12 +18922,6 @@ function _edResetPageAnims(pageIdx) {
   page.layers.forEach(function(l) {
     if (l.type === 'gif' && l._ready) { l.stopAnim(); }
     if (l.type === 'image' && (l._pngFrames || l._apngSrc)) { l.stopAnim(); }
-    // Recorrido: limpiar estado al salir de la hoja para que reinicie al volver
-    if (l._motionPath) {
-      delete l._pathStartTime;
-      delete l._pathCurX;
-      delete l._pathCurY;
-    }
   });
 }
 
@@ -18954,14 +18954,7 @@ function _edStartPageAnims(pageIdx) {
         });
       }
     }
-    // Recorrido: arrancar desde el inicio al entrar en la hoja (tanto yendo adelante como atrás)
-    if (l._motionPath && l._motionPath.length >= 2) {
-      l._pathStartTime = Date.now();
-      l._pathCurX = (l.x || 0.5);
-      l._pathCurY = (l.y || 0.5);
-    }
   });
-  _edViewerMpTickStart(); // arrancar ticker si esta hoja tiene paths
 }
 
 function _viewerAdvance(){
@@ -22145,9 +22138,20 @@ function edBibGuardar() {
     if (_la2._apngSrc) entry.apngSrc = _la2._apngSrc;
     if (_la2._pngFrames && _la2._pngFrames.length) entry.pngFrames = _la2._pngFrames;
     if (_la2.animKey) entry.animKey = _la2.animKey;
-    if (_la2._pngFramesKey)  entry._apngIdbKey = _la2._pngFramesKey;
-    else if (_la2.animKey)     entry._apngIdbKey = _la2.animKey; // animKey es clave IDB en cxAnims
-    if (_la2._gcpFrameDelay) entry.gcpFrameDelay = _la2._gcpFrameDelay;
+    if (_la2._pngFramesKey) entry._apngIdbKey = _la2._pngFramesKey;
+    if (_la2._gcpFrameDelay  != null) entry.gcpFrameDelay  = _la2._gcpFrameDelay;
+    if (_la2._gcpRepeatCount != null) entry.gcpRepeatCount = _la2._gcpRepeatCount;
+    if (_la2._gcpStopAtEnd)           entry.gcpStopAtEnd   = _la2._gcpStopAtEnd;
+    // Datos GCP para re-edición: capas y frames del editor de animaciones
+    // Sin estos campos el GCP abre sin capas al hacer doble tap sobre la animación
+    if (_la2._gcpLayersData) entry.gcpLayersData = _la2._gcpLayersData;
+    if (_la2._gcpFramesData) entry.gcpFramesData = _la2._gcpFramesData;
+    if (_la2._gcpLayerNames) entry.gcpLayerNames = _la2._gcpLayerNames;
+    // Tamaño real para inserción correcta (normW/normH usados por el código de inserción)
+    if (_la2.width  != null) entry.normW = _la2.width;
+    if (_la2.height != null) entry.normH = _la2.height;
+    // gifDataUrl: primer frame como fallback (requerido para animaciones de 1 frame y para la.src)
+    entry.gifDataUrl = (_la2._pngFrames && _la2._pngFrames[0]) || _la2.src || '';
     _bibGetAnimFolder(data).items.push(entry);
     _bibSave(data);
     edToast('Animación guardada en Biblioteca → Animaciones ✓');
@@ -22470,11 +22474,10 @@ function _bibRenderPanel(panel) {
       if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
 
       // GIF animado guardado desde el editor GIF
-      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || entry.animKey || (entry.pngFrames && entry.pngFrames.length))) {
+      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
         // Si el APNG está en IDB (dispositivo B), cargarlo antes de insertar
-        const _idbKey = entry._apngIdbKey || entry.animKey;
-        if (_idbKey && !entry.apngSrc && window._sbAnimIdbLoad) {
-          window._sbAnimIdbLoad(_idbKey)
+        if (entry._apngIdbKey && !entry.apngSrc && window._sbAnimIdbLoad) {
+          window._sbAnimIdbLoad(entry._apngIdbKey)
             .then(function(_data) { if (_data) entry.apngSrc = _data; })
             .catch(function(){})
             .finally(function() {
@@ -22482,7 +22485,7 @@ function _bibRenderPanel(panel) {
               const _img2 = new Image();
               const _src2 = entry.apngSrc || entry.gifDataUrl;
               const _frames2 = entry.apngSrc ? [entry.apngSrc]
-                             : (entry.pngFrames && entry.pngFrames.length > 1 ? entry.pngFrames : [entry.gifDataUrl]);
+                             : (entry.pngFrames && entry.pngFrames.length ? entry.pngFrames : (entry.gifDataUrl ? [entry.gifDataUrl] : []));
               _img2.onload = function() {
                 const pw=edPageW(), ph=edPageH();
                 let fW=entry.normW||0.7, fH=entry.normH||fW*(_img2.naturalHeight/Math.max(_img2.naturalWidth,1))*(pw/ph);
@@ -22514,9 +22517,10 @@ function _bibRenderPanel(panel) {
         }
         // apngSrc: APNG completo descargado de nube — usar directamente con decodeApng
         // pngFrames: array de frames individuales (sistema local o GIF antiguo)
+        // length >= 1 para incluir animaciones de 1 solo frame (lo que fallaba antes con > 1)
         const frames = entry.apngSrc ? [entry.apngSrc]
-                     : (entry.pngFrames && entry.pngFrames.length > 1 ? entry.pngFrames
-                     : [entry.gifDataUrl]);
+                     : (entry.pngFrames && entry.pngFrames.length ? entry.pngFrames
+                     : (entry.gifDataUrl ? [entry.gifDataUrl] : []));
         const _srcForImg = entry.apngSrc || (frames && frames[0]) || entry.gifDataUrl;
         const img = new Image();
         img.onload = () => {
@@ -22558,6 +22562,9 @@ function _bibRenderPanel(panel) {
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
           edPushHistory();
+          // Dibujar el primer frame estático inmediatamente (antes de que loadAnim complete)
+          // Garantiza visibilidad aunque loadAnim sea lento o falle
+          requestAnimationFrame(edRedraw);
           // Cargar con ApngDecoder — si apngSrc usar string (decodeApng), sino array (decodeFrameArray)
           const _animInput = entry.apngSrc || frames;
           la.loadAnim(_animInput, () => {
