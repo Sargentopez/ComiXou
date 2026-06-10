@@ -9517,7 +9517,16 @@ function _vsUndo() {
     return;
   }
   if (_vsHistIdx === 0) {
-    // Restaurar al snapshot inicial (estado antes de crear objetos en esta sesión)
+    if (!_vsIsNew) {
+      // Editando objeto existente: el índice 0 es el snapshot inicial previo a cualquier edición.
+      // No hay nada más que deshacer — mantener el panel abierto con el objeto restaurado.
+      _vsApply(_vsHistory[0]);
+      edRedraw();
+      _edActivateLineTool(false, true);
+      _edShapeUpdateUndoRedoBtns();
+      return;
+    }
+    // isNew=true: deshacer hasta el estado pre-sesión → cerrar panel
     _vsApply(_vsHistory[0]);
     _edLineLayer = null;
     edSelectedIdx = -1;
@@ -9527,10 +9536,8 @@ function _vsUndo() {
     edCloseOptionsPanel(); edShapeBarHide(); _edDrawUnlockUI();
     edActiveTool = 'select'; edCanvas.className = '';
     window._edIgnoreNextTap = true;
-    // No llamar edPushHistory aquí: truncaría el redo global.
-    // El estado pre-vector ya fue guardado cuando se abrió el panel.
-    // Llamar edUndo() para que el historial global retroceda al punto "antes de editar".
-    if (edHistoryIdx > 0) edUndo(); else edRedraw();
+    edPushHistory(); // guardar estado restaurado (comportamiento original v23.89)
+    edRedraw();
     _edShapeUpdateUndoRedoBtns();
     return;
   }
@@ -9551,10 +9558,12 @@ function _vsRedo() {
 }
 
 let _vsPreSessionLayers = new Set(); // referencias a layers vectoriales previos a la sesión
+let _vsIsNew = true; // true=creando objeto nuevo, false=editando objeto existente
 
 function _vsInit(isNew) {
   const page = edPages[edCurrentPage];
   if (!page) return;
+  _vsIsNew = !!isNew;
 
   if (isNew) {
     _vsPreSessionLayers = new Set(
@@ -9569,14 +9578,16 @@ function _vsInit(isNew) {
         (l.type === 'line' || l.type === 'shape') && l !== _currentLayer
       )
     );
-    _vsHistory = [];
-    _vsHistIdx = -1;
+    // Snapshot inicial para que el primer undo restaure el estado previo a la edición
+    _vsHistory = [_vsSnapshot()];
+    _vsHistIdx = 0;
   }
   _edShapeUpdateUndoRedoBtns();
 }
 
 function _vsClear() {
   _vsHistory = []; _vsHistIdx = -1;
+  _vsIsNew = true;
   _vsPreSessionLayers = new Set();
   _edShapeUpdateUndoRedoBtns();
 }
@@ -9734,7 +9745,9 @@ function edShapeRedo(){
 }
 
 function _edShapeUpdateUndoRedoBtns(){
-  const canUndo = _vsHistory.length > 0;
+  // isNew=true: activo con cualquier historia (undo en idx=0 = cancelar creación)
+  // isNew=false: solo activo si hay cambios reales más allá del snapshot inicial
+  const canUndo = _vsIsNew ? _vsHistory.length > 0 : _vsHistIdx > 0;
   const canRedo = _vsHistIdx < _vsHistory.length - 1;
   const su=$('op-shape-undo'), sr=$('op-shape-redo');
   if(su) su.disabled = !canUndo;
@@ -12008,12 +12021,11 @@ function _edActivateLineTool(isNew, isCreating) {
   const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
   const hasFill = fillCol !== 'none' && isClosed;
   const fillVal = hasFill ? fillCol : '#ffffff';
-  // canFuse: mostrar botón Fusionar si hay ≥2 objetos line cerrados en la página.
-  // Se muestra independientemente de selección y de _vsPreSessionLayers.
-  // El handler de fusión ya filtra qué objetos fusionar (solo los de sesión actual).
-  // canFuse: ≥2 layers line cerrados, O un layer único con grouped=true (multicontorno unido)
+  // canFuse: mostrar botón Fusionar si hay ≥2 objetos line cerrados DE LA SESIÓN ACTUAL.
+  // Nunca incluir objetos pre-sesión (ajenos) — solo layers que el usuario esté editando ahora.
+  // canFuse: ≥2 layers line cerrados de sesión, O un layer único con grouped=true (multicontorno unido)
   const _canFuseGrouped = _cur && _cur.type==='line' && _cur.grouped && _cur.points && _cur.points.includes(null);
-  const canFuse = _canFuseGrouped || edLayers.filter(l => l.type==='line' && l.closed).length >= 2;
+  const canFuse = _canFuseGrouped || edLayers.filter(l => l.type==='line' && l.closed && !_vsPreSessionLayers.has(l)).length >= 2;
   // nSubPaths eliminado (T1: huecos son objetos independientes hasta OK)
 
   panel.innerHTML = `
@@ -12276,10 +12288,10 @@ function _edActivateLineTool(isNew, isCreating) {
       edToast('Objetos fusionados ✓');
       return;
     }
-    // Caso B: ≥2 layers line cerrados en la página (incluyendo pre-existentes)
-    const _closedLayers = edLayers.filter(l => l.type === 'line' && l.closed);
+    // Caso B: ≥2 layers line cerrados DE LA SESIÓN ACTUAL (nunca objetos pre-sesión/ajenos)
+    const _closedLayers = edLayers.filter(l => l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l));
     if (_closedLayers.length < 2) {
-      edToast('Necesitas al menos 2 objetos cerrados para fusionar');
+      edToast('Necesitas al menos 2 objetos cerrados de esta sesión para fusionar');
       return;
     }
     // Fusionar — crea un LineLayer NUEVO independiente (no modifica los originales)
@@ -12386,8 +12398,6 @@ function _edActivateLineTool(isNew, isCreating) {
     }
     window._edCurveVertIdx=-1;
     _edFinishLine();
-    // Aplicar relleno a todos los objetos cerrados de la sesión al confirmar
-    _edApplyFillToClosedLayers();
     // T1: fusión ya hecha en tiempo real — limpiar _fusionId de TODOS los objetos
     const _okFusId = _edLineFusionId || (edSelectedIdx>=0 ? edLayers[edSelectedIdx]?._fusionId : null);
     if(_okFusId){
@@ -12424,15 +12434,11 @@ function _edActivateLineTool(isNew, isCreating) {
 }
 
 
-// Aplicar fillColor a todos los layers vectoriales cerrados de la sesión
+// _edApplyFillToClosedLayers — DEPRECATED: causaba contaminación de relleno entre objetos independientes.
+// Cada objeto vectorial mantiene únicamente el relleno asignado explícitamente por el usuario.
+// No se llama desde ningún OK handler. Se conserva por compatibilidad pero no debe usarse.
 function _edApplyFillToClosedLayers() {
-  const page = edPages[edCurrentPage];
-  if (!page) return;
-  page.layers.forEach(l => {
-    if ((l.type === 'line' || l.type === 'shape') && l.closed && (!l.fillColor || l.fillColor === 'none')) {
-      l.fillColor = edDrawFillColor || '#ffffff';
-    }
-  });
+  // No-op: la independencia de objetos es prioritaria sobre la aplicación automática de relleno.
 }
 
 function _edFinishLine() {
@@ -14087,27 +14093,27 @@ function edRenderOptionsPanel(mode){
         dl._uid = la._uid || ('dl_' + Date.now().toString(36));
         dl._fillLayerId = dl._uid;
         dl._fromStroke = true;
-        // Si tiene relleno, crear FillLayer con el relleno pintado
+        // Crear SIEMPRE el FillLayer (aunque el objeto no tenga relleno previo).
+        // Sin él, _edTmpComposite no encuentra dónde persistir lo que pinta el bucket.
+        const _fillCanvas = document.createElement('canvas');
+        _fillCanvas.width = ED_CANVAS_W; _fillCanvas.height = ED_CANVAS_H;
+        const _fillCtx = _fillCanvas.getContext('2d');
+        // Si ya tenía relleno, pre-renderizarlo (solo relleno, sin trazo)
         if (la.fillColor && la.fillColor !== 'none') {
-          const _fillCanvas = document.createElement('canvas');
-          _fillCanvas.width = ED_CANVAS_W; _fillCanvas.height = ED_CANVAS_H;
-          const _fillCtx = _fillCanvas.getContext('2d');
           const _laFillOnly = Object.assign(Object.create(Object.getPrototypeOf(la)), la);
           _laFillOnly.lineWidth = 0;
           _laFillOnly.draw(_fillCtx);
-          const _fl = new FillLayer();
-          _fl._drawLayerId = dl._uid;
-          _fl._uid = 'fl_' + dl._uid;
-          _fl._canvas = _fillCanvas; _fl._ctx = _fillCanvas.getContext('2d');
-          _fl._isWorkspaceCanvas = true;
-          _fl.x = 0.5; _fl.y = 0.5; _fl.width = 1; _fl.height = 1; _fl.rotation = 0;
-          // Insertar FillLayer antes del DrawLayer
-          page.layers.splice(edSelectedIdx, 0, _fl);
-          // DrawLayer va después del FillLayer
-          page.layers.splice(edSelectedIdx + 1, 1, dl);
-        } else {
-          page.layers.splice(edSelectedIdx, 1, dl);
         }
+        const _fl = new FillLayer();
+        _fl._drawLayerId = dl._uid;
+        _fl._uid = 'fl_' + dl._uid;
+        _fl._canvas = _fillCanvas; _fl._ctx = _fillCanvas.getContext('2d');
+        _fl._isWorkspaceCanvas = true;
+        _fl.x = 0.5; _fl.y = 0.5; _fl.width = 1; _fl.height = 1; _fl.rotation = 0;
+        // Insertar FillLayer antes del DrawLayer
+        page.layers.splice(edSelectedIdx, 0, _fl);
+        // DrawLayer va después del FillLayer
+        page.layers.splice(edSelectedIdx + 1, 1, dl);
       } else { return; }
 
       edLayers = page.layers;
@@ -16352,7 +16358,6 @@ function edInitShapeBar() {
   // OK
   $('esb-ok')?.addEventListener('click', ()=>{
     if(_locked) return;
-    _edApplyFillToClosedLayers(); // relleno al confirmar
     _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
     // Desactivar V⟺C si estaba activo, y cerrar su slider
     const _curveBtn=$('esb-curve');
@@ -20499,7 +20504,6 @@ function EditorView_init(){
   // ── OK: igual que op-draw-ok pero cierra edShapeBar ──
   $('esb-ok')?.addEventListener('click', () => {
     if(edActiveTool === 'line' && _edLineLayer) _edFinishLine();
-    _edApplyFillToClosedLayers(); // relleno al confirmar
     _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
     edShapeBarHide();
     edCloseOptionsPanel();
