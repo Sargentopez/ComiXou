@@ -9444,9 +9444,14 @@ function _vsSnapshot() {
   const page = edPages[edCurrentPage];
   if (!page) return null;
   // Excluir _edLineLayer de vecLayers — se guarda por separado
-  const vecLayers = page.layers
-    .filter(l => (l.type === 'line' || l.type === 'shape') && l !== _edLineLayer)
-    .map(l => _vsSerLayer(l));
+  // Añadir flag _isPreSession para que _vsApply pueda actualizar _vsPreSessionLayers
+  // con las nuevas instancias y evitar que objetos pre-sesión se vuelvan seleccionables tras undo/redo.
+  const _allVec = page.layers.filter(l => (l.type === 'line' || l.type === 'shape') && l !== _edLineLayer);
+  const vecLayers = _allVec.map(l => {
+    const s = _vsSerLayer(l);
+    if (s) s._isPreSession = _vsPreSessionLayers.has(l);
+    return s;
+  });
   const lineLayer = _edLineLayer ? _vsSerLayer(_edLineLayer) : null;
   return { vecLayers, lineLayer };
 }
@@ -9467,9 +9472,9 @@ function _vsApply(snap) {
   if (!page) return;
 
   // Restaurar layers vectoriales (excluye _edLineLayer)
-  const vecRestored = snap.vecLayers
-    .map(d => d ? edDeserLayer(d) : null)
-    .filter(Boolean);
+  // Mantener array sin filter para poder correlacionar con snap.vecLayers[i]._isPreSession
+  const vecRestoredRaw = snap.vecLayers.map(d => d ? edDeserLayer(d) : null);
+  const vecRestored = vecRestoredRaw.filter(Boolean);
 
   // Restaurar _edLineLayer si estaba en construcción
   if (snap.lineLayer) {
@@ -9490,9 +9495,20 @@ function _vsApply(snap) {
   page.layers = [...before, ...allVec, ...after];
   edLayers = page.layers;
 
-  // Seleccionar el último layer vectorial restaurado (el más relevante)
-  const lastVec = vecRestored[vecRestored.length - 1];
-  edSelectedIdx = lastVec ? page.layers.indexOf(lastVec) : (_edLineLayer ? page.layers.indexOf(_edLineLayer) : -1);
+  // Actualizar _vsPreSessionLayers con las nuevas instancias restauradas.
+  // Los objetos pre-sesión se identifican por el flag _isPreSession guardado en el snapshot.
+  // Sin esto, _vsPreSessionLayers quedaría apuntando a las instancias antiguas (GC'd),
+  // haciendo que los objetos pre-sesión restaurados sean seleccionables (bug de selección/relleno).
+  const _newPreSession = new Set();
+  vecRestoredRaw.forEach((l, i) => {
+    if (l && snap.vecLayers[i]?._isPreSession) _newPreSession.add(l);
+  });
+  _vsPreSessionLayers = _newPreSession;
+
+  // Seleccionar el último layer de SESIÓN (no pre-sesión) restaurado — nunca seleccionar uno ajeno
+  const _lastSessionVec = [...vecRestored].reverse().find(l => !_newPreSession.has(l))
+    || vecRestored[vecRestored.length - 1];
+  edSelectedIdx = _lastSessionVec ? page.layers.indexOf(_lastSessionVec) : (_edLineLayer ? page.layers.indexOf(_edLineLayer) : -1);
 }
 
 function _vsUndo() {
@@ -11633,7 +11649,16 @@ function _edActivateShapeTool(isNew) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
   // Táctil: si los menús están ocultos, la barra flotante ya está visible — no abrir panel
-  if(edMinimized){ edShapeBarShow(); edRedraw(); return; }
+  if(edMinimized){
+    edShapeBarShow();
+    // Inicializar _vsPreSessionLayers también en modo minimizado
+    // (sin esto queda vacío y todos los objetos vectoriales son seleccionables)
+    if (_vsHistory.length > 0) _vsClear();
+    const _selMini = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape') ? edLayers[edSelectedIdx] : null;
+    if (_vsHistory.length === 0) _vsInit(!!isNew && !_selMini);
+    edRedraw();
+    return;
+  }
 
   _edDrawLockUI(); // deshabilitar menús igual que en draw
 
@@ -11957,7 +11982,17 @@ function _edActivateLineTool(isNew, isCreating) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
   // Táctil: si los menús están ocultos, la barra flotante ya está visible — no abrir panel
-  if(edMinimized){ edShapeBarShow(); edRedraw(); return; }
+  if(edMinimized){
+    edShapeBarShow();
+    // Inicializar _vsPreSessionLayers también en modo minimizado
+    // (sin esto queda vacío y todos los objetos vectoriales son seleccionables)
+    if (!isCreating) {
+      if (_vsHistory.length > 0) _vsClear();
+      if (_vsHistory.length === 0) _vsInit(!!isNew);
+    }
+    edRedraw();
+    return;
+  }
 
   _edDrawLockUI(); // deshabilitar menús igual que en draw
 
@@ -22475,15 +22510,22 @@ function _bibRenderPanel(panel) {
 
       // GIF animado guardado desde el editor GIF
       if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
-        // Si el APNG está en IDB (dispositivo B), cargarlo antes de insertar
-        if (entry._apngIdbKey && !entry.apngSrc && window._sbAnimIdbLoad) {
+        // Si el APNG/frames están solo en IDB (dispositivo B — entry.pngFrames vacío)
+        // NOTA: si entry.pngFrames ya tiene datos, saltar este branch directamente al path normal
+        if (entry._apngIdbKey && !entry.apngSrc && !(entry.pngFrames && entry.pngFrames.length) && window._sbAnimIdbLoad) {
           window._sbAnimIdbLoad(entry._apngIdbKey)
-            .then(function(_data) { if (_data) entry.apngSrc = _data; })
+            .then(function(_data) {
+              // _data puede ser string (APNG completo) o array (frames PNG individuales)
+              if (_data) {
+                if (typeof _data === 'string') entry.apngSrc = _data;
+                else if (Array.isArray(_data) && _data.length) entry.pngFrames = _data;
+              }
+            })
             .catch(function(){})
             .finally(function() {
-              // apngSrc ya cargado — continuar con la inserción normal
+              // apngSrc o pngFrames ya cargado — continuar con la inserción normal
               const _img2 = new Image();
-              const _src2 = entry.apngSrc || entry.gifDataUrl;
+              const _src2 = entry.apngSrc || (entry.pngFrames && entry.pngFrames[0]) || entry.gifDataUrl;
               const _frames2 = entry.apngSrc ? [entry.apngSrc]
                              : (entry.pngFrames && entry.pngFrames.length ? entry.pngFrames : (entry.gifDataUrl ? [entry.gifDataUrl] : []));
               _img2.onload = function() {
