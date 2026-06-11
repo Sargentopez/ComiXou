@@ -27,6 +27,7 @@
    ============================================================ */
 
 :root {
+  color-scheme: light;
   /* Paleta cómic */
   --yellow:   #FFE135;
   --black:    #1A1A1A;

@@ -870,7 +870,14 @@ let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'waterc
 let edDodgeBurnSign = 1;         // +1 = iluminar (dodge), -1 = oscurecer (burn)
 let _edDodgeBurnActive = false; // true = modo iluminar/oscurecer activo
 let _edGapCloseEnabled = true;  // true = cerrar huecos automáticamente al soltar el trazo de tinta
-function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } _edDodgeBurnActive = false; }
+// ── Dodge/Burn: estado de nivel por canvas ────────────────────────────────
+// WeakMap<canvas, {origData:Uint8ClampedArray, levelData:Float32Array, w, h}>
+// origData: RGBA del pixel en el momento de su primer toque.
+// levelData: nivel acumulado (+= dodge, -= burn). Permite restaurar el tono
+//            original aunque algún canal haya llegado a 0 ó 255.
+let _dbOriginMap = new WeakMap();
+const _DB_STEP = 8; // delta RGB por unidad de nivel a maskA=1 (~32 pasadas de gris a blanco)
+function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } _edDodgeBurnActive = false; _dbOriginMap = new WeakMap(); }
 
 // ── Capas temporales de dibujo (sesión activa) ──────────────────
 // Cuatro canvases independientes, compositan al hacer OK.
@@ -7065,11 +7072,12 @@ function edOnStart(e){
               const _realPts = la.points.filter(Boolean);
               if(_realPts.length > 2){
                 _edShapePushHistory(); // guardar estado antes de eliminar
-                la.points[i] = null; // marcar como eliminado
-                // Limpiar nulls al inicio/fin de cada contorno
+                // splice directo — null marking dejaba un separador de contorno en el medio
+                la.points.splice(i, 1);
+                // Limpiar separadores null que hayan quedado al inicio/fin o consecutivos
+                // (útil en capas fusionadas multi-contorno)
                 while(la.points.length > 0 && la.points[0] === null) la.points.shift();
                 while(la.points.length > 0 && la.points[la.points.length-1] === null) la.points.pop();
-                // Eliminar nulls consecutivos
                 la.points = la.points.filter((p,j,a) => p !== null || (j>0 && a[j-1]!==null));
                 la._boundsDirty = true;
                 window._edCurveVertIdx = -1;
@@ -7420,7 +7428,7 @@ function edOnStart(e){
             _cofHandleTouch(_eSavedWC);
           } else {
             window._edDrawTouchTimer = setTimeout(() => {
-              if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+              if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
               if(edActiveTool !== 'fill' || edFillBrushType !== 'watercolor') return;
               _cofHandleTouch(_eSavedWC);
             }, 120);
@@ -7430,7 +7438,7 @@ function edOnStart(e){
         // Sin cursor offset: iniciar trazo inmediato
         clearTimeout(window._edDrawTouchTimer);
         window._edDrawTouchTimer = setTimeout(() => {
-          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
           edStartPaint(_eSavedWC);
         }, 120);
         return;
@@ -7446,7 +7454,7 @@ function edOnStart(e){
           } else {
             clearTimeout(window._edDrawTouchTimer);
             window._edDrawTouchTimer = setTimeout(() => {
-              if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+              if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
               if(!_edDodgeBurnActive) return;
               _cofHandleTouch(e);
             }, 120);
@@ -7514,7 +7522,7 @@ function edOnStart(e){
           _cofHandleTouch(_eSaved);
         } else {
           window._edDrawTouchTimer = setTimeout(() => {
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
             if(!['draw','eraser'].includes(edActiveTool)) return;
             _cofHandleTouch(_eSaved);
           }, 120);
@@ -7523,7 +7531,7 @@ function edOnStart(e){
       }
       // ── Modo dibujo normal (sin cursor offset) ──
       window._edDrawTouchTimer = setTimeout(() => {
-        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+        if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
         if(!['draw','eraser'].includes(edActiveTool)) return;
         edStartPaint(_eSaved);
       }, 120);
@@ -7564,7 +7572,7 @@ function edOnStart(e){
           // Toque cerca del primer nodo → pasar a _edLineAddPoint con isTouch=true
           clearTimeout(window._edLineTouchTimer);
           window._edLineTouchTimer = setTimeout(()=>{
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
             if(edActiveTool !== 'line') return;
             _edLineAddPoint(c.nx, c.ny, true);
           }, 120);
@@ -7603,7 +7611,7 @@ function edOnStart(e){
       const _cx = c.nx, _cy = c.ny;
       clearTimeout(window._edLineTouchTimer);
       window._edLineTouchTimer = setTimeout(()=>{
-        if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+        if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
         if(edActiveTool !== 'line') return;
         _edLineAddPoint(_cx, _cy, true);
       }, 120);
@@ -8102,14 +8110,14 @@ function edOnStart(e){
           _cofHandleTouch(_eSaved2);
         } else {
           window._edDrawTouchTimer = setTimeout(() => {
-            if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+            if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
             if(!['draw','eraser'].includes(edActiveTool) && !(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
             _cofHandleTouch(_eSaved2);
           }, 120);
         }
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
-          if(!window._edActivePointers || window._edActivePointers.size > 1) return;
+          if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
           if(!['draw','eraser'].includes(edActiveTool) && !(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
           edStartPaint(_eSaved2);
         }, 120);
@@ -9785,6 +9793,8 @@ function _edDrawPushHistory(){
 }
 function _edDrawApplyHistory(snapshot){
   if(!snapshot) return;
+  // Invalidar estado de nivel dodge/burn: el canvas vuelve a un estado anterior
+  _dbOriginMap = new WeakMap();
   const _restoreTmp = (key, url) => {
     const dl = _edTmp[key]; if(!dl?._canvas) return;
     const c = dl._canvas; const ctx = dl._ctx;
@@ -9842,6 +9852,8 @@ function _edDrawClearHistory(){
 }
 function _edDrawInitHistory(){
   const page = edPages[edCurrentPage]; if(!page) return;
+  // Resetear estado de nivel dodge/burn al iniciar nueva sesión de dibujo
+  _dbOriginMap = new WeakMap();
   // Crear canvases temporales para la sesión
   _edTmpCreate();
   _edTmp.active = 'pen';
@@ -10744,10 +10756,34 @@ let _wcOffscreen = null, _wcOffCtx = null;
 let _wcColor = '#000000';
 
 // ══════════════════════════════════════════
-//  DODGE / BURN  — iluminar u oscurecer píxeles en RGB puro
-//  Sin conversión HSL: escala canales hacia blanco (dodge) o hacia negro (burn)
-//  Preserva hue y saturación sin errores de redondeo
+//  DODGE / BURN  — sistema diagonal RGB clamped con nivel por pixel
+//  Todos los canales se mueven a la misma tasa (∆ = nivel × _DB_STEP).
+//  Cada canal se clampea independientemente en 0/255.
+//  El origen se guarda la primera vez que se toca cada pixel:
+//  permite restaurar el tono original aunque algún canal haya llegado a 0/255.
 // ══════════════════════════════════════════
+
+/* Devuelve el estado (origin + level) para un canvas, creándolo si es la primera vez. */
+function _dbEnsureState(canvas) {
+  if (!_dbOriginMap.has(canvas)) {
+    const w = canvas.width, h = canvas.height;
+    const origData = new Uint8ClampedArray(canvas.getContext('2d').getImageData(0, 0, w, h).data);
+    _dbOriginMap.set(canvas, { origData, levelData: new Float32Array(w * h), w, h });
+  }
+  return _dbOriginMap.get(canvas);
+}
+
+/* Calcula el RGB resultante aplicando 'level' unidades de dodge(+)/burn(-) desde el origen. */
+function _dbPixelFromLevel(origR, origG, origB, level) {
+  if (Math.abs(level) < 0.0001) return [origR, origG, origB];
+  const delta = level * _DB_STEP; // positivo = hacia blanco, negativo = hacia negro
+  return [
+    Math.min(255, Math.max(0, Math.round(origR + delta))),
+    Math.min(255, Math.max(0, Math.round(origG + delta))),
+    Math.min(255, Math.max(0, Math.round(origB + delta)))
+  ];
+}
+
 function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
   const page = edPages[edCurrentPage]; if (!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
@@ -10800,74 +10836,47 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
   sCtx.filter = 'none';
   const maskData = sCtx.getImageData(0, 0, bw, bh).data;
 
-  // Factor de intensidad por pasada (~3.5%).
-  // Implementación HSV profesional (modo "diagonal"):
-  //   Burn: oscurece (V *= 1-f) + aumenta saturación (S += (1-S)*f*1.5)
-  //         → el color se acerca al tono puro oscuro, no al negro puro.
-  //   Dodge: aclara (V += (1-V)*f) + reduce saturación (S *= 1-f*1.5)
-  //          → el color se acerca al blanco suave, no al blanco puro chato.
-  // Resultado: curva "diagonal" en el espacio de color, igual que
-  // burn/dodge profesional en Photoshop/Affinity con modo Midtones.
-  const factor = 0.035;
-
   function _applyDodgeBurn(tgt) {
+    // Obtener o crear el estado de nivel para este canvas
+    const state = _dbEnsureState(tgt.canvas);
+    // Si el canvas fue reemplazado (distinto tamaño), reinicializar
+    if (state.w !== tgt.canvas.width || state.h !== tgt.canvas.height) {
+      _dbOriginMap.delete(tgt.canvas);
+      return _applyDodgeBurn(tgt); // reintentar con nuevo estado
+    }
     if (!tgt.canvas || tgt.canvas.width < bx + bw || tgt.canvas.height < by + bh) return;
+
     const imgD = tgt.ctx.getImageData(bx, by, bw, bh);
     const d = imgD.data;
+
     for (let i = 0; i < bw * bh; i++) {
       const pi = i * 4;
-      if (d[pi + 3] < 4) continue;
       const maskA = maskData[pi + 3] / 255;
       if (maskA < 0.01) continue;
-      const f = factor * maskA;
 
-      // RGB → HSV
-      const r = d[pi] / 255, g = d[pi + 1] / 255, b = d[pi + 2] / 255;
-      const maxC = Math.max(r, g, b);
-      const minC = Math.min(r, g, b);
-      const delta = maxC - minC;
-      let h = 0, s = maxC > 0 ? delta / maxC : 0, v = maxC;
-      if (delta > 0) {
-        if (maxC === r)      h = ((g - b) / delta + (g < b ? 6 : 0)) / 6;
-        else if (maxC === g) h = ((b - r) / delta + 2) / 6;
-        else                 h = ((r - g) / delta + 4) / 6;
-      }
+      // Coordenadas canvas para indexar el estado
+      const cx = bx + (i % bw);
+      const cy = by + Math.floor(i / bw);
+      const ci = cy * state.w + cx;
 
-      if (sign > 0) {
-        // Dodge: aclarar + desaturar (hacia blanco suave)
-        v = v + (1 - v) * f;
-        s = s * (1 - f * 1.5);
-        if (s < 0) s = 0;
-      } else {
-        // Burn: oscurecer + saturar (hacia tono puro oscuro)
-        v = v * (1 - f);
-        if (s > 0.02) s = s + (1 - s) * (f * 1.5); // solo colores no grises
-      }
+      // Ignorar pixeles sin contenido original (alpha < 4)
+      if (state.origData[ci * 4 + 3] < 4) continue;
 
-      // HSV → RGB
-      let rOut, gOut, bOut;
-      if (s <= 0 || v <= 0) {
-        rOut = gOut = bOut = v;
-      } else {
-        const hi = Math.floor(h * 6) % 6;
-        const ff = h * 6 - Math.floor(h * 6);
-        const p  = v * (1 - s);
-        const q  = v * (1 - s * ff);
-        const tt = v * (1 - s * (1 - ff));
-        switch (hi) {
-          case 0: rOut=v;  gOut=tt; bOut=p;  break;
-          case 1: rOut=q;  gOut=v;  bOut=p;  break;
-          case 2: rOut=p;  gOut=v;  bOut=tt; break;
-          case 3: rOut=p;  gOut=q;  bOut=v;  break;
-          case 4: rOut=tt; gOut=p;  bOut=v;  break;
-          default:rOut=v;  gOut=p;  bOut=q;  break;
-        }
-      }
+      // Acumular nivel: cada pasada a maskA=1 suma 1 unidad
+      state.levelData[ci] += sign * maskA;
 
-      d[pi]     = Math.min(255, Math.max(0, Math.round(rOut * 255)));
-      d[pi + 1] = Math.min(255, Math.max(0, Math.round(gOut * 255)));
-      d[pi + 2] = Math.min(255, Math.max(0, Math.round(bOut * 255)));
-      // alpha sin tocar
+      // Recomputar RGB desde el origen con el nivel acumulado
+      const [newR, newG, newB] = _dbPixelFromLevel(
+        state.origData[ci * 4],
+        state.origData[ci * 4 + 1],
+        state.origData[ci * 4 + 2],
+        state.levelData[ci]
+      );
+      d[pi]     = newR;
+      d[pi + 1] = newG;
+      d[pi + 2] = newB;
+      // alpha: preservar el original
+      d[pi + 3] = state.origData[ci * 4 + 3];
     }
     tgt.ctx.putImageData(imgD, bx, by);
   }
@@ -17397,6 +17406,32 @@ function edMergeSelected(){
     const newSL = new StrokeLayer(wcStroke);
     const _mergeUid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6);
     newSL._uid = _mergeUid;
+
+    // Si la capa de tinta estaba vacía, el StrokeLayer hereda un bbox diminuto (0.1×0.1).
+    // Recalcular bbox real desde las sub-capas (fill/pencil/watercolor) acumuladas.
+    if(!StrokeLayer._boundingBox(wcStroke)){
+      const _bbF = _hasFill        ? StrokeLayer._boundingBox(wcFill)       : null;
+      const _bbP = _hasPencil      ? StrokeLayer._boundingBox(wcPencil)     : null;
+      const _bbW = _hasWatercolor  ? StrokeLayer._boundingBox(wcWatercolor) : null;
+      let _uX0=Infinity,_uY0=Infinity,_uX1=-Infinity,_uY1=-Infinity;
+      for(const _bb of [_bbF,_bbP,_bbW]){
+        if(!_bb) continue;
+        _uX0=Math.min(_uX0,_bb.x); _uY0=Math.min(_uY0,_bb.y);
+        _uX1=Math.max(_uX1,_bb.x+_bb.w); _uY1=Math.max(_uY1,_bb.y+_bb.h);
+      }
+      if(_uX0<_uX1){
+        const _uW=Math.max(1,_uX1-_uX0), _uH=Math.max(1,_uY1-_uY0);
+        const _fixPw=edPageW(), _fixPh=edPageH();
+        newSL.x      = (_uX0+_uW/2-edMarginX())/_fixPw;
+        newSL.y      = (_uY0+_uH/2-edMarginY())/_fixPh;
+        newSL.width  = _uW/_fixPw;
+        newSL.height = _uH/_fixPh;
+        // Redimensionar canvas vacío al tamaño correcto
+        const _slFix=document.createElement('canvas');
+        _slFix.width=_uW; _slFix.height=_uH;
+        newSL._canvas=_slFix;
+      }
+    }
 
     if(_hasFill){
       // Crear nuevo FillLayer vinculado al nuevo StrokeLayer
