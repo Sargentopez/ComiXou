@@ -10537,14 +10537,16 @@ function _cofHandleMove(e) {
     return;
   }
   if (_cof._pendingStart) {
-    // La distancia se mide entre el dedo y el cursor guardado (punto real del trazo).
-    // La herramienta se posiciona desde cursorX/Y usando esa distancia y el ángulo,
-    // no en la posición cruda del dedo — así no hay error desde el primer momento.
-    const d = _cofDist(tx, ty, _cof.cursorX, _cof.cursorY);
-    _cof.dist = Math.max(10, d);
-    const _radP = _edCursorOffsetAngle * Math.PI / 180;
-    _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radP);
-    _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radP);
+    // Actualizar distancia dedo→cursor para que el cursor no salte si el usuario
+    // se alejó o acercó respecto a la posición de posicionamiento.
+    _cof.dist = Math.max(10, _cofDist(tx, ty, _cof.cursorX, _cof.cursorY));
+    // Usar la posición REAL del dedo como referencia de arrastre.
+    // Antes se calculaba desde el ángulo ideal (cursorX - dist*sin, cursorY + dist*cos),
+    // lo que provocaba que el primer delta incluyera la diferencia entre la posición
+    // angular idealizada y la posición real del dedo → salto de 10-20px al inicio.
+    // _cofHandleUp ya usaba tx/ty directamente; aquí hacemos lo mismo.
+    _cof.touchX = tx;
+    _cof.touchY = ty;
     _cof._pendingStart = false;
     _cof.state = 'red_ready';
     _cofDraw();
