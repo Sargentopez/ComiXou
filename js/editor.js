@@ -6600,7 +6600,9 @@ function _edStartMotionPath(idx) {
   edSelectedIdx = idx;
   if (edCanvas) edCanvas.style.cursor = 'crosshair';
   const bar = $('edMotionBar'); if (!bar) return;
-  // Posicionar la barra justo bajo la cabecera del editor
+  // Restaurar posición central al abrir (puede estar desplazada de un uso anterior)
+  bar.style.transform = 'translateX(-50%)';
+  bar.style.left = '50%';
   bar.style.top = (_edCanvasTop + 8) + 'px';
   bar.style.display = 'flex';
   const sp = $('mpb-speed'); if (sp) sp.value = _edMotionPathSpeed;
@@ -6843,7 +6845,30 @@ function edOnStart(e){
     if (e.target && e.target.closest('#edMotionBar')) return;
     // Si estaba reproduciendo preview, detenerlo antes de redibujar
     if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
-    // Primer punto: siempre el centro de la animación — en coords relativas = (0,0)
+
+    // En táctil: esperar 120ms por si llega segundo dedo (pinch/zoom/mover cámara).
+    // En ratón/lápiz: iniciar inmediatamente.
+    if (e.pointerType === 'touch') {
+      clearTimeout(window._edMpTouchTimer);
+      const _eSavedMp = e;
+      window._edMpTouchTimer = setTimeout(() => {
+        window._edMpTouchTimer = null;
+        if (!_edMotionPathMode) return;
+        if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
+        _edMotionPathDrawing = true;
+        _edMotionPathClosed  = false;
+        _edMotionPathRaw = [{ x: 0, y: 0 }];
+        _edMotionPathPts = _edMotionPathRaw.slice();
+        if (_eSavedMp.pointerId !== undefined) {
+          try { edCanvas.setPointerCapture(_eSavedMp.pointerId); } catch(_) {}
+        }
+        edRedraw();
+      }, 120);
+      e.preventDefault();
+      return;
+    }
+
+    // Ratón/lápiz: inicio inmediato
     _edMotionPathDrawing = true;
     _edMotionPathClosed  = false;
     _edMotionPathRaw = [{ x: 0, y: 0 }];
@@ -7158,6 +7183,8 @@ function edOnStart(e){
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Cancelar timer de rubber band — era un pinch, no una selección múltiple
     if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
+    // Cancelar timer de recorrido — el segundo dedo es pinch/cámara, no dibujo
+    if(window._edMpTouchTimer){ clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     // Si rubber band ya había empezado (caso borde), cancelarla
     if(edRubberBand){ edRubberBand = null; edRedraw(); }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
@@ -9077,6 +9104,8 @@ function edOnMove(e){
 function edOnEnd(e){
   if(window._gcpActive) return;
   if (_edMotionPathMode) {
+    // Cancelar timer táctil si el dedo se levantó antes de que disparara
+    if (window._edMpTouchTimer) { clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     if (_edMotionPathDrawing) {
       _edMotionPathDrawing = false;
       if (_edMotionPathRaw.length >= 2) {
@@ -13048,7 +13077,8 @@ function edRenderOptionsPanel(mode){
     // Se aplican en cada render del panel: cubre selección directa Y
     // cualquier cambio de capa mientras la herramienta está activa.
     if (_actIsWc || _edDodgeBurnActive) edDrawSize = 20;
-    if (_edTmp.active === 'pencil')      edDrawColor = '#7A2E20';
+    if (_edTmp.active === 'pencil')      edDrawColor = '#7A2E20'; // lápiz → sanguina por defecto
+    if (_edTmp.active === 'pen')         edDrawColor = '#000000'; // tinta → negro por defecto
     // ────────────────────────────────────────────────────────────────
     const curSize = isEr ? edEraserSize : edDrawSize;
     const curOpacity = 100; // future: per-tool opacity
@@ -14088,6 +14118,86 @@ function edRenderOptionsPanel(mode){
     $('pp-edit-fill')?.addEventListener('click', () => {
       const page = edPages[edCurrentPage]; if (!page) return;
       const la = edLayers[edSelectedIdx]; if (!la) return;
+
+      // Para objetos vectoriales (shape/line) mostrar diálogo antes de
+      // rasterizar: la información vectorial se perderá al editar el relleno.
+      if (la.type === 'shape' || la.type === 'line') {
+        const _overlay    = $('edConfirmModal');
+        const _msgEl      = $('edConfirmMsg');
+        const _okBtn      = $('edConfirmOk');
+        const _cancelBtn  = $('edConfirmCancel');
+        // Texto del diálogo
+        if (_msgEl)     _msgEl.textContent  = 'Al editar el relleno, el objeto perderá su información vectorial. ¿Guardarlo en la biblioteca antes?';
+        if (_okBtn)     _okBtn.textContent   = 'Sí, guardar';
+        if (_cancelBtn) _cancelBtn.textContent = 'No';
+        // Función que realmente inicia la edición (llamada en ambas opciones)
+        const _startFillEdit = () => {
+          edPushHistory();
+          const _la2 = edLayers[edSelectedIdx]; if (!_la2) return;
+          const _page2 = edPages[edCurrentPage]; if (!_page2) return;
+          const _bakeCanvas = document.createElement('canvas');
+          _bakeCanvas.width = ED_CANVAS_W; _bakeCanvas.height = ED_CANVAS_H;
+          const _bakeCtx = _bakeCanvas.getContext('2d');
+          const _laNoFill = Object.assign(Object.create(Object.getPrototypeOf(_la2)), _la2);
+          _laNoFill.fillColor = 'none';
+          _laNoFill.draw(_bakeCtx);
+          const _dl = new DrawLayer();
+          _dl._ctx.drawImage(_bakeCanvas, 0, 0);
+          _dl._uid = _la2._uid || ('dl_' + Date.now().toString(36));
+          _dl._fillLayerId = _dl._uid;
+          _dl._fromStroke = true;
+          const _fillCanvas = document.createElement('canvas');
+          _fillCanvas.width = ED_CANVAS_W; _fillCanvas.height = ED_CANVAS_H;
+          const _fillCtx = _fillCanvas.getContext('2d');
+          if (_la2.fillColor && _la2.fillColor !== 'none') {
+            const _laFillOnly = Object.assign(Object.create(Object.getPrototypeOf(_la2)), _la2);
+            _laFillOnly.lineWidth = 0;
+            _laFillOnly.draw(_fillCtx);
+          }
+          const _flNew = new FillLayer();
+          _flNew._drawLayerId = _dl._uid;
+          _flNew._uid = 'fl_' + _dl._uid;
+          _flNew._canvas = _fillCanvas; _flNew._ctx = _fillCanvas.getContext('2d');
+          _flNew._isWorkspaceCanvas = true;
+          _flNew.x = 0.5; _flNew.y = 0.5; _flNew.width = 1; _flNew.height = 1; _flNew.rotation = 0;
+          _page2.layers.splice(edSelectedIdx, 0, _flNew);
+          _page2.layers.splice(edSelectedIdx + 1, 1, _dl);
+          edLayers = _page2.layers;
+          edSelectedIdx = -1;
+          edActiveTool = 'fill';
+          edCanvas.className = 'tool-fill';
+          const _cur = $('edBrushCursor'); if (_cur) _cur.style.display = 'block';
+          _edDrawInitHistory();
+          _edDrawLockUI();
+          _edTmp.active = 'bucket';
+          edFillBrushType = 'bucket';
+          edDrawOpacity = 100;
+          _edSyncFillCursor();
+          edRenderOptionsPanel('fill');
+          edRedraw();
+        };
+        if (!_overlay) {
+          // Fallback nativo
+          if (window.confirm('Al editar el relleno, el objeto perderá su información vectorial. ¿Guardarlo en la biblioteca antes?')) edBibGuardar();
+          _startFillEdit();
+          return;
+        }
+        _overlay.classList.add('open');
+        const _stopEv = e => e.stopPropagation();
+        _overlay.addEventListener('pointerdown', _stopEv, { capture: true });
+        const _close = () => {
+          _overlay.classList.remove('open');
+          _overlay.removeEventListener('pointerdown', _stopEv, { capture: true });
+          if (_okBtn)     { _okBtn.removeEventListener('click', _onYes); _okBtn.textContent = 'Eliminar'; }
+          if (_cancelBtn) { _cancelBtn.removeEventListener('click', _onNo); _cancelBtn.textContent = 'Cancelar'; }
+        };
+        const _onYes = () => { _close(); edBibGuardar(); _startFillEdit(); };
+        const _onNo  = () => { _close(); _startFillEdit(); };
+        _okBtn?.addEventListener('click', _onYes);
+        _cancelBtn?.addEventListener('click', _onNo);
+        return; // no continuar — la edición se inicia desde los callbacks
+      }
+
       edPushHistory();
 
       let dl = null;
@@ -14107,41 +14217,6 @@ function edRenderOptionsPanel(mode){
         }
         page.layers.splice(edSelectedIdx, 1, dl);
 
-      } else if (la.type === 'shape' || la.type === 'line') {
-        // Bake del objeto vectorial en canvas workspace
-        const _bakeCanvas = document.createElement('canvas');
-        _bakeCanvas.width = ED_CANVAS_W; _bakeCanvas.height = ED_CANVAS_H;
-        const _bakeCtx = _bakeCanvas.getContext('2d');
-        // Dibujar solo el trazo (sin relleno) en el DrawLayer (pen)
-        const _laNoFill = Object.assign(Object.create(Object.getPrototypeOf(la)), la);
-        _laNoFill.fillColor = 'none';
-        _laNoFill.draw(_bakeCtx);
-        dl = new DrawLayer();
-        dl._ctx.drawImage(_bakeCanvas, 0, 0);
-        dl._uid = la._uid || ('dl_' + Date.now().toString(36));
-        dl._fillLayerId = dl._uid;
-        dl._fromStroke = true;
-        // Crear SIEMPRE el FillLayer (aunque el objeto no tenga relleno previo).
-        // Sin él, _edTmpComposite no encuentra dónde persistir lo que pinta el bucket.
-        const _fillCanvas = document.createElement('canvas');
-        _fillCanvas.width = ED_CANVAS_W; _fillCanvas.height = ED_CANVAS_H;
-        const _fillCtx = _fillCanvas.getContext('2d');
-        // Si ya tenía relleno, pre-renderizarlo (solo relleno, sin trazo)
-        if (la.fillColor && la.fillColor !== 'none') {
-          const _laFillOnly = Object.assign(Object.create(Object.getPrototypeOf(la)), la);
-          _laFillOnly.lineWidth = 0;
-          _laFillOnly.draw(_fillCtx);
-        }
-        const _fl = new FillLayer();
-        _fl._drawLayerId = dl._uid;
-        _fl._uid = 'fl_' + dl._uid;
-        _fl._canvas = _fillCanvas; _fl._ctx = _fillCanvas.getContext('2d');
-        _fl._isWorkspaceCanvas = true;
-        _fl.x = 0.5; _fl.y = 0.5; _fl.width = 1; _fl.height = 1; _fl.rotation = 0;
-        // Insertar FillLayer antes del DrawLayer
-        page.layers.splice(edSelectedIdx, 0, _fl);
-        // DrawLayer va después del FillLayer
-        page.layers.splice(edSelectedIdx + 1, 1, dl);
       } else { return; }
 
       edLayers = page.layers;
@@ -20598,6 +20673,47 @@ function EditorView_init(){
   $('mpb-ok')?.addEventListener('click', () => _edEndMotionPath(true));
   $('mpb-cancel')?.addEventListener('click', () => _edEndMotionPath(false));
 
+  // ── Drag de la barra de recorrido ─────────────────────────────────────────
+  {
+    const _mpBar = $('edMotionBar');
+    const _mpHandle = $('mpb-drag');
+    if (_mpBar && _mpHandle) {
+      let _mpDragging = false, _mpDx = 0, _mpDy = 0, _mpBL = 0, _mpBT = 0;
+      const _mpDragStart = (e) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        e.stopPropagation(); e.preventDefault();
+        _mpDragging = true;
+        _mpHandle.style.cursor = 'grabbing';
+        // Convertir la posición actual (puede tener translateX(-50%)) a píxeles absolutos
+        const _r = _mpBar.getBoundingClientRect();
+        _mpBL = _r.left; _mpBT = _r.top;
+        _mpBar.style.left = _mpBL + 'px';
+        _mpBar.style.top  = _mpBT + 'px';
+        _mpBar.style.transform = 'none';
+        _mpDx = e.clientX - _mpBL; _mpDy = e.clientY - _mpBT;
+        _mpHandle.setPointerCapture(e.pointerId);
+      };
+      const _mpDragMove = (e) => {
+        if (!_mpDragging) return;
+        e.stopPropagation(); e.preventDefault();
+        const _newL = Math.max(0, Math.min(window.innerWidth  - _mpBar.offsetWidth,  e.clientX - _mpDx));
+        const _newT = Math.max(0, Math.min(window.innerHeight - _mpBar.offsetHeight, e.clientY - _mpDy));
+        _mpBar.style.left = _newL + 'px';
+        _mpBar.style.top  = _newT + 'px';
+      };
+      const _mpDragEnd = (e) => {
+        if (!_mpDragging) return;
+        _mpDragging = false;
+        _mpHandle.style.cursor = 'grab';
+        e.stopPropagation();
+      };
+      _mpHandle.addEventListener('pointerdown', _mpDragStart);
+      _mpHandle.addEventListener('pointermove', _mpDragMove);
+      _mpHandle.addEventListener('pointerup',   _mpDragEnd);
+      _mpHandle.addEventListener('pointercancel', _mpDragEnd);
+    }
+  }
+
   $('dd-cleardraw')?.addEventListener('click',()=>{edClearDraw();edCloseMenus();});
 
   // ── NAVEGAR (Hoja → abre overlay) ──
@@ -21612,9 +21728,11 @@ function _edBuildLineSvgPath(localPts, crObj, isClosed, pw, ph) {
 }
 
 // ── Helper: serializar una capa vector a elemento SVG ────────────────────────
-function _edLayerToSvgElement(la, bb, pw, ph) {
-  const svgCx = ((la.x - bb.x0) * pw).toFixed(3);
-  const svgCy = ((la.y - bb.y0) * ph).toFixed(3);
+function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
+  // pad (px) = semiancho máximo de trazo entre las capas exportadas;
+  // desplaza los elementos para que el stroke no quede clipado en los bordes del SVG.
+  const svgCx = ((la.x - bb.x0) * pw + pad).toFixed(3);
+  const svgCy = ((la.y - bb.y0) * ph + pad).toFixed(3);
   const rot   = la.rotation || 0;
   const op    = (la.opacity != null && la.opacity < 1) ? ` opacity="${(la.opacity).toFixed(3)}"` : '';
   const xform = rot ? ` transform="rotate(${rot} ${svgCx} ${svgCy})"` : '';
@@ -21644,7 +21762,8 @@ function _edLayerToSvgElement(la, bb, pw, ph) {
   }
 
   if (la.type === 'line') {
-    const sw    = la.lineWidth || 1;
+    // ?? en vez de ||: lineWidth=0 es válido (sin trazo); || lo convertiría en 1.
+    const sw    = la.lineWidth ?? 1;
     const cr    = la.cornerRadii || {};
     const gXform = `translate(${svgCx} ${svgCy})${rot ? ` rotate(${rot})` : ''}`;
 
@@ -21677,14 +21796,18 @@ function _edLayerToSvgElement(la, bb, pw, ph) {
         const gc   = st.color     || la.color     || '#000';
         const glw  = st.lineWidth !== undefined ? st.lineWidth : sw;
         const d    = _edBuildLineSvgPath(pts, localCr, gcl, pw, ph);
-        return `<path d="${d}" fill="${gf}" stroke="${gc}" stroke-width="${glw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+        const _gStroke = glw > 0 ? `stroke="${gc}" stroke-width="${glw}"` : 'stroke="none" stroke-width="0"';
+        return `<path d="${d}" fill="${gf}" ${_gStroke} stroke-linecap="round" stroke-linejoin="round"/>`;
       }).join('');
       return `<g transform="${gXform}"${op}>${parts}</g>`;
     }
 
     // ── Sin grouped: un único <path> con todos los contornos ──────────────
     const fill = (la.closed && la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
-    const strk = `stroke="${la.color||'#000'}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"`;
+    // Respetar sw=0: no aplicar ningún trazo cuando el grosor es cero
+    const strk = sw > 0
+      ? `stroke="${la.color||'#000'}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"`
+      : 'stroke="none" stroke-width="0"';
 
     const allD = contoursWithGIdx.map(c => {
       const localCr = {};
@@ -21758,11 +21881,25 @@ async function edExportSelectionSVG() {
   const _isPureVector = _ordered.every(l => _edLayerIsPureVector(l));
 
   if (_isPureVector && _ordered.length > 0) {
+    // Padding para que el stroke no quede clipado: semiancho máximo entre todas las capas
+    const _maxHalfSw = _ordered.reduce((m, l) => {
+      if (l.type === 'shape') return Math.max(m, (l.lineWidth || 0) / 2);
+      if (l.type === 'line') {
+        let lw = l.lineWidth ?? 1;
+        if (l.grouped && l.groupedStyles)
+          l.groupedStyles.forEach(st => { if (st.lineWidth != null) lw = Math.max(lw, st.lineWidth); });
+        return Math.max(m, lw / 2);
+      }
+      return m;
+    }, 0);
+    const _pad = Math.ceil(_maxHalfSw) + 1; // +1px de margen de seguridad
+    const _svgW = bxPx + 2 * _pad;
+    const _svgH = byPx + 2 * _pad;
     // Generar elementos SVG reales para cada capa (orden edLayers = fondo→frente)
-    const _svgEls = _ordered.map(l => '  ' + _edLayerToSvgElement(l, bb, pw, ph)).join('\n');
+    const _svgEls = _ordered.map(l => '  ' + _edLayerToSvgElement(l, bb, pw, ph, _pad)).join('\n');
     const svgStr = [
       '<?xml version="1.0" encoding="UTF-8"?>',
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${bxPx}" height="${byPx}" viewBox="0 0 ${bxPx} ${byPx}">`,
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${_svgW}" height="${_svgH}" viewBox="0 0 ${_svgW} ${_svgH}">`,
       _svgEls,
       '</svg>'
     ].join('\n');

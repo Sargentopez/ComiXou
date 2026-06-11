@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v29.36</footer>
+    <footer class="app-version">v29.40</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -537,7 +537,8 @@ Router.register('editor', {
       </div>
 
       <!-- ── BARRA RECORRIDO DE ANIMACIÓN ── -->
-      <div id="edMotionBar" style="display:none;position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:200;align-items:center;gap:8px;background:rgba(20,20,20,0.92);border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px 14px;box-shadow:0 4px 20px rgba(0,0,0,.55);color:#fff;font-size:.82rem;font-weight:700;white-space:nowrap;-webkit-tap-highlight-color:transparent;flex-wrap:wrap;max-width:calc(100vw - 24px)">
+      <div id="edMotionBar" style="display:none;position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:200;align-items:center;gap:8px;background:rgba(20,20,20,0.92);border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px 14px;box-shadow:0 4px 20px rgba(0,0,0,.55);color:#fff;font-size:.82rem;font-weight:700;white-space:nowrap;-webkit-tap-highlight-color:transparent;flex-wrap:wrap;max-width:calc(100vw - 24px);user-select:none">
+        <span id="mpb-drag" title="Mover barra" style="cursor:grab;opacity:0.55;font-size:.95rem;padding:0 2px;touch-action:none;line-height:1">⠿⠿</span>
         <span style="font-size:1rem">🛤️</span>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <span style="font-size:.78rem;opacity:.8">⏱</span>
