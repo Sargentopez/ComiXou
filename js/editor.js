@@ -10489,6 +10489,7 @@ function _cofReset() {
   _cof._dragging = false;
   _cof._strokeStarted = false;
   _cof._pendingStart = false;
+  _cof._prevTx = null; _cof._prevTy = null; // referencia real del dedo para delta
 }
 function _cofDist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 
@@ -10547,6 +10548,7 @@ function _cofHandleMove(e) {
     // _cofHandleUp ya usaba tx/ty directamente; aquí hacemos lo mismo.
     _cof.touchX = tx;
     _cof.touchY = ty;
+    _cof._prevTx = tx; _cof._prevTy = ty; // referencia real para el primer delta del trazo
     _cof._pendingStart = false;
     _cof.state = 'red_ready';
     _cofDraw();
@@ -10554,10 +10556,13 @@ function _cofHandleMove(e) {
     return;
   }
   if (_cof._strokeStarted && edPainting) {
-    // El punto real del trazo (cursorX/Y) se mueve con el delta del dedo.
-    // La herramienta (touchX/Y) se recalcula desde cursorX/Y para estar
-    // siempre geométricamente alineada — sin acumulación de error.
-    const dxN = tx - _cof.touchX, dyN = ty - _cof.touchY;
+    // Delta desde la posición REAL anterior del dedo (no desde la posición angular).
+    // _prevTx/Ty siguen el dedo real; touchX/Y sigue siendo la posición visual del
+    // cuadrado de arrastre (calculada con ángulo), pero ya no se usa para el delta.
+    const _refX = _cof._prevTx ?? _cof.touchX;
+    const _refY = _cof._prevTy ?? _cof.touchY;
+    const dxN = tx - _refX, dyN = ty - _refY;
+    _cof._prevTx = tx; _cof._prevTy = ty;
     _cof.cursorX += dxN; _cof.cursorY += dyN;
     const _radM = _edCursorOffsetAngle * Math.PI / 180;
     _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radM);
