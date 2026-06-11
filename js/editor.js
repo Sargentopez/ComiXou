@@ -8205,6 +8205,7 @@ function edOnStart(e){
         _msRecalcBbox();
         edSelectedIdx = -1;
         const _prevTool = edActiveTool;
+        clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null;
         edActiveTool = 'multiselect';
         window._edGroupSilentTool = _prevTool;
         // Iniciar drag inmediatamente — igual que objetos normales, sin retardo
@@ -8231,6 +8232,7 @@ function edOnStart(e){
       }
       edSelectedIdx = -1;
       if(edMultiSel.length >= 2){
+        clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null;
         edActiveTool = 'multiselect';
         edCanvas.className = 'tool-multiselect';
         // botón nunca queda active — opciones disponibles vía tap en botón
@@ -9239,6 +9241,7 @@ function edOnEnd(e){
       } else if(_found.length>=2){
         edMultiSel=_found;
         edSelectedIdx=-1;
+        clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null;
         edActiveTool='multiselect';
         edCanvas.className='tool-multiselect';
         _edMenuLock(false); // multiselect sin panel: desbloquear menús
@@ -9271,6 +9274,9 @@ function edOnEnd(e){
       if(edMultiSel.length >= 2){
         window._edRubberBandEndPos = null;
         _edUpdateMultiSelPanel();
+      } else {
+        // Rubber band en multiselect con < 2 objetos → salir de multiselect
+        _msClear(); edActiveTool='select'; edCanvas.className='';
       }
       edRedraw();
     }
@@ -9279,10 +9285,16 @@ function edOnEnd(e){
       if(!_edPinchHappened && edMultiSel.length && window._edMoved) edPushHistory();
       if(edMultiSel.length) _msRecalcBbox();
     }
+    // Táctil: tap sin movimiento dentro del bbox → desactivar multiselect.
+    const _wasTapInsideBbox = edMultiDragging && !window._edMoved && e?.pointerType === 'touch';
     edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
     edMultiDragOffs=[];
     const _wasMoved = window._edMoved;
     window._edMoved=false;
+    if(_wasTapInsideBbox && window._edGroupSilentTool === undefined){
+      _msClear(); edActiveTool='select'; edCanvas.className='';
+      edRedraw(); clearTimeout(window._edLongPress); window._edLongPressReady=false; return;
+    }
     // Modo grupo silencioso: nunca limpiar aquí — solo se limpia al tocar fuera (edOnStart)
     if(window._edGroupSilentTool !== undefined){
       if(_wasMoved) _msRecalcBbox();
