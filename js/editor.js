@@ -1373,15 +1373,15 @@ class GifLayer extends BaseLayer {
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
-      if (typeof edRedraw === 'function' && typeof edCanvas !== 'undefined' && edCanvas) {
-        requestAnimationFrame(() => {
-          if ($('editorViewer')?.classList.contains('open') && typeof edUpdateViewer === 'function') {
-            edUpdateViewer();
-          } else {
-            edRedraw();
-          }
-        });
-      }
+      requestAnimationFrame(() => {
+        if ($('editorViewer')?.classList.contains('open') && typeof edUpdateViewer === 'function') {
+          edUpdateViewer();
+        } else if (window._gcpActive && typeof _gcpRedraw === 'function') {
+          _gcpRedraw();
+        } else if (typeof edRedraw === 'function' && typeof edCanvas !== 'undefined' && edCanvas) {
+          edRedraw();
+        }
+      });
     }, frame.delay);
   }
   stopAnim() {
@@ -18030,6 +18030,10 @@ function edDeserLayer(d, pageOrientation){
             l._applyFrame(0);
             if(typeof edUpdateViewer==='function') edUpdateViewer();
           }
+        } else if(window._gcpActive && typeof _gcpRedraw==='function') {
+          // GIF insertado en el editor de animaciones: refrescar canvas GCP,
+          // no el canvas principal (edRedraw no actualiza gcpCanvas en modo GCP)
+          _gcpRedraw();
         } else if(typeof edRedraw==='function') {
           edRedraw();
         }
@@ -26358,6 +26362,7 @@ function gcpInsertFromBib(entry) {
       const origOnload = la.img.onload;
       la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
     }
+
     // Nombre visible en la barra
     la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
     la._gcpVisible = true;
