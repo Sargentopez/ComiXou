@@ -6586,7 +6586,11 @@ function _edMpPreviewStop() {
   _edMpPreviewActive   = false;
   if (_edMpPreviewRaf) { cancelAnimationFrame(_edMpPreviewRaf); _edMpPreviewRaf = null; }
   const la = edLayers[_edMotionPathTarget];
-  if (la) { delete la._pathCurX; delete la._pathCurY; delete la._pathStartTime; }
+  if (la) {
+    delete la._pathCurX; delete la._pathCurY; delete la._pathStartTime;
+    // Detener animación y volver al frame 0
+    if (typeof la.stopAnim === 'function') la.stopAnim();
+  }
   const btn = $('mpb-play'); if (btn) btn.textContent = '▶';
   edRedraw();
 }
@@ -20597,7 +20601,20 @@ function EditorView_init(){
       if (!_edMotionPathPts || _edMotionPathPts.length < 2) return; // no hay recorrido
       _edMotionPathPlaying = true;
       const _pla = edLayers[_edMotionPathTarget];
-      if (_pla) _pla._pathStartTime = Date.now(); // reiniciar desde el inicio
+      if (_pla) {
+        _pla._pathStartTime = Date.now(); // reiniciar recorrido desde el inicio
+        // Arrancar también la animación sincronizada con el recorrido
+        if (_pla.type === 'gif' && _pla._ready) {
+          _pla._fIdx = 0; _pla._playing = true; _pla._applyFrame(0);
+        } else if (_pla.type === 'image' && (_pla._animReady || _pla._apngSrc || _pla._pngFrames)) {
+          _pla._fIdx = 0; _pla._gcpPlayCount = 0; _pla._playing = true;
+          if (_pla._animReady && _pla._animFrames?.length) {
+            _pla._applyFrame(0);
+          } else if (_pla._apngSrc || _pla._pngFrames) {
+            _pla.loadAnim(_pla._apngSrc || _pla._pngFrames, () => { if (_pla._playing) _pla._applyFrame(0); });
+          }
+        }
+      }
       const btn = $('mpb-play'); if (btn) btn.textContent = '⏹';
       _edMpPreviewRaf = requestAnimationFrame(_edMpPreviewTick);
     }
