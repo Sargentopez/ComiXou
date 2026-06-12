@@ -6519,15 +6519,21 @@ function _edViewerMpTick() {
   if (!$('editorViewer')?.classList.contains('open')) {
     _edViewerMpRaf = null; return; // viewer cerrado — parar
   }
+  // Comprobar si ALGUNA hoja tiene recorridos (no solo la actual).
+  // Si solo comprobamos la hoja actual, el ticker se para al navegar a hojas sin
+  // recorrido y nunca se reactiva al llegar a hojas que sí los tienen.
+  const _anyPath = edPages.some(pg => (pg.layers||[]).some(l => l._motionPath && l._motionPath.length >= 2));
+  if (!_anyPath) { _edViewerMpRaf = null; return; }
+
   const page = edPages[edViewerIdx];
-  const hasPath = page && (page.layers||[]).some(l => l._motionPath && l._motionPath.length >= 2);
-  if (!hasPath) { _edViewerMpRaf = null; return; } // sin paths — parar
+  if (!page) { _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick); return; }
 
   const now = Date.now();
   // Dimensiones del lienzo para la página visible en el viewer
   const _vpo = page.orientation || edOrientation;
   const _vpw = _vpo === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
   const _vph = _vpo === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  let _mpUpdated = false;
   (page.layers||[]).forEach(l => {
     if (!l._motionPath || l._motionPath.length < 2) return;
     if (!l._pathStartTime) l._pathStartTime = now;
@@ -6536,10 +6542,10 @@ function _edViewerMpTick() {
     const _totalPx  = _edPathArcLengthPx(l._motionPath, l._motionPathClosed || false, _vpw, _vph);
     const t         = (_elapsed * _speed) / _totalPx;
     const rel       = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, t, _vpw, _vph);
-    if (rel) { l._pathCurX = (l.x || 0.5) + rel.x; l._pathCurY = (l.y || 0.5) + rel.y; }
+    if (rel) { l._pathCurX = (l.x || 0.5) + rel.x; l._pathCurY = (l.y || 0.5) + rel.y; _mpUpdated = true; }
   });
 
-  edUpdateViewer();
+  if (_mpUpdated) edUpdateViewer();
   _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick);
 }
 function _edViewerMpTickStart() {
@@ -19020,11 +19026,21 @@ function _edResetPageAnims(pageIdx) {
   page.layers.forEach(function(l) {
     if (l.type === 'gif' && l._ready) { l.stopAnim(); }
     if (l.type === 'image' && (l._pngFrames || l._apngSrc)) { l.stopAnim(); }
+    // Resetear recorrido: al salir de una hoja, limpiar tiempos para que al volver
+    // el recorrido empiece desde el principio.
+    if (l._motionPath && l._motionPath.length >= 2) {
+      delete l._pathStartTime;
+      l._pathCurX = l.x || 0.5;
+      l._pathCurY = l.y || 0.5;
+    }
   });
 }
 
 // Arrancar animaciones de una hoja desde frame 0 — llamar al entrar a cada hoja del visor
 function _edStartPageAnims(pageIdx) {
+  // Garantizar que el ticker de recorridos está corriendo (puede haberse parado si
+  // se abrió el visor en una hoja sin recorridos).
+  _edViewerMpTickStart();
   const page = edPages[pageIdx];
   if (!page) return;
   // Si la página tiene layers diferidos (lazy loading), cargarlos de IDB primero.
