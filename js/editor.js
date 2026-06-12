@@ -6883,6 +6883,10 @@ function edOnStart(e){
     // En táctil: esperar 120ms por si llega segundo dedo (pinch/zoom/mover cámara).
     // En ratón/lápiz: iniciar inmediatamente.
     if (e.pointerType === 'touch') {
+      // Registrar el puntero ANTES del return para que el check de size
+      // del timer funcione correctamente (el return normal lo saltaría).
+      if (!window._edActivePointers) window._edActivePointers = new Map();
+      window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
       clearTimeout(window._edMpTouchTimer);
       const _eSavedMp = e;
       window._edMpTouchTimer = setTimeout(() => {
@@ -7081,6 +7085,9 @@ function edOnStart(e){
         // Primer dedo: esperar 120ms para detectar si llega segundo dedo
         const _eSavedCrop = e;
         window._edCropTouchMoved = false;
+        // Guardar posición inicial para el umbral de movimiento (compatibilidad Android)
+        window._edCropTouchStartX = e.clientX;
+        window._edCropTouchStartY = e.clientY;
         clearTimeout(window._edCropTouchTimer);
         window._edCropTouchTimer = setTimeout(() => {
           window._edCropTouchTimer = null;
@@ -8495,9 +8502,15 @@ function edOnMove(e){
     _edTouchMoved = true;
     clearTimeout(window._edLongPress);
     window._edLongPressReady = false;
-    // Flag local del recorte: solo marcar si no hay drag de nodo activo
+    // Flag local del recorte: marcar solo si el movimiento supera 8px (umbral anti-jitter).
+    // Algunos digitalizadores Android reportan micro-movimientos en toques estáticos;
+    // sin umbral, el tap nunca se registra en esos dispositivos.
     if(_edCropMode && window._edCropTouchTimer && _edCropDragIdx < 0){
-      window._edCropTouchMoved = true;
+      const _cmx = window._edCropTouchStartX ?? e.clientX;
+      const _cmy = window._edCropTouchStartY ?? e.clientY;
+      if(Math.hypot(e.clientX - _cmx, e.clientY - _cmy) > 8){
+        window._edCropTouchMoved = true;
+      }
     }
   }
   // ── DRAG DE NODO DE RECORTE ────────────────────────────────
