@@ -14082,6 +14082,16 @@ function edRenderOptionsPanel(mode){
         inp.addEventListener('change', ()=>{ window._edEyedropActive=false; edRedraw(); });
         inp.addEventListener('blur',   ()=>{ setTimeout(()=>{ window._edEyedropActive=false; edRedraw(); }, 200); });
       }
+      // <select>: en Android el evento 'input' puede no dispararse al confirmar la selección
+      // nativa. Añadimos 'change' como respaldo para garantizar preview inmediato de fuente.
+      if(inp.tagName === 'SELECT'){
+        inp.addEventListener('change', e=>{
+          if(edSelectedIdx<0) return;
+          const la=edLayers[edSelectedIdx], id=e.target.id;
+          if(id==='pp-font'){la.fontFamily=e.target.value;la.resizeToFitText(edCanvas);edRedraw();}
+          else if(id==='pp-style'){la.style=e.target.value;la.resizeToFitText(edCanvas);edRedraw();}
+        });
+      }
       inp.addEventListener('input',e=>{
         if(edSelectedIdx<0)return;
         const la=edLayers[edSelectedIdx],id=e.target.id;
