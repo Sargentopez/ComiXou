@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v29.54</footer>
+    <footer class="app-version">v29.57</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -303,7 +303,7 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="draw">Dibujar ▾</button>
             <div class="ed-dropdown" id="dd-draw">
-              <button class="ed-dropdown-item" id="dd-pen">Dibujo a mano</button>
+              <button class="ed-dropdown-item" id="dd-pen">Herramientas de dibujo</button>
               <div class="ed-dropdown-submenu">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-vectorial-btn">Dibujo vectorial ▸</button>
                 <div class="ed-submenu" id="dd-vectorial-sub">
