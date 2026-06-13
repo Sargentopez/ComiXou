@@ -6667,6 +6667,10 @@ function _edEndMotionPath(save) {
   _edMotionPathPts     = [];
   _edMotionPathRaw     = [];
   _edMotionPathDrawing = false;
+  // Limpiar todos los punteros activos: el dedo que dibujó el recorrido puede
+  // seguir registrado en _edActivePointers y causar "dedo fantasma" en cámara.
+  if (window._edActivePointers) window._edActivePointers.clear();
+  if (window._edMpTouchTimer) { clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
   const bar = $('edMotionBar'); if (bar) bar.style.display = 'none';
   if (edCanvas) edCanvas.style.cursor = '';
   _edDrawUnlockUI();
@@ -9158,6 +9162,12 @@ function edOnMove(e){
 }
 function edOnEnd(e){
   if(window._gcpActive) return;
+  // Limpiar el puntero del mapa de activos SIEMPRE, antes de cualquier return prematuro.
+  // Todos los modos especiales (recorrido, recorte, zoom-rect, etc.) hacen return
+  // sin pasar por el delete normal que está más abajo — origen de todos los "dedos fantasma".
+  if(e && e.pointerId !== undefined && window._edActivePointers){
+    window._edActivePointers.delete(e.pointerId);
+  }
   if (_edMotionPathMode) {
     // Cancelar timer táctil si el dedo se levantó antes de que disparara
     if (window._edMpTouchTimer) { clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
@@ -9275,9 +9285,6 @@ function edOnEnd(e){
   // Cancelar timer de doble tap de regla si el dedo se levantó sin segundo tap
   // (el timer mismo iniciará el drag diferido si procede)
   // Limpiar pointer del mapa SIEMPRE (antes de la guarda)
-  if(e && e.pointerId !== undefined && window._edActivePointers){
-    window._edActivePointers.delete(e.pointerId);
-  }
   // Fill touch: confirmar siempre que no haya pinch activo — fuera de la guarda gestureActive
   if(edActiveTool === 'fill' && window._edFillPending && !window._edEyedropActive){
     const fp = window._edFillPending; window._edFillPending = null;
@@ -26460,10 +26467,15 @@ function gcpInsertFromBib(entry) {
         if (_flCanvas)     octx.drawImage(_flCanvas,     offX, offY);
         if (_wcCanvas)     octx.drawImage(_wcCanvas,     offX, offY);
         if (_pencilCanvas) octx.drawImage(_pencilCanvas, offX, offY);
-        // 2. StrokeLayer encima
-        octx.setTransform(1,0,0,1,offX,offY);
-        octx.globalAlpha=la.opacity??1; la.draw(octx); octx.globalAlpha=1;
-        octx.setTransform(1,0,0,1,0,0);
+        // 2. StrokeLayer encima — usar el canvas ya cargado en _gcpCanvases.stroke
+        // (la.draw() usaría el canvas de StrokeLayer.fromDataUrl que es asíncrono y podría estar vacío)
+        if (_gcpCanvases.stroke) {
+          octx.drawImage(_gcpCanvases.stroke, offX, offY);
+        } else {
+          octx.setTransform(1,0,0,1,offX,offY);
+          octx.globalAlpha=la.opacity??1; la.draw(octx); octx.globalAlpha=1;
+          octx.setTransform(1,0,0,1,0,0);
+        }
         // Bbox del contenido combinado
         const d=octx.getImageData(0,0,wsW,wsH).data;
         let x0=wsW,y0=wsH,x1=0,y1=0;
@@ -26537,9 +26549,41 @@ function gcpInsertFromBib(entry) {
         _doMergeGcp(_gcpCanvases.fill || null, _gcpCanvases.wc || null, _gcpCanvases.pencil || null);
       }
 
+      // El StrokeLayer también carga su bitmap de forma asíncrona (fromDataUrl).
+      // Registrarlo en _gcpPending igual que fill/wc/pencil para que _doMergeGcp
+      // solo se ejecute cuando TODOS los bitmaps (incluido el trazo) estén listos.
+      function _gcpRenderStrokeLayer() {
+        const _ser = entry.layerData;
+        if (!_ser || !_ser.dataUrl) { _gcpCanvases.stroke = null; _gcpCheckReady(); return; }
+        _gcpPending++;
+        const _bw = Math.max(1, Math.round((la.width  || 1) * _pwDGcp));
+        const _bh = Math.max(1, Math.round((la.height || 1) * _phDGcp));
+        const _ws = document.createElement('canvas');
+        _ws.width = ED_CANVAS_W; _ws.height = ED_CANVAS_H;
+        const _sImg = new Image();
+        _sImg.onload = () => {
+          // Reconstruir StrokeLayer temporal con el bitmap ya cargado
+          const _tmpSl = new StrokeLayer(document.createElement('canvas'), _pwDGcp, _phDGcp);
+          _tmpSl.x = la.x; _tmpSl.y = la.y;
+          _tmpSl.width = la.width; _tmpSl.height = la.height;
+          _tmpSl.rotation = la.rotation || 0;
+          _tmpSl.opacity = la.opacity ?? 1;
+          _tmpSl._canvas = document.createElement('canvas');
+          _tmpSl._canvas.width = _bw; _tmpSl._canvas.height = _bh;
+          _tmpSl._canvas.getContext('2d').drawImage(_sImg, 0, 0, _bw, _bh);
+          _gcpWithEditorContext(() => { _tmpSl.draw(_ws.getContext('2d')); });
+          _gcpCanvases.stroke = _ws;
+          _gcpPending--;
+          _gcpCheckReady();
+        };
+        _sImg.onerror = () => { _gcpCanvases.stroke = null; _gcpPending--; _gcpCheckReady(); };
+        _sImg.src = _ser.dataUrl;
+      }
+
       _gcpRenderGroupLayer(_flSer,     'fill');
       _gcpRenderGroupLayer(_wcSer,     'wc');
       _gcpRenderGroupLayer(_pencilSer, 'pencil');
+      _gcpRenderStrokeLayer();
       if (_gcpPending === 0) _gcpCheckReady();
       return;
     }
