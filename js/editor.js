@@ -25312,12 +25312,17 @@ function _gcpPreview() {
     clearTimeout(_gcpPreviewTimer);
     _gcpPreviewTimer = null;
     if (btn) btn.textContent = '▶';
-    // Si se detuvo por fin de reproducción → quedarse en el último frame
-    // Si se detuvo manualmente (botón) → volver al frame original
+    // Si se detuvo por fin de reproducción → posición de parada según tipo:
+    //   · Con interpolación circular: frame 0 (el inicio del ciclo), porque los
+    //     frames circulares finales son una TRANSICIÓN de vuelta al primer keyframe.
+    //     Quedarse en el último frame interpolado mostraría la posición intermedia.
+    //   · Sin interpolación circular: último frame (comportamiento estándar).
+    // Si se detuvo manualmente (botón) → volver al frame original.
     if (goToLastFrame) {
-      const _lastFi = total - 1;
-      window._gcpGlobalFrameIdx = _lastFi;
-      _gcpGoToFrame(_lastFi);
+      const _hasCirInterp = window._gcpCircularInterpFi >= 0;
+      const _stopFi = _hasCirInterp ? 0 : total - 1;
+      window._gcpGlobalFrameIdx = _stopFi;
+      _gcpGoToFrame(_stopFi);
     } else {
       _gcpGoToFrame(_previewStartFi);
     }
