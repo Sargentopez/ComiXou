@@ -14700,6 +14700,34 @@ function _edRulesNodePanel(n) {
   setTimeout(() => { document.addEventListener('pointerdown', _edRulesPopOutside, {passive:true}); }, 50);
 }
 
+
+// ── _edClampPop: posiciona un popup fijo junto al punto de pantalla (sx, sy)
+// garantizando que quede siempre dentro del viewport.
+// Se llama DESPUÉS de appendChild para que el browser haya calculado el layout.
+// Usa getBoundingClientRect (más fiable que offsetWidth en Android).
+function _edClampPop(pop, sx, sy) {
+  const vw = (window.visualViewport ? window.visualViewport.width  : window.innerWidth);
+  const vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+  const margin = 8;
+  const offset = 22;            // distancia horizontal al punto
+  const r    = pop.getBoundingClientRect();
+  const PW   = r.width  || pop.offsetWidth  || 200;
+  const PH   = r.height || pop.offsetHeight || 44;
+
+  // Intentar a la derecha; si no cabe, a la izquierda
+  let px = sx + offset;
+  if (px + PW > vw - margin) px = sx - PW - offset;
+  // Clamp horizontal final
+  px = Math.max(margin, Math.min(px, vw - PW - margin));
+
+  // Centrado vertical respecto al punto; clamp vertical
+  let py = sy - PH / 2;
+  py = Math.max(margin, Math.min(py, vh - PH - margin));
+
+  pop.style.left = px + 'px';
+  pop.style.top  = py + 'px';
+}
+
 function _edRulesOpenPanel(id, part, wx, wy) {
   _edRulesClosePop();
   const r = edRules.find(r => r.id === id); if(!r) return;
@@ -14723,12 +14751,7 @@ function _edRulesOpenPanel(id, part, wx, wy) {
     pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="Ocultar esta guía" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   }
   document.body.appendChild(pop);
-  const PW = pop.offsetWidth || 150, PH = pop.offsetHeight || 44;
-  let px = sc.x + 22, py = sc.y - PH / 2;
-  if(px + PW > window.innerWidth - 8) px = sc.x - PW - 22;
-  if(py < 8) py = 8;
-  if(py + PH > window.innerHeight - 8) py = window.innerHeight - PH - 8;
-  pop.style.left = px + 'px'; pop.style.top = py + 'px';
+  _edClampPop(pop, sc.x, sc.y);
 
   document.getElementById('erp-dup')?.addEventListener('click', e => {
     e.stopPropagation(); _edRuleDuplicate(id); 
@@ -27490,12 +27513,7 @@ function _gcpRulesOpenPanel(id, part, wx, wy) {
     pop.innerHTML = `<button id="grp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="grp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="grp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="grp-lock" title="${r.locked?'Desbloquear':'Bloquear'}" style="${_bsLock}">${r.locked?'🔒':'🔓'}</button>${_sep}<button id="grp-hide" title="Ocultar esta guía" style="${_bs}">${_svgEye}</button>${_sep}<button id="grp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   }
   document.body.appendChild(pop);
-  const PW = pop.offsetWidth||150, PH = pop.offsetHeight||44;
-  let px = sc.x+22, py = sc.y-PH/2;
-  if (px+PW > window.innerWidth-8) px = sc.x-PW-22;
-  if (py < 8) py = 8;
-  if (py+PH > window.innerHeight-8) py = window.innerHeight-PH-8;
-  pop.style.left = px+'px'; pop.style.top = py+'px';
+  _edClampPop(pop, sc.x, sc.y);
   document.getElementById('grp-dup')?.addEventListener('click', e => { e.stopPropagation(); _gcpRuleDuplicate(id); });
   document.getElementById('grp-horiz')?.addEventListener('click', e => {
     e.stopPropagation();
@@ -27532,12 +27550,7 @@ function _gcpRulesNodePanel(n) {
   const _bsLock = `background:${n.locked?'rgba(255,255,255,0.25)':'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
   pop.innerHTML = `<button id="gnp-lock" style="${_bsLock}">${n.locked?'🔒':'🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="gnp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   document.body.appendChild(pop);
-  const PW = pop.offsetWidth||100, PH = pop.offsetHeight||44;
-  let px = sc.x+22, py = sc.y-PH/2;
-  if (px+PW > window.innerWidth-8) px = sc.x-PW-22;
-  if (py < 8) py = 8;
-  if (py+PH > window.innerHeight-8) py = window.innerHeight-PH-8;
-  pop.style.left = px+'px'; pop.style.top = py+'px';
+  _edClampPop(pop, sc.x, sc.y);
   document.getElementById('gnp-lock')?.addEventListener('click', e => {
     e.stopPropagation(); n.locked = !n.locked;
     for (const rid of n.ruleIds) { const _rr=_gcpRules.find(r=>r.id===rid); if(_rr) _rr.locked=n.locked; }
