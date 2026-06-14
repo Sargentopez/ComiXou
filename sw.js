@@ -22,7 +22,7 @@
  *     Licencia: dominio público / uso libre
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comixow-v29-58';
+const CACHE = 'comixow-v29-59';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -30,6 +30,20 @@ const STATIC_ASSETS = [
   './icon-192.png',
   './icon-512.png',
   './logo_long.png',
+  // Fuentes WOFF2 autoalojadas — precacheadas para funcionar offline/sin conexión
+  './fonts/Bangers-Regular.woff2',
+  './fonts/BebasNeue-Regular.woff2',
+  './fonts/ComicNeue-Bold.woff2',
+  './fonts/ComicNeue-Regular.woff2',
+  './fonts/Lora-Italic-Variable.woff2',
+  './fonts/Lora-Variable.woff2',
+  './fonts/Nunito-Italic-Variable.woff2',
+  './fonts/Nunito-Variable.woff2',
+  './fonts/Oswald-Variable.woff2',
+  './fonts/PatrickHand-Regular.woff2',
+  './fonts/PermanentMarker-Regular.woff2',
+  './fonts/PressStart2P-Regular.woff2',
+  './fonts/fonts.css',
 ];
 
 self.addEventListener('message', e => {

@@ -1,0 +1,128 @@
+/*
+ * Fuentes autoalojadas de ComiXou
+ * Todas bajo licencia SIL Open Font License 1.1 (OFL) salvo donde se indica.
+ *
+ * Bangers            – Copyright 2010 The Bangers Project Authors
+ *                      https://github.com/googlefonts/bangers
+ * Bebas Neue         – Copyright 2010 Dharma Type
+ *                      (Ryoichi Tsunekawa, dharmatype.com)
+ * Comic Neue         – Copyright 2014 The Comic Neue Project Authors
+ *                      (Craig Rozynski, github.com/crozynski/comicneue)
+ * Lora               – Copyright 2011 The Lora Project Authors
+ *                      https://github.com/cyrealtype/Lora-Cyrillic
+ * Nunito             – Copyright 2014 The Nunito Project Authors
+ *                      https://github.com/googlefonts/nunito
+ * Oswald             – Copyright 2016 The Oswald Project Authors
+ *                      https://github.com/googlefonts/OswaldFont
+ * Patrick Hand       – Copyright 2010-2012 Patrick Wagesreiter
+ *                      (mail@patrickwagesreiter.at)
+ * Permanent Marker   – Copyright 2010 Font Diner, Inc.
+ *                      https://www.fontdiner.com
+ *                      Licencia: Apache License 2.0
+ * Press Start 2P     – Copyright 2012 The Press Start 2P Project Authors
+ *                      (Cody "CodeMan38" Boisclair, zone38.net)
+ *
+ * Incluidas como WOFF2 generadas desde los TTF originales de Google Fonts.
+ */
+
+/* ── Bangers (400) ────────────────────────────────── */
+@font-face {
+  font-family: 'Bangers';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('Bangers-Regular.woff2') format('woff2');
+}
+
+/* ── Bebas Neue (400) ─────────────────────────────── */
+@font-face {
+  font-family: 'Bebas Neue';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('BebasNeue-Regular.woff2') format('woff2');
+}
+
+/* ── Comic Neue (400, 700) ────────────────────────── */
+@font-face {
+  font-family: 'Comic Neue';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('ComicNeue-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Comic Neue';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('ComicNeue-Bold.woff2') format('woff2');
+}
+
+/* ── Lora variable (400–700, normal + italic) ─────── */
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('Lora-Variable.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'Lora';
+  font-style: italic;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('Lora-Italic-Variable.woff2') format('woff2-variations');
+}
+
+/* ── Nunito variable (200–900, normal + italic) ────── */
+@font-face {
+  font-family: 'Nunito';
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('Nunito-Variable.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'Nunito';
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url('Nunito-Italic-Variable.woff2') format('woff2-variations');
+}
+
+/* ── Oswald variable (200–700) ────────────────────── */
+@font-face {
+  font-family: 'Oswald';
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url('Oswald-Variable.woff2') format('woff2-variations');
+}
+
+/* ── Patrick Hand (400) ───────────────────────────── */
+@font-face {
+  font-family: 'Patrick Hand';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('PatrickHand-Regular.woff2') format('woff2');
+}
+
+/* ── Permanent Marker (400) ───────────────────────── */
+@font-face {
+  font-family: 'Permanent Marker';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('PermanentMarker-Regular.woff2') format('woff2');
+}
+
+/* ── Press Start 2P (400) ─────────────────────────── */
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('PressStart2P-Regular.woff2') format('woff2');
+}
