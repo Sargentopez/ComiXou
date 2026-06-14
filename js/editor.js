@@ -1420,7 +1420,7 @@ class TextLayer extends BaseLayer {
     this.borderColor='#000000';this.borderWidth=0;this.padding=10;
   }
   getLines(){return this.text.split('\n');}
-  _fontStr(){ return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${this.fontFamily}`; }
+  _fontStr(){ const _ff=this.fontFamily.includes(' ')?`"${this.fontFamily}"`:this.fontFamily; return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${_ff}`; }
   measure(ctx){
     ctx.font=this._fontStr();
     let mw=0,th=0;
@@ -1477,7 +1477,7 @@ class BubbleLayer extends BaseLayer {
     this.explosionRadii=null; // null = usar valores por defecto
   }
   getLines(){return this.text.split('\n');}
-  _fontStr(){ return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${this.fontFamily}`; }
+  _fontStr(){ const _ff=this.fontFamily.includes(' ')?`"${this.fontFamily}"`:this.fontFamily; return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${_ff}`; }
   measure(ctx){
     ctx.font=this._fontStr();
     let mw=0,th=0;
@@ -14088,8 +14088,17 @@ function edRenderOptionsPanel(mode){
         inp.addEventListener('change', e=>{
           if(edSelectedIdx<0) return;
           const la=edLayers[edSelectedIdx], id=e.target.id;
-          if(id==='pp-font'){la.fontFamily=e.target.value;la.resizeToFitText(edCanvas);edRedraw();}
-          else if(id==='pp-style'){la.style=e.target.value;la.resizeToFitText(edCanvas);edRedraw();}
+          if(id==='pp-font'){
+            la.fontFamily=e.target.value;
+            la.resizeToFitText(edCanvas);
+            // Precargar la fuente seleccionada antes de redibujar para evitar
+            // que Canvas use el fallback si la fuente aún no está en caché.
+            const _ff = la.fontFamily.includes(' ') ? `'${la.fontFamily}'` : la.fontFamily;
+            if(document.fonts){
+              document.fonts.load(`400 ${la.fontSize||30}px ${_ff}`)
+                .catch(()=>{}).finally(()=>{ edRedraw(); });
+            } else { edRedraw(); }
+          } else if(id==='pp-style'){la.style=e.target.value;la.resizeToFitText(edCanvas);edRedraw();}
         });
       }
       inp.addEventListener('input',e=>{
@@ -14105,7 +14114,13 @@ function edRenderOptionsPanel(mode){
           }
           la.resizeToFitText(edCanvas);
         }
-        else if(id==='pp-font'){la.fontFamily=e.target.value;la.resizeToFitText(edCanvas);}
+        else if(id==='pp-font'){
+          la.fontFamily=e.target.value; la.resizeToFitText(edCanvas);
+          const _ff3=la.fontFamily.includes(' ')?`'${la.fontFamily}'`:la.fontFamily;
+          if(document.fonts){
+            document.fonts.load(`400 ${la.fontSize||30}px ${_ff3}`).catch(()=>{}).finally(()=>edRedraw());
+          } else { edRedraw(); }
+        }
         else if(id==='pp-bold')  {la.fontBold=e.target.checked;la.resizeToFitText(edCanvas);}
         else if(id==='pp-italic'){la.fontItalic=e.target.checked;la.resizeToFitText(edCanvas);}
         else if(id==='pp-fs'){la.fontSize=parseInt(e.target.value)||12;la.resizeToFitText(edCanvas);}
@@ -20090,6 +20105,25 @@ function edConfirm(msg, onOk, okLabel='Eliminar'){
    INIT
    ══════════════════════════════════════════ */
 function EditorView_init(){
+  // Precargar todas las fuentes de texto en la caché del browser.
+  // Canvas 2D requiere que la fuente esté cargada ANTES de usarla; si no, cae
+  // al fallback silenciosamente. document.fonts.load() fuerza la carga inmediata.
+  if(typeof document !== 'undefined' && document.fonts){
+    const _edFontVariants = [
+      "400 16px Bangers",
+      "400 16px 'Bebas Neue'",
+      "400 16px 'Comic Neue'",  "700 16px 'Comic Neue'",
+      "400 16px Lora",          "700 16px Lora",
+      "400 italic 16px Lora",
+      "400 16px Nunito",        "600 16px Nunito",
+      "700 16px Nunito",        "900 16px Nunito",
+      "400 16px Oswald",        "700 16px Oswald",
+      "400 16px 'Patrick Hand'",
+      "400 16px 'Permanent Marker'",
+      "400 16px 'Press Start 2P'",
+    ];
+    _edFontVariants.forEach(v => document.fonts.load(v).catch(() => {}));
+  }
   // Limpiar estado de sesión anterior
   edHideGearIcon();
   const staleToast = $('edToast');
