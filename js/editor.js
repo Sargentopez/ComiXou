@@ -6081,8 +6081,10 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom ──
-    // En modo recorte el pinch siempre mueve la cámara (el layer está seleccionado pero no debe escalar)
-    const _haySeleccion = !_edCropMode && ((edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer);
+    // En modo recorte o edición de recorrido el pinch siempre mueve la cámara
+    // (el layer está seleccionado pero no debe escalar)
+    const _haySeleccion = !_edCropMode && !_edMotionPathMode
+      && ((edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer);
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
@@ -25355,10 +25357,18 @@ function _gcpPreview() {
     //   · Sin interpolación circular: último frame (comportamiento estándar).
     // Si se detuvo manualmente (botón) → volver al frame original.
     if (goToLastFrame) {
-      const _hasCirInterp = window._gcpCircularInterpFi >= 0;
+      // Detectar interpolación circular con doble verificación:
+      // 1. _gcpCircularInterpFi (puede ser -1 si fue resetado por otro flujo)
+      // 2. Inspección directa del último frame (_circular = true es la fuente de verdad)
+      const _lastFrm = window._gcpLayers
+        ?.find(la => la._frames && la._frames.length > 0)
+        ?._frames?.[total - 1];
+      const _hasCirInterp = window._gcpCircularInterpFi >= 0 || !!_lastFrm?._circular;
       const _stopFi = _hasCirInterp ? 0 : total - 1;
       window._gcpGlobalFrameIdx = _stopFi;
-      _gcpGoToFrame(_stopFi);
+      _gcpApplyFrame(_stopFi);
+      _gcpRedraw();
+      _gcpUpdateFrameNav();
     } else {
       _gcpGoToFrame(_previewStartFi);
     }
