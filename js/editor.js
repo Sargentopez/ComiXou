@@ -4052,6 +4052,9 @@ function edIsTouchDevice(){
   return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 }
 function edDrawSel(){
+  // Durante edición de recorrido los handles del objeto no deben aparecer:
+  // el pinch debe controlar solo la cámara, no redimensionar el objeto.
+  if(_edMotionPathMode) return;
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
   const pw=edPageW(), ph=edPageH();
@@ -5945,8 +5948,10 @@ function edPinchStart(e) {
   edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
   // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
-  // Durante recorte: forzar modo cámara (no escalar el objeto que se recorta)
-  const la = (_edCropMode || !isDrawTool && edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.locked) ? null
+  // Durante recorte o edición de recorrido: forzar modo cámara
+  // (no escalar el objeto seleccionado — el pinch es solo para navegar el canvas)
+  const la = (_edCropMode || _edMotionPathMode
+    || (!isDrawTool && edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.locked)) ? null
     : (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   // T1: si hay LineLayer en construcción, usarla como objeto pincheable
   const _laForPinch = la || (_edLineLayer && edActiveTool==='line' ? _edLineLayer : null);
