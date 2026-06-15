@@ -6684,33 +6684,6 @@ function _edRdpSimplify(pts, eps) {
 }
 
 // ── RECORRIDO DE ANIMACIÓN (motion path) ────────────────────────────────────
-// ── Helpers HTML de recorrido — punto único de verdad ────────────────────────
-// Cambiar aquí afecta a todos los paneles de propiedades a la vez.
-function _edPathRowHtml(la) {
-  return `
-      <div class="op-prop-row">
-        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
-        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
-      </div>
-      ${la._motionPath ? `<div class="op-prop-row">
-        <span class="op-prop-label">⏱ Ciclo</span>
-        <input type="range" id="pp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
-        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
-      </div>` : ''}`;
-}
-function _edGrpPathRowHtml(la) {
-  return `
-        <div class="op-prop-row">
-          <button id="pp-grp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
-          ${la._motionPath ? `<button id="pp-grp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido del grupo">✕</button>` : ''}
-        </div>
-        ${la._motionPath ? `<div class="op-prop-row">
-          <span class="op-prop-label">⏱ Ciclo</span>
-          <input type="range" id="pp-grp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
-          <span id="pp-grp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
-        </div>` : ''}`;
-}
-
 // Inicia el modo dibujo de recorrido para la capa idx
 function _edStartMotionPath(idx) {
   const la = edLayers[idx]; if (!la) return;
@@ -13823,7 +13796,15 @@ function edRenderOptionsPanel(mode){
       panel.innerHTML=`
         <div class="op-row" style="margin-top:4px;justify-content:space-between;gap:4px">
 
-        ${_edGrpPathRowHtml(la)}
+        <div class="op-prop-row">
+          <button id="pp-grp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
+          ${la._motionPath ? `<button id="pp-grp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido del grupo">✕</button>` : ''}
+        </div>
+        ${la._motionPath ? `<div class="op-prop-row">
+          <span class="op-prop-label">⏱ Ciclo</span>
+          <input type="range" id="pp-grp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+          <span id="pp-grp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
+        </div>` : ''}
           <button class="op-btn danger" id="pp-grp-del" style="flex:1">✕ Eliminar</button>
           <button class="op-btn" id="pp-grp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
           <button class="op-btn" id="pp-grp-mirror" title="Simetría" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>
@@ -14134,7 +14115,15 @@ function edRenderOptionsPanel(mode){
         <button id="pp-edit-draw" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="13" height="21" style="image-rendering:pixelated;vertical-align:middle"/> Editar dibujo</button>
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>
-      ${_edPathRowHtml(la)}`;
+      <div class="op-prop-row">
+        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
+        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
+      </div>
+      ${la._motionPath ? `<div class="op-prop-row">
+        <span class="op-prop-label">⏱ Ciclo</span>
+        <input type="range" id="pp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
+      </div>` : ''}`;
     } else if(la.type==='stroke'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
@@ -14145,7 +14134,15 @@ function edRenderOptionsPanel(mode){
         <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="13" height="21" style="image-rendering:pixelated;vertical-align:middle"/> Editar dibujo</button>
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>
-      ${_edPathRowHtml(la)}`;
+      <div class="op-prop-row">
+        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
+        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
+      </div>
+      ${la._motionPath ? `<div class="op-prop-row">
+        <span class="op-prop-label">⏱ Ciclo</span>
+        <input type="range" id="pp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
+      </div>` : ''}`;
     } else if(la.type==='gif' || (la.type==='image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames))) {
       // Animación — sin recorte, con botón de editar en GCP
       html+=`
@@ -14159,7 +14156,15 @@ function edRenderOptionsPanel(mode){
       <div class="op-prop-row">
         <button id="pp-edit-anim" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎬 Editar animación</button>
       </div>
-      ${_edPathRowHtml(la)}`;
+      <div class="op-prop-row">
+        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
+        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
+      </div>
+      ${la._motionPath ? `<div class="op-prop-row">
+        <span class="op-prop-label">⏱ Ciclo</span>
+        <input type="range" id="pp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
+      </div>` : ''}`;
     } else if(la.type==='image'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
@@ -14172,7 +14177,15 @@ function edRenderOptionsPanel(mode){
       <div class="op-prop-row">
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
       </div>
-      ${_edPathRowHtml(la)}`;
+      <div class="op-prop-row">
+        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
+        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
+      </div>
+      ${la._motionPath ? `<div class="op-prop-row">
+        <span class="op-prop-label">⏱ Ciclo</span>
+        <input type="range" id="pp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
+      </div>` : ''}`;
     } else if(la.type==='shape'){
       html+=`
       <div class="op-prop-row">
@@ -14183,7 +14196,15 @@ function edRenderOptionsPanel(mode){
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>
-      ${_edPathRowHtml(la)}`;
+      <div class="op-prop-row">
+        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
+        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
+      </div>
+      ${la._motionPath ? `<div class="op-prop-row">
+        <span class="op-prop-label">⏱ Ciclo</span>
+        <input type="range" id="pp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
+      </div>` : ''}`;
     } else if(la.type==='line'){
       html+=`
       <div class="op-prop-row">
@@ -14194,7 +14215,15 @@ function edRenderOptionsPanel(mode){
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>
-      ${_edPathRowHtml(la)}`;
+      <div class="op-prop-row">
+        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
+        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
+      </div>
+      ${la._motionPath ? `<div class="op-prop-row">
+        <span class="op-prop-label">⏱ Ciclo</span>
+        <input type="range" id="pp-path-speed" min="10" max="1000" step="10" value="${la._motionSpeed || 100}" style="flex:1;accent-color:var(--black)">
+        <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:52px;text-align:right">${la._motionSpeed || 100}px/s</span>
+      </div>` : ''}`;
     }
     const _isTextBubble = (la.type==='text'||la.type==='bubble');
     html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">

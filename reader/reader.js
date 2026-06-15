@@ -1428,6 +1428,15 @@ function _readerGifTick() {
         if (_mpPos) {
           layer._pathCurX = (layer.x || 0.5) + _mpPos.x;
           layer._pathCurY = (layer.y || 0.5) + _mpPos.y;
+          // Propagar a capas fill/pencil/watercolor vinculadas
+          const _mpUid = layer._uid || layer._fillLayerId;
+          if (_mpUid) {
+            (panel.layers||[]).forEach(_lk => {
+              if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mpUid) {
+                _lk._pathCurX = layer._pathCurX; _lk._pathCurY = layer._pathCurY;
+              }
+            });
+          }
         }
         panelChanged = true;
       }
@@ -1909,8 +1918,8 @@ function _render() {
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       // SF: el fill tiene x/y/width/height/rotation — igual que StrokeLayer.
       // Renderizar con translate+rotate+drawImage centrado en (x*pw, y*ph).
-      const _fx = (layer.x != null ? layer.x : 0.5) * pw;
-      const _fy = (layer.y != null ? layer.y : 0.5) * ph;
+      const _fx = (layer._pathCurX != null ? layer._pathCurX : (layer.x != null ? layer.x : 0.5)) * pw;
+      const _fy = (layer._pathCurY != null ? layer._pathCurY : (layer.y != null ? layer.y : 0.5)) * ph;
       const _fw = (layer.width  != null ? layer.width  : 1) * pw;
       const _fh = (layer.height != null ? layer.height : 1) * ph;
       const _fr = (layer.rotation || 0) * Math.PI / 180;
@@ -1936,22 +1945,28 @@ function _render() {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       if (type === 'image' || type === 'stroke') {
-        const x = (layer.x      || 0.5) * pw;
-        const y = (layer.y      || 0.5) * ph;
-        const w = (layer.width  || 1)   * pw;
-        const h = (layer.height || 1)   * ph;
+        const x = (type==='stroke' && layer._pathCurX!=null ? layer._pathCurX : (layer.x||0.5)) * pw;
+        const y = (type==='stroke' && layer._pathCurY!=null ? layer._pathCurY : (layer.y||0.5)) * ph;
+        const w = (layer.width  || 1) * pw;
+        const h = (layer.height || 1) * ph;
         const rot = layer.rotation || 0;
         ctx.translate(x, y);
         if (rot) ctx.rotate(rot * Math.PI / 180);
         ctx.drawImage(img, -w / 2, -h / 2, w, h);
       } else {
+        // draw: aplicar offset de motion path si existe
+        if (layer._pathCurX != null) {
+          ctx.translate((layer._pathCurX - (layer.x||0.5)) * pw,
+                        (layer._pathCurY - (layer.y||0.5)) * ph);
+        }
         ctx.drawImage(img, 0, 0, pw, ph);
       }
       ctx.restore();
     } else if (type === 'shape') {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const x = (layer._pathCurX != null ? layer._pathCurX : (layer.x||0.5)) * pw;
+      const y = (layer._pathCurY != null ? layer._pathCurY : (layer.y||0.5)) * ph;
       const w = (layer.width || 0.3) * pw, h = (layer.height || 0.2) * ph;
       const rot = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(x, y);
@@ -1972,7 +1987,8 @@ function _render() {
     } else if (type === 'line' && layer.points && layer.points.length >= 2) {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-      const x = (layer.x || 0.5) * pw, y = (layer.y || 0.5) * ph;
+      const x = (layer._pathCurX != null ? layer._pathCurX : (layer.x||0.5)) * pw;
+      const y = (layer._pathCurY != null ? layer._pathCurY : (layer.y||0.5)) * ph;
       const w = (layer.width  || 0.3) * pw, h = (layer.height || 0.2) * ph;
       const rot = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(x, y);
