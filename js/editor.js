@@ -6921,10 +6921,22 @@ function edOnStart(e){
     // En táctil: esperar 120ms por si llega segundo dedo (pinch/zoom/mover cámara).
     // En ratón/lápiz: iniciar inmediatamente.
     if (e.pointerType === 'touch') {
-      // Registrar el puntero ANTES del return para que el check de size
-      // del timer funcione correctamente (el return normal lo saltaría).
+      // Registrar el puntero ANTES de cualquier return
       if (!window._edActivePointers) window._edActivePointers = new Map();
       window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+      e.preventDefault();
+
+      if (window._edActivePointers.size >= 2) {
+        // Segundo dedo (o más): cancelar el timer de dibujo y activar la cámara.
+        // Esto permite mover/zoom con dos dedos aunque la ventana de recorrido esté abierta.
+        clearTimeout(window._edMpTouchTimer);
+        window._edMpTouchTimer = null;
+        _edMotionPathDrawing = false;
+        edPinchStart(e);   // iniciar pinch/pan de cámara igual que en el editor normal
+        return;
+      }
+
+      // Primer dedo: esperar 120ms por si llega segundo dedo (pinch vs dibujo)
       clearTimeout(window._edMpTouchTimer);
       const _eSavedMp = e;
       window._edMpTouchTimer = setTimeout(() => {
@@ -6940,7 +6952,6 @@ function edOnStart(e){
         }
         edRedraw();
       }, 120);
-      e.preventDefault();
       return;
     }
 
@@ -8499,12 +8510,12 @@ function edOnMove(e){
   if(window._gcpActive) return;
   if (_edMotionPathMode) {
     if (_edMotionPathDrawing) {
+      // Dibujo activo: acumular puntos del recorrido
       const _mm = edCoords(e);
       const _la1 = edLayers[_edMotionPathTarget];
       const _bx  = _la1 ? _la1.x : 0.5, _by = _la1 ? _la1.y : 0.5;
       const _last = _edMotionPathRaw[_edMotionPathRaw.length - 1];
       if (_last) {
-        // Coords relativas al centro de la capa
         const _rx = +(_mm.nx - _bx).toFixed(4);
         const _ry = +(_mm.ny - _by).toFixed(4);
         const _mdx = _rx - _last.x, _mdy = _ry - _last.y;
@@ -8514,8 +8525,10 @@ function edOnMove(e){
           edRedraw();
         }
       }
+      e.preventDefault(); return;
     }
-    e.preventDefault(); return;
+    // Sin dibujo activo (p.ej. durante pinch de cámara): dejar pasar al handler normal
+    // para que el movimiento de cámara funcione con dos dedos.
   }
   // Zoom rect: actualizar esquina y redibujar
   if (_edZoomRectActive && _edZoomRectStart) {
