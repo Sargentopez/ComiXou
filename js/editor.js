@@ -24423,15 +24423,22 @@ let _gcpRuleNodeId = 0;        // contador IDs de nodos compartidos
 let _gcpRuleDrag   = null;     // drag activo de guía
 let _gcpRulePanelId = null;    // id de guía con panel abierto
 
-function _gcpPushHistory(snapJSON) {
+function _gcpPushHistory() {
   if (!window._gcpLayers.length) return;
-  const snap = snapJSON || JSON.stringify(window._gcpLayers.map(la => {
-    const fi = Math.min(window._gcpGlobalFrameIdx, (la._frames||[]).length - 1);
-    return fi >= 0 && la._frames && la._frames[fi] ? {...la._frames[fi]} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
-  }));
-  // No duplicar si igual al último
+  // Snapshot COMPLETO: arrays _frames de todas las capas + índice global + interp circular.
+  // Necesario para deshacer inserciones de objetos, borrados de frames y cambios de comportamiento.
+  const snap = JSON.stringify({
+    fi:  window._gcpGlobalFrameIdx,
+    cFi: window._gcpCircularInterpFi,
+    cN:  window._gcpCircularInterpN,
+    layers: window._gcpLayers.map(la => ({
+      x: la.x, y: la.y, width: la.width, height: la.height,
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1,
+      gcpVisible: la._gcpVisible, gcpName: la._gcpName,
+      frames: (la._frames || []).map(f => f ? {...f} : null)
+    }))
+  });
   if (window._gcpHistoryIdx >= 0 && window._gcpHistory[window._gcpHistoryIdx] === snap) return;
-  // Truncar futuros
   window._gcpHistory = window._gcpHistory.slice(0, window._gcpHistoryIdx + 1);
   window._gcpHistory.push(snap);
   if (window._gcpHistory.length > 30) window._gcpHistory.shift();
@@ -24454,15 +24461,27 @@ function _gcpRedo() {
 function _gcpApplyHistorySnap(snap) {
   if (!snap) return;
   const state = JSON.parse(snap);
-  state.forEach((s, i) => {
+  // Restaurar número de capas: si el snapshot tiene menos → eliminar las extras (deshacer inserción)
+  // Si tiene más → no podemos recuperar capas borradas (datos de imagen perdidos)
+  while (window._gcpLayers.length > state.layers.length) window._gcpLayers.pop();
+  // Restaurar datos de cada capa
+  state.layers.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
-    la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity??1;
-    if (la._frames) {
-      const fi = Math.min(window._gcpGlobalFrameIdx, la._frames.length - 1);
-      if (fi >= 0) la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation,opacity:la.opacity,visible:s.visible??true};
-    }
+    la.x = s.x; la.y = s.y; la.width = s.width; la.height = s.height;
+    la.rotation = s.rotation; la.opacity = s.opacity ?? 1;
+    la._gcpVisible = s.gcpVisible; la._gcpName = s.gcpName;
+    la._frames = (s.frames || []).map(f => f ? {...f} : null);
   });
+  // Restaurar estado global
+  window._gcpCircularInterpFi = state.cFi ?? -1;
+  window._gcpCircularInterpN  = state.cN  ??  3;
+  const _total = _gcpGetTotalFrames();
+  window._gcpGlobalFrameIdx = (_total > 0)
+    ? Math.min(state.fi, _total - 1) : 0;
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
+  _gcpInvalidateAllThumbs();
+  _gcpUpdateFrameNav();
+  _gcpUpdateFramesBar();
   _gcpRedraw();
   _gcpUpdateUndoRedoBtns();
 }
@@ -24629,7 +24648,6 @@ function _gcpCaptureFrame() {
   window._gcpGlobalFrameIdx = newFi;
   _gcpApplyFrame(newFi);
   _gcpInvalidateAllThumbs();
-  _gcpClearHistory();
   _gcpPushHistory();
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
@@ -25871,6 +25889,7 @@ function _gcpUpdateFramesBar() {
         delBtnH.addEventListener('click', e => {
           e.stopPropagation();
           edConfirm('¿Eliminar el fotograma clave ' + (_vi + 1) + ' de todas las capas?', () => {
+            _gcpPushHistory(); // guardar antes de la operación destructiva
             window._gcpLayers.forEach(otherLa => {
               if (otherLa._frames && fi < otherLa._frames.length)
                 otherLa._frames.splice(fi, 1);
@@ -25917,6 +25936,7 @@ function _gcpUpdateFramesBar() {
             rotation: la.rotation || 0, opacity: la.opacity ?? 1, visible: true
           };
           delete _copy._interp;
+          _gcpPushHistory(); // guardar antes de duplicar
           la._frames.splice(fi + 1, 0, _copy);
 
           // Para los demás layers: añadir al final una copia de su último frame invisible
@@ -25951,6 +25971,7 @@ function _gcpUpdateFramesBar() {
         eyeBtn.addEventListener('click', e => {
           e.stopPropagation();
           if (la._frames && fi < la._frames.length) {
+            _gcpPushHistory(); // guardar antes de cambiar visibilidad del frame
             const _nowVis = la._frames[fi].visible !== false;
             la._frames[fi] = {...la._frames[fi], visible: !_nowVis};
             // Al ocultar: purgar interpolados adyacentes (no trim — el frame sigue en el array)
@@ -25973,6 +25994,7 @@ function _gcpUpdateFramesBar() {
         delBtn.addEventListener('click', e => {
           e.stopPropagation();
           edConfirm('¿Eliminar el fotograma clave ' + (_vi + 1) + ' de todas las capas?', () => {
+            _gcpPushHistory(); // guardar antes de la operación destructiva
             window._gcpLayers.forEach(otherLa => {
               if (otherLa._frames && fi < otherLa._frames.length)
                 otherLa._frames.splice(fi, 1);
@@ -26471,6 +26493,7 @@ function _gcpVectorToImage(la, cb) {
 // Shapes y lines se convierten a ImageLayer PNG para independencia entre frames.
 function gcpInsertFromBib(entry) {
   const doInsert = (la) => {
+    _gcpPushHistory(); // guardar estado ANTES de insertar el objeto (para poder deshacer)
     if (la.type === 'image' && la.img) {
       const origOnload = la.img.onload;
       la.img.onload = function() { if (origOnload) origOnload.call(this); _gcpRedraw(); };
@@ -27088,6 +27111,7 @@ function _gcpDoClose() {
   if (shell) shell.style.display = 'none';
   window._gcpActive = false;
   window._gcpEdLayerIdx = -1;
+  _gcpClearHistory(); // borrar historial al salir del editor de animaciones
   _gs = null;
   gcpCanvas = null; gcpCtx = null;
   document.getElementById('editorShell')?.classList.remove('gcp-open');
