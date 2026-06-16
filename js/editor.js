@@ -11708,8 +11708,7 @@ function edMoveBrush(e){
   if(edActiveTool==='fill' && (typeof edFillBrushType==='undefined' || edFillBrushType!=='watercolor')){
     // Relleno normal: sin cursor circular
     cur.style.display='none';
-    // No ocultar el cursor de desplazamiento cuando está activo (dodge/burn con COF)
-    if(!_cof.on) _edOffsetHide();
+    _edOffsetHide();
     return;
   }
   if(_cof.on){
