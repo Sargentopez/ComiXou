@@ -1436,7 +1436,9 @@ class TextLayer extends BaseLayer {
   draw(ctx,can){
     const pw=edPageW(), ph=edPageH();
     const w=this.width*pw, h=this.height*ph;
-    const px=edMarginX()+this.x*pw, py=edMarginY()+this.y*ph;
+    const _tlCurX=(_edViewerMode||_edMpPreviewActive)&&this._pathCurX!=null?this._pathCurX:this.x;
+    const _tlCurY=(_edViewerMode||_edMpPreviewActive)&&this._pathCurY!=null?this._pathCurY:this.y;
+    const px=edMarginX()+_tlCurX*pw, py=edMarginY()+_tlCurY*ph;
     ctx.save();
     ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
     // Fondo y borde se dibujan en espacio local (tras la rotación)
@@ -1606,7 +1608,9 @@ class BubbleLayer extends BaseLayer {
   draw(ctx,can){
     const pw=edPageW(), ph=edPageH();
     const w=this.width*pw, h=this.height*ph;
-    const pos={x:edMarginX()+this.x*pw, y:edMarginY()+this.y*ph};
+    const _blCurX=(_edViewerMode||_edMpPreviewActive)&&this._pathCurX!=null?this._pathCurX:this.x;
+    const _blCurY=(_edViewerMode||_edMpPreviewActive)&&this._pathCurY!=null?this._pathCurY:this.y;
+    const pos={x:edMarginX()+_blCurX*pw, y:edMarginY()+_blCurY*ph};
     const isSingle=this.text.trim().length===1&&/[a-zA-Z0-9]/.test(this.text.trim());
     ctx.save();ctx.translate(pos.x,pos.y);
 
@@ -3893,7 +3897,7 @@ function edRedraw(){
   const _editingShape = (_panelOpen && (_panelMode==='shape' || _panelMode==='line'))
     || !!_edShapePreview || !!_edLineLayer
     || $('edShapeBar')?.classList.contains('visible');
-  const _editingProps = _panelOpen && _panelMode === 'props' && edSelectedIdx >= 0;
+  const _editingProps = _panelOpen && (_panelMode === 'props' || _panelMode === 'text-props') && edSelectedIdx >= 0;
   // También hay edición activa cuando se está manipulando un objeto (drag/resize/rotate/tail)
   // aunque el panel no esté abierto — garantiza el dimming durante el desplazamiento
   const _manipulating = edSelectedIdx >= 0 &&
@@ -4241,7 +4245,7 @@ function edDrawSel(){
   }
   // Handles vértices explosión: solo visibles editando (panel abierto)
   if(la.type==='bubble' && la.style==='explosion' &&
-     ($('edOptionsPanel')?.dataset.mode==='bubble' || $('edOptionsPanel')?.dataset.mode==='props')){
+     ($('edOptionsPanel')?.dataset.mode==='bubble' || $('edOptionsPanel')?.dataset.mode==='props' || $('edOptionsPanel')?.dataset.mode==='text-props')){
     const _HR=6/z;
     la._initExplosionRadii();
     const _pw=edPageW(),_ph=edPageH();
@@ -6451,8 +6455,13 @@ function _edHandleDoubleTap(idx){
     _edDrawLockUI(); _edPropsOverlayShow();
     edRenderOptionsPanel('props');
     edRedraw();
+  } else if (la && (la.type === 'text' || la.type === 'bubble')) {
+    edSelectedIdx = idx;
+    _edDrawLockUI(); _edPropsOverlayShow();
+    edRenderOptionsPanel('text-props');
+    edRedraw();
   } else {
-    // image, text, bubble y cualquier otro tipo
+    // image y cualquier otro tipo
     edSelectedIdx = idx;
     _edDrawLockUI(); _edPropsOverlayShow();
     edRenderOptionsPanel('props');
@@ -6793,7 +6802,16 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const _la = (layerIdx != null && layerIdx >= 0) ? edLayers[layerIdx] : null;
-  const bx = _la ? _la.x : 0, by = _la ? _la.y : 0;
+  // Si la capa pertenece a un grupo, usar el centro del grupo como origen del recorrido
+  let bx, by;
+  if (_la && _la.groupId) {
+    const _gmbrs = _edGroupMemberIdxs(_la.groupId).map(i => edLayers[i]).filter(Boolean);
+    const _gxs = _gmbrs.map(m => m.x || 0.5), _gys = _gmbrs.map(m => m.y || 0.5);
+    bx = (_gxs.reduce((a,b)=>a+b,0) / _gxs.length);
+    by = (_gys.reduce((a,b)=>a+b,0) / _gys.length);
+  } else {
+    bx = _la ? _la.x : 0; by = _la ? _la.y : 0;
+  }
   // Convertir coords relativas → absolutas de workspace
   const toWs = p => ({ x: mx + (bx + p.x) * pw, y: my + (by + p.y) * ph });
   edCtx.save();
@@ -7852,7 +7870,7 @@ function edOnStart(e){
   const c=edCoords(e);
   // Cola bocadillo — solo cuando el panel de propiedades del bocadillo está abierto
   const _bubblePanelOpen = $('edOptionsPanel')?.classList.contains('open') &&
-                           $('edOptionsPanel')?.dataset.mode === 'props';
+                           ($('edOptionsPanel')?.dataset.mode === 'props' || $('edOptionsPanel')?.dataset.mode === 'text-props');
   if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='bubble' && _bubblePanelOpen){
     const la=edLayers[edSelectedIdx];
     // Helper: distancia en píxeles de pantalla entre punto normalizado y toque
@@ -8621,7 +8639,15 @@ function edOnMove(e){
       // Dibujo activo: acumular puntos del recorrido
       const _mm = edCoords(e);
       const _la1 = edLayers[_edMotionPathTarget];
-      const _bx  = _la1 ? _la1.x : 0.5, _by = _la1 ? _la1.y : 0.5;
+      // Si la capa pertenece a un grupo, usar el centro del grupo como base
+      let _bx, _by;
+      if (_la1 && _la1.groupId) {
+        const _gm1 = _edGroupMemberIdxs(_la1.groupId).map(i => edLayers[i]).filter(Boolean);
+        _bx = _gm1.reduce((a,m)=>a+(m.x||0.5),0) / _gm1.length;
+        _by = _gm1.reduce((a,m)=>a+(m.y||0.5),0) / _gm1.length;
+      } else {
+        _bx = _la1 ? _la1.x : 0.5; _by = _la1 ? _la1.y : 0.5;
+      }
       const _last = _edMotionPathRaw[_edMotionPathRaw.length - 1];
       if (_last) {
         const _rx = +(_mm.nx - _bx).toFixed(4);
@@ -11682,7 +11708,8 @@ function edMoveBrush(e){
   if(edActiveTool==='fill' && (typeof edFillBrushType==='undefined' || edFillBrushType!=='watercolor')){
     // Relleno normal: sin cursor circular
     cur.style.display='none';
-    _edOffsetHide();
+    // No ocultar el cursor de desplazamiento cuando está activo (dodge/burn con COF)
+    if(!_cof.on) _edOffsetHide();
     return;
   }
   if(_cof.on){
@@ -12752,6 +12779,100 @@ function _edFinishLine() {
 
 // Congela TODOS los DrawLayers de la página actual, de abajo a arriba.
 // Usado tras un recorte de DrawLayer, que deja temporalmente 2 DrawLayers.
+// Convierte una capa de texto/burbuja en un StrokeLayer correctamente congelado
+// con FillLayer (texto renderizado), PencilLayer y WatercolorLayer vacíos.
+function _edTextToDrawing(idx) {
+  const page = edPages[edCurrentPage]; if (!page) return;
+  const la = edLayers[idx];
+  if (!la || (la.type !== 'text' && la.type !== 'bubble')) return;
+
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+
+  // ── 1. Renderizar el texto a un canvas workspace ──────────────────────────
+  const wsCanvas = document.createElement('canvas');
+  wsCanvas.width  = ED_CANVAS_W;
+  wsCanvas.height = ED_CANVAS_H;
+  la.draw(wsCanvas.getContext('2d'), wsCanvas);
+
+  // ── 2. Calcular bbox del contenido renderizado ────────────────────────────
+  const bb = StrokeLayer._boundingBox(wsCanvas);
+  if (!bb) { edToast('El texto está vacío'); return; } // nada que convertir
+
+  const uX0 = bb.x, uY0 = bb.y, uW = Math.max(1, bb.w), uH = Math.max(1, bb.h);
+  const uCx = (uX0 + uW / 2 - mx) / pw;
+  const uCy = (uY0 + uH / 2 - my) / ph;
+  const uFw = uW / pw;
+  const uFh = uH / ph;
+  const uid = 'dl_' + Date.now().toString(36);
+
+  // ── 3. StrokeLayer (pen vacío, pero con bbox correcto) ───────────────────
+  const penCanvas = document.createElement('canvas');
+  penCanvas.width = uW; penCanvas.height = uH; // vacío transparente
+  const sl = new StrokeLayer(penCanvas);
+  sl._uid               = uid;
+  sl._fillLayerId       = uid;
+  sl._pencilLayerId     = uid;
+  sl._watercolorLayerId = uid;
+  sl.x      = uCx; sl.y      = uCy;
+  sl.width  = uFw; sl.height = uFh;
+  sl.rotation = 0;
+  sl.opacity = la.opacity ?? 1;
+  sl._bboxOriginX = uX0; sl._bboxOriginY = uY0;
+  if (la.groupId)     sl.groupId     = la.groupId;
+  if (la.locked)      sl.locked      = true;
+  if (la.hidden)      sl.hidden      = true;
+  if (la._motionPath) {
+    sl._motionPath       = la._motionPath.map(p => ({x:p.x, y:p.y}));
+    sl._motionPathClosed = la._motionPathClosed || false;
+    sl._motionSpeed      = la._motionSpeed || 100;
+  }
+
+  // ── Helper: recortar canvas workspace al bbox ─────────────────────────────
+  const _cropWs = (srcCanvas) => {
+    const c = document.createElement('canvas');
+    c.width = uW; c.height = uH;
+    c.getContext('2d').drawImage(srcCanvas, uX0, uY0, uW, uH, 0, 0, uW, uH);
+    return c;
+  };
+
+  // ── 4. FillLayer con el texto recortado al bbox ──────────────────────────
+  const fl = new FillLayer();
+  fl._drawLayerId = uid; fl._uid = 'fl_' + uid;
+  fl._canvas = _cropWs(wsCanvas); fl._ctx = fl._canvas.getContext('2d');
+  fl._isWorkspaceCanvas = false;
+  fl._bboxOriginX = uX0; fl._bboxOriginY = uY0;
+  fl.x = uCx; fl.y = uCy; fl.width = uFw; fl.height = uFh; fl.rotation = 0;
+  fl.opacity = la.opacity ?? 1;
+  if (la.groupId) fl.groupId = la.groupId;
+
+  // ── 5. PencilLayer vacío recortado ────────────────────────────────────────
+  const pl = new PencilLayer();
+  pl._drawLayerId = uid; pl._uid = 'pencil_' + uid;
+  pl._canvas = _cropWs(pl._canvas); pl._ctx = pl._canvas.getContext('2d');
+  pl._isWorkspaceCanvas = false;
+  pl._bboxOriginX = uX0; pl._bboxOriginY = uY0;
+  pl.x = uCx; pl.y = uCy; pl.width = uFw; pl.height = uFh; pl.rotation = 0;
+  if (la.groupId) pl.groupId = la.groupId;
+
+  // ── 6. WatercolorLayer vacío recortado ───────────────────────────────────
+  const wl = new WatercolorLayer();
+  wl._drawLayerId = uid; wl._uid = 'wc_' + uid;
+  wl._canvas = _cropWs(wl._canvas); wl._ctx = wl._canvas.getContext('2d');
+  wl._isWorkspaceCanvas = false;
+  wl._bboxOriginX = uX0; wl._bboxOriginY = uY0;
+  wl.x = uCx; wl.y = uCy; wl.width = uFw; wl.height = uFh; wl.rotation = 0;
+  if (la.groupId) wl.groupId = la.groupId;
+
+  // ── 7. Sustituir el texto: orden visual fill→watercolor→pencil→stroke ────
+  page.layers.splice(idx, 1, fl, wl, pl, sl);
+  edLayers = page.layers;
+  edSelectedIdx = page.layers.indexOf(sl);
+  edCloseOptionsPanel();
+  edPushHistory();
+  edRedraw();
+}
+
 function _edFreezeAllDrawLayers(){
   const page = edPages[edCurrentPage]; if(!page) return;
   // Iterar hasta que no quede ningún DrawLayer en la página
@@ -13804,6 +13925,81 @@ function edRenderOptionsPanel(mode){
     edRedraw();return;
   }
 
+
+  if(mode==='text-props'){
+    if(edSelectedIdx<0||edSelectedIdx>=edLayers.length){
+      panel.classList.remove('open');panel.innerHTML='';requestAnimationFrame(edFitCanvas);return;
+    }
+    panel.dataset.mode = 'text-props';
+    const la=edLayers[edSelectedIdx];
+    _edFocusDone = false;
+    const isBubble = la.type==='bubble';
+    const editLabel = isBubble ? '💬 Editar bocadillo' : '✏️ Editar texto';
+    panel.innerHTML=`
+      <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
+      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+        <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
+        <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
+      </div>
+      <div class="op-prop-row">
+        <button id="pp-tp-edit" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${editLabel}</button>
+      </div>
+      ${_edPathRowHtml(la)}
+      <div class="op-prop-row">
+        <button id="pp-text-to-draw" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🖼️ Convertir en imagen</button>
+      </div>
+      <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
+        <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
+        ${la.groupId
+          ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
+          : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`}
+        <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:${la.locked?'var(--gray-800)':'var(--gray-100)'};color:${la.locked?'var(--white)':'var(--gray-700)'}" title="${la.locked?'Desbloquear':'Bloquear'}">${la.locked?'🔒':'🔓'}</button>
+        <button id="op-panel-collapse" title="Minimizar panel" style="background:var(--yellow);border:1.5px solid var(--black);font-weight:900;border-radius:6px;padding:4px 8px;font-size:.82rem;cursor:pointer;flex-shrink:0">▲</button>
+      </div>`;
+    panel.classList.add('open');
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
+    $('pp-opacity')?.addEventListener('input',(e)=>{
+      const _la2=edLayers[edSelectedIdx]; if(!_la2) return;
+      _la2.opacity=+e.target.value/100;
+      const _ov=$('pp-opacity-val'); if(_ov) _ov.textContent=e.target.value+'%';
+      edRedraw();
+    });
+    $('pp-opacity')?.addEventListener('change',()=>edPushHistory());
+    $('pp-tp-edit')?.addEventListener('click',()=>{ edRenderOptionsPanel('props'); });
+    $('pp-text-to-draw')?.addEventListener('click',()=>{ if(edSelectedIdx>=0) _edTextToDrawing(edSelectedIdx); });
+    $('pp-del')?.addEventListener('click',()=>{
+      edConfirm('¿Eliminar este objeto?', ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
+    });
+    $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
+    $('pp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
+    $('pp-lock')?.addEventListener('click',()=>{
+      const _la3=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!_la3) return;
+      _la3.locked=!_la3.locked; edPushHistory();
+      const _btn3=$('pp-lock');
+      if(_btn3){ _btn3.textContent=_la3.locked?'🔒':'🔓'; _btn3.style.background=_la3.locked?'var(--gray-800)':'var(--gray-100)'; _btn3.style.color=_la3.locked?'var(--white)':'var(--gray-700)'; _btn3.title=_la3.locked?'Desbloquear':'Bloquear'; }
+    });
+    $('pp-path-btn')?.addEventListener('click',()=>{
+      const _pidx=edSelectedIdx; if(_pidx<0) return;
+      edCloseOptionsPanel(); _edDrawUnlockUI(); _edPropsOverlayHide();
+      _edStartMotionPath(_pidx);
+    });
+    $('pp-del-path')?.addEventListener('click',()=>{
+      const _pla=edLayers[edSelectedIdx]; if(!_pla) return;
+      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed;
+      edRenderOptionsPanel('text-props');
+    });
+    $('pp-path-speed')?.addEventListener('input',(ev)=>{
+      const _pla=edLayers[edSelectedIdx]; if(!_pla) return;
+      _pla._motionSpeed=+ev.target.value;
+      const _psv=$('pp-path-speed-val'); if(_psv) _psv.textContent=ev.target.value+'px/s';
+    });
+    $('pp-path-speed')?.addEventListener('change',()=>edPushHistory());
+    $('op-panel-collapse')?.addEventListener('click',()=>{
+      const _p=$('edOptionsPanel'); if(!_p) return; _p.classList.toggle('panel-collapsed');
+    });
+    requestAnimationFrame(edFitCanvas); return;
+  }
+
   if(mode==='props'){
     if(edSelectedIdx<0||edSelectedIdx>=edLayers.length){
       panel.classList.remove('open');panel.innerHTML='';requestAnimationFrame(edFitCanvas);return;
@@ -14296,6 +14492,9 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
+    $('pp-text-to-draw')?.addEventListener('click',()=>{
+      if(edSelectedIdx>=0) _edTextToDrawing(edSelectedIdx);
+    });
     // Botón colapso para text/bubble — mismo patrón que panel draw/shape
     $('op-panel-collapse')?.addEventListener('click', () => {
       const _p = $('edOptionsPanel'); if (!_p) return;
@@ -17914,7 +18113,11 @@ function edSerLayer(l){
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
-    if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; return _o;}
+    if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true;
+    if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPathClosed)_o._motionPathClosed=true;
+    if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;
+    return _o;}
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
       _hasText:!!(l.text&&l.text!=='Escribe aquí'),
@@ -17984,6 +18187,9 @@ function edSerLayer(l){
         _bobj._renderH=_maxOY*2;
       }catch(e){}
     }
+    if(l._motionPath&&l._motionPath.length>=2)_bobj._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPathClosed)_bobj._motionPathClosed=true;
+    if(l._motionSpeed!=null)_bobj._motionSpeed=l._motionSpeed;
     return _bobj;
   }
   if(l.type==='group') return null; // obsoleto
@@ -19164,6 +19370,7 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
   fctx.fillStyle = '#fff';
   fctx.fillRect(mx, my, pw, ph);
 
+  _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY
   page.layers.forEach(l => {
     if (l.type==='text' || l.type==='bubble') return;
     fctx.globalAlpha = l.opacity ?? 1;
@@ -19171,6 +19378,7 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
     fctx.globalAlpha = 1;
   });
   _edViewerDrawTextsOnCtx(page, fctx, full);
+  _edViewerMode = false;
   ctx.clearRect(0, 0, pw, ph);
   ctx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
 
@@ -19515,8 +19723,8 @@ function edUpdateViewer(){
     }
   });
   const _finishViewer = () => {
-    _edViewerMode = false; // restaurar antes de cualquier redibujado del canvas editor
     _edViewerDrawTextsOnCtx(page, fctx, full);
+    _edViewerMode = false; // restaurar DESPUÉS de dibujar textos y bocadillos
     // Restaurar antes de manipular el DOM
     edOrientation=_savedOrient;
     // Copiar zona del lienzo al viewerCanvas

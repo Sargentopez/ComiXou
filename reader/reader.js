@@ -2085,7 +2085,9 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   // Si tiene bitmap prerenderizado: dibujar forma + texto juntos (respeta sequential)
   if (t._bubbleLayerImg && t._bubbleLayer && t._bubbleLayer.renderDataUrl) {
     const bl = t._bubbleLayer;
-    const x = (bl.x || 0.5) * pw, y = (bl.y || 0.5) * ph;
+    const _bl1CurX = t._pathCurX != null ? t._pathCurX : (bl.x || 0.5);
+    const _bl1CurY = t._pathCurY != null ? t._pathCurY : (bl.y || 0.5);
+    const x = _bl1CurX * pw, y = _bl1CurY * ph;
     const _rw = bl._renderW !== undefined ? bl._renderW * pw : (bl.width || 0.3) * pw;
     const _rh = bl._renderH !== undefined ? bl._renderH * ph : (bl.height || 0.15) * ph;
     const _pad = bl._renderPad || 0;
@@ -2109,8 +2111,10 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   // Si tiene bitmap prerenderizado (thought/explosion), usarlo directamente
   if (t.renderDataUrl && t._renderImg) {
     const _fromLayers = t.width !== undefined;
-    const _rx = _fromLayers ? (t.x - t.width/2) : (t.x/100);
-    const _ry = _fromLayers ? (t.y - t.height/2) : (t.y/100);
+    const _rtCurX = _fromLayers && t._pathCurX != null ? t._pathCurX : t.x;
+    const _rtCurY = _fromLayers && t._pathCurY != null ? t._pathCurY : t.y;
+    const _rx = _fromLayers ? (_rtCurX - t.width/2) : (t.x/100);
+    const _ry = _fromLayers ? (_rtCurY - t.height/2) : (t.y/100);
     const _rw = _fromLayers ? t.width : ((t.w||30)/100);
     const _rh = _fromLayers ? t.height : ((t.h||15)/100);
     ctx.save();
@@ -2119,8 +2123,8 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     else ctx.drawImage(t._renderImg,_rx*pw,_ry*ph,_rw*pw,_rh*ph);
     ctx.restore();
     // Aún dibujar el texto encima
-    const _cx = _fromLayers ? t.x*pw : (_rx+_rw/2)*pw;
-    const _cy = _fromLayers ? t.y*ph : (_ry+_rh/2)*ph;
+    const _cx = _fromLayers ? _rtCurX*pw : (_rx+_rw/2)*pw;
+    const _cy = _fromLayers ? _rtCurY*ph : (_ry+_rh/2)*ph;
     const fs = Math.max(10, t.font_size||t.fontSize||30);
     ctx.save(); ctx.globalAlpha = alpha;
     ctx.translate(_cx,_cy);
@@ -2136,8 +2140,10 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   // panel_texts: x,y,w,h en % (0-100) con campos w,h
   // panel_layers: x,y en 0-1 (centro), width,height en 0-1
   const _fromLayers = t.width !== undefined || t.height !== undefined;
-  const _rawX = _fromLayers ? (t.x - (t.width  || 0.3) / 2) : (t.x / 100);
-  const _rawY = _fromLayers ? (t.y - (t.height || 0.15)/ 2) : (t.y / 100);
+  const _tCurX = _fromLayers && t._pathCurX != null ? t._pathCurX : t.x;
+  const _tCurY = _fromLayers && t._pathCurY != null ? t._pathCurY : t.y;
+  const _rawX = _fromLayers ? (_tCurX - (t.width  || 0.3) / 2) : (t.x / 100);
+  const _rawY = _fromLayers ? (_tCurY - (t.height || 0.15)/ 2) : (t.y / 100);
   const _rawW = _fromLayers ? (t.width  || 0.3)              : ((t.w  || 30) / 100);
   const _rawH = _fromLayers ? (t.height || 0.15)             : ((t.h  || 15) / 100);
   const x = _rawX * pw;
