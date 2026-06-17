@@ -24924,6 +24924,14 @@ function _gcpIsKeyFrame(fi) {
   return true;
 }
 
+// Fotograma clave anterior más cercano a fi (incluyendo fi mismo si ya es clave).
+function _gcpNearestPrevKeyFrame(fi) {
+  const total = _gcpGetTotalFrames();
+  let f = Math.min(Math.max(fi, 0), total - 1);
+  while (f > 0 && !_gcpIsKeyFrame(f)) f--;
+  return f;
+}
+
 // Número total de fotogramas clave.
 function _gcpGetTotalKeyFrames() {
   const total = _gcpGetTotalFrames();
@@ -25680,22 +25688,29 @@ function _gcpToggleFramesBar() {
 
 // Previsualizar la animación en el canvas GIF (botón ▶)
 let _gcpPreviewTimer = null;
+
+// Detiene el preview en marcha y salta al fotograma clave anterior más cercano.
+// Llamado desde cualquier interacción del editor GCP mientras se previsualiza.
+function _gcpPreviewStop() {
+  if (!_gcpPreviewTimer) return;
+  clearTimeout(_gcpPreviewTimer);
+  _gcpPreviewTimer = null;
+  const btn = document.getElementById('gcpPreviewBtn');
+  if (btn) btn.textContent = '▶';
+  const _snapFi = _gcpNearestPrevKeyFrame(window._gcpGlobalFrameIdx);
+  window._gcpGlobalFrameIdx = _snapFi;
+  _gcpApplyFrame(_snapFi);
+  _gcpRedraw();
+  _gcpUpdateFrameNav();
+  if (edCtx && edCanvas) edRedraw();
+}
+
 function _gcpPreview() {
   const total = _gcpGetTotalFrames();
   if (!total) { edToast('Sin frames para previsualizar'); return; }
-  // Detener si ya está en marcha → saltar siempre al último frame
+  // Detener si ya está en marcha → snap al frame clave anterior
   if (_gcpPreviewTimer) {
-    clearTimeout(_gcpPreviewTimer);
-    _gcpPreviewTimer = null;
-    const _lastFi = total - 1;
-    window._gcpGlobalFrameIdx = _lastFi;
-    _gcpGoToFrame(_lastFi);
-    const btn = document.getElementById('gcpPreviewBtn');
-    if (btn) btn.textContent = '▶';
-    // Restaurar canvas del editor al terminar el preview
-    if (edCtx && edCanvas) {
-      edRedraw();
-    }
+    _gcpPreviewStop();
     return;
   }
   const btn = document.getElementById('gcpPreviewBtn');
@@ -25745,7 +25760,12 @@ function _gcpPreview() {
       _gcpRedraw();
       _gcpUpdateFrameNav();
     } else {
-      _gcpGoToFrame(_previewStartFi);
+      // Detenido externamente (p.ej. toque en gcpShell) → snap al frame clave anterior
+      const _snapFi2 = _gcpNearestPrevKeyFrame(fi);
+      window._gcpGlobalFrameIdx = _snapFi2;
+      _gcpApplyFrame(_snapFi2);
+      _gcpRedraw();
+      _gcpUpdateFrameNav();
     }
     // Restaurar edCanvas tras el preview
     if (edCtx && edCanvas) {
@@ -26836,6 +26856,103 @@ function _gcpRenderLayersDropdown(dd) {
 // Usa el mismo sistema de _edRenderPageThumb: canvas pw×ph con
 // setTransform(1,0,0,1,-mx,-my) para que draw() coloque correctamente.
 // Preserva proporciones recortando al bbox del contenido.
+// Compone un array de items { ld, la } en una sola ImageLayer.
+// ld = datos serializados originales (contiene dataUrl e info de tipo).
+// la = capa ya deserializada y adaptada a orientación (contiene x,y,w,h,rotation adaptados).
+// Las capas con dataUrl (stroke, fill, pencil, watercolor, draw) se cargan en paralelo
+// para resolver el problema de carga asíncrona de fromDataUrl.
+// Las capas vectoriales (shape, line, text, bubble, sin dataUrl) se dibujan con la.draw().
+function _gcpMergeLayersToImage(items, cb) {
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const extra = Math.round(Math.max(pw, ph) * 0.5);
+  const wsW = pw + mx*2 + extra*2;
+  const wsH = ph + my*2 + extra*2;
+  const offX = extra, offY = extra;
+
+  // Cargar dataUrls en paralelo; capas vectoriales resuelven con img=null
+  const promises = items.map(({ ld, la }) => {
+    if (!ld.dataUrl) return Promise.resolve({ la, img: null, type: ld.type });
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve({ la, img, type: ld.type });
+      img.onerror = () => resolve({ la, img: null, type: ld.type });
+      img.src = ld.dataUrl;
+    });
+  });
+
+  Promise.all(promises).then(results => {
+    const off = document.createElement('canvas');
+    off.width = wsW; off.height = wsH;
+    const octx = off.getContext('2d');
+
+    results.forEach(r => {
+      if (!r) return;
+      const { la, img, type } = r;
+      octx.save();
+      octx.globalAlpha = la.opacity ?? 1;
+
+      if (!img) {
+        // Capa vectorial (shape, line, text, bubble): draw() es síncrono
+        octx.setTransform(1, 0, 0, 1, offX, offY);
+        la.draw(octx);
+      } else if (type === 'draw') {
+        // DrawLayer: dataUrl es la zona de página (pw×ph), se restaura en (mx,my)
+        octx.setTransform(1, 0, 0, 1, offX, offY);
+        octx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
+      } else {
+        // StrokeLayer, FillLayer, PencilLayer, WatercolorLayer:
+        // dataUrl es bbox (w*pw × h*ph), centrado en (mx+la.x*pw, my+la.y*ph)
+        const cx = mx + (la.x ?? 0.5) * pw;
+        const cy = my + (la.y ?? 0.5) * ph;
+        const w  = (la.width  ?? 1.0) * pw;
+        const h  = (la.height ?? 1.0) * ph;
+        octx.setTransform(1, 0, 0, 1, offX, offY);
+        octx.translate(cx, cy);
+        if (la.rotation) octx.rotate(la.rotation * Math.PI / 180);
+        octx.drawImage(img, -w/2, -h/2, w, h);
+      }
+      octx.restore();
+    });
+
+    // Bbox por alpha > 10
+    const d = octx.getImageData(0, 0, wsW, wsH).data;
+    let x0=wsW, y0=wsH, x1=0, y1=0;
+    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
+      if (d[(y*wsW+x)*4+3] > 10) {
+        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+      }
+    }
+    if (x1<=x0||y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
+    const pad=4;
+    x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
+    x1=Math.min(wsW-1,x1+pad); y1=Math.min(wsH-1,y1+pad);
+    const cw=x1-x0+1, ch=y1-y0+1;
+
+    const crop = document.createElement('canvas');
+    crop.width=cw; crop.height=ch;
+    crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
+    const dataUrl = crop.toDataURL('image/png');
+
+    const _wsCx = (x0 + x1) / 2 - offX;
+    const _wsCy = (y0 + y1) / 2 - offY;
+    const _nx = (_wsCx - mx) / pw;
+    const _ny = (_wsCy - my) / ph;
+    const normW = cw / pw, normH = ch / ph;
+    const scale = Math.max(normW / 0.9, normH / 0.9, 1);
+
+    const finalImg = new Image();
+    finalImg.onload = () => {
+      const imgLayer = new ImageLayer(finalImg, Math.max(0,Math.min(1,_nx)), Math.max(0,Math.min(1,_ny)), normW/scale);
+      imgLayer.height = normH/scale;
+      imgLayer.src = dataUrl;
+      imgLayer._keepSize = true;
+      cb(imgLayer);
+    };
+    finalImg.src = dataUrl;
+  });
+}
+
 function _gcpVectorToImage(la, cb) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
@@ -26970,15 +27087,21 @@ function gcpInsertFromBib(entry) {
   }
 
   if (entry.isGroup && Array.isArray(entry.layers)) {
-    const newGroupId = _edNewGroupId();
-    entry.layers.forEach(ld => {
-      const la = edDeserLayer(ld, edOrientation);
-      if (!la) return;
-      _adaptGcp(la);
-      la.groupId = newGroupId;
-      delete la._fusionId;
-      insertLayer(la);
-    });
+    // Componer todas las capas del grupo en una sola imagen antes de insertar en GCP.
+    // Pasa tanto el dato serializado (ld, necesario para el dataUrl y el tipo)
+    // como la capa deserializada+adaptada (la, necesaria para las coordenadas finales).
+    const _grpItems = entry.layers
+      .map(ld => {
+        const la = edDeserLayer(ld, edOrientation);
+        if (!la) return null;
+        _adaptGcp(la);
+        delete la._fusionId;
+        return { ld, la };
+      })
+      .filter(Boolean);
+    if (_grpItems.length) {
+      _gcpMergeLayersToImage(_grpItems, imgLayer => doInsert(imgLayer));
+    }
   } else {
     const la = edDeserLayer(entry.layerData, edOrientation);
     if (!la) return;
@@ -27273,6 +27396,10 @@ function gcpOpen(edLayerIdx) {
   // Registrar botones (solo primera vez)
   if (!shell._gcpBound) {
     shell._gcpBound = true;
+
+    // Detener preview al tocar cualquier parte del editor GCP
+    // Detener preview al tocar cualquier parte del editor GCP (excepto el botón ▶/⏹, que gestiona su propio toggle)
+    shell.addEventListener('pointerdown', (e) => { if (e.target.closest('#gcpPreviewBtn')) return; _gcpPreviewStop(); }, { passive: true, capture: true });
 
     document.getElementById('gcpCloseBtn')?.addEventListener('click', gcpClose);
     // Lupa: mismo comportamiento que en el editor general
