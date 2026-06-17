@@ -23433,14 +23433,17 @@ function _bibBindDrag(panel) {
     let _startX = 0, _startY = 0;
     let _longPressTimer = null;
     let _dragActive = false;
-    let _scrolling = false; // true cuando detectamos scroll horizontal nativo
+    let _scrolling = false; // true cuando detectamos scroll horizontal
     let _downEvent = null;
+    // Scroll JS manual horizontal (touch-action:none del shell bloquea scroll nativo)
+    let _rowScroll = null;   // { el: contenedor fila, sl0: scrollLeft inicial }
 
     el.addEventListener('pointerdown', e => {
       if (e.target.classList.contains('_bib-del-item')) return;
       _startX = e.clientX; _startY = e.clientY;
       _dragActive = false;
       _scrolling = false;
+      _rowScroll = null;
       _downEvent = e;
 
       if (e.pointerType === 'touch') {
@@ -23455,7 +23458,12 @@ function _bibBindDrag(panel) {
     }, { passive: true });
 
     el.addEventListener('pointermove', e => {
-      if (_scrolling || _dragActive) return;
+      // Si ya estamos en modo scroll JS, actualizar scrollLeft
+      if (_scrolling && _rowScroll) {
+        _rowScroll.el.scrollLeft = _rowScroll.sl0 - (e.clientX - _startX);
+        return;
+      }
+      if (_dragActive) return;
       const dx = Math.abs(e.clientX - _startX);
       const dy = Math.abs(e.clientY - _startY);
       const dist = Math.hypot(dx, dy);
@@ -23464,11 +23472,12 @@ function _bibBindDrag(panel) {
         // Detectar primero si es scroll horizontal antes de que expire el long-press
         if (dist > DRAG_THRESHOLD) {
           if (dx > dy * H_SCROLL_RATIO) {
-            // Movimiento claramente horizontal → scroll nativo, cancelar long-press
+            // Movimiento claramente horizontal → scroll JS manual
             _scrolling = true;
             if (_longPressTimer) { clearTimeout(_longPressTimer); _longPressTimer = null; }
-            // Liberar captura para que el contenedor pueda hacer scroll
-            try { el.releasePointerCapture(e.pointerId); } catch(_) {}
+            // Encontrar el contenedor de fila con overflow-x
+            const row = el.closest('[style*="overflow-x"]') || el.parentElement;
+            _rowScroll = { el: row, sl0: row ? row.scrollLeft : 0 };
           } else if (_longPressTimer) {
             // Movimiento no horizontal antes del long-press → cancelar drag
             clearTimeout(_longPressTimer); _longPressTimer = null;
