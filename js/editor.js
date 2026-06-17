@@ -10922,8 +10922,8 @@ function _cofStartStroke(e) {
 }
 
 function _cofDraw() {
-  // No mostrar cursor de desplazamiento cuando el bote de pintura está activo
-  if(_edTmp.active === 'bucket') return;
+  // No mostrar cursor de desplazamiento cuando el bote de pintura está activo (no aplica si el borrador está activo)
+  if(_edTmp.active === 'bucket' && edActiveTool === 'fill') return;
   // Visual idéntico al sistema original: contenedor centrado en el punto de arrastre,
   // rotado ang grados. Los hijos están en coordenadas locales verticales.
   const isRed = (_cof.state === 'red_ready' || _cof.state === 'red_cool');
