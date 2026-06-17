@@ -23030,6 +23030,26 @@ function _bibRenderPanel(panel) {
   panel.classList.add('open');
   requestAnimationFrame(edFitCanvas);
 
+  // Scroll manual táctil: touch-action:none del editorShell bloquea scroll nativo.
+  // Interceptamos pointer events en el panel para hacer scroll JS sobre el panel.
+  {
+    let _bsPid = null, _bsY0 = 0, _bsSt0 = 0, _bsDy = 0;
+    panel.addEventListener('pointerdown', function _bibScrollDown(e) {
+      if (e.pointerType !== 'touch') return;
+      // No activar si el toque cae sobre un ítem interactivo (botones, items, nombres)
+      if (e.target.closest('._bib-item,._bib-del-item,._bib-del-folder,#_bib-close-btn,#_bib-btn-folder,._bib-fold-name,button')) return;
+      _bsPid = e.pointerId; _bsY0 = e.clientY; _bsSt0 = panel.scrollTop; _bsDy = 0;
+    }, { passive: true });
+    panel.addEventListener('pointermove', function _bibScrollMove(e) {
+      if (_bsPid === null || e.pointerId !== _bsPid) return;
+      _bsDy = _bsY0 - e.clientY;
+      panel.scrollTop = _bsSt0 + _bsDy;
+    }, { passive: true });
+    const _bibScrollEnd = (e) => { if (e.pointerId === _bsPid) _bsPid = null; };
+    panel.addEventListener('pointerup',     _bibScrollEnd, { passive: true });
+    panel.addEventListener('pointercancel', _bibScrollEnd, { passive: true });
+  }
+
   // ── Cerrar ───────────────────────────────────────────────────
   panel.querySelector('#_bib-close-btn')?.addEventListener('pointerup', e => {
     e.stopPropagation(); _bibClose(panel);
@@ -23147,7 +23167,7 @@ function _bibRenderPanel(panel) {
       if (!entry) return;
 
       // Si el editor GIF está activo, insertar en el canvas GIF
-      if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); return; }
+      if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); window._gcpBibInsertGuard = Date.now() + 400; return; }
 
       // GIF animado guardado desde el editor GIF
       if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
@@ -23768,6 +23788,13 @@ function _gcpDrawMultiSel() {
 }
 
 function _gcpHandleDown(e) {
+  // Guard anti dedo-fantasma: ignorar eventos táctiles generados sinteticamente
+  // por Android al cerrar un overlay (biblioteca, etc.)
+  if (e.pointerType === 'touch' && window._gcpBibInsertGuard && Date.now() < window._gcpBibInsertGuard) {
+    window._gcpBibInsertGuard = 0;
+    _gcpLastTapTime = 0; _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
+    return;
+  }
   // ── DETECCIÓN DE DOBLE TAP: debe ser lo primero, antes de handles/drag ──
   {
     const gc2 = document.getElementById('gcpCanvas');
