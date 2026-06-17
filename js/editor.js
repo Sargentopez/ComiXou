@@ -22732,7 +22732,22 @@ function edBibGuardar() {
     // Guardar grupo completo
     const idxs = edMultiSel.slice();
     if (!idxs.length) { edToast('Selecciona un objeto primero'); return; }
-    const layers = idxs.map(i => edSerLayer(edLayers[i])).filter(Boolean);
+    // Incluir sub-capas (fill, pencil, watercolor) vinculadas a StrokeLayers del grupo.
+    // edGroupSelected no asigna groupId a sub-capas, por eso no están en edMultiSel.
+    const _bibSubSet = new Set(idxs);
+    idxs.forEach(i => {
+      const _sla = edLayers[i];
+      if (!_sla || _sla.type !== 'stroke' || !_sla._uid) return;
+      edLayers.forEach((l, j) => {
+        if (_bibSubSet.has(j)) return;
+        if ((l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') && l._drawLayerId === _sla._uid) {
+          _bibSubSet.add(j);
+        }
+      });
+    });
+    // Mantener orden de edLayers (inferior → superior) para composición correcta
+    const _bibAllIdxs = [..._bibSubSet].sort((a, b) => a - b);
+    const layers = _bibAllIdxs.map(i => edSerLayer(edLayers[i])).filter(Boolean);
     if (!layers.length) { edToast('Error al serializar el grupo'); return; }
     // Miniatura: renderizar todas las capas del grupo juntas
     const thumb = _bibThumbGroup(idxs);
@@ -22851,6 +22866,21 @@ function _bibThumbGroup(idxs) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
 
+  // Expandir idxs con sub-capas (fill/pencil/watercolor) vinculadas a cada StrokeLayer.
+  // edGroupSelected no les asigna groupId, por lo que no están en edMultiSel.
+  const _thumbSet = new Set(idxs);
+  idxs.forEach(i => {
+    const _sla = edLayers[i];
+    if (!_sla || _sla.type !== 'stroke' || !_sla._uid) return;
+    edLayers.forEach((l, j) => {
+      if (_thumbSet.has(j)) return;
+      if ((l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') && l._drawLayerId === _sla._uid) {
+        _thumbSet.add(j);
+      }
+    });
+  });
+  const allIdxs = [..._thumbSet].sort((a, b) => a - b);
+
   // Canvas workspace COMPLETO — captura objetos fuera del lienzo
   const off = document.createElement('canvas');
   off.width = ED_CANVAS_W; off.height = ED_CANVAS_H;
@@ -22860,7 +22890,7 @@ function _bibThumbGroup(idxs) {
 
   // Calcular bbox en coordenadas absolutas de workspace
   let minWX = Infinity, minWY = Infinity, maxWX = -Infinity, maxWY = -Infinity;
-  idxs.forEach(i => {
+  allIdxs.forEach(i => {
     const la = edLayers[i];
     if (!la) return;
     ctx.globalAlpha = la.opacity ?? 1;
@@ -23342,20 +23372,52 @@ function _bibRenderPanel(panel) {
       }
 
       if (entry.isGroup && Array.isArray(entry.layers)) {
-        // Insertar grupo: deserializar cada capa con nuevo groupId común
+        // Insertar grupo: deserializar cada capa con nuevo groupId común.
+        // IMPORTANTE: regenerar todos los UIDs para que el grupo insertado sea completamente
+        // independiente del original — sin UIDs compartidos no hay enlaces cruzados erróneos.
         const newGroupId = _edNewGroupId();
-        let inserted = 0;
-        entry.layers.forEach(ld => {
+
+        // Paso 1: deserializar y adaptar orientación
+        const _grpLas = entry.layers.map(ld => {
           const la = edDeserLayer(ld, edOrientation);
-          if (!la) return;
+          if (!la) return null;
           _adaptLayerOrientation(la);
-          // Asignar nuevo groupId (no reusar el del momento del guardado)
-          la.groupId = newGroupId;
-          // Limpiar _fusionId para evitar fusión involuntaria con sesión vectorial activa
           delete la._fusionId;
-          edLayers.push(la);
-          inserted++;
+          return la;
+        }).filter(Boolean);
+
+        // Paso 2: mapear uid_viejo → uid_nuevo para StrokeLayers
+        const _uidRemap = new Map();
+        const _mkUid = (prefix) => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+        _grpLas.forEach(la => {
+          if (la.type === 'stroke' && la._uid) {
+            const newUid = _mkUid('dl_');
+            _uidRemap.set(la._uid, newUid);
+            // _fillLayerId en stroke = su propio uid (flag + referencia): actualizar igual
+            if (la._fillLayerId) la._fillLayerId = newUid;
+            if (la._pencilLayerId) la._pencilLayerId = newUid;
+            if (la._watercolorLayerId) la._watercolorLayerId = newUid;
+            la._uid = newUid;
+          }
         });
+
+        // Paso 3: actualizar sub-capas con nuevas referencias y nuevos UIDs propios
+        _grpLas.forEach(la => {
+          if (la.type === 'fill' || la.type === 'pencil' || la.type === 'watercolor') {
+            if (la._drawLayerId && _uidRemap.has(la._drawLayerId)) {
+              la._drawLayerId = _uidRemap.get(la._drawLayerId);
+            }
+            const _pre = la.type === 'fill' ? 'fl_' : (la.type === 'pencil' ? 'pencil_' : 'wc_');
+            la._uid = _mkUid(_pre);
+            // Sub-capas no reciben groupId (coherente con edGroupSelected)
+          } else {
+            la.groupId = newGroupId;
+          }
+        });
+
+        // Paso 4: insertar en edLayers respetando el orden (inferior → superior)
+        let inserted = 0;
+        _grpLas.forEach(la => { edLayers.push(la); inserted++; });
         if (!inserted) { edToast('Error al insertar el grupo'); return; }
       } else {
         // Objeto individual
