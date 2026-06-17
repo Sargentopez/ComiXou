@@ -11403,7 +11403,8 @@ function edStartPaint(e){
   _edGetOrCreateDrawLayer(); // asegurar DrawLayer/FillLayer reales existen
   // Seleccionar capa temporal según herramienta activa
   if (edActiveTool === 'fill') {
-    _edTmp.active = 'bucket';
+    // Dodge/burn mantiene 'watercolor' para que _cofDraw() siga funcionando
+    if (!_edDodgeBurnActive) _edTmp.active = 'bucket';
   } else if (edActiveTool === 'eraser') {
     // Borrador: mantiene la capa activa actual
   } else if (typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') {
@@ -11420,9 +11421,12 @@ function edStartPaint(e){
   const _pres = er ? 1 : _edPenPressure(e);
   // Nuevo sistema cursor: iniciar trazo directo sin offset
   if(_cof.on && isTouch){
-    const c = edCoords(_eTmp);
-    const _sz = er ? edEraserSize : edDrawSize;
-    dl.beginStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
+    // Dodge/burn con COF: no pintar en capa temporal — el trazo real se aplica en edContinuePaint
+    if(!_edDodgeBurnActive){
+      const c = edCoords(_eTmp);
+      const _sz = er ? edEraserSize : edDrawSize;
+      dl.beginStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
+    }
     edRedraw();
     return;
   }
