@@ -19637,27 +19637,6 @@ function edInitViewerTap(){
     const adx = Math.abs(dx), ady = Math.abs(dy);
     _sx = null;
 
-    // Hit test de botones antes de navegar (solo tap sin arrastre)
-    if (adx < 20 && ady < 20) {
-      const _vCv = document.getElementById('viewerCanvas');
-      if (_vCv) {
-        const _vRect = _vCv.getBoundingClientRect();
-        const _vpw = edPageW(), _vph = edPageH();
-        const _vscale = Math.min(_vRect.width / _vpw, _vRect.height / _vph);
-        const _vOffX = (_vRect.width  - _vpw * _vscale) / 2;
-        const _vOffY = (_vRect.height - _vph * _vscale) / 2;
-        const _tpx = (endX - _vRect.left - _vOffX) / _vscale;
-        const _tpy = (endY - _vRect.top  - _vOffY) / _vscale;
-        const _vPg = edPages[edViewerIdx];
-        const _hit = _vPg ? _edBtnHitTest(_vPg.layers || [], _tpx, _tpy, _vpw, _vph) : null;
-        if (_hit) {
-          const _ba = _hit._buttonAction;
-          if (_ba.type === 'page') { _viewerGoToPage(_ba.pageIdx); return; }
-          if (_ba.type === 'url')  { window.open(_ba.url, '_blank', 'noopener'); return; }
-        }
-      }
-    }
-
     if (_vNavMode === 'horizontal') {
       if (adx < 30) return;
       if (adx < ady) return; // gesto más vertical, ignorar
@@ -19672,6 +19651,39 @@ function edInitViewerTap(){
       if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
     }
   }, {passive:true, ...sig});
+
+  // ── DETECCIÓN DE BOTONES DE CAPA (ratón y táctil) ──
+  // Funciona para ambos tipos de puntero: touchend cubre táctil, pointerup cubre ratón.
+  let _btnPdX = null, _btnPdY = null;
+  viewer.addEventListener('pointerdown', e => {
+    _btnPdX = e.clientX; _btnPdY = e.clientY;
+  }, { passive: true, ...sig });
+
+  viewer.addEventListener('pointerup', e => {
+    if (_btnPdX === null) return;
+    const _bdx = Math.abs(e.clientX - _btnPdX), _bdy = Math.abs(e.clientY - _btnPdY);
+    _btnPdX = null; _btnPdY = null;
+    if (_bdx > 15 || _bdy > 15) return; // fue swipe, no tap
+    // Obtener el canvas activo del visor (puede cambiar en modo scroll)
+    const _vCv = edViewerCanvas;
+    if (!_vCv) return;
+    const _vRect = _vCv.getBoundingClientRect();
+    // Comprobar que el tap cae dentro del canvas
+    if (e.clientX < _vRect.left || e.clientX > _vRect.right ||
+        e.clientY < _vRect.top  || e.clientY > _vRect.bottom) return;
+    const _vpw = edPageW(), _vph = edPageH();
+    // El canvas buffer es exactamente pw×ph; CSS lo escala para ajustar pantalla
+    const _vcssW = _vRect.width, _vcssH = _vRect.height;
+    const _vtpx  = (e.clientX - _vRect.left) * (_vpw / _vcssW);
+    const _vtpy  = (e.clientY - _vRect.top)  * (_vph / _vcssH);
+    const _vPg   = edPages[edViewerIdx];
+    const _vHit  = _vPg ? _edBtnHitTest(_vPg.layers || [], _vtpx, _vtpy, _vpw, _vph) : null;
+    if (_vHit) {
+      const _ba = _vHit._buttonAction;
+      if (_ba.type === 'page') { _viewerGoToPage(_ba.pageIdx); }
+      else if (_ba.type === 'url') { window.open(_ba.url, '_blank', 'noopener'); }
+    }
+  }, { passive: true, ...sig });
 
   // ── CONTROLES DESKTOP (mouse) ──
   viewer.addEventListener('pointerdown', e => {
@@ -20507,11 +20519,15 @@ function _edOpenBtnModal(la) {
       btn.dataset.pi = pi;
       btn.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 10px;border:none;border-bottom:1px solid var(--gray-200);background:transparent;cursor:pointer;font-family:var(--font-body);font-size:.85rem;font-weight:700';
       btn.textContent = 'Hoja ' + (pi + 1) + (pg.name ? ' — ' + pg.name : '');
-      btn.addEventListener('pointerdown', () => {
+      // Usar pointerdown+pointerup para respuesta inmediata en táctil (click tiene 300ms delay)
+      let _btnPdX = 0, _btnPdY = 0;
+      btn.addEventListener('pointerdown', e => { _btnPdX = e.clientX; _btnPdY = e.clientY; }, { passive: true });
+      btn.addEventListener('pointerup', e => {
+        if (Math.abs(e.clientX - _btnPdX) > 10 || Math.abs(e.clientY - _btnPdY) > 10) return; // fue scroll
         listEl.querySelectorAll('button').forEach(b => b.style.background = 'transparent');
         btn.style.background = 'var(--yellow)';
         listEl.dataset.sel = pi;
-      });
+      }, { passive: true });
       if (pi === 0) { btn.style.background = 'var(--yellow)'; listEl.dataset.sel = 0; }
       listEl.appendChild(btn);
     });
@@ -20544,11 +20560,12 @@ function _edOpenBtnModal(la) {
   setVis();
   document.querySelectorAll('input[name="bamType"]').forEach(r => r.addEventListener('change', setVis));
   overlay.classList.add('open');
-  const _stop = e => e.stopPropagation();
-  overlay.addEventListener('pointerdown', _stop, { capture: true });
+  // Solo bloquear propagación si el evento viene del área fuera del box (fondillo del overlay)
+  const _stop = e => { if (e.target === overlay) e.stopPropagation(); };
+  overlay.addEventListener('pointerdown', _stop);
   const close = (save) => {
     overlay.classList.remove('open');
-    overlay.removeEventListener('pointerdown', _stop, { capture: true });
+    overlay.removeEventListener('pointerdown', _stop);
     if (!save) return;
     const type = document.querySelector('input[name="bamType"]:checked')?.value || 'none';
     if (type === 'none') {
