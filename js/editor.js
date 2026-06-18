@@ -19627,6 +19627,25 @@ function edInitViewerTap(){
     _sy = e.touches[0].clientY;
   }, {passive:true, ...sig});
 
+  // Helper de hit test con coordenadas de tap en px de ventana
+  const _vCheckBtn = (winX, winY) => {
+    const _vCv = edViewerCanvas;
+    if (!_vCv) return false;
+    const _vRect = _vCv.getBoundingClientRect();
+    if (winX < _vRect.left || winX > _vRect.right || winY < _vRect.top || winY > _vRect.bottom) return false;
+    const _vpw = edPageW(), _vph = edPageH();
+    const _vtpx = (winX - _vRect.left) * (_vpw / _vRect.width);
+    const _vtpy = (winY - _vRect.top)  * (_vph / _vRect.height);
+    const _vPg  = edPages[edViewerIdx];
+    const _vHit = _vPg ? _edBtnHitTest(_vPg.layers || [], _vtpx, _vtpy, _vpw, _vph) : null;
+    if (!_vHit) return false;
+    const _ba = _vHit._buttonAction;
+    if (_ba.type === 'page') _viewerGoToPage(_ba.pageIdx);
+    else if (_ba.type === 'url') window.open(_ba.url, '_blank', 'noopener');
+    return true;
+  };
+
+  // TÁCTIL: detección de botones ANTES de la navegación (con return para cancelarla)
   viewer.addEventListener('touchend', e => {
     if(_sx === null) return;
     if(e.changedTouches.length !== 1){ _sx = null; return; }
@@ -19637,52 +19656,34 @@ function edInitViewerTap(){
     const adx = Math.abs(dx), ady = Math.abs(dy);
     _sx = null;
 
+    // Tap preciso: comprobar botones de capa antes de navegar
+    if (adx < 20 && ady < 20 && _vCheckBtn(endX, endY)) return;
+
     if (_vNavMode === 'horizontal') {
       if (adx < 30) return;
-      if (adx < ady) return; // gesto más vertical, ignorar
+      if (adx < ady) return;
       if (dx > 0) _viewerBack(); else _viewerAdvance();
     } else if (_vNavMode === 'vertical') {
       if (ady < 30) return;
-      if (ady < adx) return; // gesto más horizontal, ignorar
+      if (ady < adx) return;
       if (dy > 0) _viewerBack(); else _viewerAdvance();
     } else {
-      // Modo fixed: tap en mitad izquierda/derecha
       if (ady > 40) return;
       if (_isBackSide(endX, endY)) _viewerBack(); else _viewerAdvance();
     }
   }, {passive:true, ...sig});
 
-  // ── DETECCIÓN DE BOTONES DE CAPA (ratón y táctil) ──
-  // Funciona para ambos tipos de puntero: touchend cubre táctil, pointerup cubre ratón.
+  // RATÓN: detección de botones en pointerup (no hay touchend en PC)
   let _btnPdX = null, _btnPdY = null;
   viewer.addEventListener('pointerdown', e => {
-    _btnPdX = e.clientX; _btnPdY = e.clientY;
+    if (e.pointerType === 'mouse') { _btnPdX = e.clientX; _btnPdY = e.clientY; }
   }, { passive: true, ...sig });
-
   viewer.addEventListener('pointerup', e => {
-    if (_btnPdX === null) return;
+    if (e.pointerType !== 'mouse' || _btnPdX === null) return;
     const _bdx = Math.abs(e.clientX - _btnPdX), _bdy = Math.abs(e.clientY - _btnPdY);
     _btnPdX = null; _btnPdY = null;
-    if (_bdx > 15 || _bdy > 15) return; // fue swipe, no tap
-    // Obtener el canvas activo del visor (puede cambiar en modo scroll)
-    const _vCv = edViewerCanvas;
-    if (!_vCv) return;
-    const _vRect = _vCv.getBoundingClientRect();
-    // Comprobar que el tap cae dentro del canvas
-    if (e.clientX < _vRect.left || e.clientX > _vRect.right ||
-        e.clientY < _vRect.top  || e.clientY > _vRect.bottom) return;
-    const _vpw = edPageW(), _vph = edPageH();
-    // El canvas buffer es exactamente pw×ph; CSS lo escala para ajustar pantalla
-    const _vcssW = _vRect.width, _vcssH = _vRect.height;
-    const _vtpx  = (e.clientX - _vRect.left) * (_vpw / _vcssW);
-    const _vtpy  = (e.clientY - _vRect.top)  * (_vph / _vcssH);
-    const _vPg   = edPages[edViewerIdx];
-    const _vHit  = _vPg ? _edBtnHitTest(_vPg.layers || [], _vtpx, _vtpy, _vpw, _vph) : null;
-    if (_vHit) {
-      const _ba = _vHit._buttonAction;
-      if (_ba.type === 'page') { _viewerGoToPage(_ba.pageIdx); }
-      else if (_ba.type === 'url') { window.open(_ba.url, '_blank', 'noopener'); }
-    }
+    if (_bdx > 15 || _bdy > 15) return;
+    _vCheckBtn(e.clientX, e.clientY);
   }, { passive: true, ...sig });
 
   // ── CONTROLES DESKTOP (mouse) ──
@@ -20560,8 +20561,8 @@ function _edOpenBtnModal(la) {
   setVis();
   document.querySelectorAll('input[name="bamType"]').forEach(r => r.addEventListener('change', setVis));
   overlay.classList.add('open');
-  // Solo bloquear propagación si el evento viene del área fuera del box (fondillo del overlay)
-  const _stop = e => { if (e.target === overlay) e.stopPropagation(); };
+  // Bloquear propagación en burbuja: los hijos ya recibieron el evento; el editor no debe interferir
+  const _stop = e => e.stopPropagation();
   overlay.addEventListener('pointerdown', _stop);
   const close = (save) => {
     overlay.classList.remove('open');
