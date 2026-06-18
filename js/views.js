@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v29.97</footer>
+    <footer class="app-version">v29.101</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -231,6 +231,35 @@ Router.register('editor', {
         </div>
       </div>
 
+      <!-- Modal de acción de botón (navegación a hoja o URL externa) -->
+      <div id="edBtnModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box" style="max-width:340px;width:92vw;gap:0">
+          <p class="ed-confirm-msg" style="font-size:1rem;margin-bottom:14px">🔗 Acción al tocar</p>
+          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
+              <input type="radio" name="bamType" id="bam-none" value="none" style="accent-color:var(--black);width:18px;height:18px">
+              Sin acción
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
+              <input type="radio" name="bamType" id="bam-page" value="page" style="accent-color:var(--black);width:18px;height:18px">
+              Navegar a hoja…
+            </label>
+            <div id="bam-page-list" style="display:none;max-height:160px;overflow-y:auto;border:1.5px solid var(--gray-300);border-radius:8px;padding:4px;background:var(--white)"></div>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
+              <input type="radio" name="bamType" id="bam-url" value="url" style="accent-color:var(--black);width:18px;height:18px">
+              Abrir URL externa
+            </label>
+            <div id="bam-url-row" style="display:none">
+              <input id="bam-url-input" type="url" placeholder="https://…"
+                style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--gray-300);border-radius:8px;font-size:.9rem;font-family:var(--font-body)">
+            </div>
+          </div>
+          <div class="ed-modal-actions" style="gap:8px">
+            <button id="bam-cancel" class="ed-modal-btn cancel">Cancelar</button>
+            <button id="bam-ok" class="ed-modal-btn ok">✓ OK</button>
+          </div>
+        </div>
+      </div>
       <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
       <div id="edConfirmModal" class="ed-confirm-overlay">
         <div class="ed-confirm-box">

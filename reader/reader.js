@@ -2365,6 +2365,34 @@ function _resetPanelAnims(idx) {
   });
 }
 
+// ── Hit test de botones de capa ──────────────────────────────────────────────
+function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const la = layers[i];
+    if (!la || !la._buttonAction) continue;
+    const cx = (la.x || 0.5) * pw, cy = (la.y || 0.5) * ph;
+    const hw = (la.width  || 1) * pw / 2;
+    const hh = (la.height || 1) * ph / 2;
+    const dx = tapPx - cx, dy = tapPy - cy;
+    const ang = -(la.rotation || 0) * Math.PI / 180;
+    const lx = dx * Math.cos(ang) - dy * Math.sin(ang);
+    const ly = dx * Math.sin(ang) + dy * Math.cos(ang);
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return la;
+  }
+  return null;
+}
+
+// Navegar a un panel específico respetando el estado del reader
+function _rGoToPanel(idx) {
+  if (idx < 0 || idx >= RS.panels.length) return;
+  RS.idx = idx;
+  RS.textStep = _initTextStep(idx);
+  RS.fadeAlpha = 0;
+  _resetPanelAnims(idx);
+  _resizeCanvas();
+  _render();
+}
+
 function advance() {
   if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
   const panel = RS.panels[RS.idx];
@@ -2698,6 +2726,23 @@ function _setupControls() {
     const dy   = Math.abs(endY - sy);
     sx = null;
     if (dy > 40) return;
+    // Comprobar botones de capa (tap sin arrastre)
+    if (dx < 20 && dy < 20) {
+      const _rect = RS.canvas.getBoundingClientRect();
+      const { pw, ph } = _panelDims(RS.idx);
+      const _sc = Math.min(_rect.width / pw, _rect.height / ph);
+      const _ox = (_rect.width  - pw * _sc) / 2;
+      const _oy = (_rect.height - ph * _sc) / 2;
+      const _tpx = (endX - _rect.left - _ox) / _sc;
+      const _tpy = (endY - _rect.top  - _oy) / _sc;
+      const _panel = RS.panels[RS.idx];
+      const _hit = _panel ? _rBtnHitTest(_panel.layers || [], _tpx, _tpy, pw, ph) : null;
+      if (_hit) {
+        const _ba = _hit._buttonAction;
+        if (_ba.type === 'page') { _rGoToPanel(_ba.pageIdx); return; }
+        if (_ba.type === 'url')  { window.open(_ba.url, '_blank', 'noopener'); return; }
+      }
+    }
     // En créditos: swipe horizontal o tap en mitad izquierda → navegar atrás.
     // Tap en mitad derecha o sobre botones HTML → el overlay gestiona.
     if (RS.isCredits) {

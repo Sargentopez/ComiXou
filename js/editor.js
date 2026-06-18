@@ -884,6 +884,20 @@ function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='buck
 // _edTmp.active: 'pen'|'pencil'|'watercolor'|'bucket'
 let _edTmp = { pen:null, pencil:null, watercolor:null, bucket:null, active:'pen' };
 
+// ── Serialización de _buttonAction ──────────────────────────────────────────
+const _edSerLayerOrig = edSerLayer;
+edSerLayer = function(l) {
+  const r = _edSerLayerOrig(l);
+  if (r && l && l._buttonAction) r._buttonAction = Object.assign({}, l._buttonAction);
+  return r;
+};
+const _edDeserLayerOrig = edDeserLayer;
+edDeserLayer = function(d, orient) {
+  const l = _edDeserLayerOrig(d, orient);
+  if (l && d && d._buttonAction) l._buttonAction = Object.assign({}, d._buttonAction);
+  return l;
+};
+
 function _edTmpCreate() {
   _edTmp.pen        = new DrawLayer();
   _edTmp.pencil     = new DrawLayer();
@@ -3927,11 +3941,13 @@ function edRedraw(){
   const _linkedFill = _linkedFillId
     ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === _linkedFillId)
     : null;
-  const _linkedPencil = _activeDraw?._pencilLayerId
-    ? edLayers.find(l => l.type === 'pencil' && l._drawLayerId === _activeDraw._uid)
+  // Usar _activeDraw (modo edición) o _selectedWithFill (StrokeLayer seleccionado)
+  const _linkedDraw = _activeDraw || _selectedWithFill;
+  const _linkedPencil = _linkedDraw?._pencilLayerId
+    ? edLayers.find(l => l.type === 'pencil' && l._drawLayerId === _linkedDraw._uid)
     : null;
-  const _linkedWatercolor = _activeDraw?._watercolorLayerId
-    ? edLayers.find(l => l.type === 'watercolor' && l._drawLayerId === _activeDraw._uid)
+  const _linkedWatercolor = _linkedDraw?._watercolorLayerId
+    ? edLayers.find(l => l.type === 'watercolor' && l._drawLayerId === _linkedDraw._uid)
     : null;
 
   const _isDimmed = (l, i) => {
@@ -13951,6 +13967,9 @@ function edRenderOptionsPanel(mode){
       <div class="op-prop-row">
         <button id="pp-text-to-draw" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🖼️ Convertir en imagen</button>
       </div>
+      <div class="op-prop-row">
+        <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?'🔗 Botón activo ✓':'🔗 Como botón'}</button>
+      </div>
       <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
         <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
         ${la.groupId
@@ -13970,6 +13989,7 @@ function edRenderOptionsPanel(mode){
     $('pp-opacity')?.addEventListener('change',()=>edPushHistory());
     $('pp-tp-edit')?.addEventListener('click',()=>{ edRenderOptionsPanel('props'); });
     $('pp-text-to-draw')?.addEventListener('click',()=>{ if(edSelectedIdx>=0) _edTextToDrawing(edSelectedIdx); });
+    $('pp-btn-action')?.addEventListener('click',()=>{ const _la=edLayers[edSelectedIdx]; if(_la) _edOpenBtnModal(_la); });
     $('pp-del')?.addEventListener('click',()=>{
       edConfirm('¿Eliminar este objeto?', ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
     });
@@ -14396,7 +14416,10 @@ function edRenderOptionsPanel(mode){
       ${_edPathRowHtml(la)}`;
     }
     const _isTextBubble = (la.type==='text'||la.type==='bubble');
-    html+=`<div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
+    html+=`<div class="op-prop-row" style="margin-top:4px">
+      <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?'🔗 Botón activo ✓':'🔗 Como botón'}</button>
+    </div>
+    <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
       ${la.groupId
         ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
@@ -14481,6 +14504,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
+    $('pp-btn-action')?.addEventListener('click',()=>{ const _la=edLayers[edSelectedIdx]; if(_la) _edOpenBtnModal(_la); });
     $('pp-mirror')?.addEventListener('click',()=>{ edMirrorSelected(); });
     $('pp-lock')?.addEventListener('click',()=>{
       const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null; if(!_la) return;
@@ -19613,6 +19637,27 @@ function edInitViewerTap(){
     const adx = Math.abs(dx), ady = Math.abs(dy);
     _sx = null;
 
+    // Hit test de botones antes de navegar (solo tap sin arrastre)
+    if (adx < 20 && ady < 20) {
+      const _vCv = document.getElementById('viewerCanvas');
+      if (_vCv) {
+        const _vRect = _vCv.getBoundingClientRect();
+        const _vpw = edPageW(), _vph = edPageH();
+        const _vscale = Math.min(_vRect.width / _vpw, _vRect.height / _vph);
+        const _vOffX = (_vRect.width  - _vpw * _vscale) / 2;
+        const _vOffY = (_vRect.height - _vph * _vscale) / 2;
+        const _tpx = (endX - _vRect.left - _vOffX) / _vscale;
+        const _tpy = (endY - _vRect.top  - _vOffY) / _vscale;
+        const _vPg = edPages[edViewerIdx];
+        const _hit = _vPg ? _edBtnHitTest(_vPg.layers || [], _tpx, _tpy, _vpw, _vph) : null;
+        if (_hit) {
+          const _ba = _hit._buttonAction;
+          if (_ba.type === 'page') { _viewerGoToPage(_ba.pageIdx); return; }
+          if (_ba.type === 'url')  { window.open(_ba.url, '_blank', 'noopener'); return; }
+        }
+      }
+    }
+
     if (_vNavMode === 'horizontal') {
       if (adx < 30) return;
       if (adx < ady) return; // gesto más vertical, ignorar
@@ -20450,6 +20495,104 @@ function edToast(msg,ms=2000){
 
 // Modal de confirmación propio — evita confirm() nativo que rompe fullscreen en Android
 let _edConfirmCb = null;
+// ── Modal de acción de botón ─────────────────────────────────────────────────
+function _edOpenBtnModal(la) {
+  const overlay = document.getElementById('edBtnModal');
+  if (!overlay) return;
+  const listEl = document.getElementById('bam-page-list');
+  if (listEl) {
+    listEl.innerHTML = '';
+    edPages.forEach((pg, pi) => {
+      const btn = document.createElement('button');
+      btn.dataset.pi = pi;
+      btn.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 10px;border:none;border-bottom:1px solid var(--gray-200);background:transparent;cursor:pointer;font-family:var(--font-body);font-size:.85rem;font-weight:700';
+      btn.textContent = 'Hoja ' + (pi + 1) + (pg.name ? ' — ' + pg.name : '');
+      btn.addEventListener('pointerdown', () => {
+        listEl.querySelectorAll('button').forEach(b => b.style.background = 'transparent');
+        btn.style.background = 'var(--yellow)';
+        listEl.dataset.sel = pi;
+      });
+      if (pi === 0) { btn.style.background = 'var(--yellow)'; listEl.dataset.sel = 0; }
+      listEl.appendChild(btn);
+    });
+  }
+  const act = la._buttonAction;
+  const noneR = document.getElementById('bam-none');
+  const pageR = document.getElementById('bam-page');
+  const urlR  = document.getElementById('bam-url');
+  const urlInput = document.getElementById('bam-url-input');
+  const urlRow = document.getElementById('bam-url-row');
+  const setVis = () => {
+    const v = document.querySelector('input[name="bamType"]:checked')?.value || 'none';
+    if (listEl) listEl.style.display = v === 'page' ? '' : 'none';
+    if (urlRow) urlRow.style.display = v === 'url' ? '' : 'none';
+  };
+  if (act?.type === 'page') {
+    if (pageR) pageR.checked = true;
+    if (listEl && act.pageIdx != null) {
+      listEl.dataset.sel = act.pageIdx;
+      listEl.querySelectorAll('button').forEach(b => {
+        b.style.background = +b.dataset.pi === act.pageIdx ? 'var(--yellow)' : 'transparent';
+      });
+    }
+  } else if (act?.type === 'url') {
+    if (urlR) urlR.checked = true;
+    if (urlInput) urlInput.value = act.url || '';
+  } else {
+    if (noneR) noneR.checked = true;
+  }
+  setVis();
+  document.querySelectorAll('input[name="bamType"]').forEach(r => r.addEventListener('change', setVis));
+  overlay.classList.add('open');
+  const _stop = e => e.stopPropagation();
+  overlay.addEventListener('pointerdown', _stop, { capture: true });
+  const close = (save) => {
+    overlay.classList.remove('open');
+    overlay.removeEventListener('pointerdown', _stop, { capture: true });
+    if (!save) return;
+    const type = document.querySelector('input[name="bamType"]:checked')?.value || 'none';
+    if (type === 'none') {
+      delete la._buttonAction;
+    } else if (type === 'page') {
+      la._buttonAction = { type: 'page', pageIdx: +(listEl?.dataset.sel ?? 0) };
+    } else if (type === 'url') {
+      la._buttonAction = { type: 'url', url: (urlInput?.value?.trim() || '') };
+    }
+    edPushHistory();
+    const ppBtn = document.getElementById('pp-btn-action');
+    if (ppBtn) { ppBtn.textContent = la._buttonAction ? '🔗 Botón activo ✓' : '🔗 Como botón'; ppBtn.style.background = la._buttonAction ? 'var(--yellow)' : 'var(--gray-100)'; }
+  };
+  document.getElementById('bam-ok')?.addEventListener('click', () => close(true), { once: true });
+  document.getElementById('bam-cancel')?.addEventListener('click', () => close(false), { once: true });
+}
+
+function _viewerGoToPage(pageIdx) {
+  if (pageIdx < 0 || pageIdx >= edPages.length) return;
+  _edResetPageAnims(edViewerIdx);
+  edViewerIdx = pageIdx;
+  const np = edPages[edViewerIdx];
+  const ntl = (np?.layers || []).filter(l => l.type === 'text' || l.type === 'bubble');
+  edViewerTextStep = (np?.textMode === 'sequential' && ntl.length > 0) ? 1 : 0;
+  _edStartPageAnims(edViewerIdx);
+  edUpdateViewer();
+}
+
+function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const la = layers[i];
+    if (!la || !la._buttonAction) continue;
+    const cx = (la.x || 0.5) * pw, cy = (la.y || 0.5) * ph;
+    const hw = (la.width  || 1) * pw / 2;
+    const hh = (la.height || 1) * ph / 2;
+    const dx = tapPx - cx, dy = tapPy - cy;
+    const ang = -(la.rotation || 0) * Math.PI / 180;
+    const lx = dx * Math.cos(ang) - dy * Math.sin(ang);
+    const ly = dx * Math.sin(ang) + dy * Math.cos(ang);
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return la;
+  }
+  return null;
+}
+
 function edConfirm(msg, onOk, okLabel='Eliminar'){
   const overlay = $('edConfirmModal');
   const msgEl   = $('edConfirmMsg');
@@ -24434,9 +24577,12 @@ function _gcpOpenPropsPanel(la, laIdx) {
         tctx.translate(tmp.width, 0);
         tctx.scale(-1, 1);
         tctx.drawImage(img, 0, 0);
+        const mirroredDataUrl = tmp.toDataURL();
+        // Actualizar src síncronamente para que edSerLayer persista la imagen reflejada
+        newLa.src = mirroredDataUrl;
         const mirroredImg = new Image();
         mirroredImg.onload = () => { newLa.img = mirroredImg; _gcpRedraw(); };
-        mirroredImg.src = tmp.toDataURL();
+        mirroredImg.src = mirroredDataUrl;
       }
       newLa.rotation = -(newLa.rotation || 0);
     } else if (newLa.type === 'stroke') {
@@ -25035,10 +25181,58 @@ function _gcpGetPrevKeyFrameIdx(fi) {
 
 // Inicializar _frames de un layer en el frame de inserción
 function _gcpInitLayerFrames(la, startFi) {
+  const _snap = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
+  const total = _gcpGetTotalFrames();
+
+  // Sin frames existentes (primer objeto): solo el frame de inserción
+  if (total === 0 || !window._gcpLayers.length) {
+    la._frames = [];
+    for (let i = 0; i < startFi; i++) la._frames.push({..._snap, visible:false});
+    la._frames.push({..._snap, visible:true});
+    return;
+  }
+
+  // Tomar la primera capa como referencia de estructura (key frames + bloques interp)
+  const refLa = window._gcpLayers[0];
+  const refFrames = refLa?._frames || [];
+
+  // Extraer lista de frames clave y cuántos interpolados les siguen
+  const _keyPositions = [];  // índice global (en refFrames) de cada frame clave
+  const _interpAfter  = [];  // nº de frames interpolados tras cada clave
+  let ri = 0;
+  while (ri < refFrames.length) {
+    if (!refFrames[ri]?._interp) {
+      _keyPositions.push(ri);
+      let cnt = 0;
+      let rj = ri + 1;
+      while (rj < refFrames.length && refFrames[rj]?._interp) { cnt++; rj++; }
+      _interpAfter.push(cnt);
+      ri = rj;
+    } else { ri++; }
+  }
+
+  // Si la referencia no tiene estructura útil, rellenar con frames clave simples
+  if (_keyPositions.length === 0) {
+    la._frames = [];
+    for (let i = 0; i < total; i++) la._frames.push({..._snap, visible: i >= startFi});
+    return;
+  }
+
+  // Paso 1: construir solo los frames clave (sin interpolados todavía)
   la._frames = [];
-  const inv = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:false};
-  for (let i = 0; i < startFi; i++) la._frames.push({...inv});
-  la._frames.push({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true});
+  _keyPositions.forEach(pos => {
+    la._frames.push({..._snap, visible: pos >= startFi});
+  });
+
+  // Paso 2: insertar bloques de frames interpolados entre cada par de claves
+  let inserted = 0;
+  for (let k = 0; k < _keyPositions.length - 1; k++) {
+    const n = _interpAfter[k];
+    if (n > 0) {
+      _gcpInterpolateSingleLayer(la, k + inserted, n, false);
+      inserted += n;
+    }
+  }
 }
 
 // Aplicar frame global fi a todas las capas
