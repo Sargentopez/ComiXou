@@ -11059,25 +11059,19 @@ function _cofVecActivate() {
   _cof._pendingStart = false;
   _cof._vecNodeIdx = -1;
   _cof.state = 'idle_blue';
-  // Si hay un objeto lineal seleccionado con nodos, hacer snap al primer nodo
-  const _vla = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  if (_vla && _vla.type === 'line' && _vla.points && _vla.points.filter(Boolean).length > 0) {
-    const _firstNodeIdx = _vla.points.findIndex(p => p !== null);
-    _cofVecSnapToNode(_vla, _firstNodeIdx);
-  } else {
-    // Sin nodo: posicionar en el centro del canvas
-    const cv = document.getElementById('editorCanvas');
-    const r  = cv ? cv.getBoundingClientRect()
-                  : { left:0, top:0, width:window.innerWidth, height:window.innerHeight };
-    const cw = r.left + r.width  / 2;
-    const ch = r.top  + r.height / 2;
-    const _rad = _edCursorOffsetAngle * Math.PI / 180;
-    _cof.cursorX = cw; _cof.cursorY = ch;
-    _cof.touchX  = cw - _cof.distDefault * Math.sin(_rad);
-    _cof.touchY  = ch + _cof.distDefault * Math.cos(_rad);
-    _cof.dist = _cof.distDefault;
-  }
-  requestAnimationFrame(() => { _cofDraw(); _cofVecSyncBtn(); });
+  // Posición inicial: centro del canvas (el snap real al nodo lo hace
+  // _cofVecSnapToNode() que siempre se llama justo después desde el tap)
+  const cv = document.getElementById('editorCanvas');
+  const r  = cv ? cv.getBoundingClientRect()
+                : { left:0, top:0, width:window.innerWidth, height:window.innerHeight };
+  const cw = r.left + r.width  / 2;
+  const ch = r.top  + r.height / 2;
+  const _rad = _edCursorOffsetAngle * Math.PI / 180;
+  _cof.cursorX = cw; _cof.cursorY = ch;
+  _cof.touchX  = cw - _cof.distDefault * Math.sin(_rad);
+  _cof.touchY  = ch + _cof.distDefault * Math.cos(_rad);
+  _cof.dist = _cof.distDefault;
+  requestAnimationFrame(() => { _cofVecSyncBtn(); }); // no _cofDraw: aún no hay nodo activo
 }
 
 function _cofVecDeactivate() {
@@ -12805,10 +12799,7 @@ function _edActivateLineTool(isNew, isCreating) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
-    if(!open){ window._edCurveVertIdx=-1; }
-    // COF vectorial: activar por defecto al entrar en edición de nodos (táctil)
-    if (open && window._edIsTouch) _cofVecActivate();
-    else if (!open) _cofVecDeactivate();
+    if(!open){ window._edCurveVertIdx=-1; _cofVecDeactivate(); }
     edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
   $('op-cof-vec-btn')?.addEventListener('click', () => {
