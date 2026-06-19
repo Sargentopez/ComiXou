@@ -19274,6 +19274,30 @@ function _edOpenViewerScroll(navMode) {
     if (_sc0) { _sc0.scrollLeft = 0; _sc0.scrollTop = 0; }
   });
 
+  // ── Helpers: hit test de botones de capa en modo scroll ──
+  function _vsBtnHit(winX, winY) {
+    const cv = edViewerCanvas;
+    if (!cv) return null;
+    const rect = cv.getBoundingClientRect();
+    if (winX < rect.left || winX > rect.right || winY < rect.top || winY > rect.bottom) return null;
+    const page = edPages[edViewerIdx];
+    if (!page) return null;
+    const orient = page.orientation || edOrientation;
+    const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+    const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+    const tapX = (winX - rect.left) * pw / rect.width;
+    const tapY = (winY - rect.top)  * ph / rect.height;
+    return _edBtnHitTest(page.layers || [], tapX, tapY, pw, ph);
+  }
+  function _vsFireBtn(winX, winY) {
+    const hit = _vsBtnHit(winX, winY);
+    if (!hit) return false;
+    const ba = hit._buttonAction;
+    if (ba.type === 'page') _snapTo(ba.pageIdx);
+    else if (ba.type === 'url') window.open(ba.url, '_blank', 'noopener');
+    return true;
+  }
+
   // ── Swipe en el overlay (cuando hay textos pendientes) ──
   let _osx = null, _osy = null;
   overlay.addEventListener('touchstart', e => {
@@ -19289,6 +19313,8 @@ function _edOpenViewerScroll(navMode) {
     const dx = ex - _osx, dy = ey - _osy;
     _osx = null;
     const adx = Math.abs(dx), ady = Math.abs(dy);
+    // Botones de capa: prioridad absoluta sobre navegación
+    if (_vsFireBtn(ex, ey)) return;
     // Ignorar gestos en dirección incorrecta
     if (isH && adx < 20) return;
     if (!isH && ady < 20) return;
@@ -19330,6 +19356,36 @@ function _edOpenViewerScroll(navMode) {
       if (edViewerIdx > 0) _snapTo(edViewerIdx - 1);
     }
   }
+
+  // ── Botones de capa — container táctil (cuando overlay está inactivo) ──
+  let _vsCsx = null, _vsCsy = null;
+  sc.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { _vsCsx = null; return; }
+    _vsCsx = e.touches[0].clientX; _vsCsy = e.touches[0].clientY;
+  }, { passive: true });
+  sc.addEventListener('touchend', e => {
+    if (_vsCsx === null) return;
+    const _cex = e.changedTouches[0].clientX, _cey = e.changedTouches[0].clientY;
+    const _cadx = Math.abs(_cex - _vsCsx), _cady = Math.abs(_cey - _vsCsy);
+    _vsCsx = null;
+    // Solo para taps (no swipes): el scroll nativo ya maneja los swipes
+    if (isH ? _cadx >= 30 : _cady >= 30) return;
+    _vsFireBtn(_cex, _cey);
+  }, { passive: true });
+
+  // ── Botones de capa — ratón / PC (container) ──
+  let _vspdX = null, _vspdY = null;
+  sc.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse') return;
+    _vspdX = e.clientX; _vspdY = e.clientY;
+  }, { passive: true });
+  sc.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'mouse' || _vspdX === null) return;
+    const _sdx = Math.abs(e.clientX - _vspdX), _sdy = Math.abs(e.clientY - _vspdY);
+    _vspdX = null; _vspdY = null;
+    if (_sdx > 15 || _sdy > 15) return;
+    _vsFireBtn(e.clientX, e.clientY);
+  }, { passive: true });
 
   // ── Scroll nativo: detectar llegada a nuevo slide ──
   let _prevSI = 0, _scrollRaf = null, _settling = false;
