@@ -1613,6 +1613,15 @@ function _startScrollReader() {
     const dx = ex - _osx, dy = ey - _osy;
     _osx = null;
     const adx = Math.abs(dx), ady = Math.abs(dy);
+    // Botones de capa: prioridad absoluta sobre navegación de texto/panel
+    if (!RS.isCredits) {
+      const _obhit = _rBtnHitTestCanvas(ex, ey);
+      if (_obhit) {
+        const _oba = _obhit._buttonAction;
+        if (_oba.type === 'page') { _rGoToPanel(_oba.pageIdx); return; }
+        if (_oba.type === 'url')  { window.open(_oba.url, '_blank', 'noopener'); return; }
+      }
+    }
     // En pantalla de créditos: tap (movimiento mínimo) → detectar enlace/botón
     if (RS.isCredits && adx < 20 && ady < 20) {
       return; // el overlay HTML gestiona los clicks en créditos
@@ -1687,6 +1696,48 @@ function _startScrollReader() {
         _mountCreditsWhenScrollEnds(container, isH);
       }
     });
+  }, { passive: true });
+
+  // ── Botones de capa — container táctil (cuando overlay está inactivo) ──
+  // El overlay tiene pointer-events:none cuando no hay textos pendientes;
+  // en ese caso los toques llegan al container de scroll.
+  let _csx = null, _csy = null;
+  container.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { _csx = null; return; }
+    _csx = e.touches[0].clientX;
+    _csy = e.touches[0].clientY;
+  }, { passive: true });
+  container.addEventListener('touchend', e => {
+    if (_csx === null) return;
+    const _cex = e.changedTouches[0].clientX;
+    const _cey = e.changedTouches[0].clientY;
+    const _cadx = Math.abs(_cex - _csx), _cady = Math.abs(_cey - _csy);
+    _csx = null;
+    // Solo taps (< 30 px): los swipes los maneja el scroll nativo
+    if (isH ? _cadx >= 30 : _cady >= 30) return;
+    const _cbhit = _rBtnHitTestCanvas(_cex, _cey);
+    if (!_cbhit) return;
+    const _cba = _cbhit._buttonAction;
+    if (_cba.type === 'page') _rGoToPanel(_cba.pageIdx);
+    else if (_cba.type === 'url') window.open(_cba.url, '_blank', 'noopener');
+  }, { passive: true });
+
+  // ── Botones de capa — ratón / PC (container) ──
+  let _smpdX = null, _smpdY = null;
+  container.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse') return;
+    _smpdX = e.clientX; _smpdY = e.clientY;
+  }, { passive: true });
+  container.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'mouse' || _smpdX === null) return;
+    const _sdx = Math.abs(e.clientX - _smpdX), _sdy = Math.abs(e.clientY - _smpdY);
+    _smpdX = null; _smpdY = null;
+    if (_sdx > 15 || _sdy > 15) return; // fue arrastre, no clic
+    const _sbhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
+    if (!_sbhit) return;
+    const _sba = _sbhit._buttonAction;
+    if (_sba.type === 'page') _rGoToPanel(_sba.pageIdx);
+    else if (_sba.type === 'url') window.open(_sba.url, '_blank', 'noopener');
   }, { passive: true });
 
   // ── Teclado PC ──
