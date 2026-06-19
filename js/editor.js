@@ -4368,6 +4368,22 @@ function edDrawSel(){
     // Si hay un nodo activo, continuar animando el parpadeo
     if(window._edCurveVertIdx >= 0) requestAnimationFrame(()=>{ if(window._edCurveVertIdx>=0) edRedraw(); });
   }
+  // COF vectorial: redibujar cursor DOM tras cada redraw de canvas (mantiene posición tras pan/zoom)
+  if (_cofVecActive && _cof._vecNodeIdx >= 0 && !_cof._dragging && edSelectedIdx >= 0) {
+    const _vrla = edLayers[edSelectedIdx];
+    if (_vrla && _vrla.type === 'line') {
+      const _vabs = _vrla.absPoints();
+      const _vpt  = _vabs[_cof._vecNodeIdx];
+      if (_vpt) {
+        const _vs = _cofVecPageToScreen(_vpt.x, _vpt.y);
+        const _vrad = _edCursorOffsetAngle * Math.PI / 180;
+        _cof.cursorX = _vs.x; _cof.cursorY = _vs.y;
+        _cof.touchX  = _vs.x - _cof.distDefault * Math.sin(_vrad);
+        _cof.touchY  = _vs.y + _cof.distDefault * Math.cos(_vrad);
+        _cofDraw();
+      }
+    }
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -11113,7 +11129,7 @@ function _cofVecSnapToNode(la, nodeIdx) {
   _cof._vecNodeIdx = nodeIdx;
   _cof.state   = 'idle_blue';
   _cof._dragging = false;
-  requestAnimationFrame(_cofDraw);
+  _cofDraw(); // síncrono: garantiza que el cursor aparece en el mismo tick
 }
 
 function _cofVecMoveNode() {
