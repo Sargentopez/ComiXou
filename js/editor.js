@@ -4368,19 +4368,64 @@ function edDrawSel(){
     // Si hay un nodo activo, continuar animando el parpadeo
     if(window._edCurveVertIdx >= 0) requestAnimationFrame(()=>{ if(window._edCurveVertIdx>=0) edRedraw(); });
   }
-  // COF vectorial: redibujar cursor DOM tras cada redraw de canvas (mantiene posición tras pan/zoom)
-  if (_cofVecActive && _cof._vecNodeIdx >= 0 && !_cof._dragging && edSelectedIdx >= 0) {
-    const _vrla = edLayers[edSelectedIdx];
-    if (_vrla && _vrla.type === 'line') {
-      const _vabs = _vrla.absPoints();
+  // ── COF vectorial: cursor sobre el canvas ──────────────────────────────────
+  if (_cofVecActive && _cof._vecNodeIdx >= 0 && _cof.on && edSelectedIdx >= 0) {
+    const _vcla = edLayers[edSelectedIdx];
+    if (_vcla && _vcla.type === 'line') {
+      const _vabs = _vcla.absPoints();
       const _vpt  = _vabs[_cof._vecNodeIdx];
       if (_vpt) {
-        const _vs = _cofVecPageToScreen(_vpt.x, _vpt.y);
-        const _vrad = _edCursorOffsetAngle * Math.PI / 180;
-        _cof.cursorX = _vs.x; _cof.cursorY = _vs.y;
-        _cof.touchX  = _vs.x - _cof.distDefault * Math.sin(_vrad);
-        _cof.touchY  = _vs.y + _cof.distDefault * Math.cos(_vrad);
-        _cofDraw();
+        const _vz = edCamera.z, _vcx = edCamera.x, _vcy = edCamera.y;
+        const _vpw = edPageW(), _vph = edPageH();
+        // Posición del nodo en coordenadas mundo (canvas px)
+        const _nWx = _vpt.x * _vpw + edMarginX();
+        const _nWy = _vpt.y * _vph + edMarginY();
+        // Cuadrado de arrastre
+        let _sWx, _sWy, _curWx, _curWy;
+        if (_cof._dragging) {
+          _curWx = (_cof.cursorX - _vcx) / _vz;
+          _curWy = (_cof.cursorY - _edCanvasTop - _vcy) / _vz;
+          _sWx   = (_cof.touchX  - _vcx) / _vz;
+          _sWy   = (_cof.touchY  - _edCanvasTop - _vcy) / _vz;
+        } else {
+          _curWx = _nWx; _curWy = _nWy;
+          const _vang = (_edCursorOffsetAngle || 0) * Math.PI / 180;
+          const _vd   = (_cof.distDefault || 76) / _vz;
+          _sWx = _nWx - _vd * Math.sin(_vang);
+          _sWy = _nWy + _vd * Math.cos(_vang);
+        }
+        const _vlC = 'rgba(60,140,255,0.9)';
+        const _vdC = (typeof edDrawColor !== 'undefined' && edDrawColor) ? edDrawColor : '#000000';
+        edCtx.save();
+        edCtx.setTransform(_vz, 0, 0, _vz, _vcx, _vcy);
+        edCtx.globalAlpha = 1;
+        edCtx.setLineDash([]);
+        edCtx.shadowBlur = 0;
+        // Línea cursor→cuadrado
+        edCtx.strokeStyle = _vlC;
+        edCtx.lineWidth = 2 / _vz;
+        edCtx.beginPath();
+        edCtx.moveTo(_curWx, _curWy);
+        edCtx.lineTo(_sWx, _sWy);
+        edCtx.stroke();
+        // Cuadrado de arrastre
+        const _vdSz = 18 / _vz;
+        edCtx.fillStyle = _vdC;
+        edCtx.fillRect(_sWx - _vdSz/2, _sWy - _vdSz/2, _vdSz, _vdSz);
+        // Borde blanco del cuadrado
+        edCtx.strokeStyle = 'rgba(255,255,255,0.8)';
+        edCtx.lineWidth = 2 / _vz;
+        edCtx.strokeRect(_sWx - _vdSz/2, _sWy - _vdSz/2, _vdSz, _vdSz);
+        // Círculo cursor (sobre el nodo activo)
+        const _vcR = 8 / _vz;
+        edCtx.beginPath();
+        edCtx.arc(_curWx, _curWy, _vcR, 0, Math.PI * 2);
+        edCtx.fillStyle = _vdC + '44';
+        edCtx.fill();
+        edCtx.strokeStyle = _vlC;
+        edCtx.lineWidth = 2 / _vz;
+        edCtx.stroke();
+        edCtx.restore();
       }
     }
   }
@@ -11000,6 +11045,13 @@ function _cofStartStroke(e) {
 }
 
 function _cofDraw() {
+  // Modo vectorial: cursor dibujado sobre canvas en edRedraw, no se usa DOM overlay
+  if (_cof.vecMode) {
+    const _wv = document.getElementById('edOffsetWrap');
+    if (_wv) _wv.style.display = 'none';
+    edRedraw();
+    return;
+  }
   // No mostrar cursor de desplazamiento cuando el bote de pintura está activo (no aplica si el borrador está activo)
   if(_edTmp.active === 'bucket' && edActiveTool === 'fill' && !_cof.vecMode) return;
   // Visual idéntico al sistema original: contenedor centrado en el punto de arrastre,
@@ -11113,6 +11165,7 @@ function _cofVecDeactivate() {
   _cof._dragging = false;
   _cofHide();
   _cofVecSyncBtn();
+  edRedraw(); // limpiar cursor del canvas
 }
 
 function _cofVecSnapToNode(la, nodeIdx) {
