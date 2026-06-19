@@ -12799,6 +12799,7 @@ function _edActivateLineTool(isNew, isCreating) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
+    if( open && window._edIsTouch) _cofVecActivate();   // activo pero invisible: espera tap en nodo
     if(!open){ window._edCurveVertIdx=-1; _cofVecDeactivate(); }
     edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
