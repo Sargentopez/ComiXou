@@ -1011,6 +1011,8 @@ const _cof = {
   _strokeStarted: false,  // trazo en curso
   _pendingStart: false,   // calculando nueva distancia antes del trazo
   _pendingMoveX: 0, _pendingMoveY: 0,
+  vecMode: false,   // true cuando el COF está en modo edición vectorial de nodos
+  _vecNodeIdx: -1,  // índice del nodo activo (-1 = sin nodo)
 };
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
@@ -8223,6 +8225,17 @@ function edOnStart(e){
   if(_lineSelectMode && e.pointerType === 'touch' && edSelectedIdx >= 0 && _edCurveModeActive && _edCurveModeActive()){
     const _lsLa = edLayers[edSelectedIdx];
     if(_lsLa && _lsLa.type === 'line'){
+      // COF vectorial: toque sobre el cuadrado de arrastre → drag COF (no seleccionar nodo)
+      if (_cofVecActive && _cof.state === 'idle_blue') {
+        const _sqd = Math.hypot(e.clientX - _cof.touchX, e.clientY - _cof.touchY);
+        if (_sqd <= _cof.MARGIN * 2.5) {
+          _edShapePushHistory();
+          _cof._dragging = true;
+          _cof.dist = _cof.distDefault;
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+          return;
+        }
+      }
       // Radio normal para detectar nodos y candidatos de doble-tap
       // Radio ampliado SOLO para iniciar drag del objeto (más fácil desplazar)
       const _hitSegDrag = 48; // táctil: radio drag > radio nodo (28px)
@@ -8254,9 +8267,14 @@ function edOnStart(e){
       // Primer tap: registrar candidato
       _edLastNodeTapTime=_now4; _edLastNodeTapIdx=_hitId3;
       if(_lsHit.type==='node'){
-        // Iniciar drag de nodo
-        _edShapePushHistory();
-        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
+        // COF vectorial: activar si no lo está y snap círculo al nodo
+        if(!_cofVecActive && window._edIsTouch) _cofVecActivate();
+        if(_cofVecActive){
+          _cofVecSnapToNode(_lsLa, _lsHit.idx);
+        } else {
+          _edShapePushHistory();
+          edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
+        }
         if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
         return;
       }
@@ -10835,6 +10853,7 @@ function _cofHandleMove(e) {
     _cof.cursorX = tx + _cof.dist * Math.sin(_radD);
     _cof.cursorY = ty - _cof.dist * Math.cos(_radD);
     _cofDraw();
+    if (_cof.vecMode) _cofVecMoveNode();
     return;
   }
   if (_cof._pendingStart) {
@@ -10878,6 +10897,18 @@ function _cofHandleUp(e) {
   if (!_cof.on) return;
   if (_cof._dragging && _cof.state === 'idle_blue') {
     _cof._dragging = false;
+    if (_cof.vecMode) {
+      // Vectorial: repositionar cuadrado bajo el nodo y guardar historial
+      const _radU = _edCursorOffsetAngle * Math.PI / 180;
+      _cof.touchX = _cof.cursorX - _cof.distDefault * Math.sin(_radU);
+      _cof.touchY = _cof.cursorY + _cof.distDefault * Math.cos(_radU);
+      _cof.dist = _cof.distDefault;
+      _cofDraw();
+      _edShapePushHistory();
+      const _vLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+      if (_vLa && _vLa.type === 'line') _vLa._updateBbox();
+      return;
+    }
     _cof.savedClientX = _cof.cursorX; _cof.savedClientY = _cof.cursorY;
     _cof.state = 'red_ready';
     _cofDraw();
@@ -10939,13 +10970,14 @@ function _cofStartStroke(e) {
 
 function _cofDraw() {
   // No mostrar cursor de desplazamiento cuando el bote de pintura está activo (no aplica si el borrador está activo)
-  if(_edTmp.active === 'bucket' && edActiveTool === 'fill') return;
+  if(_edTmp.active === 'bucket' && edActiveTool === 'fill' && !_cof.vecMode) return;
   // Visual idéntico al sistema original: contenedor centrado en el punto de arrastre,
   // rotado ang grados. Los hijos están en coordenadas locales verticales.
   const isRed = (_cof.state === 'red_ready' || _cof.state === 'red_cool');
   const lineColor = isRed ? 'rgba(220,50,50,0.85)' : 'rgba(60,140,255,0.75)';
   const ang = _edCursorOffsetAngle; // -40, 0, +40 según botón elegido
-  const sz = Math.max(2, Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1)));
+  const sz = _cof.vecMode ? 16
+    : Math.max(2, Math.round((edActiveTool === 'eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1)));
   const cursorR = sz / 2; // radio real sin forzar mínimo — el centrado usa transform
   const isEr = edActiveTool === 'eraser';
   const _isDbC = !!_edDodgeBurnActive; // dodge/burn: sin color
@@ -11006,6 +11038,104 @@ function _cofHide() {
     const c = document.getElementById('edBrushCursor');
     if (c) c.style.display = '';
   }
+}
+// ── COF vectorial — cursor desplazado para edición de nodos ─────────────────
+let _cofVecActive = false;
+
+function _cofVecPageToScreen(nx, ny) {
+  const wx = nx * edPageW() + edMarginX();
+  const wy = ny * edPageH() + edMarginY();
+  const s  = edWorldToScreen(wx, wy);
+  return { x: s.x, y: s.y + _edCanvasTop };
+}
+
+function _cofVecActivate() {
+  if (!window._edIsTouch) return;
+  _cofVecActive = true;
+  _cof.on = true;
+  _cof.vecMode = true;
+  _cof._dragging = false;
+  _cof._strokeStarted = false;
+  _cof._pendingStart = false;
+  _cof._vecNodeIdx = -1;
+  _cof.state = 'idle_blue';
+  // Si hay un objeto lineal seleccionado con nodos, hacer snap al primer nodo
+  const _vla = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if (_vla && _vla.type === 'line' && _vla.points && _vla.points.filter(Boolean).length > 0) {
+    const _firstNodeIdx = _vla.points.findIndex(p => p !== null);
+    _cofVecSnapToNode(_vla, _firstNodeIdx);
+  } else {
+    // Sin nodo: posicionar en el centro del canvas
+    const cv = document.getElementById('editorCanvas');
+    const r  = cv ? cv.getBoundingClientRect()
+                  : { left:0, top:0, width:window.innerWidth, height:window.innerHeight };
+    const cw = r.left + r.width  / 2;
+    const ch = r.top  + r.height / 2;
+    const _rad = _edCursorOffsetAngle * Math.PI / 180;
+    _cof.cursorX = cw; _cof.cursorY = ch;
+    _cof.touchX  = cw - _cof.distDefault * Math.sin(_rad);
+    _cof.touchY  = ch + _cof.distDefault * Math.cos(_rad);
+    _cof.dist = _cof.distDefault;
+  }
+  requestAnimationFrame(() => { _cofDraw(); _cofVecSyncBtn(); });
+}
+
+function _cofVecDeactivate() {
+  _cofVecActive = false;
+  _cof.vecMode = false;
+  _cof._vecNodeIdx = -1;
+  _cof.on = false;
+  _cof._dragging = false;
+  _cofHide();
+  _cofVecSyncBtn();
+}
+
+function _cofVecSnapToNode(la, nodeIdx) {
+  if (!la || nodeIdx < 0 || nodeIdx >= la.points.length) return;
+  const abs = la.absPoints();
+  const pt  = abs[nodeIdx];
+  if (!pt) return;
+  const s = _cofVecPageToScreen(pt.x, pt.y);
+  _cof.cursorX = s.x; _cof.cursorY = s.y;
+  const _rad = _edCursorOffsetAngle * Math.PI / 180;
+  _cof.touchX  = s.x - _cof.distDefault * Math.sin(_rad);
+  _cof.touchY  = s.y + _cof.distDefault * Math.cos(_rad);
+  _cof.dist    = _cof.distDefault;
+  _cof._vecNodeIdx = nodeIdx;
+  _cof.state   = 'idle_blue';
+  _cof._dragging = false;
+  requestAnimationFrame(_cofDraw);
+}
+
+function _cofVecMoveNode() {
+  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if (!la || la.type !== 'line') return;
+  const ni = _cof._vecNodeIdx;
+  if (ni < 0 || ni >= la.points.length || !la.points[ni]) return;
+  const sy  = _cof.cursorY - _edCanvasTop;
+  const w   = edScreenToWorld(_cof.cursorX, sy);
+  const nx  = (w.x - edMarginX()) / edPageW();
+  const ny  = (w.y - edMarginY()) / edPageH();
+  const pw2 = edPageW(), ph2 = edPageH();
+  const rot = -(la.rotation || 0) * Math.PI / 180;
+  const cos = Math.cos(rot), sin = Math.sin(rot);
+  const dx  = (nx - la.x) * pw2, dy = (ny - la.y) * ph2;
+  la.points[ni] = { x: (dx*cos - dy*sin)/pw2, y: (dx*sin + dy*cos)/ph2 };
+  const _rxs = la.points.filter(Boolean).map(p => p.x);
+  const _rys = la.points.filter(Boolean).map(p => p.y);
+  if (_rxs.length) {
+    la.width  = Math.max(Math.max(..._rxs) - Math.min(..._rxs), 0.01);
+    la.height = Math.max(Math.max(..._rys) - Math.min(..._rys), 0.01);
+  }
+  edRedraw();
+}
+
+function _cofVecSyncBtn() {
+  const btn = document.getElementById('op-cof-vec-btn');
+  if (!btn) return;
+  btn.style.background  = _cofVecActive ? 'var(--black)' : 'transparent';
+  btn.style.color       = _cofVecActive ? 'var(--white)' : 'var(--gray-700)';
+  btn.style.borderColor = _cofVecActive ? 'var(--black)' : 'var(--gray-300)';
 }
 
 // Stubs de compatibilidad
@@ -12389,6 +12519,7 @@ function _edActivateLineTool(isNew, isCreating) {
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
     ${!isClosed?`<button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Cerrar objeto</button><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>`:''}
     <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
+    ${window._edIsTouch ? `<button id="op-cof-vec-btn" style="flex-shrink:0;border:1px solid ${_cofVecActive?'var(--black)':' var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:${_cofVecActive?'var(--black)':' transparent'};cursor:pointer;color:${_cofVecActive?'var(--white)':' var(--gray-700)'}" title="Cursor desplazado">✥</button>` : ''}
     ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Fusionar objetos cerrados en uno solo con huecos">⊕ Fusionar</button>` : ''}
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
@@ -12675,7 +12806,13 @@ function _edActivateLineTool(isNew, isCreating) {
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
     if(!open){ window._edCurveVertIdx=-1; }
+    // COF vectorial: activar por defecto al entrar en edición de nodos (táctil)
+    if (open && window._edIsTouch) _cofVecActivate();
+    else if (!open) _cofVecDeactivate();
     edRedraw(); // actualizar canvas al activar O desactivar V⟺C
+  });
+  $('op-cof-vec-btn')?.addEventListener('click', () => {
+    if (_cofVecActive) _cofVecDeactivate(); else _cofVecActivate();
   });
   $('op-line-curve-r')?.addEventListener('input',e=>{
     const v=+e.target.value;
@@ -13163,6 +13300,7 @@ function edCloseOptionsPanel(){
     // Sin esto, _vsHistory queda sucio y edPushHistory queda bloqueado
     // impidiendo guardar movimientos/resize/rotate de cualquier objeto posterior.
     if(_mode==='line' || _mode==='shape'){
+      _cofVecDeactivate(); // desactivar COF vectorial al cerrar el panel
       _edLineFusionId = null;
       // Cerrar sin OK → descartar cambios: restaurar snapshot inicial de la sesión
       if(typeof _vsClear === 'function'){
