@@ -17455,6 +17455,13 @@ async function edSaveProject(_keepOverlay){
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
       textMode: p.textMode || 'sequential',
       texts,
+      buttons: p.layers
+        .filter(l => l && l._buttonAction)
+        .map(l => ({
+          x: l.x, y: l.y, width: l.width, height: l.height,
+          rotation: l.rotation || 0,
+          action: Object.assign({}, l._buttonAction)
+        })),
     };
   });
   // Construir pages serializando capas y externalizando _pngFrames a IDB
@@ -19656,8 +19663,8 @@ function edInitViewerTap(){
     const adx = Math.abs(dx), ady = Math.abs(dy);
     _sx = null;
 
-    // Tap preciso: comprobar botones de capa antes de navegar
-    if (adx < 20 && ady < 20 && _vCheckBtn(endX, endY)) return;
+    // Botones de capa: prioridad absoluta sobre navegación
+    if (_vCheckBtn(endX, endY)) return;
 
     if (_vNavMode === 'horizontal') {
       if (adx < 30) return;

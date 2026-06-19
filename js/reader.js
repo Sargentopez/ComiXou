@@ -216,6 +216,54 @@ function buildReaderTexts(panel, layer) {
 }
 
 // ════════════════════════════════════════
+// BOTONES DE CAPA — HIT TEST (SPA reader)
+// ════════════════════════════════════════
+const _ED_PAGE_W = 360, _ED_PAGE_H = 780;
+
+// Hit test en coordenadas de panel para botones almacenados en panel.buttons
+function _rBtnHitSPA(buttons, tapPx, tapPy, pw, ph) {
+  if (!buttons || !buttons.length) return null;
+  for (let i = buttons.length - 1; i >= 0; i--) {
+    const b = buttons[i];
+    if (!b || !b.action) continue;
+    const cx = b.x * pw, cy = b.y * ph;
+    const hw = b.width * pw / 2;
+    const hh = b.height * ph / 2;
+    const dx = tapPx - cx, dy = tapPy - cy;
+    const ang = -(b.rotation || 0) * Math.PI / 180;
+    const lx = dx * Math.cos(ang) - dy * Math.sin(ang);
+    const ly = dx * Math.sin(ang) + dy * Math.cos(ang);
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return b;
+  }
+  return null;
+}
+
+// Convierte coordenadas de ventana al sistema del panel activo y hace hit test
+function _checkBtnAtPoint(winX, winY) {
+  const idx = ReaderState.currentPanel;
+  const panels = ReaderState.comic?.panels;
+  if (!panels || idx >= panels.length) return false;
+  const panel = panels[idx];
+  if (!panel || !panel.buttons || !panel.buttons.length) return false;
+  const panelEl = document.getElementById('rp_' + idx);
+  const innerEl = panelEl?.querySelector('.reader-panel-inner');
+  if (!innerEl) return false;
+  const rect = innerEl.getBoundingClientRect();
+  const isH = (panel.orientation || 'v') === 'h';
+  const pw = isH ? _ED_PAGE_H : _ED_PAGE_W;
+  const ph = isH ? _ED_PAGE_W : _ED_PAGE_H;
+  const tapX = (winX - rect.left) * pw / rect.width;
+  const tapY = (winY - rect.top)  * ph / rect.height;
+  if (tapX < 0 || tapX > pw || tapY < 0 || tapY > ph) return false;
+  const hit = _rBtnHitSPA(panel.buttons, tapX, tapY, pw, ph);
+  if (!hit) return false;
+  const action = hit.action;
+  if (action.type === 'page') { goToPanel(action.pageIdx); return true; }
+  if (action.type === 'url')  { window.open(action.url, '_blank', 'noopener'); return true; }
+  return false;
+}
+
+// ════════════════════════════════════════
 // NAVEGACIÓN
 // ════════════════════════════════════════
 // El navegador transforma las coordenadas táctiles al sistema del usuario.
@@ -663,6 +711,20 @@ function setupControls() {
     touchStartY = e.touches[0].clientY;
   }, sig);
 
+  // RATÓN / PC: hit test de botones de capa
+  let _rdPdX = null, _rdPdY = null;
+  stage.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse') return;
+    _rdPdX = e.clientX; _rdPdY = e.clientY;
+  }, sig);
+  stage.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'mouse' || _rdPdX === null) return;
+    const _dx = Math.abs(e.clientX - _rdPdX), _dy = Math.abs(e.clientY - _rdPdY);
+    _rdPdX = null; _rdPdY = null;
+    if (_dx > 15 || _dy > 15) return;
+    _checkBtnAtPoint(e.clientX, e.clientY);
+  }, sig);
+
   stage.addEventListener('touchend', (e) => {
     if (e.target.closest('button, a, input, label')) return;
     const endX = e.changedTouches[0].clientX;
@@ -670,6 +732,9 @@ function setupControls() {
     const dx   = endX - touchStartX;
     const dy   = endY - touchStartY;
     const adx  = Math.abs(dx), ady = Math.abs(dy);
+
+    // Botones de capa: prioridad absoluta sobre navegación
+    if (_checkBtnAtPoint(endX, endY)) return;
 
     // En créditos: detectar botón "Volver a leer"
     if (ReaderState.currentPanel === ReaderState.comic.panels.length) {

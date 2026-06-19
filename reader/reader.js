@@ -2366,6 +2366,21 @@ function _resetPanelAnims(idx) {
 }
 
 // ── Hit test de botones de capa ──────────────────────────────────────────────
+// Helper: recibe coordenadas de ventana, devuelve la capa botón bajo el punto
+function _rBtnHitTestCanvas(winX, winY) {
+  if (!RS.canvas) return null;
+  const _rect = RS.canvas.getBoundingClientRect();
+  if (winX < _rect.left || winX > _rect.right || winY < _rect.top || winY > _rect.bottom) return null;
+  const { pw, ph } = _panelDims(RS.idx);
+  const _sc = Math.min(_rect.width / pw, _rect.height / ph);
+  const _ox = (_rect.width  - pw * _sc) / 2;
+  const _oy = (_rect.height - ph * _sc) / 2;
+  const _tpx = (winX - _rect.left - _ox) / _sc;
+  const _tpy = (winY - _rect.top  - _oy) / _sc;
+  const _panel = RS.panels[RS.idx];
+  return _panel ? _rBtnHitTest(_panel.layers || [], _tpx, _tpy, pw, ph) : null;
+}
+
 function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
@@ -2719,30 +2734,24 @@ function _setupControls() {
   }, { passive: true, ...sig });
 
   RS.canvas.addEventListener('touchend', e => {
-    if (sx === null || cancelled) { sx = null; return; }
+    if (sx === null) return;
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
     const dx   = Math.abs(endX - sx);
     const dy   = Math.abs(endY - sy);
-    sx = null;
-    if (dy > 40) return;
-    // Comprobar botones de capa (tap sin arrastre)
-    if (dx < 20 && dy < 20) {
-      const _rect = RS.canvas.getBoundingClientRect();
-      const { pw, ph } = _panelDims(RS.idx);
-      const _sc = Math.min(_rect.width / pw, _rect.height / ph);
-      const _ox = (_rect.width  - pw * _sc) / 2;
-      const _oy = (_rect.height - ph * _sc) / 2;
-      const _tpx = (endX - _rect.left - _ox) / _sc;
-      const _tpy = (endY - _rect.top  - _oy) / _sc;
-      const _panel = RS.panels[RS.idx];
-      const _hit = _panel ? _rBtnHitTest(_panel.layers || [], _tpx, _tpy, pw, ph) : null;
-      if (_hit) {
-        const _ba = _hit._buttonAction;
-        if (_ba.type === 'page') { _rGoToPanel(_ba.pageIdx); return; }
-        if (_ba.type === 'url')  { window.open(_ba.url, '_blank', 'noopener'); return; }
-      }
+    const wasCancelled = cancelled;
+    sx = null; cancelled = false;
+
+    // Botones de capa: prioridad absoluta (incluso sobre cancelled/swipe)
+    const _bhit = _rBtnHitTestCanvas(endX, endY);
+    if (_bhit) {
+      const _ba = _bhit._buttonAction;
+      if (_ba.type === 'page') { _rGoToPanel(_ba.pageIdx); return; }
+      if (_ba.type === 'url')  { window.open(_ba.url, '_blank', 'noopener'); return; }
     }
+
+    if (wasCancelled) return;
+    if (dy > 40) return;
     // En créditos: swipe horizontal o tap en mitad izquierda → navegar atrás.
     // Tap en mitad derecha o sobre botones HTML → el overlay gestiona.
     if (RS.isCredits) {
@@ -2752,6 +2761,24 @@ function _setupControls() {
     }
     // Navegación normal
     if (_isBackSide(endX, endY)) goBack(); else advance();
+  }, { passive: true, ...sig });
+
+  // RATÓN / PC: detección de botones de capa
+  let _mpX = null, _mpY = null;
+  RS.canvas.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse') return;
+    _mpX = e.clientX; _mpY = e.clientY;
+  }, { passive: true, ...sig });
+  RS.canvas.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'mouse' || _mpX === null) return;
+    const _mdx = Math.abs(e.clientX - _mpX), _mdy = Math.abs(e.clientY - _mpY);
+    _mpX = null; _mpY = null;
+    if (_mdx > 15 || _mdy > 15) return; // fue un arrastre, no un clic
+    const _bhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
+    if (!_bhit) return;
+    const _ba = _bhit._buttonAction;
+    if (_ba.type === 'page') _rGoToPanel(_ba.pageIdx);
+    else if (_ba.type === 'url') window.open(_ba.url, '_blank', 'noopener');
   }, { passive: true, ...sig });
 }
 
