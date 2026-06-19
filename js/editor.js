@@ -8012,6 +8012,17 @@ function edOnStart(e){
       // Radio normal para doble-tap; para drag se amplía después si no hay hit
       const _lineHit = _edLineHitTest(la, c.nx, c.ny, _isTouch2);
       const _now2 = Date.now();
+      // COF vectorial: toque sobre el cuadrado de arrastre → drag COF (táctil)
+      if (_cofVecActive && _cof.state === 'idle_blue' && e.pointerType === 'touch') {
+        const _sqd = Math.hypot(e.clientX - _cof.touchX, e.clientY - _cof.touchY);
+        if (_sqd <= _cof.MARGIN * 2.5) {
+          _edShapePushHistory();
+          _cof._dragging = true;
+          _cof.dist = _cof.distDefault;
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+          return;
+        }
+      }
       if(_lineHit){
         // ID único para el hit: negativo para subPaths, positivo para path principal
         const _hitId = _lineHit.type==='node'
@@ -8079,9 +8090,13 @@ function edOnStart(e){
             _edLastNodeTapTime=_now2;
             _edLastNodeTapIdx = _hitId;
             if(_lineHit.type==='node'){
-              _edShapePushHistory(); // pre-snapshot antes del drag
-              edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
-              // Capturar pointer para recibir pointermove aunque el dedo salga del canvas
+              if (_cofVecActive && e.pointerType === 'touch') {
+                // COF: snap círculo al nodo tocado (drag se inicia en el cuadrado)
+                _cofVecSnapToNode(la, _lineHit.idx);
+              } else {
+                _edShapePushHistory(); // pre-snapshot antes del drag
+                edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
+              }
               if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
             }
             // Para segmento: solo registrar candidato, no iniciar drag
@@ -17076,9 +17091,11 @@ function edInitShapeBar() {
     btn.style.outline=active?'':'1px solid rgba(255,255,0,.5)';
     if(active){
       window._edCurveVertIdx=-1;
+      _cofVecDeactivate(); // desactivar COF al cerrar V⟺C
       _esbHideSlider();
       edRedraw(); return;
     }
+    if (window._edIsTouch) _cofVecActivate(); // activar COF al abrir V⟺C (invisible hasta tap en nodo)
     edRedraw(); // actualizar vértices a verde inmediatamente al activar V⟺C
     const _savedSelCurve=edSelectedIdx;
     const curR=window._edCurveRadius||0;
@@ -17106,6 +17123,7 @@ function edInitShapeBar() {
   // OK
   $('esb-ok')?.addEventListener('click', ()=>{
     if(_locked) return;
+    _cofVecDeactivate(); // desactivar COF al confirmar
     _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
     // Desactivar V⟺C si estaba activo, y cerrar su slider
     const _curveBtn=$('esb-curve');
