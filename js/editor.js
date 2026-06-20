@@ -12855,6 +12855,37 @@ function _edActivateLineTool(isNew, isCreating) {
     edRedraw(); _edShapePushHistory();
   });
 
+  // ── Cursor vectorial (vcof) ──
+  if (window._edIsTouch) {
+    const _vcofBtn = $('op-vcof-btn');
+    const _vcofPop = $('op-vcof-pop');
+    if (_vcofBtn) {
+      _vcofBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (_vcof.on) { _vcofSetOn(false); return; }
+        // Mostrar popover de ángulo (no requiere V/C activo para activar la herramienta)
+        if (!_vcofPop) return;
+        if (_vcofPop.style.display === 'flex') {
+          _vcofPop.style.display = 'none'; return;
+        }
+        const _vr = _vcofBtn.getBoundingClientRect();
+        _vcofPop.style.top  = (_vr.bottom + 4) + 'px';
+        _vcofPop.style.left = _vr.left + 'px';
+        _vcofPop.style.display = 'flex';
+      });
+    }
+    if (_vcofPop) {
+      ['pointerdown','touchstart'].forEach(ev =>
+        _vcofPop.addEventListener(ev, e => e.stopPropagation(), { passive: true }));
+    }
+    [['op-vcof-pop-l', 40], ['op-vcof-pop-r', -40]].forEach(([bid, angle]) => {
+      $(bid)?.addEventListener('click', () => {
+        _vcof.angle = angle;
+        _vcofSetOn(true);
+        if (_vcofPop) _vcofPop.style.display = 'none';
+      });
+    });
+  }
   // ── Minimizar (idéntico a draw) ──
   // ── Colapso del panel ──
   $('op-panel-collapse')?.addEventListener('click', () => {
