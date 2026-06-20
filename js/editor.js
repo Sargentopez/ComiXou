@@ -6163,6 +6163,18 @@ function edPinchEnd() {
   if(['draw','eraser'].includes(edActiveTool)){
     edPainting = false;
   }
+  // vcof: reposicionar cursor en el nodo tras cambio de zoom/pan
+  if (_vcof.on && _vcof.activeNodeIdx >= 0 && edSelectedIdx >= 0) {
+    const _pcLa = edLayers[edSelectedIdx];
+    if (_pcLa && _pcLa.type === 'line') {
+      const _pcNSP = _vcofNodeScreenPos(_pcLa, _vcof.activeNodeIdx);
+      if (_pcNSP) {
+        const _pcRad = _vcof.angle * Math.PI / 180;
+        _vcofDraw(_pcNSP.clientX - _vcof.dist * Math.sin(_pcRad),
+                  _pcNSP.clientY + _vcof.dist * Math.cos(_pcRad));
+      }
+    }
+  }
 }
 
 function _edDrawApplyPinchTransform(dl, dp){
@@ -7397,6 +7409,7 @@ function edOnStart(e){
                 _vcofDraw(_snSP.clientX - _vcof.dist * Math.sin(_snR),
                           _snSP.clientY + _vcof.dist * Math.cos(_snR));
               }
+              _vcofShowHint(false); // ocultar mensaje una vez seleccionado el nodo
               // No iniciar drag aquí: el arrastre se inicia desde el cuadrado (ver intercept arriba)
               return;
             }
@@ -8309,6 +8322,7 @@ function edOnStart(e){
                       _lsNSP.clientY + _vcof.dist * Math.cos(_lsR));
           }
           window._edCurveVertIdx = _lsHit.idx;
+          _vcofShowHint(false);
           edRedraw();
           return;
         }
@@ -11139,10 +11153,26 @@ function _vcofSetOn(on) {
   if (!on) {
     _vcof.activeNodeIdx = -1;
     _vcofHide();
+    _vcofShowHint(false);
     return;
   }
-  // Posición inicial: centro de pantalla
+  // Si hay un nodo ya seleccionado (V/C activo), saltar directamente a él
+  const _sLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  const _sVi = window._edCurveVertIdx;
+  if (_sLa && _sLa.type === 'line' && _sLa.points && typeof _sVi === 'number' && _sVi >= 0 && _sLa.points[_sVi]) {
+    _vcof.activeNodeIdx = _sVi;
+    const _sNSP = _vcofNodeScreenPos(_sLa, _sVi);
+    if (_sNSP) {
+      const _sRad = _vcof.angle * Math.PI / 180;
+      _vcofDraw(_sNSP.clientX - _vcof.dist * Math.sin(_sRad),
+                _sNSP.clientY + _vcof.dist * Math.cos(_sRad));
+      _vcofShowHint(false); // ya hay nodo: no es necesario el mensaje
+      return;
+    }
+  }
+  // Sin nodo seleccionado: aparece en centro de pantalla y muestra el hint
   _vcofDraw(window.innerWidth / 2, window.innerHeight / 2);
+  _vcofShowHint(true);
 }
 
 function _vcofHide() {
@@ -11171,7 +11201,7 @@ function _vcofDraw(touchCX, touchCY) {
   const ang  = _vcof.angle;
   const dist = _vcof.dist;
   const dotSize = 18;
-  const circleR = 18;
+  const circleR = 14;
   const sz = circleR * 2;
   const lineLen = Math.max(0, dist - circleR - dotSize / 2);
   const col = '#7c3aed'; // violeta — distingue del cursor de dibujo
@@ -11207,6 +11237,32 @@ function _vcofSyncBtn() {
   btn.style.background  = _vcof.on ? 'var(--black)' : 'transparent';
   btn.style.color       = _vcof.on ? 'var(--white)' : 'var(--gray-700)';
   btn.style.borderColor = _vcof.on ? 'var(--black)' : 'var(--gray-300)';
+}
+function _vcofShowHint(show) {
+  let h = document.getElementById('edVcofHint');
+  if (!h) {
+    if (!show) return;
+    h = document.createElement('div');
+    h.id = 'edVcofHint';
+    h.style.cssText = 'position:fixed;z-index:1100;background:rgba(100,40,180,0.82);'
+      + 'color:#fff;font-size:0.82rem;font-weight:700;padding:5px 14px;'
+      + 'border-radius:20px;pointer-events:none;white-space:nowrap;left:50%;'
+      + 'transform:translateX(-50%);display:none;';
+    (document.getElementById('editorShell') || document.body).appendChild(h);
+  }
+  if (show) {
+    h.textContent = 'Selecciona nodo a desplazar';
+    const topbar = document.getElementById('edTopbar');
+    const menu   = document.getElementById('edMenuBar');
+    const panel  = document.getElementById('edOptionsPanel');
+    const topH   = topbar ? topbar.getBoundingClientRect().bottom : 0;
+    const menuH  = (menu && menu.style.display !== 'none') ? menu.getBoundingClientRect().height : 0;
+    const panelH = (panel && panel.classList.contains('open')) ? panel.getBoundingClientRect().height : 0;
+    h.style.top = (topH + menuH + panelH + 8) + 'px';
+    h.style.display = 'block';
+  } else {
+    h.style.display = 'none';
+  }
 }
 
 // Stubs de compatibilidad
