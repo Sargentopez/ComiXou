@@ -1103,6 +1103,41 @@ body.editor-page #appView {
 /* ══════════════════════════════
    MODAL PROYECTO
    ══════════════════════════════ */
+/* ── Acordeón de comportamiento del recorrido ──────────────────────── */
+.mpbeh-section {
+  border: 2px solid var(--gray-200);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.mpbeh-header {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: var(--gray-100); border: none; padding: 13px 16px;
+  font-family: var(--font-body); font-size: .9rem; font-weight: 900;
+  color: var(--black); cursor: pointer; text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.mpbeh-header:active { background: var(--gray-200); }
+.mpbeh-arrow { font-size: .8rem; transition: transform .18s; flex-shrink: 0; }
+.mpbeh-section.open .mpbeh-arrow { transform: rotate(180deg); }
+.mpbeh-options {
+  display: none; flex-direction: column;
+  border-top: 2px solid var(--gray-200);
+}
+.mpbeh-section.open .mpbeh-options { display: flex; }
+.mpbeh-opt {
+  width: 100%; background: var(--white); border: none; border-bottom: 1.5px solid var(--gray-100);
+  padding: 13px 22px; font-family: var(--font-body); font-size: .88rem; font-weight: 700;
+  color: var(--gray-700); cursor: pointer; text-align: left;
+  -webkit-tap-highlight-color: transparent; transition: background .1s;
+}
+.mpbeh-opt:last-child { border-bottom: none; }
+.mpbeh-opt:active { background: var(--gray-100); }
+.mpbeh-opt.active {
+  background: var(--yellow); color: var(--black);
+  box-shadow: inset 4px 0 0 var(--black);
+  font-weight: 900;
+}
+
 #edProjectModal {
   position: fixed; inset: 0; background: rgba(0,0,0,.45);
   z-index: 500; display: flex;

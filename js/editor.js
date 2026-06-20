@@ -6588,6 +6588,24 @@ function _edPathArcLengthPx(points, closed, pw, ph) {
   return total || 1;
 }
 
+// ── Easing para recorridos: reasigna t dentro de [0,1] sin cambiar la duración ─
+// ── Easing Hermite por tramos: rápido lineal + frenado/arrancada cortos ──
+// kt=0.75, kp=3kt/(1+2kt)=0.9 → derivada fase frenado P'(u)=0.3(u-1)²≥0 (monotona)
+function _edEaseT(t,accel){
+  if(!accel||accel==='none')return t;
+  const c=t<0?0:t>1?1:t;
+  const _eo=(x)=>{
+    const kt=0.75,kp=0.9,sl=kp/kt; // sl=1.2
+    if(x<kt)return sl*x;
+    const u=(x-kt)/(1-kt),m=sl*(1-kt); // m=0.3=3*(1-kp): garantía monotonía
+    return(2*u*u*u-3*u*u+1)*kp+(u*u*u-2*u*u+u)*m+(-2*u*u*u+3*u*u);
+  };
+  if(accel==='start') return _eo(c);
+  if(accel==='end')   return 1-_eo(1-c);
+  if(accel==='middle')return c<0.5?(1-_eo(1-2*c))/2:(1+_eo(2*c-1))/2;
+  return t;
+}
+
 // ── Ticker RAF del motion path — solo activo durante la previsualización ────────
 function _edViewerMpTick() {
   if (!$('editorViewer')?.classList.contains('open')) {
@@ -6614,8 +6632,31 @@ function _edViewerMpTick() {
     const _elapsed  = (now - l._pathStartTime) / 1000;
     const _speed    = l._motionSpeed || 100; // px/s
     const _totalPx  = _edPathArcLengthPx(l._motionPath, l._motionPathClosed || false, _vpw, _vph);
-    const t         = (_elapsed * _speed) / _totalPx;
-    const rel       = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, t, _vpw, _vph);
+    const _rawT    = (_elapsed * _speed) / _totalPx;
+    const _mpEnd   = l._motionPathEnd   || 'restart';
+    const _mpAccel = l._motionPathAccel || 'none';
+    let rel = null;
+    if (_mpEnd === 'stop') {
+      if (l._pathStopped) { _mpUpdated = true; return; }
+      if (_rawT >= 1.0) {
+        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, 0.9999, _vpw, _vph);
+        l._pathStopped = true;
+      } else {
+        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_rawT,_mpAccel), _vpw, _vph);
+      }
+    } else if (_mpEnd === 'rewind') {
+      const _cycle = _rawT % 2;
+      const _posT  = _cycle <= 1 ? _cycle : (2 - _cycle);
+      // En fase backward (cycle>1) inicio y final se invierten → intercambiar start/end
+      const _isRwd  = _cycle > 1;
+      const _rwdAcc = (_isRwd && _mpAccel === 'start') ? 'end'
+                    : (_isRwd && _mpAccel === 'end')   ? 'start'
+                    : _mpAccel;
+      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_posT,_rwdAcc), _vpw, _vph);
+    } else {
+      // restart: fracción del ciclo + easing
+      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_rawT%1,_mpAccel), _vpw, _vph);
+    }
     if (rel) {
       l._pathCurX = (l.x || 0.5) + rel.x;
       l._pathCurY = (l.y || 0.5) + rel.y;
@@ -6642,7 +6683,7 @@ function _edViewerMpTickStop() {
   if (_edViewerMpRaf) { cancelAnimationFrame(_edViewerMpRaf); _edViewerMpRaf = null; }
   // Limpiar posiciones de path para que el canvas editor no las use
   const page = edPages[edCurrentPage];
-  if (page) (page.layers||[]).forEach(l => { delete l._pathCurX; delete l._pathCurY; delete l._pathStartTime; });
+  if (page) (page.layers||[]).forEach(l => { delete l._pathCurX; delete l._pathCurY; delete l._pathStartTime; delete l._pathStopped; });
 }
 
 // ── Ticker de preview play del recorrido (solo en modo edición de recorrido) ─────
@@ -6650,22 +6691,43 @@ function _edMpPreviewTick() {
   if (!_edMotionPathMode || !_edMotionPathPlaying) {
     _edMpPreviewRaf = null; return;
   }
-  // Usar el path en edición (_edMotionPathPts), no el guardado en la capa
   if (!_edMotionPathPts || _edMotionPathPts.length < 2) { _edMpPreviewStop(); return; }
   const la = edLayers[_edMotionPathTarget];
   if (!la) { _edMpPreviewStop(); return; }
-  const now = Date.now();
+  const now  = Date.now();
   if (!la._pathStartTime) la._pathStartTime = now;
   const _po  = edPages[edCurrentPage]?.orientation || edOrientation;
   const _pw  = _po === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
   const _ph  = _po === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
-  const _tot = _edPathArcLengthPx(_edMotionPathPts, _edMotionPathClosed, _pw, _ph);
-  const t    = ((now - la._pathStartTime) / 1000 * _edMotionPathSpeed) / _tot;
-  const rel  = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, t, _pw, _ph);
+  const _tot  = _edPathArcLengthPx(_edMotionPathPts, _edMotionPathClosed, _pw, _ph);
+  const _rawT = ((now - la._pathStartTime) / 1000 * _edMotionPathSpeed) / _tot;
+  const _end  = la._motionPathEnd   || 'restart';
+  const _acc  = la._motionPathAccel || 'none';
+  let rel = null, _done = false;
+
+  if (_end === 'stop') {
+    if (_rawT >= 1.0) {
+      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, 0.9999, _pw, _ph);
+      _done = true; // llegó al final: detener tras este frame
+    } else {
+      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, _edEaseT(_rawT, _acc), _pw, _ph);
+    }
+  } else if (_end === 'rewind') {
+    const _cycle  = _rawT % 2;
+    const _posT   = _cycle <= 1 ? _cycle : (2 - _cycle);
+    const _isRwd  = _cycle > 1;
+    const _rwdAcc = (_isRwd && _acc === 'start') ? 'end'
+                  : (_isRwd && _acc === 'end')   ? 'start'
+                  : _acc;
+    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, _edEaseT(_posT, _rwdAcc), _pw, _ph);
+  } else {
+    // restart (default): loop
+    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, _edEaseT(_rawT % 1, _acc), _pw, _ph);
+  }
+
   if (rel) {
     la._pathCurX = (la.x || 0.5) + rel.x;
     la._pathCurY = (la.y || 0.5) + rel.y;
-    // Propagar a capas fill/pencil/watercolor vinculadas
     const _pvUid = la._uid || la._fillLayerId;
     if (_pvUid) {
       const _pvPg = edPages[edCurrentPage];
@@ -6678,6 +6740,14 @@ function _edMpPreviewTick() {
   }
   _edMpPreviewActive = true;
   edRedraw();
+
+  if (_done) {
+    // 'stop': mantener objeto en posición final, parar reproducción
+    _edMotionPathPlaying = false;
+    _edMpPreviewRaf = null;
+    const btn = $('mpb-play'); if (btn) btn.textContent = '▶';
+    return; // _edMpPreviewActive sigue true → posición final permanece visible
+  }
   _edMpPreviewRaf = requestAnimationFrame(_edMpPreviewTick);
 }
 
@@ -6783,6 +6853,12 @@ function _edStartMotionPath(idx) {
 }
 
 // Cierra el modo recorrido; si save=true guarda los puntos en la capa
+// Cerrar modal de comportamiento del recorrido
+function _mpbehClose() {
+  const _m = document.getElementById('edMpBehaviourModal');
+  if (_m) _m.classList.remove('open');
+}
+
 function _edEndMotionPath(save) {
   if (save && _edMotionPathTarget >= 0) {
     const la = edLayers[_edMotionPathTarget];
@@ -6792,7 +6868,7 @@ function _edEndMotionPath(save) {
         la._motionPathClosed = _edMotionPathClosed;
         la._motionSpeed      = _edMotionPathSpeed;
       } else {
-        delete la._motionPath; delete la._motionPathClosed; delete la._motionSpeed;
+        delete la._motionPath; delete la._motionPathClosed; delete la._motionSpeed; delete la._motionPathEnd; delete la._motionPathAccel;
       }
       edPushHistory();
       // Propagar recorrido a todos los miembros del grupo si es un grupo
@@ -6806,8 +6882,11 @@ function _edEndMotionPath(save) {
             _m._motionPath       = _pathProp;
             _m._motionPathClosed = la._motionPathClosed || false;
             _m._motionSpeed      = la._motionSpeed || 100;
+            if (la._motionPathEnd)   _m._motionPathEnd   = la._motionPathEnd;   else delete _m._motionPathEnd;
+            if (la._motionPathAccel) _m._motionPathAccel = la._motionPathAccel; else delete _m._motionPathAccel;
           } else {
             delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed;
+            delete _m._motionPathEnd; delete _m._motionPathAccel;
           }
         });
       }
@@ -7075,8 +7154,9 @@ function edOnStart(e){
   if(window._gcpActive) return;
   // ── MODO RECORRIDO: inicio de trazo a mano alzada ───────────────────────
   if (_edMotionPathMode) {
-    // No iniciar trazo si se está tocando la barra de controles
+    // No iniciar trazo si se está tocando la barra de controles o el modal de comportamiento
     if (e.target && e.target.closest('#edMotionBar')) return;
+    if (document.getElementById('edMpBehaviourModal')?.classList.contains('open')) return;
     // Si estaba reproduciendo preview, detenerlo antes de redibujar
     if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
 
@@ -13143,6 +13223,8 @@ function _edTextToDrawing(idx) {
     sl._motionPath       = la._motionPath.map(p => ({x:p.x, y:p.y}));
     sl._motionPathClosed = la._motionPathClosed || false;
     sl._motionSpeed      = la._motionSpeed || 100;
+    if (la._motionPathEnd)   sl._motionPathEnd   = la._motionPathEnd;
+    if (la._motionPathAccel) sl._motionPathAccel = la._motionPathAccel;
   }
 
   // ── Helper: recortar canvas workspace al bbox ─────────────────────────────
@@ -14307,7 +14389,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click',()=>{
       const _pla=edLayers[edSelectedIdx]; if(!_pla) return;
-      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed;
+      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionPathEnd; delete _pla._motionPathAccel;
       edRenderOptionsPanel('text-props');
     });
     $('pp-path-speed')?.addEventListener('input',(ev)=>{
@@ -14558,7 +14640,7 @@ function edRenderOptionsPanel(mode){
         edPushHistory();
         _idxsGrp.forEach(i => {
           const _m = edLayers[i]; if (!_m) return;
-          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed;
+          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionPathEnd; delete _m._motionPathAccel;
         });
         edRenderOptionsPanel('props');
       });
@@ -14851,7 +14933,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click', () => {
       const _pla = edLayers[edSelectedIdx]; if (!_pla) return;
-      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed;
+      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionPathEnd; delete _pla._motionPathAccel;
       edPushHistory();
       edRenderOptionsPanel('props');
     });
@@ -18413,6 +18495,8 @@ function edSerLayer(l){
     if(l._motionPath && l._motionPath.length >= 2) _g._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _g._motionPathClosed = true;
     if(l._motionSpeed != null) _g._motionSpeed = l._motionSpeed;
+    if(l._motionPathEnd)   _g._motionPathEnd   = l._motionPathEnd;
+    if(l._motionPathAccel) _g._motionPathAccel = l._motionPathAccel;
     return _g;
   }
   if(l.type==='image'){
@@ -18439,6 +18523,8 @@ function edSerLayer(l){
     if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _r._motionPathClosed = true;
     if(l._motionSpeed != null) _r._motionSpeed = l._motionSpeed;
+    if(l._motionPathEnd)   _r._motionPathEnd   = l._motionPathEnd;
+    if(l._motionPathAccel) _r._motionPathAccel = l._motionPathAccel;
     return _r;
   }
   if(l.type==='text'){const _o={type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
@@ -18450,6 +18536,8 @@ function edSerLayer(l){
     if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed)_o._motionPathClosed=true;
     if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;
+    if(l._motionPathEnd)  _o._motionPathEnd  =l._motionPathEnd;
+    if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel;
     return _o;}
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
@@ -18523,6 +18611,8 @@ function edSerLayer(l){
     if(l._motionPath&&l._motionPath.length>=2)_bobj._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed)_bobj._motionPathClosed=true;
     if(l._motionSpeed!=null)_bobj._motionSpeed=l._motionSpeed;
+    if(l._motionPathEnd)  _bobj._motionPathEnd  =l._motionPathEnd;
+    if(l._motionPathAccel)_bobj._motionPathAccel=l._motionPathAccel;
     return _bobj;
   }
   if(l.type==='group') return null; // obsoleto
@@ -18536,10 +18626,10 @@ function edSerLayer(l){
     if(l.opacity !== undefined) _po.opacity=l.opacity;
     return _po;
   }
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -18574,6 +18664,8 @@ function edSerLayer(l){
     if(l._motionPath&&l._motionPath.length>=2)_sobj._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed)_sobj._motionPathClosed=true;
     if(l._motionSpeed!=null)_sobj._motionSpeed=l._motionSpeed;
+    if(l._motionPathEnd)  _sobj._motionPathEnd  =l._motionPathEnd;
+    if(l._motionPathAccel)_sobj._motionPathAccel=l._motionPathAccel;
     return _sobj;
   }
   if(l.type==='line'){
@@ -18620,6 +18712,8 @@ function edSerLayer(l){
     if(l._motionPath&&l._motionPath.length>=2)_lobj._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed)_lobj._motionPathClosed=true;
     if(l._motionSpeed!=null)_lobj._motionSpeed=l._motionSpeed;
+    if(l._motionPathEnd)  _lobj._motionPathEnd  =l._motionPathEnd;
+    if(l._motionPathAccel)_lobj._motionPathAccel=l._motionPathAccel;
     return _lobj;
   }
 }
@@ -18836,6 +18930,8 @@ function edDeserLayer(d, pageOrientation){
     if(d._motionPath)             l._motionPath       = d._motionPath;
     if(d._motionPathClosed)       l._motionPathClosed = true;
     if(d._motionSpeed != null)    l._motionSpeed      = d._motionSpeed;
+    if(d._motionPathEnd)          l._motionPathEnd    = d._motionPathEnd;
+    if(d._motionPathAccel)        l._motionPathAccel  = d._motionPathAccel;
     if(d.animKey)       l.animKey       = d.animKey;
     if(d._pngFramesKey) l._pngFramesKey = d._pngFramesKey;
     if(d._apngIdbKey)   l._apngIdbKey   = d._apngIdbKey;
@@ -21641,6 +21737,90 @@ function EditorView_init(){
   });
   $('mpb-ok')?.addEventListener('click', () => _edEndMotionPath(true));
   $('mpb-cancel')?.addEventListener('click', () => _edEndMotionPath(false));
+
+  // ── Botón Comportamiento de la barra de recorrido ─────────────────────────
+  $('mpb-behaviour')?.addEventListener('click', () => {
+    const _modal = $('edMpBehaviourModal');
+    if (!_modal) return;
+    if (_modal.classList.contains('open')) { _mpbehClose(); return; }
+    // Pre-seleccionar comportamiento actual de la capa
+    const _mla = edLayers[_edMotionPathTarget];
+    const _curEnd   = _mla?._motionPathEnd   || 'restart';
+    const _curAccel = _mla?._motionPathAccel || 'none';
+    document.querySelectorAll('[data-mpbeh-end]').forEach(b => {
+      b.classList.toggle('active', b.dataset.mpbehEnd === _curEnd);
+    });
+    document.querySelectorAll('[data-mpbeh-accel]').forEach(b => {
+      b.classList.toggle('active', b.dataset.mpbehAccel === _curAccel);
+    });
+    _modal.classList.add('open');
+  });
+
+  // ── Modal Comportamiento del Recorrido ────────────────────────────────────
+  // (el modal vive fuera de editorShell → los eventos no son interceptados por el canvas)
+  {
+    const _mpbehModal = $('edMpBehaviourModal');
+
+    // Cerrar con X, Cancelar u OK
+    $('mpbeh-close')?.addEventListener('click',  _mpbehClose);
+    $('mpbeh-cancel')?.addEventListener('click', _mpbehClose);
+    $('mpbeh-ok')?.addEventListener('click', () => {
+      const _mbLa = edLayers[_edMotionPathTarget];
+      if (_mbLa) {
+        const _endBtn   = document.querySelector('[data-mpbeh-end].active');
+        const _accelBtn = document.querySelector('[data-mpbeh-accel].active');
+        const _endVal   = _endBtn   ? _endBtn.dataset.mpbehEnd     : 'restart';
+        const _accelVal = _accelBtn ? _accelBtn.dataset.mpbehAccel : 'none';
+        _mbLa._motionPathEnd   = _endVal;
+        _mbLa._motionPathAccel = _accelVal;
+        if (_mbLa.groupId) {
+          _edGroupMemberIdxs(_mbLa.groupId).forEach(i => {
+            const _gm = edLayers[i];
+            if (_gm) { _gm._motionPathEnd = _endVal; _gm._motionPathAccel = _accelVal; }
+          });
+        }
+        edPushHistory();
+      }
+      _mpbehClose();
+    });
+
+    // Cerrar al tocar el fondo del overlay (fuera del box)
+    _mpbehModal?.addEventListener('pointerdown', (e) => {
+      if (e.target === _mpbehModal) _mpbehClose();
+    });
+
+    // Toggle sección "Al final del recorrido"
+    $('mpbeh-end-toggle')?.addEventListener('click', () => {
+      const _sec = $('mpbeh-end-toggle').closest('.mpbeh-section');
+      const _isOpen = _sec.classList.contains('open');
+      document.querySelectorAll('#edMpBehaviourModal .mpbeh-section').forEach(s => s.classList.remove('open'));
+      if (!_isOpen) _sec.classList.add('open');
+    });
+
+    // Toggle sección "Aceleraciones"
+    $('mpbeh-accel-toggle')?.addEventListener('click', () => {
+      const _sec = $('mpbeh-accel-toggle').closest('.mpbeh-section');
+      const _isOpen = _sec.classList.contains('open');
+      document.querySelectorAll('#edMpBehaviourModal .mpbeh-section').forEach(s => s.classList.remove('open'));
+      if (!_isOpen) _sec.classList.add('open');
+    });
+
+    // Selección de opción "Al final del recorrido"
+    document.querySelectorAll('[data-mpbeh-end]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-mpbeh-end]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // Selección de opción "Aceleraciones"
+    document.querySelectorAll('[data-mpbeh-accel]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-mpbeh-accel]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+  }
 
   // ── Drag de la barra de recorrido ─────────────────────────────────────────
   {

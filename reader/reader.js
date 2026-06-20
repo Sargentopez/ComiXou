@@ -1336,6 +1336,20 @@ function _bezierSampleClosed(pts, numSamples) {
 
 // ── Helper: posición a lo largo de un trayecto (t = fracción de longitud de arco) ─
 // pw/ph: dimensiones reales del lienzo en px para arc-length en espacio píxel real
+function _easeT(t,accel){
+  if(!accel||accel==='none')return t;
+  const c=t<0?0:t>1?1:t;
+  const _eo=(x)=>{
+    const kt=0.75,kp=0.9,sl=kp/kt;
+    if(x<kt)return sl*x;
+    const u=(x-kt)/(1-kt),m=sl*(1-kt);
+    return(2*u*u*u-3*u*u+1)*kp+(u*u*u-2*u*u+u)*m+(-2*u*u*u+3*u*u);
+  };
+  if(accel==='start') return _eo(c);
+  if(accel==='end')   return 1-_eo(1-c);
+  if(accel==='middle')return c<0.5?(1-_eo(1-2*c))/2:(1+_eo(2*c-1))/2;
+  return t;
+}
 function _pathPositionAt(points, closed, t, pw, ph) {
   if (!points || points.length === 0) return null;
   if (points.length === 1) return { x: points[0].x, y: points[0].y };
@@ -1423,8 +1437,31 @@ function _readerGifTick() {
           _mpTotalPx += Math.hypot((_mpPts[_i].x - _mpPts[_i-1].x) * _mpPw,
                                    (_mpPts[_i].y - _mpPts[_i-1].y) * _mpPh);
         if (_mpTotalPx < 1) _mpTotalPx = 1;
-        const _mpT   = (_mpElapsed * _mpSpeed) / _mpTotalPx;
-        const _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpT, _mpPw, _mpPh);
+        const _mpRawT = (_mpElapsed * _mpSpeed) / _mpTotalPx;
+        const _mpEndB = layer._motionPathEnd   || 'restart';
+        const _mpAcl  = layer._motionPathAccel || 'none';
+        let _mpPos = null;
+        if (_mpEndB === 'stop') {
+          if (layer._pathStopped) {
+            panelChanged = true;
+          } else if (_mpRawT >= 1.0) {
+            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, 0.9999, _mpPw, _mpPh);
+            layer._pathStopped = true;
+          } else {
+            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_mpRawT,_mpAcl), _mpPw, _mpPh);
+          }
+        } else if (_mpEndB === 'rewind') {
+          const _mpCycle = _mpRawT % 2;
+          const _mpPosT  = _mpCycle <= 1 ? _mpCycle : (2 - _mpCycle);
+          const _mpIsRwd  = _mpCycle > 1;
+          const _mpRwdAcl = (_mpIsRwd && _mpAcl === 'start') ? 'end'
+                          : (_mpIsRwd && _mpAcl === 'end')   ? 'start'
+                          : _mpAcl;
+          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_mpPosT,_mpRwdAcl), _mpPw, _mpPh);
+        } else {
+          // restart: fracción + easing
+          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_mpRawT%1,_mpAcl), _mpPw, _mpPh);
+        }
         if (_mpPos) {
           layer._pathCurX = (layer.x || 0.5) + _mpPos.x;
           layer._pathCurY = (layer.y || 0.5) + _mpPos.y;

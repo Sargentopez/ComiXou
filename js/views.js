@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v30.23</footer>
+    <footer class="app-version">v30.33</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -577,6 +577,9 @@ Router.register('editor', {
         <button id="mpb-play" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-size:1rem;font-weight:900" title="Preview">▶</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-undo" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.9rem;font-weight:900" title="Borrar recorrido y redibujar">🗑</button>
+        <span style="color:rgba(255,255,255,0.3)">│</span>
+        <button id="mpb-behaviour" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.82rem;font-weight:900" title="Comportamiento del recorrido">⚙ Comportamiento</button>
+        <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-ok" style="background:#16a34a;border:none;border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-weight:900;font-size:.88rem">✓ OK</button>
         <button id="mpb-cancel" style="background:rgba(220,38,38,0.25);border:1px solid rgba(220,38,38,0.4);border-radius:7px;padding:5px 11px;color:#ff9999;cursor:pointer;font-size:.88rem;font-weight:900" title="Cancelar">✕</button>
       </div>
@@ -597,6 +600,50 @@ Router.register('editor', {
       </div>
       <!-- Botón ✕ solo táctil: centrado abajo, siempre visible en Android/iOS -->
       <button class="viewer-btn viewer-close-touch" id="viewerCloseMobile">✕</button>
+    </div>
+
+    <!-- MODAL COMPORTAMIENTO DEL RECORRIDO -->
+    <div id="edMpBehaviourModal" class="ed-fulloverlay" style="z-index:2200">
+      <div class="ed-fulloverlay-box" style="max-width:480px">
+        <div class="ed-fulloverlay-header">
+          <h2 class="ed-fulloverlay-title">⚙ Comportamiento</h2>
+          <button class="ed-fulloverlay-close" id="mpbeh-close">✕</button>
+        </div>
+        <div style="padding:14px 16px 6px;overflow-y:auto;flex:1">
+
+          <!-- Sección: Al final del recorrido -->
+          <div class="mpbeh-section">
+            <button class="mpbeh-header" id="mpbeh-end-toggle">
+              <span class="mpbeh-header-label">Al final del recorrido…</span>
+              <span class="mpbeh-arrow">▾</span>
+            </button>
+            <div class="mpbeh-options" id="mpbeh-end-options">
+              <button class="mpbeh-opt" data-mpbeh-end="restart" id="mpbeh-end-restart">🔄 Reiniciar</button>
+              <button class="mpbeh-opt" data-mpbeh-end="stop"    id="mpbeh-end-stop">⏹ Detener</button>
+              <button class="mpbeh-opt" data-mpbeh-end="rewind"  id="mpbeh-end-rewind">⏮ Rebobinar</button>
+            </div>
+          </div>
+
+          <!-- Sección: Aceleraciones -->
+          <div class="mpbeh-section" style="margin-top:10px">
+            <button class="mpbeh-header" id="mpbeh-accel-toggle">
+              <span class="mpbeh-header-label">Aceleraciones</span>
+              <span class="mpbeh-arrow">▾</span>
+            </button>
+            <div class="mpbeh-options" id="mpbeh-accel-options">
+              <button class="mpbeh-opt" data-mpbeh-accel="none"   id="mpbeh-accel-none">▷ Sin aceleración</button>
+              <button class="mpbeh-opt" data-mpbeh-accel="start"  id="mpbeh-accel-start">⏩ Al inicio</button>
+              <button class="mpbeh-opt" data-mpbeh-accel="middle" id="mpbeh-accel-middle">↔ Al medio</button>
+              <button class="mpbeh-opt" data-mpbeh-accel="end"    id="mpbeh-accel-end">⏪ Al final</button>
+            </div>
+          </div>
+
+        </div>
+        <div class="ed-fulloverlay-actions">
+          <button class="ed-btn-sec" id="mpbeh-cancel">Cancelar</button>
+          <button class="ed-btn-pri" id="mpbeh-ok">Guardar ✓</button>
+        </div>
+      </div>
     </div>
 
     <!-- MODAL DATOS DEL PROYECTO -->
