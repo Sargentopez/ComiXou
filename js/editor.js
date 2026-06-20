@@ -2871,19 +2871,34 @@ function _edLayersSnapshot(){
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
       color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false,
       _uid:l._uid||null, _fillLayerId:l._fillLayerId||null,
-      _pencilLayerId:l._pencilLayerId||null, _watercolorLayerId:l._watercolorLayerId||null };
+      _pencilLayerId:l._pencilLayerId||null, _watercolorLayerId:l._watercolorLayerId||null,
+      _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+      _motionPathClosed: l._motionPathClosed||false,
+      _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
+      _motionPathEnd: l._motionPathEnd||undefined,
+      _motionPathAccel: l._motionPathAccel||undefined };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadius: l.cornerRadius||0, locked:l.locked||false,
-      cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
+      cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null,
+      _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+      _motionPathClosed: l._motionPathClosed||false,
+      _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
+      _motionPathEnd: l._motionPathEnd||undefined,
+      _motionPathAccel: l._motionPathAccel||undefined };
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
       grouped: l.grouped||false,
       groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
-      cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null };
+      cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null,
+      _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+      _motionPathClosed: l._motionPathClosed||false,
+      _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
+      _motionPathEnd: l._motionPathEnd||undefined,
+      _motionPathAccel: l._motionPathAccel||undefined };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor','bgOpacity',
@@ -2913,6 +2928,12 @@ function _edLayersSnapshot(){
       if(l._gcpLayerNames)   o._gcpLayerNames   = l._gcpLayerNames;
       if(l._bibItemId)       o._bibItemId        = l._bibItemId;
     }
+    // Recorrido de animación — presente en cualquier tipo de capa
+    if(l._motionPath && l._motionPath.length >= 2) o._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPathClosed) o._motionPathClosed = true;
+    if(l._motionSpeed != null) o._motionSpeed = l._motionSpeed;
+    if(l._motionPathEnd)   o._motionPathEnd   = l._motionPathEnd;
+    if(l._motionPathAccel) o._motionPathAccel = l._motionPathAccel;
     return o;
   }));
 }
@@ -3168,6 +3189,8 @@ function edApplyHistory(snapshot){
       if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
       if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
       if(o._watercolorLayerId) l._watercolorLayerId=o._watercolorLayerId;
+      // Restaurar recorrido de animación
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;}
       return l;
     }
     else if(o.type === 'shape') {
@@ -3179,6 +3202,8 @@ function edApplyHistory(snapshot){
       if(o.groupedStyles) l.groupedStyles = o.groupedStyles.map(s=>({...s}));
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
+      // Restaurar recorrido de animación
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;}
       return l;
     }
     else if(o.type === 'line') {
@@ -3192,6 +3217,8 @@ function edApplyHistory(snapshot){
       else l._updateBbox();
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
+      // Restaurar recorrido de animación
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;}
       return l;
     }
     else if(o.type === 'fill') {
@@ -19981,6 +20008,7 @@ function _edResetPageAnims(pageIdx) {
     // el recorrido empiece desde el principio.
     if (l._motionPath && l._motionPath.length >= 2) {
       delete l._pathStartTime;
+      delete l._pathStopped; // limpiar bandera 'stop' para que el recorrido reinicie
       l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
     }
