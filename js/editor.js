@@ -9964,7 +9964,7 @@ function _vsSerLayer(l) {
   // Serialización ligera para historial local (sin bitmaps)
   if (l.type === 'line') {
     const cr = l.cornerRadii || {};
-    return {
+    const _s = {
       type: 'line',
       x: l.x, y: l.y, width: l.width, height: l.height,
       rotation: l.rotation || 0,
@@ -9978,9 +9978,15 @@ function _vsSerLayer(l) {
       _fusionId: l._fusionId,
       groupId: l.groupId, locked: l.locked,
     };
+    if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = l._motionPath.map(p => ({ x: p.x, y: p.y }));
+    if (l._motionPathClosed) _s._motionPathClosed = true;
+    if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
+    if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
+    if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
+    return _s;
   }
   if (l.type === 'shape') {
-    return {
+    const _s = {
       type: 'shape', shape: l.shape,
       x: l.x, y: l.y, width: l.width, height: l.height,
       rotation: l.rotation || 0,
@@ -9991,6 +9997,12 @@ function _vsSerLayer(l) {
       _fusionId: l._fusionId,
       groupId: l.groupId, locked: l.locked,
     };
+    if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = l._motionPath.map(p => ({ x: p.x, y: p.y }));
+    if (l._motionPathClosed) _s._motionPathClosed = true;
+    if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
+    if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
+    if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
+    return _s;
   }
   return null;
 }
@@ -21116,6 +21128,21 @@ function _viewerGoToPage(pageIdx) {
   edUpdateViewer();
 }
 
+// Alpha hit testing para botones: solo hit si el píxel tiene alpha suficiente.
+// Usa el canvas offscreen de la animación (_animOc o _gifOc) cuando existe.
+function _edAlphaHit(la, lx, ly, pw, ph) {
+  const oc = la._animOc || la._gifOc;
+  if (!oc) return true; // sin canvas offscreen → usar solo bbox
+  const w = (la.width  || 1) * pw;
+  const h = (la.height || 1) * ph;
+  const px = Math.round((lx + w / 2) / w * oc.width);
+  const py = Math.round((ly + h / 2) / h * oc.height);
+  if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
+  try {
+    return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
+  } catch(e) { return true; }
+}
+
 function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
@@ -21127,7 +21154,7 @@ function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
     const ang = -(la.rotation || 0) * Math.PI / 180;
     const lx = dx * Math.cos(ang) - dy * Math.sin(ang);
     const ly = dx * Math.sin(ang) + dy * Math.cos(ang);
-    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return la;
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh && _edAlphaHit(la, lx, ly, pw, ph)) return la;
   }
   return null;
 }

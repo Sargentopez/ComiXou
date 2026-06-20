@@ -2469,6 +2469,22 @@ function _rBtnHitTestCanvas(winX, winY) {
   return _panel ? _rBtnHitTest(_panel.layers || [], _tpx, _tpy, pw, ph) : null;
 }
 
+// Alpha hit testing: devuelve true si el píxel en (lx,ly) tiene alpha suficiente.
+// lx/ly son coordenadas locales centradas en 0,0 (rotación ya deshecha).
+// Solo activo si la capa tiene canvas offscreen (_animOc o _gifOc).
+function _rAlphaHit(la, lx, ly, pw, ph) {
+  const oc = la._animOc || la._gifOc;
+  if (!oc) return true; // sin canvas offscreen → usar solo bbox
+  const w = (la.width  || 1) * pw;
+  const h = (la.height || 1) * ph;
+  const px = Math.round((lx + w / 2) / w * oc.width);
+  const py = Math.round((ly + h / 2) / h * oc.height);
+  if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
+  try {
+    return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
+  } catch(e) { return true; }
+}
+
 function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
@@ -2480,7 +2496,7 @@ function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
     const ang = -(la.rotation || 0) * Math.PI / 180;
     const lx = dx * Math.cos(ang) - dy * Math.sin(ang);
     const ly = dx * Math.sin(ang) + dy * Math.cos(ang);
-    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return la;
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh && _rAlphaHit(la, lx, ly, pw, ph)) return la;
   }
   return null;
 }
