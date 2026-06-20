@@ -2865,7 +2865,12 @@ function _edLayersSnapshot(){
         rotation: 0, opacity: l.opacity ?? 1,
         locked: l.locked || false,
         _uid: l._uid || null, _fillLayerId: l._fillLayerId || null,
-        _pencilLayerId: l._pencilLayerId || null, _watercolorLayerId: l._watercolorLayerId || null };
+        _pencilLayerId: l._pencilLayerId || null, _watercolorLayerId: l._watercolorLayerId || null,
+        _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+        _motionPathClosed: l._motionPathClosed||false,
+        _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
+        _motionPathEnd: l._motionPathEnd||undefined,
+        _motionPathAccel: l._motionPathAccel||undefined };
     }
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
@@ -18852,6 +18857,12 @@ function edDeserLayer(d, pageOrientation){
     if(d._uid) dl._uid=d._uid;
     if(d._fillLayerId) dl._fillLayerId=d._fillLayerId;
     if(d.opacity !== undefined) dl.opacity = d.opacity;
+
+    if(d._motionPath)          dl._motionPath       = d._motionPath;
+    if(d._motionPathClosed)    dl._motionPathClosed = true;
+    if(d._motionSpeed != null) dl._motionSpeed      = d._motionSpeed;
+    if(d._motionPathEnd)       dl._motionPathEnd    = d._motionPathEnd;
+    if(d._motionPathAccel)     dl._motionPathAccel  = d._motionPathAccel;
     return dl;
   }
   if(d.type==='stroke'){
@@ -18875,6 +18886,12 @@ function edDeserLayer(d, pageOrientation){
     if(d._fillLayerId) sl._fillLayerId = d._fillLayerId;
     if(d._pencilLayerId) sl._pencilLayerId = d._pencilLayerId;
     if(d._watercolorLayerId) sl._watercolorLayerId = d._watercolorLayerId;
+
+    if(d._motionPath)          sl._motionPath       = d._motionPath;
+    if(d._motionPathClosed)    sl._motionPathClosed = true;
+    if(d._motionSpeed != null) sl._motionSpeed      = d._motionSpeed;
+    if(d._motionPathEnd)       sl._motionPathEnd    = d._motionPathEnd;
+    if(d._motionPathAccel)     sl._motionPathAccel  = d._motionPathAccel;
     return sl;
   }
   if(d.type==='shape'){
@@ -18885,6 +18902,12 @@ function edDeserLayer(d, pageOrientation){
     if(d.groupId) l.groupId=d.groupId;
     if(d.locked) l.locked=true;
     if(d.hidden) l.hidden=true;
+
+    if(d._motionPath)          l._motionPath       = d._motionPath;
+    if(d._motionPathClosed)      l._motionPathClosed = true;
+    if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
+    if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
+    if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
     return l;
   }
   if(d.type==='line'){
@@ -18903,6 +18926,12 @@ function edDeserLayer(d, pageOrientation){
     if(d.grouped) l.grouped=true;
     if(d.groupedStyles) l.groupedStyles=d.groupedStyles.map(s=>({...s}));
     if(d.hidden) l.hidden=true;
+
+    if(d._motionPath)          l._motionPath       = d._motionPath;
+    if(d._motionPathClosed)      l._motionPathClosed = true;
+    if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
+    if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
+    if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
     return l;
   }
   if(d.type==='text'){const l=new TextLayer(d.text,d.x,d.y);Object.assign(l,d);return l;}
@@ -18937,6 +18966,12 @@ function edDeserLayer(d, pageOrientation){
       });
     }).catch(()=>{});
     if(d.hidden) l.hidden=true;
+
+    if(d._motionPath)          l._motionPath       = d._motionPath;
+    if(d._motionPathClosed)      l._motionPathClosed = true;
+    if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
+    if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
+    if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
     return l;
   }
   if(d.type==='image'){
