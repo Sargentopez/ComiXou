@@ -1012,6 +1012,14 @@ const _cof = {
   _pendingStart: false,   // calculando nueva distancia antes del trazo
   _pendingMoveX: 0, _pendingMoveY: 0,
 };
+// ── Cursor desplazado para edición de nodos vectoriales (_vcof) ──
+const _vcof = {
+  on: false,
+  angle: 40,          // -40 (der) o +40 (izq)
+  activeNodeIdx: -1,  // índice del nodo con cursor activo
+  dist: 76,           // misma distancia que _cof
+  MARGIN: 34,         // radio de detección para cuadrado de arrastre (px pantalla)
+};
 let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
@@ -7356,7 +7364,13 @@ function edOnStart(e){
             const _slP=$('op-line-curve-r'); if(_slP){_slP.value=existing;}
             const _slPn=$('op-line-curve-rnum'); if(_slPn){_slPn.value=existing;}
             edRedraw();
+            // vcof: cuando el cursor vectorial está activo, snap al nodo tocado
+            if (_vcof.on && e.pointerType === 'touch') {
+              _vcof.activeNodeIdx = i;
+              _vcofDraw(e.clientX, e.clientY);
+            }
             edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=i;
+            if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
             return;
           }
         }
@@ -8381,6 +8395,27 @@ function edOnStart(e){
       }
     }
   }
+  // Pasada 4 (solo táctil): bbox expandido para line/shape sin relleno.
+  // Los trazos vectoriales sin fill solo tienen hit en el contorno (línea fina),
+  // lo que en táctil exige precisión milimétrica. Ampliamos 28px de pantalla.
+  if(found < 0 && _isTouch){
+    const _p4Tol = 28 / (edCamera.z * Math.min(edPageW(), edPageH()));
+    const _p4Pw = edPageW(), _p4Ph = edPageH();
+    for(let i = edLayers.length - 1; i >= 0; i--){
+      const l = edLayers[i];
+      if(l.hidden) continue;
+      if(l.type !== 'line' && l.type !== 'shape') continue;
+      const _noFill = !l.fillColor || l.fillColor === 'none';
+      if(!_noFill) continue; // con relleno ya se detecta bien en pasada 1
+      const _p4Rot = (l.rotation || 0) * Math.PI / 180;
+      const _p4Dx = (c.nx - l.x) * _p4Pw, _p4Dy = (c.ny - l.y) * _p4Ph;
+      const _p4Lx = (_p4Dx * Math.cos(-_p4Rot) - _p4Dy * Math.sin(-_p4Rot)) / _p4Pw;
+      const _p4Ly = (_p4Dx * Math.sin(-_p4Rot) + _p4Dy * Math.cos(-_p4Rot)) / _p4Ph;
+      if(Math.abs(_p4Lx) <= l.width/2 + _p4Tol && Math.abs(_p4Ly) <= l.height/2 + _p4Tol){
+        found = i; break;
+      }
+    }
+  }
   if(found>=0){
     const _fla = edLayers[found];
     // Con barra flotante de dibujo activa: ignorar selección — el toque debe ir al dibujo
@@ -9086,7 +9121,19 @@ function edOnMove(e){
     _edShapePreview.height = Math.max(Math.abs(c.ny-y0), 0.01);
     edRedraw(); return;
   }
-  const c=edCoords(e);
+  // vcof: si cursor vectorial activo y arrastrando un nodo, calcular posición desde cursor (no del dedo)
+  let _vcofActiveNow = false;
+  if (_vcof.on && _vcof.activeNodeIdx >= 0 && edIsTailDragging &&
+      e.pointerType === 'touch') {
+    _vcofActiveNow = true;
+    _vcofDraw(e.clientX, e.clientY);
+  }
+  const _vcofRad = _vcof.angle * Math.PI / 180;
+  const _vcofE = _vcofActiveNow
+    ? { clientX: e.clientX + _vcof.dist * Math.sin(_vcofRad),
+        clientY: e.clientY - _vcof.dist * Math.cos(_vcofRad) }
+    : e;
+  const c=edCoords(_vcofE);
   _edTouchMoved = true;
   clearTimeout(window._edLongPress); // cancelar longpress si el dedo se movió
   if(edIsTailDragging&&edSelectedIdx>=0){
@@ -9703,6 +9750,19 @@ function edOnEnd(e){
   if(wasDragging && !window._edMoved && !edIsTailDragging){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('DRAG_END_NO_MOVE selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length); }
   window._edMoved = false;
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
+  // vcof: tras soltar el nodo, reposicionar cursor en la nueva posición del nodo
+  if (_vcof.on && _vcof.activeNodeIdx >= 0 && edSelectedIdx >= 0) {
+    const _vcofLa = edLayers[edSelectedIdx];
+    if (_vcofLa && _vcofLa.type === 'line') {
+      const _vcofNsp = _vcofNodeScreenPos(_vcofLa, _vcof.activeNodeIdx);
+      if (_vcofNsp) {
+        const _vcofR = _vcof.angle * Math.PI / 180;
+        // Colocar el cuadrado de arrastre por debajo del nodo
+        _vcofDraw(_vcofNsp.clientX - _vcof.dist * Math.sin(_vcofR),
+                  _vcofNsp.clientY + _vcof.dist * Math.cos(_vcofR));
+      }
+    }
+  }
   // Limpiar snapshots de LineLayer
   if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line'){
     const _ll=edLayers[edSelectedIdx];
@@ -9911,6 +9971,7 @@ function _vsInit(isNew) {
 }
 
 function _vsClear() {
+  if(typeof _vcofSetOn === 'function' && _vcof && _vcof.on) _vcofSetOn(false);
   _vsHistory = []; _vsHistIdx = -1;
   _vsIsNew = true;
   _vsPreSessionLayers = new Set();
@@ -11023,6 +11084,85 @@ function _cofHide() {
     const c = document.getElementById('edBrushCursor');
     if (c) c.style.display = '';
   }
+}
+
+// ════════════════════════════════════════════
+//  CURSOR DESPLAZADO PARA NODOS VECTORIALES (_vcof)
+// ════════════════════════════════════════════
+function _vcofSetOn(on) {
+  _vcof.on = on;
+  _vcofSyncBtn();
+  if (!on) {
+    _vcof.activeNodeIdx = -1;
+    _vcofHide();
+    return;
+  }
+  // Posición inicial: centro de pantalla
+  _vcofDraw(window.innerWidth / 2, window.innerHeight / 2);
+}
+
+function _vcofHide() {
+  const w = document.getElementById('edVcofWrap');
+  if (w) w.style.display = 'none';
+}
+
+function _vcofNodeScreenPos(la, nodeIdx) {
+  // Devuelve {clientX, clientY} CSS del nodo en pantalla
+  const pt = la.points && la.points[nodeIdx];
+  if (!pt) return null;
+  const rot = (la.rotation || 0) * Math.PI / 180;
+  const cosR = Math.cos(rot), sinR = Math.sin(rot);
+  const pw = edPageW(), ph = edPageH();
+  const lpx = pt.x * pw, lpy = pt.y * ph;
+  const absNx = la.x + (lpx * cosR - lpy * sinR) / pw;
+  const absNy = la.y + (lpx * sinR + lpy * cosR) / ph;
+  const wx = absNx * pw + edMarginX();
+  const wy = absNy * ph + edMarginY();
+  const sc = edWorldToScreen(wx, wy);
+  return { clientX: sc.x, clientY: sc.y + _edCanvasTop };
+}
+
+function _vcofDraw(touchCX, touchCY) {
+  if (!_vcof.on) return;
+  const ang  = _vcof.angle;
+  const dist = _vcof.dist;
+  const dotSize = 18;
+  const circleR = 18;
+  const sz = circleR * 2;
+  const lineLen = Math.max(0, dist - circleR - dotSize / 2);
+  const col = '#7c3aed'; // violeta — distingue del cursor de dibujo
+
+  let wrap = document.getElementById('edVcofWrap');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'edVcofWrap';
+    wrap.style.cssText = 'position:fixed;pointer-events:none;z-index:998;';
+    (document.getElementById('editorShell') || document.body).appendChild(wrap);
+  }
+  wrap.style.display = '';
+  wrap.style.left = touchCX + 'px';
+  wrap.style.top  = touchCY + 'px';
+  wrap.style.transform = 'rotate(' + ang + 'deg)';
+  wrap.innerHTML =
+    // Cuadrado de arrastre centrado en el origen (= posición del dedo)
+    '<div style="position:absolute;left:' + (-dotSize/2) + 'px;top:' + (-dotSize/2) + 'px;' +
+    'width:' + dotSize + 'px;height:' + dotSize + 'px;background:' + col + ';border-radius:2px;' +
+    'box-shadow:0 0 0 1.5px rgba(255,255,255,0.7);"></div>' +
+    // Línea hacia arriba
+    '<div style="position:absolute;left:-1px;top:' + (-dotSize/2 - lineLen) + 'px;' +
+    'width:2px;height:' + lineLen + 'px;background:' + col + ';"></div>' +
+    // Círculo cursor (sobre el nodo)
+    '<div style="position:absolute;left:0px;top:' + (-dotSize/2 - lineLen - sz) + 'px;' +
+    'width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;transform:translateX(-50%);' +
+    'border:2px solid ' + col + ';background:rgba(124,58,237,0.12);"></div>';
+}
+
+function _vcofSyncBtn() {
+  const btn = document.getElementById('op-vcof-btn');
+  if (!btn) return;
+  btn.style.background  = _vcof.on ? 'var(--black)' : 'transparent';
+  btn.style.color       = _vcof.on ? 'var(--white)' : 'var(--gray-700)';
+  btn.style.borderColor = _vcof.on ? 'var(--black)' : 'var(--gray-300)';
 }
 
 // Stubs de compatibilidad
@@ -12406,6 +12546,7 @@ function _edActivateLineTool(isNew, isCreating) {
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
     ${!isClosed?`<button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Cerrar objeto</button><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>`:''}
     <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva"><b>V⟺C</b></button>
+    ${window._edIsTouch ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-vcof-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:flex;align-items:center;gap:3px" title="Cursor desplazado para nodos"><svg width="14" height="22" viewBox="0 0 14 22" style="flex-shrink:0"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg></button><div id="op-vcof-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:center;gap:6px;"><button id="op-vcof-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button id="op-vcof-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>` : ''}
     ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Fusionar objetos cerrados en uno solo con huecos">⊕ Fusionar</button>` : ''}
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
@@ -12691,7 +12832,7 @@ function _edActivateLineTool(isNew, isCreating) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
-    if(!open){ window._edCurveVertIdx=-1; }
+    if(!open){ window._edCurveVertIdx=-1; if(_vcof.on) _vcofSetOn(false); }
     edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
   $('op-line-curve-r')?.addEventListener('input',e=>{
@@ -12736,6 +12877,7 @@ function _edActivateLineTool(isNew, isCreating) {
       if(_vcBtnL){ _vcBtnL.style.background='transparent'; _vcBtnL.style.color='var(--gray-700)'; _vcBtnL.style.borderColor='var(--gray-300)'; }
     }
     window._edCurveVertIdx=-1;
+    if(_vcof.on) _vcofSetOn(false);
     _edFinishLine();
     // T1: fusión ya hecha en tiempo real — limpiar _fusionId de TODOS los objetos
     const _okFusId = _edLineFusionId || (edSelectedIdx>=0 ? edLayers[edSelectedIdx]?._fusionId : null);
@@ -13189,6 +13331,7 @@ function edCloseOptionsPanel(){
     // impidiendo guardar movimientos/resize/rotate de cualquier objeto posterior.
     if(_mode==='line' || _mode==='shape'){
       _edLineFusionId = null;
+      if(typeof _vcofSetOn === 'function') _vcofSetOn(false);
       // Cerrar sin OK → descartar cambios: restaurar snapshot inicial de la sesión
       if(typeof _vsClear === 'function'){
         if(typeof _vsHistIdx !== 'undefined' && _vsHistory && _vsHistory.length > 0 && _vsHistIdx > 0){
@@ -22043,6 +22186,12 @@ function EditorView_init(){
       const inShapePop = e.target.closest('#edb-palette-pop');
       const inHSL      = e.target.closest('#ed-hsl-picker');
       const inPanelTab = e.target.closest('#edPanelTab');
+    // Cerrar popover vcof si se toca fuera
+    const _vcofPopEl = document.getElementById('op-vcof-pop');
+    if (_vcofPopEl && _vcofPopEl.style.display === 'flex' &&
+        !e.target.closest('#op-vcof-pop') && !e.target.closest('#op-vcof-btn')) {
+      _vcofPopEl.style.display = 'none';
+    }
       // Guards: no cancelar si estamos pintando activamente o timer táctil pendiente
       const _drawSafe = edPainting || !!window._edDrawTouchTimer || !!window._edLineTouchTimer;
       if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL && !inPanelTab && !_drawSafe){
