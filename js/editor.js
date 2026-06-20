@@ -7311,6 +7311,29 @@ function edOnStart(e){
 
   // ── MODO V⟺C: selección de vértice individual (barra flotante O submenú) ──
   if(_edCurveModeActive&&_edCurveModeActive()){
+    // vcof: si el cursor vectorial está activo y hay nodo seleccionado,
+    // interceptar toque cerca del cuadrado de arrastre ANTES de cualquier otra lógica
+    if (_vcof.on && _vcof.activeNodeIdx >= 0 && e.pointerType === 'touch') {
+      const _vcDragLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+      if (_vcDragLa && _vcDragLa.type === 'line') {
+        const _vcDragNSP = _vcofNodeScreenPos(_vcDragLa, _vcof.activeNodeIdx);
+        if (_vcDragNSP) {
+          const _vcDragRad = _vcof.angle * Math.PI / 180;
+          const _vcSqX = _vcDragNSP.clientX - _vcof.dist * Math.sin(_vcDragRad);
+          const _vcSqY = _vcDragNSP.clientY + _vcof.dist * Math.cos(_vcDragRad);
+          if (Math.hypot(e.clientX - _vcSqX, e.clientY - _vcSqY) < _vcof.MARGIN) {
+            // Toque cerca del cuadrado de arrastre → iniciar drag del nodo activo
+            if(!window._edActivePointers) window._edActivePointers = new Map();
+            window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+            _edShapePushHistory();
+            edIsTailDragging = true; edTailPointType = 'linevertex';
+            edTailVoiceIdx = _vcof.activeNodeIdx;
+            if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+            return;
+          }
+        }
+      }
+    }
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     if(la&&(la.type==='line'||la.type==='shape')){
       const c2=edCoords(e);
@@ -7364,10 +7387,18 @@ function edOnStart(e){
             const _slP=$('op-line-curve-r'); if(_slP){_slP.value=existing;}
             const _slPn=$('op-line-curve-rnum'); if(_slPn){_slPn.value=existing;}
             edRedraw();
-            // vcof: cuando el cursor vectorial está activo, snap al nodo tocado
+            // vcof: snap cursor SOBRE el nodo (círculo en nodo, cuadrado abajo)
             if (_vcof.on && e.pointerType === 'touch') {
               _vcof.activeNodeIdx = i;
-              _vcofDraw(e.clientX, e.clientY);
+              const _snSP = _vcofNodeScreenPos(la, i);
+              if (_snSP) {
+                const _snR = _vcof.angle * Math.PI / 180;
+                // touchX = nodeX - dist*sin, touchY = nodeY + dist*cos
+                _vcofDraw(_snSP.clientX - _vcof.dist * Math.sin(_snR),
+                          _snSP.clientY + _vcof.dist * Math.cos(_snR));
+              }
+              // No iniciar drag aquí: el arrastre se inicia desde el cuadrado (ver intercept arriba)
+              return;
             }
             edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=i;
             if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
@@ -8268,7 +8299,20 @@ function edOnStart(e){
       // Primer tap: registrar candidato
       _edLastNodeTapTime=_now4; _edLastNodeTapIdx=_hitId3;
       if(_lsHit.type==='node'){
-        // Iniciar drag de nodo
+        if (_vcof.on) {
+          // vcof activo: snap al nodo tocado (el drag arranca desde el cuadrado)
+          _vcof.activeNodeIdx = _lsHit.idx;
+          const _lsNSP = _vcofNodeScreenPos(_lsLa, _lsHit.idx);
+          if (_lsNSP) {
+            const _lsR = _vcof.angle * Math.PI / 180;
+            _vcofDraw(_lsNSP.clientX - _vcof.dist * Math.sin(_lsR),
+                      _lsNSP.clientY + _vcof.dist * Math.cos(_lsR));
+          }
+          window._edCurveVertIdx = _lsHit.idx;
+          edRedraw();
+          return;
+        }
+        // Sin vcof: iniciar drag normal del nodo
         _edShapePushHistory();
         edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
         if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
