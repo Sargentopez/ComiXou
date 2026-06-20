@@ -8288,8 +8288,25 @@ function edOnStart(e){
       (l.type === 'line' || l.type === 'shape') && !_vsPreSessionLayers.has(l)
     );
     let _hitVec = null;
+    // Pasada 1: hit exacto (pixel-perfect)
     for(let i = _vecLayers.length - 1; i >= 0; i--){
       if(!_vecLayers[i].hidden && _vecLayers[i].contains(c.nx, c.ny)){ _hitVec = _vecLayers[i]; break; }
+    }
+    // Pasada 2 (solo táctil): bbox expandido 28px de pantalla para facilitar la selección
+    if(!_hitVec && e.pointerType === 'touch'){
+      const _vecTolN = 28 / (edCamera.z * Math.min(edPageW(), edPageH()));
+      const _vecPw = edPageW(), _vecPh = edPageH();
+      for(let i = _vecLayers.length - 1; i >= 0; i--){
+        const _lv = _vecLayers[i];
+        if(_lv.hidden) continue;
+        const _vRot = (_lv.rotation || 0) * Math.PI / 180;
+        const _vDx = (c.nx - _lv.x) * _vecPw, _vDy = (c.ny - _lv.y) * _vecPh;
+        const _vLx = (_vDx * Math.cos(-_vRot) - _vDy * Math.sin(-_vRot)) / _vecPw;
+        const _vLy = (_vDx * Math.sin(-_vRot) + _vDy * Math.cos(-_vRot)) / _vecPh;
+        if(Math.abs(_vLx) <= _lv.width/2 + _vecTolN && Math.abs(_vLy) <= _lv.height/2 + _vecTolN){
+          _hitVec = _lv; break;
+        }
+      }
     }
     if(_hitVec){
       edSelectedIdx = edLayers.indexOf(_hitVec);
@@ -12776,9 +12793,17 @@ function _edFinishLine() {
     delete finished._fusionId;
     _edShapePushHistory();
     // Comprometer la línea al historial global: _vsClear desbloquea edPushHistory,
-    // luego guardamos el estado "línea creada" antes de reabrir el panel
+    // luego guardamos el estado "línea creada" antes de reabrir el panel.
+    // CRÍTICO: guardar _vsPreSessionLayers antes de _vsClear() para que Fusionar
+    // siga sabiendo qué objetos existían antes de esta sesión vectorial.
+    const _finishPreSession = new Set(_vsPreSessionLayers);
     _vsClear();
     edPushHistory();
+    // Restaurar contexto de sesión: _vsPreSessionLayers intacto, nueva historia vacía
+    // lista para el siguiente objeto de la misma sesión.
+    _vsPreSessionLayers = _finishPreSession;
+    _vsHistory = [_vsSnapshot()];
+    _vsHistIdx = 0;
     edRedraw();
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
