@@ -1868,6 +1868,12 @@ body.editor-page #appView {
 .ed-slider-wrap.dragging .ed-slider-bubble {
   opacity: 1;
 }
+/* Burbuja invertida para sliders en barra oscura (motion bar) */
+.ed-slider-wrap.inv .ed-slider-bubble {
+  background: #FFE135;
+  color: #111;
+}
+
 
 /* ══════════════════════════════
    BARRAS DE NAVEGACIÓN PC (T11)

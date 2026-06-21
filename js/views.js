@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v30.38</footer>
+    <footer class="app-version">v30.52</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -571,8 +571,22 @@ Router.register('editor', {
         <span style="font-size:1rem">🛤️</span>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <span style="font-size:.78rem;opacity:.8">⏱</span>
-        <input type="range" id="mpb-speed" min="10" max="1000" step="10" value="100" style="width:80px;accent-color:#FFE135;cursor:pointer;vertical-align:middle">
-        <span id="mpb-speed-val" style="min-width:64px;font-size:.78rem">100px/s</span>
+        <!-- Velocidad (px/s) — solo capas no animadas -->
+        <span id="mpb-speed-wrap" style="display:inline-flex;align-items:center;gap:4px">
+          <input type="range" id="mpb-speed" min="10" max="1000" step="10" value="100" style="width:80px;accent-color:#FFE135;cursor:pointer;vertical-align:middle">
+          <span id="mpb-speed-val" style="min-width:64px;font-size:.78rem">100px/s</span>
+        </span>
+        <!-- Ciclos — capas animadas (GIF/APNG): slider con burbuja flotante -->
+        <span id="mpb-cycles-wrap" style="display:none;align-items:center;gap:6px;min-width:130px">
+          <span style="font-size:.78rem;opacity:.8;white-space:nowrap">ciclos</span>
+          <div class="ed-slider-wrap inv" style="flex:1;min-width:80px">
+            <input type="range" id="mpb-cycles" min="1"   max="20" step="1"   value="1"
+              data-suffix="×"
+              style="flex:1;accent-color:#FFE135;cursor:pointer;width:100%">
+            <span class="ed-slider-bubble"></span>
+          </div>
+          <span id="mpb-cycles-dur" style="font-size:.75rem;color:#FFE135;min-width:36px;white-space:nowrap"></span>
+        </span>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-play" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-size:1rem;font-weight:900" title="Preview">▶</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>

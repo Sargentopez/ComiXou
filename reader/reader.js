@@ -1386,20 +1386,26 @@ function _readerGifTick() {
   RS.panels.forEach((panel, pi) => {
     let panelChanged = false;
     (panel.layers || []).forEach(layer => {
-      // GIF importado
+      // GIF importado (el ticker se suspende si el motion path con ciclos controla el frame)
       if (layer._gifReady && layer._gifFrames && layer._gifOc) {
-        if (!layer._gifLastTick) return; // no iniciado aún — esperar a que se visualice la hoja
-        const frame = layer._gifFrames[layer._gifIdx];
-        if (now - layer._gifLastTick >= (frame.delay || 100)) {
-          layer._gifIdx = (layer._gifIdx + 1) % layer._gifFrames.length;
-          layer._gifOc.getContext('2d').putImageData(layer._gifFrames[layer._gifIdx].imageData, 0, 0);
-          layer._gifLastTick = now;
-          panelChanged = true;
+        const _gifMpSync = layer._motionPath && layer._motionCycles != null;
+        if (!_gifMpSync) {
+          if (!layer._gifLastTick) return;
+          const frame = layer._gifFrames[layer._gifIdx];
+          if (now - layer._gifLastTick >= (frame.delay || 100)) {
+            layer._gifIdx = (layer._gifIdx + 1) % layer._gifFrames.length;
+            layer._gifOc.getContext('2d').putImageData(layer._gifFrames[layer._gifIdx].imageData, 0, 0);
+            layer._gifLastTick = now;
+            panelChanged = true;
+          }
         }
       }
-      // APNG: tick con delay real por frame + comportamientos stopAtEnd/repeatCount
+      // APNG: tick con delay real (suspendido si motion path con ciclos controla el frame)
       if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
-        if (!layer._animLastTick) return; // no iniciado aún — esperar a que se visualice la hoja
+        const _animMpSync = layer._motionPath && layer._motionCycles != null;
+        if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
+        else if (!layer._animLastTick) { /* noop */ }
+        else {
         const _af = layer._animFrames[layer._animIdx];
         const _ad = (_af && _af.delay) || layer._gcpFrameDelay || 100;
         if (now - layer._animLastTick >= _ad) {
@@ -1419,16 +1425,26 @@ function _readerGifTick() {
           layer._animLastTick = now;
           panelChanged = true;
         }
+        } // end else (!_animMpSync)
       }
-      // ── Recorrido de animación (motion path) — velocidad en px/s ─────────────
+      // Frame sincronizado al path respetando el comportamiento de la animación
+function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd) {
+  if (totalF < 1 || cycles <= 0) return 0;
+  const iterT = (pathEnd === 'stop') ? Math.min(rawT, 1 - 1e-9)
+              : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
+              : (rawT % 1);
+  const animProgress = iterT * cycles * totalF;
+  if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
+  if (repeatCnt > 0) return animProgress >= repeatCnt * totalF ? totalF - 1 : Math.floor(animProgress) % totalF;
+  return Math.floor(animProgress) % totalF;
+}
+
+// ── Recorrido de animación (motion path) — velocidad por ciclos o px/s ────
       if (layer._motionPath && layer._motionPath.length >= 2) {
         if (!layer._pathStartTime) layer._pathStartTime = now;
         const { pw: _mpPw, ph: _mpPh } = _panelDims(pi);
-        const _mpSpeed   = layer._motionSpeed || 100; // px/s
         const _mpElapsed = (now - layer._pathStartTime) / 1000;
-        // Longitud total del recorrido en px para convertir px/s → t
         const _mpClosed  = layer._motionPathClosed || false;
-        // Usar bezier sample para bucles cerrados (misma base que _pathPositionAt)
         const _mpPts     = (_mpClosed && layer._motionPath.length >= 3)
           ? _bezierSampleClosed(layer._motionPath, 200)
           : (_mpClosed ? [...layer._motionPath, layer._motionPath[0]] : layer._motionPath);
@@ -1437,7 +1453,44 @@ function _readerGifTick() {
           _mpTotalPx += Math.hypot((_mpPts[_i].x - _mpPts[_i-1].x) * _mpPw,
                                    (_mpPts[_i].y - _mpPts[_i-1].y) * _mpPh);
         if (_mpTotalPx < 1) _mpTotalPx = 1;
-        const _mpRawT = (_mpElapsed * _mpSpeed) / _mpTotalPx;
+        // Calcular duración del ciclo de animación (ms)
+        // _gcpLayersData.length = nº de capas GCP (NO de frames) → no usar para duración
+        const _mpCycleDurMs = (layer._gifFrames && layer._gifFrames.length)
+          ? layer._gifFrames.reduce((s, f) => s + (f.delay || 100), 0)
+          : (layer._gcpFramesData && layer._gcpFramesData[0] && layer._gcpFramesData[0].length)
+            ? layer._gcpFramesData[0].length * (layer._gcpFrameDelay || 100)
+            : (layer._pngFrames && layer._pngFrames.length)
+              ? layer._pngFrames.length * (layer._gcpFrameDelay || 100)
+              : 0;
+        // Si es animada y tiene ciclos definidos → duración = ciclos × duración_ciclo
+        // Si no → fallback a velocidad en px/s (comportamiento legado)
+        const _mpRawT = (_mpCycleDurMs > 0 && layer._motionCycles != null)
+          ? _mpElapsed / (layer._motionCycles * _mpCycleDurMs / 1000)
+          : (_mpElapsed * (layer._motionSpeed || 100)) / _mpTotalPx;
+        // ── Scrubbing: frame sincronizado al path, respetando comportamiento anim ────
+        if (_mpCycleDurMs > 0 && layer._motionCycles != null) {
+          const _mpTF = layer._gifFrames ? layer._gifFrames.length
+            : (layer._gcpFramesData && layer._gcpFramesData[0]) ? layer._gcpFramesData[0].length
+            : (layer._animFrames ? layer._animFrames.length : 0);
+          if (_mpTF > 0) {
+            const _mpSyncF = _rMpSyncFrame(
+              _mpRawT, layer._motionCycles, _mpTF,
+              layer._gcpStopAtEnd || false,
+              layer._gcpRepeatCount || 0,
+              layer._motionPathEnd || 'restart'
+            );
+            if (layer._gifReady && layer._gifFrames && layer._gifOc && _mpSyncF !== layer._gifIdx) {
+              layer._gifIdx = _mpSyncF;
+              layer._gifOc.getContext('2d').putImageData(layer._gifFrames[_mpSyncF].imageData, 0, 0);
+              panelChanged = true;
+            }
+            if (layer._animReady && layer._animFrames && layer._animOc && _mpSyncF !== layer._animIdx) {
+              layer._animIdx = _mpSyncF;
+              layer._animOc.getContext('2d').putImageData(layer._animFrames[_mpSyncF].imageData, 0, 0);
+              panelChanged = true;
+            }
+          }
+        }
         const _mpEndB = layer._motionPathEnd   || 'restart';
         const _mpAcl  = layer._motionPathAccel || 'none';
         let _mpPos = null;
