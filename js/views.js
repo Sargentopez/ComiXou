@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v30.61</footer>
+    <footer class="app-version">v30.65</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -792,7 +792,7 @@ Router.register('editor', {
           <div class="ed-menu-sep"></div>
           <!-- Comportamiento -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-gcpmenu="comportamiento">Comportamiento ▾</button>
+            <button class="ed-menu-btn" data-gcpmenu="comportamiento" style="font-size:1.35rem;padding:0 8px">⚙️</button>
             <div class="ed-dropdown" id="gdd-comportamiento" style="min-width:210px;padding:6px 0">
               <div class="ed-dropdown-label">Velocidad</div>
               <div style="padding:4px 14px 10px">
