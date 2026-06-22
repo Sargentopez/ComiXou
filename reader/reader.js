@@ -997,14 +997,26 @@ async function loadWork(workId) {
 async function loadDraft(token) {
   setLoadingMsg('Cargando borrador...');
   try {
-    const work = await sbGetAuth('works?id=eq.' + token);
-    if (!work || !work.length) { showError('Borrador no encontrado o enlace caducado.'); return; }
+    // Intento 1: acceso público por UUID (funciona cuando la RLS lo permite para todos)
+    let work = null;
+    let useAuth = false;
+    try { work = await sbGet('works?id=eq.' + token); } catch(_) {}
+
+    // Intento 2: con JWT del autor autenticado en este navegador (fallback)
+    if (!work || !work.length) {
+      try { work = await sbGetAuth('works?id=eq.' + token); useAuth = !!work?.length; } catch(_) {}
+    }
+
+    if (!work || !work.length) {
+      showError('Este borrador no está disponible. Comprueba que el enlace es correcto o que la obra no ha sido eliminada.');
+      return;
+    }
 
     setLoadingMsg('Cargando páginas...');
-    await _loadPanels(token, true);  // true = usar JWT para leer capas del borrador
+    await _loadPanels(token, useAuth);
     document.title = (work[0].title || 'Borrador') + ' — ComXow';
-    RS._workAuthor = work[0].author_name || "";
-    RS._workSocial = work[0].social      || "";
+    RS._workAuthor = work[0].author_name || '';
+    RS._workSocial = work[0].social      || '';
     RS._workTitle  = work[0].title       || '';
     RS.navMode     = work[0].nav_mode    || 'fixed';
     _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
@@ -1015,7 +1027,7 @@ async function loadDraft(token) {
     startReader();
   } catch(err) {
     console.error('Error loadDraft:', err);
-    showError('Error al cargar el borrador. Comprueba tu conexión.');
+    showError('Error al cargar el borrador. Comprueba tu conexión e inténtalo de nuevo.');
   }
 }
 

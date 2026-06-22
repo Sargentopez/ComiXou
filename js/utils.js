@@ -113,7 +113,8 @@ function openShareModal(comic) {
   }
 
   const base  = window.location.origin + window.location.pathname.replace(/\/index\.html$/, '').replace(/\/$/, '');
-  const param = comic.published ? 'id=' + comic.supabaseId : 'draft=' + comic.supabaseId;
+  const isDraft = !comic.published;
+  const param = isDraft ? 'draft=' + comic.supabaseId : 'id=' + comic.supabaseId;
   const url   = base + '/reader/index.html?' + param;
   const title = comic.title || 'Una creación en ComiXou';
 
@@ -123,10 +124,11 @@ function openShareModal(comic) {
     });
   } else {
     // Fallback: copiar enlace al portapapeles
+    const _nota = isDraft ? '\n\n⚠️ Es un borrador — cualquier persona con el enlace podrá verlo.' : '';
     navigator.clipboard.writeText(url).then(() => {
-      appAlert('Enlace copiado al portapapeles:\n' + url);
+      appAlert('✅ Enlace copiado al portapapeles:\n' + url + _nota);
     }).catch(() => {
-      appAlert('Copia este enlace para compartirlo:\n' + url);
+      appAlert('Copia este enlace para compartirlo:\n' + url + _nota);
     });
   }
 }

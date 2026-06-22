@@ -1101,16 +1101,19 @@ function _mcRenderList() {
     } else if (action === 'share') {
       const comic = ComicStore.getById(id);
       if (!comic || !_mcOwns(comic)) return;
+      // 1. Verificar que la obra ha sido subida a la nube al menos una vez
       if (!comic.supabaseId) {
-        appAlert('Esta obra no está guardada en la nube. Ábrela en el editor y guárdala en la nube para poder compartirla.');
+        appAlert('Esta obra no está guardada en la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube para poder compartirla.');
         return;
       }
-      // Si la versión local es más nueva que la nube, el enlace apuntaría a datos
-      // desactualizados — avisar al usuario para que guarde primero
+      // 2. Comparar localSavedAt vs cloudSavedAt para detectar cambios sin subir.
+      //    NOTA: updatedAt no es fiable aquí — ComicStore.save() lo sobreescribe siempre
+      //    con new Date(), por lo que no refleja la fecha real de la última subida a la nube.
+      //    cloudSavedAt solo se actualiza en editor.js al guardar en nube con éxito.
       const _localAt = comic.localSavedAt || '';
-      const _cloudAt = comic.updatedAt    || '';
+      const _cloudAt = comic.cloudSavedAt || '';
       if (_localAt && _cloudAt && _localAt > _cloudAt) {
-        appAlert('La versión local es más reciente que la guardada en la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube antes de compartirla.');
+        appAlert('Tienes cambios sin subir a la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube antes de compartirla.');
         return;
       }
       if (typeof openShareModal !== 'undefined') openShareModal(comic);
