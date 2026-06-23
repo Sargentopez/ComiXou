@@ -166,8 +166,61 @@ function buildReaderTexts(panel, layer) {
       inner.style.borderWidth = (t.border    || 2) + 'px';
       inner.style.borderColor = t.borderColor || '#000';
       inner.style.borderStyle = t.style === 'lowvoice' ? 'dashed' : 'solid';
-      if      (t.style === 'explosion') { inner.style.borderRadius = '4px'; inner.style.transform = 'rotate(-1deg)'; }
-      else if (t.style === 'thought')   { inner.style.borderRadius = '50%'; }
+      if (t.style === 'explosion') {
+        // Forma SVG blob de explosión/grito
+        inner.style.background   = 'transparent';
+        inner.style.border       = 'none';
+        inner.style.boxShadow    = 'none';
+        inner.style.borderRadius = '0';
+        inner.style.overflow     = 'visible';
+        inner.style.display      = 'flex';
+        inner.style.alignItems   = 'center';
+        inner.style.justifyContent = 'center';
+        inner.style.padding      = '22% 14%';
+        const _eSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        _eSvg.setAttribute('viewBox','0 0 289 182');
+        _eSvg.style.cssText='position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:0;pointer-events:none;';
+        const _eG = document.createElementNS('http://www.w3.org/2000/svg','g');
+        _eG.setAttribute('transform','translate(144.239 90.627)');
+        const _eP = document.createElementNS('http://www.w3.org/2000/svg','path');
+        _eP.setAttribute('d','M -112.632 34.020 L -141.239 6.082 L -114.174 -14.397 L -120.965 -67.353 L -65.757 -48.937 L -47.530 -87.627 L -2.478 -58.343 L 55.189 -75.913 L 79.067 -46.179 L 134.931 -70.056 L 114.207 -24.553 L 141.239 7.884 L 114.207 25.905 L 130.426 79.968 L 82.671 56.991 L 61.947 84.022 L 12.389 66.903 L -43.926 87.627 L -74.561 61.046 L -117.812 75.463 L -112.632 34.020 Z');
+        _eP.setAttribute('fill', t.bg || '#ffffff');
+        _eP.setAttribute('stroke', t.borderColor || '#000000');
+        _eP.setAttribute('stroke-width', String(t.border || 2));
+        _eP.setAttribute('stroke-linecap','round');
+        _eP.setAttribute('stroke-linejoin','round');
+        _eG.appendChild(_eP);
+        _eSvg.appendChild(_eG);
+        inner.appendChild(_eSvg);
+      }
+      else if (t.style === 'thought')   {
+        // Forma SVG blob de pensamiento — reemplaza el antiguo borderRadius:50%
+        inner.style.background   = 'transparent';
+        inner.style.border       = 'none';
+        inner.style.boxShadow    = 'none';
+        inner.style.borderRadius = '0';
+        inner.style.overflow     = 'visible';
+        inner.style.display      = 'flex';
+        inner.style.alignItems   = 'center';
+        inner.style.justifyContent = 'center';
+        inner.style.padding      = '18% 12%'; // margen interior para que el texto quede dentro del blob
+        // Insertar SVG de fondo (se añade antes del span de texto)
+        const _tSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        _tSvg.setAttribute('viewBox','0 0 278 149');
+        _tSvg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:0;pointer-events:none;';
+        const _tG = document.createElementNS('http://www.w3.org/2000/svg','g');
+        _tG.setAttribute('transform','translate(138.536 74.392)');
+        const _tP = document.createElementNS('http://www.w3.org/2000/svg','path');
+        _tP.setAttribute('d','M -107.781 48.879 Q -113.641 43.637 -113.339 35.780 L -113.024 27.601 L -122.608 23.419 Q -129.985 20.199 -132.761 12.644 L -132.761 12.644 Q -135.536 5.088 -133.693 -2.747 L -133.686 -2.775 Q -131.836 -10.639 -124.875 -14.741 L -114.566 -20.816 L -114.566 -31.918 Q -114.566 -43.020 -106.574 -50.726 L -103.299 -53.884 Q -97.296 -59.673 -88.970 -60.136 L -88.338 -60.171 Q -80.643 -60.598 -73.396 -57.977 L -66.149 -55.355 L -57.514 -61.215 Q -48.879 -67.074 -38.647 -69.121 L -38.031 -69.244 Q -27.292 -71.392 -16.499 -69.541 L -15.704 -69.405 Q -5.705 -67.691 1.696 -60.752 L 9.097 -53.814 L 16.882 -59.399 Q 23.283 -63.990 31.147 -64.453 L 32.001 -64.503 Q 39.011 -64.916 45.950 -63.836 L 45.950 -63.836 Q 52.888 -62.757 56.576 -56.781 L 61.832 -48.263 L 73.299 -51.514 Q 82.494 -54.122 91.899 -52.426 L 93.042 -52.220 Q 101.305 -50.730 107.319 -44.870 L 107.570 -44.625 Q 113.332 -39.011 111.636 -31.147 L 109.940 -23.283 L 123.221 -18.607 Q 131.836 -15.574 133.686 -6.630 L 133.865 -5.764 Q 135.536 2.313 132.606 10.023 L 132.225 11.027 Q 129.677 17.732 123.201 20.816 L 116.725 23.900 L 116.178 32.102 Q 115.799 37.777 112.716 42.557 L 112.716 42.557 Q 109.632 47.337 104.300 49.321 L 103.001 49.805 Q 96.371 52.272 89.561 50.356 L 76.634 46.721 L 71.854 52.272 Q 67.074 57.823 60.150 60.214 L 58.594 60.752 Q 50.113 63.682 41.144 63.429 L 39.165 63.374 Q 28.217 63.065 19.061 57.056 L 8.481 50.113 L 0.925 57.823 Q -6.630 65.532 -17.103 68.150 L -19.091 68.648 Q -30.068 71.392 -40.861 67.999 L -40.861 67.999 Q -51.655 64.607 -59.440 56.397 L -68.616 46.721 L -75.709 51.346 Q -82.802 55.972 -91.231 55.157 L -94.096 54.879 Q -101.922 54.122 -107.781 48.879 L -107.781 48.879 Z');
+        _tP.setAttribute('fill', t.bg || '#ffffff');
+        _tP.setAttribute('stroke', t.borderColor || '#000000');
+        _tP.setAttribute('stroke-width', String(t.border || 2));
+        _tP.setAttribute('stroke-linecap','round');
+        _tP.setAttribute('stroke-linejoin','round');
+        _tG.appendChild(_tP);
+        _tSvg.appendChild(_tG);
+        inner.appendChild(_tSvg);
+      }
       else                              { inner.style.borderRadius = '14px'; }
 
       inner.appendChild(Object.assign(document.createElement('span'), { textContent: t.text }));

@@ -1518,39 +1518,30 @@ class BubbleLayer extends BaseLayer {
     const maxW=lines.reduce((m,l)=>Math.max(m,ctx.measureText(l).width),0);
     const totalH=lines.length*lh;
     if(this.style==='thought'){
-      // El texto cabe en el círculo interior de radio maxDist-padding
-      // maxDist ≈ 0.45 * w (constante para proporciones razonables, ver análisis geométrico)
-      // → w = (textW/2 + padding) / 0.45 * 1.05 (margen 5%)
-      // → h = (textH/2 + padding) / 0.45 * 1.05
-      // El bbox se adapta al texto en ambos ejes sin espacio desperdiciado
-      const _C=0.45, _mg=1.05;
-      const w2=(maxW/2+this.padding)/_C*_mg;
-      const h2=(totalH/2+this.padding)/_C*_mg;
+      // El texto debe caber dentro del blob SVG de pensamiento.
+      // El blob (natural 278×149) tiene área interior segura asimétrica:
+      //   Horizontal: ±~85 unidades de 139 → safeFrX ≈ 0.61 → _Cx = 0.44
+      //   Vertical ↑: ~62 de 74.5 → safeFrYtop ≈ 0.83
+      //   Vertical ↓: ~58 de 74.5 → safeFrYbot ≈ 0.78 (saliente central en base)
+      // Usamos la restricción más estricta (base) para garantizar separación en todos los casos.
+      const _Cx=0.44, _Cy=0.36, _mg=1.05;
+      const w2=(maxW/2+this.padding)/_Cx*_mg;
+      const h2=(totalH/2+this.padding)/_Cy*_mg;
       this.width=Math.max(0.10,w2/pw);
       this.height=Math.max(0.07,h2/ph);
       return;
     }
     if(this.style==='explosion'){
-      // Para explosión: el texto debe caber dentro del área interior (delimitada por los valles)
-      // Los valles (índices impares) tienen radio ~0.55-0.65 del borde de la caja
-      // El radio interior mínimo de los valles es ~0.55 en cada eje
-      // Área interior disponible: (w/2)*minValleOx x (h/2)*minValleOy
-      // Necesitamos: caja tal que los valles dejen espacio para maxW x totalH + padding
+      // El texto debe caber en el área interior del blob SVG de explosión.
+      // Radio interior mínimo del SVG ≈ 58 unidades sobre 144.5 (half-size) ≈ 0.40
+      // Usamos _C = 0.38 para dejar margen cómodo.
+      const _Ce=0.38, _mge=1.05;
       this._initExplosionRadii();
-      // Calcular el radio mínimo de los valles en cada dirección
-      const valleys = this.explosionRadii.filter((_,i)=>i%2!==0);
-      const minValleR = valleys.reduce((m,v)=>Math.min(m,Math.hypot(v.ox,v.oy)),1);
-      // El texto + padding debe caber en el rectángulo inscrito dentro del círculo de radio minValleR
-      // Para un cuadrado inscrito en un círculo de radio r: lado = r * sqrt(2)
-      // Pero usamos el rectángulo real del texto: necesitamos que
-      // sqrt((maxW/2/ax)² + (totalH/2/ay)²) <= minValleR
-      // Simplificación: escalar la caja para que el texto quepa con margen
-      const textDiag = Math.hypot(maxW/2 + this.padding, totalH/2 + this.padding);
-      const scale = 1 / minValleR; // cuánto más grande debe ser la caja respecto al texto
-      const w = (maxW + this.padding*2) * scale * 1.1;
-      const h = (totalH + this.padding*2) * scale * 1.1;
-      this.width=Math.max(0.05,w/pw);
-      this.height=Math.max(0.05,h/ph);
+      // El SVG explosion tiene radio interior mínimo ≈0.40 → _Ce/mg = 0.38/1.05 ≈ 0.362
+      const w2=(maxW/2+this.padding)/_Ce*_mge;
+      const h2=(totalH/2+this.padding)/_Ce*_mge;
+      this.width=Math.max(0.05,w2/pw);
+      this.height=Math.max(0.05,h2/ph);
     } else {
       const factor = lines.length === 1 ? 1.15 : 1.05;
       const w = maxW * factor + this.padding * 2;
@@ -1638,45 +1629,36 @@ class BubbleLayer extends BaseLayer {
     ctx.save();ctx.translate(pos.x,pos.y);
 
     if(this.style==='thought'){
-      const circles=[{x:0,y:-h/4,r:w/3},{x:w/4,y:0,r:w/3},{x:-w/4,y:0,r:w/3},{x:0,y:h/4,r:w/3}];
-      ctx.fillStyle=this.backgroundColor;ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
-      circles.forEach(c=>{ctx.beginPath();ctx.arc(c.x,c.y,c.r,0,Math.PI*2);ctx.fill();ctx.stroke();});
-      function ci(c1,c2){
-        const dx=c2.x-c1.x,dy=c2.y-c1.y,d=Math.hypot(dx,dy);
-        if(d>c1.r+c2.r||d<Math.abs(c1.r-c2.r)||d===0)return[];
-        const a=(c1.r*c1.r-c2.r*c2.r+d*d)/(2*d),h2=c1.r*c1.r-a*a;
-        if(h2<0)return[];const hh=Math.sqrt(h2),x0=c1.x+a*dx/d,y0=c1.y+a*dy/d;
-        const rx=-dy*(hh/d),ry=dx*(hh/d);
-        return[{x:x0+rx,y:y0+ry},{x:x0-rx,y:y0-ry}];
-      }
-      let maxDist=0;
-      [[0,1],[0,2],[1,3],[2,3],[0,3],[1,2]].forEach(([a,b])=>{
-        ci(circles[a],circles[b]).forEach(p=>{maxDist=Math.max(maxDist,Math.hypot(p.x,p.y));});
-      });
-      if(maxDist===0)maxDist=Math.min(w,h)*0.4;
-      ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(0,0,maxDist,0,Math.PI*2);ctx.fill();
-      // Burbujas cola pensamiento: 3 elipses editables
+      // Path SVG del bocadillo de pensamiento (extraído de pensamiento.svg)
+      // Coordenadas centradas en (0,0), espacio natural 278×149
+      const _tD='M -107.781 48.879 Q -113.641 43.637 -113.339 35.780 L -113.024 27.601 L -122.608 23.419 Q -129.985 20.199 -132.761 12.644 L -132.761 12.644 Q -135.536 5.088 -133.693 -2.747 L -133.686 -2.775 Q -131.836 -10.639 -124.875 -14.741 L -114.566 -20.816 L -114.566 -31.918 Q -114.566 -43.020 -106.574 -50.726 L -103.299 -53.884 Q -97.296 -59.673 -88.970 -60.136 L -88.338 -60.171 Q -80.643 -60.598 -73.396 -57.977 L -66.149 -55.355 L -57.514 -61.215 Q -48.879 -67.074 -38.647 -69.121 L -38.031 -69.244 Q -27.292 -71.392 -16.499 -69.541 L -15.704 -69.405 Q -5.705 -67.691 1.696 -60.752 L 9.097 -53.814 L 16.882 -59.399 Q 23.283 -63.990 31.147 -64.453 L 32.001 -64.503 Q 39.011 -64.916 45.950 -63.836 L 45.950 -63.836 Q 52.888 -62.757 56.576 -56.781 L 61.832 -48.263 L 73.299 -51.514 Q 82.494 -54.122 91.899 -52.426 L 93.042 -52.220 Q 101.305 -50.730 107.319 -44.870 L 107.570 -44.625 Q 113.332 -39.011 111.636 -31.147 L 109.940 -23.283 L 123.221 -18.607 Q 131.836 -15.574 133.686 -6.630 L 133.865 -5.764 Q 135.536 2.313 132.606 10.023 L 132.225 11.027 Q 129.677 17.732 123.201 20.816 L 116.725 23.900 L 116.178 32.102 Q 115.799 37.777 112.716 42.557 L 112.716 42.557 Q 109.632 47.337 104.300 49.321 L 103.001 49.805 Q 96.371 52.272 89.561 50.356 L 76.634 46.721 L 71.854 52.272 Q 67.074 57.823 60.150 60.214 L 58.594 60.752 Q 50.113 63.682 41.144 63.429 L 39.165 63.374 Q 28.217 63.065 19.061 57.056 L 8.481 50.113 L 0.925 57.823 Q -6.630 65.532 -17.103 68.150 L -19.091 68.648 Q -30.068 71.392 -40.861 67.999 L -40.861 67.999 Q -51.655 64.607 -59.440 56.397 L -68.616 46.721 L -75.709 51.346 Q -82.802 55.972 -91.231 55.157 L -94.096 54.879 Q -101.922 54.122 -107.781 48.879 L -107.781 48.879 Z';
+      const _tPath=new Path2D(_tD);
+      const _tsx=w/278, _tsy=h/149; // escala al bbox del layer
+      // 1 — Blob SVG escalado al bbox del layer
+      ctx.save();
+      ctx.scale(_tsx,_tsy);
+      ctx.fillStyle=this.backgroundColor;
+      ctx.fill(_tPath);
+      ctx.lineWidth=this.borderWidth/Math.min(_tsx,_tsy);
+      ctx.strokeStyle=this.borderColor;
+      ctx.lineJoin='round';ctx.lineCap='round';
+      ctx.stroke(_tPath);
+      ctx.restore();
+      // 2 — Cola pensamiento POR ENCIMA del blob (elipses de "burbujas")
       if(this.tail){
         const bx=this.thoughtBig.x*w,   by=this.thoughtBig.y*h;
         const sx=this.thoughtSmall.x*w, sy=this.thoughtSmall.y*h;
-        // Radios proporcionales al bocadillo — tamaño doble manteniendo proporciones relativas
-        const rBig  = Math.min(w,h)*0.156;
-        const rSmall= Math.min(w,h)*0.070;
-        // Elipse mediana: a mitad de distancia entre contorno grande y contorno pequeña
-        // Contorno grande más cercano a pequeña: punto en bx,by en dirección a sx,sy a distancia rBig
+        // Tamaño fijo de las burbujas de cola — no crece con el bocadillo
+        const rBig  = edPageH() * 0.020;  // ~16px en página estándar
+        const rSmall= edPageH() * 0.009;  // ~7px en página estándar
         const dx=sx-bx,dy=sy-by,dist=Math.hypot(dx,dy)||1;
         const ux=dx/dist,uy=dy/dist;
-        // Contornos de grande y pequeña (punto más cercano entre ellas)
         const edgeBig  ={x:bx+ux*rBig,   y:by+uy*rBig};
         const edgeSmall={x:sx-ux*rSmall, y:sy-uy*rSmall};
         const freeD=Math.hypot(edgeSmall.x-edgeBig.x,edgeSmall.y-edgeBig.y);
-        // Radios interpolados linealmente: rSmall < r2 < r3 < rBig
-        // Elipses 1(rojo/pequeña) < 2 < 3 < 4(azul/grande)
-        const r2=rSmall+(rBig-rSmall)*1/3; // elipse 2: 1/3 del camino entre pequeña y grande
-        const r3=rSmall+(rBig-rSmall)*2/3; // elipse 3: 2/3 del camino entre pequeña y grande
-        // gap igual entre todos los contornos adyacentes
+        const r2=rSmall+(rBig-rSmall)*1/3;
+        const r3=rSmall+(rBig-rSmall)*2/3;
         const gap=Math.max(0,(freeD-2*r3-2*r2)/3);
-        // Desde edgeSmall hacia edgeBig (orden 2→3)
         const e2x=edgeSmall.x-ux*(gap+r2), e2y=edgeSmall.y-uy*(gap+r2);
         const e3x=edgeSmall.x-ux*(gap+2*r2+gap+r3), e3y=edgeSmall.y-uy*(gap+2*r2+gap+r3);
         [[sx,sy,rSmall],[e2x,e2y,r2],[e3x,e3y,r3],[bx,by,rBig]].forEach(([cx2,cy2,r])=>{
@@ -1685,36 +1667,63 @@ class BubbleLayer extends BaseLayer {
           ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;ctx.stroke();
         });
       }
-      // Texto centrado
+      // 3 — Texto centrado con offset upward: el blob tiene menos margen en la base
+      const _tYOff = -5 * _tsy;
       ctx.font=this._fontStr();
       const isPlaceholderT=this.text==='Escribe aquí';
       ctx.fillStyle=isPlaceholderT?'#999999':this.color;ctx.textAlign='center';ctx.textBaseline='middle';
       const linesT=this.getLines(),lhT=this.fontSize*1.2,totalHT=linesT.length*lhT;
-      linesT.forEach((l,i)=>ctx.fillText(l,0,-totalHT/2+lhT/2+i*lhT));
+      linesT.forEach((l,i)=>ctx.fillText(l,0,_tYOff+(-totalHT/2+lhT/2+i*lhT)));
       ctx.restore();return;
     }
-
     if(this.style==='explosion'){
-      this._initExplosionRadii();
-      ctx.beginPath();
-      this.explosionRadii.forEach((v,i)=>{
-        const vx=v.ox*w/2, vy=v.oy*h/2;
-        i===0?ctx.moveTo(vx,vy):ctx.lineTo(vx,vy);
-      });
-      ctx.closePath();
-    }else if(isSingle){
+      // Path SVG del bocadillo de grito/explosión (extraído de explosion.svg)
+      // Coordenadas centradas en (0,0), espacio natural 289×182
+      const _eD='M -112.632 34.020 L -141.239 6.082 L -114.174 -14.397 L -120.965 -67.353 L -65.757 -48.937 L -47.530 -87.627 L -2.478 -58.343 L 55.189 -75.913 L 79.067 -46.179 L 134.931 -70.056 L 114.207 -24.553 L 141.239 7.884 L 114.207 25.905 L 130.426 79.968 L 82.671 56.991 L 61.947 84.022 L 12.389 66.903 L -43.926 87.627 L -74.561 61.046 L -117.812 75.463 L -112.632 34.020 Z';
+      const _ePath=new Path2D(_eD);
+      const _esx=w/289, _esy=h/182;
+      // 1 — Blob SVG explosion
+      ctx.save();
+      ctx.scale(_esx,_esy);
+      ctx.fillStyle=this.backgroundColor;
+      ctx.fill(_ePath);
+      ctx.lineWidth=this.borderWidth/Math.min(_esx,_esy);
+      ctx.strokeStyle=this.borderColor;
+      ctx.lineJoin='round';ctx.lineCap='round';
+      ctx.stroke(_ePath);
+      ctx.restore();
+      // 2 — Cola (flécha estándar)
+      if(this.tail){
+        const vc=this.voiceCount||1;
+        if(!this.tailStarts)this.tailStarts=[{...this.tailStart}];
+        if(!this.tailEnds)  this.tailEnds  =[{...this.tailEnd}];
+        for(let v=0;v<vc;v++){
+          const s=this.tailStarts[v]||this.tailStarts[0];
+          const e=this.tailEnds[v]  ||this.tailEnds[0];
+          this.drawTail(ctx,s.x*w,s.y*h,e.x*w,e.y*h);
+        }
+      }
+      // 3 — Texto centrado
+      ctx.font=this._fontStr();
+      const isPlaceholderE=this.text==='Escribe aquí';
+      ctx.fillStyle=isPlaceholderE?'#999999':this.color;
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      const linesE=this.getLines(),lhE=this.fontSize*1.2,totalHE=linesE.length*lhE;
+      linesE.forEach((l,i)=>ctx.fillText(l,0,-totalHE/2+lhE/2+i*lhE));
+      ctx.restore();return;
+    }
+    // Estilos convencionales (conventional, lowvoice, radio, etc.)
+    if(isSingle){
       ctx.beginPath();ctx.arc(0,0,Math.min(w,h)/2,0,Math.PI*2);
     }else{
       ctx.beginPath();ctx.ellipse(0,0,w/2,h/2,0,0,Math.PI*2);
     }
-
     ctx.fillStyle=this.backgroundColor;ctx.fill();
     if(this.borderWidth>0){
       ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
       if(this.style==='lowvoice')ctx.setLineDash([5,3]);else ctx.setLineDash([]);
       ctx.stroke();ctx.setLineDash([]);
     }
-
     if(this.tail){
       {
         const vc=this.voiceCount||1;
@@ -1727,20 +1736,12 @@ class BubbleLayer extends BaseLayer {
         }
       }
     }
-
     ctx.font=this._fontStr();
     const isPlaceholder = this.text==='Escribe aquí';
     ctx.fillStyle=isPlaceholder?'#999999':this.color;
     ctx.textAlign='center';ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
-    // Para explosión: centrar el texto en el centroide de los valles (índices impares)
-    let textCx=0, textCy=0;
-    if(this.style==='explosion' && this.explosionRadii && this.explosionRadii.length>1){
-      const valleys=this.explosionRadii.filter((_,i)=>i%2!==0);
-      textCx=valleys.reduce((s,v)=>s+v.ox*w/2,0)/valleys.length;
-      textCy=valleys.reduce((s,v)=>s+v.oy*h/2,0)/valleys.length;
-    }
-    lines.forEach((l,i)=>ctx.fillText(l,textCx,textCy-totalH/2+lh/2+i*lh));
+    lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
     ctx.restore();
   }
 }
@@ -4311,22 +4312,8 @@ function edDrawSel(){
     }
   }
   }
-  // Handles vértices explosión: solo visibles editando (panel abierto)
-  if(la.type==='bubble' && la.style==='explosion' &&
-     ($('edOptionsPanel')?.dataset.mode==='bubble' || $('edOptionsPanel')?.dataset.mode==='props' || $('edOptionsPanel')?.dataset.mode==='text-props')){
-    const _HR=6/z;
-    la._initExplosionRadii();
-    const _pw=edPageW(),_ph=edPageH();
-    const _w=la.width*_pw, _h=la.height*_ph;
-    la.explosionRadii.forEach((v,i)=>{
-      const cpx=edMarginX()+(la.x+v.ox*_w/2/_pw)*_pw;
-      const cpy=edMarginY()+(la.y+v.oy*_h/2/_ph)*_ph;
-      const isPeak = i%2===0;
-      edCtx.beginPath();edCtx.arc(cpx,cpy,_HR,0,Math.PI*2);
-      edCtx.fillStyle=isPeak?'#ff6600':'#1a8cff';edCtx.fill();
-      edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
-    });
-  }
+  // Handles vértices explosión: desactivados — la forma es ahora un SVG fijo
+  // (la variable explosionRadii se mantiene por compatibilidad con datos serializados)
   // Handles 4 vértices del rect en modo curva
   if(la.type==='shape' && la.shape==='rect'){
     if(_edCurveModeActive()){
@@ -7759,10 +7746,13 @@ function edOnStart(e){
   _edTouchMoved = false; // resetear flag de movimiento
   edLastPointerIsTouch = (e.pointerType === 'touch'); // actualizar detección real de táctil
   // Rastrear pointers activos (para pinch con pointer events)
-  // No registrar punteros que vienen de la UI de barras flotantes — evita falsos pinch
+  // Rastrear pointers activos (para pinch con pointer events)
+  // SOLO eventos táctiles: pen y mouse son siempre de un puntero y nunca forman pinch.
+  // Incluir pen/mouse causaba falsos pinch en tabletas gráficas (el driver emite touch fantasma).
   if(!window._edActivePointers) window._edActivePointers = new Map();
   const _tgt = e.target;
-  if(!_tgt.closest('#edDrawBar') && !_tgt.closest('#edShapeBar') &&
+  if(e.pointerType === 'touch' &&
+     !_tgt.closest('#edDrawBar') && !_tgt.closest('#edShapeBar') &&
      !_tgt.closest('#edb-size-pop') && !_tgt.closest('#esb-slider-panel') &&
      !_tgt.closest('#edb-palette-pop') && !_tgt.closest('#ed-hsl-picker') &&
      !_tgt.closest('#edConfirmModal')){
@@ -9305,7 +9295,8 @@ function edOnMove(e){
   // ── MULTI-SELECCIÓN ────────────────────────────────────────
   if(edActiveTool==='multiselect'){
     if(window._edActivePointers && window._edActivePointers.size >= 2){
-      if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
+      if(e.pointerId !== undefined && window._edActivePointers.has(e.pointerId))
+        window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
       e.preventDefault();
       if(window._edPinchMulti) edPinchMove(e);
       return;
@@ -9461,7 +9452,8 @@ function edOnMove(e){
   // Pinch activo — debe comprobarse ANTES del guard gestureActive
   // (el primer dedo puede no tener gesto activo aún cuando llega el segundo)
   if(window._edActivePointers && window._edActivePointers.size >= 2){
-    if(e.pointerId !== undefined) window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
+    if(e.pointerId !== undefined && window._edActivePointers.has(e.pointerId))
+      window._edActivePointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
     e.preventDefault();
     // Pan independiente para _edLineLayer en construcción
     if(window._edLinePan){
@@ -19026,9 +19018,9 @@ function edSerLayer(l){
 
         // Calcular bbox que incluye bocadillo + cola completa
         const _bpad=Math.ceil((l.borderWidth||2)/2)+6;
-        // Para thought: el bbox real de los círculos es w/4+w/3=7w/12 en X, h/4+h/3=7h/12 en Y
-        const _thoughtOverX = l.style==='thought' ? l.width*7/12  : l.width/2;
-        const _thoughtOverY = l.style==='thought' ? l.height*7/12 : l.height/2;
+        // Para thought: el blob SVG encaja exactamente en el bbox (w/2 × h/2 desde el centro)
+        const _thoughtOverX = l.style==='thought' ? l.width/2   : l.width/2;
+        const _thoughtOverY = l.style==='thought' ? l.height/2  : l.height/2;
         let _maxOX=_thoughtOverX, _maxOY=_thoughtOverY;
         // Cola convencional (tailStarts/tailEnds)
         const _tails=[...(l.tailStarts||[l.tailStart||{x:-0.4,y:0.4}]),
