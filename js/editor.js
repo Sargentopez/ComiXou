@@ -6058,6 +6058,9 @@ function edPinchStart(e) {
     _isLineLayer: _laForPinch === _edLineLayer && !la, // es la LineLayer en construcción
     _linePoints: _laForPinch.type==='line' ? _laForPinch.points.map(p=>p?({...p}):null) : null,
     _subPaths: _laForPinch.type==='line' && _laForPinch.subPaths && _laForPinch.subPaths.length ? _laForPinch.subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null,
+    _cornerRadii: _laForPinch.cornerRadii
+      ? (Array.isArray(_laForPinch.cornerRadii) ? [..._laForPinch.cornerRadii] : {..._laForPinch.cornerRadii})
+      : null,
     // Snapshot de posiciones de todos los objetos de la sesión de fusión
     _fusionSnaps: (_laForPinch === _edLineLayer && !la && _edLineFusionId) ? (() => {
       const m = new Map();
@@ -6080,6 +6083,9 @@ function edPinchStart(e) {
         h:    edLayers[i].height,
         _linePoints: edLayers[i].type==='line' ? edLayers[i].points.map(p=>p?({...p}):null) : null,
         _subPaths: edLayers[i].type==='line' && edLayers[i].subPaths && edLayers[i].subPaths.length ? edLayers[i].subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null,
+        _cornerRadii: edLayers[i].cornerRadii
+          ? (Array.isArray(edLayers[i].cornerRadii) ? [...edLayers[i].cornerRadii] : {...edLayers[i].cornerRadii})
+          : null,
       })),
       groupRot: edMultiGroupRot,
       bbox: { ...edMultiBbox },
@@ -6114,6 +6120,18 @@ function edPinchMove(e) {
         const sw = la.width  / snap.w;
         const sh = la.height / snap.h;
         la.points = snap._linePoints.map(p => p ? ({x: p.x * sw, y: p.y * sh}) : null);
+      }
+      // Escalar cornerRadii (line y shape) — mismo algoritmo que handle resize
+      if(snap._cornerRadii && la.cornerRadii){
+        const _scR = ratio; // pinch es proporcional → sw===sh===ratio
+        const _maxR = Math.min(la.width * edPageW(), la.height * edPageH()) / 2;
+        if(Array.isArray(la.cornerRadii)){
+          la.cornerRadii = snap._cornerRadii.map(r => r ? Math.min(r * _scR, _maxR) : 0);
+        } else {
+          const _ncr = {};
+          for(const k in snap._cornerRadii){ const r=snap._cornerRadii[k]||0; _ncr[k]=r?Math.min(r*_scR,_maxR):0; }
+          la.cornerRadii = _ncr;
+        }
       }
       // Escalar Y rotar posición alrededor del pivote (en px para no distorsionar)
       const dxPx = (snap.x - pivX) * pw;
@@ -6173,6 +6191,18 @@ function edPinchMove(e) {
         la.points = edPinchScale0._linePoints.map(p => p ? ({x: p.x * sw, y: p.y * sh}) : null);
         // Escalar subPaths (T1)
         if(edPinchScale0._subPaths) la.subPaths = edPinchScale0._subPaths.map(sp=>sp.map(p=>({x:p.x*sw, y:p.y*sh})));
+      }
+      // Escalar cornerRadii (line y shape) — mismo algoritmo que handle resize
+      if(edPinchScale0._cornerRadii && la.cornerRadii){
+        const _scR = ratio; // pinch es proporcional → sw===sh===ratio
+        const _maxR = Math.min(newW * edPageW(), newH * edPageH()) / 2;
+        if(Array.isArray(la.cornerRadii)){
+          la.cornerRadii = edPinchScale0._cornerRadii.map(r => r ? Math.min(r * _scR, _maxR) : 0);
+        } else {
+          const _ncr = {};
+          for(const k in edPinchScale0._cornerRadii){ const r=edPinchScale0._cornerRadii[k]||0; _ncr[k]=r?Math.min(r*_scR,_maxR):0; }
+          la.cornerRadii = _ncr;
+        }
       }
       _edSyncFill(la, true);
       edRedraw();
