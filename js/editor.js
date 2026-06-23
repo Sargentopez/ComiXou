@@ -8947,8 +8947,6 @@ function edOnStart(e){
           }
         }
         edHideGearIcon();
-        _edDrawLockUI(); _edPropsOverlayShow();
-        edRenderOptionsPanel('props');
         edRedraw();
       }, 120);
       return;
@@ -9905,8 +9903,6 @@ function edOnEnd(e){
     if (_pseIdx >= 0 && edLayers[_pseIdx]) {
       edSelectedIdx = _pseIdx;
       edIsDragging  = false;
-      _edDrawLockUI(); _edPropsOverlayShow();
-      edRenderOptionsPanel('props');
       edRedraw();
     }
     return;
