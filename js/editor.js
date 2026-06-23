@@ -7751,6 +7751,8 @@ function edOnStart(e){
     // Cancelar selección táctil diferida — era un pinch, no un toque simple de selección
     if(window._edSelTouchTimer){ clearTimeout(window._edSelTouchTimer); window._edSelTouchTimer = null; }
     window._edPendingSelFound = null; window._edPendingSelC = null;
+    // Cancelar deselección diferida — el pinch mantiene la selección actual
+    if(window._edDeselTouchTimer){ clearTimeout(window._edDeselTouchTimer); window._edDeselTouchTimer = null; }
     // Cancelar timer de recorrido — el segundo dedo es pinch/cámara, no dibujo
     if(window._edMpTouchTimer){ clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     // Si rubber band ya había empezado (caso borde), cancelarla
@@ -8754,6 +8756,8 @@ function edOnStart(e){
   }
   if(found>=0){
     const _fla = edLayers[found];
+    // Cancelar deselección diferida — el usuario está tocando un objeto
+    if(window._edDeselTouchTimer){ clearTimeout(window._edDeselTouchTimer); window._edDeselTouchTimer = null; }
     // Con barra flotante de dibujo activa: ignorar selección — el toque debe ir al dibujo
     if($('edDrawBar')?.classList.contains('visible') && ['draw','eraser','fill'].includes(edActiveTool)){
       // Redirigir al sistema de dibujo táctil (igual que si hubiera caído en zona vacía)
@@ -9034,9 +9038,28 @@ function edOnStart(e){
     if(_panelMode==='line' || _panelMode==='shape'){
       edRedraw(); return;
     }
-    edSelectedIdx = -1;
-    // Clic en vacío: cerrar panel si no es draw
-    edRenderOptionsPanel();
+    // En táctil con objeto seleccionado: diferir deselección 120ms
+    // para dar tiempo al segundo dedo a hacer pinch-resize sobre el objeto actual
+    if (_isTouch && edSelectedIdx >= 0) {
+      clearTimeout(window._edDeselTouchTimer);
+      const _dsNx = c.nx, _dsNy = c.ny;
+      window._edDeselTouchTimer = setTimeout(() => {
+        window._edDeselTouchTimer = null;
+        if (window._edActivePointers && window._edActivePointers.size > 1) return; // pinch en curso
+        edSelectedIdx = -1;
+        edRenderOptionsPanel();
+        // Si el dedo sigue activo (hold, no levantado) → iniciar rubber band
+        if (edActiveTool === 'select' && window._edActivePointers?.size === 1 && !window._gcpActive) {
+          edRubberBand = { x0: _dsNx, y0: _dsNy, x1: _dsNx, y1: _dsNy };
+          window._edRubberBandEndPos = null;
+        }
+        edRedraw();
+      }, 120);
+    } else {
+      edSelectedIdx = -1;
+      // Clic en vacío: cerrar panel si no es draw
+      edRenderOptionsPanel();
+    }
   }
   // Clic/toque en vacío → iniciar rubber band (PC y táctil)
   // Condición: dentro del editor, sin objeto seleccionado, herramienta select
@@ -9905,6 +9928,15 @@ function edOnEnd(e){
       edIsDragging  = false;
       edRedraw();
     }
+    return;
+  }
+  // Deselección táctil diferida: si el dedo se levantó antes del timer → era un tap → deseleccionar ya
+  if (window._edDeselTouchTimer) {
+    clearTimeout(window._edDeselTouchTimer);
+    window._edDeselTouchTimer = null;
+    edSelectedIdx = -1;
+    edRenderOptionsPanel();
+    edRedraw();
     return;
   }
   // ── FIN DE DRAG DE NODO DE RECORTE ────────────────────────
