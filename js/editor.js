@@ -2427,7 +2427,10 @@ class ShapeLayer extends BaseLayer {
   contains(px, py) {
     // 1. Bbox rápido primero
     if (!super.contains(px, py)) return false;
-    // 2. Pixel-hit real — renderizar en offscreen y leer alpha
+    // 2. Pixel-hit real — canvas escalado (máx 256 px) para evitar OOM en Android.
+    // En Android, getContext('2d') devuelve null cuando el canvas es demasiado grande;
+    // el catch anterior devolvía true (falso positivo en el interior vacío del shape).
+    const _noFill = !this.fillColor || this.fillColor === 'none';
     try {
       const pw = edPageW(), ph = edPageH();
       const w  = this.width  * pw;
@@ -2437,35 +2440,39 @@ class ShapeLayer extends BaseLayer {
       const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
       const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
       const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
-      // Crear canvas offscreen del tamaño de la shape
-      const cw = Math.max(1, Math.ceil(w)), ch = Math.max(1, Math.ceil(h));
+      // Canvas escalado a máx 256 px para evitar OOM
+      const _MAX_HIT = 256;
+      const _sc = Math.min(1, _MAX_HIT / Math.max(w, h, 1));
+      const cw = Math.max(1, Math.ceil(w * _sc)), ch = Math.max(1, Math.ceil(h * _sc));
       const oc = document.createElement('canvas');
       oc.width = cw; oc.height = ch;
       const octx = oc.getContext('2d');
+      if (!octx) return _noFill ? false : super.contains(px, py);
       octx.translate(cw/2, ch/2);
+      const _ws = w * _sc, _hs = h * _sc;
       octx.beginPath();
       if (this.shape === 'ellipse') {
-        octx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI * 2);
+        octx.ellipse(0, 0, _ws/2, _hs/2, 0, 0, Math.PI * 2);
       } else {
-        octx.rect(-w/2, -h/2, w, h);
+        octx.rect(-_ws/2, -_hs/2, _ws, _hs);
       }
-      if (this.fillColor && this.fillColor !== 'none') {
+      if (!_noFill) {
         octx.fillStyle = this.fillColor;
         octx.fill();
       }
-      // Sin relleno: ampliar zona de hit al contorno (mínimo 12px) para facilitar selección
+      // Sin relleno: zona de hit mínima 12 px en escala real (≥1 px en canvas)
       if (this.lineWidth > 0) {
         octx.strokeStyle = '#000';
-        const noFill = !this.fillColor || this.fillColor === 'none';
-        octx.lineWidth = noFill ? Math.max(this.lineWidth, 12) : this.lineWidth;
+        octx.lineWidth = Math.max(Math.max(this.lineWidth, _noFill ? 12 : 0) * _sc, 1);
         octx.stroke();
       }
-      const bx = Math.floor(lx + cw/2);
-      const by = Math.floor(ly + ch/2);
+      const bx = Math.floor(lx * _sc + cw/2);
+      const by = Math.floor(ly * _sc + ch/2);
       if (bx < 0 || by < 0 || bx >= cw || by >= ch) return false;
       return octx.getImageData(bx, by, 1, 1).data[3] > 10;
     } catch(e) {
-      return true;
+      // Sin relleno: no seleccionar el interior vacío (evita falso positivo)
+      return _noFill ? false : super.contains(px, py);
     }
   }
 }
@@ -2732,7 +2739,8 @@ class LineLayer extends BaseLayer {
     if (this.points.length < 2) return false;
     // 1. Bbox rápido primero
     if (!super.contains(px, py)) return false;
-    // 2. Pixel-hit real — renderizar en offscreen y leer alpha
+    // 2. Pixel-hit real — canvas escalado (máx 256 px) para evitar OOM en Android
+    const _noFillL = !this.fillColor || this.fillColor === 'none';
     try {
       const pw = edPageW(), ph = edPageH();
       const w  = this.width  * pw;
@@ -2742,14 +2750,19 @@ class LineLayer extends BaseLayer {
       const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
       const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
       const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
-      // Canvas offscreen del tamaño del bbox de la línea
+      // Canvas escalado a máx 256 px para evitar OOM
+      const _MAX_HIT = 256;
       const pad = Math.max(this.lineWidth || 3, 8); // margen para el trazo
-      const cw = Math.max(1, Math.ceil(w) + pad*2);
-      const ch = Math.max(1, Math.ceil(h) + pad*2);
+      const fullCw = Math.max(1, Math.ceil(w) + pad*2);
+      const fullCh = Math.max(1, Math.ceil(h) + pad*2);
+      const _sc = Math.min(1, _MAX_HIT / Math.max(fullCw, fullCh, 1));
+      const cw = Math.max(1, Math.ceil(fullCw * _sc));
+      const ch = Math.max(1, Math.ceil(fullCh * _sc));
       const oc = document.createElement('canvas');
       oc.width = cw; oc.height = ch;
       const octx = oc.getContext('2d');
-      // Origen en centro del bbox + pad
+      if (!octx) return _noFillL ? false : super.contains(px, py);
+      // Origen en centro del bbox + pad (escalado)
       octx.translate(cw/2, ch/2);
       // Dividir en contornos por null
       const _cPts = this.points;
@@ -2759,8 +2772,6 @@ class LineLayer extends BaseLayer {
       if(_cContours.length > 1){
         if(this.grouped){
           // ⊕ Unir: cada contorno tiene relleno propio — testear cada uno por separado.
-          // Usar evenodd con el path combinado crea zonas ciegas en intersecciones
-          // cuando el nº de contornos superpuestos es par.
           const _gStyles = this.groupedStyles || [];
           for(let _ci = 0; _ci < _cContours.length; _ci++){
             const _cc = _cContours[_ci];
@@ -2769,13 +2780,13 @@ class LineLayer extends BaseLayer {
             const _lw  = _st.lineWidth !== undefined ? _st.lineWidth : (this.lineWidth || 0);
             const _cl  = _st.closed    !== undefined ? _st.closed    : this.closed;
             const _cp  = new Path2D();
-            _cp.moveTo(_cc[0].x*pw, _cc[0].y*ph);
-            for(let i=1;i<_cc.length;i++) _cp.lineTo(_cc[i].x*pw, _cc[i].y*ph);
+            _cp.moveTo(_cc[0].x*pw*_sc, _cc[0].y*ph*_sc);
+            for(let i=1;i<_cc.length;i++) _cp.lineTo(_cc[i].x*pw*_sc, _cc[i].y*ph*_sc);
             if(_cl) _cp.closePath();
             octx.clearRect(-cw, -ch, cw*2, ch*2);
             if(_cl && _fc && _fc !== 'none'){ octx.fillStyle = _fc; octx.fill(_cp); }
-            if(_lw > 0){ octx.strokeStyle='#000'; octx.lineWidth=Math.max(_lw, 8); octx.stroke(_cp); }
-            const _bx = Math.floor(lx + cw/2), _by = Math.floor(ly + ch/2);
+            if(_lw > 0){ octx.strokeStyle='#000'; octx.lineWidth=Math.max(_lw*_sc, 1); octx.stroke(_cp); }
+            const _bx = Math.floor(lx*_sc + cw/2), _by = Math.floor(ly*_sc + ch/2);
             if(_bx>=0 && _by>=0 && _bx<cw && _by<ch &&
                octx.getImageData(_bx, _by, 1, 1).data[3] > 10) return true;
           }
@@ -2783,32 +2794,32 @@ class LineLayer extends BaseLayer {
         }
         const _cPath = new Path2D();
         for(const c of _cContours){
-          _cPath.moveTo(c[0].x*pw, c[0].y*ph);
-          for(let i=1;i<c.length;i++) _cPath.lineTo(c[i].x*pw, c[i].y*ph);
+          _cPath.moveTo(c[0].x*pw*_sc, c[0].y*ph*_sc);
+          for(let i=1;i<c.length;i++) _cPath.lineTo(c[i].x*pw*_sc, c[i].y*ph*_sc);
           _cPath.closePath();
         }
         if (this.fillColor && this.fillColor !== 'none') { octx.fillStyle = this.fillColor; octx.fill(_cPath,'evenodd'); }
         octx.strokeStyle = '#000';
-        octx.lineWidth = Math.max((this.lineWidth||0) > 0 ? Math.max(this.lineWidth,8) : 0, 0);
+        octx.lineWidth = Math.max((this.lineWidth||0) > 0 ? Math.max(this.lineWidth*_sc, 1) : 0, 0);
         if ((this.lineWidth||0) > 0) octx.stroke(_cPath);
       } else {
         octx.beginPath();
         const _pts0 = _cContours[0]||[];
-        if(_pts0.length) { octx.moveTo(_pts0[0].x*pw, _pts0[0].y*ph); for(let i=1;i<_pts0.length;i++) octx.lineTo(_pts0[i].x*pw, _pts0[i].y*ph); }
+        if(_pts0.length) { octx.moveTo(_pts0[0].x*pw*_sc, _pts0[0].y*ph*_sc); for(let i=1;i<_pts0.length;i++) octx.lineTo(_pts0[i].x*pw*_sc, _pts0[i].y*ph*_sc); }
         if (this.closed) octx.closePath();
         if (this.closed && this.fillColor && this.fillColor !== 'none') { octx.fillStyle = this.fillColor; octx.fill(); }
       }
       octx.strokeStyle = '#000';
-      // Sin relleno: ampliar zona de hit al contorno (mínimo 12px)
-      const _noFillL = !this.fillColor || this.fillColor === 'none';
-      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth, _noFillL ? 12 : 8) : 0, 0);
+      // Sin relleno: zona de hit mínima 12 px en escala real (≥1 px en canvas)
+      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth*_sc, _noFillL ? Math.max(12*_sc, 1) : 1) : 0, 0);
       if (this.lineWidth > 0) octx.stroke();
-      const bx = Math.floor(lx + cw/2);
-      const by = Math.floor(ly + ch/2);
+      const bx = Math.floor(lx*_sc + cw/2);
+      const by = Math.floor(ly*_sc + ch/2);
       if (bx < 0 || by < 0 || bx >= cw || by >= ch) return false;
       return octx.getImageData(bx, by, 1, 1).data[3] > 10;
     } catch(e) {
-      return true;
+      // Sin relleno: no seleccionar el interior vacío (evita falso positivo)
+      return _noFillL ? false : super.contains(px, py);
     }
   }
   nearestVertex(px, py, threshold=0.03) {
@@ -5565,6 +5576,8 @@ function _edTryLoadApng(dataUrl, la, cb) {
     // Generar animKey — guardar el APNG completo en IDB (patrón GIF)
     var _ak = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
     la.animKey = _ak;
+    // Cachear tamaño para _edCalcProjectBytes() (síncrono, persiste entre recargas)
+    try { localStorage.setItem('cxSzAnim:'+_ak, String(Math.round(dataUrl.length * 0.75))); } catch(_) {}
     var _doLoadApng = function() {
       la.loadAnim(frameUrls, function() { cb(true); });
     };
@@ -5669,6 +5682,8 @@ function _gifIdbOpen() {
   });
 }
 function _gifIdbSave(key, dataUrl) {
+  // Cachear tamaño para _edCalcProjectBytes() (síncrono, persiste entre recargas)
+  try { localStorage.setItem('cxSzGif:'+key, String(Math.round(dataUrl.length * 0.75))); } catch(_) {}
   return _gifIdbOpen().then(db => new Promise((res, rej) => {
     const tx = db.transaction('gifs','readwrite');
     tx.objectStore('gifs').put(dataUrl, key);
@@ -17822,6 +17837,12 @@ function _edSaveOverlayError(msg) {
 async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
+  // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
+  const _preSz = _edCalcProjectBytes();
+  if (_preSz >= _ED_MAX_BYTES) {
+    edToast('⚠️ La obra supera los 60 MB. Elimina contenido antes de guardar en la nube.', 5000);
+    return;
+  }
   if (!Auth?.currentUser?.()) {
     // Sin sesión: ofrecer login en lugar de rechazar
     edToast('Inicia sesión para guardar en la nube');
@@ -17983,8 +18004,20 @@ function _edCalcProjectBytes() {
       if (!p || !p.layers) return;
       p.layers.forEach(l => {
         try {
-          const ser = edSerLayer(l);
-          if (ser) total += new Blob([JSON.stringify(ser)]).size;
+          if (l.type === 'gif' && l.gifKey) {
+            // El binario GIF vive en IDB (cxGifs); usar tamaño cacheado en localStorage
+            const _gifSz = parseInt(localStorage.getItem('cxSzGif:'+l.gifKey)||'0');
+            total += _gifSz || new Blob([JSON.stringify(edSerLayer(l)||{})]).size;
+          } else {
+            const ser = edSerLayer(l);
+            let _lb = ser ? new Blob([JSON.stringify(ser)]).size : 0;
+            // Para imágenes con APNG (animKey): sumar el blob APNG del bucket
+            if (l.type === 'image' && l.animKey) {
+              const _animSz = parseInt(localStorage.getItem('cxSzAnim:'+l.animKey)||'0');
+              _lb += _animSz;
+            }
+            total += _lb;
+          }
         } catch(_) {}
       });
       // Thumbnail de la página
@@ -21575,6 +21608,9 @@ function EditorView_init(){
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click', () => {
+    // Terminar modo recorrido activo antes de salir:
+    // el timer de 120ms podría dispararse después del click y capturar el puntero del canvas.
+    if (_edMotionPathMode) _edEndMotionPath(false);
     // Si hay guardado en la nube en curso, avisar con diálogo bloqueante
     if (_edCloudSaving) {
       const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);

@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v30.65</footer>
+    <footer class="app-version">v30.71</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -592,7 +592,7 @@ Router.register('editor', {
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-undo" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.9rem;font-weight:900" title="Borrar recorrido y redibujar">🗑</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>
-        <button id="mpb-behaviour" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.82rem;font-weight:900" title="Comportamiento del recorrido">⚙ Comportamiento</button>
+        <button id="mpb-behaviour" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 8px;color:#fff;cursor:pointer;font-size:1.35rem;line-height:1" title="Comportamiento del recorrido">⚙️</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-ok" style="background:#16a34a;border:none;border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-weight:900;font-size:.88rem">✓ OK</button>
         <button id="mpb-cancel" style="background:rgba(220,38,38,0.25);border:1px solid rgba(220,38,38,0.4);border-radius:7px;padding:5px 11px;color:#ff9999;cursor:pointer;font-size:.88rem;font-weight:900" title="Cancelar">✕</button>
@@ -792,7 +792,7 @@ Router.register('editor', {
           <div class="ed-menu-sep"></div>
           <!-- Comportamiento -->
           <div class="ed-menu-item" style="position:relative">
-            <button class="ed-menu-btn" data-gcpmenu="comportamiento" style="font-size:1.35rem;padding:0 8px">⚙️</button>
+            <button class="ed-menu-btn" data-gcpmenu="comportamiento">Comportamiento</button>
             <div class="ed-dropdown" id="gdd-comportamiento" style="min-width:210px;padding:6px 0">
               <div class="ed-dropdown-label">Velocidad</div>
               <div style="padding:4px 14px 10px">
