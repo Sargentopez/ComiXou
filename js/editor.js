@@ -18478,10 +18478,14 @@ function edRenderPage(page){
 }
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
   // Redimensiona y comprime una imagen a JPEG para ahorrar espacio en localStorage
-  // Las imágenes PNG con transparencia (recortes) deben conservarse como PNG
   if(!src) return src;
-  const isPng = src.startsWith('data:image/png');
-  if(!isPng && src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña JPEG
+  // SVG: conservar siempre el original — es texto vectorial con transparencia inherente,
+  // no necesita compresión y rasterizarlo a JPEG destruiría la transparencia
+  if(src.startsWith('data:image/svg+xml')) return src;
+  const isPng  = src.startsWith('data:image/png');
+  const isWebp = src.startsWith('data:image/webp');
+  const isGif  = src.startsWith('data:image/gif');
+  if(!isPng && !isWebp && !isGif && src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña JPEG
   try {
     const img = new Image();
     img.src = src;
@@ -18493,8 +18497,8 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
     cv.width = w; cv.height = h;
     const cctx = cv.getContext('2d');
     cctx.drawImage(img, 0, 0, w, h);
-    // Si es PNG, verificar si tiene píxeles transparentes — si los tiene, conservar PNG
-    if(isPng){
+    // PNG, WebP, GIF: verificar si tiene píxeles transparentes — si los tiene, conservar como PNG
+    if(isPng || isWebp || isGif){
       const d = cctx.getImageData(0, 0, w, h).data;
       let hasAlpha = false;
       for(let i=3; i<d.length; i+=4){ if(d[i]<255){ hasAlpha=true; break; } }
