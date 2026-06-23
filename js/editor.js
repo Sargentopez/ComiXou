@@ -1028,7 +1028,6 @@ let edFloatX = 12, edFloatY = 12; // posición del botón flotante (esquina supe
 // Pinch-to-zoom
 let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = null;
 let _edPinchHappened = false; // true desde que empieza el pinch hasta que se levantan TODOS los dedos
-let _edPinchForcedCamera = false; // true cuando algún dedo cayó fuera del objeto → forzar modo cámara
 let edPinchCenter0 = null, edPinchCamera0 = null;
 // Transformación de DrawLayer durante pinch
 let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
@@ -6032,26 +6031,6 @@ function _pinchCenter(pMap){
   const pts = [...pMap.values()];
   return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
 }
-// Verifica si un punto de pantalla (clientX/Y) cae sobre el bbox extendido de un layer.
-// Usa solo geometría (bbox rotado + margen), apto para detección rápida de gestos.
-// El margen (~44px de pantalla) cubre los handles de selección que sobresalen del bbox.
-function _screenPtOnLayerBbox(clientX, clientY, la) {
-  const sy = clientY - _edCanvasTop;
-  const w = edScreenToWorld(clientX, sy);
-  const pw = edPageW(), ph = edPageH();
-  const nx = (w.x - edMarginX()) / pw;
-  const ny = (w.y - edMarginY()) / ph;
-  const margin = 44 / (ph * edCamera.z); // ~44px pantalla → espacio de página
-  const rot = (la.rotation || 0) * Math.PI / 180;
-  if (rot === 0) {
-    return nx >= la.x - la.width/2 - margin && nx <= la.x + la.width/2 + margin &&
-           ny >= la.y - la.height/2 - margin && ny <= la.y + la.height/2 + margin;
-  }
-  const dx = (nx - la.x) * pw, dy = (ny - la.y) * ph;
-  const lx = (dx * Math.cos(-rot) - dy * Math.sin(-rot)) / pw;
-  const ly = (dx * Math.sin(-rot) + dy * Math.cos(-rot)) / ph;
-  return Math.abs(lx) <= la.width/2 + margin && Math.abs(ly) <= la.height/2 + margin;
-}
 function edPinchStart(e) {
   if (!window._edActivePointers || window._edActivePointers.size !== 2) return false;
   edPinching = true;
@@ -6069,21 +6048,9 @@ function edPinchStart(e) {
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
   // Durante recorte o edición de recorrido: forzar modo cámara
   // (no escalar el objeto seleccionado — el pinch es solo para navegar el canvas)
-  let la = (_edCropMode || _edMotionPathMode
+  const la = (_edCropMode || _edMotionPathMode
     || (!isDrawTool && edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.locked)) ? null
     : (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
-  // En táctil: si algún dedo cae fuera del bbox del objeto seleccionado → modo cámara.
-  // Evita redimensionar objetos cuando el usuario hace pinch-zoom con un dedo fuera del objeto.
-  _edPinchForcedCamera = false;
-  if (la && e.pointerType === 'touch') {
-    const _pPts = [...window._edActivePointers.values()];
-    if (_pPts.length === 2 &&
-        (!_screenPtOnLayerBbox(_pPts[0].x, _pPts[0].y, la) ||
-         !_screenPtOnLayerBbox(_pPts[1].x, _pPts[1].y, la))) {
-      la = null;
-      _edPinchForcedCamera = true;
-    }
-  }
   // T1: si hay LineLayer en construcción, usarla como objeto pincheable
   const _laForPinch = la || (_edLineLayer && edActiveTool==='line' ? _edLineLayer : null);
   edPinchScale0 = _laForPinch ? { w: _laForPinch.width, h: _laForPinch.height, rot: _laForPinch.rotation||0,
@@ -6102,39 +6069,21 @@ function edPinchStart(e) {
   _edDrawPinch = null;
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
-    // En táctil: si algún dedo cae fuera del bbox del grupo → modo cámara
-    if (e.pointerType === 'touch' && !_edPinchForcedCamera) {
-      const _pPtsMs = [...window._edActivePointers.values()];
-      if (_pPtsMs.length === 2) {
-        const _bbMs = { x: edMultiBbox.cx, y: edMultiBbox.cy,
-                        width: edMultiBbox.w, height: edMultiBbox.h,
-                        rotation: edMultiGroupRot || 0 };
-        if (!_screenPtOnLayerBbox(_pPtsMs[0].x, _pPtsMs[0].y, _bbMs) ||
-            !_screenPtOnLayerBbox(_pPtsMs[1].x, _pPtsMs[1].y, _bbMs)) {
-          _edPinchForcedCamera = true;
-        }
-      }
-    }
-    if (!_edPinchForcedCamera) {
-      edPinchScale0 = null; // no usar modo objeto individual
-      window._edPinchMulti = {
-        items: edMultiSel.map(i=>({
-          i,
-          rot:  edLayers[i].rotation||0,
-          x:    edLayers[i].x,
-          y:    edLayers[i].y,
-          w:    edLayers[i].width,
-          h:    edLayers[i].height,
-          _linePoints: edLayers[i].type==='line' ? edLayers[i].points.map(p=>p?({...p}):null) : null,
-          _subPaths: edLayers[i].type==='line' && edLayers[i].subPaths && edLayers[i].subPaths.length ? edLayers[i].subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null,
-        })),
-        groupRot: edMultiGroupRot,
-        bbox: { ...edMultiBbox },
-      };
-    } else {
-      edPinchScale0 = null;
-      window._edPinchMulti = null;
-    }
+    edPinchScale0 = null; // no usar modo objeto individual
+    window._edPinchMulti = {
+      items: edMultiSel.map(i=>({
+        i,
+        rot:  edLayers[i].rotation||0,
+        x:    edLayers[i].x,
+        y:    edLayers[i].y,
+        w:    edLayers[i].width,
+        h:    edLayers[i].height,
+        _linePoints: edLayers[i].type==='line' ? edLayers[i].points.map(p=>p?({...p}):null) : null,
+        _subPaths: edLayers[i].type==='line' && edLayers[i].subPaths && edLayers[i].subPaths.length ? edLayers[i].subPaths.map(sp=>{const _s=sp.map(p=>({...p})); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : null,
+      })),
+      groupRot: edMultiGroupRot,
+      bbox: { ...edMultiBbox },
+    };
   } else {
     window._edPinchMulti = null;
   }
@@ -6232,7 +6181,7 @@ function edPinchMove(e) {
     // ── Modo cámara: pan + zoom ──
     // En modo recorte o edición de recorrido el pinch siempre mueve la cámara
     // (el layer está seleccionado pero no debe escalar)
-    const _haySeleccion = !_edCropMode && !_edMotionPathMode && !_edPinchForcedCamera
+    const _haySeleccion = !_edCropMode && !_edMotionPathMode
       && ((edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer);
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
@@ -6273,7 +6222,6 @@ function edPinchEnd() {
   // syncFill en pinch individual — cubierto por onEnd
   // _edDrawPinch ya no se usa (pinch en modo draw mueve la cámara)
   _edDrawPinch = null;
-  _edPinchForcedCamera = false;
   edPinching    = false;
   edPinchDist0  = 0;
   edPinchScale0 = null;
@@ -7800,6 +7748,9 @@ function edOnStart(e){
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Cancelar timer de rubber band — era un pinch, no una selección múltiple
     if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
+    // Cancelar selección táctil diferida — era un pinch, no un toque simple de selección
+    if(window._edSelTouchTimer){ clearTimeout(window._edSelTouchTimer); window._edSelTouchTimer = null; }
+    window._edPendingSelFound = null; window._edPendingSelC = null;
     // Cancelar timer de recorrido — el segundo dedo es pinch/cámara, no dibujo
     if(window._edMpTouchTimer){ clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     // Si rubber band ya había empezado (caso borde), cancelarla
@@ -8957,6 +8908,52 @@ function edOnStart(e){
       }
       edRedraw(); return;
     }
+    // ── TÁCTIL: si el objeto tocado es distinto al seleccionado, diferir
+    //    la selección 120ms — da tiempo al segundo dedo para hacer zoom ──
+    if (_isTouch && found !== edSelectedIdx) {
+      const _dsNow = Date.now();
+      const _dsDbl = (found === _edLastTapIdx && _dsNow - _edLastTapTime < 350);
+      _edLastTapTime = _dsNow; _edLastTapIdx = found;
+      clearTimeout(window._edSelTouchTimer);
+      window._edPendingSelFound = null; window._edPendingSelC = null;
+      if (_dsDbl) {
+        // Doble tap en objeto diferente → seleccionar y abrir panel inmediatamente
+        edSelectedIdx = found; edIsDragging = false;
+        _edHandleDoubleTap(found);
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+        edRedraw(); return;
+      }
+      // Primer tap: diferir selección 120ms para no bloquear pinch-to-zoom de cámara
+      const _psFla = edLayers[found];
+      window._edPendingSelFound = found;
+      window._edPendingSelC    = { nx: c.nx, ny: c.ny };
+      window._edSelTouchTimer = setTimeout(() => {
+        window._edSelTouchTimer = null;
+        window._edPendingSelFound = null; window._edPendingSelC = null;
+        if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
+        edSelectedIdx = found; edMultiSelAnchor = found;
+        if (_psFla?.type==='line'){
+          const _psCr=_psFla.cornerRadii||{};
+          if(Object.keys(_psCr).some(k=>(_psCr[k]||0)>0)) _psFla._updateBbox();
+        }
+        if (!_psFla?.locked && edLayers[found]) {
+          edDragOffX = c.nx - edLayers[found].x;
+          edDragOffY = c.ny - edLayers[found].y;
+          edIsDragging = true; window._edMoved = false;
+          if (_psFla?.type==='line'||_psFla?.type==='shape'){
+            const _psPm=$('edOptionsPanel')?.dataset.mode;
+            if(_psPm==='line'||_psPm==='shape'||$('edShapeBar')?.classList.contains('visible'))
+              _edShapePushHistory();
+          }
+        }
+        edHideGearIcon();
+        _edDrawLockUI(); _edPropsOverlayShow();
+        edRenderOptionsPanel('props');
+        edRedraw();
+      }, 120);
+      return;
+    }
+    // ── Selección inmediata: PC, o táctil sobre el objeto YA seleccionado ──
     edSelectedIdx = found;
     edMultiSelAnchor = found; // ancla para Shift+flechas
     // Si es LineLayer con radios, actualizar bbox antes de interactuar
@@ -9471,6 +9468,30 @@ function edOnMove(e){
     return;
   }
   // Sin gesto activo → ignorar el resto
+  // EXCEPCIÓN: si hay selección táctil diferida y el dedo se mueve, confirmarla y arrastrar
+  if (window._edPendingSelFound !== null && window._edSelTouchTimer &&
+      e.pointerType === 'touch' && window._edActivePointers?.size === 1) {
+    clearTimeout(window._edSelTouchTimer);
+    window._edSelTouchTimer = null;
+    const _psIdx = window._edPendingSelFound;
+    const _psC   = window._edPendingSelC;
+    window._edPendingSelFound = null; window._edPendingSelC = null;
+    const _psFlaM = edLayers[_psIdx];
+    if (_psFlaM && !_psFlaM.locked) {
+      edSelectedIdx    = _psIdx;
+      edMultiSelAnchor = _psIdx;
+      if (_psFlaM.type==='line'){
+        const _psCrM=_psFlaM.cornerRadii||{};
+        if(Object.keys(_psCrM).some(k=>(_psCrM[k]||0)>0)) _psFlaM._updateBbox();
+      }
+      edDragOffX = (_psC?.nx ?? c.nx) - _psFlaM.x;
+      edDragOffY = (_psC?.ny ?? c.ny) - _psFlaM.y;
+      edIsDragging = true; window._edMoved = false;
+      _edDrawLockUI(); _edPropsOverlayShow();
+      edRenderOptionsPanel('props');
+      // Continuar el flujo normal de edOnMove para procesar el drag en este mismo frame
+    }
+  }
   const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart;
   if(!gestureActive) return;
   e.preventDefault();
@@ -9873,6 +9894,22 @@ function edOnEnd(e){
   }
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
+  }
+  // Selección táctil diferida: si el dedo se levantó antes de que disparara el timer,
+  // aplicar la selección inmediatamente (era un tap, no un pinch)
+  if (window._edSelTouchTimer) {
+    clearTimeout(window._edSelTouchTimer);
+    window._edSelTouchTimer = null;
+    const _pseIdx = window._edPendingSelFound;
+    window._edPendingSelFound = null; window._edPendingSelC = null;
+    if (_pseIdx >= 0 && edLayers[_pseIdx]) {
+      edSelectedIdx = _pseIdx;
+      edIsDragging  = false;
+      _edDrawLockUI(); _edPropsOverlayShow();
+      edRenderOptionsPanel('props');
+      edRedraw();
+    }
+    return;
   }
   // ── FIN DE DRAG DE NODO DE RECORTE ────────────────────────
   if (_edCropMode && _edCropDragIdx >= 0) {
@@ -25140,19 +25177,15 @@ function _gcpHandleDown(e) {
     _gcpPinching    = true;
     // Restaurar selección previa si el primer dedo la borró, y capturar objeto para pinch
     // (_gcpSelBeforePinch guarda el índice antes de que _gcpDoSelectDrag lo cambie)
-    const _selForPinch = (_gcpSelBeforePinch >= 0) ? _gcpSelBeforePinch : window._gcpSelIdx;
+    // Si nada estaba seleccionado ANTES del primer dedo (_gcpSelBeforePinch < 0),
+    // el pinch mueve la cámara — evita redimensionar un objeto seleccionado accidentalmente.
+    const _selForPinch = (_gcpSelBeforePinch >= 0) ? _gcpSelBeforePinch : -1;
     if (_selForPinch >= 0) window._gcpSelIdx = _selForPinch; // restaurar
     _gcpSelBeforePinch = -1;
     const _pla = _selForPinch >= 0 ? window._gcpLayers[_selForPinch] : null;
     if (_pla && !_pla.locked) {
-      // En táctil: si algún dedo cae fuera del bbox del objeto → modo cámara
-      const _gcpBothOnObj = e.pointerType !== 'touch' || (
-        _pts.length === 2 &&
-        _screenPtOnLayerBbox(_pts[0].x, _pts[0].y, _pla) &&
-        _screenPtOnLayerBbox(_pts[1].x, _pts[1].y, _pla)
-      );
-      _gcpPinchObj = _gcpBothOnObj ? { w: _pla.width, h: _pla.height, rot: _pla.rotation || 0,
-                       x: _pla.x, y: _pla.y } : null;
+      _gcpPinchObj = { w: _pla.width, h: _pla.height, rot: _pla.rotation || 0,
+                       x: _pla.x, y: _pla.y };
     } else {
       _gcpPinchObj = null;
     }
