@@ -7260,6 +7260,27 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
 // Devuelve {type:'seg',  idx} si cae sobre el segmento idx→idx+1
 // Devuelve null si no hay hit
 // nx, ny: coordenadas normalizadas de página (fracción 0..1)
+// ── Helper: extrae rangos {start,end} de cada sub-contorno separado por null ──
+// Necesario para hit-testing correcto en layers agrupados (⊕ Unir)
+function _edGetSubPathRanges(pts) {
+  const ranges = [];
+  let s = null;
+  for(let i = 0; i <= pts.length; i++){
+    const isEnd = i >= pts.length || pts[i] === null;
+    if(!isEnd && s === null) s = i;
+    if(isEnd && s !== null){ ranges.push({start:s, end:i-1}); s = null; }
+  }
+  return ranges;
+}
+// ── Cuenta los puntos no-null dentro del sub-contorno que contiene el índice i ──
+function _edSubPathCount(pts, i) {
+  let k = i;
+  while(k > 0 && pts[k-1] !== null) k--;
+  let count = 0;
+  while(k < pts.length && pts[k] !== null){ count++; k++; }
+  return count;
+}
+
 function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
   if(!la || la.type!=='line' || la.points.length < 2) return null;
   const pw=edPageW(), ph=edPageH(), z=edCamera.z;
@@ -7277,16 +7298,25 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
     const r=cr[i]||0;
     let lpx=p.x*pw, lpy=p.y*ph;
     if(r>0){
-      const prev=la.points[(i-1+n)%n], cur=la.points[i], next=la.points[(i+1)%n];
-      const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
-      const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
-      const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
-      const v1x=d1>0?(cur.x-prev.x)*pw/d1:0, v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
-      const v2x=d2>0?(next.x-cur.x)*pw/d2:0, v2y=d2>0?(next.y-cur.y)*ph/d2:0;
-      const p1x=cur.x*pw-v1x*rr, p1y=cur.y*ph-v1y*rr;
-      const p2x=cur.x*pw+v2x*rr, p2y=cur.y*ph+v2y*rr;
-      lpx=(p1x+2*cur.x*pw+p2x)/4;
-      lpy=(p1y+2*cur.y*ph+p2y)/4;
+      // Vecinos solo dentro del mismo sub-contorno (no cruzar null)
+      const _prevP = (i>0 && la.points[i-1]!==null) ? la.points[i-1] : null;
+      const _nextP = (i<n-1 && la.points[i+1]!==null) ? la.points[i+1] : null;
+      // Para nodos en los extremos del sub-contorno, usar wrap dentro del sub-contorno
+      const _spRanges = la.points.includes(null) ? null : null; // solo si multi-contorno
+      const prev = _prevP || (la.closed && !la.points.includes(null) ? la.points[(i-1+n)%n] : null);
+      const next = _nextP || (la.closed && !la.points.includes(null) ? la.points[(i+1)%n] : null);
+      if(prev && next){
+        const cur=la.points[i];
+        const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+        const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+        const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
+        const v1x=d1>0?(cur.x-prev.x)*pw/d1:0, v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
+        const v2x=d2>0?(next.x-cur.x)*pw/d2:0, v2y=d2>0?(next.y-cur.y)*ph/d2:0;
+        const p1x=cur.x*pw-v1x*rr, p1y=cur.y*ph-v1y*rr;
+        const p2x=cur.x*pw+v2x*rr, p2y=cur.y*ph+v2y*rr;
+        lpx=(p1x+2*cur.x*pw+p2x)/4;
+        lpy=(p1y+2*cur.y*ph+p2y)/4;
+      }
     }
     return {
       ax: la.x+(lpx*cos-lpy*sin)/pw,
@@ -7304,28 +7334,58 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
   }
   if(_bestNodeIdx >= 0) return {type:'node', idx:_bestNodeIdx};
 
-  // 2. Comprobar segmentos — saltar null y no cruzar fronteras de contorno
+  // 2. Comprobar segmentos — respetar fronteras de sub-contorno
   const absP=la.absPoints();
-  const segCount = la.closed ? n : n-1;
-  for(let i=0;i<segCount;i++){
-    const j=(i+1)%n;
-    // No conectar a través de separadores null
-    if(!la.points[i] || !la.points[j]) continue;
-    const ax=absP[i].x, ay=absP[i].y;
-    const bx=absP[j].x, by=absP[j].y;
-    // Vectores en píxeles de página (sin cámara, para la distancia)
-    const abxPx=(bx-ax)*pw, abyPx=(by-ay)*ph;
-    const apxPx=(nx-ax)*pw, apyPx=(ny-ay)*ph;
-    const abLen2=abxPx*abxPx+abyPx*abyPx;
-    if(abLen2 < 0.001) continue; // segmento degenerado
-    // Parámetro t de la proyección del punto sobre el segmento [0,1]
-    const t=Math.max(0,Math.min(1,(apxPx*abxPx+apyPx*abyPx)/abLen2));
-    // Punto más cercano del segmento al toque
-    const closestX=apxPx-t*abxPx;
-    const closestY=apyPx-t*abyPx;
-    const dist=Math.hypot(closestX,closestY)*z;
-    if(dist < hitSeg){
-      return {type:'seg', idx:i};
+
+  if(la.points.includes(null)){
+    // ── Multi-contorno (agrupado): detectar segmentos por sub-camino ──
+    // Cada sub-contorno cierra sobre sí mismo, NO sobre el primer punto global.
+    const _spRanges = _edGetSubPathRanges(la.points);
+    for(const {start:_ss, end:_se} of _spRanges){
+      const _sLen = _se - _ss + 1;
+      if(_sLen < 2) continue;
+      const _segLim = la.closed ? _sLen : _sLen - 1;
+      for(let _si = 0; _si < _segLim; _si++){
+        const _i = _ss + _si;
+        // Cierre correcto: el último nodo del sub-contorno conecta al PRIMERO del mismo sub-contorno
+        const _j = (_si + 1 < _sLen) ? _ss + _si + 1 : _ss;
+        if(!la.points[_i] || !la.points[_j]) continue;
+        const ax=absP[_i].x, ay=absP[_i].y;
+        const bx=absP[_j].x, by=absP[_j].y;
+        const abxPx=(bx-ax)*pw, abyPx=(by-ay)*ph;
+        const apxPx=(nx-ax)*pw, apyPx=(ny-ay)*ph;
+        const abLen2=abxPx*abxPx+abyPx*abyPx;
+        if(abLen2 < 0.001) continue;
+        const t=Math.max(0,Math.min(1,(apxPx*abxPx+apyPx*abyPx)/abLen2));
+        const closestX=apxPx-t*abxPx;
+        const closestY=apyPx-t*abyPx;
+        const dist=Math.hypot(closestX,closestY)*z;
+        if(dist < hitSeg){
+          // nextIdx: índice real del siguiente nodo (para inserción correcta)
+          return {type:'seg', idx:_i, nextIdx:_j};
+        }
+      }
+    }
+  } else {
+    // ── Contorno único: lógica original ──
+    const segCount = la.closed ? n : n-1;
+    for(let i=0;i<segCount;i++){
+      const j=(i+1)%n;
+      // No conectar a través de separadores null
+      if(!la.points[i] || !la.points[j]) continue;
+      const ax=absP[i].x, ay=absP[i].y;
+      const bx=absP[j].x, by=absP[j].y;
+      const abxPx=(bx-ax)*pw, abyPx=(by-ay)*ph;
+      const apxPx=(nx-ax)*pw, apyPx=(ny-ay)*ph;
+      const abLen2=abxPx*abxPx+abyPx*abyPx;
+      if(abLen2 < 0.001) continue;
+      const t=Math.max(0,Math.min(1,(apxPx*abxPx+apyPx*abyPx)/abLen2));
+      const closestX=apxPx-t*abxPx;
+      const closestY=apyPx-t*abyPx;
+      const dist=Math.hypot(closestX,closestY)*z;
+      if(dist < hitSeg){
+        return {type:'seg', idx:i};
+      }
     }
   }
 
@@ -8363,16 +8423,23 @@ function edOnStart(e){
         const r=_cr[i]||0;
         let lpx=p.x*pw,lpy=p.y*ph;
         if(r>0){
-          const prev=la.points[(i-1+_n)%_n],cur=la.points[i],next=la.points[(i+1)%_n];
-          const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
-          const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
-          const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
-          const v1x=d1>0?(cur.x-prev.x)*pw/d1:0,v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
-          const v2x=d2>0?(next.x-cur.x)*pw/d2:0,v2y=d2>0?(next.y-cur.y)*ph/d2:0;
-          const p1x=cur.x*pw-v1x*rr,p1y=cur.y*ph-v1y*rr;
-          const p2x=cur.x*pw+v2x*rr,p2y=cur.y*ph+v2y*rr;
-          lpx=(p1x+2*cur.x*pw+p2x)/4;
-          lpy=(p1y+2*cur.y*ph+p2y)/4;
+          // Vecinos solo dentro del mismo sub-contorno (no cruzar null)
+          const _pPrev = (i>0 && la.points[i-1]!==null) ? la.points[i-1] : null;
+          const _pNext = (i<_n-1 && la.points[i+1]!==null) ? la.points[i+1] : null;
+          const prev = _pPrev || (la.closed && !la.points.includes(null) ? la.points[(i-1+_n)%_n] : null);
+          const next = _pNext || (la.closed && !la.points.includes(null) ? la.points[(i+1)%_n] : null);
+          if(prev && next){
+            const cur=la.points[i];
+            const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
+            const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
+            const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
+            const v1x=d1>0?(cur.x-prev.x)*pw/d1:0,v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
+            const v2x=d2>0?(next.x-cur.x)*pw/d2:0,v2y=d2>0?(next.y-cur.y)*ph/d2:0;
+            const p1x=cur.x*pw-v1x*rr,p1y=cur.y*ph-v1y*rr;
+            const p2x=cur.x*pw+v2x*rr,p2y=cur.y*ph+v2y*rr;
+            lpx=(p1x+2*cur.x*pw+p2x)/4;
+            lpy=(p1y+2*cur.y*ph+p2y)/4;
+          }
         }
         return {lpx,lpy};
       };
@@ -8394,8 +8461,11 @@ function edOnStart(e){
           // ── Doble tap confirmado ──
           _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
           if(_lineHit.type==='node'){
-            // Eliminar nodo (mínimo 2 puntos)
-            if(_n > 2){
+            // Eliminar nodo — verificar mínimo por sub-contorno (no global)
+            const _delMin = la.points.includes(null)
+              ? _edSubPathCount(la.points, _lineHit.idx)
+              : _n;
+            if(_delMin > 2){
               la.points.splice(_lineHit.idx,1);
               if(la.cornerRadii && Object.keys(la.cornerRadii).length){
                 const newCR = {};
@@ -8411,9 +8481,9 @@ function edOnStart(e){
             return;
           } else {
             // Añadir nodo en el centro del segmento
-            // Calcular punto medio directamente desde los puntos locales (ignora nulls)
             const _segI = _lineHit.idx;
-            const _segJ = (_segI+1)%_n;
+            // nextIdx incluido en hit para sub-contornos; fallback al siguiente lineal
+            const _segJ = _lineHit.nextIdx !== undefined ? _lineHit.nextIdx : (_segI+1)%_n;
             const _pA = la.points[_segI], _pB = la.points[_segJ];
             if(_pA && _pB){
               const newLocal = {x:(_pA.x+_pB.x)/2, y:(_pA.y+_pB.y)/2};
@@ -8607,15 +8677,19 @@ function edOnStart(e){
       if(_sameHit3){
         _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
         if(_lsHit.type==='node'){
-          // Doble tap sobre nodo → eliminar
-          const _nPts = _lsLa.points.filter(Boolean).length;
-          if(_nPts > 2){
+          // Doble tap sobre nodo → eliminar (mínimo por sub-contorno)
+          const _delMin = _lsLa.points.includes(null)
+            ? _edSubPathCount(_lsLa.points, _lsHit.idx)
+            : _lsLa.points.filter(Boolean).length;
+          if(_delMin > 2){
             _lsLa.points.splice(_lsHit.idx, 1);
             _lsLa._updateBbox(); _edShapePushHistory(); edRedraw();
           }
         } else {
           // Doble tap sobre segmento → añadir nodo
-          const _sI = _lsHit.idx, _sJ = (_sI+1) % _lsLa.points.length;
+          // nextIdx garantiza que la inserción quede dentro del mismo sub-contorno
+          const _sI = _lsHit.idx;
+          const _sJ = _lsHit.nextIdx !== undefined ? _lsHit.nextIdx : (_sI+1) % _lsLa.points.length;
           const _pA = _lsLa.points[_sI], _pB = _lsLa.points[_sJ];
           if(_pA && _pB){
             _lsLa.points.splice(_sJ, 0, {x:(_pA.x+_pB.x)/2, y:(_pA.y+_pB.y)/2});
