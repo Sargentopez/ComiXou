@@ -1453,6 +1453,11 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd) {
 
 // ── Recorrido de animación (motion path) — velocidad por ciclos o px/s ────
       if (layer._motionPath && layer._motionPath.length >= 2) {
+        // Solo procesar el recorrido del panel activo. Los paneles no visibles no
+        // deben acumular tiempo ni llegar a _pathStopped mientras el usuario no los lee.
+        // El recorrido arranca de cero cada vez que _resetPanelAnims es llamado al
+        // navegar a ese panel.
+        if (pi !== RS.idx) return;
         if (!layer._pathStartTime) layer._pathStartTime = now;
         const { pw: _mpPw, ph: _mpPh } = _panelDims(pi);
         const _mpElapsed = (now - layer._pathStartTime) / 1000;
@@ -2512,6 +2517,7 @@ function _resetPanelAnims(idx) {
     // Recorrido: reiniciar desde el centro de la capa (offset relativo 0,0)
     if (layer._motionPath && layer._motionPath.length >= 2) {
       layer._pathStartTime = Date.now();
+      delete layer._pathStopped;   // borrar bandera 'stop' — el recorrido debe reiniciarse
       layer._pathCurX = layer.x || 0.5;
       layer._pathCurY = layer.y || 0.5;
     }

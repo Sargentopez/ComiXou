@@ -19965,11 +19965,15 @@ function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
   _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
-  // Inicializar recorridos de animación — posición base = centro de la capa (offset 0)
+  // Resetear estado de recorridos en TODAS las hojas — posición inicial = base de la capa.
+  // NO fijar _pathStartTime aquí: el ticker (_edViewerMpTick) lo fija en el primer frame
+  // de la hoja activa. Así el recorrido arranca siempre desde el principio cuando el
+  // usuario llega a cada hoja, independientemente de cuánto tiempo lleve abierto el visor.
   edPages.forEach(pg => (pg.layers||[]).forEach(l => {
     if (l._motionPath && l._motionPath.length >= 2) {
-      l._pathStartTime = Date.now();
-      l._pathCurX = l.x || 0.5; // offset relativo (0,0) → posición absoluta = la.x
+      delete l._pathStartTime;  // el ticker lo fijará al procesar la hoja activa
+      delete l._pathStopped;    // borrar bandera 'stop' para que el recorrido pueda reiniciarse
+      l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
     }
   }));
