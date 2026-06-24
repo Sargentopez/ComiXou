@@ -21848,10 +21848,11 @@ function EditorView_init(){
       await _edAutosaveClear(); // borrar autosave (async IDB)
       if (edProjectId) {
         try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
-        const _cNoSave = ComicStore.getById(edProjectId);
-        if (_cNoSave && _cNoSave.localEditorData) {
-          ComicStore.save({ ..._cNoSave, localEditorData: null });
-        }
+        // localEditorData NO se borra aquí: el usuario eligió no guardar los cambios
+        // de esta sesión, pero la versión local previa (backup del cloudNewer) debe
+        // seguir disponible en Proyecto → Recuperar versión del dispositivo.
+        // Solo se borra en _edExitYes (el usuario guardó y la versión local ya no es relevante)
+        // o cuando el usuario usa explícitamente "Recuperar versión local" (dd-recoverlocal).
       }
       // Si era obra nueva sin guardado previo, eliminarla
       if (isNew && edProjectId) {
