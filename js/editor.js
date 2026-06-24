@@ -867,6 +867,12 @@ const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
 let edDrawBrushType = 'pen';   // 'pen' = estilógrafo (actual) | 'pencil' = lápiz
 let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'watercolor' = pincel acuarela
+// ── Degradado de relleno ─────────────────────────────────────────────────────
+let _edFillGradActive = false; // modo degradado activo (esperando trazo del usuario)
+let _edGradC1 = '#000000';     // color 1 del degradado
+let _edGradC2 = '#ffffff';     // color 2 del degradado
+let _edGradType = 'linear';    // 'linear' | 'radial'
+let _edGradPtStart = null;     // punto inicio del trazo {nx, ny}
 let edDodgeBurnSign = 1;         // +1 = iluminar (dodge), -1 = oscurecer (burn)
 let _edDodgeBurnActive = false; // true = modo iluminar/oscurecer activo
 let _edGapCloseEnabled = true;  // true = cerrar huecos automáticamente al soltar el trazo de tinta
@@ -877,7 +883,10 @@ let _edGapCloseEnabled = true;  // true = cerrar huecos automáticamente al solt
 //            original aunque algún canal haya llegado a 0 ó 255.
 let _dbOriginMap = new WeakMap();
 const _DB_STEP = 8; // delta RGB por unidad de nivel a maskA=1 (~32 pasadas de gris a blanco)
-function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } _edDodgeBurnActive = false; _dbOriginMap = new WeakMap(); }
+function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='bucket'; edDrawOpacity=100; } _edDodgeBurnActive = false; _dbOriginMap = new WeakMap();
+  // Cancelar modo degradado si estaba activo
+  if (_edFillGradActive) { _edFillGradActive = false; _edGradPtStart = null; window._edGradPtStartClient = null; document.getElementById('ed-grad-line')?.remove(); if(edCanvas) edCanvas.style.cursor = ''; }
+}
 
 // ── Capas temporales de dibujo (sesión activa) ──────────────────
 // Cuatro canvases independientes, compositan al hacer OK.
@@ -8196,6 +8205,14 @@ function edOnStart(e){
         edRedraw(); return;
       }
       if(!window._edEyedropActive){ // cuentagotas activo: no encolar relleno
+        // Modo degradado: capturar punto inicial en lugar de encolar relleno
+        if (_edFillGradActive && edFillBrushType === 'bucket') {
+          _edGradPtStart = edCoords(e);
+          window._edGradPtStartClient = {x: e.clientX, y: e.clientY};
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+          edPainting = true;
+          return;
+        }
         window._edFillPending = { nx: edCoords(e).nx, ny: edCoords(e).ny, pid: e.pointerId };
         if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       }
@@ -8223,6 +8240,14 @@ function edOnStart(e){
         if(_edTmp.watercolor?._canvas) window._edWcFl = { _canvas: _edTmp.watercolor._canvas, _ctx: _edTmp.watercolor._ctx, _isWorkspaceCanvas: true };
         edRedraw(); return;
       }
+    }
+    // Modo degradado: capturar punto inicial en lugar de flood fill
+    if (_edFillGradActive && edFillBrushType === 'bucket') {
+      _edGradPtStart = c;
+      window._edGradPtStartClient = {x: e.clientX, y: e.clientY};
+      edPainting = true;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      return;
     }
     edFloodFill(c.nx, c.ny);
     return;
@@ -10147,6 +10172,19 @@ function edOnEnd(e){
   // Cancelar timer de doble tap de regla si el dedo se levantó sin segundo tap
   // (el timer mismo iniciará el drag diferido si procede)
   // Limpiar pointer del mapa SIEMPRE (antes de la guarda)
+  // Modo degradado: aplicar al soltar el trazo
+  if (_edFillGradActive && edPainting && _edGradPtStart && edActiveTool === 'fill') {
+    const _ge = edCoords(e);
+    document.getElementById('ed-grad-line')?.remove();
+    window._edGradPtStartClient = null;
+    _edApplyFillGradient(_edGradPtStart.nx, _edGradPtStart.ny, _ge.nx, _ge.ny);
+    _edGradPtStart = null;
+    edPainting = false;
+    edCanvas.style.cursor = '';
+    _edFillGradActive = false;
+    edRenderOptionsPanel('fill');
+    return;
+  }
   // Fill touch: confirmar siempre que no haya pinch activo — fuera de la guarda gestureActive
   if(edActiveTool === 'fill' && window._edFillPending && !window._edEyedropActive){
     const fp = window._edFillPending; window._edFillPending = null;
@@ -10274,6 +10312,11 @@ function edOnEnd(e){
   if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
   if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
     edPinchEnd();
+    return;
+  }
+  // Modo degradado: dibujar preview de la línea sobre el canvas
+  if (_edFillGradActive && edPainting && _edGradPtStart) {
+    _edDrawGradPreview(e);
     return;
   }
   if(edPainting && (edActiveTool !== 'fill' || (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'))){
@@ -11291,8 +11334,292 @@ function edFloodFill(nx, ny){
   edPushHistory(); edRedraw();
 }
 
-function edColorErase(nx, ny){
-  const page = edPages[edCurrentPage]; if(!page) return;
+// ── Suavizar bordes del relleno con antialiasing ──────────────────────────────
+function _edFillSmooth() {
+  const bk = _edTmp.bucket;
+  if (!bk?._canvas) { edToast('No hay relleno que suavizar'); return; }
+  const w = bk._canvas.width, h = bk._canvas.height;
+  if (!w || !h) { edToast('No hay relleno que suavizar'); return; }
+  // Aplicar blur Gaussiano sobre canvas temporal → antialiasing de bordes
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  const tCtx = tmp.getContext('2d');
+  tCtx.filter = 'blur(0.75px)';
+  tCtx.drawImage(bk._canvas, 0, 0);
+  bk._ctx.clearRect(0, 0, w, h);
+  bk._ctx.drawImage(tmp, 0, 0);
+  _edDrawPushHistory();
+  edPushHistory();
+  edRedraw();
+  edToast('Bordes suavizados');
+}
+
+// ── Degradado: dibujar preview de la línea en overlay canvas ──────────────────
+function _edDrawGradPreview(e) {
+  if (!window._edGradPtStartClient) return;
+  let cv = document.getElementById('ed-grad-line');
+  if (!cv || cv.tagName !== 'CANVAS') {
+    cv?.remove();
+    cv = document.createElement('canvas');
+    cv.id = 'ed-grad-line';
+    cv.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:20000;';
+    cv.width = window.innerWidth * (window.devicePixelRatio || 1);
+    cv.height = window.innerHeight * (window.devicePixelRatio || 1);
+    cv.style.width = window.innerWidth + 'px';
+    cv.style.height = window.innerHeight + 'px';
+    document.body.appendChild(cv);
+  }
+  const ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  const cx1 = window._edGradPtStartClient.x;
+  const cy1 = window._edGradPtStartClient.y;
+  const cx2 = e.clientX;
+  const cy2 = e.clientY;
+  // Sombra
+  ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2);
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.stroke();
+  // Línea degradada
+  const g = ctx.createLinearGradient(cx1, cy1, cx2, cy2);
+  g.addColorStop(0, _edGradC1); g.addColorStop(1, _edGradC2);
+  ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2);
+  ctx.strokeStyle = g; ctx.lineWidth = 3.5; ctx.stroke();
+  // Punto inicial (Color 1)
+  ctx.beginPath(); ctx.arc(cx1, cy1, 10, 0, Math.PI*2);
+  ctx.fillStyle = _edGradC1; ctx.fill();
+  ctx.strokeStyle = 'white'; ctx.lineWidth = 2.5; ctx.stroke();
+  // Punto final (Color 2)
+  ctx.beginPath(); ctx.arc(cx2, cy2, 10, 0, Math.PI*2);
+  ctx.fillStyle = _edGradC2; ctx.fill();
+  ctx.strokeStyle = 'white'; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.restore();
+}
+
+// ── Degradado: aplicar al canvas del relleno ──────────────────────────────────
+function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
+  const bk = _edTmp.bucket;
+  if (!bk?._canvas) { edToast('Abre el panel de dibujo primero'); return; }
+  const canvas = bk._canvas;
+  const ctx = bk._ctx;
+  const W = canvas.width, H = canvas.height;
+  if (!W || !H) return;
+  // Convertir coords normalizadas a píxeles del canvas (workspace)
+  const x0 = Math.round(edMarginX() + nx0 * edPageW());
+  const y0 = Math.round(edMarginY() + ny0 * edPageH());
+  const x1 = Math.round(edMarginX() + nx1 * edPageW());
+  const y1 = Math.round(edMarginY() + ny1 * edPageH());
+  // Parsear colores
+  const r1 = parseInt(_edGradC1.slice(1,3),16), g1 = parseInt(_edGradC1.slice(3,5),16), b1 = parseInt(_edGradC1.slice(5,7),16);
+  const r2 = parseInt(_edGradC2.slice(1,3),16), g2 = parseInt(_edGradC2.slice(3,5),16), b2 = parseInt(_edGradC2.slice(5,7),16);
+  const id = ctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  // Comprobar si hay píxeles pintados
+  let hasFill = false;
+  for (let i = 3; i < d.length; i += 4) { if (d[i] > 0) { hasFill = true; break; } }
+  // Si no hay relleno, crear uno nuevo en el área de página
+  if (!hasFill) {
+    const px0 = Math.round(edMarginX()), py0 = Math.round(edMarginY());
+    const px1w = Math.min(W-1, Math.round(edMarginX() + edPageW()));
+    const py1h = Math.min(H-1, Math.round(edMarginY() + edPageH()));
+    for (let y = py0; y <= py1h; y++) {
+      for (let x = px0; x <= px1w; x++) {
+        d[(y*W+x)*4+3] = 255; // marcar como pintado
+      }
+    }
+  }
+  // Aplicar degradado a todos los píxeles con alpha > 0
+  let painted = 0;
+  if (_edGradType === 'linear') {
+    const dx = x1 - x0, dy = y1 - y0;
+    const len2 = dx*dx + dy*dy;
+    if (len2 < 1) { edToast('Línea demasiado corta'); return; }
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y*W+x)*4;
+        if (d[i+3] === 0) continue;
+        const t = Math.max(0, Math.min(1, ((x-x0)*dx + (y-y0)*dy) / len2));
+        d[i]   = Math.round(r1 + (r2-r1)*t);
+        d[i+1] = Math.round(g1 + (g2-g1)*t);
+        d[i+2] = Math.round(b1 + (b2-b1)*t);
+        painted++;
+      }
+    }
+  } else { // radial
+    const R = Math.sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
+    if (R < 1) { edToast('Radio demasiado pequeño'); return; }
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y*W+x)*4;
+        if (d[i+3] === 0) continue;
+        const r = Math.sqrt((x-x0)*(x-x0) + (y-y0)*(y-y0));
+        const t = Math.max(0, Math.min(1, r/R));
+        d[i]   = Math.round(r1 + (r2-r1)*t);
+        d[i+1] = Math.round(g1 + (g2-g1)*t);
+        d[i+2] = Math.round(b1 + (b2-b1)*t);
+        painted++;
+      }
+    }
+  }
+  if (!painted) { edToast('No hay área de relleno'); return; }
+  ctx.putImageData(id, 0, 0);
+  _edDrawPushHistory();
+  edPushHistory();
+  edRedraw();
+}
+
+// ── Degradado: ventana de configuración ──────────────────────────────────────
+function _edShowGradientDialog() {
+  document.getElementById('ed-grad-dlg')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ed-grad-dlg';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
+  const _linG = () => `linear-gradient(90deg,${_edGradC1},${_edGradC2})`;
+  const _radG = () => `radial-gradient(circle,${_edGradC1},${_edGradC2})`;
+  // Render de las muestras de paleta para un color (target 1 o 2)
+  function _palHtml(which) {
+    const cur = which === 1 ? _edGradC1 : _edGradC2;
+    return edColorPalette.map((c,i) =>
+      `<button class="egd-pal" data-which="${which}" data-col="${c}" style="width:22px;height:22px;border-radius:50%;background:${c};border:2px solid ${c===cur?'#111':'#ccc'};cursor:pointer;flex-shrink:0;padding:0;margin:1px" title="${c}"></button>`
+    ).join('') +
+    `<button class="egd-eye" data-which="${which}" style="width:22px;height:22px;border-radius:50%;background:#f0f0f0;border:2px solid #ccc;cursor:pointer;flex-shrink:0;padding:0;font-size:12px;margin:1px" title="Cuentagotas">💧</button>` +
+    `<button class="egd-hsl" data-which="${which}" style="width:22px;height:22px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid #ccc;cursor:pointer;flex-shrink:0;padding:0;font-size:9px;margin:1px" title="Color personalizado">🎨</button>`;
+  }
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;padding:18px 16px;width:min(360px,95vw);box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;max-height:90vh;overflow-y:auto">
+      <div style="font-weight:900;font-size:1rem;margin-bottom:12px;text-align:center">Degradado</div>
+      <div id="egd-preview-bar" style="width:100%;height:32px;border-radius:8px;margin-bottom:14px;border:1px solid #ddd;${_edGradType==='radial'?_radG():_linG()}"></div>
+      <!-- Color 1 -->
+      <div style="margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0">Color 1</div>
+          <div id="egd-c1-swatch" style="width:32px;height:32px;border-radius:8px;background:${_edGradC1};border:2px solid #ddd;flex-shrink:0"></div>
+          <div id="egd-c1-hex" style="font-size:.72rem;color:#888;flex:1">${_edGradC1}</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:0;align-items:center">${_palHtml(1)}</div>
+      </div>
+      <!-- Color 2 -->
+      <div style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0">Color 2</div>
+          <div id="egd-c2-swatch" style="width:32px;height:32px;border-radius:8px;background:${_edGradC2};border:2px solid #ddd;flex-shrink:0"></div>
+          <div id="egd-c2-hex" style="font-size:.72rem;color:#888;flex:1">${_edGradC2}</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:0;align-items:center">${_palHtml(2)}</div>
+      </div>
+      <!-- Tipo -->
+      <div style="display:flex;flex-direction:row;gap:8px;margin-bottom:14px">
+        <button id="egd-linear" style="flex:1;padding:8px 4px;border:2px solid ${_edGradType==='linear'?'#111':'#ddd'};border-radius:8px;font-weight:900;font-size:.8rem;cursor:pointer;background:${_edGradType==='linear'?'#111':'#fff'};color:${_edGradType==='linear'?'#fff':'#333'};font-family:inherit">
+          <div style="width:100%;height:14px;border-radius:3px;margin-bottom:4px;${_linG()}"></div>Lineal</button>
+        <button id="egd-radial" style="flex:1;padding:8px 4px;border:2px solid ${_edGradType==='radial'?'#111':'#ddd'};border-radius:8px;font-weight:900;font-size:.8rem;cursor:pointer;background:${_edGradType==='radial'?'#111':'#fff'};color:${_edGradType==='radial'?'#fff':'#333'};font-family:inherit">
+          <div style="width:100%;height:14px;border-radius:3px;margin-bottom:4px;${_radG()}"></div>Circular</button>
+      </div>
+      <div style="background:#f5f5f5;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:.76rem;color:#555;text-align:center;line-height:1.4">
+        Pulsa <strong>Dibujar →</strong> y arrastra una línea sobre el dibujo.<br>Si no hay relleno, se crea automáticamente.
+      </div>
+      <div style="display:flex;gap:10px">
+        <button id="egd-cancel" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;background:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">Cancelar</button>
+        <button id="egd-ok" style="flex:1;padding:10px;border:none;border-radius:8px;background:#111;color:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">Dibujar →</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  function _updatePreview() {
+    const bar = document.getElementById('egd-preview-bar');
+    if (bar) bar.style.background = _edGradType === 'radial' ? _radG() : _linG();
+  }
+  function _setColor(which, hex) {
+    if (which === 1) { _edGradC1 = hex; }
+    else             { _edGradC2 = hex; }
+    const sw = document.getElementById(`egd-c${which}-swatch`);
+    const lbl = document.getElementById(`egd-c${which}-hex`);
+    if (sw) sw.style.background = hex; if (lbl) lbl.textContent = hex;
+    // Actualizar bordes de las muestras de esa fila
+    overlay.querySelectorAll(`.egd-pal[data-which="${which}"]`).forEach(b => {
+      b.style.border = `2px solid ${b.dataset.col === hex ? '#111' : '#ccc'}`;
+    });
+    _updatePreview();
+  }
+
+  // Tipo
+  document.getElementById('egd-linear')?.addEventListener('click', () => {
+    _edGradType = 'linear';
+    const bl = document.getElementById('egd-linear'), br = document.getElementById('egd-radial');
+    if (bl) { bl.style.border='2px solid #111'; bl.style.background='#111'; bl.style.color='#fff'; }
+    if (br) { br.style.border='2px solid #ddd'; br.style.background='#fff'; br.style.color='#333'; }
+    _updatePreview();
+  });
+  document.getElementById('egd-radial')?.addEventListener('click', () => {
+    _edGradType = 'radial';
+    const bl = document.getElementById('egd-linear'), br = document.getElementById('egd-radial');
+    if (bl) { bl.style.border='2px solid #ddd'; bl.style.background='#fff'; bl.style.color='#333'; }
+    if (br) { br.style.border='2px solid #111'; br.style.background='#111'; br.style.color='#fff'; }
+    _updatePreview();
+  });
+
+  // Clic en muestra de paleta
+  overlay.addEventListener('click', e => {
+    const palBtn = e.target.closest('.egd-pal');
+    if (palBtn) { _setColor(+palBtn.dataset.which, palBtn.dataset.col); return; }
+
+    // Cuentagotas
+    const eyeBtn = e.target.closest('.egd-eye');
+    if (eyeBtn) {
+      const which = +eyeBtn.dataset.which;
+      overlay.style.display = 'none';
+      edToast('Toca el color a usar…');
+      const ac = new AbortController();
+      const sig = { signal: ac.signal };
+      function sampleGrad(clientX, clientY) {
+        ac.abort();
+        const rect = edCanvas.getBoundingClientRect();
+        const scaleX = edCanvas.width / rect.width;
+        const scaleY = edCanvas.height / rect.height;
+        const cx = Math.round((clientX - rect.left) * scaleX);
+        const cy = Math.round((clientY - rect.top) * scaleY);
+        const px = edCanvas.getContext('2d').getImageData(cx, cy, 1, 1).data;
+        if (px[3] < 10) { edToast('Sin color en ese punto'); overlay.style.display = 'flex'; return; }
+        const hex = '#' + [px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+        _setColor(which, hex);
+        overlay.style.display = 'flex';
+      }
+      edCanvas.addEventListener('pointerdown', ev => { ev.preventDefault(); sampleGrad(ev.clientX, ev.clientY); }, { once:true, signal:ac.signal });
+      return;
+    }
+
+    // Color personalizado (HSL)
+    const hslBtn = e.target.closest('.egd-hsl');
+    if (hslBtn) {
+      const which = +hslBtn.dataset.which;
+      const prev = edDrawColor;
+      edDrawColor = which === 1 ? _edGradC1 : _edGradC2;
+      overlay.style.display = 'none';
+      _edShowColorPicker((hex, final) => {
+        if (which === 1) _edGradC1 = hex; else _edGradC2 = hex;
+        if (final) {
+          edDrawColor = prev;
+          overlay.style.display = 'flex';
+          _setColor(which, hex);
+        }
+      });
+    }
+    if (e.target === overlay) overlay.remove();
+  });
+
+  document.getElementById('egd-ok')?.addEventListener('click', () => {
+    overlay.remove();
+    _edFillGradActive = true;
+    edToast('Arrastra una línea sobre el dibujo para aplicar el degradado');
+    edCanvas.style.cursor = 'crosshair';
+    edRenderOptionsPanel('fill');
+  });
+  document.getElementById('egd-cancel')?.addEventListener('click', () => { overlay.remove(); });
+  overlay.addEventListener('pointerdown', e => { if (e.target !== overlay) e.stopPropagation(); }, true);
+  overlay.addEventListener('touchstart', e => e.stopPropagation(), {passive:true, capture:true});
+}
+
+function edColorErase(nx, ny){  const page = edPages[edCurrentPage]; if(!page) return;
   // Buscar DrawLayer activo o StrokeLayer si no hay draw abierto
   let dl = page.layers.find(l => l.type === 'draw');
   if(!dl) {
@@ -14379,6 +14706,7 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isEr?'rgba(0,0,0,.12)':'transparent'};opacity:${isEr?1:0.5}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSIyMSIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDIxIDIwIj4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFCVUFBQUFVQ0FZQUFBQmlTM1l6QUFBRUZVbEVRVlI0QWJTU2YweVVkUnpIUDkvbkYyZUFRQndKaG9hRnpybXhydkZqSWJVd0NZMVowOHdMYTVXTmlVNjNhblBKeWorNldFd2JZTG1BbEJoSktjZWdXb1dMTUptaXN3NEZzZFdKRUwrRy9EZzhQZTdoemp1T2U1N24yK2Q1NEc0bVRQL1I3ejd2NzgvUDkvVjlQOS92dzhBREtQY0xxbkxDQXY3VVFhQi8xN2ErSGxpckZRUktZYjQ5Q202V1VGck1sNkF0ekZiazlEZmJkTC9YRjBTOGtMb3gzT3ZOangwZmYxUC9WM04ycU1rMEJ6NDF1MmZPUW1BZU1nMlJrWjJkMnlJKy85NlNVMXgxcWlObDdZWFJyS3phZjFOVG12czM1RjA4VmwwZHR0dHFYU1VFTjl6V21jOHBhVy9QNSt0KzJ5ZHMzblNpNGcvTDJBOFpxdzJQSC8vdUU2R3o0eWd4bXd2NXJWdGZYQ2ZMUWtGYVd1L1BPZzR5NFk1eUo1UlFDdXoyN1QrK3VtTEZ4NTBaejZUa1hteXJwZ1VmdkVVTWhrUW1SaC9KR1o1Y3poY1Y3aEI2dWhvV3ZQM0crZ1NmVEtxUTJZcGFpTkxpZGlpVG1RbHNlQ2o3NVVDL3A3S2liRTljVmVWSHNIaXhucWlaRklCZ0FZWVF3SU1aUVFpTEtDa3RXbXF4RkI0QmdDZFFjU2d0Z3REdzhKQU41ODZScnVUVXBKeXVLM1U2NDVZc29LQVFoQUVnbGlVTTVUZ09XSTRIeW9TRFFxTVl4MFRQQXAxQTlnTkFMNjQ5aXEwV0twVG5lYWJNNTVNT0YzMjZ3LzlyWTBsb2RGUUVTeFdLbHJTY21Rb2RFcUpENkRKMEdnWDJHMVlReFI1MEx1T1JNQ3BKVXV4TUlvQUtyWStMMVNkZEd6eXRmLy9kM0NVY3h6K003b2pxTHBDazlVa0lBaDhEV2RhQi9mb2xFSjFYaWFKTWc5MCtPWUo1eWFpbEtDMVVxS0htNkh0SlFFUUVSZkU0UzdCUXdoQVU2eUhNd2dGQzlFRFlKZUNibG1IYzFncWkySTJmTDlIMjltRzZOcnZVaVh0T29BNmd0RkNoTGxHOEh1RndkTE1UNGhDbmdCNFlMZ0ZZUGhFNElaSGgrV1VQRWVZUmNMdWN4R1pySmE3SmJnQkZocnE2RHVtZHZLK244ZEhLa2JRSEZRd1Y2bTVwK2VlTUludXA0K2Jmek9CQU16aWRJMERJSWxSTWlDUXhNUTY4dnh2MlA0SHQ3c09OTWhRZlBLa2MrT3lYY1J6a3hNZkhmNHV0eXNGbUp0VEI1YktLbHFpZVhwdGRsdjNFTDdueG5pNFF1OTFDRkVVaEhxK05jVGc2WWNvM1JtWEpUL04zMWpqckd5em5FeEpDVmlQaS9QRHdzQmRiQlJVTUZib2JQK0hZcGxmSzlXWnptNkkrdVNTSklEcXQ0UEdNd0sxYi9mZzRMdHJkUFVvem55L3U2N295L0ZOTnpjYjFmWDNlYTBpWlJzMEpGWXFQRFFkNUh0S0tTNXJhc3RlVjJxOTJqZUhKVTVUUVVhcElOK254MmpZd3Z2YVZIMys5eXNPVkwrMDBHaHRVZDNOZ2dRa1Zxdlg5ZnJoVVcwdWZGU2M5aDNKZlB6THhkUG8rMTFQSlJ2dktWWG4waTBNbnorcjF3c3ZwNlN2TEVUaXZPdzB5V3dXaDZ0aG9CSG52WG1tLzJieDVrY3ZsZm01d2NHUkxkSFRJOHFhbWpLeGR1ejQ4MWRqWTRWSHo3cVgvUWRWa2t3a1VkQ09qODh1U0JHZUhoc1QrTld2T1NDYVRDYTlFemJpMy9nTUFBUC8vREM3b1R3QUFBQVpKUkVGVUF3QlRnYWc0d2ZFMDZnQUFBQUJKUlU1RXJrSmdnZz09IiB4PSIwIiB5PSIwIiB3aWR0aD0iMjEiIGhlaWdodD0iMjAiLz4KPC9zdmc+" width="21" height="20" style="image-rendering:pixelated;vertical-align:middle"/></button>
     <button id="op-color-erase-btn"
       style="flex-shrink:0;border:1.5px solid ${window._edColorEraseReady?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${window._edColorEraseReady?'var(--black)':'transparent'};color:${window._edColorEraseReady?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="Tocar aquí y luego tocar un color del canvas para borrarlo">Borrar color</button>
+    ${_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-fill-gradient" style="flex-shrink:0;border:1.5px solid ${_edFillGradActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edFillGradActive?'var(--black)':'transparent'};color:${_edFillGradActive?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="Aplicar degradado al relleno dibujando una línea">Degradado</button><button id="op-fill-smooth" style="flex-shrink:0;border:1.5px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:var(--gray-600);white-space:nowrap" title="Suavizar bordes del relleno con antialiasing">Suavizar</button>` : ''}
 
   </div>
   <!-- SEP H -->
@@ -14630,6 +14958,23 @@ function edRenderOptionsPanel(mode){
       _edSyncFillCursor();
       if(window._edIsTouch) _edOffsetHide();
       edRenderOptionsPanel('fill');
+    });
+    // Botón Degradado: abre ventana de configuración
+    $('op-fill-gradient')?.addEventListener('click', e => {
+      e.stopPropagation();
+      if (_edFillGradActive) {
+        // Desactivar si ya estaba activo
+        _edFillGradActive = false; _edGradPtStart = null; window._edGradPtStartClient = null;
+        document.getElementById('ed-grad-line')?.remove();
+        edCanvas.style.cursor = ''; edRenderOptionsPanel('fill');
+      } else {
+        _edShowGradientDialog();
+      }
+    });
+    // Botón Suavizar: antialiasing sobre el relleno actual
+    $('op-fill-smooth')?.addEventListener('click', e => {
+      e.stopPropagation();
+      _edFillSmooth();
     });
     $('op-tool-shape')?.addEventListener('click',()=>{
       edActiveTool='shape'; edCanvas.className='tool-shape';
