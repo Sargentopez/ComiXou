@@ -1427,7 +1427,10 @@ function _readerGifTick() {
           if (_nextIdx >= layer._animFrames.length) {
             layer._animPlayCount = (layer._animPlayCount || 0) + 1;
             if (_stopAtEnd || (_repeatCount > 0 && layer._animPlayCount >= _repeatCount)) {
-              _nextIdx = layer._animFrames.length - 1; // detenerse en último frame
+              // Con interpolación circular y repeticiones finitas: volver al frame 0.
+              // Con stopAtEnd: detener en el último frame (comportamiento explícito).
+              const _circEnd = !_stopAtEnd && _repeatCount > 0 && (layer._gcpCircularEnd || false);
+              _nextIdx = _circEnd ? 0 : layer._animFrames.length - 1;
             } else {
               _nextIdx = 0; // loop infinito o más repeticiones
             }
@@ -1440,14 +1443,21 @@ function _readerGifTick() {
         } // end else (!_animMpSync)
       }
       // Frame sincronizado al path respetando el comportamiento de la animación
-function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd) {
+function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd) {
   if (totalF < 1 || cycles <= 0) return 0;
+  // Caso especial: path con 'stop' + interpolación circular + repeticiones finitas.
+  // El cap (1-1e-9) de iterT impide que animProgress llegue a repeatCnt*totalF.
+  if (pathEnd === 'stop' && rawT >= 1.0 && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
   const iterT = (pathEnd === 'stop') ? Math.min(rawT, 1 - 1e-9)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
               : (rawT % 1);
   const animProgress = iterT * cycles * totalF;
   if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
-  if (repeatCnt > 0) return animProgress >= repeatCnt * totalF ? totalF - 1 : Math.floor(animProgress) % totalF;
+  if (repeatCnt > 0) {
+    return animProgress >= repeatCnt * totalF
+      ? (circularEnd ? 0 : totalF - 1)
+      : Math.floor(animProgress) % totalF;
+  }
   return Math.floor(animProgress) % totalF;
 }
 
@@ -1494,7 +1504,8 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd) {
               _mpRawT, layer._motionCycles, _mpTF,
               layer._gcpStopAtEnd || false,
               layer._gcpRepeatCount || 0,
-              layer._motionPathEnd || 'restart'
+              layer._motionPathEnd || 'restart',
+              layer._gcpCircularEnd || false
             );
             if (layer._gifReady && layer._gifFrames && layer._gifOc && _mpSyncF !== layer._gifIdx) {
               layer._gifIdx = _mpSyncF;

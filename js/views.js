@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v30.82</footer>
+    <footer class="app-version">v30.85</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -560,6 +560,8 @@ Router.register('editor', {
           <div class="edb-sep"></div>
           <button id="esb-undo"     class="edb-tool" title="Deshacer">↩</button>
           <button id="esb-redo"     class="edb-tool" title="Rehacer">↪</button>
+          <div id="esb-fuse-sep" class="edb-sep" style="display:none"></div>
+          <button id="esb-fuse"     class="edb-tool" title="Fusionar objetos cerrados en uno solo con huecos" style="display:none;font-size:.65rem;font-weight:900">⊕</button>
           <div class="edb-sep"></div>
           <button id="esb-ok"       class="edb-ok"   title="Finalizar">✓</button>
         </div>

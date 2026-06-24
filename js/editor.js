@@ -1277,7 +1277,12 @@ class ImageLayer extends BaseLayer {
     if (idx >= total) {
       this._gcpPlayCount = (this._gcpPlayCount || 0) + 1;
       if (stopAtEnd || (repeatCount > 0 && this._gcpPlayCount >= repeatCount)) {
-        this._fIdx = total - 1;
+        // Con interpolación circular y repeticiones finitas: volver al frame 0
+        // (los frames del final son una transición de vuelta al inicio; quedarse
+        // en el último frame interpolado dejaría la animación en posición intermedia).
+        // Con stopAtEnd: detener en el último frame (comportamiento explícito).
+        const _circEnd = !stopAtEnd && repeatCount > 0 && (this._gcpCircularEnd || false);
+        this._fIdx = _circEnd ? 0 : total - 1;
         this._oc.getContext('2d').putImageData(this._animFrames[this._fIdx].imageData, 0, 0);
         this._playing = false;
         requestAnimationFrame(() => {
@@ -2941,6 +2946,7 @@ function _edLayersSnapshot(){
       if(l._gcpFrameDelay)   o._gcpFrameDelay   = l._gcpFrameDelay;
       if(l._gcpRepeatCount)  o._gcpRepeatCount  = l._gcpRepeatCount;
       if(l._gcpStopAtEnd)    o._gcpStopAtEnd    = l._gcpStopAtEnd;
+      if(l._gcpCircularEnd)  o._gcpCircularEnd  = true;
       if(l._gcpLayersData)   o._gcpLayersData   = l._gcpLayersData;
       if(l._gcpFramesData)   o._gcpFramesData   = l._gcpFramesData;
       if(l._gcpLayerNames)   o._gcpLayerNames   = l._gcpLayerNames;
@@ -6701,8 +6707,13 @@ function _edEaseT(t,accel){
 //   stopAtEnd : detener en último frame tras 1 ciclo
 //   repeatCnt : detener en último frame tras N ciclos (0 = infinito)
 //   pathEnd   : comportamiento del path ('stop'|'restart'|'rewind')
-function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd) {
+function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd) {
   if (totalF < 1 || cycles <= 0) return 0;
+  // Caso especial: path con 'stop' + interpolación circular + repeticiones finitas.
+  // Cuando pathEnd='stop', iterT se capa en (1-1e-9) para no sobrepasar el final,
+  // lo que hace que animProgress nunca alcance repeatCnt*totalF. En ese momento
+  // (rawT>=1, path detenido) la animación debe mostrar frame 0, no el último.
+  if (pathEnd === 'stop' && rawT >= 1.0 && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
   // Para restart/rewind, la animación también reinicia con cada traversal
   const iterT = (pathEnd === 'stop') ? Math.min(rawT, 1 - 1e-9)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
@@ -6712,8 +6723,10 @@ function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd) {
     return Math.min(Math.floor(animProgress), totalF - 1);
   }
   if (repeatCnt > 0) {
+    // Con interpolación circular: al acabar volver al frame 0 (estado inicial).
+    // Sin ella: detener en el último frame.
     return animProgress >= repeatCnt * totalF
-      ? totalF - 1
+      ? (circularEnd ? 0 : totalF - 1)
       : Math.floor(animProgress) % totalF;
   }
   return Math.floor(animProgress) % totalF;
@@ -6760,7 +6773,8 @@ function _edViewerMpTick() {
           _rawT, _vCycles, _syncFs.length,
           l._gcpStopAtEnd || false,
           l._gcpRepeatCount || 0,
-          l._motionPathEnd || 'restart'
+          l._motionPathEnd || 'restart',
+          l._gcpCircularEnd || false
         );
         if (_mpSyncF !== l._fIdx) {
           if (l._timer) { clearTimeout(l._timer); l._timer = null; }
@@ -6852,7 +6866,8 @@ function _edMpPreviewTick() {
         _rawT, _edMotionPathCycles, _pSyncFs.length,
         la._gcpStopAtEnd || false,
         la._gcpRepeatCount || 0,
-        la._motionPathEnd || 'restart'
+        la._motionPathEnd || 'restart',
+        la._gcpCircularEnd || false
       );
       if (_pSyncF !== la._fIdx) {
         if (la._timer) { clearTimeout(la._timer); la._timer = null; }
@@ -12674,7 +12689,7 @@ function _edShapeToLineLayer(s) {
   return l;
 }
 
-function _edActivateShapeTool(isNew) {
+function _edActivateShapeTool(isNew, isCreating) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
   // Táctil: si los menús están ocultos, la barra flotante ya está visible — no abrir panel
@@ -12682,9 +12697,11 @@ function _edActivateShapeTool(isNew) {
     edShapeBarShow();
     // Inicializar _vsPreSessionLayers también en modo minimizado
     // (sin esto queda vacío y todos los objetos vectoriales son seleccionables)
-    if (_vsHistory.length > 0) _vsClear();
-    const _selMini = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape') ? edLayers[edSelectedIdx] : null;
-    if (_vsHistory.length === 0) _vsInit(!!isNew && !_selMini);
+    if (!isCreating) {
+      if (_vsHistory.length > 0) _vsClear();
+      const _selMini = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape') ? edLayers[edSelectedIdx] : null;
+      if (_vsHistory.length === 0) _vsInit(!!isNew && !_selMini);
+    }
     edRedraw();
     return;
   }
@@ -12766,12 +12783,12 @@ function _edActivateShapeTool(isNew) {
   edFitCanvas();
   _edInitSliderBubbles(panel);
   // Guardar estado previo en historial global (objeto existente)
-  // Primero cerrar cualquier sesión vectorial anterior para desbloquear edPushHistory
-  if (_vsHistory.length > 0) _vsClear();
-  if(_sel) edPushHistory(); else if(isNew) edPushHistory(); // estado previo a objeto nuevo
-  _edShapeInitHistory(!!isNew);
+  // Si isCreating: continuamos sesión vectorial activa — NO limpiar ni reinicializar
+  if (!isCreating && _vsHistory.length > 0) _vsClear();
+  if(!isCreating){ if(_sel) edPushHistory(); else if(isNew) edPushHistory(); } // estado previo a objeto nuevo
+  _edShapeInitHistory(!!(isNew || isCreating));
   // Sistema _vs*: inicializar (la sesión anterior ya se limpió arriba si existía)
-  if(_vsHistory.length === 0) _vsInit(!!isNew && !_sel);
+  if(!isCreating && _vsHistory.length === 0) _vsInit(!!isNew && !_sel);
   // Centrar cámara en el objeto al abrir el panel
   // No centrar si ya hay objetos en sesión de fusión
   const _hasFusionObjs5 = _edLineFusionId && edLayers.some(l => l._fusionId===_edLineFusionId);
@@ -12801,7 +12818,7 @@ function _edActivateShapeTool(isNew) {
       const _si = edLayers.indexOf(_curS);
       if(_si >= 0){ edLayers[_si] = _ll; edSelectedIdx = _si; }
     }
-    edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool();
+    edActiveTool='line'; edCanvas.className='tool-line'; _edActivateLineTool(false, true);
   });
 
   // ── Tipo ──
@@ -13160,23 +13177,23 @@ function _edActivateLineTool(isNew, isCreating) {
     if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
     _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
     _edLineFusionId = null;
-    _edActivateLineTool();
+    _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-segment-btn')?.addEventListener('click',()=>{
     if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
     _edLineType='segment'; edActiveTool='line'; edCanvas.className='tool-line';
     _edLineFusionId = null;
-    _edActivateLineTool();
+    _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-rect-btn')?.addEventListener('click',()=>{
     _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
     _edLineFusionId = null;
-    _edActivateLineTool();
+    _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-ellipse-btn')?.addEventListener('click',()=>{
     _edShapeType='ellipse'; edActiveTool='shape'; edCanvas.className='tool-shape';
     _edLineFusionId = null;
-    _edActivateLineTool();
+    _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-select-btn')?.addEventListener('click',()=>{
     // Cerrar modo V⟺C si estaba abierto
@@ -13201,7 +13218,7 @@ function _edActivateLineTool(isNew, isCreating) {
       }
     }
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
-    _edActivateLineTool();
+    _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
 
   // ── Color ──
@@ -13260,7 +13277,7 @@ function _edActivateLineTool(isNew, isCreating) {
   // ── Cerrar objeto ──
   $('op-line-close-btn')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l||l.points.length<3) return;
-    l.closed=true; _edShapePushHistory(); edRedraw(); _edActivateLineTool();
+    l.closed=true; _edShapePushHistory(); edRedraw(); _edActivateLineTool(false, true);
   });
 
   // ── Relleno ──
@@ -13518,9 +13535,17 @@ function _edFinishLine() {
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
     const _shapeBarActive = $('edShapeBar')?.classList.contains('visible');
-    // En modo barra flotante (menús ocultos): NUNCA abrir el panel al finalizar línea
-    if(_panelOpen && !_shapeBarActive) _edActivateLineTool(false, true);
-    else if(!edMinimized && !_shapeBarActive) _edActivateLineTool(true);
+    // Al finalizar un objeto, siempre continuar la sesión (isCreating=true) para preservar
+    // _vsPreSessionLayers y que los objetos recién creados sigan siendo seleccionables/fusionables.
+    // En modo barra flotante (minimizado o shapeBar visible): solo actualizar el botón ⊕, no abrir panel
+    if(!_shapeBarActive && !edMinimized) _edActivateLineTool(false, true);
+    // Actualizar visibilidad del botón ⊕ Fusionar en la barra flotante
+    if(_shapeBarActive) {
+      const _esbFuseBtn = $('esb-fuse'), _esbFuseSep = $('esb-fuse-sep');
+      const _canFuseNow = edLayers.filter(l => l.type==='line' && l.closed && !_vsPreSessionLayers.has(l)).length >= 2;
+      if(_esbFuseBtn) _esbFuseBtn.style.display = _canFuseNow ? '' : 'none';
+      if(_esbFuseSep) _esbFuseSep.style.display = _canFuseNow ? '' : 'none';
+    }
   } else {
     if (_edLineLayer) {
       const idx = edLayers.indexOf(_edLineLayer);
@@ -17405,6 +17430,8 @@ function edShapeBarShow(snapToCanvas) {
   bar.style.left = _esbX + 'px';
   bar.style.top  = _esbY + 'px';
   _esbSync();
+  // Actualizar visibilidad del botón ⊕ Fusionar
+  if(typeof window._esbCheckFuse === 'function') window._esbCheckFuse();
 }
 function edShapeBarHide() {
   if (_edPanelIsCollapsed()) return;
@@ -17778,6 +17805,84 @@ function edInitShapeBar() {
   // Deshacer/Rehacer
   $('esb-undo')?.addEventListener('click', ()=>{ if(_locked) return; edShapeUndo(); });
   $('esb-redo')?.addEventListener('click', ()=>{ if(_locked) return; edShapeRedo(); });
+
+  // ── ⊕ Fusionar (barra flotante) ──
+  // Muestra/oculta el botón según si hay ≥2 objetos cerrados de la sesión actual
+  window._esbCheckFuse = function() {
+    const _canFuse = edLayers.filter(l => l.type==='line' && l.closed && !_vsPreSessionLayers.has(l)).length >= 2;
+    const _fb = $('esb-fuse'), _fs = $('esb-fuse-sep');
+    if(_fb) _fb.style.display = _canFuse ? '' : 'none';
+    if(_fs) _fs.style.display = _canFuse ? '' : 'none';
+  };
+  $('esb-fuse')?.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    if(_locked) return;
+    // Caso A: layer único con grouped=true → convertir a evenodd
+    const _selLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if (_selLayer && _selLayer.type === 'line' && _selLayer.grouped && _selLayer.points && _selLayer.points.includes(null)) {
+      _edShapePushHistory();
+      _selLayer.grouped = false;
+      delete _selLayer.groupedStyles;
+      _selLayer.closed = true;
+      _selLayer.fillColor = edDrawFillColor || _selLayer.fillColor || '#ffffff';
+      _edShapePushHistory();
+      edRedraw();
+      window._esbCheckFuse();
+      edToast('Objetos fusionados ✓');
+      return;
+    }
+    // Caso B: ≥2 layers line cerrados DE LA SESIÓN ACTUAL (nunca objetos pre-sesión/ajenos)
+    const _closedLayers = edLayers.filter(l => l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l));
+    if (_closedLayers.length < 2) {
+      edToast('Necesitas al menos 2 objetos cerrados de esta sesión para fusionar');
+      return;
+    }
+    const _origin = _closedLayers[0];
+    const _newLayer = new LineLayer();
+    _newLayer.color    = _origin.color || edDrawColor || '#000000';
+    _newLayer.fillColor = edDrawFillColor || '#ffffff';
+    _newLayer.lineWidth = _origin.lineWidth ?? edDrawSize ?? 3;
+    _newLayer.opacity  = _origin.opacity ?? 1;
+    _newLayer.rotation = 0;
+    _newLayer.x = _origin.x;
+    _newLayer.y = _origin.y;
+    if (!_newLayer.cornerRadii) _newLayer.cornerRadii = {};
+    for (let _i = 0; _i < _closedLayers.length; _i++) {
+      const _ll = _closedLayers[_i];
+      if (_i > 0) _newLayer.points.push(null);
+      const _rot = (_ll.rotation || 0) * Math.PI / 180;
+      const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
+      const _cr = _ll.cornerRadii || {};
+      for (let _pi = 0; _pi < _ll.points.length; _pi++) {
+        const _p = _ll.points[_pi];
+        if (!_p) { _newLayer.points.push(null); continue; }
+        const _pw = edPageW(), _ph = edPageH();
+        const _ax = (_ll.x + _p.x * _pw * Math.cos(_rot) - _p.y * _ph * Math.sin(_rot)) / _pw - _origin.x;
+        const _ay = (_ll.y + _p.x * _pw * Math.sin(_rot) + _p.y * _ph * Math.cos(_rot)) / _ph - _origin.y;
+        const _np = { x: _ax, y: _ay };
+        const _newIdx = _newLayer.points.length;
+        _newLayer.points.push(_np);
+        if (_cr[_pi] !== undefined && _cr[_pi] !== 0) _newLayer.cornerRadii[_newIdx] = _cr[_pi];
+      }
+    }
+    _newLayer.closed = true;
+    _newLayer._updateBbox();
+    // Eliminar layers originales e insertar el fusionado en su lugar
+    const _firstIdx = edLayers.indexOf(_closedLayers[0]);
+    _closedLayers.forEach(l => {
+      const _idx = edLayers.indexOf(l);
+      if(_idx >= 0) edLayers.splice(_idx, 1);
+    });
+    const _insertAt = Math.max(0, Math.min(_firstIdx, edLayers.length));
+    edLayers.splice(_insertAt, 0, _newLayer);
+    edSelectedIdx = _insertAt;
+    // La sesión termina con la fusión: el objeto fusionado es el resultado final
+    _edShapePushHistory();
+    _vsClear(); edPushHistory();
+    window._esbCheckFuse();
+    edRedraw();
+    edToast('Objetos fusionados ✓');
+  });
 
   // OK
   $('esb-ok')?.addEventListener('click', ()=>{
@@ -18969,6 +19074,7 @@ function edSerLayer(l){
     if(l._gcpFrameDelay  != null) _r._gcpFrameDelay  = l._gcpFrameDelay;
     if(l._gcpRepeatCount != null) _r._gcpRepeatCount = l._gcpRepeatCount;
     if(l._gcpStopAtEnd)           _r._gcpStopAtEnd   = true;
+    if(l._gcpCircularEnd)         _r._gcpCircularEnd  = true;
     if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _r._motionPathClosed = true;
     if(l._motionSpeed != null) _r._motionSpeed = l._motionSpeed;
@@ -19422,6 +19528,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpFrameDelay  != null) l._gcpFrameDelay  = d._gcpFrameDelay;
     if(d._gcpRepeatCount != null) l._gcpRepeatCount = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
+    if(d._gcpCircularEnd)         l._gcpCircularEnd  = true;
     if(d._motionPath)             l._motionPath       = d._motionPath;
     if(d._motionPathClosed)       l._motionPathClosed = true;
     if(d._motionSpeed != null)    l._motionSpeed      = d._motionSpeed;
@@ -22080,16 +22187,18 @@ function EditorView_init(){
     edCloseMenus();
     edSelectedIdx = -1;
     edDrawFillColor = '#ffffff';
+    // Si hay sesión vectorial activa (objetos ya creados), preservarla al cambiar de modo
+    const _esbContSession = _vsHistory.length > 0;
     if(shapeType) {
       _edShapeType = shapeType;
       edActiveTool = 'shape';
       edCanvas.className = 'tool-shape';
-      setTimeout(() => _edActivateShapeTool(true), 0);
+      setTimeout(() => _edActivateShapeTool(!_esbContSession, _esbContSession), 0);
     } else {
       _edLineType = lineType || 'draw';
       edActiveTool = 'line';
       edCanvas.className = 'tool-line';
-      setTimeout(() => _edActivateLineTool(), 0);
+      setTimeout(() => _edActivateLineTool(false, _esbContSession), 0);
     }
   }
   $('dd-shape-rect')?.addEventListener('click', () => _esbActivate('rect'));
@@ -24069,6 +24178,7 @@ function edBibGuardar() {
     if (_la2._gcpFrameDelay  != null) entry.gcpFrameDelay  = _la2._gcpFrameDelay;
     if (_la2._gcpRepeatCount != null) entry.gcpRepeatCount = _la2._gcpRepeatCount;
     if (_la2._gcpStopAtEnd)           entry.gcpStopAtEnd   = _la2._gcpStopAtEnd;
+    if (_la2._gcpCircularEnd)         entry.gcpCircularEnd = true;
     // Datos GCP para re-edición: capas y frames del editor de animaciones
     // Sin estos campos el GCP abre sin capas al hacer doble tap sobre la animación
     if (_la2._gcpLayersData) entry.gcpLayersData = _la2._gcpLayersData;
@@ -24471,6 +24581,7 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpFrameDelay!=null) la2._gcpFrameDelay=entry.gcpFrameDelay;
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd) la2._gcpStopAtEnd=true;
+                if(entry.gcpCircularEnd) la2._gcpCircularEnd=true;
                 const _k2=_edAnimKey('bib_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8));
                 la2.animKey=_k2;
                 if(window._sbAnimIdbSave) window._sbAnimIdbSave(_k2,entry.apngSrc||_frames2).catch(function(){});
@@ -24518,6 +24629,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpFrameDelay  != null) la._gcpFrameDelay  = entry.gcpFrameDelay;
           if (entry.gcpRepeatCount != null) la._gcpRepeatCount = entry.gcpRepeatCount;
           if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
+          if (entry.gcpCircularEnd)         la._gcpCircularEnd = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
           const _bibAnimKey = _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
@@ -29215,6 +29327,7 @@ function _gcpSaveToLib(onDone) {
     existingLayer._gcpFrameDelay  = window._gcpFrameDelay;
     existingLayer._gcpRepeatCount = window._gcpRepeatCount;
     existingLayer._gcpStopAtEnd   = window._gcpStopAtEnd;
+    existingLayer._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
     // Cargar primer frame como imagen visible
     const img=new Image();
     img.onload=()=>{
@@ -29250,6 +29363,7 @@ function _gcpSaveToLib(onDone) {
       la._gcpFrameDelay  = window._gcpFrameDelay;
       la._gcpRepeatCount = window._gcpRepeatCount;
       la._gcpStopAtEnd   = window._gcpStopAtEnd;
+      la._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
       // Insertar antes de la primera capa de texto/bocadillo (igual que biblioteca)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
       if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
