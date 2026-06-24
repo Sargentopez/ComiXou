@@ -22,14 +22,15 @@
  *     Licencia: dominio público / uso libre
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comixow-v30-85';
+const CACHE = 'comixow-v30-91';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
 const STATIC_ASSETS = [
   './icon-192.png',
   './icon-512.png',
-  './logo_long.png',
+  './icon.svg',
+  './logo.svg',
   // Fuentes WOFF2 autoalojadas — precacheadas para funcionar offline/sin conexión
   './fonts/Bangers-Regular.woff2',
   './fonts/BebasNeue-Regular.woff2',

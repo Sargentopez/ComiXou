@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v30.85</footer>
+    <footer class="app-version">v30.91</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -871,7 +871,7 @@ Router.register('reader', {
     <div class="reader-topbar" id="readerTopbar">
       <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
         <a href="#home" onclick="Router.go('home');return false;" class="logo-link logo-img-link">
-          <img src="logo_long.png" alt="ComXow" class="logo-img" style="height:22px;width:auto;">
+          <img src="logo.svg" alt="ComiXou" class="logo-img" style="height:22px;width:auto;">
         </a>
       </div>
       <div class="reader-info">

@@ -7260,6 +7260,39 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
 // Devuelve {type:'seg',  idx} si cae sobre el segmento idx→idx+1
 // Devuelve null si no hay hit
 // nx, ny: coordenadas normalizadas de página (fracción 0..1)
+// ── Disuelve una capa unida (grouped=true) en sub-capas independientes ──
+// Usado al abrir una capa ⊕ Unida para edición vectorial, para que cada
+// sub-camino sea un objeto independiente y seleccionable durante la sesión.
+function _edDissolveJoined(la) {
+  const pw = edPageW(), ph = edPageH();
+  const rot = (la.rotation || 0) * Math.PI / 180;
+  const cr  = la.cornerRadii || {};
+  const gs  = la.groupedStyles || [];
+  const ranges = _edGetSubPathRanges(la.points);
+  return ranges.map((range, ci) => {
+    const st = gs[ci] || {};
+    const sub = new LineLayer();
+    sub.color     = st.color     !== undefined ? st.color     : la.color;
+    sub.fillColor = st.fillColor !== undefined ? st.fillColor : la.fillColor;
+    sub.lineWidth = st.lineWidth !== undefined ? st.lineWidth : la.lineWidth;
+    sub.opacity   = la.opacity ?? 1;
+    sub.rotation  = la.rotation || 0;
+    sub.x = la.x; sub.y = la.y;   // mismo origen; _updateBbox los recentrará
+    sub.closed    = st.closed !== undefined ? st.closed : la.closed;
+    sub.cornerRadii = {};
+    let localIdx = 0;
+    for (let i = range.start; i <= range.end; i++) {
+      const p = la.points[i];
+      if (!p) continue;
+      sub.points.push({ ...p });
+      if (cr[i]) sub.cornerRadii[localIdx] = cr[i];
+      localIdx++;
+    }
+    sub._updateBbox();
+    return sub;
+  });
+}
+
 // ── Helper: extrae rangos {start,end} de cada sub-contorno separado por null ──
 // Necesario para hit-testing correcto en layers agrupados (⊕ Unir)
 function _edGetSubPathRanges(pts) {
@@ -10301,6 +10334,14 @@ function edOnEnd(e){
     }
     window._edRotateInitRot=null;
     window._edRotateLastAngle=undefined;
+    // Hornear la rotación en los nodos si giró un LineLayer de sesión vectorial.
+    // Esto garantiza que fusión y otras operaciones lean la geometría ya correcta.
+    if(edIsRotating && edSelectedIdx >= 0){
+      const _bkLa = edLayers[edSelectedIdx];
+      if(_bkLa && _bkLa.type === 'line' && !_vsPreSessionLayers.has(_bkLa)){
+        _edBakeLineRotation(_bkLa);
+      }
+    }
     const _doPush = () => {
       const _panel=$('edOptionsPanel');
       const _mode=_panel?.dataset.mode;
@@ -10350,6 +10391,38 @@ function edOnEnd(e){
    la barra flotante usan ESTE historial, no el global.
    ══════════════════════════════════════════ */
 let _edShapeHistory = [], _edShapeHistIdx = -1, _edShapeHistIdxBase = 0;
+
+// ── Hornear rotación en nodos de LineLayer (sesión vectorial) ─────────────
+// Transforma los puntos al espacio rotado en píxeles y resetea rotation=0.
+// Garantiza que la fusión y otras operaciones lean geometría ya correcta,
+// sin depender del campo rotation para reconstruir posiciones.
+function _edBakeLineRotation(la) {
+  if (!la || la.type !== 'line' || !la.rotation) return;
+  const _pw = edPageW(), _ph = edPageH();
+  const _r  = la.rotation * Math.PI / 180;
+  const _c  = Math.cos(_r), _s = Math.sin(_r);
+  const _rotPt = p => {
+    if (!p) return null;
+    // Convertir a píxeles, rotar, volver a normalizado
+    const _pxX = p.x * _pw * _c - p.y * _ph * _s;
+    const _pxY = p.x * _pw * _s + p.y * _ph * _c;
+    const _rp  = { x: _pxX / _pw, y: _pxY / _ph };
+    if (p.curve !== undefined) _rp.curve = p.curve;
+    if (p.cp1) _rp.cp1 = {
+      x: (p.cp1.x * _pw * _c - p.cp1.y * _ph * _s) / _pw,
+      y: (p.cp1.x * _pw * _s + p.cp1.y * _ph * _c) / _ph
+    };
+    if (p.cp2) _rp.cp2 = {
+      x: (p.cp2.x * _pw * _c - p.cp2.y * _ph * _s) / _pw,
+      y: (p.cp2.x * _pw * _s + p.cp2.y * _ph * _c) / _ph
+    };
+    return _rp;
+  };
+  la.points = la.points.map(_rotPt);
+  la.rotation = 0;
+  la._updateBbox(); // recalcular width/height; x,y no se desplazan (centroide en origen)
+}
+
 // ── Historial vectorial por snapshots (sistema nuevo) ──
 // Cada snapshot = { vecLayers: [...JSON], lineLayer: JSON|null }
 // vecLayers = layers de tipo 'line' o 'shape' de la página actual
@@ -13416,6 +13489,7 @@ function _edActivateLineTool(isNew, isCreating) {
     // Añadir puntos de cada objeto en coords locales del nuevo layer,
     // preservando cornerRadii con los índices correctos (incluyendo nulls)
     if (!_newLayer.cornerRadii) _newLayer.cornerRadii = {};
+    const _fpw = edPageW(), _fph = edPageH(); // para rotación en espacio píxel (pw≠ph en páginas no cuadradas)
     for (let i = 0; i < _closedLayers.length; i++) {
       const _ll = _closedLayers[i];
       if (i > 0) _newLayer.points.push(null); // separador de contorno (ocupa un índice)
@@ -13426,12 +13500,14 @@ function _edActivateLineTool(isNew, isCreating) {
       for (let _pi = 0; _pi < _ll.points.length; _pi++) {
         const p = _ll.points[_pi];
         if (!p) { _newLayer.points.push(null); continue; }
-        // Convertir punto local del layer original a abs, luego a local del nuevo layer
-        const _ax = _ll.x + p.x * _cos - p.y * _sin;
-        const _ay = _ll.y + p.x * _sin + p.y * _cos;
+        // Rotar en espacio píxel y convertir de vuelta a normalizado
+        const _pxX = p.x * _fpw * _cos - p.y * _fph * _sin;
+        const _pxY = p.x * _fpw * _sin + p.y * _fph * _cos;
+        const _ax = _ll.x - _newLayer.x + _pxX / _fpw;
+        const _ay = _ll.y - _newLayer.y + _pxY / _fph;
         // Copiar cornerRadius si existe para este punto, al índice actual en _newLayer.points
         if (_cr[_pi]) _newLayer.cornerRadii[_newLayer.points.length] = _cr[_pi];
-        _newLayer.points.push({ x: _ax - _newLayer.x, y: _ay - _newLayer.y });
+        _newLayer.points.push({ x: _ax, y: _ay });
       }
     }
     _newLayer.closed = true;
@@ -14815,7 +14891,7 @@ function edRenderOptionsPanel(mode){
           ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
           : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`}
         <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:${la.locked?'var(--gray-800)':'var(--gray-100)'};color:${la.locked?'var(--white)':'var(--gray-700)'}" title="${la.locked?'Desbloquear':'Bloquear'}">${la.locked?'🔒':'🔓'}</button>
-        <button id="op-panel-collapse" title="Minimizar panel" style="background:var(--yellow);border:1.5px solid var(--black);font-weight:900;border-radius:6px;padding:4px 8px;font-size:.82rem;cursor:pointer;flex-shrink:0">▲</button>
+        <button id="pp-ok-bottom" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
       </div>`;
     panel.classList.add('open');
     $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
@@ -14862,9 +14938,7 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('pp-path-speed')?.addEventListener('change',()=>edPushHistory());
-    $('op-panel-collapse')?.addEventListener('click',()=>{
-      const _p=$('edOptionsPanel'); if(!_p) return; _p.classList.toggle('panel-collapsed');
-    });
+    $('pp-ok-bottom')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     requestAnimationFrame(edFitCanvas); return;
   }
 
@@ -15599,7 +15673,34 @@ function edRenderOptionsPanel(mode){
       _edLineType = 'select';
       edDrawColor = _lla.color || '#000000';
       edDrawSize  = _lla.lineWidth || 3;
-      _edActivateLineTool(false); // isNew=false: no borrar historial
+
+      // ── Capa unida (⊕ Unir): disolver en sub-capas independientes ──
+      // Cada sub-camino pasa a ser una capa propia para poder seleccionarse,
+      // moverse y editarse de forma independiente durante la sesión.
+      if (_lla.grouped && _lla.points && _lla.points.includes(null)) {
+        const _subs = _edDissolveJoined(_lla);
+        if (_subs.length >= 2) {
+          edPushHistory(); // guardar estado previo a la disolución
+          const _insertAt = edSelectedIdx;
+          edLayers.splice(_insertAt, 1); // quitar capa unida
+          _subs.forEach((s, i) => edLayers.splice(_insertAt + i, 0, s));
+          edSelectedIdx = _insertAt + _subs.length - 1; // seleccionar última sub-capa
+
+          // Inicializar sesión: sub-capas son objetos DE SESIÓN (no pre-sesión)
+          _vsClear();
+          const _subSet = new Set(_subs);
+          _vsPreSessionLayers = new Set(
+            edLayers.filter(l => (l.type === 'line' || l.type === 'shape') && !_subSet.has(l))
+          );
+          _vsHistory = [_vsSnapshot()]; _vsHistIdx = 0;
+
+          // Abrir panel manteniendo _vsPreSessionLayers (isCreating=true)
+          _edActivateLineTool(false, true);
+          return;
+        }
+      }
+
+      _edActivateLineTool(false); // isNew=false: re-editar objeto existente simple
     });
     $('pp-line-toggle-close')?.addEventListener('click',()=>{ la.closed=!la.closed; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-rot')?.addEventListener('input',e=>{
@@ -17921,6 +18022,7 @@ function edInitShapeBar() {
     _newLayer.x = _origin.x;
     _newLayer.y = _origin.y;
     if (!_newLayer.cornerRadii) _newLayer.cornerRadii = {};
+    const _esbPw = edPageW(), _esbPh = edPageH(); // fuera del bucle para eficiencia
     for (let _i = 0; _i < _closedLayers.length; _i++) {
       const _ll = _closedLayers[_i];
       if (_i > 0) _newLayer.points.push(null);
@@ -17930,9 +18032,11 @@ function edInitShapeBar() {
       for (let _pi = 0; _pi < _ll.points.length; _pi++) {
         const _p = _ll.points[_pi];
         if (!_p) { _newLayer.points.push(null); continue; }
-        const _pw = edPageW(), _ph = edPageH();
-        const _ax = (_ll.x + _p.x * _pw * Math.cos(_rot) - _p.y * _ph * Math.sin(_rot)) / _pw - _origin.x;
-        const _ay = (_ll.y + _p.x * _pw * Math.sin(_rot) + _p.y * _ph * Math.cos(_rot)) / _ph - _origin.y;
+        // Rotar en espacio píxel y convertir a normalizado (fórmula correcta para pw≠ph)
+        const _pxX = _p.x * _esbPw * _cos - _p.y * _esbPh * _sin;
+        const _pxY = _p.x * _esbPw * _sin + _p.y * _esbPh * _cos;
+        const _ax = _ll.x - _origin.x + _pxX / _esbPw;
+        const _ay = _ll.y - _origin.y + _pxY / _esbPh;
         const _np = { x: _ax, y: _ay };
         const _newIdx = _newLayer.points.length;
         _newLayer.points.push(_np);
@@ -28716,16 +28820,21 @@ function gcpInsertFromBib(entry) {
         _gcpPending++;
         const _sfW = ser.fillWidth  != null ? ser.fillWidth  : (la.width  || 1);
         const _sfH = ser.fillHeight != null ? ser.fillHeight : (la.height || 1);
-        const _fCanvW = Math.max(1, Math.round(_sfW * _pwDGcp));
-        const _fCanvH = Math.max(1, Math.round(_sfH * _phDGcp));
+        // Canvas size: fracción-origen × página-origen = píxeles reales del canvas origen.
+        // Igual que _bibRestoreGroupLayer en el editor general: set width→_adaptLayerOrientation→width*_pwD.
+        // Usar _pwDGcp cuando no hay conversión (ambas orientaciones iguales).
+        const _fCanvW = Math.max(1, Math.round(_sfW * (_needsConvGcp ? _pwOGcp : _pwDGcp)));
+        const _fCanvH = Math.max(1, Math.round(_sfH * (_needsConvGcp ? _phOGcp : _phDGcp)));
         const _LayerClass = key==='pencil' ? PencilLayer : (key==='wc' ? WatercolorLayer : FillLayer);
         const _tmp = new _LayerClass();
         _tmp._canvas.width = _fCanvW; _tmp._canvas.height = _fCanvH;
         _tmp._ctx = _tmp._canvas.getContext('2d');
         _tmp.x        = ser.fillX  != null ? ser.fillX  : la.x;
         _tmp.y        = ser.fillY  != null ? ser.fillY  : la.y;
-        _tmp.width    = _needsConvGcp ? _sfW * _pwOGcp / _pwDGcp : _sfW;
-        _tmp.height   = _needsConvGcp ? _sfH * _phOGcp / _phDGcp : _sfH;
+        // NO pre-convertir — _adaptGcp hace la conversión UNA SOLA VEZ (igual que el editor general).
+        // Pre-convertir aquí y luego llamar _adaptGcp causaba doble conversión → deformación.
+        _tmp.width    = _sfW;
+        _tmp.height   = _sfH;
         _tmp.rotation = ser.fillRotation || 0;
         _adaptGcp(_tmp);
         const _ws = document.createElement('canvas');

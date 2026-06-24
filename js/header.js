@@ -107,7 +107,7 @@ const Header = (() => {
         + '<div class="home-header-row1">'
           + '<div class="home-logo-area">'
             + '<a href="#home" class="logo-link logo-img-link" data-route="home">'
-              + '<img src="logo_long.png" alt="ComXow" class="logo-img">'
+              + '<img src="logo.svg" alt="ComiXou" class="logo-img">'
             + '</a>'
           + '</div>'
           + '<div class="home-user-area">'
