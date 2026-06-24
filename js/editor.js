@@ -11397,73 +11397,150 @@ function _edDrawGradPreview(e) {
   ctx.restore();
 }
 
-// ── Degradado: aplicar al canvas del relleno ──────────────────────────────────
+// ── Degradado: flood fill multi-semilla a lo largo de la línea, limitado por tinta ──
 function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
-  const bk = _edTmp.bucket;
-  if (!bk?._canvas) { edToast('Abre el panel de dibujo primero'); return; }
-  const canvas = bk._canvas;
-  const ctx = bk._ctx;
-  const W = canvas.width, H = canvas.height;
-  if (!W || !H) return;
-  // Convertir coords normalizadas a píxeles del canvas (workspace)
-  const x0 = Math.round(edMarginX() + nx0 * edPageW());
-  const y0 = Math.round(edMarginY() + ny0 * edPageH());
-  const x1 = Math.round(edMarginX() + nx1 * edPageW());
-  const y1 = Math.round(edMarginY() + ny1 * edPageH());
-  // Parsear colores
-  const r1 = parseInt(_edGradC1.slice(1,3),16), g1 = parseInt(_edGradC1.slice(3,5),16), b1 = parseInt(_edGradC1.slice(5,7),16);
-  const r2 = parseInt(_edGradC2.slice(1,3),16), g2 = parseInt(_edGradC2.slice(3,5),16), b2 = parseInt(_edGradC2.slice(5,7),16);
-  const id = ctx.getImageData(0, 0, W, H);
-  const d = id.data;
-  // Comprobar si hay píxeles pintados
-  let hasFill = false;
-  for (let i = 3; i < d.length; i += 4) { if (d[i] > 0) { hasFill = true; break; } }
-  // Si no hay relleno, crear uno nuevo en el área de página
-  if (!hasFill) {
-    const px0 = Math.round(edMarginX()), py0 = Math.round(edMarginY());
-    const px1w = Math.min(W-1, Math.round(edMarginX() + edPageW()));
-    const py1h = Math.min(H-1, Math.round(edMarginY() + edPageH()));
-    for (let y = py0; y <= py1h; y++) {
-      for (let x = px0; x <= px1w; x++) {
-        d[(y*W+x)*4+3] = 255; // marcar como pintado
+  const page = edPages[edCurrentPage]; if (!page) return;
+  const dl = _edGetOrCreateDrawLayer();
+  const fw = dl?._canvas?.width, fh = dl?._canvas?.height;
+  if (!fw || !fh) { edToast('Abre el panel de dibujo primero'); return; }
+
+  // Puntos A y B en píxeles del workspace
+  const ax = Math.round(edMarginX() + nx0 * edPageW());
+  const ay = Math.round(edMarginY() + ny0 * edPageH());
+  const bx = Math.round(edMarginX() + nx1 * edPageW());
+  const by = Math.round(edMarginY() + ny1 * edPageH());
+  const ldx = bx - ax, ldy = by - ay;
+  const len = Math.sqrt(ldx*ldx + ldy*ldy);
+  if (len < 1) { edToast('Línea demasiado corta'); return; }
+
+  // Parsear colores del degradado
+  const r1=parseInt(_edGradC1.slice(1,3),16), g1=parseInt(_edGradC1.slice(3,5),16), b1=parseInt(_edGradC1.slice(5,7),16);
+  const r2=parseInt(_edGradC2.slice(1,3),16), g2=parseInt(_edGradC2.slice(3,5),16), b2=parseInt(_edGradC2.slice(5,7),16);
+  const fA = Math.round((edDrawOpacity/100) * 255);
+
+  // ── Canvas de referencia completo (igual que edFloodFill) ────────────────
+  // Incluye el bucket/relleno para que colores distintos actúen como barreras,
+  // igual que el bote de pintura normal.
+  const compRef = document.createElement('canvas');
+  compRef.width = fw; compRef.height = fh;
+  const cCtx = compRef.getContext('2d');
+  if (_edTmp.bucket?._canvas)     cCtx.drawImage(_edTmp.bucket._canvas, 0, 0);
+  if (_edTmp.watercolor?._canvas) cCtx.drawImage(_edTmp.watercolor._canvas, 0, 0);
+  if (_edTmp.pencil?._canvas)     cCtx.drawImage(_edTmp.pencil._canvas, 0, 0);
+  if (_edTmp.pen?._canvas)        cCtx.drawImage(_edTmp.pen._canvas, 0, 0);
+  if (!_edTmp.bucket && !_edTmp.pen) {
+    const flRef = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
+    if (flRef) flRef.draw(cCtx);
+    cCtx.drawImage(dl._canvas, 0, 0);
+  }
+
+  // ── Máscara de tinta (solo para decidir dónde NO sembrar) ─────────────────
+  // Separada del compRef para no confundir fill con ink en el check de semilla.
+  const inkRef = document.createElement('canvas');
+  inkRef.width = fw; inkRef.height = fh;
+  const iCtx = inkRef.getContext('2d');
+  if (_edTmp.pen?._canvas)        iCtx.drawImage(_edTmp.pen._canvas, 0, 0);
+  if (_edTmp.pencil?._canvas)     iCtx.drawImage(_edTmp.pencil._canvas, 0, 0);
+  if (_edTmp.watercolor?._canvas) iCtx.drawImage(_edTmp.watercolor._canvas, 0, 0);
+  if (!_edTmp.pen) cCtx.drawImage(dl._canvas, 0, 0);
+  const inkData = iCtx.getImageData(0, 0, fw, fh).data;
+  const orig = cCtx.getImageData(0, 0, fw, fh).data;
+
+  // ── Binarizar: ≥128 alpha → barrera opaca; resto → vacío transparente ─────
+  const fd = new Uint8Array(fw * fh * 4);
+  for (let i = 0; i < fw * fh; i++) {
+    const pi=i*4, a=orig[pi+3];
+    if (a >= 128) { fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
+  }
+
+  // ── Multi-seed flood fill a lo largo de la línea ──────────────────────────
+  const TOL = 15;
+  const filled = new Uint8Array(fw * fh); // 0=libre, 1=rellenado
+  const nSamples = Math.max(Math.ceil(len * 2), 4);
+
+  for (let si = 0; si <= nSamples; si++) {
+    const t = si / nSamples;
+    const sx = Math.round(ax + ldx * t), sy = Math.round(ay + ldy * t);
+    if (sx < 0 || sx >= fw || sy < 0 || sy >= fh) continue;
+    const sIdx = sy * fw + sx;
+    if (filled[sIdx]) continue;           // ya visitado por semilla anterior
+    if (inkData[sIdx*4+3] >= 128) continue; // es tinta — no sembrar aquí
+
+    // Color del píxel de semilla (define qué vecinos son "del mismo fondo")
+    const tR=fd[sIdx*4], tG=fd[sIdx*4+1], tB=fd[sIdx*4+2], tA=fd[sIdx*4+3];
+    filled[sIdx] = 1;
+    const stack = [];
+    stack.push({y:sy, left:sx, right:sx, dy:1});
+    stack.push({y:sy, left:sx, right:sx, dy:-1});
+
+    while (stack.length) {
+      const {y, left, right, dy} = stack.pop();
+      const ny2 = y + dy;
+      if (ny2 < 0 || ny2 >= fh) continue;
+      let x = left;
+      while (x > 0) {
+        const ci=(ny2*fw+(x-1))*4;
+        if (filled[ny2*fw+(x-1)] || Math.abs(fd[ci]-tR)>TOL || Math.abs(fd[ci+1]-tG)>TOL ||
+            Math.abs(fd[ci+2]-tB)>TOL || Math.abs(fd[ci+3]-tA)>TOL) break;
+        x--;
+      }
+      let rx = right;
+      while (rx < fw-1) {
+        const ci=(ny2*fw+(rx+1))*4;
+        if (filled[ny2*fw+(rx+1)] || Math.abs(fd[ci]-tR)>TOL || Math.abs(fd[ci+1]-tG)>TOL ||
+            Math.abs(fd[ci+2]-tB)>TOL || Math.abs(fd[ci+3]-tA)>TOL) break;
+        rx++;
+      }
+      let segStart = -1;
+      for (let px = x; px <= rx; px++) {
+        const pIdx=ny2*fw+px, ci=pIdx*4;
+        const ok = !filled[pIdx] && Math.abs(fd[ci]-tR)<=TOL && Math.abs(fd[ci+1]-tG)<=TOL &&
+                   Math.abs(fd[ci+2]-tB)<=TOL && Math.abs(fd[ci+3]-tA)<=TOL;
+        if (ok) {
+          if (segStart===-1) segStart=px;
+          filled[pIdx]=1;
+        } else if (segStart!==-1) {
+          stack.push({y:ny2, left:segStart, right:px-1, dy});
+          stack.push({y:ny2, left:segStart, right:px-1, dy:-dy});
+          segStart=-1;
+        }
+      }
+      if (segStart!==-1) {
+        stack.push({y:ny2, left:segStart, right:rx, dy});
+        stack.push({y:ny2, left:segStart, right:rx, dy:-dy});
       }
     }
   }
-  // Aplicar degradado a todos los píxeles con alpha > 0
-  let painted = 0;
-  if (_edGradType === 'linear') {
-    const dx = x1 - x0, dy = y1 - y0;
-    const len2 = dx*dx + dy*dy;
-    if (len2 < 1) { edToast('Línea demasiado corta'); return; }
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const i = (y*W+x)*4;
-        if (d[i+3] === 0) continue;
-        const t = Math.max(0, Math.min(1, ((x-x0)*dx + (y-y0)*dy) / len2));
-        d[i]   = Math.round(r1 + (r2-r1)*t);
-        d[i+1] = Math.round(g1 + (g2-g1)*t);
-        d[i+2] = Math.round(b1 + (b2-b1)*t);
-        painted++;
-      }
+
+  // ── Validar que algo se rellenó ───────────────────────────────────────────
+  let paintedCount = 0;
+  for (let i = 0; i < fw*fh; i++) if (filled[i]) paintedCount++;
+  if (!paintedCount) { edToast('La línea no pasa por ninguna zona rellenable'); return; }
+
+  // ── Escribir degradado: cada pixel recibe color según proyección sobre la línea ─
+  const ffDest = _edTmp.bucket;
+  if (!ffDest?._canvas) { edToast('Error: no hay capa de relleno activa'); return; }
+  const imgData = ffDest._ctx.getImageData(0, 0, fw, fh);
+  const d = imgData.data;
+  const len2 = ldx*ldx + ldy*ldy;
+
+  for (let i = 0; i < fw*fh; i++) {
+    if (!filled[i]) continue;
+    const px = i % fw, py = Math.floor(i / fw);
+    let t;
+    if (_edGradType === 'linear') {
+      t = Math.max(0, Math.min(1, ((px-ax)*ldx + (py-ay)*ldy) / len2));
+    } else { // radial
+      t = Math.max(0, Math.min(1, Math.sqrt((px-ax)*(px-ax)+(py-ay)*(py-ay)) / len));
     }
-  } else { // radial
-    const R = Math.sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
-    if (R < 1) { edToast('Radio demasiado pequeño'); return; }
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const i = (y*W+x)*4;
-        if (d[i+3] === 0) continue;
-        const r = Math.sqrt((x-x0)*(x-x0) + (y-y0)*(y-y0));
-        const t = Math.max(0, Math.min(1, r/R));
-        d[i]   = Math.round(r1 + (r2-r1)*t);
-        d[i+1] = Math.round(g1 + (g2-g1)*t);
-        d[i+2] = Math.round(b1 + (b2-b1)*t);
-        painted++;
-      }
-    }
+    const pi = i*4;
+    d[pi]   = Math.round(r1+(r2-r1)*t);
+    d[pi+1] = Math.round(g1+(g2-g1)*t);
+    d[pi+2] = Math.round(b1+(b2-b1)*t);
+    d[pi+3] = fA;
   }
-  if (!painted) { edToast('No hay área de relleno'); return; }
-  ctx.putImageData(id, 0, 0);
+
+  ffDest._ctx.putImageData(imgData, 0, 0);
   _edDrawPushHistory();
   edPushHistory();
   edRedraw();
