@@ -315,6 +315,265 @@ function _lyBuildEyeBtn(la) {
    FILA DE TEXTO/BOCADILLO
 ────────────────────────────────────────── */
 
+/* ── Ítem del panel para un grupo de objetos (lo representa como 1 sola fila) ── */
+function _lyBuildGroupItem(groupId, members) {
+  // members: [{l, i}] con índices ascendentes (bottom → top en edLayers)
+  const memberIdxs = members.map(m => m.i);
+  const minGroupIdx = Math.min(...memberIdxs);
+  const maxGroupIdx = Math.max(...memberIdxs);
+
+  // ¿Alguno seleccionado?
+  const _isSel = members.some(m => m.i === edSelectedIdx) ||
+                 (typeof edMultiSel !== 'undefined' && edMultiSel.some(si => memberIdxs.includes(si)));
+  const _allHidden = members.every(m => m.l.hidden);
+
+  const item = document.createElement('div');
+  item.className = 'ed-layer-item' + (_isSel ? ' selected' : '');
+  item.style.cssText = 'position:relative;padding-bottom:22px;border-left:3px solid #a78bfa;';
+  if (_allHidden) item.style.opacity = '0.45';
+  // dataset para animación FLIP
+  item.dataset.realIdx = minGroupIdx;
+  const _repLa = members[0]?.l;
+  if (_repLa && !_repLa._uid) _repLa._uid = ++_lyUidCounter;
+  if (_repLa) item.dataset.uid = 'grp_' + groupId;
+
+  /* Miniatura compuesta */
+  const thumb = document.createElement('canvas');
+  thumb.className = 'ed-layer-thumb drag-handle';
+  thumb.width = 80; thumb.height = 60;
+  _lyDrawGroupCompositeThumb(thumb, members);
+  thumb.title = 'Grupo · toca para seleccionar';
+  thumb.addEventListener('pointerup', () => {
+    if (!item.classList.contains('was-dragged')) {
+      // Seleccionar el grupo completo: activar _edGroupSilentTool + multiselección
+      const ov = document.getElementById('edLayersOverlay');
+      const _doSel = () => {
+        // 1. Seleccionar el miembro más alto visualmente (mayor índice)
+        const _repIdx = members[members.length - 1].i;
+        if (typeof edSelectedIdx !== 'undefined') edSelectedIdx = _repIdx;
+        // 2. Activar multiselección interna del grupo (igual que al tocar en canvas)
+        if (window._edGroupSilentTool === undefined && typeof edActiveTool !== 'undefined') {
+          window._edGroupSilentTool = edActiveTool;
+        }
+        if (typeof _msClear === 'function') { _msClear(); }
+        if (typeof edMultiSel !== 'undefined') {
+          memberIdxs.forEach(idx => {
+            if (!edMultiSel.includes(idx)) edMultiSel.push(idx);
+          });
+        }
+        // 3. Abrir panel del miembro representativo (mostrará botón Desagrupar)
+        if (typeof edRedraw === 'function') edRedraw();
+        _lyOpenLayerPanel(_repIdx);
+      };
+      if (ov) {
+        ov.classList.remove('open');
+        setTimeout(() => { ov.remove(); _lySetCanvasTouch(true); _doSel(); }, 250);
+      } else {
+        _doSel();
+      }
+    }
+    item.classList.remove('was-dragged');
+  });
+  const _thumbWrap = document.createElement('div');
+  _thumbWrap.style.cssText = 'position:relative;flex-shrink:0;width:80px;height:60px;';
+  _thumbWrap.appendChild(thumb);
+  item.appendChild(_thumbWrap);
+
+  /* Info */
+  const info = document.createElement('div');
+  info.className = 'ed-layer-info';
+  const name = document.createElement('span');
+  name.className = 'ed-layer-name';
+  name.textContent = `⊞ Grupo (${members.length})`;
+  info.appendChild(name);
+  item.appendChild(info);
+
+  /* Flechas — compactadas (el grupo es 1 entrada) */
+  const _cpAll = _lyCompactedVisual();
+  const _posInCp = _cpAll.findIndex(e => e.groupId === groupId);
+
+  const upBtn = document.createElement('button');
+  upBtn.className = 'ed-layer-arrow';
+  upBtn.title = 'Subir grupo';
+  upBtn.textContent = '▲';
+  upBtn.disabled = _posInCp >= _cpAll.length - 1;
+  upBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _lyReorderGroup(groupId, +1);
+  });
+
+  const dnBtn = document.createElement('button');
+  dnBtn.className = 'ed-layer-arrow';
+  dnBtn.title = 'Bajar grupo';
+  dnBtn.textContent = '▼';
+  dnBtn.disabled = _posInCp <= 0;
+  dnBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _lyReorderGroup(groupId, -1);
+  });
+
+  /* Ojo — afecta a todos los miembros */
+  const eyeBtn = document.createElement('button');
+  eyeBtn.className = 'ed-layer-del';
+  eyeBtn.title = _allHidden ? 'Mostrar grupo' : 'Ocultar grupo';
+  eyeBtn.style.opacity = _allHidden ? '0.4' : '';
+  eyeBtn.textContent = '👁';
+  eyeBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    const _newHide = !_allHidden;
+    members.forEach(m => { m.l.hidden = _newHide; });
+    if (typeof edRedraw === 'function') edRedraw();
+    _lyRender();
+  });
+
+  /* Eliminar grupo */
+  const delBtn = document.createElement('button');
+  delBtn.className = 'ed-layer-del';
+  delBtn.title = 'Eliminar grupo';
+  delBtn.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
+  delBtn.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    edConfirm(`¿Eliminar el grupo (${members.length} capas)?`, () => {
+      // Recoger todos los índices incluyendo sub-capas
+      const _toRemove = new Set(memberIdxs);
+      memberIdxs.forEach(mi => {
+        const _uid = edLayers[mi]?._uid || edLayers[mi]?._fillLayerId;
+        if (_uid) {
+          edLayers.forEach((sl, si) => {
+            if ((sl.type==='fill'||sl.type==='pencil'||sl.type==='watercolor') && sl._drawLayerId===_uid)
+              _toRemove.add(si);
+          });
+        }
+      });
+      const _sorted = [..._toRemove].sort((a,b) => b-a);
+      _sorted.forEach(si => edLayers.splice(si, 1));
+      if (typeof edSelectedIdx !== 'undefined' && _toRemove.has(edSelectedIdx)) edSelectedIdx = -1;
+      if (typeof edPushHistory === 'function') edPushHistory();
+      if (typeof edRedraw === 'function') edRedraw();
+      _lyRender();
+    });
+  });
+
+  const acts = document.createElement('div');
+  acts.className = 'ed-layer-actions';
+  acts.style.cssText = 'position:absolute;bottom:2px;right:4px;display:flex;gap:4px;align-items:center;';
+  acts.appendChild(upBtn);
+  acts.appendChild(dnBtn);
+  acts.appendChild(eyeBtn);
+  acts.appendChild(delBtn);
+  item.appendChild(acts);
+
+  /* Drag handle */
+  const handle = thumb;
+  _lyBindDragGroup(groupId, minGroupIdx, maxGroupIdx, item, handle);
+
+  return item;
+}
+
+/** Miniatura compuesta: renderiza todos los miembros superpuestos */
+function _lyDrawGroupCompositeThumb(canvas, members) {
+  const ctx = canvas.getContext('2d');
+  const sw = canvas.width, sh = canvas.height;
+  ctx.fillStyle = '#f5f5f5';
+  ctx.fillRect(0, 0, sw, sh);
+  // Fondo de cuadrícula para indicar grupo
+  ctx.fillStyle = '#e8e0ff';
+  for (let gx = 0; gx < sw; gx += 8) {
+    for (let gy = gx % 16 === 0 ? 0 : 8; gy < sh; gy += 16) {
+      ctx.fillRect(gx, gy, 8, 8);
+    }
+  }
+  const _pw = typeof edPageW === 'function' ? edPageW() : sw;
+  const _ph = typeof edPageH === 'function' ? edPageH() : sh;
+  const _sc = Math.min(sw / _pw, sh / _ph);
+  const _ox = (sw - _pw * _sc) / 2, _oy = (sh - _ph * _sc) / 2;
+  // Dibujar de abajo hacia arriba (orden canvas)
+  [...members].sort((a,b) => a.i - b.i).forEach(({l}) => {
+    ctx.save();
+    ctx.globalAlpha = (l.opacity ?? 1) * 0.85;
+    try {
+      if (l.type === 'stroke' || l.type === 'draw') {
+        _lyDrawStrokeThumb(canvas, l);
+      } else if (l.type === 'shape' || l.type === 'line') {
+        // Usar miniatura rápida de posición
+        const _tx = l.x * _pw * _sc + _ox - (l.width || 0.1) * _pw * _sc / 2;
+        const _ty = l.y * _ph * _sc + _oy - (l.height || 0.1) * _ph * _sc / 2;
+        const _tw = (l.width || 0.1) * _pw * _sc;
+        const _th = (l.height || 0.1) * _ph * _sc;
+        ctx.fillStyle = l.fillColor || l.strokeColor || '#888';
+        ctx.fillRect(_tx, _ty, _tw, _th);
+      } else if ((l.type === 'image' || l.type === 'gif') && l.img?.complete) {
+        const _tx = l.x * _pw * _sc + _ox - l.width * _pw * _sc / 2;
+        const _ty = l.y * _ph * _sc + _oy - l.height * _ph * _sc / 2;
+        ctx.drawImage(l.img, _tx, _ty, l.width * _pw * _sc, l.height * _ph * _sc);
+      }
+    } catch(e) { /* ignora errores de render parcial */ }
+    ctx.restore();
+  });
+  // Marco de grupo
+  ctx.strokeStyle = '#a78bfa';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, sw-2, sh-2);
+}
+
+/** Drag-and-drop para el ítem de grupo */
+function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
+  let startY, active = false;
+  let _lyDragOverGrp = null;
+  function end() {
+    if (!active) return;
+    active = false;
+    item.classList.remove('dragging');
+    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
+    if (_lyDragOverGrp !== null) {
+      const _destGid = edLayers[_lyDragOverGrp]?.groupId;
+      if (!_destGid || _destGid !== groupId) {
+        const _dir = _lyDragOverGrp > maxIdx ? +1 : (_lyDragOverGrp < minIdx ? -1 : 0);
+        if (_dir !== 0) {
+          item.classList.add('was-dragged');
+          _lyReorderGroup(groupId, _dir);
+        }
+      }
+    }
+    _lyDragOverGrp = null;
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+  }
+  function onMove(y) {
+    if (!active) return;
+    const items = [...document.querySelectorAll('.ed-layer-item')];
+    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
+    const target = items.find(it => {
+      if (it === item) return false;
+      const rect = it.getBoundingClientRect();
+      return y >= rect.top && y <= rect.bottom;
+    });
+    if (target) {
+      target.classList.add('drag-over');
+      _lyDragOverGrp = parseInt(target.dataset.realIdx);
+    } else {
+      _lyDragOverGrp = null;
+    }
+  }
+  function onPointerMove(e) { onMove(e.clientY); }
+  function onPointerUp() { end(); }
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    startY = e.clientY;
+    active = false;
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    function checkStart(ev) {
+      if (Math.abs(ev.clientY - startY) > 4) {
+        active = true;
+        item.classList.add('dragging');
+        window.removeEventListener('pointermove', checkStart);
+      }
+    }
+    window.addEventListener('pointermove', checkStart);
+  });
+}
+
 /* -- Sub-fila genérica para capas del grupo (fill/pencil/watercolor) en el panel de capas -- */
 function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   const row = document.createElement('div');
@@ -685,31 +944,32 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   item.appendChild(info);
 
   /* Flechas subir/bajar — dentro de los elementos visuales */
-  const visualAll = edLayers.map((l,i)=>({l,i}))
-    .filter(({l})=>l.type==='image'||l.type==='gif'||l.type==='stroke'||l.type==='draw'||l.type==='shape'||l.type==='line');
-  const posInList = visualAll.findIndex(({i})=>i===realIdx);
+  // Lista compactada: grupos = 1 entrada (para que ▲/▼ salten el grupo entero)
+  const _cpAll = _lyCompactedVisual();
+  const posInList = _cpAll.findIndex(e => la.groupId ? e.groupId === la.groupId : e.i === realIdx);
 
   const upBtn = document.createElement('button');
   upBtn.className = 'ed-layer-arrow';
   upBtn.title = 'Subir nivel';
   upBtn.textContent = '▲';
-  // Con groupId: deshabilitar si todos los vecinos superiores son del mismo grupo
-  const _grpAbove = la.groupId
-    ? visualAll.slice(posInList + 1).every(({l: _l}) => _l.groupId === la.groupId)
-    : false;
-  upBtn.disabled = posInList >= visualAll.length - 1 || _grpAbove;
+  upBtn.disabled = posInList >= _cpAll.length - 1;
   upBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
     if (la.groupId) {
       _lyReorderGroup(la.groupId, +1);
     } else {
-      const next = visualAll[posInList + 1];
+      const next = _cpAll[posInList + 1];
       if (next) {
-        // Si la capa destino tiene un FillLayer por debajo, insertar sobre el fill
-        const _nextFl = next.l._fillLayerId
-          ? edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===next.l._fillLayerId)
-          : -1;
-        const _dest = _nextFl >= 0 ? Math.max(next.i, _nextFl) + 1 : next.i + 1;
+        let _dest;
+        if (next.groupId) {
+          // Saltar por encima de todo el grupo
+          _dest = next.maxGroupIdx + 1;
+        } else {
+          const _nextFl = next.l._fillLayerId
+            ? edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===next.l._fillLayerId)
+            : -1;
+          _dest = _nextFl >= 0 ? Math.max(next.i, _nextFl) + 1 : next.i + 1;
+        }
         _lyReorderLayers(realIdx, _dest);
       }
     }
@@ -719,22 +979,24 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   dnBtn.className = 'ed-layer-arrow';
   dnBtn.title = 'Bajar nivel';
   dnBtn.textContent = '▼';
-  const _grpBelow = la.groupId
-    ? visualAll.slice(0, posInList).every(({l: _l}) => _l.groupId === la.groupId)
-    : false;
-  dnBtn.disabled = posInList <= 0 || _grpBelow;
+  dnBtn.disabled = posInList <= 0;
   dnBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
     if (la.groupId) {
       _lyReorderGroup(la.groupId, -1);
     } else {
-      const prev = visualAll[posInList - 1];
+      const prev = _cpAll[posInList - 1];
       if (prev) {
-        // Insertar debajo del pair fill+stroke anterior completo
-        const _prevFl = prev.l._fillLayerId
-          ? edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===prev.l._fillLayerId)
-          : -1;
-        const _dest = _prevFl >= 0 ? Math.min(prev.i, _prevFl) : prev.i;
+        let _dest;
+        if (prev.groupId) {
+          // Saltar por debajo de todo el grupo
+          _dest = prev.minGroupIdx;
+        } else {
+          const _prevFl = prev.l._fillLayerId
+            ? edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===prev.l._fillLayerId)
+            : -1;
+          _dest = _prevFl >= 0 ? Math.min(prev.i, _prevFl) : prev.i;
+        }
         _lyReorderLayers(realIdx, _dest);
       }
     }
@@ -1102,7 +1364,9 @@ function _lyBindImgDrag(item, handle, realIdx) {
         }
       } else {
         item.classList.add('was-dragged');
-        _lyReorderImages(startIdx, _lyDragOver);
+        // Si el destino es miembro de un grupo, ajustar para no colarse dentro
+        const _adjDest = _lyAdjustDestForGroup(startIdx, _lyDragOver);
+        _lyReorderImages(startIdx, _adjDest);
       }
     }
     _lyDragIdx = _lyDragOver = null;
@@ -1200,6 +1464,102 @@ function _lyAnimatedReorder(layerObj, doReorder) {
 /* Mueve todo el bloque de un grupo una posición arriba (+1) o abajo (-1) en la lista visual.
    "Arriba" en la lista visual = índice mayor en edLayers (se dibuja encima).
    dir: +1 = subir un nivel visual, -1 = bajar un nivel visual. */
+/* ──────────────────────────────────────────────────────
+   HELPERS DE GRUPO
+────────────────────────────────────────────────────── */
+
+/**
+ * Devuelve la lista visual de capas con grupos compactados como 1 entrada.
+ * Cada entrada: { l, i, groupId?, minGroupIdx?, maxGroupIdx? }
+ */
+function _lyCompactedVisual() {
+  const raw = edLayers.map((l, i) => ({ l, i }))
+    .filter(({ l }) => l.type === 'image' || l.type === 'gif' || l.type === 'stroke' ||
+                       l.type === 'draw' || l.type === 'shape' || l.type === 'line');
+  const result = [];
+  const seenGrp = new Set();
+  for (const { l, i } of raw) {
+    if (l.groupId) {
+      if (seenGrp.has(l.groupId)) continue;
+      seenGrp.add(l.groupId);
+      const mIdxs = raw.filter(x => x.l.groupId === l.groupId).map(x => x.i);
+      result.push({ l, i, groupId: l.groupId,
+                    minGroupIdx: Math.min(...mIdxs),
+                    maxGroupIdx: Math.max(...mIdxs) });
+    } else {
+      result.push({ l, i });
+    }
+  }
+  return result;
+}
+
+/**
+ * Si toRealIdx cae dentro del bloque de un grupo diferente al origen,
+ * ajusta la posición para quedar justo encima o debajo de ese bloque.
+ */
+function _lyAdjustDestForGroup(fromIdx, toIdx) {
+  const _srcGid = edLayers[fromIdx]?.groupId || null;
+  const _dstLay = edLayers[toIdx];
+  if (!_dstLay?.groupId || _dstLay.groupId === _srcGid) return toIdx;
+  const _dstGid = _dstLay.groupId;
+  const _mIdxs = edLayers
+    .map((l, i) => ({ l, i }))
+    .filter(({ l }) => l?.groupId === _dstGid)
+    .map(({ i }) => i);
+  if (!_mIdxs.length) return toIdx;
+  const _minG = Math.min(..._mIdxs);
+  const _maxG = Math.max(..._mIdxs);
+  // Si movemos hacia arriba (toIdx > fromIdx) → encima del grupo
+  if (toIdx > fromIdx) return _maxG + 1;
+  // Si movemos hacia abajo → debajo del grupo
+  return _minG;
+}
+
+/**
+ * Garantiza que todos los miembros de groupId sean consecutivos en edLayers.
+ * Preserva el orden relativo entre ellos.
+ * También mueve las sub-capas vinculadas (fill/pencil/watercolor) de cada stroke/draw.
+ */
+function _lyCompactGroup(groupId) {
+  // Recoger todos los índices que pertenecen al grupo (miembros + sus sub-capas)
+  const _mainIdxs = edLayers
+    .map((l, i) => ({ l, i }))
+    .filter(({ l }) => l?.groupId === groupId)
+    .map(({ i }) => i);
+  if (_mainIdxs.length < 2) return;
+
+  // Incluir sub-capas vinculadas (fill/pencil/watercolor)
+  const _allIdxsSet = new Set(_mainIdxs);
+  _mainIdxs.forEach(mi => {
+    const _uid = edLayers[mi]?._uid || edLayers[mi]?._fillLayerId;
+    if (_uid) {
+      edLayers.forEach((sl, si) => {
+        if ((sl.type === 'fill' || sl.type === 'pencil' || sl.type === 'watercolor') &&
+            sl._drawLayerId === _uid) {
+          _allIdxsSet.add(si);
+        }
+      });
+    }
+  });
+
+  const _sortedIdxs = [..._allIdxsSet].sort((a, b) => a - b);
+  const _minPos = _sortedIdxs[0];
+
+  // ¿Ya son consecutivos?
+  const _isConsecutive = _sortedIdxs.every((idx, k) => k === 0 || idx === _sortedIdxs[k-1] + 1);
+  if (_isConsecutive) return;
+
+  // Extraer en orden, quitar de mayor a menor (para no desplazar índices)
+  const _layers = _sortedIdxs.map(i => edLayers[i]);
+  for (let k = _sortedIdxs.length - 1; k >= 0; k--) {
+    edLayers.splice(_sortedIdxs[k], 1);
+  }
+  // Insertar a partir de la posición mínima ajustada
+  const _removed = _sortedIdxs.filter(i => i < _minPos).length; // siempre 0
+  const _insertAt = Math.max(0, _minPos - _removed);
+  edLayers.splice(_insertAt, 0, ..._layers);
+}
+
 function _lyReorderGroup(groupId, dir) {
   // Índices de miembros del grupo, ordenados ascendente
   const memberIdxs = [];
@@ -1313,10 +1673,12 @@ function _lyReorderLayers(fromRealIdx, toRealIdx) {
 }
 
 function _lyReorderImages(fromRealIdx, toRealIdx) {
+  // Ajustar destino si cae dentro de un bloque de grupo ajeno
+  const _adjTo = _lyAdjustDestForGroup(fromRealIdx, toRealIdx);
   const _movedLayerImg = edLayers[fromRealIdx];
   _lyAnimatedReorder(_movedLayerImg, () => {
     const moved = edLayers.splice(fromRealIdx, 1)[0];
-    const to = fromRealIdx < toRealIdx ? toRealIdx - 1 : toRealIdx;
+    const to = fromRealIdx < _adjTo ? _adjTo - 1 : _adjTo;
     edLayers.splice(to, 0, moved);
     if (edSelectedIdx === fromRealIdx) edSelectedIdx = to;
     edPushHistory(); edRedraw();

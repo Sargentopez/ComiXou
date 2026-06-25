@@ -19296,6 +19296,32 @@ function edGroupSelected(){
     // No asignar groupId a sub-capas vinculadas (fill/pencil/watercolor) — son parte del stroke
     if(_l && _l.type !== 'fill' && _l.type !== 'pencil' && _l.type !== 'watercolor') _l.groupId = gid;
   });
+  // ── Garantizar que los miembros del grupo son consecutivos en edLayers ──
+  // Recoger TODOS los índices a mover: miembros con groupId + sus sub-capas vinculadas
+  const _mainIdxs = edLayers
+    .map((l, i) => ({ l, i }))
+    .filter(({ l }) => l?.groupId === gid)
+    .map(({ i }) => i);
+  if (_mainIdxs.length >= 2) {
+    const _allIdxsSet = new Set(_mainIdxs);
+    _mainIdxs.forEach(mi => {
+      const _uid = edLayers[mi]?._uid || edLayers[mi]?._fillLayerId;
+      if (_uid) {
+        edLayers.forEach((sl, si) => {
+          if ((sl.type === 'fill' || sl.type === 'pencil' || sl.type === 'watercolor') &&
+              sl._drawLayerId === _uid) _allIdxsSet.add(si);
+        });
+      }
+    });
+    const _sortedIdxs = [..._allIdxsSet].sort((a, b) => a - b);
+    const _minPos = _sortedIdxs[0];
+    const _isConsecutive = _sortedIdxs.every((idx, k) => k === 0 || idx === _sortedIdxs[k-1] + 1);
+    if (!_isConsecutive) {
+      const _movedLayers = _sortedIdxs.map(i => edLayers[i]);
+      for (let k = _sortedIdxs.length - 1; k >= 0; k--) edLayers.splice(_sortedIdxs[k], 1);
+      edLayers.splice(_minPos, 0, ..._movedLayers);
+    }
+  }
   // Volver a herramienta select tras agrupar
   _edDeactivateMultiSel();
   edPushHistory(); edRedraw();
