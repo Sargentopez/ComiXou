@@ -2065,6 +2065,7 @@ function _render() {
 
   layers.forEach((layer, j) => {
     const type = layer.type;
+    if (layer.hidden) return; // capa oculta: no renderizar en el lector
     if (type === 'gif') {
       if (!layer._gifReady || !layer._gifOc) return;
       ctx.save();
@@ -2215,7 +2216,7 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
   const bubbleLayersWithText2 = [];
   const bubbleLayerGlobalIdx2 = [];
   layers.forEach((l, gi) => {
-    if ((l.type==='bubble'||l.type==='text') && l._hasText !== false) {
+    if ((l.type==='bubble'||l.type==='text') && l._hasText !== false && !l.hidden) {
       bubbleLayersWithText2.push(l);
       bubbleLayerGlobalIdx2.push(gi);
     }

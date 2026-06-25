@@ -21189,6 +21189,7 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
   _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY
   page.layers.forEach(l => {
     if (l.type==='text' || l.type==='bubble') return;
+    if (l.hidden) return; // capa oculta: no renderizar en visor
     fctx.globalAlpha = l.opacity ?? 1;
     if (typeof l.draw === 'function') l.draw(fctx, full);
     fctx.globalAlpha = 1;
@@ -21559,6 +21560,7 @@ function edUpdateViewer(){
   // Mismo orden que el editor: seguir el array, textos al final
   page.layers.forEach(l=>{
     if(l.type==='text'||l.type==='bubble') return;
+    if(l.hidden) return; // capa oculta: no renderizar en visor interno
     if(l.type==='image'){
       fctx.globalAlpha = l.opacity ?? 1; l.draw(fctx, full); fctx.globalAlpha = 1;
     } else if(l.type==='fill' || l.type==='pencil' || l.type==='watercolor'){
@@ -21606,7 +21608,7 @@ function edUpdateViewer(){
 }
 
 function _edViewerDrawTextsOnCtx(page, ctx, can){
-  const textLayers = page.layers.filter(l=>l.type==='text'||l.type==='bubble');
+  const textLayers = page.layers.filter(l=>(l.type==='text'||l.type==='bubble') && !l.hidden);
   const isSeq = page.textMode === 'sequential';
   if(!isSeq){ textLayers.forEach(l=>l.draw(ctx, can)); return; }
 
@@ -28856,6 +28858,7 @@ function _gcpRedraw() {
   window._gcpLayers.forEach(l => {
     if (!l || typeof l.draw !== 'function') return;
     if (l._gcpVisible === false) return;
+    if (l.hidden) return; // capa oculta desde panel de capas: no renderizar
 
     // ── Blur de movimiento ─────────────────────────────────────────────────────
     // Diseño: usar los N frames ANTERIORES reales como fantasmas de trail.
@@ -29936,6 +29939,7 @@ function _gcpSaveToLib(onDone) {
     layers.forEach(l => {
       if (!l || typeof l.draw !== 'function') return;
       if (l._gcpVisible === false) return;
+      if (l.hidden) return; // capa oculta desde panel: no exportar
 
       // ── Accumulation blur (mismo algoritmo que _gcpRedraw) ──
       const _frames = l._frames;
@@ -30453,6 +30457,7 @@ async function _gcpDownloadApng() {
     layers.forEach(l => {
       if (!l || typeof l.draw !== 'function') return;
       if (l._gcpVisible === false) return;
+      if (l.hidden) return; // capa oculta desde panel: no exportar
       if (l.type === 'image' || l.type === 'gif') l.draw(fctx, fc);
       else if (l.type === 'text' || l.type === 'bubble') l.draw(fctx, fc);
       else { fctx.globalAlpha = l.opacity != null ? l.opacity : 1; l.draw(fctx); fctx.globalAlpha = 1; }
@@ -30600,6 +30605,7 @@ async function _gcpDownloadGif() {
     layers.forEach(function(l) {
       if (!l || typeof l.draw !== 'function') return;
       if (l._gcpVisible === false) return;
+      if (l.hidden) return; // capa oculta desde panel: no exportar
       if (l.type === 'image' || l.type === 'gif') l.draw(fctx, fc);
       else if (l.type === 'text' || l.type === 'bubble') l.draw(fctx, fc);
       else { fctx.globalAlpha = l.opacity != null ? l.opacity : 1; l.draw(fctx); fctx.globalAlpha = 1; }
@@ -30825,6 +30831,7 @@ async function _gcpDownloadMp4() {
     layers.forEach(l => {
       if (!l || typeof l.draw !== 'function') return;
       if (l._gcpVisible === false) return;
+      if (l.hidden) return; // capa oculta desde panel: no exportar
       if (l.type === 'image' || l.type === 'gif') l.draw(fctx, fc);
       else if (l.type === 'text' || l.type === 'bubble') l.draw(fctx, fc);
       else { fctx.globalAlpha = l.opacity != null ? l.opacity : 1; l.draw(fctx); fctx.globalAlpha = 1; }
