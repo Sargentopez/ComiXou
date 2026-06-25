@@ -4040,12 +4040,34 @@ function edRedraw(){
     return true;
   };
 
+  // Helper: compositar los 4 canvases temporales del draw en la posición actual del contexto
+  const _renderDrawTmp = () => {
+    const _dt = (dl) => {
+      if(!dl?._canvas) return;
+      edCtx.globalAlpha = 1;
+      edCtx.drawImage(dl._canvas, 0, 0);
+    };
+    _dt(_edTmp.bucket);
+    _dt(_edTmp.watercolor);
+    _dt(_edTmp.pencil);
+    _dt(_edTmp.pen);
+    edCtx.globalAlpha = 1;
+  };
+  let _drawTmpRendered = false;
+
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
   // Textos/bocadillos siempre al final (encima de todo).
+  // En modo draw, las capas temporales se insertan EN LA POSICIÓN del DrawLayer,
+  // de modo que capas superiores se sigan viendo (con dimming) por encima del dibujo.
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
-    if(_editingDraw && l.type==='draw') return; // en modo draw, el draw va al final
-    // En modo draw: las 4 capas del grupo se pintan como temporales al final
+    // En modo draw: al llegar al DrawLayer, pintar los temporales en su z-order correcto
+    if(_editingDraw && l.type==='draw'){
+      _renderDrawTmp();
+      _drawTmpRendered = true;
+      return;
+    }
+    // En modo draw: las 4 capas del grupo se pintan como temporales, omitir aquí
     if(_editingDraw && l.type==='fill'       && _linkedFill       && l===_linkedFill)       return;
     if(_editingDraw && l.type==='pencil'     && _linkedPencil     && l===_linkedPencil)     return;
     if(_editingDraw && l.type==='watercolor' && _linkedWatercolor && l===_linkedWatercolor) return;
@@ -4076,7 +4098,7 @@ function edRedraw(){
       l.draw(edCtx); l.opacity=_og;
     }
   });
-  // Textos/bocadillos: aplicar dimming individual por capa
+  // Textos/bocadillos: aplicar dimming individual por capa (siempre encima de todo)
   _textLayers.forEach(l=>{
     if(l.hidden) return; // capa oculta por el usuario
     const i = edLayers.indexOf(l);
@@ -4085,19 +4107,9 @@ function edRedraw(){
     l.draw(edCtx, edCanvas);
   });
   edCtx.globalAlpha = 1;
-  // En modo draw: renderizar capas temporales en orden bucket→watercolor→pencil→pen
-  if(_editingDraw){
-    // Capas temporales en orden composición (el FillLayer/DrawLayer reales están vacíos)
-    const _drawTmp = (dl, alpha) => {
-      if(!dl?._canvas) return;
-      edCtx.globalAlpha = alpha ?? 1;
-      edCtx.drawImage(dl._canvas, 0, 0);
-      edCtx.globalAlpha = 1;
-    };
-    _drawTmp(_edTmp.bucket,    1);
-    _drawTmp(_edTmp.watercolor,1);
-    _drawTmp(_edTmp.pencil,    1);
-    _drawTmp(_edTmp.pen,       1);
+  // Fallback: si el DrawLayer no estaba en edLayers (no debería ocurrir), pintar al final
+  if(_editingDraw && !_drawTmpRendered){
+    _renderDrawTmp();
   }
   edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
@@ -10342,6 +10354,8 @@ function edOnEnd(e){
     _edLineType = 'select'; edActiveTool = 'select'; edCanvas.className = '';
     edPushHistory(); edRedraw();
     _edActivateLineTool(false, true); // true = objeto recién creado
+    // Actualizar botón Fusionar de la barra flotante tras crear una forma cerrada
+    if (typeof window._esbCheckFuse === 'function') window._esbCheckFuse();
     return;
   }
   clearTimeout(window._edLongPress);
@@ -12405,6 +12419,14 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
   sCtx.filter = 'none';
   const maskData = sCtx.getImageData(0, 0, bw, bh).data;
 
+  // Máscara de tinta: leer el área del pincel del canvas de tinta para excluir
+  // los píxeles bajo tinta del efecto iluminar/oscurecer
+  const _penCanvas = _edTmp.pen?._canvas;
+  let _inkMaskData = null;
+  if (_penCanvas && _penCanvas.width >= bx + bw && _penCanvas.height >= by + bh) {
+    _inkMaskData = _edTmp.pen._ctx.getImageData(bx, by, bw, bh).data;
+  }
+
   function _applyDodgeBurn(tgt) {
     // Obtener o crear el estado de nivel para este canvas
     const state = _dbEnsureState(tgt.canvas);
@@ -12422,6 +12444,9 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
       const pi = i * 4;
       const maskA = maskData[pi + 3] / 255;
       if (maskA < 0.01) continue;
+
+      // Máscara de tinta: no modificar píxeles que estén bajo tinta
+      if (_inkMaskData && _inkMaskData[pi + 3] > 4) continue;
 
       // Coordenadas canvas para indexar el estado
       const cx = bx + (i % bw);
@@ -12451,6 +12476,23 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
   }
   _dbTargets.forEach(_applyDodgeBurn);
   return { wx, wy };
+}
+
+// Aplica la capa de tinta (_edTmp.pen) como máscara destructiva sobre la acuarela:
+// elimina los píxeles de acuarela en todas las zonas donde existe tinta.
+// Se llama (a) tras cada segmento de acuarela y (b) al terminar un trazo de tinta o D/B.
+function _edApplyInkMaskToWatercolor() {
+  const wc  = _edTmp.watercolor;
+  const pen = _edTmp.pen;
+  if (!wc?._canvas || !pen?._canvas) return;
+  wc._ctx.save();
+  wc._ctx.globalCompositeOperation = 'destination-out';
+  wc._ctx.drawImage(pen._canvas, 0, 0);
+  wc._ctx.restore();
+  // Invalidar el estado de dodge/burn para el canvas de acuarela: fuerza una
+  // recaptura fresca la próxima vez que se use iluminar/oscurecer, evitando que
+  // datos obsoletos de origData restauren píxeles que deben estar enmascarados.
+  _dbOriginMap.delete(wc._canvas);
 }
 
 function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
@@ -12519,6 +12561,14 @@ function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
   fl._ctx.drawImage(seg, bx, by);
   fl._ctx.filter = 'none';
   fl._ctx.restore();
+  // Máscara de tinta: eliminar en tiempo real los píxeles de acuarela que caigan
+  // sobre la tinta existente (fl._canvas === _edTmp.watercolor._canvas vía proxy)
+  if (_edTmp.pen?._canvas) {
+    fl._ctx.save();
+    fl._ctx.globalCompositeOperation = 'destination-out';
+    fl._ctx.drawImage(_edTmp.pen._canvas, 0, 0);
+    fl._ctx.restore();
+  }
 
   // ── Acumular en offscreen (sin blur) para preview en edRedraw ────────────
   _wcOffCtx.save();
@@ -12935,6 +12985,9 @@ function edSaveDrawData(){
   if(_edDodgeBurnActive){
     // Dodge/burn: solo guardar historial, no ejecutar commit de acuarela
     window._edDbLast = undefined;
+    // Máscara de tinta: eliminar cualquier efecto D/B residual bajo la tinta e
+    // invalidar el estado origData para la próxima sesión D/B
+    _edApplyInkMaskToWatercolor();
     _edDrawPushHistory();
   } else if(window._edWcFl){
     // Acuarela: limpiar offscreen y guardar historial
@@ -12947,6 +13000,11 @@ function edSaveDrawData(){
     // Gap closing para tinta (pen): cierra huecos 1-2px ANTES de guardar
     if (_edTmp.active === 'pen' && _edTmp.pen?._gcDirty && _edGapCloseEnabled) {
       _edPenCloseGaps(_edTmp.pen);
+    }
+    // Máscara de tinta: al terminar un trazo de tinta, limpiar los píxeles de acuarela
+    // que hayan quedado bajo la nueva tinta (para el caso de pintar tinta sobre acuarela existente)
+    if (_edTmp.active === 'pen') {
+      _edApplyInkMaskToWatercolor();
     }
     _edDrawPushHistory();
     // Color-erase: volver a la herramienta de dibujo al levantar el dedo
@@ -13605,9 +13663,7 @@ function _edActivateLineTool(isNew, isCreating) {
   const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
   const hasFill = fillCol !== 'none' && isClosed;
   const fillVal = hasFill ? fillCol : '#ffffff';
-  // canFuse: mostrar botón Fusionar si hay ≥2 objetos line cerrados DE LA SESIÓN ACTUAL.
-  // Nunca incluir objetos pre-sesión (ajenos) — solo layers que el usuario esté editando ahora.
-  // canFuse: ≥2 layers line cerrados de sesión, O un layer único con grouped=true (multicontorno unido)
+  // canFuse: ≥2 layers line cerrados de sesión actual, O un layer único grouped=true
   const _canFuseGrouped = _cur && _cur.type==='line' && _cur.grouped && _cur.points && _cur.points.includes(null);
   const canFuse = _canFuseGrouped || edLayers.filter(l => l.type==='line' && l.closed && !_vsPreSessionLayers.has(l)).length >= 2;
   // nSubPaths eliminado (T1: huecos son objetos independientes hasta OK)
