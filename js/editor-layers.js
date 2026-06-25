@@ -268,8 +268,19 @@ function _lyRender() {
     list.appendChild(e);
   } else {
     // El primero del array edLayers aparece el último en la lista (más abajo visualmente)
+    const _seenGroupIds = new Set(); // grupos ya mostrados como ítem único
     [...visualPairs].reverse().forEach(({l, i}) => {
       if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') return; // sub-filas
+      // ── GRUPOS: mostrar como un solo ítem colapsado ──
+      if (l.groupId) {
+        if (_seenGroupIds.has(l.groupId)) return; // ya se mostró este grupo
+        _seenGroupIds.add(l.groupId);
+        const _gMembers = edLayers.map((ml, mi) => ({l: ml, i: mi}))
+          .filter(x => x.l.groupId === l.groupId &&
+                       x.l.type !== 'fill' && x.l.type !== 'pencil' && x.l.type !== 'watercolor');
+        list.appendChild(_lyBuildGroupItem(l.groupId, _gMembers));
+        return;
+      }
       const item = _lyBuildVisualItem(l, i, i === edSelectedIdx);
       list.appendChild(item);
       // Sub-filas para capas vinculadas: fill, watercolor, pencil
@@ -470,44 +481,90 @@ function _lyBuildGroupItem(groupId, members) {
   return item;
 }
 
-/** Miniatura compuesta: renderiza todos los miembros superpuestos */
+/** Miniatura compuesta: renderiza todos los miembros en sus posiciones relativas */
 function _lyDrawGroupCompositeThumb(canvas, members) {
   const ctx = canvas.getContext('2d');
   const sw = canvas.width, sh = canvas.height;
   ctx.fillStyle = '#f5f5f5';
   ctx.fillRect(0, 0, sw, sh);
-  // Fondo de cuadrícula para indicar grupo
+  // Fondo cuadrícula para indicar grupo
   ctx.fillStyle = '#e8e0ff';
-  for (let gx = 0; gx < sw; gx += 8) {
-    for (let gy = gx % 16 === 0 ? 0 : 8; gy < sh; gy += 16) {
-      ctx.fillRect(gx, gy, 8, 8);
+  for (let gx = 0; gx < sw; gx += 8)
+    for (let gy = gx%16===0?0:8; gy < sh; gy += 16) ctx.fillRect(gx, gy, 8, 8);
+  const _pw = typeof edPageW === 'function' ? edPageW() : 360;
+  const _ph = typeof edPageH === 'function' ? edPageH() : 780;
+  const _mx = typeof edMarginX === 'function' ? edMarginX() : 720;
+  const _my = typeof edMarginY === 'function' ? edMarginY() : 780;
+  const pad = 4;
+
+  // 1. Bbox union de todos los miembros en coords workspace (sin depender del lienzo)
+  let uX0 = Infinity, uY0 = Infinity, uX1 = -Infinity, uY1 = -Infinity;
+  [...members].sort((a,b) => a.i - b.i).forEach(({l}) => {
+    if ((l.type==='stroke'||l.type==='draw') && l._canvas && !l._isWorkspaceCanvas) {
+      const ox = l._bboxOriginX!=null ? l._bboxOriginX : (_mx + l.x*_pw - l.width*_pw/2);
+      const oy = l._bboxOriginY!=null ? l._bboxOriginY : (_my + l.y*_ph - l.height*_ph/2);
+      uX0=Math.min(uX0,ox); uY0=Math.min(uY0,oy);
+      uX1=Math.max(uX1,ox+l._canvas.width); uY1=Math.max(uY1,oy+l._canvas.height);
+    } else {
+      const cx = _mx + l.x*_pw, cy = _my + l.y*_ph;
+      const hw = (l.width||0.1)*_pw/2, hh = (l.height||0.1)*_ph/2;
+      uX0=Math.min(uX0,cx-hw); uY0=Math.min(uY0,cy-hh);
+      uX1=Math.max(uX1,cx+hw); uY1=Math.max(uY1,cy+hh);
     }
-  }
-  const _pw = typeof edPageW === 'function' ? edPageW() : sw;
-  const _ph = typeof edPageH === 'function' ? edPageH() : sh;
-  const _sc = Math.min(sw / _pw, sh / _ph);
-  const _ox = (sw - _pw * _sc) / 2, _oy = (sh - _ph * _sc) / 2;
-  // Dibujar de abajo hacia arriba (orden canvas)
+  });
+  if (!isFinite(uX0)) { ctx.strokeStyle='#a78bfa';ctx.lineWidth=2;ctx.strokeRect(1,1,sw-2,sh-2); return; }
+  const uW = Math.max(1,uX1-uX0), uH = Math.max(1,uY1-uY0);
+
+  // 2. Escala para que el bbox union quepa en el thumb
+  const sc = Math.min((sw-pad*2)/uW, (sh-pad*2)/uH);
+  const ofx = pad + (sw-pad*2-uW*sc)/2;
+  const ofy = pad + (sh-pad*2-uH*sc)/2;
+  const wx2t = wx => (wx-uX0)*sc + ofx;
+  const wy2t = wy => (wy-uY0)*sc + ofy;
+
+  // 3. Renderizar cada miembro en su posición relativa
   [...members].sort((a,b) => a.i - b.i).forEach(({l}) => {
     ctx.save();
-    ctx.globalAlpha = (l.opacity ?? 1) * 0.85;
+    ctx.globalAlpha = l.opacity ?? 1;
     try {
-      if (l.type === 'stroke' || l.type === 'draw') {
-        _lyDrawStrokeThumb(canvas, l);
-      } else if (l.type === 'shape' || l.type === 'line') {
-        // Usar miniatura rápida de posición
-        const _tx = l.x * _pw * _sc + _ox - (l.width || 0.1) * _pw * _sc / 2;
-        const _ty = l.y * _ph * _sc + _oy - (l.height || 0.1) * _ph * _sc / 2;
-        const _tw = (l.width || 0.1) * _pw * _sc;
-        const _th = (l.height || 0.1) * _ph * _sc;
-        ctx.fillStyle = l.fillColor || l.strokeColor || '#888';
-        ctx.fillRect(_tx, _ty, _tw, _th);
-      } else if ((l.type === 'image' || l.type === 'gif') && l.img?.complete) {
-        const _tx = l.x * _pw * _sc + _ox - l.width * _pw * _sc / 2;
-        const _ty = l.y * _ph * _sc + _oy - l.height * _ph * _sc / 2;
-        ctx.drawImage(l.img, _tx, _ty, l.width * _pw * _sc, l.height * _ph * _sc);
+      if ((l.type==='stroke'||l.type==='draw') && l._canvas && !l._isWorkspaceCanvas) {
+        const ox = l._bboxOriginX!=null?l._bboxOriginX:(_mx+l.x*_pw-l.width*_pw/2);
+        const oy = l._bboxOriginY!=null?l._bboxOriginY:(_my+l.y*_ph-l.height*_ph/2);
+        const dx=wx2t(ox), dy=wy2t(oy), dw=l._canvas.width*sc, dh=l._canvas.height*sc;
+        const _uid = l._uid||l._fillLayerId;
+        if (typeof edLayers!=='undefined' && _uid) {
+          const _fl=edLayers.find(f=>f&&f.type==='fill'       &&f._drawLayerId===_uid);
+          const _wc=edLayers.find(f=>f&&f.type==='watercolor' &&f._drawLayerId===_uid);
+          const _pc=edLayers.find(f=>f&&f.type==='pencil'     &&f._drawLayerId===_uid);
+          if (_fl?._canvas?.width>0&&!_fl._isWorkspaceCanvas) ctx.drawImage(_fl._canvas,dx,dy,dw,dh);
+          if (_wc?._canvas?.width>0&&!_wc._isWorkspaceCanvas) ctx.drawImage(_wc._canvas,dx,dy,dw,dh);
+          if (_pc?._canvas?.width>0&&!_pc._isWorkspaceCanvas) ctx.drawImage(_pc._canvas,dx,dy,dw,dh);
+        }
+        ctx.drawImage(l._canvas, dx, dy, dw, dh);
+      } else if (l.type==='shape'||l.type==='line') {
+        const ED_W = typeof ED_CANVAS_W!=='undefined'?ED_CANVAS_W:1800;
+        const ED_H = typeof ED_CANVAS_H!=='undefined'?ED_CANVAS_H:2340;
+        const aux = document.createElement('canvas');
+        aux.width=ED_W; aux.height=ED_H;
+        l.draw(aux.getContext('2d'));
+        const cx=_mx+l.x*_pw, cy=_my+l.y*_ph;
+        const rot2=(l.rotation||0)*Math.PI/180;
+        const cR=Math.abs(Math.cos(rot2)), sR=Math.abs(Math.sin(rot2));
+        const bW=l.width*_pw*cR+l.height*_ph*sR+4, bH=l.width*_pw*sR+l.height*_ph*cR+4;
+        ctx.drawImage(aux,cx-bW/2,cy-bH/2,bW,bH,wx2t(cx-bW/2),wy2t(cy-bH/2),bW*sc,bH*sc);
+      } else {
+        const _src = l.type==='gif'?(l._oc&&l._ready?l._oc:null)
+                   : (l.type==='image'&&l.img?.complete&&l.img.naturalWidth>0?l.img:null);
+        if (_src) {
+          const cx=_mx+l.x*_pw, cy=_my+l.y*_ph;
+          const hw=(l.width||0.1)*_pw/2, hh=(l.height||0.1)*_ph/2;
+          const rot3=(l.rotation||0)*Math.PI/180;
+          ctx.translate(wx2t(cx), wy2t(cy));
+          ctx.rotate(rot3);
+          ctx.drawImage(_src, -hw*sc, -hh*sc, hw*2*sc, hh*2*sc);
+        }
       }
-    } catch(e) { /* ignora errores de render parcial */ }
+    } catch(e) { /* ignora errores de render */ }
     ctx.restore();
   });
   // Marco de grupo
@@ -515,7 +572,6 @@ function _lyDrawGroupCompositeThumb(canvas, members) {
   ctx.lineWidth = 2;
   ctx.strokeRect(1, 1, sw-2, sh-2);
 }
-
 /** Drag-and-drop para el ítem de grupo */
 function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
   let startY, active = false;
@@ -589,16 +645,23 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   tctx.fillStyle = '#f0f8ff';
   tctx.fillRect(0, 0, 80, 60);
   if (la._canvas && la._canvas.width > 0) {
-    const pw = (typeof edPageW==='function')?edPageW():800;
-    const ph = (typeof edPageH==='function')?edPageH():1100;
-    const mx = (typeof edMarginX==='function')?edMarginX():0;
-    const my = (typeof edMarginY==='function')?edMarginY():0;
-    const _sc = Math.min(80 / pw, 60 / ph);
-    const _ox = (80 - pw * _sc) / 2, _oy = (60 - ph * _sc) / 2;
-    tctx.save();
-    tctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
-    if (typeof la.draw === 'function') la.draw(tctx);
-    tctx.restore();
+    const pad = 3;
+    if (!la._isWorkspaceCanvas) {
+      // Canvas recortado al bbox del contenido: escalar directamente al thumb
+      const cw = la._canvas.width, ch = la._canvas.height;
+      const sc = Math.min((80-pad*2)/cw, (60-pad*2)/ch);
+      const dx = pad + (80-pad*2-cw*sc)/2, dy = pad + (60-pad*2-ch*sc)/2;
+      tctx.drawImage(la._canvas, dx, dy, cw*sc, ch*sc);
+    } else {
+      // Canvas workspace completo: buscar bbox real del contenido
+      const _bb = (typeof StrokeLayer!=='undefined' && StrokeLayer._boundingBox)
+        ? StrokeLayer._boundingBox(la._canvas) : null;
+      if (_bb && _bb.w > 0 && _bb.h > 0) {
+        const sc = Math.min((80-pad*2)/_bb.w, (60-pad*2)/_bb.h);
+        const dx = pad+(80-pad*2-_bb.w*sc)/2, dy = pad+(60-pad*2-_bb.h*sc)/2;
+        tctx.drawImage(la._canvas, _bb.x, _bb.y, _bb.w, _bb.h, dx, dy, _bb.w*sc, _bb.h*sc);
+      }
+    }
   }
   tctx.strokeStyle = borderColor; tctx.lineWidth = 2;
   tctx.setLineDash([4,3]); tctx.strokeRect(1,1,78,58); tctx.setLineDash([]);
@@ -1122,42 +1185,51 @@ function _lyDrawStrokeThumb(canvas, la) {
   const tw = canvas.width, th = canvas.height;
   ctx.fillStyle = '#f5f5f5';
   ctx.fillRect(0, 0, tw, th);
-  if (la.type === 'stroke' && la._canvas && la._canvas.width > 0) {
-    const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-    const mx = edMarginX ? edMarginX() : 0, my = edMarginY ? edMarginY() : 0;
-    // Escalar página completa al thumb
-    const _sc = Math.min(tw / pw, th / ph);
-    const _ox = (tw - pw * _sc) / 2, _oy = (th - ph * _sc) / 2;
-    ctx.save();
-    ctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
-    // Primero el fill vinculado (si existe)
+  const pad = 4;
+  if ((la.type === 'stroke' || la.type === 'draw') && la._canvas) {
     const _thumbUid = la._uid || la._fillLayerId;
-    const _flS      = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='fill'       && f._drawLayerId===_thumbUid) : null;
-    const _wcS      = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='watercolor' && f._drawLayerId===_thumbUid) : null;
-    const _pencilS  = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='pencil'     && f._drawLayerId===_thumbUid) : null;
-    if (_flS     && typeof _flS.draw     === 'function') _flS.draw(ctx);
-    if (_wcS     && typeof _wcS.draw     === 'function') _wcS.draw(ctx);
-    if (_pencilS && typeof _pencilS.draw === 'function') _pencilS.draw(ctx);
-    // Luego el stroke encima
-    if (typeof la.draw === 'function') la.draw(ctx);
-    ctx.restore();
-  } else if (la.type === 'draw' && la._canvas) {
-    const pw = edPageW() || ED_PAGE_W, ph = edPageH() || ED_PAGE_H;
-    const mx = edMarginX ? edMarginX() : 0, my = edMarginY ? edMarginY() : 0;
-    const _sc = Math.min(tw / pw, th / ph);
-    const _ox = (tw - pw * _sc) / 2, _oy = (th - ph * _sc) / 2;
-    ctx.save();
-    ctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
-    // Capas vinculadas al DrawLayer (en orden de render)
-    const _thumbDlUid = la._uid || la._fillLayerId;
-    const _flD     = (typeof edLayers !== 'undefined' && _thumbDlUid) ? edLayers.find(f => f && f.type==='fill'       && f._drawLayerId===_thumbDlUid) : null;
-    const _wcD     = (typeof edLayers !== 'undefined' && _thumbDlUid) ? edLayers.find(f => f && f.type==='watercolor' && f._drawLayerId===_thumbDlUid) : null;
-    const _pencilD = (typeof edLayers !== 'undefined' && _thumbDlUid) ? edLayers.find(f => f && f.type==='pencil'     && f._drawLayerId===_thumbDlUid) : null;
-    if (_flD     && typeof _flD.draw     === 'function') _flD.draw(ctx);
-    if (_wcD     && typeof _wcD.draw     === 'function') _wcD.draw(ctx);
-    if (_pencilD && typeof _pencilD.draw === 'function') _pencilD.draw(ctx);
-    la.draw(ctx);
-    ctx.restore();
+    const _flS     = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='fill'       && f._drawLayerId===_thumbUid) : null;
+    const _wcS     = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='watercolor' && f._drawLayerId===_thumbUid) : null;
+    const _pencilS = (typeof edLayers !== 'undefined' && _thumbUid) ? edLayers.find(f => f && f.type==='pencil'     && f._drawLayerId===_thumbUid) : null;
+
+    if (!la._isWorkspaceCanvas) {
+      // Capa congelada: _canvas ya recortado al bbox del contenido.
+      // Escalar directamente al thumb sin depender de coordenadas de página.
+      const cw = la._canvas.width, ch = la._canvas.height;
+      if (cw > 0 && ch > 0) {
+        const scale = Math.min((tw - pad*2) / cw, (th - pad*2) / ch);
+        const dx = pad + (tw - pad*2 - cw * scale) / 2;
+        const dy = pad + (th - pad*2 - ch * scale) / 2;
+        ctx.save();
+        if (_flS && _flS._canvas?.width > 0 && !_flS._isWorkspaceCanvas)
+          ctx.drawImage(_flS._canvas, dx, dy, cw * scale, ch * scale);
+        if (_wcS && _wcS._canvas?.width > 0 && !_wcS._isWorkspaceCanvas)
+          ctx.drawImage(_wcS._canvas, dx, dy, cw * scale, ch * scale);
+        if (_pencilS && _pencilS._canvas?.width > 0 && !_pencilS._isWorkspaceCanvas)
+          ctx.drawImage(_pencilS._canvas, dx, dy, cw * scale, ch * scale);
+        ctx.drawImage(la._canvas, dx, dy, cw * scale, ch * scale);
+        ctx.restore();
+      }
+    } else {
+      // Canvas workspace completo (DrawLayer en edición activa o sub-capa expandida).
+      // Buscar el bbox real del contenido con _boundingBox.
+      const _bb = (typeof StrokeLayer !== 'undefined' && StrokeLayer._boundingBox)
+        ? StrokeLayer._boundingBox(la._canvas) : null;
+      if (_bb && _bb.w > 0 && _bb.h > 0) {
+        const scale = Math.min((tw - pad*2) / _bb.w, (th - pad*2) / _bb.h);
+        const dx = pad + (tw - pad*2 - _bb.w * scale) / 2;
+        const dy = pad + (th - pad*2 - _bb.h * scale) / 2;
+        ctx.save();
+        if (_flS && _flS._canvas?.width > 0)
+          ctx.drawImage(_flS._canvas, _bb.x, _bb.y, _bb.w, _bb.h, dx, dy, _bb.w*scale, _bb.h*scale);
+        if (_wcS && _wcS._canvas?.width > 0)
+          ctx.drawImage(_wcS._canvas, _bb.x, _bb.y, _bb.w, _bb.h, dx, dy, _bb.w*scale, _bb.h*scale);
+        if (_pencilS && _pencilS._canvas?.width > 0)
+          ctx.drawImage(_pencilS._canvas, _bb.x, _bb.y, _bb.w, _bb.h, dx, dy, _bb.w*scale, _bb.h*scale);
+        ctx.drawImage(la._canvas, _bb.x, _bb.y, _bb.w, _bb.h, dx, dy, _bb.w*scale, _bb.h*scale);
+        ctx.restore();
+      }
+    }
   } else {
     const _lapizImg = new Image();
     _lapizImg.src = 'data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==';
@@ -1711,36 +1783,49 @@ function _lyMakeOpRow(initVal, onChange) {
    MINIATURA
 ────────────────────────────────────────── */
 function _lyDrawThumb(canvas, la) {
+  // Centra el objeto en el thumb independientemente de su posición en el canvas
   const ctx = canvas.getContext('2d');
   const sw = canvas.width, sh = canvas.height;
   ctx.fillStyle = '#f5f5f5';
   ctx.fillRect(0, 0, sw, sh);
-  // Escala uniforme respetando el ratio de la página (sin distorsión)
-  const _pw5 = typeof edPageW === 'function' ? edPageW() : sw;
-  const _ph5 = typeof edPageH === 'function' ? edPageH() : sh;
-  const _sc5 = Math.min(sw / _pw5, sh / _ph5);
-  const _ox5 = (sw - _pw5 * _sc5) / 2, _oy5 = (sh - _ph5 * _sc5) / 2;
-  const _tx5 = nx => nx * _pw5 * _sc5 + _ox5;
-  const _ty5 = ny => ny * _ph5 * _sc5 + _oy5;
-  const _tw5 = nw => nw * _pw5 * _sc5;
-  const _th5 = nh => nh * _ph5 * _sc5;
+  const _pw = typeof edPageW === 'function' ? edPageW() : 360;
+  const _ph = typeof edPageH === 'function' ? edPageH() : 780;
+  const pad = 4;
   ctx.save();
   ctx.globalAlpha = la.opacity ?? 1;
-  if (la.type === 'gif' && la._oc && la._ready) {
-    ctx.drawImage(la._oc, _tx5(la.x-la.width/2), _ty5(la.y-la.height/2), _tw5(la.width), _th5(la.height));
-  } else if (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0) {
-    ctx.drawImage(la.img, _tx5(la.x-la.width/2), _ty5(la.y-la.height/2), _tw5(la.width), _th5(la.height));
+  // Fuente de imagen: GIF usa _oc, imagen/APNG usa img
+  const _src = (la.type === 'gif')
+    ? (la._oc && la._ready ? la._oc : null)
+    : (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0 ? la.img : null);
+  if (_src) {
+    // Dimensiones del objeto en px
+    const ow = (la.width  || 0.1) * _pw;
+    const oh = (la.height || 0.1) * _ph;
+    const rot = (la.rotation || 0) * Math.PI / 180;
+    const cosR = Math.abs(Math.cos(rot)), sinR = Math.abs(Math.sin(rot));
+    const bboxW = ow * cosR + oh * sinR;
+    const bboxH = ow * sinR + oh * cosR;
+    const scale = Math.min((sw - pad*2) / Math.max(1, bboxW),
+                           (sh - pad*2) / Math.max(1, bboxH));
+    ctx.translate(sw / 2, sh / 2);
+    ctx.rotate(rot);
+    ctx.drawImage(_src, -ow / 2 * scale, -oh / 2 * scale, ow * scale, oh * scale);
   } else if (la.type === 'text' || la.type === 'bubble') {
-    const x=_tx5(la.x-la.width/2), y=_ty5(la.y-la.height/2), w=_tw5(la.width), h=_th5(la.height);
+    const ow = (la.width  || 0.1) * _pw;
+    const oh = (la.height || 0.1) * _ph;
+    const scale = Math.min((sw - pad*2) / Math.max(1, ow),
+                           (sh - pad*2) / Math.max(1, oh));
+    const dw = ow * scale, dh = oh * scale;
+    const dx = (sw - dw) / 2, dy = (sh - dh) / 2;
     ctx.fillStyle = la.backgroundColor || '#fff';
-    ctx.fillRect(x,y,w,h);
+    ctx.fillRect(dx, dy, dw, dh);
     ctx.strokeStyle = la.borderColor || '#bbb';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x,y,w,h);
+    ctx.strokeRect(dx, dy, dw, dh);
     ctx.fillStyle = la.color || '#222';
-    ctx.font = Math.max(7, Math.round(Math.min(w*0.25, h*0.45))) + 'px sans-serif';
+    ctx.font = Math.max(7, Math.round(Math.min(dw * 0.25, dh * 0.45))) + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText((la.text||'').substring(0,14), x + w/2, y + h/2);
+    ctx.fillText((la.text||'').substring(0, 14), dx + dw / 2, dy + dh / 2);
   }
   ctx.restore();
 }

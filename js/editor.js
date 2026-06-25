@@ -827,6 +827,8 @@ window.ApngDecoder = (function(){
 let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
 // ── Sistema de Reglas (T29) ──
+let edGridVisible  = false; // cuadrícula visible en el workspace (editor)
+let gcpGridVisible = false; // cuadrícula visible en el canvas GCP
 let edRules = [];          // array de reglas de la hoja actual
 let _edCanvasTop = 0;      // top del canvas en viewport — cacheado en edFitCanvas
 let edRulesHidden = false; // true = guías ocultas (invisibles, no seleccionables, sin snap)
@@ -3931,8 +3933,8 @@ function edRedraw(){
   // Reset transform → limpiar todo el viewport
   edCtx.setTransform(1,0,0,1,0,0);
   edCtx.clearRect(0,0,cw,ch);
-  // Fondo workspace (toda la pantalla)
-  edCtx.fillStyle='#b0b0b0';
+  // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible
+  edCtx.fillStyle='#c8d4e8';
   edCtx.fillRect(0,0,cw,ch);
 
   // Aplicar cámara: escala + traslación
@@ -3957,6 +3959,7 @@ function edRedraw(){
   }
   edCtx.fill();
   edCtx.shadowColor='transparent';edCtx.shadowBlur=0;
+
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
   // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
@@ -4140,6 +4143,30 @@ function edRedraw(){
       else edDrawRubberBand();
     }
     if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
+  }
+  // ── Cuadrícula: encima de todas las capas, mismo azul que el marco del lienzo ──
+  if (edGridVisible) {
+    edCtx.save();
+    edCtx.strokeStyle = 'rgba(26,140,255,0.4)';
+    edCtx.lineWidth = 1 / edCamera.z;   // 1px físico independiente del zoom
+    const _gCell = 30; // 30px workspace: mitad del tamaño anterior
+    const _gMx = edMarginX(), _gMy = edMarginY();
+    const _gW = ED_CANVAS_W, _gH = ED_CANVAS_H;
+    edCtx.beginPath();
+    for (let gx = _gMx; gx >= 0; gx -= _gCell) {
+      edCtx.moveTo(gx, 0); edCtx.lineTo(gx, _gH);
+    }
+    for (let gx = _gMx + _gCell; gx <= _gW; gx += _gCell) {
+      edCtx.moveTo(gx, 0); edCtx.lineTo(gx, _gH);
+    }
+    for (let gy = _gMy; gy >= 0; gy -= _gCell) {
+      edCtx.moveTo(0, gy); edCtx.lineTo(_gW, gy);
+    }
+    for (let gy = _gMy + _gCell; gy <= _gH; gy += _gCell) {
+      edCtx.moveTo(0, gy); edCtx.lineTo(_gW, gy);
+    }
+    edCtx.stroke();
+    edCtx.restore();
   }
   // ── Reglas (T29): solo visibles en el editor, encima de todo ──
   _edRulesDraw(edCtx);
@@ -16725,6 +16752,20 @@ function edInitRules() {
     document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
     edRedraw();
   });
+
+  // ── Cuadrícula — siempre desactivada al inicio ──
+  edGridVisible = false;
+  const _gridChk = $('dd-grid-check');
+  if (_gridChk) {
+    _gridChk.checked = edGridVisible;
+    _gridChk.addEventListener('change', () => {
+      edGridVisible = _gridChk.checked;
+      try { localStorage.setItem('cxGridVisible', edGridVisible ? '1' : '0'); } catch(e) {}
+      // Cerrar dropdown pero sin consumir el click de la label
+      document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+      edRedraw();
+    });
+  }
 }
 
 // ── Snap a reglas durante el drag ────────────────────────────────────────────
@@ -28896,6 +28937,23 @@ function _gcpRedraw() {
     _gcpDrawLayerAt(gcpCtx, l, 1);
   });
 
+  // ── Cuadrícula GCP: encima de capas, mismo azul que el marco ──
+  if (gcpGridVisible) {
+    gcpCtx.save();
+    gcpCtx.strokeStyle = 'rgba(26,140,255,0.4)';
+    gcpCtx.lineWidth = 1 / edCamera.z;
+    const _gcCell = 30;
+    const _gcMx = edMarginX(), _gcMy = edMarginY();
+    const _gcW = ED_CANVAS_W, _gcH = ED_CANVAS_H;
+    gcpCtx.beginPath();
+    for (let gx = _gcMx; gx >= 0; gx -= _gcCell) { gcpCtx.moveTo(gx, 0); gcpCtx.lineTo(gx, _gcH); }
+    for (let gx = _gcMx + _gcCell; gx <= _gcW; gx += _gcCell) { gcpCtx.moveTo(gx, 0); gcpCtx.lineTo(gx, _gcH); }
+    for (let gy = _gcMy; gy >= 0; gy -= _gcCell) { gcpCtx.moveTo(0, gy); gcpCtx.lineTo(_gcW, gy); }
+    for (let gy = _gcMy + _gcCell; gy <= _gcH; gy += _gcCell) { gcpCtx.moveTo(0, gy); gcpCtx.lineTo(_gcW, gy); }
+    gcpCtx.stroke();
+    gcpCtx.restore();
+  }
+
   // Dibujar guías GCP (encima de capas, debajo del handle de selección)
   if (_gcpRules.length || _gcpRuleNodes.length) {
     _gcpRulesDraw(gcpCtx);
@@ -30352,6 +30410,18 @@ function _gcpInitRules() {
     document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
     _gcpRedraw();
   });
+
+  // ── Cuadrícula GCP — siempre desactivada al abrir ──
+  gcpGridVisible = false;
+  const _gcpGridChk = document.getElementById('gcp-grid-check');
+  if (_gcpGridChk) {
+    _gcpGridChk.checked = false;
+    _gcpGridChk.addEventListener('change', () => {
+      gcpGridVisible = _gcpGridChk.checked;
+      document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+      _gcpRedraw();
+    });
+  }
 }
 
 // _gcpDownloadApng — exporta animacion GCP como APNG transparente

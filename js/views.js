@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v31.15</footer>
+    <footer class="app-version">v31.24</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -370,6 +370,10 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="rules">Guías ▾</button>
             <div class="ed-dropdown" id="dd-rules">
+              <label class="ed-dropdown-item" id="dd-grid-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+                <input type="checkbox" id="dd-grid-check" style="width:16px;height:16px;accent-color:#1a8cff;cursor:pointer;flex-shrink:0">
+                <span>Cuadrícula</span>
+              </label>
               <button class="ed-dropdown-item" id="dd-rule-add">＋ Añadir guía</button>
               <button class="ed-dropdown-item" id="dd-rule-toggle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" style="vertical-align:middle;margin-right:5px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg><span id="dd-rule-toggle-txt">Ocultar guías</span></button>
               <button class="ed-dropdown-item" id="dd-rule-lock-all">🔒 Bloquear guías</button>
@@ -834,6 +838,10 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-gcpmenu="gcpRules">Guías ▾</button>
             <div class="ed-dropdown" id="gdd-gcpRules">
+              <label class="ed-dropdown-item" id="gcp-grid-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+                <input type="checkbox" id="gcp-grid-check" style="width:16px;height:16px;accent-color:#1a8cff;cursor:pointer;flex-shrink:0">
+                <span>Cuadrícula</span>
+              </label>
               <button class="ed-dropdown-item" id="gcp-rule-add">＋ Añadir guía</button>
               <button class="ed-dropdown-item" id="gcp-rule-toggle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" style="vertical-align:middle;margin-right:5px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg><span id="gcp-rule-toggle-txt">Ocultar guías</span></button>
               <button class="ed-dropdown-item" id="gcp-rule-lock-all">🔒 Bloquear guías</button>
