@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v30.96</footer>
+    <footer class="app-version">v31.10</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -561,7 +561,7 @@ Router.register('editor', {
           <button id="esb-undo"     class="edb-tool" title="Deshacer">↩</button>
           <button id="esb-redo"     class="edb-tool" title="Rehacer">↪</button>
           <div id="esb-fuse-sep" class="edb-sep" style="display:none"></div>
-          <button id="esb-fuse"     class="edb-tool" title="Fusionar objetos cerrados en uno solo con huecos" style="display:none;font-size:.65rem;font-weight:900">⊕</button>
+          <button id="esb-fuse" class="edb-tool" title="Fusionar objetos cerrados en uno solo con huecos" style="display:none;padding:0;border:none;background:white;border-radius:50%;overflow:hidden;line-height:0"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="20" height="20"><circle cx="13" cy="13" r="13" fill="white"/><path d="M13,1 A12,12,0,0,0,13,25 Z" fill="black"/><circle cx="13" cy="7" r="6" fill="black"/><circle cx="13" cy="19" r="6" fill="white"/><circle cx="13" cy="13" r="12" fill="none" stroke="#444" stroke-width="1"/><circle cx="13" cy="7" r="3" fill="white"/><circle cx="13" cy="19" r="3" fill="black"/></svg></button>
           <div class="edb-sep"></div>
           <button id="esb-ok"       class="edb-ok"   title="Finalizar">✓</button>
         </div>

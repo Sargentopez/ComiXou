@@ -291,6 +291,35 @@ const Auth = (() => {
 
   _tryRefresh();
 
+  // ── Validación server-side de la sesión cacheada ───────────────────────────
+  // Llama a /auth/v1/user para confirmar que el token sigue siendo válido en Supabase.
+  // Si el servidor responde 401/403 el token fue revocado remotamente → limpiar sesión.
+  // Se lanza en background sin bloquear la render inicial; si hay error de red se mantiene
+  // la sesión (degradación elegante en modo offline).
+  async function _validateServerSession() {
+    const session = getSession();
+    if (!session?.token) return;              // sin sesión → nada que validar
+    if (_tokenExpired(session.token)) return; // caducado localmente → _tryRefresh ya lo maneja
+    // Usuarios fijos (no-Supabase) → no tienen token JWT real, saltamos
+    if (session.id === 'u_admin' || session.id === 'u_macario') return;
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/user`, {
+        headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${session.token}` }
+      });
+      if (res.status === 401 || res.status === 403) {
+        _clearSession();
+        localStorage.removeItem('cs_refresh');
+        if (typeof Header !== 'undefined') Header.refresh();
+      }
+      // 200 OK → sesión válida; no es necesario hacer nada más
+    } catch (_) {
+      // Error de red (offline) → mantener sesión cacheada
+    }
+  }
+
+  // Ejecutar validación tras el intento de refresh para no solapar peticiones
+  _tryRefresh().then(() => _validateServerSession());
+
   function currentUser() {
     const s = getSession();
     if(!s) return null;

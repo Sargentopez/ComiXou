@@ -13652,7 +13652,7 @@ function _edActivateLineTool(isNew, isCreating) {
     ${!isClosed?`<button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Cerrar objeto</button><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>`:''}
     <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">NODOS</button>
     ${window._edIsTouch ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-vcof-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:flex;align-items:center;gap:3px" title="Cursor desplazado para nodos"><svg width="14" height="22" viewBox="0 0 14 22" style="flex-shrink:0"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg></button><div id="op-vcof-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:center;gap:6px;"><button id="op-vcof-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><button id="op-vcof-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>` : ''}
-    ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Fusionar objetos cerrados en uno solo con huecos">⊕ Fusionar</button>` : ''}
+    ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:none;padding:0;width:28px;height:28px;background:white;border-radius:50%;cursor:pointer;overflow:hidden;line-height:0" title="Fusionar objetos cerrados en uno solo con huecos"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="28" height="28"><circle cx="13" cy="13" r="13" fill="white"/><path d="M13,1 A12,12,0,0,0,13,25 Z" fill="black"/><circle cx="13" cy="7" r="6" fill="black"/><circle cx="13" cy="19" r="6" fill="white"/><circle cx="13" cy="13" r="12" fill="none" stroke="#444" stroke-width="1"/><circle cx="13" cy="7" r="3" fill="white"/><circle cx="13" cy="19" r="3" fill="black"/></svg></button>` : ''}
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0"><span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">Curvar</span>
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
       <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
@@ -14097,7 +14097,7 @@ function _edFinishLine() {
     if(_shapeBarActive) {
       const _esbFuseBtn = $('esb-fuse'), _esbFuseSep = $('esb-fuse-sep');
       const _canFuseNow = edLayers.filter(l => l.type==='line' && l.closed && !_vsPreSessionLayers.has(l)).length >= 2;
-      if(_esbFuseBtn) _esbFuseBtn.style.display = _canFuseNow ? '' : 'none';
+      if(_esbFuseBtn) _esbFuseBtn.style.display = _canFuseNow ? 'flex' : 'none';
       if(_esbFuseSep) _esbFuseSep.style.display = _canFuseNow ? '' : 'none';
     }
   } else {
@@ -18408,7 +18408,7 @@ function edInitShapeBar() {
   window._esbCheckFuse = function() {
     const _canFuse = edLayers.filter(l => l.type==='line' && l.closed && !_vsPreSessionLayers.has(l)).length >= 2;
     const _fb = $('esb-fuse'), _fs = $('esb-fuse-sep');
-    if(_fb) _fb.style.display = _canFuse ? '' : 'none';
+    if(_fb) _fb.style.display = _canFuse ? 'flex' : 'none';
     if(_fs) _fs.style.display = _canFuse ? '' : 'none';
   };
   $('esb-fuse')?.addEventListener('pointerup', e => {
@@ -29635,6 +29635,7 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpRepInfinite')?.addEventListener('change', e => {
       const isInf = e.target.checked;
       window._gcpRepeatCount = isInf ? 0 : (parseInt(document.getElementById('gcpRepSlider')?.value, 10) || 1);
+      window._gcpDirty = true;
       const repRow = document.getElementById('gcpRepSliderRow');
       if (repRow) repRow.style.display = isInf ? 'none' : 'block';
       _gcpUpdateBehaviourSummary();
@@ -29645,6 +29646,7 @@ function gcpOpen(edLayerIdx) {
     _repSlider?.addEventListener('input', e => {
       const n = parseInt(e.target.value, 10);
       window._gcpRepeatCount = n;
+      window._gcpDirty = true;
       _gcpShowBubble(e.target, '×' + n);
       _gcpUpdateBehaviourSummary();
     });

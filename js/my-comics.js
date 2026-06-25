@@ -1027,38 +1027,49 @@ function _mcRenderList() {
       const _hasLocalData = !!(_comicFull.editorData?.pages?.length);
       // Local más nueva: tiene datos locales Y (nunca subida a la nube O guardado local posterior a la subida)
       const _localNewer = _hasLocalData && (_localAt > _cloudAt || !_cloudAt);
-      // 3. Si la versión local es más nueva que la nube → pedir que guarde primero
+      // ── Función de envío real ──────────────────────────────────────────────
+      const _doSubmit = async () => {
+        if (typeof SupabaseClient !== 'undefined') {
+          _mcSubmitOverlayShow();
+          try {
+            ComicStore.save({ ...comic, published: false, approved: false, pendingReview: true });
+            _mcRenderList();
+            requestAnimationFrame(() => {
+              const row  = document.querySelector(`.comic-row[data-id="${id}"]`);
+              const list = document.getElementById('myComicsList');
+              if (!row || !list) return;
+              const pt   = parseInt(list.style.paddingTop) || 0;
+              const rowTop = row.getBoundingClientRect().top + window.scrollY - pt;
+              window.scrollTo({ top: rowTop, behavior: 'smooth' });
+            });
+            await SupabaseClient.submitForReviewOnly(comic.supabaseId);
+            _mcSubmitOverlayHide();
+            _mcToast('Enviada a revisión ✓');
+          } catch(err) {
+            _mcSubmitOverlayHide();
+            ComicStore.save({ ...comic, pendingReview: false });
+            _mcRenderList();
+            _mcToast('⚠️ Error al enviar: ' + err.message);
+          }
+        } else {
+          _mcToast('Enviada a revisión ✓');
+        }
+      };
+
+      // 3. Versión local más nueva que la nube → advertir pero permitir continuar
       if (_localNewer) {
-        appAlert('Tienes cambios sin subir a la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube antes de publicar.');
+        appConfirm(
+          '⚠️ La versión guardada en tu dispositivo es más reciente que la versión en la nube.\n\n' +
+          'Si continúas, se enviará a revisión la versión de la nube, que puede no tener los últimos cambios.\n\n' +
+          'Para enviar la versión más reciente, cancela y guarda en la nube primero (botón ☁️ en el editor).',
+          _doSubmit,
+          'Continuar de todas formas'
+        );
         return;
       }
-      // 4. La nube es la versión más reciente (o no hay datos locales) →
-      //    solo cambiar el estado en Supabase, SIN re-subir contenido
-      if (typeof SupabaseClient !== 'undefined') {
-        _mcSubmitOverlayShow();
-        try {
-          ComicStore.save({ ...comic, published: false, approved: false, pendingReview: true });
-          _mcRenderList();
-          requestAnimationFrame(() => {
-            const row  = document.querySelector(`.comic-row[data-id="${id}"]`);
-            const list = document.getElementById('myComicsList');
-            if (!row || !list) return;
-            const pt   = parseInt(list.style.paddingTop) || 0;
-            const rowTop = row.getBoundingClientRect().top + window.scrollY - pt;
-            window.scrollTo({ top: rowTop, behavior: 'smooth' });
-          });
-          await SupabaseClient.submitForReviewOnly(comic.supabaseId);
-          _mcSubmitOverlayHide();
-          _mcToast('Enviada a revisión ✓');
-        } catch(err) {
-          _mcSubmitOverlayHide();
-          ComicStore.save({ ...comic, pendingReview: false });
-          _mcRenderList();
-          _mcToast('⚠️ Error al enviar: ' + err.message);
-        }
-      } else {
-        _mcToast('Enviada a revisión ✓');
-      }
+
+      // 4. La nube es la versión más reciente (o no hay datos locales) → enviar directamente
+      await _doSubmit();
     } else if (action === 'unpublish') {
       const comic = ComicStore.getById(id);
       if (!comic) return;
@@ -1112,8 +1123,15 @@ function _mcRenderList() {
       //    cloudSavedAt solo se actualiza en editor.js al guardar en nube con éxito.
       const _localAt = comic.localSavedAt || '';
       const _cloudAt = comic.cloudSavedAt || '';
+      // 2. Versión local más nueva que la nube → advertir pero dar opción de continuar
       if (_localAt && _cloudAt && _localAt > _cloudAt) {
-        appAlert('Tienes cambios sin subir a la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube antes de compartirla.');
+        appConfirm(
+          '⚠️ La versión guardada en tu dispositivo es más reciente que la versión en la nube.\n\n' +
+          'Si continúas, se compartirá la versión de la nube, que puede no tener los últimos cambios.\n\n' +
+          'Para compartir la versión más reciente, cancela y guarda en la nube primero (botón ☁️ en el editor).',
+          () => { if (typeof openShareModal !== 'undefined') openShareModal(comic); },
+          'Continuar de todas formas'
+        );
         return;
       }
       if (typeof openShareModal !== 'undefined') openShareModal(comic);
