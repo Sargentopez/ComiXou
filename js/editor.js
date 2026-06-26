@@ -11914,6 +11914,11 @@ function _edLineAddPoint(nx, ny, isTouch=false){
       _edFinishLine();
       return;
     }
+    // Re-renderizar el panel cuando se alcanza el 2º punto para que aparezca el botón
+    // "Cerrar objeto" (la condición nPoints>=2 en el template no se evalúa dinámicamente)
+    if (_edLineLayer.points.length === 2) {
+      _edActivateLineTool(false, true);
+    }
   }
   _edShapePushHistory(); // guardar estado tras cada nodo para deshacer/rehacer
   edRedraw();
@@ -14172,13 +14177,17 @@ function _edFinishLine() {
     // CRÍTICO: guardar _vsPreSessionLayers antes de _vsClear() para que Fusionar
     // siga sabiendo qué objetos existían antes de esta sesión vectorial.
     const _finishPreSession = new Set(_vsPreSessionLayers);
+    // Preservar el historial de construcción (incluye snapshots de cada nodo + el cierre)
+    // para que undo pueda volver al polígono abierto sin cerrar el panel.
+    const _savedVsHistory = _vsHistory.slice();
     _vsClear();
     edPushHistory();
-    // Restaurar contexto de sesión: _vsPreSessionLayers intacto, nueva historia vacía
-    // lista para el siguiente objeto de la misma sesión.
+    // Restaurar contexto de sesión: _vsPreSessionLayers intacto, historial de construcción
+    // conservado con _vsIsNew=false para que undo en idx=0 no salga de la edición.
     _vsPreSessionLayers = _finishPreSession;
-    _vsHistory = [_vsSnapshot()];
-    _vsHistIdx = 0;
+    _vsIsNew = false; // objeto ya existe: undo no debe cerrar el panel
+    _vsHistory = _savedVsHistory; // historial completo de construcción + snapshot del cierre
+    _vsHistIdx = _savedVsHistory.length - 1;
     edRedraw();
     _edLineType='select'; edActiveTool='select'; edCanvas.className='';
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
