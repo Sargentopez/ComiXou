@@ -2879,6 +2879,7 @@ function _edLayersSnapshot(){
         // (si se descarta con null, desaparece del historial y no puede recuperarse con redo)
         return { type: 'stroke', dataUrl: '', x: 0.5, y: 0.5, width: 0.01, height: 0.01,
                  rotation: 0, opacity: l.opacity ?? 1, locked: l.locked || false,
+                 groupId: l.groupId || undefined,
                  _uid: l._uid || null, _fillLayerId: l._fillLayerId || null };
       }
       const _cx = (_bb.x + _bb.w/2 - edMarginX()) / _pw;
@@ -2893,6 +2894,7 @@ function _edLayersSnapshot(){
         x: _cx, y: _cy, width: _fw, height: _fh,
         rotation: 0, opacity: l.opacity ?? 1,
         locked: l.locked || false,
+        groupId: l.groupId || undefined,
         _uid: l._uid || null, _fillLayerId: l._fillLayerId || null,
         _pencilLayerId: l._pencilLayerId || null, _watercolorLayerId: l._watercolorLayerId || null,
         _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
@@ -2904,6 +2906,7 @@ function _edLayersSnapshot(){
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
       color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false,
+      groupId: l.groupId || undefined,
       _uid:l._uid||null, _fillLayerId:l._fillLayerId||null,
       _pencilLayerId:l._pencilLayerId||null, _watercolorLayerId:l._watercolorLayerId||null,
       _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
@@ -2915,6 +2918,7 @@ function _edLayersSnapshot(){
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadius: l.cornerRadius||0, locked:l.locked||false,
+      groupId: l.groupId || undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null,
       _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
       _motionPathClosed: l._motionPathClosed||false,
@@ -2924,6 +2928,7 @@ function _edLayersSnapshot(){
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
+      groupId: l.groupId || undefined,
       grouped: l.grouped||false,
       groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
@@ -3170,6 +3175,7 @@ function edApplyHistory(snapshot){
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
                     : new DrawLayer();
       if(o.locked) l.locked = true;
+      if(o.groupId) l.groupId = o.groupId;
       if(o._uid) l._uid=o._uid;
       if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
       return l;
@@ -13012,9 +13018,10 @@ function edSaveDrawData(){
   if(_edDodgeBurnActive){
     // Dodge/burn: solo guardar historial, no ejecutar commit de acuarela
     window._edDbLast = undefined;
-    // Máscara de tinta: eliminar cualquier efecto D/B residual bajo la tinta e
-    // invalidar el estado origData para la próxima sesión D/B
-    _edApplyInkMaskToWatercolor();
+    // NOTA: NO llamar _edApplyInkMaskToWatercolor() aquí — la máscara de tinta es
+    // no destructiva: el contenido previo en watercolor/bucket se preserva bajo la
+    // tinta; la tinta cubre visualmente (está encima en el render). Al borrar tinta,
+    // el contenido previo reaparece. Nuevo D/B bajo tinta ya está bloqueado via _inkMaskData.
     _edDrawPushHistory();
   } else if(window._edWcFl){
     // Acuarela: limpiar offscreen y guardar historial
@@ -13028,11 +13035,10 @@ function edSaveDrawData(){
     if (_edTmp.active === 'pen' && _edTmp.pen?._gcDirty && _edGapCloseEnabled) {
       _edPenCloseGaps(_edTmp.pen);
     }
-    // Máscara de tinta: al terminar un trazo de tinta, limpiar los píxeles de acuarela
-    // que hayan quedado bajo la nueva tinta (para el caso de pintar tinta sobre acuarela existente)
-    if (_edTmp.active === 'pen') {
-      _edApplyInkMaskToWatercolor();
-    }
+    // NOTA: NO llamar _edApplyInkMaskToWatercolor() al terminar un trazo de tinta —
+    // la máscara es no destructiva: el contenido previo (acuarela/D/B) se preserva
+    // bajo la tinta y reaparece si la tinta es borrada. Nueva acuarela bajo tinta
+    // ya está bloqueada inline en _edWatercolorStroke (destination-out en tiempo real).
     _edDrawPushHistory();
     // Color-erase: volver a la herramienta de dibujo al levantar el dedo
     if (edActiveTool === 'color-erase') { /* mantener activa hasta que el usuario cambie */ }
@@ -22390,23 +22396,40 @@ function _viewerGoToPage(pageIdx) {
 // Alpha hit testing para botones: solo hit si el píxel tiene alpha suficiente.
 // Usa el canvas offscreen de la animación (_animOc o _gifOc) cuando existe.
 function _edAlphaHit(la, lx, ly, pw, ph) {
+  // 1. Animaciones (GIF/APNG): usar su canvas offscreen
   const oc = la._animOc || la._gifOc;
-  if (!oc) return true; // sin canvas offscreen → usar solo bbox
-  const w = (la.width  || 1) * pw;
-  const h = (la.height || 1) * ph;
-  const px = Math.round((lx + w / 2) / w * oc.width);
-  const py = Math.round((ly + h / 2) / h * oc.height);
-  if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
-  try {
-    return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
-  } catch(e) { return true; }
+  if (oc) {
+    const w = (la.width  || 1) * pw;
+    const h = (la.height || 1) * ph;
+    const px = Math.round((lx + w / 2) / w * oc.width);
+    const py = Math.round((ly + h / 2) / h * oc.height);
+    if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
+    try { return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10; }
+    catch(e) { return true; }
+  }
+  // 2. Capas con canvas propio (draw, stroke, fill, pencil, watercolor, shape, line):
+  // el canvas cubre la página entera; el punto de referencia es (la.x, la.y).
+  // Normalizar lx/ly → [0,1] en coordenadas de página → pixel del canvas.
+  const dc = la._canvas;
+  if (dc && dc.width && dc.height) {
+    const nx = (lx + (la.x || 0.5) * pw) / pw;
+    const ny = (ly + (la.y || 0.5) * ph) / ph;
+    const px = Math.round(nx * dc.width);
+    const py = Math.round(ny * dc.height);
+    if (px < 0 || py < 0 || px >= dc.width || py >= dc.height) return false;
+    try { return dc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10; }
+    catch(e) { return true; }
+  }
+  return true; // sin canvas → solo bbox
 }
 
 function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
     if (!la || !la._buttonAction) continue;
-    const cx = (la.x || 0.5) * pw, cy = (la.y || 0.5) * ph;
+    // Usar posición actual del recorrido si está en movimiento, si no la original
+    const cx = (la._pathCurX != null ? la._pathCurX : (la.x || 0.5)) * pw;
+    const cy = (la._pathCurY != null ? la._pathCurY : (la.y || 0.5)) * ph;
     const hw = (la.width  || 1) * pw / 2;
     const hh = (la.height || 1) * ph / 2;
     const dx = tapPx - cx, dy = tapPy - cy;

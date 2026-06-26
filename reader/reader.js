@@ -1251,6 +1251,11 @@ async function preloadImages() {
     }));
     // (renderDataUrl de bubbles se carga via panel.layers en el paso anterior)
 
+    // Cachear referencia de imagen en capas botón para alpha hit testing en recorridos
+    (panel.layers || []).forEach((layer, j) => {
+      if (layer._buttonAction && panel.layerImgs[j]) layer._btnHitImg = panel.layerImgs[j];
+    });
+
     // Actualizar progreso conforme cada panel termina (paralelo — orden no garantizado)
     if (!panel.isCredits && (panel.layers||[]).length > 0) {
       loadedPanels++;
@@ -2554,17 +2559,54 @@ function _rBtnHitTestCanvas(winX, winY) {
 
 // Alpha hit testing: devuelve true si el píxel en (lx,ly) tiene alpha suficiente.
 // lx/ly son coordenadas locales centradas en 0,0 (rotación ya deshecha).
-// Solo activo si la capa tiene canvas offscreen (_animOc o _gifOc).
+// Soporta: GIF/APNG (canvas offscreen), e imágenes estáticas (draw, stroke, image, etc.)
 function _rAlphaHit(la, lx, ly, pw, ph) {
+  // 1. Animaciones (GIF/APNG): usar su canvas offscreen existente
   const oc = la._animOc || la._gifOc;
-  if (!oc) return true; // sin canvas offscreen → usar solo bbox
+  if (oc) {
+    const w = (la.width  || 1) * pw;
+    const h = (la.height || 1) * ph;
+    const px = Math.round((lx + w / 2) / w * oc.width);
+    const py = Math.round((ly + h / 2) / h * oc.height);
+    if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
+    try {
+      return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
+    } catch(e) { return true; }
+  }
+  // 2. Capas con bitmap estático (_btnHitImg cacheado durante la carga del panel)
+  const hitImg = la._btnHitImg;
+  if (!hitImg) return true; // sin imagen → solo bbox
+  // Crear canvas offscreen la primera vez y cachearlo en la capa
+  if (!la._btnAlphaOc) {
+    const _oc = document.createElement('canvas');
+    const nw = (hitImg.naturalWidth  || hitImg.width  || 256);
+    const nh = (hitImg.naturalHeight || hitImg.height || 256);
+    _oc.width = nw; _oc.height = nh;
+    try {
+      _oc.getContext('2d').drawImage(hitImg, 0, 0);
+      la._btnAlphaOc = _oc;
+    } catch(e) {
+      la._btnAlphaOc = null;
+      return true; // canvas CORS tainted → solo bbox
+    }
+  }
+  if (!la._btnAlphaOc) return true;
+  const boc = la._btnAlphaOc;
+  // Mapear coordenadas locales → normalizado [0,1] → pixel del canvas offscreen.
+  // Capas 'draw': la imagen cubre la página entera (pw×ph); el origen es (la.x, la.y).
+  // Resto: imagen centrada de tamaño (la.width×pw) × (la.height×ph).
+  const isDraw = (la.type === 'draw');
   const w = (la.width  || 1) * pw;
   const h = (la.height || 1) * ph;
-  const px = Math.round((lx + w / 2) / w * oc.width);
-  const py = Math.round((ly + h / 2) / h * oc.height);
-  if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
+  const nx = isDraw ? (lx + (la.x || 0.5) * pw) / pw
+                    : (lx + w / 2) / w;
+  const ny = isDraw ? (ly + (la.y || 0.5) * ph) / ph
+                    : (ly + h / 2) / h;
+  const px = Math.round(nx * boc.width);
+  const py = Math.round(ny * boc.height);
+  if (px < 0 || py < 0 || px >= boc.width || py >= boc.height) return false;
   try {
-    return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
+    return boc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
   } catch(e) { return true; }
 }
 
@@ -2572,7 +2614,9 @@ function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
     if (!la || !la._buttonAction) continue;
-    const cx = (la.x || 0.5) * pw, cy = (la.y || 0.5) * ph;
+    // Usar posición actual del recorrido si está en movimiento, si no la original
+    const cx = (la._pathCurX != null ? la._pathCurX : (la.x || 0.5)) * pw;
+    const cy = (la._pathCurY != null ? la._pathCurY : (la.y || 0.5)) * ph;
     const hw = (la.width  || 1) * pw / 2;
     const hh = (la.height || 1) * ph / 2;
     const dx = tapPx - cx, dy = tapPy - cy;
