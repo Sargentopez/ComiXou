@@ -1077,20 +1077,45 @@ function _lyBuildVisualItem(la, realIdx, selected) {
       const _delLa = edLayers[realIdx];
       const _delType = _delLa ? _delLa.type : '';
       if (_delType === 'draw' || _delType === 'stroke' || _delType === 'shape' || _delType === 'line') {
-        // Cerrar panel de herramienta y desbloquear UI antes del splice
-        const _panel = document.getElementById('edOptionsPanel');
-        if (_panel) { _panel.classList.remove('open'); delete _panel.dataset.mode; }
-        if (typeof edDrawBarHide === 'function') edDrawBarHide();
-        if (typeof edShapeBarHide === 'function') edShapeBarHide();
-        if (typeof _edDrawUnlockUI === 'function') _edDrawUnlockUI();
-        if (typeof _edShapeClearHistory === 'function') _edShapeClearHistory();
-        if (window._edLineLayer) window._edLineLayer = null;
-        if (window._edLineFusionId) window._edLineFusionId = null;
-        edActiveTool = 'select';
-        if (typeof edCanvas !== 'undefined') edCanvas.className = '';
-        const _cur = document.getElementById('edBrushCursor');
-        if (_cur) _cur.style.display = 'none';
-        if (edSelectedIdx === realIdx) edSelectedIdx = -1;
+        if (_delType === 'shape' || _delType === 'line') {
+          // Sesión vectorial: eliminar el objeto y comprobar si quedan objetos de sesión
+          // antes de decidir si cerrar el panel o mantenerlo abierto
+          const _preSet = typeof _vsPreSessionLayers !== 'undefined' ? _vsPreSessionLayers : new Set();
+          const _vsLen  = typeof _vsHistory !== 'undefined' ? _vsHistory.length : 0;
+          // Pre-calculamos los objetos restantes DESPUÉS del splice (la aún existe aquí)
+          const _remAfterDel = _vsLen > 0
+            ? edLayers.filter(l => l !== _delLa && (l.type==='line'||l.type==='shape') && !_preSet.has(l))
+            : [];
+          if(_remAfterDel.length > 0){
+            // Quedan objetos de sesión: no cerrar panel. Solo ajustar selección.
+            if (edSelectedIdx === realIdx) edSelectedIdx = -1;
+          } else {
+            // Sin objetos de sesión restantes: cerrar panel y sesión
+            const _panel = document.getElementById('edOptionsPanel');
+            if (_panel) { _panel.classList.remove('open'); delete _panel.dataset.mode; }
+            if (typeof edShapeBarHide === 'function') edShapeBarHide();
+            if (typeof _edDrawUnlockUI === 'function') _edDrawUnlockUI();
+            if (typeof _edShapeClearHistory === 'function') _edShapeClearHistory();
+            if (window._edLineLayer) window._edLineLayer = null;
+            if (window._edLineFusionId) window._edLineFusionId = null;
+            edActiveTool = 'select';
+            if (typeof edCanvas !== 'undefined') edCanvas.className = '';
+            if (edSelectedIdx === realIdx) edSelectedIdx = -1;
+          }
+        } else {
+          // draw/stroke: cerrar panel siempre
+          const _panel = document.getElementById('edOptionsPanel');
+          if (_panel) { _panel.classList.remove('open'); delete _panel.dataset.mode; }
+          if (typeof edDrawBarHide === 'function') edDrawBarHide();
+          if (typeof edShapeBarHide === 'function') edShapeBarHide();
+          if (typeof _edDrawUnlockUI === 'function') _edDrawUnlockUI();
+          if (typeof _edShapeClearHistory === 'function') _edShapeClearHistory();
+          edActiveTool = 'select';
+          if (typeof edCanvas !== 'undefined') edCanvas.className = '';
+          const _cur = document.getElementById('edBrushCursor');
+          if (_cur) _cur.style.display = 'none';
+          if (edSelectedIdx === realIdx) edSelectedIdx = -1;
+        }
       }
       // Para draw/stroke: eliminar también fill, pencil y watercolor vinculados
       if (isDrawType) {
