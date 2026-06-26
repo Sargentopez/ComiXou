@@ -1423,6 +1423,21 @@ function _readerGifTick() {
         if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
         else if (!layer._animLastTick) { /* noop */ }
         else {
+        // Reinicio automático: si la animación está detenida y el plazo ha pasado, reiniciar
+        if (layer._animStopped) {
+          if (layer._gcpRestartDelay > 0 && layer._animRestartAt && now >= layer._animRestartAt) {
+            layer._animStopped   = false;
+            layer._animRestartAt = null;
+            layer._animIdx       = 0;
+            layer._animPlayCount = 0;
+            layer._animLastTick  = now;
+            if (layer._animOc && layer._animFrames && layer._animFrames.length) {
+              layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
+            }
+            panelChanged = true;
+          }
+          // Si está detenida (con o sin restart) no avanzar frames
+        } else {
         const _af = layer._animFrames[layer._animIdx];
         const _ad = (_af && _af.delay) || layer._gcpFrameDelay || 100;
         if (now - layer._animLastTick >= _ad) {
@@ -1436,6 +1451,12 @@ function _readerGifTick() {
               // Con stopAtEnd: detener en el último frame (comportamiento explícito).
               const _circEnd = !_stopAtEnd && _repeatCount > 0 && (layer._gcpCircularEnd || false);
               _nextIdx = _circEnd ? 0 : layer._animFrames.length - 1;
+              // Programar reinicio si hay delay configurado
+              const _rd = layer._gcpRestartDelay || 0;
+              if (_rd > 0) {
+                layer._animStopped   = true;
+                layer._animRestartAt = now + _rd * 1000;
+              }
             } else {
               _nextIdx = 0; // loop infinito o más repeticiones
             }
@@ -1445,6 +1466,7 @@ function _readerGifTick() {
           layer._animLastTick = now;
           panelChanged = true;
         }
+        } // end else (!_animStopped)
         } // end else (!_animMpSync)
       }
       // Frame sincronizado al path respetando el comportamiento de la animación
@@ -2527,6 +2549,8 @@ function _resetPanelAnims(idx) {
       layer._animIdx       = 0;
       layer._animLastTick  = Date.now(); // iniciar tick desde ahora
       layer._animPlayCount = 0;
+      layer._animStopped   = false;  // limpiar estado de reinicio
+      layer._animRestartAt = null;
       if (layer._animOc && layer._animFrames.length) {
         layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
       }

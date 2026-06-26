@@ -1296,6 +1296,23 @@ class ImageLayer extends BaseLayer {
         this._fIdx = _circEnd ? 0 : total - 1;
         this._oc.getContext('2d').putImageData(this._animFrames[this._fIdx].imageData, 0, 0);
         this._playing = false;
+        // Reinicio automático tras delay (si está configurado)
+        const _rd = (this._gcpRestartDelay != null ? this._gcpRestartDelay : 0);
+        if (_rd > 0) {
+          if (this._restartTimer) clearTimeout(this._restartTimer);
+          const _self = this;
+          this._restartTimer = setTimeout(() => {
+            _self._restartTimer = null;
+            _self._fIdx = 0;
+            _self._gcpPlayCount = 0;
+            _self._playing = true;
+            _self._applyFrame(0);
+            requestAnimationFrame(() => {
+              if (typeof edRedraw === 'function') edRedraw();
+              if (typeof edUpdateViewer === 'function') edUpdateViewer();
+            });
+          }, _rd * 1000);
+        }
         requestAnimationFrame(() => {
           if (typeof edRedraw === 'function') edRedraw();
           if (typeof edUpdateViewer === 'function') edUpdateViewer();
@@ -1328,6 +1345,7 @@ class ImageLayer extends BaseLayer {
 
   stopAnim() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    if (this._restartTimer) { clearTimeout(this._restartTimer); this._restartTimer = null; }
     this._playing = false;
     this._fIdx = 0;
     this._gcpPlayCount = 0;
@@ -2959,9 +2977,10 @@ function _edLayersSnapshot(){
       if(l.animKey || l._pngFramesKey || l._apngIdbKey) o._isAnim = true;
       if(l.gifKey)        o.gifKey        = l.gifKey;
       o._playing = l._playing || false;  // preservar estado de reproducción
-      if(l._gcpFrameDelay)   o._gcpFrameDelay   = l._gcpFrameDelay;
-      if(l._gcpRepeatCount)  o._gcpRepeatCount  = l._gcpRepeatCount;
-      if(l._gcpStopAtEnd)    o._gcpStopAtEnd    = l._gcpStopAtEnd;
+      if(l._gcpFrameDelay)    o._gcpFrameDelay    = l._gcpFrameDelay;
+      if(l._gcpRepeatCount)   o._gcpRepeatCount   = l._gcpRepeatCount;
+      if(l._gcpStopAtEnd)     o._gcpStopAtEnd     = l._gcpStopAtEnd;
+      if(l._gcpRestartDelay)  o._gcpRestartDelay  = l._gcpRestartDelay;
       if(l._gcpCircularEnd)  o._gcpCircularEnd  = true;
       if(l._gcpLayersData)   o._gcpLayersData   = l._gcpLayersData;
       if(l._gcpFramesData)   o._gcpFramesData   = l._gcpFramesData;
@@ -19916,9 +19935,10 @@ function edSerLayer(l){
     // _apngSrc NO se serializa — es el dataUrl enorme, va al bucket por animKey
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
-    if(l._gcpFrameDelay  != null) _r._gcpFrameDelay  = l._gcpFrameDelay;
-    if(l._gcpRepeatCount != null) _r._gcpRepeatCount = l._gcpRepeatCount;
-    if(l._gcpStopAtEnd)           _r._gcpStopAtEnd   = true;
+    if(l._gcpFrameDelay   != null) _r._gcpFrameDelay   = l._gcpFrameDelay;
+    if(l._gcpRepeatCount  != null) _r._gcpRepeatCount  = l._gcpRepeatCount;
+    if(l._gcpStopAtEnd)            _r._gcpStopAtEnd    = true;
+    if(l._gcpRestartDelay != null && l._gcpRestartDelay > 0) _r._gcpRestartDelay = l._gcpRestartDelay;
     if(l._gcpCircularEnd)         _r._gcpCircularEnd  = true;
     if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _r._motionPathClosed = true;
@@ -20370,9 +20390,10 @@ function edDeserLayer(d, pageOrientation){
     if(d._isGcpImage) l._isGcpImage=true;
     if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
     if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
-    if(d._gcpFrameDelay  != null) l._gcpFrameDelay  = d._gcpFrameDelay;
-    if(d._gcpRepeatCount != null) l._gcpRepeatCount = d._gcpRepeatCount;
-    if(d._gcpStopAtEnd)           l._gcpStopAtEnd   = true;
+    if(d._gcpFrameDelay   != null) l._gcpFrameDelay   = d._gcpFrameDelay;
+    if(d._gcpRepeatCount  != null) l._gcpRepeatCount  = d._gcpRepeatCount;
+    if(d._gcpStopAtEnd)            l._gcpStopAtEnd    = true;
+    if(d._gcpRestartDelay != null) l._gcpRestartDelay = d._gcpRestartDelay;
     if(d._gcpCircularEnd)         l._gcpCircularEnd  = true;
     if(d._motionPath)             l._motionPath       = d._motionPath;
     if(d._motionPathClosed)       l._motionPathClosed = true;
@@ -25039,10 +25060,11 @@ function edBibGuardar() {
     if (_la2._pngFrames && _la2._pngFrames.length) entry.pngFrames = _la2._pngFrames;
     if (_la2.animKey) entry.animKey = _la2.animKey;
     if (_la2._pngFramesKey) entry._apngIdbKey = _la2._pngFramesKey;
-    if (_la2._gcpFrameDelay  != null) entry.gcpFrameDelay  = _la2._gcpFrameDelay;
-    if (_la2._gcpRepeatCount != null) entry.gcpRepeatCount = _la2._gcpRepeatCount;
-    if (_la2._gcpStopAtEnd)           entry.gcpStopAtEnd   = _la2._gcpStopAtEnd;
-    if (_la2._gcpCircularEnd)         entry.gcpCircularEnd = true;
+    if (_la2._gcpFrameDelay   != null) entry.gcpFrameDelay   = _la2._gcpFrameDelay;
+    if (_la2._gcpRepeatCount  != null) entry.gcpRepeatCount  = _la2._gcpRepeatCount;
+    if (_la2._gcpStopAtEnd)            entry.gcpStopAtEnd    = _la2._gcpStopAtEnd;
+    if (_la2._gcpRestartDelay)         entry.gcpRestartDelay = _la2._gcpRestartDelay;
+    if (_la2._gcpCircularEnd)          entry.gcpCircularEnd  = true;
     // Datos GCP para re-edición: capas y frames del editor de animaciones
     // Sin estos campos el GCP abre sin capas al hacer doble tap sobre la animación
     if (_la2._gcpLayersData) entry.gcpLayersData = _la2._gcpLayersData;
@@ -25442,10 +25464,11 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpLayersData) la2._gcpLayersData=entry.gcpLayersData;
                 if(entry.gcpFramesData) la2._gcpFramesData=entry.gcpFramesData;
                 if(entry.gcpLayerNames) la2._gcpLayerNames=entry.gcpLayerNames;
-                if(entry.gcpFrameDelay!=null) la2._gcpFrameDelay=entry.gcpFrameDelay;
+                if(entry.gcpFrameDelay!=null)  la2._gcpFrameDelay=entry.gcpFrameDelay;
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
-                if(entry.gcpStopAtEnd) la2._gcpStopAtEnd=true;
-                if(entry.gcpCircularEnd) la2._gcpCircularEnd=true;
+                if(entry.gcpStopAtEnd)         la2._gcpStopAtEnd=true;
+                if(entry.gcpRestartDelay)      la2._gcpRestartDelay=entry.gcpRestartDelay;
+                if(entry.gcpCircularEnd)       la2._gcpCircularEnd=true;
                 const _k2=_edAnimKey('bib_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8));
                 la2.animKey=_k2;
                 if(window._sbAnimIdbSave) window._sbAnimIdbSave(_k2,entry.apngSrc||_frames2).catch(function(){});
@@ -25490,10 +25513,11 @@ function _bibRenderPanel(panel) {
           if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
           if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
           if (entry.gcpLayerNames) la._gcpLayerNames = entry.gcpLayerNames;
-          if (entry.gcpFrameDelay  != null) la._gcpFrameDelay  = entry.gcpFrameDelay;
-          if (entry.gcpRepeatCount != null) la._gcpRepeatCount = entry.gcpRepeatCount;
-          if (entry.gcpStopAtEnd)           la._gcpStopAtEnd   = true;
-          if (entry.gcpCircularEnd)         la._gcpCircularEnd = true;
+          if (entry.gcpFrameDelay   != null) la._gcpFrameDelay   = entry.gcpFrameDelay;
+          if (entry.gcpRepeatCount  != null) la._gcpRepeatCount  = entry.gcpRepeatCount;
+          if (entry.gcpStopAtEnd)            la._gcpStopAtEnd    = true;
+          if (entry.gcpRestartDelay)         la._gcpRestartDelay = entry.gcpRestartDelay;
+          if (entry.gcpCircularEnd)          la._gcpCircularEnd  = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
           const _bibAnimKey = _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
@@ -27046,9 +27070,10 @@ function _gcpHandleUp(e) {
 
 // Variables globales GCP — mismo patrón que: let edCanvas, edCtx;
 // Opciones de comportamiento para exportar APNG (fps → delay ms, num_plays)
-window._gcpFrameDelay  = 100;  // ms por frame (default 10fps)
-window._gcpRepeatCount = 0;    // 0 = infinito
-window._gcpStopAtEnd   = false; // true = detener en el último frame
+window._gcpFrameDelay   = 100;  // ms por frame (default 10fps)
+window._gcpRepeatCount  = 0;    // 0 = infinito
+window._gcpStopAtEnd    = false; // true = detener en el último frame
+window._gcpRestartDelay = 0;    // 0 = desactivado, 1-60 = segundos antes de reiniciar
 window._gcpDirty       = false; // true si hay cambios sin guardar
 let gcpCanvas = null;
 let gcpCtx    = null;
@@ -29703,9 +29728,10 @@ function gcpOpen(edLayerIdx) {
   if (window._gcpEdLayerIdx >= 0) {
     const _gl = edLayers[window._gcpEdLayerIdx];
     if (_gl) {
-      if (_gl._gcpFrameDelay  != null) window._gcpFrameDelay  = _gl._gcpFrameDelay;
-      if (_gl._gcpRepeatCount != null) window._gcpRepeatCount = _gl._gcpRepeatCount;
-      if (_gl._gcpStopAtEnd   != null) window._gcpStopAtEnd   = !!_gl._gcpStopAtEnd;
+      if (_gl._gcpFrameDelay   != null) window._gcpFrameDelay   = _gl._gcpFrameDelay;
+      if (_gl._gcpRepeatCount  != null) window._gcpRepeatCount  = _gl._gcpRepeatCount;
+      if (_gl._gcpStopAtEnd    != null) window._gcpStopAtEnd    = !!_gl._gcpStopAtEnd;
+      if (_gl._gcpRestartDelay != null) window._gcpRestartDelay = _gl._gcpRestartDelay;
     }
     // Sincronizar UI de comportamiento al abrir
     requestAnimationFrame(() => { if (typeof _gcpSyncComportamiento === 'function') _gcpSyncComportamiento(); });
@@ -29859,7 +29885,9 @@ function gcpOpen(edLayerIdx) {
       if (!el) return;
       const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
       const rep = (window._gcpRepeatCount || 0) === 0 ? '∞' : '×' + window._gcpRepeatCount;
-      el.textContent = fps + ' fps · ' + rep;
+      const rd  = window._gcpRestartDelay || 0;
+      const rds = rd > 0 ? ' · ↺' + rd + 's' : '';
+      el.textContent = fps + ' fps · ' + rep + rds;
     };
     const _gcpSyncComportamiento = () => {
       const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
@@ -29872,6 +29900,30 @@ function gcpOpen(edLayerIdx) {
       if (infChk)    infChk.checked = isInf;
       if (repRow)    repRow.style.display = isInf ? 'none' : 'block';
       if (repSlider) repSlider.value = Math.max(1, window._gcpRepeatCount || 1);
+      // Sincronizar sección Reinicio
+      const restartChk     = document.getElementById('gcpRestartEnabled');
+      const restartRow     = document.getElementById('gcpRestartSliderRow');
+      const restartSlider  = document.getElementById('gcpRestartSlider');
+      const restartInfNote = document.getElementById('gcpRestartInfNote');
+      const restartLbl     = document.getElementById('gcpRestartCheckLabel');
+      const restartSecLbl  = document.getElementById('gcpRestartLabel');
+      const rd  = window._gcpRestartDelay || 0;
+      const rdEnabled = rd > 0;
+      if (isInf) {
+        // Con ∞ repeticiones no se puede activar el reinicio
+        if (restartChk) { restartChk.checked = false; restartChk.disabled = true; }
+        if (restartRow) restartRow.style.display = 'none';
+        if (restartInfNote) restartInfNote.style.display = 'block';
+        if (restartLbl)    restartLbl.style.opacity    = '0.4';
+        if (restartSecLbl) restartSecLbl.style.opacity = '0.4';
+      } else {
+        if (restartChk) { restartChk.checked = rdEnabled; restartChk.disabled = false; }
+        if (restartRow) restartRow.style.display = rdEnabled ? 'block' : 'none';
+        if (restartInfNote) restartInfNote.style.display = 'none';
+        if (restartLbl)    restartLbl.style.opacity    = '';
+        if (restartSecLbl) restartSecLbl.style.opacity = '';
+        if (restartSlider) restartSlider.value = Math.max(1, rd || 5);
+      }
       _gcpUpdateBehaviourSummary();
     };
 
@@ -29918,9 +29970,9 @@ function gcpOpen(edLayerIdx) {
       const isInf = e.target.checked;
       window._gcpRepeatCount = isInf ? 0 : (parseInt(document.getElementById('gcpRepSlider')?.value, 10) || 1);
       window._gcpDirty = true;
-      const repRow = document.getElementById('gcpRepSliderRow');
-      if (repRow) repRow.style.display = isInf ? 'none' : 'block';
-      _gcpUpdateBehaviourSummary();
+      // Con ∞ repeticiones: desactivar reinicio si estaba activo
+      if (isInf && window._gcpRestartDelay > 0) window._gcpRestartDelay = 0;
+      requestAnimationFrame(_gcpSyncComportamiento);
     });
 
     // Slider repeticiones
@@ -29935,6 +29987,30 @@ function gcpOpen(edLayerIdx) {
     _repSlider?.addEventListener('pointerdown', e => { e.stopPropagation(); _gcpShowBubble(e.target, '×' + parseInt(e.target.value)); });
     _repSlider?.addEventListener('pointerup',   () => _gcpHideBubble());
     _repSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
+
+    // Checkbox reinicio
+    document.getElementById('gcpRestartEnabled')?.addEventListener('change', e => {
+      const enabled = e.target.checked;
+      const sliderVal = parseInt(document.getElementById('gcpRestartSlider')?.value, 10) || 5;
+      window._gcpRestartDelay = enabled ? sliderVal : 0;
+      window._gcpDirty = true;
+      const restartRow = document.getElementById('gcpRestartSliderRow');
+      if (restartRow) restartRow.style.display = enabled ? 'block' : 'none';
+      _gcpUpdateBehaviourSummary();
+    });
+
+    // Slider reinicio (segundos)
+    const _restartSlider = document.getElementById('gcpRestartSlider');
+    _restartSlider?.addEventListener('input', e => {
+      const n = parseInt(e.target.value, 10);
+      window._gcpRestartDelay = n;
+      window._gcpDirty = true;
+      _gcpShowBubble(e.target, n + 's');
+      _gcpUpdateBehaviourSummary();
+    });
+    _restartSlider?.addEventListener('pointerdown', e => { e.stopPropagation(); _gcpShowBubble(e.target, parseInt(e.target.value) + 's'); });
+    _restartSlider?.addEventListener('pointerup',   () => _gcpHideBubble());
+    _restartSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
 
     // Sincronizar UI al abrir el dropdown de comportamiento
     _gcpInitRules(); // botones Guías GCP
@@ -30214,9 +30290,10 @@ function _gcpSaveToLib(onDone) {
     existingLayer._pngFrames=pngFrames;
     existingLayer._animReady=false; existingLayer._animFrames=null;
     // animKey se preserva si ya existía
-    existingLayer._gcpFrameDelay  = window._gcpFrameDelay;
-    existingLayer._gcpRepeatCount = window._gcpRepeatCount;
-    existingLayer._gcpStopAtEnd   = window._gcpStopAtEnd;
+    existingLayer._gcpFrameDelay   = window._gcpFrameDelay;
+    existingLayer._gcpRepeatCount  = window._gcpRepeatCount;
+    existingLayer._gcpStopAtEnd    = window._gcpStopAtEnd;
+    existingLayer._gcpRestartDelay = window._gcpRestartDelay;
     existingLayer._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
     // Cargar primer frame como imagen visible
     const img=new Image();
@@ -30250,9 +30327,10 @@ function _gcpSaveToLib(onDone) {
       la._gcpLayersData = gcpLayersData;
       la._gcpFramesData = gcpFramesData;
       la._gcpLayerNames = gcpLayerNames;
-      la._gcpFrameDelay  = window._gcpFrameDelay;
-      la._gcpRepeatCount = window._gcpRepeatCount;
-      la._gcpStopAtEnd   = window._gcpStopAtEnd;
+      la._gcpFrameDelay   = window._gcpFrameDelay;
+      la._gcpRepeatCount  = window._gcpRepeatCount;
+      la._gcpStopAtEnd    = window._gcpStopAtEnd;
+      la._gcpRestartDelay = window._gcpRestartDelay;
       la._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
       // Insertar antes de la primera capa de texto/bocadillo (igual que biblioteca)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');

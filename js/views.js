@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v31.41</footer>
+    <footer class="app-version">v31.42</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -820,6 +820,19 @@ Router.register('editor', {
               </div>
               <div id="gcpRepSliderRow" style="display:none;padding:4px 14px 10px">
                 <input type="range" id="gcpRepSlider" min="1" max="10" value="1" step="1"
+                  style="width:100%;accent-color:var(--black);cursor:pointer">
+              </div>
+              <div class="ed-dropdown-sep"></div>
+              <div class="ed-dropdown-label" id="gcpRestartLabel" style="transition:opacity .2s">Reinicio</div>
+              <div style="padding:4px 14px 6px">
+                <label id="gcpRestartCheckLabel" style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.82rem;font-weight:700;font-family:var(--font-body);transition:opacity .2s">
+                  <input type="checkbox" id="gcpRestartEnabled" style="width:15px;height:15px;accent-color:var(--black);flex:none">
+                  Activar reinicio
+                </label>
+                <div id="gcpRestartInfNote" style="display:none;font-size:.75rem;color:var(--gray-400);font-family:var(--font-body);padding-top:3px">No disponible con ∞ repeticiones</div>
+              </div>
+              <div id="gcpRestartSliderRow" style="display:none;padding:4px 14px 10px">
+                <input type="range" id="gcpRestartSlider" min="1" max="60" value="5" step="1"
                   style="width:100%;accent-color:var(--black);cursor:pointer">
               </div>
               <div class="ed-dropdown-sep"></div>
