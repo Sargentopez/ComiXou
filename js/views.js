@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v31.30</footer>
+    <footer class="app-version">v31.34</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -510,13 +510,19 @@ Router.register('editor', {
       <div id="edb-offset-pop" style="display:none;position:fixed;z-index:1200;
         background:rgba(20,20,20,0.93);border:1px solid rgba(255,255,255,.15);
         border-radius:12px;padding:8px 10px;box-shadow:0 4px 18px rgba(0,0,0,.6);
-        flex-direction:row;align-items:center;gap:6px;">
-        <button id="edb-offset-pop-l" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Inclinado izquierda">
-          <svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
-        <button id="edb-offset-pop-r" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Inclinado derecha">
-          <svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
+        flex-direction:row;align-items:flex-start;gap:6px;">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <span style="font-size:0.55rem;font-weight:700;color:rgba(255,255,255,0.6);letter-spacing:.03em">Diestra</span>
+          <button id="edb-offset-pop-l" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Inclinado izquierda">
+            <svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          <span style="font-size:0.55rem;font-weight:700;color:rgba(255,255,255,0.6);letter-spacing:.03em">Zurda</span>
+          <button id="edb-offset-pop-r" style="border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 7px;background:transparent;cursor:pointer;" title="Inclinado derecha">
+            <svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="rgba(255,255,255,0.9)" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
       </div>
       <!-- Popover paleta (hijo de editorShell para z-index correcto) -->
       <div id="edb-palette-pop"></div>
