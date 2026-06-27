@@ -857,7 +857,6 @@ let _edLineType   = 'draw';   // 'draw' | 'select'
 let _edLineFusionId = null;   // T1: ID de fusión — LineLayer del mismo ID se fusionan al OK
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
-let _edPaintRaf = null;         // handle RAF para batching del render durante el dibujo
 let _edDrawLayerTarget = 'draw'; // 'draw' | 'fill' — capa activa en panel de dibujo
 let _edPenPendingStroke = null; // punto inicial diferido para lápiz
 const _ED_PEN_MIN_PRESSURE = 0.05; // tldraw/perfect-freehand: presión mínima para considerar contacto real
@@ -3955,27 +3954,7 @@ function _edFuseIntoMain(newLL) {
   return _primary;
 }
 
-// Devuelve true durante cualquier gesto activo que requiera batching del render
-function _edIsGestureActive() {
-  return !!(edPainting || edIsDragging || edIsResizing || edIsRotating ||
-            edIsTailDragging || edPinching || edMultiDragging || edMultiResizing || edMultiRotating);
-}
-// Wrapper de edRedraw con RAF batching automático durante gestos.
-// Cuando hay un gesto activo, consolida múltiples llamadas en un único render por frame.
-// Cuando no hay gesto, ejecuta el render inmediatamente.
-function edRedraw() {
-  if (_edIsGestureActive()) {
-    if (_edGestureRaf) return;  // ya hay un render pendiente para este frame
-    _edGestureRaf = requestAnimationFrame(() => {
-      _edGestureRaf = null;
-      _edRedrawNow();
-    });
-    return;
-  }
-  _edRedrawNow();
-}
-// Cuerpo real del redraw — nunca llamar directamente desde lógica de gesto.
-function _edRedrawNow(){
+function edRedraw(){
   // Si hay un contexto GIF activo en curso, redirigir a _gcpRedraw
   if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
   if(!edCtx || !edCanvas)return;
@@ -12123,21 +12102,40 @@ function _cofHandleMove(e) {
     return;
   }
   if (_cof._strokeStarted && edPainting) {
-    // Delta desde la posición REAL anterior del dedo (no desde la posición angular).
-    // _prevTx/Ty siguen el dedo real; touchX/Y sigue siendo la posición visual del
-    // cuadrado de arrastre (calculada con ángulo), pero ya no se usa para el delta.
-    const _refX = _cof._prevTx ?? _cof.touchX;
-    const _refY = _cof._prevTy ?? _cof.touchY;
-    const dxN = tx - _refX, dyN = ty - _refY;
-    _cof._prevTx = tx; _cof._prevTy = ty;
-    _cof.cursorX += dxN; _cof.cursorY += dyN;
+    // getCoalescedEvents(): recuperar los puntos intermedios que el browser consolidó.
+    // Sin esto, si el hilo JS estuvo ocupado, el browser entrega solo el punto final
+    // y continueStroke dibuja una recta desde el último punto hasta ahí.
+    const _ces = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    const _er = edActiveTool === 'eraser';
+    const _sz = _er ? edEraserSize : edDrawSize;
     const _radM = _edCursorOffsetAngle * Math.PI / 180;
-    _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radM);
-    _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radM);
-    _cofDraw();
-    const synth = { clientX: _cof.cursorX, clientY: _cof.cursorY,
-                    pointerType: 'touch', pointerId: e.pointerId, touches: null };
-    edContinuePaint(synth);
+
+    for (let _ci = 0; _ci < _ces.length; _ci++) {
+      const _ce = _ces[_ci];
+      // Calcular delta desde la posición REAL anterior del dedo
+      const _refX = _cof._prevTx ?? _cof.touchX;
+      const _refY = _cof._prevTy ?? _cof.touchY;
+      _cof._prevTx = _ce.clientX; _cof._prevTy = _ce.clientY;
+      _cof.cursorX += _ce.clientX - _refX;
+      _cof.cursorY += _ce.clientY - _refY;
+      _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radM);
+      _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radM);
+
+      const _synth = { clientX: _cof.cursorX, clientY: _cof.cursorY,
+                       pointerType: 'touch', pointerId: e.pointerId, touches: null };
+      if (_ci < _ces.length - 1) {
+        // Punto intermedio: solo trazar en el canvas offscreen, sin redraw
+        const _dlC = _edTmpProxy();
+        if (_dlC) {
+          const _cC = edCoords(_synth);
+          _dlC.continueStroke(_cC.nx, _cC.ny, edDrawColor, _sz, _er, edDrawOpacity, 0);
+        }
+      } else {
+        // Último punto: trazo + redraw completo
+        edContinuePaint(_synth);
+      }
+    }
+    _cofDraw(); // actualizar posición visual del cursor COF una sola vez
   }
 }
 
@@ -12901,23 +12899,6 @@ function edStartPaint(e){
   }
   if(!e._skipMoveBrush) edMoveBrush(e);
 }
-// ── RAF batching del render durante el dibujo ────────────────────────────
-// Programa un redraw para el próximo frame (máx 1 por frame mientras se dibuja).
-// El trazo en el canvas offscreen se actualiza en cada evento (inmediato);
-// solo el volcado al viewport se difiere, eliminando el bloqueo del hilo JS.
-function _edSchedulePaintRedraw() {
-  // Alias: edRedraw() ya incluye batching durante gestos — llamar directamente
-  edRedraw();
-}
-// Cancela el RAF pendiente. Llamar al terminar el trazo para que el render final
-// lo gestione edSaveDrawData con su propio edRedraw() (watercolor) o quede limpio.
-function _edFlushPaintRedraw() {
-  if (_edPaintRaf !== null) {
-    cancelAnimationFrame(_edPaintRaf);
-    _edPaintRaf = null;
-  }
-}
-// ─────────────────────────────────────────────────────────────────────────────
 function edContinuePaint(e){
   if(!edPainting) return;
   if (edActiveTool === 'color-erase') {
@@ -13109,7 +13090,6 @@ function _edPenCloseGaps(dl) {
 }
 
 function edSaveDrawData(){
-  _edFlushPaintRedraw(); // cancelar RAF pendiente; el render final lo gestiona esta función
   _edPenPendingStroke = null;
   if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
   _edPenCanDraw = false;
@@ -19180,8 +19160,14 @@ function _edCalcProjectBytes() {
   } catch(_) { return 0; }
 }
 
+// Devuelve true durante cualquier gesto activo (dibujo, drag, resize, rotate...)
+// Se usa para posponer procesos secundarios que bloquearían el hilo JS.
+function _edIsGestureActive() {
+  return !!(edPainting || edIsDragging || edIsResizing || edIsRotating ||
+            edIsTailDragging || edPinching || edMultiDragging || edMultiResizing || edMultiRotating);
+}
 function _edSizeCheck() {
-  // Si hay un gesto activo, no serializar ahora — el setInterval lo reintentará
+  // No serializar durante un gesto activo: bloquearía el hilo JS
   if (_edIsGestureActive()) return;
   const banner = document.getElementById('edSizeBanner');
   if (!banner) return;
@@ -20620,7 +20606,7 @@ function _asDb() {
 }
 
 async function _edAutosaveWrite() {
-  // Si hay un gesto activo (drag, trazo, resize...) diferir para no bloquear el hilo
+  // Posponer si hay gesto activo: el JSON.stringify de todas las capas bloquearía el hilo
   if (_edIsGestureActive()) {
     clearTimeout(window._edAutosavePushTimer);
     window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
