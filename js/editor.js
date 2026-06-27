@@ -12206,11 +12206,31 @@ function _cofHandleMove(e) {
       const _synth = { clientX: _cof.cursorX, clientY: _cof.cursorY,
                        pointerType: 'touch', pointerId: e.pointerId, touches: null };
       if (_ci < _ces.length - 1) {
-        // Punto intermedio: solo trazar en el canvas offscreen, sin redraw
-        const _dlC = _edTmpProxy();
-        if (_dlC) {
-          const _cC = edCoords(_synth);
-          _dlC.continueStroke(_cC.nx, _cC.ny, edDrawColor, _sz, _er, edDrawOpacity, 0);
+        // Punto intermedio: trazar sin redraw.
+        // Watercolor y dodge/burn necesitan su sistema propio (máscara de tinta + efectos).
+        if (_edDodgeBurnActive && edActiveTool === 'fill') {
+          // Dodge/burn intermedio: aplicar efecto con máscara de tinta, sin redraw
+          const _cI = edCoords(_synth);
+          const _prevDB = window._edDbLast;
+          window._edDbLast = edDodgeBurnStroke(_cI.nx, _cI.ny,
+            _prevDB ? _prevDB.wx : null, _prevDB ? _prevDB.wy : null);
+        } else if (!_edDodgeBurnActive && edActiveTool === 'fill' &&
+                   typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor' &&
+                   window._edWcFl) {
+          // Acuarela intermedia: trazo con máscara de tinta y blur, sin redraw
+          const _cI = edCoords(_synth);
+          const _prevWC = window._edWcLast;
+          window._edWcLast = _edWatercolorStroke(
+            window._edWcFl, _cI.nx, _cI.ny, edDrawColor, edDrawSize, edDrawOpacity,
+            _prevWC ? _prevWC.wx : null, _prevWC ? _prevWC.wy : null
+          );
+        } else {
+          // Herramienta normal (pen/pencil/eraser): pintar directamente sin redraw
+          const _dlC = _edTmpProxy();
+          if (_dlC) {
+            const _cC = edCoords(_synth);
+            _dlC.continueStroke(_cC.nx, _cC.ny, edDrawColor, _sz, _er, edDrawOpacity, 0);
+          }
         }
       } else {
         // Último punto: trazo + redraw completo
