@@ -3955,7 +3955,27 @@ function _edFuseIntoMain(newLL) {
   return _primary;
 }
 
-function edRedraw(){
+// Devuelve true durante cualquier gesto activo que requiera batching del render
+function _edIsGestureActive() {
+  return !!(edPainting || edIsDragging || edIsResizing || edIsRotating ||
+            edIsTailDragging || edPinching || edMultiDragging || edMultiResizing || edMultiRotating);
+}
+// Wrapper de edRedraw con RAF batching automático durante gestos.
+// Cuando hay un gesto activo, consolida múltiples llamadas en un único render por frame.
+// Cuando no hay gesto, ejecuta el render inmediatamente.
+function edRedraw() {
+  if (_edIsGestureActive()) {
+    if (_edGestureRaf) return;  // ya hay un render pendiente para este frame
+    _edGestureRaf = requestAnimationFrame(() => {
+      _edGestureRaf = null;
+      _edRedrawNow();
+    });
+    return;
+  }
+  _edRedrawNow();
+}
+// Cuerpo real del redraw — nunca llamar directamente desde lógica de gesto.
+function _edRedrawNow(){
   // Si hay un contexto GIF activo en curso, redirigir a _gcpRedraw
   if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
   if(!edCtx || !edCanvas)return;
@@ -12886,11 +12906,8 @@ function edStartPaint(e){
 // El trazo en el canvas offscreen se actualiza en cada evento (inmediato);
 // solo el volcado al viewport se difiere, eliminando el bloqueo del hilo JS.
 function _edSchedulePaintRedraw() {
-  if (_edPaintRaf) return;
-  _edPaintRaf = requestAnimationFrame(() => {
-    _edPaintRaf = null;
-    edRedraw();
-  });
+  // Alias: edRedraw() ya incluye batching durante gestos — llamar directamente
+  edRedraw();
 }
 // Cancela el RAF pendiente. Llamar al terminar el trazo para que el render final
 // lo gestione edSaveDrawData con su propio edRedraw() (watercolor) o quede limpio.
@@ -12904,7 +12921,7 @@ function _edFlushPaintRedraw() {
 function edContinuePaint(e){
   if(!edPainting) return;
   if (edActiveTool === 'color-erase') {
-    const _cCE2 = edCoords(e); _edColorErase(_cCE2.nx, _cCE2.ny); _edSchedulePaintRedraw(); return;
+    const _cCE2 = edCoords(e); _edColorErase(_cCE2.nx, _cCE2.ny); edRedraw(); return;
   }
   // Dodge/burn en modo continuo (táctil con COF)
   if(_edDodgeBurnActive && edActiveTool==='fill'){
@@ -12913,7 +12930,7 @@ function edContinuePaint(e){
     const _prevDB2 = window._edDbLast;
     window._edDbLast = edDodgeBurnStroke(_cDB2.nx, _cDB2.ny,
       _prevDB2 ? _prevDB2.wx : null, _prevDB2 ? _prevDB2.wy : null);
-    _edSchedulePaintRedraw(); return;
+    edRedraw(); return;
   }
   // Acuarela: usar su propio sistema de trazo sobre el FillLayer
   if(!_edDodgeBurnActive && edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor' && window._edWcFl){
@@ -12924,7 +12941,7 @@ function edContinuePaint(e){
       window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
       _prev ? _prev.wx : null, _prev ? _prev.wy : null
     );
-    _edSchedulePaintRedraw(); return;
+    edRedraw(); return;
   }
   // Máquina de estados de presión para lápiz gráfico
   if(e.pointerType === 'pen'){
@@ -12959,7 +12976,7 @@ function edContinuePaint(e){
   if(_cof.on && isTouch){
     const _sz = er ? edEraserSize : edDrawSize;
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
-    _edSchedulePaintRedraw();
+    edRedraw();
     return;
   }
 
@@ -12975,7 +12992,7 @@ function edContinuePaint(e){
     const _sizeCS = Math.max(1, Math.round(_baseC * _pres));
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
-  _edSchedulePaintRedraw();
+  edRedraw();
   edMoveBrush(e);
 }
 // Cierre de huecos para la capa de tinta (pen/estilografo).
@@ -19164,6 +19181,8 @@ function _edCalcProjectBytes() {
 }
 
 function _edSizeCheck() {
+  // Si hay un gesto activo, no serializar ahora — el setInterval lo reintentará
+  if (_edIsGestureActive()) return;
   const banner = document.getElementById('edSizeBanner');
   if (!banner) return;
   const bytes = _edCalcProjectBytes();
@@ -20601,6 +20620,12 @@ function _asDb() {
 }
 
 async function _edAutosaveWrite() {
+  // Si hay un gesto activo (drag, trazo, resize...) diferir para no bloquear el hilo
+  if (_edIsGestureActive()) {
+    clearTimeout(window._edAutosavePushTimer);
+    window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
+    return;
+  }
   if (!edProjectId || !edPages || !edPages.length) return;
   // No escribir si las páginas están vacías (edLoadProject aún no completó)
   if (edPages.every(p => !p.layers || p.layers.length === 0)) return;
