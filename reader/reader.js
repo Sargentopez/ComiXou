@@ -1421,7 +1421,14 @@ function _readerGifTick() {
       if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
         const _animMpSync = layer._motionPath && layer._motionCycles != null;
         if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
-        else if (!layer._animLastTick) { /* noop */ }
+        else if (!layer._animLastTick) {
+          // Esperar hasta que expire el temporizador de inicio
+          if (layer._animStartAt && now >= layer._animStartAt) {
+            layer._animLastTick = now;
+            layer._animStartAt  = null;
+            panelChanged = true;
+          }
+        }
         else {
         // Reinicio automático: si la animación está detenida y el plazo ha pasado, reiniciar
         if (layer._animStopped) {
@@ -1433,6 +1440,13 @@ function _readerGifTick() {
             layer._animLastTick  = now;
             if (layer._animOc && layer._animFrames && layer._animFrames.length) {
               layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
+            }
+            // Reiniciar el recorrido sincronizado con la animación
+            if (layer._motionPath && layer._motionPath.length >= 2) {
+              layer._pathStartTime = now;
+              delete layer._pathStopped;
+              layer._pathCurX = layer.x || 0.5;
+              layer._pathCurY = layer.y || 0.5;
             }
             panelChanged = true;
           }
@@ -1472,18 +1486,17 @@ function _readerGifTick() {
       // Frame sincronizado al path respetando el comportamiento de la animación
 function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd) {
   if (totalF < 1 || cycles <= 0) return 0;
-  // Caso especial: path con 'stop' + interpolación circular + repeticiones finitas.
-  // El cap (1-1e-9) de iterT impide que animProgress llegue a repeatCnt*totalF.
-  if (pathEnd === 'stop' && rawT >= 1.0 && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
-  const iterT = (pathEnd === 'stop') ? Math.min(rawT, 1 - 1e-9)
+  const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
+  if (pathEnd === 'stop' && rawT >= _stopLimit && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
+  const iterT = (pathEnd === 'stop') ? Math.min(rawT, _stopLimit - 1e-9)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
               : (rawT % 1);
   const animProgress = iterT * cycles * totalF;
   if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
   if (repeatCnt > 0) {
-    return animProgress >= repeatCnt * totalF
-      ? (circularEnd ? 0 : totalF - 1)
-      : Math.floor(animProgress) % totalF;
+    const _done = (pathEnd === 'stop' && rawT >= _stopLimit)
+               || animProgress >= repeatCnt * totalF;
+    return _done ? (circularEnd ? 0 : totalF - 1) : Math.floor(animProgress) % totalF;
   }
   return Math.floor(animProgress) % totalF;
 }
@@ -1495,7 +1508,15 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
         // El recorrido arranca de cero cada vez que _resetPanelAnims es llamado al
         // navegar a ese panel.
         if (pi !== RS.idx) return;
-        if (!layer._pathStartTime) layer._pathStartTime = now;
+        if (!layer._pathStartTime) {
+          // Esperar al temporizador de inicio junto con la animación
+          if (layer._animStartAt && now < layer._animStartAt) return;
+          layer._pathStartTime = now;
+        }
+        // Congelar recorrido durante el periodo de espera del reinicio.
+        // _animRestartAt indica que la animación está esperando para reiniciarse;
+        // el path también debe esperar para reiniciarse sincrónicamente (FIX6).
+        if (layer._animRestartAt) return;
         const { pw: _mpPw, ph: _mpPh } = _panelDims(pi);
         const _mpElapsed = (now - layer._pathStartTime) / 1000;
         const _mpClosed  = layer._motionPathClosed || false;
@@ -1546,17 +1567,25 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
             }
           }
         }
-        const _mpEndB = layer._motionPathEnd   || 'restart';
-        const _mpAcl  = layer._motionPathAccel || 'none';
+        const _mpEndB    = layer._motionPathEnd   || 'restart';
+        const _mpAcl     = layer._motionPathAccel || 'none';
+        const _isSyncMR  = _mpCycleDurMs > 0 && layer._motionCycles != null;
+        const _mpStopAtR = _isSyncMR && layer._gcpRepeatCount > 0 ? layer._gcpRepeatCount : 1;
         let _mpPos = null;
         if (_mpEndB === 'stop') {
           if (layer._pathStopped) {
             panelChanged = true;
-          } else if (_mpRawT >= 1.0) {
+          } else if (_mpRawT >= _mpStopAtR) {
             _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, 0.9999, _mpPw, _mpPh);
             layer._pathStopped = true;
+            // En sync mode: programar reinicio (el mecanismo _animRestartAt de FIX6 lo gestiona)
+            if (_isSyncMR && layer._gcpRestartDelay > 0 && !layer._animRestartAt) {
+              layer._animStopped   = true;
+              layer._animRestartAt = now + layer._gcpRestartDelay * 1000;
+            }
           } else {
-            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_mpRawT,_mpAcl), _mpPw, _mpPh);
+            const _pFracR = _isSyncMR ? _mpRawT % 1 : _mpRawT;
+            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_pFracR,_mpAcl), _mpPw, _mpPh);
           }
         } else if (_mpEndB === 'rewind') {
           const _mpCycle = _mpRawT % 2;
@@ -2547,18 +2576,27 @@ function _resetPanelAnims(idx) {
     }
     if (layer._animReady && layer._animFrames) {
       layer._animIdx       = 0;
-      layer._animLastTick  = Date.now(); // iniciar tick desde ahora
       layer._animPlayCount = 0;
-      layer._animStopped   = false;  // limpiar estado de reinicio
+      layer._animStopped   = false;
       layer._animRestartAt = null;
+      // Temporizador de inicio: si _gcpStartDelay > 0, no arrancar hasta que pase el tiempo
+      const _initDelay = (layer._gcpStartDelay || 0) * 1000;
+      if (_initDelay > 0) {
+        layer._animLastTick = null;           // no empezar aún
+        layer._animStartAt  = Date.now() + _initDelay;
+      } else {
+        layer._animLastTick = Date.now();     // iniciar tick desde ahora
+        layer._animStartAt  = null;
+      }
       if (layer._animOc && layer._animFrames.length) {
         layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
       }
     }
-    // Recorrido: reiniciar desde el centro de la capa (offset relativo 0,0)
+    // Recorrido: reiniciar — si hay delay de inicio, el path espera junto a la animación
     if (layer._motionPath && layer._motionPath.length >= 2) {
-      layer._pathStartTime = Date.now();
-      delete layer._pathStopped;   // borrar bandera 'stop' — el recorrido debe reiniciarse
+      const _hasDelay = (layer._gcpStartDelay || 0) > 0;
+      layer._pathStartTime = _hasDelay ? null : Date.now();
+      delete layer._pathStopped;
       layer._pathCurX = layer.x || 0.5;
       layer._pathCurY = layer.y || 0.5;
     }

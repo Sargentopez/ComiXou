@@ -857,6 +857,7 @@ let _edLineType   = 'draw';   // 'draw' | 'select'
 let _edLineFusionId = null;   // T1: ID de fusión — LineLayer del mismo ID se fusionan al OK
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
 let edPainting = false;
+let _edPaintRaf = null;         // handle RAF para batching del render durante el dibujo
 let _edDrawLayerTarget = 'draw'; // 'draw' | 'fill' — capa activa en panel de dibujo
 let _edPenPendingStroke = null; // punto inicial diferido para lápiz
 const _ED_PEN_MIN_PRESSURE = 0.05; // tldraw/perfect-freehand: presión mínima para considerar contacto real
@@ -1306,6 +1307,9 @@ class ImageLayer extends BaseLayer {
             _self._fIdx = 0;
             _self._gcpPlayCount = 0;
             _self._playing = true;
+            // Resetear el recorrido para que se sincronice con el reinicio
+            delete _self._pathStartTime;
+            delete _self._pathStopped;
             _self._applyFrame(0);
             requestAnimationFrame(() => {
               if (typeof edRedraw === 'function') edRedraw();
@@ -1344,8 +1348,9 @@ class ImageLayer extends BaseLayer {
   _applyPngFrame(i)     { this._applyFrame(i); }
 
   stopAnim() {
-    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-    if (this._restartTimer) { clearTimeout(this._restartTimer); this._restartTimer = null; }
+    if (this._timer)           { clearTimeout(this._timer);           this._timer           = null; }
+    if (this._restartTimer)    { clearTimeout(this._restartTimer);    this._restartTimer    = null; }
+    if (this._startDelayTimer) { clearTimeout(this._startDelayTimer); this._startDelayTimer = null; }
     this._playing = false;
     this._fIdx = 0;
     this._gcpPlayCount = 0;
@@ -2981,6 +2986,7 @@ function _edLayersSnapshot(){
       if(l._gcpRepeatCount)   o._gcpRepeatCount   = l._gcpRepeatCount;
       if(l._gcpStopAtEnd)     o._gcpStopAtEnd     = l._gcpStopAtEnd;
       if(l._gcpRestartDelay)  o._gcpRestartDelay  = l._gcpRestartDelay;
+      if(l._gcpStartDelay)    o._gcpStartDelay    = l._gcpStartDelay;
       if(l._gcpCircularEnd)  o._gcpCircularEnd  = true;
       if(l._gcpLayersData)   o._gcpLayersData   = l._gcpLayersData;
       if(l._gcpFramesData)   o._gcpFramesData   = l._gcpFramesData;
@@ -6794,25 +6800,21 @@ function _edEaseT(t,accel){
 //   pathEnd   : comportamiento del path ('stop'|'restart'|'rewind')
 function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd) {
   if (totalF < 1 || cycles <= 0) return 0;
-  // Caso especial: path con 'stop' + interpolación circular + repeticiones finitas.
-  // Cuando pathEnd='stop', iterT se capa en (1-1e-9) para no sobrepasar el final,
-  // lo que hace que animProgress nunca alcance repeatCnt*totalF. En ese momento
-  // (rawT>=1, path detenido) la animación debe mostrar frame 0, no el último.
-  if (pathEnd === 'stop' && rawT >= 1.0 && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
-  // Para restart/rewind, la animación también reinicia con cada traversal
-  const iterT = (pathEnd === 'stop') ? Math.min(rawT, 1 - 1e-9)
+  // En stop mode con repeticiones finitas, el path recorre repeatCnt veces (una por repetición).
+  // _stopLimit indica hasta dónde puede llegar rawT antes de que todo se detenga.
+  const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
+  // Caso especial: stop + circularEnd + fin alcanzado → frame 0 (estado inicial)
+  if (pathEnd === 'stop' && rawT >= _stopLimit && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
+  const iterT = (pathEnd === 'stop') ? Math.min(rawT, _stopLimit - 1e-9)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
               : (rawT % 1);  // restart: fracción dentro del traversal actual
-  const animProgress = iterT * cycles * totalF;  // frames transcurridos de animación
-  if (stopAtEnd) {
-    return Math.min(Math.floor(animProgress), totalF - 1);
-  }
+  const animProgress = iterT * cycles * totalF;
+  if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
   if (repeatCnt > 0) {
-    // Con interpolación circular: al acabar volver al frame 0 (estado inicial).
-    // Sin ella: detener en el último frame.
-    return animProgress >= repeatCnt * totalF
-      ? (circularEnd ? 0 : totalF - 1)
-      : Math.floor(animProgress) % totalF;
+    // Terminal: rawT llegó al límite (stop mode) o animProgress al total
+    const _done = (pathEnd === 'stop' && rawT >= _stopLimit)
+               || animProgress >= repeatCnt * totalF;
+    return _done ? (circularEnd ? 0 : totalF - 1) : Math.floor(animProgress) % totalF;
   }
   return Math.floor(animProgress) % totalF;
 }
@@ -6839,7 +6841,17 @@ function _edViewerMpTick() {
   let _mpUpdated = false;
   (page.layers||[]).forEach(l => {
     if (!l._motionPath || l._motionPath.length < 2) return;
-    if (!l._pathStartTime) l._pathStartTime = now;
+    // No iniciar el recorrido hasta que el temporizador de inicio de la
+    // animación haya disparado (sincroniza path y animación).
+    if (!l._pathStartTime) {
+      if (l._startDelayTimer) { _mpUpdated = true; return; } // aún esperando
+      l._pathStartTime = now;
+    }
+    // Congelar recorrido durante el periodo de espera del reinicio de animación.
+    // Sin esto, path en modo restart/rewind sigue avanzando aunque la animación
+    // esté parada. Al disparar _restartTimer se borra _pathStartTime (v31.50 FIX3)
+    // y el path reinicia desde 0 junto a la animación.
+    if (l._restartTimer) return;
     const _elapsed  = (now - l._pathStartTime) / 1000;
     const _totalPx  = _edPathArcLengthPx(l._motionPath, l._motionPathClosed || false, _vpw, _vph);
     // Usar ciclos si la capa tiene duración de ciclo guardada; si no, fallback a velocidad
@@ -6870,16 +6882,32 @@ function _edViewerMpTick() {
         }
       }
     }
-    const _mpEnd   = l._motionPathEnd   || 'restart';
-    const _mpAccel = l._motionPathAccel || 'none';
+    const _mpEnd     = l._motionPathEnd   || 'restart';
+    const _mpAccel   = l._motionPathAccel || 'none';
+    // En sync mode con repeticiones finitas, el path se recorre una vez por repetición
+    const _isSyncPth = _vCycleDurMs > 0 && _vCycles > 0;
+    const _mpStopAt  = _isSyncPth && l._gcpRepeatCount > 0 ? l._gcpRepeatCount : 1;
     let rel = null;
     if (_mpEnd === 'stop') {
       if (l._pathStopped) { _mpUpdated = true; return; }
-      if (_rawT >= 1.0) {
+      if (_rawT >= _mpStopAt) {
         rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, 0.9999, _vpw, _vph);
         l._pathStopped = true;
+        // En sync mode: disparar el restart timer si _gcpRestartDelay está configurado.
+        // (En modo no-sync lo gestiona _applyFrame; aquí el path es quien dirige los frames.)
+        if (_isSyncPth && l._gcpRestartDelay > 0 && !l._restartTimer) {
+          const _sr = l;
+          l._restartTimer = setTimeout(() => {
+            _sr._restartTimer = null;
+            delete _sr._pathStartTime; delete _sr._pathStopped;
+            _sr._fIdx = 0; _sr._gcpPlayCount = 0;
+            requestAnimationFrame(() => { if (typeof edUpdateViewer === 'function') edUpdateViewer(); });
+          }, l._gcpRestartDelay * 1000);
+        }
       } else {
-        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_rawT,_mpAccel), _vpw, _vph);
+        // En sync: fracción dentro del ciclo actual (el path reinicia cada repetición)
+        const _pFrac = _isSyncPth ? _rawT % 1 : _rawT;
+        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_pFrac,_mpAccel), _vpw, _vph);
       }
     } else if (_mpEnd === 'rewind') {
       const _cycle = _rawT % 2;
@@ -12853,10 +12881,30 @@ function edStartPaint(e){
   }
   if(!e._skipMoveBrush) edMoveBrush(e);
 }
+// ── RAF batching del render durante el dibujo ────────────────────────────
+// Programa un redraw para el próximo frame (máx 1 por frame mientras se dibuja).
+// El trazo en el canvas offscreen se actualiza en cada evento (inmediato);
+// solo el volcado al viewport se difiere, eliminando el bloqueo del hilo JS.
+function _edSchedulePaintRedraw() {
+  if (_edPaintRaf) return;
+  _edPaintRaf = requestAnimationFrame(() => {
+    _edPaintRaf = null;
+    edRedraw();
+  });
+}
+// Cancela el RAF pendiente. Llamar al terminar el trazo para que el render final
+// lo gestione edSaveDrawData con su propio edRedraw() (watercolor) o quede limpio.
+function _edFlushPaintRedraw() {
+  if (_edPaintRaf !== null) {
+    cancelAnimationFrame(_edPaintRaf);
+    _edPaintRaf = null;
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 function edContinuePaint(e){
   if(!edPainting) return;
   if (edActiveTool === 'color-erase') {
-    const _cCE2 = edCoords(e); _edColorErase(_cCE2.nx, _cCE2.ny); edRedraw(); return;
+    const _cCE2 = edCoords(e); _edColorErase(_cCE2.nx, _cCE2.ny); _edSchedulePaintRedraw(); return;
   }
   // Dodge/burn en modo continuo (táctil con COF)
   if(_edDodgeBurnActive && edActiveTool==='fill'){
@@ -12865,7 +12913,7 @@ function edContinuePaint(e){
     const _prevDB2 = window._edDbLast;
     window._edDbLast = edDodgeBurnStroke(_cDB2.nx, _cDB2.ny,
       _prevDB2 ? _prevDB2.wx : null, _prevDB2 ? _prevDB2.wy : null);
-    edRedraw(); return;
+    _edSchedulePaintRedraw(); return;
   }
   // Acuarela: usar su propio sistema de trazo sobre el FillLayer
   if(!_edDodgeBurnActive && edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor' && window._edWcFl){
@@ -12876,7 +12924,7 @@ function edContinuePaint(e){
       window._edWcFl, _cWC.nx, _cWC.ny, edDrawColor, edDrawSize, edDrawOpacity,
       _prev ? _prev.wx : null, _prev ? _prev.wy : null
     );
-    edRedraw(); return;
+    _edSchedulePaintRedraw(); return;
   }
   // Máquina de estados de presión para lápiz gráfico
   if(e.pointerType === 'pen'){
@@ -12911,7 +12959,7 @@ function edContinuePaint(e){
   if(_cof.on && isTouch){
     const _sz = er ? edEraserSize : edDrawSize;
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
-    edRedraw();
+    _edSchedulePaintRedraw();
     return;
   }
 
@@ -12927,7 +12975,7 @@ function edContinuePaint(e){
     const _sizeCS = Math.max(1, Math.round(_baseC * _pres));
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
-  edRedraw();
+  _edSchedulePaintRedraw();
   edMoveBrush(e);
 }
 // Cierre de huecos para la capa de tinta (pen/estilografo).
@@ -13044,6 +13092,7 @@ function _edPenCloseGaps(dl) {
 }
 
 function edSaveDrawData(){
+  _edFlushPaintRedraw(); // cancelar RAF pendiente; el render final lo gestiona esta función
   _edPenPendingStroke = null;
   if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
   _edPenCanDraw = false;
@@ -19939,6 +19988,7 @@ function edSerLayer(l){
     if(l._gcpRepeatCount  != null) _r._gcpRepeatCount  = l._gcpRepeatCount;
     if(l._gcpStopAtEnd)            _r._gcpStopAtEnd    = true;
     if(l._gcpRestartDelay != null && l._gcpRestartDelay > 0) _r._gcpRestartDelay = l._gcpRestartDelay;
+    if(l._gcpStartDelay   != null && l._gcpStartDelay   > 0) _r._gcpStartDelay   = l._gcpStartDelay;
     if(l._gcpCircularEnd)         _r._gcpCircularEnd  = true;
     if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _r._motionPathClosed = true;
@@ -20394,6 +20444,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpRepeatCount  != null) l._gcpRepeatCount  = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)            l._gcpStopAtEnd    = true;
     if(d._gcpRestartDelay != null) l._gcpRestartDelay = d._gcpRestartDelay;
+    if(d._gcpStartDelay   != null) l._gcpStartDelay   = d._gcpStartDelay;
     if(d._gcpCircularEnd)         l._gcpCircularEnd  = true;
     if(d._motionPath)             l._motionPath       = d._motionPath;
     if(d._motionPathClosed)       l._motionPathClosed = true;
@@ -21486,13 +21537,29 @@ function _edStartPageAnims(pageIdx) {
     if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady)) {
       l._fIdx = 0;
       l._gcpPlayCount = 0;
-      l._playing = true;
-      if (l._animReady && l._animFrames && l._animFrames.length > 0) {
-        l._applyFrame(0);
-      } else if (l._apngSrc || l._pngFrames) {
-        l.loadAnim(l._apngSrc || l._pngFrames, () => {
-          if (l._playing) l._applyFrame(0);
-        });
+      // Cancelar timers pendientes del ciclo anterior
+      if (l._startDelayTimer) { clearTimeout(l._startDelayTimer); l._startDelayTimer = null; }
+      if (l._restartTimer)    { clearTimeout(l._restartTimer);    l._restartTimer    = null; }
+      const _startMs = (l._gcpStartDelay || 0) * 1000;
+      const _doStart = () => {
+        l._startDelayTimer = null;
+        l._playing = true;
+        // Resetear el recorrido para que arranque sincronizado con la animación
+        delete l._pathStartTime;
+        delete l._pathStopped;
+        if (l._animReady && l._animFrames && l._animFrames.length > 0) {
+          l._applyFrame(0);
+        } else if (l._apngSrc || l._pngFrames) {
+          l.loadAnim(l._apngSrc || l._pngFrames, () => {
+            if (l._playing) l._applyFrame(0);
+          });
+        }
+      };
+      if (_startMs > 0) {
+        l._playing = false; // esperar al temporizador
+        l._startDelayTimer = setTimeout(_doStart, _startMs);
+      } else {
+        _doStart();
       }
     }
   });
@@ -25064,6 +25131,7 @@ function edBibGuardar() {
     if (_la2._gcpRepeatCount  != null) entry.gcpRepeatCount  = _la2._gcpRepeatCount;
     if (_la2._gcpStopAtEnd)            entry.gcpStopAtEnd    = _la2._gcpStopAtEnd;
     if (_la2._gcpRestartDelay)         entry.gcpRestartDelay = _la2._gcpRestartDelay;
+    if (_la2._gcpStartDelay)           entry.gcpStartDelay   = _la2._gcpStartDelay;
     if (_la2._gcpCircularEnd)          entry.gcpCircularEnd  = true;
     // Datos GCP para re-edición: capas y frames del editor de animaciones
     // Sin estos campos el GCP abre sin capas al hacer doble tap sobre la animación
@@ -25468,6 +25536,7 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd)         la2._gcpStopAtEnd=true;
                 if(entry.gcpRestartDelay)      la2._gcpRestartDelay=entry.gcpRestartDelay;
+                if(entry.gcpStartDelay)        la2._gcpStartDelay=entry.gcpStartDelay;
                 if(entry.gcpCircularEnd)       la2._gcpCircularEnd=true;
                 const _k2=_edAnimKey('bib_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8));
                 la2.animKey=_k2;
@@ -25517,6 +25586,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpRepeatCount  != null) la._gcpRepeatCount  = entry.gcpRepeatCount;
           if (entry.gcpStopAtEnd)            la._gcpStopAtEnd    = true;
           if (entry.gcpRestartDelay)         la._gcpRestartDelay = entry.gcpRestartDelay;
+          if (entry.gcpStartDelay)           la._gcpStartDelay   = entry.gcpStartDelay;
           if (entry.gcpCircularEnd)          la._gcpCircularEnd  = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
@@ -27074,6 +27144,8 @@ window._gcpFrameDelay   = 100;  // ms por frame (default 10fps)
 window._gcpRepeatCount  = 0;    // 0 = infinito
 window._gcpStopAtEnd    = false; // true = detener en el último frame
 window._gcpRestartDelay = 0;    // 0 = desactivado, 1-60 = segundos antes de reiniciar
+window._gcpBehavMode   = 'vel'; // modo activo del dropdown Comportamiento: 'vel'|'rep'|'rei'|'timer'
+window._gcpStartDelay  = 0;    // segundos (paso 0.5) antes de comenzar la reproducción
 window._gcpDirty       = false; // true si hay cambios sin guardar
 let gcpCanvas = null;
 let gcpCtx    = null;
@@ -29732,6 +29804,8 @@ function gcpOpen(edLayerIdx) {
       if (_gl._gcpRepeatCount  != null) window._gcpRepeatCount  = _gl._gcpRepeatCount;
       if (_gl._gcpStopAtEnd    != null) window._gcpStopAtEnd    = !!_gl._gcpStopAtEnd;
       if (_gl._gcpRestartDelay != null) window._gcpRestartDelay = _gl._gcpRestartDelay;
+      window._gcpBehavMode  = 'vel'; // siempre arrancar en modo velocidad
+      if (_gl._gcpStartDelay  != null) window._gcpStartDelay  = _gl._gcpStartDelay;
     }
     // Sincronizar UI de comportamiento al abrir
     requestAnimationFrame(() => { if (typeof _gcpSyncComportamiento === 'function') _gcpSyncComportamiento(); });
@@ -29778,6 +29852,12 @@ function gcpOpen(edLayerIdx) {
   // Registrar botones (solo primera vez)
   if (!shell._gcpBound) {
     shell._gcpBound = true;
+
+    // Mover gcpSliderBubble a body: necesario para que z-index:10000 esté en el
+    // root stacking context y quede por encima del dropdown (z-index:9000).
+    // Sin esto, la burbuja queda dentro de gcpShell (z-index:500) y el dropdown la tapa.
+    const _bubbleEl = document.getElementById('gcpSliderBubble');
+    if (_bubbleEl && _bubbleEl.parentNode !== document.body) document.body.appendChild(_bubbleEl);
 
     // Detener preview al tocar cualquier parte del editor GCP
     // Detener preview al tocar cualquier parte del editor GCP (excepto el botón ▶/⏹, que gestiona su propio toggle)
@@ -29879,72 +29959,76 @@ function gcpOpen(edLayerIdx) {
       _gcpCloseAllDropdowns();
       _gcpDownloadMp4();
     });
-    // ── Comportamiento: sliders con burbuja flotante ──
+    // ── Comportamiento: 3 botones + 1 slider adaptable ──
     const _gcpUpdateBehaviourSummary = () => {
       const el = document.getElementById('gcpBehaviourSummary');
       if (!el) return;
       const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
-      const rep = (window._gcpRepeatCount || 0) === 0 ? '∞' : '×' + window._gcpRepeatCount;
+      const rc  = window._gcpRepeatCount || 0;
+      const rep = rc === 0 ? '∞' : '×' + rc;
       const rd  = window._gcpRestartDelay || 0;
-      const rds = rd > 0 ? ' · ↺' + rd + 's' : '';
-      el.textContent = fps + ' fps · ' + rep + rds;
+      const rds = rd > 0 ? ' · R:' + rd + 's' : '';
+      const sd  = window._gcpStartDelay || 0;
+      const sds = sd > 0 ? ' · T:' + sd + 's' : '';
+      el.textContent = fps + ' fps · ' + rep + rds + sds;
     };
+
+    // Texto de burbuja según modo activo
+    const _gcpBehavBubble = (val) => {
+      const m = window._gcpBehavMode || 'vel';
+      if (m === 'vel')   return val + ' fps';
+      if (m === 'rep')   return val === 0 ? '∞' : '×' + val;
+      if (m === 'timer') return val + ' s';
+      return val === 0 ? '—' : val + ' s';
+    };
+
+    // Sincronizar botones y slider con los valores globales
     const _gcpSyncComportamiento = () => {
-      const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
-      const fpsSlider = document.getElementById('gcpFpsSlider');
-      if (fpsSlider) fpsSlider.value = Math.min(24, Math.max(1, fps));
-      const infChk    = document.getElementById('gcpRepInfinite');
-      const repSlider = document.getElementById('gcpRepSlider');
-      const repRow    = document.getElementById('gcpRepSliderRow');
-      const isInf     = (window._gcpRepeatCount || 0) === 0;
-      if (infChk)    infChk.checked = isInf;
-      if (repRow)    repRow.style.display = isInf ? 'none' : 'block';
-      if (repSlider) repSlider.value = Math.max(1, window._gcpRepeatCount || 1);
-      // Sincronizar sección Reinicio
-      const restartChk     = document.getElementById('gcpRestartEnabled');
-      const restartRow     = document.getElementById('gcpRestartSliderRow');
-      const restartSlider  = document.getElementById('gcpRestartSlider');
-      const restartInfNote = document.getElementById('gcpRestartInfNote');
-      const restartLbl     = document.getElementById('gcpRestartCheckLabel');
-      const restartSecLbl  = document.getElementById('gcpRestartLabel');
-      const rd  = window._gcpRestartDelay || 0;
-      const rdEnabled = rd > 0;
-      if (isInf) {
-        // Con ∞ repeticiones no se puede activar el reinicio
-        if (restartChk) { restartChk.checked = false; restartChk.disabled = true; }
-        if (restartRow) restartRow.style.display = 'none';
-        if (restartInfNote) restartInfNote.style.display = 'block';
-        if (restartLbl)    restartLbl.style.opacity    = '0.4';
-        if (restartSecLbl) restartSecLbl.style.opacity = '0.4';
-      } else {
-        if (restartChk) { restartChk.checked = rdEnabled; restartChk.disabled = false; }
-        if (restartRow) restartRow.style.display = rdEnabled ? 'block' : 'none';
-        if (restartInfNote) restartInfNote.style.display = 'none';
-        if (restartLbl)    restartLbl.style.opacity    = '';
-        if (restartSecLbl) restartSecLbl.style.opacity = '';
-        if (restartSlider) restartSlider.value = Math.max(1, rd || 5);
+      const isInf = (window._gcpRepeatCount || 0) === 0;
+      if ((window._gcpBehavMode || 'vel') === 'rei' && isInf) window._gcpBehavMode = 'vel';
+      const mode   = window._gcpBehavMode || 'vel';
+      const slider = document.getElementById('gcpBehavSlider');
+      const btnVel = document.getElementById('gcpBtnVel');
+      const btnRep = document.getElementById('gcpBtnRep');
+      const btnRei = document.getElementById('gcpBtnRei');
+      if (btnVel) btnVel.classList.toggle('active', mode === 'vel');
+      if (btnRep) btnRep.classList.toggle('active', mode === 'rep');
+      if (btnRei) { btnRei.classList.toggle('active', mode === 'rei'); btnRei.disabled = isInf; }
+      const btnTimer = document.getElementById('gcpBtnTimer');
+      if (btnTimer) btnTimer.classList.toggle('active', mode === 'timer');
+      if (slider) {
+        if (mode === 'vel') {
+          const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
+          slider.min = 1; slider.max = 24; slider.step = 1;
+          slider.value = Math.min(24, Math.max(1, fps));
+        } else if (mode === 'rep') {
+          slider.min = 0; slider.max = 10; slider.step = 1;
+          slider.value = Math.min(10, Math.max(0, window._gcpRepeatCount || 0));
+        } else if (mode === 'timer') {
+          slider.min = 0; slider.max = 60; slider.step = 0.5;
+          slider.value = Math.min(60, Math.max(0, window._gcpStartDelay || 0));
+        } else {
+          slider.min = 0; slider.max = 60; slider.step = 1;
+          slider.value = Math.min(60, Math.max(0, window._gcpRestartDelay || 0));
+        }
+        slider.disabled = false;
       }
       _gcpUpdateBehaviourSummary();
     };
 
-    // Burbuja flotante: aparece sobre el thumb mientras se arrastra
+    // Burbuja flotante (gcpSliderBubble ya está en body desde la init)
     const _gcpShowBubble = (slider, text) => {
       const bubble = document.getElementById('gcpSliderBubble');
       if (!bubble) return;
-      const r   = slider.getBoundingClientRect();
-      const min = parseFloat(slider.min) || 0;
-      const max = parseFloat(slider.max) || 1;
-      const val = parseFloat(slider.value);
-      const pct = (val - min) / (max - min);
-      // El thumb no recorre todo el ancho: tiene un margen de ~10px en cada extremo
+      const r      = slider.getBoundingClientRect();
+      const min    = parseFloat(slider.min) || 0;
+      const max    = parseFloat(slider.max) || 1;
+      const pct    = (parseFloat(slider.value) - min) / (max - min);
       const THUMB_R = 10;
-      const trackW  = r.width - THUMB_R * 2;
-      const thumbX  = r.left + THUMB_R + pct * trackW;
-      // Colocar la burbuja justo encima del thumb (misma separación que edb-size-pop)
-      const thumbY  = r.top - 28;
+      const thumbX  = r.left + THUMB_R + pct * (r.width - THUMB_R * 2);
       bubble.textContent = text;
-      bubble.style.left = thumbX + 'px';
-      bubble.style.top  = thumbY + 'px';
+      bubble.style.left    = thumbX + 'px';
+      bubble.style.top     = (r.top - 28) + 'px';
       bubble.style.display = 'block';
     };
     const _gcpHideBubble = () => {
@@ -29952,65 +30036,44 @@ function gcpOpen(edLayerIdx) {
       if (bubble) bubble.style.display = 'none';
     };
 
-    // Slider fps
-    const _fpsSlider = document.getElementById('gcpFpsSlider');
-    _fpsSlider?.addEventListener('input', e => {
-      const fps = parseInt(e.target.value, 10);
-      window._gcpFrameDelay = Math.round(1000 / fps);
+    // Slider único
+    const _behavSlider = document.getElementById('gcpBehavSlider');
+    _behavSlider?.addEventListener('input', e => {
+      const n    = parseFloat(e.target.value);
+      const mode = window._gcpBehavMode || 'vel';
+      if (mode === 'vel') {
+        window._gcpFrameDelay = Math.round(1000 / Math.max(n, 1));
+      } else if (mode === 'rep') {
+        window._gcpRepeatCount = n; // 0 = ∞
+        if (n === 0 && window._gcpRestartDelay > 0) window._gcpRestartDelay = 0;
+        const btnRei = document.getElementById('gcpBtnRei');
+        if (btnRei) btnRei.disabled = (n === 0);
+      } else if (mode === 'timer') {
+        window._gcpStartDelay = n; // 0 = sin retardo
+      } else {
+        window._gcpRestartDelay = n; // 0 = desactivado
+      }
       window._gcpDirty = true;
-      _gcpShowBubble(e.target, fps + ' fps');
+      _gcpShowBubble(e.target, _gcpBehavBubble(n));
       _gcpUpdateBehaviourSummary();
     });
-    _fpsSlider?.addEventListener('pointerdown', e => { e.stopPropagation(); _gcpShowBubble(e.target, parseInt(e.target.value) + ' fps'); });
-    _fpsSlider?.addEventListener('pointerup',   () => _gcpHideBubble());
-    _fpsSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
+    _behavSlider?.addEventListener('pointerdown', e => {
+      e.stopPropagation();
+      _gcpShowBubble(e.target, _gcpBehavBubble(parseFloat(e.target.value)));
+    });
+    _behavSlider?.addEventListener('pointerup',     () => _gcpHideBubble());
+    _behavSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
 
-    // Checkbox infinito
-    document.getElementById('gcpRepInfinite')?.addEventListener('change', e => {
-      const isInf = e.target.checked;
-      window._gcpRepeatCount = isInf ? 0 : (parseInt(document.getElementById('gcpRepSlider')?.value, 10) || 1);
-      window._gcpDirty = true;
-      // Con ∞ repeticiones: desactivar reinicio si estaba activo
-      if (isInf && window._gcpRestartDelay > 0) window._gcpRestartDelay = 0;
+    // Botones de modo
+    const _gcpSetMode = (mode) => {
+      if (mode === 'rei' && (window._gcpRepeatCount || 0) === 0) return;
+      window._gcpBehavMode = mode;
       requestAnimationFrame(_gcpSyncComportamiento);
-    });
-
-    // Slider repeticiones
-    const _repSlider = document.getElementById('gcpRepSlider');
-    _repSlider?.addEventListener('input', e => {
-      const n = parseInt(e.target.value, 10);
-      window._gcpRepeatCount = n;
-      window._gcpDirty = true;
-      _gcpShowBubble(e.target, '×' + n);
-      _gcpUpdateBehaviourSummary();
-    });
-    _repSlider?.addEventListener('pointerdown', e => { e.stopPropagation(); _gcpShowBubble(e.target, '×' + parseInt(e.target.value)); });
-    _repSlider?.addEventListener('pointerup',   () => _gcpHideBubble());
-    _repSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
-
-    // Checkbox reinicio
-    document.getElementById('gcpRestartEnabled')?.addEventListener('change', e => {
-      const enabled = e.target.checked;
-      const sliderVal = parseInt(document.getElementById('gcpRestartSlider')?.value, 10) || 5;
-      window._gcpRestartDelay = enabled ? sliderVal : 0;
-      window._gcpDirty = true;
-      const restartRow = document.getElementById('gcpRestartSliderRow');
-      if (restartRow) restartRow.style.display = enabled ? 'block' : 'none';
-      _gcpUpdateBehaviourSummary();
-    });
-
-    // Slider reinicio (segundos)
-    const _restartSlider = document.getElementById('gcpRestartSlider');
-    _restartSlider?.addEventListener('input', e => {
-      const n = parseInt(e.target.value, 10);
-      window._gcpRestartDelay = n;
-      window._gcpDirty = true;
-      _gcpShowBubble(e.target, n + 's');
-      _gcpUpdateBehaviourSummary();
-    });
-    _restartSlider?.addEventListener('pointerdown', e => { e.stopPropagation(); _gcpShowBubble(e.target, parseInt(e.target.value) + 's'); });
-    _restartSlider?.addEventListener('pointerup',   () => _gcpHideBubble());
-    _restartSlider?.addEventListener('pointercancel', () => _gcpHideBubble());
+    };
+    document.getElementById('gcpBtnVel')?.addEventListener('pointerup',   e => { e.stopPropagation(); _gcpSetMode('vel'); });
+    document.getElementById('gcpBtnRep')?.addEventListener('pointerup',   e => { e.stopPropagation(); _gcpSetMode('rep'); });
+    document.getElementById('gcpBtnRei')?.addEventListener('pointerup',   e => { e.stopPropagation(); _gcpSetMode('rei'); });
+    document.getElementById('gcpBtnTimer')?.addEventListener('pointerup', e => { e.stopPropagation(); _gcpSetMode('timer'); });
 
     // Sincronizar UI al abrir el dropdown de comportamiento
     _gcpInitRules(); // botones Guías GCP
@@ -30294,6 +30357,7 @@ function _gcpSaveToLib(onDone) {
     existingLayer._gcpRepeatCount  = window._gcpRepeatCount;
     existingLayer._gcpStopAtEnd    = window._gcpStopAtEnd;
     existingLayer._gcpRestartDelay = window._gcpRestartDelay;
+    existingLayer._gcpStartDelay   = window._gcpStartDelay;
     existingLayer._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
     // Cargar primer frame como imagen visible
     const img=new Image();
@@ -30331,6 +30395,7 @@ function _gcpSaveToLib(onDone) {
       la._gcpRepeatCount  = window._gcpRepeatCount;
       la._gcpStopAtEnd    = window._gcpStopAtEnd;
       la._gcpRestartDelay = window._gcpRestartDelay;
+      la._gcpStartDelay   = window._gcpStartDelay;
       la._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
       // Insertar antes de la primera capa de texto/bocadillo (igual que biblioteca)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');

@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v31.42</footer>
+    <footer class="app-version">v31.53</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -806,37 +806,20 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-gcpmenu="comportamiento">Comportamiento</button>
             <div class="ed-dropdown" id="gdd-comportamiento" style="min-width:210px;padding:6px 0">
-              <div class="ed-dropdown-label">Velocidad</div>
-              <div style="padding:4px 14px 10px">
-                <input type="range" id="gcpFpsSlider" min="1" max="24" value="10" step="1"
+              <!-- 3 botones de modo -->
+              <div style="display:flex;gap:3px;padding:8px 10px 4px">
+                <button id="gcpBtnVel"   class="gcp-behav-btn active" style="flex:1">Vel.</button>
+                <button id="gcpBtnRep"   class="gcp-behav-btn" style="flex:1">Rep.</button>
+                <button id="gcpBtnRei"   class="gcp-behav-btn" style="flex:1">Reinicio</button>
+                <button id="gcpBtnTimer" class="gcp-behav-btn" style="flex:1">&#x23F1;</button>
+              </div>
+              <!-- Slider único adaptable -->
+              <div style="padding:6px 14px 4px">
+                <input type="range" id="gcpBehavSlider" min="1" max="24" value="10" step="1"
                   style="width:100%;accent-color:var(--black);cursor:pointer">
               </div>
-              <div class="ed-dropdown-label">Repeticiones</div>
-              <div style="padding:4px 14px 6px">
-                <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.82rem;font-weight:700;font-family:var(--font-body)">
-                  <input type="checkbox" id="gcpRepInfinite" checked style="width:15px;height:15px;accent-color:var(--black);flex:none">
-                  ∞ Infinito
-                </label>
-              </div>
-              <div id="gcpRepSliderRow" style="display:none;padding:4px 14px 10px">
-                <input type="range" id="gcpRepSlider" min="1" max="10" value="1" step="1"
-                  style="width:100%;accent-color:var(--black);cursor:pointer">
-              </div>
-              <div class="ed-dropdown-sep"></div>
-              <div class="ed-dropdown-label" id="gcpRestartLabel" style="transition:opacity .2s">Reinicio</div>
-              <div style="padding:4px 14px 6px">
-                <label id="gcpRestartCheckLabel" style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.82rem;font-weight:700;font-family:var(--font-body);transition:opacity .2s">
-                  <input type="checkbox" id="gcpRestartEnabled" style="width:15px;height:15px;accent-color:var(--black);flex:none">
-                  Activar reinicio
-                </label>
-                <div id="gcpRestartInfNote" style="display:none;font-size:.75rem;color:var(--gray-400);font-family:var(--font-body);padding-top:3px">No disponible con ∞ repeticiones</div>
-              </div>
-              <div id="gcpRestartSliderRow" style="display:none;padding:4px 14px 10px">
-                <input type="range" id="gcpRestartSlider" min="1" max="60" value="5" step="1"
-                  style="width:100%;accent-color:var(--black);cursor:pointer">
-              </div>
-              <div class="ed-dropdown-sep"></div>
-              <div id="gcpBehaviourSummary" style="padding:6px 14px 8px;font-family:var(--font-body);font-size:.78rem;font-weight:700;color:var(--gray-500);text-align:center">10 fps · ∞</div>
+              <!-- Resumen -->
+              <div id="gcpBehaviourSummary" style="padding:2px 14px 8px;font-family:var(--font-body);font-size:.78rem;font-weight:700;color:var(--gray-500);text-align:center">10 fps · ∞</div>
             </div>
             <!-- Burbuja flotante de valor para sliders de comportamiento -->
             <div id="gcpSliderBubble" style="display:none;position:fixed;z-index:10000;background:var(--black);border-radius:8px;padding:5px 10px;color:var(--white);font-size:.85rem;font-weight:900;pointer-events:none;text-align:center;transform:translateX(-50%) translateY(-100%);margin-top:-8px;font-family:var(--font-body)"></div>

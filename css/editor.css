@@ -1900,6 +1900,31 @@ body.editor-page #appView {
   background: rgba(0,0,0,0.55) !important;
 }
 
+/* ── Botones segmentados del dropdown Comportamiento GCP ── */
+.gcp-behav-btn {
+  padding: 5px 2px;
+  font-family: var(--font-body);
+  font-size: .72rem;
+  font-weight: 700;
+  border: 2px solid var(--black);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--black);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.gcp-behav-btn.active {
+  background: var(--black);
+  color: var(--white);
+}
+.gcp-behav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 /* ══ EDITOR GIF ══════════════════════════════════════════════════════════════
    gcpShell flota encima del editor con position:fixed.
    gcpTopbar y gcpMenuBar copian exactamente los estilos de edTopbar/edMenuBar.
