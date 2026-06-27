@@ -4255,7 +4255,7 @@ function edRedraw(){
       edCtx.globalAlpha = la.opacity ?? 1;
       la.draw(edCtx, edCanvas);
       edCtx.globalAlpha = 1;
-      edCtx.setTransform(1,0,0,1,0,0);
+      // NO resetear aquí: _edRenderOverlays espera el transform de cámara activo
     }
     _edRenderOverlays();
     return;
@@ -4266,7 +4266,7 @@ function edRedraw(){
     const _la = edLayers[edSelectedIdx];
     // Solo cachear capas sin canvas propio pesado (draw/fill/pencil/watercolor/gif tienen su propio canvas grande)
     const _cacheable = _la &&
-      !['draw','fill','pencil','watercolor','gif'].includes(_la.type);
+      !['draw','fill','pencil','watercolor','gif','stroke'].includes(_la.type);
     if (_cacheable) {
       const cw = edCanvas.width, ch = edCanvas.height;
       if (!_edDragStatic.canvas ||
@@ -4291,7 +4291,7 @@ function edRedraw(){
         edCtx.globalAlpha = (_la.opacity ?? 1);
         _la.draw(edCtx, edCanvas);
         edCtx.globalAlpha = 1;
-        edCtx.setTransform(1,0,0,1,0,0);
+        // NO resetear aquí: _edRenderOverlays espera el transform de cámara activo
         _edRenderOverlays();
         return;
       }
