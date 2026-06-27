@@ -3954,41 +3954,48 @@ function _edFuseIntoMain(newLL) {
   return _primary;
 }
 
-function edRedraw(){
-  // Si hay un contexto GIF activo en curso, redirigir a _gcpRedraw
-  if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
-  if(!edCtx || !edCanvas)return;
-  const cw=edCanvas.width, ch=edCanvas.height;
+// ── Canvas estático para accelerar el drag de capas ──────────────────────
+// Al arrastrar un shape/image/text, se pre-renderiza todo (sin esa capa) en
+// _edDragStatic.canvas. Cada frame del drag: drawImage(static) + 1 capa.
+// Resultado: render 5-10× más rápido durante el drag.
+let _edDragStatic = { canvas: null, ctx: null, valid: false,
+  forIdx: -1, cameraZ: 0, cameraX: 0, cameraY: 0 };
+
+// Render paramétrico: fondo + capas (sin overlays UI ni scrollbars).
+// ctx             — contexto destino (edCtx para render normal; ctx estático para cache)
+// excludeLayerIdx — índice de la capa a omitir (-1 = ninguna)
+function _edRenderFrame(ctx, excludeLayerIdx = -1) {
+  const cw=ctx.canvas.width, ch=ctx.canvas.height;
 
   // Reset transform → limpiar todo el viewport
-  edCtx.setTransform(1,0,0,1,0,0);
-  edCtx.clearRect(0,0,cw,ch);
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cw,ch);
   // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible
-  edCtx.fillStyle='#c8d4e8';
-  edCtx.fillRect(0,0,cw,ch);
+  ctx.fillStyle='#c8d4e8';
+  ctx.fillRect(0,0,cw,ch);
 
   // Aplicar cámara: escala + traslación
-  edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+  ctx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
 
   const page=edPages[edCurrentPage];if(!page)return;
 
   // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip)
   // Radio fijo en coordenadas workspace → proporcional al zoom automáticamente
   const _lr = 20; // ~20px en workspace = radio de esquina físicamente constante
-  edCtx.shadowColor='rgba(0,0,0,0.35)';edCtx.shadowBlur=20/edCamera.z;
-  edCtx.fillStyle='#ffffff';
-  edCtx.beginPath();
-  if(edCtx.roundRect){
-    edCtx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr);
+  ctx.shadowColor='rgba(0,0,0,0.35)';ctx.shadowBlur=20/edCamera.z;
+  ctx.fillStyle='#ffffff';
+  ctx.beginPath();
+  if(ctx.roundRect){
+    ctx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr);
   } else {
     const _x=edMarginX(),_y=edMarginY(),_w=edPageW(),_h=edPageH(),_r=_lr;
-    edCtx.moveTo(_x+_r,_y);edCtx.lineTo(_x+_w-_r,_y);edCtx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
-    edCtx.lineTo(_x+_w,_y+_h-_r);edCtx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
-    edCtx.lineTo(_x+_r,_y+_h);edCtx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
-    edCtx.lineTo(_x,_y+_r);edCtx.arcTo(_x,_y,_x+_r,_y,_r);edCtx.closePath();
+    ctx.moveTo(_x+_r,_y);ctx.lineTo(_x+_w-_r,_y);ctx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
+    ctx.lineTo(_x+_w,_y+_h-_r);ctx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
+    ctx.lineTo(_x+_r,_y+_h);ctx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
+    ctx.lineTo(_x,_y+_r);ctx.arcTo(_x,_y,_x+_r,_y,_r);ctx.closePath();
   }
-  edCtx.fill();
-  edCtx.shadowColor='transparent';edCtx.shadowBlur=0;
+  ctx.fill();
+  ctx.shadowColor='transparent';ctx.shadowBlur=0;
 
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
@@ -4077,14 +4084,14 @@ function edRedraw(){
   const _renderDrawTmp = () => {
     const _dt = (dl) => {
       if(!dl?._canvas) return;
-      edCtx.globalAlpha = 1;
-      edCtx.drawImage(dl._canvas, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(dl._canvas, 0, 0);
     };
     _dt(_edTmp.bucket);
     _dt(_edTmp.watercolor);
     _dt(_edTmp.pencil);
     _dt(_edTmp.pen);
-    edCtx.globalAlpha = 1;
+    ctx.globalAlpha = 1;
   };
   let _drawTmpRendered = false;
 
@@ -4094,6 +4101,7 @@ function edRedraw(){
   // de modo que capas superiores se sigan viendo (con dimming) por encima del dibujo.
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
+    if(i === excludeLayerIdx) return; // capa excluida (drag) — se pinta aparte
     // En modo draw: al llegar al DrawLayer, pintar los temporales en su z-order correcto
     if(_editingDraw && l.type==='draw'){
       _renderDrawTmp();
@@ -4107,43 +4115,49 @@ function edRedraw(){
     if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='fill' || l.type==='pencil' || l.type==='watercolor'){
-      edCtx.globalAlpha = (l.opacity??1)*dimFactor;
-      l.draw(edCtx);
-      edCtx.globalAlpha = 1;
+      ctx.globalAlpha = (l.opacity??1)*dimFactor;
+      l.draw(ctx);
+      ctx.globalAlpha = 1;
     } else if(l.type==='image'){
       const _orig = l.opacity; l.opacity = (l.opacity ?? 1) * dimFactor;
-      l.draw(edCtx, edCanvas);
+      l.draw(ctx, edCanvas);
       l.opacity = _orig;
     } else if(l.type==='draw'){
-      edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
-      l.draw(edCtx);
-      edCtx.globalAlpha = 1;
+      ctx.globalAlpha = (l.opacity ?? 1) * dimFactor;
+      l.draw(ctx);
+      ctx.globalAlpha = 1;
     } else if(l.type==='stroke'){
-      edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
-      l.draw(edCtx);
-      edCtx.globalAlpha = 1;
+      ctx.globalAlpha = (l.opacity ?? 1) * dimFactor;
+      l.draw(ctx);
+      ctx.globalAlpha = 1;
     } else if(l.type==='shape' || l.type==='line'){
-      edCtx.globalAlpha = (l.opacity ?? 1) * dimFactor;
-      l.draw(edCtx);
-      edCtx.globalAlpha = 1;
+      ctx.globalAlpha = (l.opacity ?? 1) * dimFactor;
+      l.draw(ctx);
+      ctx.globalAlpha = 1;
     } else if(l.type==='gif'){
       const _og=l.opacity; l.opacity=(l.opacity??1)*dimFactor;
-      l.draw(edCtx); l.opacity=_og;
+      l.draw(ctx); l.opacity=_og;
     }
   });
   // Textos/bocadillos: aplicar dimming individual por capa (siempre encima de todo)
   _textLayers.forEach(l=>{
     if(l.hidden) return; // capa oculta por el usuario
     const i = edLayers.indexOf(l);
+    if(i === excludeLayerIdx) return; // capa excluida (drag)
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
-    edCtx.globalAlpha = _textGroupAlpha * dimFactor;
-    l.draw(edCtx, edCanvas);
+    ctx.globalAlpha = _textGroupAlpha * dimFactor;
+    l.draw(ctx, edCanvas);
   });
-  edCtx.globalAlpha = 1;
+  ctx.globalAlpha = 1;
   // Fallback: si el DrawLayer no estaba en edLayers (no debería ocurrir), pintar al final
   if(_editingDraw && !_drawTmpRendered){
     _renderDrawTmp();
   }
+}
+
+// Overlays baratos que siempre se dibujan sobre edCtx:
+// selección, cuadrícula, reglas, borde del lienzo, crop, motion path, scrollbars.
+function _edRenderOverlays() {
   edDrawSel();
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
   if(_edLineLayer && _edLineLayer.points.length === 1){
@@ -4220,6 +4234,73 @@ function edRedraw(){
   // Restaurar transform para UI sobre el canvas (scrollbars)
   edCtx.setTransform(1,0,0,1,0,0);
   _edScrollbarsDraw();
+}
+
+function edRedraw(){
+  if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
+  if(!edCtx || !edCanvas)return;
+
+  // ── Fast path: canvas estático durante drag de capa cacheable ──────────
+  if (_edDragStatic.valid && edIsDragging && edSelectedIdx === _edDragStatic.forIdx &&
+      edCamera.z === _edDragStatic.cameraZ &&
+      edCamera.x === _edDragStatic.cameraX &&
+      edCamera.y === _edDragStatic.cameraY) {
+    const cw = edCanvas.width, ch = edCanvas.height;
+    edCtx.setTransform(1,0,0,1,0,0);
+    edCtx.clearRect(0,0,cw,ch);
+    edCtx.drawImage(_edDragStatic.canvas, 0,0); // copia GPU del fondo estático
+    const la = edLayers[edSelectedIdx];
+    if (la) {
+      edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+      edCtx.globalAlpha = la.opacity ?? 1;
+      la.draw(edCtx, edCanvas);
+      edCtx.globalAlpha = 1;
+      edCtx.setTransform(1,0,0,1,0,0);
+    }
+    _edRenderOverlays();
+    return;
+  }
+
+  // ── Construir el canvas estático en el primer redraw del drag ──────────
+  if (edIsDragging && !_edDragStatic.valid && edSelectedIdx >= 0) {
+    const _la = edLayers[edSelectedIdx];
+    // Solo cachear capas sin canvas propio pesado (draw/fill/pencil/watercolor/gif tienen su propio canvas grande)
+    const _cacheable = _la &&
+      !['draw','fill','pencil','watercolor','gif'].includes(_la.type);
+    if (_cacheable) {
+      const cw = edCanvas.width, ch = edCanvas.height;
+      if (!_edDragStatic.canvas ||
+          _edDragStatic.canvas.width !== cw || _edDragStatic.canvas.height !== ch) {
+        _edDragStatic.canvas = document.createElement('canvas');
+        _edDragStatic.canvas.width = cw;
+        _edDragStatic.canvas.height = ch;
+        _edDragStatic.ctx = _edDragStatic.canvas.getContext('2d');
+      }
+      if (_edDragStatic.ctx) {
+        _edRenderFrame(_edDragStatic.ctx, edSelectedIdx);
+        _edDragStatic.forIdx  = edSelectedIdx;
+        _edDragStatic.cameraZ = edCamera.z;
+        _edDragStatic.cameraX = edCamera.x;
+        _edDragStatic.cameraY = edCamera.y;
+        _edDragStatic.valid   = true;
+        // Usar el fast path ya en este primer redraw
+        edCtx.setTransform(1,0,0,1,0,0);
+        edCtx.clearRect(0,0,cw,ch);
+        edCtx.drawImage(_edDragStatic.canvas, 0,0);
+        edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+        edCtx.globalAlpha = (_la.opacity ?? 1);
+        _la.draw(edCtx, edCanvas);
+        edCtx.globalAlpha = 1;
+        edCtx.setTransform(1,0,0,1,0,0);
+        _edRenderOverlays();
+        return;
+      }
+    }
+  }
+
+  // ── Render completo normal ─────────────────────────────────────────────
+  _edRenderFrame(edCtx);
+  _edRenderOverlays();
 }
 
 
@@ -10124,6 +10205,7 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
+  _edDragStatic.valid = false; // invalidar cache del drag
   if(window._gcpActive) return;
   // Limpiar el puntero del mapa de activos SIEMPRE, antes de cualquier return prematuro.
   // Todos los modos especiales (recorrido, recorte, zoom-rect, etc.) hacen return
