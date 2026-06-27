@@ -12207,30 +12207,16 @@ function _cofHandleMove(e) {
                        pointerType: 'touch', pointerId: e.pointerId, touches: null };
       if (_ci < _ces.length - 1) {
         // Punto intermedio: trazar sin redraw.
-        // Watercolor y dodge/burn necesitan su sistema propio (máscara de tinta + efectos).
-        if (_edDodgeBurnActive && edActiveTool === 'fill') {
-          // Dodge/burn intermedio: aplicar efecto con máscara de tinta, sin redraw
-          const _cI = edCoords(_synth);
-          const _prevDB = window._edDbLast;
-          window._edDbLast = edDodgeBurnStroke(_cI.nx, _cI.ny,
-            _prevDB ? _prevDB.wx : null, _prevDB ? _prevDB.wy : null);
-        } else if (!_edDodgeBurnActive && edActiveTool === 'fill' &&
-                   typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor' &&
-                   window._edWcFl) {
-          // Acuarela intermedia: trazo con máscara de tinta y blur, sin redraw
-          const _cI = edCoords(_synth);
-          const _prevWC = window._edWcLast;
-          window._edWcLast = _edWatercolorStroke(
-            window._edWcFl, _cI.nx, _cI.ny, edDrawColor, edDrawSize, edDrawOpacity,
-            _prevWC ? _prevWC.wx : null, _prevWC ? _prevWC.wy : null
-          );
-        } else {
-          // Herramienta normal (pen/pencil/eraser): pintar directamente sin redraw
-          const _dlC = _edTmpProxy();
-          if (_dlC) {
-            const _cC = edCoords(_synth);
-            _dlC.continueStroke(_cC.nx, _cC.ny, edDrawColor, _sz, _er, edDrawOpacity, 0);
-          }
+        // Herramienta fill (acuarela / dodge-burn): solo acumular el delta del cursor;
+        // el trazo real se aplica ÚNICAMENTE en el último evento (via edContinuePaint).
+        // Razón: los eventos coalescidos intermedios generan trazados incorrectos para
+        // estas herramientas — se restaura el comportamiento de v31_52.
+        if (edActiveTool === 'fill') continue;
+        // Herramienta normal (pen/pencil/eraser): pintar directamente sin redraw
+        const _dlC = _edTmpProxy();
+        if (_dlC) {
+          const _cC = edCoords(_synth);
+          _dlC.continueStroke(_cC.nx, _cC.ny, edDrawColor, _sz, _er, edDrawOpacity, 0);
         }
       } else {
         // Último punto: trazo + redraw completo
@@ -15429,9 +15415,25 @@ function edRenderOptionsPanel(mode){
         edDrawColor = edColorPalette[idx];
         _edUpdatePaletteDots();
       });
-      // Doble tap → abre selector de color con el color del dot como selección inicial
+      // Doble tap (táctil) → abre selector de color
       dot.addEventListener('pointerup', e => {
         if (!_edCheckDoubleTap(dot)) return;
+        e.stopPropagation();
+        const idx = parseInt(dot.dataset.colidx);
+        edSelectedPaletteIdx = idx;
+        edDrawColor = edColorPalette[idx];
+        _edUpdatePaletteDots();
+        if (idx <= 1) { edToast('Este color no es editable'); return; }
+        _edShowColorPicker((hex, final) => {
+          edDrawColor = hex;
+          if (final) { edColorPalette[idx] = hex; }
+          _edUpdatePaletteDots();
+        }, edColorPalette[idx]);
+      });
+      // Doble click (PC) → mismo efecto que doble tap en táctil
+      dot.addEventListener('dblclick', e => {
+        if (window._edIsTouch) return; // táctil lo gestiona pointerup
+        if (document.getElementById('ed-hsl-picker')) return; // ya abierto por pointerup
         e.stopPropagation();
         const idx = parseInt(dot.dataset.colidx);
         edSelectedPaletteIdx = idx;
@@ -18077,6 +18079,25 @@ function _edbBuildPalette() {
         _edbDblTapIdx = -1; _edbDblTapTimer = null;
         _edbClosePalette();
       }, 350);
+    });
+    // Doble click (PC) → mismo efecto que doble tap en táctil
+    btn.addEventListener('dblclick', e => {
+      if (window._edIsTouch) return; // táctil lo gestiona pointerup
+      if (btn.dataset.custom) return; // "+" ya funciona con pointerup
+      if (document.getElementById('ed-hsl-picker')) return; // ya abierto por pointerup
+      e.stopPropagation();
+      const idx = +btn.dataset.colidx;
+      clearTimeout(_edbDblTapTimer); _edbDblTapTimer = null; _edbDblTapIdx = -1;
+      _edbClosePalette();
+      if (idx <= 1) { edToast('Este color no es editable'); return; }
+      edSelectedPaletteIdx = idx;
+      edDrawColor = edColorPalette[idx];
+      _edShowColorPicker((hex, final) => {
+        edDrawColor = hex;
+        if (final) { edColorPalette[idx] = hex; }
+        _edUpdatePaletteDots();
+        _edbSyncColor();
+      }, edColorPalette[idx]);
     });
   });
 }
