@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v31.60</footer>
+    <footer class="app-version">v31.69</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -363,7 +363,27 @@ Router.register('editor', {
           <button class="ed-undo-redo-btn" id="edRedoBtn" title="Rehacer" disabled>↪</button>
           <button class="ed-undo-redo-btn" id="edZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
           <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="edMultiSelBtn" title="Selección múltiple (M)">Selección</button>
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" id="edMultiSelBtn" data-menu="select">Selección ▾</button>
+            <div class="ed-dropdown" id="dd-select">
+              <button class="ed-dropdown-item" id="_sel-all">Seleccionar todo</button>
+              <button class="ed-dropdown-item" id="_sel-none">Deseleccionar todo</button>
+              <div class="ed-dropdown-sep"></div>
+              <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn">⬇ Descargar selección ▸</button>
+                <div class="ed-submenu" id="dd-export-sel-sub">
+                  <button class="ed-dropdown-item" id="dd-exportselpng">PNG (transparencias)</button>
+                  <button class="ed-dropdown-item" id="dd-exportseljpg">JPG (fondo blanco)</button>
+                  <button class="ed-dropdown-item" id="dd-exportselsvg">SVG</button>
+                </div>
+              </div>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="_sel-group">⊞ Agrupar</button>
+              <button class="ed-dropdown-item" id="_sel-merge">⊕ Unir</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="_sel-delete" style="color:#c00">✕ Eliminar selección</button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
 
           <!-- REGLAS -->
@@ -424,24 +444,11 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="project">Proyecto ▾</button>
             <div class="ed-dropdown" id="dd-project">
               <button class="ed-dropdown-item" id="dd-editproject">Editar datos de la obra</button>
-              <div class="ed-dropdown-submenu" id="dd-export-wrap">
-                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportbtn">⬇ Descargar… ▸</button>
-                <div class="ed-submenu" id="dd-export-sub">
-                  <div class="ed-dropdown-submenu" id="dd-export-page-wrap">
-                    <button class="ed-dropdown-item ed-has-submenu" id="dd-exportpagebtn">Hoja actual ▸</button>
-                    <div class="ed-submenu" id="dd-export-page-sub">
-                      <button class="ed-dropdown-item" id="dd-exportpng">PNG (transparencias)</button>
-                      <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
-                    </div>
-                  </div>
-                  <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
-                    <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn">Selección ▸</button>
-                    <div class="ed-submenu" id="dd-export-sel-sub">
-                      <button class="ed-dropdown-item" id="dd-exportselpng">PNG (transparencias)</button>
-                      <button class="ed-dropdown-item" id="dd-exportseljpg">JPG (fondo blanco)</button>
-                      <button class="ed-dropdown-item" id="dd-exportselsvg">SVG</button>
-                    </div>
-                  </div>
+              <div class="ed-dropdown-submenu" id="dd-export-page-wrap">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-exportpagebtn">⬇ Descargar hoja actual ▸</button>
+                <div class="ed-submenu" id="dd-export-page-sub">
+                  <button class="ed-dropdown-item" id="dd-exportpng">PNG (transparencias)</button>
+                  <button class="ed-dropdown-item" id="dd-exportjpg">JPG (fondo blanco)</button>
                 </div>
               </div>
               <div class="ed-dropdown-sep"></div>
@@ -813,10 +820,22 @@ Router.register('editor', {
                 <button id="gcpBtnRei"   class="gcp-behav-btn" style="flex:1">Reinicio</button>
                 <button id="gcpBtnTimer" class="gcp-behav-btn" style="flex:1">&#x23F1;</button>
               </div>
+              <!-- Texto explicativo timer (visible solo en modo timer) -->
+              <div id="gcpTimerLabel" style="display:none;padding:0 14px 2px;font-family:var(--font-body);font-size:.73rem;color:var(--gray-500);text-align:center;line-height:1.3">Tiempo espera para inicio animación</div>
               <!-- Slider único adaptable -->
               <div style="padding:6px 14px 4px">
                 <input type="range" id="gcpBehavSlider" min="1" max="24" value="10" step="1"
                   style="width:100%;accent-color:var(--black);cursor:pointer">
+              </div>
+              <!-- Sección invisibilidad (visible solo en modo timer) -->
+              <div id="gcpInvisSection" style="display:none;padding:5px 14px 7px;border-top:1px solid var(--gray-200)">
+                <div style="font-family:var(--font-body);font-size:.73rem;font-weight:700;color:var(--gray-500);margin-bottom:5px;text-align:center;letter-spacing:.03em">Invisibilidad</div>
+                <label style="display:flex;align-items:center;gap:7px;font-size:.8rem;font-family:var(--font-body);cursor:pointer;padding:2px 0">
+                  <input type="checkbox" id="gcpInvisBeforeStart" style="cursor:pointer;accent-color:var(--black)"> Antes inicio
+                </label>
+                <label style="display:flex;align-items:center;gap:7px;font-size:.8rem;font-family:var(--font-body);cursor:pointer;padding:2px 0;margin-top:2px">
+                  <input type="checkbox" id="gcpInvisAtEnd" style="cursor:pointer;accent-color:var(--black)"> Al final
+                </label>
               </div>
               <!-- Resumen -->
               <div id="gcpBehaviourSummary" style="padding:2px 14px 8px;font-family:var(--font-body);font-size:.78rem;font-weight:700;color:var(--gray-500);text-align:center">10 fps · ∞</div>

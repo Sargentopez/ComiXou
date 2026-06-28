@@ -1250,7 +1250,7 @@ class ImageLayer extends BaseLayer {
     const px = edMarginX() + _iCurX*pw;
     const py = edMarginY() + _iCurY*ph;
     ctx.save();
-    ctx.globalAlpha = this.opacity ?? 1;
+    ctx.globalAlpha = this._animFadeOpacity != null ? this._animFadeOpacity : (this.opacity ?? 1);
     ctx.translate(px,py);
     ctx.rotate(this.rotation*Math.PI/180);
     ctx.drawImage(src, -w/2, -h/2, w, h);
@@ -1296,6 +1296,21 @@ class ImageLayer extends BaseLayer {
         this._fIdx = _circEnd ? 0 : total - 1;
         this._oc.getContext('2d').putImageData(this._animFrames[this._fIdx].imageData, 0, 0);
         this._playing = false;
+        // Fade out si gcpInvisAtEnd y reproducción finita
+        if (this._gcpInvisAtEnd && repeatCount > 0) {
+          const _selfFO = this;
+          const _natFO = this.opacity ?? 1;
+          const _t0FO = performance.now();
+          const _durFO = 150;
+          const _doFO = () => {
+            const p = Math.min((performance.now() - _t0FO) / _durFO, 1);
+            _selfFO._animFadeOpacity = (1 - p) * _natFO;
+            if (typeof edRedraw === 'function') edRedraw();
+            if (typeof edUpdateViewer === 'function') edUpdateViewer();
+            if (p < 1) requestAnimationFrame(_doFO);
+          };
+          requestAnimationFrame(_doFO);
+        }
         // Reinicio automático tras delay (si está configurado)
         const _rd = (this._gcpRestartDelay != null ? this._gcpRestartDelay : 0);
         if (_rd > 0) {
@@ -1305,15 +1320,41 @@ class ImageLayer extends BaseLayer {
             _self._restartTimer = null;
             _self._fIdx = 0;
             _self._gcpPlayCount = 0;
-            _self._playing = true;
-            // Resetear el recorrido para que se sincronice con el reinicio
-            delete _self._pathStartTime;
-            delete _self._pathStopped;
-            _self._applyFrame(0);
-            requestAnimationFrame(() => {
-              if (typeof edRedraw === 'function') edRedraw();
-              if (typeof edUpdateViewer === 'function') edUpdateViewer();
-            });
+            // Calcular si hay retardo de inicio con invisibilidad en este nuevo ciclo
+            const _sdMsR = (_self._gcpInvisBeforeStart && (_self._gcpStartDelay || 0) > 0)
+              ? _self._gcpStartDelay * 1000 : 0;
+            if (_sdMsR > 0) {
+              // Permanecer invisible durante el retardo de inicio del nuevo ciclo
+              _self._animFadeOpacity = 0;
+              _self._startDelayTimer = setTimeout(() => {
+                _self._startDelayTimer = null;
+                _self._playing = true;
+                delete _self._pathStartTime;
+                delete _self._pathStopped;
+                // Fade in al arrancar el nuevo ciclo
+                const _natFIR = _self.opacity ?? 1;
+                const _t0FIR = performance.now();
+                const _doFIR = () => {
+                  const p = Math.min((performance.now() - _t0FIR) / 300, 1);
+                  _self._animFadeOpacity = p >= 1 ? null : p * _natFIR;
+                  if (typeof edRedraw === 'function') edRedraw();
+                  if (typeof edUpdateViewer === 'function') edUpdateViewer();
+                  if (p < 1) requestAnimationFrame(_doFIR);
+                };
+                requestAnimationFrame(_doFIR);
+                _self._applyFrame(0);
+              }, _sdMsR);
+            } else {
+              _self._animFadeOpacity = null; // Restaurar opacidad natural para el nuevo ciclo
+              _self._playing = true;
+              delete _self._pathStartTime;
+              delete _self._pathStopped;
+              _self._applyFrame(0);
+              requestAnimationFrame(() => {
+                if (typeof edRedraw === 'function') edRedraw();
+                if (typeof edUpdateViewer === 'function') edUpdateViewer();
+              });
+            }
           }, _rd * 1000);
         }
         requestAnimationFrame(() => {
@@ -1353,6 +1394,7 @@ class ImageLayer extends BaseLayer {
     this._playing = false;
     this._fIdx = 0;
     this._gcpPlayCount = 0;
+    this._animFadeOpacity = null; // Cancelar cualquier fade activo
     if (this._animReady && this._animFrames && this._animFrames.length) {
       this._oc.getContext('2d').putImageData(this._animFrames[0].imageData, 0, 0);
     }
@@ -2986,6 +3028,8 @@ function _edLayersSnapshot(){
       if(l._gcpStopAtEnd)     o._gcpStopAtEnd     = l._gcpStopAtEnd;
       if(l._gcpRestartDelay)  o._gcpRestartDelay  = l._gcpRestartDelay;
       if(l._gcpStartDelay)    o._gcpStartDelay    = l._gcpStartDelay;
+      if(l._gcpInvisBeforeStart) o._gcpInvisBeforeStart = true;
+      if(l._gcpInvisAtEnd)       o._gcpInvisAtEnd       = true;
       if(l._gcpCircularEnd)  o._gcpCircularEnd  = true;
       if(l._gcpLayersData)   o._gcpLayersData   = l._gcpLayersData;
       if(l._gcpFramesData)   o._gcpFramesData   = l._gcpFramesData;
@@ -3726,59 +3770,42 @@ function _edDeactivateMultiSel(){
   if(edCanvas) edCanvas.className='';
   const btn = document.getElementById('edMultiSelBtn');
   if(btn) btn.classList.remove('active');
-  const _mdd=$('_edMultiSelDd'); if(_mdd) _mdd.classList.remove('open');
+  $('_edMultiSelDd')?.classList.remove('open');
+  $('dd-select')?.classList.remove('open');
+  document.querySelector('[data-menu="select"]')?.classList.remove('open');
+  if(edMenuOpen==='select') edMenuOpen=null;
   if(prev>=0&&prev<edLayers.length) edSelectedIdx=prev;
   edRedraw();
 }
 
 function _edUpdateMultiSelPanel(){
+  // Ya no abre dropdown automáticamente — las opciones se acceden vía botón "Selección ▾"
   const panel=$('edOptionsPanel');
   if(panel && panel.dataset.mode==='multiselect'){ panel.classList.remove('open'); panel.innerHTML=''; delete panel.dataset.mode; }
-  let dd = $('_edMultiSelDd');
-  if(!dd){
-    dd = document.createElement('div');
-    dd.id = '_edMultiSelDd';
-    dd.className = 'ed-dropdown';
-    document.addEventListener('pointerdown', e=>{
-      if(!dd.contains(e.target) && e.target.id!=='edMultiSelBtn') dd.classList.remove('open');
-    }, {passive:true});
-    document.body.appendChild(dd);
-  }
-  if(edActiveTool!=='multiselect' || edMultiSel.length < 2){
-    dd.classList.remove('open'); return;
-  }
-  const _hasGroup = edMultiSel.some(i => edLayers[i]?.groupId);
-  const _mergeTypes = _edMergeableTypes();
-  dd.innerHTML = `
-    <button class="ed-dropdown-item" id="_ms-group">⊞ Agrupar</button>
-    ${_mergeTypes ? `<button class="ed-dropdown-item" id="_ms-merge">⊕ Unir</button>` : ''}
-    <div class="ed-dropdown-sep"></div>
-    <button class="ed-dropdown-item" id="_ms-delete" style="color:#c00">✕ Eliminar selección</button>`;
-  $('_ms-group')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edGroupSelected(); });
-  $('_ms-merge')?.addEventListener('click', ()=>{ dd.classList.remove('open'); edMergeSelected(); });
-  $('_ms-delete')?.addEventListener('click', ()=>{
-    dd.classList.remove('open');
-    const _n = edMultiSel.length;
-    edConfirm(`¿Eliminar ${_n} objeto${_n===1?'':'s'}?`, () => {
-      edPushHistory();
-      const page = edPages[edCurrentPage]; if(!page) return;
-      // Ordenar desc para eliminar sin desfasar índices
-      const _toDelete = [...edMultiSel].sort((a,b)=>b-a);
-      _toDelete.forEach(i => { page.layers.splice(i,1); });
-      edLayers = page.layers;
-      _msClear();
-      edSelectedIdx = -1;
-      edActiveTool = 'select'; edCanvas.className = '';
-      edRedraw();
-    }, 'Eliminar');
-  });
-  const btn = $('edMultiSelBtn');
-  if(btn){
-    dd.classList.add('open');
-    _edPositionDropdown(dd, btn.getBoundingClientRect());
-  } else {
-    dd.classList.add('open');
-  }
+}
+
+// Actualiza el estado de los items del dropdown Selección ▾ según la selección actual.
+// Se llama desde edToggleMenu('select') justo antes de mostrar el menú.
+function _edUpdateSelectMenu(){
+  const _hasSel = edActiveTool==='multiselect' && edMultiSel.length >= 2;
+  const _mergeTypes = _hasSel ? _edMergeableTypes() : null;
+  const _dis = 'opacity:0.35;cursor:not-allowed;pointer-events:none';
+  // Objetos seleccionables (no ocultos, no capas vinculadas)
+  const _selectable = edLayers.filter(la => la && !la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor');
+  const _canSelAll = _selectable.length >= 1;
+  const _canDesel  = (edActiveTool==='multiselect' && edMultiSel.length > 0) || edSelectedIdx >= 0;
+  const _btnAll  = $('_sel-all');
+  const _btnNone = $('_sel-none');
+  const _btnGroup = $('_sel-group');
+  const _btnMerge = $('_sel-merge');
+  const _btnDel   = $('_sel-delete');
+  if(_btnAll)  _btnAll .setAttribute('style', _canSelAll ? '' : _dis);
+  if(_btnNone) _btnNone.setAttribute('style', _canDesel  ? '' : _dis);
+  const _btnDl = $('dd-exportselbtn');
+  if(_btnDl)  _btnDl .setAttribute('style', _canDesel  ? '' : _dis);
+  if(_btnGroup) _btnGroup.setAttribute('style', _hasSel ? '' : _dis);
+  if(_btnMerge) _btnMerge.style.display = (_hasSel && _mergeTypes) ? '' : 'none';
+  if(_btnDel)   _btnDel.setAttribute('style', _hasSel ? 'color:#c00' : 'color:#c00;' + _dis);
 }
 
 // Recalcula edMultiBbox en espacio LOCAL del grupo (desrotado por edMultiGroupRot).
@@ -13360,6 +13387,7 @@ function edToggleMenu(id){
   edMenuOpen = id;
   if(id === 'nav') edUpdateNavPages();
   if(id === 'rules') _edRuleToggleSync();
+  if(id === 'select') _edUpdateSelectMenu();
 }
 
 function edDeactivateDrawTool(){
@@ -16987,6 +17015,64 @@ function _edRuleToggleSync() {
   _txt.textContent = _anyHidden ? 'Mostrar guías' : 'Ocultar guías';
 }
 
+function edInitSelectMenu(){
+  $('_sel-all')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    const _all = [];
+    edLayers.forEach((la, i)=>{
+      if(la && !la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor') _all.push(i);
+    });
+    if(_all.length === 0) return;
+    if(_all.length === 1){
+      _msClear();
+      edSelectedIdx = _all[0]; edMultiSelAnchor = _all[0];
+      edActiveTool = 'select'; edCanvas.className = '';
+      _edDrawLockUI(); _edPropsOverlayShow();
+      edRenderOptionsPanel('props');
+      edRedraw();
+    } else {
+      edMultiSel = _all; edSelectedIdx = -1;
+      edActiveTool = 'multiselect'; edCanvas.className = 'tool-multiselect';
+      _msRecalcBbox(); edRedraw();
+    }
+  });
+  $('_sel-none')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    if(edActiveTool==='multiselect' && edMultiSel.length > 0){
+      _edDeactivateMultiSel();
+    } else if(edSelectedIdx >= 0){
+      edSelectedIdx = -1; edMultiSelAnchor = -1;
+      edActiveTool = 'select'; edCanvas.className = '';
+      _edDrawUnlockUI(); _edPropsOverlayHide();
+      edCloseOptionsPanel();
+      edRedraw();
+    }
+  });
+  $('_sel-group')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edGroupSelected();
+  });
+  $('_sel-merge')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edMergeSelected();
+  });
+  $('_sel-delete')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    const _n = edMultiSel.length;
+    edConfirm(`¿Eliminar ${_n} objeto${_n===1?'':'s'}?`, ()=>{
+      edPushHistory();
+      const page = edPages[edCurrentPage]; if(!page) return;
+      const _toDelete = [...edMultiSel].sort((a,b)=>b-a);
+      _toDelete.forEach(i=>{ page.layers.splice(i,1); });
+      edLayers = page.layers;
+      _msClear();
+      edSelectedIdx = -1;
+      edActiveTool = 'select'; edCanvas.className = '';
+      edRedraw();
+    }, 'Eliminar');
+  });
+}
+
 function edInitRules() {
   $('dd-rule-add')?.addEventListener('click', () => {
     _edRuleAdd();
@@ -20573,6 +20659,8 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpStopAtEnd)            l._gcpStopAtEnd    = true;
     if(d._gcpRestartDelay != null) l._gcpRestartDelay = d._gcpRestartDelay;
     if(d._gcpStartDelay   != null) l._gcpStartDelay   = d._gcpStartDelay;
+    if(d._gcpInvisBeforeStart)     l._gcpInvisBeforeStart = true;
+    if(d._gcpInvisAtEnd)           l._gcpInvisAtEnd       = true;
     if(d._gcpCircularEnd)         l._gcpCircularEnd  = true;
     if(d._motionPath)             l._motionPath       = d._motionPath;
     if(d._motionPathClosed)       l._motionPathClosed = true;
@@ -21675,12 +21763,28 @@ function _edStartPageAnims(pageIdx) {
       if (l._startDelayTimer) { clearTimeout(l._startDelayTimer); l._startDelayTimer = null; }
       if (l._restartTimer)    { clearTimeout(l._restartTimer);    l._restartTimer    = null; }
       const _startMs = (l._gcpStartDelay || 0) * 1000;
+      // Invisibilidad antes del inicio: opacity 0 durante el delay
+      if (_startMs > 0 && l._gcpInvisBeforeStart) l._animFadeOpacity = 0;
       const _doStart = () => {
         l._startDelayTimer = null;
         l._playing = true;
         // Resetear el recorrido para que arranque sincronizado con la animación
         delete l._pathStartTime;
         delete l._pathStopped;
+        // Fade in si gcpInvisBeforeStart (transición rápida pero gradual)
+        if (l._gcpInvisBeforeStart && _startMs > 0) {
+          const _natFI = l.opacity ?? 1;
+          const _t0FI = performance.now();
+          const _durFI = 300;
+          const _doFI = () => {
+            const p = Math.min((performance.now() - _t0FI) / _durFI, 1);
+            l._animFadeOpacity = p >= 1 ? null : p * _natFI;
+            if (typeof edRedraw === 'function') edRedraw();
+            if (typeof edUpdateViewer === 'function') edUpdateViewer();
+            if (p < 1) requestAnimationFrame(_doFI);
+          };
+          requestAnimationFrame(_doFI);
+        }
         if (l._animReady && l._animFrames && l._animFrames.length > 0) {
           l._applyFrame(0);
         } else if (l._apngSrc || l._pngFrames) {
@@ -23085,11 +23189,7 @@ function EditorView_init(){
   }
   // _edDeactivateMultiSel definida en scope global
 
-  // Botón multi-selección
-  $('edMultiSelBtn')?.addEventListener('click', () => {
-    // El botón nunca activa la herramienta — solo muestra opciones si hay selección múltiple
-    if(edMultiSel.length >= 2) _edUpdateMultiSelPanel();
-  });
+  // Botón Selección ▾ — ahora usa data-menu="select" + edToggleMenu (ver edInitSelectMenu)
   if(!window._edMultiSelKeyFn){
     window._edMultiSelKeyFn = e => {
       if(e.key==='Escape' && edActiveTool==='multiselect'){
@@ -23608,13 +23708,10 @@ function EditorView_init(){
   $('dd-exportpagebtn')?.addEventListener('click', e => {
     e.stopPropagation();
     $('dd-export-page-sub')?.classList.toggle('open');
-    $('dd-export-sel-sub')?.classList.remove('open');
   });
-  // Submenú Selección (inline)
   $('dd-exportselbtn')?.addEventListener('click', e => {
     e.stopPropagation();
     $('dd-export-sel-sub')?.classList.toggle('open');
-    $('dd-export-page-sub')?.classList.remove('open');
   });
   $('dd-exportselpng')?.addEventListener('click',()=>{ edExportSelectionPNG('png'); edCloseMenus(); });
   $('dd-exportseljpg')?.addEventListener('click',()=>{ edExportSelectionPNG('jpg'); edCloseMenus(); });
@@ -23633,10 +23730,7 @@ function EditorView_init(){
     e.stopPropagation();
     $('dd-vectorial-sub')?.classList.toggle('open');
   });
-  $('dd-exportbtn')?.addEventListener('click', e => {
-    e.stopPropagation();
-    $('dd-export-sub')?.classList.toggle('open');
-  });
+
   $('dd-exportpng')?.addEventListener('click',()=>{edExportPagePNG('png');edCloseMenus();});
   $('dd-exportjpg')?.addEventListener('click',()=>{edExportPagePNG('jpg');edCloseMenus();});
   // Mostrar "Recuperar versión del dispositivo" si hay versión local guardada
@@ -23731,6 +23825,7 @@ function EditorView_init(){
   edInitFloatDrag();
   edInitDrawBar();
   edInitShapeBar();
+  edInitSelectMenu();
   edInitRules();
   edInitBiblioteca();
   // Avisar al usuario si localStorage se llena al guardar
@@ -25266,6 +25361,8 @@ function edBibGuardar() {
     if (_la2._gcpStopAtEnd)            entry.gcpStopAtEnd    = _la2._gcpStopAtEnd;
     if (_la2._gcpRestartDelay)         entry.gcpRestartDelay = _la2._gcpRestartDelay;
     if (_la2._gcpStartDelay)           entry.gcpStartDelay   = _la2._gcpStartDelay;
+    if (_la2._gcpInvisBeforeStart)     entry.gcpInvisBeforeStart = true;
+    if (_la2._gcpInvisAtEnd)           entry.gcpInvisAtEnd       = true;
     if (_la2._gcpCircularEnd)          entry.gcpCircularEnd  = true;
     // Datos GCP para re-edición: capas y frames del editor de animaciones
     // Sin estos campos el GCP abre sin capas al hacer doble tap sobre la animación
@@ -25721,6 +25818,8 @@ function _bibRenderPanel(panel) {
           if (entry.gcpStopAtEnd)            la._gcpStopAtEnd    = true;
           if (entry.gcpRestartDelay)         la._gcpRestartDelay = entry.gcpRestartDelay;
           if (entry.gcpStartDelay)           la._gcpStartDelay   = entry.gcpStartDelay;
+          if (entry.gcpInvisBeforeStart)     la._gcpInvisBeforeStart = true;
+          if (entry.gcpInvisAtEnd)           la._gcpInvisAtEnd       = true;
           if (entry.gcpCircularEnd)          la._gcpCircularEnd  = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
@@ -27280,6 +27379,8 @@ window._gcpStopAtEnd    = false; // true = detener en el último frame
 window._gcpRestartDelay = 0;    // 0 = desactivado, 1-60 = segundos antes de reiniciar
 window._gcpBehavMode   = 'vel'; // modo activo del dropdown Comportamiento: 'vel'|'rep'|'rei'|'timer'
 window._gcpStartDelay  = 0;    // segundos (paso 0.5) antes de comenzar la reproducción
+window._gcpInvisBeforeStart = false; // true = capa invisible durante el startDelay (fade-in al iniciar)
+window._gcpInvisAtEnd       = false; // true = capa se desvanece al terminar todas las reproducciones
 window._gcpDirty       = false; // true si hay cambios sin guardar
 let gcpCanvas = null;
 let gcpCtx    = null;
@@ -28259,6 +28360,8 @@ function _gcpPreviewStop() {
   if (!_gcpPreviewTimer) return;
   clearTimeout(_gcpPreviewTimer);
   _gcpPreviewTimer = null;
+  // Resetear opacidad del canvas GCP (por si hay fade-in o fade-out en curso)
+  if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '1'; }
   const btn = document.getElementById('gcpPreviewBtn');
   if (btn) btn.textContent = '▶';
   const _snapFi = _gcpNearestPrevKeyFrame(window._gcpGlobalFrameIdx);
@@ -28331,7 +28434,8 @@ function _gcpPreview() {
       _gcpRedraw();
       _gcpUpdateFrameNav();
     }
-    // Restaurar edCanvas tras el preview
+    // Resetear opacidad del canvas GCP y restaurar edCanvas
+    if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '1'; }
     if (edCtx && edCanvas) {
       edRedraw();
     }
@@ -28347,7 +28451,15 @@ function _gcpPreview() {
     const next = fi + 1;
     if (next >= total) {
       loopN++;
-      if (repeatMax > 0 && loopN >= repeatMax) { stop(true); return; }
+      if (repeatMax > 0 && loopN >= repeatMax) {
+        if (window._gcpInvisAtEnd) {
+          // Fade-out rápido (150ms) antes de detener el preview
+          if (gcpCanvas) { gcpCanvas.style.transition = 'opacity 0.15s ease-in'; gcpCanvas.style.opacity = '0'; }
+          clearTimeout(_gcpPreviewTimer);
+          _gcpPreviewTimer = setTimeout(() => stop(true), 160);
+        } else { stop(true); }
+        return;
+      }
       fi = 0;
     } else {
       fi = next;
@@ -28355,12 +28467,25 @@ function _gcpPreview() {
     _gcpPreviewTimer = setTimeout(loop, delay);
   };
 
-  // Primer frame
+  // Primer frame — con posible retardo e invisibilidad inicial (gcpInvisBeforeStart)
   window._gcpGlobalFrameIdx = 0;
   _gcpApplyFrame(0);
   _gcpRedraw();
   fi = 1;
-  _gcpPreviewTimer = setTimeout(loop, delay);
+  const _pvDelay = window._gcpInvisBeforeStart ? (window._gcpStartDelay || 0) * 1000 : 0;
+  if (_pvDelay > 0) {
+    // Canvas invisible durante el retardo de inicio
+    if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '0'; }
+    _gcpPreviewTimer = setTimeout(() => {
+      if (!btn || btn.textContent === '▶') return; // detenido externamente
+      // Fade in al arrancar
+      if (gcpCanvas) { gcpCanvas.style.transition = 'opacity 0.3s ease-out'; gcpCanvas.style.opacity = '1'; }
+      _gcpPreviewTimer = setTimeout(loop, delay);
+    }, _pvDelay);
+  } else {
+    if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '1'; }
+    _gcpPreviewTimer = setTimeout(loop, delay);
+  }
 }
 
 // _gcpUpdateFramesBar — matriz 2D: una fila por objeto, columnas = frames globales.
@@ -29931,6 +30056,9 @@ function gcpOpen(edLayerIdx) {
     _gcpHintStop();
   }
   // Leer comportamientos guardados de la capa y reflejarlos en la UI
+  // Resetear valores por defecto antes de leer de la capa
+  window._gcpInvisBeforeStart = false;
+  window._gcpInvisAtEnd       = false;
   if (window._gcpEdLayerIdx >= 0) {
     const _gl = edLayers[window._gcpEdLayerIdx];
     if (_gl) {
@@ -29940,6 +30068,8 @@ function gcpOpen(edLayerIdx) {
       if (_gl._gcpRestartDelay != null) window._gcpRestartDelay = _gl._gcpRestartDelay;
       window._gcpBehavMode  = 'vel'; // siempre arrancar en modo velocidad
       if (_gl._gcpStartDelay  != null) window._gcpStartDelay  = _gl._gcpStartDelay;
+      window._gcpInvisBeforeStart = !!_gl._gcpInvisBeforeStart;
+      window._gcpInvisAtEnd       = !!_gl._gcpInvisAtEnd;
     }
     // Sincronizar UI de comportamiento al abrir
     requestAnimationFrame(() => { if (typeof _gcpSyncComportamiento === 'function') _gcpSyncComportamiento(); });
@@ -30130,6 +30260,19 @@ function gcpOpen(edLayerIdx) {
       if (btnRei) { btnRei.classList.toggle('active', mode === 'rei'); btnRei.disabled = isInf; }
       const btnTimer = document.getElementById('gcpBtnTimer');
       if (btnTimer) btnTimer.classList.toggle('active', mode === 'timer');
+      // Mostrar/ocultar elementos específicos del modo timer
+      const _timerLbl  = document.getElementById('gcpTimerLabel');
+      const _invisSect = document.getElementById('gcpInvisSection');
+      if (_timerLbl)  _timerLbl.style.display  = mode === 'timer' ? 'block' : 'none';
+      if (_invisSect) _invisSect.style.display  = mode === 'timer' ? 'block' : 'none';
+      if (mode === 'timer') {
+        const _cbBefore = document.getElementById('gcpInvisBeforeStart');
+        const _cbEnd    = document.getElementById('gcpInvisAtEnd');
+        const _sd = window._gcpStartDelay || 0;
+        const _rc = window._gcpRepeatCount || 0;
+        if (_cbBefore) { _cbBefore.checked = !!window._gcpInvisBeforeStart; _cbBefore.disabled = _sd === 0; }
+        if (_cbEnd)    { _cbEnd.checked    = !!window._gcpInvisAtEnd;       _cbEnd.disabled    = _rc === 0; }
+      }
       if (slider) {
         if (mode === 'vel') {
           const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
@@ -30182,8 +30325,14 @@ function gcpOpen(edLayerIdx) {
         if (n === 0 && window._gcpRestartDelay > 0) window._gcpRestartDelay = 0;
         const btnRei = document.getElementById('gcpBtnRei');
         if (btnRei) btnRei.disabled = (n === 0);
+        // "Al final" solo disponible si reproducción finita
+        const _cbEndR = document.getElementById('gcpInvisAtEnd');
+        if (_cbEndR) _cbEndR.disabled = (n === 0);
       } else if (mode === 'timer') {
         window._gcpStartDelay = n; // 0 = sin retardo
+        // "Antes inicio" solo tiene sentido si hay retardo
+        const _cbBefT = document.getElementById('gcpInvisBeforeStart');
+        if (_cbBefT) _cbBefT.disabled = (n === 0);
       } else {
         window._gcpRestartDelay = n; // 0 = desactivado
       }
@@ -30208,6 +30357,18 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpBtnRep')?.addEventListener('pointerup',   e => { e.stopPropagation(); _gcpSetMode('rep'); });
     document.getElementById('gcpBtnRei')?.addEventListener('pointerup',   e => { e.stopPropagation(); _gcpSetMode('rei'); });
     document.getElementById('gcpBtnTimer')?.addEventListener('pointerup', e => { e.stopPropagation(); _gcpSetMode('timer'); });
+
+    // Checkboxes de invisibilidad (modo timer)
+    document.getElementById('gcpInvisBeforeStart')?.addEventListener('change', e => {
+      e.stopPropagation();
+      window._gcpInvisBeforeStart = e.target.checked;
+      window._gcpDirty = true;
+    });
+    document.getElementById('gcpInvisAtEnd')?.addEventListener('change', e => {
+      e.stopPropagation();
+      window._gcpInvisAtEnd = e.target.checked;
+      window._gcpDirty = true;
+    });
 
     // Sincronizar UI al abrir el dropdown de comportamiento
     _gcpInitRules(); // botones Guías GCP
@@ -30492,6 +30653,8 @@ function _gcpSaveToLib(onDone) {
     existingLayer._gcpStopAtEnd    = window._gcpStopAtEnd;
     existingLayer._gcpRestartDelay = window._gcpRestartDelay;
     existingLayer._gcpStartDelay   = window._gcpStartDelay;
+    existingLayer._gcpInvisBeforeStart = !!window._gcpInvisBeforeStart;
+    existingLayer._gcpInvisAtEnd       = !!window._gcpInvisAtEnd;
     existingLayer._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
     // Cargar primer frame como imagen visible
     const img=new Image();
@@ -30530,6 +30693,8 @@ function _gcpSaveToLib(onDone) {
       la._gcpStopAtEnd    = window._gcpStopAtEnd;
       la._gcpRestartDelay = window._gcpRestartDelay;
       la._gcpStartDelay   = window._gcpStartDelay;
+      la._gcpInvisBeforeStart = !!window._gcpInvisBeforeStart;
+      la._gcpInvisAtEnd       = !!window._gcpInvisAtEnd;
       la._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
       // Insertar antes de la primera capa de texto/bocadillo (igual que biblioteca)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');

@@ -1420,12 +1420,29 @@ function _readerGifTick() {
       // APNG: tick con delay real (suspendido si motion path con ciclos controla el frame)
       if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
         const _animMpSync = layer._motionPath && layer._motionCycles != null;
+        // Actualizar fade activo (fade-in / fade-out)
+        if (layer._animFadeStart != null) {
+          const _fp = Math.min((now - layer._animFadeStart) / (layer._animFadeDur || 300), 1);
+          const _nat = layer.opacity !== undefined ? layer.opacity : 1;
+          layer._animFadeOpacity = layer._animFadeDir === 'in' ? _fp * _nat : (1 - _fp) * _nat;
+          if (_fp >= 1) {
+            layer._animFadeStart = null;
+            if (layer._animFadeDir === 'in') layer._animFadeOpacity = null; // restaurar opacidad natural
+          }
+          panelChanged = true;
+        }
         if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
         else if (!layer._animLastTick) {
           // Esperar hasta que expire el temporizador de inicio
           if (layer._animStartAt && now >= layer._animStartAt) {
             layer._animLastTick = now;
             layer._animStartAt  = null;
+            // Fade in si gcpInvisBeforeStart
+            if (layer._gcpInvisBeforeStart && layer._animFadeOpacity === 0) {
+              layer._animFadeStart = now;
+              layer._animFadeDur   = 300;
+              layer._animFadeDir   = 'in';
+            }
             panelChanged = true;
           }
         }
@@ -1437,13 +1454,23 @@ function _readerGifTick() {
             layer._animRestartAt = null;
             layer._animIdx       = 0;
             layer._animPlayCount = 0;
-            layer._animLastTick  = now;
             if (layer._animOc && layer._animFrames && layer._animFrames.length) {
               layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
             }
+            // Invisibilidad en inicio del nuevo ciclo (mismo comportamiento que _rStartPageAnims)
+            if (layer._gcpInvisBeforeStart && (layer._gcpStartDelay || 0) > 0) {
+              layer._animFadeOpacity = 0;
+              layer._animFadeStart   = null;
+              layer._animLastTick    = null; // suspender tick hasta que arranque
+              layer._animStartAt     = now + layer._gcpStartDelay * 1000;
+            } else {
+              layer._animFadeOpacity = null; // restaurar opacidad natural
+              layer._animLastTick    = now;
+            }
             // Reiniciar el recorrido sincronizado con la animación
             if (layer._motionPath && layer._motionPath.length >= 2) {
-              layer._pathStartTime = now;
+              const _hasStartDelay = layer._gcpInvisBeforeStart && (layer._gcpStartDelay || 0) > 0;
+              layer._pathStartTime = _hasStartDelay ? null : now;
               delete layer._pathStopped;
               layer._pathCurX = layer.x || 0.5;
               layer._pathCurY = layer.y || 0.5;
@@ -1470,6 +1497,13 @@ function _readerGifTick() {
               if (_rd > 0) {
                 layer._animStopped   = true;
                 layer._animRestartAt = now + _rd * 1000;
+              }
+              // Fade out si gcpInvisAtEnd y reproducción finita
+              if (layer._gcpInvisAtEnd && _repeatCount > 0) {
+                layer._animFadeStart = now;
+                layer._animFadeDur   = 150;
+                layer._animFadeDir   = 'out';
+                panelChanged = true;
               }
             } else {
               _nextIdx = 0; // loop infinito o más repeticiones
@@ -2162,7 +2196,7 @@ function _render() {
         const y=(layer._pathCurY != null ? layer._pathCurY : (layer.y||0.5))*ph;
         const w=(layer.width||1)*pw, h=(layer.height||1)*ph;
         const rot=(layer.rotation||0)*Math.PI/180;
-        ctx.save(); ctx.globalAlpha=layer.opacity!==undefined?layer.opacity:1;
+        ctx.save(); ctx.globalAlpha=layer._animFadeOpacity!=null?layer._animFadeOpacity:(layer.opacity!==undefined?layer.opacity:1);
         ctx.translate(x,y); if(rot)ctx.rotate(rot);
         ctx.drawImage(layer._animOc,-w/2,-h/2,w,h); ctx.restore(); return;
       }
@@ -2584,9 +2618,12 @@ function _resetPanelAnims(idx) {
       if (_initDelay > 0) {
         layer._animLastTick = null;           // no empezar aún
         layer._animStartAt  = Date.now() + _initDelay;
+        // Invisibilidad antes del inicio
+        if (layer._gcpInvisBeforeStart) { layer._animFadeOpacity = 0; layer._animFadeStart = null; }
       } else {
         layer._animLastTick = Date.now();     // iniciar tick desde ahora
         layer._animStartAt  = null;
+        layer._animFadeOpacity = null;
       }
       if (layer._animOc && layer._animFrames.length) {
         layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
