@@ -20203,6 +20203,8 @@ function edSerLayer(l){
     if(l._gcpStopAtEnd)            _r._gcpStopAtEnd    = true;
     if(l._gcpRestartDelay != null && l._gcpRestartDelay > 0) _r._gcpRestartDelay = l._gcpRestartDelay;
     if(l._gcpStartDelay   != null && l._gcpStartDelay   > 0) _r._gcpStartDelay   = l._gcpStartDelay;
+    if(l._gcpInvisBeforeStart) _r._gcpInvisBeforeStart = true;
+    if(l._gcpInvisAtEnd)       _r._gcpInvisAtEnd       = true;
     if(l._gcpCircularEnd)         _r._gcpCircularEnd  = true;
     if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _r._motionPathClosed = true;
