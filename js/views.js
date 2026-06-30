@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v31.70</footer>
+    <footer class="app-version">v31.72</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -837,8 +837,14 @@ Router.register('editor', {
                   <input type="checkbox" id="gcpInvisAtEnd" style="cursor:pointer;accent-color:var(--black)"> Al final
                 </label>
               </div>
-              <!-- Resumen -->
-              <div id="gcpBehaviourSummary" style="padding:2px 14px 8px;font-family:var(--font-body);font-size:.78rem;font-weight:700;color:var(--gray-500);text-align:center">10 fps · ∞</div>
+              <!-- Resumen editable (teclado PC/Android además del slider) -->
+              <div id="gcpBehaviourSummary" style="padding:2px 14px 8px;font-family:var(--font-body);font-size:.78rem;font-weight:700;color:var(--gray-500);text-align:center;display:flex;align-items:baseline;justify-content:center;flex-wrap:wrap;gap:2px 5px;line-height:1.7">
+                <span><input id="gcpSumVel" type="text" inputmode="numeric" maxlength="2" value="10" autocomplete="off" title="Velocidad (fps)" style="width:20px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px"> fps</span>
+                <span>·</span>
+                <span><input id="gcpSumRep" type="text" inputmode="numeric" maxlength="3" value="∞" autocomplete="off" title="Repeticiones (0 = ∞)" style="width:24px;text-align:center;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px"></span>
+                <span id="gcpSumReiWrap" style="display:none">· R:<input id="gcpSumRei" type="text" inputmode="numeric" maxlength="2" value="0" autocomplete="off" title="Reinicio (segundos)" style="width:18px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
+                <span id="gcpSumTimerWrap" style="display:none">· T:<input id="gcpSumTimer" type="text" inputmode="decimal" maxlength="4" value="0" autocomplete="off" title="Tiempo espera inicio (segundos)" style="width:24px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
+              </div>
             </div>
             <!-- Burbuja flotante de valor para sliders de comportamiento -->
             <div id="gcpSliderBubble" style="display:none;position:fixed;z-index:10000;background:var(--black);border-radius:8px;padding:5px 10px;color:var(--white);font-size:.85rem;font-weight:900;pointer-events:none;text-align:center;transform:translateX(-50%) translateY(-100%);margin-top:-8px;font-family:var(--font-body)"></div>

@@ -30226,17 +30226,50 @@ function gcpOpen(edLayerIdx) {
       _gcpDownloadMp4();
     });
     // ── Comportamiento: 3 botones + 1 slider adaptable ──
+    // Aplica un valor a la variable global del modo indicado, con los mismos
+    // efectos colaterales (cascada ∞→Reinicio=0, disabled de checkboxes/botón).
+    // Función única usada tanto por el slider (drag) como por los campos
+    // editables del resumen (teclado PC/Android) — evita lógica duplicada.
+    const _gcpApplyBehaviorVal = (mode, n) => {
+      if (mode === 'vel') {
+        window._gcpFrameDelay = Math.round(1000 / Math.max(n, 1));
+      } else if (mode === 'rep') {
+        window._gcpRepeatCount = n; // 0 = ∞
+        if (n === 0 && window._gcpRestartDelay > 0) window._gcpRestartDelay = 0;
+        const btnRei = document.getElementById('gcpBtnRei');
+        if (btnRei) btnRei.disabled = (n === 0);
+        const _cbEndR = document.getElementById('gcpInvisAtEnd');
+        if (_cbEndR) _cbEndR.disabled = (n === 0);
+      } else if (mode === 'timer') {
+        window._gcpStartDelay = n; // 0 = sin retardo
+        const _cbBefT = document.getElementById('gcpInvisBeforeStart');
+        if (_cbBefT) _cbBefT.disabled = (n === 0);
+      } else {
+        window._gcpRestartDelay = n; // 0 = desactivado
+      }
+      window._gcpDirty = true;
+    };
     const _gcpUpdateBehaviourSummary = () => {
-      const el = document.getElementById('gcpBehaviourSummary');
-      if (!el) return;
-      const fps = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
-      const rc  = window._gcpRepeatCount || 0;
-      const rep = rc === 0 ? '∞' : '×' + rc;
-      const rd  = window._gcpRestartDelay || 0;
-      const rds = rd > 0 ? ' · R:' + rd + 's' : '';
-      const sd  = window._gcpStartDelay || 0;
-      const sds = sd > 0 ? ' · T:' + sd + 's' : '';
-      el.textContent = fps + ' fps · ' + rep + rds + sds;
+      const elVel    = document.getElementById('gcpSumVel');
+      const elRep    = document.getElementById('gcpSumRep');
+      const elRei    = document.getElementById('gcpSumRei');
+      const elTmr    = document.getElementById('gcpSumTimer');
+      const wrapRei  = document.getElementById('gcpSumReiWrap');
+      const wrapTmr  = document.getElementById('gcpSumTimerWrap');
+      if (!elVel || !elRep) return;
+      const mode = window._gcpBehavMode || 'vel';
+      const fps  = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
+      const rc   = window._gcpRepeatCount   || 0;
+      const rd   = window._gcpRestartDelay  || 0;
+      const sd   = window._gcpStartDelay    || 0;
+      // No pisar el valor mientras el usuario está escribiendo en ese campo
+      if (document.activeElement !== elVel) elVel.value = fps;
+      if (document.activeElement !== elRep) elRep.value = rc === 0 ? '∞' : ('×' + rc);
+      // Reinicio/Timer: visibles si es el modo activo (para poder teclear desde 0) o si ya tienen valor
+      if (wrapRei) wrapRei.style.display = (mode === 'rei'   || rd > 0) ? 'inline' : 'none';
+      if (wrapTmr) wrapTmr.style.display = (mode === 'timer' || sd > 0) ? 'inline' : 'none';
+      if (elRei && document.activeElement !== elRei) elRei.value = rd;
+      if (elTmr && document.activeElement !== elTmr) elTmr.value = (sd % 1 === 0) ? sd : sd.toFixed(1);
     };
 
     // Texto de burbuja según modo activo
@@ -30320,25 +30353,7 @@ function gcpOpen(edLayerIdx) {
     _behavSlider?.addEventListener('input', e => {
       const n    = parseFloat(e.target.value);
       const mode = window._gcpBehavMode || 'vel';
-      if (mode === 'vel') {
-        window._gcpFrameDelay = Math.round(1000 / Math.max(n, 1));
-      } else if (mode === 'rep') {
-        window._gcpRepeatCount = n; // 0 = ∞
-        if (n === 0 && window._gcpRestartDelay > 0) window._gcpRestartDelay = 0;
-        const btnRei = document.getElementById('gcpBtnRei');
-        if (btnRei) btnRei.disabled = (n === 0);
-        // "Al final" solo disponible si reproducción finita
-        const _cbEndR = document.getElementById('gcpInvisAtEnd');
-        if (_cbEndR) _cbEndR.disabled = (n === 0);
-      } else if (mode === 'timer') {
-        window._gcpStartDelay = n; // 0 = sin retardo
-        // "Antes inicio" solo tiene sentido si hay retardo
-        const _cbBefT = document.getElementById('gcpInvisBeforeStart');
-        if (_cbBefT) _cbBefT.disabled = (n === 0);
-      } else {
-        window._gcpRestartDelay = n; // 0 = desactivado
-      }
-      window._gcpDirty = true;
+      _gcpApplyBehaviorVal(mode, n);
       _gcpShowBubble(e.target, _gcpBehavBubble(n));
       _gcpUpdateBehaviourSummary();
     });
@@ -30371,6 +30386,38 @@ function gcpOpen(edLayerIdx) {
       window._gcpInvisAtEnd = e.target.checked;
       window._gcpDirty = true;
     });
+
+    // Campos editables del resumen — establecer parámetros con teclado PC/Android
+    // (además de seguir actualizándose en vivo al arrastrar el slider)
+    const _gcpCommitSumInput = (id, mode, parse, min, max, step) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('pointerdown', e => e.stopPropagation());
+      el.addEventListener('focus', () => el.select());
+      const commit = () => {
+        const n = parse(el.value);
+        if (n == null || isNaN(n)) { _gcpSyncComportamiento(); return; } // entrada inválida: revertir
+        let v = Math.min(max, Math.max(min, n));
+        if (step) v = Math.round(v / step) * step;
+        v = Math.round(v * 100) / 100; // corrige errores de coma flotante (ej. 2.5000000000000004)
+        _gcpApplyBehaviorVal(mode, v);
+        _gcpSyncComportamiento();
+      };
+      el.addEventListener('blur', commit);
+      el.addEventListener('keydown', e => {
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+      });
+    };
+    _gcpCommitSumInput('gcpSumVel',   'vel',   v => parseInt(v, 10), 1, 24, 1);
+    _gcpCommitSumInput('gcpSumRep',   'rep',   v => {
+      const t = (v || '').trim();
+      if (t === '' || t === '∞') return 0;
+      const digits = t.replace(/[^0-9]/g, '');
+      return digits === '' ? 0 : parseInt(digits, 10);
+    }, 0, 10, 1);
+    _gcpCommitSumInput('gcpSumRei',   'rei',   v => parseInt(v, 10), 0, 60, 1);
+    _gcpCommitSumInput('gcpSumTimer', 'timer', v => parseFloat(String(v).replace(',', '.')), 0, 60, 0.5);
 
     // Sincronizar UI al abrir el dropdown de comportamiento
     _gcpInitRules(); // botones Guías GCP
