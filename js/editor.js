@@ -8483,8 +8483,7 @@ function edOnStart(e){
         // igual que la herramienta de dibujo normal
         const _eSavedWC = e;
         if(_cof.on){
-          const _cofIsRedWC = (_cof.state==='red_ready'||_cof.state==='red_cool');
-          if(_cofIsRedWC){
+          if(_cofTouchOnSquare(_eSavedWC)){
             _cofHandleTouch(_eSavedWC);
           } else {
             window._edDrawTouchTimer = setTimeout(() => {
@@ -8508,8 +8507,7 @@ function edOnStart(e){
         _edGetOrCreateDrawLayer();
         // Si el cursor desplazado está activo, usar el mismo sistema que draw/eraser
         if(_cof.on){
-          const _cofIsRedDb = (_cof.state==='red_ready'||_cof.state==='red_cool');
-          if(_cofIsRedDb){
+          if(_cofTouchOnSquare(e)){
             _cofHandleTouch(e);
           } else {
             clearTimeout(window._edDrawTouchTimer);
@@ -8592,9 +8590,10 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       // ── Nuevo sistema cursor: timer 120ms para detectar segundo dedo (pinch) ──
       if(_cof.on){
-        const _cofIsRed = (_cof.state==='red_ready'||_cof.state==='red_cool');
-        if(_cofIsRed){
-          // Estado rojo: disparar inmediatamente sin esperar segundo dedo
+        if(_cofTouchOnSquare(_eSaved)){
+          // Toque dentro del cuadrado del cursor: disparar inmediatamente sin
+          // esperar al segundo dedo — tocar ese cuadrado concreto no puede
+          // ser el inicio de un pinch.
           _cofHandleTouch(_eSaved);
         } else {
           window._edDrawTouchTimer = setTimeout(() => {
@@ -9254,8 +9253,7 @@ function edOnStart(e){
       clearTimeout(window._edDrawTouchTimer);
       const _eSaved2 = e;
       if(e.pointerType === 'touch' && _cof.on){
-        const _cofIsRed2 = (_cof.state==='red_ready'||_cof.state==='red_cool');
-        if(_cofIsRed2){
+        if(_cofTouchOnSquare(_eSaved2)){
           _cofHandleTouch(_eSaved2);
         } else {
           window._edDrawTouchTimer = setTimeout(() => {
@@ -12260,6 +12258,15 @@ function _cofReset() {
   _cof._prevTx = null; _cof._prevTy = null; // referencia real del dedo para delta
 }
 function _cofDist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+
+// Indica si un toque cae dentro de la zona de detección del cuadrado del
+// cursor (mismo margen MARGIN que usa _cofHandleTouch para decidir entre
+// arrastre/jump). Se usa para saltar el retardo anti-pinch de 120ms: tocar
+// precisamente sobre ese cuadrado es una acción inequívoca con el cursor,
+// no puede confundirse con el inicio de un pinch de dos dedos.
+function _cofTouchOnSquare(e) {
+  return _cof.on && _cofDist(e.clientX, e.clientY, _cof.touchX, _cof.touchY) <= _cof.MARGIN;
+}
 
 function _cofHandleTouch(e) {
   if (!_cof.on) return;
