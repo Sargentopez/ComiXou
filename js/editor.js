@@ -12320,6 +12320,12 @@ function _cofHandleMove(e) {
     _cof._pendingStart = false;
     _cof.state = 'red_ready';
     _cofDraw();
+    // Recuperación defensiva: si algo externo a este sistema (p.ej. la
+    // detección de pinch al posarse un segundo dedo) forzó edPainting=false
+    // a mitad de un trazo sin pasar por _cofHandleUp, _strokeStarted se queda
+    // atascado en true y este nuevo trazo nunca llegaría a iniciarse de
+    // verdad (el bucle de continueStroke exige _strokeStarted && edPainting).
+    if (_cof._strokeStarted && !edPainting) _cof._strokeStarted = false;
     if (!_cof._strokeStarted) _cofStartStroke(e);
     return;
   }
@@ -12422,8 +12428,17 @@ function _cofStartStroke(e) {
   _cof._strokeStarted = true;
   _cof.state = 'red_ready';
   _cofDraw();
+  // Anclar el inicio del trazo en _cof.cursorX/Y — la MISMA variable que usa
+  // el bucle de continueStroke en _cofHandleMove para acumular los deltas del
+  // dedo. Antes se usaba _cof.savedClientX/Y, una variable rastreada por
+  // separado que no se actualiza en la resolución de _pendingStart (solo se
+  // actualizan touchX/Y y dist ahí) — si llegaba a desincronizarse de
+  // cursorX/Y, beginStroke anclaba el trazo en un punto y el primer
+  // continueStroke calculaba su delta desde otro, dibujando un segmento recto
+  // de más entre ambos. savedClientX/Y no tiene ningún otro lector en el
+  // código — usar cursorX/Y aquí elimina esa doble fuente de verdad.
   const synth = {
-    clientX: _cof.savedClientX, clientY: _cof.savedClientY,
+    clientX: _cof.cursorX, clientY: _cof.cursorY,
     pointerType: 'touch', pointerId: e.pointerId, touches: null,
     _skipMoveBrush: true, _cofStroke: true
   };
