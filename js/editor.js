@@ -3988,10 +3988,92 @@ function _edFuseIntoMain(newLL) {
 let _edDragStatic = { canvas: null, ctx: null, valid: false,
   forIdx: -1, cameraZ: 0, cameraX: 0, cameraY: 0 };
 
+// ── Canvas estático para acelerar el trazo activo (dibujar/borrar) ───────
+// Mismo principio que _edDragStatic: mientras edPainting está activo, todo
+// excepto el grupo de dibujo en curso (relleno/acuarela/lápiz/tinta, que
+// viven en los 4 canvases temporales de _edTmp) es estático frame a frame.
+// Se cachea una vez al primer redraw del trazo; cada frame siguiente solo
+// compone ese fondo + los 4 temporales en vivo, sin recorrer edLayers.
+let _edPaintStatic = { canvas: null, ctx: null, valid: false,
+  cameraZ: 0, cameraX: 0, cameraY: 0 };
+
+// ── Caché del fondo de página (rectángulo blanco con sombra) ─────────────
+// ctx.shadowBlur es muy costoso en Android — antes se recalculaba en cada
+// redraw, incluso durante un trazo o un drag con muchos eventos por segundo.
+// El resultado solo cambia si cambia el zoom (el radio de sombra depende de
+// edCamera.z) o el tamaño/orientación de página — nunca por el contenido de
+// las capas — así que se cachea en un canvas aparte y se reutiliza mientras
+// esos valores no cambien.
+let _edBgCache = { canvas: null, ctx: null,
+  z: null, x: null, y: null, w: null, h: null, pw: null, ph: null, mx: null, my: null };
+function _edDrawPageBackground(ctx) {
+  const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
+  const cw = ctx.canvas.width, ch = ctx.canvas.height;
+  const c = _edBgCache;
+  const _valid = c.canvas && c.z===edCamera.z && c.x===edCamera.x && c.y===edCamera.y &&
+                 c.w===cw && c.h===ch && c.pw===pw && c.ph===ph && c.mx===mx && c.my===my;
+  if (!_valid) {
+    if (!c.canvas || c.w!==cw || c.h!==ch) {
+      c.canvas = document.createElement('canvas');
+      c.canvas.width = cw; c.canvas.height = ch;
+      c.ctx = c.canvas.getContext('2d');
+    }
+    const bctx = c.ctx;
+    bctx.setTransform(1,0,0,1,0,0);
+    bctx.clearRect(0,0,cw,ch);
+    bctx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+    const _lr = 20; // ~20px en workspace = radio de esquina físicamente constante
+    bctx.shadowColor='rgba(0,0,0,0.35)'; bctx.shadowBlur=20/edCamera.z;
+    bctx.fillStyle='#ffffff';
+    bctx.beginPath();
+    if (bctx.roundRect) {
+      bctx.roundRect(mx,my,pw,ph,_lr);
+    } else {
+      const _x=mx,_y=my,_w=pw,_h=ph,_r=_lr;
+      bctx.moveTo(_x+_r,_y);bctx.lineTo(_x+_w-_r,_y);bctx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
+      bctx.lineTo(_x+_w,_y+_h-_r);bctx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
+      bctx.lineTo(_x+_r,_y+_h);bctx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
+      bctx.lineTo(_x,_y+_r);bctx.arcTo(_x,_y,_x+_r,_y,_r);bctx.closePath();
+    }
+    bctx.fill();
+    bctx.shadowColor='transparent'; bctx.shadowBlur=0;
+    c.z=edCamera.z; c.x=edCamera.x; c.y=edCamera.y;
+    c.w=cw; c.h=ch; c.pw=pw; c.ph=ph; c.mx=mx; c.my=my;
+  }
+  // El cache ya incluye la transformación de cámara horneada en sus píxeles:
+  // dibujar en espacio de pantalla (identidad) y restaurar el transform previo.
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.drawImage(c.canvas, 0, 0);
+  ctx.restore();
+}
+
+// Compone los 4 canvases temporales del grupo de dibujo activo (relleno/
+// acuarela/lápiz/tinta) en la posición actual del contexto. Extraída como
+// función propia (antes vivía solo dentro de _edRenderFrame) para poder
+// llamarla también desde el fast-path de edRedraw() durante un trazo activo.
+function _edRenderDrawTmp(ctx) {
+  const _dt = (dl) => {
+    if(!dl?._canvas) return;
+    ctx.globalAlpha = 1;
+    ctx.drawImage(dl._canvas, 0, 0);
+  };
+  _dt(_edTmp.bucket);
+  _dt(_edTmp.watercolor);
+  _dt(_edTmp.pencil);
+  _dt(_edTmp.pen);
+  ctx.globalAlpha = 1;
+}
+
 // Render paramétrico: fondo + capas (sin overlays UI ni scrollbars).
 // ctx             — contexto destino (edCtx para render normal; ctx estático para cache)
 // excludeLayerIdx — índice de la capa a omitir (-1 = ninguna)
-function _edRenderFrame(ctx, excludeLayerIdx = -1) {
+// skipDrawTmp     — true: no compositar aquí los temporales del grupo de dibujo activo
+//                   (el caller los pintará en vivo encima del resultado cacheado).
+//                   La función devuelve true solo si _editingDraw era cierto (es decir,
+//                   si de verdad dejó el hueco correctamente) — el caller debe comprobar
+//                   este valor de retorno antes de marcar su caché como reutilizable.
+function _edRenderFrame(ctx, excludeLayerIdx = -1, skipDrawTmp = false) {
   const cw=ctx.canvas.width, ch=ctx.canvas.height;
 
   // Reset transform → limpiar todo el viewport
@@ -4006,23 +4088,10 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1) {
 
   const page=edPages[edCurrentPage];if(!page)return;
 
-  // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip)
-  // Radio fijo en coordenadas workspace → proporcional al zoom automáticamente
-  const _lr = 20; // ~20px en workspace = radio de esquina físicamente constante
-  ctx.shadowColor='rgba(0,0,0,0.35)';ctx.shadowBlur=20/edCamera.z;
-  ctx.fillStyle='#ffffff';
-  ctx.beginPath();
-  if(ctx.roundRect){
-    ctx.roundRect(edMarginX(),edMarginY(),edPageW(),edPageH(),_lr);
-  } else {
-    const _x=edMarginX(),_y=edMarginY(),_w=edPageW(),_h=edPageH(),_r=_lr;
-    ctx.moveTo(_x+_r,_y);ctx.lineTo(_x+_w-_r,_y);ctx.arcTo(_x+_w,_y,_x+_w,_y+_r,_r);
-    ctx.lineTo(_x+_w,_y+_h-_r);ctx.arcTo(_x+_w,_y+_h,_x+_w-_r,_y+_h,_r);
-    ctx.lineTo(_x+_r,_y+_h);ctx.arcTo(_x,_y+_h,_x,_y+_h-_r,_r);
-    ctx.lineTo(_x,_y+_r);ctx.arcTo(_x,_y,_x+_r,_y,_r);ctx.closePath();
-  }
-  ctx.fill();
-  ctx.shadowColor='transparent';ctx.shadowBlur=0;
+  // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip).
+  // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
+  // shadowBlur en cada frame, una de las operaciones más costosas en Android.
+  _edDrawPageBackground(ctx);
 
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
@@ -4107,19 +4176,6 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1) {
     return true;
   };
 
-  // Helper: compositar los 4 canvases temporales del draw en la posición actual del contexto
-  const _renderDrawTmp = () => {
-    const _dt = (dl) => {
-      if(!dl?._canvas) return;
-      ctx.globalAlpha = 1;
-      ctx.drawImage(dl._canvas, 0, 0);
-    };
-    _dt(_edTmp.bucket);
-    _dt(_edTmp.watercolor);
-    _dt(_edTmp.pencil);
-    _dt(_edTmp.pen);
-    ctx.globalAlpha = 1;
-  };
   let _drawTmpRendered = false;
 
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
@@ -4131,7 +4187,7 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1) {
     if(i === excludeLayerIdx) return; // capa excluida (drag) — se pinta aparte
     // En modo draw: al llegar al DrawLayer, pintar los temporales en su z-order correcto
     if(_editingDraw && l.type==='draw'){
-      _renderDrawTmp();
+      if(!skipDrawTmp) _edRenderDrawTmp(ctx);
       _drawTmpRendered = true;
       return;
     }
@@ -4178,8 +4234,11 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1) {
   ctx.globalAlpha = 1;
   // Fallback: si el DrawLayer no estaba en edLayers (no debería ocurrir), pintar al final
   if(_editingDraw && !_drawTmpRendered){
-    _renderDrawTmp();
+    if(!skipDrawTmp) _edRenderDrawTmp(ctx);
   }
+  // Indica al caller si esta llamada correspondía a una sesión de dibujo activa
+  // (_editingDraw) — edRedraw() lo usa para validar el caché de skipDrawTmp.
+  return _editingDraw;
 }
 
 // Overlays baratos que siempre se dibujan sobre edCtx:
@@ -4322,6 +4381,59 @@ function edRedraw(){
         _edRenderOverlays();
         return;
       }
+    }
+  }
+
+  // ── Fast path: canvas estático durante trazo activo (dibujar/borrar) ───
+  // Mismo patrón que el drag de arriba: todo excepto el grupo de dibujo en
+  // curso (vive en _edTmp, se compone en vivo) es estático durante el trazo,
+  // así que se cachea una vez y se reutiliza en cada pointermove sin
+  // recorrer edLayers ni recalcular el fondo con sombra.
+  if (_edPaintStatic.valid && edPainting &&
+      edCamera.z === _edPaintStatic.cameraZ &&
+      edCamera.x === _edPaintStatic.cameraX &&
+      edCamera.y === _edPaintStatic.cameraY) {
+    const cw = edCanvas.width, ch = edCanvas.height;
+    edCtx.setTransform(1,0,0,1,0,0);
+    edCtx.clearRect(0,0,cw,ch);
+    edCtx.drawImage(_edPaintStatic.canvas, 0,0);
+    edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+    _edRenderDrawTmp(edCtx);
+    _edRenderOverlays();
+    return;
+  }
+
+  // ── Construir el canvas estático en el primer redraw del trazo ─────────
+  if (edPainting && !_edPaintStatic.valid) {
+    const cw = edCanvas.width, ch = edCanvas.height;
+    if (!_edPaintStatic.canvas ||
+        _edPaintStatic.canvas.width !== cw || _edPaintStatic.canvas.height !== ch) {
+      _edPaintStatic.canvas = document.createElement('canvas');
+      _edPaintStatic.canvas.width = cw;
+      _edPaintStatic.canvas.height = ch;
+      _edPaintStatic.ctx = _edPaintStatic.canvas.getContext('2d');
+    }
+    if (_edPaintStatic.ctx) {
+      // skipDrawTmp=true deja el hueco del grupo de dibujo activo sin pintar en
+      // el cache. _edRenderFrame devuelve true solo si de verdad había una
+      // sesión de edición de dibujo activa (_editingDraw) y dejó ese hueco —
+      // si devuelve false (caso raro), NO marcar como válida: ese caso sigue
+      // reconstruyendo cada frame, exactamente igual que antes de este cambio.
+      const _hadGap = _edRenderFrame(_edPaintStatic.ctx, -1, true);
+      if (_hadGap) {
+        _edPaintStatic.cameraZ = edCamera.z;
+        _edPaintStatic.cameraX = edCamera.x;
+        _edPaintStatic.cameraY = edCamera.y;
+        _edPaintStatic.valid   = true;
+        edCtx.setTransform(1,0,0,1,0,0);
+        edCtx.clearRect(0,0,cw,ch);
+        edCtx.drawImage(_edPaintStatic.canvas, 0,0);
+        edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+        _edRenderDrawTmp(edCtx);
+        _edRenderOverlays();
+        return;
+      }
+      _edPaintStatic.valid = false;
     }
   }
 
@@ -10232,7 +10344,8 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
-  _edDragStatic.valid = false; // invalidar cache del drag
+  _edDragStatic.valid = false;  // invalidar cache del drag
+  _edPaintStatic.valid = false; // invalidar cache del trazo (mismo patrón)
   if(window._gcpActive) return;
   // Limpiar el puntero del mapa de activos SIEMPRE, antes de cualquier return prematuro.
   // Todos los modos especiales (recorrido, recorte, zoom-rect, etc.) hacen return
@@ -12916,6 +13029,7 @@ function edStartPaint(e){
   // Cuentagotas activo: no iniciar dibujo
   if(window._edEyedropActive){ edPainting = false; return; }
   edPainting = true;
+  _edPaintStatic.valid = false; // nuevo trazo: invalidar cache del trazo anterior
   // Herramienta borrar color
   if (edActiveTool === 'color-erase') {
     _edGetOrCreateDrawLayer();
