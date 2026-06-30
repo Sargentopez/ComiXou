@@ -22,7 +22,7 @@
  *     Licencia: dominio público / uso libre
  */
 /* ============================================================
-   editor-pages.js — Panel de hojas del editor
+   editor-pages.js — Panel de hojas del editor 
    Scroll horizontal con flechas ◀ ▶ para reordenar.
    ============================================================ */
 
