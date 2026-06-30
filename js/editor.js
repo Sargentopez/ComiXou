@@ -4068,49 +4068,30 @@ function _edRenderDrawTmp(ctx) {
 // Render paramétrico: fondo + capas (sin overlays UI ni scrollbars).
 // ctx             — contexto destino (edCtx para render normal; ctx estático para cache)
 // excludeLayerIdx — índice de la capa a omitir (-1 = ninguna)
-// drawTmpMode     — 'inline' (por defecto): compone el grupo de dibujo activo en su
-//                   posición de capa exacta — comportamiento normal, usado por el
-//                   render completo y por _edDragStatic.
-//                   'before': pinta fondo + SOLO las capas ANTERIORES al DrawLayer
-//                   activo, y se detiene ahí (nada del grupo de dibujo, nada de las
-//                   capas posteriores, nada de texto/bocadillos). Para el caché
-//                   "por debajo" del trazo activo.
-//                   'after': sin fondo (solo clearRect) — pinta SOLO las capas
-//                   POSTERIORES al DrawLayer activo + texto/bocadillos (que siempre
-//                   van encima de todo). Pensado para pintarse en vivo, cada frame,
-//                   ENCIMA de lo ya dibujado — así las capas que deben verse por
-//                   encima del trazo (con su dimming) no quedan tapadas por la tinta.
+// skipDrawTmp     — true: no compositar aquí los temporales del grupo de dibujo activo
+//                   (el caller los pintará en vivo encima del resultado cacheado).
 //                   La función devuelve true solo si _editingDraw era cierto (es decir,
-//                   si de verdad hay una sesión de dibujo activa con un DrawLayer real)
-//                   — el caller debe comprobar este valor antes de marcar como
-//                   reutilizable cualquier caché basado en 'before'.
-function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
+//                   si de verdad dejó el hueco correctamente) — el caller debe comprobar
+//                   este valor de retorno antes de marcar su caché como reutilizable.
+function _edRenderFrame(ctx, excludeLayerIdx = -1, skipDrawTmp = false) {
   const cw=ctx.canvas.width, ch=ctx.canvas.height;
 
-  if (drawTmpMode !== 'after') {
-    // Reset transform → limpiar todo el viewport
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.clearRect(0,0,cw,ch);
-    // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible
-    ctx.fillStyle='#c8d4e8';
-    ctx.fillRect(0,0,cw,ch);
-  } else {
-    // Modo 'after': se pinta encima de contenido ya existente — solo limpiar
-    // transform, sin clearRect (borraría lo ya dibujado) ni fondo opaco.
-    ctx.setTransform(1,0,0,1,0,0);
-  }
+  // Reset transform → limpiar todo el viewport
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cw,ch);
+  // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible
+  ctx.fillStyle='#c8d4e8';
+  ctx.fillRect(0,0,cw,ch);
 
   // Aplicar cámara: escala + traslación
   ctx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
 
-  const page=edPages[edCurrentPage]; if(!page) return false;
+  const page=edPages[edCurrentPage];if(!page)return;
 
-  if (drawTmpMode !== 'after') {
-    // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip).
-    // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
-    // shadowBlur en cada frame, una de las operaciones más costosas en Android.
-    _edDrawPageBackground(ctx);
-  }
+  // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip).
+  // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
+  // shadowBlur en cada frame, una de las operaciones más costosas en Android.
+  _edDrawPageBackground(ctx);
 
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
@@ -4196,7 +4177,6 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   };
 
   let _drawTmpRendered = false;
-  let _reachedDraw = false; // true en cuanto el forEach pasa por el DrawLayer activo
 
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
   // Textos/bocadillos siempre al final (encima de todo).
@@ -4207,8 +4187,7 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     if(i === excludeLayerIdx) return; // capa excluida (drag) — se pinta aparte
     // En modo draw: al llegar al DrawLayer, pintar los temporales en su z-order correcto
     if(_editingDraw && l.type==='draw'){
-      _reachedDraw = true;
-      if(drawTmpMode === 'inline') _edRenderDrawTmp(ctx);
+      if(!skipDrawTmp) _edRenderDrawTmp(ctx);
       _drawTmpRendered = true;
       return;
     }
@@ -4216,9 +4195,6 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     if(_editingDraw && l.type==='fill'       && _linkedFill       && l===_linkedFill)       return;
     if(_editingDraw && l.type==='pencil'     && _linkedPencil     && l===_linkedPencil)     return;
     if(_editingDraw && l.type==='watercolor' && _linkedWatercolor && l===_linkedWatercolor) return;
-    // 'before'/'after': pintar solo la mitad correspondiente respecto al DrawLayer
-    if(drawTmpMode === 'before' && _reachedDraw)  return; // eso ya es "after"
-    if(drawTmpMode === 'after'  && !_reachedDraw) return; // eso es "before", ya cacheado
     if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
     const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
     if(l.type==='fill' || l.type==='pencil' || l.type==='watercolor'){
@@ -4246,25 +4222,22 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
       l.draw(ctx); l.opacity=_og;
     }
   });
-  // Textos/bocadillos: aplicar dimming individual por capa (siempre encima de todo).
-  // En modo 'before' se omiten — van encima del trazo, los pinta el modo 'after'.
-  if(drawTmpMode !== 'before'){
-    _textLayers.forEach(l=>{
-      if(l.hidden) return; // capa oculta por el usuario
-      const i = edLayers.indexOf(l);
-      if(i === excludeLayerIdx) return; // capa excluida (drag)
-      const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
-      ctx.globalAlpha = _textGroupAlpha * dimFactor;
-      l.draw(ctx, edCanvas);
-    });
-  }
+  // Textos/bocadillos: aplicar dimming individual por capa (siempre encima de todo)
+  _textLayers.forEach(l=>{
+    if(l.hidden) return; // capa oculta por el usuario
+    const i = edLayers.indexOf(l);
+    if(i === excludeLayerIdx) return; // capa excluida (drag)
+    const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
+    ctx.globalAlpha = _textGroupAlpha * dimFactor;
+    l.draw(ctx, edCanvas);
+  });
   ctx.globalAlpha = 1;
   // Fallback: si el DrawLayer no estaba en edLayers (no debería ocurrir), pintar al final
-  if(_editingDraw && !_drawTmpRendered && drawTmpMode === 'inline'){
-    _edRenderDrawTmp(ctx);
+  if(_editingDraw && !_drawTmpRendered){
+    if(!skipDrawTmp) _edRenderDrawTmp(ctx);
   }
   // Indica al caller si esta llamada correspondía a una sesión de dibujo activa
-  // (_editingDraw) — edRedraw() lo usa para validar el caché de 'before'.
+  // (_editingDraw) — edRedraw() lo usa para validar el caché de skipDrawTmp.
   return _editingDraw;
 }
 
@@ -4423,10 +4396,9 @@ function edRedraw(){
     const cw = edCanvas.width, ch = edCanvas.height;
     edCtx.setTransform(1,0,0,1,0,0);
     edCtx.clearRect(0,0,cw,ch);
-    edCtx.drawImage(_edPaintStatic.canvas, 0,0); // capas POR DEBAJO del trazo (cacheadas)
+    edCtx.drawImage(_edPaintStatic.canvas, 0,0);
     edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-    _edRenderDrawTmp(edCtx);              // trazo activo, en vivo
-    _edRenderFrame(edCtx, -1, 'after');   // capas POR ENCIMA del trazo, en vivo (con dimming)
+    _edRenderDrawTmp(edCtx);
     _edRenderOverlays();
     return;
   }
@@ -4442,15 +4414,12 @@ function edRedraw(){
       _edPaintStatic.ctx = _edPaintStatic.canvas.getContext('2d');
     }
     if (_edPaintStatic.ctx) {
-      // drawTmpMode='before' cachea solo fondo + capas ANTERIORES al DrawLayer
-      // activo. Las capas POSTERIORES (que deben verse por encima del trazo)
-      // se pintan en vivo cada frame con 'after' — así no quedan tapadas por
-      // la tinta, igual que en el render completo sin cachear.
-      // _edRenderFrame devuelve true solo si de verdad había una sesión de
-      // edición de dibujo activa (_editingDraw) — si devuelve false (caso
-      // raro), NO marcar como válida: sigue reconstruyendo cada frame, igual
-      // que antes de este cambio.
-      const _hadGap = _edRenderFrame(_edPaintStatic.ctx, -1, 'before');
+      // skipDrawTmp=true deja el hueco del grupo de dibujo activo sin pintar en
+      // el cache. _edRenderFrame devuelve true solo si de verdad había una
+      // sesión de edición de dibujo activa (_editingDraw) y dejó ese hueco —
+      // si devuelve false (caso raro), NO marcar como válida: ese caso sigue
+      // reconstruyendo cada frame, exactamente igual que antes de este cambio.
+      const _hadGap = _edRenderFrame(_edPaintStatic.ctx, -1, true);
       if (_hadGap) {
         _edPaintStatic.cameraZ = edCamera.z;
         _edPaintStatic.cameraX = edCamera.x;
@@ -4461,7 +4430,6 @@ function edRedraw(){
         edCtx.drawImage(_edPaintStatic.canvas, 0,0);
         edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
         _edRenderDrawTmp(edCtx);
-        _edRenderFrame(edCtx, -1, 'after');
         _edRenderOverlays();
         return;
       }
@@ -13152,6 +13120,12 @@ function edStartPaint(e){
       const c = edCoords(_eTmp);
       const _sz = er ? edEraserSize : edDrawSize;
       dl.beginStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
+    } else if(edActiveTool !== 'fill'){
+      // Estado inconsistente: _edDodgeBurnActive=true pero la herramienta ya no es fill.
+      // Anclar _lastX/_lastY para que continueStroke no dibuje desde (0,0).
+      // Ocurre si algún camino de cambio de herramienta no resetea el flag.
+      const c = edCoords(_eTmp);
+      dl.beginStrokeNoDot(c.nx, c.ny);
     }
     edRedraw();
     return;
@@ -15394,6 +15368,12 @@ function edRenderOptionsPanel(mode){
     // ── Selector de capa destino ──
     // ── Selectores de capa temporal ──
     const _activateTmpLayer = (key, toolActive, brushType, fillType, opacity) => {
+      // Resetear dodge/burn al cambiar a cualquier herramienta desde el panel.
+      // Antes faltaba este reset — si el usuario venía de iluminar/oscurecer,
+      // _edDodgeBurnActive quedaba true con edActiveTool='draw', lo que hacía
+      // que edStartPaint omitiera dl.beginStroke y el siguiente trazo dibujara
+      // una línea recta desde la esquina del canvas (_lastX/_lastY=0).
+      _edDodgeBurnActive = false;
       _edTmp.active = key;
       // Cursor de desplazamiento: ocultar con bote, restaurar con cualquier otra herramienta
       if(window._edIsTouch){
