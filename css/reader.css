@@ -39,6 +39,7 @@
 
 /* ── BARRA SUPERIOR (solo PC) ── */
 .reader-topbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -49,6 +50,19 @@
   gap: 12px;
   z-index: 200;
 }
+/* Franja blanca tras el título — mismo criterio que en el editor: desde el
+   borde izquierdo de la página hasta el final del texto, semicírculo a la
+   derecha. Tamaño real fijado por JS (_readerUpdateTitlePill). */
+#readerTitlePill {
+  position: absolute;
+  left: 0;
+  background: var(--white);
+  border-radius: 0 999px 999px 0;
+  z-index: 1;
+  pointer-events: none;
+  width: 0;
+}
+.reader-topbar .home-logo-area { position: relative; z-index: 2; }
 .reader-home-btn {
   font-size: 1.2rem;
   text-decoration: none;
@@ -58,6 +72,7 @@
 .reader-home-btn:hover { opacity: 1; }
 
 .reader-info {
+  position: relative; z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -66,6 +81,7 @@
 }
 .reader-comic-title {
   font-family: var(--font-display);
+  font-weight: 700;
   font-size: 1.1rem;
   color: var(--yellow);
   letter-spacing: 1.5px;
@@ -251,7 +267,7 @@
   max-width: 90vw;
 }
 .end-icon { font-size: 3rem; }
-.end-card h2 { font-family: var(--font-display); font-size: 2rem; letter-spacing: 2px; }
+.end-card h2 { font-family: var(--font-display); font-weight: 700; font-size: 2rem; letter-spacing: 2px; }
 .end-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
 
 /* ── SWIPE HINT (solo móvil) ── */

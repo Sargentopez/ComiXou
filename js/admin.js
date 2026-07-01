@@ -178,7 +178,9 @@ function buildAdminRow(comic, mode) {
     </div>
     <div class="admin-row-actions">
       ${comic.supabaseId ? `<button class="admin-btn admin-btn-read" id="read_${comic.id}">👁 Leer</button>` : ''}
-      ${comic.supabaseId ? `<button class="admin-btn" id="diag_${comic.id}" style="background:#ff0;color:#000;font-weight:700">🔍 Diag BD</button>` : ''}
+      <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
+           para volver a mostrarlo, descomentar la línea de abajo. -->
+      <!-- ${comic.supabaseId ? `<button class="admin-btn" id="diag_${comic.id}" style="background:#ff0;color:#000;font-weight:700">🔍 Diag BD</button>` : ''} -->
       ${mode === 'pending'   ? `<button class="admin-btn admin-btn-ok"   id="approve_${comic.id}">✓ Aprobar</button>`  : ''}
       ${mode === 'published' ? `<button class="admin-btn admin-btn-warn" id="unpub_${comic.id}">Retirar</button>`      : ''}
       <button class="admin-btn admin-btn-del" id="del_${comic.id}">Eliminar</button>

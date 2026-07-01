@@ -695,7 +695,9 @@ function _mcRenderList() {
     </div>`;
   }).join('');
 
-  // Botón de diagnóstico
+  // Botón de diagnóstico oculto a petición de Alberto (no borrar):
+  // para volver a mostrarlo, descomentar el bloque de abajo.
+  /*
   {
     let _diagDiv = document.getElementById('_mcDiagBtn');
     if (!_diagDiv) {
@@ -707,6 +709,7 @@ function _mcRenderList() {
       wrap.appendChild(_diagDiv);
     }
   }
+  */
 
   // Cargar miniaturas lazy — tanto obras cloud (data-thumb-id) como locales (data-local-thumb-id)
   const _thumbObs = new IntersectionObserver(entries => {

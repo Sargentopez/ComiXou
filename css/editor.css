@@ -69,8 +69,9 @@ body.editor-page #appView {
 }
 
 #edBackBtn {
+  position: relative; z-index: 2;
   background: none; border: none;
-  font-size: 1.4rem; font-weight: 900;
+  font-size: 1.05rem; /* mismo tamaño que el triángulo de OCULTAR */
   color: var(--black); cursor: pointer;
   padding: 4px 8px; border-radius: 6px;
   flex-shrink: 0; line-height: 1;
@@ -79,10 +80,27 @@ body.editor-page #appView {
 #edBackBtn:active { background: var(--gray-100); }
 #edBackBtn:active { background: rgba(0,0,0,.1); }
 
+/* Franja blanca tras el título — refuerza su legibilidad con la nueva
+   tipografía. Empieza en el borde izquierdo de la página (por eso queda
+   también detrás de edBackBtn) y termina justo tras el texto del título,
+   con el extremo derecho en semicírculo. Tamaño real fijado por JS
+   (_edUpdateTitlePill) según el ancho/alto real del título renderizado. */
+#edTitlePill {
+  position: absolute;
+  left: 0;
+  background: var(--white);
+  border-radius: 0 999px 999px 0;
+  z-index: 1;
+  pointer-events: none;
+  width: 0;
+}
+
 #edProjectTitle {
+  position: relative; z-index: 2;
   flex: 0 1 auto; min-width: 0;
   /* El título cede espacio hasta cero, truncando con ellipsis */
   font-family: var(--font-display);
+  font-weight: 700;
   font-size: 1rem; letter-spacing: 0.5px;
   color: var(--black);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1161,13 +1179,37 @@ body.editor-page #appView {
 .ed-modal-sheet {
   width: 100%; max-width: 480px; background: var(--white);
   border-radius: 0 0 20px 20px; border-bottom: 2.5px solid var(--black);
-  padding: 0 18px 28px;
+  padding: 0;
   transform: translateY(-100%); transition: transform .26s cubic-bezier(.4,0,.2,1);
   box-shadow: 0 4px 24px rgba(0,0,0,.12);
+  overflow: hidden; /* recorta la cabecera a las esquinas redondeadas inferiores */
 }
 #edProjectModal.open .ed-modal-sheet { transform: translateY(0); }
 .ed-modal-handle { display: none; }
-.ed-modal-title { font-family: var(--font-display); font-size: 1.4rem; letter-spacing: 1px; text-align: center; margin-bottom: 16px; }
+.ed-modal-header {
+  position: relative;
+  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
+  border-bottom: 2.5px solid var(--black);
+  padding: 12px 16px 10px;
+}
+.ed-modal-title { position: relative; z-index: 1; font-family: var(--font-display); font-weight: 700; font-size: 1.4rem; letter-spacing: 1px; text-align: center; margin: 0; color: var(--black); }
+/* Franja blanca compartida por todas las ventanas del editor con este mismo
+   patrón de cabecera (Editar datos, Hojas/Capas/Comportamiento, Atajos de
+   teclado, Crear animaciones, Ayuda) — refuerza la legibilidad del título
+   con la nueva tipografía (Arial Bold). Empieza en el borde izquierdo de la
+   VENTANA (no de la página, al ser un modal centrado) y termina justo tras
+   el texto, con el extremo derecho en semicírculo. La crea y dimensiona
+   _edFitAllWindowTitlePills() en JS. */
+.win-title-pill {
+  position: absolute;
+  left: 0;
+  background: var(--white);
+  border-radius: 0 999px 999px 0;
+  z-index: 0;
+  pointer-events: none;
+  width: 0;
+}
+.ed-modal-body { padding: 18px 18px 28px; }
 .ed-modal-field { margin-bottom: 10px; }
 .ed-modal-field label { display: block; font-size: 0.7rem; font-weight: 900; color: var(--gray-500); text-transform: uppercase; margin-bottom: 4px; }
 .ed-modal-field input, .ed-modal-field select {
@@ -1325,6 +1367,7 @@ body.editor-page #appView {
 }
 
 .ed-fulloverlay-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1334,7 +1377,9 @@ body.editor-page #appView {
   flex-shrink: 0;
 }
 .ed-fulloverlay-title {
+  position: relative; z-index: 1;
   font-family: var(--font-display);
+  font-weight: 700;
   font-size: 1.4rem;
   letter-spacing: 1px;
   color: var(--black);
@@ -1963,6 +2008,7 @@ body.editor-page #appView {
 }
 #gcpProjectTitle {
   font-family: var(--font-display);
+  font-weight: 700;
   font-size: 1rem; letter-spacing: 0.5px;
   color: var(--black);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -2252,7 +2298,7 @@ body.editor-page #appView {
 }
 
 /* ── Modal de atajos de teclado ──────────────────────────────────── */
-#edShortcutsModal, #edAnimTutorialModal {
+#edShortcutsModal, #edAnimTutorialModal, #edHelpRefModal {
   display: none;
   position: fixed;
   inset: 0;
@@ -2261,8 +2307,8 @@ body.editor-page #appView {
   align-items: center;
   justify-content: center;
 }
-#edShortcutsModal.open, #edAnimTutorialModal.open { display: flex; }
-#edShortcutsModal .sc-box, #edAnimTutorialModal .sc-box {
+#edShortcutsModal.open, #edAnimTutorialModal.open, #edHelpRefModal.open { display: flex; }
+#edShortcutsModal .sc-box, #edAnimTutorialModal .sc-box, #edHelpRefModal .sc-box {
   background: var(--white);
   border-radius: 14px;
   box-shadow: 0 8px 36px rgba(0,0,0,.28);
@@ -2272,21 +2318,24 @@ body.editor-page #appView {
   flex-direction: column;
   overflow: hidden;
 }
-#edShortcutsModal .sc-header, #edAnimTutorialModal .sc-header {
+#edShortcutsModal .sc-header, #edAnimTutorialModal .sc-header, #edHelpRefModal .sc-header {
+  position: relative;
   display: flex;
   align-items: center;
-  padding: 14px 18px 10px;
-  border-bottom: 1.5px solid var(--gray-200);
+  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
+  padding: 12px 16px 10px;
+  border-bottom: 2.5px solid var(--black);
   gap: 8px;
 }
-#edShortcutsModal .sc-title, #edAnimTutorialModal .sc-title {
+#edShortcutsModal .sc-title, #edAnimTutorialModal .sc-title, #edHelpRefModal .sc-title {
+  position: relative; z-index: 1;
   font-family: var(--font-display);
   font-size: 1rem;
   font-weight: 900;
   letter-spacing: .3px;
   flex: 1;
 }
-#edShortcutsModal .sc-close, #edAnimTutorialModal .sc-close {
+#edShortcutsModal .sc-close, #edAnimTutorialModal .sc-close, #edHelpRefModal .sc-close {
   background: none;
   border: none;
   font-size: 1.3rem;
@@ -2296,12 +2345,12 @@ body.editor-page #appView {
   padding: 2px 6px;
   border-radius: 6px;
 }
-#edShortcutsModal .sc-close:hover, #edAnimTutorialModal .sc-close:hover { background: var(--gray-100); }
-#edShortcutsModal .sc-body, #edAnimTutorialModal .sc-body {
+#edShortcutsModal .sc-close:hover, #edAnimTutorialModal .sc-close:hover, #edHelpRefModal .sc-close:hover { background: var(--gray-100); }
+#edShortcutsModal .sc-body, #edAnimTutorialModal .sc-body, #edHelpRefModal .sc-body {
   overflow-y: auto;
   padding: 12px 18px 18px;
 }
-#edShortcutsModal .sc-section, #edAnimTutorialModal .sc-section {
+#edShortcutsModal .sc-section, #edAnimTutorialModal .sc-section, #edHelpRefModal .sc-section {
   font-family: var(--font-display);
   font-size: .8rem;
   font-weight: 900;
@@ -2312,8 +2361,8 @@ body.editor-page #appView {
   padding-bottom: 4px;
   border-bottom: 1px solid var(--gray-200);
 }
-#edShortcutsModal .sc-section:first-child, #edAnimTutorialModal .sc-section:first-child { margin-top: 4px; }
-#edShortcutsModal .sc-row, #edAnimTutorialModal .sc-row {
+#edShortcutsModal .sc-section:first-child, #edAnimTutorialModal .sc-section:first-child, #edHelpRefModal .sc-section:first-child { margin-top: 4px; }
+#edShortcutsModal .sc-row, #edAnimTutorialModal .sc-row, #edHelpRefModal .sc-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2321,19 +2370,19 @@ body.editor-page #appView {
   border-bottom: 1px solid var(--gray-100);
   gap: 10px;
 }
-#edShortcutsModal .sc-row:last-child, #edAnimTutorialModal .sc-row:last-child { border-bottom: none; }
-#edShortcutsModal .sc-desc, #edAnimTutorialModal .sc-desc {
+#edShortcutsModal .sc-row:last-child, #edAnimTutorialModal .sc-row:last-child, #edHelpRefModal .sc-row:last-child { border-bottom: none; }
+#edShortcutsModal .sc-desc, #edAnimTutorialModal .sc-desc, #edHelpRefModal .sc-desc {
   font-family: var(--font-body);
   font-size: .82rem;
   color: var(--black);
   flex: 1;
 }
-#edShortcutsModal .sc-keys, #edAnimTutorialModal .sc-keys {
+#edShortcutsModal .sc-keys, #edAnimTutorialModal .sc-keys, #edHelpRefModal .sc-keys {
   display: flex;
   gap: 3px;
   flex-shrink: 0;
 }
-#edShortcutsModal kbd, #edAnimTutorialModal kbd {
+#edShortcutsModal kbd, #edAnimTutorialModal kbd, #edHelpRefModal kbd {
   font-family: var(--font-body);
   font-size: .72rem;
   font-weight: 700;

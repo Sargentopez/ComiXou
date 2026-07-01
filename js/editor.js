@@ -1118,6 +1118,80 @@ const ED_CANVAS_H = ED_PAGE_H * 3;  // 2340
 
 const $ = id => document.getElementById(id);
 
+// Franja blanca tras el título del proyecto — refuerza su legibilidad con la
+// nueva tipografía (Arial Bold). Empieza en el borde izquierdo de la página
+// (por eso también queda detrás de edBackBtn) y termina justo tras el texto
+// del título, con el extremo derecho en semicírculo.
+function _edUpdateTitlePill(){
+  const bar   = document.getElementById('edTopbar');
+  const pill  = document.getElementById('edTitlePill');
+  const title = document.getElementById('edProjectTitle');
+  if(!bar || !pill || !title) return;
+  const barRect   = bar.getBoundingClientRect();
+  const titleRect = title.getBoundingClientRect();
+  if(titleRect.width <= 0){ pill.style.width = '0px'; return; }
+  const vPad = titleRect.height * 0.067; // relleno vertical alrededor del texto (1/3 menos alto que antes)
+  pill.style.top    = (titleRect.top - barRect.top - vPad) + 'px';
+  pill.style.height = (titleRect.height + vPad * 2) + 'px';
+  pill.style.width  = Math.max(0, titleRect.right - barRect.left + 4) + 'px';
+}
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(window._edTitlePillRaf);
+  window._edTitlePillRaf = requestAnimationFrame(_edUpdateTitlePill);
+});
+
+// ── Franja blanca en TODAS las ventanas del editor con cabecera de título ──
+// (Editar datos de la obra, Hojas, Capas, Comportamiento, Atajos de teclado,
+// Crear animaciones, Ayuda). En vez de enganchar manualmente cada punto que
+// abre uno de estos modales, se observa el DOM y se recalcula automática-
+// mente cuando alguno se abre/cierra o se crea — así una ventana nueva que
+// reutilice esta misma cabecera queda cubierta sin tocar este código.
+// A diferencia de _edUpdateTitlePill (que va desde el borde de la PÁGINA,
+// por ser la topbar principal), aquí la franja va desde el borde de la
+// VENTANA, ya que son modales centrados, no barras a todo lo ancho.
+const _edWinTitleHeaderSel = '.ed-modal-header, .ed-fulloverlay-header, #edShortcutsModal .sc-header, #edAnimTutorialModal .sc-header, #edHelpRefModal .sc-header';
+const _edWinTitleSel = '.ed-modal-title, .ed-fulloverlay-title, .sc-title';
+function _edFitWindowTitlePill(header){
+  if (!header || header.offsetParent === null) return; // oculto: no medir
+  const title = header.querySelector(_edWinTitleSel);
+  if (!title) return;
+  let pill = header.querySelector(':scope > .win-title-pill');
+  if (!pill) {
+    pill = document.createElement('div');
+    pill.className = 'win-title-pill';
+    pill.setAttribute('aria-hidden', 'true');
+    header.insertBefore(pill, header.firstChild);
+  }
+  const headerRect = header.getBoundingClientRect();
+  const titleRect  = title.getBoundingClientRect();
+  if (titleRect.width <= 0) { pill.style.width = '0px'; return; }
+  const vPad = titleRect.height * 0.067; // mismo criterio que la topbar principal
+  pill.style.top    = (titleRect.top - headerRect.top - vPad) + 'px';
+  pill.style.height = (titleRect.height + vPad * 2) + 'px';
+  pill.style.width  = Math.max(0, titleRect.right - headerRect.left + 4) + 'px';
+}
+function _edFitAllWindowTitlePills(){
+  document.querySelectorAll(_edWinTitleHeaderSel).forEach(_edFitWindowTitlePill);
+}
+// Se llama una vez desde EditorView_init(), cuando el DOM del editor ya
+// existe — si se ejecutara al cargar el script, los modales aún no estarían
+// en el DOM (el router los inserta al montar la vista) y el observer no
+// encontraría nada que vigilar.
+function _edInitWindowTitlePillObserver(){
+  if (window._edWinTitleObs) return; // ya inicializado, no duplicar
+  const _cb = () => requestAnimationFrame(_edFitAllWindowTitlePills);
+  const _obs = new MutationObserver(_cb);
+  ['edProjectModal','edShortcutsModal','edAnimTutorialModal','edHelpRefModal','edMpBehaviourModal'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) _obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+  });
+  // Overlays creados/destruidos dinámicamente (Capas, Hojas): basta con
+  // vigilar los hijos directos de body, sin subtree — barato y suficiente.
+  _obs.observe(document.body, { childList: true });
+  window.addEventListener('resize', _cb);
+  window._edWinTitleObs = _obs;
+}
+
 // Dimensiones del lienzo según orientación de la hoja actual (o global si no definida)
 function _edCurrentOrientation(){
   // Si estamos renderizando para el visor (edOrientation ya seteado temporalmente),
@@ -1527,8 +1601,8 @@ class GifLayer extends BaseLayer {
 class TextLayer extends BaseLayer {
   constructor(text='Escribe aquí',x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
-    this.text=text;this.fontSize=30;this.fontFamily='Patrick Hand';
-    this.fontBold=false;this.fontItalic=false;
+    this.text=text;this.fontSize=30;this.fontFamily='Arial';
+    this.fontBold=false;this.fontItalic=true;
     this.color='#000000';this.backgroundColor='#ffffff';this.bgOpacity=1;
     this.borderColor='#000000';this.borderWidth=0;this.padding=10;
   }
@@ -1576,8 +1650,8 @@ class TextLayer extends BaseLayer {
 class BubbleLayer extends BaseLayer {
   constructor(text='Escribe aquí',x=0.5,y=0.5){
     super('bubble',x,y,0.3,0.15);
-    this.text=text;this.fontSize=30;this.fontFamily='Patrick Hand';
-    this.fontBold=false;this.fontItalic=false;
+    this.text=text;this.fontSize=30;this.fontFamily='Arial';
+    this.fontBold=false;this.fontItalic=true;
     this.color='#000000';this.backgroundColor='#ffffff';
     this.borderColor='#000000';this.borderWidth=2;
     this.tail=true;
@@ -10110,8 +10184,11 @@ function edOnMove(e){
       edDragOffX = (_psC?.nx ?? c.nx) - _psFlaM.x;
       edDragOffY = (_psC?.ny ?? c.ny) - _psFlaM.y;
       edIsDragging = true; window._edMoved = false;
-      _edDrawLockUI(); _edPropsOverlayShow();
-      edRenderOptionsPanel('props');
+      edHideGearIcon();
+      // NO abrir el panel de propiedades aquí — un toque seguido de arrastre
+      // inmediato es un simple "seleccionar y mover", no un doble tap. Abrir
+      // el panel en este punto hacía que cualquier selección con arrastre
+      // inmediato se comportara como si se hubiera hecho doble tap (bug).
       // Continuar el flujo normal de edOnMove para procesar el drag en este mismo frame
     }
   }
@@ -10147,10 +10224,21 @@ function edOnMove(e){
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
     const c=edCoords(e);
     const x0=_edShapeStart.x, y0=_edShapeStart.y;
-    _edShapePreview.x = (x0+c.nx)/2;
-    _edShapePreview.y = (y0+c.ny)/2;
-    _edShapePreview.width  = Math.max(Math.abs(c.nx-x0), 0.01);
-    _edShapePreview.height = Math.max(Math.abs(c.ny-y0), 0.01);
+    let cnx=c.nx, cny=c.ny;
+    if(e.ctrlKey || e.metaKey){
+      // Ctrl+arrastre → forzar proporción 1:1 (cuadrado en rectángulo, círculo
+      // en elipse) — atajo estándar de la industria (Illustrator/Figma/Photoshop).
+      // width/height están normalizados por separado a ancho y alto de página,
+      // así que hay que igualar el lado en PÍXELES reales, no en valor normalizado.
+      const _pw=edPageW(), _ph=edPageH();
+      const _side = Math.max(Math.abs(c.nx-x0)*_pw, Math.abs(c.ny-y0)*_ph);
+      cnx = x0 + (c.nx>=x0 ? 1 : -1) * (_side/_pw);
+      cny = y0 + (c.ny>=y0 ? 1 : -1) * (_side/_ph);
+    }
+    _edShapePreview.x = (x0+cnx)/2;
+    _edShapePreview.y = (y0+cny)/2;
+    _edShapePreview.width  = Math.max(Math.abs(cnx-x0), 0.01);
+    _edShapePreview.height = Math.max(Math.abs(cny-y0), 0.01);
     edRedraw(); return;
   }
   // vcof: si cursor vectorial activo y arrastrando un nodo, calcular posición desde cursor (no del dedo)
@@ -19595,15 +19683,15 @@ const _edHelpContent = {
         <b>2.</b> Todos los dibujos incluyen cuatro capas:
         ${withIco('<b>Tinta</b>', icoInk)}, ${withIco('<b>Lápiz</b>', icoPencil)},
         ${withIco('<b>Acuarela</b>', icoWatercolor)} y ${withIco('<b>Relleno</b>', icoBucket)}.
-        La ${withIco('goma', icoEraser)} solo borrará la herramienta activa,
+        La ${withIco('<b>goma</b>', icoEraser)} solo borrará la herramienta activa,
         conservando el resto de capas.
       </div>
       <div>
-        <b>3.</b> Usa la herramienta ${withIco('tinta', icoInk)} o
-        ${withIco('lápiz', icoPencil)} para limitar la extensión de la
-        herramienta ${withIco('relleno', icoBucket)}, y la de
-        ${withIco('tinta', icoInk)} además como máscara para las herramientas
-        ${withIco('acuarela', icoWatercolor)} e ${withIco('iluminación', icoDodge)}.
+        <b>3.</b> Usa la herramienta ${withIco('<b>tinta</b>', icoInk)} o
+        ${withIco('<b>lápiz</b>', icoPencil)} para limitar la extensión de la
+        herramienta ${withIco('<b>relleno</b>', icoBucket)} y la de
+        ${withIco('<b>tinta</b>', icoInk)} además, como máscara para las herramientas
+        ${withIco('<b>acuarela</b>', icoWatercolor)} e ${withIco('<b>iluminación</b>', icoDodge)}.
       </div>
     `;
   })(),
@@ -19684,6 +19772,20 @@ function edHelpShow(id) {
 function _edHelpHide() {
   const ov = document.getElementById('_edHelpOverlay');
   if (ov) ov.style.display = 'none';
+}
+
+// Muestra un contenido de _edHelpContent en el modal de referencia del menú
+// Ayuda (mismo estilo "sc-box" que Atajos de teclado). A diferencia de
+// edHelpShow(), esta versión NUNCA comprueba "no volver a mostrar": el
+// usuario ha venido a buscarla a propósito desde el menú.
+function _edHelpShowRef(id, title) {
+  const html = _edHelpContent[id];
+  if (!html) return;
+  const titleEl = $('edHelpRefTitle');
+  const bodyEl  = $('edHelpRefBody');
+  if (titleEl) titleEl.textContent = title || 'Ayuda';
+  if (bodyEl)  bodyEl.innerHTML = html;
+  $('edHelpRefModal')?.classList.add('open');
 }
 
 async function edCloudSave() {
@@ -19958,7 +20060,7 @@ async function edSaveProject(_keepOverlay){
           style:       l.style      || 'conventional',
           order:       seqOrder++,
           fontSize:    l.fontSize   || 30,
-          fontFamily:  l.fontFamily || 'Patrick Hand',
+          fontFamily:  l.fontFamily || 'Arial',
           fontBold:    l.fontBold   || false,
           fontItalic:  l.fontItalic || false,
           color:       l.color      || '#000000',
@@ -19980,7 +20082,7 @@ async function edSaveProject(_keepOverlay){
           x: xPct, y: yPct, w: wPct, h: hPct,
           order:       seqOrder++,
           fontSize:    l.fontSize   || 30,
-          fontFamily:  l.fontFamily || 'Patrick Hand',
+          fontFamily:  l.fontFamily || 'Arial',
           fontBold:    l.fontBold   || false,
           fontItalic:  l.fontItalic || false,
           color:       l.color      || '#000000',
@@ -21537,6 +21639,7 @@ async function edLoadProject(id){
     } // cierre del else (autosave más nuevo que el comic guardado)
   }
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
+  _edUpdateTitlePill();
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
     edRules = comic.editorData._rules || [];
@@ -23175,6 +23278,7 @@ async function edSaveProjectModal(){
   edProjectMeta.navMode = _newNavMode;
   edProjectMeta.social  = _newSocial;
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
+  _edUpdateTitlePill();
 
   if (_titleChanged) {
     // Crear obra nueva independiente con el nuevo nombre
@@ -23437,6 +23541,7 @@ function edConfirm(msg, onOk, okLabel='Eliminar'){
    INIT
    ══════════════════════════════════════════ */
 function EditorView_init(){
+  _edInitWindowTitlePillObserver();
   // Precargar todas las fuentes de texto en la caché del browser.
   // Canvas 2D requiere que la fuente esté cargada ANTES de usarla; si no, cae
   // al fallback silenciosamente. document.fonts.load() fuerza la carga inmediata.
@@ -23499,7 +23604,7 @@ function EditorView_init(){
     const _preMeta = (typeof ComicStore !== 'undefined') ? ComicStore.getById(editId) : null;
     const _preTitle = _preMeta?.title || '';
     const _pt = document.getElementById('edProjectTitle');
-    if (_pt && _preTitle) _pt.textContent = _preTitle;
+    if (_pt && _preTitle) { _pt.textContent = _preTitle; _edUpdateTitlePill(); }
   } catch(_) {}
   // edLoadProject es async: encadenar con .then() para que edSetOrientation
   // se ejecute DESPUÉS de que los datos estén cargados.
@@ -23839,6 +23944,36 @@ function EditorView_init(){
   document.getElementById('edAnimTutorialModal')?.addEventListener('pointerdown', e => {
     if (e.target === document.getElementById('edAnimTutorialModal'))
       document.getElementById('edAnimTutorialModal').classList.remove('open');
+  });
+  // ── Ventanas de ayuda también accesibles desde el menú Ayuda ──
+  // Mismo contenido/iconos que la ventana emergente (_edHelpContent), pero
+  // con el estilo común sc-box (como "Atajos de teclado"), y SIEMPRE visible
+  // desde aquí aunque el usuario haya marcado "No volver a mostrar" en la
+  // ventana emergente — esa marca solo evita el aviso automático, no el
+  // acceso deliberado desde el menú.
+  $('dd-help-draw-tools')?.addEventListener('click', () => {
+    edCloseMenus();
+    _edHelpShowRef('draw-tools', 'Herramientas de dibujo');
+  });
+  $('edHelpRefClose')?.addEventListener('click', () => {
+    document.getElementById('edHelpRefModal')?.classList.remove('open');
+  });
+  document.getElementById('edHelpRefModal')?.addEventListener('pointerdown', e => {
+    if (e.target === document.getElementById('edHelpRefModal'))
+      document.getElementById('edHelpRefModal').classList.remove('open');
+  });
+  // CRÍTICO: al igual que con la ventana de ayuda emergente, hay que impedir
+  // que cualquier evento de puntero dentro de estos modales (Atajos de
+  // teclado, Crear animaciones, Herramientas de dibujo) llegue a los
+  // listeners globales del editor — en concreto edOnMove (registrado sobre
+  // document), que paneaba la cámara del canvas al hacer scroll dentro del
+  // cuerpo del modal en vez de scrollear el propio modal.
+  ['edShortcutsModal', 'edAnimTutorialModal', 'edHelpRefModal'].forEach(_mid => {
+    const _mEl = document.getElementById(_mid);
+    if (!_mEl) return;
+    ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
+      _mEl.addEventListener(evt, e => { e.stopPropagation(); }, { passive: true });
+    });
   });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
@@ -24540,24 +24675,27 @@ function EditorView_init(){
         const _flOrd = _ordUid ? layers.find(l=>l.type==='fill'&&l._drawLayerId===_ordUid) : null;
         const _wcOrd = _ordUid ? layers.find(l=>l.type==='watercolor'&&l._drawLayerId===_ordUid) : null;
         const _pencilOrd = _ordUid ? layers.find(l=>l.type==='pencil'&&l._drawLayerId===_ordUid) : null;
+        // Reinsertar todos los companions (fill/watercolor/pencil) justo debajo
+        // de la capa movida — bug previo: solo se hacía con _flOrd, dejando
+        // watercolor/pencil atrás al reordenar.
+        const _reinsertCompanions = (moved) => {
+          [_flOrd, _wcOrd, _pencilOrd].forEach(_c => {
+            if(!_c) return;
+            const _ci = layers.indexOf(_c);
+            if(_ci>=0){ layers.splice(_ci,1); layers.splice(layers.indexOf(moved),0,_c); }
+          });
+        };
         if(e.altKey){
           if(_goUp && idx < layers.length - 1){
             const [moved] = layers.splice(idx, 1);
             layers.push(moved);
-            // Mover FillLayer al final - 1 (debajo del DrawLayer)
-            if(_flOrd){
-              const _fi=layers.indexOf(_flOrd); if(_fi>=0) layers.splice(_fi,1);
-              layers.splice(layers.length-1,0,_flOrd);
-            }
+            _reinsertCompanions(moved);
             edSelectedIdx = layers.indexOf(moved);
             edPushHistory(); edRedraw(); edToast('Al frente ⬆');
           } else if(_goDown && idx > 0){
             const [moved] = layers.splice(idx, 1);
             layers.unshift(moved);
-            if(_flOrd){
-              const _fi=layers.indexOf(_flOrd); if(_fi>=0) layers.splice(_fi,1);
-              layers.splice(1,0,_flOrd);
-            }
+            _reinsertCompanions(moved);
             edSelectedIdx = layers.indexOf(moved);
             edPushHistory(); edRedraw(); edToast('Al fondo ⬇');
           }
@@ -24569,7 +24707,7 @@ function EditorView_init(){
             if(target < layers.length){
               const [moved] = layers.splice(idx, 1);
               layers.splice(target, 0, moved);
-              if(_flOrd){ const _fi=layers.indexOf(_flOrd); if(_fi>=0){ layers.splice(_fi,1); layers.splice(layers.indexOf(moved),0,_flOrd); } }
+              _reinsertCompanions(moved);
               edSelectedIdx = layers.indexOf(moved);
               edPushHistory(); edRedraw(); edToast('Capa subida ▲');
             }
@@ -24579,9 +24717,69 @@ function EditorView_init(){
             if(target >= 0){
               const [moved] = layers.splice(idx, 1);
               layers.splice(target, 0, moved);
-              if(_flOrd){ const _fi=layers.indexOf(_flOrd); if(_fi>=0){ layers.splice(_fi,1); layers.splice(layers.indexOf(moved),0,_flOrd); } }
+              _reinsertCompanions(moved);
               edSelectedIdx = layers.indexOf(moved);
               edPushHistory(); edRedraw(); edToast('Capa bajada ▼');
+            }
+          }
+        }
+      } else if(edActiveTool==='multiselect' && edMultiSel.length){
+        // GRUPOS / MULTISELECCIÓN: bug previo — este atajo no hacía absolutamente
+        // nada si había un grupo u otra multiselección activa (solo comprobaba
+        // edSelectedIdx, que aquí vale -1). Mueve el conjunto completo como un
+        // bloque, manteniendo el orden relativo entre sus miembros y arrastrando
+        // los companions (fill/watercolor/pencil) de cada uno.
+        const page = edPages[edCurrentPage]; if(!page) return;
+        const layers = page.layers;
+        const _selObjs = edMultiSel.map(i => edLayers[i]).filter(Boolean);
+        const _expand = (objs) => {
+          const set = new Set(objs);
+          objs.forEach(la => {
+            const uid = la?._uid || la?._fillLayerId;
+            if(!uid) return;
+            layers.forEach(l => {
+              if(['fill','pencil','watercolor'].includes(l.type) && l._drawLayerId===uid) set.add(l);
+            });
+          });
+          return set;
+        };
+        const _expandedObjs = _expand(_selObjs);
+        let idxs = [...layers.keys()].filter(i => _expandedObjs.has(layers[i])).sort((a,b)=>a-b);
+        if(idxs.length){
+          if(e.altKey){
+            // Al frente / Al fondo: mover todo el bloque a un extremo, orden relativo intacto
+            const blockLayers = idxs.map(i => layers[i]);
+            [...idxs].sort((a,b)=>b-a).forEach(i => layers.splice(i,1));
+            if(_goUp) layers.push(...blockLayers); else if(_goDown) layers.unshift(...blockLayers);
+            edMultiSel = _selObjs.map(o => layers.indexOf(o)).filter(i=>i>=0);
+            edLayers = layers;
+            _msRecalcBbox(); _edUpdateMultiSelPanel();
+            edPushHistory(); edRedraw(); edToast(_goUp ? 'Grupo al frente ⬆' : 'Grupo al fondo ⬇');
+          } else if(_goUp && idxs[idxs.length-1] < layers.length-1){
+            let target = idxs[idxs.length-1] + 1;
+            while(target < layers.length && ['fill','pencil','watercolor'].includes(layers[target].type)) target++;
+            if(target < layers.length){
+              const blockLayers = idxs.map(i => layers[i]);
+              const targetLayer = layers[target];
+              [...idxs, target].sort((a,b)=>b-a).forEach(i => layers.splice(i,1));
+              layers.splice(idxs[0], 0, targetLayer, ...blockLayers);
+              edMultiSel = _selObjs.map(o => layers.indexOf(o)).filter(i=>i>=0);
+              edLayers = layers;
+              _msRecalcBbox(); _edUpdateMultiSelPanel();
+              edPushHistory(); edRedraw(); edToast('Grupo subido ▲');
+            }
+          } else if(_goDown && idxs[0] > 0){
+            let target = idxs[0] - 1;
+            while(target >= 0 && ['fill','pencil','watercolor'].includes(layers[target].type)) target--;
+            if(target >= 0){
+              const blockLayers = idxs.map(i => layers[i]);
+              const targetLayer = layers[target];
+              [...idxs, target].sort((a,b)=>b-a).forEach(i => layers.splice(i,1));
+              layers.splice(target, 0, ...blockLayers, targetLayer);
+              edMultiSel = _selObjs.map(o => layers.indexOf(o)).filter(i=>i>=0);
+              edLayers = layers;
+              _msRecalcBbox(); _edUpdateMultiSelPanel();
+              edPushHistory(); edRedraw(); edToast('Grupo bajado ▼');
             }
           }
         }
@@ -28865,11 +29063,11 @@ function _gcpToggleFramesBar() {
   const isOpen = bar.style.display === 'flex';
   if (isOpen) {
     bar.style.display = 'none';
-    if (btn) { btn.textContent = 'Frames ▾'; btn.classList.remove('active'); }
+    if (btn) { btn.textContent = 'Matriz ▾'; btn.classList.remove('active'); }
     window._gcpUiClosedAt = Date.now();
   } else {
     bar.style.display = 'flex';
-    if (btn) { btn.textContent = 'Frames ▴'; btn.classList.add('active'); }
+    if (btn) { btn.textContent = 'Matriz ▴'; btn.classList.add('active'); }
     _gcpUpdateFramesBar();
   }
 }
@@ -30528,7 +30726,7 @@ function gcpOpen(edLayerIdx) {
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
   const _ftBtn = document.getElementById('gcpFramesToggleBtn');
-  if (_ftBtn) { _ftBtn.textContent='Frames ▾'; _ftBtn.classList.remove('active'); }
+  if (_ftBtn) { _ftBtn.textContent='Matriz ▾'; _ftBtn.classList.remove('active'); }
   window._gcpGlobalFrameIdx = 0;
 
   // Si re-editamos una animación existente, restaurar sus capas serializadas
