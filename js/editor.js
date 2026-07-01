@@ -5308,6 +5308,35 @@ function _edApplyCropImage(la, pts, pw, ph, _onDone) {
   ctxOrig.fill();
   ctxOrig.globalCompositeOperation = 'source-over';
 
+  // ── 2b. BUG FIX: reajustar los handlers (x/y/width/height) del ORIGINAL al
+  // contenido que realmente queda, igual que ya se hace para newLayer. Antes
+  // solo la pieza nueva recalculaba su bbox; el original conservaba el tamaño
+  // completo previo al recorte aunque ahora tuviera un hueco transparente.
+  const idOrig = ctxOrig.getImageData(0, 0, iw, ih).data;
+  let ominX=iw, ominY=ih, omaxX=0, omaxY=0, ofound=false;
+  for (let y=0; y<ih; y++) for (let x=0; x<iw; x++) {
+    if (idOrig[(y*iw+x)*4+3] > 4) {
+      if(x<ominX)ominX=x; if(x>omaxX)omaxX=x;
+      if(y<ominY)ominY=y; if(y>omaxY)omaxY=y; ofound=true;
+    }
+  }
+  let croppedOrig = offOrig;
+  if (ofound) {
+    const ow = omaxX-ominX+1, oh = omaxY-ominY+1;
+    croppedOrig = document.createElement('canvas');
+    croppedOrig.width = ow; croppedOrig.height = oh;
+    croppedOrig.getContext('2d').drawImage(offOrig, ominX, ominY, ow, oh, 0, 0, ow, oh);
+    const obcx = (ominX + ow/2) / iw, obcy = (ominY + oh/2) / ih;
+    const odxL = (obcx - 0.5) * lw, odyL = (obcy - 0.5) * lh;
+    la.x = la.x + (odxL * Math.cos(rot) - odyL * Math.sin(rot)) / pw;
+    la.y = la.y + (odxL * Math.sin(rot) + odyL * Math.cos(rot)) / ph;
+    la.width  = (ow / iw) * la.width;
+    la.height = (oh / ih) * la.height;
+  }
+  // Si no queda ningún píxel visible (el polígono cubría toda la imagen),
+  // croppedOrig queda como el canvas totalmente transparente tal cual —
+  // se deja como estaba para no romper el flujo (edge case fuera de alcance).
+
   // Esperar a que ambas imágenes carguen antes de llamar _onDone
   // (el snapshot del historial debe capturar el estado FINAL, no el intermedio)
   let _pending = 2;
@@ -5319,7 +5348,7 @@ function _edApplyCropImage(la, pts, pw, ph, _onDone) {
 
   const newOrigImg = new Image();
   newOrigImg.onload = () => { la.img = newOrigImg; la.src = newOrigImg.src; _checkDone(); };
-  newOrigImg.src = offOrig.toDataURL('image/png');
+  newOrigImg.src = croppedOrig.toDataURL('image/png');
 
   // Devolver newLayer ahora (sin imagen aún) — se completará en el callback
   return newLayer;
@@ -5608,21 +5637,25 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   if (_onDone) _onDone(dlInside);
 
   // Recolocar capas inside justo antes de su StrokeLayer (fill → watercolor → pencil → stroke)
-  // tras el freeze, dlInside ya fue convertido a StrokeLayer; buscarlo por _uid
+  // tras el freeze, dlInside ya fue convertido a StrokeLayer; buscarlo por _uid.
+  // BUG FIX: se insertan las 3 sub-capas JUNTAS y en el orden correcto de una sola vez
+  // (igual que hace _edFreezeDrawLayer). Insertarlas una a una justo-antes-del-stroke en el
+  // orden ['pencil','watercolor','fill'] invertía el resultado final a [pencil,watercolor,fill],
+  // dejando el relleno por ENCIMA de la acuarela y el lápiz en la pieza recortada.
   if (dlInside._flInside || dlInside._pencilInside || dlInside._wcInside) {
     const _uidIn = dlInside._uid;
     const _sl = edLayers.find(l => l.type === 'stroke' && l._uid === _uidIn);
     if (_sl) {
-      const _slIdx = edLayers.indexOf(_sl);
-      // Recolocar en orden correcto: fill → watercolor → pencil (justo antes del stroke)
-      let _insertAt = _slIdx;
-      for (const _t of ['pencil', 'watercolor', 'fill']) {
-        const _lnk = edLayers.find(l => l.type === _t && l._drawLayerId === _uidIn);
-        if (!_lnk) continue;
-        const _lnkIdx = edLayers.indexOf(_lnk);
-        if (_lnkIdx >= 0) edLayers.splice(_lnkIdx, 1);
-        _insertAt = edLayers.indexOf(_sl); // recalcular tras el splice
-        edLayers.splice(_insertAt, 0, _lnk);
+      const _fLnkIn = edLayers.find(l => l.type === 'fill'       && l._drawLayerId === _uidIn);
+      const _wLnkIn = edLayers.find(l => l.type === 'watercolor' && l._drawLayerId === _uidIn);
+      const _pLnkIn = edLayers.find(l => l.type === 'pencil'     && l._drawLayerId === _uidIn);
+      const _subIn = [_fLnkIn, _wLnkIn, _pLnkIn].filter(l => l && edLayers.includes(l));
+      if (_subIn.length > 0) {
+        const _slIdx0 = edLayers.indexOf(_sl);
+        const _subIdxsIn = _subIn.map(l => edLayers.indexOf(l)).filter(i => i >= 0 && i !== _slIdx0);
+        _subIdxsIn.sort((a,b) => b - a).forEach(i => edLayers.splice(i, 1));
+        const _slIdx1 = edLayers.indexOf(_sl);
+        edLayers.splice(_slIdx1, 0, ..._subIn);
       }
       edPages[edCurrentPage].layers = edLayers;
     }
@@ -15029,6 +15062,11 @@ function _edUpdatePaletteDots(){
       d.title = idx===0 ? 'Negro (fijo)' : 'Blanco (fijo)';
     }
   });
+  // Mantener sincronizado el input nativo oculto del botón arcoíris (PC) con el color
+  // actual — si no se sincroniza aquí, al elegir un dot de paleta sin re-render completo
+  // del panel, el selector nativo se abriría con el valor viejo (BUG FIX).
+  const _dc = document.getElementById('op-dcolor');
+  if(_dc) _dc.value = edDrawColor;
 }
 function _hexToHsl(hex){
   let r=parseInt(hex.slice(1,3),16)/255,g=parseInt(hex.slice(3,5),16)/255,b=parseInt(hex.slice(5,7),16)/255;
@@ -15615,7 +15653,9 @@ function edRenderOptionsPanel(mode){
         });
       } else {
         window._edEyedropActive = true; edRedraw();
-        $('op-dcolor')?.click();
+        const _dc = $('op-dcolor');
+        if(_dc) _dc.value = edDrawColor;
+        _dc?.click();
       }
     });
     $('op-dcolor')?.addEventListener('input',e=>{
@@ -16016,19 +16056,34 @@ function edRenderOptionsPanel(mode){
             const flCopy = _cloneGrpSub('fill', FillLayer, 'fl_');
             const plCopy = _cloneGrpSub('pencil', PencilLayer, 'pencil_');
             const wlCopy = _cloneGrpSub('watercolor', WatercolorLayer, 'wc_');
+            // Orden correcto del grupo: fill → watercolor → pencil → stroke (BUG FIX:
+            // antes se empujaba pencil antes que watercolor, invirtiendo su apilado).
             if(flCopy){ slCopy._fillLayerId = _npid; copies.push(flCopy); }
-            if(plCopy){ slCopy._pencilLayerId = _npid; copies.push(plCopy); }
             if(wlCopy){ slCopy._watercolorLayerId = _npid; copies.push(wlCopy); }
+            if(plCopy){ slCopy._pencilLayerId = _npid; copies.push(plCopy); }
             copies.push(slCopy);
           } else if(la.type !== 'fill' && la.type !== 'pencil' && la.type !== 'watercolor'){
             // Otros tipos sin sub-capas (image, shape, line, text, bubble)
             const copy = edDeserLayer(edSerLayer(la));
-            if(copy){ copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03; }
+            if(copy){
+              copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03;
+              // BUG FIX: las líneas se posicionan por su array de puntos, no por x/y —
+              // sin desplazar `points` también, la copia queda exactamente encima del
+              // original (mismo patrón ya usado en edDuplicateSelected).
+              if(copy.type === 'line' && Array.isArray(copy.points)){
+                copy.points = copy.points.map(p => p ? {...p, x: p.x + 0.03, y: p.y + 0.03} : null);
+                if(typeof copy._updateBbox === 'function') copy._updateBbox();
+              }
+            }
             copies.push(copy);
           }
           // fill/pencil/watercolor: se procesan junto con su stroke — ignorar aquí
         });
-        copies.filter(Boolean).forEach(c=>edLayers.push(c));
+        // Insertar justo encima del grupo original (BUG FIX: antes se hacía push() al
+        // final de edLayers, colocando el duplicado por encima de TODOS los objetos de
+        // la página en vez de solo por encima del grupo original).
+        const _insertGrpAt = idxs.length ? Math.max(...idxs) + 1 : edLayers.length;
+        edLayers.splice(_insertGrpAt, 0, ...copies.filter(Boolean));
         edPushHistory(); edRedraw();
         edToast('Grupo duplicado ✓');
       });

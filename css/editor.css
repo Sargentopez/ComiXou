@@ -483,6 +483,7 @@ body.editor-page #appView {
   padding: 0; flex-shrink: 0;
   transition: border-color .1s, transform .12s;
   box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  touch-action: manipulation; /* evita el zoom nativo por doble-tap en el swatch */
 }
 .edb-swatch:active { transform: scale(.88); }
 
@@ -569,6 +570,7 @@ body.editor-page #appView {
   border: 2px solid rgba(255,255,255,.2);
   cursor: pointer; padding: 0; flex-shrink: 0;
   transition: transform .1s, border-color .1s;
+  touch-action: manipulation; /* evita el zoom nativo por doble-tap y agiliza el doble-tap propio */
 }
 .edb-pal-dot:active  { transform: scale(.85); }
 .edb-pal-dot.current { border-color: #fff; box-shadow: 0 0 0 1px rgba(255,255,255,.6); }
@@ -579,6 +581,13 @@ body.editor-page #appView {
   font-size: 0.6rem;
   display: flex; align-items: center; justify-content: center;
   color: #fff; font-weight: 900; text-shadow: 0 0 2px #000;
+}
+
+/* Muestras de color del panel de dibujo a mano (op-pal-dot) y botón arcoíris (op-custom-color-btn):
+   evita que el doble-tap dispare el zoom nativo del navegador en vez de abrir el picker de color. */
+.op-pal-dot,
+#op-custom-color-btn {
+  touch-action: manipulation;
 }
 
 /* ══════════════════════════════
