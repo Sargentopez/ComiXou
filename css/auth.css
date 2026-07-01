@@ -79,6 +79,7 @@
 
 /* Cabecera amarilla estilo site-header */
 .auth-card-header {
+  position: relative;
   padding: 14px 24px 12px;
   background: var(--yellow);
   border-bottom: 2.5px solid var(--black);
@@ -87,9 +88,22 @@
   border-bottom-right-radius: 0;
 }
 .auth-title {
+  position: relative; z-index: 1;
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 1.5rem; letter-spacing: 1px; color: var(--black);
+}
+/* Franja blanca tras el título — mismo criterio que en el editor: desde el
+   borde izquierdo de la ventana hasta el final del texto, semicírculo a la
+   derecha. Tamaño real fijado por JS (_authFitTitlePill). */
+.win-title-pill {
+  position: absolute;
+  left: 0;
+  background: var(--white);
+  border-radius: 0 999px 999px 0;
+  z-index: 0;
+  pointer-events: none;
+  width: 0;
 }
 
 .auth-form  { padding: 18px 24px 4px; }

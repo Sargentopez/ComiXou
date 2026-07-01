@@ -1140,6 +1140,25 @@ window.addEventListener('resize', () => {
   window._edTitlePillRaf = requestAnimationFrame(_edUpdateTitlePill);
 });
 
+// Misma franja blanca, para la topbar del editor de animaciones (GCP).
+function _gcpUpdateTitlePill(){
+  const bar   = document.getElementById('gcpTopbar');
+  const pill  = document.getElementById('gcpTitlePill');
+  const title = document.getElementById('gcpProjectTitle');
+  if(!bar || !pill || !title) return;
+  const barRect   = bar.getBoundingClientRect();
+  const titleRect = title.getBoundingClientRect();
+  if(titleRect.width <= 0){ pill.style.width = '0px'; return; }
+  const vPad = titleRect.height * 0.067;
+  pill.style.top    = (titleRect.top - barRect.top - vPad) + 'px';
+  pill.style.height = (titleRect.height + vPad * 2) + 'px';
+  pill.style.width  = Math.max(0, titleRect.right - barRect.left + 4) + 'px';
+}
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(window._gcpTitlePillRaf);
+  window._gcpTitlePillRaf = requestAnimationFrame(_gcpUpdateTitlePill);
+});
+
 // ── Franja blanca en TODAS las ventanas del editor con cabecera de título ──
 // (Editar datos de la obra, Hojas, Capas, Comportamiento, Atajos de teclado,
 // Crear animaciones, Ayuda). En vez de enganchar manualmente cada punto que
@@ -6276,14 +6295,22 @@ function edMirrorSelected(){
     tctx.translate(tmp.width, 0);
     tctx.scale(-1, 1);
     tctx.drawImage(img, 0, 0);
+    const mirroredDataUrl = tmp.toDataURL();
     const mirroredImg = new Image();
     mirroredImg.onload = () => {
       la.img = mirroredImg;
+      // CRÍTICO: actualizar también la.src (no solo la.img). edSerLayer usa
+      // la.src para guardar/duplicar la imagen — si no se actualiza aquí,
+      // el reflejo se ve bien en el canvas pero se pierde al guardar en la
+      // biblioteca y volver a insertarla (bug: seguía sirviendo la imagen
+      // original sin reflejar). Así el objeto reflejado queda completamente
+      // independiente del original, igual que el resto de tipos de objeto.
+      la.src = mirroredDataUrl;
       // Invertir rotación respecto a eje vertical: rotation → -rotation
       la.rotation = -(la.rotation || 0);
       edRedraw();
     };
-    mirroredImg.src = tmp.toDataURL();
+    mirroredImg.src = mirroredDataUrl;
     return; // el resto se hace en onload
   }
 
@@ -16327,9 +16354,13 @@ function edRenderOptionsPanel(mode){
             tmp.width=img.naturalWidth||img.width; tmp.height=img.naturalHeight||img.height;
             const tctx=tmp.getContext('2d');
             tctx.translate(tmp.width,0); tctx.scale(-1,1); tctx.drawImage(img,0,0);
+            const mirroredDataUrl=tmp.toDataURL();
             const mi=new Image();
-            mi.onload=()=>{ m.img=mi; m.rotation=-(m.rotation||0); edRedraw(); };
-            mi.src=tmp.toDataURL();
+            // CRÍTICO: actualizar también m.src (no solo m.img) — ver comentario
+            // en edMirrorSelected. Si no, el reflejo se pierde al guardar el
+            // grupo en la biblioteca y volver a insertarlo.
+            mi.onload=()=>{ m.img=mi; m.src=mirroredDataUrl; m.rotation=-(m.rotation||0); edRedraw(); };
+            mi.src=mirroredDataUrl;
           } else if(m.type==='gif'){
             // GIF: reflejar solo posición y rotación (frames no se alteran — operación costosa)
             m.x=newX; m.rotation=-(m.rotation||0);
@@ -24535,7 +24566,7 @@ function EditorView_init(){
     if(!document.getElementById('editorShell')) return;
     // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas, etc.)
     // dejarlo hacer scroll nativo — no intervenir
-    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel');
+    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel, .ed-modal-body');
     if(overScrollable) return;
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
@@ -30776,6 +30807,7 @@ function gcpOpen(edLayerIdx) {
   } else {
     _gcpHintStop();
   }
+  _gcpUpdateTitlePill();
   // Leer comportamientos guardados de la capa y reflejarlos en la UI
   // Resetear valores por defecto antes de leer de la capa
   window._gcpInvisBeforeStart = false;
@@ -31212,6 +31244,7 @@ function _gcpDoClose() {
   // Restaurar título del gcpShell para próxima apertura
   const titleEl = document.getElementById('gcpProjectTitle');
   if (titleEl) titleEl.textContent = 'Gif 1';
+  _gcpUpdateTitlePill();
   edRedraw();
 }
 

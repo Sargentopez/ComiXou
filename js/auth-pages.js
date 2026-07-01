@@ -27,7 +27,34 @@
    la vista login o register — busca elementos frescos del DOM.
    ============================================================ */
 
+// Franja blanca tras el título de login/registro — mismo criterio que en el
+// editor: desde el borde izquierdo de la ventana hasta el final del texto,
+// semicírculo a la derecha.
+function _authFitTitlePill(){
+  document.querySelectorAll('.auth-card-header').forEach(header => {
+    const title = header.querySelector('.auth-title');
+    if (!title) return;
+    let pill = header.querySelector(':scope > .win-title-pill');
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.className = 'win-title-pill';
+      pill.setAttribute('aria-hidden', 'true');
+      header.insertBefore(pill, header.firstChild);
+    }
+    const headerRect = header.getBoundingClientRect();
+    const titleRect  = title.getBoundingClientRect();
+    if (titleRect.width <= 0) { pill.style.width = '0px'; return; }
+    const vPad = titleRect.height * 0.067;
+    pill.style.top    = (titleRect.top - headerRect.top - vPad) + 'px';
+    pill.style.height = (titleRect.height + vPad * 2) + 'px';
+    pill.style.width  = Math.max(0, titleRect.right - headerRect.left + 4) + 'px';
+  });
+}
+window.removeEventListener('resize', _authFitTitlePill); // evita duplicados si AuthView_init se llama varias veces
+window.addEventListener('resize', _authFitTitlePill);
+
 function AuthView_init() {
+  _authFitTitlePill();
 
   // ── Cerrar al clicar fuera de la tarjeta ──
   const authMain = document.querySelector('.auth-main');

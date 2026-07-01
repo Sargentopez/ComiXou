@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v32.06</footer>
+    <footer class="app-version">v32.08</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -801,6 +801,7 @@ Router.register('editor', {
     <!-- Editor GIF: mismo diseño que el editor (mismas clases CSS) -->
     <div id="gcpShell">
       <div id="gcpTopbar">
+        <div id="gcpTitlePill" aria-hidden="true"></div>
         <span id="gcpProjectTitle">Gif 1</span>
         <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav" id="gcpFrameNav" style="display:none">
@@ -908,8 +909,8 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-gcpmenu="gcp-help">Ayuda ▾</button>
             <div class="ed-dropdown" id="gdd-gcp-help">
-              <button class="ed-dropdown-item" id="gcp-dd-shortcuts">⌨ Atajos de teclado</button>
-              <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial">🎬 Crear animaciones</button>
+              <button class="ed-dropdown-item" id="gcp-dd-shortcuts">Atajos de teclado</button>
+              <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial">Crear animaciones</button>
             </div>
           </div>
         </div>

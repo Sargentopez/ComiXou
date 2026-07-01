@@ -82,6 +82,43 @@ async function _mcLoadLocalThumb(comicId) {
   } catch(_e) {}
 }
 
+// Franja blanca tras el título de los modales de "Mis Creaciones" (Nuevo
+// proyecto, Título duplicado) — mismo criterio que en el editor: desde el
+// borde izquierdo de la ventana hasta el final del texto, semicírculo a la
+// derecha. Se recalcula solo/a cuando el modal es visible.
+function _mcFitTitlePill(titleEl){
+  if (!titleEl || titleEl.offsetParent === null) return;
+  const text = titleEl.querySelector('.mc-modal-title-text');
+  if (!text) return;
+  let pill = titleEl.querySelector(':scope > .win-title-pill');
+  if (!pill) {
+    pill = document.createElement('div');
+    pill.className = 'win-title-pill';
+    pill.setAttribute('aria-hidden', 'true');
+    titleEl.insertBefore(pill, titleEl.firstChild);
+  }
+  const boxRect  = titleEl.getBoundingClientRect();
+  const textRect = text.getBoundingClientRect();
+  if (textRect.width <= 0) { pill.style.width = '0px'; return; }
+  const vPad = textRect.height * 0.067;
+  pill.style.top    = (textRect.top - boxRect.top - vPad) + 'px';
+  pill.style.height = (textRect.height + vPad * 2) + 'px';
+  pill.style.width  = Math.max(0, textRect.right - boxRect.left + 4) + 'px';
+}
+function _mcFitAllTitlePills(){
+  document.querySelectorAll('.mc-modal-title').forEach(_mcFitTitlePill);
+}
+function _mcInitTitlePillObserver(){
+  if (window._mcTitleObs) return; // ya inicializado
+  const _cb = () => requestAnimationFrame(_mcFitAllTitlePills);
+  const _obs = new MutationObserver(_cb);
+  // mcNewModal es fijo (se inyecta una vez y alterna la clase "open");
+  // mcDupModal se crea/destruye cada vez — subtree cubre ambos casos.
+  _obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  window.addEventListener('resize', _cb);
+  window._mcTitleObs = _obs;
+}
+
 function _mcInjectModal() {
   // Inyectar el modal directamente en body (fuera de appView)
   // para que position:fixed funcione sin restricciones
@@ -91,7 +128,7 @@ function _mcInjectModal() {
   modal.id = 'mcNewModal';
   modal.innerHTML = `
     <div class="mc-modal-box">
-      <h3 class="mc-modal-title">Nuevo proyecto</h3>
+      <h3 class="mc-modal-title"><span class="mc-modal-title-text">Nuevo proyecto</span></h3>
       <div class="mc-field">
         <label>Título</label>
         <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off" inputmode="text" enterkeyhint="next">
@@ -468,6 +505,7 @@ function _mcCheckStorage() {
 }
 
 function MyComicsView_init() {
+  _mcInitTitlePillObserver();
   // Detectar disponibilidad real de IDB probando una escritura en cxAnims.
   // Más fiable que detectar incógnito por APIs — en Chrome incógnito IDB existe
   // pero puede fallar silenciosamente o tener cuota insuficiente.
@@ -1237,7 +1275,7 @@ function _mcConfirmDuplicate(title, existingComic, callback) {
   ov.id = 'mcDupModal';
   ov.innerHTML = `
     <div class="mc-modal-box" style="gap:14px">
-      <h3 class="mc-modal-title" style="font-size:1.05rem">Título duplicado</h3>
+      <h3 class="mc-modal-title" style="font-size:1.05rem"><span class="mc-modal-title-text">Título duplicado</span></h3>
       <p style="margin:0;color:var(--gray-600);font-size:.9rem;line-height:1.5">
         Ya tienes una obra llamada <strong style="color:var(--primary)">${title.replace(/</g,'&lt;')}</strong>.<br>
         ¿Qué deseas hacer?

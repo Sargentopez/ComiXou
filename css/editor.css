@@ -1166,25 +1166,50 @@ body.editor-page #appView {
 }
 
 #edProjectModal {
-  position: fixed; inset: 0; background: rgba(0,0,0,.45);
-  z-index: 500; display: flex;
-  align-items: flex-start;    /* ARRIBA */
+  position: fixed; inset: 0;
+  z-index: 500;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  display: flex;
+  align-items: flex-end;
   justify-content: center;
-  padding-top: env(safe-area-inset-top, 0px);
   opacity: 0; pointer-events: none; transition: opacity .22s;
-  backdrop-filter: blur(4px);
-  overflow-y: auto;
 }
-#edProjectModal.open { opacity: 1; pointer-events: all; }
+#edProjectModal.open {
+  opacity: 1; pointer-events: all;
+  touch-action: pan-y; /* permitir scroll nativo dentro del modal */
+}
 .ed-modal-sheet {
   width: 100%; max-width: 480px; background: var(--white);
-  border-radius: 0 0 20px 20px; border-bottom: 2.5px solid var(--black);
-  padding: 0;
-  transform: translateY(-100%); transition: transform .26s cubic-bezier(.4,0,.2,1);
-  box-shadow: 0 4px 24px rgba(0,0,0,.12);
-  overflow: hidden; /* recorta la cabecera a las esquinas redondeadas inferiores */
+  border: 2.5px solid var(--black); border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  max-height: 88vh;
+  display: flex; flex-direction: column;
+  overflow: hidden; /* recorta cabecera/cuerpo a las esquinas redondeadas */
+  animation: none;
+  box-shadow: 0 -4px 32px rgba(0,0,0,.25);
 }
-#edProjectModal.open .ed-modal-sheet { transform: translateY(0); }
+#edProjectModal.open .ed-modal-sheet {
+  animation: edOverlayUp .24s cubic-bezier(.4,0,.2,1) both;
+}
+@media (pointer: fine) {
+  /* PC/ratón: centrar en vez de bottom-sheet, igual que el resto de ventanas */
+  #edProjectModal { align-items: center; }
+  .ed-modal-sheet {
+    border-bottom: 2.5px solid var(--black) !important;
+    border-radius: 18px !important;
+    max-height: 80vh;
+  }
+}
+@media (min-height: 600px) {
+  #edProjectModal { align-items: center; }
+  .ed-modal-sheet {
+    border-radius: 18px;
+    border-bottom: 2.5px solid var(--black);
+    max-height: 80vh;
+  }
+}
 .ed-modal-handle { display: none; }
 .ed-modal-header {
   position: relative;
@@ -1209,7 +1234,7 @@ body.editor-page #appView {
   pointer-events: none;
   width: 0;
 }
-.ed-modal-body { padding: 18px 18px 28px; }
+.ed-modal-body { padding: 18px 18px 28px; overflow-y: auto; -webkit-overflow-scrolling: touch; flex: 1 1 auto; min-height: 0; }
 .ed-modal-field { margin-bottom: 10px; }
 .ed-modal-field label { display: block; font-size: 0.7rem; font-weight: 900; color: var(--gray-500); text-transform: uppercase; margin-bottom: 4px; }
 .ed-modal-field input, .ed-modal-field select {
@@ -2007,11 +2032,24 @@ body.editor-page #appView {
   pointer-events: auto;
 }
 #gcpProjectTitle {
+  position: relative; z-index: 2;
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 1rem; letter-spacing: 0.5px;
   color: var(--black);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Franja blanca tras el título — mismo criterio que edTitlePill: desde el
+   borde izquierdo de la página hasta el final del texto, semicírculo a la
+   derecha. Tamaño real fijado por JS (_gcpUpdateTitlePill). */
+#gcpTitlePill {
+  position: absolute;
+  left: 0;
+  background: var(--white);
+  border-radius: 0 999px 999px 0;
+  z-index: 1;
+  pointer-events: none;
+  width: 0;
 }
 #gcpTopbar .ed-top-spacer { flex: 1; }
 #gcpTopbar #gcpFrameNav { margin-top: 20px; }
