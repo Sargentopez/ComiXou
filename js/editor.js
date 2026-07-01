@@ -839,6 +839,16 @@ let _edRuleNodeId = 0;     // contador IDs de nodos
 let _edRulePanelId = null; // id de la regla con panel abierto
 let edSelectedIdx = -1;
 let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
+// Umbral de movimiento (px de pantalla) para distinguir clic de arrastre con
+// pointerType==='pen' (tableta gráfica en PC). window._edPenDragPending guarda
+// el candidato a drag hasta que se supera este umbral (ver edOnStart/edOnMove).
+// Ventana de doble tap/doble clic (táctil y objetos en general). Antes 350ms,
+// reducida a 200ms a petición del usuario (350 se sentía demasiado lento).
+const _edDoubleTapMs = 200;
+const _edPenDragThreshold = 6;
+window._edPenDragPending = null;
+window._edPenGroupDragPending = null;
+window._edPenNodeDragPending = null;
 let edTailPointType = null, edResizeCorner = null, edTailVoiceIdx = 0;
 let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
@@ -7955,7 +7965,7 @@ function edOnStart(e){
         const _n = edRuleNodes.find(n => n.id === _rHit.nodeId); if(!_n) return;
         const _now2 = Date.now();
         const _isDouble2 = (e.detail >= 2) ||
-          (window._edNodeLastTap && (_now2 - window._edNodeLastTap < 350) &&
+          (window._edNodeLastTap && (_now2 - window._edNodeLastTap < _edDoubleTapMs) &&
            window._edNodeLastTapId === _rHit.nodeId);
         if(_isDouble2) {
           window._edNodeLastTap = 0; clearTimeout(window._edNodeTapTimer);
@@ -7979,7 +7989,7 @@ function edOnStart(e){
       if(_isHandleHit) {
         const _now = Date.now();
         const _isDouble = (e.detail >= 2) ||
-          (window._edRuleLastTap && (_now - window._edRuleLastTap < 350) &&
+          (window._edRuleLastTap && (_now - window._edRuleLastTap < _edDoubleTapMs) &&
            window._edRuleLastTapId === _rHit.ruleId);
 
         if(_isDouble) {
@@ -8150,7 +8160,7 @@ function edOnStart(e){
           if(Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z<_vcHitR){
             // Doble tap en nodo ya seleccionado → eliminar nodo
             const _isDblNode = window._edCurveVertIdx===i &&
-              (_vcNow - (window._edCurveLastTapTime||0)) < 350;
+              (_vcNow - (window._edCurveLastTapTime||0)) < _edDoubleTapMs;
             window._edCurveLastTapTime = _vcNow;
             if(_isDblNode){
               // Eliminar nodo si quedan al menos 2 puntos reales
@@ -8198,7 +8208,13 @@ function edOnStart(e){
               // No iniciar drag aquí: el arrastre se inicia desde el cuadrado (ver intercept arriba)
               return;
             }
-            edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=i;
+            if(e.pointerType === 'pen'){
+              // Lápiz: permitir seleccionar el nodo (radio, sliders) sin arrastrarlo
+              // por el temblor de la punta. Drag real solo tras superar el umbral.
+              window._edPenNodeDragPending = { voiceIdx: i, startX: e.clientX, startY: e.clientY };
+            } else {
+              edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=i;
+            }
             if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
             return;
           }
@@ -8399,7 +8415,7 @@ function edOnStart(e){
           // Doble tap dentro del bbox en modo grupo silencioso → panel del grupo
           if(window._edGroupSilentTool !== undefined){
             const _now2 = Date.now();
-            const _isDbl = _now2 - _edLastTapTime < 350;
+            const _isDbl = _now2 - _edLastTapTime < _edDoubleTapMs;
             _edLastTapTime = _now2; _edLastTapIdx = -999; // centinela grupo
             if(_isDbl){
               // Encontrar el miembro más cercano al toque
@@ -8416,8 +8432,16 @@ function edOnStart(e){
           }
           // LOCK: solo iniciar si hay miembros desbloqueados
           if(edMultiSel.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
-          edMultiDragging=true;
           edMultiDragOffs=edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+          if(e.pointerType === 'pen' && window._edGroupSilentTool !== undefined){
+            // Solo para el pseudo-grupo (objeto agrupado tratado como unidad).
+            // La multiselección real (rubber-band/shift-clic) no se toca.
+            edMultiDragging=false;
+            window._edPenGroupDragPending = { startX: e.clientX, startY: e.clientY };
+          } else {
+            edMultiDragging=true;
+            window._edPenGroupDragPending = null;
+          }
           return;
         }
       }
@@ -8954,7 +8978,11 @@ function edOnStart(e){
             _edLastNodeTapIdx = _hitId;
             if(_lineHit.type==='node'){
               _edShapePushHistory(); // pre-snapshot antes del drag
-              edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
+              if(e.pointerType === 'pen'){
+                window._edPenNodeDragPending = { voiceIdx: _lineHit.idx, startX: e.clientX, startY: e.clientY };
+              } else {
+                edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lineHit.idx;
+              }
               // Capturar pointer para recibir pointermove aunque el dedo salga del canvas
               if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
             }
@@ -8999,7 +9027,7 @@ function edOnStart(e){
     // Si es el segundo clic de un doble clic sobre este objeto, saltarse handles
     const _now = Date.now();
     const _isPotentialDbl = (_la === edLayers[_edLastTapIdx] || edSelectedIdx === _edLastTapIdx)
-                            && (_now - _edLastTapTime < 350);
+                            && (_now - _edLastTapTime < _edDoubleTapMs);
     // Radio de hit proporcional al objeto: min(fijo, 70% del semidímensión menor).
     // Evita que en objetos pequeños los handles ocupen toda la zona de drag.
     const _objMinHalfScreen = Math.min(_la.width * _pw, _la.height * _ph) * _z / 2;
@@ -9346,7 +9374,7 @@ function edOnStart(e){
           const _gidxsL = _edGroupMemberIdxs(_fla.groupId);
           const _gcx = _gidxsL.reduce((s,i)=>s+(edLayers[i]?.x||0),0) / _gidxsL.length;
           const _gcy = _gidxsL.reduce((s,i)=>s+(edLayers[i]?.y||0),0) / _gidxsL.length;
-          if(found === _edLastTapIdx && _nowL - _edLastTapTime < 350){
+          if(found === _edLastTapIdx && _nowL - _edLastTapTime < _edDoubleTapMs){
             // Doble tap en grupo bloqueado → abrir panel de grupo
             _edLastTapTime = 0; _edLastTapIdx = -1;
             edSelectedIdx = found;
@@ -9364,7 +9392,7 @@ function edOnStart(e){
           return;
         }
         // ── Objeto individual bloqueado ──
-        if(found === _edLastTapIdx && _nowL - _edLastTapTime < 350){
+        if(found === _edLastTapIdx && _nowL - _edLastTapTime < _edDoubleTapMs){
           _edLastTapTime = 0; _edLastTapIdx = -1;
           _edHandleDoubleTap(found);
         } else {
@@ -9384,7 +9412,7 @@ function edOnStart(e){
         // Detectar doble tap/clic → abrir panel de propiedades del grupo
         const _now = Date.now();
         const _isDoubleTap = (found === _edLastTapIdx || _gidxs.includes(_edLastTapIdx)) &&
-                             _now - _edLastTapTime < 350;
+                             _now - _edLastTapTime < _edDoubleTapMs;
         if(_isDoubleTap){
           _edLastTapTime = 0; _edLastTapIdx = -1;
           // Abrir panel con el objeto tocado seleccionado
@@ -9411,8 +9439,16 @@ function edOnStart(e){
         // Iniciar drag inmediatamente — igual que objetos normales, sin retardo
         // LOCK: solo iniciar si hay miembros desbloqueados
         if(_gidxs.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
-        edMultiDragging = true;
         edMultiDragOffs = _gidxs.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+        if(e.pointerType === 'pen'){
+          // Mismo umbral que en objetos individuales: el lápiz no arrastra el
+          // grupo hasta superar _edPenDragThreshold px (ver promoción en edOnMove).
+          edMultiDragging = false;
+          window._edPenGroupDragPending = { startX: e.clientX, startY: e.clientY };
+        } else {
+          edMultiDragging = true;
+          window._edPenGroupDragPending = null;
+        }
         window._edMoved = false;
         edRedraw();
         return;
@@ -9457,7 +9493,7 @@ function edOnStart(e){
     //    la selección 120ms — da tiempo al segundo dedo para hacer zoom ──
     if (_isTouch && found !== edSelectedIdx) {
       const _dsNow = Date.now();
-      const _dsDbl = (found === _edLastTapIdx && _dsNow - _edLastTapTime < 350);
+      const _dsDbl = (found === _edLastTapIdx && _dsNow - _edLastTapTime < _edDoubleTapMs);
       _edLastTapTime = _dsNow; _edLastTapIdx = found;
       clearTimeout(window._edSelTouchTimer);
       window._edPendingSelFound = null; window._edPendingSelC = null;
@@ -9511,7 +9547,19 @@ function edOnStart(e){
     }
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
-    edIsDragging = true;
+    if(e.pointerType === 'pen'){
+      // Lápiz de tableta gráfica: NO arrastrar al instante. El temblor natural
+      // de la punta al posarla generaría un pointermove mínimo que activaría
+      // el drag aunque el usuario solo quisiera seleccionar o abrir propiedades.
+      // Umbral de movimiento estándar (mismo patrón que Photoshop/Krita/Figma
+      // para distinguir clic de arrastre): el drag real solo se activa si el
+      // puntero supera _edPenDragThreshold px de pantalla (ver promoción en edOnMove).
+      edIsDragging = false;
+      window._edPenDragPending = { found, startX: e.clientX, startY: e.clientY };
+    } else {
+      edIsDragging = true;
+      window._edPenDragPending = null;
+    }
     window._edMoved = false;
 
     // Pre-snapshot para objetos vectoriales (permite deshacer el desplazamiento)
@@ -9525,9 +9573,9 @@ function edOnStart(e){
     clearTimeout(window._edLongPress);
     if(_isTouch){
       // TÁCTIL: toque simple = solo seleccionar
-      // Doble toque rápido (≤350ms) → abrir panel de propiedades
+      // Doble toque rápido (≤200ms) → abrir panel de propiedades
       const now = Date.now();
-      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+      if(found === _edLastTapIdx && now - _edLastTapTime < _edDoubleTapMs){
         edIsDragging = false;
         clearTimeout(window._edLongPress);
         _edHandleDoubleTap(found);
@@ -9540,8 +9588,9 @@ function edOnStart(e){
     } else {
       // PC/RATÓN: doble clic en el mismo objeto → abrir propiedades
       const now = Date.now();
-      if(found === _edLastTapIdx && now - _edLastTapTime < 350){
+      if(found === _edLastTapIdx && now - _edLastTapTime < _edDoubleTapMs){
         edIsDragging = false;
+        window._edPenDragPending = null;
         clearTimeout(window._edLongPress);
         _edHandleDoubleTap(found);
         _edLastTapTime = 0; _edLastTapIdx = -1;
@@ -9554,6 +9603,7 @@ function edOnStart(e){
             const _la = edLayers[found];
             if(_la && (_la.type === 'shape' || _la.type === 'line')) return;
             edIsDragging = false;
+            window._edPenDragPending = null;
             edRenderOptionsPanel('props');
           }
         }, 600);
@@ -9828,6 +9878,15 @@ function edOnMove(e){
       edRubberBand.x1=c.nx; edRubberBand.y1=c.ny;
       window._edRubberBandEndPos = {clientX: e.clientX, clientY: e.clientY};
       edRedraw(); return;
+    }
+    // Lápiz: promover el drag de grupo pendiente igual que en objetos individuales
+    if(window._edPenGroupDragPending && edMultiDragOffs.length){
+      const _pgdx = e.clientX - window._edPenGroupDragPending.startX;
+      const _pgdy = e.clientY - window._edPenGroupDragPending.startY;
+      if(Math.hypot(_pgdx, _pgdy) >= _edPenDragThreshold){
+        edMultiDragging = true;
+        window._edPenGroupDragPending = null;
+      }
     }
     if(edMultiDragging && edMultiDragOffs.length){
       e.preventDefault();
@@ -10109,6 +10168,16 @@ function edOnMove(e){
   const c=edCoords(_vcofE);
   _edTouchMoved = true;
   clearTimeout(window._edLongPress); // cancelar longpress si el dedo se movió
+  // Lápiz: promover el drag de nodo de curva pendiente igual que en objetos/grupos
+  if(window._edPenNodeDragPending && edSelectedIdx>=0){
+    const _pndx = e.clientX - window._edPenNodeDragPending.startX;
+    const _pndy = e.clientY - window._edPenNodeDragPending.startY;
+    if(Math.hypot(_pndx, _pndy) >= _edPenDragThreshold){
+      edIsTailDragging = true; edTailPointType = 'linevertex';
+      edTailVoiceIdx = window._edPenNodeDragPending.voiceIdx;
+      window._edPenNodeDragPending = null;
+    }
+  }
   if(edIsTailDragging&&edSelectedIdx>=0){
     const la=edLayers[edSelectedIdx];
     if(edTailPointType==='thoughtBig'){
@@ -10341,6 +10410,16 @@ function edOnMove(e){
     // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
     return;
   }
+  // Lápiz de tableta gráfica: promover de "pendiente" a arrastre real solo si el
+  // puntero supera el umbral de movimiento (ver activación en edOnStart).
+  if(window._edPenDragPending && edSelectedIdx === window._edPenDragPending.found){
+    const _pdx = e.clientX - window._edPenDragPending.startX;
+    const _pdy = e.clientY - window._edPenDragPending.startY;
+    if(Math.hypot(_pdx, _pdy) >= _edPenDragThreshold){
+      edIsDragging = true;
+      window._edPenDragPending = null;
+    }
+  }
   if(!edIsDragging||edSelectedIdx<0)return;
   const la=edLayers[edSelectedIdx];
   const _prevX = la.x, _prevY = la.y;
@@ -10397,6 +10476,9 @@ function edOnMove(e){
 function edOnEnd(e){
   _edDragStatic.valid = false;  // invalidar cache del drag
   _edPaintStatic.valid = false; // invalidar cache del trazo (mismo patrón)
+  window._edPenDragPending = null; // si no se superó el umbral, queda como clic/tap limpio
+  window._edPenGroupDragPending = null;
+  window._edPenNodeDragPending = null;
   if(window._gcpActive) return;
   // Limpiar el puntero del mapa de activos SIEMPRE, antes de cualquier return prematuro.
   // Todos los modos especiales (recorrido, recorte, zoom-rect, etc.) hacen return
@@ -15121,7 +15203,7 @@ function _edPickColor(e, initialHex, onInput, onCommit){
 let _edDblTapTime = 0, _edDblTapEl = null;
 function _edCheckDoubleTap(el) {
   const now = Date.now();
-  const isDbl = (now - _edDblTapTime < 350 && _edDblTapEl === el);
+  const isDbl = (now - _edDblTapTime < _edDoubleTapMs && _edDblTapEl === el);
   _edDblTapTime = isDbl ? 0 : now;
   _edDblTapEl   = isDbl ? null : el;
   return isDbl;
@@ -16838,6 +16920,9 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
+  // Capturar ANTES de ocultar el panel si la edición de nodos (V⟺C) estaba
+  // activa — el panel oculto no debe usarse después como fuente de verdad.
+  const _wasCurveActive = _edCurveModeActive();
   // Ocultar panel y lengüeta al minimizar
   const _panel=$('edOptionsPanel');
   if(_panel?.classList.contains('open')){
@@ -16854,6 +16939,20 @@ function edMinimize(){
     edDrawBarShow(false);
   } else if(_minMode==='shape' || _minMode==='line' || edActiveTool==='shape' || edActiveTool==='line'){
     edShapeBarShow(false);
+    // Herramienta de creación (recta/polígono/elipse/rectángulo/selección):
+    // sincronizar el icono de la barra con la herramienta que se estaba usando.
+    if(typeof window._esbSyncTool === 'function') window._esbSyncTool();
+    // Edición de nodos (V⟺C): si estaba activa en el panel, mantenerla activa
+    // también en la barra flotante para poder seguir curvando nodos.
+    if(_wasCurveActive){
+      const _cb = $('esb-curve');
+      if(_cb && _cb.dataset.curveActive !== '1'){
+        _cb.dataset.curveActive = '1';
+        _cb.style.background = 'rgba(0,0,0,.7)';
+        _cb.style.color = '#FFE135';
+        _cb.style.outline = '1px solid rgba(255,255,0,.5)';
+      }
+    }
   }
   _edResetCameraToFit();
   requestAnimationFrame(() => {
@@ -16877,6 +16976,9 @@ function edMinimize(){
 }
 function edMaximize(keepBar=false){
   edMinimized=false;
+  // Capturar ANTES de ocultar la barra (edShapeBarHide resetea este flag)
+  // si la edición de nodos (V⟺C) estaba activa en la barra flotante.
+  const _wasCurveActiveInBar = $('esb-curve')?.dataset.curveActive === '1';
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='';
   if(top)top.style.display='';
@@ -16900,9 +17002,11 @@ function edMaximize(keepBar=false){
     if(mode === 'shape'){
       edShapeBarHide();
       _edActivateShapeTool(false); // false = no resetear cámara al restaurar desde barra
+      if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('shape');
     } else if(mode === 'line'){
       edShapeBarHide();
       _edActivateLineTool(false); // false = no resetear cámara al restaurar desde barra
+      if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('line');
     } else {
       edRenderOptionsPanel(mode);
     }
@@ -16912,8 +17016,10 @@ function edMaximize(keepBar=false){
     requestAnimationFrame(_edBarClampToScreen);
     if(edActiveTool === 'shape') {
       _edActivateShapeTool(false);
+      if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('shape');
     } else {
       _edActivateLineTool(false);
+      if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('line');
     }
   } else {
     // Restaurar visibility si el panel colapsado quedó oculto
@@ -16926,6 +17032,20 @@ function edMaximize(keepBar=false){
       _edBarClampToScreen();
       if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
     });
+  }
+}
+// Activa visualmente el modo de edición de nodos (V⟺C) dentro del panel,
+// replicando el estado que deja el botón NODOS del panel al pulsarlo.
+// Usado al maximizar cuando ese modo estaba activo en la barra flotante.
+function _edRestoreCurveModeInPanel(mode){
+  const slId  = mode==='shape' ? 'op-shape-curve-slider' : 'op-line-curve-slider';
+  const btnId = mode==='shape' ? 'op-shape-curve-btn'    : 'op-line-curve-btn';
+  const sl = $(slId), btn = $(btnId);
+  if(sl) sl.style.display = 'flex';
+  if(btn){
+    btn.style.background = 'var(--black)';
+    btn.style.color = 'var(--white)';
+    btn.style.borderColor = 'var(--black)';
   }
 }
 function edInitFloatDrag(){
@@ -18404,13 +18524,13 @@ function _edbBuildPalette() {
         }, edColorPalette[idx]);
         return;
       }
-      // Primer tap: retardar el cierre 350ms para dar margen al doble tap
+      // Primer tap: retardar el cierre 200ms para dar margen al doble tap
       clearTimeout(_edbDblTapTimer);
       _edbDblTapIdx = idx;
       _edbDblTapTimer = setTimeout(() => {
         _edbDblTapIdx = -1; _edbDblTapTimer = null;
         _edbClosePalette();
-      }, 350);
+      }, _edDoubleTapMs);
     });
     // Doble click (PC) → mismo efecto que doble tap en táctil
     btn.addEventListener('dblclick', e => {
@@ -19415,6 +19535,155 @@ function _edSaveOverlayError(msg) {
   if (ov) ov.onclick = () => _edSaveOverlayHide();
   // Auto-cerrar tras 8 segundos
   setTimeout(() => _edSaveOverlayHide(), 8000);
+}
+
+// ── SISTEMA DE AYUDA INTERACTIVA ────────────────────────────────────────────
+// Ventana semitransparente que bloquea todos los toques (mismo patrón visual
+// que el overlay de guardado en la nube). Su contenido cambia según el botón
+// o evento que la invoque, mediante el registro _edHelpContent.
+//
+// Para añadir una nueva ayuda:
+//   1. Añadir una entrada en _edHelpContent: 'mi-ayuda': 'texto o HTML'
+//   2. Llamar a edHelpShow('mi-ayuda') desde el punto donde deba aparecer
+//
+// "No volver a mostrar" solo afecta a esa ayuda concreta (id) y solo al
+// usuario actual (guardado en localStorage, no en el servidor — ver nota
+// en la carta de entrega sobre alcance de la persistencia).
+// ── CONVENCIÓN DE ICONOS PARA TODAS LAS AYUDAS (seguir en las próximas) ──
+// 1. Los iconos son SIEMPRE el mismo asset exacto (mismo base64/SVG) que usa
+//    el botón real del panel al que se refieren — nunca un icono reinventado,
+//    aunque el original sea grande o alargado (se reescala con width/height,
+//    nunca se sustituye por otro dibujo).
+// 2. Cada icono va SIEMPRE pegado a la palabra a la que acompaña, envuelto
+//    junto a ella en un <span style="white-space:nowrap"> con un &nbsp; de
+//    separación, para que nunca quede huérfano solo en su propia línea al
+//    ajustar el texto — el conjunto "palabra + icono" se mueve como un bloque.
+// 3. Nunca en su propia línea/párrafo: siempre con texto delante y, si cabe,
+//    texto detrás dentro del mismo párrafo (nada de <div>/<br> junto a un icono).
+// 4. vertical-align:middle SIEMPRE (nunca un desplazamiento en px a ojo tipo
+//    "-4px") — deben comportarse como un emoticono dentro del texto: mismo
+//    alto aproximado que la línea, alineados por el centro, sin caja ni
+//    fondo propio, fluyendo con el párrafo igual que 😀 lo haría.
+// 5. display:inline-block SIEMPRE en el estilo de cada <img> — css/main.css
+//    tiene la regla global "img{display:block}" (línea 77) que convierte
+//    cualquier <img> normal en un bloque que se salta a su propia línea.
+//    Sin este override el icono se ve bien pero rompe el párrafo en dos.
+//    Los <svg> inline no la sufren (la regla es solo para "img"), pero por
+//    seguridad se añade también ahí.
+const _edHelpContent = {
+  'draw-tools': (() => {
+    // Cursor COF: mismo asset (base64) exacto que usa op-offset-btn en el
+    // panel de dibujo (el de "posición desplazada" para pintar sin tapar el
+    // trazo con el dedo) — no el del modo vectorial (op-vcof-btn), que es
+    // un icono distinto para otro contexto. Es más ancho que el resto: se
+    // mantiene así a propósito, tal cual se ve en el panel.
+    const icoCOF = '<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIgdmlld0JveD0iMCAwIDkwIDM0Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFGb0FBQUFpQ0FZQUFBRGYyYzZ1QUFBUDBVbEVRVlI0QWV5YUNYaE8xN3JIMzcyL1JDWkR6U2ROcFpXMjVxS1VLcHFXVzl4YlhPWDB0Tm9ldDZhVGxCcVBLY1FVQkEyQ2tsSVVOVk96b0VKRmhncmF0SlRUUXgyVUkyaU1TU1F5ZmQrK3YvY3ozRVM1RWlYNm5PZmtlZi9mR3ZZYS8rdGQ2MzMzMmpIbDMzK0ZZc0FTc1lIUzRDWFFCdnducUFMY2dlMXVqVDFNb2wzbzFBT1VBbVZCT1ZDMlZLbFNwZm5UdkJLa3ZZQ1djU04wQlRyUWh6a211cmcvZ1VSWFVJWGFFZUJINHJ2dElwdkFWdUtIeWRzUFJoS3ZCblF1SlA5UEh1U2tsTmpIeXBZdDYxT3NXTEZxSGg0ZWJSOS8vUEdSMWF0WGovVHo4enZtNit1YlZMVnExWjhxVmFyMHpSTlBQTEc5WnMyYXl5dFhyaHp1NCtNVFhMRml4UjdVNjFpeVpNbFdycTZ1RFJpZW43dTdlMlhnUzc1UDhlTEZ5NU5YRXJpREJ6bG1tcnUzUUZ3eFNuVUFVYmtpZ1JkRi92QVBFcnRCTFBoUnhQaEZwR3FXeUVnUldRcmVvSTZPbCtoMSthMkRWbkxMbFNoUm9wck5abXNKZ1NHUSttWHQyclcvZitXVlY1WjM3ZHExLy9qeDQ1c3VYNzY4MUpvMWE0b3RXYktrelB6NTg1K2VQbjE2Z3pGanhyUU9EZzRPNk4yNzkrQk9uVHFGdG0zYk5vSTZLeHMxYXJTcmJ0MjYvNmhWcTlhaE9uWHE3SG4yMldlM1ZLbFNaVGFMTklqRmVxdDgrZkpOMlJIUGVYdDdWK2VaWDQwYU5mN0Fnbm95SFFNOExHbEl3ek96Ulo3OGxzaGZEVVA4YmFhOENsNERUVUVYOGpid0xGbWtIbG8raGVnZklWdDNMRkdSK3lGYXlhM2c1ZVZWQjNKYlAvbmtrME1oWkV2ejVzMDNCQVlHZHA4MGFWS3R6WnMzdTIvZHV0VnQ3Tml4Ym0rODhZWTBiTmhRWG5qaEJTY2FOR2dnelpvMWt3NGRPa2kzYnQxa3lKQWhydFR4WExCZ1FZbU5HemNXajQyTmRVOU1URFMyYmR2bXljSjRUNTA2dGZidzRjUGI5K3paTStqTk45Lzg1TFhYWHR2aTcrLy9kZVBHamJmVnIxOS9FWXM2Z1lWNEJ6UjQ1cGxuOUFoeVR1eEIvVUNXYW5NSW1sd3VrVVo3bUlZc0FSQks2cnFrRW13anJ5ZUVUekJFVG9oVWNvZ01KcnN1OWZVNExCVFJwYW40UEdpSE52V3ZWNi9lNHRkZmYzMWw5KzdkZTB5Y09QR3BxS2dvRndqeFJDdWxRb1VLRkx0L01VMVR5cFFwSXhBbmFMaTBiOS9lNk5Pbmo4dVVLVk84bGkxYjVyVjY5ZW9TczJmUHJqUnMyTEFtN0pyTzdkcTErNWlGWE13eDAwWkVsQmlDL01LRURlQUMzSUFIS0E1S0FUVnM1UWdyQUcvd0JQQUZsY0hUdFBJS2FINlZuekRJL0FITkpYcEh1VXp1SE1hK0VyS3ZpRlFqK1JkUUN0eVRhTlg0aWhSc2hoRUxSQnNubzZFTG1Gd2Z0bjBOTk02TjBLTkpreVkwVGFraUVoY1hGeWxYcnB3ODk5eHowcUpGQytuWHI1OG5xT0ppbXBQMnVycDJoYUIzYjBDMzc5c2FaMmlkUUdmUURRU0FIcUFYNkF2K0NnYUJJQkFNOUt3TklSd0hRcWd2U3ZUTy80ZGt5amtsazkrbGxOTXpISzMrTDVMbHdGMkp0cm03dS90aTFOcFhxRkJoQU50MUd1UUdCd1VGdmZqcHA1OTZjcjU2dG1yVnlvYnhFc01vVW81MXpIY0VTaUM1MmRtVnkrVG16b0lZTlVpS3p5bXNXSHdqbkV1b1hzTTB3akNnUkk0aUhBb0dnajdnQTZDTG9RdlRrZmhMUUpSQUpWdmo5OElST0RsT29Sd1IzZHFWaVA2S2FGZklyWVZ4Nnd6Qkl6QlFFM3YxNnRWNzFLaFIxVUpDUW9wenJucVJiOU90clpWL1R6aDY5S2k0V0ZaYW1zZ1d4clVHZkFFaXdWcXdITndrZXo3eGVXQU9tQTArQVRQQngwQVhJSnh3TXRDRm1FZzRBNGdYUHo0V1MwaFlFRWxGL3pDS1dyUzQvcGo2QTlUQU5lVjRHTXgySE5tbFM1ZXhHS25PUTRjT3JUeGd3QUQzcGsyYkZvTjhpajFZc1JqNGdmMzdKUzR1VHZidDJ5Y0hEaHlRdzRjUHkrWExsMFdmWldkbnk3VnIxK1RxMWF1U2twSWlGeTllbE9Ua1pEbDc5cXljUG4xYVRwNDhLVXB3VEV5TXpKdzVNKzFhV3RxbktaWVZ6QnhWUTM4cmdtNjJRM2hRMldwWFFKNjFyQTlsTVJiWVVEbXJyQ25SM2hpUlVMUVZXelo4eU9qUm8vKzdmLy8rM25nUUxsaDFtNmVuZWs1YTlNRWpKeWRIRXIvN1RyWnMyaVNyVjYyU0pZc1d5Ynk1YzYySW1UUHRJMGVNc0JpSGZlREFnVGtzZWhhTGZtM0VpQkZYMlYwcElTRWhsL0Jvem84Yk4rNWNXRmpZaVlpSWlLOGlJeU5ERHljbGhUY1RPUUF4UjhFeGNBS2NCUDhFU2VBc1NBWVh3Q1Z3QmFqeVhTWE1BSmtnRytRQ3FCSWhUQmVSQ0Zod2RFSXgvQjNPYkxMdUx2NlVxOHBqdEhjL3dUK0JtQmlXR3MvWHJkc2RvL1pxUUVCQWlUWnQycmc5OWRSVGd1dW16eDhxOUFqQ2tBcDlpditMTDByamV2V2tVWjA2OHJTUGo1RjE5V3JLd3Zueko4eWJONjh6cmwrWGhRc1hkbG04ZUhHM0pVdVdkRis1Y3VWZlZxMWFGWUQzRVloLy9tRjBkUFNRNDhlUHo4ckl5RkR0dVRjVGhaL1ZPcHZJaWpyVUd3bUpmd1FsaWQ4dUVDdk5lUFloaStFandpa21uMUhtQ2hEbWFwYXZXYU9HQys2YW14bzN6U3dxc01oU3RXcFZlYWxKRTJtRXIvMWkvZnJTdUdGRHc3OXhZK1B0OXUzZFB1amE5WEdPajJVY0g4dkJTbzZRVldEMWxTdFgxb0wxWUNQSHpOWUxGeTZvaTZ2dTdNTWErbmthSG9lVC9sa1RrWXh4RUJuaGNFZ0FZUXVJVlhJN0V2K0l2SThJL1VWU3VWZFlRSjNOSUJNNGlmYXFXTDY4cVlsSEJkTm1jNTdKTi90bnV4cGxIbnZNdlU3dDJpK1M1N1RhaEk5TUdJL3VraU1NWUN6bmJtOHVQR0xmdENSbk9DUlBnOWdaSUpTNCtwWFBpM3pQTWFQdTRWVEtuN2xSVjB5TWptZVowcVZOaC8yR2plUnBVUXR1bWRnNXIvUDI2MkRnYUN3N1Z2UitJKytqUnhLSE1BYzRTZWZMUVRjSWI4ZnhNSXkza2xrUXUyNjdJYWVHRzNKb3ZBZ2k2dG1vYmJoRnFoTHQ1ZUhwYVRwUWV4b29jbEdDMHk5ZGt0djd6OHJNZEVUdDJzWDlqZndzdjZNL3lMNEc5SDFrTzhPYUNZWWZGT2tkWXBpUjh3ekRaN1RJWXp6UEFib0w1T2FmbnRGZW5oNGVwaU5YUFpHYjJVVVRabVZreU9Velp5UWpKVVU0TzI1MW1wdWJhKzNldCs5OGZFSkNDSm40L2Z6K3pnUWkxVE5KSTd6VVZpUXB5WEJFY1JpZnRreFRYOW05YngrdWFyUW5iNEdtVmNRYXJVZlZ3czgra3hadDIwcmJqaDJsNTRBQk1qNDhYRWFNSDIvdk8zVG8yYUNSSTkvRGQvN3E5Z0gvYnROMitSNWY4S2dsMXN1TThWZDJSWTJndTd1Ym0wMG5Ub0VpRTlObWsvYmM3SDArZTdhTURRNlcxcTFhU2RuU3BXWDNuajNHK3NqSUpoZFRVbll5R0s0TCtDMjhvR2pPdDk0cWJObkJoczNZbFJmazZSbUt5KzA4LzQzQ04zL0hHcWNzdTZWamRxWDk1cFFvQTI2SjZXS3plZUl6RzQ1SFlBeExsQ29sRmJucHExT3JsclJ1MlZJQ3UzU1JoWFBtR0x4QVRibzF3c0pIUEtqU3hUQ01OWVpwN0VmRHhvZ2w5Y0h6TjFDUHZMZDVGZ241VVdLVExwVDNBYXAwQkw5SmpsRTcyVEtzaG9SbHdTMHhiUzR1N3E3Y2hqMEtvZzIwV296OEN1WHI0eVBwNmVtNi9aU3dXd010UUVTSktvY2VoMEZpaEJpaWJaeUExSTh0aC9WbjBQSUcrTTVuQlVINlBsRERzSXpKYU9CWTJxOEYxTXNodUcvNUcvM3k5bW5Vb3dXOVZpYTRMdlJodXJ1NHVzb2pJZm8ya25WSXVkZHRoUnJBYTVvdUJHb3l5Ym1HR084UkhvVFVYcUNaT0VRdjREZlF6dDRiaUNWdkJtN3RuOUM4dnM2eVlyMXJHSVlhM2hjbzg2dnZmZVFWVk02eGNGaDIwUmZIZk8yWWhtRzRjWHlJbzRpOURpWXEyWGdkZVJkWWZlZk5PM1k0T0RwMkZYUm1OOHFWUlpNSE14Y3V4bzBObHQxNm4vd1ZJTytIRUpKNVJPU0MyR1VwWlVNaE94NjBwTDVxZGcxSzZlNGdLTFNVWWw0ZTdCUjkvYzdueHBrMDdpUTZKeXRMN0VWSXRpNXNOamR6MW5VTmxvek1USW5iczhjeExqUTBNU2twYVZRaHB1aEcyWGZSNVA5Z2dydnh4d2VRL2pzb3FFUkI5bWlJamdVdnMyQjZGMTJtb0pWdksxZVcrbnFqcWtUcnJyejFXRmZPRFdQb0pEbWQ2OG1pSUR1ZGE4KzlDUWtTdld1WDRDdEx3amZmV0R0aVlwTDdEeG15TmVuczJmNk1UdS9OQ1Fva05URnFmNkprRHRxazl3czZTWktGa25qSURvZm9BNmFZUFNDckE3WGRRV0dsT292OU9PUFFOMGk5OWJ0Vlh6WGFYWWxXelZLaUZicWxIeVRoZEN3T3ZKb2N0RGFUcS9tTDU4N0oxOXhCNzlpNVUzYkd4a3JjN3QyTzhJaUluYitjUC84aEk5T3YrQVFGRWh1a3ZNN2txcUhSbTZueE5jaW5TYVFMS3RzdHV6WE5FaXNKc2tkUTZXMVFHTExMWS9CYU1JN1NuUDM2d1VGdkVtbml1cGlRNEdiYWJNNlVrMnhlaDFQUG41ZXJoRnlrU3pia09DREpXYUNBUDdUcHZMdlFvMEhiU0w5eVJkSXVYSkJVa01MRnZZMGpxb1cvdjd6L3pqdE92UGZXVzZhZnI2OEhIMlBQRmJDTG04V2U0T2hyeE9RWXV1TkxNdFVRRWR5M3JJRG95Y0JobU1ab1d0SFBXUlVKN3lVVldmQk9sbGl0bVBzUmNZajYwL2x1RTAxRHBOZzFqSkxkc29SQjh5WnNpUktVempHU0NpbHBrSzdFSzFHYXA2L0xtV3o5elBSMHlRc2xORU1KNVN2SXpUck9ldFRYdE5ibGp0bTVBUFFwRmNxWGx5ZDlmWjN3OGZZMm52SHplL1VsUHorWGU4M290dWROME9hcVRPNTc4ZytCKzlWbXF0NFFoM3dDWWFHa3NpQTcyTFNaWTRpM0FPcEpFT1FUZFVGclFuSlhRd3pkalZtTVpSRWxUb0I4WW1McGR5NVl0T2hZMkxScDZST21UblZzMmJFajY2Zmp4KzJwYlBGc0RHUVdoTjRpRUkxVXd2TVNxQ1RlaEdyc1ZjbzRkME5xcXVnUnBEZHpxRnUrVHUrVXdNWE05SERUL3dTNDA5TTc1cFZrcXpabGd0NXMxUmhLNkFVVXdXOFdoemprYzh0aGZVUkxGeUN1R3paZ1BHU09GSnY4bVR3bHZUNWhhL0tHOGl5TU1lZ1g5VFRxVENGL1BjaW56YVRGdE52dDRTdldyT205WU9uU0FOQnZ5YXBWMCtjdFhyeGgycXhaUDNMdmtCWTZaWXA5MDdadE9VZVBIWE9rUUw1Nko3a3NnSjYzZWFHRXFpZkJ3TFRkUW1IUHQ5L2FqLy84ODRMRU0yY0tvNUZWSWJnbTJwY0VNUWwwV05DUDFCUzlwMlJSNGd1SUd3Q0pIN05yWEFrL3dFY2VoWlpQZ054d3dsRHlBbmpteDBrUVIxbTlIdFdQd3ZydkhWVFBMMlpxYXVyUjgrZlBiK1Z0YkJsZkwrYkV4TVdGZjdGMjdmQlY2OVlGcmxpOSt0MjFrWkhkVnF4ZEcvckovUGtyeDRhRi9lM0RRWU15cDgyZW5aMlFtR2puUHNLeURDTi9pL2RJNVhBK1grSzI3dGlKRTQ3NHZYdnRpMWFzeUdDaDF4ODRkR2h1WW1KaVlZaE90dXpXRGlhb1g3Ri9wRnM3ZUpDaUN4ZmpjRGpDNktPWElVWTRpQlpEenRDSkNjSDYxam1lWjRFT3UyTWtlWkhncmpiQzVHRmUwWlg4SlRzNysrOThJb3JQeXNxS1BIZnUzTEpkc2JFek4yN2VIQno1NVpmdmI0bUthcmQreTVhK00rZk1tVHMwSk9UQS93UUdadllOQ2tyZkdCV1ZkZlRrU2JuQ1VaT09BYjNHRit3TU5QOEM1L2FSNDhjZEc5a1Y3SkNzQWNPSG53NmRQSG43akxselo2emR0S2tmMnR6aHU0TUhnMDZkT25VeTcwQUtFRDlObVRsZ0NiZ0lIcGFvZ1k2SDhPbGdESXM3RVBSazV3NFNoK2psVkN3ZDZ4MUhCdUZkNVhhaTcxUlF0ZXhpWm1ibUNhNHRFM056YzdmemlYOHg1SWZFeHNlL0U3ZDc5OHRSMGRFQnN5QnVXRWhJWk05Ky9mWUg5dXQzR0J3SjZOUG5oNzZEQis4SW1UQmgzdWZMbGdYRnhjZTNqVXRJYUwxMSsvWVB2bGkzYnZ6S05Xc1diTmk4T2VyWXNXTjZrVjVZamRUeXZ6QmdKVm5qUkIrcWFEKzZ1RC9SQzNmOW9tTldyU2Q1YnlrSTBiZTNZcEdoenZpNXRMUzB3ems1T2Q5eS9Dejc0ZENoUWJzVEV0ckd4TWMvSHgwVFUvMnI2T2hxMGJHeGRYYkZ4YlVnTDNEUHZuM2hSMCtjMko2Y25Qd0RDNll2Sk1rMzJ0SDJpUDVyeS84Q0FBRC8vL0Y4NUo4QUFBQUdTVVJCVkFNQWkwVVBya3lkaDE4QUFBQUFTVVZPUks1Q1lJST0iIHg9IjAiIHk9IjAiIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIvPgo8L3N2Zz4=" width="46" height="17" style="display:inline-block;vertical-align:middle;flex-shrink:0">';
+    const icoInk = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="17" style="display:inline-block;vertical-align:middle;flex-shrink:0" viewBox="0 0 64 70"><g transform="translate(27.143 54.666)"><path d="M 5.726 5.124 L 7.133 0.079 L 6.731 -5.386 L 1.507 -6.542 L -5.124 -2.496 L -7.133 0.867 L -7.133 6.542 L 5.726 5.124 Z" fill="#aa6e6e" stroke="none" stroke-width="0"/></g><g transform="translate(25.853 55.352)"><path d="M -2.039 5.295 L -1.768 -0.655 L -4.747 7.279 L -6.102 3.312 L -5.435 -1.244 L -2.190 -4.450 L 3.217 -7.279 L 6.102 -6.336 L 2.496 -0.490 L 1.054 6.110 L -2.039 5.295 Z" fill="#f9cdcd" stroke="none" stroke-width="0"/></g><g transform="translate(26.201 62.884)"><path d="M -6.530 -4.099 L -5.274 -4.388 Q -4.018 -4.677 -2.779 -4.323 L -0.006 -3.532 Q 2.612 -2.785 5.124 -3.836 L 7.635 -4.887 L 6.077 -1.166 L -0.402 3.100 L -7.937 4.835 L -6.329 2.312 L -6.329 -0.841 L -6.530 -4.099 Z" fill="#321a1a" stroke="none" stroke-width="0"/></g><g transform="translate(45.560 24.586)"><path d="M -15.267 20.131 L -10.178 21.130 L -2.863 10.648 L 3.181 1.830 L 10.496 -8.652 L 14.631 -15.140 L 15.267 -19.133 L 14.313 -21.130 L 10.178 -19.965 L 3.817 -15.307 L -1.272 -7.154 L -6.997 3.327 L -11.132 12.312 L -15.267 20.131 Z" fill="#f2deba" stroke="none" stroke-width="0"/></g><g transform="translate(44.755 24.239)"><path d="M -14.421 19.989 L -10.816 20.744 L -0.000 -3.583 L 5.768 -11.503 L 14.060 -20.744 L 1.803 -11.315 L -3.245 -1.697 L -8.292 9.429 L -14.421 19.989 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(48.009 24.598)"><path d="M -11.710 21.312 L -5.900 10.714 L 0.655 2.766 L 6.912 -6.274 L 13.795 -16.437 L 12.601 -21.312 L 10.450 -16.749 Q 8.299 -12.187 5.412 -8.051 L 5.148 -7.672 Q 1.996 -3.157 -1.295 1.258 L -2.145 2.399 Q -4.857 6.039 -7.539 9.701 L -7.895 10.188 Q -10.220 13.364 -12.008 16.870 L -13.795 20.377 L -11.710 21.312 Z" fill="#9f8484" stroke="none" stroke-width="0"/></g><g transform="translate(32.546 46.929)"><path d="M -1.812 -2.397 L 3.730 -1.059 L 1.428 2.700 L -3.844 1.666 L -1.812 -2.397 Z" fill="#ffe135" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(39.607 34.949)"><path d="M -20.214 30.952 L -19.812 29.954 Q -19.410 28.955 -19.534 27.886 L -19.611 27.221 Q -19.812 25.487 -19.677 23.746 L -19.587 22.604 Q -19.410 20.337 -18.004 18.550 L -18.004 18.550 Q -16.598 16.764 -14.643 15.601 L -10.526 13.152 L -7.010 6.168 Q -3.495 -0.815 -0.357 -7.976 L 0.819 -10.659 Q 3.495 -16.766 7.466 -22.121 L 8.164 -23.063 Q 11.437 -27.477 16.203 -30.213 L 17.987 -31.237 Q 20.969 -32.949 21.127 -29.515 L 21.127 -29.515 Q 21.286 -26.080 19.518 -23.131 L 18.109 -20.782 Q 14.932 -15.485 11.152 -10.600 L 7.727 -6.174 Q 2.859 0.116 -1.067 7.034 L -5.401 14.670 L -5.195 19.963 Q -5.083 22.820 -6.354 25.381 L -6.354 25.381 Q -7.625 27.943 -10.096 29.381 L -10.325 29.515 Q -13.026 31.086 -16.074 31.774 L -20.181 32.700 Q -21.286 32.949 -20.750 31.951 L -20.214 30.952 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(15.616 16.910) rotate(0.9187586633190588)"><path d="M -11.511 6.000 L -11.413 3.361 Q -11.315 0.740 -8.780 0.069 L -6.909 -0.427 Q -4.375 -1.098 -3.977 -3.690 L -3.544 -6.511 L 3.641 -6.358 L 4.396 -2.943 Q 4.961 -0.383 7.532 0.131 L 9.037 0.431 Q 11.608 0.945 11.448 3.562 L 11.266 6.511 L -11.511 6.000 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.522 12.241) rotate(0.9187586633190588)"><path d="M -4.950 -1.528 L 5.193 -1.528 L 5.922 1.645 L -5.436 0.947 L -4.950 -1.528 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.472 33.578) rotate(0.9187586633190588)"><path d="M -11.467 -12.687 L 11.467 -12.687 L 11.467 11.420 Q 11.467 12.687 10.199 12.687 L -10.199 12.687 Q -11.467 12.687 -11.467 11.420 L -11.467 -12.687 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.663 32.395) rotate(0.9187586633190588)"><path d="M -12.327 -4.912 L 12.327 -4.912 L 12.327 4.912 L -12.327 4.912 L -12.327 -4.912 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(8.883 32.059) rotate(0.9187586633190588)"><path d="M -1.030 -3.400 L 0.910 -3.431 L 1.030 3.431 L -1.000 3.400 L -1.030 -3.400 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(13.737 32.126) rotate(0.9187586633190588)"><path d="M -2.791 3.446 L -3.000 -3.509 L -1.119 -3.509 L 0.821 0.109 L 0.761 -3.540 L 2.798 -3.534 L 3.000 3.480 L 0.940 3.478 L -1.060 0.140 L -0.911 3.540 L -2.791 3.446 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(26.554 32.567) rotate(0.9187586633190588)"><path d="M -1.977 -4.989 L 1.977 -4.897 L 1.932 4.989 L -1.932 4.850 L -1.977 -4.989 Z" fill="#bdb7b7" stroke="none" stroke-width="0"/></g><g transform="translate(15.633 6.439) rotate(0.9187586633190588)"><path d="M -10.419 -4.144 L 10.606 -4.133 L 10.742 4.079 L -10.606 4.133 L -10.419 -4.144 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.639 6.416) rotate(0.9187586633190588)"><path d="M -10.484 4.327 L -10.446 -4.019 L 10.560 -4.137 L 10.684 -4.058 L -7.331 -2.781 Q -8.515 -2.697 -8.551 -1.510 L -8.721 4.073 L -10.484 4.327 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(20.844 6.483) rotate(0.9187586633190588)"><path d="M -5.636 4.196 L 2.582 3.096 Q 3.628 2.956 3.692 1.903 L 4.038 -3.814 L 5.499 -4.196 L 5.636 4.053 L -5.636 4.196 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.666 25.233) rotate(0.9187586633190588)"><path d="M -13.089 -6.323 Q -13.072 -8.723 -10.753 -9.342 L -8.009 -10.074 Q -6.052 -10.596 -5.609 -12.572 L -5.166 -14.548 L -10.782 -14.548 L -10.707 -22.786 L 10.342 -22.864 L 10.416 -14.743 L 5.024 -14.743 L 5.340 -12.532 Q 5.657 -10.321 7.843 -9.864 L 11.422 -9.116 Q 13.301 -8.723 13.298 -6.803 L 13.248 20.578 Q 13.244 22.786 11.036 22.786 L -11.225 22.786 Q -13.301 22.786 -13.286 20.710 L -13.089 -6.323 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(20.776 32.253) rotate(0.9187586633190588)"><path d="M -3.023 -3.438 L -2.909 3.535 L -0.887 3.451 L -0.917 1.549 L 0.725 3.483 L 2.844 3.451 L 0.157 -0.167 L 3.023 -3.379 L 0.814 -3.410 L -1.007 -1.570 L -0.917 -3.535 L -3.023 -3.438 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.530 10.656) rotate(0.9187586633190588)"><path d="M -5.031 0.039 L 5.332 -0.169" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(6.643 31.419) rotate(0.9187586633190588)"><path d="M -1.072 -14.966 L 1.030 -15.213 L 1.072 15.213 L -1.072 14.985 L -1.072 -14.966 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g></svg>`;
+    const icoPencil = '<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0">';
+    const icoWatercolor = '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNyIgaGVpZ2h0PSIyOSIgdmlld0JveD0iMCAwIDY2IDcwIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyNy43MzggNTcuOTUzKSI+PHBhdGggZD0iTSAtNy44ODkgOS44MjkgTCAtMS4yMjMgOC43ODggTCAzLjQ2NSA2LjE4MyBMIDYuOTAyIDIuMjI1IEwgNy44ODkgLTMuMjA4IEwgNy40ODcgLTguNjczIEwgMi4yNjMgLTkuODI5IEwgLTQuMzY3IC01Ljc4MyBMIC02LjM3NiAtMi40MjAgTCAtNi4zNzYgMy4yNTYgTCAtNy44ODkgOS44MjkgWiIgZmlsbD0iI2FhNmU2ZSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjcuMjA1IDU3LjQ2NykiPjxwYXRoIGQ9Ik0gLTYuNDcwIDkuNDk4IEwgLTQuMjgyIDcuNjIzIFEgLTIuMDk1IDUuNzQ4IC0xLjk4NCAyLjg2OSBMIC0xLjc2OCAtMi43NzAgTCAtNS42MzcgNC4zOTQgTCAtNi4xMDIgMS4xOTcgTCAtNS40MzUgLTMuMzYwIEwgLTIuMTkwIC02LjU2NiBMIDMuMjE3IC05LjM5NCBMIDYuMTAyIC04LjQ1MSBMIDIuNDk2IC0yLjYwNSBMIDEuMDMwIDguMTQ0IEwgLTYuNDcwIDkuNDk4IFoiIGZpbGw9IiNmOWNkY2QiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ2LjkxMiAyNC41ODYpIj48cGF0aCBkPSJNIC0xNS4yNjcgMjAuMTMxIEwgLTEwLjE3OCAyMS4xMzAgTCAtMi44NjMgMTAuNjQ4IEwgMy4xODEgMS44MzAgTCAxMC40OTYgLTguNjUyIEwgMTQuNjMxIC0xNS4xNDAgTCAxNS4yNjcgLTE5LjEzMyBMIDE0LjMxMyAtMjEuMTMwIEwgMTAuMTc4IC0xOS45NjUgTCAzLjgxNyAtMTUuMzA3IEwgLTEuMjcyIC03LjE1NCBMIC02Ljk5NyAzLjMyNyBMIC0xMS4xMzIgMTIuMzEyIEwgLTE1LjI2NyAyMC4xMzEgWiIgZmlsbD0iI2YyZGViYSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDYuMTA3IDI0LjIzOSkiPjxwYXRoIGQ9Ik0gLTE0LjQyMSAxOS45ODkgTCAtMTAuODE2IDIwLjc0NCBMIC0wLjAwMCAtMy41ODMgTCA1Ljc2OCAtMTEuNTAzIEwgMTQuMDYwIC0yMC43NDQgTCAxLjgwMyAtMTEuMzE1IEwgLTMuMjQ1IC0xLjY5NyBMIC04LjI5MiA5LjQyOSBMIC0xNC40MjEgMTkuOTg5IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ5LjM2MSAyNC41OTgpIj48cGF0aCBkPSJNIC0xMS43MTAgMjEuMzEyIEwgLTUuOTAwIDEwLjcxNCBMIDAuNjU1IDIuNzY2IEwgNi45MTIgLTYuMjc0IEwgMTMuNzk1IC0xNi40MzcgTCAxMi42MDEgLTIxLjMxMiBMIDEwLjQ1MCAtMTYuNzQ5IFEgOC4yOTkgLTEyLjE4NyA1LjQxMiAtOC4wNTEgTCA1LjE0OCAtNy42NzIgUSAxLjk5NiAtMy4xNTcgLTEuMjk1IDEuMjU4IEwgLTIuMTQ1IDIuMzk5IFEgLTQuODU3IDYuMDM5IC03LjUzOSA5LjcwMSBMIC03Ljg5NSAxMC4xODggUSAtMTAuMjIwIDEzLjM2NCAtMTIuMDA4IDE2Ljg3MCBMIC0xMy43OTUgMjAuMzc3IEwgLTExLjcxMCAyMS4zMTIgWiIgZmlsbD0iIzlmODQ4NCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMzMuODk4IDQ2LjkyOSkiPjxwYXRoIGQ9Ik0gLTEuODEyIC0yLjM5NyBMIDMuNzMwIC0xLjA1OSBMIDEuNDI4IDIuNzAwIEwgLTMuODQ0IDEuNjY2IEwgLTEuODEyIC0yLjM5NyBaIiBmaWxsPSIjZmZlMTM1IiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQwLjk1OSAzNC45NDkpIj48cGF0aCBkPSJNIC0yMC4yMTQgMzAuOTUyIEwgLTE5LjgxMiAyOS45NTQgUSAtMTkuNDEwIDI4Ljk1NSAtMTkuNTM0IDI3Ljg4NiBMIC0xOS42MTEgMjcuMjIxIFEgLTE5LjgxMiAyNS40ODcgLTE5LjY3NyAyMy43NDYgTCAtMTkuNTg3IDIyLjYwNCBRIC0xOS40MTAgMjAuMzM3IC0xOC4wMDQgMTguNTUwIEwgLTE4LjAwNCAxOC41NTAgUSAtMTYuNTk4IDE2Ljc2NCAtMTQuNjQzIDE1LjYwMSBMIC0xMC41MjYgMTMuMTUyIEwgLTcuMDEwIDYuMTY4IFEgLTMuNDk1IC0wLjgxNSAtMC4zNTcgLTcuOTc2IEwgMC44MTkgLTEwLjY1OSBRIDMuNDk1IC0xNi43NjYgNy40NjYgLTIyLjEyMSBMIDguMTY0IC0yMy4wNjMgUSAxMS40MzcgLTI3LjQ3NyAxNi4yMDMgLTMwLjIxMyBMIDE3Ljk4NyAtMzEuMjM3IFEgMjAuOTY5IC0zMi45NDkgMjEuMTI3IC0yOS41MTUgTCAyMS4xMjcgLTI5LjUxNSBRIDIxLjI4NiAtMjYuMDgwIDE5LjUxOCAtMjMuMTMxIEwgMTguMTA5IC0yMC43ODIgUSAxNC45MzIgLTE1LjQ4NSAxMS4xNTIgLTEwLjYwMCBMIDcuNzI3IC02LjE3NCBRIDIuODU5IDAuMTE2IC0xLjA2NyA3LjAzNCBMIC01LjQwMSAxNC42NzAgTCAtNS4xOTUgMTkuOTYzIFEgLTUuMDgzIDIyLjgyMCAtNi4zNTQgMjUuMzgxIEwgLTYuMzU0IDI1LjM4MSBRIC03LjYyNSAyNy45NDMgLTEwLjA5NiAyOS4zODEgTCAtMTAuMzI1IDI5LjUxNSBRIC0xMy4wMjYgMzEuMDg2IC0xNi4wNzQgMzEuNzc0IEwgLTIwLjE4MSAzMi43MDAgUSAtMjEuMjg2IDMyLjk0OSAtMjAuNzUwIDMxLjk1MSBMIC0yMC4yMTQgMzAuOTUyIFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzAwMDAwMCIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTkuOTk2IDE4LjMxMykiPjxwYXRoIGQ9Ik0gLTE1LjMxMyAtMS41NzEgTCAtMTUuMDAwIDEuNDQ5IEwgMTMuNTA1IDEuNjc2IEwgMTQuMDYyIC0xLjg4NCBMIC0xNS4zMTMgLTEuNTcxIFoiIGZpbGw9IiNkNGQ0ZDQiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5LjI4MyAyOS43MzYpIj48cGF0aCBkPSJNIC0xNC41ODMgLTExLjY3NiBMIC05LjkwMyAtMTAuNjA2IFEgLTUuMjIyIC05LjUzNiAtMC41NDcgLTEwLjYzMCBMIDQuMDc5IC0xMS43MTMgUSA3LjU4MyAtMTIuNTMzIDExLjEyNSAtMTEuODkyIEwgMTQuNjY3IC0xMS4yNTEgTCAxMS41NzIgOS44ODUgUSAxMS4yMzIgMTIuMjA0IDguODg5IDEyLjI2OCBMIC04LjU5NSAxMi43NDAgUSAtMTAuOTM4IDEyLjgwNCAtMTEuMjgzIDEwLjQ4NSBMIC0xNC41ODMgLTExLjY3NiBaIiBmaWxsPSIjNWY5YmQzIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMCIvPjwvZz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC4wNTMgMjcuODcwKSI+PHBhdGggZD0iTSAwLjk3MyAxNC40MjQgTCAtMy4wNDAgLTE1LjQ3OCBMIDIuNTM3IC0xNS40NzggTCA0LjMzMCAxMy41NzUgUSA0LjQ0MSAxNS4zNjggMi43MDcgMTQuODk2IEwgMC45NzMgMTQuNDI0IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5Ljk5MyAyOS4wODgpIj48cGF0aCBkPSJNIC0xNi40MzggLTE0LjkyOSBRIC0xOC40MzggLTE0LjkwNSAtMTguMTEwIC0xMi45MzIgTCAtMTMuOTI2IDEyLjMwMSBRIC0xMy40MjAgMTUuMzUyIC0xMC4zMjcgMTUuMzUyIEwgOC4yODEgMTUuMzUyIFEgMTIuNTM0IDE1LjM1MiAxMy4yMjAgMTEuMTU1IEwgMTcuMjI2IC0xMy4zNjggUSAxNy41NDkgLTE1LjM0MiAxNS41NDkgLTE1LjMxNyBMIC0xNi40MzggLTE0LjkyOSBaIiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjM1MCAyOS43NzIpIj48cGF0aCBkPSJNIC00LjI3MSAxMi4yODMgTCAtMS4zMDIgMTIuMjMxIFEgMS42NjcgMTIuMTc5IDIuMDE1IDkuMjMwIEwgNC40NzkgLTExLjYxNSBMIDIuMDQ3IC0xMi4xMzYgUSAwLjEwNCAtMTIuNTUyIC0xLjg3NSAtMTIuMzc0IEwgLTMuODU0IC0xMi4xOTYgTCAtNC4yNzEgMTIuMjgzIFoiIGZpbGw9IiMzNzYwODYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjwvc3ZnPg==" width="16" height="17" style="display:inline-block;vertical-align:middle;flex-shrink:0">';
+    const icoBucket = '<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI1MCIgaGVpZ2h0PSI0NyIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="17" height="16" style="display:inline-block;vertical-align:middle;flex-shrink:0">';
+    const icoEraser = '<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSIyMSIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDIxIDIwIj4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFCVUFBQUFVQ0FZQUFBQmlTM1l6QUFBRUZVbEVRVlI0QWJTU2YweVVkUnpIUDkvbkYyZUFRQndKaG9hRnpybXhydkZqSWJVd0NZMVowOHdMYTVXTmlVNjNhblBKeWorNldFd2JZTG1BbEJoSktjZWdXb1dMTUptaXN3NEZzZFdKRUwrRy9EZzhQZTdoemp1T2U1N24yK2Q1NEc0bVRQL1I3ejd2NzgvUDkvVjlQOS92dzhBREtQY0xxbkxDQXY3VVFhQi8xN2ErSGxpckZRUktZYjQ5Q202V1VGck1sNkF0ekZiazlEZmJkTC9YRjBTOGtMb3gzT3ZOangwZmYxUC9WM04ycU1rMEJ6NDF1MmZPUW1BZU1nMlJrWjJkMnlJKy85NlNVMXgxcWlObDdZWFJyS3phZjFOVG12czM1RjA4VmwwZHR0dHFYU1VFTjl6V21jOHBhVy9QNSt0KzJ5ZHMzblNpNGcvTDJBOFpxdzJQSC8vdUU2R3o0eWd4bXd2NXJWdGZYQ2ZMUWtGYVd1L1BPZzR5NFk1eUo1UlFDdXoyN1QrK3VtTEZ4NTBaejZUa1hteXJwZ1VmdkVVTWhrUW1SaC9KR1o1Y3poY1Y3aEI2dWhvV3ZQM0crZ1NmVEtxUTJZcGFpTkxpZGlpVG1RbHNlQ2o3NVVDL3A3S2liRTljVmVWSHNIaXhucWlaRklCZ0FZWVF3SU1aUVFpTEtDa3RXbXF4RkI0QmdDZFFjU2d0Z3REdzhKQU41ODZScnVUVXBKeXVLM1U2NDVZc29LQVFoQUVnbGlVTTVUZ09XSTRIeW9TRFFxTVl4MFRQQXAxQTlnTkFMNjQ5aXEwV0twVG5lYWJNNTVNT0YzMjZ3LzlyWTBsb2RGUUVTeFdLbHJTY21Rb2RFcUpENkRKMEdnWDJHMVlReFI1MEx1T1JNQ3BKVXV4TUlvQUtyWStMMVNkZEd6eXRmLy9kM0NVY3h6K003b2pxTHBDazlVa0lBaDhEV2RhQi9mb2xFSjFYaWFKTWc5MCtPWUo1eWFpbEtDMVVxS0htNkh0SlFFUUVSZkU0UzdCUXdoQVU2eUhNd2dGQzlFRFlKZUNibG1IYzFncWkySTJmTDlIMjltRzZOcnZVaVh0T29BNmd0RkNoTGxHOEh1RndkTE1UNGhDbmdCNFlMZ0ZZUGhFNElaSGgrV1VQRWVZUmNMdWN4R1pySmE3SmJnQkZocnE2RHVtZHZLK244ZEhLa2JRSEZRd1Y2bTVwK2VlTUludXA0K2Jmek9CQU16aWRJMERJSWxSTWlDUXhNUTY4dnh2MlA0SHQ3c09OTWhRZlBLa2MrT3lYY1J6a3hNZkhmNHV0eXNGbUp0VEI1YktLbHFpZVhwdGRsdjNFTDdueG5pNFF1OTFDRkVVaEhxK05jVGc2WWNvM1JtWEpUL04zMWpqckd5em5FeEpDVmlQaS9QRHdzQmRiQlJVTUZib2JQK0hZcGxmSzlXWnptNkkrdVNTSklEcXQ0UEdNd0sxYi9mZzRMdHJkUFVvem55L3U2N295L0ZOTnpjYjFmWDNlYTBpWlJzMEpGWXFQRFFkNUh0S0tTNXJhc3RlVjJxOTJqZUhKVTVUUVVhcElOK254MmpZd3Z2YVZIMys5eXNPVkwrMDBHaHRVZDNOZ2dRa1Zxdlg5ZnJoVVcwdWZGU2M5aDNKZlB6THhkUG8rMTFQSlJ2dktWWG4waTBNbnorcjF3c3ZwNlN2TEVUaXZPdzB5V3dXaDZ0aG9CSG52WG1tLzJieDVrY3ZsZm01d2NHUkxkSFRJOHFhbWpLeGR1ejQ4MWRqWTRWSHo3cVgvUWRWa2t3a1VkQ09qODh1U0JHZUhoc1QrTld2T1NDYVRDYTlFemJpMy9nTUFBUC8vREM3b1R3QUFBQVpKUkVGVUF3QlRnYWc0d2ZFMDZnQUFBQUJKUlU1RXJrSmdnZz09IiB4PSIwIiB5PSIwIiB3aWR0aD0iMjEiIGhlaWdodD0iMjAiLz4KPC9zdmc+" width="17" height="16" style="display:inline-block;vertical-align:middle;flex-shrink:0">';
+    const icoDodge = '<span style="display:inline-flex;width:20px;height:15px;border-radius:3px;overflow:hidden;vertical-align:middle;border:1px solid #555"><span style="flex:1;background:#111;color:#fff;font-size:8px;font-weight:900;display:flex;align-items:center;justify-content:center;line-height:1">−</span><span style="flex:1;background:#fff;color:#111;font-size:7px;font-weight:900;display:flex;align-items:center;justify-content:center;line-height:1;border-left:1px solid #ccc">+</span></span>';
+    // "Etiqueta + icono" pegados con nowrap: nunca se separan al ajustar línea.
+    const withIco = (label, ico) => `<span style="white-space:nowrap">${label}&nbsp;${ico}</span>`;
+    return `
+      <div style="margin-bottom:14px">
+        <b>1.</b> Si estás usando táctil, utiliza la herramienta cursor
+        ${withIco('<b>COF</b>', icoCOF)} para no cubrir con el dedo los trazos.
+      </div>
+      <div style="margin-bottom:14px">
+        <b>2.</b> Todos los dibujos incluyen cuatro capas:
+        ${withIco('<b>Tinta</b>', icoInk)}, ${withIco('<b>Lápiz</b>', icoPencil)},
+        ${withIco('<b>Acuarela</b>', icoWatercolor)} y ${withIco('<b>Relleno</b>', icoBucket)}.
+        La ${withIco('goma', icoEraser)} solo borrará la herramienta activa,
+        conservando el resto de capas.
+      </div>
+      <div>
+        <b>3.</b> Usa la herramienta ${withIco('tinta', icoInk)} o
+        ${withIco('lápiz', icoPencil)} para limitar la extensión de la
+        herramienta ${withIco('relleno', icoBucket)}, o como máscara para
+        las herramientas ${withIco('acuarela', icoWatercolor)} o
+        ${withIco('iluminar/oscurecer', icoDodge)}.
+      </div>
+    `;
+  })(),
+};
+
+function _edHelpDismissedKey() {
+  const uid = (typeof Auth !== 'undefined' && Auth.currentUser?.()?.id) || 'anon';
+  return 'cx_help_dismissed_' + uid;
+}
+function _edHelpIsDismissed(id) {
+  try {
+    const raw = localStorage.getItem(_edHelpDismissedKey());
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) && list.includes(id);
+  } catch(_) { return false; }
+}
+function _edHelpDismiss(id) {
+  try {
+    const key = _edHelpDismissedKey();
+    const raw = localStorage.getItem(key);
+    const list = raw ? JSON.parse(raw) : [];
+    if(!list.includes(id)) list.push(id);
+    localStorage.setItem(key, JSON.stringify(list));
+  } catch(_) {}
+}
+
+function edHelpShow(id) {
+  if (_edHelpIsDismissed(id)) return;
+  const html = _edHelpContent[id];
+  if (!html) return; // sin contenido registrado para este id — no mostrar nada
+  let ov = document.getElementById('_edHelpOverlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = '_edHelpOverlay';
+    ov.style.cssText = [
+      'position:fixed;inset:0;z-index:100000',
+      'background:rgba(0,0,0,0.72)',
+      'display:flex;align-items:center;justify-content:center',
+      'font-family:sans-serif;padding:24px'
+    ].join(';');
+    ov.innerHTML = `
+      <div id="_edHelpCard" style="position:relative;display:flex;flex-direction:column;background:#1c1c20;border-radius:14px;padding:30px 20px 18px;max-width:340px;max-height:80vh;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.5)">
+        <button id="_edHelpCloseX" style="position:absolute;top:4px;right:6px;background:none;border:none;color:#e74c3c;font-size:1.4rem;font-weight:900;line-height:1;cursor:pointer;padding:6px 10px" title="Cerrar">✕</button>
+        <div id="_edHelpText" style="flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;font-size:.92rem;line-height:1.55;color:#fff;margin-bottom:16px"></div>
+        <div style="text-align:center;flex-shrink:0">
+          <button id="_edHelpNoShowBtn" style="background:transparent;color:rgba(255,255,255,.5);border:none;font-family:inherit;font-size:.72rem;font-weight:700;cursor:pointer;text-decoration:underline;padding:4px">No volver a mostrar esta ayuda</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(ov);
+    // CRÍTICO: nada de lo que ocurra dentro de la ventana de ayuda debe llegar
+    // a los listeners globales del editor — ni el que desactiva la herramienta
+    // de dibujo (_edDocDownFn, pointerdown), ni el que mueve la cámara del
+    // canvas (edOnMove, registrado en pointermove sobre document). Hay que
+    // detener TODOS los eventos de puntero dentro del overlay, no solo
+    // pointerdown, o el arrastre para hacer scroll del texto de ayuda acaba
+    // paneando la cámara del canvas de detrás.
+    // SOLO la equis cierra la ventana; tocar cualquier otro punto del overlay
+    // no hace nada más que absorber el toque (el panel de dibujo permanece).
+    ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
+      ov.addEventListener(evt, e => { e.stopPropagation(); }, { passive: true });
+    });
+    $('_edHelpCloseX').addEventListener('click', e => {
+      e.stopPropagation();
+      _edHelpHide();
+    });
+    $('_edHelpNoShowBtn').addEventListener('click', e => {
+      e.stopPropagation();
+      if (ov.dataset.helpId) _edHelpDismiss(ov.dataset.helpId);
+      _edHelpHide();
+    });
+  }
+  ov.dataset.helpId = id;
+  const textEl = document.getElementById('_edHelpText');
+  if (textEl) textEl.innerHTML = html;
+  ov.style.display = 'flex';
+}
+function _edHelpHide() {
+  const ov = document.getElementById('_edHelpOverlay');
+  if (ov) ov.style.display = 'none';
 }
 
 async function edCloudSave() {
@@ -23614,6 +23883,9 @@ function EditorView_init(){
     _edDrawInitHistory();
     _edDrawLockUI();
     edRenderOptionsPanel('draw');edCloseMenus();
+    // Primero se abre el panel; medio segundo después, la ayuda (si no se ha
+    // desactivado antes para este usuario).
+    setTimeout(() => edHelpShow('draw-tools'), 500);
   });
 
   // ── POLÍGONOS (desde menú Insertar) ──
@@ -23656,6 +23928,9 @@ function EditorView_init(){
     if(dot){ const sz=edDrawSize; const _dz3=typeof edCamera!=='undefined'?edCamera.z:1; const d=Math.max(3,Math.min(22,Math.round(sz*_dz3))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
     const sw = $('esb-color'); if(sw) sw.style.background = edDrawColor;
   }
+  // Expuesta globalmente: edMinimize necesita re-sincronizar el icono de la
+  // barra flotante con la herramienta activa al colapsar el panel.
+  window._esbSyncTool = _esbSyncTool;
 
   // ── T20: Popup selector de tipo de objeto ──
   let _esbPopEl = document.getElementById('esb-shapes-pop');
@@ -24480,7 +24755,7 @@ function EditorView_init(){
   }, { passive: true, capture: true });
   window._edPointerTypeFn = ev => {
     if(ev.pointerType==='touch') window._edIsTouch=true;
-    else if(ev.pointerType==='mouse') window._edIsTouch=false;
+    else if(ev.pointerType==='mouse' || ev.pointerType==='pen') window._edIsTouch=false;
   };
   document.addEventListener('pointerdown', window._edPointerTypeFn, true);
   // Inicializar barras de navegación HTML (solo PC)
@@ -26738,7 +27013,7 @@ function _gcpHandleDown(e) {
         const _gn = _gcpRuleNodes.find(n => n.id === _gHit.nodeId);
         if (_gn) {
           const _now = Date.now();
-          const _isDoubleTap = window._gcpRuleLastTap && (_now - window._gcpRuleLastTap < 350) &&
+          const _isDoubleTap = window._gcpRuleLastTap && (_now - window._gcpRuleLastTap < _edDoubleTapMs) &&
                                window._gcpRuleLastTapId === _gHit.nodeId;
           if (_isDoubleTap) {
             window._gcpRuleLastTap = 0;
@@ -26752,7 +27027,7 @@ function _gcpHandleDown(e) {
         const _snapId = _gHit.ruleId, _snapPart = _gHit.part;
         const _hitWx = c.px, _hitWy = c.py;
         const _now = Date.now();
-        const _isDoubleTap = window._gcpRuleLastTap && (_now - window._gcpRuleLastTap < 350) &&
+        const _isDoubleTap = window._gcpRuleLastTap && (_now - window._gcpRuleLastTap < _edDoubleTapMs) &&
                              window._gcpRuleLastTapId === _snapId;
         if (_isDoubleTap) {
           window._gcpRuleLastTap = 0;
@@ -27002,7 +27277,7 @@ function _gcpDoSelectDrag(e, c) {
     const _hitLa = window._gcpLayers[hit];
     // Doble tap sobre objeto → abrir panel de propiedades (igual que editor general)
     const _nowH = Date.now();
-    if (hit === _gcpLastTapIdx2 && _nowH - _gcpLastTapTime2 < 350) {
+    if (hit === _gcpLastTapIdx2 && _nowH - _gcpLastTapTime2 < _edDoubleTapMs) {
       _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
       _gcpOpenPropsPanel(_hitLa, hit);
       _gcpRedraw(); return;
