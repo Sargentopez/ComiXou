@@ -19601,9 +19601,9 @@ const _edHelpContent = {
       <div>
         <b>3.</b> Usa la herramienta ${withIco('tinta', icoInk)} o
         ${withIco('lápiz', icoPencil)} para limitar la extensión de la
-        herramienta ${withIco('relleno', icoBucket)}, o como máscara para
-        las herramientas ${withIco('acuarela', icoWatercolor)} o
-        ${withIco('iluminar/oscurecer', icoDodge)}.
+        herramienta ${withIco('relleno', icoBucket)}, y la de
+        ${withIco('tinta', icoInk)} además como máscara para las herramientas
+        ${withIco('acuarela', icoWatercolor)} e ${withIco('iluminación', icoDodge)}.
       </div>
     `;
   })(),
