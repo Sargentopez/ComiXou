@@ -8734,6 +8734,9 @@ function edOnStart(e){
           // LOCK: solo iniciar si hay miembros desbloqueados
           if(edMultiSel.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
           edMultiDragOffs=edMultiSel.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+          // Mismo fix que en objetos sueltos: capturar el puntero para que Android
+          // no deje de entregar pointermove a mitad de gesto.
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
           if(e.pointerType === 'pen' && window._edGroupSilentTool !== undefined){
             // Solo para el pseudo-grupo (objeto agrupado tratado como unidad).
             // La multiselección real (rubber-band/shift-clic) no se toca.
@@ -9488,6 +9491,7 @@ function edOnStart(e){
       edDragOffY = c.ny - _lsLa.y;
       edIsDragging = true;
       window._edMoved = false;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       return;
     }
     // Sin hit con radio normal: intentar con radio ampliado para drag del objeto
@@ -9498,6 +9502,7 @@ function edOnStart(e){
       edDragOffY = c.ny - _lsLa.y;
       edIsDragging = true;
       window._edMoved = false;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       return;
     }
     // Fuera del área ampliada: dejar caer al bloque de selección
@@ -9537,6 +9542,7 @@ function edOnStart(e){
       edDragOffY = c.ny - _hitVec.y;
       edIsDragging = true;
       window._edMoved = false;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       edRedraw();
       return;
     }
@@ -9741,6 +9747,9 @@ function edOnStart(e){
         // LOCK: solo iniciar si hay miembros desbloqueados
         if(_gidxs.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
         edMultiDragOffs = _gidxs.map(i=>({dx:c.nx-edLayers[i].x, dy:c.ny-edLayers[i].y}));
+        // Mismo fix que en objetos sueltos: capturar el puntero para que Android
+        // no deje de entregar pointermove a mitad de gesto.
+        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
         if(e.pointerType === 'pen'){
           // Mismo umbral que en objetos individuales: el lápiz no arrastra el
           // grupo hasta superar _edPenDragThreshold px (ver promoción en edOnMove).
@@ -9822,6 +9831,9 @@ function edOnStart(e){
           edDragOffX = c.nx - edLayers[found].x;
           edDragOffY = c.ny - edLayers[found].y;
           edIsDragging = true; window._edMoved = false;
+          // Mismo fix que en los otros arranques de arrastre: capturar el
+          // puntero (el dedo sigue apoyado, e.pointerId sigue siendo válido).
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
           window._edDragPerfLast = performance.now();
           window._edDragPerfGestureId = (window._edDragPerfGestureId || 0) + 1;
           if (_psFla?.type==='line'||_psFla?.type==='shape'){
@@ -9850,6 +9862,12 @@ function edOnStart(e){
     }
     edDragOffX = c.nx - edLayers[found].x;
     edDragOffY = c.ny - edLayers[found].y;
+    // CRÍTICO (causa raíz confirmada por diagnóstico de rendimiento de arrastre):
+    // sin capturar el puntero aquí, Android entrega el pointerdown pero luego,
+    // de forma intermitente, deja de mandar pointermove a este elemento a
+    // mitad de gesto — el objeto no sigue al dedo hasta soltar. Mismo patrón
+    // que ya usan ~20 sitios más de este archivo (resize, rotate, tail-drag).
+    if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
     if(e.pointerType === 'pen'){
       // Lápiz de tableta gráfica: NO arrastrar al instante. El temblor natural
       // de la punta al posarla generaría un pointermove mínimo que activaría
@@ -10429,6 +10447,7 @@ function edOnMove(e){
       edDragOffX = (_psC?.nx ?? c.nx) - _psFlaM.x;
       edDragOffY = (_psC?.ny ?? c.ny) - _psFlaM.y;
       edIsDragging = true; window._edMoved = false;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       window._edDragPerfLast = performance.now();
       window._edDragPerfGestureId = (window._edDragPerfGestureId || 0) + 1;
       edHideGearIcon();
@@ -12766,6 +12785,9 @@ function _cofHandleTouch(e) {
   if (_cof.state === 'idle_blue') {
     if (dToArrastre <= _cof.MARGIN) {
       _cof._dragging = true;
+      // Mismo fix que en los arrastres de objeto: capturar el puntero para
+      // que Android no deje de entregar pointermove a mitad de gesto.
+      if(e.pointerId !== undefined && edCanvas){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
     } else {
       // Saltar: mover el conjunto al nuevo punto, cursor en dirección del ángulo
       const _radJ = _edCursorOffsetAngle * Math.PI / 180;
@@ -12783,6 +12805,7 @@ function _cofHandleTouch(e) {
       clearTimeout(_cof._timer);
       _cof._pendingStart = true;
       _cof._pendingMoveX = tx; _cof._pendingMoveY = ty;
+      if(e.pointerId !== undefined && edCanvas){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
     }
     // Fuera del margen en rojo → ignorar
     return;
