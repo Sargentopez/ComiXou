@@ -572,15 +572,30 @@ function _lyDrawGroupCompositeThumb(canvas, members) {
   ctx.lineWidth = 2;
   ctx.strokeRect(1, 1, sw-2, sh-2);
 }
+/** Optimización de rendimiento (arrastres para reordenar capas/textos/grupos):
+ *  antes, onMove() volvía a consultar el DOM completo (dos querySelectorAll +
+ *  un getBoundingClientRect POR ITEM) en CADA pointermove durante el
+ *  arrastre. Con muchos objetos/capas esto es "layout thrashing" clásico —
+ *  notable sobre todo en Android. Los rects no cambian durante un arrastre
+ *  de reordenar (el resaltado 'drag-over' no afecta al layout), así que se
+ *  capturan UNA vez al empezar a arrastrar y se reutilizan en cada movimiento. */
+function _lySnapshotDragItems(selector, excludeEl) {
+  return [...document.querySelectorAll(selector)]
+    .filter(el => el !== excludeEl)
+    .map(el => ({ el, rect: el.getBoundingClientRect() }));
+}
 /** Drag-and-drop para el ítem de grupo */
 function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
   let startY, active = false;
   let _lyDragOverGrp = null;
+  let _snap = null;        // snapshot de items+rects, capturado al iniciar el arrastre
+  let _highlighted = null; // elemento actualmente resaltado con 'drag-over'
   function end() {
     if (!active) return;
     active = false;
     item.classList.remove('dragging');
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
+    if (_highlighted) { _highlighted.classList.remove('drag-over'); _highlighted = null; }
+    _snap = null;
     if (_lyDragOverGrp !== null) {
       const _destGid = edLayers[_lyDragOverGrp]?.groupId;
       if (!_destGid || _destGid !== groupId) {
@@ -596,20 +611,15 @@ function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
     window.removeEventListener('pointerup', onPointerUp);
   }
   function onMove(y) {
-    if (!active) return;
-    const items = [...document.querySelectorAll('.ed-layer-item')];
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
-    const target = items.find(it => {
-      if (it === item) return false;
-      const rect = it.getBoundingClientRect();
-      return y >= rect.top && y <= rect.bottom;
-    });
-    if (target) {
-      target.classList.add('drag-over');
-      _lyDragOverGrp = parseInt(target.dataset.realIdx);
-    } else {
-      _lyDragOverGrp = null;
+    if (!active || !_snap) return;
+    const target = _snap.find(s => y >= s.rect.top && y <= s.rect.bottom);
+    const targetEl = target ? target.el : null;
+    if (targetEl !== _highlighted) {
+      if (_highlighted) _highlighted.classList.remove('drag-over');
+      if (targetEl) targetEl.classList.add('drag-over');
+      _highlighted = targetEl;
     }
+    _lyDragOverGrp = targetEl ? parseInt(targetEl.dataset.realIdx) : null;
   }
   function onPointerMove(e) { onMove(e.clientY); }
   function onPointerUp() { end(); }
@@ -623,6 +633,7 @@ function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
       if (Math.abs(ev.clientY - startY) > 4) {
         active = true;
         item.classList.add('dragging');
+        _snap = _lySnapshotDragItems('.ed-layer-item', item);
         window.removeEventListener('pointermove', checkStart);
       }
     }
@@ -1352,29 +1363,27 @@ function _lyBuildImgItem(la, realIdx, selected) {
 ────────────────────────────────────────── */
 function _lyBindTextDrag(row, handle, realIdx) {
   let startY, startIdx, active = false;
+  let _snap = null;
+  let _highlighted = null;
 
   function onMove(y) {
-    if (!active) return;
-    const rows = [...document.querySelectorAll('.ed-layer-text-row.draggable')];
-    document.querySelectorAll('.ed-layer-text-row').forEach(r => r.classList.remove('drag-over'));
-    const target = rows.find(r => {
-      if (r === row) return false;
-      const rect = r.getBoundingClientRect();
-      return y >= rect.top && y <= rect.bottom;
-    });
-    if (target) {
-      target.classList.add('drag-over');
-      _lyDragOver = parseInt(target.dataset.realIdx);
-    } else {
-      _lyDragOver = null;
+    if (!active || !_snap) return;
+    const target = _snap.find(s => y >= s.rect.top && y <= s.rect.bottom);
+    const targetEl = target ? target.el : null;
+    if (targetEl !== _highlighted) {
+      if (_highlighted) _highlighted.classList.remove('drag-over');
+      if (targetEl) targetEl.classList.add('drag-over');
+      _highlighted = targetEl;
     }
+    _lyDragOver = targetEl ? parseInt(targetEl.dataset.realIdx) : null;
   }
 
   function end() {
     if (!active) return;
     active = false;
     row.classList.remove('dragging');
-    document.querySelectorAll('.ed-layer-text-row').forEach(r => r.classList.remove('drag-over'));
+    if (_highlighted) { _highlighted.classList.remove('drag-over'); _highlighted = null; }
+    _snap = null;
     if (_lyDragOver !== null && _lyDragOver !== startIdx) {
       row.classList.add('was-dragged');
       _lyReorderTexts(startIdx, _lyDragOver);
@@ -1402,6 +1411,7 @@ function _lyBindTextDrag(row, handle, realIdx) {
       if (Math.abs(ev.clientY - startY) > 4) {
         active = true;
         row.classList.add('dragging');
+        _snap = _lySnapshotDragItems('.ed-layer-text-row.draggable', row);
         window.removeEventListener('pointermove', checkStart);
       }
     }
@@ -1414,29 +1424,27 @@ function _lyBindTextDrag(row, handle, realIdx) {
 ────────────────────────────────────────── */
 function _lyBindImgDrag(item, handle, realIdx) {
   let startY, startIdx, active = false;
+  let _snap = null;
+  let _highlighted = null;
 
   function onMove(y) {
-    if (!active) return;
-    const items = [...document.querySelectorAll('.ed-layer-item')];
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
-    const target = items.find(i => {
-      if (i === item) return false;
-      const rect = i.getBoundingClientRect();
-      return y >= rect.top && y <= rect.bottom;
-    });
-    if (target) {
-      target.classList.add('drag-over');
-      _lyDragOver = parseInt(target.dataset.realIdx);
-    } else {
-      _lyDragOver = null;
+    if (!active || !_snap) return;
+    const target = _snap.find(s => y >= s.rect.top && y <= s.rect.bottom);
+    const targetEl = target ? target.el : null;
+    if (targetEl !== _highlighted) {
+      if (_highlighted) _highlighted.classList.remove('drag-over');
+      if (targetEl) targetEl.classList.add('drag-over');
+      _highlighted = targetEl;
     }
+    _lyDragOver = targetEl ? parseInt(targetEl.dataset.realIdx) : null;
   }
 
   function end() {
     if (!active) return;
     active = false;
     item.classList.remove('dragging');
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
+    if (_highlighted) { _highlighted.classList.remove('drag-over'); _highlighted = null; }
+    _snap = null;
     if (_lyDragOver !== null && _lyDragOver !== startIdx) {
       // Si la capa dragged tiene groupId, mover el bloque entero
       const _draggedLayer = typeof edLayers !== 'undefined' ? edLayers[startIdx] : null;
@@ -1487,6 +1495,7 @@ function _lyBindImgDrag(item, handle, realIdx) {
       if (Math.abs(ev.clientY - startY) > 4) {
         active = true;
         item.classList.add('dragging');
+        _snap = _lySnapshotDragItems('.ed-layer-item', item);
         window.removeEventListener('pointermove', checkStart);
       }
     }

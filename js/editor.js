@@ -1198,7 +1198,10 @@ function _edFitAllWindowTitlePills(){
 // encontraría nada que vigilar.
 function _edInitWindowTitlePillObserver(){
   if (window._edWinTitleObs) return; // ya inicializado, no duplicar
-  const _cb = () => requestAnimationFrame(_edFitAllWindowTitlePills);
+  const _cb = () => {
+    cancelAnimationFrame(window._edWinTitlePillRaf);
+    window._edWinTitlePillRaf = requestAnimationFrame(_edFitAllWindowTitlePills);
+  };
   const _obs = new MutationObserver(_cb);
   ['edProjectModal','edShortcutsModal','edAnimTutorialModal','edHelpRefModal','edMpBehaviourModal'].forEach(id => {
     const el = document.getElementById(id);
@@ -4445,6 +4448,24 @@ function _edRenderOverlays() {
   _edScrollbarsDraw();
 }
 
+// Throttle por frame para gestos de alta frecuencia que mueven la cámara
+// (rueda del ratón, pinch táctil). edRedraw() recorre TODAS las capas de la
+// hoja — en Android, con muchos objetos, un pointermove/wheel puede disparar
+// más redibujados completos de los que la pantalla es capaz de pintar,
+// acumulando una cola cada vez mayor (el lag empeora progresivamente en vez
+// de mantenerse estable). Esto NO sustituye a edRedraw() en el resto de la
+// app (que sigue siendo síncrono, correcto para acciones puntuales) — solo
+// se usa en los gestos continuos de cámara.
+let _edCameraRedrawRafPending = false;
+function _edRedrawCameraThrottled(){
+  if (_edCameraRedrawRafPending) return;
+  _edCameraRedrawRafPending = true;
+  requestAnimationFrame(() => {
+    _edCameraRedrawRafPending = false;
+    edRedraw();
+    if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
+  });
+}
 function edRedraw(){
   if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
   if(!edCtx || !edCanvas)return;
@@ -6685,8 +6706,7 @@ function edPinchMove(e) {
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
     edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
     edCamera.z = newZ;
-    edRedraw();
-    if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
+    _edRedrawCameraThrottled();
   }
 }
 function edPinchEnd() {
@@ -19657,13 +19677,22 @@ function _edSaveOverlayError(msg) {
 }
 
 // ── SISTEMA DE AYUDA INTERACTIVA ────────────────────────────────────────────
-// Ventana semitransparente que bloquea todos los toques (mismo patrón visual
-// que el overlay de guardado en la nube). Su contenido cambia según el botón
-// o evento que la invoque, mediante el registro _edHelpContent.
+// Una única ventana (edHelpRefModal, estilo "sc-box" — igual que Atajos de
+// teclado) para las dos formas de mostrar ayuda, evitando duplicar código:
+//   • edHelpShow(id)     — se abre sola al tocar un botón o darse un evento.
+//                          Comprueba "no volver a mostrar" y, si no está
+//                          descartada, añade ese botón al final de la ventana.
+//   • _edHelpShowRef(id) — se abre desde el submenú del botón Ayuda. Nunca
+//                          comprueba "no volver a mostrar" (el usuario ha
+//                          venido a buscarla a propósito) y NO muestra ese
+//                          botón — es la única diferencia entre ambas.
+// Contenido registrado en _edHelpContent como { title, body }.
 //
 // Para añadir una nueva ayuda:
-//   1. Añadir una entrada en _edHelpContent: 'mi-ayuda': 'texto o HTML'
-//   2. Llamar a edHelpShow('mi-ayuda') desde el punto donde deba aparecer
+//   1. Añadir una entrada en _edHelpContent: 'mi-ayuda': { title: '...', body: '...' }
+//   2. Llamar a edHelpShow('mi-ayuda') desde el punto donde deba aparecer sola,
+//      y opcionalmente añadir un botón en el submenú Ayuda que llame a
+//      _edHelpShowRef('mi-ayuda').
 //
 // "No volver a mostrar" solo afecta a esa ayuda concreta (id) y solo al
 // usuario actual (guardado en localStorage, no en el servidor — ver nota
@@ -19690,7 +19719,9 @@ function _edSaveOverlayError(msg) {
 //    Los <svg> inline no la sufren (la regla es solo para "img"), pero por
 //    seguridad se añade también ahí.
 const _edHelpContent = {
-  'draw-tools': (() => {
+  'draw-tools': {
+    title: 'Herramientas de dibujo',
+    body: (() => {
     // Cursor COF: mismo asset (base64) exacto que usa op-offset-btn en el
     // panel de dibujo (el de "posición desplazada" para pintar sin tapar el
     // trazo con el dedo) — no el del modo vectorial (op-vcof-btn), que es
@@ -19725,7 +19756,8 @@ const _edHelpContent = {
         ${withIco('<b>acuarela</b>', icoWatercolor)} e ${withIco('<b>iluminación</b>', icoDodge)}.
       </div>
     `;
-  })(),
+    })()
+  },
 };
 
 function _edHelpDismissedKey() {
@@ -19749,74 +19781,50 @@ function _edHelpDismiss(id) {
   } catch(_) {}
 }
 
-function edHelpShow(id) {
-  if (_edHelpIsDismissed(id)) return;
-  const html = _edHelpContent[id];
-  if (!html) return; // sin contenido registrado para este id — no mostrar nada
-  let ov = document.getElementById('_edHelpOverlay');
-  if (!ov) {
-    ov = document.createElement('div');
-    ov.id = '_edHelpOverlay';
-    ov.style.cssText = [
-      'position:fixed;inset:0;z-index:100000',
-      'background:rgba(0,0,0,0.72)',
-      'display:flex;align-items:center;justify-content:center',
-      'font-family:sans-serif;padding:24px'
-    ].join(';');
-    ov.innerHTML = `
-      <div id="_edHelpCard" style="position:relative;display:flex;flex-direction:column;background:#1c1c20;border-radius:14px;padding:30px 20px 18px;max-width:340px;max-height:80vh;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.5)">
-        <button id="_edHelpCloseX" style="position:absolute;top:4px;right:6px;background:none;border:none;color:#e74c3c;font-size:1.4rem;font-weight:900;line-height:1;cursor:pointer;padding:6px 10px" title="Cerrar">✕</button>
-        <div id="_edHelpText" style="flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;font-size:.92rem;line-height:1.55;color:#fff;margin-bottom:16px"></div>
-        <div style="text-align:center;flex-shrink:0">
-          <button id="_edHelpNoShowBtn" style="background:transparent;color:rgba(255,255,255,.5);border:none;font-family:inherit;font-size:.72rem;font-weight:700;cursor:pointer;text-decoration:underline;padding:4px">No volver a mostrar esta ayuda</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(ov);
-    // CRÍTICO: nada de lo que ocurra dentro de la ventana de ayuda debe llegar
-    // a los listeners globales del editor — ni el que desactiva la herramienta
-    // de dibujo (_edDocDownFn, pointerdown), ni el que mueve la cámara del
-    // canvas (edOnMove, registrado en pointermove sobre document). Hay que
-    // detener TODOS los eventos de puntero dentro del overlay, no solo
-    // pointerdown, o el arrastre para hacer scroll del texto de ayuda acaba
-    // paneando la cámara del canvas de detrás.
-    // SOLO la equis cierra la ventana; tocar cualquier otro punto del overlay
-    // no hace nada más que absorber el toque (el panel de dibujo permanece).
-    ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
-      ov.addEventListener(evt, e => { e.stopPropagation(); }, { passive: true });
-    });
-    $('_edHelpCloseX').addEventListener('click', e => {
-      e.stopPropagation();
-      _edHelpHide();
-    });
-    $('_edHelpNoShowBtn').addEventListener('click', e => {
-      e.stopPropagation();
-      if (ov.dataset.helpId) _edHelpDismiss(ov.dataset.helpId);
-      _edHelpHide();
-    });
-  }
-  ov.dataset.helpId = id;
-  const textEl = document.getElementById('_edHelpText');
-  if (textEl) textEl.innerHTML = html;
-  ov.style.display = 'flex';
-}
-function _edHelpHide() {
-  const ov = document.getElementById('_edHelpOverlay');
-  if (ov) ov.style.display = 'none';
-}
-
-// Muestra un contenido de _edHelpContent en el modal de referencia del menú
-// Ayuda (mismo estilo "sc-box" que Atajos de teclado). A diferencia de
-// edHelpShow(), esta versión NUNCA comprueba "no volver a mostrar": el
-// usuario ha venido a buscarla a propósito desde el menú.
-function _edHelpShowRef(id, title) {
-  const html = _edHelpContent[id];
-  if (!html) return;
+// Abre edHelpRefModal con el contenido de _edHelpContent[id].
+// showDismiss=true añade el botón "No volver a mostrar" al final del cuerpo
+// (caso edHelpShow); showDismiss=false no lo añade (caso _edHelpShowRef).
+// Esta función hace todo el trabajo real — las dos funciones públicas de
+// abajo solo difieren en si comprueban "descartada" y en ese flag.
+function _edHelpOpenWindow(id, showDismiss) {
+  const entry = _edHelpContent[id];
+  if (!entry) return; // sin contenido registrado para este id — no mostrar nada
   const titleEl = $('edHelpRefTitle');
   const bodyEl  = $('edHelpRefBody');
-  if (titleEl) titleEl.textContent = title || 'Ayuda';
-  if (bodyEl)  bodyEl.innerHTML = html;
+  if (titleEl) titleEl.textContent = entry.title || 'Ayuda';
+  if (bodyEl) {
+    bodyEl.innerHTML = entry.body || '';
+    let dismissBtn = document.getElementById('edHelpRefDismiss');
+    if (showDismiss) {
+      if (!dismissBtn) {
+        dismissBtn = document.createElement('button');
+        dismissBtn.id = 'edHelpRefDismiss';
+        dismissBtn.className = 'ed-help-dismiss-btn';
+        dismissBtn.textContent = 'No volver a mostrar esta ayuda';
+      }
+      bodyEl.appendChild(dismissBtn); // al final del cuerpo, tras el contenido
+      dismissBtn.onclick = () => {
+        _edHelpDismiss(id);
+        $('edHelpRefModal')?.classList.remove('open');
+      };
+    } else if (dismissBtn) {
+      dismissBtn.remove(); // este id no lleva el botón — quitarlo si venía de una ayuda anterior
+    }
+  }
   $('edHelpRefModal')?.classList.add('open');
+}
+
+// Se abre sola al tocar un botón o darse un evento (ej. abrir el panel de
+// dibujo). Respeta "no volver a mostrar".
+function edHelpShow(id) {
+  if (_edHelpIsDismissed(id)) return;
+  _edHelpOpenWindow(id, true);
+}
+
+// Se abre desde el submenú del botón Ayuda. El usuario ha venido a buscarla
+// a propósito: nunca comprueba "no volver a mostrar" ni muestra ese botón.
+function _edHelpShowRef(id) {
+  _edHelpOpenWindow(id, false);
 }
 
 async function edCloudSave() {
@@ -23984,7 +23992,7 @@ function EditorView_init(){
   // acceso deliberado desde el menú.
   $('dd-help-draw-tools')?.addEventListener('click', () => {
     edCloseMenus();
-    _edHelpShowRef('draw-tools', 'Herramientas de dibujo');
+    _edHelpShowRef('draw-tools');
   });
   $('edHelpRefClose')?.addEventListener('click', () => {
     document.getElementById('edHelpRefModal')?.classList.remove('open');
@@ -23999,7 +24007,7 @@ function EditorView_init(){
   // listeners globales del editor — en concreto edOnMove (registrado sobre
   // document), que paneaba la cámara del canvas al hacer scroll dentro del
   // cuerpo del modal en vez de scrollear el propio modal.
-  ['edShortcutsModal', 'edAnimTutorialModal', 'edHelpRefModal'].forEach(_mid => {
+  ['edShortcutsModal', 'edAnimTutorialModal', 'edHelpRefModal', 'edProjectModal'].forEach(_mid => {
     const _mEl = document.getElementById(_mid);
     if (!_mEl) return;
     ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
@@ -24580,8 +24588,7 @@ function EditorView_init(){
       edCamera.x -= e.deltaX;
       edCamera.y -= e.deltaY;
     }
-    edRedraw();
-    if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
+    _edRedrawCameraThrottled();
     _edScrollbarsUpdate();
   };
   window.addEventListener('wheel', window._edWheelFn, {passive: false});

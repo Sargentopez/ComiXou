@@ -110,7 +110,10 @@ function _mcFitAllTitlePills(){
 }
 function _mcInitTitlePillObserver(){
   if (window._mcTitleObs) return; // ya inicializado
-  const _cb = () => requestAnimationFrame(_mcFitAllTitlePills);
+  const _cb = () => {
+    cancelAnimationFrame(window._mcTitlePillRaf);
+    window._mcTitlePillRaf = requestAnimationFrame(_mcFitAllTitlePills);
+  };
   const _obs = new MutationObserver(_cb);
   // mcNewModal es fijo (se inyecta una vez y alterna la clase "open");
   // mcDupModal se crea/destruye cada vez — subtree cubre ambos casos.

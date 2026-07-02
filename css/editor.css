@@ -2388,6 +2388,21 @@ body.editor-page #appView {
   overflow-y: auto;
   padding: 12px 18px 18px;
 }
+/* Botón "No volver a mostrar esta ayuda" — solo lo añade edHelpShow() al
+   final del cuerpo; _edHelpShowRef() (submenú Ayuda) nunca lo muestra. */
+.ed-help-dismiss-btn {
+  display: block;
+  margin: 16px auto 0;
+  background: transparent;
+  color: var(--gray-500);
+  border: none;
+  font-family: inherit;
+  font-size: .72rem;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px;
+}
 #edShortcutsModal .sc-section, #edAnimTutorialModal .sc-section, #edHelpRefModal .sc-section {
   font-family: var(--font-display);
   font-size: .8rem;
