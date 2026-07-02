@@ -3027,9 +3027,54 @@ class LineLayer extends BaseLayer {
 /* ══════════════════════════════════════════
    HISTORIAL UNDO / REDO
    ══════════════════════════════════════════ */
-function _edLayersSnapshot(){
+// movedLayer (opcional): capa, o ARRAY de capas (arrastre de grupo/multi-
+// selección), que se sabe con certeza que cambiaron desde el último snapshot
+// — venimos de un arrastre simple de esa(s) capa(s) y nada más (ver edOnEnd).
+// En ese caso, todas las DEMÁS capas pueden reutilizar su fragmento cacheado
+// tal cual, evitando recodificar a base64 (toDataUrl) o re-escanear píxeles
+// (bbox de DrawLayer) canvases que no se tocaron — el coste que hacía que
+// arrastrar un objeto (o un grupo) entre varios más bloqueara el hilo
+// principal al soltar. Companions vinculados (fill/pencil/watercolor de
+// cualquier draw/stroke arrastrado, individual o dentro del grupo) NO se
+// cachean: _edSyncFill()/_edSyncFillsFor() los sincroniza en cada arrastre
+// y sí pueden cambiar.
+// Sin movedLayer (cualquier otro caso: pintar, rellenar, deshacer, redimen-
+// sionar/rotar grupo, añadir/borrar objetos...) se recalcula TODO igual que
+// siempre — cero cambio de comportamiento fuera del caso de arrastre simple.
+function _edLayersSnapshot(movedLayer){
+  let _safeToCache = null; // Set de capas que NO pudieron cambiar (reutilizables)
+  if (movedLayer) {
+    const _movedList = Array.isArray(movedLayer) ? movedLayer : [movedLayer];
+    _safeToCache = new Set(edLayers);
+    _movedList.forEach(_ml => {
+      if (!_ml) return;
+      _safeToCache.delete(_ml);
+      if (['draw','stroke'].includes(_ml.type)) {
+        const _uid = _ml._uid || _ml._fillLayerId;
+        if (_uid) {
+          edLayers.forEach(l => {
+            if (l && ['fill','pencil','watercolor'].includes(l.type) && l._drawLayerId === _uid) {
+              _safeToCache.delete(l);
+            }
+          });
+        }
+      }
+    });
+  }
   return JSON.stringify(edLayers.map(l => {
     if (!l || !l.type) return null;
+    const _cacheableType = ['fill','pencil','watercolor','draw','stroke'].includes(l.type);
+    if (_cacheableType && _safeToCache && _safeToCache.has(l) && l._cachedSnapFragment) {
+      return l._cachedSnapFragment; // capa no tocada por este arrastre — reutilizar tal cual
+    }
+    const _fragment = _edSnapLayerFragment(l);
+    if (_cacheableType && _fragment) l._cachedSnapFragment = _fragment; // refrescar caché
+    return _fragment;
+  }));
+}
+// Construye el fragmento de snapshot de UNA capa (antes era el cuerpo del
+// .map() de _edLayersSnapshot — extraído para poder cachear su resultado).
+function _edSnapLayerFragment(l){
     if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
       // Guardar dataUrl del canvas local (bbox del stroke) con sus propiedades exactas
       return { type:l.type, dataUrl: l.toDataUrl(),
@@ -3149,7 +3194,6 @@ function _edLayersSnapshot(){
     if(l._motionPathEnd)   o._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) o._motionPathAccel = l._motionPathAccel;
     return o;
-  }));
 }
 
 
@@ -3251,7 +3295,7 @@ function _edGetPaintTarget() {
   }
   return dl;
 }
-function edPushHistory(force){
+function edPushHistory(force, movedLayer){
   // Actualizar indicador de tamaño con debounce (no bloquea el flujo)
   clearTimeout(window._edSizeCheckTimer);
   window._edSizeCheckTimer = setTimeout(_edSizeCheck, 800);
@@ -3277,7 +3321,7 @@ function edPushHistory(force){
       window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return;
     }
   }
-  const layersJSON = _edLayersSnapshot();
+  const layersJSON = _edLayersSnapshot(movedLayer);
   // DIAG: registrar cada push
   if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
 
@@ -10866,7 +10910,15 @@ function edOnEnd(e){
     }
     if(edMultiDragging||edMultiResizing||edMultiRotating){
       if(window._edMoved) _edSyncFillsFor(edMultiSel, false);
-      if(!_edPinchHappened && edMultiSel.length && window._edMoved) edPushHistory();
+      if(!_edPinchHappened && edMultiSel.length && window._edMoved){
+        // Igual que en el arrastre de un objeto suelto: si fue un arrastre
+        // puro de grupo (no redimensionar/rotar), las capas NO incluidas en
+        // la selección no pudieron cambiar — pueden reutilizar su fragmento
+        // de historial cacheado. Ver _edLayersSnapshot(movedLayer).
+        const _plainGroupDrag = (edMultiDragging && !edMultiResizing && !edMultiRotating)
+          ? edMultiSel.map(i => edLayers[i]).filter(Boolean) : null;
+        edPushHistory(false, _plainGroupDrag);
+      }
       if(edMultiSel.length) _msRecalcBbox();
     }
     // Táctil: tap sin movimiento dentro del bbox → desactivar multiselect.
@@ -10980,6 +11032,13 @@ function edOnEnd(e){
         _edBakeLineRotation(_bkLa);
       }
     }
+    // Optimización: si fue un arrastre simple de UNA capa (no resize/rotate/
+    // tail-drag), _edLayersSnapshot() puede reutilizar el dataURL cacheado
+    // de TODAS las demás capas sin tocarlas — solo la capa movida (y sus
+    // companions fill/pencil/watercolor si es un draw/stroke) pudo cambiar.
+    // Ver _edLayersSnapshot(movedLayer) más abajo.
+    const _plainDragLayer = (edIsDragging && !edIsResizing && !edIsRotating && !edIsTailDragging && edSelectedIdx>=0)
+      ? edLayers[edSelectedIdx] : null;
     const _doPush = () => {
       const _panel=$('edOptionsPanel');
       const _mode=_panel?.dataset.mode;
@@ -10988,7 +11047,7 @@ function edOnEnd(e){
          && _la && (_la.type==='shape'||_la.type==='line')){
         _edShapePushHistory();
       } else {
-        edPushHistory();
+        edPushHistory(false, _plainDragLayer);
       }
     };
     if(_preExport.length) Promise.all(_preExport).then(_doPush);
