@@ -223,7 +223,27 @@ function _pgBuildCard(page, idx) {
   return card;
 }
 
+// Envoltorio ligero: para la página ACTIVA (la que se está editando) siempre
+// se renderiza en vivo, igual que antes — es solo una página, coste asumible.
+// Para el resto de páginas, si ya hay una miniatura cacheada (generada al
+// salir de ellas — ver _edCachePageThumb en editor.js), se reutiliza tal
+// cual en vez de recorrer capas y canvas pesados de páginas que ni siquiera
+// se están viendo. Si aún no hay caché para esa página (primera vez que se
+// abre "Hojas" en la sesión), se renderiza en vivo como siempre — nunca
+// se muestra una miniatura vacía.
 function _pgDrawThumb(canvas, page) {
+  if (page && page !== edPages[edCurrentPage] && page._cachedThumbCanvas) {
+    const ctx = canvas.getContext('2d');
+    const tw = canvas.width, th = canvas.height;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, tw, th);
+    ctx.drawImage(page._cachedThumbCanvas, 0, 0, tw, th);
+    return;
+  }
+  _pgRenderThumbLive(canvas, page);
+}
+
+function _pgRenderThumbLive(canvas, page) {
   const ctx = canvas.getContext('2d');
   const tw = canvas.width, th = canvas.height;
   ctx.fillStyle = '#ffffff';

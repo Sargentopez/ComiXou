@@ -5868,6 +5868,24 @@ function edDeletePage(){
   });
 }
 // Liberar _animFrames de una página (mantiene _oc con último frame para thumbnails)
+// Genera y cachea una miniatura pequeña (90×127 o 90×64) de una página,
+// para que _pgDrawThumb (editor-pages.js) pueda reutilizarla sin tener que
+// recorrer capas y canvas pesados de páginas que no se están viendo. Mismo
+// principio que _edUnloadPageAnims: liberar/evitar trabajo de páginas
+// inactivas sin perder la capacidad de mostrarlas correctamente.
+function _edCachePageThumb(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return;
+  try {
+    const _orient = page.orientation || edOrientation;
+    const off = document.createElement('canvas');
+    off.width  = 90;
+    off.height = _orient === 'vertical' ? 127 : 64;
+    _pgRenderThumbLive(off, page);
+    page._cachedThumbCanvas = off;
+  } catch(_) {} // si falla, _pgDrawThumb simplemente hará el render en vivo como antes
+}
+
 function _edUnloadPageAnims(pageIdx) {
   const page = edPages[pageIdx];
   if (!page) return;
@@ -5923,8 +5941,11 @@ function edLoadPage(idx){
   // Limpiar sesión vectorial al cambiar de página
   if(typeof _vsClear==='function') _vsClear();
 
-  // Liberar _animFrames de la página anterior para recuperar RAM
-  if (idx !== edCurrentPage) _edUnloadPageAnims(edCurrentPage);
+  // Cachear miniatura + liberar _animFrames de la página anterior antes de dejarla
+  if (idx !== edCurrentPage) {
+    _edCachePageThumb(edCurrentPage);
+    _edUnloadPageAnims(edCurrentPage);
+  }
 
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
   const _po = edPages[idx]?.orientation || 'vertical';
