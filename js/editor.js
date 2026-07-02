@@ -2052,6 +2052,9 @@ class DrawLayer extends BaseLayer {
     return dl;
   }
   toDataUrl(){
+    // Página descargada de memoria (ver _edUnloadPageCanvases): devolver la
+    // versión ya calculada antes de liberar el canvas real, sin tocarlo.
+    if(this._canvasUnloaded && this._unloadedDataUrl) return this._unloadedDataUrl;
     // Exportar solo la zona de la página para compatibilidad con guardado
     const pw = edPageW(), ph = edPageH();
     const tmp = document.createElement('canvas');
@@ -2061,6 +2064,7 @@ class DrawLayer extends BaseLayer {
     return tmp.toDataURL();
   }
   toDataUrlFull(){
+    if(this._canvasUnloaded && this._unloadedFullDataUrl) return this._unloadedFullDataUrl;
     // Exportar el workspace completo (incluye dibujo fuera del lienzo)
     return this._canvas.toDataURL();
   }
@@ -2270,10 +2274,14 @@ class FillLayer extends BaseLayer {
     }
   }
   toDataUrl() {
+    // Página descargada de memoria (ver _edUnloadPageCanvases): devolver la
+    // versión ya calculada antes de liberar el canvas real, sin tocarlo.
+    if(this._canvasUnloaded && this._unloadedDataUrl) return this._unloadedDataUrl;
     // Guardar canvas local (pw×ph) — compatible con fromDataUrl
     return this._canvas.toDataURL();
   }
   toDataUrlFull() {
+    if(this._canvasUnloaded && this._unloadedFullDataUrl) return this._unloadedFullDataUrl;
     // Alias — el canvas ya es el tamaño correcto
     return this._canvas.toDataURL();
   }
@@ -2504,7 +2512,10 @@ class StrokeLayer extends BaseLayer {
     return sl;
   }
   // Exportar bitmap recortado
-  toDataUrl(){ return this._canvas.toDataURL(); }
+  toDataUrl(){
+    if(this._canvasUnloaded && this._unloadedDataUrl) return this._unloadedDataUrl;
+    return this._canvas.toDataURL();
+  }
   // Expandir a DrawLayer para edición — devuelve un DrawLayer con el contenido restaurado
   toDrawLayer(){
     // Hacer bake del StrokeLayer con TODAS sus transformaciones aplicadas
@@ -5873,6 +5884,77 @@ function edDeletePage(){
 // recorrer capas y canvas pesados de páginas que no se están viendo. Mismo
 // principio que _edUnloadPageAnims: liberar/evitar trabajo de páginas
 // inactivas sin perder la capacidad de mostrarlas correctamente.
+// Libera la memoria de píxeles (canvas reales) de las capas pesadas
+// (fill/pencil/watercolor/draw/stroke) de una página que se abandona.
+// Antes de tocar nada, captura el dataURL exacto que produciría toDataUrl()/
+// toDataUrlFull() en ese instante — esos métodos, ya modificados en sus
+// clases (DrawLayer/FillLayer/StrokeLayer), devuelven ese valor cacheado en
+// cuanto _canvasUnloaded=true, así que guardar/duplicar/deshacer siguen
+// funcionando exactamente igual, sin tocar el canvas real ni saberlo.
+// El canvas se sustituye por un placeholder de 1×1 — la reconstrucción real
+// (necesaria solo para EDITAR o VER la página, no para guardarla) la hace
+// _edLoadPageCanvases(), llamada al volver a esa página (edLoadPage) o al
+// navegar a ella en el visor interno (edUpdateViewer).
+function _edUnloadPageCanvases(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page || !page.layers) return;
+  const _heavyTypes = ['fill','pencil','watercolor','draw','stroke'];
+  page.layers.forEach(l => {
+    if (!l || !_heavyTypes.includes(l.type) || l._canvasUnloaded) return;
+    if (!l._canvas || l._canvas.width === 0) return; // nada que descargar
+    let _full = null, _crop = null;
+    try {
+      _crop = l.toDataUrl();
+      _full = (typeof l.toDataUrlFull === 'function') ? l.toDataUrlFull() : _crop;
+    } catch(_) { return; } // si falla la captura, no tocar esta capa — más seguro dejarla como está
+    l._unloadedDataUrl     = _crop;
+    l._unloadedFullDataUrl = _full;
+    // Guardar dimensiones originales por si algo las necesita antes de reconstruir
+    l._unloadedCanvasW = l._canvas.width;
+    l._unloadedCanvasH = l._canvas.height;
+    const _placeholder = document.createElement('canvas');
+    _placeholder.width = 1; _placeholder.height = 1;
+    l._canvas = _placeholder;
+    l._ctx = _placeholder.getContext('2d');
+    l._canvasUnloaded = true;
+  });
+}
+
+// Reconstruye los canvas reales de una página previamente descargada, desde
+// los dataURL guardados por _edUnloadPageCanvases(). Idempotente: si la
+// página no está descargada, no hace nada. Async porque decodificar un
+// dataURL a Image es intrínsecamente asíncrono — hay que esperarla (await)
+// antes de dibujar esa página (editor o visor), nunca antes de guardarla
+// (guardar no la necesita, ver arriba).
+async function _edLoadPageCanvases(pageIdx) {
+  const page = edPages[pageIdx];
+  if (!page || !page.layers) return;
+  const _promises = [];
+  page.layers.forEach(l => {
+    if (!l || !l._canvasUnloaded) return;
+    _promises.push(new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const cv = document.createElement('canvas');
+        cv.width  = l._unloadedCanvasW || img.naturalWidth  || img.width;
+        cv.height = l._unloadedCanvasH || img.naturalHeight || img.height;
+        const ctx = cv.getContext('2d');
+        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        l._canvas = cv;
+        l._ctx = ctx;
+        l._canvasUnloaded = false;
+        resolve();
+      };
+      img.onerror = () => resolve(); // no dejar la promesa colgada si falla la decodificación
+      // Reconstruir siempre desde el FULL (el workspace completo) — es la
+      // fuente de la que toDataUrl() (recortado) se derivaría de nuevo si
+      // hiciera falta; usar el crop aquí perdería el contenido fuera de página.
+      img.src = l._unloadedFullDataUrl || l._unloadedDataUrl;
+    }));
+  });
+  if (_promises.length) await Promise.all(_promises);
+}
+
 function _edCachePageThumb(pageIdx) {
   const page = edPages[pageIdx];
   if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return;
@@ -5941,10 +6023,14 @@ function edLoadPage(idx){
   // Limpiar sesión vectorial al cambiar de página
   if(typeof _vsClear==='function') _vsClear();
 
-  // Cachear miniatura + liberar _animFrames de la página anterior antes de dejarla
+  // Cachear miniatura + liberar animaciones/canvas pesados de la página anterior.
+  // ORDEN IMPORTANTE: la miniatura debe generarse ANTES de liberar los canvas
+  // reales — si se invirtiera, la miniatura saldría en blanco (canvas ya
+  // reducidos a un placeholder de 1×1).
   if (idx !== edCurrentPage) {
     _edCachePageThumb(edCurrentPage);
     _edUnloadPageAnims(edCurrentPage);
+    _edUnloadPageCanvases(edCurrentPage);
   }
 
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
@@ -5965,6 +6051,11 @@ function edLoadPage(idx){
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
   // Cargar bajo demanda los _animFrames de la nueva página (liberados al salir de otras)
   _edLoadPageAnims(idx).then(() => {
+    if (edCurrentPage === idx) edRedraw();
+  });
+  // Reconstruir bajo demanda los canvas pesados (relleno/lápiz/acuarela/dibujo/
+  // trazo) si esta página se descargó al salir de ella anteriormente.
+  _edLoadPageCanvases(idx).then(() => {
     if (edCurrentPage === idx) edRedraw();
   });
 }
@@ -22749,6 +22840,29 @@ let _edViewerFullCtx    = null;
 function edUpdateViewer(){
   if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
+  // Si esta página tiene canvas pesados descargados (memoria liberada al no
+  // estar activa en el editor — ver _edUnloadPageCanvases), reconstruirlos
+  // primero y reintentar. Mismo patrón que _edStartPageAnims con animaciones
+  // diferidas: cargar → reintentar la misma función, nunca dibujar a medias.
+  const _hasUnloadedCanvases = page.layers.some(l => l && l._canvasUnloaded);
+  if (_hasUnloadedCanvases) {
+    // Capturar la página/canvas EXACTOS que tocaba dibujar en esta llamada —
+    // edViewerIdx/edViewerCanvas son variables globales mutables que pueden
+    // haber avanzado a otra hoja para cuando esta promesa se resuelva (pasa
+    // en el modo scroll, que renderiza todas las hojas de golpe al abrir el
+    // visor). Sin esto, la reconstrucción de la hoja 2 podría acabar
+    // redibujando por error el slide que esté activo en ese momento.
+    const _pIdx = edViewerIdx, _cv = edViewerCanvas, _cx = edViewerCtx;
+    _edLoadPageCanvases(_pIdx).then(() => {
+      if (!$('editorViewer')?.classList.contains('open')) return;
+      if (!edPages[_pIdx]) return; // la página pudo borrarse mientras tanto
+      const _savedIdx = edViewerIdx, _savedCv = edViewerCanvas, _savedCx = edViewerCtx;
+      edViewerIdx = _pIdx; edViewerCanvas = _cv; edViewerCtx = _cx;
+      edUpdateViewer();
+      edViewerIdx = _savedIdx; edViewerCanvas = _savedCv; edViewerCtx = _savedCx;
+    });
+    return;
+  }
   _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY si está disponible
   // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
   const _po = page.orientation || edOrientation;
@@ -32648,6 +32762,21 @@ async function _edRunDiag() {
     L('RAM _animFrames: ~'+Math.round(_totalBytes/1024)+'KB ('+_totalFrames+' frames)');
     L('_edDeserPageIdx actual: '+window._edDeserPageIdx);
   } catch(_me) { L('Error: '+_me.message); }
+
+  // 4c. Diagnóstico de canvas pesados por página (fill/pencil/watercolor/draw/stroke)
+  L('\n── Memoria de canvas por página (fill/pencil/watercolor/draw/stroke) ──');
+  try {
+    let _totalHeavy = 0, _totalUnloaded = 0, _totalThumbCached = 0;
+    edPages.forEach((p, pi) => {
+      const _heavy = (p.layers||[]).filter(l => l && ['fill','pencil','watercolor','draw','stroke'].includes(l.type));
+      const _unl = _heavy.filter(l => l._canvasUnloaded);
+      _totalHeavy += _heavy.length; _totalUnloaded += _unl.length;
+      if (p._cachedThumbCanvas) _totalThumbCached++;
+      const _active = pi === edCurrentPage ? ' ← ACTIVA' : '';
+      L('  P'+pi+_active+': '+_heavy.length+' capas pesadas, '+_unl.length+' descargadas, thumbCache='+(!!p._cachedThumbCanvas));
+    });
+    L('Total: '+_totalHeavy+' capas pesadas, '+_totalUnloaded+' descargadas, '+_totalThumbCached+'/'+edPages.length+' páginas con miniatura cacheada');
+  } catch(_mc) { L('Error: '+_mc.message); }
 
   L('\n── Carga del editor ──');
   L('editId al cargar: ' + (window._edLastLoadId || 'null'));
