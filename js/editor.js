@@ -10004,6 +10004,14 @@ function _edZoomRectDraw() {
 }
 
 function edOnMove(e){
+  // DIAGNÓSTICO TEMPORAL: contar cada pointermove que llega de verdad al
+  // navegador, ANTES de cualquier return — para saber si el problema es que
+  // dejan de llegar eventos, o que algo los descarta dentro de esta función.
+  if (window._edDragPerfGestureId) {
+    window._edRawMoveCount = window._edRawMoveCount || {};
+    const _g = window._edDragPerfGestureId;
+    window._edRawMoveCount[_g] = (window._edRawMoveCount[_g] || 0) + 1;
+  }
   if(window._gcpActive) return;
   if (_edMotionPathMode) {
     if (_edMotionPathDrawing) {
@@ -32584,6 +32592,15 @@ async function _edRunDiag() {
   });
   L('(sincePrevMs alto DENTRO del mismo gesto = cuelgue real durante el arrastre.');
   L(' Alto justo tras ">>> INICIO GESTO" = solo la pausa antes de empezar, no es el bug)');
+  L('');
+  L('── Eventos pointermove CRUDOS recibidos por gesto (antes de cualquier filtro) ──');
+  L('Si aquí solo hay 1 por gesto, el dedo se mueve y el navegador NO manda más');
+  L('eventos para ese gesto (problema de captura de puntero, no de nuestro código).');
+  L('Si aquí hay muchos pero arriba solo se ve 1, algo los descarta dentro de edOnMove.');
+  const _rawCounts = window._edRawMoveCount || {};
+  Object.keys(_rawCounts).sort((a,b)=>a-b).forEach(g => {
+    L('  gesto '+g+': '+_rawCounts[g]+' pointermove recibidos en total');
+  });
 
   // ── DIMMING: estado actual cuando hay un draw seleccionado ──
   L('');
