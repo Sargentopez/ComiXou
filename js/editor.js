@@ -1118,6 +1118,29 @@ const ED_CANVAS_H = ED_PAGE_H * 3;  // 2340
 
 const $ = id => document.getElementById(id);
 
+// ── DIAGNÓSTICO TEMPORAL: rendimiento de arrastre ──────────────────────────
+// Para investigar el bug "el objeto no sigue el dedo en tiempo real, se
+// necesitan varios intentos". Registra, en cada pointermove procesado como
+// parte de un arrastre: el intervalo desde el evento anterior (¿llegan los
+// eventos con normalidad o se retrasan/agrupan?) y cuánto tarda el propio
+// edRedraw() (¿es el renderizado lo lento, o es otra cosa?). No afecta al
+// comportamiento — solo mide y guarda en window._edDragPerfLog. Se lee desde
+// el botón de diagnóstico (🩺, reactivado temporalmente en la topbar).
+window._edDragPerfLog = [];
+window._edDragPerfLast = 0;
+function _edDragPerfMark(label, redrawMs){
+  const now = performance.now();
+  const prev = window._edDragPerfLast || now;
+  window._edDragPerfLog.push({
+    t: Math.round(now),
+    sincePrevMs: +(now - prev).toFixed(1),
+    redrawMs: redrawMs != null ? +redrawMs.toFixed(1) : null,
+    label
+  });
+  window._edDragPerfLast = now;
+  if (window._edDragPerfLog.length > 150) window._edDragPerfLog.shift();
+}
+
 // Franja blanca tras el título del proyecto — refuerza su legibilidad con la
 // nueva tipografía (Arial Bold). Empieza en el borde izquierdo de la página
 // (por eso también queda detrás de edBackBtn) y termina justo tras el texto
@@ -10074,7 +10097,9 @@ function edOnMove(e){
         edMultiBbox.cx = pivX + (ox*cr - oy*sr)/pw;
         edMultiBbox.cy = pivY + (ox*sr + oy*cr)/ph;
       }
-      window._edMoved=true; edRedraw(); return;
+      window._edMoved=true;
+      { const _t0=performance.now(); edRedraw(); _edDragPerfMark('group n='+edMultiSel.length, performance.now()-_t0); }
+      return;
     }
     if(edMultiResizing && edMultiTransform){
       e.preventDefault();
@@ -10648,7 +10673,11 @@ function edOnMove(e){
     edDragOffY = c.ny - 0.5;
   }
   window._edMoved = true;
-  edRedraw();
+  {
+    const _t0 = performance.now();
+    edRedraw();
+    _edDragPerfMark('single la.type='+(la?la.type:'?')+' cacheFast='+(_edDragStatic.valid), performance.now()-_t0);
+  }
   edHideGearIcon();
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
@@ -32396,6 +32425,15 @@ async function _edRunDiag() {
   L('══ DIAGNÓSTICO EDITOR ══');
   L(new Date().toLocaleString());
   L('Proyecto: ' + edProjectId + ' | Versión: ' + (document.querySelector('.app-version')?.textContent||'?'));
+
+  // ── RENDIMIENTO DE ARRASTRE (temporal, investigando "no sigue el dedo") ──
+  L('');
+  L('── RENDIMIENTO DE ARRASTRE (últimas '+(window._edDragPerfLog?.length||0)+' actualizaciones) ──');
+  L('Formato: [ms desde evento anterior] [ms que tardó edRedraw] etiqueta');
+  (window._edDragPerfLog||[]).forEach(e => {
+    L('  +' + String(e.sincePrevMs).padStart(6) + 'ms  redraw=' + String(e.redrawMs).padStart(5) + 'ms  ' + e.label);
+  });
+  L('(sincePrevMs alto = los eventos tardan en llegar; redrawMs alto = el redibujado es lento)');
 
   // ── DIMMING: estado actual cuando hay un draw seleccionado ──
   L('');
