@@ -1133,6 +1133,7 @@ function _edDragPerfMark(label, redrawMs){
   const prev = window._edDragPerfLast || now;
   window._edDragPerfLog.push({
     t: Math.round(now),
+    gesto: window._edDragPerfGestureId || 0,
     sincePrevMs: +(now - prev).toFixed(1),
     redrawMs: redrawMs != null ? +redrawMs.toFixed(1) : null,
     label
@@ -9821,6 +9822,8 @@ function edOnStart(e){
           edDragOffX = c.nx - edLayers[found].x;
           edDragOffY = c.ny - edLayers[found].y;
           edIsDragging = true; window._edMoved = false;
+          window._edDragPerfLast = performance.now();
+          window._edDragPerfGestureId = (window._edDragPerfGestureId || 0) + 1;
           if (_psFla?.type==='line'||_psFla?.type==='shape'){
             const _psPm=$('edOptionsPanel')?.dataset.mode;
             if(_psPm==='line'||_psPm==='shape'||$('edShapeBar')?.classList.contains('visible'))
@@ -9859,6 +9862,12 @@ function edOnStart(e){
     } else {
       edIsDragging = true;
       window._edPenDragPending = null;
+      // Marcar inicio de gesto NUEVO: resetea la referencia de tiempo y sube
+      // el número de gesto, para poder ver en el diagnóstico si un salto
+      // grande ocurre DENTRO de este arrastre (mismo nº de gesto) o es
+      // simplemente la pausa antes de empezarlo (nº de gesto distinto).
+      window._edDragPerfLast = performance.now();
+      window._edDragPerfGestureId = (window._edDragPerfGestureId || 0) + 1;
     }
     window._edMoved = false;
 
@@ -10412,6 +10421,8 @@ function edOnMove(e){
       edDragOffX = (_psC?.nx ?? c.nx) - _psFlaM.x;
       edDragOffY = (_psC?.ny ?? c.ny) - _psFlaM.y;
       edIsDragging = true; window._edMoved = false;
+      window._edDragPerfLast = performance.now();
+      window._edDragPerfGestureId = (window._edDragPerfGestureId || 0) + 1;
       edHideGearIcon();
       // NO abrir el panel de propiedades aquí — un toque seguido de arrastre
       // inmediato es un simple "seleccionar y mover", no un doble tap. Abrir
@@ -32564,11 +32575,15 @@ async function _edRunDiag() {
   // ── RENDIMIENTO DE ARRASTRE (temporal, investigando "no sigue el dedo") ──
   L('');
   L('── RENDIMIENTO DE ARRASTRE (últimas '+(window._edDragPerfLog?.length||0)+' actualizaciones) ──');
-  L('Formato: [ms desde evento anterior] [ms que tardó edRedraw] etiqueta');
+  L('Formato: [gesto nº] [ms desde evento anterior] [ms que tardó edRedraw] etiqueta');
+  L('">>> INICIO GESTO" = primer evento de un arrastre nuevo (dedo recién apoyado)');
+  let _prevGesto = null;
   (window._edDragPerfLog||[]).forEach(e => {
-    L('  +' + String(e.sincePrevMs).padStart(6) + 'ms  redraw=' + String(e.redrawMs).padStart(5) + 'ms  ' + e.label);
+    if (e.gesto !== _prevGesto) { L('  >>> INICIO GESTO ' + e.gesto + ' >>>'); _prevGesto = e.gesto; }
+    L('  g'+e.gesto+'  +' + String(e.sincePrevMs).padStart(6) + 'ms  redraw=' + String(e.redrawMs).padStart(5) + 'ms  ' + e.label);
   });
-  L('(sincePrevMs alto = los eventos tardan en llegar; redrawMs alto = el redibujado es lento)');
+  L('(sincePrevMs alto DENTRO del mismo gesto = cuelgue real durante el arrastre.');
+  L(' Alto justo tras ">>> INICIO GESTO" = solo la pausa antes de empezar, no es el bug)');
 
   // ── DIMMING: estado actual cuando hay un draw seleccionado ──
   L('');
