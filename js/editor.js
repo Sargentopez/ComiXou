@@ -1,4 +1,4 @@
-/* Comxow/COMXOW,  creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -8583,6 +8583,7 @@ function edOnStart(e){
     window._edPendingSelFound = null; window._edPendingSelC = null;
     // Cancelar deselección diferida — el pinch mantiene la selección actual
     if(window._edDeselTouchTimer){ clearTimeout(window._edDeselTouchTimer); window._edDeselTouchTimer = null; }
+    window._edPendingDeselC = null;
     // Cancelar timer de recorrido — el segundo dedo es pinch/cámara, no dibujo
     if(window._edMpTouchTimer){ clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     // Si rubber band ya había empezado (caso borde), cancelarla
@@ -8791,11 +8792,14 @@ function edOnStart(e){
         edActiveTool = 'select'; edCanvas.className = '';
         clearTimeout(window._edRbTouchTimer);
         const _rbC2 = c;
+        window._edPendingRbC = { nx: c.nx, ny: c.ny };
         window._edRbTouchTimer = setTimeout(() => {
           window._edRbTouchTimer = null;
+          window._edPendingRbC = null;
           const _rbSz = window._edActivePointers ? window._edActivePointers.size : 0;
           if(_rbSz !== 1) return; // cancelar si no hay exactamente 1 dedo activo
           if(!window._gcpActive) edRubberBand={x0:_rbC2.nx,y0:_rbC2.ny,x1:_rbC2.nx,y1:_rbC2.ny};
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
           edRedraw();
         }, 120);
       } else {
@@ -8811,6 +8815,7 @@ function edOnStart(e){
         } else {
           // Vacío real → iniciar rubber band
           if(!window._gcpActive) edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
         }
       }
       edRedraw();
@@ -9635,6 +9640,7 @@ function edOnStart(e){
     const _fla = edLayers[found];
     // Cancelar deselección diferida — el usuario está tocando un objeto
     if(window._edDeselTouchTimer){ clearTimeout(window._edDeselTouchTimer); window._edDeselTouchTimer = null; }
+    window._edPendingDeselC = null;
     // Con barra flotante de dibujo activa: ignorar selección — el toque debe ir al dibujo
     if($('edDrawBar')?.classList.contains('visible') && ['draw','eraser','fill'].includes(edActiveTool)){
       // Redirigir al sistema de dibujo táctil (igual que si hubiera caído en zona vacía)
@@ -9960,16 +9966,20 @@ function edOnStart(e){
     // para dar tiempo al segundo dedo a hacer pinch-resize sobre el objeto actual
     if (_isTouch && edSelectedIdx >= 0) {
       clearTimeout(window._edDeselTouchTimer);
-      const _dsNx = c.nx, _dsNy = c.ny;
+      window._edPendingDeselC = { nx: c.nx, ny: c.ny };
       window._edDeselTouchTimer = setTimeout(() => {
         window._edDeselTouchTimer = null;
-        if (window._edActivePointers && window._edActivePointers.size > 1) return; // pinch en curso
+        const _dsC = window._edPendingDeselC; window._edPendingDeselC = null;
+        // Mismo guard que los timers hermanos (_edSelTouchTimer/_edRbTouchTimer):
+        // "!==1" y no ">1" — si el dedo ya se levantó (size===0) esto también debe abortar
+        // el arranque de rubber band (el levantamiento ya se resolvió aparte en edOnEnd).
+        if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
         edSelectedIdx = -1;
         edRenderOptionsPanel();
-        // Si el dedo sigue activo (hold, no levantado) → iniciar rubber band
-        if (edActiveTool === 'select' && window._edActivePointers?.size === 1 && !window._gcpActive) {
-          edRubberBand = { x0: _dsNx, y0: _dsNy, x1: _dsNx, y1: _dsNy };
+        if (edActiveTool === 'select' && !window._gcpActive && _dsC) {
+          edRubberBand = { x0: _dsC.nx, y0: _dsC.ny, x1: _dsC.nx, y1: _dsC.ny };
           window._edRubberBandEndPos = null;
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
         }
         edRedraw();
       }, 120);
@@ -9983,15 +9993,20 @@ function edOnStart(e){
   // Condición: dentro del editor, sin objeto seleccionado, herramienta select
   if(tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
     if(e.pointerType === 'touch'){
-      // Táctil: esperar 120ms por si llega segundo dedo (pinch/zoom)
+      // Táctil: esperar 120ms por si llega segundo dedo (pinch/zoom).
+      // Guardar como "pendiente" para poder confirmarlo antes por movimiento
+      // (ver edOnMove) — mismo patrón ya usado para seleccionar un objeto.
       const _rbE = e;
       clearTimeout(window._edRbTouchTimer);
+      window._edPendingRbC = { nx: edCoords(e).nx, ny: edCoords(e).ny };
       window._edRbTouchTimer = setTimeout(() => {
         window._edRbTouchTimer = null;
+        window._edPendingRbC = null;
         const _rbSz2 = window._edActivePointers ? window._edActivePointers.size : 0;
         if(_rbSz2 !== 1) return; // cancelar si no hay exactamente 1 dedo activo
         const _rc = edCoords(_rbE);
         if(!window._gcpActive) edRubberBand = {x0:_rc.nx, y0:_rc.ny, x1:_rc.nx, y1:_rc.ny};
+        if(_rbE.pointerId !== undefined){ try{ edCanvas.setPointerCapture(_rbE.pointerId); }catch(_){} }
         window._edRubberBandEndPos = null;
         edRedraw();
       }, 120);
@@ -9999,6 +10014,7 @@ function edOnStart(e){
       // PC: inmediato
       const c = edCoords(e);
       if(!window._gcpActive) edRubberBand = {x0:c.nx, y0:c.ny, x1:c.nx, y1:c.ny};
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       window._edRubberBandEndPos = null;
     }
   }
@@ -10458,6 +10474,46 @@ function edOnMove(e){
       // Continuar el flujo normal de edOnMove para procesar el drag en este mismo frame
     }
   }
+  // EXCEPCIÓN: si hay deselección diferida (había un objeto seleccionado y se
+  // tocó en vacío) y el dedo se mueve, confirmarla ya y arrancar el rubber
+  // band desde el punto de toque original — mismo patrón que arriba. Sin
+  // esto, deseleccionar y arrastrar en el mismo gesto (muy habitual: "suelto
+  // este objeto y arrastro para seleccionar varios") se queda "congelado"
+  // los 120ms completos y luego el rubber band aparece ya lejos del punto
+  // de toque real — el salto que reporta Alberto en este escenario.
+  if (window._edPendingDeselC !== null && window._edDeselTouchTimer &&
+      e.pointerType === 'touch' && window._edActivePointers?.size === 1) {
+    clearTimeout(window._edDeselTouchTimer);
+    window._edDeselTouchTimer = null;
+    const _dsPc = window._edPendingDeselC;
+    window._edPendingDeselC = null;
+    edSelectedIdx = -1;
+    edRenderOptionsPanel();
+    if (edActiveTool === 'select' && !window._gcpActive) {
+      edRubberBand = { x0: _dsPc.nx, y0: _dsPc.ny, x1: _dsPc.nx, y1: _dsPc.ny };
+      window._edRubberBandEndPos = null;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+    }
+    // Continuar el flujo normal de edOnMove para procesar el rubber band en este mismo frame
+  }
+  // EXCEPCIÓN: si hay selección múltiple (rubber band) diferida y el dedo se
+  // mueve, confirmarla ya — mismo patrón que la selección de objeto de arriba.
+  // Sin esto, arrastrar para seleccionar varios objetos desde vacío se queda
+  // "congelado" hasta que pasan los 120ms completos, aunque el dedo ya se
+  // esté moviendo desde el primer instante.
+  if (window._edPendingRbC !== null && window._edRbTouchTimer &&
+      e.pointerType === 'touch' && window._edActivePointers?.size === 1) {
+    clearTimeout(window._edRbTouchTimer);
+    window._edRbTouchTimer = null;
+    const _rbPc = window._edPendingRbC;
+    window._edPendingRbC = null;
+    if (!window._gcpActive) {
+      edRubberBand = { x0: _rbPc.nx, y0: _rbPc.ny, x1: _rbPc.nx, y1: _rbPc.ny };
+      window._edRubberBandEndPos = null;
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+    }
+    // Continuar el flujo normal de edOnMove para procesar el rubber band en este mismo frame
+  }
   const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart;
   if(!gestureActive) return;
   e.preventDefault();
@@ -10915,10 +10971,20 @@ function edOnEnd(e){
     }
     return;
   }
+  // Rubber band diferido: si el dedo se levantó antes de que disparara el
+  // timer, era un simple tap en vacío — cancelarlo sin más (no crear una
+  // selección múltiple de tamaño cero). Evita dejar el estado "pendiente"
+  // colgando para el siguiente gesto.
+  if (window._edRbTouchTimer) {
+    clearTimeout(window._edRbTouchTimer);
+    window._edRbTouchTimer = null;
+    window._edPendingRbC = null;
+  }
   // Deselección táctil diferida: si el dedo se levantó antes del timer → era un tap → deseleccionar ya
   if (window._edDeselTouchTimer) {
     clearTimeout(window._edDeselTouchTimer);
     window._edDeselTouchTimer = null;
+    window._edPendingDeselC = null;
     edSelectedIdx = -1;
     edRenderOptionsPanel();
     edRedraw();
