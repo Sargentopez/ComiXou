@@ -857,17 +857,35 @@ window.ApngDecoder = (function(){
     return line.slice(0, 60) || '?';
   }
   const _origRAF = window.requestAnimationFrame.bind(window);
+  const _origCAF = window.cancelAnimationFrame.bind(window);
+  window._edRafSiteById = new Map(); // id → site, para poder decrementar bien al cancelar
+  function _edRafRelease(id, site){
+    window._edRafActive--;
+    const cur = window._edRafBySite.get(site) || 0;
+    if (cur <= 1) window._edRafBySite.delete(site); else window._edRafBySite.set(site, cur - 1);
+    window._edRafSiteById.delete(id);
+  }
   window.requestAnimationFrame = function _edRafWrapper(cb){
     window._edRafActive++;
     if (window._edRafActive > window._edRafMax) window._edRafMax = window._edRafActive;
     const site = _edRafCallerSite();
     window._edRafBySite.set(site, (window._edRafBySite.get(site) || 0) + 1);
-    return _origRAF(function(ts){
-      window._edRafActive--;
-      const cur = window._edRafBySite.get(site) || 0;
-      if (cur <= 1) window._edRafBySite.delete(site); else window._edRafBySite.set(site, cur - 1);
+    const id = _origRAF(function(ts){
+      _edRafRelease(id, site);
       cb(ts);
     });
+    window._edRafSiteById.set(id, site);
+    return id;
+  };
+  // CRÍTICO: el patrón habitual "cancelAnimationFrame(anterior); requestAnimationFrame(nuevo)"
+  // (usado p.ej. por los observers de la franja de título) cancela el pendiente sin que su
+  // callback llegue a ejecutarse — si no interceptamos cancelAnimationFrame, mi propio
+  // contador nunca se entera de esa cancelación y sube en cada ciclo aunque el comportamiento
+  // real de la app sea correcto (como mucho 1 pendiente de verdad). Verificado aparte con un
+  // test aislado antes de confiar en los números.
+  window.cancelAnimationFrame = function _edCafWrapper(id){
+    if (window._edRafSiteById.has(id)) _edRafRelease(id, window._edRafSiteById.get(id));
+    return _origCAF(id);
   };
 
   // Intervalos activos, con su delay — si hay más de los ~4 esperados
