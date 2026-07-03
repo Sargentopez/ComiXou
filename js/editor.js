@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero 2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -20247,7 +20247,7 @@ async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
   // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
-  const _preSz = await _edCalcProjectBytes();
+  const _preSz = await _edCalcProjectBytes(true);
   if (_preSz >= _ED_MAX_BYTES) {
     edToast('⚠️ La obra supera los 60 MB. Elimina contenido antes de guardar en la nube.', 5000);
     return;
@@ -20397,7 +20397,20 @@ async function edCloudSave() {
 const _ED_MAX_BYTES = 60 * 1024 * 1024; // 60 MB
 let _edSizeMonitorTimer = null;
 
-async function _edCalcProjectBytes() {
+window._edSizeCacheBytes = null;
+window._edSizeCacheAt = 0;
+const _ED_SIZE_CACHE_MS = 3000; // ventana de reutilización para las comprobaciones automáticas
+async function _edCalcProjectBytes(forceRecalc) {
+  // Memoización por tiempo: el tamaño del proyecto no cambia de golpe entre un
+  // arrastre y el siguiente frame, así que para las comprobaciones automáticas
+  // (temporizador de 15s + debounce de 800ms tras cada edición) no compensa
+  // volver a codificar a PNG las mismas capas pesadas si ya se hizo hace poco.
+  // Los sitios que SÍ necesitan un número fresco (guardar en la nube, abrir el
+  // menú Proyecto) piden forceRecalc=true explícitamente.
+  if (!forceRecalc && window._edSizeCacheBytes !== null &&
+      (performance.now() - window._edSizeCacheAt) < _ED_SIZE_CACHE_MS) {
+    return window._edSizeCacheBytes;
+  }
   // Calcula desde el estado VIVO en memoria (edPages), no desde el guardado en disco.
   // Así el autor ve el tamaño real aunque no haya guardado todavía.
   try {
@@ -20446,6 +20459,8 @@ async function _edCalcProjectBytes() {
       const _bib = _bibLoad();
       if (_bib) total += _bibUsedBytes(_bib);
     } catch(_) {}
+    window._edSizeCacheBytes = total;
+    window._edSizeCacheAt = performance.now();
     return total;
   } catch(_) { return 0; }
 }
