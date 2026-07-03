@@ -824,6 +824,72 @@ window.ApngDecoder = (function(){
    ============================================================ */
 
 /* ── ESTADO ── */
+
+// ── MONITOR DE RENDIMIENTO EN SEGUNDO PLANO (diagnóstico) ──────────────────
+// Instalado lo antes posible para cubrir TODO uso posterior de RAF/setInterval.
+// Objetivo: detectar acumulación (bucles que no se cancelan) y frames largos
+// (jank) de forma continua, no solo durante un arrastre — para que también
+// se vea si algo se degrada mientras solo se hace scroll de la UI, etc.
+// No cambia ningún comportamiento: solo cuenta y registra.
+(function _edInstallPerfMonitor(){
+  window._edPerfMonStart = performance.now();
+  window._edStrokeCount = 0; // trazos de dibujo/borrador iniciados esta sesión
+
+  // RAF en vuelo: cuántas llamadas están programadas y aún no se han ejecutado.
+  // Un bucle auto-perpetuo sano ronda 1-2; si esto crece sin volver a bajar,
+  // hay callbacks que se están re-programando sin que las anteriores terminen.
+  window._edRafActive = 0;
+  window._edRafMax = 0;
+  const _origRAF = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function(cb){
+    window._edRafActive++;
+    if (window._edRafActive > window._edRafMax) window._edRafMax = window._edRafActive;
+    return _origRAF(function(ts){
+      window._edRafActive--;
+      cb(ts);
+    });
+  };
+
+  // Intervalos activos, con su delay — si hay más de los ~4 esperados
+  // (autosave 30s, size-monitor 15s, save-overlay, algún diálogo puntual),
+  // o delays duplicados, es que algo los está creando más de una vez sin
+  // limpiar el anterior.
+  window._edIntervalRegistry = new Map(); // id → delay
+  const _origSI = window.setInterval.bind(window);
+  const _origCI = window.clearInterval.bind(window);
+  window.setInterval = function(fn, delay, ...args){
+    const id = _origSI(fn, delay, ...args);
+    window._edIntervalRegistry.set(id, delay);
+    return id;
+  };
+  window.clearInterval = function(id){
+    window._edIntervalRegistry.delete(id);
+    return _origCI(id);
+  };
+
+  // Jank log SIEMPRE activo (no solo durante drag): cualquier frame de más
+  // de 40ms se registra con timestamp + los contadores de arriba en ese
+  // instante, para poder correlacionar "cuándo" con "qué había activo".
+  window._edJankLog = [];
+  let _edJankLastT = performance.now();
+  function _edJankTick(ts){
+    const dt = ts - _edJankLastT;
+    _edJankLastT = ts;
+    if (dt > 40) {
+      window._edJankLog.push({
+        tRel: Math.round(ts - window._edPerfMonStart),
+        dt: Math.round(dt),
+        raf: window._edRafActive,
+        itv: window._edIntervalRegistry.size,
+        strokes: window._edStrokeCount
+      });
+      if (window._edJankLog.length > 200) window._edJankLog.shift();
+    }
+    requestAnimationFrame(_edJankTick);
+  }
+  requestAnimationFrame(_edJankTick);
+})();
+
 let edCanvas, edCtx, edViewerCanvas, edViewerCtx;
 let edPages = [], edCurrentPage = 0, edLayers = [];
 // ── Sistema de Reglas (T29) ──
@@ -1147,6 +1213,7 @@ function _edDragPerfMark(label, redrawMs){
 // (por eso también queda detrás de edBackBtn) y termina justo tras el texto
 // del título, con el extremo derecho en semicírculo.
 function _edUpdateTitlePill(){
+  window._edTitlePillCalls = (window._edTitlePillCalls || 0) + 1;
   const bar   = document.getElementById('edTopbar');
   const pill  = document.getElementById('edTitlePill');
   const title = document.getElementById('edProjectTitle');
@@ -1166,6 +1233,7 @@ window.addEventListener('resize', () => {
 
 // Misma franja blanca, para la topbar del editor de animaciones (GCP).
 function _gcpUpdateTitlePill(){
+  window._edGcpTitlePillCalls = (window._edGcpTitlePillCalls || 0) + 1;
   const bar   = document.getElementById('gcpTopbar');
   const pill  = document.getElementById('gcpTitlePill');
   const title = document.getElementById('gcpProjectTitle');
@@ -1214,6 +1282,7 @@ function _edFitWindowTitlePill(header){
   pill.style.width  = Math.max(0, titleRect.right - headerRect.left + 4) + 'px';
 }
 function _edFitAllWindowTitlePills(){
+  window._edWinTitlePillCalls = (window._edWinTitlePillCalls || 0) + 1;
   document.querySelectorAll(_edWinTitleHeaderSel).forEach(_edFitWindowTitlePill);
 }
 // Se llama una vez desde EditorView_init(), cuando el DOM del editor ya
@@ -13629,6 +13698,7 @@ function edStartPaint(e){
   // Cuentagotas activo: no iniciar dibujo
   if(window._edEyedropActive){ edPainting = false; return; }
   edPainting = true;
+  window._edStrokeCount = (window._edStrokeCount || 0) + 1;
   _edPaintStatic.valid = false; // nuevo trazo: invalidar cache del trazo anterior
   // Herramienta borrar color
   if (edActiveTool === 'color-erase') {
@@ -32683,7 +32753,44 @@ async function _edRunDiag() {
 
   L('══ DIAGNÓSTICO EDITOR ══');
   L(new Date().toLocaleString());
-  L('Proyecto: ' + edProjectId + ' | Versión: ' + (document.querySelector('.app-version')?.textContent||'?'));
+  let _edDiagVersion = document.querySelector('.app-version')?.textContent || '?';
+  if (_edDiagVersion === '?') {
+    // El footer .app-version pertenece a otra vista (biblioteca) y no está en
+    // el DOM al ejecutar el diagnóstico desde dentro del editor. Fuente
+    // alternativa: el nombre de la caché del Service Worker, que ya es
+    // obligatorio actualizar en cada entrega (comixow-v32-24 → v32.24).
+    try {
+      const _cacheNames = await caches.keys();
+      const _vCache = _cacheNames.find(n => /^comixow-v\d+-\d+$/.test(n));
+      if (_vCache) _edDiagVersion = _vCache.replace('comixow-v', 'v').replace(/-(\d+)$/, '.$1') + ' (por SW cache)';
+    } catch(_) {}
+  }
+  L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
+
+  // ── MONITOR DE RENDIMIENTO EN SEGUNDO PLANO (RAF/intervalos/jank) ──
+  L('');
+  L('── MONITOR EN SEGUNDO PLANO (desde carga de página, ' +
+    Math.round((performance.now() - (window._edPerfMonStart||0))/1000) + 's) ──');
+  L('RAF activos ahora mismo: ' + (window._edRafActive ?? '?') +
+    ' (incluye el propio monitor, so normal=1-2) | pico máximo visto: ' + (window._edRafMax ?? '?'));
+  const _itvEntries = window._edIntervalRegistry ? [...window._edIntervalRegistry.entries()] : [];
+  L('Intervalos activos ahora mismo: ' + _itvEntries.length +
+    ' (esperado ~2-4: autosave 30000ms, size-monitor 15000ms, y puntuales)');
+  if (_itvEntries.length) L('  delays: ' + _itvEntries.map(([id,d]) => d+'ms').join(', '));
+  L('Trazos de dibujo/borrador iniciados esta sesión: ' + (window._edStrokeCount||0));
+  L('Llamadas a _edUpdateTitlePill (topbar principal): ' + (window._edTitlePillCalls||0));
+  L('Llamadas a _gcpUpdateTitlePill (topbar GCP): ' + (window._edGcpTitlePillCalls||0));
+  L('Llamadas a _edFitAllWindowTitlePills (observer modales): ' + (window._edWinTitlePillCalls||0));
+  L('');
+  L('── JANK LOG (frames >40ms, fuera y dentro de gestos — últimos ' + (window._edJankLog?.length||0) + ') ──');
+  L('tRel=ms desde carga de página | dt=duración del frame | raf/itv/strokes=contadores en ese instante');
+  (window._edJankLog||[]).forEach(j => {
+    L('  t+' + String(j.tRel).padStart(7) + 'ms  dt=' + String(j.dt).padStart(5) + 'ms' +
+      '  raf=' + j.raf + '  itv=' + j.itv + '  strokes=' + j.strokes);
+  });
+  L('(Si dt crece con el nº de trazos, o raf/itv no bajan nunca entre frames largos,');
+  L(' hay algo que se acumula. Si aparecen aquí incluso sin tocar el lienzo — p.ej.');
+  L(' haciendo scroll del menú — confirma que es un proceso de fondo, no el gesto en sí.)')
 
   // ── RENDIMIENTO DE ARRASTRE (temporal, investigando "no sigue el dedo") ──
   L('');
