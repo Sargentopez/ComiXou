@@ -20247,7 +20247,7 @@ async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
   // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
-  const _preSz = _edCalcProjectBytes();
+  const _preSz = await _edCalcProjectBytes();
   if (_preSz >= _ED_MAX_BYTES) {
     edToast('⚠️ La obra supera los 60 MB. Elimina contenido antes de guardar en la nube.', 5000);
     return;
@@ -20397,7 +20397,7 @@ async function edCloudSave() {
 const _ED_MAX_BYTES = 60 * 1024 * 1024; // 60 MB
 let _edSizeMonitorTimer = null;
 
-function _edCalcProjectBytes() {
+async function _edCalcProjectBytes() {
   // Calcula desde el estado VIVO en memoria (edPages), no desde el guardado en disco.
   // Así el autor ve el tamaño real aunque no haya guardado todavía.
   try {
@@ -20407,11 +20407,20 @@ function _edCalcProjectBytes() {
       const data = ComicStore.getById(edProjectId);
       return data ? new Blob([JSON.stringify(data)]).size : 0;
     }
-    // Serializar cada capa de cada página igual que edSaveProject
+    // Serializar cada capa de cada página igual que edSaveProject.
+    // CAUSA RAÍZ (confirmada por diagnóstico, mismo patrón que el autoguardado):
+    // edSerLayer() hace toDataURL()/toDataUrlFull() síncrono para fill/pencil/
+    // watercolor/draw/stroke. Esta función se llama cada 15s (_edSizeMonitorTimer)
+    // y 800ms después de CADA edPushHistory — con 20 capas pesadas, sin ceder el
+    // hilo nunca, eso son varios segundos de bloqueo real, aunque el guard de
+    // "_edIsGestureActive()" de _edSizeCheck esté bien puesto: solo protege el
+    // instante de arrancar, no lo que pasa si un gesto empieza a mitad de cálculo.
     let total = 0;
-    edPages.forEach(p => {
-      if (!p || !p.layers) return;
-      p.layers.forEach(l => {
+    for (const p of edPages) {
+      if (!p || !p.layers) continue;
+      for (const l of p.layers) {
+        await new Promise(r => setTimeout(r, 0));
+        if (_edIsGestureActive()) return null; // abortado: reintentará la próxima vez que se dispare
         try {
           if (l.type === 'gif' && l.gifKey) {
             // El binario GIF vive en IDB (cxGifs); usar tamaño cacheado en localStorage
@@ -20428,10 +20437,10 @@ function _edCalcProjectBytes() {
             total += _lb;
           }
         } catch(_) {}
-      });
+      }
       // Thumbnail de la página
       if (p.dataUrl) total += Math.round(p.dataUrl.length * 0.75);
-    });
+    }
     // Sumar contenido de la biblioteca
     try {
       const _bib = _bibLoad();
@@ -20447,12 +20456,13 @@ function _edIsGestureActive() {
   return !!(edPainting || edIsDragging || edIsResizing || edIsRotating ||
             edIsTailDragging || edPinching || edMultiDragging || edMultiResizing || edMultiRotating);
 }
-function _edSizeCheck() {
+async function _edSizeCheck() {
   // No serializar durante un gesto activo: bloquearía el hilo JS
   if (_edIsGestureActive()) return;
   const banner = document.getElementById('edSizeBanner');
   if (!banner) return;
-  const bytes = _edCalcProjectBytes();
+  const bytes = await _edCalcProjectBytes();
+  if (bytes === null) return; // abortado a mitad por un gesto nuevo — se reintentará solo
   banner.style.display = bytes >= _ED_MAX_BYTES ? 'block' : 'none';
 }
 
@@ -24902,12 +24912,13 @@ function EditorView_init(){
 
   // Actualizar indicador de tamaño al abrir el menú Proyecto
   document.querySelector('[data-menu="project"]')?.addEventListener('pointerup', () => {
-    requestAnimationFrame(() => {
+    requestAnimationFrame(async () => {
       const pct  = document.getElementById('dd-project-size-pct');
       const bar  = document.getElementById('dd-project-size-bar');
       const used = document.getElementById('dd-project-size-used');
       if (!pct || !bar || !used) return;
-      const bytes   = _edCalcProjectBytes();
+      const bytes   = await _edCalcProjectBytes();
+      if (bytes === null) return; // abortado por gesto activo (raro aquí, el usuario acaba de tocar un menú)
       const MAX     = 60 * 1024 * 1024;
       const pctVal  = Math.min(100, Math.round(bytes / MAX * 100));
       const mbUsed  = (bytes / 1024 / 1024).toFixed(1);
