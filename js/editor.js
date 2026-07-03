@@ -1,4 +1,4 @@
-/* Comxow/COMXOW,  creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -840,12 +840,32 @@ window.ApngDecoder = (function(){
   // hay callbacks que se están re-programando sin que las anteriores terminen.
   window._edRafActive = 0;
   window._edRafMax = 0;
+  // Por sitio de llamada (función:línea del stack): cuántas siguen activas
+  // ahora mismo. Si un sitio concreto no baja nunca de N crecientes, es el
+  // que se re-programa sin esperar a que la anterior termine.
+  window._edRafBySite = new Map(); // "site" → activas ahora mismo
+  function _edRafCallerSite(){
+    // stack[0]="Error", [1]=_edRafCallerSite, [2]=_edRafWrapper, [3]=quien llamó a RAF de verdad
+    const s = new Error().stack;
+    if (!s) return '?';
+    const lines = s.split('\n');
+    const line = (lines[3] || lines[2] || lines[1] || '').trim();
+    let m = line.match(/at\s+([^\s(]+)\s*\(([^)]*):(\d+):\d+\)/); // "at nombre (url:LINEA:COL)"
+    if (m) return m[1] + ':' + m[3];
+    m = line.match(/at\s+([^\s(]+):(\d+):\d+/); // función anónima: "at url:LINEA:COL"
+    if (m) return '(anon):' + m[2];
+    return line.slice(0, 60) || '?';
+  }
   const _origRAF = window.requestAnimationFrame.bind(window);
-  window.requestAnimationFrame = function(cb){
+  window.requestAnimationFrame = function _edRafWrapper(cb){
     window._edRafActive++;
     if (window._edRafActive > window._edRafMax) window._edRafMax = window._edRafActive;
+    const site = _edRafCallerSite();
+    window._edRafBySite.set(site, (window._edRafBySite.get(site) || 0) + 1);
     return _origRAF(function(ts){
       window._edRafActive--;
+      const cur = window._edRafBySite.get(site) || 0;
+      if (cur <= 1) window._edRafBySite.delete(site); else window._edRafBySite.set(site, cur - 1);
       cb(ts);
     });
   };
@@ -32773,6 +32793,11 @@ async function _edRunDiag() {
     Math.round((performance.now() - (window._edPerfMonStart||0))/1000) + 's) ──');
   L('RAF activos ahora mismo: ' + (window._edRafActive ?? '?') +
     ' (incluye el propio monitor, so normal=1-2) | pico máximo visto: ' + (window._edRafMax ?? '?'));
+  const _rafSites = window._edRafBySite ? [...window._edRafBySite.entries()].sort((a,b)=>b[1]-a[1]) : [];
+  if (_rafSites.length) {
+    L('RAF activos por sitio de llamada (función:línea), el que no baja es el culpable:');
+    _rafSites.slice(0, 15).forEach(([site, n]) => L('  ' + String(n).padStart(3) + '×  ' + site));
+  }
   const _itvEntries = window._edIntervalRegistry ? [...window._edIntervalRegistry.entries()] : [];
   L('Intervalos activos ahora mismo: ' + _itvEntries.length +
     ' (esperado ~2-4: autosave 30000ms, size-monitor 15000ms, y puntuales)');
