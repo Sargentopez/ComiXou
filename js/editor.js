@@ -11212,8 +11212,11 @@ function edOnEnd(e){
     const ry1=Math.max(edRubberBand.y0,edRubberBand.y1);
     edRubberBand=null;
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
-      const _found=[];
+      let _found=[];
       edLayers.forEach((la,i)=>{ if(!la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
+      // Los grupos se seleccionan siempre completos, aunque el rubber band
+      // solo llegara a encerrar a alguno de sus miembros.
+      _found = _edExpandGroupSelection(_found);
       if(_found.length===1){
         // Un solo objeto → selección normal (sin abrir panel; doble tap lo abre)
         edSelectedIdx=_found[0];
@@ -11249,6 +11252,8 @@ function edOnEnd(e){
           // Las sub-capas fill/pencil/watercolor no son seleccionables independientemente
           if(!la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
         });
+        // Los grupos se seleccionan siempre completos.
+        edMultiSel = _edExpandGroupSelection(edMultiSel);
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
       if(edMultiSel.length >= 2){
@@ -16530,6 +16535,11 @@ function edRenderOptionsPanel(mode){
     }
     panel.dataset.mode = 'text-props';
     const la=edLayers[edSelectedIdx];
+    // Objeto agrupado: igual que mode==='props', nunca mostrar controles de
+    // edición individual (texto, opacidad, convertir en imagen...) — solo
+    // operaciones sobre el grupo completo. Reutiliza el panel de grupo que
+    // ya construye 'props', que no depende del tipo del miembro concreto.
+    if(la.groupId){ edRenderOptionsPanel('props'); return; }
     _edFocusDone = false;
     const isBubble = la.type==='bubble';
     const editLabel = isBubble ? '💬 Editar bocadillo' : '✏️ Editar texto';
@@ -20826,6 +20836,27 @@ function _edGroupMemberIdxs(groupId){
     if(edLayers[i] && edLayers[i].groupId === groupId) idxs.push(i);
   }
   return idxs;
+}
+
+// Dada una lista de índices (p.ej. lo que cae dentro de un rubber band),
+// devuelve una lista equivalente donde cualquier índice perteneciente a un
+// grupo se expande a TODOS los miembros de ese grupo — los grupos siempre
+// se seleccionan como una unidad, nunca solo alguno de sus componentes.
+function _edExpandGroupSelection(idxs){
+  const result = new Set();
+  const seenGroups = new Set();
+  idxs.forEach(i => {
+    const la = edLayers[i];
+    if(la && la.groupId){
+      if(!seenGroups.has(la.groupId)){
+        seenGroups.add(la.groupId);
+        _edGroupMemberIdxs(la.groupId).forEach(gi => result.add(gi));
+      }
+    } else {
+      result.add(i);
+    }
+  });
+  return [...result].sort((a,b) => a-b);
 }
 
 /* ── Agrupar los layers de edMultiSel ── */
