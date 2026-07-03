@@ -21828,6 +21828,22 @@ async function _edAutosaveWrite() {
       const p = edPages[_asi];
       const layers = [];
       for (let _ali = 0; _ali < (p.layers || []).length; _ali++) {
+        // CAUSA RAÍZ confirmada por diagnóstico de rendimiento de arrastre (~3s de
+        // bloqueo real dentro del mismo gesto, con solo 16 capas pesadas en una
+        // página): edSerLayer() hace toDataURL()/toDataUrlFull() SÍNCRONO para
+        // fill/pencil/watercolor/draw/stroke. El guard de _edIsGestureActive() de
+        // arriba solo protege el INICIO del autoguardado — si el usuario empieza a
+        // arrastrar mientras el bucle YA está en marcha (arrancó en un momento sin
+        // gesto), nada lo interrumpe hasta que termina de serializar todas las
+        // páginas. Un yield real (macrotask) en cada capa deja que el navegador
+        // entregue los pointermove pendientes, y la re-comprobación aborta el
+        // intento en marcha (mejor reintentar en 1500ms que bloquear el drag).
+        await new Promise(r => setTimeout(r, 0));
+        if (_edIsGestureActive()) {
+          clearTimeout(window._edAutosavePushTimer);
+          window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
+          return;
+        }
         const l = p.layers[_ali];
         try {
           let s = edSerLayer(l);
