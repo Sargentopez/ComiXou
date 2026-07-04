@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v32.38</footer>
+    <footer class="app-version">v32.46</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -383,7 +383,9 @@ Router.register('editor', {
               </div>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="_sel-group">⊞ Agrupar</button>
+              <button class="ed-dropdown-item" id="_sel-ungroup">⊟ Desagrupar</button>
               <button class="ed-dropdown-item" id="_sel-merge">⊕ Unir</button>
+              <button class="ed-dropdown-item" id="_sel-bib-save">📥 Guardar en biblioteca</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="_sel-delete" style="color:#c00">✕ Eliminar selección</button>
             </div>

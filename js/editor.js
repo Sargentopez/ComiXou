@@ -950,6 +950,13 @@ let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRo
 // reducida a 200ms a petición del usuario (350 se sentía demasiado lento).
 const _edDoubleTapMs = 200;
 const _edPenDragThreshold = 6;
+// Guard anti-arrastre tras doble tap: ventana de tiempo y umbral de movimiento
+// (mismo criterio de umbral que el resto de la app, p.ej. _edPenDragThreshold /
+// el anti-jitter de 8px del recorte) por debajo del cual un "drag" justo después
+// de abrir el panel de propiedades se considera temblor del propio gesto y se ignora.
+const _edDblTapGuardMs = 400;
+const _EdDblTapGuardPx = 10;
+window._edDblTapGuard = null;
 window._edPenDragPending = null;
 window._edPenGroupDragPending = null;
 window._edPenNodeDragPending = null;
@@ -3253,6 +3260,7 @@ function _edSnapLayerFragment(l){
         // (si se descarta con null, desaparece del historial y no puede recuperarse con redo)
         return { type: 'stroke', dataUrl: '', x: 0.5, y: 0.5, width: 0.01, height: 0.01,
                  rotation: 0, opacity: l.opacity ?? 1, locked: l.locked || false,
+                 hidden: l.hidden || false,
                  groupId: l.groupId || undefined,
                  _uid: l._uid || null, _fillLayerId: l._fillLayerId || null };
       }
@@ -3268,6 +3276,7 @@ function _edSnapLayerFragment(l){
         x: _cx, y: _cy, width: _fw, height: _fh,
         rotation: 0, opacity: l.opacity ?? 1,
         locked: l.locked || false,
+        hidden: l.hidden || false,
         groupId: l.groupId || undefined,
         _uid: l._uid || null, _fillLayerId: l._fillLayerId || null,
         _pencilLayerId: l._pencilLayerId || null, _watercolorLayerId: l._watercolorLayerId || null,
@@ -3281,6 +3290,7 @@ function _edSnapLayerFragment(l){
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
       color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false,
+      hidden:l.hidden||false,
       groupId: l.groupId || undefined,
       _uid:l._uid||null, _fillLayerId:l._fillLayerId||null,
       _pencilLayerId:l._pencilLayerId||null, _watercolorLayerId:l._watercolorLayerId||null,
@@ -3294,6 +3304,7 @@ function _edSnapLayerFragment(l){
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadius: l.cornerRadius||0, locked:l.locked||false,
+      hidden:l.hidden||false,
       groupId: l.groupId || undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null,
       _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
@@ -3305,6 +3316,7 @@ function _edSnapLayerFragment(l){
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
+      hidden:l.hidden||false,
       groupId: l.groupId || undefined,
       grouped: l.grouped||false,
       groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
@@ -3326,6 +3338,7 @@ function _edSnapLayerFragment(l){
     if(l.type === 'group') return null; // obsoleto — ignorar grupos viejos
     if(l.groupId) o.groupId = l.groupId;
     if(l.locked) o.locked = true;
+    if(l.hidden) o.hidden = true;
     if(l.img && l.img.complete && l.img.naturalWidth > 0) o._imgSrc = l.img.src || '';
     // Preservar referencias de animación en el snapshot
     if(l.type === 'image' || l.type === 'gif') {
@@ -3557,6 +3570,7 @@ function edApplyHistory(snapshot){
       l = o.dataUrl ? DrawLayer.fromDataUrl(o.dataUrl, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)
                     : new DrawLayer();
       if(o.locked) l.locked = true;
+      if(o.hidden) l.hidden = true;
       if(o.groupId) l.groupId = o.groupId;
       if(o._uid) l._uid=o._uid;
       if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
@@ -3608,6 +3622,7 @@ function edApplyHistory(snapshot){
       if(o.opacity !== undefined) l.opacity=o.opacity;
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
+      if(o.hidden) l.hidden=true;
       if(o._uid) l._uid=o._uid;
       if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
       if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
@@ -3625,6 +3640,7 @@ function edApplyHistory(snapshot){
       if(o.groupedStyles) l.groupedStyles = o.groupedStyles.map(s=>({...s}));
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
+      if(o.hidden) l.hidden=true;
       // Restaurar recorrido de animación
       if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
@@ -3640,6 +3656,7 @@ function edApplyHistory(snapshot){
       else l._updateBbox();
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
+      if(o.hidden) l.hidden=true;
       // Restaurar recorrido de animación
       if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
@@ -4814,6 +4831,12 @@ function edDrawSel(){
   }
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
+  // Objeto perteneciente a un grupo: NUNCA mostrar sus handlers individuales
+  // (resize/rotate/nodos/cola de bocadillo, vértices de curva, etc.) — mientras
+  // esté agrupado, solo debe poder modificarse a nivel de grupo (multiselección
+  // de grupo, ya con sus propios handles vía edDrawMultiSel). Ver guard gemelo
+  // en el hit-test de handles dentro de edOnStart.
+  if(la.groupId) return;
   const pw=edPageW(), ph=edPageH();
   const z=edCamera.z;
   const lw=1/z;
@@ -5103,6 +5126,32 @@ function _edShowLockIcon(la) {
   el.style.display = '';
   clearTimeout(el._hideTimer);
   el._hideTimer = setTimeout(()=>{ el.style.opacity='0'; setTimeout(()=>{ el.style.display='none'; }, 300); }, 2000);
+}
+
+// Objeto/grupo bloqueado tocado o cliqueado: un toque/clic simple debe mostrar
+// el candado (comportamiento ya existente), pero si ese mismo gesto se convierte
+// en un arrastre real, debe iniciar un rubber band desde el punto de partida
+// COMO SI el bloqueado no estuviera ahí — nunca seleccionarlo.
+// Reutiliza el mismo mecanismo ya usado para diferir selección/rubber-band en
+// espacio vacío: en táctil, timer de 120ms (deja margen al pinch de cámara) con
+// promoción automática por movimiento (ver edOnMove); en PC, umbral de píxeles
+// (mismo patrón que el lápiz de tableta, _edPenDragThreshold) al no existir
+// ambigüedad de pinch con ratón.
+function _edLockTapOrRubberBand(lockTarget, c, e, isTouch) {
+  window._edPendingLockTap = { target: lockTarget };
+  if (isTouch) {
+    clearTimeout(window._edRbTouchTimer);
+    window._edPendingRbC = { nx: c.nx, ny: c.ny };
+    window._edRbTouchTimer = setTimeout(() => {
+      window._edRbTouchTimer = null;
+      window._edPendingRbC = null;
+      const _plt = window._edPendingLockTap; window._edPendingLockTap = null;
+      if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
+      if (_plt) { _edShowLockIcon(_plt.target); edRedraw(); }
+    }, 120);
+  } else {
+    window._edPendingLockClick = { target: lockTarget, nx: c.nx, ny: c.ny, clientX: e.clientX, clientY: e.clientY };
+  }
 }
 function _edShowLockIconDraw(dl) {
   if(!dl || !edCanvas) return;
@@ -7351,7 +7400,13 @@ function _edRoundRect(ctx, x, y, w, h, r){
   ctx.closePath();
 }
 
-function _edHandleDoubleTap(idx){
+function _edHandleDoubleTap(idx, e){
+  // Guard anti-arrastre: recordar dónde y cuándo se abrió el panel por doble tap.
+  // Un doble tap real casi siempre deja al dedo con un pequeño temblor residual
+  // (o el siguiente toque cae ligerísimamente desplazado) — sin este guard, ese
+  // temblor se interpretaba como "tocar y arrastrar" y desplazaba el objeto justo
+  // al abrir sus propiedades. Se consume/expira solo en edOnMove (ver _EdDblTapGuardPx).
+  window._edDblTapGuard = e ? { idx, x0: e.clientX, y0: e.clientY, until: Date.now() + _edDblTapGuardMs } : null;
   const la = edLayers[idx];
   if(la && la.type === 'draw'){
     // DrawLayer: doble tap → abrir panel de propiedades (editar desde el botón del panel)
@@ -8891,6 +8946,7 @@ function edOnStart(e){
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Cancelar timer de rubber band — era un pinch, no una selección múltiple
     if(window._edRbTouchTimer){ clearTimeout(window._edRbTouchTimer); window._edRbTouchTimer = null; }
+    window._edPendingLockTap = null; // idem — era un pinch, no un tap sobre bloqueado
     // Cancelar selección táctil diferida — era un pinch, no un toque simple de selección
     if(window._edSelTouchTimer){ clearTimeout(window._edSelTouchTimer); window._edSelTouchTimer = null; }
     window._edPendingSelFound = null; window._edPendingSelC = null;
@@ -9642,7 +9698,10 @@ function edOnStart(e){
   // Giro y resize siempre disponibles con el panel line abierto
   const _inCurveMode = _edCurveModeActive && _edCurveModeActive();
   const _skipHandles = _inCurveMode && (_la?.type === 'line' || _la?.type === 'shape');
-  if(_la && _la.type!=='bubble' && !_skipHandles){
+  // Objeto agrupado: sin handles individuales (ver mismo guard en edDrawSel).
+  // Sin esto, aunque el handle no se dibuje, seguiría siendo clicable en su
+  // posición matemática y permitiría redimensionar/rotar solo ese miembro.
+  if(_la && _la.type!=='bubble' && !_skipHandles && !_la.groupId){
     const _isT = e.pointerType==='touch';
     const _pw=edPageW(), _ph=edPageH();
     const _z=edCamera.z;
@@ -10010,9 +10069,9 @@ function edOnStart(e){
             _edDrawLockUI(); _edPropsOverlayShow();
             edRenderOptionsPanel('props');
           } else {
-            // Un tap: mostrar candado en el centro del grupo
+            // Un tap: mostrar candado en el centro del grupo (o rubber band si hay arrastre real)
             _edLastTapTime = _nowL; _edLastTapIdx = found;
-            _edShowLockIcon({x:_gcx, y:_gcy, width:0.1, height:0.1});
+            _edLockTapOrRubberBand({x:_gcx, y:_gcy, width:0.1, height:0.1}, c, e, _isTouch);
             edRedraw();
           }
           return;
@@ -10020,10 +10079,10 @@ function edOnStart(e){
         // ── Objeto individual bloqueado ──
         if(found === _edLastTapIdx && _nowL - _edLastTapTime < _edDoubleTapMs){
           _edLastTapTime = 0; _edLastTapIdx = -1;
-          _edHandleDoubleTap(found);
+          _edHandleDoubleTap(found, e);
         } else {
           _edLastTapTime = _nowL; _edLastTapIdx = found;
-          _edShowLockIcon(_fla);
+          _edLockTapOrRubberBand(_fla, c, e, _isTouch);
           edRedraw();
         }
         return;
@@ -10129,7 +10188,7 @@ function edOnStart(e){
       if (_dsDbl) {
         // Doble tap en objeto diferente → seleccionar y abrir panel inmediatamente
         edSelectedIdx = found; edIsDragging = false;
-        _edHandleDoubleTap(found);
+        _edHandleDoubleTap(found, e);
         _edLastTapTime = 0; _edLastTapIdx = -1;
         edRedraw(); return;
       }
@@ -10224,7 +10283,7 @@ function edOnStart(e){
       if(found === _edLastTapIdx && now - _edLastTapTime < _edDoubleTapMs){
         edIsDragging = false;
         clearTimeout(window._edLongPress);
-        _edHandleDoubleTap(found);
+        _edHandleDoubleTap(found, e);
         _edLastTapTime = 0; _edLastTapIdx = -1;
         return; // no continuar procesando este evento
       } else {
@@ -10238,7 +10297,7 @@ function edOnStart(e){
         edIsDragging = false;
         window._edPenDragPending = null;
         clearTimeout(window._edLongPress);
-        _edHandleDoubleTap(found);
+        _edHandleDoubleTap(found, e);
         _edLastTapTime = 0; _edLastTapIdx = -1;
         return; // no continuar procesando este evento
       } else {
@@ -10829,12 +10888,30 @@ function edOnMove(e){
     window._edRbTouchTimer = null;
     const _rbPc = window._edPendingRbC;
     window._edPendingRbC = null;
+    window._edPendingLockTap = null; // ya no es un simple toque — no mostrar el candado
     if (!window._gcpActive) {
       edRubberBand = { x0: _rbPc.nx, y0: _rbPc.ny, x1: _rbPc.nx, y1: _rbPc.ny };
       window._edRubberBandEndPos = null;
       if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
     }
     // Continuar el flujo normal de edOnMove para procesar el rubber band en este mismo frame
+  }
+  // PC/ratón: objeto o grupo bloqueado tocado con el botón pulsado — promover a
+  // rubber band (desde el punto original, como espacio vacío) solo si el puntero
+  // supera el mismo umbral que ya usa el lápiz de tableta (_edPenDragThreshold).
+  if (window._edPendingLockClick && e.pointerType !== 'touch') {
+    const _plc = window._edPendingLockClick;
+    const _lcDist = Math.hypot(e.clientX - _plc.clientX, e.clientY - _plc.clientY);
+    if (_lcDist >= _edPenDragThreshold) {
+      window._edPendingLockClick = null;
+      window._edPendingLockTap = null;
+      if (!window._gcpActive) {
+        edRubberBand = { x0: _plc.nx, y0: _plc.ny, x1: _plc.nx, y1: _plc.ny };
+        window._edRubberBandEndPos = null;
+        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      }
+      // Continuar el flujo normal de edOnMove para procesar el rubber band en este mismo frame
+    }
   }
   const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart;
   if(!gestureActive) return;
@@ -11153,6 +11230,21 @@ function edOnMove(e){
     }
   }
   if(!edIsDragging||edSelectedIdx<0)return;
+  // Guard anti-arrastre tras doble tap (ver _edHandleDoubleTap): si el objeto es
+  // el mismo cuyo panel se acaba de abrir y seguimos dentro de la ventana/umbral,
+  // el "drag" es temblor del propio gesto — ignorarlo sin mover el objeto.
+  if(window._edDblTapGuard && window._edDblTapGuard.idx === edSelectedIdx){
+    const _g = window._edDblTapGuard;
+    const _gDist = Math.hypot(e.clientX - _g.x0, e.clientY - _g.y0);
+    if(Date.now() <= _g.until && _gDist < _EdDblTapGuardPx){
+      return; // pequeño temblor tras el doble tap — no arrastrar
+    }
+    // Umbral superado o guard caducado: es un arrastre real — dejar de proteger
+    // y recalcular el offset desde AQUÍ para que continúe sin salto.
+    const _laGuard = edLayers[edSelectedIdx];
+    if(_laGuard){ edDragOffX = c.nx - _laGuard.x; edDragOffY = c.ny - _laGuard.y; }
+    window._edDblTapGuard = null;
+  }
   const la=edLayers[edSelectedIdx];
   const _prevX = la.x, _prevY = la.y;
   la.x = c.nx - edDragOffX;
@@ -11223,6 +11315,15 @@ function edOnEnd(e){
   window._edPenGroupDragPending = null;
   window._edPenNodeDragPending = null;
   if(window._gcpActive) return;
+  // Clic PC sobre objeto/grupo bloqueado que no llegó a convertirse en arrastre
+  // (ver _edLockTapOrRubberBand/edOnMove) — mostrarlo ahora, como un clic simple.
+  if (window._edPendingLockClick) {
+    const _plc = window._edPendingLockClick;
+    window._edPendingLockClick = null;
+    const _plt = window._edPendingLockTap; window._edPendingLockTap = null;
+    _edShowLockIcon(_plt ? _plt.target : _plc.target);
+    edRedraw();
+  }
   // Limpiar el puntero del mapa de activos SIEMPRE, antes de cualquier return prematuro.
   // Todos los modos especiales (recorrido, recorte, zoom-rect, etc.) hacen return
   // sin pasar por el delete normal que está más abajo — origen de todos los "dedos fantasma".
@@ -11315,6 +11416,14 @@ function edOnEnd(e){
     clearTimeout(window._edRbTouchTimer);
     window._edRbTouchTimer = null;
     window._edPendingRbC = null;
+    // Si el timer pendiente era por un toque sobre un objeto/grupo bloqueado
+    // (ver _edLockTapOrRubberBand) y el dedo se levantó antes de disparar,
+    // fue un tap simple y rápido — mostrar el candado ahora, no perderlo.
+    if (window._edPendingLockTap) {
+      const _pltEnd = window._edPendingLockTap; window._edPendingLockTap = null;
+      _edShowLockIcon(_pltEnd.target);
+      edRedraw();
+    }
   }
   // Deselección táctil diferida: si el dedo se levantó antes del timer → era un tap → deseleccionar ya
   if (window._edDeselTouchTimer) {
@@ -18245,9 +18354,17 @@ function edInitSelectMenu(){
     document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
     edGroupSelected();
   });
+  $('_sel-ungroup')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edUngroupSelected();
+  });
   $('_sel-merge')?.addEventListener('click', ()=>{
     document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
     edMergeSelected();
+  });
+  $('_sel-bib-save')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edBibGuardar();
   });
   $('_sel-delete')?.addEventListener('click', ()=>{
     document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
@@ -21604,6 +21721,10 @@ function edSerLayer(l){
     // _apngSrc NO se serializa — es el dataUrl enorme, va al bucket por animKey
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
+    if(l._gcpRefX != null) _r._gcpRefX = l._gcpRefX;
+    if(l._gcpRefY != null) _r._gcpRefY = l._gcpRefY;
+    if(l._gcpRefW != null) _r._gcpRefW = l._gcpRefW;
+    if(l._gcpRefH != null) _r._gcpRefH = l._gcpRefH;
     if(l._gcpFrameDelay   != null) _r._gcpFrameDelay   = l._gcpFrameDelay;
     if(l._gcpRepeatCount  != null) _r._gcpRepeatCount  = l._gcpRepeatCount;
     if(l._gcpStopAtEnd)            _r._gcpStopAtEnd    = true;
@@ -22072,6 +22193,10 @@ function edDeserLayer(d, pageOrientation){
     if(d._isGcpImage) l._isGcpImage=true;
     if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
     if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
+    if(d._gcpRefX != null) l._gcpRefX = d._gcpRefX;
+    if(d._gcpRefY != null) l._gcpRefY = d._gcpRefY;
+    if(d._gcpRefW != null) l._gcpRefW = d._gcpRefW;
+    if(d._gcpRefH != null) l._gcpRefH = d._gcpRefH;
     if(d._gcpFrameDelay   != null) l._gcpFrameDelay   = d._gcpFrameDelay;
     if(d._gcpRepeatCount  != null) l._gcpRepeatCount  = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)            l._gcpStopAtEnd    = true;
@@ -31346,16 +31471,21 @@ function _gcpVectorToImage(la, cb) {
   crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
   const dataUrl = crop.toDataURL('image/png');
 
-  // Usar el tamaño visual original del objeto — preservar width/height exactos del GCP
-  const finalW = la.width;
-  const finalH = la.height;
+  // Tamaño derivado del RECORTE REAL (cw×ch) — igual patrón que _gcpSaveToLib/_gcpMergeLayersToImage.
+  // Usar la.width/la.height (sin el padding de recorte) desincroniza el raster del tamaño
+  // declarado: ImageLayer.draw() hace drawImage(src, -w/2,-h/2, w,h) estirando TODO el raster
+  // (con su padding) dentro de una caja calculada sin ese padding → encoge el objeto visible
+  // (más notorio cuanto más pequeño es el objeto respecto al padding fijo de 4px).
+  const finalW = cw / pw;
+  const finalH = ch / ph;
 
   // Crear ImageLayer con proporciones correctas
   const img = new Image();
   img.onload = () => {
     const imgLayer = new ImageLayer(img, la.x, la.y, finalW);
     imgLayer.height = finalH;
-    imgLayer.rotation = la.rotation || 0;
+    // La rotación ya quedó horneada en el recorte (la.draw() la aplicó al renderizar sobre
+    // el canvas axis-aligned) — volver a asignarla aquí duplicaría el giro.
     imgLayer.opacity = la.opacity ?? 1;
     imgLayer.src = dataUrl;
     imgLayer._keepSize = true;
@@ -31661,13 +31791,35 @@ function gcpOpen(edLayerIdx) {
     const gifLayer = edLayers[window._gcpEdLayerIdx];
     const hasData = gifLayer && gifLayer._gcpLayersData;
     if (hasData) {
+      // Delta contenedor — si la animación ya insertada se movió/redimensionó con las
+      // herramientas normales del editor general (fuera del GCP), _gcpLayersData sigue
+      // con las coordenadas absolutas del último guardado hecho DESDE el GCP.
+      // _gcpRefX/Y/W/H es el snapshot de ese último guardado; comparándolo contra el
+      // x/y/width/height ACTUAL del contenedor reconstruimos la composición interna
+      // en el sitio/tamaño reales, en vez de recuperar siempre el original.
+      const _refX = gifLayer._gcpRefX ?? gifLayer.x;
+      const _refY = gifLayer._gcpRefY ?? gifLayer.y;
+      const _refW = gifLayer._gcpRefW ?? gifLayer.width;
+      const _refH = gifLayer._gcpRefH ?? gifLayer.height;
+      const _dScX = _refW ? (gifLayer.width  / _refW) : 1;
+      const _dScY = _refH ? (gifLayer.height / _refH) : 1;
+      const _dCurX = gifLayer.x, _dCurY = gifLayer.y;
+      const _gcpApplyContainerDelta = (o) => {
+        if (!o) return;
+        if (o.x != null) o.x = _dCurX + (o.x - _refX) * _dScX;
+        if (o.y != null) o.y = _dCurY + (o.y - _refY) * _dScY;
+        if (o.width  != null) o.width  *= _dScX;
+        if (o.height != null) o.height *= _dScY;
+      };
       const restoredLayers = gifLayer._gcpLayersData
         .map(ld => edDeserLayer(ld, edOrientation))
         .filter(Boolean);
       restoredLayers.forEach((la, li) => {
+        _gcpApplyContainerDelta(la);
         // Restaurar _frames por layer (nuevo formato: array de arrays por layer)
         if (gifLayer._gcpFramesData && Array.isArray(gifLayer._gcpFramesData[li])) {
           la._frames = gifLayer._gcpFramesData[li].map(s => ({...s}));
+          la._frames.forEach(_gcpApplyContainerDelta);
         } else {
           // Compatibilidad con formato antiguo (array de snaps globales)
           la._frames = [{x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true}];
@@ -32337,7 +32489,7 @@ function _gcpSaveToLib(onDone) {
   // Si re-editamos capa existente, actualizarla in-place (igual que antes)
   const existingLayer = (window._gcpEdLayerIdx>=0) ? edLayers[window._gcpEdLayerIdx] : null;
   if (existingLayer && (existingLayer.type==='gif' || existingLayer._isGcpImage)) {
-    const savedX=existingLayer.x, savedY=existingLayer.y, savedR=existingLayer.rotation;
+    const savedR=existingLayer.rotation;
     existingLayer._gcpLayersData=gcpLayersData;
     existingLayer._gcpFramesData=gcpFramesData;
     existingLayer._gcpLayerNames=gcpLayerNames;
@@ -32357,9 +32509,16 @@ function _gcpSaveToLib(onDone) {
     const img=new Image();
     img.onload=()=>{
       existingLayer.img=img; existingLayer.src=pngFrames[0];
-      existingLayer.x=savedX; existingLayer.y=savedY; existingLayer.rotation=savedR;
-      // usar tamaño real del GCP directamente
+      // Posición Y tamaño deben salir del MISMO recorte (_gcpCenterX/Y ↔ _gcpNormW/H) — si se
+      // fuerza la x/y previa al guardado pero el tamaño se recalcula del recorte nuevo, ambos
+      // quedan referidos a recortes distintos y el objeto se desplaza/deforma al reeditar.
+      existingLayer.x=_gcpCenterX; existingLayer.y=_gcpCenterY; existingLayer.rotation=savedR;
       existingLayer.width=_gcpNormW; existingLayer.height=_gcpNormH;
+      // Re-baselinar la referencia: a partir de ahora "lo último guardado desde el GCP"
+      // es esto — así, si luego mueves/escalas la animación en el editor general y vuelves
+      // a reeditarla, gcpOpen sabrá cuánto ha cambiado el contenedor desde este guardado.
+      existingLayer._gcpRefX = _gcpCenterX; existingLayer._gcpRefY = _gcpCenterY;
+      existingLayer._gcpRefW = _gcpNormW;   existingLayer._gcpRefH = _gcpNormH;
       edPushHistory(); requestAnimationFrame(()=>edRedraw());
     };
     img.src=pngFrames[0];
@@ -32385,6 +32544,11 @@ function _gcpSaveToLib(onDone) {
       la._gcpLayersData = gcpLayersData;
       la._gcpFramesData = gcpFramesData;
       la._gcpLayerNames = gcpLayerNames;
+      // Snapshot de referencia: el x/y/width/height con que se inserta AHORA es lo que
+      // gcpOpen usará como "estado guardado" para detectar cambios hechos después
+      // en el editor general (mover/escalar la animación fuera del GCP).
+      la._gcpRefX = _gcpCenterX; la._gcpRefY = _gcpCenterY;
+      la._gcpRefW = _gcpNormW;   la._gcpRefH = _gcpNormH;
       la._gcpFrameDelay   = window._gcpFrameDelay;
       la._gcpRepeatCount  = window._gcpRepeatCount;
       la._gcpStopAtEnd    = window._gcpStopAtEnd;

@@ -194,10 +194,12 @@ function _pgBuildCard(page, idx) {
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
     if (edPages.length <= 1) { edToast('No puedes eliminar la última hoja'); return; }
-    edPages.splice(idx, 1);
-    edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
-    edPushHistory();
-    _pgRender();
+    edConfirm('¿Eliminar esta hoja?', () => {
+      edPages.splice(idx, 1);
+      edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
+      edPushHistory();
+      _pgRender();
+    });
   });
 
   actions.appendChild(dupBtn);
