@@ -8293,11 +8293,52 @@ function edOnStart(e){
     }
     // Nada tocado fuera del bbox
     if(window._edGroupSilentTool !== undefined){
-      // Modo grupo silencioso: tocar fuera → deseleccionar y restaurar herramienta
+      // Modo grupo silencioso: tocar fuera → deseleccionar el grupo y, si hay
+      // un objeto nuevo bajo el toque, seleccionarlo de inmediato (mismo
+      // criterio que cambiar de un objeto individual a otro: PC al instante,
+      // táctil diferido 120ms para no bloquear el pinch-to-zoom).
       edActiveTool = window._edGroupSilentTool;
       delete window._edGroupSilentTool;
       edMultiSel=[]; edMultiBbox=null; edMultiGroupRot=0;
       edSelectedIdx = -1;
+      edCanvas.className = '';
+      const _gsHit = edLayers.map((_,i)=>i).reverse().find(i =>
+        edLayers[i]?.contains && !edLayers[i].hidden && !edLayers[i].locked && edLayers[i].type!=='fill' && edLayers[i].contains(c.nx,c.ny));
+      if(e.pointerType === 'touch'){
+        if(_gsHit !== undefined){
+          clearTimeout(window._edSelTouchTimer);
+          window._edPendingSelFound = _gsHit;
+          window._edPendingSelC = { nx: c.nx, ny: c.ny };
+          window._edSelTouchTimer = setTimeout(() => {
+            window._edSelTouchTimer = null;
+            window._edPendingSelFound = null; window._edPendingSelC = null;
+            if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
+            edSelectedIdx = _gsHit; edMultiSelAnchor = _gsHit;
+            edDragOffX = c.nx - edLayers[_gsHit].x;
+            edDragOffY = c.ny - edLayers[_gsHit].y;
+            edIsDragging = true; window._edMoved = false;
+            edRedraw();
+          }, 120);
+        } else {
+          clearTimeout(window._edRbTouchTimer);
+          const _rbC3 = c;
+          window._edRbTouchTimer = setTimeout(() => {
+            window._edRbTouchTimer = null;
+            const _rbSz3 = window._edActivePointers ? window._edActivePointers.size : 0;
+            if(_rbSz3 !== 1) return;
+            if(!window._gcpActive) edRubberBand={x0:_rbC3.nx,y0:_rbC3.ny,x1:_rbC3.nx,y1:_rbC3.ny};
+            edRedraw();
+          }, 120);
+        }
+      } else {
+        if(_gsHit !== undefined){
+          edSelectedIdx = _gsHit;
+          _edDrawLockUI(); _edPropsOverlayShow();
+          edRenderOptionsPanel('props');
+        } else if(!window._gcpActive){
+          edRubberBand={x0:c.nx,y0:c.ny,x1:c.nx,y1:c.ny};
+        }
+      }
       edRedraw();
     } else if(e.shiftKey && e.pointerType !== 'touch'){
       // Shift+clic fuera del bbox en multiselect: buscar objeto y hacer toggle
@@ -8344,7 +8385,7 @@ function edOnStart(e){
         _msClear();
         edActiveTool = 'select'; edCanvas.className = '';
         // Si hay un objeto bajo el clic, seleccionarlo inmediatamente
-        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && !edLayers[i].hidden && edLayers[i].type!=='fill' && edLayers[i].contains(c.nx,c.ny));
+        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && !edLayers[i].hidden && !edLayers[i].locked && edLayers[i].type!=='fill' && edLayers[i].contains(c.nx,c.ny));
         if(_hit !== undefined){
           edSelectedIdx = _hit;
           _edDrawLockUI(); _edPropsOverlayShow();
