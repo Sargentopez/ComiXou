@@ -24144,6 +24144,14 @@ function EditorView_init(){
           edMultiSel.forEach(i => {
             const _la = edLayers[i]; if(!_la || _la.locked) return;
             _la.x += _dx; _la.y += _dy;
+            // Mover inmediatamente las capas vinculadas (mismo frame que edRedraw)
+            const _arUidM = _la._uid || _la._fillLayerId;
+            if (_arUidM) {
+              for (const _t of ['fill','pencil','watercolor']) {
+                const _lArM = edLayers.find(l=>l.type===_t&&l._drawLayerId===_arUidM);
+                if (_lArM) { _lArM.x += _dx; _lArM.y += _dy; }
+              }
+            }
           });
           _msRecalcBbox();
           _edUpdateMultiSelPanel();
@@ -24164,7 +24172,18 @@ function EditorView_init(){
         edRedraw();
         clearTimeout(window._edArrowKeyHistTimer);
         window._edArrowKeyHistTimer = setTimeout(() => {
-          if(edSelectedIdx>=0){
+          if(edActiveTool==='multiselect' && edMultiSel.length > 0){
+            edMultiSel.forEach(i => {
+              const _laK = edLayers[i]; if(!_laK) return;
+              const _syncUid = _laK._uid || _laK._fillLayerId;
+              if(_syncUid) {
+                for (const _t of ['fill','pencil','watercolor']) {
+                  const _lSync=edLayers.find(l=>l.type===_t&&l._drawLayerId===_syncUid);
+                  if(_lSync) _lSync.syncFrom(_laK);
+                }
+              }
+            });
+          } else if(edSelectedIdx>=0){
             const _laK=edLayers[edSelectedIdx];
             if(_laK){
               const _syncUid = _laK._uid || _laK._fillLayerId;
