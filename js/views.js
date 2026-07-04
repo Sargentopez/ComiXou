@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v32.30</footer>
+    <footer class="app-version">v32.35</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -673,6 +673,18 @@ Router.register('editor', {
               <button class="mpbeh-opt" data-mpbeh-accel="start"  id="mpbeh-accel-start">⏩ Al inicio</button>
               <button class="mpbeh-opt" data-mpbeh-accel="middle" id="mpbeh-accel-middle">↔ Al medio</button>
               <button class="mpbeh-opt" data-mpbeh-accel="end"    id="mpbeh-accel-end">⏪ Al final</button>
+            </div>
+          </div>
+
+          <!-- Sección: Orientación del objeto -->
+          <div class="mpbeh-section" style="margin-top:10px">
+            <button class="mpbeh-header" id="mpbeh-orient-toggle">
+              <span class="mpbeh-header-label">Orientación del objeto</span>
+              <span class="mpbeh-arrow">▾</span>
+            </button>
+            <div class="mpbeh-options" id="mpbeh-orient-options">
+              <button class="mpbeh-opt" data-mpbeh-orient="fixed" id="mpbeh-orient-fixed">🧭 Fija</button>
+              <button class="mpbeh-opt" data-mpbeh-orient="path"  id="mpbeh-orient-path">🔄 Girar según trayectoria</button>
             </div>
           </div>
 

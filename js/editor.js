@@ -1185,6 +1185,8 @@ let _edMotionPathPts     = [];    // puntos simplificados guardados [{x,y}]
 let _edMotionPathRaw     = [];    // puntos brutos del trazo actual
 let _edMotionPathDrawing = false; // usuario arrastrando activamente
 let _edMotionPathClosed  = false; // recorrido cerrado
+let edMpRotating = false; // true mientras se arrastra el handle de rotación durante la edición del recorrido
+let _edMotionPathOrigRotation = 0; // rotación original del objeto al entrar en modo recorrido (para restaurar si se cancela)
 let _edMotionPathSpeed   = 100;   // velocidad en píxeles del canvas por segundo (capas no animadas)
 let _edMotionPathCycles  = 1;     // ciclos de animación durante el recorrido (capas animadas)
 let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segmento de línea
@@ -1489,7 +1491,7 @@ class ImageLayer extends BaseLayer {
     ctx.save();
     ctx.globalAlpha = this._animFadeOpacity != null ? this._animFadeOpacity : (this.opacity ?? 1);
     ctx.translate(px,py);
-    ctx.rotate(this.rotation*Math.PI/180);
+    ctx.rotate((this.rotation + _edLayerPathRotDeg(this))*Math.PI/180);
     ctx.drawImage(src, -w/2, -h/2, w, h);
     ctx.restore();
   }
@@ -1744,7 +1746,7 @@ class GifLayer extends BaseLayer {
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px, py);
-    ctx.rotate((this.rotation || 0) * Math.PI / 180);
+    ctx.rotate(((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180);
     ctx.drawImage(this._oc, -w/2, -h/2, w, h);
     ctx.restore();
   }
@@ -1780,7 +1782,7 @@ class TextLayer extends BaseLayer {
     const _tlCurY=(_edViewerMode||_edMpPreviewActive)&&this._pathCurY!=null?this._pathCurY:this.y;
     const px=edMarginX()+_tlCurX*pw, py=edMarginY()+_tlCurY*ph;
     ctx.save();
-    ctx.translate(px,py); ctx.rotate(this.rotation*Math.PI/180);
+    ctx.translate(px,py); ctx.rotate((this.rotation + _edLayerPathRotDeg(this))*Math.PI/180);
     // Fondo y borde se dibujan en espacio local (tras la rotación)
     const _bgo=this.bgOpacity??1;
     const _ctxAlpha=ctx.globalAlpha;
@@ -2476,7 +2478,7 @@ class FillLayer extends BaseLayer {
       ctx.drawImage(src, 0, 0);
     } else {
       ctx.translate(px, py);
-      ctx.rotate((this.rotation || 0) * Math.PI / 180);
+      ctx.rotate(((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180);
       ctx.drawImage(src, -w / 2, -h / 2, w, h);
     }
     ctx.restore();
@@ -2662,7 +2664,7 @@ class StrokeLayer extends BaseLayer {
     const py = edMarginY() + _slCurY * ph;
     ctx.save();
     ctx.translate(px, py);
-    ctx.rotate((this.rotation||0) * Math.PI/180);
+    ctx.rotate(((this.rotation||0) + _edLayerPathRotDeg(this)) * Math.PI/180);
     ctx.drawImage(this._canvas, -w/2, -h/2, w, h);
     ctx.restore();
   }
@@ -2725,7 +2727,7 @@ class ShapeLayer extends BaseLayer {
     ctx.save();
     ctx.globalAlpha = ctx.globalAlpha * (this.opacity ?? 1);
     ctx.translate(cx, cy);
-    ctx.rotate((this.rotation || 0) * Math.PI / 180);
+    ctx.rotate(((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180);
     ctx.lineJoin = 'round';
     ctx.beginPath();
     if (this.shape === 'ellipse') {
@@ -2890,7 +2892,7 @@ class LineLayer extends BaseLayer {
     const _lnCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
     const cx = edMarginX() + _lnCurX * pw;
     const cy = edMarginY() + _lnCurY * ph;
-    const rot = (this.rotation || 0) * Math.PI / 180;
+    const rot = ((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180;
     ctx.save();
     ctx.globalAlpha = ctx.globalAlpha * (this.opacity ?? 1);
     ctx.translate(cx, cy);
@@ -3258,7 +3260,8 @@ function _edSnapLayerFragment(l){
         _motionPathClosed: l._motionPathClosed||false,
         _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
         _motionPathEnd: l._motionPathEnd||undefined,
-        _motionPathAccel: l._motionPathAccel||undefined };
+        _motionPathAccel: l._motionPathAccel||undefined,
+        _motionPathOrient: l._motionPathOrient||false };
     }
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
@@ -3270,7 +3273,8 @@ function _edSnapLayerFragment(l){
       _motionPathClosed: l._motionPathClosed||false,
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
-      _motionPathAccel: l._motionPathAccel||undefined };
+      _motionPathAccel: l._motionPathAccel||undefined,
+      _motionPathOrient: l._motionPathOrient||false };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
@@ -3281,7 +3285,8 @@ function _edSnapLayerFragment(l){
       _motionPathClosed: l._motionPathClosed||false,
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
-      _motionPathAccel: l._motionPathAccel||undefined };
+      _motionPathAccel: l._motionPathAccel||undefined,
+      _motionPathOrient: l._motionPathOrient||false };
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
@@ -3294,7 +3299,8 @@ function _edSnapLayerFragment(l){
       _motionPathClosed: l._motionPathClosed||false,
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
-      _motionPathAccel: l._motionPathAccel||undefined };
+      _motionPathAccel: l._motionPathAccel||undefined,
+      _motionPathOrient: l._motionPathOrient||false };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor','bgOpacity',
@@ -3335,6 +3341,7 @@ function _edSnapLayerFragment(l){
     if(l._motionSpeed != null) o._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   o._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) o._motionPathAccel = l._motionPathAccel;
+    if(l._motionPathOrient) o._motionPathOrient = true;
     return o;
 }
 
@@ -3591,7 +3598,7 @@ function edApplyHistory(snapshot){
       if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
       if(o._watercolorLayerId) l._watercolorLayerId=o._watercolorLayerId;
       // Restaurar recorrido de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
     }
     else if(o.type === 'shape') {
@@ -3604,7 +3611,7 @@ function edApplyHistory(snapshot){
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       // Restaurar recorrido de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
     }
     else if(o.type === 'line') {
@@ -3619,7 +3626,7 @@ function edApplyHistory(snapshot){
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       // Restaurar recorrido de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
     }
     else if(o.type === 'fill') {
@@ -4781,9 +4788,15 @@ function edIsTouchDevice(){
   return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 }
 function edDrawSel(){
-  // Durante edición de recorrido los handles del objeto no deben aparecer:
-  // el pinch debe controlar solo la cámara, no redimensionar el objeto.
-  if(_edMotionPathMode) return;
+  // Durante edición de recorrido: no mostrar el marco ni los handles de resize
+  // (el pinch debe controlar solo la cámara), pero sí el handle de rotación,
+  // para poder orientar el objeto en su punto de partida con independencia
+  // de la forma del trazado.
+  if(_edMotionPathMode){
+    const _mpLa = edLayers[_edMotionPathTarget];
+    if(_mpLa) _edDrawMpRotateHandle(_mpLa);
+    return;
+  }
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
   const pw=edPageW(), ph=edPageH();
@@ -7460,6 +7473,42 @@ function _edPathArcLengthPx(points, closed, pw, ph) {
   return total || 1;
 }
 
+// ── Motion path: ángulo de la tangente (grados) en el punto t de la trayectoria ──
+// Deriva la dirección local de la curva mediante diferencia finita sobre la misma
+// función de posición que usa el render (_edPathPositionAt), garantizando que la
+// orientación siga exactamente la curva visible (incluido el suavizado bezier de
+// los bucles cerrados). En los bordes de un trayecto abierto usa diferencia
+// hacia delante/atrás (sin envolver) para no mezclar con el extremo opuesto.
+function _edPathTangentDeg(points, closed, t, pw, ph) {
+  if (!points || points.length < 2) return 0;
+  const dt = 0.0015;
+  const t0 = closed ? t - dt : Math.max(0, t - dt);
+  const t1 = closed ? t + dt : Math.min(1, t + dt);
+  const pA = _edPathPositionAt(points, closed, t0, pw, ph);
+  const pB = _edPathPositionAt(points, closed, t1, pw, ph);
+  if (!pA || !pB) return 0;
+  const dx = (pB.x - pA.x) * pw, dy = (pB.y - pA.y) * ph;
+  if (!dx && !dy) return 0;
+  return Math.atan2(dy, dx) * 180 / Math.PI;
+}
+
+// Delta de rotación (grados) para orientar el objeto según la tangente de la
+// trayectoria en el instante t, relativo a la tangente inicial (t=0). Al ser
+// relativo, la orientación propia del objeto se conserva como punto de partida:
+// un recorrido en semicírculo (180° de giro de tangente) gira el objeto 180°
+// desde su rotación de partida — su lado superior queda abajo, el derecho a la
+// izquierda — sin importar hacia dónde apuntara originalmente el objeto.
+function _edPathOrientDelta(points, closed, t, pw, ph) {
+  return _edPathTangentDeg(points, closed, t, pw, ph) - _edPathTangentDeg(points, closed, 0, pw, ph);
+}
+
+// Grados extra de rotación por recorrido a aplicar AHORA MISMO al dibujar la capa la
+// (0 si no está en reproducción de recorrido o si la capa no tiene orientación activa).
+// Único punto de verdad usado por los draw() de todos los tipos de capa rotables.
+function _edLayerPathRotDeg(la) {
+  return ((_edViewerMode || _edMpPreviewActive) && la._pathCurRotDeg != null) ? la._pathCurRotDeg : 0;
+}
+
 // ── Easing para recorridos: reasigna t dentro de [0,1] sin cambiar la duración ─
 // ── Easing Hermite por tramos: rápido lineal + frenado/arrancada cortos ──
 // kt=0.75, kp=3kt/(1+2kt)=0.9 → derivada fase frenado P'(u)=0.3(u-1)²≥0 (monotona)
@@ -7577,11 +7626,12 @@ function _edViewerMpTick() {
     // En sync mode con repeticiones finitas, el path se recorre una vez por repetición
     const _isSyncPth = _vCycleDurMs > 0 && _vCycles > 0;
     const _mpStopAt  = _isSyncPth && l._gcpRepeatCount > 0 ? l._gcpRepeatCount : 1;
-    let rel = null;
+    let rel = null, relT = 0;
     if (_mpEnd === 'stop') {
       if (l._pathStopped) { _mpUpdated = true; return; }
       if (_rawT >= _mpStopAt) {
-        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, 0.9999, _vpw, _vph);
+        relT = 0.9999;
+        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
         l._pathStopped = true;
         // En sync mode: disparar el restart timer si _gcpRestartDelay está configurado.
         // (En modo no-sync lo gestiona _applyFrame; aquí el path es quien dirige los frames.)
@@ -7597,7 +7647,8 @@ function _edViewerMpTick() {
       } else {
         // En sync: fracción dentro del ciclo actual (el path reinicia cada repetición)
         const _pFrac = _isSyncPth ? _rawT % 1 : _rawT;
-        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_pFrac,_mpAccel), _vpw, _vph);
+        relT = _edEaseT(_pFrac,_mpAccel);
+        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
       }
     } else if (_mpEnd === 'rewind') {
       const _cycle = _rawT % 2;
@@ -7607,14 +7658,22 @@ function _edViewerMpTick() {
       const _rwdAcc = (_isRwd && _mpAccel === 'start') ? 'end'
                     : (_isRwd && _mpAccel === 'end')   ? 'start'
                     : _mpAccel;
-      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_posT,_rwdAcc), _vpw, _vph);
+      relT = _edEaseT(_posT,_rwdAcc);
+      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
     } else {
       // restart: fracción del ciclo + easing
-      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, _edEaseT(_rawT%1,_mpAccel), _vpw, _vph);
+      relT = _edEaseT(_rawT%1,_mpAccel);
+      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
     }
     if (rel) {
       l._pathCurX = (l.x || 0.5) + rel.x;
       l._pathCurY = (l.y || 0.5) + rel.y;
+      // Orientar el objeto según la tangente de la trayectoria (opcional, por capa)
+      if (l._motionPathOrient) {
+        l._pathCurRotDeg = _edPathOrientDelta(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
+      } else {
+        delete l._pathCurRotDeg;
+      }
       _mpUpdated = true;
       // Propagar a capas fill/pencil/watercolor vinculadas
       const _mpUid = l._uid || l._fillLayerId;
@@ -7622,6 +7681,7 @@ function _edViewerMpTick() {
         (page.layers||[]).forEach(_lk => {
           if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mpUid) {
             _lk._pathCurX = l._pathCurX; _lk._pathCurY = l._pathCurY;
+            if (l._pathCurRotDeg != null) _lk._pathCurRotDeg = l._pathCurRotDeg; else delete _lk._pathCurRotDeg;
           }
         });
       }
@@ -7638,7 +7698,7 @@ function _edViewerMpTickStop() {
   if (_edViewerMpRaf) { cancelAnimationFrame(_edViewerMpRaf); _edViewerMpRaf = null; }
   // Limpiar posiciones de path para que el canvas editor no las use
   const page = edPages[edCurrentPage];
-  if (page) (page.layers||[]).forEach(l => { delete l._pathCurX; delete l._pathCurY; delete l._pathStartTime; delete l._pathStopped; });
+  if (page) (page.layers||[]).forEach(l => { delete l._pathCurX; delete l._pathCurY; delete l._pathCurRotDeg; delete l._pathStartTime; delete l._pathStopped; });
 }
 
 // ── Ticker de preview play del recorrido (solo en modo edición de recorrido) ─────
@@ -7682,14 +7742,16 @@ function _edMpPreviewTick() {
   }
   const _end  = la._motionPathEnd   || 'restart';
   const _acc  = la._motionPathAccel || 'none';
-  let rel = null, _done = false;
+  let rel = null, relT = 0, _done = false;
 
   if (_end === 'stop') {
     if (_rawT >= 1.0) {
-      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, 0.9999, _pw, _ph);
+      relT = 0.9999;
+      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
       _done = true; // llegó al final: detener tras este frame
     } else {
-      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, _edEaseT(_rawT, _acc), _pw, _ph);
+      relT = _edEaseT(_rawT, _acc);
+      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
     }
   } else if (_end === 'rewind') {
     const _cycle  = _rawT % 2;
@@ -7698,21 +7760,30 @@ function _edMpPreviewTick() {
     const _rwdAcc = (_isRwd && _acc === 'start') ? 'end'
                   : (_isRwd && _acc === 'end')   ? 'start'
                   : _acc;
-    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, _edEaseT(_posT, _rwdAcc), _pw, _ph);
+    relT = _edEaseT(_posT, _rwdAcc);
+    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
   } else {
     // restart (default): loop
-    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, _edEaseT(_rawT % 1, _acc), _pw, _ph);
+    relT = _edEaseT(_rawT % 1, _acc);
+    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
   }
 
   if (rel) {
     la._pathCurX = (la.x || 0.5) + rel.x;
     la._pathCurY = (la.y || 0.5) + rel.y;
+    // Orientar el objeto según la tangente de la trayectoria (opcional, por capa)
+    if (la._motionPathOrient) {
+      la._pathCurRotDeg = _edPathOrientDelta(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
+    } else {
+      delete la._pathCurRotDeg;
+    }
     const _pvUid = la._uid || la._fillLayerId;
     if (_pvUid) {
       const _pvPg = edPages[edCurrentPage];
       if (_pvPg) (_pvPg.layers||[]).forEach(_lk => {
         if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_pvUid) {
           _lk._pathCurX = la._pathCurX; _lk._pathCurY = la._pathCurY;
+          if (la._pathCurRotDeg != null) _lk._pathCurRotDeg = la._pathCurRotDeg; else delete _lk._pathCurRotDeg;
         }
       });
     }
@@ -7736,7 +7807,7 @@ function _edMpPreviewStop() {
   if (_edMpPreviewRaf) { cancelAnimationFrame(_edMpPreviewRaf); _edMpPreviewRaf = null; }
   const la = edLayers[_edMotionPathTarget];
   if (la) {
-    delete la._pathCurX; delete la._pathCurY; delete la._pathStartTime;
+    delete la._pathCurX; delete la._pathCurY; delete la._pathCurRotDeg; delete la._pathStartTime;
     // Detener animación y volver al frame 0
     if (typeof la.stopAnim === 'function') la.stopAnim();
     // Limpiar capas fill/pencil/watercolor vinculadas
@@ -7745,7 +7816,7 @@ function _edMpPreviewStop() {
       const _psPg = edPages[edCurrentPage];
       if (_psPg) (_psPg.layers||[]).forEach(_lk => {
         if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_psUid) {
-          delete _lk._pathCurX; delete _lk._pathCurY;
+          delete _lk._pathCurX; delete _lk._pathCurY; delete _lk._pathCurRotDeg;
         }
       });
     }
@@ -7854,6 +7925,9 @@ function _edStartMotionPath(idx) {
   _edMotionPathClosed  = la._motionPathClosed || false;
   _edMotionPathSpeed   = la._motionSpeed || 100;
   _edMotionPathCycles  = la._motionCycles || 1;
+  // Guardar la rotación de partida para poder restaurarla si se cancela (✕)
+  edMpRotating = false;
+  _edMotionPathOrigRotation = la.rotation || 0;
   _edDrawLockUI();
   edSelectedIdx = idx;
   if (edCanvas) edCanvas.style.cursor = 'crosshair';
@@ -7899,6 +7973,7 @@ function _edEndMotionPath(save) {
       } else {
         delete la._motionPath; delete la._motionPathClosed; delete la._motionSpeed;
         delete la._motionCycles; delete la._motionPathEnd; delete la._motionPathAccel;
+        delete la._motionPathOrient; delete la._pathCurRotDeg;
       }
       edPushHistory();
       // Propagar recorrido a todos los miembros del grupo si es un grupo
@@ -7912,15 +7987,21 @@ function _edEndMotionPath(save) {
             _m._motionPath       = _pathProp;
             _m._motionPathClosed = la._motionPathClosed || false;
             _m._motionSpeed      = la._motionSpeed || 100;
-            if (la._motionPathEnd)   _m._motionPathEnd   = la._motionPathEnd;   else delete _m._motionPathEnd;
-            if (la._motionPathAccel) _m._motionPathAccel = la._motionPathAccel; else delete _m._motionPathAccel;
+            if (la._motionPathEnd)    _m._motionPathEnd    = la._motionPathEnd;    else delete _m._motionPathEnd;
+            if (la._motionPathAccel)  _m._motionPathAccel  = la._motionPathAccel;  else delete _m._motionPathAccel;
+            if (la._motionPathOrient) _m._motionPathOrient = la._motionPathOrient; else delete _m._motionPathOrient;
           } else {
             delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed;
             delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel;
+            delete _m._motionPathOrient; delete _m._pathCurRotDeg;
           }
         });
       }
     }
+  } else if (!save && _edMotionPathTarget >= 0) {
+    // Cancelar (✕): restaurar la rotación que tenía el objeto al entrar
+    const la = edLayers[_edMotionPathTarget];
+    if (la) la.rotation = _edMotionPathOrigRotation;
   }
   // Detener preview play si estaba activo
   if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
@@ -7929,6 +8010,8 @@ function _edEndMotionPath(save) {
   _edMotionPathPts     = [];
   _edMotionPathRaw     = [];
   _edMotionPathDrawing = false;
+  edMpRotating         = false;
+  window._edMpRotateLastAngle = undefined;
   // Limpiar todos los punteros activos: el dedo que dibujó el recorrido puede
   // seguir registrado en _edActivePointers y causar "dedo fantasma" en cámara.
   if (window._edActivePointers) window._edActivePointers.clear();
@@ -7936,6 +8019,71 @@ function _edEndMotionPath(save) {
   const bar = $('edMotionBar'); if (bar) bar.style.display = 'none';
   if (edCanvas) edCanvas.style.cursor = '';
   _edDrawUnlockUI();
+  edRedraw();
+}
+
+// ── Handle de rotación del objeto, visible durante la edición del recorrido ──
+// Réplica visual exacta del handle de rotación normal (línea + círculo + flecha),
+// pero autónomo: no depende de edSelectedIdx ni de la selección normal, así que
+// no interfiere con el resto de handles (resize) que siguen ocultos aquí.
+function _edDrawMpRotateHandle(la) {
+  if (!la || la.type === 'bubble' || la.locked) return;
+  const pw = edPageW(), ph = edPageH();
+  const z = edCamera.z;
+  const lw = 1/z;
+  const hrRot = 8/z;
+  const cx = edMarginX() + la.x*pw, cy = edMarginY() + la.y*ph;
+  const h = la.height*ph;
+  const rot = (la.rotation||0) * Math.PI/180;
+  edCtx.save();
+  edCtx.translate(cx, cy);
+  edCtx.rotate(rot);
+  const rotY = -h/2 - 28/z;
+  edCtx.beginPath(); edCtx.moveTo(0,-h/2); edCtx.lineTo(0, rotY+hrRot);
+  edCtx.strokeStyle = '#1a8cff'; edCtx.lineWidth = lw; edCtx.stroke();
+  edCtx.beginPath(); edCtx.arc(0, rotY, hrRot, 0, Math.PI*2);
+  edCtx.fillStyle = '#1a8cff'; edCtx.fill();
+  edCtx.strokeStyle = '#fff'; edCtx.lineWidth = lw*1.5; edCtx.stroke();
+  edCtx.strokeStyle = '#fff'; edCtx.lineWidth = lw*1.5;
+  const ar = hrRot*0.55;
+  edCtx.beginPath(); edCtx.arc(0, rotY, ar, -Math.PI*0.9, Math.PI*0.5); edCtx.stroke();
+  const ax = ar*Math.cos(Math.PI*0.5), ay = rotY + ar*Math.sin(Math.PI*0.5);
+  edCtx.beginPath();
+  edCtx.moveTo(ax,ay); edCtx.lineTo(ax-3/z, ay-5/z);
+  edCtx.moveTo(ax,ay); edCtx.lineTo(ax+4/z, ay-3/z);
+  edCtx.stroke();
+  edCtx.restore();
+}
+
+// ¿El evento cae sobre el handle de rotación del objeto del recorrido?
+function _edMpRotateHitTest(e) {
+  const la = edLayers[_edMotionPathTarget];
+  if (!la || la.type === 'bubble' || la.locked) return false;
+  const c = edCoords(e);
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const _isT = e.pointerType === 'touch';
+  const _cp = la.getControlPoints().find(p => p.corner === 'rotate');
+  if (!_cp) return false;
+  const _dpx = (c.nx - _cp.x) * pw, _dpy = (c.ny - _cp.y) * ph;
+  const distScreen = Math.hypot(_dpx, _dpy) * z;
+  const hitScreen = _isT ? 22 : 14;
+  return distScreen < hitScreen;
+}
+// Aplica el arrastre del handle de rotación (delta angular acumulado, igual
+// que la rotación normal — soporta giros de más de 180°).
+function _edMpRotateUpdate(e) {
+  const la = edLayers[_edMotionPathTarget];
+  if (!la) return;
+  const c = edCoords(e);
+  const _curAng = Math.atan2(c.ny - la.y, c.nx - la.x);
+  if (window._edMpRotateLastAngle !== undefined) {
+    let _delta = (_curAng - window._edMpRotateLastAngle) * 180/Math.PI;
+    if (_delta >  180) _delta -= 360;
+    if (_delta < -180) _delta += 360;
+    la.rotation = (la.rotation || 0) + _delta;
+  }
+  window._edMpRotateLastAngle = _curAng;
+  _edSyncFill(la, true);
   edRedraw();
 }
 
@@ -8280,6 +8428,38 @@ function edOnStart(e){
     // No iniciar trazo si se está tocando la barra de controles o el modal de comportamiento
     if (e.target && e.target.closest('#edMotionBar')) return;
     if (document.getElementById('edMpBehaviourModal')?.classList.contains('open')) return;
+
+    // Handle de rotación del objeto: orientar el objeto en su punto de partida,
+    // con independencia de hacia dónde vaya el trazado.
+    if (_edMpRotateHitTest(e)) {
+      if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
+      if (e.pointerType === 'touch') {
+        if (!window._edActivePointers) window._edActivePointers = new Map();
+        window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+        e.preventDefault();
+        if (window._edActivePointers.size >= 2) {
+          edMpRotating = false;
+          edPinchStart(e);
+          return;
+        }
+        edMpRotating = true;
+        const _laRot = edLayers[_edMotionPathTarget];
+        window._edMpRotateLastAngle = _laRot ? Math.atan2(edCoords(e).ny - _laRot.y, edCoords(e).nx - _laRot.x) : undefined;
+        if (e.pointerId !== undefined) {
+          try { edCanvas.setPointerCapture(e.pointerId); } catch(_) {}
+        }
+        return;
+      }
+      edMpRotating = true;
+      const _laRotPc = edLayers[_edMotionPathTarget];
+      window._edMpRotateLastAngle = _laRotPc ? Math.atan2(edCoords(e).ny - _laRotPc.y, edCoords(e).nx - _laRotPc.x) : undefined;
+      if (e.pointerId !== undefined) {
+        try { edCanvas.setPointerCapture(e.pointerId); } catch(_) {}
+      }
+      e.preventDefault();
+      return;
+    }
+
     // Si estaba reproduciendo preview, detenerlo antes de redibujar
     if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
 
@@ -10155,6 +10335,11 @@ function edOnMove(e){
   }
   if(window._gcpActive) return;
   if (_edMotionPathMode) {
+    if (edMpRotating) {
+      _edMpRotateUpdate(e);
+      e.preventDefault();
+      return;
+    }
     if (_edMotionPathDrawing) {
       // Dibujo activo: acumular puntos del recorrido
       const _mm = edCoords(e);
@@ -11010,6 +11195,13 @@ function edOnEnd(e){
   if (_edMotionPathMode) {
     // Cancelar timer táctil si el dedo se levantó antes de que disparara
     if (window._edMpTouchTimer) { clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
+    if (edMpRotating) {
+      // Soltar el handle de rotación — la rotación ya quedó aplicada en vivo;
+      // se confirma o se descarta junto con el resto al pulsar OK/✕.
+      edMpRotating = false;
+      window._edMpRotateLastAngle = undefined;
+      return;
+    }
     if (_edMotionPathDrawing) {
       _edMotionPathDrawing = false;
       if (_edMotionPathRaw.length >= 2) {
@@ -11508,6 +11700,7 @@ function _vsSerLayer(l) {
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
     if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
+    if (l._motionPathOrient) _s._motionPathOrient = true;
     if (l._motionCycles != null) _s._motionCycles = l._motionCycles;
     if (l._motionCyclesDur) _s._motionCyclesDur = l._motionCyclesDur;
     return _s;
@@ -11529,6 +11722,7 @@ function _vsSerLayer(l) {
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
     if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
+    if (l._motionPathOrient) _s._motionPathOrient = true;
     if (l._motionCycles != null) _s._motionCycles = l._motionCycles;
     if (l._motionCyclesDur) _s._motionCyclesDur = l._motionCyclesDur;
     return _s;
@@ -11549,7 +11743,20 @@ function _vsSnapshot() {
     return s;
   });
   const lineLayer = _edLineLayer ? _vsSerLayer(_edLineLayer) : null;
-  return { vecLayers, lineLayer };
+  // Registrar el ORDEN completo de la página (BUGFIX reordenado de capas): para
+  // cada posición se anota si es un vectorial (con su índice dentro de vecLayers)
+  // o una capa no vectorial — así _vsApply puede devolver cada objeto exactamente
+  // a su profundidad de pila original, en vez de agrupar todos los vectoriales
+  // en un único bloque (lo que destruía el orden si estaban intercalados con
+  // imágenes/dibujos/texto, típico de un grupo mixto ya desagrupado).
+  let _vsVecCounter = 0;
+  const order = page.layers.map(l => {
+    if (l !== _edLineLayer && (l.type === 'line' || l.type === 'shape')) {
+      return { vec: _vsVecCounter++ };
+    }
+    return { nonVec: true };
+  });
+  return { vecLayers, lineLayer, order };
 }
 
 function _vsPush() {
@@ -11579,16 +11786,30 @@ function _vsApply(snap) {
     _edLineLayer = null;
   }
 
-  // Reconstruir page.layers: mantener no-vectoriales en su posición,
-  // insertar vectoriales donde estaban (antes del draw layer, después de stroke)
   const nonVec = page.layers.filter(l => l.type !== 'line' && l.type !== 'shape');
-  const drawIdx = nonVec.findIndex(l => l.type === 'draw');
-  const textIdx = nonVec.findIndex(l => l.type === 'text' || l.type === 'bubble');
-  let insertAt = drawIdx >= 0 ? drawIdx : (textIdx >= 0 ? textIdx : nonVec.length);
-  const before = nonVec.slice(0, insertAt);
-  const after  = nonVec.slice(insertAt);
-  const allVec = _edLineLayer ? [...vecRestored, _edLineLayer] : vecRestored;
-  page.layers = [...before, ...allVec, ...after];
+
+  let _newLayers;
+  if (snap.order && snap.order.length) {
+    // Reconstrucción fiel: cada objeto vuelve exactamente a su profundidad de
+    // pila original, intercalado con las capas no vectoriales tal como estaba.
+    let _nvI = 0;
+    _newLayers = snap.order.map(m => {
+      if (m.nonVec) return nonVec[_nvI++] || null;
+      return vecRestoredRaw[m.vec] || null;
+    }).filter(Boolean);
+    if (_edLineLayer) _newLayers.push(_edLineLayer);
+  } else {
+    // Fallback para snapshots antiguos sin 'order' (sesión ya en curso antes
+    // de esta corrección): agrupa los vectoriales antes del draw/text, como antes.
+    const drawIdx = nonVec.findIndex(l => l.type === 'draw');
+    const textIdx = nonVec.findIndex(l => l.type === 'text' || l.type === 'bubble');
+    let insertAt = drawIdx >= 0 ? drawIdx : (textIdx >= 0 ? textIdx : nonVec.length);
+    const before = nonVec.slice(0, insertAt);
+    const after  = nonVec.slice(insertAt);
+    const allVec = _edLineLayer ? [...vecRestored, _edLineLayer] : vecRestored;
+    _newLayers = [...before, ...allVec, ...after];
+  }
+  page.layers = _newLayers;
   edLayers = page.layers;
 
   // Actualizar _vsPreSessionLayers con las nuevas instancias restauradas.
@@ -15325,8 +15546,9 @@ function _edTextToDrawing(idx) {
     sl._motionPath       = la._motionPath.map(p => ({x:p.x, y:p.y}));
     sl._motionPathClosed = la._motionPathClosed || false;
     sl._motionSpeed      = la._motionSpeed || 100;
-    if (la._motionPathEnd)   sl._motionPathEnd   = la._motionPathEnd;
-    if (la._motionPathAccel) sl._motionPathAccel = la._motionPathAccel;
+    if (la._motionPathEnd)    sl._motionPathEnd    = la._motionPathEnd;
+    if (la._motionPathAccel)  sl._motionPathAccel  = la._motionPathAccel;
+    if (la._motionPathOrient) sl._motionPathOrient = la._motionPathOrient;
   }
 
   // ── Helper: recortar canvas workspace al bbox ─────────────────────────────
@@ -16597,7 +16819,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click',()=>{
       const _pla=edLayers[edSelectedIdx]; if(!_pla) return;
-      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel;
+      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg;
       edRenderOptionsPanel('text-props');
     });
     $('pp-path-speed')?.addEventListener('input',(ev)=>{
@@ -16871,7 +17093,7 @@ function edRenderOptionsPanel(mode){
         edPushHistory();
         _idxsGrp.forEach(i => {
           const _m = edLayers[i]; if (!_m) return;
-          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel;
+          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathOrient; delete _m._pathCurRotDeg;
         });
         edRenderOptionsPanel('props');
       });
@@ -17164,7 +17386,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click', () => {
       const _pla = edLayers[edSelectedIdx]; if (!_pla) return;
-      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel;
+      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg;
       edPushHistory();
       edRenderOptionsPanel('props');
     });
@@ -21304,6 +21526,7 @@ function edSerLayer(l){
     if(l._motionSpeed != null) _g._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   _g._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) _g._motionPathAccel = l._motionPathAccel;
+    if(l._motionPathOrient) _g._motionPathOrient = true;
     if(l._motionCycles!=null) _g._motionCycles=l._motionCycles;
     if(l._motionCyclesDur) _g._motionCyclesDur=l._motionCyclesDur;
     return _g;
@@ -21339,6 +21562,7 @@ function edSerLayer(l){
     if(l._motionSpeed != null) _r._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   _r._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) _r._motionPathAccel = l._motionPathAccel;
+    if(l._motionPathOrient) _r._motionPathOrient = true;
     if(l._motionCycles!=null) _r._motionCycles=l._motionCycles;
     if(l._motionCyclesDur) _r._motionCyclesDur=l._motionCyclesDur;
     return _r;
@@ -21354,6 +21578,7 @@ function edSerLayer(l){
     if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _o._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathOrient)_o._motionPathOrient=true;
     if(l._motionCycles!=null)_o._motionCycles=l._motionCycles;
     if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur;
     return _o;}
@@ -21431,6 +21656,7 @@ function edSerLayer(l){
     if(l._motionSpeed!=null)_bobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _bobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_bobj._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathOrient)_bobj._motionPathOrient=true;
     if(l._motionCycles!=null)_bobj._motionCycles=l._motionCycles;
     if(l._motionCyclesDur)_bobj._motionCyclesDur=l._motionCyclesDur;
     return _bobj;
@@ -21446,10 +21672,10 @@ function edSerLayer(l){
     if(l.opacity !== undefined) _po.opacity=l.opacity;
     return _po;
   }
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -21486,6 +21712,7 @@ function edSerLayer(l){
     if(l._motionSpeed!=null)_sobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _sobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_sobj._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathOrient)_sobj._motionPathOrient=true;
     return _sobj;
   }
   if(l.type==='line'){
@@ -21534,6 +21761,7 @@ function edSerLayer(l){
     if(l._motionSpeed!=null)_lobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _lobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_lobj._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathOrient)_lobj._motionPathOrient=true;
     return _lobj;
   }
 }
@@ -21651,6 +21879,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._motionSpeed != null) dl._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)       dl._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)     dl._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathOrient)    dl._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)      dl._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)         dl._motionCyclesDur  = d._motionCyclesDur;
     return dl;
@@ -21682,6 +21911,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._motionSpeed != null) sl._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)       sl._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)     sl._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathOrient)    sl._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)      sl._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)         sl._motionCyclesDur  = d._motionCyclesDur;
     return sl;
@@ -21700,6 +21930,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
     return l;
@@ -21726,6 +21957,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
     return l;
@@ -21768,6 +22000,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
     return l;
@@ -21797,6 +22030,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._motionSpeed != null)    l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)          l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)        l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathOrient)       l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)         l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)            l._motionCyclesDur  = d._motionCyclesDur;
     if(d.animKey)       l.animKey       = d.animKey;
@@ -22368,6 +22602,7 @@ function edOpenViewer(){
       delete l._pathStopped;    // borrar bandera 'stop' para que el recorrido pueda reiniciarse
       l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
+      delete l._pathCurRotDeg;
     }
   }));
   _edViewerMpTickStart();
@@ -22879,6 +23114,7 @@ function _edResetPageAnims(pageIdx) {
       delete l._pathStopped; // limpiar bandera 'stop' para que el recorrido reinicie
       l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
+      delete l._pathCurRotDeg;
     }
   });
 }
@@ -24774,13 +25010,17 @@ function EditorView_init(){
     if (_modal.classList.contains('open')) { _mpbehClose(); return; }
     // Pre-seleccionar comportamiento actual de la capa
     const _mla = edLayers[_edMotionPathTarget];
-    const _curEnd   = _mla?._motionPathEnd   || 'restart';
-    const _curAccel = _mla?._motionPathAccel || 'none';
+    const _curEnd    = _mla?._motionPathEnd   || 'restart';
+    const _curAccel  = _mla?._motionPathAccel || 'none';
+    const _curOrient = _mla?._motionPathOrient ? 'path' : 'fixed';
     document.querySelectorAll('[data-mpbeh-end]').forEach(b => {
       b.classList.toggle('active', b.dataset.mpbehEnd === _curEnd);
     });
     document.querySelectorAll('[data-mpbeh-accel]').forEach(b => {
       b.classList.toggle('active', b.dataset.mpbehAccel === _curAccel);
+    });
+    document.querySelectorAll('[data-mpbeh-orient]').forEach(b => {
+      b.classList.toggle('active', b.dataset.mpbehOrient === _curOrient);
     });
     _modal.classList.add('open');
   });
@@ -24796,16 +25036,25 @@ function EditorView_init(){
     $('mpbeh-ok')?.addEventListener('click', () => {
       const _mbLa = edLayers[_edMotionPathTarget];
       if (_mbLa) {
-        const _endBtn   = document.querySelector('[data-mpbeh-end].active');
-        const _accelBtn = document.querySelector('[data-mpbeh-accel].active');
-        const _endVal   = _endBtn   ? _endBtn.dataset.mpbehEnd     : 'restart';
-        const _accelVal = _accelBtn ? _accelBtn.dataset.mpbehAccel : 'none';
-        _mbLa._motionPathEnd   = _endVal;
-        _mbLa._motionPathAccel = _accelVal;
+        const _endBtn    = document.querySelector('[data-mpbeh-end].active');
+        const _accelBtn  = document.querySelector('[data-mpbeh-accel].active');
+        const _orientBtn = document.querySelector('[data-mpbeh-orient].active');
+        const _endVal    = _endBtn    ? _endBtn.dataset.mpbehEnd     : 'restart';
+        const _accelVal  = _accelBtn  ? _accelBtn.dataset.mpbehAccel : 'none';
+        const _orientVal = _orientBtn ? _orientBtn.dataset.mpbehOrient === 'path' : false;
+        _mbLa._motionPathEnd    = _endVal;
+        _mbLa._motionPathAccel  = _accelVal;
+        _mbLa._motionPathOrient = _orientVal;
+        // Al desactivar orientación, limpiar el giro que pudiera seguir visible
+        if (!_orientVal) delete _mbLa._pathCurRotDeg;
         if (_mbLa.groupId) {
           _edGroupMemberIdxs(_mbLa.groupId).forEach(i => {
             const _gm = edLayers[i];
-            if (_gm) { _gm._motionPathEnd = _endVal; _gm._motionPathAccel = _accelVal; }
+            if (_gm) {
+              _gm._motionPathEnd = _endVal; _gm._motionPathAccel = _accelVal;
+              _gm._motionPathOrient = _orientVal;
+              if (!_orientVal) delete _gm._pathCurRotDeg;
+            }
           });
         }
         edPushHistory();
@@ -24834,6 +25083,14 @@ function EditorView_init(){
       if (!_isOpen) _sec.classList.add('open');
     });
 
+    // Toggle sección "Orientación del objeto"
+    $('mpbeh-orient-toggle')?.addEventListener('click', () => {
+      const _sec = $('mpbeh-orient-toggle').closest('.mpbeh-section');
+      const _isOpen = _sec.classList.contains('open');
+      document.querySelectorAll('#edMpBehaviourModal .mpbeh-section').forEach(s => s.classList.remove('open'));
+      if (!_isOpen) _sec.classList.add('open');
+    });
+
     // Selección de opción "Al final del recorrido"
     document.querySelectorAll('[data-mpbeh-end]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -24846,6 +25103,14 @@ function EditorView_init(){
     document.querySelectorAll('[data-mpbeh-accel]').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('[data-mpbeh-accel]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // Selección de opción "Orientación del objeto"
+    document.querySelectorAll('[data-mpbeh-orient]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-mpbeh-orient]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
       });
     });
