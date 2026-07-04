@@ -1397,28 +1397,6 @@ function _pathPositionAt(points, closed, t, pw, ph) {
   return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
 }
 
-// ── Motion path: ángulo de la tangente (grados) en el punto t ── (idem editor.js)
-function _pathTangentDeg(points, closed, t, pw, ph) {
-  if (!points || points.length < 2) return 0;
-  const dt = 0.0015;
-  const t0 = closed ? t - dt : Math.max(0, t - dt);
-  const t1 = closed ? t + dt : Math.min(1, t + dt);
-  const pA = _pathPositionAt(points, closed, t0, pw, ph);
-  const pB = _pathPositionAt(points, closed, t1, pw, ph);
-  if (!pA || !pB) return 0;
-  const dx = (pB.x - pA.x) * pw, dy = (pB.y - pA.y) * ph;
-  if (!dx && !dy) return 0;
-  return Math.atan2(dy, dx) * 180 / Math.PI;
-}
-// Delta de rotación (grados), relativo a la tangente inicial (t=0) — idem editor.js
-function _pathOrientDelta(points, closed, t, pw, ph) {
-  return _pathTangentDeg(points, closed, t, pw, ph) - _pathTangentDeg(points, closed, 0, pw, ph);
-}
-// Grados extra de rotación de recorrido a aplicar ahora al dibujar una capa
-function _layerPathRotDeg(la) {
-  return (la && la._pathCurRotDeg != null) ? la._pathCurRotDeg : 0;
-}
-
 // ── Animación GIF en el reproductor ─────────────────────────────────────────
 function _readerGifTick() {
   const now = Date.now();
@@ -1496,7 +1474,6 @@ function _readerGifTick() {
               delete layer._pathStopped;
               layer._pathCurX = layer.x || 0.5;
               layer._pathCurY = layer.y || 0.5;
-              delete layer._pathCurRotDeg;
             }
             panelChanged = true;
           }
@@ -1628,13 +1605,12 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
         const _mpAcl     = layer._motionPathAccel || 'none';
         const _isSyncMR  = _mpCycleDurMs > 0 && layer._motionCycles != null;
         const _mpStopAtR = _isSyncMR && layer._gcpRepeatCount > 0 ? layer._gcpRepeatCount : 1;
-        let _mpPos = null, _mpRelT = 0;
+        let _mpPos = null;
         if (_mpEndB === 'stop') {
           if (layer._pathStopped) {
             panelChanged = true;
           } else if (_mpRawT >= _mpStopAtR) {
-            _mpRelT = 0.9999;
-            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
+            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, 0.9999, _mpPw, _mpPh);
             layer._pathStopped = true;
             // En sync mode: programar reinicio (el mecanismo _animRestartAt de FIX6 lo gestiona)
             if (_isSyncMR && layer._gcpRestartDelay > 0 && !layer._animRestartAt) {
@@ -1643,8 +1619,7 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
             }
           } else {
             const _pFracR = _isSyncMR ? _mpRawT % 1 : _mpRawT;
-            _mpRelT = _easeT(_pFracR,_mpAcl);
-            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
+            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_pFracR,_mpAcl), _mpPw, _mpPh);
           }
         } else if (_mpEndB === 'rewind') {
           const _mpCycle = _mpRawT % 2;
@@ -1653,29 +1628,20 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
           const _mpRwdAcl = (_mpIsRwd && _mpAcl === 'start') ? 'end'
                           : (_mpIsRwd && _mpAcl === 'end')   ? 'start'
                           : _mpAcl;
-          _mpRelT = _easeT(_mpPosT,_mpRwdAcl);
-          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
+          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_mpPosT,_mpRwdAcl), _mpPw, _mpPh);
         } else {
           // restart: fracción + easing
-          _mpRelT = _easeT(_mpRawT%1,_mpAcl);
-          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
+          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _easeT(_mpRawT%1,_mpAcl), _mpPw, _mpPh);
         }
         if (_mpPos) {
           layer._pathCurX = (layer.x || 0.5) + _mpPos.x;
           layer._pathCurY = (layer.y || 0.5) + _mpPos.y;
-          // Orientar el objeto según la tangente de la trayectoria (opcional, por capa)
-          if (layer._motionPathOrient) {
-            layer._pathCurRotDeg = _pathOrientDelta(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
-          } else {
-            delete layer._pathCurRotDeg;
-          }
           // Propagar a capas fill/pencil/watercolor vinculadas
           const _mpUid = layer._uid || layer._fillLayerId;
           if (_mpUid) {
             (panel.layers||[]).forEach(_lk => {
               if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mpUid) {
                 _lk._pathCurX = layer._pathCurX; _lk._pathCurY = layer._pathCurY;
-                if (layer._pathCurRotDeg != null) _lk._pathCurRotDeg = layer._pathCurRotDeg; else delete _lk._pathCurRotDeg;
               }
             });
           }
@@ -2198,7 +2164,7 @@ function _render() {
       const _gy = (layer._pathCurY != null ? layer._pathCurY : (layer.y || 0.5)) * ph;
       const _gw = (layer.width  || 0.5) * pw;
       const _gh = (layer.height || 0.5) * ph;
-      const _gr = ((layer.rotation || 0) + _layerPathRotDeg(layer)) * Math.PI / 180;
+      const _gr = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(_gx, _gy);
       if (_gr) ctx.rotate(_gr);
       ctx.drawImage(layer._gifOc, -_gw/2, -_gh/2, _gw, _gh);
@@ -2216,7 +2182,7 @@ function _render() {
       const _fy = (layer._pathCurY != null ? layer._pathCurY : (layer.y != null ? layer.y : 0.5)) * ph;
       const _fw = (layer.width  != null ? layer.width  : 1) * pw;
       const _fh = (layer.height != null ? layer.height : 1) * ph;
-      const _fr = ((layer.rotation || 0) + _layerPathRotDeg(layer)) * Math.PI / 180;
+      const _fr = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(_fx, _fy);
       if (_fr) ctx.rotate(_fr);
       ctx.drawImage(img, -_fw / 2, -_fh / 2, _fw, _fh);
@@ -2229,7 +2195,7 @@ function _render() {
         const x=(layer._pathCurX != null ? layer._pathCurX : (layer.x||0.5))*pw;
         const y=(layer._pathCurY != null ? layer._pathCurY : (layer.y||0.5))*ph;
         const w=(layer.width||1)*pw, h=(layer.height||1)*ph;
-        const rot=((layer.rotation||0) + _layerPathRotDeg(layer))*Math.PI/180;
+        const rot=(layer.rotation||0)*Math.PI/180;
         ctx.save(); ctx.globalAlpha=layer._animFadeOpacity!=null?layer._animFadeOpacity:(layer.opacity!==undefined?layer.opacity:1);
         ctx.translate(x,y); if(rot)ctx.rotate(rot);
         ctx.drawImage(layer._animOc,-w/2,-h/2,w,h); ctx.restore(); return;
@@ -2239,11 +2205,11 @@ function _render() {
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
       if (type === 'image' || type === 'stroke') {
-        const x = ((type==='stroke'||type==='image') && layer._pathCurX!=null ? layer._pathCurX : (layer.x||0.5)) * pw;
-        const y = ((type==='stroke'||type==='image') && layer._pathCurY!=null ? layer._pathCurY : (layer.y||0.5)) * ph;
+        const x = (type==='stroke' && layer._pathCurX!=null ? layer._pathCurX : (layer.x||0.5)) * pw;
+        const y = (type==='stroke' && layer._pathCurY!=null ? layer._pathCurY : (layer.y||0.5)) * ph;
         const w = (layer.width  || 1) * pw;
         const h = (layer.height || 1) * ph;
-        const rot = (layer.rotation || 0) + _layerPathRotDeg(layer);
+        const rot = layer.rotation || 0;
         ctx.translate(x, y);
         if (rot) ctx.rotate(rot * Math.PI / 180);
         ctx.drawImage(img, -w / 2, -h / 2, w, h);
@@ -2262,7 +2228,7 @@ function _render() {
       const x = (layer._pathCurX != null ? layer._pathCurX : (layer.x||0.5)) * pw;
       const y = (layer._pathCurY != null ? layer._pathCurY : (layer.y||0.5)) * ph;
       const w = (layer.width || 0.3) * pw, h = (layer.height || 0.2) * ph;
-      const rot = ((layer.rotation || 0) + _layerPathRotDeg(layer)) * Math.PI / 180;
+      const rot = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(x, y);
       if (rot) ctx.rotate(rot);
       if (layer.renderDataUrl && layerImgs[j]) {
@@ -2284,7 +2250,7 @@ function _render() {
       const x = (layer._pathCurX != null ? layer._pathCurX : (layer.x||0.5)) * pw;
       const y = (layer._pathCurY != null ? layer._pathCurY : (layer.y||0.5)) * ph;
       const w = (layer.width  || 0.3) * pw, h = (layer.height || 0.2) * ph;
-      const rot = ((layer.rotation || 0) + _layerPathRotDeg(layer)) * Math.PI / 180;
+      const rot = (layer.rotation || 0) * Math.PI / 180;
       ctx.translate(x, y);
       if (rot) ctx.rotate(rot);
       // Si tiene renderDataUrl (línea con curvas), usarlo directamente
@@ -2478,8 +2444,7 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(cx, cy);
-  const _txtPathRot = (type === 'text') ? _layerPathRotDeg(t) : 0;
-  if (t.rotation || _txtPathRot) ctx.rotate(((t.rotation||0) + _txtPathRot) * Math.PI / 180);
+  if (t.rotation) ctx.rotate(t.rotation * Math.PI / 180);
   // Helper: aplica bgOpacity_ solo al fill del fondo
   const _bgFill = (fn) => {
     const _prev = ctx.globalAlpha;
@@ -2671,7 +2636,6 @@ function _resetPanelAnims(idx) {
       delete layer._pathStopped;
       layer._pathCurX = layer.x || 0.5;
       layer._pathCurY = layer.y || 0.5;
-      delete layer._pathCurRotDeg;
     }
   });
 }
