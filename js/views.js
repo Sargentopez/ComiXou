@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v31.77</footer>
+    <footer class="app-version">v32.48</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -284,7 +284,8 @@ Router.register('editor', {
 
       <!-- ── BARRA SUPERIOR ── -->
       <div id="edTopbar">
-        <button id="edBackBtn" title="Volver a Mis Creaciones">‹</button>
+        <div id="edTitlePill" aria-hidden="true"></div>
+        <button id="edBackBtn" title="Volver a Mis Creaciones">◀</button>
         <span id="edProjectTitle">Sin título</span>
         <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav">
@@ -294,7 +295,10 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
+        <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
+             para volver a mostrarlo, descomentar la línea siguiente.
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        -->
         <button class="ed-top-action" id="edSaveBtn" title="Guardar local">💾</button>
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
@@ -379,7 +383,9 @@ Router.register('editor', {
               </div>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="_sel-group">⊞ Agrupar</button>
+              <button class="ed-dropdown-item" id="_sel-ungroup">⊟ Desagrupar</button>
               <button class="ed-dropdown-item" id="_sel-merge">⊕ Unir</button>
+              <button class="ed-dropdown-item" id="_sel-bib-save">📥 Guardar en biblioteca</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="_sel-delete" style="color:#c00">✕ Eliminar selección</button>
             </div>
@@ -476,8 +482,9 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="help">Ayuda ▾</button>
             <div class="ed-dropdown" id="dd-help">
-              <button class="ed-dropdown-item" id="dd-shortcuts">⌨ Atajos de teclado</button>
-              <button class="ed-dropdown-item" id="dd-anim-tutorial">🎬 Crear animaciones</button>
+              <button class="ed-dropdown-item" id="dd-shortcuts">Atajos de teclado</button>
+              <button class="ed-dropdown-item" id="dd-anim-tutorial">Crear animaciones</button>
+              <button class="ed-dropdown-item" id="dd-help-draw-tools">Herramientas de dibujo</button>
             </div>
           </div>
 
@@ -671,6 +678,18 @@ Router.register('editor', {
             </div>
           </div>
 
+          <!-- Sección: Orientación del objeto -->
+          <div class="mpbeh-section" style="margin-top:10px">
+            <button class="mpbeh-header" id="mpbeh-orient-toggle">
+              <span class="mpbeh-header-label">Orientación del objeto</span>
+              <span class="mpbeh-arrow">▾</span>
+            </button>
+            <div class="mpbeh-options" id="mpbeh-orient-options">
+              <button class="mpbeh-opt" data-mpbeh-orient="fixed" id="mpbeh-orient-fixed">🧭 Fija</button>
+              <button class="mpbeh-opt" data-mpbeh-orient="path"  id="mpbeh-orient-path">🔄 Girar según trayectoria</button>
+            </div>
+          </div>
+
         </div>
         <div class="ed-fulloverlay-actions">
           <button class="ed-btn-sec" id="mpbeh-cancel">Cancelar</button>
@@ -683,7 +702,10 @@ Router.register('editor', {
     <div id="edProjectModal">
       <div class="ed-modal-sheet">
         <div class="ed-modal-handle"></div>
-        <h3 class="ed-modal-title">Datos del proyecto</h3>
+        <div class="ed-modal-header">
+          <h3 class="ed-modal-title">Datos del proyecto</h3>
+        </div>
+        <div class="ed-modal-body">
         <div class="ed-modal-field"><label>Título</label><input type="text" id="edMTitle" inputmode="text" enterkeyhint="next" autocomplete="off"></div>
         <div class="ed-modal-field"><label>Autor</label><input type="text" id="edMAuthor" inputmode="text" enterkeyhint="next" autocomplete="off"></div>
         <div class="ed-modal-field"><label>Género</label><input type="text" id="edMGenre" inputmode="text" enterkeyhint="done" autocomplete="off"></div>
@@ -699,6 +721,7 @@ Router.register('editor', {
           <button class="ed-modal-btn cancel" id="edMCancel">Cancelar</button>
           <button class="ed-modal-btn ok" id="edMSave">Guardar ✓</button>
         </div>
+        </div>
       </div>
     </div>
 
@@ -708,23 +731,25 @@ Router.register('editor', {
     <div id="edShortcutsModal">
       <div class="sc-box">
         <div class="sc-header">
-          <span class="sc-title">⌨ Atajos de teclado</span>
+          <span class="sc-title">Atajos de teclado</span>
           <button class="sc-close" id="edShortcutsClose">✕</button>
         </div>
         <div class="sc-body">
 
           <div class="sc-section">Historial</div>
           <div class="sc-row"><span class="sc-desc">Deshacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span></div>
-          <div class="sc-row"><span class="sc-desc">Rehacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Y</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Rehacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Y</kbd> <small style="opacity:.6">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Z</kbd></span></div>
 
           <div class="sc-section">Selección y objetos</div>
           <div class="sc-row"><span class="sc-desc">Mover objeto 1 px</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Mover objeto 10 px</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
-          <div class="sc-row"><span class="sc-desc">Añadir a multiselección</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Duplicar objeto seleccionado</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>D</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Eliminar objeto seleccionado</span><span class="sc-keys"><kbd>Supr</kbd><kbd>/</kbd><kbd>Retroceso</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Cancelar selección / cerrar panel</span><span class="sc-keys"><kbd>Esc</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Confirmar / cerrar panel (OK)</span><span class="sc-keys"><kbd>Enter</kbd></span></div>
+
+          <div class="sc-section">Formas (rectángulo / elipse)</div>
+          <div class="sc-row"><span class="sc-desc">Forzar cuadrado / círculo al arrastrar</span><span class="sc-keys"><kbd>Ctrl</kbd> + arrastrar</span></div>
 
           <div class="sc-section">Orden de capas</div>
           <div class="sc-row"><span class="sc-desc">Subir capa un nivel</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>]</kbd> <small style="opacity:.6">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>↑</kbd></span></div>
@@ -750,12 +775,26 @@ Router.register('editor', {
     <div id="edAnimTutorialModal">
       <div class="sc-box">
         <div class="sc-header">
-          <span class="sc-title">🎬 Crear animaciones</span>
+          <span class="sc-title">Crear animaciones</span>
           <button class="sc-close" id="edAnimTutorialClose">✕</button>
         </div>
         <div class="sc-body">
           <p style="text-align:center;color:var(--gray-500);font-style:italic;padding:24px 0;">Próximamente...</p>
         </div>
+      </div>
+    </div>
+
+    <!-- Modal de ayuda de referencia (menú Ayuda): mismo contenido que las
+         ventanas de ayuda emergentes, con el estilo común de "Atajos de
+         teclado" — accesible siempre, aunque el usuario haya marcado
+         "No volver a mostrar" en la ventana emergente correspondiente. -->
+    <div id="edHelpRefModal">
+      <div class="sc-box">
+        <div class="sc-header">
+          <span class="sc-title" id="edHelpRefTitle">Ayuda</span>
+          <button class="sc-close" id="edHelpRefClose">✕</button>
+        </div>
+        <div class="sc-body" id="edHelpRefBody"></div>
       </div>
     </div>
 
@@ -776,6 +815,7 @@ Router.register('editor', {
     <!-- Editor GIF: mismo diseño que el editor (mismas clases CSS) -->
     <div id="gcpShell">
       <div id="gcpTopbar">
+        <div id="gcpTitlePill" aria-hidden="true"></div>
         <span id="gcpProjectTitle">Gif 1</span>
         <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav" id="gcpFrameNav" style="display:none">
@@ -804,10 +844,13 @@ Router.register('editor', {
           <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
           <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
+          <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
+               para volver a mostrarlo, descomentar la línea siguiente.
           <button class="ed-undo-redo-btn" id="gcpSbDiagBtn" title="Diagnóstico scrollbars">🩺</button>
+          -->
           <div class="ed-menu-sep"></div>
-          <!-- Frames -->
-          <button class="ed-menu-btn" id="gcpFramesToggleBtn">Frames ▾</button>
+          <!-- Matriz (antes "Frames") -->
+          <button class="ed-menu-btn" id="gcpFramesToggleBtn">Matriz ▾</button>
           <div class="ed-menu-sep"></div>
           <!-- Comportamiento -->
           <div class="ed-menu-item" style="position:relative">
@@ -837,8 +880,14 @@ Router.register('editor', {
                   <input type="checkbox" id="gcpInvisAtEnd" style="cursor:pointer;accent-color:var(--black)"> Al final
                 </label>
               </div>
-              <!-- Resumen -->
-              <div id="gcpBehaviourSummary" style="padding:2px 14px 8px;font-family:var(--font-body);font-size:.78rem;font-weight:700;color:var(--gray-500);text-align:center">10 fps · ∞</div>
+              <!-- Resumen editable (teclado PC/Android además del slider) -->
+              <div id="gcpBehaviourSummary" style="padding:2px 14px 8px;font-family:var(--font-body);font-size:.78rem;font-weight:700;color:var(--gray-500);text-align:center;display:flex;align-items:baseline;justify-content:center;flex-wrap:wrap;gap:2px 5px;line-height:1.7">
+                <span><input id="gcpSumVel" type="text" inputmode="numeric" maxlength="2" value="10" autocomplete="off" title="Velocidad (fps)" style="width:20px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px"> fps</span>
+                <span>·</span>
+                <span><input id="gcpSumRep" type="text" inputmode="numeric" maxlength="3" value="∞" autocomplete="off" title="Repeticiones (0 = ∞)" style="width:24px;text-align:center;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px"></span>
+                <span id="gcpSumReiWrap" style="display:none">· R:<input id="gcpSumRei" type="text" inputmode="numeric" maxlength="2" value="0" autocomplete="off" title="Reinicio (segundos)" style="width:18px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
+                <span id="gcpSumTimerWrap" style="display:none">· T:<input id="gcpSumTimer" type="text" inputmode="decimal" maxlength="4" value="0" autocomplete="off" title="Tiempo espera inicio (segundos)" style="width:24px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
+              </div>
             </div>
             <!-- Burbuja flotante de valor para sliders de comportamiento -->
             <div id="gcpSliderBubble" style="display:none;position:fixed;z-index:10000;background:var(--black);border-radius:8px;padding:5px 10px;color:var(--white);font-size:.85rem;font-weight:900;pointer-events:none;text-align:center;transform:translateX(-50%) translateY(-100%);margin-top:-8px;font-family:var(--font-body)"></div>
@@ -874,8 +923,8 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-gcpmenu="gcp-help">Ayuda ▾</button>
             <div class="ed-dropdown" id="gdd-gcp-help">
-              <button class="ed-dropdown-item" id="gcp-dd-shortcuts">⌨ Atajos de teclado</button>
-              <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial">🎬 Crear animaciones</button>
+              <button class="ed-dropdown-item" id="gcp-dd-shortcuts">Atajos de teclado</button>
+              <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial">Crear animaciones</button>
             </div>
           </div>
         </div>
@@ -898,6 +947,7 @@ Router.register('reader', {
   css: ['css/reader.css'],
   html: () => `
     <div class="reader-topbar" id="readerTopbar">
+      <div id="readerTitlePill" aria-hidden="true"></div>
       <div class="home-logo-area" style="flex-direction:row;align-items:center;gap:6px">
         <a href="#home" onclick="Router.go('home');return false;" class="logo-link logo-img-link">
           <img src="logo.svg" alt="ComiXou" class="logo-img" style="height:22px;width:auto;">

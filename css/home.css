@@ -259,7 +259,9 @@
 
 /* Cabecera amarilla igual que auth-card-header */
 .mc-modal-title {
+  position: relative;
   font-family: var(--font-display);
+  font-weight: 700;
   font-size: 1.5rem;
   letter-spacing: 1px;
   color: var(--black);
@@ -270,6 +272,19 @@
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   margin: 0;
+}
+.mc-modal-title-text { position: relative; z-index: 1; }
+/* Franja blanca tras el título — mismo criterio que en el editor: desde el
+   borde izquierdo de la ventana hasta el final del texto, semicírculo a la
+   derecha. Tamaño real fijado por JS (_mcFitAllTitlePills). */
+.win-title-pill {
+  position: absolute;
+  left: 0;
+  background: var(--white);
+  border-radius: 0 999px 999px 0;
+  z-index: 0;
+  pointer-events: none;
+  width: 0;
 }
 
 .mc-field { margin: 0 20px 12px; }

@@ -42,6 +42,28 @@ const ReaderState = {
   creditsRestartArea: null,
 };
 
+// Franja blanca tras el título del lector — refuerza su legibilidad con la
+// nueva tipografía (Arial Bold). Empieza en el borde izquierdo de la página
+// (por eso también queda detrás del logo) y termina justo tras el texto del
+// título, con el extremo derecho en semicírculo.
+function _readerUpdateTitlePill(){
+  const bar   = document.getElementById('readerTopbar');
+  const pill  = document.getElementById('readerTitlePill');
+  const title = document.getElementById('readerComicTitle');
+  if(!bar || !pill || !title) return;
+  const barRect   = bar.getBoundingClientRect();
+  const titleRect = title.getBoundingClientRect();
+  if(titleRect.width <= 0){ pill.style.width = '0px'; return; }
+  const vPad = titleRect.height * 0.067; // relleno vertical alrededor del texto (1/3 menos alto que antes)
+  pill.style.top    = (titleRect.top - barRect.top - vPad) + 'px';
+  pill.style.height = (titleRect.height + vPad * 2) + 'px';
+  pill.style.width  = Math.max(0, titleRect.right - barRect.left + 4) + 'px';
+}
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(window._readerTitlePillRaf);
+  window._readerTitlePillRaf = requestAnimationFrame(_readerUpdateTitlePill);
+});
+
 function ReaderView_init(params) {
   const comicId = (params && params.id) ? params.id : new URLSearchParams(window.location.search).get('id');
   if (!comicId) { Router.go('home'); return; }
@@ -58,6 +80,7 @@ function ReaderView_init(params) {
   ReaderState.creditsShown = false;
 
   document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
+  _readerUpdateTitlePill();
 
   buildPanelElements();
   goToPanel(0);

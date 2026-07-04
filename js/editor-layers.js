@@ -620,15 +620,30 @@ function _lyDrawGroupCompositeThumb(canvas, members) {
   ctx.lineWidth = 2;
   ctx.strokeRect(1, 1, sw-2, sh-2);
 }
+/** Optimización de rendimiento (arrastres para reordenar capas/textos/grupos):
+ *  antes, onMove() volvía a consultar el DOM completo (dos querySelectorAll +
+ *  un getBoundingClientRect POR ITEM) en CADA pointermove durante el
+ *  arrastre. Con muchos objetos/capas esto es "layout thrashing" clásico —
+ *  notable sobre todo en Android. Los rects no cambian durante un arrastre
+ *  de reordenar (el resaltado 'drag-over' no afecta al layout), así que se
+ *  capturan UNA vez al empezar a arrastrar y se reutilizan en cada movimiento. */
+function _lySnapshotDragItems(selector, excludeEl) {
+  return [...document.querySelectorAll(selector)]
+    .filter(el => el !== excludeEl)
+    .map(el => ({ el, rect: el.getBoundingClientRect() }));
+}
 /** Drag-and-drop para el ítem de grupo */
 function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
   let startY, active = false;
   let _lyDragOverGrp = null;
+  let _snap = null;        // snapshot de items+rects, capturado al iniciar el arrastre
+  let _highlighted = null; // elemento actualmente resaltado con 'drag-over'
   function end() {
     if (!active) return;
     active = false;
     item.classList.remove('dragging');
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
+    if (_highlighted) { _highlighted.classList.remove('drag-over'); _highlighted = null; }
+    _snap = null;
     if (_lyDragOverGrp !== null) {
       const _destGid = edLayers[_lyDragOverGrp]?.groupId;
       if (!_destGid || _destGid !== groupId) {
@@ -644,20 +659,15 @@ function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
     window.removeEventListener('pointerup', onPointerUp);
   }
   function onMove(y) {
-    if (!active) return;
-    const items = [...document.querySelectorAll('.ed-layer-item')];
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
-    const target = items.find(it => {
-      if (it === item) return false;
-      const rect = it.getBoundingClientRect();
-      return y >= rect.top && y <= rect.bottom;
-    });
-    if (target) {
-      target.classList.add('drag-over');
-      _lyDragOverGrp = parseInt(target.dataset.realIdx);
-    } else {
-      _lyDragOverGrp = null;
+    if (!active || !_snap) return;
+    const target = _snap.find(s => y >= s.rect.top && y <= s.rect.bottom);
+    const targetEl = target ? target.el : null;
+    if (targetEl !== _highlighted) {
+      if (_highlighted) _highlighted.classList.remove('drag-over');
+      if (targetEl) targetEl.classList.add('drag-over');
+      _highlighted = targetEl;
     }
+    _lyDragOverGrp = targetEl ? parseInt(targetEl.dataset.realIdx) : null;
   }
   function onPointerMove(e) { onMove(e.clientY); }
   function onPointerUp() { end(); }
@@ -671,6 +681,7 @@ function _lyBindDragGroup(groupId, minIdx, maxIdx, item, handle) {
       if (Math.abs(ev.clientY - startY) > 4) {
         active = true;
         item.classList.add('dragging');
+        _snap = _lySnapshotDragItems('.ed-layer-item', item);
         window.removeEventListener('pointermove', checkStart);
       }
     }
@@ -1436,29 +1447,27 @@ function _lyBuildImgItem(la, realIdx, selected) {
 ────────────────────────────────────────── */
 function _lyBindTextDrag(row, handle, realIdx) {
   let startY, startIdx, active = false;
+  let _snap = null;
+  let _highlighted = null;
 
   function onMove(y) {
-    if (!active) return;
-    const rows = [...document.querySelectorAll('.ed-layer-text-row.draggable')];
-    document.querySelectorAll('.ed-layer-text-row').forEach(r => r.classList.remove('drag-over'));
-    const target = rows.find(r => {
-      if (r === row) return false;
-      const rect = r.getBoundingClientRect();
-      return y >= rect.top && y <= rect.bottom;
-    });
-    if (target) {
-      target.classList.add('drag-over');
-      _lyDragOver = parseInt(target.dataset.realIdx);
-    } else {
-      _lyDragOver = null;
+    if (!active || !_snap) return;
+    const target = _snap.find(s => y >= s.rect.top && y <= s.rect.bottom);
+    const targetEl = target ? target.el : null;
+    if (targetEl !== _highlighted) {
+      if (_highlighted) _highlighted.classList.remove('drag-over');
+      if (targetEl) targetEl.classList.add('drag-over');
+      _highlighted = targetEl;
     }
+    _lyDragOver = targetEl ? parseInt(targetEl.dataset.realIdx) : null;
   }
 
   function end() {
     if (!active) return;
     active = false;
     row.classList.remove('dragging');
-    document.querySelectorAll('.ed-layer-text-row').forEach(r => r.classList.remove('drag-over'));
+    if (_highlighted) { _highlighted.classList.remove('drag-over'); _highlighted = null; }
+    _snap = null;
     if (_lyDragOver !== null && _lyDragOver !== startIdx) {
       row.classList.add('was-dragged');
       _lyReorderTexts(startIdx, _lyDragOver);
@@ -1486,6 +1495,7 @@ function _lyBindTextDrag(row, handle, realIdx) {
       if (Math.abs(ev.clientY - startY) > 4) {
         active = true;
         row.classList.add('dragging');
+        _snap = _lySnapshotDragItems('.ed-layer-text-row.draggable', row);
         window.removeEventListener('pointermove', checkStart);
       }
     }
@@ -1498,29 +1508,27 @@ function _lyBindTextDrag(row, handle, realIdx) {
 ────────────────────────────────────────── */
 function _lyBindImgDrag(item, handle, realIdx) {
   let startY, startIdx, active = false;
+  let _snap = null;
+  let _highlighted = null;
 
   function onMove(y) {
-    if (!active) return;
-    const items = [...document.querySelectorAll('.ed-layer-item')];
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
-    const target = items.find(i => {
-      if (i === item) return false;
-      const rect = i.getBoundingClientRect();
-      return y >= rect.top && y <= rect.bottom;
-    });
-    if (target) {
-      target.classList.add('drag-over');
-      _lyDragOver = parseInt(target.dataset.realIdx);
-    } else {
-      _lyDragOver = null;
+    if (!active || !_snap) return;
+    const target = _snap.find(s => y >= s.rect.top && y <= s.rect.bottom);
+    const targetEl = target ? target.el : null;
+    if (targetEl !== _highlighted) {
+      if (_highlighted) _highlighted.classList.remove('drag-over');
+      if (targetEl) targetEl.classList.add('drag-over');
+      _highlighted = targetEl;
     }
+    _lyDragOver = targetEl ? parseInt(targetEl.dataset.realIdx) : null;
   }
 
   function end() {
     if (!active) return;
     active = false;
     item.classList.remove('dragging');
-    document.querySelectorAll('.ed-layer-item').forEach(i => i.classList.remove('drag-over'));
+    if (_highlighted) { _highlighted.classList.remove('drag-over'); _highlighted = null; }
+    _snap = null;
     if (_lyDragOver !== null && _lyDragOver !== startIdx) {
       // Si la capa dragged tiene groupId, mover el bloque entero
       const _draggedLayer = typeof edLayers !== 'undefined' ? edLayers[startIdx] : null;
@@ -1571,6 +1579,7 @@ function _lyBindImgDrag(item, handle, realIdx) {
       if (Math.abs(ev.clientY - startY) > 4) {
         active = true;
         item.classList.add('dragging');
+        _snap = _lySnapshotDragItems('.ed-layer-item', item);
         window.removeEventListener('pointermove', checkStart);
       }
     }
@@ -1700,54 +1709,43 @@ function _lyAdjustDestForGroup(fromIdx, toIdx) {
  * Garantiza que todos los miembros de groupId sean consecutivos en edLayers.
  * Preserva el orden relativo entre ellos.
  * También mueve las sub-capas vinculadas (fill/pencil/watercolor) de cada stroke/draw.
+ *
+ * ELIMINADA (v32.38): confirmado que no se llamaba desde ningún sitio.
+ * Su cometido ya queda cubierto en todos los puntos donde realmente hace
+ * falta, cada uno recalculando los índices en el momento y reinsertando
+ * como bloque contiguo (por lo que "sanean" cualquier grupo ya disperso
+ * como efecto colateral, sin necesitar un paso de compactación aparte):
+ *  - edGroupSelected()      → compactación propia justo tras crear el grupo.
+ *  - _lyReorderGroup()      → mueve el bloque completo (incluye companions).
+ *  - Atajos de teclado (Ctrl+]/[, Ctrl+Alt+]/[) sobre un objeto con groupId
+ *    → mueven el grupo entero como bloque (fix v32.37).
+ *  - "Duplicar todo el grupo" → inserta el duplicado ya como bloque contiguo.
  */
-function _lyCompactGroup(groupId) {
-  // Recoger todos los índices que pertenecen al grupo (miembros + sus sub-capas)
-  const _mainIdxs = edLayers
-    .map((l, i) => ({ l, i }))
-    .filter(({ l }) => l?.groupId === groupId)
-    .map(({ i }) => i);
-  if (_mainIdxs.length < 2) return;
-
-  // Incluir sub-capas vinculadas (fill/pencil/watercolor)
-  const _allIdxsSet = new Set(_mainIdxs);
-  _mainIdxs.forEach(mi => {
-    const _uid = edLayers[mi]?._uid || edLayers[mi]?._fillLayerId;
-    if (_uid) {
-      edLayers.forEach((sl, si) => {
-        if ((sl.type === 'fill' || sl.type === 'pencil' || sl.type === 'watercolor') &&
-            sl._drawLayerId === _uid) {
-          _allIdxsSet.add(si);
-        }
-      });
-    }
-  });
-
-  const _sortedIdxs = [..._allIdxsSet].sort((a, b) => a - b);
-  const _minPos = _sortedIdxs[0];
-
-  // ¿Ya son consecutivos?
-  const _isConsecutive = _sortedIdxs.every((idx, k) => k === 0 || idx === _sortedIdxs[k-1] + 1);
-  if (_isConsecutive) return;
-
-  // Extraer en orden, quitar de mayor a menor (para no desplazar índices)
-  const _layers = _sortedIdxs.map(i => edLayers[i]);
-  for (let k = _sortedIdxs.length - 1; k >= 0; k--) {
-    edLayers.splice(_sortedIdxs[k], 1);
-  }
-  // Insertar a partir de la posición mínima ajustada
-  const _removed = _sortedIdxs.filter(i => i < _minPos).length; // siempre 0
-  const _insertAt = Math.max(0, _minPos - _removed);
-  edLayers.splice(_insertAt, 0, ..._layers);
-}
 
 function _lyReorderGroup(groupId, dir) {
   // Índices de miembros del grupo, ordenados ascendente
-  const memberIdxs = [];
+
+  let memberIdxs = [];
   for (let i = 0; i < edLayers.length; i++) {
     if (edLayers[i] && edLayers[i].groupId === groupId) memberIdxs.push(i);
   }
   if (memberIdxs.length < 1) return;
+  // Incluir companions fill/pencil/watercolor de cada miembro: no llevan
+  // groupId propio (son parte del stroke/draw, ver edGroupSelected), pero
+  // deben moverse siempre junto a su capa dueña — si no, el grupo se
+  // desplaza y el companion se queda atrás, separándose de su stroke y
+  // rompiendo el orden fill→watercolor→pencil→stroke.
+  const _memberSet = new Set(memberIdxs);
+  memberIdxs.forEach(mi => {
+    const _m = edLayers[mi];
+    const _uid = _m?._uid || _m?._fillLayerId;
+    if (_uid) {
+      edLayers.forEach((l, li) => {
+        if (['fill','pencil','watercolor'].includes(l.type) && l._drawLayerId === _uid) _memberSet.add(li);
+      });
+    }
+  });
+  memberIdxs = [..._memberSet].sort((a,b)=>a-b);
 
   // Todos los índices visuales (imagen/dibujo/shape/line)
   const visualAll = edLayers.map((l, i) => ({ l, i }))

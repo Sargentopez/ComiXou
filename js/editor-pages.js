@@ -194,10 +194,12 @@ function _pgBuildCard(page, idx) {
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
     if (edPages.length <= 1) { edToast('No puedes eliminar la última hoja'); return; }
-    edPages.splice(idx, 1);
-    edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
-    edPushHistory();
-    _pgRender();
+    edConfirm('¿Eliminar esta hoja?', () => {
+      edPages.splice(idx, 1);
+      edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
+      edPushHistory();
+      _pgRender();
+    });
   });
 
   actions.appendChild(dupBtn);
@@ -223,7 +225,27 @@ function _pgBuildCard(page, idx) {
   return card;
 }
 
+// Envoltorio ligero: para la página ACTIVA (la que se está editando) siempre
+// se renderiza en vivo, igual que antes — es solo una página, coste asumible.
+// Para el resto de páginas, si ya hay una miniatura cacheada (generada al
+// salir de ellas — ver _edCachePageThumb en editor.js), se reutiliza tal
+// cual en vez de recorrer capas y canvas pesados de páginas que ni siquiera
+// se están viendo. Si aún no hay caché para esa página (primera vez que se
+// abre "Hojas" en la sesión), se renderiza en vivo como siempre — nunca
+// se muestra una miniatura vacía.
 function _pgDrawThumb(canvas, page) {
+  if (page && page !== edPages[edCurrentPage] && page._cachedThumbCanvas) {
+    const ctx = canvas.getContext('2d');
+    const tw = canvas.width, th = canvas.height;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, tw, th);
+    ctx.drawImage(page._cachedThumbCanvas, 0, 0, tw, th);
+    return;
+  }
+  _pgRenderThumbLive(canvas, page);
+}
+
+function _pgRenderThumbLive(canvas, page) {
   const ctx = canvas.getContext('2d');
   const tw = canvas.width, th = canvas.height;
   ctx.fillStyle = '#ffffff';
@@ -352,29 +374,66 @@ function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
 ────────────────────────────────────────── */
 function _pgDuplicate(idx) {
   const src = edPages[idx];
-  // Copia profunda de layers: los canvas se clonan para que cada hoja
-  // tenga sus propios píxeles independientes (fill, draw, stroke).
+  // Copia profunda real: cada capa se clona vía edSerLayer/edDeserLayer (el mismo boundary
+  // de serialización que usa el guardado normal y que ya usa edDuplicateSelected para un solo
+  // objeto), no con Object.assign superficial. Esto reconstruye el canvas desde dataUrl y clona
+  // en profundidad points/subPaths/cornerRadii/groupedStyles/_motionPath automáticamente —
+  // antes solo se clonaba _canvas, dejando esos arrays/objetos compartidos por referencia.
+  //
+  // Además, los identificadores que vinculan capas entre sí DENTRO de la misma hoja
+  // (_uid/_drawLayerId/_fillLayerId/_pencilLayerId/_watercolorLayerId del grupo de dibujo a
+  // mano fill+watercolor+pencil+stroke, y groupId de los grupos de selección) se remapean a
+  // valores nuevos consistentes — mismo valor antiguo → mismo valor nuevo en todas las capas
+  // que lo comparten — igual que ya hace edDuplicateSelected() con su _npid, pero generalizado
+  // a toda la hoja. Así el duplicado mantiene sus propias relaciones internas sin compartir
+  // ningún ID con la hoja original.
+  const _idMap = new Map();
+  function _pgRemapId(oldId) {
+    if (!oldId) return oldId;
+    if (!_idMap.has(oldId)) _idMap.set(oldId, Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    return _idMap.get(oldId);
+  }
+  const _srcOrientation = src.orientation || edOrientation;
+
   const newLayers = src.layers.map(l => {
     if (!l) return null;
-    const copy = Object.assign(Object.create(Object.getPrototypeOf(l)), l);
-    // Clonar canvas propio si existe — sin esto, mover píxeles en una hoja
-    // afecta a la otra porque comparten el mismo HTMLCanvasElement por referencia.
-    if (l._canvas && l._canvas instanceof HTMLCanvasElement) {
-      const cloned = document.createElement('canvas');
-      cloned.width  = l._canvas.width;
-      cloned.height = l._canvas.height;
-      cloned.getContext('2d').drawImage(l._canvas, 0, 0);
-      copy._canvas = cloned;
-      copy._ctx    = cloned.getContext('2d');
-    }
-    // La imagen se reutiliza por referencia (mismo HTMLImageElement)
+    const ser = edSerLayer(l);
+    if (!ser) return null;
+    const copy = edDeserLayer(ser, _srcOrientation);
+    if (!copy) return null;
+
+    // edDeserLayer no restaura groupId/locked para capas tipo 'gif' (gap preexistente del
+    // propio edDeserLayer, no introducido aquí) — reforzar para no perder esos estados al duplicar.
+    if (ser.groupId) copy.groupId = ser.groupId;
+    if (ser.locked)  copy.locked  = true;
+
+    // _gcpFramesData/_gcpLayersData/_gcpLayerNames (animación GCP embebida en capas image):
+    // edSerLayer los copia por REFERENCIA (a diferencia de _motionPath, que sí clona), así que
+    // sin este clonado explícito el duplicado compartiría el mismo array en memoria y editar
+    // frames de la animación en una hoja corrompería la otra.
+    if (copy._gcpFramesData) copy._gcpFramesData = JSON.parse(JSON.stringify(copy._gcpFramesData));
+    if (copy._gcpLayersData) copy._gcpLayersData = JSON.parse(JSON.stringify(copy._gcpLayersData));
+    if (copy._gcpLayerNames) copy._gcpLayerNames = JSON.parse(JSON.stringify(copy._gcpLayerNames));
+
+    // Remapear IDs de vinculación a valores nuevos e independientes del original.
+    if (copy._uid)               copy._uid               = _pgRemapId(copy._uid);
+    if (copy._drawLayerId)       copy._drawLayerId       = _pgRemapId(copy._drawLayerId);
+    if (copy._fillLayerId)       copy._fillLayerId       = _pgRemapId(copy._fillLayerId);
+    if (copy._pencilLayerId)     copy._pencilLayerId     = _pgRemapId(copy._pencilLayerId);
+    if (copy._watercolorLayerId) copy._watercolorLayerId = _pgRemapId(copy._watercolorLayerId);
+    if (copy.groupId)            copy.groupId            = _pgRemapId(copy.groupId);
+    // _fusionId no se remapea: es estado de sesión del panel de fusión de líneas ("Unir"),
+    // edSerLayer no lo serializa — no sobrevive a esta ronda de clonado, igual que
+    // edDuplicateSelected() lo borra explícitamente del objeto duplicado.
+    // _bibItemId no se remapea: es una referencia legítima al ítem de biblioteca de origen.
+
     return copy;
   }).filter(Boolean);
 
   const newPage = {
     drawData: src.drawData || null,
     layers: newLayers,
-    orientation:       src.orientation       || edOrientation,
+    orientation:       _srcOrientation,
     textLayerOpacity:  src.textLayerOpacity  ?? 1,
     textMode:          src.textMode          || 'sequential',
   };
