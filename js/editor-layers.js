@@ -1625,54 +1625,43 @@ function _lyAdjustDestForGroup(fromIdx, toIdx) {
  * Garantiza que todos los miembros de groupId sean consecutivos en edLayers.
  * Preserva el orden relativo entre ellos.
  * También mueve las sub-capas vinculadas (fill/pencil/watercolor) de cada stroke/draw.
+ *
+ * ELIMINADA (v32.38): confirmado que no se llamaba desde ningún sitio.
+ * Su cometido ya queda cubierto en todos los puntos donde realmente hace
+ * falta, cada uno recalculando los índices en el momento y reinsertando
+ * como bloque contiguo (por lo que "sanean" cualquier grupo ya disperso
+ * como efecto colateral, sin necesitar un paso de compactación aparte):
+ *  - edGroupSelected()      → compactación propia justo tras crear el grupo.
+ *  - _lyReorderGroup()      → mueve el bloque completo (incluye companions).
+ *  - Atajos de teclado (Ctrl+]/[, Ctrl+Alt+]/[) sobre un objeto con groupId
+ *    → mueven el grupo entero como bloque (fix v32.37).
+ *  - "Duplicar todo el grupo" → inserta el duplicado ya como bloque contiguo.
  */
-function _lyCompactGroup(groupId) {
-  // Recoger todos los índices que pertenecen al grupo (miembros + sus sub-capas)
-  const _mainIdxs = edLayers
-    .map((l, i) => ({ l, i }))
-    .filter(({ l }) => l?.groupId === groupId)
-    .map(({ i }) => i);
-  if (_mainIdxs.length < 2) return;
-
-  // Incluir sub-capas vinculadas (fill/pencil/watercolor)
-  const _allIdxsSet = new Set(_mainIdxs);
-  _mainIdxs.forEach(mi => {
-    const _uid = edLayers[mi]?._uid || edLayers[mi]?._fillLayerId;
-    if (_uid) {
-      edLayers.forEach((sl, si) => {
-        if ((sl.type === 'fill' || sl.type === 'pencil' || sl.type === 'watercolor') &&
-            sl._drawLayerId === _uid) {
-          _allIdxsSet.add(si);
-        }
-      });
-    }
-  });
-
-  const _sortedIdxs = [..._allIdxsSet].sort((a, b) => a - b);
-  const _minPos = _sortedIdxs[0];
-
-  // ¿Ya son consecutivos?
-  const _isConsecutive = _sortedIdxs.every((idx, k) => k === 0 || idx === _sortedIdxs[k-1] + 1);
-  if (_isConsecutive) return;
-
-  // Extraer en orden, quitar de mayor a menor (para no desplazar índices)
-  const _layers = _sortedIdxs.map(i => edLayers[i]);
-  for (let k = _sortedIdxs.length - 1; k >= 0; k--) {
-    edLayers.splice(_sortedIdxs[k], 1);
-  }
-  // Insertar a partir de la posición mínima ajustada
-  const _removed = _sortedIdxs.filter(i => i < _minPos).length; // siempre 0
-  const _insertAt = Math.max(0, _minPos - _removed);
-  edLayers.splice(_insertAt, 0, ..._layers);
-}
 
 function _lyReorderGroup(groupId, dir) {
   // Índices de miembros del grupo, ordenados ascendente
-  const memberIdxs = [];
+
+  let memberIdxs = [];
   for (let i = 0; i < edLayers.length; i++) {
     if (edLayers[i] && edLayers[i].groupId === groupId) memberIdxs.push(i);
   }
   if (memberIdxs.length < 1) return;
+  // Incluir companions fill/pencil/watercolor de cada miembro: no llevan
+  // groupId propio (son parte del stroke/draw, ver edGroupSelected), pero
+  // deben moverse siempre junto a su capa dueña — si no, el grupo se
+  // desplaza y el companion se queda atrás, separándose de su stroke y
+  // rompiendo el orden fill→watercolor→pencil→stroke.
+  const _memberSet = new Set(memberIdxs);
+  memberIdxs.forEach(mi => {
+    const _m = edLayers[mi];
+    const _uid = _m?._uid || _m?._fillLayerId;
+    if (_uid) {
+      edLayers.forEach((l, li) => {
+        if (['fill','pencil','watercolor'].includes(l.type) && l._drawLayerId === _uid) _memberSet.add(li);
+      });
+    }
+  });
+  memberIdxs = [..._memberSet].sort((a,b)=>a-b);
 
   // Todos los índices visuales (imagen/dibujo/shape/line)
   const visualAll = edLayers.map((l, i) => ({ l, i }))

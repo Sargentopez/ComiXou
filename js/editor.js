@@ -970,6 +970,21 @@ let _edLineLayer  = null;     // LineLayer en construcción
 let _edLineType   = 'draw';   // 'draw' | 'select'
 let _edLineFusionId = null;   // T1: ID de fusión — LineLayer del mismo ID se fusionan al OK
 let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType real
+// ── Anti-fantasma tableta gráfica: mouse+pen simultáneos ──────────────────
+// El propio spec de Pointer Events señala que, al mezclar tipos de puntero,
+// pueden coexistir varios punteros "primarios" a la vez. En la práctica,
+// muchas tabletas gráficas (Wacom/Huion/XP-Pen en modo genérico, o con
+// Windows Ink mal configurado) reportan el MISMO trazo físico como dos
+// punteros primarios distintos y concurrentes: uno 'pen' y otro 'mouse'
+// (fenómeno documentado por varias apps de dibujo, p.ej. drawpile/Drawpile#819).
+// Sin filtrarlo, el segundo puntero "fantasma" reinterpreta el mismo gesto
+// como un segundo toque -> falso doble-clic (borra nodos) o corta en seco
+// un arrastre/pending real que seguía en curso.
+// Mientras un puntero NO táctil (mouse o pen) tiene una interacción activa,
+// se ignora cualquier OTRO puntero no táctil hasta que el primero termine
+// (pointerup/pointercancel). No afecta a táctil — el pinch multi-dedo sigue
+// gestionado aparte por _edActivePointers.
+let _edActiveNonTouchPointerId = null;
 let edPainting = false;
 let _edDrawLayerTarget = 'draw'; // 'draw' | 'fill' — capa activa en panel de dibujo
 let _edPenPendingStroke = null; // punto inicial diferido para lápiz
@@ -8423,6 +8438,17 @@ function edOnStart(e){
   }
   // Ignorar completamente cuando el editor de animaciones está activo
   if(window._gcpActive) return;
+  // ── Anti-fantasma tableta gráfica (mouse+pen simultáneos) — ver declaración ──
+  if(e.pointerType !== 'touch'){
+    // Hover espurio de lápiz sin presión real (antes solo se filtraba para
+    // iniciar dibujo/borrador; se generaliza a TODA la app — un hover nunca
+    // debe seleccionar, arrastrar ni borrar nodos).
+    if(e.pointerType === 'pen' && e.buttons === 0) return;
+    if(_edActiveNonTouchPointerId !== null && _edActiveNonTouchPointerId !== e.pointerId){
+      return; // puntero fantasma del mismo gesto físico — ignorar por completo
+    }
+    _edActiveNonTouchPointerId = e.pointerId;
+  }
   // ── MODO RECORRIDO: inicio de trazo a mano alzada ───────────────────────
   if (_edMotionPathMode) {
     // No iniciar trazo si se está tocando la barra de controles o el modal de comportamiento
@@ -10334,6 +10360,10 @@ function edOnMove(e){
     window._edRawMoveCount[_g] = (window._edRawMoveCount[_g] || 0) + 1;
   }
   if(window._gcpActive) return;
+  // ── Anti-fantasma tableta gráfica (mouse+pen simultáneos) — ver edOnStart ──
+  if(e.pointerType !== 'touch' && _edActiveNonTouchPointerId !== null && _edActiveNonTouchPointerId !== e.pointerId){
+    return; // puntero fantasma — ignorar su movimiento mientras el real está activo
+  }
   if (_edMotionPathMode) {
     if (edMpRotating) {
       _edMpRotateUpdate(e);
@@ -11180,6 +11210,13 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
+  // ── Anti-fantasma tableta gráfica (mouse+pen simultáneos) — ver edOnStart ──
+  // DEBE ir antes que cualquier reseteo: un "up" fantasma no debe cancelar
+  // un arrastre/pending real que sigue en curso (p.ej. _edPenNodeDragPending).
+  if(e && e.pointerType !== 'touch' && _edActiveNonTouchPointerId !== null){
+    if(e.pointerId !== _edActiveNonTouchPointerId) return;
+    _edActiveNonTouchPointerId = null;
+  }
   _edDragStatic.valid = false;  // invalidar cache del drag
   _edPaintStatic.valid = false; // invalidar cache del trazo (mismo patrón)
   window._edPenDragPending = null; // si no se superó el umbral, queda como clic/tap limpio
@@ -11406,9 +11443,10 @@ function edOnEnd(e){
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
       let _found=[];
       edLayers.forEach((la,i)=>{ if(!la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
-      // Los grupos se seleccionan siempre completos, aunque el rubber band
-      // solo llegara a encerrar a alguno de sus miembros.
-      _found = _edExpandGroupSelection(_found);
+      // Los grupos se seleccionan siempre completos, pero solo si el rubber
+      // band llegó a encerrar los handlers de TODOS sus miembros — si solo
+      // atrapó a alguno, el grupo entero se descarta (_edFilterPartialGroups).
+      _found = _edExpandGroupSelection(_edFilterPartialGroups(_found));
       if(_found.length===1){
         // Un solo objeto → selección normal (sin abrir panel; doble tap lo abre)
         edSelectedIdx=_found[0];
@@ -11444,8 +11482,10 @@ function edOnEnd(e){
           // Las sub-capas fill/pencil/watercolor no son seleccionables independientemente
           if(!la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
         });
-        // Los grupos se seleccionan siempre completos.
-        edMultiSel = _edExpandGroupSelection(edMultiSel);
+        // Los grupos se seleccionan siempre completos, pero solo si el rubber
+        // band llegó a encerrar los handlers de TODOS sus miembros (ver
+        // _edFilterPartialGroups) — no basta con atrapar a uno de ellos.
+        edMultiSel = _edExpandGroupSelection(_edFilterPartialGroups(edMultiSel));
       }
       if(edMultiSel.length) _msRecalcBbox();  // bbox inicial al seleccionar
       if(edMultiSel.length >= 2){
@@ -21081,6 +21121,21 @@ function _edExpandGroupSelection(idxs){
   return [...result].sort((a,b) => a-b);
 }
 
+// Filtra los candidatos de un rubber band ANTES de expandir a grupo completo:
+// un grupo solo debe entrar en la selección si los handlers de TODOS sus
+// miembros visibles caen dentro del cuadro — no basta con que el rubber band
+// solo llegue a encerrar a uno de los objetos que lo integran. Los miembros
+// ocultos no cuentan (no son seleccionables ni se dibujan sus handlers).
+function _edFilterPartialGroups(foundIdxs){
+  const _foundSet = new Set(foundIdxs);
+  return foundIdxs.filter(i => {
+    const _gid = edLayers[i]?.groupId;
+    if(!_gid) return true;
+    const _visMembers = _edGroupMemberIdxs(_gid).filter(gi => edLayers[gi] && !edLayers[gi].hidden);
+    return _visMembers.every(gi => _foundSet.has(gi));
+  });
+}
+
 /* ── Agrupar los layers de edMultiSel ── */
 function edGroupSelected(){
   if(!edMultiSel.length || edMultiSel.length < 2) return;
@@ -25485,6 +25540,63 @@ function EditorView_init(){
         const layers = page.layers;
         const idx = edSelectedIdx;
         const _la = layers[idx];
+        // ── Objeto perteneciente a un grupo: mover TODO el grupo como bloque ──
+        // Bug potencial (sin este guard): este atajo movía solo el miembro
+        // individual seleccionado (p.ej. tras doble-tap que abre su panel de
+        // propiedades), rompiendo la invariante de "grupo contiguo" y el
+        // orden relativo interno entre sus miembros. Al desagrupar después,
+        // ese desorden quedaba fijado (edUngroupSelected solo borra groupId,
+        // no reordena). Se replica aquí el mismo criterio que ya usa la rama
+        // de multiselección de grupo (ver más abajo) pero sin tocar
+        // edSelectedIdx/edActiveTool, para no alterar el panel abierto.
+        if(_la && _la.groupId){
+          const _gid = _la.groupId;
+          const _gSet = new Set(_edGroupMemberIdxs(_gid).map(i => layers[i]));
+          _gSet.forEach(_m => {
+            const _uid = _m?._uid || _m?._fillLayerId;
+            if(_uid){
+              layers.forEach(l => {
+                if(['fill','pencil','watercolor'].includes(l.type) && l._drawLayerId===_uid) _gSet.add(l);
+              });
+            }
+          });
+          const idxs = [...layers.keys()].filter(i => _gSet.has(layers[i])).sort((a,b)=>a-b);
+          if(idxs.length){
+            if(e.altKey){
+              const blockLayers = idxs.map(i => layers[i]);
+              [...idxs].sort((a,b)=>b-a).forEach(i => layers.splice(i,1));
+              if(_goUp) layers.push(...blockLayers); else if(_goDown) layers.unshift(...blockLayers);
+              edLayers = layers;
+              edSelectedIdx = layers.indexOf(_la);
+              edPushHistory(); edRedraw(); edToast(_goUp ? 'Grupo al frente ⬆' : 'Grupo al fondo ⬇');
+            } else if(_goUp && idxs[idxs.length-1] < layers.length-1){
+              let target = idxs[idxs.length-1] + 1;
+              while(target < layers.length && ['fill','pencil','watercolor'].includes(layers[target].type)) target++;
+              if(target < layers.length){
+                const blockLayers = idxs.map(i => layers[i]);
+                const targetLayer = layers[target];
+                [...idxs, target].sort((a,b)=>b-a).forEach(i => layers.splice(i,1));
+                layers.splice(idxs[0], 0, targetLayer, ...blockLayers);
+                edLayers = layers;
+                edSelectedIdx = layers.indexOf(_la);
+                edPushHistory(); edRedraw(); edToast('Grupo subido ▲');
+              }
+            } else if(_goDown && idxs[0] > 0){
+              let target = idxs[0] - 1;
+              while(target >= 0 && ['fill','pencil','watercolor'].includes(layers[target].type)) target--;
+              if(target >= 0){
+                const blockLayers = idxs.map(i => layers[i]);
+                const targetLayer = layers[target];
+                [...idxs, target].sort((a,b)=>b-a).forEach(i => layers.splice(i,1));
+                layers.splice(target, 0, ...blockLayers, targetLayer);
+                edLayers = layers;
+                edSelectedIdx = layers.indexOf(_la);
+                edPushHistory(); edRedraw(); edToast('Grupo bajado ▼');
+              }
+            }
+          }
+          return;
+        }
         // Capas del grupo: fill, watercolor, pencil — se mueven junto al stroke
         const _ordUid = _la?._uid || _la?._fillLayerId;
         const _flOrd = _ordUid ? layers.find(l=>l.type==='fill'&&l._drawLayerId===_ordUid) : null;
