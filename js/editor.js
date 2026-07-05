@@ -1023,7 +1023,6 @@ let _edGradType = 'linear';    // 'linear' | 'radial'
 let _edGradPtStart = null;     // punto inicio del trazo {nx, ny}
 let edDodgeBurnSign = 1;         // +1 = iluminar (dodge), -1 = oscurecer (burn)
 let _edDodgeBurnActive = false; // true = modo iluminar/oscurecer activo
-let _edGapCloseEnabled = true;  // true = cerrar huecos automáticamente al soltar el trazo de tinta
 // ── Dodge/Burn: estado de nivel por canvas ────────────────────────────────
 // WeakMap<canvas, {origData:Uint8ClampedArray, levelData:Float32Array, w, h}>
 // origData: RGBA del pixel en el momento de su primer toque.
@@ -5629,7 +5628,7 @@ function _edApplyCrop() {
       edPushHistory(); // snapshot DESPUÉS
       edRenderOptionsPanel('props');
     }
-    _edResetCameraToFit();
+    edFitCanvas();
     edRedraw();
     edToast('Recorte creado ✓');
   };
@@ -8575,6 +8574,21 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
   return null;
 }
 
+// true durante edición de un dibujo vectorial (herramienta Línea/Forma en
+// cualquiera de sus estados: construyendo, seleccionando dentro del panel, o
+// nodos V⟺C) o dibujo a mano (pincel/borrador/relleno/acuarela). En estos
+// casos las guías deben ser puramente visuales: no deben interceptar el
+// toque, ni bloquear el arrastre sobre un nodo o el trazo, aunque estén
+// bloqueadas — ver gating de _edRulesHit en edOnStart.
+function _edGuidesPassThroughActive(){
+  if(['draw','eraser','fill','color-erase'].includes(edActiveTool)) return true;
+  const _mode = $('edOptionsPanel')?.dataset.mode;
+  if(_mode === 'shape' || _mode === 'line') return true;
+  if($('edShapeBar')?.classList.contains('visible')) return true;
+  if(_edLineLayer) return true;
+  return false;
+}
+
 function edOnStart(e){
   // Interceptar zoom rect antes de cualquier otra lógica
   if (_edZoomRectActive) {
@@ -8699,14 +8713,18 @@ function edOnStart(e){
   // ── REGLAS: prioridad máxima — siempre antes de cualquier bloqueo de UI ──
   // (Las guías deben funcionar aunque draw-active esté activo o el panel props
   //  esté abierto. Igual que el borde del lienzo: siempre por encima de todo.)
+  // EXCEPCIÓN: durante edición de dibujo vectorial o a mano, las guías deben
+  // ser puramente visuales — no deben interceptar el toque ni impedir que
+  // llegue al nodo/trazo subyacente, aunque estén bloqueadas (ver T29→este fix).
+  const _edGuidesBlockTouch = !_edGuidesPassThroughActive();
   // ── REGLAS: si hay modo mover activo desde el panel, absorber el primer toque ──
-  if(_edRuleDrag && _edRuleDrag.part === 'line' && _edRuleDrag.offX === undefined) {
+  if(_edGuidesBlockTouch && _edRuleDrag && _edRuleDrag.part === 'line' && _edRuleDrag.offX === undefined) {
     // El movimiento real empieza en edOnMove; aquí solo bloqueamos selección de objetos
     return;
   }
 
   // ── REGLAS: hit-test sobre arrastradores y líneas ──
-  if(edRules.length || window._edRuleMoveReady) {
+  if(_edGuidesBlockTouch && (edRules.length || window._edRuleMoveReady)) {
     const _rc = edCoords(e);
     // Modo "mover regla" activo tras pulsar "Mover" en el panel
     if(window._edRuleMoveReady) {
@@ -12778,6 +12796,22 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
     }
   }
 
+  // ── Detección de fuga (igual que en edFloodFill): si el relleno alcanza
+  // casi toda el área del stroke, se ha colado por un hueco de tinta —
+  // cerrar huecos en el propio canvas del stroke y reintentar una vez.
+  let _folFilledCount = 0;
+  for (let _fci = 0; _fci < W*H; _fci++) if (filled[_fci]) _folFilledCount++;
+  const _folLeak = (_folFilledCount / (W*H)) >= 0.9;
+  if (_folLeak && !window._edFillGapRetry && _selLa?._canvas) {
+    const _gapsClosed = _edCloseInkGapsInRegion(_selLa, 0, 0, _selLa._canvas.width-1, _selLa._canvas.height-1);
+    if (_gapsClosed) {
+      window._edFillGapRetry = true;
+      try { _edFloodFillOnLayer(refCanvas, flTarget, nx, ny); } finally { window._edFillGapRetry = false; }
+      return;
+    }
+    // Sin huecos cercanos que cerrar: seguir con el relleno tal cual.
+  }
+
   // Escribir en el FillLayer (igual que el flujo normal)
   const prevFill = flTarget._ctx.getImageData(0, 0, W, H).data;
   const _flResult = flTarget._ctx.createImageData(W, H);
@@ -12930,6 +12964,27 @@ function edFloodFill(nx, ny){
       stack.push({y:ny2,left:segStart,right:rx,dy:dy});
       stack.push({y:ny2,left:segStart,right:rx,dy:-dy});
     }
+  }
+
+  // ── Detección de fuga: si el relleno ha alcanzado casi todo el lienzo de
+  // trabajo, es señal de que se ha colado por un hueco de tinta. En vez de
+  // pintarlo todo, cerramos los huecos más cercanos en la capa de tinta
+  // (mismo algoritmo que usaba la antigua herramienta manual "Cerrar
+  // huecos") y reintentamos el relleno UNA sola vez.
+  let _ffFilledCount = 0;
+  for (let _fci = 0; _fci < fw*fh; _fci++) if (filled[_fci]) _ffFilledCount++;
+  const _ffLeak = (_ffFilledCount / (fw*fh)) >= 0.9;
+  if (_ffLeak && !window._edFillGapRetry) {
+    const _inkLayer = _edTmp.pen || dl;
+    const _gapsClosed = _inkLayer?._canvas &&
+      _edCloseInkGapsInRegion(_inkLayer, 0, 0, _inkLayer._canvas.width-1, _inkLayer._canvas.height-1);
+    if (_gapsClosed) {
+      window._edFillGapRetry = true;
+      try { edFloodFill(nx, ny); } finally { window._edFillGapRetry = false; }
+      return;
+    }
+    // Sin huecos cercanos que cerrar: no hay fuga corregible automáticamente,
+    // seguir con el relleno tal cual (igual que si esta detección no existiera).
   }
 
   // Escribir resultado al DrawLayer combinando a nivel de píxel
@@ -14568,112 +14623,97 @@ function edContinuePaint(e){
 // y otra alrededor del fin. Esto evita conexiones en angulos agudos del
 // cuerpo del trazo. Para giros diagonales tambien rellena los pixeles
 // adyacentes en L para bloquear el relleno con conectividad 8.
-function _edPenCloseGaps(dl) {
-  if (!dl?._canvas || !dl._gcDirty) return;
-  if (dl._gcStartX === undefined) {
-    dl._gcX0=Infinity; dl._gcY0=Infinity; dl._gcX1=-Infinity; dl._gcY1=-Infinity;
-    dl._gcDirty=false; return;
-  }
+// Cierra huecos de 1-2px de tinta dentro de una región del canvas, uniendo
+// extremos de trazo cercanos con un píxel interpolado entre ambos colores.
+// Es el mismo algoritmo que usaba la antigua herramienta manual "Cerrar
+// huecos" (retirada porque molestaba y ya no encajaba con el flujo actual).
+// Ahora se invoca automáticamente desde el relleno (edFloodFill /
+// _edFloodFillOnLayer) SOLO cuando éste detecta que va a pintar casi todo
+// el lienzo (fuga por hueco), y sobre la región indicada — normalmente el
+// canvas de tinta completo, ya que en el momento del relleno no sabemos
+// dónde está el hueco que causó la fuga.
+// Devuelve true si se cerró algún hueco (conviene entonces reintentar el relleno).
+function _edCloseInkGapsInRegion(dl, x0, y0, x1, y1) {
+  if (!dl?._canvas) return false;
   const src = dl._canvas;
+  // No asumir dl._ctx cacheado: StrokeLayer, por ejemplo, no lo guarda como
+  // propiedad (solo lo usa una vez, localmente, en su constructor).
+  const ctx = dl._ctx || src.getContext('2d');
   const SOLID=200, EMPTY=30, MAX_SEP=2;
-  const sz = dl._gcStrokeSize || 8;
-  // Radio: cubre el borde del cap redondeado + separacion maxima + margen
-  const radius = Math.ceil(sz / 2) + MAX_SEP + 6;
-
-  // Limpiar estado antes de cualquier return
-  dl._gcX0=Infinity; dl._gcY0=Infinity; dl._gcX1=-Infinity; dl._gcY1=-Infinity;
-  dl._gcDirty=false;
-  const sx=dl._gcStartX, sy=dl._gcStartY;
-  const ex=dl._gcEndX,   ey=dl._gcEndY;
-  dl._gcStartX=undefined; dl._gcStartY=undefined;
-  dl._gcEndX=undefined;   dl._gcEndY=undefined;
-
   const dirs8=[[1,0],[0,1],[-1,0],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
 
-  // Procesa UNA sola ventana centrada en (cx,cy) de radio=radius
-  const _processWindow = (cx, cy) => {
-    const wx0=Math.max(0, Math.floor(cx)-radius);
-    const wy0=Math.max(0, Math.floor(cy)-radius);
-    const wx1=Math.min(src.width -1, Math.ceil(cx)+radius);
-    const wy1=Math.min(src.height-1, Math.ceil(cy)+radius);
-    const rw=wx1-wx0+1, rh=wy1-wy0+1;
-    if (rw<3||rh<3) return;
+  const wx0=Math.max(0, Math.floor(x0));
+  const wy0=Math.max(0, Math.floor(y0));
+  const wx1=Math.min(src.width -1, Math.ceil(x1));
+  const wy1=Math.min(src.height-1, Math.ceil(y1));
+  const rw=wx1-wx0+1, rh=wy1-wy0+1;
+  if (rw<3||rh<3) return false;
 
-    const imgD=dl._ctx.getImageData(wx0,wy0,rw,rh);
-    const d=imgD.data;
-    const toFill=new Map(); // idx → {r,g,b}
+  const imgD=ctx.getImageData(wx0,wy0,rw,rh);
+  const d=imgD.data;
+  const toFill=new Map(); // idx → {r,g,b}
 
-    // Encolar pixel (lx,ly) si es transparente (alpha < EMPTY) y no esta ya encolado
-    const _tryQ=(lx,ly,r,g,b)=>{
-      if(lx<0||lx>=rw||ly<0||ly>=rh) return;
-      const idx=(ly*rw+lx)*4;
-      if(d[idx+3]>=EMPTY||toFill.has(idx)) return;
-      toFill.set(idx,{r,g,b});
-    };
+  // Encolar pixel (lx,ly) si es transparente (alpha < EMPTY) y no esta ya encolado
+  const _tryQ=(lx,ly,r,g,b)=>{
+    if(lx<0||lx>=rw||ly<0||ly>=rh) return;
+    const idx=(ly*rw+lx)*4;
+    if(d[idx+3]>=EMPTY||toFill.has(idx)) return;
+    toFill.set(idx,{r,g,b});
+  };
 
-    for(let y=0;y<rh;y++){
-      for(let x=0;x<rw;x++){
-        const pi=(y*rw+x)*4;
-        if(d[pi+3]<SOLID) continue; // solo desde pixeles solidos
-        const r0=d[pi],g0=d[pi+1],b0=d[pi+2];
+  for(let y=0;y<rh;y++){
+    for(let x=0;x<rw;x++){
+      const pi=(y*rw+x)*4;
+      if(d[pi+3]<SOLID) continue; // solo desde pixeles solidos
+      const r0=d[pi],g0=d[pi+1],b0=d[pi+2];
 
-        for(let di=0;di<8;di++){
-          const dx=dirs8[di][0], dy=dirs8[di][1];
-          const isDiag=(dx!==0&&dy!==0);
-          const gapLocs=[]; // coords locales de pixeles de hueco
+      for(let di=0;di<8;di++){
+        const dx=dirs8[di][0], dy=dirs8[di][1];
+        const isDiag=(dx!==0&&dy!==0);
+        const gapLocs=[]; // coords locales de pixeles de hueco
 
-          for(let step=1;step<=MAX_SEP+1;step++){
-            const nx=x+dx*step, ny=y+dy*step;
-            if(nx<0||nx>=rw||ny<0||ny>=rh) break;
-            const np=(ny*rw+nx)*4, na=d[np+3];
-            if(na>=SOLID){
-              // Extremo solido encontrado: si hay hueco valido, rellenar
-              if(gapLocs.length>=1){
-                const r1=d[np],g1=d[np+1],b1=d[np+2],n=gapLocs.length;
-                for(let i=0;i<n;i++){
-                  const {lx:gx,ly:gy}=gapLocs[i];
-                  const t=(i+1)/(n+1);
-                  const rf=Math.round(r0*(1-t)+r1*t);
-                  const gf=Math.round(g0*(1-t)+g1*t);
-                  const bf=Math.round(b0*(1-t)+b1*t);
-                  // Rellenar el pixel del hueco (primer escritura gana)
-                  const gpi=(gy*rw+gx)*4;
-                  if(!toFill.has(gpi)) toFill.set(gpi,{r:rf,g:gf,b:bf});
-                  // Escalon diagonal: rellenar pixeles en L adyacentes
-                  // para evitar que el relleno pase por conectividad diagonal
-                  if(isDiag){
-                    _tryQ(gx-dx,gy,rf,gf,bf); // componente horizontal inversa
-                    _tryQ(gx,gy-dy,rf,gf,bf); // componente vertical inversa
-                  }
+        for(let step=1;step<=MAX_SEP+1;step++){
+          const nx=x+dx*step, ny=y+dy*step;
+          if(nx<0||nx>=rw||ny<0||ny>=rh) break;
+          const np=(ny*rw+nx)*4, na=d[np+3];
+          if(na>=SOLID){
+            // Extremo solido encontrado: si hay hueco valido, rellenar
+            if(gapLocs.length>=1){
+              const r1=d[np],g1=d[np+1],b1=d[np+2],n=gapLocs.length;
+              for(let i=0;i<n;i++){
+                const {lx:gx,ly:gy}=gapLocs[i];
+                const t=(i+1)/(n+1);
+                const rf=Math.round(r0*(1-t)+r1*t);
+                const gf=Math.round(g0*(1-t)+g1*t);
+                const bf=Math.round(b0*(1-t)+b1*t);
+                // Rellenar el pixel del hueco (primer escritura gana)
+                const gpi=(gy*rw+gx)*4;
+                if(!toFill.has(gpi)) toFill.set(gpi,{r:rf,g:gf,b:bf});
+                // Escalon diagonal: rellenar pixeles en L adyacentes
+                // para evitar que el relleno pase por conectividad diagonal
+                if(isDiag){
+                  _tryQ(gx-dx,gy,rf,gf,bf); // componente horizontal inversa
+                  _tryQ(gx,gy-dy,rf,gf,bf); // componente vertical inversa
                 }
               }
-              break;
-            } else if(na<EMPTY){
-              gapLocs.push({lx:nx,ly:ny});
-              if(gapLocs.length>MAX_SEP) break;
-            } else { break; } // semitrasnparente: ni hueco ni solido, parar
-          }
+            }
+            break;
+          } else if(na<EMPTY){
+            gapLocs.push({lx:nx,ly:ny});
+            if(gapLocs.length>MAX_SEP) break;
+          } else { break; } // semitransparente: ni hueco ni solido, parar
         }
       }
     }
-    if(!toFill.size) return;
-    for(const [idx,{r,g,b}] of toFill){
-      // Nunca sobreescribir tinta existente
-      if(d[idx+3]>=SOLID) continue;
-      d[idx]=r; d[idx+1]=g; d[idx+2]=b; d[idx+3]=255;
-    }
-    dl._ctx.putImageData(imgD,wx0,wy0);
-  };
-
-  // Dos ventanas INDEPENDIENTES: inicio y fin del trazo.
-  // NO se usa su bounding box union: eso escanea el trayecto completo
-  // y generaria conexiones en angulos agudos del cuerpo del trazo.
-  _processWindow(sx, sy);
-  const _dist=Math.hypot(ex-sx, ey-sy);
-  if(_dist > radius * 0.5) {
-    // Solo procesar la ventana del fin si esta suficientemente lejos del inicio
-    _processWindow(ex, ey);
   }
+  if(!toFill.size) return false;
+  for(const [idx,{r,g,b}] of toFill){
+    // Nunca sobreescribir tinta existente
+    if(d[idx+3]>=SOLID) continue;
+    d[idx]=r; d[idx+1]=g; d[idx+2]=b; d[idx+3]=255;
+  }
+  ctx.putImageData(imgD,wx0,wy0);
+  return true;
 }
 
 function edSaveDrawData(){
@@ -14702,10 +14742,10 @@ function edSaveDrawData(){
     edRedraw();
     _edDrawPushHistory();
   } else {
-    // Gap closing para tinta (pen): cierra huecos 1-2px ANTES de guardar
-    if (_edTmp.active === 'pen' && _edTmp.pen?._gcDirty && _edGapCloseEnabled) {
-      _edPenCloseGaps(_edTmp.pen);
-    }
+    // NOTA: el cierre automático de huecos al soltar el trazo se retiró (T-gap):
+    // molestaba y ya no encajaba con el flujo actual. Ahora el cierre de huecos
+    // solo se dispara desde el relleno (edFloodFill/_edFloodFillOnLayer), y solo
+    // si detecta que va a pintar casi todo el lienzo (fuga) — ver _edCloseInkGapsInRegion.
     // NOTA: NO llamar _edApplyInkMaskToWatercolor() al terminar un trazo de tinta —
     // la máscara es no destructiva: el contenido previo (acuarela/D/B) se preserva
     // bajo la tinta y reaparece si la tinta es borrada. Nueva acuarela bajo tinta
@@ -15310,7 +15350,7 @@ function _edActivateShapeTool(isNew, isCreating) {
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
     edShapeBarHide(); _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
-    else { _edResetCameraToFit(); }
+    else { edFitCanvas(); }
     edRedraw();
   });
 
@@ -15829,7 +15869,7 @@ function _edActivateLineTool(isNew, isCreating) {
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     edShapeBarHide(); _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
-    else { _edResetCameraToFit(); }
+    else { edFitCanvas(); }
     edRedraw();
   });
 
@@ -16633,10 +16673,6 @@ function edRenderOptionsPanel(mode){
     ${!_actIsWc ? `<button id="op-tool-layer-icon"
       style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isPen||isFill?'rgba(0,0,0,.12)':'transparent'};opacity:${isPen||isFill?1:0.5}">${_edTmp.active==='pen'?`<svg xmlns="http://www.w3.org/2000/svg" width="28" height="30" viewBox="0 0 64 70"><g transform="translate(27.143 54.666)"><path d="M 5.726 5.124 L 7.133 0.079 L 6.731 -5.386 L 1.507 -6.542 L -5.124 -2.496 L -7.133 0.867 L -7.133 6.542 L 5.726 5.124 Z" fill="#aa6e6e" stroke="none" stroke-width="0"/></g><g transform="translate(25.853 55.352)"><path d="M -2.039 5.295 L -1.768 -0.655 L -4.747 7.279 L -6.102 3.312 L -5.435 -1.244 L -2.190 -4.450 L 3.217 -7.279 L 6.102 -6.336 L 2.496 -0.490 L 1.054 6.110 L -2.039 5.295 Z" fill="#f9cdcd" stroke="none" stroke-width="0"/></g><g transform="translate(26.201 62.884)"><path d="M -6.530 -4.099 L -5.274 -4.388 Q -4.018 -4.677 -2.779 -4.323 L -0.006 -3.532 Q 2.612 -2.785 5.124 -3.836 L 7.635 -4.887 L 6.077 -1.166 L -0.402 3.100 L -7.937 4.835 L -6.329 2.312 L -6.329 -0.841 L -6.530 -4.099 Z" fill="#321a1a" stroke="none" stroke-width="0"/></g><g transform="translate(45.560 24.586)"><path d="M -15.267 20.131 L -10.178 21.130 L -2.863 10.648 L 3.181 1.830 L 10.496 -8.652 L 14.631 -15.140 L 15.267 -19.133 L 14.313 -21.130 L 10.178 -19.965 L 3.817 -15.307 L -1.272 -7.154 L -6.997 3.327 L -11.132 12.312 L -15.267 20.131 Z" fill="#f2deba" stroke="none" stroke-width="0"/></g><g transform="translate(44.755 24.239)"><path d="M -14.421 19.989 L -10.816 20.744 L -0.000 -3.583 L 5.768 -11.503 L 14.060 -20.744 L 1.803 -11.315 L -3.245 -1.697 L -8.292 9.429 L -14.421 19.989 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(48.009 24.598)"><path d="M -11.710 21.312 L -5.900 10.714 L 0.655 2.766 L 6.912 -6.274 L 13.795 -16.437 L 12.601 -21.312 L 10.450 -16.749 Q 8.299 -12.187 5.412 -8.051 L 5.148 -7.672 Q 1.996 -3.157 -1.295 1.258 L -2.145 2.399 Q -4.857 6.039 -7.539 9.701 L -7.895 10.188 Q -10.220 13.364 -12.008 16.870 L -13.795 20.377 L -11.710 21.312 Z" fill="#9f8484" stroke="none" stroke-width="0"/></g><g transform="translate(32.546 46.929)"><path d="M -1.812 -2.397 L 3.730 -1.059 L 1.428 2.700 L -3.844 1.666 L -1.812 -2.397 Z" fill="#ffe135" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(39.607 34.949)"><path d="M -20.214 30.952 L -19.812 29.954 Q -19.410 28.955 -19.534 27.886 L -19.611 27.221 Q -19.812 25.487 -19.677 23.746 L -19.587 22.604 Q -19.410 20.337 -18.004 18.550 L -18.004 18.550 Q -16.598 16.764 -14.643 15.601 L -10.526 13.152 L -7.010 6.168 Q -3.495 -0.815 -0.357 -7.976 L 0.819 -10.659 Q 3.495 -16.766 7.466 -22.121 L 8.164 -23.063 Q 11.437 -27.477 16.203 -30.213 L 17.987 -31.237 Q 20.969 -32.949 21.127 -29.515 L 21.127 -29.515 Q 21.286 -26.080 19.518 -23.131 L 18.109 -20.782 Q 14.932 -15.485 11.152 -10.600 L 7.727 -6.174 Q 2.859 0.116 -1.067 7.034 L -5.401 14.670 L -5.195 19.963 Q -5.083 22.820 -6.354 25.381 L -6.354 25.381 Q -7.625 27.943 -10.096 29.381 L -10.325 29.515 Q -13.026 31.086 -16.074 31.774 L -20.181 32.700 Q -21.286 32.949 -20.750 31.951 L -20.214 30.952 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(15.616 16.910) rotate(0.9187586633190588)"><path d="M -11.511 6.000 L -11.413 3.361 Q -11.315 0.740 -8.780 0.069 L -6.909 -0.427 Q -4.375 -1.098 -3.977 -3.690 L -3.544 -6.511 L 3.641 -6.358 L 4.396 -2.943 Q 4.961 -0.383 7.532 0.131 L 9.037 0.431 Q 11.608 0.945 11.448 3.562 L 11.266 6.511 L -11.511 6.000 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.522 12.241) rotate(0.9187586633190588)"><path d="M -4.950 -1.528 L 5.193 -1.528 L 5.922 1.645 L -5.436 0.947 L -4.950 -1.528 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.472 33.578) rotate(0.9187586633190588)"><path d="M -11.467 -12.687 L 11.467 -12.687 L 11.467 11.420 Q 11.467 12.687 10.199 12.687 L -10.199 12.687 Q -11.467 12.687 -11.467 11.420 L -11.467 -12.687 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.663 32.395) rotate(0.9187586633190588)"><path d="M -12.327 -4.912 L 12.327 -4.912 L 12.327 4.912 L -12.327 4.912 L -12.327 -4.912 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(8.883 32.059) rotate(0.9187586633190588)"><path d="M -1.030 -3.400 L 0.910 -3.431 L 1.030 3.431 L -1.000 3.400 L -1.030 -3.400 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(13.737 32.126) rotate(0.9187586633190588)"><path d="M -2.791 3.446 L -3.000 -3.509 L -1.119 -3.509 L 0.821 0.109 L 0.761 -3.540 L 2.798 -3.534 L 3.000 3.480 L 0.940 3.478 L -1.060 0.140 L -0.911 3.540 L -2.791 3.446 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(26.554 32.567) rotate(0.9187586633190588)"><path d="M -1.977 -4.989 L 1.977 -4.897 L 1.932 4.989 L -1.932 4.850 L -1.977 -4.989 Z" fill="#bdb7b7" stroke="none" stroke-width="0"/></g><g transform="translate(15.633 6.439) rotate(0.9187586633190588)"><path d="M -10.419 -4.144 L 10.606 -4.133 L 10.742 4.079 L -10.606 4.133 L -10.419 -4.144 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.639 6.416) rotate(0.9187586633190588)"><path d="M -10.484 4.327 L -10.446 -4.019 L 10.560 -4.137 L 10.684 -4.058 L -7.331 -2.781 Q -8.515 -2.697 -8.551 -1.510 L -8.721 4.073 L -10.484 4.327 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(20.844 6.483) rotate(0.9187586633190588)"><path d="M -5.636 4.196 L 2.582 3.096 Q 3.628 2.956 3.692 1.903 L 4.038 -3.814 L 5.499 -4.196 L 5.636 4.053 L -5.636 4.196 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.666 25.233) rotate(0.9187586633190588)"><path d="M -13.089 -6.323 Q -13.072 -8.723 -10.753 -9.342 L -8.009 -10.074 Q -6.052 -10.596 -5.609 -12.572 L -5.166 -14.548 L -10.782 -14.548 L -10.707 -22.786 L 10.342 -22.864 L 10.416 -14.743 L 5.024 -14.743 L 5.340 -12.532 Q 5.657 -10.321 7.843 -9.864 L 11.422 -9.116 Q 13.301 -8.723 13.298 -6.803 L 13.248 20.578 Q 13.244 22.786 11.036 22.786 L -11.225 22.786 Q -13.301 22.786 -13.286 20.710 L -13.089 -6.323 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(20.776 32.253) rotate(0.9187586633190588)"><path d="M -3.023 -3.438 L -2.909 3.535 L -0.887 3.451 L -0.917 1.549 L 0.725 3.483 L 2.844 3.451 L 0.157 -0.167 L 3.023 -3.379 L 0.814 -3.410 L -1.007 -1.570 L -0.917 -3.535 L -3.023 -3.438 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.530 10.656) rotate(0.9187586633190588)"><path d="M -5.031 0.039 L 5.332 -0.169" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(6.643 31.419) rotate(0.9187586633190588)"><path d="M -1.072 -14.966 L 1.030 -15.213 L 1.072 15.213 L -1.072 14.985 L -1.072 -14.966 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g></svg>`:_edTmp.active==='pencil'?`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="16" height="26" style="image-rendering:pixelated;vertical-align:middle"/>`:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI1MCIgaGVpZ2h0PSI0NyIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="24" height="23" style="image-rendering:pixelated;vertical-align:middle"/>`}</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
-    ${_edTmp.active === 'pen' ? `<button id="op-gap-close-btn"
-      style="flex-shrink:0;border:1.5px solid ${_edGapCloseEnabled ? 'var(--black)' : 'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edGapCloseEnabled ? 'var(--black)' : 'transparent'};color:${_edGapCloseEnabled ? 'var(--white)' : 'var(--gray-600)'};white-space:nowrap"
-      title="Cerrar huecos automáticamente al soltar el trazo — desactivar para dibujos muy pequeños">Cerrar huecos</button>
-    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${_actIsWc ? `<button id="op-fill-watercolor" title="Acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${!_edDodgeBurnActive?'rgba(0,0,0,.12)':'transparent'};opacity:${!_edDodgeBurnActive?1:0.4}"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNyIgaGVpZ2h0PSIyOSIgdmlld0JveD0iMCAwIDY2IDcwIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyNy43MzggNTcuOTUzKSI+PHBhdGggZD0iTSAtNy44ODkgOS44MjkgTCAtMS4yMjMgOC43ODggTCAzLjQ2NSA2LjE4MyBMIDYuOTAyIDIuMjI1IEwgNy44ODkgLTMuMjA4IEwgNy40ODcgLTguNjczIEwgMi4yNjMgLTkuODI5IEwgLTQuMzY3IC01Ljc4MyBMIC02LjM3NiAtMi40MjAgTCAtNi4zNzYgMy4yNTYgTCAtNy44ODkgOS44MjkgWiIgZmlsbD0iI2FhNmU2ZSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjcuMjA1IDU3LjQ2NykiPjxwYXRoIGQ9Ik0gLTYuNDcwIDkuNDk4IEwgLTQuMjgyIDcuNjIzIFEgLTIuMDk1IDUuNzQ4IC0xLjk4NCAyLjg2OSBMIC0xLjc2OCAtMi43NzAgTCAtNS42MzcgNC4zOTQgTCAtNi4xMDIgMS4xOTcgTCAtNS40MzUgLTMuMzYwIEwgLTIuMTkwIC02LjU2NiBMIDMuMjE3IC05LjM5NCBMIDYuMTAyIC04LjQ1MSBMIDIuNDk2IC0yLjYwNSBMIDEuMDMwIDguMTQ0IEwgLTYuNDcwIDkuNDk4IFoiIGZpbGw9IiNmOWNkY2QiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ2LjkxMiAyNC41ODYpIj48cGF0aCBkPSJNIC0xNS4yNjcgMjAuMTMxIEwgLTEwLjE3OCAyMS4xMzAgTCAtMi44NjMgMTAuNjQ4IEwgMy4xODEgMS44MzAgTCAxMC40OTYgLTguNjUyIEwgMTQuNjMxIC0xNS4xNDAgTCAxNS4yNjcgLTE5LjEzMyBMIDE0LjMxMyAtMjEuMTMwIEwgMTAuMTc4IC0xOS45NjUgTCAzLjgxNyAtMTUuMzA3IEwgLTEuMjcyIC03LjE1NCBMIC02Ljk5NyAzLjMyNyBMIC0xMS4xMzIgMTIuMzEyIEwgLTE1LjI2NyAyMC4xMzEgWiIgZmlsbD0iI2YyZGViYSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDYuMTA3IDI0LjIzOSkiPjxwYXRoIGQ9Ik0gLTE0LjQyMSAxOS45ODkgTCAtMTAuODE2IDIwLjc0NCBMIC0wLjAwMCAtMy41ODMgTCA1Ljc2OCAtMTEuNTAzIEwgMTQuMDYwIC0yMC43NDQgTCAxLjgwMyAtMTEuMzE1IEwgLTMuMjQ1IC0xLjY5NyBMIC04LjI5MiA5LjQyOSBMIC0xNC40MjEgMTkuOTg5IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ5LjM2MSAyNC41OTgpIj48cGF0aCBkPSJNIC0xMS43MTAgMjEuMzEyIEwgLTUuOTAwIDEwLjcxNCBMIDAuNjU1IDIuNzY2IEwgNi45MTIgLTYuMjc0IEwgMTMuNzk1IC0xNi40MzcgTCAxMi42MDEgLTIxLjMxMiBMIDEwLjQ1MCAtMTYuNzQ5IFEgOC4yOTkgLTEyLjE4NyA1LjQxMiAtOC4wNTEgTCA1LjE0OCAtNy42NzIgUSAxLjk5NiAtMy4xNTcgLTEuMjk1IDEuMjU4IEwgLTIuMTQ1IDIuMzk5IFEgLTQuODU3IDYuMDM5IC03LjUzOSA5LjcwMSBMIC03Ljg5NSAxMC4xODggUSAtMTAuMjIwIDEzLjM2NCAtMTIuMDA4IDE2Ljg3MCBMIC0xMy43OTUgMjAuMzc3IEwgLTExLjcxMCAyMS4zMTIgWiIgZmlsbD0iIzlmODQ4NCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMzMuODk4IDQ2LjkyOSkiPjxwYXRoIGQ9Ik0gLTEuODEyIC0yLjM5NyBMIDMuNzMwIC0xLjA1OSBMIDEuNDI4IDIuNzAwIEwgLTMuODQ0IDEuNjY2IEwgLTEuODEyIC0yLjM5NyBaIiBmaWxsPSIjZmZlMTM1IiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQwLjk1OSAzNC45NDkpIj48cGF0aCBkPSJNIC0yMC4yMTQgMzAuOTUyIEwgLTE5LjgxMiAyOS45NTQgUSAtMTkuNDEwIDI4Ljk1NSAtMTkuNTM0IDI3Ljg4NiBMIC0xOS42MTEgMjcuMjIxIFEgLTE5LjgxMiAyNS40ODcgLTE5LjY3NyAyMy43NDYgTCAtMTkuNTg3IDIyLjYwNCBRIC0xOS40MTAgMjAuMzM3IC0xOC4wMDQgMTguNTUwIEwgLTE4LjAwNCAxOC41NTAgUSAtMTYuNTk4IDE2Ljc2NCAtMTQuNjQzIDE1LjYwMSBMIC0xMC41MjYgMTMuMTUyIEwgLTcuMDEwIDYuMTY4IFEgLTMuNDk1IC0wLjgxNSAtMC4zNTcgLTcuOTc2IEwgMC44MTkgLTEwLjY1OSBRIDMuNDk1IC0xNi43NjYgNy40NjYgLTIyLjEyMSBMIDguMTY0IC0yMy4wNjMgUSAxMS40MzcgLTI3LjQ3NyAxNi4yMDMgLTMwLjIxMyBMIDE3Ljk4NyAtMzEuMjM3IFEgMjAuOTY5IC0zMi45NDkgMjEuMTI3IC0yOS41MTUgTCAyMS4xMjcgLTI5LjUxNSBRIDIxLjI4NiAtMjYuMDgwIDE5LjUxOCAtMjMuMTMxIEwgMTguMTA5IC0yMC43ODIgUSAxNC45MzIgLTE1LjQ4NSAxMS4xNTIgLTEwLjYwMCBMIDcuNzI3IC02LjE3NCBRIDIuODU5IDAuMTE2IC0xLjA2NyA3LjAzNCBMIC01LjQwMSAxNC42NzAgTCAtNS4xOTUgMTkuOTYzIFEgLTUuMDgzIDIyLjgyMCAtNi4zNTQgMjUuMzgxIEwgLTYuMzU0IDI1LjM4MSBRIC03LjYyNSAyNy45NDMgLTEwLjA5NiAyOS4zODEgTCAtMTAuMzI1IDI5LjUxNSBRIC0xMy4wMjYgMzEuMDg2IC0xNi4wNzQgMzEuNzc0IEwgLTIwLjE4MSAzMi43MDAgUSAtMjEuMjg2IDMyLjk0OSAtMjAuNzUwIDMxLjk1MSBMIC0yMC4yMTQgMzAuOTUyIFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzAwMDAwMCIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTkuOTk2IDE4LjMxMykiPjxwYXRoIGQ9Ik0gLTE1LjMxMyAtMS41NzEgTCAtMTUuMDAwIDEuNDQ5IEwgMTMuNTA1IDEuNjc2IEwgMTQuMDYyIC0xLjg4NCBMIC0xNS4zMTMgLTEuNTcxIFoiIGZpbGw9IiNkNGQ0ZDQiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5LjI4MyAyOS43MzYpIj48cGF0aCBkPSJNIC0xNC41ODMgLTExLjY3NiBMIC05LjkwMyAtMTAuNjA2IFEgLTUuMjIyIC05LjUzNiAtMC41NDcgLTEwLjYzMCBMIDQuMDc5IC0xMS43MTMgUSA3LjU4MyAtMTIuNTMzIDExLjEyNSAtMTEuODkyIEwgMTQuNjY3IC0xMS4yNTEgTCAxMS41NzIgOS44ODUgUSAxMS4yMzIgMTIuMjA0IDguODg5IDEyLjI2OCBMIC04LjU5NSAxMi43NDAgUSAtMTAuOTM4IDEyLjgwNCAtMTEuMjgzIDEwLjQ4NSBMIC0xNC41ODMgLTExLjY3NiBaIiBmaWxsPSIjNWY5YmQzIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMCIvPjwvZz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC4wNTMgMjcuODcwKSI+PHBhdGggZD0iTSAwLjk3MyAxNC40MjQgTCAtMy4wNDAgLTE1LjQ3OCBMIDIuNTM3IC0xNS40NzggTCA0LjMzMCAxMy41NzUgUSA0LjQ0MSAxNS4zNjggMi43MDcgMTQuODk2IEwgMC45NzMgMTQuNDI0IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5Ljk5MyAyOS4wODgpIj48cGF0aCBkPSJNIC0xNi40MzggLTE0LjkyOSBRIC0xOC40MzggLTE0LjkwNSAtMTguMTEwIC0xMi45MzIgTCAtMTMuOTI2IDEyLjMwMSBRIC0xMy40MjAgMTUuMzUyIC0xMC4zMjcgMTUuMzUyIEwgOC4yODEgMTUuMzUyIFEgMTIuNTM0IDE1LjM1MiAxMy4yMjAgMTEuMTU1IEwgMTcuMjI2IC0xMy4zNjggUSAxNy41NDkgLTE1LjM0MiAxNS41NDkgLTE1LjMxNyBMIC0xNi40MzggLTE0LjkyOSBaIiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjM1MCAyOS43NzIpIj48cGF0aCBkPSJNIC00LjI3MSAxMi4yODMgTCAtMS4zMDIgMTIuMjMxIFEgMS42NjcgMTIuMTc5IDIuMDE1IDkuMjMwIEwgNC40NzkgLTExLjYxNSBMIDIuMDQ3IC0xMi4xMzYgUSAwLjEwNCAtMTIuNTUyIC0xLjg3NSAtMTIuMzc0IEwgLTMuODU0IC0xMi4xOTYgTCAtNC4yNzEgMTIuMjgzIFoiIGZpbGw9IiMzNzYwODYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjwvc3ZnPg==" width="29" height="31" style="image-rendering:pixelated;vertical-align:middle"/></button>
     <button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:43px;height:33px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="Oscurecer (izq) / Iluminar (der)"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
@@ -16850,10 +16886,6 @@ function edRenderOptionsPanel(mode){
       edDrawColor = '#7A2E20';
       _edbSyncColor();
       edRenderOptionsPanel('draw');
-    });
-    $('op-gap-close-btn')?.addEventListener('click', () => {
-      _edGapCloseEnabled = !_edGapCloseEnabled;
-      edRenderOptionsPanel('draw'); // re-render para actualizar estado visual del botón
     });
     $('op-tool-eraser')?.addEventListener('click', () => {
       _edDodgeBurnActive = false;
@@ -17142,7 +17174,7 @@ function edRenderOptionsPanel(mode){
       edCloseOptionsPanel();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       if(edMinimized){ window._edMinimizedDrawMode = null; edMaximize(); }
-      else { _edResetCameraToFit(); }
+      else { edFitCanvas(); }
     });
 
     // ── Eliminar ──
@@ -17221,7 +17253,7 @@ function edRenderOptionsPanel(mode){
         <button id="pp-ok-bottom" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
       </div>`;
     panel.classList.add('open');
-    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edFitCanvas(); });
     $('pp-opacity')?.addEventListener('input',(e)=>{
       const _la2=edLayers[edSelectedIdx]; if(!_la2) return;
       _la2.opacity=+e.target.value/100;
@@ -17275,7 +17307,7 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('pp-path-speed')?.addEventListener('change',()=>edPushHistory());
-    $('pp-ok-bottom')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
+    $('pp-ok-bottom')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edFitCanvas(); });
     requestAnimationFrame(edFitCanvas); return;
   }
 
@@ -17822,7 +17854,7 @@ function edRenderOptionsPanel(mode){
         _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
       }
     });
-    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edFitCanvas(); });
     $('pp-text-to-draw')?.addEventListener('click',()=>{
       if(edSelectedIdx>=0) _edTextToDrawing(edSelectedIdx);
     });
@@ -18211,9 +18243,9 @@ function edMinimize(){
       }
     }
   }
-  _edResetCameraToFit();
+  edFitCanvas();
   requestAnimationFrame(() => {
-    // Tras el reset de cámara, reposicionar la barra pegada al lienzo
+    // Tras reajustar el lienzo, reposicionar la barra pegada al lienzo
     const _bar = $('edDrawBar');
     const _sbar = $('edShapeBar');
     if (_bar?.classList.contains('visible')) {
@@ -18250,7 +18282,7 @@ function edMaximize(keepBar=false){
     window._edMinimizedCollapsed = false;
     const panel=$('edOptionsPanel');
     if(panel) panel.style.visibility='';
-    _edResetCameraToFit();
+    edFitCanvas();
     requestAnimationFrame(() => {
       _edBarClampToScreen();
       // Restaurar lengüeta DESPUÉS del layout recalculado
@@ -18269,7 +18301,7 @@ function edMaximize(keepBar=false){
     }
   } else if(_vsHistory.length > 0) {
     edShapeBarHide();
-    _edResetCameraToFit();
+    edFitCanvas();
     requestAnimationFrame(_edBarClampToScreen);
     if(edActiveTool === 'shape') {
       _edActivateShapeTool(false);
@@ -18284,7 +18316,7 @@ function edMaximize(keepBar=false){
     if(_panelElse?.classList.contains('panel-collapsed')) {
       _panelElse.style.visibility = '';
     }
-    _edResetCameraToFit();
+    edFitCanvas();
     requestAnimationFrame(() => {
       _edBarClampToScreen();
       if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
@@ -25484,7 +25516,7 @@ function EditorView_init(){
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
     _edDrawUnlockUI();
     if(edMinimized){ window._edMinimizedDrawMode=null; edMaximize(); }
-    else { _edResetCameraToFit(); }
+    else { edFitCanvas(); }
     edRedraw();
   });
 
