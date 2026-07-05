@@ -4927,12 +4927,15 @@ function edDrawSel(){
   // En modo V⟺C: solo mostrar marco tenue, ocultar handles de resize/rotate
   const _curveMode=_edCurveModeActive&&_edCurveModeActive();
   // Táctil + dibujo vectorial (línea/forma) con cualquier herramienta que no sea
-  // el selector puro, o con nodos V⟺C activos: ocultar TODOS los handlers
-  // (resize/rotate/vértices) — el marco discontinuo y la guía de la línea se
-  // mantienen. En PC no aplica: el ratón no tiene pinch y los handles siguen
-  // siendo la única forma de redimensionar/rotar (ver comentario en edOnStart).
+  // el selector puro: ocultar los HANDLERS de escala/rotación del objeto completo
+  // (los 8 cuadrados + la palanca de giro). Esto NO afecta a los NODOS/vértices
+  // de la línea o curva (esos son otra cosa: se siguen dibujando siempre que el
+  // modo V⟺C esté activo, los oculte o no _hideVecHandles). El marco discontinuo
+  // y la guía de la línea también se mantienen. En PC no aplica: el ratón no
+  // tiene pinch y los handles siguen siendo la única forma de redimensionar/
+  // rotar (ver comentario en edOnStart).
   const _hideVecHandles = window._edIsTouch === true && (la.type==='line'||la.type==='shape')
-    && (_curveMode || _edVectorEditSessionActive());
+    && _edVectorFreehandGesture();
   edCtx.strokeStyle='#1a8cff';
   edCtx.lineWidth=lw;
   // Rect bbox y handles de selección
@@ -5013,7 +5016,7 @@ function edDrawSel(){
   }
   // Handles 4 vértices del rect: solo en modo v/c (no en modo selección)
   if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape' && _edLineType !== 'select'){
-    if(_edCurveModeActive() && !_hideVecHandles){
+    if(_edCurveModeActive()){
       const corners=[[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]];
       const rot2=(la.rotation||0)*Math.PI/180;
       const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
@@ -5037,7 +5040,7 @@ function edDrawSel(){
   // (la variable explosionRadii se mantiene por compatibilidad con datos serializados)
   // Handles 4 vértices del rect en modo curva
   if(la.type==='shape' && la.shape==='rect'){
-    if(_edCurveModeActive() && !_hideVecHandles){
+    if(_edCurveModeActive()){
       const rot2=(la.rotation||0)*Math.PI/180;
       const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
       const hw=la.width*pw/2, hh=la.height*ph/2;
@@ -5061,7 +5064,7 @@ function edDrawSel(){
     }
   }
   // Handles vértices de ShapeLayer rect en sesión de fusión (panel line abierto)
-  if(la.type==='shape' && la.shape==='rect' && la._fusionId && $('edOptionsPanel')?.dataset.mode==='line' && !_hideVecHandles){
+  if(la.type==='shape' && la.shape==='rect' && la._fusionId && $('edOptionsPanel')?.dataset.mode==='line'){
     const rot2=(la.rotation||0)*Math.PI/180;
     const cos2=Math.cos(rot2), sin2=Math.sin(rot2);
     const hw=la.width*pw/2, hh=la.height*ph/2;
@@ -5078,7 +5081,7 @@ function edDrawSel(){
   // En modo selección (select) solo se ven los 8 handles de bbox y el de rotación
   const _showLineNodes = la.type==='line' && la.points.length>=1 && !la._fromEllipse &&
     ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) &&
-    _edCurveModeActive && _edCurveModeActive() && !_hideVecHandles; // solo visibles en modo V/C
+    _edCurveModeActive && _edCurveModeActive(); // solo visibles en modo V/C
   if(_showLineNodes){
     const rot=(la.rotation||0)*Math.PI/180;
     const cos=Math.cos(rot),sin=Math.sin(rot);
@@ -6918,24 +6921,29 @@ function edCoords(e){
 }
 
 
-// Sesión de edición vectorial activa: panel Línea/Forma abierto (dataset.mode
-// 'line'/'shape'), barra flotante de forma visible, o línea en construcción.
-// Coincide con el mismo criterio ya usado en edOnStart (_editingVectorial) para
-// bloquear selección de otros objetos. Cuando esto es true, el objeto que se
-// está editando NO es el "selector (flecha)" puro (ese caso deja el panel en
-// modo 'props') — es la herramienta Línea/Forma en cualquiera de sus estados
-// internos (dibujar, seleccionar dentro del panel, o nodos V⟺C).
-function _edVectorEditSessionActive(){
+// true cuando se está usando el "selector" (flecha) sobre un dibujo vectorial:
+// o bien el selector general (fuera del panel Línea/Forma), o bien su propio
+// sub-icono "seleccionar" (mismo icono de flecha) DENTRO del panel — con este
+// sub-icono el panel sigue en modo 'line'/'shape' pero se trata igualmente de
+// "usando el selector": debe verse y comportarse como el selector general.
+function _edVectorSelectorActive(){
   const _mode = $('edOptionsPanel')?.dataset.mode;
-  return (_mode === 'shape' || _mode === 'line')
-      || !!$('edShapeBar')?.classList.contains('visible')
-      || !!_edLineLayer;
+  if(_mode === 'line')  return _edLineType  === 'select';
+  if(_mode === 'shape') return _edShapeType === 'select';
+  // Panel fuera del modo línea/forma (p.ej. 'props', o cerrado): selector general.
+  return true;
 }
 // true cuando, para un dibujo vectorial (línea/forma), el pinch y los handlers
-// deben comportarse en modo "dibujo a mano" (cámara únicamente, sin handlers):
-// cualquier herramienta que no sea el selector puro, o edición de nodos V⟺C.
+// de escala/rotación deben comportarse en modo "dibujo a mano" (cámara
+// únicamente, sin esos handlers): cualquier herramienta que no sea el
+// selector (ver _edVectorSelectorActive), o edición de nodos V⟺C activa —
+// esto último aunque el sub-modo interno siga siendo técnicamente "select".
+// Los NODOS/vértices de la curva NO dependen de esto: se siguen dibujando
+// siempre que el modo V⟺C esté activo (ver _edCurveModeActive en cada bloque
+// de nodos), sean o no "handlers" de escala/rotación.
 function _edVectorFreehandGesture(){
-  return _edVectorEditSessionActive() || (typeof _edCurveModeActive === 'function' && _edCurveModeActive());
+  if(typeof _edCurveModeActive === 'function' && _edCurveModeActive()) return true;
+  return !_edVectorSelectorActive();
 }
 
 /* ══════════════════════════════════════════
@@ -9081,9 +9089,14 @@ function edOnStart(e){
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Cancelar drag de nodo de recorte si estaba activo
     if(_edCropMode && _edCropDragIdx >= 0){ _edCropDragIdx = -1; _edCropDragging = false; }
-    // Sistema de pan para LineLayer (en construcción o seleccionado)
-    const _panTarget = _edLineLayer ||
-      (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line' ? edLayers[edSelectedIdx] : null);
+    // Sistema de pan para LineLayer (en construcción o seleccionada) — SOLO
+    // aplica en modo selector puro. En edición vectorial (cualquier otra
+    // herramienta, o nodos V⟺C) el pinch debe ser 100% cámara — nunca mover
+    // el objeto directamente — así que este sistema no debe activarse ahí
+    // (si no, secuestra el gesto con un "return" antes de llegar a edPinchMove,
+    // que es donde vive el zoom/pan de cámara).
+    const _panTarget = _edVectorFreehandGesture() ? null : (_edLineLayer ||
+      (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line' ? edLayers[edSelectedIdx] : null));
     if(_panTarget){
       const _pts2 = [...window._edActivePointers.values()];
       const _fusId = _panTarget._fusionId || _edLineFusionId;
@@ -9872,12 +9885,14 @@ function edOnStart(e){
   // En panel line con LineLayer seleccionado: los nodos tienen prioridad sobre los handles de bbox
   const _panelLineOpen = $('edOptionsPanel')?.dataset.mode === 'line';
   const _panelShapeOpen = $('edOptionsPanel')?.dataset.mode === 'shape';
-  // Saltar handles en modo V⟺C (nodos tienen prioridad sobre handles), y en
-  // táctil también durante cualquier sesión de edición vectorial con una
-  // herramienta que no sea el selector puro (ver _hideVecHandles en edDrawSel:
-  // el handle invisible no debe seguir siendo pinchable). En PC no aplica.
+  // Saltar handles de resize/rotate en modo V⟺C (todos los dispositivos —
+  // esto ya existía) y, en táctil, también cuando no se está usando el
+  // selector (cualquier otra herramienta del panel Línea/Forma) — ver
+  // _hideVecHandles en edDrawSel: el handle invisible no debe seguir siendo
+  // pinchable. En PC fuera de V⟺C no aplica: sigue siendo la única forma de
+  // redimensionar/rotar.
   const _inCurveMode = _edCurveModeActive && _edCurveModeActive();
-  const _skipHandles = (_inCurveMode || (window._edIsTouch === true && _edVectorEditSessionActive()))
+  const _skipHandles = (_inCurveMode || (window._edIsTouch === true && _edVectorFreehandGesture()))
     && (_la?.type === 'line' || _la?.type === 'shape');
   // Objeto agrupado: sin handles individuales (ver mismo guard en edDrawSel).
   // Sin esto, aunque el handle no se dibuje, seguiría siendo clicable en su
