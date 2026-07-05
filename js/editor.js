@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero 2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -1902,11 +1902,20 @@ class BubbleLayer extends BaseLayer {
       this.width=Math.max(0.05,w2/pw);
       this.height=Math.max(0.05,h2/ph);
     } else {
-      const factor = lines.length === 1 ? 1.15 : 1.05;
-      const w = maxW * factor + this.padding * 2;
-      const h = totalH * factor + this.padding * 2;
-      this.width=Math.max(0.05,w/pw);
-      this.height=Math.max(0.05,h/ph);
+      // Bocadillos elípticos (conventional, lowvoice, radio, etc.): a diferencia
+      // de explosión (14 vértices con picos lejanos y valles cercanos al
+      // centro) o pensamiento (blob asimétrico), la elipse no tiene ángulos
+      // "más cercanos" o "más lejanos" — es una curva uniforme. La separación
+      // debe igualar la de grito respecto de SUS ángulos más cercanos (los
+      // valles, el punto más restrictivo de esa forma), no una derivación
+      // geométrica independiente del rectángulo inscrito en la elipse — esa
+      // derivación (1/(2√2)) dejaba más margen del que tienen pensamiento y
+      // grito. Mismo _C que explosión (_Ce) y misma holgura extra (_mg).
+      const _Cconv=0.38, _mgconv=1.05;
+      const w2=(maxW/2+this.padding)/_Cconv*_mgconv;
+      const h2=(totalH/2+this.padding)/_Cconv*_mgconv;
+      this.width=Math.max(0.05,w2/pw);
+      this.height=Math.max(0.05,h2/ph);
     }
   }
   _initExplosionRadii(){
@@ -4917,6 +4926,13 @@ function edDrawSel(){
   edCtx.rotate(rot);
   // En modo V⟺C: solo mostrar marco tenue, ocultar handles de resize/rotate
   const _curveMode=_edCurveModeActive&&_edCurveModeActive();
+  // Táctil + dibujo vectorial (línea/forma) con cualquier herramienta que no sea
+  // el selector puro, o con nodos V⟺C activos: ocultar TODOS los handlers
+  // (resize/rotate/vértices) — el marco discontinuo y la guía de la línea se
+  // mantienen. En PC no aplica: el ratón no tiene pinch y los handles siguen
+  // siendo la única forma de redimensionar/rotar (ver comentario en edOnStart).
+  const _hideVecHandles = window._edIsTouch === true && (la.type==='line'||la.type==='shape')
+    && (_curveMode || _edVectorEditSessionActive());
   edCtx.strokeStyle='#1a8cff';
   edCtx.lineWidth=lw;
   // Rect bbox y handles de selección
@@ -4925,7 +4941,7 @@ function edDrawSel(){
   edCtx.setLineDash([]);
   // Handles de escala y rotación
   if(la.type!=='bubble'){
-    if(!_curveMode){
+    if(!_curveMode && !_hideVecHandles){
     // Para rect (LineLayer 4-nodos cerrado): solo handles en centros de segmentos
     // (las esquinas son nodos de edición, no handles de resize)
     // Siempre 8 handlers (4 esquinas + 4 centros de lado)
@@ -4997,7 +5013,7 @@ function edDrawSel(){
   }
   // Handles 4 vértices del rect: solo en modo v/c (no en modo selección)
   if(la.type==='shape' && la.shape==='rect' && $('edOptionsPanel')?.dataset.mode==='shape' && _edLineType !== 'select'){
-    if(_edCurveModeActive()){
+    if(_edCurveModeActive() && !_hideVecHandles){
       const corners=[[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]];
       const rot2=(la.rotation||0)*Math.PI/180;
       const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
@@ -5021,7 +5037,7 @@ function edDrawSel(){
   // (la variable explosionRadii se mantiene por compatibilidad con datos serializados)
   // Handles 4 vértices del rect en modo curva
   if(la.type==='shape' && la.shape==='rect'){
-    if(_edCurveModeActive()){
+    if(_edCurveModeActive() && !_hideVecHandles){
       const rot2=(la.rotation||0)*Math.PI/180;
       const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
       const hw=la.width*pw/2, hh=la.height*ph/2;
@@ -5045,7 +5061,7 @@ function edDrawSel(){
     }
   }
   // Handles vértices de ShapeLayer rect en sesión de fusión (panel line abierto)
-  if(la.type==='shape' && la.shape==='rect' && la._fusionId && $('edOptionsPanel')?.dataset.mode==='line'){
+  if(la.type==='shape' && la.shape==='rect' && la._fusionId && $('edOptionsPanel')?.dataset.mode==='line' && !_hideVecHandles){
     const rot2=(la.rotation||0)*Math.PI/180;
     const cos2=Math.cos(rot2), sin2=Math.sin(rot2);
     const hw=la.width*pw/2, hh=la.height*ph/2;
@@ -5062,7 +5078,7 @@ function edDrawSel(){
   // En modo selección (select) solo se ven los 8 handles de bbox y el de rotación
   const _showLineNodes = la.type==='line' && la.points.length>=1 && !la._fromEllipse &&
     ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) &&
-    _edCurveModeActive && _edCurveModeActive(); // solo visibles en modo V/C
+    _edCurveModeActive && _edCurveModeActive() && !_hideVecHandles; // solo visibles en modo V/C
   if(_showLineNodes){
     const rot=(la.rotation||0)*Math.PI/180;
     const cos=Math.cos(rot),sin=Math.sin(rot);
@@ -6902,6 +6918,26 @@ function edCoords(e){
 }
 
 
+// Sesión de edición vectorial activa: panel Línea/Forma abierto (dataset.mode
+// 'line'/'shape'), barra flotante de forma visible, o línea en construcción.
+// Coincide con el mismo criterio ya usado en edOnStart (_editingVectorial) para
+// bloquear selección de otros objetos. Cuando esto es true, el objeto que se
+// está editando NO es el "selector (flecha)" puro (ese caso deja el panel en
+// modo 'props') — es la herramienta Línea/Forma en cualquiera de sus estados
+// internos (dibujar, seleccionar dentro del panel, o nodos V⟺C).
+function _edVectorEditSessionActive(){
+  const _mode = $('edOptionsPanel')?.dataset.mode;
+  return (_mode === 'shape' || _mode === 'line')
+      || !!$('edShapeBar')?.classList.contains('visible')
+      || !!_edLineLayer;
+}
+// true cuando, para un dibujo vectorial (línea/forma), el pinch y los handlers
+// deben comportarse en modo "dibujo a mano" (cámara únicamente, sin handlers):
+// cualquier herramienta que no sea el selector puro, o edición de nodos V⟺C.
+function _edVectorFreehandGesture(){
+  return _edVectorEditSessionActive() || (typeof _edCurveModeActive === 'function' && _edCurveModeActive());
+}
+
 /* ══════════════════════════════════════════
    PINCH-TO-ZOOM (2 dedos)
    ══════════════════════════════════════════ */
@@ -6935,13 +6971,19 @@ function edPinchStart(e) {
   edPinchCamera0 = { x: edCamera.x, y: edCamera.y, z: edCamera.z };
   // Snapshot de objeto para resize (solo si hay objeto y NO estamos pintando)
   const isDrawTool = ['draw','eraser'].includes(edActiveTool);
-  // Durante recorte o edición de recorrido: forzar modo cámara
+  // Edición de dibujo vectorial (línea/forma) con cualquier herramienta que no
+  // sea el selector puro, o con nodos V⟺C activos: el pinch NUNCA debe escalar
+  // ni rotar el objeto — debe actuar solo sobre la cámara, solidario con todo
+  // el lienzo, igual que en dibujo a mano (draw/eraser).
+  const _vecFreehand = _edVectorFreehandGesture();
+  // Durante recorte, edición de recorrido, o edición vectorial: forzar modo cámara
   // (no escalar el objeto seleccionado — el pinch es solo para navegar el canvas)
-  const la = (_edCropMode || _edMotionPathMode
+  const la = (_edCropMode || _edMotionPathMode || _vecFreehand
     || (!isDrawTool && edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.locked)) ? null
     : (!isDrawTool && edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
   // T1: si hay LineLayer en construcción, usarla como objeto pincheable
-  const _laForPinch = la || (_edLineLayer && edActiveTool==='line' ? _edLineLayer : null);
+  // (salvo en sesión de edición vectorial: ver _vecFreehand arriba)
+  const _laForPinch = _vecFreehand ? null : (la || (_edLineLayer && edActiveTool==='line' ? _edLineLayer : null));
   edPinchScale0 = _laForPinch ? { w: _laForPinch.width, h: _laForPinch.height, rot: _laForPinch.rotation||0,
     x: _laForPinch.x, y: _laForPinch.y,
     _isLineLayer: _laForPinch === _edLineLayer && !la, // es la LineLayer en construcción
@@ -7098,9 +7140,11 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom ──
-    // En modo recorte o edición de recorrido el pinch siempre mueve la cámara
-    // (el layer está seleccionado pero no debe escalar)
-    const _haySeleccion = !_edCropMode && !_edMotionPathMode
+    // En modo recorte, edición de recorrido, o edición de dibujo vectorial
+    // (herramienta distinta del selector puro, o nodos V⟺C) el pinch siempre
+    // mueve la cámara — el objeto/línea en construcción no debe escalar, y
+    // debe verse solidario con el resto del lienzo (igual que en dibujo a mano).
+    const _haySeleccion = !_edVectorFreehandGesture() && !_edCropMode && !_edMotionPathMode
       && ((edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer);
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
     const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
@@ -9828,10 +9872,13 @@ function edOnStart(e){
   // En panel line con LineLayer seleccionado: los nodos tienen prioridad sobre los handles de bbox
   const _panelLineOpen = $('edOptionsPanel')?.dataset.mode === 'line';
   const _panelShapeOpen = $('edOptionsPanel')?.dataset.mode === 'shape';
-  // Solo saltar handles en modo V⟺C (nodos tienen prioridad sobre handles)
-  // Giro y resize siempre disponibles con el panel line abierto
+  // Saltar handles en modo V⟺C (nodos tienen prioridad sobre handles), y en
+  // táctil también durante cualquier sesión de edición vectorial con una
+  // herramienta que no sea el selector puro (ver _hideVecHandles en edDrawSel:
+  // el handle invisible no debe seguir siendo pinchable). En PC no aplica.
   const _inCurveMode = _edCurveModeActive && _edCurveModeActive();
-  const _skipHandles = _inCurveMode && (_la?.type === 'line' || _la?.type === 'shape');
+  const _skipHandles = (_inCurveMode || (window._edIsTouch === true && _edVectorEditSessionActive()))
+    && (_la?.type === 'line' || _la?.type === 'shape');
   // Objeto agrupado: sin handles individuales (ver mismo guard en edDrawSel).
   // Sin esto, aunque el handle no se dibuje, seguiría siendo clicable en su
   // posición matemática y permitiría redimensionar/rotar solo ese miembro.
