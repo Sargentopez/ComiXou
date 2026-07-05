@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero 2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -8960,7 +8960,44 @@ function edOnStart(e){
               }
               return;
             }
-            // Primer tap: seleccionar nodo
+            // Táctil sin vcof: registrar el puntero YA (antes de cualquier
+            // return) para que un segundo dedo, si llega, forme correctamente
+            // el pinch de cámara — y esperar el tiempo habitual de segundo
+            // dedo (120ms) antes de seleccionar/arrastrar el nodo. Un primer
+            // toque cerca de un nodo puede ser en realidad el arranque de un
+            // gesto de pinch/cámara, no una intención sobre ese nodo.
+            if(e.pointerType === 'touch' && !_vcof.on){
+              if (!window._edActivePointers) window._edActivePointers = new Map();
+              window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+              clearTimeout(window._edNodeDragTouchTimer);
+              const _ndLa2 = la, _ndIdx2 = i;
+              window._edPendingNodeDrag = {
+                la: _ndLa2, idx: _ndIdx2,
+                commit: () => {
+                  window._edCurveVertIdx=_ndIdx2;
+                  if(!_ndLa2.cornerRadii)_ndLa2.cornerRadii={};
+                  const _ndExisting=_ndLa2.cornerRadii[_ndIdx2]||0;
+                  window._edCurveRadius=_ndExisting;
+                  const _sl2=$('esb-slider-input'); if(_sl2) _sl2.value=_ndExisting;
+                  const _slP2=$('op-line-curve-r'); if(_slP2){_slP2.value=_ndExisting;}
+                  const _slPn2=$('op-line-curve-rnum'); if(_slPn2){_slPn2.value=_ndExisting;}
+                  edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_ndIdx2;
+                }
+              };
+              window._edNodeDragTouchTimer = setTimeout(() => {
+                window._edNodeDragTouchTimer = null;
+                const _pnd2 = window._edPendingNodeDrag;
+                window._edPendingNodeDrag = null;
+                if (!_pnd2) return;
+                if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
+                if (edSelectedIdx < 0 || edLayers[edSelectedIdx] !== _pnd2.la) return;
+                _pnd2.commit();
+                if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+                edRedraw();
+              }, 120);
+              return;
+            }
+            // Primer tap: seleccionar nodo (vcof activo, lápiz, o ratón)
             window._edCurveVertIdx=i;
             if(!la.cornerRadii)la.cornerRadii={};
             const existing=la.cornerRadii[i]||0;
@@ -8989,6 +9026,7 @@ function edOnStart(e){
               // por el temblor de la punta. Drag real solo tras superar el umbral.
               window._edPenNodeDragPending = { voiceIdx: i, startX: e.clientX, startY: e.clientY };
             } else {
+              // Ratón (PC): inmediato, no hay ambigüedad de gesto posible
               edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=i;
             }
             if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
@@ -9012,6 +9050,13 @@ function edOnStart(e){
         }
         if(_vcBestCi >= 0){
           const ci2 = _vcBestCi;
+          // Registrar el puntero ANTES del return — si no, un segundo dedo no
+          // podría formar correctamente un pinch tras tocar una esquina
+          // (esta selección no arrastra nada, pero sí debe dejar sitio al gesto).
+          if(e.pointerType === 'touch'){
+            if (!window._edActivePointers) window._edActivePointers = new Map();
+            window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+          }
           window._edCurveVertIdx=ci2;
           if(!la.cornerRadii)la.cornerRadii=[0,0,0,0];
           const existing=la.cornerRadii[ci2]||0;
@@ -9064,6 +9109,9 @@ function edOnStart(e){
     // Cancelar deselección diferida — el pinch mantiene la selección actual
     if(window._edDeselTouchTimer){ clearTimeout(window._edDeselTouchTimer); window._edDeselTouchTimer = null; }
     window._edPendingDeselC = null;
+    // Cancelar drag de nodo pendiente — era un pinch, no una intención de arrastrar el nodo
+    if(window._edNodeDragTouchTimer){ clearTimeout(window._edNodeDragTouchTimer); window._edNodeDragTouchTimer = null; }
+    window._edPendingNodeDrag = null;
     // Cancelar timer de recorrido — el segundo dedo es pinch/cámara, no dibujo
     if(window._edMpTouchTimer){ clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     // Si rubber band ya había empezado (caso borde), cancelarla
@@ -10053,10 +10101,30 @@ function edOnStart(e){
           edRedraw();
           return;
         }
-        // Sin vcof: iniciar drag normal del nodo
-        _edShapePushHistory();
-        edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_lsHit.idx;
-        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+        // Sin vcof: esperar el tiempo habitual de segundo dedo (120ms) antes
+        // de iniciar el drag del nodo — un primer toque cerca de un nodo puede
+        // ser en realidad el arranque de un gesto de pinch/cámara con 2 dedos,
+        // no una intención de arrastrar ese nodo. Mismo patrón que el resto de
+        // la app (ver _edSelTouchTimer/_edPendingSelFound más abajo).
+        clearTimeout(window._edNodeDragTouchTimer);
+        const _ndLa = _lsLa, _ndIdx = _lsHit.idx;
+        window._edPendingNodeDrag = {
+          la: _ndLa, idx: _ndIdx,
+          commit: () => {
+            _edShapePushHistory();
+            edIsTailDragging=true; edTailPointType='linevertex'; edTailVoiceIdx=_ndIdx;
+          }
+        };
+        window._edNodeDragTouchTimer = setTimeout(() => {
+          window._edNodeDragTouchTimer = null;
+          const _pnd = window._edPendingNodeDrag;
+          window._edPendingNodeDrag = null;
+          if (!_pnd) return;
+          if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
+          if (edSelectedIdx < 0 || edLayers[edSelectedIdx] !== _pnd.la) return;
+          _pnd.commit();
+          if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+        }, 120);
         return;
       }
       // Segmento: registrar candidato para doble tap Y permitir drag del objeto completo
@@ -10994,6 +11062,24 @@ function edOnMove(e){
     return;
   }
   // Sin gesto activo → ignorar el resto
+  // EXCEPCIÓN: si hay un nodo pendiente de confirmar (esperando el segundo
+  // dedo) y el dedo se mueve, confirmarlo y arrastrar de inmediato — el
+  // movimiento real es evidencia de que no era el arranque de un pinch, sino
+  // una intención genuina de arrastrar ese nodo. Mismo patrón que la
+  // selección diferida (_edPendingSelFound) justo debajo.
+  if (window._edPendingNodeDrag && window._edNodeDragTouchTimer &&
+      e.pointerType === 'touch' && window._edActivePointers?.size === 1) {
+    clearTimeout(window._edNodeDragTouchTimer);
+    window._edNodeDragTouchTimer = null;
+    const _pnd = window._edPendingNodeDrag;
+    window._edPendingNodeDrag = null;
+    if (edSelectedIdx >= 0 && edLayers[edSelectedIdx] === _pnd.la) {
+      _pnd.commit();
+      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      edRedraw();
+    }
+    return;
+  }
   // EXCEPCIÓN: si hay selección táctil diferida y el dedo se mueve, confirmarla y arrastrar
   if (window._edPendingSelFound !== null && window._edSelTouchTimer &&
       e.pointerType === 'touch' && window._edActivePointers?.size === 1) {
@@ -11567,6 +11653,15 @@ function edOnEnd(e){
   }
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
+  }
+  // Drag de nodo diferido: si el dedo se levantó antes de que disparara el
+  // timer, fue un simple tap (sin movimiento) — no había nada más que hacer
+  // (el candidato de doble-tap ya se registró en edOnStart), así que solo se
+  // limpia el estado pendiente sin iniciar ningún drag.
+  if (window._edNodeDragTouchTimer) {
+    clearTimeout(window._edNodeDragTouchTimer);
+    window._edNodeDragTouchTimer = null;
+    window._edPendingNodeDrag = null;
   }
   // Selección táctil diferida: si el dedo se levantó antes de que disparara el timer,
   // aplicar la selección inmediatamente (era un tap, no un pinch)
