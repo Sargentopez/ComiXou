@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero 2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -992,6 +992,16 @@ let edLastPointerIsTouch = false; // se actualiza en edOnStart con e.pointerType
 // (pointerup/pointercancel). No afecta a táctil — el pinch multi-dedo sigue
 // gestionado aparte por _edActivePointers.
 let _edActiveNonTouchPointerId = null;
+// Momento (Date.now()) en que se fijó _edActiveNonTouchPointerId. Un puntero
+// fantasma genuino (mismo gesto físico, ratón+lápiz duplicado) llega casi
+// simultáneamente — unos pocos ms. Si en vez de eso pasa el margen de abajo
+// sin que llegara el pointerup/pointercancel que debía limpiar el id (evento
+// de puntero perdido, rareza de driver de tableta, etc.), el id anterior se
+// considera huérfano y un puntero nuevo puede adoptarlo — así este mecanismo
+// nunca puede quedar bloqueado para siempre (antes sí podía, y solo se
+// arreglaba recargando la página).
+let _edActiveNonTouchPointerTs = 0;
+const _ED_GHOST_PTR_MS = 500;
 let edPainting = false;
 let _edDrawLayerTarget = 'draw'; // 'draw' | 'fill' — capa activa en panel de dibujo
 let _edPenPendingStroke = null; // punto inicial diferido para lápiz
@@ -1284,9 +1294,13 @@ function _edUpdateTitlePill(){
   const titleRect = title.getBoundingClientRect();
   if(titleRect.width <= 0){ pill.style.width = '0px'; return; }
   const vPad = titleRect.height * 0.067; // relleno vertical alrededor del texto (1/3 menos alto que antes)
+  const pillH = titleRect.height + vPad * 2;
   pill.style.top    = (titleRect.top - barRect.top - vPad) + 'px';
-  pill.style.height = (titleRect.height + vPad * 2) + 'px';
+  pill.style.height = pillH + 'px';
   pill.style.width  = Math.max(0, titleRect.right - barRect.left + 4) + 'px';
+  // Píldora de flechas+número de página: misma altura exacta que la del título.
+  const pageNavPill = document.getElementById('edPageNavPill');
+  if(pageNavPill) pageNavPill.style.height = pillH + 'px';
 }
 window.addEventListener('resize', () => {
   cancelAnimationFrame(window._edTitlePillRaf);
@@ -1304,9 +1318,13 @@ function _gcpUpdateTitlePill(){
   const titleRect = title.getBoundingClientRect();
   if(titleRect.width <= 0){ pill.style.width = '0px'; return; }
   const vPad = titleRect.height * 0.067;
+  const pillH = titleRect.height + vPad * 2;
   pill.style.top    = (titleRect.top - barRect.top - vPad) + 'px';
-  pill.style.height = (titleRect.height + vPad * 2) + 'px';
+  pill.style.height = pillH + 'px';
   pill.style.width  = Math.max(0, titleRect.right - barRect.left + 4) + 'px';
+  // Píldora de flechas+número de fotograma: misma altura exacta que la del título.
+  const framePill = document.getElementById('gcpFramePill');
+  if(framePill) framePill.style.height = pillH + 'px';
 }
 window.addEventListener('resize', () => {
   cancelAnimationFrame(window._gcpTitlePillRaf);
@@ -6469,6 +6487,23 @@ function edAddImage(file){
   };
   reader.readAsDataURL(file);
 }
+// ── Pegar con Ctrl+V (evento nativo 'paste') — complemento del botón del
+// menú Insertar→Pegar. Se ignora si el foco está en un campo de texto de la
+// propia app (renombrar capa, editar texto/bocadillo, etc.) para no romper
+// el pegado de texto normal ahí.
+document.addEventListener('paste', e => {
+  if(!edCanvas) return;
+  const _tgt = e.target;
+  if(_tgt && (_tgt.tagName === 'INPUT' || _tgt.tagName === 'TEXTAREA' || _tgt.isContentEditable)) return;
+  const _items = e.clipboardData?.items; if(!_items) return;
+  for(const _it of _items){
+    if(_it.type && _it.type.startsWith('image/')){
+      const _blob = _it.getAsFile();
+      if(_blob){ e.preventDefault(); edAddImage(_blob); }
+      break;
+    }
+  }
+});
 /* ── Insertar GIF animado ── */
 function edAddGif(file, onLayerReady) {
   if (!file) return;
@@ -8390,8 +8425,9 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
   }
   if(_bestNodeIdx >= 0) return {type:'node', idx:_bestNodeIdx};
 
-  // 2. Comprobar segmentos — respetar fronteras de sub-contorno
+  // 2. Comprobar segmentos — respetar fronteras de sub-contorno, devolver el MÁS CERCANO
   const absP=la.absPoints();
+  let _bestSegDist = hitSeg, _bestSeg = null;
 
   if(la.points.includes(null)){
     // ── Multi-contorno (agrupado): detectar segmentos por sub-camino ──
@@ -8416,10 +8452,8 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
         const closestX=apxPx-t*abxPx;
         const closestY=apyPx-t*abyPx;
         const dist=Math.hypot(closestX,closestY)*z;
-        if(dist < hitSeg){
-          // nextIdx: índice real del siguiente nodo (para inserción correcta)
-          return {type:'seg', idx:_i, nextIdx:_j};
-        }
+        // nextIdx: índice real del siguiente nodo (para inserción correcta)
+        if(dist < _bestSegDist){ _bestSegDist=dist; _bestSeg={type:'seg', idx:_i, nextIdx:_j}; }
       }
     }
   } else {
@@ -8439,31 +8473,37 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
       const closestX=apxPx-t*abxPx;
       const closestY=apyPx-t*abyPx;
       const dist=Math.hypot(closestX,closestY)*z;
-      if(dist < hitSeg){
-        return {type:'seg', idx:i};
-      }
+      if(dist < _bestSegDist){ _bestSegDist=dist; _bestSeg={type:'seg', idx:i}; }
     }
   }
+  if(_bestSeg) return _bestSeg;
 
-  // 3. Comprobar subPaths (T1): nodos y segmentos en coordenadas locales del objeto
+  // 3. Comprobar subPaths (T1): nodos y segmentos en coordenadas locales del objeto,
+  // también eligiendo siempre el más cercano entre TODOS los sub-caminos.
   if(la.subPaths && la.subPaths.length){
     // Helper: pasar punto local (normalizado) a abs
     const localToAbs = (lx, ly) => {
       const lpx=lx*pw, lpy=ly*ph;
       return { x: la.x+(lpx*cos-lpy*sin)/pw, y: la.y+(lpx*sin+lpy*cos)/ph };
     };
+    // 3a. Nodos de todos los subPaths — el más cercano dentro del radio
+    let _bestSpNodeDist = hitNode, _bestSpNode = null;
+    for(let si=0; si<la.subPaths.length; si++){
+      const sp=la.subPaths[si];
+      if(!sp||sp.length<2) continue;
+      for(let i=0;i<sp.length;i++){
+        const {x:ax,y:ay}=localToAbs(sp[i].x, sp[i].y);
+        const _d=Math.hypot((nx-ax)*pw,(ny-ay)*ph)*z;
+        if(_d < _bestSpNodeDist){ _bestSpNodeDist=_d; _bestSpNode={type:'node', subPath:si, idx:i}; }
+      }
+    }
+    if(_bestSpNode) return _bestSpNode;
+    // 3b. Segmentos de todos los subPaths (siempre cerrados) — el más cercano
+    let _bestSpSegDist = hitSeg, _bestSpSeg = null;
     for(let si=0; si<la.subPaths.length; si++){
       const sp=la.subPaths[si];
       if(!sp||sp.length<2) continue;
       const ns=sp.length;
-      // Nodos del subPath
-      for(let i=0;i<ns;i++){
-        const {x:ax,y:ay}=localToAbs(sp[i].x, sp[i].y);
-        if(Math.hypot((nx-ax)*pw,(ny-ay)*ph)*z < hitNode){
-          return {type:'node', subPath:si, idx:i};
-        }
-      }
-      // Segmentos del subPath (siempre cerrado)
       for(let i=0;i<ns;i++){
         const j=(i+1)%ns;
         const {x:ax,y:ay}=localToAbs(sp[i].x,sp[i].y);
@@ -8474,11 +8514,10 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
         if(abLen2<0.001) continue;
         const t=Math.max(0,Math.min(1,(apxPx*abxPx+apyPx*abyPx)/abLen2));
         const dist=Math.hypot(apxPx-t*abxPx, apyPx-t*abyPx)*z;
-        if(dist<hitSeg){
-          return {type:'seg', subPath:si, idx:i};
-        }
+        if(dist < _bestSpSegDist){ _bestSpSegDist=dist; _bestSpSeg={type:'seg', subPath:si, idx:i}; }
       }
     }
+    if(_bestSpSeg) return _bestSpSeg;
   }
 
   return null;
@@ -8501,10 +8540,14 @@ function edOnStart(e){
     // iniciar dibujo/borrador; se generaliza a TODA la app — un hover nunca
     // debe seleccionar, arrastrar ni borrar nodos).
     if(e.pointerType === 'pen' && e.buttons === 0) return;
-    if(_edActiveNonTouchPointerId !== null && _edActiveNonTouchPointerId !== e.pointerId){
+    if(_edActiveNonTouchPointerId !== null && _edActiveNonTouchPointerId !== e.pointerId
+       && (Date.now() - _edActiveNonTouchPointerTs) < _ED_GHOST_PTR_MS){
       return; // puntero fantasma del mismo gesto físico — ignorar por completo
     }
+    // Si había un id distinto pero ya pasó el margen, es un gesto huérfano
+    // (su pointerup/pointercancel no llegó) — este puntero nuevo lo reemplaza.
     _edActiveNonTouchPointerId = e.pointerId;
+    _edActiveNonTouchPointerTs = Date.now();
   }
   // ── MODO RECORRIDO: inicio de trazo a mano alzada ───────────────────────
   if (_edMotionPathMode) {
@@ -8823,12 +8866,22 @@ function edOnStart(e){
         const rot2=(la.rotation||0)*Math.PI/180;
         const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
         const _vcNow=Date.now();
+        // Encontrar el nodo MÁS CERCANO dentro del radio (no el primero por índice
+        // recorrido — con nodos próximos entre sí, sus áreas de detección se
+        // solapan y tomar "el primero que coincide" podía seleccionar/borrar
+        // un nodo vecino en vez del que realmente se está tocando).
+        let _vcBestDist = _vcHitR, _vcBestI = -1;
         for(let i=0;i<la.points.length;i++){
           const p=la.points[i]; if(!p) continue;
           const lpx=p.x*pw2,lpy=p.y*ph2;
           const ax2=la.x+(lpx*cos2-lpy*sin2)/pw2;
           const ay2=la.y+(lpx*sin2+lpy*cos2)/ph2;
-          if(Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z<_vcHitR){
+          const _vcD=Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z;
+          if(_vcD < _vcBestDist){ _vcBestDist=_vcD; _vcBestI=i; }
+        }
+        if(_vcBestI >= 0){
+          const i = _vcBestI;
+          {
             // Doble tap en nodo ya seleccionado → eliminar nodo
             const _isDblNode = window._edCurveVertIdx===i &&
               (_vcNow - (window._edCurveLastTapTime||0)) < _edDoubleTapMs;
@@ -8897,22 +8950,26 @@ function edOnStart(e){
         const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
         const hw=la.width*pw2/2,hh=la.height*ph2/2;
         const corners=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
+        let _vcBestCDist = _vcHitR, _vcBestCi = -1;
         for(let ci2=0;ci2<4;ci2++){
           const[lx,ly]=corners[ci2];
           const ax2=(la.x*pw2+lx*cos2-ly*sin2)/pw2;
           const ay2=(la.y*ph2+lx*sin2+ly*cos2)/ph2;
-          if(Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z<_vcHitR){
-            window._edCurveVertIdx=ci2;
-            if(!la.cornerRadii)la.cornerRadii=[0,0,0,0];
-            const existing=la.cornerRadii[ci2]||0;
-            window._edCurveRadius=existing;
-            // Actualizar sliders (barra flotante Y submenú)
-            const _sl2=$('esb-slider-input');
-            if(_sl2) _sl2.value=existing;
-            const _slP2=$('op-shape-curve-r'); if(_slP2){_slP2.value=existing;}
-            const _slP2n=$('op-shape-curve-rnum'); if(_slP2n){_slP2n.value=existing;}
-            edRedraw();return;
-          }
+          const _vcCd=Math.hypot((c2.nx-ax2)*pw2,(c2.ny-ay2)*ph2)*edCamera.z;
+          if(_vcCd < _vcBestCDist){ _vcBestCDist=_vcCd; _vcBestCi=ci2; }
+        }
+        if(_vcBestCi >= 0){
+          const ci2 = _vcBestCi;
+          window._edCurveVertIdx=ci2;
+          if(!la.cornerRadii)la.cornerRadii=[0,0,0,0];
+          const existing=la.cornerRadii[ci2]||0;
+          window._edCurveRadius=existing;
+          // Actualizar sliders (barra flotante Y submenú)
+          const _sl2=$('esb-slider-input');
+          if(_sl2) _sl2.value=existing;
+          const _slP2=$('op-shape-curve-r'); if(_slP2){_slP2.value=existing;}
+          const _slP2n=$('op-shape-curve-rnum'); if(_slP2n){_slP2n.value=existing;}
+          edRedraw();return;
         }
       }
     }
@@ -10963,7 +11020,12 @@ function edOnMove(e){
       // Continuar el flujo normal de edOnMove para procesar el rubber band en este mismo frame
     }
   }
-  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart;
+  // Los 3 estados "pending" de lápiz (nodo/objeto/grupo) deben incluirse aquí:
+  // representan un posible arrastre real en formación (edIsDragging/edIsTailDragging
+  // aún NO están activos a propósito, hasta superar el umbral de movimiento — ver
+  // _edPenDragThreshold). Sin ellos, este guard cortaba el procesamiento antes de
+  // llegar nunca a la promoción, y el lápiz no llegaba a mover nada (nodos incluido).
+  const gestureActive = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart||!!window._edPenNodeDragPending||!!window._edPenDragPending||!!window._edPenGroupDragPending;
   if(!gestureActive) return;
   e.preventDefault();
   if(edPinching) return; // segundo dedo levantado, esperar edOnEnd
@@ -15207,7 +15269,7 @@ function _edActivateLineTool(isNew, isCreating) {
   <!-- FILA CERRAR + V/C + INFO VÉRTICES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
     <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">NODOS</button>
-    ${window._edIsTouch ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-vcof-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:flex;align-items:center;gap:3px" title="Cursor desplazado para nodos"><svg width="14" height="22" viewBox="0 0 14 22" style="flex-shrink:0"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg></button><div id="op-vcof-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Zurda</span><button id="op-vcof-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Diestra</span><button id="op-vcof-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div>` : ''}
+    ${window._edIsTouch ? `<div id="op-vcof-wrap" style="display:none;align-items:center;gap:4px"><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-vcof-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:flex;align-items:center;gap:3px" title="Cursor desplazado para nodos"><svg width="14" height="22" viewBox="0 0 14 22" style="flex-shrink:0"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg></button><div id="op-vcof-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Zurda</span><button id="op-vcof-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Diestra</span><button id="op-vcof-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div></div>` : ''}
     ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:none;padding:0;width:28px;height:28px;background:white;border-radius:50%;cursor:pointer;overflow:hidden;line-height:0" title="Fusionar objetos cerrados en uno solo con huecos"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="28" height="28"><circle cx="13" cy="13" r="13" fill="white"/><path d="M13,1 A12,12,0,0,0,13,25 Z" fill="black"/><circle cx="13" cy="7" r="6" fill="black"/><circle cx="13" cy="19" r="6" fill="white"/><circle cx="13" cy="13" r="12" fill="none" stroke="#444" stroke-width="1"/><circle cx="13" cy="7" r="3" fill="white"/><circle cx="13" cy="19" r="3" fill="black"/></svg></button>` : ''}
     <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0"><span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">Curvar</span>
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
@@ -15513,7 +15575,15 @@ function _edActivateLineTool(isNew, isCreating) {
     btn.style.background=open?'var(--black)':'transparent';
     btn.style.color=open?'var(--white)':'var(--gray-700)';
     btn.style.borderColor=open?'var(--black)':'var(--gray-300)';
-    if(!open){ window._edCurveVertIdx=-1; if(_vcof.on) _vcofSetOn(false); }
+    // Cursor COF (vcof): solo activable mientras la edición de nodos está activa
+    const _vcofWrap = $('op-vcof-wrap');
+    if(_vcofWrap) _vcofWrap.style.display = open ? 'flex' : 'none';
+    if(!open){
+      window._edCurveVertIdx=-1;
+      if(_vcof.on) _vcofSetOn(false);
+      const _vcofPop = $('op-vcof-pop');
+      if(_vcofPop) _vcofPop.style.display='none';
+    }
     edRedraw(); // actualizar canvas al activar O desactivar V⟺C
   });
   $('op-line-curve-r')?.addEventListener('input',e=>{
@@ -16058,6 +16128,11 @@ function _edFreezeDrawLayer(){
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
   _edEraserPickClose(); // cerrar picker del borrador si está abierto
+  // Misma razón que en _bibClose: el ghost de arrastre de la biblioteca vive
+  // en document.body, no dentro del panel — si este cierre genérico se
+  // dispara con un arrastre en curso (p.ej. toque fuera del panel), hay que
+  // cancelarlo explícitamente o la miniatura flotante queda huérfana.
+  if (typeof _bibDragCancel === 'function') _bibDragCancel();
   const panel=$('edOptionsPanel');
   if(panel){
     const _mode=panel.dataset.mode;
@@ -24976,6 +25051,30 @@ function EditorView_init(){
   });
 
   $('dd-camera')?.addEventListener('click', ()=>{ edCloseMenus(); edOpenCamera(); });
+  // ── Pegar imagen desde el portapapeles (obtenida fuera de la app) ──
+  // Async Clipboard API — estándar para "pegar" bajo demanda desde un botón
+  // (a diferencia del evento nativo 'paste', que solo dispara con Ctrl+V/
+  // menú contextual del SO). Reutiliza edAddImage tal cual: acepta cualquier
+  // Blob, no solo File — el Blob del portapapeles encaja sin adaptarlo.
+  $('dd-paste')?.addEventListener('click', async ()=>{
+    edCloseMenus();
+    if(!navigator.clipboard || !navigator.clipboard.read){
+      edToast('Tu navegador no permite pegar imágenes así — prueba Ctrl+V');
+      return;
+    }
+    try{
+      const _items = await navigator.clipboard.read();
+      let _imgBlob = null;
+      for(const _it of _items){
+        const _imgType = _it.types.find(t => t.startsWith('image/'));
+        if(_imgType){ _imgBlob = await _it.getType(_imgType); break; }
+      }
+      if(!_imgBlob){ edToast('No hay ninguna imagen en el portapapeles'); return; }
+      edAddImage(_imgBlob);
+    } catch(_err){
+      edToast('No se pudo leer el portapapeles — comprueba los permisos');
+    }
+  });
   $('dd-shortcuts')?.addEventListener('click', () => {
     edCloseMenus();
     const m = document.getElementById('edShortcutsModal');
@@ -25065,6 +25164,13 @@ function EditorView_init(){
 
   // ── DIBUJAR ──
   $('dd-pen')?.addEventListener('click',()=>{
+    // Deseleccionar cualquier objeto previo (mismo criterio que _esbActivate
+    // para formas/líneas): un dibujo nuevo no debe heredar la selección
+    // anterior. Sin esto, _edRefocusAfterCollapse() usaba edSelectedIdx
+    // (aún apuntando al objeto de antes) para recentrar la cámara al
+    // colapsar el panel — recentraba en un objeto no relacionado en vez
+    // de no recentrar nada, ya que esto NO es una reedición.
+    edSelectedIdx = -1;
     // Guardar el estado previo antes de entrar al modo dibujo
     edPushHistory();
     edActiveTool='draw';
@@ -27394,6 +27500,11 @@ function edBibAbrir() {
 }
 
 function _bibClose(panel) {
+  // Si se cierra la biblioteca con un arrastre de item en curso, el "ghost"
+  // (miniatura flotante) vive en document.body, fuera de este panel — al
+  // vaciar panel.innerHTML no se limpia solo. Cancelar explícitamente
+  // cualquier arrastre pendiente antes de cerrar.
+  if (typeof _bibDragCancel === 'function') _bibDragCancel();
   panel.classList.remove('open');
   panel.innerHTML = '';
   delete panel.dataset.mode;
@@ -32015,6 +32126,11 @@ function gcpOpen(edLayerIdx) {
 
   // Mostrar overlay y bloqueante
   shell.style.display = 'block';
+  // La primera llamada a _gcpUpdateTitlePill() (más arriba, justo tras fijar el
+  // texto) se hace con gcpShell aún en display:none — getBoundingClientRect()
+  // devuelve tamaño 0 y la píldora nunca se dibuja. Recalcular ahora que el
+  // shell ya es visible (rAF: esperar a que el navegador aplique el layout).
+  requestAnimationFrame(_gcpUpdateTitlePill);
   const blocker = document.getElementById('gcpBlocker');
   if (blocker) {
     blocker.style.display = 'block';

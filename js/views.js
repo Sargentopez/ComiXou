@@ -50,7 +50,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v32.48</footer>
+    <footer class="app-version">v32.58</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -289,6 +289,7 @@ Router.register('editor', {
         <span id="edProjectTitle">Sin título</span>
         <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav">
+          <div id="edPageNavPill" aria-hidden="true"></div>
           <button class="ed-top-pagebn" id="edPagePrev" title="Página anterior">&#9664;</button>
           <span id="edPageNum">1</span>
           <button class="ed-top-pagebn" id="edPageNext" title="Página siguiente">&#9654;</button>
@@ -325,6 +326,7 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-camera">Cámara</button>
                 </div>
                 <button class="ed-dropdown-item" id="dd-animation">Animación</button>
+                <button class="ed-dropdown-item" id="dd-paste">Pegar</button>
               </div>
 
             </div>
@@ -819,6 +821,7 @@ Router.register('editor', {
         <span id="gcpProjectTitle">Gif 1</span>
         <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav" id="gcpFrameNav" style="display:none">
+          <div id="gcpFramePill" aria-hidden="true"></div>
           <button class="ed-top-pagebn" id="gcpFramePrev" title="Fotograma clave anterior">&#9664;</button>
           <span id="gcpFrameNum">1</span>
           <button class="ed-top-pagebn" id="gcpFrameNext" title="Fotograma clave siguiente">&#9654;</button>

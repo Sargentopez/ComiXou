@@ -131,6 +131,8 @@ body.editor-page #appView {
 
 /* Nav de páginas en topbar */
 .ed-top-pagnav {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 0;
@@ -146,6 +148,25 @@ body.editor-page #appView {
     align-self: center;
     padding-bottom: 0;
   }
+}
+/* Franja blanca en píldora completa (ambos extremos semicirculares) tras el
+   conjunto flechas+número de página, para destacarlo del resto de la topbar.
+   z-index NEGATIVO a propósito: los botones/número son position:static (sin
+   posicionar), y un hijo posicionado con z-index positivo pinta SIEMPRE por
+   encima del contenido static del mismo contenedor, sin importar el orden en
+   el DOM — por eso con z-index:1 quedaba tapando los números/flechas.
+   Alto = misma altura exacta que edTitlePill, sincronizada por JS
+   (_edUpdateTitlePill) para que ambas píldoras midan siempre lo mismo. */
+#edPageNavPill {
+  position: absolute;
+  left: -9px;
+  right: -9px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--white);
+  border-radius: 999px;
+  z-index: -1;
+  pointer-events: none;
 }
 .ed-top-pagebn {
   background: none; border: none;
@@ -1278,6 +1299,28 @@ body.editor-page #appView {
   transform: translate(-50%,-50%); display: none;
   transition: width 0.08s, height 0.08s;
 }
+/* Cruz central de tamaño fijo — para localizar el cursor en PC (ratón/lápiz)
+   cuando el grosor del trazo es tan pequeño que el círculo apenas se ve.
+   Pseudo-elementos del propio #edBrushCursor: heredan su display/visibilidad
+   (en táctil, edMoveBrush ya oculta todo el elemento vía JS — sin cambios
+   aquí), pero su tamaño es fijo y NUNCA escala con el grosor del trazo. */
+#edBrushCursor::before,
+#edBrushCursor::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  background: #000000;
+  box-shadow: 0 0 0 1px #ffffff;
+  pointer-events: none;
+}
+#edBrushCursor::before {
+  width: 1.5px; height: 13px;
+  transform: translate(-50%, -50%);
+}
+#edBrushCursor::after {
+  width: 13px; height: 1.5px;
+  transform: translate(-50%, -50%);
+}
 
 /* Cursor offset (T18) */
 #edb-offset-l, #edb-offset-c, #edb-offset-r,
@@ -2053,13 +2096,30 @@ body.editor-page #appView {
 }
 #gcpTopbar .ed-top-spacer { flex: 1; }
 #gcpTopbar #gcpFrameNav { margin-top: 20px; }
-/* gcpFrameNav: siempre en flujo flex (los dos spacers centran), nunca position:absolute */
+/* gcpFrameNav: siempre en flujo flex (los dos spacers centran), nunca position:absolute.
+   relative (no static) para que sirva de contexto de posicionamiento a #gcpFramePill,
+   sin afectar al layout (no se le da ningún offset top/left/right/bottom). */
 #gcpTopbar .ed-top-pagnav {
-  position: static !important;
+  position: relative !important;
   left: auto !important;
   transform: none !important;
   align-self: center !important;
   padding-bottom: 0 !important;
+}
+/* Píldora completa (ambos extremos semicirculares) tras flechas+número de
+   fotograma, mismo criterio y misma altura (sincronizada por JS) que
+   edPageNavPill/edTitlePill. z-index negativo por el mismo motivo: los
+   botones/número son static y pintan por encima de un z-index positivo. */
+#gcpFramePill {
+  position: absolute;
+  left: -9px;
+  right: -9px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--white);
+  border-radius: 999px;
+  z-index: -1;
+  pointer-events: none;
 }
 #gcpCloseBtn {
   background: none; border: none;
