@@ -20,6 +20,11 @@
  * - LZW decompression (puerto JavaScript de implementación Java)
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
+ *
+ * - Trix (editor de texto enriquecido)
+ *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
+ *     Licencia: MIT
+ *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ============================================================
    editor.css — ComXow v4.3
@@ -2511,3 +2516,158 @@ body.editor-page #appView {
 /* Dropdown comportamiento GCP — flex al abrirse, fondo igual al resto de dropdowns */
 #gdd-comportamiento { display: none; flex-direction: column; }
 #gdd-comportamiento.open { display: flex; }
+
+/* ══ EDITOR DE TEXTOS ═══════════════════════════════════════════════════════
+   tdShell flota encima del editor con position:fixed, mismo criterio que
+   gcpShell (topbar + menubar con las mismas clases ed-menu-btn/ed-menu-sep),
+   pero es contenido DOM (Trix), no un segundo <canvas> — no necesita
+   sincronizarse con editorCanvas ni con gestos táctiles de cámara.
+   Cabecera violeta para diferenciarlo del amarillo (editor general) y el
+   azul (editor GCP). Librería de terceros: Trix (MIT) — ver créditos al
+   inicio de este archivo.
+   ══════════════════════════════════════════════════════════════════════════ */
+#tdShell {
+  display: none;
+  position: fixed;
+  inset: 0;
+  padding-top: env(safe-area-inset-top, 0px);
+  z-index: 600;
+  background: var(--gray-100);
+  flex-direction: column;
+}
+#tdTopbar {
+  position: relative;
+  flex-shrink: 0;
+  height: 52px;
+  background: linear-gradient(to right, var(--violet) 33%, #ece0fa 50%, var(--violet) 67%);
+  border-bottom: 2.5px solid var(--black);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 8px;
+  z-index: 2;
+}
+#tdProjectTitle {
+  position: relative; z-index: 2;
+  flex: 0 1 auto; min-width: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1rem; letter-spacing: 0.5px;
+  color: var(--black);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Franja blanca tras el título — mismo criterio que edTitlePill/gcpTitlePill */
+#tdTitlePill {
+  position: absolute;
+  left: 0;
+  background: var(--white);
+  border-radius: 0 999px 999px 0;
+  z-index: 1;
+  pointer-events: none;
+  width: 0;
+}
+#tdTopbar .ed-top-spacer { flex: 1; }
+#tdCloseBtn {
+  position: relative; z-index: 2;
+  background: none; border: none;
+  font-size: 1.4rem; font-weight: 900;
+  color: var(--black); cursor: pointer;
+  padding: 4px 8px; border-radius: 6px;
+  flex-shrink: 0; line-height: 1;
+  transition: background .15s;
+}
+#tdCloseBtn:active { background: rgba(0,0,0,.1); }
+
+#tdMenuBar {
+  position: relative;
+  flex-shrink: 0;
+  height: 40px;
+  background: var(--white);
+  border-bottom: 1.5px solid var(--gray-300);
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  overflow: hidden;
+  z-index: 1;
+}
+/* #tdToolbar ES el <trix-toolbar> — se estiliza como barra de menú propia,
+   reemplazando el layout por defecto de trix.css (button-row/button-group,
+   que no usamos: nuestros botones son hijos directos con clases ed-menu-btn) */
+#tdToolbar {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  touch-action: pan-x pan-y;
+}
+#tdToolbar::-webkit-scrollbar { display: none; }
+
+/* Reskin de los botones de formato (mismo lenguaje visual que ed-menu-btn,
+   con estado activo — Trix añade/quita la clase trix-active según el cursor) */
+.td-fmt-btn { font-family: var(--font-body); }
+.td-fmt-btn b, .td-fmt-btn i, .td-fmt-btn s { font-family: var(--font-display); }
+.td-fmt-btn.trix-active {
+  color: var(--white);
+  background: var(--black);
+}
+
+/* Área de la hoja: fondo neutro, hoja de papel centrada con sombra tipo viñeta.
+   Ancho fijo con proporción de página (como un A4 integrado en el lienzo);
+   el alto crece de forma natural según el texto — la paginación real ocurre
+   al pulsar "Aplicar al lienzo" (_tdLayoutPages en editor-textdoc.js), no aquí. */
+#tdPageArea {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  justify-content: center;
+  padding: 20px 12px 48px;
+  -webkit-overflow-scrolling: touch;
+}
+.td-page {
+  background: var(--paper);
+  box-shadow: var(--box-shadow-lg);
+  border: 1.5px solid var(--black);
+  width: min(100%, 480px);
+  aspect-ratio: 360 / 780; /* misma proporción que ED_PAGE_W×ED_PAGE_H vertical */
+  padding: 9%;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+/* Hoja actual en orientación horizontal (edOrientation) — proporción contraria */
+.td-page.horizontal { aspect-ratio: 780 / 360; }
+
+.td-editor {
+  display: block;
+  width: 100%;
+  min-height: 100%;
+  border: none;
+  padding: 0;
+  outline: none;
+  font-family: 'Lora', serif;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.td-editor h1 {
+  font-family: 'Lora', serif;
+  font-size: 1.55em;
+  font-weight: 700;
+  margin: 0 0 .4em;
+}
+.td-editor blockquote {
+  border-left: 3px solid var(--gray-300);
+  padding-left: .8em;
+  font-style: italic;
+  margin: .6em 0;
+  color: var(--gray-700);
+}
+.td-editor ul, .td-editor ol { padding-left: 1.4em; margin: .4em 0; }
+.td-editor:empty::before {
+  content: attr(placeholder);
+  color: var(--gray-500);
+  pointer-events: none;
+}

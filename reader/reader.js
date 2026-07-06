@@ -20,6 +20,11 @@
  * - LZW decompression (puerto JavaScript de implementación Java)
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
+ *
+ * - Trix (editor de texto enriquecido)
+ *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
+ *     Licencia: MIT
+ *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ============================================================
    ComXow Reader — Reproductor externo standalone
@@ -2350,9 +2355,15 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
     t._bubbleLayer    = bubbleLayersWithText2[i] || null;
   });
 
+  // Hoja de texto paginada (Editor de textos): el resumen de panel_texts no lleva
+  // richLines (serían filas enormes en una tabla pensada para ser ligera) — para
+  // esas capas se dibuja la capa completa (panel_layers), que sí las tiene.
+  const _pick = t => (t._bubbleLayer && Array.isArray(t._bubbleLayer.richLines) && t._bubbleLayer.richLines.length)
+    ? t._bubbleLayer : t;
+
   const isSeq = (panel.text_mode || 'sequential') === 'sequential';
   if (!isSeq) {
-    texts.forEach(t => _drawBubble(ctx, t, pw, ph, 1));
+    texts.forEach(t => _drawBubble(ctx, _pick(t), pw, ph, 1));
     return;
   }
   // Modo sequential — replica exacta del visor interno del editor (edUpdateViewer):
@@ -2361,7 +2372,7 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
   const toShow = texts.slice(0, RS.textStep);
   toShow.forEach((t, vi) => {
     if (t.type === 'text') {
-      _drawBubble(ctx, t, pw, ph, 1);
+      _drawBubble(ctx, _pick(t), pw, ph, 1);
     } else {
       const isCurrent  = vi === toShow.length - 1;
       const isPrevious = vi === toShow.length - 2;
@@ -2464,6 +2475,11 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const bw     = borderW_ * scale;
   const style  = t.style || 'conventional';
   const type   = t.type  || 'bubble';
+  // Hoja de texto paginada: panel_texts no tiene richLines (columnas fijas),
+  // así que se resuelve desde la capa de panel_layers ya asociada por _drawTexts.
+  const richSource = (t._bubbleLayer && Array.isArray(t._bubbleLayer.richLines) && t._bubbleLayer.richLines.length)
+    ? t._bubbleLayer
+    : (Array.isArray(t.richLines) && t.richLines.length ? t : null);
   const cx = x + w / 2;
   const cy = y + h / 2;
   const isSingle = (t.text||'').trim().length===1 && /[a-zA-Z0-9]/.test((t.text||'').trim());
@@ -2583,6 +2599,15 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     ctx.restore();
   }
 
+  // Hoja de texto paginada (Editor de textos): formato enriquecido ya maquetado.
+  // Coordenadas (line.y, run.x) son absolutas dentro de la página lógica
+  // (0,0 = esquina superior izquierda) — mismo criterio que editor.js.
+  if (type === 'text' && richSource) {
+    _drawRichTextLines(ctx, richSource, w, h, textColor_);
+    ctx.restore();
+    return;
+  }
+
   // Texto centrado
   ctx.font = (fontItalic_ ? 'italic ' : '') + (fontBold_ ? 'bold ' : '') + fs + 'px ' + fontFamily_;
   const isPlaceholder = (t.text||'') === 'Escribe aquí';
@@ -2592,6 +2617,54 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
   const lh = fs * 1.2, totalH = lines.length * lh;
   lines.forEach((line, i) => ctx.fillText(line, 0, -totalH/2 + lh/2 + i*lh));
 
+  ctx.restore();
+}
+
+// Fuente para una línea/fragmento de texto enriquecido — misma lógica que
+// TextLayer._richFontStr() en editor.js.
+function _richFontStr(fontSize, bold, italic, mono, richFontFamily) {
+  const fam = mono ? 'monospace' : (richFontFamily || 'Lora');
+  const _fam = fam.includes(' ') ? '"' + fam + '"' : fam;
+  return (italic ? 'italic ' : '') + (bold ? 'bold ' : '') + fontSize + 'px ' + _fam;
+}
+// Dibuja las líneas ya maquetadas/paginadas por _tdLayoutPages (js/editor-textdoc.js),
+// serializadas en t.richLines — implementación paralela a TextLayer._drawRichLines().
+function _drawRichTextLines(ctx, t, w, h, textColor_) {
+  ctx.save();
+  ctx.translate(-w/2, -h/2);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  const _col = textColor_ || '#000000';
+  const _fam = t.richFontFamily;
+  (t.richLines || []).forEach(line => {
+    if (line.kind === 'quote') {
+      ctx.save();
+      ctx.strokeStyle = _col; ctx.globalAlpha = ctx.globalAlpha * 0.32;
+      ctx.lineWidth = Math.max(2, line.fontSize * 0.08);
+      ctx.beginPath();
+      ctx.moveTo(line.indent - 10, line.y - line.fontSize * 0.85);
+      ctx.lineTo(line.indent - 10, line.y + line.fontSize * 0.28);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (line.marker) {
+      ctx.font = _richFontStr(line.fontSize, false, false, false, _fam);
+      ctx.fillStyle = _col;
+      ctx.fillText(line.marker, Math.max(0, line.indent - line.fontSize * 0.95), line.y);
+    }
+    (line.runs || []).forEach(r => {
+      ctx.font = _richFontStr(line.fontSize, r.bold, r.italic || line.kind === 'quote', r.mono, _fam);
+      ctx.fillStyle = _col;
+      ctx.fillText(r.text, r.x, line.y);
+      if (r.strike) {
+        ctx.beginPath();
+        ctx.lineWidth = Math.max(1, line.fontSize * 0.06);
+        ctx.strokeStyle = _col;
+        ctx.moveTo(r.x, line.y - line.fontSize * 0.32);
+        ctx.lineTo(r.x + r.width, line.y - line.fontSize * 0.32);
+        ctx.stroke();
+      }
+    });
+  });
   ctx.restore();
 }
 

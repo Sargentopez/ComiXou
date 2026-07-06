@@ -20,6 +20,11 @@
  * - LZW decompression (puerto JavaScript de implementación Java)
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
+ *
+ * - Trix (editor de texto enriquecido)
+ *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
+ *     Licencia: MIT
+ *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ============================================================
    views.js — Registro de todas las vistas de la SPA
@@ -50,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v32.69</footer>
+    <footer class="app-version">v32.70</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -185,7 +190,7 @@ Router.register('my-comics', {
 Router.register('editor', {
   bodyClass: 'editor-page',
   hideHeader: true,
-  css: ['css/editor.css'],
+  css: ['css/editor.css', 'css/trix.css'],
   html: () => `
     <div id="editorShell">
 
@@ -358,6 +363,8 @@ Router.register('editor', {
             <div class="ed-dropdown" id="dd-escribir">
               <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
               <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-textdoc">📄 Editor de textos</button>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
@@ -937,6 +944,42 @@ Router.register('editor', {
       </div>
       <!-- Panel de propiedades del objeto seleccionado (doble tap) -->
       <div id="gcpPropsPanel"></div>
+    </div>
+
+    <!-- Editor de textos: mismo diseño que edShell/gcpShell, cabecera violeta.
+         Editor de texto enriquecido (Trix, MIT, https://trix-editor.org/) — ver
+         créditos al inicio de este archivo. Al "Aplicar al lienzo" el contenido
+         se pagina y se añade como hojas nuevas al final de la obra. -->
+    <div id="tdShell">
+      <div id="tdTopbar">
+        <div id="tdTitlePill" aria-hidden="true"></div>
+        <span id="tdProjectTitle">Editor de textos</span>
+        <span class="ed-top-spacer"></span>
+        <button class="ed-top-action" id="tdApplyBtn">Aplicar al lienzo</button>
+        <button id="tdCloseBtn" title="Volver al editor">✕</button>
+      </div>
+      <div id="tdMenuBar">
+        <trix-toolbar id="tdToolbar">
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="undo" title="Deshacer">↩</button>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="redo" title="Rehacer">↪</button>
+          <div class="ed-menu-sep"></div>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bold" title="Negrita"><b>N</b></button>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="italic" title="Cursiva"><i>K</i></button>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="strike" title="Tachado"><s>S</s></button>
+          <div class="ed-menu-sep"></div>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="heading1" title="Título">Título</button>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="quote" title="Cita">&quot; Cita</button>
+          <div class="ed-menu-sep"></div>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bullet" title="Lista de viñetas">• Lista</button>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="number" title="Lista numerada">1. Lista</button>
+        </trix-toolbar>
+      </div>
+      <div id="tdPageArea">
+        <div id="tdPage" class="td-page">
+          <input type="hidden" id="tdHiddenInput">
+          <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe aquí el texto de tu obra…"></trix-editor>
+        </div>
+      </div>
     </div>
 
     <div id="edBrushCursor"></div>

@@ -20,9 +20,14 @@
  * - LZW decompression (puerto JavaScript de implementación Java)
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
+ *
+ * - Trix (editor de texto enriquecido)
+ *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
+ *     Licencia: MIT
+ *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comixow-v32-69';
+const CACHE = 'comixow-v32-70';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas

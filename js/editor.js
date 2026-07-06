@@ -20,6 +20,11 @@
  * - LZW decompression (puerto JavaScript de implementación Java)
  *     Referencia original: https://gist.github.com/devunwired/4479231
  *     Licencia: dominio público / uso libre
+ *
+ * - Trix (editor de texto enriquecido)
+ *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
+ *     Licencia: MIT
+ *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ── gifuct-js embebido (MIT, Matt Way github.com/matt-way/gifuct-js) ── */
 var _gm = {};
@@ -1803,16 +1808,67 @@ class TextLayer extends BaseLayer {
   getLines(){return this.text.split('\n');}
   _fontStr(){ const _ff=this.fontFamily.includes(' ')?`"${this.fontFamily}"`:this.fontFamily; return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${_ff}`; }
   measure(ctx){
+    // Hoja de texto paginada (Editor de textos): tamaño ya fijado a página completa
+    if(this.richLines) return {width:this.width, height:this.height};
     ctx.font=this._fontStr();
     let mw=0,th=0;
     this.getLines().forEach(l=>{mw=Math.max(mw,ctx.measureText(l).width);th+=this.fontSize*1.2;});
     return{width:mw,height:th};
   }
   resizeToFitText(can){
+    // Hoja de texto paginada: el tamaño (página completa) lo fija _tdApplyToCanvas(), no re-ajustar
+    if(this.richLines) return;
     const pw=edPageW(), ph=edPageH();
     const ctx=can.getContext('2d'),{width,height}=this.measure(ctx);
     this.width=Math.max(0.05,(width+this.padding*2)/pw);
     this.height=Math.max(0.05,(height+this.padding*2)/ph);
+  }
+  // Fuente para una línea/fragmento de texto enriquecido (Editor de textos).
+  // mono usa la fuente del sistema (monospace); el resto usa richFontFamily (Lora por defecto).
+  _richFontStr(fontSize,bold,italic,mono){
+    const fam = mono ? 'monospace' : (this.richFontFamily || 'Lora');
+    const _fam = fam.includes(' ') ? `"${fam}"` : fam;
+    return `${italic?'italic ':''}${bold?'bold ':''}${fontSize}px ${_fam}`;
+  }
+  // Dibuja las líneas ya maquetadas/paginadas por _tdLayoutPages (editor-textdoc.js).
+  // Coordenadas (line.y, run.x) son absolutas dentro de la página lógica (0,0 = esquina
+  // superior izquierda), por eso se traslada desde el centro (-w/2,-h/2) antes de dibujar.
+  _drawRichLines(ctx,w,h){
+    ctx.save();
+    ctx.translate(-w/2,-h/2);
+    ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    const _col = this.color || '#000000';
+    this.richLines.forEach(line=>{
+      if(line.kind==='quote'){
+        ctx.save();
+        ctx.strokeStyle=_col; ctx.globalAlpha=ctx.globalAlpha*0.32;
+        ctx.lineWidth=Math.max(2,line.fontSize*0.08);
+        ctx.beginPath();
+        ctx.moveTo(line.indent-10, line.y-line.fontSize*0.85);
+        ctx.lineTo(line.indent-10, line.y+line.fontSize*0.28);
+        ctx.stroke();
+        ctx.restore();
+      }
+      if(line.marker){
+        ctx.font=this._richFontStr(line.fontSize,false,false,false);
+        ctx.fillStyle=_col;
+        ctx.fillText(line.marker, Math.max(0,line.indent-line.fontSize*0.95), line.y);
+      }
+      (line.runs||[]).forEach(r=>{
+        ctx.font=this._richFontStr(line.fontSize, r.bold, r.italic||line.kind==='quote', r.mono);
+        ctx.fillStyle=_col;
+        ctx.fillText(r.text, r.x, line.y);
+        if(r.strike){
+          ctx.beginPath();
+          ctx.lineWidth=Math.max(1,line.fontSize*0.06);
+          ctx.strokeStyle=_col;
+          ctx.moveTo(r.x, line.y-line.fontSize*0.32);
+          ctx.lineTo(r.x+r.width, line.y-line.fontSize*0.32);
+          ctx.stroke();
+        }
+      });
+    });
+    ctx.restore();
   }
   draw(ctx,can){
     const pw=edPageW(), ph=edPageH();
@@ -1829,6 +1885,12 @@ class TextLayer extends BaseLayer {
     if(this.borderWidth>0){
       ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
       ctx.strokeRect(-w/2,-h/2,w,h);
+    }
+    // Hoja de texto paginada (Editor de textos): formato enriquecido ya maquetado
+    if(this.richLines && this.richLines.length){
+      this._drawRichLines(ctx,w,h);
+      ctx.restore();
+      return;
     }
     ctx.font=this._fontStr();
     const isPlaceholder = this.text==='Escribe aquí';
@@ -22271,6 +22333,10 @@ function edSerLayer(l){
     backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
     if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true;
+    // Hoja de texto paginada (Editor de textos): líneas ya maquetadas + HTML de origen (Trix)
+    if(l.richLines) _o.richLines=l.richLines;
+    if(l.richFontFamily) _o.richFontFamily=l.richFontFamily;
+    if(l.sourceHTML) _o.sourceHTML=l.sourceHTML;
     if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed)_o._motionPathClosed=true;
     if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;
@@ -25039,7 +25105,7 @@ function EditorView_init(){
       "400 16px 'Bebas Neue'",
       "400 16px 'Comic Neue'",  "700 16px 'Comic Neue'",
       "400 16px Lora",          "700 16px Lora",
-      "400 italic 16px Lora",
+      "400 italic 16px Lora",  "700 italic 16px Lora",
       "400 16px Nunito",        "600 16px Nunito",
       "700 16px Nunito",        "900 16px Nunito",
       "400 16px Oswald",        "700 16px Oswald",
@@ -25489,6 +25555,7 @@ function EditorView_init(){
   });
   $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
   $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
+  $('dd-textdoc')?.addEventListener('click', ()=>{ if(typeof edOpenTextDoc==='function') edOpenTextDoc(); });
   $('edFileGallery')?.addEventListener('change', async e=>{
     const _f = e.target.files[0];
     e.target.value = '';
