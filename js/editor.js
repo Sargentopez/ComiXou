@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero 2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -12812,6 +12812,82 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
     // Sin huecos cercanos que cerrar: seguir con el relleno tal cual.
   }
 
+  // ── Suavizado automático bajo la tinta, en dos fases ────────────────────
+  // FASE 1 — sin suavizar: mientras la tinta va subiendo (o está en su pico
+  // ya alcanzado, aunque se mantenga plana después) el relleno va al 100%.
+  // Esto cubre toda la rampa de entrada de la tinta y su núcleo opaco,
+  // por ancho que sea — así el relleno llega al 100% justo hasta donde la
+  // propia tinta también está al 100%, sin línea de corte.
+  // FASE 2 — suavizado, con un contador FIJO de niveles (no "hasta el
+  // infinito"): en cuanto se detecta que la tinta ya no sube respecto al
+  // máximo visto hasta ahora, el SIGUIENTE píxel de relleno pasa a nivel 1
+  // de transparencia, el siguiente a nivel 2 (más transparente que el
+  // anterior), el siguiente a nivel 3... y al llegar al último nivel el
+  // relleno ya no se dibuja más — el relleno acaba ahí, no sigue avanzando
+  // por debajo del resto de la tinta.
+  let _extAlphaOL = null;
+  {
+    const _TAPER_N = 4; // niveles totales (3 de transparencia + el final en 0)
+    const _runMax = new Int16Array(W*H).fill(-1);
+    const _depth  = new Int16Array(W*H).fill(-1); // 0 = aún fase 1 (100%)
+    const _NB = [[1,0],[-1,0],[0,1],[0,-1]];
+    const _q = [];
+    const _MAX_Q = 2000000; // salvaguarda: no debería alcanzarse en uso normal
+    // Sembrar: vecinos directos del núcleo del relleno que tengan tinta
+    // (el primer píxel siempre entra en fase 1: aún no sabemos si la tinta
+    // sigue subiendo, así que se trata como si viniera de un máximo de -∞)
+    for (let y=0; y<H; y++){
+      for (let x=0; x<W; x++){
+        const idx = y*W+x;
+        if (!filled[idx]) continue;
+        for (const [ddx,ddy] of _NB){
+          const nx=x+ddx, ny=y+ddy;
+          if (nx<0||nx>=W||ny<0||ny>=H) continue;
+          const nidx = ny*W+nx;
+          if (filled[nidx] || _runMax[nidx] !== -1) continue;
+          const inkA = orig[nidx*4+3];
+          if (inkA <= 0) continue;
+          _runMax[nidx] = inkA;
+          _depth[nidx]  = 0;
+          _q.push(nidx);
+        }
+      }
+    }
+    // BFS estricta: cada píxel se visita y fija una sola vez
+    for (let _qh=0; _qh<_q.length; _qh++){
+      const idx = _q[_qh];
+      const predMax   = _runMax[idx];
+      const predDepth = _depth[idx];
+      if (predDepth >= _TAPER_N) continue; // ya en nivel final: no propagar más
+      const x = idx % W, y = (idx / W) | 0;
+      for (const [ddx,ddy] of _NB){
+        const nx=x+ddx, ny=y+ddy;
+        if (nx<0||nx>=W||ny<0||ny>=H) continue;
+        const nidx = ny*W+nx;
+        if (filled[nidx] || _runMax[nidx] !== -1) continue; // ya fijado o es núcleo
+        const inkA = orig[nidx*4+3];
+        if (inkA <= 0) continue;
+        if (inkA > predMax) {
+          // La tinta sigue subiendo respecto al máximo ya visto: fase 1 (100%)
+          _runMax[nidx] = inkA;
+          _depth[nidx]  = 0;
+        } else {
+          // La tinta ya no sube (esté o no en su pico): un nivel más de
+          // transparencia, sin importar lo que haga la tinta a partir de aquí
+          _runMax[nidx] = predMax;
+          _depth[nidx]  = predDepth + 1;
+        }
+        if (_q.length < _MAX_Q) _q.push(nidx);
+      }
+    }
+    _extAlphaOL = new Uint8Array(W*H);
+    for (let i=0; i<W*H; i++){
+      if (filled[i] || _depth[i] < 0) continue;
+      const _extA = _depth[i] === 0 ? fA : Math.round(fA * (_TAPER_N - _depth[i]) / _TAPER_N);
+      if (_extA > 0) _extAlphaOL[i] = _extA;
+    }
+  }
+
   // Escribir en el FillLayer (igual que el flujo normal)
   const prevFill = flTarget._ctx.getImageData(0, 0, W, H).data;
   const _flResult = flTarget._ctx.createImageData(W, H);
@@ -12819,6 +12895,7 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
   for(let i=0; i<W*H; i++){
     const pi=i*4;
     if(filled[i]){ _rd[pi]=fR;_rd[pi+1]=fG;_rd[pi+2]=fB;_rd[pi+3]=fA; }
+    else if(_extAlphaOL[i] > 0){ _rd[pi]=fR;_rd[pi+1]=fG;_rd[pi+2]=fB;_rd[pi+3]=_extAlphaOL[i]; }
     else { _rd[pi]=prevFill[pi];_rd[pi+1]=prevFill[pi+1];_rd[pi+2]=prevFill[pi+2];_rd[pi+3]=prevFill[pi+3]; }
   }
   if (flTarget._canvas.width !== W || flTarget._canvas.height !== H) {
@@ -12987,6 +13064,92 @@ function edFloodFill(nx, ny){
     // seguir con el relleno tal cual (igual que si esta detección no existiera).
   }
 
+  // ── Suavizado automático bajo la tinta, en dos fases ────────────────────
+  // El núcleo del relleno (filled=1) tiene un borde recto justo donde
+  // empieza la tinta. Si luego se borra la tinta, ese borde recto queda
+  // expuesto sin suavizar — hasta ahora había que pulsar "Suavizar" a mano.
+  // FASE 1 — sin suavizar: mientras la tinta va subiendo (o está en su pico
+  // ya alcanzado, aunque se mantenga plana después) el relleno va al 100%.
+  // Esto cubre toda la rampa de entrada de la tinta y su núcleo opaco, por
+  // ancho que sea — el relleno llega al 100% justo hasta donde la propia
+  // tinta también está al 100%, sin línea de corte.
+  // FASE 2 — suavizado, con un contador FIJO de niveles (no "hasta el
+  // infinito"): en cuanto la tinta ya no sube respecto al máximo visto
+  // hasta ahora, el SIGUIENTE píxel de relleno pasa a nivel 1 de
+  // transparencia, el siguiente a nivel 2 (más transparente que el
+  // anterior), el siguiente a nivel 3... y al llegar al último nivel el
+  // relleno ya no se dibuja más — acaba ahí, no sigue bajo el resto de tinta.
+  let _extAlpha = null;
+  {
+    const _inkRef = _edTmp.pen || dl;
+    if (_inkRef?._canvas && _inkRef._canvas.width === fw && _inkRef._canvas.height === fh) {
+      const _TAPER_N = 4; // niveles totales (3 de transparencia + el final en 0)
+      const _inkCtx = _inkRef._ctx || _inkRef._canvas.getContext('2d');
+      const _inkData = _inkCtx.getImageData(0, 0, fw, fh).data;
+      const _runMax = new Int16Array(fw*fh).fill(-1);
+      const _depth  = new Int16Array(fw*fh).fill(-1); // 0 = aún fase 1 (100%)
+      const _NB = [[1,0],[-1,0],[0,1],[0,-1]];
+      const _q = [];
+      const _MAX_Q = 2000000; // salvaguarda: no debería alcanzarse en uso normal
+      // Sembrar: vecinos directos del núcleo del relleno que tengan tinta
+      // (el primer píxel siempre entra en fase 1: aún no sabemos si la
+      // tinta sigue subiendo, se trata como si viniera de un máximo de -∞)
+      for (let y=0; y<fh; y++){
+        for (let x=0; x<fw; x++){
+          const idx = y*fw+x;
+          if (!filled[idx]) continue;
+          for (const [ddx,ddy] of _NB){
+            const nx=x+ddx, ny=y+ddy;
+            if (nx<0||nx>=fw||ny<0||ny>=fh) continue;
+            const nidx = ny*fw+nx;
+            if (filled[nidx] || _runMax[nidx] !== -1) continue;
+            const inkA = _inkData[nidx*4+3];
+            if (inkA <= 0) continue;
+            _runMax[nidx] = inkA;
+            _depth[nidx]  = 0;
+            _q.push(nidx);
+          }
+        }
+      }
+      // BFS estricta: cada píxel se visita y fija UNA sola vez, heredando el
+      // estado de sus vecinos YA fijados (más cercanos al relleno) — nunca
+      // se revisita, para que un valor alto más profundo en la tinta no se
+      // propague hacia atrás y rebaje un píxel más cercano al relleno.
+      for (let _qh=0; _qh<_q.length; _qh++){
+        const idx = _q[_qh];
+        const predMax   = _runMax[idx];
+        const predDepth = _depth[idx];
+        if (predDepth >= _TAPER_N) continue; // ya en nivel final: no propagar más
+        const x = idx % fw, y = (idx / fw) | 0;
+        for (const [ddx,ddy] of _NB){
+          const nx=x+ddx, ny=y+ddy;
+          if (nx<0||nx>=fw||ny<0||ny>=fh) continue;
+          const nidx = ny*fw+nx;
+          if (filled[nidx] || _runMax[nidx] !== -1) continue; // ya fijado o es núcleo
+          const inkA = _inkData[nidx*4+3];
+          if (inkA <= 0) continue;
+          if (inkA > predMax) {
+            // La tinta sigue subiendo respecto al máximo ya visto: fase 1 (100%)
+            _runMax[nidx] = inkA;
+            _depth[nidx]  = 0;
+          } else {
+            // La tinta ya no sube (esté o no en su pico): un nivel más de
+            // transparencia, sin importar lo que haga la tinta a partir de aquí
+            _runMax[nidx] = predMax;
+            _depth[nidx]  = predDepth + 1;
+          }
+          if (_q.length < _MAX_Q) _q.push(nidx);
+        }
+      }
+      _extAlpha = new Uint8Array(fw*fh);
+      for (let i=0; i<fw*fh; i++){
+        if (filled[i] || _depth[i] < 0) continue;
+        const _extA = _depth[i] === 0 ? fA : Math.round(fA * (_TAPER_N - _depth[i]) / _TAPER_N);
+        if (_extA > 0) _extAlpha[i] = _extA;
+      }
+    }
+  }
+
   // Escribir resultado al DrawLayer combinando a nivel de píxel
   // Para preservar la editabilidad futura, el DrawLayer queda con:
   //   · Píxeles rellenados (filled=1): color fill opaco
@@ -13011,9 +13174,12 @@ function edFloodFill(nx, ny){
     const _ffPrev = _ffCtx.getImageData(0, 0, fw, fh);
     const _ffPrevD = _ffPrev.data;
     for (let _fi = 0; _fi < fw * fh; _fi++) {
-      if (!filled[_fi]) continue;
       const _pi = _fi * 4;
-      _ffPrevD[_pi]=fR; _ffPrevD[_pi+1]=fG; _ffPrevD[_pi+2]=fB; _ffPrevD[_pi+3]=fA;
+      if (filled[_fi]) {
+        _ffPrevD[_pi]=fR; _ffPrevD[_pi+1]=fG; _ffPrevD[_pi+2]=fB; _ffPrevD[_pi+3]=fA;
+      } else if (_extAlpha && _extAlpha[_fi] > 0) {
+        _ffPrevD[_pi]=fR; _ffPrevD[_pi+1]=fG; _ffPrevD[_pi+2]=fB; _ffPrevD[_pi+3]=_extAlpha[_fi];
+      }
     }
     _ffCtx.putImageData(_ffPrev, 0, 0);
   } else {
@@ -13024,11 +13190,14 @@ function edFloodFill(nx, ny){
       const _flPrev = _flFill._ctx.getImageData(0, 0, _flW, _flH);
       const _flPrevD = _flPrev.data;
       for (let _fi = 0; _fi < fw * fh; _fi++) {
-        if (!filled[_fi]) continue;
         const _wsx = x0 + (_fi % fw), _wsy = y0 + Math.floor(_fi / fw);
         if (_wsx < 0 || _wsy < 0 || _wsx >= _flW || _wsy >= _flH) continue;
         const _pi = (_wsy * _flW + _wsx) * 4;
-        _flPrevD[_pi]=fR; _flPrevD[_pi+1]=fG; _flPrevD[_pi+2]=fB; _flPrevD[_pi+3]=fA;
+        if (filled[_fi]) {
+          _flPrevD[_pi]=fR; _flPrevD[_pi+1]=fG; _flPrevD[_pi+2]=fB; _flPrevD[_pi+3]=fA;
+        } else if (_extAlpha && _extAlpha[_fi] > 0) {
+          _flPrevD[_pi]=fR; _flPrevD[_pi+1]=fG; _flPrevD[_pi+2]=fB; _flPrevD[_pi+3]=_extAlpha[_fi];
+        }
       }
       _flFill._ctx.putImageData(_flPrev, 0, 0);
     } else {
