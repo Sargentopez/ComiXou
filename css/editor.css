@@ -2698,37 +2698,44 @@ body.editor-page #appView {
    proporción A4 real (210×297) — independiente de la orientación/tamaño de la
    hoja del cómic, que se recalcula aparte al pulsar "Aplicar al lienzo"
    (_tdApplyToCanvas usa edPageW/edPageH, no esto).
-   La hoja NO tiene altura fija ni scroll propio: crece con el texto (como
-   cualquier editor normal — Word, LibreOffice, Google Docs) y es el área que
-   la contiene la que se desplaza como una página web cualquiera, sin una
-   "ventana" interna con su propia barra de desplazamiento. */
+   La hoja tiene tamaño FIJO (una página A4) y recorta su contenido
+   (overflow:hidden) — NO es una tira que crece ni hace scroll interno. Para
+   "pasar de página" se traslada el contenido (#tdPageInner) con transform,
+   con una transición animada: el salto a la hoja siguiente tiene que notarse,
+   no ser un scroll continuo indistinguible (ver _tdScrollToViewPage). */
 #tdPageArea {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   display: flex;
   justify-content: center;
-  padding: 20px 12px 60px;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y; /* permitir arrastre táctil vertical — mismo criterio que otros overlays desplazables */
+  align-items: center;
+  padding: 14px 12px;
+  touch-action: none; /* el arrastre táctil (scroll continuo) lo controla el JS, ver _tdSetScrollOffset */
 }
 .td-page {
   background: var(--paper);
   box-shadow: var(--box-shadow-lg);
   border: 1.5px solid var(--black);
-  width: min(100%, 794px); /* A4 a 96dpi, se encoge en pantallas más estrechas */
-  min-height: calc(min(100%, 794px) * 297 / 210); /* alto mínimo = una A4 entera */
+  width: min(100%, 794px); /* A4 a 96dpi, se encoge en pantallas más estrechas — igual que antes */
+  height: calc(min(100%, 794px) * 297 / 210); /* alto FIJO real (no crece) según ese ancho */
+  max-height: 100%; /* red de seguridad en ventanas muy bajas — no desborda el área */
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+}
+#tdPageInner {
   padding: 9%; /* márgenes de una A4 estándar */
   box-sizing: border-box;
-  flex-shrink: 0;
-  align-self: flex-start;
+  width: 100%;
+  transition: transform .32s cubic-bezier(.4,0,.2,1);
+  will-change: transform;
 }
 
 .td-editor {
   display: block;
   width: 100%;
-  min-height: 100%; /* crece con el contenido, SIN scroll propio */
+  min-height: 100%; /* crece con el contenido — el recorte lo hace .td-page */
   border: none;
   padding: 0;
   outline: none;

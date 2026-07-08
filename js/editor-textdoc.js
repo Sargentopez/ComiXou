@@ -107,7 +107,43 @@ function edOpenTextDoc(editLayer){
     // aplicado al lienzo, y a ese solo se llega con doble tap sobre él).
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
   }
-  requestAnimationFrame(() => requestAnimationFrame(_tdRecomputeViewPagination));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    _tdViewCurPage = 0;
+    _tdCurrentOffset = 0;
+    const inner = document.getElementById('tdPageInner');
+    if(inner) inner.style.transform = 'none';
+    _tdRecomputeViewPagination();
+    // Reeditar: centrar la vista en el texto que había en la hoja concreta
+    // desde la que se abrió el panel, no siempre al principio del documento.
+    // La maquetación del lienzo (comic) y la de esta vista en vivo (A4) son
+    // distintas, así que no se puede reutilizar directamente la posición —
+    // se usa el nº de caracteres que hay ANTES de esa hoja dentro del mismo
+    // flujo, y se busca a qué página de ESTA vista corresponde ese mismo punto.
+    if(editLayer && editLayer.richLines && editLayer._tdFlowId){
+      const targetChars = _tdCharsBeforeLayer(editLayer);
+      if(targetChars > 0){
+        let page = 0;
+        for(let i = 0; i < _tdViewPageStartChars.length; i++){ if(targetChars >= _tdViewPageStartChars[i]) page = i; }
+        _tdScrollToViewPage(page, false);
+      }
+    }
+  }));
+}
+// Caracteres de texto plano que hay ANTES de la hoja `la` dentro de su mismo
+// flujo (sumando las hojas anteriores, en el orden en que aparecen en la
+// obra) — usado para saber, al reeditar, en qué página de la vista en vivo
+// (maquetación A4, independiente de la del lienzo) cae ese mismo punto.
+function _tdCharsBeforeLayer(la){
+  if(!la || !la._tdFlowId) return 0;
+  const flowId = la._tdFlowId;
+  let chars = 0;
+  for(let i = 0; i < edPages.length; i++){
+    const layer = (edPages[i].layers || []).find(l => l && l._tdFlowId === flowId);
+    if(!layer) continue;
+    if(layer === la) break;
+    (layer.richLines || []).forEach(line => (line.runs || []).forEach(r => { if(r.text) chars += r.text.length; }));
+  }
+  return chars;
 }
 function _tdEnsureFlowId(layer){
   if(!layer._tdFlowId) layer._tdFlowId = _tdNewFlowId();
@@ -187,31 +223,66 @@ function _tdInitOnce(){
       _tdRecomputeTimer = setTimeout(() => {
         _tdRecomputeViewPagination();
         _tdFollowCursorPage();
-      }, 250);
+      }, 220);
     });
     editorEl.addEventListener('trix-selection-change', () => {
       clearTimeout(_tdFollowTimer);
-      _tdFollowTimer = setTimeout(_tdFollowCursorPage, 120);
+      _tdFollowTimer = setTimeout(_tdFollowCursorPage, 100);
     });
-    // Si el usuario desliza a mano por la hoja, mantener el número de
-    // página de la cabecera sincronizado con lo que se ve.
-    document.getElementById('tdPageArea')?.addEventListener('scroll', () => {
-      clearTimeout(_tdScrollSyncTimer);
-      _tdScrollSyncTimer = setTimeout(() => {
-        const area = document.getElementById('tdPageArea');
-        if(!area) return;
-        const top = area.scrollTop;
-        let page = 0;
-        for(let i = 0; i < _tdViewPageScrollTops.length; i++){ if(top + 2 >= _tdViewPageScrollTops[i]) page = i; }
-        if(page !== _tdViewCurPage){ _tdViewCurPage = page; _tdUpdateViewPageNav(); }
-      }, 100);
-    }, {passive:true});
   }
+  // Desplazamiento continuo: rueda del ratón (PC) y arrastre táctil (móvil),
+  // igual que cualquier área de texto normal — la hoja sigue teniendo tamaño
+  // A4 fijo y recorta su contenido (.td-page overflow:hidden); lo que se
+  // restaura es que #tdPageInner se pueda mover libremente dentro de eso,
+  // no solo saltar de página en página. Los botones de flecha y el
+  // seguimiento automático del cursor siguen saltando a un límite de página
+  // exacto y animado (_tdScrollToViewPage).
+  const _tdArea = document.getElementById('tdPageArea');
+  _tdArea?.addEventListener('wheel', e => {
+    e.preventDefault();
+    _tdSetScrollOffset(_tdCurrentOffset + e.deltaY, false);
+  }, {passive:false});
+
+  let _tdDragActive = false, _tdDragStartY = null, _tdDragStartOffset = 0, _tdDragMoved = false;
+  _tdArea?.addEventListener('pointerdown', e => {
+    // Solo táctil/lápiz: con ratón, arrastrar debe seguir seleccionando texto
+    // como en cualquier editor — el desplazamiento en PC es con la rueda.
+    if(e.pointerType === 'mouse') return;
+    _tdDragActive = true; _tdDragMoved = false;
+    _tdDragStartY = e.clientY; _tdDragStartOffset = _tdCurrentOffset;
+    _tdArea.setPointerCapture?.(e.pointerId);
+  });
+  _tdArea?.addEventListener('pointermove', e => {
+    if(!_tdDragActive || _tdDragStartY === null) return;
+    const dy = e.clientY - _tdDragStartY;
+    if(Math.abs(dy) > 4) _tdDragMoved = true;
+    if(_tdDragMoved){ e.preventDefault(); _tdSetScrollOffset(_tdDragStartOffset - dy, false); }
+  });
+  const _tdEndDrag = () => { _tdDragActive = false; _tdDragStartY = null; };
+  _tdArea?.addEventListener('pointerup', _tdEndDrag);
+  _tdArea?.addEventListener('pointercancel', _tdEndDrag);
   document.getElementById('tdPagePrev')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage - 1));
   document.getElementById('tdPageNext')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage + 1));
   _tdWireFontControls();
+
+  // Flechas del teclado (PC): pasan de página — SOLO cuando el cursor no está
+  // escribiendo en el propio texto (si el trix-editor tiene el foco, las
+  // flechas deben seguir moviendo el cursor con su comportamiento normal;
+  // "nada seleccionado" aquí equivale a no tener el foco en el editor). Mismo
+  // criterio que el resto de la app: derecha/abajo=siguiente, izquierda/
+  // arriba=anterior. Ver también Ayuda ▾ Atajos de teclado.
+  document.addEventListener('keydown', e => {
+    const shell = document.getElementById('tdShell');
+    if(!shell || shell.style.display === 'none' || shell.style.display === '') return;
+    if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+    const active = document.activeElement;
+    if(active && (active.isContentEditable || active === document.getElementById('tdEditor'))) return;
+    e.preventDefault();
+    if(e.key === 'ArrowRight' || e.key === 'ArrowDown') _tdScrollToViewPage(_tdViewCurPage + 1);
+    else _tdScrollToViewPage(_tdViewCurPage - 1);
+  });
 }
-let _tdFollowTimer = null, _tdScrollSyncTimer = null;
+let _tdFollowTimer = null;
 
 // Tamaños/fuentes admitidos al pegar contenido externo — mismo rango que los
 // controles del editor (ver tdFontSizeSel/tdFontFamilySel en views.js), para
@@ -282,18 +353,21 @@ function _tdWireFontControls(){
   });
 }
 
-// ── Paginación EN VIVO mientras se escribe (hojas A4 reales, no una tira
-//    infinita) ──────────────────────────────────────────────────────────────
+// ── Paginación EN VIVO mientras se escribe (hojas A4 reales, recorte real,
+//    no una tira que crece con scroll continuo) ─────────────────────────────
 // El documento de Trix sigue siendo UNO solo (continuo) — no se puede partir
 // en varios <trix-editor> sin romper su modelo de cursor/deshacer. En su
-// lugar, la "hoja" (.td-page) tiene alto fijo con scroll interno, y se usa el
-// MISMO motor de maquetación que "Aplicar al lienzo" (_tdLayoutPages) para
-// saber cuántas páginas hacen falta y en qué carácter empieza cada una; luego
-// se localiza esa posición en el DOM real con la API Range (funciona con
-// cualquier anidamiento, sin tener que hacer coincidir mi árbol de bloques
-// con el árbol real de Trix nodo a nodo).
+// lugar, la "hoja" (.td-page) tiene tamaño A4 FIJO y recorta su contenido
+// (overflow:hidden); el contenido real (#tdPageInner) es más alto y se
+// TRASLADA (transform: translateY) para mostrar solo la página actual — un
+// salto visual real de una página a otra, no un scroll suave indistinguible.
+// Se usa el MISMO motor de maquetación que "Aplicar al lienzo" (_tdLayoutPages)
+// para saber cuántas páginas hacen falta y en qué carácter empieza cada una;
+// luego se localiza esa posición en el DOM real con la API Range (funciona
+// con cualquier anidamiento, sin tener que hacer coincidir mi árbol de
+// bloques con el árbol real de Trix nodo a nodo).
 let _tdViewPageStartChars = [0];
-let _tdViewPageScrollTops = [0];
+let _tdViewPageOffsets = [0]; // px a trasladar (translateY) para ver cada página
 let _tdViewCurPage = 0;
 
 // Busca la posición (nodo de texto + offset) en `container` que corresponde
@@ -323,37 +397,66 @@ function _tdCharOffsetToRange(container, targetOffset){
 // tamaño real de la hoja del cómic: al "Aplicar al lienzo" se vuelve a
 // calcular desde cero contra edPageW/edPageH (ver _tdApplyToCanvas), pueden
 // salir más o menos hojas que las que se vieron aquí — es lo esperado.
+//
+// IMPORTANTE: se usan dimensiones REALES medidas del DOM (ancho del editor,
+// alto de página, tamaño de letra ya calculado), no la constante TD_A4_W/H —
+// la página en pantalla casi nunca mide 794px de verdad (un móvil en vertical
+// mide bastante menos), y si el motor de maquetación (basado en canvas)
+// midiera el ajuste de línea contra un ancho distinto al que realmente usa el
+// navegador, los saltos de página calculados no coincidirían con los reales.
 let _tdRecomputeTimer = null;
 function _tdRecomputeViewPagination(){
   const hidden = document.getElementById('tdHiddenInput');
   const editorEl = document.getElementById('tdEditor');
-  const scrollArea = document.getElementById('tdPageArea');
-  if(!hidden || !editorEl || !scrollArea) return;
+  const inner = document.getElementById('tdPageInner');
+  const pageEl = document.getElementById('tdPage');
+  if(!hidden || !editorEl || !inner || !pageEl) return;
   const html = hidden.value || '';
   const blocks = _tdParseBlocks(html);
   const lhSel = document.getElementById('tdLineHeightSel');
   const lineHeightMult = lhSel ? (parseFloat(lhSel.value) || TD_LINE_MULT) : TD_LINE_MULT;
+
+  // Ancho real disponible para el texto: el propio trix-editor ya está DENTRO
+  // del padding de #tdPageInner, así que su ancho renderizado ES el ancho neto.
+  const pw = editorEl.clientWidth || TD_A4_W;
+  // Alto real de una página: el de .td-page (lo que recorta overflow:hidden),
+  // menos el padding vertical real de #tdPageInner (percentual, ya resuelto a
+  // píxeles por el navegador — puede no ser igual al horizontal: el padding en
+  // % se calcula siempre sobre el ANCHO del contenedor en ambos ejes).
+  const innerCs = getComputedStyle(inner);
+  const padTop = parseFloat(innerCs.paddingTop) || 0;
+  const padBottom = parseFloat(innerCs.paddingBottom) || 0;
+  const ph = (pageEl.clientHeight || TD_A4_H);
+  // Tamaño de letra real ya calculado por el navegador (rem/clamp ya resueltos)
+  const bodySize = parseFloat(getComputedStyle(editorEl).fontSize) || TD_A4_BODY_SIZE;
+  const h1Size = bodySize * 1.55; // igual proporción que .td-editor h1{font-size:1.55em}
+
   const { pageStartChars } = _tdLayoutPages(
-    blocks, {pw: TD_A4_W, ph: TD_A4_H}, lineHeightMult,
-    { marginFrac: TD_A4_MARGIN_FRAC, bodySize: TD_A4_BODY_SIZE, h1Size: TD_A4_H1_SIZE }
+    blocks, {pw, ph}, lineHeightMult,
+    { marginFracX: 0, marginFracY: 0, bodySize, h1Size, padTop, padBottom }
   );
   _tdViewPageStartChars = pageStartChars;
 
-  // Medir en el DOM real dónde cae cada carácter de inicio de página, para
-  // poder desplazar el scroll ahí con precisión (no una estimación por ratio).
-  // El que se desplaza es el área contenedora (tdPageArea) — la hoja crece
-  // con el texto, no tiene scroll propio.
-  const areaRect = scrollArea.getBoundingClientRect();
-  _tdViewPageScrollTops = pageStartChars.map(charOffset => {
+  // Medir en el DOM real dónde cae cada carácter de inicio de página. Hay que
+  // medir con #tdPageInner en su posición NATURAL (sin trasladar) — si no, la
+  // traslación ya aplicada de la página actual falsearía la medida.
+  inner.style.transition = 'none';
+  inner.style.transform = 'none';
+  const innerRect = inner.getBoundingClientRect();
+  _tdViewPageOffsets = pageStartChars.map(charOffset => {
     if(charOffset <= 0) return 0;
     const range = _tdCharOffsetToRange(editorEl, charOffset);
-    if(!range) return scrollArea.scrollHeight;
+    if(!range) return inner.scrollHeight;
     const rect = range.getBoundingClientRect();
-    return Math.max(0, scrollArea.scrollTop + (rect.top - areaRect.top));
+    return Math.max(0, rect.top - innerRect.top);
   });
-
-  _tdViewCurPage = Math.min(_tdViewCurPage, _tdViewPageStartChars.length - 1);
-  _tdUpdateViewPageNav();
+  // Reaplicar (sin animar) la posición de scroll que ya tenía — NO se fuerza
+  // el salto al inicio exacto de la página: el usuario puede haberse
+  // desplazado libremente con la rueda/el dedo (ver _tdSetScrollOffset), y
+  // recalcular mientras escribe no debe deshacer eso. _tdFollowCursorPage,
+  // llamado justo después de esta función, sí decide si hay que saltar de
+  // página (cuando el cursor avanza más allá de lo que se ve).
+  _tdSetScrollOffset(_tdCurrentOffset, false);
 }
 
 function _tdUpdateViewPageNav(){
@@ -366,15 +469,51 @@ function _tdUpdateViewPageNav(){
   if(next) next.disabled = _tdViewCurPage >= total - 1;
 }
 
-// Navega a la página n (0-based) desplazando el área contenedora (no la hoja,
-// que no tiene scroll propio — crece con el texto como cualquier editor normal).
-function _tdScrollToViewPage(n){
-  const scrollArea = document.getElementById('tdPageArea');
-  if(!scrollArea) return;
-  const total = _tdViewPageStartChars.length;
-  _tdViewCurPage = Math.max(0, Math.min(total - 1, n));
-  scrollArea.scrollTo({ top: _tdViewPageScrollTops[_tdViewCurPage] || 0, behavior: 'smooth' });
+// Posición de desplazamiento actual, en px — no atada a una página exacta:
+// la rueda del ratón y el arrastre táctil la mueven de forma continua (ver
+// _tdSetScrollOffset); los botones de flecha y el seguimiento automático del
+// cursor SÍ saltan a un límite de página exacto (_tdScrollToViewPage).
+let _tdCurrentOffset = 0;
+
+// Desplaza #tdPageInner a una posición cualquiera en px (no necesariamente el
+// principio de una página) — usada por la rueda del ratón y el arrastre
+// táctil para restaurar un desplazamiento continuo y natural, sin perder el
+// recorte de página fija (.td-page sigue con overflow:hidden; lo que cambia
+// es solo hasta dónde se traslada #tdPageInner). animate=false (rueda/
+// arrastre, tiene que notarse al instante) frente a true (saltos de página,
+// con la transición animada ya definida en CSS).
+function _tdSetScrollOffset(px, animate){
+  const inner = document.getElementById('tdPageInner');
+  const pageEl = document.getElementById('tdPage');
+  if(!inner || !pageEl) return;
+  const maxScroll = Math.max(0, (inner.scrollHeight || 0) - (pageEl.clientHeight || 0));
+  const clamped = Math.max(0, Math.min(maxScroll, px));
+  inner.style.transition = animate ? '' : 'none';
+  inner.style.transform = 'translateY(-' + clamped + 'px)';
+  _tdCurrentOffset = clamped;
+  // Reflejar en la cabecera la página más cercana a donde se ha desplazado,
+  // sin forzar un salto — es solo para que el número siga lo que se ve.
+  let page = 0;
+  for(let i = 0; i < _tdViewPageOffsets.length; i++){ if(clamped + 2 >= _tdViewPageOffsets[i]) page = i; }
+  if(page !== _tdViewCurPage){ _tdViewCurPage = page; }
   _tdUpdateViewPageNav();
+}
+
+// Navega a la página n (0-based): traslada #tdPageInner para que .td-page
+// (tamaño A4 fijo, overflow:hidden) recorte y muestre solo esa página — un
+// salto real y animado, no un scroll continuo (para eso están la rueda del
+// ratón y el arrastre táctil, ver _tdSetScrollOffset). announce=true avisa
+// con un toast (se usa al seguir el cursor automáticamente mientras se
+// escribe, para que el cambio de hoja sea inequívoco; los botones de flecha
+// no lo necesitan, ya es obvio que el usuario lo pidió él mismo).
+function _tdScrollToViewPage(n, announce){
+  const total = _tdViewPageStartChars.length;
+  const target = Math.max(0, Math.min(total - 1, n));
+  const changed = target !== _tdViewCurPage;
+  _tdSetScrollOffset(_tdViewPageOffsets[target] || 0, true);
+  _tdViewCurPage = target; // _tdSetScrollOffset ya lo habría puesto bien, pero por si acaso
+  _tdUpdateViewPageNav();
+  if(changed && announce) edToast('→ Página ' + (_tdViewCurPage + 1));
 }
 
 // Mientras se escribe: si el cursor queda por delante de la página que se
@@ -406,7 +545,7 @@ function _tdFollowCursorPage(){
   if(!found) return; // cursor no está sobre un nodo de texto (p.ej. justo tras un salto)
   let page = 0;
   for(let i = 0; i < total; i++){ if(consumed >= _tdViewPageStartChars[i]) page = i; }
-  if(page !== _tdViewCurPage) _tdScrollToViewPage(page);
+  if(page !== _tdViewCurPage) _tdScrollToViewPage(page, true);
 }
 
 window.addEventListener('resize', () => {
@@ -535,17 +674,20 @@ function _tdFontStr(fontSize, bold, italic, mono, fontFamily){
 // de {pw,ph} — tamaño de marco por página ya existente en el flujo (tras
 // redimensionar alguna con los handlers); la última talla de la lista se
 // repite para páginas adicionales si el contenido no cupiera en las dadas.
-// opts: {marginFrac o marginFracX/marginFracY, bodySize, h1Size} — por
-// defecto, los del cómic (Aplicar al lienzo); la vista en vivo del editor
-// (A4) pasa los suyos propios, ver _tdRecomputeViewPagination. marginFracX
-// es el que el usuario puede cambiar desde "Márgenes" en el panel de
-// propiedades (ver pp-td-margin/_tdReflowAfterMarginChange) — solo afecta al
-// margen lateral, el vertical se mantiene siempre en su valor por defecto.
+// opts: {marginFrac o marginFracX/marginFracY, bodySize, h1Size, padTop,
+// padBottom} — por defecto, los del cómic (Aplicar al lienzo); la vista en
+// vivo del editor pasa dimensiones y padding REALES medidos del DOM (ver
+// _tdRecomputeViewPagination) en vez de fracciones, para que el ajuste de
+// línea coincida exactamente con lo que el navegador va a renderizar.
+// marginFracX es el que el usuario puede cambiar desde "Márgenes" en el
+// panel de propiedades (ver pp-td-margin/_tdReflowAfterMarginChange) — solo
+// afecta al margen lateral, el vertical se mantiene siempre en su defecto.
 function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts){
   const sizes = Array.isArray(frameSizes) ? frameSizes : [frameSizes];
   const lhMult = lineHeightMult || TD_LINE_MULT;
   const marginFracX = (opts && (opts.marginFracX ?? opts.marginFrac)) ?? TD_MARGIN_FRAC;
   const marginFracY = (opts && (opts.marginFracY ?? opts.marginFrac)) ?? TD_MARGIN_FRAC;
+  const hasExplicitPad = !!(opts && (opts.padTop !== undefined || opts.padBottom !== undefined));
   const bodySizeDefault = (opts && opts.bodySize) || TD_BODY_SIZE;
   const h1SizeDefault = (opts && opts.h1Size) || TD_H1_SIZE;
   const ctx = _tdMeasureCtx;
@@ -553,8 +695,15 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts){
   let frameIdx = 0, mx, my, textW, textH;
   function loadFrame(){
     const f = sizes[Math.min(frameIdx, sizes.length - 1)];
-    mx = f.pw * marginFracX; my = f.ph * marginFracY;
-    textW = f.pw - mx * 2; textH = f.ph - my * 2;
+    mx = f.pw * marginFracX;
+    textW = f.pw - mx * 2;
+    if(hasExplicitPad){
+      my = opts.padTop || 0;
+      textH = f.ph - (opts.padTop || 0) - (opts.padBottom || 0);
+    } else {
+      my = f.ph * marginFracY;
+      textH = f.ph - my * 2;
+    }
   }
   loadFrame();
 
@@ -713,6 +862,46 @@ function _tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, marginXFrac){
   return tl;
 }
 
+// Marcador de "hoja exceptuada" (ver pp-td-except/_tdExceptCurrentPage): una
+// capa oculta y sin texto visible, solo para recordar que esta hoja debe
+// quedarse sin texto de ese flujo — ni al reeditar ni al reajustar por
+// redimensionado/márgenes se le debe volver a poner contenido. Es una capa
+// (no una propiedad de la página) para que viaje tal cual por el pipeline de
+// panel_layers ya existente, sin necesitar cambios de esquema en Supabase.
+function _tdMakeExceptMarker(flowId){
+  const tl = new TextLayer('', 0.5, 0.5);
+  tl.x = 0.5; tl.y = 0.5; tl.width = 0.02; tl.height = 0.02;
+  tl.hidden = true;
+  tl.bgOpacity = 0; tl.borderWidth = 0;
+  tl._tdExceptFlow = flowId;
+  return tl;
+}
+
+// Botón "Exceptuar en esta hoja" (panel de propiedades): quita el texto de la
+// hoja actual y dispara el reflujo — el contenido que le correspondía pasa a
+// la hoja siguiente del flujo (o crea una nueva si hiciera falta).
+function _tdExceptCurrentPage(){
+  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+  if(!la || !la.richLines || !la.richLines.length) return;
+  const flowId = _tdEnsureFlowId(la);
+  const page = edPages[edCurrentPage];
+  if(!page) return;
+
+  page.layers = (page.layers || []).filter(l => l !== la);
+  page.layers.push(_tdMakeExceptMarker(flowId));
+
+  _tdReflowFlowInPlace(la, false);
+  if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
+  // _tdReflowFlowInPlace() ya llamó a edFitCanvas(), pero con el panel de
+  // propiedades todavía abierto (se cierra justo después, arriba) — mide el
+  // hueco disponible leyendo el DOM en el momento en que se llama, así que
+  // ajustaba la cámara al área más pequeña (con panel) y luego cerrar el
+  // panel ya no la restauraba. Hace falta este segundo ajuste, ya con el
+  // panel cerrado, para recuperar el tamaño completo de la cámara.
+  if(typeof edFitCanvas === 'function') edFitCanvas();
+  edToast('Hoja exceptuada — el texto ha pasado a la hoja siguiente');
+}
+
 // ── Aplicar al lienzo ────────────────────────────────────────────────────
 // Sin edición en curso: crea un flujo nuevo empezando en la hoja vigente (la
 // que estaba activa al abrir el Editor de textos). El texto se reparte
@@ -832,13 +1021,44 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
   const html = la.sourceHTML || '';
   if(!html) return;
 
-  // Todas las hojas del flujo, en orden, con el marco (tamaño real) que cada
-  // una tenga en este momento — no necesariamente uniforme si ya se había
-  // redimensionado alguna antes.
+  // Hojas del flujo: "slots" (tienen la capa de texto) y "huecos" (excluidos
+  // a propósito con "Exceptuar en esta hoja" — capa marcadora _tdExceptFlow,
+  // ver _tdMakeExceptMarker). Los huecos cuentan para saber dónde empieza y
+  // termina el flujo en la obra, pero el reflujo nunca les pone contenido.
   const flowIdxs = [];
-  edPages.forEach((p, i) => { if((p.layers || []).some(l => l && l._tdFlowId === flowId)) flowIdxs.push(i); });
+  const exceptIdxs = [];
+  edPages.forEach((p, i) => {
+    if((p.layers || []).some(l => l && l._tdFlowId === flowId)) flowIdxs.push(i);
+    else if((p.layers || []).some(l => l && l._tdExceptFlow === flowId)) exceptIdxs.push(i);
+  });
   flowIdxs.sort((a, b) => a - b);
-  if(!flowIdxs.length) return;
+  if(!flowIdxs.length){
+    if(!exceptIdxs.length) return; // no queda nada de este flujo en la obra
+    // Se acaba de exceptuar la única hoja que quedaba: crear una hoja nueva
+    // justo después, con el contenido completo, usando su orientación como
+    // referencia — si no, el texto desaparecería sin ir a ninguna parte.
+    const afterIdx = Math.max(...exceptIdxs) + 1;
+    const orient = edPages[Math.max(...exceptIdxs)].orientation || edOrientation;
+    const sv = orient === 'vertical';
+    const blocks0 = _tdParseBlocks(html);
+    const { pages: pages0 } = _tdLayoutPages(
+      blocks0, {pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W}, la.lineHeightMult,
+      { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC }
+    );
+    const newPages0 = pages0.map(pageLines => ({
+      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac)],
+      drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient
+    }));
+    edPages.splice(afterIdx, 0, ...newPages0);
+    if(typeof edFitCanvas === 'function') edFitCanvas(true);
+    if(typeof edRedraw === 'function') edRedraw();
+    if(typeof edPushHistory === 'function') edPushHistory(true);
+    if(typeof _pgRender === 'function') _pgRender();
+    return { firstIdx: afterIdx, count: newPages0.length, oldCount: 0 };
+  }
+  const spanIdxs = [...flowIdxs, ...exceptIdxs].sort((a, b) => a - b);
+  const lastIdx = spanIdxs[spanIdxs.length - 1];
+  const firstIdx = spanIdxs[0];
 
   const frames = flowIdxs.map(i => {
     const pg = edPages[i];
@@ -848,49 +1068,71 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
     const pgPw = sv ? ED_PAGE_W : ED_PAGE_H, pgPh = sv ? ED_PAGE_H : ED_PAGE_W;
     return { pw: layer.width * pgPw, ph: layer.height * pgPh };
   });
-  // Marco de reserva si hiciera falta más sitio del que dan las hojas ya
-  // existentes: página completa en la orientación de la última hoja del
-  // flujo — mismo criterio que "Aplicar al lienzo".
-  const lastOrient = edPages[flowIdxs[flowIdxs.length - 1]].orientation || edOrientation;
+  // Marco de reserva para páginas nuevas: página completa en la orientación
+  // de la última hoja del tramo del flujo (slot o hueco) — mismo criterio
+  // que "Aplicar al lienzo".
+  const lastOrient = edPages[lastIdx].orientation || edOrientation;
   const svLast = lastOrient === 'vertical';
   frames.push({ pw: svLast ? ED_PAGE_W : ED_PAGE_H, ph: svLast ? ED_PAGE_H : ED_PAGE_W });
 
   const blocks = _tdParseBlocks(html);
   const { pages } = _tdLayoutPages(blocks, frames, la.lineHeightMult, { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC });
 
-  const extrasByOldIdx = flowIdxs.map(i => (edPages[i].layers || []).filter(l => !(l && l._tdFlowId === flowId)));
-  const firstIdx = flowIdxs[0];
+  const oldCount = flowIdxs.length;
+  const reused = Math.min(pages.length, flowIdxs.length);
+  const currentPageObj = edPages[edCurrentPage]; // referencia — para recolocar tras las mutaciones
+  const wasCurrentInFlow = flowIdxs.includes(edCurrentPage) || exceptIdxs.includes(edCurrentPage);
 
-  const newPageObjs = pages.map((pageLines, i) => {
-    const oldIdx = flowIdxs[i];
-    const oldPage = oldIdx !== undefined ? edPages[oldIdx] : null;
-    const oldLayer = oldPage ? oldPage.layers.find(l => l && l._tdFlowId === flowId) : null;
-    const tl = _tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac);
-    if(oldLayer){
-      // Conservar el marco (posición/tamaño/color/fondo/marco) que ya tenía
-      // esta hoja — incluido el que el usuario acaba de fijar con los handlers.
-      tl.x = oldLayer.x; tl.y = oldLayer.y; tl.width = oldLayer.width; tl.height = oldLayer.height;
-      tl.rotation = oldLayer.rotation || 0;
-      tl.color = oldLayer.color; tl.backgroundColor = oldLayer.backgroundColor;
-      tl.bgOpacity = oldLayer.bgOpacity; tl.borderColor = oldLayer.borderColor; tl.borderWidth = oldLayer.borderWidth;
-    }
-    const extras = oldPage ? (extrasByOldIdx[i] || []) : [];
-    const orientation = oldPage ? (oldPage.orientation || edOrientation) : lastOrient;
-    return { layers: [tl, ...extras], drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation };
-  });
-  for(let i = pages.length; i < extrasByOldIdx.length; i++){
-    const leftovers = extrasByOldIdx[i] || [];
-    if(leftovers.length && newPageObjs.length) newPageObjs[newPageObjs.length - 1].layers.push(...leftovers);
+  // 1) Slots reutilizados: mutar la MISMA capa in situ — conserva posición/
+  //    tamaño/color/fondo/marco sin copiar nada y sin mover ninguna página
+  //    (los huecos de en medio quedan exactamente donde estaban).
+  for(let i = 0; i < reused; i++){
+    const layer = edPages[flowIdxs[i]].layers.find(l => l && l._tdFlowId === flowId);
+    layer.richLines = pages[i];
+    layer.sourceHTML = html;
+    layer.lineHeightMult = la.lineHeightMult;
+    layer.marginXFrac = la.marginXFrac;
+    layer.text = _tdPlainSummary(pages[i]);
   }
 
-  const wasCurrentInFlow = flowIdxs.includes(edCurrentPage);
-  const offsetWithinFlow = edCurrentPage - firstIdx;
+  // 2) Slots sobrantes (cupo en menos hojas): quitar, de mayor a menor índice.
+  //    Objetos añadidos a mano en esas hojas se reubican en el último slot
+  //    reutilizado (si lo hay) para no perderlos.
+  for(let i = flowIdxs.length - 1; i >= reused; i--){
+    const idx = flowIdxs[i];
+    const pg = edPages[idx];
+    const extras = (pg.layers || []).filter(l => !(l && l._tdFlowId === flowId));
+    if(extras.length && reused > 0) edPages[flowIdxs[reused - 1]].layers.push(...extras);
+    edPages.splice(idx, 1);
+  }
 
-  for(let k = flowIdxs.length - 1; k >= 0; k--) edPages.splice(flowIdxs[k], 1);
-  edPages.splice(firstIdx, 0, ...newPageObjs);
+  // 3) Si hacen falta más páginas, se añaden justo tras el final ACTUAL del
+  //    tramo (slots + huecos) — recalculado ahora, no con el índice de antes
+  //    de los cambios del paso 2.
+  if(pages.length > reused){
+    let insertAt = -1;
+    edPages.forEach((p, i) => {
+      if((p.layers || []).some(l => l && (l._tdFlowId === flowId || l._tdExceptFlow === flowId))) insertAt = i;
+    });
+    insertAt = insertAt + 1;
+    const extraPages = pages.slice(reused).map(pageLines => ({
+      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac)],
+      drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
+    }));
+    edPages.splice(insertAt, 0, ...extraPages);
+  }
 
   if(wasCurrentInFlow){
-    edCurrentPage = Math.max(firstIdx, Math.min(firstIdx + newPageObjs.length - 1, firstIdx + offsetWithinFlow));
+    const foundIdx = edPages.indexOf(currentPageObj);
+    if(foundIdx >= 0){
+      edCurrentPage = foundIdx;
+    } else {
+      // La hoja que se veía era un slot sobrante ya eliminado: ir a la
+      // última hoja del flujo que quede.
+      let fallback = -1;
+      edPages.forEach((p, i) => { if((p.layers || []).some(l => l && l._tdFlowId === flowId)) fallback = i; });
+      edCurrentPage = fallback >= 0 ? fallback : Math.max(0, Math.min(edPages.length - 1, firstIdx));
+    }
     // edLoadPage() deselecciona y resetea el panel de propiedades — está
     // pensado para cuando el usuario cambia de página desde el panel de
     // Hojas, no para refrescar la hoja actual tras un reflujo. Si el panel
@@ -915,5 +1157,5 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
   if(typeof edRedraw === 'function') edRedraw();
   if(typeof edPushHistory === 'function') edPushHistory(true);
   if(typeof _pgRender === 'function') _pgRender();
-  return { firstIdx, count: newPageObjs.length, oldCount: flowIdxs.length };
+  return { firstIdx, count: pages.length, oldCount };
 }

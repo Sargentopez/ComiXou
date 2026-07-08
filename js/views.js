@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v32.92</footer>
+    <footer class="app-version">v32.99</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -770,11 +770,16 @@ Router.register('editor', {
           <div class="sc-row"><span class="sc-desc">Zoom acercar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Rueda ↑</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Zoom alejar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Rueda ↓</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Desplazar canvas</span><span class="sc-keys"><kbd>Rueda</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Pasar de hoja (sin nada seleccionado)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
 
           <div class="sc-section">Editor de animaciones (GCP)</div>
           <div class="sc-row"><span class="sc-desc">Mover objeto seleccionado 1 px</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Mover objeto seleccionado 10 px</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc">Navegar entre frames (sin selección)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
+
+          <div class="sc-section">Editor de textos</div>
+          <div class="sc-row"><span class="sc-desc">Pasar de página (cursor fuera del texto)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc">Desplazar el texto</span><span class="sc-keys"><kbd>Rueda</kbd> <small style="opacity:.6">o arrastrar con el dedo</small></span></div>
 
         </div>
       </div>
@@ -1012,8 +1017,10 @@ Router.register('editor', {
       </div>
       <div id="tdPageArea">
         <div id="tdPage" class="td-page">
-          <input type="hidden" id="tdHiddenInput">
-          <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe aquí el texto de tu obra…"></trix-editor>
+          <div id="tdPageInner">
+            <input type="hidden" id="tdHiddenInput">
+            <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe aquí el texto de tu obra…"></trix-editor>
+          </div>
         </div>
       </div>
     </div>

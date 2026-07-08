@@ -18038,6 +18038,7 @@ function edRenderOptionsPanel(mode){
     </div>`}
     <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
+      ${_isRichText ? `<button class="op-btn" id="pp-td-except" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.7rem;cursor:pointer" title="Esta hoja se queda sin texto; su contenido pasa a la siguiente">🚫 Exceptuar en esta hoja</button>` : ''}
       ${_isRichText ? '' : (la.groupId
         ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
         : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`)}
@@ -18123,6 +18124,9 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del')?.addEventListener('click',()=>{
       edConfirm('¿Eliminar este objeto?', ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
+    });
+    $('pp-td-except')?.addEventListener('click',()=>{
+      if(typeof _tdExceptCurrentPage==='function') _tdExceptCurrentPage();
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
@@ -22404,6 +22408,7 @@ function edSerLayer(l){
     if(l.richFontFamily) _o.richFontFamily=l.richFontFamily;
     if(l.sourceHTML) _o.sourceHTML=l.sourceHTML;
     if(l._tdFlowId) _o._tdFlowId=l._tdFlowId;
+    if(l._tdExceptFlow) _o._tdExceptFlow=l._tdExceptFlow;
     if(l.lineHeightMult) _o.lineHeightMult=l.lineHeightMult;
     if(l.marginXFrac) _o.marginXFrac=l.marginXFrac;
     if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
@@ -26636,6 +26641,18 @@ function EditorView_init(){
         return;
       }
       // Si hay panel abierto o no hay selección, dejar caer al bloque de Shift+multiselección
+      if(!_panelOpen && !_hasSel && edPages.length > 1){
+        // Sin nada seleccionado: las flechas pasan de hoja (mismo criterio que
+        // el editor GCP sin objeto seleccionado — derecha/abajo=siguiente,
+        // izquierda/arriba=anterior). Ver también Ayuda ▾ Atajos de teclado.
+        e.preventDefault();
+        if(e.key==='ArrowRight' || e.key==='ArrowDown'){
+          if(edCurrentPage < edPages.length-1) edLoadPage(edCurrentPage+1);
+        } else {
+          if(edCurrentPage > 0) edLoadPage(edCurrentPage-1);
+        }
+        return;
+      }
     }
 
     // Shift+flechas (PC): añadir a la multiselección el objeto más cercano en esa dirección
