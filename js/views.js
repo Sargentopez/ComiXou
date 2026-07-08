@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v32.70</footer>
+    <footer class="app-version">v32.92</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -361,10 +361,10 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" data-menu="escribir">Escribir ▾</button>
             <div class="ed-dropdown" id="dd-escribir">
+              <button class="ed-dropdown-item" id="dd-textdoc">Editor de textos</button>
+              <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="dd-textbox">Caja de texto</button>
               <button class="ed-dropdown-item" id="dd-bubble">Bocadillo</button>
-              <div class="ed-dropdown-sep"></div>
-              <button class="ed-dropdown-item" id="dd-textdoc">📄 Editor de textos</button>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
@@ -955,6 +955,12 @@ Router.register('editor', {
         <div id="tdTitlePill" aria-hidden="true"></div>
         <span id="tdProjectTitle">Editor de textos</span>
         <span class="ed-top-spacer"></span>
+        <div class="ed-top-pagnav">
+          <div id="tdPageNavPill" aria-hidden="true"></div>
+          <button class="ed-top-pagebn" id="tdPagePrev" title="Página anterior">&#9664;</button>
+          <span id="tdPageNum">1</span>
+          <button class="ed-top-pagebn" id="tdPageNext" title="Página siguiente">&#9654;</button>
+        </div>
         <button class="ed-top-action" id="tdApplyBtn">Aplicar al lienzo</button>
         <button id="tdCloseBtn" title="Volver al editor">✕</button>
       </div>
@@ -972,7 +978,37 @@ Router.register('editor', {
           <div class="ed-menu-sep"></div>
           <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bullet" title="Lista de viñetas">• Lista</button>
           <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="number" title="Lista numerada">1. Lista</button>
+          <div class="ed-menu-sep"></div>
+          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="pageBreak" title="Salto de página">⤓ Salto de página</button>
         </trix-toolbar>
+      </div>
+      <div id="tdMenuBar2">
+        <span class="td-menu2-label">Fuente</span>
+        <select id="tdFontFamilySel" title="Tipo de letra de la selección">
+          <option value="Lora" selected>Lora (serif)</option>
+          <option value="Patrick Hand">Patrick Hand</option>
+          <option value="Bangers">Bangers</option>
+          <option value="Permanent Marker">Permanent Marker</option>
+          <option value="Bebas Neue">Bebas Neue</option>
+          <option value="Oswald">Oswald</option>
+          <option value="Comic Neue">Comic Neue</option>
+          <option value="Press Start 2P">Press Start 2P (8-bit)</option>
+          <option value="Arial">Arial</option>
+          <option value="Verdana">Verdana</option>
+        </select>
+        <span class="td-menu2-label">Tamaño</span>
+        <select id="tdFontSizeSel" title="Tamaño de letra de la selección">
+          <option value="16px">Pequeño</option>
+          <option value="22px" selected>Normal</option>
+          <option value="28px">Grande</option>
+          <option value="36px">Muy grande</option>
+        </select>
+        <span class="td-menu2-label">Interlineado</span>
+        <select id="tdLineHeightSel" title="Interlineado de todo el texto">
+          <option value="1.15">Compacto</option>
+          <option value="1.42" selected>Normal</option>
+          <option value="1.75">Amplio</option>
+        </select>
       </div>
       <div id="tdPageArea">
         <div id="tdPage" class="td-page">

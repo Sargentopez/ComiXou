@@ -2567,6 +2567,25 @@ body.editor-page #appView {
   width: 0;
 }
 #tdTopbar .ed-top-spacer { flex: 1; }
+/* Píldora blanca tras flechas+número de página — mismo criterio que edPageNavPill */
+#tdPageNavPill {
+  position: absolute;
+  left: -9px;
+  right: -9px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--white);
+  border-radius: 999px;
+  z-index: -1;
+  pointer-events: none;
+}
+#tdPageNum {
+  font-family: var(--font-body);
+  font-size: 0.9rem; font-weight: 900;
+  color: var(--black);
+  min-width: 22px; text-align: center;
+  line-height: 28px;
+}
 #tdCloseBtn {
   position: relative; z-index: 2;
   background: none; border: none;
@@ -2612,10 +2631,77 @@ body.editor-page #appView {
   background: var(--black);
 }
 
-/* Área de la hoja: fondo neutro, hoja de papel centrada con sombra tipo viñeta.
-   Ancho fijo con proporción de página (como un A4 integrado en el lienzo);
-   el alto crece de forma natural según el texto — la paginación real ocurre
-   al pulsar "Aplicar al lienzo" (_tdLayoutPages en editor-textdoc.js), no aquí. */
+/* Segunda barra: fuente, tamaño e interlineado — no son botones de Trix
+   (fontSize/fontFamily son atributos con valor; el interlineado es un ajuste
+   global del documento, ver TD_LINE_MULT en editor-textdoc.js), así que viven
+   fuera de #tdToolbar con sus propios <select>. */
+#tdMenuBar2 {
+  flex-shrink: 0;
+  min-height: 38px;
+  background: var(--white);
+  border-bottom: 1.5px solid var(--gray-300);
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  z-index: 1;
+}
+#tdMenuBar2::-webkit-scrollbar { display: none; }
+.td-menu2-label {
+  font-family: var(--font-body);
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--gray-700);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#tdMenuBar2 select {
+  font-family: var(--font-body);
+  font-size: .78rem;
+  font-weight: 700;
+  border: 1.5px solid var(--gray-300);
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: var(--white);
+  color: var(--black);
+  flex-shrink: 0;
+}
+
+/* Marcador de salto de página forzado dentro del Editor de textos — se
+   ignora su contenido al maquetar (ver _tdParseBlocks), solo marca el corte */
+.td-editor aside {
+  display: block;
+  margin: 10px 0;
+  padding: 4px 0;
+  border: none;
+  border-top: 2px dashed var(--gray-400);
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--gray-500);
+  line-height: 1;
+}
+.td-editor aside::before {
+  content: '⤓ Salto de página ⤓';
+  display: inline-block;
+  background: var(--paper);
+  padding: 0 8px;
+  transform: translateY(-9px);
+}
+
+/* Área de la hoja: fondo neutro, hoja de papel centrada con sombra tipo viñeta,
+   proporción A4 real (210×297) — independiente de la orientación/tamaño de la
+   hoja del cómic, que se recalcula aparte al pulsar "Aplicar al lienzo"
+   (_tdApplyToCanvas usa edPageW/edPageH, no esto).
+   La hoja NO tiene altura fija ni scroll propio: crece con el texto (como
+   cualquier editor normal — Word, LibreOffice, Google Docs) y es el área que
+   la contiene la que se desplaza como una página web cualquiera, sin una
+   "ventana" interna con su propia barra de desplazamiento. */
 #tdPageArea {
   flex: 1;
   min-height: 0;
@@ -2623,27 +2709,26 @@ body.editor-page #appView {
   overflow-x: hidden;
   display: flex;
   justify-content: center;
-  padding: 20px 12px 48px;
+  padding: 20px 12px 60px;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y; /* permitir arrastre táctil vertical — mismo criterio que otros overlays desplazables */
 }
 .td-page {
   background: var(--paper);
   box-shadow: var(--box-shadow-lg);
   border: 1.5px solid var(--black);
-  width: min(100%, 480px);
-  aspect-ratio: 360 / 780; /* misma proporción que ED_PAGE_W×ED_PAGE_H vertical */
-  padding: 9%;
+  width: min(100%, 794px); /* A4 a 96dpi, se encoge en pantallas más estrechas */
+  min-height: calc(min(100%, 794px) * 297 / 210); /* alto mínimo = una A4 entera */
+  padding: 9%; /* márgenes de una A4 estándar */
   box-sizing: border-box;
   flex-shrink: 0;
   align-self: flex-start;
 }
-/* Hoja actual en orientación horizontal (edOrientation) — proporción contraria */
-.td-page.horizontal { aspect-ratio: 780 / 360; }
 
 .td-editor {
   display: block;
   width: 100%;
-  min-height: 100%;
+  min-height: 100%; /* crece con el contenido, SIN scroll propio */
   border: none;
   padding: 0;
   outline: none;
