@@ -22411,6 +22411,7 @@ function edSerLayer(l){
     if(l._tdExceptFlow) _o._tdExceptFlow=l._tdExceptFlow;
     if(l.lineHeightMult) _o.lineHeightMult=l.lineHeightMult;
     if(l.marginXFrac) _o.marginXFrac=l.marginXFrac;
+    if(l.manualBreakChars && l.manualBreakChars.length) _o.manualBreakChars=l.manualBreakChars;
     if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed)_o._motionPathClosed=true;
     if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;

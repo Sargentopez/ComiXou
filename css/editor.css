@@ -2713,9 +2713,11 @@ body.editor-page #appView {
   padding: 14px 12px;
   touch-action: none; /* el arrastre táctil (desplazamiento continuo) lo controla el JS */
 }
-/* Proporción A4 real (210×297) — independiente de la orientación/tamaño de
-   la hoja del cómic, que se recalcula aparte al pulsar "Aplicar al lienzo"
-   (_tdApplyToCanvas usa edPageW/edPageH, no esto). */
+/* Proporción A4 (210×297) — solo el aspecto visual de la hoja vacía; el
+   tamaño real de la hoja de la obra (edPageW/edPageH) se usa aparte para
+   predecir dónde caerán los saltos de página (líneas discontinuas), sin
+   afectar a este aspecto ni al tamaño de letra con el que se escribe aquí
+   (ver _tdRecomputeViewPagination). */
 .td-page {
   background: var(--paper);
   box-shadow: var(--box-shadow-lg);
@@ -2725,8 +2727,56 @@ body.editor-page #appView {
   padding: 9%; /* márgenes de una A4 estándar */
   box-sizing: border-box;
   flex-shrink: 0;
+  position: relative;
   transition: transform .32s cubic-bezier(.4,0,.2,1);
   will-change: transform;
+}
+/* Líneas discontinuas de cambio de página — puramente visuales (no forman
+   parte del documento de Trix), superpuestas dentro de la propia hoja para
+   que se muevan con ella. Posicionadas en JS (_tdRecomputeViewPagination)
+   en cada punto donde una página termina y empieza la siguiente. */
+#tdPageBreaks {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+/* Contenedor de un salto de página — la línea visible atraviesa toda la
+   hoja (no solo el ancho del texto); la zona de arrastre es más alta que la
+   línea en sí, para poder cogerla cómodamente con el dedo. */
+.td-pagebreak-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 0;
+}
+.td-pagebreak-visual {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  border-top: 3px dashed var(--blue);
+  pointer-events: none;
+}
+.td-pagebreak-handle {
+  position: absolute;
+  left: 0; right: 0;
+  top: -14px; height: 28px;
+  pointer-events: auto;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.td-pagebreak-handle:hover .td-pagebreak-visual,
+.td-pagebreak-line.dragging .td-pagebreak-visual {
+  border-top-width: 4px;
+}
+/* Pequeño agarre visual centrado, para que se note que se puede arrastrar */
+.td-pagebreak-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 34px; height: 10px;
+  transform: translate(-50%, -50%);
+  background: var(--blue);
+  border-radius: 5px;
+  opacity: .85;
 }
 
 .td-editor {

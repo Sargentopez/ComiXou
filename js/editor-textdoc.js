@@ -48,16 +48,18 @@
 
 // ── Constantes de maquetación (unidades lógicas del lienzo, iguales a
 //    las que ya usa TextLayer.fontSize en el resto del editor) ──
+// ── Tamaños de la obra al aplicar (los usa también la predicción de saltos
+//    de página de la vista en vivo, ver _tdRecomputeViewPagination) ────────
 const TD_MARGIN_FRAC   = 0.045;  // margen de página al APLICAR al lienzo (fracción del tamaño real de la hoja)
 const TD_BODY_SIZE     = 22;     // cuerpo de texto al APLICAR al lienzo
 const TD_H1_SIZE        = 34;     // título (heading1) al APLICAR al lienzo
 
-// ── A4 del editor (solo para escribir/navegar) ──────────────────────────────
-// La paginación que se ve mientras se escribe es independiente de la hoja del
-// cómic: sirve solo para moverse por el editor con un formato de página
-// habitual (A4). Al "Aplicar al lienzo" se vuelve a maquetar desde cero
-// contra el tamaño real de la hoja actual (edPageW/edPageH) — ver
-// _tdApplyToCanvas, que NO usa estas constantes.
+// ── A4 del editor (solo el aspecto visual de la hoja mientras se escribe) ───
+// El tamaño de letra y los márgenes con los que se ESCRIBE aquí son fijos
+// (CSS de .td-editor/.td-page, formato A4 habitual) y no cambian. Dónde caen
+// los saltos de página SÍ se predice con el tamaño real de la hoja actual
+// (edPageW/edPageH) — ver _tdRecomputeViewPagination — para que las líneas
+// discontinuas marquen el punto real en el que se cortará al aplicar.
 const TD_A4_W = 794, TD_A4_H = 1123; // A4 a 96dpi — medida estándar en diseño web
 const TD_A4_MARGIN_FRAC = 0.09;
 const TD_A4_BODY_SIZE = 17, TD_A4_H1_SIZE = 27; // a juego con el CSS de .td-editor (1.05rem/1.55em)
@@ -99,6 +101,7 @@ function edOpenTextDoc(editLayer){
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML);
     if(applyBtn) applyBtn.textContent = 'Guardar cambios';
     if(lhSel) lhSel.value = String(editLayer.lineHeightMult || TD_LINE_MULT);
+    _tdManualBreakChars = (editLayer.manualBreakChars || []).slice();
   } else {
     _tdEditingFlowId = null;
     if(applyBtn) applyBtn.textContent = 'Aplicar al lienzo';
@@ -107,6 +110,7 @@ function edOpenTextDoc(editLayer){
     // sesiones anteriores (el único texto editable es el que ya está
     // aplicado al lienzo, y a ese solo se llega con doble tap sobre él).
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
+    _tdManualBreakChars = [];
   }
   requestAnimationFrame(() => requestAnimationFrame(() => {
     _tdViewCurPage = 0;
@@ -116,8 +120,9 @@ function edOpenTextDoc(editLayer){
     _tdRecomputeViewPagination();
     // Reeditar: centrar la vista en el texto que había en la hoja concreta
     // desde la que se abrió el panel, no siempre al principio del documento.
-    // La maquetación del lienzo (comic) y la de esta vista en vivo (A4) son
-    // distintas, así que no se puede reutilizar directamente la posición —
+    // La maquetación real de la hoja (al aplicar) y la de esta vista en vivo
+    // (A4, mientras se escribe) son distintas, así que no se puede reutilizar
+    // directamente la posición —
     // se usa el nº de caracteres que hay ANTES de esa hoja dentro del mismo
     // flujo, y se busca a qué página de ESTA vista corresponde ese mismo punto.
     if(editLayer && editLayer.richLines && editLayer._tdFlowId){
@@ -225,6 +230,18 @@ function _tdInitOnce(){
         _tdRecomputeViewPagination();
         _tdCenterActiveLine();
       }, 220);
+    });
+    // Cada salto de línea (Enter) cuenta como una línea más hacia el cálculo
+    // de dónde caerá el salto de página, aunque sea de una sola palabra — y
+    // debe reflejarse enseguida, no solo tras la pausa general de arriba
+    // (pensada para no recalcular en cada letra mientras se escribe seguido).
+    editorEl.addEventListener('keydown', e => {
+      if(e.key !== 'Enter') return;
+      clearTimeout(_tdRecomputeTimer);
+      _tdRecomputeTimer = setTimeout(() => {
+        _tdRecomputeViewPagination();
+        _tdCenterActiveLine();
+      }, 30);
     });
     editorEl.addEventListener('trix-selection-change', () => {
       clearTimeout(_tdFollowTimer);
@@ -448,6 +465,13 @@ function _tdWireFontControls(){
 let _tdViewPageStartChars = [0];
 let _tdViewPageOffsets = [0]; // px a trasladar (translateY) para ver cada página
 let _tdViewCurPage = 0;
+// Saltos de página fijados a mano arrastrando la línea discontinua (offset
+// de carácter, siempre coincidente con el final de una línea real — ver
+// _tdSnapBreakToLine). Se reinician al abrir un documento nuevo o al
+// reeditar uno existente (se restauran desde la capa si los tenía guardados
+// — ver edOpenTextDoc) y se guardan en la propia capa al aplicar.
+let _tdManualBreakChars = [];
+let _tdLineStartCharsCache = []; // último cálculo — para ajustar el arrastre a la línea más cercana
 
 // Busca la posición (nodo de texto + offset) en `container` que corresponde
 // al carácter nº targetOffset contando solo nodos de texto, en orden documento
@@ -471,18 +495,14 @@ function _tdCharOffsetToRange(container, targetOffset){
   return null;
 }
 
-// Recalcula cuántas "hojas A4" hace falta para el contenido actual — SOLO
-// para moverse por el editor mientras se escribe. Es independiente del
-// tamaño real de la hoja del cómic: al "Aplicar al lienzo" se vuelve a
-// calcular desde cero contra edPageW/edPageH (ver _tdApplyToCanvas), pueden
-// salir más o menos hojas que las que se vieron aquí — es lo esperado.
-//
-// IMPORTANTE: se usan dimensiones REALES medidas del DOM (ancho del editor,
-// alto de página, tamaño de letra ya calculado), no la constante TD_A4_W/H —
-// la página en pantalla casi nunca mide 794px de verdad (un móvil en vertical
-// mide bastante menos), y si el motor de maquetación (basado en canvas)
-// midiera el ajuste de línea contra un ancho distinto al que realmente usa el
-// navegador, los saltos de página calculados no coincidirían con los reales.
+// Predice dónde caerán los saltos de hoja al pulsar "Aplicar al lienzo" —
+// usando esa MISMA maquetación (edPageW/edPageH, TD_BODY_SIZE/TD_H1_SIZE, el
+// margen de la capa si se está reeditando) — para dibujar ahí las líneas
+// discontinuas y numerar las páginas. El tamaño de letra y los márgenes con
+// los que se ESCRIBE aquí no se tocan: siguen siendo los de siempre (CSS de
+// .td-editor/.td-page) — esta predicción es solo para saber EN QUÉ PUNTO del
+// texto (nº de caracteres) caerá cada salto, que luego se localiza en el DOM
+// tal y como se está escribiendo ahora mismo (_tdCharOffsetToRange).
 let _tdRecomputeTimer = null;
 function _tdRecomputeViewPagination(){
   const hidden = document.getElementById('tdHiddenInput');
@@ -495,49 +515,121 @@ function _tdRecomputeViewPagination(){
   const lhSel = document.getElementById('tdLineHeightSel');
   const lineHeightMult = lhSel ? (parseFloat(lhSel.value) || TD_LINE_MULT) : TD_LINE_MULT;
 
-  // Ancho real disponible para el texto: el propio trix-editor ya está DENTRO
-  // del padding de .td-page, así que su ancho renderizado ES el ancho neto.
-  const pw = editorEl.clientWidth || TD_A4_W;
-  // Alto de "una página" para la maquetación: el del VISOR (#tdPageArea, con
-  // altura fija ajustada al hueco real disponible — ver _tdSyncViewportHeight),
-  // no el de .td-page, que ahora crece libremente con el texto y puede medir
-  // mucho más que una página. Se resta el padding vertical real de .td-page
-  // (percentual, ya resuelto a píxeles por el navegador — puede no ser igual
-  // al horizontal: el padding en % se calcula siempre sobre el ANCHO).
-  const innerCs = getComputedStyle(inner);
-  const padTop = parseFloat(innerCs.paddingTop) || 0;
-  const padBottom = parseFloat(innerCs.paddingBottom) || 0;
-  const ph = (areaEl.clientHeight || TD_A4_H);
-  // Tamaño de letra real ya calculado por el navegador (rem/clamp ya resueltos)
-  const bodySize = parseFloat(getComputedStyle(editorEl).fontSize) || TD_A4_BODY_SIZE;
-  const h1Size = bodySize * 1.55; // igual proporción que .td-editor h1{font-size:1.55em}
+  // Si se está reeditando un texto ya aplicado, usar SU margen lateral (el
+  // ajuste "Estrecho/Normal/Ancho" del panel de propiedades) — si no, el
+  // margen por defecto. El interlineado ya lo refleja el selector
+  // (puesto al valor de la capa al reeditar — ver edOpenTextDoc).
+  const editingLayer = (typeof _tdEditingFlowId !== 'undefined' && _tdEditingFlowId) ? _tdFindFlowLayer(_tdEditingFlowId) : null;
+  const marginFracX = (editingLayer && editingLayer.marginXFrac) || TD_MARGIN_FRAC;
 
-  const { pageStartChars } = _tdLayoutPages(
-    blocks, {pw, ph}, lineHeightMult,
-    { marginFracX: 0, marginFracY: 0, bodySize, h1Size, padTop, padBottom }
+  // _tdManualBreakChars: saltos fijados a mano arrastrando la línea — el
+  // resto de páginas se recalculan solas a partir de ahí (ver comentario en
+  // _tdLayoutPages).
+  const { pageStartChars, lineStartChars } = _tdLayoutPages(
+    blocks, {pw: edPageW(), ph: edPageH()}, lineHeightMult,
+    { marginFracX, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
+    _tdManualBreakChars
   );
   _tdViewPageStartChars = pageStartChars;
+  _tdLineStartCharsCache = lineStartChars;
 
-  // Medir en el DOM real dónde cae cada carácter de inicio de página. Hay que
-  // medir con .td-page en su posición NATURAL (sin trasladar) — si no, la
+  // Medir en el DOM real (con el tamaño/margen de escritura de siempre, sin
+  // tocarlos) dónde cae cada uno de esos saltos previstos, y también CADA
+  // línea (para poder ajustar el arrastre a la más cercana). Hay que medir
+  // con .td-page en su posición NATURAL (sin trasladar) — si no, la
   // traslación ya aplicada falsearía la medida.
   inner.style.transition = 'none';
   inner.style.transform = 'none';
   const innerRect = inner.getBoundingClientRect();
-  _tdViewPageOffsets = pageStartChars.map(charOffset => {
+  const charToY = charOffset => {
     if(charOffset <= 0) return 0;
     const range = _tdCharOffsetToRange(editorEl, charOffset);
     if(!range) return inner.scrollHeight;
     const rect = range.getBoundingClientRect();
     return Math.max(0, rect.top - innerRect.top);
-  });
+  };
+  _tdViewPageOffsets = pageStartChars.map(charToY);
+  _tdLineOffsetsCache = lineStartChars.map(charToY);
+
+  // Líneas discontinuas de cambio de página: una por cada punto donde
+  // termina una página y empieza la siguiente (todas menos la primera, que
+  // es el principio del documento, no un cambio de hoja). Cada una lleva su
+  // zona de arrastre para poder fijarla a mano (ver _tdWirePageBreakDrag).
+  const breaksEl = document.getElementById('tdPageBreaks');
+  if(breaksEl){
+    breaksEl.innerHTML = '';
+    for(let i = 1; i < _tdViewPageOffsets.length; i++){
+      const line = document.createElement('div');
+      line.className = 'td-pagebreak-line';
+      line.style.top = _tdViewPageOffsets[i] + 'px';
+      line.dataset.chars = String(pageStartChars[i]);
+      const visual = document.createElement('div');
+      visual.className = 'td-pagebreak-visual';
+      const handle = document.createElement('div');
+      handle.className = 'td-pagebreak-handle';
+      line.appendChild(visual);
+      line.appendChild(handle);
+      _tdWirePageBreakDrag(handle, line);
+      breaksEl.appendChild(line);
+    }
+  }
   // Reaplicar (sin animar) la posición de desplazamiento que ya tenía — NO se
   // fuerza el salto al inicio exacto de la página: el usuario puede haberse
   // desplazado libremente con la rueda/el dedo (ver _tdSetScrollOffset), y
-  // recalcular mientras escribe no debe deshacer eso. _tdFollowCursorPage,
+  // recalcular mientras escribe no debe deshacer eso. _tdCenterActiveLine,
   // llamado justo después de esta función, decide si hay que seguir al
-  // cursor (centrarlo si se sale del hueco visible).
+  // cursor (mantenerlo visible si se sale del hueco visible).
   _tdSetScrollOffset(_tdCurrentOffset, false);
+}
+let _tdLineOffsetsCache = [];
+
+// Conecta el arrastre de la zona de agarre de un salto de página: mientras
+// se arrastra, la línea sigue al dedo/ratón libremente; al soltar, se ajusta
+// al límite de línea real más cercano (nunca queda a mitad de una línea) y
+// se fija como salto manual — el resto de páginas se recalculan solas a
+// partir de ahí (ver _tdLayoutPages).
+function _tdWirePageBreakDrag(handle, lineEl){
+  let dragging = false;
+  const onMove = e => {
+    if(!dragging) return;
+    const pageEl = document.getElementById('tdPage');
+    if(!pageEl) return;
+    const pageRect = pageEl.getBoundingClientRect();
+    const localY = e.clientY - pageRect.top;
+    lineEl.style.top = Math.max(0, localY) + 'px';
+  };
+  const onUp = () => {
+    if(!dragging) return;
+    dragging = false;
+    lineEl.classList.remove('dragging');
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+
+    const finalTop = parseFloat(lineEl.style.top) || 0;
+    // Ajustar al límite de línea real más cercano — nunca a mitad de una,
+    // solo donde el formato permite que exista una línea de verdad.
+    let nearestIdx = 0, nearestDist = Infinity;
+    for(let i = 0; i < _tdLineOffsetsCache.length; i++){
+      const d = Math.abs(_tdLineOffsetsCache[i] - finalTop);
+      if(d < nearestDist){ nearestDist = d; nearestIdx = i; }
+    }
+    const oldChars = parseFloat(lineEl.dataset.chars);
+    const newChars = _tdLineStartCharsCache[nearestIdx];
+    _tdManualBreakChars = _tdManualBreakChars.filter(c => c !== oldChars);
+    if(newChars > 0 && !_tdManualBreakChars.includes(newChars)) _tdManualBreakChars.push(newChars);
+    _tdManualBreakChars.sort((a, b) => a - b);
+    _tdRecomputeViewPagination();
+  };
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    dragging = true;
+    lineEl.classList.add('dragging');
+    handle.setPointerCapture?.(e.pointerId);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  });
 }
 
 function _tdUpdateViewPageNav(){
@@ -598,14 +690,18 @@ function _tdScrollToViewPage(n, announce){
 }
 
 // Mientras se escribe (o se mueve el cursor): mantiene la línea activa
-// centrada verticalmente en el hueco visible de verdad (entre el final de la
+// visible cerca del final del hueco visible de verdad (entre el final de la
 // cabecera/barras y el principio del teclado — Visual Viewport, no
-// window.innerHeight, para que el teclado nunca la tape). A diferencia de
-// saltar entre "páginas" (eso lo siguen haciendo las flechas y el arrastre
-// manual, ver _tdScrollToViewPage), aquí se mide la posición REAL en
-// pantalla del cursor (getClientRects) y se ajusta el desplazamiento al
-// milímetro — la hoja puede quedar desplazada por debajo de la cabecera y
-// las barras cuando haga falta (el visor #tdPageArea la recorta ahí).
+// window.innerHeight, para que el teclado nunca la tape). Se ancla cerca del
+// FINAL de ese hueco (no en el centro): así, al llegar a la última línea de
+// la hoja, toda la hoja que va por delante queda ya por encima del teclado,
+// en vez de desperdiciar la mitad de la pantalla en blanco por debajo del
+// cursor. A diferencia de saltar entre "páginas" (eso lo siguen haciendo las
+// flechas y el arrastre manual, ver _tdScrollToViewPage), aquí se mide la
+// posición REAL en pantalla del cursor (getClientRects) y se ajusta el
+// desplazamiento al milímetro — la hoja puede quedar desplazada por debajo
+// de la cabecera y las barras cuando haga falta (el visor #tdPageArea la
+// recorta ahí).
 function _tdCenterActiveLine(){
   const editorEl = document.getElementById('tdEditor');
   const areaEl = document.getElementById('tdPageArea');
@@ -632,10 +728,13 @@ function _tdCenterActiveLine(){
   const safeTop = areaRect.top;
   const safeBottom = vv ? (vv.height + vv.offsetTop) : window.innerHeight;
   if(safeBottom <= safeTop) return;
-  const safeCenterY = (safeTop + safeBottom) / 2;
+  // Margen de respiro bajo el cursor (no pegarlo del todo al borde del
+  // teclado) — una línea y media de texto, con un mínimo/máximo razonable.
+  const margin = Math.max(24, Math.min(48, (rect.height || 24) * 1.5));
+  const targetY = safeBottom - margin;
 
-  const delta = cursorY - safeCenterY;
-  if(Math.abs(delta) < 3) return; // ya centrada — evita micro-ajustes constantes
+  const delta = cursorY - targetY;
+  if(Math.abs(delta) < 3) return; // ya donde debe estar — evita micro-ajustes constantes
   _tdSetScrollOffset(_tdCurrentOffset + delta, false);
 }
 
@@ -769,14 +868,20 @@ function _tdFontStr(fontSize, bold, italic, mono, fontFamily){
 // redimensionar alguna con los handlers); la última talla de la lista se
 // repite para páginas adicionales si el contenido no cupiera en las dadas.
 // opts: {marginFrac o marginFracX/marginFracY, bodySize, h1Size, padTop,
-// padBottom} — por defecto, los del cómic (Aplicar al lienzo); la vista en
-// vivo del editor pasa dimensiones y padding REALES medidos del DOM (ver
-// _tdRecomputeViewPagination) en vez de fracciones, para que el ajuste de
-// línea coincida exactamente con lo que el navegador va a renderizar.
+// padBottom} — los del tamaño real de la hoja (Aplicar al lienzo). La
+// predicción de saltos de página de la vista en vivo (_tdRecomputeViewPagination)
+// también usa estas mismas fracciones/tamaños, no una aproximación aparte.
 // marginFracX es el que el usuario puede cambiar desde "Márgenes" en el
 // panel de propiedades (ver pp-td-margin/_tdReflowAfterMarginChange) — solo
 // afecta al margen lateral, el vertical se mantiene siempre en su defecto.
-function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts){
+// forcedBreakChars: posiciones (nº de carácter, en el mismo recuento que
+// pageStartChars) donde se ha arrastrado a mano un salto de página — SIEMPRE
+// coinciden con el final de una línea real (ver _tdSnapBreakToLine), nunca a
+// mitad de una. El resto de páginas se recalculan solas a partir de ahí: es
+// una consecuencia natural de que el algoritmo simplemente sigue avanzando
+// línea a línea, no hace falta ningún ajuste especial para que "el resto se
+// adapte" — lo hace porque nunca decide por adelantado dónde irá cada salto.
+function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakChars){
   const sizes = Array.isArray(frameSizes) ? frameSizes : [frameSizes];
   const lhMult = lineHeightMult || TD_LINE_MULT;
   const marginFracX = (opts && (opts.marginFracX ?? opts.marginFrac)) ?? TD_MARGIN_FRAC;
@@ -785,6 +890,8 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts){
   const bodySizeDefault = (opts && opts.bodySize) || TD_BODY_SIZE;
   const h1SizeDefault = (opts && opts.h1Size) || TD_H1_SIZE;
   const ctx = _tdMeasureCtx;
+  const forced = (forcedBreakChars || []).slice().sort((a, b) => a - b);
+  let forcedIdx = 0;
 
   let frameIdx = 0, mx, my, textW, textH;
   function loadFrame(){
@@ -803,18 +910,28 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts){
 
   const pages = [];
   const pageStartChars = [0]; // offset de texto plano (orden documento) donde empieza cada página
+  const lineStartChars = []; // offset al final de CADA línea (no solo de página) — para ajustar el arrastre
   let curLines = [];
   let curY = 0; // relativo al margen superior (0..textH)
   let charsSoFar = 0;
 
   function pushLine(entry){
-    if(curY + entry.height > textH && curLines.length > 0){
+    const endChars = charsSoFar; // caracteres acumulados hasta el final de ESTA línea
+    let shouldBreak = curY + entry.height > textH && curLines.length > 0;
+    // Salto forzado a mano (arrastre): si ya se ha alcanzado o pasado el
+    // siguiente punto fijado, cortar aquí también, haya sitio o no — pero
+    // solo si esta página ya tiene algo (si no, dejaría una página vacía).
+    if(!shouldBreak && curLines.length > 0 && forcedIdx < forced.length && endChars >= forced[forcedIdx]){
+      shouldBreak = true;
+    }
+    if(shouldBreak){
       pages.push(curLines);
       curLines = [];
       curY = 0;
       frameIdx++;
       loadFrame();
       pageStartChars.push(charsSoFar);
+      while(forcedIdx < forced.length && forced[forcedIdx] <= endChars) forcedIdx++;
     }
     const baseline = curY + entry.height * 0.78;
     curLines.push({
@@ -826,6 +943,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts){
       runs: entry.runs
     });
     curY += entry.height;
+    lineStartChars.push(endChars);
   }
 
   function forcePageBreak(){
@@ -927,7 +1045,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts){
     });
   });
 
-  return {pages, mx, my, pageStartChars};
+  return {pages, mx, my, pageStartChars, lineStartChars};
 }
 
 // Resumen en texto plano por página (fallback/legacy — _hasText, panel_texts, etc.
@@ -940,7 +1058,7 @@ function _tdPlainSummary(pageLines){
   return joined.slice(0, 60) || 'Texto';
 }
 
-function _tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, marginXFrac){
+function _tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, marginXFrac, manualBreakChars){
   const tl = new TextLayer(_tdPlainSummary(pageLines), 0.5, 0.5);
   tl.x = 0.5; tl.y = 0.5; tl.width = 1; tl.height = 1;
   tl.color = '#1A1A1A';
@@ -953,6 +1071,7 @@ function _tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, marginXFrac){
   tl._tdFlowId = flowId;
   tl.lineHeightMult = lineHeightMult || TD_LINE_MULT;
   tl.marginXFrac = marginXFrac || TD_MARGIN_FRAC;
+  if(manualBreakChars && manualBreakChars.length) tl.manualBreakChars = manualBreakChars.slice();
   return tl;
 }
 
@@ -1024,6 +1143,7 @@ function _tdApplyToCanvas(){
     // desde el propio Editor de textos).
     existingLayer.sourceHTML = html;
     existingLayer.lineHeightMult = lineHeightMult;
+    existingLayer.manualBreakChars = _tdManualBreakChars.slice();
     const _panelWasOpen = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
     const r = _tdReflowFlowInPlace(existingLayer, _panelWasOpen);
     if(!r){ edToast('No se pudo actualizar el texto'); return; }
@@ -1046,19 +1166,19 @@ function _tdApplyToCanvas(){
       frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
     }
 
-    const { pages } = _tdLayoutPages(blocks, frames, lineHeightMult);
+    const { pages } = _tdLayoutPages(blocks, frames, lineHeightMult, undefined, _tdManualBreakChars);
     const existingCount = Math.min(pages.length, edPages.length - startIdx);
 
     for(let i = 0; i < existingCount; i++){
       const pg = edPages[startIdx + i];
       pg.layers = pg.layers || [];
-      pg.layers.push(_tdMakeTextLayer(pages[i], html, flowId, lineHeightMult));
+      pg.layers.push(_tdMakeTextLayer(pages[i], html, flowId, lineHeightMult, undefined, _tdManualBreakChars));
     }
     // Si el texto sigue más allá de las hojas ya existentes, las que faltan
     // se crean nuevas al final — con la orientación de la última hoja de la obra.
     const lastOrient = edPages.length ? (edPages[edPages.length - 1].orientation || edOrientation) : edOrientation;
     const newPages = pages.slice(existingCount).map(pageLines => ({
-      layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult)],
+      layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, _tdManualBreakChars)],
       drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
     }));
     if(newPages.length) edPages.push(...newPages);
@@ -1077,6 +1197,7 @@ function _tdApplyToCanvas(){
   const editorEl = document.getElementById('tdEditor');
   if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
   _tdEditingFlowId = null;
+  _tdManualBreakChars = [];
 
   edCloseTextDoc();
 }
@@ -1137,10 +1258,11 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
     const blocks0 = _tdParseBlocks(html);
     const { pages: pages0 } = _tdLayoutPages(
       blocks0, {pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W}, la.lineHeightMult,
-      { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC }
+      { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC },
+      la.manualBreakChars
     );
     const newPages0 = pages0.map(pageLines => ({
-      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac)],
+      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, la.manualBreakChars)],
       drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient
     }));
     edPages.splice(afterIdx, 0, ...newPages0);
@@ -1170,7 +1292,11 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
   frames.push({ pw: svLast ? ED_PAGE_W : ED_PAGE_H, ph: svLast ? ED_PAGE_H : ED_PAGE_W });
 
   const blocks = _tdParseBlocks(html);
-  const { pages } = _tdLayoutPages(blocks, frames, la.lineHeightMult, { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC });
+  const { pages } = _tdLayoutPages(
+    blocks, frames, la.lineHeightMult,
+    { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC },
+    la.manualBreakChars
+  );
 
   const oldCount = flowIdxs.length;
   const reused = Math.min(pages.length, flowIdxs.length);
@@ -1186,6 +1312,7 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
     layer.sourceHTML = html;
     layer.lineHeightMult = la.lineHeightMult;
     layer.marginXFrac = la.marginXFrac;
+    layer.manualBreakChars = la.manualBreakChars;
     layer.text = _tdPlainSummary(pages[i]);
   }
 
@@ -1210,7 +1337,7 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
     });
     insertAt = insertAt + 1;
     const extraPages = pages.slice(reused).map(pageLines => ({
-      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac)],
+      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, la.manualBreakChars)],
       drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
     }));
     edPages.splice(insertAt, 0, ...extraPages);
