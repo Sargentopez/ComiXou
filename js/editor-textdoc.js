@@ -312,6 +312,22 @@ function _tdInitOnce(){
     window.visualViewport.addEventListener('resize', _tdSyncViewportHeight);
     window.visualViewport.addEventListener('scroll', _tdSyncViewportHeight);
   }
+
+  // Reabrir el teclado (p.ej. cerrarlo y volver a tocar el texto para seguir
+  // escribiendo) también tiene que volver a centrar la línea activa. El
+  // evento de foco llega ANTES de que el teclado termine de animarse (varía
+  // bastante entre dispositivos), así que se reintenta varias veces con
+  // distintos retardos en vez de una sola comprobación — más fiable que
+  // fiarse de un único evento de la Visual Viewport en el momento justo.
+  document.addEventListener('focusin', e => {
+    const editorEl = document.getElementById('tdEditor');
+    const shell = document.getElementById('tdShell');
+    if(!editorEl || !shell || shell.style.display === 'none' || shell.style.display === '') return;
+    if(e.target !== editorEl && !editorEl.contains(e.target)) return;
+    [50, 200, 400, 650].forEach(ms => setTimeout(() => {
+      if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
+    }, ms));
+  });
 }
 let _tdViewportSyncTimer = null;
 function _tdSyncViewportHeight(){
