@@ -81,6 +81,7 @@ function edOpenTextDoc(editLayer){
   _tdInitOnce();
   const wasOpen = shell.style.display !== 'none' && shell.style.display !== '';
   shell.style.display = 'flex';
+  if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
   // Botón/gesto atrás (PC y Android): cerrar el shell en vez de salir del editor.
   // Empuja una entrada de historial solo si no estaba ya abierto (evita duplicar
   // entradas si se reabre en modo edición sobre el mismo shell ya visible).
@@ -255,10 +256,24 @@ function _tdInitOnce(){
   _tdArea?.addEventListener('pointermove', e => {
     if(!_tdDragActive || _tdDragStartY === null) return;
     const dy = e.clientY - _tdDragStartY;
-    if(Math.abs(dy) > 4) _tdDragMoved = true;
+    if(Math.abs(dy) > 4 && !_tdDragMoved){
+      _tdDragMoved = true;
+      // Arrastre real detectado: si el propio gesto ya había empezado a
+      // seleccionar texto (habitual al arrastrar sobre un contenteditable),
+      // se cancela esa selección y se desactiva mientras dure el arrastre —
+      // si no, arrastrar para desplazar la hoja "engancharía" texto en vez
+      // de moverla.
+      window.getSelection()?.removeAllRanges();
+      const editorEl2 = document.getElementById('tdEditor');
+      if(editorEl2) editorEl2.style.userSelect = 'none';
+    }
     if(_tdDragMoved){ e.preventDefault(); _tdSetScrollOffset(_tdDragStartOffset - dy, false); }
   });
-  const _tdEndDrag = () => { _tdDragActive = false; _tdDragStartY = null; };
+  const _tdEndDrag = () => {
+    _tdDragActive = false; _tdDragStartY = null;
+    const editorEl2 = document.getElementById('tdEditor');
+    if(editorEl2) editorEl2.style.userSelect = '';
+  };
   _tdArea?.addEventListener('pointerup', _tdEndDrag);
   _tdArea?.addEventListener('pointercancel', _tdEndDrag);
   document.getElementById('tdPagePrev')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage - 1));
@@ -281,6 +296,31 @@ function _tdInitOnce(){
     if(e.key === 'ArrowRight' || e.key === 'ArrowDown') _tdScrollToViewPage(_tdViewCurPage + 1);
     else _tdScrollToViewPage(_tdViewCurPage - 1);
   });
+
+  // Teclado virtual (móvil): el shell se ajusta al alto REAL visible (Visual
+  // Viewport), no al de la ventana completa — si no, el teclado tapa la
+  // parte de abajo de la hoja (y con ella, la línea que se está escribiendo)
+  // sin que #tdShell (position:fixed;inset:0, que se calcula sobre el
+  // viewport de diseño, no el visual) se entere. Al encogerse el shell, la
+  // hoja se encoge con él en el mismo flujo (flex) que ya usa para pantallas
+  // pequeñas — no es un formato nuevo, es el mismo adaptándose a menos alto.
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', _tdSyncViewportHeight);
+    window.visualViewport.addEventListener('scroll', _tdSyncViewportHeight);
+  }
+}
+let _tdViewportSyncTimer = null;
+function _tdSyncViewportHeight(){
+  const shell = document.getElementById('tdShell');
+  if(!shell || shell.style.display === 'none' || shell.style.display === '') return;
+  const vv = window.visualViewport;
+  if(!vv) return;
+  shell.style.height = vv.height + 'px';
+  shell.style.top = (vv.offsetTop || 0) + 'px';
+  // La página cambia de tamaño con el shell — recalcular la paginación en
+  // vivo (con retardo corto: el teclado tarda un poco en terminar de animarse).
+  clearTimeout(_tdViewportSyncTimer);
+  _tdViewportSyncTimer = setTimeout(_tdRecomputeViewPagination, 120);
 }
 let _tdFollowTimer = null;
 
