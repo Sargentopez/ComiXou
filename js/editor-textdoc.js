@@ -111,7 +111,7 @@ function edOpenTextDoc(editLayer){
   requestAnimationFrame(() => requestAnimationFrame(() => {
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
-    const inner = document.getElementById('tdPageInner');
+    const inner = document.getElementById('tdPage');
     if(inner) inner.style.transform = 'none';
     _tdRecomputeViewPagination();
     // Reeditar: centrar la vista en el texto que había en la hoja concreta
@@ -219,25 +219,27 @@ function _tdInitOnce(){
   if(editorEl){
     editorEl.addEventListener('trix-change', () => {
       // Paginación en vivo: recalcular con retardo (evita rehacer el cálculo
-      // en cada pulsación) y seguir la página donde está escribiendo el cursor.
+      // en cada pulsación) y mantener centrada la línea que se está escribiendo.
       clearTimeout(_tdRecomputeTimer);
       _tdRecomputeTimer = setTimeout(() => {
         _tdRecomputeViewPagination();
-        _tdFollowCursorPage();
+        _tdCenterActiveLine();
       }, 220);
     });
     editorEl.addEventListener('trix-selection-change', () => {
       clearTimeout(_tdFollowTimer);
-      _tdFollowTimer = setTimeout(_tdFollowCursorPage, 100);
+      _tdFollowTimer = setTimeout(_tdCenterActiveLine, 100);
     });
   }
-  // Desplazamiento continuo: rueda del ratón (PC) y arrastre táctil (móvil),
-  // igual que cualquier área de texto normal — la hoja sigue teniendo tamaño
-  // A4 fijo y recorta su contenido (.td-page overflow:hidden); lo que se
-  // restaura es que #tdPageInner se pueda mover libremente dentro de eso,
-  // no solo saltar de página en página. Los botones de flecha y el
-  // seguimiento automático del cursor siguen saltando a un límite de página
-  // exacto y animado (_tdScrollToViewPage).
+  // Desplazamiento continuo: rueda del ratón (PC) y arrastre táctil (móvil).
+  // #tdPageArea es el visor de altura fija (ajustada al hueco real
+  // disponible, ver _tdSyncViewportHeight) que recorta lo que no quepa
+  // (overflow:hidden); .td-page crece con el texto y se traslada (transform)
+  // dentro de ese visor — puede quedar parcialmente por debajo de la
+  // cabecera/barras cuando haga falta (ver _tdCenterActiveLine). Los botones
+  // de flecha siguen saltando a un límite de página exacto y animado
+  // (_tdScrollToViewPage); mientras se escribe, en cambio, la línea activa
+  // se centra al milímetro, no a saltos.
   const _tdArea = document.getElementById('tdPageArea');
   _tdArea?.addEventListener('wheel', e => {
     e.preventDefault();
@@ -337,7 +339,7 @@ function _tdSyncViewportHeight(){
   // La página cambia de tamaño — recalcular la paginación en vivo (con
   // retardo corto: el teclado tarda un poco en terminar de animarse).
   clearTimeout(_tdViewportSyncTimer);
-  _tdViewportSyncTimer = setTimeout(_tdRecomputeViewPagination, 120);
+  _tdViewportSyncTimer = setTimeout(() => { _tdRecomputeViewPagination(); _tdCenterActiveLine(); }, 120);
 }
 let _tdFollowTimer = null;
 
@@ -410,19 +412,23 @@ function _tdWireFontControls(){
   });
 }
 
-// ── Paginación EN VIVO mientras se escribe (hojas A4 reales, recorte real,
-//    no una tira que crece con scroll continuo) ─────────────────────────────
+// ── Paginación EN VIVO mientras se escribe (hojas A4 reales; la línea activa
+//    se mantiene centrada y visible, incluso por debajo de la cabecera) ─────
 // El documento de Trix sigue siendo UNO solo (continuo) — no se puede partir
 // en varios <trix-editor> sin romper su modelo de cursor/deshacer. En su
-// lugar, la "hoja" (.td-page) tiene tamaño A4 FIJO y recorta su contenido
-// (overflow:hidden); el contenido real (#tdPageInner) es más alto y se
-// TRASLADA (transform: translateY) para mostrar solo la página actual — un
-// salto visual real de una página a otra, no un scroll suave indistinguible.
-// Se usa el MISMO motor de maquetación que "Aplicar al lienzo" (_tdLayoutPages)
-// para saber cuántas páginas hacen falta y en qué carácter empieza cada una;
-// luego se localiza esa posición en el DOM real con la API Range (funciona
-// con cualquier anidamiento, sin tener que hacer coincidir mi árbol de
-// bloques con el árbol real de Trix nodo a nodo).
+// lugar, #tdPageArea es un visor de altura FIJA (ajustada al hueco real
+// disponible — Visual Viewport menos cabecera/barras, ver
+// _tdSyncViewportHeight) que recorta lo que no quepa (overflow:hidden); la
+// "hoja" (.td-page) crece con el texto y se TRASLADA (transform: translateY)
+// dentro de ese visor — puede quedar parcialmente por debajo de la cabecera
+// cuando haga falta para mantener centrada la línea que se está escribiendo
+// (ver _tdCenterActiveLine). Los botones de flecha y el arrastre manual
+// siguen tratando esto como "páginas" con saltos exactos y animados
+// (_tdScrollToViewPage). Se usa el MISMO motor de maquetación que "Aplicar
+// al lienzo" (_tdLayoutPages) para saber cuántas páginas hacen falta y en
+// qué carácter empieza cada una; luego se localiza esa posición en el DOM
+// real con la API Range (funciona con cualquier anidamiento, sin tener que
+// hacer coincidir mi árbol de bloques con el árbol real de Trix nodo a nodo).
 let _tdViewPageStartChars = [0];
 let _tdViewPageOffsets = [0]; // px a trasladar (translateY) para ver cada página
 let _tdViewCurPage = 0;
@@ -465,25 +471,27 @@ let _tdRecomputeTimer = null;
 function _tdRecomputeViewPagination(){
   const hidden = document.getElementById('tdHiddenInput');
   const editorEl = document.getElementById('tdEditor');
-  const inner = document.getElementById('tdPageInner');
-  const pageEl = document.getElementById('tdPage');
-  if(!hidden || !editorEl || !inner || !pageEl) return;
+  const inner = document.getElementById('tdPage');
+  const areaEl = document.getElementById('tdPageArea');
+  if(!hidden || !editorEl || !inner || !areaEl) return;
   const html = hidden.value || '';
   const blocks = _tdParseBlocks(html);
   const lhSel = document.getElementById('tdLineHeightSel');
   const lineHeightMult = lhSel ? (parseFloat(lhSel.value) || TD_LINE_MULT) : TD_LINE_MULT;
 
   // Ancho real disponible para el texto: el propio trix-editor ya está DENTRO
-  // del padding de #tdPageInner, así que su ancho renderizado ES el ancho neto.
+  // del padding de .td-page, así que su ancho renderizado ES el ancho neto.
   const pw = editorEl.clientWidth || TD_A4_W;
-  // Alto real de una página: el de .td-page (lo que recorta overflow:hidden),
-  // menos el padding vertical real de #tdPageInner (percentual, ya resuelto a
-  // píxeles por el navegador — puede no ser igual al horizontal: el padding en
-  // % se calcula siempre sobre el ANCHO del contenedor en ambos ejes).
+  // Alto de "una página" para la maquetación: el del VISOR (#tdPageArea, con
+  // altura fija ajustada al hueco real disponible — ver _tdSyncViewportHeight),
+  // no el de .td-page, que ahora crece libremente con el texto y puede medir
+  // mucho más que una página. Se resta el padding vertical real de .td-page
+  // (percentual, ya resuelto a píxeles por el navegador — puede no ser igual
+  // al horizontal: el padding en % se calcula siempre sobre el ANCHO).
   const innerCs = getComputedStyle(inner);
   const padTop = parseFloat(innerCs.paddingTop) || 0;
   const padBottom = parseFloat(innerCs.paddingBottom) || 0;
-  const ph = (pageEl.clientHeight || TD_A4_H);
+  const ph = (areaEl.clientHeight || TD_A4_H);
   // Tamaño de letra real ya calculado por el navegador (rem/clamp ya resueltos)
   const bodySize = parseFloat(getComputedStyle(editorEl).fontSize) || TD_A4_BODY_SIZE;
   const h1Size = bodySize * 1.55; // igual proporción que .td-editor h1{font-size:1.55em}
@@ -495,8 +503,8 @@ function _tdRecomputeViewPagination(){
   _tdViewPageStartChars = pageStartChars;
 
   // Medir en el DOM real dónde cae cada carácter de inicio de página. Hay que
-  // medir con #tdPageInner en su posición NATURAL (sin trasladar) — si no, la
-  // traslación ya aplicada de la página actual falsearía la medida.
+  // medir con .td-page en su posición NATURAL (sin trasladar) — si no, la
+  // traslación ya aplicada falsearía la medida.
   inner.style.transition = 'none';
   inner.style.transform = 'none';
   const innerRect = inner.getBoundingClientRect();
@@ -507,12 +515,12 @@ function _tdRecomputeViewPagination(){
     const rect = range.getBoundingClientRect();
     return Math.max(0, rect.top - innerRect.top);
   });
-  // Reaplicar (sin animar) la posición de scroll que ya tenía — NO se fuerza
-  // el salto al inicio exacto de la página: el usuario puede haberse
+  // Reaplicar (sin animar) la posición de desplazamiento que ya tenía — NO se
+  // fuerza el salto al inicio exacto de la página: el usuario puede haberse
   // desplazado libremente con la rueda/el dedo (ver _tdSetScrollOffset), y
   // recalcular mientras escribe no debe deshacer eso. _tdFollowCursorPage,
-  // llamado justo después de esta función, sí decide si hay que saltar de
-  // página (cuando el cursor avanza más allá de lo que se ve).
+  // llamado justo después de esta función, decide si hay que seguir al
+  // cursor (centrarlo si se sale del hueco visible).
   _tdSetScrollOffset(_tdCurrentOffset, false);
 }
 
@@ -532,18 +540,18 @@ function _tdUpdateViewPageNav(){
 // cursor SÍ saltan a un límite de página exacto (_tdScrollToViewPage).
 let _tdCurrentOffset = 0;
 
-// Desplaza #tdPageInner a una posición cualquiera en px (no necesariamente el
+// Desplaza .td-page a una posición cualquiera en px (no necesariamente el
 // principio de una página) — usada por la rueda del ratón y el arrastre
 // táctil para restaurar un desplazamiento continuo y natural, sin perder el
 // recorte de página fija (.td-page sigue con overflow:hidden; lo que cambia
-// es solo hasta dónde se traslada #tdPageInner). animate=false (rueda/
+// es solo hasta dónde se traslada .td-page). animate=false (rueda/
 // arrastre, tiene que notarse al instante) frente a true (saltos de página,
 // con la transición animada ya definida en CSS).
 function _tdSetScrollOffset(px, animate){
-  const inner = document.getElementById('tdPageInner');
-  const pageEl = document.getElementById('tdPage');
-  if(!inner || !pageEl) return;
-  const maxScroll = Math.max(0, (inner.scrollHeight || 0) - (pageEl.clientHeight || 0));
+  const inner = document.getElementById('tdPage');
+  const areaEl = document.getElementById('tdPageArea');
+  if(!inner || !areaEl) return;
+  const maxScroll = Math.max(0, (inner.scrollHeight || 0) - (areaEl.clientHeight || 0));
   const clamped = Math.max(0, Math.min(maxScroll, px));
   inner.style.transition = animate ? '' : 'none';
   inner.style.transform = 'translateY(-' + clamped + 'px)';
@@ -556,10 +564,10 @@ function _tdSetScrollOffset(px, animate){
   _tdUpdateViewPageNav();
 }
 
-// Navega a la página n (0-based): traslada #tdPageInner para que .td-page
-// (tamaño A4 fijo, overflow:hidden) recorte y muestre solo esa página — un
-// salto real y animado, no un scroll continuo (para eso están la rueda del
-// ratón y el arrastre táctil, ver _tdSetScrollOffset). announce=true avisa
+// Navega a la página n (0-based): traslada .td-page dentro del visor de
+// altura fija (#tdPageArea, con overflow:hidden) — un salto real y animado,
+// no un scroll continuo (para eso están la rueda del ratón y el arrastre
+// táctil, ver _tdSetScrollOffset). announce=true avisa
 // con un toast (se usa al seguir el cursor automáticamente mientras se
 // escribe, para que el cambio de hoja sea inequívoco; los botones de flecha
 // no lo necesitan, ya es obvio que el usuario lo pidió él mismo).
@@ -573,36 +581,46 @@ function _tdScrollToViewPage(n, announce){
   if(changed && announce) edToast('→ Página ' + (_tdViewCurPage + 1));
 }
 
-// Mientras se escribe: si el cursor queda por delante de la página que se
-// está viendo (avanzó el texto más allá de lo que cabía), sigue el avance
-// automáticamente — igual que un procesador de texto normal. Se usa
-// window.getSelection() (no editor.getSelectedRange(), cuyo recuento interno
-// de posiciones de Trix podría no coincidir exactamente con charsSoFar) y se
-// cuenta con el MISMO criterio (TreeWalker de nodos de texto) que
-// _tdCharOffsetToRange, para garantizar que ambos lados miden igual.
-function _tdFollowCursorPage(){
+// Mientras se escribe (o se mueve el cursor): mantiene la línea activa
+// centrada verticalmente en el hueco visible de verdad (entre el final de la
+// cabecera/barras y el principio del teclado — Visual Viewport, no
+// window.innerHeight, para que el teclado nunca la tape). A diferencia de
+// saltar entre "páginas" (eso lo siguen haciendo las flechas y el arrastre
+// manual, ver _tdScrollToViewPage), aquí se mide la posición REAL en
+// pantalla del cursor (getClientRects) y se ajusta el desplazamiento al
+// milímetro — la hoja puede quedar desplazada por debajo de la cabecera y
+// las barras cuando haga falta (el visor #tdPageArea la recorta ahí).
+function _tdCenterActiveLine(){
   const editorEl = document.getElementById('tdEditor');
-  if(!editorEl) return;
-  const total = _tdViewPageStartChars.length;
-  if(total <= 1){ _tdViewCurPage = 0; _tdUpdateViewPageNav(); return; }
+  const areaEl = document.getElementById('tdPageArea');
+  if(!editorEl || !areaEl) return;
   const sel = window.getSelection();
-  if(!sel || sel.rangeCount === 0) return;
+  if(!sel || sel.rangeCount === 0 || !sel.isCollapsed) return; // con texto seleccionado, no forzar
   const anchorNode = sel.focusNode;
   if(!anchorNode || !editorEl.contains(anchorNode)) return;
-  const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
-  let consumed = 0, node, found = false;
-  while((node = walker.nextNode())){
-    if(node === anchorNode){
-      consumed += Math.min(sel.focusOffset, node.textContent.length);
-      found = true;
-      break;
-    }
-    consumed += node.textContent.length;
+
+  const range = sel.getRangeAt(0).cloneRange();
+  range.collapse(true);
+  let rect = range.getClientRects()[0];
+  if(!rect){
+    // Punto sin rectángulo propio (línea vacía, justo tras un salto, etc.):
+    // el elemento contenedor más próximo sirve de aproximación razonable.
+    const el = anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode;
+    rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
   }
-  if(!found) return; // cursor no está sobre un nodo de texto (p.ej. justo tras un salto)
-  let page = 0;
-  for(let i = 0; i < total; i++){ if(consumed >= _tdViewPageStartChars[i]) page = i; }
-  if(page !== _tdViewCurPage) _tdScrollToViewPage(page, true);
+  if(!rect || (rect.top === 0 && rect.bottom === 0)) return;
+  const cursorY = rect.top + rect.height / 2;
+
+  const areaRect = areaEl.getBoundingClientRect();
+  const vv = window.visualViewport;
+  const safeTop = areaRect.top;
+  const safeBottom = vv ? (vv.height + vv.offsetTop) : window.innerHeight;
+  if(safeBottom <= safeTop) return;
+  const safeCenterY = (safeTop + safeBottom) / 2;
+
+  const delta = cursorY - safeCenterY;
+  if(Math.abs(delta) < 3) return; // ya centrada — evita micro-ajustes constantes
+  _tdSetScrollOffset(_tdCurrentOffset + delta, false);
 }
 
 window.addEventListener('resize', () => {

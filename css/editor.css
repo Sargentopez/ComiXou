@@ -2694,40 +2694,37 @@ body.editor-page #appView {
   transform: translateY(-9px);
 }
 
-/* Área de la hoja: fondo neutro, hoja de papel centrada con sombra tipo viñeta,
-   proporción A4 real (210×297) — independiente de la orientación/tamaño de la
-   hoja del cómic, que se recalcula aparte al pulsar "Aplicar al lienzo"
-   (_tdApplyToCanvas usa edPageW/edPageH, no esto).
-   La hoja tiene tamaño FIJO (una página A4) y recorta su contenido
-   (overflow:hidden) — NO es una tira que crece ni hace scroll interno. Para
-   "pasar de página" se traslada el contenido (#tdPageInner) con transform,
-   con una transición animada: el salto a la hoja siguiente tiene que notarse,
-   no ser un scroll continuo indistinguible (ver _tdScrollToViewPage). */
+/* Área de la hoja: VISOR de altura fija (calculada por JS en
+   _tdSyncViewportHeight/_tdRecomputeViewPagination a partir del hueco real
+   disponible — Visual Viewport menos cabecera/barras) que recorta lo que no
+   quepa (overflow:hidden). La propia .td-page es más alta que este visor
+   cuando el documento lo requiere y se TRASLADA dentro de él (transform,
+   con transición animada) — así puede desplazarse por debajo de la cabecera
+   y las barras cuando haga falta para mantener centrada la línea que se
+   está escribiendo (ver _tdCenterActiveLine), tanto al escribir como
+   arrastrando con el dedo (_tdSetScrollOffset). */
 #tdPageArea {
   flex: 1;
   min-height: 0;
   overflow: hidden;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
   padding: 14px 12px;
-  touch-action: none; /* el arrastre táctil (scroll continuo) lo controla el JS, ver _tdSetScrollOffset */
+  touch-action: none; /* el arrastre táctil (desplazamiento continuo) lo controla el JS */
 }
+/* Proporción A4 real (210×297) — independiente de la orientación/tamaño de
+   la hoja del cómic, que se recalcula aparte al pulsar "Aplicar al lienzo"
+   (_tdApplyToCanvas usa edPageW/edPageH, no esto). */
 .td-page {
   background: var(--paper);
   box-shadow: var(--box-shadow-lg);
   border: 1.5px solid var(--black);
-  width: min(100%, 794px); /* A4 a 96dpi, se encoge en pantallas más estrechas — igual que antes */
-  height: calc(min(100%, 794px) * 297 / 210); /* alto FIJO real (no crece) según ese ancho */
-  max-height: 100%; /* red de seguridad en ventanas muy bajas — no desborda el área */
-  overflow: hidden;
-  position: relative;
-  flex-shrink: 0;
-}
-#tdPageInner {
+  width: min(100%, 794px); /* A4 a 96dpi, se encoge en pantallas más estrechas */
+  min-height: calc(min(100%, 794px) * 297 / 210); /* una A4 entera como mínimo, aunque esté vacía */
   padding: 9%; /* márgenes de una A4 estándar */
   box-sizing: border-box;
-  width: 100%;
+  flex-shrink: 0;
   transition: transform .32s cubic-bezier(.4,0,.2,1);
   will-change: transform;
 }
