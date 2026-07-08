@@ -244,38 +244,40 @@ function _tdInitOnce(){
     _tdSetScrollOffset(_tdCurrentOffset + e.deltaY, false);
   }, {passive:false});
 
-  let _tdDragActive = false, _tdDragStartY = null, _tdDragStartOffset = 0, _tdDragMoved = false;
-  _tdArea?.addEventListener('pointerdown', e => {
-    // Solo táctil/lápiz: con ratón, arrastrar debe seguir seleccionando texto
-    // como en cualquier editor — el desplazamiento en PC es con la rueda.
-    if(e.pointerType === 'mouse') return;
-    _tdDragActive = true; _tdDragMoved = false;
-    _tdDragStartY = e.clientY; _tdDragStartOffset = _tdCurrentOffset;
-    _tdArea.setPointerCapture?.(e.pointerId);
-  });
-  _tdArea?.addEventListener('pointermove', e => {
-    if(!_tdDragActive || _tdDragStartY === null) return;
-    const dy = e.clientY - _tdDragStartY;
-    if(Math.abs(dy) > 4 && !_tdDragMoved){
-      _tdDragMoved = true;
-      // Arrastre real detectado: si el propio gesto ya había empezado a
-      // seleccionar texto (habitual al arrastrar sobre un contenteditable),
-      // se cancela esa selección y se desactiva mientras dure el arrastre —
-      // si no, arrastrar para desplazar la hoja "engancharía" texto en vez
-      // de moverla.
+  // Arrastre táctil: eventos touch en fase de CAPTURA (no de burbuja) — así
+  // llegan ANTES que cualquier manejo interno de Trix sobre el propio touch,
+  // que podría detener la propagación (stopPropagation) y dejar el gesto sin
+  // llegar aquí si se escuchara solo en fase de burbuja normal. Se corta
+  // cualquier selección de texto nativa desde el primer movimiento (no se
+  // espera a un umbral grande), que es lo que competía con este gesto.
+  let _tdTouchStartY = null, _tdTouchStartOffset = 0, _tdTouchMoved = false;
+  _tdArea?.addEventListener('touchstart', e => {
+    if(e.touches.length !== 1) return; // 2 dedos: no interferir (zoom/pinch)
+    _tdTouchStartY = e.touches[0].clientY;
+    _tdTouchStartOffset = _tdCurrentOffset;
+    _tdTouchMoved = false;
+  }, {capture:true, passive:true});
+  _tdArea?.addEventListener('touchmove', e => {
+    if(_tdTouchStartY === null || e.touches.length !== 1) return;
+    const dy = e.touches[0].clientY - _tdTouchStartY;
+    if(!_tdTouchMoved && Math.abs(dy) > 3){
+      _tdTouchMoved = true;
       window.getSelection()?.removeAllRanges();
       const editorEl2 = document.getElementById('tdEditor');
       if(editorEl2) editorEl2.style.userSelect = 'none';
     }
-    if(_tdDragMoved){ e.preventDefault(); _tdSetScrollOffset(_tdDragStartOffset - dy, false); }
-  });
-  const _tdEndDrag = () => {
-    _tdDragActive = false; _tdDragStartY = null;
+    if(_tdTouchMoved){
+      e.preventDefault();
+      _tdSetScrollOffset(_tdTouchStartOffset - dy, false);
+    }
+  }, {capture:true, passive:false});
+  const _tdTouchEnd = () => {
+    _tdTouchStartY = null; _tdTouchMoved = false;
     const editorEl2 = document.getElementById('tdEditor');
     if(editorEl2) editorEl2.style.userSelect = '';
   };
-  _tdArea?.addEventListener('pointerup', _tdEndDrag);
-  _tdArea?.addEventListener('pointercancel', _tdEndDrag);
+  _tdArea?.addEventListener('touchend', _tdTouchEnd, {capture:true});
+  _tdArea?.addEventListener('touchcancel', _tdTouchEnd, {capture:true});
   document.getElementById('tdPagePrev')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage - 1));
   document.getElementById('tdPageNext')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage + 1));
   _tdWireFontControls();
@@ -312,13 +314,28 @@ function _tdInitOnce(){
 let _tdViewportSyncTimer = null;
 function _tdSyncViewportHeight(){
   const shell = document.getElementById('tdShell');
-  if(!shell || shell.style.display === 'none' || shell.style.display === '') return;
+  const pageArea = document.getElementById('tdPageArea');
+  if(!shell || shell.style.display === 'none' || shell.style.display === '' || !pageArea) return;
   const vv = window.visualViewport;
   if(!vv) return;
-  shell.style.height = vv.height + 'px';
-  shell.style.top = (vv.offsetTop || 0) + 'px';
-  // La página cambia de tamaño con el shell — recalcular la paginación en
-  // vivo (con retardo corto: el teclado tarda un poco en terminar de animarse).
+  // Se fija el alto de #tdPageArea DIRECTAMENTE (no el del shell completo):
+  // depender de que #tdShell se encoja y eso se propague correctamente por
+  // el flexbox/porcentajes hasta la hoja resultó poco fiable — fijar aquí
+  // mismo el elemento que realmente tiene que encogerse es más directo y no
+  // depende de que ese encadenado de tamaños funcione en todos los navegadores.
+  const topbar = document.getElementById('tdTopbar');
+  const menuBar = document.getElementById('tdMenuBar');
+  const menuBar2 = document.getElementById('tdMenuBar2');
+  const chromeH = (topbar?.getBoundingClientRect().height || 0)
+                + (menuBar?.getBoundingClientRect().height || 0)
+                + (menuBar2?.getBoundingClientRect().height || 0);
+  // Alto real visible (Visual Viewport — lo que NO tapa el teclado) menos la
+  // cabecera y las barras de herramientas: lo que queda para la hoja.
+  const availH = Math.max(120, Math.round(vv.height - chromeH));
+  pageArea.style.flex = 'none';
+  pageArea.style.height = availH + 'px';
+  // La página cambia de tamaño — recalcular la paginación en vivo (con
+  // retardo corto: el teclado tarda un poco en terminar de animarse).
   clearTimeout(_tdViewportSyncTimer);
   _tdViewportSyncTimer = setTimeout(_tdRecomputeViewPagination, 120);
 }
@@ -590,7 +607,10 @@ function _tdFollowCursorPage(){
 
 window.addEventListener('resize', () => {
   cancelAnimationFrame(window._tdRecomputeRaf);
-  window._tdRecomputeRaf = requestAnimationFrame(_tdRecomputeViewPagination);
+  window._tdRecomputeRaf = requestAnimationFrame(() => {
+    if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
+    else _tdRecomputeViewPagination();
+  });
 });
 
 // ── Franja blanca tras el título (mismo criterio que edTitlePill/gcpTitlePill) ──
