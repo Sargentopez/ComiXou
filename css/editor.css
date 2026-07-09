@@ -2714,14 +2714,28 @@ body.editor-page #appView {
   justify-content: center;
   align-items: flex-start;
   padding: 14px 12px;
+  /* Scroll SEGUIMOS teniéndolo (rueda, arrastre táctil, selección — todo lo
+     de arriba sigue dependiendo de que esto sea de verdad scrollable) pero
+     SIN pintar la barra: su propia franja/thumb, acotados y cada vez más
+     pequeños según crece el texto, se veían como un "marco" fijo al fondo —
+     lo contrario de la hoja continua que se busca. Ya hay de sobra otras
+     formas de desplazarse: rueda del ratón (PC), arrastre táctil (Android),
+     y las flechas ◀▶ de cambio de página. */
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* versiones antiguas de Edge/IE */
 }
+#tdPageArea::-webkit-scrollbar { display: none; } /* Chrome/Android/Safari */
 /* Área de escritura: ya NO simula un folio A4 físico (sin fondo de papel,
    sombra, borde ni proporción/alto mínimo forzados) — solo un ancho cómodo
-   de lectura y un relleno fijo. Los saltos de página (líneas discontinuas,
-   ver #tdPageBreaks más abajo) ya comunican por sí solos dónde corta cada
-   hoja real; no hace falta simular su aspecto para eso. */
+   de lectura (especialmente útil en PC/pantallas anchas, donde una línea de
+   texto a todo lo ancho sería incómoda de leer) y un relleno fijo. SIN
+   ningún límite vertical: el alto es puro contenido, crece con el texto sin
+   mínimo ni máximo artificial (no hay aspect-ratio ni min-height fijos).
+   Los saltos de página (líneas discontinuas, ver #tdPageBreaks más abajo)
+   ya comunican por sí solos dónde corta cada hoja real; no hace falta
+   simular su aspecto para eso. */
 .td-page {
-  width: min(100%, 760px); /* ancho cómodo de lectura, no ligado a ninguna proporción de página */
+  width: min(100%, 760px); /* ancho cómodo de lectura — se encoge en pantallas estrechas (móvil), no en PC */
   padding: 28px 24px;
   box-sizing: border-box;
   flex-shrink: 0;
@@ -2737,12 +2751,19 @@ body.editor-page #appView {
   z-index: 5;
   pointer-events: none;
 }
-/* Contenedor de un salto de página — la línea visible atraviesa toda la
-   hoja (no solo el ancho del texto); la zona de arrastre es más alta que la
-   línea en sí, para poder cogerla cómodamente con el dedo. */
+/* Contenedor de un salto de página — la línea visible atraviesa TODA LA
+   PANTALLA (no solo el ancho de .td-page, que en PC/pantallas anchas queda
+   más estrecho que el hueco de escritura completo) — truco "full-bleed"
+   estándar: al ser .td-page siempre centrada (ver #tdPageArea), left:50%
+   cae exactamente en el centro de la pantalla también, y con margin-left
+   negativo de medio viewport más width:100vw, escapa por completo del
+   ancho de .td-page. La zona de arrastre es más alta que la línea en sí,
+   para poder cogerla cómodamente con el dedo. */
 .td-pagebreak-line {
   position: absolute;
-  left: 0; right: 0;
+  left: 50%;
+  width: 100vw;
+  margin-left: -50vw;
   height: 0;
 }
 .td-pagebreak-visual {

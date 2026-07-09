@@ -116,6 +116,7 @@ function edOpenTextDoc(editLayer){
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
     _tdAutoFollow = true;
+    _tdPageBreakDragging = false;
     const areaElInit = document.getElementById('tdPageArea');
     if(areaElInit) areaElInit.scrollTop = 0;
     _tdRecomputeViewPagination();
@@ -528,6 +529,20 @@ let _tdFollowTimer = null;
 // este freno, recentraba de fondo aunque el usuario no estuviera tecleando).
 let _tdAutoFollow = true;
 
+// Mientras se arrastra un salto de página, ninguna llamada EXTERNA a
+// _tdRecomputeViewPagination() debe reconstruir las líneas (ver esa
+// función) — el mismo sondeo periódico de arriba (_tdKbPollTimer, cada
+// 350ms mientras el editor tiene el foco, que sigue activo aunque ahora
+// mismo se esté arrastrando un salto con el ratón/dedo, no escribiendo)
+// destruía el elemento que se arrastra a medio gesto y lo sustituía por
+// uno nuevo en su posición ORIGINAL — como el arrastre en sí escucha en
+// document (no en el propio elemento), seguía "funcionando" de forma
+// invisible sobre el elemento ya desconectado del DOM, y al soltar volvía
+// a reconstruir, esta vez sí en el punto final: de ahí el salto en tres
+// tiempos (sigue al ratón → vuelve a su sitio original → salta al final).
+// Ver _tdWirePageBreakDrag.
+let _tdPageBreakDragging = false;
+
 // Tamaños/fuentes admitidos al pegar contenido externo — mismo rango que los
 // controles del editor (ver tdFontSizeSel/tdFontFamilySel en views.js), para
 // que el texto pegado quepa en la página igual que el escrito a mano.
@@ -696,6 +711,7 @@ function _tdEditingFlowFrames(flowId){
 
 let _tdRecomputeTimer = null;
 function _tdRecomputeViewPagination(){
+  if(_tdPageBreakDragging) return; // no reconstruir las líneas a medio arrastre — ver _tdPageBreakDragging
   const hidden = document.getElementById('tdHiddenInput');
   const editorEl = document.getElementById('tdEditor');
   const inner = document.getElementById('tdPage');
@@ -842,33 +858,69 @@ function _tdWirePageBreakDrag(handle, lineEl){
     const oldChars = parseFloat(lineEl.dataset.chars);
     const others = _tdManualBreakChars.filter(c => c !== oldChars);
     let newChars = _tdLineStartCharsCache[nearestIdx];
+    let correctedIdx = -1;
 
-    // Comprobar contra el algoritmo REAL si este punto se respeta de
-    // verdad, o si un desbordamiento natural de esa página lo dejaría sin
-    // efecto (silenciosamente, más arriba de donde se soltó).
-    let tentative = others.slice();
-    if(newChars > 0 && !tentative.includes(newChars)) tentative.push(newChars);
-    tentative.sort((a, b) => a - b);
-    let result = _tdLayoutPagesForBreaks(tentative);
-    if(newChars > 0 && !result.pageStartChars.includes(newChars)){
-      // No cabe: esa página ya no tiene sitio hasta donde se soltó — se usa
-      // el límite real más bajo que SÍ admite (el siguiente punto de corte
-      // que el algoritmo aplicaría de todas formas para esa página).
+    if(newChars > 0){
+      // Comprobar contra el algoritmo REAL cuál es el primer corte que de
+      // verdad ocurre justo después de la página anterior (prevBreak) — si
+      // no coincide EXACTAMENTE con donde se soltó, ese punto no es válido
+      // para esta página, aunque un desbordamiento natural interpuesto
+      // antes haga que "newChars" aparezca honrado más adelante, para una
+      // página distinta a la que se pretendía extender (eso creaba un
+      // salto de más, el bug reportado). Se usa el primer corte real en su
+      // lugar, sea cual sea.
       const prevBreak = others.filter(c => c < newChars).reduce((a, b) => Math.max(a, b), 0);
-      const ceilChars = result.pageStartChars.find(c => c > prevBreak);
-      newChars = (ceilChars !== undefined && ceilChars > 0) ? ceilChars : 0;
-      edToast('Esa página ya no tiene sitio — colocado en el límite permitido');
-      tentative = others.slice();
+      const probe = _tdLayoutPagesForBreaks([...others, newChars].sort((a, b) => a - b));
+      const nextBreak = probe.pageStartChars.find(c => c > prevBreak);
+      if(nextBreak !== newChars){
+        newChars = (nextBreak !== undefined && nextBreak > 0) ? nextBreak : 0;
+        edToast('Esa página ya no tiene sitio — colocado en el límite permitido');
+        // Línea real correspondiente al punto YA corregido, para animar
+        // hacia ahí (no necesariamente la más cercana a donde se soltó).
+        let d2 = Infinity;
+        for(let i = 0; i < _tdLineStartCharsCache.length; i++){
+          const diff = Math.abs(_tdLineStartCharsCache[i] - newChars);
+          if(diff < d2){ d2 = diff; correctedIdx = i; }
+        }
+      }
+    }
+
+    const finish = () => {
+      const tentative = others.slice();
       if(newChars > 0 && !tentative.includes(newChars)) tentative.push(newChars);
       tentative.sort((a, b) => a - b);
+      _tdManualBreakChars = tentative;
+      _tdPageBreakDragging = false; // ya se puede reconstruir de nuevo — esta es la propia reconstrucción final
+      _tdRecomputeViewPagination();
+    };
+
+    if(correctedIdx >= 0 && _tdLineOffsetsCache[correctedIdx] !== undefined){
+      // Solo aquí se anima: el arrastre en sí (onMove) sigue al dedo/ratón
+      // al instante, sin transición — pero cuando el punto soltado NO era
+      // válido y hay que rectificar, la línea se desliza de vuelta a su
+      // sitio real en vez de saltar de golpe (lo que haría el recálculo,
+      // que reconstruye las líneas desde cero).
+      lineEl.style.transition = 'top .22s cubic-bezier(.4,0,.2,1)';
+      lineEl.style.top = _tdLineOffsetsCache[correctedIdx] + 'px';
+      let done = false;
+      const onEnd = () => {
+        if(done) return;
+        done = true;
+        lineEl.removeEventListener('transitionend', onEnd);
+        finish();
+      };
+      lineEl.addEventListener('transitionend', onEnd);
+      setTimeout(onEnd, 260); // red de seguridad si transitionend no llega
+    } else {
+      finish();
     }
-    _tdManualBreakChars = tentative;
-    _tdRecomputeViewPagination();
   };
   handle.addEventListener('pointerdown', e => {
     e.preventDefault();
     dragging = true;
+    _tdPageBreakDragging = true; // bloquea cualquier reconstrucción externa hasta soltar (ver _tdPageBreakDragging)
     lineEl.classList.add('dragging');
+    lineEl.style.transition = 'none'; // arrastre al instante, sin animación, siguiendo al dedo/ratón
     handle.setPointerCapture?.(e.pointerId);
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
