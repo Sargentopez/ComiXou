@@ -2696,22 +2696,24 @@ body.editor-page #appView {
 
 /* Área de la hoja: VISOR de altura fija (calculada por JS en
    _tdSyncViewportHeight/_tdRecomputeViewPagination a partir del hueco real
-   disponible — Visual Viewport menos cabecera/barras) que recorta lo que no
-   quepa (overflow:hidden). La propia .td-page es más alta que este visor
-   cuando el documento lo requiere y se TRASLADA dentro de él (transform,
-   con transición animada) — así puede desplazarse por debajo de la cabecera
-   y las barras cuando haga falta para mantener centrada la línea que se
-   está escribiendo (ver _tdCenterActiveLine), tanto al escribir como
-   arrastrando con el dedo (_tdSetScrollOffset). */
+   disponible — Visual Viewport menos cabecera/barras) con SCROLL NATIVO
+   (antes: overflow:hidden + touch-action:none + transform manejado a mano
+   por JS — eso es lo que rompía la selección nativa de texto: touch-action
+   se hereda a todos los descendientes, así que Trix, por debajo, nunca
+   llegaba a recibir sus propios gestos táctiles de selección). Con scroll
+   nativo, arrastrar para desplazarse Y seleccionar texto (mantener pulsado,
+   arrastrar los "handles") conviven sin que haga falta ninguna lógica
+   propia para distinguirlos — es el navegador quien ya sabe hacerlo, en
+   cualquier página con texto largo. Ver _tdSetScrollOffset. */
 #tdPageArea {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   justify-content: center;
   align-items: flex-start;
   padding: 14px 12px;
-  touch-action: none; /* el arrastre táctil (desplazamiento continuo) lo controla el JS */
 }
 /* Proporción A4 (210×297) — solo el aspecto visual de la hoja vacía; el
    tamaño real de la hoja de la obra (edPageW/edPageH) se usa aparte para
@@ -2728,8 +2730,6 @@ body.editor-page #appView {
   box-sizing: border-box;
   flex-shrink: 0;
   position: relative;
-  transition: transform .32s cubic-bezier(.4,0,.2,1);
-  will-change: transform;
 }
 /* Líneas discontinuas de cambio de página — puramente visuales (no forman
    parte del documento de Trix), superpuestas dentro de la propia hoja para

@@ -115,8 +115,8 @@ function edOpenTextDoc(editLayer){
   requestAnimationFrame(() => requestAnimationFrame(() => {
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
-    const inner = document.getElementById('tdPage');
-    if(inner) inner.style.transform = 'none';
+    const areaElInit = document.getElementById('tdPageArea');
+    if(areaElInit) areaElInit.scrollTop = 0;
     _tdRecomputeViewPagination();
     // Reeditar: centrar la vista en el texto que había en la hoja concreta
     // desde la que se abrió el panel, no siempre al principio del documento.
@@ -168,30 +168,47 @@ function _tdFindFlowLayer(flowId){
 function edCloseTextDoc(fromPopstate){
   const shell = document.getElementById('tdShell');
   const wasOpen = !!shell && shell.style.display !== 'none' && shell.style.display !== '';
-  // virtualkeyboardpolicy="manual" (ver views.js/_tdInitOnce) también quita
-  // el cierre automático al cambiar el foco — es la otra mitad de lo mismo
-  // que hace falta para que no se abra solo; por eso se quedaba abierto
-  // incluso al volver al lienzo. hide() exige que el elemento con el foco
-  // en ESE momento sea el de política manual, así que se reenfoca el editor
-  // justo antes por si el foco ya se había movido (p.ej. al propio botón de
-  // cerrar o "Aplicar al lienzo").
-  if(wasOpen && 'virtualKeyboard' in navigator){
+  const finishClose = () => {
+    if(shell) shell.style.display = 'none';
+    _tdEditingFlowId = null;
+    const applyBtn = document.getElementById('tdApplyBtn');
+    if(applyBtn) applyBtn.textContent = 'Aplicar al lienzo';
+    // Si se cierra por la X o por "Aplicar" (no por el botón atrás), hay que
+    // consumir la entrada de historial añadida al abrir — si no, el
+    // siguiente "atrás" del usuario se quedaría "vacío" (solo cerraría un
+    // shell ya cerrado).
+    if(wasOpen && !fromPopstate && history.state && history.state.tdShellOpen){
+      history.back();
+    }
+  };
+  // El intento anterior (hide() + reenfocar) no cerraba el teclado de
+  // verdad — hide() exige que el elemento CON EL FOCO en ese instante
+  // preciso tenga la política manual, algo frágil de garantizar con un
+  // elemento personalizado como <trix-editor>. En vez de depender de eso,
+  // se revierte la política a la de siempre ("auto") y se hace un blur()
+  // normal — el mecanismo de cierre de teclado más antiguo y probado que
+  // existe en la web, el mismo que usa cualquier campo de texto corriente.
+  // Un frame de por medio (requestAnimationFrame) entre fijar la política y
+  // el blur real, para que el navegador registre el cambio como una
+  // pérdida de foco genuina y no como un no-op sin efecto. Se restaura
+  // "manual" enseguida para que la próxima vez que se toque el editor no
+  // se abra solo (ver _tdTouchEnd).
+  const editorEl = wasOpen ? document.getElementById('tdEditor') : null;
+  if(editorEl){
     try {
-      const editorEl = document.getElementById('tdEditor');
-      if(editorEl) editorEl.focus({preventScroll:true});
-      navigator.virtualKeyboard.hide();
+      editorEl.virtualKeyboardPolicy = 'auto';
+      if(document.activeElement !== editorEl) editorEl.focus({preventScroll:true});
     } catch(_e){}
+    requestAnimationFrame(() => {
+      try {
+        editorEl.blur();
+        editorEl.virtualKeyboardPolicy = 'manual';
+      } catch(_e){}
+      finishClose();
+    });
+    return;
   }
-  if(shell) shell.style.display = 'none';
-  _tdEditingFlowId = null;
-  const applyBtn = document.getElementById('tdApplyBtn');
-  if(applyBtn) applyBtn.textContent = 'Aplicar al lienzo';
-  // Si se cierra por la X o por "Aplicar" (no por el botón atrás), hay que
-  // consumir la entrada de historial añadida al abrir — si no, el siguiente
-  // "atrás" del usuario se quedaría "vacío" (solo cerraría un shell ya cerrado).
-  if(wasOpen && !fromPopstate && history.state && history.state.tdShellOpen){
-    history.back();
-  }
+  finishClose();
 }
 // Registra (una sola vez) el interceptor del botón/gesto atrás para este shell.
 // Ver window._edBackInterceptors en router.js.
@@ -272,107 +289,59 @@ function _tdInitOnce(){
       _tdFollowTimer = setTimeout(_tdCenterActiveLine, 100);
     });
   }
-  // Desplazamiento continuo: rueda del ratón (PC) y arrastre táctil (móvil).
-  // #tdPageArea es el visor de altura fija (ajustada al hueco real
-  // disponible, ver _tdSyncViewportHeight) que recorta lo que no quepa
-  // (overflow:hidden); .td-page crece con el texto y se traslada (transform)
-  // dentro de ese visor — puede quedar parcialmente por debajo de la
-  // cabecera/barras cuando haga falta (ver _tdCenterActiveLine). Los botones
-  // de flecha siguen saltando a un límite de página exacto y animado
-  // (_tdScrollToViewPage); mientras se escribe, en cambio, la línea activa
-  // se centra al milímetro, no a saltos.
+  // Desplazamiento continuo: scroll nativo de #tdPageArea (rueda del ratón
+  // en PC, arrastre táctil en móvil, ambos gestionados por el navegador sin
+  // JS propio — ver el bloque de abajo). Los botones de flecha siguen
+  // saltando a un límite de página exacto y animado (_tdScrollToViewPage);
+  // mientras se escribe, en cambio, la línea activa se centra al milímetro,
+  // no a saltos (ver _tdCenterActiveLine).
   const _tdArea = document.getElementById('tdPageArea');
-  _tdArea?.addEventListener('wheel', e => {
-    e.preventDefault();
-    _tdSetScrollOffset(_tdCurrentOffset + e.deltaY, false);
-  }, {passive:false});
 
-  // Arrastre táctil: eventos touch en fase de CAPTURA (no de burbuja) — así
-  // llegan ANTES que cualquier manejo interno de Trix sobre el propio touch,
-  // que podría detener la propagación (stopPropagation) y dejar el gesto sin
-  // llegar aquí si se escuchara solo en fase de burbuja normal.
-  //
-  // Un toque sobre el texto puede acabar siendo tres cosas distintas, y no
-  // se sabe cuál hasta que el dedo se mueve (o no) lo suficiente:
-  //   - arrastrar el folio (gesto vertical: el texto se desplaza en pantalla)
-  //   - seleccionar texto (gesto horizontal, en el sentido de la línea)
-  //   - un simple toque para colocar el cursor y escribir (apenas se mueve)
-  // Así distinguen esto los editores de texto nativos (Android/iOS): igual
-  // que aquí, por la dirección dominante del gesto, no por dónde empieza.
-  // Mientras no se supere un umbral pequeño (temblor natural del dedo), no
-  // se decide nada. Al superarlo, se decide UNA vez y se mantiene el resto
-  // del gesto (no se re-evalúa a medio camino):
-  //   - más vertical que horizontal → arrastrar folio (como hasta ahora:
-  //     preventDefault, se cancela cualquier selección que hubiera empezado)
-  //   - más horizontal (o igual) → selección de texto: NO se toca nada, se
-  //     deja el sistema nativo de selección de Android hacer lo suyo
-  //     (colocar handles, extender selección…) sin interferir.
-  let _tdTouchStartY = null, _tdTouchStartX = null, _tdTouchStartOffset = 0, _tdTouchGesture = null;
+  // Scroll NATIVO (#tdPageArea con overflow-y:auto, ver css/editor.css): el
+  // navegador ya gestiona por su cuenta tanto arrastrar para desplazarse
+  // como seleccionar texto (mantener pulsado, arrastrar los "handles") sin
+  // que haga falta ninguna lógica propia para distinguirlos — ni rueda del
+  // ratón (el scroll nativo ya responde a ella solo). Antes, #tdPageArea
+  // tenía touch-action:none + un transform manejado a mano por JS, y eso
+  // era justo lo que rompía la selección nativa: touch-action se hereda a
+  // los descendientes, así que Trix nunca llegaba a recibir sus propios
+  // gestos de selección. Lo ÚNICO que sigue haciendo falta decidir a mano
+  // es si hay que ABRIR EL TECLADO: con <trix-editor virtualkeyboardpolicy=
+  // "manual"> (ver views.js e inicio de esta función) el navegador ya no lo
+  // abre solo al enfocar — se abre aquí, a propósito, solo si el toque NO
+  // ha desplazado la hoja (comparando el scroll antes/después) NI ha
+  // dejado una selección de texto (isCollapsed) — un toque para escribir,
+  // y nada más.
+  let _tdTouchStartScrollTop = 0;
   _tdArea?.addEventListener('touchstart', e => {
     if(e.touches.length !== 1) return; // 2 dedos: no interferir (zoom/pinch)
-    _tdTouchStartY = e.touches[0].clientY;
-    _tdTouchStartX = e.touches[0].clientX;
-    _tdTouchStartOffset = _tdCurrentOffset;
-    // Si ya hay texto seleccionado (los "handles" nativos visibles), este
-    // toque es casi seguro para arrastrar uno de esos handles y ajustar la
-    // selección — no para arrastrar el folio. Se marca de entrada como
-    // 'select' pase lo que pase después: extender una selección a otra
-    // línea o párrafo es, sobre todo, movimiento VERTICAL, que si no se
-    // confundiría con arrastrar el folio.
-    const selNow = window.getSelection();
-    _tdTouchGesture = (selNow && !selNow.isCollapsed && editorEl && editorEl.contains(selNow.anchorNode)) ? 'select' : null;
-  }, {capture:true, passive:true});
-  _tdArea?.addEventListener('touchmove', e => {
-    if(_tdTouchStartY === null || e.touches.length !== 1) return;
-    // Mismo chequeo, ahora en cada movimiento: cubre el toque mantenido que
-    // activa la selección nativa de una palabra A MEDIO GESTO (sin soltar
-    // el dedo) — en el instante en que aparece, el resto del gesto pasa a
-    // tratarse como selección, aunque todavía no se hubiera decidido nada.
-    if(_tdTouchGesture === null){
-      const selNow = window.getSelection();
-      if(selNow && !selNow.isCollapsed && editorEl && editorEl.contains(selNow.anchorNode)){
-        _tdTouchGesture = 'select';
-      }
-    }
-    const dy = e.touches[0].clientY - _tdTouchStartY;
-    const dx = e.touches[0].clientX - _tdTouchStartX;
-    if(_tdTouchGesture === null && Math.max(Math.abs(dx), Math.abs(dy)) > 6){
-      _tdTouchGesture = Math.abs(dy) > Math.abs(dx) ? 'drag' : 'select';
-      if(_tdTouchGesture === 'drag'){
-        window.getSelection()?.removeAllRanges();
-        const editorEl2 = document.getElementById('tdEditor');
-        if(editorEl2) editorEl2.style.userSelect = 'none';
-      }
-    }
-    if(_tdTouchGesture === 'drag'){
-      e.preventDefault();
-      _tdSetScrollOffset(_tdTouchStartOffset - dy, false);
-    }
-    // 'select', o todavía sin decidir por debajo del umbral: no se llama a
-    // preventDefault ni se toca la selección — el navegador hace lo suyo.
-  }, {capture:true, passive:false});
+    _tdTouchStartScrollTop = _tdArea.scrollTop;
+  }, {passive:true});
   const _tdTouchEnd = e => {
-    const gesture = _tdTouchGesture;
-    _tdTouchStartY = null; _tdTouchStartX = null; _tdTouchGesture = null;
-    const editorEl2 = document.getElementById('tdEditor');
-    if(editorEl2) editorEl2.style.userSelect = '';
-    // <trix-editor virtualkeyboardpolicy="manual"> (ver views.js e inicio de
-    // esta función) le pide al navegador que NO abra el teclado solo por
-    // enfocar — se abre aquí, a propósito, solo cuando NINGUNA de las otras
-    // dos opciones ha ocurrido (ni arrastre ni selección) y el resultado es
-    // un cursor colocado sin selección: un toque para escribir, y nada más.
+    if(e.type === 'touchcancel' || !('virtualKeyboard' in navigator)) return;
+    if(Math.abs(_tdArea.scrollTop - _tdTouchStartScrollTop) > 2) return; // se desplazó: no es un toque para escribir
     // rAF: da tiempo a que el navegador termine de resolver dónde cae el
-    // cursor tras el toque antes de comprobarlo.
-    if(gesture !== null || e.type === 'touchcancel' || !('virtualKeyboard' in navigator)) return;
+    // cursor (o la selección) tras el toque antes de comprobarlo.
     requestAnimationFrame(() => {
       const sel = window.getSelection();
-      if(sel && sel.rangeCount > 0 && sel.isCollapsed && editorEl2 && editorEl2.contains(sel.anchorNode)){
+      if(sel && sel.rangeCount > 0 && sel.isCollapsed && editorEl && editorEl.contains(sel.anchorNode)){
         navigator.virtualKeyboard.show();
       }
     });
   };
-  _tdArea?.addEventListener('touchend', _tdTouchEnd, {capture:true});
-  _tdArea?.addEventListener('touchcancel', _tdTouchEnd, {capture:true});
+  _tdArea?.addEventListener('touchend', _tdTouchEnd, {passive:true});
+  _tdArea?.addEventListener('touchcancel', _tdTouchEnd, {passive:true});
+
+  // _tdCurrentOffset (y la página mostrada en la cabecera) al día cuando el
+  // usuario desplaza directamente con el dedo o la rueda: eso ya no pasa
+  // por _tdSetScrollOffset (que ahora solo se llama para los
+  // desplazamientos programados — seguir el cursor, saltos de página).
+  let _tdScrollSyncRaf = null;
+  _tdArea?.addEventListener('scroll', () => {
+    cancelAnimationFrame(_tdScrollSyncRaf);
+    _tdScrollSyncRaf = requestAnimationFrame(() => _tdSyncPageNavFromOffset(_tdArea.scrollTop));
+  }, {passive:true});
+
   document.getElementById('tdPagePrev')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage - 1));
   document.getElementById('tdPageNext')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage + 1));
   _tdWireFontControls();
@@ -625,7 +594,7 @@ function _tdWireFontControls(){
 // real con la API Range (funciona con cualquier anidamiento, sin tener que
 // hacer coincidir mi árbol de bloques con el árbol real de Trix nodo a nodo).
 let _tdViewPageStartChars = [0];
-let _tdViewPageOffsets = [0]; // px a trasladar (translateY) para ver cada página
+let _tdViewPageOffsets = [0]; // px de scrollTop para ver cada página
 let _tdViewCurPage = 0;
 // Saltos de página fijados a mano arrastrando la línea discontinua (offset
 // de carácter, siempre coincidente con el final de una línea real — ver
@@ -741,11 +710,10 @@ function _tdRecomputeViewPagination(){
 
   // Medir en el DOM real (con el tamaño/margen de escritura de siempre, sin
   // tocarlos) dónde cae cada uno de esos saltos previstos, y también CADA
-  // línea (para poder ajustar el arrastre a la más cercana). Hay que medir
-  // con .td-page en su posición NATURAL (sin trasladar) — si no, la
-  // traslación ya aplicada falsearía la medida.
-  inner.style.transition = 'none';
-  inner.style.transform = 'none';
+  // línea (para poder ajustar el arrastre a la más cercana). La resta
+  // rect.top - innerRect.top ya es independiente de cuánto se haya
+  // desplazado #tdPageArea (scroll nativo): ambos puntos se mueven juntos
+  // al desplazarse, así que su diferencia se mantiene constante.
   const innerRect = inner.getBoundingClientRect();
   const charToY = charOffset => {
     if(charOffset <= 0) return 0;
@@ -781,11 +749,11 @@ function _tdRecomputeViewPagination(){
   }
   // Reaplicar (sin animar) la posición de desplazamiento que ya tenía — NO se
   // fuerza el salto al inicio exacto de la página: el usuario puede haberse
-  // desplazado libremente con la rueda/el dedo (ver _tdSetScrollOffset), y
+  // desplazado libremente con la rueda/el dedo (scroll nativo), y
   // recalcular mientras escribe no debe deshacer eso. _tdCenterActiveLine,
   // llamado justo después de esta función, decide si hay que seguir al
   // cursor (mantenerlo visible si se sale del hueco visible).
-  _tdSetScrollOffset(_tdCurrentOffset, false);
+  _tdSetScrollOffset(areaEl.scrollTop, false);
 }
 let _tdLineOffsetsCache = [];
 
@@ -849,39 +817,43 @@ function _tdUpdateViewPageNav(){
 }
 
 // Posición de desplazamiento actual, en px — no atada a una página exacta:
-// la rueda del ratón y el arrastre táctil la mueven de forma continua (ver
-// _tdSetScrollOffset); los botones de flecha y el seguimiento automático del
-// cursor SÍ saltan a un límite de página exacto (_tdScrollToViewPage).
+// la rueda del ratón y el arrastre táctil la mueven de forma continua
+// (scroll nativo de #tdPageArea, reflejado aquí vía _tdSyncPageNavFromOffset);
+// los botones de flecha y el seguimiento automático del cursor SÍ saltan a
+// un límite de página exacto (_tdScrollToViewPage).
 let _tdCurrentOffset = 0;
 
-// Desplaza .td-page a una posición cualquiera en px (no necesariamente el
-// principio de una página) — usada por la rueda del ratón y el arrastre
-// táctil para restaurar un desplazamiento continuo y natural, sin perder el
-// recorte de página fija (.td-page sigue con overflow:hidden; lo que cambia
-// es solo hasta dónde se traslada .td-page). animate=false (rueda/
-// arrastre, tiene que notarse al instante) frente a true (saltos de página,
-// con la transición animada ya definida en CSS).
+// Desplaza #tdPageArea a una posición cualquiera en px (no necesariamente el
+// principio de una página) — usada por el seguimiento automático del cursor
+// y los saltos de página con flecha para restaurar un desplazamiento
+// continuo y natural. Scroll NATIVO (antes: transform manual + recorte con
+// overflow:hidden) — animate=false (seguir el cursor mientras se escribe,
+// tiene que notarse al instante) frente a true (saltos de página, con
+// animación).
 function _tdSetScrollOffset(px, animate){
-  const inner = document.getElementById('tdPage');
   const areaEl = document.getElementById('tdPageArea');
-  if(!inner || !areaEl) return;
-  const maxScroll = Math.max(0, (inner.scrollHeight || 0) - (areaEl.clientHeight || 0));
+  if(!areaEl) return;
+  const maxScroll = Math.max(0, areaEl.scrollHeight - areaEl.clientHeight);
   const clamped = Math.max(0, Math.min(maxScroll, px));
-  inner.style.transition = animate ? '' : 'none';
-  inner.style.transform = 'translateY(-' + clamped + 'px)';
-  _tdCurrentOffset = clamped;
-  // Reflejar en la cabecera la página más cercana a donde se ha desplazado,
-  // sin forzar un salto — es solo para que el número siga lo que se ve.
+  areaEl.scrollTo({top: clamped, behavior: animate ? 'smooth' : 'instant'});
+  _tdSyncPageNavFromOffset(clamped);
+}
+// Actualiza el estado (offset actual, página mostrada en la cabecera) a
+// partir de una posición de scroll — compartido entre _tdSetScrollOffset
+// (cambios programados) y el listener de scroll nativo (cambios por
+// arrastre directo del usuario, que ya no pasan por _tdSetScrollOffset).
+function _tdSyncPageNavFromOffset(offset){
+  _tdCurrentOffset = offset;
   let page = 0;
-  for(let i = 0; i < _tdViewPageOffsets.length; i++){ if(clamped + 2 >= _tdViewPageOffsets[i]) page = i; }
+  for(let i = 0; i < _tdViewPageOffsets.length; i++){ if(offset + 2 >= _tdViewPageOffsets[i]) page = i; }
   if(page !== _tdViewCurPage){ _tdViewCurPage = page; }
   _tdUpdateViewPageNav();
 }
 
-// Navega a la página n (0-based): traslada .td-page dentro del visor de
-// altura fija (#tdPageArea, con overflow:hidden) — un salto real y animado,
-// no un scroll continuo (para eso están la rueda del ratón y el arrastre
-// táctil, ver _tdSetScrollOffset). announce=true avisa
+// Navega a la página n (0-based): desplaza #tdPageArea (scroll nativo) a la
+// posición de esa página — un salto real y animado, no un scroll continuo
+// (para eso están la rueda del ratón y el arrastre táctil, gestionados por
+// el propio navegador). announce=true avisa
 // con un toast (se usa al seguir el cursor automáticamente mientras se
 // escribe, para que el cambio de hoja sea inequívoco; los botones de flecha
 // no lo necesitan, ya es obvio que el usuario lo pidió él mismo).
@@ -940,7 +912,7 @@ function _tdCenterActiveLine(){
 
   const delta = cursorY - targetY;
   if(Math.abs(delta) < 3) return; // ya donde debe estar — evita micro-ajustes constantes
-  _tdSetScrollOffset(_tdCurrentOffset + delta, false);
+  _tdSetScrollOffset(areaEl.scrollTop + delta, false);
 }
 
 window.addEventListener('resize', () => {
