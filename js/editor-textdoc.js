@@ -206,6 +206,16 @@ function _tdInitOnce(){
   document.getElementById('tdApplyBtn')?.addEventListener('click', _tdApplyToCanvas);
   const editorEl = document.getElementById('tdEditor');
 
+  // Refuerzo del atributo HTML virtualkeyboardpolicy="manual" (ver views.js)
+  // como propiedad JS también: <trix-editor> es un elemento personalizado que
+  // activa su propio contenteditable en su ciclo de vida interno, así que no
+  // hay garantía de que el navegador asocie el atributo estático al elemento
+  // ya "editable" en el momento exacto que le corresponde — fijarlo aquí, ya
+  // con Trix inicializado, es más fiable.
+  if(editorEl){
+    try { editorEl.virtualKeyboardPolicy = 'manual'; } catch(_e){}
+  }
+
   // Esta hoja es solo texto — las imágenes ya tienen su propio flujo en el editor,
   // así que no se permiten adjuntos arrastrados/pegados dentro de Trix.
   document.addEventListener('trix-file-accept', e => e.preventDefault());
@@ -266,46 +276,63 @@ function _tdInitOnce(){
   // Arrastre táctil: eventos touch en fase de CAPTURA (no de burbuja) — así
   // llegan ANTES que cualquier manejo interno de Trix sobre el propio touch,
   // que podría detener la propagación (stopPropagation) y dejar el gesto sin
-  // llegar aquí si se escuchara solo en fase de burbuja normal. Se corta
-  // cualquier selección de texto nativa desde el primer movimiento (no se
-  // espera a un umbral grande), que es lo que competía con este gesto.
-  let _tdTouchStartY = null, _tdTouchStartOffset = 0, _tdTouchMoved = false;
+  // llegar aquí si se escuchara solo en fase de burbuja normal.
+  //
+  // Un toque sobre el texto puede acabar siendo tres cosas distintas, y no
+  // se sabe cuál hasta que el dedo se mueve (o no) lo suficiente:
+  //   - arrastrar el folio (gesto vertical: el texto se desplaza en pantalla)
+  //   - seleccionar texto (gesto horizontal, en el sentido de la línea)
+  //   - un simple toque para colocar el cursor y escribir (apenas se mueve)
+  // Así distinguen esto los editores de texto nativos (Android/iOS): igual
+  // que aquí, por la dirección dominante del gesto, no por dónde empieza.
+  // Mientras no se supere un umbral pequeño (temblor natural del dedo), no
+  // se decide nada. Al superarlo, se decide UNA vez y se mantiene el resto
+  // del gesto (no se re-evalúa a medio camino):
+  //   - más vertical que horizontal → arrastrar folio (como hasta ahora:
+  //     preventDefault, se cancela cualquier selección que hubiera empezado)
+  //   - más horizontal (o igual) → selección de texto: NO se toca nada, se
+  //     deja el sistema nativo de selección de Android hacer lo suyo
+  //     (colocar handles, extender selección…) sin interferir.
+  let _tdTouchStartY = null, _tdTouchStartX = null, _tdTouchStartOffset = 0, _tdTouchGesture = null;
   _tdArea?.addEventListener('touchstart', e => {
     if(e.touches.length !== 1) return; // 2 dedos: no interferir (zoom/pinch)
     _tdTouchStartY = e.touches[0].clientY;
+    _tdTouchStartX = e.touches[0].clientX;
     _tdTouchStartOffset = _tdCurrentOffset;
-    _tdTouchMoved = false;
+    _tdTouchGesture = null;
   }, {capture:true, passive:true});
   _tdArea?.addEventListener('touchmove', e => {
     if(_tdTouchStartY === null || e.touches.length !== 1) return;
     const dy = e.touches[0].clientY - _tdTouchStartY;
-    if(!_tdTouchMoved && Math.abs(dy) > 3){
-      _tdTouchMoved = true;
-      window.getSelection()?.removeAllRanges();
-      const editorEl2 = document.getElementById('tdEditor');
-      if(editorEl2) editorEl2.style.userSelect = 'none';
+    const dx = e.touches[0].clientX - _tdTouchStartX;
+    if(_tdTouchGesture === null && Math.max(Math.abs(dx), Math.abs(dy)) > 6){
+      _tdTouchGesture = Math.abs(dy) > Math.abs(dx) ? 'drag' : 'select';
+      if(_tdTouchGesture === 'drag'){
+        window.getSelection()?.removeAllRanges();
+        const editorEl2 = document.getElementById('tdEditor');
+        if(editorEl2) editorEl2.style.userSelect = 'none';
+      }
     }
-    if(_tdTouchMoved){
+    if(_tdTouchGesture === 'drag'){
       e.preventDefault();
       _tdSetScrollOffset(_tdTouchStartOffset - dy, false);
     }
+    // 'select', o todavía sin decidir por debajo del umbral: no se llama a
+    // preventDefault ni se toca la selección — el navegador hace lo suyo.
   }, {capture:true, passive:false});
   const _tdTouchEnd = e => {
-    const wasMoved = _tdTouchMoved;
-    _tdTouchStartY = null; _tdTouchMoved = false;
+    const gesture = _tdTouchGesture;
+    _tdTouchStartY = null; _tdTouchStartX = null; _tdTouchGesture = null;
     const editorEl2 = document.getElementById('tdEditor');
     if(editorEl2) editorEl2.style.userSelect = '';
-    // <trix-editor virtualkeyboardpolicy="manual"> (ver views.js) le pide al
-    // navegador que NO abra el teclado solo por enfocar — así un toque puede
-    // resolverse en tres cosas distintas (arrastrar el folio, seleccionar
-    // texto, o solo colocar el cursor) antes de decidir si hace falta
-    // teclado. Aquí se abre a propósito, y solo, cuando NINGUNA de las otras
-    // dos ha ocurrido: nada de arrastre (wasMoved) y el resultado es un
-    // cursor colocado sin selección (mantener pulsado sobre una palabra la
-    // selecciona — eso tampoco es "quiero escribir", así que tampoco abre
-    // teclado por sí solo). rAF: da tiempo a que el navegador termine de
-    // resolver dónde cae el cursor tras el toque antes de comprobarlo.
-    if(wasMoved || e.type === 'touchcancel' || !('virtualKeyboard' in navigator)) return;
+    // <trix-editor virtualkeyboardpolicy="manual"> (ver views.js e inicio de
+    // esta función) le pide al navegador que NO abra el teclado solo por
+    // enfocar — se abre aquí, a propósito, solo cuando NINGUNA de las otras
+    // dos opciones ha ocurrido (ni arrastre ni selección) y el resultado es
+    // un cursor colocado sin selección: un toque para escribir, y nada más.
+    // rAF: da tiempo a que el navegador termine de resolver dónde cae el
+    // cursor tras el toque antes de comprobarlo.
+    if(gesture !== null || e.type === 'touchcancel' || !('virtualKeyboard' in navigator)) return;
     requestAnimationFrame(() => {
       const sel = window.getSelection();
       if(sel && sel.rangeCount > 0 && sel.isCollapsed && editorEl2 && editorEl2.contains(sel.anchorNode)){
@@ -352,23 +379,18 @@ function _tdInitOnce(){
   // modo el navegador NO encoge ningún viewport al abrirse el teclado (por
   // diseño — así el resto de la app, p.ej. los modales de login con 92dvh,
   // puede quedarse fijo en pantalla) — por eso los dos listeners de arriba
-  // nunca disparan por culpa del teclado. La VirtualKeyboard API es la única
-  // vía para conocer su alto real en este modo; está soportada en Chrome
-  // para Android, la plataforma objetivo de esta app. Si no existe (PC,
-  // navegador sin soporte), _tdKeyboardH se queda en 0 y todo sigue
-  // funcionando exactamente igual que hasta ahora.
+  // nunca disparan por culpa del teclado. _tdReadKeyboardH() (más abajo) es
+  // quien de verdad mide el alto, combinando dos señales independientes
+  // (VirtualKeyboard API y la variable de entorno CSS env(keyboard-inset-*)
+  // ) por si alguna de las dos falla o se retrasa en un dispositivo
+  // concreto — geometrychange aquí solo sirve de aviso para releer cuanto
+  // antes, no como única fuente del número.
   if('virtualKeyboard' in navigator){
     try {
       navigator.virtualKeyboard.overlaysContent = true;
       navigator.virtualKeyboard.addEventListener('geometrychange', () => {
-        // geometrychange puede disparar varias veces con valores intermedios
-        // mientras el teclado termina de animarse (comportamiento documentado
-        // de Chrome, no controlable desde aquí) — se espera una breve calma
-        // antes de aplicar, igual que ya hace el resto de este archivo con la
-        // paginación en vivo.
         clearTimeout(_tdKeyboardGeomTimer);
         _tdKeyboardGeomTimer = setTimeout(() => {
-          _tdKeyboardH = navigator.virtualKeyboard.boundingRect.height || 0;
           if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
         }, 100);
       });
@@ -384,6 +406,11 @@ function _tdInitOnce(){
   // bastante entre dispositivos), así que se reintenta varias veces con
   // distintos retardos en vez de una sola comprobación — más fiable que
   // fiarse de un único evento de la Visual Viewport en el momento justo.
+  // Además, mientras el editor conserve el foco, se relee el alto del
+  // teclado cada poco tiempo (red de seguridad adicional: si geometrychange
+  // no llega a tiempo o con el valor definitivo en algún dispositivo, esto
+  // lo corrige solo en menos de medio segundo, en vez de quedarse mal para
+  // el resto de la sesión de escritura).
   document.addEventListener('focusin', e => {
     const editorEl = document.getElementById('tdEditor');
     const shell = document.getElementById('tdShell');
@@ -392,17 +419,51 @@ function _tdInitOnce(){
     [50, 200, 400, 650].forEach(ms => setTimeout(() => {
       if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
     }, ms));
+    clearInterval(_tdKbPollTimer);
+    _tdKbPollTimer = setInterval(() => {
+      if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
+    }, 350);
+  });
+  document.addEventListener('focusout', e => {
+    const editorEl = document.getElementById('tdEditor');
+    if(!editorEl || (e.target !== editorEl && !editorEl.contains(e.target))) return;
+    clearInterval(_tdKbPollTimer);
   });
 }
 let _tdViewportSyncTimer = null;
-// Alto actual del teclado virtual en px — solo lo actualiza la VirtualKeyboard
-// API (ver _tdInitOnce). Hace falta porque interactive-widget=overlays-content
-// (meta viewport de index.html, deliberado para el fullscreen y los modales)
-// hace que NI window.innerHeight NI window.visualViewport.height reflejen al
-// teclado: bajo ese modo ambos se quedan midiendo la pantalla completa aunque
-// el teclado esté abierto y tapando media hoja.
+// Alto actual del teclado virtual en px — ver _tdReadKeyboardH(). Hace falta
+// porque interactive-widget=overlays-content (meta viewport de index.html,
+// deliberado para el fullscreen y los modales) hace que NI window.innerHeight
+// NI window.visualViewport.height reflejen al teclado: bajo ese modo ambos se
+// quedan midiendo la pantalla completa aunque el teclado esté abierto y
+// tapando media hoja.
 let _tdKeyboardH = 0;
 let _tdKeyboardGeomTimer = null;
+let _tdKbPollTimer = null;
+
+// Mide el alto real del teclado combinando DOS señales independientes, por
+// si una de las dos no llega a tiempo o falla en algún dispositivo concreto
+// (esta API está documentada como poco fiable en la práctica — geometrías
+// que tardan en asentarse, valores intermedios — así que apoyarse en una
+// sola vía es arriesgado):
+//   1) navigator.virtualKeyboard.boundingRect.height (VirtualKeyboard API)
+//   2) env(keyboard-inset-height) leído vía un elemento de sonda invisible
+//      (#tdKbProbe, ver views.js) cuyo alto CSS es exactamente esa variable
+//      de entorno — el navegador la mantiene actualizada por su cuenta, sin
+//      depender de que ningún evento JS dispare correctamente.
+// Se toma la MAYOR de las dos: mejor pasarse un poco (línea con más aire por
+// encima del teclado) que quedarse corto (línea tapada, el problema que se
+// está arreglando).
+function _tdReadKeyboardH(){
+  let apiH = 0;
+  if('virtualKeyboard' in navigator){
+    try { apiH = navigator.virtualKeyboard.boundingRect.height || 0; } catch(_e){}
+  }
+  const probe = document.getElementById('tdKbProbe');
+  const probeH = probe ? (probe.getBoundingClientRect().height || 0) : 0;
+  return { apiH, probeH, used: Math.max(apiH, probeH) };
+}
+
 function _tdSyncViewportHeight(){
   const shell = document.getElementById('tdShell');
   const pageArea = document.getElementById('tdPageArea');
@@ -422,9 +483,19 @@ function _tdSyncViewportHeight(){
                 + (menuBar2?.getBoundingClientRect().height || 0);
   // Alto real visible menos la cabecera/barras y el teclado virtual: lo que
   // queda para la hoja. vv.height por sí solo NO refleja al teclado bajo
-  // interactive-widget=overlays-content (ver _tdKeyboardH más arriba) — de
-  // ahí que haya que restarlo aparte, con el dato de la VirtualKeyboard API.
+  // interactive-widget=overlays-content — de ahí que haya que restarlo
+  // aparte, releyéndolo siempre fresco (no fiarse de un valor cacheado de
+  // cuando disparó tal o cual evento).
+  const kb = _tdReadKeyboardH();
+  _tdKeyboardH = kb.used;
   const availH = Math.max(120, Math.round(vv.height - chromeH - _tdKeyboardH));
+  // Diagnóstico visible TEMPORAL (#tdKbDebug, ver views.js) mientras se
+  // termina de confirmar que el cálculo del teclado es correcto en
+  // dispositivo real — quitar en cuanto se confirme. Muestra, de izda a
+  // dcha: alto visual viewport, señal API, señal CSS env(), la mayor de las
+  // dos (la que se usa), y el hueco resultante para la hoja.
+  const dbg = document.getElementById('tdKbDebug');
+  if(dbg) dbg.textContent = `vv:${Math.round(vv.height)} api:${Math.round(kb.apiH)} env:${Math.round(kb.probeH)} kb:${Math.round(_tdKeyboardH)} avail:${availH}`;
   pageArea.style.flex = 'none';
   pageArea.style.height = availH + 'px';
   // La página cambia de tamaño — recalcular la paginación en vivo (con
@@ -793,23 +864,19 @@ function _tdScrollToViewPage(n, announce){
   if(changed && announce) edToast('→ Página ' + (_tdViewCurPage + 1));
 }
 
-// Mientras se escribe (o se mueve el cursor): mantiene la línea activa
-// visible cerca del final del hueco visible de verdad (entre el final de la
-// cabecera/barras y el principio del teclado). El límite inferior lo marca
-// el propio #tdPageArea (areaRect.bottom): su alto ya lo calcula
-// _tdSyncViewportHeight descontando cabecera/barras Y teclado virtual
-// (VirtualKeyboard API) — usar ese mismo elemento como única fuente de
-// verdad, en vez de recalcular aparte con visualViewport, evita que ambos
-// cálculos puedan quedar en desacuerdo. Se ancla cerca del
-// FINAL de ese hueco (no en el centro): así, al llegar a la última línea de
-// la hoja, toda la hoja que va por delante queda ya por encima del teclado,
-// en vez de desperdiciar la mitad de la pantalla en blanco por debajo del
-// cursor. A diferencia de saltar entre "páginas" (eso lo siguen haciendo las
-// flechas y el arrastre manual, ver _tdScrollToViewPage), aquí se mide la
-// posición REAL en pantalla del cursor (getClientRects) y se ajusta el
-// desplazamiento al milímetro — la hoja puede quedar desplazada por debajo
-// de la cabecera y las barras cuando haga falta (el visor #tdPageArea la
-// recorta ahí).
+// Mientras se escribe (o se mueve el cursor): la línea activa se mantiene
+// SIEMPRE en el mismo punto de la pantalla — la mitad del hueco visible de
+// verdad (entre el final de la cabecera/barras y el principio del teclado)
+// — y es la HOJA la que se desplaza para que la línea nunca se mueva de
+// ahí. El límite inferior de ese hueco lo marca el propio #tdPageArea
+// (areaRect.bottom): su alto ya lo calcula _tdSyncViewportHeight
+// descontando cabecera/barras Y teclado virtual — usar ese mismo elemento
+// como única fuente de verdad, en vez de recalcular aparte con
+// visualViewport, evita que ambos cálculos puedan quedar en desacuerdo. A
+// diferencia de saltar entre "páginas" (eso lo siguen haciendo las flechas
+// y el arrastre manual, ver _tdScrollToViewPage), aquí se mide la posición
+// REAL en pantalla del cursor (getClientRects) y se ajusta el desplazamiento
+// al milímetro.
 function _tdCenterActiveLine(){
   const editorEl = document.getElementById('tdEditor');
   const areaEl = document.getElementById('tdPageArea');
@@ -835,10 +902,10 @@ function _tdCenterActiveLine(){
   const safeTop = areaRect.top;
   const safeBottom = areaRect.bottom;
   if(safeBottom <= safeTop) return;
-  // Margen de respiro bajo el cursor (no pegarlo del todo al borde del
-  // teclado) — una línea y media de texto, con un mínimo/máximo razonable.
-  const margin = Math.max(24, Math.min(48, (rect.height || 24) * 1.5));
-  const targetY = safeBottom - margin;
+  // Punto fijo: la mitad exacta del hueco visible — no el final ni un
+  // margen cerca del borde. Pedido explícito: la línea activa siempre en
+  // el mismo sitio, a media pantalla, y es la hoja la que se adapta.
+  const targetY = (safeTop + safeBottom) / 2;
 
   const delta = cursorY - targetY;
   if(Math.abs(delta) < 3) return; // ya donde debe estar — evita micro-ajustes constantes
