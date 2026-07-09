@@ -236,6 +236,7 @@ function _tdInitOnce(){
 
   document.getElementById('tdCloseBtn')?.addEventListener('click', edCloseTextDoc);
   document.getElementById('tdApplyBtn')?.addEventListener('click', _tdApplyToCanvas);
+  document.getElementById('tdPageBreakBtn')?.addEventListener('click', _tdInsertPageBreakAtCursor);
   const editorEl = document.getElementById('tdEditor');
 
   // Refuerzo del atributo HTML virtualkeyboardpolicy="manual" (ver views.js)
@@ -786,20 +787,49 @@ function _tdRecomputeViewPagination(){
 }
 let _tdLineOffsetsCache = [];
 
+// Ejecuta _tdLayoutPages con un conjunto de saltos forzados concreto, usando
+// el marco real de la hoja que se está reeditando (o la página entera si es
+// texto nuevo, sin flowId todavía) — para poder consultar de antemano dónde
+// cortaría el algoritmo con exactamente ese conjunto de saltos. Usado por
+// _tdWirePageBreakDrag para saber hasta dónde se puede bajar un salto sin
+// que la página de arriba se quede sin sitio físico.
+function _tdLayoutPagesForBreaks(forcedBreakChars){
+  const hidden = document.getElementById('tdHiddenInput');
+  if(!hidden) return { pages: [], pageStartChars: [0], lineStartChars: [] };
+  const blocks = _tdParseBlocks(hidden.value || '');
+  const lhSel = document.getElementById('tdLineHeightSel');
+  const lineHeightMult = lhSel ? (parseFloat(lhSel.value) || TD_LINE_MULT) : TD_LINE_MULT;
+  const editingLayer = _tdEditingFlowId ? _tdFindFlowLayer(_tdEditingFlowId) : null;
+  const marginFracX = (editingLayer && editingLayer.marginXFrac) || TD_MARGIN_FRAC;
+  const editingFrames = _tdEditingFlowId ? _tdEditingFlowFrames(_tdEditingFlowId) : null;
+  const frameSizes = editingFrames || {pw: edPageW(), ph: edPageH()};
+  return _tdLayoutPages(
+    blocks, frameSizes, lineHeightMult,
+    { marginFracX, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
+    forcedBreakChars
+  );
+}
+
 // Conecta el arrastre de la zona de agarre de un salto de página: mientras
-// se arrastra, la línea sigue al dedo/ratón libremente; al soltar, se ajusta
-// al límite de línea real más cercano (nunca queda a mitad de una línea) y
-// se fija como salto manual — el resto de páginas se recalculan solas a
-// partir de ahí (ver _tdLayoutPages).
+// se arrastra, la línea sigue al dedo/ratón libremente — pero sin poder
+// bajar más allá de donde la página de ARRIBA se queda sin sitio físico de
+// verdad (su marco real, ver _tdLayoutPagesForBreaks); subir siempre es
+// libre, nunca hay problema de espacio por acortar una página. El número
+// total de páginas SIEMPRE puede crecer si hace falta — el límite es la
+// capacidad de esta página concreta, no cuántas hojas hay en la obra. Al
+// soltar, se ajusta al límite de línea real más cercano (nunca a mitad de
+// una) y se fija como salto manual — el resto de páginas se recalculan
+// solas a partir de ahí (ver _tdLayoutPages).
 function _tdWirePageBreakDrag(handle, lineEl){
   let dragging = false;
+  let ceilY = Infinity;
   const onMove = e => {
     if(!dragging) return;
     const pageEl = document.getElementById('tdPage');
     if(!pageEl) return;
     const pageRect = pageEl.getBoundingClientRect();
     const localY = e.clientY - pageRect.top;
-    lineEl.style.top = Math.max(0, localY) + 'px';
+    lineEl.style.top = Math.max(0, Math.min(ceilY, localY)) + 'px';
   };
   const onUp = () => {
     if(!dragging) return;
@@ -829,6 +859,28 @@ function _tdWirePageBreakDrag(handle, lineEl){
     dragging = true;
     lineEl.classList.add('dragging');
     handle.setPointerCapture?.(e.pointerId);
+
+    // Techo de este arrastre concreto: se quita SOLO este salto del conjunto
+    // (los demás siguen fijos tal cual) y se mira dónde cortaría el
+    // algoritmo de todas formas — por desbordamiento natural del marco de
+    // esa página, o por el siguiente salto ya fijado, lo que llegue antes.
+    // Ese punto es el límite físico real: más allá, esa página ya no tiene
+    // sitio para más líneas.
+    ceilY = Infinity;
+    const oldChars = parseFloat(lineEl.dataset.chars);
+    const others = _tdManualBreakChars.filter(c => c !== oldChars);
+    const prevBreak = others.filter(c => c < oldChars).reduce((a, b) => Math.max(a, b), 0);
+    const { pageStartChars: reducedStarts } = _tdLayoutPagesForBreaks(others);
+    const ceilChars = reducedStarts.find(c => c > prevBreak);
+    if(ceilChars !== undefined){
+      let nearestIdx = 0, nearestDist = Infinity;
+      for(let i = 0; i < _tdLineStartCharsCache.length; i++){
+        const d = Math.abs(_tdLineStartCharsCache[i] - ceilChars);
+        if(d < nearestDist){ nearestDist = d; nearestIdx = i; }
+      }
+      if(_tdLineOffsetsCache[nearestIdx] !== undefined) ceilY = _tdLineOffsetsCache[nearestIdx];
+    }
+
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     document.addEventListener('pointercancel', onUp);
@@ -943,6 +995,55 @@ function _tdCenterActiveLine(){
   const delta = cursorY - targetY;
   if(Math.abs(delta) < 3) return; // ya donde debe estar — evita micro-ajustes constantes
   _tdSetScrollOffset(areaEl.scrollTop + delta, false);
+}
+
+// Botón "Salto de página" (tdPageBreakBtn): antes usaba el sistema nativo de
+// atributos de bloque de Trix (Trix.config.blockAttributes.pageBreak,
+// transformaba el bloque ENTERO donde estuviera el cursor en un <aside>,
+// perdiendo su contenido de texto). Ahora usa el MISMO sistema que arrastrar
+// una línea discontinua a mano (_tdManualBreakChars): añade un salto justo
+// al final de la línea real donde esté el cursor en ese momento, sin tocar
+// el contenido — y por tanto queda igual de arrastrable después. La lectura
+// de contenido antiguo con <aside> incrustado (_tdParseBlocks/_tdLayoutPages)
+// se mantiene intacta, solo cambia cómo se CREAN saltos nuevos a partir de
+// ahora.
+function _tdInsertPageBreakAtCursor(){
+  const editorEl = document.getElementById('tdEditor');
+  const inner = document.getElementById('tdPage');
+  if(!editorEl || !inner) return;
+  const sel = window.getSelection();
+  if(!sel || sel.rangeCount === 0) return;
+  const anchorNode = sel.focusNode;
+  if(!anchorNode || !editorEl.contains(anchorNode)) return;
+
+  const range = sel.getRangeAt(0).cloneRange();
+  range.collapse(true);
+  let rect = range.getClientRects()[0];
+  if(!rect){
+    const el = anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode;
+    rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+  }
+  if(!rect || (rect.top === 0 && rect.bottom === 0)) return;
+  const cursorYRel = (rect.top + rect.height / 2) - inner.getBoundingClientRect().top;
+
+  // Línea real (de las ya calculadas, ver _tdLineOffsetsCache) más cercana a
+  // la posición vertical del cursor — el salto se añade al final de ESA
+  // línea, sea cual sea (funciona igual en medio de un párrafo largo que al
+  // final de uno corto).
+  let nearestIdx = 0, nearestDist = Infinity;
+  for(let i = 0; i < _tdLineOffsetsCache.length; i++){
+    const d = Math.abs(_tdLineOffsetsCache[i] - cursorYRel);
+    if(d < nearestDist){ nearestDist = d; nearestIdx = i; }
+  }
+  const newChars = _tdLineStartCharsCache[nearestIdx];
+  if(!(newChars > 0)){ edToast('El cursor ya está al principio — no hay nada que separar'); return; }
+  if(_tdManualBreakChars.includes(newChars)){ edToast('Ya hay un salto de página ahí'); return; }
+  _tdManualBreakChars.push(newChars);
+  _tdManualBreakChars.sort((a, b) => a - b);
+  _tdAutoFollow = true; // insertar un salto es una edición como escribir — seguir mostrando la línea activa
+  _tdRecomputeViewPagination();
+  _tdCenterActiveLine();
+  edToast('Salto de página añadido');
 }
 
 window.addEventListener('resize', () => {

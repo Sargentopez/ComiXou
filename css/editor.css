@@ -2715,18 +2715,14 @@ body.editor-page #appView {
   align-items: flex-start;
   padding: 14px 12px;
 }
-/* Proporción A4 (210×297) — solo el aspecto visual de la hoja vacía; el
-   tamaño real de la hoja de la obra (edPageW/edPageH) se usa aparte para
-   predecir dónde caerán los saltos de página (líneas discontinuas), sin
-   afectar a este aspecto ni al tamaño de letra con el que se escribe aquí
-   (ver _tdRecomputeViewPagination). */
+/* Área de escritura: ya NO simula un folio A4 físico (sin fondo de papel,
+   sombra, borde ni proporción/alto mínimo forzados) — solo un ancho cómodo
+   de lectura y un relleno fijo. Los saltos de página (líneas discontinuas,
+   ver #tdPageBreaks más abajo) ya comunican por sí solos dónde corta cada
+   hoja real; no hace falta simular su aspecto para eso. */
 .td-page {
-  background: var(--paper);
-  box-shadow: var(--box-shadow-lg);
-  border: 1.5px solid var(--black);
-  width: min(100%, 794px); /* A4 a 96dpi, se encoge en pantallas más estrechas */
-  aspect-ratio: 210 / 297; /* una A4 entera como mínimo (según el ANCHO propio), aunque esté vacía — crece con el contenido más allá de esto */
-  padding: 9%; /* márgenes de una A4 estándar */
+  width: min(100%, 760px); /* ancho cómodo de lectura, no ligado a ninguna proporción de página */
+  padding: 28px 24px;
   box-sizing: border-box;
   flex-shrink: 0;
   position: relative;

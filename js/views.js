@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.16</footer>
+    <footer class="app-version">v33.18</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -992,7 +992,7 @@ Router.register('editor', {
           <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bullet" title="Lista de viñetas">• Lista</button>
           <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="number" title="Lista numerada">1. Lista</button>
           <div class="ed-menu-sep"></div>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="pageBreak" title="Salto de página">⤓ Salto de página</button>
+          <button type="button" class="ed-menu-btn td-fmt-btn" id="tdPageBreakBtn" title="Salto de página">⤓ Salto de página</button>
         </trix-toolbar>
       </div>
       <div id="tdMenuBar2">
