@@ -168,6 +168,20 @@ function _tdFindFlowLayer(flowId){
 function edCloseTextDoc(fromPopstate){
   const shell = document.getElementById('tdShell');
   const wasOpen = !!shell && shell.style.display !== 'none' && shell.style.display !== '';
+  // virtualkeyboardpolicy="manual" (ver views.js/_tdInitOnce) también quita
+  // el cierre automático al cambiar el foco — es la otra mitad de lo mismo
+  // que hace falta para que no se abra solo; por eso se quedaba abierto
+  // incluso al volver al lienzo. hide() exige que el elemento con el foco
+  // en ESE momento sea el de política manual, así que se reenfoca el editor
+  // justo antes por si el foco ya se había movido (p.ej. al propio botón de
+  // cerrar o "Aplicar al lienzo").
+  if(wasOpen && 'virtualKeyboard' in navigator){
+    try {
+      const editorEl = document.getElementById('tdEditor');
+      if(editorEl) editorEl.focus({preventScroll:true});
+      navigator.virtualKeyboard.hide();
+    } catch(_e){}
+  }
   if(shell) shell.style.display = 'none';
   _tdEditingFlowId = null;
   const applyBtn = document.getElementById('tdApplyBtn');
@@ -299,10 +313,27 @@ function _tdInitOnce(){
     _tdTouchStartY = e.touches[0].clientY;
     _tdTouchStartX = e.touches[0].clientX;
     _tdTouchStartOffset = _tdCurrentOffset;
-    _tdTouchGesture = null;
+    // Si ya hay texto seleccionado (los "handles" nativos visibles), este
+    // toque es casi seguro para arrastrar uno de esos handles y ajustar la
+    // selección — no para arrastrar el folio. Se marca de entrada como
+    // 'select' pase lo que pase después: extender una selección a otra
+    // línea o párrafo es, sobre todo, movimiento VERTICAL, que si no se
+    // confundiría con arrastrar el folio.
+    const selNow = window.getSelection();
+    _tdTouchGesture = (selNow && !selNow.isCollapsed && editorEl && editorEl.contains(selNow.anchorNode)) ? 'select' : null;
   }, {capture:true, passive:true});
   _tdArea?.addEventListener('touchmove', e => {
     if(_tdTouchStartY === null || e.touches.length !== 1) return;
+    // Mismo chequeo, ahora en cada movimiento: cubre el toque mantenido que
+    // activa la selección nativa de una palabra A MEDIO GESTO (sin soltar
+    // el dedo) — en el instante en que aparece, el resto del gesto pasa a
+    // tratarse como selección, aunque todavía no se hubiera decidido nada.
+    if(_tdTouchGesture === null){
+      const selNow = window.getSelection();
+      if(selNow && !selNow.isCollapsed && editorEl && editorEl.contains(selNow.anchorNode)){
+        _tdTouchGesture = 'select';
+      }
+    }
     const dy = e.touches[0].clientY - _tdTouchStartY;
     const dx = e.touches[0].clientX - _tdTouchStartX;
     if(_tdTouchGesture === null && Math.max(Math.abs(dx), Math.abs(dy)) > 6){
