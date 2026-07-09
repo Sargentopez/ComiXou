@@ -330,6 +330,36 @@ function _tdInitOnce(){
     window.visualViewport.addEventListener('scroll', _tdSyncViewportHeight);
   }
 
+  // Alto real del teclado bajo interactive-widget=overlays-content: con ese
+  // modo el navegador NO encoge ningún viewport al abrirse el teclado (por
+  // diseño — así el resto de la app, p.ej. los modales de login con 92dvh,
+  // puede quedarse fijo en pantalla) — por eso los dos listeners de arriba
+  // nunca disparan por culpa del teclado. La VirtualKeyboard API es la única
+  // vía para conocer su alto real en este modo; está soportada en Chrome
+  // para Android, la plataforma objetivo de esta app. Si no existe (PC,
+  // navegador sin soporte), _tdKeyboardH se queda en 0 y todo sigue
+  // funcionando exactamente igual que hasta ahora.
+  if('virtualKeyboard' in navigator){
+    try {
+      navigator.virtualKeyboard.overlaysContent = true;
+      navigator.virtualKeyboard.addEventListener('geometrychange', () => {
+        // geometrychange puede disparar varias veces con valores intermedios
+        // mientras el teclado termina de animarse (comportamiento documentado
+        // de Chrome, no controlable desde aquí) — se espera una breve calma
+        // antes de aplicar, igual que ya hace el resto de este archivo con la
+        // paginación en vivo.
+        clearTimeout(_tdKeyboardGeomTimer);
+        _tdKeyboardGeomTimer = setTimeout(() => {
+          _tdKeyboardH = navigator.virtualKeyboard.boundingRect.height || 0;
+          if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
+        }, 100);
+      });
+    } catch(err) {
+      // Contexto no seguro u otro motivo por el que la API rechace activarse
+      // (no debería pasar en producción, siempre HTTPS/PWA): seguir sin ella.
+    }
+  }
+
   // Reabrir el teclado (p.ej. cerrarlo y volver a tocar el texto para seguir
   // escribiendo) también tiene que volver a centrar la línea activa. El
   // evento de foco llega ANTES de que el teclado termine de animarse (varía
@@ -347,6 +377,14 @@ function _tdInitOnce(){
   });
 }
 let _tdViewportSyncTimer = null;
+// Alto actual del teclado virtual en px — solo lo actualiza la VirtualKeyboard
+// API (ver _tdInitOnce). Hace falta porque interactive-widget=overlays-content
+// (meta viewport de index.html, deliberado para el fullscreen y los modales)
+// hace que NI window.innerHeight NI window.visualViewport.height reflejen al
+// teclado: bajo ese modo ambos se quedan midiendo la pantalla completa aunque
+// el teclado esté abierto y tapando media hoja.
+let _tdKeyboardH = 0;
+let _tdKeyboardGeomTimer = null;
 function _tdSyncViewportHeight(){
   const shell = document.getElementById('tdShell');
   const pageArea = document.getElementById('tdPageArea');
@@ -364,9 +402,11 @@ function _tdSyncViewportHeight(){
   const chromeH = (topbar?.getBoundingClientRect().height || 0)
                 + (menuBar?.getBoundingClientRect().height || 0)
                 + (menuBar2?.getBoundingClientRect().height || 0);
-  // Alto real visible (Visual Viewport — lo que NO tapa el teclado) menos la
-  // cabecera y las barras de herramientas: lo que queda para la hoja.
-  const availH = Math.max(120, Math.round(vv.height - chromeH));
+  // Alto real visible menos la cabecera/barras y el teclado virtual: lo que
+  // queda para la hoja. vv.height por sí solo NO refleja al teclado bajo
+  // interactive-widget=overlays-content (ver _tdKeyboardH más arriba) — de
+  // ahí que haya que restarlo aparte, con el dato de la VirtualKeyboard API.
+  const availH = Math.max(120, Math.round(vv.height - chromeH - _tdKeyboardH));
   pageArea.style.flex = 'none';
   pageArea.style.height = availH + 'px';
   // La página cambia de tamaño — recalcular la paginación en vivo (con
@@ -691,8 +731,12 @@ function _tdScrollToViewPage(n, announce){
 
 // Mientras se escribe (o se mueve el cursor): mantiene la línea activa
 // visible cerca del final del hueco visible de verdad (entre el final de la
-// cabecera/barras y el principio del teclado — Visual Viewport, no
-// window.innerHeight, para que el teclado nunca la tape). Se ancla cerca del
+// cabecera/barras y el principio del teclado). El límite inferior lo marca
+// el propio #tdPageArea (areaRect.bottom): su alto ya lo calcula
+// _tdSyncViewportHeight descontando cabecera/barras Y teclado virtual
+// (VirtualKeyboard API) — usar ese mismo elemento como única fuente de
+// verdad, en vez de recalcular aparte con visualViewport, evita que ambos
+// cálculos puedan quedar en desacuerdo. Se ancla cerca del
 // FINAL de ese hueco (no en el centro): así, al llegar a la última línea de
 // la hoja, toda la hoja que va por delante queda ya por encima del teclado,
 // en vez de desperdiciar la mitad de la pantalla en blanco por debajo del
@@ -724,9 +768,8 @@ function _tdCenterActiveLine(){
   const cursorY = rect.top + rect.height / 2;
 
   const areaRect = areaEl.getBoundingClientRect();
-  const vv = window.visualViewport;
   const safeTop = areaRect.top;
-  const safeBottom = vv ? (vv.height + vv.offsetTop) : window.innerHeight;
+  const safeBottom = areaRect.bottom;
   if(safeBottom <= safeTop) return;
   // Margen de respiro bajo el cursor (no pegarlo del todo al borde del
   // teclado) — una línea y media de texto, con un mínimo/máximo razonable.
