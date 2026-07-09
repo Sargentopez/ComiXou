@@ -1825,8 +1825,8 @@ class TextLayer extends BaseLayer {
   }
   // Fuente para una línea/fragmento de texto enriquecido (Editor de textos).
   // mono usa la fuente del sistema (monospace); el resto usa richFontFamily (Lora por defecto).
-  _richFontStr(fontSize,bold,italic,mono){
-    const fam = mono ? 'monospace' : (this.richFontFamily || 'Lora');
+  _richFontStr(fontSize,bold,italic,mono,fontFamily){
+    const fam = mono ? 'monospace' : (fontFamily || this.richFontFamily || 'Lora');
     const _fam = fam.includes(' ') ? `"${fam}"` : fam;
     return `${italic?'italic ':''}${bold?'bold ':''}${fontSize}px ${_fam}`;
   }
@@ -1838,10 +1838,12 @@ class TextLayer extends BaseLayer {
     ctx.translate(-w/2,-h/2);
     ctx.textAlign='left'; ctx.textBaseline='alphabetic';
     const _col = this.color || '#000000';
+    const _quoteCol = '#4A4540'; // --gray-700 — mismo tono atenuado que .td-editor blockquote
     this.richLines.forEach(line=>{
+      const _lineCol = line.kind==='quote' ? _quoteCol : _col;
       if(line.kind==='quote'){
         ctx.save();
-        ctx.strokeStyle=_col; ctx.globalAlpha=ctx.globalAlpha*0.32;
+        ctx.strokeStyle=_lineCol; ctx.globalAlpha=ctx.globalAlpha*0.32;
         ctx.lineWidth=Math.max(2,line.fontSize*0.08);
         ctx.beginPath();
         ctx.moveTo(line.indent-10, line.y-line.fontSize*0.85);
@@ -1851,19 +1853,20 @@ class TextLayer extends BaseLayer {
       }
       if(line.marker){
         ctx.font=this._richFontStr(line.fontSize,false,false,false);
-        ctx.fillStyle=_col;
+        ctx.fillStyle=_lineCol;
         ctx.fillText(line.marker, Math.max(0,line.indent-line.fontSize*0.95), line.y);
       }
       (line.runs||[]).forEach(r=>{
-        ctx.font=this._richFontStr(line.fontSize, r.bold, r.italic||line.kind==='quote', r.mono);
-        ctx.fillStyle=_col;
+        const _rfs = r.fontSize || line.fontSize;
+        ctx.font=this._richFontStr(_rfs, r.bold, r.italic||line.kind==='quote', r.mono, r.fontFamily);
+        ctx.fillStyle=_lineCol;
         ctx.fillText(r.text, r.x, line.y);
         if(r.strike){
           ctx.beginPath();
-          ctx.lineWidth=Math.max(1,line.fontSize*0.06);
-          ctx.strokeStyle=_col;
-          ctx.moveTo(r.x, line.y-line.fontSize*0.32);
-          ctx.lineTo(r.x+r.width, line.y-line.fontSize*0.32);
+          ctx.lineWidth=Math.max(1,_rfs*0.06);
+          ctx.strokeStyle=_lineCol;
+          ctx.moveTo(r.x, line.y-_rfs*0.32);
+          ctx.lineTo(r.x+r.width, line.y-_rfs*0.32);
           ctx.stroke();
         }
       });
@@ -7599,7 +7602,9 @@ function _edHandleDoubleTap(idx, e){
   } else if (la && (la.type === 'text' || la.type === 'bubble')) {
     edSelectedIdx = idx;
     _edDrawLockUI(); _edPropsOverlayShow();
-    edRenderOptionsPanel('text-props');
+    // Hoja de texto paginada (Editor de textos): directo al panel completo
+    // (con el botón "Editar texto" que abre Trix), sin el panel intermedio.
+    edRenderOptionsPanel((la.richLines && la.richLines.length) ? 'props' : 'text-props');
     edRedraw();
   } else {
     // image y cualquier otro tipo
@@ -12041,6 +12046,24 @@ function edOnEnd(e){
   clearTimeout(window._edLongPress);
   const wasDragging = edIsDragging||edIsResizing||edIsTailDragging||edIsRotating;
   window._edLongPressReady = false;
+  // Hoja de texto paginada (Editor de textos): redimensionar con los handlers
+  // reajusta el contenido a la nueva forma — lo que ya no cabe pasa a la hoja
+  // siguiente (o crea una nueva), y si se agranda, tira de texto de la hoja
+  // siguiente para rellenar el hueco (pudiendo vaciar y quitar alguna hoja).
+  // Se hace ANTES del push de historial de más abajo para que quede como un
+  // único paso de deshacer (resize + reflujo juntos).
+  if(edIsResizing && window._edMoved && edSelectedIdx>=0){
+    const _rzLa = edLayers[edSelectedIdx];
+    if(_rzLa && _rzLa.richLines && _rzLa.richLines.length && typeof _tdReflowAfterResize==='function'){
+      // Capturar aquí, lo antes posible, si el panel estaba realmente abierto
+      // — usando la señal directa del bloqueo del menú (draw-active en
+      // editorShell), no la clase "open" del panel: esa puede haber sido
+      // reseteada ya por otro código antes de llegar aquí, y entonces la
+      // restauración no se disparaba, dejando el menú bloqueado.
+      const _panelWasOpen = !!($('editorShell')?.classList.contains('draw-active'));
+      _tdReflowAfterResize(edSelectedIdx, _panelWasOpen);
+    }
+  }
   // BUG-E09: solo guardar historial si algo cambió de verdad
   // Si hubo pinch, cancelar cualquier drag — el último dedo al levantarse no debe mover nada
   if(_edPinchHappened){
@@ -17484,7 +17507,7 @@ function edRenderOptionsPanel(mode){
         <button id="pp-ok-bottom" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
       </div>`;
     panel.classList.add('open');
-    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edFitCanvas(); });
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-opacity')?.addEventListener('input',(e)=>{
       const _la2=edLayers[edSelectedIdx]; if(!_la2) return;
       _la2.opacity=+e.target.value/100;
@@ -17538,7 +17561,7 @@ function edRenderOptionsPanel(mode){
       }
     });
     $('pp-path-speed')?.addEventListener('change',()=>edPushHistory());
-    $('pp-ok-bottom')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edFitCanvas(); });
+    $('pp-ok-bottom')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     requestAnimationFrame(edFitCanvas); return;
   }
 
@@ -17872,7 +17895,13 @@ function edRenderOptionsPanel(mode){
           <span id="pp-bgop-val" style="font-size:.75rem;font-weight:900;min-width:28px;text-align:left">${Math.round((la.bgOpacity??1)*100)}%</span>
           <input type="range" id="pp-bgop" min="0" max="100" value="${Math.round((la.bgOpacity??1)*100)}" style="flex:1;min-width:40px;accent-color:var(--black)">
         </div>
-        ${_edPathRowHtml(la)}`;
+        <div class="op-prop-row"><span class="op-prop-label">Márgenes</span>
+          <select id="pp-td-margin">
+            <option value="0.02" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.02)<0.005?'selected':''}>Estrecho</option>
+            <option value="0.045" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.045)<0.005?'selected':''}>Normal</option>
+            <option value="0.08" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.08)<0.005?'selected':''}>Ancho</option>
+          </select>
+        </div>`;
       } else {
       html+=`
       <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
@@ -18003,14 +18032,16 @@ function edRenderOptionsPanel(mode){
       ${_edPathRowHtml(la)}`;
     }
     const _isTextBubble = (la.type==='text'||la.type==='bubble');
-    html+=`<div class="op-prop-row" style="margin-top:4px">
+    const _isRichText = !!(la.richLines && la.richLines.length);
+    html+=`${_isRichText ? '' : `<div class="op-prop-row" style="margin-top:4px">
       <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?'🔗 Botón activo ✓':'🔗 Como botón'}</button>
-    </div>
+    </div>`}
     <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
-      ${la.groupId
+      ${_isRichText ? `<button class="op-btn" id="pp-td-except" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.7rem;cursor:pointer" title="Esta hoja se queda sin texto; su contenido pasa a la siguiente">🚫 Exceptuar en esta hoja</button>` : ''}
+      ${_isRichText ? '' : (la.groupId
         ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
-        : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`}
+        : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`)}
       ${(!_isTextBubble)?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
       <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100);opacity:${la.locked?'1':'0.4'}" title="${la.locked?'Desbloquear':'Bloquear'}">🔒</button>
       ${_isTextBubble
@@ -18080,6 +18111,11 @@ function edRenderOptionsPanel(mode){
         else if(id==='pp-bgop'){const v=parseInt(e.target.value)||0;la.bgOpacity=v/100;const lbl=$('pp-bgop-val');if(lbl)lbl.textContent=v+'%';}
         else if(id==='pp-bc')     la.borderColor=e.target.value;
         else if(id==='pp-bw')     la.borderWidth=parseInt(e.target.value);
+        else if(id==='pp-td-margin'){
+          la.marginXFrac = parseFloat(e.target.value) || (typeof TD_MARGIN_FRAC!=='undefined'?TD_MARGIN_FRAC:0.045);
+          if(typeof _tdReflowAfterMarginChange==='function') _tdReflowAfterMarginChange(la);
+          return; // el reflujo ya redibuja/guarda historial — no seguir con el resto del handler genérico
+        }
         else if(id==='pp-style')  {la.style=e.target.value;la.resizeToFitText(edCanvas);}
         else if(id==='pp-vc')     la.voiceCount=Math.max(1,parseInt(e.target.value)||1);
         else if(id==='pp-tail')   la.tail=e.target.checked;
@@ -18088,6 +18124,9 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del')?.addEventListener('click',()=>{
       edConfirm('¿Eliminar este objeto?', ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
+    });
+    $('pp-td-except')?.addEventListener('click',()=>{
+      if(typeof _tdExceptCurrentPage==='function') _tdExceptCurrentPage();
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
@@ -18112,7 +18151,7 @@ function edRenderOptionsPanel(mode){
         _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
       }
     });
-    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edFitCanvas(); });
+    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
     $('pp-td-edit')?.addEventListener('click',()=>{
       const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
       if(_la && typeof edOpenTextDoc==='function') edOpenTextDoc(_la);
@@ -22369,6 +22408,10 @@ function edSerLayer(l){
     if(l.richFontFamily) _o.richFontFamily=l.richFontFamily;
     if(l.sourceHTML) _o.sourceHTML=l.sourceHTML;
     if(l._tdFlowId) _o._tdFlowId=l._tdFlowId;
+    if(l._tdExceptFlow) _o._tdExceptFlow=l._tdExceptFlow;
+    if(l.lineHeightMult) _o.lineHeightMult=l.lineHeightMult;
+    if(l.marginXFrac) _o.marginXFrac=l.marginXFrac;
+    if(l.manualBreakChars && l.manualBreakChars.length) _o.manualBreakChars=l.manualBreakChars;
     if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed)_o._motionPathClosed=true;
     if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;
@@ -26181,9 +26224,9 @@ function EditorView_init(){
   // ── Ctrl+Wheel: zoom del canvas ──
   window._edWheelFn = e => {
     if(!document.getElementById('editorShell')) return;
-    // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas, etc.)
-    // dejarlo hacer scroll nativo — no intervenir
-    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel, .ed-modal-body');
+    // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas,
+    // Editor de textos, etc.) dejarlo hacer scroll nativo — no intervenir
+    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel, .ed-modal-body, #tdPageArea');
     if(overScrollable) return;
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
@@ -26238,8 +26281,12 @@ function EditorView_init(){
     const tag = document.activeElement?.tagName?.toLowerCase();
     const ctrl = e.ctrlKey || e.metaKey;
     // Bloquear shortcuts si hay un input con foco, EXCEPTO Ctrl+Z/Y
-    // cuando hay herramienta de dibujo activa (los sliders del panel roban el foco)
-    if(tag === 'input' || tag === 'textarea' || tag === 'select'){
+    // cuando hay herramienta de dibujo activa (los sliders del panel roban el foco).
+    // isContentEditable cubre también el Editor de textos (Trix pone el atributo
+    // contenteditable en el propio <trix-editor>, no es un <textarea>) — sin esto,
+    // Backspace/Delete al escribir ahí no borraba texto: bajaba hasta el borrado
+    // de la capa seleccionada del lienzo (línea de "Delete"/"Backspace" más abajo).
+    if(tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable){
       const isDrawTool = ['draw','eraser','fill'].includes(edActiveTool);
       const isUndoRedo = ctrl && (e.key.toLowerCase()==='z' || e.key.toLowerCase()==='y');
       if(!(isDrawTool && isUndoRedo)) return;
@@ -26595,6 +26642,18 @@ function EditorView_init(){
         return;
       }
       // Si hay panel abierto o no hay selección, dejar caer al bloque de Shift+multiselección
+      if(!_panelOpen && !_hasSel && edPages.length > 1){
+        // Sin nada seleccionado: las flechas pasan de hoja (mismo criterio que
+        // el editor GCP sin objeto seleccionado — derecha/abajo=siguiente,
+        // izquierda/arriba=anterior). Ver también Ayuda ▾ Atajos de teclado.
+        e.preventDefault();
+        if(e.key==='ArrowRight' || e.key==='ArrowDown'){
+          if(edCurrentPage < edPages.length-1) edLoadPage(edCurrentPage+1);
+        } else {
+          if(edCurrentPage > 0) edLoadPage(edCurrentPage-1);
+        }
+        return;
+      }
     }
 
     // Shift+flechas (PC): añadir a la multiselección el objeto más cercano en esa dirección

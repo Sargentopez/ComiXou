@@ -187,7 +187,7 @@ function _lyRender() {
   if(!page.textMode) page.textMode = 'immediate'; // fallback para proyectos antiguos
   const isSeq    = page.textMode === 'sequential';
   const imgPairs = edLayers.map((l,i) => ({l,i})).filter(({l}) => l.type==='image'); // mantenido por compatibilidad
-  const textObjs = edLayers.filter(l => l.type==='text' || l.type==='bubble');
+  const textObjs = edLayers.filter(l => (l.type==='text' || l.type==='bubble') && !l._tdExceptFlow);
 
   /* ══ SECCIÓN TEXTOS ══ */
 
@@ -940,7 +940,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   row.appendChild(lbl);
 
   /* Flechas subir/bajar nivel */
-  const textObjs = edLayers.filter(l => l.type==='text' || l.type==='bubble');
+  const textObjs = edLayers.filter(l => (l.type==='text' || l.type==='bubble') && !l._tdExceptFlow);
   const viIdx = textObjs.indexOf(la);
   const upBtn = document.createElement('button');
   upBtn.className = 'ed-layer-arrow';

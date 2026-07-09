@@ -558,13 +558,6 @@ function _pgRotatePage(idx) {
   const page = edPages[idx];
   if (!page) return;
 
-  // Hoja de texto paginada (Editor de textos): el recorte genérico de abajo
-  // encogería richLines a una fracción de página — se recalcula la maquetación
-  // completa contra las nuevas dimensiones en su lugar (ver editor-textdoc.js).
-  if (page.layers && page.layers.some(l => l && l.richLines && l.richLines.length)) {
-    if (typeof _tdRotateFlowPage === 'function' && _tdRotateFlowPage(idx)) return;
-  }
-
   const currentOrient = page.orientation || edOrientation;
   const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
 
