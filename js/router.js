@@ -130,22 +130,7 @@ const Router = (() => {
   }
 
   window.addEventListener('popstate', e => {
-    // Overlays a pantalla completa (p.ej. el Editor de textos) pueden registrarse
-    // aquí para cerrarse con el botón/gesto atrás en vez de dejar que el router
-    // navegue fuera de la vista actual. Cada interceptor devuelve true si se
-    // encargó de cerrar algo (y por tanto hay que parar aquí, sin navegar).
-    if (window._edBackInterceptors && window._edBackInterceptors.length) {
-      for (let i = window._edBackInterceptors.length - 1; i >= 0; i--) {
-        try { if (window._edBackInterceptors[i]()) return; } catch(_e) {}
-      }
-    }
     const s = e.state;
-    const targetView = (s && s.view) || 'home';
-    // Si el destino es la misma vista en la que ya estamos (p.ej. al consumir
-    // una entrada de historial interna como la del Editor de textos, que usa
-    // pushState/back() como marcador), no reconstruir la vista — evitaría
-    // perder el estado en memoria del editor sin necesidad real de navegar.
-    if (targetView === currentView) return;
     if (s && s.view) _render(s.view, s.params || {});
     else _render('home', {});
   });

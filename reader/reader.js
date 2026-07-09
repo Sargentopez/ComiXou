@@ -2634,13 +2634,11 @@ function _drawRichTextLines(ctx, t, w, h, textColor_) {
   ctx.translate(-w/2, -h/2);
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   const _col = textColor_ || '#000000';
-  const _quoteCol = '#4A4540'; // --gray-700 — mismo tono atenuado que .td-editor blockquote
   const _fam = t.richFontFamily;
   (t.richLines || []).forEach(line => {
-    const _lineCol = line.kind === 'quote' ? _quoteCol : _col;
     if (line.kind === 'quote') {
       ctx.save();
-      ctx.strokeStyle = _lineCol; ctx.globalAlpha = ctx.globalAlpha * 0.32;
+      ctx.strokeStyle = _col; ctx.globalAlpha = ctx.globalAlpha * 0.32;
       ctx.lineWidth = Math.max(2, line.fontSize * 0.08);
       ctx.beginPath();
       ctx.moveTo(line.indent - 10, line.y - line.fontSize * 0.85);
@@ -2650,20 +2648,19 @@ function _drawRichTextLines(ctx, t, w, h, textColor_) {
     }
     if (line.marker) {
       ctx.font = _richFontStr(line.fontSize, false, false, false, _fam);
-      ctx.fillStyle = _lineCol;
+      ctx.fillStyle = _col;
       ctx.fillText(line.marker, Math.max(0, line.indent - line.fontSize * 0.95), line.y);
     }
     (line.runs || []).forEach(r => {
-      const _rfs = r.fontSize || line.fontSize;
-      ctx.font = _richFontStr(_rfs, r.bold, r.italic || line.kind === 'quote', r.mono, r.fontFamily || _fam);
-      ctx.fillStyle = _lineCol;
+      ctx.font = _richFontStr(line.fontSize, r.bold, r.italic || line.kind === 'quote', r.mono, _fam);
+      ctx.fillStyle = _col;
       ctx.fillText(r.text, r.x, line.y);
       if (r.strike) {
         ctx.beginPath();
-        ctx.lineWidth = Math.max(1, _rfs * 0.06);
-        ctx.strokeStyle = _lineCol;
-        ctx.moveTo(r.x, line.y - _rfs * 0.32);
-        ctx.lineTo(r.x + r.width, line.y - _rfs * 0.32);
+        ctx.lineWidth = Math.max(1, line.fontSize * 0.06);
+        ctx.strokeStyle = _col;
+        ctx.moveTo(r.x, line.y - line.fontSize * 0.32);
+        ctx.lineTo(r.x + r.width, line.y - line.fontSize * 0.32);
         ctx.stroke();
       }
     });
