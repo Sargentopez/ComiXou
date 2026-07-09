@@ -115,6 +115,7 @@ function edOpenTextDoc(editLayer){
   requestAnimationFrame(() => requestAnimationFrame(() => {
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
+    _tdAutoFollow = true;
     const areaElInit = document.getElementById('tdPageArea');
     if(areaElInit) areaElInit.scrollTop = 0;
     _tdRecomputeViewPagination();
@@ -264,6 +265,9 @@ function _tdInitOnce(){
 
   if(editorEl){
     editorEl.addEventListener('trix-change', () => {
+      // Cambio real de texto: esto SÍ es "se está escribiendo" — reactiva
+      // el seguimiento aunque un arrastre manual lo hubiera apagado antes.
+      _tdAutoFollow = true;
       // Paginación en vivo: recalcular con retardo (evita rehacer el cálculo
       // en cada pulsación) y mantener centrada la línea que se está escribiendo.
       clearTimeout(_tdRecomputeTimer);
@@ -278,6 +282,7 @@ function _tdInitOnce(){
     // (pensada para no recalcular en cada letra mientras se escribe seguido).
     editorEl.addEventListener('keydown', e => {
       if(e.key !== 'Enter') return;
+      _tdAutoFollow = true;
       clearTimeout(_tdRecomputeTimer);
       _tdRecomputeTimer = setTimeout(() => {
         _tdRecomputeViewPagination();
@@ -318,8 +323,13 @@ function _tdInitOnce(){
     _tdTouchStartScrollTop = _tdArea.scrollTop;
   }, {passive:true});
   const _tdTouchEnd = e => {
-    if(e.type === 'touchcancel' || !('virtualKeyboard' in navigator)) return;
-    if(Math.abs(_tdArea.scrollTop - _tdTouchStartScrollTop) > 2) return; // se desplazó: no es un toque para escribir
+    // Se desplazó de verdad (arrastre): a partir de aquí, hasta que se
+    // vuelva a escribir, no se fuerza el recentrado — el usuario puede
+    // estar leyendo otra parte de la obra. Universal, no depende de la
+    // VirtualKeyboard API (eso solo hace falta para la decisión de abajo).
+    const scrolled = Math.abs(_tdArea.scrollTop - _tdTouchStartScrollTop) > 2;
+    if(scrolled) _tdAutoFollow = false;
+    if(scrolled || e.type === 'touchcancel' || !('virtualKeyboard' in navigator)) return;
     // rAF: da tiempo a que el navegador termine de resolver dónde cae el
     // cursor (o la selección) tras el toque antes de comprobarlo.
     requestAnimationFrame(() => {
@@ -331,6 +341,10 @@ function _tdInitOnce(){
   };
   _tdArea?.addEventListener('touchend', _tdTouchEnd, {passive:true});
   _tdArea?.addEventListener('touchcancel', _tdTouchEnd, {passive:true});
+  // Rueda del ratón (PC): el scroll en sí ya lo hace el navegador solo (ver
+  // arriba) — esto solo registra que fue un desplazamiento MANUAL, para lo
+  // mismo que el arrastre táctil.
+  _tdArea?.addEventListener('wheel', () => { _tdAutoFollow = false; }, {passive:true});
 
   // _tdCurrentOffset (y la página mostrada en la cabecera) al día cuando el
   // usuario desplaza directamente con el dedo o la rueda: eso ya no pasa
@@ -342,8 +356,11 @@ function _tdInitOnce(){
     _tdScrollSyncRaf = requestAnimationFrame(() => _tdSyncPageNavFromOffset(_tdArea.scrollTop));
   }, {passive:true});
 
-  document.getElementById('tdPagePrev')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage - 1));
-  document.getElementById('tdPageNext')?.addEventListener('click', () => _tdScrollToViewPage(_tdViewCurPage + 1));
+  // Botones de página: navegación explícita a una página concreta — igual
+  // que arrastrar o la rueda, es el usuario pidiendo ver otra parte, así
+  // que también apaga el seguimiento automático hasta que vuelva a escribir.
+  document.getElementById('tdPagePrev')?.addEventListener('click', () => { _tdAutoFollow = false; _tdScrollToViewPage(_tdViewCurPage - 1); });
+  document.getElementById('tdPageNext')?.addEventListener('click', () => { _tdAutoFollow = false; _tdScrollToViewPage(_tdViewCurPage + 1); });
   _tdWireFontControls();
 
   // Flechas del teclado (PC): pasan de página — SOLO cuando el cursor no está
@@ -359,6 +376,7 @@ function _tdInitOnce(){
     const active = document.activeElement;
     if(active && (active.isContentEditable || active === document.getElementById('tdEditor'))) return;
     e.preventDefault();
+    _tdAutoFollow = false;
     if(e.key === 'ArrowRight' || e.key === 'ArrowDown') _tdScrollToViewPage(_tdViewCurPage + 1);
     else _tdScrollToViewPage(_tdViewCurPage - 1);
   });
@@ -504,6 +522,17 @@ function _tdSyncViewportHeight(){
   _tdViewportSyncTimer = setTimeout(() => { _tdRecomputeViewPagination(); _tdCenterActiveLine(); }, 120);
 }
 let _tdFollowTimer = null;
+// Solo se sigue el cursor (recentrado automático) MIENTRAS SE ESCRIBE de
+// verdad — no todo el rato solo porque el editor tenga el foco. Se
+// enciende en cada cambio real de texto (trix-change: pedido explícito,
+// "detectarse cuando se empieza a escribir") y se apaga en cuanto se
+// detecta un desplazamiento manual (arrastre, rueda, flechas de página) —
+// así, si el usuario quiere leer otra parte de la obra mientras el editor
+// sigue abierto, el recentrado no se lo impide ni se lo deshace a los
+// pocos cientos de ms (el sondeo periódico de _tdKbPollTimer, pensado solo
+// para el alto del teclado, también pasa por _tdCenterActiveLine — sin
+// este freno, recentraba de fondo aunque el usuario no estuviera tecleando).
+let _tdAutoFollow = true;
 
 // Tamaños/fuentes admitidos al pegar contenido externo — mismo rango que los
 // controles del editor (ver tdFontSizeSel/tdFontFamilySel en views.js), para
@@ -881,6 +910,7 @@ function _tdScrollToViewPage(n, announce){
 // REAL en pantalla del cursor (getClientRects) y se ajusta el desplazamiento
 // al milímetro.
 function _tdCenterActiveLine(){
+  if(!_tdAutoFollow) return; // el usuario se ha desplazado a mano para leer — no forzar hasta que vuelva a escribir
   const editorEl = document.getElementById('tdEditor');
   const areaEl = document.getElementById('tdPageArea');
   if(!editorEl || !areaEl) return;
