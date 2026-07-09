@@ -508,13 +508,6 @@ function _tdSyncViewportHeight(){
   const kb = _tdReadKeyboardH();
   _tdKeyboardH = kb.used;
   const availH = Math.max(120, Math.round(vv.height - chromeH - _tdKeyboardH));
-  // Diagnóstico visible TEMPORAL (#tdKbDebug, ver views.js) mientras se
-  // termina de confirmar que el cálculo del teclado es correcto en
-  // dispositivo real — quitar en cuanto se confirme. Muestra, de izda a
-  // dcha: alto visual viewport, señal API, señal CSS env(), la mayor de las
-  // dos (la que se usa), y el hueco resultante para la hoja.
-  const dbg = document.getElementById('tdKbDebug');
-  if(dbg) dbg.textContent = `vv:${Math.round(vv.height)} api:${Math.round(kb.apiH)} env:${Math.round(kb.probeH)} kb:${Math.round(_tdKeyboardH)} avail:${availH}`;
   pageArea.style.flex = 'none';
   pageArea.style.height = availH + 'px';
   // La página cambia de tamaño — recalcular la paginación en vivo (con
@@ -811,25 +804,24 @@ function _tdLayoutPagesForBreaks(forcedBreakChars){
 }
 
 // Conecta el arrastre de la zona de agarre de un salto de página: mientras
-// se arrastra, la línea sigue al dedo/ratón libremente — pero sin poder
-// bajar más allá de donde la página de ARRIBA se queda sin sitio físico de
-// verdad (su marco real, ver _tdLayoutPagesForBreaks); subir siempre es
-// libre, nunca hay problema de espacio por acortar una página. El número
-// total de páginas SIEMPRE puede crecer si hace falta — el límite es la
-// capacidad de esta página concreta, no cuántas hojas hay en la obra. Al
-// soltar, se ajusta al límite de línea real más cercano (nunca a mitad de
-// una) y se fija como salto manual — el resto de páginas se recalculan
-// solas a partir de ahí (ver _tdLayoutPages).
+// se arrastra, la línea sigue al dedo/ratón libremente, sin ningún tope
+// visual durante el gesto — el número total de páginas SIEMPRE puede
+// crecer si hace falta, así que mientras se arrastra no hay ninguna razón
+// para impedir el movimiento. Al soltar, se ajusta al límite de línea real
+// más cercano (nunca a mitad de una) y se comprueba el resultado DE
+// VERDAD: si la página de arriba no tiene sitio físico hasta ahí (su marco
+// real, ver _tdLayoutPagesForBreaks — un desbordamiento natural ocurriría
+// antes), se corrige a la posición más baja que el algoritmo SÍ respeta
+// para esa página, en vez de dejar el salto donde se soltó.
 function _tdWirePageBreakDrag(handle, lineEl){
   let dragging = false;
-  let ceilY = Infinity;
   const onMove = e => {
     if(!dragging) return;
     const pageEl = document.getElementById('tdPage');
     if(!pageEl) return;
     const pageRect = pageEl.getBoundingClientRect();
     const localY = e.clientY - pageRect.top;
-    lineEl.style.top = Math.max(0, Math.min(ceilY, localY)) + 'px';
+    lineEl.style.top = Math.max(0, localY) + 'px';
   };
   const onUp = () => {
     if(!dragging) return;
@@ -848,10 +840,29 @@ function _tdWirePageBreakDrag(handle, lineEl){
       if(d < nearestDist){ nearestDist = d; nearestIdx = i; }
     }
     const oldChars = parseFloat(lineEl.dataset.chars);
-    const newChars = _tdLineStartCharsCache[nearestIdx];
-    _tdManualBreakChars = _tdManualBreakChars.filter(c => c !== oldChars);
-    if(newChars > 0 && !_tdManualBreakChars.includes(newChars)) _tdManualBreakChars.push(newChars);
-    _tdManualBreakChars.sort((a, b) => a - b);
+    const others = _tdManualBreakChars.filter(c => c !== oldChars);
+    let newChars = _tdLineStartCharsCache[nearestIdx];
+
+    // Comprobar contra el algoritmo REAL si este punto se respeta de
+    // verdad, o si un desbordamiento natural de esa página lo dejaría sin
+    // efecto (silenciosamente, más arriba de donde se soltó).
+    let tentative = others.slice();
+    if(newChars > 0 && !tentative.includes(newChars)) tentative.push(newChars);
+    tentative.sort((a, b) => a - b);
+    let result = _tdLayoutPagesForBreaks(tentative);
+    if(newChars > 0 && !result.pageStartChars.includes(newChars)){
+      // No cabe: esa página ya no tiene sitio hasta donde se soltó — se usa
+      // el límite real más bajo que SÍ admite (el siguiente punto de corte
+      // que el algoritmo aplicaría de todas formas para esa página).
+      const prevBreak = others.filter(c => c < newChars).reduce((a, b) => Math.max(a, b), 0);
+      const ceilChars = result.pageStartChars.find(c => c > prevBreak);
+      newChars = (ceilChars !== undefined && ceilChars > 0) ? ceilChars : 0;
+      edToast('Esa página ya no tiene sitio — colocado en el límite permitido');
+      tentative = others.slice();
+      if(newChars > 0 && !tentative.includes(newChars)) tentative.push(newChars);
+      tentative.sort((a, b) => a - b);
+    }
+    _tdManualBreakChars = tentative;
     _tdRecomputeViewPagination();
   };
   handle.addEventListener('pointerdown', e => {
@@ -859,28 +870,6 @@ function _tdWirePageBreakDrag(handle, lineEl){
     dragging = true;
     lineEl.classList.add('dragging');
     handle.setPointerCapture?.(e.pointerId);
-
-    // Techo de este arrastre concreto: se quita SOLO este salto del conjunto
-    // (los demás siguen fijos tal cual) y se mira dónde cortaría el
-    // algoritmo de todas formas — por desbordamiento natural del marco de
-    // esa página, o por el siguiente salto ya fijado, lo que llegue antes.
-    // Ese punto es el límite físico real: más allá, esa página ya no tiene
-    // sitio para más líneas.
-    ceilY = Infinity;
-    const oldChars = parseFloat(lineEl.dataset.chars);
-    const others = _tdManualBreakChars.filter(c => c !== oldChars);
-    const prevBreak = others.filter(c => c < oldChars).reduce((a, b) => Math.max(a, b), 0);
-    const { pageStartChars: reducedStarts } = _tdLayoutPagesForBreaks(others);
-    const ceilChars = reducedStarts.find(c => c > prevBreak);
-    if(ceilChars !== undefined){
-      let nearestIdx = 0, nearestDist = Infinity;
-      for(let i = 0; i < _tdLineStartCharsCache.length; i++){
-        const d = Math.abs(_tdLineStartCharsCache[i] - ceilChars);
-        if(d < nearestDist){ nearestDist = d; nearestIdx = i; }
-      }
-      if(_tdLineOffsetsCache[nearestIdx] !== undefined) ceilY = _tdLineOffsetsCache[nearestIdx];
-    }
-
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     document.addEventListener('pointercancel', onUp);

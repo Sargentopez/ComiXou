@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.18</footer>
+    <footer class="app-version">v33.20</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -961,9 +961,6 @@ Router.register('editor', {
            segunda señal independiente para _tdReadKeyboardH(), ver
            editor-textdoc.js. No ocupa espacio (visibility:hidden). -->
       <div id="tdKbProbe" aria-hidden="true" style="position:fixed;left:0;top:0;width:1px;visibility:hidden;pointer-events:none;height:env(keyboard-inset-height, 0px);"></div>
-      <!-- Diagnóstico visible TEMPORAL del cálculo del teclado — quitar en
-           cuanto se confirme correcto en dispositivo real. -->
-      <div id="tdKbDebug" aria-hidden="true" style="position:fixed;top:2px;right:2px;z-index:99999;font:10px monospace;background:rgba(0,0,0,.6);color:#0f0;padding:2px 5px;border-radius:3px;pointer-events:none;white-space:pre;"></div>
       <div id="tdTopbar">
         <div id="tdTitlePill" aria-hidden="true"></div>
         <span id="tdProjectTitle">Editor de textos</span>
