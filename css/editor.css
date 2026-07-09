@@ -2723,7 +2723,7 @@ body.editor-page #appView {
   box-shadow: var(--box-shadow-lg);
   border: 1.5px solid var(--black);
   width: min(100%, 794px); /* A4 a 96dpi, se encoge en pantallas más estrechas */
-  min-height: calc(min(100%, 794px) * 297 / 210); /* una A4 entera como mínimo, aunque esté vacía */
+  aspect-ratio: 210 / 297; /* una A4 entera como mínimo (según el ANCHO propio), aunque esté vacía — crece con el contenido más allá de esto */
   padding: 9%; /* márgenes de una A4 estándar */
   box-sizing: border-box;
   flex-shrink: 0;
