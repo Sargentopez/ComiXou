@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.11</footer>
+    <footer class="app-version">v33.12</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1018,7 +1018,7 @@ Router.register('editor', {
       <div id="tdPageArea">
         <div id="tdPage" class="td-page">
           <input type="hidden" id="tdHiddenInput">
-          <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe aquí el texto de tu obra…"></trix-editor>
+          <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe aquí el texto de tu obra…" virtualkeyboardpolicy="manual"></trix-editor>
           <div id="tdPageBreaks" aria-hidden="true"></div>
         </div>
       </div>

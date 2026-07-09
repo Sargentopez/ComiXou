@@ -290,10 +290,28 @@ function _tdInitOnce(){
       _tdSetScrollOffset(_tdTouchStartOffset - dy, false);
     }
   }, {capture:true, passive:false});
-  const _tdTouchEnd = () => {
+  const _tdTouchEnd = e => {
+    const wasMoved = _tdTouchMoved;
     _tdTouchStartY = null; _tdTouchMoved = false;
     const editorEl2 = document.getElementById('tdEditor');
     if(editorEl2) editorEl2.style.userSelect = '';
+    // <trix-editor virtualkeyboardpolicy="manual"> (ver views.js) le pide al
+    // navegador que NO abra el teclado solo por enfocar — así un toque puede
+    // resolverse en tres cosas distintas (arrastrar el folio, seleccionar
+    // texto, o solo colocar el cursor) antes de decidir si hace falta
+    // teclado. Aquí se abre a propósito, y solo, cuando NINGUNA de las otras
+    // dos ha ocurrido: nada de arrastre (wasMoved) y el resultado es un
+    // cursor colocado sin selección (mantener pulsado sobre una palabra la
+    // selecciona — eso tampoco es "quiero escribir", así que tampoco abre
+    // teclado por sí solo). rAF: da tiempo a que el navegador termine de
+    // resolver dónde cae el cursor tras el toque antes de comprobarlo.
+    if(wasMoved || e.type === 'touchcancel' || !('virtualKeyboard' in navigator)) return;
+    requestAnimationFrame(() => {
+      const sel = window.getSelection();
+      if(sel && sel.rangeCount > 0 && sel.isCollapsed && editorEl2 && editorEl2.contains(sel.anchorNode)){
+        navigator.virtualKeyboard.show();
+      }
+    });
   };
   _tdArea?.addEventListener('touchend', _tdTouchEnd, {capture:true});
   _tdArea?.addEventListener('touchcancel', _tdTouchEnd, {capture:true});
@@ -461,6 +479,7 @@ function _tdWireFontControls(){
     try{ editorEl.editor?.activateAttribute('fontSize', sizeSel.value); }catch(_e){}
     unfreeze();
     editorEl.focus();
+    if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
   });
 
   famSel.addEventListener('mousedown', freeze);
@@ -469,6 +488,7 @@ function _tdWireFontControls(){
     try{ editorEl.editor?.activateAttribute('fontFamily', famSel.value); }catch(_e){}
     unfreeze();
     editorEl.focus();
+    if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
   });
 
   // Reflejar en los selects el tamaño/fuente activos en la posición actual del cursor
@@ -543,6 +563,43 @@ function _tdCharOffsetToRange(container, targetOffset){
 // .td-editor/.td-page) — esta predicción es solo para saber EN QUÉ PUNTO del
 // texto (nº de caracteres) caerá cada salto, que luego se localiza en el DOM
 // tal y como se está escribiendo ahora mismo (_tdCharOffsetToRange).
+// Marcos reales (por hoja) de un flujo YA APLICADO — misma lógica exacta que
+// _tdReflowFlowInPlace usa para aplicar de verdad (frames = ancho/alto real
+// de cada hoja del flujo, más un marco de reserva al final), pero de SOLO
+// LECTURA: no muta nada, solo sirve para que _tdRecomputeViewPagination
+// prediga los saltos contra el marco que de verdad se usará, en vez de
+// asumir siempre la página entera. Necesario porque si la hoja de texto se
+// redimensionó a mano en el lienzo (handlers) o ya no ocupa la página
+// entera, la vista previa (y cualquier salto que se arrastre sobre ella) se
+// desincronizaría de lo que _tdApplyToCanvas/_tdReflowFlowInPlace aplicará.
+// Devuelve null si el flujo no tiene ninguna hoja en la obra (p.ej. texto
+// nuevo, todavía sin aplicar — ahí se sigue usando la página entera).
+function _tdEditingFlowFrames(flowId){
+  if(!flowId) return null;
+  const flowIdxs = [];
+  const exceptIdxs = [];
+  edPages.forEach((p, i) => {
+    if((p.layers || []).some(l => l && l._tdFlowId === flowId)) flowIdxs.push(i);
+    else if((p.layers || []).some(l => l && l._tdExceptFlow === flowId)) exceptIdxs.push(i);
+  });
+  if(!flowIdxs.length) return null;
+  flowIdxs.sort((a, b) => a - b);
+  const frames = flowIdxs.map(i => {
+    const pg = edPages[i];
+    const layer = pg.layers.find(l => l && l._tdFlowId === flowId);
+    const orient = pg.orientation || edOrientation;
+    const sv = orient === 'vertical';
+    const pgPw = sv ? ED_PAGE_W : ED_PAGE_H, pgPh = sv ? ED_PAGE_H : ED_PAGE_W;
+    return { pw: layer.width * pgPw, ph: layer.height * pgPh };
+  });
+  const spanIdxs = [...flowIdxs, ...exceptIdxs].sort((a, b) => a - b);
+  const lastIdx = spanIdxs[spanIdxs.length - 1];
+  const lastOrient = edPages[lastIdx].orientation || edOrientation;
+  const svLast = lastOrient === 'vertical';
+  frames.push({ pw: svLast ? ED_PAGE_W : ED_PAGE_H, ph: svLast ? ED_PAGE_H : ED_PAGE_W });
+  return frames;
+}
+
 let _tdRecomputeTimer = null;
 function _tdRecomputeViewPagination(){
   const hidden = document.getElementById('tdHiddenInput');
@@ -562,11 +619,18 @@ function _tdRecomputeViewPagination(){
   const editingLayer = (typeof _tdEditingFlowId !== 'undefined' && _tdEditingFlowId) ? _tdFindFlowLayer(_tdEditingFlowId) : null;
   const marginFracX = (editingLayer && editingLayer.marginXFrac) || TD_MARGIN_FRAC;
 
+  // Marco de la predicción: si se reedita un flujo ya aplicado, el marco
+  // REAL de cada una de sus hojas (por si se redimensionó con los handlers
+  // en el lienzo — ver _tdEditingFlowFrames); si no (texto nuevo, o el
+  // flujo ya no tiene hojas en la obra), la página entera de siempre.
+  const editingFrames = _tdEditingFlowId ? _tdEditingFlowFrames(_tdEditingFlowId) : null;
+  const frameSizes = editingFrames || {pw: edPageW(), ph: edPageH()};
+
   // _tdManualBreakChars: saltos fijados a mano arrastrando la línea — el
   // resto de páginas se recalculan solas a partir de ahí (ver comentario en
   // _tdLayoutPages).
   const { pageStartChars, lineStartChars } = _tdLayoutPages(
-    blocks, {pw: edPageW(), ph: edPageH()}, lineHeightMult,
+    blocks, frameSizes, lineHeightMult,
     { marginFracX, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
     _tdManualBreakChars
   );
