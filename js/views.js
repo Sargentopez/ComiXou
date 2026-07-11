@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.38</footer>
+    <footer class="app-version">v33.40</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -972,6 +972,10 @@ Router.register('editor', {
           <button class="ed-top-pagebn" id="tdPageNext" title="Página siguiente">&#9654;</button>
         </div>
         <button class="ed-top-action" id="tdApplyBtn">Aplicar al lienzo</button>
+        <!-- Botón de diagnóstico temporal para el bug de acentos/IME (petición
+             de Alberto) — cuando ya no haga falta, comentar esta línea siguiendo
+             el mismo patrón que edDiagBtn/gcpSbDiagBtn (no borrar el botón). -->
+        <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME">🩺</button>
         <button id="tdCloseBtn" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">

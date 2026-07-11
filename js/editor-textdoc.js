@@ -255,6 +255,7 @@ function _tdInitOnce(){
   document.getElementById('tdCloseBtn')?.addEventListener('click', edCloseTextDoc);
   document.getElementById('tdApplyBtn')?.addEventListener('click', _tdApplyToCanvas);
   document.getElementById('tdPageBreakBtn')?.addEventListener('click', _tdInsertPageBreakAtCursor);
+  document.getElementById('tdDiagBtn')?.addEventListener('click', _tdRunDiag);
   const editorEl = document.getElementById('tdEditor');
 
   // Refuerzo del atributo HTML virtualkeyboardpolicy="manual" (ver views.js)
@@ -296,9 +297,16 @@ function _tdInitOnce(){
   // estándar en editores enriquecidos (CKEditor, ProseMirror, Slate) para
   // convivir con el IME de Android.
   if(editorEl){
-    editorEl.addEventListener('compositionstart', () => { _tdComposing = true; });
-    editorEl.addEventListener('compositionend', () => {
+    editorEl.addEventListener('compositionstart', e => {
+      _tdComposing = true;
+      _tdLogIme('compositionstart', 'data=' + JSON.stringify(e.data));
+    });
+    editorEl.addEventListener('compositionupdate', e => {
+      _tdLogIme('compositionupdate', 'data=' + JSON.stringify(e.data));
+    });
+    editorEl.addEventListener('compositionend', e => {
       _tdComposing = false;
+      _tdLogIme('compositionend', 'data=' + JSON.stringify(e.data));
       // Al terminar, aplicar el reajuste/recentrado que se haya podido
       // saltar mientras estaba activa (mismo retardo que trix-change).
       clearTimeout(_tdRecomputeTimer);
@@ -307,6 +315,17 @@ function _tdInitOnce(){
         _tdRecomputeViewPagination();
         _tdCenterActiveLine();
       }, 220);
+    });
+    // 'input'/'beforeinput' no cambian ningún comportamiento (solo registran) —
+    // sirven para ver si el navegador llegó a insertar el acento de verdad y
+    // con qué inputType/datos, aunque compositionend no dispare o mienta (caso
+    // documentado en Android Chrome: el dato de compositionend a veces no
+    // refleja el texto realmente insertado).
+    editorEl.addEventListener('beforeinput', e => {
+      _tdLogIme('beforeinput', 'inputType=' + e.inputType + ' data=' + JSON.stringify(e.data) + ' isComposing=' + e.isComposing);
+    });
+    editorEl.addEventListener('input', e => {
+      _tdLogIme('input', 'inputType=' + e.inputType + ' data=' + JSON.stringify(e.data) + ' isComposing=' + e.isComposing);
     });
   }
 
@@ -581,6 +600,129 @@ let _tdAutoFollow = true;
 // _tdCenterActiveLine y _tdSyncViewportHeight para no tocar scroll/tamaño
 // del contenedor del editor mientras tanto.
 let _tdComposing = false;
+
+// ── Diagnóstico temporal de acentos/IME (botón 🩺 tdDiagBtn, ver views.js) ──
+// Guarda un historial reciente de eventos de composición/entrada — así se ve
+// la secuencia EXACTA que dispara Android al fallar un acento, en vez de
+// depender de que Alberto la describa de memoria. Petición explícita de
+// Alberto: "pon un icono en el editor de textos para diagnóstico, mira cómo
+// se hace en otros diagnósticos ocultos como comentarios" (mismo patrón que
+// _edRunDiag en editor.js / botón 🩺 edDiagBtn).
+window._tdImeLog = window._tdImeLog || [];
+function _tdLogIme(kind, detail){
+  const t = new Date();
+  const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
+        ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
+  window._tdImeLog.push(`${hh}:${mm}:${ss}.${ms}  ${kind}  ${detail || ''}`);
+  if(window._tdImeLog.length > 300) window._tdImeLog.shift();
+}
+
+// Registro de cada intento de "Aplicar al lienzo" (botón 🩺 tdDiagBtn) — qué
+// HTML se leyó, cuántos bloques/con qué alineación salieron de _tdParseBlocks,
+// y por qué rama terminó la función (éxito, "sin contenido", flujo no
+// encontrado, excepción...). Petición explícita de Alberto tras detectar que
+// "Aplicar al lienzo" no hacía nada con un párrafo alineado de más de una línea.
+window._tdApplyLog = window._tdApplyLog || [];
+function _tdLogApply(kind, detail){
+  const t = new Date();
+  const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
+        ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
+  window._tdApplyLog.push(`${hh}:${mm}:${ss}.${ms}  ${kind}  ${detail || ''}`);
+  if(window._tdApplyLog.length > 100) window._tdApplyLog.shift();
+}
+async function _tdRunDiag(){
+  const lines = [];
+  const L = s => lines.push(s);
+  L('══ DIAGNÓSTICO EDITOR DE TEXTOS — acentos/IME ══');
+  L(new Date().toLocaleString());
+
+  // Versión REALMENTE en ejecución ahora mismo (footer) y estado de caché/SW —
+  // primera sospecha si "sigue roto tras recargar": que no se esté ejecutando
+  // de verdad el JS nuevo (SW en espera sin activar, o la app ni siquiera se
+  // recargó del todo — en Android, volver a abrir el icono de una PWA a veces
+  // solo reactiva el proceso en segundo plano en vez de recargar la página).
+  L('Versión (footer): ' + (document.querySelector('.app-version')?.textContent || '?'));
+  try{
+    const cacheNames = await caches.keys();
+    L('Cachés existentes: ' + (cacheNames.length ? cacheNames.join(', ') : '(ninguna)'));
+  }catch(e){ L('Error leyendo cachés: ' + e.message); }
+  try{
+    if('serviceWorker' in navigator){
+      const reg = await navigator.serviceWorker.getRegistration();
+      L('Service Worker registrado: ' + (reg ? 'sí' : 'NO'));
+      if(reg){
+        L('  installing: ' + (reg.installing ? reg.installing.scriptURL : '—'));
+        L('  waiting: ' + (reg.waiting ? reg.waiting.scriptURL + '  ⚠️ HAY UN SW EN ESPERA SIN ACTIVAR (JS viejo aún en uso)' : '—'));
+        L('  active: ' + (reg.active ? reg.active.scriptURL : '—'));
+      }
+      L('  controlando esta página ahora mismo: ' + (navigator.serviceWorker.controller ? 'sí' : 'NO'));
+    } else {
+      L('serviceWorker no soportado en este navegador');
+    }
+  }catch(e){ L('Error leyendo Service Worker: ' + e.message); }
+  L('User agent: ' + navigator.userAgent);
+
+  // Estado del editor de textos ahora mismo
+  const editorEl = document.getElementById('tdEditor');
+  L('');
+  L('── Estado del editor ahora mismo ──');
+  L('tdEditor existe: ' + (editorEl ? 'sí' : 'NO'));
+  if(editorEl){
+    L('virtualKeyboardPolicy: ' + editorEl.virtualKeyboardPolicy);
+    L('contentEditable: ' + editorEl.contentEditable);
+    L('tiene el foco ahora mismo: ' + (document.activeElement === editorEl));
+  }
+  L('_tdComposing ahora mismo: ' + _tdComposing);
+  L('virtualKeyboard API disponible: ' + ('virtualKeyboard' in navigator));
+  if('virtualKeyboard' in navigator){
+    try{
+      L('  overlaysContent: ' + navigator.virtualKeyboard.overlaysContent);
+      const r = navigator.virtualKeyboard.boundingRect;
+      L('  boundingRect: ' + (r ? `${Math.round(r.width)}×${Math.round(r.height)}` : '—'));
+    }catch(e){ L('  Error leyendo virtualKeyboard: ' + e.message); }
+  }
+
+  L('');
+  L('── Historial de eventos de composición/entrada (' + (window._tdImeLog || []).length + ') ──');
+  L('(secuencia normal: compositionstart → compositionupdate* → input → compositionend;');
+  L(' si falta compositionend tras un compositionstart, o si el "input" que va justo');
+  L(' antes de compositionend no trae el acento en su "data", esa es la pista clave)');
+  if((window._tdImeLog || []).length) window._tdImeLog.forEach(l => L(l));
+  else L('(vacío — no se ha escrito nada en el editor todavía en esta carga de página)');
+
+  L('');
+  L('── Historial de "Aplicar al lienzo" (' + (window._tdApplyLog || []).length + ') ──');
+  L('("SALIDA: sin contenido" = _tdParseBlocks no encontró texto real en ningún');
+  L(' bloque — la causa más típica es que se perdiera al recorrer el HTML, p.ej.');
+  L(' un párrafo alineado con más de una línea)');
+  if((window._tdApplyLog || []).length) window._tdApplyLog.forEach(l => L(l));
+  else L('(vacío — no se ha pulsado "Aplicar al lienzo" todavía en esta carga de página)');
+
+  // Mostrar panel — mismo patrón visual que _edRunDiag (editor.js, botón 🩺 edDiagBtn)
+  let p = document.getElementById('_tdDiagPanel');
+  if(!p){
+    p = document.createElement('div');
+    p.id = '_tdDiagPanel';
+    p.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#111;color:#0f0;font:11px monospace;display:flex;flex-direction:column;padding:8px;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px;flex-shrink:0';
+    hdr.innerHTML = '<b style="color:#fff">DIAGNÓSTICO ACENTOS/IME</b>';
+    const btns = document.createElement('div');
+    const cp = document.createElement('button');
+    cp.textContent = '📋 Copiar'; cp.style.cssText = 'padding:2px 8px;cursor:pointer;margin-right:4px;';
+    cp.onclick = () => { const ta = document.getElementById('_tdDiagTa'); ta.select(); document.execCommand('copy'); cp.textContent = '✓'; };
+    const cl = document.createElement('button');
+    cl.textContent = '✕'; cl.style.cssText = 'padding:2px 8px;cursor:pointer;';
+    cl.onclick = () => p.remove();
+    btns.append(cp, cl); hdr.appendChild(btns); p.appendChild(hdr);
+    const ta = document.createElement('textarea');
+    ta.id = '_tdDiagTa';
+    ta.style.cssText = 'flex:1;width:100%;background:#111;color:#0f0;border:none;font:11px monospace;padding:4px;box-sizing:border-box;resize:none;';
+    ta.readOnly = true; p.appendChild(ta);
+    document.body.appendChild(p);
+  }
+  document.getElementById('_tdDiagTa').value = lines.join('\n');
+}
 
 // Mientras se arrastra un salto de página, ninguna llamada EXTERNA a
 // _tdRecomputeViewPagination() debe reconstruir las líneas (ver esa
@@ -1403,14 +1545,24 @@ function _tdParseBlocks(html){
       // cita, lista…), igual que ya se hace con indentLevel/ctxKind.
       if(tag === 'align-center' || tag === 'align-right' || tag === 'align-justify'){
         const a = tag === 'align-center' ? 'center' : tag === 'align-right' ? 'right' : 'justify';
-        if(el.children.length > 0){
-          // Envuelve un bloque real (div/h1/blockquote/ul/ol/pre…) — recorrer dentro.
+        // ¿Envuelve un bloque real (div/h1/blockquote/ul/ol/pre/aside, u otra
+        // etiqueta de alineación anidada)? Antes se usaba "¿tiene ALGÚN hijo
+        // elemento?" — pero un simple salto de línea manual (<br>, Shift+Intro
+        // dentro del mismo párrafo) o texto con negrita/cursiva (<strong>,
+        // <em>...) TAMBIÉN son hijos elemento sin ser un bloque envuelto, y
+        // hacían caer aquí por error: se recorrían como si fueran bloques de
+        // nivel superior (no lo son) y el párrafo entero se perdía en
+        // silencio — bug real: alinear un párrafo con más de una línea
+        // dejaba "Aplicar al lienzo" sin nada que aplicar.
+        const TD_BLOCK_TAGS = ['div', 'h1', 'blockquote', 'ul', 'ol', 'pre', 'aside', 'align-center', 'align-right', 'align-justify'];
+        const wrapsRealBlock = Array.from(el.children).some(c => TD_BLOCK_TAGS.includes(c.tagName.toLowerCase()));
+        if(wrapsRealBlock){
+          // Envuelve un bloque real — recorrer dentro.
           walkBlockLevel(el, ctxKind, indentLevel, a);
         } else {
-          // La propia etiqueta de alineación ES el párrafo (Trix no anidó
-          // nada dentro, el texto está directamente ahí) — tratarla como tal
-          // en vez de recorrer sus hijos (no hay ninguno: el párrafo entero
-          // se perdía en silencio si Trix genera el HTML de esta forma).
+          // La propia etiqueta de alineación ES el párrafo (con o sin <br>/
+          // negrita/cursiva sueltos dentro) — tratarla como tal en vez de
+          // recorrer sus hijos como si fueran bloques.
           blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, align:a, runs: runsFromInline(el, {})});
         }
         return;
@@ -1798,9 +1950,23 @@ function _tdExceptCurrentPage(){
 function _tdApplyToCanvas(){
   const hidden = document.getElementById('tdHiddenInput');
   const html = (hidden ? hidden.value : '') || '';
-  const blocks = _tdParseBlocks(html);
+  let blocks;
+  try{
+    blocks = _tdParseBlocks(html);
+  }catch(err){
+    _tdLogApply('EXCEPCIÓN en _tdParseBlocks', (err && err.message) || String(err));
+    edToast('Error al leer el texto — no se ha perdido nada, sigue en el editor (' + ((err && err.message) || err) + ')');
+    return;
+  }
   const hasContent = blocks.some(b => (b.runs || []).some(r => r.text && r.text.trim()));
-  if(!hasContent){ edToast('Escribe algo de texto antes de aplicar'); return; }
+  _tdLogApply('inicio', 'html.length=' + html.length + ' bloques=' + blocks.length
+    + ' align=[' + blocks.map(b => b.align || '-').join(',') + ']'
+    + ' hasContent=' + hasContent);
+  if(!hasContent){
+    _tdLogApply('SALIDA: sin contenido', 'blocks=' + JSON.stringify(blocks).slice(0, 500));
+    edToast('Escribe algo de texto antes de aplicar');
+    return;
+  }
 
   const lineHeightMult = _tdLineHeightMult;
 
@@ -1812,7 +1978,7 @@ function _tdApplyToCanvas(){
   try{
     if(_tdEditingFlowId){
       const existingLayer = _tdFindFlowLayer(_tdEditingFlowId);
-      if(!existingLayer){ edToast('No se encuentra el texto a actualizar'); return; }
+      if(!existingLayer){ _tdLogApply('SALIDA: flujo no encontrado', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se encuentra el texto a actualizar'); return; }
       // Se reutiliza el mismo motor que el redimensionado con los handlers:
       // conserva el tamaño/posición/color/fondo/marco que ya tuviera cada hoja
       // del flujo — solo cambia el contenido (y el interlineado, si se tocó
@@ -1822,7 +1988,7 @@ function _tdApplyToCanvas(){
       existingLayer.manualBreakChars = _tdManualBreakChars.slice();
       const _panelWasOpen = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
       const r = _tdReflowFlowInPlace(existingLayer, _panelWasOpen);
-      if(!r){ edToast('No se pudo actualizar el texto'); return; }
+      if(!r){ _tdLogApply('SALIDA: reflujo falló', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se pudo actualizar el texto'); return; }
       if(!_panelWasOpen) edLoadPage(r.firstIdx); // si no había panel que restaurar, al menos ir a la hoja
       edToast(r.count === 1 ? 'Texto actualizado (1 hoja)' : `Texto actualizado (${r.count} hojas)`);
     } else {
@@ -1868,9 +2034,11 @@ function _tdApplyToCanvas(){
       );
     }
   }catch(err){
+    _tdLogApply('EXCEPCIÓN capturada', (err && err.message) || String(err));
     edToast('Error al aplicar el texto — no se ha perdido nada, sigue en el editor (' + (err && err.message || err) + ')');
     return;
   }
+  _tdLogApply('OK', 'texto aplicado y editor cerrado');
 
   // Cada aplicación consume el contenido del editor — se vacía para el siguiente texto
   if(hidden) hidden.value = '';
