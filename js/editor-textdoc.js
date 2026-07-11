@@ -329,6 +329,29 @@ function _tdInitOnce(){
     });
   }
 
+  // Listeners en fase de CAPTURA sobre document — se ejecutan ANTES que
+  // cualquier otro (incluido el manejo interno del propio Trix), y en
+  // capture aunque algo intermedio llame a stopPropagation() en fase de
+  // burbuja no impide que estos disparen. Sirven para distinguir dos
+  // posibilidades muy distintas cuando un acento se pierde sin dejar rastro
+  // en los listeners normales de arriba: (a) el evento SÍ llega al DOM pero
+  // algo antes de nuestro listener normal lo intercepta — solucionable desde
+  // JS; o (b) no llega absolutamente nada ni siquiera aquí — entonces se
+  // pierde a un nivel (SO/teclado/Chrome) que ningún JS de la página puede
+  // interceptar ni arreglar. keydown con keyCode 229 o key:"Dead"/"Unidentified"
+  // es la señal típica de "el IME está procesando esta tecla".
+  if(editorEl && !window._tdCaptureLoggerBound){
+    window._tdCaptureLoggerBound = true;
+    document.addEventListener('beforeinput', e => {
+      if(!editorEl.contains(e.target) && e.target !== editorEl) return;
+      _tdLogIme('(CAPTURA) beforeinput', 'inputType=' + e.inputType + ' data=' + JSON.stringify(e.data));
+    }, true);
+    document.addEventListener('keydown', e => {
+      if(!editorEl.contains(e.target) && e.target !== editorEl) return;
+      _tdLogIme('(CAPTURA) keydown', 'key=' + e.key + ' keyCode=' + e.keyCode + ' isComposing=' + e.isComposing);
+    }, true);
+  }
+
   if(editorEl){
     editorEl.addEventListener('trix-change', () => {
       // Cambio real de texto: esto SÍ es "se está escribiendo" — reactiva
@@ -660,11 +683,29 @@ function _tdShowKeyboardIfNeeded(reason){
   let h = 0;
   try{ h = navigator.virtualKeyboard.boundingRect?.height || 0; }catch(_e){}
   if(h > 0){
-    _tdLogIme('virtualKeyboard.show() OMITIDO', reason + ' — ya estaba abierto (boundingRect.height=' + h + ')');
+    _tdLogIme('mostrar teclado OMITIDO', reason + ' — ya estaba abierto (boundingRect.height=' + h + ')');
     return;
   }
-  _tdLogIme('virtualKeyboard.show() llamado', reason);
-  navigator.virtualKeyboard.show();
+  const editorEl = document.getElementById('tdEditor');
+  if(!editorEl) return;
+  // EXPERIMENTO: en vez de navigator.virtualKeyboard.show() (API más nueva,
+  // con varios bugs documentados en Chromium a día de hoy — ver conversación
+  // con Alberto), se usa el mecanismo más antiguo y sencillo del que ya hay
+  // prueba de que funciona bien con acentos: virtualKeyboardPolicy="auto" +
+  // un enfoque real muestra el teclado solo, igual que en cualquier <input>
+  // normal del resto de la app (confirmado que ahí los acentos van bien).
+  // Blur()+focus() (no basta reenfocar el mismo elemento ya enfocado) para
+  // que se dispare de verdad el "nuevo enfoque" que activa el auto-show —
+  // efecto secundario aceptado: un parpadeo brevísimo del cursor/selección.
+  // Se vuelve a "manual" enseguida para que el SIGUIENTE enfoque (arrastrar,
+  // seleccionar) no muestre el teclado solo otra vez.
+  _tdLogIme('mostrar teclado (vía policy=auto, no show())', reason);
+  editorEl.blur();
+  requestAnimationFrame(() => {
+    editorEl.virtualKeyboardPolicy = 'auto';
+    editorEl.focus();
+    setTimeout(() => { editorEl.virtualKeyboardPolicy = 'manual'; }, 80);
+  });
 }
 
 // Registro de cada intento de "Aplicar al lienzo" (botón 🩺 tdDiagBtn) — qué
@@ -749,8 +790,12 @@ async function _tdRunDiag(){
   L('(secuencia normal: compositionstart → compositionupdate* → input → compositionend;');
   L(' si falta compositionend tras un compositionstart, o si el "input" que va justo');
   L(' antes de compositionend no trae el acento en su "data", esa es la pista clave.');
-  L(' También incluye cada llamada a virtualKeyboard.show() — si una aparece justo');
-  L(' antes de que un carácter no llegue a escribirse, esa es la pista a seguir)');
+  L(' También incluye cada llamada a virtualKeyboard.show(), y una copia en fase de');
+  L(' CAPTURA de beforeinput/keydown (se ejecuta antes que cualquier otra cosa,');
+  L(' incluido Trix) — si un acento falla y NO aparece ni siquiera como "(CAPTURA)",');
+  L(' significa que no llega nada al DOM: se pierde en el sistema/teclado, no en');
+  L(' nuestro JS. Si SÍ aparece en captura pero no en los listeners normales de');
+  L(' abajo, algo intermedio lo está interceptando y sí sería arreglable)');
   if((window._tdImeLog || []).length) window._tdImeLog.forEach(l => L(l));
   else L('(vacío — no se ha escrito nada en el editor todavía en esta carga de página)');
 
