@@ -522,6 +522,9 @@ let _tdViewportSyncTimer = null;
 // quedan midiendo la pantalla completa aunque el teclado esté abierto y
 // tapando media hoja.
 let _tdKeyboardH = 0;
+// Último alto (px) realmente aplicado a #tdPageArea por _tdSyncViewportHeight —
+// para poder saltar el resize/scroll en cuanto no haya cambio real (ver ahí).
+let _tdLastSyncedAvailH = null;
 let _tdKeyboardGeomTimer = null;
 let _tdKbPollTimer = null;
 
@@ -575,6 +578,22 @@ function _tdSyncViewportHeight(){
   const kb = _tdReadKeyboardH();
   _tdKeyboardH = kb.used;
   const availH = Math.max(120, Math.round(vv.height - chromeH - _tdKeyboardH));
+  // Si no ha cambiado nada de verdad, no tocar #tdPageArea en absoluto — ni su
+  // alto ni (en cascada) el scroll. Antes se reaplicaba SIEMPRE, cambiara algo
+  // o no, cada ~350ms mientras el editor tuviera el foco (sondeo periódico) —
+  // eso significa tocar el contenedor del <trix-editor> aunque el usuario no
+  // esté haciendo nada más que sostener una tecla para elegir un acento; en
+  // Android eso puede bastar para que el sistema deje caer ese carácter sin
+  // que llegue a disparar ni un solo evento de composición (por eso _tdComposing,
+  // que depende de compositionstart/end, no basta por sí solo: hay teclados/
+  // configuraciones en los que Android nunca llega a usar composición y
+  // confirma cada letra al instante — confirmado con el registro del botón 🩺).
+  if(_tdLastSyncedAvailH !== null && Math.abs(availH - _tdLastSyncedAvailH) < 1){
+    window._tdSyncSkipCount = (window._tdSyncSkipCount || 0) + 1;
+    return;
+  }
+  window._tdSyncApplyCount = (window._tdSyncApplyCount || 0) + 1;
+  _tdLastSyncedAvailH = availH;
   pageArea.style.flex = 'none';
   pageArea.style.height = availH + 'px';
   // La página cambia de tamaño — recalcular la paginación en vivo (con
@@ -641,7 +660,18 @@ async function _tdRunDiag(){
   // de verdad el JS nuevo (SW en espera sin activar, o la app ni siquiera se
   // recargó del todo — en Android, volver a abrir el icono de una PWA a veces
   // solo reactiva el proceso en segundo plano en vez de recargar la página).
-  L('Versión (footer): ' + (document.querySelector('.app-version')?.textContent || '?'));
+  let _tdDiagVersion = document.querySelector('.app-version')?.textContent || '?';
+  if(_tdDiagVersion === '?'){
+    // El footer .app-version pertenece a otra vista (biblioteca) y no está en
+    // el DOM al ejecutar el diagnóstico desde dentro del Editor de textos —
+    // mismo fallback que usa _edRunDiag: el nombre de caché del Service Worker.
+    try{
+      const _cacheNamesV = await caches.keys();
+      const _vCache = _cacheNamesV.find(n => /^comixow-v\d+-\d+$/.test(n));
+      if(_vCache) _tdDiagVersion = _vCache.replace('comixow-v', 'v').replace(/-(\d+)$/, '.$1') + ' (por SW cache)';
+    }catch(_e){}
+  }
+  L('Versión: ' + _tdDiagVersion);
   try{
     const cacheNames = await caches.keys();
     L('Cachés existentes: ' + (cacheNames.length ? cacheNames.join(', ') : '(ninguna)'));
@@ -673,6 +703,7 @@ async function _tdRunDiag(){
     L('tiene el foco ahora mismo: ' + (document.activeElement === editorEl));
   }
   L('_tdComposing ahora mismo: ' + _tdComposing);
+  L('_tdSyncViewportHeight — aplicado: ' + (window._tdSyncApplyCount || 0) + ' | saltado por no haber cambio real: ' + (window._tdSyncSkipCount || 0));
   L('virtualKeyboard API disponible: ' + ('virtualKeyboard' in navigator));
   if('virtualKeyboard' in navigator){
     try{
