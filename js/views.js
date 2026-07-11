@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.34</footer>
+    <footer class="app-version">v33.31</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1008,7 +1008,6 @@ Router.register('editor', {
               <button class="ed-dropdown-item" data-value="Verdana">Verdana</button>
             </div>
           </div>
-          <div class="ed-menu-sep"></div>
           <div class="ed-menu-item" style="position:relative">
             <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdFontSize" title="Tamaño de letra de la selección">Tamaño ▾</button>
             <div class="ed-dropdown" id="dd-tdFontSize">
@@ -1018,25 +1017,12 @@ Router.register('editor', {
               <button class="ed-dropdown-item" data-value="36px">Muy grande</button>
             </div>
           </div>
-          <div class="ed-menu-sep"></div>
-          <div class="ed-menu-item" style="position:relative">
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdLineHeight" title="Interlineado de todo el texto">Interlineado ▾</button>
-            <div class="ed-dropdown" id="dd-tdLineHeight">
-              <button class="ed-dropdown-item" data-value="1.15">Compacto</button>
-              <button class="ed-dropdown-item" data-value="1.42">Normal</button>
-              <button class="ed-dropdown-item" data-value="1.75">Amplio</button>
-            </div>
-          </div>
-          <div class="ed-menu-sep"></div>
-          <div class="ed-menu-item" style="position:relative">
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdAlign" title="Alineación del párrafo">Alineación ▾</button>
-            <div class="ed-dropdown" id="dd-tdAlign">
-              <button class="ed-dropdown-item" data-value="alignLeft">A la izquierda</button>
-              <button class="ed-dropdown-item" data-value="alignCenter">Centrado</button>
-              <button class="ed-dropdown-item" data-value="alignRight">A la derecha</button>
-              <button class="ed-dropdown-item" data-value="alignJustify">Justificado</button>
-            </div>
-          </div>
+          <span class="td-menu2-label">Interlineado</span>
+          <select id="tdLineHeightSel" title="Interlineado de todo el texto">
+            <option value="1.15">Compacto</option>
+            <option value="1.42" selected>Normal</option>
+            <option value="1.75">Amplio</option>
+          </select>
         </div>
       </div>
       <div id="tdPageArea">
