@@ -116,10 +116,7 @@ function edOpenTextDoc(editLayer){
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
     _tdAutoFollow = true;
-    _tdActiveDragCancel?.();
     _tdPageBreakDragging = false;
-    _tdLastPageBreakTapChars = null;
-    _tdLastPageBreakTapTime = 0;
     const areaElInit = document.getElementById('tdPageArea');
     if(areaElInit) areaElInit.scrollTop = 0;
     _tdRecomputeViewPagination();
@@ -171,14 +168,6 @@ function _tdFindFlowLayer(flowId){
   return null;
 }
 function edCloseTextDoc(fromPopstate){
-  // Si se está arrastrando (o corrigiendo) un salto de página en este
-  // instante, abortarlo YA, antes de nada más — sus listeners viven en
-  // document (no en el propio elemento) y solo se quitan al soltar
-  // normalmente; cerrar el editor a media gesto nunca dispara ese soltar
-  // de verdad, así que se quedarían escuchando para siempre, reaccionando
-  // a cualquier toque futuro en cualquier parte de la app. Esto es lo que
-  // coincidía con que el teclado se quedara sin cerrar.
-  _tdActiveDragCancel?.();
   const shell = document.getElementById('tdShell');
   const wasOpen = !!shell && shell.style.display !== 'none' && shell.style.display !== '';
   const finishClose = () => {
@@ -508,8 +497,10 @@ function _tdSyncViewportHeight(){
   // depende de que ese encadenado de tamaños funcione en todos los navegadores.
   const topbar = document.getElementById('tdTopbar');
   const menuBar = document.getElementById('tdMenuBar');
+  const menuBar2 = document.getElementById('tdMenuBar2');
   const chromeH = (topbar?.getBoundingClientRect().height || 0)
-                + (menuBar?.getBoundingClientRect().height || 0);
+                + (menuBar?.getBoundingClientRect().height || 0)
+                + (menuBar2?.getBoundingClientRect().height || 0);
   // Alto real visible menos la cabecera/barras y el teclado virtual: lo que
   // queda para la hoja. vv.height por sí solo NO refleja al teclado bajo
   // interactive-widget=overlays-content — de ahí que haya que restarlo
@@ -552,32 +543,8 @@ let _tdAutoFollow = true;
 // Ver _tdWirePageBreakDrag.
 let _tdPageBreakDragging = false;
 
-// Función para ABORTAR el arrastre de salto de página actualmente en curso
-// (si lo hay), sin aplicar ningún cambio — null si no hay ninguno activo.
-// Necesaria porque los listeners del arrastre están en document (no en el
-// propio elemento) y solo se quitan dentro de onUp: si el editor se cierra
-// a media gesto (el shell se oculta, pero nunca llega un pointerup/
-// pointercancel de verdad para ese puntero), esos listeners se quedarían
-// escuchando en document PARA SIEMPRE, reaccionando a cualquier toque
-// futuro en cualquier parte de la app — de ahí que "se bloqueara el drag"
-// coincidiera con que "el teclado no se cerraba": ver edCloseTextDoc,
-// donde se llama a esto antes de nada.
-let _tdActiveDragCancel = null;
-
-// Doble toque/doble clic sobre la zona de arrastre de un salto de página:
-// lo elimina (ver _tdWirePageBreakDrag). Se guarda a nivel de MÓDULO,
-// identificando el salto por su carácter (_tdManualBreakChars, estable) y
-// no por el elemento DOM concreto — un simple toque, aunque no llegue a
-// moverse nada, ya dispara onUp → _tdRecomputeViewPagination(), que
-// reconstruye TODAS las líneas; el segundo toque de un doble-toque cae
-// siempre sobre un elemento nuevo (recién creado por esa reconstrucción),
-// así que un cronómetro guardado en el propio elemento nunca vería el
-// segundo toque.
-let _tdLastPageBreakTapChars = null;
-let _tdLastPageBreakTapTime = 0;
-
 // Tamaños/fuentes admitidos al pegar contenido externo — mismo rango que los
-// controles del editor (ver dd-tdFontFamily/dd-tdFontSize en views.js), para
+// controles del editor (ver tdFontSizeSel/tdFontFamilySel en views.js), para
 // que el texto pegado quepa en la página igual que el escrito a mano.
 const TD_PASTE_FONT_MIN = 12, TD_PASTE_FONT_MAX = 40;
 const TD_ALLOWED_FONTS = ['Lora','Patrick Hand','Bangers','Permanent Marker','Bebas Neue','Oswald','Comic Neue','Press Start 2P','Arial','Verdana'];
@@ -603,69 +570,47 @@ function _tdSanitizePastedHTML(html){
 // Tamaño y tipo de letra de la selección: atributos de texto personalizados de
 // Trix (con valor, no solo on/off — ver _tdRegisterCustomTrixAttributes), con
 // controles propios fuera de <trix-toolbar> porque Trix no genera selects.
-// Ya NO son <select> nativos — son menús desplegables con submenú y checkeo,
-// mismo patrón que "Insertar ▾"/"Dibujar ▾" del editor general
-// (edToggleMenu/edCloseMenus, reutilizadas tal cual — son genéricas, operan
-// por [data-menu]/#dd-<id>, no conocen nada específico del editor general).
-// Truco "frozen" (documentado por la propia comunidad de Trix): al tocar el
-// botón se activa el atributo invisible "frozen" para que la selección de
-// texto siga viéndose resaltada mientras el foco se va del editor al menú.
+// Truco "frozen" (documentado por la propia comunidad de Trix): al enfocar el
+// select se activa el atributo invisible "frozen" para que la selección de
+// texto siga viéndose resaltada mientras el foco está en el <select>.
 function _tdWireFontControls(){
   const editorEl = document.getElementById('tdEditor');
-  const famBtn  = document.querySelector('[data-menu="tdFontFamily"]');
-  const sizeBtn = document.querySelector('[data-menu="tdFontSize"]');
-  if(!editorEl || !famBtn || !sizeBtn) return;
+  const sizeSel = document.getElementById('tdFontSizeSel');
+  const famSel  = document.getElementById('tdFontFamilySel');
+  if(!editorEl || !sizeSel || !famSel) return;
 
   const freeze = () => { try{ editorEl.editor?.activateAttribute('frozen'); }catch(_e){} };
   const unfreeze = () => { try{ editorEl.editor?.deactivateAttribute('frozen'); }catch(_e){} };
-  famBtn.addEventListener('pointerdown', freeze);
-  sizeBtn.addEventListener('pointerdown', freeze);
 
-  const applyChoice = (attr, value) => {
-    try{ editorEl.editor?.activateAttribute(attr, value); }catch(_e){}
+  sizeSel.addEventListener('mousedown', freeze);
+  sizeSel.addEventListener('focus', freeze);
+  sizeSel.addEventListener('change', () => {
+    try{ editorEl.editor?.activateAttribute('fontSize', sizeSel.value); }catch(_e){}
     unfreeze();
-    if(typeof edCloseMenus === 'function') edCloseMenus();
     editorEl.focus();
     if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
-    _tdSyncFontMenuActive();
-  };
-  document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
-    btn.addEventListener('click', () => applyChoice('fontFamily', btn.dataset.value));
-  });
-  document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
-    btn.addEventListener('click', () => applyChoice('fontSize', btn.dataset.value));
   });
 
-  // Reflejar en el checkeo (✓ + fondo) la fuente/tamaño activos en la
-  // posición actual del cursor — se actualiza en cada cambio de selección,
-  // esté el menú abierto o no, para que ya esté correcto la próxima vez que
-  // se abra (los desplegables, cerrados, no se ven — no hace falta esperar
-  // a que se abran para refrescarlo).
-  editorEl.addEventListener('trix-selection-change', _tdSyncFontMenuActive);
-  _tdSyncFontMenuActive();
-}
-
-// Marca con ✓ (y fondo, vía .ed-dropdown-item.active) la fuente/tamaño que
-// corresponden a la posición actual del cursor — 'Lora'/'22px' son los
-// valores por defecto del documento si el punto del cursor no tiene
-// ninguno de los dos atributos explícito.
-function _tdSyncFontMenuActive(){
-  const editorEl = document.getElementById('tdEditor');
-  if(!editorEl || !editorEl.editor) return;
-  let fs = '22px', ff = 'Lora';
-  try{
-    const range = editorEl.editor.getSelectedRange();
-    const piece = editorEl.editor.getDocument().getPieceAtPosition(range[0]);
-    const pfs = piece && piece.getAttribute && piece.getAttribute('fontSize');
-    const pff = piece && piece.getAttribute && piece.getAttribute('fontFamily');
-    if(pfs) fs = pfs;
-    if(pff) ff = pff;
-  }catch(_e){}
-  document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.value === ff);
+  famSel.addEventListener('mousedown', freeze);
+  famSel.addEventListener('focus', freeze);
+  famSel.addEventListener('change', () => {
+    try{ editorEl.editor?.activateAttribute('fontFamily', famSel.value); }catch(_e){}
+    unfreeze();
+    editorEl.focus();
+    if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
   });
-  document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.value === fs);
+
+  // Reflejar en los selects el tamaño/fuente activos en la posición actual del cursor
+  editorEl.addEventListener('trix-selection-change', () => {
+    const editor = editorEl.editor; if(!editor) return;
+    try{
+      const range = editor.getSelectedRange();
+      const piece = editor.getDocument().getPieceAtPosition(range[0]);
+      const fs = piece && piece.getAttribute && piece.getAttribute('fontSize');
+      const ff = piece && piece.getAttribute && piece.getAttribute('fontFamily');
+      if(fs && [...sizeSel.options].some(o => o.value === fs)) sizeSel.value = fs;
+      if(ff && [...famSel.options].some(o => o.value === ff)) famSel.value = ff;
+    }catch(_e){}
   });
 }
 
@@ -886,28 +831,6 @@ function _tdLayoutPagesForBreaks(forcedBreakChars){
 // para esa página, en vez de dejar el salto donde se soltó.
 function _tdWirePageBreakDrag(handle, lineEl){
   let dragging = false;
-  let pendingTimeout = null;
-
-  const removeDragListeners = () => {
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
-    document.removeEventListener('pointercancel', onUp);
-  };
-
-  // Aborta este arrastre concreto sin aplicar ningún cambio — llamable
-  // tanto desde dentro (nunca se llama a sí misma normalmente, el flujo
-  // normal es onUp→finish) como desde FUERA vía _tdActiveDragCancel (ver
-  // esa variable y edCloseTextDoc) si el editor se cierra a media gesto o
-  // a mitad de la animación de corrección.
-  const cancelDrag = () => {
-    dragging = false;
-    removeDragListeners();
-    if(pendingTimeout){ clearTimeout(pendingTimeout); pendingTimeout = null; }
-    lineEl.classList.remove('dragging');
-    _tdPageBreakDragging = false;
-    if(_tdActiveDragCancel === cancelDrag) _tdActiveDragCancel = null;
-  };
-
   const onMove = e => {
     if(!dragging) return;
     const pageEl = document.getElementById('tdPage');
@@ -920,7 +843,9 @@ function _tdWirePageBreakDrag(handle, lineEl){
     if(!dragging) return;
     dragging = false;
     lineEl.classList.remove('dragging');
-    removeDragListeners();
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
 
     const finalTop = parseFloat(lineEl.style.top) || 0;
     // Ajustar al límite de línea real más cercano — nunca a mitad de una,
@@ -966,7 +891,6 @@ function _tdWirePageBreakDrag(handle, lineEl){
       tentative.sort((a, b) => a - b);
       _tdManualBreakChars = tentative;
       _tdPageBreakDragging = false; // ya se puede reconstruir de nuevo — esta es la propia reconstrucción final
-      if(_tdActiveDragCancel === cancelDrag) _tdActiveDragCancel = null;
       _tdRecomputeViewPagination();
     };
 
@@ -975,9 +899,7 @@ function _tdWirePageBreakDrag(handle, lineEl){
       // al instante, sin transición — pero cuando el punto soltado NO era
       // válido y hay que rectificar, la línea se desliza de vuelta a su
       // sitio real en vez de saltar de golpe (lo que haría el recálculo,
-      // que reconstruye las líneas desde cero). _tdActiveDragCancel sigue
-      // registrado durante esta espera (se anula al final, en finish o en
-      // cancelDrag) por si el editor se cierra justo durante la animación.
+      // que reconstruye las líneas desde cero).
       lineEl.style.transition = 'top .22s cubic-bezier(.4,0,.2,1)';
       lineEl.style.top = _tdLineOffsetsCache[correctedIdx] + 'px';
       let done = false;
@@ -988,33 +910,15 @@ function _tdWirePageBreakDrag(handle, lineEl){
         finish();
       };
       lineEl.addEventListener('transitionend', onEnd);
-      pendingTimeout = setTimeout(onEnd, 260); // red de seguridad si transitionend no llega
+      setTimeout(onEnd, 260); // red de seguridad si transitionend no llega
     } else {
       finish();
     }
   };
   handle.addEventListener('pointerdown', e => {
     e.preventDefault();
-    const chars = parseFloat(lineEl.dataset.chars);
-    const now = Date.now();
-    if(_tdLastPageBreakTapChars === chars && (now - _tdLastPageBreakTapTime) < 350){
-      // Doble toque/clic: eliminar este salto — no empezar a arrastrar.
-      // Los saltos posteriores se recalculan solos al llamar de nuevo a
-      // _tdRecomputeViewPagination (el algoritmo nunca decide de antemano
-      // dónde va cada salto, ver _tdLayoutPages), así que quitar uno de
-      // _tdManualBreakChars ya reconfigura todo lo que haga falta después.
-      _tdLastPageBreakTapChars = null;
-      _tdLastPageBreakTapTime = 0;
-      _tdManualBreakChars = _tdManualBreakChars.filter(c => c !== chars);
-      _tdRecomputeViewPagination();
-      edToast('Salto de página eliminado');
-      return;
-    }
-    _tdLastPageBreakTapChars = chars;
-    _tdLastPageBreakTapTime = now;
     dragging = true;
     _tdPageBreakDragging = true; // bloquea cualquier reconstrucción externa hasta soltar (ver _tdPageBreakDragging)
-    _tdActiveDragCancel = cancelDrag; // para poder abortar desde fuera si hace falta (ver edCloseTextDoc)
     lineEl.classList.add('dragging');
     lineEl.style.transition = 'none'; // arrastre al instante, sin animación, siguiendo al dedo/ratón
     handle.setPointerCapture?.(e.pointerId);
