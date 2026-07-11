@@ -383,6 +383,14 @@ function _tdInitOnce(){
   // ha desplazado la hoja (comparando el scroll antes/después) NI ha
   // dejado una selección de texto (isCollapsed) — un toque para escribir,
   // y nada más.
+  // Llamar navigator.virtualKeyboard.show() cuando el teclado YA está abierto
+  // no debería hacer nada... pero es la única diferencia real entre este
+  // editor y el resto de la app (el único sitio que usa virtualKeyboardPolicy
+  // "manual" + la VirtualKeyboard API), y se estaba llamando en cada toque
+  // para reposicionar el cursor dentro del texto — algo muy frecuente
+  // mientras se escribe (ver _tdShowKeyboardIfNeeded, función de nivel de
+  // módulo definida más abajo junto a _tdComposing/_tdLogIme, para que
+  // también la use _tdWireFontControls).
   let _tdTouchStartScrollTop = 0;
   _tdArea?.addEventListener('touchstart', e => {
     if(e.touches.length !== 1) return; // 2 dedos: no interferir (zoom/pinch)
@@ -401,7 +409,7 @@ function _tdInitOnce(){
     requestAnimationFrame(() => {
       const sel = window.getSelection();
       if(sel && sel.rangeCount > 0 && sel.isCollapsed && editorEl && editorEl.contains(sel.anchorNode)){
-        navigator.virtualKeyboard.show();
+        _tdShowKeyboardIfNeeded('toque en el texto (tdTouchEnd)');
       }
     });
   };
@@ -636,6 +644,29 @@ function _tdLogIme(kind, detail){
   if(window._tdImeLog.length > 300) window._tdImeLog.shift();
 }
 
+// Llamar navigator.virtualKeyboard.show() cuando el teclado YA está abierto
+// no debería hacer nada... pero es la única diferencia real entre este
+// editor y el resto de la app (el único sitio que usa virtualKeyboardPolicy
+// "manual" + la VirtualKeyboard API), y se estaba llamando en cada toque
+// para reposicionar el cursor dentro del texto — algo muy frecuente
+// mientras se escribe. Igual que con _tdSyncViewportHeight, se evita
+// llamarla si ya sabemos que está abierta (boundingRect con alto > 0);
+// además queda registrado en el diagnóstico (🩺) para poder ver si
+// coincide con el instante exacto de un acento fallido. Nivel de módulo
+// (no anidada dentro de _tdInitOnce) para que también pueda llamarla
+// _tdWireFontControls (finishChoice), que es una función hermana, no hija.
+function _tdShowKeyboardIfNeeded(reason){
+  if(!('virtualKeyboard' in navigator)) return;
+  let h = 0;
+  try{ h = navigator.virtualKeyboard.boundingRect?.height || 0; }catch(_e){}
+  if(h > 0){
+    _tdLogIme('virtualKeyboard.show() OMITIDO', reason + ' — ya estaba abierto (boundingRect.height=' + h + ')');
+    return;
+  }
+  _tdLogIme('virtualKeyboard.show() llamado', reason);
+  navigator.virtualKeyboard.show();
+}
+
 // Registro de cada intento de "Aplicar al lienzo" (botón 🩺 tdDiagBtn) — qué
 // HTML se leyó, cuántos bloques/con qué alineación salieron de _tdParseBlocks,
 // y por qué rama terminó la función (éxito, "sin contenido", flujo no
@@ -714,10 +745,12 @@ async function _tdRunDiag(){
   }
 
   L('');
-  L('── Historial de eventos de composición/entrada (' + (window._tdImeLog || []).length + ') ──');
+  L('── Historial de eventos de composición/entrada/teclado (' + (window._tdImeLog || []).length + ') ──');
   L('(secuencia normal: compositionstart → compositionupdate* → input → compositionend;');
   L(' si falta compositionend tras un compositionstart, o si el "input" que va justo');
-  L(' antes de compositionend no trae el acento en su "data", esa es la pista clave)');
+  L(' antes de compositionend no trae el acento en su "data", esa es la pista clave.');
+  L(' También incluye cada llamada a virtualKeyboard.show() — si una aparece justo');
+  L(' antes de que un carácter no llegue a escribirse, esa es la pista a seguir)');
   if((window._tdImeLog || []).length) window._tdImeLog.forEach(l => L(l));
   else L('(vacío — no se ha escrito nada en el editor todavía en esta carga de página)');
 
@@ -845,7 +878,7 @@ function _tdWireFontControls(){
     unfreeze();
     if(typeof edCloseMenus === 'function') edCloseMenus();
     editorEl.focus();
-    if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
+    _tdShowKeyboardIfNeeded('cerrar menú de formato (finishChoice)');
   };
 
   // CRÍTICO — por qué estos 4 desplegables van por "pointerdown" y no por
