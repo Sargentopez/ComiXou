@@ -926,6 +926,29 @@ function _tdWireFontControls(){
     _tdShowKeyboardIfNeeded('cerrar menú de formato (finishChoice)');
   };
 
+  // Si hay texto seleccionado, fuente/tamaño/alineación deben afectar SOLO a
+  // esa selección (ya es así de por sí en Trix). Si NO hay selección
+  // (cursor colapsado), pedido explícito de Alberto: en vez de que fuente/
+  // tamaño se queden como "atributo para lo próximo que se escriba" y
+  // alineación afecte solo al párrafo del cursor, se aplica a TODO el
+  // documento. Se selecciona todo momentáneamente, se aplica el cambio (fn)
+  // y se restaura la posición de cursor original — todo síncrono, así que
+  // no llega a pintarse ningún parpadeo de "todo seleccionado" en pantalla.
+  function _tdApplyScoped(fn){
+    const editor = editorEl.editor;
+    if(!editor){ fn(); return; }
+    const range = editor.getSelectedRange();
+    if(range && range[0] === range[1]){
+      const len = editor.getDocument().toString().length;
+      if(len > 0){
+        editor.setSelectedRange([0, len]);
+        try{ fn(); } finally { editor.setSelectedRange(range); }
+        return;
+      }
+    }
+    fn();
+  }
+
   // CRÍTICO — por qué estos 4 desplegables van por "pointerdown" y no por
   // "click": Trix engancha su propia barra de herramientas NATIVA también a
   // "mousedown", nunca a "click" (ver ToolbarController dentro de
@@ -945,7 +968,9 @@ function _tdWireFontControls(){
   document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
-      try{ editorEl.editor?.activateAttribute('fontFamily', btn.dataset.value); }catch(_e){}
+      _tdApplyScoped(() => {
+        try{ editorEl.editor?.activateAttribute('fontFamily', btn.dataset.value); }catch(_e){}
+      });
       finishChoice();
       _tdSyncFontMenuActive();
     });
@@ -953,7 +978,9 @@ function _tdWireFontControls(){
   document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
-      try{ editorEl.editor?.activateAttribute('fontSize', btn.dataset.value); }catch(_e){}
+      _tdApplyScoped(() => {
+        try{ editorEl.editor?.activateAttribute('fontSize', btn.dataset.value); }catch(_e){}
+      });
       finishChoice();
       _tdSyncFontMenuActive();
     });
@@ -984,12 +1011,30 @@ function _tdWireFontControls(){
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
       const value = btn.dataset.value; // alignLeft | alignCenter | alignRight | alignJustify
-      ['alignCenter', 'alignRight', 'alignJustify'].forEach(a => {
-        try{ editorEl.editor?.deactivateAttribute(a); }catch(_e){}
+      _tdApplyScoped(() => {
+        const editor = editorEl.editor;
+        if(!editor) return;
+        // Reafirmar el rango objetivo antes de CADA llamada: deactivateAttribute,
+        // a diferencia de activateAttribute, NO restaura la selección cuando
+        // de verdad quita algo (la colapsa) — sin esto, en cuanto una de las
+        // tres desactivaciones quitaba una alineación real, las llamadas
+        // siguientes de esta misma secuencia actuaban sobre la posición
+        // equivocada (reproducido y confirmado con Trix real antes de
+        // aplicar este fix: solo se veía afectado el primer párrafo).
+        const targetRange = editor.getSelectedRange();
+        ['alignCenter', 'alignRight', 'alignJustify'].forEach(a => {
+          try{
+            if(targetRange) editor.setSelectedRange(targetRange);
+            editor.deactivateAttribute(a);
+          }catch(_e){}
+        });
+        if(value !== 'alignLeft'){
+          try{
+            if(targetRange) editor.setSelectedRange(targetRange);
+            editor.activateAttribute(value);
+          }catch(_e){}
+        }
       });
-      if(value !== 'alignLeft'){
-        try{ editorEl.editor?.activateAttribute(value); }catch(_e){}
-      }
       finishChoice();
       _tdSyncAlignMenuActive();
     });
