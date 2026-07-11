@@ -675,18 +675,33 @@ function _tdWireFontControls(){
     if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
   };
 
-  // Fuente y tamaño: atributos de TEXTO con valor (ver
-  // _tdRegisterCustomTrixAttributes) — necesitan una selección/cursor real
-  // para aplicarse, de ahí el "frozen" de arriba.
+  // CRÍTICO — por qué estos 4 desplegables van por "pointerdown" y no por
+  // "click": Trix engancha su propia barra de herramientas NATIVA también a
+  // "mousedown", nunca a "click" (ver ToolbarController dentro de
+  // trix.umd.min.js: didClickAttributeButton/didClickActionButton están
+  // registrados con "mousedown"). La razón es que un <button> normal mueve
+  // el foco del navegador en cuanto se pulsa, ANTES de que llegue el evento
+  // "click" — para ese momento el <trix-editor> ya ha perdido el foco/la
+  // selección real. Para un atributo de TEXTO (fuente/tamaño) eso se
+  // disimula porque con el cursor sin selección Trix cae al mecanismo de
+  // "atributos para lo próximo que se escriba"; pero un atributo de BLOQUE
+  // como la alineación depende de resolver el párrafo actual (getBlock())
+  // sobre una selección todavía válida en ese instante — con el foco ya
+  // perdido, se aplicaba a la posición equivocada o no se aplicaba en
+  // absoluto (bug reportado: "las alineaciones no se aplican"). Usando
+  // "pointerdown" + preventDefault(), igual que el propio Trix, el
+  // navegador nunca llega a mover el foco fuera del editor.
   document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
       try{ editorEl.editor?.activateAttribute('fontFamily', btn.dataset.value); }catch(_e){}
       finishChoice();
       _tdSyncFontMenuActive();
     });
   });
   document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
       try{ editorEl.editor?.activateAttribute('fontSize', btn.dataset.value); }catch(_e){}
       finishChoice();
       _tdSyncFontMenuActive();
@@ -694,11 +709,12 @@ function _tdWireFontControls(){
   });
 
   // Interlineado: NO es un atributo de Trix — es un ajuste global de todo
-  // el documento (ver _tdLineHeightMult), así que no hace falta "frozen" ni
-  // tocar el editor para aplicarlo — pero sí recalcular la paginación en
-  // vivo, ya que el interlineado cambia cuánto texto cabe por hoja.
+  // el documento (ver _tdLineHeightMult), así que no depende de selección
+  // ni de foco para aplicarse — se deja igualmente en "pointerdown" por
+  // coherencia con los otros 3 desplegables de esta misma barra.
   document.querySelectorAll('#dd-tdLineHeight .ed-dropdown-item').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
       _tdLineHeightMult = parseFloat(btn.dataset.value) || TD_LINE_MULT;
       finishChoice();
       _tdSyncLineHeightMenuActive();
@@ -708,15 +724,14 @@ function _tdWireFontControls(){
 
   // Alineación: atributo de BLOQUE (como título/cita), no de texto — actúa
   // sobre el párrafo donde esté el cursor con solo tenerlo colocado ahí, sin
-  // necesitar una selección activa (por eso no hace falta "frozen" para que
-  // funcione, aunque se deja puesto igualmente arriba, por si acaso, igual
-  // que en fuente/tamaño). La exclusividad entre las 4 opciones se hace a
-  // mano (ver _tdRegisterCustomTrixAttributes: no se usa la opción
+  // necesitar una selección activa. La exclusividad entre las 4 opciones se
+  // hace a mano (ver _tdRegisterCustomTrixAttributes: no se usa la opción
   // "exclusive" de Trix porque esa quita CUALQUIER otro atributo de bloque,
   // no solo los de alineación). "A la izquierda" es quitar las otras tres
   // sin poner nada — es como se comporta el texto sin marcar ninguna.
   document.querySelectorAll('#dd-tdAlign .ed-dropdown-item').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault();
       const value = btn.dataset.value; // alignLeft | alignCenter | alignRight | alignJustify
       ['alignCenter', 'alignRight', 'alignJustify'].forEach(a => {
         try{ editorEl.editor?.deactivateAttribute(a); }catch(_e){}
