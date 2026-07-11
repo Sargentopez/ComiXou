@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.25</footer>
+    <footer class="app-version">v33.34</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -975,50 +975,69 @@ Router.register('editor', {
         <button id="tdCloseBtn" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">
-        <trix-toolbar id="tdToolbar">
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="undo" title="Deshacer">↩</button>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="redo" title="Rehacer">↪</button>
+        <div id="tdMenuScroll">
+          <trix-toolbar id="tdToolbar">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="undo" title="Deshacer">↩</button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="redo" title="Rehacer">↪</button>
+            <div class="ed-menu-sep"></div>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bold" title="Negrita"><b>N</b></button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="italic" title="Cursiva"><i>K</i></button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="strike" title="Tachado"><s>S</s></button>
+            <div class="ed-menu-sep"></div>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="heading1" title="Título">Título</button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="quote" title="Cita">&quot; Cita</button>
+            <div class="ed-menu-sep"></div>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bullet" title="Lista de viñetas">• Lista</button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="number" title="Lista numerada">1. Lista</button>
+            <div class="ed-menu-sep"></div>
+            <button type="button" class="ed-menu-btn td-fmt-btn" id="tdPageBreakBtn" title="Salto de página">⤓ Salto de página</button>
+          </trix-toolbar>
           <div class="ed-menu-sep"></div>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bold" title="Negrita"><b>N</b></button>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="italic" title="Cursiva"><i>K</i></button>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="strike" title="Tachado"><s>S</s></button>
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdFontFamily" title="Tipo de letra de la selección">Fuente ▾</button>
+            <div class="ed-dropdown" id="dd-tdFontFamily">
+              <button class="ed-dropdown-item" data-value="Lora">Lora (serif)</button>
+              <button class="ed-dropdown-item" data-value="Patrick Hand">Patrick Hand</button>
+              <button class="ed-dropdown-item" data-value="Bangers">Bangers</button>
+              <button class="ed-dropdown-item" data-value="Permanent Marker">Permanent Marker</button>
+              <button class="ed-dropdown-item" data-value="Bebas Neue">Bebas Neue</button>
+              <button class="ed-dropdown-item" data-value="Oswald">Oswald</button>
+              <button class="ed-dropdown-item" data-value="Comic Neue">Comic Neue</button>
+              <button class="ed-dropdown-item" data-value="Press Start 2P">Press Start 2P (8-bit)</button>
+              <button class="ed-dropdown-item" data-value="Arial">Arial</button>
+              <button class="ed-dropdown-item" data-value="Verdana">Verdana</button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="heading1" title="Título">Título</button>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="quote" title="Cita">&quot; Cita</button>
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdFontSize" title="Tamaño de letra de la selección">Tamaño ▾</button>
+            <div class="ed-dropdown" id="dd-tdFontSize">
+              <button class="ed-dropdown-item" data-value="16px">Pequeño</button>
+              <button class="ed-dropdown-item" data-value="22px">Normal</button>
+              <button class="ed-dropdown-item" data-value="28px">Grande</button>
+              <button class="ed-dropdown-item" data-value="36px">Muy grande</button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bullet" title="Lista de viñetas">• Lista</button>
-          <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="number" title="Lista numerada">1. Lista</button>
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdLineHeight" title="Interlineado de todo el texto">Interlineado ▾</button>
+            <div class="ed-dropdown" id="dd-tdLineHeight">
+              <button class="ed-dropdown-item" data-value="1.15">Compacto</button>
+              <button class="ed-dropdown-item" data-value="1.42">Normal</button>
+              <button class="ed-dropdown-item" data-value="1.75">Amplio</button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
-          <button type="button" class="ed-menu-btn td-fmt-btn" id="tdPageBreakBtn" title="Salto de página">⤓ Salto de página</button>
-        </trix-toolbar>
-      </div>
-      <div id="tdMenuBar2">
-        <span class="td-menu2-label">Fuente</span>
-        <select id="tdFontFamilySel" title="Tipo de letra de la selección">
-          <option value="Lora" selected>Lora (serif)</option>
-          <option value="Patrick Hand">Patrick Hand</option>
-          <option value="Bangers">Bangers</option>
-          <option value="Permanent Marker">Permanent Marker</option>
-          <option value="Bebas Neue">Bebas Neue</option>
-          <option value="Oswald">Oswald</option>
-          <option value="Comic Neue">Comic Neue</option>
-          <option value="Press Start 2P">Press Start 2P (8-bit)</option>
-          <option value="Arial">Arial</option>
-          <option value="Verdana">Verdana</option>
-        </select>
-        <span class="td-menu2-label">Tamaño</span>
-        <select id="tdFontSizeSel" title="Tamaño de letra de la selección">
-          <option value="16px">Pequeño</option>
-          <option value="22px" selected>Normal</option>
-          <option value="28px">Grande</option>
-          <option value="36px">Muy grande</option>
-        </select>
-        <span class="td-menu2-label">Interlineado</span>
-        <select id="tdLineHeightSel" title="Interlineado de todo el texto">
-          <option value="1.15">Compacto</option>
-          <option value="1.42" selected>Normal</option>
-          <option value="1.75">Amplio</option>
-        </select>
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdAlign" title="Alineación del párrafo">Alineación ▾</button>
+            <div class="ed-dropdown" id="dd-tdAlign">
+              <button class="ed-dropdown-item" data-value="alignLeft">A la izquierda</button>
+              <button class="ed-dropdown-item" data-value="alignCenter">Centrado</button>
+              <button class="ed-dropdown-item" data-value="alignRight">A la derecha</button>
+              <button class="ed-dropdown-item" data-value="alignJustify">Justificado</button>
+            </div>
+          </div>
+        </div>
       </div>
       <div id="tdPageArea">
         <div id="tdPage" class="td-page">
