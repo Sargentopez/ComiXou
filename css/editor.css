@@ -2597,6 +2597,12 @@ body.editor-page #appView {
 }
 #tdCloseBtn:active { background: rgba(0,0,0,.1); }
 
+/* Barra exterior — SIN overflow propio (igual que #edMenuBar): el scroll
+   vive en el hijo #tdMenuScroll. Necesario para que el ::after de sombra de
+   aquí abajo no se recorte — overflow-x:auto en un eje sin overflow-y
+   explícito en el OTRO fuerza ese otro eje a "auto" también (aunque se
+   escriba "visible"), y eso sí recortaría un ::after que sobresale hacia
+   abajo. Con el scroll en el hijo, esta barra se queda limpia. */
 #tdMenuBar {
   position: relative;
   flex-shrink: 0;
@@ -2604,23 +2610,46 @@ body.editor-page #appView {
   background: var(--white);
   border-bottom: 1.5px solid var(--gray-300);
   box-shadow: 0 1px 4px rgba(0,0,0,.06);
-  overflow: hidden;
-  z-index: 1;
-}
-/* #tdToolbar ES el <trix-toolbar> — se estiliza como barra de menú propia,
-   reemplazando el layout por defecto de trix.css (button-row/button-group,
-   que no usamos: nuestros botones son hijos directos con clases ed-menu-btn) */
-#tdToolbar {
   display: flex;
   align-items: stretch;
-  height: 100%;
+  z-index: 1;
+}
+/* Mismo sombreado que #edMenuBar::after en el editor general — una franja
+   que se difumina, superpuesta sobre el principio del área de escritura. */
+#tdMenuBar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: 100%;
+  height: 16px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.22), transparent);
+  pointer-events: none;
+  z-index: 299;
+}
+/* Zona deslizable — igual que #edMenuScroll: aquí sí vive el scroll
+   horizontal, botones de Trix y controles de fuente juntos en una única
+   franja. */
+#tdMenuScroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   overflow-x: auto;
   overflow-y: visible;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   touch-action: pan-x pan-y;
 }
-#tdToolbar::-webkit-scrollbar { display: none; }
+#tdMenuScroll::-webkit-scrollbar { display: none; }
+/* #tdToolbar ES el <trix-toolbar> — se estiliza como parte de la barra de
+   menú única (reemplazando el layout por defecto de trix.css, que no
+   usamos: nuestros botones son hijos directos con clases ed-menu-btn). */
+#tdToolbar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+}
 
 /* Reskin de los botones de formato (mismo lenguaje visual que ed-menu-btn,
    con estado activo — Trix añade/quita la clase trix-active según el cursor) */
@@ -2631,44 +2660,26 @@ body.editor-page #appView {
   background: var(--black);
 }
 
-/* Segunda barra: fuente, tamaño e interlineado — no son botones de Trix
-   (fontSize/fontFamily son atributos con valor; el interlineado es un ajuste
-   global del documento, ver TD_LINE_MULT en editor-textdoc.js), así que viven
-   fuera de #tdToolbar con sus propios <select>. */
-#tdMenuBar2 {
+/* Checkeo del valor activo en el punto del cursor (fuente/tamaño/
+   interlineado/alineación) — el fondo amarillo ya es de
+   .ed-dropdown-item.active (regla global); esto solo añade la marca ✓,
+   reservando su hueco siempre (aunque no esté activo, en transparente)
+   para que el texto no salte de sitio al marcar/desmarcar. Acotado a los
+   desplegables del Editor de textos — no toca el resto de menús de la app. */
+#dd-tdFontFamily .ed-dropdown-item::before,
+#dd-tdFontSize .ed-dropdown-item::before,
+#dd-tdLineHeight .ed-dropdown-item::before,
+#dd-tdAlign .ed-dropdown-item::before {
+  content: '✓';
+  width: 16px;
   flex-shrink: 0;
-  min-height: 38px;
-  background: var(--white);
-  border-bottom: 1.5px solid var(--gray-300);
-  box-shadow: 0 1px 4px rgba(0,0,0,.06);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  z-index: 1;
+  color: transparent;
 }
-#tdMenuBar2::-webkit-scrollbar { display: none; }
-.td-menu2-label {
-  font-family: var(--font-body);
-  font-size: .72rem;
-  font-weight: 700;
-  color: var(--gray-700);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-#tdMenuBar2 select {
-  font-family: var(--font-body);
-  font-size: .78rem;
-  font-weight: 700;
-  border: 1.5px solid var(--gray-300);
-  border-radius: 6px;
-  padding: 3px 6px;
-  background: var(--white);
+#dd-tdFontFamily .ed-dropdown-item.active::before,
+#dd-tdFontSize .ed-dropdown-item.active::before,
+#dd-tdLineHeight .ed-dropdown-item.active::before,
+#dd-tdAlign .ed-dropdown-item.active::before {
   color: var(--black);
-  flex-shrink: 0;
 }
 
 /* Marcador de salto de página forzado dentro del Editor de textos — se
@@ -2693,6 +2704,20 @@ body.editor-page #appView {
   padding: 0 8px;
   transform: translateY(-9px);
 }
+
+/* Alineación (align-center/-right/-justify, ver _tdRegisterCustomTrixAttributes)
+   — etiquetas inventadas, no elementos de bloque por HTML por defecto, así
+   que hace falta el display:block explícito además del text-align. La
+   izquierda no tiene etiqueta propia (es la ausencia de cualquiera de estas
+   tres, el comportamiento normal del texto). */
+.td-editor align-center,
+.td-editor align-right,
+.td-editor align-justify {
+  display: block;
+}
+.td-editor align-center  { text-align: center; }
+.td-editor align-right   { text-align: right; }
+.td-editor align-justify { text-align: justify; }
 
 /* Área de la hoja: VISOR de altura fija (calculada por JS en
    _tdSyncViewportHeight/_tdRecomputeViewPagination a partir del hueco real

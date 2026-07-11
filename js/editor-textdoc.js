@@ -63,7 +63,11 @@ const TD_H1_SIZE        = 34;     // título (heading1) al APLICAR al lienzo
 const TD_A4_W = 794, TD_A4_H = 1123; // A4 a 96dpi — medida estándar en diseño web
 const TD_A4_MARGIN_FRAC = 0.09;
 const TD_A4_BODY_SIZE = 17, TD_A4_H1_SIZE = 27; // a juego con el CSS de .td-editor (1.05rem/1.55em)
-const TD_LINE_MULT     = 1.42;   // interlineado
+const TD_LINE_MULT     = 1.42;   // interlineado por defecto
+// Interlineado actual del documento — ya no es un <select> (ver
+// _tdWireFontControls), es un ajuste global de todo el texto, no por
+// carácter/bloque como fontSize/fontFamily o la alineación.
+let _tdLineHeightMult = TD_LINE_MULT;
 const TD_PARA_GAP_MULT = 0.55;   // espacio extra tras cada bloque (× fontSize del bloque)
 const TD_LIST_INDENT   = 30;     // sangría de listas
 const TD_QUOTE_INDENT  = 24;     // sangría de citas (por nivel de anidamiento)
@@ -92,7 +96,6 @@ function edOpenTextDoc(editLayer){
   requestAnimationFrame(_tdUpdateTitlePill);
   const editorEl = document.getElementById('tdEditor');
   const applyBtn = document.getElementById('tdApplyBtn');
-  const lhSel = document.getElementById('tdLineHeightSel');
   if(editLayer && editLayer.richLines && editLayer.sourceHTML){
     // Reeditar un texto ya aplicado: cargar su HTML de origen y recordar su flowId
     // para que "Aplicar" sustituya estas hojas en vez de añadir otras nuevas.
@@ -100,12 +103,12 @@ function edOpenTextDoc(editLayer){
     _tdEditingFlowId = _tdEnsureFlowId(editLayer);
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML);
     if(applyBtn) applyBtn.textContent = 'Guardar cambios';
-    if(lhSel) lhSel.value = String(editLayer.lineHeightMult || TD_LINE_MULT);
+    _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
     _tdManualBreakChars = (editLayer.manualBreakChars || []).slice();
   } else {
     _tdEditingFlowId = null;
     if(applyBtn) applyBtn.textContent = 'Aplicar al lienzo';
-    if(lhSel) lhSel.value = String(TD_LINE_MULT);
+    _tdLineHeightMult = TD_LINE_MULT;
     // Siempre en blanco al abrir desde el menú — no se restaura nada de
     // sesiones anteriores (el único texto editable es el que ya está
     // aplicado al lienzo, y a ese solo se llega con doble tap sobre él).
@@ -116,7 +119,13 @@ function edOpenTextDoc(editLayer){
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
     _tdAutoFollow = true;
+    _tdActiveDragCancel?.();
+    _tdSyncLineHeightMenuActive();
+    _tdSyncFontMenuActive();
+    _tdSyncAlignMenuActive();
     _tdPageBreakDragging = false;
+    _tdLastPageBreakTapChars = null;
+    _tdLastPageBreakTapTime = 0;
     const areaElInit = document.getElementById('tdPageArea');
     if(areaElInit) areaElInit.scrollTop = 0;
     _tdRecomputeViewPagination();
@@ -168,6 +177,14 @@ function _tdFindFlowLayer(flowId){
   return null;
 }
 function edCloseTextDoc(fromPopstate){
+  // Si se está arrastrando (o corrigiendo) un salto de página en este
+  // instante, abortarlo YA, antes de nada más — sus listeners viven en
+  // document (no en el propio elemento) y solo se quitan al soltar
+  // normalmente; cerrar el editor a media gesto nunca dispara ese soltar
+  // de verdad, así que se quedarían escuchando para siempre, reaccionando
+  // a cualquier toque futuro en cualquier parte de la app. Esto es lo que
+  // coincidía con que el teclado se quedara sin cerrar.
+  _tdActiveDragCancel?.();
   const shell = document.getElementById('tdShell');
   const wasOpen = !!shell && shell.style.display !== 'none' && shell.style.display !== '';
   const finishClose = () => {
@@ -262,6 +279,34 @@ function _tdInitOnce(){
       if(e.paste && typeof e.paste.html === 'string'){
         e.paste.html = _tdSanitizePastedHTML(e.paste.html);
       }
+    });
+  }
+
+  // Estado de composición IME: Android (Gboard y similares) mantiene la
+  // PALABRA que se está escribiendo como una "composición" activa hasta que
+  // se confirma (espacio, puntuación, perder el foco) — esto es lo normal
+  // para TODA escritura ahí, no solo para acentos con pulsación larga. Si
+  // mientras tanto se desplaza o redimensiona #tdPageArea (el contenedor
+  // del propio <trix-editor>) desde JS, Android puede cancelar esa
+  // composición y el carácter que se estaba formando (p.ej. "á" al escribir
+  // "más") se pierde por completo, dejando solo las letras ya confirmadas
+  // ("ms"). _tdComposing evita que el recentrado automático y el reajuste
+  // de alto por teclado toquen el scroll/tamaño mientras esto esté activo
+  // (ver guards en _tdCenterActiveLine y _tdSyncViewportHeight) — patrón
+  // estándar en editores enriquecidos (CKEditor, ProseMirror, Slate) para
+  // convivir con el IME de Android.
+  if(editorEl){
+    editorEl.addEventListener('compositionstart', () => { _tdComposing = true; });
+    editorEl.addEventListener('compositionend', () => {
+      _tdComposing = false;
+      // Al terminar, aplicar el reajuste/recentrado que se haya podido
+      // saltar mientras estaba activa (mismo retardo que trix-change).
+      clearTimeout(_tdRecomputeTimer);
+      _tdRecomputeTimer = setTimeout(() => {
+        if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
+        _tdRecomputeViewPagination();
+        _tdCenterActiveLine();
+      }, 220);
     });
   }
 
@@ -485,6 +530,10 @@ function _tdReadKeyboardH(){
 }
 
 function _tdSyncViewportHeight(){
+  // No tocar el tamaño del contenedor del editor mientras hay una
+  // composición IME activa — ver _tdComposing. Se reintenta solo/a los
+  // pocos ms tras compositionend (sondeo periódico o el propio handler).
+  if(_tdComposing) return;
   const shell = document.getElementById('tdShell');
   const pageArea = document.getElementById('tdPageArea');
   if(!shell || shell.style.display === 'none' || shell.style.display === '' || !pageArea) return;
@@ -497,10 +546,8 @@ function _tdSyncViewportHeight(){
   // depende de que ese encadenado de tamaños funcione en todos los navegadores.
   const topbar = document.getElementById('tdTopbar');
   const menuBar = document.getElementById('tdMenuBar');
-  const menuBar2 = document.getElementById('tdMenuBar2');
   const chromeH = (topbar?.getBoundingClientRect().height || 0)
-                + (menuBar?.getBoundingClientRect().height || 0)
-                + (menuBar2?.getBoundingClientRect().height || 0);
+                + (menuBar?.getBoundingClientRect().height || 0);
   // Alto real visible menos la cabecera/barras y el teclado virtual: lo que
   // queda para la hoja. vv.height por sí solo NO refleja al teclado bajo
   // interactive-widget=overlays-content — de ahí que haya que restarlo
@@ -529,6 +576,12 @@ let _tdFollowTimer = null;
 // este freno, recentraba de fondo aunque el usuario no estuviera tecleando).
 let _tdAutoFollow = true;
 
+// true mientras Android tiene una composición IME activa (ver listeners
+// compositionstart/compositionend en _tdInitOnce). Consultada por
+// _tdCenterActiveLine y _tdSyncViewportHeight para no tocar scroll/tamaño
+// del contenedor del editor mientras tanto.
+let _tdComposing = false;
+
 // Mientras se arrastra un salto de página, ninguna llamada EXTERNA a
 // _tdRecomputeViewPagination() debe reconstruir las líneas (ver esa
 // función) — el mismo sondeo periódico de arriba (_tdKbPollTimer, cada
@@ -543,8 +596,32 @@ let _tdAutoFollow = true;
 // Ver _tdWirePageBreakDrag.
 let _tdPageBreakDragging = false;
 
+// Función para ABORTAR el arrastre de salto de página actualmente en curso
+// (si lo hay), sin aplicar ningún cambio — null si no hay ninguno activo.
+// Necesaria porque los listeners del arrastre están en document (no en el
+// propio elemento) y solo se quitan dentro de onUp: si el editor se cierra
+// a media gesto (el shell se oculta, pero nunca llega un pointerup/
+// pointercancel de verdad para ese puntero), esos listeners se quedarían
+// escuchando en document PARA SIEMPRE, reaccionando a cualquier toque
+// futuro en cualquier parte de la app — de ahí que "se bloqueara el drag"
+// coincidiera con que "el teclado no se cerraba": ver edCloseTextDoc,
+// donde se llama a esto antes de nada.
+let _tdActiveDragCancel = null;
+
+// Doble toque/doble clic sobre la zona de arrastre de un salto de página:
+// lo elimina (ver _tdWirePageBreakDrag). Se guarda a nivel de MÓDULO,
+// identificando el salto por su carácter (_tdManualBreakChars, estable) y
+// no por el elemento DOM concreto — un simple toque, aunque no llegue a
+// moverse nada, ya dispara onUp → _tdRecomputeViewPagination(), que
+// reconstruye TODAS las líneas; el segundo toque de un doble-toque cae
+// siempre sobre un elemento nuevo (recién creado por esa reconstrucción),
+// así que un cronómetro guardado en el propio elemento nunca vería el
+// segundo toque.
+let _tdLastPageBreakTapChars = null;
+let _tdLastPageBreakTapTime = 0;
+
 // Tamaños/fuentes admitidos al pegar contenido externo — mismo rango que los
-// controles del editor (ver tdFontSizeSel/tdFontFamilySel en views.js), para
+// controles del editor (ver dd-tdFontFamily/dd-tdFontSize en views.js), para
 // que el texto pegado quepa en la página igual que el escrito a mano.
 const TD_PASTE_FONT_MIN = 12, TD_PASTE_FONT_MAX = 40;
 const TD_ALLOWED_FONTS = ['Lora','Patrick Hand','Bangers','Permanent Marker','Bebas Neue','Oswald','Comic Neue','Press Start 2P','Arial','Verdana'];
@@ -570,47 +647,151 @@ function _tdSanitizePastedHTML(html){
 // Tamaño y tipo de letra de la selección: atributos de texto personalizados de
 // Trix (con valor, no solo on/off — ver _tdRegisterCustomTrixAttributes), con
 // controles propios fuera de <trix-toolbar> porque Trix no genera selects.
-// Truco "frozen" (documentado por la propia comunidad de Trix): al enfocar el
-// select se activa el atributo invisible "frozen" para que la selección de
-// texto siga viéndose resaltada mientras el foco está en el <select>.
+// Ya NO son <select> nativos — son menús desplegables con submenú y checkeo,
+// mismo patrón que "Insertar ▾"/"Dibujar ▾" del editor general
+// (edToggleMenu/edCloseMenus, reutilizadas tal cual — son genéricas, operan
+// por [data-menu]/#dd-<id>, no conocen nada específico del editor general).
+// Truco "frozen" (documentado por la propia comunidad de Trix): al tocar el
+// botón se activa el atributo invisible "frozen" para que la selección de
+// texto siga viéndose resaltada mientras el foco se va del editor al menú.
 function _tdWireFontControls(){
   const editorEl = document.getElementById('tdEditor');
-  const sizeSel = document.getElementById('tdFontSizeSel');
-  const famSel  = document.getElementById('tdFontFamilySel');
-  if(!editorEl || !sizeSel || !famSel) return;
+  const famBtn   = document.querySelector('[data-menu="tdFontFamily"]');
+  const sizeBtn  = document.querySelector('[data-menu="tdFontSize"]');
+  const lhBtn    = document.querySelector('[data-menu="tdLineHeight"]');
+  const alignBtn = document.querySelector('[data-menu="tdAlign"]');
+  if(!editorEl || !famBtn || !sizeBtn || !lhBtn || !alignBtn) return;
 
   const freeze = () => { try{ editorEl.editor?.activateAttribute('frozen'); }catch(_e){} };
   const unfreeze = () => { try{ editorEl.editor?.deactivateAttribute('frozen'); }catch(_e){} };
+  famBtn.addEventListener('pointerdown', freeze);
+  sizeBtn.addEventListener('pointerdown', freeze);
+  alignBtn.addEventListener('pointerdown', freeze);
 
-  sizeSel.addEventListener('mousedown', freeze);
-  sizeSel.addEventListener('focus', freeze);
-  sizeSel.addEventListener('change', () => {
-    try{ editorEl.editor?.activateAttribute('fontSize', sizeSel.value); }catch(_e){}
+  const finishChoice = () => {
     unfreeze();
+    if(typeof edCloseMenus === 'function') edCloseMenus();
     editorEl.focus();
     if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
+  };
+
+  // Fuente y tamaño: atributos de TEXTO con valor (ver
+  // _tdRegisterCustomTrixAttributes) — necesitan una selección/cursor real
+  // para aplicarse, de ahí el "frozen" de arriba.
+  document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      try{ editorEl.editor?.activateAttribute('fontFamily', btn.dataset.value); }catch(_e){}
+      finishChoice();
+      _tdSyncFontMenuActive();
+    });
+  });
+  document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      try{ editorEl.editor?.activateAttribute('fontSize', btn.dataset.value); }catch(_e){}
+      finishChoice();
+      _tdSyncFontMenuActive();
+    });
   });
 
-  famSel.addEventListener('mousedown', freeze);
-  famSel.addEventListener('focus', freeze);
-  famSel.addEventListener('change', () => {
-    try{ editorEl.editor?.activateAttribute('fontFamily', famSel.value); }catch(_e){}
-    unfreeze();
-    editorEl.focus();
-    if('virtualKeyboard' in navigator) navigator.virtualKeyboard.show();
+  // Interlineado: NO es un atributo de Trix — es un ajuste global de todo
+  // el documento (ver _tdLineHeightMult), así que no hace falta "frozen" ni
+  // tocar el editor para aplicarlo — pero sí recalcular la paginación en
+  // vivo, ya que el interlineado cambia cuánto texto cabe por hoja.
+  document.querySelectorAll('#dd-tdLineHeight .ed-dropdown-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _tdLineHeightMult = parseFloat(btn.dataset.value) || TD_LINE_MULT;
+      finishChoice();
+      _tdSyncLineHeightMenuActive();
+      _tdRecomputeViewPagination();
+    });
   });
 
-  // Reflejar en los selects el tamaño/fuente activos en la posición actual del cursor
+  // Alineación: atributo de BLOQUE (como título/cita), no de texto — actúa
+  // sobre el párrafo donde esté el cursor con solo tenerlo colocado ahí, sin
+  // necesitar una selección activa (por eso no hace falta "frozen" para que
+  // funcione, aunque se deja puesto igualmente arriba, por si acaso, igual
+  // que en fuente/tamaño). La exclusividad entre las 4 opciones se hace a
+  // mano (ver _tdRegisterCustomTrixAttributes: no se usa la opción
+  // "exclusive" de Trix porque esa quita CUALQUIER otro atributo de bloque,
+  // no solo los de alineación). "A la izquierda" es quitar las otras tres
+  // sin poner nada — es como se comporta el texto sin marcar ninguna.
+  document.querySelectorAll('#dd-tdAlign .ed-dropdown-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const value = btn.dataset.value; // alignLeft | alignCenter | alignRight | alignJustify
+      ['alignCenter', 'alignRight', 'alignJustify'].forEach(a => {
+        try{ editorEl.editor?.deactivateAttribute(a); }catch(_e){}
+      });
+      if(value !== 'alignLeft'){
+        try{ editorEl.editor?.activateAttribute(value); }catch(_e){}
+      }
+      finishChoice();
+      _tdSyncAlignMenuActive();
+    });
+  });
+
+  // Reflejar en el checkeo (✓ + fondo) los valores activos en la posición
+  // actual del cursor — se actualiza en cada cambio de selección, esté el
+  // menú abierto o no, para que ya esté correcto la próxima vez que se
+  // abra (los desplegables, cerrados, no se ven — no hace falta esperar a
+  // que se abran para refrescarlo). Interlineado no depende del cursor
+  // (ajuste global), así que solo se sincroniza al abrir/cambiar, no aquí.
   editorEl.addEventListener('trix-selection-change', () => {
-    const editor = editorEl.editor; if(!editor) return;
-    try{
-      const range = editor.getSelectedRange();
-      const piece = editor.getDocument().getPieceAtPosition(range[0]);
-      const fs = piece && piece.getAttribute && piece.getAttribute('fontSize');
-      const ff = piece && piece.getAttribute && piece.getAttribute('fontFamily');
-      if(fs && [...sizeSel.options].some(o => o.value === fs)) sizeSel.value = fs;
-      if(ff && [...famSel.options].some(o => o.value === ff)) famSel.value = ff;
-    }catch(_e){}
+    _tdSyncFontMenuActive();
+    _tdSyncAlignMenuActive();
+  });
+  _tdSyncFontMenuActive();
+  _tdSyncAlignMenuActive();
+  _tdSyncLineHeightMenuActive();
+}
+
+// Marca con ✓ (y fondo, vía .ed-dropdown-item.active) la fuente/tamaño que
+// corresponden a la posición actual del cursor — 'Lora'/'22px' son los
+// valores por defecto del documento si el punto del cursor no tiene
+// ninguno de los dos atributos explícito.
+function _tdSyncFontMenuActive(){
+  const editorEl = document.getElementById('tdEditor');
+  if(!editorEl || !editorEl.editor) return;
+  let fs = '22px', ff = 'Lora';
+  try{
+    const range = editorEl.editor.getSelectedRange();
+    const piece = editorEl.editor.getDocument().getPieceAtPosition(range[0]);
+    const pfs = piece && piece.getAttribute && piece.getAttribute('fontSize');
+    const pff = piece && piece.getAttribute && piece.getAttribute('fontFamily');
+    if(pfs) fs = pfs;
+    if(pff) ff = pff;
+  }catch(_e){}
+  document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.value === ff);
+  });
+  document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.value === fs);
+  });
+}
+
+// Marca con ✓ (y fondo) la alineación activa en la posición actual del
+// cursor — atributo de BLOQUE, así que se consulta con attributeIsActive
+// (no hace falta recorrer piezas de texto como con fuente/tamaño: eso es
+// solo para atributos de texto con valor).
+function _tdSyncAlignMenuActive(){
+  const editorEl = document.getElementById('tdEditor');
+  if(!editorEl || !editorEl.editor) return;
+  let active = 'alignLeft';
+  try{
+    const editor = editorEl.editor;
+    if(editor.attributeIsActive('alignCenter')) active = 'alignCenter';
+    else if(editor.attributeIsActive('alignRight')) active = 'alignRight';
+    else if(editor.attributeIsActive('alignJustify')) active = 'alignJustify';
+  }catch(_e){}
+  document.querySelectorAll('#dd-tdAlign .ed-dropdown-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.value === active);
+  });
+}
+
+// Marca con ✓ (y fondo) el interlineado actual — ajuste global del
+// documento (_tdLineHeightMult), no depende del cursor.
+function _tdSyncLineHeightMenuActive(){
+  document.querySelectorAll('#dd-tdLineHeight .ed-dropdown-item').forEach(btn => {
+    btn.classList.toggle('active', (parseFloat(btn.dataset.value) || TD_LINE_MULT) === _tdLineHeightMult);
   });
 }
 
@@ -719,8 +900,7 @@ function _tdRecomputeViewPagination(){
   if(!hidden || !editorEl || !inner || !areaEl) return;
   const html = hidden.value || '';
   const blocks = _tdParseBlocks(html);
-  const lhSel = document.getElementById('tdLineHeightSel');
-  const lineHeightMult = lhSel ? (parseFloat(lhSel.value) || TD_LINE_MULT) : TD_LINE_MULT;
+  const lineHeightMult = _tdLineHeightMult;
 
   // Si se está reeditando un texto ya aplicado, usar SU margen lateral (el
   // ajuste "Estrecho/Normal/Ancho" del panel de propiedades) — si no, el
@@ -792,7 +972,11 @@ function _tdRecomputeViewPagination(){
   // recalcular mientras escribe no debe deshacer eso. _tdCenterActiveLine,
   // llamado justo después de esta función, decide si hay que seguir al
   // cursor (mantenerlo visible si se sale del hueco visible).
-  _tdSetScrollOffset(areaEl.scrollTop, false);
+  // Se omite mientras hay composición IME activa (_tdComposing): incluso
+  // reaplicar el MISMO scrollTop invoca scrollTo() sobre el contenedor del
+  // <trix-editor>, y eso ya es suficiente en Android para cancelar la
+  // composición en curso.
+  if(!_tdComposing) _tdSetScrollOffset(areaEl.scrollTop, false);
 }
 let _tdLineOffsetsCache = [];
 
@@ -806,8 +990,7 @@ function _tdLayoutPagesForBreaks(forcedBreakChars){
   const hidden = document.getElementById('tdHiddenInput');
   if(!hidden) return { pages: [], pageStartChars: [0], lineStartChars: [] };
   const blocks = _tdParseBlocks(hidden.value || '');
-  const lhSel = document.getElementById('tdLineHeightSel');
-  const lineHeightMult = lhSel ? (parseFloat(lhSel.value) || TD_LINE_MULT) : TD_LINE_MULT;
+  const lineHeightMult = _tdLineHeightMult;
   const editingLayer = _tdEditingFlowId ? _tdFindFlowLayer(_tdEditingFlowId) : null;
   const marginFracX = (editingLayer && editingLayer.marginXFrac) || TD_MARGIN_FRAC;
   const editingFrames = _tdEditingFlowId ? _tdEditingFlowFrames(_tdEditingFlowId) : null;
@@ -831,6 +1014,28 @@ function _tdLayoutPagesForBreaks(forcedBreakChars){
 // para esa página, en vez de dejar el salto donde se soltó.
 function _tdWirePageBreakDrag(handle, lineEl){
   let dragging = false;
+  let pendingTimeout = null;
+
+  const removeDragListeners = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+  };
+
+  // Aborta este arrastre concreto sin aplicar ningún cambio — llamable
+  // tanto desde dentro (nunca se llama a sí misma normalmente, el flujo
+  // normal es onUp→finish) como desde FUERA vía _tdActiveDragCancel (ver
+  // esa variable y edCloseTextDoc) si el editor se cierra a media gesto o
+  // a mitad de la animación de corrección.
+  const cancelDrag = () => {
+    dragging = false;
+    removeDragListeners();
+    if(pendingTimeout){ clearTimeout(pendingTimeout); pendingTimeout = null; }
+    lineEl.classList.remove('dragging');
+    _tdPageBreakDragging = false;
+    if(_tdActiveDragCancel === cancelDrag) _tdActiveDragCancel = null;
+  };
+
   const onMove = e => {
     if(!dragging) return;
     const pageEl = document.getElementById('tdPage');
@@ -843,9 +1048,7 @@ function _tdWirePageBreakDrag(handle, lineEl){
     if(!dragging) return;
     dragging = false;
     lineEl.classList.remove('dragging');
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
-    document.removeEventListener('pointercancel', onUp);
+    removeDragListeners();
 
     const finalTop = parseFloat(lineEl.style.top) || 0;
     // Ajustar al límite de línea real más cercano — nunca a mitad de una,
@@ -891,6 +1094,7 @@ function _tdWirePageBreakDrag(handle, lineEl){
       tentative.sort((a, b) => a - b);
       _tdManualBreakChars = tentative;
       _tdPageBreakDragging = false; // ya se puede reconstruir de nuevo — esta es la propia reconstrucción final
+      if(_tdActiveDragCancel === cancelDrag) _tdActiveDragCancel = null;
       _tdRecomputeViewPagination();
     };
 
@@ -899,7 +1103,9 @@ function _tdWirePageBreakDrag(handle, lineEl){
       // al instante, sin transición — pero cuando el punto soltado NO era
       // válido y hay que rectificar, la línea se desliza de vuelta a su
       // sitio real en vez de saltar de golpe (lo que haría el recálculo,
-      // que reconstruye las líneas desde cero).
+      // que reconstruye las líneas desde cero). _tdActiveDragCancel sigue
+      // registrado durante esta espera (se anula al final, en finish o en
+      // cancelDrag) por si el editor se cierra justo durante la animación.
       lineEl.style.transition = 'top .22s cubic-bezier(.4,0,.2,1)';
       lineEl.style.top = _tdLineOffsetsCache[correctedIdx] + 'px';
       let done = false;
@@ -910,15 +1116,33 @@ function _tdWirePageBreakDrag(handle, lineEl){
         finish();
       };
       lineEl.addEventListener('transitionend', onEnd);
-      setTimeout(onEnd, 260); // red de seguridad si transitionend no llega
+      pendingTimeout = setTimeout(onEnd, 260); // red de seguridad si transitionend no llega
     } else {
       finish();
     }
   };
   handle.addEventListener('pointerdown', e => {
     e.preventDefault();
+    const chars = parseFloat(lineEl.dataset.chars);
+    const now = Date.now();
+    if(_tdLastPageBreakTapChars === chars && (now - _tdLastPageBreakTapTime) < 350){
+      // Doble toque/clic: eliminar este salto — no empezar a arrastrar.
+      // Los saltos posteriores se recalculan solos al llamar de nuevo a
+      // _tdRecomputeViewPagination (el algoritmo nunca decide de antemano
+      // dónde va cada salto, ver _tdLayoutPages), así que quitar uno de
+      // _tdManualBreakChars ya reconfigura todo lo que haga falta después.
+      _tdLastPageBreakTapChars = null;
+      _tdLastPageBreakTapTime = 0;
+      _tdManualBreakChars = _tdManualBreakChars.filter(c => c !== chars);
+      _tdRecomputeViewPagination();
+      edToast('Salto de página eliminado');
+      return;
+    }
+    _tdLastPageBreakTapChars = chars;
+    _tdLastPageBreakTapTime = now;
     dragging = true;
     _tdPageBreakDragging = true; // bloquea cualquier reconstrucción externa hasta soltar (ver _tdPageBreakDragging)
+    _tdActiveDragCancel = cancelDrag; // para poder abortar desde fuera si hace falta (ver edCloseTextDoc)
     lineEl.classList.add('dragging');
     lineEl.style.transition = 'none'; // arrastre al instante, sin animación, siguiendo al dedo/ratón
     handle.setPointerCapture?.(e.pointerId);
@@ -1003,6 +1227,11 @@ function _tdScrollToViewPage(n, announce){
 // REAL en pantalla del cursor (getClientRects) y se ajusta el desplazamiento
 // al milímetro.
 function _tdCenterActiveLine(){
+  // No mover el scroll mientras hay una composición IME activa — ver
+  // _tdComposing. Desplazar #tdPageArea (contenedor del <trix-editor>) en
+  // ese instante es lo que hace que Android cancele la composición y se
+  // pierda el carácter que se estaba formando (p.ej. el acento de "más").
+  if(_tdComposing) return;
   if(!_tdAutoFollow) return; // el usuario se ha desplazado a mano para leer — no forzar hasta que vuelva a escribir
   const editorEl = document.getElementById('tdEditor');
   const areaEl = document.getElementById('tdPageArea');
@@ -1150,9 +1379,27 @@ function _tdParseBlocks(html){
     return runs;
   }
 
-  function walkBlockLevel(container, ctxKind, indentLevel){
+  function walkBlockLevel(container, ctxKind, indentLevel, align){
     Array.from(container.children).forEach(el => {
       const tag = el.tagName.toLowerCase();
+      // Alineación (align-center/-right/-justify, ver _tdRegisterCustomTrixAttributes)
+      // envuelve el bloque real — se detecta aquí y se propaga a lo que
+      // resulte de analizar su contenido, sea cual sea (párrafo, título,
+      // cita, lista…), igual que ya se hace con indentLevel/ctxKind.
+      if(tag === 'align-center' || tag === 'align-right' || tag === 'align-justify'){
+        const a = tag === 'align-center' ? 'center' : tag === 'align-right' ? 'right' : 'justify';
+        if(el.children.length > 0){
+          // Envuelve un bloque real (div/h1/blockquote/ul/ol/pre…) — recorrer dentro.
+          walkBlockLevel(el, ctxKind, indentLevel, a);
+        } else {
+          // La propia etiqueta de alineación ES el párrafo (Trix no anidó
+          // nada dentro, el texto está directamente ahí) — tratarla como tal
+          // en vez de recorrer sus hijos (no hay ninguno: el párrafo entero
+          // se perdía en silencio si Trix genera el HTML de esta forma).
+          blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, align:a, runs: runsFromInline(el, {})});
+        }
+        return;
+      }
       if(tag === 'ul' || tag === 'ol'){
         Array.from(el.children).forEach((li, i) => {
           if(li.tagName.toLowerCase() !== 'li') return;
@@ -1160,26 +1407,27 @@ function _tdParseBlocks(html){
             kind: tag === 'ul' ? 'bullet' : 'number',
             index: i + 1,
             indent: indentLevel,
+            align,
             runs: runsFromInline(li, {})
           });
         });
       } else if(tag === 'blockquote'){
-        walkBlockLevel(el, 'quote', indentLevel + 1);
+        walkBlockLevel(el, 'quote', indentLevel + 1, align);
       } else if(tag === 'h1'){
-        blocks.push({kind:'heading', indent:indentLevel, runs: runsFromInline(el, {})});
+        blocks.push({kind:'heading', indent:indentLevel, align, runs: runsFromInline(el, {})});
       } else if(tag === 'pre'){
-        blocks.push({kind:'code', indent:indentLevel, runs: runsFromInline(el, {mono:true})});
+        blocks.push({kind:'code', indent:indentLevel, align, runs: runsFromInline(el, {mono:true})});
       } else if(tag === 'aside'){
         // Salto de página forzado (Trix.config.blockAttributes.pageBreak, tagName 'aside')
         // — se ignora cualquier texto que pueda tener, solo marca el corte.
         blocks.push({kind:'pagebreak', indent:indentLevel, runs:[]});
       } else {
-        blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, runs: runsFromInline(el, {})});
+        blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, align, runs: runsFromInline(el, {})});
       }
     });
   }
 
-  walkBlockLevel(doc.body, 'paragraph', 0);
+  walkBlockLevel(doc.body, 'paragraph', 0, null);
   return blocks;
 }
 
@@ -1188,13 +1436,34 @@ function _tdParseBlocks(html){
 //    un hack sobre internals. Ver README/wiki de Trix: "textAttributes
 //    support style attributes via styleProperty; blockAttributes solo
 //    tagName" (por eso el interlineado es un ajuste global del documento,
-//    no un atributo de Trix — ver TD_LINE_MULT / tdLineHeightSel). ──
+//    no un atributo de Trix — ver TD_LINE_MULT / _tdLineHeightMult). ──
 function _tdRegisterCustomTrixAttributes(){
   if(typeof Trix === 'undefined' || window._tdTrixAttrsRegistered) return;
   window._tdTrixAttrsRegistered = true;
   Trix.config.textAttributes.fontSize   = { styleProperty: 'font-size',   inheritable: true };
   Trix.config.textAttributes.fontFamily = { styleProperty: 'font-family', inheritable: true };
   Trix.config.blockAttributes.pageBreak = { tagName: 'aside', terminal: true, breakOnReturn: true, group: false };
+  // Alineación: Trix no soporta estilos en blockAttributes (solo tagName),
+  // así que — patrón documentado por la comunidad de Trix para este caso
+  // exacto — se registra una etiqueta inventada por cada alineación
+  // (excepto izquierda, que es la ausencia de cualquiera de las otras tres,
+  // ya que es como se comporta el texto sin marcar nada) y se les da
+  // aspecto por CSS (ver .td-editor align-center, etc.). La exclusividad
+  // entre ellas (nunca dos a la vez) se gestiona a mano en el clic del
+  // submenú (ver _tdWireFontControls), no vía la opción "exclusive" de
+  // Trix — esa opción, a juzgar por el propio código fuente de Trix,
+  // quita CUALQUIER otro atributo de bloque en ese punto (título, cita…),
+  // no solo los de alineación, y eso no es lo que se quiere aquí.
+  Trix.config.blockAttributes.alignCenter  = { tagName: 'align-center',  nestable: false };
+  Trix.config.blockAttributes.alignRight   = { tagName: 'align-right',   nestable: false };
+  Trix.config.blockAttributes.alignJustify = { tagName: 'align-justify', nestable: false };
+  // Imprescindible: sin esto, Trix (usa DOMPurify internamente para sanear
+  // el HTML) elimina estas etiquetas inventadas nada más volver a cargar el
+  // documento guardado para reeditar — documentado en el propio README de
+  // Trix ("Trix.config.dompurify.ADD_TAGS") y confirmado por un caso real
+  // reportado en su repositorio (issue #864: una etiqueta personalizada
+  // sin esto se guardaba bien, pero desaparecía al reabrir el editor).
+  Trix.config.dompurify.ADD_TAGS = (Trix.config.dompurify.ADD_TAGS || []).concat(['align-center', 'align-right', 'align-justify']);
 }
 _tdRegisterCustomTrixAttributes();
 
@@ -1283,16 +1552,24 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       while(forcedIdx < forced.length && forced[forcedIdx] <= endChars) forcedIdx++;
     }
     const baseline = curY + entry.height * 0.78;
-    curLines.push({
+    const lineObj = {
       y: my + baseline,
       indent: mx + entry.indent,
       kind: entry.kind,
       fontSize: entry.fontSize,
       marker: entry.marker,
-      runs: entry.runs
-    });
+      runs: entry.runs,
+      align: entry.align,
+      // Ancho real disponible para el TEXTO en esta línea concreta (marco ya
+      // actualizado arriba si tocaba) — lo necesita el centrado/derecha/
+      // justificado más abajo; se guarda ahora porque textW cambia de marco
+      // en marco y para cuando se calculan las x ya solo queda el último.
+      availW: Math.max(20, textW - entry.indent)
+    };
+    curLines.push(lineObj);
     curY += entry.height;
     lineStartChars.push(endChars);
+    return lineObj;
   }
 
   function forcePageBreak(){
@@ -1335,7 +1612,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     });
 
     if(words.length === 0){
-      pushLine({height:baseFontSize*lhMult, indent:indentPx, kind:block.kind, fontSize:baseFontSize, marker:null, runs:[]});
+      pushLine({height:baseFontSize*lhMult, indent:indentPx, kind:block.kind, fontSize:baseFontSize, marker:null, runs:[], align: block.align});
       curY += baseFontSize * TD_PARA_GAP_MULT;
       return;
     }
@@ -1344,12 +1621,13 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     let lineWidth = 0;
     let lineMaxFontSize = baseFontSize;
     let firstLineOfBlock = true;
+    let lastLineOfBlock = null; // la última línea empujada de este bloque — el justificado no la estira (convención tipográfica: la última línea de un párrafo se queda a su ancho natural)
 
     function flushLine(){
       while(lineRuns.length && lineRuns[lineRuns.length - 1].isSpace) lineRuns.pop();
-      pushLine({
+      lastLineOfBlock = pushLine({
         height: lineMaxFontSize * lhMult, indent: indentPx, kind: block.kind, fontSize: lineMaxFontSize,
-        marker: firstLineOfBlock ? marker : null, runs: lineRuns
+        marker: firstLineOfBlock ? marker : null, runs: lineRuns, align: block.align
       });
       firstLineOfBlock = false;
       lineRuns = [];
@@ -1375,6 +1653,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       if(w.fontSize > lineMaxFontSize) lineMaxFontSize = w.fontSize;
     });
     if(lineRuns.length) flushLine();
+    if(lastLineOfBlock) lastLineOfBlock.isBlockEnd = true;
 
     curY += baseFontSize * TD_PARA_GAP_MULT;
   });
@@ -1382,15 +1661,43 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   if(curLines.length) pages.push(curLines);
   if(pages.length === 0) pages.push([]);
 
-  // Posición x acumulada por línea (alineación izquierda) + limpieza de campos internos
+  // Posición x de cada run según la alineación real de la línea (heredada
+  // del bloque de Trix — ver _tdParseBlocks/_tdRegisterCustomTrixAttributes).
+  // Se calcula aquí, una única vez; _drawRichLines (editor.js) usa esta x
+  // tal cual al dibujar en el lienzo, sin saber nada de alineación por su
+  // cuenta — por eso basta con tocar este único sitio.
   pages.forEach(page => {
     page.forEach(line => {
-      let x = line.indent;
+      let lineWidth = 0;
+      line.runs.forEach(r => { lineWidth += r.width; });
+      const availW = line.availW || 0;
+
+      let startX = line.indent; // izquierda: como siempre
+      if(line.align === 'center'){
+        startX = line.indent + Math.max(0, (availW - lineWidth) / 2);
+      } else if(line.align === 'right'){
+        startX = line.indent + Math.max(0, availW - lineWidth);
+      }
+
+      // Justificado: reparte el sobrante entre los espacios de la línea —
+      // salvo en la última línea de cada párrafo (isBlockEnd), que se deja a
+      // su ancho natural, como hace cualquier procesador de texto.
+      let extraPerSpace = 0;
+      if(line.align === 'justify' && !line.isBlockEnd){
+        const spaceCount = line.runs.filter(r => r.isSpace).length;
+        const extra = availW - lineWidth;
+        if(spaceCount > 0 && extra > 0) extraPerSpace = extra / spaceCount;
+      }
+
+      let x = startX;
       line.runs.forEach(r => {
         r.x = x;
         x += r.width;
+        if(extraPerSpace && r.isSpace) x += extraPerSpace;
         delete r.isSpace;
       });
+      delete line.availW;
+      delete line.isBlockEnd;
     });
   });
 
@@ -1480,65 +1787,74 @@ function _tdApplyToCanvas(){
   const hasContent = blocks.some(b => (b.runs || []).some(r => r.text && r.text.trim()));
   if(!hasContent){ edToast('Escribe algo de texto antes de aplicar'); return; }
 
-  const lhSel = document.getElementById('tdLineHeightSel');
-  const lineHeightMult = lhSel ? parseFloat(lhSel.value) || TD_LINE_MULT : TD_LINE_MULT;
+  const lineHeightMult = _tdLineHeightMult;
 
-  if(_tdEditingFlowId){
-    const existingLayer = _tdFindFlowLayer(_tdEditingFlowId);
-    if(!existingLayer){ edToast('No se encuentra el texto a actualizar'); return; }
-    // Se reutiliza el mismo motor que el redimensionado con los handlers:
-    // conserva el tamaño/posición/color/fondo/marco que ya tuviera cada hoja
-    // del flujo — solo cambia el contenido (y el interlineado, si se tocó
-    // desde el propio Editor de textos).
-    existingLayer.sourceHTML = html;
-    existingLayer.lineHeightMult = lineHeightMult;
-    existingLayer.manualBreakChars = _tdManualBreakChars.slice();
-    const _panelWasOpen = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
-    const r = _tdReflowFlowInPlace(existingLayer, _panelWasOpen);
-    if(!r){ edToast('No se pudo actualizar el texto'); return; }
-    if(!_panelWasOpen) edLoadPage(r.firstIdx); // si no había panel que restaurar, al menos ir a la hoja
-    edToast(r.count === 1 ? 'Texto actualizado (1 hoja)' : `Texto actualizado (${r.count} hojas)`);
-  } else {
-    const flowId = _tdNewFlowId();
-    const startIdx = Math.max(0, Math.min(edCurrentPage, edPages.length - 1));
+  // Red de seguridad: si algo de aquí abajo lanza un error inesperado (el
+  // texto no se pierde, sigue en el editor tal cual), se avisa con un
+  // mensaje claro en vez de quedarse a medias sin completar la acción ni
+  // decir por qué — antes, la única forma de salir en ese caso era "Cerrar"
+  // sin guardar, perdiendo los cambios sin ninguna explicación.
+  try{
+    if(_tdEditingFlowId){
+      const existingLayer = _tdFindFlowLayer(_tdEditingFlowId);
+      if(!existingLayer){ edToast('No se encuentra el texto a actualizar'); return; }
+      // Se reutiliza el mismo motor que el redimensionado con los handlers:
+      // conserva el tamaño/posición/color/fondo/marco que ya tuviera cada hoja
+      // del flujo — solo cambia el contenido (y el interlineado, si se tocó
+      // desde el propio Editor de textos).
+      existingLayer.sourceHTML = html;
+      existingLayer.lineHeightMult = lineHeightMult;
+      existingLayer.manualBreakChars = _tdManualBreakChars.slice();
+      const _panelWasOpen = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
+      const r = _tdReflowFlowInPlace(existingLayer, _panelWasOpen);
+      if(!r){ edToast('No se pudo actualizar el texto'); return; }
+      if(!_panelWasOpen) edLoadPage(r.firstIdx); // si no había panel que restaurar, al menos ir a la hoja
+      edToast(r.count === 1 ? 'Texto actualizado (1 hoja)' : `Texto actualizado (${r.count} hojas)`);
+    } else {
+      const flowId = _tdNewFlowId();
+      const startIdx = Math.max(0, Math.min(edCurrentPage, edPages.length - 1));
 
-    // El texto se reparte primero por las hojas YA EXISTENTES a partir de la
-    // actual, respetando la orientación propia de cada una — solo se crean
-    // hojas nuevas si el texto continúa más allá de las que ya había.
-    const frames = [];
-    for(let i = startIdx; i < edPages.length; i++){
-      const sv = (edPages[i].orientation || edOrientation) === 'vertical';
-      frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
+      // El texto se reparte primero por las hojas YA EXISTENTES a partir de la
+      // actual, respetando la orientación propia de cada una — solo se crean
+      // hojas nuevas si el texto continúa más allá de las que ya había.
+      const frames = [];
+      for(let i = startIdx; i < edPages.length; i++){
+        const sv = (edPages[i].orientation || edOrientation) === 'vertical';
+        frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
+      }
+      if(!frames.length){
+        const sv = edOrientation === 'vertical';
+        frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
+      }
+
+      const { pages } = _tdLayoutPages(blocks, frames, lineHeightMult, undefined, _tdManualBreakChars);
+      const existingCount = Math.min(pages.length, edPages.length - startIdx);
+
+      for(let i = 0; i < existingCount; i++){
+        const pg = edPages[startIdx + i];
+        pg.layers = pg.layers || [];
+        pg.layers.push(_tdMakeTextLayer(pages[i], html, flowId, lineHeightMult, undefined, _tdManualBreakChars));
+      }
+      // Si el texto sigue más allá de las hojas ya existentes, las que faltan
+      // se crean nuevas al final — con la orientación de la última hoja de la obra.
+      const lastOrient = edPages.length ? (edPages[edPages.length - 1].orientation || edOrientation) : edOrientation;
+      const newPages = pages.slice(existingCount).map(pageLines => ({
+        layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, _tdManualBreakChars)],
+        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
+      }));
+      if(newPages.length) edPages.push(...newPages);
+
+      edLoadPage(startIdx);
+      edPushHistory();
+      edToast(
+        pages.length === 1 ? 'Texto añadido a la hoja actual' :
+        !newPages.length ? `Texto añadido en ${pages.length} hojas ya existentes` :
+        `Texto añadido: ${pages.length} hojas (${newPages.length} nueva${newPages.length===1?'':'s'})`
+      );
     }
-    if(!frames.length){
-      const sv = edOrientation === 'vertical';
-      frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
-    }
-
-    const { pages } = _tdLayoutPages(blocks, frames, lineHeightMult, undefined, _tdManualBreakChars);
-    const existingCount = Math.min(pages.length, edPages.length - startIdx);
-
-    for(let i = 0; i < existingCount; i++){
-      const pg = edPages[startIdx + i];
-      pg.layers = pg.layers || [];
-      pg.layers.push(_tdMakeTextLayer(pages[i], html, flowId, lineHeightMult, undefined, _tdManualBreakChars));
-    }
-    // Si el texto sigue más allá de las hojas ya existentes, las que faltan
-    // se crean nuevas al final — con la orientación de la última hoja de la obra.
-    const lastOrient = edPages.length ? (edPages[edPages.length - 1].orientation || edOrientation) : edOrientation;
-    const newPages = pages.slice(existingCount).map(pageLines => ({
-      layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, _tdManualBreakChars)],
-      drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
-    }));
-    if(newPages.length) edPages.push(...newPages);
-
-    edLoadPage(startIdx);
-    edPushHistory();
-    edToast(
-      pages.length === 1 ? 'Texto añadido a la hoja actual' :
-      !newPages.length ? `Texto añadido en ${pages.length} hojas ya existentes` :
-      `Texto añadido: ${pages.length} hojas (${newPages.length} nueva${newPages.length===1?'':'s'})`
-    );
+  }catch(err){
+    edToast('Error al aplicar el texto — no se ha perdido nada, sigue en el editor (' + (err && err.message || err) + ')');
+    return;
   }
 
   // Cada aplicación consume el contenido del editor — se vacía para el siguiente texto
