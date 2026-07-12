@@ -224,7 +224,21 @@ function edCloseTextDoc(fromPopstate){
   // pérdida de foco genuina y no como un no-op sin efecto. Se restaura
   // "manual" enseguida para que la próxima vez que se toque el editor no
   // se abra solo (ver _tdTouchEnd).
-  const editorEl = wasOpen ? document.getElementById('tdEditor') : null;
+  //
+  // PERO: nada de esto debe hacerse si el teclado YA está colapsado (p.ej.
+  // se cierra pulsando "Guardar cambios"/"Aplicar al lienzo", cuyo propio
+  // clic nativo ya deja el foco en el botón, sin teclado — no hace falta
+  // "ensure focus" para nada). Forzar aquí un focus() en ese caso reabre el
+  // teclado que ya estaba cerrado (con la política recién puesta en "auto",
+  // se muestra solo), y el blur() del frame siguiente no siempre conseguía
+  // cerrarlo de nuevo — bug reportado: el teclado se quedaba abierto sin
+  // poder cerrarse. boundingRect.height es la misma señal que ya se usa en
+  // _tdShowKeyboardIfNeeded para saber si está mostrándose ahora mismo.
+  let _tdKbCurrentlyShown = true; // sin la API, se asume que sí (comportamiento de siempre)
+  try{
+    if('virtualKeyboard' in navigator) _tdKbCurrentlyShown = (navigator.virtualKeyboard.boundingRect?.height || 0) > 0;
+  }catch(_e){}
+  const editorEl = (wasOpen && _tdKbCurrentlyShown) ? document.getElementById('tdEditor') : null;
   if(editorEl){
     try {
       editorEl.virtualKeyboardPolicy = 'auto';
@@ -2337,10 +2351,20 @@ function _tdApplyToCanvas(){
       existingLayer.sourceHTML = html;
       existingLayer.lineHeightMult = lineHeightMult;
       existingLayer.manualBreakChars = _tdManualBreakChars.slice();
-      const _panelWasOpen = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
-      const r = _tdReflowFlowInPlace(existingLayer, _panelWasOpen);
+      const _wasPanelOpenBefore = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
+      // Petición explícita de Alberto: al guardar cambios en un texto ya
+      // existente, NO reabrir el panel de propiedades al volver (antes se
+      // restauraba tal cual estaba — siempre abierto, porque la única forma
+      // de llegar aquí es desde su propio botón "Editar texto"). Se pasa
+      // "false" para que _tdReflowFlowInPlace no lo reabra, y se cierra del
+      // todo + resetea la cámara explícitamente aquí abajo — si no, el
+      // lienzo se queda con el tamaño encogido que tiene mientras el panel
+      // está abierto, aunque el panel en sí ya no se vea.
+      const r = _tdReflowFlowInPlace(existingLayer, false);
       if(!r){ _tdLogApply('SALIDA: reflujo falló', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se pudo actualizar el texto'); return; }
-      if(!_panelWasOpen) edLoadPage(r.firstIdx); // si no había panel que restaurar, al menos ir a la hoja
+      if(!_wasPanelOpenBefore) edLoadPage(r.firstIdx); // mismo respaldo que había, por si no hubiera panel que cerrar
+      if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
+      if(typeof _edResetCameraToFit === 'function') _edResetCameraToFit();
       edToast(r.count === 1 ? 'Texto actualizado (1 hoja)' : `Texto actualizado (${r.count} hojas)`);
     } else {
       const flowId = _tdNewFlowId();
