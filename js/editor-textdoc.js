@@ -478,6 +478,15 @@ function _tdInitOnce(){
     _tdTouchStartScrollTop = _tdArea.scrollTop;
   }, {passive:true});
   const _tdTouchEnd = e => {
+    // Un toque sobre el tirador/línea de un salto de página (arrastrarlo,
+    // doble toque para borrarlo) no es "tocar el texto para escribir" —
+    // pedido explícito de Alberto: solo colocar el cursor en el propio
+    // texto debe abrir el teclado. Sin este filtro, el toque en el tirador
+    // burbujea hasta aquí igual que cualquier otro, y la comprobación de
+    // abajo (¿hay una selección colapsada dentro del editor?) suele seguir
+    // dando "sí" por la selección "pegajosa" que ya vimos que mantiene Trix
+    // de antes — aunque no se haya tocado el texto para nada.
+    if(e.target && e.target.closest && e.target.closest('.td-pagebreak-line')) return;
     // Se desplazó de verdad (arrastre): a partir de aquí, hasta que se
     // vuelva a escribir, no se fuerza el recentrado — el usuario puede
     // estar leyendo otra parte de la obra. Universal, no depende de la
