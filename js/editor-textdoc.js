@@ -1005,8 +1005,16 @@ function _tdWireFontControls(){
   const finishChoice = () => {
     unfreeze();
     if(typeof edCloseMenus === 'function') edCloseMenus();
+    // NO se reabre el teclado aquí a propósito (antes llamaba a
+    // _tdShowKeyboardIfNeeded) — coherente con el resto de la app: el
+    // teclado solo se muestra con un toque deliberado en el propio texto
+    // (ver _tdTouchEnd), nunca solo. Además, el ciclo blur()+focus() que
+    // eso conllevaba parecía interferir en Android con que el cambio recién
+    // elegido (p.ej. interlineado) quedara bien reflejado al aplicar al
+    // lienzo justo después — bugs reportados por Alberto. Un focus() liso,
+    // sin tocar virtualKeyboardPolicy, no muestra el teclado (sigue en
+    // "manual"), así que basta para mantener el cursor/selección visibles.
     editorEl.focus();
-    _tdShowKeyboardIfNeeded('cerrar menú de formato (finishChoice)');
   };
 
   // Si hay texto seleccionado, fuente/tamaño/alineación deben afectar SOLO a
