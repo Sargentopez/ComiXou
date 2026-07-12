@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.45</footer>
+    <footer class="app-version">v33.50</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1026,9 +1026,9 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdLineHeight" title="Interlineado de todo el texto">Interlineado ▾</button>
             <div class="ed-dropdown" id="dd-tdLineHeight">
-              <button class="ed-dropdown-item" data-value="1.15">Compacto</button>
-              <button class="ed-dropdown-item" data-value="1.42">Normal</button>
-              <button class="ed-dropdown-item" data-value="1.75">Amplio</button>
+              <button class="ed-dropdown-item" data-value="lineCompact">Compacto</button>
+              <button class="ed-dropdown-item" data-value="lineNormal">Normal</button>
+              <button class="ed-dropdown-item" data-value="lineAmplio">Amplio</button>
             </div>
           </div>
           <div class="ed-menu-sep"></div>

@@ -2719,6 +2719,21 @@ body.editor-page #appView {
 .td-editor align-right   { text-align: right; }
 .td-editor align-justify { text-align: justify; }
 
+/* Interlineado por párrafo (line-compact/line-amplio, ver
+   _tdRegisterCustomTrixAttributes) — Normal es la ausencia de ambas (el
+   line-height base de .td-editor, más abajo). Los valores aquí son solo
+   para la VISTA DE EDICIÓN de Trix (tipografía CSS normal); el multiplicador
+   real usado al aplicar al lienzo es otro (ver TD_LINE_MULT en
+   editor-textdoc.js) porque es un motor de dibujo en canvas aparte — no
+   hace falta que coincidan en cifra exacta, solo que la proporción entre
+   compacto/normal/amplio se note igual de forma relativa. */
+.td-editor line-compact,
+.td-editor line-amplio {
+  display: block;
+}
+.td-editor line-compact { line-height: 1.3; }
+.td-editor line-amplio  { line-height: 2; }
+
 /* Área de la hoja: VISOR de altura fija (calculada por JS en
    _tdSyncViewportHeight/_tdRecomputeViewPagination a partir del hueco real
    disponible — Visual Viewport menos cabecera/barras) con SCROLL NATIVO

@@ -63,10 +63,15 @@ const TD_H1_SIZE        = 34;     // título (heading1) al APLICAR al lienzo
 const TD_A4_W = 794, TD_A4_H = 1123; // A4 a 96dpi — medida estándar en diseño web
 const TD_A4_MARGIN_FRAC = 0.09;
 const TD_A4_BODY_SIZE = 17, TD_A4_H1_SIZE = 27; // a juego con el CSS de .td-editor (1.05rem/1.55em)
-const TD_LINE_MULT     = 1.42;   // interlineado por defecto
-// Interlineado actual del documento — ya no es un <select> (ver
-// _tdWireFontControls), es un ajuste global de todo el texto, no por
-// carácter/bloque como fontSize/fontFamily o la alineación.
+const TD_LINE_MULT     = 1.42;   // interlineado por defecto ("Normal")
+const TD_LINE_COMPACT  = 1.15;   // interlineado "Compacto" (mismo valor que ya tenía el desplegable)
+const TD_LINE_AMPLIO   = 1.75;   // interlineado "Amplio" (ídem)
+// Valor POR DEFECTO del documento/sesión actual — lo usan los párrafos que
+// NO traen su propia etiqueta line-compact/line-amplio (ver _tdParseBlocks),
+// y sirve de compatibilidad con obras guardadas antes de que el interlineado
+// fuera por párrafo (editLayer.lineHeightMult, ver edOpenTextDoc). El ajuste
+// por párrafo en sí vive en el propio HTML de Trix (atributo de bloque,
+// igual que la alineación — ver _tdRegisterCustomTrixAttributes), no aquí.
 let _tdLineHeightMult = TD_LINE_MULT;
 const TD_PARA_GAP_MULT = 0.55;   // espacio extra tras cada bloque (× fontSize del bloque)
 const TD_LIST_INDENT   = 30;     // sangría de listas
@@ -96,6 +101,7 @@ function edOpenTextDoc(editLayer){
   requestAnimationFrame(_tdUpdateTitlePill);
   const editorEl = document.getElementById('tdEditor');
   const applyBtn = document.getElementById('tdApplyBtn');
+  _tdCursorEverPlaced = false; // el cursor real todavía no se ha colocado en ESTE contenido
   if(editLayer && editLayer.richLines && editLayer.sourceHTML){
     // Reeditar un texto ya aplicado: cargar su HTML de origen y recordar su flowId
     // para que "Aplicar" sustituya estas hojas en vez de añadir otras nuevas.
@@ -104,7 +110,12 @@ function edOpenTextDoc(editLayer){
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML);
     if(applyBtn) applyBtn.textContent = 'Guardar cambios';
     _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
-    _tdManualBreakChars = (editLayer.manualBreakChars || []).slice();
+    // El .filter(c => c > 0) es limpieza defensiva por si esta obra ya se
+    // guardó con el salto inválido del bug de arriba (posición 0, sin
+    // tirador dibujable) — así se corrige solo la próxima vez que se abra,
+    // sin necesitar ninguna acción extra por parte de Alberto.
+    _tdManualBreakChars = (editLayer.manualBreakChars || []).filter(c => c > 0).slice();
+    _tdBreakHistory = [_tdManualBreakChars.slice()]; _tdBreakHistoryIdx = 0;
   } else {
     _tdEditingFlowId = null;
     if(applyBtn) applyBtn.textContent = 'Aplicar al lienzo';
@@ -114,6 +125,7 @@ function edOpenTextDoc(editLayer){
     // aplicado al lienzo, y a ese solo se llega con doble tap sobre él).
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
     _tdManualBreakChars = [];
+    _tdBreakHistory = [[]]; _tdBreakHistoryIdx = 0;
   }
   requestAnimationFrame(() => requestAnimationFrame(() => {
     _tdViewCurPage = 0;
@@ -379,9 +391,41 @@ function _tdInitOnce(){
       }, 30);
     });
     editorEl.addEventListener('trix-selection-change', () => {
+      // loadHTML() (reeditar/abrir en blanco) NO dispara este evento por sí
+      // solo — solo una interacción real (toque, clic, flechas) lo hace.
+      // Por eso sirve para saber si el cursor ya está colocado de verdad en
+      // ALGÚN sitio del texto actual, y no en el [0,0] interno que Trix deja
+      // tras cargar el HTML sin que el usuario haya tocado nada todavía
+      // (ver _tdInsertPageBreakAtCursor y el bug reportado por Alberto).
+      _tdCursorEverPlaced = true;
       clearTimeout(_tdFollowTimer);
       _tdFollowTimer = setTimeout(_tdCenterActiveLine, 100);
     });
+    // Ctrl+Z/Ctrl+Y (o Cmd en Mac) para deshacer/rehacer SALTOS DE PÁGINA —
+    // ver _tdBreakHistory. En fase de CAPTURA porque el propio Trix también
+    // escucha Ctrl+Z en este mismo elemento (para deshacer texto) y, al
+    // estar registrado antes que este listener, actuaría primero en fase de
+    // burbuja — con esto se decide ANTES: si hay algo que deshacer de
+    // saltos, se hace eso y se corta el paso con stopImmediatePropagation
+    // (para que Trix no deshaga TAMBIÉN un cambio de texto con la misma
+    // pulsación); si no hay nada de saltos pendiente, no se toca nada y
+    // Trix sigue con su deshacer de texto normal, como siempre.
+    editorEl.addEventListener('keydown', e => {
+      const mod = e.ctrlKey || e.metaKey;
+      if(!mod) return;
+      const k = e.key.toLowerCase();
+      const isUndo = k === 'z' && !e.shiftKey;
+      const isRedo = k === 'y' || (k === 'z' && e.shiftKey);
+      if(isUndo && _tdBreakHistoryIdx > 0){
+        e.preventDefault(); e.stopImmediatePropagation();
+        _tdUndoBreak();
+        edToast('Salto de página restaurado');
+      } else if(isRedo && _tdBreakHistoryIdx < _tdBreakHistory.length - 1){
+        e.preventDefault(); e.stopImmediatePropagation();
+        _tdRedoBreak();
+        edToast('Salto de página rehecho');
+      }
+    }, true);
   }
   // Desplazamiento continuo: scroll nativo de #tdPageArea (rueda del ratón
   // en PC, arrastre táctil en móvil, ambos gestionados por el navegador sin
@@ -438,6 +482,31 @@ function _tdInitOnce(){
   };
   _tdArea?.addEventListener('touchend', _tdTouchEnd, {passive:true});
   _tdArea?.addEventListener('touchcancel', _tdTouchEnd, {passive:true});
+  // Clic con RATÓN en el margen de la página (fuera del propio <trix-editor>,
+  // p.ej. el fondo alrededor de la hoja) — con el dedo esto no hace falta:
+  // el propio _tdTouchEnd de arriba decide cuándo mostrar/ocultar el teclado
+  // según haya selección o no. Pero en PC, un clic fuera del elemento nunca
+  // llega a Trix por ningún otro camino — y Trix guarda su selección de
+  // forma expresa (para que la barra de herramientas siga actuando sobre
+  // ella al perder el foco, ver _tdShowKeyboardIfNeeded/finishChoice), así
+  // que sin esto seguía "recordando" indefinidamente la última selección
+  // real aunque el usuario llevara rato con la vista puesta en otro sitio:
+  // el siguiente cambio de fuente/tamaño/alineación/interlineado (pensado
+  // para "sin selección = todo el documento", ver _tdApplyScoped) se
+  // aplicaba por error solo a ese párrafo antiguo. Colapsarla aquí (al
+  // final de lo que hubiera, no al principio: no hay una posición de texto
+  // sensata "donde" se hizo clic, ya que el clic fue fuera del texto) es
+  // la señal explícita que Trix necesita para dar la selección por
+  // terminada — bug reportado por Alberto, reproducido en PC.
+  _tdArea?.addEventListener('mousedown', e => {
+    if(!editorEl || !editorEl.editor) return;
+    if(editorEl.contains(e.target)) return; // clic dentro del propio texto — no tocar
+    try{
+      const editor = editorEl.editor;
+      const range = editor.getSelectedRange();
+      if(range && range[0] !== range[1]) editor.setSelectedRange([range[1], range[1]]);
+    }catch(_e){}
+  });
   // Rueda del ratón (PC): el scroll en sí ya lo hace el navegador solo (ver
   // arriba) — esto solo registra que fue un desplazamiento MANUAL, para lo
   // mismo que el arrastre táctil.
@@ -986,14 +1055,37 @@ function _tdWireFontControls(){
     });
   });
 
-  // Interlineado: NO es un atributo de Trix — es un ajuste global de todo
-  // el documento (ver _tdLineHeightMult), así que no depende de selección
-  // ni de foco para aplicarse — se deja igualmente en "pointerdown" por
-  // coherencia con los otros 3 desplegables de esta misma barra.
+  // Interlineado: pedido explícito de Alberto — debe comportarse igual que
+  // alineación (por párrafo, y con selección vs. todo el documento vía
+  // _tdApplyScoped), así que ahora es un atributo de BLOQUE de Trix
+  // (lineCompact/lineAmplio, ver _tdRegisterCustomTrixAttributes) en vez de
+  // la variable global única _tdLineHeightMult de antes. "Normal" es la
+  // ausencia de ambas, igual que "A la izquierda" en alineación.
   document.querySelectorAll('#dd-tdLineHeight .ed-dropdown-item').forEach(btn => {
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
-      _tdLineHeightMult = parseFloat(btn.dataset.value) || TD_LINE_MULT;
+      const value = btn.dataset.value; // lineCompact | lineNormal | lineAmplio
+      _tdApplyScoped(() => {
+        const editor = editorEl.editor;
+        if(!editor) return;
+        // Reafirmar el rango antes de cada llamada — mismo motivo que en
+        // alineación: deactivateAttribute no restaura la selección cuando
+        // quita algo real (ver comentario detallado en el desplegable de
+        // alineación, más abajo).
+        const targetRange = editor.getSelectedRange();
+        ['lineCompact', 'lineAmplio'].forEach(a => {
+          try{
+            if(targetRange) editor.setSelectedRange(targetRange);
+            editor.deactivateAttribute(a);
+          }catch(_e){}
+        });
+        if(value !== 'lineNormal'){
+          try{
+            if(targetRange) editor.setSelectedRange(targetRange);
+            editor.activateAttribute(value);
+          }catch(_e){}
+        }
+      });
       finishChoice();
       _tdSyncLineHeightMenuActive();
       _tdRecomputeViewPagination();
@@ -1044,11 +1136,13 @@ function _tdWireFontControls(){
   // actual del cursor — se actualiza en cada cambio de selección, esté el
   // menú abierto o no, para que ya esté correcto la próxima vez que se
   // abra (los desplegables, cerrados, no se ven — no hace falta esperar a
-  // que se abran para refrescarlo). Interlineado no depende del cursor
-  // (ajuste global), así que solo se sincroniza al abrir/cambiar, no aquí.
+  // que se abran para refrescarlo). Interlineado TAMBIÉN depende del cursor
+  // ahora que es un atributo de bloque por párrafo (como alineación), no un
+  // ajuste global — se sincroniza aquí igual que los otros tres.
   editorEl.addEventListener('trix-selection-change', () => {
     _tdSyncFontMenuActive();
     _tdSyncAlignMenuActive();
+    _tdSyncLineHeightMenuActive();
   });
   _tdSyncFontMenuActive();
   _tdSyncAlignMenuActive();
@@ -1098,11 +1192,20 @@ function _tdSyncAlignMenuActive(){
   });
 }
 
-// Marca con ✓ (y fondo) el interlineado actual — ajuste global del
-// documento (_tdLineHeightMult), no depende del cursor.
+// Marca con ✓ (y fondo) el interlineado activo en la posición actual del
+// cursor — atributo de BLOQUE (igual que alineación), se consulta con
+// attributeIsActive.
 function _tdSyncLineHeightMenuActive(){
+  const editorEl = document.getElementById('tdEditor');
+  if(!editorEl || !editorEl.editor) return;
+  let active = 'lineNormal';
+  try{
+    const editor = editorEl.editor;
+    if(editor.attributeIsActive('lineCompact')) active = 'lineCompact';
+    else if(editor.attributeIsActive('lineAmplio')) active = 'lineAmplio';
+  }catch(_e){}
   document.querySelectorAll('#dd-tdLineHeight .ed-dropdown-item').forEach(btn => {
-    btn.classList.toggle('active', (parseFloat(btn.dataset.value) || TD_LINE_MULT) === _tdLineHeightMult);
+    btn.classList.toggle('active', btn.dataset.value === active);
   });
 }
 
@@ -1132,7 +1235,55 @@ let _tdViewCurPage = 0;
 // reeditar uno existente (se restauran desde la capa si los tenía guardados
 // — ver edOpenTextDoc) y se guardan en la propia capa al aplicar.
 let _tdManualBreakChars = [];
+// true en cuanto el usuario coloca de verdad el cursor en el texto actual
+// (ver el listener de trix-selection-change) — se reinicia a false cada vez
+// que se abre el editor (nuevo o reeditando, ver edOpenTextDoc). Sin esto,
+// _tdInsertPageBreakAtCursor no tenía forma fiable de distinguir "el cursor
+// está genuinamente aquí" de "Trix aún no ha recibido ningún toque desde
+// que cargó el HTML" — ambos casos dejan una selección con pinta válida
+// ([0,0] interno de Trix, a veces también reflejado en window.getSelection
+// según el navegador), y sin el filtro se creaba un salto de página en el
+// principio absoluto del documento — imposible de arrastrar ni de borrar
+// porque _tdRecomputeViewPagination nunca dibuja tirador para el inicio del
+// documento (solo para cambios de página REALES, ver ese bucle: empieza en
+// i=1) — bug reportado por Alberto.
+let _tdCursorEverPlaced = false;
 let _tdLineStartCharsCache = []; // último cálculo — para ajustar el arrastre a la línea más cercana
+
+// ── Historial de saltos de página (insertar/arrastrar/eliminar) — pedido
+// explícito de Alberto: eliminar un salto (doble toque en su tirador) debe
+// poder deshacerse. El deshacer propio de Trix (Ctrl+Z) no sirve aquí:
+// solo conoce cambios de TEXTO, nada sabe de _tdManualBreakChars. Mismo
+// patrón pila+índice que el resto del editor (edHistory/edHistoryIdx,
+// _vsHistory, edDrawHistoryIdx…) — independiente de todos ellos, como
+// exige ese mismo patrón (ver ANALISIS_CAPAS_DIBUJO). Cada entrada es una
+// FOTO completa del array (más simple y robusto que registrar "qué cambió"
+// con una lógica de deshacer distinta para insertar/mover/borrar).
+let _tdBreakHistory = [[]];
+let _tdBreakHistoryIdx = 0;
+function _tdPushBreakHistory(){
+  // Llamar DESPUÉS de cada cambio a _tdManualBreakChars, con el nuevo
+  // estado ya aplicado. Si no estamos en la punta (por deshacer previos),
+  // se descarta el "rehacer" pendiente — comportamiento estándar de
+  // cualquier historial al hacer un cambio nuevo.
+  _tdBreakHistory = _tdBreakHistory.slice(0, _tdBreakHistoryIdx + 1);
+  _tdBreakHistory.push(_tdManualBreakChars.slice());
+  _tdBreakHistoryIdx = _tdBreakHistory.length - 1;
+}
+function _tdUndoBreak(){
+  if(_tdBreakHistoryIdx <= 0) return false;
+  _tdBreakHistoryIdx--;
+  _tdManualBreakChars = _tdBreakHistory[_tdBreakHistoryIdx].slice();
+  _tdRecomputeViewPagination();
+  return true;
+}
+function _tdRedoBreak(){
+  if(_tdBreakHistoryIdx >= _tdBreakHistory.length - 1) return false;
+  _tdBreakHistoryIdx++;
+  _tdManualBreakChars = _tdBreakHistory[_tdBreakHistoryIdx].slice();
+  _tdRecomputeViewPagination();
+  return true;
+}
 
 // Busca la posición (nodo de texto + offset) en `container` que corresponde
 // al carácter nº targetOffset contando solo nodos de texto, en orden documento
@@ -1404,6 +1555,7 @@ function _tdWirePageBreakDrag(handle, lineEl){
       if(newChars > 0 && !tentative.includes(newChars)) tentative.push(newChars);
       tentative.sort((a, b) => a - b);
       _tdManualBreakChars = tentative;
+      _tdPushBreakHistory();
       _tdPageBreakDragging = false; // ya se puede reconstruir de nuevo — esta es la propia reconstrucción final
       if(_tdActiveDragCancel === cancelDrag) _tdActiveDragCancel = null;
       _tdRecomputeViewPagination();
@@ -1441,12 +1593,16 @@ function _tdWirePageBreakDrag(handle, lineEl){
       // Los saltos posteriores se recalculan solos al llamar de nuevo a
       // _tdRecomputeViewPagination (el algoritmo nunca decide de antemano
       // dónde va cada salto, ver _tdLayoutPages), así que quitar uno de
-      // _tdManualBreakChars ya reconfigura todo lo que haga falta después.
+      // _tdManualBreakChars ya reconfigura todo lo que haga falta después
+      // — los saltos ANTERIORES a este no se tocan para nada (siguen en el
+      // array tal cual estaban). Queda en _tdBreakHistory por si se quiere
+      // deshacer (Ctrl+Z, ver el keydown de más abajo).
       _tdLastPageBreakTapChars = null;
       _tdLastPageBreakTapTime = 0;
       _tdManualBreakChars = _tdManualBreakChars.filter(c => c !== chars);
+      _tdPushBreakHistory();
       _tdRecomputeViewPagination();
-      edToast('Salto de página eliminado');
+      edToast('Salto de página eliminado (Ctrl+Z para deshacer)');
       return;
     }
     _tdLastPageBreakTapChars = chars;
@@ -1592,6 +1748,18 @@ function _tdInsertPageBreakAtCursor(){
   const editorEl = document.getElementById('tdEditor');
   const inner = document.getElementById('tdPage');
   if(!editorEl || !inner) return;
+  if(!_tdCursorEverPlaced){
+    // El cursor no se ha colocado todavía de verdad en este texto (recién
+    // abierto/reeditado, sin tocar aún) — sin este filtro, la selección
+    // "de mentira" que deja Trix tras loadHTML ([0,0] interno, a veces
+    // también reflejada en window.getSelection) colaba como si fuera una
+    // posición real y creaba un salto de página en el principio absoluto
+    // del documento — imposible de arrastrar o borrar después, porque no
+    // se dibuja tirador para el inicio del documento (solo para cambios de
+    // página reales, ver el bucle de _tdRecomputeViewPagination).
+    edToast('Toca primero el texto, donde quieras insertar el salto');
+    return;
+  }
   const sel = window.getSelection();
   if(!sel || sel.rangeCount === 0) return;
   const anchorNode = sel.focusNode;
@@ -1621,6 +1789,7 @@ function _tdInsertPageBreakAtCursor(){
   if(_tdManualBreakChars.includes(newChars)){ edToast('Ya hay un salto de página ahí'); return; }
   _tdManualBreakChars.push(newChars);
   _tdManualBreakChars.sort((a, b) => a - b);
+  _tdPushBreakHistory();
   _tdAutoFollow = true; // insertar un salto es una edición como escribir — seguir mostrando la línea activa
   _tdRecomputeViewPagination();
   _tdCenterActiveLine();
@@ -1690,34 +1859,41 @@ function _tdParseBlocks(html){
     return runs;
   }
 
-  function walkBlockLevel(container, ctxKind, indentLevel, align){
+  const TD_WRAPPER_TAGS = ['align-center', 'align-right', 'align-justify', 'line-compact', 'line-amplio'];
+  const TD_BLOCK_TAGS = ['div', 'h1', 'blockquote', 'ul', 'ol', 'pre', 'aside'].concat(TD_WRAPPER_TAGS);
+
+  function walkBlockLevel(container, ctxKind, indentLevel, align, lineMult){
     Array.from(container.children).forEach(el => {
       const tag = el.tagName.toLowerCase();
-      // Alineación (align-center/-right/-justify, ver _tdRegisterCustomTrixAttributes)
-      // envuelve el bloque real — se detecta aquí y se propaga a lo que
+      // Alineación (align-center/-right/-justify) e interlineado por párrafo
+      // (line-compact/line-amplio, ver _tdRegisterCustomTrixAttributes)
+      // envuelven el bloque real — se detectan aquí y se propagan a lo que
       // resulte de analizar su contenido, sea cual sea (párrafo, título,
-      // cita, lista…), igual que ya se hace con indentLevel/ctxKind.
-      if(tag === 'align-center' || tag === 'align-right' || tag === 'align-justify'){
-        const a = tag === 'align-center' ? 'center' : tag === 'align-right' ? 'right' : 'justify';
+      // cita, lista…), igual que ya se hace con indentLevel/ctxKind. Pueden
+      // ir anidadas entre sí (un párrafo puede estar centrado Y compacto a
+      // la vez), por eso cada una solo actualiza SU propio valor (align o
+      // lineMult) y deja el otro tal cual venía.
+      if(TD_WRAPPER_TAGS.includes(tag)){
+        const a  = tag === 'align-center' ? 'center' : tag === 'align-right' ? 'right' : tag === 'align-justify' ? 'justify' : align;
+        const lm = tag === 'line-compact' ? TD_LINE_COMPACT : tag === 'line-amplio' ? TD_LINE_AMPLIO : lineMult;
         // ¿Envuelve un bloque real (div/h1/blockquote/ul/ol/pre/aside, u otra
-        // etiqueta de alineación anidada)? Antes se usaba "¿tiene ALGÚN hijo
-        // elemento?" — pero un simple salto de línea manual (<br>, Shift+Intro
-        // dentro del mismo párrafo) o texto con negrita/cursiva (<strong>,
-        // <em>...) TAMBIÉN son hijos elemento sin ser un bloque envuelto, y
-        // hacían caer aquí por error: se recorrían como si fueran bloques de
-        // nivel superior (no lo son) y el párrafo entero se perdía en
-        // silencio — bug real: alinear un párrafo con más de una línea
+        // etiqueta de alineación/interlineado anidada)? Antes se usaba "¿tiene
+        // ALGÚN hijo elemento?" — pero un simple salto de línea manual (<br>,
+        // Shift+Intro dentro del mismo párrafo) o texto con negrita/cursiva
+        // (<strong>, <em>...) TAMBIÉN son hijos elemento sin ser un bloque
+        // envuelto, y hacían caer aquí por error: se recorrían como si fueran
+        // bloques de nivel superior (no lo son) y el párrafo entero se perdía
+        // en silencio — bug real: alinear un párrafo con más de una línea
         // dejaba "Aplicar al lienzo" sin nada que aplicar.
-        const TD_BLOCK_TAGS = ['div', 'h1', 'blockquote', 'ul', 'ol', 'pre', 'aside', 'align-center', 'align-right', 'align-justify'];
         const wrapsRealBlock = Array.from(el.children).some(c => TD_BLOCK_TAGS.includes(c.tagName.toLowerCase()));
         if(wrapsRealBlock){
           // Envuelve un bloque real — recorrer dentro.
-          walkBlockLevel(el, ctxKind, indentLevel, a);
+          walkBlockLevel(el, ctxKind, indentLevel, a, lm);
         } else {
-          // La propia etiqueta de alineación ES el párrafo (con o sin <br>/
-          // negrita/cursiva sueltos dentro) — tratarla como tal en vez de
-          // recorrer sus hijos como si fueran bloques.
-          blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, align:a, runs: runsFromInline(el, {})});
+          // La propia etiqueta ES el párrafo (con o sin <br>/negrita/cursiva
+          // sueltos dentro) — tratarla como tal en vez de recorrer sus hijos
+          // como si fueran bloques.
+          blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, align:a, lineHeightMult:lm, runs: runsFromInline(el, {})});
         }
         return;
       }
@@ -1728,36 +1904,44 @@ function _tdParseBlocks(html){
             kind: tag === 'ul' ? 'bullet' : 'number',
             index: i + 1,
             indent: indentLevel,
-            align,
+            align, lineHeightMult:lineMult,
             runs: runsFromInline(li, {})
           });
         });
       } else if(tag === 'blockquote'){
-        walkBlockLevel(el, 'quote', indentLevel + 1, align);
+        walkBlockLevel(el, 'quote', indentLevel + 1, align, lineMult);
       } else if(tag === 'h1'){
-        blocks.push({kind:'heading', indent:indentLevel, align, runs: runsFromInline(el, {})});
+        blocks.push({kind:'heading', indent:indentLevel, align, lineHeightMult:lineMult, runs: runsFromInline(el, {})});
       } else if(tag === 'pre'){
-        blocks.push({kind:'code', indent:indentLevel, align, runs: runsFromInline(el, {mono:true})});
+        blocks.push({kind:'code', indent:indentLevel, align, lineHeightMult:lineMult, runs: runsFromInline(el, {mono:true})});
       } else if(tag === 'aside'){
         // Salto de página forzado (Trix.config.blockAttributes.pageBreak, tagName 'aside')
         // — se ignora cualquier texto que pueda tener, solo marca el corte.
         blocks.push({kind:'pagebreak', indent:indentLevel, runs:[]});
       } else {
-        blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, align, runs: runsFromInline(el, {})});
+        blocks.push({kind: ctxKind === 'quote' ? 'quote' : 'paragraph', indent:indentLevel, align, lineHeightMult:lineMult, runs: runsFromInline(el, {})});
       }
     });
   }
 
-  walkBlockLevel(doc.body, 'paragraph', 0, null);
+  // El valor por defecto para bloques SIN etiqueta explícita de interlineado
+  // es _tdLineHeightMult (el ajuste de ESTA sesión/documento — ya incluye
+  // editLayer.lineHeightMult al reeditar una obra guardada antes de que el
+  // interlineado fuera por párrafo, ver edOpenTextDoc), no la constante fija
+  // TD_LINE_MULT — si no, reeditar una obra con "Amplio" guardado como ajuste
+  // global lo revertía en silencio a "Normal" en cuanto se volvía a analizar
+  // el HTML, perdiendo ese ajuste.
+  walkBlockLevel(doc.body, 'paragraph', 0, null, _tdLineHeightMult);
   return blocks;
 }
 
 // ── Registro de atributos personalizados de Trix (fontSize, fontFamily,
-//    salto de página) — extensión oficial vía Trix.config, no un fork ni
-//    un hack sobre internals. Ver README/wiki de Trix: "textAttributes
-//    support style attributes via styleProperty; blockAttributes solo
-//    tagName" (por eso el interlineado es un ajuste global del documento,
-//    no un atributo de Trix — ver TD_LINE_MULT / _tdLineHeightMult). ──
+//    salto de página, alineación, interlineado por párrafo) — extensión
+//    oficial vía Trix.config, no un fork ni un hack sobre internals. Ver
+//    README/wiki de Trix: "textAttributes support style attributes via
+//    styleProperty; blockAttributes solo tagName" (por eso alineación e
+//    interlineado usan etiquetas inventadas en vez de un valor — ver
+//    TD_WRAPPER_TAGS más abajo en _tdParseBlocks). ──
 function _tdRegisterCustomTrixAttributes(){
   if(typeof Trix === 'undefined' || window._tdTrixAttrsRegistered) return;
   window._tdTrixAttrsRegistered = true;
@@ -1778,13 +1962,19 @@ function _tdRegisterCustomTrixAttributes(){
   Trix.config.blockAttributes.alignCenter  = { tagName: 'align-center',  nestable: false };
   Trix.config.blockAttributes.alignRight   = { tagName: 'align-right',   nestable: false };
   Trix.config.blockAttributes.alignJustify = { tagName: 'align-justify', nestable: false };
+  // Interlineado por párrafo (pedido explícito de Alberto: debe comportarse
+  // igual que alineación — selección de texto y no todo el documento). Mismo
+  // patrón que alineación: dos etiquetas inventadas (Normal es la ausencia
+  // de ambas, como "A la izquierda").
+  Trix.config.blockAttributes.lineCompact = { tagName: 'line-compact', nestable: false };
+  Trix.config.blockAttributes.lineAmplio  = { tagName: 'line-amplio',  nestable: false };
   // Imprescindible: sin esto, Trix (usa DOMPurify internamente para sanear
   // el HTML) elimina estas etiquetas inventadas nada más volver a cargar el
   // documento guardado para reeditar — documentado en el propio README de
   // Trix ("Trix.config.dompurify.ADD_TAGS") y confirmado por un caso real
   // reportado en su repositorio (issue #864: una etiqueta personalizada
   // sin esto se guardaba bien, pero desaparecía al reabrir el editor).
-  Trix.config.dompurify.ADD_TAGS = (Trix.config.dompurify.ADD_TAGS || []).concat(['align-center', 'align-right', 'align-justify']);
+  Trix.config.dompurify.ADD_TAGS = (Trix.config.dompurify.ADD_TAGS || []).concat(['align-center', 'align-right', 'align-justify', 'line-compact', 'line-amplio']);
 }
 _tdRegisterCustomTrixAttributes();
 
@@ -1909,6 +2099,13 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
 
     const isHeading = block.kind === 'heading';
     const baseFontSize = isHeading ? h1SizeDefault : bodySizeDefault;
+    // Interlineado: el del propio párrafo (line-compact/line-amplio, ver
+    // _tdParseBlocks) si lo tiene: pedido explícito de Alberto — debe
+    // comportarse como alineación (por párrafo/selección), no como un
+    // único ajuste para todo el documento. Si el bloque no trae uno
+    // explícito (walkBlockLevel ya pone TD_LINE_MULT por defecto, pero por
+    // si acaso), cae al parámetro de la función.
+    const lhMult = block.lineHeightMult || lineHeightMult || TD_LINE_MULT;
 
     let indentPx = 0;
     let marker = null;
@@ -2200,6 +2397,7 @@ function _tdApplyToCanvas(){
   if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
   _tdEditingFlowId = null;
   _tdManualBreakChars = [];
+  _tdBreakHistory = [[]]; _tdBreakHistoryIdx = 0;
 
   edCloseTextDoc();
 }
