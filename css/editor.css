@@ -2754,6 +2754,13 @@ body.editor-page #appView {
   justify-content: center;
   align-items: flex-start;
   padding: 14px 12px;
+  /* Sin esto, el propio navegador puede "compensar" automáticamente
+     (ajustando scrollTop él solo) cuando algo cambia de tamaño por encima
+     de la zona visible — justo lo que hace crecer #tdSelTopSpacer a
+     propósito (ver _tdEnsureSelectionClearance) para empujar el texto
+     hacia abajo. Con el anclaje desactivado, el comportamiento es
+     predecible: crecer el espaciador desplaza el contenido, sin más. */
+  overflow-anchor: none;
   /* Scroll SEGUIMOS teniéndolo (rueda, arrastre táctil, selección — todo lo
      de arriba sigue dependiendo de que esto sea de verdad scrollable) pero
      SIN pintar la barra: su propia franja/thumb, acotados y cada vez más
@@ -2780,6 +2787,15 @@ body.editor-page #appView {
   box-sizing: border-box;
   flex-shrink: 0;
   position: relative;
+}
+/* Espacio EXTRA por encima del texto, solo para poder desplazar la página
+   hacia abajo cuando una selección cae demasiado arriba — ver
+   _tdEnsureSelectionClearance en editor-textdoc.js. Vacío (altura 0) salvo
+   cuando hace falta: así el texto sigue empezando justo debajo de la barra
+   de menús en el caso normal, sin hueco de más. */
+#tdSelTopSpacer {
+  height: 0;
+  flex-shrink: 0;
 }
 /* Líneas discontinuas de cambio de página — puramente visuales (no forman
    parte del documento de Trix), superpuestas dentro de la propia hoja para

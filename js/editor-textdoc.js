@@ -102,13 +102,15 @@ function edOpenTextDoc(editLayer){
   const editorEl = document.getElementById('tdEditor');
   const applyBtn = document.getElementById('tdApplyBtn');
   _tdCursorEverPlaced = false; // el cursor real todavía no se ha colocado en ESTE contenido
+  const _tdSpacer = document.getElementById('tdSelTopSpacer');
+  if(_tdSpacer) _tdSpacer.style.height = '0px'; // el hueco crecido en una sesión anterior no pinta nada aquí
   if(editLayer && editLayer.richLines && editLayer.sourceHTML){
     // Reeditar un texto ya aplicado: cargar su HTML de origen y recordar su flowId
     // para que "Aplicar" sustituya estas hojas en vez de añadir otras nuevas.
     // Capas de v32.70 (sin _tdFlowId): adoptar uno ahora, como flujo de una sola hoja.
     _tdEditingFlowId = _tdEnsureFlowId(editLayer);
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML);
-    if(applyBtn) applyBtn.textContent = 'Guardar cambios';
+    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Guardar cambios'; }
     _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
     // El .filter(c => c > 0) es limpieza defensiva por si esta obra ya se
     // guardó con el salto inválido del bug de arriba (posición 0, sin
@@ -118,7 +120,7 @@ function edOpenTextDoc(editLayer){
     _tdBreakHistory = [_tdManualBreakChars.slice()]; _tdBreakHistoryIdx = 0;
   } else {
     _tdEditingFlowId = null;
-    if(applyBtn) applyBtn.textContent = 'Aplicar al lienzo';
+    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Aplicar al lienzo'; }
     _tdLineHeightMult = TD_LINE_MULT;
     // Siempre en blanco al abrir desde el menú — no se restaura nada de
     // sesiones anteriores (el único texto editable es el que ya está
@@ -203,7 +205,7 @@ function edCloseTextDoc(fromPopstate){
     if(shell) shell.style.display = 'none';
     _tdEditingFlowId = null;
     const applyBtn = document.getElementById('tdApplyBtn');
-    if(applyBtn) applyBtn.textContent = 'Aplicar al lienzo';
+    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Aplicar al lienzo'; }
     // Si se cierra por la X o por "Aplicar" (no por el botón atrás), hay que
     // consumir la entrada de historial añadida al abrir — si no, el
     // siguiente "atrás" del usuario se quedaría "vacío" (solo cerraría un
@@ -414,6 +416,11 @@ function _tdInitOnce(){
       _tdCursorEverPlaced = true;
       clearTimeout(_tdFollowTimer);
       _tdFollowTimer = setTimeout(_tdCenterActiveLine, 100);
+      // rAF: el propio Android tarda un instante en decidir/mostrar su menú
+      // nativo de selección (Copiar/Pegar) tras esta selección — se
+      // comprueba en el frame siguiente para medir ya con la selección
+      // asentada (ver _tdEnsureSelectionClearance).
+      requestAnimationFrame(_tdEnsureSelectionClearance);
     });
     // Ctrl+Z/Ctrl+Y (o Cmd en Mac) para deshacer/rehacer SALTOS DE PÁGINA —
     // ver _tdBreakHistory. En fase de CAPTURA porque el propio Trix también
@@ -1279,6 +1286,45 @@ let _tdManualBreakChars = [];
 // documento (solo para cambios de página REALES, ver ese bucle: empieza en
 // i=1) — bug reportado por Alberto.
 let _tdCursorEverPlaced = false;
+
+// Petición explícita de Alberto: si una selección de texto (para copiar/
+// pegar, etc.) queda demasiado arriba, el menú NATIVO de selección de
+// Android (Copiar/Pegar/Todo) puede tapar la propia fila de botones del
+// editor (#tdMenuBar). Ese menú lo pinta el propio sistema operativo, FUERA
+// del DOM de la página (igual que el teclado) — no hay CSS ni z-index que
+// pueda ponerlo por debajo de nada nuestro, ni "bajarlo de capa": es UI
+// nativa, siempre por encima de cualquier contenido web. Lo único que SÍ se
+// puede hacer es asegurar que la selección nunca quede tan arriba como para
+// que ese menú (dondequiera que decida pintarse, arriba o abajo de la
+// selección) llegue a tocar esa fila — desplazando la página hacia abajo lo
+// que haga falta, aunque la selección esté en la primerísima línea del
+// documento. Para eso existe #tdSelTopSpacer (ver views.js/editor.css):
+// vacío en el caso normal, se hace crecer aquí lo justo para tener margen
+// de sobra por encima incluso en ese caso extremo (sin él no habría "más
+// arriba" donde desplazarse estando ya en scrollTop 0).
+const TD_SEL_MENU_CLEARANCE = 110; // alto estimado del menú nativo + margen de sobra
+function _tdEnsureSelectionClearance(){
+  const editorEl = document.getElementById('tdEditor');
+  const areaEl = document.getElementById('tdPageArea');
+  const menuBar = document.getElementById('tdMenuBar');
+  const spacer = document.getElementById('tdSelTopSpacer');
+  if(!editorEl || !areaEl || !menuBar || !spacer) return;
+  const sel = window.getSelection();
+  if(!sel || sel.rangeCount === 0 || sel.isCollapsed) return; // solo selección de texto real, no un simple cursor
+  if(!editorEl.contains(sel.anchorNode)) return;
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  if(!rect || (rect.top === 0 && rect.bottom === 0)) return;
+  const safeTop = menuBar.getBoundingClientRect().bottom + TD_SEL_MENU_CLEARANCE;
+  const deficit = safeTop - rect.top;
+  if(deficit <= 0) return; // ya hay sitio de sobra por encima
+  // Falta "deficit" px de aire por encima de la selección. Crecer el
+  // espaciador esa cantidad (nunca encogerlo — más simple y evita tener que
+  // rastrear si algo más pudiera necesitar el hueco actual) empuja todo el
+  // contenido hacia abajo sin más (overflow-anchor:none en #tdPageArea
+  // evita que el navegador intente "compensarlo" él solo).
+  const curSpacer = parseFloat(spacer.style.height) || 0;
+  spacer.style.height = (curSpacer + deficit) + 'px';
+}
 let _tdLineStartCharsCache = []; // último cálculo — para ajustar el arrastre a la línea más cercana
 
 // ── Historial de saltos de página (insertar/arrastrar/eliminar) — pedido

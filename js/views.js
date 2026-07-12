@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.54</footer>
+    <footer class="app-version">v33.57</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -971,11 +971,12 @@ Router.register('editor', {
           <span id="tdPageNum">1</span>
           <button class="ed-top-pagebn" id="tdPageNext" title="Página siguiente">&#9654;</button>
         </div>
-        <button class="ed-top-action" id="tdApplyBtn">Aplicar al lienzo</button>
-        <!-- Botón de diagnóstico temporal para el bug de acentos/IME (petición
-             de Alberto) — cuando ya no haga falta, comentar esta línea siguiendo
-             el mismo patrón que edDiagBtn/gcpSbDiagBtn (no borrar el botón). -->
+        <button class="ed-top-action" id="tdApplyBtn" title="Aplicar al lienzo">💾</button>
+        <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
+             para volver a mostrarlo, descomentar la línea siguiente. Mismo
+             patrón que edDiagBtn/gcpSbDiagBtn.
         <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME">🩺</button>
+        -->
         <button id="tdCloseBtn" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">
@@ -1045,6 +1046,7 @@ Router.register('editor', {
       </div>
       <div id="tdPageArea">
         <div id="tdPage" class="td-page">
+          <div id="tdSelTopSpacer" aria-hidden="true"></div>
           <input type="hidden" id="tdHiddenInput">
           <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe aquí el texto de tu obra…" virtualkeyboardpolicy="manual"></trix-editor>
           <div id="tdPageBreaks" aria-hidden="true"></div>
