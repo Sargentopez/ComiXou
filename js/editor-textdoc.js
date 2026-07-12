@@ -212,6 +212,20 @@ function edCloseTextDoc(fromPopstate){
     // shell ya cerrado).
     if(wasOpen && !fromPopstate && history.state && history.state.tdShellOpen){
       history.back();
+      // Salvaguarda ante el bug reportado por Alberto (intermitente, causa
+      // exacta no clara — sospecha: el cierre puede quedar diferido un
+      // frame según si había que cerrar el teclado o no, y ese hueco puede
+      // dejar el historial en un estado distinto al esperado): comprobar,
+      // poco después de retroceder, que de verdad hemos vuelto al editor —
+      // si no (p.ej. se ha ido más atrás de la cuenta, a la página del
+      // autor), corregirlo forzando la vuelta al editor en vez de dejar al
+      // usuario en una vista equivocada sin explicación.
+      const _tdEditIdAtClose = (typeof sessionStorage !== 'undefined') ? sessionStorage.getItem('cx_edit_id') : null;
+      setTimeout(() => {
+        if(!location.hash.startsWith('#editor') && _tdEditIdAtClose && typeof Router !== 'undefined'){
+          Router.go('editor', { id: _tdEditIdAtClose });
+        }
+      }, 120);
     }
   };
   // El intento anterior (hide() + reenfocar) no cerraba el teclado de
@@ -1627,9 +1641,28 @@ function _tdWirePageBreakDrag(handle, lineEl){
       }
     }
 
+    // Si el punto final (ya corregido arriba si hacía falta) es justo donde
+    // el algoritmo cortaría de todos modos SIN guardarlo como salto manual
+    // (con el tamaño de marco actual y los DEMÁS saltos manuales, sin este),
+    // no hace falta fijarlo — y no conviene hacerlo: si se guardara siempre,
+    // el simple gesto de tocar un salto automático (aunque "rebote" a la
+    // misma posición porque el marco no daba para más, como en el paso de
+    // validación de arriba) lo convertiría en un salto FIJO para siempre,
+    // que seguiría forzándose aunque el marco creciera después y ya no
+    // hiciera falta — bug reportado por Alberto: imposible que el texto
+    // volviera a caber en una sola hoja al agrandar la caja, tras haber
+    // tocado una vez el salto entre hojas. Al no guardarlo, sigue siendo
+    // "el corte natural de este tamaño de marco" — se recalcula solo si el
+    // marco cambia, en vez de quedar congelado en esa posición para siempre.
+    let isRedundant = false;
+    if(newChars > 0){
+      const naturalProbe = _tdLayoutPagesForBreaks(others);
+      isRedundant = naturalProbe.pageStartChars.includes(newChars);
+    }
+
     const finish = () => {
       const tentative = others.slice();
-      if(newChars > 0 && !tentative.includes(newChars)) tentative.push(newChars);
+      if(newChars > 0 && !isRedundant && !tentative.includes(newChars)) tentative.push(newChars);
       tentative.sort((a, b) => a - b);
       _tdManualBreakChars = tentative;
       _tdPushBreakHistory();
@@ -2603,15 +2636,21 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
     layer.text = _tdPlainSummary(pages[i]);
   }
 
-  // 2) Slots sobrantes (cupo en menos hojas): quitar, de mayor a menor índice.
-  //    Objetos añadidos a mano en esas hojas se reubican en el último slot
-  //    reutilizado (si lo hay) para no perderlos.
+  // 2) Slots sobrantes (cupo en menos hojas): la capa de texto del flujo ya
+  //    no hace falta ahí. Si la hoja NO tiene nada más, se quita la hoja
+  //    entera (de mayor a menor índice). Si SÍ tiene otros elementos
+  //    (dibujos, otro texto, imágenes…), la hoja NO se elimina — pedido
+  //    explícito de Alberto: se queda tal cual, solo sin la capa de texto
+  //    del flujo, en vez de mover esos elementos a otra hoja y borrar esta.
   for(let i = flowIdxs.length - 1; i >= reused; i--){
     const idx = flowIdxs[i];
     const pg = edPages[idx];
     const extras = (pg.layers || []).filter(l => !(l && l._tdFlowId === flowId));
-    if(extras.length && reused > 0) edPages[flowIdxs[reused - 1]].layers.push(...extras);
-    edPages.splice(idx, 1);
+    if(extras.length){
+      pg.layers = extras;
+    } else {
+      edPages.splice(idx, 1);
+    }
   }
 
   // 3) Si hacen falta más páginas, se añaden justo tras el final ACTUAL del
