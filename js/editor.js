@@ -6724,14 +6724,17 @@ function edDuplicateSelected(){
   }
 
   // Si había capas vinculadas: crear copias independientes con nuevo ID
-  const _hasGroup = !!(_flOrig || _pencilOrig || _wcOrig);
+  const _hasGroup = !!(_flOrig || _pencilOrig || _wcOrig || copy._fillLayerId || copy._pencilLayerId || copy._watercolorLayerId);
   let _flCopy = null, _pencilCopy = null, _wcCopy = null;
   if(_hasGroup){
     const _npid = _edGenUid();
+    // Remapear TODOS los flags que la copia ya trae heredados del original ANTES de
+    // clonar las sub-capas — así queda siempre con IDs propios, diferenciados del
+    // original, independientemente de si _cloneGroupLayer localiza el objeto real.
+    if(copy._fillLayerId)       copy._fillLayerId       = _npid;
+    if(copy._pencilLayerId)     copy._pencilLayerId     = _npid;
+    if(copy._watercolorLayerId) copy._watercolorLayerId = _npid;
     copy._uid = _npid;
-    if(_flOrig)     copy._fillLayerId       = _npid;
-    if(_pencilOrig) copy._pencilLayerId     = _npid;
-    if(_wcOrig)     copy._watercolorLayerId = _npid;
     _flCopy     = _cloneGroupLayer(_flOrig,     FillLayer,       'fl_',     _npid);
     _pencilCopy = _cloneGroupLayer(_pencilOrig, PencilLayer,     'pencil_', _npid);
     _wcCopy     = _cloneGroupLayer(_wcOrig,     WatercolorLayer, 'wc_',     _npid);
@@ -17661,6 +17664,14 @@ function edRenderOptionsPanel(mode){
             if(!slCopy) return;
             slCopy.groupId = newGid;
             slCopy.x += 0.03; slCopy.y += 0.03;
+            // BUG FIX: remapear los flags de vinculación ANTES de buscar las sub-capas,
+            // y en base a si el PROPIO slCopy ya trae ese flag (heredado del original vía
+            // edSerLayer/edDeserLayer) — NO en base a si luego se localiza el objeto real.
+            // Así la copia siempre queda con IDs propios y diferenciados del original para
+            // cualquier flag que herede, incluso si la búsqueda de la sub-capa fallara.
+            if(slCopy._fillLayerId)       slCopy._fillLayerId       = _npid;
+            if(slCopy._pencilLayerId)     slCopy._pencilLayerId     = _npid;
+            if(slCopy._watercolorLayerId) slCopy._watercolorLayerId = _npid;
             slCopy._uid = _npid;
             // Función helper para clonar sub-capa
             function _cloneGrpSub(type, LayerClass, prefix){
@@ -17685,15 +17696,16 @@ function edRenderOptionsPanel(mode){
             const wlCopy = _cloneGrpSub('watercolor', WatercolorLayer, 'wc_');
             // Orden correcto del grupo: fill → watercolor → pencil → stroke (BUG FIX:
             // antes se empujaba pencil antes que watercolor, invirtiendo su apilado).
-            if(flCopy){ slCopy._fillLayerId = _npid; copies.push(flCopy); }
-            if(wlCopy){ slCopy._watercolorLayerId = _npid; copies.push(wlCopy); }
-            if(plCopy){ slCopy._pencilLayerId = _npid; copies.push(plCopy); }
+            if(flCopy) copies.push(flCopy);
+            if(wlCopy) copies.push(wlCopy);
+            if(plCopy) copies.push(plCopy);
             copies.push(slCopy);
           } else if(la.type !== 'fill' && la.type !== 'pencil' && la.type !== 'watercolor'){
             // Otros tipos sin sub-capas (image, shape, line, text, bubble)
             const copy = edDeserLayer(edSerLayer(la));
             if(copy){
               copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03;
+              delete copy._fusionId;
               // NOTA: no tocar copy.points aquí (ver nota equivalente en
               // edDuplicateSelected) — desplazar x/y ya mueve el objeto completo;
               // desplazar points también duplicaba el desplazamiento y descuadraba
