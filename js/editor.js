@@ -17618,7 +17618,21 @@ function edRenderOptionsPanel(mode){
       // Eliminar todo el grupo
       $('pp-grp-del')?.addEventListener('click',()=>{
         edConfirm('¿Eliminar el grupo completo?', ()=>{
-          const idxs = _edGroupMemberIdxs(gid).sort((a,b)=>b-a);
+          const _delMainIdxs = _edGroupMemberIdxs(gid);
+          // Incluir sub-capas vinculadas (fill/pencil/watercolor) de los StrokeLayers
+          // del grupo — no llevan groupId, así que _edGroupMemberIdxs no las recoge
+          // por sí solo (mismo patrón que edDeleteSelected() y _grpLockSubIdxs0 arriba).
+          const _delSubIdxsSet = new Set();
+          _delMainIdxs.forEach(mi => {
+            const _uid = edLayers[mi]?._uid || edLayers[mi]?._fillLayerId;
+            if(_uid){
+              edLayers.forEach((sl, si) => {
+                if((sl.type==='fill'||sl.type==='pencil'||sl.type==='watercolor') && sl._drawLayerId===_uid)
+                  _delSubIdxsSet.add(si);
+              });
+            }
+          });
+          const idxs = [...new Set([..._delMainIdxs, ..._delSubIdxsSet])].sort((a,b)=>b-a);
           edPushHistory();
           idxs.forEach(i => edLayers.splice(i,1));
           edSelectedIdx=-1; edMultiSel=[]; edMultiBbox=null;
