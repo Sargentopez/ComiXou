@@ -395,7 +395,7 @@ function _pgDuplicate(idx) {
   const _idMap = new Map();
   function _pgRemapId(oldId) {
     if (!oldId) return oldId;
-    if (!_idMap.has(oldId)) _idMap.set(oldId, Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    if (!_idMap.has(oldId)) _idMap.set(oldId, _edGenUid());
     return _idMap.get(oldId);
   }
   const _srcOrientation = src.orientation || edOrientation;
