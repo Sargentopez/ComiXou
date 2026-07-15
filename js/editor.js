@@ -6700,10 +6700,12 @@ function edDuplicateSelected(){
   // Desplazar ligeramente para distinguirlo visualmente del original
   copy.x = la.x + 0.02;
   copy.y = la.y + 0.02;
-  if(copy.type === 'line' && Array.isArray(copy.points)){
-    copy.points = copy.points.map(p => p ? {...p, x: p.x + 0.02, y: p.y + 0.02} : null);
-    copy._updateBbox();
-  }
+  // NOTA: no tocar copy.points aquí. LineLayer.draw() ya usa x/y como origen de
+  // traslación y los points como offsets LOCALES — desplazar x/y basta para mover
+  // el objeto completo. Desplazar points ADEMÁS (y llamar a _updateBbox, que
+  // recentra points y vuelve a sumar el delta resultante a x/y) producía un
+  // desplazamiento doble (BUG: la copia de un 'line' quedaba el doble de lejos
+  // que la de cualquier otro tipo, descuadrando su posición relativa en grupos).
   delete copy._fusionId;
   delete copy.groupId;
 
@@ -6725,7 +6727,7 @@ function edDuplicateSelected(){
   const _hasGroup = !!(_flOrig || _pencilOrig || _wcOrig);
   let _flCopy = null, _pencilCopy = null, _wcCopy = null;
   if(_hasGroup){
-    const _npid = Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+    const _npid = _edGenUid();
     copy._uid = _npid;
     if(_flOrig)     copy._fillLayerId       = _npid;
     if(_pencilOrig) copy._pencilLayerId     = _npid;
@@ -17639,7 +17641,7 @@ function edRenderOptionsPanel(mode){
           // Si es stroke con sub-capas, duplicar el grupo completo
           if(la.type === 'stroke' && _uid && !_processedUids.has(_uid)){
             _processedUids.add(_uid);
-            const _npid = Date.now().toString(36)+Math.random().toString(36).slice(2,5)+'_'+i;
+            const _npid = _edGenUid();
             // Clonar stroke
             const slCopy = edDeserLayer(edSerLayer(la));
             if(!slCopy) return;
@@ -17678,13 +17680,10 @@ function edRenderOptionsPanel(mode){
             const copy = edDeserLayer(edSerLayer(la));
             if(copy){
               copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03;
-              // BUG FIX: las líneas se posicionan por su array de puntos, no por x/y —
-              // sin desplazar `points` también, la copia queda exactamente encima del
-              // original (mismo patrón ya usado en edDuplicateSelected).
-              if(copy.type === 'line' && Array.isArray(copy.points)){
-                copy.points = copy.points.map(p => p ? {...p, x: p.x + 0.03, y: p.y + 0.03} : null);
-                if(typeof copy._updateBbox === 'function') copy._updateBbox();
-              }
+              // NOTA: no tocar copy.points aquí (ver nota equivalente en
+              // edDuplicateSelected) — desplazar x/y ya mueve el objeto completo;
+              // desplazar points también duplicaba el desplazamiento y descuadraba
+              // el 'line' respecto al resto de elementos del grupo duplicado.
             }
             copies.push(copy);
           }
@@ -21866,8 +21865,23 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
    Sin GroupLayer. Sin transformaciones. Siempre funciona.
    ══════════════════════════════════════════════════════════════ */
 
+// Generador de IDs únicos centralizado. Usa crypto.randomUUID() cuando está disponible
+// (122 bits aleatorios: colisión prácticamente imposible), con fallback robusto
+// (timestamp + contador monótono + random) para entornos sin soporte. Se usa para
+// groupId y para _uid de capas insertadas/duplicadas — así dos grupos insertados o
+// duplicados por separado NUNCA pueden terminar compartiendo el mismo identificador.
+let _edUidSeq = 0;
+function _edGenUid(prefix){
+  prefix = prefix || '';
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return prefix + crypto.randomUUID();
+  }
+  _edUidSeq = (_edUidSeq + 1) % 1000000;
+  return prefix + Date.now().toString(36) + '_' + _edUidSeq.toString(36) + Math.random().toString(36).slice(2,8);
+}
+
 function _edNewGroupId(){
-  return 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+  return _edGenUid('g');
 }
 
 /* Índices de todos los miembros del grupo en edLayers */
@@ -22341,6 +22355,19 @@ function edMergeSelected(){
   }
 }
 
+// Clona profundamente un punto de LineLayer, incluyendo cp1/cp2 anidados (nodos
+// de curva Bézier). Un simple {...p} deja cp1/cp2 compartidos por referencia con
+// el objeto original — inofensivo mientras el código solo REEMPLACE cp1/cp2 (nunca
+// los muta in-place), pero clonarlos también garantiza copias 100% independientes,
+// tal y como se requiere para grupos guardados/insertados desde biblioteca.
+function _edCloneLinePoint(p){
+  if(!p) return null;
+  const np = {...p};
+  if(p.cp1) np.cp1 = {...p.cp1};
+  if(p.cp2) np.cp2 = {...p.cp2};
+  return np;
+}
+
 function edSerLayer(l){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='fill'){
@@ -22566,12 +22593,12 @@ function edSerLayer(l){
   if(l.type==='line'){
     const _cr=l.cornerRadii||{};
     const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);
-    const _lobj={type:'line', points:l.points.map(p=>p?{...p}:null),
+    const _lobj={type:'line', points:l.points.map(_edCloneLinePoint),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
       _fromEllipse:l._fromEllipse||false,
       cornerRadii:_hasR?{..._cr}:undefined,
-      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined};
+      subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.map(_edCloneLinePoint); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined};
     if(l.groupId)_lobj.groupId=l.groupId;
     if(l.locked)_lobj.locked=true;
     if(l.hidden)_lobj.hidden=true;
@@ -22785,12 +22812,12 @@ function edDeserLayer(d, pageOrientation){
   }
   if(d.type==='line'){
     const l=new LineLayer();
-    l.points=(d.points||[]).map(p=>p?{...p}:null); l.closed=d.closed||false;
+    l.points=(d.points||[]).map(_edCloneLinePoint); l.closed=d.closed||false;
     l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
     if(d._fromEllipse) l._fromEllipse=true;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
-    if(d.subPaths&&d.subPaths.length) l.subPaths=d.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;});
+    if(d.subPaths&&d.subPaths.length) l.subPaths=d.subPaths.map(sp=>{const _s=sp.map(_edCloneLinePoint); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;});
     if(d.x!=null){l.x=d.x;l.y=d.y;l.width=d.width||0.01;l.height=d.height||0.01;}
     else l._updateBbox();
     if(d.groupId) l.groupId=d.groupId;
@@ -28444,10 +28471,16 @@ function _bibRenderPanel(panel) {
         // Insertar grupo: deserializar cada capa con nuevo groupId común.
         // IMPORTANTE: regenerar todos los UIDs para que el grupo insertado sea completamente
         // independiente del original — sin UIDs compartidos no hay enlaces cruzados erróneos.
-        const newGroupId = _edNewGroupId();
+        // BUG FIX: _bibLoad() devuelve _bibCache POR REFERENCIA (no una copia) — entry.layers
+        // es literalmente el mismo array/objetos cada vez que se abre la biblioteca. Si no se
+        // clona antes de deserializar, dos inserciones del mismo grupo podrían terminar
+        // compartiendo arrays anidados (points, subPaths...) con la biblioteca y entre sí.
+        // Clonado profundo vía JSON: entry.layers son datos JSON-safe (así se guardan/persisten).
+        const _entryLayersClone = JSON.parse(JSON.stringify(entry.layers));
+        const newGroupId = _edGenUid('g');
 
         // Paso 1: deserializar y adaptar orientación
-        const _grpLas = entry.layers.map(ld => {
+        const _grpLas = _entryLayersClone.map(ld => {
           const la = edDeserLayer(ld, edOrientation);
           if (!la) return null;
           _adaptLayerOrientation(la);
@@ -28457,10 +28490,9 @@ function _bibRenderPanel(panel) {
 
         // Paso 2: mapear uid_viejo → uid_nuevo para StrokeLayers
         const _uidRemap = new Map();
-        const _mkUid = (prefix) => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
         _grpLas.forEach(la => {
           if (la.type === 'stroke' && la._uid) {
-            const newUid = _mkUid('dl_');
+            const newUid = _edGenUid('dl_');
             _uidRemap.set(la._uid, newUid);
             // _fillLayerId en stroke = su propio uid (flag + referencia): actualizar igual
             if (la._fillLayerId) la._fillLayerId = newUid;
@@ -28477,7 +28509,7 @@ function _bibRenderPanel(panel) {
               la._drawLayerId = _uidRemap.get(la._drawLayerId);
             }
             const _pre = la.type === 'fill' ? 'fl_' : (la.type === 'pencil' ? 'pencil_' : 'wc_');
-            la._uid = _mkUid(_pre);
+            la._uid = _edGenUid(_pre);
             // Sub-capas no reciben groupId (coherente con edGroupSelected)
           } else {
             la.groupId = newGroupId;
@@ -28489,8 +28521,13 @@ function _bibRenderPanel(panel) {
         _grpLas.forEach(la => { edLayers.push(la); inserted++; });
         if (!inserted) { edToast('Error al insertar el grupo'); return; }
       } else {
-        // Objeto individual
-        const newLayer = edDeserLayer(entry.layerData, edOrientation);
+        // Objeto individual — clonar profundamente antes de deserializar (misma
+        // razón que en el bloque de grupo: entry viene de _bibCache por referencia).
+        const _layerDataClone      = entry.layerData          ? JSON.parse(JSON.stringify(entry.layerData))          : entry.layerData;
+        const _fillDataClone       = entry.fillLayerData       ? JSON.parse(JSON.stringify(entry.fillLayerData))       : null;
+        const _wcDataClone         = entry.watercolorLayerData ? JSON.parse(JSON.stringify(entry.watercolorLayerData)) : null;
+        const _pencilDataClone     = entry.pencilLayerData     ? JSON.parse(JSON.stringify(entry.pencilLayerData))     : null;
+        const newLayer = edDeserLayer(_layerDataClone, edOrientation);
         if (!newLayer) { edToast('Error al insertar el objeto'); return; }
         _adaptLayerOrientation(newLayer);
         delete newLayer._fusionId;
@@ -28517,17 +28554,17 @@ function _bibRenderPanel(panel) {
         }
 
         // Restaurar capas del grupo si existen en el entry
-        const _hasGroup = !!(entry.fillLayerData?.dataUrl || entry.watercolorLayerData?.dataUrl || entry.pencilLayerData?.dataUrl);
+        const _hasGroup = !!(_fillDataClone?.dataUrl || _wcDataClone?.dataUrl || _pencilDataClone?.dataUrl);
         if (_hasGroup) {
-          const _nid = Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+          const _nid = _edGenUid();
           newLayer._uid = _nid;
-          if (entry.fillLayerData?.dataUrl)       { newLayer._fillLayerId       = _nid; }
-          if (entry.watercolorLayerData?.dataUrl)  { newLayer._watercolorLayerId = _nid; }
-          if (entry.pencilLayerData?.dataUrl)      { newLayer._pencilLayerId     = _nid; }
+          if (_fillDataClone?.dataUrl)   { newLayer._fillLayerId       = _nid; }
+          if (_wcDataClone?.dataUrl)     { newLayer._watercolorLayerId = _nid; }
+          if (_pencilDataClone?.dataUrl) { newLayer._pencilLayerId     = _nid; }
           // Insertar en orden: fill → watercolor → pencil → stroke
-          if (entry.fillLayerData?.dataUrl)       _bibRestoreGroupLayer(entry.fillLayerData,       FillLayer,       'fl_',     _nid);
-          if (entry.watercolorLayerData?.dataUrl)  _bibRestoreGroupLayer(entry.watercolorLayerData, WatercolorLayer, 'wc_',     _nid);
-          if (entry.pencilLayerData?.dataUrl)      _bibRestoreGroupLayer(entry.pencilLayerData,     PencilLayer,     'pencil_', _nid);
+          if (_fillDataClone?.dataUrl)   _bibRestoreGroupLayer(_fillDataClone,   FillLayer,       'fl_',     _nid);
+          if (_wcDataClone?.dataUrl)     _bibRestoreGroupLayer(_wcDataClone,     WatercolorLayer, 'wc_',     _nid);
+          if (_pencilDataClone?.dataUrl) _bibRestoreGroupLayer(_pencilDataClone, PencilLayer,     'pencil_', _nid);
         } else {
           delete newLayer._fillLayerId; delete newLayer._pencilLayerId;
           delete newLayer._watercolorLayerId; delete newLayer._uid;

@@ -2436,12 +2436,15 @@ function _tdApplyToCanvas(){
       const existingLayer = _tdFindFlowLayer(_tdEditingFlowId);
       if(!existingLayer){ _tdLogApply('SALIDA: flujo no encontrado', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se encuentra el texto a actualizar'); return; }
       // Se reutiliza el mismo motor que el redimensionado con los handlers:
-      // conserva el tamaño/posición/color/fondo/marco que ya tuviera cada hoja
-      // del flujo — solo cambia el contenido (y el interlineado, si se tocó
-      // desde el propio Editor de textos). Los saltos de página ya NO se
-      // colocan a mano (quitado por completo, pedido explícito de Alberto):
-      // el tamaño de caja de cada hoja, tal cual esté en el lienzo, es quien
-      // decide dónde caen — nunca al revés.
+      // conserva color/fondo/marco que ya tuviera cada hoja del flujo — el
+      // contenido y el interlineado siempre se actualizan. El TAMAÑO de
+      // cada caja, en cambio, se recalcula desde el contenido (página
+      // completa como marco, caja redimensionada después para encajar con
+      // el corte) SALVO en las hojas que Alberto redimensionó a mano con
+      // los tiradores (_tdBoxManualH) — ver el comentario de deriveBoxFromContent
+      // dentro de _tdReflowFlowInPlace para el porqué completo. Los saltos
+      // de página ya NO se colocan a mano (quitado por completo, pedido
+      // explícito de Alberto): el contenido decide dónde caen, no al revés.
       existingLayer.sourceHTML = html;
       existingLayer.lineHeightMult = lineHeightMult;
       const _wasPanelOpenBefore = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
