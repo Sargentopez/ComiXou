@@ -101,7 +101,6 @@ function edOpenTextDoc(editLayer){
   requestAnimationFrame(_tdUpdateTitlePill);
   const editorEl = document.getElementById('tdEditor');
   const applyBtn = document.getElementById('tdApplyBtn');
-  _tdCursorEverPlaced = false; // el cursor real todavía no se ha colocado en ESTE contenido
   const _tdSpacer = document.getElementById('tdSelTopSpacer');
   if(_tdSpacer) _tdSpacer.style.height = '0px'; // el hueco crecido en una sesión anterior no pinta nada aquí
   if(editLayer && editLayer.richLines && editLayer.sourceHTML){
@@ -112,12 +111,6 @@ function edOpenTextDoc(editLayer){
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML);
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Guardar cambios'; }
     _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
-    // El .filter(c => c > 0) es limpieza defensiva por si esta obra ya se
-    // guardó con el salto inválido del bug de arriba (posición 0, sin
-    // tirador dibujable) — así se corrige solo la próxima vez que se abra,
-    // sin necesitar ninguna acción extra por parte de Alberto.
-    _tdManualBreakChars = (editLayer.manualBreakChars || []).filter(c => c > 0).slice();
-    _tdBreakHistory = [_tdManualBreakChars.slice()]; _tdBreakHistoryIdx = 0;
   } else {
     _tdEditingFlowId = null;
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Aplicar al lienzo'; }
@@ -126,20 +119,14 @@ function edOpenTextDoc(editLayer){
     // sesiones anteriores (el único texto editable es el que ya está
     // aplicado al lienzo, y a ese solo se llega con doble tap sobre él).
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
-    _tdManualBreakChars = [];
-    _tdBreakHistory = [[]]; _tdBreakHistoryIdx = 0;
   }
   requestAnimationFrame(() => requestAnimationFrame(() => {
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
     _tdAutoFollow = true;
-    _tdActiveDragCancel?.();
     _tdSyncLineHeightMenuActive();
     _tdSyncFontMenuActive();
     _tdSyncAlignMenuActive();
-    _tdPageBreakDragging = false;
-    _tdLastPageBreakTapChars = null;
-    _tdLastPageBreakTapTime = 0;
     const areaElInit = document.getElementById('tdPageArea');
     if(areaElInit) areaElInit.scrollTop = 0;
     _tdRecomputeViewPagination();
@@ -190,15 +177,20 @@ function _tdFindFlowLayer(flowId){
   }
   return null;
 }
+// true justo antes de un history.back() AUTOPROVOCADO por nosotros mismos
+// (al cerrar el editor de textos normalmente, para consumir la entrada de
+// historial añadida al abrirlo) — y hasta que su propio popstate resultante
+// llega. Necesaria porque, para ese momento, shell.style.display YA está en
+// 'none' (se pone ANTES de llamar a history.back(), ver finishClose) — el
+// interceptor de abajo NO puede usar shell.style.display para reconocer
+// "el editor de textos seguía abierto" en ese preciso instante, aunque el
+// popstate que está atrapando sea el suyo propio. Sin esto, ese popstate
+// autoprovocado se le escapaba al router, que navegaba a lo que hubiera en
+// el historial justo detrás — normalmente la vista de antes de abrir el
+// editor general (bug reportado por Alberto: acababa en "Mis creaciones").
+let _tdAwaitingSelfPopstate = false;
+
 function edCloseTextDoc(fromPopstate){
-  // Si se está arrastrando (o corrigiendo) un salto de página en este
-  // instante, abortarlo YA, antes de nada más — sus listeners viven en
-  // document (no en el propio elemento) y solo se quitan al soltar
-  // normalmente; cerrar el editor a media gesto nunca dispara ese soltar
-  // de verdad, así que se quedarían escuchando para siempre, reaccionando
-  // a cualquier toque futuro en cualquier parte de la app. Esto es lo que
-  // coincidía con que el teclado se quedara sin cerrar.
-  _tdActiveDragCancel?.();
   const shell = document.getElementById('tdShell');
   const wasOpen = !!shell && shell.style.display !== 'none' && shell.style.display !== '';
   const finishClose = () => {
@@ -211,21 +203,12 @@ function edCloseTextDoc(fromPopstate){
     // siguiente "atrás" del usuario se quedaría "vacío" (solo cerraría un
     // shell ya cerrado).
     if(wasOpen && !fromPopstate && history.state && history.state.tdShellOpen){
+      _tdAwaitingSelfPopstate = true;
       history.back();
-      // Salvaguarda ante el bug reportado por Alberto (intermitente, causa
-      // exacta no clara — sospecha: el cierre puede quedar diferido un
-      // frame según si había que cerrar el teclado o no, y ese hueco puede
-      // dejar el historial en un estado distinto al esperado): comprobar,
-      // poco después de retroceder, que de verdad hemos vuelto al editor —
-      // si no (p.ej. se ha ido más atrás de la cuenta, a la página del
-      // autor), corregirlo forzando la vuelta al editor en vez de dejar al
-      // usuario en una vista equivocada sin explicación.
-      const _tdEditIdAtClose = (typeof sessionStorage !== 'undefined') ? sessionStorage.getItem('cx_edit_id') : null;
-      setTimeout(() => {
-        if(!location.hash.startsWith('#editor') && _tdEditIdAtClose && typeof Router !== 'undefined'){
-          Router.go('editor', { id: _tdEditIdAtClose });
-        }
-      }, 120);
+      // Salvaguarda extra por si, aun así, el popstate esperado no llegara
+      // nunca (p.ej. algún navegador que no lo dispare de forma fiable) —
+      // se limpia la bandera sola para no dejarla puesta para siempre.
+      setTimeout(() => { _tdAwaitingSelfPopstate = false; }, 500);
     }
   };
   // El intento anterior (hide() + reenfocar) no cerraba el teclado de
@@ -279,6 +262,19 @@ function _tdRegisterBackInterceptor(){
   _tdBackInterceptorRegistered = true;
   window._edBackInterceptors = window._edBackInterceptors || [];
   window._edBackInterceptors.push(() => {
+    // Nuestro propio history.back() (al cerrar normalmente, para consumir la
+    // entrada de historial añadida al abrir) YA dejó shell.style.display en
+    // 'none' antes de disparar este popstate — comprobar solo
+    // shell.style.display haría pensar que el editor de textos "ya no
+    // estaba abierto" en ese instante, y dejaría escapar el evento hacia el
+    // router (bug reportado por Alberto: acababa en "Mis creaciones"). Se
+    // comprueba esta bandera PRIMERO: si es nuestro propio popstate
+    // autoprovocado, atraparlo siempre — ya se cerró todo, aquí solo hace
+    // falta "tragarse" el evento para que el router no navegue con él.
+    if(_tdAwaitingSelfPopstate){
+      _tdAwaitingSelfPopstate = false;
+      return true;
+    }
     const shell = document.getElementById('tdShell');
     if(shell && shell.style.display !== 'none' && shell.style.display !== ''){
       edCloseTextDoc(true); // true: ya se consumió la entrada de historial vía popstate
@@ -296,7 +292,6 @@ function _tdInitOnce(){
 
   document.getElementById('tdCloseBtn')?.addEventListener('click', edCloseTextDoc);
   document.getElementById('tdApplyBtn')?.addEventListener('click', _tdApplyToCanvas);
-  document.getElementById('tdPageBreakBtn')?.addEventListener('click', _tdInsertPageBreakAtCursor);
   document.getElementById('tdDiagBtn')?.addEventListener('click', _tdRunDiag);
   const editorEl = document.getElementById('tdEditor');
 
@@ -421,13 +416,6 @@ function _tdInitOnce(){
       }, 30);
     });
     editorEl.addEventListener('trix-selection-change', () => {
-      // loadHTML() (reeditar/abrir en blanco) NO dispara este evento por sí
-      // solo — solo una interacción real (toque, clic, flechas) lo hace.
-      // Por eso sirve para saber si el cursor ya está colocado de verdad en
-      // ALGÚN sitio del texto actual, y no en el [0,0] interno que Trix deja
-      // tras cargar el HTML sin que el usuario haya tocado nada todavía
-      // (ver _tdInsertPageBreakAtCursor y el bug reportado por Alberto).
-      _tdCursorEverPlaced = true;
       clearTimeout(_tdFollowTimer);
       _tdFollowTimer = setTimeout(_tdCenterActiveLine, 100);
       // rAF: el propio Android tarda un instante en decidir/mostrar su menú
@@ -436,31 +424,6 @@ function _tdInitOnce(){
       // asentada (ver _tdEnsureSelectionClearance).
       requestAnimationFrame(_tdEnsureSelectionClearance);
     });
-    // Ctrl+Z/Ctrl+Y (o Cmd en Mac) para deshacer/rehacer SALTOS DE PÁGINA —
-    // ver _tdBreakHistory. En fase de CAPTURA porque el propio Trix también
-    // escucha Ctrl+Z en este mismo elemento (para deshacer texto) y, al
-    // estar registrado antes que este listener, actuaría primero en fase de
-    // burbuja — con esto se decide ANTES: si hay algo que deshacer de
-    // saltos, se hace eso y se corta el paso con stopImmediatePropagation
-    // (para que Trix no deshaga TAMBIÉN un cambio de texto con la misma
-    // pulsación); si no hay nada de saltos pendiente, no se toca nada y
-    // Trix sigue con su deshacer de texto normal, como siempre.
-    editorEl.addEventListener('keydown', e => {
-      const mod = e.ctrlKey || e.metaKey;
-      if(!mod) return;
-      const k = e.key.toLowerCase();
-      const isUndo = k === 'z' && !e.shiftKey;
-      const isRedo = k === 'y' || (k === 'z' && e.shiftKey);
-      if(isUndo && _tdBreakHistoryIdx > 0){
-        e.preventDefault(); e.stopImmediatePropagation();
-        _tdUndoBreak();
-        edToast('Salto de página restaurado');
-      } else if(isRedo && _tdBreakHistoryIdx < _tdBreakHistory.length - 1){
-        e.preventDefault(); e.stopImmediatePropagation();
-        _tdRedoBreak();
-        edToast('Salto de página rehecho');
-      }
-    }, true);
   }
   // Desplazamiento continuo: scroll nativo de #tdPageArea (rueda del ratón
   // en PC, arrastre táctil en móvil, ambos gestionados por el navegador sin
@@ -920,6 +883,118 @@ async function _tdRunDiag(){
   if((window._tdApplyLog || []).length) window._tdApplyLog.forEach(l => L(l));
   else L('(vacío — no se ha pulsado "Aplicar al lienzo" todavía en esta carga de página)');
 
+  // Diagnóstico específico del quiebro de página — pedido para localizar
+  // EXACTAMENTE dónde diverge el cálculo real en el dispositivo de Alberto,
+  // tras varios intentos fallidos basados solo en razonamiento/pruebas sin
+  // motor de layout real. Recalcula TODO el mismo camino que
+  // _tdRecomputeViewPagination, mostrando cada paso por separado.
+  L('');
+  L('── Geometría del quiebro de página (estado real ahora mismo) ──');
+  try{
+    const hiddenDiag = document.getElementById('tdHiddenInput');
+    const innerDiag = document.getElementById('tdPage');
+    if(!hiddenDiag || !editorEl || !innerDiag){
+      L('(faltan elementos — editor no abierto o incompleto)');
+    } else {
+      const htmlDiag = editorEl.innerHTML || hiddenDiag.value || '';
+      L('editorEl.innerHTML === hiddenInput.value: ' + (editorEl.innerHTML === hiddenDiag.value));
+      const blocksDiag = _tdParseBlocks(htmlDiag);
+      L('Nº de bloques: ' + blocksDiag.length);
+      const flatTextDiag = _tdBlocksFlatText(blocksDiag);
+      L('Longitud texto plano: ' + flatTextDiag.length);
+      const lineHeightMultDiag = _tdLineHeightMult;
+      const editingLayerDiag = _tdEditingFlowId ? _tdFindFlowLayer(_tdEditingFlowId) : null;
+      const marginFracXDiag = (editingLayerDiag && editingLayerDiag.marginXFrac) || TD_MARGIN_FRAC;
+      const editingFramesDiag = _tdEditingFlowId ? _tdEditingFlowFrames(_tdEditingFlowId) : null;
+      const frameSizesDiag = editingFramesDiag || {pw: edPageW(), ph: edPageH()};
+      L('_tdEditingFlowId: ' + _tdEditingFlowId);
+      L('Marco usado (frameSizes): ' + JSON.stringify(frameSizesDiag) + (editingFramesDiag ? ' (por página: alto real solo si _tdBoxManualH, si no página completa)' : ' (página completa — sin flujo real)'));
+      const { pageStartChars: pscDiag } = _tdLayoutPages(
+        blocksDiag, frameSizesDiag, lineHeightMultDiag,
+        { marginFracX: marginFracXDiag, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
+        []
+      );
+      L('pageStartChars: ' + JSON.stringify(pscDiag));
+      const innerRectDiag = innerDiag.getBoundingClientRect();
+      L('innerRect (tdPage): ' + JSON.stringify({left: innerRectDiag.left, top: innerRectDiag.top, width: innerRectDiag.width}));
+
+      for(let i = 1; i < pscDiag.length; i++){
+        const c = pscDiag[i];
+        L('');
+        L(`— Salto ${i}: c=${c} —`);
+        const lastReal = _tdLastNonSpaceOffset(flatTextDiag, c - 1);
+        L('  lastReal (c-1 retrocedido ante espacio): ' + lastReal);
+        L('  contexto en flatText (20 antes, carácter, 20 después): ' + JSON.stringify(flatTextDiag.slice(Math.max(0, lastReal - 20), lastReal) + '[' + flatTextDiag[lastReal] + ']' + flatTextDiag.slice(lastReal + 1, lastReal + 21)));
+        const p1 = _tdCharOffsetToPoint(editorEl, lastReal);
+        const p2 = _tdCharOffsetToPoint(editorEl, lastReal + 1);
+        L('  p1 nodo: longitud=' + (p1 ? p1.node.textContent.length : 'null') + ' offset=' + (p1 ? p1.offset : 'null'));
+        L('  p2 nodo: longitud=' + (p2 ? p2.node.textContent.length : 'null') + ' offset=' + (p2 ? p2.offset : 'null'));
+        L('  ¿p1 y p2 son el MISMO nodo?: ' + (p1 && p2 ? (p1.node === p2.node) : 'n/a'));
+        if(p1 && p2){
+          try{
+            const spanDiag = document.createRange();
+            spanDiag.setStart(p1.node, p1.offset);
+            spanDiag.setEnd(p2.node, p2.offset);
+            L('  range.toString() del tramo (debería ser 1 carácter, el de arriba): ' + JSON.stringify(spanDiag.toString()));
+            const rectsDiag = spanDiag.getClientRects();
+            L('  span.getClientRects().length: ' + rectsDiag.length);
+            if(rectsDiag.length){
+              const r0 = rectsDiag[0];
+              L('  rects[0]: ' + JSON.stringify({left: r0.left, right: r0.right, top: r0.top, bottom: r0.bottom}));
+              L('  x calculado (rects[0].right, relativo al viewport — ver .td-pagebreak-line full-bleed): ' + r0.right);
+            }
+            // Rectángulo de la ÚLTIMA PALABRA completa ("confín."), no solo el
+            // último carácter — por si el problema es específico de medir un
+            // tramo de 1 solo carácter en el límite exacto de un nodo largo.
+            const wordStart = Math.max(0, lastReal - 6); // "confin." son 7 caracteres, empieza 6 antes del punto
+            const pw1 = _tdCharOffsetToPoint(editorEl, wordStart);
+            const pw2 = _tdCharOffsetToPoint(editorEl, lastReal + 1);
+            if(pw1 && pw2){
+              const wordSpan = document.createRange();
+              wordSpan.setStart(pw1.node, pw1.offset);
+              wordSpan.setEnd(pw2.node, pw2.offset);
+              L('  Palabra completa medida (offset ' + wordStart + ' a ' + (lastReal+1) + '): ' + JSON.stringify(wordSpan.toString()));
+              const wordRects = wordSpan.getClientRects();
+              L('  palabra.getClientRects().length: ' + wordRects.length);
+              Array.from(wordRects).forEach((wr, wi) => L(`    rects[${wi}]: ` + JSON.stringify({left: wr.left, right: wr.right, top: wr.top, bottom: wr.bottom})));
+            }
+          }catch(e){ L('  Error construyendo el tramo: ' + e.message); }
+        }
+        // Punto de referencia CONOCIDO: el primer carácter del documento
+        // (offset 0) — para comparar si SU rectángulo tiene sentido (cerca
+        // del margen superior izquierdo de innerRect), y así saber si el
+        // problema es general (también falla la referencia) o específico
+        // de esta posición en concreto.
+        try{
+          const pRef1 = _tdCharOffsetToPoint(editorEl, 0);
+          const pRef2 = _tdCharOffsetToPoint(editorEl, 1);
+          if(pRef1 && pRef2){
+            const refSpan = document.createRange();
+            refSpan.setStart(pRef1.node, pRef1.offset);
+            refSpan.setEnd(pRef2.node, pRef2.offset);
+            const refRects = refSpan.getClientRects();
+            L('  [referencia] primer carácter del documento (offset 0): ' + JSON.stringify(refSpan.toString()) + ' rect=' + (refRects.length ? JSON.stringify({left: refRects[0].left, top: refRects[0].top}) : 'null'));
+          }
+        }catch(e){ L('  Error en referencia: ' + e.message); }
+      }
+
+      // Estado REAL ya renderizado en el DOM ahora mismo (por si difiere del
+      // recién recalculado arriba — p.ej. si algo no disparó un recompute)
+      L('');
+      L('── Elementos .td-pagebreak-line YA en el DOM ahora mismo ──');
+      const linesInDom = document.querySelectorAll('.td-pagebreak-line');
+      L('Cantidad: ' + linesInDom.length);
+      linesInDom.forEach((el, i) => {
+        L(`  línea ${i}: --split-x=${el.style.getPropertyValue('--split-x')} --gap=${el.style.getPropertyValue('--gap')} top=${el.style.top}`);
+        const conn = el.querySelector('.td-pagebreak-connector');
+        if(conn){
+          const cr = conn.getBoundingClientRect();
+          L(`    .td-pagebreak-connector renderizado en: left=${cr.left} top=${cr.top} width=${cr.width} height=${cr.height}`);
+        }
+      });
+    }
+  }catch(e){ L('Error en diagnóstico de geometría: ' + e.message + '\n' + e.stack); }
+
   // Mostrar panel — mismo patrón visual que _edRunDiag (editor.js, botón 🩺 edDiagBtn)
   let p = document.getElementById('_tdDiagPanel');
   if(!p){
@@ -946,44 +1021,6 @@ async function _tdRunDiag(){
   document.getElementById('_tdDiagTa').value = lines.join('\n');
 }
 
-// Mientras se arrastra un salto de página, ninguna llamada EXTERNA a
-// _tdRecomputeViewPagination() debe reconstruir las líneas (ver esa
-// función) — el mismo sondeo periódico de arriba (_tdKbPollTimer, cada
-// 350ms mientras el editor tiene el foco, que sigue activo aunque ahora
-// mismo se esté arrastrando un salto con el ratón/dedo, no escribiendo)
-// destruía el elemento que se arrastra a medio gesto y lo sustituía por
-// uno nuevo en su posición ORIGINAL — como el arrastre en sí escucha en
-// document (no en el propio elemento), seguía "funcionando" de forma
-// invisible sobre el elemento ya desconectado del DOM, y al soltar volvía
-// a reconstruir, esta vez sí en el punto final: de ahí el salto en tres
-// tiempos (sigue al ratón → vuelve a su sitio original → salta al final).
-// Ver _tdWirePageBreakDrag.
-let _tdPageBreakDragging = false;
-
-// Función para ABORTAR el arrastre de salto de página actualmente en curso
-// (si lo hay), sin aplicar ningún cambio — null si no hay ninguno activo.
-// Necesaria porque los listeners del arrastre están en document (no en el
-// propio elemento) y solo se quitan dentro de onUp: si el editor se cierra
-// a media gesto (el shell se oculta, pero nunca llega un pointerup/
-// pointercancel de verdad para ese puntero), esos listeners se quedarían
-// escuchando en document PARA SIEMPRE, reaccionando a cualquier toque
-// futuro en cualquier parte de la app — de ahí que "se bloqueara el drag"
-// coincidiera con que "el teclado no se cerraba": ver edCloseTextDoc,
-// donde se llama a esto antes de nada.
-let _tdActiveDragCancel = null;
-
-// Doble toque/doble clic sobre la zona de arrastre de un salto de página:
-// lo elimina (ver _tdWirePageBreakDrag). Se guarda a nivel de MÓDULO,
-// identificando el salto por su carácter (_tdManualBreakChars, estable) y
-// no por el elemento DOM concreto — un simple toque, aunque no llegue a
-// moverse nada, ya dispara onUp → _tdRecomputeViewPagination(), que
-// reconstruye TODAS las líneas; el segundo toque de un doble-toque cae
-// siempre sobre un elemento nuevo (recién creado por esa reconstrucción),
-// así que un cronómetro guardado en el propio elemento nunca vería el
-// segundo toque.
-let _tdLastPageBreakTapChars = null;
-let _tdLastPageBreakTapTime = 0;
-
 // Tamaños/fuentes admitidos al pegar contenido externo — mismo rango que los
 // controles del editor (ver dd-tdFontFamily/dd-tdFontSize en views.js), para
 // que el texto pegado quepa en la página igual que el escrito a mano.
@@ -992,11 +1029,37 @@ const TD_ALLOWED_FONTS = ['Lora','Patrick Hand','Bangers','Permanent Marker','Be
 function _tdSanitizePastedHTML(html){
   try{
     const doc = new DOMParser().parseFromString(html || '', 'text/html');
+    // El propio navegador, al copiar texto DE DENTRO del editor (Ctrl+C
+    // sobre texto ya escrito aquí, sin pasar por fuera de la app), suele
+    // incrustar el tamaño de letra CSS COMPUTADO en ese instante como un
+    // estilo explícito en el fragmento copiado — no porque el usuario lo
+    // eligiera a propósito, sino como parte de cómo el navegador serializa
+    // la selección. El CSS de EDICIÓN en pantalla (.td-editor, 1.05rem ≈
+    // 16.8px) es un tamaño DISTINTO del que de verdad se aplica al lienzo
+    // (TD_BODY_SIZE = 22px) — texto que NUNCA tuvo un tamaño explícito
+    // (usaba el del bloque por defecto) volvía a pegarse con ese ~16.8px
+    // "fantasma" incrustado, tratado luego como si fuera un tamaño distinto
+    // a propósito. Bug reportado por Alberto: párrafos copiados y pegados
+    // dentro del mismo documento salían con un tamaño distinto al original.
+    // Se detecta y se quita (no se clampa: aquí no hace falta respetar
+    // nada, es ruido) cualquier valor a menos de 1px de ese tamaño de
+    // edición — el resto de tamaños (los elegidos de verdad, o los que
+    // vienen de fuera de la app) se procesan igual que siempre.
+    let editorCssFontSizePx = null;
+    try{
+      const liveEditor = document.getElementById('tdEditor');
+      if(liveEditor) editorCssFontSizePx = parseFloat(getComputedStyle(liveEditor).fontSize);
+    }catch(_e){}
     doc.body.querySelectorAll('[style]').forEach(el => {
       if(el.style.fontSize){
         const n = parseFloat(el.style.fontSize);
-        if(!isNaN(n)) el.style.fontSize = Math.max(TD_PASTE_FONT_MIN, Math.min(TD_PASTE_FONT_MAX, n)) + 'px';
-        else el.style.removeProperty('font-size');
+        if(isNaN(n)){
+          el.style.removeProperty('font-size');
+        } else if(editorCssFontSizePx !== null && !isNaN(editorCssFontSizePx) && Math.abs(n - editorCssFontSizePx) < 1){
+          el.style.removeProperty('font-size');
+        } else {
+          el.style.fontSize = Math.max(TD_PASTE_FONT_MIN, Math.min(TD_PASTE_FONT_MAX, n)) + 'px';
+        }
       }
       if(el.style.fontFamily){
         const clean = el.style.fontFamily.replace(/^['"]|['"]$/g, '').split(',')[0].trim();
@@ -1281,25 +1344,6 @@ function _tdSyncLineHeightMenuActive(){
 let _tdViewPageStartChars = [0];
 let _tdViewPageOffsets = [0]; // px de scrollTop para ver cada página
 let _tdViewCurPage = 0;
-// Saltos de página fijados a mano arrastrando la línea discontinua (offset
-// de carácter, siempre coincidente con el final de una línea real — ver
-// _tdSnapBreakToLine). Se reinician al abrir un documento nuevo o al
-// reeditar uno existente (se restauran desde la capa si los tenía guardados
-// — ver edOpenTextDoc) y se guardan en la propia capa al aplicar.
-let _tdManualBreakChars = [];
-// true en cuanto el usuario coloca de verdad el cursor en el texto actual
-// (ver el listener de trix-selection-change) — se reinicia a false cada vez
-// que se abre el editor (nuevo o reeditando, ver edOpenTextDoc). Sin esto,
-// _tdInsertPageBreakAtCursor no tenía forma fiable de distinguir "el cursor
-// está genuinamente aquí" de "Trix aún no ha recibido ningún toque desde
-// que cargó el HTML" — ambos casos dejan una selección con pinta válida
-// ([0,0] interno de Trix, a veces también reflejado en window.getSelection
-// según el navegador), y sin el filtro se creaba un salto de página en el
-// principio absoluto del documento — imposible de arrastrar ni de borrar
-// porque _tdRecomputeViewPagination nunca dibuja tirador para el inicio del
-// documento (solo para cambios de página REALES, ver ese bucle: empieza en
-// i=1) — bug reportado por Alberto.
-let _tdCursorEverPlaced = false;
 
 // Petición explícita de Alberto: si una selección de texto (para copiar/
 // pegar, etc.) queda demasiado arriba, el menú NATIVO de selección de
@@ -1341,41 +1385,6 @@ function _tdEnsureSelectionClearance(){
 }
 let _tdLineStartCharsCache = []; // último cálculo — para ajustar el arrastre a la línea más cercana
 
-// ── Historial de saltos de página (insertar/arrastrar/eliminar) — pedido
-// explícito de Alberto: eliminar un salto (doble toque en su tirador) debe
-// poder deshacerse. El deshacer propio de Trix (Ctrl+Z) no sirve aquí:
-// solo conoce cambios de TEXTO, nada sabe de _tdManualBreakChars. Mismo
-// patrón pila+índice que el resto del editor (edHistory/edHistoryIdx,
-// _vsHistory, edDrawHistoryIdx…) — independiente de todos ellos, como
-// exige ese mismo patrón (ver ANALISIS_CAPAS_DIBUJO). Cada entrada es una
-// FOTO completa del array (más simple y robusto que registrar "qué cambió"
-// con una lógica de deshacer distinta para insertar/mover/borrar).
-let _tdBreakHistory = [[]];
-let _tdBreakHistoryIdx = 0;
-function _tdPushBreakHistory(){
-  // Llamar DESPUÉS de cada cambio a _tdManualBreakChars, con el nuevo
-  // estado ya aplicado. Si no estamos en la punta (por deshacer previos),
-  // se descarta el "rehacer" pendiente — comportamiento estándar de
-  // cualquier historial al hacer un cambio nuevo.
-  _tdBreakHistory = _tdBreakHistory.slice(0, _tdBreakHistoryIdx + 1);
-  _tdBreakHistory.push(_tdManualBreakChars.slice());
-  _tdBreakHistoryIdx = _tdBreakHistory.length - 1;
-}
-function _tdUndoBreak(){
-  if(_tdBreakHistoryIdx <= 0) return false;
-  _tdBreakHistoryIdx--;
-  _tdManualBreakChars = _tdBreakHistory[_tdBreakHistoryIdx].slice();
-  _tdRecomputeViewPagination();
-  return true;
-}
-function _tdRedoBreak(){
-  if(_tdBreakHistoryIdx >= _tdBreakHistory.length - 1) return false;
-  _tdBreakHistoryIdx++;
-  _tdManualBreakChars = _tdBreakHistory[_tdBreakHistoryIdx].slice();
-  _tdRecomputeViewPagination();
-  return true;
-}
-
 // Busca la posición (nodo de texto + offset) en `container` que corresponde
 // al carácter nº targetOffset contando solo nodos de texto, en orden documento
 // — el mismo criterio de recuento que usa _tdLayoutPages sobre el HTML ya
@@ -1398,6 +1407,131 @@ function _tdCharOffsetToRange(container, targetOffset){
   return null;
 }
 
+// Punto (nodo+offset) en targetOffset, SIN colapsar a un Range — a
+// diferencia de _tdCharOffsetToRange, admite targetOffset=0 (principio del
+// documento). Sirve de base a _tdCharRect para construir un tramo que
+// abarque un carácter real, en vez de un punto en su límite.
+function _tdCharOffsetToPoint(container, targetOffset){
+  if(targetOffset < 0) return null;
+  if(targetOffset === 0){
+    const walker0 = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const first = walker0.nextNode();
+    return first ? {node: first, offset: 0} : null;
+  }
+  const range = _tdCharOffsetToRange(container, targetOffset);
+  return range ? {node: range.startContainer, offset: range.startOffset} : null;
+}
+
+// Texto plano completo (mismo esquema sin separador que usa
+// _tdParseBlocks/_tdLayoutPages) — para poder inspeccionar qué carácter hay
+// en una posición dada sin tener que recorrer los bloques cada vez.
+function _tdBlocksFlatText(blocks){
+  return blocks.map(b => (b.runs || []).map(r => r.text || '').join('')).join('');
+}
+
+// _tdLayoutPages cuenta el ESPACIO que provoca el salto de línea como parte
+// de ESA línea (antes de recortarlo de su representación visual, ver
+// flushLine en _tdLayoutPages) — así que el "último carácter" de una línea,
+// tal cual lo da lineStartChars/pageStartChars, a veces es ese espacio, no
+// la última letra visible. Un espacio así NO es fiable de medir en
+// pantalla (los navegadores lo colapsan visualmente al ajustar la línea:
+// puede aparecer pegado al final de la línea anterior, al principio de la
+// siguiente, o con un ancho impredecible) — de ahí que los puntos/el
+// segmento aparecieran desplazados, a veces bastante lejos del final real
+// de la palabra. Se retrocede hasta el último carácter que NO sea espacio
+// antes de medir.
+function _tdLastNonSpaceOffset(flatText, offset){
+  let i = Math.max(0, Math.min(offset, flatText.length - 1));
+  while(i > 0 && /\s/.test(flatText[i])) i--;
+  return i;
+}
+
+// Rectángulo que ocupa DE VERDAD el carácter en charOffset (esquema
+// "plano", sin separador de párrafo, el mismo que usa _tdParseBlocks/
+// _tdLayoutPages — ver _tdCharOffsetToRange) — recorre el DOM real
+// directamente con TreeWalker, SIN pasar por el mecanismo de selección de
+// Trix (editor.setSelectedRange/getSelectedRange). Se abandonó ese camino
+// tras comprobar que, en un dispositivo real, medía de forma poco fiable
+// (window.getSelection() depende del foco del elemento en ese instante, y
+// forzar el foco en cada medición no lo resolvió) — un recorrido directo
+// del propio DOM no depende de nada de eso.
+//
+// Se toma el tramo real (charOffset a charOffset+1), no un punto de
+// intercalación colapsado EN charOffset — un punto colapsado ahí
+// representa el límite ANTES de ese carácter (entre charOffset-1 y
+// charOffset), no el propio carácter. Un tramo real tampoco tiene la
+// ambigüedad de "¿a qué lado de un salto de línea pertenece este punto?"
+// que sí tendría un punto colapsado justo en ese límite.
+function _tdCharRect(container, charOffset){
+  if(charOffset < 0) return null;
+  const p1 = _tdCharOffsetToPoint(container, charOffset);
+  const p2 = _tdCharOffsetToPoint(container, charOffset + 1);
+  if(!p1 || !p2) return null;
+  try{
+    const span = document.createRange();
+    span.setStart(p1.node, p1.offset);
+    span.setEnd(p2.node, p2.offset);
+    // getClientRects()[0], NO getBoundingClientRect(): si charOffset es el
+    // último carácter de un párrafo, el tramo hasta charOffset+1 cruza la
+    // frontera al bloque (<div>) siguiente — getBoundingClientRect() daría
+    // el rectángulo que ENGLOBA los dos fragmentos (el final de este
+    // párrafo Y el principio del siguiente), más ancho/alto de lo que
+    // ocupa de verdad este carácter. getClientRects()[0] da solo el PRIMER
+    // fragmento — el que corresponde de verdad al carácter pedido, esté o
+    // no a final de párrafo.
+    const rects = span.getClientRects();
+    return (rects && rects.length) ? rects[0] : null;
+  }catch(_e){ return null; }
+}
+
+// Geometría del quiebro en "Z" para un punto de corte concreto (carácter nº
+// c, el primero de la página siguiente) — ver _tdRecomputeViewPagination
+// para la explicación completa de por qué hace falta el quiebro en vez de
+// una recta simple (Trix y el lienzo miden el texto con motores distintos).
+function _tdComputeSplitGeometry(editorEl, innerRect, blocks, c){
+  if(c <= 0) return { x: 0, yBefore: 0, yAfter: 0 };
+  // c-1 (el "último carácter" tal cual lo da pageStartChars) a veces es el
+  // ESPACIO que provocó el propio salto de línea — _tdLayoutPages lo cuenta
+  // como parte de esta línea antes de recortarlo de su representación
+  // visual (ver flushLine). Un espacio así no es fiable de medir en
+  // pantalla (se colapsa visualmente al ajustar la línea) — se retrocede
+  // al último carácter real (no-espacio) antes de medir.
+  const flatText = _tdBlocksFlatText(blocks);
+  const lastReal = _tdLastNonSpaceOffset(flatText, c - 1);
+  const rBefore = _tdCharRect(editorEl, lastReal);
+  const rAfter = _tdCharRect(editorEl, c);
+  // x: posición HORIZONTAL relativa al VIEWPORT (rBefore.right tal cual la
+  // da getClientRects, SIN restar innerRect.left) — no relativa a .td-page.
+  // Motivo: .td-pagebreak-line (ver css/editor.css) se posiciona con el
+  // truco "full-bleed" left:50%;width:100vw;margin-left:-50vw para cruzar
+  // toda la pantalla, no solo el ancho de .td-page — ese truco coloca el
+  // origen (left:0) de SUS hijos (.td-pagebreak-visual-top/bottom,
+  // .td-pagebreak-connector, todos con left:var(--split-x)) exactamente en
+  // x=0 del viewport, no en el borde de .td-page. Restar innerRect.left
+  // aquí desplazaba la línea hacia la izquierda esa misma distancia — se
+  // veía cortando el texto varias palabras ANTES del carácter real donde
+  // de verdad termina la página (bug reportado por Alberto: la línea caía
+  // en "por si" cuando el corte real era en "todo el").
+  const x = rBefore ? Math.max(0, rBefore.right) : 0;
+  let yBefore = rBefore ? Math.max(0, rBefore.bottom - innerRect.top) : 0;
+  let yAfter = rAfter ? Math.max(0, rAfter.top - innerRect.top) : yBefore;
+  if(rBefore && rAfter && yAfter < yBefore){
+    // Caso más habitual en la práctica: la última palabra de esta página y
+    // la primera de la siguiente caen en la MISMA línea de Trix (Trix cabe
+    // más texto por línea de lo que asumió el lienzo) — el borde INFERIOR
+    // de la palabra de antes y el SUPERIOR de la de después quedan
+    // invertidos (los dos pertenecen a la misma línea compartida), no en
+    // el orden "arriba, luego abajo" que da un salto de línea normal. Se
+    // usan entonces los bordes de esa línea COMPARTIDA en su lugar: el
+    // superior para la recta de la derecha, el inferior para la de la
+    // izquierda — así el hueco nunca colapsa a 0 en este caso, que es
+    // precisamente el que hace falta marcar con el quiebro en "Z".
+    yBefore = Math.max(0, rBefore.top - innerRect.top);
+    yAfter = Math.max(0, rAfter.bottom - innerRect.top);
+  }
+  return { x, yBefore, yAfter };
+}
+
 // Predice dónde caerán los saltos de hoja al pulsar "Aplicar al lienzo" —
 // usando esa MISMA maquetación (edPageW/edPageH, TD_BODY_SIZE/TD_H1_SIZE, el
 // margen de la capa si se está reeditando) — para dibujar ahí las líneas
@@ -1406,17 +1540,17 @@ function _tdCharOffsetToRange(container, targetOffset){
 // .td-editor/.td-page) — esta predicción es solo para saber EN QUÉ PUNTO del
 // texto (nº de caracteres) caerá cada salto, que luego se localiza en el DOM
 // tal y como se está escribiendo ahora mismo (_tdCharOffsetToRange).
-// Marcos reales (por hoja) de un flujo YA APLICADO — misma lógica exacta que
-// _tdReflowFlowInPlace usa para aplicar de verdad (frames = ancho/alto real
-// de cada hoja del flujo, más un marco de reserva al final), pero de SOLO
-// LECTURA: no muta nada, solo sirve para que _tdRecomputeViewPagination
-// prediga los saltos contra el marco que de verdad se usará, en vez de
-// asumir siempre la página entera. Necesario porque si la hoja de texto se
-// redimensionó a mano en el lienzo (handlers) o ya no ocupa la página
-// entera, la vista previa (y cualquier salto que se arrastre sobre ella) se
-// desincronizaría de lo que _tdApplyToCanvas/_tdReflowFlowInPlace aplicará.
-// Devuelve null si el flujo no tiene ninguna hoja en la obra (p.ej. texto
-// nuevo, todavía sin aplicar — ahí se sigue usando la página entera).
+// Marco por página: el alto REAL de la caja SOLO si esa página se
+// redimensionó a mano con los tiradores en el editor general (marca
+// _tdBoxManualH, ver el resize-end en editor.js) — ahí el tamaño es una
+// decisión deliberada de Alberto y debe limitar dónde cae el salto. Para el
+// resto (páginas cuyo alto es simplemente el resultado automático de
+// ajustar la caja al contenido en una edición anterior), página completa —
+// si no, una caja que se quedó pequeña como residuo de un texto más corto
+// seguiría limitando para siempre a un texto que ha crecido (bug "2 saltos
+// en vez de 1"). Debe coincidir EXACTAMENTE con el mismo criterio en
+// _tdReflowFlowInPlace (frames), para que la vista previa nunca se
+// desincronice de lo que "Guardar cambios" aplica de verdad.
 function _tdEditingFlowFrames(flowId){
   if(!flowId) return null;
   const flowIdxs = [];
@@ -1433,7 +1567,8 @@ function _tdEditingFlowFrames(flowId){
     const orient = pg.orientation || edOrientation;
     const sv = orient === 'vertical';
     const pgPw = sv ? ED_PAGE_W : ED_PAGE_H, pgPh = sv ? ED_PAGE_H : ED_PAGE_W;
-    return { pw: layer.width * pgPw, ph: layer.height * pgPh };
+    if(layer && layer._tdBoxManualH) return { pw: layer.width * pgPw, ph: layer.height * pgPh };
+    return { pw: pgPw, ph: pgPh };
   });
   const spanIdxs = [...flowIdxs, ...exceptIdxs].sort((a, b) => a - b);
   const lastIdx = spanIdxs[spanIdxs.length - 1];
@@ -1445,13 +1580,19 @@ function _tdEditingFlowFrames(flowId){
 
 let _tdRecomputeTimer = null;
 function _tdRecomputeViewPagination(){
-  if(_tdPageBreakDragging) return; // no reconstruir las líneas a medio arrastre — ver _tdPageBreakDragging
   const hidden = document.getElementById('tdHiddenInput');
   const editorEl = document.getElementById('tdEditor');
   const inner = document.getElementById('tdPage');
   const areaEl = document.getElementById('tdPageArea');
   if(!hidden || !editorEl || !inner || !areaEl) return;
-  const html = hidden.value || '';
+  // editorEl.innerHTML (el DOM VIVO del editor), no hidden.value: Trix
+  // sincroniza el input oculto automáticamente, pero leer el HTML
+  // directamente del propio editor garantiza que _tdParseBlocks (que decide
+  // dónde caen los saltos) y el recorrido con TreeWalker más abajo (que
+  // mide su posición en pantalla) analizan EXACTAMENTE el mismo contenido
+  // en el mismo instante, sin depender de ningún temporizado de
+  // sincronización entre los dos.
+  const html = editorEl.innerHTML || hidden.value || '';
   const blocks = _tdParseBlocks(html);
   const lineHeightMult = _tdLineHeightMult;
 
@@ -1462,20 +1603,25 @@ function _tdRecomputeViewPagination(){
   const editingLayer = (typeof _tdEditingFlowId !== 'undefined' && _tdEditingFlowId) ? _tdFindFlowLayer(_tdEditingFlowId) : null;
   const marginFracX = (editingLayer && editingLayer.marginXFrac) || TD_MARGIN_FRAC;
 
-  // Marco de la predicción: si se reedita un flujo ya aplicado, el marco
-  // REAL de cada una de sus hojas (por si se redimensionó con los handlers
-  // en el lienzo — ver _tdEditingFlowFrames); si no (texto nuevo, o el
-  // flujo ya no tiene hojas en la obra), la página entera de siempre.
+  // Marco de la predicción, POR PÁGINA: el alto real de la caja solo para
+  // las páginas que Alberto redimensionó a mano con los tiradores en el
+  // editor general (_tdBoxManualH, ver _tdEditingFlowFrames) — ahí un
+  // cambio en el lienzo debe reflejarse aquí de inmediato, con el resto de
+  // saltos sucesivos recalculándose en cascada a partir de ese nuevo
+  // reparto. Para el resto (páginas cuyo alto es solo el residuo automático
+  // de un ajuste-al-contenido anterior), página completa — si no, una caja
+  // que se quedó pequeña de un texto más corto seguiría limitando para
+  // siempre a un texto que ha crecido (bug "2 saltos en vez de 1"). Debe
+  // coincidir EXACTAMENTE con el mismo criterio en _tdReflowFlowInPlace,
+  // para que esta vista previa nunca se desincronice de lo que "Guardar
+  // cambios" aplica de verdad.
   const editingFrames = _tdEditingFlowId ? _tdEditingFlowFrames(_tdEditingFlowId) : null;
   const frameSizes = editingFrames || {pw: edPageW(), ph: edPageH()};
 
-  // _tdManualBreakChars: saltos fijados a mano arrastrando la línea — el
-  // resto de páginas se recalculan solas a partir de ahí (ver comentario en
-  // _tdLayoutPages).
   const { pageStartChars, lineStartChars } = _tdLayoutPages(
     blocks, frameSizes, lineHeightMult,
     { marginFracX, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
-    _tdManualBreakChars
+    []
   );
   _tdViewPageStartChars = pageStartChars;
   _tdLineStartCharsCache = lineStartChars;
@@ -1497,25 +1643,55 @@ function _tdRecomputeViewPagination(){
   _tdViewPageOffsets = pageStartChars.map(charToY);
   _tdLineOffsetsCache = lineStartChars.map(charToY);
 
-  // Líneas discontinuas de cambio de página: una por cada punto donde
-  // termina una página y empieza la siguiente (todas menos la primera, que
-  // es el principio del documento, no un cambio de hoja). Cada una lleva su
-  // zona de arrastre para poder fijarla a mano (ver _tdWirePageBreakDrag).
+  // Posición de cada línea de cambio de página — a partir del rectángulo
+  // REAL del último carácter de la página anterior (no un punto de
+  // intercalación colapsado en su límite con el siguiente, que puede
+  // resolverse de forma ambigua según el navegador — a veces como "final de
+  // esta línea", a veces como "principio de la siguiente"; ver _tdCharRect).
+  // Motivo de por qué hace falta esto (señalado por Alberto): el editor de
+  // textos (Trix, motor de fuentes del navegador) y el lienzo (Canvas 2D,
+  // measureText) miden el ancho del texto con motores distintos, así que el
+  // punto exacto de corte casi nunca cae en el mismo salto de línea visible
+  // en los dos sitios — no se puede pretender una única recta precisa.
+  //   · xSplit/yBefore: borde derecho/inferior del ÚLTIMO carácter de la
+  //     página anterior tal y como se ve escrito aquí mismo — justo tras su
+  //     última palabra.
+  //   · yAfter: borde superior del PRIMER carácter de la página siguiente.
+  // Geometría exacta pedida por Alberto: la vertical va exactamente en
+  // xSplit, de yBefore a yAfter; la recta hacia la DERECHA cuelga de su
+  // extremo SUPERIOR (yBefore, físicamente más arriba); la recta hacia la
+  // IZQUIERDA cuelga de su extremo INFERIOR (yAfter). Si Trix envolvió el
+  // texto exactamente en el mismo punto que predijo el lienzo, yBefore y
+  // yAfter coinciden (hueco 0) y las dos rectas quedan a la misma altura,
+  // unidas por xSplit — visualmente una única línea con un pequeño quiebro
+  // en xSplit, sin caso aparte.
+  const splits = pageStartChars.map(c => _tdComputeSplitGeometry(editorEl, innerRect, blocks, c));
+
+  // Líneas de cambio de página: una por cada punto donde termina una página
+  // y empieza la siguiente (todas menos la primera, que es el principio del
+  // documento, no un cambio de hoja) — puramente visual, sin ningún tirador
+  // ni interacción (quitado por completo, pedido explícito de Alberto: los
+  // saltos se generan solos según el tamaño de caja en el lienzo).
   const breaksEl = document.getElementById('tdPageBreaks');
   if(breaksEl){
     breaksEl.innerHTML = '';
     for(let i = 1; i < _tdViewPageOffsets.length; i++){
+      const { x: xSplit, yBefore, yAfter } = splits[i];
+      const gap = yAfter - yBefore;
       const line = document.createElement('div');
       line.className = 'td-pagebreak-line';
-      line.style.top = _tdViewPageOffsets[i] + 'px';
-      line.dataset.chars = String(pageStartChars[i]);
-      const visual = document.createElement('div');
-      visual.className = 'td-pagebreak-visual';
-      const handle = document.createElement('div');
-      handle.className = 'td-pagebreak-handle';
-      line.appendChild(visual);
-      line.appendChild(handle);
-      _tdWirePageBreakDrag(handle, line);
+      line.style.top = yBefore + 'px';
+      line.style.setProperty('--gap', gap + 'px');
+      line.style.setProperty('--split-x', xSplit + 'px');
+      const visualTop = document.createElement('div');
+      visualTop.className = 'td-pagebreak-visual-top';
+      const connector = document.createElement('div');
+      connector.className = 'td-pagebreak-connector';
+      const visualBottom = document.createElement('div');
+      visualBottom.className = 'td-pagebreak-visual-bottom';
+      line.appendChild(visualTop);
+      line.appendChild(connector);
+      line.appendChild(visualBottom);
       breaksEl.appendChild(line);
     }
   }
@@ -1533,201 +1709,14 @@ function _tdRecomputeViewPagination(){
 }
 let _tdLineOffsetsCache = [];
 
-// Ejecuta _tdLayoutPages con un conjunto de saltos forzados concreto, usando
-// el marco real de la hoja que se está reeditando (o la página entera si es
-// texto nuevo, sin flowId todavía) — para poder consultar de antemano dónde
-// cortaría el algoritmo con exactamente ese conjunto de saltos. Usado por
-// _tdWirePageBreakDrag para saber hasta dónde se puede bajar un salto sin
-// que la página de arriba se quede sin sitio físico.
-function _tdLayoutPagesForBreaks(forcedBreakChars){
-  const hidden = document.getElementById('tdHiddenInput');
-  if(!hidden) return { pages: [], pageStartChars: [0], lineStartChars: [] };
-  const blocks = _tdParseBlocks(hidden.value || '');
-  const lineHeightMult = _tdLineHeightMult;
-  const editingLayer = _tdEditingFlowId ? _tdFindFlowLayer(_tdEditingFlowId) : null;
-  const marginFracX = (editingLayer && editingLayer.marginXFrac) || TD_MARGIN_FRAC;
-  const editingFrames = _tdEditingFlowId ? _tdEditingFlowFrames(_tdEditingFlowId) : null;
-  const frameSizes = editingFrames || {pw: edPageW(), ph: edPageH()};
-  return _tdLayoutPages(
-    blocks, frameSizes, lineHeightMult,
-    { marginFracX, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
-    forcedBreakChars
-  );
-}
-
-// Conecta el arrastre de la zona de agarre de un salto de página: mientras
-// se arrastra, la línea sigue al dedo/ratón libremente, sin ningún tope
-// visual durante el gesto — el número total de páginas SIEMPRE puede
-// crecer si hace falta, así que mientras se arrastra no hay ninguna razón
-// para impedir el movimiento. Al soltar, se ajusta al límite de línea real
-// más cercano (nunca a mitad de una) y se comprueba el resultado DE
-// VERDAD: si la página de arriba no tiene sitio físico hasta ahí (su marco
-// real, ver _tdLayoutPagesForBreaks — un desbordamiento natural ocurriría
-// antes), se corrige a la posición más baja que el algoritmo SÍ respeta
-// para esa página, en vez de dejar el salto donde se soltó.
-function _tdWirePageBreakDrag(handle, lineEl){
-  let dragging = false;
-  let pendingTimeout = null;
-
-  const removeDragListeners = () => {
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
-    document.removeEventListener('pointercancel', onUp);
-  };
-
-  // Aborta este arrastre concreto sin aplicar ningún cambio — llamable
-  // tanto desde dentro (nunca se llama a sí misma normalmente, el flujo
-  // normal es onUp→finish) como desde FUERA vía _tdActiveDragCancel (ver
-  // esa variable y edCloseTextDoc) si el editor se cierra a media gesto o
-  // a mitad de la animación de corrección.
-  const cancelDrag = () => {
-    dragging = false;
-    removeDragListeners();
-    if(pendingTimeout){ clearTimeout(pendingTimeout); pendingTimeout = null; }
-    lineEl.classList.remove('dragging');
-    _tdPageBreakDragging = false;
-    if(_tdActiveDragCancel === cancelDrag) _tdActiveDragCancel = null;
-  };
-
-  const onMove = e => {
-    if(!dragging) return;
-    const pageEl = document.getElementById('tdPage');
-    if(!pageEl) return;
-    const pageRect = pageEl.getBoundingClientRect();
-    const localY = e.clientY - pageRect.top;
-    lineEl.style.top = Math.max(0, localY) + 'px';
-  };
-  const onUp = () => {
-    if(!dragging) return;
-    dragging = false;
-    lineEl.classList.remove('dragging');
-    removeDragListeners();
-
-    const finalTop = parseFloat(lineEl.style.top) || 0;
-    // Ajustar al límite de línea real más cercano — nunca a mitad de una,
-    // solo donde el formato permite que exista una línea de verdad.
-    let nearestIdx = 0, nearestDist = Infinity;
-    for(let i = 0; i < _tdLineOffsetsCache.length; i++){
-      const d = Math.abs(_tdLineOffsetsCache[i] - finalTop);
-      if(d < nearestDist){ nearestDist = d; nearestIdx = i; }
-    }
-    const oldChars = parseFloat(lineEl.dataset.chars);
-    const others = _tdManualBreakChars.filter(c => c !== oldChars);
-    let newChars = _tdLineStartCharsCache[nearestIdx];
-    let correctedIdx = -1;
-
-    if(newChars > 0){
-      // Comprobar contra el algoritmo REAL cuál es el primer corte que de
-      // verdad ocurre justo después de la página anterior (prevBreak) — si
-      // no coincide EXACTAMENTE con donde se soltó, ese punto no es válido
-      // para esta página, aunque un desbordamiento natural interpuesto
-      // antes haga que "newChars" aparezca honrado más adelante, para una
-      // página distinta a la que se pretendía extender (eso creaba un
-      // salto de más, el bug reportado). Se usa el primer corte real en su
-      // lugar, sea cual sea.
-      const prevBreak = others.filter(c => c < newChars).reduce((a, b) => Math.max(a, b), 0);
-      const probe = _tdLayoutPagesForBreaks([...others, newChars].sort((a, b) => a - b));
-      const nextBreak = probe.pageStartChars.find(c => c > prevBreak);
-      if(nextBreak !== newChars){
-        newChars = (nextBreak !== undefined && nextBreak > 0) ? nextBreak : 0;
-        edToast('Esa página ya no tiene sitio — colocado en el límite permitido');
-        // Línea real correspondiente al punto YA corregido, para animar
-        // hacia ahí (no necesariamente la más cercana a donde se soltó).
-        let d2 = Infinity;
-        for(let i = 0; i < _tdLineStartCharsCache.length; i++){
-          const diff = Math.abs(_tdLineStartCharsCache[i] - newChars);
-          if(diff < d2){ d2 = diff; correctedIdx = i; }
-        }
-      }
-    }
-
-    // Si el punto final (ya corregido arriba si hacía falta) es justo donde
-    // el algoritmo cortaría de todos modos SIN guardarlo como salto manual
-    // (con el tamaño de marco actual y los DEMÁS saltos manuales, sin este),
-    // no hace falta fijarlo — y no conviene hacerlo: si se guardara siempre,
-    // el simple gesto de tocar un salto automático (aunque "rebote" a la
-    // misma posición porque el marco no daba para más, como en el paso de
-    // validación de arriba) lo convertiría en un salto FIJO para siempre,
-    // que seguiría forzándose aunque el marco creciera después y ya no
-    // hiciera falta — bug reportado por Alberto: imposible que el texto
-    // volviera a caber en una sola hoja al agrandar la caja, tras haber
-    // tocado una vez el salto entre hojas. Al no guardarlo, sigue siendo
-    // "el corte natural de este tamaño de marco" — se recalcula solo si el
-    // marco cambia, en vez de quedar congelado en esa posición para siempre.
-    let isRedundant = false;
-    if(newChars > 0){
-      const naturalProbe = _tdLayoutPagesForBreaks(others);
-      isRedundant = naturalProbe.pageStartChars.includes(newChars);
-    }
-
-    const finish = () => {
-      const tentative = others.slice();
-      if(newChars > 0 && !isRedundant && !tentative.includes(newChars)) tentative.push(newChars);
-      tentative.sort((a, b) => a - b);
-      _tdManualBreakChars = tentative;
-      _tdPushBreakHistory();
-      _tdPageBreakDragging = false; // ya se puede reconstruir de nuevo — esta es la propia reconstrucción final
-      if(_tdActiveDragCancel === cancelDrag) _tdActiveDragCancel = null;
-      _tdRecomputeViewPagination();
-    };
-
-    if(correctedIdx >= 0 && _tdLineOffsetsCache[correctedIdx] !== undefined){
-      // Solo aquí se anima: el arrastre en sí (onMove) sigue al dedo/ratón
-      // al instante, sin transición — pero cuando el punto soltado NO era
-      // válido y hay que rectificar, la línea se desliza de vuelta a su
-      // sitio real en vez de saltar de golpe (lo que haría el recálculo,
-      // que reconstruye las líneas desde cero). _tdActiveDragCancel sigue
-      // registrado durante esta espera (se anula al final, en finish o en
-      // cancelDrag) por si el editor se cierra justo durante la animación.
-      lineEl.style.transition = 'top .22s cubic-bezier(.4,0,.2,1)';
-      lineEl.style.top = _tdLineOffsetsCache[correctedIdx] + 'px';
-      let done = false;
-      const onEnd = () => {
-        if(done) return;
-        done = true;
-        lineEl.removeEventListener('transitionend', onEnd);
-        finish();
-      };
-      lineEl.addEventListener('transitionend', onEnd);
-      pendingTimeout = setTimeout(onEnd, 260); // red de seguridad si transitionend no llega
-    } else {
-      finish();
-    }
-  };
-  handle.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    const chars = parseFloat(lineEl.dataset.chars);
-    const now = Date.now();
-    if(_tdLastPageBreakTapChars === chars && (now - _tdLastPageBreakTapTime) < 350){
-      // Doble toque/clic: eliminar este salto — no empezar a arrastrar.
-      // Los saltos posteriores se recalculan solos al llamar de nuevo a
-      // _tdRecomputeViewPagination (el algoritmo nunca decide de antemano
-      // dónde va cada salto, ver _tdLayoutPages), así que quitar uno de
-      // _tdManualBreakChars ya reconfigura todo lo que haga falta después
-      // — los saltos ANTERIORES a este no se tocan para nada (siguen en el
-      // array tal cual estaban). Queda en _tdBreakHistory por si se quiere
-      // deshacer (Ctrl+Z, ver el keydown de más abajo).
-      _tdLastPageBreakTapChars = null;
-      _tdLastPageBreakTapTime = 0;
-      _tdManualBreakChars = _tdManualBreakChars.filter(c => c !== chars);
-      _tdPushBreakHistory();
-      _tdRecomputeViewPagination();
-      edToast('Salto de página eliminado (Ctrl+Z para deshacer)');
-      return;
-    }
-    _tdLastPageBreakTapChars = chars;
-    _tdLastPageBreakTapTime = now;
-    dragging = true;
-    _tdPageBreakDragging = true; // bloquea cualquier reconstrucción externa hasta soltar (ver _tdPageBreakDragging)
-    _tdActiveDragCancel = cancelDrag; // para poder abortar desde fuera si hace falta (ver edCloseTextDoc)
-    lineEl.classList.add('dragging');
-    lineEl.style.transition = 'none'; // arrastre al instante, sin animación, siguiendo al dedo/ratón
-    handle.setPointerCapture?.(e.pointerId);
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    document.addEventListener('pointercancel', onUp);
-  });
-}
+// Petición explícita de Alberto: se ha quitado TODA la interacción manual
+// con los saltos de página desde el editor de textos (menú Eliminar/Mover,
+// puntos azules candidatos, botón "Salto de página") — daba demasiados
+// problemas y no hace falta: los saltos se crean/ajustan solos según el
+// tamaño de caja del texto en el propio lienzo (ver _tdReflowAfterResize
+// en editor.js), y el editor de textos se limita a MOSTRAR dónde caen
+// (ver _tdRecomputeViewPagination más abajo), sin ningún tirador ni
+// interacción sobre ellos.
 
 function _tdUpdateViewPageNav(){
   const num = document.getElementById('tdPageNum');
@@ -1842,68 +1831,6 @@ function _tdCenterActiveLine(){
   const delta = cursorY - targetY;
   if(Math.abs(delta) < 3) return; // ya donde debe estar — evita micro-ajustes constantes
   _tdSetScrollOffset(areaEl.scrollTop + delta, false);
-}
-
-// Botón "Salto de página" (tdPageBreakBtn): antes usaba el sistema nativo de
-// atributos de bloque de Trix (Trix.config.blockAttributes.pageBreak,
-// transformaba el bloque ENTERO donde estuviera el cursor en un <aside>,
-// perdiendo su contenido de texto). Ahora usa el MISMO sistema que arrastrar
-// una línea discontinua a mano (_tdManualBreakChars): añade un salto justo
-// al final de la línea real donde esté el cursor en ese momento, sin tocar
-// el contenido — y por tanto queda igual de arrastrable después. La lectura
-// de contenido antiguo con <aside> incrustado (_tdParseBlocks/_tdLayoutPages)
-// se mantiene intacta, solo cambia cómo se CREAN saltos nuevos a partir de
-// ahora.
-function _tdInsertPageBreakAtCursor(){
-  const editorEl = document.getElementById('tdEditor');
-  const inner = document.getElementById('tdPage');
-  if(!editorEl || !inner) return;
-  if(!_tdCursorEverPlaced){
-    // El cursor no se ha colocado todavía de verdad en este texto (recién
-    // abierto/reeditado, sin tocar aún) — sin este filtro, la selección
-    // "de mentira" que deja Trix tras loadHTML ([0,0] interno, a veces
-    // también reflejada en window.getSelection) colaba como si fuera una
-    // posición real y creaba un salto de página en el principio absoluto
-    // del documento — imposible de arrastrar o borrar después, porque no
-    // se dibuja tirador para el inicio del documento (solo para cambios de
-    // página reales, ver el bucle de _tdRecomputeViewPagination).
-    edToast('Toca primero el texto, donde quieras insertar el salto');
-    return;
-  }
-  const sel = window.getSelection();
-  if(!sel || sel.rangeCount === 0) return;
-  const anchorNode = sel.focusNode;
-  if(!anchorNode || !editorEl.contains(anchorNode)) return;
-
-  const range = sel.getRangeAt(0).cloneRange();
-  range.collapse(true);
-  let rect = range.getClientRects()[0];
-  if(!rect){
-    const el = anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode;
-    rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
-  }
-  if(!rect || (rect.top === 0 && rect.bottom === 0)) return;
-  const cursorYRel = (rect.top + rect.height / 2) - inner.getBoundingClientRect().top;
-
-  // Línea real (de las ya calculadas, ver _tdLineOffsetsCache) más cercana a
-  // la posición vertical del cursor — el salto se añade al final de ESA
-  // línea, sea cual sea (funciona igual en medio de un párrafo largo que al
-  // final de uno corto).
-  let nearestIdx = 0, nearestDist = Infinity;
-  for(let i = 0; i < _tdLineOffsetsCache.length; i++){
-    const d = Math.abs(_tdLineOffsetsCache[i] - cursorYRel);
-    if(d < nearestDist){ nearestDist = d; nearestIdx = i; }
-  }
-  const newChars = _tdLineStartCharsCache[nearestIdx];
-  if(!(newChars > 0)){ edToast('El cursor ya está al principio — no hay nada que separar'); return; }
-  if(_tdManualBreakChars.includes(newChars)){ edToast('Ya hay un salto de página ahí'); return; }
-  _tdManualBreakChars.push(newChars);
-  _tdManualBreakChars.sort((a, b) => a - b);
-  _tdPushBreakHistory();
-  _tdAutoFollow = true; // insertar un salto es una edición como escribir — seguir mostrando la línea activa
-  _tdRecomputeViewPagination();
-  _tdCenterActiveLine();
-  edToast('Salto de página añadido');
 }
 
 window.addEventListener('resize', () => {
@@ -2128,6 +2055,18 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   const hasExplicitPad = !!(opts && (opts.padTop !== undefined || opts.padBottom !== undefined));
   const bodySizeDefault = (opts && opts.bodySize) || TD_BODY_SIZE;
   const h1SizeDefault = (opts && opts.h1Size) || TD_H1_SIZE;
+  // Solo lo usa _tdRecomputeViewPagination (vista previa en el editor de
+  // textos) — el ancho de escritura ahí (.td-page, "cómodo de lectura",
+  // hasta 760px en PC) no tiene ninguna relación con el ancho real de la
+  // hoja en el lienzo (frame.pw, p.ej. 360px): sin este factor, el
+  // algoritmo predice muchos MENOS caracteres por línea de los que Trix
+  // cabe de verdad (con su propio tamaño de letra CSS, fijo, dentro de ese
+  // ancho mucho mayor) — la predicción entera queda desincronizada de
+  // dónde caen las líneas de verdad en Trix, no solo "un poco distinta"
+  // como el quiebro en Z está pensado para tolerar. _tdApplyToCanvas (el
+  // único sitio que de verdad decide el contenido de cada hoja) nunca pasa
+  // esto — sigue usando bodySize/h1Size tal cual, sin escalar.
+  const fontSizeScale = (opts && opts.fontSizeScale) || 1;
   const ctx = _tdMeasureCtx;
   const forced = (forcedBreakChars || []).slice().sort((a, b) => a - b);
   let forcedIdx = 0;
@@ -2150,6 +2089,18 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   const pages = [];
   const pageStartChars = [0]; // offset de texto plano (orden documento) donde empieza cada página
   const lineStartChars = []; // offset al final de CADA línea (no solo de página) — para ajustar el arrastre
+  // Alto de caja que haría falta para contener EXACTAMENTE el contenido de
+  // cada página (margen incluido) — no el alto del marco que se usó para
+  // calcularla. Pedido explícito de Alberto: los saltos de página fijados a
+  // mano en el editor de textos deben poder crear/redimensionar cajas al
+  // aplicar, no depender de que ya exista una caja de cierto tamaño — ver
+  // _tdReflowFlowInPlace/_tdApplyToCanvas, que usan esto para dimensionar
+  // cada hoja según dónde haya quedado el corte, en vez de usar el tamaño
+  // de caja que ya hubiera antes.
+  const pageBoxHeights = [];
+  const pageBoxHeightFor = () => hasExplicitPad
+    ? (curY + (opts.padTop || 0) + (opts.padBottom || 0))
+    : (curY / Math.max(0.01, 1 - 2 * marginFracY));
   let curLines = [];
   let curY = 0; // relativo al margen superior (0..textH)
   let charsSoFar = 0;
@@ -2157,19 +2108,39 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   function pushLine(entry){
     const endChars = charsSoFar; // caracteres acumulados hasta el final de ESTA línea
     let shouldBreak = curY + entry.height > textH && curLines.length > 0;
-    // Salto forzado a mano (arrastre): si ya se ha alcanzado o pasado el
-    // siguiente punto fijado, cortar aquí también, haya sitio o no — pero
-    // solo si esta página ya tiene algo (si no, dejaría una página vacía).
-    if(!shouldBreak && curLines.length > 0 && forcedIdx < forced.length && endChars >= forced[forcedIdx]){
+    // Salto forzado a mano (arrastre): si ya se ha PASADO el punto fijado
+    // (estrictamente más allá, no con "="), cortar aquí también, haya sitio
+    // o no — pero solo si esta página ya tiene algo (si no, dejaría una
+    // página vacía). El "estrictamente" es importante: el punto fijado
+    // (ver _tdLineStartCharsCache) es siempre el FINAL de una línea real —
+    // esa línea debe quedarse en ESTA página (es justo donde el usuario
+    // soltó el arrastre), no empujarse a la siguiente. Con ">=" en vez de
+    // ">", esa línea concreta se empujaba una página de más — bug
+    // reportado por Alberto ("al mover saltos hacia arriba, crea saltos
+    // nuevos"): el contenido real no coincidía con el punto donde se soltó
+    // el arrastre, y la validación posterior (que sí compara contra el
+    // contenido real) lo detectaba como un punto distinto y no conseguía
+    // asentarse en uno solo.
+    if(!shouldBreak && curLines.length > 0 && forcedIdx < forced.length && endChars > forced[forcedIdx]){
       shouldBreak = true;
     }
     if(shouldBreak){
       pages.push(curLines);
+      pageBoxHeights.push(pageBoxHeightFor());
       curLines = [];
       curY = 0;
       frameIdx++;
       loadFrame();
-      pageStartChars.push(charsSoFar);
+      // OJO: charsSoFar en este punto YA incluye los caracteres de "entry"
+      // (la línea que se está a punto de añadir a la página NUEVA) — sus
+      // palabras se contaron en charsSoFar ANTES de que overflow disparara
+      // este pushLine (ver el bucle de palabras, más abajo en la función).
+      // Por eso NO sirve como "aquí empieza la página nueva": se usa en su
+      // lugar el último valor ya registrado en lineStartChars — el final de
+      // la línea ANTERIOR, que es exactamente donde arranca esta página —
+      // sin él, el punto de corte quedaba una línea entera de más tarde de
+      // lo real, el bug reportado ("las rectas un renglón por debajo").
+      pageStartChars.push(lineStartChars.length ? lineStartChars[lineStartChars.length - 1] : 0);
       while(forcedIdx < forced.length && forced[forcedIdx] <= endChars) forcedIdx++;
     }
     const baseline = curY + entry.height * 0.78;
@@ -2196,6 +2167,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   function forcePageBreak(){
     if(curLines.length > 0){
       pages.push(curLines);
+      pageBoxHeights.push(pageBoxHeightFor());
       curLines = [];
       curY = 0;
       frameIdx++;
@@ -2208,7 +2180,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     if(block.kind === 'pagebreak'){ forcePageBreak(); return; }
 
     const isHeading = block.kind === 'heading';
-    const baseFontSize = isHeading ? h1SizeDefault : bodySizeDefault;
+    const baseFontSize = (isHeading ? h1SizeDefault : bodySizeDefault) * fontSizeScale;
     // Interlineado: el del propio párrafo (line-compact/line-amplio, ver
     // _tdParseBlocks) si lo tiene: pedido explícito de Alberto — debe
     // comportarse como alineación (por párrafo/selección), no como un
@@ -2233,7 +2205,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       const parts = (run.text || '').split(/(\s+)/).filter(s => s.length);
       parts.forEach(p => words.push({
         text:p, bold: isHeading ? true : !!run.bold, italic:!!run.italic, strike:!!run.strike, mono:!!run.mono,
-        fontSize: run.fontSize || baseFontSize,
+        fontSize: run.fontSize ? run.fontSize * fontSizeScale : baseFontSize,
         fontFamily: run.fontFamily || null, // null = usar richFontFamily del documento
         isSpace: /^\s+$/.test(p)
       }));
@@ -2247,20 +2219,32 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
 
     let lineRuns = [];
     let lineWidth = 0;
-    let lineMaxFontSize = baseFontSize;
+    // null hasta que se coloca la primera palabra real de la línea — NO
+    // baseFontSize desde el principio: si se inicializara así, una línea
+    // compuesta ENTERAMENTE por texto más pequeño que el tamaño por defecto
+    // del bloque (p.ej. contenido pegado a 16px en un párrafo de 22px, ver
+    // bug de pegado señalado por Alberto) nunca lo reflejaría — el chequeo
+    // de abajo solo dejaba CRECER el valor (font.size > lineMaxFontSize),
+    // nunca DECRECER, así que esa línea se quedaba registrada con la altura
+    // del tamaño por defecto aunque su texto real fuera más pequeño.
+    let lineMaxFontSize = null;
     let firstLineOfBlock = true;
     let lastLineOfBlock = null; // la última línea empujada de este bloque — el justificado no la estira (convención tipográfica: la última línea de un párrafo se queda a su ancho natural)
 
     function flushLine(){
       while(lineRuns.length && lineRuns[lineRuns.length - 1].isSpace) lineRuns.pop();
+      // Línea vacía (p.ej. dos <br> seguidos, sin ninguna palabra real entre
+      // ellos) — nunca se fijó lineMaxFontSize, se usa el tamaño por
+      // defecto del bloque como única opción razonable para su altura.
+      const effectiveFontSize = lineMaxFontSize !== null ? lineMaxFontSize : baseFontSize;
       lastLineOfBlock = pushLine({
-        height: lineMaxFontSize * lhMult, indent: indentPx, kind: block.kind, fontSize: lineMaxFontSize,
+        height: effectiveFontSize * lhMult, indent: indentPx, kind: block.kind, fontSize: effectiveFontSize,
         marker: firstLineOfBlock ? marker : null, runs: lineRuns, align: block.align
       });
       firstLineOfBlock = false;
       lineRuns = [];
       lineWidth = 0;
-      lineMaxFontSize = baseFontSize;
+      lineMaxFontSize = null;
     }
 
     words.forEach(w => {
@@ -2278,7 +2262,10 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       });
       lineWidth += width;
       charsSoFar += w.text.length;
-      if(w.fontSize > lineMaxFontSize) lineMaxFontSize = w.fontSize;
+      // Refleja el tamaño REAL de las palabras de ESTA línea — tanto si es
+      // mayor como si es menor que lo que ya llevaba registrado (antes solo
+      // se permitía crecer, ver comentario en la declaración de arriba).
+      if(lineMaxFontSize === null || w.fontSize > lineMaxFontSize) lineMaxFontSize = w.fontSize;
     });
     if(lineRuns.length) flushLine();
     if(lastLineOfBlock) lastLineOfBlock.isBlockEnd = true;
@@ -2286,8 +2273,8 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     curY += baseFontSize * TD_PARA_GAP_MULT;
   });
 
-  if(curLines.length) pages.push(curLines);
-  if(pages.length === 0) pages.push([]);
+  if(curLines.length){ pages.push(curLines); pageBoxHeights.push(pageBoxHeightFor()); }
+  if(pages.length === 0){ pages.push([]); pageBoxHeights.push(0); }
 
   // Posición x de cada run según la alineación real de la línea (heredada
   // del bloque de Trix — ver _tdParseBlocks/_tdRegisterCustomTrixAttributes).
@@ -2329,7 +2316,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     });
   });
 
-  return {pages, mx, my, pageStartChars, lineStartChars};
+  return {pages, mx, my, pageStartChars, lineStartChars, pageBoxHeights};
 }
 
 // Resumen en texto plano por página (fallback/legacy — _hasText, panel_texts, etc.
@@ -2377,6 +2364,14 @@ function _tdMakeExceptMarker(flowId){
 // Botón "Exceptuar en esta hoja" (panel de propiedades): quita el texto de la
 // hoja actual y dispara el reflujo — el contenido que le correspondía pasa a
 // la hoja siguiente del flujo (o crea una nueva si hiciera falta).
+// deriveBoxFromContent=true (mismo criterio que "Guardar cambios", no el de
+// redimensionar con tiradores): la hoja siguiente al hueco debe poder
+// absorber TODO el texto redistribuido hasta llenar la página entera, no
+// quedar acotada a su alto real si ese alto era solo el residuo automático
+// de una edición anterior más corta — bug reportado por Alberto (solo se
+// vertía una parte del texto en la hoja siguiente). Las páginas que Alberto
+// sí redimensionó a mano con los tiradores (_tdBoxManualH) siguen
+// respetándose igual, aquí y en cualquier otro reflujo del mismo flujo.
 function _tdExceptCurrentPage(){
   const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
   if(!la || !la.richLines || !la.richLines.length) return;
@@ -2387,7 +2382,7 @@ function _tdExceptCurrentPage(){
   page.layers = (page.layers || []).filter(l => l !== la);
   page.layers.push(_tdMakeExceptMarker(flowId));
 
-  _tdReflowFlowInPlace(la, false);
+  _tdReflowFlowInPlace(la, false, true);
   if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
   // _tdReflowFlowInPlace() ya llamó a edFitCanvas(), pero con el panel de
   // propiedades todavía abierto (se cierra justo después, arriba) — mide el
@@ -2443,10 +2438,12 @@ function _tdApplyToCanvas(){
       // Se reutiliza el mismo motor que el redimensionado con los handlers:
       // conserva el tamaño/posición/color/fondo/marco que ya tuviera cada hoja
       // del flujo — solo cambia el contenido (y el interlineado, si se tocó
-      // desde el propio Editor de textos).
+      // desde el propio Editor de textos). Los saltos de página ya NO se
+      // colocan a mano (quitado por completo, pedido explícito de Alberto):
+      // el tamaño de caja de cada hoja, tal cual esté en el lienzo, es quien
+      // decide dónde caen — nunca al revés.
       existingLayer.sourceHTML = html;
       existingLayer.lineHeightMult = lineHeightMult;
-      existingLayer.manualBreakChars = _tdManualBreakChars.slice();
       const _wasPanelOpenBefore = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
       // Petición explícita de Alberto: al guardar cambios en un texto ya
       // existente, NO reabrir el panel de propiedades al volver (antes se
@@ -2456,7 +2453,7 @@ function _tdApplyToCanvas(){
       // todo + resetea la cámara explícitamente aquí abajo — si no, el
       // lienzo se queda con el tamaño encogido que tiene mientras el panel
       // está abierto, aunque el panel en sí ya no se vea.
-      const r = _tdReflowFlowInPlace(existingLayer, false);
+      const r = _tdReflowFlowInPlace(existingLayer, false, true);
       if(!r){ _tdLogApply('SALIDA: reflujo falló', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se pudo actualizar el texto'); return; }
       if(!_wasPanelOpenBefore) edLoadPage(r.firstIdx); // mismo respaldo que había, por si no hubiera panel que cerrar
       if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
@@ -2479,19 +2476,19 @@ function _tdApplyToCanvas(){
         frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
       }
 
-      const { pages } = _tdLayoutPages(blocks, frames, lineHeightMult, undefined, _tdManualBreakChars);
+      const { pages } = _tdLayoutPages(blocks, frames, lineHeightMult, undefined, []);
       const existingCount = Math.min(pages.length, edPages.length - startIdx);
 
       for(let i = 0; i < existingCount; i++){
         const pg = edPages[startIdx + i];
         pg.layers = pg.layers || [];
-        pg.layers.push(_tdMakeTextLayer(pages[i], html, flowId, lineHeightMult, undefined, _tdManualBreakChars));
+        pg.layers.push(_tdMakeTextLayer(pages[i], html, flowId, lineHeightMult, undefined, []));
       }
       // Si el texto sigue más allá de las hojas ya existentes, las que faltan
       // se crean nuevas al final — con la orientación de la última hoja de la obra.
       const lastOrient = edPages.length ? (edPages[edPages.length - 1].orientation || edOrientation) : edOrientation;
       const newPages = pages.slice(existingCount).map(pageLines => ({
-        layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, _tdManualBreakChars)],
+        layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, [])],
         drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
       }));
       if(newPages.length) edPages.push(...newPages);
@@ -2516,8 +2513,6 @@ function _tdApplyToCanvas(){
   const editorEl = document.getElementById('tdEditor');
   if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
   _tdEditingFlowId = null;
-  _tdManualBreakChars = [];
-  _tdBreakHistory = [[]]; _tdBreakHistoryIdx = 0;
 
   edCloseTextDoc();
 }
@@ -2551,10 +2546,20 @@ function _tdReflowAfterMarginChange(la){
   }
 }
 
-function _tdReflowFlowInPlace(la, panelWasOpen){
+function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
   const flowId = _tdEnsureFlowId(la); // migra capas de v32.70 sin _tdFlowId
   const html = la.sourceHTML || '';
   if(!html) return;
+  // Los saltos fijados a mano en el editor de textos solo deben seguir
+  // forzando un corte cuando ESTA llamada viene con deriveBoxFromContent
+  // (Guardar cambios / Exceptuar en esta hoja — ver más abajo). Si viene de
+  // redimensionar con los tiradores en el editor general, se ignoran: si no,
+  // un salto colocado hace tiempo en el editor de textos se quedaba
+  // "congelado" para siempre en la capa, y seguía forzando un corte incluso
+  // después de agrandar la caja lo bastante como para que ya no hiciera
+  // falta — bug reportado por Alberto (el texto de la hoja siguiente no se
+  // reabsorbía al ampliar la caja).
+  const effectiveManualBreaks = deriveBoxFromContent ? (la.manualBreakChars || []) : [];
 
   // Hojas del flujo: "slots" (tienen la capa de texto) y "huecos" (excluidos
   // a propósito con "Exceptuar en esta hoja" — capa marcadora _tdExceptFlow,
@@ -2579,10 +2584,10 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
     const { pages: pages0 } = _tdLayoutPages(
       blocks0, {pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W}, la.lineHeightMult,
       { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC },
-      la.manualBreakChars
+      effectiveManualBreaks
     );
     const newPages0 = pages0.map(pageLines => ({
-      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, la.manualBreakChars)],
+      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks)],
       drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient
     }));
     edPages.splice(afterIdx, 0, ...newPages0);
@@ -2596,13 +2601,42 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
   const lastIdx = spanIdxs[spanIdxs.length - 1];
   const firstIdx = spanIdxs[0];
 
+  // Marco para calcular la paginación — por página, dos criterios distintos
+  // a propósito:
+  //
+  // · Si la llamada viene de redimensionar con los tiradores en el editor
+  //   general (deriveBoxFromContent falsy, _tdReflowAfterResize /
+  //   _tdReflowAfterMarginChange): el tamaño de caja REAL de cada hoja del
+  //   flujo, tal cual esté en ese momento — si no, perdería precisamente el
+  //   cambio que Alberto acaba de hacer con los tiradores, y además movería
+  //   el tamaño de TODAS las demás hojas del flujo sin que él lo pidiera.
+  //
+  // · Si viene de "Guardar cambios" en el editor de textos O de "Exceptuar
+  //   en esta hoja" (deriveBoxFromContent=true en ambos casos): por
+  //   página — el alto REAL solo si esa página en concreto se redimensionó
+  //   a mano alguna vez con los tiradores (marca _tdBoxManualH, puesta en
+  //   el resize-end de editor.js) — ahí el tamaño es una decisión
+  //   deliberada de Alberto (p.ej. dejar sitio a una imagen debajo) y debe
+  //   limitar dónde cae el salto aunque se reedite el texto o se exceptúe
+  //   otra hoja del mismo flujo. Para el resto (sin la marca — el alto es
+  //   solo el residuo automático de haber ajustado la caja al contenido en
+  //   una edición anterior), página entera: si no, una caja que se quedó
+  //   pequeña de un texto más corto (o de una redistribución anterior)
+  //   seguiría limitando para siempre al texto que le toque ahora — dos
+  //   bugs reportados por Alberto con la misma causa: "2 saltos en vez de
+  //   1" al reeditar, y "solo se vierte una parte del texto en la hoja
+  //   siguiente" al exceptuar una hoja de en medio del flujo. Debe
+  //   coincidir EXACTAMENTE con el mismo criterio en _tdEditingFlowFrames,
+  //   para que la vista previa del editor de textos nunca se desincronice
+  //   de esto.
   const frames = flowIdxs.map(i => {
     const pg = edPages[i];
-    const layer = pg.layers.find(l => l && l._tdFlowId === flowId);
     const orient = pg.orientation || edOrientation;
     const sv = orient === 'vertical';
     const pgPw = sv ? ED_PAGE_W : ED_PAGE_H, pgPh = sv ? ED_PAGE_H : ED_PAGE_W;
-    return { pw: layer.width * pgPw, ph: layer.height * pgPh };
+    const layer = pg.layers.find(l => l && l._tdFlowId === flowId);
+    if(!deriveBoxFromContent || (layer && layer._tdBoxManualH)) return { pw: layer.width * pgPw, ph: layer.height * pgPh };
+    return { pw: pgPw, ph: pgPh };
   });
   // Marco de reserva para páginas nuevas: página completa en la orientación
   // de la última hoja del tramo del flujo (slot o hueco) — mismo criterio
@@ -2612,27 +2646,57 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
   frames.push({ pw: svLast ? ED_PAGE_W : ED_PAGE_H, ph: svLast ? ED_PAGE_H : ED_PAGE_W });
 
   const blocks = _tdParseBlocks(html);
-  const { pages } = _tdLayoutPages(
+  const { pages, pageBoxHeights } = _tdLayoutPages(
     blocks, frames, la.lineHeightMult,
     { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC },
-    la.manualBreakChars
+    effectiveManualBreaks
   );
+  // Alto MÍNIMO de caja (fracción de la página) para evitar una caja
+  // degenerada, casi invisible, si una página quedara con muy poco
+  // contenido (p.ej. un salto justo tras una sola palabra).
+  const TD_MIN_BOX_HEIGHT_FRAC = 0.08;
+  const boxHeightFracFor = (i, pgPh) => Math.min(1, Math.max(TD_MIN_BOX_HEIGHT_FRAC, (pageBoxHeights[i] || 0) / pgPh));
 
   const oldCount = flowIdxs.length;
   const reused = Math.min(pages.length, flowIdxs.length);
   const currentPageObj = edPages[edCurrentPage]; // referencia — para recolocar tras las mutaciones
   const wasCurrentInFlow = flowIdxs.includes(edCurrentPage) || exceptIdxs.includes(edCurrentPage);
 
-  // 1) Slots reutilizados: mutar la MISMA capa in situ — conserva posición/
-  //    tamaño/color/fondo/marco sin copiar nada y sin mover ninguna página
-  //    (los huecos de en medio quedan exactamente donde estaban).
+  // 1) Slots reutilizados: mutar la MISMA capa in situ — conserva
+  //    color/fondo/marco sin copiar nada y sin mover ninguna página (los
+  //    huecos de en medio quedan exactamente donde estaban). El TAMAÑO/
+  //    POSICIÓN de la caja solo se toca si deriveBoxFromContent (Guardar
+  //    cambios en el editor de textos, o Exceptuar en esta hoja) Y la
+  //    página NO tiene la marca _tdBoxManualH: ancho completo (coherente
+  //    con que la vista previa ya usa ese ancho — ver
+  //    _tdRecomputeViewPagination) y alto según cuánto ocupe de verdad el
+  //    contenido de esa página (pageBoxHeights) — pedido explícito de
+  //    Alberto para ESE caso: es el salto de página el que decide el
+  //    tamaño de la caja, no al revés. Se conserva el borde SUPERIOR que
+  //    ya tuviera la caja (por si no empezaba en el borde de la página) —
+  //    solo se mueve el borde inferior. Si la página SÍ tiene
+  //    _tdBoxManualH, o si esto viene de redimensionar con los tiradores
+  //    en el editor general, tamaño/posición se dejan tal cual estuvieran
+  //    — comportamiento de siempre, para no deshacer precisamente el
+  //    cambio que Alberto acaba de hacer a mano ahí.
   for(let i = 0; i < reused; i++){
     const layer = edPages[flowIdxs[i]].layers.find(l => l && l._tdFlowId === flowId);
+    if(deriveBoxFromContent && !layer._tdBoxManualH){
+      const orient = edPages[flowIdxs[i]].orientation || edOrientation;
+      const sv = orient === 'vertical';
+      const pgPh = sv ? ED_PAGE_H : ED_PAGE_W;
+      const oldTopEdge = layer.y - layer.height / 2;
+      const newHeightFrac = boxHeightFracFor(i, pgPh);
+      layer.width = 1;
+      layer.height = newHeightFrac;
+      layer.x = 0.5;
+      layer.y = oldTopEdge + newHeightFrac / 2;
+    }
     layer.richLines = pages[i];
     layer.sourceHTML = html;
     layer.lineHeightMult = la.lineHeightMult;
     layer.marginXFrac = la.marginXFrac;
-    layer.manualBreakChars = la.manualBreakChars;
+    layer.manualBreakChars = effectiveManualBreaks;
     layer.text = _tdPlainSummary(pages[i]);
   }
 
@@ -2662,10 +2726,25 @@ function _tdReflowFlowInPlace(la, panelWasOpen){
       if((p.layers || []).some(l => l && (l._tdFlowId === flowId || l._tdExceptFlow === flowId))) insertAt = i;
     });
     insertAt = insertAt + 1;
-    const extraPages = pages.slice(reused).map(pageLines => ({
-      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, la.manualBreakChars)],
-      drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
-    }));
+    const pgPhNew = svLast ? ED_PAGE_H : ED_PAGE_W;
+    const extraPages = pages.slice(reused).map((pageLines, j) => {
+      const tl = _tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
+      // Página nueva, sin posición previa que conservar. Con
+      // deriveBoxFromContent (Guardar cambios o Exceptuar en esta hoja), se
+      // ancla al borde superior con el alto justo para su contenido; si no
+      // (desbordamiento normal al redimensionar con los tiradores en el
+      // editor general), se deja la página completa por defecto — mismo
+      // criterio que "Aplicar al lienzo" de siempre.
+      if(deriveBoxFromContent){
+        const newHeightFrac = boxHeightFracFor(reused + j, pgPhNew);
+        tl.height = newHeightFrac;
+        tl.y = newHeightFrac / 2;
+      }
+      return {
+        layers: [tl],
+        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
+      };
+    });
     edPages.splice(insertAt, 0, ...extraPages);
   }
 

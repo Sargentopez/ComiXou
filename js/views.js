@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.58</footer>
+    <footer class="app-version">v33.88</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -972,11 +972,7 @@ Router.register('editor', {
           <button class="ed-top-pagebn" id="tdPageNext" title="Página siguiente">&#9654;</button>
         </div>
         <button class="ed-top-action" id="tdApplyBtn" title="Aplicar al lienzo">💾</button>
-        <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
-             para volver a mostrarlo, descomentar la línea siguiente. Mismo
-             patrón que edDiagBtn/gcpSbDiagBtn.
         <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME">🩺</button>
-        -->
         <button id="tdCloseBtn" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">
@@ -994,8 +990,6 @@ Router.register('editor', {
             <div class="ed-menu-sep"></div>
             <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bullet" title="Lista de viñetas">• Lista</button>
             <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="number" title="Lista numerada">1. Lista</button>
-            <div class="ed-menu-sep"></div>
-            <button type="button" class="ed-menu-btn td-fmt-btn" id="tdPageBreakBtn" title="Salto de página">⤓ Salto de página</button>
           </trix-toolbar>
           <div class="ed-menu-sep"></div>
           <div class="ed-menu-item" style="position:relative">

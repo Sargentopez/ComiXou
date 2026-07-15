@@ -2813,43 +2813,52 @@ body.editor-page #appView {
    estándar: al ser .td-page siempre centrada (ver #tdPageArea), left:50%
    cae exactamente en el centro de la pantalla también, y con margin-left
    negativo de medio viewport más width:100vw, escapa por completo del
-   ancho de .td-page. La zona de arrastre es más alta que la línea en sí,
-   para poder cogerla cómodamente con el dedo. */
+   ancho de .td-page. Puramente visual, sin ninguna interacción (pedido
+   explícito de Alberto: quitada toda la manipulación manual de saltos). */
 .td-pagebreak-line {
   position: absolute;
   left: 50%;
   width: 100vw;
   margin-left: -50vw;
-  height: 0;
+  height: 0; /* la altura real la da --gap (ver JS) — 0 = línea simple */
 }
-.td-pagebreak-visual {
+/* Geometría exacta pedida por Alberto — no dos rectas de ancho completo,
+   sino un quiebro en forma de "Z": el tramo vertical va exactamente tras la
+   última palabra de la página anterior (xSplit); de él cuelgan dos rectas
+   en direcciones opuestas —
+     · hacia la DERECHA, colgando de su extremo SUPERIOR (yBefore, la fila
+       de esa última palabra — físicamente más arriba en pantalla).
+     · hacia la IZQUIERDA, colgando de su extremo INFERIOR (yAfter, la fila
+       donde empieza la página siguiente).
+   Motivo de por qué hace falta el quiebro en vez de una única recta: el
+   editor de textos (Trix, motor de fuentes del navegador) y el lienzo
+   (Canvas 2D, measureText) miden el ancho del texto con motores distintos,
+   así que el punto exacto de corte casi nunca cae en el mismo salto de
+   línea visible en los dos sitios. Si aquí SÍ coincide (--gap: 0), las dos
+   rectas quedan a la misma altura y se ve como una única línea con un
+   pequeño quiebro en xSplit, sin caso aparte. */
+.td-pagebreak-visual-top {
   position: absolute;
-  left: 0; right: 0; top: 0;
+  left: var(--split-x, 0px); right: 0; top: 0;
   border-top: 3px dashed var(--blue);
   pointer-events: none;
 }
-.td-pagebreak-handle {
+.td-pagebreak-visual-bottom {
   position: absolute;
-  left: 0; right: 0;
-  top: -14px; height: 28px;
-  pointer-events: auto;
-  cursor: ns-resize;
-  touch-action: none;
+  left: 0; width: var(--split-x, 0px);
+  top: var(--gap, 0px);
+  border-top: 3px dashed var(--blue);
+  pointer-events: none;
 }
-.td-pagebreak-handle:hover .td-pagebreak-visual,
-.td-pagebreak-line.dragging .td-pagebreak-visual {
-  border-top-width: 4px;
-}
-/* Pequeño agarre visual centrado, para que se note que se puede arrastrar */
-.td-pagebreak-handle::after {
-  content: '';
+.td-pagebreak-connector {
   position: absolute;
-  left: 50%; top: 50%;
-  width: 34px; height: 10px;
-  transform: translate(-50%, -50%);
+  left: var(--split-x, 0px);
+  top: 0;
+  width: 3px;
+  height: var(--gap, 0px);
   background: var(--blue);
-  border-radius: 5px;
-  opacity: .85;
+  opacity: .6;
+  pointer-events: none;
 }
 
 .td-editor {

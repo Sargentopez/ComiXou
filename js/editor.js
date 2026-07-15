@@ -12055,6 +12055,14 @@ function edOnEnd(e){
   if(edIsResizing && window._edMoved && edSelectedIdx>=0){
     const _rzLa = edLayers[edSelectedIdx];
     if(_rzLa && _rzLa.richLines && _rzLa.richLines.length && typeof _tdReflowAfterResize==='function'){
+      // Redimensionado a mano con los tiradores: a partir de ahora, este alto
+      // de caja concreto es una decisión deliberada de Alberto (p.ej. dejar
+      // sitio a una imagen debajo) y debe respetarse como límite real de
+      // paginación aunque se reedite el texto desde "Guardar cambios" — ver
+      // _tdReflowFlowInPlace/_tdEditingFlowFrames, que solo ignoran el alto
+      // real de las páginas SIN esta marca (residuo automático de un texto
+      // más corto anterior, no una decisión a propósito).
+      _rzLa._tdBoxManualH = true;
       // Capturar aquí, lo antes posible, si el panel estaba realmente abierto
       // — usando la señal directa del bloqueo del menú (draw-active en
       // editorShell), no la clase "open" del panel: esa puede haber sido
@@ -22409,6 +22417,7 @@ function edSerLayer(l){
     if(l.sourceHTML) _o.sourceHTML=l.sourceHTML;
     if(l._tdFlowId) _o._tdFlowId=l._tdFlowId;
     if(l._tdExceptFlow) _o._tdExceptFlow=l._tdExceptFlow;
+    if(l._tdBoxManualH) _o._tdBoxManualH=true;
     if(l.lineHeightMult) _o.lineHeightMult=l.lineHeightMult;
     if(l.marginXFrac) _o.marginXFrac=l.marginXFrac;
     if(l.manualBreakChars && l.manualBreakChars.length) _o.manualBreakChars=l.manualBreakChars;
@@ -25213,7 +25222,20 @@ function EditorView_init(){
   // Diagnóstico: registrar qué id se carga y cuándo
   window._edLastLoadId = editId;
   window._edLastLoadTs = new Date().toISOString();
-  if(!editId){Router.go('my-comics');return;}
+  if(!editId){
+    // cx_edit_id se CONSUME (se borra, ver más abajo) la primera vez que
+    // arranca el editor — así que si este init se dispara una SEGUNDA vez
+    // de forma espuria (p.ej. un popstate mal filtrado al cerrar el Editor
+    // de textos, con varios saltos de página de por medio — bug reportado
+    // por Alberto: acababa saliendo a "Mis creaciones" sin haberlo pedido),
+    // aquí SIEMPRE estará vacío, aunque ya hubiera un proyecto cargado y
+    // nada hubiera cambiado de verdad. Si edProjectId y edPages muestran
+    // que ya hay una obra en memoria, no es una navegación nueva real —
+    // seguir con lo que ya había en vez de salir del editor.
+    if(edProjectId && edPages && edPages.length) return;
+    Router.go('my-comics');
+    return;
+  }
   sessionStorage.removeItem('cx_edit_id');
 
   // Resetear estado de sesión anterior ANTES de la carga asíncrona.
