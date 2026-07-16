@@ -31263,7 +31263,7 @@ function _gcpUpdateFramesBar() {
   const scrollWrap = document.createElement('div');
   scrollWrap.id = 'gcpFramesScrollWrap';
   scrollWrap.style.cssText = [
-    'display:flex', 'flex-direction:row', 'flex:1',
+    'display:flex', 'flex-direction:row', 'flex:1', 'min-height:0',
     'overflow-x:hidden', 'overflow-y:auto',
     'scrollbar-width:none',
   ].join(';');
@@ -31278,7 +31278,7 @@ function _gcpUpdateFramesBar() {
   // Zona de frames: scroll horizontal compartido para TODAS las capas
   const framesPane = document.createElement('div');
   framesPane.id = 'gcpFramesPane';
-  framesPane.style.cssText = 'flex:1;overflow-x:auto;overflow-y:visible;display:flex;flex-direction:column;scrollbar-width:none;';
+  framesPane.style.cssText = 'flex:1;min-width:0;overflow-x:auto;overflow-y:visible;display:flex;flex-direction:column;scrollbar-width:none;';
   framesPane.addEventListener('scroll', () => {}, { passive: true });
   scrollWrap.appendChild(framesPane);
   // Restaurar posición de scroll horizontal (preserva el foco visual al duplicar/eliminar)

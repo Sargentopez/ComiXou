@@ -2247,6 +2247,9 @@ body.editor-page #appView {
 /* Zona de frames: scroll horizontal para todas las capas */
 #gcpFramesPane {
   flex: 1;
+  min-width: 0; /* sin esto, un flex:1 con contenido no-encogible (cards flex-shrink:0)
+                   nunca se considera desbordado — scrollWidth queda igual a clientWidth
+                   y el thumb custom (#gcpFrHScroll) no aparece nunca */
   overflow-x: auto;
   overflow-y: visible;
   display: flex;
