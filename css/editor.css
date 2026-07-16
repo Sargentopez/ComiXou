@@ -2228,11 +2228,10 @@ body.editor-page #appView {
   flex: 1;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--gray-400) var(--gray-200);
+  scrollbar-width: none; /* Firefox: ocultar nativo — usamos custom (ver #gcpFrVScroll/#gcpFrVSlider) */
   min-height: 0;
 }
-#gcpFramesScrollWrap::-webkit-scrollbar { width: 0; } /* ocultar nativo — usamos custom */
+#gcpFramesScrollWrap::-webkit-scrollbar { width: 0; } /* Chrome/Safari/Edge: ocultar nativo — usamos custom */
 /* Columna izquierda fija */
 #gcpFramesLeftPane {
   flex-shrink: 0;
