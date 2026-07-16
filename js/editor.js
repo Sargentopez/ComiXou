@@ -34249,6 +34249,7 @@ function _edRepairDuplicateIds(dryRun) {
     };
     (p.layers||[]).forEach((l, li) => {
       if (!l || !_mainTypes.includes(l.type) && l.type!=='fill' && l.type!=='pencil' && l.type!=='watercolor') return;
+      let _changed = false;
       for (const f of ['_uid','_drawLayerId','_fillLayerId','_pencilLayerId','_watercolorLayerId']) {
         const _val = l[f];
         if (!_val) continue;
@@ -34256,7 +34257,7 @@ function _edRepairDuplicateIds(dryRun) {
         if (_firstPage !== undefined && _firstPage < pi) {
           const _new = remapUid(_val);
           report.push('P'+pi+'L'+li+' ('+l.type+') '+f+': colisión con página '+_firstPage+' → id nuevo');
-          if (!dryRun) l[f] = _new;
+          if (!dryRun) { l[f] = _new; _changed = true; }
         }
       }
       if (l.groupId) {
@@ -34264,9 +34265,14 @@ function _edRepairDuplicateIds(dryRun) {
         if (_firstPage !== undefined && _firstPage < pi) {
           const _new = remapGid(l.groupId);
           report.push('P'+pi+'L'+li+' ('+l.type+') groupId: colisión con página '+_firstPage+' → grupo nuevo');
-          if (!dryRun) l.groupId = _new;
+          if (!dryRun) { l.groupId = _new; _changed = true; }
         }
       }
+      // Invalidar la caché de snapshot de historial (_edLayersSnapshot) para esta
+      // capa: si no se limpia, el próximo arrastre (que sí consulta la caché vía
+      // movedLayer) reutilizaría el fragmento VIEJO con los IDs ya reparados
+      // revertidos, dejando ese estado corrupto grabado en el historial.
+      if (_changed && l._cachedSnapFragment) delete l._cachedSnapFragment;
     });
   });
   return report;
