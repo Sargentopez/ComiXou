@@ -34213,6 +34213,65 @@ async function _gcpDownloadMp4() {
 }
 
 // ── DIAGNÓSTICO GUARDADO LOCAL Y NUBE ────────────────────────────────────────
+// Repara colisiones de _uid/_drawLayerId/groupId entre páginas (o entre grupos
+// de la misma página) creadas antes del endurecimiento de generación de IDs.
+// dryRun=true solo genera el informe, sin modificar nada. dryRun=false aplica
+// el remapeo. Usa el mismo patrón de remapeo consistente que _pgDuplicate
+// (mismo valor viejo → mismo valor nuevo dentro de una página), pero solo para
+// los valores que colisionan con una página ANTERIOR — los IDs ya únicos no se
+// tocan, para minimizar el impacto.
+function _edRepairDuplicateIds(dryRun) {
+  const _mainTypes = ['stroke','line','shape','text','bubble','image','gif'];
+  const report = [];
+  const _seenUid = new Map(); // _uid/_drawLayerId (mismo espacio: una subcapa
+                               // referencia el _uid de su stroke vía _drawLayerId)
+  const _seenGid = new Map(); // groupId, espacio aparte
+
+  edPages.forEach((p, pi) => {
+    (p.layers||[]).forEach(l => {
+      if (!l) return;
+      if (l._uid && !_seenUid.has(l._uid)) _seenUid.set(l._uid, pi);
+      if (l._drawLayerId && !_seenUid.has(l._drawLayerId)) _seenUid.set(l._drawLayerId, pi);
+      if (l.groupId && !_seenGid.has(l.groupId)) _seenGid.set(l.groupId, pi);
+    });
+  });
+
+  edPages.forEach((p, pi) => {
+    const _idMap = new Map();
+    const _gidMap = new Map();
+    const remapUid = (oldId) => {
+      if (!_idMap.has(oldId)) _idMap.set(oldId, _edGenUid());
+      return _idMap.get(oldId);
+    };
+    const remapGid = (oldGid) => {
+      if (!_gidMap.has(oldGid)) _gidMap.set(oldGid, _edGenUid('g'));
+      return _gidMap.get(oldGid);
+    };
+    (p.layers||[]).forEach((l, li) => {
+      if (!l || !_mainTypes.includes(l.type) && l.type!=='fill' && l.type!=='pencil' && l.type!=='watercolor') return;
+      for (const f of ['_uid','_drawLayerId','_fillLayerId','_pencilLayerId','_watercolorLayerId']) {
+        const _val = l[f];
+        if (!_val) continue;
+        const _firstPage = _seenUid.get(_val);
+        if (_firstPage !== undefined && _firstPage < pi) {
+          const _new = remapUid(_val);
+          report.push('P'+pi+'L'+li+' ('+l.type+') '+f+': colisión con página '+_firstPage+' → id nuevo');
+          if (!dryRun) l[f] = _new;
+        }
+      }
+      if (l.groupId) {
+        const _firstPage = _seenGid.get(l.groupId);
+        if (_firstPage !== undefined && _firstPage < pi) {
+          const _new = remapGid(l.groupId);
+          report.push('P'+pi+'L'+li+' ('+l.type+') groupId: colisión con página '+_firstPage+' → grupo nuevo');
+          if (!dryRun) l.groupId = _new;
+        }
+      }
+    });
+  });
+  return report;
+}
+
 async function _edRunDiag() {
   const lines = [];
   const L = s => lines.push(s);
@@ -34737,10 +34796,24 @@ async function _edRunDiag() {
     const cp = document.createElement('button');
     cp.textContent='📋 Copiar'; cp.style.cssText='padding:2px 8px;cursor:pointer;margin-right:4px;';
     cp.onclick=()=>{const ta=document.getElementById('_edDiagTa');ta.select();document.execCommand('copy');cp.textContent='✓';};
+    const rp = document.createElement('button');
+    rp.textContent='🔧 Reparar IDs'; rp.style.cssText='padding:2px 8px;cursor:pointer;margin-right:4px;';
+    rp.onclick=()=>{
+      const _preview = _edRepairDuplicateIds(true);
+      if (!_preview.length) { edToast('Sin colisiones de ID que reparar ✓'); return; }
+      edConfirm('Se han detectado ' + _preview.length + ' campos con ID duplicado entre páginas/grupos. ¿Reparar asignándoles IDs nuevos? (con historial para deshacer)', () => {
+        edPushHistory();
+        const _applied = _edRepairDuplicateIds(false);
+        edPushHistory();
+        edRedraw();
+        edToast('Reparados ' + _applied.length + ' campos ✓');
+        _edRunDiag();
+      }, 'Reparar');
+    };
     const cl = document.createElement('button');
     cl.textContent='✕'; cl.style.cssText='padding:2px 8px;cursor:pointer;';
     cl.onclick=()=>p.remove();
-    btns.append(cp,cl); hdr.appendChild(btns); p.appendChild(hdr);
+    btns.append(cp,rp,cl); hdr.appendChild(btns); p.appendChild(hdr);
     const ta = document.createElement('textarea');
     ta.id='_edDiagTa';
     ta.style.cssText='flex:1;width:100%;background:#111;color:#0f0;border:none;font:11px monospace;padding:4px;box-sizing:border-box;resize:none;';
