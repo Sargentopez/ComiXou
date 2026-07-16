@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.98</footer>
+    <footer class="app-version">v33.100</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -301,10 +301,13 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico reactivado a petición de Alberto para investigar
-             el bug de duplicado/borrado de grupos. Para volver a ocultarlo, comentar
-             la línea siguiente (mismo patrón que se usó antes). -->
+        <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
+             para volver a mostrarlo, descomentar la línea siguiente. La función
+             de reparación (_edRepairDuplicateIds, botón 🔧 Reparar IDs dentro de
+             este panel) sigue activa en el código aunque el botón esté oculto —
+             ver CARTA_SIGUIENTE_INSTANCIA para el motivo.
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        -->
         <button class="ed-top-action" id="edSaveBtn" title="Guardar local">💾</button>
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
