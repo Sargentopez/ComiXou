@@ -17605,6 +17605,12 @@ function edRenderOptionsPanel(mode){
         }
       });
       const _grpAllLocked = _grpLockIdxs0.every(i => edLayers[i]?.locked) && _grpLockSubIdxs0.every(i => edLayers[i]?.locked);
+      // Opacidad inicial mostrada en el slider: media de las capas principales
+      // (los miembros pueden tener opacidades distintas; al mover el slider se
+      // igualan todas, igual que ya hace el slider de un objeto individual con
+      // sus sub-capas vinculadas).
+      const _grpOpacities = _grpLockIdxs0.map(i => edLayers[i]?.opacity ?? 1);
+      const _grpAvgOpacity = _grpOpacities.length ? _grpOpacities.reduce((a,b)=>a+b,0)/_grpOpacities.length : 1;
       panel.innerHTML=`
         <div class="op-row" style="margin-top:4px;justify-content:space-between;gap:4px">
 
@@ -17615,9 +17621,68 @@ function edRenderOptionsPanel(mode){
           <button class="op-btn" id="pp-grp-lock" title="${_grpAllLocked?'Desbloquear grupo':'Bloquear grupo'}" style="flex-shrink:0;background:var(--gray-100);opacity:${_grpAllLocked?'1':'0.4'};border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.82rem;cursor:pointer">🔒</button>
           <button class="op-btn" id="pp-grp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>
           <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
+        </div>
+        <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
+          <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-grp-rot" value="0" min="-360" max="360"> °
+        </div>
+        <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+          <span id="pp-grp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round(_grpAvgOpacity*100)}%</span>
+          <input type="range" id="pp-grp-opacity" min="0" max="100" value="${Math.round(_grpAvgOpacity*100)}" style="flex:1;accent-color:var(--black)">
         </div>`;
       panel.classList.add('open');
       edFitCanvas(); // actualizar _edCanvasTop
+      // Rotación controlada de todo el grupo: gira cada miembro (+ sus sub-capas
+      // vinculadas) alrededor del centroide del grupo, sumando el delta a la
+      // rotación propia de cada uno — mismo criterio matemático que el handle de
+      // rotación por arrastre en multiselección (ver edMultiRotating más arriba
+      // en el archivo), para que ambos caminos den resultados coherentes.
+      let _grpRotPrev = 0;
+      const _grpRotAllIdxs = () => {
+        const _main = _edGroupMemberIdxs(gid);
+        const _subSet = new Set();
+        _main.forEach(mi => {
+          const _uid = edLayers[mi]?._uid || edLayers[mi]?._fillLayerId;
+          if(_uid){
+            edLayers.forEach((sl, si) => {
+              if((sl.type==='fill'||sl.type==='pencil'||sl.type==='watercolor') && sl._drawLayerId===_uid)
+                _subSet.add(si);
+            });
+          }
+        });
+        return { main: _main, all: [...new Set([..._main, ..._subSet])] };
+      };
+      $('pp-grp-rot')?.addEventListener('input', (ev) => {
+        const _newRot = parseFloat(ev.target.value) || 0;
+        const _delta = _newRot - _grpRotPrev;
+        if(!_delta) return;
+        _grpRotPrev = _newRot;
+        const { main, all } = _grpRotAllIdxs();
+        let _px=0, _py=0, _n=0;
+        main.forEach(i => { const l=edLayers[i]; if(!l || l.type==='draw') return; _px+=l.x; _py+=l.y; _n++; });
+        if(!_n) return;
+        const cx=_px/_n, cy=_py/_n;
+        const pw=edPageW(), ph=edPageH();
+        const rad=_delta*Math.PI/180, cos=Math.cos(rad), sin=Math.sin(rad);
+        all.forEach(i => {
+          const l=edLayers[i]; if(!l || l.type==='draw') return;
+          const dx_px=(l.x-cx)*pw, dy_px=(l.y-cy)*ph;
+          l.x = cx + (dx_px*cos - dy_px*sin)/pw;
+          l.y = cy + (dx_px*sin + dy_px*cos)/ph;
+          l.rotation = (l.rotation||0) + _delta;
+          _edSyncFill(l, true);
+        });
+        edRedraw();
+      });
+      $('pp-grp-rot')?.addEventListener('change', () => { edPushHistory(); });
+      // Opacidad de todo el grupo: iguala capas principales y sub-capas vinculadas
+      $('pp-grp-opacity')?.addEventListener('input', (ev) => {
+        const _newOp = ev.target.value/100;
+        const { all } = _grpRotAllIdxs();
+        all.forEach(i => { const l=edLayers[i]; if(l) l.opacity=_newOp; });
+        const _ov=$('pp-grp-opacity-val'); if(_ov) _ov.textContent=ev.target.value+'%';
+        edRedraw();
+      });
+      $('pp-grp-opacity')?.addEventListener('change', () => { edPushHistory(); });
       // Eliminar todo el grupo
       $('pp-grp-del')?.addEventListener('click',()=>{
         edConfirm('¿Eliminar el grupo completo?', ()=>{
