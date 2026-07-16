@@ -31316,8 +31316,11 @@ function _gcpUpdateFramesBar() {
       hThumb.style.left  = (frac * (trackW - thumbW)) + 'px';
     };
     framesPane.addEventListener('scroll', _syncHThumb, { passive: true });
-    // Actualizar al renderizar — llamada diferida
-    setTimeout(_syncHThumb, 50);
+    // ResizeObserver en vez de setTimeout con retardo fijo: se dispara en cuanto
+    // el layout real está listo (primera visualización, nº de frames cambiado,
+    // redimensión de ventana...) sin depender de adivinar un tiempo — por eso
+    // antes la barra quedaba invisible hasta que un scroll forzaba el recálculo.
+    new ResizeObserver(_syncHThumb).observe(framesPane);
 
     // Drag del thumb horizontal
     let _hDragX = 0, _hDragScroll = 0, _hDragging = false;
@@ -31380,7 +31383,7 @@ function _gcpUpdateFramesBar() {
       vThumb.style.top    = (frac * (trackH - thumbH)) + 'px';
     };
     scrollWrap.addEventListener('scroll', _syncVThumb, { passive: true });
-    setTimeout(_syncVThumb, 80);
+    new ResizeObserver(_syncVThumb).observe(scrollWrap);
 
     let _vDragY = 0, _vDragScroll = 0, _vDragging = false;
     vThumb.addEventListener('pointerdown', e => {
@@ -31442,7 +31445,7 @@ function _gcpUpdateFramesBar() {
       vSliderThumb.style.transform = 'translateY(' + (frac * (trackH - thumbH)) + 'px)';
     };
     scrollWrap.addEventListener('scroll', _syncVSlider, { passive: true });
-    setTimeout(_syncVSlider, 50);
+    new ResizeObserver(_syncVSlider).observe(scrollWrap);
 
     let _vsY0 = 0, _vsScroll0 = 0;
     vSliderThumb.addEventListener('pointerdown', e => {
