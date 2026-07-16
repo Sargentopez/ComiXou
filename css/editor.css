@@ -2273,6 +2273,17 @@ body.editor-page #appView {
 /* Slider V táctil */
 #gcpFrVSlider { touch-action: none; }
 
+/* Biblioteca — scroll horizontal de cada carpeta (mismo criterio que la
+   Matriz: nada de var(--gray-200)/--gray-400, que no existen en el proyecto.
+   Aquí no se construye un thumb custom por carpeta — con muchas carpetas
+   sería una barra por cada una — en su lugar se estiliza el scrollbar
+   nativo (visible y con los mismos colores) usando scrollbar-color inline
+   para Firefox y esta regla para Chrome/Safari/Edge. */
+._bib-items-scroll::-webkit-scrollbar { height: 10px; }
+._bib-items-scroll::-webkit-scrollbar-track { background: var(--gray-300); border-radius: 5px; }
+._bib-items-scroll::-webkit-scrollbar-thumb { background: var(--gray-700); border-radius: 5px; }
+._bib-items-scroll::-webkit-scrollbar-thumb:hover { background: var(--black); }
+
 /* Cada fila de layer — altura fija para que las cards no se solapen.
    La card mide: header(24) + thumb(72) + actions(26) + padding(8) + gaps = 136px */
 /* gcp-layer-scroll: fila de frames de una capa en el scroll compartido */

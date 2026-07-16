@@ -7350,13 +7350,16 @@ function _edScrollbarsDraw(){
   // Barras de navegación — solo si hay ratón/stylus conectado
   if(!window._edHasMousePointer){ _edHideHTMLScrollbars(); return; }
   if(!edCanvas) return;
-  // Si la Matriz del editor de animaciones (gcpFramesBar) está abierta, ocultar
-  // las barras generales de paneo del canvas: comparten la misma franja derecha
-  // que el scroll propio de la Matriz (gcpFrVScroll/gcpFrVSlider) y se veían
-  // como "2 barras verticales" superpuestas. Se restauran solas al cerrar la
-  // Matriz (siguiente llamada a _edScrollbarsDraw ya no entra en este return).
+  // Si la Matriz del editor de animaciones (gcpFramesBar) o el panel de
+  // Biblioteca están abiertos, ocultar las barras generales de paneo del
+  // canvas: comparten la misma franja derecha/inferior que el scroll propio
+  // de esos paneles y se veían como "2 barras" superpuestas. Se restauran
+  // solas al cerrarlos (siguiente llamada a _edScrollbarsDraw ya no entra
+  // en este return).
   const _gcpBar = document.getElementById('gcpFramesBar');
-  if (_gcpBar && _gcpBar.style.display === 'flex') { _edHideHTMLScrollbars(); return; }
+  const _bibPanel = document.getElementById('edOptionsPanel');
+  const _bibOpen = _bibPanel && _bibPanel.classList.contains('open') && _bibPanel.dataset.mode === 'biblioteca';
+  if ((_gcpBar && _gcpBar.style.display === 'flex') || _bibOpen) { _edHideHTMLScrollbars(); return; }
   const W = edCanvas.width, H = edCanvas.height;
 
   const hBar   = document.getElementById('ed-hscroll');
@@ -26933,6 +26936,7 @@ function EditorView_init(){
       if (_bib && _bib.classList.contains('open') && !_insideBib) {
         _bib.classList.remove('open'); _bib.innerHTML = ''; delete _bib.dataset.mode;
         window._gcpUiClosedAt = Date.now();
+        if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
       }
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
       const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], #gcp-rule-pop, #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
@@ -28164,6 +28168,7 @@ function edBibAbrir() {
   // La biblioteca ya está cargada en _bibCache desde edLoadProject (await _bibInitIdb).
   // El botón solo abre el panel y renderiza lo que ya está en memoria.
   _bibRenderPanel(panel);
+  if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
 }
 
 function _bibClose(panel) {
@@ -28176,6 +28181,7 @@ function _bibClose(panel) {
   panel.innerHTML = '';
   delete panel.dataset.mode;
   requestAnimationFrame(edFitCanvas);
+  if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
 }
 
 // Convertir dataUrl a Blob (sin fetch — funciona en Android)
@@ -28223,7 +28229,7 @@ function _bibRenderPanel(panel) {
       html += `<div class="_bib-drop-zone _bib-empty-drop" data-drop-fi="${fi}"
                     style="padding:10px 10px;font-size:.75rem;color:var(--gray-400);font-style:italic;min-height:32px;transition:background .15s">Vacía — arrastra aquí</div>`;
     } else {
-      html += `<div style="padding:6px 6px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;touch-action:pan-x">
+      html += `<div class="_bib-items-scroll" style="padding:6px 6px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--gray-700) var(--gray-300);touch-action:pan-x">
       <div class="_bib-items-row" style="display:flex;flex-direction:row;gap:7px;flex-wrap:nowrap;min-width:min-content">`;
       folder.items.forEach((it, ii) => {
         html += `
@@ -29739,10 +29745,10 @@ function _gcpAutoSaveFrame() {
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi) la._frames.push(null);
+    if (la._gcpVisible === false) { la._frames[fi] = null; return; }
     la._frames[fi] = {
       x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1,
-      visible: la._gcpVisible !== false
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1
     };
   });
   // Recalcular interpolaciones adyacentes si existen (preservando _blur)
@@ -30184,7 +30190,8 @@ function _gcpSaveCurrentToFrame() {
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
     if (!la._frames || fi < 0 || fi >= la._frames.length) return;
-    la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:la._frames[fi]?.visible!==false};
+    if (la._gcpVisible === false) { la._frames[fi] = null; return; }
+    la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
   });
 }
 
@@ -30202,11 +30209,11 @@ function _gcpGetTotalFrames() {
 function _gcpIsKeyFrame(fi) {
   if (!window._gcpLayers || !window._gcpLayers.length) return true;
   for (const la of window._gcpLayers) {
-    if (la._frames && fi < la._frames.length) {
-      return !la._frames[fi]?._interp;
+    if (la._frames && fi < la._frames.length && la._frames[fi]) {
+      return !la._frames[fi]._interp;
     }
   }
-  return true;
+  return true; // ninguna capa tiene datos en fi (columna totalmente vacía) — no debería ocurrir tras el trim
 }
 
 // Fotograma clave anterior más cercano a fi (incluyendo fi mismo si ya es clave).
@@ -30264,8 +30271,8 @@ function _gcpInitLayerFrames(la, startFi) {
   // Sin frames existentes (primer objeto): solo el frame de inserción
   if (total === 0 || !window._gcpLayers.length) {
     la._frames = [];
-    for (let i = 0; i < startFi; i++) la._frames.push({..._snap, visible:false});
-    la._frames.push({..._snap, visible:true});
+    for (let i = 0; i < startFi; i++) la._frames.push(null);
+    la._frames.push({..._snap});
     return;
   }
 
@@ -30291,14 +30298,14 @@ function _gcpInitLayerFrames(la, startFi) {
   // Si la referencia no tiene estructura útil, rellenar con frames clave simples
   if (_keyPositions.length === 0) {
     la._frames = [];
-    for (let i = 0; i < total; i++) la._frames.push({..._snap, visible: i >= startFi});
+    for (let i = 0; i < total; i++) la._frames.push(i >= startFi ? {..._snap} : null);
     return;
   }
 
   // Paso 1: construir solo los frames clave (sin interpolados todavía)
   la._frames = [];
   _keyPositions.forEach(pos => {
-    la._frames.push({..._snap, visible: pos >= startFi});
+    la._frames.push(pos >= startFi ? {..._snap} : null);
   });
 
   // Paso 2: insertar bloques de frames interpolados entre cada par de claves
@@ -30323,22 +30330,10 @@ function _gcpSaveFrame() {
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
-    // Respetar visibilidad: si el objeto no existe en este frame, no forzar visible
-    const _wasVisible = la._gcpVisible !== false
-      && !(la._frames[fi] && la._frames[fi].visible === false);
-    const snap = {x:la.x,y:la.y,width:la.width,height:la.height,
-                  rotation:la.rotation||0,opacity:la.opacity??1,visible:_wasVisible};
-    if (fi < la._frames.length) {
-      la._frames[fi] = snap;
-    } else {
-      // Rellenar huecos con invisible hasta fi-1, luego visible en fi
-      while (la._frames.length < fi) {
-        la._frames.push(la._frames.length
-          ? {...la._frames[la._frames.length-1], visible:false}
-          : {...snap, visible:false});
-      }
-      la._frames.push(snap);
-    }
+    while (la._frames.length <= fi) la._frames.push(null);
+    if (la._gcpVisible === false) { la._frames[fi] = null; return; }
+    la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,
+                  rotation:la.rotation||0,opacity:la.opacity??1};
   });
   _gcpInvalidateAllThumbs();
   _gcpUpdateFrameNav();
@@ -30353,7 +30348,7 @@ function _gcpSaveFrame() {
 
 // _gcpCaptureFrame: botón +. Copia exacta del frame activo como nuevo frame
 // insertado justo después, avanza a él.
-// Si algún layer no tiene frame en fi, lo crea primero.
+// Si algún layer no existe en fi, el nuevo frame tampoco existe (se propaga null).
 function _gcpCaptureFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
   // Al añadir un nuevo frame, borrar la interpolación circular automática
@@ -30361,23 +30356,12 @@ function _gcpCaptureFrame() {
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
-    const snap = {x:la.x,y:la.y,width:la.width,height:la.height,
-                  rotation:la.rotation||0,opacity:la.opacity??1,visible:true};
-    // Asegurar que fi existe en este layer
-    if (fi >= la._frames.length) {
-      while (la._frames.length < fi) {
-        la._frames.push(la._frames.length
-          ? {...la._frames[la._frames.length-1], visible:false}
-          : {...snap, visible:false});
-      }
-      la._frames.push(snap);
-    }
+    while (la._frames.length <= fi) la._frames.push(null);
     // Insertar copia del frame fi justo después.
-    // Si el objeto no existía en fi (visible:false), el nuevo frame también es invisible.
+    // Si el objeto no existía en fi (null), el nuevo frame tampoco existe.
     const _srcFrame = la._frames[fi];
-    const _newFrame = (_srcFrame && _srcFrame.visible === false)
-      ? {..._srcFrame, visible: false}
-      : {..._srcFrame};
+    const _newFrame = _srcFrame ? {..._srcFrame} : null;
+    if (_newFrame) delete _newFrame._interp;
     la._frames.splice(fi + 1, 0, _newFrame);
   });
   const newFi = fi + 1;
@@ -30400,6 +30384,7 @@ function _gcpCaptureFrame() {
 
 // Lerp lineal entre dos frames para una capa
 function _gcpLerpFrame(a, b, t) {
+  if (!a || !b) return null; // uno de los extremos no existe: no hay nada que interpolar
   const r = v => Math.round(v * 100) / 100;
   return {
     x:        r(a.x        + (b.x        - a.x)        * t),
@@ -30408,7 +30393,6 @@ function _gcpLerpFrame(a, b, t) {
     height:   r(a.height   + (b.height   - a.height)   * t),
     rotation: r(a.rotation + (b.rotation - a.rotation) * t),
     opacity:  Math.round((a.opacity + (b.opacity - a.opacity) * t) * 1000) / 1000,
-    visible:  a.visible !== false && b.visible !== false,
     _interp:  true,
   };
 }
@@ -30424,20 +30408,25 @@ function _gcpCountInterpBetween(la, fi) {
 
 // Genera n frames interpolados entre la._frames[fi] y la._frames[fi+n+1]
 // para UNA sola capa. Reemplaza los _interp existentes en ese hueco.
+// Si alguno de los dos extremos no existe (null), no hay nada que interpolar:
+// se insertan n huecos (null) en vez de posiciones calculadas.
 // withBlur: si true, los frames generados heredan el flag _blur del bloque anterior.
 function _gcpInterpolateSingleLayer(la, fi, n, withBlur) {
   if (!la._frames || n < 1) return;
   const a = la._frames[fi];
   // El frame clave derecho está en fi+1 (ya se eliminaron los interp previos)
   const bIdx = fi + 1;
-  if (!a || bIdx >= la._frames.length) return;
+  if (bIdx >= la._frames.length) return;
   const b = la._frames[bIdx];
-  if (!b) return;
   const newFrames = [];
-  for (let k = 1; k <= n; k++) {
-    const f = _gcpLerpFrame(a, b, k / (n + 1));
-    if (withBlur) f._blur = true;
-    newFrames.push(f);
+  if (!a || !b) {
+    for (let k = 0; k < n; k++) newFrames.push(null);
+  } else {
+    for (let k = 1; k <= n; k++) {
+      const f = _gcpLerpFrame(a, b, k / (n + 1));
+      if (withBlur) f._blur = true;
+      newFrames.push(f);
+    }
   }
   // Insertar sin reemplazar (bIdx sigue en su sitio)
   la._frames.splice(fi + 1, 0, ...newFrames);
@@ -30484,8 +30473,7 @@ function _gcpReinterpolateAround(fi) {
   _gcpUpdateFramesBar();
 }
 
-// ── Modal de interpolación ────────────────────────────────────────────────────
-// Elimina columnas finales donde TODOS los frames de todas las capas son invisibles.
+// Elimina columnas finales donde TODOS los objetos de todas las capas no existen.
 function _gcpTrimTrailingInvisible() {
   if (!window._gcpLayers || !window._gcpLayers.length) return;
   let changed = true;
@@ -30496,7 +30484,7 @@ function _gcpTrimTrailingInvisible() {
     const lastFi = total - 1;
     const allInvis = window._gcpLayers.every(la => {
       if (!la._frames || lastFi >= la._frames.length) return true;
-      return la._frames[lastFi].visible === false;
+      return !la._frames[lastFi];
     });
     if (allInvis) {
       window._gcpLayers.forEach(la => {
@@ -30510,7 +30498,7 @@ function _gcpTrimTrailingInvisible() {
     window._gcpGlobalFrameIdx = newTotal - 1;
 }
 
-// Elimina columnas INICIALES donde TODOS los frames de todas las capas son invisibles.
+// Elimina columnas INICIALES donde TODOS los objetos de todas las capas no existen.
 function _gcpTrimLeadingInvisible() {
   if (!window._gcpLayers || !window._gcpLayers.length) return;
   let changed = true;
@@ -30520,7 +30508,7 @@ function _gcpTrimLeadingInvisible() {
     if (total === 0) break;
     const allInvis = window._gcpLayers.every(la => {
       if (!la._frames || la._frames.length === 0) return true;
-      return la._frames[0].visible === false;
+      return !la._frames[0];
     });
     if (allInvis) {
       window._gcpLayers.forEach(la => {
@@ -30537,31 +30525,17 @@ function _gcpTrimLeadingInvisible() {
     window._gcpGlobalFrameIdx = newTotal - 1;
 }
 
-// Elimina interpolados adyacentes a fi en todas las capas.
-// Se llama cuando un frame clave queda invisible (ya no puede ser extremo de interpolación).
-// Oculta o muestra los frames interpolados adyacentes a fi en todas las capas.
-// Al ocultar un frame clave, sus interpolados vecinos se ocultan también (visible:false).
-// Al volver a mostrar el frame clave, sus interpolados vecinos se muestran también.
+// Elimina (pone a null) los interpolados adyacentes a fi en todas las capas.
+// Se llama cuando un frame clave deja de existir (ya no puede ser extremo de interpolación):
+// al desaparecer un extremo, los interpolados de ese tramo dejan de tener sentido.
 function _gcpPurgeInterpAround(fi, layerTarget) {
-  _gcpSetInterpVisibilityAround(fi, false, layerTarget);
-}
-function _gcpSetInterpVisibilityAround(fi, visible, layerTarget) {
-  // Si se pasa layerTarget, operar solo sobre esa capa; si no, sobre todas (compatibilidad)
   const layers = layerTarget ? [layerTarget] : (window._gcpLayers || []);
   layers.forEach(la => {
     if (!la._frames) return;
-    // Interpolados DESPUÉS de fi
     let i = fi + 1;
-    while (i < la._frames.length && la._frames[i]?._interp) {
-      la._frames[i] = {...la._frames[i], visible};
-      i++;
-    }
-    // Interpolados ANTES de fi
+    while (i < la._frames.length && la._frames[i]?._interp) { la._frames[i] = null; i++; }
     let j = fi - 1;
-    while (j >= 0 && la._frames[j]?._interp) {
-      la._frames[j] = {...la._frames[j], visible};
-      j--;
-    }
+    while (j >= 0 && la._frames[j]?._interp) { la._frames[j] = null; j--; }
   });
 }
 
@@ -30742,7 +30716,8 @@ function _gcpShowInterpModal(fi, layerIdx) {
 
 // Ejecutar interpolación global: inserta n columnas interpoladas entre la columna fi y fi+1.
 // Afecta a TODAS las capas — la matriz pasa de (L capas × T cols) a (L capas × T+n cols).
-// Si una capa no tiene frame en fi o fi+1, se usa el último frame disponible (o invisible).
+// Si una capa no existe en fi o fi+1 (null), no hay nada que interpolar en ese tramo:
+// se insertan huecos (null) para esa capa en las columnas nuevas.
 function _gcpDoInterpolate(fi, n) {
   if (!window._gcpLayers.length || n < 1) return;
 
@@ -30757,23 +30732,23 @@ function _gcpDoInterpolate(fi, n) {
     if (existing > 0) la._frames.splice(fi + 1, existing);
   });
 
-  // Ahora insertar n frames interpolados en todas las capas en la columna fi+1
-  const _inv = la => ({
-    x: la.x, y: la.y, width: la.width, height: la.height,
-    rotation: la.rotation || 0, opacity: la.opacity ?? 1, visible: false
-  });
-
+  // Ahora insertar n frames interpolados en todas las capas en la columna fi+1.
+  // Si alguno de los dos extremos no existe (null), no hay nada que interpolar:
+  // se insertan huecos (null), igual que en _gcpInterpolateSingleLayer.
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
-    // Frame izquierdo (columna fi): si no existe, usar estado actual del layer
-    const a = la._frames[fi] ?? _inv(la);
-    // Frame derecho (columna fi+1 tras el splice): si no existe, clonar a (sin cambio)
-    const b = la._frames[fi + 1] ?? {...a};
+    while (la._frames.length <= fi + 1) la._frames.push(null);
+    const a = la._frames[fi];
+    const b = la._frames[fi + 1];
     const newFrames = [];
-    for (let k = 1; k <= n; k++) {
-      const f = _gcpLerpFrame(a, b, k / (n + 1));
-      if (_gcpDoInterpolate._blur) f._blur = true;
-      newFrames.push(f);
+    if (!a || !b) {
+      for (let k = 0; k < n; k++) newFrames.push(null);
+    } else {
+      for (let k = 1; k <= n; k++) {
+        const f = _gcpLerpFrame(a, b, k / (n + 1));
+        if (_gcpDoInterpolate._blur) f._blur = true;
+        newFrames.push(f);
+      }
     }
     la._frames.splice(fi + 1, 0, ...newFrames);
   });
@@ -30836,13 +30811,14 @@ function _gcpApplyFrame(fi) {
       la._gcpVisible = true; return;
     }
     if (fi >= la._frames.length) {
-      // Columna más allá de los frames de esta capa → invisible
+      // Columna más allá de los frames de esta capa → no existe
       la._gcpVisible = false; return;
     }
-    const s = la._frames[fi]; if (!s) return;
+    const s = la._frames[fi];
+    if (!s) { la._gcpVisible = false; return; } // no existe en este frame
     la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
     la.rotation=s.rotation; la.opacity=s.opacity??1;
-    la._gcpVisible = (s.visible !== false);
+    la._gcpVisible = true;
   });
 }
 
@@ -30881,9 +30857,14 @@ function _gcpInvalidateThumb(la, fi) {
 }
 function _gcpInvalidateAllThumbs() { _gcpThumbCache.clear(); }
 
-// Miniatura de UN layer en frame fi (60x60).
-// ignoreVisibility=true: renderiza el contenido aunque visible===false (para mostrar miniatura semitransparente).
-function _gcpLayerFrameThumb(la, fi, S, ignoreVisibility) {
+// Miniatura de UN objeto en frame fi. Si el objeto no existe en ese frame (null),
+// la celda es gratis: no se renderiza nada ni se cachea (el llamador ni debería invocar
+// esta función en ese caso — ver hasFrame en _gcpUpdateFramesBar).
+// Rendimiento: el canvas de trabajo se ciña al propio tamaño del objeto (más un margen
+// de seguridad para rotación/desbordes de trazo) en vez de a toda la página + medio
+// lienzo extra — con objetos pequeños esto reduce el área a escanear en 1-2 órdenes
+// de magnitud, que es lo que bloqueaba la matriz con muchos objetos/frames.
+function _gcpLayerFrameThumb(la, fi, S) {
   S = S || 72;
   // Consultar cache antes de renderizar
   const cacheKey = _gcpThumbCacheKey(la, fi) + '-' + S;
@@ -30891,16 +30872,8 @@ function _gcpLayerFrameThumb(la, fi, S, ignoreVisibility) {
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
   tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
-  if (!la._frames || fi >= la._frames.length) return tc;
+  if (!la._frames || fi >= la._frames.length || !la._frames[fi]) return tc; // no existe: no cachear
   const snap = la._frames[fi];
-  if (!snap || (snap.visible === false && !ignoreVisibility)) {
-    tctx.fillStyle='#1e293b'; tctx.fillRect(0,0,S,S);
-    tctx.fillStyle='rgba(239,68,68,0.6)'; tctx.fillRect(0,0,S,S);
-    tctx.fillStyle='#fff'; tctx.font='bold '+(S*0.4)+'px sans-serif';
-    tctx.textAlign='center'; tctx.textBaseline='middle';
-    tctx.fillText('✖', S/2, S/2);
-    return tc;
-  }
   const savedPos = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
   const _savedSel = window._gcpSelIdx;
   window._gcpSelIdx = -1;
@@ -30908,8 +30881,14 @@ function _gcpLayerFrameThumb(la, fi, S, ignoreVisibility) {
   la.rotation=snap.rotation; la.opacity=snap.opacity??1;
   _gcpWithEditorContext(() => {
     const pw=edPageW(),ph=edPageH(),mx=edMarginX(),my=edMarginY();
-    const extra=Math.round(Math.max(pw,ph)*0.5);
-    const wsW=pw+mx*2+extra*2, wsH=ph+my*2+extra*2, offX=extra, offY=extra;
+    // Región de trabajo ceñida al propio objeto: mitad de la diagonal (cota válida para
+    // cualquier rotación, por Cauchy-Schwarz) + colchón de seguridad para desbordes de trazo.
+    const halfW = Math.abs(la.width * pw) / 2, halfH = Math.abs(la.height * ph) / 2;
+    const diagHalf = Math.hypot(halfW, halfH);
+    const objR = diagHalf + Math.max(diagHalf * 0.4, 24);
+    const cx = mx + la.x * pw, cy = my + la.y * ph;
+    const wsW = Math.max(4, Math.round(objR * 2)), wsH = wsW;
+    const offX = wsW/2 - cx, offY = wsH/2 - cy;
     const off=document.createElement('canvas'); off.width=wsW; off.height=wsH;
     const octx=off.getContext('2d');
     octx.setTransform(1,0,0,1,offX,offY);
@@ -30921,7 +30900,7 @@ function _gcpLayerFrameThumb(la, fi, S, ignoreVisibility) {
     const idata=octx.getImageData(0,0,wsW,wsH).data;
     let x0=wsW,y0=wsH,x1=0,y1=0;
     for(let y=0;y<wsH;y++)for(let x=0;x<wsW;x++){if(idata[(y*wsW+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}}
-    if(x1<=x0||y1<=y0){x0=mx+offX;y0=my+offY;x1=x0+pw-1;y1=y0+ph-1;}
+    if(x1<=x0||y1<=y0){x0=0;y0=0;x1=wsW-1;y1=wsH-1;}
     const pad=6;x0=Math.max(0,x0-pad);y0=Math.max(0,y0-pad);x1=Math.min(wsW-1,x1+pad);y1=Math.min(wsH-1,y1+pad);
     const cw=x1-x0+1,ch=y1-y0+1;const scale=Math.min(S/cw,S/ch);const dw=cw*scale,dh=ch*scale;
     tctx.fillStyle='#fff';tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
@@ -30931,6 +30910,31 @@ function _gcpLayerFrameThumb(la, fi, S, ignoreVisibility) {
   window._gcpSelIdx=_savedSel;
   _gcpThumbCache.set(cacheKey, tc);
   return tc;
+}
+
+// IntersectionObserver compartido para cargar miniaturas solo cuando la celda
+// entra en el viewport de la matriz — evita calcular las de fuera de pantalla.
+// Se recrea en cada _gcpUpdateFramesBar() porque el contenedor raíz se reconstruye.
+let _gcpThumbIO = null;
+function _gcpQueueThumbRender(holder, la, fi, S) {
+  holder._gcpLa = la; holder._gcpFi = fi; holder._gcpS = S;
+  if (_gcpThumbIO) _gcpThumbIO.observe(holder);
+}
+function _gcpRenderQueuedThumb(holder) {
+  const c = _gcpLayerFrameThumb(holder._gcpLa, holder._gcpFi, holder._gcpS);
+  c.style.cssText = 'width:' + holder._gcpS + 'px;height:' + holder._gcpS + 'px;display:block;';
+  if (holder.isConnected) holder.replaceWith(c);
+}
+
+// Busca el snapshot existente más reciente de esta capa en o antes de fi (excluyendo fi).
+// Se usa para "resucitar" un objeto que vuelve a existir tras un hueco, recuperando
+// su última posición/tamaño/rotación real en vez de una posición nueva desde cero.
+function _gcpFindPrevExistingFrame(la, fi) {
+  if (!la._frames) return null;
+  for (let i = Math.min(fi, la._frames.length) - 1; i >= 0; i--) {
+    if (la._frames[i]) return la._frames[i];
+  }
+  return null;
 }
 
 // Miniatura compuesta (todos los layers visibles) en frame fi
@@ -31269,6 +31273,19 @@ function _gcpUpdateFramesBar() {
   ].join(';');
   inner.appendChild(scrollWrap);
 
+  // IntersectionObserver de miniaturas: se recrea en cada reconstrucción de la matriz
+  // porque scrollWrap (su raíz) es un nodo nuevo cada vez. rootMargin da un colchón para
+  // que la miniatura esté lista justo antes de entrar en pantalla al hacer scroll.
+  if (_gcpThumbIO) _gcpThumbIO.disconnect();
+  _gcpThumbIO = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      _gcpThumbIO.unobserve(entry.target);
+      const holder = entry.target;
+      requestAnimationFrame(() => _gcpRenderQueuedThumb(holder));
+    });
+  }, { root: scrollWrap, rootMargin: '300px', threshold: 0.01 });
+
   // Columna izquierda: controles de cada capa (fija, sin scroll)
   const leftPane = document.createElement('div');
   leftPane.id = 'gcpFramesLeftPane';
@@ -31549,9 +31566,11 @@ function _gcpUpdateFramesBar() {
     });
     leftCol.appendChild(delLayerBtn);
 
-    // Botón ojo — alterna visibilidad de todos los frames de la fila
+    // Botón ojo — oculta/muestra TODOS los frames de la fila a la vez.
+    // Ocultar ahora significa "no existe" (null), lo que borraría la posición de cada
+    // frame; para poder revertirlo se guarda una copia en _framesBackup mientras está oculto.
     const _allHidden = la._frames && la._frames.length > 0 &&
-      la._frames.every(f => f && f.visible === false);
+      la._frames.every(f => !f);
     const eyeBtn = document.createElement('button');
     eyeBtn.title = 'Mostrar/ocultar todos los frames';
     eyeBtn.textContent = '👁';
@@ -31563,10 +31582,19 @@ function _gcpUpdateFramesBar() {
     eyeBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (!la._frames || !la._frames.length) return;
-      const _nowHidden = la._frames.every(f => f && f.visible === false);
-      const _newVisible = _nowHidden; // toggle: ocultos→visibles, cualquier otro estado→ocultos
-      la._frames = la._frames.map(f => f ? { ...f, visible: _newVisible } : f);
-      eyeBtn.style.opacity = _newVisible ? '1' : '0.4';
+      const _nowAllHidden = la._frames.every(f => !f);
+      if (_nowAllHidden) {
+        // Mostrar todos: restaurar desde el backup si existe
+        if (la._framesBackup) {
+          la._frames = la._framesBackup.map((f, i) => f ? {...f} : (la._frames[i] || null));
+          delete la._framesBackup;
+        }
+      } else {
+        // Ocultar todos: guardar backup antes de vaciar (para poder recuperarlo)
+        la._framesBackup = la._frames.map(f => f ? {...f} : null);
+        la._frames = la._frames.map(() => null);
+      }
+      eyeBtn.style.opacity = _nowAllHidden ? '1' : '0.4';
       _gcpInvalidateAllThumbs();
       _gcpApplyFrame(window._gcpGlobalFrameIdx);
       window._gcpDirty = true;
@@ -31607,20 +31635,14 @@ function _gcpUpdateFramesBar() {
 
     for (let _vi = 0; _vi < _visibleFiList.length; _vi++) {
       const fi        = _visibleFiList[_vi];
-      const hasFrame  = fi < layerFrames;
-      const snap      = hasFrame ? la._frames[fi] : null;
-      const isVisible = snap && snap.visible !== false;
+      // hasFrame ahora significa "el objeto existe en este frame" — un hueco (null)
+      // dentro del rango del array cuenta como "no existe", igual que estar fuera de rango.
+      const hasFrame  = fi < layerFrames && !!la._frames[fi];
       const isCurrent = (fi === gfi) && isSelLayer;
 
       const card = document.createElement('div');
       card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
-      card.style.cursor = hasFrame ? 'pointer' : 'default';
-      // Frame oculto: fondo azul muy pálido para distinguirlo visualmente
-      // (permite ver la miniatura semitransparente encima con buen contraste)
-      if (hasFrame && !isVisible) {
-        card.style.background = '#dbeafe'; // azul pálido — estándar apps animación
-        card.style.borderColor = '#93c5fd';
-      }
+      card.style.cursor = 'pointer'; // ambos estados son clicables: navegan al frame
 
       // Cabecera con número de fotograma clave (_vi+1, no índice global fi+1)
       const header = document.createElement('div');
@@ -31632,6 +31654,7 @@ function _gcpUpdateFramesBar() {
       card.appendChild(header);
 
       if (!hasFrame) {
+        // No existe: celda gratis, sin miniatura que calcular.
         const empty = document.createElement('div');
         empty.className = 'ed-page-thumb';
         empty.style.cssText = 'width:88px;height:88px;display:flex;align-items:center;' +
@@ -31639,71 +31662,49 @@ function _gcpUpdateFramesBar() {
         empty.textContent = '·';
         card.appendChild(empty);
 
-      } else if (!isVisible) {
-        // Frame oculto: mostrar miniatura con opacidad 50% (no la ✖ roja)
-        const thumb = _gcpLayerFrameThumb(la, fi, 88, true); // ignoreVisibility=true → renderiza el contenido
-        thumb.className = 'ed-page-thumb';
-        thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;opacity:0.5;filter:grayscale(30%);';
-        card.appendChild(thumb);
-
-        // Botones ojo y ✕ también en frames invisibles
-        const hiddenActions = document.createElement('div');
-        hiddenActions.className = 'ed-page-actions';
-
-        const eyeBtnH = document.createElement('button');
-        eyeBtnH.className = 'ed-page-action-btn';
-        eyeBtnH.title = 'Mostrar frame';
-        eyeBtnH.style.opacity = '0.4';
-        eyeBtnH.textContent = '👁';
-        eyeBtnH.addEventListener('click', e => {
+        // Botón para hacer que el objeto vuelva a existir en este frame,
+        // recuperando su última posición/tamaño/rotación conocidos.
+        const emptyActions = document.createElement('div');
+        emptyActions.className = 'ed-page-actions';
+        const showBtn = document.createElement('button');
+        showBtn.className = 'ed-page-action-btn';
+        showBtn.title = 'Añadir el objeto en este fotograma';
+        showBtn.style.opacity = '0.4';
+        showBtn.textContent = '👁';
+        showBtn.addEventListener('click', e => {
           e.stopPropagation();
-          if (la._frames && fi < la._frames.length) {
-            la._frames[fi] = {...la._frames[fi], visible: true};
-            // Restaurar visibilidad de interpolados adyacentes
-            _gcpSetInterpVisibilityAround(fi, true, la);
-          }
+          _gcpPushHistory();
+          if (!la._frames) la._frames = [];
+          while (la._frames.length <= fi) la._frames.push(null);
+          const _prev = _gcpFindPrevExistingFrame(la, fi);
+          la._frames[fi] = _prev ? {..._prev} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
+          delete la._frames[fi]._interp;
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
+          _gcpReinterpolateAround(fi);
           _gcpUpdateFrameNav();
           _gcpRedraw();
           _gcpUpdateFramesBar();
         });
-        hiddenActions.appendChild(eyeBtnH);
-
-        const delBtnH = document.createElement('button');
-        delBtnH.className = 'ed-page-action-btn ed-page-del';
-        delBtnH.title = 'Eliminar frame';
-        delBtnH.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
-        delBtnH.addEventListener('click', e => {
-          e.stopPropagation();
-          edConfirm('¿Eliminar el fotograma clave ' + (_vi + 1) + ' de todas las capas?', () => {
-            _gcpPushHistory(); // guardar antes de la operación destructiva
-            window._gcpLayers.forEach(otherLa => {
-              if (otherLa._frames && fi < otherLa._frames.length)
-                otherLa._frames.splice(fi, 1);
-            });
-            const _nt = _gcpGetTotalFrames();
-            if (window._gcpGlobalFrameIdx >= _nt && _nt > 0)
-              window._gcpGlobalFrameIdx = _nt - 1;
-            _gcpTrimLeadingInvisible();
-            _gcpTrimTrailingInvisible();
-            window._gcpDirty = true;
-            _gcpInvalidateAllThumbs();
-            _gcpApplyFrame(window._gcpGlobalFrameIdx);
-            _gcpUpdateFrameNav();
-            _gcpRedraw();
-            _gcpUpdateFramesBar();
-          });
-        });
-        hiddenActions.appendChild(delBtnH);
-        card.appendChild(hiddenActions);
+        emptyActions.appendChild(showBtn);
+        card.appendChild(emptyActions);
 
       } else {
-        const thumb = _gcpLayerFrameThumb(la, fi, 88);
-        thumb.className = 'ed-page-thumb';
-        thumb.style.cssText = 'width:88px;height:88px;display:block;cursor:pointer;';
-        card.appendChild(thumb);
+        // Existe: miniatura con carga diferida (placeholder ligero hasta que la celda
+        // entra en el viewport de la matriz — ver _gcpQueueThumbRender/_gcpThumbIO).
+        const cacheKey = _gcpThumbCacheKey(la, fi) + '-88';
+        if (_gcpThumbCache.has(cacheKey)) {
+          const c = _gcpThumbCache.get(cacheKey);
+          c.style.cssText = 'width:88px;height:88px;display:block;';
+          card.appendChild(c);
+        } else {
+          const holder = document.createElement('div');
+          holder.className = 'ed-page-thumb';
+          holder.style.cssText = 'width:88px;height:88px;background:var(--gray-100);';
+          card.appendChild(holder);
+          _gcpQueueThumbRender(holder, la, fi, 88);
+        }
 
         const actions = document.createElement('div');
         actions.className = 'ed-page-actions';
@@ -31714,30 +31715,18 @@ function _gcpUpdateFramesBar() {
         dupBtn.innerHTML = '⧉';
         dupBtn.addEventListener('click', e => {
           e.stopPropagation();
-          // Duplicar solo en la fila del layer activo (la):
-          // insertar copia de fi justo después en este layer.
-          // En el resto de layers: añadir al final una copia de su último frame
-          // con visible:false para mantener la longitud de la matriz sin alterar su contenido.
-          if (!la._frames) la._frames = [];
-          const _src = la._frames[fi];
-          const _copy = _src ? {..._src} : {
-            x: la.x, y: la.y, width: la.width, height: la.height,
-            rotation: la.rotation || 0, opacity: la.opacity ?? 1, visible: true
-          };
-          delete _copy._interp;
+          // Duplicar la COLUMNA entera: cada capa inserta una copia de su propio
+          // estado en fi (exista o no) en la misma posición fi+1 — así todas quedan
+          // alineadas, a diferencia de la versión anterior que solo insertaba en la
+          // fila activa y rellenaba las demás al final (desalineaba la matriz).
           _gcpPushHistory(); // guardar antes de duplicar
-          la._frames.splice(fi + 1, 0, _copy);
-
-          // Para los demás layers: añadir al final una copia de su último frame invisible
           window._gcpLayers.forEach(otherLa => {
-            if (otherLa === la) return;
             if (!otherLa._frames) otherLa._frames = [];
-            const _last = otherLa._frames.length > 0
-              ? {...otherLa._frames[otherLa._frames.length - 1], visible: false}
-              : { x: otherLa.x, y: otherLa.y, width: otherLa.width, height: otherLa.height,
-                  rotation: otherLa.rotation || 0, opacity: otherLa.opacity ?? 1, visible: false };
-            delete _last._interp;
-            otherLa._frames.push(_last);
+            while (otherLa._frames.length <= fi) otherLa._frames.push(null);
+            const _src = otherLa._frames[fi];
+            const _copy = _src ? {..._src} : null;
+            if (_copy) delete _copy._interp;
+            otherLa._frames.splice(fi + 1, 0, _copy);
           });
 
           window._gcpDirty = true;
@@ -31750,24 +31739,25 @@ function _gcpUpdateFramesBar() {
         });
         actions.appendChild(dupBtn);
 
-        // ── Botón ojo: ocultar/mostrar frame de esta capa ──────────────
+        // ── Botón ojo: hacer que el objeto deje de existir en este frame ──
         const eyeBtn = document.createElement('button');
         eyeBtn.className = 'ed-page-action-btn';
-        const _curVisible = snap && snap.visible !== false;
-        eyeBtn.title = _curVisible ? 'Ocultar frame' : 'Mostrar frame';
-        eyeBtn.style.cssText = _curVisible ? '' : 'opacity:0.4';
+        eyeBtn.title = 'Quitar el objeto de este fotograma';
         eyeBtn.textContent = '👁';
         eyeBtn.addEventListener('click', e => {
           e.stopPropagation();
-          if (la._frames && fi < la._frames.length) {
-            _gcpPushHistory(); // guardar antes de cambiar visibilidad del frame
-            const _nowVis = la._frames[fi].visible !== false;
-            la._frames[fi] = {...la._frames[fi], visible: !_nowVis};
-            // Al ocultar: purgar interpolados adyacentes (no trim — el frame sigue en el array)
-            if (_nowVis) _gcpPurgeInterpAround(fi, la);
+          if (la._frames && fi < la._frames.length && la._frames[fi]) {
+            _gcpPushHistory(); // guardar antes de quitar el objeto de este frame
+            la._frames[fi] = null;
+            // Los interpolados adyacentes ya no tienen extremo del que partir
+            _gcpPurgeInterpAround(fi, la);
+            _gcpTrimLeadingInvisible();
+            _gcpTrimTrailingInvisible();
           }
           window._gcpDirty = true;
           _gcpInvalidateAllThumbs();
+          const _ntEye = _gcpGetTotalFrames();
+          if (window._gcpGlobalFrameIdx >= _ntEye && _ntEye > 0) window._gcpGlobalFrameIdx = _ntEye - 1;
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
           _gcpUpdateFrameNav();
           _gcpRedraw();
@@ -31805,14 +31795,14 @@ function _gcpUpdateFramesBar() {
         card.appendChild(actions);
       }
 
-      if (hasFrame) {
-        card.addEventListener('click', e => {
-          if (e.target.closest('.ed-page-action-btn')) return;
-          e.stopPropagation();
-          window._gcpSelIdx = layerIdx;
-          _gcpGoToFrame(fi);
-        });
-      }
+      // Navegar al frame al tocar la card, exista o no el objeto en esta fila;
+      // solo se selecciona la capa si realmente existe aquí.
+      card.addEventListener('click', e => {
+        if (e.target.closest('.ed-page-action-btn')) return;
+        e.stopPropagation();
+        if (hasFrame) window._gcpSelIdx = layerIdx;
+        _gcpGoToFrame(fi);
+      });
 
       scroll.appendChild(card);
 
@@ -32074,7 +32064,7 @@ function _gcpRedraw() {
       }
 
       // _farSnap = key A; near = posición actual de l (nunca más allá del objeto)
-      const _farSnap = (_lFi >= 0 && _lFi !== fi && _frames[_lFi]?.visible !== false) ? _frames[_lFi] : null;
+      const _farSnap = (_lFi >= 0 && _lFi !== fi && _frames[_lFi]) ? _frames[_lFi] : null;
 
       if (_farSnap) {
         const _bpw = edPageW(), _bph = edPageH();
@@ -32720,13 +32710,21 @@ function gcpOpen(edLayerIdx) {
         .filter(Boolean);
       restoredLayers.forEach((la, li) => {
         _gcpApplyContainerDelta(la);
-        // Restaurar _frames por layer (nuevo formato: array de arrays por layer)
+        // Restaurar _frames por layer (nuevo formato: array de arrays por layer).
+        // Normalización de compatibilidad: los proyectos antiguos guardaban "no existe"
+        // como snapshot completo con visible:false; el modelo actual usa null directamente,
+        // así que se convierte aquí una sola vez al cargar. Las miniaturas de esas celdas
+        // pasan a ser gratis (no hay nada que renderizar) igual que las nuevas.
         if (gifLayer._gcpFramesData && Array.isArray(gifLayer._gcpFramesData[li])) {
-          la._frames = gifLayer._gcpFramesData[li].map(s => ({...s}));
+          la._frames = gifLayer._gcpFramesData[li].map(s => {
+            if (!s || s.visible === false) return null;
+            const { visible, ...rest } = s;
+            return { ...rest };
+          });
           la._frames.forEach(_gcpApplyContainerDelta);
         } else {
           // Compatibilidad con formato antiguo (array de snaps globales)
-          la._frames = [{x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,visible:true}];
+          la._frames = [{x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1}];
         }
         if (la.type === 'image' && la.img) {
           const prev = la.img.onload;
@@ -32736,8 +32734,8 @@ function gcpOpen(edLayerIdx) {
         // Restaurar nombre de capa
         la._gcpName = (gifLayer._gcpLayerNames && gifLayer._gcpLayerNames[li])
           || (la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj'));
-        // Inicializar visibilidad según el frame 0
-        la._gcpVisible = !(la._frames && la._frames[0] && la._frames[0].visible === false);
+        // Inicializar visibilidad según el frame 0 (existe = no-null)
+        la._gcpVisible = !!(la._frames && la._frames[0]);
         _gcpPushLayer(la);
       });
       window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
@@ -32879,6 +32877,7 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpBibBtn')?.addEventListener('click', () => {
       const panel = $('edOptionsPanel');
       if (panel) _bibRenderPanel(panel);
+      if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
     });
 
     // Botones undo/redo
@@ -33282,7 +33281,7 @@ function _gcpSaveToLib(onDone) {
       }
       if (_showBlur) {
         // Trail de exactamente un frame: desde fi-1 hasta fi
-        const _farSnap = (fi > 0 && _frames[fi-1]?.visible !== false) ? _frames[fi-1] : null;
+        const _farSnap = (fi > 0 && _frames[fi-1]) ? _frames[fi-1] : null;
         if (_farSnap) {
           // Velocidad en píxeles del canvas de exportación (pageW = ref de escala)
           const _edx = (l.x - _farSnap.x) * pageW;
@@ -33388,7 +33387,7 @@ function _gcpSaveToLib(onDone) {
   const gcpLayersData = window._gcpLayers
     .map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean);
   // Serializar frames por layer (nuevo formato: array de arrays)
-  const gcpFramesData = window._gcpLayers.map(la => (la._frames||[]).map(s=>({...s})));
+  const gcpFramesData = window._gcpLayers.map(la => (la._frames||[]).map(s=>s?{...s}:null));
   // Preservar nombres de capas (_gcpName no lo guarda edSerLayer)
   const gcpLayerNames = window._gcpLayers.map(la => la._gcpName || null);
 
