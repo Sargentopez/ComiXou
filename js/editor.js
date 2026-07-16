@@ -31290,14 +31290,15 @@ function _gcpUpdateFramesBar() {
     const hScrollBar = document.createElement('div');
     hScrollBar.id = 'gcpFrHScroll';
     hScrollBar.style.cssText = [
-      'height:10px', 'background:var(--gray-200)', 'cursor:pointer',
-      'flex-shrink:0', 'position:relative', 'border-top:1px solid var(--gray-300)',
+      'height:14px', 'background:var(--gray-300)', 'cursor:pointer',
+      'flex-shrink:0', 'position:relative',
     ].join(';');
     const hThumb = document.createElement('div');
     hThumb.id = 'gcpFrHThumb';
     hThumb.style.cssText = [
-      'position:absolute', 'top:1px', 'height:8px',
-      'background:var(--gray-400)', 'border-radius:4px', 'cursor:grab', 'min-width:20px',
+      'position:absolute', 'top:2px', 'height:10px',
+      'background:var(--gray-700)', 'border-radius:5px', 'cursor:grab', 'min-width:24px',
+      'box-shadow:1px 1px 0 rgba(0,0,0,.15)',
     ].join(';');
     hScrollBar.appendChild(hThumb);
     inner.appendChild(hScrollBar);
@@ -31357,14 +31358,15 @@ function _gcpUpdateFramesBar() {
     const vScrollBar = document.createElement('div');
     vScrollBar.id = 'gcpFrVScroll';
     vScrollBar.style.cssText = [
-      'width:10px', 'background:var(--gray-200)', 'cursor:pointer',
+      'width:14px', 'background:var(--gray-300)', 'cursor:pointer',
       'flex-shrink:0', 'display:none', 'position:relative',
     ].join(';');
     const vThumb = document.createElement('div');
     vThumb.id = 'gcpFrVThumb';
     vThumb.style.cssText = [
-      'position:absolute', 'left:1px', 'width:8px',
-      'background:var(--gray-400)', 'border-radius:4px', 'cursor:grab', 'min-height:20px',
+      'position:absolute', 'left:2px', 'width:10px',
+      'background:var(--gray-700)', 'border-radius:5px', 'cursor:grab', 'min-height:24px',
+      'box-shadow:1px 1px 0 rgba(0,0,0,.15)',
     ].join(';');
     vScrollBar.appendChild(vThumb);
     // Insertar como columna dentro del scrollWrap (junto a framesPane)
@@ -31426,7 +31428,7 @@ function _gcpUpdateFramesBar() {
     const vSliderThumb = document.createElement('div');
     vSliderThumb.style.cssText = [
       'width:6px', 'min-height:28px', 'border-radius:3px',
-      'background:var(--gray-400)', 'opacity:0.7', 'cursor:pointer', 'touch-action:none',
+      'background:var(--gray-700)', 'opacity:0.7', 'cursor:pointer', 'touch-action:none',
     ].join(';');
     vSlider.appendChild(vSliderThumb);
     bar.style.position = 'relative';
