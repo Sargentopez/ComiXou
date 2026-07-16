@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v33.93</footer>
+    <footer class="app-version">v33.95</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -301,10 +301,10 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
-             para volver a mostrarlo, descomentar la línea siguiente.
+        <!-- Botón de diagnóstico reactivado a petición de Alberto para investigar
+             el bug de duplicado/borrado de grupos. Para volver a ocultarlo, comentar
+             la línea siguiente (mismo patrón que se usó antes). -->
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
-        -->
         <button class="ed-top-action" id="edSaveBtn" title="Guardar local">💾</button>
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
@@ -972,7 +972,10 @@ Router.register('editor', {
           <button class="ed-top-pagebn" id="tdPageNext" title="Página siguiente">&#9654;</button>
         </div>
         <button class="ed-top-action" id="tdApplyBtn" title="Aplicar al lienzo">💾</button>
+        <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
+             para volver a mostrarlo, descomentar la línea siguiente.
         <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME">🩺</button>
+        -->
         <button id="tdCloseBtn" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">

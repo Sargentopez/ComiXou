@@ -26620,12 +26620,17 @@ function EditorView_init(){
         // Guardar estado actual (con objetos) antes de borrar
         // Usamos el mismo patrón que edDeleteSelected
         const toDelete=[...edMultiSel].sort((a,b)=>b-a);
-        // Eliminar también los FillLayers vinculados
+        // Eliminar también las sub-capas vinculadas (fill/pencil/watercolor) — BUG FIX:
+        // antes solo se borraba 'fill', dejando huérfanas 'pencil'/'watercolor' (mismo
+        // patrón que el bug ya corregido en "Eliminar grupo" del panel de propiedades).
         toDelete.forEach(i=>{
           const _ld=page.layers[i];
-          if(_ld?._fillLayerId){
-            const _fdi=page.layers.findIndex(l=>l.type==='fill'&&l._drawLayerId===_ld._fillLayerId);
-            if(_fdi>=0) page.layers.splice(_fdi,1);
+          const _ldUid = _ld?._uid || _ld?._fillLayerId;
+          if(_ldUid){
+            for (const _t of ['fill','pencil','watercolor']) {
+              const _fdi=page.layers.findIndex(l=>l.type===_t&&l._drawLayerId===_ldUid);
+              if(_fdi>=0) page.layers.splice(_fdi,1);
+            }
           }
         });
         // Recalcular índices tras eliminar FillLayers
@@ -34227,6 +34232,75 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
+
+  // ── INTEGRIDAD DE GRUPOS (investigación: borrar grupo original afecta al
+  // duplicado en grupos con muchos elementos). Recorre TODAS las páginas y
+  // busca tres cosas que solo pueden pasar si un duplicado no quedó 100%
+  // independiente: (1) dos capas principales con el mismo _uid, (2) dos
+  // subcapas fill/pencil/watercolor con el mismo _drawLayerId (ambas dirían
+  // pertenecer al mismo stroke), (3) un flag _xxxLayerId en una capa principal
+  // que no tiene ninguna subcapa real con ese _drawLayerId (flag "fantasma").
+  L('');
+  L('── INTEGRIDAD DE GRUPOS (uids duplicados/huérfanos, todas las páginas) ──');
+  try {
+    const _mainTypes = ['stroke','line','shape','text','bubble','image','gif'];
+    const _subTypes = ['fill','pencil','watercolor'];
+    const _uidCount = new Map();               // uid -> [{page, idx, type}]
+    const _subDrawIdCount = { fill: new Map(), pencil: new Map(), watercolor: new Map() }; // por tipo: drawLayerId -> [{page, idx}]
+    edPages.forEach((p, pi) => {
+      (p.layers||[]).forEach((l, li) => {
+        if (!l) return;
+        if (_mainTypes.includes(l.type) && l._uid) {
+          if (!_uidCount.has(l._uid)) _uidCount.set(l._uid, []);
+          _uidCount.get(l._uid).push({page:pi, idx:li, type:l.type});
+        }
+        if (_subTypes.includes(l.type) && l._drawLayerId) {
+          const _m = _subDrawIdCount[l.type];
+          if (!_m.has(l._drawLayerId)) _m.set(l._drawLayerId, []);
+          _m.get(l._drawLayerId).push({page:pi, idx:li});
+        }
+      });
+    });
+    let _giIssues = 0;
+    for (const [uid, hits] of _uidCount.entries()) {
+      if (hits.length > 1) {
+        _giIssues++;
+        L('  ⚠️ _uid DUPLICADO "'+uid+'" en '+hits.length+' capas principales: ' +
+          hits.map(h=>'P'+h.page+'L'+h.idx+'('+h.type+')').join(', '));
+      }
+    }
+    for (const _st of _subTypes) {
+      for (const [did, hits] of _subDrawIdCount[_st].entries()) {
+        if (hits.length > 1) {
+          _giIssues++;
+          L('  ⚠️ '+_st+'._drawLayerId DUPLICADO "'+did+'" en '+hits.length+' capas '+_st+': ' +
+            hits.map(h=>'P'+h.page+'L'+h.idx).join(', '));
+        }
+      }
+    }
+    // Flags fantasma: capa principal con _xxxLayerId puesto pero sin subcapa real
+    edPages.forEach((p, pi) => {
+      const _pLayers = p.layers||[];
+      _pLayers.forEach((l, li) => {
+        if (!l || !_mainTypes.includes(l.type)) return;
+        for (const _flag of ['_fillLayerId','_pencilLayerId','_watercolorLayerId']) {
+          const _val = l[_flag];
+          if (!_val) continue;
+          const _st = _flag==='_fillLayerId'?'fill':(_flag==='_pencilLayerId'?'pencil':'watercolor');
+          const _found = _pLayers.some(l2=>l2 && l2.type===_st && l2._drawLayerId===_val);
+          if (!_found) {
+            _giIssues++;
+            L('  ⚠️ P'+pi+'L'+li+' ('+l.type+(l.groupId?', grupo '+l.groupId:'')+') tiene '+_flag+'="'+_val+'" pero NO existe esa subcapa '+_st+' en la página');
+          }
+        }
+      });
+    });
+    const _totalGroups = new Set();
+    edPages.forEach(p => (p.layers||[]).forEach(l => { if (l && l.groupId) _totalGroups.add(l.groupId); }));
+    L('  Grupos encontrados (groupId distintos, todas las páginas): ' + _totalGroups.size);
+    if (_giIssues === 0) L('  ✓ Sin duplicados ni flags huérfanos detectados');
+    else L('  → ' + _giIssues + ' problema(s) de integridad detectado(s) arriba ⚠️');
+  } catch(_gie) { L('  Error en integridad de grupos: ' + _gie.message); }
 
   // ── MONITOR DE RENDIMIENTO EN SEGUNDO PLANO (RAF/intervalos/jank) ──
   L('');
