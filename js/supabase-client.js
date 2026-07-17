@@ -129,6 +129,29 @@ async function _czDecompress(str) {
   } catch(e) { return str; }
 }
 
+// ── Pool de concurrencia limitada ("promise pool") ─────────────────────────
+// Patrón estándar para paralelizar tareas async sin fan-out ilimitado:
+// ejecuta como mucho `limit` tareas a la vez, encadenando la siguiente en
+// cuanto una termina. Se usa para descargas/subidas de red donde secuencial
+// (una a una) es demasiado lento pero lanzar todo a la vez arriesga saturar
+// memoria/ancho de banda en Android con obras pesadas (muchas imágenes/GIFs/
+// APNG grandes a la vez).
+async function _sbPoolMap(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function runNext() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await worker(items[i], i);
+    }
+  }
+  const runners = [];
+  const n = Math.max(1, Math.min(limit, items.length));
+  for (let k = 0; k < n; k++) runners.push(runNext());
+  await Promise.all(runners);
+  return results;
+}
+
 const SupabaseClient = (() => {
   const BASE    = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
   const STORAGE = 'https://qqgsbyylaugsagbxsetc.supabase.co/storage/v1';
@@ -378,15 +401,26 @@ const SupabaseClient = (() => {
 
 
   async function _uploadPanels(comic) {
-    // Antes de borrar los panels, recoger las URLs de bucket para limpiar archivos huérfanos
+    // Antes de borrar los panels, recoger las URLs de bucket para limpiar archivos huérfanos.
+    // Paralelizado: antes se hacía un GET por panel antiguo y un DELETE por gif/anim,
+    // todo secuencial — en obras con muchas hojas/animaciones eran decenas de viajes
+    // de red uno detrás de otro antes de empezar siquiera a subir los datos nuevos.
+    // Son lecturas/borrados independientes entre sí, así que paralelizarlos no cambia
+    // el resultado ni el manejo de errores (cada borrado conserva su propio .catch).
     try {
       const _oldPanels = await _get(`panels?work_id=eq.${comic.supabaseId}&select=id`);
-      for (const _op of (_oldPanels || [])) {
-        const _oldLayers = await _get(`panel_layers?panel_id=eq.${_op.id}&select=gif_url,anim_url`);
-        for (const _ol of (_oldLayers || [])) {
-          if (_ol.gif_url)  await _gifDelete(_ol.gif_url).catch(()=>{});
-          if (_ol.anim_url) await _animDelete(_ol.anim_url).catch(()=>{});
+      if (_oldPanels && _oldPanels.length) {
+        const _oldLayersByPanel = await Promise.all(
+          _oldPanels.map(_op => _get(`panel_layers?panel_id=eq.${_op.id}&select=gif_url,anim_url`).catch(() => []))
+        );
+        const _cleanupJobs = [];
+        for (const _oldLayers of _oldLayersByPanel) {
+          for (const _ol of (_oldLayers || [])) {
+            if (_ol.gif_url)  _cleanupJobs.push(_gifDelete(_ol.gif_url).catch(()=>{}));
+            if (_ol.anim_url) _cleanupJobs.push(_animDelete(_ol.anim_url).catch(()=>{}));
+          }
         }
+        await Promise.all(_cleanupJobs);
       }
     } catch(_e) { /* no bloquear el guardado si falla la limpieza */ }
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
@@ -413,8 +447,17 @@ const SupabaseClient = (() => {
       }
     }
 
-    for (let i = 0; i < panels.length; i++) {
-      const p = panels[i];
+    // Subir cada página en paralelo, con concurrencia acotada a 3.
+    // Las páginas son independientes entre sí: panel_order se guarda como
+    // valor explícito en la fila (la reconstrucción en otro dispositivo
+    // ordena por esa columna, no por el orden de inserción — ver
+    // downloadDraftAsEditorData, order=panel_order.asc), cada panelId es un
+    // UUID nuevo sin relación con los demás, y las claves de bucket
+    // (gifKey, _bucketKey con sufijo aleatorio) son únicas por capa. limit=3:
+    // mismo criterio que en la descarga — suficiente para no ir página a
+    // página en serie, pero sin lanzar todas las imágenes/GIFs/APNG de una
+    // obra pesada a la vez (riesgo de pico de memoria en Android).
+    await _sbPoolMap(panels, 3, async (p, i) => {
       const ins = await _upsert('panels', {
         work_id:     comic.supabaseId,
         panel_order: i,
@@ -423,7 +466,7 @@ const SupabaseClient = (() => {
         data_url:    p.dataUrl     || null,
       });
       const panelId = ins[0]?.id;
-      if (!panelId) continue;
+      if (!panelId) return;
 
       // Borrar capas y textos anteriores por si el CASCADE no actuó
       await _delete('panel_layers', `panel_id=eq.${panelId}`);
@@ -524,7 +567,7 @@ const SupabaseClient = (() => {
       }
 
       // Textos para el reader (panel_texts sin cambios)
-      if (!p.texts || p.texts.length === 0) continue;
+      if (!p.texts || p.texts.length === 0) return;
       await _upsert('panel_texts', p.texts.map((t, j) => ({
         panel_id:     panelId,
         text_order:   t.order              ?? j,
@@ -551,7 +594,7 @@ const SupabaseClient = (() => {
         rotation:     t.rotation          ?? 0,
         padding:      t.padding           ?? 15,
       })));
-    }
+    });
   }
 
   // ── BORRADOR EN NUBE ──────────────────────────────────────
@@ -689,66 +732,82 @@ const SupabaseClient = (() => {
       `panels?work_id=eq.${supabaseId}&order=panel_order.asc&select=id,panel_order,orientation,text_mode,data_url`
     ) || [];
 
-    const pages = [];
-    for (let pi = 0; pi < panels.length; pi++) {
-      const panel = panels[pi];
-      const layerRows = await _get(
-        `panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`
-      ) || [];
+    // Metadatos de capas (JSON ligero) de TODAS las páginas en paralelo.
+    // Antes era una petición secuencial por página — en obras con muchas hojas
+    // eso multiplicaba directamente la latencia de red por el número de hojas.
+    // limit=6: margen prudente para no disparar peticiones simultáneas de más.
+    const _layerRowsByPanel = await _sbPoolMap(panels, 6, panel =>
+      _get(`panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`).catch(() => [])
+    );
 
-      const layers = [];
-      for (let li = 0; li < layerRows.length; li++) {
-        const row = layerRows[li];
-        let layerObj = null;
+    // Procesar (descomprimir + descargar GIF/APNG) cada capa de cada página.
+    // Concurrencia acotada a 3: son binarios potencialmente pesados — lanzar
+    // TODAS las capas animadas de una obra a la vez arriesgaría picos de
+    // memoria en Android. Aun así, 3 en paralelo ya evita la cascada
+    // estrictamente secuencial que había antes (capa a capa, página a página).
+    const _flatLayers = [];
+    panels.forEach((panel, pi) => {
+      (_layerRowsByPanel[pi] || []).forEach((row, li) => _flatLayers.push({ pi, li, row }));
+    });
+    const _flatResults = await _sbPoolMap(_flatLayers, 3, async ({ pi, li, row }) => {
+      let layerObj = null;
+      try {
+        const _raw = await _czDecompress(row.layer_data);
+        layerObj = JSON.parse(_raw);
+      } catch(e) {}
+      if (!layerObj) return null;
+      // APNG animado — patrón idéntico al GIF:
+      // APNG: descargar si hay anim_url — sin depender de animKey
+      if (layerObj.type === 'image' && row.anim_url) {
         try {
-          const _raw = await _czDecompress(row.layer_data);
-          layerObj = JSON.parse(_raw);
-        } catch(e) {}
-        if (!layerObj) continue;
-        // APNG animado — patrón idéntico al GIF:
-        // APNG: descargar si hay anim_url — sin depender de animKey
-        if (layerObj.type === 'image' && row.anim_url) {
-          try {
-            const _apngDataUrl = await _animDownload(row.anim_url);
-            if (_apngDataUrl) {
-              layerObj._apngSrc = _apngDataUrl;
-              // Guardar en IDB con clave prefijada por userId para que el visor la encuentre
-              try {
-                const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
-                const _uid2 = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-                // Usar clave con supabaseId embebido para que el detector de huérfanos
-                // la reconozca correctamente. Formato: {uid}__{supabaseId}_{pi}_{li}
-                // idéntico al que usa edSaveProject, así son intercambiables.
-                const _idbKey2 = _uid2 + '__' + supabaseId + '_' + pi + '_' + li;
-                await _sbAnimIdbSave(_idbKey2, _apngDataUrl);
-                layerObj._pngFramesKey = _idbKey2;
-              } catch(_idbErr) {
-                // IDB no disponible (modo incógnito) — datos en _apngSrc solamente
-                // El visor usará _apngSrc directamente si _pngFramesKey no existe
-                window._edIdbUnavailable = true;
-              }
+          const _apngDataUrl = await _animDownload(row.anim_url);
+          if (_apngDataUrl) {
+            layerObj._apngSrc = _apngDataUrl;
+            // Guardar en IDB con clave prefijada por userId para que el visor la encuentre
+            try {
+              const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+              const _uid2 = (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+              // Usar clave con supabaseId embebido para que el detector de huérfanos
+              // la reconozca correctamente. Formato: {uid}__{supabaseId}_{pi}_{li}
+              // idéntico al que usa edSaveProject, así son intercambiables.
+              const _idbKey2 = _uid2 + '__' + supabaseId + '_' + pi + '_' + li;
+              await _sbAnimIdbSave(_idbKey2, _apngDataUrl);
+              layerObj._pngFramesKey = _idbKey2;
+            } catch(_idbErr) {
+              // IDB no disponible (modo incógnito) — datos en _apngSrc solamente
+              // El visor usará _apngSrc directamente si _pngFramesKey no existe
+              window._edIdbUnavailable = true;
             }
-          } catch(e) { console.warn('APNG cloud download:', e); }
-        }
-        // GIF: descargar de Storage y meter en IndexedDB local
-        if (layerObj.type === 'gif' && row.gif_url) {
-          try {
-            const gifResp = await fetch(row.gif_url);
-            if (gifResp.ok) {
-              const blob   = await gifResp.blob();
-              const reader = new FileReader();
-              const dataUrl = await new Promise(res => {
-                reader.onload = e => res(e.target.result);
-                reader.readAsDataURL(blob);
-              });
-              if (window._gifIdbSave && layerObj.gifKey) {
-                await window._gifIdbSave(layerObj.gifKey, dataUrl).catch(() => {});
-              }
-            }
-          } catch(e) { console.warn('GIF cloud download:', e); }
-        }
-        layers.push(layerObj);
+          }
+        } catch(e) { console.warn('APNG cloud download:', e); }
       }
+      // GIF: descargar de Storage y meter en IndexedDB local
+      if (layerObj.type === 'gif' && row.gif_url) {
+        try {
+          const gifResp = await fetch(row.gif_url);
+          if (gifResp.ok) {
+            const blob   = await gifResp.blob();
+            const reader = new FileReader();
+            const dataUrl = await new Promise(res => {
+              reader.onload = e => res(e.target.result);
+              reader.readAsDataURL(blob);
+            });
+            if (window._gifIdbSave && layerObj.gifKey) {
+              await window._gifIdbSave(layerObj.gifKey, dataUrl).catch(() => {});
+            }
+          }
+        } catch(e) { console.warn('GIF cloud download:', e); }
+      }
+      return layerObj;
+    });
+
+    // Reagrupar los resultados aplanados de vuelta en páginas, preservando el
+    // orden original de panel_order/layer_order.
+    let _cursor = 0;
+    const pages = panels.map((panel, pi) => {
+      const _rowCount = (_layerRowsByPanel[pi] || []).length;
+      const layers = _flatResults.slice(_cursor, _cursor + _rowCount).filter(Boolean);
+      _cursor += _rowCount;
 
       // Fallback: si no hay panel_layers (obra antigua), usar data_url como ImageLayer
       if (layers.length === 0 && panel.data_url) {
@@ -756,13 +815,13 @@ const SupabaseClient = (() => {
       }
 
       const orient = panel.orientation === 'h' ? 'horizontal' : 'vertical';
-      pages.push({
+      return {
         orientation:      orient,
         textMode:         panel.text_mode || 'sequential',
         textLayerOpacity: 1,
         layers,
-      });
-    }
+      };
+    });
 
     return {
       work,

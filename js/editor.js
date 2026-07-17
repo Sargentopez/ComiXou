@@ -21417,13 +21417,25 @@ function _edHelpShowRef(id) {
 async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
+
+  // Mostrar el contador INMEDIATAMENTE al tocar el botón — antes de cualquier
+  // trabajo previo. En obras pesadas, _edCalcProjectBytes(true) fuerza un
+  // recálculo síncrono por capa (toDataURL de fill/pencil/watercolor/draw/
+  // stroke) que puede tardar varios segundos; antes el overlay no aparecía
+  // hasta que ese cálculo terminaba, dando la sensación de que el botón
+  // "no respondía". Cualquier salida temprana de aquí en adelante debe
+  // ocultar el overlay explícitamente (no hay guardado real que lo sustituya).
+  _edSaveOverlayShow('Comprobando tamaño…');
+
   // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
   const _preSz = await _edCalcProjectBytes(true);
   if (_preSz >= _ED_MAX_BYTES) {
+    _edSaveOverlayHide();
     edToast('⚠️ La obra supera los 60 MB. Elimina contenido antes de guardar en la nube.', 5000);
     return;
   }
   if (!Auth?.currentUser?.()) {
+    _edSaveOverlayHide();
     // Sin sesión: ofrecer login en lugar de rechazar
     edToast('Inicia sesión para guardar en la nube');
     setTimeout(() => {
@@ -21437,14 +21449,14 @@ async function edCloudSave() {
   }
 
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
-  _edSaveOverlayShow('Guardando…');
+  _edSaveOverlayUpdate('Guardando…');
   await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate('Subiendo a la nube…');
 
   let comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
     : ComicStore.getById(edProjectId);
-  if (!comic) { edToast('Error: obra no encontrada'); return; }
+  if (!comic) { _edSaveOverlayHide(); edToast('Error: obra no encontrada'); return; }
   // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
   // construir editorData en línea para poder subirlo a la nube correctamente.
   if ((!comic.editorData || !comic.editorData.pages || !comic.editorData.pages.length) && edPages && edPages.length) {
@@ -23327,9 +23339,21 @@ let _edLoadProjectInProgress = false;
 async function edLoadProject(id){
   if(_edLoadProjectInProgress) return;
   _edLoadProjectInProgress = true;
+  // Promesa de "carga COMPLETA" (capas pesadas + redraw final incluidos) — la usa
+  // el contador bloqueante que my-comics.js inicia al pulsar "editar" (ver
+  // EditorView_init) para saber cuándo puede desbloquear la app. Se resuelve
+  // desde _edResolveFullyLoaded() en todos los caminos de salida de esta función,
+  // nunca se deja sin resolver (evitaría un bloqueo permanente del contador).
+  let _edResolveFullyLoaded;
+  window._edFullyLoadedPromise = new Promise(res => { _edResolveFullyLoaded = res; });
   const comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
-  if(!comic){ _edLoadProjectInProgress = false; return; }
+  if(!comic){ _edLoadProjectInProgress = false; _edResolveFullyLoaded(); return; }
+  // Declarado aquí (no dentro de if(edCanvas){...}) para que siga en alcance en
+  // el resto de la función — antes se declaraba con `const` dentro de ese bloque
+  // y se leía fuera de él, lo que lanzaba SIEMPRE un ReferenceError silencioso
+  // (promesa rechazada sin .catch en EditorView_init) al final de cada carga.
+  let _fillLoadPromises = [];
   try {
   edProjectId=id;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
@@ -23479,7 +23503,6 @@ async function edLoadProject(id){
     }));
     // Esperar a que los FillLayers terminen de cargar antes del snapshot inicial
     // (evita guardar un canvas vacío en el historial porque img.onload es async)
-    const _fillLoadPromises = [];
     edPages.forEach((p, _pIdx) => (p.layers||[]).forEach(l => {
       if(l && (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') && l._loadPromise) _fillLoadPromises.push(l._loadPromise);
       // Cargar _animFrames solo de la página activa (página 0 al cargar).
@@ -23494,6 +23517,17 @@ async function edLoadProject(id){
         }
       }
     }));
+    // _edFullyLoadedPromise se resuelve cuando se cumplen DOS condiciones
+    // independientes (la que tarde más manda): 1) capas pesadas cargadas +
+    // historial inicial empujado, 2) el redraw/reset secundario a los 400ms.
+    // Antes solo se esperaba la (1); el contador bloqueante de my-comics podía
+    // desbloquear la app justo antes del redraw final, mostrando un instante
+    // de cámara/lienzo todavía sin encajar.
+    let _edFullyLoadedGate = 2;
+    const _edGateDone = () => {
+      _edFullyLoadedGate--;
+      if (_edFullyLoadedGate <= 0) _edResolveFullyLoaded();
+    };
     const _doPushHistory = () => {
       edPushHistory(true);
       // Sincronizar el marcador de "guardado" con el snapshot inicial,
@@ -23501,6 +23535,7 @@ async function edLoadProject(id){
       _edSavedHistoryIdx = edHistoryIdx;
       // Siempre liberar el flag al finalizar — independientemente de si hubo promises
       _edLoadProjectInProgress = false;
+      _edGateDone();
     };
     if(_fillLoadPromises.length) {
       // Mantener el flag activo hasta que los fills carguen y el historial se inicialice
@@ -23531,7 +23566,14 @@ async function edLoadProject(id){
       // Las coordenadas x/y existen desde la deserialización; que el canvas de
       // un stroke tarde en renderizarse no afecta al JSON del historial.
       void _loadPromises; // referencia para evitar warning
+      _edGateDone();
     }, 400);
+  } else {
+    // Sin canvas (no debería ocurrir en el flujo normal desde EditorView_init,
+    // que ya comprueba edCanvas antes de llamar): liberar el lock y desbloquear
+    // el contador — nunca dejar la promesa de carga completa sin resolver.
+    _edLoadProjectInProgress = false;
+    _edResolveFullyLoaded();
   }
   // Actualizar nav de páginas en topbar (si ya existe el DOM)
   requestAnimationFrame(()=>edUpdateNavPages());
@@ -23540,10 +23582,8 @@ async function edLoadProject(id){
     console.error('edLoadProject error:', _le);
     edToast('⚠️ Error al cargar la obra');
     _edLoadProjectInProgress = false; // liberar solo en error
+    _edResolveFullyLoaded(); // nunca dejar el contador bloqueante colgado por un error
   }
-  // En éxito: el flag se libera en _doPushHistory si hay fills async,
-  // o inmediatamente si no hay fills pendientes
-  if (!_fillLoadPromises?.length) _edLoadProjectInProgress = false;
 }
 
 /* ══════════════════════════════════════════
@@ -25012,6 +25052,12 @@ function EditorView_destroy(){
     window._edVisibilityFn = null;
   }
   _edAutosaveStop();
+  // _edAutosaveStop() solo detiene el intervalo periódico (cada 30s). El
+  // temporizador de debounce tras cada edición (1.5-5s) es un setTimeout aparte
+  // que nunca se cancelaba aquí — podía disparar _edAutosaveWrite() ya fuera
+  // del editor y reescribir un autoguardado que se acababa de borrar
+  // explícitamente (p.ej. justo después de elegir "No guardar" al salir).
+  if (window._edAutosavePushTimer) { clearTimeout(window._edAutosavePushTimer); window._edAutosavePushTimer = null; }
   // Cancelar timers de reset de cámara pendientes de la carga anterior
   // para evitar que se disparen cuando ya estamos en otra vista
   if (window._edLoadResetTimer) { clearTimeout(window._edLoadResetTimer); window._edLoadResetTimer = null; }
@@ -25380,7 +25426,11 @@ function EditorView_init(){
     // nada hubiera cambiado de verdad. Si edProjectId y edPages muestran
     // que ya hay una obra en memoria, no es una navegación nueva real —
     // seguir con lo que ya había en vez de salir del editor.
-    if(edProjectId && edPages && edPages.length) return;
+    if(edProjectId && edPages && edPages.length) {
+      if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+      return;
+    }
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
     Router.go('my-comics');
     return;
   }
@@ -25412,6 +25462,15 @@ function EditorView_init(){
   edLoadProject(editId).then(() => {
     // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
     edSetOrientation(edPages[0]?.orientation || edOrientation, false);
+  }).catch(err => { console.error('edLoadProject:', err); });
+  // Contador bloqueante iniciado en my-comics.js al pulsar "editar" (ver _cxLoadOverlayShow):
+  // no liberarlo con la parte síncrona de edLoadProject — esperar a la promesa de
+  // carga REALMENTE completa (capas pesadas + redraw final), fijada dentro de
+  // edLoadProject como window._edFullyLoadedPromise justo antes de su primer await.
+  (window._edFullyLoadedPromise || Promise.resolve()).then(() => {
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+  }).catch(() => {
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
   });
   edActiveTool='select';
   const cur=$('edBrushCursor');if(cur)cur.style.display='none';
@@ -25592,11 +25651,14 @@ function EditorView_init(){
             }
           }
         } catch(_) {}
-      } else {
-        // Restaurar último estado guardado
-        const saved = ComicStore.getById(edProjectId);
-        if (saved) edLoadProject(edProjectId);
       }
+      // NOTA: antes, si la obra no era nueva, aquí se relanzaba edLoadProject(edProjectId)
+      // "para restaurar el último estado guardado" en memoria. Es innecesario — la próxima
+      // vez que se abra el editor (esta obra u otra), EditorView_init resetea edPages/edLayers/
+      // historial/cámara y vuelve a cargar desde disco de todos modos — y provocaba una
+      // recarga completa (OPFS + deserialización + redraw) compitiendo por el hilo principal
+      // justo durante la navegación a "Mis creaciones", que es la causa confirmada de la
+      // lentitud al salir sin guardar. Se elimina la llamada.
       // Navegar — el detector de huérfanos en my-comics se lanzará con delay normal
       // pero ya no habrá nada que detectar
       Router.go('my-comics');

@@ -801,8 +801,18 @@ function _mcRenderList() {
       if (window._mcEditLock) return;
       window._mcEditLock = true;
       setTimeout(() => { window._mcEditLock = false; }, 3000);
+      // Contador bloqueante: se inicia AQUÍ, en el primer tick posible tras el toque,
+      // y bloquea la app hasta que el editor general confirme la carga completa
+      // (ver _cxLoadOverlayHide en EditorView_init, editor.js). Sustituye al toast
+      // que antes solo avisaba de la descarga de la nube — ahora cubre TODA la
+      // apertura, incluidas las obras que no necesitan descargarse.
+      if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow('Abriendo obra…');
       const _comicMeta = ComicStore.getById(id);
-      if (!_comicMeta || !_mcOwns(_comicMeta)) { window._mcEditLock = false; return; }
+      if (!_comicMeta || !_mcOwns(_comicMeta)) {
+        window._mcEditLock = false;
+        if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+        return;
+      }
       const comicToEdit = ComicStore.getByIdFull
         ? (await ComicStore.getByIdFull(id))
         : ComicStore.getById(id);
@@ -836,7 +846,7 @@ function _mcRenderList() {
         _cloudNewer  // la nube tiene versión más reciente → descargar siempre
       );
       if (comicToEdit && _needsDownload) {
-        _mcToast('\u23f3 Descargando obra de la nube\u2026 ');
+        if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate('Descargando obra de la nube…');
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
           // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
@@ -972,7 +982,8 @@ function _mcRenderList() {
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
         } catch(err) {
-          if (_dlBtn) _dlBtn.style.pointerEvents = '';
+          window._mcEditLock = false;
+          if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
           _mcToast('\u26a0\ufe0f Error al descargar de la nube: ' + err.message);
           return;
         }

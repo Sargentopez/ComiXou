@@ -198,6 +198,78 @@ function appConfirm(msg, onOk, okLabel) {
   cancelBtn.addEventListener('click', onNo);
 }
 
+/* ══════════════════════════════════════════
+   CONTADOR DE CARGA BLOQUEANTE — my-comics → editor
+   Se inicia al tocar "editar" sobre cualquier obra (ver my-comics.js) y
+   bloquea toda interacción con la app hasta que el editor general confirma
+   que la obra está COMPLETAMENTE cargada (ver EditorView_init / edLoadProject
+   en editor.js, a través de window._edFullyLoadedPromise).
+   Vive en document.body (fuera de #appView) a propósito: el router SPA
+   reemplaza el innerHTML de #appView al navegar de my-comics a editor, así
+   que un overlay dentro de #appView desaparecería a mitad de la transición.
+   ══════════════════════════════════════════ */
+let _cxLoadOverlayTimer  = null;
+let _cxLoadOverlaySecs   = 0;
+let _cxLoadOverlaySafety = null;
+
+function _cxLoadOverlayShow(title) {
+  let ov = document.getElementById('_cxLoadOverlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = '_cxLoadOverlay';
+    ov.style.cssText = [
+      'position:fixed;inset:0;z-index:999999',
+      'background:rgba(0,0,0,0.82)',
+      'display:flex;flex-direction:column;align-items:center;justify-content:center',
+      'color:#fff;font-family:sans-serif;text-align:center;padding:24px',
+      'touch-action:none'
+    ].join(';');
+    ov.innerHTML = `
+      <div style="font-size:2.2rem;margin-bottom:16px">📖</div>
+      <div id="_cxLoadOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:16px"></div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:20px;height:20px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:_cxLoadSpin .8s linear infinite"></div>
+        <span id="_cxLoadOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
+      </div>
+      <style>@keyframes _cxLoadSpin{to{transform:rotate(360deg)}}</style>
+    `;
+    // Bloquear scroll/gestos por debajo aunque algo intente moverse mientras carga
+    ov.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+    document.body.appendChild(ov);
+  }
+  const titleEl = document.getElementById('_cxLoadOvTitle');
+  if (titleEl) titleEl.textContent = title || 'Abriendo obra…';
+  _cxLoadOverlaySecs = 0;
+  const secsEl = document.getElementById('_cxLoadOvSecs');
+  if (secsEl) secsEl.textContent = '0s';
+  clearInterval(_cxLoadOverlayTimer);
+  _cxLoadOverlayTimer = setInterval(() => {
+    _cxLoadOverlaySecs++;
+    const el = document.getElementById('_cxLoadOvSecs');
+    if (el) el.textContent = _cxLoadOverlaySecs + 's';
+  }, 1000);
+  // Seguridad: nunca bloquear la app de forma permanente si algo falla y ningún
+  // camino de código llega a llamar a _cxLoadOverlayHide().
+  clearTimeout(_cxLoadOverlaySafety);
+  _cxLoadOverlaySafety = setTimeout(() => {
+    _cxLoadOverlayHide();
+    if (typeof showToast === 'function') showToast('⚠️ La carga está tardando más de lo normal');
+  }, 25000);
+  ov.style.display = 'flex';
+}
+
+function _cxLoadOverlayUpdate(title) {
+  const el = document.getElementById('_cxLoadOvTitle');
+  if (el) el.textContent = title;
+}
+
+function _cxLoadOverlayHide() {
+  clearInterval(_cxLoadOverlayTimer);
+  clearTimeout(_cxLoadOverlaySafety);
+  const ov = document.getElementById('_cxLoadOverlay');
+  if (ov) ov.style.display = 'none';
+}
+
 function appAlert(msg) {
   const overlay  = _appConfirmGetEl();
   const msgEl    = document.getElementById(`${_APP_CONFIRM_ID}_msg`);
