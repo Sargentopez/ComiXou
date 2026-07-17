@@ -2244,19 +2244,22 @@ body.editor-page #appView {
   position: sticky;
   left: 0;
 }
-/* Zona de frames: scroll horizontal para todas las capas */
+/* Zona de frames: apilador de filas — SIN overflow propio a propósito.
+   Antes tenía overflow-x:auto + overflow-y:visible, pero CSS convierte
+   automáticamente ese "visible" en "auto" cuando el otro eje no es visible
+   — eso lo convertía en un contenedor con su propio scroll vertical
+   independiente del de leftPane/samplePane, que es la causa de que ambos
+   lados dejaran de estar sincronizados. El scroll horizontal ahora vive en
+   cada fila (.gcp-layer-scroll) individualmente. */
 #gcpFramesPane {
   flex: 1;
-  min-width: 0; /* sin esto, un flex:1 con contenido no-encogible (cards flex-shrink:0)
-                   nunca se considera desbordado — scrollWidth queda igual a clientWidth
-                   y el thumb custom (#gcpFrHScroll) no aparece nunca */
-  overflow-x: auto;
-  overflow-y: visible;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  scrollbar-width: none; /* ocultar nativo — usamos custom */
 }
-#gcpFramesPane::-webkit-scrollbar { display: none; }
+/* Cada fila de frames: scroll horizontal propio, sincronizado por JS entre
+   todas las filas (ver _gcpSyncFrameRowsScroll) */
+.gcp-layer-scroll::-webkit-scrollbar { display: none; }
 /* Scrollbar H custom PC — diseño visible: pista con color real (no
    var(--gray-200)/--gray-400, que no existen en el proyecto y dejaban la
    barra prácticamente sin color) + thumb oscuro con buen contraste */
@@ -2283,74 +2286,6 @@ body.editor-page #appView {
 ._bib-items-scroll::-webkit-scrollbar-track { background: var(--gray-300); border-radius: 5px; }
 ._bib-items-scroll::-webkit-scrollbar-thumb { background: var(--gray-700); border-radius: 5px; }
 ._bib-items-scroll::-webkit-scrollbar-thumb:hover { background: var(--black); }
-
-/* Cada fila de layer — altura fija para que las cards no se solapen.
-   La card mide: header(24) + thumb(72) + actions(26) + padding(8) + gaps = 136px */
-/* gcp-layer-scroll: fila de frames de una capa en el scroll compartido */
-.gcp-layer-scroll {
-  display: flex;
-  flex-direction: row;
-  flex-shrink: 0;
-  height: 148px;
-  border-bottom: 1px solid var(--gray-200);
-  overflow: visible;
-}
-.gcp-layer-scroll:last-child { border-bottom: none; }
-/* leftPane: cada bloque de controles */
-#gcpFramesLeftPane > div {
-  border-bottom: 1px solid var(--gray-200);
-  box-sizing: border-box;
-}
-#gcpFramesLeftPane > div:last-child { border-bottom: none; }
-
-/* Etiqueta/controles del layer: columna fija a la izquierda */
-.gcp-layer-label {
-  flex-shrink: 0;
-  width: 44px;
-  min-width: 44px;
-  border-right: 1px solid var(--gray-200);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 2px 0;
-  font-size: 9px;
-  font-weight: 900;
-  color: var(--gray-500);
-  text-align: center;
-  overflow: hidden;
-}
-.gcp-layer-label.sel { color: #ff6600; }
-
-/* Scroll horizontal de cards — ocupa el resto de la fila */
-.gcp-layer-scroll {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  flex: 1;
-  padding: 4px 8px;
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
-  scrollbar-color: var(--gray-300) transparent;
-}
-.gcp-layer-scroll::-webkit-scrollbar { height: 4px; }
-.gcp-layer-scroll::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
-
-/* Cards de frame dentro del GCP: tamaño reducido para caber en 148px de fila */
-.gcp-layer-scroll .ed-page-card {
-  width: 80px;
-  padding: 3px 4px 3px;
-  gap: 3px;
-}
-.gcp-layer-scroll .ed-page-thumb {
-  width: 72px !important;
-  height: 72px !important;
-  max-height: 72px;
-}
 
 /* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }

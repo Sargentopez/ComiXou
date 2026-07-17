@@ -30849,6 +30849,18 @@ function _gcpGoToFrame(fi) {
   if (_gfb && _gfb.style.display === 'flex') _gcpUpdateFramesBar();
 }
 
+// Al tocar la MINIATURA de un frame existente (no el resto de la card, no sus
+// botones): cierra la matriz y salta directamente a ese fotograma en el
+// lienzo. Se cierra ANTES de navegar para que _gcpGoToFrame no reconstruya la
+// matriz de forma inútil justo antes de ocultarla.
+function _gcpThumbTapGoToFrame(e, la, fi) {
+  e.stopPropagation();
+  const layerIdx = window._gcpLayers.indexOf(la);
+  if (layerIdx >= 0) window._gcpSelIdx = layerIdx;
+  _gcpCloseFramesBar();
+  _gcpGoToFrame(fi);
+}
+
 // ── Miniatura de "muestra": UNA por objeto (fila), para identificar de un
 // vistazo qué objeto es cada fila sin depender de ningún frame concreto.
 // Se renderiza con las propiedades ACTUALES del objeto (no depende de ningún fi).
@@ -31023,6 +31035,7 @@ function _gcpProcessThumbQueue() {
 function _gcpRenderQueuedThumb(holder) {
   const c = _gcpLayerFrameThumb(holder._gcpLa, holder._gcpFi, holder._gcpS);
   c.style.cssText = 'width:' + holder._gcpS + 'px;height:' + holder._gcpS + 'px;display:block;';
+  c.addEventListener('click', e => _gcpThumbTapGoToFrame(e, holder._gcpLa, holder._gcpFi));
   if (holder.isConnected) holder.replaceWith(c);
 }
 
@@ -31107,6 +31120,19 @@ function _gcpRefreshActiveThumb() {
   if (bar && bar.style.display === 'flex') _gcpUpdateFramesBar();
 }
 
+// Cierra el panel de la matriz de frames (a diferencia de _gcpToggleFramesBar,
+// esta no comprueba el estado — siempre cierra). Se usa también al tocar
+// directamente una miniatura visible, ver _gcpUpdateFramesBar.
+function _gcpCloseFramesBar() {
+  const bar = document.getElementById('gcpFramesBar');
+  const btn = document.getElementById('gcpFramesToggleBtn');
+  if (!bar) return;
+  bar.style.display = 'none';
+  if (btn) { btn.textContent = 'Matriz ▾'; btn.classList.remove('active'); }
+  window._gcpUiClosedAt = Date.now();
+  if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
+}
+
 // Toggle visibilidad del panel de frames
 function _gcpToggleFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
@@ -31114,17 +31140,15 @@ function _gcpToggleFramesBar() {
   if (!bar) return;
   const isOpen = bar.style.display === 'flex';
   if (isOpen) {
-    bar.style.display = 'none';
-    if (btn) { btn.textContent = 'Matriz ▾'; btn.classList.remove('active'); }
-    window._gcpUiClosedAt = Date.now();
+    _gcpCloseFramesBar();
   } else {
     bar.style.display = 'flex';
     if (btn) { btn.textContent = 'Matriz ▴'; btn.classList.add('active'); }
     _gcpUpdateFramesBar();
+    // Refrescar de inmediato las barras generales de paneo (se ocultan/muestran
+    // según si la Matriz está abierta — ver _edScrollbarsDraw)
+    if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
   }
-  // Refrescar de inmediato las barras generales de paneo (se ocultan/muestran
-  // según si la Matriz está abierta — ver _edScrollbarsDraw)
-  if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
 }
 
 // Previsualizar la animación en el canvas GIF (botón ▶)
@@ -31360,8 +31384,13 @@ function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   if (!bar) return;
   if (bar.style.display !== 'flex') return;
-  // Preservar posición de scroll horizontal antes de reconstruir el DOM
-  const _prevScrollLeft = document.getElementById('gcpFramesPane')?.scrollLeft || 0;
+  // Preservar posición de scroll antes de reconstruir el DOM — tanto horizontal
+  // (vive en cada fila desde el arreglo del scroll independiente de framesPane)
+  // como vertical (scrollWrap). Sin esto, cada reconstrucción (p.ej. al cambiar
+  // la existencia de un objeto en un frame) volvía a colocar la vista arriba
+  // del todo, aunque el usuario estuviera viendo filas o columnas más abajo.
+  const _prevScrollLeft = document.querySelector('#gcpFramesPane .gcp-layer-scroll')?.scrollLeft || 0;
+  const _prevScrollTop  = document.getElementById('gcpFramesScrollWrap')?.scrollTop || 0;
   bar.innerHTML = '';
 
   // Estructura: columna izquierda fija + zona de frames con scroll H+V
@@ -31370,6 +31399,29 @@ function _gcpUpdateFramesBar() {
   inner.id = 'gcpFramesBar-inner';
   inner.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;flex:1;';
   bar.appendChild(inner);
+
+  // ── Regla de tiempo ──────────────────────────────────────────────────────
+  // Fuera de scrollWrap a propósito: así queda fija verticalmente (no se va
+  // con el scroll de filas) pero se sincroniza en horizontal con framesPane
+  // (ver el listener de 'scroll' más abajo). El espaciador de la izquierda
+  // iguala el ancho de leftPane(52px) + samplePane(64px) para que la regla
+  // arranque justo donde arranca la primera columna de frames.
+  const rulerRow = document.createElement('div');
+  rulerRow.id = 'gcpRulerRow';
+  rulerRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:27px;' +
+    'border:1.5px solid #1d6fe0;background:var(--gray-50);';
+  const rulerSpacer = document.createElement('div');
+  rulerSpacer.style.cssText = 'flex-shrink:0;width:116px;border-right:1px solid var(--gray-200);';
+  rulerRow.appendChild(rulerSpacer);
+  const rulerViewport = document.createElement('div');
+  rulerViewport.id = 'gcpRulerViewport';
+  rulerViewport.style.cssText = 'flex:1;min-width:0;overflow:hidden;position:relative;';
+  const rulerContent = document.createElement('div');
+  rulerContent.id = 'gcpRulerContent';
+  rulerContent.style.cssText = 'position:absolute;top:0;left:0;height:100%;';
+  rulerViewport.appendChild(rulerContent);
+  rulerRow.appendChild(rulerViewport);
+  inner.appendChild(rulerRow);
 
   // Zona scrollable: contiene leftPane + framesPane, scroll vertical aquí
   const scrollWrap = document.createElement('div');
@@ -31391,6 +31443,9 @@ function _gcpUpdateFramesBar() {
   if (_gcpThumbIO) _gcpThumbIO.disconnect();
   _gcpThumbQueue.length = 0;
   _gcpThumbQueueRunning = false;
+  // Registro de las filas de frames (una por objeto) para sincronizar su scroll
+  // horizontal entre sí — ver _gcpSyncFrameRowsScroll más abajo.
+  window._gcpFrameRows = [];
   _gcpThumbIO = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (!entry.isIntersecting) return;
@@ -31421,11 +31476,34 @@ function _gcpUpdateFramesBar() {
   // Zona de frames: scroll horizontal compartido para TODAS las capas
   const framesPane = document.createElement('div');
   framesPane.id = 'gcpFramesPane';
-  framesPane.style.cssText = 'flex:1;min-width:0;overflow-x:auto;overflow-y:visible;display:flex;flex-direction:column;scrollbar-width:none;';
-  framesPane.addEventListener('scroll', () => {}, { passive: true });
+  // SIN overflow-x/overflow-y aquí a propósito: si se declara overflow-x:auto
+  // junto con overflow-y:visible, CSS convierte automáticamente ese "visible"
+  // en "auto" (así lo define el estándar de overflow) — eso convertía a
+  // framesPane en un contenedor con SU PROPIO scroll vertical independiente,
+  // separado del que comparten leftPane/samplePane, que es exactamente lo que
+  // causaba que ambos lados dejaran de estar sincronizados. Ahora framesPane
+  // es un simple apilador de filas (como leftPane/samplePane): su contenido
+  // desborda libremente y el ÚNICO scroll vertical es el de scrollWrap. El
+  // scroll horizontal se mueve a cada fila individualmente — ver más abajo.
+  framesPane.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;';
   scrollWrap.appendChild(framesPane);
-  // Restaurar posición de scroll horizontal (preserva el foco visual al duplicar/eliminar)
-  if (_prevScrollLeft > 0) requestAnimationFrame(() => { framesPane.scrollLeft = _prevScrollLeft; });
+
+  // Sincroniza el scroll horizontal de TODAS las filas entre sí (y la regla de
+  // tiempo) a partir de la que acaba de moverse. Cada fila tiene su propio
+  // overflow-x:auto — por eso hace falta este eco manual para que se
+  // comporten como si fuera un único scroll horizontal compartido.
+  let _gcpSyncingFrameScroll = false;
+  let _syncHThumb = null; // se asigna más abajo solo en PC
+  function _gcpSyncFrameRowsScroll(sourceEl) {
+    if (_gcpSyncingFrameScroll) return;
+    _gcpSyncingFrameScroll = true;
+    const left = sourceEl.scrollLeft;
+    window._gcpFrameRows.forEach(row => { if (row !== sourceEl && row.scrollLeft !== left) row.scrollLeft = left; });
+    rulerContent.style.transform = 'translateX(-' + left + 'px)';
+    if (_syncHThumb) _syncHThumb();
+    _gcpSyncingFrameScroll = false;
+  }
+  window._gcpSyncFrameRowsScroll = _gcpSyncFrameRowsScroll;
 
   // ── Scrollbar horizontal custom (PC) ─────────────────────────────────────
   // Solo en PC (no táctil) — barra bajo los frames
@@ -31446,9 +31524,11 @@ function _gcpUpdateFramesBar() {
     hScrollBar.appendChild(hThumb);
     inner.appendChild(hScrollBar);
 
-    // Sincronizar thumb con scroll del framesPane
-    const _syncHThumb = () => {
-      const fp = framesPane;
+    // Sincronizar thumb con scroll — usa la primera fila como referencia
+    // (todas las filas tienen exactamente el mismo ancho de contenido).
+    _syncHThumb = () => {
+      const fp = window._gcpFrameRows[0];
+      if (!fp) { hScrollBar.style.display = 'none'; return; }
       const maxScroll = fp.scrollWidth - fp.clientWidth;
       if (maxScroll <= 0) { hScrollBar.style.display = 'none'; return; }
       hScrollBar.style.display = 'block';
@@ -31459,24 +31539,27 @@ function _gcpUpdateFramesBar() {
       hThumb.style.width = thumbW + 'px';
       hThumb.style.left  = (frac * (trackW - thumbW)) + 'px';
     };
-    framesPane.addEventListener('scroll', _syncHThumb, { passive: true });
     // ResizeObserver en vez de setTimeout con retardo fijo: se dispara en cuanto
     // el layout real está listo (primera visualización, nº de frames cambiado,
     // redimensión de ventana...) sin depender de adivinar un tiempo — por eso
     // antes la barra quedaba invisible hasta que un scroll forzaba el recálculo.
-    new ResizeObserver(_syncHThumb).observe(framesPane);
+    new ResizeObserver(() => _syncHThumb()).observe(framesPane);
 
-    // Drag del thumb horizontal
+    // Drag del thumb horizontal — mueve la primera fila, que a su vez
+    // propaga el cambio a las demás vía el listener 'scroll' de cada fila.
     let _hDragX = 0, _hDragScroll = 0, _hDragging = false;
     hThumb.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      _hDragging = true; _hDragX = e.clientX; _hDragScroll = framesPane.scrollLeft;
+      const fp = window._gcpFrameRows[0];
+      if (!fp) return;
+      _hDragging = true; _hDragX = e.clientX; _hDragScroll = fp.scrollLeft;
       hThumb.setPointerCapture(e.pointerId);
       hThumb.style.cursor = 'grabbing';
     });
     hThumb.addEventListener('pointermove', e => {
       if (!_hDragging) return;
-      const fp = framesPane;
+      const fp = window._gcpFrameRows[0];
+      if (!fp) return;
       const maxScroll = fp.scrollWidth - fp.clientWidth;
       const trackW = hScrollBar.clientWidth;
       const thumbW = hThumb.offsetWidth;
@@ -31489,8 +31572,9 @@ function _gcpUpdateFramesBar() {
     hScrollBar.addEventListener('pointerdown', e => {
       if (e.target === hThumb) return;
       e.stopPropagation();
+      const fp = window._gcpFrameRows[0];
+      if (!fp) return;
       const rect = hScrollBar.getBoundingClientRect();
-      const fp = framesPane;
       const maxScroll = fp.scrollWidth - fp.clientWidth;
       const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       fp.scrollLeft = frac * maxScroll;
@@ -31561,14 +31645,18 @@ function _gcpUpdateFramesBar() {
   } else {
     // ── Arrastre táctil vertical unificado (solo eje vertical) ──────────────
     // Antes, arrastrar sobre los controles de la izquierda o la columna de
-    // muestras no desplazaba nada (esas columnas no tienen scroll propio).
-    // Ahora un arrastre vertical ahí mueve la matriz entera (filas), igual que
-    // arrastrar sobre los frames. El eje horizontal NO se toca aquí: sigue
-    // funcionando solo dentro de framesPane con su scroll nativo de siempre,
-    // así las muestras permanecen siempre visibles en pantalla.
-    // touch-action:none solo en estas dos columnas — framesPane no se toca.
+    // muestras no desplazaba nada, y se asumía que el vertical sobre la matriz
+    // de frames "burbujearía" de forma nativa hasta el scrollWrap común — en
+    // Android eso no es fiable (por eso seguía sin sentirse solidario). Ahora
+    // el MISMO código gestiona el vertical en las tres zonas (controles,
+    // muestras y frames), así que se comportan de forma idéntica y siempre
+    // quedan alineadas. El eje horizontal sigue siendo exclusivo de framesPane,
+    // con su scroll nativo de siempre (touch-action:pan-x se lo permite; solo
+    // el vertical nativo queda desactivado ahí, para que lo gestione este
+    // mismo código en vez de una burbuja que no era fiable).
     leftPane.style.touchAction = 'none';
     samplePane.style.touchAction = 'none';
+    framesPane.style.touchAction = 'pan-x';
 
     let _panPointerId = null, _panStartY = 0, _panScrollTop0 = 0, _panActive = false;
     const _PAN_THRESHOLD = 6; // px — por debajo de esto se trata como toque/tap, no arrastre
@@ -31584,7 +31672,7 @@ function _gcpUpdateFramesBar() {
       if (e.pointerId !== _panPointerId) return;
       const dy = e.clientY - _panStartY;
       if (!_panActive) {
-        if (Math.abs(dy) < _PAN_THRESHOLD) return; // todavía podría ser un tap
+        if (Math.abs(dy) < _PAN_THRESHOLD) return; // todavía podría ser un tap (o un arrastre horizontal en frames)
         _panActive = true;
         e.currentTarget.setPointerCapture(e.pointerId);
       }
@@ -31597,9 +31685,11 @@ function _gcpUpdateFramesBar() {
       if (_panActive) { try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(_e){} }
       _panPointerId = null; _panActive = false;
     };
-    // Enganchado solo en leftPane y samplePane: framesPane no se toca y sigue
-    // con su overflow-x nativo exactamente como antes.
-    [leftPane, samplePane].forEach(pane => {
+    // Enganchado en las tres zonas: controles, muestras y frames. En frames,
+    // como solo se activa al superar el umbral vertical, un arrastre
+    // predominantemente horizontal nunca lo dispara y su scroll nativo
+    // horizontal queda intacto.
+    [leftPane, samplePane, framesPane].forEach(pane => {
       pane.addEventListener('pointerdown', _panStart);
       pane.addEventListener('pointermove', _panMove);
       pane.addEventListener('pointerup', _panEnd);
@@ -31791,13 +31881,13 @@ function _gcpUpdateFramesBar() {
     leftCol.appendChild(label);
 
     // leftCol → leftPane (columna fija)
-    leftCol.style.height = '148px';
+    leftCol.style.height = '190px';
     leftPane.appendChild(leftCol);
 
     // sampleCol → samplePane (solo la miniatura, sin controles, con más espacio
     // ahora que no comparte columna con las flechas/botones)
     const sampleCol = document.createElement('div');
-    sampleCol.style.cssText = 'flex-shrink:0;width:64px;height:148px;display:flex;' +
+    sampleCol.style.cssText = 'flex-shrink:0;width:64px;height:190px;display:flex;' +
       'align-items:center;justify-content:center;';
     const sampleThumb = _gcpLayerSampleThumb(la, 56);
     sampleThumb.style.cssText = 'width:56px;height:56px;display:block;border-radius:4px;' +
@@ -31809,7 +31899,16 @@ function _gcpUpdateFramesBar() {
     // Scroll de frames → framesPane (scroll horizontal compartido)
     const scroll = document.createElement('div');
     scroll.className = 'gcp-layer-scroll';
-    scroll.style.cssText = 'display:flex;flex-direction:row;overflow:visible;flex-shrink:0;height:148px;';
+    // overflow-x:auto aquí (no en framesPane) es la clave del arreglo: cada
+    // fila scrollea horizontalmente por su cuenta, y se sincronizan entre sí
+    // por JS (ver _gcpSyncFrameRowsScroll) — así framesPane nunca se convierte
+    // en un contenedor con scroll vertical propio.
+    // align-items:center + altura generosa: recupera el aire visual alrededor
+    // de la card (antes lo daba un padding que resultó estar duplicando alturas).
+    scroll.style.cssText = 'display:flex;flex-direction:row;align-items:center;' +
+      'overflow-x:auto;overflow-y:hidden;flex-shrink:0;height:190px;scrollbar-width:none;';
+    window._gcpFrameRows.push(scroll);
+    scroll.addEventListener('scroll', () => _gcpSyncFrameRowsScroll(scroll), { passive: true });
 
     // ── Cards de frames (solo frames clave; los interpolados se ocultan) ─────────
     // Construir lista de índices visibles: saltar frames interpolados
@@ -31830,6 +31929,7 @@ function _gcpUpdateFramesBar() {
 
       const card = document.createElement('div');
       card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
+      card.dataset.fi = fi; // usado para medir posiciones y construir la regla de tiempo
       card.style.cursor = 'pointer'; // ambos estados son clicables: navegan al frame
 
       // Cabecera con número de fotograma clave (_vi+1, no índice global fi+1)
@@ -31887,6 +31987,7 @@ function _gcpUpdateFramesBar() {
         if (_gcpThumbCache.has(cacheKey)) {
           const c = _gcpThumbCache.get(cacheKey);
           c.style.cssText = 'width:88px;height:88px;display:block;';
+          c.addEventListener('click', e => _gcpThumbTapGoToFrame(e, la, fi));
           card.appendChild(c);
         } else {
           const holder = document.createElement('div');
@@ -32103,8 +32204,142 @@ function _gcpUpdateFramesBar() {
     scroll.appendChild(liveCard);
     framesPane.appendChild(scroll);
   });
+
+  // Restaurar posición de scroll horizontal (preserva el foco visual al
+  // duplicar/eliminar) — se aplica a la primera fila y se propaga a las
+  // demás mediante su propio listener de 'scroll'.
+  if (_prevScrollLeft > 0 && window._gcpFrameRows[0]) {
+    const _firstRow = window._gcpFrameRows[0];
+    requestAnimationFrame(() => { _firstRow.scrollLeft = _prevScrollLeft; });
+  }
+  // Restaurar posición de scroll vertical — sin esto, cada reconstrucción de
+  // la matriz (p.ej. al cambiar la existencia de un objeto en un frame)
+  // devolvía la vista al principio aunque el usuario estuviera más abajo.
+  if (_prevScrollTop > 0) {
+    requestAnimationFrame(() => { scrollWrap.scrollTop = _prevScrollTop; });
+  }
+
+  _gcpBuildRuler(framesPane, rulerContent);
+
   // Limpiar flag de reconstrucción en el siguiente frame
   requestAnimationFrame(() => { window._gcpFramesBarRebuilding = false; });
+}
+
+// Mide la posición real (en px, dentro del contenido scrollable de framesPane)
+// de cada card de frame clave de la PRIMERA fila — todas las filas comparten
+// exactamente la misma estructura de columnas, así que sirve como referencia
+// única para las demás. Sirve de base para dibujar la regla de tiempo.
+function _gcpMeasureRulerBreakpoints(framesPane) {
+  const firstRow = framesPane.querySelector('.gcp-layer-scroll');
+  if (!firstRow) return [];
+  const cards = firstRow.querySelectorAll('.ed-page-card[data-fi]');
+  if (!cards.length) return [];
+  const rowRect = firstRow.getBoundingClientRect();
+  const breakpoints = [];
+  cards.forEach(card => {
+    const r = card.getBoundingClientRect();
+    breakpoints.push({
+      fi: parseInt(card.dataset.fi, 10),
+      px: (r.left - rowRect.left) + firstRow.scrollLeft,
+    });
+  });
+  breakpoints.sort((a, b) => a.fi - b.fi);
+  return breakpoints;
+}
+
+// Construye (o reconstruye) la regla de tiempo completa: mide las posiciones,
+// las guarda para poder redibujar solo las marcas si cambia la velocidad
+// (ver _gcpUpdateRuler), y dibuja las marcas iniciales.
+function _gcpBuildRuler(framesPane, rulerContent) {
+  window._gcpRulerBreakpoints = _gcpMeasureRulerBreakpoints(framesPane);
+  const firstRow = framesPane.querySelector('.gcp-layer-scroll');
+  window._gcpRulerContentWidth = firstRow ? firstRow.scrollWidth : 0;
+  _gcpDrawRulerMarks();
+}
+
+// Dado un punto en "tiempo-frame" (puede ser fraccional — p.ej. 3.5 = a mitad
+// de camino entre el frame 3 y el 4), devuelve su posición en px interpolando
+// entre los breakpoints medidos. Esto es lo que hace que la regla dé el salto
+// correcto en los tramos con frames interpolados: esos tramos ocupan mucho
+// menos espacio visual que frames clave individuales, así que el tiempo que
+// representan se comprime proporcionalmente en vez de repartirse a partes
+// iguales por frame.
+function _gcpPxAtFrameTime(bp, ft) {
+  if (!bp || !bp.length) return 0;
+  if (ft <= bp[0].fi) return bp[0].px;
+  for (let i = 0; i < bp.length - 1; i++) {
+    if (ft >= bp[i].fi && ft <= bp[i + 1].fi) {
+      const span = bp[i + 1].fi - bp[i].fi;
+      const t = span > 0 ? (ft - bp[i].fi) / span : 0;
+      return bp[i].px + t * (bp[i + 1].px - bp[i].px);
+    }
+  }
+  // Más allá del último breakpoint: extrapolar con el ancho medio de columna
+  const last = bp[bp.length - 1];
+  const prev = bp[bp.length - 2] || last;
+  const perFrame = (last.fi > prev.fi) ? (last.px - prev.px) / (last.fi - prev.fi) : 96;
+  return last.px + (ft - last.fi) * perFrame;
+}
+
+// Redibuja solo las marcas de la regla usando los breakpoints ya medidos y la
+// velocidad de reproducción ACTUAL (window._gcpFrameDelay). No vuelve a medir
+// el DOM — por eso puede llamarse en cada cambio de velocidad sin reconstruir
+// toda la matriz. Ver el gancho en _gcpApplyBehaviorVal (modo 'vel').
+function _gcpDrawRulerMarks() {
+  const rulerContent = document.getElementById('gcpRulerContent');
+  if (!rulerContent) return; // matriz cerrada — nada que dibujar
+  const bp = window._gcpRulerBreakpoints;
+  rulerContent.innerHTML = '';
+  if (!bp || !bp.length) return;
+
+  const delayMs = window._gcpFrameDelay || 100;
+  const totalFrames = _gcpGetTotalFrames();
+  const totalSeconds = (totalFrames * delayMs) / 1000;
+  const framesPerSec = 1000 / delayMs; // posición en "tiempo-frame" que equivale a 1 segundo
+  rulerContent.style.width = (window._gcpRulerContentWidth || 0) + 'px';
+
+  const stepSec = 0.1;
+  const totalMarks = Math.ceil(totalSeconds / stepSec) + 1;
+  const MIN_TICK_GAP_PX  = 3;  // por debajo de esto, ni la marca se dibuja (tramos muy interpolados)
+  const MIN_LABEL_GAP_PX = 9;  // el texto necesita más aire que la propia línea
+  let _lastTickPx  = -Infinity;
+  let _lastLabelPx = -Infinity;
+
+  for (let m = 0; m <= totalMarks; m++) {
+    const tSec = m * stepSec;
+    const isWhole = (m % 10) === 0;
+    const ft = tSec * framesPerSec;
+    const px = _gcpPxAtFrameTime(bp, ft);
+
+    if ((px - _lastTickPx) < MIN_TICK_GAP_PX) continue; // demasiado juntas: omitir marca
+    _lastTickPx = px;
+
+    const tick = document.createElement('div');
+    tick.style.cssText = 'position:absolute;left:' + Math.round(px) + 'px;' +
+      (isWhole
+        ? 'top:0;width:1.5px;height:100%;background:#1a1a1a;'
+        : 'top:15px;width:1px;height:11px;background:#767676;');
+    rulerContent.appendChild(tick);
+
+    // Etiqueta de texto: exige más separación que la propia marca (el texto
+    // es más ancho que la línea) para no amontonarse en tramos comprimidos.
+    if ((px - _lastLabelPx) < MIN_LABEL_GAP_PX) continue;
+    _lastLabelPx = px;
+
+    const label = document.createElement('div');
+    if (isWhole) {
+      label.textContent = Math.round(tSec) + 's';
+      label.style.cssText = 'position:absolute;top:1px;left:' + (Math.round(px) + 3) + 'px;' +
+        'font-size:10px;font-weight:900;color:#1a1a1a;white-space:nowrap;line-height:1;';
+    } else {
+      // Solo el dígito de la décima (sin "s"): más compacto, evita saturar
+      // tramos con muchas marcas juntas.
+      label.textContent = String(m % 10);
+      label.style.cssText = 'position:absolute;top:3px;left:' + (Math.round(px) + 2) + 'px;' +
+        'font-size:7px;font-weight:700;color:#767676;white-space:nowrap;line-height:1;';
+    }
+    rulerContent.appendChild(label);
+  }
 }
 
 // ── Diagnóstico scrollbars GCP ───────────────────────────────────────────────
@@ -33141,6 +33376,10 @@ function gcpOpen(edLayerIdx) {
     const _gcpApplyBehaviorVal = (mode, n) => {
       if (mode === 'vel') {
         window._gcpFrameDelay = Math.round(1000 / Math.max(n, 1));
+        // La duración total cambia con la velocidad: redibujar las marcas de
+        // la regla de tiempo si la matriz está abierta (no hace falta volver
+        // a medir el DOM, las posiciones de las cards no cambian).
+        _gcpDrawRulerMarks();
       } else if (mode === 'rep') {
         window._gcpRepeatCount = n; // 0 = ∞
         if (n === 0 && window._gcpRestartDelay > 0) window._gcpRestartDelay = 0;
