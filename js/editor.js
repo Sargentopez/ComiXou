@@ -29745,11 +29745,17 @@ function _gcpAutoSaveFrame() {
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi) la._frames.push(null);
-    if (la._gcpVisible === false) { la._frames[fi] = null; return; }
+    if (la._gcpVisible === false) { la._frames[fi] = null; _gcpInvalidateThumb(la, fi); return; }
     la._frames[fi] = {
       x: la.x, y: la.y, width: la.width, height: la.height,
       rotation: la.rotation || 0, opacity: la.opacity ?? 1
     };
+    // Invalidar solo esta celda concreta (capa, frame) y la muestra de esta
+    // fila — no la caché entera. Esta función se llama en cada autoguardado
+    // durante un arrastre; invalidarlo todo aquí era lo que obligaba a
+    // recalcular las miniaturas de TODOS los frames en cada fotograma del gesto.
+    _gcpInvalidateThumb(la, fi);
+    _gcpInvalidateSampleThumb(la);
   });
   // Recalcular interpolaciones adyacentes si existen (preservando _blur)
   _gcpReinterpolateAround(fi);
@@ -30331,11 +30337,13 @@ function _gcpSaveFrame() {
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi) la._frames.push(null);
-    if (la._gcpVisible === false) { la._frames[fi] = null; return; }
+    if (la._gcpVisible === false) { la._frames[fi] = null; _gcpInvalidateThumb(la, fi); return; }
     la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,
                   rotation:la.rotation||0,opacity:la.opacity??1};
+    // Solo esta columna cambió — no hace falta invalidar el resto de frames.
+    _gcpInvalidateThumb(la, fi);
+    _gcpInvalidateSampleThumb(la);
   });
-  _gcpInvalidateAllThumbs();
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
   if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
@@ -30466,10 +30474,15 @@ function _gcpReinterpolateBefore(fi) {
 }
 
 // Reinterpolación completa (después de editar un frame clave)
+// Nota: los frames interpolados NUNCA tienen su propia miniatura cacheada (se
+// omiten de _visibleFiList — se colapsan en el indicador ⟳ entre claves), así
+// que recalcular sus valores no invalida ninguna miniatura ya renderizada. Por
+// eso aquí NO se llama a _gcpInvalidateAllThumbs(): esta función se dispara en
+// cada autoguardado durante un arrastre, y antes vaciaba la caché entera (y
+// obligaba a re-renderizar todos los frames) en cada fotograma del gesto.
 function _gcpReinterpolateAround(fi) {
   _gcpReinterpolateAfter(fi);
   _gcpReinterpolateBefore(fi);
-  _gcpInvalidateAllThumbs();
   _gcpUpdateFramesBar();
 }
 
@@ -30842,7 +30855,11 @@ function _gcpGoToFrame(fi) {
 const _gcpSampleThumbCache = new Map(); // clave: índice de capa
 function _gcpInvalidateSampleThumb(la) {
   const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
-  if (idx >= 0) _gcpSampleThumbCache.delete(idx);
+  if (idx < 0) return;
+  // La clave real es "idx-S" (S = tamaño en px), no idx a secas — borrar por prefijo.
+  for (const k of _gcpSampleThumbCache.keys()) {
+    if (k.startsWith(idx + '-')) _gcpSampleThumbCache.delete(k);
+  }
 }
 function _gcpInvalidateAllSampleThumbs() { _gcpSampleThumbCache.clear(); }
 
@@ -30862,11 +30879,17 @@ function _gcpLayerSampleThumb(la, S) {
     const diagHalf = Math.hypot(halfW, halfH);
     const objR = diagHalf + Math.max(diagHalf * 0.4, 24);
     const cx = mx + la.x * pw, cy = my + la.y * ph;
-    const wsW = Math.max(4, Math.round(objR * 2)), wsH = wsW;
-    const offX = wsW/2 - cx, offY = wsH/2 - cy;
+    // Límite de resolución de trabajo: acota el coste de dibujar+getImageData
+    // aunque el objeto sea muy grande (p.ej. un fondo a página completa) — se
+    // reescala el trazo entero para que quepa, no se recorta.
+    const rawSize = Math.max(4, Math.round(objR * 2));
+    const WORK_CAP = 320;
+    const scale = Math.min(1, WORK_CAP / rawSize);
+    const wsW = Math.max(4, Math.round(rawSize * scale)), wsH = wsW;
+    const offX = wsW/2 - cx*scale, offY = wsH/2 - cy*scale;
     const off=document.createElement('canvas'); off.width=wsW; off.height=wsH;
     const octx=off.getContext('2d');
-    octx.setTransform(1,0,0,1,offX,offY);
+    octx.setTransform(scale,0,0,scale,offX,offY);
     if(la.type==='gif'){if(la._oc&&la._ready&&la._oc.width>0){const gx=mx+la.x*pw-(la.width*pw)/2;const gy=my+la.y*ph-(la.height*ph)/2;octx.globalAlpha=la.opacity??1;octx.drawImage(la._oc,gx,gy,la.width*pw,la.height*ph);octx.globalAlpha=1;}}
     else if(la.type==='image'){la.draw(octx,off);}
     else if(la.type==='draw'){la.draw(octx);}
@@ -30877,7 +30900,7 @@ function _gcpLayerSampleThumb(la, S) {
     for(let y=0;y<wsH;y++)for(let x=0;x<wsW;x++){if(idata[(y*wsW+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}}
     if(x1<=x0||y1<=y0){x0=0;y0=0;x1=wsW-1;y1=wsH-1;}
     const pad=6;x0=Math.max(0,x0-pad);y0=Math.max(0,y0-pad);x1=Math.min(wsW-1,x1+pad);y1=Math.min(wsH-1,y1+pad);
-    const cw=x1-x0+1,ch=y1-y0+1;const scale=Math.min(S/cw,S/ch);const dw=cw*scale,dh=ch*scale;
+    const cw=x1-x0+1,ch=y1-y0+1;const scale2=Math.min(S/cw,S/ch);const dw=cw*scale2,dh=ch*scale2;
     tctx.fillStyle='#fff';tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
     tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
   });
@@ -30935,11 +30958,17 @@ function _gcpLayerFrameThumb(la, fi, S) {
     const diagHalf = Math.hypot(halfW, halfH);
     const objR = diagHalf + Math.max(diagHalf * 0.4, 24);
     const cx = mx + la.x * pw, cy = my + la.y * ph;
-    const wsW = Math.max(4, Math.round(objR * 2)), wsH = wsW;
-    const offX = wsW/2 - cx, offY = wsH/2 - cy;
+    // Límite de resolución de trabajo: acota el coste de dibujar+getImageData
+    // aunque el objeto sea muy grande (p.ej. un fondo a página completa) — se
+    // reescala el trazo entero para que quepa, no se recorta.
+    const rawSize = Math.max(4, Math.round(objR * 2));
+    const WORK_CAP = 320;
+    const scale = Math.min(1, WORK_CAP / rawSize);
+    const wsW = Math.max(4, Math.round(rawSize * scale)), wsH = wsW;
+    const offX = wsW/2 - cx*scale, offY = wsH/2 - cy*scale;
     const off=document.createElement('canvas'); off.width=wsW; off.height=wsH;
     const octx=off.getContext('2d');
-    octx.setTransform(1,0,0,1,offX,offY);
+    octx.setTransform(scale,0,0,scale,offX,offY);
     if(la.type==='gif'){if(la._oc&&la._ready&&la._oc.width>0){const gx=mx+la.x*pw-(la.width*pw)/2;const gy=my+la.y*ph-(la.height*ph)/2;octx.globalAlpha=la.opacity??1;octx.drawImage(la._oc,gx,gy,la.width*pw,la.height*ph);octx.globalAlpha=1;}}
     else if(la.type==='image'){la.draw(octx,off);}
     else if(la.type==='draw'){la.draw(octx);}
@@ -30950,7 +30979,7 @@ function _gcpLayerFrameThumb(la, fi, S) {
     for(let y=0;y<wsH;y++)for(let x=0;x<wsW;x++){if(idata[(y*wsW+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}}
     if(x1<=x0||y1<=y0){x0=0;y0=0;x1=wsW-1;y1=wsH-1;}
     const pad=6;x0=Math.max(0,x0-pad);y0=Math.max(0,y0-pad);x1=Math.min(wsW-1,x1+pad);y1=Math.min(wsH-1,y1+pad);
-    const cw=x1-x0+1,ch=y1-y0+1;const scale=Math.min(S/cw,S/ch);const dw=cw*scale,dh=ch*scale;
+    const cw=x1-x0+1,ch=y1-y0+1;const scale2=Math.min(S/cw,S/ch);const dw=cw*scale2,dh=ch*scale2;
     tctx.fillStyle='#fff';tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
     tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
   });
@@ -30965,11 +30994,32 @@ function _gcpLayerFrameThumb(la, fi, S) {
 // pantalla. Se recrea en cada _gcpUpdateFramesBar() porque el contenedor raíz
 // se reconstruye. Las miniaturas de muestra (una por fila) no lo necesitan:
 // son pocas (una por objeto) y se calculan directamente.
+//
+// IMPORTANTE: no basta con "diferir" cada miniatura a su propio
+// requestAnimationFrame — si varias celdas entran en pantalla a la vez (p.ej.
+// al abrir la matriz con pocas filas/columnas, donde casi todo cabe en el
+// viewport + margen de precarga), TODAS programan su rAF para el mismo tick,
+// y el navegador las ejecuta de golpe, síncronamente, en un solo frame. Eso
+// es lo que bloqueaba dispositivos Android: no una miniatura pesada, sino
+// decenas renderizándose juntas. La cola de abajo garantiza que como mucho
+// se renderiza UNA miniatura por frame de pantalla, sea cual sea el número
+// de celdas que se vuelvan visibles de golpe.
 let _gcpThumbIO = null;
+let _gcpThumbQueue = [];
+let _gcpThumbQueueRunning = false;
+
 function _gcpQueueThumbRender(holder, la, fi, S) {
   holder._gcpLa = la; holder._gcpFi = fi; holder._gcpS = S;
   if (_gcpThumbIO) _gcpThumbIO.observe(holder);
 }
+
+function _gcpProcessThumbQueue() {
+  if (!_gcpThumbQueue.length) { _gcpThumbQueueRunning = false; return; }
+  const holder = _gcpThumbQueue.shift();
+  if (holder.isConnected) _gcpRenderQueuedThumb(holder);
+  requestAnimationFrame(_gcpProcessThumbQueue); // uno por frame, nunca más
+}
+
 function _gcpRenderQueuedThumb(holder) {
   const c = _gcpLayerFrameThumb(holder._gcpLa, holder._gcpFi, holder._gcpS);
   c.style.cssText = 'width:' + holder._gcpS + 'px;height:' + holder._gcpS + 'px;display:block;';
@@ -31332,17 +31382,26 @@ function _gcpUpdateFramesBar() {
   inner.appendChild(scrollWrap);
 
   // IntersectionObserver de miniaturas: se recrea en cada reconstrucción de la matriz
-  // porque scrollWrap (su raíz) es un nodo nuevo cada vez. rootMargin da un colchón para
-  // que la miniatura esté lista justo antes de entrar en pantalla al hacer scroll.
+  // porque scrollWrap (su raíz) es un nodo nuevo cada vez. rootMargin pequeño: solo
+  // precarga lo justo antes de que entre en pantalla, no toda la matriz de golpe.
+  // Las celdas que se vuelven visibles se ENCOLAN (_gcpThumbQueue) y se procesan de
+  // una en una por frame — ver _gcpProcessThumbQueue — para que aunque muchas celdas
+  // entren en pantalla a la vez (matrices pequeñas con pocos objetos/frames) nunca se
+  // rendericen varias miniaturas de golpe en el mismo tick.
   if (_gcpThumbIO) _gcpThumbIO.disconnect();
+  _gcpThumbQueue.length = 0;
+  _gcpThumbQueueRunning = false;
   _gcpThumbIO = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (!entry.isIntersecting) return;
       _gcpThumbIO.unobserve(entry.target);
-      const holder = entry.target;
-      requestAnimationFrame(() => _gcpRenderQueuedThumb(holder));
+      _gcpThumbQueue.push(entry.target);
     });
-  }, { root: scrollWrap, rootMargin: '300px', threshold: 0.01 });
+    if (!_gcpThumbQueueRunning && _gcpThumbQueue.length) {
+      _gcpThumbQueueRunning = true;
+      requestAnimationFrame(_gcpProcessThumbQueue);
+    }
+  }, { root: scrollWrap, rootMargin: '60px', threshold: 0.01 });
 
   // Columna izquierda: controles de cada capa (fija, sin scroll)
   const leftPane = document.createElement('div');
@@ -31710,7 +31769,9 @@ function _gcpUpdateFramesBar() {
         la._frames = la._frames.map(() => null);
       }
       eyeBtn.style.opacity = _nowAllHidden ? '1' : '0.4';
-      _gcpInvalidateAllThumbs();
+      // Solo esta fila cambió (ninguna otra capa se ve afectada, ni se
+      // desplazan columnas) — invalidar solo la caché de este objeto.
+      _gcpInvalidateThumb(la);
       _gcpApplyFrame(window._gcpGlobalFrameIdx);
       window._gcpDirty = true;
       _gcpPushHistory();
@@ -31807,7 +31868,9 @@ function _gcpUpdateFramesBar() {
           la._frames[fi] = _prev ? {..._prev} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
           delete la._frames[fi]._interp;
           window._gcpDirty = true;
-          _gcpInvalidateAllThumbs();
+          // Solo esta celda pasa a existir — el resto de frames de esta y
+          // otras capas no cambian, no hace falta invalidarlos.
+          _gcpInvalidateThumb(la, fi);
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
           _gcpReinterpolateAround(fi);
           _gcpUpdateFrameNav();
@@ -31878,11 +31941,20 @@ function _gcpUpdateFramesBar() {
             la._frames[fi] = null;
             // Los interpolados adyacentes ya no tienen extremo del que partir
             _gcpPurgeInterpAround(fi, la);
+            const _totalBefore = _gcpGetTotalFrames();
             _gcpTrimLeadingInvisible();
             _gcpTrimTrailingInvisible();
+            if (_gcpGetTotalFrames() === _totalBefore) {
+              // El recorte no quitó ninguna columna: nada se desplazó,
+              // basta con invalidar esta celda concreta.
+              _gcpInvalidateThumb(la, fi);
+            } else {
+              // Se recortaron columnas de borde: los índices de TODAS las
+              // capas se desplazaron, hace falta invalidar todo.
+              _gcpInvalidateAllThumbs();
+            }
           }
           window._gcpDirty = true;
-          _gcpInvalidateAllThumbs();
           const _ntEye = _gcpGetTotalFrames();
           if (window._gcpGlobalFrameIdx >= _ntEye && _ntEye > 0) window._gcpGlobalFrameIdx = _ntEye - 1;
           _gcpApplyFrame(window._gcpGlobalFrameIdx);
@@ -32540,7 +32612,9 @@ function gcpInsertFromBib(entry) {
     // Si _totalAtInsert === 0: _frames vacío — el usuario guarda su primer frame con "Guardar Frame".
     _gcpPushLayer(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
-    _gcpInvalidateAllThumbs();
+    // El objeto nuevo se añade al final: no desplaza a ningún otro objeto ni
+    // frame existente, y él mismo no tiene nada cacheado todavía — no hace
+    // falta invalidar la caché de miniaturas de los demás objetos.
     _gcpUpdateFrameNav();
     const _fb = document.getElementById('gcpFramesBar');
     if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
