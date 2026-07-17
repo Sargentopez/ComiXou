@@ -6715,6 +6715,12 @@ function edDuplicateSelected(){
   // Desplazar ligeramente para distinguirlo visualmente del original
   copy.x = la.x + 0.02;
   copy.y = la.y + 0.02;
+  // Si es una animación GCP con ref de línea base: desplazarla el mismo delta.
+  // Sin esto, _gcpRefX/Y quedan apuntando a la posición del ORIGINAL (previa a
+  // esta duplicación), no a la de la copia — gcpOpen calcularía mal el delta de
+  // contenedor la primera vez que la copia se mueva y se reedite.
+  if (copy._gcpRefX != null) copy._gcpRefX += 0.02;
+  if (copy._gcpRefY != null) copy._gcpRefY += 0.02;
   // NOTA: no tocar copy.points aquí. LineLayer.draw() ya usa x/y como origen de
   // traslación y los points como offsets LOCALES — desplazar x/y basta para mover
   // el objeto completo. Desplazar points ADEMÁS (y llamar a _updateBbox, que
@@ -28437,6 +28443,10 @@ function _bibRenderPanel(panel) {
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
+                // Ref de línea base — SIN esto, gcpOpen no puede calcular el delta de
+                // contenedor si esta animación se mueve en el editor general antes de
+                // reeditarla (ver invariante junto a _gcpApplyContainerDelta en gcpOpen).
+                la2._gcpRefX=0.5; la2._gcpRefY=0.5; la2._gcpRefW=fW; la2._gcpRefH=fH;
                 if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=[entry.apngSrc];}
                 else la2._pngFrames=_frames2;
                 la2._fIdx=0;
@@ -28482,6 +28492,8 @@ function _bibRenderPanel(panel) {
           la.src = entry.gifDataUrl || (entry.pngFrames && entry.pngFrames[0]) || _srcForImg;
           la._keepSize = true;
           la._isGcpImage = true;
+          // Ref de línea base — misma razón que en la rama async de arriba.
+          la._gcpRefX = 0.5; la._gcpRefY = 0.5; la._gcpRefW = finalW; la._gcpRefH = finalH;
           // Si apngSrc: usar directamente para decodeApng (preserva todos los frames)
           if (entry.apngSrc) {
             la._apngSrc = entry.apngSrc;
@@ -33666,7 +33678,8 @@ function gcpClose() {
   const pop = document.createElement('div');
   pop.id = '_gcpSavePop';
   pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;touch-action:none';
-  const _isReEdit = (window._gcpEdLayerIdx >= 0) && edLayers[window._gcpEdLayerIdx]?._isGcpImage;
+  const _isReEdit = (window._gcpEdLayerIdx >= 0) &&
+    (edLayers[window._gcpEdLayerIdx]?._isGcpImage || edLayers[window._gcpEdLayerIdx]?._gcpLayersData);
   const _actionLabel = _isReEdit ? 'Actualizar animación' : 'Insertar en el canvas';
   pop.innerHTML = `<div id="_gcpSaveBox" style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
     <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">Tienes cambios sin guardar</p>
@@ -33849,9 +33862,14 @@ function _gcpSaveToLib(onDone) {
   // Restaurar estado del frame activo
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
 
-  // Si re-editamos capa existente, actualizarla in-place (igual que antes)
+  // Si re-editamos capa existente, actualizarla in-place (igual que antes).
+  // _gcpLayersData se acepta como señal adicional a _isGcpImage: window._gcpEdLayerIdx
+  // ya certifica por construcción (se fija solo en gcpOpen(idx) al pulsar "Editar
+  // animación" sobre una capa ya seleccionada) que esto es una reedición — exigir
+  // ADEMÁS _isGcpImage es una comprobación redundante que, si ese flag se pierde
+  // por cualquier vía, convierte una actualización en una animación duplicada.
   const existingLayer = (window._gcpEdLayerIdx>=0) ? edLayers[window._gcpEdLayerIdx] : null;
-  if (existingLayer && (existingLayer.type==='gif' || existingLayer._isGcpImage)) {
+  if (existingLayer && (existingLayer.type==='gif' || existingLayer._isGcpImage || existingLayer._gcpLayersData)) {
     const savedR=existingLayer.rotation;
     existingLayer._gcpLayersData=gcpLayersData;
     existingLayer._gcpFramesData=gcpFramesData;
