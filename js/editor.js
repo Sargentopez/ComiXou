@@ -31221,9 +31221,10 @@ function _gcpPreview() {
 function _gcpAnimatedSwap(idxA, idxB) {
   const bar = document.getElementById('gcpFramesBar');
   const leftPane   = document.getElementById('gcpFramesLeftPane');
+  const samplePane = document.getElementById('gcpFramesSamplePane');
   const framesPane = document.getElementById('gcpFramesPane');
 
-  if (!leftPane || !framesPane) {
+  if (!leftPane || !samplePane || !framesPane) {
     // Fallback sin animación
     [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
     if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
@@ -31233,6 +31234,7 @@ function _gcpAnimatedSwap(idxA, idxB) {
   }
 
   const leftChildren   = Array.from(leftPane.children);
+  const sampleChildren = Array.from(samplePane.children);
   const framesChildren = Array.from(framesPane.children);
   const n = leftChildren.length;
   if (n < 2) { _gcpUpdateFramesBar(); return; }
@@ -31242,16 +31244,19 @@ function _gcpAnimatedSwap(idxA, idxB) {
   const domB = (n - 1) - idxB;
 
   const lA = leftChildren[domA],   lB = leftChildren[domB];
+  const sA = sampleChildren[domA], sB = sampleChildren[domB];
   const fA = framesChildren[domA], fB = framesChildren[domB];
-  if (!lA || !lB || !fA || !fB) { _gcpUpdateFramesBar(); return; }
+  if (!lA || !lB || !sA || !sB || !fA || !fB) { _gcpUpdateFramesBar(); return; }
 
   // FIRST: capturar Y
   const topLA = lA.getBoundingClientRect().top;
   const topLB = lB.getBoundingClientRect().top;
+  const topSA = sA.getBoundingClientRect().top;
+  const topSB = sB.getBoundingClientRect().top;
   const topFA = fA.getBoundingClientRect().top;
   const topFB = fB.getBoundingClientRect().top;
 
-  // Intercambiar en DOM — ambos paneles
+  // Intercambiar en DOM — los tres paneles
   const _swapSiblings = (pa, elA, elB) => {
     const afterA = elA.nextSibling;
     const afterB = elB.nextSibling;
@@ -31260,17 +31265,20 @@ function _gcpAnimatedSwap(idxA, idxB) {
     else { pa.insertBefore(elB, afterA); pa.insertBefore(elA, afterB); }
   };
   _swapSiblings(leftPane,   lA, lB);
+  _swapSiblings(samplePane, sA, sB);
   _swapSiblings(framesPane, fA, fB);
 
   // LAST: deltas
   const dLA = topLA - lA.getBoundingClientRect().top;
   const dLB = topLB - lB.getBoundingClientRect().top;
+  const dSA = topSA - sA.getBoundingClientRect().top;
+  const dSB = topSB - sB.getBoundingClientRect().top;
   const dFA = topFA - fA.getBoundingClientRect().top;
   const dFB = topFB - fB.getBoundingClientRect().top;
 
   // INVERT
-  [lA, lB, fA, fB].forEach((el, i) => {
-    const d = [dLA, dLB, dFA, dFB][i];
+  [lA, lB, sA, sB, fA, fB].forEach((el, i) => {
+    const d = [dLA, dLB, dSA, dSB, dFA, dFB][i];
     el.style.transition = 'none';
     el.style.transform  = 'translateY(' + d + 'px)';
     el.style.opacity    = '0.55';
@@ -31279,7 +31287,7 @@ function _gcpAnimatedSwap(idxA, idxB) {
   // PLAY
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const ease = 'transform 320ms cubic-bezier(.4,0,.2,1), opacity 320ms ease';
-    [lA, lB, fA, fB].forEach(el => {
+    [lA, lB, sA, sB, fA, fB].forEach(el => {
       el.style.transition = ease;
       el.style.transform  = 'translateY(0)';
       el.style.opacity    = '1';
@@ -31341,6 +31349,15 @@ function _gcpUpdateFramesBar() {
   leftPane.id = 'gcpFramesLeftPane';
   leftPane.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;overflow:visible;z-index:1;position:sticky;left:0;';
   scrollWrap.appendChild(leftPane);
+
+  // Columna de muestras: una miniatura por objeto, sin controles — solo para
+  // identificar de un vistazo qué fila es cada objeto. Fija junto a leftPane
+  // (sticky, desplazada su ancho), con la línea divisoria de la matriz a su derecha.
+  const samplePane = document.createElement('div');
+  samplePane.id = 'gcpFramesSamplePane';
+  samplePane.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;overflow:visible;' +
+    'z-index:1;position:sticky;left:52px;border-right:1px solid var(--gray-200);';
+  scrollWrap.appendChild(samplePane);
 
   // Zona de frames: scroll horizontal compartido para TODAS las capas
   const framesPane = document.createElement('div');
@@ -31546,18 +31563,11 @@ function _gcpUpdateFramesBar() {
     // ── Fila ──────────────────────────────────────────────────────────
     // (row eliminado — estructura nueva: leftPane + framesPane separados)
 
-    // Columna izquierda: flechas orden + botón eliminar + etiqueta
+    // Columna izquierda: flechas orden + botón eliminar + etiqueta (solo controles,
+    // la miniatura de muestra vive en su propio panel — ver samplePane)
     const leftCol = document.createElement('div');
     leftCol.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;' +
-      'width:52px;min-width:52px;border-right:1px solid var(--gray-200);padding:2px 0;gap:1px;';
-
-    // Miniatura de muestra: identifica de un vistazo qué objeto es esta fila,
-    // sin necesidad de mirar ningún frame concreto. Una por objeto, no por celda.
-    const sampleThumb = _gcpLayerSampleThumb(la, 40);
-    sampleThumb.style.cssText = 'width:40px;height:40px;display:block;border-radius:4px;' +
-      'border:1px solid var(--gray-300);flex-shrink:0;';
-    sampleThumb.title = layerName;
-    leftCol.appendChild(sampleThumb);
+      'width:52px;min-width:52px;padding:2px 0;gap:1px;';
 
     // Fila superior: ▲ arriba y ▼ abajo (reordenar capas)
     const arrowRow = document.createElement('div');
@@ -31675,6 +31685,18 @@ function _gcpUpdateFramesBar() {
     // leftCol → leftPane (columna fija)
     leftCol.style.height = '148px';
     leftPane.appendChild(leftCol);
+
+    // sampleCol → samplePane (solo la miniatura, sin controles, con más espacio
+    // ahora que no comparte columna con las flechas/botones)
+    const sampleCol = document.createElement('div');
+    sampleCol.style.cssText = 'flex-shrink:0;width:64px;height:148px;display:flex;' +
+      'align-items:center;justify-content:center;';
+    const sampleThumb = _gcpLayerSampleThumb(la, 56);
+    sampleThumb.style.cssText = 'width:56px;height:56px;display:block;border-radius:4px;' +
+      'border:1px solid var(--gray-300);flex-shrink:0;';
+    sampleThumb.title = layerName;
+    sampleCol.appendChild(sampleThumb);
+    samplePane.appendChild(sampleCol);
 
     // Scroll de frames → framesPane (scroll horizontal compartido)
     const scroll = document.createElement('div');
