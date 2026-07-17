@@ -31500,6 +31500,53 @@ function _gcpUpdateFramesBar() {
     });
 
   } else {
+    // ── Arrastre táctil vertical unificado (solo eje vertical) ──────────────
+    // Antes, arrastrar sobre los controles de la izquierda o la columna de
+    // muestras no desplazaba nada (esas columnas no tienen scroll propio).
+    // Ahora un arrastre vertical ahí mueve la matriz entera (filas), igual que
+    // arrastrar sobre los frames. El eje horizontal NO se toca aquí: sigue
+    // funcionando solo dentro de framesPane con su scroll nativo de siempre,
+    // así las muestras permanecen siempre visibles en pantalla.
+    // touch-action:none solo en estas dos columnas — framesPane no se toca.
+    leftPane.style.touchAction = 'none';
+    samplePane.style.touchAction = 'none';
+
+    let _panPointerId = null, _panStartY = 0, _panScrollTop0 = 0, _panActive = false;
+    const _PAN_THRESHOLD = 6; // px — por debajo de esto se trata como toque/tap, no arrastre
+
+    const _panStart = e => {
+      if (e.pointerType !== 'touch') return; // el ratón/PC usa las barras de scroll propias
+      _panPointerId = e.pointerId;
+      _panStartY = e.clientY;
+      _panScrollTop0 = scrollWrap.scrollTop;
+      _panActive = false; // aún no se sabe si será tap o arrastre
+    };
+    const _panMove = e => {
+      if (e.pointerId !== _panPointerId) return;
+      const dy = e.clientY - _panStartY;
+      if (!_panActive) {
+        if (Math.abs(dy) < _PAN_THRESHOLD) return; // todavía podría ser un tap
+        _panActive = true;
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
+      e.preventDefault();
+      const maxScrollY = scrollWrap.scrollHeight - scrollWrap.clientHeight;
+      scrollWrap.scrollTop = Math.max(0, Math.min(maxScrollY, _panScrollTop0 - dy));
+    };
+    const _panEnd = e => {
+      if (e.pointerId !== _panPointerId) return;
+      if (_panActive) { try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(_e){} }
+      _panPointerId = null; _panActive = false;
+    };
+    // Enganchado solo en leftPane y samplePane: framesPane no se toca y sigue
+    // con su overflow-x nativo exactamente como antes.
+    [leftPane, samplePane].forEach(pane => {
+      pane.addEventListener('pointerdown', _panStart);
+      pane.addEventListener('pointermove', _panMove);
+      pane.addEventListener('pointerup', _panEnd);
+      pane.addEventListener('pointercancel', _panEnd);
+    });
+
     // ── Slider vertical táctil ─────────────────────────────────────────────
     // Un thumb arrastrable en el lateral derecho para scroll de filas en táctil
     const vSlider = document.createElement('div');
