@@ -30836,15 +30836,70 @@ function _gcpGoToFrame(fi) {
   if (_gfb && _gfb.style.display === 'flex') _gcpUpdateFramesBar();
 }
 
-// ── Cache de miniaturas: evita re-renderizar lo que no cambió ──────────────────
-// Clave: "layerIdx-fi". Se invalida en _gcpInvalidateThumbCache(layerIdx, fi).
-const _gcpThumbCache = new Map();
+// ── Miniatura de "muestra": UNA por objeto (fila), para identificar de un
+// vistazo qué objeto es cada fila sin depender de ningún frame concreto.
+// Se renderiza con las propiedades ACTUALES del objeto (no depende de ningún fi).
+const _gcpSampleThumbCache = new Map(); // clave: índice de capa
+function _gcpInvalidateSampleThumb(la) {
+  const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
+  if (idx >= 0) _gcpSampleThumbCache.delete(idx);
+}
+function _gcpInvalidateAllSampleThumbs() { _gcpSampleThumbCache.clear(); }
+
+function _gcpLayerSampleThumb(la, S) {
+  S = S || 40;
+  const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
+  const cacheKey = idx + '-' + S;
+  if (_gcpSampleThumbCache.has(cacheKey)) return _gcpSampleThumbCache.get(cacheKey);
+  const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
+  const tctx = tc.getContext('2d');
+  tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
+  const _savedSel = window._gcpSelIdx;
+  window._gcpSelIdx = -1;
+  _gcpWithEditorContext(() => {
+    const pw=edPageW(),ph=edPageH(),mx=edMarginX(),my=edMarginY();
+    const halfW = Math.abs(la.width * pw) / 2, halfH = Math.abs(la.height * ph) / 2;
+    const diagHalf = Math.hypot(halfW, halfH);
+    const objR = diagHalf + Math.max(diagHalf * 0.4, 24);
+    const cx = mx + la.x * pw, cy = my + la.y * ph;
+    const wsW = Math.max(4, Math.round(objR * 2)), wsH = wsW;
+    const offX = wsW/2 - cx, offY = wsH/2 - cy;
+    const off=document.createElement('canvas'); off.width=wsW; off.height=wsH;
+    const octx=off.getContext('2d');
+    octx.setTransform(1,0,0,1,offX,offY);
+    if(la.type==='gif'){if(la._oc&&la._ready&&la._oc.width>0){const gx=mx+la.x*pw-(la.width*pw)/2;const gy=my+la.y*ph-(la.height*ph)/2;octx.globalAlpha=la.opacity??1;octx.drawImage(la._oc,gx,gy,la.width*pw,la.height*ph);octx.globalAlpha=1;}}
+    else if(la.type==='image'){la.draw(octx,off);}
+    else if(la.type==='draw'){la.draw(octx);}
+    else{octx.globalAlpha=la.opacity??1;la.draw(octx);octx.globalAlpha=1;}
+    octx.setTransform(1,0,0,1,0,0);
+    const idata=octx.getImageData(0,0,wsW,wsH).data;
+    let x0=wsW,y0=wsH,x1=0,y1=0;
+    for(let y=0;y<wsH;y++)for(let x=0;x<wsW;x++){if(idata[(y*wsW+x)*4+3]>10){if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}}
+    if(x1<=x0||y1<=y0){x0=0;y0=0;x1=wsW-1;y1=wsH-1;}
+    const pad=6;x0=Math.max(0,x0-pad);y0=Math.max(0,y0-pad);x1=Math.min(wsW-1,x1+pad);y1=Math.min(wsH-1,y1+pad);
+    const cw=x1-x0+1,ch=y1-y0+1;const scale=Math.min(S/cw,S/ch);const dw=cw*scale,dh=ch*scale;
+    tctx.fillStyle='#fff';tctx.fillRect((S-dw)/2,(S-dh)/2,dw,dh);
+    tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
+  });
+  window._gcpSelIdx=_savedSel;
+  _gcpSampleThumbCache.set(cacheKey, tc);
+  return tc;
+}
+
+// ── Miniatura de UN frame concreto: fiel al contenido real de ese frame ────────
+// (posición/tamaño/rotación/opacidad EXACTOS de ese fi, no la pose "actual" del
+// objeto). Solo se llama para frames que SÍ existen — ver hasFrame en
+// _gcpUpdateFramesBar; los frames sin contenido no cuestan nada de renderizar.
+// Rendimiento: el canvas de trabajo se ciñe al propio tamaño del objeto (más un
+// margen de seguridad para rotación/desbordes de trazo) en vez de a toda la
+// página + medio lienzo extra, y además la carga se difiere con
+// IntersectionObserver: solo se calculan las miniaturas que entran en pantalla.
+const _gcpThumbCache = new Map(); // clave: "layerIdx-fi-S"
 function _gcpThumbCacheKey(la, fi) {
   const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
   return idx + '-' + fi;
 }
 function _gcpInvalidateThumb(la, fi) {
-  // fi === undefined → invalida todos los frames de ese layer
   if (fi === undefined) {
     const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
     if (idx < 0) return;
@@ -30855,18 +30910,13 @@ function _gcpInvalidateThumb(la, fi) {
     _gcpThumbCache.delete(_gcpThumbCacheKey(la, fi));
   }
 }
-function _gcpInvalidateAllThumbs() { _gcpThumbCache.clear(); }
+function _gcpInvalidateAllThumbs() {
+  _gcpThumbCache.clear();
+  _gcpInvalidateAllSampleThumbs();
+}
 
-// Miniatura de UN objeto en frame fi. Si el objeto no existe en ese frame (null),
-// la celda es gratis: no se renderiza nada ni se cachea (el llamador ni debería invocar
-// esta función en ese caso — ver hasFrame en _gcpUpdateFramesBar).
-// Rendimiento: el canvas de trabajo se ciña al propio tamaño del objeto (más un margen
-// de seguridad para rotación/desbordes de trazo) en vez de a toda la página + medio
-// lienzo extra — con objetos pequeños esto reduce el área a escanear en 1-2 órdenes
-// de magnitud, que es lo que bloqueaba la matriz con muchos objetos/frames.
 function _gcpLayerFrameThumb(la, fi, S) {
   S = S || 72;
-  // Consultar cache antes de renderizar
   const cacheKey = _gcpThumbCacheKey(la, fi) + '-' + S;
   if (_gcpThumbCache.has(cacheKey)) return _gcpThumbCache.get(cacheKey);
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
@@ -30881,8 +30931,6 @@ function _gcpLayerFrameThumb(la, fi, S) {
   la.rotation=snap.rotation; la.opacity=snap.opacity??1;
   _gcpWithEditorContext(() => {
     const pw=edPageW(),ph=edPageH(),mx=edMarginX(),my=edMarginY();
-    // Región de trabajo ceñida al propio objeto: mitad de la diagonal (cota válida para
-    // cualquier rotación, por Cauchy-Schwarz) + colchón de seguridad para desbordes de trazo.
     const halfW = Math.abs(la.width * pw) / 2, halfH = Math.abs(la.height * ph) / 2;
     const diagHalf = Math.hypot(halfW, halfH);
     const objR = diagHalf + Math.max(diagHalf * 0.4, 24);
@@ -30912,9 +30960,11 @@ function _gcpLayerFrameThumb(la, fi, S) {
   return tc;
 }
 
-// IntersectionObserver compartido para cargar miniaturas solo cuando la celda
-// entra en el viewport de la matriz — evita calcular las de fuera de pantalla.
-// Se recrea en cada _gcpUpdateFramesBar() porque el contenedor raíz se reconstruye.
+// IntersectionObserver compartido para cargar miniaturas de frame solo cuando
+// la celda entra en el viewport de la matriz — evita calcular las de fuera de
+// pantalla. Se recrea en cada _gcpUpdateFramesBar() porque el contenedor raíz
+// se reconstruye. Las miniaturas de muestra (una por fila) no lo necesitan:
+// son pocas (una por objeto) y se calculan directamente.
 let _gcpThumbIO = null;
 function _gcpQueueThumbRender(holder, la, fi, S) {
   holder._gcpLa = la; holder._gcpFi = fi; holder._gcpS = S;
@@ -31500,6 +31550,14 @@ function _gcpUpdateFramesBar() {
     const leftCol = document.createElement('div');
     leftCol.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;' +
       'width:52px;min-width:52px;border-right:1px solid var(--gray-200);padding:2px 0;gap:1px;';
+
+    // Miniatura de muestra: identifica de un vistazo qué objeto es esta fila,
+    // sin necesidad de mirar ningún frame concreto. Una por objeto, no por celda.
+    const sampleThumb = _gcpLayerSampleThumb(la, 40);
+    sampleThumb.style.cssText = 'width:40px;height:40px;display:block;border-radius:4px;' +
+      'border:1px solid var(--gray-300);flex-shrink:0;';
+    sampleThumb.title = layerName;
+    leftCol.appendChild(sampleThumb);
 
     // Fila superior: ▲ arriba y ▼ abajo (reordenar capas)
     const arrowRow = document.createElement('div');
