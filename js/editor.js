@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero 2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -3453,6 +3453,21 @@ function _edSnapLayerFragment(l){
       if(l._gcpFramesData)   o._gcpFramesData   = l._gcpFramesData;
       if(l._gcpLayerNames)   o._gcpLayerNames   = l._gcpLayerNames;
       if(l._bibItemId)       o._bibItemId        = l._bibItemId;
+      // _isGcpImage/_gcpRefX/Y/W/H/_keepSize: SIN esto, un deshacer/rehacer (edApplyHistory)
+      // reconstruye la capa sin estos campos (mismo bug que edSerLayer/edDeserLayer ya
+      // arreglan para el guardado real del proyecto — ver invariante de _edLayersSnapshot).
+      // Consecuencia si faltan: _gcpSaveToLib ya no reconoce la capa como animación GCP
+      // existente ("existingLayer._isGcpImage") y crea una animación NUEVA duplicada en
+      // vez de actualizar la de siempre; y gcpOpen no puede corregir la posición interna
+      // tras un desplazamiento hecho en el editor general (_gcpRefX/Y/W/H ausentes → el
+      // delta de contenedor se queda en identidad → el contenido reaparece en la posición
+      // antigua, previa al desplazamiento).
+      if(l._keepSize)     o._keepSize     = true;
+      if(l._isGcpImage)   o._isGcpImage   = true;
+      if(l._gcpRefX != null) o._gcpRefX = l._gcpRefX;
+      if(l._gcpRefY != null) o._gcpRefY = l._gcpRefY;
+      if(l._gcpRefW != null) o._gcpRefW = l._gcpRefW;
+      if(l._gcpRefH != null) o._gcpRefH = l._gcpRefH;
     }
     // Recorrido de animación — presente en cualquier tipo de capa
     if(l._motionPath && l._motionPath.length >= 2) o._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
