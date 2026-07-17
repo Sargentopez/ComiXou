@@ -21190,6 +21190,18 @@ function _edCloudSavingStop() {
 // ── OVERLAY DE GUARDADO ──────────────────────────────────────────────────────
 let _edSaveOverlayTimer = null;
 let _edSaveOverlaySecs  = 0;
+// true mientras haya un guardado REAL en curso (edCloudSave/edSaveProject lo
+// activan al mostrar el overlay). Mientras esté activo, el cierre automático
+// de seguridad NUNCA debe disparar — antes se cerraba siempre a los 30s sin
+// comprobar nada, así que una obra pesada que tardara más en guardarse en la
+// nube hacía desaparecer el contador dando la falsa impresión de que había
+// terminado, cuando en realidad _edCloudSaving seguía en true por detrás.
+let _edSaveOverlayForceOpen = false;
+// Tope absoluto — última red de seguridad si algún camino de código dejara
+// _edSaveOverlayForceOpen atascado en true tras un fallo inesperado. 3 minutos
+// da margen de sobra a un guardado legítimo de una obra pesada sin dejar al
+// usuario bloqueado para siempre ante un cuelgue real.
+const _ED_SAVE_OVERLAY_HARD_CAP = 180;
 
 function _edSaveOverlayShow(title) {
   let ov = document.getElementById('_edSaveOverlay');
@@ -21225,8 +21237,13 @@ function _edSaveOverlayShow(title) {
     _edSaveOverlaySecs++;
     const el = document.getElementById('_edSaveOvSecs');
     if (el) el.textContent = _edSaveOverlaySecs + 's';
-    // Timeout de seguridad: cerrar overlay tras 30s si algo falla
-    if (_edSaveOverlaySecs >= 30) _edSaveOverlayHide();
+    if (_edSaveOverlaySecs >= _ED_SAVE_OVERLAY_HARD_CAP) {
+      // Última red de seguridad absoluta — dispara pase lo que pase
+      _edSaveOverlayHide();
+    } else if (!_edSaveOverlayForceOpen && _edSaveOverlaySecs >= 30) {
+      // Solo cierra por timeout si NINGÚN guardado real está en curso
+      _edSaveOverlayHide();
+    }
   }, 1000);
   ov.style.display = 'flex';
 }
@@ -21240,6 +21257,7 @@ let _edSaveErrors = []; // errores de guardado para diagnóstico
 
 function _edSaveOverlayHide() {
   clearInterval(_edSaveOverlayTimer);
+  _edSaveOverlayForceOpen = false;
   const ov = document.getElementById('_edSaveOverlay');
   if (ov) ov.style.display = 'none';
 }
@@ -21426,6 +21444,11 @@ async function edCloudSave() {
   // "no respondía". Cualquier salida temprana de aquí en adelante debe
   // ocultar el overlay explícitamente (no hay guardado real que lo sustituya).
   _edSaveOverlayShow('Comprobando tamaño…');
+  // Mientras esta función siga en marcha (cualquiera de sus fases), el overlay
+  // no debe cerrarse solo por el cierre automático de seguridad — solo cuando
+  // esta misma función llame explícitamente a _edSaveOverlayHide() (éxito,
+  // error, o salida temprana, todos ya cubiertos más abajo).
+  _edSaveOverlayForceOpen = true;
 
   // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
   const _preSz = await _edCalcProjectBytes(true);
@@ -21695,7 +21718,7 @@ async function edSaveProject(_keepOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
   // Capturar historyIdx ahora — puede cambiar durante los awaits posteriores
   const _saveHistoryIdx = edHistoryIdx;
-  if(!_keepOverlay) _edSaveOverlayShow('Guardando en dispositivo…');
+  if(!_keepOverlay) { _edSaveOverlayShow('Guardando en dispositivo…'); _edSaveOverlayForceOpen = true; }
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
