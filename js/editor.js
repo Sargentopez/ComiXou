@@ -2188,6 +2188,7 @@ function edSetOrientation(o, persist=true){
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
   // Recalcular height de ImageLayers y redimensionar FillLayers si la orientación cambió
   if(persist && prevOrientation !== o){
+    _edMarkPageDirty(edCurrentPage); // el redimensionado de fills de abajo también cambia contenido guardable
     const _isV  = o === 'vertical';
     const _pw   = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph   = _isV ? ED_PAGE_H : ED_PAGE_W;
@@ -3578,6 +3579,34 @@ function _edGetPaintTarget() {
   }
   return dl;
 }
+// ── SEGUIMIENTO DE PÁGINAS MODIFICADAS (guardado incremental) ───────────────
+// Cada página lleva dos flags en memoria (nunca se serializan a disco/nube):
+// _dirtyLocal / _dirtyCloud — true si su contenido difiere de lo último
+// guardado en OPFS / Supabase respectivamente. Se marcan `true` en CUALQUIER
+// punto del código que cambie el contenido de una página (ver _edMarkPageDirty)
+// y se ponen a `false` SOLO por edSaveProject/edCloudSave, y SOLO después de
+// confirmar que el guardado tuvo éxito — nunca antes.
+//
+// window._edPagesStructureDirtyLocal / …Cloud: true si han cambiado el NÚMERO
+// o el ORDEN de las páginas desde el último guardado de ese tipo (añadir,
+// eliminar, reordenar, duplicar hoja). Mientras estén a true, el guardado
+// correspondiente ignora los flags por página y hace SIEMPRE un guardado
+// completo — es la red de seguridad para cualquier caso donde la posición ya
+// no significa lo mismo que la última vez.
+//
+// Principio de diseño: ante la duda, marcar sucio. Saltarse una página que sí
+// cambió sería pérdida de datos; volver a guardar una página que no cambió
+// solo cuesta un poco de tiempo — exactamente lo que ya pasaba antes de este
+// cambio en TODAS las páginas.
+function _edMarkPageDirty(pageOrIdx) {
+  const p = (typeof pageOrIdx === 'number') ? edPages[pageOrIdx] : pageOrIdx;
+  if (p) { p._dirtyLocal = true; p._dirtyCloud = true; }
+}
+function _edMarkPagesStructureDirty() {
+  window._edPagesStructureDirtyLocal = true;
+  window._edPagesStructureDirtyCloud = true;
+}
+
 function edPushHistory(force, movedLayer){
   // Actualizar indicador de tamaño con debounce (no bloquea el flujo)
   clearTimeout(window._edSizeCheckTimer);
@@ -3619,6 +3648,7 @@ function edPushHistory(force, movedLayer){
     multiSel: edMultiSel.length ? [...edMultiSel] : [] });
   if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
   edHistoryIdx = edHistory.length - 1;
+  _edMarkPageDirty(edCurrentPage);
   edUpdateUndoRedoBtns();
 }
 
@@ -3643,6 +3673,12 @@ function edRedo(){
 
 function edApplyHistory(snapshot){
   if(!snapshot) return;
+  // Deshacer/rehacer también deja el contenido de la página distinto de lo
+  // guardado — edPushHistory no se llama en este camino, así que hay que
+  // marcar sucio aquí explícitamente (si no, un guardado posterior podría
+  // reutilizar por error la versión "de después" ya guardada en vez de
+  // reflejar el "antes" al que se acaba de volver).
+  _edMarkPageDirty(snapshot.pageIdx);
   const raw = JSON.parse(snapshot.layersJSON);
   const imgPromises = [];
   edLayers = raw.map(o => {
@@ -5215,6 +5251,7 @@ function edDrawSel(){
    ══════════════════════════════════════════ */
 function edAddPage(){
   edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation});
+  _edMarkPagesStructureDirty();
   edLoadPage(edPages.length-1);
   edToast('Página añadida');
 }
@@ -6178,6 +6215,7 @@ function edDeletePage(){
   if(edPages.length<=1){edToast('Necesitas al menos una página');return;}
   edConfirm('¿Eliminar esta hoja?', ()=>{
     edPages.splice(edCurrentPage,1);
+    _edMarkPagesStructureDirty();
     edLoadPage(Math.min(edCurrentPage,edPages.length-1));
   });
 }
@@ -21548,6 +21586,19 @@ async function edCloudSave() {
     ComicStore.save(comic);
   }
 
+  // Qué páginas hace falta subir de verdad — ver _edMarkPageDirty/
+  // _edMarkPagesStructureDirty. null = subir la obra entera (comportamiento
+  // de siempre): se usa si ha habido cambios estructurales desde el último
+  // guardado en la nube, o si el número de páginas no coincide con lo que se
+  // va a subir (nunca fiarse de índices posicionales en ese caso).
+  let _dirtyPageIndices = null;
+  if (!window._edPagesStructureDirtyCloud &&
+      comic.editorData && comic.editorData.pages &&
+      comic.editorData.pages.length === edPages.length) {
+    _dirtyPageIndices = [];
+    edPages.forEach((p, i) => { if (p._dirtyCloud !== false) _dirtyPageIndices.push(i); });
+  }
+
   const btn = $('edCloudSaveBtn');
   if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
   _edCloudSaving = true;
@@ -21555,8 +21606,12 @@ async function edCloudSave() {
   _edCloudSavingUpdateBadge();
 
   try {
-    await SupabaseClient.saveDraft(comic);
+    await SupabaseClient.saveDraft(comic, _dirtyPageIndices);
     edToast('☁️ Guardado en nube');
+    // Confirmar limpieza de guardado incremental en la nube SOLO ahora que se
+    // sabe que la subida tuvo éxito de verdad — igual que en edSaveProject.
+    edPages.forEach(p => { p._dirtyCloud = false; });
+    window._edPagesStructureDirtyCloud = false;
     // Borrar autosave explícitamente tras guardado en nube exitoso.
     // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
     // por versionchange. Este segundo intento garantiza que no queda autosave espurio
@@ -21723,7 +21778,38 @@ async function edSaveProject(_keepOverlay){
   const existing=ComicStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
   const _camState = { x: edCamera.x, y: edCamera.y, z: edCamera.z, page: edCurrentPage };
-  const panels=edPages.map((p,i)=>{
+  const _savedOrient2=edOrientation, _savedPage2=edCurrentPage;
+  const panels = [];
+  const _edPages = [];
+  // Páginas realmente reserializadas en esta pasada — solo se confirman como
+  // "limpias" (caché + flag) más abajo, DESPUÉS de comprobar que el guardado
+  // tuvo éxito. Si el guardado fallara, no se toca ningún flag: la próxima
+  // vez se reintentará todo lo que sea necesario, nunca se da por bueno algo
+  // que no se ha llegado a persistir de verdad.
+  const _freshlySerialized = [];
+  for (let _pi=0; _pi<edPages.length; _pi++) {
+    const p = edPages[_pi];
+
+    // ¿Se puede reutilizar lo ya serializado la vez anterior para esta
+    // página? Solo si: (a) no ha habido cambios estructurales (añadir/
+    // eliminar/reordenar/duplicar hoja) desde el último guardado local,
+    // (b) esta página en concreto no está marcada sucia, (c) hay caché
+    // previa de verdad, y (d) una comprobación barata de coherencia (mismo
+    // número de capas que lo cacheado) — red de seguridad ante cualquier
+    // cambio que hubiera podido escapar a los puntos donde se marca sucio.
+    const _canReuse = !window._edPagesStructureDirtyLocal && p._dirtyLocal === false &&
+                       p._cachedPanelLocal && p._cachedSerLocal &&
+                       p._cachedSerLocal.layers.length === p.layers.length;
+    if (_canReuse) {
+      panels.push(p._cachedPanelLocal);
+      _edPages.push(p._cachedSerLocal);
+      continue;
+    }
+
+    edCurrentPage = _pi;
+    edOrientation = p.orientation || _savedOrient2;
+
+    // ── Miniatura + textos/botones para el reader ──
     // Exportar capas de texto/bocadillo para el reader.
     // El orden del array layers[] es el orden secuencial de aparición.
     // Tanto BubbleLayer como TextLayer aparecen uno a uno al tocar.
@@ -21782,8 +21868,8 @@ async function edSaveProject(_keepOverlay){
         });
       }
     });
-    return {
-      id:'panel_'+i,
+    const _panelSer = {
+      id:'panel_'+_pi,
       dataUrl:edRenderPage(p),
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
       textMode: p.textMode || 'sequential',
@@ -21796,15 +21882,10 @@ async function edSaveProject(_keepOverlay){
           action: Object.assign({}, l._buttonAction)
         })),
     };
-  });
-  // Construir pages serializando capas y externalizando _pngFrames a IDB
-  // (evita QuotaExceededError silencioso en localStorage con frames PNG grandes)
-  const _savedOrient2=edOrientation, _savedPage2=edCurrentPage;
-  const _edPages = [];
-  for (let _pi=0; _pi<edPages.length; _pi++) {
-    const p = edPages[_pi];
-    edCurrentPage = _pi;
-    edOrientation = p.orientation || _savedOrient2;
+    panels.push(_panelSer);
+
+    // ── Serializar capas de esta página y externalizar _pngFrames a IDB ──
+    // (evita QuotaExceededError silencioso en localStorage con frames PNG grandes)
     const _pageLayers = [];
     for (let _li=0; _li<p.layers.length; _li++) {
       const _sl = edSerLayer(p.layers[_li]);
@@ -21835,7 +21916,9 @@ async function edSaveProject(_keepOverlay){
       }
       _pageLayers.push(_sl);
     }
-    _edPages.push({layers:_pageLayers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient2});
+    const _pageSer = {layers:_pageLayers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient2};
+    _edPages.push(_pageSer);
+    _freshlySerialized.push({ page: p, panel: _panelSer, ser: _pageSer });
   }
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
 
@@ -21892,6 +21975,14 @@ async function edSaveProject(_keepOverlay){
     edToast('Guardado ✓');
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
     await _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
+    // Confirmar limpieza de guardado incremental SOLO ahora que se sabe que el
+    // guardado tuvo éxito de verdad — nunca antes (ver _edMarkPageDirty arriba).
+    _freshlySerialized.forEach(({ page, panel, ser }) => {
+      page._cachedPanelLocal = panel;
+      page._cachedSerLocal   = ser;
+      page._dirtyLocal       = false;
+    });
+    window._edPagesStructureDirtyLocal = false;
   } else {
     // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
     const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
@@ -21900,6 +21991,9 @@ async function edSaveProject(_keepOverlay){
       : 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
     _edSaveOverlayError(_err);
     edToast(_isIncognito ? '⚠️ Modo incógnito: usa Guardar en nube' : '⚠️ Guardado parcial');
+    // No confirmar nada: las páginas reserializadas en esta pasada siguen
+    // marcadas sucias (o sin flag, que se trata igual) — el próximo intento
+    // las volverá a serializar en vez de dar por bueno un guardado que falló.
   }
   // Compactar historial usando el idx capturado al inicio (evita race condition con undo async)
   const _snapToKeep = (_saveHistoryIdx >= 0 && _saveHistoryIdx < edHistory.length)
@@ -23379,6 +23473,13 @@ async function edLoadProject(id){
   let _fillLoadPromises = [];
   try {
   edProjectId=id;
+  // Reiniciar el seguimiento de guardado incremental para esta obra — ver
+  // _edMarkPageDirty/_edMarkPagesStructureDirty. Cada página recién
+  // deserializada no tiene _dirtyLocal/_dirtyCloud (undefined se trata como
+  // "sucia" por defecto), pero se deja explícito aquí también para no
+  // arrastrar flags globales de la obra anterior entre una carga y otra.
+  window._edPagesStructureDirtyLocal = true;
+  window._edPagesStructureDirtyCloud = true;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
   // cuando el usuario abra el panel.
   _bibCache = null;

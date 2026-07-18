@@ -201,6 +201,7 @@ function _pgBuildCard(page, idx) {
     if (edPages.length <= 1) { edToast('No puedes eliminar la última hoja'); return; }
     edConfirm('¿Eliminar esta hoja?', () => {
       edPages.splice(idx, 1);
+      if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
       edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
       edPushHistory();
       _pgRender();
@@ -445,6 +446,7 @@ function _pgDuplicate(idx) {
 
   // Insertar a continuación
   edPages.splice(idx + 1, 0, newPage);
+  if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
   edPushHistory();
   edToast(`Hoja ${idx + 1} duplicada`);
   _pgRender();
@@ -458,6 +460,7 @@ function _pgReorder(fromIdx, toIdx) {
   _pgAnimatedReorder(pageObj, () => {
     const moved = edPages.splice(fromIdx, 1)[0];
     edPages.splice(toIdx, 0, moved);
+    if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
     if (edCurrentPage === fromIdx) {
       edCurrentPage = toIdx;
     } else if (fromIdx < edCurrentPage && edCurrentPage <= toIdx) {
@@ -640,6 +643,11 @@ function _pgRotatePage(idx) {
   });
 
   page.orientation = newOrient;
+  // Rotar SIEMPRE cambia el contenido guardable de esta página (orientación +
+  // x/y/width/height de cada capa, recalculados arriba) — marcar sucia aquí
+  // de forma incondicional, sea o no la página activa. edSetOrientation/
+  // edPushHistory de abajo solo cubren el caso idx===edCurrentPage.
+  if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(page);
 
   if (idx === edCurrentPage) {
     if (typeof edSetOrientation === 'function') edSetOrientation(newOrient, false);

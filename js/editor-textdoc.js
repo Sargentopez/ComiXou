@@ -2494,7 +2494,7 @@ function _tdApplyToCanvas(){
         layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, [])],
         drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
       }));
-      if(newPages.length) edPages.push(...newPages);
+      if(newPages.length) { edPages.push(...newPages); if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty(); }
 
       edLoadPage(startIdx);
       edPushHistory();
@@ -2594,6 +2594,7 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient
     }));
     edPages.splice(afterIdx, 0, ...newPages0);
+    if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
     if(typeof edFitCanvas === 'function') edFitCanvas(true);
     if(typeof edRedraw === 'function') edRedraw();
     if(typeof edPushHistory === 'function') edPushHistory(true);
@@ -2717,6 +2718,7 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       pg.layers = extras;
     } else {
       edPages.splice(idx, 1);
+      if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
     }
   }
 
@@ -2749,6 +2751,7 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       };
     });
     edPages.splice(insertAt, 0, ...extraPages);
+    if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
   }
 
   if(wasCurrentInFlow){

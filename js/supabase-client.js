@@ -400,13 +400,230 @@ const SupabaseClient = (() => {
   }
 
 
-  async function _uploadPanels(comic) {
-    // Antes de borrar los panels, recoger las URLs de bucket para limpiar archivos huérfanos.
-    // Paralelizado: antes se hacía un GET por panel antiguo y un DELETE por gif/anim,
-    // todo secuencial — en obras con muchas hojas/animaciones eran decenas de viajes
-    // de red uno detrás de otro antes de empezar siquiera a subir los datos nuevos.
-    // Son lecturas/borrados independientes entre sí, así que paralelizarlos no cambia
-    // el resultado ni el manejo de errores (cada borrado conserva su propio .catch).
+  // Sube/actualiza UNA página: fila panels + sus panel_layers/panel_texts.
+  // Compartida entre la ruta completa (existingPanelId=null, siempre inserta
+  // fila nueva) y la ruta incremental (existingPanelId= la fila que ya existía
+  // en esa posición, para actualizarla en el sitio en vez de duplicarla).
+  async function _uploadOnePanel(comic, edPages, p, i, existingPanelId) {
+    const ins = await _upsert('panels', {
+      ...(existingPanelId ? { id: existingPanelId } : {}),
+      work_id:     comic.supabaseId,
+      panel_order: i,
+      orientation: p.orientation || 'v',
+      text_mode:   p.textMode    || 'sequential',
+      data_url:    p.dataUrl     || null,
+    });
+    const panelId = ins[0]?.id || existingPanelId;
+    if (!panelId) return;
+
+    // Borrar capas y textos anteriores por si el CASCADE no actuó
+    await _delete('panel_layers', `panel_id=eq.${panelId}`);
+    await _delete('panel_texts',  `panel_id=eq.${panelId}`);
+
+    // Capas del editor: image, draw, stroke, bubble, text, gif — formato edSerLayer
+    const edPage = edPages[i];
+    if (edPage && edPage.layers && edPage.layers.length > 0) {
+      const layerRows = [];
+      for (let j = 0; j < edPage.layers.length; j++) {
+        const l = edPage.layers[j];
+        let gifUrl = null;
+        // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
+        if (l.type === 'gif' && l.gifKey) {
+          try {
+            const dataUrl = await _sbGifIdbLoad(l.gifKey);
+            if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
+          } catch(e) { console.warn('GIF upload error:', e.message); }
+        }
+        // FillLayer, PencilLayer, WatercolorLayer: instancias de clase con canvas
+        // Serializar mediante toDataUrl() para obtener el dataUrl correcto
+        if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') {
+          const _groupData = {
+            type: l.type,
+            dataUrl: (typeof l.toDataUrl === 'function') ? l.toDataUrl() : (l.dataUrl || null),
+            _drawLayerId: l._drawLayerId || null,
+            _uid: l._uid || null,
+            hidden: l.hidden || false,
+            opacity: l.opacity,
+            // Propiedades de posición/tamaño/rotación
+            x:        l.x        != null ? l.x        : 0.5,
+            y:        l.y        != null ? l.y        : 0.5,
+            width:    l.width    != null ? l.width    : 1.0,
+            height:   l.height   != null ? l.height   : 1.0,
+            rotation: l.rotation != null ? l.rotation : 0,
+            // _isFull:true para que edDeserLayer lo reconozca como nuevo formato
+            _isFull: true,
+          };
+          // No comprimir: el dataUrl PNG ya es binario comprimido internamente
+          const _ld = JSON.stringify(_groupData);
+          layerRows.push({ panel_id: panelId, layer_order: j, layer_type: l.type, layer_data: _ld, gif_url: null, anim_url: null });
+          continue; // siguiente capa
+        }
+
+        // Serializar la capa — excluir campos de re-edición que el reader no necesita
+        const _lClean = {...l};
+        // _gcpLayersData/_gcpFramesData/_gcpLayerNames son datos vectoriales (no imágenes)
+        // Se mantienen en layer_data para que el editor GCP funcione en dispositivo B
+        delete _lClean._pngFrames;     // nunca en layer_data — van al bucket
+        delete _lClean._pngFramesKey;  // clave IDB local — no tiene sentido en Supabase
+        delete _lClean._animFrames;    // datos en memoria — no serializar
+        delete _lClean._animReady;
+        delete _lClean._oc;
+        delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
+
+        // APNG animado → bucket 'anims'
+        // Fuentes de datos en orden de prioridad:
+        // 1. IDB (caso normal), 2. _apngSrc en memoria (modo incógnito), 3. _pngFrames en memoria
+        let animUrl = null;
+        if (l.type === 'image' && (l._pngFramesKey || l.animKey || l._apngSrc || (l._pngFrames && l._pngFrames.length))) {
+          const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+          try {
+            let _apngDataUrl = null;
+            // 1. Intentar IDB si hay clave
+            if (l._pngFramesKey || l.animKey) {
+              const _idbKey = l._pngFramesKey || l.animKey;
+              const _animData = await _sbAnimIdbLoad(_idbKey).catch(() => null);
+              if (_animData) {
+                if (typeof _animData === 'string') _apngDataUrl = _animData;
+                else if (Array.isArray(_animData) && _animData.length)
+                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+              }
+            }
+            // 2. Fallback: _apngSrc en memoria (modo incógnito o descarga reciente)
+            if (!_apngDataUrl && l._apngSrc) _apngDataUrl = l._apngSrc;
+            // 3. Fallback: _pngFrames en memoria
+            if (!_apngDataUrl && l._pngFrames && l._pngFrames.length)
+              _apngDataUrl = await _buildApngFromFrames(l._pngFrames, l._gcpFrameDelay || 100);
+            if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
+          } catch(e) { console.warn('APNG upload error:', e.message); }
+        }
+
+        // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
+        // El resto: JSON directo como v16.42 — sin riesgo de fallo de descompresión
+        // Comprimir cualquier layer cuyo JSON supere el umbral (fill ya comprimido arriba)
+        const _lRaw = JSON.stringify(_lClean);
+        const _ld = _lRaw.length >= _CZ_MIN ? await _czCompress(_lRaw) : _lRaw;
+        layerRows.push({
+          panel_id:    panelId,
+          layer_order: j,
+          layer_type:  l.type,
+          layer_data:  _ld,
+          gif_url:     gifUrl,
+          anim_url:    animUrl,
+        });
+      } // end for j
+      if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
+    }
+
+    // Textos para el reader (panel_texts sin cambios)
+    if (!p.texts || p.texts.length === 0) return;
+    await _upsert('panel_texts', p.texts.map((t, j) => ({
+      panel_id:     panelId,
+      text_order:   t.order              ?? j,
+      type:         t.type              || 'bubble',
+      style:        t.style             || 'conventional',
+      has_tail:     t.hasTail           ?? true,
+      tail_starts:  JSON.stringify(t.tailStarts || [{x:-0.4,y:0.4}]),
+      tail_ends:    JSON.stringify(t.tailEnds   || [{x:-0.4,y:0.6}]),
+      voice_count:  t.voiceCount        ?? 1,
+      x:            t.x                 ?? 0,
+      y:            t.y                 ?? 0,
+      w:            t.w                 ?? t.width  ?? 0.3,
+      h:            t.h                 ?? t.height ?? 0.15,
+      text:         t.text              || '',
+      font_family:  t.fontFamily        || 'Patrick Hand',
+      font_size:    t.fontSize          ?? 30,
+      font_bold:    t.fontBold          ?? false,
+      font_italic:  t.fontItalic        ?? false,
+      color:        t.color             || '#000000',
+      bg:           t.bg || t.backgroundColor || '#ffffff',
+      bg_opacity:   t.bgOpacity         ?? 1,
+      border:       t.border            ?? t.borderWidth ?? 2,
+      border_color: t.borderColor       || '#000000',
+      rotation:     t.rotation          ?? 0,
+      padding:      t.padding           ?? 15,
+    })));
+  }
+
+  // Limpia del bucket los gif/anim de las filas panel_layers antiguas de un
+  // panelId concreto — usada por la ruta incremental antes de sustituir sus
+  // filas (la ruta completa hace el equivalente en bloque, para toda la obra,
+  // justo antes del borrado general de panels).
+  async function _cleanupPanelFiles(panelId) {
+    if (!panelId) return;
+    try {
+      const _oldLayers = await _get(`panel_layers?panel_id=eq.${panelId}&select=gif_url,anim_url`);
+      const _jobs = [];
+      (_oldLayers || []).forEach(_ol => {
+        if (_ol.gif_url)  _jobs.push(_gifDelete(_ol.gif_url).catch(()=>{}));
+        if (_ol.anim_url) _jobs.push(_animDelete(_ol.anim_url).catch(()=>{}));
+      });
+      await Promise.all(_jobs);
+    } catch(_e) { /* no bloquear el guardado si falla la limpieza */ }
+  }
+
+  async function _uploadPanels(comic, dirtyPageIndices) {
+    // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
+    // Usar editorData.pages como fuente de verdad para las capas
+    const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
+    const panels  = comic.panels && comic.panels.length ? comic.panels : edPages.map((p, i) => ({
+      dataUrl:     null,
+      orientation: p.orientation === 'horizontal' ? 'h' : 'v',
+      textMode:    p.textMode || 'sequential',
+      texts:       p.texts || [],
+    }));
+
+    if (!panels.length) return;
+
+    // Subir thumbnail de la primera hoja (best-effort, no bloquea el guardado)
+    const _firstDataUrl = panels[0]?.dataUrl || null;
+    if (_firstDataUrl) {
+      const _coverUrlResult = await _thumbUpload(comic.supabaseId, _firstDataUrl).catch(() => null);
+      if (_coverUrlResult) {
+        await _patch('works', `id=eq.${comic.supabaseId}`, { cover_url: _coverUrlResult }).catch(() => {});
+      }
+    }
+
+    // ── ¿Podemos subir SOLO las páginas marcadas sucias? ──────────────────
+    // dirtyPageIndices lo calcula edCloudSave a partir de _dirtyCloud por
+    // página — viene como array cuando NO ha habido cambios estructurales
+    // (añadir/eliminar/reordenar hojas) desde el último guardado en la nube.
+    // Aun así, antes de fiarnos, comprobamos que el número de panels ya
+    // existentes en Supabase coincide EXACTAMENTE con panels.length — si no
+    // coincide (obra nunca subida, o cualquier inconsistencia), caemos a la
+    // ruta completa de siempre en vez de arriesgar índices que no signifiquen
+    // lo mismo que la última vez.
+    let _incrementalOk = Array.isArray(dirtyPageIndices);
+    let _panelIdByOrder = null;
+    if (_incrementalOk) {
+      const _existingPanels = await _get(`panels?work_id=eq.${comic.supabaseId}&select=id,panel_order`) || [];
+      if (_existingPanels.length !== panels.length) {
+        _incrementalOk = false; // no coincide el recuento — mejor subir todo
+      } else {
+        _panelIdByOrder = {};
+        _existingPanels.forEach(row => { _panelIdByOrder[row.panel_order] = row.id; });
+        // Verificar que TODOS los índices sucios tienen panel existente —
+        // si falta alguno, algo no cuadra: caer a la ruta completa.
+        for (const i of dirtyPageIndices) {
+          if (_panelIdByOrder[i] == null) { _incrementalOk = false; break; }
+        }
+      }
+    }
+
+    if (_incrementalOk) {
+      // ── RUTA INCREMENTAL: solo tocar páginas realmente sucias ──────────
+      if (dirtyPageIndices.length === 0) return; // nada cambió desde el último guardado en la nube
+      await _sbPoolMap(dirtyPageIndices, 3, async (i) => {
+        const existingId = _panelIdByOrder[i];
+        await _cleanupPanelFiles(existingId);
+        await _uploadOnePanel(comic, edPages, panels[i], i, existingId);
+      });
+      return;
+    }
+
+    // ── RUTA COMPLETA (comportamiento de siempre): borra todo y resube todo ──
+    // Antes de borrar los panels, recoger las URLs de bucket para limpiar
+    // archivos huérfanos. Paralelizado: antes se hacía un GET por panel
+    // antiguo y un DELETE por gif/anim, todo secuencial.
     try {
       const _oldPanels = await _get(`panels?work_id=eq.${comic.supabaseId}&select=id`);
       if (_oldPanels && _oldPanels.length) {
@@ -425,28 +642,6 @@ const SupabaseClient = (() => {
     } catch(_e) { /* no bloquear el guardado si falla la limpieza */ }
     await _delete('panels', `work_id=eq.${comic.supabaseId}`);
 
-    // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
-    // Usar editorData.pages como fuente de verdad para las capas
-    const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
-    const panels  = comic.panels && comic.panels.length ? comic.panels : edPages.map((p, i) => ({
-      dataUrl:     null,
-      orientation: p.orientation === 'horizontal' ? 'h' : 'v',
-      textMode:    p.textMode || 'sequential',
-      texts:       p.texts || [],
-    }));
-
-    if (!panels.length) return;
-
-    // Subir thumbnail de la primera hoja (best-effort, no bloquea el guardado)
-    const _firstDataUrl = panels[0]?.dataUrl || null;
-    let _coverUrlResult = null;
-    if (_firstDataUrl) {
-      _coverUrlResult = await _thumbUpload(comic.supabaseId, _firstDataUrl).catch(() => null);
-      if (_coverUrlResult) {
-        await _patch('works', `id=eq.${comic.supabaseId}`, { cover_url: _coverUrlResult }).catch(() => {});
-      }
-    }
-
     // Subir cada página en paralelo, con concurrencia acotada a 3.
     // Las páginas son independientes entre sí: panel_order se guarda como
     // valor explícito en la fila (la reconstrucción en otro dispositivo
@@ -457,150 +652,13 @@ const SupabaseClient = (() => {
     // mismo criterio que en la descarga — suficiente para no ir página a
     // página en serie, pero sin lanzar todas las imágenes/GIFs/APNG de una
     // obra pesada a la vez (riesgo de pico de memoria en Android).
-    await _sbPoolMap(panels, 3, async (p, i) => {
-      const ins = await _upsert('panels', {
-        work_id:     comic.supabaseId,
-        panel_order: i,
-        orientation: p.orientation || 'v',
-        text_mode:   p.textMode    || 'sequential',
-        data_url:    p.dataUrl     || null,
-      });
-      const panelId = ins[0]?.id;
-      if (!panelId) return;
-
-      // Borrar capas y textos anteriores por si el CASCADE no actuó
-      await _delete('panel_layers', `panel_id=eq.${panelId}`);
-      await _delete('panel_texts',  `panel_id=eq.${panelId}`);
-
-      // Capas del editor: image, draw, stroke, bubble, text, gif — formato edSerLayer
-      const edPage = edPages[i];
-      if (edPage && edPage.layers && edPage.layers.length > 0) {
-        const layerRows = [];
-        for (let j = 0; j < edPage.layers.length; j++) {
-          const l = edPage.layers[j];
-          let gifUrl = null;
-          // GIF: subir binario a Storage; layer_data solo guarda metadatos (sin dataUrl)
-          if (l.type === 'gif' && l.gifKey) {
-            try {
-              const dataUrl = await _sbGifIdbLoad(l.gifKey);
-              if (dataUrl) gifUrl = await _gifUpload(l.gifKey, dataUrl);
-            } catch(e) { console.warn('GIF upload error:', e.message); }
-          }
-          // FillLayer, PencilLayer, WatercolorLayer: instancias de clase con canvas
-          // Serializar mediante toDataUrl() para obtener el dataUrl correcto
-          if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') {
-            const _groupData = {
-              type: l.type,
-              dataUrl: (typeof l.toDataUrl === 'function') ? l.toDataUrl() : (l.dataUrl || null),
-              _drawLayerId: l._drawLayerId || null,
-              _uid: l._uid || null,
-              hidden: l.hidden || false,
-              opacity: l.opacity,
-              // Propiedades de posición/tamaño/rotación
-              x:        l.x        != null ? l.x        : 0.5,
-              y:        l.y        != null ? l.y        : 0.5,
-              width:    l.width    != null ? l.width    : 1.0,
-              height:   l.height   != null ? l.height   : 1.0,
-              rotation: l.rotation != null ? l.rotation : 0,
-              // _isFull:true para que edDeserLayer lo reconozca como nuevo formato
-              _isFull: true,
-            };
-            // No comprimir: el dataUrl PNG ya es binario comprimido internamente
-            const _ld = JSON.stringify(_groupData);
-            layerRows.push({ panel_id: panelId, layer_order: j, layer_type: l.type, layer_data: _ld, gif_url: null, anim_url: null });
-            continue; // siguiente capa
-          }
-
-          // Serializar la capa — excluir campos de re-edición que el reader no necesita
-          const _lClean = {...l};
-          // _gcpLayersData/_gcpFramesData/_gcpLayerNames son datos vectoriales (no imágenes)
-          // Se mantienen en layer_data para que el editor GCP funcione en dispositivo B
-          delete _lClean._pngFrames;     // nunca en layer_data — van al bucket
-          delete _lClean._pngFramesKey;  // clave IDB local — no tiene sentido en Supabase
-          delete _lClean._animFrames;    // datos en memoria — no serializar
-          delete _lClean._animReady;
-          delete _lClean._oc;
-          delete _lClean._apngSrc;     // dataUrl enorme — ya está en bucket por animKey
-
-          // APNG animado → bucket 'anims'
-          // Fuentes de datos en orden de prioridad:
-          // 1. IDB (caso normal), 2. _apngSrc en memoria (modo incógnito), 3. _pngFrames en memoria
-          let animUrl = null;
-          if (l.type === 'image' && (l._pngFramesKey || l.animKey || l._apngSrc || (l._pngFrames && l._pngFrames.length))) {
-            const _bucketKey = 'anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-            try {
-              let _apngDataUrl = null;
-              // 1. Intentar IDB si hay clave
-              if (l._pngFramesKey || l.animKey) {
-                const _idbKey = l._pngFramesKey || l.animKey;
-                const _animData = await _sbAnimIdbLoad(_idbKey).catch(() => null);
-                if (_animData) {
-                  if (typeof _animData === 'string') _apngDataUrl = _animData;
-                  else if (Array.isArray(_animData) && _animData.length)
-                    _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
-                }
-              }
-              // 2. Fallback: _apngSrc en memoria (modo incógnito o descarga reciente)
-              if (!_apngDataUrl && l._apngSrc) _apngDataUrl = l._apngSrc;
-              // 3. Fallback: _pngFrames en memoria
-              if (!_apngDataUrl && l._pngFrames && l._pngFrames.length)
-                _apngDataUrl = await _buildApngFromFrames(l._pngFrames, l._gcpFrameDelay || 100);
-              if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
-            } catch(e) { console.warn('APNG upload error:', e.message); }
-          }
-
-          // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
-          // El resto: JSON directo como v16.42 — sin riesgo de fallo de descompresión
-          // Comprimir cualquier layer cuyo JSON supere el umbral (fill ya comprimido arriba)
-          const _lRaw = JSON.stringify(_lClean);
-          const _ld = _lRaw.length >= _CZ_MIN ? await _czCompress(_lRaw) : _lRaw;
-          layerRows.push({
-            panel_id:    panelId,
-            layer_order: j,
-            layer_type:  l.type,
-            layer_data:  _ld,
-            gif_url:     gifUrl,
-            anim_url:    animUrl,
-          });
-        } // end for j
-        if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
-      }
-
-      // Textos para el reader (panel_texts sin cambios)
-      if (!p.texts || p.texts.length === 0) return;
-      await _upsert('panel_texts', p.texts.map((t, j) => ({
-        panel_id:     panelId,
-        text_order:   t.order              ?? j,
-        type:         t.type              || 'bubble',
-        style:        t.style             || 'conventional',
-        has_tail:     t.hasTail           ?? true,
-        tail_starts:  JSON.stringify(t.tailStarts || [{x:-0.4,y:0.4}]),
-        tail_ends:    JSON.stringify(t.tailEnds   || [{x:-0.4,y:0.6}]),
-        voice_count:  t.voiceCount        ?? 1,
-        x:            t.x                 ?? 0,
-        y:            t.y                 ?? 0,
-        w:            t.w                 ?? t.width  ?? 0.3,
-        h:            t.h                 ?? t.height ?? 0.15,
-        text:         t.text              || '',
-        font_family:  t.fontFamily        || 'Patrick Hand',
-        font_size:    t.fontSize          ?? 30,
-        font_bold:    t.fontBold          ?? false,
-        font_italic:  t.fontItalic        ?? false,
-        color:        t.color             || '#000000',
-        bg:           t.bg || t.backgroundColor || '#ffffff',
-        bg_opacity:   t.bgOpacity         ?? 1,
-        border:       t.border            ?? t.borderWidth ?? 2,
-        border_color: t.borderColor       || '#000000',
-        rotation:     t.rotation          ?? 0,
-        padding:      t.padding           ?? 15,
-      })));
-    });
+    await _sbPoolMap(panels, 3, (p, i) => _uploadOnePanel(comic, edPages, p, i, null));
   }
 
   // ── BORRADOR EN NUBE ──────────────────────────────────────
   // Límite razonable: 50MB por obra (data_url de paneles son base64 JPEGs)
   // El campo published=false impide que aparezca en el reader público
-  async function saveDraft(comic) {
+  async function saveDraft(comic, dirtyPageIndices) {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId para guardar borrador');
 
@@ -620,7 +678,7 @@ const SupabaseClient = (() => {
       pending_review: false,
       updated_at:     new Date().toISOString(),
     });
-    await _uploadPanels(comic);
+    await _uploadPanels(comic, dirtyPageIndices);
     return { sizeKB: 0 }; // tamaño calculado por Supabase al rechazar si excede límite
   }
 
