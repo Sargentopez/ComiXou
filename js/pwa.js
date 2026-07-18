@@ -34,8 +34,7 @@
 
   /* ── Registrar Service Worker y forzar actualización inmediata ── */
   if ('serviceWorker' in navigator) {
-    const swPath = window.location.pathname.includes('/pages/')
-      ? '../sw.js' : './sw.js';
+    const swPath = './sw.js';
 
     // Función para saber si el usuario está en el editor (editando una obra)
     const _inEditor = () => !!sessionStorage.getItem('cx_editing');

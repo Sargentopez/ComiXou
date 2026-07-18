@@ -645,7 +645,19 @@ function _renderCreditsCanvas() {
       _limg.src = _LOGO_DATA_URL;
       const _lh = logoFS * 1.1;
       const _lw = _limg.naturalWidth > 0 ? _limg.naturalWidth * (_lh / _limg.naturalHeight) : _lh * (191/42);
-      ctx.drawImage(_limg, rightCX - _lw/2, rightStartY - _lh * 0.8, _lw, _lh);
+      // Icono estático (sin animar) a la izquierda del logo, mismo alto, pareja centrada
+      let _iw = 0, _gap = 0;
+      if (typeof _ICON_DATA_URL !== 'undefined') {
+        const _iimg = new Image();
+        _iimg.src = _ICON_DATA_URL;
+        _iw = _iimg.naturalWidth > 0 ? _iimg.naturalWidth * (_lh / _iimg.naturalHeight) : _lh * (68/67);
+        _gap = _lh * 0.3;
+        const _startX = rightCX - (_iw + _gap + _lw) / 2, _topY = rightStartY - _lh * 0.8;
+        ctx.drawImage(_iimg, _startX, _topY, _iw, _lh);
+        ctx.drawImage(_limg, _startX + _iw + _gap, _topY, _lw, _lh);
+      } else {
+        ctx.drawImage(_limg, rightCX - _lw/2, rightStartY - _lh * 0.8, _lw, _lh);
+      }
     }
 
     const sloganY = rightStartY + sloganFS * 2;
@@ -713,7 +725,18 @@ function _renderCreditsCanvas() {
       _limg2.src = _LOGO_DATA_URL;
       const _lh2 = logoFS * 1.1;
       const _lw2 = _limg2.naturalWidth > 0 ? _limg2.naturalWidth * (_lh2 / _limg2.naturalHeight) : _lh2 * (191/42);
-      ctx.drawImage(_limg2, cx - _lw2/2, logoY - _lh2 * 0.8, _lw2, _lh2);
+      // Icono estático (sin animar) a la izquierda del logo, mismo alto, pareja centrada
+      if (typeof _ICON_DATA_URL !== 'undefined') {
+        const _iimg2 = new Image();
+        _iimg2.src = _ICON_DATA_URL;
+        const _iw2 = _iimg2.naturalWidth > 0 ? _iimg2.naturalWidth * (_lh2 / _iimg2.naturalHeight) : _lh2 * (68/67);
+        const _gap2 = _lh2 * 0.3;
+        const _startX2 = cx - (_iw2 + _gap2 + _lw2) / 2, _topY2 = logoY - _lh2 * 0.8;
+        ctx.drawImage(_iimg2, _startX2, _topY2, _iw2, _lh2);
+        ctx.drawImage(_limg2, _startX2 + _iw2 + _gap2, _topY2, _lw2, _lh2);
+      } else {
+        ctx.drawImage(_limg2, cx - _lw2/2, logoY - _lh2 * 0.8, _lw2, _lh2);
+      }
     }
 
     const sloganFS = Math.round(fRef * 0.042);

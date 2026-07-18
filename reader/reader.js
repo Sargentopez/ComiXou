@@ -820,6 +820,8 @@ const ED_CANVAS_H = ED_PAGE_H * 3; // 2340 - workspace completo
 // ── ESTADO ──────────────────────────────────────────────────
 // Imagen del logo — se precarga completamente en preloadImages() antes de mostrar créditos
 let _logoImg = null;
+// Icono estático (sin animar) — misma hoja de créditos, junto al logo
+let _iconImg = null;
 
 const RS = {
   panels:       [],   // [{id, orientation, text_mode, data_url, texts:[]}]
@@ -1182,6 +1184,15 @@ async function preloadImages() {
       img.onload  = () => { _logoImg = img; resolve(); };
       img.onerror = () => resolve(); // no bloquear si falla
       img.src = _LOGO_DATA_URL;
+    });
+  }
+  // Precargar el icono estático (misma hoja de créditos, junto al logo)
+  if (typeof _ICON_DATA_URL !== 'undefined') {
+    await new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => { _iconImg = img; resolve(); };
+      img.onerror = () => resolve();
+      img.src = _ICON_DATA_URL;
     });
   }
 
@@ -3012,7 +3023,15 @@ function _renderCredits() {
     const lineH = ph * 0.09;
     const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
     const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
-    if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+    if (_iconImg && _iconImg.complete && _iconImg.naturalWidth > 0 && _logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+      const lh = logoFS * 1.1;
+      const lw2 = _logoImg.naturalWidth * (lh / _logoImg.naturalHeight);
+      const iw2 = _iconImg.naturalWidth * (lh / _iconImg.naturalHeight);
+      const gap = lh * 0.3;
+      const startX = rightCX - (iw2 + gap + lw2) / 2, topY = rightStartY - lh * 0.8;
+      ctx.drawImage(_iconImg, startX, topY, iw2, lh);
+      ctx.drawImage(_logoImg, startX + iw2 + gap, topY, lw2, lh);
+    } else if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
       const lh = logoFS * 1.1, lw2 = _logoImg.naturalWidth * (lh / _logoImg.naturalHeight);
       ctx.drawImage(_logoImg, rightCX - lw2/2, rightStartY - lh * 0.8, lw2, lh);
     }
@@ -3048,7 +3067,15 @@ function _renderCredits() {
     ctx.fillStyle = '#222'; ctx.textAlign = 'center';
     ctx.fillText(authorText, cx, authorY);
     const lineH = ph * 0.09, logoFS = Math.round(fRef * 0.11), logoY = authorY + lineH * 1.3;
-    if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+    if (_iconImg && _iconImg.complete && _iconImg.naturalWidth > 0 && _logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
+      const lh2 = logoFS * 1.1;
+      const lw2 = _logoImg.naturalWidth * (lh2 / _logoImg.naturalHeight);
+      const iw2 = _iconImg.naturalWidth * (lh2 / _iconImg.naturalHeight);
+      const gap2 = lh2 * 0.3;
+      const startX2 = cx - (iw2 + gap2 + lw2) / 2, topY2 = logoY - lh2 * 0.8;
+      ctx.drawImage(_iconImg, startX2, topY2, iw2, lh2);
+      ctx.drawImage(_logoImg, startX2 + iw2 + gap2, topY2, lw2, lh2);
+    } else if (_logoImg && _logoImg.complete && _logoImg.naturalWidth > 0) {
       const lh2 = logoFS * 1.1, lw2 = _logoImg.naturalWidth * (lh2 / _logoImg.naturalHeight);
       ctx.drawImage(_logoImg, cx - lw2/2, logoY - lh2 * 0.8, lw2, lh2);
     }
