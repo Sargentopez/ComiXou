@@ -30052,9 +30052,10 @@ function _gcpOpenPropsPanel(la, laIdx) {
     if (!newLa) return;
     newLa.x += 0.03; newLa.y += 0.03;
     newLa._gcpName = (la._gcpName || '') + ' copia';
-    // Objeto nuevo: invisible en frames anteriores, visible solo desde fi
-    const fi = window._gcpGlobalFrameIdx || 0;
-    _gcpInitLayerFrames(newLa, fi);
+    // Objeto nuevo pendiente de confirmar: no se propaga a otros frames hasta
+    // que se guarde/capture con su posición definitiva (ver _gcpSaveFrame).
+    newLa._frames = [];
+    newLa._gcpPendingInsert = true;
     _gcpPushLayer(newLa);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpClosePropsPanel();
@@ -30114,9 +30115,10 @@ function _gcpOpenPropsPanel(la, laIdx) {
     } else if (newLa.type === 'text' || newLa.type === 'bubble') {
       newLa.rotation = -(newLa.rotation || 0);
     }
-    // Objeto nuevo: invisible en frames anteriores, visible solo desde fi
-    const fi = window._gcpGlobalFrameIdx || 0;
-    _gcpInitLayerFrames(newLa, fi);
+    // Objeto nuevo pendiente de confirmar: no se propaga a otros frames hasta
+    // que se guarde/capture con su posición definitiva (ver _gcpSaveFrame).
+    newLa._frames = [];
+    newLa._gcpPendingInsert = true;
     _gcpPushLayer(newLa);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     _gcpClosePropsPanel();
@@ -30759,6 +30761,17 @@ function _gcpSaveFrame() {
   if (!window._gcpLayers.length) { edToast('Añade objetos primero'); return; }
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
+    // Objeto insertado/duplicado/reflejado pendiente de confirmar: esta es su
+    // primera confirmación real. Usar su posición YA definitiva (el usuario
+    // ya lo ha arrastrado a su sitio) para propagar/interpolar el resto de la
+    // línea de tiempo — igual que si se hubiera insertado ya colocado ahí.
+    if (la._gcpPendingInsert) {
+      delete la._gcpPendingInsert;
+      _gcpInitLayerFrames(la, fi);
+      _gcpInvalidateThumb(la);   // toda la fila es nueva
+      _gcpInvalidateSampleThumb(la);
+      return;
+    }
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi) la._frames.push(null);
     if (la._gcpVisible === false) { la._frames[fi] = null; _gcpInvalidateThumb(la, fi); return; }
@@ -30787,6 +30800,15 @@ function _gcpCaptureFrame() {
   _gcpRemoveCircularInterp();
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
+    // Objeto pendiente de confirmar (insertado/duplicado/reflejado sin pasar
+    // aún por 💾): confirmarlo aquí también, con su posición ya definitiva,
+    // antes de copiar — si no, esta capa se trataría como "no existe en fi".
+    if (la._gcpPendingInsert) {
+      delete la._gcpPendingInsert;
+      _gcpInitLayerFrames(la, fi);
+      _gcpInvalidateThumb(la);
+      _gcpInvalidateSampleThumb(la);
+    }
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi) la._frames.push(null);
     // Insertar copia del frame fi justo después.
@@ -33265,16 +33287,15 @@ function gcpInsertFromBib(entry) {
     // Nombre visible en la barra
     la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
     la._gcpVisible = true;
-    const _totalAtInsert = _gcpGetTotalFrames();
-    const _curFi = window._gcpGlobalFrameIdx;
+    // El objeto queda PENDIENTE de confirmar: no se propaga a ningún otro
+    // frame todavía (evita "congelar" su posición provisional de inserción
+    // antes de que el usuario lo arrastre a su sitio definitivo). Solo al
+    // guardar (💾 _gcpSaveFrame) o capturar (+ _gcpCaptureFrame) por primera
+    // vez se usa su posición YA definitiva para propagar/interpolar el resto
+    // de la línea de tiempo — evita crear una interpolación fantasma entre
+    // la posición de inserción y la posición final.
     la._frames = [];
-    if (_totalAtInsert > 0) {
-      // Inicializar solo hasta el frame actual: invisible 0.._curFi-1, visible en _curFi.
-      // Los frames posteriores son implícitamente invisibles (fi >= _frames.length).
-      // Evita que el nuevo objeto ocupe todos los slots de una animación previa eliminada.
-      _gcpInitLayerFrames(la, _curFi);
-    }
-    // Si _totalAtInsert === 0: _frames vacío — el usuario guarda su primer frame con "Guardar Frame".
+    la._gcpPendingInsert = true;
     _gcpPushLayer(la);
     window._gcpSelIdx = window._gcpLayers.length - 1;
     // El objeto nuevo se añade al final: no desplaza a ningún otro objeto ni
