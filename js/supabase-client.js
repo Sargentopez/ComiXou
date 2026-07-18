@@ -416,9 +416,15 @@ const SupabaseClient = (() => {
     const panelId = ins[0]?.id || existingPanelId;
     if (!panelId) return;
 
-    // Borrar capas y textos anteriores por si el CASCADE no actuó
-    await _delete('panel_layers', `panel_id=eq.${panelId}`);
-    await _delete('panel_texts',  `panel_id=eq.${panelId}`);
+    // Borrar capas y textos anteriores por si el CASCADE no actuó. NO se
+    // esperan aquí: se lanzan en paralelo con el procesamiento de las capas
+    // (que no depende de ellos — solo lee edPage.layers) y cada uno se espera
+    // justo antes de su INSERT correspondiente. Antes eran dos rondas de red
+    // secuenciales que bloqueaban el inicio del procesamiento sin necesidad;
+    // en una página con capas GIF/APNG (que ya tardan lo suyo en subir su
+    // binario), esta espera quedaba completamente escondida detrás de eso.
+    const _delLayersP = _delete('panel_layers', `panel_id=eq.${panelId}`);
+    const _delTextsP  = _delete('panel_texts',  `panel_id=eq.${panelId}`);
 
     // Capas del editor: image, draw, stroke, bubble, text, gif — formato edSerLayer
     const edPage = edPages[i];
@@ -511,10 +517,14 @@ const SupabaseClient = (() => {
           anim_url:    animUrl,
         });
       } // end for j
+      await _delLayersP; // esperar el borrado (lanzado en paralelo arriba) antes de insertar
       if(layerRows.length > 0) await _upsert('panel_layers', layerRows);
+    } else {
+      await _delLayersP;
     }
 
     // Textos para el reader (panel_texts sin cambios)
+    await _delTextsP; // esperar el borrado (lanzado en paralelo arriba) antes de insertar
     if (!p.texts || p.texts.length === 0) return;
     await _upsert('panel_texts', p.texts.map((t, j) => ({
       panel_id:     panelId,

@@ -2492,7 +2492,9 @@ function _tdApplyToCanvas(){
       const lastOrient = edPages.length ? (edPages[edPages.length - 1].orientation || edOrientation) : edOrientation;
       const newPages = pages.slice(existingCount).map(pageLines => ({
         layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, [])],
-        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
+        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient,
+        _dirtyCountLocal: 1,
+        _dirtyCountCloud: 1,
       }));
       if(newPages.length) { edPages.push(...newPages); if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty(); }
 
@@ -2591,7 +2593,9 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
     );
     const newPages0 = pages0.map(pageLines => ({
       layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks)],
-      drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient
+      drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient,
+      _dirtyCountLocal: 1,
+        _dirtyCountCloud: 1,
     }));
     edPages.splice(afterIdx, 0, ...newPages0);
     if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
@@ -2747,7 +2751,9 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       }
       return {
         layers: [tl],
-        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient
+        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient,
+        _dirtyCountLocal: 1,
+        _dirtyCountCloud: 1,
       };
     });
     edPages.splice(insertAt, 0, ...extraPages);

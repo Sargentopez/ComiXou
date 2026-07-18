@@ -3579,20 +3579,52 @@ function _edGetPaintTarget() {
   }
   return dl;
 }
+// Hash simple (djb2) del contenido de la biblioteca — no criptográfico, solo
+// necesita detectar de forma fiable si cambió desde el último guardado en la
+// nube. Mucho más barato que subir la biblioteca entera "por si acaso".
+function _cxSimpleHash(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  }
+  return h.toString(36);
+}
+
 // ── SEGUIMIENTO DE PÁGINAS MODIFICADAS (guardado incremental) ───────────────
-// Cada página lleva dos flags en memoria (nunca se serializan a disco/nube):
-// _dirtyLocal / _dirtyCloud — true si su contenido difiere de lo último
-// guardado en OPFS / Supabase respectivamente. Se marcan `true` en CUALQUIER
-// punto del código que cambie el contenido de una página (ver _edMarkPageDirty)
-// y se ponen a `false` SOLO por edSaveProject/edCloudSave, y SOLO después de
-// confirmar que el guardado tuvo éxito — nunca antes.
+// MECANISMO PRINCIPAL — dos contadores de interacción independientes por
+// página (local y nube; tienen que ser independientes porque puedes guardar
+// localmente varias veces antes de un solo guardado en nube, y viceversa).
+// Cada uno se incrementa con CUALQUIER tap/click en el editor (ver
+// _edInteractionTick) y 0 significa "no hace falta guardar". Al confirmar
+// un guardado con éxito, el contador correspondiente se RESTA (nunca se
+// pone a 0 a ciegas) usando la instantánea capturada en el momento de
+// decidir qué guardar — así, si el usuario toca algo justo a mitad de un
+// guardado (que puede tardar varios segundos), ese toque no se pierde: el
+// contador queda en 1 o más en vez de resetearse a 0 por error, y la página
+// sigue sucia hasta el siguiente guardado.
 //
-// window._edPagesStructureDirtyLocal / …Cloud: true si han cambiado el NÚMERO
-// o el ORDEN de las páginas desde el último guardado de ese tipo (añadir,
-// eliminar, reordenar, duplicar hoja). Mientras estén a true, el guardado
-// correspondiente ignora los flags por página y hace SIEMPRE un guardado
-// completo — es la red de seguridad para cualquier caso donde la posición ya
-// no significa lo mismo que la última vez.
+// Al cargar la obra, _dirtyCountLocal arranca en 0 para las páginas cuya
+// caché se establece desde disco (ver edLoadProject) — lo que se acaba de
+// leer ES, por definición, lo que hay en OPFS. _dirtyCountCloud NO se
+// inicializa al cargar (queda sin definir = sucia por defecto): no hay
+// garantía de que el dispositivo y la nube estén sincronizados en ese
+// instante — pudiste guardar localmente en una sesión anterior sin llegar
+// a guardar en nube, y tratar esa página como ya sincronizada haría que esa
+// hoja nunca se subiera.
+//
+// RED DE SEGURIDAD ADICIONAL — _dirtyLocal / _dirtyCloud: flags que se
+// marcan `true` explícitamente en puntos concretos del código (edPushHistory,
+// edApplyHistory, edSetOrientation, sesiones de dibujo/vectorial, rotar hoja
+// no activa, reparación de IDs). Se combinan con los contadores: una página
+// se considera sucia si CUALQUIERA de los mecanismos lo indica.
+//
+// window._edPagesStructureDirtyLocal / …Cloud: true si han cambiado el
+// NÚMERO o el ORDEN de las páginas desde el último guardado de ese tipo
+// (añadir, eliminar, reordenar, duplicar hoja) — incluye la ELIMINACIÓN de
+// hojas, para que una hoja borrada no reaparezca al cargar la obra: mientras
+// esté a true, el guardado correspondiente ignora los contadores/flags por
+// página y hace SIEMPRE un guardado completo, que en la ruta de nube borra
+// primero todos los panels existentes y sube solo los que hay ahora mismo.
 //
 // Principio de diseño: ante la duda, marcar sucio. Saltarse una página que sí
 // cambió sería pérdida de datos; volver a guardar una página que no cambió
@@ -3605,6 +3637,30 @@ function _edMarkPageDirty(pageOrIdx) {
 function _edMarkPagesStructureDirty() {
   window._edPagesStructureDirtyLocal = true;
   window._edPagesStructureDirtyCloud = true;
+}
+// Listener global de "cualquier tap/click" — sin ninguna condición de salida
+// temprana a propósito. No comprueba qué se tocó ni si el gesto se completó
+// o se canceló: basta con haber empezado un tap/click sobre la página activa
+// para marcarla como potencialmente modificada, en ambos contadores.
+function _edInteractionTick() {
+  const p = edPages[edCurrentPage];
+  if (!p) return;
+  p._dirtyCountLocal = (p._dirtyCountLocal || 0) + 1;
+  p._dirtyCountCloud = (p._dirtyCountCloud || 0) + 1;
+}
+// ¿Está sucia esta página para guardado LOCAL?
+function _edPageDirtyLocal(p) {
+  if (!p) return true;
+  if (p._dirtyLocal !== false) return true;
+  if (typeof p._dirtyCountLocal !== 'number') return true; // nunca establecido → sucia por defecto
+  return p._dirtyCountLocal !== 0;
+}
+// ¿Está sucia esta página para guardado en NUBE? (contador independiente)
+function _edPageDirtyCloud(p) {
+  if (!p) return true;
+  if (p._dirtyCloud !== false) return true;
+  if (typeof p._dirtyCountCloud !== 'number') return true; // nunca establecido → sucia por defecto
+  return p._dirtyCountCloud !== 0;
 }
 
 function edPushHistory(force, movedLayer){
@@ -5250,7 +5306,7 @@ function edDrawSel(){
    PÁGINAS
    ══════════════════════════════════════════ */
 function edAddPage(){
-  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation});
+  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation,_dirtyCountLocal:1,_dirtyCountCloud:1});
   _edMarkPagesStructureDirty();
   edLoadPage(edPages.length-1);
   edToast('Página añadida');
@@ -21597,18 +21653,24 @@ async function edCloudSave() {
     ComicStore.save(comic);
   }
 
-  // Qué páginas hace falta subir de verdad — ver _edMarkPageDirty/
-  // _edMarkPagesStructureDirty. null = subir la obra entera (comportamiento
-  // de siempre): se usa si ha habido cambios estructurales desde el último
-  // guardado en la nube, o si el número de páginas no coincide con lo que se
-  // va a subir (nunca fiarse de índices posicionales en ese caso).
+  // Qué páginas hace falta subir de verdad — ver _edPageDirtyCloud (contador
+  // de interacción + flags _dirtyCloud). null = subir la obra entera
+  // (comportamiento de siempre): se usa si ha habido cambios estructurales
+  // desde el último guardado en la nube, o si el número de páginas no
+  // coincide con lo que se va a subir (nunca fiarse de índices posicionales
+  // en ese caso).
   let _dirtyPageIndices = null;
   if (!window._edPagesStructureDirtyCloud &&
       comic.editorData && comic.editorData.pages &&
       comic.editorData.pages.length === edPages.length) {
     _dirtyPageIndices = [];
-    edPages.forEach((p, i) => { if (p._dirtyCloud !== false) _dirtyPageIndices.push(i); });
+    edPages.forEach((p, i) => { if (_edPageDirtyCloud(p)) _dirtyPageIndices.push(i); });
   }
+  // Instantánea del contador de CADA página en el momento de decidir qué
+  // subir — si el usuario toca algo durante la subida (que puede tardar
+  // segundos), ese cambio no debe confundirse con lo que realmente se acaba
+  // de subir en esta pasada; quedará pendiente para el siguiente guardado.
+  const _cloudCounterSnapshots = edPages.map(p => p._dirtyCountCloud || 0);
 
   const btn = $('edCloudSaveBtn');
   if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
@@ -21621,7 +21683,19 @@ async function edCloudSave() {
     edToast('☁️ Guardado en nube');
     // Confirmar limpieza de guardado incremental en la nube SOLO ahora que se
     // sabe que la subida tuvo éxito de verdad — igual que en edSaveProject.
-    edPages.forEach(p => { p._dirtyCloud = false; });
+    // Restar la instantánea capturada arriba (no asignar 0 a ciegas): si el
+    // usuario tocó algo durante la subida, el contador queda con el resto
+    // pendiente en vez de perderse.
+    if (_dirtyPageIndices === null) {
+      // Subida completa: TODAS las páginas quedan sincronizadas con la nube
+      edPages.forEach((p, i) => { p._dirtyCloud = false; p._dirtyCountCloud = (p._dirtyCountCloud || 0) - _cloudCounterSnapshots[i]; });
+    } else {
+      // Subida incremental: solo las páginas que realmente se subieron
+      _dirtyPageIndices.forEach(i => {
+        const p = edPages[i];
+        if (p) { p._dirtyCloud = false; p._dirtyCountCloud = (p._dirtyCountCloud || 0) - _cloudCounterSnapshots[i]; }
+      });
+    }
     window._edPagesStructureDirtyCloud = false;
     // Borrar autosave explícitamente tras guardado en nube exitoso.
     // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
@@ -21637,19 +21711,35 @@ async function edCloudSave() {
       ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false, cloudSavedAt: new Date().toISOString() });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
-    // Sincronizar biblioteca con la nube
+    // Sincronizar biblioteca con la nube — solo si su contenido cambió de
+    // verdad desde el último guardado en la nube. La huella se persiste en
+    // localStorage (por usuario, no por obra) porque la biblioteca es
+    // conceptualmente compartida por todas las obras del usuario en la
+    // nube — aunque cada obra mantenga su propia caché local en IDB, lo que
+    // importa aquí es si hace falta volver a subirla.
     const user = Auth?.currentUser?.();
     if (user && user.id) {
       try {
         const _bib = _bibLoad();
-        const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
-        const _bibFolderInfo = (_bib?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
-        window._edLastBibSync = { items: _bibItems, folders: _bibFolderInfo, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, cacheNull: _bibCache===null, ts: new Date().toISOString() };
-        await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
+        const _bibJson = JSON.stringify(_bib || {});
+        const _bibHashNow = _cxSimpleHash(_bibJson);
+        const _bibHashKey = 'cx_bib_synced_hash_' + user.id;
+        const _bibHashPrev = localStorage.getItem(_bibHashKey);
+        if (_bibHashPrev === _bibHashNow) {
+          // Sin cambios desde el último guardado en la nube — no subir nada
+          window._edLastBibSync = { skipped: true, ts: new Date().toISOString() };
+        } else {
+          const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+          const _bibFolderInfo = (_bib?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
+          window._edLastBibSync = { items: _bibItems, folders: _bibFolderInfo, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, cacheNull: _bibCache===null, ts: new Date().toISOString(), skipped: false };
+          await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
+          // Confirmar la huella SOLO tras éxito — igual que con las páginas
+          try { localStorage.setItem(_bibHashKey, _bibHashNow); } catch(_) {}
 
-        // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
-        if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
-          _edShowIncognitoWarning('Biblioteca sincronizada con la nube: ' + _bibItems + ' item(s). Al abrir en modo normal se cargará desde la nube.');
+          // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
+          if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
+            _edShowIncognitoWarning('Biblioteca sincronizada con la nube: ' + _bibItems + ' item(s). Al abrir en modo normal se cargará desde la nube.');
+          }
         }
       } catch(e) { console.warn('bibSync error:', e); }
     }
@@ -21726,7 +21816,7 @@ async function _edCalcProjectBytes(forceRecalc) {
     for (const p of edPages) {
       if (!p || !p.layers) continue;
 
-      if (!window._edPagesStructureDirtyLocal && p._dirtyLocal === false &&
+      if (!window._edPagesStructureDirtyLocal && !_edPageDirtyLocal(p) &&
           p._cachedSerLocal && p._cachedSizeBytes != null &&
           p._cachedSerLocal.layers.length === p.layers.length) {
         total += p._cachedSizeBytes;
@@ -21834,11 +21924,13 @@ async function edSaveProject(_keepOverlay){
     // ¿Se puede reutilizar lo ya serializado la vez anterior para esta
     // página? Solo si: (a) no ha habido cambios estructurales (añadir/
     // eliminar/reordenar/duplicar hoja) desde el último guardado local,
-    // (b) esta página en concreto no está marcada sucia, (c) hay caché
-    // previa de verdad, y (d) una comprobación barata de coherencia (mismo
-    // número de capas que lo cacheado) — red de seguridad ante cualquier
-    // cambio que hubiera podido escapar a los puntos donde se marca sucio.
-    const _canReuse = !window._edPagesStructureDirtyLocal && p._dirtyLocal === false &&
+    // (b) ni el contador de interacción ni los flags indican cambios en esta
+    // página en concreto (_edPageDirtyLocal), (c) hay caché previa de
+    // verdad, y (d) una comprobación barata de coherencia (mismo número de
+    // capas que lo cacheado) — red de seguridad ante cualquier cambio que
+    // hubiera podido escapar tanto al contador como a los flags.
+    const _counterSnapshot = p._dirtyCountLocal || 0; // capturado YA, antes de decidir nada
+    const _canReuse = !window._edPagesStructureDirtyLocal && !_edPageDirtyLocal(p) &&
                        p._cachedPanelLocal && p._cachedSerLocal &&
                        p._cachedSerLocal.layers.length === p.layers.length;
     if (_canReuse) {
@@ -21959,7 +22051,7 @@ async function edSaveProject(_keepOverlay){
     }
     const _pageSer = {layers:_pageLayers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient2};
     _edPages.push(_pageSer);
-    _freshlySerialized.push({ page: p, panel: _panelSer, ser: _pageSer });
+    _freshlySerialized.push({ page: p, panel: _panelSer, ser: _pageSer, counterSnapshot: _counterSnapshot });
   }
   edOrientation=_savedOrient2; edCurrentPage=_savedPage2;
 
@@ -22018,10 +22110,13 @@ async function edSaveProject(_keepOverlay){
     await _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
     // Confirmar limpieza de guardado incremental SOLO ahora que se sabe que el
     // guardado tuvo éxito de verdad — nunca antes (ver _edMarkPageDirty arriba).
-    _freshlySerialized.forEach(({ page, panel, ser }) => {
+    _freshlySerialized.forEach(({ page, panel, ser, counterSnapshot }) => {
       page._cachedPanelLocal = panel;
       page._cachedSerLocal   = ser;
       page._dirtyLocal       = false;
+      // Restar (no asignar 0): si hubo un tap durante este guardado, el
+      // contador queda con el resto pendiente en vez de perderse.
+      page._dirtyCountLocal  = (page._dirtyCountLocal || 0) - counterSnapshot;
       // Cachear también el tamaño en bytes de esta página — lo reutiliza
       // _edCalcProjectBytes para no tener que volver a serializar páginas sin
       // cambios solo para calcular el tamaño (ver _edPageCachedBytes).
@@ -23524,10 +23619,20 @@ async function edLoadProject(id){
   // lo que acabamos de leer) — dejarla en true aquí anulaba la caché por
   // página de más abajo (_cachedSerLocal/_dirtyLocal establecida desde pd),
   // forzando guardado completo local incluso en el primer guardado tras
-  // abrir la obra. Cloud se deja en true (conservador): no hay garantía de
-  // que el local recién cargado ya coincida con lo que hay en Supabase.
+  // abrir la obra.
+  //
+  // Cloud, por defecto, se deja conservador (true / sin establecer por
+  // página): no hay garantía de que el local recién cargado ya coincida con
+  // lo que hay en Supabase — pudiste guardar localmente en una sesión
+  // anterior sin llegar a guardar en nube. EXCEPCIÓN: si my-comics.js acaba
+  // de descargar esta obra de la nube (señal cx_just_synced_cloud, puesta
+  // justo después de escribir la descarga en OPFS), en ESE instante concreto
+  // lo local SÍ coincide con la nube con total certeza — se puede tratar
+  // también el guardado en nube como sincronizado en esta carga.
+  const _justSyncedCloud = sessionStorage.getItem('cx_just_synced_cloud') === '1';
+  sessionStorage.removeItem('cx_just_synced_cloud'); // consumir — solo vale para esta carga
   window._edPagesStructureDirtyLocal = false;
-  window._edPagesStructureDirtyCloud = true;
+  window._edPagesStructureDirtyCloud = !_justSyncedCloud;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
   // cuando el usuario abra el panel.
   _bibCache = null;
@@ -23673,15 +23778,29 @@ async function edLoadProject(id){
         _newPage._cachedSizeBytes = _edPageCachedBytes(_newPage, _newPage._cachedSerLocal);
         const _panelFromDisk = (comic.panels && comic.panels[_pi2]) ? comic.panels[_pi2] : null;
         if (_panelFromDisk) _newPage._cachedPanelLocal = _panelFromDisk;
+        // Contador local arranca en 0 tras cargar — nada se ha tocado
+        // todavía en esta sesión y lo que se acaba de leer ES lo que hay en
+        // OPFS. El contador de nube se deja SIN establecer por defecto — no
+        // hay garantía de que este dispositivo y la nube estén sincronizados
+        // en este instante (ver nota más arriba sobre _dirtyCountCloud) —
+        // EXCEPTO si se acaba de descargar de la nube (_justSyncedCloud),
+        // en cuyo caso lo local coincide con la nube con total certeza.
+        _newPage._dirtyCountLocal = 0;
+        if (_justSyncedCloud) { _newPage._dirtyCloud = false; _newPage._dirtyCountCloud = 0; }
+      } else {
+        // Migración legacy o autoguardado recuperado: SIEMPRE hace falta
+        // guardar esta página, tanto local como en nube.
+        _newPage._dirtyCountLocal = 1;
+        _newPage._dirtyCountCloud = 1;
       }
       return _newPage;
     });
   }else{
-    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
+    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical',_dirtyCountLocal:1,_dirtyCountCloud:1}];
     edRules=[];
     edRuleNodes=[];
   }
-  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential'});
+  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',_dirtyCountLocal:1,_dirtyCountCloud:1});
   edCurrentPage=0;edLayers=edPages[0].layers;
   // Aplicar la orientación REAL de la primera hoja (puede diferir de la orientación global de la obra)
   edOrientation = edPages[0].orientation || edOrientation;
@@ -25707,6 +25826,12 @@ function EditorView_init(){
     [document, 'pointermove',  edOnMove,  {passive:false}],
     [document, 'pointerup',    edOnEnd,   {}],
     [document, 'pointercancel',edOnEnd,   {}],
+    // Contador de interacción por página (ver _edInteractionTick): fase de
+    // CAPTURA para que dispare SIEMPRE, incluso si algún control interno
+    // llama a stopPropagation() en fase de burbuja. A propósito no tiene
+    // ninguna condición de salida temprana — cualquier tap/click cuenta,
+    // sea sobre el canvas, un panel, un botón o un diálogo.
+    [document, 'pointerdown',  _edInteractionTick, {capture:true}],
   ];
   window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
   // Ocultar cursor circular al salir del canvas (PC)

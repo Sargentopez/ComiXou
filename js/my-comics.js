@@ -928,6 +928,13 @@ function _mcRenderList() {
             // creado durante la sesión anterior podría tener ts > localSavedAt heredado.
             localSavedAt: new Date().toISOString(),
           });
+          // Justo aquí, lo que se va a cargar en el editor ES exactamente lo
+          // que hay en la nube ahora mismo (se acaba de descargar y escribir
+          // en OPFS) — señal para que edLoadProject pueda tratar también el
+          // guardado en nube como "ya sincronizado" en esta carga, en vez de
+          // forzar siempre una subida completa en el primer guardado en nube
+          // de la sesión. Se consume (se borra) la primera vez que se lee.
+          sessionStorage.setItem('cx_just_synced_cloud', '1');
           // Sincronizar biblioteca: usar la de la nube si la nube es más nueva o la obra es cloudOnly.
           // Si la local es más reciente (solo _hasLegacyStrokes forzó la descarga), preservar la local.
           const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;

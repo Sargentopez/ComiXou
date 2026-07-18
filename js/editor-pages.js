@@ -442,6 +442,8 @@ function _pgDuplicate(idx) {
     orientation:       _srcOrientation,
     textLayerOpacity:  src.textLayerOpacity  ?? 1,
     textMode:          src.textMode          || 'sequential',
+    _dirtyCountLocal: 1,
+    _dirtyCountCloud: 1,
   };
 
   // Insertar a continuación
