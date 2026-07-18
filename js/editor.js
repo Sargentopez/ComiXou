@@ -23519,11 +23519,14 @@ async function edLoadProject(id){
   try {
   edProjectId=id;
   // Reiniciar el seguimiento de guardado incremental para esta obra — ver
-  // _edMarkPageDirty/_edMarkPagesStructureDirty. Cada página recién
-  // deserializada no tiene _dirtyLocal/_dirtyCloud (undefined se trata como
-  // "sucia" por defecto), pero se deja explícito aquí también para no
-  // arrastrar flags globales de la obra anterior entre una carga y otra.
-  window._edPagesStructureDirtyLocal = true;
+  // _edMarkPageDirty/_edMarkPagesStructureDirty. La estructura LOCAL recién
+  // cargada coincide, por definición, con lo que hay en OPFS (es literalmente
+  // lo que acabamos de leer) — dejarla en true aquí anulaba la caché por
+  // página de más abajo (_cachedSerLocal/_dirtyLocal establecida desde pd),
+  // forzando guardado completo local incluso en el primer guardado tras
+  // abrir la obra. Cloud se deja en true (conservador): no hay garantía de
+  // que el local recién cargado ya coincida con lo que hay en Supabase.
+  window._edPagesStructureDirtyLocal = false;
   window._edPagesStructureDirtyCloud = true;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
   // cuando el usuario abra el panel.
@@ -23535,6 +23538,10 @@ async function edLoadProject(id){
 
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
+  // true si comic.editorData.pages termina siendo el autoguardado recuperado
+  // (cambios sin guardar) en vez de lo realmente persistido en OPFS/nube —
+  // en ese caso NUNCA se puede tratar ninguna página como "ya guardada".
+  let _edLoadedFromAutosave = false;
   // Si hay un snapshot pero está vacío (pages=[]) → basura → borrar sin preguntar
   if (_asSave && (!_asSave.pages || !_asSave.pages.length || !_asSave.ts)) {
     _edAutosaveClear(id);
@@ -23594,6 +23601,11 @@ async function edLoadProject(id){
       // Cargar el autosave en lugar de los datos del disco
       comic.editorData = comic.editorData || {};
       comic.editorData.pages = _asSave.pages;
+      _edLoadedFromAutosave = true; // estas páginas NO coinciden con lo persistido
+      // La estructura del autoguardado (nº de páginas) podría no coincidir con
+      // lo persistido — no fiarse de índices por posición hasta el próximo
+      // guardado real, que reflejará la estructura verdadera.
+      window._edPagesStructureDirtyLocal = true;
       // Restaurar biblioteca si estaba en el snapshot
       if (_asSave.bib) {
         try { _bibSave(_asSave.bib); } catch(_) {}
@@ -23632,17 +23644,37 @@ async function edLoadProject(id){
       }).filter(Boolean);
       window._edDeserPageIdx = 0;
       // Migrar drawData legado (versiones <5.20) a DrawLayer si no hay DrawLayer ya
-      if(pd.drawData && !layers.find(l=>l.type==='draw')){
+      const _hadLegacyMigration = !!(pd.drawData && !layers.find(l=>l.type==='draw'));
+      if(_hadLegacyMigration){
         const _isV = orient==='vertical';
         layers.unshift(DrawLayer.fromDataUrl(pd.drawData, _isV?ED_PAGE_W:ED_PAGE_H, _isV?ED_PAGE_H:ED_PAGE_W)); // legacy
       }
-      return {
+      const _newPage = {
         drawData: null,
         layers,
         textLayerOpacity: pd.textLayerOpacity??1,
         textMode: pd.textMode||'sequential',
         orientation: orient,
       };
+      // Establecer la caché de guardado incremental YA al cargar — pd es
+      // literalmente lo que ya está persistido en OPFS/nube para esta página,
+      // así que si no hubo migración legacy NI se recuperó el autoguardado,
+      // es seguro tratarla como "ya guardada" sin necesidad de un primer
+      // guardado para "calentar" la caché. Sin esto, comprobar el tamaño (o
+      // guardar) justo después de UN solo cambio pequeño recién abierta la
+      // obra recalculaba TODA la obra igual que antes, porque no había
+      // caché previa de esta sesión.
+      // Si se recuperó el autoguardado, pd YA ES el cambio sin guardar que el
+      // usuario pidió recuperar — tratarlo como "limpio" haría que nunca se
+      // llegase a persistir de verdad. Nunca cachear en ese caso.
+      if (!_hadLegacyMigration && !_edLoadedFromAutosave) {
+        _newPage._cachedSerLocal = { layers: pd.layers || [], textLayerOpacity: _newPage.textLayerOpacity, textMode: _newPage.textMode, orientation: orient };
+        _newPage._dirtyLocal = false;
+        _newPage._cachedSizeBytes = _edPageCachedBytes(_newPage, _newPage._cachedSerLocal);
+        const _panelFromDisk = (comic.panels && comic.panels[_pi2]) ? comic.panels[_pi2] : null;
+        if (_panelFromDisk) _newPage._cachedPanelLocal = _panelFromDisk;
+      }
+      return _newPage;
     });
   }else{
     edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical'}];
