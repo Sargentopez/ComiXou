@@ -3638,11 +3638,34 @@ function _edMarkPagesStructureDirty() {
   window._edPagesStructureDirtyLocal = true;
   window._edPagesStructureDirtyCloud = true;
 }
-// Listener global de "cualquier tap/click" — sin ninguna condición de salida
-// temprana a propósito. No comprueba qué se tocó ni si el gesto se completó
-// o se canceló: basta con haber empezado un tap/click sobre la página activa
-// para marcarla como potencialmente modificada, en ambos contadores.
-function _edInteractionTick() {
+// Elementos donde un tap/click NUNCA puede modificar el contenido de la obra
+// — se excluyen del contador de interacción. Deliberadamente es una lista
+// CORTA y de exclusión (no de inclusión): cualquier botón de menú que NO
+// esté aquí sigue contando, porque podría crear/mover/eliminar contenido
+// (reordenar capas, añadir hoja, crear una animación, borrar de la
+// biblioteca...) y no tengo forma de estar seguro de cuáles son inofensivos
+// sin revisar cada uno. Ante la duda, contar.
+const _ED_TICK_EXCLUDE_SELECTOR = [
+  '#edPagePrev', '#edPageNext',   // navegar entre hojas para verlas, no las modifica
+  '#edMinimizeBtn',               // ocultar/mostrar menú
+  '#edSaveBtn', '#edCloudSaveBtn',// guardar (el propio guardado ya tiene su seguimiento)
+  '#edPreviewBtn',                // vista previa / reproducir
+  '#edFsBtn',                     // pantalla completa
+  '#edDiagBtn',                   // diagnóstico
+  '#edHelpRefModal',              // ventana de ayuda entera (contenido, cerrar, "no volver a mostrar")
+].join(', ');
+// Listener global de "cualquier tap/click", con las excepciones de arriba.
+// No comprueba si el gesto se completó o se canceló: basta con haber
+// empezado un tap/click fuera de la lista de exclusión para marcar la
+// página activa como potencialmente modificada, en ambos contadores.
+function _edInteractionTick(e) {
+  const _target = e && e.target;
+  if (_target && _target.closest) {
+    if (_target.closest(_ED_TICK_EXCLUDE_SELECTOR)) return;
+  }
+  // Tap que no aterriza en ningún elemento reconocido (fuera del canvas y
+  // fuera de cualquier botón/panel) — no puede modificar nada.
+  if (_target === document.body || _target === document.documentElement) return;
   const p = edPages[edCurrentPage];
   if (!p) return;
   p._dirtyCountLocal = (p._dirtyCountLocal || 0) + 1;
@@ -21320,7 +21343,7 @@ function _edSaveOverlayShow(title) {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.48" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.49" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_edSaveOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:10px"></div>
       <div id="_edSaveOvMsg" style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         No salgas de la aplicación hasta finalizado el guardado.<br>

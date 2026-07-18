@@ -225,7 +225,7 @@ function _cxLoadOverlayShow(title) {
       'touch-action:none'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.48" alt="Cargando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.49" alt="Cargando" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_cxLoadOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:16px"></div>
       <span id="_cxLoadOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
     `;
