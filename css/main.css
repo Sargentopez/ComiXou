@@ -42,10 +42,19 @@
   --violet:   #9B6BD9;
   --ink:      #2C1810;
   --paper:    #FFF9F0;
+  /* Escala de grises — antes solo existían 100/300/500/700, dejando
+     50/200/400/600/800 sin definir (var() sin fallback = valor inválido =
+     borde/fondo/texto invisible). Añadidos interpolando entre los tonos
+     ya existentes para mantener la misma progresión cálida. */
+  --gray-50:  #FAF6EF;
   --gray-100: #F5F0E8;
+  --gray-200: #DFD8CC;
   --gray-300: #C8C0B0;
+  --gray-400: #A9A090;
   --gray-500: #8A8070;
+  --gray-600: #6A6358;
   --gray-700: #4A4540;
+  --gray-800: #2A2828;
   --shadow:   rgba(26,26,26,0.18);
 
   /* Tipografía */

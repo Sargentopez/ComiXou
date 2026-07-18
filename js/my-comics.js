@@ -1303,7 +1303,7 @@ function _mcConfirmDuplicate(title, existingComic, callback) {
     <div class="mc-modal-box" style="gap:14px">
       <h3 class="mc-modal-title" style="font-size:1.05rem"><span class="mc-modal-title-text">Título duplicado</span></h3>
       <p style="margin:0;color:var(--gray-600);font-size:.9rem;line-height:1.5">
-        Ya tienes una obra llamada <strong style="color:var(--primary)">${title.replace(/</g,'&lt;')}</strong>.<br>
+        Ya tienes una obra llamada <strong style="color:var(--blue)">${title.replace(/</g,'&lt;')}</strong>.<br>
         ¿Qué deseas hacer?
       </p>
       <div class="mc-modal-actions" style="flex-direction:column;gap:8px">

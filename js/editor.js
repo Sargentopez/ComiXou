@@ -30817,7 +30817,13 @@ function _gcpCaptureFrame() {
 // Lerp lineal entre dos frames para una capa
 function _gcpLerpFrame(a, b, t) {
   if (!a || !b) return null; // uno de los extremos no existe: no hay nada que interpolar
-  const r = v => Math.round(v * 100) / 100;
+  // x/y/width/height son fracciones normalizadas 0..1 de la página. Redondear
+  // a 2 decimales (como se hacía antes) descarta hasta el 1% del ancho/alto de
+  // página en CADA frame interpolado — varios píxeles reales de desplazamiento
+  // incluso cuando a y b son idénticos (objeto que no cambia entre claves).
+  // Precisión ampliada a 6 decimales: error máximo ~0.0001% de la página,
+  // imperceptible incluso en lienzos de altísima resolución.
+  const r = v => Math.round(v * 1e6) / 1e6;
   return {
     x:        r(a.x        + (b.x        - a.x)        * t),
     y:        r(a.y        + (b.y        - a.y)        * t),
