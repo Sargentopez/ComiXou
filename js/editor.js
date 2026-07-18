@@ -12498,6 +12498,11 @@ function _vsInit(isNew) {
   const page = edPages[edCurrentPage];
   if (!page) return;
   _vsIsNew = !!isNew;
+  // Marcar sucia la página YA al iniciar la sesión vectorial (edición de
+  // nodos de shape/line), no solo al confirmar — mismo motivo que en
+  // _edDrawInitHistory: nada impide guardar mientras la sesión sigue activa,
+  // y cada arrastre de nodo dentro de la sesión muta la capa real.
+  if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(edCurrentPage);
 
   if (isNew) {
     _vsPreSessionLayers = new Set(
@@ -12781,6 +12786,12 @@ function _edDrawClearHistory(){
 }
 function _edDrawInitHistory(){
   const page = edPages[edCurrentPage]; if(!page) return;
+  // Marcar sucia la página YA al iniciar la sesión, no solo al congelar el
+  // trazo. Nada impide guardar mientras una sesión de dibujo sigue activa
+  // (no hay guard que lo bloquee), y dodge/burn muta el canvas de la capa
+  // 'draw' real en cuanto se usa — si se guardara a mitad de sesión sin
+  // congelar, esa edición podría quedar sin marcar y perderse en el guardado.
+  if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(edCurrentPage);
   // Resetear estado de nivel dodge/burn al iniciar nueva sesión de dibujo
   _dbOriginMap = new WeakMap();
   // Crear canvases temporales para la sesión
@@ -21661,6 +21672,23 @@ let _edSizeMonitorTimer = null;
 window._edSizeCacheBytes = null;
 window._edSizeCacheAt = 0;
 const _ED_SIZE_CACHE_MS = 3000; // ventana de reutilización para las comprobaciones automáticas
+// Calcula el tamaño en bytes de una página YA serializada (pageSer, el mismo
+// objeto que cachea edSaveProject), sin volver a llamar a edSerLayer()/
+// toDataURL(). El JSON de pageSer.layers ya incluye los metadatos de cada
+// capa (incluida la de gif/imagen animada); solo hace falta sumar aparte el
+// binario de gif/APNG, que vive en IDB/bucket y no en ese JSON.
+function _edPageCachedBytes(p, pageSer) {
+  let bytes = new Blob([JSON.stringify(pageSer.layers || [])]).size;
+  (p.layers || []).forEach(l => {
+    if (l.type === 'gif' && l.gifKey) {
+      bytes += parseInt(localStorage.getItem('cxSzGif:'+l.gifKey)||'0');
+    } else if (l.type === 'image' && l.animKey) {
+      bytes += parseInt(localStorage.getItem('cxSzAnim:'+l.animKey)||'0');
+    }
+  });
+  return bytes;
+}
+
 async function _edCalcProjectBytes(forceRecalc) {
   // Memoización por tiempo: el tamaño del proyecto no cambia de golpe entre un
   // arrastre y el siguiente frame, así que para las comprobaciones automáticas
@@ -21689,9 +21717,22 @@ async function _edCalcProjectBytes(forceRecalc) {
     // hilo nunca, eso son varios segundos de bloqueo real, aunque el guard de
     // "_edIsGestureActive()" de _edSizeCheck esté bien puesto: solo protege el
     // instante de arrancar, no lo que pasa si un gesto empieza a mitad de cálculo.
+    //
+    // OPTIMIZACIÓN (confirmada como causa de guardados de varios minutos en obras
+    // pesadas al editar una sola página): reutilizar el tamaño cacheado de las
+    // páginas que NO han cambiado desde el último guardado local, en vez de
+    // volver a serializar TODA la obra cada vez que se llama con forceRecalc.
     let total = 0;
     for (const p of edPages) {
       if (!p || !p.layers) continue;
+
+      if (!window._edPagesStructureDirtyLocal && p._dirtyLocal === false &&
+          p._cachedSerLocal && p._cachedSizeBytes != null &&
+          p._cachedSerLocal.layers.length === p.layers.length) {
+        total += p._cachedSizeBytes;
+        continue; // página sin cambios — no repetir toDataURL()/JSON.stringify()
+      }
+
       for (const l of p.layers) {
         await new Promise(r => setTimeout(r, 0));
         if (_edIsGestureActive()) return null; // abortado: reintentará la próxima vez que se dispare
@@ -21981,6 +22022,10 @@ async function edSaveProject(_keepOverlay){
       page._cachedPanelLocal = panel;
       page._cachedSerLocal   = ser;
       page._dirtyLocal       = false;
+      // Cachear también el tamaño en bytes de esta página — lo reutiliza
+      // _edCalcProjectBytes para no tener que volver a serializar páginas sin
+      // cambios solo para calcular el tamaño (ver _edPageCachedBytes).
+      page._cachedSizeBytes  = _edPageCachedBytes(page, ser);
     });
     window._edPagesStructureDirtyLocal = false;
   } else {
@@ -23515,7 +23560,12 @@ async function edLoadProject(id){
       window._edLastAutosaveDecision.decision = 'DESCARTADO_SIN_DIALOGO';
       _edAutosaveClear(id);
     } else {
-    // Mostrar diálogo de recuperación antes de cargar
+    // Mostrar diálogo de recuperación antes de cargar. IMPORTANTE: ocultar el
+    // contador bloqueante de my-comics mientras se muestra este diálogo — si
+    // se queda encima (z-index más alto), el usuario ve el spinner girando
+    // sin poder tocar "Sí"/"No", como si la app estuviera colgada, cuando en
+    // realidad solo está esperando esta respuesta.
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
     const _asRecovered = await new Promise(res => {
       const _asDlg = document.createElement('div');
       _asDlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
@@ -23536,6 +23586,10 @@ async function edLoadProject(id){
       document.getElementById('_asYes').onclick = () => { _asDlg.remove(); res(true); };
       document.getElementById('_asNo').onclick  = () => { _asDlg.remove(); _edAutosaveClear(id); res(false); };
     });
+    // El usuario ya ha elegido qué versión cargar — reanudar el contador
+    // bloqueante para el resto de la carga (se ocultará solo cuando la obra
+    // esté completamente cargada, igual que si no hubiera habido conflicto).
+    if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow('Abriendo obra…');
     if (_asRecovered) {
       // Cargar el autosave en lugar de los datos del disco
       comic.editorData = comic.editorData || {};
@@ -35547,6 +35601,11 @@ async function _edRunDiag() {
       edConfirm('Se han detectado ' + _preview.length + ' campos con ID duplicado entre páginas/grupos. ¿Reparar asignándoles IDs nuevos? (con historial para deshacer)', () => {
         edPushHistory();
         const _applied = _edRepairDuplicateIds(false);
+        // _edRepairDuplicateIds puede tocar capas de CUALQUIER página (recorre
+        // toda la obra buscando colisiones de ID) — edPushHistory de aquí solo
+        // marca sucia la página activa. Marcar todas explícitamente para que
+        // el guardado incremental no se salte ninguna página reparada.
+        edPages.forEach(p => { if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(p); });
         edPushHistory();
         edRedraw();
         edToast('Reparados ' + _applied.length + ' campos ✓');
