@@ -34761,9 +34761,26 @@ async function _gcpDownloadApng() {
     const apngBuf = UPNG.encode(bufs, cropW, cropH, 0, dels, true);
 
     // Post-proceso del buffer APNG: recorrer todos los chunks y forzar en cada fcTL:
-    //   dispose_op = 1 (APNG_DISPOSE_OP_BACKGROUND: borrar antes del siguiente frame)
+    //   dispose_op = 0 (APNG_DISPOSE_OP_NONE: no borrar nada entre frames)
     //   blend_op   = 0 (APNG_BLEND_OP_SOURCE: reemplazar, no mezclar)
-    // Esto garantiza animación correcta con transparencia en todos los visores.
+    // IMPORTANTE — por qué dispose_op debe ser 0 y no 1 (BACKGROUND):
+    // UPNG.encode calcula por su cuenta, para cada frame, el sub-rectángulo
+    // MÍNIMO que cambió respecto al frame anterior — aunque aquí se le pasen
+    // buffers ya recortados al mismo tamaño (cropW×cropH), sigue aplicando esa
+    // optimización internamente. La mayoría de los frames de una animación GCP
+    // solo mueven un objeto pequeño sobre un fondo que se queda quieto (p.ej.
+    // un fondo blanco grande y estático) — UPNG detecta eso y codifica esos
+    // frames como un sub-rectángulo diminuto alrededor de lo que realmente
+    // cambia. Con dispose_op=BACKGROUND cada frame BORRA su propia región justo
+    // antes de pintar el siguiente; como esa región casi nunca cubre el fondo
+    // estático, el fondo desaparece a partir del segundo frame y no se vuelve
+    // a dibujar en el resto de la animación (solo reaparece en los frames que
+    // sí cubren el lienzo completo). Con dispose_op=NONE nada se borra: cada
+    // sub-rectángulo se pinta (reemplazando, por blend_op=SOURCE) sobre lo que
+    // ya había del frame anterior, que es exactamente lo que debe permanecer
+    // ahí sin cambios. Verificado decodificando y recomponiendo un export real
+    // con UPNG.js: con dispose_op=1 el fondo desaparecía en 9 de 12 frames;
+    // con dispose_op=0 los 12 frames muestran el lienzo completo correctamente.
     // También parchear num_plays en acTL.
     // num_plays: si stopAtEnd → 1 ciclo; si repeatCount > 0 → ese número; si no → 0 (infinito)
     const numPlays = window._gcpStopAtEnd ? 1
@@ -34784,7 +34801,7 @@ async function _gcpDownloadApng() {
       } else if (chunkType === 0x6663544C) { // 'fcTL'
         // dispose_op está en byte 24 del chunk de datos (offset+4+4+24)
         // blend_op está en byte 25
-        view.setUint8(off + 4 + 4 + 24, 1); // dispose_op = BACKGROUND
+        view.setUint8(off + 4 + 4 + 24, 0); // dispose_op = NONE (ver nota arriba)
         view.setUint8(off + 4 + 4 + 25, 0); // blend_op   = SOURCE
         // Recalcular CRC del fcTL (26 bytes de datos)
         let crc = 0xFFFFFFFF;
