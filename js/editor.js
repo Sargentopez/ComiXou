@@ -21320,7 +21320,7 @@ function _edSaveOverlayShow(title) {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <div style="font-size:2.2rem;margin-bottom:16px">💾</div>
+      <img src="loading-icon.png?v=34.39" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_edSaveOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:10px"></div>
       <div id="_edSaveOvMsg" style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         No salgas de la aplicación hasta finalizado el guardado.<br>
