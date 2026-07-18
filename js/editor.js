@@ -21343,7 +21343,7 @@ function _edSaveOverlayShow(title) {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.50" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.52" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_edSaveOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:10px"></div>
       <div id="_edSaveOvMsg" style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         No salgas de la aplicación hasta finalizado el guardado.<br>
@@ -34823,33 +34823,23 @@ async function _gcpDownloadApng() {
   const dels = new Array(totalFrames).fill(totalFrames > 1 ? frameDelay : 0);
 
   try {
-    // UPNG.encode con forbidPlte=true: fuerza RGBA32 puro (sin paleta).
-    // Evita blend_op=1 que acumula frames y rompe la animación con transparencia.
+    // forbidPlte=true: fuerza RGBA32 puro (sin paleta), necesario para
+    // transparencia de 8 bits real. dispose_op/blend_op los decide UPNG.encode
+    // por sí mismo y no se tocan después — ver nota abajo.
     const apngBuf = UPNG.encode(bufs, cropW, cropH, 0, dels, true);
 
-    // Post-proceso del buffer APNG: recorrer todos los chunks y forzar en cada fcTL:
-    //   dispose_op = 0 (APNG_DISPOSE_OP_NONE: no borrar nada entre frames)
-    //   blend_op   = 0 (APNG_BLEND_OP_SOURCE: reemplazar, no mezclar)
-    // IMPORTANTE — por qué dispose_op debe ser 0 y no 1 (BACKGROUND):
-    // UPNG.encode calcula por su cuenta, para cada frame, el sub-rectángulo
-    // MÍNIMO que cambió respecto al frame anterior — aunque aquí se le pasen
-    // buffers ya recortados al mismo tamaño (cropW×cropH), sigue aplicando esa
-    // optimización internamente. La mayoría de los frames de una animación GCP
-    // solo mueven un objeto pequeño sobre un fondo que se queda quieto (p.ej.
-    // un fondo blanco grande y estático) — UPNG detecta eso y codifica esos
-    // frames como un sub-rectángulo diminuto alrededor de lo que realmente
-    // cambia. Con dispose_op=BACKGROUND cada frame BORRA su propia región justo
-    // antes de pintar el siguiente; como esa región casi nunca cubre el fondo
-    // estático, el fondo desaparece a partir del segundo frame y no se vuelve
-    // a dibujar en el resto de la animación (solo reaparece en los frames que
-    // sí cubren el lienzo completo). Con dispose_op=NONE nada se borra: cada
-    // sub-rectángulo se pinta (reemplazando, por blend_op=SOURCE) sobre lo que
-    // ya había del frame anterior, que es exactamente lo que debe permanecer
-    // ahí sin cambios. Verificado decodificando y recomponiendo un export real
-    // con UPNG.js: con dispose_op=1 el fondo desaparecía en 9 de 12 frames;
-    // con dispose_op=0 los 12 frames muestran el lienzo completo correctamente.
-    // También parchear num_plays en acTL.
-    // num_plays: si stopAtEnd → 1 ciclo; si repeatCount > 0 → ese número; si no → 0 (infinito)
+    // UPNG.encode ya decide por sí mismo, para cada frame, el sub-rectángulo
+    // que cambió, su dispose_op y su blend_op — y codifica los BYTES del
+    // frame de acuerdo a esa decisión (a veces asume blend=OVER, a veces
+    // blend=SOURCE, según cuál necesite menos datos). Estos valores NO deben
+    // tocarse después: forzar blend_op=SOURCE en un frame que UPNG codificó
+    // asumiendo OVER corrompe esos píxeles (se comprobó: reemplaza contenido
+    // real por transparencia en zonas que debían quedar sin cambios, con
+    // diferencias de hasta 255 en canales que deberían ser idénticos entre
+    // frames). Verificado también que sin tocar fcTL, un fondo estático se
+    // mantiene idéntico en el 100% de los frames (antes, forzando dispose/
+    // blend, quedaban restos inconsistentes de 1-4px en algunos frames).
+    // Solo se parchea num_plays en acTL, que UPNG.encode no expone como parámetro.
     const numPlays = window._gcpStopAtEnd ? 1
                    : (window._gcpRepeatCount > 0 ? window._gcpRepeatCount : 0);
     const crcT = _gcpCrc32Table();
@@ -34860,17 +34850,6 @@ async function _gcpDownloadApng() {
       if (chunkType === 0x6163544C) { // 'acTL'
         view.setUint32(off + 12, numPlays); // num_plays
         // Recalcular CRC (cubre tipo + datos)
-        let crc = 0xFFFFFFFF;
-        for (let i = off + 4; i < off + 4 + 4 + chunkLen; i++) {
-          crc = (crcT[(crc ^ view.getUint8(i)) & 0xFF] ^ (crc >>> 8)) >>> 0;
-        }
-        view.setUint32(off + 4 + 4 + chunkLen, crc ^ 0xFFFFFFFF);
-      } else if (chunkType === 0x6663544C) { // 'fcTL'
-        // dispose_op está en byte 24 del chunk de datos (offset+4+4+24)
-        // blend_op está en byte 25
-        view.setUint8(off + 4 + 4 + 24, 0); // dispose_op = NONE (ver nota arriba)
-        view.setUint8(off + 4 + 4 + 25, 0); // blend_op   = SOURCE
-        // Recalcular CRC del fcTL (26 bytes de datos)
         let crc = 0xFFFFFFFF;
         for (let i = off + 4; i < off + 4 + 4 + chunkLen; i++) {
           crc = (crcT[(crc ^ view.getUint8(i)) & 0xFF] ^ (crc >>> 8)) >>> 0;
