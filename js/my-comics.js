@@ -1712,7 +1712,7 @@ function _mcSubmitOverlayShow() {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.45" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.48" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
       <div style="font-size:1.1rem;font-weight:700;margin-bottom:10px">Guardando en la nube…</div>
       <div style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         No salgas de la aplicación hasta finalizado el guardado.<br>

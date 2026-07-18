@@ -33,6 +33,25 @@
 
 let _pgUidCounter = 0;  // IDs únicos estables para animación FLIP
 
+// Bloqueo breve y compartido para acciones de página que crean/mueven/
+// eliminan hojas (duplicar, añadir, eliminar, rotar, reordenar). Estas
+// funciones son síncronas e inmediatas — no hay ningún "trabajo en curso"
+// que esperar — así que el riesgo no es una llamada solapándose con un
+// guardado lento, sino un SEGUNDO evento 'click' llegando casi a la vez que
+// el primero (doble-tap real, o el clásico duplicado de eventos en Android
+// que ya motivó usar pointerdown/pointerup en vez de click en otras partes
+// del editor). Confirmado: el botón "Duplicar hoja" usaba 'click' sin
+// ninguna protección — un doble disparo inserta DOS hojas nuevas en vez de
+// una, cada una con su propia posición válida (no una colisión, por eso no
+// aparece como panel_order duplicado en Supabase).
+let _pgActionLock = false;
+function _pgActionLocked() {
+  if (_pgActionLock) return true;
+  _pgActionLock = true;
+  setTimeout(() => { _pgActionLock = false; }, 600);
+  return false;
+}
+
 /* ──────────────────────────────────────────
    ABRIR / CERRAR
 ────────────────────────────────────────── */
@@ -145,6 +164,7 @@ function _pgBuildCard(page, idx) {
   leftBtn.disabled = idx === 0;
   leftBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
+    if (_pgActionLocked()) return;
     _pgReorder(idx, idx - 1);
   });
 
@@ -155,6 +175,7 @@ function _pgBuildCard(page, idx) {
   rightBtn.disabled = idx === edPages.length - 1;
   rightBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
+    if (_pgActionLocked()) return;
     _pgReorder(idx, idx + 1);
   });
 
@@ -179,6 +200,7 @@ function _pgBuildCard(page, idx) {
   dupBtn.innerHTML = '⧉';
   dupBtn.addEventListener('click', e => {
     e.stopPropagation();
+    if (_pgActionLocked()) return;
     _pgDuplicate(idx);
   });
 
@@ -189,6 +211,7 @@ function _pgBuildCard(page, idx) {
   rotBtn.innerHTML = _pgOrientIcon(pageOrient);
   rotBtn.addEventListener('click', e => {
     e.stopPropagation();
+    if (_pgActionLocked()) return;
     _pgRotatePage(idx);
   });
 
@@ -198,6 +221,7 @@ function _pgBuildCard(page, idx) {
   delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
+    if (_pgActionLocked()) return;
     if (edPages.length <= 1) { edToast('No puedes eliminar la última hoja'); return; }
     edConfirm('¿Eliminar esta hoja?', () => {
       edPages.splice(idx, 1);

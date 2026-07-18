@@ -796,9 +796,26 @@ const SupabaseClient = (() => {
     let _projectRules = [];
     try { _projectRules = work.rules ? JSON.parse(work.rules) : []; } catch(e) { _projectRules = []; }
 
-    const panels = await _get(
+    const _panelsRaw = await _get(
       `panels?work_id=eq.${supabaseId}&order=panel_order.asc&select=id,panel_order,orientation,text_mode,data_url`
     ) || [];
+
+    // Defensa contra páginas duplicadas: si por cualquier motivo hay más de
+    // una fila con el mismo panel_order (p.ej. datos ya corruptos de antes
+    // de un guardado en nube sin protección de reentrada, ya corregido),
+    // quedarse con una sola en vez de mostrar la página repetida. No arregla
+    // el dato en Supabase (ver diagnóstico), pero evita que el síntoma se
+    // repita en cada descarga mientras tanto.
+    const _seenOrders = new Set();
+    const panels = [];
+    for (const _p of _panelsRaw) {
+      if (_seenOrders.has(_p.panel_order)) {
+        console.warn('downloadDraftAsEditorData: panel_order duplicado detectado y descartado', _p.panel_order, 'obra', supabaseId);
+        continue;
+      }
+      _seenOrders.add(_p.panel_order);
+      panels.push(_p);
+    }
 
     // Metadatos de capas (JSON ligero) de TODAS las páginas en paralelo.
     // Antes era una petición secuencial por página — en obras con muchas hojas

@@ -21320,7 +21320,7 @@ function _edSaveOverlayShow(title) {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.45" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.48" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_edSaveOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:10px"></div>
       <div id="_edSaveOvMsg" style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         No salgas de la aplicación hasta finalizado el guardado.<br>
@@ -21536,14 +21536,45 @@ function _edHelpShowRef(id) {
 async function edCloudSave() {
   if (!edProjectId) { edToast('Sin proyecto activo'); return; }
   if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
-
+  // GUARD DE REENTRADA — fijado SÍNCRONAMENTE aquí, antes de cualquier await.
+  // _edCloudSaving existía pero nunca se comprobaba al entrar (solo se usaba
+  // para el aviso "guardando en nube..." al intentar salir) — así que un
+  // doble-tap, o un evento 'click' duplicado, podía disparar dos llamadas
+  // concurrentes a esta función. Verificado con simulación: sin este guard,
+  // dos llamadas concurrentes en la ruta completa (borra todos los panels y
+  // resube todos) dejaban panel_order duplicados o un recuento incorrecto en
+  // el 80% de los casos — coincide exactamente con "hojas duplicadas" al
+  // recargar la obra. Con el guard, 0% de fallos en la misma simulación.
+  if (_edCloudSaving) { edToast('Ya se está guardando en la nube…'); return; }
+  _edCloudSaving = true;
+  try {
+    await _edCloudSaveInner();
+  } catch(_e) {
+    // Red de seguridad final: el try/catch/finally interno ya cubre errores
+    // de la subida en sí, pero _edCalcProjectBytes/edSaveProject/la
+    // reconstrucción de fallback incógnito-OPFS se ejecutan ANTES de ese
+    // bloque — si algo ahí lanza una excepción no controlada, sin esta red
+    // el guard se habría quedado atascado en true para siempre (bloqueando
+    // cualquier guardado en nube futuro en esta sesión).
+    console.error('edCloudSave (excepción no controlada):', _e);
+    edToast('⚠️ Error inesperado al guardar en nube');
+  } finally {
+    _edCloudSaving = false;
+    _edSaveOverlayHide();
+    _edCloudSavingStop();
+    const _btnFinal = $('edCloudSaveBtn');
+    if (_btnFinal) { _btnFinal.textContent = '☁️'; _btnFinal.disabled = false; }
+  }
+}
+async function _edCloudSaveInner() {
   // Mostrar el contador INMEDIATAMENTE al tocar el botón — antes de cualquier
   // trabajo previo. En obras pesadas, _edCalcProjectBytes(true) fuerza un
   // recálculo síncrono por capa (toDataURL de fill/pencil/watercolor/draw/
   // stroke) que puede tardar varios segundos; antes el overlay no aparecía
   // hasta que ese cálculo terminaba, dando la sensación de que el botón
   // "no respondía". Cualquier salida temprana de aquí en adelante debe
-  // ocultar el overlay explícitamente (no hay guardado real que lo sustituya).
+  // ocultar el overlay explícitamente Y liberar _edCloudSaving (no hay
+  // guardado real que lo sustituya).
   _edSaveOverlayShow('Comprobando tamaño…');
   // Mientras esta función siga en marcha (cualquiera de sus fases), el overlay
   // no debe cerrarse solo por el cierre automático de seguridad — solo cuando
@@ -21554,12 +21585,10 @@ async function edCloudSave() {
   // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
   const _preSz = await _edCalcProjectBytes(true);
   if (_preSz >= _ED_MAX_BYTES) {
-    _edSaveOverlayHide();
     edToast('⚠️ La obra supera los 60 MB. Elimina contenido antes de guardar en la nube.', 5000);
     return;
   }
   if (!Auth?.currentUser?.()) {
-    _edSaveOverlayHide();
     // Sin sesión: ofrecer login en lugar de rechazar
     edToast('Inicia sesión para guardar en la nube');
     setTimeout(() => {
@@ -21580,7 +21609,7 @@ async function edCloudSave() {
   let comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
     : ComicStore.getById(edProjectId);
-  if (!comic) { _edSaveOverlayHide(); edToast('Error: obra no encontrada'); return; }
+  if (!comic) { edToast('Error: obra no encontrada'); return; }
   // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
   // construir editorData en línea para poder subirlo a la nube correctamente.
   if ((!comic.editorData || !comic.editorData.pages || !comic.editorData.pages.length) && edPages && edPages.length) {
@@ -21896,8 +21925,24 @@ function _edSizeMonitorStop() {
   if (banner) banner.style.display = 'none';
 }
 
+let _edLocalSaving = false; // true mientras edSaveProject() está en curso — guard de reentrada
 async function edSaveProject(_keepOverlay){
   if(!edProjectId){edToast('Sin proyecto activo');return;}
+  // GUARD DE REENTRADA — mismo problema que se encontró en edCloudSave: sin
+  // esto, dos guardados locales concurrentes (doble-tap en "Guardar", o un
+  // guardado local disparado desde otro sitio mientras edCloudSave ya está
+  // en su propio edSaveProject interno) podían competir escribiendo en OPFS
+  // a la vez. try/finally garantiza que el guard se libera pase lo que pase,
+  // incluso si algo dentro lanza una excepción no controlada.
+  if (_edLocalSaving) { edToast('Ya se está guardando…'); return; }
+  _edLocalSaving = true;
+  try {
+    return await _edSaveProjectInner(_keepOverlay);
+  } finally {
+    _edLocalSaving = false;
+  }
+}
+async function _edSaveProjectInner(_keepOverlay){
   // Capturar historyIdx ahora — puede cambiar durante los awaits posteriores
   const _saveHistoryIdx = edHistoryIdx;
   if(!_keepOverlay) { _edSaveOverlayShow('Guardando en dispositivo…'); _edSaveOverlayForceOpen = true; }
@@ -26608,7 +26653,10 @@ function EditorView_init(){
     });
   }
   // Bindings del dropdown pequeño (ya no se usa, pero por si acaso)
-  $('dd-addpage')?.addEventListener('click',()=>{edAddPage();edCloseMenus();});
+  $('dd-addpage')?.addEventListener('click',()=>{
+    if (typeof _pgActionLocked === 'function' && _pgActionLocked()) return;
+    edAddPage();edCloseMenus();
+  });
   $('dd-delpage')?.addEventListener('click',()=>{edDeletePage();edCloseMenus();});
   $('dd-orientv')?.addEventListener('click',()=>{edSetOrientation('vertical');edCloseMenus();});
   $('dd-orienth')?.addEventListener('click',()=>{edSetOrientation('horizontal');edCloseMenus();});
@@ -35354,6 +35402,80 @@ async function _edRunDiag() {
     if (_giIssues === 0) L('  ✓ Sin duplicados ni flags huérfanos detectados');
     else L('  → ' + _giIssues + ' problema(s) de integridad detectado(s) arriba ⚠️');
   } catch(_gie) { L('  Error en integridad de grupos: ' + _gie.message); }
+
+  // ── INTEGRIDAD DE PÁGINAS (investigación: hojas duplicadas reportadas por
+  // Alberto). Pensada para ejecutarse DOS VECES y comparar a mano: una vez
+  // ANTES de guardar, otra vez DESPUÉS de guardar y volver a abrir la obra.
+  // Si el nº de páginas o alguna huella cambia entre ambas ejecuciones sin
+  // que haya habido ninguna edición real de por medio, la causa está entre
+  // el guardado y la carga siguiente.
+  L('');
+  L('── INTEGRIDAD DE PÁGINAS (ejecutar antes Y después de guardar+recargar) ──');
+  try {
+    L('  Nº de páginas: ' + edPages.length);
+    L('  edCurrentPage: ' + edCurrentPage);
+    L('  Flags estructurales — local: ' + window._edPagesStructureDirtyLocal + ' | nube: ' + window._edPagesStructureDirtyCloud);
+    const _pageFingerprints = [];
+    for (let _pi = 0; _pi < edPages.length; _pi++) {
+      const p = edPages[_pi];
+      let _serLayers;
+      // Reutilizar la caché de guardado incremental si está limpia y disponible
+      // — evita repetir toDataURL() de fill/pencil/watercolor/draw/stroke en
+      // un diagnóstico ejecutado sobre una obra pesada.
+      if (p._dirtyCountLocal === 0 && p._cachedSerLocal) {
+        _serLayers = p._cachedSerLocal.layers || [];
+      } else {
+        _serLayers = (p.layers||[]).map(l => { try { return edSerLayer(l); } catch(_e) { return null; } }).filter(Boolean);
+      }
+      const _fp = _cxSimpleHash(JSON.stringify(_serLayers));
+      _pageFingerprints.push(_fp);
+      L('  P' + _pi + ': ' + (p.layers||[]).length + ' capa(s) | orient=' + (p.orientation||'?') +
+        ' | huella=' + _fp +
+        ' | local(dirty=' + (p._dirtyLocal===undefined?'∅':p._dirtyLocal) + ',cont=' + (p._dirtyCountLocal===undefined?'∅':p._dirtyCountLocal) + ')' +
+        ' | nube(dirty=' + (p._dirtyCloud===undefined?'∅':p._dirtyCloud) + ',cont=' + (p._dirtyCountCloud===undefined?'∅':p._dirtyCountCloud) + ')');
+    }
+    // Buscar huellas duplicadas — dos (o más) páginas con contenido idéntico
+    const _fpMap = new Map();
+    _pageFingerprints.forEach((fp, pi) => { if (!_fpMap.has(fp)) _fpMap.set(fp, []); _fpMap.get(fp).push(pi); });
+    let _pageDupFound = false;
+    for (const [fp, idxs] of _fpMap.entries()) {
+      if (idxs.length > 1) {
+        _pageDupFound = true;
+        L('  ⚠️ HUELLA IDÉNTICA "' + fp + '" en páginas: ' + idxs.join(', ') + ' — contenido igual, posible duplicado real');
+      }
+    }
+    L('  Huella conjunta (todas las páginas, en orden): ' + _cxSimpleHash(_pageFingerprints.join('|')));
+    if (!_pageDupFound) L('  ✓ Sin páginas con huella idéntica detectadas');
+
+    // Comparar contra lo que hay REALMENTE persistido ahora mismo (relee de
+    // OPFS/localStorage, sin pasar por edLoadProject) — si el nº de páginas
+    // aquí difiere de edPages.length de arriba, la duplicación está en cómo
+    // se cargó/deserializó, no en lo que hay guardado. Si coinciden entre
+    // sí pero SÍ difieren respecto a la ejecución anterior de este mismo
+    // diagnóstico (antes de guardar), la duplicación ocurrió al guardar.
+    try {
+      const _rawComic = ComicStore.getByIdFull ? await ComicStore.getByIdFull(edProjectId) : null;
+      const _rawPages = _rawComic?.editorData?.pages || [];
+      L('  Nº de páginas persistidas AHORA MISMO (OPFS, releído): ' + _rawPages.length);
+      L('  localSavedAt: ' + (_rawComic?.localSavedAt || '∅') + ' | cloudSavedAt: ' + (_rawComic?.cloudSavedAt || '∅') + ' | cloudNewer: ' + (_rawComic?.cloudNewer ?? '∅'));
+      if (_rawPages.length !== edPages.length) {
+        L('  ⚠️ DESAJUSTE: lo persistido (' + _rawPages.length + ') no coincide con lo cargado en memoria (' + edPages.length + ')');
+      } else {
+        L('  ✓ Coincide con lo cargado en memoria');
+      }
+      // Huella de lo persistido, para comparar directamente con la huella
+      // conjunta de arriba (memoria) y con la ejecución anterior de este
+      // mismo diagnóstico tras recargar la obra.
+      const _rawFps = _rawPages.map(pg => _cxSimpleHash(JSON.stringify(pg.layers || [])));
+      L('  Huella conjunta de lo persistido: ' + _cxSimpleHash(_rawFps.join('|')));
+      const _asRaw = (typeof _edAutosaveRead === 'function') ? await _edAutosaveRead(edProjectId).catch(() => null) : null;
+      if (_asRaw && _asRaw.pages) {
+        L('  Autoguardado pendiente: SÍ — ' + _asRaw.pages.length + ' página(s), guardado ' + (_asRaw.ts ? new Date(_asRaw.ts).toLocaleString() : '?'));
+      } else {
+        L('  Autoguardado pendiente: no hay');
+      }
+    } catch(_rawE) { L('  Error releyendo lo persistido: ' + (_rawE && _rawE.message)); }
+  } catch(_pie) { L('  Error en integridad de páginas: ' + (_pie && _pie.message)); }
 
   // ── MONITOR DE RENDIMIENTO EN SEGUNDO PLANO (RAF/intervalos/jank) ──
   L('');
