@@ -225,13 +225,9 @@ function _cxLoadOverlayShow(title) {
       'touch-action:none'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.39" alt="Cargando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.40" alt="Cargando" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_cxLoadOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:16px"></div>
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:20px;height:20px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:_cxLoadSpin .8s linear infinite"></div>
-        <span id="_cxLoadOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
-      </div>
-      <style>@keyframes _cxLoadSpin{to{transform:rotate(360deg)}}</style>
+      <span id="_cxLoadOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
     `;
     // Bloquear scroll/gestos por debajo aunque algo intente moverse mientras carga
     ov.addEventListener('touchmove', e => e.preventDefault(), { passive: false });

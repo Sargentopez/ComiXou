@@ -1712,17 +1712,13 @@ function _mcSubmitOverlayShow() {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <div style="font-size:2.2rem;margin-bottom:16px">☁️</div>
+      <img src="loading-icon.png?v=34.40" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
       <div style="font-size:1.1rem;font-weight:700;margin-bottom:10px">Guardando en la nube…</div>
       <div style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         No salgas de la aplicación hasta finalizado el guardado.<br>
         Interrumpir el proceso creará una obra defectuosa.
       </div>
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="width:20px;height:20px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:_mcSpin .8s linear infinite"></div>
-        <span id="_mcSubmitOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
-      </div>
-      <style>@keyframes _mcSpin{to{transform:rotate(360deg)}}</style>
+      <span id="_mcSubmitOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
     `;
     document.body.appendChild(ov);
   }
