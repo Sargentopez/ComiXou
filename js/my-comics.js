@@ -947,7 +947,11 @@ function _mcRenderList() {
               // Guardar la biblioteca local actual como backup (solo si no existe ya un backup)
               const _bibLocalExists = localStorage.getItem(_bibLocalKey);
               if (!_bibLocalExists) {
-                const _bibCurrentData = window._bibLoad ? window._bibLoad() : null;
+                // BUG FIX v34.59: window._bibLoad() depende de edProjectId/_bibCache
+                // del editor, que en este punto (antes de edLoadProject) aún
+                // corresponden a la obra anterior o están vacíos — leer con la
+                // clave explícita de ESTA obra directamente de IDB.
+                const _bibCurrentData = window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKey) : null;
                 const _bibCurrentRaw = _bibCurrentData ? JSON.stringify(_bibCurrentData) : localStorage.getItem(_bibKey);
                 if (_bibCurrentRaw) {
                   try { localStorage.setItem(_bibLocalKey, _bibCurrentRaw); } catch(e) {}
@@ -1005,7 +1009,16 @@ function _mcRenderList() {
         if (_bibUser && _bibUser.id && _bibSbId && typeof SupabaseClient.bibDownload === 'function') {
           try {
             const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
-            const _bibLocal = window._bibLoad ? window._bibLoad() : (() => {
+            // BUG FIX v34.59: window._bibLoad() depende de edProjectId/_bibCache
+            // del editor. En este punto (antes de edLoadProject) esas variables
+            // todavía apuntan a la obra editada anteriormente en esta sesión, o
+            // están vacías si es la primera vez que se abre una obra tras cargar
+            // la app — en ambos casos window._bibLoad() podía devolver "vacío"
+            // aunque la biblioteca de ESTA obra sí tuviera datos en IDB, lo que
+            // disparaba una descarga y sobrescritura con la biblioteca (desactualizada)
+            // de la nube, borrando cambios locales recién guardados. Se lee ahora
+            // con la clave explícita de esta obra directamente de IDB.
+            const _bibLocal = (window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKey) : null) || (() => {
               try { return JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) { return null; }
             })();
             const _bibEmpty = !_bibLocal || !_bibLocal.folders || _bibLocal.folders.every(f => !f.items || f.items.length === 0);
@@ -1028,7 +1041,10 @@ function _mcRenderList() {
                   })
                 }));
                 if (_bibIdbW.length) await Promise.all(_bibIdbW);
-                if (window._bibSave) { window._bibSave({ folders: cleanFolders }); }
+                // Clave explícita — igual que en la otra rama — para no depender
+                // de edProjectId del editor (ver BUG FIX v34.59 más arriba).
+                if (window._bibSaveWithKey) { window._bibSaveWithKey({ folders: cleanFolders }, _bibKey); }
+                else if (window._bibSave) { window._bibSave({ folders: cleanFolders }); }
                 else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
               }
             }

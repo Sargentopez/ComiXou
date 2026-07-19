@@ -9992,7 +9992,10 @@ function edOnStart(e){
         if(_df < 44){
           // Toque cerca del primer nodo → pasar a _edLineAddPoint con isTouch=true
           clearTimeout(window._edLineTouchTimer);
+          window._edPendingLineAddPoint = { nx: c.nx, ny: c.ny };
           window._edLineTouchTimer = setTimeout(()=>{
+            window._edLineTouchTimer = null;
+            window._edPendingLineAddPoint = null;
             if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
             if(edActiveTool !== 'line') return;
             _edLineAddPoint(c.nx, c.ny, true);
@@ -10031,7 +10034,10 @@ function edOnStart(e){
       const _pid = e.pointerId;
       const _cx = c.nx, _cy = c.ny;
       clearTimeout(window._edLineTouchTimer);
+      window._edPendingLineAddPoint = { nx: _cx, ny: _cy };
       window._edLineTouchTimer = setTimeout(()=>{
+        window._edLineTouchTimer = null;
+        window._edPendingLineAddPoint = null;
         if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
         if(edActiveTool !== 'line') return;
         _edLineAddPoint(_cx, _cy, true);
@@ -12006,14 +12012,46 @@ function edOnEnd(e){
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
   }
-  // Drag de nodo diferido: si el dedo se levantó antes de que disparara el
-  // timer, fue un simple tap (sin movimiento) — no había nada más que hacer
-  // (el candidato de doble-tap ya se registró en edOnStart), así que solo se
-  // limpia el estado pendiente sin iniciar ningún drag.
+  // Drag de nodo diferido: si el dedo se levanta antes de que dispare el
+  // timer de 120ms (que espera un posible segundo dedo para pinch/cámara),
+  // el propio hecho de soltar YA demuestra que no va a llegar ese segundo
+  // dedo — es un toque simple y debe seleccionar el nodo de inmediato, igual
+  // que ya hacen sus "hermanos" _edSelTouchTimer/_edDeselTouchTimer un poco
+  // más abajo (y que edOnMove ya hace para este mismo timer si el dedo se
+  // mueve en vez de soltarse, ver más arriba). Antes esto solo limpiaba el
+  // estado pendiente sin más — un toque rápido no seleccionaba nada.
+  // NOTA: no se hace "return" aquí a propósito — se deja caer al resto del
+  // handler para reutilizar tal cual la misma lógica de fin-de-arrastre
+  // (historial, reseteo de edIsTailDragging) que ya se ejecuta cuando el
+  // timer dispara con el dedo aún apoyado y luego se suelta sin mover.
   if (window._edNodeDragTouchTimer) {
     clearTimeout(window._edNodeDragTouchTimer);
     window._edNodeDragTouchTimer = null;
+    const _pndTap = window._edPendingNodeDrag;
     window._edPendingNodeDrag = null;
+    if (_pndTap && (!window._edActivePointers || window._edActivePointers.size === 0) &&
+        edSelectedIdx >= 0 && edLayers[edSelectedIdx] === _pndTap.la) {
+      _pndTap.commit();
+      edRedraw();
+    }
+  }
+  // Añadir punto de línea diferido: mismo caso que el nodo — si el dedo se
+  // levanta antes de los 120ms de espera por un posible segundo dedo, ya no
+  // puede llegar ese segundo dedo, así que el punto debe colocarse ya en vez
+  // de esperar. _edLineAddPoint ya guarda su propio historial y redibuja.
+  // Igual que en el bloque del nodo, no se hace "return" aquí: se deja caer
+  // al resto del handler para no saltarse la lógica de limpieza de pinch en
+  // el caso límite de que sí hubiera llegado un segundo dedo real y sea ESE
+  // el que queda tocando cuando este primer dedo se levanta.
+  if (window._edLineTouchTimer) {
+    clearTimeout(window._edLineTouchTimer);
+    window._edLineTouchTimer = null;
+    const _pndLine = window._edPendingLineAddPoint;
+    window._edPendingLineAddPoint = null;
+    if (_pndLine && (!window._edActivePointers || window._edActivePointers.size === 0) &&
+        edActiveTool === 'line') {
+      _edLineAddPoint(_pndLine.nx, _pndLine.ny, true);
+    }
   }
   // Selección táctil diferida: si el dedo se levantó antes de que disparara el timer,
   // aplicar la selección inmediatamente (era un tap, no un pinch)
@@ -28403,6 +28441,23 @@ window._bibSaveWithKey = function(data, explicitKey) {
     tx.onerror    = res;
   })).catch(() => {});
   return _bibSavePromise;
+};
+// _bibLoadWithKey: lee directamente de IndexedDB con una clave explícita, SIN
+// pasar por _bibCache/edProjectId. Necesaria porque my-comics.js comprueba el
+// contenido de la biblioteca de la obra que se va a abrir ANTES de que
+// edLoadProject se ejecute — en ese momento edProjectId/_bibCache todavía
+// corresponden a la obra anterior (o están vacíos en una sesión recién
+// iniciada), así que window._bibLoad() podía informar "biblioteca vacía"
+// aunque la obra sí tuviera datos guardados en IDB bajo su propia clave.
+// Devuelve una Promise que resuelve con los datos guardados, o null si no
+// hay nada o falla la lectura.
+window._bibLoadWithKey = function(explicitKey) {
+  return _bibOpenIdb().then(db => new Promise(res => {
+    const tx  = db.transaction(_BIB_IDB_STORE, 'readonly');
+    const req = tx.objectStore(_BIB_IDB_STORE).get(explicitKey);
+    req.onsuccess = () => res(req.result || null);
+    req.onerror   = () => res(null);
+  })).catch(() => null);
 };
 // Bytes estimados de la biblioteca (suma del JSON de cada item)
 function _bibUsedBytes(data) {
