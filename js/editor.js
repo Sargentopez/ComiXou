@@ -1059,6 +1059,53 @@ edDeserLayer = function(d, orient) {
   return l;
 };
 
+// ── Serialización de l.name (nombre de capa editable en el panel) ──────────
+// Mismo patrón que el wrapper de _buttonAction: evita tocar cada rama interna
+// de edSerLayer/edDeserLayer (una por tipo de capa). No se aplica a fill/
+// pencil/watercolor (subcapas de dibujo a mano — no son renombrables).
+const _edNameSerLayerOrig = edSerLayer;
+edSerLayer = function(l) {
+  const r = _edNameSerLayerOrig(l);
+  if (r && l && l.name && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor') {
+    r.name = l.name;
+  }
+  return r;
+};
+const _edNameDeserLayerOrig = edDeserLayer;
+edDeserLayer = function(d, orient) {
+  const l = _edNameDeserLayerOrig(d, orient);
+  if (l && d && d.name && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor') {
+    l.name = d.name;
+  }
+  return l;
+};
+
+// ── l.name en el historial de undo/redo (_edLayersSnapshot/edApplyHistory) ──
+// _edSnapLayerFragment/edApplyHistory usan serialización manual inline propia
+// (independiente de edSerLayer/edDeserLayer) — sin esto, un deshacer/rehacer
+// perdería el nombre aunque el guardado del proyecto lo conserve.
+const _edNameSnapFragmentOrig = _edSnapLayerFragment;
+_edSnapLayerFragment = function(l) {
+  const r = _edNameSnapFragmentOrig(l);
+  if (r && l && l.name && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor') {
+    r.name = l.name;
+  }
+  return r;
+};
+const _edNameApplyHistoryOrig = edApplyHistory;
+edApplyHistory = function(snapshot) {
+  _edNameApplyHistoryOrig(snapshot);
+  if (!snapshot) return;
+  try {
+    const _raw = JSON.parse(snapshot.layersJSON);
+    _raw.forEach((o, i) => {
+      if (o && o.name && edLayers[i] && o.type !== 'fill' && o.type !== 'pencil' && o.type !== 'watercolor') {
+        edLayers[i].name = o.name;
+      }
+    });
+  } catch(_e) {}
+};
+
 function _edTmpCreate() {
   _edTmp.pen        = new DrawLayer();
   _edTmp.pencil     = new DrawLayer();
@@ -5061,6 +5108,40 @@ function edRedraw(){
 function edIsTouchDevice(){
   return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
 }
+
+/* ── Clase de dispositivo: separa "¿es táctil?" de "¿cuánta pantalla hay?" ──
+   En varios sitios del editor, window._edIsTouch (¿el usuario está interactuando
+   por táctil?) se usa también, implícitamente, como "pantalla pequeña de móvil"
+   — apropiado para decidir CÓMO se interactúa (gestos, offset de cursor táctil,
+   picker HSL vs nativo, etc.), pero no para decidir el TAMAÑO de la interfaz:
+   una tablet es táctil igual que un móvil, pero dispone de mucho más espacio y
+   debería verse proporcionalmente como el PC, no encogida como el móvil.
+   edGetDeviceClass() añade el tamaño real de viewport como eje independiente:
+     - 'desktop' → sin táctil (ratón/trackpad): igual que siempre, sin cambios.
+     - 'phone'   → táctil + pantalla pequeña: igual que siempre, sin cambios.
+     - 'tablet'  → táctil + pantalla grande: NUEVO — se escala la interfaz.
+   Umbral 600px = breakpoint "medium" de Material Design 3 (m3.material.io/
+   foundations/layout/breakpoints), el mismo que usa Android para distinguir
+   teléfono de tablet — coherente con que ComiXou tiene Android PWA como
+   objetivo principal. Se usa Math.min(ancho,alto) en vez de solo el ancho para
+   que el resultado no cambie solo por rotar el dispositivo. */
+function edGetDeviceClass() {
+  if (!window._edIsTouch) return 'desktop';
+  const minDim = Math.min(window.innerWidth, window.innerHeight);
+  return minDim >= 600 ? 'tablet' : 'phone';
+}
+
+// Aplica/retira la clase que activa el escalado de tablet (--edb-scale en CSS,
+// ver editor.css). Se aplica en <body> — no en #editorShell — porque varias
+// ventanas/overlays (Capas, Hojas, Comportamiento, Datos del proyecto...) se
+// insertan como hijas directas de body, no de #editorShell; body es el único
+// ancestro común a las barras flotantes Y a esas ventanas.
+// Solo actúa cuando la clase es 'tablet' — 'desktop' y 'phone' quedan
+// exactamente igual que antes de este cambio.
+function edApplyDeviceClass() {
+  document.body.classList.toggle('ed-scale-tablet', edGetDeviceClass() === 'tablet');
+}
+
 function edDrawSel(){
   // Durante edición de recorrido: no mostrar el marco ni los handles de resize
   // (el pinch debe controlar solo la cámara), pero sí el handle de rotación,
@@ -25448,6 +25529,7 @@ function EditorView_destroy(){
     document.removeEventListener('pointerdown', window._edPointerTypeFn, true);
     window._edPointerTypeFn = null;
   }
+  document.body.classList.remove('ed-scale-tablet');
   // Limpiar timers
   clearTimeout(window._edLongPress);
   // Parar cámara si estaba abierta
@@ -27389,6 +27471,7 @@ function EditorView_init(){
   // Detectar si el dispositivo está usando táctil — se actualiza con cualquier pointerdown
   // Se usa en _edPickColor para elegir el picker correcto (HSL vs nativo)
   window._edIsTouch = navigator.maxTouchPoints > 0 && !window.matchMedia('(pointer:fine)').matches;
+  edApplyDeviceClass(); // clase de tamaño de tablet, si procede (ver definición de la función)
   // Detección dinámica de ratón: si llega un pointermove de tipo mouse, mostrar scrollbars
   window._edHasMousePointer = window.matchMedia('(pointer:fine)').matches;
   document.addEventListener('pointermove', _e => {
@@ -27402,6 +27485,7 @@ function EditorView_init(){
   window._edPointerTypeFn = ev => {
     if(ev.pointerType==='touch') window._edIsTouch=true;
     else if(ev.pointerType==='mouse' || ev.pointerType==='pen') window._edIsTouch=false;
+    edApplyDeviceClass(); // el cambio táctil↔ratón puede cambiar la clase de tamaño
   };
   document.addEventListener('pointerdown', window._edPointerTypeFn, true);
   // Inicializar barras de navegación HTML (solo PC)
@@ -27409,7 +27493,7 @@ function EditorView_init(){
 
   // ── RESIZE ──
   // Guardar referencia para cleanup en EditorView_destroy
-  window._edResizeFn = () => { edFitCanvas(false); }; // solo reajustar tamaño, nunca resetear cámara
+  window._edResizeFn = () => { edFitCanvas(false); edApplyDeviceClass(); }; // reajustar tamaño + clase de tablet; nunca resetear cámara
   window.addEventListener('resize', window._edResizeFn);
 
   // Fit canvas con reintentos hasta que las medidas sean reales
@@ -27533,7 +27617,7 @@ function EditorView_init(){
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
   edUpdateCanvasFullscreen();
   // Guardar referencia para cleanup en EditorView_destroy
-  window._edOrientFn = () => { setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); }, 200); };
+  window._edOrientFn = () => { setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); edApplyDeviceClass(); }, 200); };
   window.addEventListener('orientationchange', window._edOrientFn);
 
   // ── Pinch en cualquier zona (fuera del canvas) = zoom ──
