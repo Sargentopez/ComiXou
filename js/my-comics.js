@@ -1001,16 +1001,20 @@ function _mcRenderList() {
                   })
                 }));
                 if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
-                // Guardar con clave explícita para evitar race condition con edProjectId del editor
-                if (window._bibSaveWithKey) window._bibSaveWithKey({ folders: cleanFolders }, _bibKey);
-                else if (window._bibSave) window._bibSave({ folders: cleanFolders });
+                // Guardar con clave explícita para evitar race condition con edProjectId del editor.
+                // BUG FIX v34.62: esta escritura NO se esperaba (sin await) — el editor podía
+                // arrancar edLoadProject()→_bibInitIdb() y LEER de IDB antes de que esta escritura
+                // terminara, encontrando todavía el contenido local anterior (p.ej. con el objeto
+                // recién eliminado) en vez de la versión de la nube que se acaba de descargar aquí.
+                if (window._bibSaveWithKey) await window._bibSaveWithKey({ folders: cleanFolders }, _bibKey);
+                else if (window._bibSave) await window._bibSave({ folders: cleanFolders });
                 else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
               } else {
                 // La nube no tiene biblioteca — limpiar la local con clave correcta
                 window._mcLastEditDecision.bib.action = 'cloud_empty_cleared_local';
                 const _emptyBib = { folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }] };
-                if (window._bibSaveWithKey) window._bibSaveWithKey(_emptyBib, _bibKey);
-                else if (window._bibSave) window._bibSave(_emptyBib);
+                if (window._bibSaveWithKey) await window._bibSaveWithKey(_emptyBib, _bibKey);
+                else if (window._bibSave) await window._bibSave(_emptyBib);
               }
             } catch(e) { console.warn('bibDownload error (no crítico):', e); }
           }
@@ -1074,8 +1078,9 @@ function _mcRenderList() {
                 if (_bibIdbW.length) await Promise.all(_bibIdbW);
                 // Clave explícita — igual que en la otra rama — para no depender
                 // de edProjectId del editor (ver BUG FIX v34.59 más arriba).
-                if (window._bibSaveWithKey) { window._bibSaveWithKey({ folders: cleanFolders }, _bibKey); }
-                else if (window._bibSave) { window._bibSave({ folders: cleanFolders }); }
+                // BUG FIX v34.62: await añadido — misma razón que en la rama de arriba.
+                if (window._bibSaveWithKey) { await window._bibSaveWithKey({ folders: cleanFolders }, _bibKey); }
+                else if (window._bibSave) { await window._bibSave({ folders: cleanFolders }); }
                 else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
               }
             }
