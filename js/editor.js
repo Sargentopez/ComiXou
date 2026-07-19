@@ -3631,10 +3631,20 @@ function _cxSimpleHash(str) {
 // solo cuesta un poco de tiempo — exactamente lo que ya pasaba antes de este
 // cambio en TODAS las páginas.
 function _edMarkPageDirty(pageOrIdx) {
+  // Mientras la obra se esté cargando (contador bloqueante de my-comics
+  // activo), nada de lo que ocurra internamente puede ser una edición real
+  // del usuario — ya existe un bloqueo que impide tocar nada hasta que
+  // termine de cargar. Sin esto, el propio edLoadProject marcaba la página
+  // activa como sucia (vía su empuje inicial al historial) justo después de
+  // establecerla como "limpia" momentos antes, en la misma carga — lo que
+  // forzaba una reserialización innecesaria en el primer guardado de cada
+  // sesión, aunque el usuario no hubiera tocado nada todavía.
+  if (window._edLoadingSuppressDirty) return;
   const p = (typeof pageOrIdx === 'number') ? edPages[pageOrIdx] : pageOrIdx;
   if (p) { p._dirtyLocal = true; p._dirtyCloud = true; }
 }
 function _edMarkPagesStructureDirty() {
+  if (window._edLoadingSuppressDirty) return;
   window._edPagesStructureDirtyLocal = true;
   window._edPagesStructureDirtyCloud = true;
 }
@@ -3647,6 +3657,9 @@ function _edMarkPagesStructureDirty() {
 // sin revisar cada uno. Ante la duda, contar.
 const _ED_TICK_EXCLUDE_SELECTOR = [
   '#edPagePrev', '#edPageNext',   // navegar entre hojas para verlas, no las modifica
+  '.ed-nav-page-btn',             // miniaturas del navegador desplegable de páginas — mismo motivo
+  '.ed-page-thumb',               // miniatura del panel completo de páginas — mismo motivo
+  '#edPagesClose',                // cerrar el panel completo de páginas (no modifica nada)
   '#edMinimizeBtn',               // ocultar/mostrar menú
   '#edSaveBtn', '#edCloudSaveBtn',// guardar (el propio guardado ya tiene su seguimiento)
   '#edPreviewBtn',                // vista previa / reproducir
@@ -3659,6 +3672,12 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
 // empezado un tap/click fuera de la lista de exclusión para marcar la
 // página activa como potencialmente modificada, en ambos contadores.
 function _edInteractionTick(e) {
+  // Un toque impaciente sobre el propio contador de carga (mientras la obra
+  // todavía se está cargando) no puede modificar nada — ver nota en
+  // _edMarkPageDirty. El overlay ya bloquea visualmente la interacción; esto
+  // cierra el hueco de que el listener global (fase de captura) lo cuente de
+  // todas formas.
+  if (window._edLoadingSuppressDirty) return;
   const _target = e && e.target;
   if (_target && _target.closest) {
     if (_target.closest(_ED_TICK_EXCLUDE_SELECTOR)) return;
@@ -21343,7 +21362,7 @@ function _edSaveOverlayShow(title) {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.52" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.54" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_edSaveOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:10px"></div>
       <div id="_edSaveOvMsg" style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         No salgas de la aplicación hasta finalizado el guardado.<br>
@@ -23660,6 +23679,12 @@ let _edLoadProjectInProgress = false;
 async function edLoadProject(id){
   if(_edLoadProjectInProgress) return;
   _edLoadProjectInProgress = true;
+  // Suprimir cualquier marcado de "sucio" mientras dure esta carga — ver
+  // _edMarkPageDirty/_edInteractionTick. Se libera en EditorView_init, en el
+  // mismo punto donde se oculta el contador bloqueante de my-comics (cuando
+  // window._edFullyLoadedPromise se resuelve) — exactamente la misma ventana
+  // en la que el usuario tiene la app bloqueada y no puede tocar nada real.
+  window._edLoadingSuppressDirty = true;
   // Promesa de "carga COMPLETA" (capas pesadas + redraw final incluidos) — la usa
   // el contador bloqueante que my-comics.js inicia al pulsar "editar" (ver
   // EditorView_init) para saber cuándo puede desbloquear la app. Se resuelve
@@ -25861,8 +25886,10 @@ function EditorView_init(){
   // carga REALMENTE completa (capas pesadas + redraw final), fijada dentro de
   // edLoadProject como window._edFullyLoadedPromise justo antes de su primer await.
   (window._edFullyLoadedPromise || Promise.resolve()).then(() => {
+    window._edLoadingSuppressDirty = false;
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
   }).catch(() => {
+    window._edLoadingSuppressDirty = false;
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
   });
   edActiveTool='select';
