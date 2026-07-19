@@ -21383,6 +21383,33 @@ function _edShowIncognitoWarning(msg) {
 }
 window._edShowIncognitoWarning = _edShowIncognitoWarning;
 
+// Aviso persistente para fallos REALES de almacenamiento local (distinto del
+// de incógnito) — IndexedDB u OPFS no funcionan como deberían en este
+// navegador/dispositivo. Mismo patrón visual que _edShowIncognitoWarning,
+// pero con su propio id para poder convivir con él sin pisarse.
+function _edShowStorageWarning(msg) {
+  if (document.getElementById('_edStorageWarn')) return; // ya visible
+  const box = document.createElement('div');
+  box.id = '_edStorageWarn';
+  box.style.cssText = [
+    'position:fixed','bottom:20px','left:50%','transform:translateX(-50%)',
+    'background:#7f1d1d','color:#fef2f2','border-radius:12px',
+    'padding:16px 20px','max-width:380px','width:90%','z-index:99999',
+    'box-shadow:0 8px 32px rgba(0,0,0,0.5)','font-size:14px','line-height:1.5',
+    'display:flex','flex-direction:column','gap:10px'
+  ].join(';');
+  box.innerHTML = `
+    <div style="display:flex;gap:10px;align-items:flex-start">
+      <span style="font-size:20px;flex-shrink:0">🚫</span>
+      <span>${msg}</span>
+    </div>
+    <button id="_edStorageWarnClose" style="align-self:flex-end;background:#ef4444;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">Entendido</button>
+  `;
+  document.body.appendChild(box);
+  document.getElementById('_edStorageWarnClose').addEventListener('click', () => box.remove());
+}
+window._edShowStorageWarning = _edShowStorageWarning;
+
 function _edMenuLock(lock) {
   if (lock) {
     $('editorShell')?.classList.add('draw-active');
@@ -28379,6 +28406,38 @@ function _bibLoad() {
 let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
 let _bibIncognitoChanged = false; // cambios pendientes de subir en modo incógnito
 let _bibSavePromise = null; // última operación de guardado pendiente
+// Registro de fallos de verificación de escritura de biblioteca — visible en
+// el diagnóstico 🩺. Si en un dispositivo concreto IndexedDB "pierde" escrituras
+// en silencio (tx.oncomplete se dispara pero el dato releído no coincide), esto
+// lo deja constancia sin que Alberto tenga que adivinarlo.
+let _bibWriteVerifyFailures = [];
+window._bibWriteVerifyFailures = _bibWriteVerifyFailures;
+function _bibVerifyWrite(db, key, expectedData) {
+  try {
+    const tx  = db.transaction(_BIB_IDB_STORE, 'readonly');
+    const req = tx.objectStore(_BIB_IDB_STORE).get(key);
+    const _expectedItems = (expectedData.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+    req.onsuccess = () => {
+      const readBack = req.result;
+      const _readItems = (readBack?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+      const _mismatch = !readBack
+        || _readItems !== _expectedItems
+        || readBack._localModifiedAt !== expectedData._localModifiedAt;
+      if (_mismatch) {
+        _bibWriteVerifyFailures.push({
+          ts: new Date().toISOString(), key,
+          expectedItems: _expectedItems, readItems: _readItems,
+          expectedStamp: expectedData._localModifiedAt, readStamp: readBack?._localModifiedAt,
+        });
+        if (_bibWriteVerifyFailures.length > 20) _bibWriteVerifyFailures.shift();
+      }
+    };
+    req.onerror = () => {
+      _bibWriteVerifyFailures.push({ ts: new Date().toISOString(), key, error: 'la relectura de verificación falló' });
+      if (_bibWriteVerifyFailures.length > 20) _bibWriteVerifyFailures.shift();
+    };
+  } catch(_e) {}
+}
 function _bibSave(data) {
   // Sello de "última modificación LOCAL real" — se usa en my-comics.js para
   // decidir, al abrir la obra, si la biblioteca local es más reciente que la
@@ -28401,7 +28460,7 @@ function _bibSave(data) {
   _bibSavePromise = _bibOpenIdb().then(db => {
     return new Promise((res, rej) => {
       const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
-      tx.oncomplete = () => res();
+      tx.oncomplete = () => { _bibVerifyWrite(db, _bibSaveKey, data); res(); };
       tx.onerror = () => res(); // silencioso
       tx.objectStore(_BIB_IDB_STORE).put(data, _bibSaveKey);
     });
@@ -28436,7 +28495,85 @@ async function _bibFlush() {
     } catch(_) {}
   }
 }
-// Exposición global para my-comics.js y otros módulos externos
+
+// ═══════════════════════════════════════════════════════════════
+// ── COMPROBACIÓN DE ARRANQUE: ¿guarda este dispositivo de verdad? ──
+// Pedido por Alberto tras detectar que el fallo "borro un objeto de la
+// biblioteca, guardo local, reabro y el objeto ha vuelto" ocurre en un PC
+// mas no en otro con la MISMA versión — indicando un problema del propio
+// navegador/perfil (permisos, borrado automático de datos, política de
+// almacenamiento), no del código. Esto hace una prueba real de
+// escritura+lectura+borrado en IndexedDB (biblioteca) y en OPFS (obra) nada
+// más cargar la app, UNA vez por sesión, y avisa de forma visible y
+// persistente si alguna falla — no requiere ir a buscar un diagnóstico.
+// ═══════════════════════════════════════════════════════════════
+async function _cxTestIdbBiblioteca() {
+  const _testKey = '__cx_storage_selftest__';
+  const _testVal = { _selftest: true, ts: Date.now() };
+  try {
+    const db = await _bibOpenIdb();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+      tx.objectStore(_BIB_IDB_STORE).put(_testVal, _testKey);
+      tx.oncomplete = res;
+      tx.onerror = () => rej(tx.error);
+    });
+    const readBack = await new Promise((res, rej) => {
+      const tx = db.transaction(_BIB_IDB_STORE, 'readonly');
+      const req = tx.objectStore(_BIB_IDB_STORE).get(_testKey);
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+    // Limpiar la clave de prueba — no debe quedar en la biblioteca real
+    try {
+      const tx2 = db.transaction(_BIB_IDB_STORE, 'readwrite');
+      tx2.objectStore(_BIB_IDB_STORE).delete(_testKey);
+    } catch(_e) {}
+    return !!(readBack && readBack.ts === _testVal.ts);
+  } catch(e) {
+    return false;
+  }
+}
+async function _cxTestOpfs() {
+  try {
+    if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') return false;
+    const root = await navigator.storage.getDirectory();
+    const _testName = '__cx_storage_selftest__.txt';
+    const _testContent = 'selftest-' + Date.now();
+    const fh = await root.getFileHandle(_testName, { create: true });
+    const ws = await fh.createWritable();
+    await ws.write(_testContent);
+    await ws.close();
+    const file = await fh.getFile();
+    const text = await file.text();
+    try { await root.removeEntry(_testName); } catch(_e) {}
+    return text === _testContent;
+  } catch(e) {
+    return false;
+  }
+}
+async function _cxCheckStorageReliability() {
+  const idbOk  = await _cxTestIdbBiblioteca();
+  const opfsOk = await _cxTestOpfs();
+  window._cxStorageCheck = { idbOk, opfsOk, ts: new Date().toISOString() };
+  if (!idbOk || !opfsOk) {
+    const _partes = [];
+    if (!idbOk)  _partes.push('la base de datos local (biblioteca)');
+    if (!opfsOk) _partes.push('el almacenamiento de archivos local (obras)');
+    _edShowStorageWarning(
+      'Este navegador no está guardando correctamente ' + _partes.join(' ni ') + '. ' +
+      'Los cambios podrían no persistir al cerrar o reabrir la app. ' +
+      'Revisa la configuración de cookies/datos de sitio de este navegador ' +
+      '(que no estén bloqueados ni se borren al cerrar) o prueba con otro navegador.'
+    );
+  }
+  return window._cxStorageCheck;
+}
+window._cxCheckStorageReliability = _cxCheckStorageReliability;
+// Ejecutar una vez, poco después de cargar el script — no bloquea nada más.
+setTimeout(() => { _cxCheckStorageReliability().catch(() => {}); }, 800);
+
+
 window._bibSave = _bibSave;
 window._bibLoad = _bibLoad;
 window._bibKey  = _bibKey;
@@ -36025,6 +36162,12 @@ async function _edRunDiag() {
     L('_bibIdbUnavailable: ' + _bibIdbUnavailable);
     L('_bibCache===null: ' + (_bibCache===null));
     L('_bibIncognitoChanged: ' + (typeof _bibIncognitoChanged !== 'undefined' ? _bibIncognitoChanged : 'N/A'));
+    if (window._cxStorageCheck) {
+      L('Comprobación de almacenamiento al arrancar (' + window._cxStorageCheck.ts + '): IDB biblioteca=' + (window._cxStorageCheck.idbOk?'OK':'FALLA') + ' | OPFS=' + (window._cxStorageCheck.opfsOk?'OK':'FALLA'));
+    }
+    if (_bibWriteVerifyFailures.length) {
+      L('⚠️ ' + _bibWriteVerifyFailures.length + ' fallo(s) de verificación de escritura registrados: ' + JSON.stringify(_bibWriteVerifyFailures.slice(-3)));
+    }
 
   } catch(e) { L('error: ' + e.message); }
   L('\n── Errores de guardado: ninguno ──');
