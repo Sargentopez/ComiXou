@@ -35974,6 +35974,36 @@ async function _edRunDiag() {
     L('\n── Último bibSync ──');
     L(JSON.stringify(window._edLastBibSync));
   }
+  // Decisión tomada en my-comics.js al pulsar "Editar" para ESTA apertura —
+  // permite ver si la biblioteca se sobrescribió desde la nube y por qué,
+  // sin depender de lo que Alberto pueda observar en pantalla.
+  L('\n── Última decisión al pulsar "Editar" (biblioteca) ──');
+  if (window._mcLastEditDecision) {
+    const _me = window._mcLastEditDecision;
+    L('  ts: ' + _me.ts + ' | obra: "' + _me.title + '" (' + _me.comicId + ')');
+    L('  supabaseId: ' + (_me.supabaseId || 'NULL (obra nunca subida a la nube)'));
+    L('  cloudOnly: ' + _me.cloudOnly + ' | hasLegacyStrokes: ' + _me.hasLegacyStrokes + ' | hasLocalSaved: ' + _me.hasLocalSaved);
+    L('  localSavedAt: ' + (_me.localSavedAt || 'NULL — usando updatedAt: ' + _me.updatedAt));
+    L('  cloudNewer: ' + _me.cloudNewer + ' | needsDownload: ' + _me.needsDownload);
+    if (_me.bib) {
+      L('  rama biblioteca: ' + _me.bib.branch + ' | acción: ' + _me.bib.action);
+      if (_me.bib.branch === 'needsDownload') {
+        L('    useCloudBib: ' + _me.bib.useCloudBib + (_me.bib.cloudItems!==undefined ? ' | items descargados de la nube: ' + _me.bib.cloudItems : ''));
+      } else if (_me.bib.branch === 'notNeedsDownload') {
+        L('    bibKey: ' + _me.bib.bibKey);
+        L('    bibEmpty (¿biblioteca local detectada como vacía?): ' + _me.bib.bibEmpty);
+        L('    items detectados en la biblioteca LOCAL de esta obra: ' + _me.bib.bibLocalItems);
+        if (_me.bib.cloudItems !== undefined) L('    items descargados de la nube: ' + _me.bib.cloudItems);
+      }
+      if (_me.bib.action === 'overwrite_from_cloud' || _me.bib.action === 'overwrote_from_cloud_because_local_looked_empty' || _me.bib.action === 'cloud_empty_cleared_local') {
+        L('  ⚠️ Esta apertura SOBRESCRIBIÓ la biblioteca local con la de la nube');
+      }
+    } else {
+      L('  (sin comprobación de biblioteca en esta apertura — sin usuario/SupabaseClient)');
+    }
+  } else {
+    L('  Sin datos (no se pulsó "Editar" desde my-comics en esta sesión, o la app se recargó después)');
+  }
   // Estado actual de _bibCache
   L('\n── bibCache actual ──');
   try {

@@ -845,6 +845,24 @@ function _mcRenderList() {
         _hasLegacyStrokes ||
         _cloudNewer  // la nube tiene versión más reciente → descargar siempre
       );
+      // DIAGNÓSTICO v34.60: registrar la decisión al abrir la obra — visible
+      // desde el botón 🩺 del editor (window._mcLastEditDecision). Estos valores
+      // (cloudNewer, timestamps comparados, qué rama de biblioteca se ejecutó)
+      // no son observables directamente por Alberto, de ahí la instrumentación.
+      window._mcLastEditDecision = {
+        ts: new Date().toISOString(),
+        comicId: id,
+        title: comicToEdit.title || '',
+        supabaseId: comicToEdit.supabaseId || null,
+        cloudOnly: comicToEdit.cloudOnly === true,
+        localSavedAt: comicToEdit.localSavedAt || null,
+        updatedAt: comicToEdit.updatedAt || null,
+        hasLegacyStrokes: _hasLegacyStrokes,
+        hasLocalSaved: _hasLocalSaved,
+        cloudNewer: _cloudNewer,
+        needsDownload: _needsDownload,
+        bib: null, // se completa más abajo, en la rama de biblioteca que corresponda
+      };
       if (comicToEdit && _needsDownload) {
         if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate('Descargando obra de la nube…');
         try {
@@ -940,6 +958,7 @@ function _mcRenderList() {
           const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
           const _sbId = comicToEdit.supabaseId || comicToEdit.id;
           const _useCloudBib = comicToEdit.cloudOnly === true || _cloudNewer;
+          window._mcLastEditDecision.bib = { branch: 'needsDownload', useCloudBib: _useCloudBib, action: 'not_triggered' };
           if (_useCloudBib && _user && _user.id && _sbId && typeof SupabaseClient.bibDownload === 'function') {
             try {
               const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
@@ -961,6 +980,8 @@ function _mcRenderList() {
               const cloudData = await SupabaseClient.bibDownload(_user.id, _sbId);
               const _bibIdbWrites = [];
               if (cloudData && cloudData.folders) {
+                window._mcLastEditDecision.bib.action = 'overwrite_from_cloud';
+                window._mcLastEditDecision.bib.cloudItems = cloudData.folders.reduce((n,f)=>n+(f.items?.length||0),0);
                 // Procesar animaciones: guardar en IDB y limpiar apngSrc del JSON
                 const cleanFolders = cloudData.folders.map(cf => ({
                   ...cf,
@@ -986,6 +1007,7 @@ function _mcRenderList() {
                 else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
               } else {
                 // La nube no tiene biblioteca — limpiar la local con clave correcta
+                window._mcLastEditDecision.bib.action = 'cloud_empty_cleared_local';
                 const _emptyBib = { folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }] };
                 if (window._bibSaveWithKey) window._bibSaveWithKey(_emptyBib, _bibKey);
                 else if (window._bibSave) window._bibSave(_emptyBib);
@@ -1022,10 +1044,19 @@ function _mcRenderList() {
               try { return JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) { return null; }
             })();
             const _bibEmpty = !_bibLocal || !_bibLocal.folders || _bibLocal.folders.every(f => !f.items || f.items.length === 0);
+            window._mcLastEditDecision.bib = {
+              branch: 'notNeedsDownload',
+              bibKey: _bibKey,
+              bibEmpty: _bibEmpty,
+              bibLocalItems: (_bibLocal?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0),
+              action: _bibEmpty ? 'checking_cloud' : 'kept_local_nonempty',
+            };
             if (_bibEmpty) {
               // No hay biblioteca local — descargar la de la nube como punto de partida
               const _cloudBib = await SupabaseClient.bibDownload(_bibUser.id, _bibSbId);
+              window._mcLastEditDecision.bib.cloudItems = (_cloudBib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
               if (_cloudBib && _cloudBib.folders) {
+                window._mcLastEditDecision.bib.action = 'overwrote_from_cloud_because_local_looked_empty';
                 const _bibIdbW = [];
                 const cleanFolders = _cloudBib.folders.map(cf => ({
                   ...cf,
