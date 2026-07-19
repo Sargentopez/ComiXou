@@ -21907,7 +21907,12 @@ async function _edCloudSaveInner() {
     if (user && user.id) {
       try {
         const _bib = _bibLoad();
-        const _bibJson = JSON.stringify(_bib || {});
+        // Excluir _localModifiedAt del hash: ese sello (añadido en v34.63 para
+        // comparar frescura local vs. nube al abrir la obra) cambia en cada
+        // _bibSave(), aunque el contenido real (folders) no haya cambiado —
+        // incluirlo en el hash haría que este "saltar si no cambió nada" nunca
+        // funcionara, y se resubiría la biblioteca en cada guardado en nube.
+        const _bibJson = JSON.stringify({ folders: (_bib && _bib.folders) || [] });
         const _bibHashNow = _cxSimpleHash(_bibJson);
         const _bibHashKey = 'cx_bib_synced_hash_' + user.id;
         const _bibHashPrev = localStorage.getItem(_bibHashKey);
@@ -28375,6 +28380,13 @@ let _bibIdbUnavailable = false; // true si IDB falló (modo incógnito)
 let _bibIncognitoChanged = false; // cambios pendientes de subir en modo incógnito
 let _bibSavePromise = null; // última operación de guardado pendiente
 function _bibSave(data) {
+  // Sello de "última modificación LOCAL real" — se usa en my-comics.js para
+  // decidir, al abrir la obra, si la biblioteca local es más reciente que la
+  // de la nube (y por tanto debe conservarse) en vez de sobreescribirla a
+  // ciegas. Solo _bibSave() marca esto — _bibSaveWithKey() (usada por
+  // my-comics.js para escribir datos que VIENEN de la nube) sella con la
+  // fecha de la nube en su lugar, no con "ahora".
+  data._localModifiedAt = Date.now();
   _bibCache = data; // actualizar caché inmediatamente
   if (_bibIdbUnavailable) {
     _bibIncognitoChanged = true;
@@ -35986,18 +35998,17 @@ async function _edRunDiag() {
     L('  localSavedAt: ' + (_me.localSavedAt || 'NULL — usando updatedAt: ' + _me.updatedAt));
     L('  cloudNewer: ' + _me.cloudNewer + ' | needsDownload: ' + _me.needsDownload);
     if (_me.bib) {
-      L('  rama biblioteca: ' + _me.bib.branch + ' | acción: ' + _me.bib.action);
-      if (_me.bib.branch === 'needsDownload') {
-        L('    useCloudBib: ' + _me.bib.useCloudBib + (_me.bib.cloudItems!==undefined ? ' | items descargados de la nube: ' + _me.bib.cloudItems : ''));
-      } else if (_me.bib.branch === 'notNeedsDownload') {
-        L('    bibKey: ' + _me.bib.bibKey);
-        L('    bibEmpty (¿biblioteca local detectada como vacía?): ' + _me.bib.bibEmpty);
-        L('    items detectados en la biblioteca LOCAL de esta obra: ' + _me.bib.bibLocalItems);
-        if (_me.bib.cloudItems !== undefined) L('    items descargados de la nube: ' + _me.bib.cloudItems);
+      const _b = _me.bib;
+      L('  rama (solo informativa — desde v34.63 ambas usan la misma comparación): ' + _b.branch);
+      L('  acción: ' + _b.action);
+      if (_b.localModifiedAt !== undefined) {
+        L('    local: ' + _b.localItems + ' item(s), _localModifiedAt=' + (_b.localModifiedAt ? new Date(_b.localModifiedAt).toISOString() : '0 (nunca editada localmente / dato legado)'));
+        L('    nube:  ' + _b.cloudItems + ' item(s), últ. modificación=' + (_b.cloudModifiedAt ? new Date(_b.cloudModifiedAt).toISOString() : '0 (nube vacía)'));
       }
-      if (_me.bib.action === 'overwrite_from_cloud' || _me.bib.action === 'overwrote_from_cloud_because_local_looked_empty' || _me.bib.action === 'cloud_empty_cleared_local') {
-        L('  ⚠️ Esta apertura SOBRESCRIBIÓ la biblioteca local con la de la nube');
-      }
+      if (_b.action === 'kept_local_newer') L('  ✓ Local es más reciente que la nube — se conservó tal cual (correcto)');
+      else if (_b.action === 'overwritten_from_cloud') L('  ⚠️ La nube era igual o más reciente — se sobrescribió lo local con la nube');
+      else if (_b.action === 'kept_local_legacy_no_timestamp') L('  ℹ️ Local sin _localModifiedAt (dato de antes de v34.63) y nube vacía — se conservó lo local por seguridad');
+      else if (_b.action === 'both_empty') L('  ℹ️ Local y nube vacías — scaffold vacío');
     } else {
       L('  (sin comprobación de biblioteca en esta apertura — sin usuario/SupabaseClient)');
     }

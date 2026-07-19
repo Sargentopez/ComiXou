@@ -651,6 +651,103 @@ async function _mcSyncCloudDates() {
 }
 
 /* ── RENDERIZAR LISTA ── */
+// Extrae el userId de sesión de forma segura (namespacing en IDB de animaciones cxAnims)
+function _mcSessionUid() {
+  try {
+    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    return (_s && _s.id) ? String(_s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
+  } catch(_e) { return '_anon_'; }
+}
+
+// _mcResolveBiblioteca(comicToEdit): decide qué versión de la biblioteca de ESTA
+// obra debe quedar en IndexedDB local justo antes de abrir el editor.
+//
+// REGLA (pedida explícitamente por Alberto): gana quien sea más reciente, igual
+// que ya se hace con las páginas de la obra (localSavedAt vs. updated_at de la
+// nube) — la decisión NO depende de si la obra en sí necesitó redescargarse ni
+// de heurísticas de "¿parece vacía?". Se compara:
+//   - _localModifiedAt: sello que _bibSave() (editor.js) pone en CADA edición
+//     real del usuario (añadir/borrar/renombrar) — nunca en escrituras que
+//     vienen de la nube.
+//   - cloudModifiedAt: el created_at más reciente entre los items ya existentes
+//     en Supabase para esta obra (llega como item.timestamp en bibDownload()).
+// Si lo local es más reciente Y tiene contenido, se conserva tal cual — nunca
+// se sobreescribe a ciegas. En cualquier otro caso, gana la nube (incluye el
+// caso de poblar por primera vez un dispositivo nuevo).
+//
+// Devuelve un objeto de diagnóstico — el mismo que se expone en
+// window._mcLastEditDecision.bib para el botón 🩺 del editor.
+async function _mcResolveBiblioteca(comicToEdit) {
+  const _bibKey  = `cs_biblioteca_${comicToEdit.id}`;
+  const _bibUser = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
+  const _bibSbId = comicToEdit.supabaseId || comicToEdit.id;
+  const result = { bibKey: _bibKey, action: 'skipped_no_user_or_id' };
+  if (!_bibUser || !_bibUser.id || !_bibSbId || typeof SupabaseClient.bibDownload !== 'function') {
+    return result;
+  }
+  try {
+    const localBib = window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKey) : null;
+    const localModifiedAt = (localBib && localBib._localModifiedAt) || 0;
+    const localItems = (localBib?.folders || []).reduce((n, f) => n + (f.items?.length || 0), 0);
+    result.localModifiedAt = localModifiedAt;
+    result.localItems = localItems;
+
+    const cloudBib = await SupabaseClient.bibDownload(_bibUser.id, _bibSbId);
+    const allCloudItems = (cloudBib?.folders || []).flatMap(f => f.items || []);
+    const cloudModifiedAt = allCloudItems.reduce((m, it) => Math.max(m, it.timestamp || 0), 0);
+    const cloudItems = allCloudItems.length;
+    result.cloudModifiedAt = cloudModifiedAt;
+    result.cloudItems = cloudItems;
+
+    if (localItems > 0 && localModifiedAt > cloudModifiedAt) {
+      // Lo local es más reciente que lo último subido a la nube — conservar,
+      // NO sobreescribir con la nube (esto es lo que fallaba antes).
+      result.action = 'kept_local_newer';
+      return result;
+    }
+
+    if (cloudItems > 0) {
+      const _bibIdbW = [];
+      const cleanFolders = cloudBib.folders.map(cf => ({
+        ...cf,
+        items: cf.items.map(item => {
+          if (item.isGifAnim && item.apngSrc) {
+            const _uid = _mcSessionUid();
+            const _k = _uid + '__bib_' + item.id;
+            if (window._sbAnimIdbSave) _bibIdbW.push(window._sbAnimIdbSave(_k, item.apngSrc).catch(() => {}));
+            const c = Object.assign({}, item);
+            delete c.apngSrc;
+            c._apngIdbKey = _k;
+            return c;
+          }
+          return item;
+        })
+      }));
+      if (_bibIdbW.length) await Promise.all(_bibIdbW);
+      // _localModifiedAt se sella con la fecha de la NUBE, no con "ahora": esto
+      // es un espejo de la nube, no una edición local nueva.
+      const _toSave = { folders: cleanFolders, _localModifiedAt: cloudModifiedAt };
+      if (window._bibSaveWithKey) await window._bibSaveWithKey(_toSave, _bibKey);
+      else if (window._bibSave) await window._bibSave(_toSave);
+      else { try { localStorage.setItem(_bibKey, JSON.stringify(_toSave)); } catch(e) {} }
+      result.action = 'overwritten_from_cloud';
+    } else if (localItems === 0) {
+      // Ambos vacíos — dejar un scaffold vacío limpio
+      const _emptyBib = { folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }], _localModifiedAt: 0 };
+      if (window._bibSaveWithKey) await window._bibSaveWithKey(_emptyBib, _bibKey);
+      else if (window._bibSave) await window._bibSave(_emptyBib);
+      result.action = 'both_empty';
+    } else {
+      // Local tiene items pero sin _localModifiedAt (dato guardado antes de
+      // este sello) y la nube está vacía — conservar lo local en vez de borrarlo.
+      result.action = 'kept_local_legacy_no_timestamp';
+    }
+  } catch (e) {
+    result.action = 'error: ' + e.message;
+  }
+  return result;
+}
+
 function _mcRenderList() {
   const wrap = document.getElementById('mcContent');
   if (!wrap) return;
@@ -953,71 +1050,22 @@ function _mcRenderList() {
           // forzar siempre una subida completa en el primer guardado en nube
           // de la sesión. Se consume (se borra) la primera vez que se lee.
           sessionStorage.setItem('cx_just_synced_cloud', '1');
-          // Sincronizar biblioteca: usar la de la nube si la nube es más nueva o la obra es cloudOnly.
-          // Si la local es más reciente (solo _hasLegacyStrokes forzó la descarga), preservar la local.
-          const _user = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
-          const _sbId = comicToEdit.supabaseId || comicToEdit.id;
-          const _useCloudBib = comicToEdit.cloudOnly === true || _cloudNewer;
-          window._mcLastEditDecision.bib = { branch: 'needsDownload', useCloudBib: _useCloudBib, action: 'not_triggered' };
-          if (_useCloudBib && _user && _user.id && _sbId && typeof SupabaseClient.bibDownload === 'function') {
-            try {
-              const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
-              const _bibLocalKey = `cs_biblioteca_local_${comicToEdit.id}`;
-              // Guardar la biblioteca local actual como backup (solo si no existe ya un backup)
-              const _bibLocalExists = localStorage.getItem(_bibLocalKey);
-              if (!_bibLocalExists) {
-                // BUG FIX v34.59: window._bibLoad() depende de edProjectId/_bibCache
-                // del editor, que en este punto (antes de edLoadProject) aún
-                // corresponden a la obra anterior o están vacíos — leer con la
-                // clave explícita de ESTA obra directamente de IDB.
-                const _bibCurrentData = window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKey) : null;
-                const _bibCurrentRaw = _bibCurrentData ? JSON.stringify(_bibCurrentData) : localStorage.getItem(_bibKey);
-                if (_bibCurrentRaw) {
-                  try { localStorage.setItem(_bibLocalKey, _bibCurrentRaw); } catch(e) {}
-                }
-              }
-              // Solo para obras cloud: descargar biblioteca de la nube y reemplazar la local
-              const cloudData = await SupabaseClient.bibDownload(_user.id, _sbId);
-              const _bibIdbWrites = [];
-              if (cloudData && cloudData.folders) {
-                window._mcLastEditDecision.bib.action = 'overwrite_from_cloud';
-                window._mcLastEditDecision.bib.cloudItems = cloudData.folders.reduce((n,f)=>n+(f.items?.length||0),0);
-                // Procesar animaciones: guardar en IDB y limpiar apngSrc del JSON
-                const cleanFolders = cloudData.folders.map(cf => ({
-                  ...cf,
-                  items: cf.items.map(item => {
-                    if (item.isGifAnim && item.apngSrc) {
-                      const _bibUid1 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
-                      const _bibIdbKey = _bibUid1 + '__bib_' + item.id;
-                      if (window._sbAnimIdbSave) {
-                        _bibIdbWrites.push(window._sbAnimIdbSave(_bibIdbKey, item.apngSrc).catch(() => {}));
-                      }
-                      const cleanItem = Object.assign({}, item);
-                      delete cleanItem.apngSrc;
-                      cleanItem._apngIdbKey = _bibIdbKey;
-                      return cleanItem;
-                    }
-                    return item;
-                  })
-                }));
-                if (_bibIdbWrites.length) await Promise.all(_bibIdbWrites);
-                // Guardar con clave explícita para evitar race condition con edProjectId del editor.
-                // BUG FIX v34.62: esta escritura NO se esperaba (sin await) — el editor podía
-                // arrancar edLoadProject()→_bibInitIdb() y LEER de IDB antes de que esta escritura
-                // terminara, encontrando todavía el contenido local anterior (p.ej. con el objeto
-                // recién eliminado) en vez de la versión de la nube que se acaba de descargar aquí.
-                if (window._bibSaveWithKey) await window._bibSaveWithKey({ folders: cleanFolders }, _bibKey);
-                else if (window._bibSave) await window._bibSave({ folders: cleanFolders });
-                else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
-              } else {
-                // La nube no tiene biblioteca — limpiar la local con clave correcta
-                window._mcLastEditDecision.bib.action = 'cloud_empty_cleared_local';
-                const _emptyBib = { folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }] };
-                if (window._bibSaveWithKey) await window._bibSaveWithKey(_emptyBib, _bibKey);
-                else if (window._bibSave) await window._bibSave(_emptyBib);
-              }
-            } catch(e) { console.warn('bibDownload error (no crítico):', e); }
-          }
+          // Decidir la biblioteca: gana quien sea más reciente (ver _mcResolveBiblioteca),
+          // no una heurística ligada a por qué la obra necesitó redescargarse.
+          try {
+            // Backup de seguridad de la biblioteca local actual, por si _edSaveProject
+            // necesita restaurarla (ver su lógica de "_bibCurrentItems===0"). Se
+            // mantiene igual que en versiones anteriores como red de seguridad,
+            // aunque con la comparación de frescura ya no debería hacer falta.
+            const _bibKeyBackup = `cs_biblioteca_${comicToEdit.id}`;
+            const _bibLocalBackupKey = `cs_biblioteca_local_${comicToEdit.id}`;
+            if (!localStorage.getItem(_bibLocalBackupKey)) {
+              const _bibCurrentData = window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKeyBackup) : null;
+              if (_bibCurrentData) { try { localStorage.setItem(_bibLocalBackupKey, JSON.stringify(_bibCurrentData)); } catch(e) {} }
+            }
+          } catch(e) {}
+          window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
+          window._mcLastEditDecision.bib.branch = 'needsDownload';
         } catch(err) {
           window._mcEditLock = false;
           if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
@@ -1026,67 +1074,11 @@ function _mcRenderList() {
         }
       }
 
-      // Cuando local es más nueva: no tocar la biblioteca.
-      // La biblioteca local (cs_biblioteca_{id}) ya tiene los datos correctos del dispositivo.
-      // Solo si NO hay datos locales de biblioteca descargamos la de la nube como punto de partida.
+      // Cuando local es más nueva: no tocar la biblioteca. Ver _mcResolveBiblioteca
+      // — la decisión ya no depende de si esta obra necesitó redescargarse.
       if (!_needsDownload) {
-        const _bibUser = typeof Auth !== 'undefined' ? Auth.currentUser?.() : null;
-        const _bibSbId = comicToEdit.supabaseId || comicToEdit.id;
-        if (_bibUser && _bibUser.id && _bibSbId && typeof SupabaseClient.bibDownload === 'function') {
-          try {
-            const _bibKey = `cs_biblioteca_${comicToEdit.id}`;
-            // BUG FIX v34.59: window._bibLoad() depende de edProjectId/_bibCache
-            // del editor. En este punto (antes de edLoadProject) esas variables
-            // todavía apuntan a la obra editada anteriormente en esta sesión, o
-            // están vacías si es la primera vez que se abre una obra tras cargar
-            // la app — en ambos casos window._bibLoad() podía devolver "vacío"
-            // aunque la biblioteca de ESTA obra sí tuviera datos en IDB, lo que
-            // disparaba una descarga y sobrescritura con la biblioteca (desactualizada)
-            // de la nube, borrando cambios locales recién guardados. Se lee ahora
-            // con la clave explícita de esta obra directamente de IDB.
-            const _bibLocal = (window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKey) : null) || (() => {
-              try { return JSON.parse(localStorage.getItem(_bibKey) || 'null'); } catch(e) { return null; }
-            })();
-            const _bibEmpty = !_bibLocal || !_bibLocal.folders || _bibLocal.folders.every(f => !f.items || f.items.length === 0);
-            window._mcLastEditDecision.bib = {
-              branch: 'notNeedsDownload',
-              bibKey: _bibKey,
-              bibEmpty: _bibEmpty,
-              bibLocalItems: (_bibLocal?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0),
-              action: _bibEmpty ? 'checking_cloud' : 'kept_local_nonempty',
-            };
-            if (_bibEmpty) {
-              // No hay biblioteca local — descargar la de la nube como punto de partida
-              const _cloudBib = await SupabaseClient.bibDownload(_bibUser.id, _bibSbId);
-              window._mcLastEditDecision.bib.cloudItems = (_cloudBib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
-              if (_cloudBib && _cloudBib.folders) {
-                window._mcLastEditDecision.bib.action = 'overwrote_from_cloud_because_local_looked_empty';
-                const _bibIdbW = [];
-                const cleanFolders = _cloudBib.folders.map(cf => ({
-                  ...cf,
-                  items: cf.items.map(item => {
-                    if (item.isGifAnim && item.apngSrc) {
-                      const _bibUid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
-                      const _k = _bibUid2 + '__bib_' + item.id;
-                      if (window._sbAnimIdbSave) _bibIdbW.push(window._sbAnimIdbSave(_k, item.apngSrc).catch(() => {}));
-                      const c = Object.assign({}, item);
-                      delete c.apngSrc; c._apngIdbKey = _k; return c;
-                    }
-                    return item;
-                  })
-                }));
-                if (_bibIdbW.length) await Promise.all(_bibIdbW);
-                // Clave explícita — igual que en la otra rama — para no depender
-                // de edProjectId del editor (ver BUG FIX v34.59 más arriba).
-                // BUG FIX v34.62: await añadido — misma razón que en la rama de arriba.
-                if (window._bibSaveWithKey) { await window._bibSaveWithKey({ folders: cleanFolders }, _bibKey); }
-                else if (window._bibSave) { await window._bibSave({ folders: cleanFolders }); }
-                else { try { localStorage.setItem(_bibKey, JSON.stringify({ folders: cleanFolders })); } catch(e) {} }
-              }
-            }
-            // Si hay biblioteca local → no tocar nada (la versión local es la canónica)
-          } catch(e) { console.warn('bibDownload:', e); }
-        }
+        window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
+        window._mcLastEditDecision.bib.branch = 'notNeedsDownload';
       }
 
       // El aviso de modo incógnito lo gestiona _edShowIncognitoWarning en editor.js
