@@ -27039,7 +27039,7 @@ function EditorView_init(){
     if(!document.getElementById('editorShell')) return;
     // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas,
     // Editor de textos, etc.) dejarlo hacer scroll nativo — no intervenir
-    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel, .ed-modal-body, #tdPageArea, #gcpFramesBar, #gcpPropsPanel, [data-gcpmenu]');
+    const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel, .ed-modal-body, #tdPageArea, #gcpFramesBar, #gcpPropsPanel, [data-gcpmenu], [id^="gdd-"]');
     if(overScrollable) return;
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
@@ -27605,7 +27605,7 @@ function EditorView_init(){
         if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
       }
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
-      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], #gcp-rule-pop, #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
+      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], [id^="gdd-"], #gcp-rule-pop, #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
       if (_gcpUiEl) {
         return; // Es UI del GIF o scrollbar — dejar que sus propios listeners actúen
       } else {
@@ -29952,7 +29952,7 @@ function _gcpHandleDown(e) {
   // verificar que no pertenece a ningún elemento de UI del editor GIF
   if (e.target && e.target !== gc) {
     // Si el target tiene un ancestro que es UI del GIF → ignorar
-    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], #gcp-rule-pop')) return;
+    if (e.target.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], [id^="gdd-"], #gcp-rule-pop')) return;
   }
   const rect = gc.getBoundingClientRect();
   const src2 = e.touches ? e.touches[0] : e;
@@ -30143,7 +30143,7 @@ function _gcpHandleDown(e) {
 function _gcpDoSelectDrag(e, c) {
   // No iniciar selección si el origen está en UI del GCP (submenús, paneles, barras)
   if (e.target && e.target !== gcpCanvas) {
-    if (e.target.closest?.('#gcpFramesBar,#gcpMenuBar,#gcpTopbar,#gcpPropsPanel,#gcpShell,[data-gcpmenu],#gcp-rule-pop,#gcpInterpModal,#gcpInterpMenu,._gcpDropdown')) return;
+    if (e.target.closest?.('#gcpFramesBar,#gcpMenuBar,#gcpTopbar,#gcpPropsPanel,#gcpShell,[data-gcpmenu],[id^="gdd-"],#gcp-rule-pop,#gcpInterpModal,#gcpInterpMenu')) return;
   }
   const _isTouch = e.pointerType === 'touch';
   const _pw = edPageW(), _ph = edPageH(), _z = edCamera.z;
@@ -35023,10 +35023,10 @@ function _gcpSnapToRules(la) {
 function _gcpInitRules() {
   document.getElementById('gcp-rule-add')?.addEventListener('click', () => {
     _gcpRuleAdd();
-    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    _gcpCloseAllDropdowns();
   });
   document.getElementById('gcp-rule-clear')?.addEventListener('click', () => {
-    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    _gcpCloseAllDropdowns();
     _gcpRuleClear();
   });
   document.getElementById('gcp-rule-toggle')?.addEventListener('click', () => {
@@ -35034,13 +35034,13 @@ function _gcpInitRules() {
     if (_anyHidden) { _gcpRulesHidden=false; _gcpRules.forEach(r=>{r.hidden=false;}); }
     else { _gcpRulesHidden = true; }
     _gcpRuleToggleSync();
-    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    _gcpCloseAllDropdowns();
     _gcpRedraw();
   });
   document.getElementById('gcp-rule-lock-all')?.addEventListener('click', () => {
     _gcpRules.forEach(r=>{r.locked=true;});
     _gcpRuleNodes.forEach(n=>{n.locked=true;});
-    document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+    _gcpCloseAllDropdowns();
     _gcpRedraw();
   });
 
@@ -35051,7 +35051,7 @@ function _gcpInitRules() {
     _gcpGridChk.checked = false;
     _gcpGridChk.addEventListener('change', () => {
       gcpGridVisible = _gcpGridChk.checked;
-      document.querySelectorAll('#gcpMenuBar .ed-dropdown').forEach(d => d.classList.remove('open'));
+      _gcpCloseAllDropdowns();
       _gcpRedraw();
     });
   }
