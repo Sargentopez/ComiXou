@@ -30871,6 +30871,14 @@ window._gcpStartDelay  = 0;    // segundos (paso 0.5) antes de comenzar la repro
 window._gcpInvisBeforeStart = false; // true = capa invisible durante el startDelay (fade-in al iniciar)
 window._gcpInvisAtEnd       = false; // true = capa se desvanece al terminar todas las reproducciones
 window._gcpDirty       = false; // true si hay cambios sin guardar
+// Posición de scroll de la Matriz (horizontal/vertical) — persistente entre
+// reconstrucciones. Se actualiza SOLO desde los listeners de 'scroll' reales
+// (ver _gcpSyncFrameRowsScroll y el listener de scrollWrap en
+// _gcpUpdateFramesBar), nunca releyendo el DOM justo antes de destruirlo. Así
+// la "cámara" de la Matriz queda fija aunque _gcpUpdateFramesBar() se llame
+// varias veces seguidas (eliminar/añadir/cambiar visibilidad de un frame).
+window._gcpFramesScrollLeft = 0;
+window._gcpFramesScrollTop  = 0;
 let gcpCanvas = null;
 let gcpCtx    = null;
 // Mapa de pointers activos para pinch/pan en el canvas GCP
@@ -32218,13 +32226,6 @@ function _gcpUpdateFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   if (!bar) return;
   if (bar.style.display !== 'flex') return;
-  // Preservar posición de scroll antes de reconstruir el DOM — tanto horizontal
-  // (vive en cada fila desde el arreglo del scroll independiente de framesPane)
-  // como vertical (scrollWrap). Sin esto, cada reconstrucción (p.ej. al cambiar
-  // la existencia de un objeto en un frame) volvía a colocar la vista arriba
-  // del todo, aunque el usuario estuviera viendo filas o columnas más abajo.
-  const _prevScrollLeft = document.querySelector('#gcpFramesPane .gcp-layer-scroll')?.scrollLeft || 0;
-  const _prevScrollTop  = document.getElementById('gcpFramesScrollWrap')?.scrollTop || 0;
   bar.innerHTML = '';
 
   // Estructura: columna izquierda fija + zona de frames con scroll H+V
@@ -32266,6 +32267,12 @@ function _gcpUpdateFramesBar() {
     'scrollbar-width:none',
   ].join(';');
   inner.appendChild(scrollWrap);
+  // Fuente persistente del scroll vertical — a diferencia del thumb custom de
+  // PC (más abajo, solo !window._edIsTouch), este listener corre siempre,
+  // también en táctil/Android, que es la plataforma principal del proyecto.
+  scrollWrap.addEventListener('scroll', () => {
+    window._gcpFramesScrollTop = scrollWrap.scrollTop;
+  }, { passive: true });
 
   // IntersectionObserver de miniaturas: se recrea en cada reconstrucción de la matriz
   // porque scrollWrap (su raíz) es un nodo nuevo cada vez. rootMargin pequeño: solo
@@ -32277,6 +32284,11 @@ function _gcpUpdateFramesBar() {
   if (_gcpThumbIO) _gcpThumbIO.disconnect();
   _gcpThumbQueue.length = 0;
   _gcpThumbQueueRunning = false;
+  // Los ResizeObserver de la reconstrucción anterior (thumbs de scroll H/V,
+  // slider táctil) quedaban huérfanos observando nodos ya desconectados del
+  // DOM — se desconectan aquí antes de crear los nuevos.
+  (window._gcpFrResizeObservers || []).forEach(ro => ro.disconnect());
+  window._gcpFrResizeObservers = [];
   // Registro de las filas de frames (una por objeto) para sincronizar su scroll
   // horizontal entre sí — ver _gcpSyncFrameRowsScroll más abajo.
   window._gcpFrameRows = [];
@@ -32332,6 +32344,7 @@ function _gcpUpdateFramesBar() {
     if (_gcpSyncingFrameScroll) return;
     _gcpSyncingFrameScroll = true;
     const left = sourceEl.scrollLeft;
+    window._gcpFramesScrollLeft = left; // fuente persistente — ver declaración junto a window._gcpDirty
     window._gcpFrameRows.forEach(row => { if (row !== sourceEl && row.scrollLeft !== left) row.scrollLeft = left; });
     rulerContent.style.transform = 'translateX(-' + left + 'px)';
     if (_syncHThumb) _syncHThumb();
@@ -32377,7 +32390,9 @@ function _gcpUpdateFramesBar() {
     // el layout real está listo (primera visualización, nº de frames cambiado,
     // redimensión de ventana...) sin depender de adivinar un tiempo — por eso
     // antes la barra quedaba invisible hasta que un scroll forzaba el recálculo.
-    new ResizeObserver(() => _syncHThumb()).observe(framesPane);
+    const _frResizeH = new ResizeObserver(() => _syncHThumb());
+    _frResizeH.observe(framesPane);
+    window._gcpFrResizeObservers.push(_frResizeH);
 
     // Drag del thumb horizontal — mueve la primera fila, que a su vez
     // propaga el cambio a las demás vía el listener 'scroll' de cada fila.
@@ -32446,7 +32461,9 @@ function _gcpUpdateFramesBar() {
       vThumb.style.top    = (frac * (trackH - thumbH)) + 'px';
     };
     scrollWrap.addEventListener('scroll', _syncVThumb, { passive: true });
-    new ResizeObserver(_syncVThumb).observe(scrollWrap);
+    const _frResizeV = new ResizeObserver(_syncVThumb);
+    _frResizeV.observe(scrollWrap);
+    window._gcpFrResizeObservers.push(_frResizeV);
 
     let _vDragY = 0, _vDragScroll = 0, _vDragging = false;
     vThumb.addEventListener('pointerdown', e => {
@@ -32561,7 +32578,9 @@ function _gcpUpdateFramesBar() {
       vSliderThumb.style.transform = 'translateY(' + (frac * (trackH - thumbH)) + 'px)';
     };
     scrollWrap.addEventListener('scroll', _syncVSlider, { passive: true });
-    new ResizeObserver(_syncVSlider).observe(scrollWrap);
+    const _frResizeVS = new ResizeObserver(_syncVSlider);
+    _frResizeVS.observe(scrollWrap);
+    window._gcpFrResizeObservers.push(_frResizeVS);
 
     let _vsY0 = 0, _vsScroll0 = 0;
     vSliderThumb.addEventListener('pointerdown', e => {
@@ -33039,18 +33058,21 @@ function _gcpUpdateFramesBar() {
     framesPane.appendChild(scroll);
   });
 
-  // Restaurar posición de scroll horizontal (preserva el foco visual al
-  // duplicar/eliminar) — se aplica a la primera fila y se propaga a las
-  // demás mediante su propio listener de 'scroll'.
-  if (_prevScrollLeft > 0 && window._gcpFrameRows[0]) {
+  // Restaurar posición de scroll horizontal y vertical — usa las variables
+  // persistentes (window._gcpFramesScrollLeft/Top), no una lectura puntual del
+  // DOM justo antes de destruirlo: así la "cámara" de la Matriz queda fija sin
+  // importar cuántas veces se llame _gcpUpdateFramesBar() seguidas (eliminar/
+  // añadir/cambiar visibilidad de un frame). Doble rAF: garantiza que se aplica
+  // después de que el navegador confirme el layout nuevo (mismo patrón que
+  // _edInitFit), no solo tras el primer frame programado.
+  if (window._gcpFramesScrollLeft > 0 && window._gcpFrameRows[0]) {
     const _firstRow = window._gcpFrameRows[0];
-    requestAnimationFrame(() => { _firstRow.scrollLeft = _prevScrollLeft; });
+    const _targetLeft = window._gcpFramesScrollLeft;
+    requestAnimationFrame(() => requestAnimationFrame(() => { _firstRow.scrollLeft = _targetLeft; }));
   }
-  // Restaurar posición de scroll vertical — sin esto, cada reconstrucción de
-  // la matriz (p.ej. al cambiar la existencia de un objeto en un frame)
-  // devolvía la vista al principio aunque el usuario estuviera más abajo.
-  if (_prevScrollTop > 0) {
-    requestAnimationFrame(() => { scrollWrap.scrollTop = _prevScrollTop; });
+  if (window._gcpFramesScrollTop > 0) {
+    const _targetTop = window._gcpFramesScrollTop;
+    requestAnimationFrame(() => requestAnimationFrame(() => { scrollWrap.scrollTop = _targetTop; }));
   }
 
   _gcpBuildRuler(framesPane, rulerContent);
@@ -33941,6 +33963,7 @@ function gcpOpen(edLayerIdx) {
   window._gcpMultiSel = []; window._gcpMultiBbox = null;
   window._gcpMultiDragging = window._gcpMultiResizing = window._gcpMultiRotating = false;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
+  window._gcpFramesScrollLeft = 0; window._gcpFramesScrollTop = 0;
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null; _gcpRuleNodeId = 0;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
