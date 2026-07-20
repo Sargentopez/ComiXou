@@ -753,9 +753,16 @@ window.ApngDecoder = (function(){
   function decodeFrameArray(dataUrls, delay) {
     // Cargar frames en secuencia para garantizar orden correcto
     // Cada frame usa su propio canvas — evita contaminación entre frames asíncronos
+    // delay: número (uniforme, todos los frames igual) O array (un valor por frame,
+    // índice = índice de frame — usado para respetar pausas individuales fijadas
+    // con el botón T de la Matriz, ver loadAnim más abajo).
     if (!dataUrls || !dataUrls.length) return Promise.reject(new Error('sin frames'));
     var results = [];
     var W = 0, H = 0;
+    var _delayFor = function(i) {
+      if (Array.isArray(delay)) return delay[i] || 100;
+      return delay || 100;
+    };
     function loadOne(i) {
       if (i >= dataUrls.length) return Promise.resolve({ frames: results, width: W, height: H });
       return new Promise(function(res) {
@@ -765,11 +772,11 @@ window.ApngDecoder = (function(){
           var oc = document.createElement('canvas'); oc.width = W; oc.height = H;
           var ox = oc.getContext('2d');
           ox.drawImage(img, 0, 0);
-          results[i] = { imageData: ox.getImageData(0, 0, W, H), delay: delay || 100 };
+          results[i] = { imageData: ox.getImageData(0, 0, W, H), delay: _delayFor(i) };
           res();
         };
         img.onerror = function() {
-          results[i] = { imageData: new ImageData(W||1, H||1), delay: delay || 100 };
+          results[i] = { imageData: new ImageData(W||1, H||1), delay: _delayFor(i) };
           res();
         };
         img.src = dataUrls[i];
@@ -1592,7 +1599,16 @@ class ImageLayer extends BaseLayer {
     // Si ya está listo Y no fue reseteado por stopAnim, reusar sin redecodificar
     if (this._animReady && this._animFrames && this._animFrames.length) { cb && cb(); return; }
     if (!window.ApngDecoder) { console.warn('ApngDecoder no disponible'); cb && cb(); return; }
-    const delay = this._gcpFrameDelay || window._gcpFrameDelay || 100;
+    const uniformDelay = this._gcpFrameDelay || window._gcpFrameDelay || 100;
+    // Si input es un array de frames sueltos (_pngFrames, sin fcTL propio — el
+    // caso de animaciones creadas en el editor GCP y aún no empaquetadas como
+    // un único APNG real), construir un delay POR FRAME a partir de las pausas
+    // fijadas con el botón T (this._gcpFrameHolds). Si input es un APNG real
+    // (string), se deja el delay uniforme: decodeApng ya extrae el delay real
+    // de cada frame directamente del fcTL del propio archivo.
+    const delay = (Array.isArray(input) && this._gcpFrameHolds && this._gcpFrameHolds.length)
+      ? input.map((_, fi) => this._gcpFrameHolds[fi] || uniformDelay)
+      : uniformDelay;
     window.ApngDecoder.decode(input, delay).then((result) => {
       this._animFrames = result.frames;
       this._fIdx  = 0;
@@ -3490,6 +3506,7 @@ function _edSnapLayerFragment(l){
       if(l.gifKey)        o.gifKey        = l.gifKey;
       o._playing = l._playing || false;  // preservar estado de reproducción
       if(l._gcpFrameDelay)    o._gcpFrameDelay    = l._gcpFrameDelay;
+      if(l._gcpFrameHolds && l._gcpFrameHolds.length) o._gcpFrameHolds = l._gcpFrameHolds;
       if(l._gcpRepeatCount)   o._gcpRepeatCount   = l._gcpRepeatCount;
       if(l._gcpStopAtEnd)     o._gcpStopAtEnd     = l._gcpStopAtEnd;
       if(l._gcpRestartDelay)  o._gcpRestartDelay  = l._gcpRestartDelay;
@@ -6746,7 +6763,13 @@ function _edTryLoadApng(dataUrl, la, cb) {
     // Cachear tamaño para _edCalcProjectBytes() (síncrono, persiste entre recargas)
     try { localStorage.setItem('cxSzAnim:'+_ak, String(Math.round(dataUrl.length * 0.75))); } catch(_) {}
     var _doLoadApng = function() {
-      la.loadAnim(frameUrls, function() { cb(true); });
+      // dataUrl (el APNG completo) — NO frameUrls: frameUrls son frames ya
+      // "aplanados" a PNG estático individual (sin fcTL), así que decodificarlos
+      // como array fuerza un delay UNIFORME para todos vía decodeFrameArray,
+      // perdiendo cualquier pausa por frame que el APNG original sí tuviera.
+      // Pasando el dataUrl original, ApngDecoder.decode lo reconoce como string
+      // único y usa decodeApng, que sí lee el delay real de cada fcTL.
+      la.loadAnim(dataUrl, function() { cb(true); });
     };
     if (window._sbAnimIdbSave) {
       // Guardar el dataUrl APNG completo en IDB — cb solo después de que IDB complete
@@ -23039,6 +23062,7 @@ function edSerLayer(l){
     if(l._gcpRefW != null) _r._gcpRefW = l._gcpRefW;
     if(l._gcpRefH != null) _r._gcpRefH = l._gcpRefH;
     if(l._gcpFrameDelay   != null) _r._gcpFrameDelay   = l._gcpFrameDelay;
+    if(l._gcpFrameHolds && l._gcpFrameHolds.length) _r._gcpFrameHolds = l._gcpFrameHolds;
     if(l._gcpRepeatCount  != null) _r._gcpRepeatCount  = l._gcpRepeatCount;
     if(l._gcpStopAtEnd)            _r._gcpStopAtEnd    = true;
     if(l._gcpRestartDelay != null && l._gcpRestartDelay > 0) _r._gcpRestartDelay = l._gcpRestartDelay;
@@ -23521,6 +23545,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpRefW != null) l._gcpRefW = d._gcpRefW;
     if(d._gcpRefH != null) l._gcpRefH = d._gcpRefH;
     if(d._gcpFrameDelay   != null) l._gcpFrameDelay   = d._gcpFrameDelay;
+    if(Array.isArray(d._gcpFrameHolds)) l._gcpFrameHolds = d._gcpFrameHolds;
     if(d._gcpRepeatCount  != null) l._gcpRepeatCount  = d._gcpRepeatCount;
     if(d._gcpStopAtEnd)            l._gcpStopAtEnd    = true;
     if(d._gcpRestartDelay != null) l._gcpRestartDelay = d._gcpRestartDelay;
@@ -28815,6 +28840,7 @@ function edBibGuardar() {
     if (_la2.animKey) entry.animKey = _la2.animKey;
     if (_la2._pngFramesKey) entry._apngIdbKey = _la2._pngFramesKey;
     if (_la2._gcpFrameDelay   != null) entry.gcpFrameDelay   = _la2._gcpFrameDelay;
+    if (_la2._gcpFrameHolds && _la2._gcpFrameHolds.length) entry.gcpFrameHolds = _la2._gcpFrameHolds;
     if (_la2._gcpRepeatCount  != null) entry.gcpRepeatCount  = _la2._gcpRepeatCount;
     if (_la2._gcpStopAtEnd)            entry.gcpStopAtEnd    = _la2._gcpStopAtEnd;
     if (_la2._gcpRestartDelay)         entry.gcpRestartDelay = _la2._gcpRestartDelay;
@@ -29233,6 +29259,7 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpFramesData) la2._gcpFramesData=entry.gcpFramesData;
                 if(entry.gcpLayerNames) la2._gcpLayerNames=entry.gcpLayerNames;
                 if(entry.gcpFrameDelay!=null)  la2._gcpFrameDelay=entry.gcpFrameDelay;
+                if(Array.isArray(entry.gcpFrameHolds)) la2._gcpFrameHolds=entry.gcpFrameHolds;
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd)         la2._gcpStopAtEnd=true;
                 if(entry.gcpRestartDelay)      la2._gcpRestartDelay=entry.gcpRestartDelay;
@@ -29285,6 +29312,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpFramesData) la._gcpFramesData = entry.gcpFramesData;
           if (entry.gcpLayerNames) la._gcpLayerNames = entry.gcpLayerNames;
           if (entry.gcpFrameDelay   != null) la._gcpFrameDelay   = entry.gcpFrameDelay;
+          if (Array.isArray(entry.gcpFrameHolds)) la._gcpFrameHolds = entry.gcpFrameHolds;
           if (entry.gcpRepeatCount  != null) la._gcpRepeatCount  = entry.gcpRepeatCount;
           if (entry.gcpStopAtEnd)            la._gcpStopAtEnd    = true;
           if (entry.gcpRestartDelay)         la._gcpRestartDelay = entry.gcpRestartDelay;
@@ -30879,6 +30907,7 @@ window._gcpDirty       = false; // true si hay cambios sin guardar
 // varias veces seguidas (eliminar/añadir/cambiar visibilidad de un frame).
 window._gcpFramesScrollLeft = 0;
 window._gcpFramesScrollTop  = 0;
+let _gcpUidCounter = 0; // IDs únicos estables para filas de capas — ver _gcpAnimatedSwap
 let gcpCanvas = null;
 let gcpCtx    = null;
 // Mapa de pointers activos para pinch/pan en el canvas GCP
@@ -31345,6 +31374,7 @@ function _gcpTrimTrailingInvisible() {
       window._gcpLayers.forEach(la => {
         if (la._frames && lastFi < la._frames.length) la._frames.splice(lastFi, 1);
       });
+      if (window._gcpFrameHolds && lastFi < window._gcpFrameHolds.length) window._gcpFrameHolds.splice(lastFi, 1);
       changed = true;
     }
   }
@@ -31369,6 +31399,7 @@ function _gcpTrimLeadingInvisible() {
       window._gcpLayers.forEach(la => {
         if (la._frames && la._frames.length > 0) la._frames.splice(0, 1);
       });
+      if (window._gcpFrameHolds && window._gcpFrameHolds.length > 0) window._gcpFrameHolds.splice(0, 1);
       // El índice de frame activo se desplaza una posición hacia atrás
       if (window._gcpGlobalFrameIdx > 0) window._gcpGlobalFrameIdx--;
       changed = true;
@@ -31380,7 +31411,139 @@ function _gcpTrimLeadingInvisible() {
     window._gcpGlobalFrameIdx = newTotal - 1;
 }
 
-// Elimina (pone a null) los interpolados adyacentes a fi en todas las capas.
+// ── Acciones de COLUMNA (afectan a todas las capas a la vez) ────────────────
+// Antes vivían duplicadas dentro de cada celda individual (una copia del botón
+// por fila); se sacan aquí como funciones únicas porque conceptualmente actúan
+// sobre la columna entera, no sobre un objeto — ver la fila compartida de
+// acciones que las invoca, _gcpBuildColActions.
+
+// Duplica la COLUMNA fi entera: cada capa inserta una copia de su propio
+// estado en fi (exista o no) en la posición fi+1 — así todas quedan alineadas.
+// window._gcpFrameHolds viaja con el mismo splice() para que la pausa de un
+// frame se duplique junto con él, igual que su posición/tamaño/rotación.
+function _gcpDuplicateFrameColumn(fi) {
+  _gcpPushHistory(); // guardar antes de duplicar
+  window._gcpLayers.forEach(otherLa => {
+    if (!otherLa._frames) otherLa._frames = [];
+    while (otherLa._frames.length <= fi) otherLa._frames.push(null);
+    const _src = otherLa._frames[fi];
+    const _copy = _src ? {..._src} : null;
+    if (_copy) delete _copy._interp;
+    otherLa._frames.splice(fi + 1, 0, _copy);
+  });
+  if (!window._gcpFrameHolds) window._gcpFrameHolds = [];
+  while (window._gcpFrameHolds.length <= fi) window._gcpFrameHolds.push(null);
+  window._gcpFrameHolds.splice(fi + 1, 0, window._gcpFrameHolds[fi] ?? null);
+
+  window._gcpDirty = true;
+  window._gcpGlobalFrameIdx = fi + 1;
+  _gcpInvalidateAllThumbs();
+  _gcpApplyFrame(window._gcpGlobalFrameIdx);
+  _gcpUpdateFrameNav();
+  _gcpRedraw();
+  _gcpUpdateFramesBar();
+}
+
+// Elimina la COLUMNA fi físicamente de todas las capas (con confirmación,
+// operación destructiva). window._gcpFrameHolds se recorta en el mismo punto.
+function _gcpDeleteFrameColumn(fi, keyNum) {
+  edConfirm('¿Eliminar el fotograma clave ' + keyNum + ' de todas las capas?', () => {
+    _gcpPushHistory(); // guardar antes de la operación destructiva
+    window._gcpLayers.forEach(otherLa => {
+      if (otherLa._frames && fi < otherLa._frames.length)
+        otherLa._frames.splice(fi, 1);
+    });
+    if (window._gcpFrameHolds && fi < window._gcpFrameHolds.length)
+      window._gcpFrameHolds.splice(fi, 1);
+    const _nt = _gcpGetTotalFrames();
+    if (window._gcpGlobalFrameIdx >= _nt && _nt > 0)
+      window._gcpGlobalFrameIdx = _nt - 1;
+    _gcpTrimLeadingInvisible();
+    _gcpTrimTrailingInvisible();
+    window._gcpDirty = true;
+    _gcpInvalidateAllThumbs();
+    _gcpApplyFrame(window._gcpGlobalFrameIdx);
+    _gcpUpdateFrameNav();
+    _gcpRedraw();
+    _gcpUpdateFramesBar();
+  });
+}
+
+// Modal para fijar la pausa (en segundos) de la columna fi — cuánto tiempo se
+// queda la animación detenida en ese fotograma antes de seguir reproduciéndose.
+// Mismo formato que _gcpStartDelay/_gcpRestartDelay: segundos, pasos de 0.5,
+// 0 = sin pausa extra (usa la velocidad normal de "Comportamiento").
+function _gcpShowFrameHoldModal(fi) {
+  const _old = document.getElementById('_gcpHoldModal');
+  if (_old) _old.remove();
+
+  const curMs = (window._gcpFrameHolds && window._gcpFrameHolds[fi]) || 0;
+  const curSec = curMs > 0 ? curMs / 1000 : 0;
+
+  const overlay = document.createElement('div');
+  overlay.id = '_gcpHoldModal';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);' +
+    'display:flex;align-items:center;justify-content:center;';
+  overlay.addEventListener('pointerdown', e => e.stopPropagation());
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--white);border-radius:12px;padding:18px;' +
+    'width:min(300px,86vw);box-shadow:0 8px 30px rgba(0,0,0,.3);';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight:900;font-size:15px;margin-bottom:4px;';
+  title.textContent = 'Pausa en este fotograma';
+  box.appendChild(title);
+
+  const sub = document.createElement('div');
+  sub.style.cssText = 'font-size:12px;color:var(--gray-500);margin-bottom:12px;';
+  sub.textContent = 'Segundos que la animación se queda detenida aquí antes de continuar. 0 = velocidad normal.';
+  box.appendChild(sub);
+
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:16px;';
+  const input = document.createElement('input');
+  input.type = 'number'; input.min = '0'; input.step = '0.5'; input.value = curSec;
+  input.style.cssText = 'flex:1;font-size:16px;padding:8px;border:1.5px solid var(--gray-300);border-radius:8px;';
+  const unit = document.createElement('span');
+  unit.textContent = 's'; unit.style.cssText = 'font-weight:700;color:var(--gray-500);';
+  row.appendChild(input); row.appendChild(unit);
+  box.appendChild(row);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancelar';
+  cancelBtn.style.cssText = 'padding:8px 14px;border-radius:8px;border:1.5px solid var(--gray-300);' +
+    'background:var(--white);cursor:pointer;font-weight:700;';
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  btnRow.appendChild(cancelBtn);
+
+  const saveBtn = document.createElement('button');
+  saveBtn.textContent = 'Guardar';
+  saveBtn.style.cssText = 'padding:8px 14px;border-radius:8px;border:none;' +
+    'background:#1d6fe0;color:var(--white);cursor:pointer;font-weight:700;';
+  saveBtn.addEventListener('click', () => {
+    const sec = Math.max(0, parseFloat(input.value) || 0);
+    const ms = Math.round(sec * 1000);
+    if (!window._gcpFrameHolds) window._gcpFrameHolds = [];
+    while (window._gcpFrameHolds.length <= fi) window._gcpFrameHolds.push(null);
+    window._gcpFrameHolds[fi] = ms > 0 ? ms : null;
+    window._gcpDirty = true;
+    overlay.remove();
+    _gcpUpdateFramesBar();
+  });
+  btnRow.appendChild(saveBtn);
+  box.appendChild(btnRow);
+
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  requestAnimationFrame(() => input.focus());
+}
+
+
 // Se llama cuando un frame clave deja de existir (ya no puede ser extremo de interpolación):
 // al desaparecer un extremo, los interpolados de ese tramo dejan de tener sentido.
 function _gcpPurgeInterpAround(fi, layerTarget) {
@@ -31706,21 +31869,27 @@ function _gcpThumbTapGoToFrame(e, la, fi) {
 // ── Miniatura de "muestra": UNA por objeto (fila), para identificar de un
 // vistazo qué objeto es cada fila sin depender de ningún frame concreto.
 // Se renderiza con las propiedades ACTUALES del objeto (no depende de ningún fi).
-const _gcpSampleThumbCache = new Map(); // clave: índice de capa
+const _gcpSampleThumbCache = new Map(); // clave: UID estable de la capa (no el índice — ver nota abajo)
 function _gcpInvalidateSampleThumb(la) {
-  const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
-  if (idx < 0) return;
-  // La clave real es "idx-S" (S = tamaño en px), no idx a secas — borrar por prefijo.
+  if (la._gcpUid == null) return;
+  // La clave real es "uid-S" (S = tamaño en px), no uid a secas — borrar por prefijo.
   for (const k of _gcpSampleThumbCache.keys()) {
-    if (k.startsWith(idx + '-')) _gcpSampleThumbCache.delete(k);
+    if (k.startsWith(la._gcpUid + '-')) _gcpSampleThumbCache.delete(k);
   }
 }
 function _gcpInvalidateAllSampleThumbs() { _gcpSampleThumbCache.clear(); }
 
 function _gcpLayerSampleThumb(la, S) {
   S = S || 40;
-  const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
-  const cacheKey = idx + '-' + S;
+  // IMPORTANTE: la clave debe ser el UID del objeto, NO su índice en el array
+  // (window._gcpLayers.indexOf(la)). Al reordenar capas (▲▼), el índice de un
+  // objeto cambia pero su identidad no — usar el índice como clave hacía que,
+  // tras un reorden, la miniatura de muestra de una fila mostrara la del
+  // objeto que ANTES ocupaba ese puesto (caché contaminada), no la del objeto
+  // que realmente hay ahora ahí. Por eso las filas sí bajaban (posición
+  // correcta) pero las miniaturas parecían quedarse quietas.
+  if (!la._gcpUid) la._gcpUid = ++_gcpUidCounter;
+  const cacheKey = la._gcpUid + '-' + S;
   if (_gcpSampleThumbCache.has(cacheKey)) return _gcpSampleThumbCache.get(cacheKey);
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
@@ -31773,15 +31942,16 @@ function _gcpLayerSampleThumb(la, S) {
 // IntersectionObserver: solo se calculan las miniaturas que entran en pantalla.
 const _gcpThumbCache = new Map(); // clave: "layerIdx-fi-S"
 function _gcpThumbCacheKey(la, fi) {
-  const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
-  return idx + '-' + fi;
+  // Mismo criterio que _gcpLayerSampleThumb: UID estable, no índice de array
+  // (que cambia al reordenar capas y contaminaría la caché entre objetos).
+  if (!la._gcpUid) la._gcpUid = ++_gcpUidCounter;
+  return la._gcpUid + '-' + fi;
 }
 function _gcpInvalidateThumb(la, fi) {
   if (fi === undefined) {
-    const idx = window._gcpLayers ? window._gcpLayers.indexOf(la) : -1;
-    if (idx < 0) return;
+    if (la._gcpUid == null) return;
     for (const k of _gcpThumbCache.keys()) {
-      if (k.startsWith(idx + '-')) _gcpThumbCache.delete(k);
+      if (k.startsWith(la._gcpUid + '-')) _gcpThumbCache.delete(k);
     }
   } else {
     _gcpThumbCache.delete(_gcpThumbCacheKey(la, fi));
@@ -32090,6 +32260,9 @@ function _gcpPreview() {
     window._gcpGlobalFrameIdx = fi;
     _gcpApplyFrame(fi);
     _gcpRedraw();
+    // La pausa (T) es la de ESTE frame que se acaba de mostrar — capturar antes
+    // de reasignar fi al siguiente, si no se usaría (por error) la del destino.
+    const _renderedFi = fi;
     const next = fi + 1;
     if (next >= total) {
       loopN++;
@@ -32106,7 +32279,7 @@ function _gcpPreview() {
     } else {
       fi = next;
     }
-    _gcpPreviewTimer = setTimeout(loop, delay);
+    _gcpPreviewTimer = setTimeout(loop, (window._gcpFrameHolds && window._gcpFrameHolds[_renderedFi]) || delay);
   };
 
   // Primer frame — con posible retardo e invisibilidad inicial (gcpInvisBeforeStart)
@@ -32114,6 +32287,7 @@ function _gcpPreview() {
   _gcpApplyFrame(0);
   _gcpRedraw();
   fi = 1;
+  const _frame0Delay = (window._gcpFrameHolds && window._gcpFrameHolds[0]) || delay;
   const _pvDelay = window._gcpInvisBeforeStart ? (window._gcpStartDelay || 0) * 1000 : 0;
   if (_pvDelay > 0) {
     // Canvas invisible durante el retardo de inicio
@@ -32122,104 +32296,124 @@ function _gcpPreview() {
       if (!btn || btn.textContent === '▶') return; // detenido externamente
       // Fade in al arrancar
       if (gcpCanvas) { gcpCanvas.style.transition = 'opacity 0.3s ease-out'; gcpCanvas.style.opacity = '1'; }
-      _gcpPreviewTimer = setTimeout(loop, delay);
+      _gcpPreviewTimer = setTimeout(loop, _frame0Delay);
     }, _pvDelay);
   } else {
     if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '1'; }
-    _gcpPreviewTimer = setTimeout(loop, delay);
+    _gcpPreviewTimer = setTimeout(loop, _frame0Delay);
   }
 }
 
 // _gcpUpdateFramesBar — matriz 2D: una fila por objeto, columnas = frames globales.
 // Patrón idéntico al refreshLayerTimelines() del HTML de referencia.
-// Animación FLIP para reorden de capas en la barra de frames
-// Opera directamente sobre los nodos DOM existentes sin reconstruir
+//
+// Reordena una capa (subir/bajar un nivel) con animación de deslizamiento
+// (técnica FLIP, mismo patrón que _lyAnimatedReorder en editor-layers.js):
+// intercambia su posición en el array, reconstruye la matriz entera (para que
+// los botones ▲▼/ojo/eliminar de cada fila queden siempre con el índice
+// correcto — capturan layerIdx en su closure al crearse, y sin reconstruir
+// ese índice se queda congelado en el original para siempre) y anima la
+// transición usando el UID estable de cada fila (leftCol/sampleCol/scroll)
+// para emparejar su posición antes/después aunque el DOM se haya recreado.
+//
+// NOTA histórica: hubo un intento anterior de esta misma animación que
+// parecía no funcionar (las filas no se veían reordenar). La causa real no
+// era la animación: era que la caché de miniaturas de "muestra" usaba el
+// ÍNDICE de la capa como clave en vez de un UID estable, así que tras
+// reordenar, cada fila mostraba la miniatura que había cacheada en su nuevo
+// puesto (la del objeto que antes estaba ahí), no la del objeto que realmente
+// contenía — la posición cambiaba pero la miniatura parecía "pegada". Esa
+// caché ya está corregida (ver _gcpLayerSampleThumb/_gcpThumbCacheKey), así
+// que la animación puede reintroducirse con seguridad.
 function _gcpAnimatedSwap(idxA, idxB) {
-  const bar = document.getElementById('gcpFramesBar');
   const leftPane   = document.getElementById('gcpFramesLeftPane');
   const samplePane = document.getElementById('gcpFramesSamplePane');
   const framesPane = document.getElementById('gcpFramesPane');
+  const _panes = [['left', leftPane], ['sample', samplePane], ['frames', framesPane]];
 
-  if (!leftPane || !samplePane || !framesPane) {
-    // Fallback sin animación
-    [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
-    if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
-    else if (window._gcpSelIdx === idxB) window._gcpSelIdx = idxA;
-    window._gcpDirty = true; _gcpPushHistory(); _gcpRedraw(); _gcpUpdateFramesBar();
-    return;
-  }
-
-  const leftChildren   = Array.from(leftPane.children);
-  const sampleChildren = Array.from(samplePane.children);
-  const framesChildren = Array.from(framesPane.children);
-  const n = leftChildren.length;
-  if (n < 2) { _gcpUpdateFramesBar(); return; }
-
-  // Orden DOM invertido respecto al array de capas
-  const domA = (n - 1) - idxA;
-  const domB = (n - 1) - idxB;
-
-  const lA = leftChildren[domA],   lB = leftChildren[domB];
-  const sA = sampleChildren[domA], sB = sampleChildren[domB];
-  const fA = framesChildren[domA], fB = framesChildren[domB];
-  if (!lA || !lB || !sA || !sB || !fA || !fB) { _gcpUpdateFramesBar(); return; }
-
-  // FIRST: capturar Y
-  const topLA = lA.getBoundingClientRect().top;
-  const topLB = lB.getBoundingClientRect().top;
-  const topSA = sA.getBoundingClientRect().top;
-  const topSB = sB.getBoundingClientRect().top;
-  const topFA = fA.getBoundingClientRect().top;
-  const topFB = fB.getBoundingClientRect().top;
-
-  // Intercambiar en DOM — los tres paneles
-  const _swapSiblings = (pa, elA, elB) => {
-    const afterA = elA.nextSibling;
-    const afterB = elB.nextSibling;
-    if (afterA === elB) { pa.insertBefore(elB, elA); }
-    else if (afterB === elA) { pa.insertBefore(elA, elB); }
-    else { pa.insertBefore(elB, afterA); pa.insertBefore(elA, afterB); }
-  };
-  _swapSiblings(leftPane,   lA, lB);
-  _swapSiblings(samplePane, sA, sB);
-  _swapSiblings(framesPane, fA, fB);
-
-  // LAST: deltas
-  const dLA = topLA - lA.getBoundingClientRect().top;
-  const dLB = topLB - lB.getBoundingClientRect().top;
-  const dSA = topSA - sA.getBoundingClientRect().top;
-  const dSB = topSB - sB.getBoundingClientRect().top;
-  const dFA = topFA - fA.getBoundingClientRect().top;
-  const dFB = topFB - fB.getBoundingClientRect().top;
-
-  // INVERT
-  [lA, lB, sA, sB, fA, fB].forEach((el, i) => {
-    const d = [dLA, dLB, dSA, dSB, dFA, dFB][i];
-    el.style.transition = 'none';
-    el.style.transform  = 'translateY(' + d + 'px)';
-    el.style.opacity    = '0.55';
+  // ── FIRST: posición de cada fila ANTES del reorder, por UID estable ──────
+  const snapBefore = new Map();
+  _panes.forEach(([tag, pane]) => {
+    if (!pane) return;
+    pane.querySelectorAll('[data-uid]').forEach(el => {
+      snapBefore.set(tag + ':' + el.dataset.uid, el.getBoundingClientRect().top);
+    });
   });
 
-  // PLAY
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const ease = 'transform 320ms cubic-bezier(.4,0,.2,1), opacity 320ms ease';
-    [lA, lB, sA, sB, fA, fB].forEach(el => {
-      el.style.transition = ease;
-      el.style.transform  = 'translateY(0)';
-      el.style.opacity    = '1';
-      el.addEventListener('transitionend', () => {
-        el.style.transition = ''; el.style.transform = ''; el.style.opacity = '';
-      }, { once: true });
-    });
-  }));
+  // UID único por objeto (no el nombre — varias capas pueden llamarse igual,
+  // p.ej. "Img" todas, lo que hacía el registro de diagnóstico ambiguo).
+  const _uids = () => window._gcpLayers.map(l => (l && l._gcpUid != null) ? l._gcpUid : '?');
+  const _before = _uids();
+  const _scrollLeftBefore = window._gcpFramesScrollLeft;
+  const _scrollTopBefore  = window._gcpFramesScrollTop;
 
-  // Actualizar datos y redibujar
+  // ── Reorder real + reconstrucción completa de la matriz ──────────────────
   [window._gcpLayers[idxA], window._gcpLayers[idxB]] = [window._gcpLayers[idxB], window._gcpLayers[idxA]];
   if (window._gcpSelIdx === idxA) window._gcpSelIdx = idxB;
   else if (window._gcpSelIdx === idxB) window._gcpSelIdx = idxA;
   window._gcpDirty = true;
   _gcpPushHistory();
   _gcpRedraw();
+  _gcpUpdateFramesBar();
+
+  const _after = _uids();
+  if (!window._gcpSwapLog) window._gcpSwapLog = [];
+  window._gcpSwapLog.push({
+    t: new Date().toISOString().slice(11, 19),
+    idxA, idxB,
+    before: _before.join(','),
+    after: _after.join(','),
+    scrollBefore: _scrollLeftBefore + ',' + _scrollTopBefore,
+    scrollRightAfterRebuild: window._gcpFramesScrollLeft + ',' + window._gcpFramesScrollTop,
+  });
+  if (window._gcpSwapLog.length > 20) window._gcpSwapLog.shift();
+
+  if (snapBefore.size === 0) return; // primera reconstrucción de la sesión: nada que animar
+
+  // ── LAST: posiciones nuevas — DIFERIDA con el mismo doble rAF que usa la
+  // restauración de scroll dentro de _gcpUpdateFramesBar (ver window._gcpFramesScrollLeft/
+  // Top). Si se midiera aquí mismo, síncronamente, el scroll de la matriz TODAVÍA
+  // estaría en su posición por defecto (0,0) — recién reconstruido el DOM, la
+  // restauración real no llega hasta dos rAF más tarde — y la animación
+  // calcularía un delta erróneo basado en esa posición temporal, dando la
+  // sensación de que la "cámara" de la matriz salta al principio al reordenar.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const toAnimate = [];
+    const leftPane2   = document.getElementById('gcpFramesLeftPane');
+    const samplePane2 = document.getElementById('gcpFramesSamplePane');
+    const framesPane2 = document.getElementById('gcpFramesPane');
+    if (!leftPane2 || !samplePane2 || !framesPane2) return; // la matriz pudo cerrarse mientras tanto
+    [['left', leftPane2], ['sample', samplePane2], ['frames', framesPane2]].forEach(([tag, pane]) => {
+      pane.querySelectorAll('[data-uid]').forEach(el => {
+        const key = tag + ':' + el.dataset.uid;
+        if (!snapBefore.has(key)) return;
+        const delta = snapBefore.get(key) - el.getBoundingClientRect().top;
+        if (Math.abs(delta) < 2) return;
+        toAnimate.push({ el, delta });
+      });
+    });
+    if (!toAnimate.length) return;
+
+    // ── INVERT ─────────────────────────────────────────────────────────────
+    toAnimate.forEach(({ el, delta }) => {
+      el.style.transition = 'none';
+      el.style.transform  = 'translateY(' + delta + 'px)';
+      el.style.opacity    = '0.55';
+    });
+
+    // ── PLAY (otro doble rAF: fuerza el paint del estado INVERT antes de animar) ──
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const ease = 'transform 320ms cubic-bezier(.4,0,.2,1), opacity 320ms ease';
+      toAnimate.forEach(({ el }) => {
+        el.style.transition = ease;
+        el.style.transform  = 'translateY(0)';
+        el.style.opacity    = '1';
+        el.addEventListener('transitionend', () => {
+          el.style.transition = ''; el.style.transform = ''; el.style.opacity = '';
+        }, { once: true });
+      });
+    }));
+  }));
 }
 
 function _gcpUpdateFramesBar() {
@@ -32257,6 +32451,31 @@ function _gcpUpdateFramesBar() {
   rulerViewport.appendChild(rulerContent);
   rulerRow.appendChild(rulerViewport);
   inner.appendChild(rulerRow);
+
+  // ── Fila de acciones de columna (⧉ duplicar / ✕ eliminar / T pausa) ──────
+  // Mismo patrón que la regla de tiempo justo encima: fuera de scrollWrap (fija
+  // verticalmente, no se va con el scroll de filas) pero sincronizada en
+  // horizontal con framesPane. Antes ⧉ y ✕ vivían duplicados dentro de CADA
+  // celda de CADA fila — no tenía sentido, porque las tres acciones afectan a
+  // la columna entera (todas las capas), no a un objeto individual. Ahora
+  // aparecen una sola vez, en el límite entre columna y columna, igual que el
+  // botón ⟳ de interpolación aparece una vez entre frame y frame de una fila.
+  const colActionsRow = document.createElement('div');
+  colActionsRow.id = 'gcpColActionsRow';
+  colActionsRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:26px;' +
+    'border-bottom:1px solid var(--gray-200);background:var(--white);';
+  const colActionsSpacer = document.createElement('div');
+  colActionsSpacer.style.cssText = 'flex-shrink:0;width:116px;border-right:1px solid var(--gray-200);';
+  colActionsRow.appendChild(colActionsSpacer);
+  const colActionsViewport = document.createElement('div');
+  colActionsViewport.id = 'gcpColActionsViewport';
+  colActionsViewport.style.cssText = 'flex:1;min-width:0;overflow:hidden;position:relative;';
+  const colActionsContent = document.createElement('div');
+  colActionsContent.id = 'gcpColActionsContent';
+  colActionsContent.style.cssText = 'position:absolute;top:0;left:0;height:100%;';
+  colActionsViewport.appendChild(colActionsContent);
+  colActionsRow.appendChild(colActionsViewport);
+  inner.appendChild(colActionsRow);
 
   // Zona scrollable: contiene leftPane + framesPane, scroll vertical aquí
   const scrollWrap = document.createElement('div');
@@ -32347,6 +32566,7 @@ function _gcpUpdateFramesBar() {
     window._gcpFramesScrollLeft = left; // fuente persistente — ver declaración junto a window._gcpDirty
     window._gcpFrameRows.forEach(row => { if (row !== sourceEl && row.scrollLeft !== left) row.scrollLeft = left; });
     rulerContent.style.transform = 'translateX(-' + left + 'px)';
+    if (colActionsContent) colActionsContent.style.transform = 'translateX(-' + left + 'px)';
     if (_syncHThumb) _syncHThumb();
     _gcpSyncingFrameScroll = false;
   }
@@ -32605,6 +32825,10 @@ function _gcpUpdateFramesBar() {
   // Iterar en orden inverso: el último índice (más arriba en canvas) aparece primero en la UI
   const _layersCopy = window._gcpLayers.map((la, i) => ({ la, layerIdx: i })).reverse();
   _layersCopy.forEach(({ la, layerIdx }) => {
+    // UID estable por objeto (no por índice, que cambia al reordenar) — mismo
+    // patrón que la._uid en editor-layers.js (_lyAnimatedReorder). Permite que
+    // _gcpAnimatedSwap identifique la fila tras una reconstrucción completa.
+    if (!la._gcpUid) la._gcpUid = ++_gcpUidCounter;
     const isSelLayer  = (layerIdx === window._gcpSelIdx);
     const layerName   = la._gcpName || ('Obj ' + (layerIdx + 1));
     const layerFrames = la._frames ? la._frames.length : 0;
@@ -32615,15 +32839,16 @@ function _gcpUpdateFramesBar() {
     // Columna izquierda: flechas orden + botón eliminar + etiqueta (solo controles,
     // la miniatura de muestra vive en su propio panel — ver samplePane)
     const leftCol = document.createElement('div');
+    leftCol.dataset.uid = la._gcpUid;
     leftCol.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;' +
-      'width:52px;min-width:52px;padding:2px 0;gap:1px;';
+      'justify-content:space-between;width:52px;min-width:52px;padding:4px 0;' +
+      'border-bottom:1px solid var(--gray-200);box-sizing:border-box;';
 
-    // Fila superior: ▲ arriba y ▼ abajo (reordenar capas)
-    const arrowRow = document.createElement('div');
-    arrowRow.style.cssText = 'display:flex;gap:1px;align-items:center;';
-
-    const _arrowBtnStyle = 'background:none;border:none;cursor:pointer;padding:1px 3px;' +
-      'border-radius:3px;font-size:10px;line-height:1;color:var(--gray-500);transition:background .12s;';
+    // ▲ subir capa — fijo arriba del todo, centrado, más grande (antes compartía
+    // fila horizontal con ▼; separados verticalmente se identifican mejor y
+    // caben más cómodos al tacto).
+    const _arrowBtnStyle = 'background:none;border:none;cursor:pointer;padding:2px 8px;' +
+      'border-radius:4px;font-size:15px;line-height:1;color:var(--gray-500);transition:background .12s;';
 
     const upBtn = document.createElement('button');
     upBtn.title = 'Subir capa';
@@ -32637,7 +32862,16 @@ function _gcpUpdateFramesBar() {
       if (layerIdx >= window._gcpLayers.length - 1) return;
       _gcpAnimatedSwap(layerIdx, layerIdx + 1);
     });
+    leftCol.appendChild(upBtn);
 
+    // Grupo intermedio (eliminar / ojo / etiqueta) — centrado en el espacio
+    // que queda entre ▲ y ▼, ocupando el resto de la altura disponible.
+    const midGroup = document.createElement('div');
+    midGroup.style.cssText = 'flex:1;min-height:0;display:flex;flex-direction:column;' +
+      'align-items:center;justify-content:center;gap:1px;width:100%;';
+
+    // ▼ bajar capa — fijo abajo del todo, centrado, más grande. Se añade al
+    // final de leftCol más abajo (después del grupo intermedio).
     const dnBtn = document.createElement('button');
     dnBtn.title = 'Bajar capa';
     dnBtn.textContent = '▼';
@@ -32650,10 +32884,6 @@ function _gcpUpdateFramesBar() {
       if (layerIdx <= 0) return;
       _gcpAnimatedSwap(layerIdx, layerIdx - 1);
     });
-
-    arrowRow.appendChild(upBtn);
-    arrowRow.appendChild(dnBtn);
-    leftCol.appendChild(arrowRow);
 
     // Botón eliminar capa (con confirmación)
     const delLayerBtn = document.createElement('button');
@@ -32681,7 +32911,7 @@ function _gcpUpdateFramesBar() {
         _gcpPushHistory(); _gcpUpdateFrameNav(); _gcpRedraw(); _gcpUpdateFramesBar();
       });
     });
-    leftCol.appendChild(delLayerBtn);
+    midGroup.appendChild(delLayerBtn);
 
     // Botón ojo — oculta/muestra TODOS los frames de la fila a la vez.
     // Ocultar ahora significa "no existe" (null), lo que borraría la posición de cada
@@ -32721,17 +32951,22 @@ function _gcpUpdateFramesBar() {
       _gcpRedraw();
       _gcpUpdateFramesBar();
     });
-    leftCol.appendChild(eyeBtn);
+    midGroup.appendChild(eyeBtn);
 
-    // Etiqueta
+    // Etiqueta — con la posición de apilado delante (p.ej. "#4"), para poder
+    // seguir a simple vista qué fila es cuál aunque el nombre sea genérico y
+    // se repita entre objetos (todos los "Img" se llaman igual por defecto).
     const label = document.createElement('div');
     label.className = 'gcp-layer-label' + (isSelLayer ? ' sel' : '');
     label.style.cssText = 'font-size:9px;font-weight:900;text-align:center;' +
       'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;padding:0 2px;' +
       'color:' + (isSelLayer ? '#ff6600' : 'var(--gray-500)') + ';';
-    label.textContent = layerName;
-    label.title = layerName;
-    leftCol.appendChild(label);
+    label.textContent = '#' + (layerIdx + 1) + ' ' + layerName;
+    label.title = '#' + (layerIdx + 1) + ' ' + layerName;
+    midGroup.appendChild(label);
+
+    leftCol.appendChild(midGroup);
+    leftCol.appendChild(dnBtn);
 
     // leftCol → leftPane (columna fija)
     leftCol.style.height = '190px';
@@ -32740,8 +32975,9 @@ function _gcpUpdateFramesBar() {
     // sampleCol → samplePane (solo la miniatura, sin controles, con más espacio
     // ahora que no comparte columna con las flechas/botones)
     const sampleCol = document.createElement('div');
-    sampleCol.style.cssText = 'flex-shrink:0;width:64px;height:190px;display:flex;' +
-      'align-items:center;justify-content:center;';
+    sampleCol.dataset.uid = la._gcpUid;
+    sampleCol.style.cssText = 'flex-shrink:0;width:64px;height:190px;box-sizing:border-box;display:flex;' +
+      'align-items:center;justify-content:center;border-bottom:1px solid var(--gray-200);';
     const sampleThumb = _gcpLayerSampleThumb(la, 56);
     sampleThumb.style.cssText = 'width:56px;height:56px;display:block;border-radius:4px;' +
       'border:1px solid var(--gray-300);flex-shrink:0;';
@@ -32752,14 +32988,16 @@ function _gcpUpdateFramesBar() {
     // Scroll de frames → framesPane (scroll horizontal compartido)
     const scroll = document.createElement('div');
     scroll.className = 'gcp-layer-scroll';
+    scroll.dataset.uid = la._gcpUid;
     // overflow-x:auto aquí (no en framesPane) es la clave del arreglo: cada
     // fila scrollea horizontalmente por su cuenta, y se sincronizan entre sí
     // por JS (ver _gcpSyncFrameRowsScroll) — así framesPane nunca se convierte
     // en un contenedor con scroll vertical propio.
     // align-items:center + altura generosa: recupera el aire visual alrededor
     // de la card (antes lo daba un padding que resultó estar duplicando alturas).
-    scroll.style.cssText = 'display:flex;flex-direction:row;align-items:center;' +
-      'overflow-x:auto;overflow-y:hidden;flex-shrink:0;height:190px;scrollbar-width:none;';
+    scroll.style.cssText = 'display:flex;flex-direction:row;align-items:center;gap:24px;' +
+      'overflow-x:auto;overflow-y:hidden;flex-shrink:0;height:190px;box-sizing:border-box;' +
+      'border-bottom:1px solid var(--gray-200);scrollbar-width:none;';
     window._gcpFrameRows.push(scroll);
     scroll.addEventListener('scroll', () => _gcpSyncFrameRowsScroll(scroll), { passive: true });
 
@@ -32853,37 +33091,10 @@ function _gcpUpdateFramesBar() {
         const actions = document.createElement('div');
         actions.className = 'ed-page-actions';
 
-        const dupBtn = document.createElement('button');
-        dupBtn.className = 'ed-page-action-btn';
-        dupBtn.title = 'Duplicar frame';
-        dupBtn.innerHTML = '⧉';
-        dupBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          // Duplicar la COLUMNA entera: cada capa inserta una copia de su propio
-          // estado en fi (exista o no) en la misma posición fi+1 — así todas quedan
-          // alineadas, a diferencia de la versión anterior que solo insertaba en la
-          // fila activa y rellenaba las demás al final (desalineaba la matriz).
-          _gcpPushHistory(); // guardar antes de duplicar
-          window._gcpLayers.forEach(otherLa => {
-            if (!otherLa._frames) otherLa._frames = [];
-            while (otherLa._frames.length <= fi) otherLa._frames.push(null);
-            const _src = otherLa._frames[fi];
-            const _copy = _src ? {..._src} : null;
-            if (_copy) delete _copy._interp;
-            otherLa._frames.splice(fi + 1, 0, _copy);
-          });
-
-          window._gcpDirty = true;
-          window._gcpGlobalFrameIdx = fi + 1;
-          _gcpInvalidateAllThumbs();
-          _gcpApplyFrame(window._gcpGlobalFrameIdx);
-          _gcpUpdateFrameNav();
-          _gcpRedraw();
-          _gcpUpdateFramesBar();
-        });
-        actions.appendChild(dupBtn);
-
         // ── Botón ojo: hacer que el objeto deje de existir en este frame ──
+        // (Único botón que queda aquí: duplicar/eliminar pasaron a la fila
+        // compartida de acciones de columna — ver _gcpBuildColActions más abajo,
+        // porque afectan a TODAS las capas, no solo a esta.)
         const eyeBtn = document.createElement('button');
         eyeBtn.className = 'ed-page-action-btn';
         eyeBtn.title = 'Quitar el objeto de este fotograma';
@@ -32917,34 +33128,6 @@ function _gcpUpdateFramesBar() {
           _gcpUpdateFramesBar();
         });
         actions.appendChild(eyeBtn);
-
-        // ── Botón ✕: eliminar frame físicamente de todas las capas ──────
-        const delBtn = document.createElement('button');
-        delBtn.className = 'ed-page-action-btn ed-page-del';
-        delBtn.title = 'Eliminar frame';
-        delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
-        delBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          edConfirm('¿Eliminar el fotograma clave ' + (_vi + 1) + ' de todas las capas?', () => {
-            _gcpPushHistory(); // guardar antes de la operación destructiva
-            window._gcpLayers.forEach(otherLa => {
-              if (otherLa._frames && fi < otherLa._frames.length)
-                otherLa._frames.splice(fi, 1);
-            });
-            const _nt = _gcpGetTotalFrames();
-            if (window._gcpGlobalFrameIdx >= _nt && _nt > 0)
-              window._gcpGlobalFrameIdx = _nt - 1;
-            _gcpTrimLeadingInvisible();
-            _gcpTrimTrailingInvisible();
-            window._gcpDirty = true;
-            _gcpInvalidateAllThumbs();
-            _gcpApplyFrame(window._gcpGlobalFrameIdx);
-            _gcpUpdateFrameNav();
-            _gcpRedraw();
-            _gcpUpdateFramesBar();
-          });
-        });
-        actions.appendChild(delBtn);
         card.appendChild(actions);
       }
 
@@ -32958,82 +33141,6 @@ function _gcpUpdateFramesBar() {
       });
 
       scroll.appendChild(card);
-
-      // Botón ⟳ entre este frame clave y el siguiente (o circular al final)
-      const _nextKeyFi = _visibleFiList[_vi + 1];
-      const _isLastFrame = _nextKeyFi === undefined && _visibleFiList.length > 1;
-      if (_nextKeyFi !== undefined || _isLastFrame) {
-        // Para el último frame: simular que el "siguiente" es el frame 0 (circular)
-        // Contar interpolados entre fi y _nextKeyFi (o circulares si es el último)
-        let _interpCount, _hasInterp, _isCircular = false;
-        if (_isLastFrame) {
-          // Contar frames _circular después de fi
-          _interpCount = window._gcpLayers[0]?._frames
-            ? window._gcpLayers[0]._frames.slice(fi + 1).filter(f => f?._circular).length
-            : 0;
-          _hasInterp  = _interpCount > 0;
-          _isCircular = true;
-        } else {
-          _interpCount = _nextKeyFi - fi - 1;
-          _hasInterp   = _interpCount > 0;
-        }
-
-        const interpBtn = document.createElement('button');
-        const _hasBlur = _hasInterp && window._gcpLayers.some(l =>
-          l._frames && l._frames[fi + 1]?._interp && l._frames[fi + 1]?._blur);
-        interpBtn.title = _hasInterp
-          ? _interpCount + ' frame' + (_interpCount > 1 ? 's' : '') + ' interpolado' + (_interpCount > 1 ? 's' : '') +
-            (_hasBlur ? ' + blur' : '') + ' — pulsa para opciones'
-          : 'Añadir interpolación';
-        interpBtn.style.cssText = [
-          'flex-shrink:0', 'align-self:center',
-          'width:20px', 'height:20px',
-          'border-radius:50%',
-          'border:1.5px ' + (_hasInterp ? (_hasBlur ? 'dashed' : 'solid') : 'solid') +
-            ' ' + (_hasInterp ? '#cc2200' : 'var(--gray-300)'),
-          'background:' + (_hasInterp ? '#ffeeeb' : 'var(--white)'),
-          'color:' + (_hasInterp ? '#cc2200' : 'var(--gray-400)'),
-          'font-size:9px', 'line-height:1', 'font-weight:900',
-          'cursor:pointer',
-          'display:flex', 'align-items:center', 'justify-content:center',
-          'padding:0',
-          'transition:border-color .15s, color .15s, background .15s',
-          'z-index:1',
-        ].join(';');
-        interpBtn.textContent = '⟳';
-        interpBtn.dataset.interpFi    = fi;
-        interpBtn.dataset.interpLayer = layerIdx;
-
-        if (!_hasInterp) {
-          interpBtn.addEventListener('pointerenter', () => {
-            interpBtn.style.borderColor = 'var(--black)';
-            interpBtn.style.color = 'var(--black)';
-            interpBtn.style.background = 'var(--gray-100)';
-          });
-          interpBtn.addEventListener('pointerleave', () => {
-            interpBtn.style.borderColor = 'var(--gray-300)';
-            interpBtn.style.color = 'var(--gray-400)';
-            interpBtn.style.background = 'var(--white)';
-          });
-          interpBtn.addEventListener('click', e => {
-            e.stopPropagation();
-            if (_isCircular) {
-              // Último frame sin frame a la derecha → interpolación circular
-              _gcpShowCircularInterpModal(fi);
-            } else {
-              _gcpShowInterpModal(fi, layerIdx);
-            }
-          });
-        } else {
-          // Botón rojo → menú contextual inline (igual para circular y no circular)
-          interpBtn.addEventListener('click', e => {
-            e.stopPropagation();
-            _gcpShowInterpMenu(interpBtn, fi, _interpCount, layerIdx);
-          });
-        }
-
-        scroll.appendChild(interpBtn);
-      }
     }
 
     // Card "en edición" al final de cada fila
@@ -33076,6 +33183,9 @@ function _gcpUpdateFramesBar() {
   }
 
   _gcpBuildRuler(framesPane, rulerContent);
+  _gcpBuildColActions(colActionsContent);
+  _gcpAlignRowArrows(framesPane, leftPane);
+  _gcpStretchSidePanes(scrollWrap, leftPane, samplePane, framesPane);
 
   // Limpiar flag de reconstrucción en el siguiente frame
   requestAnimationFrame(() => { window._gcpFramesBarRebuilding = false; });
@@ -33097,6 +33207,7 @@ function _gcpMeasureRulerBreakpoints(framesPane) {
     breakpoints.push({
       fi: parseInt(card.dataset.fi, 10),
       px: (r.left - rowRect.left) + firstRow.scrollLeft,
+      w:  r.width, // ancho real de la tarjeta — ver _gcpBuildColActions (centrar en el hueco real)
     });
   });
   breakpoints.sort((a, b) => a.fi - b.fi);
@@ -33111,6 +33222,169 @@ function _gcpBuildRuler(framesPane, rulerContent) {
   const firstRow = framesPane.querySelector('.gcp-layer-scroll');
   window._gcpRulerContentWidth = firstRow ? firstRow.scrollWidth : 0;
   _gcpDrawRulerMarks();
+}
+
+// Construye la fila de acciones de columna (⧉ duplicar / ✕ eliminar / T pausa),
+// un cluster por cada fotograma clave visible, centrado en el límite entre esa
+// columna y la siguiente (reutiliza los mismos breakpoints ya medidos para la
+// regla de tiempo — misma referencia horizontal, para que quede alineado).
+const _GCP_COL_CARD_W_FALLBACK = 96; // solo si por lo que sea no se pudo medir el ancho real
+function _gcpBuildColActions(colActionsContent) {
+  colActionsContent.innerHTML = '';
+  const bp = window._gcpRulerBreakpoints;
+  if (!bp || !bp.length) return;
+  colActionsContent.style.width = (window._gcpRulerContentWidth || 0) + 'px';
+
+  bp.forEach((b, i) => {
+    const cardW = b.w || _GCP_COL_CARD_W_FALLBACK;
+    // Centrado sobre la propia columna (su tarjeta), no en el hueco con la siguiente.
+    const anchorPx = b.px + cardW / 2;
+
+    const cluster = document.createElement('div');
+    cluster.style.cssText = 'position:absolute;top:2px;left:' + Math.round(anchorPx) + 'px;' +
+      'transform:translateX(-50%);display:flex;align-items:center;gap:2px;' +
+      'background:var(--white);border:1px solid var(--gray-300);border-radius:10px;' +
+      'padding:1px 3px;box-shadow:0 1px 2px rgba(0,0,0,.08);';
+
+    const mk = (label, title, color) => {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      btn.title = title;
+      btn.style.cssText = 'width:19px;height:19px;border:none;background:none;cursor:pointer;' +
+        'font-size:11px;font-weight:900;line-height:1;display:flex;align-items:center;' +
+        'justify-content:center;border-radius:6px;color:' + color + ';padding:0;';
+      btn.addEventListener('pointerenter', () => { btn.style.background = 'var(--gray-100)'; });
+      btn.addEventListener('pointerleave', () => { btn.style.background = 'none'; });
+      return btn;
+    };
+
+    const dupBtn = mk('⧉', 'Duplicar columna (todas las capas)', 'var(--gray-600)');
+    dupBtn.addEventListener('click', e => { e.stopPropagation(); _gcpDuplicateFrameColumn(b.fi); });
+    cluster.appendChild(dupBtn);
+
+    const delBtn = mk('✕', 'Eliminar columna (todas las capas)', '#e63030');
+    delBtn.addEventListener('click', e => { e.stopPropagation(); _gcpDeleteFrameColumn(b.fi, i + 1); });
+    cluster.appendChild(delBtn);
+
+    const holdMs = (window._gcpFrameHolds && window._gcpFrameHolds[b.fi]) || 0;
+    const holdBtn = mk('T', holdMs > 0
+      ? ('Pausa: ' + (holdMs / 1000) + 's — toca para cambiar')
+      : 'Añadir pausa en este fotograma', holdMs > 0 ? '#cc2200' : 'var(--gray-600)');
+    if (holdMs > 0) {
+      holdBtn.style.background = '#ffeeeb';
+      holdBtn.style.border = '1px solid #cc2200';
+    }
+    holdBtn.addEventListener('click', e => { e.stopPropagation(); _gcpShowFrameHoldModal(b.fi); });
+    cluster.appendChild(holdBtn);
+
+    colActionsContent.appendChild(cluster);
+
+    // ── ⟳ Interpolación — en el HUECO entre esta columna y la siguiente (o
+    // tras la última, para la interpolación circular). Afecta a TODAS las
+    // capas por igual (ver _gcpDoInterpolate) — antes se repetía, redundante,
+    // en cada fila; ahora aparece una sola vez, igual que ⧉/✕/T.
+    const isLastBp = i === bp.length - 1;
+    if (isLastBp && bp.length <= 1) return; // sin al menos 2 columnas no hay "hueco" que interpolar
+    const nextLeftPx = isLastBp ? (b.px + cardW + 24) : bp[i + 1].px;
+    const gapAnchor  = isLastBp ? (b.px + cardW + 12) : (b.px + cardW + nextLeftPx) / 2;
+
+    let _interpCount, _hasInterp, _isCircular = false, _interpFi = b.fi;
+    if (isLastBp) {
+      _interpCount = window._gcpLayers[0]?._frames
+        ? window._gcpLayers[0]._frames.slice(b.fi + 1).filter(f => f?._circular).length
+        : 0;
+      _hasInterp  = _interpCount > 0;
+      _isCircular = true;
+    } else {
+      _interpCount = bp[i + 1].fi - b.fi - 1;
+      _hasInterp   = _interpCount > 0;
+    }
+    const _hasBlur = _hasInterp && window._gcpLayers.some(l =>
+      l._frames && l._frames[b.fi + 1]?._interp && l._frames[b.fi + 1]?._blur);
+
+    const interpBtn = document.createElement('button');
+    interpBtn.title = _hasInterp
+      ? _interpCount + ' frame' + (_interpCount > 1 ? 's' : '') + ' interpolado' + (_interpCount > 1 ? 's' : '') +
+        (_hasBlur ? ' + blur' : '') + ' — pulsa para opciones'
+      : 'Añadir interpolación (todas las capas)';
+    interpBtn.style.cssText = [
+      'position:absolute', 'top:2px', 'left:' + Math.round(gapAnchor) + 'px',
+      'transform:translateX(-50%)',
+      'width:20px', 'height:20px', 'border-radius:50%',
+      'border:1.5px ' + (_hasInterp ? (_hasBlur ? 'dashed' : 'solid') : 'solid') +
+        ' ' + (_hasInterp ? '#cc2200' : 'var(--gray-300)'),
+      'background:' + (_hasInterp ? '#ffeeeb' : 'var(--white)'),
+      'color:' + (_hasInterp ? '#cc2200' : 'var(--gray-400)'),
+      'font-size:9px', 'line-height:1', 'font-weight:900',
+      'cursor:pointer',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'padding:0',
+      'transition:border-color .15s, color .15s, background .15s',
+    ].join(';');
+    interpBtn.textContent = '⟳';
+
+    if (!_hasInterp) {
+      interpBtn.addEventListener('pointerenter', () => {
+        interpBtn.style.borderColor = 'var(--black)';
+        interpBtn.style.color = 'var(--black)';
+        interpBtn.style.background = 'var(--gray-100)';
+      });
+      interpBtn.addEventListener('pointerleave', () => {
+        interpBtn.style.borderColor = 'var(--gray-300)';
+        interpBtn.style.color = 'var(--gray-400)';
+        interpBtn.style.background = 'var(--white)';
+      });
+      interpBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (_isCircular) _gcpShowCircularInterpModal(_interpFi);
+        else _gcpShowInterpModal(_interpFi, window._gcpLayers.length - 1);
+      });
+    } else {
+      interpBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        _gcpShowInterpMenu(interpBtn, _interpFi, _interpCount, window._gcpLayers.length - 1);
+      });
+    }
+
+    colActionsContent.appendChild(interpBtn);
+  });
+}
+
+// Alinea la punta de ▲ (arriba) y ▼ (abajo) de cada fila con el borde superior
+// e inferior REAL de las tarjetas de frame (que quedan centradas dentro de la
+// fila de 190px, con un hueco arriba/abajo que depende de su contenido — no es
+// un valor fijo conocido de antemano, así que se mide en el DOM ya construido).
+function _gcpAlignRowArrows(framesPane, leftPane) {
+  const firstRow  = framesPane.querySelector('.gcp-layer-scroll');
+  const firstCard = firstRow ? firstRow.querySelector('.ed-page-card') : null;
+  if (!firstRow || !firstCard) return;
+  const rowRect  = firstRow.getBoundingClientRect();
+  const cardRect = firstCard.getBoundingClientRect();
+  const topGap    = Math.max(0, Math.round(cardRect.top - rowRect.top));
+  const bottomGap = Math.max(0, Math.round(rowRect.bottom - cardRect.bottom));
+  // padding-top empuja ▲ hasta el borde superior de la tarjeta; padding-bottom
+  // empuja ▼ hasta su borde inferior — justify-content:space-between en
+  // leftCol hace el resto (primer/último hijo pegados a los bordes del hueco
+  // ya reducido por este padding).
+  leftPane.querySelectorAll('[data-uid]').forEach(col => {
+    col.style.paddingTop    = topGap + 'px';
+    col.style.paddingBottom = bottomGap + 'px';
+  });
+}
+
+// Iguala la altura de leftPane/samplePane (y por tanto sus separadores
+// verticales) a la de framesPane — que es quien de verdad renderiza todas las
+// filas correctamente — más la altura visible de scrollWrap (por si la ventana
+// de la Matriz es más alta que el contenido, con pocos objetos). Se fija
+// altura EXPLÍCITA, no min-height: depender de que leftPane/samplePane
+// calculen su propia altura "de forma natural" a partir de sus propias filas
+// resultó no ser fiable (se quedaban cortas a partir de la 2ª fila), así que
+// se les da directamente el número que ya sabemos correcto.
+function _gcpStretchSidePanes(scrollWrap, leftPane, samplePane, framesPane) {
+  const h = Math.max(framesPane.scrollHeight, scrollWrap.clientHeight || 0);
+  if (!h) return;
+  leftPane.style.height   = h + 'px';
+  samplePane.style.height = h + 'px';
 }
 
 // Dado un punto en "tiempo-frame" (puede ser fraccional — p.ej. 3.5 = a mitad
@@ -33137,9 +33411,52 @@ function _gcpPxAtFrameTime(bp, ft) {
   return last.px + (ft - last.fi) * perFrame;
 }
 
+// Duración real (ms) de un frame concreto: su pausa (T) si tiene, si no la
+// velocidad normal de "Comportamiento". Mismo criterio que usan ya los 3
+// exportadores (APNG/GIF/MP4) y la previsualización interna — aquí se usa
+// para que la REGLA muestre el salto de tiempo real, no uno uniforme.
+function _gcpFrameDurationMs(fi, delayMs) {
+  return (window._gcpFrameHolds && window._gcpFrameHolds[fi]) || delayMs;
+}
+
+// Tiempo acumulado (ms) al INICIO de cada frame, 0..totalFrames — cumTime[0]=0,
+// cumTime[totalFrames] = duración total de la animación completa.
+function _gcpBuildCumTimeMs(totalFrames, delayMs) {
+  const cum = [0];
+  for (let fi = 0; fi < totalFrames; fi++) {
+    cum.push(cum[fi] + _gcpFrameDurationMs(fi, delayMs));
+  }
+  return cum;
+}
+
+// Dado un instante real tMs, devuelve la posición equivalente en "tiempo-frame"
+// (fraccional, para pasar a _gcpPxAtFrameTime) — recorriendo cumTime en vez de
+// asumir que cada frame dura lo mismo. Con pausas (T), un mismo intervalo de
+// tiempo real puede caer dentro de un único frame que dura mucho más que los demás.
+function _gcpFrameTimeAtMs(tMs, cumTime, delayMs) {
+  const totalFrames = cumTime.length - 1;
+  if (totalFrames <= 0) return 0;
+  if (tMs <= 0) return 0;
+  if (tMs >= cumTime[totalFrames]) {
+    // Más allá del final: extrapolar con la velocidad normal.
+    return totalFrames + (tMs - cumTime[totalFrames]) / delayMs;
+  }
+  for (let fi = 0; fi < totalFrames; fi++) {
+    if (tMs >= cumTime[fi] && tMs < cumTime[fi + 1]) {
+      const dur = cumTime[fi + 1] - cumTime[fi];
+      const t = dur > 0 ? (tMs - cumTime[fi]) / dur : 0;
+      return fi + t;
+    }
+  }
+  return totalFrames;
+}
+
 // Redibuja solo las marcas de la regla usando los breakpoints ya medidos y la
-// velocidad de reproducción ACTUAL (window._gcpFrameDelay). No vuelve a medir
-// el DOM — por eso puede llamarse en cada cambio de velocidad sin reconstruir
+// velocidad de reproducción ACTUAL (window._gcpFrameDelay), teniendo en cuenta
+// las pausas por frame (window._gcpFrameHolds) para que el salto de tiempo
+// real se refleje correctamente — un frame con pausa de 3s ocupa 3s de regla,
+// no la fracción uniforme que le tocaría sin pausa. No vuelve a medir el DOM
+// — por eso puede llamarse en cada cambio de velocidad/pausa sin reconstruir
 // toda la matriz. Ver el gancho en _gcpApplyBehaviorVal (modo 'vel').
 function _gcpDrawRulerMarks() {
   const rulerContent = document.getElementById('gcpRulerContent');
@@ -33150,8 +33467,9 @@ function _gcpDrawRulerMarks() {
 
   const delayMs = window._gcpFrameDelay || 100;
   const totalFrames = _gcpGetTotalFrames();
-  const totalSeconds = (totalFrames * delayMs) / 1000;
-  const framesPerSec = 1000 / delayMs; // posición en "tiempo-frame" que equivale a 1 segundo
+  const cumTime = _gcpBuildCumTimeMs(totalFrames, delayMs);
+  const totalMs = cumTime[totalFrames];
+  const totalSeconds = totalMs / 1000;
   rulerContent.style.width = (window._gcpRulerContentWidth || 0) + 'px';
 
   const stepSec = 0.1;
@@ -33164,7 +33482,7 @@ function _gcpDrawRulerMarks() {
   for (let m = 0; m <= totalMarks; m++) {
     const tSec = m * stepSec;
     const isWhole = (m % 10) === 0;
-    const ft = tSec * framesPerSec;
+    const ft = _gcpFrameTimeAtMs(tSec * 1000, cumTime, delayMs);
     const px = _gcpPxAtFrameTime(bp, ft);
 
     if ((px - _lastTickPx) < MIN_TICK_GAP_PX) continue; // demasiado juntas: omitir marca
@@ -33203,6 +33521,41 @@ function _gcpSbDiag() {
   _edSbStartCapture(); // activar captura global si no está activa
   const lines = [];
   const L = s => lines.push(s);
+
+  L('── Subir/bajar capas (Matriz) ──');
+  L('window._gcpLayers.length: ' + (window._gcpLayers ? window._gcpLayers.length : 'null'));
+  L('Orden ACTUAL (índice 0 = fondo) — formato índice:uid:nombre — el UID es único por objeto, el nombre puede repetirse: ' + (window._gcpLayers || []).map((l,i) => i+':'+((l&&l._gcpUid!=null)?l._gcpUid:'?')+':'+((l&&(l._gcpName||l.type))||'?')).join(' | '));
+  L('window._gcpSelIdx: ' + window._gcpSelIdx);
+  L('_gcpFramesBarRebuilding: ' + window._gcpFramesBarRebuilding);
+  const _bar = document.getElementById('gcpFramesBar');
+  L('#gcpFramesBar display: ' + (_bar ? _bar.style.display : 'NO ELEMENT'));
+  L('Log de los últimos _gcpAnimatedSwap (más reciente al final):');
+  (window._gcpSwapLog || []).forEach(e => {
+    L('  [' + e.t + '] swap(' + e.idxA + ',' + e.idxB + ')  UIDs antes=[' + e.before + ']  UIDs después=[' + e.after + ']  scroll(L,T) antes=' + e.scrollBefore + '  justo tras reconstruir=' + e.scrollRightAfterRebuild);
+  });
+  if (!window._gcpSwapLog || !window._gcpSwapLog.length) L('  (todavía no se ha pulsado ▲/▼ en esta sesión)');
+
+  L('── Columnas / pausas (T) ──');
+  L('_gcpGetTotalFrames(): ' + (typeof _gcpGetTotalFrames === 'function' ? _gcpGetTotalFrames() : 'n/d'));
+  L('Por capa, longitud de _frames (¿todas igual?) — índice:uid: ' + (window._gcpLayers || []).map((l,i) => i+':'+((l&&l._gcpUid!=null)?l._gcpUid:'?')+'='+((l&&l._frames)?l._frames.length:'null')).join(' | '));
+  L('window._gcpFrameHolds (índice=ms): ' + JSON.stringify(window._gcpFrameHolds || []));
+  L('window._gcpRulerBreakpoints (fila de referencia = la primera en el DOM, la capa MÁS ARRIBA visualmente):');
+  (window._gcpRulerBreakpoints || []).forEach((b, i) => {
+    L('  cluster #' + (i+1) + ' (contando desde la izquierda): fi=' + b.fi + '  px=' + Math.round(b.px) + '  ancho=' + Math.round(b.w||0));
+  });
+  if (!window._gcpRulerBreakpoints || !window._gcpRulerBreakpoints.length) L('  (sin datos — abre la Matriz primero)');
+
+  L('── Navegación por frame (toco tarjeta → ¿imagen correcta?) ──');
+  L('window._gcpGlobalFrameIdx (frame activo ahora mismo): ' + window._gcpGlobalFrameIdx);
+  L('window._gcpSelIdx (capa seleccionada): ' + window._gcpSelIdx);
+  (window._gcpLayers || []).forEach((la, i) => {
+    L('  capa idx=' + i + ' uid=' + (la._gcpUid != null ? la._gcpUid : '?'));
+    L('    posiciones x,y guardadas por frame: ' + (la._frames || []).map((s, fi) => fi + ':' + (s ? ('(' + (+s.x).toFixed(3) + ',' + (+s.y).toFixed(3) + ')') : 'null')).join(' '));
+  });
+  L('Posición APLICADA ahora mismo en cada capa (la.x, la.y — lo que se ve en el lienzo):');
+  (window._gcpLayers || []).forEach((la, i) => {
+    L('  capa idx=' + i + ' uid=' + (la._gcpUid != null ? la._gcpUid : '?') + '  x=' + (+la.x).toFixed(3) + ' y=' + (+la.y).toFixed(3));
+  });
 
   L('── Estado scrollbars en GCP ──');
   L('_edIsTouch: ' + window._edIsTouch);
@@ -33964,6 +34317,7 @@ function gcpOpen(edLayerIdx) {
   window._gcpMultiDragging = window._gcpMultiResizing = window._gcpMultiRotating = false;
   window._gcpHistory = []; window._gcpHistoryIdx = -1;
   window._gcpFramesScrollLeft = 0; window._gcpFramesScrollTop = 0;
+  window._gcpFrameHolds = [];
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null; _gcpRuleNodeId = 0;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
@@ -34058,6 +34412,7 @@ function gcpOpen(edLayerIdx) {
     const _gl = edLayers[window._gcpEdLayerIdx];
     if (_gl) {
       if (_gl._gcpFrameDelay   != null) window._gcpFrameDelay   = _gl._gcpFrameDelay;
+      window._gcpFrameHolds = Array.isArray(_gl._gcpFrameHolds) ? _gl._gcpFrameHolds.slice() : [];
       if (_gl._gcpRepeatCount  != null) window._gcpRepeatCount  = _gl._gcpRepeatCount;
       if (_gl._gcpStopAtEnd    != null) window._gcpStopAtEnd    = !!_gl._gcpStopAtEnd;
       if (_gl._gcpRestartDelay != null) window._gcpRestartDelay = _gl._gcpRestartDelay;
@@ -34708,6 +35063,7 @@ function _gcpSaveToLib(onDone) {
     existingLayer._animReady=false; existingLayer._animFrames=null;
     // animKey se preserva si ya existía
     existingLayer._gcpFrameDelay   = window._gcpFrameDelay;
+    existingLayer._gcpFrameHolds   = window._gcpFrameHolds.slice();
     existingLayer._gcpRepeatCount  = window._gcpRepeatCount;
     existingLayer._gcpStopAtEnd    = window._gcpStopAtEnd;
     existingLayer._gcpRestartDelay = window._gcpRestartDelay;
@@ -34760,6 +35116,7 @@ function _gcpSaveToLib(onDone) {
       la._gcpRefX = _gcpCenterX; la._gcpRefY = _gcpCenterY;
       la._gcpRefW = _gcpNormW;   la._gcpRefH = _gcpNormH;
       la._gcpFrameDelay   = window._gcpFrameDelay;
+      la._gcpFrameHolds   = window._gcpFrameHolds.slice();
       la._gcpRepeatCount  = window._gcpRepeatCount;
       la._gcpStopAtEnd    = window._gcpStopAtEnd;
       la._gcpRestartDelay = window._gcpRestartDelay;
@@ -35158,7 +35515,12 @@ async function _gcpDownloadApng() {
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
 
   const frameDelay = (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
-  const dels = new Array(totalFrames).fill(totalFrames > 1 ? frameDelay : 0);
+  // Array de delays por frame: usa la pausa fijada con el botón T (window._gcpFrameHolds)
+  // cuando exista para ese índice global, si no la velocidad normal de "Comportamiento".
+  // UPNG.encode ya acepta un array aquí (dels) — no hay que inventar nada nuevo.
+  const dels = totalFrames > 1
+    ? Array.from({length: totalFrames}, (_, fi) => (window._gcpFrameHolds && window._gcpFrameHolds[fi]) || frameDelay)
+    : new Array(totalFrames).fill(0);
 
   try {
     // forbidPlte=true: fuerza RGBA32 puro (sin paleta), necesario para
@@ -35403,7 +35765,6 @@ async function _gcpDownloadGif() {
 
   // delay en centésimas de segundo (GIF usa 1/100s)
   const frameDelay = window._gcpFrameDelay != null ? window._gcpFrameDelay : 100;
-  const gifDelay = Math.max(2, Math.round(frameDelay / 10)); // ms → cs
   const loopCount = (window._gcpStopAtEnd || window._gcpRepeatCount === 1) ? 1
                   : (window._gcpRepeatCount > 0 ? window._gcpRepeatCount : 0);
 
@@ -35411,7 +35772,11 @@ async function _gcpDownloadGif() {
     const bufSize = cropW * cropH * totalFrames * 5 + 1024;
     const buf = new Uint8Array(bufSize);
     const gw = new GW(buf, cropW, cropH, {loop: loopCount, palette: palette});
-    indexFrames.forEach(function(pixels) {
+    indexFrames.forEach(function(pixels, fi) {
+      // Pausa fijada con el botón T (window._gcpFrameHolds) para esta columna, si existe;
+      // si no, la velocidad normal de "Comportamiento". GIF trabaja en centésimas (cs).
+      const _msFi = (window._gcpFrameHolds && window._gcpFrameHolds[fi]) || frameDelay;
+      const gifDelay = Math.max(2, Math.round(_msFi / 10)); // ms → cs
       gw.addFrame(0, 0, cropW, cropH, pixels, {
         delay: gifDelay,
         palette: palette,
@@ -35515,8 +35880,13 @@ async function _gcpDownloadMp4() {
   const cropH = makeEven(Math.min(wsH, maxY + pad + 1) - cropY);
 
   const frameDelay = (window._gcpFrameDelay != null ? window._gcpFrameDelay : 100);
-  // microsegundos por frame (WebCodecs usa µs)
-  const frameDurationUs = frameDelay * 1000;
+  // microsegundos por frame (WebCodecs usa µs) — por frame individual: respeta la
+  // pausa fijada con el botón T (window._gcpFrameHolds) donde exista, si no la
+  // velocidad normal. framerate de configuración: solo una estimación media para
+  // el encoder (afecta a parámetros internos, no al timestamp real de cada frame).
+  const frameDurationUsArr = Array.from({length: totalFrames},
+    (_, fi) => ((window._gcpFrameHolds && window._gcpFrameHolds[fi]) || frameDelay) * 1000);
+  const frameDurationUs = frameDurationUsArr[0] || (frameDelay * 1000); // usado solo como estimación media
 
   try {
     // Verificar soporte H.264 en este dispositivo
@@ -35556,7 +35926,9 @@ async function _gcpDownloadMp4() {
       framerate: Math.round(1000 / frameDelay)
     });
 
-    // Codificar cada frame
+    // Codificar cada frame — timestamp ACUMULATIVO (no fi*duración uniforme):
+    // con pausas por frame, cada frame puede durar algo distinto al anterior.
+    let _mp4Ts = 0;
     for (let fi = 0; fi < renderedFrames.length; fi++) {
       const fc = renderedFrames[fi];
       // Crear canvas recortado
@@ -35564,10 +35936,12 @@ async function _gcpDownloadMp4() {
       cropped.width = cropW; cropped.height = cropH;
       cropped.getContext('2d').drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
+      const _durUs = frameDurationUsArr[fi];
       const frame = new VideoFrame(cropped, {
-        timestamp: fi * frameDurationUs,
-        duration: frameDurationUs
+        timestamp: _mp4Ts,
+        duration: _durUs
       });
+      _mp4Ts += _durUs;
       const isKey = fi === 0 || fi % 30 === 0;
       encoder.encode(frame, { keyFrame: isKey });
       frame.close();

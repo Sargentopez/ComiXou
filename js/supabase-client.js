@@ -276,12 +276,17 @@ const SupabaseClient = (() => {
   window._sbAnimIdbSave = _sbAnimIdbSave;
   window._sbAnimIdbLoad = _sbAnimIdbLoad;
 
-  // Reconstruye un APNG desde array de PNG dataUrls individuales usando UPNG
-  async function _buildApngFromFrames(frameUrls, delayMs) {
+  // Reconstruye un APNG desde array de PNG dataUrls individuales usando UPNG.
+  // holds (opcional): array de pausas por frame en ms (window._gcpFrameHolds /
+  // la._gcpFrameHolds) — si existe un valor para un índice, se usa en vez del
+  // delay uniforme. Mismo criterio que _gcpDownloadApng en editor.js.
+  async function _buildApngFromFrames(frameUrls, delayMs, holds) {
     if (typeof UPNG === 'undefined' || !window.ApngDecoder || !frameUrls || !frameUrls.length) return null;
     try {
       const result = await window.ApngDecoder.decodeFrameArray(frameUrls, delayMs || 100);
-      const dels = new Array(result.frames.length).fill(delayMs || 100);
+      const dels = (holds && holds.length)
+        ? Array.from({length: result.frames.length}, (_, fi) => holds[fi] || delayMs || 100)
+        : new Array(result.frames.length).fill(delayMs || 100);
       const bufs = result.frames.map(f => f.imageData.data.buffer);
       const apngBuf = UPNG.encode(bufs, result.width, result.height, 0, dels, true);
       const blob = new Blob([apngBuf], {type: 'image/png'});
@@ -491,14 +496,14 @@ const SupabaseClient = (() => {
               if (_animData) {
                 if (typeof _animData === 'string') _apngDataUrl = _animData;
                 else if (Array.isArray(_animData) && _animData.length)
-                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100);
+                  _apngDataUrl = await _buildApngFromFrames(_animData, l._gcpFrameDelay || 100, l._gcpFrameHolds);
               }
             }
             // 2. Fallback: _apngSrc en memoria (modo incógnito o descarga reciente)
             if (!_apngDataUrl && l._apngSrc) _apngDataUrl = l._apngSrc;
             // 3. Fallback: _pngFrames en memoria
             if (!_apngDataUrl && l._pngFrames && l._pngFrames.length)
-              _apngDataUrl = await _buildApngFromFrames(l._pngFrames, l._gcpFrameDelay || 100);
+              _apngDataUrl = await _buildApngFromFrames(l._pngFrames, l._gcpFrameDelay || 100, l._gcpFrameHolds);
             if (_apngDataUrl) animUrl = await _animUpload(_bucketKey, _apngDataUrl);
           } catch(e) { console.warn('APNG upload error:', e.message); }
         }
@@ -1019,7 +1024,7 @@ const SupabaseClient = (() => {
               _apngDataUrl = entry.apngSrc;
             } else if (entry.pngFrames && entry.pngFrames.length > 1) {
               // Array de frames individuales — reconstruir APNG
-              _apngDataUrl = await _buildApngFromFrames(entry.pngFrames, entry.gcpFrameDelay || 100);
+              _apngDataUrl = await _buildApngFromFrames(entry.pngFrames, entry.gcpFrameDelay || 100, entry.gcpFrameHolds);
             }
             if (_apngDataUrl) {
               const _bucketKey = 'bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);

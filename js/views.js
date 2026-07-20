@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v34.67</footer>
+    <footer class="app-version">v34.82</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -860,10 +860,10 @@ Router.register('editor', {
           <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
           <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
-          <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
-               para volver a mostrarlo, descomentar la línea siguiente.
+          <!-- Botón de diagnóstico — reactivado temporalmente para depurar el bug
+               de subir/bajar capas en la Matriz (a petición de Alberto: reusar
+               este, no crear uno nuevo). Volver a comentar cuando se resuelva. -->
           <button class="ed-undo-redo-btn" id="gcpSbDiagBtn" title="Diagnóstico scrollbars">🩺</button>
-          -->
           <div class="ed-menu-sep"></div>
           <!-- Matriz (antes "Frames") -->
           <button class="ed-menu-btn" id="gcpFramesToggleBtn">Matriz ▾</button>

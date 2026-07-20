@@ -753,6 +753,7 @@ window.ApngDecoder = (function(){
   function decodeFrameArray(dataUrls, delay) {
     if (!dataUrls || !dataUrls.length) return Promise.reject(new Error('sin frames'));
     var results = [], W = 0, H = 0;
+    var _delayFor = function(i) { return Array.isArray(delay) ? (delay[i] || 100) : (delay || 100); };
     function loadOne(i) {
       if (i >= dataUrls.length) return Promise.resolve({frames:results,width:W,height:H});
       return new Promise(function(res) {
@@ -761,11 +762,11 @@ window.ApngDecoder = (function(){
           if (!W) { W=img.naturalWidth; H=img.naturalHeight; }
           var oc=document.createElement('canvas'); oc.width=W; oc.height=H;
           oc.getContext('2d').drawImage(img,0,0);
-          results[i]={imageData:oc.getContext('2d').getImageData(0,0,W,H),delay:delay||100};
+          results[i]={imageData:oc.getContext('2d').getImageData(0,0,W,H),delay:_delayFor(i)};
           res();
         };
         img.onerror=function(){
-          results[i]={imageData:new ImageData(W||1,H||1),delay:delay||100};
+          results[i]={imageData:new ImageData(W||1,H||1),delay:_delayFor(i)};
           res();
         };
         img.src=dataUrls[i];
