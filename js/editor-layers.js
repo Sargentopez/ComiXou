@@ -380,6 +380,11 @@ function _lyBuildEyeBtn(la) {
   const btn = document.createElement('button');
   btn.className = 'ed-layer-del';
   btn.title = la.hidden ? 'Mostrar capa' : 'Ocultar capa';
+  // Color negro explícito (no el gris de .ed-layer-del, compartido con
+  // candado/eliminar): con opacity:1 pero color gris claro, el ojo "visible"
+  // se percibe como atenuado aunque técnicamente esté al 100% — a petición
+  // de Alberto, que el ojo se vea realmente sólido cuando está visible.
+  btn.style.color = 'var(--black)';
   btn.style.opacity = la.hidden ? '0.5' : '1';
   btn.textContent = '👁';
   btn.addEventListener('pointerup', e => {
@@ -515,6 +520,7 @@ function _lyBuildGroupItem(groupId, members) {
   const eyeBtn = document.createElement('button');
   eyeBtn.className = 'ed-layer-del';
   eyeBtn.title = _allHidden ? 'Mostrar grupo' : 'Ocultar grupo';
+  eyeBtn.style.color = 'var(--black)';
   eyeBtn.style.opacity = _allHidden ? '0.5' : '1';
   eyeBtn.textContent = '👁';
   eyeBtn.addEventListener('pointerup', e => {
@@ -808,6 +814,7 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   const eyeBtn = document.createElement('button');
   eyeBtn.className = 'ed-layer-del';
   eyeBtn.textContent = '👁';
+  eyeBtn.style.color = 'var(--black)';
   eyeBtn.style.opacity = la.hidden ? '0.5' : '1';
   eyeBtn.title = la.hidden ? 'Mostrar' : 'Ocultar';
   eyeBtn.addEventListener('pointerup', e => {
@@ -897,6 +904,7 @@ function _lyBuildFillSubRowOld(la, realIdx) {
   const eyeBtn = document.createElement('button');
   eyeBtn.className = 'ed-layer-del';
   eyeBtn.textContent = '👁';
+  eyeBtn.style.color = 'var(--black)';
   eyeBtn.style.opacity = la.hidden ? '0.5' : '1';
   eyeBtn.title = la.hidden ? 'Mostrar relleno' : 'Ocultar relleno';
   eyeBtn.addEventListener('pointerup', e => {
@@ -1301,6 +1309,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
       return _subs.length > 0 && _subs.every(l => l.hidden);
     };
     _eyeBtn.title  = _eyeAllHidden() ? 'Mostrar grupo' : 'Ocultar grupo';
+    _eyeBtn.style.color = 'var(--black)';
     _eyeBtn.style.opacity = _eyeAllHidden() ? '0.5' : '1';
     _eyeBtn.addEventListener('pointerup', e => {
       e.stopPropagation();

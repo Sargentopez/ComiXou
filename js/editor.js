@@ -33274,7 +33274,7 @@ function _gcpUpdateFramesBar() {
     eyeBtn.textContent = '👁';
     eyeBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:6px 10px;' +
       'border-radius:6px;font-size:16px;line-height:1;transition:background .15s;flex-shrink:0;' +
-      'opacity:' + (_allHidden ? '0.4' : '1') + ';';
+      'color:var(--black);opacity:' + (_allHidden ? '0.5' : '1') + ';';
     eyeBtn.addEventListener('pointerenter', () => { eyeBtn.style.background = 'var(--gray-200)'; });
     eyeBtn.addEventListener('pointerleave', () => { eyeBtn.style.background = 'none'; });
     eyeBtn.addEventListener('click', e => {
@@ -33399,7 +33399,12 @@ function _gcpUpdateFramesBar() {
         const showBtn = document.createElement('button');
         showBtn.className = 'ed-page-action-btn';
         showBtn.title = 'Añadir el objeto en este fotograma';
-        showBtn.style.opacity = '0.4';
+        // El objeto NO existe en este frame = estado "invisible" → 50% (mismo
+        // criterio que el resto de ojos de la app). Color negro explícito, no
+        // el gris de .ed-page-action-btn: con solo opacity, el ojo "visible"
+        // se percibía como atenuado por heredar un gris claro de por sí.
+        showBtn.style.color = 'var(--black)';
+        showBtn.style.opacity = '0.5';
         showBtn.textContent = '👁';
         showBtn.addEventListener('click', e => {
           e.stopPropagation();
@@ -33449,6 +33454,12 @@ function _gcpUpdateFramesBar() {
         const eyeBtn = document.createElement('button');
         eyeBtn.className = 'ed-page-action-btn';
         eyeBtn.title = 'Quitar el objeto de este fotograma';
+        // El objeto SÍ existe en este frame = estado "visible" → 100%, con
+        // color negro explícito (no el gris de .ed-page-action-btn, que sin
+        // esto hacía que el ojo se viera atenuado aunque su opacidad ya
+        // fuera 1 — bug reportado por Alberto).
+        eyeBtn.style.color = 'var(--black)';
+        eyeBtn.style.opacity = '1';
         eyeBtn.textContent = '👁';
         eyeBtn.addEventListener('click', e => {
           e.stopPropagation();
