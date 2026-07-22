@@ -105,7 +105,7 @@ async function renderUsers(panel) {
     const SB_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
     const res = await fetch(
       `${SB_URL}/rest/v1/authors?select=id,username,email,role&order=role.asc,username.asc`,
-      { headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` } }
+      { headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` }, cache: 'no-store' }
     );
     if (res.ok) list = await res.json();
   } catch (_) {}
@@ -206,7 +206,7 @@ function buildAdminRow(comic, mode) {
     const _SB_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
     const _h = { 'apikey': _SB_KEY, 'Authorization': `Bearer ${_SB_KEY}` };
     const _get = async path => {
-      const r = await fetch(`${_SB_URL}/rest/v1/${path}`, { headers: _h });
+      const r = await fetch(`${_SB_URL}/rest/v1/${path}`, { headers: _h, cache: 'no-store' });
       return r.ok ? r.json() : [];
     };
     const _btn = row.querySelector(`#diag_${comic.id}`);

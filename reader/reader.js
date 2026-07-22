@@ -1050,7 +1050,10 @@ const _CZ_PFX = 'gz:';
 // Descarga frames PNG desde bucket 'anims'
 async function _animDownload(animUrl) {
   if (!animUrl) return null;
-  const r = await fetch(animUrl);
+  // cache:'no-store' — el lector se comparte por enlace y lo puede abrir
+  // cualquiera; si el navegador sirviera una copia cacheada de una
+  // animación ya editada, quien lea la obra vería la versión antigua.
+  const r = await fetch(animUrl, { cache: 'no-store' });
   if (!r.ok) return null;
   const blob = await r.blob();
   return new Promise(res => {
@@ -1211,7 +1214,8 @@ async function preloadImages() {
       // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
       if (layer.type === 'gif') {
         if (!layer._gifUrl) return Promise.resolve(null);
-        return fetch(layer._gifUrl)
+        // cache:'no-store' — mismo motivo que _animDownload arriba.
+        return fetch(layer._gifUrl, { cache: 'no-store' })
           .then(r => r.blob())
           .then(blob => new Promise(res => {
             const fr = new FileReader();
@@ -1307,9 +1311,14 @@ async function sbGet(path) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), _SB_TIMEOUT_MS);
   try {
+    // cache:'no-store' — sin esto el navegador puede servir una respuesta
+    // guardada de una visita anterior al mismo enlace, mostrando la obra
+    // con páginas/animaciones desactualizadas aunque el autor ya la haya
+    // vuelto a guardar.
     const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY },
       signal: controller.signal,
+      cache: 'no-store',
     });
     clearTimeout(timer);
     if (!res.ok) throw new Error('Supabase ' + res.status);
@@ -1336,6 +1345,7 @@ async function sbGetAuth(path) {
     const res = await fetch(SUPABASE_URL + '/rest/v1/' + path, {
       headers: _sbAuthHeaders(),
       signal: controller.signal,
+      cache: 'no-store',
     });
     clearTimeout(timer);
     if (!res.ok) throw new Error('Supabase ' + res.status);
@@ -1558,14 +1568,61 @@ function _readerGifTick() {
         } // end else (!_animMpSync)
       }
       // Frame sincronizado al path respetando el comportamiento de la animación
-function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd) {
+// ── Sincronización recorrido↔animación respetando pausas por frame (T) ──────
+// Mismo criterio que en editor.js (_edLayerCumTimeMs/_edFrameProgressAt/
+// _edApplyHoldFreeze) — implementación paralela propia del reader.
+function _rLayerCumTimeMs(layer, totalF) {
+  const cum = [0];
+  if (layer._gifFrames && layer._gifFrames.length) {
+    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((layer._gifFrames[fi] && layer._gifFrames[fi].delay) || 100));
+  } else {
+    const delayMs = layer._gcpFrameDelay || 100;
+    const holds = layer._gcpFrameHolds;
+    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((holds && holds[fi]) || delayMs));
+  }
+  return cum;
+}
+function _rFrameProgressAt(cumTime, totalF, tMs, holds) {
+  if (totalF <= 0) return 0;
+  const totalMs = cumTime[totalF];
+  if (tMs <= 0 || totalMs <= 0) return 0;
+  if (tMs >= totalMs) return totalF;
+  for (let fi = 0; fi < totalF; fi++) {
+    if (tMs >= cumTime[fi] && tMs < cumTime[fi + 1]) {
+      const holdMs = (holds && holds[fi]) || 0;
+      if (holdMs > 0) return fi;
+      const dur = cumTime[fi + 1] - cumTime[fi];
+      return fi + (dur > 0 ? (tMs - cumTime[fi]) / dur : 0);
+    }
+  }
+  return totalF;
+}
+function _rApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
+  if (!(cycles > 0) || totalF <= 0 || !cumTime) return pathFrac01;
+  const totalMs = cumTime[totalF];
+  if (!(totalMs > 0)) return pathFrac01;
+  const cycleUnits  = pathFrac01 * cycles;
+  const cycleIdx    = Math.floor(cycleUnits);
+  const fracInCycle = cycleUnits - cycleIdx;
+  const warped      = _rFrameProgressAt(cumTime, totalF, fracInCycle * totalMs, holds) / totalF;
+  return (cycleIdx + warped) / cycles;
+}
+
+function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds) {
   if (totalF < 1 || cycles <= 0) return 0;
   const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
   if (pathEnd === 'stop' && rawT >= _stopLimit && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
   const iterT = (pathEnd === 'stop') ? Math.min(rawT, _stopLimit - 1e-9)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
               : (rawT % 1);
-  const animProgress = iterT * cycles * totalF;
+  const cycleUnits  = iterT * cycles;
+  const cycleIdx    = Math.floor(cycleUnits);
+  const fracInCycle = cycleUnits - cycleIdx;
+  const _totalMsMp  = cumTime ? cumTime[totalF] : 0;
+  const fiInCycle   = (cumTime && _totalMsMp > 0)
+    ? _rFrameProgressAt(cumTime, totalF, fracInCycle * _totalMsMp, holds)
+    : fracInCycle * totalF;
+  const animProgress = cycleIdx * totalF + fiInCycle;
   if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
   if (repeatCnt > 0) {
     const _done = (pathEnd === 'stop' && rawT >= _stopLimit)
@@ -1602,49 +1659,48 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
           _mpTotalPx += Math.hypot((_mpPts[_i].x - _mpPts[_i-1].x) * _mpPw,
                                    (_mpPts[_i].y - _mpPts[_i-1].y) * _mpPh);
         if (_mpTotalPx < 1) _mpTotalPx = 1;
-        // Calcular duración del ciclo de animación (ms)
+        // Calcular duración del ciclo de animación (ms) — usa el tiempo acumulado
+        // real (_rLayerCumTimeMs), que respeta las pausas por frame (T); antes
+        // multiplicaba frames × delay uniforme, ignorándolas.
         // _gcpLayersData.length = nº de capas GCP (NO de frames) → no usar para duración
-        const _mpCycleDurMs = (layer._gifFrames && layer._gifFrames.length)
-          ? layer._gifFrames.reduce((s, f) => s + (f.delay || 100), 0)
-          : (layer._gcpFramesData && layer._gcpFramesData[0] && layer._gcpFramesData[0].length)
-            ? layer._gcpFramesData[0].length * (layer._gcpFrameDelay || 100)
-            : (layer._pngFrames && layer._pngFrames.length)
-              ? layer._pngFrames.length * (layer._gcpFrameDelay || 100)
-              : 0;
+        let _mpTF = layer._gifFrames ? layer._gifFrames.length
+          : (layer._gcpFramesData && layer._gcpFramesData[0]) ? layer._gcpFramesData[0].length
+          : (layer._pngFrames ? layer._pngFrames.length
+          : (layer._animFrames ? layer._animFrames.length : 0));
+        const _mpCumTime = _mpTF > 0 ? _rLayerCumTimeMs(layer, _mpTF) : null;
+        const _mpCycleDurMs = _mpCumTime ? _mpCumTime[_mpTF] : 0;
         // Si es animada y tiene ciclos definidos → duración = ciclos × duración_ciclo
         // Si no → fallback a velocidad en px/s (comportamiento legado)
         const _mpRawT = (_mpCycleDurMs > 0 && layer._motionCycles != null)
           ? _mpElapsed / (layer._motionCycles * _mpCycleDurMs / 1000)
           : (_mpElapsed * (layer._motionSpeed || 100)) / _mpTotalPx;
         // ── Scrubbing: frame sincronizado al path, respetando comportamiento anim ────
-        if (_mpCycleDurMs > 0 && layer._motionCycles != null) {
-          const _mpTF = layer._gifFrames ? layer._gifFrames.length
-            : (layer._gcpFramesData && layer._gcpFramesData[0]) ? layer._gcpFramesData[0].length
-            : (layer._animFrames ? layer._animFrames.length : 0);
-          if (_mpTF > 0) {
-            const _mpSyncF = _rMpSyncFrame(
-              _mpRawT, layer._motionCycles, _mpTF,
-              layer._gcpStopAtEnd || false,
-              layer._gcpRepeatCount || 0,
-              layer._motionPathEnd || 'restart',
-              layer._gcpCircularEnd || false
-            );
-            if (layer._gifReady && layer._gifFrames && layer._gifOc && _mpSyncF !== layer._gifIdx) {
-              layer._gifIdx = _mpSyncF;
-              layer._gifOc.getContext('2d').putImageData(layer._gifFrames[_mpSyncF].imageData, 0, 0);
-              panelChanged = true;
-            }
-            if (layer._animReady && layer._animFrames && layer._animOc && _mpSyncF !== layer._animIdx) {
-              layer._animIdx = _mpSyncF;
-              layer._animOc.getContext('2d').putImageData(layer._animFrames[_mpSyncF].imageData, 0, 0);
-              panelChanged = true;
-            }
+        if (_mpCycleDurMs > 0 && layer._motionCycles != null && _mpTF > 0) {
+          const _mpSyncF = _rMpSyncFrame(
+            _mpRawT, layer._motionCycles, _mpTF,
+            layer._gcpStopAtEnd || false,
+            layer._gcpRepeatCount || 0,
+            layer._motionPathEnd || 'restart',
+            layer._gcpCircularEnd || false,
+            _mpCumTime, layer._gcpFrameHolds
+          );
+          if (layer._gifReady && layer._gifFrames && layer._gifOc && _mpSyncF !== layer._gifIdx) {
+            layer._gifIdx = _mpSyncF;
+            layer._gifOc.getContext('2d').putImageData(layer._gifFrames[_mpSyncF].imageData, 0, 0);
+            panelChanged = true;
+          }
+          if (layer._animReady && layer._animFrames && layer._animOc && _mpSyncF !== layer._animIdx) {
+            layer._animIdx = _mpSyncF;
+            layer._animOc.getContext('2d').putImageData(layer._animFrames[_mpSyncF].imageData, 0, 0);
+            panelChanged = true;
           }
         }
         const _mpEndB    = layer._motionPathEnd   || 'restart';
         const _mpAcl     = layer._motionPathAccel || 'none';
         const _isSyncMR  = _mpCycleDurMs > 0 && layer._motionCycles != null;
         const _mpStopAtR = _isSyncMR && layer._gcpRepeatCount > 0 ? layer._gcpRepeatCount : 1;
+        // Congela la fracción cruda (antes de easing) durante las pausas por frame.
+        const _rFreeze = f => _mpCumTime ? _rApplyHoldFreeze(_mpCumTime, _mpTF, layer._gcpFrameHolds, layer._motionCycles, f) : f;
         let _mpPos = null, _mpRelT = 0;
         if (_mpEndB === 'stop') {
           if (layer._pathStopped) {
@@ -1659,13 +1715,14 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
               layer._animRestartAt = now + layer._gcpRestartDelay * 1000;
             }
           } else {
-            const _pFracR = _isSyncMR ? _mpRawT % 1 : _mpRawT;
+            const _pFracR = _isSyncMR ? _rFreeze(_mpRawT % 1) : _mpRawT;
             _mpRelT = _easeT(_pFracR,_mpAcl);
             _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
           }
         } else if (_mpEndB === 'rewind') {
           const _mpCycle = _mpRawT % 2;
-          const _mpPosT  = _mpCycle <= 1 ? _mpCycle : (2 - _mpCycle);
+          const _mpPosT0  = _mpCycle <= 1 ? _mpCycle : (2 - _mpCycle);
+          const _mpPosT   = _isSyncMR ? _rFreeze(_mpPosT0) : _mpPosT0;
           const _mpIsRwd  = _mpCycle > 1;
           const _mpRwdAcl = (_mpIsRwd && _mpAcl === 'start') ? 'end'
                           : (_mpIsRwd && _mpAcl === 'end')   ? 'start'
@@ -1673,8 +1730,8 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
           _mpRelT = _easeT(_mpPosT,_mpRwdAcl);
           _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
         } else {
-          // restart: fracción + easing
-          _mpRelT = _easeT(_mpRawT%1,_mpAcl);
+          // restart: fracción (congelada durante pausas) + easing
+          _mpRelT = _easeT(_isSyncMR ? _rFreeze(_mpRawT % 1) : (_mpRawT % 1), _mpAcl);
           _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
         }
         if (_mpPos) {

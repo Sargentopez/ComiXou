@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v34.82</footer>
+    <footer class="app-version">v34.90</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -301,11 +301,12 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico visible (edDiagBtn) — necesario ahora mismo para
-             diagnosticar el bug de biblioteca (window._mcLastEditDecision). La
-             función de reparación (_edRepairDuplicateIds, botón 🔧 Reparar IDs
-             dentro de este panel) sigue activa también. -->
+        <!-- Botón de diagnóstico oculto como comentario (a petición de Alberto).
+             Para volver a mostrarlo, descomentar la línea siguiente. La función de
+             reparación (_edRepairDuplicateIds, botón 🔧 Reparar IDs dentro de este
+             panel) sigue activa aunque el botón que abre el panel esté oculto.
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        -->
         <button class="ed-top-action" id="edSaveBtn" title="Guardar local">💾</button>
         <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
       </div>
@@ -860,10 +861,12 @@ Router.register('editor', {
           <button class="ed-undo-redo-btn" id="gcpUndoBtn" title="Deshacer" disabled>↩</button>
           <button class="ed-undo-redo-btn" id="gcpRedoBtn" title="Rehacer" disabled>↪</button>
           <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" title="Ver lienzo completo / workspace">🔍</button>
-          <!-- Botón de diagnóstico — reactivado temporalmente para depurar el bug
-               de subir/bajar capas en la Matriz (a petición de Alberto: reusar
-               este, no crear uno nuevo). Volver a comentar cuando se resuelva. -->
+          <!-- Botón de diagnóstico oculto de nuevo (T31) — se reactivó temporalmente
+               para depurar el bug de subir/bajar capas en la Matriz, ya resuelto y
+               confirmado por Alberto. Para volver a mostrarlo, descomentar la línea
+               siguiente.
           <button class="ed-undo-redo-btn" id="gcpSbDiagBtn" title="Diagnóstico scrollbars">🩺</button>
+          -->
           <div class="ed-menu-sep"></div>
           <!-- Matriz (antes "Frames") -->
           <button class="ed-menu-btn" id="gcpFramesToggleBtn">Matriz ▾</button>
@@ -990,11 +993,16 @@ Router.register('editor', {
             <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="strike" title="Tachado"><s>S</s></button>
             <div class="ed-menu-sep"></div>
             <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="heading1" title="Título">Título</button>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="quote" title="Cita">&quot; Cita</button>
-            <div class="ed-menu-sep"></div>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bullet" title="Lista de viñetas">• Lista</button>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="number" title="Lista numerada">1. Lista</button>
           </trix-toolbar>
+          <div class="ed-menu-sep"></div>
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdParrafo" title="Opciones de párrafo (cita y listas)">Párrafo ▾</button>
+            <div class="ed-dropdown" id="dd-tdParrafo">
+              <button type="button" class="ed-dropdown-item" data-value="quote">&quot; Cita</button>
+              <button type="button" class="ed-dropdown-item" data-value="bullet">• Lista de viñetas</button>
+              <button type="button" class="ed-dropdown-item" data-value="number">1. Lista numerada</button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
           <div class="ed-menu-item" style="position:relative">
             <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdFontFamily" title="Tipo de letra de la selección">Fuente ▾</button>
@@ -1046,7 +1054,7 @@ Router.register('editor', {
         <div id="tdPage" class="td-page">
           <div id="tdSelTopSpacer" aria-hidden="true"></div>
           <input type="hidden" id="tdHiddenInput">
-          <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe aquí el texto de tu obra…" virtualkeyboardpolicy="manual"></trix-editor>
+          <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" placeholder="Escribe o pega aquí tu texto" virtualkeyboardpolicy="manual"></trix-editor>
           <div id="tdPageBreaks" aria-hidden="true"></div>
         </div>
       </div>

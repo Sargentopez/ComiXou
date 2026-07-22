@@ -60,7 +60,7 @@ function _mcLoadThumb(supabaseId) {
   const _tok = _sess?.token || _MC_KEY;
   const _hdrs = { 'apikey': _MC_KEY, 'Authorization': `Bearer ${_tok}` };
   fetch(`${_MC_BASE}/panels?work_id=eq.${supabaseId}&order=panel_order.asc&limit=1&select=data_url`,
-    { headers: _hdrs })
+    { headers: _hdrs, cache: 'no-store' })
     .then(r => r.json())
     .then(rows => {
       const url = rows?.[0]?.data_url || '';
@@ -1413,7 +1413,7 @@ async function _mcCloudLoad() {
     const _authHdrs = { 'apikey': _MC_KEY, 'Authorization': `Bearer ${_token}`, 'Range': '0-999' };
     // Range: 0-999 garantiza hasta 1000 resultados (límite PostgREST por defecto)
     const works = await fetch(`${_MC_BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`,
-      { headers: _authHdrs })
+      { headers: _authHdrs, cache: 'no-store' })
       .then(r => r.json());
 
     if (!works || !works.length) {
@@ -1475,7 +1475,7 @@ async function _mcCloudLoad() {
       try {
         const firstPanels = await fetch(
           `${_MC_BASE}/panels?work_id=eq.${w.id}&order=panel_order.asc&limit=1&select=data_url`,
-          { headers: _authHdrs }
+          { headers: _authHdrs, cache: 'no-store' }
         ).then(r => r.json());
         const thumbDataUrl = firstPanels?.[0]?.data_url || '';
         if (thumbDataUrl) _mcThumbCache.set(w.id, thumbDataUrl);

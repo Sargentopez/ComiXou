@@ -535,6 +535,7 @@ function _tdInitOnce(){
   document.getElementById('tdPagePrev')?.addEventListener('click', () => { _tdAutoFollow = false; _tdScrollToViewPage(_tdViewCurPage - 1); });
   document.getElementById('tdPageNext')?.addEventListener('click', () => { _tdAutoFollow = false; _tdScrollToViewPage(_tdViewCurPage + 1); });
   _tdWireFontControls();
+  _tdWireParrafoControls();
 
   // Flechas del teclado (PC): pasan de página — SOLO cuando el cursor no está
   // escribiendo en el propio texto (si el trix-editor tiene el foco, las
@@ -1262,6 +1263,84 @@ function _tdWireFontControls(){
   _tdSyncFontMenuActive();
   _tdSyncAlignMenuActive();
   _tdSyncLineHeightMenuActive();
+}
+
+// Párrafo: agrupa en un desplegable "Cita" y las dos listas (bullet/number),
+// antes sueltos como botones planos dentro de <trix-toolbar>. Siguen siendo
+// los MISMOS atributos de bloque NATIVOS de Trix (quote/bullet/number) — no
+// se ha inventado nada nuevo — pero se controlan a mano desde FUERA de
+// <trix-toolbar>, igual que alineación/interlineado/fuente/tamaño, porque
+// edToggleMenu/edCloseMenus reubican el desplegable a <body> al abrirse (ver
+// más arriba) y el manejador nativo de clics de Trix está enganchado por
+// delegación de eventos SOLO dentro de <trix-toolbar> (this.element, ver
+// trix.umd.min.js: b("mousedown",{onElement:this.element,...})) — un botón
+// reubicado fuera de ese árbol dejaría de recibir el evento mientras el
+// menú estuviera abierto.
+// Se llama directamente a editor.activateAttribute()/deactivateAttribute(),
+// el mismo API público que usa el propio botón nativo de Trix por debajo
+// (toolbarDidToggleAttribute -> composition.toggleCurrentAttribute ->
+// setCurrentAttribute/removeCurrentAttribute — idéntico camino), así que el
+// resultado es exactamente el mismo que antes, exclusividad entre atributos
+// de bloque incluida (la gestiona Trix igual, sea cual sea la vía de
+// entrada). Verificado con un test real de Trix (Playwright) antes de
+// aplicar este cambio.
+function _tdWireParrafoControls(){
+  const editorEl = document.getElementById('tdEditor');
+  const btn = document.querySelector('[data-menu="tdParrafo"]');
+  if(!editorEl || !btn) return;
+
+  // Mismo truco "frozen" que fuente/tamaño/alineación: mantener la selección
+  // visualmente resaltada mientras el foco pasa del editor al menú.
+  const freeze   = () => { try{ editorEl.editor?.activateAttribute('frozen'); }catch(_e){} };
+  const unfreeze = () => { try{ editorEl.editor?.deactivateAttribute('frozen'); }catch(_e){} };
+  btn.addEventListener('pointerdown', freeze);
+
+  const finishChoice = () => {
+    unfreeze();
+    if(typeof edCloseMenus === 'function') edCloseMenus();
+    editorEl.focus();
+  };
+
+  // pointerdown (no click): mismo motivo documentado en fuente/tamaño/
+  // alineación — con "click" el editor ya habría perdido el foco/la
+  // selección real para cuando llega el evento.
+  document.querySelectorAll('#dd-tdParrafo .ed-dropdown-item').forEach(item => {
+    item.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      const attr = item.dataset.value; // quote | bullet | number
+      try{
+        const editor = editorEl.editor;
+        if(editor){
+          // Toggle simple: exactamente lo que hacía el botón nativo de Trix
+          // (ver toolbarDidToggleAttribute/toggleCurrentAttribute) — no se
+          // desactivan a mano los otros dos, Trix ya gestiona la
+          // exclusividad entre atributos de bloque igual que antes.
+          if(editor.attributeIsActive(attr)) editor.deactivateAttribute(attr);
+          else editor.activateAttribute(attr);
+        }
+      }catch(_e){}
+      finishChoice();
+      _tdSyncParrafoMenuActive();
+    });
+  });
+
+  editorEl.addEventListener('trix-selection-change', _tdSyncParrafoMenuActive);
+  _tdSyncParrafoMenuActive();
+}
+
+// Marca con ✓ (y fondo) cuál de las tres opciones de párrafo (cita/viñetas/
+// numerada) está activa en la posición actual del cursor — atributos de
+// BLOQUE nativos de Trix, se consultan con attributeIsActive (igual que
+// alineación/interlineado).
+function _tdSyncParrafoMenuActive(){
+  const editorEl = document.getElementById('tdEditor');
+  if(!editorEl || !editorEl.editor) return;
+  const editor = editorEl.editor;
+  document.querySelectorAll('#dd-tdParrafo .ed-dropdown-item').forEach(item => {
+    let isActive = false;
+    try{ isActive = editor.attributeIsActive(item.dataset.value); }catch(_e){}
+    item.classList.toggle('active', isActive);
+  });
 }
 
 // Marca con ✓ (y fondo, vía .ed-dropdown-item.active) la fuente/tamaño que

@@ -2671,6 +2671,7 @@ body.ed-scale-tablet .ed-fulloverlay-box {
    reservando su hueco siempre (aunque no esté activo, en transparente)
    para que el texto no salte de sitio al marcar/desmarcar. Acotado a los
    desplegables del Editor de textos — no toca el resto de menús de la app. */
+#dd-tdParrafo .ed-dropdown-item::before,
 #dd-tdFontFamily .ed-dropdown-item::before,
 #dd-tdFontSize .ed-dropdown-item::before,
 #dd-tdLineHeight .ed-dropdown-item::before,
@@ -2680,6 +2681,7 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   flex-shrink: 0;
   color: transparent;
 }
+#dd-tdParrafo .ed-dropdown-item.active::before,
 #dd-tdFontFamily .ed-dropdown-item.active::before,
 #dd-tdFontSize .ed-dropdown-item.active::before,
 #dd-tdLineHeight .ed-dropdown-item.active::before,

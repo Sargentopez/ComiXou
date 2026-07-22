@@ -8028,6 +8028,66 @@ function _edEaseT(t,accel){
   return t;
 }
 
+// ── Sincronización recorrido↔animación respetando pausas por frame (T) ──────
+// Cuando un frame tiene pausa (window._gcpFrameHolds en el editor GCP, guardada
+// en la capa como la._gcpFrameHolds), tanto el frame mostrado como la posición
+// en el recorrido deben quedarse fijos durante toda la pausa — el ancho fijo
+// de la tarjeta en la Matriz no guarda proporción con el tiempo real (ver el
+// mismo razonamiento aplicado a la regla de tiempo), y aquí el recorrido debe
+// "esperar" exactamente igual que la propia animación.
+
+// Tiempo acumulado (ms) de una capa GCP/APNG/GIF ya insertada (fuera de una
+// sesión activa del editor de animación) — mismo criterio que
+// _gcpBuildCumTimeMs, pero leyendo los datos ya guardados en la propia capa.
+// GIF: cada frame ya trae su propio delay real (formato GIF), se usa tal cual.
+function _edLayerCumTimeMs(la, totalF) {
+  const cum = [0];
+  if (la._gifFrames && la._gifFrames.length) {
+    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((la._gifFrames[fi] && la._gifFrames[fi].delay) || 100));
+  } else {
+    const delayMs = la._gcpFrameDelay || 100;
+    const holds = la._gcpFrameHolds;
+    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((holds && holds[fi]) || delayMs));
+  }
+  return cum;
+}
+
+// Posición fraccional dentro de la secuencia de frames en el instante tMs,
+// respetando pausas: dentro de un frame con pausa, se queda fija en su índice
+// entero (sin parte fraccional) durante toda la duración de la pausa — no
+// avanza hacia el siguiente frame hasta que esta termine.
+function _edFrameProgressAt(cumTime, totalF, tMs, holds) {
+  if (totalF <= 0) return 0;
+  const totalMs = cumTime[totalF];
+  if (tMs <= 0 || totalMs <= 0) return 0;
+  if (tMs >= totalMs) return totalF;
+  for (let fi = 0; fi < totalF; fi++) {
+    if (tMs >= cumTime[fi] && tMs < cumTime[fi + 1]) {
+      const holdMs = (holds && holds[fi]) || 0;
+      if (holdMs > 0) return fi; // congelado — sin parte fraccional durante la pausa
+      const dur = cumTime[fi + 1] - cumTime[fi];
+      return fi + (dur > 0 ? (tMs - cumTime[fi]) / dur : 0);
+    }
+  }
+  return totalF;
+}
+
+// Convierte una fracción 0-1 de UN traversal completo del recorrido (que
+// puede abarcar varios ciclos de animación) en la fracción equivalente
+// respetando pausas — se aplica a la fracción "cruda" de cada modo de fin de
+// recorrido (stop/rewind/restart) ANTES de la curva de aceleración, así el
+// recorrido se congela exactamente cuando la animación se detiene, y ambos
+// retoman el avance juntos al terminar la pausa.
+function _edApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
+  if (!(cycles > 0) || totalF <= 0 || !cumTime) return pathFrac01;
+  const totalMs = cumTime[totalF];
+  if (!(totalMs > 0)) return pathFrac01;
+  const cycleUnits  = pathFrac01 * cycles;
+  const cycleIdx    = Math.floor(cycleUnits);
+  const fracInCycle = cycleUnits - cycleIdx;
+  const warped      = _edFrameProgressAt(cumTime, totalF, fracInCycle * totalMs, holds) / totalF;
+  return (cycleIdx + warped) / cycles;
+}
 
 // Calcula el frame sincronizado al progreso del path, respetando el comportamiento
 // de la animación (stopAtEnd, repeatCount) — igual a lo que haría la animación
@@ -8038,7 +8098,9 @@ function _edEaseT(t,accel){
 //   stopAtEnd : detener en último frame tras 1 ciclo
 //   repeatCnt : detener en último frame tras N ciclos (0 = infinito)
 //   pathEnd   : comportamiento del path ('stop'|'restart'|'rewind')
-function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd) {
+//   cumTime, holds: tiempo acumulado y pausas por frame — si se omiten, se
+//   asume velocidad uniforme (comportamiento idéntico al de antes).
+function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds) {
   if (totalF < 1 || cycles <= 0) return 0;
   // En stop mode con repeticiones finitas, el path recorre repeatCnt veces (una por repetición).
   // _stopLimit indica hasta dónde puede llegar rawT antes de que todo se detenga.
@@ -8048,7 +8110,16 @@ function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, cir
   const iterT = (pathEnd === 'stop') ? Math.min(rawT, _stopLimit - 1e-9)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
               : (rawT % 1);  // restart: fracción dentro del traversal actual
-  const animProgress = iterT * cycles * totalF;
+  // Posición dentro del ciclo actual — respeta pausas por frame si se dispone
+  // de cumTime (ver _edFrameProgressAt); si no, reparto uniforme (como antes).
+  const cycleUnits  = iterT * cycles;
+  const cycleIdx    = Math.floor(cycleUnits);
+  const fracInCycle = cycleUnits - cycleIdx;
+  const _totalMsMp  = cumTime ? cumTime[totalF] : 0;
+  const fiInCycle   = (cumTime && _totalMsMp > 0)
+    ? _edFrameProgressAt(cumTime, totalF, fracInCycle * _totalMsMp, holds)
+    : fracInCycle * totalF;
+  const animProgress = cycleIdx * totalF + fiInCycle;
   if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
   if (repeatCnt > 0) {
     // Terminal: rawT llegó al límite (stop mode) o animProgress al total
@@ -8101,17 +8172,25 @@ function _edViewerMpTick() {
       ? _elapsed / (_vCycles * _vCycleDurMs / 1000)
       : (_elapsed * (l._motionSpeed || 100)) / _totalPx;
     // ── Scrubbing: derivar frame de animación del progreso del path ──────────
+    // cumTime/holds se calculan aquí (una vez) y se reutilizan más abajo para
+    // que la posición en el recorrido también respete las pausas por frame.
+    let _mpCumTime = null, _mpTotalF = 0;
     if (_vCycleDurMs > 0 && _vCycles > 0) {
       const _syncFs = (l._animFrames && l._animFrames.length) ? l._animFrames
                     : (l._frames    && l._frames.length)    ? l._frames
                     : null;
+      if (_syncFs) {
+        _mpTotalF = _syncFs.length;
+        _mpCumTime = _edLayerCumTimeMs(l, _mpTotalF);
+      }
       if (_syncFs && l._oc) {
         const _mpSyncF = _edMpSyncFrame(
-          _rawT, _vCycles, _syncFs.length,
+          _rawT, _vCycles, _mpTotalF,
           l._gcpStopAtEnd || false,
           l._gcpRepeatCount || 0,
           l._motionPathEnd || 'restart',
-          l._gcpCircularEnd || false
+          l._gcpCircularEnd || false,
+          _mpCumTime, l._gcpFrameHolds
         );
         if (_mpSyncF !== l._fIdx) {
           if (l._timer) { clearTimeout(l._timer); l._timer = null; }
@@ -8127,6 +8206,9 @@ function _edViewerMpTick() {
     // En sync mode con repeticiones finitas, el path se recorre una vez por repetición
     const _isSyncPth = _vCycleDurMs > 0 && _vCycles > 0;
     const _mpStopAt  = _isSyncPth && l._gcpRepeatCount > 0 ? l._gcpRepeatCount : 1;
+    // Congela la fracción cruda (antes de easing) durante las pausas por frame —
+    // ver _edApplyHoldFreeze. Sin cumTime (capa sin datos de frames) no hace nada.
+    const _freeze = f => _mpCumTime ? _edApplyHoldFreeze(_mpCumTime, _mpTotalF, l._gcpFrameHolds, _vCycles, f) : f;
     let rel = null, relT = 0;
     if (_mpEnd === 'stop') {
       if (l._pathStopped) { _mpUpdated = true; return; }
@@ -8147,13 +8229,14 @@ function _edViewerMpTick() {
         }
       } else {
         // En sync: fracción dentro del ciclo actual (el path reinicia cada repetición)
-        const _pFrac = _isSyncPth ? _rawT % 1 : _rawT;
+        const _pFrac = _isSyncPth ? _freeze(_rawT % 1) : _rawT;
         relT = _edEaseT(_pFrac,_mpAccel);
         rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
       }
     } else if (_mpEnd === 'rewind') {
       const _cycle = _rawT % 2;
-      const _posT  = _cycle <= 1 ? _cycle : (2 - _cycle);
+      const _posT0 = _cycle <= 1 ? _cycle : (2 - _cycle);
+      const _posT  = _isSyncPth ? _freeze(_posT0) : _posT0;
       // En fase backward (cycle>1) inicio y final se invierten → intercambiar start/end
       const _isRwd  = _cycle > 1;
       const _rwdAcc = (_isRwd && _mpAccel === 'start') ? 'end'
@@ -8162,8 +8245,8 @@ function _edViewerMpTick() {
       relT = _edEaseT(_posT,_rwdAcc);
       rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
     } else {
-      // restart: fracción del ciclo + easing
-      relT = _edEaseT(_rawT%1,_mpAccel);
+      // restart: fracción del ciclo (congelada durante pausas) + easing
+      relT = _edEaseT(_isSyncPth ? _freeze(_rawT % 1) : (_rawT % 1), _mpAccel);
       rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
     }
     if (rel) {
@@ -8222,16 +8305,25 @@ function _edMpPreviewTick() {
     ? ((now - la._pathStartTime) / 1000) / (_edMotionPathCycles * _cycleDurMs / 1000)
     : ((now - la._pathStartTime) / 1000 * _edMotionPathSpeed) / _tot;
   // ── Scrubbing: sincronizar frame de animación al progreso del path ──────────
-  if (_cycleDurMs > 0 && _edMotionPathCycles > 0) {
+  // cumTime/holds se calculan aquí (una vez) y se reutilizan más abajo para
+  // que la posición en el recorrido también respete las pausas por frame.
+  let _pCumTime = null, _pTotalF = 0;
+  const _pIsSync = _cycleDurMs > 0 && _edMotionPathCycles > 0;
+  if (_pIsSync) {
     const _pSyncFs = (la._animFrames && la._animFrames.length) ? la._animFrames
                    : (la._frames    && la._frames.length)    ? la._frames : null;
+    if (_pSyncFs) {
+      _pTotalF = _pSyncFs.length;
+      _pCumTime = _edLayerCumTimeMs(la, _pTotalF);
+    }
     if (_pSyncFs && la._oc) {
       const _pSyncF = _edMpSyncFrame(
-        _rawT, _edMotionPathCycles, _pSyncFs.length,
+        _rawT, _edMotionPathCycles, _pTotalF,
         la._gcpStopAtEnd || false,
         la._gcpRepeatCount || 0,
         la._motionPathEnd || 'restart',
-        la._gcpCircularEnd || false
+        la._gcpCircularEnd || false,
+        _pCumTime, la._gcpFrameHolds
       );
       if (_pSyncF !== la._fIdx) {
         if (la._timer) { clearTimeout(la._timer); la._timer = null; }
@@ -8244,6 +8336,8 @@ function _edMpPreviewTick() {
   const _end  = la._motionPathEnd   || 'restart';
   const _acc  = la._motionPathAccel || 'none';
   let rel = null, relT = 0, _done = false;
+  // Congela la fracción cruda (antes de easing) durante las pausas por frame.
+  const _pFreeze = f => _pCumTime ? _edApplyHoldFreeze(_pCumTime, _pTotalF, la._gcpFrameHolds, _edMotionPathCycles, f) : f;
 
   if (_end === 'stop') {
     if (_rawT >= 1.0) {
@@ -8251,12 +8345,13 @@ function _edMpPreviewTick() {
       rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
       _done = true; // llegó al final: detener tras este frame
     } else {
-      relT = _edEaseT(_rawT, _acc);
+      relT = _edEaseT(_pIsSync ? _pFreeze(_rawT) : _rawT, _acc);
       rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
     }
   } else if (_end === 'rewind') {
     const _cycle  = _rawT % 2;
-    const _posT   = _cycle <= 1 ? _cycle : (2 - _cycle);
+    const _posT0  = _cycle <= 1 ? _cycle : (2 - _cycle);
+    const _posT   = _pIsSync ? _pFreeze(_posT0) : _posT0;
     const _isRwd  = _cycle > 1;
     const _rwdAcc = (_isRwd && _acc === 'start') ? 'end'
                   : (_isRwd && _acc === 'end')   ? 'start'
@@ -8264,8 +8359,8 @@ function _edMpPreviewTick() {
     relT = _edEaseT(_posT, _rwdAcc);
     rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
   } else {
-    // restart (default): loop
-    relT = _edEaseT(_rawT % 1, _acc);
+    // restart (default): loop, congelado durante pausas
+    relT = _edEaseT(_pIsSync ? _pFreeze(_rawT % 1) : (_rawT % 1), _acc);
     rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
   }
 
@@ -19516,12 +19611,18 @@ function _edGetCycleDurationMs(la) {
   // GIF importado: suma de delays reales por frame
   if (la._gifFrames && la._gifFrames.length)
     return la._gifFrames.reduce((s, f) => s + (f.delay || 100), 0);
-  // GCP/APNG: _gcpFramesData[0].length = frames totales incluyendo interpolados
-  if (la._gcpFramesData && la._gcpFramesData[0] && la._gcpFramesData[0].length)
-    return la._gcpFramesData[0].length * (la._gcpFrameDelay || 100);
+  // GCP/APNG: _gcpFramesData[0].length = frames totales incluyendo interpolados.
+  // Usa el tiempo acumulado real (_edLayerCumTimeMs), que respeta las pausas
+  // por frame (T) — antes multiplicaba frames × delay uniforme, ignorándolas.
+  if (la._gcpFramesData && la._gcpFramesData[0] && la._gcpFramesData[0].length) {
+    const totalF = la._gcpFramesData[0].length;
+    return _edLayerCumTimeMs(la, totalF)[totalF];
+  }
   // Fallback: _pngFrames = frames renderizados (incluye interpolados)
-  if (la._pngFrames && la._pngFrames.length)
-    return la._pngFrames.length * (la._gcpFrameDelay || 100);
+  if (la._pngFrames && la._pngFrames.length) {
+    const totalF = la._pngFrames.length;
+    return _edLayerCumTimeMs(la, totalF)[totalF];
+  }
   // NOTA: _gcpLayersData.length = nº de capas de composición GCP, NO de frames → no usar
   return 0;
 }
@@ -27651,6 +27752,22 @@ function EditorView_init(){
       if(!_inDropdown){ edCloseMenus(); }
     }
 
+    // Cerrar la Biblioteca al tocar fuera cuando se abrió desde el editor
+    // general (no GCP) — el caso "GCP activo" ya se cierra más arriba. Solo
+    // para mode==='biblioteca': otros usos de #edOptionsPanel (line/shape/
+    // multiselect...) tienen su propio cierre y no deben verse afectados.
+    {
+      const _bibGen = $('edOptionsPanel');
+      if (_bibGen && _bibGen.classList.contains('open') && _bibGen.dataset.mode === 'biblioteca') {
+        const _insideBibGen = e.target?.closest?.('#edOptionsPanel, #dd-bib-open');
+        if (!_insideBibGen) {
+          _bibGen.classList.remove('open'); _bibGen.innerHTML = ''; delete _bibGen.dataset.mode;
+          if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
+        }
+      }
+    }
+
+
     if(['draw','eraser','fill','shape','line'].includes(edActiveTool)){
       const inCanvas   = e.target.closest('#editorCanvas') || e.target.closest('#editorCanvasWrap');
       const inPanel    = e.target.closest('#edOptionsPanel');
@@ -29219,7 +29336,7 @@ function _bibRenderPanel(panel) {
       if (!entry) return;
 
       // Si el editor GIF está activo, insertar en el canvas GIF
-      if (window._gcpActive) { gcpInsertFromBib(entry); _bibClose(panel); window._gcpBibInsertGuard = Date.now() + 400; return; }
+      if (window._gcpActive) { gcpInsertFromBib(entry); window._gcpBibInsertGuard = Date.now() + 400; return; }
 
       // GIF animado guardado desde el editor GIF
       if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
@@ -29276,7 +29393,7 @@ function _bibRenderPanel(panel) {
               };
               _img2.src=_src2;
             });
-          _bibClose(panel); edToast('Animación insertada ✓'); return;
+          edToast('Animación insertada ✓'); return;
         }
         // apngSrc: APNG completo descargado de nube — usar directamente con decodeApng
         // pngFrames: array de frames individuales (sistema local o GIF antiguo)
@@ -29345,7 +29462,6 @@ function _bibRenderPanel(panel) {
           });
         };
         img.src = _srcForImg;
-        _bibClose(panel);
         edToast('Animación insertada ✓');
         return;
       }
@@ -29516,7 +29632,6 @@ function _bibRenderPanel(panel) {
 
       edSelectedIdx = -1;
       edPushHistory(); edRedraw();
-      _bibClose(panel);
       edToast('Objeto insertado ✓');
     });
   });
@@ -31948,13 +32063,23 @@ function _gcpThumbCacheKey(la, fi) {
   return la._gcpUid + '-' + fi;
 }
 function _gcpInvalidateThumb(la, fi) {
+  if (la._gcpUid == null) return;
   if (fi === undefined) {
-    if (la._gcpUid == null) return;
     for (const k of _gcpThumbCache.keys()) {
       if (k.startsWith(la._gcpUid + '-')) _gcpThumbCache.delete(k);
     }
   } else {
-    _gcpThumbCache.delete(_gcpThumbCacheKey(la, fi));
+    // Borrar por PREFIJO (uid-fi-), no por clave exacta: la clave real en caché
+    // siempre lleva el tamaño como sufijo (p.ej. "uid-fi-88", "uid-fi-56" para
+    // la miniatura de muestra), que _gcpThumbCacheKey(la,fi) no incluye. Borrar
+    // por clave exacta nunca encontraba nada que eliminar — la miniatura vieja
+    // se quedaba en caché indefinidamente tras editar el objeto (mover/rotar/
+    // redimensionar), hasta que otra acción (duplicar/eliminar/ocultar) vaciaba
+    // la caché entera por su cuenta.
+    const _prefix = la._gcpUid + '-' + fi + '-';
+    for (const k of _gcpThumbCache.keys()) {
+      if (k.startsWith(_prefix)) _gcpThumbCache.delete(k);
+    }
   }
 }
 function _gcpInvalidateAllThumbs() {
@@ -32462,7 +32587,7 @@ function _gcpUpdateFramesBar() {
   // botón ⟳ de interpolación aparece una vez entre frame y frame de una fila.
   const colActionsRow = document.createElement('div');
   colActionsRow.id = 'gcpColActionsRow';
-  colActionsRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:26px;' +
+  colActionsRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:32px;' +
     'border-bottom:1px solid var(--gray-200);background:var(--white);';
   const colActionsSpacer = document.createElement('div');
   colActionsSpacer.style.cssText = 'flex-shrink:0;width:116px;border-right:1px solid var(--gray-200);';
@@ -32868,7 +32993,7 @@ function _gcpUpdateFramesBar() {
     // que queda entre ▲ y ▼, ocupando el resto de la altura disponible.
     const midGroup = document.createElement('div');
     midGroup.style.cssText = 'flex:1;min-height:0;display:flex;flex-direction:column;' +
-      'align-items:center;justify-content:center;gap:1px;width:100%;';
+      'align-items:center;justify-content:center;gap:8px;width:100%;';
 
     // ▼ bajar capa — fijo abajo del todo, centrado, más grande. Se añade al
     // final de leftCol más abajo (después del grupo intermedio).
@@ -32888,9 +33013,9 @@ function _gcpUpdateFramesBar() {
     // Botón eliminar capa (con confirmación)
     const delLayerBtn = document.createElement('button');
     delLayerBtn.title = 'Eliminar ' + layerName;
-    delLayerBtn.innerHTML = '<span style="color:#e63030;font-size:12px;font-weight:900;line-height:1">✕</span>';
-    delLayerBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:2px 4px;' +
-      'border-radius:4px;transition:background .15s;flex-shrink:0;';
+    delLayerBtn.innerHTML = '<span style="color:#e63030;font-size:15px;font-weight:900;line-height:1">✕</span>';
+    delLayerBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:6px 10px;' +
+      'border-radius:6px;transition:background .15s;flex-shrink:0;';
     delLayerBtn.addEventListener('pointerenter', () => { delLayerBtn.style.background = '#fff0f0'; });
     delLayerBtn.addEventListener('pointerleave', () => { delLayerBtn.style.background = 'none'; });
     delLayerBtn.addEventListener('click', e => {
@@ -32921,8 +33046,8 @@ function _gcpUpdateFramesBar() {
     const eyeBtn = document.createElement('button');
     eyeBtn.title = 'Mostrar/ocultar todos los frames';
     eyeBtn.textContent = '👁';
-    eyeBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:2px 4px;' +
-      'border-radius:4px;font-size:13px;line-height:1;transition:background .15s;flex-shrink:0;' +
+    eyeBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:6px 10px;' +
+      'border-radius:6px;font-size:16px;line-height:1;transition:background .15s;flex-shrink:0;' +
       'opacity:' + (_allHidden ? '0.4' : '1') + ';';
     eyeBtn.addEventListener('pointerenter', () => { eyeBtn.style.background = 'var(--gray-200)'; });
     eyeBtn.addEventListener('pointerleave', () => { eyeBtn.style.background = 'none'; });
@@ -33241,18 +33366,18 @@ function _gcpBuildColActions(colActionsContent) {
     const anchorPx = b.px + cardW / 2;
 
     const cluster = document.createElement('div');
-    cluster.style.cssText = 'position:absolute;top:2px;left:' + Math.round(anchorPx) + 'px;' +
-      'transform:translateX(-50%);display:flex;align-items:center;gap:2px;' +
-      'background:var(--white);border:1px solid var(--gray-300);border-radius:10px;' +
-      'padding:1px 3px;box-shadow:0 1px 2px rgba(0,0,0,.08);';
+    cluster.style.cssText = 'position:absolute;top:4px;left:' + Math.round(anchorPx) + 'px;' +
+      'transform:translateX(-50%);display:flex;align-items:center;gap:4px;' +
+      'background:var(--white);border:1px solid var(--gray-300);border-radius:12px;' +
+      'padding:2px 4px;box-shadow:0 1px 2px rgba(0,0,0,.08);';
 
     const mk = (label, title, color) => {
       const btn = document.createElement('button');
       btn.textContent = label;
       btn.title = title;
-      btn.style.cssText = 'width:19px;height:19px;border:none;background:none;cursor:pointer;' +
-        'font-size:11px;font-weight:900;line-height:1;display:flex;align-items:center;' +
-        'justify-content:center;border-radius:6px;color:' + color + ';padding:0;';
+      btn.style.cssText = 'width:23px;height:23px;border:none;background:none;cursor:pointer;' +
+        'font-size:12px;font-weight:900;line-height:1;display:flex;align-items:center;' +
+        'justify-content:center;border-radius:7px;color:' + color + ';padding:0;';
       btn.addEventListener('pointerenter', () => { btn.style.background = 'var(--gray-100)'; });
       btn.addEventListener('pointerleave', () => { btn.style.background = 'none'; });
       return btn;
@@ -33472,48 +33597,123 @@ function _gcpDrawRulerMarks() {
   const totalSeconds = totalMs / 1000;
   rulerContent.style.width = (window._gcpRulerContentWidth || 0) + 'px';
 
-  const stepSec = 0.1;
-  const totalMarks = Math.ceil(totalSeconds / stepSec) + 1;
-  const MIN_TICK_GAP_PX  = 3;  // por debajo de esto, ni la marca se dibuja (tramos muy interpolados)
+  const MIN_TICK_GAP_PX  = 3;  // por debajo de esto, ni la marca se dibuja (tramos muy comprimidos)
   const MIN_LABEL_GAP_PX = 9;  // el texto necesita más aire que la propia línea
   let _lastTickPx  = -Infinity;
   let _lastLabelPx = -Infinity;
+  const EPS_MS = 1; // tolerancia para comparar tiempos (redondeos de coma flotante)
 
-  for (let m = 0; m <= totalMarks; m++) {
-    const tSec = m * stepSec;
-    const isWhole = (m % 10) === 0;
-    const ft = _gcpFrameTimeAtMs(tSec * 1000, cumTime, delayMs);
-    const px = _gcpPxAtFrameTime(bp, ft);
-
-    if ((px - _lastTickPx) < MIN_TICK_GAP_PX) continue; // demasiado juntas: omitir marca
+  // Dibuja una marca (corta = décima, larga = segundo entero) con su etiqueta,
+  // reutilizada tanto para las marcas normales como para las especiales en rojo.
+  function drawMark(px, isWhole, label, color) {
+    if ((px - _lastTickPx) < MIN_TICK_GAP_PX) return;
     _lastTickPx = px;
-
     const tick = document.createElement('div');
     tick.style.cssText = 'position:absolute;left:' + Math.round(px) + 'px;' +
       (isWhole
-        ? 'top:0;width:1.5px;height:100%;background:#1a1a1a;'
-        : 'top:15px;width:1px;height:11px;background:#767676;');
+        ? 'top:0;width:1.5px;height:100%;background:' + color + ';'
+        : 'top:15px;width:1px;height:11px;background:' + color + ';');
     rulerContent.appendChild(tick);
 
-    // Etiqueta de texto: exige más separación que la propia marca (el texto
-    // es más ancho que la línea) para no amontonarse en tramos comprimidos.
-    if ((px - _lastLabelPx) < MIN_LABEL_GAP_PX) continue;
+    if ((px - _lastLabelPx) < MIN_LABEL_GAP_PX) return;
     _lastLabelPx = px;
-
-    const label = document.createElement('div');
-    if (isWhole) {
-      label.textContent = Math.round(tSec) + 's';
-      label.style.cssText = 'position:absolute;top:1px;left:' + (Math.round(px) + 3) + 'px;' +
-        'font-size:10px;font-weight:900;color:#1a1a1a;white-space:nowrap;line-height:1;';
-    } else {
-      // Solo el dígito de la décima (sin "s"): más compacto, evita saturar
-      // tramos con muchas marcas juntas.
-      label.textContent = String(m % 10);
-      label.style.cssText = 'position:absolute;top:3px;left:' + (Math.round(px) + 2) + 'px;' +
-        'font-size:7px;font-weight:700;color:#767676;white-space:nowrap;line-height:1;';
-    }
-    rulerContent.appendChild(label);
+    const lbl = document.createElement('div');
+    lbl.textContent = label;
+    lbl.style.cssText = isWhole
+      ? 'position:absolute;top:1px;left:' + (Math.round(px) + 3) + 'px;' +
+        'font-size:10px;font-weight:900;color:' + color + ';white-space:nowrap;line-height:1;'
+      : 'position:absolute;top:3px;left:' + (Math.round(px) + 2) + 'px;' +
+        'font-size:7px;font-weight:700;color:' + color + ';white-space:nowrap;line-height:1;';
+    rulerContent.appendChild(lbl);
   }
+
+  // ── Tramos especiales: frames con pausa (T) y huecos interpolados ───────────
+  // En ambos casos, el ancho de la tarjeta es fijo (para la miniatura) y no
+  // guarda proporción con el tiempo real que representa — un frame con pausa
+  // de 3s ocupa la misma tarjeta que uno de 100ms, y un hueco con 5 frames
+  // interpolados ocupa el mismo hueco de 24px que uno con 1 solo. Repartir
+  // marcas de 0.1s proporcionalmente ahí dentro no tiene sentido (no hay
+  // espacio, y engañaría sobre dónde cae cada instante). En vez de eso: 2-3
+  // marcas fijas en rojo — inicio y fin del tramo, más cualquier segundo
+  // entero que quede estrictamente dentro — igual para pausa que para hueco.
+  const RED = '#cc2200';
+  const specialRanges = []; // {msStart, msEnd, pxStart, pxEnd}
+
+  bp.forEach((b, i) => {
+    const cardW = b.w || _GCP_COL_CARD_W_FALLBACK;
+
+    // Frame con pausa (T): el propio frame es el tramo especial.
+    const holdMs = (window._gcpFrameHolds && window._gcpFrameHolds[b.fi]) || 0;
+    if (holdMs > 0) {
+      specialRanges.push({
+        msStart: cumTime[b.fi], msEnd: cumTime[b.fi + 1],
+        pxStart: b.px, pxEnd: b.px + cardW,
+      });
+    }
+
+    // Hueco interpolado hasta la siguiente columna visible.
+    if (i < bp.length - 1 && (bp[i + 1].fi - b.fi) > 1) {
+      specialRanges.push({
+        msStart: cumTime[b.fi + 1], msEnd: cumTime[bp[i + 1].fi],
+        pxStart: b.px + cardW, pxEnd: bp[i + 1].px,
+      });
+    }
+  });
+
+  const _inSpecialRange = tMs => specialRanges.some(r => tMs > r.msStart - EPS_MS && tMs < r.msEnd + EPS_MS);
+
+  // ── Recopilar TODAS las marcas candidatas (normales + especiales) antes de
+  // dibujar nada — drawMark asume que se le llama en orden estrictamente de
+  // izquierda a derecha (así decide qué omitir por estar demasiado cerca de
+  // la anterior). Dibujar primero todas las normales y luego todas las
+  // especiales rompía ese orden: una marca especial temprana podía quedar
+  // "por detrás" de la última marca normal (del final de la animación) y
+  // se descartaba por error.
+  const candidates = [];
+
+  // Marcas normales de 0.1s — omitiendo los instantes que caigan dentro de un
+  // tramo especial (ese hueco lo cubren sus propias marcas, añadidas después).
+  const stepSec = 0.1;
+  const totalMarks = Math.ceil(totalSeconds / stepSec) + 1;
+  for (let m = 0; m <= totalMarks; m++) {
+    const tSec = m * stepSec;
+    const tMs = tSec * 1000;
+    if (_inSpecialRange(tMs)) continue;
+    const isWhole = (m % 10) === 0;
+    const ft = _gcpFrameTimeAtMs(tMs, cumTime, delayMs);
+    const px = _gcpPxAtFrameTime(bp, ft);
+    const label = isWhole ? (Math.round(tSec) + 's') : String(m % 10);
+    candidates.push({ px, isWhole, label, color: isWhole ? '#1a1a1a' : '#767676' });
+  }
+
+  // Marcas especiales en rojo: inicio, fin y segundos enteros cruzados.
+  specialRanges.forEach(r => {
+    const durMs = r.msEnd - r.msStart;
+    const fmt = ms => {
+      const s = ms / 1000;
+      const isWhole = Math.abs(s - Math.round(s)) < (EPS_MS / 1000);
+      return { isWhole, label: isWhole ? (Math.round(s) + 's') : (s.toFixed(1) + 's') };
+    };
+    const startFmt = fmt(r.msStart);
+    candidates.push({ px: r.pxStart, isWhole: startFmt.isWhole, label: startFmt.label, color: RED });
+    const endFmt = fmt(r.msEnd);
+    candidates.push({ px: r.pxEnd, isWhole: endFmt.isWhole, label: endFmt.label, color: RED });
+
+    // Segundos enteros estrictamente dentro del tramo (ni al principio ni al final).
+    const sFrom = Math.floor(r.msStart / 1000) + 1;
+    const sTo   = Math.ceil(r.msEnd / 1000) - 1;
+    for (let s = sFrom; s <= sTo; s++) {
+      const sMs = s * 1000;
+      if (sMs <= r.msStart + EPS_MS || sMs >= r.msEnd - EPS_MS) continue;
+      const frac = durMs > 0 ? (sMs - r.msStart) / durMs : 0;
+      const px = r.pxStart + frac * (r.pxEnd - r.pxStart);
+      candidates.push({ px, isWhole: true, label: s + 's', color: RED });
+    }
+  });
+
+  // Ordenar por posición y dibujar en ese orden — ahora sí, izquierda a derecha real.
+  candidates.sort((a, b) => a.px - b.px);
+  candidates.forEach(c => drawMark(c.px, c.isWhole, c.label, c.color));
 }
 
 // ── Diagnóstico scrollbars GCP ───────────────────────────────────────────────

@@ -178,7 +178,13 @@ const SupabaseClient = (() => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000); // 8s timeout
     try {
-      const r = await fetch(`${BASE}/${path}`, { headers: _hdrsUser(), signal: controller.signal });
+      // cache:'no-store' — nunca servir una respuesta guardada por el navegador.
+      // Esta es la función genérica de lectura (works/panels/panel_layers/
+      // biblioteca): si el navegador cacheara una fila desactualizada, el
+      // editor (y su visor interno) podría cargar una obra con capas u
+      // opciones "anim_url"/"gif_url" antiguas aunque ya se hubiera guardado
+      // una versión más reciente en Supabase.
+      const r = await fetch(`${BASE}/${path}`, { headers: _hdrsUser(), signal: controller.signal, cache: 'no-store' });
       clearTimeout(timer);
       if (!r.ok) throw new Error(`GET ${path}: ${r.status} ${await r.text()}`);
       return r.json();
@@ -393,7 +399,10 @@ const SupabaseClient = (() => {
   // Descarga APNG del bucket 'anims' y devuelve dataUrl PNG — patrón idéntico al GIF
   async function _animDownload(animUrl) {
     if (!animUrl) return null;
-    const r = await fetch(animUrl);
+    // cache:'no-store' — el binario de una animación editada puede subirse
+    // con una URL previamente vista por el navegador (p.ej. reintentos o
+    // biblioteca); no arriesgarse a servir una copia antigua desde caché.
+    const r = await fetch(animUrl, { cache: 'no-store' });
     if (!r.ok) return null;
     const blob = await r.blob();
     return new Promise(res => {
@@ -874,7 +883,10 @@ const SupabaseClient = (() => {
       // GIF: descargar de Storage y meter en IndexedDB local
       if (layerObj.type === 'gif' && row.gif_url) {
         try {
-          const gifResp = await fetch(row.gif_url);
+          // cache:'no-store' — mismo motivo que _animDownload: garantizar
+          // que el visor interno del editor siempre reciba el GIF más
+          // reciente, no una copia obsoleta servida desde caché.
+          const gifResp = await fetch(row.gif_url, { cache: 'no-store' });
           if (gifResp.ok) {
             const blob   = await gifResp.blob();
             const reader = new FileReader();
@@ -990,6 +1002,7 @@ const SupabaseClient = (() => {
     if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/biblioteca?${filter}`, {
       headers: _hdrsUser(),
+      cache: 'no-store',
     });
     if (!r.ok) throw new Error(`bibFetch: ${r.status} ${await r.text()}`);
     const rows = await r.json();
